@@ -11,6 +11,12 @@ def _metadata(frame: IntentFrame, **values: object) -> dict[str, object]:
     claim_check_type = frame.entities.get("claim_check_type")
     if claim_check_type and claim_check_type != "none":
         metadata["claim_check_type"] = claim_check_type
+    compare_metric = str(frame.entities.get("compare_metric") or "")
+    if compare_metric:
+        metadata["compare_metric"] = compare_metric
+    comparison_followup_intent = str(frame.entities.get("comparison_followup_intent") or "")
+    if comparison_followup_intent:
+        metadata["comparison_followup_intent"] = comparison_followup_intent
     return metadata
 
 
@@ -55,7 +61,7 @@ def decide_discovery_response(frame: IntentFrame) -> ResponseDecision:
             required_slots=(),
             forbidden_behaviors=("product_card_first_response", "generic_unsized_summary"),
             assistant_guidance="DB의 마일리지/수명 지표로 비교하고 차종 호환과 주행환경에 따라 달라질 수 있음을 밝힌다.",
-            metadata={"response_shape_key": "metric_comparison_summary", "compare_metric": "mileage"},
+            metadata=_metadata(frame, response_shape_key="metric_comparison_summary", compare_metric="mileage"),
         )
 
     if frame.sub_intent == "quantity_benefit_comparison":
@@ -91,15 +97,20 @@ def decide_discovery_response(frame: IntentFrame) -> ResponseDecision:
             },
         )
 
-    if frame.sub_intent in ("attribute_compare", "latest_compare"):
+    if frame.sub_intent in ("attribute_compare", "latest_compare", "general_compare"):
         compare_metric = str(entities.get("compare_metric") or "detail")
+        response_shape_key = (
+            "grade_comparison_summary"
+            if compare_metric in {"grade", "price_grade"} or frame.sub_intent == "grade_compare"
+            else "metric_comparison_summary"
+        )
         return ResponseDecision(
             response_shape=ResponseShape.SUMMARY,
             template=TemplateName.QUICK_REPLY,
             required_slots=(),
             forbidden_behaviors=("product_card_first_response", "generic_unsized_summary", "comparison_without_db_basis"),
             assistant_guidance="비교 대상 상품을 DB 필드 기준으로 비교하고, 규격별 값 차이가 있을 수 있음을 밝힌다.",
-            metadata={"response_shape_key": "metric_comparison_summary", "compare_metric": compare_metric},
+            metadata=_metadata(frame, response_shape_key=response_shape_key, compare_metric=compare_metric),
         )
 
     if frame.sub_intent == "mileage_bias_guardrail":
@@ -119,7 +130,7 @@ def decide_discovery_response(frame: IntentFrame) -> ResponseDecision:
             required_slots=(),
             forbidden_behaviors=("misrecognize_ventus_air_s", "claim_kinergy_ex_is_premium_above_ventus"),
             assistant_guidance="상품명을 정확히 인식하고 각 상품의 등급/포지션 근거로 비교한다.",
-            metadata={"response_shape_key": "grade_comparison_summary"},
+            metadata=_metadata(frame, response_shape_key="grade_comparison_summary", compare_metric="grade"),
         )
 
     if frame.sub_intent in ("product_attribute_lookup", "product_attribute_explanation"):

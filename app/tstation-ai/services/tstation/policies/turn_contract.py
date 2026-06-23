@@ -140,6 +140,13 @@ def build_turn_contract(
         **(dict(intent_frame.known_slots) if intent_frame is not None else {}),
         **_slots_from_model(merged_slots),
     })
+    if intent_frame is not None:
+        compare_metric = str(intent_frame.entities.get("compare_metric") or "")
+        comparison_followup_intent = str(intent_frame.entities.get("comparison_followup_intent") or "")
+        if compare_metric:
+            known_slots["compare_metric"] = compare_metric
+        if comparison_followup_intent:
+            known_slots["comparison_followup_intent"] = comparison_followup_intent
 
     required_slots = _merge_tuple(
         intent_frame.missing_slots if intent_frame is not None else (),
@@ -348,6 +355,7 @@ def violates_response_template_contract(event: Mapping[str, Any], contract: Turn
 def response_contract_violations(
     *,
     template: str | None,
+    assistant_response_text: str | None = None,
     assistant_response_source: str | None = None,
     response_shape_key: str | None = None,
     called_tools: list[str] | tuple[str, ...] | None = None,
@@ -394,7 +402,77 @@ def response_contract_violations(
             "response_shape_key": str(event.get("response_shape_key") or ""),
             "assistant_response_source": str(event.get("assistant_response_source") or ""),
         })
+    compare_violation = _comparison_contract_violation(
+        assistant_response_text=assistant_response_text,
+        assistant_response_source=assistant_response_source,
+        response_shape_key=response_shape_key,
+        contract=contract,
+    )
+    if compare_violation is not None:
+        violations.append(compare_violation)
     return violations
+
+
+def _comparison_contract_violation(
+    *,
+    assistant_response_text: str | None,
+    assistant_response_source: str | None,
+    response_shape_key: str | None,
+    contract: TurnContract | None,
+) -> dict[str, Any] | None:
+    if contract is None:
+        return None
+    response_metadata = contract.response_decision or {}
+    response_metadata = response_metadata.get("metadata") if isinstance(response_metadata, Mapping) else {}
+    if not isinstance(response_metadata, Mapping):
+        return None
+    comparison_followup_intent = str(response_metadata.get("comparison_followup_intent") or "")
+    compare_metric = str(response_metadata.get("compare_metric") or contract.known_slots.get("compare_metric") or "")
+    if comparison_followup_intent != "continue_previous_compare_metric":
+        return None
+    if str(assistant_response_source or "") != "code_product_compare_resolver":
+        return {
+            "type": "compare_metric_contract_drift",
+            "comparison_followup_intent": comparison_followup_intent,
+            "compare_metric": compare_metric or "none",
+            "assistant_response_source": str(assistant_response_source or ""),
+        }
+    expected_response_shape_key = (
+        "grade_comparison_summary" if compare_metric in {"grade", "price_grade"} else "metric_comparison_summary"
+    )
+    if str(response_shape_key or "") != expected_response_shape_key:
+        return {
+            "type": "compare_metric_contract_drift",
+            "comparison_followup_intent": comparison_followup_intent,
+            "compare_metric": compare_metric or "none",
+            "response_shape_key": str(response_shape_key or ""),
+            "expected_response_shape_key": expected_response_shape_key,
+        }
+    expected_row = _comparison_metric_row_label(compare_metric)
+    response_text = str(assistant_response_text or "")
+    if expected_row and expected_row not in response_text:
+        return {
+            "type": "compare_metric_row_missing",
+            "comparison_followup_intent": comparison_followup_intent,
+            "compare_metric": compare_metric or "none",
+            "expected_row": expected_row,
+        }
+    return None
+
+
+def _comparison_metric_row_label(metric: str) -> str:
+    return {
+        "release": "출시 시점",
+        "price": "최종 혜택가",
+        "grade": "상품 등급",
+        "price_grade": "상품 등급",
+        "mileage": "마일리지/수명",
+        "noise": "정숙성",
+        "fuel_efficiency": "연비/회전저항",
+        "wet": "빗길 성능",
+        "car_type": "차종",
+        "detail": "특징",
+    }.get(str(metric or ""), "")
 
 
 def _domain_value(value: Any) -> str:

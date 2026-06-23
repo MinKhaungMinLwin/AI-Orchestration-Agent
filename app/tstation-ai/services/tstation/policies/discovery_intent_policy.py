@@ -104,7 +104,7 @@ _PRODUCT_ATTRIBUTE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("load", re.compile(r"하중|하중지수|무게", re.IGNORECASE)),
     ("speed", re.compile(r"속도\s*기호|속도|고속", re.IGNORECASE)),
     ("season", re.compile(r"계절|사계절|겨울용|여름용|올웨더|올시즌", re.IGNORECASE)),
-    ("car_type", re.compile(r"차종|승용차|suv|전기차용|전기차", re.IGNORECASE)),
+    ("car_type", re.compile(r"차종|승용\s*/\s*suv|suv\s*용|승용차용|전기차용|전기차\s*전용|승용차\s*대비|suv\s*대비", re.IGNORECASE)),
 )
 _RECOMMENDATION_ATTRIBUTE_METRICS: frozenset[str] = frozenset(
     {"fuel_efficiency", "wet", "load", "speed"}
@@ -427,6 +427,8 @@ def build_discovery_intent_frame(
     brand_cd = brand_codes[0] if brand_codes else extract_product_brand_code(text)
     quantity_options = extract_quantity_options(text)
     discovery_followup_intent = str(slots.get("discovery_followup_intent") or "").strip()
+    comparison_followup_intent = str(slots.get("comparison_followup_intent") or "").strip()
+    comparison_metric = str(slots.get("comparison_metric") or "").strip()
 
     entities: dict[str, Any] = {
         "product_names": products,
@@ -440,6 +442,16 @@ def build_discovery_intent_frame(
         entities["quantity_options"] = quantity_options
     if discovery_followup_intent == "recent_product_set_size_availability":
         entities["discovery_followup_intent"] = discovery_followup_intent
+    if comparison_followup_intent in {
+        "continue_previous_compare_metric",
+        "new_compare_metric",
+        "generic_compare",
+    }:
+        entities["comparison_followup_intent"] = comparison_followup_intent
+    if comparison_metric in {
+        "release", "price", "grade", "mileage", "noise", "fuel_efficiency", "wet", "car_type", "detail",
+    }:
+        entities["compare_metric"] = comparison_metric
     if len(products) >= 2:
         entities["multi_product_names"] = True
         if re.search(r"각각|둘\s*다|둘\s*모두|상품\s*정보|설명|알려", text, re.IGNORECASE):
@@ -508,6 +520,40 @@ def build_discovery_intent_frame(
     ):
         intent = "product_search"
         sub_intent = "recent_product_set_size_availability"
+    elif (
+        len(products) >= 2
+        and comparison_followup_intent == "continue_previous_compare_metric"
+        and comparison_metric in {"release", "price", "grade", "mileage", "noise", "fuel_efficiency", "wet", "car_type", "detail"}
+    ):
+        intent = "product_comparison"
+        sub_intent = (
+            "latest_compare"
+            if comparison_metric == "release"
+            else "grade_compare"
+            if comparison_metric == "grade"
+            else "mileage_compare"
+            if comparison_metric == "mileage"
+            else "attribute_compare"
+        )
+    elif (
+        len(products) >= 2
+        and comparison_followup_intent == "new_compare_metric"
+        and comparison_metric in {"release", "price", "grade", "mileage", "noise", "fuel_efficiency", "wet", "car_type", "detail"}
+    ):
+        intent = "product_comparison"
+        sub_intent = (
+            "latest_compare"
+            if comparison_metric == "release"
+            else "grade_compare"
+            if comparison_metric == "grade"
+            else "mileage_compare"
+            if comparison_metric == "mileage"
+            else "attribute_compare"
+        )
+    elif len(products) >= 2 and comparison_followup_intent == "generic_compare":
+        intent = "product_comparison"
+        sub_intent = "general_compare"
+        entities.setdefault("compare_metric", "detail")
     elif entities.get("external_price_comparison"):
         intent = "product_search"
         sub_intent = "external_price_comparison_request"
