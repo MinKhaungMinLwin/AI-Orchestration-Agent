@@ -50,6 +50,8 @@ def decide_transaction_response(
         return _decide_service_duration_advisory()
     if intent == "maintenance_addon_with_tire_service":
         return _decide_maintenance_addon_with_tire_service()
+    if intent == "store_service_availability":
+        return _decide_store_service_availability()
     if intent == "favorite_store_lookup":
         return _decide_favorite_store_lookup()
     if intent == "reservation_store_info_lookup":
@@ -224,6 +226,24 @@ def _decide_maintenance_addon_with_tire_service() -> ResponseDecision:
             "타이어 교체와 엔진오일/실내필터/와이퍼 등 경정비 동시 요청은 매장 서비스 가능 여부 안내로 처리한다. "
             "svc_codes 121/122 또는 All My T/경정비 신호가 확인되면 온라인 타이어 주문 시 경정비 함께 주문 가능성을 안내하고, "
             "확인되지 않으면 타이어 장착은 온라인 주문/예약으로 진행하되 경정비는 방문예약 또는 매장 사전 연락으로 확인하도록 안내한다."
+        ),
+    )
+
+
+def _decide_store_service_availability() -> ResponseDecision:
+    return _decision(
+        response_shape_key="store_service_availability",
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        forbidden_behaviors=(
+            "datepick_for_store_service_availability",
+            "preorder_for_store_service_availability",
+            "generic_store_search_for_store_service_availability",
+            "claim_unverified_store_service_available",
+        ),
+        assistant_guidance=(
+            "보관서비스, 질소충전, 얼라인먼트 숙련도 같은 매장별 서비스 운영 여부는 예약/방문예약이 아니라 "
+            "매장별 운영 정책 안내로 답한다. 시스템에서 확정할 수 없는 경우 단정하지 말고 해당 매장 직접 확인을 권장한다."
         ),
     )
 

@@ -24,6 +24,12 @@ _TIRE_STORAGE_RE = re.compile(
     r"|보관\s*중.*(?:분실|없어|훼손|파손)|맡겨\s*놓은|보관.*확인",
     re.IGNORECASE,
 )
+_STORE_SERVICE_AVAILABILITY_RE = re.compile(
+    r"보관\s*서비스.{0,20}(?:가능|돼|되|하나|해)|"
+    r"(?:윈터|겨울)?\s*타이어\s*보관.{0,20}(?:가능|돼|되|하나|해)|"
+    r"보관\s*(?:돼|되|가능|되나요|가능해)|질소\s*충전|질소|얼라인먼트.{0,12}(?:잘|무료|가능)",
+    re.IGNORECASE,
+)
 _TPMS_SAFETY_RISK_RE = re.compile(
     r"주행\s*중.*(?:흔들|이상|위험|떨림|깜빡)"
     r"|운행\s*중.*(?:흔들|이상|위험|떨림|깜빡)"
@@ -94,6 +100,18 @@ def decide_support_response(
                 "(3) 주행 후 일정 시간 지나면 꺼지는 경우 있음, "
                 "(4) 리셋 방법은 차량 매뉴얼/정비사 확인, "
                 "(5) 계속 경고 시 매장 점검 권장. 자동 1:1 연결 금지."
+            ),
+        )
+
+    if intent == "store_service_availability" or _STORE_SERVICE_AVAILABILITY_RE.search(text):
+        return _decision(
+            response_shape_key="store_service_availability",
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=("claim_unverified_store_service_available", "show_datepick_for_store_service"),
+            assistant_guidance=(
+                "매장별 서비스 운영 여부는 확정 단정하지 말고 매장별로 다를 수 있음을 안내한다. "
+                "매장명이 있으면 그 매장 기준 직접 확인을 권장하고, 매장명이 없으면 어느 매장 기준인지 확인한다."
             ),
         )
 

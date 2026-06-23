@@ -31,6 +31,11 @@ _RESERVATION_STORE_INFO_RE = re.compile(
     re.IGNORECASE,
 )
 _MAINTENANCE_ADDON_SERVICE_RE = re.compile(r"엔진\s*오일|실내\s*필터|필터|와이퍼|배터리|경정비", re.IGNORECASE)
+_STORE_SERVICE_AVAILABILITY_RE = re.compile(
+    r"보관\s*서비스|타이어\s*보관|윈터\s*타이어\s*보관|겨울\s*타이어\s*보관|"
+    r"보관\s*(?:돼|되|가능|되나요|가능해)|질소\s*충전|질소|얼라인먼트.{0,12}(?:잘|무료|가능)",
+    re.IGNORECASE,
+)
 _TIRE_SERVICE_RE = re.compile(r"타이어.{0,12}(?:교체|장착|서비스|작업)|(?:교체|장착).{0,12}타이어", re.IGNORECASE)
 _ADDON_WITH_RE = re.compile(r"같이|함께|동시|하면서|겸|추가|하고\s*싶", re.IGNORECASE)
 _PURCHASE_RE = re.compile(r"구매|주문|결제|살래|살게|사고\s*싶|사려고", re.IGNORECASE)
@@ -224,6 +229,7 @@ def plan_cross_domain_turn(user_text: str, *, known_slots: dict[str, Any] | None
     needs_description = bool(_DESCRIPTION_RE.search(text))
     needs_pattern_coupon_lookup = bool(has_product_hint and _PATTERN_COUPON_RE.search(text))
     needs_regional_price_policy = bool(_REGIONAL_PRICE_POLICY_RE.search(text))
+    needs_store_service_availability = bool(_STORE_SERVICE_AVAILABILITY_RE.search(text))
     has_current_store = bool(_STORE_NAME_RE.search(text) or _REGION_HINT_RE.search(text))
     needs_stock_or_booking = bool(_STOCK_OR_BOOKING_RE.search(text) or (_PURCHASE_RE.search(text) and has_current_store))
     needs_reservation_store_info = bool(_RESERVATION_STORE_REF_RE.search(text) and _RESERVATION_STORE_INFO_RE.search(text))
@@ -280,6 +286,20 @@ def plan_cross_domain_turn(user_text: str, *, known_slots: dict[str, Any] | None
                     domain=PolicyDomain.SUPPORT,
                     intent="warranty_claim",
                     reason="상품명과 조기 마모/품질 불만/보상 요구가 결합된 워런티 클레임임",
+                ),
+            ),
+            response_strategy="single_domain_response",
+        )
+
+    if needs_store_service_availability and not needs_stock_or_booking and not needs_price:
+        return CrossDomainPlan(
+            primary_domain=PolicyDomain.SUPPORT,
+            subtasks=(
+                DomainSubtask(
+                    domain=PolicyDomain.SUPPORT,
+                    intent="store_service_availability",
+                    reason="매장별 서비스 운영 여부 질문은 예약/매장검색이 아니라 support 서비스 가능 여부 안내임",
+                    required_slots=(),
                 ),
             ),
             response_strategy="single_domain_response",

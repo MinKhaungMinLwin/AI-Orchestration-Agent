@@ -39,6 +39,11 @@ _SERVICE_DURATION_ADVISORY_RE = re.compile(
     re.IGNORECASE,
 )
 _MAINTENANCE_ADDON_SERVICE_RE = re.compile(r"엔진\s*오일|실내\s*필터|필터|와이퍼|배터리|경정비", re.IGNORECASE)
+_STORE_SERVICE_AVAILABILITY_RE = re.compile(
+    r"보관\s*서비스|타이어\s*보관|윈터\s*타이어\s*보관|겨울\s*타이어\s*보관|"
+    r"보관\s*(?:돼|되|가능|되나요|가능해)|질소\s*충전|질소|얼라인먼트.{0,12}(?:잘|무료|가능)",
+    re.IGNORECASE,
+)
 _TIRE_SERVICE_RE = re.compile(r"타이어.{0,12}(?:교체|장착|서비스|작업)|(?:교체|장착).{0,12}타이어", re.IGNORECASE)
 _ADDON_WITH_RE = re.compile(r"같이|함께|동시|하면서|겸|추가|하고\s*싶", re.IGNORECASE)
 _RESERVATION_CHANGE_RE = re.compile(r"변경|바꿔|옮겨|미뤄|당겨|취소", re.IGNORECASE)
@@ -335,6 +340,7 @@ def build_transaction_intent_frame(
     current_service_duration_advisory = bool(
         _SERVICE_DURATION_ADVISORY_RE.search(text) and not _RESERVATION_CHANGE_RE.search(text)
     )
+    current_store_service_availability = bool(_STORE_SERVICE_AVAILABILITY_RE.search(text))
     current_maintenance_addon_with_tire = bool(
         _TIRE_SERVICE_RE.search(text)
         and _MAINTENANCE_ADDON_SERVICE_RE.search(text)
@@ -534,6 +540,10 @@ def build_transaction_intent_frame(
         sub_intent = "additional_service_duration"
         if re.search(r"얼라인먼트|휠\s*얼라이먼트", text, re.IGNORECASE):
             entities["service_type"] = "alignment"
+    elif current_store_service_availability and not (current_stock or current_price or current_purchase):
+        intent = "store_service_availability"
+        sub_intent = "store_service_availability"
+        entities["service_type"] = "store_service_availability"
     elif current_maintenance_addon_with_tire:
         intent = "maintenance_addon_with_tire_service"
         sub_intent = "store_service_availability"
@@ -620,6 +630,9 @@ def build_transaction_intent_frame(
         known["pending_intent"] = "maintenance_addon_with_tire_service"
         known["goal_type"] = "store_service_availability"
         known["service_type"] = "maintenance_addon"
+    if intent == "store_service_availability":
+        known["goal_type"] = "store_service_availability"
+        known["service_type"] = "store_service_availability"
     if intent == "reservation_store_info_lookup":
         known["pending_intent"] = "reservation_store_info_lookup"
         known["goal_type"] = "reservation_store_info"
@@ -798,6 +811,22 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
             metadata={"response_intent": "maintenance_addon_with_tire_service", "action": action},
         )
 
+    if frame.intent == "store_service_availability":
+        return ToolPlan(
+            allowed_tools=(),
+            preferred_tool=None,
+            tool_args_patch={},
+            forbidden_tools=(
+                "search_stores_tool",
+                "get_store_list_tool",
+                "get_store_schedule_tool",
+                "transaction_store_preview_tool",
+                "preorder_with_null_required_fields",
+            ),
+            required_slots=(),
+            metadata={"response_intent": "store_service_availability", "action": action},
+        )
+
     if frame.intent == "quick_order_reservation":
         return ToolPlan(
             allowed_tools=("transaction_store_preview_tool", "get_multi_store_schedule_tool", "get_store_schedule_tool"),
@@ -871,6 +900,8 @@ def _transaction_action(frame: IntentFrame) -> str:
         return "service_duration_advisory"
     if frame.intent == "maintenance_addon_with_tire_service":
         return "maintenance_addon_with_tire_service"
+    if frame.intent == "store_service_availability":
+        return "store_service_availability"
     if frame.intent == "reservation_store_info_lookup":
         return "reservation_store_info_lookup"
     return frame.intent or "transaction_fallback"
@@ -946,6 +977,8 @@ def _action_required_slots(frame: IntentFrame, action: str) -> tuple[str, ...]:
         add("booking_datetime", not (frame.known_slots.get("requested_cal_day") and frame.known_slots.get("rsv_hour")))
     elif action == "maintenance_addon_with_tire_service":
         add("store", not _has_action_store(frame))
+    elif action == "store_service_availability":
+        return ()
     else:
         for slot in frame.missing_slots:
             add(slot, True)

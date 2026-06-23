@@ -283,6 +283,9 @@ def build_turn_contract(
     if code_intent == "maintenance_addon_with_tire_service":
         domain = "transaction"
         intent = "maintenance_addon_with_tire_service"
+    if code_intent == "store_service_availability":
+        domain = "support"
+        intent = "store_service_availability"
     if code_intent == "reservation_store_info_lookup":
         domain = "transaction"
         intent = "reservation_store_info_lookup"
@@ -1499,6 +1502,7 @@ def _reference_guard_exempt_intent(intent: str) -> bool:
         "oe_re_concept_explanation",
         "service_duration_advisory",
         "maintenance_addon_with_tire_service",
+        "store_service_availability",
     }
 
 

@@ -114,6 +114,7 @@ from services.tstation.policies.store_service_gate import (
     is_store_detail_page_cta_text,
     is_store_visual_detail_request,
     replace_store_review_unavailable_text,
+    unverifiable_store_preference_labels,
 )
 from services.tstation.template_mapper import (
     current_discovery_response_decision,
@@ -606,10 +607,12 @@ class MultiAgentDomain(BaseModel):
         "online_store_price_policy",
         "regional_price_policy",
         "price_policy_faq",
+        "store_service_availability",
     ] = Field(
         description=(
             "Structured support/policy intent. Use this for non-transaction policy guidance such as shipping fee, "
-            "online-vs-store price policy, regional price policy, or generic price policy FAQ. Use 'none' otherwise."
+            "online-vs-store price policy, regional price policy, store service availability, or generic price policy FAQ. "
+            "Use 'none' otherwise."
         ),
     )
     recommendation_scenario: str = Field(
@@ -1101,6 +1104,7 @@ class _SlimMultiAgentDomain(BaseModel):
         "online_store_price_policy",
         "regional_price_policy",
         "price_policy_faq",
+        "store_service_availability",
     ] = Field(
         description="Structured support/policy intent, or 'none'."
     )
@@ -1248,6 +1252,7 @@ Complaint routing rule:
    - "online_store_price_policy": 온라인 vs 매장 가격/구매 방식/주문 방식 정책
    - "regional_price_policy": 서울/제주 등 지역에 따라 최종가가 달라지는 정책 설명
    - "price_policy_faq": generic pricing policy FAQ that is not a live price lookup
+   - "store_service_availability": 보관서비스/타이어 보관/질소충전/얼라인먼트 숙련도 등 매장별 서비스 운영 여부 안내
    - When a turn is a SUPPORT policy explanation, set policy_intent explicitly instead of leaving only a broad SUPPORT domain.
    - Product names may appear inside policy questions. Do NOT switch to Discovery/Transaction just because a product name is present if the actual question is policy.
 
@@ -1470,7 +1475,7 @@ Classify the user's FIRST message into EXACTLY ONE domain.
 DOMAINS:
 - TRANSACTION: store search by location or name (강남/근처/올마이티/All My T); goods_no (G+12 digits) price/stock/order; store visit reservation (specific date/time slot booking); reservation time change (예약 시간 변경/방문 시간 변경/일정 변경/시간 바꿀 수 있어); cart; coupon inquiry (내 쿠폰/쿠폰함/쿠폰 사용 조건/쿠폰 어떻게 써/쿠폰 사용법) [⚠️ NOT SUPPORT]; order history (내 주문내역/주문 조회/내 주문/내가 주문한 거) [⚠️ NOT SUPPORT]; maintenance/service history lookup (정비이력/정비내역/관리받은 내역/서비스 이력) [⚠️ NOT SUPPORT — must query member history]; order cancellation (주문 취소/취소하고 싶어/취소해줘) [⚠️ NOT SUPPORT]; cancellation/return fee inquiry (취소 수수료/취소비용/오늘 취소하면 수수료/예약 취소 비용/택배비/왕복 배송비/반품 비용/반품수수료) [⚠️ NOT SUPPORT — must check order/logistics state].
 - DISCOVERY: product search by name or keyword; tire recommendation; vehicle-tire compatibility; product specs/features/videos; run-flat vs normal tire price comparison; price/stock/buy with PRODUCT NAME ONLY (no goods_no — Discovery resolves goods_no first).
-- SUPPORT: warranty, returns, refund, general maintenance info, **per-vehicle maintenance D-day / 정비 시기·주기 / 교체 시기 / 점검 만기일 (내 차 정비 일정 / 엔진오일 언제 갈아야 / all my T 점검 만기 / 타이어 교체 시기)** [⚠️ NOT TRANSACTION — registered-car D-day matrix, not a store-visit slot booking], shipping fee policy (배송비/도서산간/제주/서귀포), online-vs-store price policy, 1:1 문의, 상담원 연결, T-Station service complaints (tires/products/orders/payment/delivery/installation/stores/coupons/vehicles/chatbot answers), smart pickup / pickup-service FAQ (픽업서비스, 스마트픽업, 차 가지러 와, 차 가지러 올 수 있어, 차량 수거 후 인도, 집앞까지 데려다 줘, 픽업 신청 방법, 픽업 가능 거리, 기사 위치/도착 문의). ⚠️ Do NOT route cancellation fee questions here — Transaction checks actual order state.
+- SUPPORT: warranty, returns, refund, general maintenance info, **per-vehicle maintenance D-day / 정비 시기·주기 / 교체 시기 / 점검 만기일 (내 차 정비 일정 / 엔진오일 언제 갈아야 / all my T 점검 만기 / 타이어 교체 시기)** [⚠️ NOT TRANSACTION — registered-car D-day matrix, not a store-visit slot booking], store-specific service availability policy (보관서비스/타이어 보관/질소충전/얼라인먼트 숙련도 — NOT store schedule), shipping fee policy (배송비/도서산간/제주/서귀포), online-vs-store price policy, 1:1 문의, 상담원 연결, T-Station service complaints (tires/products/orders/payment/delivery/installation/stores/coupons/vehicles/chatbot answers), smart pickup / pickup-service FAQ (픽업서비스, 스마트픽업, 차 가지러 와, 차 가지러 올 수 있어, 차량 수거 후 인도, 집앞까지 데려다 줘, 픽업 신청 방법, 픽업 가능 거리, 기사 위치/도착 문의). ⚠️ Do NOT route cancellation fee questions here — Transaction checks actual order state.
 - LEADING: pure greeting; unclear intent; bare re-trigger words (다시/또) with no domain anchor.
 
 Also set `policy_intent`:
@@ -1478,6 +1483,7 @@ Also set `policy_intent`:
 - online vs store price or purchase method policy → `online_store_price_policy`
 - regional final-price difference policy (서울 vs 제주 등) → `regional_price_policy`
 - generic pricing policy FAQ → `price_policy_faq`
+- store-specific service availability (보관서비스/타이어 보관/질소충전/얼라인먼트 잘 봐?) → `store_service_availability`
 - otherwise `none`
 
 RULES:
@@ -2096,6 +2102,25 @@ class StreamingMultiAgentCoordinator:
                 claim_check_type="none",
                 complaint_scope="none",
                 flow="hardcoded regex routing — bypassed LLM router",
+            )
+
+        store_service_decision = decide_store_service_gate(user_text=text)
+        if (
+            store_service_decision.intent == "store_special_service"
+            and not _STORE_SERVICE_ROUTE_EXCLUSION_RE.search(text)
+        ):
+            return MultiAgentDomain(
+                reason=store_service_decision.reason,
+                domains=[MultiAgentDomain.Domain.SUPPORT],
+                execution_plan=["support:store_service_availability"],
+                user_behavior="asking whether a store-specific service is available",
+                policy_intent="store_service_availability",
+                needs_clarification=False,
+                planner_confidence=0.95,
+                agent_prompt_profile=AgentPromptProfile.FULL,
+                claim_check_type="none",
+                complaint_scope="none",
+                flow="hardcoded store-service availability routing — bypassed transaction store override",
             )
 
         if cls._is_store_schedule_current_turn_query(text):
@@ -8637,6 +8662,57 @@ def _service_duration_advisory_event(user_text: str, *, store_name: str | None =
     }
 
 
+def _store_service_availability_event(user_text: str, *, store_name: str | None = None) -> dict | None:
+    labels = unverifiable_store_preference_labels(user_text or "")
+    if not labels:
+        return None
+    service_label = labels[0]
+    store_label = str(store_name or "").strip()
+    if store_label:
+        assistant_response = (
+            f"{store_label}의 {service_label}는 매장별 운영 조건과 현장 상황에 따라 달라질 수 있어요. "
+            "현재 챗봇 데이터만으로는 가능 여부를 확정해서 단정하기 어렵습니다.\n\n"
+            "방문 전 해당 매장에 직접 확인해 주세요. 보관서비스처럼 시즌/공간/이용 조건이 있는 서비스는 "
+            "매장별 운영 여부와 접수 가능 시점이 다를 수 있어요."
+        )
+        quick_replies = [
+            {"label": "매장 전화번호 확인", "domain": "TRANSACTION"},
+            {"label": "매장 상세보기", "domain": "TRANSACTION"},
+            {"label": "다른 매장 문의", "domain": "SUPPORT"},
+        ]
+    else:
+        assistant_response = (
+            f"{service_label}는 매장별 운영 조건에 따라 달라질 수 있어요. "
+            "어느 매장 기준인지 알려주시면 해당 매장 기준으로 확인 방법을 안내해드릴게요.\n\n"
+            "특히 타이어 보관서비스는 시즌, 보관 공간, 이용 조건에 따라 운영 여부가 달라질 수 있습니다."
+        )
+        quick_replies = [
+            {"label": "매장명 입력", "domain": "SUPPORT"},
+            {"label": "보관서비스 안내", "domain": "SUPPORT"},
+            {"label": "매장 찾기", "domain": "TRANSACTION"},
+        ]
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.SUPPORT.value,
+        "assistant_response_source": "code_store_service_availability_guard",
+        "data": {
+            "assistantResponse": assistant_response,
+            "quickReplies": quick_replies,
+            "predictedDomains": ["SUPPORT", "TRANSACTION"],
+            "metadata": {
+                "responseShapeKey": "store_service_availability",
+                "store_service_availability_intent": True,
+                "storeServiceLabel": service_label,
+                "carried_store_context": store_label,
+                "store_search_suppressed": True,
+                "override_blocked_reason": "store_service_availability_support_intent",
+                "userText": user_text,
+            },
+        },
+    }
+
+
 _MAINTENANCE_ADDON_CODES = frozenset({"121", "122"})
 
 
@@ -13628,6 +13704,11 @@ _VEHICLE_SUITABILITY_RE = re.compile(
     re.IGNORECASE,
 )
 _EV_BLOCKING_TRANSACTION_GOALS = {"store_with_stock", "place_order"}
+_STORE_SERVICE_ROUTE_EXCLUSION_RE = re.compile(
+    r"(?:매장|지점|곳).{0,16}(?:추천|찾아|검색|보여|알려)|"
+    r"(?:추천|찾아|검색|보여|알려).{0,16}(?:매장|지점|곳)",
+    re.IGNORECASE,
+)
 _EV_BLOCKING_TRANSACTION_INTENTS = {"stock", "order", "reservation"}
 _SIZE_ONLY_RE = re.compile(r"^\s*\d{3}\s*[/\s]?\s*\d{2}\s*(?:R|\s|/)?\s*\d{2}\s*$", re.IGNORECASE)
 _VEHICLE_PLATE_ONLY_RE = re.compile(r"^\s*\d{2,3}[가-힣]\d{4}\s*$")
@@ -17377,6 +17458,53 @@ class TStationChatServiceV2:
                 )
                 merged_slots.shop_id = None
                 merged_slots.shop_name = None
+
+            store_service_decision = decide_store_service_gate(user_text=last_user_text)
+            if (
+                store_service_decision.intent == "store_special_service"
+                and not _STORE_SERVICE_ROUTE_EXCLUSION_RE.search(last_user_text)
+            ):
+                store_context_name = (
+                    regex_slots.shop_name
+                    or merged_slots.shop_name
+                    or getattr(merged_slots, "store_name", None)
+                    or existing_slots.shop_name
+                    or getattr(existing_slots, "store_name", None)
+                )
+                if regex_slots.shop_name:
+                    merged_slots.shop_name = regex_slots.shop_name
+                if store_context_name and not merged_slots.shop_name:
+                    merged_slots.shop_name = str(store_context_name)
+                merged_slots.goal_type = "store_service_availability"
+                merged_slots.pending_intent = None
+                await chat_history_svc.save_slots_async(request.session_id, merged_slots, user_id=request.user_id)
+                store_service_event = _store_service_availability_event(
+                    last_user_text,
+                    store_name=str(store_context_name or "").strip() or None,
+                )
+                if store_service_event is not None:
+                    logger.info(
+                        "[STORE_SERVICE_AVAILABILITY] support guard response: store=%r reason=%s labels=%s",
+                        store_context_name,
+                        store_service_decision.reason,
+                        unverifiable_store_preference_labels(last_user_text),
+                    )
+                    if request.stream:
+                        return StreamingResponse(
+                            TStationChatServiceV2._stream_policy_guard_response(store_service_event),
+                            media_type="text/event-stream",
+                            headers={
+                                "Cache-Control": "no-cache",
+                                "Connection": "keep-alive",
+                                "X-Accel-Buffering": "no",
+                            },
+                        )
+                    event_data = (
+                        store_service_event.get("data")
+                        if isinstance(store_service_event.get("data"), dict)
+                        else {}
+                    )
+                    return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
 
             # 3.5) If the user explicitly asked for a recommendation in THIS turn
             # AND did not also include a fresh transactional keyword, clear any

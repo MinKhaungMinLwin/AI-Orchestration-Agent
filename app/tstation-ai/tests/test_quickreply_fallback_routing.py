@@ -167,6 +167,7 @@ from services.tstation.chat import (
     _maintenance_addon_store_context_from_location_template,
     _maintenance_addon_with_tire_service_event,
     _service_duration_advisory_event,
+    _store_service_availability_event,
     _build_vehicle_information_event,
     _build_complaint_scope_guard_event,
     _build_recommendation_contract_fallback_event,
@@ -5162,6 +5163,7 @@ def test_store_contact_guidance_skips_candidate_confirmation_prompt() -> None:
 
 def test_store_service_gate_detects_unverifiable_service_conditions() -> None:
     nitrogen = decide_store_service_gate(user_text="티스테이션 부산거제점 질소 충전도 해줘?")
+    storage = decide_store_service_gate(user_text="모란점 윈터타이어 보관서비스 가능해?")
     lift = decide_store_service_gate(user_text="내 차 타스만인데 리프트 있어야 되더라고... 하남 지역에 리프트 있는 매장 있어?")
     amenities = decide_store_service_gate(user_text="하남에 대기실 있고 워셔액 무료로 넣어주는 매장 있어?")
     women_kids = decide_store_service_gate(user_text="여성 주차구역이나 키즈 놀이방 있는 매장 찾아줘")
@@ -5172,6 +5174,11 @@ def test_store_service_gate_detects_unverifiable_service_conditions() -> None:
     assert nitrogen.needs_store_detail_cta is True
     assert nitrogen.needs_unverifiable_guidance is True
     assert unverifiable_store_preference_labels("티스테이션 부산거제점 질소 충전도 해줘?") == ["질소 충전 여부"]
+    assert storage.intent == "store_special_service"
+    assert storage.needs_store_detail_cta is True
+    assert unverifiable_store_preference_labels("모란점 윈터타이어 보관서비스 가능해?") == [
+        "타이어 보관 서비스 운영 여부"
+    ]
     assert lift.intent == "store_special_service"
     assert lift.needs_store_detail_cta is True
     assert "리프트 보유 여부" in unverifiable_store_preference_labels(
@@ -12225,6 +12232,77 @@ def test_alignment_addon_duration_question_is_advisory_not_store_schedule() -> N
     assert not should_guard_required_slots(contract)
     assert "30분~1시간" in event["data"]["assistantResponse"]
     assert event["template"] == "quickReply"
+
+
+def test_store_service_availability_is_support_advisory_not_store_schedule() -> None:
+    user_text = "모란점 윈터타이어 보관서비스 가능해?"
+    frame = build_transaction_intent_frame(user_text, known_slots={})
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text=user_text,
+        known_slots=dict(frame.known_slots),
+    )
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=response_decision,
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:store_service_availability"],
+            policy_intent="store_service_availability",
+            needs_clarification=False,
+        ),
+    )
+    event = _store_service_availability_event(user_text, store_name=frame.known_slots.get("store_name"))
+
+    assert frame.intent == "store_service_availability"
+    assert frame.sub_intent == "store_service_availability"
+    assert frame.known_slots["store_name"] == "모란점"
+    assert frame.known_slots["goal_type"] == "store_service_availability"
+    assert tool_plan.allowed_tools == ()
+    assert "get_store_schedule_tool" in tool_plan.forbidden_tools
+    assert "transaction_store_preview_tool" in tool_plan.forbidden_tools
+    assert response_decision.metadata["response_shape_key"] == "store_service_availability"
+    assert contract.domain == "support"
+    assert contract.intent == "store_service_availability"
+    assert contract.blocking_required_slots == ()
+    assert not should_guard_required_slots(contract)
+    assert event is not None
+    assert event["source_domain"] == "support"
+    assert event["assistant_response_source"] == "code_store_service_availability_guard"
+    assert "모란점" in event["data"]["assistantResponse"]
+    assert "확정해서 단정하기 어렵" in event["data"]["assistantResponse"]
+    assert event["data"]["metadata"]["store_search_suppressed"] is True
+    assert event["data"]["metadata"]["carried_store_context"] == "모란점"
+    assert "datepick" not in json.dumps(event, ensure_ascii=False)
+
+
+def test_store_service_availability_followup_uses_carried_store_context_without_search() -> None:
+    user_text = "보관서비스 돼?"
+    event = _store_service_availability_event(user_text, store_name="모란점")
+    plan = plan_cross_domain_turn(user_text, known_slots={"shop_name": "모란점"})
+
+    assert plan.primary_domain == PolicyDomain.SUPPORT
+    assert [task.intent for task in plan.subtasks] == ["store_service_availability"]
+    assert event is not None
+    assert "모란점" in event["data"]["assistantResponse"]
+    assert event["data"]["metadata"]["store_search_suppressed"] is True
+    assert "검색되는 매장" not in event["data"]["assistantResponse"]
+
+
+def test_store_service_availability_without_store_asks_scope_not_random_store_search() -> None:
+    user_text = "보관서비스 돼?"
+    event = _store_service_availability_event(user_text, store_name=None)
+    frame = build_transaction_intent_frame(user_text, known_slots={})
+
+    assert frame.intent == "store_service_availability"
+    assert event is not None
+    assert "어느 매장 기준인지" in event["data"]["assistantResponse"]
+    assert event["data"]["metadata"]["carried_store_context"] == ""
+    assert event["data"]["metadata"]["store_search_suppressed"] is True
+    assert _labels(event["data"]["quickReplies"])[0] == "매장명 입력"
 
 
 def test_tire_service_with_maintenance_addon_uses_transaction_store_service_action() -> None:
