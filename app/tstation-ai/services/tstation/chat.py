@@ -8323,6 +8323,35 @@ def _direct_tire_delivery_guard_event(user_text: str, *, active_transaction_cont
     return event
 
 
+def _service_duration_advisory_event(user_text: str, *, store_name: str | None = None) -> dict:
+    store_label = str(store_name or "").strip()
+    store_phrase = f"{store_label}에서 " if store_label else ""
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+        "assistant_response_source": "code_service_duration_advisory",
+        "data": {
+            "assistantResponse": (
+                f"{store_phrase}예약한 작업에 현장에서 얼라인먼트를 추가하면 보통 30분~1시간 정도 더 걸릴 수 있어요. "
+                "다만 차량 상태, 작업 대기, 매장 혼잡도에 따라 달라질 수 있어서 방문 전이나 접수 시 매장에 "
+                "가능 여부와 예상 소요시간을 확인하는 게 안전해요."
+            ),
+            "quickReplies": [
+                {"label": "예약 내역 확인", "domain": "TRANSACTION"},
+                {"label": "매장 정보 확인", "domain": "TRANSACTION"},
+                {"label": "다른 정비 문의", "domain": "SUPPORT"},
+            ],
+            "predictedDomains": ["TRANSACTION", "SUPPORT"],
+            "metadata": {
+                "responseShapeKey": "service_duration_advisory",
+                "storeName": store_label,
+                "userText": user_text,
+            },
+        },
+    }
+
+
 _PAST_EVENT_QUERY_RE = re.compile(
     r"(?=.*(?:지난|종료(?:된|한)?|끝난|과거|예전|이전|마감(?:된)?))(?=.*(?:이벤트|행사))",
     re.IGNORECASE,
@@ -18840,6 +18869,29 @@ class TStationChatServiceV2:
                     },
                 )
             event_data = complaint_guard_event.get("data") if isinstance(complaint_guard_event.get("data"), dict) else {}
+            return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
+
+        if turn_contract and turn_contract.intent == "service_duration_advisory":
+            service_duration_event = _service_duration_advisory_event(
+                last_user_text,
+                store_name=str((turn_contract.known_slots or {}).get("store_name") or ""),
+            )
+            logger.info(
+                "[SERVICE_DURATION] advisory response: text=%r session_id=%s",
+                last_user_text[:80],
+                request.session_id,
+            )
+            if request.stream:
+                return StreamingResponse(
+                    TStationChatServiceV2._stream_policy_guard_response(service_duration_event),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
+            event_data = service_duration_event.get("data") if isinstance(service_duration_event.get("data"), dict) else {}
             return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
 
         if should_guard_required_slots(turn_contract):

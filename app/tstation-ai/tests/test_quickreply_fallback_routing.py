@@ -163,6 +163,7 @@ from services.tstation.chat import (
     _split_product_size_quantity_from_text,
     _delivery_policy_guard_event,
     _direct_tire_delivery_guard_event,
+    _service_duration_advisory_event,
     _build_vehicle_information_event,
     _build_complaint_scope_guard_event,
     _build_recommendation_contract_fallback_event,
@@ -11900,6 +11901,86 @@ def test_turn_contract_allows_stock_when_required_slots_are_known() -> None:
     assert contract.intent == "stock_store_search"
     assert contract.blocking_required_slots == ()
     assert not should_guard_required_slots(contract)
+
+
+def test_alignment_addon_duration_question_is_advisory_not_store_schedule() -> None:
+    user_text = "모란점에 예약한거 서비스 받을 때 현장에서 얼라인먼트도 추가하면 시간 얼마나 더 걸려?"
+    frame = build_transaction_intent_frame(user_text, known_slots={})
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text=user_text,
+        known_slots=dict(frame.known_slots),
+    )
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=response_decision,
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=[
+                "transaction:check_existing_reservation",
+                "transaction:service_duration_advisory",
+            ],
+            referred_object_status="missing",
+            referred_object_type="order",
+            needs_clarification=True,
+        ),
+    )
+    event = _service_duration_advisory_event(user_text, store_name=frame.known_slots.get("store_name"))
+
+    assert frame.intent == "service_duration_advisory"
+    assert frame.sub_intent == "additional_service_duration"
+    assert frame.known_slots["store_name"] == "모란점"
+    assert tool_plan.allowed_tools == ()
+    assert "get_store_schedule_tool" in tool_plan.forbidden_tools
+    assert response_decision.metadata["response_shape_key"] == "service_duration_advisory"
+    assert contract.blocking_required_slots == ()
+    assert not should_guard_required_slots(contract)
+    assert "30분~1시간" in event["data"]["assistantResponse"]
+    assert event["template"] == "quickReply"
+
+
+def test_reservation_time_change_still_requires_order_context() -> None:
+    user_text = "예약한 시간 바꿔줘"
+    frame = build_transaction_intent_frame(user_text, known_slots={})
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=frame,
+        tool_plan=plan_transaction_tools(frame),
+        response_decision=decide_transaction_response(
+            intent=frame.intent,
+            user_text=user_text,
+            known_slots=dict(frame.known_slots),
+        ),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["transaction:store_schedule"],
+            referred_object_status="missing",
+            referred_object_type="order",
+            needs_clarification=True,
+        ),
+    )
+
+    assert frame.intent == "store_schedule"
+    assert "order" in contract.blocking_required_slots
+    assert should_guard_required_slots(contract)
+
+
+def test_store_schedule_question_still_allows_datepick_flow() -> None:
+    user_text = "모란점 오늘 예약 가능한 시간 알려줘"
+    frame = build_transaction_intent_frame(user_text, known_slots={})
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text=user_text,
+        known_slots=dict(frame.known_slots),
+    )
+
+    assert frame.intent == "store_schedule"
+    assert tool_plan.preferred_tool == "get_store_schedule_tool"
+    assert response_decision.template == TemplateName.DATE_PICK
 
 
 def test_turn_contract_treats_ord_qty_as_quantity_for_stock_required_slot() -> None:

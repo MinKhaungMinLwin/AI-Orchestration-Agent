@@ -22,6 +22,15 @@ _STORE_SCHEDULE_RE = re.compile(
     r"예약\s*가능|작업\s*가능|장착\s*가능|가능한\s*(?:시간|일정|매장)|가능\s*시간|가능\s*일정|스케줄|몇\s*시|시간",
     re.IGNORECASE,
 )
+_SERVICE_DURATION_ADVISORY_RE = re.compile(
+    r"(?:예약한\s*거|예약한거|예약|서비스\s*받|작업|교체).{0,40}"
+    r"(?:현장(?:에서)?\s*)?(?:얼라인먼트|휠\s*얼라이먼트|엔진오일|실내\s*필터|필터|배터리|와이퍼|경정비)"
+    r".{0,40}(?:추가|같이|함께).{0,30}(?:시간|얼마나|소요|걸려)|"
+    r"(?:얼라인먼트|휠\s*얼라이먼트|엔진오일|실내\s*필터|필터|배터리|와이퍼|경정비)"
+    r".{0,40}(?:현장(?:에서)?\s*)?(?:추가|같이|함께).{0,30}(?:시간|얼마나|소요|걸려)",
+    re.IGNORECASE,
+)
+_RESERVATION_CHANGE_RE = re.compile(r"변경|바꿔|옮겨|미뤄|당겨|취소", re.IGNORECASE)
 _NOON_RE = re.compile(r"12\s*시|점심\s*시간", re.IGNORECASE)
 _NEARBY_RE = re.compile(r"근처|주변|가까운|인근", re.IGNORECASE)
 _STORE_SUFFIX_RE = re.compile(r"([가-힣A-Za-z0-9]+(?:점|매장))")
@@ -309,6 +318,9 @@ def build_transaction_intent_frame(
     current_stock = bool(_STOCK_RE.search(text) or _TODAY_RE.search(text))
     current_price = bool(_PRICE_OR_COUPON_RE.search(text))
     current_purchase = bool(_PURCHASE_RE.search(text))
+    current_service_duration_advisory = bool(
+        _SERVICE_DURATION_ADVISORY_RE.search(text) and not _RESERVATION_CHANGE_RE.search(text)
+    )
     current_reservation = bool(_RESERVATION_RE.search(text) or _STORE_SCHEDULE_RE.search(text) or current_purchase)
     plain_store_search = (
         current_store_search
@@ -493,7 +505,12 @@ def build_transaction_intent_frame(
         "today_install_candidate_scope": today_install_candidate_scope,
     }
 
-    if preserve_pending_today_install:
+    if current_service_duration_advisory:
+        intent = "service_duration_advisory"
+        sub_intent = "additional_service_duration"
+        if re.search(r"얼라인먼트|휠\s*얼라이먼트", text, re.IGNORECASE):
+            entities["service_type"] = "alignment"
+    elif preserve_pending_today_install:
         intent = "stock_store_search"
         sub_intent = "today_install"
         entities["stock_check_mode"] = "preview"
@@ -711,6 +728,16 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
             metadata={"response_intent": "favorite_store_lookup", "action": action},
         )
 
+    if frame.intent == "service_duration_advisory":
+        return ToolPlan(
+            allowed_tools=(),
+            preferred_tool=None,
+            tool_args_patch={},
+            forbidden_tools=("get_store_schedule_tool", "get_store_detail_tool", "transaction_store_preview_tool"),
+            required_slots=(),
+            metadata={"response_intent": "service_duration_advisory", "action": action},
+        )
+
     if frame.intent == "quick_order_reservation":
         return ToolPlan(
             allowed_tools=("transaction_store_preview_tool", "get_multi_store_schedule_tool", "get_store_schedule_tool"),
@@ -780,6 +807,8 @@ def _transaction_action(frame: IntentFrame) -> str:
         return "selected_store_schedule"
     if frame.intent == "store_schedule":
         return "selected_store_schedule"
+    if frame.intent == "service_duration_advisory":
+        return "service_duration_advisory"
     return frame.intent or "transaction_fallback"
 
 

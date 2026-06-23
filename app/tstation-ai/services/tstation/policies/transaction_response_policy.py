@@ -46,6 +46,8 @@ def decide_transaction_response(
         return _decide_stock_store_search(text=text, slots=slots)
     if intent == "store_schedule":
         return _decide_store_schedule(text=text, slots=slots)
+    if intent == "service_duration_advisory":
+        return _decide_service_duration_advisory()
     if intent == "favorite_store_lookup":
         return _decide_favorite_store_lookup()
     if intent == "inventory_availability":
@@ -169,6 +171,19 @@ def _decide_favorite_store_lookup() -> ResponseDecision:
         assistant_guidance=(
             "단골매장 조회는 위치를 다시 묻지 말고 get_favorite_stores_tool 결과만 사용한다. "
             "결과가 비면 등록된 단골매장이 없다는 quickReply로 안내하고 일반 매장 검색으로 자동 전환하지 않는다."
+        ),
+    )
+
+
+def _decide_service_duration_advisory() -> ResponseDecision:
+    return _decision(
+        response_shape_key="service_duration_advisory",
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        forbidden_behaviors=("datepick_for_service_duration_advisory", "require_order_for_general_service_info"),
+        assistant_guidance=(
+            "이미 예약한 서비스에 현장 부가 서비스를 추가할 때의 일반 소요시간 안내는 주문번호 없이 답변한다. "
+            "예약 변경/취소/시간 재조정이 아닌 한 datepick이나 예약 슬롯을 제시하지 않는다."
         ),
     )
 

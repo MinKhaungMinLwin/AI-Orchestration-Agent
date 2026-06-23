@@ -270,6 +270,8 @@ def build_turn_contract(
     has_reference_signal = _has_reference_signal(user_text)
     if intent == "transaction_fallback" and _is_recoverable_today_install_stock_contract(known_slots):
         intent = "stock_store_search"
+    if code_intent == "service_duration_advisory":
+        intent = "service_duration_advisory"
     if planner_intent == "quick_order_execute" and _has_quick_order_execute_slots(known_slots):
         intent = "quick_order_execute"
     action_required_slots = tool_plan.required_slots if tool_plan is not None else ()
@@ -1447,7 +1449,11 @@ def _should_apply_reference_guard(
 
 
 def _reference_guard_exempt_intent(intent: str) -> bool:
-    return str(intent or "") in {"favorite_store_lookup", "oe_re_concept_explanation"}
+    return str(intent or "") in {
+        "favorite_store_lookup",
+        "oe_re_concept_explanation",
+        "service_duration_advisory",
+    }
 
 
 def _slot_for_referred_object_type(object_type: str) -> str:
