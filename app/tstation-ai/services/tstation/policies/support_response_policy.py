@@ -115,6 +115,18 @@ def decide_support_response(
             ),
         )
 
+    if intent == "store_review_write":
+        return _decision(
+            response_shape_key="store_review_write",
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=("omit_store_service_history_cta", "invent_external_review_path"),
+            assistant_guidance=(
+                "매장 리뷰/후기/칭찬/별점 작성 경로는 마이페이지 > 매장서비스 내역만 안내한다. "
+                "STORE_SERVICE_HISTORY CTA가 첫 번째 quickReply가 아니면 보정 대상이다."
+            ),
+        )
+
     if intent == "tire_storage_service" or _TIRE_STORAGE_RE.search(text):
         return _decision(
             response_shape_key="keep_service_hist_cta",

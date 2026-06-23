@@ -186,6 +186,7 @@ from services.tstation.chat import (
     _ensure_discovery_transaction_recovery_chain,
     _inject_store_detail_chip_for_contact_guidance,
     _inject_order_history_chip_for_cancel_guidance,
+    _ensure_store_review_write_cta,
     _is_ev_suitability_turn,
     _extract_plain_store_info_store_name,
     _is_bare_product_name_search_query,
@@ -271,6 +272,7 @@ from services.tstation.policies.delivery_policy_gate import (
 from services.tstation.policies.intent_frame import IntentFrame, PolicyDomain
 from services.tstation.policies.transaction_intent_policy import build_transaction_intent_frame, plan_transaction_tools
 from services.tstation.policies.transaction_response_policy import decide_transaction_response
+from services.tstation.policies.support_response_policy import decide_support_response
 from services.tstation.policies.response_decision import ResponseDecision, ResponseShape, TemplateName, ToolPlan
 from services.tstation.policies.turn_contract import (
     TurnContract,
@@ -5240,6 +5242,12 @@ def test_store_service_gate_detects_review_detail_but_not_review_write() -> None
     assert rating_summary.needs_store_detail_cta is False
     assert review_write.intent == "none"
     assert review_write.needs_store_detail_cta is False
+
+
+def test_store_review_write_is_not_hard_routed_by_regex_gate() -> None:
+    routing = StreamingMultiAgentCoordinator._force_keyword_routing("리뷰 어디다 써?")
+
+    assert routing is None
 
 
 def test_store_visual_detail_request_routes_to_store_detail_cta_intent() -> None:
@@ -11891,6 +11899,68 @@ def test_support_policy_turn_contract_keeps_policy_intent_and_forbidden_product_
             "forbidden_tools": ["search_product_tool", "get_final_price_tool"],
         }
     ]
+
+
+@pytest.mark.parametrize(
+    "user_text",
+    [
+        "리뷰 어디다 써?",
+        "후기 남기고 싶어",
+        "남양주점 별점 5점 남기고 싶어",
+        "칭찬 리뷰 작성하고 싶어",
+    ],
+)
+def test_store_review_write_policy_contract_requires_service_history_cta(user_text: str) -> None:
+    routing_result = _routing_result(
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        execution_plan=["support:store_review_write"],
+        policy_intent="store_review_write",
+    )
+    response_decision = decide_support_response(
+        intent="store_review_write",
+        user_text=user_text,
+        known_slots={},
+    )
+    contract = build_turn_contract(
+        user_text=user_text,
+        routing_result=routing_result,
+        response_decision=response_decision,
+    )
+    event_data = {
+        "assistantResponse": "매장 리뷰는 마이페이지에서 작성하실 수 있어요.",
+        "quickReplies": [{"label": "처음으로", "domain": "LEADING"}],
+        "predictedDomains": ["SUPPORT"],
+    }
+
+    assert response_decision.metadata["response_shape_key"] == "store_review_write"
+    assert response_decision.template == TemplateName.QUICK_REPLY
+    assert "omit_store_service_history_cta" in response_decision.forbidden_behaviors
+    assert contract.domain == "support"
+    assert contract.intent == "store_review_write"
+    assert _ensure_store_review_write_cta(event_data, cta_required=True) is True
+    assert event_data["quickReplies"][0] == {
+        "label": "바로가기",
+        "url": CTAUrls.STORE_SERVICE_HISTORY,
+        "domain": "SUPPORT",
+    }
+    assert "마이페이지 > 매장서비스 내역" in event_data["assistantResponse"]
+    assert event_data["metadata"]["storeReviewWriteCtaEnforced"] is True
+
+
+def test_store_review_write_cta_policy_does_not_affect_review_detail_or_store_rating_search() -> None:
+    review_detail = decide_store_service_gate(user_text="남양주점 리뷰 어때?")
+    rating_store_routing = StreamingMultiAgentCoordinator._force_keyword_routing("평점 높은 매장 추천해줘")
+    event_data = {
+        "assistantResponse": "상세 리뷰는 매장 상세 페이지에서 확인하실 수 있어요.",
+        "quickReplies": [{"label": "매장 상세 페이지로 이동", "domain": "TRANSACTION"}],
+        "predictedDomains": ["TRANSACTION"],
+    }
+
+    assert review_detail.intent == "store_review_detail"
+    assert rating_store_routing is not None
+    assert rating_store_routing.domains == [MultiAgentDomain.Domain.TRANSACTION]
+    assert _ensure_store_review_write_cta(event_data, cta_required=False) is False
+    assert event_data["quickReplies"][0]["label"] == "매장 상세 페이지로 이동"
 
 
 def _routing_result(

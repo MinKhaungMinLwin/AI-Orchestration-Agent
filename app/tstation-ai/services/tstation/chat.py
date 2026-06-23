@@ -608,11 +608,12 @@ class MultiAgentDomain(BaseModel):
         "regional_price_policy",
         "price_policy_faq",
         "store_service_availability",
+        "store_review_write",
     ] = Field(
         description=(
             "Structured support/policy intent. Use this for non-transaction policy guidance such as shipping fee, "
-            "online-vs-store price policy, regional price policy, store service availability, or generic price policy FAQ. "
-            "Use 'none' otherwise."
+            "online-vs-store price policy, regional price policy, store service availability, store review write CTA, "
+            "or generic price policy FAQ. Use 'none' otherwise."
         ),
     )
     recommendation_scenario: str = Field(
@@ -1105,6 +1106,7 @@ class _SlimMultiAgentDomain(BaseModel):
         "regional_price_policy",
         "price_policy_faq",
         "store_service_availability",
+        "store_review_write",
     ] = Field(
         description="Structured support/policy intent, or 'none'."
     )
@@ -1253,6 +1255,7 @@ Complaint routing rule:
    - "regional_price_policy": 서울/제주 등 지역에 따라 최종가가 달라지는 정책 설명
    - "price_policy_faq": generic pricing policy FAQ that is not a live price lookup
    - "store_service_availability": 보관서비스/타이어 보관/질소충전/얼라인먼트 숙련도 등 매장별 서비스 운영 여부 안내
+   - "store_review_write": 리뷰/후기/칭찬/별점/평가를 작성하거나 남기는 공식 경로 안내
    - When a turn is a SUPPORT policy explanation, set policy_intent explicitly instead of leaving only a broad SUPPORT domain.
    - Product names may appear inside policy questions. Do NOT switch to Discovery/Transaction just because a product name is present if the actual question is policy.
 
@@ -1484,6 +1487,7 @@ Also set `policy_intent`:
 - regional final-price difference policy (서울 vs 제주 등) → `regional_price_policy`
 - generic pricing policy FAQ → `price_policy_faq`
 - store-specific service availability (보관서비스/타이어 보관/질소충전/얼라인먼트 잘 봐?) → `store_service_availability`
+- store review/write path (리뷰 어디다 써?, 후기 남기고 싶어, 남양주점 별점 5점 남기고 싶어, 칭찬 리뷰 작성하고 싶어) → `store_review_write`
 - otherwise `none`
 
 RULES:
@@ -7441,6 +7445,86 @@ def _inject_store_detail_chip_for_contact_guidance(
         event_data["predictedDomains"] = _dedupe_domain_values(["TRANSACTION", *predicted])
     else:
         event_data["predictedDomains"] = ["TRANSACTION"]
+    return True
+
+
+_STORE_REVIEW_WRITE_METADATA_RE = re.compile(
+    r"store_review_write|support_review_write|review_write|리뷰\s*작성|후기\s*작성|후기\s*남기|"
+    r"리뷰\s*남기|칭찬\s*(?:리뷰|후기|남기)|별점.{0,12}(?:남기|주|줄|작성)|"
+    r"평점.{0,12}(?:남기|주|줄|작성)|매장\s*평가.{0,12}(?:남기|주|작성)",
+    re.IGNORECASE,
+)
+
+
+def _store_review_write_cta_required(
+    *,
+    routing_result: Any | None = None,
+    turn_contract: Any | None = None,
+) -> bool:
+    if str(getattr(routing_result, "policy_intent", "") or "") == "store_review_write":
+        return True
+    if str(getattr(turn_contract, "intent", "") or "") == "store_review_write":
+        return True
+    metadata_text = " ".join(
+        str(value)
+        for value in (
+            getattr(routing_result, "policy_intent", ""),
+            getattr(routing_result, "reason", ""),
+            getattr(routing_result, "user_behavior", ""),
+            getattr(routing_result, "flow", ""),
+            " ".join(str(item) for item in (getattr(routing_result, "execution_plan", None) or ())),
+            getattr(turn_contract, "planner_intent", ""),
+            " ".join(str(item) for item in (getattr(turn_contract, "execution_plan", None) or ())),
+        )
+        if value
+    )
+    return bool(_STORE_REVIEW_WRITE_METADATA_RE.search(metadata_text))
+
+
+def _ensure_store_review_write_cta(event_data: dict[str, Any], *, cta_required: bool) -> bool:
+    if not cta_required:
+        return False
+    chips = event_data.get("quickReplies")
+    if not isinstance(chips, list):
+        chips = []
+    review_chip = {
+        "label": "바로가기",
+        "url": CTAUrls.STORE_SERVICE_HISTORY,
+        "domain": "SUPPORT",
+    }
+    filtered = [
+        chip for chip in chips
+        if not (
+            isinstance(chip, dict)
+            and (
+                str(chip.get("url") or "").strip() == CTAUrls.STORE_SERVICE_HISTORY
+                or str(chip.get("label") or "").strip() == "바로가기"
+            )
+        )
+    ]
+    fallback_chips = [
+        {"label": "1:1 문의하기", "domain": "SUPPORT"},
+        {"label": "처음으로", "domain": "LEADING"},
+    ]
+    labels = {str(chip.get("label") or "").strip() for chip in filtered if isinstance(chip, dict)}
+    for chip in fallback_chips:
+        if chip["label"] not in labels:
+            filtered.append(chip)
+            labels.add(chip["label"])
+    event_data["quickReplies"] = [review_chip, *filtered]
+    assistant_text = str(event_data.get("assistantResponse") or "").strip()
+    required_text = "매장 리뷰는 마이페이지 > 매장서비스 내역에서 작성하실 수 있어요."
+    if required_text not in assistant_text:
+        event_data["assistantResponse"] = f"{assistant_text}\n\n{required_text}".strip()
+    predicted = event_data.get("predictedDomains")
+    if isinstance(predicted, list):
+        event_data["predictedDomains"] = _dedupe_domain_values(["SUPPORT", *predicted])
+    else:
+        event_data["predictedDomains"] = ["SUPPORT"]
+    metadata = event_data.setdefault("metadata", {})
+    if isinstance(metadata, dict):
+        metadata["policyIntent"] = "store_review_write"
+        metadata["storeReviewWriteCtaEnforced"] = True
     return True
 
 
@@ -24834,6 +24918,22 @@ class TStationChatServiceV2:
                             "type": "message",
                             "content": assistant_response,
                             "agent": "[DISCOVERY AGENT]",
+                        }]
+                    if _ensure_store_review_write_cta(
+                        event_data,
+                        cta_required=_store_review_write_cta_required(
+                            routing_result=routing_result,
+                            turn_contract=turn_contract,
+                        ),
+                    ):
+                        logger.info("[POLICY][support] store review write CTA enforced")
+                        assistant_response = str(event_data.get("assistantResponse") or "")
+                        draft_response = assistant_response
+                        draft_for_qc = assistant_response
+                        original_message_events = [{
+                            "type": "message",
+                            "content": assistant_response,
+                            "agent": "[SUPPORT AGENT]",
                         }]
                     coerced_event = None
                     if (
