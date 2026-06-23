@@ -48,6 +48,7 @@ from services.tstation.policies.discovery_intent_policy import (
     best_seller_period_from_text,
     build_discovery_intent_frame,
     extract_product_names,
+    extract_product_attribute_metrics,
     is_default_benefit_request,
     is_default_tire_shopping_request,
     is_best_seller_request,
@@ -181,6 +182,18 @@ def _response_shape_key_for_source_domain(source_domain: str | None) -> str:
     decision = _response_decision_for_source_domain(source_domain)
     metadata = getattr(decision, "metadata", None) or {}
     return str(metadata.get("response_shape_key") or "")
+
+
+def _compare_metric_from_event(event: Mapping[str, Any] | None) -> str:
+    if not isinstance(event, Mapping):
+        return ""
+    data = event.get("data")
+    if not isinstance(data, Mapping):
+        return ""
+    metadata = data.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return ""
+    return str(metadata.get("compareMetric") or metadata.get("compare_metric") or "").strip()
 
 
 def _try_submit_speculative(fn, *args, **kwargs) -> concurrent.futures.Future | None:
@@ -11293,6 +11306,64 @@ def _template_data_from_assistant_message(message: dict[str, Any] | None) -> dic
     return parsed if isinstance(parsed, dict) else None
 
 
+def _recent_compare_context_from_messages(user_text: str, messages: list[dict[str, Any]] | None) -> dict[str, str]:
+    if not messages:
+        return {}
+    current_frame = build_discovery_intent_frame(user_text)
+    current_product_names = tuple(current_frame.entities.get("product_names") or ())
+    if len(current_product_names) < 2:
+        return {}
+
+    prior_compare_metric = ""
+    for message in reversed(messages):
+        template_data = _template_data_from_assistant_message(message)
+        if not isinstance(template_data, dict):
+            continue
+        if str(template_data.get("assistant_response_source") or "").strip() != "code_product_compare_resolver":
+            continue
+        data = template_data.get("data")
+        if not isinstance(data, dict):
+            continue
+        metadata = data.get("metadata")
+        if not isinstance(metadata, dict):
+            continue
+        response_shape_key = str(metadata.get("response_shape_key") or "").strip()
+        if response_shape_key not in {"metric_comparison_summary", "grade_comparison_summary"}:
+            continue
+        candidate_metric = str(metadata.get("compareMetric") or metadata.get("compare_metric") or "").strip()
+        if candidate_metric in {"release", "price", "grade", "mileage", "noise", "fuel_efficiency", "wet", "car_type", "detail"}:
+            prior_compare_metric = candidate_metric
+            break
+    if not prior_compare_metric:
+        return {}
+
+    current_compare_metric = str(current_frame.entities.get("compare_metric") or "").strip()
+    current_sub_intent = str(current_frame.sub_intent or "").strip()
+    if not current_compare_metric:
+        current_attribute_metrics = tuple(extract_product_attribute_metrics(user_text))
+        if "price" in current_attribute_metrics or _PRODUCT_PRICE_COMPARE_TEXT_RE.search(user_text):
+            current_compare_metric = "price"
+            current_sub_intent = "attribute_compare"
+        elif "car_type" in current_attribute_metrics:
+            current_compare_metric = "car_type"
+            current_sub_intent = "attribute_compare"
+    if current_sub_intent in {"latest_compare", "grade_compare", "mileage_compare", "attribute_compare"} and current_compare_metric:
+        return {
+            "comparison_followup_intent": (
+                "continue_previous_compare_metric"
+                if current_compare_metric == prior_compare_metric
+                else "new_compare_metric"
+            ),
+            "comparison_metric": current_compare_metric,
+        }
+    if current_sub_intent == "general_compare":
+        return {
+            "comparison_followup_intent": "continue_previous_compare_metric",
+            "comparison_metric": prior_compare_metric,
+        }
+    return {}
+
+
 def _datepick_template_recovery_candidate_from_messages(
     messages: list[dict] | None,
 ) -> dict[str, Any] | None:
@@ -12155,6 +12226,7 @@ def _build_discovery_policy_context(
     domains: list[MultiAgentDomain.Domain],
     last_user_text: str,
     context_text: str,
+    messages: list[dict[str, Any]] | None = None,
     tire_size: str | None,
     goods_no: str | None = None,
     vehicle_type: str | None = None,
@@ -12196,6 +12268,15 @@ def _build_discovery_policy_context(
             "release", "price", "grade", "mileage", "noise", "fuel_efficiency", "wet", "car_type", "detail",
         }:
             known_slots["comparison_metric"] = routing_comparison_metric
+        if "comparison_metric" not in known_slots and "comparison_followup_intent" not in known_slots:
+            recovered_compare_context = _recent_compare_context_from_messages(last_user_text, messages)
+            recovered_followup_intent = str(recovered_compare_context.get("comparison_followup_intent") or "").strip()
+            recovered_metric = str(recovered_compare_context.get("comparison_metric") or "").strip()
+            if recovered_followup_intent in {"continue_previous_compare_metric", "new_compare_metric"} and recovered_metric in {
+                "release", "price", "grade", "mileage", "noise", "fuel_efficiency", "wet", "car_type", "detail",
+            }:
+                known_slots["comparison_followup_intent"] = recovered_followup_intent
+                known_slots["comparison_metric"] = recovered_metric
         supported_followup_override = _bare_product_search_followup_override(
             last_user_text,
             context_text=context_text,
@@ -16681,6 +16762,7 @@ class TStationChatServiceV2:
             domains=domains,
             last_user_text=last_user_text,
             context_text="\n".join(reversed(recent_user_texts)) or last_user_text,
+            messages=messages,
             tire_size=merged_slots.tire_size,
             goods_no=merged_slots.goods_no,
             vehicle_type=merged_slots.vehicle_type,
@@ -21715,10 +21797,14 @@ class TStationChatServiceV2:
                 current_contract_response_shape_key = _response_shape_key_for_source_domain(
                     current_contract_source_domain
                 )
+                current_contract_compare_metric = _compare_metric_from_event(
+                    buffered_data_events[-1] if buffered_data_events else None
+                )
                 contract_violations = response_contract_violations(
                     template=last_template,
                     assistant_response_text=draft_for_qc,
                     assistant_response_source=last_assistant_response_source,
+                    compare_metric=current_contract_compare_metric,
                     response_shape_key=current_contract_response_shape_key,
                     called_tools=sorted(called_tool_names),
                     source_domain=current_contract_source_domain,

@@ -6309,6 +6309,74 @@ def test_product_compare_event_uses_router_new_car_type_metric() -> None:
     assert "차종" in event["data"]["assistantResponse"]
 
 
+def test_discovery_policy_context_recovers_release_compare_continuation_from_recent_compare_template() -> None:
+    messages = [
+        {"role": "user", "content": "ventus s2 as, ventus air S 중에 뭐가 더 신상품?"},
+        {
+            "role": "assistant",
+            "content": (
+                "상품 정보를 표로 비교해드릴게요.\n\n최신 상품은 벤투스 에어S입니다.\n\n"
+                "[이전 선택된 상품 데이터]\n"
+                '{"type":"data","template":"quickReply","source_domain":"discovery",'
+                '"assistant_response_source":"code_product_compare_resolver","data":{"assistantResponse":"x",'
+                '"metadata":{"response_shape_key":"metric_comparison_summary","compareMetric":"release",'
+                '"comparison_followup_intent":"none"}}}'
+            ),
+        },
+        {"role": "user", "content": "dynapro hpx, dynapro hp3 중에서는?"},
+    ]
+    patch, decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        last_user_text="dynapro hpx, dynapro hp3 중에서는?",
+        context_text="ventus s2 as, ventus air S 중에 뭐가 더 신상품?\ndynapro hpx, dynapro hp3 중에서는?",
+        messages=messages,
+        tire_size=None,
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY],
+            execution_plan=["discovery:resolve_or_describe_product"],
+        ),
+    )
+
+    assert patch == {}
+    assert decision is not None
+    assert decision.metadata["compare_metric"] == "release"
+    assert decision.metadata["comparison_followup_intent"] == "continue_previous_compare_metric"
+
+
+def test_discovery_policy_context_prefers_explicit_price_metric_over_prior_release_compare_context() -> None:
+    messages = [
+        {"role": "user", "content": "ventus s2 as, ventus air S 중에 뭐가 더 신상품?"},
+        {
+            "role": "assistant",
+            "content": (
+                "상품 정보를 표로 비교해드릴게요.\n\n최신 상품은 벤투스 에어S입니다.\n\n"
+                "[이전 선택된 상품 데이터]\n"
+                '{"type":"data","template":"quickReply","source_domain":"discovery",'
+                '"assistant_response_source":"code_product_compare_resolver","data":{"assistantResponse":"x",'
+                '"metadata":{"response_shape_key":"metric_comparison_summary","compareMetric":"release",'
+                '"comparison_followup_intent":"none"}}}'
+            ),
+        },
+        {"role": "user", "content": "dynapro hpx, dynapro hp3 가격은?"},
+    ]
+    patch, decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        last_user_text="dynapro hpx, dynapro hp3 가격은?",
+        context_text="ventus s2 as, ventus air S 중에 뭐가 더 신상품?\ndynapro hpx, dynapro hp3 가격은?",
+        messages=messages,
+        tire_size=None,
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY],
+            execution_plan=["discovery:resolve_or_describe_product"],
+        ),
+    )
+
+    assert patch == {}
+    assert decision is not None
+    assert decision.metadata["compare_metric"] == "price"
+    assert decision.metadata["comparison_followup_intent"] == "new_compare_metric"
+
+
 def test_no_visible_output_fallback_event_prefers_transaction_size_clarification_over_description() -> None:
     contract = build_turn_contract(
         user_text="판교점에서 오늘서비스로 dynapro hpx 2개 구매하고싶어",
@@ -9787,6 +9855,41 @@ def test_turn_contract_reports_missing_metric_row_for_compare_continuation() -> 
     )
 
     assert {"type": "compare_metric_row_missing", "comparison_followup_intent": "continue_previous_compare_metric", "compare_metric": "release", "expected_row": "출시 시점"} in violations
+
+
+def test_turn_contract_reports_compare_metric_metadata_drift() -> None:
+    contract = build_turn_contract(
+        user_text="dynapro hpx, dynapro hp3 중에서는?",
+        intent_frame=IntentFrame(domain=PolicyDomain.DISCOVERY, intent="product_comparison", sub_intent="latest_compare"),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            metadata={
+                "response_shape_key": "metric_comparison_summary",
+                "compare_metric": "release",
+                "comparison_followup_intent": "continue_previous_compare_metric",
+            },
+        ),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY],
+            execution_plan=["discovery:product_comparison"],
+            comparison_followup_intent="continue_previous_compare_metric",
+            comparison_metric="release",
+        ),
+    )
+
+    violations = response_contract_violations(
+        template="quickReply",
+        assistant_response_text="| 항목 | Dynapro HPX | Dynapro HP3 |\n|---|---|---|\n| 특징 | x | y |",
+        assistant_response_source="code_product_compare_resolver",
+        compare_metric="detail",
+        response_shape_key="metric_comparison_summary",
+        called_tools=["search_product_tool"],
+        source_domain="discovery",
+        contract=contract,
+    )
+
+    assert {"type": "compare_metric_metadata_drift", "compare_metric": "release", "assistant_compare_metric": "detail"} in violations
 
 
 def test_response_decision_helper_uses_source_domain_contextvars() -> None:

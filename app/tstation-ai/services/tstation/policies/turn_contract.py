@@ -147,6 +147,14 @@ def build_turn_contract(
             known_slots["compare_metric"] = compare_metric
         if comparison_followup_intent:
             known_slots["comparison_followup_intent"] = comparison_followup_intent
+    response_metadata = response_decision.metadata if response_decision is not None else {}
+    if isinstance(response_metadata, Mapping):
+        compare_metric = str(response_metadata.get("compare_metric") or "")
+        comparison_followup_intent = str(response_metadata.get("comparison_followup_intent") or "")
+        if compare_metric and not known_slots.get("compare_metric"):
+            known_slots["compare_metric"] = compare_metric
+        if comparison_followup_intent and not known_slots.get("comparison_followup_intent"):
+            known_slots["comparison_followup_intent"] = comparison_followup_intent
 
     required_slots = _merge_tuple(
         intent_frame.missing_slots if intent_frame is not None else (),
@@ -357,6 +365,7 @@ def response_contract_violations(
     template: str | None,
     assistant_response_text: str | None = None,
     assistant_response_source: str | None = None,
+    compare_metric: str | None = None,
     response_shape_key: str | None = None,
     called_tools: list[str] | tuple[str, ...] | None = None,
     source_domain: str | None = None,
@@ -402,6 +411,13 @@ def response_contract_violations(
             "response_shape_key": str(event.get("response_shape_key") or ""),
             "assistant_response_source": str(event.get("assistant_response_source") or ""),
         })
+    compare_metadata_violation = _comparison_metric_metadata_violation(
+        compare_metric=compare_metric,
+        assistant_response_source=assistant_response_source,
+        contract=contract,
+    )
+    if compare_metadata_violation is not None:
+        violations.append(compare_metadata_violation)
     compare_violation = _comparison_contract_violation(
         assistant_response_text=assistant_response_text,
         assistant_response_source=assistant_response_source,
@@ -411,6 +427,29 @@ def response_contract_violations(
     if compare_violation is not None:
         violations.append(compare_violation)
     return violations
+
+
+def _comparison_metric_metadata_violation(
+    *,
+    compare_metric: str | None,
+    assistant_response_source: str | None,
+    contract: TurnContract | None,
+) -> dict[str, Any] | None:
+    if contract is None or str(assistant_response_source or "") != "code_product_compare_resolver":
+        return None
+    response_metadata = contract.response_decision or {}
+    response_metadata = response_metadata.get("metadata") if isinstance(response_metadata, Mapping) else {}
+    if not isinstance(response_metadata, Mapping):
+        return None
+    expected_metric = str(response_metadata.get("compare_metric") or contract.known_slots.get("compare_metric") or "")
+    actual_metric = str(compare_metric or "").strip()
+    if not expected_metric or not actual_metric or expected_metric == actual_metric:
+        return None
+    return {
+        "type": "compare_metric_metadata_drift",
+        "compare_metric": expected_metric,
+        "assistant_compare_metric": actual_metric,
+    }
 
 
 def _comparison_contract_violation(
