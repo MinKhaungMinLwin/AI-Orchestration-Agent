@@ -18070,6 +18070,7 @@ class TStationChatServiceV2:
         search_product_tool_results: list[tuple[str, dict]] = []
         buffered_data_events: list[dict] = []  # DATA events held until after QC
         tool_context_items = []  # Structured tool results for context preservation
+        mapper_tool_items: list[dict[str, Any]] = []  # Raw tool entries for deterministic template recovery.
         original_message_events = []  # Hold message events to sync history
         called_tool_names: set[str] = set()
         tool_errors: list[dict] = []
@@ -18176,6 +18177,7 @@ class TStationChatServiceV2:
             if tool_error := _tool_error_summary(tool_name, tool_result):
                 tool_errors.append(tool_error)
             structured_sources.append((tool_name, tool_result))
+            mapper_tool_items.append({"tool": tool_name, "args": dict(tool_input or {}), "data": tool_result})
             filtered = filter_source_data(
                 tool_name,
                 json.dumps(tool_result, ensure_ascii=False),
@@ -21748,6 +21750,11 @@ class TStationChatServiceV2:
                         logger.info("[TURN_CONTRACT] post-tool parse-failure update %s", turn_contract.to_dict())
                     if parsed_for_verifier is not None:
                         structured_sources.append((tool_name, parsed_for_verifier))
+                        mapper_tool_items.append({
+                            "tool": tool_name,
+                            "args": dict(input_data or {}) if isinstance(input_data, dict) else {},
+                            "data": parsed_for_verifier,
+                        })
                         if tool_name == "search_product_tool":
                             search_keyword = str(input_data.get("keyword") or "").strip()
                             search_product_tool_results.append((search_keyword, parsed_for_verifier))
@@ -23190,7 +23197,7 @@ class TStationChatServiceV2:
                                 )
                             elif mismatches and not _parallel_qc:
                                 fallback_event = _qc_inventory_availability_recovery_event(
-                                    tool_context_items,
+                                    mapper_tool_items,
                                     mismatches,
                                 ) or _qc_factual_mismatch_guard_event(mismatches)
                                 buffered_data_events = [fallback_event]
