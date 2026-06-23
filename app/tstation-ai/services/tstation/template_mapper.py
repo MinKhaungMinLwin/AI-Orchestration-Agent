@@ -5033,6 +5033,14 @@ def _map_order_complete(tool_data_list: list[dict], assistant_text: str) -> dict
     """
     entries = _find_entries(tool_data_list, "save_to_cart_tool", "quick_order_tool")
     if not entries:
+        entries = [
+            entry
+            for entry in tool_data_list
+            if entry.get("tool") in {"save_to_cart_tool", "quick_order_tool"}
+            and isinstance(entry.get("data"), dict)
+            and entry["data"].get("status") == "error"
+        ]
+    if not entries:
         return None
     entry = entries[-1]
     flow_type = "cart" if entry.get("tool") == "save_to_cart_tool" else "order"
@@ -5203,20 +5211,51 @@ def _map_order_complete(tool_data_list: list[dict], assistant_text: str) -> dict
         if is_success
         else "주문 처리 중 문제가 발생했어요. 다시 시도해 주세요."
     )
+    if not is_success:
+        return {
+            "type": "data",
+            "template": "quickReply",
+            "data": {
+                "assistantResponse": "주문서 생성에 실패했어요. 주문 정보를 다시 확인해 주세요.",
+                "quickReplies": [
+                    {"label": "주문 정보 다시 확인", "domain": "TRANSACTION"},
+                    {"label": "장바구니 확인", "domain": "TRANSACTION", "url": CTAUrls.CART},
+                ],
+                "metadata": {
+                    "goodsId": goods_no,
+                    "shopId": shop_id or None,
+                    "quickOrderResult": "failed",
+                },
+            },
+        }
+    if not order_form_data:
+        return {
+            "type": "data",
+            "template": "quickReply",
+            "data": {
+                "assistantResponse": (
+                    "주문서 생성 결과를 확인했지만 주문/결제 페이지 이동 정보가 부족해요. "
+                    "주문 정보를 다시 확인해 주세요."
+                ),
+                "quickReplies": [
+                    {"label": "주문 정보 다시 확인", "domain": "TRANSACTION"},
+                    {"label": "장바구니 확인", "domain": "TRANSACTION", "url": CTAUrls.CART},
+                ],
+                "metadata": {
+                    "goodsId": goods_no,
+                    "shopId": shop_id or None,
+                    "quickOrderResult": "missing_order_page_payload",
+                },
+            },
+        }
     text = (assistant_text or "").strip()
     assistant_response = default_msg if is_success else text if text and len(text) <= 120 else default_msg
 
-    if is_success:
-        quick_replies = [
-            {"label": "주문 내역 확인", "domain": "TRANSACTION"},
-            {"label": "배송 상태 확인", "domain": "TRANSACTION"},
-            {"label": "처음으로", "domain": "LEADING"},
-        ]
-    else:
-        quick_replies = [
-            {"label": "다시 시도", "domain": "TRANSACTION"},
-            {"label": "처음으로", "domain": "LEADING"},
-        ]
+    quick_replies = [
+        {"label": "주문 내역 확인", "domain": "TRANSACTION"},
+        {"label": "배송 상태 확인", "domain": "TRANSACTION"},
+        {"label": "처음으로", "domain": "LEADING"},
+    ]
 
     return {
         "type": "data",

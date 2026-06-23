@@ -6766,7 +6766,7 @@ _ORDER_SUMMARY_LINE_RE = re.compile(r"^\s*([^:\n]+)\s*:\s*(.+?)\s*$", re.MULTILI
 def _parse_order_summary_lines(text: str) -> dict[str, str]:
     parsed: dict[str, str] = {}
     for match in _ORDER_SUMMARY_LINE_RE.finditer(text):
-        key = match.group(1).strip()
+        key = re.sub(r"^[\s\-•*]+", "", match.group(1)).strip()
         value = match.group(2).strip()
         if key and value:
             parsed[key] = value
@@ -6833,6 +6833,15 @@ def _coerce_order_summary_quickreply_to_preorder(
     payment_amount = _parse_krw_amount(amount_raw or "")
     if payment_amount is None and slot_state is not None:
         payment_amount = getattr(slot_state, "payment_amount", None)
+    requested_cal_day = _cal_day_from_korean_date_text(booking_raw)
+    rsv_hour = _reservation_hour_from_text(booking_raw)
+    product_name = re.sub(
+        r"\s*\d{3}\s*/?\s*\d{2}\s*R?\s*\d{2}\s*$",
+        "",
+        product,
+        flags=re.IGNORECASE,
+    ).strip() or product
+    tire_size = normalize_tire_size(product)
 
     return {
         "type": "data",
@@ -6854,6 +6863,13 @@ def _coerce_order_summary_quickreply_to_preorder(
             "metadata": {
                 "goodsId": getattr(slot_state, "goods_no", None) if slot_state is not None else None,
                 "shopId": getattr(slot_state, "shop_id", None) if slot_state is not None else None,
+                "shopName": getattr(slot_state, "shop_name", None) if slot_state is not None else store_name,
+                "ordQty": int(qty_match.group(0)),
+                "requestedCalDay": requested_cal_day,
+                "rsvHour": rsv_hour,
+                "paymentAmount": payment_amount,
+                "productName": product_name,
+                "tireSize": tire_size,
                 "carNo": None,
                 "carLncCd": None,
             },
@@ -24988,20 +25004,25 @@ class TStationChatServiceV2:
                 "tool": "quick_order_tool",
                 "source_domain": "transaction",
             })
+            status = str(quick_order_result.get("status") or "").lower()
+            unwrapped_quick_order = _unwrap_tool_data(quick_order_result)
+            quick_order_flag = (
+                str(unwrapped_quick_order.get("result") or "").lower()
+                if isinstance(unwrapped_quick_order, dict)
+                else ""
+            )
+            order_form_payload = (
+                unwrapped_quick_order.get("data")
+                if isinstance(unwrapped_quick_order, dict) and isinstance(unwrapped_quick_order.get("data"), dict)
+                else None
+            )
+            is_success = status == "success" and quick_order_flag not in {"", "false", "0"} and order_form_payload
 
             mapped_event = try_build_template(
                 [{"tool": "quick_order_tool", "args": tool_input, "data": quick_order_result}],
                 str(preorder_payload.get("assistantResponse") or ""),
             )
-            if mapped_event is None:
-                status = str(quick_order_result.get("status") or "").lower()
-                unwrapped_quick_order = _unwrap_tool_data(quick_order_result)
-                quick_order_flag = (
-                    str(unwrapped_quick_order.get("result") or "").lower()
-                    if isinstance(unwrapped_quick_order, dict)
-                    else ""
-                )
-                is_success = status == "success" and quick_order_flag not in {"", "false", "0"}
+            if not is_success:
                 return emitted_events, {
                     "type": "data",
                     "template": "quickReply",
@@ -25009,24 +25030,40 @@ class TStationChatServiceV2:
                     "assistant_response_source": "code_quick_order_execute_resolver",
                     "data": {
                         "assistantResponse": (
-                            "주문서가 준비되었습니다. 주문/결제 페이지에서 결제를 진행해 주세요."
-                            if is_success
-                            else "주문서 생성 중 문제가 생겼어요. 주문 정보를 다시 확인한 뒤 재시도해 주세요."
+                            "주문서 생성에 실패했어요. 주문 정보를 다시 확인해 주세요."
                         ),
-                        "quickReplies": (
-                            [
-                                {"label": "주문 내역 확인", "domain": "TRANSACTION"},
-                                {"label": "배송 상태 확인", "domain": "TRANSACTION"},
-                            ]
-                            if is_success
-                            else [
-                                {"label": "주문 다시 확인", "domain": "TRANSACTION"},
-                                {"label": "예약 시간 다시 선택", "domain": "TRANSACTION"},
-                            ]
-                        ),
+                        "quickReplies": [
+                            {"label": "주문 정보 다시 확인", "domain": "TRANSACTION"},
+                            {"label": "장바구니 확인", "domain": "TRANSACTION", "url": CTAUrls.CART},
+                        ],
                         "predictedDomains": ["TRANSACTION"],
                         "metadata": {
                             "response_shape_key": "quick_order_execute",
+                            "quickOrderToolCalled": True,
+                            "quickOrderResult": "failed",
+                        },
+                    },
+                }
+            if mapped_event is None or mapped_event.get("template") != "orderComplete":
+                return emitted_events, {
+                    "type": "data",
+                    "template": "quickReply",
+                    "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+                    "assistant_response_source": "code_quick_order_execute_resolver",
+                    "data": {
+                        "assistantResponse": (
+                            "주문서 생성 결과를 확인했지만 주문/결제 페이지 이동 정보가 부족해요. "
+                            "주문 정보를 다시 확인해 주세요."
+                        ),
+                        "quickReplies": [
+                            {"label": "주문 정보 다시 확인", "domain": "TRANSACTION"},
+                            {"label": "장바구니 확인", "domain": "TRANSACTION", "url": CTAUrls.CART},
+                        ],
+                        "predictedDomains": ["TRANSACTION"],
+                        "metadata": {
+                            "response_shape_key": "quick_order_execute",
+                            "quickOrderToolCalled": True,
+                            "quickOrderResult": "missing_order_page_payload",
                         },
                     },
                 }

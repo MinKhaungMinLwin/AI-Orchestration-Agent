@@ -45,6 +45,7 @@ from services.tstation.chat import (
     _build_coupon_applicability_event,
     _build_coupon_channel_policy_event,
     _build_default_benefit_event,
+    _coerce_order_summary_quickreply_to_preorder,
     _build_maintenance_dday_event,
     _build_maintenance_history_access_policy_event,
     _build_maintenance_history_event,
@@ -13425,6 +13426,38 @@ def test_preorder_slot_recovery_uses_ready_preorder_payload_as_execute_source() 
         "requested_cal_day": "20260623",
         "rsv_hour": "17",
     }
+
+
+def test_preorder_summary_guard_preserves_execute_metadata() -> None:
+    event = {
+        "template": "quickReply",
+        "source_domain": "transaction",
+        "data": {
+            "assistantResponse": (
+                "주문 정보\n"
+                "- 상품: 다이나프로 HPX 235/55R19\n"
+                "- 수량: 2개\n"
+                "- 장착 매장: 티스테이션 판교점\n"
+                "- 방문 예정: 2026년 6월 23일 (화) 17:00\n"
+                "- 결제 예상금액: 314,400원"
+            )
+        },
+    }
+    slot_state = SimpleNamespace(goods_no="G000000317682", shop_id="F00721", shop_name="티스테이션 판교점")
+
+    preorder = _coerce_order_summary_quickreply_to_preorder(event, slot_state)
+
+    assert preorder is not None
+    metadata = preorder["data"]["metadata"]
+    assert metadata["goodsId"] == "G000000317682"
+    assert metadata["shopId"] == "F00721"
+    assert metadata["shopName"] == "티스테이션 판교점"
+    assert metadata["ordQty"] == 2
+    assert metadata["requestedCalDay"] == "20260623"
+    assert metadata["rsvHour"] == "17"
+    assert metadata["paymentAmount"] == 314400
+    assert metadata["productName"] == "다이나프로 HPX"
+    assert metadata["tireSize"] == "235/55R19"
 
 
 def test_turn_contract_promotes_planner_quick_order_execute_over_code_reservation_drift() -> None:
