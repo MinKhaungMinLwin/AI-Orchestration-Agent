@@ -6946,6 +6946,66 @@ def test_turn_contract_fallback_event_prefers_size_clarification_on_response_pol
     assert "Dynapro HPX 오늘서비스 구매를 진행하려면 타이어 사이즈를 선택해 주세요." in event["data"]["assistantResponse"]
 
 
+def test_turn_contract_fallback_event_prefers_size_clarification_without_blocking_slots() -> None:
+    contract = TurnContract(
+        domain="discovery",
+        intent="resolve_or_describe_product",
+        sub_intent="product_name_search",
+        known_slots={
+            "ord_qty": 2,
+            "shop_name": "판교점",
+            "availability_intent": "today_install",
+            "requested_cal_day": "20260624",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        required_slots=(),
+        blocking_required_slots=(),
+        resolvable_required_slots=(),
+        allowed_tools=("search_product_tool",),
+        forbidden_tools=("get_products_recommendations_tool",),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=("answer_from_previous_recommendation",),
+            metadata={"response_shape_key": "product_search_summary"},
+        ).to_dict(),
+        risk_level="medium",
+        fallback_reason="response_policy_forbidden_behaviors",
+        planner_intent="resolve_or_describe_product",
+        planner_domains=("discovery",),
+        execution_plan=("discovery:resolve_product", "transaction:stock_store_or_reservation"),
+    )
+
+    event = _build_turn_contract_fallback_event(
+        turn_contract=contract,
+        user_text="판교점에서 오늘서비스로 dynapro hpx 2개 구매하고싶어",
+        tool_data_list=[
+            {
+                "tool": "search_product_tool",
+                "args": {"keyword": "다이나프로 HPX", "limit": 10, "brand_cd": "HK"},
+                "data": {
+                    "status": "success",
+                    "data": {
+                        "items": [
+                            {"goods_nm": "다이나프로 HPX", "tire_size_1": "255/45R20"},
+                            {"goods_nm": "다이나프로 HPX", "tire_size_1": "255/55R18"},
+                            {"goods_nm": "다이나프로 HPX", "tire_size_1": "215/55R18"},
+                        ]
+                    },
+                },
+            }
+        ],
+    )
+
+    assert event is not None
+    assert event["assistant_response_source"] == "code_transaction_product_resolution_size_clarification"
+    assert "다이나프로 HPX 오늘서비스 구매를 진행하려면 타이어 사이즈를 선택해 주세요." in event["data"]["assistantResponse"]
+    assert _labels(event["data"]["quickReplies"]) == ["255/45R20", "255/55R18", "215/55R18", "사이즈 직접 입력"]
+    assert event["data"]["metadata"]["ordQty"] == 2
+    assert event["data"]["metadata"]["shopName"] == "판교점"
+
+
 def test_no_visible_output_fallback_event_builds_latest_compare_summary() -> None:
     contract = build_turn_contract(
         user_text="ventus s2 as, ventus air s 중에 뭐가 더 신상품?",

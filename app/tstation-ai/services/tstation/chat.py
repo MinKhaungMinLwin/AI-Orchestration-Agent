@@ -12011,14 +12011,13 @@ def _build_turn_contract_required_slot_guard_event(
 ) -> dict[str, Any] | None:
     if turn_contract is None:
         return None
-    if "tire_size" in set(turn_contract.blocking_required_slots):
-        unresolved_event = _build_transaction_unresolved_product_resolution_event(
-            user_text=user_text,
-            slots=turn_contract.known_slots,
-            tool_data_list=tool_data_list,
-        )
-        if unresolved_event is not None:
-            return unresolved_event
+    unresolved_event = _build_transaction_unresolved_product_resolution_event(
+        user_text=user_text,
+        slots=turn_contract.known_slots,
+        tool_data_list=tool_data_list,
+    )
+    if unresolved_event is not None:
+        return unresolved_event
     return build_required_slot_clarification_event(turn_contract)
 
 
@@ -12030,14 +12029,13 @@ def _build_turn_contract_fallback_event(
 ) -> dict[str, Any] | None:
     if turn_contract is None:
         return None
-    if "tire_size" in set(turn_contract.blocking_required_slots):
-        unresolved_event = _build_transaction_unresolved_product_resolution_event(
-            user_text=user_text,
-            slots=turn_contract.known_slots,
-            tool_data_list=tool_data_list,
-        )
-        if unresolved_event is not None:
-            return unresolved_event
+    unresolved_event = _build_transaction_unresolved_product_resolution_event(
+        user_text=user_text,
+        slots=turn_contract.known_slots,
+        tool_data_list=tool_data_list,
+    )
+    if unresolved_event is not None:
+        return unresolved_event
     if should_guard_required_slots(turn_contract):
         return build_required_slot_clarification_event(turn_contract)
     return build_response_policy_guard_event(turn_contract)
