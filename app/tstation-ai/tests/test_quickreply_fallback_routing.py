@@ -46,6 +46,7 @@ from services.tstation.chat import (
     _build_coupon_channel_policy_event,
     _build_default_benefit_event,
     _build_maintenance_dday_event,
+    _build_maintenance_history_access_policy_event,
     _build_maintenance_history_event,
     _build_owned_coupon_best_discount_event,
     _build_owned_coupon_expiry_lookup_event,
@@ -114,6 +115,7 @@ from services.tstation.chat import (
     _build_staggered_vehicle_tire_selection_event,
     _build_staggered_tire_quantity_limit_event,
     _is_manual_tire_size_input_selection,
+    _is_maintenance_history_access_policy_query,
     _is_maintenance_history_lookup_query,
     _is_order_quantity_prompt_continuation_text,
     _is_staggered_selected_tire_size_context,
@@ -14783,6 +14785,63 @@ def test_maintenance_history_lookup_contract_uses_history_tool(user_text: str, r
     assert contract.intent == "maintenance_history_lookup"
     assert "get_maintenance_history_tool" in contract.allowed_tools
     assert contract.blocking_required_slots == ()
+
+
+@pytest.mark.parametrize(
+    "user_text",
+    [
+        "내가 최근에 부산에서 여수로 이사를 했는데, 아무 티스테이션 매장 가서도 내 차 정비 이력 조회 가능할까?",
+        "다른 지역 매장에서도 내 차 정비내역 볼 수 있어?",
+    ],
+)
+def test_maintenance_history_access_policy_does_not_call_history_tool(user_text: str) -> None:
+    assert _is_maintenance_history_access_policy_query(user_text) is True
+    assert _is_maintenance_history_lookup_query(user_text) is False
+
+    frame = build_transaction_intent_frame(
+        user_text,
+        known_slots={
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "ord_qty": 4,
+            "goods_no": "G000000309780",
+        },
+    )
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text=user_text,
+        known_slots=dict(frame.known_slots),
+    )
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=response_decision,
+    )
+
+    assert frame.intent == "maintenance_history_access_policy"
+    assert tool_plan.allowed_tools == ()
+    assert "get_maintenance_history_tool" in tool_plan.forbidden_tools
+    assert response_decision.metadata.get("response_shape_key") == "maintenance_history_access_policy"
+    assert contract.intent == "maintenance_history_access_policy"
+    assert "get_maintenance_history_tool" in contract.forbidden_tools
+    assert contract.allowed_tools == ()
+    assert contract.blocking_required_slots == ()
+
+
+def test_maintenance_history_access_policy_event_has_service_history_cta() -> None:
+    event = _build_maintenance_history_access_policy_event(
+        "내가 최근에 부산에서 여수로 이사를 했는데, 아무 티스테이션 매장 가서도 내 차 정비 이력 조회 가능할까?"
+    )
+    data = event["data"]
+
+    assert event["template"] == "quickReply"
+    assert event["assistant_response_source"] == "code_maintenance_history_access_policy"
+    assert "다른 지역 티스테이션 매장" in data["assistantResponse"]
+    assert "상세 이력은 마이페이지 > 매장서비스 내역" in data["assistantResponse"]
+    assert data["quickReplies"][0]["label"] == "매장서비스 내역"
+    assert data["quickReplies"][0]["url"] == CTAUrls.STORE_SERVICE_HISTORY
 
 
 def test_maintenance_history_event_filters_requested_service_and_has_cta() -> None:

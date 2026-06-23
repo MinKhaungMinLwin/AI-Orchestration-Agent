@@ -312,6 +312,9 @@ def build_turn_contract(
     if code_intent == "maintenance_history_lookup" or planner_intent == "maintenance_history_lookup":
         domain = "transaction"
         intent = "maintenance_history_lookup"
+    if code_intent == "maintenance_history_access_policy" or planner_intent == "maintenance_history_access_policy":
+        domain = "support"
+        intent = "maintenance_history_access_policy"
     if _is_discovery_event_content_contract(routing_result, planner_intent, code_intent):
         domain = "discovery"
         intent = planner_intent if planner_intent in {
@@ -390,6 +393,17 @@ def build_turn_contract(
         forbidden_tools = _merge_tuple(
             forbidden_tools,
             ("get_products_recommendations_tool", "search_product_tool", "get_orders_of_user_tool"),
+        )
+    if intent == "maintenance_history_access_policy":
+        allowed_tools = ()
+        forbidden_tools = _merge_tuple(
+            forbidden_tools,
+            (
+                "get_maintenance_history_tool",
+                "get_orders_of_user_tool",
+                "get_products_recommendations_tool",
+                "search_product_tool",
+            ),
         )
 
     drift = _contract_drift(

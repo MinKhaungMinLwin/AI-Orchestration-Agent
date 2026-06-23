@@ -1561,6 +1561,9 @@ RULES:
 - 정비이력/정비내역/관리받은 내역/서비스 이력/받은 서비스, "마지막으로 휠얼라인먼트 받은게 언제",
   "오일필터 교체한 날이 언제야", "최근 엔진오일 언제 갈았어" → TRANSACTION,
   agent_prompt_profile=transaction_order, intent=maintenance_history_lookup
+- "아무 매장 가도 정비 이력 조회 가능해?", "다른 지역 매장에서도 내 차 이력 볼 수 있어?",
+  "이사했는데 여수 매장에서도 정비이력 확인 가능할까?" → TRANSACTION or SUPPORT,
+  policy_intent=maintenance_history_access_policy (policy/availability guidance, do NOT call get_maintenance_history_tool)
 - 예약 시간 변경/방문 시간 변경/일정 변경/시간 바꿀 수 있어 → TRANSACTION, agent_prompt_profile=transaction_order
 - 단순 변심 + 반품 + (왕복 배송비/택배비/배송비/반품 비용/반품수수료) → TRANSACTION, agent_prompt_profile=transaction_order
 - 환불/반품/보증/워런티/1:1 문의/상담원 → SUPPORT, except the cancellation/return shipping-fee rule above
@@ -1600,6 +1603,9 @@ EXAMPLES (tricky cases):
 - "정비이력 보여줘", "내가 관리받은 내역 알려줘", "마지막으로 휠얼라인먼트 서비스 받은게 언제더라?",
   "오일필터 교체한 날이 언제야", "최근 엔진오일 언제 갈았어?" → TRANSACTION,
   agent_prompt_profile=transaction_order, intent=maintenance_history_lookup (maintenance/service history lookup, NOT SUPPORT)
+- "부산에서 여수로 이사했는데 아무 티스테이션 매장 가도 내 차 정비 이력 조회 가능할까?",
+  "다른 지역 매장에서도 정비내역 볼 수 있어?" → TRANSACTION or SUPPORT,
+  policy_intent=maintenance_history_access_policy (answer policy/procedure, no maintenance-history tool)
 - "내 예약 알려줘", "예약 조회", "예약 어떻게 돼있어", "다음 방문 언제" → TRANSACTION, agent_prompt_profile=transaction_order (visit reservation lookup, NOT SUPPORT, NOT creating new reservation)
 - "예약한 매장 전화번호", "내 예약 매장 위치", "예약 지점 연락처" → TRANSACTION, agent_prompt_profile=transaction_order (reservation store info lookup from reservation/order source; do NOT infer from recently viewed/searched store)
 - "오늘 예약한거 시간 변경하고 싶어" → TRANSACTION, agent_prompt_profile=transaction_order
@@ -5658,6 +5664,16 @@ _MAINTENANCE_HISTORY_LOOKUP_RE = re.compile(
     r".{0,16}(?:언제|있)",
     re.IGNORECASE,
 )
+_MAINTENANCE_HISTORY_ACCESS_POLICY_RE = re.compile(
+    r"(?:(?:정비|서비스|관리)\s*(?:이력|내역)|정비이력|정비내역|관리받은\s*(?:내역|거)|"
+    r"관리\s*받은\s*(?:내역|거)|내\s*차\s*(?:이력|내역)).{0,60}"
+    r"(?:조회\s*가능|확인\s*가능|볼\s*수|볼수|조회할\s*수|확인할\s*수|매장(?:에서)?\s*(?:조회|확인)|"
+    r"아무\s*(?:티스테이션\s*)?(?:매장|지점)|다른\s*(?:지역|매장|지점)|이사|타\s*지역)|"
+    r"(?:부산|여수|서울|제주|광주|대전|대구|울산|인천|경기|분당|판교|한남|모란).{0,40}"
+    r"(?:(?:정비|서비스|관리)\s*(?:이력|내역)|정비이력|정비내역).{0,40}"
+    r"(?:조회\s*가능|확인\s*가능|볼\s*수|볼수|매장(?:에서)?\s*(?:조회|확인))",
+    re.IGNORECASE,
+)
 _MAINTENANCE_HISTORY_SERVICE_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("휠얼라인먼트", (r"휠\s*얼라인먼트", r"얼라인먼트")),
     ("오일필터", (r"오일\s*필터", r"오일필터")),
@@ -5671,7 +5687,12 @@ _MAINTENANCE_HISTORY_SERVICE_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
 
 
 def _is_maintenance_history_lookup_query(user_text: str | None) -> bool:
-    return bool(_MAINTENANCE_HISTORY_LOOKUP_RE.search(user_text or ""))
+    text = user_text or ""
+    return bool(_MAINTENANCE_HISTORY_LOOKUP_RE.search(text) and not _is_maintenance_history_access_policy_query(text))
+
+
+def _is_maintenance_history_access_policy_query(user_text: str | None) -> bool:
+    return bool(_MAINTENANCE_HISTORY_ACCESS_POLICY_RE.search(user_text or ""))
 
 
 def _requested_maintenance_history_item(user_text: str | None) -> tuple[str, tuple[str, ...]] | None:
@@ -5780,6 +5801,41 @@ def _build_maintenance_history_event(tool_result: dict, user_query: str) -> dict
             "metadata": {
                 "responseShapeKey": "maintenance_history_lookup",
                 "requestedServiceItem": focus[0] if focus else None,
+            },
+        },
+    }
+
+
+def _build_maintenance_history_access_policy_event(user_query: str) -> dict:
+    assistant_response = (
+        "티스테이션 매장에서는 고객/차량 정보 기준으로 정비·서비스 이력 확인이 가능할 수 있어요.\n\n"
+        "다른 지역 매장에 방문하더라도 차량번호나 예약자 정보로 확인을 요청해 주세요. "
+        "다만 매장 시스템 권한이나 이력 종류에 따라 확인 범위가 달라질 수 있어요.\n\n"
+        "상세 이력은 마이페이지 > 매장서비스 내역에서도 확인할 수 있어요."
+    )
+    if re.search(r"아무\s*(?:티스테이션\s*)?(?:매장|지점)|다른\s*(?:지역|매장|지점)|이사", user_query, re.IGNORECASE):
+        assistant_response = (
+            "이사 후 다른 지역 티스테이션 매장에 방문해도 고객/차량 정보 기준으로 정비·서비스 이력 확인을 요청할 수 있어요.\n\n"
+            "방문 시 차량번호나 예약자 정보를 알려주시면 매장에서 확인을 도와드릴 수 있고, "
+            "시스템 권한이나 이력 종류에 따라 확인 범위는 달라질 수 있어요.\n\n"
+            "상세 이력은 마이페이지 > 매장서비스 내역에서도 확인할 수 있어요."
+        )
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.SUPPORT.value,
+        "assistant_response_source": "code_maintenance_history_access_policy",
+        "data": {
+            "assistantResponse": assistant_response,
+            "quickReplies": [
+                {"label": "매장서비스 내역", "url": CTAUrls.STORE_SERVICE_HISTORY, "domain": "SUPPORT"},
+                {"label": "가까운 매장 찾기", "domain": "TRANSACTION"},
+                {"label": "정비이력 조회", "domain": "TRANSACTION"},
+            ],
+            "predictedDomains": ["SUPPORT", "TRANSACTION"],
+            "metadata": {
+                "responseShapeKey": "maintenance_history_access_policy",
+                "maintenanceHistoryAccessPolicy": True,
             },
         },
     }
@@ -21585,6 +21641,8 @@ class TStationChatServiceV2:
             )
 
         async def _resolve_maintenance_history_lookup_with_code() -> tuple[list[dict], dict] | None:
+            if _is_maintenance_history_access_policy_query(user_query):
+                return [], _build_maintenance_history_access_policy_event(user_query)
             if not _is_maintenance_history_lookup_query(user_query):
                 return None
 

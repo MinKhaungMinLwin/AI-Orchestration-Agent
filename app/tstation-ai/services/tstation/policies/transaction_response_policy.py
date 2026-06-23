@@ -62,6 +62,8 @@ def decide_transaction_response(
         return _decide_order_arrival_status_lookup()
     if intent == "maintenance_history_lookup":
         return _decide_maintenance_history_lookup(slots=slots)
+    if intent == "maintenance_history_access_policy":
+        return _decide_maintenance_history_access_policy()
     if intent == "price_or_benefit_alert_request":
         return _decide_price_or_benefit_alert_request(slots=slots)
     if intent == "inventory_availability":
@@ -279,6 +281,24 @@ def _decide_maintenance_history_lookup(*, slots: dict[str, Any]) -> ResponseDeci
             "사용자가 특정 항목을 언급했으면 tool 결과에서 해당 항목을 우선 필터링하고, 결과 응답에는 정비이력보기 CTA를 포함한다."
         ),
         metadata={"requested_service_item": requested_item} if requested_item else None,
+    )
+
+
+def _decide_maintenance_history_access_policy() -> ResponseDecision:
+    return _decision(
+        response_shape_key="maintenance_history_access_policy",
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        forbidden_behaviors=(
+            "call_maintenance_history_tool_for_access_policy",
+            "require_order_for_maintenance_history_access_policy",
+            "show_actual_history_rows_for_access_policy",
+        ),
+        assistant_guidance=(
+            "정비/서비스 이력의 조회 가능 여부, 다른 지역/아무 매장에서도 볼 수 있는지, 매장 확인 절차를 묻는 경우는 "
+            "사용자의 실제 이력을 조회하지 않는다. 차량번호/예약자 정보로 매장 확인 요청이 가능할 수 있음을 안내하고, "
+            "상세 이력 확인 CTA를 제공한다."
+        ),
     )
 
 
