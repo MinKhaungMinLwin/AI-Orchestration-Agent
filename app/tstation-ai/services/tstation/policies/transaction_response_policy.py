@@ -92,9 +92,9 @@ def _decide_stock_store_search(*, text: str, slots: dict[str, Any]) -> ResponseD
             response_shape_key="missing_stock_search_slots",
             response_shape=ResponseShape.CLARIFY,
             template=TemplateName.QUICK_REPLY,
-            required_slots=tuple(required_slots),
             forbidden_behaviors=("empty_location_card", "ask_unrelated_reset"),
             assistant_guidance="상품은 확정된 것으로 보고 재확인하지 말고, 재고 조회에 필요한 누락 정보만 짧게 요청한다.",
+            metadata={"missing_slots": tuple(required_slots), "stock_check_mode": stock_check_mode},
         )
 
     if stock_check_mode == "inventory_only":
@@ -285,9 +285,9 @@ def _decide_quick_order_reservation(*, slots: dict[str, Any]) -> ResponseDecisio
             response_shape_key="missing_order_slots",
             response_shape=ResponseShape.CLARIFY,
             template=TemplateName.QUICK_REPLY,
-            required_slots=tuple(missing),
             forbidden_behaviors=_NO_ORDER_NULL_FORBIDDEN,
             assistant_guidance="주문 요약을 만들기 전에 누락된 필수 주문 정보를 먼저 수집한다.",
+            metadata={"missing_slots": tuple(missing)},
         )
 
     if _has_selected_booking_datetime(slots):
@@ -306,9 +306,9 @@ def _decide_quick_order_reservation(*, slots: dict[str, Any]) -> ResponseDecisio
         response_shape_key="reservation_slots",
         response_shape=ResponseShape.DATE_PICK,
         template=TemplateName.DATE_PICK,
-        required_slots=("booking_datetime",),
         forbidden_behaviors=_NO_ORDER_NULL_FORBIDDEN + ("store_hours_instead_of_slots",),
         assistant_guidance="상품/수량/매장이 확정됐으면 예약 가능한 날짜와 시간을 먼저 선택하게 한다.",
+        metadata={"next_step": "booking_datetime"},
     )
 
 

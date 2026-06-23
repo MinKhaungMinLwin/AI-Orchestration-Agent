@@ -490,6 +490,7 @@ def build_transaction_intent_frame(
         "noon_requested": bool(_NOON_RE.search(text)),
         "result_limit": result_limit,
         "stock_check_mode": "inventory_only",
+        "today_install_candidate_scope": today_install_candidate_scope,
     }
 
     if preserve_pending_today_install:
@@ -515,6 +516,14 @@ def build_transaction_intent_frame(
     elif _PRICE_OR_COUPON_RE.search(text):
         intent = "price_or_coupon_check"
         sub_intent = "coupon" if "쿠폰" in text else "price"
+    elif (
+        _STORE_SCHEDULE_RE.search(text)
+        and has_product
+        and (has_location or requested_cal_day or today_requested)
+    ):
+        intent = "stock_store_search"
+        sub_intent = "today_install"
+        entities["stock_check_mode"] = "preview"
     elif _STORE_SCHEDULE_RE.search(text) and (store_name or has_location) and not has_product:
         intent = "store_schedule"
         sub_intent = "store_visit"
@@ -564,6 +573,8 @@ def build_transaction_intent_frame(
         known["availability_intent"] = "today_install"
     if intent == "stock_store_search":
         known["stock_check_mode"] = str(entities.get("stock_check_mode") or "inventory_only")
+        if requested_cal_day:
+            known["requested_cal_day"] = requested_cal_day
         if quantity:
             known["quantity"] = quantity
             known["ord_qty"] = quantity
@@ -598,9 +609,11 @@ def build_transaction_intent_frame(
 
 def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
     """Return the preferred Transaction tool family for the intent frame."""
+    action = _transaction_action(frame)
+    action_required_slots = _action_required_slots(frame, action)
     if (
         frame.intent in {"stock_store_search", "quick_order_reservation"}
-        and "tire_size" in frame.missing_slots
+        and "tire_size" in action_required_slots
         and not frame.known_slots.get("goods_no")
     ):
         return ToolPlan(
@@ -614,8 +627,12 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
                 "transaction_store_preview_tool",
                 "get_store_inventory_tool",
             ),
-            required_slots=frame.missing_slots,
-            metadata={"response_intent": frame.intent, "guard": "require_product_size_before_transaction"},
+            required_slots=action_required_slots,
+            metadata={
+                "response_intent": frame.intent,
+                "action": action,
+                "guard": "require_product_size_before_transaction",
+            },
         )
     if frame.intent == "stock_store_search":
         args = _slot_args(
@@ -639,16 +656,24 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
                 preferred_tool=preferred_tool,
                 tool_args_patch=args,
                 forbidden_tools=("transaction_store_preview_tool", "get_store_schedule_tool", "preorder_with_null_required_fields"),
-                required_slots=frame.missing_slots,
-                metadata={"response_intent": "stock_store_search", "stock_check_mode": "inventory_only"},
+                required_slots=action_required_slots,
+                metadata={
+                    "response_intent": "stock_store_search",
+                    "stock_check_mode": "inventory_only",
+                    "action": action,
+                },
             )
         return ToolPlan(
             allowed_tools=("transaction_store_preview_tool", "get_store_inventory_tool", "get_store_list_tool"),
             preferred_tool="transaction_store_preview_tool",
             tool_args_patch=args,
             forbidden_tools=("get_store_schedule_tool", "preorder_with_null_required_fields"),
-            required_slots=frame.missing_slots,
-            metadata={"response_intent": "stock_store_search", "stock_check_mode": "preview"},
+            required_slots=action_required_slots,
+            metadata={
+                "response_intent": "stock_store_search",
+                "stock_check_mode": "preview",
+                "action": action,
+            },
         )
 
     if frame.intent == "store_schedule":
@@ -657,8 +682,8 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
             preferred_tool="get_store_schedule_tool",
             tool_args_patch=_slot_args(frame, "store_name", "region"),
             forbidden_tools=("transaction_store_preview_tool",),
-            required_slots=frame.missing_slots,
-            metadata={"response_intent": "store_schedule"},
+            required_slots=action_required_slots,
+            metadata={"response_intent": "store_schedule", "action": action},
         )
 
     if frame.intent == "store_search":
@@ -672,8 +697,8 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
             preferred_tool="search_stores_tool",
             tool_args_patch=args,
             forbidden_tools=("get_store_schedule_tool", "transaction_store_preview_tool"),
-            required_slots=frame.missing_slots,
-            metadata={"response_intent": "store_search"},
+            required_slots=action_required_slots,
+            metadata={"response_intent": "store_search", "action": action},
         )
 
     if frame.intent == "favorite_store_lookup":
@@ -682,8 +707,8 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
             preferred_tool="get_favorite_stores_tool",
             tool_args_patch={},
             forbidden_tools=("search_stores_tool", "get_store_list_tool", "get_nearby_stores_tool"),
-            required_slots=frame.missing_slots,
-            metadata={"response_intent": "favorite_store_lookup"},
+            required_slots=action_required_slots,
+            metadata={"response_intent": "favorite_store_lookup", "action": action},
         )
 
     if frame.intent == "quick_order_reservation":
@@ -694,8 +719,8 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
                 frame, "goods_no", "tire_size", "quantity", "store_name", "region", "requested_cal_day"
             ),
             forbidden_tools=("store_hours_instead_of_slots", "order_summary_with_null_required_fields"),
-            required_slots=frame.missing_slots,
-            metadata={"response_intent": "quick_order_reservation"},
+            required_slots=action_required_slots,
+            metadata={"response_intent": "quick_order_reservation", "action": action},
         )
 
     if frame.intent == "quick_order_execute":
@@ -710,22 +735,22 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
             "car_lnc_cd",
             "payment_amount",
         )
-        if frame.missing_slots:
+        if action_required_slots:
             return ToolPlan(
                 allowed_tools=(),
                 preferred_tool=None,
                 tool_args_patch=args,
                 forbidden_tools=("transaction_store_preview_tool", "get_store_schedule_tool"),
-                required_slots=frame.missing_slots,
-                metadata={"response_intent": "quick_order_execute"},
+                required_slots=action_required_slots,
+                metadata={"response_intent": "quick_order_execute", "action": action},
             )
         return ToolPlan(
             allowed_tools=("quick_order_tool",),
             preferred_tool="quick_order_tool",
             tool_args_patch=args,
             forbidden_tools=("transaction_store_preview_tool", "get_store_schedule_tool"),
-            required_slots=frame.missing_slots,
-            metadata={"response_intent": "quick_order_execute"},
+            required_slots=action_required_slots,
+            metadata={"response_intent": "quick_order_execute", "action": action},
         )
 
     if frame.intent == "price_or_coupon_check":
@@ -733,11 +758,103 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
             allowed_tools=("get_final_price_tool", "get_my_coupons_tool", "get_coupon_applicable_products_tool"),
             preferred_tool="get_final_price_tool",
             tool_args_patch=_slot_args(frame, "goods_no", "tire_size", "quantity"),
-            required_slots=frame.missing_slots,
-            metadata={"response_intent": "price_or_coupon_check"},
+            required_slots=action_required_slots,
+            metadata={"response_intent": "price_or_coupon_check", "action": action},
         )
 
-    return ToolPlan(required_slots=frame.missing_slots, metadata={"response_intent": frame.intent})
+    return ToolPlan(required_slots=action_required_slots, metadata={"response_intent": frame.intent, "action": action})
+
+
+def _transaction_action(frame: IntentFrame) -> str:
+    if frame.intent == "stock_store_search":
+        stock_check_mode = str(frame.known_slots.get("stock_check_mode") or frame.entities.get("stock_check_mode") or "")
+        if stock_check_mode == "inventory_only":
+            return "store_inventory_lookup"
+        if (
+            frame.known_slots.get("region")
+            or frame.known_slots.get("lat")
+            or frame.known_slots.get("lng")
+            or not _has_action_store(frame)
+        ):
+            return "regional_install_availability_preview"
+        return "selected_store_schedule"
+    if frame.intent == "store_schedule":
+        return "selected_store_schedule"
+    return frame.intent or "transaction_fallback"
+
+
+def _has_action_product(frame: IntentFrame) -> bool:
+    return bool(
+        frame.known_slots.get("goods_no")
+        or frame.known_slots.get("product_name")
+        or frame.known_slots.get("tire_model")
+        or frame.known_slots.get("pattern_name")
+        or frame.known_slots.get("pending_product_name")
+    )
+
+
+def _has_action_location(frame: IntentFrame) -> bool:
+    return bool(
+        frame.known_slots.get("region")
+        or frame.known_slots.get("place")
+        or frame.known_slots.get("lat")
+        or frame.known_slots.get("lng")
+        or frame.known_slots.get("shop_id")
+        or frame.known_slots.get("shop_name")
+        or frame.known_slots.get("store_name")
+    )
+
+
+def _has_action_store(frame: IntentFrame) -> bool:
+    return bool(frame.known_slots.get("shop_id") or frame.known_slots.get("shop_name") or frame.known_slots.get("store_name"))
+
+
+def _has_action_date(frame: IntentFrame) -> bool:
+    return bool(
+        frame.known_slots.get("requested_cal_day")
+        or frame.known_slots.get("availability_intent") == "today_install"
+        or frame.entities.get("today_requested")
+    )
+
+
+def _action_required_slots(frame: IntentFrame, action: str) -> tuple[str, ...]:
+    required: list[str] = []
+
+    def add(slot: str, condition: bool) -> None:
+        if condition and slot not in required:
+            required.append(slot)
+
+    if action == "regional_install_availability_preview":
+        add("product", not _has_action_product(frame))
+        add("tire_size", not (frame.known_slots.get("tire_size") or frame.known_slots.get("goods_no")))
+        add("quantity", not (frame.known_slots.get("quantity") or frame.known_slots.get("ord_qty")))
+        add("location", not (_has_action_location(frame) or frame.entities.get("today_install_candidate_scope")))
+        add("requested_cal_day", not _has_action_date(frame))
+    elif action == "store_inventory_lookup":
+        add("product", not _has_action_product(frame))
+        add("tire_size", not (frame.known_slots.get("tire_size") or frame.known_slots.get("goods_no")))
+        add("quantity", not (frame.known_slots.get("quantity") or frame.known_slots.get("ord_qty")))
+        add("store", not _has_action_store(frame))
+    elif action == "selected_store_schedule":
+        add("store", not _has_action_store(frame))
+        stock_context = bool(frame.known_slots.get("goods_no") or frame.known_slots.get("stock_check_mode") == "preview")
+        if stock_context:
+            add("product", not _has_action_product(frame))
+            add("quantity", not (frame.known_slots.get("quantity") or frame.known_slots.get("ord_qty")))
+            add("requested_cal_day", not _has_action_date(frame))
+    elif action == "quick_order_reservation":
+        add("product", not frame.known_slots.get("goods_no"))
+        add("quantity", not (frame.known_slots.get("quantity") or frame.known_slots.get("ord_qty")))
+        add("store", not _has_action_store(frame))
+    elif action == "quick_order_execute":
+        add("product", not frame.known_slots.get("goods_no"))
+        add("quantity", not (frame.known_slots.get("quantity") or frame.known_slots.get("ord_qty")))
+        add("store", not frame.known_slots.get("shop_id"))
+        add("booking_datetime", not (frame.known_slots.get("requested_cal_day") and frame.known_slots.get("rsv_hour")))
+    else:
+        for slot in frame.missing_slots:
+            add(slot, True)
+    return tuple(required)
 
 
 def _missing_slots_for_intent(

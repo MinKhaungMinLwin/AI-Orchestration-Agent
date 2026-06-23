@@ -226,11 +226,21 @@ def build_turn_contract(
         intent = "stock_store_search"
     if planner_intent == "quick_order_execute" and _has_quick_order_execute_slots(known_slots):
         intent = "quick_order_execute"
+    action_required_slots = tool_plan.required_slots if tool_plan is not None else ()
+    fallback_required_slots = (
+        intent_frame.missing_slots
+        if tool_plan is None and intent_frame is not None
+        else ()
+    )
+    cross_domain_required_slots = (
+        _required_slots_from_cross_domain(cross_domain_plan)
+        if tool_plan is None
+        else ()
+    )
     required_slots = _merge_tuple(
-        intent_frame.missing_slots if intent_frame is not None else (),
-        tool_plan.required_slots if tool_plan is not None else (),
-        response_decision.required_slots if response_decision is not None else (),
-        _required_slots_from_cross_domain(cross_domain_plan),
+        action_required_slots,
+        fallback_required_slots,
+        cross_domain_required_slots,
     )
     required_slots = _merge_tuple(
         required_slots,

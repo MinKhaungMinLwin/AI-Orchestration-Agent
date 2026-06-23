@@ -6633,6 +6633,7 @@ def test_turn_contract_required_slot_guard_prefers_size_clarification_for_multi_
             template=TemplateName.QUICK_REPLY,
             required_slots=("tire_size",),
         ),
+        tool_plan=ToolPlan(required_slots=("tire_size",)),
         merged_slots=ConversationSlots(
             pending_intent="order",
             goal_type="place_order",
@@ -10262,6 +10263,7 @@ def test_transaction_intent_policy_switches_today_install_to_candidate_store_sea
     assert "shop_id" not in frame.known_slots
     assert "shop_name" not in frame.known_slots
     assert tool_plan.preferred_tool == "transaction_store_preview_tool"
+    assert "store" not in tool_plan.required_slots
     assert tool_plan.tool_args_patch["goods_no"] == "G000000317729"
     assert tool_plan.tool_args_patch["tire_size"] == "235/55R19"
     assert tool_plan.tool_args_patch["quantity"] == 4
@@ -10295,6 +10297,8 @@ def test_transaction_intent_policy_keeps_order_region_followup_on_preview_scope(
     assert "shop_id" not in frame.known_slots
     assert "shop_name" not in frame.known_slots
     assert tool_plan.preferred_tool == "transaction_store_preview_tool"
+    assert tool_plan.metadata["action"] == "regional_install_availability_preview"
+    assert "store" not in tool_plan.required_slots
     assert tool_plan.tool_args_patch["region"] == "해운대"
     assert "shop_id" not in tool_plan.tool_args_patch
     assert response_decision.metadata["response_shape_key"] == "stock_store_candidates"
@@ -10378,6 +10382,47 @@ def test_transaction_intent_policy_keeps_store_missing_guard_for_pure_stock_with
 
     assert frame.intent == "stock_store_search"
     assert "location" in frame.missing_slots
+
+
+def test_regional_install_availability_preview_requires_region_not_store() -> None:
+    frame = build_transaction_intent_frame(
+        "벤투스 s2 as 2055516 2개 내일 장착 가능한 서울 매장 알려줘",
+        known_slots={"goods_no": "G000000317729"},
+    )
+    tool_plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "stock_store_search"
+    assert frame.sub_intent == "today_install"
+    assert frame.known_slots["stock_check_mode"] == "preview"
+    assert frame.known_slots["region"] == "서울"
+    assert frame.known_slots["requested_cal_day"]
+    assert tool_plan.metadata["action"] == "regional_install_availability_preview"
+    assert tool_plan.preferred_tool == "transaction_store_preview_tool"
+    assert "store" not in tool_plan.required_slots
+    assert "location" not in tool_plan.required_slots
+
+
+def test_region_followup_preserves_preview_contract_without_store_required() -> None:
+    frame = build_transaction_intent_frame(
+        "서울지역은?",
+        known_slots={
+            "goods_no": "G000000317729",
+            "tire_size": "205/55R16",
+            "ord_qty": 2,
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+            "availability_intent": "today_install",
+            "requested_cal_day": "20260624",
+        },
+    )
+    tool_plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "stock_store_search"
+    assert frame.sub_intent == "today_install"
+    assert frame.known_slots["region"] == "서울"
+    assert tool_plan.metadata["action"] == "regional_install_availability_preview"
+    assert "store" not in tool_plan.required_slots
+    assert tool_plan.preferred_tool == "transaction_store_preview_tool"
 
 
 def test_transaction_intent_policy_keeps_reservation_flow_when_user_explicitly_books() -> None:
@@ -10823,7 +10868,7 @@ def test_turn_contract_does_not_guard_cross_domain_product_price_resolution(user
     assert cross_domain_plan.is_cross_domain
     assert contract.planner_intent == "resolve_or_describe_product"
     assert contract.intent == "resolve_or_describe_product"
-    assert contract.resolvable_required_slots
+    assert contract.resolvable_required_slots == ()
     assert not contract.blocking_required_slots
     assert not should_guard_required_slots(contract)
     assert any(item["field"] == "intent" for item in contract.contract_drift)
@@ -11647,7 +11692,7 @@ def test_turn_contract_qc_reports_discovery_first_leg_violation() -> None:
         "type": "forbidden_discovery_first_leg_response",
         "severity": "warning",
         "template": "quickReply",
-        "fallback_reason": "missing_required_slots:product",
+        "fallback_reason": "response_policy_forbidden_behaviors",
         "response_shape_key": "product_attribute_summary",
         "assistant_response_source": "code_product_attribute_resolver",
     }]
