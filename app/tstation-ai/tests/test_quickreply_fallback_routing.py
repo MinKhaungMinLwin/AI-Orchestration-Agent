@@ -111,6 +111,7 @@ from services.tstation.chat import (
     _apply_order_snapshot_slots,
     _build_order_quantity_prompt_event,
     _build_order_arrival_status_event,
+    _build_order_cancel_status_event,
     _build_order_history_reorder_event,
     _is_preorder_confirmation_reply,
     _build_staggered_vehicle_tire_selection_event,
@@ -190,6 +191,7 @@ from services.tstation.chat import (
     _find_coupon_from_owned_coupons,
     _find_single_confident_coupon_from_owned_coupons,
     _is_order_arrival_status_query,
+    _is_order_cancel_status_lookup_query,
     _is_order_history_reorder_query,
     _is_reservation_store_info_lookup_query,
     _is_specific_owned_coupon_lookup_query,
@@ -1803,6 +1805,113 @@ def test_order_cancel_request_policy_forbids_cancel_selection_and_processing_pro
     assert "ask_which_order_to_cancel" in response_decision.forbidden_behaviors
     assert "ask_order_number_for_cancel_request" in response_decision.forbidden_behaviors
     assert "promise_cancel_processing" in response_decision.forbidden_behaviors
+
+
+@pytest.mark.parametrize(
+    "user_text",
+    [
+        "O202606170019357 주문취소된거 맞지?",
+        "취소 완료됐어?",
+        "취소 처리됐어?",
+        "취소 상태 확인해줘",
+        "카드 취소 승인됐어?",
+        "결제 취소됐어?",
+    ],
+)
+def test_order_cancel_status_lookup_query_is_not_cancel_request(user_text: str) -> None:
+    assert _is_order_cancel_status_lookup_query(user_text)
+
+    frame = build_transaction_intent_frame(user_text)
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text=user_text,
+        known_slots=dict(frame.known_slots),
+    )
+
+    assert frame.intent == "order_cancel_status_lookup"
+    assert tool_plan.allowed_tools == ("get_order_status_tool", "get_orders_of_user_tool")
+    assert "quick_order_tool" in tool_plan.forbidden_tools
+    assert response_decision.metadata["response_shape_key"] == "order_cancel_status_summary"
+    assert "direct_cancel_unavailable_guidance" in response_decision.forbidden_behaviors
+
+
+def test_order_cancel_status_lookup_with_order_no_prefers_status_tool() -> None:
+    frame = build_transaction_intent_frame("O202606170019357 주문취소된거 맞지?")
+    tool_plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "order_cancel_status_lookup"
+    assert frame.known_slots["order_no"] == "O202606170019357"
+    assert tool_plan.preferred_tool == "get_order_status_tool"
+    assert tool_plan.tool_args_patch == {"query_no": "O202606170019357"}
+
+
+def test_order_cancel_request_remains_direct_unavailable_guidance() -> None:
+    frame = build_transaction_intent_frame("O202606170019357 취소해줘")
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text="O202606170019357 취소해줘",
+        known_slots=dict(frame.known_slots),
+    )
+
+    assert frame.intent == "order_cancel_request"
+    assert response_decision.metadata["response_shape_key"] == "order_cancel_request_guidance"
+
+
+def test_order_cancel_request_normalizer_skips_cancel_status_lookup() -> None:
+    event_data = {
+        "assistantResponse": "제가 직접 주문을 취소 처리할 수는 없어요.\n취소 가능 여부는 주문 상세 화면에서 확인해 주세요.",
+        "quickReplies": [{"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"}],
+        "predictedDomains": ["TRANSACTION"],
+    }
+
+    changed = _normalize_order_cancel_request_guidance(
+        event_data,
+        tool_data_list=[],
+        last_user_text="O202606170019357 주문취소된거 맞지?",
+    )
+
+    assert changed is False
+
+
+def test_order_cancel_status_event_reports_lookup_result_without_request_guidance() -> None:
+    event = _build_order_cancel_status_event(
+        {"status": "success", "data": {"ord_no": "O202606170019357", "ord_prgs_stat_nm": "주문취소"}},
+        {"ord_no": "O202606170019357"},
+    )
+
+    data = event["data"]
+    assert data["metadata"]["response_shape_key"] == "order_cancel_status_summary"
+    assert "현재 주문취소로 확인돼요" in data["assistantResponse"]
+    assert "제가 직접 주문을 취소 처리할 수는 없어요" not in data["assistantResponse"]
+    assert data["quickReplies"][0]["label"] == "주문 상세 보기"
+
+
+def test_turn_contract_blocks_cancel_status_normalized_as_cancel_request() -> None:
+    user_text = "O202606170019357 주문취소된거 맞지?"
+    frame = build_transaction_intent_frame(user_text)
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text=user_text,
+        known_slots=dict(frame.known_slots),
+    )
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=response_decision,
+    )
+
+    violations = response_contract_violations(
+        template="quickReply",
+        assistant_response_text="제가 직접 주문을 취소 처리할 수는 없어요.\n취소 가능 여부는 주문 상세 화면에서 확인해 주세요.",
+        response_shape_key="order_cancel_status_summary",
+        called_tools=("get_order_status_tool",),
+        contract=contract,
+    )
+
+    assert any(violation["type"] == "order_cancel_status_normalized_as_cancel_request" for violation in violations)
 
 
 def test_destination_cta_mapper_replaces_generic_discovery_chips_for_order_payment_guidance() -> None:

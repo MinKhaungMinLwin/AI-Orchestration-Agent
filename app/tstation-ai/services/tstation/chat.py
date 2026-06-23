@@ -4258,6 +4258,12 @@ _ORDER_CANCEL_REQUEST_TEXT_RE = re.compile(
     r"(?:고객\s*센터|상담|전화).{0,40}(?:취소|캔슬)",
     re.IGNORECASE,
 )
+_ORDER_CANCEL_STATUS_LOOKUP_TEXT_RE = re.compile(
+    r"(?:주문|결제|카드)?\s*취소.{0,18}(?:됐|되었|완료|처리|상태|확인|승인|맞지|맞아|됐어|됐나요|됐는지)|"
+    r"(?:취소|캔슬)(?:된\s*거|된거|완료|처리|상태|승인).{0,18}(?:맞|확인|됐|됐어|됐나요|알려)|"
+    r"카드\s*취소\s*승인|결제\s*취소.{0,18}(?:됐|승인|처리|완료)",
+    re.IGNORECASE,
+)
 _ORDER_CANCEL_SELECTION_PROMPT_RE = re.compile(
     r"어떤\s*주문을\s*취소하시겠어요|주문번호를\s*말씀해\s*주세요|"
     r"아래\s*주문\s*내역에서\s*취소하려는\s*주문을\s*선택|"
@@ -8226,6 +8232,15 @@ def _is_order_arrival_status_query(user_text: str | None) -> bool:
     )
 
 
+def _is_order_cancel_status_lookup_query(user_text: str | None) -> bool:
+    text = user_text or ""
+    if not text:
+        return False
+    if re.search(r"(?:취소|캔슬).{0,20}(?:처리|진행|요청)\s*(?:해\s*줘|해주세요|해줘)", text, re.IGNORECASE):
+        return False
+    return bool(_ORDER_CANCEL_STATUS_LOOKUP_TEXT_RE.search(text))
+
+
 def _order_rows_from_orders_result(tool_result: dict) -> list[dict]:
     data = _unwrap_tool_data(tool_result)
     rows = data.get("orders") if isinstance(data, dict) else None
@@ -8921,6 +8936,60 @@ def _build_order_arrival_status_event(order_status_result: dict, order_row: dict
     }
 
 
+def _build_order_cancel_status_event(order_status_result: dict, order_row: dict | None = None) -> dict:
+    data = _unwrap_tool_data(order_status_result)
+    if not isinstance(data, dict):
+        data = {}
+    order_row = order_row or {}
+    ord_no = str(data.get("ord_no") or order_row.get("ord_no") or data.get("query_no") or "").strip()
+    status = str(
+        data.get("ord_prgs_stat_nm")
+        or data.get("shop_vst_rsv_sts_label")
+        or data.get("dlv_prgs_stat_nm")
+        or data.get("status_nm")
+        or data.get("status")
+        or ""
+    ).strip()
+    if not status:
+        status = "확인 가능한 상태값 없음"
+    is_cancelled = bool(re.search(r"취소|환불\s*완료|결제\s*취소", status, re.IGNORECASE))
+
+    if ord_no and is_cancelled:
+        response = f"{ord_no} 주문 상태를 확인해보니 현재 {status}로 확인돼요."
+    elif ord_no:
+        response = f"{ord_no}은 현재 {status}로 확인돼요. 취소 완료 상태는 아닙니다."
+    else:
+        response = "주문 상태를 확인했지만 주문번호를 특정하지 못했어요. 주문내역에서 직접 확인해 주세요."
+
+    detail_chip = (
+        {
+            "label": "주문 상세 보기",
+            "url": CTAUrls.ORDER_HISTORY_DETAIL.replace("<ord_no>", ord_no),
+            "domain": "TRANSACTION",
+        }
+        if ord_no
+        else {"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"}
+    )
+    quick_replies = [detail_chip]
+    if ord_no:
+        quick_replies.append({"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"})
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+        "assistant_response_source": "code_order_cancel_status_lookup",
+        "data": {
+            "assistantResponse": response,
+            "quickReplies": quick_replies,
+            "predictedDomains": ["TRANSACTION"],
+            "metadata": {
+                "response_shape_key": "order_cancel_status_summary",
+                "orderCancelStatusLookup": True,
+            },
+        },
+    }
+
+
 def _inject_order_history_chip_for_cancel_guidance(
     event_data: dict,
     *,
@@ -8985,6 +9054,8 @@ def _normalize_order_cancel_request_guidance(
     tool_data_list: list[dict],
     last_user_text: str,
 ) -> bool:
+    if _is_order_cancel_status_lookup_query(last_user_text):
+        return False
     assistant_text = str(event_data.get("assistantResponse") or "")
     if not (
         _ORDER_CANCEL_REQUEST_TEXT_RE.search(last_user_text)
@@ -21969,6 +22040,103 @@ class TStationChatServiceV2:
             })
             return emitted_events, _build_order_arrival_status_event(status_result, order_row)
 
+        async def _resolve_order_cancel_status_with_code() -> tuple[list[dict], dict] | None:
+            if not _is_order_cancel_status_lookup_query(user_query):
+                return None
+
+            from services.tstation.agents.c_transaction_agent.tools import (
+                get_order_status_tool as _order_status_tool,
+                get_orders_of_user_tool as _orders_tool,
+            )
+
+            emitted_events: list[dict] = []
+            orders_result: dict | None = None
+            order_row = _resolve_order_row_for_arrival_query(user_query, messages=messages)
+            if order_row is None:
+                orders_input: dict[str, Any] = {}
+                emitted_events.append({
+                    "type": "status",
+                    "status": "tool_start",
+                    "tool": "get_orders_of_user_tool",
+                    "display_name": "주문 내역 조회 중...",
+                    "source_domain": "transaction",
+                })
+                try:
+                    raw_orders = await asyncio.to_thread(_orders_tool.invoke, orders_input)
+                    orders_result = _tool_result_dict(raw_orders)
+                except Exception as exc:
+                    logger.exception("[ORDER_CANCEL_STATUS] orders tool failed")
+                    orders_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+                _record_code_tool_result("get_orders_of_user_tool", orders_input, orders_result)
+                emitted_events.append({
+                    "type": "agent_flow",
+                    "agent": "[Order / Delivery AF]",
+                    "agent_class": "Transaction Agent",
+                    "status": orders_result.get("status", "success"),
+                    "source_domain": "transaction",
+                })
+                emitted_events.append({
+                    "type": "tool",
+                    "input": orders_input,
+                    "output": json.dumps(orders_result, ensure_ascii=False),
+                    "node": "tools",
+                    "tool": "get_orders_of_user_tool",
+                    "source_domain": "transaction",
+                })
+                order_row = _resolve_order_row_for_arrival_query(user_query, orders_result=orders_result)
+
+            ord_no = str((order_row or {}).get("ord_no") or (order_row or {}).get("ordNo") or "").strip()
+            if not ord_no:
+                return emitted_events, {
+                    "type": "data",
+                    "template": "quickReply",
+                    "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+                    "assistant_response_source": "code_order_cancel_status_lookup",
+                    "data": {
+                        "assistantResponse": "해당 주문번호의 주문 내역을 확인하지 못했어요. 주문내역에서 직접 확인해 주세요.",
+                        "quickReplies": [
+                            {"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"},
+                        ],
+                        "predictedDomains": ["TRANSACTION"],
+                        "metadata": {
+                            "response_shape_key": "order_cancel_status_summary",
+                            "orderCancelStatusLookup": True,
+                        },
+                    },
+                }
+
+            status_input = {"query_no": ord_no}
+            emitted_events.append({
+                "type": "status",
+                "status": "tool_start",
+                "tool": "get_order_status_tool",
+                "display_name": "주문 현황 조회 중...",
+                "source_domain": "transaction",
+            })
+            try:
+                raw_status = await asyncio.to_thread(_order_status_tool.invoke, status_input)
+                status_result = _tool_result_dict(raw_status)
+            except Exception as exc:
+                logger.exception("[ORDER_CANCEL_STATUS] status tool failed")
+                status_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+            _record_code_tool_result("get_order_status_tool", status_input, status_result)
+            emitted_events.append({
+                "type": "agent_flow",
+                "agent": "[Order / Delivery AF]",
+                "agent_class": "Transaction Agent",
+                "status": status_result.get("status", "success"),
+                "source_domain": "transaction",
+            })
+            emitted_events.append({
+                "type": "tool",
+                "input": status_input,
+                "output": json.dumps(status_result, ensure_ascii=False),
+                "node": "tools",
+                "tool": "get_order_status_tool",
+                "source_domain": "transaction",
+            })
+            return emitted_events, _build_order_cancel_status_event(status_result, order_row)
+
         async def _resolve_order_history_reorder_with_code() -> tuple[list[dict], dict] | None:
             if not _is_order_history_reorder_query(user_query):
                 return None
@@ -24780,6 +24948,22 @@ class TStationChatServiceV2:
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps(reservation_store_event, ensure_ascii=False)}\n\n"
             assistant_response = str((reservation_store_event.get("data") or {}).get("assistantResponse") or "")
+            if assistant_response:
+                yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[TRANSACTION AGENT]'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
+        order_cancel_status_resolution = await _resolve_order_cancel_status_with_code()
+        if order_cancel_status_resolution is not None:
+            code_events, order_cancel_event = order_cancel_status_resolution
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+            for code_event in code_events:
+                yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(order_cancel_event, ensure_ascii=False)}\n\n"
+            assistant_response = str((order_cancel_event.get("data") or {}).get("assistantResponse") or "")
             if assistant_response:
                 yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[TRANSACTION AGENT]'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"

@@ -60,6 +60,8 @@ def decide_transaction_response(
         return _decide_reservation_store_info_lookup()
     if intent == "order_arrival_status_lookup":
         return _decide_order_arrival_status_lookup()
+    if intent == "order_cancel_status_lookup":
+        return _decide_order_cancel_status_lookup()
     if intent == "order_cancel_request":
         return _decide_order_cancel_request()
     if intent == "maintenance_history_lookup":
@@ -303,6 +305,26 @@ def _decide_order_cancel_request() -> ResponseDecision:
             "챗봇이 직접 주문을 취소 처리할 수 없음을 안내한다. 취소 가능 여부와 취소 버튼은 주문 상세 화면에서 "
             "사용자가 직접 확인해야 한다. 주문번호가 명확하면 주문 상세 CTA를 제공하고, 없거나 여러 건이면 주문내역 CTA만 제공한다. "
             "어떤 주문을 취소할지 선택하게 하거나 주문번호를 요구하지 않는다."
+        ),
+    )
+
+
+def _decide_order_cancel_status_lookup() -> ResponseDecision:
+    return _decision(
+        response_shape_key="order_cancel_status_summary",
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        forbidden_behaviors=(
+            "answer_without_order_lookup",
+            "direct_cancel_unavailable_guidance",
+            "order_cancel_request_normalizer",
+            "promise_cancel_progress",
+            "promise_cancel_processing",
+        ),
+        assistant_guidance=(
+            "이미 취소됐는지 또는 결제/카드 취소가 승인됐는지 확인하는 상태 조회다. 주문번호가 있으면 "
+            "get_order_status_tool(query_no=...)을 우선 호출하고, 없으면 get_orders_of_user_tool로 최근 주문을 확인하거나 "
+            "주문내역 CTA를 안내한다. '제가 직접 주문을 취소 처리할 수는 없어요' 같은 취소 실행 불가 안내로 정규화하지 않는다."
         ),
     )
 

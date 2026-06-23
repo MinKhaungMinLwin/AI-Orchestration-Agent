@@ -331,6 +331,8 @@ def build_turn_contract(
         known_slots["goal_type"] = "product_event_lookup"
     if planner_intent == "quick_order_execute" and _has_quick_order_execute_slots(known_slots):
         intent = "quick_order_execute"
+    if code_intent == "order_cancel_status_lookup":
+        intent = "order_cancel_status_lookup"
     action_required_slots = tool_plan.required_slots if tool_plan is not None else ()
     fallback_required_slots = (
         intent_frame.missing_slots
@@ -770,6 +772,14 @@ def response_contract_violations(
     )
     if reservation_store_violation is not None:
         violations.append(reservation_store_violation)
+    order_cancel_status_violation = _order_cancel_status_contract_violation(
+        assistant_response_text=assistant_response_text,
+        response_shape_key=response_shape_key,
+        called_tools=called_tools,
+        contract=contract,
+    )
+    if order_cancel_status_violation is not None:
+        violations.append(order_cancel_status_violation)
     recommendation_disclosure_violation = _recommendation_approximation_disclosure_violation(
         assistant_response_text=assistant_response_text,
         contract=contract,
@@ -1132,6 +1142,33 @@ def _reservation_store_info_contract_violation(
     if str(response_shape_key or "") == "reservation_store_info_lookup" or _RESERVATION_STORE_CLAIM_RE.search(response_text):
         return {
             "type": "reservation_store_claim_without_reservation_source",
+            "response_shape_key": str(response_shape_key or ""),
+            "called_tools": sorted(tools),
+        }
+    return None
+
+
+def _order_cancel_status_contract_violation(
+    *,
+    assistant_response_text: str | None,
+    response_shape_key: str | None,
+    called_tools: list[str] | tuple[str, ...] | None,
+    contract: TurnContract | None,
+) -> dict[str, Any] | None:
+    if contract is None or str(contract.intent or "") != "order_cancel_status_lookup":
+        return None
+    response_text = str(assistant_response_text or "")
+    if response_text.startswith("제가 직접 주문을 취소 처리할 수는 없어요"):
+        return {
+            "type": "order_cancel_status_normalized_as_cancel_request",
+            "response_shape_key": str(response_shape_key or ""),
+        }
+    tools = {str(tool) for tool in tuple(called_tools or ()) if str(tool).strip()}
+    if tools & {"get_order_status_tool", "get_orders_of_user_tool"}:
+        return None
+    if str(response_shape_key or "") == "order_cancel_status_summary":
+        return {
+            "type": "order_cancel_status_without_order_lookup",
             "response_shape_key": str(response_shape_key or ""),
             "called_tools": sorted(tools),
         }
