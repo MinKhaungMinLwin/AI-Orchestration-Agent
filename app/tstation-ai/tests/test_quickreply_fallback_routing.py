@@ -310,6 +310,7 @@ from services.tstation.policies.pickup_service_gate import deterministic_pickup_
 from services.tstation.policies.store_service_gate import decide_store_service_gate, unverifiable_store_preference_labels
 from schemas.tstation.slots import CanonicalSlotState, ComparisonContext, ConversationSlots, RecommendationContext
 from services.tstation.template_mapper import (
+    _map_location,
     _map_store_detail_info,
     current_discovery_response_decision,
     current_goal_type,
@@ -7739,6 +7740,42 @@ def test_store_detail_info_mapping_uses_allmyti_label() -> None:
     assistant = event["data"]["assistantResponse"]
     assert "• 올마이티: 이용 가능" in assistant
     assert "올마이T" not in assistant
+
+
+def test_location_card_description_uses_rating_label_not_star_icon() -> None:
+    goal_token = current_goal_type.set("store_finder")
+    try:
+        event = _map_location(
+            [
+                {
+                    "tool": "search_stores_tool",
+                    "args": {"region_code": "송파", "limit": 1},
+                    "data": {
+                        "stores": [
+                            {
+                                "shop_id": "F00405",
+                                "shop_nm": "티스테이션 송파 삼전점",
+                                "road_addr_base": "서울 송파구 백제고분로 1",
+                                "tel_no": "0212345678",
+                                "rating_idx": 4.1,
+                                "review_count": 12,
+                                "is_all_my_t": True,
+                                "is_installable": True,
+                            }
+                        ]
+                    },
+                }
+            ],
+            "티스테이션 송파 삼전점의 영업 정보 안내 드려요.",
+        )
+    finally:
+        current_goal_type.reset(goal_token)
+
+    assert event is not None
+    description = event["data"]["stores"][0]["description"]
+    assert "평점: 4.1" in description
+    assert "⭐" not in description
+    assert "서비스: 올마이티" in description
 
 
 def test_explicit_store_purchase_chain_request_detection_is_narrow() -> None:

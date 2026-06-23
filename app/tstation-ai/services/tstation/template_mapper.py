@@ -4166,7 +4166,7 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             if tel_no:
                 description_lines.append(f"전화: {tel_no}")
             if rating:
-                description_lines.append(f"⭐ {rating:.1f}")
+                description_lines.append(f"평점: {rating:.1f}")
             if review_count is not None:
                 description_lines.append(f"리뷰 {review_count}건")
             if services_text:
@@ -4506,7 +4506,7 @@ def _map_time_filter_location(tool_data_list: list[dict], assistant_text: str) -
             if tel:
                 description_lines.append(f"전화: {tel}")
             if rating:
-                description_lines.append(f"⭐ {rating:.1f}")
+                description_lines.append(f"평점: {rating:.1f}")
 
             items.append({
                 "nameAddress": _get_str(row, "shop_nm", default=shop_id),
