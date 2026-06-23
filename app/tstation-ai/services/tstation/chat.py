@@ -4195,8 +4195,47 @@ _COUPON_BOX_CHIPS: list[dict] = [
     {"label": "쿠폰함 바로가기", "url": CTAUrls.MY_COUPON_LIST_PC, "domain": "TRANSACTION"},
     {"label": "내 쿠폰 조회", "domain": "TRANSACTION"},
 ]
+_GENERIC_QUICKREPLY_LABELS_FOR_DESTINATION_CTA = {
+    "상품 검색",
+    "상품 추천",
+    "상품 추천 받기",
+    "타이어 추천",
+    "타이어 추천 받기",
+    "매장 찾기",
+    "구매하기",
+    "1:1 문의하기",
+    "처음으로",
+    "다시 시도",
+    "상담사 연결",
+}
 _ORDER_CANCEL_CTA_TEXT_RE = re.compile(
     r"취소|반품|배송중|출고|택배비|왕복\s*배송비|취소\s*가능\s*여부|최종\s*비용",
+    re.IGNORECASE,
+)
+_ORDER_DESTINATION_GUIDANCE_RE = re.compile(
+    r"주문\s*내역|주문\s*상세|결제\s*(?:정보|수단|내역)|입금\s*기한|무통장|가상\s*계좌|"
+    r"영수증|현금\s*영수증|배송\s*(?:현황|조회)|택배사|도착\s*예정|"
+    r"(?:취소|반품|환불).{0,24}(?:주문\s*내역|마이페이지|확인|진행|신청)",
+    re.IGNORECASE,
+)
+_ORDER_NO_FOR_DESTINATION_CTA_RE = re.compile(
+    r"(?:주문\s*번호|주문번호)\s*[:：]?\s*(?P<named>[A-Z]?\d{8,})|\b(?P<bare>O\d{8,})\b",
+    re.IGNORECASE,
+)
+_COUPON_DESTINATION_GUIDANCE_RE = re.compile(
+    r"쿠폰\s*함|쿠폰함|보유\s*쿠폰|내\s*쿠폰|쿠폰\s*(?:내역|목록)",
+    re.IGNORECASE,
+)
+_WARRANTY_DESTINATION_GUIDANCE_RE = re.compile(
+    r"(?:워런티|보증).{0,24}(?:확인|조회|내역|마이페이지)|나의\s*(?:워런티|보증)",
+    re.IGNORECASE,
+)
+_KEEP_SERVICE_DESTINATION_GUIDANCE_RE = re.compile(
+    r"보관\s*서비스\s*(?:이력|내역)|보관\s*(?:이력|내역).{0,16}(?:확인|조회)",
+    re.IGNORECASE,
+)
+_STORE_SERVICE_DESTINATION_GUIDANCE_RE = re.compile(
+    r"매장\s*서비스\s*(?:이력|내역)|정비\s*(?:이력|내역)|(?:리뷰|후기|별점).{0,16}(?:작성|남기)",
     re.IGNORECASE,
 )
 _ORDER_CANCEL_REFUND_QUERY_RE = re.compile(
@@ -8457,6 +8496,134 @@ def _inject_order_history_chip_for_cancel_guidance(
         event_data["predictedDomains"] = _dedupe_domain_values(["TRANSACTION", *predicted])
     else:
         event_data["predictedDomains"] = ["TRANSACTION"]
+    return True
+
+
+def _destination_cta_for_guidance_text(assistant_text: str) -> dict[str, str] | None:
+    if _ORDER_DESTINATION_GUIDANCE_RE.search(assistant_text):
+        order_no_match = _ORDER_NO_FOR_DESTINATION_CTA_RE.search(assistant_text)
+        order_no = ""
+        if order_no_match:
+            order_no = str(order_no_match.group("named") or order_no_match.group("bare") or "").strip()
+        if order_no:
+            return {
+                "destination": "order_history_detail",
+                "label": "주문내역 상세 보기",
+                "url": CTAUrls.ORDER_HISTORY_DETAIL.replace("<ord_no>", order_no),
+                "domain": "TRANSACTION",
+            }
+        return {
+            "destination": "order_history",
+            "label": "주문내역 보기",
+            "url": CTAUrls.ORDER_HISTORY,
+            "domain": "TRANSACTION",
+        }
+    if _COUPON_DESTINATION_GUIDANCE_RE.search(assistant_text):
+        return {
+            "destination": "coupon_list",
+            "label": "쿠폰함 바로가기",
+            "url": CTAUrls.MY_COUPON_LIST_PC,
+            "domain": "TRANSACTION",
+        }
+    if _WARRANTY_DESTINATION_GUIDANCE_RE.search(assistant_text):
+        return {
+            "destination": "warranty_main",
+            "label": "나의 워런티 보기",
+            "url": CTAUrls.WARRANTY_MAIN,
+            "domain": "SUPPORT",
+        }
+    if _KEEP_SERVICE_DESTINATION_GUIDANCE_RE.search(assistant_text):
+        return {
+            "destination": "keep_service_history",
+            "label": "보관서비스 내역 보기",
+            "url": CTAUrls.KEEP_SERVICE_HIST,
+            "domain": "SUPPORT",
+        }
+    if _STORE_SERVICE_DESTINATION_GUIDANCE_RE.search(assistant_text):
+        return {
+            "destination": "store_service_history",
+            "label": "매장서비스 내역 보기",
+            "url": CTAUrls.STORE_SERVICE_HISTORY,
+            "domain": "SUPPORT",
+        }
+    return None
+
+
+def _quickreply_chips_are_generic_for_destination_cta(chips: object) -> bool:
+    if not isinstance(chips, list):
+        return False
+    labels = {
+        str(chip.get("label") or "").strip()
+        for chip in chips
+        if isinstance(chip, dict)
+    }
+    if not labels:
+        return True
+    return labels <= _GENERIC_QUICKREPLY_LABELS_FOR_DESTINATION_CTA
+
+
+def _inject_destination_cta_for_guidance(event_data: dict) -> bool:
+    assistant_text = str(event_data.get("assistantResponse") or "")
+    destination = _destination_cta_for_guidance_text(assistant_text)
+    if destination is None:
+        return False
+
+    chips = event_data.get("quickReplies")
+    if not isinstance(chips, list):
+        return False
+
+    destination_url = destination["url"]
+    has_destination_url = any(
+        isinstance(chip, dict) and str(chip.get("url") or "").strip() == destination_url
+        for chip in chips
+    )
+    if has_destination_url:
+        return False
+
+    has_other_url = any(
+        isinstance(chip, dict) and bool(str(chip.get("url") or "").strip())
+        for chip in chips
+    )
+    if has_other_url and not _quickreply_chips_are_generic_for_destination_cta(chips):
+        return False
+
+    destination_chip = {
+        "label": destination["label"],
+        "url": destination_url,
+        "domain": destination["domain"],
+    }
+    if _quickreply_chips_are_generic_for_destination_cta(chips):
+        preserved = [
+            chip for chip in chips
+            if (
+                isinstance(chip, dict)
+                and str(chip.get("label") or "").strip() in {"1:1 문의하기", "처음으로"}
+            )
+        ]
+    else:
+        preserved = [
+            chip for chip in chips
+            if not (
+                isinstance(chip, dict)
+                and str(chip.get("label") or "").strip() == destination_chip["label"]
+            )
+        ]
+    event_data["quickReplies"] = [destination_chip, *preserved]
+
+    predicted = event_data.get("predictedDomains")
+    if isinstance(predicted, list):
+        event_data["predictedDomains"] = _dedupe_domain_values([destination["domain"], *predicted])
+    else:
+        event_data["predictedDomains"] = [destination["domain"]]
+
+    metadata = event_data.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+    metadata.update({
+        "destinationCtaInjected": True,
+        "destination": destination["destination"],
+    })
+    event_data["metadata"] = metadata
     return True
 
 
@@ -25801,6 +25968,8 @@ class TStationChatServiceV2:
                         )
                     ):
                         logger.info("[QUICKREPLY_FILTER] injected order history chip for cancel guidance")
+                    if is_current_quickreply and _inject_destination_cta_for_guidance(event_data):
+                        logger.info("[QUICKREPLY_FILTER] injected destination CTA for guidance")
                     if (
                         is_current_quickreply
                         and not is_handoff

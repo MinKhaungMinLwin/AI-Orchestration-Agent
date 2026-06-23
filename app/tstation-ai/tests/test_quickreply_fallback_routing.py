@@ -188,6 +188,7 @@ from services.tstation.chat import (
     _ensure_discovery_transaction_recovery_chain,
     _inject_store_detail_chip_for_contact_guidance,
     _inject_order_history_chip_for_cancel_guidance,
+    _inject_destination_cta_for_guidance,
     _ensure_store_review_write_cta,
     _is_ev_suitability_turn,
     _extract_plain_store_info_store_name,
@@ -1701,6 +1702,109 @@ def test_cancel_guidance_injects_order_history_cta() -> None:
     assert event_data["quickReplies"][0]["label"] == "주문 내역 보기"
     assert event_data["quickReplies"][0]["url"].endswith("/mypage/tstation/order-history")
     assert "벤투스 S2 AS 주문 내역" in event_data["assistantResponse"]
+
+
+def test_destination_cta_mapper_replaces_generic_discovery_chips_for_order_payment_guidance() -> None:
+    event_data = {
+        "assistantResponse": (
+            "무통장 입금 기한은 챗봇에서 직접 확인하기 어려워요. "
+            "주문내역의 결제 정보에서 입금 기한을 확인해 주세요."
+        ),
+        "quickReplies": [
+            {"label": "상품 검색", "domain": "DISCOVERY"},
+            {"label": "타이어 추천", "domain": "DISCOVERY"},
+            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+            {"label": "처음으로", "domain": "LEADING"},
+        ],
+        "predictedDomains": ["DISCOVERY", "SUPPORT"],
+    }
+
+    changed = _inject_destination_cta_for_guidance(event_data)
+
+    assert changed is True
+    assert [chip["label"] for chip in event_data["quickReplies"]] == ["주문내역 보기", "1:1 문의하기", "처음으로"]
+    assert event_data["quickReplies"][0]["url"] == CTAUrls.ORDER_HISTORY
+    assert event_data["predictedDomains"][0] == "TRANSACTION"
+    assert event_data["metadata"] == {
+        "destinationCtaInjected": True,
+        "destination": "order_history",
+    }
+
+
+def test_destination_cta_mapper_handles_coupon_warranty_and_store_service_guidance() -> None:
+    cases = [
+        (
+            "보유 쿠폰은 쿠폰함에서 확인하실 수 있어요.",
+            "쿠폰함 바로가기",
+            CTAUrls.MY_COUPON_LIST_PC,
+            "coupon_list",
+        ),
+        (
+            "오늘 장착한 상품의 워런티는 나의 워런티에서 확인해 주세요.",
+            "나의 워런티 보기",
+            CTAUrls.WARRANTY_MAIN,
+            "warranty_main",
+        ),
+        (
+            "매장 리뷰는 매장서비스 내역에서 작성하실 수 있어요.",
+            "매장서비스 내역 보기",
+            CTAUrls.STORE_SERVICE_HISTORY,
+            "store_service_history",
+        ),
+    ]
+
+    for assistant_response, expected_label, expected_url, expected_destination in cases:
+        event_data = {
+            "assistantResponse": assistant_response,
+            "quickReplies": [{"label": "처음으로", "domain": "LEADING"}],
+            "predictedDomains": ["LEADING"],
+        }
+
+        changed = _inject_destination_cta_for_guidance(event_data)
+
+        assert changed is True
+        assert event_data["quickReplies"][0]["label"] == expected_label
+        assert event_data["quickReplies"][0]["url"] == expected_url
+        assert event_data["metadata"]["destination"] == expected_destination
+
+
+def test_destination_cta_mapper_uses_order_history_detail_when_order_number_is_visible() -> None:
+    event_data = {
+        "assistantResponse": "주문번호 O202605180019345 배송현황은 주문 상세에서 확인해 주세요.",
+        "quickReplies": [{"label": "처음으로", "domain": "LEADING"}],
+        "predictedDomains": ["LEADING"],
+    }
+
+    changed = _inject_destination_cta_for_guidance(event_data)
+
+    assert changed is True
+    assert event_data["quickReplies"][0]["label"] == "주문내역 상세 보기"
+    assert event_data["quickReplies"][0]["url"].endswith(
+        "/mypage/tstation/order-history/detail/O202605180019345"
+    )
+    assert event_data["metadata"]["destination"] == "order_history_detail"
+
+
+def test_destination_cta_mapper_does_not_touch_product_recommendation_or_existing_destination_url() -> None:
+    recommendation_event = {
+        "assistantResponse": "상품 규격과 장착점을 선택한 뒤 주문/결제 단계에서 최종 금액을 확인할 수 있어요.",
+        "quickReplies": [
+            {"label": "상품 검색", "domain": "DISCOVERY"},
+            {"label": "타이어 추천", "domain": "DISCOVERY"},
+        ],
+    }
+    existing_destination_event = {
+        "assistantResponse": "주문내역에서 배송현황을 확인해 주세요.",
+        "quickReplies": [
+            {"label": "주문내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"},
+            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+        ],
+    }
+
+    assert _inject_destination_cta_for_guidance(recommendation_event) is False
+    assert "metadata" not in recommendation_event
+    assert _inject_destination_cta_for_guidance(existing_destination_event) is False
+    assert len(existing_destination_event["quickReplies"]) == 2
 
 
 def test_order_arrival_followup_resolves_recent_order_not_store_schedule() -> None:
