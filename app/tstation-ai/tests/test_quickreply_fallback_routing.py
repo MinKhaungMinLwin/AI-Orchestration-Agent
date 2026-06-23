@@ -116,6 +116,7 @@ from services.tstation.chat import (
     _apply_vehicle_selection_slot_values,
     _resolve_vehicle_tire_position_selection,
     _vehicle_selection_slot_values,
+    _vehicle_based_recommendation_refinement_patch,
     _vehicle_type_compatibility_guard_event,
     _preferred_product_search_keyword,
     _infer_multi_variant_recommendation_constraints,
@@ -9282,6 +9283,56 @@ def test_similar_price_policy_does_not_inject_size_without_size_reference() -> N
     assert decision is not None
     assert decision.metadata["response_shape_key"] == "similar_price_range_recommendation"
     assert "tire_size" not in patch
+
+
+def test_vehicle_based_recommendation_refinement_preserves_previous_performance_filter() -> None:
+    patch, decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        last_user_text="내차 기준으로",
+        context_text="스포츠성능 타이어 추천\n내차 기준으로",
+        tire_size=None,
+    )
+
+    assert patch["rcmd_type"] == "performance"
+    assert patch["limit"] == 5
+    assert patch["discovery_followup_action"] == "vehicle_based_recommendation_refinement"
+    assert decision is not None
+    assert decision.metadata["response_shape_key"] == "vehicle_based_recommendation_refinement"
+    assert "product_card_without_size" not in decision.forbidden_behaviors
+
+
+def test_vehicle_based_recommendation_refinement_preserves_previous_low_vibration_filter() -> None:
+    patch = _vehicle_based_recommendation_refinement_patch(
+        "내 차량 기준으로",
+        "소음 적은 타이어 추천\n내 차량 기준으로",
+    )
+
+    assert patch["rcmd_type"] == "low_vibration"
+    assert patch["limit"] == 5
+    assert patch["discovery_followup_action"] == "vehicle_based_recommendation_refinement"
+
+
+def test_vehicle_based_recommendation_refinement_contract_allows_vehicle_lookup_and_recommendation() -> None:
+    frame = build_discovery_intent_frame(
+        "내차 기준으로",
+        known_slots={"discovery_followup_action": "vehicle_based_recommendation_refinement"},
+    )
+    tool_plan = plan_discovery_tools(frame)
+    decision = decide_discovery_response(frame)
+    contract = build_turn_contract(
+        user_text="내차 기준으로",
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=decision,
+    )
+
+    assert frame.sub_intent == "vehicle_based_recommendation_refinement"
+    assert tool_plan.allowed_tools == ("get_my_cars_tool", "get_products_recommendations_tool")
+    assert tool_plan.required_slots == ("tire_size",)
+    assert contract.required_slots == ("tire_size",)
+    assert contract.resolvable_required_slots == ("tire_size",)
+    assert contract.blocking_required_slots == ()
+    assert not should_guard_required_slots(contract)
 
 
 def test_recommendation_tool_applies_discovery_policy_patch(monkeypatch: pytest.MonkeyPatch) -> None:

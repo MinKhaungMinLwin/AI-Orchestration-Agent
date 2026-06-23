@@ -496,6 +496,7 @@ def build_discovery_intent_frame(
     recent_product_set_price_basis = str(slots.get("recent_product_set_price_basis") or "").strip()
     comparison_followup_intent = str(slots.get("comparison_followup_intent") or "").strip()
     comparison_metric = str(slots.get("comparison_metric") or "").strip()
+    discovery_followup_action = str(slots.get("discovery_followup_action") or "").strip()
 
     entities: dict[str, Any] = {
         "product_names": products,
@@ -533,6 +534,8 @@ def build_discovery_intent_frame(
         "release", "price", "grade", "mileage", "noise", "fuel_efficiency", "wet", "car_type", "detail",
     }:
         entities["compare_metric"] = comparison_metric
+    if discovery_followup_action == "vehicle_based_recommendation_refinement":
+        entities["discovery_followup_action"] = discovery_followup_action
     if len(products) >= 2:
         entities["multi_product_names"] = True
         if re.search(r"각각|둘\s*다|둘\s*모두|상품\s*정보|설명|알려", text, re.IGNORECASE):
@@ -594,7 +597,10 @@ def build_discovery_intent_frame(
     standalone_attribute_metrics = tuple(
         metric for metric in attribute_metrics if metric not in ("season", "car_type")
     )
-    if (
+    if discovery_followup_action == "vehicle_based_recommendation_refinement":
+        intent = "product_recommendation"
+        sub_intent = "vehicle_based_recommendation_refinement"
+    elif (
         oe_replacement_type
         and (
             tire_size
@@ -764,7 +770,13 @@ def build_discovery_intent_frame(
         sub_intent = "general_recommendation"
 
     missing_slots: tuple[str, ...] = ()
-    if intent == "product_recommendation" and not tire_size and entities.get("price_goal") == "lowest":
+    if (
+        intent == "product_recommendation"
+        and not tire_size
+        and discovery_followup_action == "vehicle_based_recommendation_refinement"
+    ):
+        missing_slots = ("tire_size",)
+    elif intent == "product_recommendation" and not tire_size and entities.get("price_goal") == "lowest":
         missing_slots = ("tire_size",)
     elif sub_intent == "quantity_benefit_comparison" and not tire_size and not slots.get("goods_no"):
         missing_slots = ("tire_size",)
@@ -995,8 +1007,17 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
         args["brand_cd"] = entities["brand_cd"]
         if frame.intent == "product_recommendation":
             args["allow_cross_brand_fill"] = False
+    allowed_tools = ("get_products_recommendations_tool",)
+    required_slots: tuple[str, ...] = ()
+    metadata: dict[str, Any] = {}
+    if entities.get("discovery_followup_action") == "vehicle_based_recommendation_refinement":
+        allowed_tools = ("get_my_cars_tool", "get_products_recommendations_tool")
+        required_slots = ("tire_size",)
+        metadata = {"response_intent": "vehicle_based_recommendation_refinement"}
     return ToolPlan(
-        allowed_tools=("get_products_recommendations_tool",),
+        allowed_tools=allowed_tools,
         preferred_tool="get_products_recommendations_tool",
         tool_args_patch=args,
+        required_slots=required_slots,
+        metadata=metadata,
     )

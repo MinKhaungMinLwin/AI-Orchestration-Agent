@@ -12907,6 +12907,9 @@ def _build_discovery_policy_context(
             }:
                 known_slots["comparison_followup_intent"] = recovered_followup_intent
                 known_slots["comparison_metric"] = recovered_metric
+        vehicle_refinement_patch = _vehicle_based_recommendation_refinement_patch(last_user_text, context_text)
+        if vehicle_refinement_patch:
+            known_slots["discovery_followup_action"] = "vehicle_based_recommendation_refinement"
         supported_followup_override = _bare_product_search_followup_override(
             last_user_text,
             context_text=context_text,
@@ -12927,6 +12930,14 @@ def _build_discovery_policy_context(
             last_user_text,
             known_slots=known_slots,
         )
+        if vehicle_refinement_patch and discovery_frame.intent == "product_recommendation":
+            entities = dict(discovery_frame.entities)
+            entities["discovery_followup_action"] = "vehicle_based_recommendation_refinement"
+            discovery_frame = replace(
+                discovery_frame,
+                sub_intent="vehicle_based_recommendation_refinement",
+                entities=entities,
+            )
         routing_claim_check_type = str(getattr(routing_result, "claim_check_type", "") or "").strip()
         if routing_claim_check_type in {
             "none",
@@ -13016,6 +13027,10 @@ def _build_discovery_policy_context(
             discovery_tool_patch = {"size": discovery_tool_plan.tool_args_patch["size"]}
         else:
             discovery_tool_patch = {}
+        if vehicle_refinement_patch:
+            for key, value in vehicle_refinement_patch.items():
+                if value not in (None, ""):
+                    discovery_tool_patch.setdefault(key, value)
         if effective_supported_objective == "sound_absorber":
             discovery_tool_patch.pop("brand_cd", None)
         if (
@@ -13443,6 +13458,11 @@ _RECOMMENDATION_SIZE_REFERENCE_RE = re.compile(
     r"이\s*사이즈|그\s*사이즈|같(?:은|은)\s*사이즈|동일\s*사이즈|해당\s*사이즈",
     re.IGNORECASE,
 )
+_VEHICLE_BASED_RECOMMENDATION_REFINEMENT_RE = re.compile(
+    r"내\s*차\s*기준|내차\s*기준|내\s*차량\s*기준|내차량\s*기준|"
+    r"내\s*차에\s*맞|내차에\s*맞|내\s*차로\s*(?:다시|추천|확인)|내차로\s*(?:다시|추천|확인)",
+    re.IGNORECASE,
+)
 _STORE_REFERENCE_SIGNAL_RE = re.compile(
     r"그\s*매장|이\s*매장|해당\s*매장|거기|여기|저기|"
     r"첫\s*번째\s*매장|1\s*번\s*매장|방금\s*매장|아까\s*매장",
@@ -13468,6 +13488,38 @@ def _is_fresh_brand_or_size_recommendation_turn(text: str) -> bool:
             or frame.entities.get("performance")
         )
     )
+
+
+def _vehicle_based_recommendation_refinement_patch(
+    current_text: str,
+    context_text: str | None,
+) -> dict[str, Any]:
+    """Return prior recommendation args for "내차 기준" refinement follow-ups.
+
+    The regex only detects the vehicle-basis follow-up signal. The action is
+    enabled only when a previous user turn produced a recommendation policy
+    patch, so generic "내 차" questions do not become recommendation flows.
+    """
+    if not _VEHICLE_BASED_RECOMMENDATION_REFINEMENT_RE.search(current_text or ""):
+        return {}
+
+    current = str(current_text or "").strip()
+    for line in reversed([part.strip() for part in str(context_text or "").splitlines() if part.strip()]):
+        if line == current:
+            continue
+        frame = build_discovery_intent_frame(line)
+        if frame.intent != "product_recommendation":
+            continue
+        plan = plan_discovery_tools(frame)
+        if plan.preferred_tool != "get_products_recommendations_tool":
+            continue
+        patch = dict(plan.tool_args_patch)
+        if not patch:
+            patch = {"rcmd_type": "tstation"}
+        patch.setdefault("limit", 5)
+        patch["discovery_followup_action"] = "vehicle_based_recommendation_refinement"
+        return patch
+    return {}
 
 
 def _clear_stale_product_slots_for_new_recommendation(
@@ -18077,6 +18129,7 @@ class TStationChatServiceV2:
                     "goods_no": merged_slots.goods_no,
                     "vehicle_type": merged_slots.vehicle_type,
                     "brand_cd": discovery_tool_patch.get("brand_cd"),
+                    "discovery_followup_action": discovery_tool_patch.get("discovery_followup_action"),
                 }
                 contract_frame = build_discovery_intent_frame(
                     last_user_text,

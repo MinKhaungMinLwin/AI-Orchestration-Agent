@@ -190,6 +190,7 @@ def build_turn_contract(
         comparison_followup_intent = str(intent_frame.entities.get("comparison_followup_intent") or "")
         oe_replacement_type = str(intent_frame.entities.get("oe_replacement_type") or "")
         stock_check_mode = str(intent_frame.entities.get("stock_check_mode") or "")
+        discovery_followup_action = str(intent_frame.entities.get("discovery_followup_action") or "")
         if requested_product_attribute:
             known_slots["requested_product_attribute"] = requested_product_attribute
         if compare_metric:
@@ -200,6 +201,8 @@ def build_turn_contract(
             known_slots["oe_replacement_type"] = oe_replacement_type
         if stock_check_mode:
             known_slots["stock_check_mode"] = stock_check_mode
+        if discovery_followup_action:
+            known_slots["discovery_followup_action"] = discovery_followup_action
     policy_intent = str(getattr(routing_result, "policy_intent", "") or "")
     if policy_intent and policy_intent != "none":
         known_slots["policy_intent"] = policy_intent
@@ -252,7 +255,7 @@ def build_turn_contract(
         ),
     )
     required_slots = _filter_satisfied_required_slots(required_slots, known_slots)
-    resolvable_required_slots = _resolvable_required_slots(required_slots, cross_domain_plan)
+    resolvable_required_slots = _resolvable_required_slots(required_slots, cross_domain_plan, known_slots)
     blocking_required_slots = _blocking_required_slots(
         user_text,
         required_slots,
@@ -1116,10 +1119,18 @@ def _required_slots_from_cross_domain(plan: CrossDomainPlan | None) -> tuple[str
 def _resolvable_required_slots(
     required_slots: tuple[str, ...],
     plan: CrossDomainPlan | None,
+    known_slots: Mapping[str, Any] | None = None,
 ) -> tuple[str, ...]:
-    if not required_slots or not _has_discovery_product_resolution_task(plan):
+    if not required_slots:
         return ()
-    resolvable = {"product", "goods_no"}
+    resolvable: set[str] = set()
+    if _has_discovery_product_resolution_task(plan):
+        resolvable.update({"product", "goods_no"})
+    if (
+        isinstance(known_slots, Mapping)
+        and str(known_slots.get("discovery_followup_action") or "") == "vehicle_based_recommendation_refinement"
+    ):
+        resolvable.add("tire_size")
     return tuple(slot for slot in required_slots if slot in resolvable)
 
 

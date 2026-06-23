@@ -303,6 +303,18 @@ def decide_discovery_response(frame: IntentFrame) -> ResponseDecision:
         )
 
     if frame.intent == "product_recommendation" and not tire_size:
+        if entities.get("discovery_followup_action") == "vehicle_based_recommendation_refinement":
+            return ResponseDecision(
+                response_shape=ResponseShape.CARD,
+                template=TemplateName.PRODUCT,
+                required_slots=("tire_size",),
+                forbidden_behaviors=("drop_previous_recommendation_filter",),
+                assistant_guidance=(
+                    "등록 차량 조회로 tire_size를 해소한 뒤 직전 추천 조건을 유지해 상품을 추천한다. "
+                    "차량 조회 실패 또는 등록 차량 없음이면 차량번호나 사이즈 확인 quickReply로 안내한다."
+                ),
+                metadata=_metadata(frame, response_shape_key="vehicle_based_recommendation_refinement"),
+            )
         return ResponseDecision(
             response_shape=ResponseShape.SUMMARY,
             template=TemplateName.QUICK_REPLY,
