@@ -26,6 +26,10 @@ _NOON_RE = re.compile(r"12\s*시|점심\s*시간", re.IGNORECASE)
 _NEARBY_RE = re.compile(r"근처|주변|가까운|인근", re.IGNORECASE)
 _STORE_SUFFIX_RE = re.compile(r"([가-힣A-Za-z0-9]+(?:점|매장))")
 _STORE_SEARCH_RE = re.compile(r"매장|지점|티스테이션|더타이어샵|찾아|알려|보여", re.IGNORECASE)
+_FAVORITE_STORE_RE = re.compile(
+    r"내\s*단골(?:매장|가게|점)?|단골(?:매장|가게|점)|마이샵|자주\s*가는\s*매장",
+    re.IGNORECASE,
+)
 _OTHER_STORE_RE = re.compile(r"다른\s*(?:매장|지점|곳)|다시\s*(?:확인|찾|검색)|새로\s*(?:찾|검색)", re.IGNORECASE)
 _STORE_SCOPE_FOLLOWUP_RE = re.compile(
     r"다른\s*(?:매장|지점|곳)|근처(?:에)?\s*(?:다른\s*)?(?:매장|지점|곳)|주변\s*(?:매장|지점)|"
@@ -182,11 +186,18 @@ def build_transaction_intent_frame(
     current_product_name = _extract_product_name(text)
     current_has_product = bool(current_product_name or _PRODUCT_HINT_RE.search(text))
     current_store_search = bool(_STORE_SEARCH_RE.search(text))
+    current_favorite_store_lookup = bool(_FAVORITE_STORE_RE.search(text))
     current_stock = bool(_STOCK_RE.search(text) or _TODAY_RE.search(text))
     current_price = bool(_PRICE_OR_COUPON_RE.search(text))
     current_purchase = bool(_PURCHASE_RE.search(text))
     current_reservation = bool(_RESERVATION_RE.search(text) or _STORE_SCHEDULE_RE.search(text) or current_purchase)
-    plain_store_search = current_store_search and not current_stock and not current_price and not current_reservation
+    plain_store_search = (
+        current_store_search
+        and not current_favorite_store_lookup
+        and not current_stock
+        and not current_price
+        and not current_reservation
+    )
     pending_today_install = _has_pending_today_install_context(slots)
     confirmed_product_quantity_context = _has_confirmed_product_quantity_context(slots)
     other_store_today_install_continuation = (
@@ -296,6 +307,9 @@ def build_transaction_intent_frame(
     elif _NOON_RE.search(text) and has_location and not has_product:
         intent = "store_schedule"
         sub_intent = "store_visit"
+    elif current_favorite_store_lookup:
+        intent = "favorite_store_lookup"
+        sub_intent = "favorite"
     elif _STORE_SEARCH_RE.search(text) and has_location and not has_product:
         intent = "store_search"
         sub_intent = "nearby" if entities["nearby"] else "region"
@@ -412,6 +426,16 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
             forbidden_tools=("get_store_schedule_tool", "transaction_store_preview_tool"),
             required_slots=frame.missing_slots,
             metadata={"response_intent": "store_search"},
+        )
+
+    if frame.intent == "favorite_store_lookup":
+        return ToolPlan(
+            allowed_tools=("get_favorite_stores_tool",),
+            preferred_tool="get_favorite_stores_tool",
+            tool_args_patch={},
+            forbidden_tools=("search_stores_tool", "get_store_list_tool", "get_nearby_stores_tool"),
+            required_slots=frame.missing_slots,
+            metadata={"response_intent": "favorite_store_lookup"},
         )
 
     if frame.intent == "quick_order_reservation":

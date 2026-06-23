@@ -9613,7 +9613,7 @@ def test_cross_domain_policy_prioritizes_favorite_store_lookup_over_plain_store_
     assert plan.subtasks[0].required_slots == ()
 
 
-@pytest.mark.parametrize("user_text", ["강남 매장 알려줘", "근처 매장 찾아줘"])
+@pytest.mark.parametrize("user_text", ["강남 매장 알려줘", "판교 매장 찾아줘"])
 def test_non_favorite_store_search_keeps_existing_store_search_paths(user_text: str) -> None:
     frame = build_transaction_intent_frame(user_text, known_slots={})
 

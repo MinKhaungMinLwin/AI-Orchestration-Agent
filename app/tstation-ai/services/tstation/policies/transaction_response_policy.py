@@ -36,6 +36,8 @@ def decide_transaction_response(
         return _decide_stock_store_search(text=text, slots=slots)
     if intent == "store_schedule":
         return _decide_store_schedule(text=text, slots=slots)
+    if intent == "favorite_store_lookup":
+        return _decide_favorite_store_lookup()
     if intent == "inventory_availability":
         return _decide_inventory_availability(slots=slots, tool_result=tool_result or {})
     if intent == "quick_order_reservation":
@@ -122,6 +124,19 @@ def _decide_store_schedule(*, text: str, slots: dict[str, Any]) -> ResponseDecis
         template=TemplateName.DATE_PICK,
         forbidden_behaviors=("store_hours_instead_of_slots",),
         assistant_guidance="상품/수량/매장이 확정된 예약 요청은 영업시간 설명이 아니라 예약 슬롯을 제시한다.",
+    )
+
+
+def _decide_favorite_store_lookup() -> ResponseDecision:
+    return _decision(
+        response_shape_key="favorite_store_lookup",
+        response_shape=ResponseShape.LOCATION,
+        template=TemplateName.LOCATION,
+        forbidden_behaviors=("ask_location_for_favorite_store", "auto_select_single_store", "fallback_to_generic_store_search"),
+        assistant_guidance=(
+            "단골매장 조회는 위치를 다시 묻지 말고 get_favorite_stores_tool 결과만 사용한다. "
+            "결과가 비면 등록된 단골매장이 없다는 quickReply로 안내하고 일반 매장 검색으로 자동 전환하지 않는다."
+        ),
     )
 
 

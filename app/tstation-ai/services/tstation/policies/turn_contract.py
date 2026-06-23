@@ -437,6 +437,12 @@ def response_contract_violations(
     )
     if product_attribute_violation is not None:
         violations.append(product_attribute_violation)
+    tool_contract_violation = _tool_contract_violation(
+        called_tools=called_tools,
+        contract=contract,
+    )
+    if tool_contract_violation is not None:
+        violations.append(tool_contract_violation)
     compare_violation = _comparison_contract_violation(
         assistant_response_text=assistant_response_text,
         assistant_response_source=assistant_response_source,
@@ -496,6 +502,28 @@ def _product_attribute_contract_violation(
         "response_shape_key": str(response_shape_key or ""),
         "assistant_response_source": str(assistant_response_source or ""),
         "expected_response_shape_key": "product_attribute_summary",
+    }
+
+
+def _tool_contract_violation(
+    *,
+    called_tools: list[str] | tuple[str, ...] | None,
+    contract: TurnContract | None,
+) -> dict[str, Any] | None:
+    if contract is None or not contract.allowed_tools or not called_tools:
+        return None
+    disallowed = [
+        str(tool)
+        for tool in called_tools
+        if str(tool)
+        and (str(tool) not in contract.allowed_tools or str(tool) in contract.forbidden_tools)
+    ]
+    if not disallowed:
+        return None
+    return {
+        "type": "unexpected_tool_for_contract",
+        "called_tools": disallowed,
+        "allowed_tools": list(contract.allowed_tools),
     }
 
 

@@ -24,6 +24,10 @@ _STOCK_OR_BOOKING_RE = re.compile(
 )
 _PURCHASE_RE = re.compile(r"구매|주문|결제|살래|살게|사고\s*싶|사려고", re.IGNORECASE)
 _STORE_SEARCH_RE = re.compile(r"매장|지점|티스테이션|더타이어샵|근처|주변|찾아|알려|보여", re.IGNORECASE)
+_FAVORITE_STORE_RE = re.compile(
+    r"내\s*단골(?:매장|가게|점)?|단골(?:매장|가게|점)|마이샵|자주\s*가는\s*매장",
+    re.IGNORECASE,
+)
 _STORE_NAME_RE = re.compile(r"([가-힣A-Za-z0-9]+(?:점|매장))")
 _REGION_HINT_RE = re.compile(
     r"서울|서초|강남|판교|분당|파주|강릉|부산|광교|성남|오목천|동광주|송파|한남|"
@@ -198,6 +202,7 @@ def plan_cross_domain_turn(user_text: str, *, known_slots: dict[str, Any] | None
     has_product_hint = bool(has_current_product_hint or slots.get("product_name") or slots.get("goods_no"))
     tire_size = slots.get("tire_size") or _normalize_tire_size(text)
     needs_store_search = bool(_STORE_SEARCH_RE.search(text))
+    needs_favorite_store_lookup = bool(_FAVORITE_STORE_RE.search(text))
     needs_price = bool(_PRICE_OR_COUPON_RE.search(text))
     needs_support = bool(_SUPPORT_RE.search(text))
     needs_description = bool(_DESCRIPTION_RE.search(text))
@@ -233,7 +238,9 @@ def plan_cross_domain_turn(user_text: str, *, known_slots: dict[str, Any] | None
             response_strategy="single_domain_response",
         )
 
-    current_turn_is_plain_store_search = needs_store_search and not needs_stock_or_booking and not needs_price
+    current_turn_is_plain_store_search = (
+        needs_store_search and not needs_favorite_store_lookup and not needs_stock_or_booking and not needs_price
+    )
 
     if needs_support and not has_current_product_hint and not needs_stock_or_booking:
         return CrossDomainPlan(
@@ -243,6 +250,20 @@ def plan_cross_domain_turn(user_text: str, *, known_slots: dict[str, Any] | None
                     domain=PolicyDomain.SUPPORT,
                     intent="policy_notice_or_escalation",
                     reason="정책 안내 또는 1:1 문의 연결이 필요함",
+                ),
+            ),
+            response_strategy="single_domain_response",
+        )
+
+    if needs_favorite_store_lookup and not has_current_product_hint and not needs_stock_or_booking and not needs_price:
+        return CrossDomainPlan(
+            primary_domain=PolicyDomain.TRANSACTION,
+            subtasks=(
+                DomainSubtask(
+                    domain=PolicyDomain.TRANSACTION,
+                    intent="favorite_store_lookup",
+                    reason="현재 발화는 지역 검색이 아니라 사용자의 단골매장 조회임",
+                    required_slots=(),
                 ),
             ),
             response_strategy="single_domain_response",
