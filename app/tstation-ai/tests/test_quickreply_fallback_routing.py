@@ -1715,9 +1715,13 @@ def test_cancel_guidance_injects_order_history_cta() -> None:
 
 def test_order_cancel_request_normalizer_blocks_selection_prompt_for_complaint_cancel() -> None:
     event_data = {
-        "assistantResponse": "어떤 주문을 취소하시겠어요? 아래 주문 내역에서 취소하려는 주문을 선택해 주세요.",
+        "assistantResponse": (
+            "주문번호 O202606220019363 취소 가능한 주문을 확인해 드릴게요. "
+            "어떤 주문을 취소하시겠어요? 아래 주문 내역에서 취소하려는 주문을 선택해 주세요."
+        ),
         "quickReplies": [
             {"label": "최근 주문 취소", "domain": "TRANSACTION"},
+            {"label": "1:1 문의하기", "domain": "SUPPORT"},
             {"label": "상품 검색", "domain": "DISCOVERY"},
         ],
         "predictedDomains": ["TRANSACTION"],
@@ -1753,12 +1757,19 @@ def test_order_cancel_request_normalizer_blocks_selection_prompt_for_complaint_c
         "domain": "TRANSACTION",
     }
     assert [chip["label"] for chip in event_data["quickReplies"]] == ["주문 내역 보기", "1:1 문의하기"]
+    assert len(event_data["quickReplies"]) == 2
 
 
-def test_order_cancel_request_normalizer_uses_detail_cta_only_for_explicit_order_no() -> None:
+def test_order_cancel_request_normalizer_uses_order_history_even_for_explicit_order_no() -> None:
     event_data = {
         "assistantResponse": "취소 가능한 주문을 확인해 드릴게요. 주문번호를 말씀해 주세요.",
-        "quickReplies": [{"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"}],
+        "quickReplies": [
+            {
+                "label": "주문 상세에서 취소 확인",
+                "url": CTAUrls.ORDER_HISTORY_DETAIL.replace("<ord_no>", "O202606220019363"),
+                "domain": "TRANSACTION",
+            }
+        ],
         "predictedDomains": ["TRANSACTION"],
     }
 
@@ -1775,8 +1786,8 @@ def test_order_cancel_request_normalizer_uses_detail_cta_only_for_explicit_order
     )
     assert event_data["quickReplies"] == [
         {
-            "label": "주문 상세에서 취소 확인",
-            "url": CTAUrls.ORDER_HISTORY_DETAIL.replace("<ord_no>", "O202606220019363"),
+            "label": "주문 내역 보기",
+            "url": CTAUrls.ORDER_HISTORY,
             "domain": "TRANSACTION",
         }
     ]

@@ -8867,14 +8867,6 @@ def _inject_order_history_chip_for_cancel_guidance(
     return True
 
 
-def _order_no_from_cancel_context(assistant_text: str, last_user_text: str) -> str:
-    for text in (last_user_text, assistant_text):
-        match = _ORDER_NO_FOR_DESTINATION_CTA_RE.search(text)
-        if match:
-            return str(match.group("named") or match.group("bare") or "").strip()
-    return ""
-
-
 def _recent_order_count_from_tool_context(tool_data_list: list[dict]) -> int:
     for entry in reversed(tool_data_list):
         if not isinstance(entry, dict) or entry.get("tool") != "get_orders_of_user_tool":
@@ -8906,19 +8898,8 @@ def _normalize_order_cancel_request_guidance(
     if not isinstance(chips, list):
         return False
 
-    order_no = _order_no_from_cancel_context(assistant_text, last_user_text)
     order_count = _recent_order_count_from_tool_context(tool_data_list)
-    if order_no:
-        response = (
-            "제가 직접 주문을 취소 처리할 수는 없어요.\n"
-            "취소 가능 여부와 취소 버튼은 주문 상세 화면에서 확인해 주세요."
-        )
-        primary_chip = {
-            "label": "주문 상세에서 취소 확인",
-            "url": CTAUrls.ORDER_HISTORY_DETAIL.replace("<ord_no>", order_no),
-            "domain": "TRANSACTION",
-        }
-    elif order_count > 1:
+    if order_count > 1:
         response = (
             "최근 주문이 여러 건 확인돼요.\n"
             "취소하려는 주문은 주문내역에서 직접 확인한 뒤, 주문 상세 화면에서 취소 가능 여부를 확인해 주세요."
@@ -8950,6 +8931,8 @@ def _normalize_order_cancel_request_guidance(
         url = str(chip.get("url") or "").strip()
         if label in blocked_labels:
             continue
+        if label == "주문 상세에서 취소 확인" or "/mypage/tstation/order-history/detail/" in url:
+            continue
         if url in {primary_chip["url"], CTAUrls.ORDER_HISTORY}:
             continue
         if label in {"상품 검색", "타이어 추천", "구매하기"}:
@@ -8957,8 +8940,19 @@ def _normalize_order_cancel_request_guidance(
         filtered.append(chip)
 
     secondary = [{"label": "1:1 문의하기", "domain": "SUPPORT"}] if _ORDER_CANCEL_COMPLAINT_RE.search(last_user_text) else []
+    quick_replies: list[dict] = []
+    seen_chips: set[tuple[str, str, str]] = set()
+    for chip in [primary_chip, *secondary, *filtered]:
+        label = str(chip.get("label") or "").strip()
+        url = str(chip.get("url") or "").strip()
+        domain = str(chip.get("domain") or "").strip()
+        chip_key = (label, url, domain)
+        if chip_key in seen_chips:
+            continue
+        seen_chips.add(chip_key)
+        quick_replies.append(chip)
     event_data["assistantResponse"] = response
-    event_data["quickReplies"] = [primary_chip, *secondary, *filtered]
+    event_data["quickReplies"] = quick_replies
     event_data["predictedDomains"] = _dedupe_domain_values(["TRANSACTION", "SUPPORT"])
     metadata = event_data.get("metadata")
     if not isinstance(metadata, dict):
@@ -8967,8 +8961,6 @@ def _normalize_order_cancel_request_guidance(
         "orderCancelGuidanceNormalized": True,
         "response_shape_key": "order_cancel_request_guidance",
     })
-    if order_no:
-        metadata["orderNo"] = order_no
     event_data["metadata"] = metadata
     return True
 
