@@ -50,6 +50,9 @@ _TSTATION_ORIGIN_HOSTS = {
     "mqa.tstation.com",
     "mbiz.tstation.com",
     "bizqa.tstation.com",
+    "www.tstation.com",
+    "m.tstation.com",
+    "biz.tstation.com",
 }
 
 
