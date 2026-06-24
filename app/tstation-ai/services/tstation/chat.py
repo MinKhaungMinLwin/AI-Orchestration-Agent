@@ -70,6 +70,11 @@ from services.tstation.policies.price_response_policy import (
 from services.tstation.policies.transaction_intent_policy import build_transaction_intent_frame, plan_transaction_tools
 from services.tstation.policies.transaction_response_policy import decide_transaction_response
 from services.tstation.policies.response_decision import ResponseDecision, ResponseShape, TemplateName
+from services.tstation.policies.resolved_context import (
+    canonical_context_from_slots,
+    canonical_context_from_template_boundary,
+    canonical_context_from_tool_boundary,
+)
 from services.tstation.policies.turn_contract import (
     TurnContract,
     build_required_slot_clarification_event,
@@ -2642,11 +2647,10 @@ class StreamingMultiAgentCoordinator:
             for row in rows:
                 if not isinstance(row, dict):
                     continue
-                if str(row.get("goods_no") or "").strip() != target_goods_no:
+                canonical_row = canonical_context_from_tool_boundary(row)
+                if str(canonical_row.get("goods_no") or "").strip() != target_goods_no:
                     continue
-                row_tire_size = normalize_tire_size(
-                    str(row.get("tire_size") or row.get("tire_size_1") or row.get("tireSize") or "")
-                )
+                row_tire_size = normalize_tire_size(str(canonical_row.get("tire_size") or ""))
                 return input_tire_size or row_tire_size
         return None
 
@@ -2844,11 +2848,11 @@ class StreamingMultiAgentCoordinator:
 
             if isinstance(data, dict):
                 for field in fields:
-                    val = data.get(field)
+                    val = canonical_context_from_tool_boundary(data).get(field)
                     if val:
                         tool_slots[field] = val
                 if tool_name == "search_product_tool" and tool_slots.get("goods_no"):
-                    tire_size = data.get("tire_size") or data.get("tire_size_1") or data.get("tireSize")
+                    tire_size = canonical_context_from_tool_boundary(data).get("tire_size")
                     if tire_size:
                         tool_slots["tire_size"] = tire_size
 
@@ -4995,21 +4999,10 @@ def _store_context_from_mapping(data: Mapping[str, Any] | None) -> dict[str, Any
     context = data.get("currentStoreContext")
     if isinstance(context, Mapping):
         data = context
-    shop_id = str(
-        data.get("shopId")
-        or data.get("shop_id")
-        or data.get("storeId")
-        or data.get("store_id")
-        or ""
-    ).strip()
-    shop_name = str(
-        data.get("shopName")
-        or data.get("shop_name")
-        or data.get("storeName")
-        or data.get("store_nm")
-        or data.get("shop_nm")
-        or ""
-    ).strip()
+    canonical_template = canonical_context_from_template_boundary(data)
+    canonical_tool = canonical_context_from_tool_boundary(data)
+    shop_id = str(canonical_template.get("shop_id") or canonical_tool.get("shop_id") or data.get("store_id") or "").strip()
+    shop_name = str(canonical_template.get("shop_name") or canonical_tool.get("shop_name") or "").strip()
     xpos = _float_or_none(
         data.get("xpos")
         or data.get("x_pos")
@@ -5033,8 +5026,10 @@ def _store_context_from_mapping(data: Mapping[str, Any] | None) -> dict[str, Any
     ).strip()
     result: dict[str, Any] = {}
     if shop_id:
+        result["shop_id"] = shop_id
         result["shopId"] = shop_id
     if shop_name:
+        result["shop_name"] = shop_name
         result["shopName"] = shop_name
     if xpos is not None:
         result["xpos"] = xpos
@@ -5073,26 +5068,22 @@ def _apply_cta_context_to_slots(slots: Any, cta_context: dict[str, Any], *, sour
     if not cta_context:
         return slots
     values: dict[str, Any] = {}
-    mapping = {
-        "goodsNo": "goods_no",
-        "goods_no": "goods_no",
-        "tireSize": "tire_size",
-        "tire_size": "tire_size",
-        "ordQty": "ord_qty",
-        "ord_qty": "ord_qty",
-        "regionCode": "region",
-        "region_code": "region",
-        "storeName": "shop_name",
-        "store_nm": "shop_name",
-        "shopName": "shop_name",
-        "requestedCalDay": "requested_cal_day",
-        "requested_cal_day": "requested_cal_day",
-        "intentKey": "availability_intent",
-    }
-    for src, dst in mapping.items():
-        value = cta_context.get(src)
+    canonical_context = canonical_context_from_template_boundary(cta_context)
+    for key in ("goods_no", "tire_size", "ord_qty", "region", "shop_name", "requested_cal_day"):
+        value = canonical_context.get(key)
         if value not in (None, "", []):
-            values[dst] = value
+            if key == "ord_qty":
+                try:
+                    value = int(value)
+                except (TypeError, ValueError):
+                    continue
+            values[key] = value
+    region_code = cta_context.get("regionCode") or cta_context.get("region_code")
+    if region_code not in (None, "", []):
+        values["region"] = region_code
+    intent_key = cta_context.get("intentKey") or cta_context.get("intent_key")
+    if intent_key not in (None, "", []):
+        values["availability_intent"] = intent_key
     if values.get("availability_intent") == "today_install":
         values["pending_intent"] = getattr(slots, "pending_intent", None) or "stock"
         values["goal_type"] = getattr(slots, "goal_type", None) or "store_with_stock"
@@ -5146,8 +5137,9 @@ def _cta_preview_input_from_slots(
     other_store_search: bool = False,
 ) -> tuple[dict[str, Any] | None, str | None]:
     context = cta_context or {}
-    goods_no = getattr(slots, "goods_no", None) or context.get("goodsNo") or context.get("goods_no")
-    ord_qty_value = getattr(slots, "ord_qty", None) or context.get("ordQty") or context.get("ord_qty")
+    canonical_context = canonical_context_from_template_boundary(context)
+    goods_no = getattr(slots, "goods_no", None) or canonical_context.get("goods_no")
+    ord_qty_value = getattr(slots, "ord_qty", None) or canonical_context.get("ord_qty")
     if not goods_no:
         return None, "product"
     if not ord_qty_value:
@@ -5157,7 +5149,7 @@ def _cta_preview_input_from_slots(
         getattr(slots, "region", None)
         or getattr(slots, "shop_name", None)
         or getattr(slots, "shop_id", None)
-        or store_context.get("shopName")
+        or store_context.get("shop_name")
         or (store_context.get("xpos") is not None and store_context.get("ypos") is not None)
     )
     if not has_location:
@@ -5173,8 +5165,8 @@ def _cta_preview_input_from_slots(
     }
     if other_store_search:
         excluded_shop_ids: list[str] = []
-        if store_context.get("shopId"):
-            excluded_shop_ids.append(str(store_context["shopId"]))
+        if store_context.get("shop_id"):
+            excluded_shop_ids.append(str(store_context["shop_id"]))
         elif getattr(slots, "shop_id", None):
             excluded_shop_ids.append(str(slots.shop_id))
         if store_context.get("xpos") is not None and store_context.get("ypos") is not None:
@@ -5182,7 +5174,7 @@ def _cta_preview_input_from_slots(
             preview_input["user_ypos"] = float(store_context["ypos"])
             preview_input["radius_km"] = 20.0
         else:
-            area_hint = _store_area_hint_from_name(str(store_context.get("shopName") or getattr(slots, "shop_name", "") or ""))
+            area_hint = _store_area_hint_from_name(str(store_context.get("shop_name") or getattr(slots, "shop_name", "") or ""))
             if area_hint:
                 preview_input["region_code"] = area_hint
             elif getattr(slots, "region", None):
@@ -5196,8 +5188,8 @@ def _cta_preview_input_from_slots(
         preview_input["region_code"] = slots.region
     elif getattr(slots, "shop_name", None):
         preview_input["store_nm"] = slots.shop_name
-    elif store_context.get("shopName"):
-        preview_input["store_nm"] = str(store_context["shopName"])
+    elif store_context.get("shop_name"):
+        preview_input["store_nm"] = str(store_context["shop_name"])
     if str(context.get("followupMode") or "") == "logistics_earliest_install_date":
         preview_input["stock_check_mode"] = "logistics_only"
     if getattr(slots, "requested_cal_day", None):
@@ -5229,7 +5221,7 @@ def _preview_today_shop_ids(tool_result: dict[str, Any]) -> set[str]:
     for row in rows:
         if not isinstance(row, dict):
             continue
-        shop_id = str(row.get("shopId") or row.get("shop_id") or "").strip()
+        shop_id = str(canonical_context_from_tool_boundary(row).get("shop_id") or "").strip()
         if shop_id:
             result.add(shop_id)
     return result
@@ -6982,50 +6974,46 @@ def _standardize_preorder_metadata(event_data: dict, slot_state: Any | None) -> 
         metadata = {}
         event_data["metadata"] = metadata
 
+    canonical_event = canonical_context_from_template_boundary(event_data)
+    canonical_metadata = canonical_context_from_template_boundary(metadata)
+    canonical_slots = canonical_context_from_slots(slot_state)
     product_text = str(order_info.get("product") or metadata.get("productName") or "").strip()
     booking_text = str(order_info.get("bookingDateTime") or metadata.get("bookingDateTime") or "").strip()
     requested_cal_day = (
-        str(metadata.get("requestedCalDay") or metadata.get("requested_cal_day") or "").strip()
+        str(canonical_metadata.get("requested_cal_day") or canonical_event.get("requested_cal_day") or "").strip()
         or _cal_day_from_korean_date_text(booking_text)
     )
     rsv_hour = (
-        str(metadata.get("rsvHour") or metadata.get("rsv_hour") or "").strip()
+        str(canonical_metadata.get("rsv_hour") or canonical_event.get("rsv_hour") or "").strip()
         or _reservation_hour_from_text(booking_text)
     )
-    quantity = metadata.get("ordQty") or metadata.get("ord_qty") or metadata.get("quantity") or order_info.get("quantity")
+    quantity = canonical_metadata.get("ord_qty") or canonical_event.get("ord_qty") or order_info.get("quantity")
     payment_amount = (
         metadata.get("paymentAmount")
         or metadata.get("payment_amount")
         or order_info.get("paymentAmount")
         or (getattr(slot_state, "payment_amount", None) if slot_state is not None else None)
     )
-    goods_no = (
-        metadata.get("goodsNo")
-        or metadata.get("goodsId")
-        or metadata.get("goods_no")
-        or (getattr(slot_state, "goods_no", None) if slot_state is not None else None)
-    )
+    goods_no = canonical_metadata.get("goods_no") or canonical_event.get("goods_no") or canonical_slots.get("goods_no")
     product_name = (
-        metadata.get("productName")
-        or metadata.get("goodsNm")
-        or (getattr(slot_state, "tire_model", None) if slot_state is not None else None)
+        canonical_metadata.get("product_name")
+        or canonical_event.get("product_name")
+        or canonical_slots.get("product_name")
         or re.sub(r"\s*\d{3}\s*/?\s*\d{2}\s*R?\s*\d{2}\s*$", "", product_text, flags=re.IGNORECASE).strip()
         or product_text
     )
     tire_size = (
-        metadata.get("tireSize")
-        or metadata.get("tire_size")
+        canonical_metadata.get("tire_size")
+        or canonical_event.get("tire_size")
         or normalize_tire_size(product_text)
-        or (getattr(slot_state, "tire_size", None) if slot_state is not None else None)
+        or canonical_slots.get("tire_size")
     )
-    shop_id = metadata.get("shopId") or metadata.get("shop_id") or (
-        getattr(slot_state, "shop_id", None) if slot_state is not None else None
-    )
+    shop_id = canonical_metadata.get("shop_id") or canonical_event.get("shop_id") or canonical_slots.get("shop_id")
     store_name = (
-        metadata.get("storeName")
-        or metadata.get("shopName")
+        canonical_metadata.get("shop_name")
+        or canonical_event.get("shop_name")
         or order_info.get("storeName")
-        or (getattr(slot_state, "shop_name", None) if slot_state is not None else None)
+        or canonical_slots.get("shop_name")
     )
 
     metadata["goodsNo"] = goods_no
@@ -8794,7 +8782,7 @@ def _stock_inventory_matches_shop(raw_inventory: object, shop_id: str) -> bool:
         return False
     for key in ("todayShopArray", "tnaShopArray"):
         for row in _stock_inventory_rows(raw_inventory, key):
-            row_shop_id = str(row.get("shopId") or row.get("shop_id") or "").strip()
+            row_shop_id = str(canonical_context_from_tool_boundary(row).get("shop_id") or "").strip()
             if row_shop_id and row_shop_id == shop_id:
                 return True
     return False
@@ -10477,7 +10465,7 @@ def _build_coupon_applicability_event(
         for item in products:
             row_brand_cd = str(item.get("brand_cd") or item.get("brandCode") or "").strip().upper()
             row_brand_nm = str(item.get("brand_nm") or item.get("brand_name") or item.get("brandName") or "").strip()
-            row_goods_nm = str(item.get("goods_nm") or item.get("goods_name") or "").strip()
+            row_goods_nm = str(canonical_context_from_tool_boundary(item).get("product_name") or "").strip()
             if not row_goods_nm:
                 continue
             if (
@@ -10512,9 +10500,9 @@ def _build_coupon_applicability_event(
     target_keys = _coupon_product_match_keys(target_product_name)
     if target_keys:
         product_names = [
-            str(item.get("goods_nm") or item.get("goods_name") or "").strip()
+            str(canonical_context_from_tool_boundary(item).get("product_name") or "").strip()
             for item in products
-            if str(item.get("goods_nm") or item.get("goods_name") or "").strip()
+            if str(canonical_context_from_tool_boundary(item).get("product_name") or "").strip()
         ]
         matched_product_names = [
             name for name in product_names
@@ -10537,7 +10525,7 @@ def _build_coupon_applicability_event(
     elif products:
         lines.append(f"‘{coupon_name}’ 적용 가능 상품은 {total_products}개예요.")
         for item in products[:5]:
-            goods_nm = str(item.get("goods_nm") or item.get("goods_name") or "").strip()
+            goods_nm = str(canonical_context_from_tool_boundary(item).get("product_name") or "").strip()
             if goods_nm:
                 lines.append(f"- {goods_nm}")
         if total_products > 5:
@@ -10612,7 +10600,7 @@ def _build_product_coupon_eligibility_event(
         for item in items:
             if not isinstance(item, dict):
                 continue
-            goods_nm = str(item.get("goods_nm") or item.get("goods_name") or "").strip()
+            goods_nm = str(canonical_context_from_tool_boundary(item).get("product_name") or "").strip()
             if not goods_nm:
                 continue
             if target_brand:
@@ -11163,7 +11151,7 @@ def _pick_product_row_from_search_result(
     for row in rows:
         if not isinstance(row, dict):
             continue
-        row_name = str(row.get("goods_nm") or row.get("title") or "").strip()
+        row_name = str(canonical_context_from_tool_boundary(row).get("product_name") or "").strip()
         if not row_name:
             continue
         row_canonical_names = set(extract_product_names(row_name))
@@ -11185,7 +11173,7 @@ def _pick_product_row_from_search_result(
             for row in rows:
                 if not isinstance(row, dict):
                     continue
-                row_name = str(row.get("goods_nm") or row.get("title") or "").strip()
+                row_name = str(canonical_context_from_tool_boundary(row).get("product_name") or "").strip()
                 if row_name:
                     return row
         return None
@@ -11199,18 +11187,22 @@ def _resolved_comparison_rows_are_distinct(product_rows: list[tuple[str, dict | 
     if not isinstance(left_row, dict) or not isinstance(right_row, dict):
         return False
 
-    left_goods_no = str(left_row.get("goods_no") or left_row.get("goodsId") or "").strip()
-    right_goods_no = str(right_row.get("goods_no") or right_row.get("goodsId") or "").strip()
+    left_canonical_row = canonical_context_from_tool_boundary(left_row)
+    right_canonical_row = canonical_context_from_tool_boundary(right_row)
+    left_goods_no = str(left_canonical_row.get("goods_no") or "").strip()
+    right_goods_no = str(right_canonical_row.get("goods_no") or "").strip()
     if left_goods_no and right_goods_no and left_goods_no == right_goods_no:
         return False
 
-    left_canonical = set(extract_product_names(str(left_row.get("goods_nm") or left_name or "")))
-    right_canonical = set(extract_product_names(str(right_row.get("goods_nm") or right_name or "")))
+    left_label = str(left_canonical_row.get("product_name") or left_name or "")
+    right_label = str(right_canonical_row.get("product_name") or right_name or "")
+    left_canonical = set(extract_product_names(left_label))
+    right_canonical = set(extract_product_names(right_label))
     if left_canonical and right_canonical and (left_canonical & right_canonical):
         return False
 
-    left_norm = _normalize_coupon_match_text(left_row.get("goods_nm") or left_name or "")
-    right_norm = _normalize_coupon_match_text(right_row.get("goods_nm") or right_name or "")
+    left_norm = _normalize_coupon_match_text(left_label)
+    right_norm = _normalize_coupon_match_text(right_label)
     return bool(left_norm and right_norm and left_norm != right_norm)
 
 
@@ -11225,13 +11217,14 @@ def _unique_product_row_from_sized_search_result(tool_result: dict, product_name
     for row in rows:
         if not isinstance(row, dict):
             continue
-        goods_no = str(row.get("goods_no") or "").strip()
+        canonical_row = canonical_context_from_tool_boundary(row)
+        goods_no = str(canonical_row.get("goods_no") or "").strip()
         if not goods_no:
             continue
-        row_size = normalize_tire_size(str(row.get("tire_size_1") or row.get("tire_size_2") or ""))
+        row_size = normalize_tire_size(str(canonical_row.get("tire_size") or row.get("tire_size_2") or ""))
         if requested_size and row_size and row_size != requested_size:
             continue
-        row_name = row.get("goods_nm") or row.get("title")
+        row_name = canonical_row.get("product_name")
         if product_name and not _is_strong_product_name_match(product_name, row_name):
             continue
         matched_by_goods_no.setdefault(goods_no, row)
@@ -11256,9 +11249,7 @@ def _tire_sizes_from_product_rows(rows: list[dict]) -> list[str]:
     for row in rows:
         if not isinstance(row, dict):
             continue
-        tire_size = normalize_tire_size(
-            str(row.get("tire_size_1") or row.get("tire_size") or row.get("tireSize") or row.get("titleTires") or "")
-        )
+        tire_size = normalize_tire_size(str(canonical_context_from_tool_boundary(row).get("tire_size") or ""))
         if not tire_size:
             tire_size = normalize_tire_size(str(row.get("tire_size_2") or ""))
         if not tire_size:
@@ -11285,9 +11276,10 @@ def _product_description_lines_and_metadata(
     *,
     size_specific: bool = True,
 ) -> tuple[list[str], dict[str, str]]:
-    goods_no = str(row.get("goods_no") or "").strip()
-    name = str(row.get("goods_nm") or row.get("big_goods_nm") or "상품").strip()
-    tire_size = normalize_tire_size(str(row.get("tire_size_1") or row.get("tire_size_2") or ""))
+    canonical_row = canonical_context_from_tool_boundary(row)
+    goods_no = str(canonical_row.get("goods_no") or "").strip()
+    name = str(canonical_row.get("product_name") or row.get("big_goods_nm") or "상품").strip()
+    tire_size = normalize_tire_size(str(canonical_row.get("tire_size") or row.get("tire_size_2") or ""))
     slogan = _clean_product_sentence(row.get("slogan"))
     tech = _clean_product_sentence(row.get("pc_prod_tech_desc"))
     season = str(row.get("season_nm") or "").strip()
@@ -11843,7 +11835,6 @@ def _comparison_query_with_recent_context(
             return f"{current_names[0]}랑 {current_names[1]} 비교"
         return user_text
 
-    recent_names = _recent_product_names_for_comparison(messages)
     suffix = "상품 설명 비교" if is_description_compare else "비교"
     if effective_metric and not is_description_compare:
         suffix = _comparison_query_metric_phrase(effective_metric)
@@ -11852,22 +11843,25 @@ def _comparison_query_with_recent_context(
         return f"{current_names[0]}랑 {current_names[1]} {suffix}"
 
     if len(current_names) == 1:
+        recent_names = _recent_product_names_for_comparison(messages)
         current_name = current_names[0]
         for recent_name in reversed(recent_names):
             if recent_name != current_name:
                 return f"{recent_name}랑 {current_name} {suffix}"
 
+    if len(current_names) == 0 and len(context_names) >= 2 and _can_reuse_recent_products_for_comparison(
+        user_text,
+        is_description_compare=is_description_compare,
+    ):
+        return f"{context_names[0]}랑 {context_names[1]} {suffix}"
+
+    recent_names = _recent_product_names_for_comparison(messages)
     if (
         len(current_names) == 0
         and len(recent_names) >= 2
         and _can_reuse_recent_products_for_comparison(user_text, is_description_compare=is_description_compare)
     ):
         return f"{recent_names[0]}랑 {recent_names[1]} {suffix}"
-    if len(current_names) == 0 and len(context_names) >= 2 and _can_reuse_recent_products_for_comparison(
-        user_text,
-        is_description_compare=is_description_compare,
-    ):
-        return f"{context_names[0]}랑 {context_names[1]} {suffix}"
     return user_text
 
 
@@ -11929,8 +11923,9 @@ def _build_multi_product_detail_quickreply_event(
             continue
         found_count += 1
         detail_lines, product_metadata = _product_description_lines_and_metadata(row, size_specific=size_specific)
+        canonical_row = canonical_context_from_tool_boundary(row)
         name = product_metadata.get("productName") or str(
-            row.get("goods_nm") or row.get("big_goods_nm") or row.get("title") or requested_name
+            canonical_row.get("product_name") or row.get("big_goods_nm") or requested_name
         ).strip()
         lines.extend(["", f"## {name}", *detail_lines])
         metadata_products.append(product_metadata)
@@ -12255,8 +12250,9 @@ def _quantity_price_summary(price_result: dict, quantity: int) -> dict[str, Any]
     base_total = sale_unit * quantity
     final_total = final_unit * quantity
     discount_total = max(0, base_total - final_total)
-    product_name = str(row.get("goods_nm") or row.get("title") or "선택하신 상품").strip()
-    goods_no = str(row.get("goods_no") or "").strip()
+    canonical_row = canonical_context_from_tool_boundary(row)
+    product_name = str(canonical_row.get("product_name") or "선택하신 상품").strip()
+    goods_no = str(canonical_row.get("goods_no") or "").strip()
     applied_coupons = row.get("applied_coupons")
     coupon_names: list[str] = []
     if isinstance(applied_coupons, list):
@@ -12350,7 +12346,8 @@ def _quantity_benefit_pending_values_from_template(template_data: dict | None) -
         return {}
     if metadata.get("pendingIntent") != "quantity_benefit_comparison":
         return {}
-    product_name = str(metadata.get("productName") or "").strip()
+    canonical_metadata = canonical_context_from_template_boundary(metadata)
+    product_name = str(canonical_metadata.get("product_name") or "").strip()
     quantity_options = metadata.get("quantityOptions")
     if not isinstance(quantity_options, list):
         return {}
@@ -12445,7 +12442,7 @@ def _resolve_goods_no_from_product_template_selection(user_text: str, template_d
     text = user_text.strip()
     ordinal_idx = _selection_ordinal_index(text, len(metadata))
     if ordinal_idx is not None and isinstance(metadata[ordinal_idx], dict):
-        goods_no = str(metadata[ordinal_idx].get("goodsId") or metadata[ordinal_idx].get("goodsNo") or "").strip()
+        goods_no = str(canonical_context_from_template_boundary(metadata[ordinal_idx]).get("goods_no") or "").strip()
         return goods_no or None
 
     target_size = normalize_tire_size(text)
@@ -12456,15 +12453,20 @@ def _resolve_goods_no_from_product_template_selection(user_text: str, template_d
     for product, meta in zip(products, metadata):
         if not isinstance(product, dict) or not isinstance(meta, dict):
             continue
-        product_size = normalize_tire_size(str(product.get("titleTires") or product.get("tireSize") or ""))
+        canonical_product = canonical_context_from_template_boundary(product)
+        canonical_meta = canonical_context_from_template_boundary(meta)
+        product_size = normalize_tire_size(str(canonical_product.get("tire_size") or ""))
         if target_size and product_size != target_size:
             continue
         title = " ".join(
-            str(product.get(key) or "")
-            for key in ("title", "titleProductName", "productName", "goodsNm")
+            str(part or "")
+            for part in (
+                canonical_product.get("product_name"),
+                product.get("title"),
+            )
         ).lower()
         score = sum(1 for token in tokens if token in title)
-        goods_no = str(meta.get("goodsId") or meta.get("goodsNo") or "").strip()
+        goods_no = str(canonical_meta.get("goods_no") or "").strip()
         if score > best_score:
             best_score = score
             best_goods_no = goods_no
@@ -12610,14 +12612,15 @@ def _goods_no_from_template_event(event: dict | None) -> str:
         return ""
     metadata = data.get("metadata")
     if isinstance(metadata, dict):
-        goods_no = str(metadata.get("goodsId") or metadata.get("goods_no") or metadata.get("goodsIdList") or "").strip()
+        canonical_metadata = canonical_context_from_template_boundary(metadata)
+        goods_no = str(canonical_metadata.get("goods_no") or metadata.get("goodsIdList") or "").strip()
         if goods_no.startswith("G"):
             return goods_no
     for key in ("products", "productList", "items"):
         rows = data.get(key)
         if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict):
             continue
-        row_goods_no = str(rows[0].get("goodsId") or rows[0].get("goods_no") or rows[0].get("goodsNo") or "").strip()
+        row_goods_no = str(canonical_context_from_template_boundary(rows[0]).get("goods_no") or "").strip()
         if row_goods_no.startswith("G"):
             return row_goods_no
     return ""
@@ -12929,8 +12932,9 @@ def _build_external_price_comparison_event_from_search_results(
         "대신 T'Station 내부 판매가와 회원 쿠폰 기준 최저 혜택가는 확인해 드릴 수 있습니다.",
     ]
     if row is not None:
-        product_label = str(row.get("goods_nm") or row.get("title") or "").strip()
-        tire_size = str(row.get("tire_size_1") or row.get("tire_size_2") or frame.entities.get("tire_size") or "").strip()
+        canonical_row = canonical_context_from_tool_boundary(row)
+        product_label = str(canonical_row.get("product_name") or "").strip()
+        tire_size = str(canonical_row.get("tire_size") or row.get("tire_size_2") or frame.entities.get("tire_size") or "").strip()
         final_price = _final_price_from_row(row)
         sale_price = _to_int(row.get("sale_prc"))
         price_bits: list[str] = []
@@ -13347,7 +13351,7 @@ def _recent_product_set_size_availability_context(
     product_names: list[str] = list(listing_context.get("product_names") or [])
     if not product_names:
         for row in listing_context["rows"]:
-            product_name = str(row.get("goods_nm") or row.get("titleProductName") or row.get("title") or "").strip()
+            product_name = str(canonical_context_from_tool_boundary(row).get("product_name") or "").strip()
             if not product_name or product_name in product_names:
                 continue
             product_names.append(product_name)
@@ -13429,12 +13433,11 @@ def _build_recent_product_size_availability_event_from_rows(
 
     size_map: dict[str, set[str]] = {}
     for row in context["rows"]:
-        product_name = str(row.get("goods_nm") or row.get("titleProductName") or row.get("title") or "").strip()
+        canonical_row = canonical_context_from_tool_boundary(row)
+        product_name = str(canonical_row.get("product_name") or "").strip()
         if not product_name:
             continue
-        tire_size = normalize_tire_size(
-            str(row.get("tire_size_1") or row.get("tire_size") or row.get("tireSize") or row.get("titleTires") or "")
-        )
+        tire_size = normalize_tire_size(str(canonical_row.get("tire_size") or ""))
         size_map.setdefault(product_name, set())
         if tire_size:
             size_map[product_name].add(tire_size)
@@ -13497,18 +13500,10 @@ def _recent_product_keyword_for_size_only_search(
     if _fallback_sized_product_keyword(user_text):
         return None
 
-    if _STORE_AVAILABILITY_CONTINUATION_RE.search(str(recent_context or "")):
-        context_keyword = _recent_context_product_keyword_for_size_only_search(user_text, recent_context)
-        if context_keyword:
-            return context_keyword
-
-    pending_product_name = str(getattr(slots, "pending_product_name", None) or "").strip() if slots is not None else ""
-    if pending_product_name:
-        return _preferred_product_search_keyword(pending_product_name)
-
-    slot_model = str(getattr(slots, "tire_model", None) or "").strip() if slots is not None else ""
-    if slot_model:
-        return _preferred_product_search_keyword(slot_model)
+    canonical_slots = canonical_context_from_slots(slots)
+    slot_product_name = str(canonical_slots.get("product_name") or "").strip()
+    if slot_product_name:
+        return _preferred_product_search_keyword(slot_product_name)
 
     for entry in reversed(prev_tool_data or []):
         if entry.get("tool") != "search_product_tool":
@@ -13524,9 +13519,14 @@ def _recent_product_keyword_for_size_only_search(
             for row in rows:
                 if not isinstance(row, dict):
                     continue
-                row_name = str(row.get("goods_nm") or row.get("title") or "").strip()
+                row_name = str(canonical_context_from_tool_boundary(row).get("product_name") or "").strip()
                 if row_name:
                     return _preferred_product_search_keyword(row_name)
+
+    if _STORE_AVAILABILITY_CONTINUATION_RE.search(str(recent_context or "")):
+        context_keyword = _recent_context_product_keyword_for_size_only_search(user_text, recent_context)
+        if context_keyword:
+            return context_keyword
 
     return _recent_context_product_keyword_for_size_only_search(user_text, recent_context)
 
@@ -13602,13 +13602,10 @@ def _product_size_list_keyword_from_context(
     if product_names:
         return _preferred_product_search_keyword(str(product_names[0]))
 
-    pending_product_name = str(getattr(slots, "pending_product_name", None) or "").strip() if slots is not None else ""
-    if pending_product_name:
-        return _preferred_product_search_keyword(pending_product_name)
-
-    slot_model = str(getattr(slots, "tire_model", None) or "").strip() if slots is not None else ""
-    if slot_model:
-        return _preferred_product_search_keyword(slot_model)
+    canonical_slots = canonical_context_from_slots(slots)
+    slot_product_name = str(canonical_slots.get("product_name") or "").strip()
+    if slot_product_name:
+        return _preferred_product_search_keyword(slot_product_name)
 
     for keyword, _result in reversed(search_results or []):
         keyword = str(keyword or "").strip()
@@ -13635,7 +13632,7 @@ def _product_size_list_keyword_from_context(
 def _product_size_list_row_matches_keyword(row: dict, keyword: str | None) -> bool:
     if not keyword:
         return True
-    row_name = str(row.get("goods_nm") or row.get("titleProductName") or row.get("title") or "")
+    row_name = str(canonical_context_from_tool_boundary(row).get("product_name") or "")
     if not row_name:
         return False
     return _is_strong_product_name_match(keyword, row_name)
@@ -13701,11 +13698,10 @@ def _build_product_size_list_event_from_search_results(
     seen_sizes: set[str] = set()
     first_product_name = ""
     for row in rows:
+        canonical_row = canonical_context_from_tool_boundary(row)
         if not first_product_name:
-            first_product_name = str(row.get("goods_nm") or row.get("titleProductName") or row.get("title") or "").strip()
-        tire_size = normalize_tire_size(
-            str(row.get("tire_size_1") or row.get("tire_size") or row.get("tireSize") or row.get("titleTires") or "")
-        )
+            first_product_name = str(canonical_row.get("product_name") or "").strip()
+        tire_size = normalize_tire_size(str(canonical_row.get("tire_size") or ""))
         if not tire_size:
             tire_size = normalize_tire_size(str(row.get("tire_size_2") or ""))
         if not tire_size:
@@ -13890,9 +13886,8 @@ def _search_result_size_candidates(rows: list[dict]) -> list[str]:
     sizes: list[str] = []
     seen_sizes: set[str] = set()
     for row in rows:
-        tire_size = normalize_tire_size(
-            str(row.get("tire_size_1") or row.get("tire_size") or row.get("tireSize") or row.get("titleTires") or "")
-        )
+        canonical_row = canonical_context_from_tool_boundary(row)
+        tire_size = normalize_tire_size(str(canonical_row.get("tire_size") or ""))
         if not tire_size:
             tire_size = normalize_tire_size(str(row.get("tire_size_2") or ""))
         if not tire_size:
@@ -13912,12 +13907,7 @@ def _search_result_rows_for_product(rows: list[dict], product_name: str) -> list
     target_names = set(extract_product_names(product_label))
     matched_rows: list[dict] = []
     for row in rows:
-        row_name = str(
-            row.get("goods_nm")
-            or row.get("titleProductName")
-            or row.get("title")
-            or ""
-        ).strip()
+        row_name = str(canonical_context_from_tool_boundary(row).get("product_name") or "").strip()
         if not row_name:
             matched_rows.append(row)
             continue
@@ -14025,12 +14015,7 @@ def _search_results_from_structured_sources(
         keyword = ""
         first_row = rows[0]
         if isinstance(first_row, dict):
-            keyword = str(
-                first_row.get("goods_nm")
-                or first_row.get("titleProductName")
-                or first_row.get("title")
-                or ""
-            ).strip()
+            keyword = str(canonical_context_from_tool_boundary(first_row).get("product_name") or "").strip()
         results.append((keyword, tool_output))
     return results
 
@@ -14596,8 +14581,12 @@ def _build_store_availability_quantity_prompt_event(
             "predictedDomains": ["TRANSACTION"],
             "metadata": {
                 "goodsId": goods_no,
+                "goodsNo": goods_no,
+                "goods_no": goods_no,
                 "tireSize": tire_size,
+                "tire_size": tire_size,
                 "productName": product_keyword,
+                "product_name": product_keyword,
                 "storeName": store_name,
             },
         },
@@ -15638,6 +15627,8 @@ def _build_discovery_policy_context(
     tire_size: str | None,
     goods_no: str | None = None,
     vehicle_type: str | None = None,
+    tire_size_front: str | None = None,
+    tire_size_rear: str | None = None,
     recommendation_context: Mapping[str, Any] | None = None,
     comparison_context: Mapping[str, Any] | None = None,
     routing_result: Any | None = None,
@@ -15942,14 +15933,31 @@ def _build_discovery_policy_context(
             and "tire_size" not in discovery_tool_patch
         ):
             discovery_tool_patch["tire_size"] = tire_size
+        vehicle_type_skip_metadata = _vehicle_type_patch_skip_metadata_for_selected_vehicle_size_mismatch(
+            user_text=last_user_text,
+            current_tire_size=tire_size,
+            selected_vehicle_front_size=tire_size_front,
+            selected_vehicle_rear_size=tire_size_rear,
+            discovery_frame=discovery_frame,
+            recommendation_context=recommendation_context,
+        )
         if (
             vehicle_type
             and discovery_tool_plan.preferred_tool == "get_products_recommendations_tool"
             and discovery_frame.intent == "product_recommendation"
             and "vehicle_type" not in discovery_tool_patch
             and not discovery_frame.entities.get("vehicle_category")
+            and not vehicle_type_skip_metadata
         ):
             discovery_tool_patch["vehicle_type"] = vehicle_type
+        if vehicle_type_skip_metadata:
+            discovery_response_decision = replace(
+                discovery_response_decision,
+                metadata={
+                    **dict(discovery_response_decision.metadata or {}),
+                    **vehicle_type_skip_metadata,
+                },
+            )
         logger.debug(
             "[POLICY][discovery] frame=%s tool_plan=%s response_decision=%s",
             discovery_frame.to_dict(),
@@ -16617,6 +16625,12 @@ _VEHICLE_BASED_RECOMMENDATION_REFINEMENT_RE = re.compile(
     r"내\s*차에\s*맞|내차에\s*맞|내\s*차로\s*(?:다시|추천|확인)|내차로\s*(?:다시|추천|확인)",
     re.IGNORECASE,
 )
+_EXPLICIT_VEHICLE_SCOPE_RE = re.compile(
+    r"내\s*차|내차|내\s*차량|내차량|선택(?:한)?\s*차량|이\s*차량|해당\s*차량|"
+    r"차량\s*기준|차종\s*기준|GV70|제네시스|현대|기아|BMW|벤츠|아우디|테슬라|"
+    r"SUV|승용차?|전기차|EV|경트럭|밴",
+    re.IGNORECASE,
+)
 _STORE_REFERENCE_SIGNAL_RE = re.compile(
     r"그\s*매장|이\s*매장|해당\s*매장|거기|여기|저기|"
     r"첫\s*번째\s*매장|1\s*번\s*매장|방금\s*매장|아까\s*매장",
@@ -16674,6 +16688,43 @@ def _vehicle_based_recommendation_refinement_patch(
         patch["discovery_followup_action"] = "vehicle_based_recommendation_refinement"
         return patch
     return {}
+
+
+def _vehicle_type_patch_skip_metadata_for_selected_vehicle_size_mismatch(
+    *,
+    user_text: str,
+    current_tire_size: str | None,
+    selected_vehicle_front_size: str | None,
+    selected_vehicle_rear_size: str | None,
+    discovery_frame: Any,
+    recommendation_context: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Return trace metadata when selected-vehicle type should not constrain a fresh size recommendation."""
+    explicit_size = normalize_tire_size(user_text)
+    normalized_current_size = normalize_tire_size(current_tire_size or "") or explicit_size
+    if not normalized_current_size:
+        return None
+    vehicle_category = str((getattr(discovery_frame, "entities", {}) or {}).get("vehicle_category") or "").strip()
+    if vehicle_category or _EXPLICIT_VEHICLE_SCOPE_RE.search(user_text or ""):
+        return None
+    normalized_front = normalize_tire_size(selected_vehicle_front_size or "")
+    normalized_rear = normalize_tire_size(selected_vehicle_rear_size or "")
+    selected_sizes = list(dict.fromkeys(size for size in (normalized_front, normalized_rear) if size))
+    if not selected_sizes or normalized_current_size in set(selected_sizes):
+        return None
+    fitment_source = str((recommendation_context or {}).get("fitment_source") or "").strip()
+    if fitment_source == "selected_vehicle":
+        return None
+    return {
+        "vehicle_type_patch_skipped": True,
+        "skip_reason": (
+            "explicit_size_differs_from_selected_vehicle_size"
+            if explicit_size
+            else "current_size_differs_from_selected_vehicle_size"
+        ),
+        "current_tire_size": normalized_current_size,
+        "selected_vehicle_sizes": selected_sizes,
+    }
 
 
 def _clear_stale_product_slots_for_new_recommendation(
@@ -17876,7 +17927,7 @@ class TStationChatServiceV2:
 
         ordinal_idx = _selection_ordinal_index(text, len(items))
         if ordinal_idx is not None:
-            goods_no = items[ordinal_idx].get("goods_no")
+            goods_no = canonical_context_from_tool_boundary(items[ordinal_idx]).get("goods_no")
             if goods_no:
                 return goods_no
 
@@ -17888,11 +17939,11 @@ class TStationChatServiceV2:
             same_size = [
                 item
                 for item in items
-                if normalize_tire_size(item.get("tire_size_1") or item.get("tire_size") or item.get("tireSize")) == target_size
+                if normalize_tire_size(canonical_context_from_tool_boundary(item).get("tire_size")) == target_size
             ]
 
             if target_size_from_text and len(same_size) == 1:
-                goods_no = same_size[0].get("goods_no")
+                goods_no = canonical_context_from_tool_boundary(same_size[0]).get("goods_no")
                 if goods_no:
                     return goods_no
 
@@ -17901,7 +17952,7 @@ class TStationChatServiceV2:
             best_score = 0
             tied = False
             for item in same_size:
-                goods_nm = (item.get("goods_nm") or "").lower()
+                goods_nm = str(canonical_context_from_tool_boundary(item).get("product_name") or "").lower()
                 score = sum(1 for tok in tokens if tok in goods_nm)
                 if score > best_score:
                     best_score = score
@@ -17910,7 +17961,7 @@ class TStationChatServiceV2:
                 elif score == best_score and score > 0:
                     tied = True
             if best_item is not None and best_score >= 2 and not tied:
-                goods_no = best_item.get("goods_no")
+                goods_no = canonical_context_from_tool_boundary(best_item).get("goods_no")
                 if goods_no:
                     return goods_no
 
@@ -17930,17 +17981,18 @@ class TStationChatServiceV2:
             metadata = event_data.get("metadata")
             if not isinstance(metadata, dict):
                 return None
-            goods_no = str(metadata.get("goodsId") or metadata.get("goodsNo") or "").strip()
+            canonical_values = canonical_context_from_template_boundary(metadata)
+            goods_no = str(canonical_values.get("goods_no") or "").strip()
             if not goods_no:
                 return None
-            tire_size = normalize_tire_size(str(metadata.get("tireSize") or metadata.get("tire_size") or ""))
-            tire_model = str(metadata.get("productName") or metadata.get("goodsNm") or "").strip()
+            tire_size = normalize_tire_size(str(canonical_values.get("tire_size") or ""))
+            tire_model = str(canonical_values.get("product_name") or "").strip()
             slot_values: dict[str, Any] = {"goods_no": goods_no}
             if tire_size:
                 slot_values["tire_size"] = tire_size
             if tire_model:
                 slot_values["tire_model"] = tire_model
-            raw_qty = metadata.get("quantity") or metadata.get("ordQty") or metadata.get("ord_qty")
+            raw_qty = canonical_values.get("ord_qty")
             if raw_qty is not None:
                 try:
                     qty = int(raw_qty)
@@ -17965,16 +18017,13 @@ class TStationChatServiceV2:
         if not isinstance(product, dict) or not isinstance(meta, dict):
             return None
 
-        goods_no = str(meta.get("goodsId") or meta.get("goodsNo") or "").strip()
+        canonical_values = canonical_context_from_template_boundary({**product, **meta})
+        goods_no = str(canonical_values.get("goods_no") or "").strip()
         if not goods_no:
             return None
 
-        tire_size = normalize_tire_size(
-            str(product.get("titleTires") or product.get("tireSize") or product.get("size") or "")
-        )
-        tire_model = str(
-            product.get("titleProductName") or product.get("productName") or product.get("goodsNm") or ""
-        ).strip()
+        tire_size = normalize_tire_size(str(canonical_values.get("tire_size") or product.get("size") or ""))
+        tire_model = str(canonical_values.get("product_name") or "").strip()
 
         slot_values: dict[str, Any] = {"goods_no": goods_no}
         if tire_size:
@@ -18033,22 +18082,22 @@ class TStationChatServiceV2:
                 data = entry.get("data")
                 payload = data.get("data") if isinstance(data, dict) and isinstance(data.get("data"), dict) else data
                 payload = payload if isinstance(payload, dict) else {}
+                canonical_payload = canonical_context_from_tool_boundary(payload)
                 if not goods_no:
-                    goods_no = str(payload.get("goods_no") or "").strip()
+                    goods_no = str(canonical_payload.get("goods_no") or "").strip()
                 if goods_no:
                     slot_values["goods_no"] = goods_no
                 tire_size = normalize_tire_size(
                     str(
                         tool_input.get("tire_size")
                         or tool_input.get("size")
-                        or payload.get("tire_size_1")
-                        or payload.get("tire_size")
+                        or canonical_payload.get("tire_size")
                         or ""
                     )
                 )
                 if tire_size:
                     slot_values["tire_size"] = tire_size
-                product_name = str(payload.get("goods_nm") or payload.get("productName") or "").strip()
+                product_name = str(canonical_payload.get("product_name") or "").strip()
                 if product_name:
                     slot_values["tire_model"] = product_name
                 if slot_values.get("goods_no"):
@@ -18072,25 +18121,20 @@ class TStationChatServiceV2:
             return None
 
         slot_values: dict[str, Any] = {}
-        goods_no = str(
-            metadata.get("goodsId")
-            or metadata.get("goodsNo")
-            or metadata.get("goods_no")
-            or metadata.get("goods_id")
-            or ""
-        ).strip()
+        canonical_values = canonical_context_from_template_boundary(template_data)
+        goods_no = str(canonical_values.get("goods_no") or "").strip()
         if goods_no:
             slot_values["goods_no"] = goods_no
 
-        shop_id = str(metadata.get("shopId") or metadata.get("shop_id") or metadata.get("storeId") or "").strip()
+        shop_id = str(canonical_values.get("shop_id") or "").strip()
         if shop_id:
             slot_values["shop_id"] = shop_id
 
-        store_name = str(order_info.get("storeName") or metadata.get("shopName") or metadata.get("storeName") or "").strip()
+        store_name = str(canonical_values.get("shop_name") or "").strip()
         if store_name:
             slot_values["shop_name"] = store_name
 
-        raw_qty = order_info.get("quantity") or metadata.get("quantity") or metadata.get("ordQty") or metadata.get("ord_qty")
+        raw_qty = canonical_values.get("ord_qty")
         if raw_qty is not None:
             try:
                 qty = int(raw_qty)
@@ -18108,8 +18152,8 @@ class TStationChatServiceV2:
             except (TypeError, ValueError):
                 pass
 
-        product_text = str(order_info.get("product") or metadata.get("productName") or "").strip()
-        product_name = str(metadata.get("productName") or metadata.get("goodsNm") or "").strip() or product_text
+        product_text = str(order_info.get("product") or "").strip()
+        product_name = str(canonical_values.get("product_name") or "").strip() or product_text
         if product_name:
             slot_values["tire_model"] = re.sub(
                 r"\s*\d{3}\s*/?\s*\d{2}\s*R?\s*\d{2}\s*$",
@@ -18117,19 +18161,17 @@ class TStationChatServiceV2:
                 product_name,
                 flags=re.IGNORECASE,
             ).strip() or product_name
-        tire_size = normalize_tire_size(metadata.get("tireSize") or metadata.get("tire_size") or product_text)
+        tire_size = normalize_tire_size(canonical_values.get("tire_size") or product_text)
         if tire_size:
             slot_values["tire_size"] = tire_size
 
         booking_datetime = str(order_info.get("bookingDateTime") or metadata.get("bookingDateTime") or "").strip()
         requested_cal_day = _cal_day_from_korean_date_text(booking_datetime)
-        requested_cal_day = requested_cal_day or str(
-            metadata.get("requestedCalDay") or metadata.get("requested_cal_day") or metadata.get("rsvDate") or ""
-        ).strip()
+        requested_cal_day = requested_cal_day or str(canonical_values.get("requested_cal_day") or "").strip()
         if requested_cal_day:
             slot_values["requested_cal_day"] = requested_cal_day
         rsv_hour = _reservation_hour_from_text(booking_datetime)
-        rsv_hour = rsv_hour or str(metadata.get("rsvHour") or metadata.get("rsv_hour") or "").strip()
+        rsv_hour = rsv_hour or str(canonical_values.get("rsv_hour") or "").strip()
         if rsv_hour:
             slot_values["rsv_hour"] = rsv_hour
 
@@ -18157,30 +18199,23 @@ class TStationChatServiceV2:
             return None
 
         slot_values: dict[str, Any] = {}
-        shop_id = str(metadata.get("shopId") or metadata.get("shop_id") or "").strip()
+        canonical_values = canonical_context_from_template_boundary(metadata)
+        shop_id = str(canonical_values.get("shop_id") or "").strip()
         if shop_id:
             slot_values["shop_id"] = shop_id
-        shop_name = str(metadata.get("shopName") or metadata.get("shop_name") or "").strip()
+        shop_name = str(canonical_values.get("shop_name") or "").strip()
         if shop_name:
             slot_values["shop_name"] = shop_name
-        goods_no = str(
-            metadata.get("goodsNo")
-            or metadata.get("goods_no")
-            or metadata.get("goodsId")
-            or metadata.get("goods_id")
-            or ""
-        ).strip()
+        goods_no = str(canonical_values.get("goods_no") or "").strip()
         if goods_no:
             slot_values["goods_no"] = goods_no
-        product_name = str(metadata.get("productName") or metadata.get("product_name") or "").strip()
+        product_name = str(canonical_values.get("product_name") or "").strip()
         if product_name:
             slot_values["tire_model"] = product_name
-        tire_size = normalize_tire_size(
-            metadata.get("tireSize") or metadata.get("tire_size") or ""
-        )
+        tire_size = normalize_tire_size(canonical_values.get("tire_size") or "")
         if tire_size:
             slot_values["tire_size"] = tire_size
-        raw_qty = metadata.get("ordQty") or metadata.get("quantity")
+        raw_qty = canonical_values.get("ord_qty")
         if raw_qty is not None:
             try:
                 qty = int(raw_qty)
@@ -18199,6 +18234,7 @@ class TStationChatServiceV2:
 
         text = str(user_text or "").strip()
         rsv_hour = _reservation_hour_from_text(text)
+        rsv_hour = rsv_hour or str(canonical_values.get("rsv_hour") or "").strip()
         if rsv_hour:
             slot_values["rsv_hour"] = rsv_hour
 
@@ -18207,6 +18243,7 @@ class TStationChatServiceV2:
             template_data,
             allow_selected_fallback=bool(text),
         )
+        requested_cal_day = requested_cal_day or str(canonical_values.get("requested_cal_day") or "").strip()
         if requested_cal_day:
             slot_values["requested_cal_day"] = requested_cal_day
 
@@ -18359,11 +18396,11 @@ class TStationChatServiceV2:
         same_size = [
             item
             for item in items
-            if normalize_tire_size(item.get("tire_size_1") or item.get("tire_size") or item.get("tireSize")) == target_size
+            if normalize_tire_size(canonical_context_from_tool_boundary(item).get("tire_size")) == target_size
         ]
         if len(same_size) != 1:
             return None
-        goods_no = same_size[0].get("goods_no")
+        goods_no = canonical_context_from_tool_boundary(same_size[0]).get("goods_no")
         return goods_no if goods_no else None
 
     @staticmethod
@@ -18415,7 +18452,7 @@ class TStationChatServiceV2:
         # or store-name token — only resolvable when exactly 1 store was shown.
         _STORE_SELECT_CHIPS = frozenset({"이 매장 선택", "이 매장으로", "이곳 선택"})
         if text in _STORE_SELECT_CHIPS and len(items) == 1:
-            shop_id = items[0].get("shop_id")
+            shop_id = canonical_context_from_tool_boundary(items[0]).get("shop_id")
             if shop_id:
                 return shop_id
 
@@ -18423,7 +18460,7 @@ class TStationChatServiceV2:
         if ordinal_match:
             idx = int(ordinal_match.group(1)) - 1
             if 0 <= idx < len(items):
-                shop_id = items[idx].get("shop_id")
+                shop_id = canonical_context_from_tool_boundary(items[idx]).get("shop_id")
                 if shop_id:
                     return shop_id
 
@@ -18434,7 +18471,8 @@ class TStationChatServiceV2:
         if tokens:
             scored: list[tuple[int, dict]] = []
             for item in items:
-                shop_nm = item.get("shop_nm") or ""
+                canonical_item = canonical_context_from_tool_boundary(item)
+                shop_nm = canonical_item.get("shop_name") or ""
                 score = sum(1 for tok in tokens if tok in shop_nm)
                 if score > 0:
                     scored.append((score, item))
@@ -18442,7 +18480,7 @@ class TStationChatServiceV2:
                 max_score = max(s for s, _ in scored)
                 top = [item for s, item in scored if s == max_score]
                 if len(top) == 1:
-                    shop_id = top[0].get("shop_id")
+                    shop_id = canonical_context_from_tool_boundary(top[0]).get("shop_id")
                     if shop_id:
                         return shop_id
 
@@ -18473,7 +18511,8 @@ class TStationChatServiceV2:
         if selected is None:
             return None
         meta = selected.get("meta") or {}
-        shop_id = meta.get("shopId") if isinstance(meta, dict) else None
+        canonical_meta = canonical_context_from_template_boundary(meta) if isinstance(meta, dict) else {}
+        shop_id = canonical_meta.get("shop_id")
         return str(shop_id).strip() or None
 
     @staticmethod
@@ -18507,7 +18546,8 @@ class TStationChatServiceV2:
         if text in _STORE_SELECT_CHIPS and len(stores) == 1:
             meta = metadata[0]
             store = stores[0]
-            if isinstance(meta, dict) and isinstance(store, dict) and meta.get("shopId"):
+            canonical_meta = canonical_context_from_template_boundary(meta) if isinstance(meta, dict) else {}
+            if isinstance(meta, dict) and isinstance(store, dict) and canonical_meta.get("shop_id"):
                 return {"store": store, "meta": meta}
 
         ordinal_match = re.match(r"^\s*(\d+)\s*[\.\)번:]", text)
@@ -18516,7 +18556,8 @@ class TStationChatServiceV2:
             if 0 <= idx < len(metadata):
                 meta = metadata[idx]
                 store = stores[idx]
-                if isinstance(meta, dict) and isinstance(store, dict) and meta.get("shopId"):
+                canonical_meta = canonical_context_from_template_boundary(meta) if isinstance(meta, dict) else {}
+                if isinstance(meta, dict) and isinstance(store, dict) and canonical_meta.get("shop_id"):
                     return {"store": store, "meta": meta}
 
         tokens = [t for t in re.findall(r"[A-Za-z가-힣]+", text) if len(t) >= 2]
@@ -18534,7 +18575,8 @@ class TStationChatServiceV2:
                 top = [(store, meta) for s, store, meta in scored if s == max_score]
                 if len(top) == 1:
                     store, meta = top[0]
-                    if meta.get("shopId"):
+                    canonical_meta = canonical_context_from_template_boundary(meta)
+                    if canonical_meta.get("shop_id"):
                         return {"store": store, "meta": meta}
 
         return None
@@ -18550,19 +18592,20 @@ class TStationChatServiceV2:
             return None
 
         values: dict[str, Any] = {}
-        shop_id = str(meta.get("shopId") or "").strip()
+        canonical_meta = canonical_context_from_template_boundary(meta)
+        shop_id = str(canonical_meta.get("shop_id") or "").strip()
         if shop_id:
             values["shop_id"] = shop_id
-        shop_name = str(meta.get("shopName") or "").strip()
+        shop_name = str(canonical_meta.get("shop_name") or "").strip()
         if shop_name:
             values["shop_name"] = shop_name
-        goods_no = str(meta.get("goodsNo") or meta.get("goods_no") or "").strip()
+        goods_no = str(canonical_meta.get("goods_no") or "").strip()
         if goods_no:
             values["goods_no"] = goods_no
-        tire_size = normalize_tire_size(meta.get("tireSize") or meta.get("tire_size") or "")
+        tire_size = normalize_tire_size(canonical_meta.get("tire_size") or "")
         if tire_size:
             values["tire_size"] = tire_size
-        raw_qty = meta.get("ordQty") or meta.get("ord_qty") or meta.get("quantity")
+        raw_qty = canonical_meta.get("ord_qty")
         if raw_qty is not None:
             try:
                 qty = int(raw_qty)
@@ -18570,7 +18613,7 @@ class TStationChatServiceV2:
                     values["ord_qty"] = qty
             except (TypeError, ValueError):
                 pass
-        region = str(meta.get("region") or "").strip()
+        region = str(canonical_meta.get("region") or "").strip()
         if region:
             values["region"] = region
         pending_intent = str(meta.get("pendingIntent") or "").strip()
@@ -19614,13 +19657,13 @@ class TStationChatServiceV2:
                 if (
                     store_context
                     and (store_context.get("xpos") is None or store_context.get("ypos") is None)
-                    and store_context.get("shopName")
+                    and store_context.get("shop_name")
                 ):
                     from services.tstation.agents.c_transaction_agent.tools import (
                         get_store_list_tool as _cta_get_store_list_tool,
                     )
 
-                    list_input = {"store_nm": str(store_context["shopName"]), "limit": 10}
+                    list_input = {"store_nm": str(store_context["shop_name"]), "limit": 10}
                     try:
                         raw_list = await asyncio.to_thread(_cta_get_store_list_tool.invoke, list_input)
                         list_result = raw_list if isinstance(raw_list, dict) else qc_verifier.parse_tool_output(raw_list)
@@ -19628,7 +19671,7 @@ class TStationChatServiceV2:
                         stores = list_data.get("stores") if isinstance(list_data, dict) else None
                         if isinstance(stores, list):
                             matched_store = _store_name_exact_match_row(
-                                str(store_context["shopName"]),
+                                str(store_context["shop_name"]),
                                 [store for store in stores if isinstance(store, dict)],
                             )
                             if matched_store is not None:
@@ -19665,8 +19708,9 @@ class TStationChatServiceV2:
                 assert preview_input is not None
                 store_context = _store_context_from_mapping(enriched_cta_context)
                 searched_by_radius = preview_input.get("user_xpos") is not None and preview_input.get("user_ypos") is not None
+                canonical_cta_context = canonical_context_from_template_boundary(cta_context)
                 previous_store_name = str(
-                    store_context.get("shopName") or cta_context.get("shopName") or cta_context.get("storeName") or ""
+                    store_context.get("shop_name") or canonical_cta_context.get("shop_name") or ""
                 ).strip()
                 excluded_ids = {str(shop_id) for shop_id in preview_input.get("exclude_shop_ids", []) if shop_id}
 
@@ -20325,7 +20369,8 @@ class TStationChatServiceV2:
                     if selected_location is not None:
                         selected_meta = selected_location.get("meta") or {}
                         if isinstance(selected_meta, dict):
-                            resolved_shop_id = str(selected_meta.get("shopId") or "").strip() or None
+                            canonical_meta = canonical_context_from_template_boundary(selected_meta)
+                            resolved_shop_id = str(canonical_meta.get("shop_id") or "").strip() or None
                     if resolved_shop_id:
                         preview_values = TStationChatServiceV2._preview_location_slot_values_from_selection(
                             selected_location
@@ -21711,6 +21756,8 @@ class TStationChatServiceV2:
             tire_size=merged_slots.tire_size,
             goods_no=merged_slots.goods_no,
             vehicle_type=merged_slots.vehicle_type,
+            tire_size_front=merged_slots.tire_size_front,
+            tire_size_rear=merged_slots.tire_size_rear,
             recommendation_context=merged_slots.recommendation_context,
             comparison_context=merged_slots.comparison_context,
             routing_result=routing_result,
@@ -21835,7 +21882,7 @@ class TStationChatServiceV2:
                     for meta in metadata:
                         if not isinstance(meta, dict):
                             continue
-                        shop_id = meta.get("shopId") or meta.get("shop_id")
+                        shop_id = canonical_context_from_template_boundary(meta).get("shop_id")
                         if shop_id:
                             excluded_store_ids.add(str(shop_id))
         current_excluded_store_ids.set(excluded_store_ids)
@@ -22318,8 +22365,9 @@ class TStationChatServiceV2:
                 async for chunk in _finish(event):
                     yield chunk
                 return
-            shop_id = str(matched_store.get("shop_id") or matched_store.get("shopId") or "").strip()
-            resolved_store_name = str(matched_store.get("shop_nm") or matched_store.get("shop_name") or "").strip()
+            canonical_store = canonical_context_from_tool_boundary(matched_store)
+            shop_id = str(canonical_store.get("shop_id") or "").strip()
+            resolved_store_name = str(canonical_store.get("shop_name") or "").strip()
             if resolved_store_name:
                 store_name = resolved_store_name
             store_context = _store_context_from_mapping({**matched_store, "shopId": shop_id, "shopName": store_name})
@@ -24368,6 +24416,65 @@ class TStationChatServiceV2:
             except Exception as exc:
                 logger.warning("[QTY_BENEFIT] failed to clear pending slots: %s", exc)
 
+        def _stage_resolved_product_slots_for_direct_return(
+            *,
+            goods_no: str,
+            tire_size: str | None = None,
+            product_name: str | None = None,
+            pending_intent: str | None = None,
+            goal_type: str | None = None,
+        ) -> None:
+            nonlocal pending_slots
+            normalized_goods_no = str(goods_no or "").strip()
+            if not normalized_goods_no:
+                return
+
+            from schemas.tstation.slots import ConversationSlots
+
+            base_slots = pending_slots
+            if base_slots is None:
+                base_slots = initial_slots.model_copy() if initial_slots is not None else ConversationSlots()
+
+            values: dict[str, Any] = {"goods_no": normalized_goods_no}
+            normalized_tire_size = normalize_tire_size(tire_size or "")
+            if normalized_tire_size:
+                values["tire_size"] = normalized_tire_size
+            normalized_product_name = str(product_name or "").strip()
+            if normalized_product_name:
+                values["tire_model"] = normalized_product_name
+                values["pending_product_name"] = normalized_product_name
+            if pending_intent:
+                values["pending_intent"] = pending_intent
+            if goal_type:
+                values["goal_type"] = goal_type
+
+            updated_slots = base_slots.apply_runtime_values(
+                values,
+                source="resolved_product_direct_return",
+            )
+            context = dict(updated_slots.availability_context or {})
+            pending_order_context = dict(context.get("pending_order_context") or {})
+            pending_order_context.update({
+                "goods_no": normalized_goods_no,
+            })
+            if normalized_tire_size:
+                pending_order_context["tire_size"] = normalized_tire_size
+            if normalized_product_name:
+                pending_order_context["product_name"] = normalized_product_name
+            if pending_intent:
+                pending_order_context["pending_intent"] = pending_intent
+            if goal_type:
+                pending_order_context["goal_type"] = goal_type
+            context["pending_order_context"] = pending_order_context
+            updated_slots.availability_context = context
+            pending_slots = updated_slots
+            logger.info(
+                "[SLOTS] Staged resolved product for direct return: goods_no=%s tire_size=%s product=%s",
+                normalized_goods_no,
+                normalized_tire_size,
+                normalized_product_name,
+            )
+
         def _quantity_benefit_frame_with_recent_context() -> Any | None:
             known_slots: dict[str, Any] = {}
             if initial_slots is not None:
@@ -24691,6 +24798,13 @@ class TStationChatServiceV2:
                 )
                 goods_no = str((row or {}).get("goods_no") or "").strip()
                 if goods_no:
+                    _stage_resolved_product_slots_for_direct_return(
+                        goods_no=goods_no,
+                        tire_size=str(tool_input.get("size") or ""),
+                        product_name=preferred_keyword,
+                        pending_intent="stock" if is_store_availability_size_followup else None,
+                        goal_type="store_with_stock" if is_store_availability_size_followup else None,
+                    )
                     if is_store_availability_size_followup:
                         tire_size = str(tool_input.get("size") or "")
                         ord_qty = getattr(initial_slots, "ord_qty", None) if initial_slots is not None else None
@@ -25113,7 +25227,7 @@ class TStationChatServiceV2:
                         for row in rows:
                             if not isinstance(row, dict):
                                 continue
-                            row_name = str(row.get("goods_nm") or row.get("title") or "").strip()
+                            row_name = str(canonical_context_from_tool_boundary(row).get("product_name") or "").strip()
                             if row_name:
                                 return _preferred_product_search_keyword(row_name), brand_cd
                 return "", None
@@ -26333,6 +26447,14 @@ class TStationChatServiceV2:
                 latest_quickreply_tmpl=latest_quickreply_tmpl,
             )
             if context is None:
+                size_only_tool_input = _build_size_only_product_search_tool_input(
+                    user_query,
+                    prev_tool_data=prev_tool_data or [],
+                    recent_context=recent_user_context_text,
+                    slots=initial_slots,
+                )
+                if size_only_tool_input is not None:
+                    return None
                 if (
                     str(getattr(routing_result, "discovery_followup_intent", "") or "").strip()
                     == "recent_product_set_size_availability"
@@ -26511,6 +26633,7 @@ class TStationChatServiceV2:
         bare_product_search_resolution = await _resolve_bare_product_search_with_code()
         if bare_product_search_resolution is not None:
             code_events, product_event = bare_product_search_resolution
+            await _persist_pending_slots_for_direct_return()
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
             for code_event in code_events:
                 yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
@@ -26813,9 +26936,10 @@ class TStationChatServiceV2:
                         items = data.get("items") if isinstance(data, dict) else None
                         if isinstance(items, list) and len(items) == 1 and isinstance(items[0], dict):
                             item = items[0]
-                            if item.get("goods_no"):
-                                turn_tool_slots["goods_no"] = item.get("goods_no")
-                            tire_size = item.get("tire_size") or item.get("tire_size_1") or item.get("tireSize")
+                            canonical_item = canonical_context_from_tool_boundary(item)
+                            if canonical_item.get("goods_no"):
+                                turn_tool_slots["goods_no"] = canonical_item.get("goods_no")
+                            tire_size = canonical_item.get("tire_size")
                             if tire_size:
                                 turn_tool_slots["tire_size"] = tire_size
                     elif tool_name == "transaction_store_preview_tool" and isinstance(input_data, dict):

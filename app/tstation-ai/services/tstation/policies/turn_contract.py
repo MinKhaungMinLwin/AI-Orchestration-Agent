@@ -8,6 +8,7 @@ from typing import Any, Mapping
 
 from services.tstation.policies.cross_domain_policy import CrossDomainPlan
 from services.tstation.policies.intent_frame import IntentFrame
+from services.tstation.policies.resolved_context import build_resolved_turn_context
 from services.tstation.policies.response_decision import ResponseDecision, ToolPlan
 
 
@@ -162,6 +163,7 @@ class TurnContract:
     override_blocked: bool = False
     blocked_override_reason: str | None = None
     contract_drift: tuple[Mapping[str, Any], ...] = ()
+    resolved_context: Mapping[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -191,6 +193,7 @@ class TurnContract:
             "override_blocked": self.override_blocked,
             "blocked_override_reason": self.blocked_override_reason,
             "contract_drift": [dict(item) for item in self.contract_drift],
+            "resolved_context": dict(self.resolved_context),
         }
 
 
@@ -432,6 +435,10 @@ def build_turn_contract(
         response_decision=response_decision,
         cross_domain_plan=cross_domain_plan,
     )
+    resolved_context = build_resolved_turn_context(
+        user_text=user_text,
+        slots=known_slots,
+    ).to_dict()
 
     return TurnContract(
         domain=domain,
@@ -465,6 +472,7 @@ def build_turn_contract(
         override_blocked=bool(getattr(routing_result, "override_blocked", False)),
         blocked_override_reason=str(getattr(routing_result, "blocked_override_reason", "") or "") or None,
         contract_drift=drift,
+        resolved_context=resolved_context,
     )
 
 
@@ -520,6 +528,17 @@ def build_response_policy_guard_event(contract: TurnContract) -> dict[str, Any]:
     response_decision = contract.response_decision or {}
     forbidden = response_decision.get("forbidden_behaviors") if isinstance(response_decision, Mapping) else ()
     forbidden_set = {str(item) for item in forbidden} if isinstance(forbidden, list | tuple) else set()
+    tool_error_behaviors = {
+        "assert_price_without_tool_result",
+        "assert_coupon_without_tool_result",
+        "order_complete_on_tool_error",
+        "datepick_on_tool_error",
+    }
+    if not (forbidden_set & tool_error_behaviors):
+        missing_slot_event = _build_missing_slot_action_prompt_event(contract)
+        if missing_slot_event is not None:
+            return missing_slot_event
+
     if _is_discovery_first_leg_transaction_contract(contract):
         intent = str(contract.intent or "")
         known_slots = contract.known_slots or {}
@@ -659,6 +678,308 @@ def build_response_policy_guard_event(contract: TurnContract) -> dict[str, Any]:
             },
         },
     }
+
+
+def _build_missing_slot_action_prompt_event(contract: TurnContract) -> dict[str, Any] | None:
+    missing_slots = _missing_slots_for_action_prompt(contract)
+    if not missing_slots:
+        return None
+    resolved_slots = _resolved_context_slots(contract)
+    is_order = _is_order_missing_slot_context(contract)
+
+    if _has_missing_slot(missing_slots, "store", "location") and _has_product_size_quantity(resolved_slots):
+        event = _build_missing_store_action_prompt_event(contract, resolved_slots, is_order=is_order)
+    elif _has_missing_slot(missing_slots, "ord_qty", "quantity") and _has_product_and_size(resolved_slots):
+        event = _build_missing_quantity_action_prompt_event(contract, resolved_slots, is_order=is_order)
+    elif _has_missing_slot(missing_slots, "tire_size", "size") and _has_product_context(resolved_slots):
+        event = _build_missing_tire_size_action_prompt_event(contract, resolved_slots, is_order=is_order)
+    elif _has_missing_slot(missing_slots, "goods_no", "product", "product_name"):
+        event = _build_missing_product_action_prompt_event(contract, resolved_slots, is_order=is_order)
+    elif _has_missing_slot(missing_slots, "store", "location"):
+        event = _build_missing_store_action_prompt_event(contract, resolved_slots, is_order=is_order)
+    elif _has_missing_slot(missing_slots, "ord_qty", "quantity"):
+        event = _build_missing_quantity_action_prompt_event(contract, resolved_slots, is_order=is_order)
+    elif _has_missing_slot(missing_slots, "tire_size", "size"):
+        event = _build_missing_tire_size_action_prompt_event(contract, resolved_slots, is_order=is_order)
+    else:
+        return None
+    return event
+
+
+def _missing_slots_for_action_prompt(contract: TurnContract) -> tuple[str, ...]:
+    response_decision = contract.response_decision or {}
+    metadata = response_decision.get("metadata") if isinstance(response_decision, Mapping) else None
+    metadata_missing = metadata.get("missing_slots") if isinstance(metadata, Mapping) else ()
+    response_required = response_decision.get("required_slots") if isinstance(response_decision, Mapping) else ()
+    return _dedupe_slots(
+        contract.blocking_required_slots,
+        metadata_missing if isinstance(metadata_missing, list | tuple) else (),
+        response_required if isinstance(response_required, list | tuple) else (),
+        contract.required_slots,
+    )
+
+
+def _dedupe_slots(*slot_groups: Any) -> tuple[str, ...]:
+    slots: list[str] = []
+    for group in slot_groups:
+        if isinstance(group, str):
+            candidates = (group,)
+        elif isinstance(group, list | tuple):
+            candidates = group
+        else:
+            continue
+        for slot in candidates:
+            normalized = _canonical_missing_slot(str(slot or "").strip())
+            if normalized and normalized not in slots:
+                slots.append(normalized)
+    return tuple(slots)
+
+
+def _canonical_missing_slot(slot: str) -> str:
+    if slot in {"location", "shop", "shop_id", "shop_name", "store_name", "store_nm"}:
+        return "store"
+    if slot in {"quantity"}:
+        return "ord_qty"
+    if slot in {"size"}:
+        return "tire_size"
+    if slot in {"goods_no", "product_name", "goods", "item"}:
+        return "product"
+    return slot
+
+
+def _has_missing_slot(slots: tuple[str, ...], *candidates: str) -> bool:
+    canonical = {_canonical_missing_slot(candidate) for candidate in candidates}
+    return any(slot in canonical for slot in slots)
+
+
+def _is_order_missing_slot_context(contract: TurnContract) -> bool:
+    known_slots = contract.known_slots or {}
+    return (
+        str(contract.intent or "") in {"quick_order_reservation", "quick_order_execute"}
+        or str(known_slots.get("pending_intent") or "").strip() == "order"
+        or str(known_slots.get("goal_type") or "").strip() == "place_order"
+    )
+
+
+def _resolved_context_slots(contract: TurnContract) -> dict[str, Any]:
+    slots: dict[str, Any] = {}
+    resolved_context = contract.resolved_context or {}
+    for group in ("product", "size", "quantity", "store", "booking"):
+        values = resolved_context.get(group)
+        if not isinstance(values, Mapping):
+            continue
+        for key, payload in values.items():
+            if not isinstance(payload, Mapping):
+                continue
+            value = payload.get("value")
+            if value not in (None, "", [], {}):
+                slots[str(key)] = value
+    if not slots:
+        return dict(contract.known_slots or {})
+    for key in ("pending_intent", "goal_type"):
+        value = (contract.known_slots or {}).get(key)
+        if value not in (None, ""):
+            slots[key] = value
+    return slots
+
+
+def _has_product_context(known_slots: Mapping[str, Any]) -> bool:
+    return bool(
+        known_slots.get("goods_no")
+        or _product_name(known_slots)
+    )
+
+
+def _has_product_and_size(known_slots: Mapping[str, Any]) -> bool:
+    return _has_product_context(known_slots) and bool(known_slots.get("tire_size"))
+
+
+def _has_product_size_quantity(known_slots: Mapping[str, Any]) -> bool:
+    return _has_product_and_size(known_slots) and bool(known_slots.get("ord_qty") or known_slots.get("quantity"))
+
+
+def _build_missing_store_action_prompt_event(
+    contract: TurnContract,
+    known_slots: Mapping[str, Any],
+    *,
+    is_order: bool,
+) -> dict[str, Any]:
+    product_label = _order_product_label(known_slots)
+    quantity = _slot_text(known_slots, "ord_qty", "quantity")
+    if is_order and product_label and quantity:
+        message = f"{product_label} {quantity}개 구매를 진행하려면 장착 매장이 필요해요. 어느 지역이나 매장에서 확인할까요?"
+    elif is_order and product_label:
+        message = f"{product_label} 구매를 진행하려면 장착 매장이 필요해요. 어느 지역이나 매장에서 확인할까요?"
+    elif not is_order and product_label:
+        message = f"{product_label} 기준으로 확인하려면 지역이나 매장이 필요해요. 어느 지역이나 매장에서 확인할까요?"
+    elif not is_order:
+        message = "확인하려면 지역이나 매장이 필요해요. 어느 지역이나 매장에서 확인할까요?"
+    else:
+        message = "구매를 진행하려면 장착 매장이 필요해요. 어느 지역이나 매장에서 확인할까요?"
+    return _missing_slot_quickreply_event(
+        contract,
+        message=message,
+        quick_replies=[
+            {"label": "내 주변 매장 찾기", "domain": "TRANSACTION"},
+            {"label": "단골매장 보기", "domain": "TRANSACTION"},
+            {"label": "지역/매장 입력", "domain": "TRANSACTION"},
+        ],
+        missing_slot="store",
+    )
+
+
+def _build_missing_quantity_action_prompt_event(
+    contract: TurnContract,
+    known_slots: Mapping[str, Any],
+    *,
+    is_order: bool,
+) -> dict[str, Any]:
+    product_label = _order_product_label(known_slots)
+    if is_order and product_label:
+        message = f"{product_label} 구매를 진행하려면 수량이 필요해요. 구매할 타이어 수량을 알려주세요."
+    elif not is_order and product_label:
+        message = f"{product_label} 기준으로 확인하려면 수량이 필요해요. 확인할 타이어 수량을 알려주세요."
+    elif not is_order:
+        message = "확인하려면 수량이 필요해요. 확인할 타이어 수량을 알려주세요."
+    else:
+        message = "구매를 진행하려면 수량이 필요해요. 구매할 타이어 수량을 알려주세요."
+    return _missing_slot_quickreply_event(
+        contract,
+        message=message,
+        quick_replies=[
+            {"label": "1개", "domain": "TRANSACTION"},
+            {"label": "2개", "domain": "TRANSACTION"},
+            {"label": "3개", "domain": "TRANSACTION"},
+            {"label": "4개", "domain": "TRANSACTION"},
+        ],
+        missing_slot="quantity",
+    )
+
+
+def _build_missing_tire_size_action_prompt_event(
+    contract: TurnContract,
+    known_slots: Mapping[str, Any],
+    *,
+    is_order: bool,
+) -> dict[str, Any]:
+    product_name = _product_name(known_slots)
+    if is_order and product_name:
+        message = f"{product_name} 구매를 진행하려면 타이어 사이즈가 필요해요. 장착할 규격을 선택하거나 입력해 주세요."
+    elif not is_order and product_name:
+        message = f"{product_name} 기준으로 확인하려면 타이어 사이즈가 필요해요. 확인할 규격을 선택하거나 입력해 주세요."
+    elif not is_order:
+        message = "확인하려면 타이어 규격이 필요해요. 확인할 규격을 선택하거나 입력해 주세요."
+    else:
+        message = "구매를 진행하려면 먼저 타이어 규격을 확인해야 해요. 장착할 규격을 선택하거나 입력해 주세요."
+    return _missing_slot_quickreply_event(
+        contract,
+        message=message,
+        quick_replies=[
+            {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
+            {"label": "내 차량 보기", "domain": "DISCOVERY"},
+            {"label": "상품 다시 찾기", "domain": "DISCOVERY"},
+        ],
+        missing_slot="tire_size",
+    )
+
+
+def _build_missing_product_action_prompt_event(
+    contract: TurnContract,
+    known_slots: Mapping[str, Any],
+    *,
+    is_order: bool,
+) -> dict[str, Any]:
+    if is_order:
+        message = "구매를 이어가려면 어떤 상품인지 먼저 정해야 해요. 확인할 상품명을 알려주시거나 상품을 선택해 주세요."
+    else:
+        message = "진행하려면 어떤 상품 기준인지 먼저 정해야 해요. 확인할 상품명을 알려주시거나 상품을 선택해 주세요."
+    return _missing_slot_quickreply_event(
+        contract,
+        message=message,
+        quick_replies=[
+            {"label": "상품명 입력", "domain": "DISCOVERY"},
+            {"label": "상품 추천", "domain": "DISCOVERY"},
+            {"label": "처음부터 다시", "domain": "LEADING"},
+        ],
+        missing_slot="product",
+    )
+
+
+def _missing_slot_quickreply_event(
+    contract: TurnContract,
+    *,
+    message: str,
+    quick_replies: list[dict[str, str]],
+    missing_slot: str,
+) -> dict[str, Any]:
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "transaction",
+        "assistant_response_source": "code_turn_contract_missing_slot_prompt",
+        "data": {
+            "assistantResponse": message,
+            "quickReplies": quick_replies,
+            "predictedDomains": ["TRANSACTION", "DISCOVERY"],
+            "metadata": {
+                "turnContract": contract.to_dict(),
+                "missingSlot": missing_slot,
+                "missingSlots": list(_missing_slots_for_action_prompt(contract)),
+                "pendingOrderContext": _pending_order_context_from_slots(_resolved_context_slots(contract)),
+            },
+        },
+    }
+
+
+def _pending_order_context_from_slots(known_slots: Mapping[str, Any]) -> dict[str, Any]:
+    context: dict[str, Any] = {}
+    for source_key, target_key in (
+        ("goods_no", "goods_no"),
+        ("goods_no", "goodsNo"),
+        ("product_name", "product_name"),
+        ("tire_model", "product_name"),
+        ("pending_product_name", "product_name"),
+        ("tire_size", "tire_size"),
+        ("tire_size", "tireSize"),
+        ("ord_qty", "ord_qty"),
+        ("ord_qty", "ordQty"),
+        ("quantity", "ord_qty"),
+        ("pending_intent", "pending_intent"),
+        ("goal_type", "goal_type"),
+    ):
+        value = known_slots.get(source_key)
+        if value not in (None, "") and target_key not in context:
+            context[target_key] = value
+    context.setdefault("pending_intent", "order")
+    context.setdefault("goal_type", "place_order")
+    return context
+
+
+def _order_product_label(known_slots: Mapping[str, Any]) -> str:
+    product_name = _product_name(known_slots)
+    tire_size = _slot_text(known_slots, "tire_size")
+    if product_name and tire_size:
+        return f"{product_name} {tire_size}"
+    return product_name or tire_size
+
+
+def _product_name(known_slots: Mapping[str, Any]) -> str:
+    return _slot_text(
+        known_slots,
+        "product_name",
+        "tire_model",
+        "pending_product_name",
+        "goods_nm",
+        "goods_name",
+    )
+
+
+def _slot_text(known_slots: Mapping[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = known_slots.get(key)
+        if value not in (None, ""):
+            return str(value).strip()
+    return ""
 
 
 def violates_response_template_contract(event: Mapping[str, Any], contract: TurnContract | None) -> bool:
