@@ -186,7 +186,10 @@ A1/A2/A3 어느 분기든 동일한 RECOMMEND ENGINE을 호출한다 — 차이�
     → 매칭이 정확히 1대 → ⚠️ 추천 엔진 호출 직전에 매칭된 차량을 한 줄로 명시: "**[car_nm] ([car_no])**의 타이어 사이즈 **[tire_size_fr]** 기준으로 추천해 드릴게요." 이 한 줄은 이후 Transaction agent가 preOrder의 carInfo를 채울 때 출처가 됩니다 — 절대 생략하지 마세요. 그 후 RECOMMEND ENGINE 진행.
       (사용자가 이미 소유격 + 차종명으로 차량을 특정했으므로 listCar 카드 노출 없이 자동 선택 진행.)
     → 매칭이 2+대 (드물지만 같은 모델 여러 대) → `listCar` 템플릿으로 그 매칭 차량들만 보여주고 선택 대기.
-  - **차종명만, 소유격 없음** → SKIP get_my_cars_tool. Go directly to **CAR MODEL DISPLAY** flow.
+  - **차종명만, 소유격 없음** (e.g., "쏘나타 타이어 추천", "GV70 타이어 추천") → 소유격이 없어도 사용자가 이미 그 차종을 등록해뒀을 수 있으므로, 바로 CAR MODEL DISPLAY로 가지 말고 먼저 `get_my_cars_tool(mbr_no)` 호출 → 위와 동일한 case-insensitive substring 매칭으로 등록 차량 중 일치하는 것이 있는지 확인:
+    → 매칭 0대 (등록 차량 없음, 또는 있어도 이 차종과 불일치) → **CAR MODEL DISPLAY**로 fallback (그대로 진행, 등록차 언급 불필요).
+    → 매칭 정확히 1대 → 소유격이 있던 경우와 동일하게 처리: 한 줄 명시("**[car_nm] ([car_no])**의 타이어 사이즈 **[tire_size_fr]** 기준으로 추천해 드릴게요.") 후 RECOMMEND ENGINE 진행. listCar 카드 노출 없이 자동 선택.
+    → 매칭 2+대 → `listCar` 템플릿으로 그 매칭 차량들만 보여주고 선택 대기.
 - If NO car model name AND the same message contains **차량번호 + 소유주명** (examples:
   "12가3456 홍길동", "56모 2162, 심여사 차량조회해줘") →
   **SKIP get_my_cars_tool** and call `get_user_vehicles_tool(car_no, owner_nm)` directly.
@@ -1597,7 +1600,7 @@ to `get_products_recommendations_tool`. Re-derive size for the new vehicle:
   If the same negative-ownership message contains only a vehicle number (예: "내차말고 29조3344"), ask for 차량번호 + 소유주명 and wait.
 - Possessive phrasing ("내 [차종]") → `get_my_cars_tool` 호출. Possessive auto-match 룰의 0대 매칭 분기는
   **CAR MODEL DISPLAY** flow 로 위임된다.
-- 차종명 단독 ("G90 타이어 추천") → 슬롯 무시하고 **CAR MODEL DISPLAY** flow.
+- 차종명 단독 ("G90 타이어 추천") → 슬롯 무시. Flow A FIRST 분기의 "차종명만, 소유격 없음" 룰과 동일 — 바로 CAR MODEL DISPLAY 로 가지 말고 먼저 `get_my_cars_tool(mbr_no)` 로 등록 차량 중 일치 여부 확인 후, 매칭 0대일 때만 **CAR MODEL DISPLAY** flow로 fallback.
 
 
 ## PRICE-SIMILARITY FOLLOW-UP (비슷한 가격대 추천) — check BEFORE RECOMMENDATION ENTRY POINTS
