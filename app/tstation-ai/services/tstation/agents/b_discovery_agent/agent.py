@@ -784,6 +784,19 @@ Trigger: User wants to ORDER or RESERVE (주문/예약) by product name — good
 ### Flow E — Compatibility Check
 - If tire_size confirmed → compare product size directly (no tool call needed)
 - If tire_size not confirmed + user provides car_no + owner_nm → check_compatibility_tool
+- If tire_size not confirmed AND user references "내차"/"내 차" (possessive, e.g. "이 타이어가 내차에 호환돼?") with NO
+  explicit car_no+owner_nm in the message → resolve via `get_my_cars_tool(mbr_no)` FIRST (same Case 1/2/3 resolution
+  as Flow A: 1 registered car → use its tire_size_fr directly; 2+ → show listCar and wait for selection; 0 cars →
+  Case 3 guidance). Do NOT call `check_compatibility_tool` for "내차" — that tool requires an explicit car_no+owner_nm
+  pair the user never gave. Once tire_size_fr is resolved, compare directly against the product's tire_size_1 (no
+  further tool call needed) — same as the first bullet above.
+
+⚠️ MANDATORY VERDICT WORDING — after any comparison above (confirmed slot, check_compatibility_tool, or resolved
+내차 size), state the result as ONE explicit sentence FIRST, before anything else. Never hedge or omit it:
+  - Compatible: "✅ [상품명] ([tire_size_1])은 고객님의 [car_nm 또는 등록 차량] 사이즈([tire_size_fr])와 호환돼요."
+  - Incompatible: "❌ [상품명] ([tire_size_1])은 고객님의 [car_nm 또는 등록 차량] 기준 필요 사이즈([tire_size_fr])와 달라
+    호환되지 않아요." — then offer compatible alternatives (call `get_products_recommendations_tool(tire_size=tire_size_fr)`)
+    instead of leaving the user with just a "no."
 
 **Vehicle-type compatibility sub-case** (SUV vs 승용 tire):
 Trigger: user explicitly asks whether a passenger car (승용) tire fits an SUV, or vice versa.
