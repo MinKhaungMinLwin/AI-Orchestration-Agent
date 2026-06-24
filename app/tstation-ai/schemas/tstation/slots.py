@@ -156,7 +156,10 @@ class ConversationSlots(BaseModel):
     pending_check_object_value: Optional[str] = None
     pending_check_turns_remaining: Optional[int] = None
 
-    # Slot dependency: when a key changes, its dependent slots are reset to None
+    # User/regex merge dependencies. These apply before tool/template recovery
+    # and are intentionally stricter than runtime recovery: a user-supplied new
+    # goods_no represents a new concrete SKU, so the old tire_size must be
+    # re-confirmed instead of silently surviving.
     DEPENDENT_RESETS: ClassVar[dict[str, list[str]]] = {
         "pending_product_name": ["goods_no", "payment_amount"],
         "tire_model": ["goods_no", "payment_amount"],
@@ -198,6 +201,10 @@ class ConversationSlots(BaseModel):
         "region": ["shop_id", "shop_name"],
     }
     RUNTIME_DEPENDENT_RESETS: ClassVar[dict[str, list[str]]] = {
+        # Tool/template/history recovery dependencies. Runtime values are
+        # already derived from verified rows or canonical template boundary
+        # data, so they may complete the current context without erasing other
+        # still-valid slots unless those slots directly conflict.
         # Runtime product resolution is usually "same size, different model".
         # Keep tire_size so Discovery/Transaction can re-query the new SKU under
         # the user's active size, but never keep old product label or amount.

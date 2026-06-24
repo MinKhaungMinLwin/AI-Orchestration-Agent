@@ -8,6 +8,7 @@ from typing import Any, Mapping
 
 from services.tstation.policies.cross_domain_policy import CrossDomainPlan
 from services.tstation.policies.intent_frame import IntentFrame
+from services.tstation.policies.resolved_context import build_resolved_turn_context
 from services.tstation.policies.response_decision import ResponseDecision, ToolPlan
 
 
@@ -162,6 +163,7 @@ class TurnContract:
     override_blocked: bool = False
     blocked_override_reason: str | None = None
     contract_drift: tuple[Mapping[str, Any], ...] = ()
+    resolved_context: Mapping[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -191,6 +193,7 @@ class TurnContract:
             "override_blocked": self.override_blocked,
             "blocked_override_reason": self.blocked_override_reason,
             "contract_drift": [dict(item) for item in self.contract_drift],
+            "resolved_context": dict(self.resolved_context),
         }
 
 
@@ -432,6 +435,10 @@ def build_turn_contract(
         response_decision=response_decision,
         cross_domain_plan=cross_domain_plan,
     )
+    resolved_context = build_resolved_turn_context(
+        user_text=user_text,
+        slots=known_slots,
+    ).to_dict()
 
     return TurnContract(
         domain=domain,
@@ -465,6 +472,7 @@ def build_turn_contract(
         override_blocked=bool(getattr(routing_result, "override_blocked", False)),
         blocked_override_reason=str(getattr(routing_result, "blocked_override_reason", "") or "") or None,
         contract_drift=drift,
+        resolved_context=resolved_context,
     )
 
 
@@ -517,13 +525,20 @@ def build_required_slot_clarification_event(contract: TurnContract) -> dict[str,
 def build_response_policy_guard_event(contract: TurnContract) -> dict[str, Any]:
     """Build a safe fallback when a template violates response policy, not slots."""
 
-    missing_slot_event = _build_missing_slot_action_prompt_event(contract)
-    if missing_slot_event is not None:
-        return missing_slot_event
-
     response_decision = contract.response_decision or {}
     forbidden = response_decision.get("forbidden_behaviors") if isinstance(response_decision, Mapping) else ()
     forbidden_set = {str(item) for item in forbidden} if isinstance(forbidden, list | tuple) else set()
+    tool_error_behaviors = {
+        "assert_price_without_tool_result",
+        "assert_coupon_without_tool_result",
+        "order_complete_on_tool_error",
+        "datepick_on_tool_error",
+    }
+    if not (forbidden_set & tool_error_behaviors):
+        missing_slot_event = _build_missing_slot_action_prompt_event(contract)
+        if missing_slot_event is not None:
+            return missing_slot_event
+
     if _is_discovery_first_leg_transaction_contract(contract):
         intent = str(contract.intent or "")
         known_slots = contract.known_slots or {}
@@ -669,23 +684,23 @@ def _build_missing_slot_action_prompt_event(contract: TurnContract) -> dict[str,
     missing_slots = _missing_slots_for_action_prompt(contract)
     if not missing_slots:
         return None
-    known_slots = contract.known_slots or {}
+    resolved_slots = _resolved_context_slots(contract)
     is_order = _is_order_missing_slot_context(contract)
 
-    if _has_missing_slot(missing_slots, "store", "location") and _has_product_size_quantity(known_slots):
-        event = _build_missing_store_action_prompt_event(contract, known_slots, is_order=is_order)
-    elif _has_missing_slot(missing_slots, "ord_qty", "quantity") and _has_product_and_size(known_slots):
-        event = _build_missing_quantity_action_prompt_event(contract, known_slots, is_order=is_order)
-    elif _has_missing_slot(missing_slots, "tire_size", "size") and _has_product_context(known_slots):
-        event = _build_missing_tire_size_action_prompt_event(contract, known_slots, is_order=is_order)
+    if _has_missing_slot(missing_slots, "store", "location") and _has_product_size_quantity(resolved_slots):
+        event = _build_missing_store_action_prompt_event(contract, resolved_slots, is_order=is_order)
+    elif _has_missing_slot(missing_slots, "ord_qty", "quantity") and _has_product_and_size(resolved_slots):
+        event = _build_missing_quantity_action_prompt_event(contract, resolved_slots, is_order=is_order)
+    elif _has_missing_slot(missing_slots, "tire_size", "size") and _has_product_context(resolved_slots):
+        event = _build_missing_tire_size_action_prompt_event(contract, resolved_slots, is_order=is_order)
     elif _has_missing_slot(missing_slots, "goods_no", "product", "product_name"):
-        event = _build_missing_product_action_prompt_event(contract, known_slots, is_order=is_order)
+        event = _build_missing_product_action_prompt_event(contract, resolved_slots, is_order=is_order)
     elif _has_missing_slot(missing_slots, "store", "location"):
-        event = _build_missing_store_action_prompt_event(contract, known_slots, is_order=is_order)
+        event = _build_missing_store_action_prompt_event(contract, resolved_slots, is_order=is_order)
     elif _has_missing_slot(missing_slots, "ord_qty", "quantity"):
-        event = _build_missing_quantity_action_prompt_event(contract, known_slots, is_order=is_order)
+        event = _build_missing_quantity_action_prompt_event(contract, resolved_slots, is_order=is_order)
     elif _has_missing_slot(missing_slots, "tire_size", "size"):
-        event = _build_missing_tire_size_action_prompt_event(contract, known_slots, is_order=is_order)
+        event = _build_missing_tire_size_action_prompt_event(contract, resolved_slots, is_order=is_order)
     else:
         return None
     return event
@@ -744,6 +759,28 @@ def _is_order_missing_slot_context(contract: TurnContract) -> bool:
         or str(known_slots.get("pending_intent") or "").strip() == "order"
         or str(known_slots.get("goal_type") or "").strip() == "place_order"
     )
+
+
+def _resolved_context_slots(contract: TurnContract) -> dict[str, Any]:
+    slots: dict[str, Any] = {}
+    resolved_context = contract.resolved_context or {}
+    for group in ("product", "size", "quantity", "store", "booking"):
+        values = resolved_context.get(group)
+        if not isinstance(values, Mapping):
+            continue
+        for key, payload in values.items():
+            if not isinstance(payload, Mapping):
+                continue
+            value = payload.get("value")
+            if value not in (None, "", [], {}):
+                slots[str(key)] = value
+    if not slots:
+        return dict(contract.known_slots or {})
+    for key in ("pending_intent", "goal_type"):
+        value = (contract.known_slots or {}).get(key)
+        if value not in (None, ""):
+            slots[key] = value
+    return slots
 
 
 def _has_product_context(known_slots: Mapping[str, Any]) -> bool:
@@ -888,7 +925,7 @@ def _missing_slot_quickreply_event(
                 "turnContract": contract.to_dict(),
                 "missingSlot": missing_slot,
                 "missingSlots": list(_missing_slots_for_action_prompt(contract)),
-                "pendingOrderContext": _pending_order_context_from_slots(contract.known_slots or {}),
+                "pendingOrderContext": _pending_order_context_from_slots(_resolved_context_slots(contract)),
             },
         },
     }
