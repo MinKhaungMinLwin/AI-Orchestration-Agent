@@ -5497,6 +5497,10 @@ _TODAY_SERVICE_DATEPICK_RE = re.compile(
     r"오늘\s*서비스|오늘서비스|오늘\s*장착|당일\s*장착|오늘\s*가능|당일|지금|바로|당장",
     re.IGNORECASE,
 )
+_TODAY_SERVICE_UNAVAILABLE_COPY_RE = re.compile(
+    r"오늘\s*서비스|오늘서비스|오늘\s*장착|당일\s*장착|오늘\s*가능|당일",
+    re.IGNORECASE,
+)
 _STORE_BOOKING_FOLLOWUP_SIGNAL_RE = re.compile(
     r"예약|장착|방문|스케줄|시간표|가능\s*(?:해|하|한|하냐|하냐고|하나요|여부)?|돼\??|되\??",
     re.IGNORECASE,
@@ -5529,7 +5533,7 @@ def _parse_korean_date_label(label: str) -> datetime.date | None:
 
 def _today_service_datepick_response(event: dict, *, force: bool = False) -> str | None:
     user_text = current_user_text.get() or ""
-    if not force and not _TODAY_SERVICE_DATEPICK_RE.search(user_text):
+    if not _TODAY_SERVICE_UNAVAILABLE_COPY_RE.search(user_text):
         return None
     event_data = event.get("data")
     if not isinstance(event_data, dict):
