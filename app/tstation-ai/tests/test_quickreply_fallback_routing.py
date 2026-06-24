@@ -112,6 +112,10 @@ from services.tstation.chat import (
     _build_manual_tire_size_input_event,
     _build_missing_order_product_reselection_event,
     _stage_pending_order_context,
+    _stage_pending_product_context_from_search,
+    _clear_invalid_store_identity_slots,
+    _is_invalid_store_slot_value,
+    _is_resolved_size_store_availability_transaction_continuation,
     _selected_order_context_from_preview_values,
     _apply_selected_order_context_for_purchase_cta,
     _apply_order_snapshot_slots,
@@ -3891,6 +3895,29 @@ def test_store_availability_continuation_recovers_recent_single_store_name() -> 
     }]
 
     assert _recent_store_name_for_availability_continuation(prev_tool_data=prev_tool_data) == "티스테이션 판교점"
+
+
+def test_store_availability_continuation_does_not_treat_rating_as_store_name() -> None:
+    assert _is_invalid_store_slot_value("평점") is True
+
+    slots = ConversationSlots(
+        shop_name="평점",
+        goods_no="G000000319594",
+        tire_size="215/65R15",
+        region="광주",
+        pending_intent="stock",
+        goal_type="store_with_stock",
+        availability_context={"pending_order_context": {"shop_name": "평점", "region": "광주"}},
+    )
+
+    cleared = _clear_invalid_store_identity_slots(slots, source="test")
+
+    assert cleared["shop_name"] == "평점"
+    assert slots.shop_name is None
+    assert slots.availability_context == {"pending_order_context": {"region": "광주"}}
+    assert _recent_store_name_for_availability_continuation(
+        recent_context="리뷰는 43건, 평균 평점은 4.2점이에요."
+    ) is None
 
 
 def test_sized_bare_product_search_can_resolve_unique_goods_no_for_detail() -> None:
@@ -12584,6 +12611,68 @@ def test_pending_order_context_preserves_resolved_stock_slots() -> None:
     assert slots.availability_context is not None
     assert slots.availability_context["pending_order_context"]["ord_qty"] == 2
     assert slots.availability_context["pending_order_context"]["product_name"] == "키너지 EX"
+
+
+def test_product_search_stages_pending_stock_context_before_size_followup() -> None:
+    slots = ConversationSlots(
+        region="광주",
+        pending_intent="stock",
+        goal_type="store_with_stock",
+    )
+
+    context = _stage_pending_product_context_from_search(
+        slots,
+        tool_input={"keyword": "키너지 EX", "limit": 10},
+        parsed_data={
+            "status": "success",
+            "data": {
+                "items": [
+                    {"goods_no": "G000000319594", "goods_nm": "키너지 EX", "tire_size_1": "215/65R15"},
+                    {"goods_no": "G000000319595", "goods_nm": "키너지 EX", "tire_size_1": "205/60R16"},
+                ]
+            },
+        },
+        source="tool:search_product_tool",
+    )
+
+    assert context["product_name"] == "키너지 EX"
+    assert context["region"] == "광주"
+    assert context["pending_intent"] == "stock"
+    assert context["goal_type"] == "store_with_stock"
+    assert context["candidate_count"] == 2
+    assert slots.pending_product_name == "키너지 EX"
+    assert slots.tire_model == "키너지 EX"
+    assert slots.availability_context["pending_order_context"]["product_name"] == "키너지 EX"
+
+
+def test_size_only_stock_followup_with_resolved_product_routes_to_transaction() -> None:
+    routing_result = SimpleNamespace(
+        pending_check_topic="store_inventory",
+        discovery_followup_intent="recent_product_set_size_availability",
+        execution_plan=["search store inventory for product in Gwangju"],
+    )
+    slots = ConversationSlots(
+        goods_no="G000000319594",
+        tire_size="215/65R15",
+        region="광주",
+        pending_intent="stock",
+        goal_type="store_with_stock",
+        availability_context={
+            "pending_order_context": {
+                "product_name": "키너지 EX",
+                "region": "광주",
+                "pending_intent": "stock",
+                "goal_type": "store_with_stock",
+            }
+        },
+    )
+
+    assert _is_resolved_size_store_availability_transaction_continuation(
+        "2156515",
+        slots=slots,
+        routing_result=routing_result,
+        size_only_store_availability_continuation=True,
+    ) is True
 
 
 def test_preview_store_selection_promotes_selected_order_context_for_order_cta() -> None:

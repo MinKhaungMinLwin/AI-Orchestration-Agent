@@ -2852,6 +2852,17 @@ class StreamingMultiAgentCoordinator:
                     if tire_size:
                         tool_slots["tire_size"] = tire_size
 
+        if tool_name == "search_product_tool" and tool_succeeded:
+            staged_context = _stage_pending_product_context_from_search(
+                slots,
+                tool_input=tool_input,
+                parsed_data=parsed_data,
+                source="tool:search_product_tool",
+            )
+            if staged_context:
+                changed = True
+                logger.debug("[SLOTS] Search product context staged: %s", staged_context)
+
         if tool_slots:
             updated = slots.apply_runtime_values(tool_slots, source=f"tool:{tool_name}")
             if tool_name in {"search_product_tool", "transaction_store_preview_tool", "get_store_inventory_tool"}:
@@ -14179,6 +14190,35 @@ def _is_size_only_store_availability_continuation(
     return bool(_STORE_AVAILABILITY_CONTINUATION_RE.search(context_blob))
 
 
+_INVALID_STORE_SLOT_VALUES = frozenset({"평점", "별점", "리뷰", "후기", "평가"})
+
+
+def _is_invalid_store_slot_value(value: str | None) -> bool:
+    normalized = re.sub(r"\s+", "", str(value or "")).strip().lower()
+    normalized = re.sub(r"^(?:티스테이션|더타이어샵|t'?station)", "", normalized, flags=re.IGNORECASE)
+    return normalized in _INVALID_STORE_SLOT_VALUES
+
+
+def _clear_invalid_store_identity_slots(slots: ConversationSlots, *, source: str) -> dict[str, Any]:
+    shop_name = str(getattr(slots, "shop_name", None) or "").strip()
+    if not _is_invalid_store_slot_value(shop_name):
+        return {}
+    cleared = {"shop_name": shop_name, "source": source}
+    slots.shop_name = None
+    if getattr(slots, "shop_id", None) and source != "slot_sanitizer_keep_shop_id":
+        cleared["shop_id"] = slots.shop_id
+        slots.shop_id = None
+    context = dict(getattr(slots, "availability_context", None) or {})
+    pending_context = context.get("pending_order_context")
+    if isinstance(pending_context, dict) and _is_invalid_store_slot_value(str(pending_context.get("shop_name") or "")):
+        pending_context = dict(pending_context)
+        pending_context.pop("shop_name", None)
+        context["pending_order_context"] = pending_context
+        slots.availability_context = context
+        cleared["pending_order_context_shop_name"] = shop_name
+    return cleared
+
+
 def _recent_store_name_for_availability_continuation(
     *,
     prev_tool_data: list[dict] | None = None,
@@ -14187,7 +14227,7 @@ def _recent_store_name_for_availability_continuation(
     slots: Any | None = None,
 ) -> str | None:
     slot_store = str(getattr(slots, "shop_name", None) or "").strip() if slots is not None else ""
-    if slot_store:
+    if slot_store and not _is_invalid_store_slot_value(slot_store):
         return slot_store
 
     for entry in reversed(prev_tool_data or []):
@@ -14201,7 +14241,7 @@ def _recent_store_name_for_availability_continuation(
             items = [item for item in data["stores"] if isinstance(item, dict)]
         if len(items) == 1:
             store_name = str(items[0].get("shop_nm") or items[0].get("name") or "").strip()
-            if store_name:
+            if store_name and not _is_invalid_store_slot_value(store_name):
                 return store_name
 
     context_parts = [recent_context]
@@ -14209,7 +14249,7 @@ def _recent_store_name_for_availability_continuation(
         context_parts.append(str(message.get("content") or ""))
     context_blob = "\n".join(part for part in context_parts if part)
     match = re.search(r"(?:티스테이션\s*)?([A-Za-z0-9가-힣]+점)", context_blob)
-    if match:
+    if match and not _is_invalid_store_slot_value(match.group(0).strip()):
         return match.group(0).strip()
     return None
 
@@ -14265,6 +14305,54 @@ def _is_pure_inventory_stock_ready(slots: Any | None) -> bool:
         and _slot_value("tire_size")
         and qty > 0
         and (_slot_value("shop_id") or _slot_value("shop_name") or _slot_value("store_name"))
+    )
+
+
+def _is_resolved_size_store_availability_transaction_continuation(
+    user_text: str,
+    *,
+    slots: Any | None,
+    routing_result: Any | None = None,
+    size_only_store_availability_continuation: bool = False,
+) -> bool:
+    if not size_only_store_availability_continuation:
+        return False
+    if not _SIZE_ONLY_RE.match(str(user_text or "")):
+        return False
+
+    def _slot_value(name: str) -> Any:
+        if slots is None:
+            return None
+        if isinstance(slots, Mapping):
+            return slots.get(name)
+        return getattr(slots, name, None)
+
+    if not (_slot_value("goods_no") and _slot_value("tire_size")):
+        return False
+    pending_intent = str(_slot_value("pending_intent") or "").strip()
+    goal_type = str(_slot_value("goal_type") or "").strip()
+    if pending_intent != "stock" and goal_type != "store_with_stock":
+        return False
+    has_scope = bool(
+        _slot_value("region")
+        or _slot_value("shop_id")
+        or _slot_value("shop_name")
+        or _slot_value("store_name")
+    )
+    availability_context = _slot_value("availability_context")
+    if isinstance(availability_context, Mapping):
+        pending_context = availability_context.get("pending_order_context")
+        if isinstance(pending_context, Mapping):
+            has_scope = has_scope or bool(pending_context.get("region") or pending_context.get("shop_id") or pending_context.get("shop_name"))
+    if not has_scope:
+        return False
+    routing_topic = str(getattr(routing_result, "pending_check_topic", "") or "").strip()
+    followup_intent = str(getattr(routing_result, "discovery_followup_intent", "") or "").strip()
+    execution_plan = " ".join(str(item) for item in (getattr(routing_result, "execution_plan", []) or []))
+    return bool(
+        routing_topic in {"store_inventory", "today_install", "none", ""}
+        or followup_intent == "recent_product_set_size_availability"
+        or re.search(r"stock|inventory|재고|장착|store", execution_plan, re.IGNORECASE)
     )
 
 
@@ -16382,6 +16470,8 @@ def _pending_order_context_values(slots: ConversationSlots) -> dict[str, Any]:
     values: dict[str, Any] = {}
     for field in ("goods_no", "tire_size", "ord_qty", "region", "shop_id", "shop_name"):
         value = getattr(slots, field, None)
+        if field == "shop_name" and _is_invalid_store_slot_value(str(value or "")):
+            continue
         if value not in (None, "", [], {}):
             values[field] = value
     product_name = getattr(slots, "tire_model", None) or getattr(slots, "pending_product_name", None)
@@ -16400,6 +16490,7 @@ def _pending_order_context_values(slots: ConversationSlots) -> dict[str, Any]:
 
 def _stage_pending_order_context(slots: ConversationSlots, *, source: str) -> dict[str, Any]:
     """Persist stock/order product context separately from stale flat slots."""
+    _clear_invalid_store_identity_slots(slots, source=f"{source}:pending_order_context")
     if not (
         slots.goods_no
         and slots.tire_size
@@ -16415,6 +16506,56 @@ def _stage_pending_order_context(slots: ConversationSlots, *, source: str) -> di
     pending_context["source"] = source
     context["pending_order_context"] = pending_context
     slots.availability_context = context
+    return pending_context
+
+
+def _stage_pending_product_context_from_search(
+    slots: ConversationSlots,
+    *,
+    tool_input: Mapping[str, Any] | None,
+    parsed_data: Mapping[str, Any],
+    source: str,
+) -> dict[str, Any]:
+    """Persist product-search context while waiting for size/quantity follow-ups."""
+    pending_intent = str(getattr(slots, "pending_intent", "") or "").strip()
+    goal_type = str(getattr(slots, "goal_type", "") or "").strip()
+    if pending_intent not in {"stock", "order", "price"} and goal_type not in {
+        "store_with_stock",
+        "place_order",
+        "price_inquiry",
+    }:
+        return {}
+
+    keyword = str((tool_input or {}).get("keyword") or "").strip()
+    if not keyword:
+        return {}
+    payload = parsed_data.get("data", parsed_data)
+    items = payload.get("items") if isinstance(payload, Mapping) else None
+    if not isinstance(items, list) or not any(isinstance(item, Mapping) for item in items):
+        return {}
+
+    context = dict(getattr(slots, "availability_context", None) or {})
+    pending_context = dict(context.get("pending_order_context") or {})
+    pending_context["product_name"] = keyword
+    pending_context.setdefault("pending_product_name", keyword)
+    if getattr(slots, "region", None):
+        pending_context["region"] = slots.region
+    if getattr(slots, "tire_size", None):
+        pending_context["tire_size"] = slots.tire_size
+    if getattr(slots, "goods_no", None):
+        pending_context["goods_no"] = slots.goods_no
+    if getattr(slots, "ord_qty", None):
+        pending_context["ord_qty"] = slots.ord_qty
+    pending_context.setdefault("pending_intent", pending_intent or "stock")
+    pending_context.setdefault("goal_type", goal_type or "store_with_stock")
+    pending_context["source"] = source
+    pending_context["candidate_count"] = sum(1 for item in items if isinstance(item, Mapping))
+    context["pending_order_context"] = pending_context
+    slots.availability_context = context
+    if not getattr(slots, "pending_product_name", None):
+        slots.pending_product_name = keyword
+    if not getattr(slots, "tire_model", None):
+        slots.tire_model = keyword
     return pending_context
 
 
@@ -18981,11 +19122,17 @@ class TStationChatServiceV2:
 
             # 2) Extract regex-based slots from the LATEST user message only
             regex_slots = ConversationSlots.extract_from_user_text(last_user_text)
+            invalid_regex_store = _clear_invalid_store_identity_slots(regex_slots, source="regex_slots")
+            if invalid_regex_store:
+                logger.debug("[SLOTS] Ignored invalid current-turn store slot: %s", invalid_regex_store)
             if StreamingMultiAgentCoordinator._is_existing_reservation_management_current_turn_query(last_user_text):
                 intent_group = "existing_reservation_management"
 
             # 3) Merge: existing → regex (full merge with dependency reset)
             merged_slots = existing_slots.merge(regex_slots)
+            invalid_merged_store = _clear_invalid_store_identity_slots(merged_slots, source="merged_slots")
+            if invalid_merged_store:
+                logger.info("[SLOTS] Cleared invalid store identity slot: %s", invalid_merged_store)
             merged_slots = _apply_pending_object_check_slots(merged_slots, user_text=last_user_text)
             if _is_product_coupon_price_amount_query(last_user_text):
                 coupon_product_name = _coupon_target_product_name_for_query(last_user_text)
@@ -20759,6 +20906,13 @@ class TStationChatServiceV2:
                 [domain.value for domain in previous_domains],
             )
 
+        resolved_size_stock_continuation = _is_resolved_size_store_availability_transaction_continuation(
+            last_user_text,
+            slots=merged_slots,
+            routing_result=routing_result,
+            size_only_store_availability_continuation=size_only_store_availability_continuation,
+        )
+
         # Post-classification redirect: when the user's current-turn reply was a
         # list-selection that just resolved goods_no (via step 3.8) and a
         # transactional intent is still pending, the classifier may still pick
@@ -20821,12 +20975,13 @@ class TStationChatServiceV2:
             len(domains) == 1
             and domains[0] == MultiAgentDomain.Domain.DISCOVERY
             and merged_slots.goods_no is not None
-            and regex_slots.pending_intent is not None
+            and (regex_slots.pending_intent is not None or resolved_size_stock_continuation)
         ):
             logger.debug(
                 f"[COORDINATOR] P0c DISCOVERY→TX redirect: classifier=[DISCOVERY], "
                 f"goods_no={merged_slots.goods_no!r} (carried), "
                 f"fresh_intent={regex_slots.pending_intent!r}, "
+                f"resolved_size_stock_continuation={resolved_size_stock_continuation!r}, "
                 f"session_id={request.session_id} → domains=[TRANSACTION]"
             )
             log_classifier_redirect(
@@ -20839,6 +20994,10 @@ class TStationChatServiceV2:
                 slots={
                     "goods_no_carried": merged_slots.goods_no,
                     "fresh_intent": regex_slots.pending_intent,
+                    "resolved_size_stock_continuation": resolved_size_stock_continuation,
+                    "tire_size": merged_slots.tire_size,
+                    "region": merged_slots.region,
+                    "shop_name": merged_slots.shop_name,
                 },
             )
             domains = [MultiAgentDomain.Domain.TRANSACTION]
