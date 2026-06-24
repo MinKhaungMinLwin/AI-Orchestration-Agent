@@ -10260,6 +10260,77 @@ def test_discovery_policy_context_applies_selected_vehicle_type_to_followup_reco
     }
 
 
+def test_discovery_policy_context_skips_stale_vehicle_type_for_mismatched_size_only_followup() -> None:
+    patch, decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        last_user_text="2156016",
+        context_text="GV70 선택\n2156016",
+        tire_size="215/60R16",
+        vehicle_type="suv",
+        tire_size_front="235/55R19",
+        tire_size_rear="235/55R19",
+    )
+
+    assert patch == {"tire_size": "215/60R16"}
+    assert decision is not None
+    assert decision.metadata["vehicle_type_patch_skipped"] is True
+    assert decision.metadata["skip_reason"] == "explicit_size_differs_from_selected_vehicle_size"
+    assert decision.metadata["current_tire_size"] == "215/60R16"
+    assert decision.metadata["selected_vehicle_sizes"] == ["235/55R19"]
+
+
+def test_discovery_policy_context_keeps_vehicle_type_for_matching_selected_vehicle_size_followup() -> None:
+    patch, _decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        last_user_text="2355519",
+        context_text="GV70 선택\n2355519",
+        tire_size="235/55R19",
+        vehicle_type="suv",
+        tire_size_front="235/55R19",
+        tire_size_rear="235/55R19",
+    )
+
+    assert patch == {
+        "tire_size": "235/55R19",
+        "vehicle_type": "suv",
+    }
+
+
+def test_discovery_policy_context_keeps_vehicle_type_for_explicit_vehicle_scope_size_followup() -> None:
+    patch, _decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        last_user_text="SUV용 2156016 추천",
+        context_text="GV70 선택\nSUV용 2156016 추천",
+        tire_size="215/60R16",
+        vehicle_type="suv",
+        tire_size_front="235/55R19",
+        tire_size_rear="235/55R19",
+    )
+
+    assert patch["tire_size"] == "215/60R16"
+    assert patch["vehicle_type"] == "suv"
+
+
+def test_discovery_policy_context_skips_stale_vehicle_type_for_new_metric_with_mismatched_size() -> None:
+    patch, decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        last_user_text="가성비 좋은 타이어",
+        context_text="GV70 선택\n2156016\n가성비 좋은 타이어",
+        tire_size="215/60R16",
+        vehicle_type="suv",
+        tire_size_front="235/55R19",
+        tire_size_rear="235/55R19",
+    )
+
+    assert patch == {
+        "rcmd_type": "value",
+        "tire_size": "215/60R16",
+    }
+    assert decision is not None
+    assert decision.metadata["vehicle_type_patch_skipped"] is True
+    assert decision.metadata["skip_reason"] == "current_size_differs_from_selected_vehicle_size"
+
+
 def test_discovery_policy_context_prefers_current_turn_vehicle_type_over_selected_vehicle_slot() -> None:
     patch, _decision = _build_discovery_policy_context(
         domains=[MultiAgentDomain.Domain.DISCOVERY],

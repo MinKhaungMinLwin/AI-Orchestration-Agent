@@ -15648,6 +15648,8 @@ def _build_discovery_policy_context(
     tire_size: str | None,
     goods_no: str | None = None,
     vehicle_type: str | None = None,
+    tire_size_front: str | None = None,
+    tire_size_rear: str | None = None,
     recommendation_context: Mapping[str, Any] | None = None,
     comparison_context: Mapping[str, Any] | None = None,
     routing_result: Any | None = None,
@@ -15952,14 +15954,31 @@ def _build_discovery_policy_context(
             and "tire_size" not in discovery_tool_patch
         ):
             discovery_tool_patch["tire_size"] = tire_size
+        vehicle_type_skip_metadata = _vehicle_type_patch_skip_metadata_for_selected_vehicle_size_mismatch(
+            user_text=last_user_text,
+            current_tire_size=tire_size,
+            selected_vehicle_front_size=tire_size_front,
+            selected_vehicle_rear_size=tire_size_rear,
+            discovery_frame=discovery_frame,
+            recommendation_context=recommendation_context,
+        )
         if (
             vehicle_type
             and discovery_tool_plan.preferred_tool == "get_products_recommendations_tool"
             and discovery_frame.intent == "product_recommendation"
             and "vehicle_type" not in discovery_tool_patch
             and not discovery_frame.entities.get("vehicle_category")
+            and not vehicle_type_skip_metadata
         ):
             discovery_tool_patch["vehicle_type"] = vehicle_type
+        if vehicle_type_skip_metadata:
+            discovery_response_decision = replace(
+                discovery_response_decision,
+                metadata={
+                    **dict(discovery_response_decision.metadata or {}),
+                    **vehicle_type_skip_metadata,
+                },
+            )
         logger.debug(
             "[POLICY][discovery] frame=%s tool_plan=%s response_decision=%s",
             discovery_frame.to_dict(),
@@ -16627,6 +16646,12 @@ _VEHICLE_BASED_RECOMMENDATION_REFINEMENT_RE = re.compile(
     r"내\s*차에\s*맞|내차에\s*맞|내\s*차로\s*(?:다시|추천|확인)|내차로\s*(?:다시|추천|확인)",
     re.IGNORECASE,
 )
+_EXPLICIT_VEHICLE_SCOPE_RE = re.compile(
+    r"내\s*차|내차|내\s*차량|내차량|선택(?:한)?\s*차량|이\s*차량|해당\s*차량|"
+    r"차량\s*기준|차종\s*기준|GV70|제네시스|현대|기아|BMW|벤츠|아우디|테슬라|"
+    r"SUV|승용차?|전기차|EV|경트럭|밴",
+    re.IGNORECASE,
+)
 _STORE_REFERENCE_SIGNAL_RE = re.compile(
     r"그\s*매장|이\s*매장|해당\s*매장|거기|여기|저기|"
     r"첫\s*번째\s*매장|1\s*번\s*매장|방금\s*매장|아까\s*매장",
@@ -16684,6 +16709,43 @@ def _vehicle_based_recommendation_refinement_patch(
         patch["discovery_followup_action"] = "vehicle_based_recommendation_refinement"
         return patch
     return {}
+
+
+def _vehicle_type_patch_skip_metadata_for_selected_vehicle_size_mismatch(
+    *,
+    user_text: str,
+    current_tire_size: str | None,
+    selected_vehicle_front_size: str | None,
+    selected_vehicle_rear_size: str | None,
+    discovery_frame: Any,
+    recommendation_context: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Return trace metadata when selected-vehicle type should not constrain a fresh size recommendation."""
+    explicit_size = normalize_tire_size(user_text)
+    normalized_current_size = normalize_tire_size(current_tire_size or "") or explicit_size
+    if not normalized_current_size:
+        return None
+    vehicle_category = str((getattr(discovery_frame, "entities", {}) or {}).get("vehicle_category") or "").strip()
+    if vehicle_category or _EXPLICIT_VEHICLE_SCOPE_RE.search(user_text or ""):
+        return None
+    normalized_front = normalize_tire_size(selected_vehicle_front_size or "")
+    normalized_rear = normalize_tire_size(selected_vehicle_rear_size or "")
+    selected_sizes = list(dict.fromkeys(size for size in (normalized_front, normalized_rear) if size))
+    if not selected_sizes or normalized_current_size in set(selected_sizes):
+        return None
+    fitment_source = str((recommendation_context or {}).get("fitment_source") or "").strip()
+    if fitment_source == "selected_vehicle":
+        return None
+    return {
+        "vehicle_type_patch_skipped": True,
+        "skip_reason": (
+            "explicit_size_differs_from_selected_vehicle_size"
+            if explicit_size
+            else "current_size_differs_from_selected_vehicle_size"
+        ),
+        "current_tire_size": normalized_current_size,
+        "selected_vehicle_sizes": selected_sizes,
+    }
 
 
 def _clear_stale_product_slots_for_new_recommendation(
@@ -21732,6 +21794,8 @@ class TStationChatServiceV2:
             tire_size=merged_slots.tire_size,
             goods_no=merged_slots.goods_no,
             vehicle_type=merged_slots.vehicle_type,
+            tire_size_front=merged_slots.tire_size_front,
+            tire_size_rear=merged_slots.tire_size_rear,
             recommendation_context=merged_slots.recommendation_context,
             comparison_context=merged_slots.comparison_context,
             routing_result=routing_result,
