@@ -724,7 +724,7 @@ def _is_logistics_schedule_datepick_event(event: Mapping[str, Any]) -> bool:
         or ""
     ).strip().lower()
     dates = data.get("dates") if isinstance(data, Mapping) else None
-    return schedule_mode == "logistics_only" and isinstance(dates, list) and bool(dates)
+    return schedule_mode == "logistics_only" and (dates is None or (isinstance(dates, list) and bool(dates)))
 
 
 def _is_purchase_bound_preview_event(event: Mapping[str, Any], contract: TurnContract | None) -> bool:
@@ -789,6 +789,17 @@ def response_contract_violations(
         "called_tools": list(called_tools or ()),
         "source_domain": source_domain or ("discovery" if contract.domain == "discovery" else contract.domain),
     }
+    known_slots = contract.known_slots or {}
+    schedule_mode = str(
+        known_slots.get("mode")
+        or known_slots.get("scheduleMode")
+        or known_slots.get("schedule_mode")
+        or known_slots.get("inventoryMode")
+        or known_slots.get("inventory_mode")
+        or ""
+    ).strip()
+    if schedule_mode:
+        event["data"] = {"metadata": {"scheduleMode": schedule_mode}}
     if should_guard_required_slots(contract) and template != "quickReply":
         violations.append({
             "type": "required_slots_not_clarified",
