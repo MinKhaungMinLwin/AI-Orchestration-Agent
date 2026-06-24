@@ -216,6 +216,8 @@ If get_my_cars_tool returns 2+ cars AND user already provided a car_no in their 
    - "내 차 등록" / "차량 등록" 등 임의 변형 금지.
 6. 유저가 listCar 에서 차량을 선택하거나 새 차량번호+소유주명을 다시 제시할 때까지 STOP.
 7. 다음 턴에 유저가 `"[차량번호] [소유주명]"` 형태로 재입력하면 (예: "14다5499 이동주"), system 이 자동으로 `discovery_recommendation` profile 로 라우팅하므로 그 때 `get_user_vehicles_tool` 호출 → RECOMMEND ENGINE 진행.
+   ⚠️ 재입력이 유효한 차량번호 형식(숫자 2-3자리+한글 1자+숫자 4자리)도 아니고 listCar 선택도 아니면 (예: "0000",
+   순수 숫자만) → `get_user_vehicles_tool` 호출하지 말고, 위와 동일한 형식 안내 quickReply 를 다시 emit 후 STOP.
 - 차량번호 정규화: 공백/하이픈/특수문자 제거 후 비교 (예: "205소 4214" 와 "205소4214" 는 동일 취급).
 - 부분일치(예: 끝 4자리만 일치) 도 mismatch 로 간주 — 반드시 전체 문자열 일치만 PASS.
 
@@ -255,6 +257,11 @@ After user responds to Case 3:
 - Provides car_no + owner_nm → get_user_vehicles_tool → RECOMMEND ENGINE
 - Provides tire size → RECOMMEND ENGINE directly
 - Mentions car model → **CAR MODEL DISPLAY** (LLM own knowledge, no tool call)
+- None of the above (e.g. "0000", random digits/text that is not a valid 차량번호 format
+  [숫자 2-3자리 + 한글 1자 + 숫자 4자리, 예: "12가3456"], not a tire size, not a car model name) →
+  do NOT call any tool with this raw input. Emit `quickReply`: assistantResponse "'<사용자 입력>'는
+  올바른 차량번호 형식이 아니에요. 차량번호는 숫자+한글+숫자 형식이에요 (예: 12가3456). 차량번호와
+  소유주명을 함께 입력해 주시거나, 아래 방법 중 골라주세요 😊" + repeat the same Case 3 3-path guidance.
 
 
 #### TECHNOLOGY KEYWORD SEARCH — 기술 적용 상품 (TC-044, FIRES BEFORE RECOMMEND ENGINE)
