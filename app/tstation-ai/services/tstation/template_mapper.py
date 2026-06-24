@@ -4764,14 +4764,18 @@ def _map_datepick(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     Schedule-tool path wins when both are present (richer multi-day shape).
     """
     transaction_decision = current_transaction_response_decision.get()
-    if transaction_decision and (
-        transaction_decision.forbids("datepick_for_unverified_store")
-        or transaction_decision.forbids("datepick_for_unavailable_stock")
+    same_turn_logistics_schedule_has_slots = _same_turn_logistics_schedule_has_slots(tool_data_list)
+    if transaction_decision and transaction_decision.forbids("datepick_for_unverified_store"):
+        return None
+    if (
+        transaction_decision
+        and transaction_decision.forbids("datepick_for_unavailable_stock")
+        and not same_turn_logistics_schedule_has_slots
     ):
         return None
     if _same_turn_inventory_has_no_stock(tool_data_list) and (
         current_pending_intent.get() == "stock" or current_goal_type.get() == "store_with_stock"
-    ) and not _same_turn_logistics_schedule_has_slots(tool_data_list):
+    ) and not same_turn_logistics_schedule_has_slots:
         return None
 
     entries = _find_entries(tool_data_list, "get_store_schedule_tool")
@@ -5497,6 +5501,10 @@ _TODAY_SERVICE_DATEPICK_RE = re.compile(
     r"오늘\s*서비스|오늘서비스|오늘\s*장착|당일\s*장착|오늘\s*가능|당일|지금|바로|당장",
     re.IGNORECASE,
 )
+_TODAY_SERVICE_UNAVAILABLE_COPY_RE = re.compile(
+    r"오늘\s*서비스|오늘서비스|오늘\s*장착|당일\s*장착|오늘\s*가능|당일",
+    re.IGNORECASE,
+)
 _STORE_BOOKING_FOLLOWUP_SIGNAL_RE = re.compile(
     r"예약|장착|방문|스케줄|시간표|가능\s*(?:해|하|한|하냐|하냐고|하나요|여부)?|돼\??|되\??",
     re.IGNORECASE,
@@ -5529,7 +5537,7 @@ def _parse_korean_date_label(label: str) -> datetime.date | None:
 
 def _today_service_datepick_response(event: dict, *, force: bool = False) -> str | None:
     user_text = current_user_text.get() or ""
-    if not force and not _TODAY_SERVICE_DATEPICK_RE.search(user_text):
+    if not _TODAY_SERVICE_UNAVAILABLE_COPY_RE.search(user_text):
         return None
     event_data = event.get("data")
     if not isinstance(event_data, dict):

@@ -92,6 +92,7 @@ from services.tstation.chat import (
     _apply_pending_object_check_slots,
     _clear_stale_product_slots_for_new_recommendation,
     _clear_stale_store_search_context_for_general_turn,
+    _demote_stale_tire_size_for_new_product_transaction,
     _datepick_template_recovery_candidate_from_messages,
     _verified_datepick_order_values,
     _comparison_query_with_recent_context,
@@ -110,6 +111,13 @@ from services.tstation.chat import (
     _build_discovery_policy_context,
     _build_manual_tire_size_input_event,
     _build_missing_order_product_reselection_event,
+    _stage_pending_order_context,
+    _stage_pending_product_context_from_search,
+    _clear_invalid_store_identity_slots,
+    _is_invalid_store_slot_value,
+    _is_resolved_size_store_availability_transaction_continuation,
+    _selected_order_context_from_preview_values,
+    _apply_selected_order_context_for_purchase_cta,
     _apply_order_snapshot_slots,
     _build_order_quantity_prompt_event,
     _build_order_arrival_status_event,
@@ -863,6 +871,16 @@ def test_delivery_policy_gate_does_not_hijack_order_delivery_status() -> None:
 
     assert decision.intent == DeliveryPolicyIntent.NONE
     assert _delivery_policy_guard_event("주문 배송 상태 확인해줘") is None
+
+
+def test_transaction_order_prompt_disallows_order_history_payment_continuation() -> None:
+    prompt = TRANSACTION_ORDER_SYSTEM_PROMPT_TEMPLATE
+
+    assert "ORDER-HISTORY PAYMENT CONTINUATION GUARD" in prompt
+    assert "주문내역에 미결제 주문서가 별도 저장되어 있어" in prompt
+    assert "결제를 이어갈 수 있다고 안내하지 마라" in prompt
+    assert "주문 상세 페이지에서 결제 진행 버튼을 확인해 주세요" in prompt
+    assert "새 주문서 생성(`quick_order_tool`) 또는 장바구니 담기(`save_to_cart_tool`)" in prompt
 
 
 def test_delivery_policy_guard_blocks_direct_home_delivery_during_active_order_context() -> None:
@@ -3877,6 +3895,29 @@ def test_store_availability_continuation_recovers_recent_single_store_name() -> 
     }]
 
     assert _recent_store_name_for_availability_continuation(prev_tool_data=prev_tool_data) == "티스테이션 판교점"
+
+
+def test_store_availability_continuation_does_not_treat_rating_as_store_name() -> None:
+    assert _is_invalid_store_slot_value("평점") is True
+
+    slots = ConversationSlots(
+        shop_name="평점",
+        goods_no="G000000319594",
+        tire_size="215/65R15",
+        region="광주",
+        pending_intent="stock",
+        goal_type="store_with_stock",
+        availability_context={"pending_order_context": {"shop_name": "평점", "region": "광주"}},
+    )
+
+    cleared = _clear_invalid_store_identity_slots(slots, source="test")
+
+    assert cleared["shop_name"] == "평점"
+    assert slots.shop_name is None
+    assert slots.availability_context == {"pending_order_context": {"region": "광주"}}
+    assert _recent_store_name_for_availability_continuation(
+        recent_context="리뷰는 43건, 평균 평점은 4.2점이에요."
+    ) is None
 
 
 def test_sized_bare_product_search_can_resolve_unique_goods_no_for_detail() -> None:
@@ -12339,7 +12380,7 @@ def test_transaction_followup_other_store_does_not_misclassify_as_favorite_store
     assert frame.known_slots["stock_check_mode"] == "preview"
 
 
-def test_transaction_intent_policy_restores_quantity_only_pure_stock_followup() -> None:
+def test_transaction_intent_policy_restores_quantity_only_store_stock_followup_to_schedule_preview() -> None:
     known_slots = {
         "goods_no": "G000000317729",
         "tire_size": "235/35R20",
@@ -12360,23 +12401,31 @@ def test_transaction_intent_policy_restores_quantity_only_pure_stock_followup() 
     assert _is_quantity_only_stock_followup_text("4개") is True
     assert _is_pure_inventory_stock_ready(known_slots) is True
     assert frame.intent == "stock_store_search"
-    assert frame.sub_intent == "stock"
-    assert frame.known_slots["stock_check_mode"] == "inventory_only"
+    assert frame.sub_intent == "reservation"
+    assert frame.known_slots["stock_check_mode"] == "preview"
     assert frame.known_slots["shop_name"] == "판교점"
-    assert tool_plan.allowed_tools == (
-        "get_store_inventory_tool",
-        "get_store_list_tool",
-        "get_logistics_inventory_tool",
+    assert tool_plan.preferred_tool == "transaction_store_preview_tool"
+    assert "transaction_store_preview_tool" in tool_plan.allowed_tools
+    assert "requested_cal_day" not in tool_plan.required_slots
+    assert response_decision.metadata["response_shape_key"] == "stock_store_candidates"
+    assert response_decision.metadata["stock_check_mode"] == "preview"
+
+
+def test_transaction_intent_policy_uses_schedule_preview_for_named_store_stock_without_today_request() -> None:
+    frame = build_transaction_intent_frame(
+        "판교점에 ion evo as 2354518 4개 재고 있어?",
+        known_slots={"goods_no": "G000000317735"},
     )
-    assert tool_plan.preferred_tool == "get_store_list_tool"
-    assert "transaction_store_preview_tool" in tool_plan.forbidden_tools
-    assert response_decision.metadata["response_shape_key"] == "stock_inventory_lookup"
-    assert response_decision.metadata["stock_check_mode"] == "inventory_only"
-    assert response_decision.metadata["logistics_notice_allowed"] is True
-    assert response_decision.metadata["reservation_ui_allowed"] is False
-    assert "get_store_inventory_tool만" not in response_decision.assistant_guidance
-    assert "물류 재고" in response_decision.assistant_guidance
-    assert "datepick/preOrder" in response_decision.assistant_guidance
+    tool_plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "stock_store_search"
+    assert frame.sub_intent == "reservation"
+    assert frame.known_slots["stock_check_mode"] == "preview"
+    assert frame.known_slots["shop_name"] == "판교점"
+    assert frame.known_slots["tire_size"] == "235/45R18"
+    assert frame.known_slots["ord_qty"] == 4
+    assert tool_plan.preferred_tool == "transaction_store_preview_tool"
+    assert "requested_cal_day" not in tool_plan.required_slots
 
 
 def test_transaction_intent_policy_keeps_today_install_flow_for_quantity_only_followup() -> None:
@@ -12485,6 +12534,183 @@ def test_transaction_intent_policy_keeps_pure_stock_region_query_inventory_only(
     assert frame.known_slots["stock_check_mode"] == "inventory_only"
     assert tool_plan.preferred_tool in {"get_store_inventory_tool", "get_store_list_tool"}
     assert "transaction_store_preview_tool" in tool_plan.forbidden_tools
+
+
+def test_new_product_stock_query_demotes_carried_size_to_candidate() -> None:
+    slots = ConversationSlots(
+        tire_size="235/50R19",
+        goods_no="GOLD",
+        tire_model="이전 추천 상품",
+        payment_amount=100000,
+        comparison_context=ComparisonContext(
+            product_names=("이전 A", "이전 B"),
+            compare_metric="release",
+            response_shape_key="metric_comparison_summary",
+        ),
+    )
+
+    demoted = _demote_stale_tire_size_for_new_product_transaction(
+        slots,
+        "키너지 ex 재고 있는 광주 지역 매장 있을까?",
+        "stock",
+    )
+
+    assert demoted == {
+        "product_name": "Kinergy EX",
+        "candidate_tire_size": "235/50R19",
+        "pending_intent": "stock",
+    }
+    assert slots.tire_size is None
+    assert slots.goods_no is None
+    assert slots.payment_amount is None
+    assert slots.comparison_context is None
+    assert slots.tire_model == "Kinergy EX"
+    assert slots.pending_product_name == "Kinergy EX"
+    assert slots.availability_context == {
+        "candidate_tire_size": "235/50R19",
+        "candidate_tire_size_source": "previous_context",
+        "pending_product_name": "Kinergy EX",
+        "pending_intent": "stock",
+    }
+
+
+def test_new_product_stock_query_keeps_current_turn_explicit_size_confirmed() -> None:
+    slots = ConversationSlots(tire_size="235/50R19", goods_no="GOLD")
+
+    demoted = _demote_stale_tire_size_for_new_product_transaction(
+        slots,
+        "키너지 ex 2454518 사이즈 광주 지역에 재고 있는 매장 알려주세요",
+        "stock",
+    )
+
+    assert demoted == {}
+    assert slots.tire_size == "235/50R19"
+    assert slots.goods_no == "GOLD"
+
+
+def test_pending_order_context_preserves_resolved_stock_slots() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000312989",
+        tire_size="245/45R18",
+        tire_model="키너지 EX",
+        region="광주",
+        pending_intent="stock",
+        goal_type="store_with_stock",
+    )
+
+    first_context = _stage_pending_order_context(slots, source="search_product_tool")
+    assert first_context["goods_no"] == "G000000312989"
+    assert first_context["tire_size"] == "245/45R18"
+    assert first_context["region"] == "광주"
+    assert first_context["pending_intent"] == "stock"
+    assert first_context["goal_type"] == "store_with_stock"
+
+    slots.ord_qty = 2
+    second_context = _stage_pending_order_context(slots, source="quantity_followup")
+    assert second_context["ord_qty"] == 2
+    assert slots.availability_context is not None
+    assert slots.availability_context["pending_order_context"]["ord_qty"] == 2
+    assert slots.availability_context["pending_order_context"]["product_name"] == "키너지 EX"
+
+
+def test_product_search_stages_pending_stock_context_before_size_followup() -> None:
+    slots = ConversationSlots(
+        region="광주",
+        pending_intent="stock",
+        goal_type="store_with_stock",
+    )
+
+    context = _stage_pending_product_context_from_search(
+        slots,
+        tool_input={"keyword": "키너지 EX", "limit": 10},
+        parsed_data={
+            "status": "success",
+            "data": {
+                "items": [
+                    {"goods_no": "G000000319594", "goods_nm": "키너지 EX", "tire_size_1": "215/65R15"},
+                    {"goods_no": "G000000319595", "goods_nm": "키너지 EX", "tire_size_1": "205/60R16"},
+                ]
+            },
+        },
+        source="tool:search_product_tool",
+    )
+
+    assert context["product_name"] == "키너지 EX"
+    assert context["region"] == "광주"
+    assert context["pending_intent"] == "stock"
+    assert context["goal_type"] == "store_with_stock"
+    assert context["candidate_count"] == 2
+    assert slots.pending_product_name == "키너지 EX"
+    assert slots.tire_model == "키너지 EX"
+    assert slots.availability_context["pending_order_context"]["product_name"] == "키너지 EX"
+
+
+def test_size_only_stock_followup_with_resolved_product_routes_to_transaction() -> None:
+    routing_result = SimpleNamespace(
+        pending_check_topic="store_inventory",
+        discovery_followup_intent="recent_product_set_size_availability",
+        execution_plan=["search store inventory for product in Gwangju"],
+    )
+    slots = ConversationSlots(
+        goods_no="G000000319594",
+        tire_size="215/65R15",
+        region="광주",
+        pending_intent="stock",
+        goal_type="store_with_stock",
+        availability_context={
+            "pending_order_context": {
+                "product_name": "키너지 EX",
+                "region": "광주",
+                "pending_intent": "stock",
+                "goal_type": "store_with_stock",
+            }
+        },
+    )
+
+    assert _is_resolved_size_store_availability_transaction_continuation(
+        "2156515",
+        slots=slots,
+        routing_result=routing_result,
+        size_only_store_availability_continuation=True,
+    ) is True
+
+
+def test_preview_store_selection_promotes_selected_order_context_for_order_cta() -> None:
+    preview_values = {
+        "goods_no": "G000000312989",
+        "tire_size": "245/45R18",
+        "ord_qty": 2,
+        "shop_id": "F00023",
+        "shop_name": "티스테이션 오포점",
+        "region": "광주",
+        "pending_intent": "stock",
+        "goal_type": "store_with_stock",
+    }
+    selected_context = _selected_order_context_from_preview_values(preview_values)
+    slots = ConversationSlots(
+        goods_no="STALE",
+        tire_size="235/50R19",
+        ord_qty=4,
+        pending_intent="stock",
+        goal_type="store_with_stock",
+        order_context={"selected_order_context": selected_context},
+    )
+
+    updated, values = _apply_selected_order_context_for_purchase_cta(slots)
+
+    assert values["goods_no"] == "G000000312989"
+    assert values["tire_size"] == "245/45R18"
+    assert values["ord_qty"] == 2
+    assert values["shop_id"] == "F00023"
+    assert values["pending_intent"] == "order"
+    assert values["goal_type"] == "place_order"
+    assert updated.goods_no == "G000000312989"
+    assert updated.tire_size == "245/45R18"
+    assert updated.ord_qty == 2
+    assert updated.shop_id == "F00023"
+    assert updated.shop_name == "티스테이션 오포점"
+    assert updated.pending_intent == "order"
+    assert updated.goal_type == "place_order"
 
 
 def test_transaction_intent_policy_keeps_specific_store_recheck_scope() -> None:
@@ -14204,6 +14430,99 @@ def test_turn_contract_blocks_datepick_for_unavailable_stock_response_policy() -
     assert event["assistant_response_source"] == "code_turn_contract_response_policy_guard"
     assert "예약 가능한 재고" in event["data"]["assistantResponse"]
     assert "다른 매장 찾기" in _labels(event["data"]["quickReplies"])
+
+
+def test_logistics_schedule_datepick_overrides_prior_store_stock_unavailable_guard() -> None:
+    response_decision = ResponseDecision(
+        response_shape=ResponseShape.NO_RESULT,
+        template=TemplateName.QUICK_REPLY,
+        forbidden_behaviors=(
+            "say_available_when_stock_zero",
+            "datepick_for_unavailable_stock",
+            "datepick_for_pure_inventory_flow",
+            "preorder_for_pure_inventory_flow",
+        ),
+        metadata={"response_shape_key": "stock_unavailable", "stock_check_mode": "inventory_only"},
+    )
+    token = current_transaction_response_decision.set(response_decision)
+    try:
+        event = try_build_template(
+            [
+                {
+                    "tool": "get_store_inventory_tool",
+                    "args": {
+                        "goods_list": [{"goodsNo": "G000000319595", "qty": "4"}],
+                        "shop_id_list": [{"shopId": "F00023"}],
+                    },
+                    "data": {"status": "success", "data": {"todayShopArray": [], "tnaShopArray": []}},
+                },
+                {
+                    "tool": "get_store_schedule_tool",
+                    "args": {"shop_id": "F00023", "mode": "logistics_only"},
+                    "data": {
+                        "status": "success",
+                        "data": {
+                            "shop_id": "F00023",
+                            "mode": "logistics_only",
+                            "shop_nm": "티스테이션 오포점",
+                            "is_installable": True,
+                            "slots": [{"cal_day": "20260702", "tm": "09"}],
+                        },
+                    },
+                },
+            ],
+            "",
+        )
+    finally:
+        current_transaction_response_decision.reset(token)
+
+    assert event is not None
+    assert event["template"] == "datepick"
+    assert event["data"]["metadata"]["scheduleMode"] == "logistics_only"
+    assert event["data"]["dates"][0]["available"] is True
+
+
+def test_turn_contract_allows_logistics_schedule_datepick_after_inventory_empty() -> None:
+    contract = build_turn_contract(
+        user_text="티스테이션 오포점",
+        intent_frame=IntentFrame(
+            domain=PolicyDomain.TRANSACTION,
+            intent="store_schedule",
+            known_slots={
+                "goods_no": "G000000319595",
+                "ord_qty": 4,
+                "shop_id": "F00023",
+                "shop_name": "티스테이션 오포점",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+                "stock_check_mode": "inventory_only",
+            },
+        ),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.NO_RESULT,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=(
+                "say_available_when_stock_zero",
+                "datepick_for_unavailable_stock",
+                "datepick_for_pure_inventory_flow",
+                "preorder_for_pure_inventory_flow",
+            ),
+            metadata={"response_shape_key": "stock_unavailable", "stock_check_mode": "inventory_only"},
+        ),
+    )
+    event = {
+        "template": "datepick",
+        "source_domain": "transaction",
+        "assistant_response_source": "code_mapper_schedule_mode",
+        "response_shape_key": "stock_unavailable",
+        "called_tools": ["get_store_inventory_tool", "get_store_schedule_tool"],
+        "data": {
+            "dates": [{"date": "2026년 7월 2일", "available": True, "availableTimes": [9], "index": 0}],
+            "metadata": {"shopId": "F00023", "scheduleMode": "logistics_only"},
+        },
+    }
+
+    assert not violates_response_template_contract(event, contract)
 
 
 def test_transaction_preview_tool_result_with_schedule_slots_is_not_treated_as_stock_unavailable() -> None:

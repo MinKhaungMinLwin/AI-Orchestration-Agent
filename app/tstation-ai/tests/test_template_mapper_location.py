@@ -2440,6 +2440,50 @@ def test_today_service_question_dates_pick_answers_with_earliest_available_date(
     )
 
 
+def test_urgent_reservation_wording_does_not_claim_today_service_unavailable() -> None:
+    current_pending_intent.set("reservation")
+    current_user_text.set("나 지금 타이어 펑크남 ㅠㅠ 근처 예약 바로 가능한 매장 좀 알려줘\n판교점")
+    entry = _schedule_entry(
+        mode="general",
+        is_installable=True,
+        slots=[
+            {"cal_day": "20260624", "tm": "09"},
+            {"cal_day": "20260624", "tm": "10"},
+        ],
+    )
+
+    result = _map_datepick([entry], "예약하려는 날짜와 시간을 선택해 주세요.")
+
+    assert result is not None
+    assert result["template"] == "datepick"
+    assert "오늘서비스는 어렵고" not in result["data"]["assistantResponse"]
+    assert result["data"]["assistantResponse"] == "예약하려는 날짜와 시간을 선택해 주세요."
+
+
+def test_preview_logistics_datepick_without_explicit_today_service_uses_mode_copy() -> None:
+    current_pending_intent.set("reservation")
+    current_user_text.set("판교점")
+    entry = _preview_entry_with_schedule(
+        args={"store_nm": "판교점", "include_price": True},
+        stores=[_stub_store("F00721", "티스테이션 판교점")],
+        schedule_stores=[{
+            "shop_id": "F00721",
+            "mode": "logistics_only",
+            "shop_nm": "티스테이션 판교점",
+            "slots": [{"cal_day": "20260624", "tm": "09"}],
+        }],
+    )
+    entry["data"]["data"]["schedule"]["tier"] = "logistics_only"
+
+    result = try_build_template([entry], "예약하려는 날짜와 시간을 선택해 주세요.")
+
+    assert result is not None
+    assert result["template"] == "datepick"
+    assert result["assistant_response_source"] == "code_mapper_schedule_mode"
+    assert "오늘서비스는 어렵고" not in result["data"]["assistantResponse"]
+    assert result["data"]["assistantResponse"] == "물류 배송 후 장착 가능한 일정입니다. 예약하려는 날짜와 시간을 선택해 주세요."
+
+
 def test_other_store_request_after_preview_schedule_does_not_emit_datepick() -> None:
     """User asked for alternative stores, not another schedule picker for the same store."""
     current_pending_intent.set("order")

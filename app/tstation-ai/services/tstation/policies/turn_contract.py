@@ -687,6 +687,12 @@ def _effective_forbidden_behaviors(
     forbidden_behaviors: list[Any] | tuple[Any, ...],
 ) -> tuple[str, ...]:
     behaviors = tuple(str(behavior) for behavior in forbidden_behaviors)
+    if _is_logistics_schedule_datepick_event(event):
+        return tuple(
+            behavior
+            for behavior in behaviors
+            if behavior not in {"datepick_for_unavailable_stock", "datepick_for_pure_inventory_flow"}
+        )
     if not _is_purchase_bound_preview_event(event, contract):
         return behaviors
     return tuple(
@@ -694,6 +700,31 @@ def _effective_forbidden_behaviors(
         for behavior in behaviors
         if behavior not in {"datepick_for_pure_inventory_flow", "preorder_for_pure_inventory_flow"}
     )
+
+
+def _is_logistics_schedule_datepick_event(event: Mapping[str, Any]) -> bool:
+    if str(event.get("template") or "") != "datepick":
+        return False
+    called_tools = {
+        str(tool)
+        for tool in tuple(event.get("called_tools") or ())
+        if str(tool).strip()
+    }
+    if "get_store_schedule_tool" not in called_tools:
+        return False
+    data = event.get("data")
+    metadata = data.get("metadata") if isinstance(data, Mapping) else None
+    if not isinstance(metadata, Mapping):
+        return False
+    schedule_mode = str(
+        metadata.get("scheduleMode")
+        or metadata.get("schedule_mode")
+        or metadata.get("inventoryMode")
+        or metadata.get("inventory_mode")
+        or ""
+    ).strip().lower()
+    dates = data.get("dates") if isinstance(data, Mapping) else None
+    return schedule_mode == "logistics_only" and (dates is None or (isinstance(dates, list) and bool(dates)))
 
 
 def _is_purchase_bound_preview_event(event: Mapping[str, Any], contract: TurnContract | None) -> bool:
@@ -758,6 +789,17 @@ def response_contract_violations(
         "called_tools": list(called_tools or ()),
         "source_domain": source_domain or ("discovery" if contract.domain == "discovery" else contract.domain),
     }
+    known_slots = contract.known_slots or {}
+    schedule_mode = str(
+        known_slots.get("mode")
+        or known_slots.get("scheduleMode")
+        or known_slots.get("schedule_mode")
+        or known_slots.get("inventoryMode")
+        or known_slots.get("inventory_mode")
+        or ""
+    ).strip()
+    if schedule_mode:
+        event["data"] = {"metadata": {"scheduleMode": schedule_mode}}
     if should_guard_required_slots(contract) and template != "quickReply":
         violations.append({
             "type": "required_slots_not_clarified",
@@ -1277,6 +1319,8 @@ def _stock_contract_violation(
         else {},
     }
     if stock_check_mode == "inventory_only" and _is_purchase_bound_preview_event(event, contract):
+        return None
+    if stock_check_mode == "inventory_only" and str(template or "") == "datepick" and "get_store_schedule_tool" in called_tools:
         return None
     if stock_check_mode == "inventory_only":
         if str(response_shape_key or "") == "transaction_fallback" and not called_tools:
