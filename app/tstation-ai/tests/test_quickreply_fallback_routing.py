@@ -3886,6 +3886,11 @@ def test_store_availability_size_followup_quantity_prompt_invariant() -> None:
     assert "상품 검색하겠습니다" not in response
     assert "프리미엄이 제공하는" not in response
     assert _labels(event["data"]["quickReplies"]) == ["1개", "2개", "3개", "4개"]
+    assert event["data"]["metadata"]["goodsId"] == "G000000319593"
+    assert event["data"]["metadata"]["goodsNo"] == "G000000319593"
+    assert event["data"]["metadata"]["goods_no"] == "G000000319593"
+    assert event["data"]["metadata"]["tireSize"] == "235/55R19"
+    assert event["data"]["metadata"]["tire_size"] == "235/55R19"
 
 
 def test_store_availability_continuation_recovers_recent_single_store_name() -> None:
@@ -9015,6 +9020,26 @@ def test_purchase_cta_recovers_confirmed_product_from_quickreply_metadata() -> N
     assert slots == {
         "goods_no": "G000000317729",
         "tire_size": "235/55R19",
+        "tire_model": "다이나프로 HPX",
+    }
+
+
+def test_purchase_cta_recovers_confirmed_product_from_snake_case_quickreply_metadata() -> None:
+    slots = TStationChatServiceV2._confirmed_product_slot_values_for_purchase_cta(
+        latest_quickreply_tmpl={
+            "assistantResponse": "다이나프로 HPX 상품은 확인했어요. 장착 수량을 알려주세요.",
+            "metadata": {
+                "goods_no": "G000000317666",
+                "tire_size": "255/45R20",
+                "product_name": "다이나프로 HPX",
+            },
+        },
+        prev_tool_data=[],
+    )
+
+    assert slots == {
+        "goods_no": "G000000317666",
+        "tire_size": "255/45R20",
         "tire_model": "다이나프로 HPX",
     }
 

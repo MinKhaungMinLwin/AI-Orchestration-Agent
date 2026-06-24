@@ -12610,7 +12610,13 @@ def _goods_no_from_template_event(event: dict | None) -> str:
         return ""
     metadata = data.get("metadata")
     if isinstance(metadata, dict):
-        goods_no = str(metadata.get("goodsId") or metadata.get("goods_no") or metadata.get("goodsIdList") or "").strip()
+        goods_no = str(
+            metadata.get("goodsId")
+            or metadata.get("goodsNo")
+            or metadata.get("goods_no")
+            or metadata.get("goodsIdList")
+            or ""
+        ).strip()
         if goods_no.startswith("G"):
             return goods_no
     for key in ("products", "productList", "items"):
@@ -14596,8 +14602,12 @@ def _build_store_availability_quantity_prompt_event(
             "predictedDomains": ["TRANSACTION"],
             "metadata": {
                 "goodsId": goods_no,
+                "goodsNo": goods_no,
+                "goods_no": goods_no,
                 "tireSize": tire_size,
+                "tire_size": tire_size,
                 "productName": product_keyword,
+                "product_name": product_keyword,
                 "storeName": store_name,
             },
         },
@@ -17930,11 +17940,22 @@ class TStationChatServiceV2:
             metadata = event_data.get("metadata")
             if not isinstance(metadata, dict):
                 return None
-            goods_no = str(metadata.get("goodsId") or metadata.get("goodsNo") or "").strip()
+            goods_no = str(
+                metadata.get("goodsId")
+                or metadata.get("goodsNo")
+                or metadata.get("goods_no")
+                or metadata.get("goods_id")
+                or ""
+            ).strip()
             if not goods_no:
                 return None
             tire_size = normalize_tire_size(str(metadata.get("tireSize") or metadata.get("tire_size") or ""))
-            tire_model = str(metadata.get("productName") or metadata.get("goodsNm") or "").strip()
+            tire_model = str(
+                metadata.get("productName")
+                or metadata.get("product_name")
+                or metadata.get("goodsNm")
+                or ""
+            ).strip()
             slot_values: dict[str, Any] = {"goods_no": goods_no}
             if tire_size:
                 slot_values["tire_size"] = tire_size
@@ -24368,6 +24389,70 @@ class TStationChatServiceV2:
             except Exception as exc:
                 logger.warning("[QTY_BENEFIT] failed to clear pending slots: %s", exc)
 
+        def _stage_resolved_product_slots_for_direct_return(
+            *,
+            goods_no: str,
+            tire_size: str | None = None,
+            product_name: str | None = None,
+            pending_intent: str | None = None,
+            goal_type: str | None = None,
+        ) -> None:
+            nonlocal pending_slots
+            normalized_goods_no = str(goods_no or "").strip()
+            if not normalized_goods_no:
+                return
+
+            from schemas.tstation.slots import ConversationSlots
+
+            base_slots = pending_slots
+            if base_slots is None:
+                base_slots = initial_slots.model_copy() if initial_slots is not None else ConversationSlots()
+
+            values: dict[str, Any] = {"goods_no": normalized_goods_no}
+            normalized_tire_size = normalize_tire_size(tire_size or "")
+            if normalized_tire_size:
+                values["tire_size"] = normalized_tire_size
+            normalized_product_name = str(product_name or "").strip()
+            if normalized_product_name:
+                values["tire_model"] = normalized_product_name
+                values["pending_product_name"] = normalized_product_name
+            if pending_intent:
+                values["pending_intent"] = pending_intent
+            if goal_type:
+                values["goal_type"] = goal_type
+
+            updated_slots = base_slots.apply_runtime_values(
+                values,
+                source="resolved_product_direct_return",
+            )
+            context = dict(updated_slots.availability_context or {})
+            pending_order_context = dict(context.get("pending_order_context") or {})
+            pending_order_context.update({
+                "goods_no": normalized_goods_no,
+                "goodsNo": normalized_goods_no,
+            })
+            if normalized_tire_size:
+                pending_order_context["tire_size"] = normalized_tire_size
+                pending_order_context["tireSize"] = normalized_tire_size
+            if normalized_product_name:
+                pending_order_context["product_name"] = normalized_product_name
+                pending_order_context["productName"] = normalized_product_name
+            if pending_intent:
+                pending_order_context["pending_intent"] = pending_intent
+                pending_order_context["pendingIntent"] = pending_intent
+            if goal_type:
+                pending_order_context["goal_type"] = goal_type
+                pending_order_context["goalType"] = goal_type
+            context["pending_order_context"] = pending_order_context
+            updated_slots.availability_context = context
+            pending_slots = updated_slots
+            logger.info(
+                "[SLOTS] Staged resolved product for direct return: goods_no=%s tire_size=%s product=%s",
+                normalized_goods_no,
+                normalized_tire_size,
+                normalized_product_name,
+            )
+
         def _quantity_benefit_frame_with_recent_context() -> Any | None:
             known_slots: dict[str, Any] = {}
             if initial_slots is not None:
@@ -24691,6 +24776,13 @@ class TStationChatServiceV2:
                 )
                 goods_no = str((row or {}).get("goods_no") or "").strip()
                 if goods_no:
+                    _stage_resolved_product_slots_for_direct_return(
+                        goods_no=goods_no,
+                        tire_size=str(tool_input.get("size") or ""),
+                        product_name=preferred_keyword,
+                        pending_intent="stock" if is_store_availability_size_followup else None,
+                        goal_type="store_with_stock" if is_store_availability_size_followup else None,
+                    )
                     if is_store_availability_size_followup:
                         tire_size = str(tool_input.get("size") or "")
                         ord_qty = getattr(initial_slots, "ord_qty", None) if initial_slots is not None else None
@@ -26511,6 +26603,7 @@ class TStationChatServiceV2:
         bare_product_search_resolution = await _resolve_bare_product_search_with_code()
         if bare_product_search_resolution is not None:
             code_events, product_event = bare_product_search_resolution
+            await _persist_pending_slots_for_direct_return()
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
             for code_event in code_events:
                 yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
