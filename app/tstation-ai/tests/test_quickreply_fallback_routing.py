@@ -14432,6 +14432,99 @@ def test_turn_contract_blocks_datepick_for_unavailable_stock_response_policy() -
     assert "다른 매장 찾기" in _labels(event["data"]["quickReplies"])
 
 
+def test_logistics_schedule_datepick_overrides_prior_store_stock_unavailable_guard() -> None:
+    response_decision = ResponseDecision(
+        response_shape=ResponseShape.NO_RESULT,
+        template=TemplateName.QUICK_REPLY,
+        forbidden_behaviors=(
+            "say_available_when_stock_zero",
+            "datepick_for_unavailable_stock",
+            "datepick_for_pure_inventory_flow",
+            "preorder_for_pure_inventory_flow",
+        ),
+        metadata={"response_shape_key": "stock_unavailable", "stock_check_mode": "inventory_only"},
+    )
+    token = current_transaction_response_decision.set(response_decision)
+    try:
+        event = try_build_template(
+            [
+                {
+                    "tool": "get_store_inventory_tool",
+                    "args": {
+                        "goods_list": [{"goodsNo": "G000000319595", "qty": "4"}],
+                        "shop_id_list": [{"shopId": "F00023"}],
+                    },
+                    "data": {"status": "success", "data": {"todayShopArray": [], "tnaShopArray": []}},
+                },
+                {
+                    "tool": "get_store_schedule_tool",
+                    "args": {"shop_id": "F00023", "mode": "logistics_only"},
+                    "data": {
+                        "status": "success",
+                        "data": {
+                            "shop_id": "F00023",
+                            "mode": "logistics_only",
+                            "shop_nm": "티스테이션 오포점",
+                            "is_installable": True,
+                            "slots": [{"cal_day": "20260702", "tm": "09"}],
+                        },
+                    },
+                },
+            ],
+            "",
+        )
+    finally:
+        current_transaction_response_decision.reset(token)
+
+    assert event is not None
+    assert event["template"] == "datepick"
+    assert event["data"]["metadata"]["scheduleMode"] == "logistics_only"
+    assert event["data"]["dates"][0]["available"] is True
+
+
+def test_turn_contract_allows_logistics_schedule_datepick_after_inventory_empty() -> None:
+    contract = build_turn_contract(
+        user_text="티스테이션 오포점",
+        intent_frame=IntentFrame(
+            domain=PolicyDomain.TRANSACTION,
+            intent="store_schedule",
+            known_slots={
+                "goods_no": "G000000319595",
+                "ord_qty": 4,
+                "shop_id": "F00023",
+                "shop_name": "티스테이션 오포점",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+                "stock_check_mode": "inventory_only",
+            },
+        ),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.NO_RESULT,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=(
+                "say_available_when_stock_zero",
+                "datepick_for_unavailable_stock",
+                "datepick_for_pure_inventory_flow",
+                "preorder_for_pure_inventory_flow",
+            ),
+            metadata={"response_shape_key": "stock_unavailable", "stock_check_mode": "inventory_only"},
+        ),
+    )
+    event = {
+        "template": "datepick",
+        "source_domain": "transaction",
+        "assistant_response_source": "code_mapper_schedule_mode",
+        "response_shape_key": "stock_unavailable",
+        "called_tools": ["get_store_inventory_tool", "get_store_schedule_tool"],
+        "data": {
+            "dates": [{"date": "2026년 7월 2일", "available": True, "availableTimes": [9], "index": 0}],
+            "metadata": {"shopId": "F00023", "scheduleMode": "logistics_only"},
+        },
+    }
+
+    assert not violates_response_template_contract(event, contract)
+
+
 def test_transaction_preview_tool_result_with_schedule_slots_is_not_treated_as_stock_unavailable() -> None:
     response_decision = decide_transaction_response(
         intent="inventory_availability",

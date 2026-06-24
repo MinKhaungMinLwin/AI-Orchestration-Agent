@@ -4764,14 +4764,18 @@ def _map_datepick(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     Schedule-tool path wins when both are present (richer multi-day shape).
     """
     transaction_decision = current_transaction_response_decision.get()
-    if transaction_decision and (
-        transaction_decision.forbids("datepick_for_unverified_store")
-        or transaction_decision.forbids("datepick_for_unavailable_stock")
+    same_turn_logistics_schedule_has_slots = _same_turn_logistics_schedule_has_slots(tool_data_list)
+    if transaction_decision and transaction_decision.forbids("datepick_for_unverified_store"):
+        return None
+    if (
+        transaction_decision
+        and transaction_decision.forbids("datepick_for_unavailable_stock")
+        and not same_turn_logistics_schedule_has_slots
     ):
         return None
     if _same_turn_inventory_has_no_stock(tool_data_list) and (
         current_pending_intent.get() == "stock" or current_goal_type.get() == "store_with_stock"
-    ) and not _same_turn_logistics_schedule_has_slots(tool_data_list):
+    ) and not same_turn_logistics_schedule_has_slots:
         return None
 
     entries = _find_entries(tool_data_list, "get_store_schedule_tool")
