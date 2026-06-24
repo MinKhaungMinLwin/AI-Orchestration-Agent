@@ -14466,6 +14466,73 @@ def test_quick_order_reservation_keeps_datepick_guard_without_selected_datetime(
     assert should_guard_required_slots(contract)
 
 
+def test_turn_contract_missing_store_prompt_preserves_order_context() -> None:
+    contract = _transaction_turn_contract(
+        "구매하기",
+        {
+            "goods_no": "G000000317666",
+            "product_name": "다이나프로 HPX",
+            "tire_size": "255/45R20",
+            "ord_qty": 2,
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+
+    event = build_response_policy_guard_event(contract)
+    response = event["data"]["assistantResponse"]
+    metadata = event["data"]["metadata"]
+
+    assert event["assistant_response_source"] == "code_turn_contract_missing_slot_prompt"
+    assert "다이나프로 HPX 255/45R20 2개 구매를 진행하려면 장착 매장이 필요해요" in response
+    assert "현재 확인된 정보만으로" not in response
+    assert _labels(event["data"]["quickReplies"]) == ["내 주변 매장 찾기", "단골매장 보기", "지역/매장 입력"]
+    assert metadata["missingSlot"] == "store"
+    assert metadata["pendingOrderContext"]["goods_no"] == "G000000317666"
+    assert metadata["pendingOrderContext"]["tire_size"] == "255/45R20"
+    assert metadata["pendingOrderContext"]["ord_qty"] == 2
+    assert metadata["pendingOrderContext"]["pending_intent"] == "order"
+    assert metadata["pendingOrderContext"]["goal_type"] == "place_order"
+
+
+def test_turn_contract_missing_quantity_prompt_before_store_prompt() -> None:
+    contract = _transaction_turn_contract(
+        "구매하기",
+        {
+            "goods_no": "G000000317666",
+            "product_name": "다이나프로 HPX",
+            "tire_size": "255/45R20",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+
+    event = build_response_policy_guard_event(contract)
+
+    assert event["assistant_response_source"] == "code_turn_contract_missing_slot_prompt"
+    assert "수량이 필요해요" in event["data"]["assistantResponse"]
+    assert _labels(event["data"]["quickReplies"]) == ["1개", "2개", "3개", "4개"]
+    assert event["data"]["metadata"]["missingSlot"] == "quantity"
+
+
+def test_turn_contract_missing_tire_size_prompt_before_product_prompt() -> None:
+    contract = _transaction_turn_contract(
+        "구매하기",
+        {
+            "product_name": "다이나프로 HPX",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+
+    event = build_response_policy_guard_event(contract)
+
+    assert event["assistant_response_source"] == "code_turn_contract_missing_slot_prompt"
+    assert "다이나프로 HPX 구매를 진행하려면 타이어 사이즈가 필요해요" in event["data"]["assistantResponse"]
+    assert _labels(event["data"]["quickReplies"]) == ["사이즈 직접 입력", "내 차량 보기", "상품 다시 찾기"]
+    assert event["data"]["metadata"]["missingSlot"] == "tire_size"
+
+
 def test_preorder_confirmation_reply_requires_ready_card() -> None:
     ready_preorder = {
         "template": "preOrder",
