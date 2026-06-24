@@ -92,6 +92,7 @@ from services.tstation.chat import (
     _apply_pending_object_check_slots,
     _clear_stale_product_slots_for_new_recommendation,
     _clear_stale_store_search_context_for_general_turn,
+    _demote_stale_tire_size_for_new_product_transaction,
     _datepick_template_recovery_candidate_from_messages,
     _verified_datepick_order_values,
     _comparison_query_with_recent_context,
@@ -110,6 +111,9 @@ from services.tstation.chat import (
     _build_discovery_policy_context,
     _build_manual_tire_size_input_event,
     _build_missing_order_product_reselection_event,
+    _stage_pending_order_context,
+    _selected_order_context_from_preview_values,
+    _apply_selected_order_context_for_purchase_cta,
     _apply_order_snapshot_slots,
     _build_order_quantity_prompt_event,
     _build_order_arrival_status_event,
@@ -12495,6 +12499,121 @@ def test_transaction_intent_policy_keeps_pure_stock_region_query_inventory_only(
     assert frame.known_slots["stock_check_mode"] == "inventory_only"
     assert tool_plan.preferred_tool in {"get_store_inventory_tool", "get_store_list_tool"}
     assert "transaction_store_preview_tool" in tool_plan.forbidden_tools
+
+
+def test_new_product_stock_query_demotes_carried_size_to_candidate() -> None:
+    slots = ConversationSlots(
+        tire_size="235/50R19",
+        goods_no="GOLD",
+        tire_model="이전 추천 상품",
+        payment_amount=100000,
+        comparison_context=ComparisonContext(
+            product_names=("이전 A", "이전 B"),
+            compare_metric="release",
+            response_shape_key="metric_comparison_summary",
+        ),
+    )
+
+    demoted = _demote_stale_tire_size_for_new_product_transaction(
+        slots,
+        "키너지 ex 재고 있는 광주 지역 매장 있을까?",
+        "stock",
+    )
+
+    assert demoted == {
+        "product_name": "Kinergy EX",
+        "candidate_tire_size": "235/50R19",
+        "pending_intent": "stock",
+    }
+    assert slots.tire_size is None
+    assert slots.goods_no is None
+    assert slots.payment_amount is None
+    assert slots.comparison_context is None
+    assert slots.tire_model == "Kinergy EX"
+    assert slots.pending_product_name == "Kinergy EX"
+    assert slots.availability_context == {
+        "candidate_tire_size": "235/50R19",
+        "candidate_tire_size_source": "previous_context",
+        "pending_product_name": "Kinergy EX",
+        "pending_intent": "stock",
+    }
+
+
+def test_new_product_stock_query_keeps_current_turn_explicit_size_confirmed() -> None:
+    slots = ConversationSlots(tire_size="235/50R19", goods_no="GOLD")
+
+    demoted = _demote_stale_tire_size_for_new_product_transaction(
+        slots,
+        "키너지 ex 2454518 사이즈 광주 지역에 재고 있는 매장 알려주세요",
+        "stock",
+    )
+
+    assert demoted == {}
+    assert slots.tire_size == "235/50R19"
+    assert slots.goods_no == "GOLD"
+
+
+def test_pending_order_context_preserves_resolved_stock_slots() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000312989",
+        tire_size="245/45R18",
+        tire_model="키너지 EX",
+        region="광주",
+        pending_intent="stock",
+        goal_type="store_with_stock",
+    )
+
+    first_context = _stage_pending_order_context(slots, source="search_product_tool")
+    assert first_context["goods_no"] == "G000000312989"
+    assert first_context["tire_size"] == "245/45R18"
+    assert first_context["region"] == "광주"
+    assert first_context["pending_intent"] == "stock"
+    assert first_context["goal_type"] == "store_with_stock"
+
+    slots.ord_qty = 2
+    second_context = _stage_pending_order_context(slots, source="quantity_followup")
+    assert second_context["ord_qty"] == 2
+    assert slots.availability_context is not None
+    assert slots.availability_context["pending_order_context"]["ord_qty"] == 2
+    assert slots.availability_context["pending_order_context"]["product_name"] == "키너지 EX"
+
+
+def test_preview_store_selection_promotes_selected_order_context_for_order_cta() -> None:
+    preview_values = {
+        "goods_no": "G000000312989",
+        "tire_size": "245/45R18",
+        "ord_qty": 2,
+        "shop_id": "F00023",
+        "shop_name": "티스테이션 오포점",
+        "region": "광주",
+        "pending_intent": "stock",
+        "goal_type": "store_with_stock",
+    }
+    selected_context = _selected_order_context_from_preview_values(preview_values)
+    slots = ConversationSlots(
+        goods_no="STALE",
+        tire_size="235/50R19",
+        ord_qty=4,
+        pending_intent="stock",
+        goal_type="store_with_stock",
+        order_context={"selected_order_context": selected_context},
+    )
+
+    updated, values = _apply_selected_order_context_for_purchase_cta(slots)
+
+    assert values["goods_no"] == "G000000312989"
+    assert values["tire_size"] == "245/45R18"
+    assert values["ord_qty"] == 2
+    assert values["shop_id"] == "F00023"
+    assert values["pending_intent"] == "order"
+    assert values["goal_type"] == "place_order"
+    assert updated.goods_no == "G000000312989"
+    assert updated.tire_size == "245/45R18"
+    assert updated.ord_qty == 2
+    assert updated.shop_id == "F00023"
+    assert updated.shop_name == "티스테이션 오포점"
+    assert updated.pending_intent == "order"
+    assert updated.goal_type == "place_order"
 
 
 def test_transaction_intent_policy_keeps_specific_store_recheck_scope() -> None:

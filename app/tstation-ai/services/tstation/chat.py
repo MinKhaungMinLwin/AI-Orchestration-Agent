@@ -2854,6 +2854,8 @@ class StreamingMultiAgentCoordinator:
 
         if tool_slots:
             updated = slots.apply_runtime_values(tool_slots, source=f"tool:{tool_name}")
+            if tool_name in {"search_product_tool", "transaction_store_preview_tool", "get_store_inventory_tool"}:
+                _stage_pending_order_context(updated, source=f"tool:{tool_name}")
             if updated.model_dump() != slots.model_dump():
                 slots.__dict__.update(updated.__dict__)
                 changed = True
@@ -16316,6 +16318,155 @@ def _clear_stale_product_identity_for_fresh_transaction(
     return True
 
 
+def _fresh_transaction_product_keyword(text: str, pending_intent: str | None) -> str:
+    if not _is_fresh_product_transaction_request(text, pending_intent):
+        return ""
+    if _is_product_coupon_price_amount_query(text):
+        coupon_product_name = _coupon_target_product_name_for_query(text)
+        parsed_coupon_target = _split_product_size_quantity_from_text(coupon_product_name, text)
+        current_keyword = str(parsed_coupon_target.get("product_name") or "").strip()
+    else:
+        current_keyword = _fallback_sized_product_keyword(text)
+    if not current_keyword:
+        frame = build_discovery_intent_frame(text)
+        product_names = tuple(frame.entities.get("product_names") or ())
+        if product_names:
+            current_keyword = str(product_names[0])
+    current_keyword = _SIZED_PRODUCT_TRANSACTION_HINT_STOP_RE.sub(" ", current_keyword)
+    return re.sub(r"\s+", " ", current_keyword).strip(" ,./")
+
+
+def _demote_stale_tire_size_for_new_product_transaction(
+    slots: ConversationSlots,
+    text: str,
+    pending_intent: str | None,
+) -> dict[str, Any]:
+    """Keep a carried size as a candidate when the current turn names a new product.
+
+    A previous recommendation/search size is not proof that a newly named product
+    exists in that size. Search/stock tools must first resolve the new product
+    family, then ask the user to pick one of its actual sizes if the candidate is
+    unavailable.
+    """
+    product_keyword = _fresh_transaction_product_keyword(text, pending_intent)
+    if not product_keyword:
+        return {}
+    current_size = normalize_tire_size(text)
+    if current_size or not slots.tire_size:
+        return {}
+
+    candidate_tire_size = slots.tire_size
+    context = dict(slots.availability_context or {})
+    context["candidate_tire_size"] = candidate_tire_size
+    context["candidate_tire_size_source"] = "previous_context"
+    context["pending_product_name"] = product_keyword
+    context["pending_intent"] = pending_intent
+
+    slots.tire_size = None
+    slots.goods_no = None
+    slots.payment_amount = None
+    slots.comparison_context = None
+    slots.price_facts = None
+    slots.coupon_facts = None
+    slots.tire_model = product_keyword
+    slots.pending_product_name = product_keyword
+    slots.availability_context = context
+    return {
+        "product_name": product_keyword,
+        "candidate_tire_size": candidate_tire_size,
+        "pending_intent": pending_intent,
+    }
+
+
+def _pending_order_context_values(slots: ConversationSlots) -> dict[str, Any]:
+    values: dict[str, Any] = {}
+    for field in ("goods_no", "tire_size", "ord_qty", "region", "shop_id", "shop_name"):
+        value = getattr(slots, field, None)
+        if value not in (None, "", [], {}):
+            values[field] = value
+    product_name = getattr(slots, "tire_model", None) or getattr(slots, "pending_product_name", None)
+    if product_name:
+        values["product_name"] = product_name
+    if getattr(slots, "pending_intent", None):
+        values["pending_intent"] = slots.pending_intent
+    if getattr(slots, "goal_type", None):
+        values["goal_type"] = slots.goal_type
+    if getattr(slots, "availability_intent", None):
+        values["availability_intent"] = slots.availability_intent
+    if getattr(slots, "requested_cal_day", None):
+        values["requested_cal_day"] = slots.requested_cal_day
+    return values
+
+
+def _stage_pending_order_context(slots: ConversationSlots, *, source: str) -> dict[str, Any]:
+    """Persist stock/order product context separately from stale flat slots."""
+    if not (
+        slots.goods_no
+        and slots.tire_size
+        and (slots.region or slots.shop_id or slots.shop_name or slots.pending_intent in {"stock", "order"})
+    ):
+        return {}
+    context = dict(slots.availability_context or {})
+    pending_context = _pending_order_context_values(slots)
+    if not pending_context:
+        return {}
+    pending_context.setdefault("pending_intent", "stock")
+    pending_context.setdefault("goal_type", "store_with_stock")
+    pending_context["source"] = source
+    context["pending_order_context"] = pending_context
+    slots.availability_context = context
+    return pending_context
+
+
+def _selected_order_context_from_preview_values(preview_values: Mapping[str, Any]) -> dict[str, Any]:
+    if not preview_values.get("goods_no"):
+        return {}
+    context: dict[str, Any] = {}
+    for field in ("goods_no", "tire_size", "ord_qty", "region", "shop_id", "shop_name"):
+        value = preview_values.get(field)
+        if value not in (None, "", [], {}):
+            context[field] = value
+    for field in ("schedule_mode", "stock_check_mode"):
+        value = preview_values.get(field)
+        if value not in (None, "", [], {}):
+            context[field] = value
+    context["pending_intent"] = "order"
+    context["goal_type"] = "place_order"
+    context["source"] = "preview_location_template_selection"
+    return context
+
+
+def _apply_selected_order_context_for_purchase_cta(slots: ConversationSlots) -> tuple[ConversationSlots, dict[str, Any]]:
+    context_root = slots.order_context if isinstance(slots.order_context, dict) else {}
+    selected_context = context_root.get("selected_order_context")
+    if not isinstance(selected_context, dict):
+        return slots, {}
+    values = {
+        key: value
+        for key, value in selected_context.items()
+        if key
+        in {
+            "goods_no",
+            "tire_size",
+            "ord_qty",
+            "region",
+            "shop_id",
+            "shop_name",
+            "pending_intent",
+            "goal_type",
+            "requested_cal_day",
+            "rsv_hour",
+        }
+        and value not in (None, "", [], {})
+    }
+    if not values.get("goods_no"):
+        return slots, {}
+    values["pending_intent"] = "order"
+    values["goal_type"] = "place_order"
+    updated = slots.apply_runtime_values(values, source="selected_order_context", fill_only=False)
+    return updated, values
+
+
 _RECOMMENDATION_SIZE_REFERENCE_RE = re.compile(
     r"이\s*사이즈|그\s*사이즈|같(?:은|은)\s*사이즈|동일\s*사이즈|해당\s*사이즈",
     re.IGNORECASE,
@@ -18882,6 +19033,16 @@ class TStationChatServiceV2:
                     stale_tire_model,
                     stale_payment_amount,
                 )
+            demoted_size_context = _demote_stale_tire_size_for_new_product_transaction(
+                merged_slots,
+                last_user_text,
+                regex_slots.pending_intent,
+            )
+            if demoted_size_context:
+                logger.info(
+                    "[SLOTS] Demoted carried tire_size for fresh product transaction: %s",
+                    demoted_size_context,
+                )
             preorder_slot_values = TStationChatServiceV2._preorder_slot_values_from_data(latest_preorder_tmpl)
             preorder_confirmation_turn = _is_preorder_confirmation_reply(last_user_text, latest_preorder_tmpl)
             missing_preorder_context = any(
@@ -19814,12 +19975,22 @@ class TStationChatServiceV2:
                 and not regex_slots.tire_model
                 and not regex_slots.pending_product_name
             ):
+                selected_context_values: dict[str, Any] = {}
+                merged_slots, selected_context_values = _apply_selected_order_context_for_purchase_cta(merged_slots)
+                if selected_context_values:
+                    logger.info(
+                        "[ORDER_CTA] Recovered selected order context for purchase CTA: %s",
+                        selected_context_values,
+                    )
                 recovered_product_slots = TStationChatServiceV2._confirmed_product_slot_values_for_purchase_cta(
                     latest_quickreply_tmpl=latest_quickreply_tmpl,
                     latest_product_tmpl=latest_product_tmpl,
                     prev_tool_data=prev_tool_data,
                 )
-                if recovered_product_slots:
+                if selected_context_values:
+                    if getattr(merged_slots, "ord_qty", None) is None:
+                        current_vehicle_selection_prompt_event.set(_build_order_quantity_prompt_event(merged_slots))
+                elif recovered_product_slots:
                     merged_slots = merged_slots.apply_runtime_values(
                         recovered_product_slots,
                         source="purchase_cta_product_recovery",
@@ -20018,6 +20189,17 @@ class TStationChatServiceV2:
                             if preview_values.get("goods_no")
                             else "location_template_selection",
                         )
+                        selected_order_context = _selected_order_context_from_preview_values(preview_values)
+                        if selected_order_context:
+                            order_context = dict(merged_slots.order_context or {})
+                            order_context["selected_order_context"] = selected_order_context
+                            merged_slots.order_context = order_context
+                            merged_slots.pending_intent = "order"
+                            merged_slots.goal_type = "place_order"
+                            logger.debug(
+                                "[SLOTS] Promoted preview store selection to selected_order_context: %s",
+                                selected_order_context,
+                            )
                         logger.debug(
                             f"[SLOTS] Resolved shop_id={resolved_shop_id!r} from user's "
                             f"list-selection against last `location` template metadata"
@@ -21348,6 +21530,15 @@ class TStationChatServiceV2:
                 recent_user_texts.append(extracted)
             if len(recent_user_texts) >= 3:
                 break
+        staged_pending_order_context = _stage_pending_order_context(
+            merged_slots,
+            source="pre_policy_context",
+        )
+        if staged_pending_order_context:
+            logger.debug(
+                "[SLOTS] Staged pending_order_context before policy planning: %s",
+                staged_pending_order_context,
+            )
         current_goal_type.set(merged_slots.goal_type)
         current_pending_intent.set(merged_slots.pending_intent)
         current_confirmed_tire_size.set(merged_slots.tire_size)
