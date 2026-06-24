@@ -15,7 +15,7 @@ from textwrap import dedent
 from pydantic import BaseModel, Field, model_validator
 from enum import Enum
 
-from services.tstation.common.cta_urls import CTAUrls
+from services.tstation.common.cta_urls import CTAUrls, rebase_tstation_url_to_origin
 from services.tstation.common.tstation_be_client import set_tstation_be_token, set_tstation_origin_host
 from config.env import settings
 from config.prompts import load_client_injection
@@ -15034,6 +15034,42 @@ def _normalize_cart_url_for_cart_check_chip(event_data: dict) -> bool:
     return changed
 
 
+def _normalize_tstation_cta_urls_for_origin(event_data: dict) -> bool:
+    changed = False
+    chips = event_data.get("quickReplies")
+    if isinstance(chips, list):
+        normalized_chips: list[object] = []
+        for chip in chips:
+            if not isinstance(chip, dict):
+                normalized_chips.append(chip)
+                continue
+            next_chip = dict(chip)
+            url = str(next_chip.get("url") or "").strip()
+            rebased = rebase_tstation_url_to_origin(url)
+            if url and rebased != url:
+                next_chip["url"] = rebased
+                changed = True
+            normalized_chips.append(next_chip)
+        if changed:
+            event_data["quickReplies"] = normalized_chips
+
+    redict_link = event_data.get("redictLink") or event_data.get("redirectLink")
+    if isinstance(redict_link, dict):
+        normalized_link = dict(redict_link)
+        for key in ("pc", "mobile"):
+            url = str(normalized_link.get(key) or "").strip()
+            rebased = rebase_tstation_url_to_origin(url)
+            if url and rebased != url:
+                normalized_link[key] = rebased
+                changed = True
+        if changed:
+            if "redictLink" in event_data:
+                event_data["redictLink"] = normalized_link
+            if "redirectLink" in event_data:
+                event_data["redirectLink"] = normalized_link
+    return changed
+
+
 def _discovery_recovery_chips_for_text(
     assistant_text: str | None,
     source_domain: str | None,
@@ -27573,6 +27609,8 @@ class TStationChatServiceV2:
                         "content": assistant_response,
                         "agent": "[TRANSACTION AGENT]",
                     }]
+                if isinstance(event_data, dict) and _normalize_tstation_cta_urls_for_origin(event_data):
+                    logger.info("[CTA_URL] rebased T-Station CTA URLs to request origin host")
                 # Buffer data event — yield after QC so assistantResponse is always verified
                 buffered_data_events.append(event)
                 continue
