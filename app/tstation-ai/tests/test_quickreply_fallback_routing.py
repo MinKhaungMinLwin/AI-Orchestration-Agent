@@ -12353,7 +12353,7 @@ def test_transaction_followup_other_store_does_not_misclassify_as_favorite_store
     assert frame.known_slots["stock_check_mode"] == "preview"
 
 
-def test_transaction_intent_policy_restores_quantity_only_pure_stock_followup() -> None:
+def test_transaction_intent_policy_restores_quantity_only_store_stock_followup_to_schedule_preview() -> None:
     known_slots = {
         "goods_no": "G000000317729",
         "tire_size": "235/35R20",
@@ -12374,23 +12374,31 @@ def test_transaction_intent_policy_restores_quantity_only_pure_stock_followup() 
     assert _is_quantity_only_stock_followup_text("4개") is True
     assert _is_pure_inventory_stock_ready(known_slots) is True
     assert frame.intent == "stock_store_search"
-    assert frame.sub_intent == "stock"
-    assert frame.known_slots["stock_check_mode"] == "inventory_only"
+    assert frame.sub_intent == "reservation"
+    assert frame.known_slots["stock_check_mode"] == "preview"
     assert frame.known_slots["shop_name"] == "판교점"
-    assert tool_plan.allowed_tools == (
-        "get_store_inventory_tool",
-        "get_store_list_tool",
-        "get_logistics_inventory_tool",
+    assert tool_plan.preferred_tool == "transaction_store_preview_tool"
+    assert "transaction_store_preview_tool" in tool_plan.allowed_tools
+    assert "requested_cal_day" not in tool_plan.required_slots
+    assert response_decision.metadata["response_shape_key"] == "stock_store_candidates"
+    assert response_decision.metadata["stock_check_mode"] == "preview"
+
+
+def test_transaction_intent_policy_uses_schedule_preview_for_named_store_stock_without_today_request() -> None:
+    frame = build_transaction_intent_frame(
+        "판교점에 ion evo as 2354518 4개 재고 있어?",
+        known_slots={"goods_no": "G000000317735"},
     )
-    assert tool_plan.preferred_tool == "get_store_list_tool"
-    assert "transaction_store_preview_tool" in tool_plan.forbidden_tools
-    assert response_decision.metadata["response_shape_key"] == "stock_inventory_lookup"
-    assert response_decision.metadata["stock_check_mode"] == "inventory_only"
-    assert response_decision.metadata["logistics_notice_allowed"] is True
-    assert response_decision.metadata["reservation_ui_allowed"] is False
-    assert "get_store_inventory_tool만" not in response_decision.assistant_guidance
-    assert "물류 재고" in response_decision.assistant_guidance
-    assert "datepick/preOrder" in response_decision.assistant_guidance
+    tool_plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "stock_store_search"
+    assert frame.sub_intent == "reservation"
+    assert frame.known_slots["stock_check_mode"] == "preview"
+    assert frame.known_slots["shop_name"] == "판교점"
+    assert frame.known_slots["tire_size"] == "235/45R18"
+    assert frame.known_slots["ord_qty"] == 4
+    assert tool_plan.preferred_tool == "transaction_store_preview_tool"
+    assert "requested_cal_day" not in tool_plan.required_slots
 
 
 def test_transaction_intent_policy_keeps_today_install_flow_for_quantity_only_followup() -> None:

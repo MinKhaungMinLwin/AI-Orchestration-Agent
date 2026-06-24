@@ -623,6 +623,12 @@ def build_transaction_intent_frame(
         )
     )
     today_requested = bool(_TODAY_RE.search(text))
+    selected_store_schedule_ready = bool(
+        has_product
+        and tire_size
+        and quantity
+        and (store_name or slots.get("shop_id") or slots.get("shop_name") or slots.get("store_name"))
+    )
 
     entities: dict[str, Any] = {
         "tire_size": tire_size,
@@ -703,8 +709,8 @@ def build_transaction_intent_frame(
         sub_intent = "confirm"
     elif quantity_only_stock_continuation or quantity_slot_fill_stock_continuation:
         intent = "stock_store_search"
-        sub_intent = "today_install" if explicit_preview_request else "stock"
-        entities["stock_check_mode"] = "preview" if sub_intent == "today_install" else "inventory_only"
+        sub_intent = "today_install" if explicit_preview_request else ("reservation" if selected_store_schedule_ready else "stock")
+        entities["stock_check_mode"] = "preview" if explicit_preview_request or selected_store_schedule_ready else "inventory_only"
     elif store_scope_product_continuation:
         intent = "stock_store_search"
         use_preview_scope = bool(
@@ -738,6 +744,10 @@ def build_transaction_intent_frame(
     elif _STORE_SEARCH_RE.search(text) and has_location and not has_product:
         intent = "store_search"
         sub_intent = "nearby" if entities["nearby"] else "region"
+    elif _STOCK_RE.search(text) and selected_store_schedule_ready and not today_requested:
+        intent = "stock_store_search"
+        sub_intent = "reservation"
+        entities["stock_check_mode"] = "preview"
     elif (_STOCK_RE.search(text) or today_requested) and has_product:
         intent = "stock_store_search"
         sub_intent = "today_install" if today_requested else "stock"
@@ -1140,13 +1150,14 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
 def _transaction_action(frame: IntentFrame) -> str:
     if frame.intent == "stock_store_search":
         stock_check_mode = str(frame.known_slots.get("stock_check_mode") or frame.entities.get("stock_check_mode") or "")
+        has_store = _has_action_store(frame)
         if stock_check_mode == "inventory_only":
             return "store_inventory_lookup"
         if (
-            frame.known_slots.get("region")
+            (frame.known_slots.get("region") and not has_store)
             or frame.known_slots.get("lat")
             or frame.known_slots.get("lng")
-            or not _has_action_store(frame)
+            or not has_store
         ):
             return "regional_install_availability_preview"
         return "selected_store_schedule"
@@ -1233,7 +1244,6 @@ def _action_required_slots(frame: IntentFrame, action: str) -> tuple[str, ...]:
         if stock_context:
             add("product", not _has_action_product(frame))
             add("quantity", not (frame.known_slots.get("quantity") or frame.known_slots.get("ord_qty")))
-            add("requested_cal_day", not _has_action_date(frame))
     elif action == "quick_order_reservation":
         add("product", not frame.known_slots.get("goods_no"))
         add("quantity", not (frame.known_slots.get("quantity") or frame.known_slots.get("ord_qty")))
