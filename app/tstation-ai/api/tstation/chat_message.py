@@ -40,6 +40,7 @@ from schemas.tstation.chat_message import (
 )
 from services.tstation.chat_history_service import get_chat_history_service
 from services.tstation.chat import TStationChatServiceV2
+from services.tstation.common.cta_urls import CTAUrls
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -49,6 +50,9 @@ _TSTATION_ORIGIN_HOSTS = {
     "mqa.tstation.com",
     "mbiz.tstation.com",
     "bizqa.tstation.com",
+    "www.tstation.com",
+    "m.tstation.com",
+    "biz.tstation.com",
 }
 
 
@@ -170,7 +174,7 @@ def _quick_order_action_event(message: str, *, metadata: dict | None = None) -> 
             "assistantResponse": message,
             "quickReplies": [
                 {"label": "주문 정보 다시 확인", "domain": "TRANSACTION"},
-                {"label": "장바구니 확인", "domain": "TRANSACTION", "url": "https://wwwqa.tstation.com/mypage/cart"},
+                {"label": "장바구니 확인", "domain": "TRANSACTION", "url": CTAUrls.CART},
             ],
             "predictedDomains": ["TRANSACTION"],
             "metadata": metadata or {},
