@@ -865,6 +865,16 @@ def test_delivery_policy_gate_does_not_hijack_order_delivery_status() -> None:
     assert _delivery_policy_guard_event("주문 배송 상태 확인해줘") is None
 
 
+def test_transaction_order_prompt_disallows_order_history_payment_continuation() -> None:
+    prompt = TRANSACTION_ORDER_SYSTEM_PROMPT_TEMPLATE
+
+    assert "ORDER-HISTORY PAYMENT CONTINUATION GUARD" in prompt
+    assert "주문내역에 미결제 주문서가 별도 저장되어 있어" in prompt
+    assert "결제를 이어갈 수 있다고 안내하지 마라" in prompt
+    assert "주문 상세 페이지에서 결제 진행 버튼을 확인해 주세요" in prompt
+    assert "새 주문서 생성(`quick_order_tool`) 또는 장바구니 담기(`save_to_cart_tool`)" in prompt
+
+
 def test_delivery_policy_guard_blocks_direct_home_delivery_during_active_order_context() -> None:
     event = _delivery_policy_guard_event(
         "집으로 배송해줘",
