@@ -1,9 +1,11 @@
+from __future__ import annotations
+
 import datetime
 import logging
 import re
 from typing import Any, ClassVar, Literal, Mapping, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +18,16 @@ logger = logging.getLogger(__name__)
 # 상품 주문이 아니다. template_mapper 가 isBookingFlow=true 분기 시 함께 본다.
 PendingIntent = Literal["price", "stock", "order", "reservation", "quantity_benefit_comparison"]
 AvailabilityIntent = Literal["today_install"]
+PendingCheckTopic = Literal[
+    "safe_service",
+    "safe_plus",
+    "coupon_applicability",
+    "today_install",
+    "store_inventory",
+    "warranty",
+    "event_applicability",
+]
+PendingCheckObjectType = Literal["product_name", "tire_size", "store", "vehicle", "none"]
 
 # High-level user goal carried across the session. Drives both goal-aware prompt
 # injection (so agents know the *destination*, not just the immediate turn) and
@@ -29,8 +41,67 @@ GoalType = Literal[
     "store_with_stock",
     "store_finder",
     "price_inquiry",
+    "coupon_discount_amount",
     "place_order",
 ]
+
+
+class RecommendationContext(BaseModel):
+    """Typed recommendation-only context kept separate from durable common slots."""
+
+    scenario: Optional[str] = None
+    applied_rcmd_type: Optional[str] = None
+    applied_vehicle_type: Optional[str] = None
+    applied_season_nm: Optional[str] = None
+    approximation: bool = False
+    approximation_basis: Optional[str] = None
+    source_text: Optional[str] = None
+    fitment_source: Optional[str] = None
+    tool_args_patch: Optional[dict[str, Any]] = None
+    expected_tool_args: Optional[dict[str, Any]] = None
+    scope: Optional[str] = None
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any] | "RecommendationContext" | None) -> "RecommendationContext | None":
+        if value is None:
+            return None
+        if isinstance(value, cls):
+            return value
+        data = {key: item for key, item in dict(value).items() if item not in (None, "")}
+        if "scenario" not in data and data.get("recommendation_scenario"):
+            data["scenario"] = data.get("recommendation_scenario")
+        return cls(**{key: item for key, item in data.items() if key in cls.model_fields})
+
+    def to_policy_dict(self) -> dict[str, Any]:
+        data = self.model_dump(exclude_none=True)
+        if self.scenario:
+            data["recommendation_scenario"] = self.scenario
+        return data
+
+
+class ComparisonContext(BaseModel):
+    """Typed comparison-only context preserved after deterministic compare answers."""
+
+    product_names: list[str] = Field(default_factory=list)
+    compare_metric: Optional[str] = None
+    response_shape_key: Optional[str] = None
+    comparison_followup_intent: Optional[str] = None
+    source: Optional[str] = None
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, Any] | "ComparisonContext" | None) -> "ComparisonContext | None":
+        if value is None:
+            return None
+        if isinstance(value, cls):
+            return value
+        data = {key: item for key, item in dict(value).items() if item not in (None, "")}
+        product_names = data.get("product_names") or data.get("productNames")
+        if isinstance(product_names, (tuple, list)):
+            data["product_names"] = [str(name).strip() for name in product_names if str(name or "").strip()][:2]
+        return cls(**{key: item for key, item in data.items() if key in cls.model_fields})
+
+    def to_policy_dict(self) -> dict[str, Any]:
+        return self.model_dump(exclude_none=True)
 
 
 class ConversationSlots(BaseModel):
@@ -73,6 +144,17 @@ class ConversationSlots(BaseModel):
     recommendation_variants: Optional[list[dict[str, Any]]] = None
     recommendation_limit_per_variant: Optional[int] = None
     recommendation_source_text: Optional[str] = None
+    recommendation_context: Optional[RecommendationContext] = None
+    comparison_context: Optional[ComparisonContext] = None
+    availability_context: Optional[dict[str, Any]] = None
+    order_context: Optional[dict[str, Any]] = None
+    quantity_comparison_context: Optional[dict[str, Any]] = None
+    price_facts: Optional[dict[str, Any]] = None
+    coupon_facts: Optional[dict[str, Any]] = None
+    pending_check_topic: Optional[PendingCheckTopic] = None
+    pending_check_object_type: Optional[PendingCheckObjectType] = None
+    pending_check_object_value: Optional[str] = None
+    pending_check_turns_remaining: Optional[int] = None
 
     # Slot dependency: when a key changes, its dependent slots are reset to None
     DEPENDENT_RESETS: ClassVar[dict[str, list[str]]] = {
@@ -336,6 +418,7 @@ class ConversationSlots(BaseModel):
         "store_with_stock": "재고 있는 매장 찾기",
         "store_finder": "매장 찾기",
         "price_inquiry": "가격 조회",
+        "coupon_discount_amount": "쿠폰 할인금액 확인",
         "place_order": "주문 진행",
     }
 
@@ -372,6 +455,11 @@ class ConversationSlots(BaseModel):
             ("region", "지역", frozenset({"region"})),
         ],
         "price_inquiry": [
+            ("model", "타이어 모델", frozenset({"tire_model", "goods_no"})),
+            ("size", "타이어 사이즈", frozenset({"tire_size"})),
+            ("qty", "수량", frozenset({"ord_qty"})),
+        ],
+        "coupon_discount_amount": [
             ("model", "타이어 모델", frozenset({"tire_model", "goods_no"})),
             ("size", "타이어 사이즈", frozenset({"tire_size"})),
             ("qty", "수량", frozenset({"ord_qty"})),
@@ -841,6 +929,9 @@ class ConversationSlots(BaseModel):
             "requested_cal_day": "요청 장착일",
             "rsv_hour": "요청 예약시간",
             "payment_amount": "결제금액",
+            "pending_check_topic": "확인 대기 주제",
+            "pending_check_object_type": "확인 대상 유형",
+            "pending_check_object_value": "확인 대상 값",
         }
 
         # Map pending_intent enum value → Korean label displayed in the prompt.
@@ -931,3 +1022,112 @@ class ConversationSlots(BaseModel):
     def has_any(self) -> bool:
         """Return True if at least one slot is filled."""
         return any(v is not None for v in self.model_dump().values())
+
+
+class CanonicalSlotState(BaseModel):
+    """Normalized slot view used by policy/reset code without changing the external slot API."""
+
+    common: dict[str, Any] = {}
+    product: dict[str, Any] = {}
+    store: dict[str, Any] = {}
+    price: dict[str, Any] = {}
+    contexts: dict[str, Any] = {}
+
+    COMMON_FIELDS: ClassVar[tuple[str, ...]] = (
+        "tire_size",
+        "tire_size_front",
+        "tire_size_rear",
+        "vehicle_type",
+        "car_lnc_cd",
+        "car_no",
+        "car_model",
+        "ord_qty",
+        "region",
+    )
+    PRODUCT_FIELDS: ClassVar[tuple[str, ...]] = (
+        "goods_no",
+        "tire_model",
+        "pending_product_name",
+    )
+    STORE_FIELDS: ClassVar[tuple[str, ...]] = (
+        "shop_id",
+        "shop_name",
+        "requested_cal_day",
+        "rsv_hour",
+    )
+    PRICE_FIELDS: ClassVar[tuple[str, ...]] = (
+        "payment_amount",
+        "price_facts",
+        "coupon_facts",
+    )
+    CONTEXT_FIELDS: ClassVar[tuple[str, ...]] = (
+        "recommendation_context",
+        "comparison_context",
+        "availability_context",
+        "order_context",
+        "quantity_comparison_context",
+    )
+
+    @classmethod
+    def from_slots(cls, slots: ConversationSlots) -> "CanonicalSlotState":
+        def _value(value: Any) -> Any:
+            if isinstance(value, RecommendationContext):
+                return value.to_policy_dict()
+            if isinstance(value, ComparisonContext):
+                return value.to_policy_dict()
+            if isinstance(value, BaseModel):
+                return value.model_dump(exclude_none=True)
+            return value
+
+        def _group(fields: tuple[str, ...]) -> dict[str, Any]:
+            return {
+                field: _value(getattr(slots, field))
+                for field in fields
+                if getattr(slots, field, None) is not None
+            }
+
+        return cls(
+            common=_group(cls.COMMON_FIELDS),
+            product=_group(cls.PRODUCT_FIELDS),
+            store=_group(cls.STORE_FIELDS),
+            price=_group(cls.PRICE_FIELDS),
+            contexts=_group(cls.CONTEXT_FIELDS),
+        )
+
+    @classmethod
+    def reset_for_new_recommendation(
+        cls,
+        slots: ConversationSlots,
+        *,
+        recommendation_context: Mapping[str, Any] | None = None,
+        current_tire_size: str | None = None,
+        current_product_name: str | None = None,
+    ) -> dict[str, Any]:
+        """Reset flow-specific state for a new recommendation while preserving common fitment slots."""
+
+        cleared: dict[str, Any] = {}
+        if current_tire_size:
+            slots.tire_size = current_tire_size
+        if recommendation_context:
+            slots.recommendation_context = RecommendationContext.from_mapping(recommendation_context)
+
+        product_reset_fields = (
+            "goods_no",
+            "payment_amount",
+            "price_facts",
+            "coupon_facts",
+            "order_context",
+            "pending_product_name",
+            "pending_quantity_options",
+            "pending_required_slot",
+        )
+        for field in product_reset_fields:
+            if getattr(slots, field, None) is not None:
+                cleared[field] = getattr(slots, field)
+                setattr(slots, field, None)
+
+        if not current_product_name and slots.tire_model is not None:
+            cleared["tire_model"] = slots.tire_model
+            slots.tire_model = None
+
+        return cleared

@@ -22,8 +22,28 @@ _STOCK_OR_BOOKING_RE = re.compile(
     r"재고|오늘\s*장착|당일\s*장착|장착\s*가능|예약|오늘\s*서비스|오늘서비스|당일\s*서비스",
     re.IGNORECASE,
 )
+_RESERVATION_STORE_REF_RE = re.compile(
+    r"예약(?:한|하신)?\s*(?:매장|지점|곳)|내\s*예약\s*(?:매장|지점|곳)|예약\s*매장|예약\s*지점",
+    re.IGNORECASE,
+)
+_RESERVATION_STORE_INFO_RE = re.compile(
+    r"전화|전화번호|연락처|주소|위치|어디|영업|운영|휴무|정보|상세|가고\s*싶|연락|전화하고",
+    re.IGNORECASE,
+)
+_MAINTENANCE_ADDON_SERVICE_RE = re.compile(r"엔진\s*오일|실내\s*필터|필터|와이퍼|배터리|경정비", re.IGNORECASE)
+_STORE_SERVICE_AVAILABILITY_RE = re.compile(
+    r"보관\s*서비스|타이어\s*보관|윈터\s*타이어\s*보관|겨울\s*타이어\s*보관|"
+    r"보관\s*(?:돼|되|가능|되나요|가능해)|질소\s*충전|질소|얼라인먼트.{0,12}(?:잘|무료|가능)",
+    re.IGNORECASE,
+)
+_TIRE_SERVICE_RE = re.compile(r"타이어.{0,12}(?:교체|장착|서비스|작업)|(?:교체|장착).{0,12}타이어", re.IGNORECASE)
+_ADDON_WITH_RE = re.compile(r"같이|함께|동시|하면서|겸|추가|하고\s*싶", re.IGNORECASE)
 _PURCHASE_RE = re.compile(r"구매|주문|결제|살래|살게|사고\s*싶|사려고", re.IGNORECASE)
 _STORE_SEARCH_RE = re.compile(r"매장|지점|티스테이션|더타이어샵|근처|주변|찾아|알려|보여", re.IGNORECASE)
+_FAVORITE_STORE_RE = re.compile(
+    r"내\s*단골(?:매장|가게|점)?|단골(?:매장|가게|점)|마이샵|자주\s*가는\s*매장",
+    re.IGNORECASE,
+)
 _STORE_NAME_RE = re.compile(r"([가-힣A-Za-z0-9]+(?:점|매장))")
 _REGION_HINT_RE = re.compile(
     r"서울|서초|강남|판교|분당|파주|강릉|부산|광교|성남|오목천|동광주|송파|한남|"
@@ -31,6 +51,8 @@ _REGION_HINT_RE = re.compile(
     re.IGNORECASE,
 )
 _PRICE_OR_COUPON_RE = re.compile(r"가격|할인가|최대\s*혜택|쿠폰|할인", re.IGNORECASE)
+_PRODUCT_BENEFIT_LOOKUP_RE = re.compile(r"행사|이벤트|프로모션|기획전|딜|deal|쿠폰|할인권|혜택", re.IGNORECASE)
+_BENEFIT_STACKING_RE = re.compile(r"중복|같이|함께|동시|둘\s*다|다\s*돼|같이\s*돼", re.IGNORECASE)
 _REGIONAL_PRICE_POLICY_RE = re.compile(
     r"(?=.*(?:가격|판매가|최종가))"
     r"(?=.*(?:똑같|같(?:아|은|나요|을까)?|동일|다르|차이|왜))"
@@ -48,6 +70,11 @@ _SUPPORT_RE = re.compile(
     re.IGNORECASE,
 )
 _DESCRIPTION_RE = re.compile(r"뭐야|뭔지|설명|차이|장점|왜|등급|연비|소음|마일리지|최신", re.IGNORECASE)
+_COMPARISON_SIGNAL_RE = re.compile(r"비교|차이|중(?:에|에서는)|뭐가\s*달라|무슨\s*차이", re.IGNORECASE)
+_OMITTED_COMPARISON_AXIS_RE = re.compile(
+    r"(?:중에서는|중에(?:는)?|둘은|두\s*상품은|는\s*\?|은\s*\?|어때|어떤데)\s*$",
+    re.IGNORECASE,
+)
 _SIZE_COMPACT_RE = re.compile(r"\b(\d{3})\s*/?\s*(\d{2})\s*R?\s*(\d{2})\b", re.IGNORECASE)
 _WARRANTY_CLAIM_WEAR_RE = re.compile(
     r"다\s*닳|빨리\s*닳|벌써\s*닳|조기\s*마모|편마모|마모|수명|하자|문제|이상|불량|품질|"
@@ -198,14 +225,52 @@ def plan_cross_domain_turn(user_text: str, *, known_slots: dict[str, Any] | None
     has_product_hint = bool(has_current_product_hint or slots.get("product_name") or slots.get("goods_no"))
     tire_size = slots.get("tire_size") or _normalize_tire_size(text)
     needs_store_search = bool(_STORE_SEARCH_RE.search(text))
+    needs_favorite_store_lookup = bool(_FAVORITE_STORE_RE.search(text))
     needs_price = bool(_PRICE_OR_COUPON_RE.search(text))
     needs_support = bool(_SUPPORT_RE.search(text))
     needs_description = bool(_DESCRIPTION_RE.search(text))
     needs_pattern_coupon_lookup = bool(has_product_hint and _PATTERN_COUPON_RE.search(text))
+    needs_product_benefit_lookup = bool(
+        has_product_hint
+        and _PRODUCT_BENEFIT_LOOKUP_RE.search(text)
+        and not _BENEFIT_STACKING_RE.search(text)
+    )
     needs_regional_price_policy = bool(_REGIONAL_PRICE_POLICY_RE.search(text))
+    needs_store_service_availability = bool(_STORE_SERVICE_AVAILABILITY_RE.search(text))
     has_current_store = bool(_STORE_NAME_RE.search(text) or _REGION_HINT_RE.search(text))
     needs_stock_or_booking = bool(_STOCK_OR_BOOKING_RE.search(text) or (_PURCHASE_RE.search(text) and has_current_store))
+    needs_reservation_store_info = bool(_RESERVATION_STORE_REF_RE.search(text) and _RESERVATION_STORE_INFO_RE.search(text))
+    needs_maintenance_addon_with_tire = bool(
+        _TIRE_SERVICE_RE.search(text)
+        and _MAINTENANCE_ADDON_SERVICE_RE.search(text)
+        and _ADDON_WITH_RE.search(text)
+        and has_current_store
+    )
     has_warranty_claim_signal = is_warranty_claim_signal(text, known_slots=slots)
+    comparison_context = slots.get("comparison_context") if isinstance(slots.get("comparison_context"), dict) else {}
+    comparison_metric = str(comparison_context.get("compare_metric") or slots.get("comparison_metric") or "").strip()
+    has_prior_comparison_axis = bool(comparison_metric and comparison_metric != "none")
+    has_product_comparison_signal = (
+        len(tuple(_PRODUCT_HINT_RE.finditer(text))) >= 2
+        and (
+            bool(_COMPARISON_SIGNAL_RE.search(text))
+            or (has_prior_comparison_axis and bool(_OMITTED_COMPARISON_AXIS_RE.search(text)))
+        )
+        and not needs_stock_or_booking
+    )
+
+    if has_product_comparison_signal:
+        return CrossDomainPlan(
+            primary_domain=PolicyDomain.DISCOVERY,
+            subtasks=(
+                DomainSubtask(
+                    domain=PolicyDomain.DISCOVERY,
+                    intent="product_comparison",
+                    reason="두 개 이상 상품명과 비교/차이 신호가 있어 단일 상품 설명으로 축소하지 않음",
+                ),
+            ),
+            response_strategy="single_domain_response",
+        )
 
     if needs_regional_price_policy:
         return CrossDomainPlan(
@@ -233,7 +298,23 @@ def plan_cross_domain_turn(user_text: str, *, known_slots: dict[str, Any] | None
             response_strategy="single_domain_response",
         )
 
-    current_turn_is_plain_store_search = needs_store_search and not needs_stock_or_booking and not needs_price
+    if needs_store_service_availability and not needs_stock_or_booking and not needs_price:
+        return CrossDomainPlan(
+            primary_domain=PolicyDomain.SUPPORT,
+            subtasks=(
+                DomainSubtask(
+                    domain=PolicyDomain.SUPPORT,
+                    intent="store_service_availability",
+                    reason="매장별 서비스 운영 여부 질문은 예약/매장검색이 아니라 support 서비스 가능 여부 안내임",
+                    required_slots=(),
+                ),
+            ),
+            response_strategy="single_domain_response",
+        )
+
+    current_turn_is_plain_store_search = (
+        needs_store_search and not needs_favorite_store_lookup and not needs_stock_or_booking and not needs_price
+    )
 
     if needs_support and not has_current_product_hint and not needs_stock_or_booking:
         return CrossDomainPlan(
@@ -243,6 +324,66 @@ def plan_cross_domain_turn(user_text: str, *, known_slots: dict[str, Any] | None
                     domain=PolicyDomain.SUPPORT,
                     intent="policy_notice_or_escalation",
                     reason="정책 안내 또는 1:1 문의 연결이 필요함",
+                ),
+            ),
+            response_strategy="single_domain_response",
+        )
+
+    if needs_product_benefit_lookup and not needs_stock_or_booking:
+        return CrossDomainPlan(
+            primary_domain=PolicyDomain.DISCOVERY,
+            subtasks=(
+                DomainSubtask(
+                    domain=PolicyDomain.DISCOVERY,
+                    intent="product_event_lookup",
+                    reason="상품명+행사/이벤트/기획전/쿠폰/혜택 질의는 상품 설명/가격 거래가 아니라 Discovery event content 조회임",
+                    required_slots=(),
+                ),
+            ),
+            response_strategy="single_domain_response",
+        )
+
+    if needs_maintenance_addon_with_tire:
+        return CrossDomainPlan(
+            primary_domain=PolicyDomain.TRANSACTION,
+            subtasks=(
+                DomainSubtask(
+                    domain=PolicyDomain.TRANSACTION,
+                    intent="maintenance_addon_with_tire_service",
+                    reason="특정 매장에서 타이어 교체와 경정비 동시 요청은 매장 서비스 가능 여부 확인이 필요한 거래성 안내임",
+                    required_slots=() if (slots.get("store_name") or slots.get("shop_id") or has_current_store) else ("store",),
+                ),
+                DomainSubtask(
+                    domain=PolicyDomain.SUPPORT,
+                    intent="maintenance_addon_policy_notice",
+                    reason="경정비 동시 주문 가능 여부는 정책성 안내 문구가 보조로 필요함",
+                ),
+            ),
+            response_strategy="transaction_store_service_check_then_policy_notice",
+        )
+
+    if needs_reservation_store_info:
+        return CrossDomainPlan(
+            primary_domain=PolicyDomain.TRANSACTION,
+            subtasks=(
+                DomainSubtask(
+                    domain=PolicyDomain.TRANSACTION,
+                    intent="reservation_store_info_lookup",
+                    reason="예약한 매장 참조는 최근 조회 매장이 아니라 예약/주문 내역 source로 확인해야 함",
+                ),
+            ),
+            response_strategy="reservation_source_then_store_info_response",
+        )
+
+    if needs_favorite_store_lookup and not has_current_product_hint and not needs_stock_or_booking and not needs_price:
+        return CrossDomainPlan(
+            primary_domain=PolicyDomain.TRANSACTION,
+            subtasks=(
+                DomainSubtask(
+                    domain=PolicyDomain.TRANSACTION,
+                    intent="favorite_store_lookup",
+                    reason="현재 발화는 지역 검색이 아니라 사용자의 단골매장 조회임",
+                    required_slots=(),
                 ),
             ),
             response_strategy="single_domain_response",

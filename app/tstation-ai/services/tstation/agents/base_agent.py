@@ -1091,10 +1091,28 @@ class BaseAgent(ABC):
                                         "started_at": time.perf_counter(),
                                     }
                                     if tool_name == "get_store_schedule_tool":
+                                        tool_plan = None
+                                        tool_plan_allowed = False
+                                        try:
+                                            from services.tstation.template_mapper import current_transaction_tool_plan
+
+                                            tool_plan = current_transaction_tool_plan.get()
+                                        except Exception:
+                                            tool_plan = None
+                                        if tool_plan is not None:
+                                            allowed_tools = tuple(getattr(tool_plan, "allowed_tools", ()) or ())
+                                            forbidden_tools = tuple(getattr(tool_plan, "forbidden_tools", ()) or ())
+                                            required_slots = tuple(getattr(tool_plan, "required_slots", ()) or ())
+                                            tool_plan_allowed = (
+                                                tool_name in allowed_tools
+                                                and tool_name not in forbidden_tools
+                                                and not required_slots
+                                            )
                                         gate_decision = decide_schedule_tool_gate(
                                             user_text=_latest_user_text(messages),
                                             tool_args=tc.get("args", {}),
                                             recent_context=_recent_context_text(messages),
+                                            allowed_by_tool_plan=tool_plan_allowed,
                                         )
                                         cfgable = (
                                             (config or {}).get("configurable", {})
@@ -1916,11 +1934,35 @@ class BaseAgent(ABC):
             return None
         try:
             from services.tstation.policies.response_decision import TemplateName
-            from services.tstation.template_mapper import current_transaction_response_decision
+            from services.tstation.template_mapper import (
+                current_transaction_response_decision,
+                current_transaction_tool_plan,
+            )
         except Exception:
             return None
 
         decision = current_transaction_response_decision.get()
+        tool_plan = current_transaction_tool_plan.get()
+        safe_lookup_intents = {
+            "store_search",
+            "favorite_store_lookup",
+            "product_coupon_eligibility",
+            "coupon_applicable_products",
+            "coupon_pattern_applicability",
+            "order_history_lookup",
+            "reservation_lookup",
+        }
+        tool_plan_intent = ""
+        if tool_plan is not None:
+            metadata = getattr(tool_plan, "metadata", None) or {}
+            tool_plan_intent = str(metadata.get("response_intent") or "")
+        if (
+            tool_plan is not None
+            and tool_name in getattr(tool_plan, "allowed_tools", ())
+            and not getattr(tool_plan, "required_slots", ())
+            and tool_plan_intent in safe_lookup_intents
+        ):
+            return None
         if (
             decision is None
             or decision.template != TemplateName.QUICK_REPLY

@@ -3,10 +3,45 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Mapping
 
 from services.tstation.policies.intent_frame import IntentFrame, PolicyDomain
+from services.tstation.policies.recommendation_scenario_catalog import (
+    recommendation_scenario_from_text,
+    recommendation_scenario_metadata,
+)
 from services.tstation.policies.response_decision import ToolPlan
+
+
+def _recommendation_context_dict(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if hasattr(value, "to_policy_dict"):
+        try:
+            return {key: item for key, item in value.to_policy_dict().items() if item not in (None, "")}
+        except Exception:
+            return {}
+    if isinstance(value, Mapping):
+        data = {key: item for key, item in value.items() if item not in (None, "")}
+        if "recommendation_scenario" not in data and data.get("scenario"):
+            data["recommendation_scenario"] = data.get("scenario")
+        return data
+    return {}
+
+
+def _recommendation_expected_tool_args(args: Mapping[str, Any]) -> dict[str, Any]:
+    tracked_keys = (
+        "rcmd_type",
+        "vehicle_type",
+        "season_nm",
+        "tire_size",
+        "brand_cd",
+        "allow_cross_brand_fill",
+        "pfm_nm",
+        "prc_grd",
+        "sort_by",
+    )
+    return {key: args[key] for key in tracked_keys if args.get(key) not in (None, "")}
 
 
 _SIZE_COMPACT_RE = re.compile(r"\b(\d{3})\s*/?\s*(\d{2})\s*R?\s*(\d{2})\b", re.IGNORECASE)
@@ -40,6 +75,10 @@ _PASSENGER_RECOMMENDATION_RE = re.compile(r"승용차|세단|SEDAN|스포츠카"
 _TRUCK_VAN_RECOMMENDATION_RE = re.compile(r"경트럭|화물차|카고트럭|덤프트럭|트럭|밴|승합차", re.IGNORECASE)
 _SOUND_ABSORBER_RE = re.compile(r"흡음재|흡음|sound\s*absorber|소음\s*저감", re.IGNORECASE)
 _SAFE_SERVICE_RE = re.compile(r"안심\s*(?:서비스|플러스)|안심서비스|안심플러스", re.IGNORECASE)
+_OE_REPLACEMENT_TYPE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("oe", re.compile(r"(?:\bOE\b|순정|출고\s*타이어|출고용|출고때|출고 시)", re.IGNORECASE)),
+    ("re", re.compile(r"(?:\bRE\b|교체용|replacement)", re.IGNORECASE)),
+)
 _MILEAGE_ATTRIBUTE_RE = re.compile(r"오래\s*(?:타|탈)|수명|내구|마일리지\s*(?:좋|높|긴)|long", re.IGNORECASE)
 _MILEAGE_PRODUCT_RE = re.compile(r"마일리지\s*(?:타이어|플러스|plus|\d)", re.IGNORECASE)
 _LATEST_RE = re.compile(r"최신|신상|신제품|최근(?:에)?\s*(?:출시|나온)|새로\s*나온|등록일", re.IGNORECASE)
@@ -51,20 +90,29 @@ _QUANTITY_OPTION_RE = re.compile(r"(\d{1,2})\s*(?:개|본)")
 _QUANTITY_BENEFIT_RE = re.compile(r"할인|혜택|가격|금액|최종가|저렴|싼|싸|쿠폰", re.IGNORECASE)
 _QUANTITY_COMPARE_RE = re.compile(r"비교|중에|살까|고민|더|차이|낫|유리|얼마나", re.IGNORECASE)
 _GRADE_COMPARE_RE = re.compile(r"프리미엄|등급|상위|하위|급", re.IGNORECASE)
-_COMPARE_RE = re.compile(r"비교|보다|중에|가장|제일|맞지|아냐", re.IGNORECASE)
+_COMPARE_RE = re.compile(r"비교|차이|무슨\s*차이|뭐가\s*달라|보다|중에|가장|제일|맞지|아냐", re.IGNORECASE)
 _RECOMMEND_RE = re.compile(r"추천|찾|골라|보여|알려", re.IGNORECASE)
 _BEST_SELLER_RE = re.compile(
-    r"인기|베스트\s*셀러|베스트|잘\s*팔리|많이\s*팔린|많이\s*(?:사는|구매한|산)|"
-    r"(?:젤|제일|가장)\s*많이\s*(?:사는|구매한|산|팔린)|잘\s*나가|"
+    r"인기|베스트\s*셀러|베스트|잘\s*팔리|많이\s*팔(?:린|리는)|많이\s*(?:사는|구매한|산)|"
+    r"(?:젤|제일|가장)\s*많이\s*(?:사는|구매한|산|팔(?:린|리는))|잘\s*나가|"
     r"최다\s*(?:판매|구매)|판매\s*(?:순위|랭킹|량)|구매\s*(?:순위|랭킹)",
     re.IGNORECASE,
 )
 _BEST_SELLER_AGGREGATE_RE = re.compile(
     r"베스트\s*셀러|"
+    r"판매\s*(?:순위|랭킹|량)|구매\s*(?:순위|랭킹)|최다\s*(?:판매|구매)|"
     r"(?=.*(?:타이어|상품))"
-    r"(?=.*(?:베스트|인기|잘\s*팔리|많이\s*(?:사는|구매한|산|팔린)|"
-    r"(?:젤|제일|가장)\s*많이\s*(?:사는|구매한|산|팔린)|잘\s*나가|"
+    r"(?=.*(?:베스트|인기|잘\s*팔리|많이\s*(?:사는|구매한|산|팔(?:린|리는))|"
+    r"(?:젤|제일|가장)\s*많이\s*(?:사는|구매한|산|팔(?:린|리는))|잘\s*나가|"
     r"최다\s*(?:판매|구매)|판매\s*(?:순위|랭킹|량)|구매\s*(?:순위|랭킹)))",
+    re.IGNORECASE,
+)
+_BEST_SELLER_UNSPECIFIED_COMMERCE_RE = re.compile(
+    r"(?=.*(?:요즘|최근|지금|현재))"
+    r"(?=.*(?:것|거|타이어|상품))"
+    r"(?=.*(?:인기\s*(?:있|많)|잘\s*팔리|잘\s*나가|"
+    r"많이\s*팔(?:린|리는)|"
+    r"(?:젤|제일|가장)\s*(?:인기|많이\s*(?:사는|구매한|산|팔(?:린|리는)))))",
     re.IGNORECASE,
 )
 _DEMOGRAPHIC_ATTRIBUTE_RE = re.compile(
@@ -87,6 +135,11 @@ _DEAL_LIST_RE = re.compile(
     r"진행\s*중인\s*기획전|기획전\s*(?:목록|리스트|검색|조회|보여|알려|내용)?",
     re.IGNORECASE,
 )
+_PRODUCT_EVENT_LOOKUP_RE = re.compile(r"행사|이벤트|프로모션", re.IGNORECASE)
+_PRODUCT_DEAL_LOOKUP_RE = re.compile(r"기획전|딜|deal", re.IGNORECASE)
+_PRODUCT_COUPON_LOOKUP_RE = re.compile(r"쿠폰|할인권", re.IGNORECASE)
+_PRODUCT_BENEFIT_LOOKUP_RE = re.compile(r"행사|이벤트|프로모션|기획전|딜|deal|쿠폰|할인권|혜택", re.IGNORECASE)
+_BENEFIT_STACKING_RE = re.compile(r"중복|같이|함께|동시|둘\s*다|다\s*돼|같이\s*돼", re.IGNORECASE)
 _BEST_SELLER_DAY_RE = re.compile(r"오늘|금일|하루", re.IGNORECASE)
 _BEST_SELLER_WEEK_RE = re.compile(r"이번\s*주|금주|이번주|주간", re.IGNORECASE)
 _BEST_SELLER_MONTH_RE = re.compile(r"이번\s*달|이달|월별|월간", re.IGNORECASE)
@@ -104,8 +157,25 @@ _PRODUCT_ATTRIBUTE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("load", re.compile(r"하중|하중지수|무게", re.IGNORECASE)),
     ("speed", re.compile(r"속도\s*기호|속도|고속", re.IGNORECASE)),
     ("season", re.compile(r"계절|사계절|겨울용|여름용|올웨더|올시즌", re.IGNORECASE)),
-    ("car_type", re.compile(r"차종|승용차|suv|전기차용|전기차", re.IGNORECASE)),
+    ("car_type", re.compile(r"차종|승용\s*/\s*suv|suv\s*용|승용차용|전기차용|전기차\s*전용|승용차\s*대비|suv\s*대비", re.IGNORECASE)),
 )
+_REQUESTED_PRODUCT_ATTRIBUTE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("brand", re.compile(r"브랜드|brand", re.IGNORECASE)),
+    ("manufacturer", re.compile(r"제조사|제조원|만든\s*회사|어디꺼|어느\s*회사", re.IGNORECASE)),
+    ("origin", re.compile(r"원산지|생산국|제조국|어느\s*나라", re.IGNORECASE)),
+    ("release", re.compile(r"출시|출시일|출시년도|등록일", re.IGNORECASE)),
+    ("noise", _NOISE_LABEL_RE),
+    ("fuel_efficiency", re.compile(r"연비|회전\s*저항|rr\b", re.IGNORECASE)),
+    ("wet", re.compile(r"빗길|젖은\s*노면|젖은노면|wet|제동\s*등급", re.IGNORECASE)),
+    ("price_grade", re.compile(r"상품\s*등급|가격\s*등급|프리미엄|스탠다드|이코노미", re.IGNORECASE)),
+    ("season", re.compile(r"계절|사계절|겨울용|여름용|올웨더|올시즌", re.IGNORECASE)),
+    ("car_type", re.compile(r"차종|승용\s*/\s*suv|suv\s*용|승용차용|전기차용|전기차\s*전용|승용차\s*대비|suv\s*대비", re.IGNORECASE)),
+    ("price", re.compile(r"가격\s*비교|가격\s*차이|더\s*싸|더\s*비싸|가격은\s*얼마|얼마나\s*저렴", re.IGNORECASE)),
+    ("mileage", _MILEAGE_ATTRIBUTE_RE),
+    ("load", re.compile(r"하중|하중지수|무게", re.IGNORECASE)),
+    ("speed", re.compile(r"속도\s*기호|속도|고속", re.IGNORECASE)),
+)
+_REQUESTED_PRODUCT_ATTRIBUTES = frozenset(metric for metric, _ in _REQUESTED_PRODUCT_ATTRIBUTE_PATTERNS)
 _RECOMMENDATION_ATTRIBUTE_METRICS: frozenset[str] = frozenset(
     {"fuel_efficiency", "wet", "load", "speed"}
 )
@@ -248,6 +318,30 @@ def extract_brand_codes(text: str) -> tuple[str, ...]:
     return tuple(brand_cd for _, brand_cd in matches)
 
 
+def _reorder_grade_compare_products(text: str, products: tuple[str, ...]) -> tuple[str, ...]:
+    if len(products) < 2 or "보다" not in (text or ""):
+        return products
+    normalized = (text or "").casefold()
+    positions: dict[str, int] = {}
+    for product in products:
+        best = -1
+        for needle, display_name, _brand_cd in _PRODUCT_ALIASES:
+            if display_name != product:
+                continue
+            pos = normalized.find(needle.casefold())
+            if pos >= 0 and (best < 0 or pos < best):
+                best = pos
+        if best >= 0:
+            positions[product] = best
+    pivot = normalized.find("보다")
+    after = [product for product in products if positions.get(product, -1) > pivot]
+    before = [product for product in products if product not in after]
+    if not after and len(before) >= 2:
+        before = sorted(before, key=lambda product: positions.get(product, -1), reverse=True)
+        return tuple(before)
+    return tuple(after + before) if after and before else products
+
+
 def extract_brand_code(text: str) -> str | None:
     brand_codes = extract_brand_codes(text)
     return brand_codes[0] if brand_codes else None
@@ -267,6 +361,20 @@ def extract_product_attribute_metrics(text: str) -> tuple[str, ...]:
         if pattern.search(text or "") and metric not in metrics:
             metrics.append(metric)
     return tuple(metrics)
+
+
+def extract_requested_product_attribute(text: str) -> str | None:
+    for requested_attribute, pattern in _REQUESTED_PRODUCT_ATTRIBUTE_PATTERNS:
+        if pattern.search(text or ""):
+            return requested_attribute
+    return None
+
+
+def extract_oe_replacement_type(text: str) -> str | None:
+    for replacement_type, pattern in _OE_REPLACEMENT_TYPE_PATTERNS:
+        if pattern.search(text or ""):
+            return replacement_type
+    return None
 
 
 def classify_product_claim_check_type(text: str) -> str:
@@ -321,7 +429,10 @@ def is_best_seller_request(text: str, *, include_demographic_preference: bool = 
     deterministic runtime path and Discovery intent policy do not drift.
     """
     text = text or ""
-    if _BEST_SELLER_RE.search(text) and _BEST_SELLER_AGGREGATE_RE.search(text):
+    if _BEST_SELLER_RE.search(text) and (
+        _BEST_SELLER_AGGREGATE_RE.search(text)
+        or _BEST_SELLER_UNSPECIFIED_COMMERCE_RE.search(text)
+    ):
         return True
     if not include_demographic_preference:
         return False
@@ -417,14 +528,34 @@ def build_discovery_intent_frame(
     text = last_user_text or ""
     slots = dict(known_slots or {})
     explicit_tire_size = normalize_tire_size(text)
-    tire_size = explicit_tire_size or slots.get("tire_size")
+    inherited_tire_size = normalize_tire_size(str(slots.get("tire_size") or ""))
+    allow_inherited_tire_size = slots.get("allow_inherited_tire_size", True)
+    tire_size = explicit_tire_size or (inherited_tire_size if allow_inherited_tire_size else None)
     products = extract_product_names(text)
     attribute_metrics = extract_product_attribute_metrics(text)
+    requested_product_attribute = str(
+        slots.get("requested_product_attribute") or extract_requested_product_attribute(text) or ""
+    ).strip()
+    oe_replacement_type = extract_oe_replacement_type(text)
     brand_codes = extract_brand_codes(text)
     variant_constraints = extract_variant_constraints(text)
     brand_cd = brand_codes[0] if brand_codes else extract_product_brand_code(text)
     quantity_options = extract_quantity_options(text)
     discovery_followup_intent = str(slots.get("discovery_followup_intent") or "").strip()
+    recent_product_set_followup_type = str(slots.get("recent_product_set_followup_type") or "").strip()
+    recent_product_set_metric = str(slots.get("recent_product_set_metric") or "").strip()
+    recent_product_set_direction = str(slots.get("recent_product_set_direction") or "").strip()
+    recent_product_set_price_basis = str(slots.get("recent_product_set_price_basis") or "").strip()
+    comparison_followup_intent = str(slots.get("comparison_followup_intent") or "").strip()
+    comparison_metric = str(slots.get("comparison_metric") or "").strip()
+    discovery_followup_action = str(slots.get("discovery_followup_action") or "").strip()
+    router_recommendation_scenario = str(slots.get("recommendation_scenario") or "").strip()
+    recommendation_context = _recommendation_context_dict(slots.get("recommendation_context"))
+    context_recommendation_scenario = str(
+        (recommendation_context or {}).get("recommendation_scenario")
+        or (recommendation_context or {}).get("scenario")
+        or ""
+    ).strip()
 
     entities: dict[str, Any] = {
         "product_names": products,
@@ -434,10 +565,47 @@ def build_discovery_intent_frame(
         "attribute_metrics": attribute_metrics,
         "claim_check_type": classify_product_claim_check_type(text),
     }
+    if requested_product_attribute in _REQUESTED_PRODUCT_ATTRIBUTES:
+        entities["requested_product_attribute"] = requested_product_attribute
+    if oe_replacement_type:
+        entities["oe_replacement_type"] = oe_replacement_type
     if quantity_options:
         entities["quantity_options"] = quantity_options
     if discovery_followup_intent == "recent_product_set_size_availability":
         entities["discovery_followup_intent"] = discovery_followup_intent
+    if recent_product_set_followup_type == "rank_recent_product_set":
+        entities["recent_product_set_followup_type"] = recent_product_set_followup_type
+    if recent_product_set_metric in {
+        "price", "noise", "wet", "snow", "release", "review", "rating", "grade", "vehicle_type", "mileage", "detail",
+    }:
+        entities["recent_product_set_metric"] = recent_product_set_metric
+    if recent_product_set_direction in {"min", "max", "match", "compare"}:
+        entities["recent_product_set_direction"] = recent_product_set_direction
+    if recent_product_set_price_basis in {"cheapest_final_prc", "extra_fvr_sale_prc", "sale_prc"}:
+        entities["recent_product_set_price_basis"] = recent_product_set_price_basis
+    if comparison_followup_intent in {
+        "continue_previous_compare_metric",
+        "new_compare_metric",
+        "generic_compare",
+    }:
+        entities["comparison_followup_intent"] = comparison_followup_intent
+    if comparison_metric in {
+        "release", "price", "grade", "mileage", "noise", "fuel_efficiency", "wet", "car_type", "detail",
+    }:
+        entities["compare_metric"] = comparison_metric
+    if discovery_followup_action == "vehicle_based_recommendation_refinement":
+        entities["discovery_followup_action"] = discovery_followup_action
+    scenario = recommendation_scenario_from_text(
+        text,
+        router_recommendation_scenario or context_recommendation_scenario,
+    )
+    if scenario is not None:
+        entities.update(recommendation_scenario_metadata(scenario))
+        entities["recommendation_scenario_tool_args_patch"] = dict(scenario.tool_args_patch)
+    if recommendation_context:
+        entities["recommendation_context"] = {
+            key: value for key, value in recommendation_context.items() if value not in (None, "")
+        }
     if len(products) >= 2:
         entities["multi_product_names"] = True
         if re.search(r"각각|둘\s*다|둘\s*모두|상품\s*정보|설명|알려", text, re.IGNORECASE):
@@ -494,21 +662,101 @@ def build_discovery_intent_frame(
         entities["default_benefit"] = True
     elif is_deal_list_request(text):
         entities["deal_list_only"] = True
+    if products and _PRODUCT_BENEFIT_LOOKUP_RE.search(text) and not _BENEFIT_STACKING_RE.search(text):
+        if _PRODUCT_EVENT_LOOKUP_RE.search(text):
+            entities["product_benefit_lookup_type"] = "event"
+        elif _PRODUCT_DEAL_LOOKUP_RE.search(text):
+            entities["product_benefit_lookup_type"] = "deal"
+        elif _PRODUCT_COUPON_LOOKUP_RE.search(text):
+            entities["product_benefit_lookup_type"] = "coupon"
+        else:
+            entities["product_benefit_lookup_type"] = "benefit"
 
     concept = bool(_CONCEPT_RE.search(text))
     standalone_attribute_metrics = tuple(
         metric for metric in attribute_metrics if metric not in ("season", "car_type")
     )
-    if (
+    if discovery_followup_action == "vehicle_based_recommendation_refinement":
+        intent = "product_recommendation"
+        sub_intent = "vehicle_based_recommendation_refinement"
+    elif (
+        oe_replacement_type
+        and (
+            tire_size
+            or products
+            or brand_cd
+        )
+    ):
+        intent = "product_search"
+        sub_intent = "oe_re_product_filter"
+    elif (
+        oe_replacement_type
+        and (
+            concept
+            or not products
+        )
+    ):
+        intent = "product_description"
+        sub_intent = "oe_re_concept_explanation"
+    elif (
         discovery_followup_intent == "recent_product_set_size_availability"
         and tire_size
         and not products
     ):
         intent = "product_search"
         sub_intent = "recent_product_set_size_availability"
+    elif recent_product_set_followup_type == "rank_recent_product_set" and recent_product_set_metric:
+        intent = "product_search"
+        sub_intent = "recent_product_set_ranking"
+    elif (
+        len(products) >= 2
+        and comparison_followup_intent == "continue_previous_compare_metric"
+        and comparison_metric in {"release", "price", "grade", "mileage", "noise", "fuel_efficiency", "wet", "car_type", "detail"}
+    ):
+        intent = "product_comparison"
+        sub_intent = (
+            "latest_compare"
+            if comparison_metric == "release"
+            else "grade_compare"
+            if comparison_metric == "grade"
+            else "mileage_compare"
+            if comparison_metric == "mileage"
+            else "attribute_compare"
+        )
+    elif (
+        len(products) >= 2
+        and comparison_followup_intent == "new_compare_metric"
+        and comparison_metric in {"release", "price", "grade", "mileage", "noise", "fuel_efficiency", "wet", "car_type", "detail"}
+    ):
+        intent = "product_comparison"
+        sub_intent = (
+            "latest_compare"
+            if comparison_metric == "release"
+            else "grade_compare"
+            if comparison_metric == "grade"
+            else "mileage_compare"
+            if comparison_metric == "mileage"
+            else "attribute_compare"
+        )
+    elif len(products) >= 2 and comparison_followup_intent == "generic_compare":
+        intent = "product_comparison"
+        sub_intent = "general_compare"
+        entities.setdefault("compare_metric", "detail")
     elif entities.get("external_price_comparison"):
         intent = "product_search"
         sub_intent = "external_price_comparison_request"
+    elif entities.get("product_benefit_lookup_type") == "event":
+        intent = "product_search"
+        sub_intent = "product_event_lookup"
+    elif entities.get("product_benefit_lookup_type") == "deal":
+        intent = "product_search"
+        sub_intent = "product_deal_lookup"
+    elif entities.get("product_benefit_lookup_type") == "coupon":
+        intent = "product_search"
+        sub_intent = "product_coupon_lookup"
+    elif entities.get("product_benefit_lookup_type") == "benefit":
+        intent = "product_search"
+        sub_intent = "product_benefit_lookup"
     elif entities.get("default_benefit"):
         intent = "product_search"
         sub_intent = "benefit_event_deal_list"
@@ -564,6 +812,9 @@ def build_discovery_intent_frame(
     elif concept and _WINTER_RE.search(text) and _ALL_SEASON_RE.search(text):
         intent = "product_description"
         sub_intent = "season_concept_compare"
+    elif requested_product_attribute and products:
+        intent = "product_description"
+        sub_intent = "product_attribute_lookup"
     elif attribute_metrics and products:
         intent = "product_description"
         sub_intent = "product_attribute_lookup"
@@ -589,6 +840,7 @@ def build_discovery_intent_frame(
         or _SAFE_SERVICE_RE.search(text)
         or _PERFORMANCE_RE.search(text)
         or _LOWEST_PRICE_RE.search(text)
+        or scenario is not None
     ):
         intent = "product_recommendation"
         sub_intent = "condition_recommendation"
@@ -610,10 +862,20 @@ def build_discovery_intent_frame(
         sub_intent = "general_recommendation"
 
     missing_slots: tuple[str, ...] = ()
-    if intent == "product_recommendation" and not tire_size and entities.get("price_goal") == "lowest":
+    if (
+        intent == "product_recommendation"
+        and not tire_size
+        and discovery_followup_action == "vehicle_based_recommendation_refinement"
+    ):
+        missing_slots = ("tire_size",)
+    elif intent == "product_recommendation" and not tire_size and entities.get("price_goal") == "lowest":
         missing_slots = ("tire_size",)
     elif sub_intent == "quantity_benefit_comparison" and not tire_size and not slots.get("goods_no"):
         missing_slots = ("tire_size",)
+
+    if sub_intent == "grade_compare":
+        products = _reorder_grade_compare_products(text, products)
+        entities["product_names"] = products
 
     return IntentFrame(
         domain=PolicyDomain.DISCOVERY,
@@ -628,6 +890,21 @@ def build_discovery_intent_frame(
 
 def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
     entities = frame.entities
+    if frame.sub_intent == "oe_re_product_filter":
+        args = {"limit": 10}
+        product_names = entities.get("product_names") or ()
+        if product_names:
+            args["keyword"] = product_names[0]
+        if entities.get("tire_size"):
+            args["size"] = entities["tire_size"]
+        if entities.get("brand_cd"):
+            args["brand_cd"] = entities["brand_cd"]
+        return ToolPlan(
+            allowed_tools=("search_product_tool",),
+            preferred_tool="search_product_tool",
+            tool_args_patch=args,
+            forbidden_tools=("get_products_recommendations_tool",),
+        )
     if frame.sub_intent == "recent_product_set_size_availability":
         return ToolPlan(
             forbidden_tools=(
@@ -636,6 +913,19 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
                 "get_products_recommendations_tool",
             ),
             metadata={"response_intent": "recent_product_set_size_availability"},
+        )
+    if frame.sub_intent == "recent_product_set_ranking":
+        return ToolPlan(
+            forbidden_tools=(
+                "search_product_tool",
+                "get_product_description_tool",
+                "get_products_recommendations_tool",
+            ),
+            metadata={
+                "response_intent": "recent_product_set_ranking",
+                "metric": entities.get("recent_product_set_metric"),
+                "direction": entities.get("recent_product_set_direction"),
+            },
         )
     if frame.sub_intent == "external_price_comparison_request":
         product_names = entities.get("product_names") or ()
@@ -670,6 +960,43 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             preferred_tool="get_deals_tool",
             tool_args_patch={},
             forbidden_tools=("get_events_tool", "get_my_coupons_tool"),
+        )
+    if frame.sub_intent in {
+        "product_event_lookup",
+        "product_deal_lookup",
+        "product_coupon_lookup",
+        "product_benefit_lookup",
+    }:
+        product_names = entities.get("product_names") or ()
+        args: dict[str, Any] = {}
+        if product_names:
+            args["keyword"] = product_names[0]
+        if entities.get("brand_cd"):
+            args["brand_cd"] = entities["brand_cd"]
+        if entities.get("tire_size"):
+            args["size"] = entities["tire_size"]
+        return ToolPlan(
+            allowed_tools=(
+                "search_product_tool",
+                "get_product_applicable_events_tool",
+                "get_product_promotions_tool",
+                "get_events_tool",
+                "get_deals_tool",
+            ),
+            preferred_tool="search_product_tool",
+            tool_args_patch=args,
+            forbidden_tools=(
+                "get_products_recommendations_tool",
+                "get_product_description_tool",
+                "quick_order_tool",
+                "transaction_store_preview_tool",
+                "get_store_schedule_tool",
+            ),
+            metadata={
+                "response_intent": frame.sub_intent,
+                "goal_type": "product_event_lookup",
+                "benefit_lookup_type": entities.get("product_benefit_lookup_type"),
+            },
         )
     if frame.sub_intent == "best_seller_search":
         args = {"period": entities.get("best_seller_period") or "3months", "limit": 5}
@@ -745,10 +1072,10 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             if entities.get("brand_cd"):
                 args["brand_cd"] = entities["brand_cd"]
         return ToolPlan(
-            allowed_tools=("search_product_tool", "get_products_recommendations_tool"),
+            allowed_tools=("search_product_tool", "get_product_description_tool"),
             preferred_tool="search_product_tool",
             tool_args_patch=args,
-            forbidden_tools=("product_card_first_response",),
+            forbidden_tools=("get_products_recommendations_tool", "product_card_first_response"),
         )
     if entities.get("technology") == "sound_absorber":
         args = {"rcmd_type": "sound_absorber"}
@@ -772,33 +1099,33 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             tool_args_patch=args,
             forbidden_tools=("generic_unsized_recommendation",),
         )
-    args = {}
+    args = dict(entities.get("recommendation_scenario_tool_args_patch") or {})
     if entities.get("vehicle_category"):
-        args["vehicle_type"] = entities["vehicle_category"]
-    if entities.get("quiet_focus"):
+        args.setdefault("vehicle_type", entities["vehicle_category"])
+    if entities.get("quiet_focus") and "rcmd_type" not in args:
         args["rcmd_type"] = "low_vibration"
-    elif entities.get("value_focus"):
+    elif entities.get("value_focus") and "rcmd_type" not in args:
         args["rcmd_type"] = "value"
-    elif entities.get("recommendation_metric") == "fuel_efficiency":
+    elif entities.get("recommendation_metric") == "fuel_efficiency" and "rcmd_type" not in args:
         args["rcmd_type"] = "fuel_efficiency"
-    elif entities.get("performance") == "performance":
+    elif entities.get("performance") == "performance" and "rcmd_type" not in args:
         args["rcmd_type"] = "performance"
-    if entities.get("season") == "winter":
+    if entities.get("season") == "winter" and not entities.get("recommendation_scenario"):
         if args.get("rcmd_type"):
             args["season_nm"] = "겨울"
         else:
             args.update({"rcmd_type": "snow", "season_nm": "겨울"})
-    elif entities.get("season") == "all_weather":
+    elif entities.get("season") == "all_weather" and not entities.get("recommendation_scenario"):
         if args.get("rcmd_type"):
             args["season_nm"] = "올웨더"
         else:
             args.update({"rcmd_type": "all_weather", "season_nm": "올웨더"})
-    elif entities.get("season") == "all_season":
+    elif entities.get("season") == "all_season" and not entities.get("recommendation_scenario"):
         if args.get("rcmd_type"):
             args["season_nm"] = "사계절"
         else:
             args.update({"rcmd_type": "all_weather", "season_nm": "사계절"})
-    elif entities.get("season") == "summer":
+    elif entities.get("season") == "summer" and not entities.get("recommendation_scenario"):
         args["season_nm"] = "여름"
     if entities.get("explicit_tire_size") or entities.get("price_goal") != "similar_range":
         if entities.get("tire_size"):
@@ -807,8 +1134,38 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
         args["sort_by"] = "price_asc"
     if entities.get("brand_cd"):
         args["brand_cd"] = entities["brand_cd"]
+        if frame.intent == "product_recommendation":
+            args["allow_cross_brand_fill"] = False
+    allowed_tools = ("get_products_recommendations_tool",)
+    required_slots: tuple[str, ...] = ()
+    metadata: dict[str, Any] = {
+        key: entities[key]
+        for key in (
+            "recommendation_scenario",
+            "recommendation_scenario_label",
+            "applied_rcmd_type",
+            "applied_vehicle_type",
+            "applied_season_nm",
+            "approximation",
+            "approximation_basis",
+        )
+        if key in entities
+    }
+    if metadata:
+        metadata["response_intent"] = "catalog_recommendation"
+        metadata["forbidden_behaviors"] = (
+            "drop_recommendation_scenario",
+            "claim_unsupported_scenario_as_exact",
+        )
+        metadata["recommendation_expected_tool_args"] = _recommendation_expected_tool_args(args)
+    if entities.get("discovery_followup_action") == "vehicle_based_recommendation_refinement":
+        allowed_tools = ("get_my_cars_tool", "get_products_recommendations_tool")
+        required_slots = ("tire_size",)
+        metadata = {**metadata, "response_intent": "vehicle_based_recommendation_refinement"}
     return ToolPlan(
-        allowed_tools=("get_products_recommendations_tool",),
+        allowed_tools=allowed_tools,
         preferred_tool="get_products_recommendations_tool",
         tool_args_patch=args,
+        required_slots=required_slots,
+        metadata=metadata,
     )

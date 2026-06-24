@@ -13,7 +13,11 @@ _EXPIRED_COUPON_RE = re.compile(r"만료|끝난|종료|원복|복구|다시\s*�
 _COUPON_RE = re.compile(r"쿠폰|할인권|혜택", re.IGNORECASE)
 _NONEXISTENT_BENEFIT_RE = re.compile(r"T\s*블랙|블랙\s*멤버십|VIP|브이아이피|블랙\s*카드|50\s*%", re.IGNORECASE)
 _HUMAN_RE = re.compile(r"상담원|사람\s*상담|고객센터|전화번호|연결", re.IGNORECASE)
-_PERSONAL_CONTACT_RE = re.compile(r"개인\s*(?:핸드폰|전화|연락처)|담당자\s*연락처|관리자\s*번호", re.IGNORECASE)
+_PERSONAL_CONTACT_RE = re.compile(
+    r"개인\s*(?:핸드폰|휴대폰|전화|번호|연락처)"
+    r"|(?:담당자|관리자|직원|사장님|매니저|점장).{0,16}(?:개인\s*)?(?:연락처|번호|전화번호|휴대폰|핸드폰)",
+    re.IGNORECASE,
+)
 _TPMS_RE = re.compile(
     r"TPMS|공기압\s*경고등|공기압\s*점검등|타이어압력모니터링"
     r"|경고등.*안\s*꺼|안\s*꺼.*경고등|경고등.*꺼지지|경고등.*계속",
@@ -22,6 +26,12 @@ _TPMS_RE = re.compile(
 _TIRE_STORAGE_RE = re.compile(
     r"보관\s*서비스|맡긴\s*타이어|타이어\s*보관|보관\s*이력"
     r"|보관\s*중.*(?:분실|없어|훼손|파손)|맡겨\s*놓은|보관.*확인",
+    re.IGNORECASE,
+)
+_STORE_SERVICE_AVAILABILITY_RE = re.compile(
+    r"보관\s*서비스.{0,20}(?:가능|돼|되|하나|해)|"
+    r"(?:윈터|겨울)?\s*타이어\s*보관.{0,20}(?:가능|돼|되|하나|해)|"
+    r"보관\s*(?:돼|되|가능|되나요|가능해)|질소\s*충전|질소|얼라인먼트.{0,12}(?:잘|무료|가능)",
     re.IGNORECASE,
 )
 _TPMS_SAFETY_RISK_RE = re.compile(
@@ -97,6 +107,42 @@ def decide_support_response(
             ),
         )
 
+    if intent == "store_service_availability" or _STORE_SERVICE_AVAILABILITY_RE.search(text):
+        return _decision(
+            response_shape_key="store_service_availability",
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=("claim_unverified_store_service_available", "show_datepick_for_store_service"),
+            assistant_guidance=(
+                "매장별 서비스 운영 여부는 확정 단정하지 말고 매장별로 다를 수 있음을 안내한다. "
+                "매장명이 있으면 그 매장 기준 직접 확인을 권장하고, 매장명이 없으면 어느 매장 기준인지 확인한다."
+            ),
+        )
+
+    if intent == "my_goods_review_lookup":
+        return _decision(
+            response_shape_key="my_goods_review_lookup",
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=("omit_goods_review_cta", "route_goods_review_to_store_service_history"),
+            assistant_guidance=(
+                "내가 쓴 상품 리뷰/구매후기/베스트리뷰 선정 여부 확인 경로는 마이페이지 > 리뷰관리만 안내한다. "
+                "GOODS_REVIEW CTA가 첫 번째 quickReply가 아니면 보정 대상이다."
+            ),
+        )
+
+    if intent in {"store_service_review_write", "store_review_write"}:
+        return _decision(
+            response_shape_key="store_service_review_write",
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=("omit_store_service_history_cta", "invent_external_review_path"),
+            assistant_guidance=(
+                "매장 리뷰/후기/칭찬/별점 작성 경로는 마이페이지 > 매장서비스 내역만 안내한다. "
+                "STORE_SERVICE_HISTORY CTA가 첫 번째 quickReply가 아니면 보정 대상이다."
+            ),
+        )
+
     if intent == "tire_storage_service" or _TIRE_STORAGE_RE.search(text):
         return _decision(
             response_shape_key="keep_service_hist_cta",
@@ -110,15 +156,6 @@ def decide_support_response(
             ),
         )
 
-    if intent == "human_escalation" or _HUMAN_RE.search(text):
-        return _decision(
-            response_shape_key="human_escalation",
-            response_shape=ResponseShape.ACTION_CONFIRM,
-            template=TemplateName.QNA_COMPLETE,
-            forbidden_behaviors=("overpromise_live_agent", "hide_official_contact"),
-            assistant_guidance="챗봇 처리 한계를 인정하고 1:1 문의 또는 공식 고객센터 번호 안내로 연결한다.",
-        )
-
     if intent == "personal_contact" or _PERSONAL_CONTACT_RE.search(text):
         return _decision(
             response_shape_key="personal_contact_denied",
@@ -126,6 +163,15 @@ def decide_support_response(
             template=TemplateName.QUICK_REPLY,
             forbidden_behaviors=("share_personal_contact", "invent_staff_contact"),
             assistant_guidance="개인 연락처는 제공할 수 없으며 공식 고객센터 또는 1:1 문의 경로만 안내한다.",
+        )
+
+    if intent == "human_escalation" or _HUMAN_RE.search(text):
+        return _decision(
+            response_shape_key="human_escalation",
+            response_shape=ResponseShape.ACTION_CONFIRM,
+            template=TemplateName.QNA_COMPLETE,
+            forbidden_behaviors=("overpromise_live_agent", "hide_official_contact"),
+            assistant_guidance="챗봇 처리 한계를 인정하고 1:1 문의 또는 공식 고객센터 번호 안내로 연결한다.",
         )
 
     if slots.get("qna_required"):

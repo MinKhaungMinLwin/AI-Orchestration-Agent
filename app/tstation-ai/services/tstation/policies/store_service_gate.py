@@ -53,6 +53,14 @@ STORE_REVIEW_UNAVAILABLE_TEXT_RE = re.compile(
 )
 
 _UNVERIFIABLE_STORE_PREFERENCE_RULES: tuple[tuple[re.Pattern[str], str], ...] = (
+    (
+        re.compile(
+            r"보관\s*서비스|타이어\s*보관|윈터\s*타이어\s*보관|겨울\s*타이어\s*보관|"
+            r"보관\s*(?:돼|되|가능|해\s*줘|되나요|가능해)",
+            re.IGNORECASE,
+        ),
+        "타이어 보관 서비스 운영 여부",
+    ),
     (re.compile(r"리프트|대형\s*리프트|차량용\s*리프트", re.IGNORECASE), "리프트 보유 여부"),
     (re.compile(r"질소\s*충전|질소", re.IGNORECASE), "질소 충전 여부"),
     (re.compile(r"대기\s*공간|대기실|라운지|휴게실|대기\s*환경", re.IGNORECASE), "대기 공간"),

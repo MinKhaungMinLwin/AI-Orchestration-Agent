@@ -22,12 +22,24 @@ with real values from tool outputs before emitting the chip JSON.
 from __future__ import annotations
 
 from typing import Final, Mapping
+from urllib.parse import urlparse, urlunparse
 
 from config.env import settings
+from services.tstation.common.tstation_be_client import get_tstation_origin_host
 
 
 _PC: Final[str] = settings.TSTATION_WEB_PC_BASE.rstrip("/")
 _MOBILE: Final[str] = settings.TSTATION_WEB_MOBILE_BASE.rstrip("/")
+_TSTATION_CTA_HOSTS: Final[set[str]] = {
+    "wwwqa.tstation.com",
+    "mqa.tstation.com",
+    "bizqa.tstation.com",
+    "mbiz.tstation.com",
+    "www.tstation.com",
+    "m.tstation.com",
+    "biz.tstation.com",
+    "mbiz.tstation.com",
+}
 
 
 class CTAUrls:
@@ -41,6 +53,7 @@ class CTAUrls:
     CART: Final[str] = f"{_PC}/cart"
     ORDER_HISTORY: Final[str] = f"{_PC}/mypage/tstation/order-history"
     STORE_SERVICE_HISTORY: Final[str] = f"{_PC}/mypage/tstation/custservice/carservice-hist"
+    GOODS_REVIEW: Final[str] = f"{_PC}/mypage/activity/goods-review"
     KEEP_SERVICE_HIST: Final[str] = f"{_PC}/mypage/tstation/custservice/keepservice-hist"
     PROMOTION_EVENT_LIST: Final[str] = f"{_PC}/promotion/event-list"
     PROMOTION_PAST_EVENT_LIST: Final[str] = f"{_PC}/promotion/past-event-list"
@@ -67,6 +80,7 @@ _SENTINEL_MAP: Mapping[str, str] = {
     "__URL_ORDER_HISTORY_DETAIL__": CTAUrls.ORDER_HISTORY_DETAIL,
     "__URL_STORE_DETAIL__": CTAUrls.STORE_DETAIL,
     "__URL_STORE_SERVICE_HISTORY__": CTAUrls.STORE_SERVICE_HISTORY,
+    "__URL_GOODS_REVIEW__": CTAUrls.GOODS_REVIEW,
     "__URL_KEEP_SERVICE_HIST__": CTAUrls.KEEP_SERVICE_HIST,
     "__URL_PROMOTION_EVENT_LIST__": CTAUrls.PROMOTION_EVENT_LIST,
     "__URL_PROMOTION_PAST_EVENT_LIST__": CTAUrls.PROMOTION_PAST_EVENT_LIST,
@@ -91,3 +105,19 @@ def expand_url_sentinels(text: str) -> str:
     for sentinel, url in _SENTINEL_MAP.items():
         text = text.replace(sentinel, url)
     return text
+
+
+def rebase_tstation_url_to_origin(url: str | None) -> str:
+    """Move known T-Station absolute URLs to the current request origin host."""
+    raw = str(url or "").strip()
+    if not raw:
+        return ""
+    origin_host = str(get_tstation_origin_host() or "").strip().lower()
+    if not origin_host:
+        return raw
+    parsed = urlparse(raw)
+    if parsed.scheme not in {"http", "https"}:
+        return raw
+    if (parsed.hostname or "").lower() not in _TSTATION_CTA_HOSTS:
+        return raw
+    return urlunparse(parsed._replace(scheme="https", netloc=origin_host))

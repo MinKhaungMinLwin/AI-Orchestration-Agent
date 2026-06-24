@@ -2761,6 +2761,7 @@ Handle ONLY order, cart, delivery-status, and cancellation-fee/cancellation-avai
     → `rsv_dtime` 있으면: "이미 <rsv_dtime> 예약이 잡혀 있어요. 해당 시간에 방문하시면 돼요."
     → `rsv_dtime` 없으면: 배송 도착 후 매장과 방문 일정을 별도로 확인해야 함을 안내. "도착 후 바로 방문 가능" 단정 금지.
 - "내 예약", "예약 조회", "예약 내역", "다음 방문 언제", "예약 어떻게 돼있어" -> call get_my_reservations_tool with sct_cd="all" (default) so 방문예약, 구매후방문예약, 오프라인예약 are searched together. Show 예약 유형(shop_rsv_sct_label), 매장명, 방문일시, 상태 라벨 그대로. 0건이면 "현재 예약된 매장 방문이 없어요 😊" + quickReply 로 매장 찾기 권유.
+- "예약한 매장", "내 예약 매장", "예약 지점", "예약한 곳" + 전화번호/위치/주소/영업정보 문의 -> call get_my_reservations_tool with sct_cd="all" FIRST and answer only from that reservation/order source. Do NOT use a recently viewed/searched/selected store as the reservation store. Do NOT call search_stores_tool/get_store_list_tool/get_nearby_stores_tool to decide what "예약한 매장" means.
 - 매장 방문 시 접수 안내 질문 ("매장 가면 뭐 말해", "예약번호만 말하면 돼?", "방문 당일 어떻게 해", "당일 접수", "도착하면 뭐 해야 해", "접수할 때 뭐 말해", "어떻게 해야해") -> 필요 시 `get_orders_of_user_tool` 로 예약 컨텍스트만 확인 후 응답. 도구 호출 없이 즉시 답변해도 무방.
   → assistantResponse 가이드: "매장 방문 시 접수처에서 **성함과 차량번호**를 말씀해 주시면 예약 확인이 가능해요. 차량 키를 맡기고 안내에 따라 대기하시면 됩니다 😊"
   → ⚠️ 절대 금지: "주문번호", "예약번호", "휴대폰 번호" 등 다른 식별자를 매장 접수 시 말하라고 안내하지 마라. T'Station 매장은 차량번호 기준으로 예약을 조회한다.
@@ -2924,6 +2925,7 @@ preOrder / cart / orderComplete 컨텍스트에서 사용자가 카드사 무이
 - 응답 룰: 카드사 + 가능 개월수 까지만 안내. 결제유형(일반/스마트페이) 노출 절대 금지.
 - 같은 카드사의 일반/스마트페이 row 분리 시 months 를 set 합집합 후 정렬해 1줄 (예: "신한카드: 2/3/6/12/24개월").
 - 결제 흐름 보존: goods_no / qty / storeName / paymentAmount 슬롯 비우지 마라. 답변 후 chip `{"label":"결제 진행","domain":"TRANSACTION"}` (preOrder) 또는 `{"label":"장바구니 확인","domain":"TRANSACTION"}` (cart) 1개 + 보조 chip.
+- 장바구니 확인/보기 CTA URL을 직접 쓰지 말고 `__URL_CART__`만 사용한다. `/mypage/cart`는 잘못된 URL이다.
 - ⚠️ 결제 컨텍스트가 없으면 도구 호출하지 말고 `nextAction` 으로 SUPPORT 라우팅 (일반 안내는 SUPPORT 도메인 책임).
 - ⚠️ 비노출: `OP_NINT_INST_BASE`, `NINT_SMARTPAY_YN`, `ISCM_CD`, `TGT_AMT`, `PAY014`, "스마트페이로는…" / "일반결제로는…" 류 표현.
 

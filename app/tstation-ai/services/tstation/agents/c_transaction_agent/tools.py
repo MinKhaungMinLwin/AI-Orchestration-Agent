@@ -1889,6 +1889,9 @@ def transaction_store_preview_tool(
     store_nm: str | None = None,
     user_xpos: float | None = None,
     user_ypos: float | None = None,
+    radius_km: float | None = None,
+    exclude_shop_ids: List[str] | None = None,
+    stock_check_mode: str | None = None,
     include_price: bool = True,
     svc_codes: List[str] | None = None,
     all_my_t_only: bool = False,
@@ -1911,6 +1914,7 @@ def transaction_store_preview_tool(
             "store_nm": store_nm,
             "user_xpos": user_xpos,
             "user_ypos": user_ypos,
+            "radius_km": radius_km,
             "requested_cal_day": requested_cal_day,
         }
         goods_no, ord_qty, region_code, store_nm, user_xpos, user_ypos = _apply_store_preview_policy_patch(
@@ -1935,14 +1939,15 @@ def transaction_store_preview_tool(
                 "store_nm": store_nm,
                 "user_xpos": user_xpos,
                 "user_ypos": user_ypos,
+                "radius_km": radius_km,
                 "requested_cal_day": requested_cal_day,
             },
         )
 
     logger.debug(
         "[TOOL][transaction_store_preview_tool] Called with: goods_no=%s, ord_qty=%s, region_code=%s, "
-        "store_nm=%s, user_xpos=%s, user_ypos=%s, include_price=%s",
-        goods_no, ord_qty, region_code, store_nm, user_xpos, user_ypos, include_price,
+        "store_nm=%s, user_xpos=%s, user_ypos=%s, radius_km=%s, include_price=%s, stock_check_mode=%s",
+        goods_no, ord_qty, region_code, store_nm, user_xpos, user_ypos, radius_km, include_price, stock_check_mode,
     )
 
     if not goods_no or ord_qty is None or ord_qty < 1:
@@ -1961,13 +1966,14 @@ def transaction_store_preview_tool(
 
     if store_nm:
         store_nm = normalize_brand_name(store_nm)
+    effective_radius_km = float(radius_km or 10.0)
 
     if user_xpos is not None and user_ypos is not None:
         store_response = get_store_list(
             client=get_client(),
             xpos=user_xpos,
             ypos=user_ypos,
-            radius_km=10.0,
+            radius_km=effective_radius_km,
             svc_codes=svc_codes,
             all_my_t_only=all_my_t_only,
             imported_car_only=imported_car_only,
@@ -2022,7 +2028,7 @@ def transaction_store_preview_tool(
                         client=get_client(),
                         xpos=found_xpos,
                         ypos=found_ypos,
-                        radius_km=10.0,
+                        radius_km=effective_radius_km,
                         svc_codes=svc_codes,
                         all_my_t_only=all_my_t_only,
                         imported_car_only=imported_car_only,
@@ -2053,6 +2059,9 @@ def transaction_store_preview_tool(
                     }
     if has_region and not has_store and not has_coords and place_fallback is None:
         stores = _filter_stores_by_preferred_region_address(region_code, stores)
+    excluded_shop_ids = {str(shop_id).strip() for shop_id in (exclude_shop_ids or []) if str(shop_id).strip()}
+    if excluded_shop_ids:
+        stores = [store for store in stores if _shop_id(store) not in excluded_shop_ids]
 
     # store_nm 으로 검색했는데 결과가 0건/exact 분점명 미일치인 경우 결정적 guard 적용.
     # 이게 없으면 LLM 이 silent "No store candidates found" 만 받고 generic 응답을
