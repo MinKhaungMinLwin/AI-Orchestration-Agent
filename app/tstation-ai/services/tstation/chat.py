@@ -115,6 +115,7 @@ from services.tstation.policies.store_confirmation_policy import (
     resolve_store_followup_from_quickreply_template,
 )
 from services.tstation.policies.store_service_gate import (
+    StoreAttributeInquiry,
     decide_store_service_gate,
     extract_store_attribute_inquiry,
     is_store_detail_page_cta_text,
@@ -807,6 +808,7 @@ _ROUTER_PROTECTED_ACTIONS = frozenset({
     "order",
     "cancel",
     "order_history",
+    "store_selection",
     "store_schedule",
     "store_visit_advisory",
 })
@@ -1282,6 +1284,71 @@ def _mark_router_override_blocked(
         routing_result.original_router_execution_plan = list(previous_execution_plan)
     routing_result.override_blocked = True
     routing_result.blocked_override_reason = "conflicts_with_high_confidence_router_contract"
+
+
+def _is_transaction_store_selection_plan(execution_plan: list[str] | tuple[str, ...] | None) -> bool:
+    return any(str(item or "").strip().lower() == "transaction:store_selection" for item in (execution_plan or ()))
+
+
+def _restore_blocked_transaction_store_selection_contract(
+    routing_result: MultiAgentDomain | None,
+) -> list[MultiAgentDomain.Domain] | None:
+    if routing_result is None or not bool(getattr(routing_result, "override_blocked", False)):
+        return None
+    original_domains = list(getattr(routing_result, "original_router_domains", []) or [])
+    original_execution_plan = list(getattr(routing_result, "original_router_execution_plan", []) or [])
+    if MultiAgentDomain.Domain.TRANSACTION not in original_domains:
+        return None
+    if not _is_transaction_store_selection_plan(original_execution_plan):
+        return None
+
+    restored_domains = [MultiAgentDomain.Domain.TRANSACTION]
+    routing_result.domains = restored_domains
+    routing_result.execution_plan = original_execution_plan
+    routing_result.policy_intent = "none"
+    routing_result.agent_prompt_profile = AgentPromptProfile.TRANSACTION_STORE
+    routing_result.override_blocked = False
+    routing_result.blocked_override_reason = "none"
+    routing_result.override_applied = True
+    routing_result.override_reason = "restore_original_transaction_store_selection"
+    return restored_domains
+
+
+def _store_attribute_selection_continuation_inquiry(
+    *,
+    user_text: str,
+    messages: list[dict],
+    store_name: str,
+    routing_result: MultiAgentDomain | None,
+) -> StoreAttributeInquiry | None:
+    if not store_name or routing_result is None:
+        return None
+    if not _is_transaction_store_selection_plan(getattr(routing_result, "execution_plan", None)):
+        return None
+    current = str(user_text or "").strip()
+    for msg in reversed(messages or []):
+        if msg.get("role") != "user":
+            continue
+        content = StreamingMultiAgentCoordinator._extract_current_user_input(str(msg.get("content") or ""))
+        if not content or content.strip() == current:
+            continue
+        inquiry = extract_store_attribute_inquiry(content, store_name=store_name)
+        if inquiry is not None:
+            return inquiry
+        labels = unverifiable_store_preference_labels(content)
+        if labels:
+            attribute_text = labels[0]
+            for suffix in (" 운영 여부", " 여부"):
+                if attribute_text.endswith(suffix):
+                    attribute_text = attribute_text[: -len(suffix)].strip()
+                    break
+            return StoreAttributeInquiry(
+                store_name=store_name,
+                attribute_text=attribute_text or labels[0],
+                attribute_type="operating_condition" if "야간" in attribute_text or "퇴근" in attribute_text else "service",
+                verification_level="store_contact_required",
+            )
+    return None
 
 
 def _promote_completed_speculative_router_contract(
@@ -22606,6 +22673,15 @@ class TStationChatServiceV2:
         except Exception:
             logger.exception("[POLICY][cross-domain] Failed to normalize route")
 
+        restored_store_selection_domains = _restore_blocked_transaction_store_selection_contract(routing_result)
+        if restored_store_selection_domains is not None:
+            domains = restored_store_selection_domains
+            logger.info(
+                "[ROUTER_CONTRACT] restored blocked transaction store_selection contract: domains=%s plan=%s",
+                [domain.value for domain in domains],
+                list(getattr(routing_result, "execution_plan", []) or []),
+            )
+
         # Publish the active goal_type to the request-scoped ContextVar consumed
         # by template_mapper. This lets _map_location / _map_product set
         # isBookingFlow=True when a downstream tool call (inventory / price /
@@ -24145,23 +24221,43 @@ class TStationChatServiceV2:
                     or ""
                 ).strip()
             inquiry = extract_store_attribute_inquiry(user_query, store_name=slot_store_name or None)
+            current_store_name = _extract_plain_store_info_store_name(user_query)
+            continuation_inquiry = _store_attribute_selection_continuation_inquiry(
+                user_text=user_query,
+                messages=messages,
+                store_name=str(router_store_name or current_store_name or slot_store_name or "").strip(),
+                routing_result=routing_result,
+            )
             labels = unverifiable_store_preference_labels(user_query)
             if (
                 router_policy_intent != "store_attribute_inquiry"
                 and inquiry is None
+                and continuation_inquiry is None
                 and not (slot_store_name and labels)
             ):
                 return None
             store_name = str(
                 router_store_name
                 or (inquiry.store_name if inquiry is not None else "")
+                or (continuation_inquiry.store_name if continuation_inquiry is not None else "")
+                or current_store_name
                 or slot_store_name
                 or ""
             ).strip()
-            attribute_text = router_attribute_text or (inquiry.attribute_text if inquiry is not None else "")
-            attribute_type = router_attribute_type or (inquiry.attribute_type if inquiry is not None else "")
+            attribute_text = (
+                router_attribute_text
+                or (inquiry.attribute_text if inquiry is not None else "")
+                or (continuation_inquiry.attribute_text if continuation_inquiry is not None else "")
+            )
+            attribute_type = (
+                router_attribute_type
+                or (inquiry.attribute_type if inquiry is not None else "")
+                or (continuation_inquiry.attribute_type if continuation_inquiry is not None else "")
+            )
             verification_level = router_verification_level or (
                 inquiry.verification_level if inquiry is not None else ""
+            ) or (
+                continuation_inquiry.verification_level if continuation_inquiry is not None else ""
             )
             if not store_name:
                 event = _store_attribute_inquiry_event(

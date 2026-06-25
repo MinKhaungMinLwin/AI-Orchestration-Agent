@@ -179,9 +179,11 @@ from services.tstation.chat import (
     _response_shape_key_for_source_domain,
     _has_current_turn_p0_auto_chain_anchor,
     _promote_completed_speculative_router_contract,
+    _restore_blocked_transaction_store_selection_contract,
     _router_contract_is_high_confidence_comparison,
     _router_contract_is_high_confidence_policy,
     _router_contract_is_high_confidence_transaction_flow,
+    _store_attribute_selection_continuation_inquiry,
     _should_preserve_router_contract,
     _is_product_attribute_lookup_query,
     _should_apply_product_attribute_resolver,
@@ -15606,6 +15608,71 @@ def test_store_attribute_inquiry_cross_domain_plan_does_not_override_router_to_s
         "store_attribute_contact_notice",
     ]
     assert plan.response_strategy == "transaction_store_info_then_attribute_notice"
+
+
+def test_blocked_transaction_store_selection_contract_is_restored() -> None:
+    routing = chat_module.MultiAgentDomain(
+        reason="support policy overrode store selection",
+        domains=[chat_module.MultiAgentDomain.Domain.SUPPORT],
+        execution_plan=["support:store_service_availability"],
+        user_behavior="answering stale night-maintenance availability",
+        flow="support policy",
+        claim_check_type="none",
+        complaint_scope="none",
+        policy_intent="store_service_availability",
+        planner_confidence=1.0,
+        needs_clarification=False,
+        override_blocked=True,
+        blocked_override_reason="preserve original router contract",
+        original_router_domains=[chat_module.MultiAgentDomain.Domain.TRANSACTION],
+        original_router_execution_plan=["transaction:store_selection"],
+        agent_prompt_profile=chat_module.AgentPromptProfile.FULL,
+    )
+
+    restored = _restore_blocked_transaction_store_selection_contract(routing)
+
+    assert restored == [chat_module.MultiAgentDomain.Domain.TRANSACTION]
+    assert routing.domains == [chat_module.MultiAgentDomain.Domain.TRANSACTION]
+    assert routing.execution_plan == ["transaction:store_selection"]
+    assert routing.agent_prompt_profile == chat_module.AgentPromptProfile.TRANSACTION_STORE
+    assert routing.policy_intent == "none"
+    assert routing.override_blocked is False
+
+
+def test_store_selection_continues_previous_store_attribute_inquiry() -> None:
+    routing = chat_module.MultiAgentDomain(
+        reason="store selection",
+        domains=[chat_module.MultiAgentDomain.Domain.TRANSACTION],
+        execution_plan=["transaction:store_selection"],
+        user_behavior="selecting one store from prior ambiguous candidates",
+        flow="store selection",
+        claim_check_type="none",
+        complaint_scope="none",
+        policy_intent="none",
+        planner_confidence=0.95,
+        needs_clarification=False,
+        agent_prompt_profile=chat_module.AgentPromptProfile.TRANSACTION_STORE,
+    )
+
+    inquiry = _store_attribute_selection_continuation_inquiry(
+        user_text="티스테이션 분당정자점",
+        messages=[
+            {"role": "user", "content": "야간정비도 가능한가요? 티스테이션 정자점"},
+            {
+                "role": "assistant",
+                "content": "분당정자점과 수원정자점 중 원하시는 매장이 있나요?",
+            },
+            {"role": "user", "content": "티스테이션 분당정자점"},
+        ],
+        store_name="분당정자점",
+        routing_result=routing,
+    )
+
+    assert inquiry is not None
+    assert inquiry.store_name == "분당정자점"
+    assert inquiry.attribute_text == "야간정비"
+    assert inquiry.attribute_type == "operating_condition"
+    assert inquiry.verification_level == "store_contact_required"
 
 
 def test_store_attribute_inquiry_checks_service_codes_before_answering() -> None:
