@@ -350,6 +350,8 @@ from services.tstation.template_mapper import (
 from services.tstation.policies.discovery_intent_policy import (
     best_seller_period_from_text,
     build_discovery_intent_frame,
+    extract_product_family_names,
+    extract_product_names,
     is_best_seller_request,
     plan_discovery_tools,
 )
@@ -3003,6 +3005,57 @@ def test_overlapping_ion_alias_single_input_stays_single_product() -> None:
 
     assert frame.entities["product_names"] == ("iON evo AS",)
     assert _should_clarify_ambiguous_multi_product_query(user_text, [{"role": "user", "content": user_text}]) is False
+
+
+def test_ion_family_purchase_is_not_safe_kids_recommendation() -> None:
+    user_text = "아이온 타이어 구매할래"
+    frame = build_discovery_intent_frame(user_text)
+    plan = plan_discovery_tools(frame)
+
+    assert extract_product_names(user_text) == ()
+    assert extract_product_family_names(user_text) == ("iON",)
+    assert recommendation_scenario_from_text(user_text) is None
+    assert frame.intent == "product_search"
+    assert frame.sub_intent == "product_family_search"
+    assert frame.entities["product_family_names"] == ("iON",)
+    assert frame.entities["product_keyword"] == "iON"
+    assert plan.preferred_tool == "search_product_tool"
+    assert plan.tool_args_patch == {"keyword": "iON", "brand_cd": "HK"}
+    assert "get_products_recommendations_tool" in plan.forbidden_tools
+
+
+def test_ventus_family_purchase_keeps_product_family_search() -> None:
+    user_text = "벤투스 타이어 구매할래"
+    frame = build_discovery_intent_frame(user_text)
+    plan = plan_discovery_tools(frame)
+
+    assert extract_product_family_names(user_text) == ("Ventus",)
+    assert frame.intent == "product_search"
+    assert frame.sub_intent == "product_family_search"
+    assert plan.tool_args_patch == {"keyword": "Ventus", "brand_cd": "HK"}
+
+
+def test_ion_full_product_alias_wins_over_family_alias() -> None:
+    frame = build_discovery_intent_frame("아이온 에보 AS SUV 구매할래")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.entities["product_names"] == ("iON evo AS SUV",)
+    assert frame.entities["product_family_names"] == ()
+    assert frame.intent == "product_search"
+    assert frame.sub_intent == "product_name_search"
+    assert plan.tool_args_patch == {"keyword": "iON evo AS SUV", "brand_cd": "HK"}
+
+
+def test_real_child_safety_recommendation_still_uses_safe_kids() -> None:
+    text = "아이 태우고 다니는데 안전한 타이어 추천"
+    frame = build_discovery_intent_frame(text)
+    plan = plan_discovery_tools(frame)
+
+    assert recommendation_scenario_from_text(text).key == "safe_kids"
+    assert frame.intent == "product_recommendation"
+    assert frame.sub_intent == "condition_recommendation"
+    assert plan.preferred_tool == "get_products_recommendations_tool"
+    assert plan.tool_args_patch == {"rcmd_type": "safe_kids"}
 
 
 def test_overlapping_ion_alias_suv_single_input_does_not_split() -> None:
@@ -8603,7 +8656,7 @@ def test_transaction_unresolved_product_resolution_event_returns_not_found_for_z
 
     assert event is not None
     assert event["assistant_response_source"] == "code_transaction_product_resolution_not_found"
-    assert "Dynapro HPX 상품을 찾지 못해 가격 확인을(를) 이어서 확인하지 못했어요." in event["data"]["assistantResponse"]
+    assert "Dynapro HPX 상품을 찾지 못해 가격 확인 흐름을 이어서 진행하지 못했어요." in event["data"]["assistantResponse"]
 
 
 def test_transaction_unresolved_product_resolution_event_filters_size_candidates_by_product_name() -> None:

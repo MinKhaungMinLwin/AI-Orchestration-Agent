@@ -100,7 +100,10 @@ RECOMMENDATION_SCENARIO_CATALOG: dict[str, RecommendationScenario] = {
     ),
     "safe_kids": RecommendationScenario(
         key="safe_kids",
-        expressions=_patterns(r"아이|키즈|안전"),
+        expressions=_patterns(
+            r"키즈|어린이|유아|아이\s*(?:태우|동승|와\s*함께|랑\s*타|안전|보호)|"
+            r"안전(?:한|하게|성|하게\s*탈|하게\s*타|.*(?:아이|어린이|유아|가족))"
+        ),
         tool_args_patch={"rcmd_type": "safe_kids"},
         response_label="아이/안전",
     ),

@@ -84,6 +84,7 @@ _MILEAGE_PRODUCT_RE = re.compile(r"마일리지\s*(?:타이어|플러스|plus|\d
 _LATEST_RE = re.compile(r"최신|신상|신제품|최근(?:에)?\s*(?:출시|나온)|새로\s*나온|등록일", re.IGNORECASE)
 _CONCEPT_RE = re.compile(r"뭐야|무슨\s*뜻|의미|차이|설명", re.IGNORECASE)
 _BUY_RE = re.compile(r"구매|살래|주문|장바구니|결제", re.IGNORECASE)
+_PRICE_OR_COUPON_RE = re.compile(r"가격|얼마|할인가|최대\s*혜택|쿠폰|할인|혜택", re.IGNORECASE)
 _STOCK_OR_BOOKING_RE = re.compile(r"재고|오늘\s*장착|장착\s*가능|예약|매장|근처|주변", re.IGNORECASE)
 _SIMILAR_PRICE_RE = re.compile(r"비슷한\s*가격|가격대|동급\s*가격", re.IGNORECASE)
 _QUANTITY_OPTION_RE = re.compile(r"(\d{1,2})\s*(?:개|본)")
@@ -249,6 +250,18 @@ _PRODUCT_ALIASES: tuple[tuple[str, str, str], ...] = (
     ("세레니티 플러스", "세레니티 플러스", "BS"),
     ("serenity plus", "세레니티 플러스", "BS"),
 )
+_PRODUCT_FAMILY_ALIASES: tuple[tuple[str, str, str], ...] = (
+    ("ventus", "Ventus", "HK"),
+    ("벤투스", "Ventus", "HK"),
+    ("dynapro", "Dynapro", "HK"),
+    ("다이나프로", "Dynapro", "HK"),
+    ("kinergy", "Kinergy", "HK"),
+    ("키너지", "Kinergy", "HK"),
+    ("ion", "iON", "HK"),
+    ("아이온", "iON", "HK"),
+    ("optimo", "Optimo", "HK"),
+    ("옵티모", "Optimo", "HK"),
+)
 _BRAND_ALIASES: tuple[tuple[str, str], ...] = (
     ("한국타이어", "HK"),
     ("hankook", "HK"),
@@ -304,6 +317,53 @@ def extract_product_names(text: str) -> tuple[str, ...]:
     return tuple(products)
 
 
+def extract_product_family_names(text: str) -> tuple[str, ...]:
+    normalized = (text or "").casefold()
+    product_spans: list[tuple[int, int]] = []
+    for needle, _display_name, _brand_cd in _PRODUCT_ALIASES:
+        needle_norm = needle.casefold()
+        start = normalized.find(needle_norm)
+        while start >= 0:
+            product_spans.append((start, start + len(needle_norm)))
+            start = normalized.find(needle_norm, start + 1)
+
+    family_matches: list[tuple[int, int, str]] = []
+    seen: set[tuple[int, int, str]] = set()
+    for needle, display_name, _brand_cd in _PRODUCT_FAMILY_ALIASES:
+        needle_norm = needle.casefold()
+        start = normalized.find(needle_norm)
+        while start >= 0:
+            end = start + len(needle_norm)
+            if needle_norm == "ion":
+                prev_char = normalized[start - 1] if start > 0 else ""
+                next_char = normalized[end] if end < len(normalized) else ""
+                if prev_char.isalpha() or next_char.isalpha():
+                    start = normalized.find(needle_norm, start + 1)
+                    continue
+            if any(not (end <= product_start or start >= product_end) for product_start, product_end in product_spans):
+                start = normalized.find(needle_norm, start + 1)
+                continue
+            key = (start, end, display_name)
+            if key not in seen:
+                family_matches.append(key)
+                seen.add(key)
+            start = normalized.find(needle_norm, start + 1)
+
+    family_matches.sort(key=lambda item: (item[0], -(item[1] - item[0]), item[2]))
+    selected: list[tuple[int, int, str]] = []
+    for start, end, display_name in family_matches:
+        if any(not (end <= chosen_start or start >= chosen_end) for chosen_start, chosen_end, _ in selected):
+            continue
+        selected.append((start, end, display_name))
+    selected.sort(key=lambda item: item[0])
+
+    families: list[str] = []
+    for _start, _end, display_name in selected:
+        if display_name not in families:
+            families.append(display_name)
+    return tuple(families)
+
+
 def extract_brand_codes(text: str) -> tuple[str, ...]:
     normalized = (text or "").casefold()
     matches: list[tuple[int, str]] = []
@@ -350,6 +410,9 @@ def extract_brand_code(text: str) -> str | None:
 def extract_product_brand_code(text: str) -> str | None:
     normalized = (text or "").casefold()
     for needle, _display_name, brand_cd in _PRODUCT_ALIASES:
+        if needle.casefold() in normalized:
+            return brand_cd
+    for needle, _display_name, brand_cd in _PRODUCT_FAMILY_ALIASES:
         if needle.casefold() in normalized:
             return brand_cd
     return None
@@ -532,6 +595,7 @@ def build_discovery_intent_frame(
     allow_inherited_tire_size = slots.get("allow_inherited_tire_size", True)
     tire_size = explicit_tire_size or (inherited_tire_size if allow_inherited_tire_size else None)
     products = extract_product_names(text)
+    product_families = () if products else extract_product_family_names(text)
     attribute_metrics = extract_product_attribute_metrics(text)
     requested_product_attribute = str(
         slots.get("requested_product_attribute") or extract_requested_product_attribute(text) or ""
@@ -559,6 +623,7 @@ def build_discovery_intent_frame(
 
     entities: dict[str, Any] = {
         "product_names": products,
+        "product_family_names": product_families,
         "tire_size": tire_size,
         "explicit_tire_size": explicit_tire_size,
         "purchase_intent": bool(_BUY_RE.search(text)),
@@ -598,6 +663,15 @@ def build_discovery_intent_frame(
     scenario = recommendation_scenario_from_text(
         text,
         router_recommendation_scenario or context_recommendation_scenario,
+    )
+    product_resolution_transaction_anchor = bool(
+        (products or product_families)
+        and (
+            entities["purchase_intent"]
+            or _PRICE_OR_COUPON_RE.search(text)
+            or _STOCK_OR_BOOKING_RE.search(text)
+            or _RESTOCK_RE.search(text)
+        )
     )
     if scenario is not None:
         entities.update(recommendation_scenario_metadata(scenario))
@@ -779,6 +853,10 @@ def build_discovery_intent_frame(
             entities["guardrail"] = "occupation_neutral"
         intent = "product_search"
         sub_intent = "product_name_search"
+    elif product_resolution_transaction_anchor:
+        intent = "product_search"
+        sub_intent = "product_family_search" if product_families else "product_name_search"
+        entities["product_keyword"] = (product_families or products)[0]
     elif _GRADE_COMPARE_RE.search(text) and len(products) >= 2:
         intent = "product_comparison"
         sub_intent = "grade_compare"
@@ -1076,6 +1154,29 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             preferred_tool="search_product_tool",
             tool_args_patch=args,
             forbidden_tools=("get_products_recommendations_tool", "product_card_first_response"),
+        )
+    if frame.intent == "product_search":
+        product_names = entities.get("product_names") or ()
+        product_families = entities.get("product_family_names") or ()
+        keyword = (
+            entities.get("product_keyword")
+            or (product_names[0] if product_names else None)
+            or (product_families[0] if product_families else "")
+        )
+        args = {"keyword": keyword, "limit": 10}
+        if entities.get("tire_size"):
+            args["size"] = entities["tire_size"]
+        if entities.get("brand_cd"):
+            args["brand_cd"] = entities["brand_cd"]
+        return ToolPlan(
+            allowed_tools=("search_product_tool",),
+            preferred_tool="search_product_tool",
+            tool_args_patch=args,
+            forbidden_tools=("get_products_recommendations_tool",),
+            metadata={
+                "response_intent": frame.sub_intent or "product_search",
+                **({"product_family_names": product_families} if product_families else {}),
+            },
         )
     if entities.get("technology") == "sound_absorber":
         args = {"rcmd_type": "sound_absorber"}

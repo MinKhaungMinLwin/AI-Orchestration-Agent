@@ -14157,7 +14157,7 @@ def _build_transaction_unresolved_product_not_found_event(
         "assistant_response_source": "code_transaction_product_resolution_not_found",
         "data": {
             "assistantResponse": (
-                f"{product_label} 상품을 찾지 못해 {action_label}을(를) 이어서 확인하지 못했어요.\n"
+                f"{product_label} 상품을 찾지 못해 {action_label} 흐름을 이어서 진행하지 못했어요.\n"
                 "정확한 상품명이나 규격을 알려주시면 다시 확인해드릴게요."
             ),
             "quickReplies": [
@@ -15660,7 +15660,13 @@ _FOLLOWUP_RECOMMENDATION_CONTEXT_PATTERNS: tuple[tuple[str, str, str | None, str
     (r"장거리|long\s*distance", "장거리", "long_distance", None),
     (r"도심|시내|urban", "도심 주행", "urban", None),
     (r"주말|weekend", "주말 주행", "weekend", None),
-    (r"아이|키즈|안전", "아이/안전", "safe_kids", None),
+    (
+        r"키즈|어린이|유아|아이\s*(?:태우|동승|와\s*함께|랑\s*타|안전|보호)|"
+        r"안전(?:한|하게|성|하게\s*탈|하게\s*타|.*(?:아이|어린이|유아|가족))",
+        "아이/안전",
+        "safe_kids",
+        None,
+    ),
     (r"흡음재|노이즈\s*흡수", "흡음재", "sound_absorber", None),
     (r"보증|warranty", "보증", "warranty", None),
 )
