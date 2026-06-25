@@ -12009,6 +12009,20 @@ def _product_feature_summary(row: dict) -> str:
 
 
 def _product_review_summary(row: dict) -> str:
+    rating_text, review_count_text, review_text = _product_review_parts(row)
+    if review_text != "확인 가능한 대표 리뷰는 아직 없어요.":
+        prefix = ""
+        if rating_text != "미확인" and review_count_text != "미확인":
+            prefix = f"평점 {rating_text}, 리뷰 {review_count_text}. "
+        return f'{prefix}대표 리뷰는 {review_text} 흐름입니다.'
+    if rating_text != "미확인" and review_count_text != "미확인":
+        return f"평점 {rating_text}, 리뷰 {review_count_text}이 확인돼요."
+    if review_count_text != "미확인":
+        return f"리뷰 {review_count_text}이 확인돼요."
+    return "확인 가능한 리뷰 요약은 아직 없어요."
+
+
+def _product_review_parts(row: dict) -> tuple[str, str, str]:
     rating = row.get("rating") if isinstance(row.get("rating"), dict) else {}
     rating_avg = row.get("rating_avg") or row.get("rate") or rating.get("rating_avg")
     review_count = row.get("review_count") or rating.get("review_count")
@@ -12020,16 +12034,11 @@ def _product_review_summary(row: dict) -> str:
                 review_text = _clean_product_sentence(review.get("gdas_cont") or review.get("content"))
                 if review_text:
                     break
-    if review_text:
-        prefix = ""
-        if rating_avg and review_count:
-            prefix = f"평점 {rating_avg}, 리뷰 {review_count}건. "
-        return f"{prefix}대표 리뷰는 \"{review_text[:80]}\" 흐름입니다."
-    if rating_avg and review_count:
-        return f"평점 {rating_avg}, 리뷰 {review_count}건이 확인돼요."
-    if review_count:
-        return f"리뷰 {review_count}건이 확인돼요."
-    return "확인 가능한 리뷰 요약은 아직 없어요."
+
+    rating_text = str(rating_avg).strip() if rating_avg else "미확인"
+    review_count_text = f"{review_count}건" if review_count else "미확인"
+    representative_review = f'"{review_text[:80]}"' if review_text else "확인 가능한 대표 리뷰는 아직 없어요."
+    return rating_text, review_count_text, representative_review
 
 
 def _product_comparison_value(row: dict, key: str) -> str:
@@ -12041,6 +12050,12 @@ def _product_comparison_value(row: dict, key: str) -> str:
         return _product_performance_summary(row)
     if key == "review":
         return _product_review_summary(row)
+    if key == "review_rating":
+        return _product_review_parts(row)[0]
+    if key == "review_count":
+        return _product_review_parts(row)[1]
+    if key == "representative_review":
+        return _product_review_parts(row)[2]
     if key == "release":
         return str(row.get("t_rls_yearmon") or row.get("sys_reg_dtime") or "").strip() or "미확인"
     if key == "price":
@@ -12096,22 +12111,31 @@ def _build_product_comparison_table(
     rows: tuple[tuple[str, str], ...] | None = None,
     verdict: str | None = None,
 ) -> str:
-    table_rows = rows or (
+    base_rows = rows or (
         ("상품 등급", "grade"),
         ("특징", "feature"),
         ("주요 성능", "performance"),
         ("리뷰", "review"),
     )
-    lines = [
-        "상품 정보를 표로 비교해드릴게요.",
-        "",
-        f"| 항목 | {left_name} | {right_name} |",
-        "|---|---|---|",
-    ]
-    for label, key in table_rows:
-        left_value = _markdown_table_cell(_product_comparison_value(left_row, key))
-        right_value = _markdown_table_cell(_product_comparison_value(right_row, key))
-        lines.append(f"| {label} | {left_value} | {right_value} |")
+    table_rows: list[tuple[str, str]] = []
+    for label, key in base_rows:
+        if key == "review":
+            table_rows.extend(
+                (
+                    ("평점", "review_rating"),
+                    ("리뷰", "review_count"),
+                    ("대표 리뷰", "representative_review"),
+                )
+            )
+        else:
+            table_rows.append((label, key))
+
+    lines = ["상품 정보를 상품별 표로 비교해드릴게요."]
+    for product_name, row in ((left_name, left_row), (right_name, right_row)):
+        lines.extend(["", f"**{_markdown_table_cell(product_name)}**", "", "| 항목 | 내용 |", "|---|---|"])
+        for label, key in table_rows:
+            value = _markdown_table_cell(_product_comparison_value(row, key))
+            lines.append(f"| {label} | {value} |")
     if verdict:
         lines.extend(["", verdict])
     return "\n".join(lines)

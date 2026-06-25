@@ -2341,8 +2341,12 @@ def test_grade_comparison_event_prefers_higher_price_grade() -> None:
     )
 
     assistant = event["data"]["assistantResponse"]
-    assert "| 항목 | 키너지 EX | 벤투스 에어S |" in assistant
-    assert "| 상품 등급 | 스탠다드 | 프리미엄 |" in assistant
+    assert "| 항목 | 키너지 EX | 벤투스 에어S |" not in assistant
+    assert "**키너지 EX**" in assistant
+    assert "**벤투스 에어S**" in assistant
+    assert "| 항목 | 내용 |" in assistant
+    assert "| 상품 등급 | 스탠다드 |" in assistant
+    assert "| 상품 등급 | 프리미엄 |" in assistant
     assert "벤투스 에어S이 키너지 EX보다 상위 등급입니다." in assistant
     assert _labels(event["data"]["quickReplies"]) == ["구매하기", "다른 상품 비교", "내 차량 보기"]
 
@@ -2384,8 +2388,9 @@ def test_price_comparison_event_uses_same_final_price_priority_as_product_cards(
     )
 
     assistant = event["data"]["assistantResponse"]
-    assert "| 항목 | 키너지 EX | 벤투스 에어S |" in assistant
-    assert "| 최종 혜택가 | 85,000원 | 95,000원 |" in assistant
+    assert "| 항목 | 키너지 EX | 벤투스 에어S |" not in assistant
+    assert "| 최종 혜택가 | 85,000원 |" in assistant
+    assert "| 최종 혜택가 | 95,000원 |" in assistant
     assert "키너지 EX이 10,000원 더 저렴해요." in assistant
 
 
@@ -2399,8 +2404,9 @@ def test_mileage_comparison_event_prefers_higher_life_span() -> None:
     )
 
     assistant = event["data"]["assistantResponse"]
-    assert "| 항목 | 키너지 EX | 벤투스 에어S |" in assistant
-    assert "| 마일리지/수명 | 4.1 | 3.2 |" in assistant
+    assert "| 항목 | 키너지 EX | 벤투스 에어S |" not in assistant
+    assert "| 마일리지/수명 | 4.1 |" in assistant
+    assert "| 마일리지/수명 | 3.2 |" in assistant
     assert "마일리지/수명 기준으로는 키너지 EX이 벤투스 에어S보다 유리해요." in assistant
 
 
@@ -2462,11 +2468,17 @@ def test_generic_product_comparison_defaults_to_features_and_reviews() -> None:
 
     assistant = event["data"]["assistantResponse"]
 
-    assert "상품 정보를 표로 비교해드릴게요." in assistant
-    assert "| 항목 | 다이나프로 HPX | 윈터 아이셉트 에보3 X |" in assistant
-    assert "| 특징 | SUV용 사계절 컴포트 타이어 | 겨울철 눈길과 빙판 주행에 초점을 둔 SUV 윈터 타이어 |" in assistant
-    assert "| 주요 성능 | 정숙성 5, 승차감 4.8, 회전저항 3, 젖은노면 3 | 정숙성 4, 승차감 4.2, 회전저항 4, 젖은노면 2 |" in assistant
-    assert "| 리뷰 | 평점 4.8, 리뷰 12건. 대표 리뷰는" in assistant
+    assert "상품 정보를 상품별 표로 비교해드릴게요." in assistant
+    assert "| 항목 | 다이나프로 HPX | 윈터 아이셉트 에보3 X |" not in assistant
+    assert "**다이나프로 HPX**" in assistant
+    assert "**윈터 아이셉트 에보3 X**" in assistant
+    assert "| 특징 | SUV용 사계절 컴포트 타이어 |" in assistant
+    assert "| 특징 | 겨울철 눈길과 빙판 주행에 초점을 둔 SUV 윈터 타이어 |" in assistant
+    assert "| 주요 성능 | 정숙성 5, 승차감 4.8, 회전저항 3, 젖은노면 3 |" in assistant
+    assert "| 주요 성능 | 정숙성 4, 승차감 4.2, 회전저항 4, 젖은노면 2 |" in assistant
+    assert "| 평점 | 4.8 |" in assistant
+    assert "| 리뷰 | 12건 |" in assistant
+    assert "| 대표 리뷰 | \"승차감이 좋고 조용해서 장거리 주행이 편해요. 추천해요.\" |" in assistant
     assert "추천해요." in assistant
     assert "눈길 접지력이 안정적이라는 / 느낌" in assistant
     assert "SUV용 사계절 컴포트 타이어" in assistant
@@ -2504,7 +2516,9 @@ def test_product_comparison_table_does_not_expose_goods_no() -> None:
     )
 
     assistant = event["data"]["assistantResponse"]
-    assert "| 항목 | 키너지 EX | 벤투스 에어S |" in assistant
+    assert "| 항목 | 키너지 EX | 벤투스 에어S |" not in assistant
+    assert "**키너지 EX**" in assistant
+    assert "**벤투스 에어S**" in assistant
     assert "상품코드" not in assistant
     assert "goods_no" not in assistant
     assert "G000000111111" not in assistant
@@ -2540,7 +2554,8 @@ def test_product_comparison_feature_fallback_omits_pattern_group() -> None:
 
     assistant = event["data"]["assistantResponse"]
 
-    assert "| 특징 | 사계절, 승용차용, COMFORT | 사계절, SUV용, COMFORT |" in assistant
+    assert "| 특징 | 사계절, 승용차용, COMFORT |" in assistant
+    assert "| 특징 | 사계절, SUV용, COMFORT |" in assistant
     assert "벤투스 슈퍼 컴포트" not in assistant
     assert "다이나프로 컴포트" not in assistant
 
