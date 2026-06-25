@@ -931,6 +931,21 @@ def _router_contract_is_price_or_benefit_alert(routing_result: MultiAgentDomain 
     return MultiAgentDomain.Domain.TRANSACTION in domains
 
 
+def _router_contract_is_order_cancel_fee_inquiry(routing_result: MultiAgentDomain | None) -> bool:
+    if routing_result is None:
+        return False
+    if bool(getattr(routing_result, "needs_clarification", False)):
+        return False
+    plan_items = tuple(str(item or "").strip().lower() for item in (getattr(routing_result, "execution_plan", None) or ()))
+    if not any("order_cancel_fee_inquiry" in item for item in plan_items):
+        return False
+    domains = list(getattr(routing_result, "domains", []) or [])
+    if MultiAgentDomain.Domain.TRANSACTION not in domains:
+        return False
+    profile = getattr(routing_result, "agent_prompt_profile", None)
+    return profile in {AgentPromptProfile.TRANSACTION_ORDER, AgentPromptProfile.FULL}
+
+
 def _router_contract_is_high_confidence_transaction_flow(routing_result: MultiAgentDomain | None) -> bool:
     if routing_result is None:
         return False
@@ -1853,6 +1868,10 @@ Complaint routing rule:
        Examples: "언제 가야 한가할까?", "토요일 오전은 붐비던데 언제 예약하는 게 좋아?", "대기 적은 시간 알려줘", "점심시간에도 작업 가능하지?", "일요일 문 열어?" → TRANSACTION or SUPPORT advisory, execution_plan=["transaction:store_visit_advisory"], quickReply/text only, do NOT call get_store_schedule_tool.
        Only slot-lookup examples such as "토요일 예약 가능한 시간 보여줘", "이번 토요일 10시 예약 가능해?", "오늘 오후 예약 잡아줘", "방문예약 가능한 시간 알려줘" should use store_schedule/datepick.
    - "transaction_price_stock": price/final price/logistics stock when goods_no is already known AND there is NO active store reservation intent in the conversation history
+   - "transaction_order": order/cart/status, cancellation execution requests, and cancellation/return fee inquiries. Split execution vs fee inquiry:
+     * order_cancel_request = user asks to cancel/process/request cancellation ("예약 취소해줘", "주문 취소 처리해줘").
+     * order_cancel_fee_inquiry = user asks whether cancellation causes costs/fees/penalties/shipping charges ("예약 취소에 따른 위약금이 있는지 알려줘", "예약 취소하면 비용이 발생하나요?", "오늘 취소하면 수수료 있나요?").
+       Use execution_plan=["transaction:order_cancel_fee_inquiry"]. This is not a cancel execution request.
    - "discovery_recommendation": tire recommendation by vehicle, tire size, scenario, discount ranking WITHOUT a specific product name, or continuation from recommendation cards ("추천", "맞는 타이어", "12가3456 타이어", "세일 많이 하는 타이어", "할인율 높은 타이어")
    - "discovery_search": product search by name/keyword/brand/size (no goods_no), price/stock/discount-price query with product name only (e.g. "벤투스 S2 할인가 얼마야?", "다이나프로 HPX 할인된 가격", "마일리지 타이어", "마일리지 플러스 2"), run-flat vs normal price comparison, best-sellers/sales-rank requests ("많이 팔린/베스트셀러/잘 팔리는/잘 나가는/요즘 제일 인기 있는 거") — goods_no NOT yet known in context
    - "discovery_event_content": explicit events/deals/current benefit list requests ("이벤트 혜택 알려줘", "지금 받을 수 있는 혜택 알려줘", "기획전 알려줘", "행사 목록", "이벤트 대상 상품"), product-applicable events, YouTube/video.
@@ -1945,6 +1964,8 @@ DISCOVERY — product search, recommendation, compatibility (no goods_no yet):
 TRANSACTION — price/stock/store/order with goods_no already known in context:
 - "{{goods_no}} 가격 얼마야?", "주문/장바구니", "강남 매장", "예약 날짜", "한남점 선택", "주문 내역", "내 쿠폰", "오늘 취소하면 수수료 있나요?"
 - "가격 내려가면 알려줘", "쿠폰 이벤트 생기면 알림 줘", "이벤트 생기면 연락 줘" → TRANSACTION, execution_plan=["transaction:price_or_benefit_alert_request"], quickReply guidance only. Do not call event/deal/coupon issue tools and do not claim an alert was registered.
+- "예약 취소에 따른 위약금이 있는지 알려줘", "예약 취소하면 비용이 발생하나요?", "오늘 취소하면 수수료 있나요?" → TRANSACTION, agent_prompt_profile=transaction_order, execution_plan=["transaction:order_cancel_fee_inquiry"]. Fee/penalty inquiry only; do not classify as order_cancel_request and do not say the chatbot cannot directly cancel unless the user asks to cancel.
+- "예약 취소해줘", "주문 취소 처리해줘" → TRANSACTION, agent_prompt_profile=transaction_order, execution_plan=["transaction:order_cancel_request"].
 
 SUPPORT — policy, warranty, human agent:
 - "보증/반품", "상담원/1:1문의"
@@ -2085,6 +2106,8 @@ Also set `policy_intent`:
 - current event/benefit/deal list lookup ("이벤트 혜택 알려줘", "지금 받을 수 있는 혜택 알려줘", "기획전 알려줘") → DISCOVERY, agent_prompt_profile=`discovery_event_content`, execution_plan=`discovery:benefit_event_list_lookup` or `discovery:benefit_deal_list`
 - automatic price/coupon/event notification request ("가격 내려가면 알려줘", "쿠폰 이벤트 생기면 알림 줘", "문자 줘", "연락 줘") → TRANSACTION, execution_plan=`transaction:price_or_benefit_alert_request`; this is not a current event list lookup.
 - competitor product to Hankook lineup orientation ("미쉐린 크로스클라이밋2에 대응하는 한국타이어 라인업 알려줘", "CC2랑 비슷한 한타 뭐야") → DISCOVERY, agent_prompt_profile=`discovery_search`, execution_plan=`discovery:competitor_counterpart_guidance`; this is an informational answer, not vehicle/size recommendation or Transaction.
+- cancellation/return fee inquiry ("예약 취소에 따른 위약금이 있는지 알려줘", "예약 취소하면 비용이 발생하나요?", "오늘 취소하면 수수료 있나요?") → TRANSACTION, agent_prompt_profile=`transaction_order`, execution_plan=`transaction:order_cancel_fee_inquiry`; this is a fee/condition inquiry, not an order_cancel_request.
+- cancellation execution request ("예약 취소해줘", "주문 취소 처리해줘") → TRANSACTION, agent_prompt_profile=`transaction_order`, execution_plan=`transaction:order_cancel_request`.
 - specific-store attribute inquiry (정자점 야간정비 가능해?, 정자점 리프트 있어?, 정자점 질소충전 돼?, 정자점 얼라인먼트 잘 봐?) → `store_attribute_inquiry` with TRANSACTION store info lookup plus support-style contact guidance
   Also fill `store_attribute_store_name`, `store_attribute_text`, `store_attribute_type`, and `store_attribute_verification_level`.
 - store service availability with no specific store (보관서비스 돼?, 얼라인먼트 잘 봐?) → `store_service_availability`
@@ -2116,7 +2139,7 @@ RULES:
 - 온라인/오프라인/티스테이션 매장 가격이 왜 다른지 묻는 설명형 질문 → SUPPORT. 상품명이 있어도 상품 리스트/규격 선택을 요구하지 말 것.
 - 제주/서귀포/도서산간 + 배송비/추가 비용/온라인 가격 정책 질문 → SUPPORT
 - 픽업서비스/스마트픽업/차 가지러 와/차 가지러 올 수 있어/차량 수거 후 인도/집앞까지 데려다 줘/픽업 신청 방법/픽업 가능 거리/기사 위치 문의 → SUPPORT
-- 취소 수수료/취소비용/오늘 취소하면 수수료/예약 취소 비용/택배비 물어내야/왕복 배송비/반품수수료 → TRANSACTION, agent_prompt_profile=transaction_order
+- 취소 수수료/취소비용/오늘 취소하면 수수료/예약 취소 비용/위약금/택배비 물어내야/왕복 배송비/반품수수료 → TRANSACTION, agent_prompt_profile=transaction_order, execution_plan=transaction:order_cancel_fee_inquiry
 - Complaint tone alone is not enough for SUPPORT. First classify complaint_scope:
   - tstation_service_complaint → SUPPORT
   - out_of_scope_complaint → LEADING with support-scope guidance, no 상담/불편 접수
@@ -3461,6 +3484,8 @@ class StreamingMultiAgentCoordinator:
                         "availability_intent": getattr(pending_slots, "availability_intent", None),
                         "requested_cal_day": getattr(pending_slots, "requested_cal_day", None),
                     }
+                    if _router_contract_is_order_cancel_fee_inquiry(active_routing_result):
+                        transaction_known_slots["router_transaction_intent"] = "order_cancel_fee_inquiry"
                     transaction_tool_patch, transaction_response_decision, transaction_tool_plan = (
                         _build_transaction_policy_context(
                             domains=domains,
@@ -23413,6 +23438,8 @@ class TStationChatServiceV2:
         }
         if _router_contract_is_price_or_benefit_alert(routing_result):
             transaction_known_slots["router_transaction_intent"] = "price_or_benefit_alert_request"
+        elif _router_contract_is_order_cancel_fee_inquiry(routing_result):
+            transaction_known_slots["router_transaction_intent"] = "order_cancel_fee_inquiry"
         transaction_tool_patch, transaction_response_decision, transaction_tool_plan = _build_transaction_policy_context(
             domains=domains,
             last_user_text=last_user_text,
@@ -29969,6 +29996,8 @@ class TStationChatServiceV2:
                         logger.info("[QUICKREPLY_FILTER] injected order history chip for cancel guidance")
                     if (
                         is_current_quickreply
+                        and turn_contract is not None
+                        and turn_contract.intent == "order_cancel_request"
                         and _normalize_order_cancel_request_guidance(
                             event_data,
                             tool_data_list=[*(prev_tool_data or []), *tool_context_items],

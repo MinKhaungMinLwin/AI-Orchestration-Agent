@@ -1452,6 +1452,13 @@ def response_contract_violations(
     )
     if order_cancel_status_violation is not None:
         violations.append(order_cancel_status_violation)
+    order_cancel_fee_violation = _order_cancel_fee_inquiry_contract_violation(
+        assistant_response_text=assistant_response_text,
+        response_shape_key=response_shape_key,
+        contract=contract,
+    )
+    if order_cancel_fee_violation is not None:
+        violations.append(order_cancel_fee_violation)
     payment_error_violation = _payment_error_troubleshooting_contract_violation(
         template=template,
         called_tools=called_tools,
@@ -1957,6 +1964,28 @@ def _order_cancel_status_contract_violation(
             "type": "order_cancel_status_without_order_lookup",
             "response_shape_key": str(response_shape_key or ""),
             "called_tools": sorted(tools),
+        }
+    return None
+
+
+def _order_cancel_fee_inquiry_contract_violation(
+    *,
+    assistant_response_text: str | None,
+    response_shape_key: str | None,
+    contract: TurnContract | None,
+) -> dict[str, Any] | None:
+    if contract is None or str(contract.intent or "") != "order_cancel_fee_inquiry":
+        return None
+    response_text = str(assistant_response_text or "")
+    if response_text.startswith("제가 직접 주문을 취소 처리할 수는 없어요"):
+        return {
+            "type": "order_cancel_fee_inquiry_normalized_as_cancel_request",
+            "response_shape_key": str(response_shape_key or ""),
+        }
+    if re.search(r"어떤\s*주문을\s*취소|취소하려는\s*주문을\s*선택", response_text):
+        return {
+            "type": "order_cancel_fee_inquiry_asked_cancel_selection",
+            "response_shape_key": str(response_shape_key or ""),
         }
     return None
 

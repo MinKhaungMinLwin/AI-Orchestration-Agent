@@ -2230,6 +2230,99 @@ def test_order_cancel_request_policy_forbids_cancel_selection_and_processing_pro
     assert "promise_cancel_processing" in response_decision.forbidden_behaviors
 
 
+def test_order_cancel_fee_inquiry_router_prompt_splits_from_cancel_request() -> None:
+    for prompt in (prompt_router_multi(), prompt_router_slim()):
+        assert "order_cancel_fee_inquiry" in prompt
+        assert "예약 취소에 따른 위약금이 있는지 알려줘" in prompt
+        assert "order_cancel_request" in prompt
+        assert "Fee/penalty inquiry only" in prompt or "fee/condition inquiry" in prompt
+
+
+@pytest.mark.parametrize(
+    "user_text",
+    [
+        "예약 취소에 따른 위약금이 있는지 알려줘.",
+        "예약 취소하면 비용이 발생하나요?",
+        "오늘 취소하면 수수료 있나요?",
+    ],
+)
+def test_order_cancel_fee_inquiry_router_contract_is_protected(user_text: str) -> None:
+    frame = build_transaction_intent_frame(
+        user_text,
+        known_slots={"router_transaction_intent": "order_cancel_fee_inquiry"},
+    )
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text=user_text,
+        known_slots=dict(frame.known_slots),
+    )
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=response_decision,
+    )
+
+    assert frame.intent == "order_cancel_fee_inquiry"
+    assert frame.known_slots["pending_intent"] == "order_cancel_fee_inquiry"
+    assert frame.known_slots["goal_type"] == "order_cancel_fee_inquiry"
+    assert tool_plan.allowed_tools == ("get_orders_of_user_tool", "get_order_status_tool")
+    assert tool_plan.preferred_tool == "get_orders_of_user_tool"
+    assert response_decision.metadata["response_shape_key"] == "order_cancel_fee_inquiry_summary"
+    assert "direct_cancel_unavailable_guidance" in response_decision.forbidden_behaviors
+    assert "normalize_as_cancel_request" in response_decision.forbidden_behaviors
+    assert "arbitrary_past_order_fee_answer" in response_decision.forbidden_behaviors
+    assert contract.intent == "order_cancel_fee_inquiry"
+
+
+def test_order_cancel_fee_inquiry_contract_rejects_cancel_request_normalized_text() -> None:
+    frame = build_transaction_intent_frame(
+        "예약 취소에 따른 위약금이 있는지 알려줘.",
+        known_slots={"router_transaction_intent": "order_cancel_fee_inquiry"},
+    )
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text="예약 취소에 따른 위약금이 있는지 알려줘.",
+        known_slots=dict(frame.known_slots),
+    )
+    contract = build_turn_contract(
+        user_text="예약 취소에 따른 위약금이 있는지 알려줘.",
+        intent_frame=frame,
+        tool_plan=plan_transaction_tools(frame),
+        response_decision=response_decision,
+    )
+
+    violations = response_contract_violations(
+        template="quickReply",
+        assistant_response_text="제가 직접 주문을 취소 처리할 수는 없어요.\n취소 가능 여부는 주문 상세 화면에서 확인해 주세요.",
+        assistant_response_source="transaction_agent",
+        response_shape_key="order_cancel_fee_inquiry_summary",
+        called_tools=["get_orders_of_user_tool"],
+        source_domain="transaction",
+        contract=contract,
+    )
+
+    assert {
+        "type": "order_cancel_fee_inquiry_normalized_as_cancel_request",
+        "severity": "error",
+        "response_shape_key": "order_cancel_fee_inquiry_summary",
+    } in violations
+
+
+def test_order_cancel_request_and_status_remain_separate_from_fee_inquiry() -> None:
+    cancel_frame = build_transaction_intent_frame("예약 취소해줘")
+    status_frame = build_transaction_intent_frame("주문 취소됐어?")
+
+    assert cancel_frame.intent == "order_cancel_request"
+    assert decide_transaction_response(
+        intent=cancel_frame.intent,
+        user_text="예약 취소해줘",
+        known_slots=dict(cancel_frame.known_slots),
+    ).metadata["response_shape_key"] == "order_cancel_request_guidance"
+    assert status_frame.intent == "order_cancel_status_lookup"
+
+
 @pytest.mark.parametrize(
     "user_text",
     [

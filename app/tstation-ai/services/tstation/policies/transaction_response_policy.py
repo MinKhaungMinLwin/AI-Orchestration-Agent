@@ -68,6 +68,8 @@ def decide_transaction_response(
         return _decide_order_arrival_status_lookup()
     if intent == "order_cancel_status_lookup":
         return _decide_order_cancel_status_lookup()
+    if intent == "order_cancel_fee_inquiry":
+        return _decide_order_cancel_fee_inquiry()
     if intent == "order_cancel_request":
         return _decide_order_cancel_request()
     if intent == "payment_method_change_request":
@@ -348,6 +350,28 @@ def _decide_order_cancel_request() -> ResponseDecision:
             "챗봇이 직접 주문을 취소 처리할 수 없음을 안내한다. 취소 가능 여부와 취소 버튼은 주문 상세 화면에서 "
             "사용자가 직접 확인해야 한다. 주문번호가 명확하면 주문 상세 CTA를 제공하고, 없거나 여러 건이면 주문내역 CTA만 제공한다. "
             "어떤 주문을 취소할지 선택하게 하거나 주문번호를 요구하지 않는다."
+        ),
+    )
+
+
+def _decide_order_cancel_fee_inquiry() -> ResponseDecision:
+    return _decision(
+        response_shape_key="order_cancel_fee_inquiry_summary",
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        forbidden_behaviors=(
+            "direct_cancel_unavailable_guidance",
+            "normalize_as_cancel_request",
+            "arbitrary_past_order_fee_answer",
+            "ask_which_order_to_cancel",
+            "promise_cancel_processing",
+        ),
+        assistant_guidance=(
+            "취소 실행 요청이 아니라 취소 비용/위약금/수수료 발생 여부 문의다. 특정 주문/예약이 없으면 과거 출고 주문을 "
+            "임의 선택해 비용을 단정하지 않는다. 활성 온라인 주문/예약이 정확히 1건이면 해당 상태 기준으로 조건부 안내하고, "
+            "온라인 주문 내역이 없거나 매장 방문 예약만 가능한 경우에는 매장 방문 예약은 별도 취소 수수료가 발생하지 않는다고 "
+            "안내한 뒤 예약/주문 내역 또는 1:1 문의 CTA를 제공한다. '제가 직접 주문을 취소 처리할 수는 없어요' 같은 "
+            "취소 실행 불가 안내로 정규화하지 않는다."
         ),
     )
 

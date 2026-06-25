@@ -458,9 +458,11 @@ def build_transaction_intent_frame(
         and not current_reservation_store_info_lookup
     )
     current_order_cancel_status_lookup = bool(_ORDER_CANCEL_STATUS_LOOKUP_RE.search(text))
+    router_order_cancel_fee_inquiry = str(slots.get("router_transaction_intent") or "") == "order_cancel_fee_inquiry"
     current_order_cancel_request = bool(
         _ORDER_CANCEL_REQUEST_RE.search(text)
         and not current_order_cancel_status_lookup
+        and not router_order_cancel_fee_inquiry
     )
     current_payment_method_change = bool(_PAYMENT_METHOD_CHANGE_RE.search(text))
     current_payment_account_info = bool(_PAYMENT_ACCOUNT_INFO_RE.search(text))
@@ -707,6 +709,10 @@ def build_transaction_intent_frame(
             entities["order_no"] = direct_order_match.group(0).upper()
         elif suffix_match:
             entities["order_no_suffix"] = suffix_match.group("suffix") or suffix_match.group("suffix2")
+    elif router_order_cancel_fee_inquiry:
+        intent = "order_cancel_fee_inquiry"
+        sub_intent = "cancel_fee"
+        entities["order_cancel_fee_inquiry"] = True
     elif current_order_cancel_status_lookup:
         intent = "order_cancel_status_lookup"
         sub_intent = "cancel_status"
@@ -894,6 +900,10 @@ def build_transaction_intent_frame(
         known["order_cancel_status_lookup"] = True
         if entities.get("order_no"):
             known["order_no"] = entities["order_no"]
+    if intent == "order_cancel_fee_inquiry":
+        known["pending_intent"] = "order_cancel_fee_inquiry"
+        known["goal_type"] = "order_cancel_fee_inquiry"
+        known["order_cancel_fee_inquiry"] = True
     if intent == "order_cancel_request":
         known["pending_intent"] = "order_cancel_request"
         known["goal_type"] = "order_cancel_request"
@@ -1147,6 +1157,22 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
             metadata={"response_intent": "order_cancel_status_lookup", "action": action},
         )
 
+    if frame.intent == "order_cancel_fee_inquiry":
+        return ToolPlan(
+            allowed_tools=("get_orders_of_user_tool", "get_order_status_tool"),
+            preferred_tool="get_orders_of_user_tool",
+            tool_args_patch={},
+            forbidden_tools=(
+                "search_faq_hybrid_tool",
+                "get_store_schedule_tool",
+                "search_stores_tool",
+                "get_store_list_tool",
+                "quick_order_tool",
+            ),
+            required_slots=action_required_slots,
+            metadata={"response_intent": "order_cancel_fee_inquiry", "action": action},
+        )
+
     if frame.intent in {"payment_method_change_request", "payment_account_info_lookup"}:
         return ToolPlan(
             allowed_tools=("get_orders_of_user_tool", "get_order_status_tool"),
@@ -1363,6 +1389,8 @@ def _transaction_action(frame: IntentFrame) -> str:
         return "order_arrival_status_lookup"
     if frame.intent == "order_cancel_status_lookup":
         return "order_cancel_status_lookup"
+    if frame.intent == "order_cancel_fee_inquiry":
+        return "order_cancel_fee_inquiry"
     if frame.intent == "order_cancel_request":
         return "order_cancel_request"
     if frame.intent == "maintenance_history_lookup":
