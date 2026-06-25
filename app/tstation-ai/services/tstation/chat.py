@@ -15334,6 +15334,218 @@ def _store_name_exact_match_row(store_name: str, stores: list[dict[str, Any]]) -
     return None
 
 
+def _store_row_value(store: Mapping[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = store.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return ""
+
+
+def _store_row_shop_id(store: Mapping[str, Any]) -> str:
+    return _store_row_value(store, "shop_id", "shopId", "shop_seq", "shopSeq")
+
+
+def _store_row_shop_name(store: Mapping[str, Any]) -> str:
+    return _store_row_value(store, "shop_nm", "shopName", "shop_name", "storeName", "name")
+
+
+def _store_row_address(store: Mapping[str, Any]) -> str:
+    road = " ".join(
+        part
+        for part in (
+            _store_row_value(store, "road_addr_base", "roadAddrBase"),
+            _store_row_value(store, "road_addr_dtl", "roadAddrDtl"),
+        )
+        if part
+    ).strip()
+    if road:
+        return road
+    return " ".join(
+        part
+        for part in (
+            _store_row_value(store, "addr_base", "addrBase"),
+            _store_row_value(store, "addr_dtl", "addrDtl"),
+        )
+        if part
+    ).strip()
+
+
+def _store_row_phone(store: Mapping[str, Any]) -> str:
+    return _store_row_value(store, "tel_no", "phone", "tel", "phoneNo")
+
+
+def _dedupe_store_rows(stores: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    seen: set[tuple[str, ...]] = set()
+    for store in stores:
+        if not isinstance(store, dict):
+            continue
+        shop_id = _store_row_shop_id(store)
+        if shop_id:
+            key = ("shop_id", shop_id)
+        else:
+            key = (
+                "store_fingerprint",
+                _store_row_shop_name(store),
+                _store_row_address(store),
+                _store_row_phone(store),
+            )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(store)
+    return deduped
+
+
+def _pending_store_selection_payload(
+    *,
+    pending_action_type: str,
+    original_user_text: str,
+    store_query: str,
+    candidate_stores: list[dict[str, Any]],
+    action_payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "pending_action_type": pending_action_type,
+        "pendingActionType": pending_action_type,
+        "original_user_text": original_user_text,
+        "originalUserText": original_user_text,
+        "required_slot": "store",
+        "requiredSlot": "store",
+        "store_query": store_query,
+        "storeQuery": store_query,
+        "candidate_stores": candidate_stores,
+        "candidateStores": candidate_stores,
+        "action_payload": action_payload or {},
+        "actionPayload": action_payload or {},
+        "ttl_turns": 1,
+        "ttlTurns": 1,
+        "context_state": "waiting_for_store_selection",
+        "contextState": "waiting_for_store_selection",
+    }
+
+
+def _pending_store_attribute_selection_event(
+    *,
+    user_text: str,
+    store_query: str,
+    stores: list[dict[str, Any]],
+    attribute_text: str,
+    attribute_type: str,
+    verification_level: str,
+) -> dict | None:
+    candidate_rows = _dedupe_store_rows(stores)
+    if not candidate_rows:
+        return None
+    candidate_stores: list[dict[str, str]] = []
+    items: list[dict[str, Any]] = []
+    metadata: list[dict[str, Any]] = []
+    for row in candidate_rows:
+        shop_id = _store_row_shop_id(row)
+        shop_name = _store_row_shop_name(row)
+        if not shop_id or not shop_name:
+            continue
+        address = _store_row_address(row)
+        phone = _store_row_phone(row)
+        candidate_stores.append({
+            "shop_id": shop_id,
+            "shopId": shop_id,
+            "shop_name": shop_name,
+            "shopName": shop_name,
+            "address": address,
+            "phone": phone,
+        })
+        description_lines = [line for line in (address, f"전화: {phone}" if phone else "") if line]
+        items.append({
+            "nameAddress": shop_name,
+            "distance": "",
+            "detailAddress": address,
+            "isAllMyT": bool(row.get("is_all_my_t") or row.get("isAllMyT")),
+            "todayInstall": False,
+            "tnaDelivery": False,
+            "description": "\n ".join(description_lines),
+        })
+        metadata.append({
+            "shopId": shop_id,
+            "shop_id": shop_id,
+            "shopName": shop_name,
+            "shop_name": shop_name,
+            "sourceTool": "get_store_list_tool",
+            "source_tool": "get_store_list_tool",
+        })
+    if not items:
+        return None
+    pending_payload = _pending_store_selection_payload(
+        pending_action_type="store_attribute_check",
+        original_user_text=user_text,
+        store_query=store_query,
+        candidate_stores=candidate_stores,
+        action_payload={
+            "attribute_text": attribute_text,
+            "attributeText": attribute_text,
+            "attribute_type": attribute_type,
+            "attributeType": attribute_type,
+            "verification_level": verification_level,
+            "verificationLevel": verification_level,
+        },
+    )
+    for meta in metadata:
+        meta["pendingStoreSelection"] = pending_payload
+        meta["pending_store_selection"] = pending_payload
+        meta["pendingActionType"] = "store_attribute_check"
+        meta["pending_action_type"] = "store_attribute_check"
+    return {
+        "type": "data",
+        "template": "location",
+        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+        "assistant_response_source": "code_pending_store_selection",
+        "data": {
+            "stores": items,
+            "metadata": metadata,
+            "isBookingFlow": True,
+            "assistantResponse": f"{store_query}으로 확인되는 매장이 여러 곳이에요. 확인할 매장을 선택해 주세요.",
+            "pendingStoreSelection": pending_payload,
+            "metadataSummary": {
+                "context_state": "waiting_for_store_selection",
+                "pending_action_type": "store_attribute_check",
+            },
+        },
+    }
+
+
+def _store_attribute_selection_continuation_from_location_selection(
+    selection: dict | None,
+) -> StoreAttributeInquiry | None:
+    if not isinstance(selection, dict):
+        return None
+    meta = selection.get("meta")
+    if not isinstance(meta, dict):
+        return None
+    pending = meta.get("pendingStoreSelection") or meta.get("pending_store_selection")
+    if not isinstance(pending, dict):
+        return None
+    action_type = str(pending.get("pending_action_type") or pending.get("pendingActionType") or "").strip()
+    if action_type != "store_attribute_check":
+        return None
+    payload = pending.get("action_payload") or pending.get("actionPayload") or {}
+    if not isinstance(payload, dict):
+        payload = {}
+    canonical_meta = canonical_context_from_template_boundary(meta)
+    store_name = str(canonical_meta.get("shop_name") or meta.get("shopName") or meta.get("shop_name") or "").strip()
+    attribute_text = str(payload.get("attribute_text") or payload.get("attributeText") or "").strip()
+    if not store_name or not attribute_text:
+        return None
+    return StoreAttributeInquiry(
+        store_name=store_name,
+        attribute_text=attribute_text,
+        attribute_type=str(payload.get("attribute_type") or payload.get("attributeType") or "service").strip(),
+        verification_level=str(
+            payload.get("verification_level") or payload.get("verificationLevel") or "store_contact_required"
+        ).strip(),
+    )
+
+
 _PREVIOUS_SELECTION_DATA_MARKER = "[이전 선택된 상품 데이터]"
 
 
@@ -24411,6 +24623,14 @@ class TStationChatServiceV2:
                 ).strip()
             inquiry = extract_store_attribute_inquiry(user_query, store_name=slot_store_name or None)
             current_store_name = _extract_plain_store_info_store_name(user_query)
+            latest_location_template = latest_template_data_from_messages(messages, "location")
+            selected_location = TStationChatServiceV2._resolve_store_selection_from_history_template(
+                user_query,
+                latest_location_template,
+            )
+            pending_selection_inquiry = _store_attribute_selection_continuation_from_location_selection(
+                selected_location,
+            )
             continuation_inquiry = _store_attribute_selection_continuation_inquiry(
                 user_text=user_query,
                 messages=messages,
@@ -24421,6 +24641,7 @@ class TStationChatServiceV2:
             if (
                 router_policy_intent != "store_attribute_inquiry"
                 and inquiry is None
+                and pending_selection_inquiry is None
                 and continuation_inquiry is None
                 and not (slot_store_name and labels)
             ):
@@ -24428,6 +24649,7 @@ class TStationChatServiceV2:
             store_name = str(
                 router_store_name
                 or (inquiry.store_name if inquiry is not None else "")
+                or (pending_selection_inquiry.store_name if pending_selection_inquiry is not None else "")
                 or (continuation_inquiry.store_name if continuation_inquiry is not None else "")
                 or current_store_name
                 or slot_store_name
@@ -24436,15 +24658,19 @@ class TStationChatServiceV2:
             attribute_text = (
                 router_attribute_text
                 or (inquiry.attribute_text if inquiry is not None else "")
+                or (pending_selection_inquiry.attribute_text if pending_selection_inquiry is not None else "")
                 or (continuation_inquiry.attribute_text if continuation_inquiry is not None else "")
             )
             attribute_type = (
                 router_attribute_type
                 or (inquiry.attribute_type if inquiry is not None else "")
+                or (pending_selection_inquiry.attribute_type if pending_selection_inquiry is not None else "")
                 or (continuation_inquiry.attribute_type if continuation_inquiry is not None else "")
             )
             verification_level = router_verification_level or (
                 inquiry.verification_level if inquiry is not None else ""
+            ) or (
+                pending_selection_inquiry.verification_level if pending_selection_inquiry is not None else ""
             ) or (
                 continuation_inquiry.verification_level if continuation_inquiry is not None else ""
             )
@@ -24506,17 +24732,26 @@ class TStationChatServiceV2:
                     verification_level=verification_level,
                 )
                 return (emitted_events, event) if event is not None else None
-            store_rows = [store for store in stores if isinstance(store, dict)]
+            store_rows = _dedupe_store_rows([store for store in stores if isinstance(store, dict)])
             store_row = _store_name_exact_match_row(store_name, store_rows)
             if store_row is None:
                 logger.info("[STORE_ATTRIBUTE] ambiguous store match; skip arbitrary detail store=%r rows=%d", store_name, len(store_rows))
-                event = _store_attribute_inquiry_event(
-                    user_query,
-                    store_name=store_name,
+                event = _pending_store_attribute_selection_event(
+                    user_text=user_query,
+                    store_query=store_name,
+                    stores=store_rows,
                     attribute_text=attribute_text,
                     attribute_type=attribute_type,
                     verification_level=verification_level,
                 )
+                if event is None:
+                    event = _store_attribute_inquiry_event(
+                        user_query,
+                        store_name=store_name,
+                        attribute_text=attribute_text,
+                        attribute_type=attribute_type,
+                        verification_level=verification_level,
+                    )
                 return (emitted_events, event) if event is not None else None
 
             shop_id = str(store_row.get("shop_id") or store_row.get("shop_seq") or "").strip()

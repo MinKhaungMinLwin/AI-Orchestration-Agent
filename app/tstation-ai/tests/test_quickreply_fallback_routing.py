@@ -184,10 +184,12 @@ from services.tstation.chat import (
     _has_current_turn_p0_auto_chain_anchor,
     _promote_completed_speculative_router_contract,
     _restore_blocked_transaction_store_selection_contract,
+    _pending_store_attribute_selection_event,
     _router_contract_is_high_confidence_comparison,
     _router_contract_is_high_confidence_policy,
     _router_contract_is_high_confidence_transaction_flow,
     _store_attribute_selection_continuation_inquiry,
+    _store_attribute_selection_continuation_from_location_selection,
     _should_preserve_router_contract,
     _is_product_attribute_lookup_query,
     _should_apply_product_attribute_resolver,
@@ -15880,6 +15882,74 @@ def test_store_selection_continues_previous_store_attribute_inquiry() -> None:
 
     assert inquiry is not None
     assert inquiry.store_name == "분당정자점"
+    assert inquiry.attribute_text == "야간정비"
+    assert inquiry.attribute_type == "operating_condition"
+    assert inquiry.verification_level == "store_contact_required"
+
+
+def test_ambiguous_store_attribute_candidates_carry_pending_selection_state() -> None:
+    event = _pending_store_attribute_selection_event(
+        user_text="야간정비도 가능한가요? 티스테이션 정자점",
+        store_query="정자점",
+        stores=[
+            {
+                "shop_id": "F10001",
+                "shop_nm": "티스테이션 분당정자점",
+                "road_addr_base": "경기도 성남시 분당구 정자일로 1",
+                "tel_no": "0311234567",
+            },
+            {
+                "shop_id": "F10001",
+                "shop_nm": "티스테이션 분당정자점",
+                "road_addr_base": "경기도 성남시 분당구 정자일로 1",
+                "tel_no": "0311234567",
+            },
+            {
+                "shop_id": "F20002",
+                "shop_nm": "티스테이션 수원정자점",
+                "road_addr_base": "경기도 수원시 장안구 정자동 2",
+                "tel_no": "0317654321",
+            },
+        ],
+        attribute_text="야간정비",
+        attribute_type="operating_condition",
+        verification_level="store_contact_required",
+    )
+
+    assert event is not None
+    assert event["template"] == "location"
+    assert event["data"]["isBookingFlow"] is True
+    assert len(event["data"]["stores"]) == 2
+    pending = event["data"]["metadata"][0]["pendingStoreSelection"]
+    assert pending["pending_action_type"] == "store_attribute_check"
+    assert pending["required_slot"] == "store"
+    assert pending["store_query"] == "정자점"
+    assert pending["original_user_text"] == "야간정비도 가능한가요? 티스테이션 정자점"
+    assert pending["action_payload"]["attribute_text"] == "야간정비"
+    assert pending["candidate_stores"][0]["shop_id"] == "F10001"
+
+
+def test_store_selection_resumes_pending_attribute_action_from_location_metadata() -> None:
+    latest_location = _pending_store_attribute_selection_event(
+        user_text="야간정비도 가능한가요? 티스테이션 정자점",
+        store_query="정자점",
+        stores=[
+            {"shop_id": "F10001", "shop_nm": "티스테이션 분당정자점"},
+            {"shop_id": "F20002", "shop_nm": "티스테이션 수원정자점"},
+        ],
+        attribute_text="야간정비",
+        attribute_type="operating_condition",
+        verification_level="store_contact_required",
+    )
+
+    selection = TStationChatServiceV2._resolve_store_selection_from_history_template(
+        "티스테이션 분당정자점",
+        latest_location,
+    )
+    inquiry = _store_attribute_selection_continuation_from_location_selection(selection)
+
+    assert inquiry is not None
+    assert inquiry.store_name == "티스테이션 분당정자점"
     assert inquiry.attribute_text == "야간정비"
     assert inquiry.attribute_type == "operating_condition"
     assert inquiry.verification_level == "store_contact_required"
