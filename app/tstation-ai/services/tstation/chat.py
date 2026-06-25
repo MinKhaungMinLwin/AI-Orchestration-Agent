@@ -1159,14 +1159,17 @@ def _should_preserve_router_contract(
     is_high_confidence_event_content = _router_contract_is_high_confidence_event_content(routing_result)
     is_high_confidence_protected_action = _router_contract_is_high_confidence_protected_action(routing_result)
     is_high_confidence_transaction_flow = _router_contract_is_high_confidence_transaction_flow(routing_result)
+    is_high_confidence_policy = _router_contract_is_high_confidence_policy(routing_result)
     if not (
         is_high_confidence_comparison
         or is_high_confidence_event_content
         or is_high_confidence_protected_action
         or is_high_confidence_transaction_flow
-        or _router_contract_is_high_confidence_policy(routing_result)
+        or is_high_confidence_policy
     ):
         return False
+    if is_high_confidence_policy:
+        return True
     if is_high_confidence_transaction_flow and override_reason in {
         "router_low_confidence_or_ambiguous",
         "heuristic_cross_domain_policy_route",

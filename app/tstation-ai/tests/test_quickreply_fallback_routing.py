@@ -1211,7 +1211,7 @@ def test_p0_auto_chain_requires_current_turn_transaction_anchor() -> None:
     )
 
 
-def test_high_confidence_support_router_contract_allows_explicit_price_lookup_override_reason() -> None:
+def test_high_confidence_support_router_contract_blocks_explicit_price_lookup_override_reason() -> None:
     routing = MultiAgentDomain(
         reason="support policy intent",
         domains=[MultiAgentDomain.Domain.SUPPORT],
@@ -1226,10 +1226,32 @@ def test_high_confidence_support_router_contract_allows_explicit_price_lookup_ov
         agent_prompt_profile="full",
     )
 
-    assert not _should_preserve_router_contract(
+    assert _should_preserve_router_contract(
         routing_result=routing,
         candidate_override="p0_auto_chain",
         override_reason="explicit_current_turn_price_lookup",
+    )
+
+
+def test_high_confidence_store_service_policy_blocks_purchase_keyword_override_reason() -> None:
+    routing = MultiAgentDomain(
+        reason="store service policy intent",
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        execution_plan=["support:store_service_availability"],
+        user_behavior="asking if externally purchased tires can be installed at a store with labor fee",
+        flow="policy guidance",
+        claim_check_type="none",
+        complaint_scope="none",
+        policy_intent="store_service_availability",
+        planner_confidence=0.95,
+        needs_clarification=False,
+        agent_prompt_profile="full",
+    )
+
+    assert _should_preserve_router_contract(
+        routing_result=routing,
+        candidate_override="p0b_transaction_redirect",
+        override_reason="explicit_current_turn_purchase",
     )
 
 
