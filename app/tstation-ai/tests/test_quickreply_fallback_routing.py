@@ -15508,6 +15508,58 @@ def test_store_attribute_inquiry_preserves_uncataloged_attribute_text() -> None:
     assert inquiry.verification_level == "store_contact_required"
 
 
+def test_store_attribute_inquiry_router_fields_handle_store_name_after_attribute() -> None:
+    user_text = "야간정비도 가능한가요? 티스테이션 정자점"
+    event = _store_attribute_inquiry_event(
+        user_text,
+        store_name="정자점",
+        attribute_text="야간정비",
+        attribute_type="operating_condition",
+        verification_level="store_contact_required",
+    )
+    routing = chat_module.MultiAgentDomain(
+        reason="specific store attribute inquiry",
+        domains=[chat_module.MultiAgentDomain.Domain.TRANSACTION, chat_module.MultiAgentDomain.Domain.SUPPORT],
+        execution_plan=["transaction:store_attribute_inquiry", "support:store_attribute_contact_notice"],
+        user_behavior="asking whether a specific store offers night maintenance",
+        flow="store attribute inquiry",
+        claim_check_type="none",
+        complaint_scope="none",
+        discovery_followup_intent="none",
+        carried_discovery_objective="none",
+        pending_check_topic="none",
+        pending_check_object_type="none",
+        pending_check_object_value="",
+        comparison_followup_intent="none",
+        comparison_metric="none",
+        recent_product_set_followup_type="none",
+        recent_product_set_metric="none",
+        recent_product_set_direction="none",
+        recent_product_set_price_basis="none",
+        requested_product_attribute="none",
+        policy_intent="store_attribute_inquiry",
+        store_attribute_store_name="정자점",
+        store_attribute_text="야간정비",
+        store_attribute_type="operating_condition",
+        store_attribute_verification_level="store_contact_required",
+        recommendation_scenario="none",
+        referred_object_status="resolved",
+        referred_object_type="store",
+        needs_clarification=False,
+        planner_confidence=0.95,
+        agent_prompt_profile=chat_module.AgentPromptProfile.TRANSACTION_STORE,
+    )
+
+    assert extract_store_attribute_inquiry(user_text) is None
+    assert StreamingMultiAgentCoordinator._force_keyword_routing(user_text) is None
+    assert routing.policy_intent == "store_attribute_inquiry"
+    assert routing.store_attribute_store_name == "정자점"
+    assert routing.store_attribute_text == "야간정비"
+    assert event is not None
+    assert event["data"]["metadata"]["attributeText"] == "야간정비"
+    assert "정자점의 야간정비 가능 여부" in event["data"]["assistantResponse"]
+
+
 def test_store_attribute_inquiry_equipment_requires_contact_without_source() -> None:
     user_text = "정자점 대형 SUV 리프트 있어?"
     inquiry = extract_store_attribute_inquiry(user_text)

@@ -433,6 +433,14 @@ class MultiAgentDomain(BaseModel):
                 data["requested_product_attribute"] = "none"
             if "policy_intent" not in data:
                 data["policy_intent"] = "none"
+            if "store_attribute_store_name" not in data:
+                data["store_attribute_store_name"] = ""
+            if "store_attribute_text" not in data:
+                data["store_attribute_text"] = ""
+            if "store_attribute_type" not in data:
+                data["store_attribute_type"] = "unknown"
+            if "store_attribute_verification_level" not in data:
+                data["store_attribute_verification_level"] = "store_contact_required"
             if "recommendation_scenario" not in data:
                 data["recommendation_scenario"] = "none"
             if "override_applied" not in data:
@@ -652,6 +660,32 @@ class MultiAgentDomain(BaseModel):
             "online-vs-store price policy, regional price policy, store service availability, goods review lookup, "
             "store service review write CTA, or generic price policy FAQ. Use 'none' otherwise."
         ),
+    )
+    store_attribute_store_name: str = Field(
+        description=(
+            "For policy_intent='store_attribute_inquiry', the specific store name from the current turn "
+            "(e.g. '정자점'). Empty string otherwise."
+        )
+    )
+    store_attribute_text: str = Field(
+        description=(
+            "For policy_intent='store_attribute_inquiry', preserve the raw requested store attribute/service/equipment/"
+            "operating phrase such as '야간정비', '질소충전', '대형 SUV 리프트'. Empty string otherwise."
+        )
+    )
+    store_attribute_type: Literal["service", "equipment", "operating_condition", "subjective_quality", "unknown"] = Field(
+        description="Type of store_attribute_text for store_attribute_inquiry. Use 'unknown' otherwise."
+    )
+    store_attribute_verification_level: Literal[
+        "tool_verifiable",
+        "store_contact_required",
+        "unsupported_or_policy",
+    ] = Field(
+        description=(
+            "Verification level for store_attribute_inquiry. Use 'store_contact_required' when current tools cannot "
+            "confirm the service/equipment/operating condition, 'tool_verifiable' only for fields directly available "
+            "from store tools, and 'unsupported_or_policy' for subjective or guarantee-like requests."
+        )
     )
     recommendation_scenario: str = Field(
         description=(
@@ -1335,6 +1369,14 @@ class _SlimMultiAgentDomain(BaseModel):
                 data["requested_product_attribute"] = "none"
             if "policy_intent" not in data:
                 data["policy_intent"] = "none"
+            if "store_attribute_store_name" not in data:
+                data["store_attribute_store_name"] = ""
+            if "store_attribute_text" not in data:
+                data["store_attribute_text"] = ""
+            if "store_attribute_type" not in data:
+                data["store_attribute_type"] = "unknown"
+            if "store_attribute_verification_level" not in data:
+                data["store_attribute_verification_level"] = "store_contact_required"
             if "recommendation_scenario" not in data:
                 data["recommendation_scenario"] = "none"
             if "override_applied" not in data:
@@ -1491,6 +1533,22 @@ class _SlimMultiAgentDomain(BaseModel):
         "store_review_write",
     ] = Field(
         description="Structured support/policy intent, or 'none'."
+    )
+    store_attribute_store_name: str = Field(
+        description="For policy_intent='store_attribute_inquiry', the specific store name, or empty string."
+    )
+    store_attribute_text: str = Field(
+        description="For policy_intent='store_attribute_inquiry', the raw requested store attribute phrase, or empty string."
+    )
+    store_attribute_type: Literal["service", "equipment", "operating_condition", "subjective_quality", "unknown"] = Field(
+        description="Type of store_attribute_text for store_attribute_inquiry. Use 'unknown' otherwise."
+    )
+    store_attribute_verification_level: Literal[
+        "tool_verifiable",
+        "store_contact_required",
+        "unsupported_or_policy",
+    ] = Field(
+        description="Verification level for store_attribute_inquiry."
     )
     recommendation_scenario: str = Field(
         description=(
@@ -1653,6 +1711,11 @@ Complaint routing rule:
    - "store_review_write": legacy alias for store_service_review_write only
    - When a turn is a SUPPORT policy explanation, set policy_intent explicitly instead of leaving only a broad SUPPORT domain.
    - Product names may appear inside policy questions. Do NOT switch to Discovery/Transaction just because a product name is present if the actual question is policy.
+   - For `store_attribute_inquiry`, also fill:
+     * `store_attribute_store_name`: store name only, e.g. "정자점" from "야간정비도 가능한가요? 티스테이션 정자점"
+     * `store_attribute_text`: preserve the requested attribute/service phrase, e.g. "야간정비"
+     * `store_attribute_type`: service | equipment | operating_condition | subjective_quality | unknown
+     * `store_attribute_verification_level`: store_contact_required unless the exact field is available from store tools.
 
 18. agent_prompt_profile - use a narrow profile only for clear single-flow requests:
    - "transaction_coupon": coupon/promotion/coupon issue
@@ -1885,6 +1948,7 @@ Also set `policy_intent`:
 - regional final-price difference policy (서울 vs 제주 등) → `regional_price_policy`
 - generic pricing policy FAQ → `price_policy_faq`
 - specific-store attribute inquiry (정자점 야간정비 가능해?, 정자점 리프트 있어?, 정자점 질소충전 돼?, 정자점 얼라인먼트 잘 봐?) → `store_attribute_inquiry` with TRANSACTION store info lookup plus support-style contact guidance
+  Also fill `store_attribute_store_name`, `store_attribute_text`, `store_attribute_type`, and `store_attribute_verification_level`.
 - store service availability with no specific store (보관서비스 돼?, 얼라인먼트 잘 봐?) → `store_service_availability`
 - goods review lookup path (내가 쓴 리뷰 어디서 봐?, 내가 작성한 리뷰 확인, 베스트리뷰 확인 어디서 해?, 상품 리뷰/구매후기 확인) → `my_goods_review_lookup`
 - store/service review write path (매장 리뷰 어디다 써?, 매장서비스 후기 작성, 남양주점 별점 5점 남기고 싶어, 지점 칭찬 리뷰 작성하고 싶어) → `store_service_review_write`
@@ -2013,7 +2077,7 @@ EXAMPLES (tricky cases):
 - "2026년 5월 15일 (금)\n17:00" → TRANSACTION, agent_prompt_profile=full (same rule: any message that is ONLY date+newline+time is a datepick selection, always use full profile)
 - [Prior context: agent showed preOrder card] User says "ㅇㅇ" or "네" or "주문해줘" → TRANSACTION, agent_prompt_profile=full (confirmation after preOrder card — needs quick_order_tool which is only in full profile)
 
-Output: domains (list with ONE OR MORE domains, ordered by execution priority), reason, execution_plan, claim_check_type, complaint_scope, discovery_followup_intent, carried_discovery_objective, pending_check_topic, pending_check_object_type, pending_check_object_value, comparison_followup_intent, comparison_metric, recent_product_set_followup_type, recent_product_set_metric, recent_product_set_direction, recent_product_set_price_basis, requested_product_attribute, policy_intent, recommendation_scenario, referred_object_status, referred_object_type, needs_clarification, planner_confidence, and agent_prompt_profile.
+Output: domains (list with ONE OR MORE domains, ordered by execution priority), reason, execution_plan, claim_check_type, complaint_scope, discovery_followup_intent, carried_discovery_objective, pending_check_topic, pending_check_object_type, pending_check_object_value, comparison_followup_intent, comparison_metric, recent_product_set_followup_type, recent_product_set_metric, recent_product_set_direction, recent_product_set_price_basis, requested_product_attribute, policy_intent, store_attribute_store_name, store_attribute_text, store_attribute_type, store_attribute_verification_level, recommendation_scenario, referred_object_status, referred_object_type, needs_clarification, planner_confidence, and agent_prompt_profile.
 claim_check_type:
 - none: normal product description/search/recommendation
 - verifiable_product_attribute: product data attribute verification such as noise label, wet grade, rolling resistance, price grade, season, or vehicle category
@@ -2537,39 +2601,10 @@ class StreamingMultiAgentCoordinator:
             )
 
         store_service_decision = decide_store_service_gate(user_text=text)
-        if (
-            store_service_decision.intent == "store_attribute_inquiry"
-            and not _STORE_SERVICE_ROUTE_EXCLUSION_RE.search(text)
-        ):
-            return MultiAgentDomain(
-                reason=store_service_decision.reason,
-                domains=[MultiAgentDomain.Domain.TRANSACTION, MultiAgentDomain.Domain.SUPPORT],
-                execution_plan=["transaction:store_attribute_inquiry", "support:store_attribute_contact_notice"],
-                user_behavior="asking whether a specific store has a service/equipment/operating attribute",
-                policy_intent="store_attribute_inquiry",
-                needs_clarification=False,
-                planner_confidence=0.95,
-                agent_prompt_profile=AgentPromptProfile.TRANSACTION_STORE,
-                claim_check_type="none",
-                complaint_scope="none",
-                flow="hardcoded store-attribute inquiry routing — lookup store info then advise contact",
-            )
-        if (
-            store_service_decision.intent == "store_special_service"
-            and not _STORE_SERVICE_ROUTE_EXCLUSION_RE.search(text)
-        ):
-            return MultiAgentDomain(
-                reason=store_service_decision.reason,
-                domains=[MultiAgentDomain.Domain.SUPPORT],
-                execution_plan=["support:store_service_availability"],
-                user_behavior="asking whether a store-specific service is available",
-                policy_intent="store_service_availability",
-                needs_clarification=False,
-                planner_confidence=0.95,
-                agent_prompt_profile=AgentPromptProfile.FULL,
-                claim_check_type="none",
-                complaint_scope="none",
-                flow="hardcoded store-service availability routing — bypassed transaction store override",
+        if store_service_decision.intent == "store_special_service" and not _STORE_SERVICE_ROUTE_EXCLUSION_RE.search(text):
+            logger.info(
+                "[STORE_ATTRIBUTE_ROUTING] defer store service/attribute inquiry to LLM router: reason=%s",
+                store_service_decision.reason,
             )
 
         if cls._is_transaction_order_current_turn_query(text):
@@ -10567,16 +10602,28 @@ def _store_attribute_inquiry_event(
     user_text: str,
     *,
     store_name: str | None = None,
+    attribute_text: str | None = None,
+    attribute_type: str | None = None,
+    verification_level: str | None = None,
     store_info_entries: list[dict] | None = None,
 ) -> dict | None:
     inquiry = extract_store_attribute_inquiry(user_text or "", store_name=store_name)
     labels = unverifiable_store_preference_labels(user_text or "")
-    if inquiry is None and not labels:
+    explicit_attribute_text = str(attribute_text or "").strip()
+    if inquiry is None and not labels and not explicit_attribute_text:
         return None
-    service_label = (inquiry.attribute_text if inquiry is not None else labels[0]).strip()
+    service_label = (
+        explicit_attribute_text
+        or (inquiry.attribute_text if inquiry is not None else "")
+        or (labels[0] if labels else "")
+    ).strip()
     store_label = str(store_name or (inquiry.store_name if inquiry is not None else "")).strip()
-    attribute_type = inquiry.attribute_type if inquiry is not None else "service"
-    verification_level = inquiry.verification_level if inquiry is not None else "store_contact_required"
+    attribute_type = str(attribute_type or (inquiry.attribute_type if inquiry is not None else "service") or "unknown")
+    verification_level = str(
+        verification_level
+        or (inquiry.verification_level if inquiry is not None else "store_contact_required")
+        or "store_contact_required"
+    )
     store_info_summary = _build_store_detail_summary_from_context(store_info_entries or [])
     if store_label:
         store_info_block = f"\n\n확인된 매장 정보\n{store_info_summary}" if store_info_summary else ""
@@ -23897,6 +23944,13 @@ class TStationChatServiceV2:
             return emitted_events, _build_store_holiday_period_event(user_query, store_row, detail_result)
 
         async def _resolve_store_attribute_inquiry_with_code() -> tuple[list[dict], dict] | None:
+            router_policy_intent = str(getattr(routing_result, "policy_intent", "") or "")
+            router_store_name = str(getattr(routing_result, "store_attribute_store_name", "") or "").strip()
+            router_attribute_text = str(getattr(routing_result, "store_attribute_text", "") or "").strip()
+            router_attribute_type = str(getattr(routing_result, "store_attribute_type", "") or "").strip()
+            router_verification_level = str(
+                getattr(routing_result, "store_attribute_verification_level", "") or ""
+            ).strip()
             slot_store_name = ""
             if initial_slots is not None:
                 slot_store_name = str(
@@ -23906,11 +23960,31 @@ class TStationChatServiceV2:
                 ).strip()
             inquiry = extract_store_attribute_inquiry(user_query, store_name=slot_store_name or None)
             labels = unverifiable_store_preference_labels(user_query)
-            if inquiry is None and not (slot_store_name and labels):
+            if (
+                router_policy_intent != "store_attribute_inquiry"
+                and inquiry is None
+                and not (slot_store_name and labels)
+            ):
                 return None
-            store_name = str((inquiry.store_name if inquiry is not None else slot_store_name) or "").strip()
+            store_name = str(
+                router_store_name
+                or (inquiry.store_name if inquiry is not None else "")
+                or slot_store_name
+                or ""
+            ).strip()
+            attribute_text = router_attribute_text or (inquiry.attribute_text if inquiry is not None else "")
+            attribute_type = router_attribute_type or (inquiry.attribute_type if inquiry is not None else "")
+            verification_level = router_verification_level or (
+                inquiry.verification_level if inquiry is not None else ""
+            )
             if not store_name:
-                event = _store_attribute_inquiry_event(user_query, store_name=None)
+                event = _store_attribute_inquiry_event(
+                    user_query,
+                    store_name=None,
+                    attribute_text=attribute_text,
+                    attribute_type=attribute_type,
+                    verification_level=verification_level,
+                )
                 return ([], event) if event is not None else None
 
             from services.tstation.agents.c_transaction_agent.tools import (
@@ -23953,13 +24027,25 @@ class TStationChatServiceV2:
             list_data = _unwrap_tool_data(list_result)
             stores = list_data.get("stores") if isinstance(list_data, dict) else None
             if not isinstance(stores, list) or not stores:
-                event = _store_attribute_inquiry_event(user_query, store_name=store_name)
+                event = _store_attribute_inquiry_event(
+                    user_query,
+                    store_name=store_name,
+                    attribute_text=attribute_text,
+                    attribute_type=attribute_type,
+                    verification_level=verification_level,
+                )
                 return (emitted_events, event) if event is not None else None
             store_rows = [store for store in stores if isinstance(store, dict)]
             store_row = _store_name_exact_match_row(store_name, store_rows)
             if store_row is None:
                 logger.info("[STORE_ATTRIBUTE] ambiguous store match; skip arbitrary detail store=%r rows=%d", store_name, len(store_rows))
-                event = _store_attribute_inquiry_event(user_query, store_name=store_name)
+                event = _store_attribute_inquiry_event(
+                    user_query,
+                    store_name=store_name,
+                    attribute_text=attribute_text,
+                    attribute_type=attribute_type,
+                    verification_level=verification_level,
+                )
                 return (emitted_events, event) if event is not None else None
 
             shop_id = str(store_row.get("shop_id") or store_row.get("shop_seq") or "").strip()
@@ -23967,6 +24053,9 @@ class TStationChatServiceV2:
                 event = _store_attribute_inquiry_event(
                     user_query,
                     store_name=store_name,
+                    attribute_text=attribute_text,
+                    attribute_type=attribute_type,
+                    verification_level=verification_level,
                     store_info_entries=[{"tool": "get_store_list_tool", "args": list_input, "data": list_result}],
                 )
                 return (emitted_events, event) if event is not None else None
@@ -24018,6 +24107,9 @@ class TStationChatServiceV2:
             event = _store_attribute_inquiry_event(
                 user_query,
                 store_name=store_name,
+                attribute_text=attribute_text,
+                attribute_type=attribute_type,
+                verification_level=verification_level,
                 store_info_entries=[
                     {"tool": "get_store_list_tool", "args": list_input, "data": list_result},
                     {"tool": "get_store_detail_tool", "args": detail_input, "data": detail_result},
