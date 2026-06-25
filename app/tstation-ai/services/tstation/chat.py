@@ -17216,6 +17216,38 @@ def _stage_dormant_transaction_context(slots: ConversationSlots, *, source: str)
     return dormant_context
 
 
+def _mask_dormant_transaction_action_slots(slots: ConversationSlots, *, source: str) -> dict[str, Any]:
+    """Remove flat action slots after copying them into dormant context."""
+    masked: dict[str, Any] = {}
+    if slots.pending_intent in {"order", "stock", "reservation", "price"}:
+        masked["pending_intent"] = slots.pending_intent
+        slots.pending_intent = None
+    if slots.goal_type in {"place_order", "store_with_stock", "price_inquiry"}:
+        masked["goal_type"] = slots.goal_type
+        slots.goal_type = None
+    if slots.pending_required_slot:
+        masked["pending_required_slot"] = slots.pending_required_slot
+        slots.pending_required_slot = None
+    if slots.availability_intent:
+        masked["availability_intent"] = slots.availability_intent
+        slots.availability_intent = None
+    if slots.requested_cal_day:
+        masked["requested_cal_day"] = slots.requested_cal_day
+        slots.requested_cal_day = None
+    if slots.rsv_hour:
+        masked["rsv_hour"] = slots.rsv_hour
+        slots.rsv_hour = None
+    if slots.ord_qty is not None:
+        masked["ord_qty"] = slots.ord_qty
+        slots.ord_qty = None
+    if slots.payment_amount is not None:
+        masked["payment_amount"] = slots.payment_amount
+        slots.payment_amount = None
+    if masked:
+        logger.debug("[SLOTS] Masked dormant transaction action slots from %s: %s", source, masked)
+    return masked
+
+
 def _stage_pending_product_context_from_search(
     slots: ConversationSlots,
     *,
@@ -22498,6 +22530,12 @@ class TStationChatServiceV2:
                     "[SLOTS] Staged dormant transaction context before policy planning: %s",
                     staged_dormant_context,
                 )
+            masked_dormant_action_slots = _mask_dormant_transaction_action_slots(
+                merged_slots,
+                source=f"pre_policy_context:{action_mode}",
+            )
+            if masked_dormant_action_slots:
+                await chat_history_svc.save_slots_async(request.session_id, merged_slots, user_id=request.user_id)
         current_goal_type.set(merged_slots.goal_type)
         current_pending_intent.set(merged_slots.pending_intent)
         current_action_mode.set(action_mode)

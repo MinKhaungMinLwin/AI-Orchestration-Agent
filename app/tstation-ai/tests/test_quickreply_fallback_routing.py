@@ -118,6 +118,7 @@ from services.tstation.chat import (
     _context_state_for_action,
     _current_turn_action_mode,
     _has_current_turn_order_recovery_anchor,
+    _mask_dormant_transaction_action_slots,
     _stage_dormant_transaction_context,
     _stage_pending_order_context,
     _stage_pending_product_context_from_search,
@@ -7840,9 +7841,13 @@ def test_high_confidence_support_policy_beats_purchase_keyword_action_mode() -> 
         _stage_pending_order_context(slots, source=f"pre_policy_context:{context_state}")
     else:
         _stage_dormant_transaction_context(slots, source=f"pre_policy_context:{action_mode}")
+        _mask_dormant_transaction_action_slots(slots, source=f"pre_policy_context:{action_mode}")
 
     assert action_mode == "support_policy_answer"
     assert context_state == "dormant"
+    assert slots.pending_intent is None
+    assert slots.goal_type is None
+    assert slots.ord_qty is None
     assert "pending_order_context" not in (slots.availability_context or {})
     assert "dormant_purchase_context" in (slots.availability_context or {})
     assert slots.availability_context["dormant_purchase_context"]["source"] == (
