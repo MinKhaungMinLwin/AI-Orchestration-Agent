@@ -741,6 +741,7 @@ RULES:
 - Product name + explicit same-turn order/store request + size, no goods_no → [DISCOVERY, TRANSACTION]
 - Product name + 예약/주문 + NO size, no goods_no → DISCOVERY only (must show list so user picks size)
 - Vehicle number (e.g. 12가3456) + tire request → DISCOVERY
+- Vehicle number ALONE, with no other text at all (e.g. just "12가3456") → DISCOVERY, agent_prompt_profile=discovery_recommendation. In this chatbot there is no other plausible intent for a bare plate number — treat it the same as "12가3456 타이어 추천". Do NOT route to LEADING for lack of an explicit tire keyword.
 - 추천/맞는 타이어/어떤 타이어 → DISCOVERY
 - 가격 범위/예산으로 타이어 찾기 (X만원 이하/이상/사이 타이어 등, goods_no 없음) → DISCOVERY
 - 런플랫 가격 차이/추가 비용/일반 타이어 대비 비교 → DISCOVERY, agent_prompt_profile=discovery_search
@@ -799,6 +800,7 @@ EXAMPLES (tricky cases):
 - [After showing multiple products] "두개다 2355519 사이즈가 있을까?" → DISCOVERY, discovery_followup_intent=recent_product_set_size_availability
 - [After showing multiple products] "2355519 규격 있어?" → DISCOVERY, discovery_followup_intent=recent_product_set_size_availability
 - "12가3456 타이어 추천" → DISCOVERY, agent_prompt_profile=discovery_recommendation
+- "12가3456" (bare vehicle number, no other text) → DISCOVERY, agent_prompt_profile=discovery_recommendation (same handling as "12가3456 타이어 추천" — no tire keyword needed)
 - "30만원 이하 타이어 추천해줘" → DISCOVERY, agent_prompt_profile=discovery_recommendation (price range recommendation)
 - "지금 세일 많이 하는 타이어 위주로 보여줘" → DISCOVERY, agent_prompt_profile=discovery_recommendation (discounted tire ranking, NOT events/deals)
 - "할인율 높은 타이어 보여줘" → DISCOVERY, agent_prompt_profile=discovery_recommendation (highest discount applied)
