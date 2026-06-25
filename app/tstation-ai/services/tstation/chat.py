@@ -116,6 +116,7 @@ from services.tstation.policies.store_confirmation_policy import (
 )
 from services.tstation.policies.store_service_gate import (
     decide_store_service_gate,
+    extract_store_attribute_inquiry,
     is_store_detail_page_cta_text,
     is_store_visual_detail_request,
     replace_store_review_unavailable_text,
@@ -640,6 +641,7 @@ class MultiAgentDomain(BaseModel):
         "online_store_price_policy",
         "regional_price_policy",
         "price_policy_faq",
+        "store_attribute_inquiry",
         "store_service_availability",
         "my_goods_review_lookup",
         "store_service_review_write",
@@ -1479,6 +1481,7 @@ class _SlimMultiAgentDomain(BaseModel):
         "online_store_price_policy",
         "regional_price_policy",
         "price_policy_faq",
+        "store_attribute_inquiry",
         "store_service_availability",
         "my_goods_review_lookup",
         "store_service_review_write",
@@ -1640,7 +1643,8 @@ Complaint routing rule:
    - "online_store_price_policy": 온라인 vs 매장 가격/구매 방식/주문 방식 정책
    - "regional_price_policy": 서울/제주 등 지역에 따라 최종가가 달라지는 정책 설명
    - "price_policy_faq": generic pricing policy FAQ that is not a live price lookup
-   - "store_service_availability": 보관서비스/타이어 보관/질소충전/얼라인먼트 숙련도 등 매장별 서비스 운영 여부 안내
+   - "store_attribute_inquiry": 특정 매장의 서비스/장비/운영 조건/주관 품질 가능 여부 문의
+   - "store_service_availability": 매장명이 없는 보관서비스/타이어 보관/질소충전/얼라인먼트 숙련도 등 매장별 서비스 운영 여부 안내
    - "my_goods_review_lookup": 내가 쓴 상품 리뷰/구매후기/베스트리뷰 선정 여부 확인 경로 안내
    - "store_service_review_write": 매장/지점/매장서비스/장착서비스 리뷰·후기·칭찬·별점 작성 경로 안내
    - "store_review_write": legacy alias for store_service_review_write only
@@ -1869,7 +1873,7 @@ Classify the user's FIRST message into EXACTLY ONE domain.
 DOMAINS:
 - TRANSACTION: store search by location or name (강남/근처/올마이티/All My T); goods_no (G+12 digits) price/stock/order; store visit reservation (specific date/time slot booking); reservation time change (예약 시간 변경/방문 시간 변경/일정 변경/시간 바꿀 수 있어); cart; coupon inquiry (내 쿠폰/쿠폰함/쿠폰 사용 조건/쿠폰 어떻게 써/쿠폰 사용법) [⚠️ NOT SUPPORT]; order history (내 주문내역/주문 조회/내 주문/내가 주문한 거) [⚠️ NOT SUPPORT]; maintenance/service history lookup (정비이력/정비내역/관리받은 내역/서비스 이력) [⚠️ NOT SUPPORT — must query member history]; order cancellation (주문 취소/취소하고 싶어/취소해줘) [⚠️ NOT SUPPORT]; cancellation/return fee inquiry (취소 수수료/취소비용/오늘 취소하면 수수료/예약 취소 비용/택배비/왕복 배송비/반품 비용/반품수수료) [⚠️ NOT SUPPORT — must check order/logistics state].
 - DISCOVERY: product search by name or keyword; tire recommendation; vehicle-tire compatibility; product specs/features/videos; run-flat vs normal tire price comparison; price/stock/buy with PRODUCT NAME ONLY (no goods_no — Discovery resolves goods_no first).
-- SUPPORT: warranty, returns, refund, general maintenance info, **per-vehicle maintenance D-day / 정비 시기·주기 / 교체 시기 / 점검 만기일 (내 차 정비 일정 / 엔진오일 언제 갈아야 / all my T 점검 만기 / 타이어 교체 시기)** [⚠️ NOT TRANSACTION — registered-car D-day matrix, not a store-visit slot booking], store-specific service availability policy (보관서비스/타이어 보관/질소충전/얼라인먼트 숙련도 — NOT store schedule), shipping fee policy (배송비/도서산간/제주/서귀포), online-vs-store price policy, 1:1 문의, 상담원 연결, T-Station service complaints (tires/products/orders/payment/delivery/installation/stores/coupons/vehicles/chatbot answers), smart pickup / pickup-service FAQ (픽업서비스, 스마트픽업, 차 가지러 와, 차 가지러 올 수 있어, 차량 수거 후 인도, 집앞까지 데려다 줘, 픽업 신청 방법, 픽업 가능 거리, 기사 위치/도착 문의). ⚠️ Do NOT route cancellation fee questions here — Transaction checks actual order state.
+- SUPPORT: warranty, returns, refund, general maintenance info, **per-vehicle maintenance D-day / 정비 시기·주기 / 교체 시기 / 점검 만기일 (내 차 정비 일정 / 엔진오일 언제 갈아야 / all my T 점검 만기 / 타이어 교체 시기)** [⚠️ NOT TRANSACTION — registered-car D-day matrix, not a store-visit slot booking], store-specific service availability policy when NO specific store is named, shipping fee policy (배송비/도서산간/제주/서귀포), online-vs-store price policy, 1:1 문의, 상담원 연결, T-Station service complaints (tires/products/orders/payment/delivery/installation/stores/coupons/vehicles/chatbot answers), smart pickup / pickup-service FAQ (픽업서비스, 스마트픽업, 차 가지러 와, 차 가지러 올 수 있어, 차량 수거 후 인도, 집앞까지 데려다 줘, 픽업 신청 방법, 픽업 가능 거리, 기사 위치/도착 문의). ⚠️ Do NOT route cancellation fee questions here — Transaction checks actual order state.
 - LEADING: pure greeting; unclear intent; bare re-trigger words (다시/또) with no domain anchor.
 
 Also set `policy_intent`:
@@ -1877,7 +1881,8 @@ Also set `policy_intent`:
 - online vs store price or purchase method policy → `online_store_price_policy`
 - regional final-price difference policy (서울 vs 제주 등) → `regional_price_policy`
 - generic pricing policy FAQ → `price_policy_faq`
-- store-specific service availability (보관서비스/타이어 보관/질소충전/얼라인먼트 잘 봐?) → `store_service_availability`
+- specific-store attribute inquiry (정자점 야간정비 가능해?, 정자점 리프트 있어?, 정자점 질소충전 돼?, 정자점 얼라인먼트 잘 봐?) → `store_attribute_inquiry` with TRANSACTION store info lookup plus support-style contact guidance
+- store service availability with no specific store (보관서비스 돼?, 얼라인먼트 잘 봐?) → `store_service_availability`
 - goods review lookup path (내가 쓴 리뷰 어디서 봐?, 내가 작성한 리뷰 확인, 베스트리뷰 확인 어디서 해?, 상품 리뷰/구매후기 확인) → `my_goods_review_lookup`
 - store/service review write path (매장 리뷰 어디다 써?, 매장서비스 후기 작성, 남양주점 별점 5점 남기고 싶어, 지점 칭찬 리뷰 작성하고 싶어) → `store_service_review_write`
 - otherwise `none`
@@ -2529,6 +2534,23 @@ class StreamingMultiAgentCoordinator:
             )
 
         store_service_decision = decide_store_service_gate(user_text=text)
+        if (
+            store_service_decision.intent == "store_attribute_inquiry"
+            and not _STORE_SERVICE_ROUTE_EXCLUSION_RE.search(text)
+        ):
+            return MultiAgentDomain(
+                reason=store_service_decision.reason,
+                domains=[MultiAgentDomain.Domain.TRANSACTION, MultiAgentDomain.Domain.SUPPORT],
+                execution_plan=["transaction:store_attribute_inquiry", "support:store_attribute_contact_notice"],
+                user_behavior="asking whether a specific store has a service/equipment/operating attribute",
+                policy_intent="store_attribute_inquiry",
+                needs_clarification=False,
+                planner_confidence=0.95,
+                agent_prompt_profile=AgentPromptProfile.TRANSACTION_STORE,
+                claim_check_type="none",
+                complaint_scope="none",
+                flow="hardcoded store-attribute inquiry routing — lookup store info then advise contact",
+            )
         if (
             store_service_decision.intent == "store_special_service"
             and not _STORE_SERVICE_ROUTE_EXCLUSION_RE.search(text)
@@ -10538,55 +10560,89 @@ def _store_visit_advisory_event(user_text: str, *, store_name: str | None = None
     }
 
 
-def _store_service_availability_event(user_text: str, *, store_name: str | None = None) -> dict | None:
+def _store_attribute_inquiry_event(
+    user_text: str,
+    *,
+    store_name: str | None = None,
+    store_info_entries: list[dict] | None = None,
+) -> dict | None:
+    inquiry = extract_store_attribute_inquiry(user_text or "", store_name=store_name)
     labels = unverifiable_store_preference_labels(user_text or "")
-    if not labels:
+    if inquiry is None and not labels:
         return None
-    service_label = labels[0]
-    store_label = str(store_name or "").strip()
+    service_label = (inquiry.attribute_text if inquiry is not None else labels[0]).strip()
+    store_label = str(store_name or (inquiry.store_name if inquiry is not None else "")).strip()
+    attribute_type = inquiry.attribute_type if inquiry is not None else "service"
+    verification_level = inquiry.verification_level if inquiry is not None else "store_contact_required"
+    store_info_summary = _build_store_detail_summary_from_context(store_info_entries or [])
     if store_label:
+        store_info_block = f"\n\n확인된 매장 정보\n{store_info_summary}" if store_info_summary else ""
         assistant_response = (
-            f"{store_label}의 {service_label}는 매장별 운영 조건과 현장 상황에 따라 달라질 수 있어요. "
-            "현재 챗봇 데이터만으로는 가능 여부를 확정해서 단정하기 어렵습니다.\n\n"
-            "방문 전 해당 매장에 직접 확인해 주세요. 보관서비스처럼 시즌/공간/이용 조건이 있는 서비스는 "
-            "매장별 운영 여부와 접수 가능 시점이 다를 수 있어요."
+            f"{store_label}의 {service_label} 가능 여부는 매장 운영 조건과 당일 작업 상황에 따라 달라질 수 있어요. "
+            "현재 확인된 데이터만으로는 가능 여부를 확정해서 단정하기 어렵습니다.\n\n"
+            f"방문 전 해당 매장에 직접 확인해 주세요.{store_info_block}"
         )
         quick_replies = [
             {"label": "매장 전화번호 확인", "domain": "TRANSACTION"},
             {"label": "매장 상세보기", "domain": "TRANSACTION"},
-            {"label": "다른 매장 문의", "domain": "SUPPORT"},
+            {"label": "매장 예약", "domain": "TRANSACTION"},
         ]
+        for entry in store_info_entries or []:
+            raw = _unwrap_tool_data(entry.get("data"))
+            if not isinstance(raw, dict):
+                continue
+            store_seq = str(raw.get("shop_seq") or raw.get("shop_id") or "").strip()
+            if store_seq:
+                quick_replies[1] = {
+                    "label": "매장 상세보기",
+                    "url": CTAUrls.STORE_DETAIL.replace("<shop_seq>", store_seq),
+                    "domain": "TRANSACTION",
+                }
+                break
     else:
         assistant_response = (
-            f"{service_label}는 매장별 운영 조건에 따라 달라질 수 있어요. "
+            f"{service_label}는 매장별 운영 조건과 현장 상황에 따라 달라질 수 있어요. "
             "어느 매장 기준인지 알려주시면 해당 매장 기준으로 확인 방법을 안내해드릴게요.\n\n"
-            "특히 타이어 보관서비스는 시즌, 보관 공간, 이용 조건에 따라 운영 여부가 달라질 수 있습니다."
+            "확인할 매장명을 알려주시면 매장 기본정보와 함께 안내해드릴게요."
         )
         quick_replies = [
             {"label": "매장명 입력", "domain": "SUPPORT"},
-            {"label": "보관서비스 안내", "domain": "SUPPORT"},
             {"label": "매장 찾기", "domain": "TRANSACTION"},
+            {"label": "1:1 문의하기", "domain": "SUPPORT"},
         ]
     return {
         "type": "data",
         "template": "quickReply",
-        "source_domain": MultiAgentDomain.Domain.SUPPORT.value,
-        "assistant_response_source": "code_store_service_availability_guard",
+        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value if store_info_summary else MultiAgentDomain.Domain.SUPPORT.value,
+        "assistant_response_source": (
+            "code_store_attribute_inquiry_with_store_info"
+            if store_info_summary
+            else "code_store_attribute_inquiry_guard"
+        ),
         "data": {
             "assistantResponse": assistant_response,
             "quickReplies": quick_replies,
-            "predictedDomains": ["SUPPORT", "TRANSACTION"],
+            "predictedDomains": ["TRANSACTION", "SUPPORT"],
             "metadata": {
-                "responseShapeKey": "store_service_availability",
+                "responseShapeKey": "store_attribute_inquiry",
+                "store_attribute_inquiry_intent": True,
                 "store_service_availability_intent": True,
                 "storeServiceLabel": service_label,
+                "attributeText": service_label,
+                "attributeType": attribute_type,
+                "verificationLevel": verification_level,
                 "carried_store_context": store_label,
-                "store_search_suppressed": True,
-                "override_blocked_reason": "store_service_availability_support_intent",
+                "store_info_lookup": bool(store_info_summary),
+                "store_search_suppressed": not bool(store_label),
+                "override_blocked_reason": "store_attribute_inquiry_contact_required",
                 "userText": user_text,
             },
         },
     }
+
+
+def _store_service_availability_event(user_text: str, *, store_name: str | None = None) -> dict | None:
+    return _store_attribute_inquiry_event(user_text, store_name=store_name)
 
 
 _MAINTENANCE_ADDON_CODES = frozenset({"121", "122"})
@@ -20101,7 +20157,7 @@ class TStationChatServiceV2:
 
             store_service_decision = decide_store_service_gate(user_text=last_user_text)
             if (
-                store_service_decision.intent == "store_special_service"
+                store_service_decision.intent in {"store_attribute_inquiry", "store_special_service"}
                 and not _STORE_SERVICE_ROUTE_EXCLUSION_RE.search(last_user_text)
             ):
                 store_context_name = (
@@ -20115,16 +20171,16 @@ class TStationChatServiceV2:
                     merged_slots.shop_name = regex_slots.shop_name
                 if store_context_name and not merged_slots.shop_name:
                     merged_slots.shop_name = str(store_context_name)
-                merged_slots.goal_type = "store_service_availability"
+                merged_slots.goal_type = "store_attribute_inquiry"
                 merged_slots.pending_intent = None
                 await chat_history_svc.save_slots_async(request.session_id, merged_slots, user_id=request.user_id)
-                store_service_event = _store_service_availability_event(
+                store_service_event = _store_attribute_inquiry_event(
                     last_user_text,
                     store_name=str(store_context_name or "").strip() or None,
                 )
-                if store_service_event is not None:
+                if store_service_event is not None and not store_context_name:
                     logger.info(
-                        "[STORE_SERVICE_AVAILABILITY] support guard response: store=%r reason=%s labels=%s",
+                        "[STORE_ATTRIBUTE_INQUIRY] support guard response without store: store=%r reason=%s labels=%s",
                         store_context_name,
                         store_service_decision.reason,
                         unverifiable_store_preference_labels(last_user_text),
@@ -23837,6 +23893,135 @@ class TStationChatServiceV2:
             })
             return emitted_events, _build_store_holiday_period_event(user_query, store_row, detail_result)
 
+        async def _resolve_store_attribute_inquiry_with_code() -> tuple[list[dict], dict] | None:
+            slot_store_name = ""
+            if initial_slots is not None:
+                slot_store_name = str(
+                    getattr(initial_slots, "shop_name", None)
+                    or getattr(initial_slots, "store_name", None)
+                    or ""
+                ).strip()
+            inquiry = extract_store_attribute_inquiry(user_query, store_name=slot_store_name or None)
+            labels = unverifiable_store_preference_labels(user_query)
+            if inquiry is None and not (slot_store_name and labels):
+                return None
+            store_name = str((inquiry.store_name if inquiry is not None else slot_store_name) or "").strip()
+            if not store_name:
+                event = _store_attribute_inquiry_event(user_query, store_name=None)
+                return ([], event) if event is not None else None
+
+            from services.tstation.agents.c_transaction_agent.tools import (
+                get_store_detail_tool as _store_detail_tool,
+                get_store_list_tool as _store_list_tool,
+            )
+
+            emitted_events: list[dict] = []
+            list_input = {"store_nm": store_name, "limit": 3}
+            emitted_events.append({
+                "type": "status",
+                "status": "tool_start",
+                "tool": "get_store_list_tool",
+                "display_name": "매장 조회 중...",
+                "source_domain": "transaction",
+            })
+            try:
+                raw_list = await asyncio.to_thread(_store_list_tool.invoke, list_input)
+                list_result = _tool_result_dict(raw_list)
+            except Exception as exc:
+                logger.exception("[STORE_ATTRIBUTE] store list tool failed")
+                list_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+            _record_code_tool_result("get_store_list_tool", list_input, list_result)
+            emitted_events.append({
+                "type": "agent_flow",
+                "agent": "[Store AF]",
+                "agent_class": "Transaction Agent",
+                "status": list_result.get("status", "success"),
+                "source_domain": "transaction",
+            })
+            emitted_events.append({
+                "type": "tool",
+                "input": list_input,
+                "output": json.dumps(list_result, ensure_ascii=False),
+                "node": "tools",
+                "tool": "get_store_list_tool",
+                "source_domain": "transaction",
+            })
+
+            list_data = _unwrap_tool_data(list_result)
+            stores = list_data.get("stores") if isinstance(list_data, dict) else None
+            if not isinstance(stores, list) or not stores:
+                event = _store_attribute_inquiry_event(user_query, store_name=store_name)
+                return (emitted_events, event) if event is not None else None
+            store_rows = [store for store in stores if isinstance(store, dict)]
+            store_row = _store_name_exact_match_row(store_name, store_rows)
+            if store_row is None:
+                logger.info("[STORE_ATTRIBUTE] ambiguous store match; skip arbitrary detail store=%r rows=%d", store_name, len(store_rows))
+                event = _store_attribute_inquiry_event(user_query, store_name=store_name)
+                return (emitted_events, event) if event is not None else None
+
+            shop_id = str(store_row.get("shop_id") or store_row.get("shop_seq") or "").strip()
+            if not shop_id:
+                event = _store_attribute_inquiry_event(
+                    user_query,
+                    store_name=store_name,
+                    store_info_entries=[{"tool": "get_store_list_tool", "args": list_input, "data": list_result}],
+                )
+                return (emitted_events, event) if event is not None else None
+
+            detail_input = {"shop_id": shop_id, "cal_day": _requested_reservation_cal_day_or_today(user_query)}
+            emitted_events.append({
+                "type": "status",
+                "status": "tool_start",
+                "tool": "get_store_detail_tool",
+                "display_name": "매장 상세 정보 조회 중...",
+                "source_domain": "transaction",
+            })
+            try:
+                raw_detail = await asyncio.to_thread(_store_detail_tool.invoke, detail_input)
+                detail_result = _tool_result_dict(raw_detail)
+            except Exception as exc:
+                logger.exception("[STORE_ATTRIBUTE] store detail tool failed")
+                detail_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+            _record_code_tool_result("get_store_detail_tool", detail_input, detail_result)
+            emitted_events.append({
+                "type": "agent_flow",
+                "agent": "[Store AF]",
+                "agent_class": "Transaction Agent",
+                "status": detail_result.get("status", "success"),
+                "source_domain": "transaction",
+            })
+            emitted_events.append({
+                "type": "tool",
+                "input": detail_input,
+                "output": json.dumps(detail_result, ensure_ascii=False),
+                "node": "tools",
+                "tool": "get_store_detail_tool",
+                "source_domain": "transaction",
+            })
+            if initial_slots is not None and isinstance(detail_result, dict) and detail_result.get("status") == "success":
+                detail_data = _unwrap_tool_data(detail_result)
+                initial_slots.shop_id = shop_id
+                if isinstance(detail_data, dict):
+                    initial_slots.shop_name = str(detail_data.get("shop_nm") or store_row.get("shop_nm") or store_name).strip()
+                if session_id:
+                    try:
+                        from services.tstation.chat_history_service import get_chat_history_service
+
+                        history_svc = get_chat_history_service()
+                        await history_svc.save_slots_async(session_id, initial_slots, user_id=user_id)
+                    except Exception:
+                        logger.exception("[STORE_ATTRIBUTE] failed to persist store slots")
+
+            event = _store_attribute_inquiry_event(
+                user_query,
+                store_name=store_name,
+                store_info_entries=[
+                    {"tool": "get_store_list_tool", "args": list_input, "data": list_result},
+                    {"tool": "get_store_detail_tool", "args": detail_input, "data": detail_result},
+                ],
+            )
+            return (emitted_events, event) if event is not None else None
+
         async def _resolve_plain_store_info_with_code() -> tuple[list[dict], dict] | None:
             store_name = _extract_plain_store_info_store_name(user_query)
             if not store_name:
@@ -26596,22 +26781,6 @@ class TStationChatServiceV2:
             yield "data: [DONE]\n\n"
             return
 
-        plain_store_info_resolution = await _resolve_plain_store_info_with_code()
-        if plain_store_info_resolution is not None:
-            code_events, store_info_event = plain_store_info_resolution
-            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
-            for code_event in code_events:
-                yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
-            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
-            yield f"data: {json.dumps(store_info_event, ensure_ascii=False)}\n\n"
-            assistant_response = str((store_info_event.get("data") or {}).get("assistantResponse") or "")
-            if assistant_response:
-                yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[TRANSACTION AGENT]'}, ensure_ascii=False)}\n\n"
-            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
-            yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
-            yield "data: [DONE]\n\n"
-            return
-
         store_holiday_resolution = await _resolve_store_holiday_period_with_code()
         if store_holiday_resolution is not None:
             code_events, holiday_event = store_holiday_resolution
@@ -26621,6 +26790,38 @@ class TStationChatServiceV2:
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps(holiday_event, ensure_ascii=False)}\n\n"
             assistant_response = str((holiday_event.get("data") or {}).get("assistantResponse") or "")
+            if assistant_response:
+                yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[TRANSACTION AGENT]'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
+        store_attribute_resolution = await _resolve_store_attribute_inquiry_with_code()
+        if store_attribute_resolution is not None:
+            code_events, store_attribute_event = store_attribute_resolution
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+            for code_event in code_events:
+                yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(store_attribute_event, ensure_ascii=False)}\n\n"
+            assistant_response = str((store_attribute_event.get("data") or {}).get("assistantResponse") or "")
+            if assistant_response:
+                yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[TRANSACTION AGENT]'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
+        plain_store_info_resolution = await _resolve_plain_store_info_with_code()
+        if plain_store_info_resolution is not None:
+            code_events, store_info_event = plain_store_info_resolution
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+            for code_event in code_events:
+                yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(store_info_event, ensure_ascii=False)}\n\n"
+            assistant_response = str((store_info_event.get("data") or {}).get("assistantResponse") or "")
             if assistant_response:
                 yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[TRANSACTION AGENT]'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"

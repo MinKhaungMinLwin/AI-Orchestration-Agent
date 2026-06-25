@@ -54,8 +54,10 @@ def decide_transaction_response(
         return _decide_service_duration_advisory()
     if intent == "maintenance_addon_with_tire_service":
         return _decide_maintenance_addon_with_tire_service()
+    if intent == "store_attribute_inquiry":
+        return _decide_store_attribute_inquiry()
     if intent == "store_service_availability":
-        return _decide_store_service_availability()
+        return _decide_store_attribute_inquiry()
     if intent == "favorite_store_lookup":
         return _decide_favorite_store_lookup()
     if intent == "reservation_store_info_lookup":
@@ -416,22 +418,27 @@ def _decide_maintenance_addon_with_tire_service() -> ResponseDecision:
     )
 
 
-def _decide_store_service_availability() -> ResponseDecision:
+def _decide_store_attribute_inquiry() -> ResponseDecision:
     return _decision(
-        response_shape_key="store_service_availability",
+        response_shape_key="store_attribute_inquiry",
         response_shape=ResponseShape.SUMMARY,
         template=TemplateName.QUICK_REPLY,
         forbidden_behaviors=(
-            "datepick_for_store_service_availability",
-            "preorder_for_store_service_availability",
-            "generic_store_search_for_store_service_availability",
+            "datepick_for_store_attribute_inquiry",
+            "preorder_for_store_attribute_inquiry",
+            "order_complete_for_store_attribute_inquiry",
             "claim_unverified_store_service_available",
+            "pick_arbitrary_store",
         ),
         assistant_guidance=(
-            "보관서비스, 질소충전, 얼라인먼트 숙련도 같은 매장별 서비스 운영 여부는 예약/방문예약이 아니라 "
-            "매장별 운영 정책 안내로 답한다. 시스템에서 확정할 수 없는 경우 단정하지 말고 해당 매장 직접 확인을 권장한다."
+            "특정 매장의 서비스/장비/운영 조건/주관 품질 가능 여부는 source 없이 단정하지 않는다. "
+            "매장명이 있으면 기본 매장정보를 함께 안내해 사용자가 직접 확인하도록 하고, 매장명이 없으면 매장명을 요청한다."
         ),
     )
+
+
+def _decide_store_service_availability() -> ResponseDecision:
+    return _decide_store_attribute_inquiry()
 
 
 def _decide_inventory_availability(

@@ -8,6 +8,7 @@ from typing import Any
 
 from services.tstation.policies.intent_frame import IntentFrame, PolicyDomain
 from services.tstation.policies.response_decision import ToolPlan
+from services.tstation.policies.store_service_gate import extract_store_attribute_inquiry
 
 
 _SIZE_COMPACT_RE = re.compile(r"\b(\d{3})\s*/?\s*(\d)(\d)(?:\3)?\s*R?\s*(\d{2})\b", re.IGNORECASE)
@@ -127,7 +128,8 @@ _MAINTENANCE_HISTORY_SERVICE_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
 _MAINTENANCE_ADDON_SERVICE_RE = re.compile(r"엔진\s*오일|실내\s*필터|필터|와이퍼|배터리|경정비", re.IGNORECASE)
 _STORE_SERVICE_AVAILABILITY_RE = re.compile(
     r"보관\s*서비스|타이어\s*보관|윈터\s*타이어\s*보관|겨울\s*타이어\s*보관|"
-    r"보관\s*(?:돼|되|가능|되나요|가능해)|질소\s*충전|질소|얼라인먼트.{0,12}(?:잘|무료|가능)",
+    r"보관\s*(?:돼|되|가능|되나요|가능해)|질소\s*충전|질소|"
+    r"야간\s*(?:정비|서비스|작업)|야간정비|얼라인먼트.{0,12}(?:잘|무료|가능)",
     re.IGNORECASE,
 )
 _TIRE_SERVICE_RE = re.compile(r"타이어.{0,12}(?:교체|장착|서비스|작업)|(?:교체|장착).{0,12}타이어", re.IGNORECASE)
@@ -474,6 +476,7 @@ def build_transaction_intent_frame(
     current_service_duration_advisory = bool(
         _SERVICE_DURATION_ADVISORY_RE.search(text) and not _RESERVATION_CHANGE_RE.search(text)
     )
+    current_store_attribute_inquiry = extract_store_attribute_inquiry(text, store_name=current_store_name)
     current_store_service_availability = bool(_STORE_SERVICE_AVAILABILITY_RE.search(text))
     current_store_visit_advisory = bool(
         _STORE_VISIT_ADVISORY_RE.search(text)
@@ -500,6 +503,7 @@ def build_transaction_intent_frame(
         and not current_stock
         and not current_price
         and not current_reservation
+        and current_store_attribute_inquiry is None
     )
     pending_today_install = _has_pending_today_install_context(slots)
     confirmed_product_quantity_context = _has_confirmed_product_quantity_context(slots)
@@ -729,10 +733,18 @@ def build_transaction_intent_frame(
         sub_intent = "additional_service_duration"
         if re.search(r"얼라인먼트|휠\s*얼라이먼트", text, re.IGNORECASE):
             entities["service_type"] = "alignment"
+    elif current_store_attribute_inquiry and not (current_stock or current_price or current_purchase):
+        intent = "store_attribute_inquiry"
+        sub_intent = "store_attribute_inquiry"
+        entities["attribute_text"] = current_store_attribute_inquiry.attribute_text
+        entities["attribute_type"] = current_store_attribute_inquiry.attribute_type
+        entities["verification_level"] = current_store_attribute_inquiry.verification_level
     elif current_store_service_availability and not (current_stock or current_price or current_purchase):
-        intent = "store_service_availability"
-        sub_intent = "store_service_availability"
-        entities["service_type"] = "store_service_availability"
+        intent = "store_attribute_inquiry"
+        sub_intent = "store_attribute_inquiry"
+        entities["attribute_text"] = "매장 서비스"
+        entities["attribute_type"] = "service"
+        entities["verification_level"] = "store_contact_required"
     elif current_open_store_filter:
         intent = "open_store_search"
         sub_intent = "open_store_filter"
@@ -832,9 +844,14 @@ def build_transaction_intent_frame(
         known["pending_intent"] = "maintenance_addon_with_tire_service"
         known["goal_type"] = "store_service_availability"
         known["service_type"] = "maintenance_addon"
-    if intent == "store_service_availability":
-        known["goal_type"] = "store_service_availability"
-        known["service_type"] = "store_service_availability"
+    if intent == "store_attribute_inquiry":
+        known["goal_type"] = "store_attribute_inquiry"
+        known["service_type"] = "store_attribute_inquiry"
+        known["attribute_text"] = entities.get("attribute_text") or slots.get("attribute_text")
+        known["attribute_type"] = entities.get("attribute_type") or slots.get("attribute_type") or "unknown"
+        known["verification_level"] = (
+            entities.get("verification_level") or slots.get("verification_level") or "store_contact_required"
+        )
     if intent == "open_store_search":
         known["goal_type"] = "store_finder"
         known["open_only"] = True
@@ -1169,7 +1186,21 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
             metadata={"response_intent": "maintenance_addon_with_tire_service", "action": action},
         )
 
-    if frame.intent == "store_service_availability":
+    if frame.intent in {"store_attribute_inquiry", "store_service_availability"}:
+        if frame.known_slots.get("store_name") or frame.known_slots.get("shop_name") or frame.known_slots.get("shop_id"):
+            return ToolPlan(
+                allowed_tools=("get_store_list_tool", "get_store_detail_tool"),
+                preferred_tool="get_store_list_tool",
+                tool_args_patch=_slot_args(frame, "store_name", "shop_id"),
+                forbidden_tools=(
+                    "search_stores_tool",
+                    "get_store_schedule_tool",
+                    "transaction_store_preview_tool",
+                    "preorder_with_null_required_fields",
+                ),
+                required_slots=(),
+                metadata={"response_intent": "store_attribute_inquiry", "action": action},
+            )
         return ToolPlan(
             allowed_tools=(),
             preferred_tool=None,
@@ -1182,7 +1213,7 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
                 "preorder_with_null_required_fields",
             ),
             required_slots=(),
-            metadata={"response_intent": "store_service_availability", "action": action},
+            metadata={"response_intent": "store_attribute_inquiry", "action": action},
         )
 
     if frame.intent == "quick_order_reservation":
@@ -1272,8 +1303,8 @@ def _transaction_action(frame: IntentFrame) -> str:
         return "store_visit_advisory"
     if frame.intent == "maintenance_addon_with_tire_service":
         return "maintenance_addon_with_tire_service"
-    if frame.intent == "store_service_availability":
-        return "store_service_availability"
+    if frame.intent in {"store_attribute_inquiry", "store_service_availability"}:
+        return "store_attribute_inquiry"
     if frame.intent == "reservation_store_info_lookup":
         return "reservation_store_info_lookup"
     if frame.intent == "reservation_status_lookup":

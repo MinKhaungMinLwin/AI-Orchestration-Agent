@@ -12,6 +12,7 @@ import re
 from typing import Any
 
 from services.tstation.policies.intent_frame import PolicyDomain
+from services.tstation.policies.store_service_gate import extract_store_attribute_inquiry
 
 
 _PRODUCT_HINT_RE = re.compile(
@@ -33,7 +34,8 @@ _RESERVATION_STORE_INFO_RE = re.compile(
 _MAINTENANCE_ADDON_SERVICE_RE = re.compile(r"엔진\s*오일|실내\s*필터|필터|와이퍼|배터리|경정비", re.IGNORECASE)
 _STORE_SERVICE_AVAILABILITY_RE = re.compile(
     r"보관\s*서비스|타이어\s*보관|윈터\s*타이어\s*보관|겨울\s*타이어\s*보관|"
-    r"보관\s*(?:돼|되|가능|되나요|가능해)|질소\s*충전|질소|얼라인먼트.{0,12}(?:잘|무료|가능)",
+    r"보관\s*(?:돼|되|가능|되나요|가능해)|질소\s*충전|질소|"
+    r"야간\s*(?:정비|서비스|작업)|야간정비|얼라인먼트.{0,12}(?:잘|무료|가능)",
     re.IGNORECASE,
 )
 _TIRE_SERVICE_RE = re.compile(r"타이어.{0,12}(?:교체|장착|서비스|작업)|(?:교체|장착).{0,12}타이어", re.IGNORECASE)
@@ -236,8 +238,10 @@ def plan_cross_domain_turn(user_text: str, *, known_slots: dict[str, Any] | None
         and not _BENEFIT_STACKING_RE.search(text)
     )
     needs_regional_price_policy = bool(_REGIONAL_PRICE_POLICY_RE.search(text))
-    needs_store_service_availability = bool(_STORE_SERVICE_AVAILABILITY_RE.search(text))
     has_current_store = bool(_STORE_NAME_RE.search(text) or _REGION_HINT_RE.search(text))
+    carried_store_name = str(slots.get("store_name") or slots.get("shop_name") or "").strip()
+    store_attribute_inquiry = extract_store_attribute_inquiry(text, store_name=carried_store_name or None)
+    needs_store_service_availability = bool(_STORE_SERVICE_AVAILABILITY_RE.search(text))
     needs_stock_or_booking = bool(_STOCK_OR_BOOKING_RE.search(text) or (_PURCHASE_RE.search(text) and has_current_store))
     needs_reservation_store_info = bool(_RESERVATION_STORE_REF_RE.search(text) and _RESERVATION_STORE_INFO_RE.search(text))
     needs_maintenance_addon_with_tire = bool(
@@ -296,6 +300,25 @@ def plan_cross_domain_turn(user_text: str, *, known_slots: dict[str, Any] | None
                 ),
             ),
             response_strategy="single_domain_response",
+        )
+
+    if store_attribute_inquiry and not needs_stock_or_booking and not needs_price:
+        return CrossDomainPlan(
+            primary_domain=PolicyDomain.TRANSACTION,
+            subtasks=(
+                DomainSubtask(
+                    domain=PolicyDomain.TRANSACTION,
+                    intent="store_attribute_inquiry",
+                    reason="특정 매장의 서비스/장비/운영 조건 여부 질문은 가능 여부를 단정하지 않고 매장 기본정보 조회를 보조 실행함",
+                    required_slots=(),
+                ),
+                DomainSubtask(
+                    domain=PolicyDomain.SUPPORT,
+                    intent="store_attribute_contact_notice",
+                    reason="검증 불가 속성은 매장 직접 확인 안내가 필요함",
+                ),
+            ),
+            response_strategy="transaction_store_info_then_attribute_notice",
         )
 
     if needs_store_service_availability and not needs_stock_or_booking and not needs_price:

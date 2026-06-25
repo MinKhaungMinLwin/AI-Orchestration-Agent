@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 
 StoreServiceIntent = Literal[
+    "store_attribute_inquiry",
     "store_special_service",
     "store_review_detail",
     "store_rating_summary",
@@ -23,6 +24,24 @@ class StoreServiceGateDecision(BaseModel):
         description="Whether requested store condition is not directly verifiable from store search data."
     )
     reason: str = Field(description="Short English reason for traces/logs only.")
+
+
+STORE_ATTRIBUTE_TYPE = Literal["service", "equipment", "operating_condition", "subjective_quality", "unknown"]
+STORE_ATTRIBUTE_VERIFICATION_LEVEL = Literal[
+    "tool_verifiable",
+    "store_contact_required",
+    "unsupported_or_policy",
+]
+
+
+class StoreAttributeInquiry(BaseModel):
+    store_name: str = Field(default="", description="Current or carried store name, if available.")
+    attribute_text: str = Field(default="", description="Raw store attribute/service/equipment phrase from user text.")
+    attribute_type: STORE_ATTRIBUTE_TYPE = Field(default="unknown", description="Structured attribute family.")
+    verification_level: STORE_ATTRIBUTE_VERIFICATION_LEVEL = Field(
+        default="store_contact_required",
+        description="Whether the attribute can be answered from tool data or requires direct store contact.",
+    )
 
 
 STORE_CONTACT_REDIRECT_RE = re.compile(
@@ -62,6 +81,7 @@ _UNVERIFIABLE_STORE_PREFERENCE_RULES: tuple[tuple[re.Pattern[str], str], ...] = 
         "타이어 보관 서비스 운영 여부",
     ),
     (re.compile(r"리프트|대형\s*리프트|차량용\s*리프트", re.IGNORECASE), "리프트 보유 여부"),
+    (re.compile(r"야간\s*(?:정비|서비스|작업)|야간정비", re.IGNORECASE), "야간정비 운영 여부"),
     (re.compile(r"질소\s*충전|질소", re.IGNORECASE), "질소 충전 여부"),
     (re.compile(r"대기\s*공간|대기실|라운지|휴게실|대기\s*환경", re.IGNORECASE), "대기 공간"),
     (re.compile(r"워셔액\s*(?:무료|제공|보충)?|워셔액", re.IGNORECASE), "워셔액 무료 제공"),
@@ -84,6 +104,95 @@ _UNVERIFIABLE_STORE_PREFERENCE_RULES: tuple[tuple[re.Pattern[str], str], ...] = 
     ),
     (re.compile(r"숙련도|실력|잘\s*보는|잘하는|정확도|꼼꼼", re.IGNORECASE), "작업 숙련도"),
 )
+_STORE_NAME_RE = re.compile(r"((?:티스테이션\s*)?[가-힣A-Za-z0-9]+(?:점|매장))")
+_ATTRIBUTE_QUESTION_RE = re.compile(
+    r"가능\s*해|가능한가|가능(?:하|한)|돼|되(?:나|나요|니|냐)?|있어|있나|있나요|"
+    r"해\s*줘|해줘|운영\s*해|운영해|잘\s*(?:봐|보|하)",
+    re.IGNORECASE,
+)
+_ADJACENT_NON_ATTRIBUTE_RE = re.compile(
+    r"내\s*차\s*정비\s*(?:일정|시기)|정비\s*이력|정비이력|정비\s*내역|정비내역|"
+    r"주문한\s*거.{0,20}(?:장착|예약)\s*가능|예약\s*(?:조회|내역|확인|상태)|"
+    r"예약\s*(?:가능|가능한\s*(?:시간|일정|슬롯)|잡|해|걸|보여|알려)|방문예약|"
+    r"타이어\s*(?:교체|장착).{0,12}예약|장착\s*가능|다시\s*확인|"
+    r"점심\s*시간|그냥\s*가도|대기\s*시간|한가|붐비|혼잡",
+    re.IGNORECASE,
+)
+_ATTRIBUTE_SUFFIX_RE = re.compile(
+    r"(?:도|은|는|이|가|을|를)?\s*"
+    r"(?:가능\s*해|가능한가|가능(?:하|한)|돼|되(?:나|나요|니|냐)?|있어|있나|있나요|"
+    r"해\s*줘|해줘|운영\s*해|운영해|잘\s*(?:봐|보|하)).*$",
+    re.IGNORECASE,
+)
+_ATTRIBUTE_STOPWORDS_RE = re.compile(
+    r"^(?:티스테이션|더타이어샵|그리고|혹시|그럼|거기|해당\s*매장|매장|지점)\s*",
+    re.IGNORECASE,
+)
+_TOOL_VERIFIABLE_ATTRIBUTE_RE = re.compile(r"주소|전화|전화번호|연락처|영업\s*시간|운영\s*시간|휴무|위치", re.IGNORECASE)
+_EQUIPMENT_ATTRIBUTE_RE = re.compile(r"리프트|대형\s*리프트|차량용\s*리프트|장비|설비", re.IGNORECASE)
+_OPERATING_CONDITION_ATTRIBUTE_RE = re.compile(
+    r"야간|퇴근\s*후|저녁|늦게|주말|공휴일|휴일|일요일|토요일|운영|영업|문\s*열",
+    re.IGNORECASE,
+)
+_SUBJECTIVE_QUALITY_ATTRIBUTE_RE = re.compile(r"잘\s*(?:봐|보|하)|숙련도|실력|정확도|꼼꼼|친절|평가|평점", re.IGNORECASE)
+
+
+def _normalize_store_name(value: str | None) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    return re.sub(r"^(?:티스테이션|더타이어샵)\s*", "", text, flags=re.IGNORECASE).strip()
+
+
+def extract_store_attribute_inquiry(
+    text: str,
+    *,
+    store_name: str | None = None,
+) -> StoreAttributeInquiry | None:
+    """Extract a generic store attribute inquiry while preserving raw attribute text."""
+    value = str(text or "").strip()
+    if not value or _ADJACENT_NON_ATTRIBUTE_RE.search(value) or not _ATTRIBUTE_QUESTION_RE.search(value):
+        return None
+    store_label = _normalize_store_name(store_name)
+    if not store_label:
+        match = _STORE_NAME_RE.search(value)
+        if match:
+            store_label = _normalize_store_name(match.group(1))
+    if not store_label:
+        return None
+
+    working = value
+    if store_label:
+        working = re.sub(rf"(?:티스테이션\s*)?{re.escape(store_label)}", " ", working, count=1, flags=re.IGNORECASE)
+    working = _ATTRIBUTE_SUFFIX_RE.sub("", working).strip()
+    working = _ATTRIBUTE_STOPWORDS_RE.sub("", working).strip()
+    working = re.sub(r"^(?:에서|에|도|은|는|이|가|을|를|혹시)\s*", "", working).strip()
+    working = re.sub(r"\s+", " ", working).strip(" ?!.")
+    labels = unverifiable_store_preference_labels(value)
+    attribute_text = working or (labels[0] if labels else "")
+    if not attribute_text:
+        return None
+
+    attr_type: STORE_ATTRIBUTE_TYPE = "unknown"
+    verification_level: STORE_ATTRIBUTE_VERIFICATION_LEVEL = "store_contact_required"
+    if _TOOL_VERIFIABLE_ATTRIBUTE_RE.search(attribute_text):
+        attr_type = "operating_condition"
+        verification_level = "tool_verifiable"
+    elif _EQUIPMENT_ATTRIBUTE_RE.search(attribute_text):
+        attr_type = "equipment"
+    elif _OPERATING_CONDITION_ATTRIBUTE_RE.search(attribute_text):
+        attr_type = "operating_condition"
+    elif _SUBJECTIVE_QUALITY_ATTRIBUTE_RE.search(attribute_text):
+        attr_type = "subjective_quality"
+        verification_level = "unsupported_or_policy"
+    elif labels:
+        attr_type = "service"
+
+    return StoreAttributeInquiry(
+        store_name=store_label,
+        attribute_text=attribute_text,
+        attribute_type=attr_type,
+        verification_level=verification_level,
+    )
+
 
 
 def unverifiable_store_preference_labels(text: str) -> list[str]:
@@ -122,6 +231,13 @@ def replace_store_review_unavailable_text(text: str, replacement: str) -> str:
 def decide_store_service_gate(*, user_text: str = "", assistant_text: str = "") -> StoreServiceGateDecision:
     """Classify store special-service/review-detail handling needs without an LLM call."""
     text = user_text or ""
+    if extract_store_attribute_inquiry(text) is not None:
+        return StoreServiceGateDecision(
+            intent="store_attribute_inquiry",
+            needs_store_detail_cta=True,
+            needs_unverifiable_guidance=True,
+            reason="User asks whether a specific store has a service/equipment/operating attribute.",
+        )
     labels = unverifiable_store_preference_labels(text)
     if labels:
         return StoreServiceGateDecision(

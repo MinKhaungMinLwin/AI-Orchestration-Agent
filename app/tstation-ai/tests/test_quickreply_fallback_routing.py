@@ -202,6 +202,7 @@ from services.tstation.chat import (
     _maintenance_addon_store_context_from_location_template,
     _maintenance_addon_with_tire_service_event,
     _service_duration_advisory_event,
+    _store_attribute_inquiry_event,
     _store_service_availability_event,
     _build_vehicle_information_event,
     _build_complaint_scope_guard_event,
@@ -340,7 +341,11 @@ from services.tstation.policies.turn_contract import (
     warning_contract_violations,
 )
 from services.tstation.policies.pickup_service_gate import deterministic_pickup_service_gate_decision
-from services.tstation.policies.store_service_gate import decide_store_service_gate, unverifiable_store_preference_labels
+from services.tstation.policies.store_service_gate import (
+    decide_store_service_gate,
+    extract_store_attribute_inquiry,
+    unverifiable_store_preference_labels,
+)
 from schemas.tstation.slots import CanonicalSlotState, ComparisonContext, ConversationSlots, RecommendationContext
 from services.tstation.template_mapper import (
     _map_location,
@@ -6336,11 +6341,11 @@ def test_store_service_gate_detects_unverifiable_service_conditions() -> None:
     gifts = decide_store_service_gate(user_text="사은품이나 추가 무료 서비스 주는 매장 있어?")
     balance_skill = decide_store_service_gate(user_text="얼라인먼트랑 밸런스 정확도 좋은 매장 알려줘")
 
-    assert nitrogen.intent == "store_special_service"
+    assert nitrogen.intent == "store_attribute_inquiry"
     assert nitrogen.needs_store_detail_cta is True
     assert nitrogen.needs_unverifiable_guidance is True
     assert unverifiable_store_preference_labels("티스테이션 부산거제점 질소 충전도 해줘?") == ["질소 충전 여부"]
-    assert storage.intent == "store_special_service"
+    assert storage.intent == "store_attribute_inquiry"
     assert storage.needs_store_detail_cta is True
     assert unverifiable_store_preference_labels("모란점 윈터타이어 보관서비스 가능해?") == [
         "타이어 보관 서비스 운영 여부"
@@ -15405,6 +15410,107 @@ def test_alignment_addon_duration_question_is_advisory_not_store_schedule() -> N
     assert event["template"] == "quickReply"
 
 
+def test_store_attribute_inquiry_with_store_uses_store_info_lookup_contract() -> None:
+    user_text = "티스테이션 정자점 야간정비도 가능해?"
+    inquiry = extract_store_attribute_inquiry(user_text)
+    frame = build_transaction_intent_frame(user_text, known_slots={})
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text=user_text,
+        known_slots=dict(frame.known_slots),
+    )
+    event = _store_attribute_inquiry_event(
+        user_text,
+        store_name=frame.known_slots.get("store_name"),
+        store_info_entries=[
+            {
+                "tool": "get_store_detail_tool",
+                "data": {
+                    "status": "success",
+                    "data": {
+                        "shop_seq": "F10001",
+                        "shop_nm": "티스테이션 정자점",
+                        "road_addr_base": "경기도 성남시 분당구 정자일로 1",
+                        "tel_no": "0311234567",
+                        "shop_biz_strt_time": "0900",
+                        "shop_biz_end_time": "1900",
+                        "shop_sat_strt_time": "0900",
+                        "shop_sat_end_time": "1600",
+                        "holiday": "일요일",
+                    },
+                },
+            }
+        ],
+    )
+
+    assert inquiry is not None
+    assert inquiry.store_name == "정자점"
+    assert inquiry.attribute_text == "야간정비"
+    assert inquiry.attribute_type == "operating_condition"
+    assert inquiry.verification_level == "store_contact_required"
+    assert frame.intent == "store_attribute_inquiry"
+    assert frame.known_slots["store_name"] == "정자점"
+    assert frame.known_slots["attribute_text"] == "야간정비"
+    assert frame.known_slots["verification_level"] == "store_contact_required"
+    assert tool_plan.allowed_tools == ("get_store_list_tool", "get_store_detail_tool")
+    assert tool_plan.preferred_tool == "get_store_list_tool"
+    assert "get_store_schedule_tool" in tool_plan.forbidden_tools
+    assert "transaction_store_preview_tool" in tool_plan.forbidden_tools
+    assert response_decision.metadata["response_shape_key"] == "store_attribute_inquiry"
+    assert "claim_unverified_store_service_available" in response_decision.forbidden_behaviors
+    assert event is not None
+    assistant = event["data"]["assistantResponse"]
+    assert "가능 여부는 매장 운영 조건과 당일 작업 상황에 따라 달라질 수" in assistant
+    assert "현재 확인된 데이터만으로는 가능 여부를 확정해서 단정하기 어렵" in assistant
+    assert "확인된 매장 정보" in assistant
+    assert "매장명: 티스테이션 정자점" in assistant
+    assert "전화: 031-123-4567" in assistant
+    assert "평일: 09:00~19:00" in assistant
+    assert "토요일: 09:00~16:00" in assistant
+    assert "가능합니다" not in assistant
+    assert event["assistant_response_source"] == "code_store_attribute_inquiry_with_store_info"
+    assert event["data"]["metadata"]["attributeText"] == "야간정비"
+    assert event["data"]["metadata"]["store_info_lookup"] is True
+    assert "datepick" not in json.dumps(event, ensure_ascii=False)
+    assert "preOrder" not in json.dumps(event, ensure_ascii=False)
+
+
+def test_store_attribute_inquiry_preserves_uncataloged_attribute_text() -> None:
+    inquiry = extract_store_attribute_inquiry("정자점 퇴근 후에도 작업해줘?")
+
+    assert inquiry is not None
+    assert inquiry.store_name == "정자점"
+    assert inquiry.attribute_text == "퇴근 후에도 작업"
+    assert inquiry.attribute_type == "operating_condition"
+    assert inquiry.verification_level == "store_contact_required"
+
+
+def test_store_attribute_inquiry_equipment_requires_contact_without_source() -> None:
+    user_text = "정자점 대형 SUV 리프트 있어?"
+    inquiry = extract_store_attribute_inquiry(user_text)
+    frame = build_transaction_intent_frame(user_text, known_slots={})
+    event = _store_attribute_inquiry_event(user_text, store_name="정자점")
+
+    assert inquiry is not None
+    assert inquiry.attribute_type == "equipment"
+    assert frame.intent == "store_attribute_inquiry"
+    assert frame.known_slots["attribute_text"] == "대형 SUV 리프트"
+    assert event is not None
+    assert "단정하기 어렵" in event["data"]["assistantResponse"]
+    assert "가능합니다" not in event["data"]["assistantResponse"]
+
+
+def test_store_attribute_inquiry_keeps_adjacent_transaction_flows() -> None:
+    maintenance_dday = build_transaction_intent_frame("내 차 정비 일정 알려줘", known_slots={})
+    maintenance_history = build_transaction_intent_frame("정비이력 보여줘", known_slots={})
+    order_install = build_transaction_intent_frame("주문한 거 정자점에서 장착 가능해?", known_slots={})
+
+    assert maintenance_dday.intent != "store_attribute_inquiry"
+    assert maintenance_history.intent == "maintenance_history_lookup"
+    assert order_install.intent != "store_attribute_inquiry"
+
+
 def test_store_service_availability_is_support_advisory_not_store_schedule() -> None:
     user_text = "모란점 윈터타이어 보관서비스 가능해?"
     frame = build_transaction_intent_frame(user_text, known_slots={})
@@ -15421,45 +15527,43 @@ def test_store_service_availability_is_support_advisory_not_store_schedule() -> 
         response_decision=response_decision,
         routing_result=_routing_result(
             domains=[MultiAgentDomain.Domain.SUPPORT],
-            execution_plan=["support:store_service_availability"],
-            policy_intent="store_service_availability",
+            execution_plan=["transaction:store_attribute_inquiry", "support:store_attribute_contact_notice"],
+            policy_intent="store_attribute_inquiry",
             needs_clarification=False,
         ),
     )
-    event = _store_service_availability_event(user_text, store_name=frame.known_slots.get("store_name"))
+    event = _store_attribute_inquiry_event(user_text, store_name=frame.known_slots.get("store_name"))
 
-    assert frame.intent == "store_service_availability"
-    assert frame.sub_intent == "store_service_availability"
+    assert frame.intent == "store_attribute_inquiry"
+    assert frame.sub_intent == "store_attribute_inquiry"
     assert frame.known_slots["store_name"] == "모란점"
-    assert frame.known_slots["goal_type"] == "store_service_availability"
-    assert tool_plan.allowed_tools == ()
+    assert frame.known_slots["goal_type"] == "store_attribute_inquiry"
+    assert tool_plan.allowed_tools == ("get_store_list_tool", "get_store_detail_tool")
     assert "get_store_schedule_tool" in tool_plan.forbidden_tools
     assert "transaction_store_preview_tool" in tool_plan.forbidden_tools
-    assert response_decision.metadata["response_shape_key"] == "store_service_availability"
-    assert contract.domain == "support"
-    assert contract.intent == "store_service_availability"
+    assert response_decision.metadata["response_shape_key"] == "store_attribute_inquiry"
+    assert contract.intent == "store_attribute_inquiry"
     assert contract.blocking_required_slots == ()
     assert not should_guard_required_slots(contract)
     assert event is not None
-    assert event["source_domain"] == "support"
-    assert event["assistant_response_source"] == "code_store_service_availability_guard"
+    assert event["assistant_response_source"] == "code_store_attribute_inquiry_guard"
     assert "모란점" in event["data"]["assistantResponse"]
     assert "확정해서 단정하기 어렵" in event["data"]["assistantResponse"]
-    assert event["data"]["metadata"]["store_search_suppressed"] is True
+    assert event["data"]["metadata"]["store_search_suppressed"] is False
     assert event["data"]["metadata"]["carried_store_context"] == "모란점"
     assert "datepick" not in json.dumps(event, ensure_ascii=False)
 
 
-def test_store_service_availability_followup_uses_carried_store_context_without_search() -> None:
+def test_store_service_availability_followup_uses_carried_store_context_for_attribute_lookup() -> None:
     user_text = "보관서비스 돼?"
     event = _store_service_availability_event(user_text, store_name="모란점")
     plan = plan_cross_domain_turn(user_text, known_slots={"shop_name": "모란점"})
 
-    assert plan.primary_domain == PolicyDomain.SUPPORT
-    assert [task.intent for task in plan.subtasks] == ["store_service_availability"]
+    assert plan.primary_domain == PolicyDomain.TRANSACTION
+    assert [task.intent for task in plan.subtasks] == ["store_attribute_inquiry", "store_attribute_contact_notice"]
     assert event is not None
     assert "모란점" in event["data"]["assistantResponse"]
-    assert event["data"]["metadata"]["store_search_suppressed"] is True
+    assert event["data"]["metadata"]["store_search_suppressed"] is False
     assert "검색되는 매장" not in event["data"]["assistantResponse"]
 
 
@@ -15468,7 +15572,7 @@ def test_store_service_availability_without_store_asks_scope_not_random_store_se
     event = _store_service_availability_event(user_text, store_name=None)
     frame = build_transaction_intent_frame(user_text, known_slots={})
 
-    assert frame.intent == "store_service_availability"
+    assert frame.intent == "store_attribute_inquiry"
     assert event is not None
     assert "어느 매장 기준인지" in event["data"]["assistantResponse"]
     assert event["data"]["metadata"]["carried_store_context"] == ""
