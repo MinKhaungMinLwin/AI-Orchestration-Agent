@@ -15993,21 +15993,6 @@ def _normalize_tstation_cta_urls_for_origin(event_data: dict) -> bool:
             normalized_chips.append(next_chip)
         if changed:
             event_data["quickReplies"] = normalized_chips
-
-    redict_link = event_data.get("redictLink") or event_data.get("redirectLink")
-    if isinstance(redict_link, dict):
-        normalized_link = dict(redict_link)
-        for key in ("pc", "mobile"):
-            url = str(normalized_link.get(key) or "").strip()
-            rebased = rebase_tstation_url_to_origin(url)
-            if url and rebased != url:
-                normalized_link[key] = rebased
-                changed = True
-        if changed:
-            if "redictLink" in event_data:
-                event_data["redictLink"] = normalized_link
-            if "redirectLink" in event_data:
-                event_data["redirectLink"] = normalized_link
     return changed
 
 

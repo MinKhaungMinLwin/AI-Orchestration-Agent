@@ -11,7 +11,6 @@ from urllib.parse import quote
 
 from Crypto.Cipher import AES
 
-from config.env import settings
 from services.tstation.common.tstation_be_client import get_tstation_origin_host
 
 logger = logging.getLogger(__name__)
@@ -19,6 +18,8 @@ logger = logging.getLogger(__name__)
 AES_KEY: bytes = b"K7mN9pQ2xR4vW8zA"
 
 QNA_WRITE_PATH = "/customer-service/qna.do"
+QNA_PC_FALLBACK_BASE = "https://www.tstation.com"
+QNA_MOBILE_FALLBACK_BASE = "https://m.tstation.com"
 
 CSL_CLS_SEQ_MAP: dict[str, str] = {
     "상품문의": "10002",
@@ -94,6 +95,6 @@ def _qna_base_urls() -> dict[str, str]:
         origin_base = f"https://{origin_host}".rstrip("/")
         return {"pc": origin_base, "mobile": origin_base}
     return {
-        "pc": settings.TSTATION_WEB_PC_BASE.rstrip("/"),
-        "mobile": settings.TSTATION_WEB_MOBILE_BASE.rstrip("/"),
+        "pc": QNA_PC_FALLBACK_BASE,
+        "mobile": QNA_MOBILE_FALLBACK_BASE,
     }

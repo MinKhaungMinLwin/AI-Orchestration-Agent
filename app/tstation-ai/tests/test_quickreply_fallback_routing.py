@@ -20,9 +20,11 @@ from types import SimpleNamespace
 
 import pytest
 
+from common.qna_payload import make_qna_payload_urls
 from services.tstation import chat as chat_module, qc_verifier
 from services.tstation.common.cta_urls import CTAUrls
 from services.tstation.common.pii_guardrail import check_pii
+from services.tstation.common.tstation_be_client import set_tstation_origin_host
 from services.tstation.source_filter import _ORDER_FIELDS_BASE
 from services.tstation.template_mapper import _safe_service_unsized_policy_response
 from services.tstation.agents.b_discovery_agent import tools as discovery_tools
@@ -249,6 +251,7 @@ from services.tstation.chat import (
     _normalize_discovery_policy_quickreply,
     _normalize_recommendation_approximation_response,
     _normalize_cart_url_for_cart_check_chip,
+    _normalize_tstation_cta_urls_for_origin,
     _complaint_scope_for_turn,
     _infer_complaint_scope,
     _normalize_existing_reservation_change_quickreply,
@@ -385,10 +388,12 @@ from services.tstation.source_filter import filter_for_context
 @pytest.fixture(autouse=True)
 def _reset_action_mode_context():
     token = current_action_mode.set("unspecified")
+    set_tstation_origin_host(None)
     try:
         yield
     finally:
         current_action_mode.reset(token)
+        set_tstation_origin_host(None)
 
 def _labels(chips: list[dict]) -> list[str]:
     return [c["label"] for c in chips]
@@ -13654,6 +13659,64 @@ def test_normalize_cart_url_for_cart_check_chip_keeps_existing_canonical_and_oth
     assert event_data["quickReplies"][0]["url"] == CTAUrls.CART
     assert event_data["quickReplies"][1]["url"] == CTAUrls.ORDER_HISTORY
     assert event_data["quickReplies"][2]["url"] == CTAUrls.STORE_SERVICE_HISTORY
+
+
+def test_normalize_tstation_cta_url_remaps_pc_warranty_path_for_mobile_origin() -> None:
+    set_tstation_origin_host("m.tstation.com")
+    event_data = {
+        "quickReplies": [
+            {"label": "나의 워런티 확인", "url": "https://wwwqa.tstation.com/mypage/tstation/warranty/main"}
+        ]
+    }
+
+    assert _normalize_tstation_cta_urls_for_origin(event_data)
+    assert event_data["quickReplies"][0]["url"] == "https://m.tstation.com/mypage/tstation/warranty"
+
+
+def test_normalize_tstation_cta_url_uses_production_pc_fallback_without_origin() -> None:
+    event_data = {
+        "quickReplies": [
+            {"label": "주문 내역 보기", "url": "https://wwwqa.tstation.com/mypage/tstation/order-history"}
+        ]
+    }
+
+    assert _normalize_tstation_cta_urls_for_origin(event_data)
+    assert event_data["quickReplies"][0]["url"] == "https://www.tstation.com/mypage/tstation/order-history"
+
+
+def test_normalize_tstation_cta_url_uses_mobile_coupon_path_for_mobile_origin() -> None:
+    set_tstation_origin_host("mqa.tstation.com")
+    event_data = {
+        "quickReplies": [
+            {"label": "내 쿠폰함", "url": "https://wwwqa.tstation.com/mypage/tstation/coupon/couponList"}
+        ]
+    }
+
+    assert _normalize_tstation_cta_urls_for_origin(event_data)
+    assert event_data["quickReplies"][0]["url"] == "https://mqa.tstation.com/coupon/myCouponList"
+
+
+def test_normalize_tstation_cta_url_does_not_touch_qna_redirect_links() -> None:
+    set_tstation_origin_host("m.tstation.com")
+    event_data = {
+        "redictLink": {
+            "pc": "https://wwwqa.tstation.com/customer/qna",
+            "mobile": "https://mqa.tstation.com/customer/qna",
+        }
+    }
+
+    assert not _normalize_tstation_cta_urls_for_origin(event_data)
+    assert event_data["redictLink"] == {
+        "pc": "https://wwwqa.tstation.com/customer/qna",
+        "mobile": "https://mqa.tstation.com/customer/qna",
+    }
+
+
+def test_qna_payload_urls_use_production_fallback_without_origin() -> None:
+    redict_link = make_qna_payload_urls(cnsl_clss_seq="10019", inq_tit_nm="문의", ai_summary="문의 내용")
+
+    assert redict_link["pc"].startswith("https://www.tstation.com/customer-service/qna.do?")
+    assert redict_link["mobile"].startswith("https://m.tstation.com/customer-service/qna.do?")
 
 
 def test_discovery_explicit_support_text_keeps_dead_end_chips() -> None:
