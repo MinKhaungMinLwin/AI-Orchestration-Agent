@@ -20,6 +20,7 @@ import pytest
 from services.tstation.chat import MultiAgentDomain, StreamingMultiAgentCoordinator
 from services.tstation.agents.base_agent import BaseAgent, _build_stock_preview_guard_args
 from services.tstation.template_mapper import (
+    current_action_mode,
     current_discovery_response_decision,
     _product_search_policy_fallback_response,
     _product_result_context_message,
@@ -47,6 +48,7 @@ from services.tstation.policies.response_decision import ResponseDecision, Respo
 @pytest.fixture(autouse=True)
 def _reset_pending_intent():
     """Each test sets pending_intent fresh; reset to avoid bleed across tests."""
+    action_mode_token = current_action_mode.set("unspecified")
     pending_token = current_pending_intent.set(None)
     goal_token = current_goal_type.set(None)
     ev_token = current_ev_suitability_comparison.set(False)
@@ -64,6 +66,7 @@ def _reset_pending_intent():
     current_ev_suitability_comparison.reset(ev_token)
     current_pending_intent.reset(pending_token)
     current_goal_type.reset(goal_token)
+    current_action_mode.reset(action_mode_token)
 
 
 def _store_list_entry(*, args: dict, stores: list[dict]) -> dict:
@@ -318,7 +321,7 @@ def test_location_description_includes_store_review_count() -> None:
 
     assert event is not None
     description = event["data"]["stores"][0]["description"]
-    assert "⭐ 3.2" in description
+    assert "평점: 3.2" in description
     assert "리뷰 14건" in description
 
 
@@ -377,7 +380,7 @@ def test_location_filters_ev_specialty_and_charge_requested_stores() -> None:
     assert event is not None
     assert event["template"] == "location"
     assert len(event["data"]["stores"]) == 1
-    assert event["data"]["metadata"] == [{"shopId": "F001"}]
+    assert event["data"]["metadata"][0]["shopId"] == "F001"
     assert "전기차 특화점이면서 충전 가능한 매장 1곳" in event["data"]["assistantResponse"]
     assert "전기차 특화점" in event["data"]["stores"][0]["description"]
     assert "충전 가능" in event["data"]["stores"][0]["description"]
@@ -2259,7 +2262,7 @@ def test_preview_location_filters_to_inventory_positive_stores() -> None:
     assert result["data"]["stores"][0]["nameAddress"] == "티스테이션 강릉강남점"
     assert result["data"]["stores"][0]["todayInstall"] is True
     assert "[매장재고]" in result["data"]["stores"][0]["description"]
-    assert result["data"]["metadata"] == [{"shopId": "T02396"}]
+    assert [meta["shopId"] for meta in result["data"]["metadata"]] == ["T02396"]
 
 
 def test_preview_location_uses_requested_cal_day_for_today_install_copy_on_region_followup() -> None:
@@ -2336,7 +2339,7 @@ def test_preview_location_does_not_filter_order_preview_candidates() -> None:
     assert result is not None
     assert result["template"] == "location"
     assert len(result["data"]["stores"]) == 3
-    assert result["data"]["metadata"] == [{"shopId": "F00518"}, {"shopId": "T02396"}, {"shopId": "F00405"}]
+    assert [meta["shopId"] for meta in result["data"]["metadata"]] == ["F00518", "T02396", "F00405"]
 
 
 def test_order_preview_logistics_only_location_explains_today_unavailable() -> None:
@@ -2433,7 +2436,8 @@ def test_preview_single_scheduled_store_maps_to_datepick_for_booking() -> None:
 
     assert result is not None
     assert result["template"] == "datepick"
-    assert result["data"]["metadata"] == {"shopId": "T02396", "shopName": "티스테이션 강릉강남점"}
+    assert result["data"]["metadata"]["shopId"] == "T02396"
+    assert result["data"]["metadata"]["shopName"] == "티스테이션 강릉강남점"
     assert result["data"]["dates"] == [
         {
             "date": "2026년 5월 21일 (목)",
@@ -2448,6 +2452,23 @@ def test_preview_single_scheduled_store_maps_to_datepick_for_booking() -> None:
             "index": 1,
         },
     ]
+
+
+def test_preview_schedule_does_not_map_to_datepick_for_policy_answer_action_mode() -> None:
+    current_action_mode.set("support_policy_answer")
+    current_pending_intent.set("order")
+    current_goal_type.set("place_order")
+    entry = _preview_entry_with_schedule(
+        args={"region_code": "강릉", "goods_no": "G000000309780", "ord_qty": 4},
+        stores=[_stub_store("T02396", "티스테이션 강릉강남점")],
+        schedule_stores=[{
+            "shop_id": "T02396",
+            "shop_nm": "티스테이션 강릉강남점",
+            "slots": [{"cal_day": "20260521", "tm": "09"}],
+        }],
+    )
+
+    assert _map_datepick([entry], "정책을 안내드릴게요.") is None
 
 
 def test_today_service_question_dates_pick_answers_with_earliest_available_date() -> None:
@@ -2571,7 +2592,7 @@ def test_preview_single_scheduled_store_keeps_stock_location_flow() -> None:
     assert result is not None
     assert result["template"] == "location"
     assert len(result["data"]["stores"]) == 1
-    assert result["data"]["metadata"] == [{"shopId": "T02396"}]
+    assert [meta["shopId"] for meta in result["data"]["metadata"]] == ["T02396"]
 
 
 def test_exact_order_preview_maps_to_datepick_even_if_pending_stock_context_lingers() -> None:
@@ -2605,7 +2626,8 @@ def test_exact_order_preview_maps_to_datepick_even_if_pending_stock_context_ling
 
     assert result is not None
     assert result["template"] == "datepick"
-    assert result["data"]["metadata"] == {"shopId": "F00518", "shopName": "티스테이션 강릉MBC점"}
+    assert result["data"]["metadata"]["shopId"] == "F00518"
+    assert result["data"]["metadata"]["shopName"] == "티스테이션 강릉MBC점"
     assert result["data"]["dates"] == [
         {
             "date": "2026년 5월 27일 (수)",
@@ -2640,7 +2662,8 @@ def test_general_schedule_maps_to_datepick_even_when_online_install_unavailable(
 
     assert result is not None
     assert result["template"] == "datepick"
-    assert result["data"]["metadata"] == {"shopId": "F00405", "shopName": "티스테이션 경포점"}
+    assert result["data"]["metadata"]["shopId"] == "F00405"
+    assert result["data"]["metadata"]["shopName"] == "티스테이션 경포점"
     assert result["data"]["dates"] == [
         {
             "date": "2026년 5월 21일 (목)",
@@ -2802,7 +2825,7 @@ def test_store_business_hours_query_does_not_add_uncertain_operation_guidance() 
 
     assert result is not None
     assert result["template"] == "quickReply"
-    assert "평일 영업시간" in result["data"]["assistantResponse"]
+    assert "평일: 09:00~18:00" in result["data"]["assistantResponse"]
     assert "일요일/공휴일 운영 여부" not in result["data"]["assistantResponse"]
 
 
@@ -2947,6 +2970,74 @@ def test_favorite_stores_with_booking_intent_sets_booking_flow() -> None:
     current_pending_intent.set("order")
     entry = _favorite_stores_entry([_stub_store("F03077", "티스테이션 모란점")])
     result = _map_location([entry], "단골 매장으로 주문 진행할게요 😊")
+
+    assert result is not None
+    assert result["template"] == "location"
+    assert result["data"]["isBookingFlow"] is True
+
+
+def test_dormant_order_context_does_not_start_booking_flow_without_action_mode() -> None:
+    """Stored order context is grounding only unless the current turn resumes it."""
+    current_action_mode.set("info_only")
+    current_pending_intent.set("order")
+    current_goal_type.set("place_order")
+    entry = _favorite_stores_entry([_stub_store("F03077", "티스테이션 모란점")])
+
+    result = _map_location([entry], "단골매장이에요. 매장을 선택해 주세요.")
+
+    assert result is not None
+    assert result["template"] == "location"
+    assert result["data"]["isBookingFlow"] is False
+    assert "pendingIntent" not in result["data"]["metadata"][0]
+    assert "goalType" not in result["data"]["metadata"][0]
+    assert "goodsNo" not in result["data"]["metadata"][0]
+    assert "ordQty" not in result["data"]["metadata"][0]
+
+
+def test_resumed_order_context_can_start_booking_flow() -> None:
+    """Explicit resume action mode promotes stored order context back to active."""
+    current_action_mode.set("purchase_continuation")
+    current_pending_intent.set("order")
+    current_goal_type.set("place_order")
+    entry = _favorite_stores_entry([_stub_store("F03077", "티스테이션 모란점")])
+
+    result = _map_location([entry], "아까 구매 이어서 진행할게요.")
+
+    assert result is not None
+    assert result["template"] == "location"
+    assert result["data"]["isBookingFlow"] is True
+
+
+def test_booking_signal_stays_info_only_when_action_mode_is_policy_answer() -> None:
+    """Tool-side inventory/schedule signals cannot initiate FE booking behavior by themselves."""
+    current_action_mode.set("support_policy_answer")
+    current_pending_intent.set("order")
+    current_goal_type.set("place_order")
+    entry = _preview_entry(
+        args={"goods_no": "G000000319448", "ord_qty": 4, "region_code": "마포"},
+        stores=[_stub_store("T02396", "티스테이션 마포점")],
+        inventory={"todayShopArray": [{"shopId": "T02396"}], "tnaShopArray": []},
+    )
+
+    result = _map_location([entry], "인터넷에서 산 타이어 장착 정책을 안내드릴게요.")
+
+    assert result is not None
+    assert result["template"] == "location"
+    assert result["data"]["isBookingFlow"] is False
+
+
+def test_booking_signal_can_start_booking_flow_when_action_mode_is_purchase_continuation() -> None:
+    """An explicit resume/purchase action may use preview signals to advance the flow."""
+    current_action_mode.set("purchase_continuation")
+    current_pending_intent.set("order")
+    current_goal_type.set("place_order")
+    entry = _preview_entry(
+        args={"goods_no": "G000000319448", "ord_qty": 4, "region_code": "마포"},
+        stores=[_stub_store("T02396", "티스테이션 마포점")],
+        inventory={"todayShopArray": [{"shopId": "T02396"}], "tnaShopArray": []},
+    )
+
+    result = _map_location([entry], "아까 구매를 이어서 진행할게요.")
 
     assert result is not None
     assert result["template"] == "location"
@@ -3209,7 +3300,7 @@ def test_missing_store_order_policy_renders_nearby_store_candidates() -> None:
     assert result["data"]["isBookingFlow"] is True
     assert result["data"]["assistantResponse"] == "요청하신 조건에 맞는 매장 1곳입니다. 원하시는 매장을 선택해 주세요."
     assert result["data"]["stores"][0]["nameAddress"] == "티스테이션 덕이점"
-    assert result["data"]["metadata"] == [{"shopId": "F00499"}]
+    assert [meta["shopId"] for meta in result["data"]["metadata"]] == ["F00499"]
 
 
 def test_nearby_store_tool_forces_code_mapper_over_llm_quickreply() -> None:
@@ -3446,6 +3537,34 @@ def test_tc058_time_filter_location_excludes_blocked_noon_slot() -> None:
     description = result["data"]["stores"][0]["description"]
     assert "12:00" not in description
     assert "13:00, 14:00" in description
+
+
+def test_time_filter_location_does_not_start_booking_flow_for_policy_answer_action_mode() -> None:
+    current_action_mode.set("support_policy_answer")
+    current_pending_intent.set("reservation")
+    current_goal_type.set("place_order")
+    entry = {
+        "tool": "get_stores_with_time_filter_tool",
+        "args": {"region_code": "서울", "time_threshold_hour": 12},
+        "data": {
+            "status": "success",
+            "data": {
+                "region_code": "서울",
+                "time_threshold_hour": 12,
+                "stores_available": [
+                    {
+                        "shop_id": "T00001",
+                        "shop_nm": "티스테이션 서울점",
+                        "cal_day": "20260523",
+                        "qualifying_slots": [13, "1400"],
+                        "address": "서울특별시 강남구",
+                    },
+                ],
+            },
+        },
+    }
+
+    assert try_build_template([entry], "정책을 안내드릴게요.") is None
 
 
 def test_store_complex_search_location_includes_schedule_slots() -> None:

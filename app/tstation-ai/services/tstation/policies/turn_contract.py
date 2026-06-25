@@ -170,6 +170,9 @@ class TurnContract:
     blocked_override_reason: str | None = None
     contract_drift: tuple[Mapping[str, Any], ...] = ()
     resolved_context: Mapping[str, Any] = field(default_factory=dict)
+    action_mode: str = "unspecified"
+    context_state: str = "dormant"
+    resume_source: str = "none"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -200,6 +203,9 @@ class TurnContract:
             "blocked_override_reason": self.blocked_override_reason,
             "contract_drift": [dict(item) for item in self.contract_drift],
             "resolved_context": dict(self.resolved_context),
+            "action_mode": self.action_mode,
+            "context_state": self.context_state,
+            "resume_source": self.resume_source,
         }
 
 
@@ -212,6 +218,9 @@ def build_turn_contract(
     cross_domain_plan: CrossDomainPlan | None = None,
     routing_result: Any | None = None,
     merged_slots: Any | None = None,
+    action_mode: str = "unspecified",
+    context_state: str = "dormant",
+    resume_source: str = "none",
 ) -> TurnContract:
     """Combine policy objects into a single contract without changing execution."""
 
@@ -482,6 +491,9 @@ def build_turn_contract(
         blocked_override_reason=str(getattr(routing_result, "blocked_override_reason", "") or "") or None,
         contract_drift=drift,
         resolved_context=resolved_context,
+        action_mode=action_mode,
+        context_state=context_state,
+        resume_source=resume_source,
     )
 
 
@@ -553,7 +565,20 @@ def build_response_policy_guard_event(contract: TurnContract) -> dict[str, Any]:
         known_slots = contract.known_slots or {}
         pending_intent = str(known_slots.get("pending_intent") or "").strip()
         goal_type = str(known_slots.get("goal_type") or "").strip()
-        if pending_intent == "order" or goal_type == "place_order":
+        has_transaction_action = contract.action_mode in {
+            "unspecified",
+            "purchase_continuation",
+            "stock_check",
+            "reservation_lookup",
+            "booking_continuation",
+        }
+        if not has_transaction_action:
+            message = "요청하신 내용을 기준으로 다시 확인해 주세요."
+            quick_replies = [
+                {"label": "상품 다시 찾기", "domain": "DISCOVERY"},
+                {"label": "처음부터 다시", "domain": "LEADING"},
+            ]
+        elif pending_intent == "order" or goal_type == "place_order":
             if not (known_slots.get("goods_no") or known_slots.get("tire_size")):
                 message = "구매를 진행하려면 먼저 타이어 규격을 확인해야 해요. 장착할 규격을 선택해 주세요."
                 quick_replies = [
@@ -690,6 +715,14 @@ def build_response_policy_guard_event(contract: TurnContract) -> dict[str, Any]:
 
 
 def _build_missing_slot_action_prompt_event(contract: TurnContract) -> dict[str, Any] | None:
+    if contract.action_mode not in {
+        "unspecified",
+        "purchase_continuation",
+        "stock_check",
+        "reservation_lookup",
+        "booking_continuation",
+    }:
+        return None
     missing_slots = _missing_slots_for_action_prompt(contract)
     if not missing_slots:
         return None
@@ -764,9 +797,12 @@ def _has_missing_slot(slots: tuple[str, ...], *candidates: str) -> bool:
 def _is_order_missing_slot_context(contract: TurnContract) -> bool:
     known_slots = contract.known_slots or {}
     return (
-        str(contract.intent or "") in {"quick_order_reservation", "quick_order_execute"}
-        or str(known_slots.get("pending_intent") or "").strip() == "order"
-        or str(known_slots.get("goal_type") or "").strip() == "place_order"
+        contract.action_mode in {"purchase_continuation", "unspecified"}
+        and (
+            str(contract.intent or "") in {"quick_order_reservation", "quick_order_execute"}
+            or str(known_slots.get("pending_intent") or "").strip() == "order"
+            or str(known_slots.get("goal_type") or "").strip() == "place_order"
+        )
     )
 
 
@@ -999,6 +1035,8 @@ def violates_response_template_contract(event: Mapping[str, Any], contract: Turn
     template = str(event.get("template") or "")
     if should_guard_required_slots(contract) and template in _REQUIRED_SLOT_BLOCK_TEMPLATES:
         return True
+    if _action_mode_contract_violation(event=event, contract=contract) is not None:
+        return True
     if _is_unsupported_discovery_product_template_without_current_source(event, contract):
         return True
     response_decision = contract.response_decision or {}
@@ -1128,6 +1166,89 @@ def _is_purchase_bound_preview_event(event: Mapping[str, Any], contract: TurnCon
     return "transaction_store_preview_tool" in called_tools or source_tool == "transaction_store_preview_tool"
 
 
+_PURCHASE_OR_BOOKING_PROMPT_RE = re.compile(
+    r"구매를\s*(?:진행|이어)|주문을\s*(?:진행|이어)|예약(?:\s*가능|\s*시간|\s*일정|\s*을\s*진행)|"
+    r"장착\s*매장|장착할\s*규격|수량이\s*필요",
+    re.IGNORECASE,
+)
+_ACTION_TEMPLATE_MODES = {
+    "datepick": {"purchase_continuation", "booking_continuation", "reservation_lookup", "stock_check"},
+    "preOrder": {"purchase_continuation"},
+    "orderComplete": {"purchase_continuation"},
+    "cartComplete": {"purchase_continuation"},
+}
+_LOCATION_BOOKING_FLOW_MODES = {"purchase_continuation", "stock_check", "booking_continuation", "reservation_lookup"}
+_ACTION_TOOL_MODES = {
+    "quick_order_tool": {"purchase_continuation"},
+    "add_to_cart_tool": {"purchase_continuation"},
+    "transaction_store_preview_tool": {"purchase_continuation", "stock_check", "booking_continuation"},
+    "get_store_schedule_tool": {"purchase_continuation", "stock_check", "booking_continuation", "reservation_lookup"},
+    "get_multi_store_schedule_tool": {"purchase_continuation", "stock_check", "booking_continuation", "reservation_lookup"},
+}
+
+
+def _action_mode_contract_violation(
+    *,
+    event: Mapping[str, Any],
+    contract: TurnContract,
+) -> dict[str, Any] | None:
+    action_mode = str(contract.action_mode or "info_only")
+    if action_mode == "unspecified":
+        return None
+
+    template = str(event.get("template") or "")
+    allowed_modes = _ACTION_TEMPLATE_MODES.get(template)
+    if allowed_modes is not None and action_mode not in allowed_modes:
+        return {
+            "type": "action_mode_template_violation",
+            "action_mode": action_mode,
+            "context_state": contract.context_state,
+            "resume_source": contract.resume_source,
+            "template": template,
+        }
+    data = event.get("data")
+    if (
+        template == "location"
+        and isinstance(data, Mapping)
+        and bool(data.get("isBookingFlow"))
+        and action_mode not in _LOCATION_BOOKING_FLOW_MODES
+    ):
+        return {
+            "type": "action_mode_template_violation",
+            "action_mode": action_mode,
+            "context_state": contract.context_state,
+            "resume_source": contract.resume_source,
+            "template": template,
+            "field": "isBookingFlow",
+        }
+
+    called_tools = {str(tool or "") for tool in event.get("called_tools") or ()}
+    for tool_name, tool_modes in _ACTION_TOOL_MODES.items():
+        if tool_name in called_tools and action_mode not in tool_modes:
+            return {
+                "type": "action_mode_tool_violation",
+                "action_mode": action_mode,
+                "context_state": contract.context_state,
+                "resume_source": contract.resume_source,
+                "tool": tool_name,
+            }
+
+    assistant_text = str(event.get("assistant_response_text") or "")
+    if (
+        action_mode
+        in {"support_policy_answer", "product_description", "product_comparison", "owned_record_lookup", "store_search", "info_only"}
+        and _PURCHASE_OR_BOOKING_PROMPT_RE.search(assistant_text)
+    ):
+        return {
+            "type": "action_mode_prompt_violation",
+            "action_mode": action_mode,
+            "context_state": contract.context_state,
+            "resume_source": contract.resume_source,
+            "template": template,
+        }
+    return None
+
+
 def response_contract_violations(
     *,
     template: str | None,
@@ -1137,6 +1258,7 @@ def response_contract_violations(
     response_shape_key: str | None = None,
     called_tools: list[str] | tuple[str, ...] | None = None,
     tool_inputs: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...] | None = None,
+    event_data: Mapping[str, Any] | None = None,
     source_domain: str | None = None,
     contract: TurnContract | None,
 ) -> list[dict[str, Any]]:
@@ -1153,6 +1275,8 @@ def response_contract_violations(
         "called_tools": list(called_tools or ()),
         "source_domain": source_domain or ("discovery" if contract.domain == "discovery" else contract.domain),
     }
+    if event_data is not None:
+        event["data"] = event_data
     known_slots = contract.known_slots or {}
     schedule_mode = str(
         known_slots.get("mode")
@@ -1170,6 +1294,9 @@ def response_contract_violations(
             "required_slots": list(contract.blocking_required_slots),
             "template": template,
         })
+    action_mode_violation = _action_mode_contract_violation(event=event, contract=contract)
+    if action_mode_violation is not None:
+        violations.append(action_mode_violation)
     unsupported_product_template = _is_unsupported_discovery_product_template_without_current_source(event, contract)
     if unsupported_product_template:
         violations.append({

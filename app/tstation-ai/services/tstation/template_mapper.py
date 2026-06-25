@@ -45,6 +45,13 @@ current_pending_intent: contextvars.ContextVar[str | None] = contextvars.Context
     "current_pending_intent", default=None
 )
 
+# Current-turn action mode computed by the coordinator. Slot/context values may
+# enrich tool inputs and responses, but FE action metadata must only be emitted
+# when this mode confirms that the current turn is transactional.
+current_action_mode: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "current_action_mode", default="unspecified"
+)
+
 # True only for turns where the user explicitly asks for normal tire vs run-flat
 # price/additional-cost comparison. Prevents generic cheapest/discount compare
 # turns from being hijacked just because the candidate set contains RUNFLAT.
@@ -276,7 +283,44 @@ def _is_goal_booking_followup() -> bool:
     """
     if _is_product_description_only_turn():
         return False
+    if not _has_current_turn_transaction_action():
+        return False
     return current_goal_type.get() in _GOAL_BOOKING_FOLLOWUP
+
+
+def _has_current_turn_transaction_action(*modes: str) -> bool:
+    action_mode = current_action_mode.get()
+    if action_mode == "unspecified":
+        legacy_mode = {
+            "order": "purchase_continuation",
+            "stock": "stock_check",
+            "reservation": "booking_continuation",
+        }.get(current_pending_intent.get() or "") or {
+            "place_order": "purchase_continuation",
+            "store_with_stock": "stock_check",
+        }.get(current_goal_type.get() or "")
+        if not legacy_mode:
+            text = _current_turn_user_text()
+            if _PRODUCT_PURCHASE_ACTION_RE.search(text):
+                legacy_mode = "purchase_continuation"
+            elif _STOCK_OR_INSTALL_REQUEST_RE.search(text):
+                legacy_mode = "stock_check"
+        if modes:
+            return legacy_mode in modes
+        return legacy_mode in {
+            "purchase_continuation",
+            "stock_check",
+            "reservation_lookup",
+            "booking_continuation",
+        }
+    if modes:
+        return action_mode in modes
+    return action_mode in {
+        "purchase_continuation",
+        "stock_check",
+        "reservation_lookup",
+        "booking_continuation",
+    }
 
 
 def _is_product_description_only_turn() -> bool:
@@ -356,14 +400,18 @@ def _product_transaction_missing_size_event(
 
 def _single_product_transaction_handoff_event(items: list[dict], metadata: list[dict]) -> dict | None:
     if len(items) != 1 or len(metadata) != 1 or not (
-        _is_goal_booking_followup() or _is_product_transaction_missing_size_turn()
+        _is_goal_booking_followup()
+        or (
+            _has_current_turn_transaction_action("purchase_continuation", "stock_check")
+            and _is_product_transaction_missing_size_turn()
+        )
     ):
         return None
     goal_type = current_goal_type.get()
     pending_intent = current_pending_intent.get()
     if goal_type == "price_inquiry" or pending_intent == "price":
         action_text = "가격 확인을 이어갈게요."
-    elif _is_product_transaction_missing_size_turn():
+    elif _has_current_turn_transaction_action("purchase_continuation") and _is_product_transaction_missing_size_turn():
         action_text = "구매를 진행하려면 먼저 타이어 규격을 확인해야 해요."
     else:
         return None
@@ -669,6 +717,7 @@ def _preview_location_metadata(
     schedule_store = schedule_store if isinstance(schedule_store, dict) else {}
     schedule_mode = _get_str(schedule_store, "mode").lower()
     schedule_tier = _get_str(schedule, "tier").lower()
+    transaction_metadata_allowed = current_action_mode.get() == "unspecified" or _has_current_turn_transaction_action()
 
     metadata: dict[str, Any] = {"shopId": shop_id}
     if shop_name:
@@ -679,7 +728,7 @@ def _preview_location_metadata(
     if schedule_tier:
         metadata["scheduleTier"] = schedule_tier
         metadata["schedule_tier"] = schedule_tier
-    if entry.get("tool") == "transaction_store_preview_tool":
+    if entry.get("tool") == "transaction_store_preview_tool" and transaction_metadata_allowed:
         metadata["sourceTool"] = "transaction_store_preview_tool"
         metadata["source_tool"] = "transaction_store_preview_tool"
         metadata["stockCheckMode"] = "preview"
@@ -692,7 +741,7 @@ def _preview_location_metadata(
             metadata["goalType"] = goal_type
 
     goods_no = _get_str(args, "goods_no") or _get_str(raw, "goods_no", "goodsNo")
-    if goods_no:
+    if goods_no and transaction_metadata_allowed:
         metadata["goodsNo"] = goods_no
         metadata["goods_no"] = goods_no
         metadata["goods_no"] = goods_no
@@ -701,7 +750,7 @@ def _preview_location_metadata(
         ord_qty_int = int(ord_qty) if ord_qty is not None else None
     except (TypeError, ValueError):
         ord_qty_int = None
-    if ord_qty_int and ord_qty_int > 0:
+    if ord_qty_int and ord_qty_int > 0 and transaction_metadata_allowed:
         metadata["ordQty"] = ord_qty_int
         metadata["ord_qty"] = ord_qty_int
         metadata["ord_qty"] = ord_qty_int
@@ -865,6 +914,8 @@ def _map_inventory_stock_result(tool_data_list: list[dict], assistant_text: str)
     if labels is None or labels:
         return None
     if _same_turn_logistics_schedule_has_slots(tool_data_list):
+        return None
+    if not _has_current_turn_transaction_action("stock_check"):
         return None
     if current_pending_intent.get() != "stock" and current_goal_type.get() != "store_with_stock":
         return None
@@ -2762,6 +2813,8 @@ def _map_discovery_policy_quickreply(tool_data_list: list[dict], assistant_text:
         return None
     response_shape_key = str(decision.metadata.get("response_shape_key") or "")
     if (
+        _has_current_turn_transaction_action("purchase_continuation", "stock_check")
+        and
         _is_product_transaction_missing_size_turn()
         and current_pending_intent.get() != "stock"
         and (response_shape_key != "product_search_summary" or _PRODUCT_PURCHASE_ACTION_RE.search(_current_turn_user_text()))
@@ -2858,12 +2911,12 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
             rows = raw if isinstance(raw, list) else (raw.get("items") if isinstance(raw, dict) else [])
             if isinstance(rows, list) and any(isinstance(row, dict) for row in rows):
                 return None
-    product_search_size_summary = _map_product_search_size_summary(tool_data_list)
-    if product_search_size_summary:
-        return product_search_size_summary
     discovery_policy_quickreply = _map_discovery_policy_quickreply(tool_data_list, assistant_text)
     if discovery_policy_quickreply:
         return discovery_policy_quickreply
+    product_search_size_summary = _map_product_search_size_summary(tool_data_list)
+    if product_search_size_summary:
+        return product_search_size_summary
     if _explicit_requested_product_attribute_metrics() and _find_entries(tool_data_list, "search_product_tool"):
         response = _product_attribute_policy_response(tool_data_list)
         response = sanitize_user_facing_response(response)
@@ -2889,6 +2942,7 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
             }
     if (
         not _is_product_description_only_turn()
+        and _has_current_turn_transaction_action()
         and (
             current_pending_intent.get() in ("stock", "order", "reservation")
             or current_goal_type.get() in (
@@ -2903,7 +2957,7 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
         )
     ):
         return None
-    if _is_product_transaction_missing_size_turn():
+    if _has_current_turn_transaction_action("purchase_continuation", "stock_check") and _is_product_transaction_missing_size_turn():
         return None
 
     rows_by_name: dict[str, list[dict]] = {}
@@ -3090,7 +3144,11 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
     # a product card should advance the flow (qty → shop → tool call), so the
     # FE must route to /chat instead of /append.
     short, response_source = _summarize_with_source(assistant_text, "product", len(items))
-    if _is_product_transaction_missing_size_turn() and not _find_entries(tool_data_list, "get_best_selling_products_tool"):
+    if (
+        _has_current_turn_transaction_action("purchase_continuation", "stock_check")
+        and _is_product_transaction_missing_size_turn()
+        and not _find_entries(tool_data_list, "get_best_selling_products_tool")
+    ):
         short = "구매를 진행하려면 먼저 타이어 규격을 확인해야 해요. 장착할 규격을 선택해 주세요."
         response_source = "code_product_transaction_missing_size"
         pending_context = _product_transaction_pending_context()
@@ -3113,7 +3171,11 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
     handoff_event = _single_product_transaction_handoff_event(items, metadata)
     if handoff_event is not None:
         return handoff_event
-    if _is_product_transaction_missing_size_turn() and not _find_entries(tool_data_list, "get_best_selling_products_tool"):
+    if (
+        _has_current_turn_transaction_action("purchase_continuation", "stock_check")
+        and _is_product_transaction_missing_size_turn()
+        and not _find_entries(tool_data_list, "get_best_selling_products_tool")
+    ):
         missing_size_event = _product_transaction_missing_size_event(items, metadata, short)
         if missing_size_event is not None:
             return missing_size_event
@@ -3124,7 +3186,11 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
         "data": {
             "products": items,
             "metadata": metadata,
-            "isBookingFlow": _is_goal_booking_followup() or _is_product_transaction_missing_size_turn(),
+            "isBookingFlow": _is_goal_booking_followup()
+            or (
+                _has_current_turn_transaction_action("purchase_continuation", "stock_check")
+                and _is_product_transaction_missing_size_turn()
+            ),
             "assistantResponse": short,
         },
         "assistant_response_source": response_source,
@@ -3605,9 +3671,11 @@ def _map_ev_suitability_comparison(tool_data_list: list[dict], assistant_text: s
     """Build a deterministic quickReply for EV tire suitability comparisons."""
     if not current_ev_suitability_comparison.get():
         return None
-    if current_pending_intent.get() in ("stock", "order", "reservation") or current_goal_type.get() in (
-        "store_with_stock",
-        "place_order",
+    if _has_current_turn_transaction_action() and (
+        current_pending_intent.get() in ("stock", "order", "reservation") or current_goal_type.get() in (
+            "store_with_stock",
+            "place_order",
+        )
     ):
         return None
 
@@ -4027,7 +4095,7 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     # 서비스 예약 포함) 컨텍스트에서 location 카드가 isBookingFlow=true 로 emit되어
     # FE 매장 클릭이 /chat chain (다음 step datepick) 으로 이어진다.
     plain_store_search_user_text = _is_plain_store_search_user_text()
-    has_booking_intent = (
+    has_booking_intent = _has_current_turn_transaction_action() and (
         current_pending_intent.get() in ("order", "stock", "reservation") and not plain_store_search_user_text
     )
     # 단골매장 조회는 사용자가 직접 발화로 요청한 명시적 컨텍스트 — booking signal/
@@ -4065,6 +4133,7 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
 
     stock_filter_context = (
         not plain_store_search_user_text
+        and _has_current_turn_transaction_action("stock_check")
         and (
             current_pending_intent.get() == "stock"
             or current_goal_type.get() == "store_with_stock"
@@ -4422,8 +4491,9 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     # this turn (e.g., inventory check fires AFTER store selection).
     # Pure Flow 4/5 info lookups with no goal still stay False so clicking a
     # card surfaces the rich description without spuriously advancing.
+    action_allows_booking_signal = current_action_mode.get() == "unspecified" or _has_current_turn_transaction_action()
     is_booking_flow = (
-        has_booking_signal
+        (has_booking_signal and action_allows_booking_signal)
         or (_is_goal_booking_followup() and not plain_store_search_user_text)
         or has_booking_intent
         or current_return_visit_store_flow.get()
@@ -4460,7 +4530,10 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
         if not schedule_empty:
             continue
         guarded_preview_region = _get_str(args, "region_code") if isinstance(args, dict) else ""
-        guarded_preview_is_order = current_pending_intent.get() == "order"
+        guarded_preview_is_order = (
+            _has_current_turn_transaction_action("purchase_continuation")
+            and current_pending_intent.get() == "order"
+        )
         break
 
     short, response_source = _summarize_with_source(assistant_text, "location", len(items))
@@ -4545,6 +4618,11 @@ def _format_time_filter_slot(slot: object) -> str:
 
 
 def _map_time_filter_location(tool_data_list: list[dict], assistant_text: str) -> dict | None:
+    if current_action_mode.get() != "unspecified" and not _has_current_turn_transaction_action(
+        "booking_continuation",
+        "reservation_lookup",
+    ):
+        return None
     for entry in _find_entries(tool_data_list, "get_stores_with_time_filter_tool"):
         raw = _unwrap(entry)
         if not isinstance(raw, dict):
@@ -4764,6 +4842,8 @@ def _map_datepick_from_preview(tool_data_list: list[dict], assistant_text: str) 
     """
     if _is_other_store_request():
         return None
+    if current_action_mode.get() != "unspecified" and not _has_current_turn_transaction_action():
+        return None
 
     for entry in reversed(_find_entries(tool_data_list, "transaction_store_preview_tool")):
         args = entry.get("args") if isinstance(entry.get("args"), dict) else entry.get("input")
@@ -4849,6 +4929,8 @@ def _map_datepick(tool_data_list: list[dict], assistant_text: str) -> dict | Non
 
     Schedule-tool path wins when both are present (richer multi-day shape).
     """
+    if current_action_mode.get() != "unspecified" and not _has_current_turn_transaction_action():
+        return None
     transaction_decision = current_transaction_response_decision.get()
     same_turn_logistics_schedule_has_slots = _same_turn_logistics_schedule_has_slots(tool_data_list)
     if transaction_decision and transaction_decision.forbids("datepick_for_unverified_store"):
@@ -4859,7 +4941,7 @@ def _map_datepick(tool_data_list: list[dict], assistant_text: str) -> dict | Non
         and not same_turn_logistics_schedule_has_slots
     ):
         return None
-    if _same_turn_inventory_has_no_stock(tool_data_list) and (
+    if _same_turn_inventory_has_no_stock(tool_data_list) and _has_current_turn_transaction_action("stock_check") and (
         current_pending_intent.get() == "stock" or current_goal_type.get() == "store_with_stock"
     ) and not same_turn_logistics_schedule_has_slots:
         return None
@@ -5028,7 +5110,11 @@ def _build_datepick_metadata(
         metadata["scheduleTier"] = schedule_tier
         metadata["schedule_tier"] = schedule_tier
 
-    omit_product_slots = current_pending_intent.get() == "stock" and entry.get("tool") != "transaction_store_preview_tool"
+    omit_product_slots = (
+        _has_current_turn_transaction_action("stock_check")
+        and current_pending_intent.get() == "stock"
+        and entry.get("tool") != "transaction_store_preview_tool"
+    )
     goods_no = _get_str(args, "goods_no") or _get_str(raw, "goods_no", "goodsNo")
     if omit_product_slots:
         goods_no = ""
@@ -5464,7 +5550,9 @@ def _map_store_detail_info(tool_data_list: list[dict], assistant_text: str) -> d
         return None
     if called_tools & _BOOKING_SIGNAL_TOOLS:
         return None
-    if current_pending_intent.get() == "order" or current_goal_type.get() == "place_order":
+    if _has_current_turn_transaction_action("purchase_continuation") and (
+        current_pending_intent.get() == "order" or current_goal_type.get() == "place_order"
+    ):
         return None
 
     entries = _find_entries(tool_data_list, "get_store_detail_tool")

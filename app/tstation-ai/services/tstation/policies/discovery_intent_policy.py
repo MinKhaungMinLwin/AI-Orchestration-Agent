@@ -855,7 +855,11 @@ def build_discovery_intent_frame(
         sub_intent = "product_name_search"
     elif product_resolution_transaction_anchor:
         intent = "product_search"
-        sub_intent = "product_family_search" if product_families else "product_name_search"
+        if products and _RESTOCK_RE.search(text):
+            sub_intent = "restock_inquiry"
+            entities["restock_inquiry"] = True
+        else:
+            sub_intent = "product_family_search" if product_families else "product_name_search"
         entities["product_keyword"] = (product_families or products)[0]
     elif _GRADE_COMPARE_RE.search(text) and len(products) >= 2:
         intent = "product_comparison"

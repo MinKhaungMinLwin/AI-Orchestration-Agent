@@ -929,6 +929,158 @@ def _explicit_current_turn_override_reason(
     return None
 
 
+_EXPLICIT_RESUME_ANCHOR_RE = re.compile(
+    r"계속\s*(?:진행|이어|해)|이어\s*(?:진행|해)|아까\s*(?:구매|주문|재고|예약)\s*(?:이어|계속)|"
+    r"(?:구매|주문|예약)\s*계속|이걸로\s*(?:진행|구매|주문)|"
+    r"구매하기|주문하기|장바구니\s*(?:담기|담아)|예약\s*(?:진행|계속)",
+    re.IGNORECASE,
+)
+
+
+def _resume_source_from_current_turn(user_text: str) -> str:
+    if _EXPLICIT_RESUME_ANCHOR_RE.search(user_text or ""):
+        return "explicit_user"
+    return "none"
+
+
+def _has_stored_transaction_context(slots: ConversationSlots) -> bool:
+    context = slots.availability_context if isinstance(slots.availability_context, dict) else {}
+    return bool(
+        slots.pending_intent in {"order", "stock", "reservation"}
+        or slots.goal_type in {"place_order", "store_with_stock"}
+        or context.get("pending_order_context")
+        or context.get("dormant_purchase_context")
+        or context.get("dormant_stock_context")
+    )
+
+
+def _stored_transaction_intent(slots: ConversationSlots) -> tuple[str, str]:
+    pending_intent = str(getattr(slots, "pending_intent", "") or "")
+    goal_type = str(getattr(slots, "goal_type", "") or "")
+    if pending_intent or goal_type:
+        return pending_intent, goal_type
+    context = slots.availability_context if isinstance(slots.availability_context, dict) else {}
+    for key in ("pending_order_context", "dormant_purchase_context", "dormant_stock_context", "dormant_transaction_context"):
+        stored = context.get(key)
+        if not isinstance(stored, dict):
+            continue
+        pending_intent = str(stored.get("pending_intent") or "")
+        goal_type = str(stored.get("goal_type") or "")
+        if pending_intent or goal_type:
+            return pending_intent, goal_type
+    return "", ""
+
+
+def _current_turn_action_mode(
+    *,
+    user_text: str,
+    domains: list[MultiAgentDomain.Domain],
+    routing_result: MultiAgentDomain | None,
+    regex_slots: ConversationSlots,
+    merged_slots: ConversationSlots,
+    explicit_override_reason: str | None,
+    resume_source: str,
+) -> str:
+    if regex_slots.pending_intent == "order" or explicit_override_reason == "explicit_current_turn_purchase":
+        return "purchase_continuation"
+    if regex_slots.pending_intent == "stock" or explicit_override_reason == "explicit_current_turn_stock_or_booking":
+        return "stock_check"
+    if regex_slots.pending_intent == "price" or explicit_override_reason == "explicit_current_turn_price_lookup":
+        return "price_lookup"
+    if regex_slots.pending_intent == "reservation":
+        return "booking_continuation"
+    if resume_source != "none" and _has_stored_transaction_context(merged_slots):
+        pending_intent, goal_type = _stored_transaction_intent(merged_slots)
+        if pending_intent == "order" or goal_type == "place_order":
+            return "purchase_continuation"
+        if pending_intent == "stock" or goal_type == "store_with_stock":
+            return "stock_check"
+        if pending_intent == "reservation":
+            return "booking_continuation"
+        return "purchase_continuation"
+
+    plan_text = " ".join(str(item or "").lower() for item in (getattr(routing_result, "execution_plan", None) or ()))
+    if MultiAgentDomain.Domain.SUPPORT in domains:
+        return "support_policy_answer"
+    if MultiAgentDomain.Domain.DISCOVERY in domains:
+        if "compare" in plan_text or "comparison" in plan_text:
+            return "product_comparison"
+        if "description" in plan_text or "attribute" in plan_text:
+            return "product_description"
+        if "recommend" in plan_text or "recommendation" in plan_text:
+            return "product_recommendation"
+    if MultiAgentDomain.Domain.TRANSACTION in domains:
+        if any(
+            token in plan_text
+            for token in (
+                "history",
+                "status_lookup",
+                "reservation_status",
+                "order_status",
+                "order_history",
+                "owned",
+                "maintenance_history",
+                "cancel_status",
+            )
+        ):
+            return "owned_record_lookup"
+        if any(token in plan_text for token in ("quick_order", "place_order", "add_to_cart", "cart", "checkout")):
+            return "purchase_continuation"
+        if "stock" in plan_text or "inventory" in plan_text:
+            return "stock_check"
+        if "reservation" in plan_text or "schedule" in plan_text or "booking" in plan_text:
+            return "booking_continuation"
+        if "store" in plan_text:
+            return "store_search"
+    if re.search(r"매장|근처|주변|지점", user_text or "", re.IGNORECASE):
+        return "store_search"
+    return "info_only"
+
+
+def _context_state_for_action(
+    *,
+    action_mode: str,
+    resume_source: str,
+    slots: ConversationSlots,
+) -> str:
+    if action_mode in {"purchase_continuation", "stock_check", "reservation_lookup", "booking_continuation"}:
+        return "resumed" if resume_source != "none" else "active"
+    return "dormant" if _has_stored_transaction_context(slots) else "active"
+
+
+def _has_current_turn_order_recovery_anchor(
+    user_text: str,
+    *,
+    preorder_confirmation_turn: bool,
+    fresh_product_transaction_request: bool,
+) -> bool:
+    return bool(
+        preorder_confirmation_turn
+        or (user_text and _DATEPICK_SELECTION_RE.match(user_text))
+        or fresh_product_transaction_request
+        or _resume_source_from_current_turn(user_text) != "none"
+    )
+
+
+_TRANSACTION_ACTION_MODES = {
+    "purchase_continuation",
+    "stock_check",
+    "price_lookup",
+    "booking_continuation",
+    "reservation_lookup",
+}
+
+
+def _allows_transaction_action_mode(action_mode: str | None) -> bool:
+    return str(action_mode or "unspecified") in _TRANSACTION_ACTION_MODES
+
+
+def _allows_outer_tool_slot_staging(tool_name: str, action_mode: str | None) -> bool:
+    if tool_name == "transaction_store_preview_tool":
+        return _allows_transaction_action_mode(action_mode)
+    return True
+
+
 _P0_AUTO_CHAIN_PENDING_INTENTS = {"price", "stock", "order"}
 
 
@@ -2944,7 +3096,10 @@ class StreamingMultiAgentCoordinator:
 
         if tool_slots:
             updated = slots.apply_runtime_values(tool_slots, source=f"tool:{tool_name}")
-            if tool_name in {"search_product_tool", "transaction_store_preview_tool", "get_store_inventory_tool"}:
+            if (
+                tool_name in {"search_product_tool", "transaction_store_preview_tool", "get_store_inventory_tool"}
+                and _current_request_allows_transaction_context_staging(updated)
+            ):
                 _stage_pending_order_context(updated, source=f"tool:{tool_name}")
             if updated.model_dump() != slots.model_dump():
                 slots.__dict__.update(updated.__dict__)
@@ -14389,6 +14544,8 @@ def _build_no_visible_output_fallback_event(
             ],
         )
         if called_tool_names
+        and turn_contract is not None
+        and turn_contract.action_mode in {"unspecified", "purchase_continuation", "stock_check"}
         else None
     )
     if unresolved_event is not None:
@@ -14414,6 +14571,8 @@ def _build_turn_contract_required_slot_guard_event(
 ) -> dict[str, Any] | None:
     if turn_contract is None:
         return None
+    if turn_contract.action_mode not in {"unspecified", "purchase_continuation", "stock_check"}:
+        return build_required_slot_clarification_event(turn_contract)
     unresolved_event = _build_transaction_unresolved_product_resolution_event(
         user_text=user_text,
         slots=turn_contract.known_slots,
@@ -14432,6 +14591,10 @@ def _build_turn_contract_fallback_event(
 ) -> dict[str, Any] | None:
     if turn_contract is None:
         return None
+    if turn_contract.action_mode not in {"unspecified", "purchase_continuation", "stock_check"}:
+        if should_guard_required_slots(turn_contract):
+            return build_required_slot_clarification_event(turn_contract)
+        return build_response_policy_guard_event(turn_contract)
     unresolved_event = _build_transaction_unresolved_product_resolution_event(
         user_text=user_text,
         slots=turn_contract.known_slots,
@@ -16863,6 +17026,48 @@ def _stage_pending_order_context(slots: ConversationSlots, *, source: str) -> di
     return pending_context
 
 
+def _current_request_allows_transaction_context_staging(slots: ConversationSlots) -> bool:
+    try:
+        from services.tstation.template_mapper import current_action_mode
+
+        action_mode = current_action_mode.get()
+    except Exception:
+        action_mode = "unspecified"
+    if action_mode == "unspecified":
+        return bool(
+            getattr(slots, "pending_intent", None) in {"order", "stock", "price", "reservation"}
+            or getattr(slots, "goal_type", None) in {"place_order", "store_with_stock", "price_inquiry"}
+        )
+    return action_mode in {
+        "purchase_continuation",
+        "stock_check",
+        "price_lookup",
+        "booking_continuation",
+        "reservation_lookup",
+    }
+
+
+def _stage_dormant_transaction_context(slots: ConversationSlots, *, source: str) -> dict[str, Any]:
+    """Keep prior transaction context available for grounding without making it active."""
+    _clear_invalid_store_identity_slots(slots, source=f"{source}:dormant_transaction_context")
+    dormant_context = _pending_order_context_values(slots)
+    if not dormant_context:
+        return {}
+    context = dict(slots.availability_context or {})
+    pending_intent = str(dormant_context.get("pending_intent") or slots.pending_intent or "")
+    if pending_intent == "order" or dormant_context.get("goal_type") == "place_order":
+        key = "dormant_purchase_context"
+    elif pending_intent == "stock" or dormant_context.get("goal_type") == "store_with_stock":
+        key = "dormant_stock_context"
+    else:
+        key = "dormant_transaction_context"
+    dormant_context["source"] = source
+    dormant_context["context_state"] = "dormant"
+    context[key] = dormant_context
+    slots.availability_context = context
+    return dormant_context
+
+
 def _stage_pending_product_context_from_search(
     slots: ConversationSlots,
     *,
@@ -16871,6 +17076,8 @@ def _stage_pending_product_context_from_search(
     source: str,
 ) -> dict[str, Any]:
     """Persist product-search context while waiting for size/quantity follow-ups."""
+    if not _current_request_allows_transaction_context_staging(slots):
+        return {}
     pending_intent = str(getattr(slots, "pending_intent", "") or "").strip()
     goal_type = str(getattr(slots, "goal_type", "") or "").strip()
     if pending_intent not in {"stock", "order", "price"} and goal_type not in {
@@ -19578,9 +19785,14 @@ class TStationChatServiceV2:
                 logger.info(
                     "[SLOTS] Demoted carried tire_size for fresh product transaction: %s",
                     demoted_size_context,
-                )
+            )
             preorder_slot_values = TStationChatServiceV2._preorder_slot_values_from_data(latest_preorder_tmpl)
             preorder_confirmation_turn = _is_preorder_confirmation_reply(last_user_text, latest_preorder_tmpl)
+            current_turn_order_recovery_anchor = _has_current_turn_order_recovery_anchor(
+                last_user_text,
+                preorder_confirmation_turn=preorder_confirmation_turn,
+                fresh_product_transaction_request=fresh_product_transaction_request,
+            )
             missing_preorder_context = any(
                 getattr(merged_slots, field, None) is None
                 for field in (
@@ -19595,6 +19807,7 @@ class TStationChatServiceV2:
             )
             if (
                 preorder_slot_values
+                and current_turn_order_recovery_anchor
                 and (
                     merged_slots.goal_type == "place_order"
                     or merged_slots.pending_intent == "order"
@@ -19655,6 +19868,7 @@ class TStationChatServiceV2:
                         logger.info("[SLOTS] Recovered datepick template from recent assistant message for order flow")
             should_recover_datepick_order_slots = bool(
                 datepick_slot_values
+                and current_turn_order_recovery_anchor
                 and (
                     merged_slots.goal_type == "place_order"
                     or merged_slots.pending_intent == "order"
@@ -20280,6 +20494,7 @@ class TStationChatServiceV2:
                     transaction_store_preview_tool as _transaction_store_preview_tool,
                 )
                 from services.tstation.template_mapper import (
+                    current_action_mode as _cta_current_action_mode,
                     current_goal_type as _cta_current_goal_type,
                     current_pending_intent as _cta_current_pending_intent,
                     current_user_text as _cta_current_user_text,
@@ -20289,6 +20504,13 @@ class TStationChatServiceV2:
                 _cta_current_user_text.set(last_user_text)
                 _cta_current_pending_intent.set(merged_slots.pending_intent)
                 _cta_current_goal_type.set(merged_slots.goal_type)
+                _cta_current_action_mode.set(
+                    "purchase_continuation"
+                    if merged_slots.pending_intent == "order" or merged_slots.goal_type == "place_order"
+                    else "stock_check"
+                    if merged_slots.pending_intent == "stock" or merged_slots.goal_type == "store_with_stock"
+                    else "booking_continuation"
+                )
                 try:
                     raw_preview = await asyncio.to_thread(_transaction_store_preview_tool.invoke, preview_input)
                     preview_result = raw_preview if isinstance(raw_preview, dict) else qc_verifier.parse_tool_output(raw_preview)
@@ -22064,6 +22286,7 @@ class TStationChatServiceV2:
         # ContextVar scoping: set once per request, FastAPI's request lifecycle
         # confines propagation; no manual reset needed.
         from services.tstation.template_mapper import (
+            current_action_mode,
             current_ev_suitability_comparison,
             current_excluded_store_ids,
             current_goal_type,
@@ -22092,17 +22315,44 @@ class TStationChatServiceV2:
                 recent_user_texts.append(extracted)
             if len(recent_user_texts) >= 3:
                 break
-        staged_pending_order_context = _stage_pending_order_context(
-            merged_slots,
-            source="pre_policy_context",
+        resume_source = _resume_source_from_current_turn(last_user_text)
+        action_mode = _current_turn_action_mode(
+            user_text=last_user_text,
+            domains=domains,
+            routing_result=routing_result,
+            regex_slots=regex_slots,
+            merged_slots=merged_slots,
+            explicit_override_reason=explicit_override_reason,
+            resume_source=resume_source,
         )
-        if staged_pending_order_context:
-            logger.debug(
-                "[SLOTS] Staged pending_order_context before policy planning: %s",
-                staged_pending_order_context,
+        context_state = _context_state_for_action(
+            action_mode=action_mode,
+            resume_source=resume_source,
+            slots=merged_slots,
+        )
+        if action_mode in {"purchase_continuation", "stock_check", "booking_continuation"}:
+            staged_pending_order_context = _stage_pending_order_context(
+                merged_slots,
+                source=f"pre_policy_context:{context_state}",
             )
+            if staged_pending_order_context:
+                logger.debug(
+                    "[SLOTS] Staged active pending_order_context before policy planning: %s",
+                    staged_pending_order_context,
+                )
+        else:
+            staged_dormant_context = _stage_dormant_transaction_context(
+                merged_slots,
+                source=f"pre_policy_context:{action_mode}",
+            )
+            if staged_dormant_context:
+                logger.debug(
+                    "[SLOTS] Staged dormant transaction context before policy planning: %s",
+                    staged_dormant_context,
+                )
         current_goal_type.set(merged_slots.goal_type)
         current_pending_intent.set(merged_slots.pending_intent)
+        current_action_mode.set(action_mode)
         current_confirmed_tire_size.set(merged_slots.tire_size)
         current_user_text.set("\n".join(reversed(recent_user_texts)) or last_user_text)
         current_user_preferences_text.set(merged_slots.user_preferences_text or "")
@@ -22170,6 +22420,9 @@ class TStationChatServiceV2:
                     cross_domain_plan=cross_domain_plan,
                     routing_result=routing_result,
                     merged_slots=merged_slots,
+                    action_mode=action_mode,
+                    context_state=context_state,
+                    resume_source=resume_source,
                 )
             elif MultiAgentDomain.Domain.DISCOVERY in domains:
                 discovery_contract_slots = {
@@ -22195,6 +22448,9 @@ class TStationChatServiceV2:
                     cross_domain_plan=cross_domain_plan,
                     routing_result=routing_result,
                     merged_slots=merged_slots,
+                    action_mode=action_mode,
+                    context_state=context_state,
+                    resume_source=resume_source,
                 )
             else:
                 turn_contract = build_turn_contract(
@@ -22202,6 +22458,9 @@ class TStationChatServiceV2:
                     cross_domain_plan=cross_domain_plan,
                     routing_result=routing_result,
                     merged_slots=merged_slots,
+                    action_mode=action_mode,
+                    context_state=context_state,
+                    resume_source=resume_source,
                 )
             logger.info("[TURN_CONTRACT] %s", turn_contract.to_dict() if turn_contract else None)
             if turn_contract and turn_contract.contract_drift:
@@ -22849,6 +23108,9 @@ class TStationChatServiceV2:
         # Hoisted so the trace summary at end-of-stream can reference QC verdict
         # even when the draft was empty and the QC block below never ran.
         _qc_passed = True
+        stream_action_mode = str(getattr(turn_contract, "action_mode", None) or "unspecified")
+        stream_context_state = str(getattr(turn_contract, "context_state", None) or "dormant")
+        stream_resume_source = str(getattr(turn_contract, "resume_source", None) or "none")
 
         # Detailed latency tracking state
         _lat_tool_start: dict[str, float] = {}
@@ -27218,6 +27480,9 @@ class TStationChatServiceV2:
                             response_decision=aggregate_response_decision,
                             routing_result=routing_result,
                             merged_slots=pending_slots or initial_slots,
+                            action_mode=stream_action_mode,
+                            context_state=stream_context_state,
+                            resume_source=stream_resume_source,
                         )
                         logger.info("[TURN_CONTRACT] post-tool parse-failure update %s", turn_contract.to_dict())
                     if parsed_for_verifier is not None:
@@ -27308,6 +27573,9 @@ class TStationChatServiceV2:
                                 response_decision=post_tool_response_decision,
                                 routing_result=routing_result,
                                 merged_slots=pending_slots or initial_slots,
+                                action_mode=stream_action_mode,
+                                context_state=stream_context_state,
+                                resume_source=stream_resume_source,
                             )
                             logger.info("[TURN_CONTRACT] post-tool update %s", turn_contract.to_dict())
                     turn_tool_slots: dict[str, Any] = {}
@@ -27322,7 +27590,11 @@ class TStationChatServiceV2:
                             tire_size = canonical_item.get("tire_size")
                             if tire_size:
                                 turn_tool_slots["tire_size"] = tire_size
-                    elif tool_name == "transaction_store_preview_tool" and isinstance(input_data, dict):
+                    elif (
+                        tool_name == "transaction_store_preview_tool"
+                        and isinstance(input_data, dict)
+                        and _allows_outer_tool_slot_staging(tool_name, stream_action_mode)
+                    ):
                         preserve_confirmed_preview_slots = _is_confirmed_product_store_scope_followup(
                             user_query,
                             initial_slots,
@@ -27570,7 +27842,7 @@ class TStationChatServiceV2:
                         draft_response = assistant_response
                         draft_for_qc = assistant_response
                 coerced_event = None
-                if intent_group != "existing_reservation_management":
+                if intent_group != "existing_reservation_management" and _allows_transaction_action_mode(stream_action_mode):
                     coerced_event = coerce_reservation_quickreply_to_datepick(
                         event,
                         structured_sources,
@@ -27586,7 +27858,7 @@ class TStationChatServiceV2:
                     last_assistant_response_source = "code_mapper_preview_quickreply"
                     event_data = event.get("data", {})
                 coerced_event = None
-                if intent_group != "existing_reservation_management":
+                if intent_group != "existing_reservation_management" and _allows_transaction_action_mode(stream_action_mode):
                     coerced_event = coerce_order_preview_quickreply_to_datepick(
                         event,
                         structured_sources,
@@ -27813,9 +28085,14 @@ class TStationChatServiceV2:
                                 "[PRODUCT_SLOT_STAGE] staged confirmed product slots from event: %s",
                                 confirmed_product_slots,
                             )
-                    if last_template == "preOrder":
+                    can_commit_transaction_event_slots = _allows_transaction_action_mode(stream_action_mode)
+                    if last_template == "preOrder" and can_commit_transaction_event_slots:
                         _standardize_preorder_metadata(event_data, pending_slots or initial_slots)
-                    preorder_slots = TStationChatServiceV2._preorder_slot_values_from_data(event_data)
+                    preorder_slots = (
+                        TStationChatServiceV2._preorder_slot_values_from_data(event_data)
+                        if can_commit_transaction_event_slots
+                        else None
+                    )
                     if preorder_slots:
                         from schemas.tstation.slots import ConversationSlots
 
@@ -27830,7 +28107,11 @@ class TStationChatServiceV2:
                         if updated_slots.model_dump() != base_slots.model_dump():
                             pending_slots = updated_slots
                             logger.info("[PREORDER_SLOT_COMMIT] staged canonical order snapshot: %s", preorder_slots)
-                    datepick_slots = TStationChatServiceV2._datepick_slot_values_from_data(event)
+                    datepick_slots = (
+                        TStationChatServiceV2._datepick_slot_values_from_data(event)
+                        if can_commit_transaction_event_slots
+                        else None
+                    )
                     if datepick_slots and (
                         getattr(pending_slots or initial_slots, "goal_type", None) == "place_order"
                         or getattr(pending_slots or initial_slots, "pending_intent", None) == "order"
@@ -28301,6 +28582,7 @@ class TStationChatServiceV2:
                     if (
                         intent_group != "existing_reservation_management"
                         and last_assistant_response_source != "discovery_policy"
+                        and _allows_transaction_action_mode(stream_action_mode)
                     ):
                         coerced_event = coerce_schedule_confirmation_quickreply_to_datepick(
                             event,

@@ -113,6 +113,12 @@ from services.tstation.chat import (
     _build_discovery_policy_context,
     _build_manual_tire_size_input_event,
     _build_missing_order_product_reselection_event,
+    _allows_transaction_action_mode,
+    _allows_outer_tool_slot_staging,
+    _context_state_for_action,
+    _current_turn_action_mode,
+    _has_current_turn_order_recovery_anchor,
+    _stage_dormant_transaction_context,
     _stage_pending_order_context,
     _stage_pending_product_context_from_search,
     _clear_invalid_store_identity_slots,
@@ -339,6 +345,7 @@ from schemas.tstation.slots import CanonicalSlotState, ComparisonContext, Conver
 from services.tstation.template_mapper import (
     _map_location,
     _map_store_detail_info,
+    current_action_mode,
     current_discovery_response_decision,
     current_goal_type,
     current_pending_intent,
@@ -363,6 +370,15 @@ from services.tstation.policies.recommendation_scenario_catalog import recommend
 from services.tstation.policies.discovery_response_policy import decide_discovery_response
 from services.tstation.policies.price_response_policy import build_price_intent_frame, decide_price_response
 from services.tstation.source_filter import filter_for_context
+
+
+@pytest.fixture(autouse=True)
+def _reset_action_mode_context():
+    token = current_action_mode.set("unspecified")
+    try:
+        yield
+    finally:
+        current_action_mode.reset(token)
 
 def _labels(chips: list[dict]) -> list[str]:
     return [c["label"] for c in chips]
@@ -7652,6 +7668,399 @@ def test_order_history_force_routes_to_transaction_order() -> None:
     assert result is not None
     assert result.domains == [MultiAgentDomain.Domain.TRANSACTION]
     assert result.agent_prompt_profile == "transaction_order"
+
+
+def test_action_mode_keeps_order_history_as_owned_record_lookup_with_stale_order_context() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000309780",
+        tire_size="225/45R17",
+        pending_intent="order",
+        goal_type="place_order",
+    )
+    routing_result = MultiAgentDomain(
+        reason="test",
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        execution_plan=["transaction:order_history_lookup"],
+        user_behavior="asking for owned order records",
+        flow="owned-record lookup",
+        claim_check_type="none",
+        complaint_scope="none",
+        agent_prompt_profile="transaction_order",
+    )
+
+    action_mode = _current_turn_action_mode(
+        user_text="내 주문내역 알려줘",
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        routing_result=routing_result,
+        regex_slots=ConversationSlots(),
+        merged_slots=slots,
+        explicit_override_reason=None,
+        resume_source="none",
+    )
+
+    assert action_mode == "owned_record_lookup"
+    assert _context_state_for_action(action_mode=action_mode, resume_source="none", slots=slots) == "dormant"
+
+
+@pytest.mark.parametrize(
+    ("user_text", "domains", "execution_plan", "expected_mode"),
+    [
+        (
+            "인터넷에서 사서 매장에 가져가도 돼?",
+            [MultiAgentDomain.Domain.SUPPORT],
+            ["support:delivery_policy"],
+            "support_policy_answer",
+        ),
+        (
+            "이 타이어 설명 다시 해줘",
+            [MultiAgentDomain.Domain.DISCOVERY],
+            ["discovery:product_description"],
+            "product_description",
+        ),
+        (
+            "연비는 어때?",
+            [MultiAgentDomain.Domain.DISCOVERY],
+            ["discovery:product_attribute_lookup"],
+            "product_description",
+        ),
+        (
+            "온라인 가격이랑 매장 가격 차이 뭐야?",
+            [MultiAgentDomain.Domain.SUPPORT],
+            ["support:regional_price_policy"],
+            "support_policy_answer",
+        ),
+        (
+            "내 주문내역 알려줘",
+            [MultiAgentDomain.Domain.TRANSACTION],
+            ["transaction:order_history_lookup"],
+            "owned_record_lookup",
+        ),
+    ],
+)
+def test_action_mode_keeps_stale_transaction_context_dormant_for_independent_turns(
+    user_text: str,
+    domains: list[MultiAgentDomain.Domain],
+    execution_plan: list[str],
+    expected_mode: str,
+) -> None:
+    slots = ConversationSlots(
+        goods_no="G000000309780",
+        tire_size="225/45R17",
+        ord_qty=4,
+        shop_name="판교점",
+        requested_cal_day="20260625",
+        pending_intent="order",
+        goal_type="place_order",
+    )
+    routing_result = MultiAgentDomain(
+        reason="test",
+        domains=domains,
+        execution_plan=execution_plan,
+        user_behavior="current turn should not resume stale purchase context",
+        flow="independent turn",
+        claim_check_type="none",
+        complaint_scope="none",
+        agent_prompt_profile="full",
+    )
+
+    action_mode = _current_turn_action_mode(
+        user_text=user_text,
+        domains=domains,
+        routing_result=routing_result,
+        regex_slots=ConversationSlots(),
+        merged_slots=slots,
+        explicit_override_reason=None,
+        resume_source="none",
+    )
+
+    assert action_mode == expected_mode
+    assert _context_state_for_action(action_mode=action_mode, resume_source="none", slots=slots) == "dormant"
+
+
+def test_action_mode_resumes_stored_order_context_only_with_explicit_resume_anchor() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000309780",
+        tire_size="225/45R17",
+        pending_intent="order",
+        goal_type="place_order",
+    )
+
+    action_mode = _current_turn_action_mode(
+        user_text="아까 구매 이어서 진행해줘",
+        domains=[MultiAgentDomain.Domain.LEADING],
+        routing_result=None,
+        regex_slots=ConversationSlots(),
+        merged_slots=slots,
+        explicit_override_reason=None,
+        resume_source="explicit_user",
+    )
+
+    assert action_mode == "purchase_continuation"
+    assert _context_state_for_action(
+        action_mode=action_mode,
+        resume_source="explicit_user",
+        slots=slots,
+    ) == "resumed"
+
+
+def test_action_mode_resumes_dormant_stock_context_as_stock_check() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000309780",
+        tire_size="225/45R17",
+        availability_context={
+            "dormant_stock_context": {
+                "goods_no": "G000000309780",
+                "tire_size": "225/45R17",
+                "pending_intent": "stock",
+                "goal_type": "store_with_stock",
+                "context_state": "dormant",
+            }
+        },
+    )
+
+    action_mode = _current_turn_action_mode(
+        user_text="계속 진행해줘",
+        domains=[MultiAgentDomain.Domain.LEADING],
+        routing_result=None,
+        regex_slots=ConversationSlots(),
+        merged_slots=slots,
+        explicit_override_reason=None,
+        resume_source="explicit_user",
+    )
+
+    assert action_mode == "stock_check"
+    assert _context_state_for_action(
+        action_mode=action_mode,
+        resume_source="explicit_user",
+        slots=slots,
+    ) == "resumed"
+
+
+@pytest.mark.parametrize(
+    (
+        "user_text",
+        "preorder_confirmation_turn",
+        "fresh_product_transaction_request",
+        "expected",
+    ),
+    [
+        ("인터넷에서 사서 매장에 가져가도 돼?", False, False, False),
+        ("이 타이어 설명 다시 해줘", False, False, False),
+        ("2026년 5월 21일 (목)\n09:00", False, False, True),
+        ("주문해줘", True, False, True),
+        ("아까 구매 이어서 진행해줘", False, False, True),
+        ("벤투스 S2 AS 225/45R17 4개 구매할래", False, True, True),
+    ],
+)
+def test_order_template_recovery_requires_current_turn_anchor(
+    user_text: str,
+    preorder_confirmation_turn: bool,
+    fresh_product_transaction_request: bool,
+    expected: bool,
+) -> None:
+    assert _has_current_turn_order_recovery_anchor(
+        user_text,
+        preorder_confirmation_turn=preorder_confirmation_turn,
+        fresh_product_transaction_request=fresh_product_transaction_request,
+    ) is expected
+
+
+@pytest.mark.parametrize(
+    ("action_mode", "expected"),
+    [
+        ("purchase_continuation", True),
+        ("stock_check", True),
+        ("booking_continuation", True),
+        ("reservation_lookup", True),
+        ("price_lookup", True),
+        ("support_policy_answer", False),
+        ("product_description", False),
+        ("product_comparison", False),
+        ("owned_record_lookup", False),
+        ("store_search", False),
+        ("info_only", False),
+        ("unspecified", False),
+    ],
+)
+def test_transaction_event_slot_commit_requires_transaction_action_mode(action_mode: str, expected: bool) -> None:
+    assert _allows_transaction_action_mode(action_mode) is expected
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "action_mode", "expected"),
+    [
+        ("transaction_store_preview_tool", "purchase_continuation", True),
+        ("transaction_store_preview_tool", "stock_check", True),
+        ("transaction_store_preview_tool", "booking_continuation", True),
+        ("transaction_store_preview_tool", "support_policy_answer", False),
+        ("transaction_store_preview_tool", "product_description", False),
+        ("transaction_store_preview_tool", "info_only", False),
+        ("search_product_tool", "product_description", True),
+    ],
+)
+def test_outer_tool_slot_staging_blocks_preview_tool_without_transaction_action(
+    tool_name: str,
+    action_mode: str,
+    expected: bool,
+) -> None:
+    assert _allows_outer_tool_slot_staging(tool_name, action_mode) is expected
+
+
+def test_dormant_transaction_context_is_preserved_without_active_pending_context() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000309780",
+        tire_size="225/45R17",
+        ord_qty=4,
+        pending_intent="order",
+        goal_type="place_order",
+    )
+
+    dormant = _stage_dormant_transaction_context(slots, source="test_policy_turn")
+
+    assert dormant["context_state"] == "dormant"
+    assert slots.availability_context["dormant_purchase_context"]["goods_no"] == "G000000309780"
+    assert "pending_order_context" not in slots.availability_context
+
+
+def test_tool_derived_search_context_does_not_stage_active_order_context_in_info_only_mode() -> None:
+    from services.tstation.template_mapper import current_action_mode
+
+    token = current_action_mode.set("info_only")
+    slots = ConversationSlots(
+        tire_model="Dynapro HPX",
+        pending_intent="order",
+        goal_type="place_order",
+    )
+    try:
+        staged = _stage_pending_product_context_from_search(
+            slots,
+            tool_input={"keyword": "Dynapro HPX"},
+            parsed_data={"data": {"items": [{"goods_no": "G000000309780", "goods_nm": "Dynapro HPX"}]}},
+            source="test_info_only",
+        )
+    finally:
+        current_action_mode.reset(token)
+
+    assert staged == {}
+    assert not (slots.availability_context or {}).get("pending_order_context")
+
+
+def test_response_contract_flags_purchase_template_when_context_is_dormant() -> None:
+    contract = TurnContract(
+        domain="support",
+        intent="delivery_policy",
+        known_slots={"pending_intent": "order", "goal_type": "place_order"},
+        action_mode="support_policy_answer",
+        context_state="dormant",
+        resume_source="none",
+    )
+
+    violations = response_contract_violations(
+        template="datepick",
+        assistant_response_text="구매를 진행하려면 예약 가능 시간을 선택해 주세요.",
+        assistant_response_source="code_mapper",
+        called_tools=("get_store_schedule_tool",),
+        source_domain="transaction",
+        contract=contract,
+    )
+
+    violation_types = {violation["type"] for violation in hard_contract_violations(violations)}
+    assert "action_mode_template_violation" in violation_types
+
+    tool_violations = response_contract_violations(
+        template="quickReply",
+        assistant_response_text="구매를 진행하려면 예약 가능 시간을 선택해 주세요.",
+        assistant_response_source="code_mapper",
+        called_tools=("get_store_schedule_tool",),
+        source_domain="transaction",
+        contract=contract,
+    )
+    tool_violation_types = {violation["type"] for violation in hard_contract_violations(tool_violations)}
+    assert "action_mode_tool_violation" in tool_violation_types
+
+
+def test_response_contract_allows_purchase_template_when_context_is_resumed() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="quick_order_reservation",
+        known_slots={"pending_intent": "order", "goal_type": "place_order"},
+        action_mode="purchase_continuation",
+        context_state="resumed",
+        resume_source="explicit_user",
+    )
+
+    violations = response_contract_violations(
+        template="datepick",
+        assistant_response_text="구매를 진행하려면 예약 가능 시간을 선택해 주세요.",
+        assistant_response_source="code_mapper",
+        called_tools=("get_store_schedule_tool",),
+        source_domain="transaction",
+        contract=contract,
+    )
+
+    assert not [
+        violation
+        for violation in hard_contract_violations(violations)
+        if str(violation.get("type") or "").startswith("action_mode_")
+    ]
+
+
+def test_response_contract_flags_location_booking_flow_when_context_is_dormant() -> None:
+    contract = TurnContract(
+        domain="support",
+        intent="delivery_policy",
+        known_slots={"pending_intent": "order", "goal_type": "place_order"},
+        action_mode="support_policy_answer",
+        context_state="dormant",
+        resume_source="none",
+    )
+
+    violations = response_contract_violations(
+        template="location",
+        assistant_response_text="매장을 안내드릴게요.",
+        assistant_response_source="code_mapper",
+        called_tools=(),
+        event_data={"isBookingFlow": True, "stores": [], "metadata": []},
+        source_domain="transaction",
+        contract=contract,
+    )
+
+    action_violations = [
+        violation for violation in hard_contract_violations(violations)
+        if violation.get("type") == "action_mode_template_violation"
+    ]
+    assert action_violations
+    assert action_violations[0]["field"] == "isBookingFlow"
+    assert violates_response_template_contract(
+        {"template": "location", "data": {"isBookingFlow": True}},
+        contract,
+    )
+
+
+def test_response_contract_allows_location_booking_flow_when_context_is_active_transaction() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="store_schedule",
+        known_slots={"pending_intent": "stock", "goal_type": "store_with_stock"},
+        action_mode="stock_check",
+        context_state="active",
+        resume_source="none",
+    )
+
+    violations = response_contract_violations(
+        template="location",
+        assistant_response_text="장착 가능한 매장을 안내드릴게요.",
+        assistant_response_source="code_mapper",
+        called_tools=("transaction_store_preview_tool",),
+        event_data={"isBookingFlow": True, "stores": [], "metadata": []},
+        source_domain="transaction",
+        contract=contract,
+    )
+
+    assert not [
+        violation for violation in hard_contract_violations(violations)
+        if violation.get("type") == "action_mode_template_violation"
+    ]
 
 
 def test_store_schedule_question_is_not_hard_routed_before_router() -> None:
