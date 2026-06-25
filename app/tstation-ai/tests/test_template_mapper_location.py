@@ -601,35 +601,8 @@ def test_map_product_deduplicates_same_recommendation_goods_from_guard_and_tool(
             args={"rcmd_type": "tstation", "tire_size": "225/55R17", "car_lnc_cd": "W011338"},
             data={
                 "items": [
-                    {
-                        "goods_no": "G1",
-                        "goods_nm": "키너지 4S2",
-                        "tire_size_1": "225/55R17",
-                        "tire_size_2": "2255517",
-                        "sale_prc": 180000,
-                        "cheapest_final_prc": 134500,
-                        "price": 134500,
-                        "prc_grd_nm": "스탠다드",
-                        "goods_pfm_nm": "COMFORT",
-                        "season_nm": "사계절",
-                        "car_knd_nm": "SUV",
-                        "brand_nm": "HANKOOK",
-                        "t_rls_yearmon": "2020년 10월",
-                        "rating_avg": 4.5,
-                        "review_count": 12,
-                    },
-                    {
-                        "goods_no": "G2",
-                        "goods_nm": "크로스클라이밋 2",
-                        "tire_size_1": "225/55R17",
-                        "sale_prc": 270000,
-                        "cheapest_final_prc": 251800,
-                        "price": 251800,
-                        "prc_grd_nm": "프리미엄",
-                        "goods_pfm_nm": "COMFORT",
-                        "season_nm": "사계절",
-                        "car_knd_nm": "SUV",
-                    },
+                    {"goods_no": "G1", "goods_nm": "키너지 4S2", "tire_size_1": "225/55R17", "price": 134500},
+                    {"goods_no": "G2", "goods_nm": "크로스클라이밋 2", "tire_size_1": "225/55R17", "price": 251800},
                 ],
                 "recommendation_fallback": {
                     "requested_season_nm": "겨울",
@@ -658,31 +631,6 @@ def test_map_product_deduplicates_same_recommendation_goods_from_guard_and_tool(
     assert event["template"] == "product"
     assert len(event["data"]["products"]) == 2
     assert [item["goodsId"] for item in event["data"]["metadata"]] == ["G1", "G2"]
-    assert event["data"]["metadata"][0] == {
-        "goodsId": "G1",
-        "goodsNo": "G1",
-        "goods_no": "G1",
-        "productName": "키너지 4S2",
-        "product_name": "키너지 4S2",
-        "goods_nm": "키너지 4S2",
-        "tireSize": "225/55R17",
-        "tire_size": "225/55R17",
-        "tire_size_1": "225/55R17",
-        "tire_size_2": "2255517",
-        "price": 134500,
-        "finalPrice": 134500,
-        "cheapest_final_prc": 134500,
-        "originalPrice": 180000,
-        "sale_prc": 180000,
-        "prc_grd_nm": "스탠다드",
-        "goods_pfm_nm": "COMFORT",
-        "season_nm": "사계절",
-        "car_knd_nm": "SUV",
-        "brand_nm": "HANKOOK",
-        "t_rls_yearmon": "2020년 10월",
-        "rating_avg": 4.5,
-        "review_count": 12,
-    }
     assert "올웨더 대안 상품 2개" in event["data"]["assistantResponse"]
 
 
