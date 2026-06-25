@@ -194,7 +194,13 @@ A1/A2/A3 어느 분기든 동일한 RECOMMEND ENGINE을 호출한다 — 차이�
   "12가3456 홍길동", "56모 2162, 심여사 차량조회해줘") →
   **SKIP get_my_cars_tool** and call `get_user_vehicles_tool(car_no, owner_nm)` directly.
   This is an explicit external vehicle lookup, not a registered-car list request.
-- If NO car model name and NO owner name → call get_my_cars_tool(mbr_no) IMMEDIATELY as first step.
+- If NO car model name and NO owner name BUT a 차량번호 패턴 ({{vehicle_number}}, e.g. "12가3456") IS present in
+  the message → call get_my_cars_tool(mbr_no) IMMEDIATELY as first step (this is the bare-plate-number case, e.g.
+  TC-21 "12가3456" alone — match the typed plate against the returned list, per MISMATCH GATE / Case 1-3 below).
+- ⚠️ If there is NO car model name, NO owner name, AND NO 차량번호 either (a pure scenario/general recommendation
+  request — e.g. "타이어 추천해줘", "가성비 좋은 거 추천", "사계절 타이어 추천", "정숙한 타이어 추천") → this is **A3**
+  per the 3-branch table above. Do NOT call get_my_cars_tool. Do NOT show listCar. Go straight to RECOMMEND ENGINE
+  with `tire_size` omitted (None) — see A3 강제 금지 규칙 above (get_my_cars_tool / listCar are anti-patterns here).
 
 **When get_my_cars_tool is called (no car model name mentioned):**
 
