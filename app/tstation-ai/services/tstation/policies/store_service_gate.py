@@ -34,6 +34,53 @@ STORE_ATTRIBUTE_VERIFICATION_LEVEL = Literal[
 ]
 
 
+STORE_SERVICE_CATALOG: dict[str, dict[str, object]] = {
+    "tire_storage": {
+        "name": "타이어 보관서비스",
+        "codes": ("119",),
+        "patterns": (
+            re.compile(r"보관\s*서비스|타이어\s*보관|타이어\s*호텔|윈터\s*타이어|겨울\s*타이어", re.IGNORECASE),
+        ),
+    },
+    "wheel_alignment": {
+        "name": "휠얼라인먼트",
+        "codes": ("124", "125"),
+        "patterns": (re.compile(r"휠\s*얼라이먼트|휠\s*얼라인먼트|얼라인먼트", re.IGNORECASE),),
+    },
+    "maintenance": {
+        "name": "경정비",
+        "codes": ("121", "122"),
+        "patterns": (
+            re.compile(r"경정비|엔진\s*오일|엔진오일|실내\s*필터|에어컨\s*필터|필터|와이퍼", re.IGNORECASE),
+        ),
+    },
+    "free_check": {
+        "name": "무상점검",
+        "codes": ("126",),
+        "patterns": (re.compile(r"무상\s*점검|무료\s*점검|all\s*my\s*t|올마이티", re.IGNORECASE),),
+    },
+    "imported_tire": {
+        "name": "수입타이어 취급",
+        "codes": ("120",),
+        "patterns": (re.compile(r"수입\s*타이어", re.IGNORECASE),),
+    },
+}
+
+
+def normalize_store_service_request(text: str) -> dict[str, object] | None:
+    """Return a validated service catalog match for store service search/inquiry."""
+    value = text or ""
+    for service_key, service in STORE_SERVICE_CATALOG.items():
+        patterns = service.get("patterns") or ()
+        if any(pattern.search(value) for pattern in patterns if isinstance(pattern, re.Pattern)):
+            return {
+                "service_key": service_key,
+                "service_name": str(service["name"]),
+                "service_codes": tuple(str(code) for code in service["codes"]),
+            }
+    return None
+
+
 class StoreAttributeInquiry(BaseModel):
     store_name: str = Field(default="", description="Current or carried store name, if available.")
     attribute_text: str = Field(default="", description="Raw store attribute/service/equipment phrase from user text.")
@@ -107,7 +154,7 @@ _UNVERIFIABLE_STORE_PREFERENCE_RULES: tuple[tuple[re.Pattern[str], str], ...] = 
 _STORE_NAME_RE = re.compile(r"((?:티스테이션\s*)?[가-힣A-Za-z0-9]+(?:점|매장))")
 _STORE_MENTION_CONTEXT_RE = re.compile(
     r"티스테이션|더타이어샵|매장|지점|장착점|주소|전화|연락처|영업|운영|휴무|"
-    r"예약|재고|입고|장착|구매|주문|질소|보관|야간\s*(?:정비|서비스|작업)|야간정비|"
+    r"예약|재고|입고|장착|교체|작업|확인|구매|주문|질소|보관|야간\s*(?:정비|서비스|작업)|야간정비|"
     r"얼라인먼트|휠\s*얼라이먼트|리프트|공휴일|휴일|일요일|토요일|문\s*열",
     re.IGNORECASE,
 )

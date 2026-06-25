@@ -442,6 +442,14 @@ class MultiAgentDomain(BaseModel):
                 data["store_attribute_type"] = "unknown"
             if "store_attribute_verification_level" not in data:
                 data["store_attribute_verification_level"] = "store_contact_required"
+            if "service_name" not in data:
+                data["service_name"] = ""
+            if "service_code" not in data:
+                data["service_code"] = ""
+            if "region" not in data:
+                data["region"] = ""
+            if "place_query" not in data:
+                data["place_query"] = ""
             if "recommendation_scenario" not in data:
                 data["recommendation_scenario"] = "none"
             if "override_applied" not in data:
@@ -652,7 +660,9 @@ class MultiAgentDomain(BaseModel):
         "price_policy_faq",
         "payment_error_troubleshooting",
         "legal_action_guidance_denied",
+        "store_service_search",
         "store_attribute_inquiry",
+        "store_service_advisory",
         "store_service_availability",
         "my_goods_review_lookup",
         "store_service_review_write",
@@ -692,6 +702,14 @@ class MultiAgentDomain(BaseModel):
             "from store tools, and 'unsupported_or_policy' for subjective or guarantee-like requests."
         )
     )
+    service_name: str = Field(
+        description="For policy_intent='store_service_search', normalized service name such as '타이어 보관서비스'. Empty otherwise."
+    )
+    service_code: str = Field(
+        description="For policy_intent='store_service_search', primary normalized service code such as '119'. Empty otherwise."
+    )
+    region: str = Field(description="For store_service_search, broad region/place from the current turn. Empty otherwise.")
+    place_query: str = Field(description="For store_service_search, raw place query from the current turn. Empty otherwise.")
     recommendation_scenario: str = Field(
         description=(
             "For Discovery tire recommendation turns, classify the request into a supported recommendation catalog key "
@@ -1515,6 +1533,14 @@ class _SlimMultiAgentDomain(BaseModel):
                 data["store_attribute_type"] = "unknown"
             if "store_attribute_verification_level" not in data:
                 data["store_attribute_verification_level"] = "store_contact_required"
+            if "service_name" not in data:
+                data["service_name"] = ""
+            if "service_code" not in data:
+                data["service_code"] = ""
+            if "region" not in data:
+                data["region"] = ""
+            if "place_query" not in data:
+                data["place_query"] = ""
             if "recommendation_scenario" not in data:
                 data["recommendation_scenario"] = "none"
             if "override_applied" not in data:
@@ -1666,7 +1692,9 @@ class _SlimMultiAgentDomain(BaseModel):
         "price_policy_faq",
         "payment_error_troubleshooting",
         "legal_action_guidance_denied",
+        "store_service_search",
         "store_attribute_inquiry",
+        "store_service_advisory",
         "store_service_availability",
         "my_goods_review_lookup",
         "store_service_review_write",
@@ -1690,6 +1718,14 @@ class _SlimMultiAgentDomain(BaseModel):
     ] = Field(
         description="Verification level for store_attribute_inquiry."
     )
+    service_name: str = Field(
+        description="For policy_intent='store_service_search', normalized service name, or empty string."
+    )
+    service_code: str = Field(
+        description="For policy_intent='store_service_search', primary normalized service code, or empty string."
+    )
+    region: str = Field(description="For store_service_search, broad region/place, or empty string.")
+    place_query: str = Field(description="For store_service_search, raw place query, or empty string.")
     recommendation_scenario: str = Field(
         description=(
             "Discovery tire recommendation catalog key, or 'unknown_scenario'/'none'. "
@@ -1846,8 +1882,9 @@ Complaint routing rule:
    - "price_policy_faq": generic pricing policy FAQ that is not a live price lookup
    - "payment_error_troubleshooting": 결제 진행 중 오류/결제창 또는 결제 화면 문제/결제 진행 불가/장착일 선택란 미노출 등 checkout troubleshooting
    - "legal_action_guidance_denied": 티스테이션 매장/서비스/예약/장착/응대 불편과 함께 고소/소송/법적 대응/내용증명/분쟁조정/신고 방법을 묻는 경우. 법적 절차는 안내하지 않고 공식 CS 접수만 안내.
+   - "store_service_search": 지역/근처/어디어디/찾아줘 + 서비스 조건 매장 검색
    - "store_attribute_inquiry": 특정 매장의 서비스/장비/운영 조건/주관 품질 가능 여부 문의
-   - "store_service_availability": 매장명이 없는 보관서비스/타이어 보관/질소충전/얼라인먼트 숙련도 등 매장별 서비스 운영 여부 안내
+   - "store_service_advisory": 지역·매장 없이 보관서비스/타이어 보관/질소충전/얼라인먼트 등 서비스 가능 여부만 묻는 일반 안내
    - "my_goods_review_lookup": 내가 쓴 상품 리뷰/구매후기/베스트리뷰 선정 여부 확인 경로 안내
    - "store_service_review_write": 매장/지점/매장서비스/장착서비스 리뷰·후기·칭찬·별점 작성 경로 안내
    - "store_review_write": legacy alias for store_service_review_write only
@@ -1858,6 +1895,8 @@ Complaint routing rule:
      * `store_attribute_text`: preserve the requested attribute/service phrase, e.g. "야간정비"
      * `store_attribute_type`: service | equipment | operating_condition | subjective_quality | unknown
      * `store_attribute_verification_level`: store_contact_required unless the exact field is available from store tools.
+   - For `store_service_search`, also fill `service_name`, `service_code`, and `region` or `place_query`.
+     Service catalog: 119=타이어 보관서비스, 124/125=휠얼라인먼트, 121/122=경정비, 126=무상점검, 120=수입타이어 취급.
 
 18. agent_prompt_profile - use a narrow profile only for clear single-flow requests:
    - "transaction_coupon": coupon/promotion/coupon issue
@@ -2108,9 +2147,10 @@ Also set `policy_intent`:
 - competitor product to Hankook lineup orientation ("미쉐린 크로스클라이밋2에 대응하는 한국타이어 라인업 알려줘", "CC2랑 비슷한 한타 뭐야") → DISCOVERY, agent_prompt_profile=`discovery_search`, execution_plan=`discovery:competitor_counterpart_guidance`; this is an informational answer, not vehicle/size recommendation or Transaction.
 - cancellation/return fee inquiry ("예약 취소에 따른 위약금이 있는지 알려줘", "예약 취소하면 비용이 발생하나요?", "오늘 취소하면 수수료 있나요?") → TRANSACTION, agent_prompt_profile=`transaction_order`, execution_plan=`transaction:order_cancel_fee_inquiry`; this is a fee/condition inquiry, not an order_cancel_request.
 - cancellation execution request ("예약 취소해줘", "주문 취소 처리해줘") → TRANSACTION, agent_prompt_profile=`transaction_order`, execution_plan=`transaction:order_cancel_request`.
+- 지역+서비스 조건 매장 검색 (경기권에 타이어 보관해주는 매장 어디 있어?, 청주에 타이어 보관서비스 가능한 매장 있어?, 경기권 얼라인먼트 가능한 매장 알려줘) → TRANSACTION, policy_intent=`store_service_search`, execution_plan=`transaction:store_service_search`
 - specific-store attribute inquiry (정자점 야간정비 가능해?, 정자점 리프트 있어?, 정자점 질소충전 돼?, 정자점 얼라인먼트 잘 봐?) → `store_attribute_inquiry` with TRANSACTION store info lookup plus support-style contact guidance
   Also fill `store_attribute_store_name`, `store_attribute_text`, `store_attribute_type`, and `store_attribute_verification_level`.
-- store service availability with no specific store (보관서비스 돼?, 얼라인먼트 잘 봐?) → `store_service_availability`
+- store service advisory with no specific store/region (보관서비스 돼?, 얼라인먼트 잘 봐?) → `store_service_advisory`
 - goods review lookup path (내가 쓴 리뷰 어디서 봐?, 내가 작성한 리뷰 확인, 베스트리뷰 확인 어디서 해?, 상품 리뷰/구매후기 확인) → `my_goods_review_lookup`
 - store/service review write path (매장 리뷰 어디다 써?, 매장서비스 후기 작성, 남양주점 별점 5점 남기고 싶어, 지점 칭찬 리뷰 작성하고 싶어) → `store_service_review_write`
 - otherwise `none`
@@ -2238,7 +2278,7 @@ EXAMPLES (tricky cases):
 - "2026년 5월 15일 (금)\n17:00" → TRANSACTION, agent_prompt_profile=full (same rule: any message that is ONLY date+newline+time is a datepick selection, always use full profile)
 - [Prior context: agent showed preOrder card] User says "ㅇㅇ" or "네" or "주문해줘" → TRANSACTION, agent_prompt_profile=full (confirmation after preOrder card — needs quick_order_tool which is only in full profile)
 
-Output: domains (list with ONE OR MORE domains, ordered by execution priority), reason, execution_plan, claim_check_type, complaint_scope, discovery_followup_intent, carried_discovery_objective, pending_check_topic, pending_check_object_type, pending_check_object_value, comparison_followup_intent, comparison_metric, recent_product_set_followup_type, recent_product_set_metric, recent_product_set_direction, recent_product_set_price_basis, requested_product_attribute, policy_intent, store_attribute_store_name, store_attribute_text, store_attribute_type, store_attribute_verification_level, recommendation_scenario, referred_object_status, referred_object_type, needs_clarification, planner_confidence, and agent_prompt_profile.
+Output: domains (list with ONE OR MORE domains, ordered by execution priority), reason, execution_plan, claim_check_type, complaint_scope, discovery_followup_intent, carried_discovery_objective, pending_check_topic, pending_check_object_type, pending_check_object_value, comparison_followup_intent, comparison_metric, recent_product_set_followup_type, recent_product_set_metric, recent_product_set_direction, recent_product_set_price_basis, requested_product_attribute, policy_intent, store_attribute_store_name, store_attribute_text, store_attribute_type, store_attribute_verification_level, service_name, service_code, region, place_query, recommendation_scenario, referred_object_status, referred_object_type, needs_clarification, planner_confidence, and agent_prompt_profile.
 claim_check_type:
 - none: normal product description/search/recommendation
 - verifiable_product_attribute: product data attribute verification such as noise label, wet grade, rolling resistance, price grade, season, or vehicle category

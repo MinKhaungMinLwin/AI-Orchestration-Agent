@@ -16799,17 +16799,101 @@ def test_store_service_availability_followup_uses_carried_store_context_for_attr
     assert "검색되는 매장" not in event["data"]["assistantResponse"]
 
 
-def test_store_service_availability_without_store_asks_scope_not_random_store_search() -> None:
+def test_store_service_advisory_without_store_asks_scope_not_random_store_search() -> None:
     user_text = "보관서비스 돼?"
     event = _store_service_availability_event(user_text, store_name=None)
     frame = build_transaction_intent_frame(user_text, known_slots={})
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text=user_text,
+        known_slots=dict(frame.known_slots),
+    )
 
-    assert frame.intent == "store_attribute_inquiry"
+    assert frame.intent == "store_service_advisory"
+    assert frame.known_slots["service_name"] == "타이어 보관서비스"
+    assert tool_plan.allowed_tools == ()
+    assert "search_stores_tool" in tool_plan.forbidden_tools
+    assert "get_store_schedule_tool" in tool_plan.forbidden_tools
+    assert response_decision.metadata["response_shape_key"] == "store_service_advisory"
     assert event is not None
     assert "어느 매장 기준인지" in event["data"]["assistantResponse"]
     assert event["data"]["metadata"]["carried_store_context"] == ""
     assert event["data"]["metadata"]["store_search_suppressed"] is True
     assert _labels(event["data"]["quickReplies"])[0] == "매장명 입력"
+
+
+def test_region_tire_storage_service_search_uses_store_search_contract() -> None:
+    user_text = "경기권에 타이어 보관해주는 매장 어디 있어?"
+    frame = build_transaction_intent_frame(user_text, known_slots={})
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text=user_text,
+        known_slots=dict(frame.known_slots),
+    )
+
+    assert frame.intent == "store_service_search"
+    assert frame.sub_intent == "store_service_search"
+    assert frame.known_slots["region"] == "경기"
+    assert frame.known_slots["service_name"] == "타이어 보관서비스"
+    assert frame.known_slots["service_codes"] == ("119",)
+    assert frame.missing_slots == ()
+    assert tool_plan.allowed_tools == ("search_stores_tool", "get_store_list_tool")
+    assert tool_plan.preferred_tool == "search_stores_tool"
+    assert tool_plan.tool_args_patch["region_code"] == "경기"
+    assert tool_plan.tool_args_patch["place_query"] == "경기"
+    assert tool_plan.tool_args_patch["svc_codes"] == ["119"]
+    assert "get_store_schedule_tool" in tool_plan.forbidden_tools
+    assert "transaction_store_preview_tool" in tool_plan.forbidden_tools
+    assert response_decision.template == TemplateName.LOCATION
+    assert response_decision.metadata["response_shape_key"] == "store_service_search"
+
+
+def test_cheongju_tire_storage_service_search_normalizes_service_code() -> None:
+    frame = build_transaction_intent_frame("청주에 타이어 보관서비스 가능한 매장 있어?", known_slots={})
+    tool_plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "store_service_search"
+    assert frame.known_slots["region"] == "청주"
+    assert frame.known_slots["service_codes"] == ("119",)
+    assert tool_plan.tool_args_patch["svc_codes"] == ["119"]
+
+
+def test_region_alignment_service_search_uses_alignment_codes() -> None:
+    frame = build_transaction_intent_frame("경기권 얼라인먼트 가능한 매장 알려줘", known_slots={})
+    tool_plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "store_service_search"
+    assert frame.known_slots["region"] == "경기"
+    assert frame.known_slots["service_name"] == "휠얼라인먼트"
+    assert frame.known_slots["service_codes"] == ("124", "125")
+    assert tool_plan.tool_args_patch["svc_codes"] == ["124", "125"]
+
+
+def test_store_service_search_without_region_requires_region_only() -> None:
+    user_text = "타이어 보관해주는 매장 어디 있어?"
+    frame = build_transaction_intent_frame(user_text, known_slots={})
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text=user_text,
+        known_slots=dict(frame.known_slots),
+    )
+
+    assert frame.intent == "store_service_search"
+    assert frame.missing_slots == ("region",)
+    assert tool_plan.required_slots == ("region",)
+    assert tool_plan.tool_args_patch["svc_codes"] == ["119"]
+    assert response_decision.required_slots == ("region",)
+    assert response_decision.metadata["response_shape_key"] == "missing_store_service_search_region"
+
+
+def test_owned_tire_storage_history_question_stays_out_of_store_service_search() -> None:
+    frame = build_transaction_intent_frame("맡긴 타이어 어디서 확인해?", known_slots={})
+
+    assert frame.intent != "store_service_search"
+    assert frame.intent != "store_service_advisory"
 
 
 def test_tire_service_with_maintenance_addon_uses_transaction_store_service_action() -> None:

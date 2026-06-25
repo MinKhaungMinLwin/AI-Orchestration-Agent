@@ -48,6 +48,10 @@ def decide_transaction_response(
         return _decide_store_schedule(text=text, slots=slots)
     if intent == "open_store_search":
         return _decide_open_store_search()
+    if intent == "store_service_search":
+        return _decide_store_service_search(slots=slots)
+    if intent == "store_service_advisory":
+        return _decide_store_service_advisory()
     if intent == "store_visit_advisory":
         return _decide_store_visit_advisory()
     if intent == "service_duration_advisory":
@@ -242,6 +246,54 @@ def _decide_open_store_search() -> ResponseDecision:
             "지역 후보 매장을 특정 날짜/요일 영업 여부로 필터링하고, 확인된 매장은 location 카드로 안내한다."
         ),
         metadata={"open_only": True},
+    )
+
+
+def _decide_store_service_search(*, slots: dict[str, Any]) -> ResponseDecision:
+    if not slots.get("region"):
+        return _decision(
+            response_shape_key="missing_store_service_search_region",
+            response_shape=ResponseShape.CLARIFY,
+            template=TemplateName.QUICK_REPLY,
+            required_slots=("region",),
+            forbidden_behaviors=("random_store_service_search_without_region", "store_service_advisory_for_search"),
+            assistant_guidance="서비스 조건 매장 검색은 지역이 필요하므로 지역만 짧게 요청한다.",
+            metadata={"service_name": slots.get("service_name")},
+        )
+    return _decision(
+        response_shape_key="store_service_search",
+        response_shape=ResponseShape.LOCATION,
+        template=TemplateName.LOCATION,
+        forbidden_behaviors=(
+            "store_service_advisory_for_search",
+            "schedule_tool_for_store_service_search",
+            "claim_service_without_matching_svc_code",
+        ),
+        assistant_guidance=(
+            "지역+서비스 조건 매장 검색은 조건에 맞는 매장 location 카드로 안내한다. "
+            "svc_codes에 해당 서비스 코드가 확인된 경우에만 가능 표현을 쓴다."
+        ),
+        metadata={
+            "service_name": slots.get("service_name"),
+            "service_codes": tuple(slots.get("service_codes") or ()),
+        },
+    )
+
+
+def _decide_store_service_advisory() -> ResponseDecision:
+    return _decision(
+        response_shape_key="store_service_advisory",
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        forbidden_behaviors=(
+            "random_store_service_search_without_region",
+            "claim_service_without_matching_svc_code",
+            "schedule_tool_for_store_service_advisory",
+        ),
+        assistant_guidance=(
+            "지역이나 특정 매장이 없는 서비스 가능 여부 질문은 일반 안내로 답하고, "
+            "검색하려면 지역 또는 매장명을 요청한다."
+        ),
     )
 
 
