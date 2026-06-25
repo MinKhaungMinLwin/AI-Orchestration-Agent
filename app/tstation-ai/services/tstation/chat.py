@@ -830,6 +830,8 @@ def _router_contract_is_high_confidence_policy(routing_result: MultiAgentDomain 
     if len(domains) != 1:
         return False
     policy_intent = str(getattr(routing_result, "policy_intent", "none") or "none")
+    if policy_intent == "store_attribute_inquiry":
+        return False
     if domains[0] == MultiAgentDomain.Domain.SUPPORT and policy_intent != "none":
         return True
     execution_plan = tuple(str(item) for item in (getattr(routing_result, "execution_plan", None) or ()))
@@ -22484,6 +22486,10 @@ class TStationChatServiceV2:
                             )
                             or any(
                                 task.intent == "reservation_store_info_lookup"
+                                for task in cross_domain_plan.subtasks
+                            )
+                            or any(
+                                task.intent == "store_attribute_inquiry"
                                 for task in cross_domain_plan.subtasks
                             )
                         )

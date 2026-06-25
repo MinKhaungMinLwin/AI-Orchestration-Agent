@@ -1136,6 +1136,35 @@ def test_high_confidence_support_policy_contract_survives_wrong_prompt_profile()
     )
 
 
+def test_support_store_attribute_contract_allows_transaction_store_lookup_override() -> None:
+    routing = MultiAgentDomain(
+        reason="specific store attribute inquiry",
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        execution_plan=["check specific store's service availability for night maintenance"],
+        user_behavior="asking whether a specific store offers night maintenance",
+        flow="policy guidance",
+        claim_check_type="none",
+        complaint_scope="none",
+        policy_intent="store_attribute_inquiry",
+        store_attribute_store_name="정자점",
+        store_attribute_text="야간정비",
+        store_attribute_type="operating_condition",
+        store_attribute_verification_level="store_contact_required",
+        planner_confidence=1.0,
+        needs_clarification=False,
+        referred_object_status="resolved",
+        referred_object_type="store",
+        agent_prompt_profile="full",
+    )
+
+    assert not _router_contract_is_high_confidence_policy(routing)
+    assert not _should_preserve_router_contract(
+        routing_result=routing,
+        candidate_override="cross_domain_policy_route",
+        override_reason="heuristic_cross_domain_policy_route",
+    )
+
+
 def test_completed_speculative_router_policy_contract_promotes_over_discovery_guess() -> None:
     routing = MultiAgentDomain(
         reason="regional price policy",
