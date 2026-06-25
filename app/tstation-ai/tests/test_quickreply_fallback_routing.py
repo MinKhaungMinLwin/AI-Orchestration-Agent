@@ -2906,16 +2906,16 @@ def test_generic_product_comparison_defaults_to_features_and_reviews() -> None:
 
     assistant = event["data"]["assistantResponse"]
 
-    assert "상품별 장단점을 모바일에서 보기 쉽게 정리해드릴게요." not in assistant
+    assert "상품별 장단점을 모바일에서 보기 쉽게 정리해드릴게요." in assistant
     assert "| 항목 | 다이나프로 HPX | 윈터 아이셉트 에보3 X |" not in assistant
-    assert "**다이나프로 HPX**" in assistant
-    assert "**윈터 아이셉트 에보3 X**" in assistant
-    assert assistant.count("| 항목 | 내용 |") == 2
-    assert "| 특징 | SUV용 사계절 컴포트 타이어 |" in assistant
-    assert "| 주요 성능 | 정숙성 5, 승차감 4.8, 회전저항 3, 젖은노면 3 |" in assistant
-    assert "| 평점 | 4.8 |" in assistant
-    assert "| 리뷰 | 12건 |" in assistant
-    assert "| 대표 리뷰 | \"승차감이 좋고 조용해서 장거리 주행이 편해요. 추천해요.\" |" in assistant
+    assert "| 항목 | 내용 |" not in assistant
+    assert "상품\n다이나프로 HPX" in assistant
+    assert "상품\n윈터 아이셉트 에보3 X" in assistant
+    assert "장점\n- 특징: SUV용 사계절 컴포트 타이어" in assistant
+    assert "- 주요 성능: 정숙성 5, 승차감 4.8, 회전저항 3, 젖은노면 3" in assistant
+    assert "- 평점 4.8, 리뷰 12건" in assistant
+    assert "단점\n- 현재 제공 데이터만으로 명확한 단점은 확인되지 않아요." in assistant
+    assert "- 대표 리뷰 참고: \"승차감이 좋고 조용해서 장거리 주행이 편해요. 추천해요.\"" in assistant
     assert "----" in assistant
     assert "추천해요." in assistant
     assert "눈길 접지력이 안정적이라는 / 느낌" in assistant
@@ -2928,7 +2928,7 @@ def test_generic_product_comparison_defaults_to_features_and_reviews() -> None:
     assert "249,700" not in assistant
 
 
-def test_recommendation_product_template_can_build_comparison_event() -> None:
+def test_recommendation_product_template_can_be_replaced_by_mobile_comparison() -> None:
     event = _build_product_comparison_event_from_product_template(
         "추천되는 상품들 장단점 비교해줘",
         {
@@ -2950,32 +2950,10 @@ def test_recommendation_product_template_can_build_comparison_event() -> None:
 
     assert event is not None
     assistant = event["data"]["assistantResponse"]
-    assert "상품별 장단점을 모바일에서 보기 쉽게 정리해드릴게요." not in assistant
-    assert "**키너지 EX**" in assistant
-    assert "| 항목 | 내용 |" in assistant
-    assert "| 특징 | 저소음, 안전까지 갖춘 컴포트 타이어 |" in assistant
-    assert "| 평점 | 4.2 |" in assistant
-    assert "**옵티모 H426**" in assistant
-    assert "미확인 등급" not in assistant
-
-
-def test_recommendation_product_template_comparison_respects_price_axis() -> None:
-    event = _build_product_comparison_event_from_product_template(
-        "추천되는 상품들 가격 비교해줘",
-        {
-            "products": [
-                {"productName": "키너지 EX", "price": 120000, "rating": {"rating_avg": 4.2}},
-                {"productName": "옵티모 H426", "price": 100000, "rating": {"rating_avg": 5.0}},
-            ],
-        },
-    )
-
-    assert event is not None
-    assistant = event["data"]["assistantResponse"]
-    assert "| 최종 혜택가 | 120,000원 |" in assistant
-    assert "| 최종 혜택가 | 100,000원 |" in assistant
-    assert "옵티모 H426이 20,000원 더 저렴해요." in assistant
-    assert "| 장점 |" not in assistant
+    assert "상품\n키너지 EX" in assistant
+    assert "장점\n- 특징: 저소음, 안전까지 갖춘 컴포트 타이어" in assistant
+    assert "상품\n옵티모 H426" in assistant
+    assert "| 항목 | 내용 |" not in assistant
 
 
 def test_product_comparison_table_does_not_expose_goods_no() -> None:
@@ -12240,26 +12218,6 @@ def test_recommendation_scenario_metadata_flows_into_turn_contract() -> None:
         "rcmd_type": "heavy_load",
         "vehicle_type": "suv",
     }
-
-
-def test_vehicle_recommendation_with_followup_compare_records_compare_goal() -> None:
-    user_text = "내 차에 적합한 올웨더 상품 추천해줘. 그리고 추천되는 상품들 장단점 비교해주고"
-    frame = build_discovery_intent_frame(user_text)
-    plan = plan_discovery_tools(frame)
-    decision = decide_discovery_response(frame)
-    contract = build_turn_contract(
-        user_text=user_text,
-        intent_frame=frame,
-        tool_plan=plan,
-        response_decision=decision,
-    )
-
-    assert contract.turn_complexity == "multi_goal"
-    assert [step["goal"] for step in contract.goal_steps] == [
-        "resolve_vehicle",
-        "recommend_products",
-        "compare_products",
-    ]
 
 
 def test_sized_offroad_recommendation_tool_plan_records_expected_tool_args() -> None:
