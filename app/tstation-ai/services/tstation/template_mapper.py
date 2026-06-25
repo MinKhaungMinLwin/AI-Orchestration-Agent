@@ -1732,6 +1732,12 @@ def _confirmed_size_line(rows: list[dict]) -> str:
     return f"사이즈: {size_list}"
 
 
+def _confirmed_multi_size_line(rows: list[dict]) -> str:
+    if len(_confirmed_sizes_for_rows(rows)) < 2:
+        return ""
+    return _confirmed_size_line(rows)
+
+
 def _map_product_search_size_summary(tool_data_list: list[dict]) -> dict | None:
     """Answer size/fitment-size questions from product search results.
 
@@ -2929,7 +2935,7 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
     include_confirmed_sizes = not _current_turn_has_explicit_tire_size()
     for name, rows in list(rows_by_name.items())[:5]:
         row = rows[0]
-        size_line = _confirmed_size_line(rows) if include_confirmed_sizes else ""
+        size_line = _confirmed_multi_size_line(rows) if include_confirmed_sizes else ""
         if is_neutral_product_description:
             detail_line = _tire_summary_detail_line(row)
             lines.extend([

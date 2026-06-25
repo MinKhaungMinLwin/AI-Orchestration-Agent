@@ -1200,7 +1200,7 @@ def test_unsized_recommendation_maps_to_text_summary_not_product_cards() -> None
     assert "승차감과 마일리지 중심의 타이어입니다." in assistant_response
     assert assistant_response.count("아이온 에보 AS") == 1
     assert "사이즈: 235/35R20, 265/35R21" in assistant_response
-    assert "사이즈: 265/50R20" in assistant_response
+    assert "사이즈: 265/50R20" not in assistant_response
     assert "패턴" not in assistant_response
     assert "products" not in result["data"]
 
