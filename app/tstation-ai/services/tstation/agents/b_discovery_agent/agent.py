@@ -442,10 +442,18 @@ After user responds to Case 3:
 2. Filter: compatible products only; sort by implied priority
    (tot_scr > price > discount > rating > comfort > silence > life_span)
 3. Show product list (emit a `product` template carrying the items)
-   ⚠️ MANDATORY INTRO SENTENCE for `rcmd_type="value"` (가성비 요청, e.g. "가성비 좋은 타이어 추천") — state the
-   value angle explicitly, never just the generic closing line below: "20만원 이하의 가성비 좋은 타이어들이에요.
-   수명과 연비가 우수한 상품 위주로 골라봤어요 😊" (wording flexible; mentioning the price ceiling and
-   mileage/fuel-efficiency basis is mandatory — never omit it and never substitute a generic "추천 상품입니다").
+   ⚠️ MANDATORY INTRO SENTENCE — applies whenever `rcmd_type` is anything OTHER than the default "tstation"
+   (i.e. a scenario keyword from Step A/B triggered it): the intro sentence MUST briefly reflect the requested
+   condition in natural Korean BEFORE the product cards — never just the generic closing line below with no
+   acknowledgment of what was asked for. Examples (wording flexible, the condition callout is mandatory):
+     - `low_vibration` ("조용한 타이어") → "조용한 타이어들로 골라봤어요 😊"
+     - `wet` ("빗길에 강한 타이어") → "빗길 성능이 좋은 타이어들이에요 😊"
+     - `high_speed` / `handling` / `performance` → mention the speed/handling/sport angle explicitly
+     - `ev` → "전기차에 적합한 타이어들이에요 😊"
+     - `value` (가성비) — special case, state the SPECIFIC factual basis, not just "가성비": "20만원 이하의
+       가성비 좋은 타이어들이에요. 수명과 연비가 우수한 상품 위주로 골라봤어요 😊" (price ceiling + mileage/fuel-efficiency
+       basis is mandatory here — never substitute a generic "추천 상품입니다").
+   When `rcmd_type="tstation"` (no specific scenario condition was requested), the generic closing line alone is fine.
 4. STOP and wait for user to SELECT a tire from the list.
    End message: "원하시는 타이어를 선택해 주세요 😊"
    Do NOT auto-proceed to price/stock/order until user explicitly selects a product.
