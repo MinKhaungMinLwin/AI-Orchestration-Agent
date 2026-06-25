@@ -16694,6 +16694,13 @@ _VEHICLE_SUITABILITY_RE = re.compile(
     r"전용|꼭|이유|껴|장착|써도|되나|되나요|일반\s*타이어|차이|비교|뭐가\s*달라",
     re.IGNORECASE,
 )
+_GENERAL_TIRE_RECOMMENDATION_QUERY_RE = re.compile(
+    r"(?=.*(?:추천|찾|골라|보여|낄\s*수\s*있는|끼울\s*수\s*있는|장착\s*가능한))"
+    r"(?=.*(?:일반\s*타이어|일반타이어|"
+    r"(?:전기차(?:용|\s*전용)?|electric|(?<![A-Za-z])EV(?![A-Za-z])).{0,20}(?:말고|아닌|아니고|빼고|제외)|"
+    r"(?:말고|아닌|아니고|빼고|제외).{0,20}(?:전기차(?:용|\s*전용)?|electric|(?<![A-Za-z])EV(?![A-Za-z]))))",
+    re.IGNORECASE,
+)
 _EV_BLOCKING_TRANSACTION_GOALS = {"store_with_stock", "place_order"}
 _STORE_SERVICE_ROUTE_EXCLUSION_RE = re.compile(
     r"(?:매장|지점|곳).{0,16}(?:추천|찾아|검색|보여|알려)|"
@@ -17608,6 +17615,8 @@ def _is_ev_suitability_turn(
     if not text:
         return False
     if pending_intent in _EV_BLOCKING_TRANSACTION_INTENTS or goal_type in _EV_BLOCKING_TRANSACTION_GOALS:
+        return False
+    if normalize_tire_size(text) and _GENERAL_TIRE_RECOMMENDATION_QUERY_RE.search(text):
         return False
     return bool(_VEHICLE_CATEGORY_CONTEXT_RE.search(text) and _VEHICLE_SUITABILITY_RE.search(text))
 

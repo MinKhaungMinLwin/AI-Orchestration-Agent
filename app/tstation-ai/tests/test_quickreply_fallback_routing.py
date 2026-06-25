@@ -11807,6 +11807,11 @@ def test_ev_suitability_detects_explicit_ev_explanation_question() -> None:
     assert _is_ev_suitability_turn(text) is True
 
 
+def test_ev_suitability_does_not_override_sized_general_tire_recommendation() -> None:
+    text = "245/40R20 사이즈, 아이온6에 전기차 전용 타이어 말고 일반타이어 낄 수 있는걸로 추천해줘"
+    assert _is_ev_suitability_turn(text) is False
+
+
 def test_ev_suitability_is_not_product_attribute_lookup() -> None:
     text = "내 차는 전기차인데 그냥 dynapro HPX 끼면 안돼? ion evo AS를 꼭 껴야하는 이유가 있어?"
     assert _is_product_attribute_lookup_query(text) is False
