@@ -10598,6 +10598,140 @@ def _store_visit_advisory_event(user_text: str, *, store_name: str | None = None
     }
 
 
+_STORE_ATTRIBUTE_SVC_CODE_LABELS: dict[str, str] = {
+    "113": "타이어 온라인 주문",
+    "116": "배터리",
+    "119": "타이어 보관",
+    "120": "수입타이어",
+    "121": "경정비",
+    "122": "경정비 당일",
+    "124": "얼라인먼트",
+    "125": "얼라인먼트",
+    "126": "무상점검",
+}
+_STORE_ATTRIBUTE_SVC_PATTERNS: tuple[tuple[re.Pattern[str], tuple[str, ...], str], ...] = (
+    (re.compile(r"보관|타이어\s*호텔|윈터\s*타이어|겨울\s*타이어", re.IGNORECASE), ("119",), "타이어 보관"),
+    (re.compile(r"얼라인먼트|휠\s*얼라이먼트|휠\s*얼라인먼트", re.IGNORECASE), ("124", "125"), "얼라인먼트"),
+    (re.compile(r"경정비|엔진\s*오일|엔진오일|실내\s*필터|필터|와이퍼", re.IGNORECASE), ("121", "122"), "경정비"),
+    (re.compile(r"배터리", re.IGNORECASE), ("116",), "배터리"),
+    (re.compile(r"무상\s*점검|무료\s*점검|all\s*my\s*t|올마이티", re.IGNORECASE), ("126",), "무상점검"),
+    (re.compile(r"수입\s*타이어", re.IGNORECASE), ("120",), "수입타이어"),
+)
+
+
+def _store_attribute_row_from_entries(store_info_entries: list[dict] | None) -> dict:
+    for entry in reversed(store_info_entries or []):
+        raw = _unwrap_tool_data(entry.get("data"))
+        if not isinstance(raw, dict):
+            continue
+        if entry.get("tool") == "get_store_detail_tool":
+            return raw
+        stores = raw.get("stores")
+        if isinstance(stores, list) and stores and isinstance(stores[0], dict):
+            return stores[0]
+    return {}
+
+
+def _store_attribute_svc_codes(row: Mapping[str, Any]) -> set[str]:
+    raw_codes = row.get("svc_codes") or row.get("svcCodes") or row.get("serviceCodes")
+    if isinstance(raw_codes, list):
+        return {str(code).strip() for code in raw_codes if str(code).strip()}
+    if isinstance(raw_codes, str):
+        return {code.strip() for code in re.split(r"[,|/\s]+", raw_codes) if code.strip()}
+    return set()
+
+
+def _store_attribute_svc_labels(codes: set[str]) -> list[str]:
+    labels: list[str] = []
+    seen: set[str] = set()
+    for code in sorted(codes):
+        label = _STORE_ATTRIBUTE_SVC_CODE_LABELS.get(code)
+        if label and label not in seen:
+            labels.append(label)
+            seen.add(label)
+    return labels
+
+
+def _store_attribute_operating_hours_text(row: Mapping[str, Any]) -> str:
+    weekday_start = _normalize_store_time(str(row.get("shop_biz_strt_time") or "").strip())
+    weekday_end = _normalize_store_time(str(row.get("shop_biz_end_time") or "").strip())
+    sat_start = _normalize_store_time(str(row.get("shop_sat_strt_time") or "").strip())
+    sat_end = _normalize_store_time(str(row.get("shop_sat_end_time") or "").strip())
+    parts: list[str] = []
+    if weekday_start and weekday_end:
+        parts.append(f"평일 {weekday_start}~{weekday_end}")
+    if sat_start and sat_end:
+        parts.append(f"토요일 {sat_start}~{sat_end}")
+    return ", ".join(parts)
+
+
+def _store_attribute_assessment_text(
+    *,
+    store_label: str,
+    attribute_text: str,
+    attribute_type: str,
+    verification_level: str,
+    store_info_entries: list[dict] | None,
+) -> tuple[str, str]:
+    row = _store_attribute_row_from_entries(store_info_entries)
+    if not row:
+        return (
+            f"{store_label}의 {attribute_text} 가능 여부는 매장 운영 조건과 당일 작업 상황에 따라 달라질 수 있어요. "
+            "현재 조회된 매장 정보가 없어 가능 여부를 확정해서 단정하기 어렵습니다.",
+            "not_checked",
+        )
+
+    attr = str(attribute_text or "").strip()
+    attr_type = str(attribute_type or "")
+    level = str(verification_level or "")
+    codes = _store_attribute_svc_codes(row)
+    for pattern, expected_codes, label in _STORE_ATTRIBUTE_SVC_PATTERNS:
+        if not pattern.search(attr):
+            continue
+        matched = bool(codes.intersection(expected_codes))
+        if matched:
+            return (
+                f"{store_label}의 {label} 항목은 조회된 매장 서비스 정보에서 확인돼요. "
+                "다만 실제 접수 가능 여부와 시간은 당일 작업 상황에 따라 달라질 수 있어요.",
+                "matched",
+            )
+        labels = _store_attribute_svc_labels(codes)
+        visible = f" 현재 조회된 서비스 항목은 {', '.join(labels)}입니다." if labels else ""
+        return (
+            f"{store_label}의 {label} 항목은 조회된 매장 서비스 정보에서 확인되지 않아요.{visible} "
+            "미노출 서비스나 현장 운영 조건은 다를 수 있으니 방문 전 매장에 직접 확인해 주세요.",
+            "not_matched",
+        )
+
+    if re.search(r"야간|퇴근\s*후|저녁|늦게", attr, re.IGNORECASE):
+        hours = _store_attribute_operating_hours_text(row)
+        hours_sentence = f" 조회된 영업시간은 {hours}입니다." if hours else ""
+        return (
+            f"{store_label}의 {attr}는 조회된 매장 정보에 별도 서비스 항목으로 확인되지 않아요.{hours_sentence} "
+            "영업시간 내 접수 가능 여부도 당일 작업 상황에 따라 달라질 수 있으니 방문 전 매장에 직접 확인해 주세요.",
+            "contact_required",
+        )
+
+    if level == "tool_verifiable" or re.search(r"주소|전화|전화번호|연락처|영업\s*시간|운영\s*시간|휴무|위치", attr, re.IGNORECASE):
+        return (
+            f"{store_label}의 {attr}는 아래 조회된 매장 기본정보에서 확인해 주세요.",
+            "tool_verifiable",
+        )
+
+    if attr_type == "subjective_quality":
+        return (
+            f"{store_label}의 {attr}는 조회된 매장 기본정보만으로 판단하기 어려운 항목이에요. "
+            "방문 전 매장에 직접 문의하거나 상세 페이지의 리뷰/평점을 함께 확인해 주세요.",
+            "unsupported_or_policy",
+        )
+
+    return (
+        f"{store_label}의 {attr} 여부는 조회된 매장 기본정보에 별도 항목으로 확인되지 않아요. "
+        "방문 전 매장에 직접 확인해 주세요.",
+        "contact_required",
+    )
+
+
 def _store_attribute_inquiry_event(
     user_text: str,
     *,
@@ -10626,11 +10760,17 @@ def _store_attribute_inquiry_event(
     )
     store_info_summary = _build_store_detail_summary_from_context(store_info_entries or [])
     if store_label:
+        assessment_text, assessment_status = _store_attribute_assessment_text(
+            store_label=store_label,
+            attribute_text=service_label,
+            attribute_type=attribute_type,
+            verification_level=verification_level,
+            store_info_entries=store_info_entries,
+        )
         store_info_block = f"\n\n확인된 매장 정보\n{store_info_summary}" if store_info_summary else ""
+        contact_sentence = "" if "방문 전" in assessment_text else "\n\n방문 전 해당 매장에 직접 확인해 주세요."
         assistant_response = (
-            f"{store_label}의 {service_label} 가능 여부는 매장 운영 조건과 당일 작업 상황에 따라 달라질 수 있어요. "
-            "현재 확인된 데이터만으로는 가능 여부를 확정해서 단정하기 어렵습니다.\n\n"
-            f"방문 전 해당 매장에 직접 확인해 주세요.{store_info_block}"
+            f"{assessment_text}{contact_sentence}{store_info_block}"
         )
         quick_replies = [
             {"label": "매장 전화번호 확인", "domain": "TRANSACTION"},
@@ -10650,6 +10790,7 @@ def _store_attribute_inquiry_event(
                 }
                 break
     else:
+        assessment_status = "missing_store"
         assistant_response = (
             f"{service_label}는 매장별 운영 조건과 현장 상황에 따라 달라질 수 있어요. "
             "어느 매장 기준인지 알려주시면 해당 매장 기준으로 확인 방법을 안내해드릴게요.\n\n"
@@ -10681,6 +10822,7 @@ def _store_attribute_inquiry_event(
                 "attributeText": service_label,
                 "attributeType": attribute_type,
                 "verificationLevel": verification_level,
+                "attributeAssessmentStatus": assessment_status,
                 "carried_store_context": store_label,
                 "store_info_lookup": bool(store_info_summary),
                 "store_search_suppressed": not bool(store_label),

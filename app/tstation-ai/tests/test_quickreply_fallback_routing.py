@@ -15488,8 +15488,8 @@ def test_store_attribute_inquiry_with_store_uses_store_info_lookup_contract() ->
     assert "claim_unverified_store_service_available" in response_decision.forbidden_behaviors
     assert event is not None
     assistant = event["data"]["assistantResponse"]
-    assert "가능 여부는 매장 운영 조건과 당일 작업 상황에 따라 달라질 수" in assistant
-    assert "현재 확인된 데이터만으로는 가능 여부를 확정해서 단정하기 어렵" in assistant
+    assert "야간정비는 조회된 매장 정보에 별도 서비스 항목으로 확인되지 않아요" in assistant
+    assert "조회된 영업시간은 평일 09:00~19:00, 토요일 09:00~16:00입니다" in assistant
     assert "확인된 매장 정보" in assistant
     assert "매장명: 티스테이션 정자점" in assistant
     assert "전화: 031-123-4567" in assistant
@@ -15498,6 +15498,7 @@ def test_store_attribute_inquiry_with_store_uses_store_info_lookup_contract() ->
     assert "가능합니다" not in assistant
     assert event["assistant_response_source"] == "code_store_attribute_inquiry_with_store_info"
     assert event["data"]["metadata"]["attributeText"] == "야간정비"
+    assert event["data"]["metadata"]["attributeAssessmentStatus"] == "contact_required"
     assert event["data"]["metadata"]["store_info_lookup"] is True
     assert "datepick" not in json.dumps(event, ensure_ascii=False)
     assert "preOrder" not in json.dumps(event, ensure_ascii=False)
@@ -15563,6 +15564,70 @@ def test_store_attribute_inquiry_router_fields_handle_store_name_after_attribute
     assert event is not None
     assert event["data"]["metadata"]["attributeText"] == "야간정비"
     assert "정자점의 야간정비 가능 여부" in event["data"]["assistantResponse"]
+
+
+def test_store_attribute_inquiry_checks_service_codes_before_answering() -> None:
+    event = _store_attribute_inquiry_event(
+        "정자점 얼라인먼트 가능해?",
+        store_name="정자점",
+        attribute_text="얼라인먼트",
+        attribute_type="service",
+        verification_level="tool_verifiable",
+        store_info_entries=[
+            {
+                "tool": "get_store_detail_tool",
+                "data": {
+                    "status": "success",
+                    "data": {
+                        "shop_seq": "F10001",
+                        "shop_nm": "티스테이션 정자점",
+                        "road_addr_base": "경기도 성남시 분당구 정자일로 1",
+                        "tel_no": "0311234567",
+                        "shop_biz_strt_time": "0900",
+                        "shop_biz_end_time": "1900",
+                        "svc_codes": ["124"],
+                    },
+                },
+            }
+        ],
+    )
+
+    assert event is not None
+    assistant = event["data"]["assistantResponse"]
+    assert "얼라인먼트 항목은 조회된 매장 서비스 정보에서 확인돼요" in assistant
+    assert "확인된 매장 정보" in assistant
+    assert event["data"]["metadata"]["attributeAssessmentStatus"] == "matched"
+
+
+def test_store_attribute_inquiry_reports_missing_service_code_match() -> None:
+    event = _store_attribute_inquiry_event(
+        "정자점 타이어 보관서비스 가능해?",
+        store_name="정자점",
+        attribute_text="타이어 보관서비스",
+        attribute_type="service",
+        verification_level="tool_verifiable",
+        store_info_entries=[
+            {
+                "tool": "get_store_detail_tool",
+                "data": {
+                    "status": "success",
+                    "data": {
+                        "shop_seq": "F10001",
+                        "shop_nm": "티스테이션 정자점",
+                        "road_addr_base": "경기도 성남시 분당구 정자일로 1",
+                        "tel_no": "0311234567",
+                        "svc_codes": ["124"],
+                    },
+                },
+            }
+        ],
+    )
+
+    assert event is not None
+    assistant = event["data"]["assistantResponse"]
+    assert "타이어 보관 항목은 조회된 매장 서비스 정보에서 확인되지 않아요" in assistant
+    assert "현재 조회된 서비스 항목은 얼라인먼트입니다" in assistant
+    assert event["data"]["metadata"]["attributeAssessmentStatus"] == "not_matched"
 
 
 def test_store_attribute_inquiry_equipment_requires_contact_without_source() -> None:
