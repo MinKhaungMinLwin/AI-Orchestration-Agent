@@ -44,6 +44,14 @@ def _recommendation_expected_tool_args(args: Mapping[str, Any]) -> dict[str, Any
     return {key: args[key] for key in tracked_keys if args.get(key) not in (None, "")}
 
 
+def _is_general_tire_recommendation_request(text: str) -> bool:
+    text = text or ""
+    return (
+        bool(_GENERAL_TIRE_RECOMMENDATION_ACTION_RE.search(text))
+        and bool(_GENERAL_TIRE_PREFERENCE_RE.search(text) or _NON_EV_TIRE_PREFERENCE_RE.search(text))
+    )
+
+
 _SIZE_COMPACT_RE = re.compile(r"\b(\d{3})\s*/?\s*(\d)(\d)(?:\3)?\s*R?\s*(\d{2})\b", re.IGNORECASE)
 _SUMMER_RE = re.compile(r"여름|썸머|summer", re.IGNORECASE)
 _WINTER_RE = re.compile(r"윈터|겨울|스노우|snow|winter", re.IGNORECASE)
@@ -68,6 +76,21 @@ _NOISE_LABEL_RE = re.compile(r"소음\s*(?:등급|라벨)|저소음\s*등급|소
 _QUIET_RECOMMENDATION_RE = re.compile(r"저소음|정숙|조용|소음|진동", re.IGNORECASE)
 _EV_RECOMMENDATION_RE = re.compile(
     r"전기차|전기차용|electric|테슬라|모델\s*Y|모델Y|(?<![A-Za-z])EV(?![A-Za-z])",
+    re.IGNORECASE,
+)
+_GENERAL_TIRE_RECOMMENDATION_ACTION_RE = re.compile(
+    r"추천|찾|골라|보여|낄\s*수\s*있는|끼울\s*수\s*있는|장착\s*가능한",
+    re.IGNORECASE,
+)
+_GENERAL_TIRE_PREFERENCE_RE = re.compile(
+    r"일반\s*타이어|일반타이어|승용차?\s*용\s*타이어|승용\s*타이어",
+    re.IGNORECASE,
+)
+_NON_EV_TIRE_PREFERENCE_RE = re.compile(
+    r"(?:전기차(?:용|\s*전용)?|electric|(?<![A-Za-z])EV(?![A-Za-z])).{0,20}"
+    r"(?:말고|아닌|아니고|빼고|제외)|"
+    r"(?:말고|아닌|아니고|빼고|제외).{0,20}"
+    r"(?:전기차(?:용|\s*전용)?|electric|(?<![A-Za-z])EV(?![A-Za-z]))",
     re.IGNORECASE,
 )
 _SUV_RECOMMENDATION_RE = re.compile(r"SUV|스포츠\s*유틸리티", re.IGNORECASE)
@@ -621,6 +644,13 @@ def build_discovery_intent_frame(
         or (recommendation_context or {}).get("scenario")
         or ""
     ).strip()
+    general_tire_recommendation = _is_general_tire_recommendation_request(text)
+    if (
+        requested_product_attribute == "car_type"
+        and _GENERAL_TIRE_RECOMMENDATION_ACTION_RE.search(text)
+        and not _CONCEPT_RE.search(text)
+    ):
+        requested_product_attribute = ""
 
     entities: dict[str, Any] = {
         "product_names": products,
@@ -665,6 +695,8 @@ def build_discovery_intent_frame(
         text,
         router_recommendation_scenario or context_recommendation_scenario,
     )
+    if general_tire_recommendation and scenario is not None and scenario.key == "ev":
+        scenario = None
     product_resolution_transaction_anchor = bool(
         (products or product_families)
         and (
@@ -704,7 +736,11 @@ def build_discovery_intent_frame(
         entities["performance"] = "performance"
     if _QUIET_RECOMMENDATION_RE.search(text):
         entities["quiet_focus"] = True
-    if _EV_RECOMMENDATION_RE.search(text):
+    if general_tire_recommendation:
+        entities["vehicle_category"] = "passenger"
+        entities["applied_vehicle_type"] = "passenger"
+        entities["general_tire_preference"] = "non_ev"
+    elif _EV_RECOMMENDATION_RE.search(text):
         entities["vehicle_category"] = "ev"
     elif _SUV_RECOMMENDATION_RE.search(text):
         entities["vehicle_category"] = "suv"
@@ -895,6 +931,10 @@ def build_discovery_intent_frame(
     elif concept and _WINTER_RE.search(text) and _ALL_SEASON_RE.search(text):
         intent = "product_description"
         sub_intent = "season_concept_compare"
+    elif requested_product_attribute == "car_type" and concept and not general_tire_recommendation:
+        intent = "product_description"
+        sub_intent = "product_attribute_explanation"
+        entities["compare_metric"] = "car_type"
     elif requested_product_attribute and products:
         intent = "product_description"
         sub_intent = "product_attribute_lookup"
@@ -1125,6 +1165,14 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             preferred_tool="search_product_tool",
             tool_args_patch=args,
             forbidden_tools=("get_products_recommendations_tool", "generic_unsized_recommendation"),
+        )
+    if frame.sub_intent == "product_attribute_explanation" and entities.get("requested_product_attribute") == "car_type":
+        return ToolPlan(
+            forbidden_tools=("get_products_recommendations_tool",),
+            metadata={
+                "response_intent": "product_attribute_explanation",
+                "requested_product_attribute": "car_type",
+            },
         )
     if frame.intent == "product_description":
         product_names = entities.get("product_names") or ()

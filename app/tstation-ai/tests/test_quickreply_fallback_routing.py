@@ -12211,6 +12211,82 @@ def test_sized_offroad_recommendation_tool_plan_records_expected_tool_args() -> 
     }
 
 
+def test_general_tire_for_ev_vehicle_recommendation_uses_passenger_vehicle_type() -> None:
+    text = "245/40R20 사이즈, 아이온6에 전기차 전용 타이어 말고 일반타이어 낄 수 있는걸로 추천해줘"
+    frame = build_discovery_intent_frame(text)
+    plan = plan_discovery_tools(frame)
+    contract = build_turn_contract(
+        user_text=text,
+        intent_frame=frame,
+        tool_plan=plan,
+        response_decision=decide_discovery_response(frame),
+    )
+
+    assert frame.intent == "product_recommendation"
+    assert frame.entities["vehicle_category"] == "passenger"
+    assert "recommendation_scenario" not in frame.entities
+    assert "requested_product_attribute" not in frame.entities
+    assert plan.allowed_tools == ("get_products_recommendations_tool",)
+    assert plan.tool_args_patch["vehicle_type"] == "passenger"
+    assert plan.tool_args_patch["tire_size"] == "245/40R20"
+    assert plan.metadata["recommendation_expected_tool_args"]["vehicle_type"] == "passenger"
+    assert plan.metadata["recommendation_expected_tool_args"]["tire_size"] == "245/40R20"
+
+    violations = response_contract_violations(
+        template="product",
+        assistant_response_text="245/40R20 일반 타이어 추천 상품입니다.",
+        called_tools=["get_products_recommendations_tool"],
+        tool_inputs=[
+            {
+                "tool": "get_products_recommendations_tool",
+                "args": {"vehicle_type": "passenger", "tire_size": "245/40R20"},
+            }
+        ],
+        contract=contract,
+    )
+
+    assert not any(violation["type"] == "recommendation_tool_input_drift" for violation in violations)
+
+
+def test_ev_specific_tire_recommendation_keeps_ev_vehicle_type() -> None:
+    frame = build_discovery_intent_frame("아이온6 전기차 전용 타이어 추천해줘")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.intent == "product_recommendation"
+    assert frame.entities["recommendation_scenario"] == "ev"
+    assert frame.entities["vehicle_category"] == "ev"
+    assert "requested_product_attribute" not in frame.entities
+    assert plan.tool_args_patch["vehicle_type"] == "ev"
+    assert plan.metadata["recommendation_expected_tool_args"]["vehicle_type"] == "ev"
+
+
+def test_car_type_difference_question_stays_product_attribute_explanation() -> None:
+    frame = build_discovery_intent_frame("전기차용 타이어랑 일반 타이어 차이 알려줘")
+    plan = plan_discovery_tools(frame)
+    decision = decide_discovery_response(frame)
+
+    assert frame.intent == "product_description"
+    assert frame.sub_intent == "product_attribute_explanation"
+    assert frame.entities["requested_product_attribute"] == "car_type"
+    assert plan.preferred_tool is None
+    assert "get_products_recommendations_tool" in plan.forbidden_tools
+    assert decision.metadata["requested_product_attribute"] == "car_type"
+
+
+def test_general_tire_recommendation_by_size_uses_passenger_vehicle_type() -> None:
+    frame = build_discovery_intent_frame("245/40R20 일반타이어 추천")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.intent == "product_recommendation"
+    assert frame.entities["vehicle_category"] == "passenger"
+    assert plan.tool_args_patch["vehicle_type"] == "passenger"
+    assert plan.tool_args_patch["tire_size"] == "245/40R20"
+    assert plan.metadata["recommendation_expected_tool_args"] == {
+        "vehicle_type": "passenger",
+        "tire_size": "245/40R20",
+    }
+
+
 def test_recommendation_tool_input_drift_detected_by_turn_contract() -> None:
     frame = build_discovery_intent_frame(
         "오프로드용 타이어 추천",
