@@ -150,6 +150,9 @@ from services.tstation.chat import (
     _is_strong_coupon_applicability_query,
     _is_product_coupon_eligibility_query,
     _is_coupon_applicable_products_decision,
+    _recent_coupon_context_for_policy,
+    _recent_product_coupon_followup_target,
+    _augment_recent_product_set_ranking_metadata,
     _is_product_coupon_price_amount_query,
     _is_coupon_discount_amount_context,
     _is_coupon_discount_amount_size_list_followup,
@@ -5357,6 +5360,115 @@ def test_coupon_applicable_products_decision_is_blocked_by_pending_discount_amou
         )
         is False
     )
+
+
+def test_coupon_gate_recent_context_includes_assistant_product_metadata() -> None:
+    context = _recent_coupon_context_for_policy(
+        [
+            {"role": "assistant", "content": "이 중에서는 벤투스 S2 AS 215/55R17이 가장 저렴해요. 표시가 기준 125,400원입니다."},
+            {"role": "user", "content": "할인쿠폰은 뭐가 적용된거야?"},
+        ],
+        latest_quickreply_tmpl={
+            "data": {
+                "assistantResponse": "이 중에서는 벤투스 S2 AS 215/55R17이 가장 저렴해요.",
+                "metadata": {
+                    "productName": "벤투스 S2 AS",
+                    "tireSize": "215/55R17",
+                    "price": 125400,
+                    "priceBasis": "cheapest_final_prc",
+                    "goodsNo": "G000000123456",
+                    "selectedFromRecentProductSet": True,
+                },
+            }
+        },
+    )
+
+    assert "[이전 선택된 상품 데이터]" in context
+    assert "벤투스 S2 AS" in context
+    assert "215/55R17" in context
+    assert "G000000123456" in context
+    assert "cheapest_final_prc" in context
+
+
+def test_recent_product_set_ranking_response_metadata_is_canonicalized() -> None:
+    event = {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": "이 중에서는 벤투스 S2 AS 215/55R17이 가장 저렴해요. 표시가 기준 125,400원입니다.",
+            "quickReplies": [],
+        },
+    }
+
+    changed = _augment_recent_product_set_ranking_metadata(event, "이중에 제일 싼게 뭐야?")
+
+    assert changed is True
+    metadata = event["data"]["metadata"]
+    assert metadata["productName"] == "벤투스 S2 AS"
+    assert metadata["product_name"] == "벤투스 S2 AS"
+    assert metadata["tireSize"] == "215/55R17"
+    assert metadata["tire_size"] == "215/55R17"
+    assert metadata["price"] == "125400"
+    assert metadata["priceBasis"] == "text"
+    assert metadata["selectedFromRecentProductSet"] is True
+
+
+@pytest.mark.parametrize(
+    "user_text",
+    [
+        "할인쿠폰은 뭐가 적용된거야?",
+        "그 상품 쿠폰 적용돼?",
+        "그거 할인쿠폰 뭐 들어가?",
+        "최저가 상품에 적용되는 쿠폰 있어?",
+        "이중 제일 싼 상품 쿠폰까지 하면 얼마야?",
+    ],
+)
+def test_coupon_followup_restores_recent_product_instead_of_applicable_products(user_text: str) -> None:
+    recent_context = (
+        "assistant: 이 중에서는 벤투스 S2 AS 215/55R17이 가장 저렴해요. 표시가 기준 125,400원입니다.\n"
+        '[이전 선택된 상품 데이터] {"productName":"벤투스 S2 AS","tireSize":"215/55R17",'
+        '"price":125400,"priceBasis":"cheapest_final_prc","goodsNo":"G000000123456"}'
+    )
+    decision = CouponQueryGateDecision(
+        intent=CouponQueryIntent.COUPON_APPLICABLE_PRODUCTS,
+        confidence=0.91,
+        product_name=None,
+        coupon_hint="할인쿠폰",
+        reason="Simulated generic coupon target misclassification.",
+    )
+
+    target = _recent_product_coupon_followup_target(user_text, recent_context)
+
+    assert target is not None
+    assert target["product_name"] == "벤투스 S2 AS"
+    assert target["tire_size"] == "215/55R17"
+    assert target["goods_no"] == "G000000123456"
+    assert _is_coupon_applicable_products_decision(
+        decision,
+        user_text=user_text,
+        recent_context=recent_context,
+    ) is False
+
+
+@pytest.mark.parametrize(
+    "coupon_hint,user_text",
+    [
+        ("패밀리 쿠폰", "패밀리 쿠폰은 어떤 상품에 적용돼?"),
+        ("생일 쿠폰", "생일 쿠폰은 어떤 상품에 적용돼?"),
+        ("16% 할인쿠폰", "16% 할인쿠폰 적용 가능한 상품이 뭐있어?"),
+        ("C001", "쿠폰번호 C001은 어떤 상품에 적용돼?"),
+    ],
+)
+def test_specific_coupon_target_still_allows_applicable_products(coupon_hint: str, user_text: str) -> None:
+    decision = CouponQueryGateDecision(
+        intent=CouponQueryIntent.COUPON_APPLICABLE_PRODUCTS,
+        confidence=0.92,
+        product_name=None,
+        coupon_hint=coupon_hint,
+        reason="Specific coupon target.",
+    )
+
+    assert _is_coupon_applicable_products_decision(decision, user_text=user_text) is True
 
 
 def test_size_only_followup_recovers_coupon_price_target_from_recent_context() -> None:

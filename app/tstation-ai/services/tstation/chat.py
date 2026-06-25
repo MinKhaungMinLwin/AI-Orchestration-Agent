@@ -9958,6 +9958,237 @@ def _recent_user_context_for_policy(messages: list[dict], limit: int = 3) -> str
     return "\n".join(reversed(recent_texts))
 
 
+_COUPON_GENERIC_HINTS = {
+    "쿠폰",
+    "할인쿠폰",
+    "할인 쿠폰",
+    "할인권",
+    "혜택",
+    "할인",
+}
+_COUPON_SPECIFIC_HINT_RE = re.compile(
+    r"\d{1,2}\s*%|쿠폰\s*(?:번호|코드|id)|\b[A-Z]\d{3,}\b|cpn|deal|딜|"
+    r"패밀리|family|생일|birthday|임직원|employee|직원",
+    re.IGNORECASE,
+)
+_COUPON_RECENT_PRODUCT_FOLLOWUP_RE = re.compile(
+    r"그\s*상품|그거|이거|해당\s*상품|최저가\s*상품|제일\s*싼\s*상품|가장\s*저렴한\s*상품|"
+    r"이\s*중|이중|위\s*상품|방금\s*(?:말한|고른|추천한)|할인쿠폰은\s*뭐가\s*적용",
+    re.IGNORECASE,
+)
+_COUPON_CONTEXT_PRODUCT_NAME_RE = re.compile(
+    r"벤투스\s*(?:S2\s*AS|에어\s*S|air\s*S)|ventus\s*(?:S2\s*AS|air\s*S)|"
+    r"키너지\s*EX|kinergy\s*EX|다이나프로\s*HPX|dynapro\s*HPX|"
+    r"아이온(?:\s*에보\s*AS)?|iON(?:\s*evo\s*AS)?",
+    re.IGNORECASE,
+)
+
+
+def _coupon_hint_is_specific(coupon_hint: str | None) -> bool:
+    hint = re.sub(r"\s+", " ", str(coupon_hint or "").strip()).lower()
+    if not hint:
+        return False
+    if hint in _COUPON_GENERIC_HINTS:
+        return False
+    return bool(_COUPON_SPECIFIC_HINT_RE.search(hint) or len(hint) >= 5)
+
+
+def _extract_text_and_payloads_from_message(message: Mapping[str, Any]) -> tuple[list[str], list[Any]]:
+    texts: list[str] = []
+    payloads: list[Any] = []
+    for key in ("data", "metadata", "template", "payload"):
+        value = message.get(key)
+        if isinstance(value, (dict, list)):
+            payloads.append(value)
+    content = message.get("content")
+    if isinstance(content, str):
+        stripped = content.strip()
+        if stripped:
+            texts.append(stripped)
+            try:
+                parsed = json.loads(stripped)
+            except Exception:
+                parsed = None
+            if isinstance(parsed, (dict, list)):
+                payloads.append(parsed)
+    elif isinstance(content, (dict, list)):
+        payloads.append(content)
+    return texts, payloads
+
+
+def _product_coupon_context_metadata_from_payload(payload: Any) -> dict[str, Any]:
+    found: dict[str, Any] = {}
+
+    def _visit(value: Any) -> None:
+        if isinstance(value, Mapping):
+            lower_keys = {str(key).lower(): key for key in value.keys()}
+            field_map = {
+                "product_name": ("productname", "product_name", "goodsname", "goods_nm", "title_tires", "titletires"),
+                "tire_size": ("tiresize", "tire_size", "tire_size_1", "tiresize1", "size"),
+                "goods_no": ("goodsno", "goods_no", "goodsid", "goods_id"),
+                "price_basis": ("pricebasis", "price_basis"),
+                "price": ("price", "cheapest_final_prc", "extra_fvr_sale_prc", "sale_prc", "finalprice"),
+            }
+            for target_key, candidates in field_map.items():
+                if found.get(target_key):
+                    continue
+                for candidate in candidates:
+                    source_key = lower_keys.get(candidate)
+                    if source_key is None:
+                        continue
+                    raw = value.get(source_key)
+                    if raw not in (None, ""):
+                        found[target_key] = raw
+                        if target_key == "price" and not found.get("price_basis"):
+                            found["price_basis"] = str(source_key)
+                        break
+            for child in value.values():
+                if len(found) >= 5:
+                    return
+                _visit(child)
+        elif isinstance(value, list):
+            for child in value[:6]:
+                if len(found) >= 5:
+                    return
+                _visit(child)
+
+    _visit(payload)
+    if found.get("tire_size"):
+        normalized_size = normalize_tire_size(str(found["tire_size"]))
+        if normalized_size:
+            found["tire_size"] = normalized_size
+    return found
+
+
+def _product_coupon_context_metadata_from_text(text: str) -> dict[str, Any]:
+    normalized_size = normalize_tire_size(text)
+    if not normalized_size:
+        size_match = re.search(r"(\d{3})\s*/?\s*(\d{2})\s*R?\s*(\d{2})(?=[가-힣\s,.)]|$)", text or "", re.IGNORECASE)
+        if size_match:
+            normalized_size = f"{size_match.group(1)}/{size_match.group(2)}R{size_match.group(3)}"
+    product_match = _COUPON_CONTEXT_PRODUCT_NAME_RE.search(text or "")
+    if not product_match or not normalized_size:
+        return {}
+    result: dict[str, Any] = {
+        "product_name": re.sub(r"\s+", " ", product_match.group(0)).strip(),
+        "tire_size": normalized_size,
+    }
+    price_match = re.search(r"(\d{1,3}(?:,\d{3})+|\d{5,})\s*원", text or "")
+    if price_match:
+        result["price"] = price_match.group(1).replace(",", "")
+        result["price_basis"] = "text"
+    goods_match = re.search(r"\bG\d{8,}\b", text or "", re.IGNORECASE)
+    if goods_match:
+        result["goods_no"] = goods_match.group(0).upper()
+    return result
+
+
+def _recent_coupon_context_for_policy(
+    messages: list[dict],
+    *,
+    latest_quickreply_tmpl: dict | None = None,
+    limit: int = 6,
+) -> str:
+    lines: list[str] = []
+    product_context = _product_coupon_context_metadata_from_payload(latest_quickreply_tmpl)
+    if product_context:
+        lines.append("[이전 선택된 상품 데이터] " + json.dumps(product_context, ensure_ascii=False))
+    inspected = 0
+    for msg in reversed(messages or []):
+        if inspected >= limit:
+            break
+        inspected += 1
+        role = str(msg.get("role") or "").strip() or "unknown"
+        texts, payloads = _extract_text_and_payloads_from_message(msg)
+        for payload in payloads:
+            if not product_context:
+                product_context = _product_coupon_context_metadata_from_payload(payload)
+                if product_context:
+                    lines.append("[이전 선택된 상품 데이터] " + json.dumps(product_context, ensure_ascii=False))
+        for text in texts:
+            extracted = StreamingMultiAgentCoordinator._extract_current_user_input(text) if role == "user" else text
+            extracted = str(extracted or "").strip()
+            if not extracted or "USER CONTEXT INFORMATION" in extracted:
+                continue
+            if role == "assistant":
+                text_context = _product_coupon_context_metadata_from_text(extracted)
+                if text_context:
+                    lines.append("[이전 선택된 상품 데이터] " + json.dumps(text_context, ensure_ascii=False))
+            lines.append(f"{role}: {extracted[:800]}")
+    return "\n".join(reversed(lines[-10:]))
+
+
+def _recent_product_coupon_followup_target(user_text: str | None, recent_context: str | None) -> dict[str, Any] | None:
+    text = str(user_text or "")
+    if not _COUPON_WORD_RE.search(text):
+        return None
+    if _COUPON_SPECIFIC_HINT_RE.search(text) and not _COUPON_RECENT_PRODUCT_FOLLOWUP_RE.search(text):
+        return None
+    if not (_COUPON_RECENT_PRODUCT_FOLLOWUP_RE.search(text) or _is_product_coupon_price_amount_query(text)):
+        return None
+    context = str(recent_context or "")
+    for line in reversed([part.strip() for part in context.splitlines() if part.strip()]):
+        if "[이전 선택된 상품 데이터]" in line:
+            payload_text = line.split("[이전 선택된 상품 데이터]", 1)[1].strip()
+            try:
+                parsed = json.loads(payload_text)
+            except Exception:
+                parsed = {}
+            metadata = _product_coupon_context_metadata_from_payload(parsed)
+        else:
+            metadata = _product_coupon_context_metadata_from_text(line)
+        product_name = str(metadata.get("product_name") or "").strip()
+        tire_size = normalize_tire_size(str(metadata.get("tire_size") or ""))
+        if not product_name:
+            continue
+        result: dict[str, Any] = {"product_name": product_name}
+        if tire_size:
+            result["tire_size"] = tire_size
+        if metadata.get("goods_no"):
+            result["goods_no"] = str(metadata["goods_no"]).strip()
+        if metadata.get("price"):
+            result["price"] = metadata["price"]
+        if metadata.get("price_basis"):
+            result["price_basis"] = metadata["price_basis"]
+        return result
+    return None
+
+
+def _augment_recent_product_set_ranking_metadata(event: dict | None, user_text: str | None) -> bool:
+    if not isinstance(event, dict) or event.get("template") != "quickReply":
+        return False
+    if not _RECENT_PRODUCT_SET_RANKING_TEXT_RE.search(str(user_text or "")):
+        return False
+    data = event.get("data")
+    if not isinstance(data, dict):
+        return False
+    assistant_text = str(data.get("assistantResponse") or "")
+    metadata = _product_coupon_context_metadata_from_payload(data)
+    text_metadata = _product_coupon_context_metadata_from_text(assistant_text)
+    merged = {**text_metadata, **{key: value for key, value in metadata.items() if value not in (None, "")}}
+    product_name = str(merged.get("product_name") or "").strip()
+    tire_size = normalize_tire_size(str(merged.get("tire_size") or ""))
+    if not product_name:
+        return False
+    event_metadata = data.setdefault("metadata", {})
+    if not isinstance(event_metadata, dict):
+        event_metadata = {}
+        data["metadata"] = event_metadata
+    event_metadata.setdefault("productName", product_name)
+    event_metadata.setdefault("product_name", product_name)
+    if tire_size:
+        event_metadata.setdefault("tireSize", tire_size)
+        event_metadata.setdefault("tire_size", tire_size)
+    if merged.get("goods_no"):
+        event_metadata.setdefault("goodsNo", str(merged["goods_no"]).strip())
+        event_metadata.setdefault("goods_no", str(merged["goods_no"]).strip())
+    if merged.get("price"):
+        event_metadata.setdefault("price", merged["price"])
+    event_metadata.setdefault("priceBasis", str(merged.get("price_basis") or "text"))
+    event_metadata.setdefault("selectedFromRecentProductSet", True)
+    return True
+
+
 def _delivery_policy_guard_event(
     user_text: str,
     recent_context: str = "",
@@ -11131,8 +11362,18 @@ def _is_coupon_applicable_products_decision(
     *,
     user_text: str | None = None,
     slots: Any | None = None,
+    recent_context: str | None = None,
 ) -> bool:
     if _is_product_coupon_price_amount_query(user_text) or _is_coupon_discount_amount_context(slots):
+        return False
+    if (
+        decision is not None
+        and decision.intent == CouponQueryIntent.COUPON_APPLICABLE_PRODUCTS
+        and not str(decision.product_name or "").strip()
+        and not _coupon_hint_is_specific(decision.coupon_hint)
+    ):
+        if _recent_product_coupon_followup_target(user_text, recent_context):
+            return False
         return False
     return (
         decision is not None
@@ -20745,6 +20986,10 @@ class TStationChatServiceV2:
                 agent_domain_values_for_initial_route(policy_plan, known_slots=policy_known_slots)
             )
             active_transaction_action_context = _has_active_transaction_action_context(last_user_text, merged_slots)
+            coupon_recent_context = _recent_coupon_context_for_policy(
+                classifier_messages,
+                latest_quickreply_tmpl=latest_quickreply_tmpl,
+            )
             policy_product_resolution_first = (
                 bool(policy_domains)
                 and policy_domains[0] == MultiAgentDomain.Domain.DISCOVERY
@@ -20757,25 +21002,32 @@ class TStationChatServiceV2:
                 route_coupon_gate_decision = await asyncio.to_thread(
                     decide_coupon_query_gate,
                     user_text=last_user_text,
-                    recent_context=last_user_text,
+                    recent_context=coupon_recent_context,
                 )
                 with _trace_span(
                     "🛡️ coupon_query_gate.route",
                     trace_id=request.tracing_id,
                     parent_span_id=_classify_span.id or _parent_span_id,
-                    input=last_user_text,
+                    input={"user_text": last_user_text, "recent_context": coupon_recent_context[-1200:]},
                 ) as _coupon_route_span:
                     _coupon_route_span.update(output=route_coupon_gate_decision.model_dump())
             route_coupon_tool_intents = {
                 CouponQueryIntent.OWNED_COUPON_LOOKUP,
                 CouponQueryIntent.BEST_DISCOUNT,
                 CouponQueryIntent.PRODUCT_COUPON_ELIGIBILITY,
-                CouponQueryIntent.COUPON_APPLICABLE_PRODUCTS,
             }
             coupon_gate_can_override_route = (
                 route_coupon_gate_decision is not None
                 and route_coupon_gate_decision.is_actionable
-                and route_coupon_gate_decision.intent in route_coupon_tool_intents
+                and (
+                    route_coupon_gate_decision.intent in route_coupon_tool_intents
+                    or _is_coupon_applicable_products_decision(
+                        route_coupon_gate_decision,
+                        user_text=last_user_text,
+                        slots=merged_slots,
+                        recent_context=coupon_recent_context,
+                    )
+                )
                 and not active_transaction_action_context
             )
 
@@ -22631,7 +22883,10 @@ class TStationChatServiceV2:
                         recent_user_context_texts.append(extracted)
                 if len(recent_user_context_texts) >= 3:
                     break
-        recent_user_context_text = "\n".join(reversed(recent_user_context_texts)) or user_query
+        recent_user_context_text = _recent_coupon_context_for_policy(
+            messages,
+            latest_quickreply_tmpl=latest_quickreply_tmpl,
+        ) or "\n".join(reversed(recent_user_context_texts)) or user_query
         coupon_gate_decision: CouponQueryGateDecision | None = None
 
         async def _get_coupon_gate_decision() -> CouponQueryGateDecision | None:
@@ -22662,6 +22917,9 @@ class TStationChatServiceV2:
                 coupon_gate_decision.reason,
             )
             return coupon_gate_decision
+
+        def _recent_product_coupon_followup_target_for_turn() -> dict[str, Any] | None:
+            return _recent_product_coupon_followup_target(user_query, recent_user_context_text)
 
         def _tool_result_dict(raw: Any) -> dict:
             if isinstance(raw, dict):
@@ -23813,8 +24071,18 @@ class TStationChatServiceV2:
             my_coupons_result: dict | None = None,
             target_product_name: str | None = None,
         ) -> tuple[list[dict], dict] | None:
-            target_product_name = target_product_name or _coupon_target_product_name_for_query(user_query)
+            restored_followup_target = _recent_product_coupon_followup_target_for_turn()
+            target_product_name = (
+                target_product_name
+                or str((restored_followup_target or {}).get("product_name") or "").strip()
+                or _coupon_target_product_name_for_query(user_query)
+            )
             normalized_target = _split_product_size_quantity_from_text(target_product_name, user_query)
+            if restored_followup_target:
+                if not normalized_target.get("tire_size") and restored_followup_target.get("tire_size"):
+                    normalized_target["tire_size"] = restored_followup_target["tire_size"]
+                if not normalized_target.get("quantity") and restored_followup_target.get("quantity"):
+                    normalized_target["quantity"] = restored_followup_target["quantity"]
             if (
                 not normalized_target.get("product_name")
                 and normalize_tire_size(user_query)
@@ -25957,8 +26225,13 @@ class TStationChatServiceV2:
 
         coupon_decision = await _get_coupon_gate_decision()
         coupon_gate_resolution: tuple[list[dict], dict] | None = None
+        restored_coupon_product_target = _recent_product_coupon_followup_target_for_turn()
         if _is_owned_coupon_expiry_lookup_query(user_query):
             coupon_gate_resolution = await _resolve_owned_coupon_expiry_lookup_with_code()
+        elif restored_coupon_product_target:
+            coupon_gate_resolution = await _resolve_product_coupon_eligibility_with_code(
+                target_product_name=str(restored_coupon_product_target.get("product_name") or "").strip() or None
+            )
         elif _recent_product_coupon_price_target(user_query, recent_user_context_text):
             coupon_gate_resolution = await _resolve_product_coupon_eligibility_with_code()
         elif coupon_decision is not None and coupon_decision.is_actionable:
@@ -25978,6 +26251,7 @@ class TStationChatServiceV2:
                 coupon_decision,
                 user_text=user_query,
                 slots=initial_slots,
+                recent_context=recent_user_context_text,
             ):
                 coupon_gate_resolution = await _resolve_coupon_applicability_with_code()
 
@@ -27143,6 +27417,7 @@ class TStationChatServiceV2:
                                 coupon_decision,
                                 user_text=user_query,
                                 slots=pending_slots or initial_slots,
+                                recent_context=recent_user_context_text,
                             )
                             or (
                                 coupon_decision is None
@@ -27849,6 +28124,7 @@ class TStationChatServiceV2:
                                 coupon_decision,
                                 user_text=user_query,
                                 slots=pending_slots or initial_slots,
+                                recent_context=recent_user_context_text,
                             )
                             or (coupon_decision is None and _is_strong_coupon_applicability_query(user_query))
                         )
@@ -27868,6 +28144,7 @@ class TStationChatServiceV2:
                                 coupon_decision,
                                 user_text=user_query,
                                 slots=pending_slots or initial_slots,
+                                recent_context=recent_user_context_text,
                             )
                             or (
                                 coupon_decision is None
@@ -28185,6 +28462,8 @@ class TStationChatServiceV2:
                     }]
                 if isinstance(event_data, dict) and _normalize_tstation_cta_urls_for_origin(event_data):
                     logger.info("[CTA_URL] rebased T-Station CTA URLs to request origin host")
+                if _augment_recent_product_set_ranking_metadata(event, user_query):
+                    logger.info("[RECENT_PRODUCT_SET] augmented ranking response metadata")
                 # Buffer data event — yield after QC so assistantResponse is always verified
                 buffered_data_events.append(event)
                 continue
