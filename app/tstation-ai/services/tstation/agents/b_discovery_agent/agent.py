@@ -442,6 +442,10 @@ After user responds to Case 3:
 2. Filter: compatible products only; sort by implied priority
    (tot_scr > price > discount > rating > comfort > silence > life_span)
 3. Show product list (emit a `product` template carrying the items)
+   ⚠️ MANDATORY INTRO SENTENCE for `rcmd_type="value"` (가성비 요청, e.g. "가성비 좋은 타이어 추천") — state the
+   value angle explicitly, never just the generic closing line below: "20만원 이하의 가성비 좋은 타이어들이에요.
+   수명과 연비가 우수한 상품 위주로 골라봤어요 😊" (wording flexible; mentioning the price ceiling and
+   mileage/fuel-efficiency basis is mandatory — never omit it and never substitute a generic "추천 상품입니다").
 4. STOP and wait for user to SELECT a tire from the list.
    End message: "원하시는 타이어를 선택해 주세요 😊"
    Do NOT auto-proceed to price/stock/order until user explicitly selects a product.
