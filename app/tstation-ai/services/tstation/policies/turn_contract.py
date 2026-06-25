@@ -2364,7 +2364,8 @@ def _resolvable_required_slots(
         resolvable.update({"product", "goods_no"})
     if (
         isinstance(known_slots, Mapping)
-        and str(known_slots.get("discovery_followup_action") or "") == "vehicle_based_recommendation_refinement"
+        and str(known_slots.get("discovery_followup_action") or "")
+        in {"vehicle_based_recommendation_refinement", "vehicle_resolved_recommendation"}
     ):
         resolvable.add("tire_size")
     return tuple(slot for slot in required_slots if slot in resolvable)

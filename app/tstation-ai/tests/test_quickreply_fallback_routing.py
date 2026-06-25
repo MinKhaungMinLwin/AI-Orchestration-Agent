@@ -13156,6 +13156,76 @@ def test_vehicle_based_recommendation_refinement_contract_allows_vehicle_lookup_
     assert not should_guard_required_slots(contract)
 
 
+def test_vehicle_resolved_all_weather_recommendation_contract_allows_product_card() -> None:
+    user_text = "내 차에 적합한 올웨더 상품 추천해줘. 그리고 추천되는 상품들 장단점 비교해주고"
+    frame = build_discovery_intent_frame(user_text)
+    tool_plan = plan_discovery_tools(frame)
+    decision = decide_discovery_response(frame)
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=decision,
+    )
+
+    assert frame.sub_intent == "vehicle_resolved_recommendation"
+    assert frame.entities["discovery_followup_action"] == "vehicle_resolved_recommendation"
+    assert tool_plan.allowed_tools == ("get_my_cars_tool", "get_products_recommendations_tool")
+    assert tool_plan.required_slots == ("tire_size",)
+    assert decision.metadata["response_shape_key"] == "vehicle_resolved_recommendation"
+    assert "product_card_without_size" not in decision.forbidden_behaviors
+    assert contract.required_slots == ("tire_size",)
+    assert contract.resolvable_required_slots == ("tire_size",)
+    assert contract.blocking_required_slots == ()
+    assert not should_guard_required_slots(contract)
+
+    violations = response_contract_violations(
+        template="product",
+        assistant_response_source="code_mapper",
+        response_shape_key="vehicle_resolved_recommendation",
+        called_tools=["get_my_cars_tool", "get_products_recommendations_tool"],
+        event_data={
+            "products": [
+                {
+                    "titleProductName": "키너지 4S2",
+                    "titleTires": "235/55R19",
+                },
+            ],
+        },
+        source_domain="discovery",
+        contract=contract,
+    )
+
+    violation_types = {violation["type"] for violation in violations}
+    assert "forbidden_template" not in violation_types
+    assert "product_card_without_size" not in str(violations)
+    assert "unexpected_tool_for_contract" not in violation_types
+
+
+def test_vehicle_resolved_all_weather_compare_request_still_prioritizes_product_card() -> None:
+    user_text = "내 차에 적합한 올웨더 상품 장단점 비교해줘"
+    frame = build_discovery_intent_frame(user_text)
+    tool_plan = plan_discovery_tools(frame)
+    decision = decide_discovery_response(frame)
+
+    assert frame.sub_intent == "vehicle_resolved_recommendation"
+    assert frame.entities["discovery_followup_action"] == "vehicle_resolved_recommendation"
+    assert tool_plan.allowed_tools == ("get_my_cars_tool", "get_products_recommendations_tool")
+    assert decision.template == TemplateName.PRODUCT
+    assert "product_card_without_size" not in decision.forbidden_behaviors
+
+
+def test_unsized_all_weather_recommendation_still_blocks_product_card() -> None:
+    frame = build_discovery_intent_frame("올웨더 상품 추천해줘")
+    tool_plan = plan_discovery_tools(frame)
+    decision = decide_discovery_response(frame)
+
+    assert frame.sub_intent == "condition_recommendation"
+    assert tool_plan.allowed_tools == ("get_products_recommendations_tool",)
+    assert decision.metadata["response_shape_key"] == "catalog_unsized_recommendation_summary"
+    assert "product_card_without_size" in decision.forbidden_behaviors
+
+
 def test_recommendation_tool_applies_discovery_policy_patch(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict = {}
 

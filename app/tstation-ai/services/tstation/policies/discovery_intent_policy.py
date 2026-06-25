@@ -82,6 +82,12 @@ _GENERAL_TIRE_RECOMMENDATION_ACTION_RE = re.compile(
     r"추천|찾|골라|보여|낄\s*수\s*있는|끼울\s*수\s*있는|장착\s*가능한",
     re.IGNORECASE,
 )
+_MY_VEHICLE_RECOMMENDATION_RE = re.compile(
+    r"(?:내\s*차|내차|내\s*차량|내차량|등록\s*차량|등록차)"
+    r".{0,24}(?:적합|맞는|맞춰|기준|추천|찾|골라|보여)|"
+    r"(?:적합|맞는|맞춰|기준).{0,24}(?:내\s*차|내차|내\s*차량|내차량|등록\s*차량|등록차)",
+    re.IGNORECASE,
+)
 _GENERAL_TIRE_PREFERENCE_RE = re.compile(
     r"일반\s*타이어|일반타이어|승용차?\s*용\s*타이어|승용\s*타이어",
     re.IGNORECASE,
@@ -691,6 +697,8 @@ def build_discovery_intent_frame(
         entities["compare_metric"] = comparison_metric
     if discovery_followup_action == "vehicle_based_recommendation_refinement":
         entities["discovery_followup_action"] = discovery_followup_action
+    elif _MY_VEHICLE_RECOMMENDATION_RE.search(text) and (_RECOMMEND_RE.search(text) or _COMPARE_RE.search(text)):
+        entities["discovery_followup_action"] = "vehicle_resolved_recommendation"
     scenario = recommendation_scenario_from_text(
         text,
         router_recommendation_scenario or context_recommendation_scenario,
@@ -790,6 +798,9 @@ def build_discovery_intent_frame(
     if discovery_followup_action == "vehicle_based_recommendation_refinement":
         intent = "product_recommendation"
         sub_intent = "vehicle_based_recommendation_refinement"
+    elif entities.get("discovery_followup_action") == "vehicle_resolved_recommendation":
+        intent = "product_recommendation"
+        sub_intent = "vehicle_resolved_recommendation"
     elif (
         oe_replacement_type
         and (
@@ -988,7 +999,10 @@ def build_discovery_intent_frame(
     if (
         intent == "product_recommendation"
         and not tire_size
-        and discovery_followup_action == "vehicle_based_recommendation_refinement"
+        and (
+            discovery_followup_action == "vehicle_based_recommendation_refinement"
+            or entities.get("discovery_followup_action") == "vehicle_resolved_recommendation"
+        )
     ):
         missing_slots = ("tire_size",)
     elif intent == "product_recommendation" and not tire_size and entities.get("price_goal") == "lowest":
@@ -1312,10 +1326,13 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             "claim_unsupported_scenario_as_exact",
         )
         metadata["recommendation_expected_tool_args"] = _recommendation_expected_tool_args(args)
-    if entities.get("discovery_followup_action") == "vehicle_based_recommendation_refinement":
+    if entities.get("discovery_followup_action") in {
+        "vehicle_based_recommendation_refinement",
+        "vehicle_resolved_recommendation",
+    }:
         allowed_tools = ("get_my_cars_tool", "get_products_recommendations_tool")
         required_slots = ("tire_size",)
-        metadata = {**metadata, "response_intent": "vehicle_based_recommendation_refinement"}
+        metadata = {**metadata, "response_intent": entities["discovery_followup_action"]}
     return ToolPlan(
         allowed_tools=allowed_tools,
         preferred_tool="get_products_recommendations_tool",
