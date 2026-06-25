@@ -8904,6 +8904,74 @@ def _select_order_rows_by_number(user_text: str, rows: list[dict]) -> tuple[list
     return [], "none", ""
 
 
+_CANCEL_OR_REFUND_STATUS_RE = re.compile(
+    r"주문\s*취소|취소\s*완료|결제\s*취소|카드\s*취소|승인\s*취소|환불\s*완료|환불",
+    re.IGNORECASE,
+)
+_NON_STATUS_CANCEL_TEXT_RE = re.compile(r"취소\s*(?:가능|방법|요청|신청)|환불\s*(?:방법|요청|신청)", re.IGNORECASE)
+
+
+def _order_cancel_refund_status_text(row: dict) -> str:
+    statuses: list[str] = []
+    for key in (
+        "ord_prgs_stat_nm",
+        "ordPrgsStatNm",
+        "shop_vst_rsv_sts_label",
+        "shopVstRsvStsLabel",
+        "dlv_prgs_stat_nm",
+        "dlvPrgsStatNm",
+        "status_nm",
+        "statusNm",
+    ):
+        value = _order_row_value(row, key)
+        if value:
+            statuses.append(value)
+    for status in statuses:
+        if _NON_STATUS_CANCEL_TEXT_RE.search(status):
+            continue
+        if _CANCEL_OR_REFUND_STATUS_RE.search(status):
+            return status
+    return ""
+
+
+def _select_cancel_or_refund_order_rows(
+    user_text: str,
+    orders_result: dict | None = None,
+    messages: list[dict] | None = None,
+) -> dict[str, Any]:
+    rows = _order_rows_from_orders_result(orders_result or {}) if orders_result is not None else []
+    if not rows and messages is not None:
+        rows = _order_rows_from_messages(messages)
+
+    matches, match_reason, match_value = _select_order_rows_by_number(user_text, rows)
+    if match_reason in {"full_order_no", "order_no_suffix"}:
+        if len(matches) > 1:
+            return {"state": "multiple_matches", "rows": matches, "match_reason": match_reason, "match_value": match_value}
+        row = matches[0]
+        if _order_cancel_refund_status_text(row):
+            return {"state": "matched", "row": row, "rows": [row], "match_reason": match_reason, "match_value": match_value}
+        return {
+            "state": "explicit_order_status_unknown",
+            "row": row,
+            "rows": [row],
+            "match_reason": match_reason,
+            "match_value": match_value,
+        }
+    if match_reason in {"full_order_no_not_found", "order_no_suffix_not_found"}:
+        return {"state": "explicit_order_not_found", "rows": [], "match_reason": match_reason, "match_value": match_value}
+
+    if not rows:
+        return {"state": "no_order_history", "rows": [], "match_reason": "none", "match_value": ""}
+
+    cancel_rows = [row for row in rows if _order_cancel_refund_status_text(row)]
+    cancel_rows = sorted(cancel_rows, key=_order_history_sort_key, reverse=True)
+    if len(cancel_rows) == 1:
+        return {"state": "matched", "row": cancel_rows[0], "rows": cancel_rows, "match_reason": "cancel_status_single"}
+    if len(cancel_rows) > 1:
+        return {"state": "multiple_matches", "rows": cancel_rows, "match_reason": "cancel_status_multiple"}
+    return {"state": "no_cancel_or_refund_order", "rows": [], "match_reason": "cancel_status_none"}
+
+
 def _order_history_tire_rows(orders_result: dict) -> list[dict]:
     rows = []
     for row in _order_rows_from_orders_result(orders_result):
@@ -9587,6 +9655,94 @@ def _build_order_arrival_status_event(order_status_result: dict, order_row: dict
     }
 
 
+def _order_cancel_status_detail_chip(ord_no: str) -> dict[str, str]:
+    return (
+        {"label": "주문 상세 보기", "url": CTAUrls.ORDER_HISTORY_DETAIL.replace("<ord_no>", ord_no), "domain": "TRANSACTION"}
+        if ord_no
+        else {"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"}
+    )
+
+
+def _card_refund_timing_notice(user_text: str | None = None) -> str:
+    return (
+        "카드사 환불 반영 시점은 카드사 승인취소/매입취소 처리 기준에 따라 달라질 수 있어요. "
+        "정확한 반영일은 카드사 앱 또는 카드사 고객센터에서 확인해 주세요."
+    )
+
+
+def _cancel_order_candidate_line(row: dict) -> str:
+    ord_no = _order_no_from_row(row)
+    status = _order_cancel_refund_status_text(row) or _order_row_value(row, "ord_prgs_stat_nm", "status_nm") or "상태 확인 필요"
+    goods_nm = _order_row_value(row, "goods_nm", "goodsName") or "상품명 확인 필요"
+    qty = _order_row_value(row, "ord_qty", "ordQty")
+    date = _date_label(_order_history_sort_key(row))
+    parts = [ord_no, status, goods_nm]
+    if qty:
+        parts.append(f"{qty}개")
+    if date:
+        parts.append(date)
+    return "- " + " / ".join(part for part in parts if part)
+
+
+def _order_cancel_status_selection_event(selection: dict[str, Any]) -> dict:
+    state = str(selection.get("state") or "")
+    rows = [row for row in selection.get("rows", []) if isinstance(row, dict)]
+    match_value = str(selection.get("match_value") or "").strip()
+    metadata = {
+        "response_shape_key": "order_cancel_status_summary",
+        "orderCancelStatusLookup": True,
+        "selectionState": state,
+        "matchReason": selection.get("match_reason") or "",
+        "matchValue": match_value,
+    }
+
+    if state == "multiple_matches":
+        lines = ["취소된 주문이 여러 건 있어요. 환불 상태를 확인할 주문을 선택해 주세요."]
+        lines.extend(_cancel_order_candidate_line(row) for row in rows[:5])
+        quick_replies = [
+            {"label": _order_no_from_row(row), "domain": "TRANSACTION"}
+            for row in rows[:3]
+            if _order_no_from_row(row)
+        ]
+        quick_replies.append({"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"})
+        response = "\n".join(lines)
+    elif state == "explicit_order_not_found":
+        response = (
+            f"{match_value} 주문의 주문내역을 확인하지 못했어요. 주문내역에서 직접 확인해 주세요."
+            if match_value
+            else "해당 주문번호의 주문내역을 확인하지 못했어요. 주문내역에서 직접 확인해 주세요."
+        )
+        quick_replies = [{"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"}]
+    elif state == "explicit_order_status_unknown":
+        row = selection.get("row") if isinstance(selection.get("row"), dict) else {}
+        ord_no = _order_no_from_row(row)
+        status = _order_row_value(row, "ord_prgs_stat_nm", "status_nm") or "확인 가능한 상태값 없음"
+        response = (
+            f"{ord_no} 주문은 현재 {status}로 확인돼요. 취소/환불 완료 상태인지 확실하지 않으면 주문 상세나 카드사에서 확인해 주세요.\n\n"
+            f"{_card_refund_timing_notice()}"
+        )
+        quick_replies = [_order_cancel_status_detail_chip(ord_no), {"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"}]
+    elif state == "no_order_history":
+        response = "최근 주문내역을 확인하지 못했어요. 주문내역에서 취소된 주문을 확인해 주세요."
+        quick_replies = [{"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"}]
+    else:
+        response = "최근 주문내역에서 취소/환불 상태의 주문을 특정하지 못했어요. 주문내역에서 취소된 주문을 확인해 주세요."
+        quick_replies = [{"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"}]
+
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+        "assistant_response_source": "code_order_cancel_status_lookup",
+        "data": {
+            "assistantResponse": response,
+            "quickReplies": quick_replies,
+            "predictedDomains": ["TRANSACTION"],
+            "metadata": metadata,
+        },
+    }
+
+
 def _build_order_cancel_status_event(order_status_result: dict, order_row: dict | None = None) -> dict:
     data = _unwrap_tool_data(order_status_result)
     if not isinstance(data, dict):
@@ -9594,8 +9750,24 @@ def _build_order_cancel_status_event(order_status_result: dict, order_row: dict 
     order_row = order_row or {}
     tool_status = str(order_status_result.get("status") or "").strip().lower()
     ord_no = str(data.get("ord_no") or order_row.get("ord_no") or data.get("query_no") or "").strip()
+    row_cancel_status = _order_cancel_refund_status_text(order_row)
     if tool_status == "error":
-        response = "해당 주문번호의 주문 내역을 확인하지 못했어요. 주문내역에서 직접 확인해 주세요."
+        if ord_no and row_cancel_status:
+            response = (
+                f"주문내역 기준으로 {ord_no} 주문은 {row_cancel_status} 상태로 확인돼요.\n\n"
+                f"{_card_refund_timing_notice()}"
+            )
+            quick_replies = [
+                _order_cancel_status_detail_chip(ord_no),
+                {"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"},
+            ]
+            failed = False
+        else:
+            response = "해당 주문번호의 주문내역을 확인하지 못했어요. 주문내역에서 직접 확인해 주세요."
+            quick_replies = [
+                {"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"},
+            ]
+            failed = True
         return {
             "type": "data",
             "template": "quickReply",
@@ -9603,14 +9775,13 @@ def _build_order_cancel_status_event(order_status_result: dict, order_row: dict 
             "assistant_response_source": "code_order_cancel_status_lookup",
             "data": {
                 "assistantResponse": response,
-                "quickReplies": [
-                    {"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"},
-                ],
+                "quickReplies": quick_replies,
                 "predictedDomains": ["TRANSACTION"],
                 "metadata": {
                     "response_shape_key": "order_cancel_status_summary",
                     "orderCancelStatusLookup": True,
-                    "orderCancelStatusLookupFailed": True,
+                    "orderCancelStatusLookupFailed": failed,
+                    "statusFallbackFromOrderRow": bool(ord_no and row_cancel_status),
                 },
             },
         }
@@ -9619,6 +9790,7 @@ def _build_order_cancel_status_event(order_status_result: dict, order_row: dict 
         or data.get("shop_vst_rsv_sts_label")
         or data.get("dlv_prgs_stat_nm")
         or data.get("status_nm")
+        or row_cancel_status
         or ""
     ).strip()
     if not status:
@@ -9626,21 +9798,13 @@ def _build_order_cancel_status_event(order_status_result: dict, order_row: dict 
     is_cancelled = bool(re.search(r"취소|환불\s*완료|결제\s*취소", status, re.IGNORECASE))
 
     if ord_no and is_cancelled:
-        response = f"{ord_no} 주문 상태를 확인해보니 현재 {status}로 확인돼요."
+        response = f"{ord_no} 주문 상태를 확인해보니 현재 {status}로 확인돼요.\n\n{_card_refund_timing_notice()}"
     elif ord_no:
-        response = f"{ord_no}은 현재 {status}로 확인돼요. 취소 완료 상태는 아닙니다."
+        response = f"{ord_no}은 현재 {status}로 확인돼요. 취소 완료 상태는 아닙니다.\n\n{_card_refund_timing_notice()}"
     else:
         response = "주문 상태를 확인했지만 주문번호를 특정하지 못했어요. 주문내역에서 직접 확인해 주세요."
 
-    detail_chip = (
-        {
-            "label": "주문 상세 보기",
-            "url": CTAUrls.ORDER_HISTORY_DETAIL.replace("<ord_no>", ord_no),
-            "domain": "TRANSACTION",
-        }
-        if ord_no
-        else {"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"}
-    )
+    detail_chip = _order_cancel_status_detail_chip(ord_no)
     quick_replies = [detail_chip]
     if ord_no:
         quick_replies.append({"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"})
@@ -24350,59 +24514,49 @@ class TStationChatServiceV2:
 
             emitted_events: list[dict] = []
             orders_result: dict | None = None
-            order_row = _resolve_order_row_for_arrival_query(user_query, messages=messages)
-            if order_row is None:
-                orders_input: dict[str, Any] = {}
-                emitted_events.append({
-                    "type": "status",
-                    "status": "tool_start",
-                    "tool": "get_orders_of_user_tool",
-                    "display_name": "주문 내역 조회 중...",
-                    "source_domain": "transaction",
-                })
-                try:
-                    raw_orders = await asyncio.to_thread(_orders_tool.invoke, orders_input)
-                    orders_result = _tool_result_dict(raw_orders)
-                except Exception as exc:
-                    logger.exception("[ORDER_CANCEL_STATUS] orders tool failed")
-                    orders_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
-                _record_code_tool_result("get_orders_of_user_tool", orders_input, orders_result)
-                emitted_events.append({
-                    "type": "agent_flow",
-                    "agent": "[Order / Delivery AF]",
-                    "agent_class": "Transaction Agent",
-                    "status": orders_result.get("status", "success"),
-                    "source_domain": "transaction",
-                })
-                emitted_events.append({
-                    "type": "tool",
-                    "input": orders_input,
-                    "output": json.dumps(orders_result, ensure_ascii=False),
-                    "node": "tools",
-                    "tool": "get_orders_of_user_tool",
-                    "source_domain": "transaction",
-                })
-                order_row = _resolve_order_row_for_arrival_query(user_query, orders_result=orders_result)
+            orders_input: dict[str, Any] = {}
+            emitted_events.append({
+                "type": "status",
+                "status": "tool_start",
+                "tool": "get_orders_of_user_tool",
+                "display_name": "주문 내역 조회 중...",
+                "source_domain": "transaction",
+            })
+            try:
+                raw_orders = await asyncio.to_thread(_orders_tool.invoke, orders_input)
+                orders_result = _tool_result_dict(raw_orders)
+            except Exception as exc:
+                logger.exception("[ORDER_CANCEL_STATUS] orders tool failed")
+                orders_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+            _record_code_tool_result("get_orders_of_user_tool", orders_input, orders_result)
+            emitted_events.append({
+                "type": "agent_flow",
+                "agent": "[Order / Delivery AF]",
+                "agent_class": "Transaction Agent",
+                "status": orders_result.get("status", "success"),
+                "source_domain": "transaction",
+            })
+            emitted_events.append({
+                "type": "tool",
+                "input": orders_input,
+                "output": json.dumps(orders_result, ensure_ascii=False),
+                "node": "tools",
+                "tool": "get_orders_of_user_tool",
+                "source_domain": "transaction",
+            })
+            selection = _select_cancel_or_refund_order_rows(user_query, orders_result, messages)
+            if selection.get("state") != "matched":
+                return emitted_events, _order_cancel_status_selection_event(selection)
 
-            ord_no = str((order_row or {}).get("ord_no") or (order_row or {}).get("ordNo") or "").strip()
+            order_row = selection.get("row") if isinstance(selection.get("row"), dict) else {}
+            ord_no = _order_no_from_row(order_row)
             if not ord_no:
-                return emitted_events, {
-                    "type": "data",
-                    "template": "quickReply",
-                    "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
-                    "assistant_response_source": "code_order_cancel_status_lookup",
-                    "data": {
-                        "assistantResponse": "해당 주문번호의 주문 내역을 확인하지 못했어요. 주문내역에서 직접 확인해 주세요.",
-                        "quickReplies": [
-                            {"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"},
-                        ],
-                        "predictedDomains": ["TRANSACTION"],
-                        "metadata": {
-                            "response_shape_key": "order_cancel_status_summary",
-                            "orderCancelStatusLookup": True,
-                        },
-                    },
-                }
+                return emitted_events, _order_cancel_status_selection_event({
+                    "state": "no_cancel_or_refund_order",
+                    "rows": [],
+                    "match_reason": selection.get("match_reason") or "",
+                    "match_value": selection.get("match_value") or "",
+                })
 
             status_input = {"query_no": ord_no}
             emitted_events.append({

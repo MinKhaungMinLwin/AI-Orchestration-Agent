@@ -142,6 +142,8 @@ from services.tstation.chat import (
     _build_order_cancel_status_event,
     _build_order_history_reorder_event,
     _payment_method_order_selection_event,
+    _order_cancel_status_selection_event,
+    _select_cancel_or_refund_order_rows,
     _select_order_rows_by_number,
     _is_preorder_confirmation_reply,
     _build_staggered_vehicle_tire_selection_event,
@@ -2235,6 +2237,85 @@ def test_order_cancel_status_lookup_with_order_no_prefers_status_tool() -> None:
     assert tool_plan.tool_args_patch == {"query_no": "O202606170019357"}
 
 
+def test_cancel_status_selector_auto_selects_single_cancelled_order_without_order_no() -> None:
+    orders_result = {
+        "status": "success",
+        "data": {
+            "orders": [
+                {
+                    "ord_no": "O202606170019357",
+                    "ord_prgs_stat_nm": "주문취소",
+                    "goods_nm": "벤투스 S2 AS",
+                    "ord_qty": 4,
+                    "sys_reg_dtime": "2026-06-17T10:00:00",
+                },
+                {
+                    "ord_no": "O202606180019358",
+                    "ord_prgs_stat_nm": "장착완료",
+                    "goods_nm": "키너지 EX",
+                },
+            ]
+        },
+    }
+
+    selection = _select_cancel_or_refund_order_rows("주문 취소했는데 카드사 환불 처리 언제됨?", orders_result)
+
+    assert selection["state"] == "matched"
+    assert selection["row"]["ord_no"] == "O202606170019357"
+    assert selection["match_reason"] == "cancel_status_single"
+
+
+def test_cancel_status_selector_asks_when_multiple_cancelled_orders() -> None:
+    orders_result = {
+        "status": "success",
+        "data": {
+            "orders": [
+                {
+                    "ord_no": "O202606170019357",
+                    "ord_prgs_stat_nm": "주문취소",
+                    "goods_nm": "벤투스 S2 AS",
+                    "ord_qty": 4,
+                    "sys_reg_dtime": "2026-06-17T10:00:00",
+                },
+                {
+                    "ord_no": "O202606180019358",
+                    "status_nm": "결제취소",
+                    "goods_nm": "키너지 EX",
+                    "ord_qty": 2,
+                    "sys_reg_dtime": "2026-06-18T10:00:00",
+                },
+            ]
+        },
+    }
+
+    selection = _select_cancel_or_refund_order_rows("주문 취소했는데 환불 언제돼?", orders_result)
+    event = _order_cancel_status_selection_event(selection)
+
+    assert selection["state"] == "multiple_matches"
+    assert "취소된 주문이 여러 건" in event["data"]["assistantResponse"]
+    assert "O202606170019357" in event["data"]["assistantResponse"]
+    assert "O202606180019358" in event["data"]["assistantResponse"]
+    assert event["data"]["quickReplies"][0]["label"] == "O202606180019358"
+
+
+def test_cancel_status_selector_reports_no_cancelled_order_without_order_no_fallback() -> None:
+    orders_result = {
+        "status": "success",
+        "data": {
+            "orders": [
+                {"ord_no": "O202606170019357", "ord_prgs_stat_nm": "장착완료", "goods_nm": "벤투스 S2 AS"},
+            ]
+        },
+    }
+
+    selection = _select_cancel_or_refund_order_rows("주문 취소했는데 카드사 환불 언제돼?", orders_result)
+    event = _order_cancel_status_selection_event(selection)
+
+    assert selection["state"] == "no_cancel_or_refund_order"
+    assert "취소/환불 상태의 주문을 특정하지 못했어요" in event["data"]["assistantResponse"]
+    assert "해당 주문번호" not in event["data"]["assistantResponse"]
+
+
 def test_payment_method_change_request_allows_order_lookup_without_pii_block() -> None:
     user_text = "3708번 주문 결제수단 무통장 입금으로 변경할래"
 
@@ -2360,6 +2441,7 @@ def test_order_cancel_status_event_reports_lookup_result_without_request_guidanc
     data = event["data"]
     assert data["metadata"]["response_shape_key"] == "order_cancel_status_summary"
     assert "현재 주문취소로 확인돼요" in data["assistantResponse"]
+    assert "카드사 환불 반영 시점" in data["assistantResponse"]
     assert "제가 직접 주문을 취소 처리할 수는 없어요" not in data["assistantResponse"]
     assert data["quickReplies"][0]["label"] == "주문 상세 보기"
 
@@ -2367,17 +2449,17 @@ def test_order_cancel_status_event_reports_lookup_result_without_request_guidanc
 def test_order_cancel_status_event_does_not_treat_tool_error_as_order_status() -> None:
     event = _build_order_cancel_status_event(
         {"status": "error", "message": "not found", "data": {"query_no": "O202606170019357"}},
-        {"ord_no": "O202606170019357"},
+        {"ord_no": "O202606170019357", "ord_prgs_stat_nm": "주문취소"},
     )
 
     data = event["data"]
     assert data["metadata"]["response_shape_key"] == "order_cancel_status_summary"
-    assert data["metadata"]["orderCancelStatusLookupFailed"] is True
+    assert data["metadata"]["orderCancelStatusLookupFailed"] is False
+    assert data["metadata"]["statusFallbackFromOrderRow"] is True
     assert "현재 error" not in data["assistantResponse"]
-    assert "확인하지 못했어요" in data["assistantResponse"]
-    assert data["quickReplies"] == [
-        {"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"},
-    ]
+    assert "주문내역 기준으로 O202606170019357 주문은 주문취소 상태로 확인돼요" in data["assistantResponse"]
+    assert "카드사 환불 반영 시점" in data["assistantResponse"]
+    assert data["quickReplies"][0]["label"] == "주문 상세 보기"
 
 
 def test_turn_contract_blocks_cancel_status_normalized_as_cancel_request() -> None:
