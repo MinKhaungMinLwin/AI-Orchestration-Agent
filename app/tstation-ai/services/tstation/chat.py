@@ -10086,6 +10086,62 @@ def _normalize_order_cancel_request_guidance(
     return True
 
 
+def _normalize_order_cancel_fee_inquiry_guidance(
+    event_data: dict,
+    *,
+    tool_data_list: list[dict],
+) -> bool:
+    if event_data.get("template") not in (None, "quickReply"):
+        return False
+
+    assistant_text = str(event_data.get("assistantResponse") or "")
+    should_normalize = bool(
+        assistant_text.startswith("제가 직접 주문을 취소 처리할 수는 없어요")
+        or re.search(r"타이어\s*1\s*개당\s*1\s*만\s*원|1\s*만\s*원의\s*취소|어떤\s*주문을\s*취소", assistant_text)
+        or str((event_data.get("metadata") or {}).get("response_shape_key") or "") == "order_cancel_request_guidance"
+    )
+    if not should_normalize:
+        return False
+
+    order_count = _recent_order_count_from_tool_context(tool_data_list)
+    if order_count > 1:
+        response = (
+            "예약/주문 취소 비용은 주문 유형과 진행 상태에 따라 달라질 수 있어요.\n\n"
+            "특정 예약이나 주문이 지정되지 않은 상태에서는 과거 주문 하나를 기준으로 위약금이나 비용을 단정하지 않을게요. "
+            "최근 온라인 주문/예약이 여러 건 확인되니, 주문 내역에서 해당 예약 또는 주문의 상태를 확인해 주세요.\n\n"
+            "매장 방문 예약만 취소하는 경우에는 별도 취소 수수료가 발생하지 않는 것으로 안내돼요."
+        )
+    elif order_count == 1:
+        response = (
+            "확인된 온라인 주문/예약 1건 기준으로 취소 비용은 주문 진행 상태에 따라 달라질 수 있어요.\n\n"
+            "주문 상세에서 현재 상태와 취소 가능 여부를 먼저 확인해 주세요. 매장 방문 예약만 취소하는 경우에는 "
+            "별도 취소 수수료가 발생하지 않는 것으로 안내돼요."
+        )
+    else:
+        response = (
+            "확인된 온라인 주문 내역이 없어요.\n\n"
+            "매장 방문 예약만 취소하는 경우에는 별도 취소 수수료가 발생하지 않는 것으로 안내돼요. "
+            "정확한 예약 취소는 예약 내역 또는 1:1 문의에서 확인해 주세요."
+        )
+
+    quick_replies = [
+        {"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"},
+        {"label": "1:1 문의하기", "domain": "SUPPORT"},
+    ]
+    event_data["assistantResponse"] = response
+    event_data["quickReplies"] = quick_replies
+    event_data["predictedDomains"] = ["TRANSACTION", "SUPPORT"]
+    metadata = event_data.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+    metadata.update({
+        "orderCancelFeeInquiryNormalized": True,
+        "response_shape_key": "order_cancel_fee_inquiry_summary",
+    })
+    event_data["metadata"] = metadata
+    return True
+
+
 def _destination_cta_for_guidance_text(assistant_text: str) -> dict[str, str] | None:
     if _ORDER_DESTINATION_GUIDANCE_RE.search(assistant_text):
         order_no_match = _ORDER_NO_FOR_DESTINATION_CTA_RE.search(assistant_text)
@@ -29997,6 +30053,16 @@ class TStationChatServiceV2:
                     if (
                         is_current_quickreply
                         and turn_contract is not None
+                        and turn_contract.intent == "order_cancel_fee_inquiry"
+                        and _normalize_order_cancel_fee_inquiry_guidance(
+                            event_data,
+                            tool_data_list=[*(prev_tool_data or []), *tool_context_items],
+                        )
+                    ):
+                        logger.info("[QUICKREPLY_FILTER] normalized order cancel fee inquiry guidance")
+                    if (
+                        is_current_quickreply
+                        and turn_contract is not None
                         and turn_contract.intent == "order_cancel_request"
                         and _normalize_order_cancel_request_guidance(
                             event_data,
@@ -30031,6 +30097,9 @@ class TStationChatServiceV2:
                                 for chip in recovery_chips
                                 if isinstance(chip, dict)
                             ])
+                    assistant_response = str(event_data.get("assistantResponse") or assistant_response)
+                    draft_response = assistant_response
+                    draft_for_qc = assistant_response
                 if isinstance(event_data, dict) and _normalize_cart_url_for_cart_check_chip(event_data):
                     logger.info("[QUICKREPLY_FILTER] normalized cart URL for cart-check chip")
                 if isinstance(event_data, dict) and _remove_home_quick_reply_chips(event_data):

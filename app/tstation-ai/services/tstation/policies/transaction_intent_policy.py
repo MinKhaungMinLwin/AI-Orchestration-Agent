@@ -163,6 +163,11 @@ _ORDER_CANCEL_REQUEST_RE = re.compile(
     r"(?:고객\s*센터|상담|전화).{0,40}(?:취소|캔슬)",
     re.IGNORECASE,
 )
+_ORDER_CANCEL_FEE_INQUIRY_RE = re.compile(
+    r"(?=.*(?:주문|예약|취소|반품|캔슬))"
+    r"(?=.*(?:위약금|수수료|비용|배송비|택배비|왕복\s*배송비|물어내|발생|얼마))",
+    re.IGNORECASE,
+)
 _OTHER_STORE_RE = re.compile(r"다른\s*(?:매장|지점|곳)|다시\s*(?:확인|찾|검색)|새로\s*(?:찾|검색)", re.IGNORECASE)
 _STORE_SCOPE_FOLLOWUP_RE = re.compile(
     r"다른\s*(?:매장|지점|곳)|근처(?:에)?\s*(?:다른\s*)?(?:매장|지점|곳)|주변\s*(?:매장|지점)|"
@@ -459,10 +464,17 @@ def build_transaction_intent_frame(
     )
     current_order_cancel_status_lookup = bool(_ORDER_CANCEL_STATUS_LOOKUP_RE.search(text))
     router_order_cancel_fee_inquiry = str(slots.get("router_transaction_intent") or "") == "order_cancel_fee_inquiry"
+    current_order_cancel_fee_inquiry = bool(
+        router_order_cancel_fee_inquiry
+        or (
+            _ORDER_CANCEL_FEE_INQUIRY_RE.search(text)
+            and not current_order_cancel_status_lookup
+        )
+    )
     current_order_cancel_request = bool(
         _ORDER_CANCEL_REQUEST_RE.search(text)
         and not current_order_cancel_status_lookup
-        and not router_order_cancel_fee_inquiry
+        and not current_order_cancel_fee_inquiry
     )
     current_payment_method_change = bool(_PAYMENT_METHOD_CHANGE_RE.search(text))
     current_payment_account_info = bool(_PAYMENT_ACCOUNT_INFO_RE.search(text))
@@ -709,7 +721,7 @@ def build_transaction_intent_frame(
             entities["order_no"] = direct_order_match.group(0).upper()
         elif suffix_match:
             entities["order_no_suffix"] = suffix_match.group("suffix") or suffix_match.group("suffix2")
-    elif router_order_cancel_fee_inquiry:
+    elif current_order_cancel_fee_inquiry:
         intent = "order_cancel_fee_inquiry"
         sub_intent = "cancel_fee"
         entities["order_cancel_fee_inquiry"] = True

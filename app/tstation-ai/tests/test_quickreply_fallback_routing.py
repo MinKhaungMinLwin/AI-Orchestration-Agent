@@ -247,6 +247,7 @@ from services.tstation.chat import (
     _ensure_discovery_transaction_recovery_chain,
     _inject_store_detail_chip_for_contact_guidance,
     _inject_order_history_chip_for_cancel_guidance,
+    _normalize_order_cancel_fee_inquiry_guidance,
     _normalize_order_cancel_request_guidance,
     _inject_destination_cta_for_guidance,
     _ensure_my_goods_review_lookup_cta,
@@ -2274,6 +2275,62 @@ def test_order_cancel_fee_inquiry_router_contract_is_protected(user_text: str) -
     assert "normalize_as_cancel_request" in response_decision.forbidden_behaviors
     assert "arbitrary_past_order_fee_answer" in response_decision.forbidden_behaviors
     assert contract.intent == "order_cancel_fee_inquiry"
+
+
+def test_order_cancel_fee_inquiry_fallback_does_not_require_router_slot() -> None:
+    frame = build_transaction_intent_frame("예약 취소에 따른 위약금이 있는지 알려줘.")
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text="예약 취소에 따른 위약금이 있는지 알려줘.",
+        known_slots=dict(frame.known_slots),
+    )
+
+    assert frame.intent == "order_cancel_fee_inquiry"
+    assert frame.sub_intent == "cancel_fee"
+    assert frame.known_slots["pending_intent"] == "order_cancel_fee_inquiry"
+    assert tool_plan.allowed_tools == ("get_orders_of_user_tool", "get_order_status_tool")
+    assert response_decision.metadata["response_shape_key"] == "order_cancel_fee_inquiry_summary"
+
+
+def test_order_cancel_fee_inquiry_normalizer_blocks_past_order_fee_assertion() -> None:
+    event_data = {
+        "template": "quickReply",
+        "assistantResponse": (
+            "이미 출고가 진행된 주문은 단순 변심 취소/반품 시 배송 현황에 따라 "
+            "타이어 1개당 1만 원의 취소/반품 비용이 발생할 수 있어요 🙏\n\n"
+            "정확한 취소 가능 여부와 최종 비용은 1:1 문의를 통해 확인해 주세요."
+        ),
+        "quickReplies": [{"label": "1:1 문의하기", "domain": "SUPPORT"}],
+        "predictedDomains": ["SUPPORT"],
+        "metadata": {"response_shape_key": "order_cancel_fee_inquiry_summary"},
+    }
+
+    changed = _normalize_order_cancel_fee_inquiry_guidance(
+        event_data,
+        tool_data_list=[
+            {
+                "tool": "get_orders_of_user_tool",
+                "data": {
+                    "data": {
+                        "orders": [
+                            {"ord_no": "O202606220019363", "goods_nm": "키너지 EX"},
+                            {"ord_no": "O202605180019345", "goods_nm": "벤투스 S1 에보 Z AS"},
+                        ],
+                    }
+                },
+            }
+        ],
+    )
+
+    assert changed is True
+    response = event_data["assistantResponse"]
+    assert "과거 주문 하나를 기준으로 위약금이나 비용을 단정하지 않을게요" in response
+    assert "타이어 1개당 1만 원" not in response
+    assert "제가 직접 주문을 취소 처리할 수는 없어요" not in response
+    assert event_data["metadata"]["orderCancelFeeInquiryNormalized"] is True
+    assert event_data["metadata"]["response_shape_key"] == "order_cancel_fee_inquiry_summary"
+    assert [chip["label"] for chip in event_data["quickReplies"]] == ["주문 내역 보기", "1:1 문의하기"]
 
 
 def test_order_cancel_fee_inquiry_contract_rejects_cancel_request_normalized_text() -> None:
