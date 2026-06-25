@@ -15636,7 +15636,10 @@ def _pending_store_selection_payload(
     store_query: str,
     candidate_stores: list[dict[str, Any]],
     action_payload: dict[str, Any] | None = None,
+    goal_steps: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    normalized_goal_steps = goal_steps or []
+    turn_complexity = "multi_goal" if len(normalized_goal_steps) >= 2 else "simple"
     return {
         "pending_action_type": pending_action_type,
         "pendingActionType": pending_action_type,
@@ -15654,6 +15657,12 @@ def _pending_store_selection_payload(
         "ttlTurns": 1,
         "context_state": "waiting_for_store_selection",
         "contextState": "waiting_for_store_selection",
+        "turn_complexity": turn_complexity,
+        "turnComplexity": turn_complexity,
+        "goal_steps": normalized_goal_steps,
+        "goalSteps": normalized_goal_steps,
+        "pending_goal": normalized_goal_steps[-1]["goal"] if normalized_goal_steps else pending_action_type,
+        "pendingGoal": normalized_goal_steps[-1]["goal"] if normalized_goal_steps else pending_action_type,
     }
 
 
@@ -15707,6 +15716,22 @@ def _pending_store_attribute_selection_event(
         })
     if not items:
         return None
+    goal_steps = [
+        {
+            "seq": 1,
+            "goal": "resolve_store",
+            "required_slots": ["store_query"],
+            "produced_slots": ["store", "shop_id", "shop_name"],
+            "allowed_tools": ["get_store_list_tool"],
+        },
+        {
+            "seq": 2,
+            "goal": "answer_store_attribute",
+            "required_slots": ["store"],
+            "produced_slots": ["store_attribute_answer"],
+            "allowed_tools": ["get_store_detail_tool"],
+        },
+    ]
     pending_payload = _pending_store_selection_payload(
         pending_action_type="store_attribute_check",
         original_user_text=user_text,
@@ -15720,6 +15745,7 @@ def _pending_store_attribute_selection_event(
             "verification_level": verification_level,
             "verificationLevel": verification_level,
         },
+        goal_steps=goal_steps,
     )
     for meta in metadata:
         meta["pendingStoreSelection"] = pending_payload

@@ -13049,6 +13049,104 @@ def test_vehicle_based_recommendation_refinement_contract_allows_vehicle_lookup_
     assert not should_guard_required_slots(contract)
 
 
+def test_multi_goal_vehicle_recommend_compare_contract_metadata_allows_prerequisite_tools() -> None:
+    user_text = "내 차에 적합한 올웨더 상품 추천해줘. 그리고 추천되는 상품들 장단점 비교해주고"
+    frame = build_discovery_intent_frame(user_text)
+    tool_plan = plan_discovery_tools(frame)
+    decision = decide_discovery_response(frame)
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=decision,
+        merged_slots=ConversationSlots.extract_from_user_text(user_text),
+    )
+
+    assert contract.turn_complexity == "multi_goal"
+    assert [step["goal"] for step in contract.goal_steps] == [
+        "resolve_vehicle",
+        "recommend_products",
+        "compare_products",
+    ]
+    assert "get_my_cars_tool" in contract.allowed_tools
+    assert "get_products_recommendations_tool" in contract.allowed_tools
+    assert "tire_size" in contract.produced_slots
+    assert contract.to_dict()["turn_complexity"] == "multi_goal"
+    assert contract.to_dict()["goal_steps"][0]["goal"] == "resolve_vehicle"
+    assert "product_card_without_size" in decision.forbidden_behaviors
+
+    violations = response_contract_violations(
+        template="product",
+        called_tools=["get_my_cars_tool", "get_products_recommendations_tool"],
+        event_data={"products": [{"productName": "키너지"}]},
+        source_domain="discovery",
+        contract=contract,
+    )
+
+    assert not any(violation["type"] == "unexpected_tool_for_contract" for violation in violations)
+    assert hard_contract_violations(violations) == []
+
+
+def test_simple_all_weather_recommendation_does_not_gain_vehicle_goal() -> None:
+    user_text = "올웨더 타이어 추천해줘"
+    frame = build_discovery_intent_frame(user_text)
+    tool_plan = plan_discovery_tools(frame)
+    decision = decide_discovery_response(frame)
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=decision,
+    )
+
+    assert contract.turn_complexity == "simple"
+    assert contract.goal_steps == ()
+    assert "get_my_cars_tool" not in contract.allowed_tools
+    assert tool_plan.allowed_tools == ("get_products_recommendations_tool",)
+
+
+def test_multi_goal_metadata_covers_store_size_and_order_status_pairs() -> None:
+    store_frame = build_transaction_intent_frame("정자점 야간정비 가능?", known_slots={"shop_name": "정자점"})
+    store_contract = build_turn_contract(
+        user_text="정자점 야간정비 가능?",
+        intent_frame=store_frame,
+        tool_plan=plan_transaction_tools(store_frame),
+        response_decision=decide_transaction_response(
+            intent=store_frame.intent,
+            user_text="정자점 야간정비 가능?",
+            known_slots=dict(store_frame.known_slots),
+        ),
+    )
+    assert [step["goal"] for step in store_contract.goal_steps] == ["resolve_store", "answer_store_attribute"]
+    assert "get_store_list_tool" in store_contract.allowed_tools
+    assert "get_store_detail_tool" in store_contract.allowed_tools
+
+    size_frame = build_discovery_intent_frame("벤투스 S2 AS 가격 알려줘", known_slots={"product_name": "Ventus S2 AS"})
+    size_contract = build_turn_contract(
+        user_text="벤투스 S2 AS 가격 알려줘",
+        intent_frame=size_frame,
+        tool_plan=ToolPlan(allowed_tools=("search_product_tool",), required_slots=("tire_size",)),
+        response_decision=ResponseDecision.clarify("tire_size"),
+    )
+    assert [step["goal"] for step in size_contract.goal_steps] == ["resolve_tire_size", "resolve_product"]
+    assert "search_product_tool" in size_contract.allowed_tools
+
+    order_frame = build_transaction_intent_frame("주문 취소했는데 카드사 환불 처리 언제됨?", known_slots={})
+    order_contract = build_turn_contract(
+        user_text="주문 취소했는데 카드사 환불 처리 언제됨?",
+        intent_frame=order_frame,
+        tool_plan=plan_transaction_tools(order_frame),
+        response_decision=decide_transaction_response(
+            intent=order_frame.intent,
+            user_text="주문 취소했는데 카드사 환불 처리 언제됨?",
+            known_slots=dict(order_frame.known_slots),
+        ),
+    )
+    assert [step["goal"] for step in order_contract.goal_steps] == ["resolve_order", "answer_order_status"]
+    assert "get_orders_of_user_tool" in order_contract.allowed_tools
+    assert "get_order_status_tool" in order_contract.allowed_tools
+
+
 def test_recommendation_tool_applies_discovery_policy_patch(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict = {}
 
@@ -16254,6 +16352,9 @@ def test_ambiguous_store_attribute_candidates_carry_pending_selection_state() ->
     assert pending["original_user_text"] == "야간정비도 가능한가요? 티스테이션 정자점"
     assert pending["action_payload"]["attribute_text"] == "야간정비"
     assert pending["candidate_stores"][0]["shop_id"] == "F10001"
+    assert pending["turn_complexity"] == "multi_goal"
+    assert [step["goal"] for step in pending["goal_steps"]] == ["resolve_store", "answer_store_attribute"]
+    assert pending["pending_goal"] == "answer_store_attribute"
 
 
 def test_store_selection_resumes_pending_attribute_action_from_location_metadata() -> None:
