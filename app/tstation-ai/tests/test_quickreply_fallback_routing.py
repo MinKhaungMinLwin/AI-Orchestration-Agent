@@ -15566,6 +15566,17 @@ def test_store_attribute_inquiry_router_fields_handle_store_name_after_attribute
     assert "정자점의 야간정비 가능 여부" in event["data"]["assistantResponse"]
 
 
+def test_store_attribute_inquiry_cross_domain_plan_does_not_override_router_to_support() -> None:
+    plan = plan_cross_domain_turn("야간정비도 가능한가요? 티스테이션 정자점", known_slots={})
+
+    assert plan.primary_domain == PolicyDomain.TRANSACTION
+    assert [task.intent for task in plan.subtasks] == [
+        "store_attribute_inquiry",
+        "store_attribute_contact_notice",
+    ]
+    assert plan.response_strategy == "transaction_store_info_then_attribute_notice"
+
+
 def test_store_attribute_inquiry_checks_service_codes_before_answering() -> None:
     event = _store_attribute_inquiry_event(
         "정자점 얼라인먼트 가능해?",

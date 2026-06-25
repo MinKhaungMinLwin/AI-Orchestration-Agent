@@ -321,6 +321,25 @@ def plan_cross_domain_turn(user_text: str, *, known_slots: dict[str, Any] | None
             response_strategy="transaction_store_info_then_attribute_notice",
         )
 
+    if needs_store_service_availability and (has_current_store or carried_store_name) and not needs_stock_or_booking and not needs_price:
+        return CrossDomainPlan(
+            primary_domain=PolicyDomain.TRANSACTION,
+            subtasks=(
+                DomainSubtask(
+                    domain=PolicyDomain.TRANSACTION,
+                    intent="store_attribute_inquiry",
+                    reason="특정 매장 문맥이 있는 서비스/운영 조건 문의는 매장 기본정보 조회 후 확인 가능 여부를 안내함",
+                    required_slots=(),
+                ),
+                DomainSubtask(
+                    domain=PolicyDomain.SUPPORT,
+                    intent="store_attribute_contact_notice",
+                    reason="tool 결과로 단정할 수 없는 속성은 매장 직접 확인 안내가 필요함",
+                ),
+            ),
+            response_strategy="transaction_store_info_then_attribute_notice",
+        )
+
     if needs_store_service_availability and not needs_stock_or_booking and not needs_price:
         return CrossDomainPlan(
             primary_domain=PolicyDomain.SUPPORT,
