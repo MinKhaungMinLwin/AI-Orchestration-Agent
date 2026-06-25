@@ -28,6 +28,10 @@ from services.tstation.common.tstation_be_client import set_tstation_origin_host
 from services.tstation.source_filter import _ORDER_FIELDS_BASE
 from services.tstation.template_mapper import _safe_service_unsized_policy_response
 from services.tstation.agents.b_discovery_agent import tools as discovery_tools
+from services.tstation.agents.b_discovery_agent.agent import (
+    DISCOVERY_AGENT_SYSTEM_PROMPT_TEMPLATE,
+    DISCOVERY_SEARCH_SYSTEM_PROMPT_TEMPLATE,
+)
 from services.tstation.agents.base_agent import (
     _build_registered_vehicle_staggered_tire_event,
     _is_staggered_registered_vehicle,
@@ -323,6 +327,8 @@ from services.tstation.chat import (
     MultiAgentDomain,
     StreamingMultiAgentCoordinator,
     TStationChatServiceV2,
+    prompt_router_multi,
+    prompt_router_slim,
 )
 from schemas.tstation.chat_message import ChatMessageRequest
 from services.tstation.agents.c_transaction_agent.tools import _apply_store_preview_policy_patch
@@ -1466,6 +1472,31 @@ def test_oe_replacement_query_is_detected() -> None:
     assert _is_oe_replacement_equivalent_query("RE 상품으로 교체하면 돼?")
     assert not _is_oe_replacement_equivalent_query("requesting tire recommendation following tire feature explanation")
     assert not _is_oe_replacement_equivalent_query("Current Time: Monday")
+
+
+def test_competitor_counterpart_guidance_lives_in_llm_prompt_not_regex_guard() -> None:
+    for prompt in (DISCOVERY_AGENT_SYSTEM_PROMPT_TEMPLATE, DISCOVERY_SEARCH_SYSTEM_PROMPT_TEMPLATE):
+        assert "COMPETITOR PRODUCT COUNTERPART GUIDANCE" in prompt
+        assert "Do NOT call tools for the initial counterpart guidance answer" in prompt
+        assert "Do NOT ask for vehicle or tire size" in prompt
+        assert "공식 대응 상품이나 동일 성능 제품" in prompt
+        assert "키너지 4S2를 검색해드릴까요?" in prompt
+
+
+def test_router_prompt_classifies_competitor_counterpart_as_discovery_guidance() -> None:
+    for prompt in (prompt_router_multi(), prompt_router_slim()):
+        assert "competitor_counterpart_guidance" in prompt
+        assert "DISCOVERY" in prompt
+        assert "discovery_search" in prompt
+        assert "vehicle/size recommendation" in prompt
+
+
+def test_competitor_counterpart_guidance_does_not_hijack_plain_competitor_search() -> None:
+    frame = build_discovery_intent_frame("미쉐린 크로스클라이밋2 검색해줘")
+    plan = plan_discovery_tools(frame)
+
+    assert plan.preferred_tool in {"search_product_tool", "get_products_recommendations_tool"}
+    assert plan.allowed_tools
 
 
 def test_order_history_reorder_query_is_not_oe_replacement() -> None:
