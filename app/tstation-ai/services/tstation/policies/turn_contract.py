@@ -8,13 +8,6 @@ from typing import Any, Mapping
 
 from services.tstation.policies.cross_domain_policy import CrossDomainPlan
 from services.tstation.policies.intent_frame import IntentFrame
-from services.tstation.policies.multi_goal_policy import (
-    allowed_tools_from_goal_steps,
-    build_goal_steps,
-    produced_slots_for_called_tools,
-    produced_slots_from_goal_steps,
-    turn_complexity,
-)
 from services.tstation.policies.resolved_context import build_resolved_turn_context
 from services.tstation.policies.response_decision import ResponseDecision, ToolPlan
 
@@ -197,9 +190,6 @@ class TurnContract:
     action_mode: str = "unspecified"
     context_state: str = "dormant"
     resume_source: str = "none"
-    turn_complexity: str = "simple"
-    goal_steps: tuple[Mapping[str, Any], ...] = ()
-    produced_slots: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -233,9 +223,6 @@ class TurnContract:
             "action_mode": self.action_mode,
             "context_state": self.context_state,
             "resume_source": self.resume_source,
-            "turn_complexity": self.turn_complexity,
-            "goal_steps": [dict(step) for step in self.goal_steps],
-            "produced_slots": list(self.produced_slots),
         }
 
 
@@ -410,18 +397,6 @@ def build_turn_contract(
         ),
     )
     required_slots = _filter_satisfied_required_slots(required_slots, known_slots)
-    goal_steps = build_goal_steps(
-        user_text=user_text,
-        domain=domain,
-        intent=intent,
-        sub_intent=sub_intent,
-        known_slots=known_slots,
-        required_slots=required_slots,
-        execution_plan=execution_plan,
-        tool_plan_metadata=tool_plan_metadata if isinstance(tool_plan_metadata, Mapping) else {},
-        response_metadata=response_metadata if isinstance(response_metadata, Mapping) else {},
-    )
-    produced_slots = produced_slots_from_goal_steps(goal_steps)
     resolvable_required_slots = _resolvable_required_slots(required_slots, cross_domain_plan, known_slots)
     blocking_required_slots = _blocking_required_slots(
         user_text,
@@ -432,8 +407,6 @@ def build_turn_contract(
     )
     allowed_tools = tuple(tool_plan.allowed_tools) if tool_plan is not None else ()
     forbidden_tools = tuple(tool_plan.forbidden_tools) if tool_plan is not None else ()
-    if goal_steps:
-        allowed_tools = _merge_tuple(allowed_tools, allowed_tools_from_goal_steps(goal_steps))
     if planner_intent == "quick_order_execute" and _has_quick_order_execute_slots(known_slots):
         allowed_tools = _merge_tuple(allowed_tools, ("quick_order_tool",))
         forbidden_tools = tuple(tool for tool in forbidden_tools if tool != "quick_order_tool")
@@ -570,9 +543,6 @@ def build_turn_contract(
         action_mode=action_mode,
         context_state=context_state,
         resume_source=resume_source,
-        turn_complexity=turn_complexity(goal_steps),
-        goal_steps=goal_steps,
-        produced_slots=produced_slots,
     )
 
 
@@ -1134,14 +1104,6 @@ def _effective_forbidden_behaviors(
     forbidden_behaviors: list[Any] | tuple[Any, ...],
 ) -> tuple[str, ...]:
     behaviors = tuple(str(behavior) for behavior in forbidden_behaviors)
-    called_tools = tuple(str(tool) for tool in tuple(event.get("called_tools") or ()) if str(tool).strip())
-    called_tool_produced_slots = produced_slots_for_called_tools(contract.goal_steps, called_tools)
-    if "tire_size" in called_tool_produced_slots:
-        behaviors = tuple(
-            behavior
-            for behavior in behaviors
-            if behavior not in {"product_card_without_size", "price_without_size"}
-        )
     if _is_sized_discovery_product_source_event(event):
         behaviors = tuple(
             behavior
