@@ -1729,7 +1729,7 @@ def _confirmed_size_line(rows: list[dict]) -> str:
     size_list = _format_confirmed_size_list(rows)
     if not size_list:
         return ""
-    return f"검색 결과에서 확인된 사이즈: {size_list}"
+    return f"사이즈: {size_list}"
 
 
 def _map_product_search_size_summary(tool_data_list: list[dict]) -> dict | None:
@@ -2308,7 +2308,6 @@ def _product_metric_comparison_policy_response(tool_data_list: list[dict]) -> st
     grouped = _collect_product_comparison_rows(tool_data_list)
     if not grouped:
         return ""
-    include_confirmed_sizes = not _current_turn_has_explicit_tire_size()
 
     ranked: list[tuple[str, float | None, str]] = []
     for name, rows in grouped.items():
@@ -2352,12 +2351,7 @@ def _product_metric_comparison_policy_response(tool_data_list: list[dict]) -> st
             lines.append("비교 대상의 수명/마일리지 지표가 충분하지 않아요.")
 
     for name, _, display in ranked[:6]:
-        line = f"- {name}: {display}"
-        if include_confirmed_sizes:
-            size_line = _confirmed_size_line(grouped.get(name, []))
-            if size_line:
-                line = f"{line} / {size_line}"
-        lines.append(line)
+        lines.append(f"- {name}: {display}")
 
     lines.append("")
     if metric == "fuel_efficiency":
