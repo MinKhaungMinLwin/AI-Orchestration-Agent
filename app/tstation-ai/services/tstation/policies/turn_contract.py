@@ -22,6 +22,7 @@ _HIGH_RISK_INTENTS = frozenset({
     "coupon_pattern_applicability",
     "stock_store_search",
     "store_schedule",
+    "open_store_search",
     "quick_order_reservation",
     "quick_order_execute",
     "inventory_availability",

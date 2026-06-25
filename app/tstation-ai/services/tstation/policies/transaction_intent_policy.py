@@ -39,6 +39,12 @@ _STORE_VISIT_ADVISORY_RE = re.compile(
     r"(?:문\s*열|영업|운영|쉬|휴무|열어).{0,20}(?:일요일|공휴일|휴무|휴일)",
     re.IGNORECASE,
 )
+_OPEN_STORE_FILTER_RE = re.compile(
+    r"(?=.*(?:매장|지점|티스테이션|더타이어샵|곳))"
+    r"(?=.*(?:토요일|일요일|주말|공휴일|휴일|휴무))"
+    r"(?=.*(?:문\s*열|영업|운영|열어|여는|여나|하나|하는|가능))",
+    re.IGNORECASE,
+)
 _RESERVATION_STORE_REF_RE = re.compile(
     r"예약(?:한|하신)?\s*(?:매장|지점|곳)|내\s*예약\s*(?:매장|지점|곳)|예약\s*매장|예약\s*지점",
     re.IGNORECASE,
@@ -163,7 +169,7 @@ _KOREAN_RESULT_LIMIT_RE = re.compile(
 )
 _KNOWN_UNVERIFIED_STORE_NAMES = frozenset({"강남점", "티스테이션 강남점"})
 _REGION_HINT_RE = re.compile(
-    r"(서울|서초|강남|판교|분당|파주|강릉|부산|해운대|광교|성남|오목천|동광주|송파|한남|"
+    r"(서울|서초|강남|마포|판교|분당|파주|강릉|부산|해운대|광교|성남|오목천|동광주|송파|한남|"
     r"청량리|인천|하남|청주|제주|서귀포)"
 )
 _PRODUCT_HINT_RE = re.compile(
@@ -450,6 +456,13 @@ def build_transaction_intent_frame(
         and not current_price
         and not current_purchase
     )
+    current_open_store_filter = bool(
+        current_store_visit_advisory
+        and _OPEN_STORE_FILTER_RE.search(text)
+        and not current_store_name
+        and (current_region or _NEARBY_RE.search(text))
+        and not current_has_product
+    )
     current_maintenance_addon_with_tire = bool(
         _TIRE_SERVICE_RE.search(text)
         and _MAINTENANCE_ADDON_SERVICE_RE.search(text)
@@ -692,6 +705,10 @@ def build_transaction_intent_frame(
         intent = "store_service_availability"
         sub_intent = "store_service_availability"
         entities["service_type"] = "store_service_availability"
+    elif current_open_store_filter:
+        intent = "open_store_search"
+        sub_intent = "open_store_filter"
+        entities["open_store_filter"] = True
     elif current_store_visit_advisory and (store_name or has_location):
         intent = "store_visit_advisory"
         sub_intent = "store_visit_timing"
@@ -790,6 +807,9 @@ def build_transaction_intent_frame(
     if intent == "store_service_availability":
         known["goal_type"] = "store_service_availability"
         known["service_type"] = "store_service_availability"
+    if intent == "open_store_search":
+        known["goal_type"] = "store_finder"
+        known["open_only"] = True
     if intent == "reservation_store_info_lookup":
         known["pending_intent"] = "reservation_store_info_lookup"
         known["goal_type"] = "reservation_store_info"
@@ -827,7 +847,17 @@ def build_transaction_intent_frame(
             known["quantity"] = quantity
             known["ord_qty"] = quantity
     if plain_store_search and not current_has_product and not preserve_transaction_product_context:
-        for key in ("goods_no", "product_name", "pattern_name", "tire_size", "quantity", "ord_qty", "store_name"):
+        for key in (
+            "goods_no",
+            "product_name",
+            "pattern_name",
+            "tire_size",
+            "quantity",
+            "ord_qty",
+            "store_name",
+            "shop_name",
+            "shop_id",
+        ):
             known.pop(key, None)
     else:
         known.update({
@@ -932,6 +962,27 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
             forbidden_tools=("transaction_store_preview_tool",),
             required_slots=action_required_slots,
             metadata={"response_intent": "store_schedule", "action": action},
+        )
+
+    if frame.intent == "open_store_search":
+        args = _slot_args(frame, "region", "limit", "requested_cal_day")
+        if frame.known_slots.get("region"):
+            args["region_code"] = frame.known_slots["region"]
+            args["place_query"] = frame.known_slots["region"]
+        args["open_only"] = True
+        return ToolPlan(
+            allowed_tools=(
+                "search_stores_complex_tool",
+                "search_stores_tool",
+                "get_store_list_tool",
+                "get_store_schedule_tool",
+                "get_store_detail_tool",
+            ),
+            preferred_tool="search_stores_complex_tool",
+            tool_args_patch=args,
+            forbidden_tools=("transaction_store_preview_tool",),
+            required_slots=action_required_slots,
+            metadata={"response_intent": "open_store_search", "action": action},
         )
 
     if frame.intent == "store_search":
@@ -1163,6 +1214,8 @@ def _transaction_action(frame: IntentFrame) -> str:
         return "selected_store_schedule"
     if frame.intent == "store_schedule":
         return "selected_store_schedule"
+    if frame.intent == "open_store_search":
+        return "open_store_filter"
     if frame.intent == "service_duration_advisory":
         return "service_duration_advisory"
     if frame.intent == "store_visit_advisory":
@@ -1304,7 +1357,7 @@ def _missing_slots_for_intent(
             missing.append("store")
         if not requested_cal_day or not rsv_hour:
             missing.append("booking_datetime")
-    elif intent in ("store_schedule", "store_search"):
+    elif intent in ("store_schedule", "store_search", "open_store_search"):
         if not has_location:
             missing.append("store")
     return tuple(missing)

@@ -46,6 +46,8 @@ def decide_transaction_response(
         return _decide_stock_store_search(text=text, slots=slots)
     if intent == "store_schedule":
         return _decide_store_schedule(text=text, slots=slots)
+    if intent == "open_store_search":
+        return _decide_open_store_search()
     if intent == "store_visit_advisory":
         return _decide_store_visit_advisory()
     if intent == "service_duration_advisory":
@@ -216,6 +218,20 @@ def _decide_store_visit_advisory() -> ResponseDecision:
             "예약 슬롯 조회가 아니므로 datepick을 제시하지 않는다. 실시간 혼잡도 데이터가 없으면 일반적인 방문 권장 시간과 "
             "매장 직접 확인 CTA를 quickReply로 안내한다."
         ),
+    )
+
+
+def _decide_open_store_search() -> ResponseDecision:
+    return _decision(
+        response_shape_key="open_store_filter",
+        response_shape=ResponseShape.LOCATION,
+        template=TemplateName.LOCATION,
+        forbidden_behaviors=("unfiltered_store_list_for_open_store_filter", "store_visit_advisory_for_open_store_filter"),
+        assistant_guidance=(
+            "지역 기반 요일/휴일 영업 매장 검색은 방문 혼잡도 상담이 아니다. "
+            "지역 후보 매장을 특정 날짜/요일 영업 여부로 필터링하고, 확인된 매장은 location 카드로 안내한다."
+        ),
+        metadata={"open_only": True},
     )
 
 

@@ -168,6 +168,7 @@ from services.tstation.chat import (
     _promote_completed_speculative_router_contract,
     _router_contract_is_high_confidence_comparison,
     _router_contract_is_high_confidence_policy,
+    _router_contract_is_high_confidence_transaction_flow,
     _should_preserve_router_contract,
     _is_product_attribute_lookup_query,
     _should_apply_product_attribute_resolver,
@@ -1175,6 +1176,83 @@ def test_high_confidence_discovery_recommendation_router_contract_blocks_generic
         routing_result=routing,
         candidate_override="cross_domain_policy_route",
         override_reason="router_low_confidence_or_ambiguous",
+    )
+
+
+@pytest.mark.parametrize(
+    ("profile", "execution_plan"),
+    [
+        ("transaction_store", ["check_store_opening_hours"]),
+        ("transaction_order", ["transaction:order_history"]),
+        ("transaction_price_stock", ["transaction:stock_store_search"]),
+    ],
+)
+def test_high_confidence_transaction_router_contract_blocks_heuristic_override(
+    profile: str,
+    execution_plan: list[str],
+) -> None:
+    routing = MultiAgentDomain(
+        reason="high confidence transaction flow",
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        execution_plan=execution_plan,
+        user_behavior="asking for transaction flow",
+        flow="transaction",
+        claim_check_type="none",
+        complaint_scope="none",
+        planner_confidence=0.95,
+        needs_clarification=False,
+        agent_prompt_profile=profile,
+    )
+
+    assert _router_contract_is_high_confidence_transaction_flow(routing)
+    assert _should_preserve_router_contract(
+        routing_result=routing,
+        candidate_override="cross_domain_policy_route",
+        override_reason="heuristic_cross_domain_policy_route",
+    )
+
+
+def test_high_confidence_transaction_router_contract_allows_explicit_product_resolution_override() -> None:
+    routing = MultiAgentDomain(
+        reason="transaction product action",
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        execution_plan=["transaction:stock_store_search"],
+        user_behavior="asking stock for unresolved product",
+        flow="transaction",
+        claim_check_type="none",
+        complaint_scope="none",
+        planner_confidence=0.95,
+        needs_clarification=False,
+        agent_prompt_profile="transaction_price_stock",
+    )
+
+    assert _router_contract_is_high_confidence_transaction_flow(routing)
+    assert not _should_preserve_router_contract(
+        routing_result=routing,
+        candidate_override="p0b_transaction_redirect",
+        override_reason="missing_goods_no_for_explicit_transaction",
+    )
+
+
+def test_low_confidence_transaction_router_contract_does_not_block_heuristic_override() -> None:
+    routing = MultiAgentDomain(
+        reason="low confidence transaction flow",
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        execution_plan=["transaction:store_search"],
+        user_behavior="ambiguous",
+        flow="transaction",
+        claim_check_type="none",
+        complaint_scope="none",
+        planner_confidence=0.62,
+        needs_clarification=False,
+        agent_prompt_profile="transaction_store",
+    )
+
+    assert not _router_contract_is_high_confidence_transaction_flow(routing)
+    assert not _should_preserve_router_contract(
+        routing_result=routing,
+        candidate_override="cross_domain_policy_route",
+        override_reason="heuristic_cross_domain_policy_route",
     )
 
 
@@ -14760,6 +14838,67 @@ def test_store_schedule_question_still_allows_datepick_flow() -> None:
     assert frame.intent == "store_schedule"
     assert tool_plan.preferred_tool == "get_store_schedule_tool"
     assert response_decision.template == TemplateName.DATE_PICK
+
+
+def test_region_open_store_filter_does_not_become_visit_advisory() -> None:
+    user_text = "마포구 주변에 일요일에도 영업하는 매장 있나요?"
+    frame = build_transaction_intent_frame(
+        user_text,
+        known_slots={
+            "goods_no": "G000000317729",
+            "product_name": "벤투스 S2 AS",
+            "shop_name": "티스테이션 분당정자점",
+        },
+    )
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text=user_text,
+        known_slots=dict(frame.known_slots),
+    )
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=response_decision,
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["check_store_opening_hours"],
+            referred_object_status="missing",
+            referred_object_type="store",
+            needs_clarification=False,
+        ),
+    )
+
+    assert frame.intent == "open_store_search"
+    assert frame.sub_intent == "open_store_filter"
+    assert frame.known_slots["region"] == "마포"
+    assert frame.known_slots["open_only"] is True
+    assert "goods_no" not in frame.known_slots
+    assert "product_name" not in frame.known_slots
+    assert "shop_name" not in frame.known_slots
+    assert tool_plan.preferred_tool == "search_stores_complex_tool"
+    assert "search_stores_complex_tool" in tool_plan.allowed_tools
+    assert "get_store_schedule_tool" in tool_plan.allowed_tools
+    assert "get_store_schedule_tool" not in tool_plan.forbidden_tools
+    assert response_decision.template == TemplateName.LOCATION
+    assert response_decision.metadata["response_shape_key"] == "open_store_filter"
+    assert contract.intent == "open_store_search"
+    assert "search_stores_complex_tool" in contract.allowed_tools
+    assert "get_store_schedule_tool" in contract.allowed_tools
+    assert "get_store_schedule_tool" not in contract.forbidden_tools
+    assert "transaction_store_preview_tool" in contract.forbidden_tools
+
+
+def test_plain_region_store_search_still_uses_store_search() -> None:
+    user_text = "강남 주변 매장 알려줘"
+    frame = build_transaction_intent_frame(user_text, known_slots={})
+    tool_plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "store_search"
+    assert frame.known_slots["region"] == "강남"
+    assert tool_plan.preferred_tool == "search_stores_tool"
+    assert "get_store_schedule_tool" in tool_plan.forbidden_tools
 
 
 @pytest.mark.parametrize(

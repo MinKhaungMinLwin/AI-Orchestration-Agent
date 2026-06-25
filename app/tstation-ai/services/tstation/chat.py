@@ -871,6 +871,39 @@ def _router_contract_is_high_confidence_event_content(routing_result: MultiAgent
     )
 
 
+def _router_contract_is_high_confidence_transaction_flow(routing_result: MultiAgentDomain | None) -> bool:
+    if routing_result is None:
+        return False
+    if bool(getattr(routing_result, "needs_clarification", False)):
+        return False
+    if float(getattr(routing_result, "planner_confidence", 0.0) or 0.0) < _ROUTER_OVERRIDE_PRESERVE_CONFIDENCE:
+        return False
+    domains = list(getattr(routing_result, "domains", []) or [])
+    if domains != [MultiAgentDomain.Domain.TRANSACTION]:
+        return False
+    profile = getattr(routing_result, "agent_prompt_profile", None)
+    if profile in (
+        AgentPromptProfile.TRANSACTION_STORE,
+        AgentPromptProfile.TRANSACTION_ORDER,
+        AgentPromptProfile.TRANSACTION_PRICE_STOCK,
+    ):
+        return True
+    plan_text = " ".join(str(item or "").strip().lower() for item in (getattr(routing_result, "execution_plan", None) or ()))
+    return any(
+        token in plan_text
+        for token in (
+            "store",
+            "stock",
+            "inventory",
+            "reservation",
+            "order",
+            "opening_hours",
+            "schedule",
+            "transaction:",
+        )
+    )
+
+
 def _explicit_current_turn_override_reason(
     *,
     user_text: str,
@@ -907,13 +940,22 @@ def _should_preserve_router_contract(
     is_high_confidence_comparison = _router_contract_is_high_confidence_comparison(routing_result)
     is_high_confidence_event_content = _router_contract_is_high_confidence_event_content(routing_result)
     is_high_confidence_protected_action = _router_contract_is_high_confidence_protected_action(routing_result)
+    is_high_confidence_transaction_flow = _router_contract_is_high_confidence_transaction_flow(routing_result)
     if not (
         is_high_confidence_comparison
         or is_high_confidence_event_content
         or is_high_confidence_protected_action
+        or is_high_confidence_transaction_flow
         or _router_contract_is_high_confidence_policy(routing_result)
     ):
         return False
+    if is_high_confidence_transaction_flow and override_reason in {
+        "router_low_confidence_or_ambiguous",
+        "heuristic_cross_domain_policy_route",
+        None,
+        "",
+    }:
+        return True
     if is_high_confidence_event_content and override_reason in {
         "missing_goods_no_for_explicit_transaction",
         "explicit_current_turn_price_lookup",
@@ -21545,9 +21587,10 @@ class TStationChatServiceV2:
                 logger.info(
                     "[SLOTS] Cleared stale store-search context for general turn: %s",
                     cleared_stale_store_context,
-                )
+            )
             preserve_router_policy_contract = _router_contract_is_high_confidence_policy(routing_result)
             preserve_router_event_contract = _router_contract_is_high_confidence_event_content(routing_result)
+            preserve_router_transaction_contract = _router_contract_is_high_confidence_transaction_flow(routing_result)
             router_requires_reference_clarification = bool(
                 routing_result is not None
                 and getattr(routing_result, "needs_clarification", False)
@@ -21564,15 +21607,16 @@ class TStationChatServiceV2:
                 "pending_check_object_type": merged_slots.pending_check_object_type,
                 "pending_check_object_value": merged_slots.pending_check_object_value,
             }
-            if preserve_router_policy_contract or preserve_router_event_contract:
+            if preserve_router_policy_contract or preserve_router_event_contract or preserve_router_transaction_contract:
                 planned_domains = []
                 has_coupon_pattern_plan = False
                 logger.info(
                     "[POLICY][cross-domain] skipped heuristic plan for high-confidence router contract: "
-                    "domains=%s policy_intent=%s profile=%s",
+                    "domains=%s policy_intent=%s profile=%s transaction=%s",
                     [domain.value for domain in list(getattr(routing_result, "domains", []) or [])],
                     getattr(routing_result, "policy_intent", None),
                     getattr(routing_result, "agent_prompt_profile", None),
+                    preserve_router_transaction_contract,
                 )
             else:
                 cross_domain_plan = plan_cross_domain_turn(last_user_text, known_slots=known_slots)
@@ -21638,14 +21682,16 @@ class TStationChatServiceV2:
                     getattr(routing_result, "referred_object_type", None),
                 )
             if should_apply_cross_domain_route:
-                cross_domain_override_reason = (
-                    explicit_override_reason
-                    or "router_low_confidence_or_ambiguous"
-                    if routing_result is None
+                if explicit_override_reason:
+                    cross_domain_override_reason = explicit_override_reason
+                elif (
+                    routing_result is None
                     or float(getattr(routing_result, "planner_confidence", 0.0) or 0.0) < 0.8
                     or bool(getattr(routing_result, "needs_clarification", False))
-                    else "missing_goods_no_for_explicit_transaction"
-                )
+                ):
+                    cross_domain_override_reason = "router_low_confidence_or_ambiguous"
+                else:
+                    cross_domain_override_reason = "heuristic_cross_domain_policy_route"
                 if _should_preserve_router_contract(
                     routing_result=routing_result,
                     candidate_override="cross_domain_policy_route",
