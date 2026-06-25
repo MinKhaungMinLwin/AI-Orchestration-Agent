@@ -364,6 +364,7 @@ from services.tstation.policies.pickup_service_gate import deterministic_pickup_
 from services.tstation.policies.store_service_gate import (
     decide_store_service_gate,
     extract_store_attribute_inquiry,
+    extract_valid_store_name,
     unverifiable_store_preference_labels,
 )
 from schemas.tstation.slots import CanonicalSlotState, ComparisonContext, ConversationSlots, RecommendationContext
@@ -16327,6 +16328,46 @@ def test_store_service_availability_is_support_advisory_not_store_schedule() -> 
     assert event["data"]["metadata"]["store_search_suppressed"] is False
     assert event["data"]["metadata"]["carried_store_context"] == "모란점"
     assert "datepick" not in json.dumps(event, ensure_ascii=False)
+
+
+def test_product_recommendation_comparison_text_does_not_create_store_slot() -> None:
+    user_text = "내 차에 적합한 올웨더 상품 추천해줘. 그리고 추천되는 상품들 장단점 비교해주고"
+    slots = ConversationSlots.extract_from_user_text(user_text)
+    resolved_context = build_resolved_turn_context(user_text=user_text, slots=slots.model_dump(exclude_none=True))
+    transaction_frame = build_transaction_intent_frame(user_text, known_slots=slots.model_dump(exclude_none=True))
+    cross_domain_plan = plan_cross_domain_turn(user_text, known_slots=slots.model_dump(exclude_none=True))
+
+    assert slots.goal_type == "product_recommend"
+    assert slots.shop_name is None
+    assert "shop_name" not in transaction_frame.known_slots
+    assert transaction_frame.intent != "store_attribute_inquiry"
+    assert all(task.intent != "store_attribute_inquiry" for task in cross_domain_plan.subtasks)
+    assert resolved_context.to_dict()["store"]["shop_name"] == {"value": None, "source": "missing"}
+    assert extract_valid_store_name(user_text) is None
+
+
+def test_generic_pros_cons_comparison_followup_is_not_store_selection() -> None:
+    user_text = "장단점 비교해줘"
+    slots = ConversationSlots.extract_from_user_text(user_text)
+    transaction_frame = build_transaction_intent_frame(user_text, known_slots=slots.model_dump(exclude_none=True))
+
+    assert slots.shop_name is None
+    assert slots.goal_type is None
+    assert transaction_frame.intent != "store_attribute_inquiry"
+    assert extract_store_attribute_inquiry(user_text) is None
+    assert extract_valid_store_name(user_text) is None
+
+
+def test_store_suffix_validation_keeps_real_store_contexts() -> None:
+    business_hours = ConversationSlots.extract_from_user_text("티스테이션 분당정자점 영업시간 알려줘")
+    stock_lookup = ConversationSlots.extract_from_user_text("한남점 재고 있어?")
+    night_service = ConversationSlots.extract_from_user_text("정자점 야간정비 가능?")
+
+    assert business_hours.shop_name == "분당정자점"
+    assert stock_lookup.shop_name == "한남점"
+    assert stock_lookup.pending_intent == "stock"
+    assert night_service.shop_name == "정자점"
+    assert extract_store_attribute_inquiry("정자점 야간정비 가능?") is not None
 
 
 def test_store_service_availability_followup_uses_carried_store_context_for_attribute_lookup() -> None:

@@ -8,7 +8,7 @@ from typing import Any
 
 from services.tstation.policies.intent_frame import IntentFrame, PolicyDomain
 from services.tstation.policies.response_decision import ToolPlan
-from services.tstation.policies.store_service_gate import extract_store_attribute_inquiry
+from services.tstation.policies.store_service_gate import extract_store_attribute_inquiry, extract_valid_store_name
 
 
 _SIZE_COMPACT_RE = re.compile(r"\b(\d{3})\s*/?\s*(\d)(\d)(?:\3)?\s*R?\s*(\d{2})\b", re.IGNORECASE)
@@ -137,7 +137,6 @@ _ADDON_WITH_RE = re.compile(r"같이|함께|동시|하면서|겸|추가|하고\s
 _RESERVATION_CHANGE_RE = re.compile(r"변경|바꿔|옮겨|미뤄|당겨|취소", re.IGNORECASE)
 _NOON_RE = re.compile(r"12\s*시|점심\s*시간", re.IGNORECASE)
 _NEARBY_RE = re.compile(r"근처|주변|가까운|인근", re.IGNORECASE)
-_STORE_SUFFIX_RE = re.compile(r"([가-힣A-Za-z0-9]+(?:점|매장))")
 _STORE_SEARCH_RE = re.compile(r"매장|지점|티스테이션|더타이어샵|찾아|알려|보여", re.IGNORECASE)
 _FAVORITE_STORE_RE = re.compile(
     r"내\s*단골(?:매장|가게|점)?|단골(?:매장|가게|점)|마이샵|자주\s*가는\s*매장",
@@ -1507,10 +1506,10 @@ def _slot_args(frame: IntentFrame, *keys: str) -> dict[str, Any]:
 
 
 def _extract_store_name(text: str) -> str | None:
-    match = _STORE_SUFFIX_RE.search(text or "")
-    if not match:
+    store_name = extract_valid_store_name(text or "")
+    if not store_name:
         return None
-    return match.group(1)
+    return re.sub(r"^(?:티스테이션|더타이어샵)\s*", "", store_name, flags=re.IGNORECASE).strip()
 
 
 def _extract_product_name(text: str) -> str | None:

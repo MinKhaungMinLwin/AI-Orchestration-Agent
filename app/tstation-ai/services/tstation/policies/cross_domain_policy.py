@@ -12,7 +12,7 @@ import re
 from typing import Any
 
 from services.tstation.policies.intent_frame import PolicyDomain
-from services.tstation.policies.store_service_gate import extract_store_attribute_inquiry
+from services.tstation.policies.store_service_gate import extract_store_attribute_inquiry, extract_valid_store_name
 
 
 _PRODUCT_HINT_RE = re.compile(
@@ -46,7 +46,6 @@ _FAVORITE_STORE_RE = re.compile(
     r"내\s*단골(?:매장|가게|점)?|단골(?:매장|가게|점)|마이샵|자주\s*가는\s*매장",
     re.IGNORECASE,
 )
-_STORE_NAME_RE = re.compile(r"([가-힣A-Za-z0-9]+(?:점|매장))")
 _REGION_HINT_RE = re.compile(
     r"서울|서초|강남|판교|분당|파주|강릉|부산|광교|성남|오목천|동광주|송파|한남|"
     r"청량리|인천|하남|청주|제주|서귀포",
@@ -238,7 +237,7 @@ def plan_cross_domain_turn(user_text: str, *, known_slots: dict[str, Any] | None
         and not _BENEFIT_STACKING_RE.search(text)
     )
     needs_regional_price_policy = bool(_REGIONAL_PRICE_POLICY_RE.search(text))
-    has_current_store = bool(_STORE_NAME_RE.search(text) or _REGION_HINT_RE.search(text))
+    has_current_store = bool(extract_valid_store_name(text) or _REGION_HINT_RE.search(text))
     carried_store_name = str(slots.get("store_name") or slots.get("shop_name") or "").strip()
     store_attribute_inquiry = extract_store_attribute_inquiry(text, store_name=carried_store_name or None)
     needs_store_service_availability = bool(_STORE_SERVICE_AVAILABILITY_RE.search(text))

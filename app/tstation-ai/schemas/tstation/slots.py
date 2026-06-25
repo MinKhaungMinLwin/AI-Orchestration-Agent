@@ -261,6 +261,16 @@ class ConversationSlots(BaseModel):
     ]
     _GOODS_NO_PATTERN: ClassVar[re.Pattern] = re.compile(r"G\d{9,}")
     _SHOP_NAME_PATTERN: ClassVar[re.Pattern] = re.compile(r"([가-힣A-Za-z0-9]+(?:점|매장))")
+    _STORE_MENTION_CONTEXT_PATTERN: ClassVar[re.Pattern] = re.compile(
+        r"티스테이션|더타이어샵|매장|지점|장착점|주소|전화|연락처|영업|운영|휴무|"
+        r"예약|재고|입고|장착|구매|주문|질소|보관|야간\s*(?:정비|서비스|작업)|야간정비|"
+        r"얼라인먼트|휠\s*얼라이먼트|리프트|공휴일|휴일|일요일|토요일|문\s*열",
+        re.IGNORECASE,
+    )
+    _BARE_STORE_NAME_TURN_PATTERN: ClassVar[re.Pattern] = re.compile(
+        r"^\s*(?:티스테이션\s*)?[가-힣A-Za-z0-9]+(?:점|매장)\s*$",
+        re.IGNORECASE,
+    )
     # "10개월"/"10개구" 처럼 "개" 뒤에 한글이 이어지는 경우 quantity 로 오추출되지 않도록
     # negative lookahead 로 차단. "4개", "4개 주세요", "4개." 는 정상 매칭.
     _ORD_QTY_PATTERN: ClassVar[re.Pattern] = re.compile(r"(\d+)\s*개(?![가-힣])")
@@ -691,7 +701,7 @@ class ConversationSlots(BaseModel):
             slots.ord_qty = int(qty_match.group(1))
 
         shop_name_match = cls._SHOP_NAME_PATTERN.search(user_text)
-        if shop_name_match:
+        if shop_name_match and cls.has_valid_store_mention_context(user_text):
             slots.shop_name = shop_name_match.group(1)
 
         # Intent: first matching pattern wins. Only set if a transactional keyword
@@ -814,6 +824,17 @@ class ConversationSlots(BaseModel):
         (`extract_from_user_text`) enforces the priority via the elif chain.
         """
         return any(pattern.search(user_text) for pattern in cls._STORE_FINDER_PATTERNS)
+
+    @classmethod
+    def has_valid_store_mention_context(cls, user_text: str) -> bool:
+        """Return True when a suffix-style store name is supported by store context.
+
+        Bare suffix extraction is intentionally gated: ordinary nouns such as
+        "장단점" can end with "점" but are not store selections inside product
+        recommendation/comparison turns.
+        """
+        text = user_text or ""
+        return bool(cls._BARE_STORE_NAME_TURN_PATTERN.fullmatch(text) or cls._STORE_MENTION_CONTEXT_PATTERN.search(text))
 
     @classmethod
     def _has_preference_hints(cls, user_text: str) -> bool:

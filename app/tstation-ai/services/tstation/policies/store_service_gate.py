@@ -105,8 +105,15 @@ _UNVERIFIABLE_STORE_PREFERENCE_RULES: tuple[tuple[re.Pattern[str], str], ...] = 
     (re.compile(r"숙련도|실력|잘\s*보는|잘하는|정확도|꼼꼼", re.IGNORECASE), "작업 숙련도"),
 )
 _STORE_NAME_RE = re.compile(r"((?:티스테이션\s*)?[가-힣A-Za-z0-9]+(?:점|매장))")
+_STORE_MENTION_CONTEXT_RE = re.compile(
+    r"티스테이션|더타이어샵|매장|지점|장착점|주소|전화|연락처|영업|운영|휴무|"
+    r"예약|재고|입고|장착|구매|주문|질소|보관|야간\s*(?:정비|서비스|작업)|야간정비|"
+    r"얼라인먼트|휠\s*얼라이먼트|리프트|공휴일|휴일|일요일|토요일|문\s*열",
+    re.IGNORECASE,
+)
+_BARE_STORE_NAME_TURN_RE = re.compile(r"^\s*(?:티스테이션\s*)?[가-힣A-Za-z0-9]+(?:점|매장)\s*$", re.IGNORECASE)
 _ATTRIBUTE_QUESTION_RE = re.compile(
-    r"가능\s*해|가능한가|가능(?:하|한)|돼|되(?:나|나요|니|냐)?|있어|있나|있나요|"
+    r"가능\s*해|가능한가|가능(?:하|한)|가능(?:\s*[?!.]|$)|돼|되(?:나|나요|니|냐)?|있어|있나|있나요|"
     r"해\s*줘|해줘|운영\s*해|운영해|잘\s*(?:봐|보|하)",
     re.IGNORECASE,
 )
@@ -120,7 +127,7 @@ _ADJACENT_NON_ATTRIBUTE_RE = re.compile(
 )
 _ATTRIBUTE_SUFFIX_RE = re.compile(
     r"(?:도|은|는|이|가|을|를)?\s*"
-    r"(?:가능\s*해|가능한가|가능(?:하|한)|돼|되(?:나|나요|니|냐)?|있어|있나|있나요|"
+    r"(?:가능\s*해|가능한가|가능(?:하|한)|가능(?:\s*[?!.]|$)|돼|되(?:나|나요|니|냐)?|있어|있나|있나요|"
     r"해\s*줘|해줘|운영\s*해|운영해|잘\s*(?:봐|보|하)).*$",
     re.IGNORECASE,
 )
@@ -142,6 +149,23 @@ def _normalize_store_name(value: str | None) -> str:
     return re.sub(r"^(?:티스테이션|더타이어샵)\s*", "", text, flags=re.IGNORECASE).strip()
 
 
+def has_valid_store_mention_context(text: str) -> bool:
+    """Return True when suffix-style store extraction is supported by store context."""
+    value = text or ""
+    return bool(_BARE_STORE_NAME_TURN_RE.fullmatch(value) or _STORE_MENTION_CONTEXT_RE.search(value))
+
+
+def extract_valid_store_name(text: str) -> str | None:
+    """Extract a store name only when the surrounding text makes it a store mention."""
+    value = text or ""
+    if not has_valid_store_mention_context(value):
+        return None
+    match = _STORE_NAME_RE.search(value)
+    if not match:
+        return None
+    return match.group(1)
+
+
 def extract_store_attribute_inquiry(
     text: str,
     *,
@@ -153,9 +177,9 @@ def extract_store_attribute_inquiry(
         return None
     store_label = _normalize_store_name(store_name)
     if not store_label:
-        match = _STORE_NAME_RE.search(value)
-        if match:
-            store_label = _normalize_store_name(match.group(1))
+        extracted_store_name = extract_valid_store_name(value)
+        if extracted_store_name:
+            store_label = _normalize_store_name(extracted_store_name)
     if not store_label:
         return None
 
