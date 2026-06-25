@@ -4845,6 +4845,17 @@ _OWNED_COUPON_BEST_DISCOUNT_RE = re.compile(
     re.IGNORECASE,
 )
 _ORDER_DIRECT_NO_RE = re.compile(r"\bO[A-Za-z0-9]{8,}\b", re.IGNORECASE)
+_PARTIAL_ORDER_NO_SUFFIX_RE = re.compile(
+    r"(?:주문\s*)?(?P<suffix>\d{3,8})\s*번\s*주문|주문\s*(?:번호)?\s*(?P<suffix2>\d{3,8})\b",
+    re.IGNORECASE,
+)
+_PAYMENT_METHOD_CHANGE_QUERY_RE = re.compile(
+    r"(?:주문|결제).{0,30}결제\s*수단.{0,30}(?:변경|바꾸|무통장|가상\s*계좌|입금)|"
+    r"결제\s*수단.{0,30}(?:변경|바꾸|무통장|가상\s*계좌|입금)|"
+    r"(?:무통장\s*입금|가상\s*계좌).{0,30}(?:변경|바꾸|결제\s*수단)",
+    re.IGNORECASE,
+)
+_PAYMENT_ACCOUNT_INFO_QUERY_RE = re.compile(r"무통장\s*입금\s*기한|가상\s*계좌|입금\s*기한|주문\s*상세.{0,20}결제\s*정보", re.IGNORECASE)
 _ORDER_ARRIVAL_STATUS_RE = re.compile(
     r"(?:주문|상품|타이어|그거|그\s*주문|해당\s*건|첫\s*번째|1\s*번|최근|배송|도착|매장|그\s*이후)"
     r".{0,60}(?:매장\s*(?:도착|입고)|배송\s*예정|도착\s*(?:예정|상태|일|했|해)|언제\s*(?:와|오|도착)|"
@@ -8815,6 +8826,33 @@ def _order_row_value(row: dict, *keys: str) -> str:
     return ""
 
 
+def _partial_order_no_suffix(user_text: str | None) -> str:
+    match = _PARTIAL_ORDER_NO_SUFFIX_RE.search(user_text or "")
+    if not match:
+        return ""
+    return str(match.group("suffix") or match.group("suffix2") or "").strip()
+
+
+def _order_no_from_row(row: dict) -> str:
+    return _order_row_value(row, "ord_no", "ordNo", "order_no", "orderNo").upper()
+
+
+def _select_order_rows_by_number(user_text: str, rows: list[dict]) -> tuple[list[dict], str, str]:
+    direct_match = _ORDER_DIRECT_NO_RE.search(user_text or "")
+    if direct_match:
+        direct_ord_no = direct_match.group(0).upper()
+        matches = [row for row in rows if _order_no_from_row(row) == direct_ord_no]
+        return matches or [{"ord_no": direct_ord_no}], "full_order_no" if matches else "full_order_no_not_found", direct_ord_no
+
+    suffix = _partial_order_no_suffix(user_text)
+    if suffix:
+        matches = [row for row in rows if _order_no_from_row(row).endswith(suffix)]
+        if matches:
+            return matches, "order_no_suffix", suffix
+        return [], "order_no_suffix_not_found", suffix
+    return [], "none", ""
+
+
 def _order_history_tire_rows(orders_result: dict) -> list[dict]:
     rows = []
     for row in _order_rows_from_orders_result(orders_result):
@@ -9000,13 +9038,18 @@ def _resolve_order_row_for_arrival_query(
     messages: list[dict] | None = None,
     orders_result: dict | None = None,
 ) -> dict | None:
-    direct_match = _ORDER_DIRECT_NO_RE.search(user_text or "")
-    direct_ord_no = direct_match.group(0).upper() if direct_match else None
     rows = _order_rows_from_orders_result(orders_result or {}) if orders_result is not None else []
     if not rows and messages is not None:
         rows = _order_rows_from_messages(messages)
-    if direct_ord_no:
-        return next((row for row in rows if str(row.get("ord_no") or "").upper() == direct_ord_no), {"ord_no": direct_ord_no})
+    direct_or_suffix_matches, match_reason, match_value = _select_order_rows_by_number(user_text, rows)
+    if match_reason == "full_order_no":
+        return direct_or_suffix_matches[0]
+    if match_reason == "full_order_no_not_found":
+        return direct_or_suffix_matches[0]
+    if match_reason == "order_no_suffix":
+        return direct_or_suffix_matches[0] if len(direct_or_suffix_matches) == 1 else None
+    if match_reason == "order_no_suffix_not_found":
+        return {"order_no_suffix": match_value, "match_reason": match_reason}
     if not rows:
         return None
 
@@ -9562,6 +9605,78 @@ def _build_order_cancel_status_event(order_status_result: dict, order_row: dict 
             "metadata": {
                 "response_shape_key": "order_cancel_status_summary",
                 "orderCancelStatusLookup": True,
+            },
+        },
+    }
+
+
+def _payment_method_order_selection_event(
+    *,
+    user_text: str,
+    rows: list[dict],
+    match_reason: str,
+    match_value: str,
+) -> dict:
+    is_change = bool(_PAYMENT_METHOD_CHANGE_QUERY_RE.search(user_text or ""))
+    metadata_key = "paymentMethodChangeRequest" if is_change else "paymentAccountInfoLookup"
+    if match_reason == "none":
+        response = (
+            "주문내역 상세에서 결제 정보, 무통장 입금 기한, 가상계좌 정보를 확인해 주세요."
+            if not is_change
+            else "제가 직접 결제수단을 변경해드릴 수는 없어요. 주문내역 상세에서 결제 정보 확인 또는 변경 가능 여부를 확인해 주세요."
+        )
+        quick_replies = [
+            {"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"},
+            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+        ]
+    elif match_reason == "order_no_suffix_not_found":
+        response = f"{match_value}로 끝나는 주문을 찾지 못했어요. 주문내역에서 해당 주문의 결제 정보를 확인해 주세요."
+        quick_replies = [{"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"}]
+    elif len(rows) > 1:
+        response = f"{match_value}로 끝나는 주문이 여러 건 있어요. 주문내역에서 변경하려는 주문을 선택해 주세요."
+        quick_replies = [{"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"}]
+    else:
+        row = rows[0] if rows else {}
+        ord_no = _order_no_from_row(row)
+        goods_nm = _order_row_value(row, "goods_nm", "goodsName")
+        prefix = (
+            "제가 직접 결제수단을 변경해드릴 수는 없어요."
+            if is_change
+            else "무통장 입금 기한이나 가상계좌 정보는 주문 상세에서 확인해 주세요."
+        )
+        detail = f"\n- 주문번호: {ord_no}" if ord_no else ""
+        if goods_nm:
+            detail += f"\n- 상품명: {goods_nm}"
+        response = (
+            f"{prefix}{detail}\n\n"
+            "주문내역 상세에서 결제 정보 확인 또는 변경 가능 여부를 확인해 주세요. "
+            "화면에서 변경이 어렵다면 1:1 문의로 요청해 주세요."
+        )
+        detail_chip = (
+            {"label": "주문 상세 보기", "url": CTAUrls.ORDER_HISTORY_DETAIL.replace("<ord_no>", ord_no), "domain": "TRANSACTION"}
+            if ord_no
+            else {"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"}
+        )
+        quick_replies = [
+            detail_chip,
+            {"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"},
+            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+        ]
+
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+        "assistant_response_source": "code_payment_method_guidance",
+        "data": {
+            "assistantResponse": response,
+            "quickReplies": quick_replies,
+            "predictedDomains": ["TRANSACTION", "SUPPORT"],
+            "metadata": {
+                "response_shape_key": "payment_method_change_request" if is_change else "payment_account_info_lookup",
+                metadata_key: True,
+                "matchReason": match_reason,
+                "matchValue": match_value,
             },
         },
     }
@@ -21620,6 +21735,16 @@ class TStationChatServiceV2:
                 CouponQueryIntent.BEST_DISCOUNT,
                 CouponQueryIntent.PRODUCT_COUPON_ELIGIBILITY,
             }
+            route_coupon_support_intents = {
+                CouponQueryIntent.ISSUE_HOWTO,
+                CouponQueryIntent.POLICY_INFO,
+                CouponQueryIntent.STACKING,
+            }
+            coupon_gate_support_route = (
+                route_coupon_gate_decision is not None
+                and route_coupon_gate_decision.intent in route_coupon_support_intents
+                and route_coupon_gate_decision.confidence >= 0.55
+            )
             coupon_gate_can_override_route = (
                 route_coupon_gate_decision is not None
                 and route_coupon_gate_decision.is_actionable
@@ -21645,6 +21770,29 @@ class TStationChatServiceV2:
                     active_transaction_action_context,
                     route_coupon_gate_decision.intent.value,
                     route_coupon_gate_decision.confidence,
+                )
+
+            if (
+                coupon_gate_support_route
+            ):
+                domains = [MultiAgentDomain.Domain.SUPPORT]
+                routing_result = MultiAgentDomain(
+                    reason=f"coupon_query_gate:{route_coupon_gate_decision.intent.value}",
+                    domains=domains,
+                    execution_plan=[f"support:coupon_{route_coupon_gate_decision.intent.value}"],
+                    user_behavior="coupon policy/how-to support request",
+                    flow="coupon_query_gate_support",
+                    claim_check_type="none",
+                    complaint_scope="none",
+                    agent_prompt_profile=AgentPromptProfile.FULL,
+                )
+                skip_decision = False
+                speculative_classify_future = None
+                logger.info(
+                    "[COUPON_QUERY_GATE][route] support route intent=%s confidence=%.2f session_id=%s",
+                    route_coupon_gate_decision.intent.value,
+                    route_coupon_gate_decision.confidence,
+                    request.session_id,
                 )
 
             if (
@@ -22415,6 +22563,11 @@ class TStationChatServiceV2:
             and routing_result.agent_prompt_profile == AgentPromptProfile.TRANSACTION_COUPON
             and last_user_text
             and _COUPON_ISSUE_INTENT_RE.search(last_user_text)
+            and not (
+                route_coupon_gate_decision is not None
+                and route_coupon_gate_decision.intent
+                in {CouponQueryIntent.ISSUE_HOWTO, CouponQueryIntent.POLICY_INFO, CouponQueryIntent.STACKING}
+            )
             and domains != [MultiAgentDomain.Domain.TRANSACTION]
         ):
             logger.info(
@@ -23773,6 +23926,57 @@ class TStationChatServiceV2:
                 })
 
             return emitted_events, _build_default_benefit_event(events_result, deals_result)
+
+        async def _resolve_payment_method_change_with_code() -> tuple[list[dict], dict] | None:
+            if not (
+                _PAYMENT_METHOD_CHANGE_QUERY_RE.search(user_query or "")
+                or _PAYMENT_ACCOUNT_INFO_QUERY_RE.search(user_query or "")
+            ):
+                return None
+
+            from services.tstation.agents.c_transaction_agent.tools import (
+                get_orders_of_user_tool as _orders_tool,
+            )
+
+            emitted_events: list[dict] = []
+            orders_input: dict[str, Any] = {}
+            emitted_events.append({
+                "type": "status",
+                "status": "tool_start",
+                "tool": "get_orders_of_user_tool",
+                "display_name": "주문 내역 조회 중...",
+                "source_domain": "transaction",
+            })
+            try:
+                raw_orders = await asyncio.to_thread(_orders_tool.invoke, orders_input)
+                orders_result = _tool_result_dict(raw_orders)
+            except Exception as exc:
+                logger.exception("[PAYMENT_METHOD_CHANGE] orders tool failed")
+                orders_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+            _record_code_tool_result("get_orders_of_user_tool", orders_input, orders_result)
+            emitted_events.append({
+                "type": "agent_flow",
+                "agent": "[Order / Delivery AF]",
+                "agent_class": "Transaction Agent",
+                "status": orders_result.get("status", "success"),
+                "source_domain": "transaction",
+            })
+            emitted_events.append({
+                "type": "tool",
+                "input": orders_input,
+                "output": json.dumps(orders_result, ensure_ascii=False),
+                "node": "tools",
+                "tool": "get_orders_of_user_tool",
+                "source_domain": "transaction",
+            })
+            rows = _order_rows_from_orders_result(orders_result)
+            matches, match_reason, match_value = _select_order_rows_by_number(user_query, rows)
+            return emitted_events, _payment_method_order_selection_event(
+                user_text=user_query,
+                rows=matches,
+                match_reason=match_reason,
+                match_value=match_value,
+            )
 
         async def _resolve_order_arrival_status_with_code() -> tuple[list[dict], dict] | None:
             if not _is_order_arrival_status_query(user_query):
@@ -27041,6 +27245,22 @@ class TStationChatServiceV2:
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps(reservation_store_event, ensure_ascii=False)}\n\n"
             assistant_response = str((reservation_store_event.get("data") or {}).get("assistantResponse") or "")
+            if assistant_response:
+                yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[TRANSACTION AGENT]'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
+        payment_method_resolution = await _resolve_payment_method_change_with_code()
+        if payment_method_resolution is not None:
+            code_events, payment_event = payment_method_resolution
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+            for code_event in code_events:
+                yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(payment_event, ensure_ascii=False)}\n\n"
+            assistant_response = str((payment_event.get("data") or {}).get("assistantResponse") or "")
             if assistant_response:
                 yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[TRANSACTION AGENT]'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"

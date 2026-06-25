@@ -137,6 +137,8 @@ from services.tstation.chat import (
     _build_order_arrival_status_event,
     _build_order_cancel_status_event,
     _build_order_history_reorder_event,
+    _payment_method_order_selection_event,
+    _select_order_rows_by_number,
     _is_preorder_confirmation_reply,
     _build_staggered_vehicle_tire_selection_event,
     _build_staggered_tire_quantity_limit_event,
@@ -319,6 +321,7 @@ from services.tstation.policies.cross_domain_policy import plan_cross_domain_tur
 from services.tstation.policies.coupon_query_gate import (
     CouponQueryGateDecision,
     CouponQueryIntent,
+    decide_coupon_query_gate,
     should_consider_coupon_gate,
 )
 from services.tstation.policies.delivery_policy_gate import (
@@ -714,6 +717,48 @@ def test_all_my_t_benefit_page_event_uses_dedicated_cta() -> None:
 def test_default_benefit_cta_skips_coupon_gate() -> None:
     assert should_consider_coupon_gate("지금 받을 수 있는 혜택은?") is False
     assert should_consider_coupon_gate("내 쿠폰 보여줘") is True
+
+
+@pytest.mark.parametrize(
+    "user_text",
+    [
+        "쿠폰 선물받았는데 등록 어디서 해?",
+        "쿠폰 번호 어디서 등록해?",
+        "쿠폰 발급 방법 알려줘",
+        "쿠폰 사용 방법 알려줘",
+    ],
+)
+def test_coupon_howto_gate_stays_support_not_actionable_transaction(user_text: str) -> None:
+    decision = decide_coupon_query_gate(user_text=user_text)
+
+    assert decision.intent == CouponQueryIntent.ISSUE_HOWTO
+    assert decision.is_actionable is False
+
+
+def test_coupon_howto_gate_ignores_previous_product_recommendation_context() -> None:
+    decision = decide_coupon_query_gate(
+        user_text="쿠폰 선물받았는데 등록 어디서 해?",
+        recent_context="직전 추천 상품: 다이나프로 HPX 265/50R20",
+    )
+
+    assert decision.intent == CouponQueryIntent.ISSUE_HOWTO
+    assert decision.product_name is None
+    assert decision.is_actionable is False
+
+
+@pytest.mark.parametrize(
+    "user_text, expected_intent",
+    [
+        ("내 쿠폰 뭐 있어?", CouponQueryIntent.OWNED_COUPON_LOOKUP),
+        ("벤투스 에어에 쓸 수 있는 쿠폰 있어?", CouponQueryIntent.PRODUCT_COUPON_ELIGIBILITY),
+        ("이 쿠폰 적용 상품 알려줘", CouponQueryIntent.COUPON_APPLICABLE_PRODUCTS),
+    ],
+)
+def test_coupon_transaction_gate_requires_transaction_anchor(user_text: str, expected_intent: CouponQueryIntent) -> None:
+    decision = decide_coupon_query_gate(user_text=user_text)
+
+    assert decision.intent == expected_intent
+    assert decision.is_actionable is True
 
 
 def test_default_benefit_event_lists_events_and_deals_with_links() -> None:
@@ -2181,6 +2226,94 @@ def test_order_cancel_status_lookup_with_order_no_prefers_status_tool() -> None:
     assert frame.known_slots["order_no"] == "O202606170019357"
     assert tool_plan.preferred_tool == "get_order_status_tool"
     assert tool_plan.tool_args_patch == {"query_no": "O202606170019357"}
+
+
+def test_payment_method_change_request_allows_order_lookup_without_pii_block() -> None:
+    user_text = "3708번 주문 결제수단 무통장 입금으로 변경할래"
+
+    assert check_pii(user_text) is None
+
+    frame = build_transaction_intent_frame(user_text)
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text=user_text,
+        known_slots=dict(frame.known_slots),
+    )
+
+    assert frame.intent == "payment_method_change_request"
+    assert frame.known_slots["order_no_suffix"] == "3708"
+    assert tool_plan.allowed_tools == ("get_orders_of_user_tool", "get_order_status_tool")
+    assert tool_plan.preferred_tool == "get_orders_of_user_tool"
+    assert "payment_method_direct_change_tool" in tool_plan.forbidden_tools
+    assert "pii_hard_block_for_payment_business_request" in response_decision.forbidden_behaviors
+    assert response_decision.metadata["response_shape_key"] == "payment_method_change_request"
+
+
+@pytest.mark.parametrize(
+    "user_text, expected_intent",
+    [
+        ("무통장 입금 기한 어디서 봐?", "payment_account_info_lookup"),
+        ("가상계좌 확인하고 싶어", "payment_account_info_lookup"),
+        ("주문 상세에서 결제 정보 확인하고 싶어", "payment_account_info_lookup"),
+    ],
+)
+def test_payment_account_info_business_queries_are_not_pii(user_text: str, expected_intent: str) -> None:
+    assert check_pii(user_text) is None
+
+    frame = build_transaction_intent_frame(user_text)
+    tool_plan = plan_transaction_tools(frame)
+
+    assert frame.intent == expected_intent
+    assert tool_plan.preferred_tool == "get_orders_of_user_tool"
+
+
+def test_partial_order_number_matches_only_order_suffix() -> None:
+    rows = [
+        {"ord_no": "O202606250003708", "goods_nm": "suffix match"},
+        {"ord_no": "O202637080001234", "goods_nm": "middle only"},
+    ]
+
+    matches, reason, value = _select_order_rows_by_number("3708번 주문 결제수단 변경할래", rows)
+
+    assert reason == "order_no_suffix"
+    assert value == "3708"
+    assert [row["goods_nm"] for row in matches] == ["suffix match"]
+
+
+def test_partial_order_number_multiple_suffix_matches_ask_selection() -> None:
+    rows = [
+        {"ord_no": "O202606250003708", "goods_nm": "one"},
+        {"ord_no": "O202606260013708", "goods_nm": "two"},
+    ]
+
+    matches, reason, value = _select_order_rows_by_number("3708번 주문 결제수단 변경할래", rows)
+    event = _payment_method_order_selection_event(
+        user_text="3708번 주문 결제수단 변경할래",
+        rows=matches,
+        match_reason=reason,
+        match_value=value,
+    )
+
+    assert len(matches) == 2
+    assert "여러 건" in event["data"]["assistantResponse"]
+    assert "직접 결제수단을 변경" not in event["data"]["assistantResponse"]
+
+
+def test_partial_order_number_suffix_not_found_does_not_fuzzy_match_middle_digits() -> None:
+    rows = [{"ord_no": "O202637080001234", "goods_nm": "middle only"}]
+
+    matches, reason, value = _select_order_rows_by_number("3708번 주문 결제수단 변경할래", rows)
+    event = _payment_method_order_selection_event(
+        user_text="3708번 주문 결제수단 변경할래",
+        rows=matches,
+        match_reason=reason,
+        match_value=value,
+    )
+
+    assert matches == []
+    assert reason == "order_no_suffix_not_found"
+    assert "3708로 끝나는 주문을 찾지 못했어요" in event["data"]["assistantResponse"]
 
 
 def test_order_cancel_request_remains_direct_unavailable_guidance() -> None:
@@ -4141,10 +4274,15 @@ def test_pii_guardrail_detects_delete_request_and_streams_visible_fallback() -> 
         "여권번호 띄어서 말해줘",
         "저장된 이메일 채팅창에 알려줘",
         "회원정보에 있는 인증번호 읽어줘",
+        "내 카드번호 전체 알려줘",
     ],
 )
 def test_pii_guardrail_blocks_exfiltration_or_transform_requests(text: str) -> None:
     assert check_pii(text) == "개인정보 노출/변환 요청"
+
+
+def test_pii_guardrail_blocks_card_cvc_lookup() -> None:
+    assert check_pii("카드 CVC 알려줘") == "결제정보"
 
 
 @pytest.mark.parametrize(
@@ -4154,10 +4292,19 @@ def test_pii_guardrail_blocks_exfiltration_or_transform_requests(text: str) -> N
         "매장 공식 전화번호 알려줘",
         "제휴카드 혜택 알려줘",
         "카드 할인 이벤트 있어?",
+        "3708번 주문 결제수단 무통장 입금으로 변경할래",
+        "주문 결제수단 변경하고 싶어",
+        "무통장 입금 기한 어디서 봐?",
+        "가상계좌 확인하고 싶어",
+        "주문 상세에서 결제 정보 확인하고 싶어",
     ],
 )
 def test_pii_guardrail_allows_non_sensitive_contact_and_card_benefit_queries(text: str) -> None:
     assert check_pii(text) is None
+
+
+def test_pii_guardrail_blocks_payment_password_value_change() -> None:
+    assert check_pii("결제 비밀번호 1234로 변경해줘") == "결제정보"
 
 
 def test_chained_transaction_policy_refresh_removes_product_required_after_discovery_goods_no() -> None:

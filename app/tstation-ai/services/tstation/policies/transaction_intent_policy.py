@@ -144,6 +144,14 @@ _FAVORITE_STORE_RE = re.compile(
     re.IGNORECASE,
 )
 _ORDER_DIRECT_NO_RE = re.compile(r"\bO\d{8,}\b", re.IGNORECASE)
+_ORDER_NO_SUFFIX_RE = re.compile(r"(?:주문\s*)?(?P<suffix>\d{3,8})\s*번\s*주문|주문\s*(?:번호)?\s*(?P<suffix2>\d{3,8})\b", re.IGNORECASE)
+_PAYMENT_METHOD_CHANGE_RE = re.compile(
+    r"(?:주문|결제).{0,30}결제\s*수단.{0,30}(?:변경|바꾸|무통장|가상\s*계좌|입금)|"
+    r"결제\s*수단.{0,30}(?:변경|바꾸|무통장|가상\s*계좌|입금)|"
+    r"(?:무통장\s*입금|가상\s*계좌).{0,30}(?:변경|바꾸|결제\s*수단)",
+    re.IGNORECASE,
+)
+_PAYMENT_ACCOUNT_INFO_RE = re.compile(r"무통장\s*입금\s*기한|가상\s*계좌|입금\s*기한|결제\s*정보", re.IGNORECASE)
 _ORDER_CANCEL_STATUS_LOOKUP_RE = re.compile(
     r"(?:주문|결제|카드)?\s*취소.{0,18}(?:됐|되었|완료|처리|상태|확인|승인|맞지|맞아|됐어|됐나요|됐는지)|"
     r"(?:취소|캔슬)(?:된\s*거|된거|완료|처리|상태|승인).{0,18}(?:맞|확인|됐|됐어|됐나요|알려)|"
@@ -464,6 +472,8 @@ def build_transaction_intent_frame(
         _ORDER_CANCEL_REQUEST_RE.search(text)
         and not current_order_cancel_status_lookup
     )
+    current_payment_method_change = bool(_PAYMENT_METHOD_CHANGE_RE.search(text))
+    current_payment_account_info = bool(_PAYMENT_ACCOUNT_INFO_RE.search(text))
     current_store_arrival_visit_guidance = bool(_STORE_ARRIVAL_NOTIFICATION_VISIT_RE.search(text))
     current_stock = bool(_STOCK_RE.search(text) or _TODAY_RE.search(text))
     current_price = bool(_PRICE_OR_COUPON_RE.search(text))
@@ -687,7 +697,27 @@ def build_transaction_intent_frame(
         "today_install_candidate_scope": today_install_candidate_scope,
     }
 
-    if current_order_cancel_status_lookup:
+    if current_payment_method_change:
+        intent = "payment_method_change_request"
+        sub_intent = "payment_method_change"
+        entities["payment_method_change_request"] = True
+        direct_order_match = _ORDER_DIRECT_NO_RE.search(text)
+        suffix_match = _ORDER_NO_SUFFIX_RE.search(text)
+        if direct_order_match:
+            entities["order_no"] = direct_order_match.group(0).upper()
+        elif suffix_match:
+            entities["order_no_suffix"] = suffix_match.group("suffix") or suffix_match.group("suffix2")
+    elif current_payment_account_info:
+        intent = "payment_account_info_lookup"
+        sub_intent = "payment_account_info"
+        entities["payment_account_info_lookup"] = True
+        direct_order_match = _ORDER_DIRECT_NO_RE.search(text)
+        suffix_match = _ORDER_NO_SUFFIX_RE.search(text)
+        if direct_order_match:
+            entities["order_no"] = direct_order_match.group(0).upper()
+        elif suffix_match:
+            entities["order_no_suffix"] = suffix_match.group("suffix") or suffix_match.group("suffix2")
+    elif current_order_cancel_status_lookup:
         intent = "order_cancel_status_lookup"
         sub_intent = "cancel_status"
         entities["order_cancel_status_lookup"] = True
@@ -879,6 +909,13 @@ def build_transaction_intent_frame(
         known["order_cancel_request"] = True
         if entities.get("order_no"):
             known["order_no"] = entities["order_no"]
+    if intent in {"payment_method_change_request", "payment_account_info_lookup"}:
+        known["pending_intent"] = intent
+        known["goal_type"] = intent
+        if entities.get("order_no"):
+            known["order_no"] = entities["order_no"]
+        if entities.get("order_no_suffix"):
+            known["order_no_suffix"] = entities["order_no_suffix"]
     if intent == "maintenance_history_lookup":
         known["pending_intent"] = "maintenance_history_lookup"
         known["goal_type"] = "maintenance_history_lookup"
@@ -1117,6 +1154,22 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
             ),
             required_slots=action_required_slots,
             metadata={"response_intent": "order_cancel_status_lookup", "action": action},
+        )
+
+    if frame.intent in {"payment_method_change_request", "payment_account_info_lookup"}:
+        return ToolPlan(
+            allowed_tools=("get_orders_of_user_tool", "get_order_status_tool"),
+            preferred_tool="get_orders_of_user_tool",
+            tool_args_patch={},
+            forbidden_tools=(
+                "search_faq_hybrid_tool",
+                "quick_order_tool",
+                "preorder_with_null_required_fields",
+                "payment_method_direct_change_tool",
+                "arbitrary_order_selection",
+            ),
+            required_slots=(),
+            metadata={"response_intent": frame.intent, "action": action},
         )
 
     if frame.intent == "maintenance_history_lookup":

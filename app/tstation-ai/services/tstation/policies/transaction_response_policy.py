@@ -70,6 +70,10 @@ def decide_transaction_response(
         return _decide_order_cancel_status_lookup()
     if intent == "order_cancel_request":
         return _decide_order_cancel_request()
+    if intent == "payment_method_change_request":
+        return _decide_payment_method_change_request()
+    if intent == "payment_account_info_lookup":
+        return _decide_payment_account_info_lookup()
     if intent == "maintenance_history_lookup":
         return _decide_maintenance_history_lookup(slots=slots)
     if intent == "maintenance_history_access_policy":
@@ -364,6 +368,42 @@ def _decide_order_cancel_status_lookup() -> ResponseDecision:
             "이미 취소됐는지 또는 결제/카드 취소가 승인됐는지 확인하는 상태 조회다. 주문번호가 있으면 "
             "get_order_status_tool(query_no=...)을 우선 호출하고, 없으면 get_orders_of_user_tool로 최근 주문을 확인하거나 "
             "주문내역 CTA를 안내한다. '제가 직접 주문을 취소 처리할 수는 없어요' 같은 취소 실행 불가 안내로 정규화하지 않는다."
+        ),
+    )
+
+
+def _decide_payment_method_change_request() -> ResponseDecision:
+    return _decision(
+        response_shape_key="payment_method_change_request",
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        forbidden_behaviors=(
+            "pii_hard_block_for_payment_business_request",
+            "promise_payment_method_changed",
+            "direct_payment_method_change",
+            "pick_arbitrary_order",
+        ),
+        assistant_guidance=(
+            "챗봇이 직접 결제수단을 변경 완료했다고 말하지 않는다. 주문 목록에서 suffix 또는 전체 주문번호로 주문을 확인하고, "
+            "주문 상세에서 결제 정보/변경 가능 여부를 확인하도록 안내한다. 필요 시 주문 상세 보기와 1:1 문의 CTA를 제공한다."
+        ),
+    )
+
+
+def _decide_payment_account_info_lookup() -> ResponseDecision:
+    return _decision(
+        response_shape_key="payment_account_info_lookup",
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        forbidden_behaviors=(
+            "pii_hard_block_for_payment_business_request",
+            "invent_virtual_account",
+            "expose_sensitive_payment_secret",
+            "pick_arbitrary_order",
+        ),
+        assistant_guidance=(
+            "무통장 입금 기한/가상계좌/결제 정보 확인은 주문 상세 기준으로 안내한다. 주문을 특정할 수 있으면 주문 상세 CTA를 제공하고, "
+            "특정할 수 없으면 주문내역 확인 CTA를 제공한다."
         ),
     )
 

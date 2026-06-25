@@ -40,7 +40,12 @@ class CouponQueryGateDecision(BaseModel):
 
     @property
     def is_actionable(self) -> bool:
-        return self.intent not in {CouponQueryIntent.NONE, CouponQueryIntent.POLICY_INFO} and self.confidence >= 0.55
+        return self.intent not in {
+            CouponQueryIntent.NONE,
+            CouponQueryIntent.ISSUE_HOWTO,
+            CouponQueryIntent.POLICY_INFO,
+            CouponQueryIntent.STACKING,
+        } and self.confidence >= 0.55
 
 
 _COUPON_GATE_TRIGGER_RE = re.compile(r"쿠폰|할인\s*쿠폰|할인권|혜택|할인\s*상품|적용\s*상품", re.IGNORECASE)
@@ -62,12 +67,32 @@ _COUPON_APPLICABLE_PRODUCT_ANCHOR_RE = re.compile(
     r"적용\s*가능|적용가능|대상\s*상품|적용\s*상품|사용\s*가능|사용가능",
     re.IGNORECASE,
 )
+_COUPON_ISSUE_HOWTO_RE = re.compile(
+    r"쿠폰.{0,24}(?:선물\s*받|번호|등록|발급|다운로드|받|어디서|어디\s*서|방법|사용\s*방법|쓰는\s*법)|"
+    r"(?:선물\s*받|번호|등록|발급|다운로드|받|어디서|어디\s*서|방법|사용\s*방법|쓰는\s*법).{0,24}쿠폰",
+    re.IGNORECASE,
+)
+_COUPON_STACKING_HOWTO_RE = re.compile(r"쿠폰.{0,24}(?:중복|같이|함께|동시)|(?:중복|같이|함께|동시).{0,24}쿠폰", re.IGNORECASE)
+_OWNED_COUPON_LOOKUP_RE = re.compile(r"(?:내|나의|보유|가지고\s*있는|있는).{0,16}쿠폰|쿠폰.{0,16}(?:뭐\s*있|보여|조회|확인)", re.IGNORECASE)
+_PRODUCT_COUPON_ELIGIBILITY_RE = re.compile(
+    r"(?:벤투스|ventus|다이나프로|dynapro|키너지|kinergy|아이온|ion|옵티모|optimo|미쉐린|michelin|cc2)"
+    r".{0,30}(?:쿠폰|할인권).{0,24}(?:있|돼|되|쓸|사용|적용)|"
+    r"(?:쿠폰|할인권).{0,24}(?:벤투스|ventus|다이나프로|dynapro|키너지|kinergy|아이온|ion|옵티모|optimo|미쉐린|michelin|cc2)",
+    re.IGNORECASE,
+)
+_COUPON_APPLICABLE_PRODUCTS_RE = re.compile(
+    r"(?:이|그|해당)?\s*쿠폰.{0,24}(?:적용\s*상품|대상\s*상품|쓸\s*수\s*있는\s*상품|사용\s*가능\s*상품)|"
+    r"(?:적용\s*상품|대상\s*상품|쓸\s*수\s*있는\s*상품|사용\s*가능\s*상품).{0,24}쿠폰",
+    re.IGNORECASE,
+)
 
 
 def should_consider_coupon_gate(user_text: str | None) -> bool:
     text = user_text or ""
     if _DEFAULT_BENEFIT_RE.search(text):
         return False
+    if _COUPON_ISSUE_HOWTO_RE.search(text) or _COUPON_STACKING_HOWTO_RE.search(text):
+        return True
     if _PRICE_OR_BENEFIT_ALERT_RE.search(text) and not _COUPON_APPLICABLE_PRODUCT_ANCHOR_RE.search(text):
         return False
     return bool(_COUPON_GATE_TRIGGER_RE.search(text))
@@ -99,6 +124,47 @@ def decide_coupon_query_gate(
             product_name=None,
             coupon_hint=None,
             reason="No coupon-related trigger.",
+        )
+    text = user_text or ""
+    if _COUPON_STACKING_HOWTO_RE.search(text):
+        return CouponQueryGateDecision(
+            intent=CouponQueryIntent.STACKING,
+            confidence=0.9,
+            product_name=None,
+            coupon_hint=None,
+            reason="Deterministic coupon stacking policy/how-to query.",
+        )
+    if _COUPON_ISSUE_HOWTO_RE.search(text):
+        return CouponQueryGateDecision(
+            intent=CouponQueryIntent.ISSUE_HOWTO,
+            confidence=0.92,
+            product_name=None,
+            coupon_hint="쿠폰",
+            reason="Deterministic coupon issue/register/use how-to query.",
+        )
+    if _COUPON_APPLICABLE_PRODUCTS_RE.search(text):
+        return CouponQueryGateDecision(
+            intent=CouponQueryIntent.COUPON_APPLICABLE_PRODUCTS,
+            confidence=0.88,
+            product_name=None,
+            coupon_hint="쿠폰",
+            reason="Deterministic coupon applicable products query.",
+        )
+    if _PRODUCT_COUPON_ELIGIBILITY_RE.search(text):
+        return CouponQueryGateDecision(
+            intent=CouponQueryIntent.PRODUCT_COUPON_ELIGIBILITY,
+            confidence=0.88,
+            product_name=None,
+            coupon_hint="쿠폰",
+            reason="Deterministic product coupon eligibility query.",
+        )
+    if _OWNED_COUPON_LOOKUP_RE.search(text):
+        return CouponQueryGateDecision(
+            intent=CouponQueryIntent.OWNED_COUPON_LOOKUP,
+            confidence=0.88,
+            product_name=None,
+            coupon_hint=None,
+            reason="Deterministic owned coupon lookup query.",
         )
 
     prompt = dedent(f"""
