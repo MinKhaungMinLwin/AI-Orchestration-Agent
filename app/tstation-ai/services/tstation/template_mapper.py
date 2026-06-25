@@ -1660,6 +1660,76 @@ _POPULAR_UNSIZED_REQUEST_RE = re.compile(
     r"인기|베스트\s*셀러|베스트|잘\s*팔리|많이\s*팔린|많이\s*사는|잘\s*나가",
     re.IGNORECASE,
 )
+_TEXT_TIRE_SIZE_RE = re.compile(r"(?<!\d)\d{3}\s*/?\s*\d{2,3}\s*R?\s*\d{2}(?!\d)", re.IGNORECASE)
+
+
+def _current_turn_has_explicit_tire_size() -> bool:
+    return bool(_TEXT_TIRE_SIZE_RE.search(current_user_text.get() or ""))
+
+
+def _normalize_row_tire_size(value: object) -> str:
+    raw = str(value or "").strip().upper().replace(" ", "")
+    if not raw:
+        return ""
+    compact = re.fullmatch(r"(\d{3})(\d{2})(\d{2})", raw)
+    if compact:
+        return f"{compact.group(1)}/{compact.group(2)}R{compact.group(3)}"
+    match = re.fullmatch(r"(\d{3})/?(\d{2})Z?R?(\d{2})", raw)
+    if match:
+        return f"{match.group(1)}/{match.group(2)}R{match.group(3)}"
+    return raw
+
+
+def _row_tire_sizes(row: dict) -> list[str]:
+    sizes: list[str] = []
+    for key in ("tire_size_1", "tire_size_2"):
+        size = _normalize_row_tire_size(row.get(key))
+        if size and size not in sizes:
+            sizes.append(size)
+
+    if not sizes:
+        width = _get_str(row, "tire_width")
+        series = _get_str(row, "tire_series")
+        inch = _get_str(row, "inch")
+        if width and series and inch:
+            size = _normalize_row_tire_size(f"{width}/{series}R{inch}")
+            if size:
+                sizes.append(size)
+    return sizes
+
+
+def _tire_size_sort_key(size: str) -> tuple[int, int, int, str]:
+    match = re.search(r"(\d{3})/(\d{2})R(\d{2})", size)
+    if not match:
+        return (999, 999, 999, size)
+    return (int(match.group(1)), int(match.group(2)), int(match.group(3)), size)
+
+
+def _confirmed_sizes_for_rows(rows: list[dict]) -> list[str]:
+    sizes: list[str] = []
+    for row in rows:
+        for size in _row_tire_sizes(row):
+            if size not in sizes:
+                sizes.append(size)
+    return sorted(sizes, key=_tire_size_sort_key)
+
+
+def _format_confirmed_size_list(rows: list[dict], *, max_visible: int = 3) -> str:
+    sizes = _confirmed_sizes_for_rows(rows)
+    if not sizes:
+        return ""
+    visible = ", ".join(sizes[:max_visible])
+    remaining = len(sizes) - max_visible
+    if remaining > 0:
+        return f"{visible} 외 {remaining}개"
+    return visible
+
+
+def _confirmed_size_line(rows: list[dict]) -> str:
+    size_list = _format_confirmed_size_list(rows)
+    if not size_list:
+        return ""
+    return f"검색 결과에서 확인된 사이즈: {size_list}"
 
 
 def _map_product_search_size_summary(tool_data_list: list[dict]) -> dict | None:
@@ -1673,7 +1743,7 @@ def _map_product_search_size_summary(tool_data_list: list[dict]) -> dict | None:
     if not _PRODUCT_SEARCH_SIZE_INTENT_RE.search(user_text):
         return None
 
-    grouped: dict[str, list[str]] = {}
+    grouped: dict[str, list[dict]] = {}
     found = False
     for entry in _find_entries(tool_data_list, "search_product_tool"):
         if _has_size_arg(entry):
@@ -1686,20 +1756,20 @@ def _map_product_search_size_summary(tool_data_list: list[dict]) -> dict | None:
         for row in rows:
             if not isinstance(row, dict):
                 continue
-            name = _get_str(row, "goods_nm", "title")
-            size = _get_str(row, "tire_size_1", "tire_size_2")
-            if not name or not size:
-                continue
-            sizes = grouped.setdefault(name, [])
-            if size not in sizes:
-                sizes.append(size)
+            name = _get_str(row, "goods_nm", "big_goods_nm", "ptrn_d_nm", "title")
+            if name:
+                grouped.setdefault(name, []).append(row)
 
     if not found or not grouped:
         return None
 
     lines = ["검색된 상품은 현재 아래 사이즈로 확인돼요."]
-    for name, sizes in list(grouped.items())[:5]:
-        lines.append(f"- {name}: {', '.join(sizes[:12])}")
+    for name, rows in list(grouped.items())[:5]:
+        size_list = _format_confirmed_size_list(rows, max_visible=12)
+        if size_list:
+            lines.append(f"- {name}: {size_list}")
+    if len(lines) == 1:
+        return None
     lines.extend([
         "",
         "차량에 장착 가능한지는 차량번호나 현재 타이어 규격 기준으로 다시 확인해 주세요.",
@@ -1930,6 +2000,9 @@ def _collect_product_attribute_rows(tool_data_list: list[dict]) -> dict[str, lis
 
 
 def _comparison_group_name(entry: dict, row: dict) -> str:
+    row_name = _get_str(row, "goods_nm", "big_goods_nm", "ptrn_d_nm", "title")
+    if row_name:
+        return row_name
     keyword = _get_str(_tool_args(entry), "keyword")
     normalized = keyword.casefold().strip()
     if normalized in {"cc2", "미쉐린 cc2", "michelin cc2"}:
@@ -2235,6 +2308,7 @@ def _product_metric_comparison_policy_response(tool_data_list: list[dict]) -> st
     grouped = _collect_product_comparison_rows(tool_data_list)
     if not grouped:
         return ""
+    include_confirmed_sizes = not _current_turn_has_explicit_tire_size()
 
     ranked: list[tuple[str, float | None, str]] = []
     for name, rows in grouped.items():
@@ -2278,7 +2352,12 @@ def _product_metric_comparison_policy_response(tool_data_list: list[dict]) -> st
             lines.append("비교 대상의 수명/마일리지 지표가 충분하지 않아요.")
 
     for name, _, display in ranked[:6]:
-        lines.append(f"- {name}: {display}")
+        line = f"- {name}: {display}"
+        if include_confirmed_sizes:
+            size_line = _confirmed_size_line(grouped.get(name, []))
+            if size_line:
+                line = f"{line} / {size_line}"
+        lines.append(line)
 
     lines.append("")
     if metric == "fuel_efficiency":
@@ -2827,7 +2906,7 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
     if _is_product_transaction_missing_size_turn():
         return None
 
-    rows_by_name: dict[str, dict] = {}
+    rows_by_name: dict[str, list[dict]] = {}
     found_product_tool = False
     for entry in _find_entries(
         tool_data_list,
@@ -2846,14 +2925,17 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
             if not isinstance(row, dict):
                 continue
             name = _get_str(row, "goods_nm", "big_goods_nm", "ptrn_d_nm", "title")
-            if name and name not in rows_by_name:
-                rows_by_name[name] = row
+            if name:
+                rows_by_name.setdefault(name, []).append(row)
     if not found_product_tool or not rows_by_name:
         return None
 
     skip_size_missing_notice = is_neutral_product_description or is_popular_unsized_request
     lines = [] if skip_size_missing_notice else ["사이즈가 아직 확인되지 않아 타이어 기준으로 안내드릴게요."]
-    for name, row in list(rows_by_name.items())[:5]:
+    include_confirmed_sizes = not _current_turn_has_explicit_tire_size()
+    for name, rows in list(rows_by_name.items())[:5]:
+        row = rows[0]
+        size_line = _confirmed_size_line(rows) if include_confirmed_sizes else ""
         if is_neutral_product_description:
             detail_line = _tire_summary_detail_line(row)
             lines.extend([
@@ -2863,6 +2945,8 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
             ])
             if detail_line:
                 lines.append(detail_line)
+            if size_line:
+                lines.append(size_line)
         else:
             detail_line = _tire_summary_detail_line(row)
             lines.extend([
@@ -2872,6 +2956,8 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
             ])
             if detail_line:
                 lines.append(f"  {detail_line}")
+            if size_line:
+                lines.append(f"  {size_line}")
     if skip_size_missing_notice:
         lines = [line for line in lines if line]
     elif not is_popular_unsized_request:

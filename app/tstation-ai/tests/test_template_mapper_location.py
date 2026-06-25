@@ -1199,8 +1199,8 @@ def test_unsized_recommendation_maps_to_text_summary_not_product_cards() -> None
     assert "- 다이나프로 HPX: SUV용 사계절 컴포트 타이어입니다." in assistant_response
     assert "승차감과 마일리지 중심의 타이어입니다." in assistant_response
     assert assistant_response.count("아이온 에보 AS") == 1
-    assert "235/35R20" not in assistant_response
-    assert "265/35R21" not in assistant_response
+    assert "검색 결과에서 확인된 사이즈: 235/35R20, 265/35R21" in assistant_response
+    assert "검색 결과에서 확인된 사이즈: 265/50R20" in assistant_response
     assert "패턴" not in assistant_response
     assert "products" not in result["data"]
 
@@ -1216,7 +1216,26 @@ def test_popular_unsized_recommendation_omits_size_missing_notice() -> None:
     assert "사이즈가 아직 확인되지 않아" not in assistant_response
     assert "정확한 장착 가능 여부와 가격" not in assistant_response
     assert "- 아이온 에보 AS: 전기차용 사계절 스포츠 타이어입니다." in assistant_response
+    assert "검색 결과에서 확인된 사이즈: 235/35R20, 265/35R21" in assistant_response
     assert "- 다이나프로 HPX: SUV용 사계절 컴포트 타이어입니다." in assistant_response
+
+
+def test_unsized_recommendation_collects_secondary_and_composed_sizes() -> None:
+    current_user_text.set("전기차용 타이어 추천해줘")
+
+    entry = _unsized_recommendation_entry()
+    items = entry["data"]["data"]["items"]
+    items[0]["tire_size_2"] = "245/45R20"
+    items[1].pop("tire_size_1")
+    items[1]["tire_width"] = "255"
+    items[1]["tire_series"] = "45"
+    items[1]["inch"] = "21"
+
+    result = try_build_template([entry], "전기차용 타이어를 추천해 드릴게요.")
+
+    assert result is not None
+    assistant_response = result["data"]["assistantResponse"]
+    assert "검색 결과에서 확인된 사이즈: 235/35R20, 245/45R20, 255/45R21" in assistant_response
 
 
 def test_best_selling_tool_maps_to_product_cards() -> None:
@@ -1373,6 +1392,7 @@ def test_product_description_without_size_omits_unrequested_size_missing_notice(
     assert "정확한 장착 가능 여부와 가격" not in assistant_response
     assert "키너지 EX:" in assistant_response
     assert "승용차용 사계절" in assistant_response
+    assert "검색 결과에서 확인된 사이즈: 165/60R14, 185/65R14" in assistant_response
     assert "저소음 라벨이 적용돼 정숙성과 승차감을 중요하게 보는 주행에 잘 맞아요." in assistant_response
     assert "젖은 노면과 회전저항 등급은 각각 3등급, 3등급으로 확인돼요." in assistant_response
     assert "패턴의" not in assistant_response
@@ -1997,12 +2017,18 @@ def test_metric_comparison_policy_ranks_mileage_from_search_results() -> None:
     assert result["template"] == "quickReply"
     assistant_response = result["data"]["assistantResponse"]
     assert "DB 수명/마일리지 지표 기준으로는 다이나프로 HPX" in assistant_response
-    assert "- 다이나프로 HPX: 수명/마일리지 점수 5/5" in assistant_response
-    assert "- 벤투스 에어S: 수명/마일리지 점수 4/5" in assistant_response
+    assert (
+        "- 다이나프로 HPX: 수명/마일리지 점수 5/5 / 검색 결과에서 확인된 사이즈: 235/55R19"
+        in assistant_response
+    )
+    assert (
+        "- 벤투스 에어S: 수명/마일리지 점수 4/5 / 검색 결과에서 확인된 사이즈: 245/45R18"
+        in assistant_response
+    )
     assert "상품 카드" not in assistant_response
 
 
-def test_metric_comparison_policy_groups_generic_keyword_results_by_request() -> None:
+def test_metric_comparison_policy_groups_generic_keyword_results_by_product_name() -> None:
     text = "ventus air S, dynapro HPX, optimo, 미쉐린 CC2 어떤거 가장 오래 탈 수 있어?"
     current_user_text.set(text)
     current_discovery_response_decision.set(decide_discovery_response(build_discovery_intent_frame(text)))
@@ -2011,10 +2037,11 @@ def test_metric_comparison_policy_groups_generic_keyword_results_by_request() ->
 
     assert result is not None
     assistant_response = result["data"]["assistantResponse"]
-    assert "- 옵티모: 수명/마일리지 점수 2.5/5" in assistant_response
-    assert "- 미쉐린 CC2: 수명/마일리지 정보 확인되지 않음" in assistant_response
-    assert "옵티모 H426" not in assistant_response
-    assert "옵티모 H108" not in assistant_response
+    assert "- 옵티모 H426: 수명/마일리지 점수 2.5/5" in assistant_response
+    assert "- 옵티모 H108: 수명/마일리지 점수 2.5/5" in assistant_response
+    assert "- 크로스클라이밋 2: 수명/마일리지 정보 확인되지 않음" in assistant_response
+    assert "검색 결과에서 확인된 사이즈: 245/50R18" in assistant_response
+    assert "검색 결과에서 확인된 사이즈: 245/45R19" in assistant_response
 
 
 def test_metric_comparison_policy_ranks_fuel_efficiency_from_rr() -> None:
@@ -2027,8 +2054,8 @@ def test_metric_comparison_policy_ranks_fuel_efficiency_from_rr() -> None:
     assert result is not None
     assistant_response = result["data"]["assistantResponse"]
     assert "회전저항/RR 기준으로는 벤투스 에어S, 키너지 EX이 같은 수준" in assistant_response
-    assert "- 벤투스 에어S: 회전저항/RR 3등급" in assistant_response
-    assert "- 키너지 EX: 회전저항/RR 3등급" in assistant_response
+    assert "- 벤투스 에어S: 회전저항/RR 3등급 / 검색 결과에서 확인된 사이즈: 245/45R18" in assistant_response
+    assert "- 키너지 EX: 회전저항/RR 3등급 / 검색 결과에서 확인된 사이즈: 165/60R14, 185/65R14" in assistant_response
     assert "등급 숫자가 낮을수록" in assistant_response
 
 
@@ -2042,9 +2069,28 @@ def test_metric_comparison_policy_answers_latest_product_confidently() -> None:
     assert result is not None
     assistant_response = result["data"]["assistantResponse"]
     assert "최신 상품은 다이나프로 HP3입니다." in assistant_response
-    assert "- 다이나프로 HP3: 등록일 2025-01-20, 출시 2025년 2월" in assistant_response
-    assert "- 다이나프로 HPX: 등록일 2022-11-10, 출시 2023년 1월" in assistant_response
+    assert (
+        "- 다이나프로 HP3: 등록일 2025-01-20, 출시 2025년 2월 / 검색 결과에서 확인된 사이즈: 235/55R19"
+        in assistant_response
+    )
+    assert (
+        "- 다이나프로 HPX: 등록일 2022-11-10, 출시 2023년 1월 / 검색 결과에서 확인된 사이즈: 235/55R19"
+        in assistant_response
+    )
     assert "보통" not in assistant_response
+
+
+def test_metric_comparison_policy_omits_confirmed_size_list_when_user_provided_size() -> None:
+    text = "235/55R19에서 dynapro HPX랑 dynapro HP3 중에 최신상품이 뭐야?"
+    current_user_text.set(text)
+    current_discovery_response_decision.set(decide_discovery_response(build_discovery_intent_frame(text)))
+
+    result = try_build_template(_attribute_compare_search_entries()[1:3], "보통 HPX 쪽으로 보시면 돼요.")
+
+    assert result is not None
+    assistant_response = result["data"]["assistantResponse"]
+    assert "최신 상품은 다이나프로 HP3입니다." in assistant_response
+    assert "검색 결과에서 확인된 사이즈" not in assistant_response
 
 
 def test_mileage_value_recommendation_uses_life_score_when_catalog_fields_are_missing() -> None:
