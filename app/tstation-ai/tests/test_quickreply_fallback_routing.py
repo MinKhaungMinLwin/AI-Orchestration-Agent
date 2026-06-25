@@ -188,6 +188,7 @@ from services.tstation.chat import (
     _has_current_turn_p0_auto_chain_anchor,
     _promote_completed_speculative_router_contract,
     _restore_blocked_transaction_store_selection_contract,
+    _restore_store_attribute_lookup_contract,
     _pending_store_attribute_selection_event,
     _router_contract_is_high_confidence_comparison,
     _router_contract_is_high_confidence_policy,
@@ -15912,6 +15913,39 @@ def test_store_attribute_inquiry_cross_domain_plan_does_not_override_router_to_s
         "store_attribute_contact_notice",
     ]
     assert plan.response_strategy == "transaction_store_info_then_attribute_notice"
+
+
+def test_support_only_store_attribute_router_contract_is_restored_to_transaction_lookup() -> None:
+    routing = chat_module.MultiAgentDomain(
+        reason="store attribute inquiry classified as support",
+        domains=[chat_module.MultiAgentDomain.Domain.SUPPORT],
+        execution_plan=["Check store-specific service policy or advise contact"],
+        user_behavior="asking whether a specific store offers night maintenance",
+        flow="support policy",
+        claim_check_type="none",
+        complaint_scope="none",
+        policy_intent="store_attribute_inquiry",
+        store_attribute_store_name="티스테이션 정자점",
+        store_attribute_text="야간정비도 가능한가요?",
+        store_attribute_type="service",
+        store_attribute_verification_level="store_contact_required",
+        referred_object_status="resolved",
+        referred_object_type="store",
+        planner_confidence=0.95,
+        needs_clarification=False,
+        agent_prompt_profile=chat_module.AgentPromptProfile.TRANSACTION_STORE,
+    )
+
+    restored = _restore_store_attribute_lookup_contract(routing)
+
+    assert restored == [chat_module.MultiAgentDomain.Domain.TRANSACTION, chat_module.MultiAgentDomain.Domain.SUPPORT]
+    assert routing.domains == [chat_module.MultiAgentDomain.Domain.TRANSACTION, chat_module.MultiAgentDomain.Domain.SUPPORT]
+    assert routing.execution_plan == ["transaction:store_attribute_inquiry", "support:store_attribute_contact_notice"]
+    assert routing.agent_prompt_profile == chat_module.AgentPromptProfile.TRANSACTION_STORE
+    assert routing.override_applied is True
+    assert routing.override_reason == "restore_store_attribute_lookup_contract"
+    assert routing.original_router_domains == [chat_module.MultiAgentDomain.Domain.SUPPORT]
+    assert routing.original_router_execution_plan == ["Check store-specific service policy or advise contact"]
 
 
 def test_blocked_transaction_store_selection_contract_is_restored() -> None:

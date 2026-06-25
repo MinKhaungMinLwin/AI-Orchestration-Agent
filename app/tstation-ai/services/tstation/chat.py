@@ -1316,6 +1316,40 @@ def _restore_blocked_transaction_store_selection_contract(
     return restored_domains
 
 
+def _restore_store_attribute_lookup_contract(
+    routing_result: MultiAgentDomain | None,
+) -> list[MultiAgentDomain.Domain] | None:
+    if routing_result is None:
+        return None
+    if str(getattr(routing_result, "policy_intent", "") or "") != "store_attribute_inquiry":
+        return None
+    store_name = str(getattr(routing_result, "store_attribute_store_name", "") or "").strip()
+    attribute_text = str(getattr(routing_result, "store_attribute_text", "") or "").strip()
+    if not store_name or not attribute_text:
+        return None
+    if bool(getattr(routing_result, "needs_clarification", False)):
+        return None
+    domains = list(getattr(routing_result, "domains", []) or [])
+    execution_plan = list(getattr(routing_result, "execution_plan", []) or [])
+    target_domains = [MultiAgentDomain.Domain.TRANSACTION, MultiAgentDomain.Domain.SUPPORT]
+    target_plan = ["transaction:store_attribute_inquiry", "support:store_attribute_contact_notice"]
+    if domains == target_domains and execution_plan == target_plan:
+        return None
+
+    if not routing_result.original_router_domains:
+        routing_result.original_router_domains = list(domains)
+    if not routing_result.original_router_execution_plan:
+        routing_result.original_router_execution_plan = list(execution_plan)
+    routing_result.domains = target_domains
+    routing_result.execution_plan = target_plan
+    routing_result.agent_prompt_profile = AgentPromptProfile.TRANSACTION_STORE
+    routing_result.override_applied = True
+    routing_result.override_reason = "restore_store_attribute_lookup_contract"
+    routing_result.override_blocked = False
+    routing_result.blocked_override_reason = "none"
+    return target_domains
+
+
 def _store_attribute_selection_continuation_inquiry(
     *,
     user_text: str,
@@ -23026,6 +23060,17 @@ class TStationChatServiceV2:
                     )
         except Exception:
             logger.exception("[POLICY][cross-domain] Failed to normalize route")
+
+        restored_store_attribute_domains = _restore_store_attribute_lookup_contract(routing_result)
+        if restored_store_attribute_domains is not None:
+            domains = restored_store_attribute_domains
+            skip_decision = False
+            speculative_classify_future = None
+            logger.info(
+                "[ROUTER_CONTRACT] restored store_attribute_inquiry lookup contract: domains=%s plan=%s",
+                [domain.value for domain in domains],
+                list(getattr(routing_result, "execution_plan", []) or []),
+            )
 
         restored_store_selection_domains = _restore_blocked_transaction_store_selection_contract(routing_result)
         if restored_store_selection_domains is not None:
