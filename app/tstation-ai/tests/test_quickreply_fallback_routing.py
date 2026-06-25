@@ -33,6 +33,8 @@ from services.tstation.agents.base_agent import (
     _slot_data_for_tool_event,
 )
 from services.tstation.agents.c_transaction_agent.agent import TRANSACTION_ORDER_SYSTEM_PROMPT_TEMPLATE
+from services.tstation.agents.e_support_agent.agent import SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
+from services.tstation.agents.e_support_agent.tools import _filter_card_installments_by_payment_type
 from services.tstation.chat import (
     _FALLBACK_COUPON,
     _FALLBACK_GENERIC,
@@ -18451,3 +18453,66 @@ def test_maintenance_history_event_reports_no_matching_requested_service() -> No
 
     assert "최근 정비이력에서 오일필터 항목은 확인되지 않아요" in data["assistantResponse"]
     assert data["quickReplies"][0]["url"] == CTAUrls.STORE_SERVICE_HISTORY
+
+
+def test_card_installment_filter_defaults_to_general_rows_only() -> None:
+    payload = {
+        "cards": [
+            {"iscm_nm": "신한카드", "months": [2, 3, 6], "payment_type": "일반"},
+            {"iscm_nm": "신한카드", "months": [12, 24], "payment_type": "스마트페이"},
+            {"iscm_nm": "현대카드", "months": [12], "payment_type": "일반"},
+        ],
+    }
+
+    filtered = _filter_card_installments_by_payment_type(payload, None)
+
+    assert filtered["payment_type_filter"] == "일반"
+    assert filtered["cards"] == [
+        {"iscm_nm": "신한카드", "months": [2, 3, 6], "payment_type": "일반"},
+        {"iscm_nm": "현대카드", "months": [12], "payment_type": "일반"},
+    ]
+    assert all(card["payment_type"] == "일반" for card in filtered["cards"])
+    assert not any(card["iscm_nm"] == "신한카드" and 12 in card["months"] for card in filtered["cards"])
+
+
+def test_card_installment_filter_keeps_smartpay_rows_only_when_explicit() -> None:
+    payload = {
+        "cards": [
+            {"iscm_nm": "신한카드", "months": [2, 3, 6], "payment_type": "일반"},
+            {"iscm_nm": "신한카드", "months": [12, 24], "payment_type": "스마트페이"},
+        ],
+    }
+
+    filtered = _filter_card_installments_by_payment_type(payload, "스마트페이")
+
+    assert filtered["payment_type_filter"] == "스마트페이"
+    assert filtered["cards"] == [{"iscm_nm": "신한카드", "months": [12, 24], "payment_type": "스마트페이"}]
+
+
+def test_card_installment_filter_preserves_separate_sections_for_all() -> None:
+    payload = {
+        "cards": [
+            {"iscm_nm": "신한카드", "months": [2, 3, 6], "payment_type": "일반"},
+            {"iscm_nm": "신한카드", "months": [12, 24], "payment_type": "스마트페이"},
+        ],
+    }
+
+    filtered = _filter_card_installments_by_payment_type(payload, "전체")
+
+    assert filtered["payment_type_filter"] == "전체"
+    assert filtered["cards"] == payload["cards"]
+    assert filtered["cards_by_payment_type"] == {
+        "일반": [{"iscm_nm": "신한카드", "months": [2, 3, 6], "payment_type": "일반"}],
+        "스마트페이": [{"iscm_nm": "신한카드", "months": [12, 24], "payment_type": "스마트페이"}],
+    }
+
+
+def test_card_installment_prompts_forbid_general_smartpay_month_union() -> None:
+    prompt_text = SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE + TRANSACTION_ORDER_SYSTEM_PROMPT_TEMPLATE
+
+    assert "payment_type=\"일반\"" in prompt_text
+    assert "payment_type=\"스마트페이\"" in prompt_text
+    assert "절대 합산" in prompt_text
+    assert "일반 카드 무이자 [2,3,6] 과 스마트페이 [12,24] 를 절대 합산" in prompt_text
+    assert "set 합집합" not in prompt_text
+    assert "union" not in prompt_text.lower()
