@@ -53,6 +53,22 @@ _RESERVATION_STORE_INFO_RE = re.compile(
     r"전화|전화번호|연락처|주소|위치|어디|영업|운영|휴무|정보|상세|가고\s*싶|연락|전화하고",
     re.IGNORECASE,
 )
+_RESERVATION_STATUS_LOOKUP_RE = re.compile(
+    r"내\s*예약|예약\s*(?:조회|내역|확인|상태)|다음\s*방문|예약\s*어떻게\s*돼|예약\s*어떻게돼|"
+    r"(?:오늘|내일|모레|오전|오후|저녁|\d{1,2}\s*시).{0,18}"
+    r"(?:예약한\s*거|예약한거|예약\s*잡힌\s*거|예약\s*잡힌거|잡힌\s*예약|예약\s*되어|예약\s*돼|예약됐)"
+    r".{0,20}(?:있|확인|맞|어떻게|알려)|"
+    r"(?:예약한\s*거|예약한거|예약\s*잡힌\s*거|예약\s*잡힌거|잡힌\s*예약|예약\s*되어|예약\s*돼|예약됐)"
+    r".{0,20}(?:있|확인|맞|어떻게|알려)",
+    re.IGNORECASE,
+)
+_RESERVATION_AVAILABILITY_OR_BOOKING_RE = re.compile(
+    r"예약\s*가능|예약\s*(?:가능한\s*)?(?:시간|일정|슬롯)|"
+    r"예약\s*(?:잡아|잡아줘|잡아주세요|해줘|해주세요|걸어|걸어줘|해\s*줘)|"
+    r"예약\s*(?:잡|하|걸).{0,12}(?:줘|주세요|싶|래|려고|가능)|"
+    r"(?:가능한\s*)?(?:예약\s*)?(?:시간표|스케줄|슬롯)\s*(?:보여|알려|확인)",
+    re.IGNORECASE,
+)
 _STORE_ARRIVAL_NOTIFICATION_VISIT_RE = re.compile(
     r"(?:타이어|상품|주문|물건)?\s*"
     r"(?:매장|장착점|지점)?\s*(?:에\s*)?"
@@ -433,6 +449,11 @@ def build_transaction_intent_frame(
     current_reservation_store_info_lookup = bool(
         _RESERVATION_STORE_REF_RE.search(text) and _RESERVATION_STORE_INFO_RE.search(text)
     )
+    current_reservation_status_lookup = bool(
+        _RESERVATION_STATUS_LOOKUP_RE.search(text)
+        and not _RESERVATION_AVAILABILITY_OR_BOOKING_RE.search(text)
+        and not current_reservation_store_info_lookup
+    )
     current_order_cancel_status_lookup = bool(_ORDER_CANCEL_STATUS_LOOKUP_RE.search(text))
     current_order_cancel_request = bool(
         _ORDER_CANCEL_REQUEST_RE.search(text)
@@ -696,6 +717,10 @@ def build_transaction_intent_frame(
         intent = "reservation_store_info_lookup"
         sub_intent = "reservation_store_reference"
         entities["reservation_store_reference"] = True
+    elif current_reservation_status_lookup:
+        intent = "reservation_status_lookup"
+        sub_intent = "owned_record_status"
+        entities["owned_record_target"] = "reservation"
     elif current_service_duration_advisory:
         intent = "service_duration_advisory"
         sub_intent = "additional_service_duration"
@@ -814,6 +839,10 @@ def build_transaction_intent_frame(
         known["pending_intent"] = "reservation_store_info_lookup"
         known["goal_type"] = "reservation_store_info"
         known["reservation_store_reference"] = True
+    if intent == "reservation_status_lookup":
+        known["pending_intent"] = "reservation_status_lookup"
+        known["goal_type"] = "owned_record_lookup"
+        known["owned_record_target"] = "reservation"
     if intent == "order_arrival_status_lookup":
         known["pending_intent"] = "order_arrival_status_lookup"
         known["goal_type"] = "store_arrival_visit_guidance"
@@ -1018,6 +1047,24 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
             forbidden_tools=("search_stores_tool", "get_store_list_tool", "get_nearby_stores_tool"),
             required_slots=action_required_slots,
             metadata={"response_intent": "reservation_store_info_lookup", "action": action},
+        )
+
+    if frame.intent == "reservation_status_lookup":
+        return ToolPlan(
+            allowed_tools=("get_my_reservations_tool", "get_orders_of_user_tool", "get_order_status_tool"),
+            preferred_tool="get_my_reservations_tool",
+            tool_args_patch={"sct_cd": "all"},
+            forbidden_tools=(
+                "search_product_tool",
+                "get_products_recommendations_tool",
+                "search_stores_tool",
+                "get_store_list_tool",
+                "get_nearby_stores_tool",
+                "transaction_store_preview_tool",
+                "get_store_schedule_tool",
+            ),
+            required_slots=action_required_slots,
+            metadata={"response_intent": "reservation_status_lookup", "action": action},
         )
 
     if frame.intent == "order_arrival_status_lookup":
@@ -1226,6 +1273,8 @@ def _transaction_action(frame: IntentFrame) -> str:
         return "store_service_availability"
     if frame.intent == "reservation_store_info_lookup":
         return "reservation_store_info_lookup"
+    if frame.intent == "reservation_status_lookup":
+        return "reservation_status_lookup"
     if frame.intent == "order_arrival_status_lookup":
         return "order_arrival_status_lookup"
     if frame.intent == "order_cancel_status_lookup":

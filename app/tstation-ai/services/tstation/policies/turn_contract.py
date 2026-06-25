@@ -124,6 +124,11 @@ _RESERVATION_STORE_CLAIM_RE = re.compile(
     r"예약(?:하신|한)?\s*(?:매장|지점|곳)|예약\s*매장|예약\s*지점",
     re.IGNORECASE,
 )
+_RESERVATION_STATUS_CLAIM_RE = re.compile(
+    r"예약\s*(?:내역|상태|확인|조회|정보)|예약(?:하신|한|된)?\s*(?:건|내용)|"
+    r"예약(?:이|은|는)?.{0,12}(?:있|없|확인|잡혀|되어|돼|됐)|예약\s*확인으로",
+    re.IGNORECASE,
+)
 _REFERENCE_SIGNAL_RE = re.compile(
     r"그거|이거|요거|저거|"
     r"그\s*상품|이\s*상품|해당\s*상품|"
@@ -310,6 +315,9 @@ def build_turn_contract(
     if code_intent == "reservation_store_info_lookup":
         domain = "transaction"
         intent = "reservation_store_info_lookup"
+    if code_intent == "reservation_status_lookup":
+        domain = "transaction"
+        intent = "reservation_status_lookup"
     if code_intent == "order_arrival_status_lookup":
         domain = "transaction"
         intent = "order_arrival_status_lookup"
@@ -1252,6 +1260,14 @@ def response_contract_violations(
     )
     if reservation_store_violation is not None:
         violations.append(reservation_store_violation)
+    reservation_status_violation = _reservation_status_contract_violation(
+        assistant_response_text=assistant_response_text,
+        response_shape_key=response_shape_key,
+        called_tools=called_tools,
+        contract=contract,
+    )
+    if reservation_status_violation is not None:
+        violations.append(reservation_status_violation)
     order_cancel_status_violation = _order_cancel_status_contract_violation(
         assistant_response_text=assistant_response_text,
         response_shape_key=response_shape_key,
@@ -1622,6 +1638,29 @@ def _reservation_store_info_contract_violation(
     if str(response_shape_key or "") == "reservation_store_info_lookup" or _RESERVATION_STORE_CLAIM_RE.search(response_text):
         return {
             "type": "reservation_store_claim_without_reservation_source",
+            "response_shape_key": str(response_shape_key or ""),
+            "called_tools": sorted(tools),
+        }
+    return None
+
+
+def _reservation_status_contract_violation(
+    *,
+    assistant_response_text: str | None,
+    response_shape_key: str | None,
+    called_tools: list[str] | tuple[str, ...] | None,
+    contract: TurnContract | None,
+) -> dict[str, Any] | None:
+    if contract is None or str(contract.intent or "") != "reservation_status_lookup":
+        return None
+    tools = {str(tool) for tool in tuple(called_tools or ()) if str(tool).strip()}
+    source_tools = {"get_my_reservations_tool", "get_orders_of_user_tool", "get_order_status_tool"}
+    if tools & source_tools:
+        return None
+    response_text = str(assistant_response_text or "")
+    if str(response_shape_key or "") == "reservation_status_lookup" or _RESERVATION_STATUS_CLAIM_RE.search(response_text):
+        return {
+            "type": "reservation_status_claim_without_reservation_source",
             "response_shape_key": str(response_shape_key or ""),
             "called_tools": sorted(tools),
         }

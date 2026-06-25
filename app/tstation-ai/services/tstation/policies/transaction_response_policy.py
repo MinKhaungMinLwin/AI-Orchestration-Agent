@@ -60,6 +60,8 @@ def decide_transaction_response(
         return _decide_favorite_store_lookup()
     if intent == "reservation_store_info_lookup":
         return _decide_reservation_store_info_lookup()
+    if intent == "reservation_status_lookup":
+        return _decide_reservation_status_lookup()
     if intent == "order_arrival_status_lookup":
         return _decide_order_arrival_status_lookup()
     if intent == "order_cancel_status_lookup":
@@ -261,6 +263,25 @@ def _decide_reservation_store_info_lookup() -> ResponseDecision:
         assistant_guidance=(
             "예약한 매장/예약 지점 참조는 최근 조회 매장이 아니라 예약 내역 source로 확인한다. "
             "get_my_reservations_tool 또는 주문/예약 내역 결과가 없으면 예약 매장을 단정하지 말고 예약번호/주문번호 또는 예약 내역 확인을 요청한다."
+        ),
+    )
+
+
+def _decide_reservation_status_lookup() -> ResponseDecision:
+    return _decision(
+        response_shape_key="reservation_status_lookup",
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        forbidden_behaviors=(
+            "reservation_status_claim_without_reservation_source",
+            "discovery_first_for_owned_reservation_lookup",
+            "product_search_for_owned_reservation_lookup",
+            "store_schedule_for_owned_reservation_lookup",
+        ),
+        assistant_guidance=(
+            "기존 예약 상태/존재 확인은 현재 턴의 owned-record 조회다. "
+            "stale 상품/매장 슬롯으로 상품 검색이나 예약 가능 시간 조회로 돌리지 말고, "
+            "get_my_reservations_tool 또는 주문/예약 source를 확인한 뒤 확인된 예약만 안내한다."
         ),
     )
 

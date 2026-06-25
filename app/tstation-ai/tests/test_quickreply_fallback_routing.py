@@ -165,6 +165,7 @@ from services.tstation.chat import (
     _trace_final_error_state,
     _response_decision_for_source_domain,
     _response_shape_key_for_source_domain,
+    _has_current_turn_p0_auto_chain_anchor,
     _promote_completed_speculative_router_contract,
     _router_contract_is_high_confidence_comparison,
     _router_contract_is_high_confidence_policy,
@@ -1134,6 +1135,54 @@ def test_completed_speculative_router_policy_contract_promotes_over_discovery_gu
     assert promoted is True
     assert domains == [MultiAgentDomain.Domain.SUPPORT]
     assert promoted_routing is routing
+
+
+def test_completed_speculative_transaction_order_contract_promotes_over_discovery_guess() -> None:
+    routing = MultiAgentDomain(
+        reason="owned reservation lookup",
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        execution_plan=["transaction:reservation_status_lookup"],
+        user_behavior="asking whether an existing reservation is scheduled today",
+        flow="transaction order management",
+        claim_check_type="none",
+        complaint_scope="none",
+        policy_intent="none",
+        planner_confidence=0.95,
+        needs_clarification=False,
+        agent_prompt_profile="transaction_order",
+    )
+    future: concurrent.futures.Future = concurrent.futures.Future()
+    future.set_result(([MultiAgentDomain.Domain.TRANSACTION], routing))
+
+    domains, promoted_routing, promoted = _promote_completed_speculative_router_contract(
+        classify_future=future,
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        routing_result=None,
+    )
+
+    assert promoted is True
+    assert domains == [MultiAgentDomain.Domain.TRANSACTION]
+    assert promoted_routing is routing
+
+
+def test_p0_auto_chain_requires_current_turn_transaction_anchor() -> None:
+    stale_reservation_slots = ConversationSlots(
+        pending_intent="reservation",
+        tire_model="옵티모",
+        tire_size="235/55R19",
+    )
+    current_price_slots = ConversationSlots(pending_intent="price")
+
+    assert not _has_current_turn_p0_auto_chain_anchor(
+        user_text="오늘 오후에 예약한 거 있지?",
+        regex_slots=stale_reservation_slots,
+        explicit_override_reason=None,
+    )
+    assert _has_current_turn_p0_auto_chain_anchor(
+        user_text="235/55R19 가격 얼마야?",
+        regex_slots=current_price_slots,
+        explicit_override_reason="explicit_current_turn_price_lookup",
+    )
 
 
 def test_high_confidence_support_router_contract_allows_explicit_price_lookup_override_reason() -> None:
@@ -7004,6 +7053,133 @@ def test_reservation_store_info_response_requires_reservation_tool_source() -> N
         "called_tools": [],
     } in bad
     assert good == []
+
+
+@pytest.mark.parametrize(
+    "user_text",
+    [
+        "오늘 오후에 예약한 거 있지?",
+        "오늘 예약 잡힌 거 있어?",
+        "내 예약 어떻게 돼있어?",
+        "오후에 예약한 거 확인해줘",
+    ],
+)
+def test_reservation_status_lookup_uses_reservation_source_contract(user_text: str) -> None:
+    frame = build_transaction_intent_frame(
+        user_text,
+        known_slots={
+            "pending_intent": "reservation",
+            "goal_type": "store_finder",
+            "tire_model": "옵티모",
+            "tire_size": "235/55R19",
+            "region": "마포",
+        },
+    )
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text=user_text,
+        known_slots=dict(frame.known_slots),
+    )
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=response_decision,
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["transaction:reservation_status_lookup"],
+            agent_prompt_profile="transaction_order",
+        ),
+    )
+
+    assert frame.intent == "reservation_status_lookup"
+    assert frame.sub_intent == "owned_record_status"
+    assert frame.known_slots["goal_type"] == "owned_record_lookup"
+    assert frame.known_slots["owned_record_target"] == "reservation"
+    assert tool_plan.preferred_tool == "get_my_reservations_tool"
+    assert "get_my_reservations_tool" in tool_plan.allowed_tools
+    assert "search_product_tool" in tool_plan.forbidden_tools
+    assert "get_products_recommendations_tool" in tool_plan.forbidden_tools
+    assert "get_store_schedule_tool" in tool_plan.forbidden_tools
+    assert response_decision.metadata["response_shape_key"] == "reservation_status_lookup"
+    assert contract.domain == "transaction"
+    assert contract.intent == "reservation_status_lookup"
+    assert contract.blocking_required_slots == ()
+
+
+@pytest.mark.parametrize(
+    "user_text",
+    [
+        "오늘 오후 예약 가능해?",
+        "마포점 오늘 예약 가능해?",
+        "오늘 오후 예약 잡아줘",
+        "두 달 뒤에도 예약 가능하지?",
+    ],
+)
+def test_reservation_availability_requests_are_not_owned_status_lookup(user_text: str) -> None:
+    frame = build_transaction_intent_frame(
+        user_text,
+        known_slots={
+            "pending_intent": "reservation",
+            "tire_model": "옵티모",
+            "tire_size": "235/55R19",
+            "region": "마포",
+        },
+    )
+    tool_plan = plan_transaction_tools(frame)
+
+    assert frame.intent != "reservation_status_lookup"
+    assert tool_plan.preferred_tool != "get_my_reservations_tool"
+
+
+def test_reservation_status_response_requires_reservation_tool_source() -> None:
+    contract = build_turn_contract(
+        user_text="오늘 오후에 예약한 거 있지?",
+        intent_frame=IntentFrame(domain=PolicyDomain.TRANSACTION, intent="reservation_status_lookup"),
+        tool_plan=ToolPlan(
+            allowed_tools=("get_my_reservations_tool", "get_orders_of_user_tool", "get_order_status_tool"),
+            forbidden_tools=("search_product_tool", "get_products_recommendations_tool", "get_store_schedule_tool"),
+        ),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            metadata={"response_shape_key": "reservation_status_lookup"},
+        ),
+    )
+
+    bad = response_contract_violations(
+        template="quickReply",
+        assistant_response_text="고객님 예약 내역 확인은 예약 정보 조회가 필요해요. 예약 확인으로 이어서 도와드릴게요.",
+        assistant_response_source="transaction_agent",
+        response_shape_key="reservation_status_lookup",
+        called_tools=[],
+        contract=contract,
+    )
+    good = response_contract_violations(
+        template="quickReply",
+        assistant_response_text="오늘 오후 예약 1건이 확인됐어요.",
+        assistant_response_source="transaction_agent",
+        response_shape_key="reservation_status_lookup",
+        called_tools=["get_my_reservations_tool"],
+        contract=contract,
+    )
+
+    assert {
+        "type": "reservation_status_claim_without_reservation_source",
+        "severity": "error",
+        "response_shape_key": "reservation_status_lookup",
+        "called_tools": [],
+    } in bad
+    assert good == []
+
+
+def test_owned_reservation_status_force_routes_to_transaction_order() -> None:
+    result = StreamingMultiAgentCoordinator._force_keyword_routing("오늘 오후에 예약한 거 있지?")
+
+    assert result is not None
+    assert result.domains == [MultiAgentDomain.Domain.TRANSACTION]
+    assert result.agent_prompt_profile == "transaction_order"
 
 
 def test_reservation_store_info_event_uses_reservation_row_fields() -> None:

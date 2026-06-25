@@ -929,6 +929,28 @@ def _explicit_current_turn_override_reason(
     return None
 
 
+_P0_AUTO_CHAIN_PENDING_INTENTS = {"price", "stock", "order"}
+
+
+def _has_current_turn_p0_auto_chain_anchor(
+    *,
+    user_text: str,
+    regex_slots: ConversationSlots,
+    explicit_override_reason: str | None,
+) -> bool:
+    """Return whether this turn provides action evidence for Discovery->Transaction chaining."""
+
+    if regex_slots.pending_intent in _P0_AUTO_CHAIN_PENDING_INTENTS:
+        return True
+    if explicit_override_reason in {
+        "explicit_current_turn_price_lookup",
+        "explicit_current_turn_stock_or_booking",
+        "explicit_current_turn_purchase",
+    }:
+        return True
+    return bool(normalize_tire_size(user_text) or ConversationSlots.has_product_keyword(user_text))
+
+
 def _should_preserve_router_contract(
     *,
     routing_result: MultiAgentDomain | None,
@@ -1047,13 +1069,19 @@ def _promote_completed_speculative_router_contract(
     except Exception:
         logger.exception("[ROUTER_CONTRACT] failed to read completed speculative classifier result")
         return domains, routing_result, False
-    if not _router_contract_is_high_confidence_policy(verified_routing):
+    if not (
+        _router_contract_is_high_confidence_policy(verified_routing)
+        or _router_contract_is_high_confidence_transaction_flow(verified_routing)
+    ):
         return domains, routing_result, False
     logger.info(
-        "[ROUTER_CONTRACT] promoted completed speculative router contract: previous=%s verified=%s policy_intent=%s",
+        "[ROUTER_CONTRACT] promoted completed speculative router contract: previous=%s verified=%s "
+        "policy_intent=%s profile=%s execution_plan=%s",
         [getattr(domain, "value", domain) for domain in list(domains or [])],
         [getattr(domain, "value", domain) for domain in list(verified_domains or [])],
         getattr(verified_routing, "policy_intent", None),
+        getattr(verified_routing, "agent_prompt_profile", None),
+        list(getattr(verified_routing, "execution_plan", []) or []),
     )
     return list(verified_domains or []), verified_routing, True
 
@@ -2150,7 +2178,12 @@ class StreamingMultiAgentCoordinator:
         re.IGNORECASE,
     )
     _TRANSACTION_RESERVATION_LOOKUP_RE: ClassVar[re.Pattern[str]] = re.compile(
-        r"내\s*예약|예약\s*조회|예약\s*내역|다음\s*방문|예약\s*어떻게\s*돼|예약\s*어떻게돼",
+        r"내\s*예약|예약\s*조회|예약\s*내역|다음\s*방문|예약\s*어떻게\s*돼|예약\s*어떻게돼|"
+        r"(?:오늘|내일|모레|오전|오후|저녁|\d{1,2}\s*시).{0,18}"
+        r"(?:예약한\s*거|예약한거|예약\s*잡힌\s*거|예약\s*잡힌거|잡힌\s*예약|예약\s*되어|예약\s*돼|예약됐)"
+        r".{0,20}(?:있|확인|맞|어떻게|알려)|"
+        r"(?:예약한\s*거|예약한거|예약\s*잡힌\s*거|예약\s*잡힌거|잡힌\s*예약|예약\s*되어|예약\s*돼|예약됐)"
+        r".{0,20}(?:있|확인|맞|어떻게|알려)",
         re.IGNORECASE,
     )
     _TRANSACTION_RESERVATION_CHANGE_RE: ClassVar[re.Pattern[str]] = re.compile(
@@ -21113,35 +21146,27 @@ class TStationChatServiceV2:
             )
             domains = [MultiAgentDomain.Domain.TRANSACTION]
 
-        # P0 auto-chain code gate: when a transactional intent (price/stock/order)
-        # is outstanding — either expressed THIS turn or inherited from a prior turn
-        # whose tool has not yet fulfilled it — and some product is identifiable
-        # (current turn text OR inherited from prior turns), but no goods_no is yet
-        # confirmed, override the classifier's single-domain [DISCOVERY] pick to
-        # [DISCOVERY, TRANSACTION]. Discovery resolves goods_no via search_product_tool,
-        # then Transaction proceeds (price/inventory/order) in the same user turn —
-        # removing the redundant "네" confirmation step.
+        # P0 auto-chain code gate: when a price/stock/order intent is outstanding
+        # and the current turn supplies its own transactional/product anchor, but
+        # no goods_no is yet confirmed, override the classifier's single-domain
+        # [DISCOVERY] pick to [DISCOVERY, TRANSACTION]. Discovery resolves goods_no
+        # via search_product_tool, then Transaction proceeds in the same turn.
         #
         # Guard conditions (ALL must hold):
         #   1. Classifier chose exactly [DISCOVERY] — no override of TX/SUPPORT/LEADING.
-        #   2. `merged_slots.pending_intent` is set — fresh this turn OR inherited
-        #      from an earlier turn whose tool has not yet fulfilled the intent.
+        #   2. `merged_slots.pending_intent` is price/stock/order — reservation is
+        #      not sufficient because it can mean either a new slot request or an
+        #      existing owned-record lookup.
+        #   3. Current turn has an action/product anchor from regex_slots,
+        #      explicit_override_reason, tire size, or product keyword.
+        #   4. `merged_slots.goods_no is None` — goods_no-known turns stay TX-only.
+        #   5. Product hint is present through current or confirmed context.
         #      Example: user asks "재고 있어?" in turn 1, search returns multiple
         #      results, user picks a specific size in turn 2 — the stock intent is
         #      still pending and should chain to Transaction once goods_no resolves.
-        #      Short replies like "네" do NOT trigger because condition #4 requires
-        #      a real product hint (tire_size / tire_model / brand keyword), which
+        #      Short replies like "네" do NOT trigger because condition #3 requires
+        #      current-turn evidence and condition #5 requires a product hint, which
         #      a bare "네" never satisfies.
-        #   3. `merged_slots.goods_no is None` — goods_no-known turns stay TX-only.
-        #   4. Product hint present via ONE of:
-        #        a. `merged_slots.tire_size` — current turn OR inherited from a prior
-        #           turn (intentional: user says "225/45R18" then later "가격 얼마?"
-        #           should continue the same product context, not re-ask).
-        #        b. `merged_slots.tire_model` — typically confirmed in prior turns via
-        #           LLM slot extraction; inheriting it is by design.
-        #        c. Brand/model keyword in CURRENT turn text (벤투스/Dynapro/...).
-        #      Pure no-product queries with no prior context ("가격 얼마에요?" on a
-        #      fresh session) stay Discovery-only so Discovery can ask which model.
         #
         # Safety: even when the gate fires, the coordinator verifies goods_no was
         # actually resolved after Discovery before running Transaction (search with
@@ -21206,9 +21231,14 @@ class TStationChatServiceV2:
         if (
             len(domains) == 1
             and domains[0] == MultiAgentDomain.Domain.DISCOVERY
-            and merged_slots.pending_intent is not None
+            and merged_slots.pending_intent in _P0_AUTO_CHAIN_PENDING_INTENTS
             and merged_slots.goods_no is None
             and not _DATEPICK_SELECTION_RE.match(last_user_text or "")
+            and _has_current_turn_p0_auto_chain_anchor(
+                user_text=last_user_text,
+                regex_slots=regex_slots,
+                explicit_override_reason=explicit_override_reason,
+            )
             and (
                 merged_slots.tire_size is not None
                 or merged_slots.tire_model is not None
