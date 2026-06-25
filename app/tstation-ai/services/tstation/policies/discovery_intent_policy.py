@@ -129,6 +129,7 @@ _DEFAULT_BENEFIT_RE = re.compile(
     r"지금\s*받을\s*수\s*있는\s*혜택|현재\s*받을\s*수\s*있는\s*혜택|"
     r"진행\s*중인\s*(?:이벤트|행사|혜택)|이벤트\s*/\s*기획전|이벤트랑\s*기획전|"
     r"이벤트(?:와|과|하고)\s*기획전|기획전(?:와|과|하고)\s*이벤트|"
+    r"이벤트\s*혜택\s*(?:목록|리스트|검색|조회|보여|알려)?|"
     r"이벤트\s*(?:목록|리스트|검색|조회|보여|알려)",
     re.IGNORECASE,
 )
@@ -833,7 +834,7 @@ def build_discovery_intent_frame(
         sub_intent = "product_benefit_lookup"
     elif entities.get("default_benefit"):
         intent = "product_search"
-        sub_intent = "benefit_event_deal_list"
+        sub_intent = "benefit_event_list_lookup"
     elif entities.get("deal_list_only"):
         intent = "product_search"
         sub_intent = "benefit_deal_list"
@@ -1029,7 +1030,7 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
                 "external_price_scraping",
             ),
         )
-    if frame.sub_intent == "benefit_event_deal_list":
+    if frame.sub_intent in {"benefit_event_list_lookup", "benefit_event_deal_list"}:
         return ToolPlan(
             allowed_tools=("get_events_tool", "get_deals_tool"),
             preferred_tool="get_events_tool",

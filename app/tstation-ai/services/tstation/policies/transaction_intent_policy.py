@@ -204,15 +204,6 @@ _PRODUCT_HINT_RE = re.compile(
     re.IGNORECASE,
 )
 _PRICE_OR_COUPON_RE = re.compile(r"가격|할인가|최대\s*혜택|쿠폰|할인", re.IGNORECASE)
-_PRICE_OR_BENEFIT_ALERT_RE = re.compile(
-    r"(?:가격|금액|최종가|혜택|쿠폰|이벤트|프로모션|할인|저렴|싸)"
-    r".{0,40}(?:알림|알람|문자|SMS|sms|알려|연락|통지)|"
-    r"(?:알림|알람|문자|SMS|sms|알려|연락|통지)"
-    r".{0,40}(?:가격|금액|최종가|혜택|쿠폰|이벤트|프로모션|할인|저렴|싸)|"
-    r"(?:가격|금액|최종가).{0,20}(?:떨어지|내려가|낮아지)|"
-    r"(?:저렴해지|싸지).{0,30}(?:알림|알람|알려|문자|SMS|sms)",
-    re.IGNORECASE,
-)
 _TODAY_INSTALL_OR_RESERVATION_RE = re.compile(
     r"오늘\s*장착|오늘장착|오늘\s*서비스|오늘서비스|당일|"
     r"예약|방문|장착\s*가능|예약\s*가능|가능한\s*(?:시간|일정)|"
@@ -477,7 +468,7 @@ def build_transaction_intent_frame(
     current_store_arrival_visit_guidance = bool(_STORE_ARRIVAL_NOTIFICATION_VISIT_RE.search(text))
     current_stock = bool(_STOCK_RE.search(text) or _TODAY_RE.search(text))
     current_price = bool(_PRICE_OR_COUPON_RE.search(text))
-    current_price_or_benefit_alert = bool(_PRICE_OR_BENEFIT_ALERT_RE.search(text))
+    router_alert_contract = str(slots.get("router_transaction_intent") or "") == "price_or_benefit_alert_request"
     current_maintenance_history_access_policy = bool(_MAINTENANCE_HISTORY_ACCESS_POLICY_RE.search(text))
     current_maintenance_history_lookup = bool(
         _MAINTENANCE_HISTORY_LOOKUP_RE.search(text) and not current_maintenance_history_access_policy
@@ -743,11 +734,12 @@ def build_transaction_intent_frame(
         intent = "maintenance_history_lookup"
         sub_intent = "service_history"
         entities["requested_service_item"] = _requested_maintenance_history_item(text)
-    elif current_price_or_benefit_alert:
+    elif router_alert_contract:
         intent = "price_or_benefit_alert_request"
         sub_intent = "alert_request"
         entities["alert_request"] = True
         entities["alert_scope"] = "price_or_benefit"
+        entities["router_contract"] = True
         if current_product_name or slots.get("goods_no") or slots.get("tire_model") or slots.get("product_name"):
             entities["product_context_available"] = True
     elif current_reservation_store_info_lookup:
@@ -1324,7 +1316,13 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
         return ToolPlan(
             allowed_tools=(),
             preferred_tool=None,
-            forbidden_tools=("issue_coupon_tool", "create_price_alert_tool", "create_benefit_alert_tool"),
+            forbidden_tools=(
+                "get_events_tool",
+                "get_deals_tool",
+                "issue_coupon_tool",
+                "create_price_alert_tool",
+                "create_benefit_alert_tool",
+            ),
             required_slots=(),
             metadata={"response_intent": "price_or_benefit_alert_request", "action": action},
         )

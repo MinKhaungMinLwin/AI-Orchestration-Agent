@@ -798,6 +798,8 @@ _ROUTER_PROTECTED_ACTIONS = frozenset({
     "product_comparison",
     "discovery_recommendation",
     "best_seller_search",
+    "benefit_event_list_lookup",
+    "benefit_deal_list",
     "product_event_lookup",
     "product_promotion_lookup",
     "product_coupon_lookup",
@@ -903,6 +905,8 @@ def _router_contract_is_high_confidence_event_content(routing_result: MultiAgent
                 "product_promotion_lookup",
                 "product_coupon_lookup",
                 "product_deal_lookup",
+                "benefit_event_list_lookup",
+                "benefit_deal_list",
                 "event",
                 "promotion",
                 "deal",
@@ -911,6 +915,18 @@ def _router_contract_is_high_confidence_event_content(routing_result: MultiAgent
             )
         )
     )
+
+
+def _router_contract_is_price_or_benefit_alert(routing_result: MultiAgentDomain | None) -> bool:
+    if routing_result is None:
+        return False
+    if bool(getattr(routing_result, "needs_clarification", False)):
+        return False
+    plan_items = tuple(str(item or "").strip().lower() for item in (getattr(routing_result, "execution_plan", None) or ()))
+    if not any("price_or_benefit_alert_request" in item for item in plan_items):
+        return False
+    domains = list(getattr(routing_result, "domains", []) or [])
+    return MultiAgentDomain.Domain.TRANSACTION in domains
 
 
 def _router_contract_is_high_confidence_transaction_flow(routing_result: MultiAgentDomain | None) -> bool:
@@ -1835,7 +1851,9 @@ Complaint routing rule:
    - "transaction_price_stock": price/final price/logistics stock when goods_no is already known AND there is NO active store reservation intent in the conversation history
    - "discovery_recommendation": tire recommendation by vehicle, tire size, scenario, discount ranking WITHOUT a specific product name, or continuation from recommendation cards ("추천", "맞는 타이어", "12가3456 타이어", "세일 많이 하는 타이어", "할인율 높은 타이어")
    - "discovery_search": product search by name/keyword/brand/size (no goods_no), price/stock/discount-price query with product name only (e.g. "벤투스 S2 할인가 얼마야?", "다이나프로 HPX 할인된 가격", "마일리지 타이어", "마일리지 플러스 2"), run-flat vs normal price comparison, best-sellers/sales-rank requests ("많이 팔린/베스트셀러/잘 팔리는/잘 나가는/요즘 제일 인기 있는 거") — goods_no NOT yet known in context
-   - "discovery_event_content": explicit events/deals/event-product requests ("이벤트", "기획전", "행사 목록", "이벤트 대상 상품"), product-applicable events, YouTube/video
+   - "discovery_event_content": explicit events/deals/current benefit list requests ("이벤트 혜택 알려줘", "지금 받을 수 있는 혜택 알려줘", "기획전 알려줘", "행사 목록", "이벤트 대상 상품"), product-applicable events, YouTube/video.
+     Use execution_plan=["discovery:benefit_event_list_lookup"] for current event/benefit lists and ["discovery:benefit_deal_list"] for deal-only list requests.
+     Treat "알려줘/보여줘/뭐 있어?" as information lookup, NOT automatic alert registration.
    - "full": compatibility-only, mixed, ambiguous, or uncertain cases; ALSO use when: (a) user message matches datepick selection pattern (ONLY a date+time, e.g. "2026년 5월 15일 (금)\n17:00") — preOrder+quick_order flow requires full profile, (b) user confirms a preOrder card shown in a previous turn ("ㅇㅇ", "네", "주문해줘" after preOrder was displayed)
 
 14. referred_object_status — classify reference resolution for pronouns/ordinal/set references:
@@ -1913,12 +1931,14 @@ DOMAIN ROUTING EXAMPLES
 DISCOVERY — product search, recommendation, compatibility (no goods_no yet):
 - "buy tires for 12가3456", "쏘나타 타이어 추천", "벤투스 S2 가격/재고/매장" (resolve goods_no first), "런플랫이 얼마나 더 비싸?", "225/45R18 런플랫 가격 차이", "이벤트", "리뷰 영상", "추천 가격 비교해줘"
 - "마일리지 타이어", "마일리지 플러스", "마일리지 플러스 2/3" → discovery_search. These are product/product-family terms. Do not classify them as mileage-attribute recommendations unless the user says "마일리지 좋은", "수명 긴", "오래 타는", "마모 적은" etc.
+- "이벤트 혜택 알려줘", "지금 받을 수 있는 혜택 알려줘", "기획전 알려줘" → DISCOVERY, agent_prompt_profile=discovery_event_content, execution_plan=["discovery:benefit_event_list_lookup"] or ["discovery:benefit_deal_list"]. This is current list lookup, not an alert request.
 - 가격 범위/예산으로 타이어 찾기: "30만원 이하 타이어 추천", "20만원에서 30만원 사이 타이어", "예산 50만원 이상 프리미엄 타이어", "한국타이어 30만원 이하 있어?" — goods_no 없으므로 반드시 DISCOVERY
 - 가격 유사성 기반 추천 follow-up: 직전 대화에서 특정 상품의 가격이 표시된 후 그 가격대와 비슷한 다른 타이어를 요청하는 경우 — 이전 도메인이 TRANSACTION(가격 조회)이어도 반드시 DISCOVERY. 사용자 의도는 가격 포지셔닝 기반 새 추천이므로 TRANSACTION이 아님.
 - 상품명 + 예약/주문 + 사이즈 없음: "판교점에서 벤투스 S2 AS 4개 예약해줘", "키너지 GT 2개 주문해줘" — goods_no 없으므로 DISCOVERY (사이즈 선택을 위해 검색 결과 목록 먼저 제시)
 
 TRANSACTION — price/stock/store/order with goods_no already known in context:
 - "{{goods_no}} 가격 얼마야?", "주문/장바구니", "강남 매장", "예약 날짜", "한남점 선택", "주문 내역", "내 쿠폰", "오늘 취소하면 수수료 있나요?"
+- "가격 내려가면 알려줘", "쿠폰 이벤트 생기면 알림 줘", "이벤트 생기면 연락 줘" → TRANSACTION, execution_plan=["transaction:price_or_benefit_alert_request"], quickReply guidance only. Do not call event/deal/coupon issue tools and do not claim an alert was registered.
 
 SUPPORT — policy, warranty, human agent:
 - "보증/반품", "상담원/1:1문의"
@@ -2055,6 +2075,8 @@ Also set `policy_intent`:
 - regional final-price difference policy (서울 vs 제주 등) → `regional_price_policy`
 - generic pricing policy FAQ → `price_policy_faq`
 - checkout/payment troubleshooting (payment error, payment window/screen problem, payment cannot proceed, install-date selector missing during checkout) → SUPPORT, policy_intent=`payment_error_troubleshooting`
+- current event/benefit/deal list lookup ("이벤트 혜택 알려줘", "지금 받을 수 있는 혜택 알려줘", "기획전 알려줘") → DISCOVERY, agent_prompt_profile=`discovery_event_content`, execution_plan=`discovery:benefit_event_list_lookup` or `discovery:benefit_deal_list`
+- automatic price/coupon/event notification request ("가격 내려가면 알려줘", "쿠폰 이벤트 생기면 알림 줘", "문자 줘", "연락 줘") → TRANSACTION, execution_plan=`transaction:price_or_benefit_alert_request`; this is not a current event list lookup.
 - specific-store attribute inquiry (정자점 야간정비 가능해?, 정자점 리프트 있어?, 정자점 질소충전 돼?, 정자점 얼라인먼트 잘 봐?) → `store_attribute_inquiry` with TRANSACTION store info lookup plus support-style contact guidance
   Also fill `store_attribute_store_name`, `store_attribute_text`, `store_attribute_type`, and `store_attribute_verification_level`.
 - store service availability with no specific store (보관서비스 돼?, 얼라인먼트 잘 봐?) → `store_service_availability`
@@ -4803,15 +4825,6 @@ _ORDER_CANCEL_SELECTION_PROMPT_RE = re.compile(
     re.IGNORECASE,
 )
 _ORDER_CANCEL_COMPLAINT_RE = re.compile(r"고객\s*센터|상담|전화\s*(?:안|않|연결)", re.IGNORECASE)
-_PRICE_OR_BENEFIT_ALERT_QUERY_RE = re.compile(
-    r"(?:가격|금액|최종가|혜택|쿠폰|이벤트|프로모션|할인|저렴|싸)"
-    r".{0,40}(?:알림|알람|문자|SMS|sms|알려|연락|통지)|"
-    r"(?:알림|알람|문자|SMS|sms|알려|연락|통지)"
-    r".{0,40}(?:가격|금액|최종가|혜택|쿠폰|이벤트|프로모션|할인|저렴|싸)|"
-    r"(?:가격|금액|최종가).{0,20}(?:떨어지|내려가|낮아지)|"
-    r"(?:저렴해지|싸지).{0,30}(?:알림|알람|알려|문자|SMS|sms)",
-    re.IGNORECASE,
-)
 _ORDER_DESTINATION_GUIDANCE_RE = re.compile(
     r"주문\s*내역|주문\s*상세|결제\s*(?:정보|수단|내역)|입금\s*기한|무통장|가상\s*계좌|"
     r"영수증|현금\s*영수증|배송\s*(?:현황|조회)|택배사|도착\s*예정|"
@@ -23203,6 +23216,8 @@ class TStationChatServiceV2:
             "pending_intent": merged_slots.pending_intent,
             "goal_type": merged_slots.goal_type,
         }
+        if _router_contract_is_price_or_benefit_alert(routing_result):
+            transaction_known_slots["router_transaction_intent"] = "price_or_benefit_alert_request"
         transaction_tool_patch, transaction_response_decision, transaction_tool_plan = _build_transaction_policy_context(
             domains=domains,
             last_user_text=last_user_text,
@@ -24120,9 +24135,11 @@ class TStationChatServiceV2:
             return emitted_events, mapped_event
 
         async def _resolve_default_benefit_with_code() -> tuple[list[dict], dict] | None:
-            if domains != [MultiAgentDomain.Domain.DISCOVERY]:
-                return None
-            if not is_default_benefit_request(user_query):
+            router_event_list_lookup = any(
+                "benefit_event_list_lookup" in str(item or "").lower()
+                for item in (getattr(routing_result, "execution_plan", None) or ())
+            )
+            if not is_default_benefit_request(user_query) and not router_event_list_lookup:
                 return None
 
             from services.tstation.agents.b_discovery_agent.tools import get_deals_tool as _deals_tool
@@ -27448,7 +27465,10 @@ class TStationChatServiceV2:
             yield "data: [DONE]\n\n"
             return
 
-        if _PRICE_OR_BENEFIT_ALERT_QUERY_RE.search(user_query or ""):
+        if (
+            _router_contract_is_price_or_benefit_alert(routing_result)
+            and not is_default_benefit_request(user_query)
+        ):
             alert_event = _price_or_benefit_alert_event()
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"

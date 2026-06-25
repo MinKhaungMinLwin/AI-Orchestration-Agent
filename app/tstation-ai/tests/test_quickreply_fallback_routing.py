@@ -8438,6 +8438,7 @@ def test_price_or_benefit_alert_request_is_not_coupon_gate_or_support_reminder()
             "goods_no": "G000000319573",
             "tire_model": "벤투스 에어S",
             "payment_amount": 151200,
+            "router_transaction_intent": "price_or_benefit_alert_request",
         },
     )
     tool_plan = plan_transaction_tools(frame)
@@ -8453,6 +8454,39 @@ def test_price_or_benefit_alert_request_is_not_coupon_gate_or_support_reminder()
     assert "issue_coupon_tool" in tool_plan.forbidden_tools
     assert response_decision.metadata["response_shape_key"] == "price_or_benefit_alert_guidance"
     assert "promise_price_alert_registration" in response_decision.forbidden_behaviors
+
+
+def test_event_benefit_lookup_is_discovery_contract_not_alert_request() -> None:
+    frame = build_discovery_intent_frame("이벤트 혜택 알려줘")
+    tool_plan = plan_discovery_tools(frame)
+
+    transaction_frame = build_transaction_intent_frame("이벤트 혜택 알려줘", known_slots={})
+    transaction_tool_plan = plan_transaction_tools(transaction_frame)
+
+    assert frame.intent == "product_search"
+    assert frame.sub_intent == "benefit_event_list_lookup"
+    assert tool_plan.allowed_tools == ("get_events_tool", "get_deals_tool")
+    assert tool_plan.preferred_tool == "get_events_tool"
+    assert "get_my_coupons_tool" in tool_plan.forbidden_tools
+    assert transaction_frame.intent != "price_or_benefit_alert_request"
+    assert transaction_tool_plan.metadata["response_intent"] != "price_or_benefit_alert_request"
+
+
+def test_price_or_benefit_alert_requires_router_contract() -> None:
+    user_text = "가격 내려가면 알려줘"
+
+    plain_frame = build_transaction_intent_frame(user_text, known_slots={})
+    alert_frame = build_transaction_intent_frame(
+        user_text,
+        known_slots={"router_transaction_intent": "price_or_benefit_alert_request"},
+    )
+    alert_plan = plan_transaction_tools(alert_frame)
+
+    assert plain_frame.intent != "price_or_benefit_alert_request"
+    assert alert_frame.intent == "price_or_benefit_alert_request"
+    assert alert_plan.allowed_tools == ()
+    assert "get_events_tool" in alert_plan.forbidden_tools
+    assert "get_deals_tool" in alert_plan.forbidden_tools
 
 
 def test_price_or_benefit_alert_event_guides_without_registration_claim() -> None:

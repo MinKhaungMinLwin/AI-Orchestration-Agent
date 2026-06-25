@@ -171,7 +171,7 @@ def test_default_benefit_cta_uses_events_and_deals_not_coupons() -> None:
 
     assert is_default_benefit_request("지금 받을 수 있는 혜택은?") is True
     assert frame.intent == "product_search"
-    assert frame.sub_intent == "benefit_event_deal_list"
+    assert frame.sub_intent == "benefit_event_list_lookup"
     assert frame.entities["default_benefit"] is True
     assert plan.allowed_tools == ("get_events_tool", "get_deals_tool")
     assert plan.preferred_tool == "get_events_tool"
@@ -184,7 +184,7 @@ def test_event_list_request_uses_events_and_deals() -> None:
 
     assert is_default_benefit_request("진행 중인 이벤트") is True
     assert frame.intent == "product_search"
-    assert frame.sub_intent == "benefit_event_deal_list"
+    assert frame.sub_intent == "benefit_event_list_lookup"
     assert frame.entities["default_benefit"] is True
     assert plan.allowed_tools == ("get_events_tool", "get_deals_tool")
     assert plan.preferred_tool == "get_events_tool"
