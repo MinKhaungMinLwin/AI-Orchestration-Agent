@@ -3131,7 +3131,7 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
                 "tags": tags,
                 "description": "",
             })
-            metadata.append({"goodsId": goods_no})
+            metadata.append(_product_metadata_from_row(row, price=price, original_price=original_price))
             if goods_no:
                 seen_goods_ids.add(goods_no)
     if not items:
@@ -3195,6 +3195,63 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
         },
         "assistant_response_source": response_source,
     }
+
+
+def _product_metadata_from_row(row: dict, *, price: int | None, original_price: int | None) -> dict[str, object]:
+    goods_no = _get_str(row, "goods_no")
+    goods_nm = _get_str(row, "goods_nm", "title")
+    tire_size = _get_str(row, "tire_size_1", "tire_size_2")
+    metadata: dict[str, object] = {
+        "goodsId": goods_no,
+        "goodsNo": goods_no,
+        "goods_no": goods_no,
+        "productName": goods_nm,
+        "product_name": goods_nm,
+        "goods_nm": goods_nm,
+        "tireSize": tire_size,
+        "tire_size": tire_size,
+        "tire_size_1": _get_str(row, "tire_size_1"),
+        "tire_size_2": _get_str(row, "tire_size_2"),
+    }
+    if price is not None:
+        metadata["price"] = price
+        metadata["finalPrice"] = price
+        metadata["cheapest_final_prc"] = _display_final_unit_price(row) or price
+    if original_price is not None:
+        metadata["originalPrice"] = original_price
+        metadata["sale_prc"] = original_price
+    for key in (
+        "extra_fvr_sale_prc",
+        "prc_grd_nm",
+        "goods_pfm_nm",
+        "season_nm",
+        "car_knd_nm",
+        "brand_nm",
+        "orpl_nm",
+        "t_rls_yearmon",
+        "rating_avg",
+        "review_count",
+        "rate",
+        "tot_scr",
+        "t_comfort",
+        "t_silence",
+        "t_life_span",
+        "t_fuel_eff_convert",
+        "wet",
+        "rr",
+        "t_snow",
+        "t_ice",
+        "t_highspd",
+        "t_highspd_cd",
+        "t_wgt_spd",
+        "t_wgt_idx",
+        "t_wgt_idx_kg",
+        "t_tray_ware",
+    ):
+        value = row.get(key)
+        if value not in (None, "", [], {}):
+            metadata[key] = value
+    return metadata
 
 
 def inject_product_tags_and_sanitize(
