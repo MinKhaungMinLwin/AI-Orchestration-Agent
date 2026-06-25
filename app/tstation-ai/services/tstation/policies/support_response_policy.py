@@ -34,6 +34,15 @@ _STORE_SERVICE_AVAILABILITY_RE = re.compile(
     r"보관\s*(?:돼|되|가능|되나요|가능해)|질소\s*충전|질소|얼라인먼트.{0,12}(?:잘|무료|가능)",
     re.IGNORECASE,
 )
+_LEGAL_ACTION_RE = re.compile(
+    r"고소|소송|법적\s*(?:대응|조치|절차)|분쟁\s*조정|분쟁조정|내용\s*증명|내용증명|신고\s*(?:방법|절차|하는\s*법)",
+    re.IGNORECASE,
+)
+_LEGAL_ACTION_TSTATION_SCOPE_RE = re.compile(
+    r"티스테이션|T[\s-]*Station|한국타이어|매장|지점|[가-힣A-Za-z0-9]{2,20}점|"
+    r"장착|예약|방문|응대|서비스|고객센터",
+    re.IGNORECASE,
+)
 _TPMS_SAFETY_RISK_RE = re.compile(
     r"주행\s*중.*(?:흔들|이상|위험|떨림|깜빡)"
     r"|운행\s*중.*(?:흔들|이상|위험|떨림|깜빡)"
@@ -51,6 +60,25 @@ def decide_support_response(
     """Return Support response contracts for policy-sensitive cases."""
     text = user_text or ""
     slots = known_slots or {}
+
+    if intent == "legal_action_guidance_denied" or (
+        _LEGAL_ACTION_RE.search(text) and _LEGAL_ACTION_TSTATION_SCOPE_RE.search(text)
+    ):
+        return _decision(
+            response_shape_key="legal_action_guidance_denied",
+            response_shape=ResponseShape.ACTION_CONFIRM,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=(
+                "provide_legal_action_steps",
+                "explain_lawsuit_or_complaint_method",
+                "give_legal_advice",
+            ),
+            assistant_guidance=(
+                "매장/서비스 불편에 법적 조치 요청이 섞여도 고소·소송·분쟁 절차, 기관, 서류, 단계, 요건은 안내하지 않는다. "
+                "짧게 불편에 공감한 뒤 챗봇에서는 법적 절차 안내가 어렵다고 말하고, 1:1 문의 또는 고객센터로 불편 접수만 안내한다."
+            ),
+            metadata={"qna_category_hint": "불편/클레임"},
+        )
 
     if intent == "coupon_issue" or (_COUPON_RE.search(text) and _EXTREME_COUPON_RE.search(text)):
         return _decision(

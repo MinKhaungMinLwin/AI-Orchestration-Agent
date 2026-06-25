@@ -15323,10 +15323,94 @@ def test_payment_error_support_policy_guides_faq_before_qna() -> None:
     assert "FAQ hybrid 검색을 먼저 수행" in response_decision.assistant_guidance
 
 
+@pytest.mark.parametrize(
+    "user_text",
+    [
+        "예약 시간은 3시였는데 왜 아직도 내 차 안봐줘... 여기 티스테이션 정자점 고소하는법좀 알려줘",
+        "정자점 소송하려면 어떻게 해",
+        "매장 법적 대응 방법 알려줘",
+        "내용증명 보내는 법 알려줘 티스테이션 매장 때문에",
+    ],
+)
+def test_support_policy_denies_store_legal_action_steps(user_text: str) -> None:
+    response_decision = decide_support_response(intent="support_faq", user_text=user_text)
+
+    assert response_decision.metadata["response_shape_key"] == "legal_action_guidance_denied"
+    assert response_decision.template == TemplateName.QUICK_REPLY
+    assert "provide_legal_action_steps" in response_decision.forbidden_behaviors
+    assert "explain_lawsuit_or_complaint_method" in response_decision.forbidden_behaviors
+    assert "give_legal_advice" in response_decision.forbidden_behaviors
+    assert "법적 절차" in response_decision.assistant_guidance
+
+
+@pytest.mark.parametrize("user_text", ["정자점 불편 접수해줘", "상담원 연결해줘", "1:1 문의하고 싶어"])
+def test_support_policy_keeps_normal_complaint_escalation(user_text: str) -> None:
+    response_decision = decide_support_response(intent="human_escalation", user_text=user_text)
+
+    assert response_decision.metadata["response_shape_key"] == "human_escalation"
+    assert response_decision.template == TemplateName.QNA_COMPLETE
+    assert "provide_legal_action_steps" not in response_decision.forbidden_behaviors
+
+
+def test_legal_action_complaint_routes_to_support_scope_without_legal_steps() -> None:
+    user_text = "티스테이션 정자점 고소하는 법 알려줘"
+
+    assert _infer_complaint_scope(user_text) == "tstation_service_complaint"
+    assert _support_fast_path(user_text) == [MultiAgentDomain.Domain.SUPPORT]
+
+    contract = build_turn_contract(
+        user_text=user_text,
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:legal_action_guidance_denied"],
+            policy_intent="legal_action_guidance_denied",
+        ),
+    )
+
+    assert contract.domain == "support"
+    assert contract.intent == "legal_action_guidance_denied"
+    assert "transfer_to_qna_tool" in contract.allowed_tools
+    assert "search_faq_hybrid_tool" in contract.forbidden_tools
+    assert "provide_legal_action_steps" in contract.response_decision["forbidden_behaviors"]
+
+    bad = response_contract_violations(
+        template="quickReply",
+        event_data={
+            "assistantResponse": "고소장은 경찰서에 제출하고, 이후 소송 절차에 필요한 증거 서류를 준비하시면 됩니다."
+        },
+        contract=contract,
+    )
+    assert {
+        "type": "legal_action_guidance_forbidden",
+        "assistant_response_text": "고소장은 경찰서에 제출하고, 이후 소송 절차에 필요한 증거 서류를 준비하시면 됩니다.",
+        "forbidden_behaviors": [
+            "explain_lawsuit_or_complaint_method",
+            "give_legal_advice",
+            "provide_legal_action_steps",
+        ],
+        "severity": "error",
+    } in bad
+
+    good = response_contract_violations(
+        template="quickReply",
+        event_data={
+            "assistantResponse": "불편을 겪으셨다면 죄송합니다. 챗봇에서는 법적 절차 안내는 어렵고, 1:1 문의나 고객센터로 불편을 접수해 주세요."
+        },
+        contract=contract,
+    )
+    assert good == []
+
+
 def test_support_prompt_contains_payment_error_faq_first_policy() -> None:
     assert "payment_error_troubleshooting" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
     assert "search_faq_hybrid_tool" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
     assert "transfer_to_qna_tool` 단독 호출 금지" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
+
+
+def test_support_prompt_contains_legal_action_hard_stop() -> None:
+    assert "매장/서비스 불만 + 법적 조치 요청" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
+    assert "법률 절차, 기관, 서류, 단계, 요건" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
+    assert "FAQ 검색보다 complaint/escalation 응답이 우선" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
 
 
 @pytest.mark.parametrize(

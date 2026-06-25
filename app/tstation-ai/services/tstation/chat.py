@@ -651,6 +651,7 @@ class MultiAgentDomain(BaseModel):
         "regional_price_policy",
         "price_policy_faq",
         "payment_error_troubleshooting",
+        "legal_action_guidance_denied",
         "store_attribute_inquiry",
         "store_service_availability",
         "my_goods_review_lookup",
@@ -660,7 +661,8 @@ class MultiAgentDomain(BaseModel):
         description=(
             "Structured support/policy intent. Use this for non-transaction policy guidance such as shipping fee, "
             "online-vs-store price policy, regional price policy, payment error troubleshooting, "
-            "store service availability, goods review lookup, store service review write CTA, or generic price policy FAQ. "
+            "legal action guidance denial, store service availability, goods review lookup, "
+            "store service review write CTA, or generic price policy FAQ. "
             "Use 'none' otherwise."
         ),
     )
@@ -1648,6 +1650,7 @@ class _SlimMultiAgentDomain(BaseModel):
         "regional_price_policy",
         "price_policy_faq",
         "payment_error_troubleshooting",
+        "legal_action_guidance_denied",
         "store_attribute_inquiry",
         "store_service_availability",
         "my_goods_review_lookup",
@@ -1827,6 +1830,7 @@ Complaint routing rule:
    - "regional_price_policy": 서울/제주 등 지역에 따라 최종가가 달라지는 정책 설명
    - "price_policy_faq": generic pricing policy FAQ that is not a live price lookup
    - "payment_error_troubleshooting": 결제 진행 중 오류/결제창 또는 결제 화면 문제/결제 진행 불가/장착일 선택란 미노출 등 checkout troubleshooting
+   - "legal_action_guidance_denied": 티스테이션 매장/서비스/예약/장착/응대 불편과 함께 고소/소송/법적 대응/내용증명/분쟁조정/신고 방법을 묻는 경우. 법적 절차는 안내하지 않고 공식 CS 접수만 안내.
    - "store_attribute_inquiry": 특정 매장의 서비스/장비/운영 조건/주관 품질 가능 여부 문의
    - "store_service_availability": 매장명이 없는 보관서비스/타이어 보관/질소충전/얼라인먼트 숙련도 등 매장별 서비스 운영 여부 안내
    - "my_goods_review_lookup": 내가 쓴 상품 리뷰/구매후기/베스트리뷰 선정 여부 확인 경로 안내
@@ -2075,6 +2079,7 @@ Also set `policy_intent`:
 - regional final-price difference policy (서울 vs 제주 등) → `regional_price_policy`
 - generic pricing policy FAQ → `price_policy_faq`
 - checkout/payment troubleshooting (payment error, payment window/screen problem, payment cannot proceed, install-date selector missing during checkout) → SUPPORT, policy_intent=`payment_error_troubleshooting`
+- T-Station store/service complaint mixed with legal action request (고소/소송/법적 대응/내용증명/분쟁조정/신고 방법) → SUPPORT, policy_intent=`legal_action_guidance_denied`; do not explain legal steps, institutions, documents, or procedures.
 - current event/benefit/deal list lookup ("이벤트 혜택 알려줘", "지금 받을 수 있는 혜택 알려줘", "기획전 알려줘") → DISCOVERY, agent_prompt_profile=`discovery_event_content`, execution_plan=`discovery:benefit_event_list_lookup` or `discovery:benefit_deal_list`
 - automatic price/coupon/event notification request ("가격 내려가면 알려줘", "쿠폰 이벤트 생기면 알림 줘", "문자 줘", "연락 줘") → TRANSACTION, execution_plan=`transaction:price_or_benefit_alert_request`; this is not a current event list lookup.
 - specific-store attribute inquiry (정자점 야간정비 가능해?, 정자점 리프트 있어?, 정자점 질소충전 돼?, 정자점 얼라인먼트 잘 봐?) → `store_attribute_inquiry` with TRANSACTION store info lookup plus support-style contact guidance
@@ -5026,6 +5031,15 @@ _OUT_OF_SCOPE_COMPLAINT_RE = re.compile(
     r"연애|정치|선거|법률|소송|의료|병원|건강|타사|다른\s*회사|은행|보험|부동산|코인|비트코인",
     re.IGNORECASE,
 )
+_LEGAL_ACTION_REQUEST_RE = re.compile(
+    r"고소|소송|법적\s*(?:대응|조치|절차)|분쟁\s*조정|분쟁조정|내용\s*증명|내용증명|신고\s*(?:방법|절차|하는\s*법)",
+    re.IGNORECASE,
+)
+_LEGAL_ACTION_TSTATION_SCOPE_RE = re.compile(
+    r"티스테이션|T[\s-]*Station|한국타이어|매장|지점|[가-힣A-Za-z0-9]{2,20}점|"
+    r"장착|예약|방문|응대|서비스|고객센터",
+    re.IGNORECASE,
+)
 _PRIVATE_CONTACT_REQUEST_RE = re.compile(
     r"(?:관리자|직원|담당자|사장님|대표|매니저|점장|기사님|정비사|상담원|상담사).{0,16}"
     r"(?:개인\s*)?(?:휴대폰|핸드폰|폰|전화번호|번호|연락처|연락\s*번호)"
@@ -5094,8 +5108,10 @@ def _infer_complaint_scope(text: str | None) -> str:
     target is clearly outside T-Station scope or unclear.
     """
     value = str(text or "").strip()
-    if not value or not _COMPLAINT_TONE_RE.search(value):
+    if not value or not (_COMPLAINT_TONE_RE.search(value) or _LEGAL_ACTION_REQUEST_RE.search(value)):
         return "none"
+    if _LEGAL_ACTION_REQUEST_RE.search(value) and _LEGAL_ACTION_TSTATION_SCOPE_RE.search(value):
+        return "tstation_service_complaint"
     if _OUT_OF_SCOPE_COMPLAINT_RE.search(value):
         return "out_of_scope_complaint"
     if _TSTATION_COMPLAINT_SCOPE_RE.search(value):
@@ -16647,6 +16663,9 @@ def _support_fast_path(text: str) -> "list[MultiAgentDomain.Domain] | None":
         return [MultiAgentDomain.Domain.SUPPORT]
     if is_warranty_claim_signal(text):
         logger.debug("[SUPPORT_FAST_PATH] warranty claim signal → SUPPORT: %r", text[:80])
+        return [MultiAgentDomain.Domain.SUPPORT]
+    if _LEGAL_ACTION_REQUEST_RE.search(text) and _LEGAL_ACTION_TSTATION_SCOPE_RE.search(text):
+        logger.debug("[SUPPORT_FAST_PATH] legal action complaint guard → SUPPORT: %r", text[:80])
         return [MultiAgentDomain.Domain.SUPPORT]
     if _SUPPORT_FAST_RE.search(text):
         logger.debug(f"[SUPPORT_FAST_PATH] → SUPPORT: {text[:60]!r}")

@@ -137,6 +137,23 @@ _REFERENCE_SIGNAL_RE = re.compile(
     r"방금\s*거|아까\s*거|최근\s*거|해당\s*건",
     re.IGNORECASE,
 )
+_LEGAL_ACTION_FORBIDDEN_BEHAVIORS = frozenset({
+    "provide_legal_action_steps",
+    "explain_lawsuit_or_complaint_method",
+    "give_legal_advice",
+})
+_LEGAL_ACTION_PROCEDURE_RE = re.compile(
+    r"(?:고소장|소장|내용\s*증명|내용증명|분쟁\s*조정|분쟁조정|소송|고소|신고|법적\s*(?:절차|조치|대응))"
+    r".{0,50}(?:작성|제출|접수|발송|보내|신청|관할|경찰서|법원|소비자원|기관|서류|증거|요건|단계|절차)|"
+    r"(?:작성|제출|접수|발송|보내|신청|관할|경찰서|법원|소비자원|기관|서류|증거|요건|단계|절차)"
+    r".{0,50}(?:고소장|소장|내용\s*증명|내용증명|분쟁\s*조정|분쟁조정|소송|고소|신고|법적\s*(?:절차|조치|대응))",
+    re.IGNORECASE,
+)
+_LEGAL_ACTION_DENIAL_RE = re.compile(
+    r"법적\s*(?:절차|조치|대응).{0,24}(?:안내|도움|제공).{0,16}(?:어렵|불가|드릴\s*수\s*없)|"
+    r"(?:안내|도움|제공).{0,16}(?:어렵|불가|드릴\s*수\s*없).{0,24}법적\s*(?:절차|조치|대응)",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -403,6 +420,21 @@ def build_turn_contract(
             forbidden_tools,
             ("search_product_tool", "get_final_price_tool"),
         )
+    if intent == "legal_action_guidance_denied":
+        allowed_tools = _merge_tuple(allowed_tools, ("transfer_to_qna_tool",))
+        allowed_tools = tuple(
+            tool for tool in allowed_tools if tool not in {"get_faq_tool", "search_faq_hybrid_tool", "search_faq_rag_tool"}
+        )
+        forbidden_tools = _merge_tuple(
+            forbidden_tools,
+            (
+                "get_faq_tool",
+                "search_faq_hybrid_tool",
+                "search_faq_rag_tool",
+                "search_product_tool",
+                "get_final_price_tool",
+            ),
+        )
     if intent in {
         "product_event_lookup",
         "product_promotion_lookup",
@@ -458,6 +490,23 @@ def build_turn_contract(
         slots=known_slots,
     ).to_dict()
 
+    response_decision_payload = response_decision.to_dict() if response_decision is not None else None
+    if intent == "legal_action_guidance_denied" and response_decision_payload is None:
+        response_decision_payload = {
+            "response_shape": "action_confirm",
+            "template": "quickReply",
+            "required_slots": [],
+            "forbidden_behaviors": [
+                "provide_legal_action_steps",
+                "explain_lawsuit_or_complaint_method",
+                "give_legal_advice",
+            ],
+            "assistant_guidance": (
+                "법적 절차, 기관, 서류, 단계, 요건은 안내하지 않고 1:1 문의 또는 고객센터 불편 접수만 안내한다."
+            ),
+            "metadata": {"response_shape_key": "legal_action_guidance_denied"},
+        }
+
     return TurnContract(
         domain=domain,
         intent=intent,
@@ -468,7 +517,7 @@ def build_turn_contract(
         resolvable_required_slots=resolvable_required_slots,
         allowed_tools=allowed_tools,
         forbidden_tools=forbidden_tools,
-        response_decision=response_decision.to_dict() if response_decision is not None else None,
+        response_decision=response_decision_payload,
         risk_level=risk_level,
         fallback_reason=fallback_reason,
         planner_intent=planner_intent,
@@ -1411,6 +1460,13 @@ def response_contract_violations(
     )
     if payment_error_violation is not None:
         violations.append(payment_error_violation)
+    legal_action_violation = _legal_action_guidance_contract_violation(
+        assistant_response_text=assistant_response_text,
+        event_data=event_data,
+        contract=contract,
+    )
+    if legal_action_violation is not None:
+        violations.append(legal_action_violation)
     recommendation_disclosure_violation = _recommendation_approximation_disclosure_violation(
         assistant_response_text=assistant_response_text,
         contract=contract,
@@ -1469,6 +1525,37 @@ def _payment_error_troubleshooting_contract_violation(
             "called_tools": tools,
         }
     return None
+
+
+def _legal_action_guidance_contract_violation(
+    *,
+    assistant_response_text: str | None,
+    event_data: Mapping[str, Any] | None,
+    contract: TurnContract | None,
+) -> dict[str, Any] | None:
+    if contract is None:
+        return None
+    response_decision = contract.response_decision or {}
+    forbidden_behaviors = response_decision.get("forbidden_behaviors") if isinstance(response_decision, Mapping) else ()
+    if not isinstance(forbidden_behaviors, list | tuple):
+        return None
+    forbidden_set = {str(item) for item in forbidden_behaviors}
+    if not (forbidden_set & _LEGAL_ACTION_FORBIDDEN_BEHAVIORS):
+        return None
+    assistant_text = str(assistant_response_text or "").strip()
+    if not assistant_text and isinstance(event_data, Mapping):
+        assistant_text = str(event_data.get("assistantResponse") or "").strip()
+    if not assistant_text:
+        return None
+    if _LEGAL_ACTION_DENIAL_RE.search(assistant_text):
+        return None
+    if not _LEGAL_ACTION_PROCEDURE_RE.search(assistant_text):
+        return None
+    return {
+        "type": "legal_action_guidance_forbidden",
+        "assistant_response_text": assistant_text[:160],
+        "forbidden_behaviors": sorted(forbidden_set & _LEGAL_ACTION_FORBIDDEN_BEHAVIORS),
+    }
 
 
 def _recommendation_metadata(contract: TurnContract | None) -> dict[str, Any]:
