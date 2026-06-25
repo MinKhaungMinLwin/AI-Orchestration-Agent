@@ -36,7 +36,11 @@ from services.tstation.agents.base_agent import (
 )
 from services.tstation.agents.c_transaction_agent.agent import TRANSACTION_ORDER_SYSTEM_PROMPT_TEMPLATE
 from services.tstation.agents.e_support_agent.agent import SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
-from services.tstation.agents.e_support_agent.tools import _filter_card_installments_by_payment_type
+from services.tstation.agents.e_support_agent.tools import (
+    _augment_faq_query_for_policy,
+    _filter_card_installments_by_payment_type,
+    current_support_policy_intent,
+)
 from services.tstation.chat import (
     _FALLBACK_COUPON,
     _FALLBACK_GENERIC,
@@ -15117,6 +15121,94 @@ def test_support_policy_turn_contract_keeps_policy_intent_and_forbidden_product_
             "forbidden_tools": ["search_product_tool", "get_final_price_tool"],
         }
     ]
+
+
+def test_payment_error_troubleshooting_contract_requires_faq_first() -> None:
+    contract = build_turn_contract(
+        user_text="결제 오류 나",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:payment_error_troubleshooting"],
+            policy_intent="payment_error_troubleshooting",
+        ),
+    )
+
+    assert contract.domain == "support"
+    assert contract.intent == "payment_error_troubleshooting"
+    assert contract.known_slots["policy_intent"] == "payment_error_troubleshooting"
+    assert "search_faq_hybrid_tool" in contract.allowed_tools
+    assert "search_product_tool" in contract.forbidden_tools
+    assert "get_final_price_tool" in contract.forbidden_tools
+
+    assert response_contract_violations(
+        template="quickReply",
+        called_tools=["search_faq_hybrid_tool"],
+        event_data={
+            "assistantResponse": "확인 가능한 FAQ 기준으로 팝업 차단 해제와 PC 웹 재시도를 먼저 확인해 주세요.",
+            "quickReplies": [{"label": "1:1 문의하기", "domain": "SUPPORT"}],
+        },
+        contract=contract,
+    ) == []
+
+    qna_only = response_contract_violations(
+        template="qnaComplete",
+        called_tools=["search_faq_hybrid_tool", "transfer_to_qna_tool"],
+        event_data={"assistantResponse": "1:1 문의로 접수해 주세요."},
+        contract=contract,
+    )
+    assert {
+        "type": "payment_error_troubleshooting_qna_without_solution",
+        "template": "qnaComplete",
+        "called_tools": ["search_faq_hybrid_tool", "transfer_to_qna_tool"],
+        "severity": "error",
+    } in qna_only
+
+    no_faq = response_contract_violations(
+        template="qnaComplete",
+        called_tools=["transfer_to_qna_tool"],
+        event_data={"assistantResponse": "1:1 문의로 접수해 주세요."},
+        contract=contract,
+    )
+    assert {
+        "type": "payment_error_troubleshooting_without_faq_search",
+        "called_tools": ["transfer_to_qna_tool"],
+        "severity": "error",
+    } in no_faq
+
+
+def test_payment_error_troubleshooting_augments_faq_query_from_router_intent_only() -> None:
+    token = current_support_policy_intent.set("payment_error_troubleshooting")
+    try:
+        query = _augment_faq_query_for_policy("앱에서 결제가 안 되고 장착일 선택이 안 보여")
+    finally:
+        current_support_policy_intent.reset(token)
+
+    assert "앱에서 결제가 안 되고 장착일 선택이 안 보여" in query
+    assert "결제 오류" in query
+    assert "결제 진행 불가" in query
+    assert "팝업 차단" in query
+    assert "PC 웹 재시도" in query
+
+    token = current_support_policy_intent.set("none")
+    try:
+        assert _augment_faq_query_for_policy("결제 오류 나") == "결제 오류 나"
+    finally:
+        current_support_policy_intent.reset(token)
+
+
+def test_payment_error_support_policy_guides_faq_before_qna() -> None:
+    response_decision = decide_support_response(intent="payment_error_troubleshooting", user_text="결제창이 안 열려")
+
+    assert response_decision.metadata["response_shape_key"] == "payment_error_troubleshooting"
+    assert response_decision.template == TemplateName.QUICK_REPLY
+    assert "qna_without_faq_solution" in response_decision.forbidden_behaviors
+    assert "FAQ hybrid 검색을 먼저 수행" in response_decision.assistant_guidance
+
+
+def test_support_prompt_contains_payment_error_faq_first_policy() -> None:
+    assert "payment_error_troubleshooting" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
+    assert "search_faq_hybrid_tool" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
+    assert "transfer_to_qna_tool` 단독 호출 금지" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
 
 
 @pytest.mark.parametrize(

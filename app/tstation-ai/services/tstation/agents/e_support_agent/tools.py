@@ -1,5 +1,6 @@
 import logging
 import os
+import contextvars
 from typing import Any
 
 from common.qna_payload import make_qna_payload_urls
@@ -52,6 +53,29 @@ from services.tstation.rag.rag_config import RAGDynamicConfig
 from config.env import settings
 
 logger = logging.getLogger(__name__)
+
+current_support_policy_intent: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "current_support_policy_intent",
+    default="none",
+)
+_PAYMENT_ERROR_FAQ_ANCHORS = (
+    "결제 오류",
+    "결제창 열리지 않음",
+    "결제 진행 불가",
+    "팝업 차단",
+    "모바일웹 앱 재시도",
+    "PC 웹 재시도",
+)
+
+
+def _augment_faq_query_for_policy(query: str) -> str:
+    text = str(query or "").strip()
+    if current_support_policy_intent.get() != "payment_error_troubleshooting":
+        return text
+    missing_anchors = [anchor for anchor in _PAYMENT_ERROR_FAQ_ANCHORS if anchor not in text]
+    if not missing_anchors:
+        return text
+    return " ".join(part for part in (text, *missing_anchors) if part)
 
 
 _GENERAL_INSTALLMENT_TYPE = "일반"
@@ -266,6 +290,7 @@ def search_faq_hybrid_tool(query: str, top_k: int = 20) -> dict:
 
     Example: {"query": "환불 정책이 어떻게 되나요?"}
     """
+    query = _augment_faq_query_for_policy(query)
     logger.debug("[TOOL][search_faq_hybrid_tool] query=%s top_k=%s", query, top_k)
     try:
         openai_api_key = os.getenv("OPENAI_API_KEY") or settings.OPENAI_API_KEY

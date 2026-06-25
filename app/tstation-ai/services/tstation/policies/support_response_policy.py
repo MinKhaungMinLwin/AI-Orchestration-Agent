@@ -119,6 +119,21 @@ def decide_support_response(
             ),
         )
 
+    if intent == "payment_error_troubleshooting":
+        return _decision(
+            response_shape_key="payment_error_troubleshooting",
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=(
+                "qna_without_faq_solution",
+                "infer_payment_provider_or_browser_cause_without_faq",
+            ),
+            assistant_guidance=(
+                "결제 오류/결제창/결제 진행 불가 문의는 FAQ hybrid 검색을 먼저 수행하고, FAQ 근거로 시도 가능한 해결 방법을 안내한다. "
+                "1:1 문의는 해결 방법 안내 후에도 문제가 지속될 때 fallback CTA로만 제공한다."
+            ),
+        )
+
     if intent == "my_goods_review_lookup":
         return _decision(
             response_shape_key="my_goods_review_lookup",

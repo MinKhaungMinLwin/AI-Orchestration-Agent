@@ -650,6 +650,7 @@ class MultiAgentDomain(BaseModel):
         "online_store_price_policy",
         "regional_price_policy",
         "price_policy_faq",
+        "payment_error_troubleshooting",
         "store_attribute_inquiry",
         "store_service_availability",
         "my_goods_review_lookup",
@@ -658,8 +659,9 @@ class MultiAgentDomain(BaseModel):
     ] = Field(
         description=(
             "Structured support/policy intent. Use this for non-transaction policy guidance such as shipping fee, "
-            "online-vs-store price policy, regional price policy, store service availability, goods review lookup, "
-            "store service review write CTA, or generic price policy FAQ. Use 'none' otherwise."
+            "online-vs-store price policy, regional price policy, payment error troubleshooting, "
+            "store service availability, goods review lookup, store service review write CTA, or generic price policy FAQ. "
+            "Use 'none' otherwise."
         ),
     )
     store_attribute_store_name: str = Field(
@@ -1595,6 +1597,7 @@ class _SlimMultiAgentDomain(BaseModel):
         "online_store_price_policy",
         "regional_price_policy",
         "price_policy_faq",
+        "payment_error_troubleshooting",
         "store_attribute_inquiry",
         "store_service_availability",
         "my_goods_review_lookup",
@@ -1773,6 +1776,7 @@ Complaint routing rule:
    - "online_store_price_policy": 온라인 vs 매장 가격/구매 방식/주문 방식 정책
    - "regional_price_policy": 서울/제주 등 지역에 따라 최종가가 달라지는 정책 설명
    - "price_policy_faq": generic pricing policy FAQ that is not a live price lookup
+   - "payment_error_troubleshooting": 결제 진행 중 오류/결제창 또는 결제 화면 문제/결제 진행 불가/장착일 선택란 미노출 등 checkout troubleshooting
    - "store_attribute_inquiry": 특정 매장의 서비스/장비/운영 조건/주관 품질 가능 여부 문의
    - "store_service_availability": 매장명이 없는 보관서비스/타이어 보관/질소충전/얼라인먼트 숙련도 등 매장별 서비스 운영 여부 안내
    - "my_goods_review_lookup": 내가 쓴 상품 리뷰/구매후기/베스트리뷰 선정 여부 확인 경로 안내
@@ -2016,6 +2020,7 @@ Also set `policy_intent`:
 - online vs store price or purchase method policy → `online_store_price_policy`
 - regional final-price difference policy (서울 vs 제주 등) → `regional_price_policy`
 - generic pricing policy FAQ → `price_policy_faq`
+- checkout/payment troubleshooting (payment error, payment window/screen problem, payment cannot proceed, install-date selector missing during checkout) → SUPPORT, policy_intent=`payment_error_troubleshooting`
 - specific-store attribute inquiry (정자점 야간정비 가능해?, 정자점 리프트 있어?, 정자점 질소충전 돼?, 정자점 얼라인먼트 잘 봐?) → `store_attribute_inquiry` with TRANSACTION store info lookup plus support-style contact guidance
   Also fill `store_attribute_store_name`, `store_attribute_text`, `store_attribute_type`, and `store_attribute_verification_level`.
 - store service availability with no specific store (보관서비스 돼?, 얼라인먼트 잘 봐?) → `store_service_availability`
@@ -4217,7 +4222,6 @@ _SUPPORT_FAST_RE = re.compile(
     r"불만입니다|짜증나|화나|뭐\s*이런|제대로\s*해|엉망이|이딴",
     re.IGNORECASE,
 )
-
 _REMINDING_ALARM_QUERY_RE = re.compile(
     r"(?:점검|교체|정비|타이어|차량|스마트케어|smart\s*care)?\s*"
     r"(?:알람|알림|리마인더|리마인딩|문자|SMS|sms)\s*"
@@ -23057,6 +23061,7 @@ class TStationChatServiceV2:
             current_discovery_search_tool_patch,
         )
         from services.tstation.agents.c_transaction_agent.tools import current_transaction_store_preview_tool_patch
+        from services.tstation.agents.e_support_agent.tools import current_support_policy_intent
         recent_user_texts: list[str] = []
         for msg in reversed(request.messages):
             if msg.get("role") != "user":
@@ -23162,6 +23167,7 @@ class TStationChatServiceV2:
         current_transaction_store_preview_tool_patch.set(transaction_tool_patch)
         current_transaction_response_decision.set(transaction_response_decision)
         current_transaction_tool_plan.set(transaction_tool_plan)
+        current_support_policy_intent.set(str(getattr(routing_result, "policy_intent", "") or "none"))
         turn_contract: TurnContract | None = None
         try:
             if MultiAgentDomain.Domain.TRANSACTION in domains:

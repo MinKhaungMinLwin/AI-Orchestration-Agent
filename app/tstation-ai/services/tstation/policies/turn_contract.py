@@ -1403,6 +1403,14 @@ def response_contract_violations(
     )
     if order_cancel_status_violation is not None:
         violations.append(order_cancel_status_violation)
+    payment_error_violation = _payment_error_troubleshooting_contract_violation(
+        template=template,
+        called_tools=called_tools,
+        event_data=event_data,
+        contract=contract,
+    )
+    if payment_error_violation is not None:
+        violations.append(payment_error_violation)
     recommendation_disclosure_violation = _recommendation_approximation_disclosure_violation(
         assistant_response_text=assistant_response_text,
         contract=contract,
@@ -1416,6 +1424,51 @@ def response_contract_violations(
     if recommendation_tool_drift is not None:
         violations.append(recommendation_tool_drift)
     return [_with_contract_violation_severity(violation) for violation in violations]
+
+
+def _payment_error_troubleshooting_contract_violation(
+    *,
+    template: str | None,
+    called_tools: list[str] | tuple[str, ...] | None,
+    event_data: Mapping[str, Any] | None,
+    contract: TurnContract | None,
+) -> dict[str, Any] | None:
+    if contract is None or contract.intent != "payment_error_troubleshooting":
+        return None
+    tools = list(called_tools or ())
+    has_faq = "search_faq_hybrid_tool" in tools
+    has_qna = "transfer_to_qna_tool" in tools
+    if has_qna and not has_faq:
+        return {
+            "type": "payment_error_troubleshooting_without_faq_search",
+            "called_tools": tools,
+        }
+    if not has_faq:
+        return None
+    if template == "qnaComplete":
+        return {
+            "type": "payment_error_troubleshooting_qna_without_solution",
+            "template": template,
+            "called_tools": tools,
+        }
+    quick_replies = []
+    assistant_text = ""
+    if isinstance(event_data, Mapping):
+        assistant_text = str(event_data.get("assistantResponse") or "").strip()
+        raw_replies = event_data.get("quickReplies")
+        if isinstance(raw_replies, list):
+            quick_replies = [item for item in raw_replies if isinstance(item, Mapping)]
+    if (
+        quick_replies
+        and len(assistant_text) < 30
+        and all(str(item.get("label") or "").strip() in {"1:1 문의하기", "1:1 문의"} for item in quick_replies)
+    ):
+        return {
+            "type": "payment_error_troubleshooting_qna_only_quickreply",
+            "template": template,
+            "called_tools": tools,
+        }
+    return None
 
 
 def _recommendation_metadata(contract: TurnContract | None) -> dict[str, Any]:
