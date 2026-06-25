@@ -44,7 +44,7 @@ def _recommendation_expected_tool_args(args: Mapping[str, Any]) -> dict[str, Any
     return {key: args[key] for key in tracked_keys if args.get(key) not in (None, "")}
 
 
-_SIZE_COMPACT_RE = re.compile(r"\b(\d{3})\s*/?\s*(\d{2})\s*R?\s*(\d{2})\b", re.IGNORECASE)
+_SIZE_COMPACT_RE = re.compile(r"\b(\d{3})\s*/?\s*(\d)(\d)(?:\3)?\s*R?\s*(\d{2})\b", re.IGNORECASE)
 _SUMMER_RE = re.compile(r"여름|썸머|summer", re.IGNORECASE)
 _WINTER_RE = re.compile(r"윈터|겨울|스노우|snow|winter", re.IGNORECASE)
 _ALL_WEATHER_RE = re.compile(r"올웨더|all\s*weather", re.IGNORECASE)
@@ -271,7 +271,7 @@ def normalize_tire_size(text: str) -> str | None:
     match = _SIZE_COMPACT_RE.search(text or "")
     if not match:
         return None
-    return f"{match.group(1)}/{match.group(2)}R{match.group(3)}"
+    return f"{match.group(1)}/{match.group(2)}{match.group(3)}R{match.group(4)}"
 
 
 def extract_product_names(text: str) -> tuple[str, ...]:

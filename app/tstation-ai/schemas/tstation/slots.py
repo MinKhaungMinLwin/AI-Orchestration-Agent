@@ -257,7 +257,7 @@ class ConversationSlots(BaseModel):
         # Standard format: 225/45R17
         (re.compile(r"(\d{3})/(\d{2})R(\d{2})"), "{0}/{1}R{2}"),
         # Flexible whitespace/separator: "225 45 17", "225 4517", "22545 17", "225/45/17"
-        (re.compile(r"(?<!\d)(\d{3})[\s/]?(\d{2})[\s/]?(\d{2})(?!\d)"), "{0}/{1}R{2}"),
+        (re.compile(r"(?<!\d)(\d{3})[\s/]?(\d)(\d)(?:\3)?[\s/]?(\d{2})(?!\d)"), "{0}/{1}{2}R{3}"),
     ]
     _GOODS_NO_PATTERN: ClassVar[re.Pattern] = re.compile(r"G\d{9,}")
     _SHOP_NAME_PATTERN: ClassVar[re.Pattern] = re.compile(r"([가-힣A-Za-z0-9]+(?:점|매장))")
@@ -679,11 +679,7 @@ class ConversationSlots(BaseModel):
         for pattern, fmt in cls._TIRE_SIZE_PATTERNS:
             tire_size_match = pattern.search(user_text)
             if tire_size_match:
-                slots.tire_size = fmt.format(
-                    tire_size_match.group(1),
-                    tire_size_match.group(2),
-                    tire_size_match.group(3),
-                )
+                slots.tire_size = fmt.format(*tire_size_match.groups())
                 break
 
         goods_no_match = cls._GOODS_NO_PATTERN.search(user_text)

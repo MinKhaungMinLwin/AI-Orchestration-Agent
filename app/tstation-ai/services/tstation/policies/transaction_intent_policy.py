@@ -10,7 +10,7 @@ from services.tstation.policies.intent_frame import IntentFrame, PolicyDomain
 from services.tstation.policies.response_decision import ToolPlan
 
 
-_SIZE_COMPACT_RE = re.compile(r"\b(\d{3})\s*/?\s*(\d{2})\s*R?\s*(\d{2})\b", re.IGNORECASE)
+_SIZE_COMPACT_RE = re.compile(r"\b(\d{3})\s*/?\s*(\d)(\d)(?:\3)?\s*R?\s*(\d{2})\b", re.IGNORECASE)
 _QUANTITY_RE = re.compile(r"(\d+)\s*(?:개|본|짝)")
 _TODAY_RE = re.compile(r"오늘|당일|지금|바로|당장", re.IGNORECASE)
 _RELATIVE_RESERVATION_DATE_RE = re.compile(r"내일|모레", re.IGNORECASE)
@@ -238,7 +238,7 @@ def normalize_tire_size(text: str) -> str | None:
     match = _SIZE_COMPACT_RE.search(text or "")
     if not match:
         return None
-    return f"{match.group(1)}/{match.group(2)}R{match.group(3)}"
+    return f"{match.group(1)}/{match.group(2)}{match.group(3)}R{match.group(4)}"
 
 
 def extract_quantity(text: str) -> int | None:

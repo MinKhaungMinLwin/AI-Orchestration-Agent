@@ -11702,6 +11702,33 @@ def test_recommendation_tool_does_not_autofill_tire_size_for_price_range(monkeyp
     assert captured["tire_size"] is None
 
 
+def test_recommendation_price_filter_uses_cheapest_final_price_before_extra_price() -> None:
+    items = [
+        {
+            "goods_no": "G-OUT",
+            "cheapest_final_prc": 179_300,
+            "extra_fvr_sale_prc": 202_300,
+        },
+        {
+            "goods_no": "G-IN",
+            "cheapest_final_prc": 229_000,
+            "extra_fvr_sale_prc": 258_400,
+        },
+        {
+            "goods_no": "G-FALLBACK-IN",
+            "extra_fvr_sale_prc": 235_100,
+        },
+        {
+            "goods_no": "G-FALLBACK-OUT",
+            "extra_fvr_sale_prc": 164_600,
+        },
+    ]
+
+    filtered = discovery_tools._filter_by_price(items, 200_000, 299_999)
+
+    assert [item["goods_no"] for item in filtered] == ["G-IN", "G-FALLBACK-IN"]
+
+
 def test_similar_price_policy_preserves_referenced_latest_size_context() -> None:
     patch, decision = _build_discovery_policy_context(
         domains=[MultiAgentDomain.Domain.DISCOVERY],
@@ -12203,6 +12230,15 @@ def test_brand_size_recommendation_clears_stale_transaction_product_slots() -> N
     assert slots.pending_product_name is None
     assert slots.ord_qty == 4
     assert slots.payment_amount is None
+
+
+def test_duplicated_series_tire_size_typo_normalizes_across_slots_and_discovery_policy() -> None:
+    slots = ConversationSlots.extract_from_user_text("23555519 사이즈 20만원대 추천해줘")
+    frame = build_discovery_intent_frame("23555519 사이즈 20만원대 추천해줘")
+
+    assert slots.tire_size == "235/55R19"
+    assert frame.entities["tire_size"] == "235/55R19"
+    assert frame.entities["explicit_tire_size"] == "235/55R19"
 
 
 def test_brand_recommendation_tool_patch_disables_cross_brand_fill() -> None:
@@ -16265,6 +16301,80 @@ def test_turn_contract_blocks_product_template_for_price_without_confirmed_size(
     )
     fallback_event = build_response_policy_guard_event(contract)
     assert fallback_event["template"] == "quickReply"
+
+
+def test_turn_contract_allows_sized_recommendation_product_cards_from_current_tool() -> None:
+    contract = build_turn_contract(
+        user_text="23555519 사이즈 20만원대 추천해줘",
+        intent_frame=IntentFrame(domain=PolicyDomain.DISCOVERY, intent="product_recommendation"),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=("product_card_without_size", "price_without_size", "drop_season_constraint"),
+            metadata={"response_shape_key": "unsized_recommendation_summary"},
+        ),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY],
+            execution_plan=["discovery:product_recommendation"],
+        ),
+    )
+
+    assert not violates_response_template_contract(
+        {
+            "template": "product",
+            "source_domain": "discovery",
+            "assistant_response_source": "code_mapper",
+            "response_shape_key": "unsized_recommendation_summary",
+            "called_tools": ["get_products_recommendations_tool"],
+            "data": {
+                "products": [
+                    {
+                        "titleProductName": "벤투스 S1 에보 Z AS X",
+                        "titleTires": "235/55R19",
+                        "price": 202300,
+                    }
+                ]
+            },
+        },
+        contract,
+    )
+
+
+def test_turn_contract_still_blocks_unsized_recommendation_product_cards_without_size() -> None:
+    contract = build_turn_contract(
+        user_text="20만원대 추천해줘",
+        intent_frame=IntentFrame(domain=PolicyDomain.DISCOVERY, intent="product_recommendation"),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=("product_card_without_size", "price_without_size"),
+            metadata={"response_shape_key": "unsized_recommendation_summary"},
+        ),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY],
+            execution_plan=["discovery:product_recommendation"],
+        ),
+    )
+
+    assert violates_response_template_contract(
+        {
+            "template": "product",
+            "source_domain": "discovery",
+            "assistant_response_source": "code_mapper",
+            "response_shape_key": "unsized_recommendation_summary",
+            "called_tools": ["get_products_recommendations_tool"],
+            "data": {
+                "products": [
+                    {
+                        "titleProductName": "다이나프로 HPX",
+                        "titleTires": "",
+                        "price": 213200,
+                    }
+                ]
+            },
+        },
+        contract,
+    )
 
 
 def test_turn_contract_keeps_product_template_when_current_turn_has_product_source_tool() -> None:

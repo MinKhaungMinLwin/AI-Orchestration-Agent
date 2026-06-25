@@ -283,20 +283,19 @@ def _filter_by_price(
     min_price: int | None,
     max_price: int | None,
 ) -> list[dict]:
-    """Filter items by effective price (sale price preferred over original).
+    """Filter items by user-facing final price.
 
     Items with no price information are excluded when a price filter is active —
     we cannot verify they are within budget.
 
-    Applied BEFORE _enrich_items_with_descriptions to avoid fetching descriptions
-    for items that will be discarded. extra_fvr_sale_prc comes from the main
-    search/recommendation BE response so it is available on raw items.
+    The product card displays cheapest_final_prc first, then falls back to
+    extra_fvr_sale_prc, so filtering must use the same visible price basis.
     """
     if not min_price and not max_price:
         return items
     result = []
     for item in items:
-        effective_price = item.get("extra_fvr_sale_prc") or item.get("price") or 0
+        effective_price = _price_filter_basis(item)
         if not effective_price:
             continue
         if min_price and effective_price < min_price:
@@ -305,6 +304,19 @@ def _filter_by_price(
             continue
         result.append(item)
     return result
+
+
+def _price_filter_basis(item: dict) -> int:
+    """Visible price basis for min_price/max_price filters."""
+    for key in ("cheapest_final_prc", "extra_fvr_sale_prc"):
+        value = item.get(key)
+        if value in (None, "", 0):
+            continue
+        try:
+            return int(str(value).replace(",", ""))
+        except (TypeError, ValueError):
+            continue
+    return 0
 
 
 def _slim_product_item(item: dict) -> dict:

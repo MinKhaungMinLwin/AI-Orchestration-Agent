@@ -1008,6 +1008,12 @@ def _effective_forbidden_behaviors(
     forbidden_behaviors: list[Any] | tuple[Any, ...],
 ) -> tuple[str, ...]:
     behaviors = tuple(str(behavior) for behavior in forbidden_behaviors)
+    if _is_sized_discovery_product_source_event(event):
+        behaviors = tuple(
+            behavior
+            for behavior in behaviors
+            if behavior not in {"product_card_without_size", "price_without_size"}
+        )
     if _is_logistics_schedule_datepick_event(event):
         return tuple(
             behavior
@@ -1021,6 +1027,34 @@ def _effective_forbidden_behaviors(
         for behavior in behaviors
         if behavior not in {"datepick_for_pure_inventory_flow", "preorder_for_pure_inventory_flow"}
     )
+
+
+def _is_sized_discovery_product_source_event(event: Mapping[str, Any]) -> bool:
+    if str(event.get("template") or "") != "product":
+        return False
+    if str(event.get("source_domain") or "").lower() != "discovery":
+        return False
+    called_tools = {str(tool) for tool in tuple(event.get("called_tools") or ()) if str(tool).strip()}
+    if not called_tools & _DISCOVERY_PRODUCT_SOURCE_TOOLS:
+        return False
+    data = event.get("data")
+    if not isinstance(data, Mapping):
+        return False
+    products = data.get("products")
+    if not isinstance(products, list):
+        return False
+    for product in products:
+        if not isinstance(product, Mapping):
+            continue
+        tire_size = (
+            product.get("titleTires")
+            or product.get("tireSize")
+            or product.get("tire_size")
+            or product.get("tire_size_1")
+        )
+        if str(tire_size or "").strip():
+            return True
+    return False
 
 
 def _is_logistics_schedule_datepick_event(event: Mapping[str, Any]) -> bool:

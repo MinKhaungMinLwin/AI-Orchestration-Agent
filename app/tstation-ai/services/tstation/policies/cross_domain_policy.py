@@ -75,7 +75,7 @@ _OMITTED_COMPARISON_AXIS_RE = re.compile(
     r"(?:중에서는|중에(?:는)?|둘은|두\s*상품은|는\s*\?|은\s*\?|어때|어떤데)\s*$",
     re.IGNORECASE,
 )
-_SIZE_COMPACT_RE = re.compile(r"\b(\d{3})\s*/?\s*(\d{2})\s*R?\s*(\d{2})\b", re.IGNORECASE)
+_SIZE_COMPACT_RE = re.compile(r"\b(\d{3})\s*/?\s*(\d)(\d)(?:\3)?\s*R?\s*(\d{2})\b", re.IGNORECASE)
 _WARRANTY_CLAIM_WEAR_RE = re.compile(
     r"다\s*닳|빨리\s*닳|벌써\s*닳|조기\s*마모|편마모|마모|수명|하자|문제|이상|불량|품질|"
     r"광고(?:랑|와)?\s*다르|말(?:한|하던)\s*거(?:랑)?\s*다르",
@@ -487,4 +487,4 @@ def _normalize_tire_size(text: str) -> str | None:
     match = _SIZE_COMPACT_RE.search(text or "")
     if not match:
         return None
-    return f"{match.group(1)}/{match.group(2)}R{match.group(3)}"
+    return f"{match.group(1)}/{match.group(2)}{match.group(3)}R{match.group(4)}"
