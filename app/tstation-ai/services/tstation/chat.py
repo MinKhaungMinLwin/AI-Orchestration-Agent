@@ -13306,36 +13306,12 @@ def _build_product_comparison_table(
         else:
             table_rows.append((label, key))
 
-    lines = ["상품별 장단점을 모바일에서 보기 쉽게 정리해드릴게요."]
+    lines = ["상품 정보를 상품별 표로 비교해드릴게요."]
     for product_name, row in ((left_name, left_row), (right_name, right_row)):
-        advantages: list[str] = []
+        lines.extend(["", f"**{_markdown_table_cell(product_name)}**", "", "| 항목 | 내용 |", "|---|---|"])
         for label, key in table_rows:
-            if key in {"review_rating", "review_count", "representative_review"}:
-                continue
             value = _markdown_table_cell(_product_comparison_value(row, key))
-            if value and value != "미확인":
-                advantages.append(f"{label}: {value}")
-        rating, review_count, representative_review = _product_review_parts(row)
-        review_bits = []
-        if rating != "미확인":
-            review_bits.append(f"평점 {rating}")
-        if review_count != "미확인":
-            review_bits.append(f"리뷰 {review_count}")
-        if review_bits:
-            advantages.append(", ".join(review_bits))
-        if not advantages:
-            advantages.append("확인 가능한 상품 정보가 부족해요.")
-
-        limitations = ["현재 제공 데이터만으로 명확한 단점은 확인되지 않아요."]
-        if representative_review != "확인 가능한 대표 리뷰는 아직 없어요.":
-            limitations.append(f"대표 리뷰 참고: {_markdown_table_cell(representative_review)}")
-
-        lines.extend(["", "상품", _markdown_table_cell(product_name), "", "장점"])
-        lines.extend(f"- {item}" for item in advantages[:4])
-        lines.extend(["", "단점"])
-        lines.extend(f"- {item}" for item in limitations[:2])
-        if product_name != right_name:
-            lines.extend(["", "----"])
+            lines.append(f"| {label} | {value} |")
     if verdict:
         lines.extend(["", verdict])
     return "\n".join(lines)
@@ -14114,64 +14090,6 @@ def _build_product_comparison_event_from_search_results(
     return _build_product_comparison_event(user_text, product_rows)
 
 
-def _is_product_template_comparison_query(user_text: str) -> bool:
-    text = user_text or ""
-    if _is_product_comparison_query(text):
-        return True
-    return bool(
-        re.search(
-            r"장단점|장점|단점|비교|차이|다른\s*점|각각\s*(?:특징|설명|후기|리뷰)",
-            text,
-            re.IGNORECASE,
-        )
-    )
-
-
-def _build_product_comparison_event_from_product_template(
-    user_text: str,
-    event_data: Mapping[str, Any] | None,
-) -> dict | None:
-    if not _is_product_template_comparison_query(user_text):
-        return None
-    if not isinstance(event_data, Mapping):
-        return None
-    products = event_data.get("products")
-    if not isinstance(products, list) or len(products) < 2:
-        return None
-    metadata = event_data.get("metadata")
-    metadata_rows = metadata if isinstance(metadata, list) else []
-    product_rows: list[tuple[str, dict | None]] = []
-    for index, product in enumerate(products[:2]):
-        if not isinstance(product, Mapping):
-            continue
-        product_payload = dict(product)
-        meta_payload = (
-            metadata_rows[index]
-            if index < len(metadata_rows) and isinstance(metadata_rows[index], Mapping)
-            else {}
-        )
-        merged_row = {**dict(meta_payload), **product_payload}
-        canonical = canonical_context_from_template_boundary(merged_row)
-        product_name = str(
-            canonical.get("product_name")
-            or product.get("productName")
-            or product.get("title")
-            or product.get("goods_nm")
-            or product.get("name")
-            or ""
-        ).strip()
-        if not product_name:
-            continue
-        if canonical.get("tire_size") and not merged_row.get("tire_size_1"):
-            merged_row["tire_size_1"] = canonical["tire_size"]
-        if product.get("description") and not merged_row.get("slogan"):
-            merged_row["slogan"] = product.get("description")
-        product_rows.append((product_name, merged_row))
-    if len(product_rows) < 2:
-        return None
-    return _build_product_comparison_event(user_text, product_rows)
-
-
 def _first_product_row_from_search_result(tool_result: dict) -> dict | None:
     data = _unwrap_tool_data(tool_result)
     rows = data.get("items") if isinstance(data, dict) else None
@@ -14395,8 +14313,7 @@ _RECENT_PRODUCT_SIZE_AVAILABILITY_RE = re.compile(
     re.IGNORECASE,
 )
 _STORE_AVAILABILITY_CONTINUATION_RE = re.compile(
-    r"오늘\s*(?:장착|서비스|가능)|오늘서비스|당일\s*(?:장착|서비스)|"
-    r"장착\s*가능|예약\s*가능|재고\s*(?:있|확인|가능)|스케줄|예약\s*시간",
+    r"장착\s*가능|오늘|내일|예약|매장|지점|재고|스케줄|시간|방문",
     re.IGNORECASE,
 )
 
@@ -29369,22 +29286,17 @@ class TStationChatServiceV2:
                         latest_quickreply_tmpl,
                         slots=pending_slots or initial_slots,
                     )
-                    deterministic_compare_event = _build_product_comparison_event_from_product_template(
-                        comparison_query,
-                        event_data if isinstance(event_data, Mapping) else None,
-                    )
-                    if deterministic_compare_event is None:
-                        deterministic_compare_event = (
-                            None
-                            if (
-                                deterministic_external_price_event is not None
-                                or _should_skip_product_compare_override(user_query, called_tool_names)
-                            )
-                            else _build_product_comparison_event_from_search_results(
-                                comparison_query,
-                                search_product_tool_results,
-                            )
+                    deterministic_compare_event = (
+                        None
+                        if (
+                            deterministic_external_price_event is not None
+                            or _should_skip_product_compare_override(user_query, called_tool_names)
                         )
+                        else _build_product_comparison_event_from_search_results(
+                            comparison_query,
+                            search_product_tool_results,
+                        )
+                    )
                     if (
                         _is_product_comparison_query(comparison_query)
                         and (
@@ -29663,19 +29575,14 @@ class TStationChatServiceV2:
                             latest_quickreply_tmpl,
                             slots=pending_slots or initial_slots,
                         )
-                        deterministic_compare_event = _build_product_comparison_event_from_product_template(
-                            comparison_query,
-                            event_data if isinstance(event_data, Mapping) else None,
-                        )
-                        if deterministic_compare_event is None:
-                            deterministic_compare_event = (
-                                None
-                                if _should_skip_product_compare_override(user_query, called_tool_names)
-                                else _build_product_comparison_event_from_search_results(
-                                    comparison_query,
-                                    search_product_tool_results,
-                                )
+                        deterministic_compare_event = (
+                            None
+                            if _should_skip_product_compare_override(user_query, called_tool_names)
+                            else _build_product_comparison_event_from_search_results(
+                                comparison_query,
+                                search_product_tool_results,
                             )
+                        )
                         if (
                             _is_product_comparison_query(comparison_query)
                             and (
