@@ -51,6 +51,7 @@ backup/*
 docker/qdrant_storage/collections/
 /qdrant_storage/
 example/
+/docs/*
 /docs/test-questions/
 /docs/inventory-and-reservation-flow.md
 
