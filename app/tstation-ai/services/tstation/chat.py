@@ -13306,36 +13306,14 @@ def _build_product_comparison_table(
         else:
             table_rows.append((label, key))
 
-    lines = ["상품별 장단점을 모바일에서 보기 쉽게 정리해드릴게요."]
+    lines: list[str] = []
     for product_name, row in ((left_name, left_row), (right_name, right_row)):
-        advantages: list[str] = []
+        if lines:
+            lines.extend(["", "----", ""])
+        lines.extend([f"**{_markdown_table_cell(product_name)}**", "", "| 항목 | 내용 |", "|---|---|"])
         for label, key in table_rows:
-            if key in {"review_rating", "review_count", "representative_review"}:
-                continue
             value = _markdown_table_cell(_product_comparison_value(row, key))
-            if value and value != "미확인":
-                advantages.append(f"{label}: {value}")
-        rating, review_count, representative_review = _product_review_parts(row)
-        review_bits = []
-        if rating != "미확인":
-            review_bits.append(f"평점 {rating}")
-        if review_count != "미확인":
-            review_bits.append(f"리뷰 {review_count}")
-        if review_bits:
-            advantages.append(", ".join(review_bits))
-        if not advantages:
-            advantages.append("확인 가능한 상품 정보가 부족해요.")
-
-        limitations = ["현재 제공 데이터만으로 명확한 단점은 확인되지 않아요."]
-        if representative_review != "확인 가능한 대표 리뷰는 아직 없어요.":
-            limitations.append(f"대표 리뷰 참고: {_markdown_table_cell(representative_review)}")
-
-        lines.extend(["", "상품", _markdown_table_cell(product_name), "", "장점"])
-        lines.extend(f"- {item}" for item in advantages[:4])
-        lines.extend(["", "단점"])
-        lines.extend(f"- {item}" for item in limitations[:2])
-        if product_name != right_name:
-            lines.extend(["", "----"])
+            lines.append(f"| {label} | {value} |")
     if verdict:
         lines.extend(["", verdict])
     return "\n".join(lines)
@@ -13874,10 +13852,12 @@ def _build_product_comparison_event(
         left_grade = str(left_row.get("prc_grd_nm") or "").strip() or "미확인"
         right_grade = str(right_row.get("prc_grd_nm") or "").strip() or "미확인"
         if _grade_rank_value(left_grade) == _grade_rank_value(right_grade):
-            verdict = (
-                f"{left_name}와 {right_name}는 모두 {left_grade} 등급으로 확인돼요. "
-                "두 상품은 같은 등급 안에서 포지션 차이가 있을 수 있어요."
-            )
+            verdict = None
+            if left_grade != "미확인":
+                verdict = (
+                    f"{left_name}와 {right_name}는 모두 {left_grade} 등급으로 확인돼요. "
+                    "두 상품은 같은 등급 안에서 포지션 차이가 있을 수 있어요."
+                )
         else:
             better_name = left_name if _grade_rank_value(left_grade) > _grade_rank_value(right_grade) else right_name
             worse_name = right_name if better_name == left_name else left_name
@@ -14016,16 +13996,19 @@ def _build_product_comparison_event(
     else:
         left_grade = str(left_row.get("prc_grd_nm") or "").strip() or "미확인"
         right_grade = str(right_row.get("prc_grd_nm") or "").strip() or "미확인"
+        verdict = None
+        if left_grade != "미확인" or right_grade != "미확인":
+            verdict = (
+                f"{left_name}는 {left_grade}, {right_name}는 {right_grade} 등급으로 확인돼요. "
+                f"비교하실 항목({_metric_label(compare_metric or 'grade')})을 더 구체적으로 알려주시면 이어서 정리해 드릴게요."
+            )
         assistant = _build_product_comparison_table(
             left_name,
             left_row,
             right_name,
             right_row,
             rows=(("상품 등급", "grade"), ("특징", "feature"), ("리뷰", "review")),
-            verdict=(
-                f"{left_name}는 {left_grade}, {right_name}는 {right_grade} 등급으로 확인돼요. "
-                f"비교하실 항목({_metric_label(compare_metric or 'grade')})을 더 구체적으로 알려주시면 이어서 정리해 드릴게요."
-            ),
+            verdict=verdict,
         )
 
     return {
@@ -14114,25 +14097,10 @@ def _build_product_comparison_event_from_search_results(
     return _build_product_comparison_event(user_text, product_rows)
 
 
-def _is_product_template_comparison_query(user_text: str) -> bool:
-    text = user_text or ""
-    if _is_product_comparison_query(text):
-        return True
-    return bool(
-        re.search(
-            r"장단점|장점|단점|비교|차이|다른\s*점|각각\s*(?:특징|설명|후기|리뷰)",
-            text,
-            re.IGNORECASE,
-        )
-    )
-
-
 def _build_product_comparison_event_from_product_template(
     user_text: str,
     event_data: Mapping[str, Any] | None,
 ) -> dict | None:
-    if not _is_product_template_comparison_query(user_text):
-        return None
     if not isinstance(event_data, Mapping):
         return None
     products = event_data.get("products")
@@ -14170,6 +14138,15 @@ def _build_product_comparison_event_from_product_template(
     if len(product_rows) < 2:
         return None
     return _build_product_comparison_event(user_text, product_rows)
+
+
+def _turn_contract_has_goal(contract: Any | None, goal: str) -> bool:
+    if contract is None:
+        return False
+    for step in getattr(contract, "goal_steps", ()) or ():
+        if isinstance(step, Mapping) and str(step.get("goal") or "") == goal:
+            return True
+    return False
 
 
 def _first_product_row_from_search_result(tool_result: dict) -> dict | None:
@@ -29150,6 +29127,7 @@ class TStationChatServiceV2:
                 if isinstance(event_response_source, str):
                     last_assistant_response_source = event_response_source
                 event_data = event.get("data", {})
+                additional_data_events: list[dict] = []
                 if is_external_price_comparison_request(user_query):
                     deterministic_external_price_event = _build_external_price_comparison_event_from_search_results(
                         user_query,
@@ -29369,11 +29347,33 @@ class TStationChatServiceV2:
                         latest_quickreply_tmpl,
                         slots=pending_slots or initial_slots,
                     )
-                    deterministic_compare_event = _build_product_comparison_event_from_product_template(
-                        comparison_query,
-                        event_data if isinstance(event_data, Mapping) else None,
+                    product_template_compare_event = (
+                        _build_product_comparison_event_from_product_template(
+                            comparison_query,
+                            event_data if isinstance(event_data, Mapping) else None,
+                        )
+                        if _turn_contract_has_goal(turn_contract, "compare_products")
+                        else None
                     )
-                    if deterministic_compare_event is None:
+                    deterministic_compare_event = product_template_compare_event
+                    if product_template_compare_event is not None and event.get("template") == "product":
+                        logger.info("[PRODUCT_COMPARE] appending product template comparison after product card")
+                        additional_data_events.append(product_template_compare_event)
+                        compare_data = product_template_compare_event.get("data", {})
+                        compare_response = str(compare_data.get("assistantResponse") or "")
+                        base_response = str(event_data.get("assistantResponse") or draft_response or "").strip()
+                        draft_response = "\n\n".join(part for part in (base_response, compare_response) if part)
+                        draft_for_qc = draft_response
+                        last_template = "quickReply"
+                        last_template_source = "code_mapper"
+                        last_assistant_response_source = "code_product_compare_resolver"
+                        original_message_events = [{
+                            "type": "message",
+                            "content": draft_response,
+                            "agent": "[DISCOVERY AGENT]",
+                        }]
+                        deterministic_compare_event = None
+                    if deterministic_compare_event is None and not additional_data_events:
                         deterministic_compare_event = (
                             None
                             if (
@@ -29386,6 +29386,8 @@ class TStationChatServiceV2:
                             )
                         )
                     if (
+                        not additional_data_events
+                        and
                         _is_product_comparison_query(comparison_query)
                         and (
                             event.get("template") == "product"
@@ -29663,11 +29665,24 @@ class TStationChatServiceV2:
                             latest_quickreply_tmpl,
                             slots=pending_slots or initial_slots,
                         )
-                        deterministic_compare_event = _build_product_comparison_event_from_product_template(
-                            comparison_query,
-                            event_data if isinstance(event_data, Mapping) else None,
+                        product_template_compare_event = (
+                            _build_product_comparison_event_from_product_template(
+                                comparison_query,
+                                event_data if isinstance(event_data, Mapping) else None,
+                            )
+                            if _turn_contract_has_goal(turn_contract, "compare_products")
+                            else None
                         )
-                        if deterministic_compare_event is None:
+                        deterministic_compare_event = product_template_compare_event
+                        if product_template_compare_event is not None and event.get("template") == "product":
+                            if product_template_compare_event not in additional_data_events:
+                                logger.info("[PRODUCT_COMPARE] appending product template comparison after product card")
+                                additional_data_events.append(product_template_compare_event)
+                            last_template = "quickReply"
+                            last_template_source = "code_mapper"
+                            last_assistant_response_source = "code_product_compare_resolver"
+                            deterministic_compare_event = None
+                        if deterministic_compare_event is None and not additional_data_events:
                             deterministic_compare_event = (
                                 None
                                 if _should_skip_product_compare_override(user_query, called_tool_names)
@@ -29677,6 +29692,8 @@ class TStationChatServiceV2:
                                 )
                             )
                         if (
+                            not additional_data_events
+                            and
                             _is_product_comparison_query(comparison_query)
                             and (
                                 deterministic_compare_event is None
@@ -30175,8 +30192,16 @@ class TStationChatServiceV2:
                     logger.info("[CTA_URL] rebased T-Station CTA URLs to request origin host")
                 if _augment_recent_product_set_ranking_metadata(event, user_query):
                     logger.info("[RECENT_PRODUCT_SET] augmented ranking response metadata")
+                for additional_event in additional_data_events:
+                    for value in _quick_reply_domain_values_from_event(additional_event):
+                        if value not in next_quick_reply_domain_values:
+                            next_quick_reply_domain_values.append(value)
+                    for value in _predicted_domain_values_from_event(additional_event):
+                        if value not in next_predicted_domain_values:
+                            next_predicted_domain_values.append(value)
                 # Buffer data event — yield after QC so assistantResponse is always verified
                 buffered_data_events.append(event)
+                buffered_data_events.extend(additional_data_events)
                 continue
 
             # --- RESET DRAFT when a new sub-agent starts (multi-agent chaining) ---
