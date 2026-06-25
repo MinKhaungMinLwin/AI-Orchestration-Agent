@@ -981,6 +981,49 @@ def _current_turn_action_mode(
     explicit_override_reason: str | None,
     resume_source: str,
 ) -> str:
+    plan_text = " ".join(str(item or "").lower() for item in (getattr(routing_result, "execution_plan", None) or ()))
+    if _router_contract_is_high_confidence_policy(routing_result):
+        if MultiAgentDomain.Domain.SUPPORT in domains:
+            return "support_policy_answer"
+        if MultiAgentDomain.Domain.DISCOVERY in domains:
+            if "compare" in plan_text or "comparison" in plan_text:
+                return "product_comparison"
+            if "description" in plan_text or "attribute" in plan_text:
+                return "product_description"
+            if "recommend" in plan_text or "recommendation" in plan_text:
+                return "product_recommendation"
+            return "info_only"
+    if _router_contract_is_high_confidence_comparison(routing_result):
+        return "product_comparison"
+    if (
+        routing_result is not None
+        and not bool(getattr(routing_result, "needs_clarification", False))
+        and float(getattr(routing_result, "planner_confidence", 0.0) or 0.0) >= _ROUTER_OVERRIDE_PRESERVE_CONFIDENCE
+        and MultiAgentDomain.Domain.DISCOVERY in domains
+    ):
+        if "description" in plan_text or "attribute" in plan_text:
+            return "product_description"
+    if (
+        routing_result is not None
+        and not bool(getattr(routing_result, "needs_clarification", False))
+        and float(getattr(routing_result, "planner_confidence", 0.0) or 0.0) >= _ROUTER_OVERRIDE_PRESERVE_CONFIDENCE
+        and MultiAgentDomain.Domain.TRANSACTION in domains
+        and any(
+            token in plan_text
+            for token in (
+                "history",
+                "status_lookup",
+                "reservation_status",
+                "order_status",
+                "order_history",
+                "owned",
+                "maintenance_history",
+                "cancel_status",
+            )
+        )
+    ):
+        return "owned_record_lookup"
+
     if regex_slots.pending_intent == "order" or explicit_override_reason == "explicit_current_turn_purchase":
         return "purchase_continuation"
     if regex_slots.pending_intent == "stock" or explicit_override_reason == "explicit_current_turn_stock_or_booking":
@@ -999,7 +1042,6 @@ def _current_turn_action_mode(
             return "booking_continuation"
         return "purchase_continuation"
 
-    plan_text = " ".join(str(item or "").lower() for item in (getattr(routing_result, "execution_plan", None) or ()))
     if MultiAgentDomain.Domain.SUPPORT in domains:
         return "support_policy_answer"
     if MultiAgentDomain.Domain.DISCOVERY in domains:

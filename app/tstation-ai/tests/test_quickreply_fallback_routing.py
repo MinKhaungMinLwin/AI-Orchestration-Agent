@@ -7777,6 +7777,52 @@ def test_action_mode_keeps_stale_transaction_context_dormant_for_independent_tur
     assert _context_state_for_action(action_mode=action_mode, resume_source="none", slots=slots) == "dormant"
 
 
+def test_high_confidence_support_policy_beats_purchase_keyword_action_mode() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000309780",
+        tire_size="225/45R17",
+        ord_qty=4,
+        shop_name="판교점",
+        pending_intent="order",
+        goal_type="place_order",
+    )
+    routing_result = MultiAgentDomain(
+        reason="store service policy question",
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        execution_plan=["support:store_service_availability"],
+        user_behavior="asking if externally purchased tires can be installed at a store with labor fee",
+        flow="support policy answer",
+        claim_check_type="none",
+        complaint_scope="none",
+        agent_prompt_profile="full",
+        policy_intent="store_service_availability",
+        planner_confidence=0.95,
+    )
+
+    action_mode = _current_turn_action_mode(
+        user_text="인터넷에서 구매하니까 더 싼데? 매장에 가져가서 공임비 받고 장착도 가능하지?",
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        routing_result=routing_result,
+        regex_slots=ConversationSlots(pending_intent="order"),
+        merged_slots=slots,
+        explicit_override_reason="explicit_current_turn_purchase",
+        resume_source="none",
+    )
+    context_state = _context_state_for_action(action_mode=action_mode, resume_source="none", slots=slots)
+    if action_mode in {"purchase_continuation", "stock_check", "booking_continuation"}:
+        _stage_pending_order_context(slots, source=f"pre_policy_context:{context_state}")
+    else:
+        _stage_dormant_transaction_context(slots, source=f"pre_policy_context:{action_mode}")
+
+    assert action_mode == "support_policy_answer"
+    assert context_state == "dormant"
+    assert "pending_order_context" not in (slots.availability_context or {})
+    assert "dormant_purchase_context" in (slots.availability_context or {})
+    assert slots.availability_context["dormant_purchase_context"]["source"] == (
+        "pre_policy_context:support_policy_answer"
+    )
+
+
 def test_action_mode_resumes_stored_order_context_only_with_explicit_resume_anchor() -> None:
     slots = ConversationSlots(
         goods_no="G000000309780",
