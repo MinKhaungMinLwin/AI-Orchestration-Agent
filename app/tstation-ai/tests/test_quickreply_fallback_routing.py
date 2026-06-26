@@ -73,7 +73,6 @@ from services.tstation.chat import (
     _build_signup_first_purchase_benefit_event,
     _build_owned_coupon_best_discount_event,
     _build_owned_coupon_expiry_lookup_event,
-    _build_oe_replacement_guidance_event,
     _build_product_coupon_eligibility_event,
     _build_product_coupon_price_amount_event,
     _build_product_coupon_price_no_product_event,
@@ -384,6 +383,7 @@ from services.tstation.policies.ui_action_policy import (
     build_preview_tool_mapped_event,
     build_staggered_tire_quantity_limit_event,
     build_staggered_vehicle_tire_selection_event,
+    build_oe_replacement_guidance_event,
     build_other_store_search_result_event,
     build_other_store_stock_unavailable_event,
     build_logistics_earliest_install_fallback_event,
@@ -2185,7 +2185,7 @@ def test_owned_vehicle_selection_cta_is_detected_after_context_extraction() -> N
 
 
 def test_oe_replacement_guidance_explains_oe_re_before_vehicle_selection() -> None:
-    event = _build_oe_replacement_guidance_event(
+    event = build_oe_replacement_guidance_event(
         None,
         "내 차 살 때 끼워져 있던 타이어랑 똑같은 거 있어?",
         include_vehicle_selection=True,
@@ -2215,7 +2215,7 @@ def test_oe_replacement_guidance_does_not_recommend_vehicle_products_immediately
         },
     }
 
-    event = _build_oe_replacement_guidance_event(
+    event = build_oe_replacement_guidance_event(
         selected_vehicle,
         "내 차 제네시스 GV70이고 미쉐린 타이어 끼고 있었던 거 같은데, 동일한 상품 판매하고 있어?",
     )
@@ -9339,20 +9339,23 @@ def test_promotion_gift_policy_beats_stale_purchase_context_without_high_confide
 
 
 @pytest.mark.parametrize(
-    ("user_text", "policy_intent"),
+    ("user_text", "execution_plan", "policy_intent"),
     [
         (
             "예약한 매장에 왔는데 주문한 거랑 다른 타이어가 왔어",
-            "tstation_service_complaint",
+            ["support:tstation_service_complaint"],
+            "none",
         ),
         (
             "해외 비자카드로 결제하려는데 본인인증이 안 넘어가",
-            "payment_troubleshooting",
+            ["support:payment_error_troubleshooting"],
+            "payment_error_troubleshooting",
         ),
     ],
 )
 def test_support_policy_action_mode_does_not_resume_purchase_from_regex_candidate(
     user_text: str,
+    execution_plan: list[str],
     policy_intent: str,
 ) -> None:
     regex_slots = ConversationSlots.extract_from_user_text(user_text)
@@ -9367,7 +9370,7 @@ def test_support_policy_action_mode_does_not_resume_purchase_from_regex_candidat
     routing_result = MultiAgentDomain(
         reason="support policy question during purchase flow",
         domains=[MultiAgentDomain.Domain.SUPPORT],
-        execution_plan=[f"support:{policy_intent}"],
+        execution_plan=execution_plan,
         user_behavior="support question",
         flow="support policy answer",
         claim_check_type="none",
@@ -9383,11 +9386,7 @@ def test_support_policy_action_mode_does_not_resume_purchase_from_regex_candidat
         routing_result=routing_result,
         regex_slots=regex_slots,
         merged_slots=slots,
-        explicit_override_reason=_explicit_current_turn_override_reason(
-            user_text=user_text,
-            regex_slots=regex_slots,
-            explicit_store_purchase_chain_request=False,
-        ),
+        explicit_override_reason=None,
         resume_source="none",
     )
 

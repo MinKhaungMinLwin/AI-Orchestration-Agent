@@ -2077,6 +2077,90 @@ def resolve_goods_no_from_recent_product_context(
     return str(goods_no).strip() if goods_no else None
 
 
+def oe_replacement_cta_context() -> dict[str, str]:
+    return {
+        "intentKey": "oe_replacement",
+        "source_intent": "oe_replacement_guidance",
+        "expected_contract_intent": "oe_re_product_filter_summary",
+    }
+
+
+def is_oe_replacement_cta_context(value: Mapping[str, Any] | None) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    source_intent = str(value.get("source_intent") or "").strip()
+    expected_contract_intent = str(value.get("expected_contract_intent") or "").strip()
+    return source_intent == "oe_replacement_guidance" or expected_contract_intent in {
+        "oe_re_product_filter_summary",
+        "oe_re_concept_explanation",
+    }
+
+
+def build_oe_replacement_guidance_event(
+    selected_vehicle: Mapping[str, Any] | None,
+    user_text: str,
+    *,
+    include_vehicle_selection: bool = False,
+) -> dict[str, Any]:
+    selected_car = (selected_vehicle or {}).get("car") if isinstance((selected_vehicle or {}).get("car"), Mapping) else {}
+    selected_meta = (selected_vehicle or {}).get("meta") if isinstance((selected_vehicle or {}).get("meta"), Mapping) else {}
+    car_info = str(selected_car.get("info") or selected_car.get("description") or "").strip()
+    car_no = str(selected_meta.get("carNo") or selected_car.get("licensePlate") or "").strip()
+    front_size = str(selected_meta.get("tireSize") or "").strip()
+    rear_size = str(selected_meta.get("tireSizeRe") or "").strip()
+
+    lines = [
+        "OE는 차량 출고 시 장착된 순정 타이어이고, RE는 교체용으로 판매되는 타이어예요.",
+        "출고 타이어와 완전히 같은 상품은 차종, 연식, 트림, 당시 출고 브랜드에 따라 달라서 차량 정보만으로는 바로 확정하기 어려워요.",
+    ]
+    if car_info:
+        vehicle_label = f"{car_info} ({car_no})" if car_no else car_info
+        lines.append(f"\n{vehicle_label} 기준으로 확인을 이어가려면 현재 장착된 타이어의 브랜드와 사이즈를 함께 봐야 해요.")
+        if front_size and rear_size and front_size != rear_size:
+            lines.append(f"현재 등록 정보의 규격은 전륜 {front_size}, 후륜 {rear_size}로 확인돼요.")
+        elif front_size or rear_size:
+            lines.append(f"현재 등록 정보의 규격은 {front_size or rear_size}로 확인돼요.")
+    else:
+        lines.append("\n차량을 선택해 주시면 등록된 규격 기준으로 동일 상품 또는 가까운 교체용 상품을 찾아드릴게요.")
+
+    if re.search(r"미쉐린|michelin", user_text or "", re.IGNORECASE):
+        lines.append("미쉐린으로 기억하고 계시면, 해당 브랜드 상품부터 확인하고 없으면 호환되는 교체용 상품을 함께 안내할게요.")
+    else:
+        lines.append("동일 OE 상품 확인이 어려운 경우에는 같은 규격의 주력 교체용 상품을 대안으로 안내드릴게요.")
+
+    cta_context = oe_replacement_cta_context()
+    quick_replies = [
+        {"label": "차량 선택해서 찾기", "domain": "DISCOVERY", "intentKey": "oe_replacement", "metadata": cta_context},
+        {"label": "사이즈 직접 입력", "domain": "DISCOVERY", "intentKey": "oe_replacement", "metadata": cta_context},
+        {"label": "교체용 상품 추천", "domain": "DISCOVERY", "intentKey": "oe_replacement", "metadata": cta_context},
+    ]
+    if selected_vehicle is not None:
+        quick_replies = [
+            {"label": "동일 상품 찾기", "domain": "DISCOVERY", "intentKey": "oe_replacement", "metadata": cta_context},
+            {"label": "교체용 상품 추천", "domain": "DISCOVERY", "intentKey": "oe_replacement", "metadata": cta_context},
+            {"label": "사이즈 직접 입력", "domain": "DISCOVERY", "intentKey": "oe_replacement", "metadata": cta_context},
+        ]
+    elif include_vehicle_selection:
+        quick_replies = [
+            {"label": "보유차량 중 선택", "domain": "DISCOVERY", "intentKey": "oe_replacement", "metadata": cta_context},
+            {"label": "차번+이름으로 검색", "domain": "DISCOVERY", "intentKey": "oe_replacement", "metadata": cta_context},
+            {"label": "사이즈 직접 입력", "domain": "DISCOVERY", "intentKey": "oe_replacement", "metadata": cta_context},
+        ]
+
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "discovery",
+        "assistant_response_source": "code_oe_replacement_guidance",
+        "data": {
+            "assistantResponse": "\n".join(lines),
+            "quickReplies": quick_replies,
+            "predictedDomains": ["DISCOVERY"],
+            "metadata": {"ctaContext": cta_context, "response_shape_key": "oe_re_concept_explanation"},
+        },
+    }
+
+
 def goods_no_from_template_event(event: Mapping[str, Any] | None) -> str:
     if not isinstance(event, Mapping):
         return ""
