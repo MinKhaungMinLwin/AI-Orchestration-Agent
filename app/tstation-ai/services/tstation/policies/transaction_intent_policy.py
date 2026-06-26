@@ -615,14 +615,29 @@ def build_transaction_intent_frame(
         else extract_store_attribute_inquiry(text, store_name=action_store_name)
     )
     current_store_service_request = normalize_store_service_request(text)
+    router_store_service_search = (
+        str(slots.get("policy_intent") or "") == "store_service_search"
+        and bool(str(slots.get("service_name") or slots.get("service_code") or "").strip())
+        and bool(str(slots.get("region") or slots.get("place_query") or "").strip())
+    )
+    router_store_service_codes = tuple(
+        str(code).strip()
+        for code in (slots.get("service_codes") or ())
+        if str(code).strip()
+    ) or (() if not slots.get("service_code") else (str(slots.get("service_code")).strip(),))
     current_store_service_availability = has_store_service_availability_signal(text)
     current_store_service_search = bool(
-        current_store_service_request
+        (
+            router_store_service_search
+            or (
+                current_store_service_request
+                and _STORE_SERVICE_SEARCH_RE.search(text)
+                and not current_stock
+                and not current_price
+                and not current_purchase
+            )
+        )
         and not action_store_name
-        and _STORE_SERVICE_SEARCH_RE.search(text)
-        and not current_stock
-        and not current_price
-        and not current_purchase
     )
     current_store_visit_advisory = bool(
         _STORE_VISIT_ADVISORY_RE.search(text)
@@ -936,9 +951,22 @@ def build_transaction_intent_frame(
     elif current_store_service_search:
         intent = "store_service_search"
         sub_intent = "store_service_search"
-        entities["service_name"] = current_store_service_request["service_name"]
-        entities["service_codes"] = tuple(current_store_service_request["service_codes"])
-        entities["service_key"] = current_store_service_request["service_key"]
+        service_name = str(
+            (current_store_service_request or {}).get("service_name")
+            or slots.get("service_name")
+            or "매장 서비스"
+        ).strip()
+        service_codes = tuple(
+            (current_store_service_request or {}).get("service_codes")
+            or router_store_service_codes
+        )
+        entities["service_name"] = service_name
+        entities["service_codes"] = service_codes
+        entities["service_key"] = str(
+            (current_store_service_request or {}).get("service_key")
+            or slots.get("service_key")
+            or service_name
+        ).strip()
     elif current_store_service_availability and not (current_stock or current_price or current_purchase):
         intent = "store_service_advisory"
         sub_intent = "store_service_advisory"
@@ -1313,7 +1341,7 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
             allowed_tools=("search_stores_tool", "get_store_list_tool"),
             preferred_tool="search_stores_tool",
             tool_args_patch=args,
-            forbidden_tools=("get_store_schedule_tool", "transaction_store_preview_tool"),
+            forbidden_tools=("get_store_schedule_tool", "transaction_store_preview_tool", "quick_order_tool"),
             required_slots=action_required_slots,
             metadata={
                 "response_intent": "store_service_search",

@@ -70,6 +70,36 @@ def test_store_service_search_without_region_requires_region() -> None:
     assert decision.required_slots == ("region",)
 
 
+def test_router_structured_store_service_search_overrides_generic_store_search_text() -> None:
+    user_text = "윈터 타이어 끼고 싶은데, 지금 장착중인 타이어 보관해주는 매장이 경기권에 어디어디 있어?"
+    frame = build_transaction_intent_frame(
+        user_text,
+        known_slots={
+            "policy_intent": "store_service_search",
+            "service_name": "타이어 보관서비스",
+            "service_code": "119",
+            "service_codes": ("119",),
+            "region": "경기",
+            "place_query": "경기권",
+        },
+    )
+    plan = plan_transaction_tools(frame)
+    decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text=user_text,
+        known_slots=dict(frame.known_slots),
+    )
+
+    assert frame.intent == "store_service_search"
+    assert frame.known_slots["region"] == "경기"
+    assert frame.known_slots["service_codes"] == ("119",)
+    assert plan.allowed_tools == ("search_stores_tool", "get_store_list_tool")
+    assert "get_store_schedule_tool" in plan.forbidden_tools
+    assert "transaction_store_preview_tool" in plan.forbidden_tools
+    assert "quick_order_tool" in plan.forbidden_tools
+    assert decision.metadata["response_shape_key"] == "store_service_search"
+
+
 def test_plain_store_info_lookup_allows_store_detail_tools() -> None:
     user_text = "티스테이션 한남점 전화번호 알려줘"
     frame = build_transaction_intent_frame(user_text, known_slots={})

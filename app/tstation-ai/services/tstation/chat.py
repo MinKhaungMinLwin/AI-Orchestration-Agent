@@ -116,6 +116,7 @@ from services.tstation.policies.store_confirmation_policy import (
 )
 from services.tstation.policies.store_service_gate import (
     StoreAttributeInquiry,
+    StoreServiceGateDecision,
     classify_store_name_role,
     decide_store_service_gate,
     extract_store_attribute_inquiry,
@@ -1400,6 +1401,57 @@ def _restore_store_attribute_lookup_contract(
     routing_result.override_blocked = False
     routing_result.blocked_override_reason = "none"
     return target_domains
+
+
+def _restore_store_service_search_contract(
+    routing_result: MultiAgentDomain | None,
+) -> list[MultiAgentDomain.Domain] | None:
+    if routing_result is None:
+        return None
+    if str(getattr(routing_result, "policy_intent", "") or "") != "store_service_search":
+        return None
+    service_name = str(getattr(routing_result, "service_name", "") or "").strip()
+    service_code = str(getattr(routing_result, "service_code", "") or "").strip()
+    region = str(getattr(routing_result, "region", "") or "").strip()
+    place_query = str(getattr(routing_result, "place_query", "") or "").strip()
+    if not (service_name or service_code):
+        return None
+    if not (region or place_query):
+        return None
+    if bool(getattr(routing_result, "needs_clarification", False)):
+        return None
+    domains = list(getattr(routing_result, "domains", []) or [])
+    execution_plan = list(getattr(routing_result, "execution_plan", []) or [])
+    target_domains = [MultiAgentDomain.Domain.TRANSACTION]
+    target_plan = ["transaction:store_service_search"]
+    if domains == target_domains and execution_plan == target_plan:
+        return None
+
+    if not routing_result.original_router_domains:
+        routing_result.original_router_domains = list(domains)
+    if not routing_result.original_router_execution_plan:
+        routing_result.original_router_execution_plan = list(execution_plan)
+    routing_result.domains = target_domains
+    routing_result.execution_plan = target_plan
+    routing_result.agent_prompt_profile = AgentPromptProfile.TRANSACTION_STORE
+    routing_result.override_applied = True
+    routing_result.override_reason = "restore_store_service_search_contract"
+    routing_result.override_blocked = False
+    routing_result.blocked_override_reason = "none"
+    return target_domains
+
+
+def _should_emit_pre_router_store_service_guard(
+    *,
+    user_text: str,
+    decision: StoreServiceGateDecision,
+    store_context_name: str | None,
+) -> bool:
+    if decision.intent not in {"store_attribute_inquiry", "store_special_service"}:
+        return False
+    if _STORE_SERVICE_ROUTE_EXCLUSION_RE.search(user_text or ""):
+        return False
+    return bool(str(store_context_name or "").strip())
 
 
 def _store_attribute_selection_continuation_inquiry(
@@ -21602,17 +21654,18 @@ class TStationChatServiceV2:
                 merged_slots.shop_name = None
 
             store_service_decision = decide_store_service_gate(user_text=last_user_text)
-            if (
-                store_service_decision.intent in {"store_attribute_inquiry", "store_special_service"}
-                and not _STORE_SERVICE_ROUTE_EXCLUSION_RE.search(last_user_text)
+            store_context_name = (
+                regex_slots.shop_name
+                or merged_slots.shop_name
+                or getattr(merged_slots, "store_name", None)
+                or existing_slots.shop_name
+                or getattr(existing_slots, "store_name", None)
+            )
+            if _should_emit_pre_router_store_service_guard(
+                user_text=last_user_text,
+                decision=store_service_decision,
+                store_context_name=store_context_name,
             ):
-                store_context_name = (
-                    regex_slots.shop_name
-                    or merged_slots.shop_name
-                    or getattr(merged_slots, "store_name", None)
-                    or existing_slots.shop_name
-                    or getattr(existing_slots, "store_name", None)
-                )
                 if regex_slots.shop_name:
                     merged_slots.shop_name = regex_slots.shop_name
                 if store_context_name and not merged_slots.shop_name:
@@ -21624,9 +21677,9 @@ class TStationChatServiceV2:
                     last_user_text,
                     store_name=str(store_context_name or "").strip() or None,
                 )
-                if store_service_event is not None and not store_context_name:
+                if store_service_event is not None:
                     logger.info(
-                        "[STORE_ATTRIBUTE_INQUIRY] support guard response without store: store=%r reason=%s labels=%s",
+                        "[STORE_ATTRIBUTE_INQUIRY] pre-router guard with store context: store=%r reason=%s labels=%s",
                         store_context_name,
                         store_service_decision.reason,
                         unverifiable_store_preference_labels(last_user_text),
@@ -24035,6 +24088,17 @@ class TStationChatServiceV2:
                 list(getattr(routing_result, "execution_plan", []) or []),
             )
 
+        restored_store_service_search_domains = _restore_store_service_search_contract(routing_result)
+        if restored_store_service_search_domains is not None:
+            domains = restored_store_service_search_domains
+            skip_decision = False
+            speculative_classify_future = None
+            logger.info(
+                "[ROUTER_CONTRACT] restored store_service_search transaction contract: domains=%s plan=%s",
+                [domain.value for domain in domains],
+                list(getattr(routing_result, "execution_plan", []) or []),
+            )
+
         restored_store_selection_domains = _restore_blocked_transaction_store_selection_contract(routing_result)
         if restored_store_selection_domains is not None:
             domains = restored_store_selection_domains
@@ -24170,6 +24234,22 @@ class TStationChatServiceV2:
             transaction_known_slots["router_transaction_intent"] = "price_or_benefit_alert_request"
         elif _router_contract_is_order_cancel_fee_inquiry(routing_result):
             transaction_known_slots["router_transaction_intent"] = "order_cancel_fee_inquiry"
+        if str(getattr(routing_result, "policy_intent", "") or "") == "store_service_search":
+            service_name = str(getattr(routing_result, "service_name", "") or "").strip()
+            service_code = str(getattr(routing_result, "service_code", "") or "").strip()
+            region = str(getattr(routing_result, "region", "") or "").strip()
+            place_query = str(getattr(routing_result, "place_query", "") or "").strip()
+            if (service_name or service_code) and (region or place_query):
+                transaction_known_slots["policy_intent"] = "store_service_search"
+                if service_name:
+                    transaction_known_slots["service_name"] = service_name
+                if service_code:
+                    transaction_known_slots["service_code"] = service_code
+                    transaction_known_slots["service_codes"] = (service_code,)
+                if region:
+                    transaction_known_slots["region"] = region
+                if place_query:
+                    transaction_known_slots["place_query"] = place_query
         transaction_tool_patch, transaction_response_decision, transaction_tool_plan = _build_transaction_policy_context(
             domains=domains,
             last_user_text=last_user_text,

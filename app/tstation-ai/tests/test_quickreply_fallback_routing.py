@@ -200,8 +200,10 @@ from services.tstation.chat import (
     _router_contract_is_high_confidence_comparison,
     _router_contract_is_high_confidence_policy,
     _router_contract_is_high_confidence_transaction_flow,
+    _restore_store_service_search_contract,
     _store_attribute_selection_continuation_inquiry,
     _store_attribute_selection_continuation_from_location_selection,
+    _should_emit_pre_router_store_service_guard,
     _should_preserve_router_contract,
     _is_product_attribute_lookup_query,
     _should_apply_product_attribute_resolver,
@@ -16048,6 +16050,10 @@ def _routing_result(
     comparison_metric: str = "none",
     requested_product_attribute: str = "none",
     policy_intent: str = "none",
+    service_name: str = "",
+    service_code: str = "",
+    region: str = "",
+    place_query: str = "",
     referred_object_status: str = "resolved",
     referred_object_type: str = "none",
     needs_clarification: bool = False,
@@ -16066,6 +16072,10 @@ def _routing_result(
         comparison_metric=comparison_metric,
         requested_product_attribute=requested_product_attribute,
         policy_intent=policy_intent,
+        service_name=service_name,
+        service_code=service_code,
+        region=region,
+        place_query=place_query,
         referred_object_status=referred_object_status,
         referred_object_type=referred_object_type,
         needs_clarification=needs_clarification,
@@ -17258,6 +17268,30 @@ def test_store_service_advisory_without_store_asks_scope_not_random_store_search
     assert _labels(event["data"]["quickReplies"])[0] == "매장명 입력"
 
 
+def test_pre_router_store_service_guard_skips_region_search_request_without_store_context() -> None:
+    user_text = "윈터 타이어 끼고 싶은데, 지금 장착중인 타이어 보관해주는 매장이 경기권에 어디어디 있어?"
+    decision = decide_store_service_gate(user_text=user_text)
+
+    assert decision.intent == "store_special_service"
+    assert _should_emit_pre_router_store_service_guard(
+        user_text=user_text,
+        decision=decision,
+        store_context_name=None,
+    ) is False
+
+
+def test_pre_router_store_service_guard_keeps_specific_store_attribute_flow() -> None:
+    user_text = "광교신도시점 타이어 보관 가능해?"
+    decision = decide_store_service_gate(user_text=user_text)
+
+    assert decision.intent == "store_attribute_inquiry"
+    assert _should_emit_pre_router_store_service_guard(
+        user_text=user_text,
+        decision=decision,
+        store_context_name="광교신도시점",
+    ) is True
+
+
 def test_region_tire_storage_service_search_uses_store_search_contract() -> None:
     user_text = "경기권에 타이어 보관해주는 매장 어디 있어?"
     frame = build_transaction_intent_frame(user_text, known_slots={})
@@ -17281,6 +17315,59 @@ def test_region_tire_storage_service_search_uses_store_search_contract() -> None
     assert tool_plan.tool_args_patch["svc_codes"] == ["119"]
     assert "get_store_schedule_tool" in tool_plan.forbidden_tools
     assert "transaction_store_preview_tool" in tool_plan.forbidden_tools
+    assert response_decision.template == TemplateName.LOCATION
+    assert response_decision.metadata["response_shape_key"] == "store_service_search"
+
+
+def test_router_store_service_search_contract_restores_transaction_route_from_support_domain() -> None:
+    routing = _routing_result(
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        execution_plan=["support:store_service_search"],
+        agent_prompt_profile="full",
+        policy_intent="store_service_search",
+        service_name="타이어 보관서비스",
+        service_code="119",
+        region="경기",
+        place_query="경기권",
+    )
+
+    restored = _restore_store_service_search_contract(routing)
+
+    assert restored == [MultiAgentDomain.Domain.TRANSACTION]
+    assert routing.domains == [MultiAgentDomain.Domain.TRANSACTION]
+    assert routing.execution_plan == ["transaction:store_service_search"]
+    assert routing.agent_prompt_profile == chat_module.AgentPromptProfile.TRANSACTION_STORE
+    assert routing.override_reason == "restore_store_service_search_contract"
+
+
+def test_actual_store_service_search_sentence_prefers_store_search_contract_over_today_context() -> None:
+    user_text = "윈터 타이어 끼고 싶은데, 지금 장착중인 타이어 보관해주는 매장이 경기권에 어디어디 있어?"
+    frame = build_transaction_intent_frame(
+        user_text,
+        known_slots={
+            "policy_intent": "store_service_search",
+            "service_name": "타이어 보관서비스",
+            "service_code": "119",
+            "service_codes": ("119",),
+            "region": "경기",
+            "place_query": "경기권",
+        },
+    )
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text=user_text,
+        known_slots=dict(frame.known_slots),
+    )
+
+    assert frame.intent == "store_service_search"
+    assert frame.sub_intent == "store_service_search"
+    assert frame.known_slots["region"] == "경기"
+    assert frame.known_slots["service_codes"] == ("119",)
+    assert tool_plan.allowed_tools == ("search_stores_tool", "get_store_list_tool")
+    assert "get_store_schedule_tool" in tool_plan.forbidden_tools
+    assert "transaction_store_preview_tool" in tool_plan.forbidden_tools
+    assert "quick_order_tool" in tool_plan.forbidden_tools
     assert response_decision.template == TemplateName.LOCATION
     assert response_decision.metadata["response_shape_key"] == "store_service_search"
 
