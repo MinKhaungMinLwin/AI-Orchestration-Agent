@@ -2685,6 +2685,46 @@ def store_availability_followup_context(
     }
 
 
+def decide_store_availability_followup_action(
+    *,
+    product_keyword: str,
+    followup_context: Mapping[str, Any],
+) -> dict[str, Any]:
+    tire_size = str(followup_context.get("tire_size") or "").strip()
+    goods_no = str(followup_context.get("goods_no") or "").strip()
+    store_name = str(followup_context.get("store_name") or "").strip() or None
+    requested_day_label = str(followup_context.get("requested_day_label") or "오늘").strip() or "오늘"
+    ord_qty = followup_context.get("ord_qty")
+    prompt_kwargs = {
+        "product_keyword": product_keyword,
+        "tire_size": tire_size,
+        "store_name": store_name,
+        "goods_no": goods_no,
+        "requested_day_label": requested_day_label,
+    }
+    if not ord_qty:
+        return {
+            "action": "prompt_quantity",
+            "prompt_kwargs": prompt_kwargs,
+        }
+    if not store_name:
+        return {
+            "action": "prompt_store",
+            "prompt_kwargs": {
+                **prompt_kwargs,
+                "store_name": None,
+            },
+        }
+    return {
+        "action": "run_preview",
+        "prompt_kwargs": prompt_kwargs,
+        "preview_input": dict(followup_context.get("preview_input") or {}),
+        "ord_qty": ord_qty,
+        "store_name": store_name,
+        "tire_size": tire_size,
+    }
+
+
 def is_size_only_store_availability_continuation(
     user_text: str,
     *,

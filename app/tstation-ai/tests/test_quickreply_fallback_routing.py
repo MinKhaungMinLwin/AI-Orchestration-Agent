@@ -424,6 +424,7 @@ from services.tstation.policies.ui_action_policy import (
     goods_no_from_template_event,
     normalize_preview_tool_result,
     build_store_availability_quantity_prompt_event,
+    decide_store_availability_followup_action,
     validate_ui_actions_for_contract,
 )
 from services.tstation.policies.pickup_service_gate import deterministic_pickup_service_gate_decision
@@ -5657,6 +5658,64 @@ def test_store_availability_size_followup_quantity_prompt_invariant() -> None:
     assert event["data"]["metadata"]["goods_no"] == "G000000319593"
     assert event["data"]["metadata"]["tireSize"] == "235/55R19"
     assert event["data"]["metadata"]["tire_size"] == "235/55R19"
+
+
+def test_store_availability_followup_action_prompts_for_quantity_first() -> None:
+    action = decide_store_availability_followup_action(
+        product_keyword="벤투스 에어S",
+        followup_context={
+            "goods_no": "G000000319593",
+            "tire_size": "235/55R19",
+            "ord_qty": None,
+            "store_name": "티스테이션 판교점",
+            "requested_day_label": "오늘",
+        },
+    )
+
+    assert action["action"] == "prompt_quantity"
+    assert action["prompt_kwargs"]["product_keyword"] == "벤투스 에어S"
+    assert action["prompt_kwargs"]["store_name"] == "티스테이션 판교점"
+
+
+def test_store_availability_followup_action_requires_store_before_preview() -> None:
+    action = decide_store_availability_followup_action(
+        product_keyword="벤투스 에어S",
+        followup_context={
+            "goods_no": "G000000319593",
+            "tire_size": "235/55R19",
+            "ord_qty": 4,
+            "store_name": None,
+            "requested_day_label": "오늘",
+        },
+    )
+
+    assert action["action"] == "prompt_store"
+    assert action["prompt_kwargs"]["store_name"] is None
+
+
+def test_store_availability_followup_action_runs_preview_with_context() -> None:
+    action = decide_store_availability_followup_action(
+        product_keyword="벤투스 에어S",
+        followup_context={
+            "goods_no": "G000000319593",
+            "tire_size": "235/55R19",
+            "ord_qty": 4,
+            "store_name": "티스테이션 판교점",
+            "requested_day_label": "오늘",
+            "preview_input": {
+                "goods_no": "G000000319593",
+                "ord_qty": 4,
+                "store_nm": "티스테이션 판교점",
+                "include_price": True,
+                "requested_cal_day": "20260626",
+            },
+        },
+    )
+
+    assert action["action"] == "run_preview"
+    assert action["preview_input"]["requested_cal_day"] == "20260626"
+    assert action["store_name"] == "티스테이션 판교점"
+    assert action["ord_qty"] == 4
 
 
 def test_store_availability_continuation_recovers_recent_single_store_name() -> None:

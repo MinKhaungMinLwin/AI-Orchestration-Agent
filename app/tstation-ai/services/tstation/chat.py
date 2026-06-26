@@ -185,6 +185,7 @@ from services.tstation.policies.ui_action_policy import (
     requested_cal_day_from_availability_context,
     requested_day_label_from_availability_context,
     recent_store_name_for_availability_continuation,
+    decide_store_availability_followup_action,
     resolve_ui_action_context,
     rewrite_vehicle_selection_user_text,
     store_availability_followup_context,
@@ -27414,34 +27415,22 @@ class TStationChatServiceV2:
                             parse_requested_reservation_date=_parse_requested_reservation_date,
                             requested_reservation_cal_day_or_today=_requested_reservation_cal_day_or_today,
                         )
-                        tire_size = str(followup_context.get("tire_size") or "")
-                        ord_qty = followup_context.get("ord_qty")
-                        store_name = str(followup_context.get("store_name") or "").strip() or None
-                        requested_day_label = str(followup_context.get("requested_day_label") or "오늘")
-                        if not ord_qty:
+                        followup_action = decide_store_availability_followup_action(
+                            product_keyword=preferred_keyword,
+                            followup_context=followup_context,
+                        )
+                        if followup_action["action"] == "prompt_quantity":
                             quantity_event = _finalize_direct_code_event(
-                                build_store_availability_quantity_prompt_event(
-                                    product_keyword=preferred_keyword,
-                                    tire_size=tire_size,
-                                    store_name=store_name,
-                                    goods_no=goods_no,
-                                    requested_day_label=requested_day_label,
-                                ),
+                                build_store_availability_quantity_prompt_event(**followup_action["prompt_kwargs"]),
                                 turn_contract=turn_contract,
                                 intent="stock_store_search",
                                 source="code_store_availability_size_followup_quantity",
                                 required_tools=("search_product_tool",),
                             )
                             return (emitted_events, quantity_event) if quantity_event is not None else None
-                        if not store_name:
+                        if followup_action["action"] == "prompt_store":
                             store_event = _finalize_direct_code_event(
-                                build_store_availability_quantity_prompt_event(
-                                    product_keyword=preferred_keyword,
-                                    tire_size=tire_size,
-                                    store_name=None,
-                                    goods_no=goods_no,
-                                    requested_day_label=requested_day_label,
-                                ),
+                                build_store_availability_quantity_prompt_event(**followup_action["prompt_kwargs"]),
                                 turn_contract=turn_contract,
                                 intent="stock_store_search",
                                 source="code_store_availability_size_followup_store",
@@ -27449,7 +27438,10 @@ class TStationChatServiceV2:
                             )
                             return (emitted_events, store_event) if store_event is not None else None
 
-                        preview_input = dict(followup_context.get("preview_input") or {})
+                        preview_input = dict(followup_action.get("preview_input") or {})
+                        ord_qty = followup_action.get("ord_qty")
+                        store_name = str(followup_action.get("store_name") or "").strip()
+                        tire_size = str(followup_action.get("tire_size") or "").strip()
                         emitted_events.append({
                             "type": "status",
                             "status": "tool_start",
@@ -27514,13 +27506,7 @@ class TStationChatServiceV2:
                             )
                             return (emitted_events, stock_event) if stock_event is not None else None
                         fallback_event = _finalize_direct_code_event(
-                            build_store_availability_quantity_prompt_event(
-                                product_keyword=preferred_keyword,
-                                tire_size=tire_size,
-                                store_name=store_name,
-                                goods_no=goods_no,
-                                requested_day_label=requested_day_label,
-                            ),
+                            build_store_availability_quantity_prompt_event(**followup_action["prompt_kwargs"]),
                             turn_contract=turn_contract,
                             intent="stock_store_search",
                             source="code_store_availability_size_followup_fallback",
