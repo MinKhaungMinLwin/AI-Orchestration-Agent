@@ -440,6 +440,11 @@ def test_chip_context_preserves_action_contract_fields() -> None:
             "domain": "TRANSACTION",
             "actionId": "enter_region",
             "intentKey": "today_install",
+            "cta_id": "reservation.region.enter",
+            "cta_action": "enter_region",
+            "expected_behavior": "conversation_action",
+            "source_intent": "stock_store_search",
+            "expected_contract_intent": "stock_store_search",
             "metadata": {"goodsNo": "G000000317729", "ordQty": 4},
         },
     )
@@ -448,6 +453,9 @@ def test_chip_context_preserves_action_contract_fields() -> None:
 
     assert dumped["actionId"] == "enter_region"
     assert dumped["intentKey"] == "today_install"
+    assert dumped["cta_id"] == "reservation.region.enter"
+    assert dumped["cta_action"] == "enter_region"
+    assert dumped["expected_contract_intent"] == "stock_store_search"
     assert dumped["metadata"]["goodsNo"] == "G000000317729"
 
 

@@ -102,6 +102,7 @@ from services.tstation.policies.coupon_query_gate import (
     decide_coupon_query_gate,
     should_consider_coupon_gate,
 )
+from services.tstation.policies.cta_registry import cta_trace_metadata, normalize_quickreply_ctas
 from services.tstation.policies.delivery_policy_gate import (
     DeliveryPolicyIntent,
     decide_delivery_policy_gate,
@@ -5622,8 +5623,18 @@ _BOOKING_PREVIEW_CHIPS = [
 ]
 
 
+def _chip_context_dict(chip_context: Any | None) -> dict[str, Any]:
+    if isinstance(chip_context, dict):
+        return chip_context
+    if hasattr(chip_context, "model_dump"):
+        dumped = chip_context.model_dump()
+        return dumped if isinstance(dumped, dict) else {}
+    return {}
+
+
 def _chip_value(chip_context: dict[str, Any] | None, *keys: str) -> str:
-    if not isinstance(chip_context, dict):
+    chip_context = _chip_context_dict(chip_context)
+    if not chip_context:
         return ""
     for key in keys:
         value = chip_context.get(key)
@@ -5696,10 +5707,22 @@ def _quickreply_cta_context_from_template(template_data: dict | None) -> dict[st
 
 
 def _quickreply_cta_context_from_chip(chip_context: dict[str, Any] | None) -> dict[str, Any]:
-    if not isinstance(chip_context, dict):
+    chip_context = _chip_context_dict(chip_context)
+    if not chip_context:
         return {}
     metadata = chip_context.get("metadata")
-    return dict(metadata) if isinstance(metadata, dict) else {}
+    context = dict(metadata) if isinstance(metadata, dict) else {}
+    for key in (
+        "cta_id",
+        "cta_action",
+        "expected_behavior",
+        "source_intent",
+        "expected_contract_intent",
+    ):
+        value = chip_context.get(key)
+        if value not in (None, ""):
+            context.setdefault(key, value)
+    return context
 
 
 def _merged_quickreply_cta_context(
@@ -23396,11 +23419,10 @@ class TStationChatServiceV2:
         # node: input=last user text, output=domains. Any nested LLM call from
         # classify_multi_intent attaches under this span via parent_span_id.
         _chip_domain: str | None = None
-        _chip_ctx = request.chip_context or {}
-        if isinstance(_chip_ctx, dict):
-            _d = _chip_ctx.get("domain")
-            if _d in _VALID_CHIP_DOMAINS:
-                _chip_domain = _d
+        _chip_ctx = _chip_context_dict(request.chip_context)
+        _d = _chip_ctx.get("domain")
+        if _d in _VALID_CHIP_DOMAINS:
+            _chip_domain = _d
 
         with _trace_span(
             "classify",
@@ -25414,6 +25436,7 @@ class TStationChatServiceV2:
             domain=MultiAgentDomain.Domain.LEADING.value,
             reason="pre_contract_policy_guard",
         )
+        normalize_quickreply_ctas(data_event)
         yield f"data: {json.dumps(data_event, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
@@ -25428,6 +25451,7 @@ class TStationChatServiceV2:
                 source=str(event.get("assistant_response_source") or "code_policy_guard"),
                 reason="pre_contract_policy_guard",
             )
+        normalize_quickreply_ctas(event)
         event_data = event.get("data") if isinstance(event.get("data"), dict) else {}
         msg = str(event_data.get("assistantResponse") or "")
         source_domain = str(event.get("source_domain") or "TRANSACTION").upper()
@@ -25466,6 +25490,7 @@ class TStationChatServiceV2:
                 )
             )
         event = finalized_event
+        normalize_quickreply_ctas(event, contract=turn_contract)
         event_data = event.get("data") if isinstance(event.get("data"), dict) else {}
         msg = str(event_data.get("assistantResponse") or "")
         yield f"data: {json.dumps({'type': 'status', 'status': 'tool_start', 'tool': 'transaction_store_preview_tool', 'display_name': '장착 가능 일정 확인 중...', 'source_domain': 'transaction'}, ensure_ascii=False)}\n\n"
@@ -25523,6 +25548,7 @@ class TStationChatServiceV2:
                     )
                 )
             event = finalized_event
+            normalize_quickreply_ctas(event, contract=turn_contract)
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
             msg = str((event.get("data") or {}).get("assistantResponse") or "")
@@ -33205,6 +33231,8 @@ class TStationChatServiceV2:
                     )
                 if isinstance(event_data, dict) and _normalize_tstation_cta_urls_for_origin(event_data):
                     logger.info("[CTA_URL] rebased T-Station CTA URLs to request origin host")
+                if normalize_quickreply_ctas(event, contract=turn_contract):
+                    logger.info("[CTA_REGISTRY] normalized quickReply CTA metadata before buffer")
                 if _augment_recent_product_set_ranking_metadata(event, user_query):
                     logger.info("[RECENT_PRODUCT_SET] augmented ranking response metadata")
                 # Buffer data event — yield after QC so assistantResponse is always verified
@@ -33383,6 +33411,7 @@ class TStationChatServiceV2:
             # PARALLEL MODE: yield data events immediately so FE renders without waiting for QC.
             if _parallel_qc:
                 for buffered_evt in buffered_data_events:
+                    normalize_quickreply_ctas(buffered_evt, contract=turn_contract)
                     _mark_first_visible()
                     yield f"data: {json.dumps(buffered_evt, ensure_ascii=False)}\n\n"
 
@@ -33688,6 +33717,7 @@ class TStationChatServiceV2:
                 # SEQUENTIAL (default): data events were buffered; yield them as-is now.
                 # Verifier never rewrites the draft, so no patching is needed.
                 for buffered_evt in buffered_data_events:
+                    normalize_quickreply_ctas(buffered_evt, contract=turn_contract)
                     _mark_first_visible()
                     yield f"data: {json.dumps(buffered_evt, ensure_ascii=False)}\n\n"
 
@@ -33802,6 +33832,7 @@ class TStationChatServiceV2:
                 "latency_agent_llm_generation_ms": round(_lat_agent_llm_generation_ms),
                 "latency_qc_ms": round(_lat_qc_ms),
             }
+            _trace_metadata.update(cta_trace_metadata(buffered_data_events))
             _trace_output = _truncate(draft_response)
             _trace_input = _truncate(_last_user)
             # Set both the parent span's own output AND the trace-level output.

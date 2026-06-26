@@ -14,6 +14,11 @@ class ChipContext(BaseModel):
     action_id: Optional[str] = Field(default=None, description="Executable quick reply action identifier.")
     intentKey: Optional[str] = Field(default=None, description="Conversation intent key declared by the chip emitter.")
     intent_key: Optional[str] = Field(default=None, description="Conversation intent key declared by the chip emitter.")
+    cta_id: Optional[str] = Field(default=None, description="Shared CTA registry identifier emitted with the chip.")
+    cta_action: Optional[str] = Field(default=None, description="Shared CTA registry action emitted with the chip.")
+    expected_behavior: Optional[str] = Field(default=None, description="open_url, conversation_action, or dynamic_choice.")
+    source_intent: Optional[str] = Field(default=None, description="Intent that emitted this CTA.")
+    expected_contract_intent: Optional[str] = Field(default=None, description="Next-turn contract intent expected by the CTA.")
     metadata: Optional[dict] = Field(default=None, description="Action-specific metadata emitted with the chip.")
 
     model_config = {"extra": "allow"}

@@ -1,0 +1,488 @@
+"""Shared quickReply CTA registry and final-emission normalizer."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+import re
+from typing import Any, Mapping
+from urllib.parse import urlparse
+
+from services.tstation.common.cta_urls import CTAUrls
+
+
+@dataclass(frozen=True)
+class CTADefinition:
+    cta_id: str
+    label: str
+    domain: str
+    cta_action: str
+    expected_behavior: str
+    url: str | None = None
+    source_intent: str | None = None
+    expected_contract_intent: str | None = None
+    allowed_tools: tuple[str, ...] = ()
+    forbidden_tools: tuple[str, ...] = ()
+    forbidden_templates: tuple[str, ...] = ()
+    required_context: tuple[str, ...] = ()
+    fallback_behavior: str | None = None
+
+
+@dataclass(frozen=True)
+class CTAValidationResult:
+    result: str
+    reason: str
+    cta_id: str = ""
+    cta_action: str = ""
+    expected_behavior: str = ""
+    expected_contract_intent: str = ""
+
+
+_URL_CTA_DEFINITIONS: tuple[CTADefinition, ...] = (
+    CTADefinition(
+        cta_id="member.benefit.open",
+        label="회원 혜택 확인",
+        domain="SUPPORT",
+        cta_action="open_membership_benefit",
+        expected_behavior="open_url",
+        url=CTAUrls.MEMBERSHIP_BENEFIT,
+    ),
+    CTADefinition(
+        cta_id="coupon.my_list.open",
+        label="쿠폰함 바로가기",
+        domain="TRANSACTION",
+        cta_action="open_my_coupon_list",
+        expected_behavior="open_url",
+        url=CTAUrls.MY_COUPON_LIST_PC,
+    ),
+    CTADefinition(
+        cta_id="coupon.my_list.open",
+        label="내 쿠폰 확인",
+        domain="TRANSACTION",
+        cta_action="open_my_coupon_list",
+        expected_behavior="open_url",
+        url=CTAUrls.MY_COUPON_LIST_PC,
+    ),
+    CTADefinition(
+        cta_id="order.history.open",
+        label="주문 내역 확인",
+        domain="TRANSACTION",
+        cta_action="open_order_history",
+        expected_behavior="open_url",
+        url=CTAUrls.ORDER_HISTORY,
+    ),
+    CTADefinition(
+        cta_id="order.history.open",
+        label="주문 내역 보기",
+        domain="TRANSACTION",
+        cta_action="open_order_history",
+        expected_behavior="open_url",
+        url=CTAUrls.ORDER_HISTORY,
+    ),
+    CTADefinition(
+        cta_id="cart.open",
+        label="장바구니 확인",
+        domain="TRANSACTION",
+        cta_action="open_cart",
+        expected_behavior="open_url",
+        url=CTAUrls.CART,
+    ),
+    CTADefinition(
+        cta_id="support.qna.open",
+        label="1:1 문의하기",
+        domain="SUPPORT",
+        cta_action="open_qna",
+        expected_behavior="conversation_action",
+        expected_contract_intent="human_escalation",
+        allowed_tools=("transfer_to_qna_tool",),
+        fallback_behavior="ask_escalation_confirmation",
+    ),
+)
+
+_CONVERSATION_CTA_DEFINITIONS: tuple[CTADefinition, ...] = (
+    CTADefinition(
+        cta_id="owned_vehicle.select",
+        label="내 차량으로 확인",
+        domain="DISCOVERY",
+        cta_action="select_owned_vehicle",
+        expected_behavior="conversation_action",
+        expected_contract_intent="vehicle_lookup",
+        allowed_tools=("get_my_cars_tool", "get_user_vehicles_tool"),
+        fallback_behavior="ask_vehicle_or_size_again",
+    ),
+    CTADefinition(
+        cta_id="owned_vehicle.select",
+        label="내 차량 보기",
+        domain="DISCOVERY",
+        cta_action="select_owned_vehicle",
+        expected_behavior="conversation_action",
+        expected_contract_intent="vehicle_lookup",
+        allowed_tools=("get_my_cars_tool", "get_user_vehicles_tool"),
+        fallback_behavior="ask_vehicle_or_size_again",
+    ),
+    CTADefinition(
+        cta_id="owned_vehicle.select",
+        label="보유차량 중 선택",
+        domain="DISCOVERY",
+        cta_action="select_owned_vehicle",
+        expected_behavior="conversation_action",
+        expected_contract_intent="vehicle_lookup",
+        allowed_tools=("get_my_cars_tool", "get_user_vehicles_tool"),
+        fallback_behavior="ask_vehicle_or_size_again",
+    ),
+    CTADefinition(
+        cta_id="store.search.start",
+        label="매장 찾기",
+        domain="TRANSACTION",
+        cta_action="start_store_search",
+        expected_behavior="conversation_action",
+        expected_contract_intent="store_search",
+        allowed_tools=("search_stores_tool", "get_store_list_tool", "get_nearby_stores_tool"),
+        fallback_behavior="ask_region_again",
+    ),
+    CTADefinition(
+        cta_id="store.search.other",
+        label="다른 매장 찾기",
+        domain="TRANSACTION",
+        cta_action="search_other_store",
+        expected_behavior="conversation_action",
+        expected_contract_intent="stock_store_search",
+        allowed_tools=("search_stores_tool", "get_store_list_tool", "transaction_store_preview_tool"),
+        fallback_behavior="ask_region_again",
+    ),
+    CTADefinition(
+        cta_id="reservation.date.change",
+        label="다른 날짜 확인",
+        domain="TRANSACTION",
+        cta_action="enter_date",
+        expected_behavior="conversation_action",
+        expected_contract_intent="store_schedule",
+        allowed_tools=("get_store_schedule_tool", "get_multi_store_schedule_tool"),
+        fallback_behavior="ask_date_again",
+    ),
+    CTADefinition(
+        cta_id="purchase.start",
+        label="구매하기",
+        domain="TRANSACTION",
+        cta_action="start_purchase",
+        expected_behavior="conversation_action",
+        expected_contract_intent="quick_order_reservation",
+        allowed_tools=("transaction_store_preview_tool", "quick_order_tool"),
+        fallback_behavior="ask_missing_purchase_slots",
+    ),
+    CTADefinition(
+        cta_id="cart.check",
+        label="장바구니 확인",
+        domain="TRANSACTION",
+        cta_action="open_cart",
+        expected_behavior="open_url",
+        url=CTAUrls.CART,
+    ),
+)
+
+_DEFINITIONS_BY_LABEL: dict[str, CTADefinition] = {
+    definition.label: definition
+    for definition in (*_URL_CTA_DEFINITIONS, *_CONVERSATION_CTA_DEFINITIONS)
+}
+
+_DYNAMIC_SIZE_RE = re.compile(r"^\s*\d{3}\s*/\s*\d{2}\s*R\s*\d{2}\s*$", re.IGNORECASE)
+_DYNAMIC_QTY_RE = re.compile(r"^\s*[1-4]\s*(?:개|본)\s*$")
+_DYNAMIC_ORDER_RE = re.compile(r"(?:주문|예약)?\s*[0-9]{4,}\s*(?:번|건)?")
+
+
+def _url_path(url: str | None) -> str:
+    raw = str(url or "").strip()
+    if not raw:
+        return ""
+    return urlparse(raw).path.rstrip("/")
+
+
+_DEFINITIONS_BY_URL_PATH: dict[str, CTADefinition] = {
+    _url_path(definition.url): definition
+    for definition in _URL_CTA_DEFINITIONS
+    if definition.url
+}
+
+
+def _context_value(context: Mapping[str, Any], key: str) -> Any:
+    value = context.get(key)
+    if value not in (None, ""):
+        return value
+    snake = re.sub(r"(?<!^)([A-Z])", r"_\1", key).lower()
+    return context.get(snake)
+
+
+def _definition_for_chip(chip: Mapping[str, Any]) -> CTADefinition | None:
+    label = str(chip.get("label") or "").strip()
+    definition = _DEFINITIONS_BY_LABEL.get(label)
+    if definition is not None:
+        return definition
+    url_path = _url_path(str(chip.get("url") or ""))
+    if url_path:
+        return _DEFINITIONS_BY_URL_PATH.get(url_path)
+    return None
+
+
+def _dynamic_definition_for_chip(chip: Mapping[str, Any]) -> CTADefinition | None:
+    label = str(chip.get("label") or "").strip()
+    metadata = chip.get("metadata") if isinstance(chip.get("metadata"), Mapping) else {}
+    dynamic_type = str(metadata.get("dynamic_type") or metadata.get("cta_type") or "").strip()
+    if dynamic_type:
+        cta_type = dynamic_type
+    elif _DYNAMIC_SIZE_RE.fullmatch(label):
+        cta_type = "dynamic_tire_size"
+    elif _DYNAMIC_QTY_RE.fullmatch(label):
+        cta_type = "dynamic_quantity"
+    elif _DYNAMIC_ORDER_RE.fullmatch(label):
+        cta_type = "dynamic_order_candidate"
+    elif str(chip.get("domain") or "").upper() == "TRANSACTION" and label.endswith(("점", "센터")):
+        cta_type = "dynamic_store_candidate"
+    else:
+        return None
+    return CTADefinition(
+        cta_id=f"dynamic.{cta_type}",
+        label=label,
+        domain=str(chip.get("domain") or "").upper(),
+        cta_action="select_dynamic_choice",
+        expected_behavior="dynamic_choice",
+        expected_contract_intent=str(metadata.get("expected_contract_intent") or ""),
+    )
+
+
+def _definition_payload(definition: CTADefinition, *, source_intent: str) -> dict[str, Any]:
+    payload = {
+        "cta_id": definition.cta_id,
+        "cta_action": definition.cta_action,
+        "expected_behavior": definition.expected_behavior,
+        "source_intent": definition.source_intent or source_intent,
+        "expected_contract_intent": definition.expected_contract_intent or "",
+        "expected_behavior_version": "cta_registry_v1",
+    }
+    if definition.allowed_tools:
+        payload["allowed_tools"] = list(definition.allowed_tools)
+    if definition.forbidden_tools:
+        payload["forbidden_tools"] = list(definition.forbidden_tools)
+    if definition.required_context:
+        payload["required_context"] = list(definition.required_context)
+    if definition.fallback_behavior:
+        payload["fallback_behavior"] = definition.fallback_behavior
+    return payload
+
+
+def _validate_definition(
+    chip: Mapping[str, Any],
+    definition: CTADefinition,
+    *,
+    current_template: str,
+    contract: Any | None,
+    context: Mapping[str, Any],
+) -> CTAValidationResult:
+    if definition.expected_behavior == "open_url" and not str(chip.get("url") or definition.url or "").strip():
+        return CTAValidationResult("blocked", "open_url_missing_url", definition.cta_id, definition.cta_action)
+    if (
+        definition.expected_behavior == "conversation_action"
+        and not definition.expected_contract_intent
+        and definition.cta_id != "support.qna.open"
+    ):
+        return CTAValidationResult("blocked", "conversation_cta_missing_expected_contract", definition.cta_id)
+    if current_template in definition.forbidden_templates:
+        return CTAValidationResult("blocked", f"template_forbidden:{current_template}", definition.cta_id)
+    missing_context = [
+        key for key in definition.required_context
+        if _context_value(context, key) in (None, "")
+    ]
+    if missing_context:
+        return CTAValidationResult(
+            "blocked",
+            f"missing_context:{','.join(missing_context)}",
+            definition.cta_id,
+            definition.cta_action,
+            definition.expected_behavior,
+            definition.expected_contract_intent or "",
+        )
+    if contract is not None:
+        forbidden_tools = set(str(tool) for tool in getattr(contract, "forbidden_tools", ()) or ())
+        blocked_tools = [tool for tool in definition.allowed_tools if tool in forbidden_tools]
+        if blocked_tools:
+            return CTAValidationResult(
+                "blocked",
+                f"tool_forbidden:{','.join(blocked_tools)}",
+                definition.cta_id,
+                definition.cta_action,
+                definition.expected_behavior,
+                definition.expected_contract_intent or "",
+            )
+    return CTAValidationResult(
+        "allowed",
+        "cta_contract_validated",
+        definition.cta_id,
+        definition.cta_action,
+        definition.expected_behavior,
+        definition.expected_contract_intent or "",
+    )
+
+
+def _safe_fallback_chip(source_domain: str) -> dict[str, Any]:
+    domain = str(source_domain or "").upper()
+    if domain == "SUPPORT":
+        return {
+            "label": "문의 내용 다시 입력",
+            "domain": "SUPPORT",
+            "metadata": {
+                "cta_id": "safe_fallback.ask_again",
+                "cta_action": "ask_again",
+                "expected_behavior": "conversation_action",
+                "expected_contract_intent": "",
+                "cta_validation_result": "fallback",
+                "cta_validation_reason": "all_ctas_blocked",
+            },
+        }
+    return {
+        "label": "조건 다시 입력",
+        "domain": domain if domain in {"DISCOVERY", "TRANSACTION"} else "LEADING",
+        "metadata": {
+            "cta_id": "safe_fallback.ask_again",
+            "cta_action": "ask_again",
+            "expected_behavior": "conversation_action",
+            "expected_contract_intent": "",
+            "cta_validation_result": "fallback",
+            "cta_validation_reason": "all_ctas_blocked",
+        },
+    }
+
+
+def normalize_quickreply_ctas(
+    event: dict[str, Any],
+    *,
+    contract: Any | None = None,
+    source_intent: str | None = None,
+) -> bool:
+    """Attach CTA action contracts to quickReply chips and drop invalid CTAs."""
+
+    if not isinstance(event, dict) or event.get("template") != "quickReply":
+        return False
+    data = event.get("data")
+    if not isinstance(data, dict):
+        return False
+    chips = data.get("quickReplies")
+    if not isinstance(chips, list):
+        return False
+    current_template = str(event.get("template") or "")
+    current_intent = str(source_intent or getattr(contract, "intent", "") or "")
+    source_domain = str(event.get("source_domain") or getattr(contract, "domain", "") or "").upper()
+    event_metadata = data.get("metadata") if isinstance(data.get("metadata"), Mapping) else {}
+
+    changed = False
+    normalized: list[Any] = []
+    audit: list[dict[str, Any]] = []
+    for raw_chip in chips:
+        if not isinstance(raw_chip, dict):
+            normalized.append(raw_chip)
+            continue
+        chip = dict(raw_chip)
+        definition = _definition_for_chip(chip) or _dynamic_definition_for_chip(chip)
+        if definition is None:
+            normalized.append(chip)
+            continue
+        if not chip.get("domain") and definition.domain:
+            chip["domain"] = definition.domain
+        if definition.expected_behavior == "open_url" and not chip.get("url") and definition.url:
+            chip["url"] = definition.url
+        chip_metadata = chip.get("metadata") if isinstance(chip.get("metadata"), Mapping) else {}
+        merged_context = {**dict(event_metadata), **dict(chip_metadata)}
+        validation = _validate_definition(
+            chip,
+            definition,
+            current_template=current_template,
+            contract=contract,
+            context=merged_context,
+        )
+        audit.append({
+            "label": chip.get("label"),
+            "cta_id": validation.cta_id or definition.cta_id,
+            "cta_action": validation.cta_action or definition.cta_action,
+            "expected_behavior": validation.expected_behavior or definition.expected_behavior,
+            "expected_contract_intent": (
+                validation.expected_contract_intent or definition.expected_contract_intent or ""
+            ),
+            "result": validation.result,
+            "reason": validation.reason,
+        })
+        if validation.result != "allowed":
+            changed = True
+            continue
+        next_metadata = {
+            **dict(chip_metadata),
+            **_definition_payload(definition, source_intent=current_intent),
+            "actual_contract_intent": current_intent,
+            "cta_validation_result": validation.result,
+            "cta_validation_reason": validation.reason,
+        }
+        if definition.expected_behavior == "dynamic_choice":
+            next_metadata.setdefault("dynamic_value", chip.get("label"))
+        chip["metadata"] = next_metadata
+        chip["cta_id"] = definition.cta_id
+        chip["cta_action"] = definition.cta_action
+        chip["expected_behavior"] = definition.expected_behavior
+        if definition.expected_contract_intent:
+            chip["expected_contract_intent"] = definition.expected_contract_intent
+        normalized.append(chip)
+        changed = changed or chip != raw_chip
+
+    if chips and not normalized:
+        normalized = [_safe_fallback_chip(source_domain)]
+        changed = True
+
+    if changed:
+        data["quickReplies"] = normalized
+    if audit:
+        metadata = data.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
+            data["metadata"] = metadata
+        metadata["cta_validation_result"] = "allowed" if all(item["result"] == "allowed" for item in audit) else "mixed"
+        metadata["cta_validation"] = audit
+        metadata["cta_registry_version"] = "cta_registry_v1"
+        metadata["actual_contract_intent"] = current_intent
+    return changed or bool(audit)
+
+
+def cta_trace_metadata(events: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarize emitted CTA metadata for Langfuse trace metadata."""
+
+    ctas: list[dict[str, Any]] = []
+    for event in events:
+        data = event.get("data") if isinstance(event, Mapping) else None
+        if not isinstance(data, Mapping):
+            continue
+        for chip in data.get("quickReplies") or []:
+            if not isinstance(chip, Mapping):
+                continue
+            metadata = chip.get("metadata") if isinstance(chip.get("metadata"), Mapping) else {}
+            cta_id = str(chip.get("cta_id") or metadata.get("cta_id") or "").strip()
+            if not cta_id:
+                continue
+            ctas.append({
+                "label": chip.get("label"),
+                "cta_id": cta_id,
+                "cta_action": chip.get("cta_action") or metadata.get("cta_action"),
+                "expected_behavior": chip.get("expected_behavior") or metadata.get("expected_behavior"),
+                "source_intent": metadata.get("source_intent"),
+                "expected_contract_intent": (
+                    chip.get("expected_contract_intent") or metadata.get("expected_contract_intent")
+                ),
+                "actual_contract_intent": metadata.get("actual_contract_intent"),
+                "validation_result": metadata.get("cta_validation_result"),
+                "validation_reason": metadata.get("cta_validation_reason"),
+            })
+    if not ctas:
+        return {}
+    return {
+        "ctas": ctas[:10],
+        "cta_id": ctas[0].get("cta_id"),
+        "cta_action": ctas[0].get("cta_action"),
+        "expected_behavior": ctas[0].get("expected_behavior"),
+        "expected_contract_intent": ctas[0].get("expected_contract_intent"),
+        "actual_contract_intent": ctas[0].get("actual_contract_intent"),
+        "cta_validation_result": ctas[0].get("validation_result"),
+        "cta_validation_reason": ctas[0].get("validation_reason"),
+    }
