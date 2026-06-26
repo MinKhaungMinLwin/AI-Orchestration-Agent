@@ -9787,6 +9787,70 @@ def test_action_mode_resumes_dormant_stock_context_as_stock_check() -> None:
     ) == "resumed"
 
 
+def test_turn_contract_trace_metadata_keeps_previous_flow_dormant_for_support_policy() -> None:
+    routing_result = MultiAgentDomain(
+        reason="support policy question during order flow",
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        execution_plan=["support:general_card_cancel_timing_policy"],
+        user_behavior="asking card cancel timing policy during an order flow",
+        flow="support policy answer",
+        claim_check_type="none",
+        complaint_scope="none",
+        agent_prompt_profile="full",
+        policy_intent="general_card_cancel_timing_policy",
+    )
+
+    contract = build_turn_contract(
+        user_text="취소 완료 문자 받았는데 카드 승인 취소 언제 돼?",
+        routing_result=routing_result,
+        merged_slots=ConversationSlots(),
+        action_mode="support_policy_answer",
+        context_state="dormant",
+        resume_source="none",
+        previous_pending_intent="order",
+        previous_goal_type="place_order",
+        resume_anchor_detected=False,
+        dormant_context_reason="current_turn_action:support_policy_answer",
+    )
+
+    payload = contract.to_dict()
+    assert payload["current_turn_intent"] == "general_card_cancel_timing_policy"
+    assert payload["previous_pending_intent"] == "order"
+    assert payload["previous_goal_type"] == "place_order"
+    assert payload["resume_anchor_detected"] is False
+    assert payload["dormant_context_reason"] == "current_turn_action:support_policy_answer"
+    assert payload["blocking_required_slots_source"] == "none"
+
+
+def test_turn_contract_trace_metadata_marks_reference_guard_blocking_slot_source() -> None:
+    routing_result = MultiAgentDomain(
+        reason="owned order lookup needs order reference",
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        execution_plan=["transaction:order_cancel_status_lookup"],
+        user_behavior="asking cancel status without enough order reference",
+        flow="owned record lookup",
+        claim_check_type="none",
+        complaint_scope="none",
+        agent_prompt_profile="transaction_order",
+        referred_object_type="order",
+        referred_object_status="missing",
+        needs_clarification=True,
+    )
+
+    contract = build_turn_contract(
+        user_text="취소 상태 확인해줘",
+        routing_result=routing_result,
+        merged_slots=ConversationSlots(),
+        action_mode="owned_record_lookup",
+        context_state="active",
+        resume_source="none",
+    )
+
+    payload = contract.to_dict()
+    assert "order" in payload["blocking_required_slots"]
+    assert payload["blocking_required_slots_source"] == "current_intent+reference_guard:order"
+
+
 @pytest.mark.parametrize(
     (
         "user_text",
