@@ -136,6 +136,8 @@ from services.tstation.policies.ui_action_policy import (
     chip_context_dict,
     chip_value,
     classify_direct_cta_action,
+    confirmed_product_slot_values_for_purchase_cta,
+    confirmed_product_slot_values_from_event,
     goods_no_from_template_event,
     merged_quickreply_cta_context,
     normalize_ui_action_metadata,
@@ -19947,68 +19949,7 @@ class TStationChatServiceV2:
 
     @staticmethod
     def _confirmed_product_slot_values_from_event(event: dict) -> dict[str, Any] | None:
-        """Extract confirmed product slots from single-product product/detail events."""
-        template = event.get("template")
-        if template not in {"product", "quickReply"}:
-            return None
-        event_data = event.get("data")
-        if not isinstance(event_data, dict):
-            return None
-
-        if template == "quickReply":
-            metadata = event_data.get("metadata")
-            if not isinstance(metadata, dict):
-                return None
-            canonical_values = canonical_context_from_template_boundary(metadata)
-            goods_no = str(canonical_values.get("goods_no") or "").strip()
-            if not goods_no:
-                return None
-            tire_size = normalize_tire_size(str(canonical_values.get("tire_size") or ""))
-            tire_model = str(canonical_values.get("product_name") or "").strip()
-            slot_values: dict[str, Any] = {"goods_no": goods_no}
-            if tire_size:
-                slot_values["tire_size"] = tire_size
-            if tire_model:
-                slot_values["tire_model"] = tire_model
-            raw_qty = canonical_values.get("ord_qty")
-            if raw_qty is not None:
-                try:
-                    qty = int(raw_qty)
-                    if qty > 0:
-                        slot_values["ord_qty"] = qty
-                except (TypeError, ValueError):
-                    pass
-            return slot_values
-
-        products = event_data.get("products")
-        metadata = event_data.get("metadata")
-        if not (
-            isinstance(products, list)
-            and len(products) == 1
-            and isinstance(metadata, list)
-            and len(metadata) == 1
-        ):
-            return None
-
-        product = products[0]
-        meta = metadata[0]
-        if not isinstance(product, dict) or not isinstance(meta, dict):
-            return None
-
-        canonical_values = canonical_context_from_template_boundary({**product, **meta})
-        goods_no = str(canonical_values.get("goods_no") or "").strip()
-        if not goods_no:
-            return None
-
-        tire_size = normalize_tire_size(str(canonical_values.get("tire_size") or product.get("size") or ""))
-        tire_model = str(canonical_values.get("product_name") or "").strip()
-
-        slot_values: dict[str, Any] = {"goods_no": goods_no}
-        if tire_size:
-            slot_values["tire_size"] = tire_size
-        if tire_model:
-            slot_values["tire_model"] = tire_model
-        return slot_values
+        return confirmed_product_slot_values_from_event(event)
 
     @staticmethod
     def _confirmed_product_slot_values_for_purchase_cta(
@@ -20017,71 +19958,11 @@ class TStationChatServiceV2:
         latest_product_tmpl: dict | None = None,
         prev_tool_data: list[dict] | None = None,
     ) -> dict[str, Any] | None:
-        """Recover a confirmed product for bare purchase/cart CTA turns.
-
-        This only uses sources that already point to one concrete product. It
-        deliberately does not pick the first row from product/recommendation
-        lists, because a bare "구매하기" after an unresolved list still needs a
-        product reselection prompt.
-        """
-        for template, data in (
-            ("quickReply", latest_quickreply_tmpl),
-            ("product", latest_product_tmpl),
-        ):
-            slots = TStationChatServiceV2._confirmed_product_slot_values_from_event({
-                "template": template,
-                "data": data,
-            })
-            if slots:
-                return slots
-
-        for entry in reversed(prev_tool_data or []):
-            if not isinstance(entry, dict):
-                continue
-            tool = str(entry.get("tool") or "")
-            tool_input = entry.get("input") if isinstance(entry.get("input"), dict) else entry.get("args")
-            tool_input = tool_input if isinstance(tool_input, dict) else {}
-
-            if tool == "get_final_price_tool":
-                goods_no = str(tool_input.get("goods_no") or "").strip()
-                if goods_no:
-                    slot_values: dict[str, Any] = {"goods_no": goods_no}
-                    tire_size = normalize_tire_size(str(tool_input.get("tire_size") or tool_input.get("size") or ""))
-                    if tire_size:
-                        slot_values["tire_size"] = tire_size
-                    product_name = str(tool_input.get("product_name") or tool_input.get("goods_nm") or "").strip()
-                    if product_name:
-                        slot_values["tire_model"] = product_name
-                    return slot_values
-
-            if tool == "get_product_description_tool":
-                slot_values = {}
-                goods_no = str(tool_input.get("goods_no") or "").strip()
-                data = entry.get("data")
-                payload = data.get("data") if isinstance(data, dict) and isinstance(data.get("data"), dict) else data
-                payload = payload if isinstance(payload, dict) else {}
-                canonical_payload = canonical_context_from_tool_boundary(payload)
-                if not goods_no:
-                    goods_no = str(canonical_payload.get("goods_no") or "").strip()
-                if goods_no:
-                    slot_values["goods_no"] = goods_no
-                tire_size = normalize_tire_size(
-                    str(
-                        tool_input.get("tire_size")
-                        or tool_input.get("size")
-                        or canonical_payload.get("tire_size")
-                        or ""
-                    )
-                )
-                if tire_size:
-                    slot_values["tire_size"] = tire_size
-                product_name = str(canonical_payload.get("product_name") or "").strip()
-                if product_name:
-                    slot_values["tire_model"] = product_name
-                if slot_values.get("goods_no"):
-                    return slot_values
-
-        return None
+        return confirmed_product_slot_values_for_purchase_cta(
+            latest_quickreply_tmpl=latest_quickreply_tmpl,
+            latest_product_tmpl=latest_product_tmpl,
+            prev_tool_data=prev_tool_data,
+        )
 
     @staticmethod
     def _preorder_slot_values_from_data(template_data: dict | None) -> dict[str, Any] | None:

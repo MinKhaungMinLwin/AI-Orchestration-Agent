@@ -1670,6 +1670,131 @@ def resolve_goods_no_from_product_template_selection(user_text: str, template_da
     return None
 
 
+def confirmed_product_slot_values_from_event(event: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(event, Mapping):
+        return None
+    template = event.get("template")
+    if template not in {"product", "quickReply"}:
+        return None
+    event_data = event.get("data")
+    if not isinstance(event_data, Mapping):
+        return None
+
+    if template == "quickReply":
+        metadata = event_data.get("metadata")
+        if not isinstance(metadata, Mapping):
+            return None
+        canonical_values = canonical_context_from_template_boundary(metadata)
+        goods_no = str(canonical_values.get("goods_no") or "").strip()
+        if not goods_no:
+            return None
+        tire_size = normalize_tire_size(str(canonical_values.get("tire_size") or ""))
+        tire_model = str(canonical_values.get("product_name") or "").strip()
+        slot_values: dict[str, Any] = {"goods_no": goods_no}
+        if tire_size:
+            slot_values["tire_size"] = tire_size
+        if tire_model:
+            slot_values["tire_model"] = tire_model
+        raw_qty = canonical_values.get("ord_qty")
+        if raw_qty is not None:
+            try:
+                qty = int(raw_qty)
+                if qty > 0:
+                    slot_values["ord_qty"] = qty
+            except (TypeError, ValueError):
+                pass
+        return slot_values
+
+    products = event_data.get("products")
+    metadata = event_data.get("metadata")
+    if not (
+        isinstance(products, list)
+        and len(products) == 1
+        and isinstance(metadata, list)
+        and len(metadata) == 1
+    ):
+        return None
+    product = products[0]
+    meta = metadata[0]
+    if not isinstance(product, Mapping) or not isinstance(meta, Mapping):
+        return None
+
+    canonical_values = canonical_context_from_template_boundary({**product, **meta})
+    goods_no = str(canonical_values.get("goods_no") or "").strip()
+    if not goods_no:
+        return None
+
+    tire_size = normalize_tire_size(str(canonical_values.get("tire_size") or product.get("size") or ""))
+    tire_model = str(canonical_values.get("product_name") or "").strip()
+    slot_values: dict[str, Any] = {"goods_no": goods_no}
+    if tire_size:
+        slot_values["tire_size"] = tire_size
+    if tire_model:
+        slot_values["tire_model"] = tire_model
+    return slot_values
+
+
+def confirmed_product_slot_values_for_purchase_cta(
+    *,
+    latest_quickreply_tmpl: Mapping[str, Any] | None = None,
+    latest_product_tmpl: Mapping[str, Any] | None = None,
+    prev_tool_data: list[dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
+    for template, data in (
+        ("quickReply", latest_quickreply_tmpl),
+        ("product", latest_product_tmpl),
+    ):
+        slots = confirmed_product_slot_values_from_event({
+            "template": template,
+            "data": data,
+        })
+        if slots:
+            return slots
+
+    for entry in reversed(prev_tool_data or []):
+        if not isinstance(entry, Mapping):
+            continue
+        tool = str(entry.get("tool") or "")
+        tool_input = entry.get("input") if isinstance(entry.get("input"), Mapping) else entry.get("args")
+        tool_input = tool_input if isinstance(tool_input, Mapping) else {}
+
+        if tool == "get_final_price_tool":
+            goods_no = str(tool_input.get("goods_no") or "").strip()
+            if goods_no:
+                slot_values: dict[str, Any] = {"goods_no": goods_no}
+                tire_size = normalize_tire_size(str(tool_input.get("tire_size") or tool_input.get("size") or ""))
+                if tire_size:
+                    slot_values["tire_size"] = tire_size
+                product_name = str(tool_input.get("product_name") or tool_input.get("goods_nm") or "").strip()
+                if product_name:
+                    slot_values["tire_model"] = product_name
+                return slot_values
+
+        if tool == "get_product_description_tool":
+            slot_values: dict[str, Any] = {}
+            goods_no = str(tool_input.get("goods_no") or "").strip()
+            data = entry.get("data")
+            payload = data.get("data") if isinstance(data, Mapping) and isinstance(data.get("data"), Mapping) else data
+            payload = payload if isinstance(payload, Mapping) else {}
+            canonical_payload = canonical_context_from_tool_boundary(payload)
+            if not goods_no:
+                goods_no = str(canonical_payload.get("goods_no") or "").strip()
+            if goods_no:
+                slot_values["goods_no"] = goods_no
+            tire_size = normalize_tire_size(
+                str(tool_input.get("tire_size") or tool_input.get("size") or canonical_payload.get("tire_size") or "")
+            )
+            if tire_size:
+                slot_values["tire_size"] = tire_size
+            product_name = str(canonical_payload.get("product_name") or "").strip()
+            if product_name:
+                slot_values["tire_model"] = product_name
+            if slot_values.get("goods_no"):
+                return slot_values
+
+    return None
+
+
 def goods_no_from_template_event(event: Mapping[str, Any] | None) -> str:
     if not isinstance(event, Mapping):
         return ""

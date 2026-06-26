@@ -391,6 +391,8 @@ from services.tstation.policies.ui_action_policy import (
     build_quickreply_cta_clarification_event,
     cta_missing_slot_event,
     classify_direct_cta_action,
+    confirmed_product_slot_values_for_purchase_cta,
+    confirmed_product_slot_values_from_event,
     is_manual_tire_size_input_selection,
     is_logistics_earliest_install_date_followup,
     is_staggered_selected_tire_size_context,
@@ -11502,7 +11504,7 @@ def test_confirmed_product_slot_values_from_cart_quickreply_metadata_includes_qu
         },
     }
 
-    assert TStationChatServiceV2._confirmed_product_slot_values_from_event(event) == {
+    assert confirmed_product_slot_values_from_event(event) == {
         "goods_no": "G000000309783",
         "ord_qty": 2,
         "tire_model": "벤투스 S2 AS",
@@ -12142,7 +12144,7 @@ def test_recent_product_context_resolves_unique_goods_no_by_vehicle_selected_tir
 
 
 def test_purchase_cta_recovers_confirmed_product_from_quickreply_metadata() -> None:
-    slots = TStationChatServiceV2._confirmed_product_slot_values_for_purchase_cta(
+    slots = confirmed_product_slot_values_for_purchase_cta(
         latest_quickreply_tmpl={
             "assistantResponse": "다이나프로 HPX 설명입니다.",
             "metadata": {
@@ -12162,7 +12164,7 @@ def test_purchase_cta_recovers_confirmed_product_from_quickreply_metadata() -> N
 
 
 def test_purchase_cta_recovers_confirmed_product_from_snake_case_quickreply_metadata() -> None:
-    slots = TStationChatServiceV2._confirmed_product_slot_values_for_purchase_cta(
+    slots = confirmed_product_slot_values_for_purchase_cta(
         latest_quickreply_tmpl={
             "assistantResponse": "다이나프로 HPX 상품은 확인했어요. 장착 수량을 알려주세요.",
             "metadata": {
@@ -12182,7 +12184,7 @@ def test_purchase_cta_recovers_confirmed_product_from_snake_case_quickreply_meta
 
 
 def test_purchase_cta_recovers_confirmed_product_from_recent_price_tool_input() -> None:
-    slots = TStationChatServiceV2._confirmed_product_slot_values_for_purchase_cta(
+    slots = confirmed_product_slot_values_for_purchase_cta(
         prev_tool_data=[
             {
                 "tool": "get_final_price_tool",
@@ -12196,7 +12198,7 @@ def test_purchase_cta_recovers_confirmed_product_from_recent_price_tool_input() 
 
 
 def test_purchase_cta_does_not_pick_first_product_from_unselected_candidate_list() -> None:
-    slots = TStationChatServiceV2._confirmed_product_slot_values_for_purchase_cta(
+    slots = confirmed_product_slot_values_for_purchase_cta(
         prev_tool_data=[
             {
                 "tool": "get_products_recommendations_tool",
@@ -13124,7 +13126,7 @@ def test_confirmed_product_slot_values_from_single_product_event() -> None:
         },
     }
 
-    assert TStationChatServiceV2._confirmed_product_slot_values_from_event(event) == {
+    assert confirmed_product_slot_values_from_event(event) == {
         "goods_no": "G2",
         "tire_model": "벤투스 S1 에보 Z",
         "tire_size": "265/40R21",
@@ -13148,7 +13150,7 @@ def test_confirmed_product_slot_values_from_product_description_quickreply_event
         },
     }
 
-    assert TStationChatServiceV2._confirmed_product_slot_values_from_event(event) == {
+    assert confirmed_product_slot_values_from_event(event) == {
         "goods_no": "G000000309783",
         "tire_model": "벤투스 S2 AS",
         "tire_size": "225/45R17",
@@ -13167,7 +13169,7 @@ def test_confirmed_product_slot_values_ignore_multi_product_event() -> None:
         },
     }
 
-    assert TStationChatServiceV2._confirmed_product_slot_values_from_event(event) is None
+    assert confirmed_product_slot_values_from_event(event) is None
 
 
 def test_requested_maintenance_focus_matches_tire_query() -> None:
