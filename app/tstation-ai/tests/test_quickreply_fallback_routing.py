@@ -17395,6 +17395,67 @@ def test_partner_member_coupon_policy_contract_blocks_owned_coupon_tools() -> No
     )
 
 
+def test_promotion_gift_policy_contract_requires_partial_cancel_guidance_and_blocks_lookup_tools() -> None:
+    contract = build_turn_contract(
+        user_text="이벤트 적용 타이어 4개 구매하고 사은품 받았는데 뒤에 2개 취소하면 사은품 돌려줘야 해?",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:promotion_gift_policy"],
+            policy_intent="promotion_gift_policy",
+        ),
+    )
+
+    assert contract.domain == "support"
+    assert contract.intent == "promotion_gift_policy"
+    assert "search_faq_hybrid_tool" in contract.allowed_tools
+    assert "search_product_tool" in contract.forbidden_tools
+    assert "get_final_price_tool" in contract.forbidden_tools
+
+    missing_guidance = response_contract_violations(
+        template="quickReply",
+        called_tools=["search_faq_hybrid_tool"],
+        assistant_response_text="4개 구매 시 사은품이 지급되는 이벤트입니다.",
+        contract=contract,
+    )
+    assert {
+        "type": "promotion_gift_policy_missing_partial_cancel_guidance",
+        "severity": "error",
+        "assistant_response_text": "4개 구매 시 사은품이 지급되는 이벤트입니다.",
+        "response_shape_key": "",
+    } in missing_guidance
+
+    forbidden_lookup = response_contract_violations(
+        template="quickReply",
+        called_tools=["search_faq_hybrid_tool", "get_product_promotions_tool"],
+        assistant_response_text=(
+            "부분 취소로 이벤트나 프로모션 지급 기준 수량에 미달할 수 있어요. "
+            "기준 미달 시에는 사은품 반납이 필요할 수 있고, 반납이 어렵거나 조건에 따라 "
+            "사은품 상당 금액을 차감한 뒤 환불될 수 있어요. 최종 적용은 이벤트 상세 조건과 "
+            "실제 주문/취소 처리 기준에 따라 달라져요."
+        ),
+        contract=contract,
+    )
+    assert {
+        "type": "promotion_gift_policy_used_forbidden_lookup",
+        "severity": "error",
+        "called_tools": ["get_product_promotions_tool"],
+        "response_shape_key": "",
+    } in forbidden_lookup
+
+    good = response_contract_violations(
+        template="quickReply",
+        called_tools=["search_faq_hybrid_tool"],
+        assistant_response_text=(
+            "부분 취소로 이벤트나 프로모션 지급 기준 수량에 미달할 수 있어요. "
+            "기준 미달 시에는 사은품 반납이 필요할 수 있고, 반납이 어렵거나 조건에 따라 "
+            "사은품 상당 금액을 차감한 뒤 환불될 수 있어요. 최종 적용은 이벤트 상세 조건과 "
+            "실제 주문/취소 처리 기준에 따라 달라져요."
+        ),
+        contract=contract,
+    )
+    assert hard_contract_violations(good) == []
+
+
 def test_signup_coupon_guidance_contract_blocks_owned_coupon_tools() -> None:
     contract = build_turn_contract(
         user_text="회원가입 전용 쿠폰이 있어?",
@@ -21489,6 +21550,25 @@ def test_support_faq_policy_event_for_signup_uses_membership_cta() -> None:
     assert quick_replies[0]["label"] == "회원 혜택 확인"
     assert quick_replies[0]["url"] == CTAUrls.MEMBERSHIP_BENEFIT
     assert event["data"]["metadata"]["responseShapeKey"] == "signup_first_purchase_benefit_policy"
+
+
+def test_support_faq_policy_event_for_promotion_gift_appends_partial_cancel_invariant() -> None:
+    event = _build_support_faq_policy_event(
+        "promotion_gift_policy",
+        "이벤트 적용 타이어 4개 구매하고 사은품 받았는데 뒤에 2개 취소하면 사은품 돌려줘야 해?",
+        tool_result={
+            "status": "success",
+            "data": {"items": [{"answer": "4개 구매 시 사은품이 지급되는 이벤트입니다."}]},
+        },
+    )
+
+    assert event is not None
+    response = str(event["data"]["assistantResponse"])
+    assert "4개 구매 시 사은품이 지급되는 이벤트입니다." in response
+    assert "부분 취소로 이벤트나 프로모션 지급 기준 수량에 미달할 수 있어요." in response
+    assert "사은품 반납이 필요할 수 있고" in response
+    assert "사은품 상당 금액을 차감한 뒤 환불될 수 있어요." in response
+    assert "이벤트 상세 조건과 실제 주문/취소 처리 기준에 따라 달라져요." in response
 
 
 def test_direct_faq_policy_tool_payload_builds_transaction_policy_event() -> None:

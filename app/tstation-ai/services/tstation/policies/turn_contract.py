@@ -1672,6 +1672,14 @@ def response_contract_violations(
     )
     if signup_coupon_violation is not None:
         violations.append(signup_coupon_violation)
+    promotion_gift_violation = _promotion_gift_policy_contract_violation(
+        assistant_response_text=assistant_response_text,
+        response_shape_key=response_shape_key,
+        called_tools=called_tools,
+        contract=contract,
+    )
+    if promotion_gift_violation is not None:
+        violations.append(promotion_gift_violation)
     faq_first_support_violation = _faq_first_support_policy_contract_violation(
         assistant_response_text=assistant_response_text,
         called_tools=called_tools,
@@ -2208,6 +2216,51 @@ def _signup_coupon_guidance_contract_violation(
         return {
             "type": "signup_coupon_guidance_asserted_already_issued",
             "assistant_response_text": assistant_text,
+        }
+    return None
+
+
+def _promotion_gift_policy_contract_violation(
+    *,
+    assistant_response_text: str | None,
+    response_shape_key: str | None,
+    called_tools: list[str] | tuple[str, ...] | None,
+    contract: TurnContract | None,
+) -> dict[str, Any] | None:
+    if contract is None or str(contract.intent or "") != "promotion_gift_policy":
+        return None
+    tools = {str(tool) for tool in tuple(called_tools or ()) if str(tool).strip()}
+    blocked_tools = sorted(
+        tools
+        & {
+            "search_product_tool",
+            "get_final_price_tool",
+            "get_orders_of_user_tool",
+            "get_order_status_tool",
+            "get_product_applicable_events_tool",
+            "get_product_promotions_tool",
+        }
+    )
+    if blocked_tools:
+        return {
+            "type": "promotion_gift_policy_used_forbidden_lookup",
+            "called_tools": blocked_tools,
+            "response_shape_key": str(response_shape_key or ""),
+        }
+    assistant_text = str(assistant_response_text or "").strip()
+    normalized_text = re.sub(r"\s+", "", assistant_text)
+    has_partial_cancel = any(token in normalized_text for token in ("부분취소", "일부취소", "취소"))
+    has_threshold_miss = any(token in normalized_text for token in ("기준수량", "기준미달", "수량미달", "조건미달"))
+    has_return_or_deduction = any(token in normalized_text for token in ("사은품반납", "반납", "차감", "상당금액"))
+    has_refund = "환불" in normalized_text
+    has_final_condition = any(
+        token in normalized_text for token in ("이벤트상세조건", "상세조건", "주문취소처리기준", "취소처리기준")
+    )
+    if not (has_partial_cancel and has_threshold_miss and has_return_or_deduction and has_refund and has_final_condition):
+        return {
+            "type": "promotion_gift_policy_missing_partial_cancel_guidance",
+            "assistant_response_text": assistant_text,
+            "response_shape_key": str(response_shape_key or ""),
         }
     return None
 

@@ -134,6 +134,7 @@ from services.tstation.policies.ui_action_policy import (
     preview_action_mode_for_slots,
     quickreply_cta_context_from_chip,
     quickreply_cta_context_from_template,
+    resolve_goods_no_from_selection,
     resolve_goods_no_from_product_template_selection,
     preview_location_slot_values_from_selection,
     resolve_shop_id_from_selection,
@@ -6577,13 +6578,20 @@ def _build_support_faq_policy_event(
     if intent not in _DIRECT_SUPPORT_FAQ_POLICY_INTENTS:
         return None
     source_summary = _faq_policy_source_summary_text(tool_result)
+    required_guidance_by_intent = {
+        "promotion_gift_policy": (
+            "부분 취소로 이벤트나 프로모션 지급 기준 수량에 미달할 수 있어요.\n"
+            "기준 미달 시에는 사은품 반납이 필요할 수 있고, 반납이 어렵거나 조건에 따라 사은품 상당 금액을 차감한 뒤 환불될 수 있어요.\n"
+            "최종 적용은 이벤트 상세 조건과 실제 주문/취소 처리 기준에 따라 달라져요."
+        ),
+    }
     followup_by_intent = {
         "tire_manufacture_date_policy": "제조일자만으로 교환이나 환불을 단정하지 말고, 필요하면 제품 상태와 구매 이력도 함께 확인해 주세요.",
         "tire_quality_warranty_policy": "품질보증이나 무상 교체 여부는 실제 점검 결과와 보증 조건을 함께 확인해야 해요.",
         "assurance_service_policy": "보상이나 가입 가능 여부는 상세 조건과 적용 시점에 따라 달라질 수 있어요.",
         "reservation_policy_guidance": "실제 예약 변경이나 취소 전에는 예약 상세 안내도 함께 확인해 주세요.",
         "installation_work_policy": "추가 작업비나 현장 결제 여부는 정책과 작업 범위에 따라 달라질 수 있어요.",
-        "promotion_gift_policy": "사은품 유지 여부나 차감 조건은 실제 주문 구성과 이벤트 기준을 함께 확인해야 해요.",
+        "promotion_gift_policy": required_guidance_by_intent["promotion_gift_policy"],
         "tire_condition_photo_policy": "사진만으로 주행 안전이나 교체 필요 여부를 단정하기는 어려워요. 필요하면 매장 점검도 함께 받아 주세요.",
         "signup_first_purchase_benefit_policy": "실제 회원 상태와 쿠폰 노출 여부는 계정별로 다를 수 있으니, 회원 혜택 페이지나 쿠폰함에서도 함께 확인해 주세요.",
         "signup_coupon_guidance": "실제 발급 가능 여부와 노출 상태는 회원 상태와 마케팅 동의 여부에 따라 달라질 수 있어요.",
@@ -6594,7 +6602,7 @@ def _build_support_faq_policy_event(
         "assurance_service_policy": "안심서비스와 디지털워런티 조건은 가입 시점과 적용 범위에 따라 달라질 수 있어요.",
         "reservation_policy_guidance": "예약 가능 기간, 취소, 변경 조건은 정책 기준으로 먼저 확인해 보는 것이 안전해요.",
         "installation_work_policy": "공임, 장착비, 추가 작업 비용은 작업 범위와 정책에 따라 달라질 수 있어요.",
-        "promotion_gift_policy": "사은품과 프로모션 유지 조건은 주문 변경 여부와 이벤트 기준에 따라 달라질 수 있어요.",
+        "promotion_gift_policy": required_guidance_by_intent["promotion_gift_policy"],
         "tire_condition_photo_policy": "타이어 상태는 사진만으로 안전 여부를 확정하기 어렵고, 점검 기준을 함께 확인해야 해요.",
         "signup_first_purchase_benefit_policy": "회원가입과 신규회원 혜택은 회원 상태, 마케팅 동의 여부, 진행 중 정책에 따라 달라질 수 있어요.",
         "signup_coupon_guidance": "신규회원과 가입 쿠폰 혜택은 회원 상태와 진행 중 정책에 따라 달라질 수 있어요.",
@@ -13919,40 +13927,6 @@ def _quantity_benefit_pending_values_from_slots(slots: Any | None) -> dict[str, 
     }
 
 
-_KOREAN_SELECTION_ORDINALS: tuple[tuple[tuple[str, ...], int], ...] = (
-    (("첫번째", "첫째"), 0),
-    (("두번째", "둘째"), 1),
-    (("세번째", "셋째"), 2),
-    (("네번째", "넷째"), 3),
-    (("다섯번째", "다섯째"), 4),
-    (("여섯번째", "여섯째"), 5),
-    (("일곱번째", "일곱째"), 6),
-    (("여덟번째", "여덟째"), 7),
-    (("아홉번째", "아홉째"), 8),
-    (("열번째", "열째"), 9),
-)
-
-
-def _selection_ordinal_index(user_text: str, item_count: int) -> int | None:
-    if not user_text or item_count <= 0:
-        return None
-
-    text = user_text.strip()
-    numeric_match = re.match(r"^\s*(\d+)\s*(?:[\.\)번:]|번째|째)", text)
-    if numeric_match:
-        idx = int(numeric_match.group(1)) - 1
-        return idx if 0 <= idx < item_count else None
-
-    compact = re.sub(r"\s+", "", text)
-    if compact.startswith(("마지막", "끝번째", "끝째")):
-        return item_count - 1
-
-    for prefixes, idx in _KOREAN_SELECTION_ORDINALS:
-        if any(compact.startswith(prefix) for prefix in prefixes):
-            return idx if idx < item_count else None
-    return None
-
-
 def _quantity_benefit_continuation_frame_from_pending(
     user_text: str,
     *,
@@ -20144,99 +20118,11 @@ class TStationChatServiceV2:
         prev_tool_data: list[dict],
         current_tire_size: str | None = None,
     ) -> str | None:
-        """Match a user's list-selection reply against the prior search_product_tool
-        result and return the goods_no of the matched item.
-
-        When a previous turn returned multiple products and the user responds with
-        an ordinal ("3.", "3번"), a name + size ("Ventus S2 AS 225/45R18"), or
-        a name-only pick with a confirmed tire_size already stored in slots, this
-        lets the coordinator capture goods_no before any agent runs — so that the
-        subsequent Discovery→Transaction handoff is not blocked by the "goods_no
-        missing in slots" safety check (Discovery may skip calling the search tool
-        when it can resolve the pick from conversation history alone).
-
-        Matching strategy (first hit wins):
-          1. Ordinal at the start of the message → items[idx-1]
-          2. Single item with matching tire_size from the current text
-          3. Multiple items with matching tire_size → pick the one whose goods_nm
-             has the highest token overlap (≥2 tokens required to avoid false hits)
-          4. If the current text has no size but current_tire_size is known, use
-             that size as the candidate filter and require goods_nm token overlap.
-
-        Only the most recent product-listing tool entry is inspected.
-        Returns None when no confident match is found.
-
-        Expected tool_context entry shape (produced by filter_for_context in
-        services/tstation/source_filter.py, which is what gets persisted to Redis):
-            {"tool": "search_product_tool" | "get_products_recommendations_tool",
-             "data": [{"goods_no": "...", "goods_nm": "...", "tire_size_1": "..."}],
-             "input": {...}}
-        Note: `data` is a LIST directly, and the size field is `tire_size_1`
-        (filter whitelist is {"goods_no", "goods_nm", "tire_size_1", ...}).
-        """
-        if not user_text or not prev_tool_data:
-            return None
-
-        items: list[dict] = []
-        PRODUCT_LIST_TOOLS = {"search_product_tool", "get_products_recommendations_tool"}
-        for entry in reversed(prev_tool_data):
-            if entry.get("tool") not in PRODUCT_LIST_TOOLS:
-                continue
-            data = entry.get("data")
-            # Primary shape: filter_for_context stores data as a list directly
-            if isinstance(data, list):
-                items = [it for it in data if isinstance(it, dict) and not it.get("_truncated")]
-                break
-            # Defensive fallback: {"items": [...]} shape (raw tool output)
-            if isinstance(data, dict) and isinstance(data.get("items"), list):
-                items = [it for it in data["items"] if isinstance(it, dict)]
-                break
-        if not items:
-            return None
-
-        text = user_text.strip()
-
-        ordinal_idx = _selection_ordinal_index(text, len(items))
-        if ordinal_idx is not None:
-            goods_no = canonical_context_from_tool_boundary(items[ordinal_idx]).get("goods_no")
-            if goods_no:
-                return goods_no
-
-        target_size_from_text = normalize_tire_size(text)
-        target_size = target_size_from_text or normalize_tire_size(current_tire_size or "")
-        if target_size:
-            # filter_for_context keeps `tire_size_1`; include legacy aliases
-            # for safety if another path ever stores the raw field name.
-            same_size = [
-                item
-                for item in items
-                if normalize_tire_size(canonical_context_from_tool_boundary(item).get("tire_size")) == target_size
-            ]
-
-            if target_size_from_text and len(same_size) == 1:
-                goods_no = canonical_context_from_tool_boundary(same_size[0]).get("goods_no")
-                if goods_no:
-                    return goods_no
-
-            tokens = [t.lower() for t in re.findall(r"[A-Za-z가-힣0-9]+", text) if len(t) >= 2]
-            best_item: dict | None = None
-            best_score = 0
-            tied = False
-            for item in same_size:
-                goods_nm = str(canonical_context_from_tool_boundary(item).get("product_name") or "").lower()
-                score = sum(1 for tok in tokens if tok in goods_nm)
-                if score > best_score:
-                    best_score = score
-                    best_item = item
-                    tied = False
-                elif score == best_score and score > 0:
-                    tied = True
-            if best_item is not None and best_score >= 2 and not tied:
-                goods_no = canonical_context_from_tool_boundary(best_item).get("goods_no")
-                if goods_no:
-                    return goods_no
-
-        return None
+        return resolve_goods_no_from_selection(
+            user_text,
+            prev_tool_data,
+            current_tire_size=current_tire_size,
+        )
 
     @staticmethod
     def _confirmed_product_slot_values_from_event(event: dict) -> dict[str, Any] | None:
@@ -22420,7 +22306,7 @@ class TStationChatServiceV2:
             # slots and causing the coordinator's P0 safety check to stop the chain
             # before Transaction runs.
             if merged_slots.goods_no is None and prev_tool_data:
-                resolved_goods_no = TStationChatServiceV2._resolve_goods_no_from_selection(
+                resolved_goods_no = resolve_goods_no_from_selection(
                     last_user_text,
                     prev_tool_data,
                     current_tire_size=merged_slots.tire_size,
@@ -28068,7 +27954,7 @@ class TStationChatServiceV2:
                 return current_frame
 
             current_size = normalize_tire_size(user_query)
-            current_goods_no = TStationChatServiceV2._resolve_goods_no_from_selection(
+            current_goods_no = resolve_goods_no_from_selection(
                 user_query,
                 prev_tool_data or [],
                 current_tire_size=known_slots.get("tire_size") or current_size,
@@ -28142,7 +28028,7 @@ class TStationChatServiceV2:
             if not goods_no and initial_slots is not None:
                 goods_no = str(getattr(initial_slots, "goods_no", None) or "").strip()
             if not goods_no:
-                goods_no = TStationChatServiceV2._resolve_goods_no_from_selection(
+                goods_no = resolve_goods_no_from_selection(
                     user_query,
                     prev_tool_data or [],
                     current_tire_size=confirmed_tire_size,
@@ -28404,7 +28290,7 @@ class TStationChatServiceV2:
             ):
                 return None
             confirmed_tire_size = getattr(initial_slots, "tire_size", None) if initial_slots is not None else None
-            if size_only_tool_input is None and TStationChatServiceV2._resolve_goods_no_from_selection(
+            if size_only_tool_input is None and resolve_goods_no_from_selection(
                 user_query,
                 prev_tool_data or [],
                 current_tire_size=confirmed_tire_size,
