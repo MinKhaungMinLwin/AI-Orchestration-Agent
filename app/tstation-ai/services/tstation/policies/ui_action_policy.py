@@ -12,6 +12,11 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
+from schemas.tstation.slots import ConversationSlots
+from services.tstation.policies.intent_frame import IntentFrame, PolicyDomain
+from services.tstation.policies.transaction_intent_policy import build_transaction_intent_frame, plan_transaction_tools
+from services.tstation.policies.transaction_response_policy import decide_transaction_response
+from services.tstation.policies.turn_contract import build_turn_contract
 from services.tstation.policies.discovery_intent_policy import build_discovery_intent_frame, normalize_tire_size
 from services.tstation.policies.cta_registry import cta_trace_metadata, normalize_quickreply_ctas
 from services.tstation.policies.resolved_context import (
@@ -2616,6 +2621,124 @@ def is_resolved_size_store_availability_transaction_continuation(
         routing_topic in {"store_inventory", "today_install", "none", ""}
         or followup_intent == "recent_product_set_size_availability"
         or re.search(r"stock|inventory|재고|장착|store", execution_plan, re.IGNORECASE)
+    )
+
+
+def is_quantity_only_stock_followup_text(text: str) -> bool:
+    normalized = str(text or "").strip()
+    if not normalized:
+        return False
+    parsed = ConversationSlots.extract_from_user_text(normalized)
+    return bool(
+        parsed.ord_qty is not None
+        and normalize_tire_size(normalized) is None
+        and parsed.shop_name is None
+        and parsed.region is None
+        and not ConversationSlots.has_product_keyword(normalized)
+        and not re.search(r"예약|장착|오늘\s*서비스|오늘서비스|당일|방문|가능\s*시간|스케줄", normalized, re.IGNORECASE)
+    )
+
+
+def is_pure_inventory_stock_ready(slots: Any | None) -> bool:
+    canonical_slots = canonical_context_from_slots(slots)
+    if slots is None and not canonical_slots:
+        return False
+    slot_values = slots.model_dump() if hasattr(slots, "model_dump") else dict(slots or {})
+
+    def _slot_value(name: str) -> Any:
+        if isinstance(slots, Mapping):
+            return slots.get(name, canonical_slots.get(name))
+        if slots is not None and hasattr(slots, name):
+            return getattr(slots, name, canonical_slots.get(name))
+        return slot_values.get(name, canonical_slots.get(name))
+
+    try:
+        qty = int(_slot_value("ord_qty") or _slot_value("quantity") or 0)
+    except (TypeError, ValueError):
+        qty = 0
+    return bool(
+        (_slot_value("pending_intent") == "stock" or _slot_value("goal_type") == "store_with_stock")
+        and _slot_value("goods_no")
+        and _slot_value("tire_size")
+        and qty > 0
+        and (_slot_value("shop_id") or _slot_value("shop_name") or _slot_value("store_name"))
+    )
+
+
+def build_pure_inventory_stock_contract(
+    user_text: str,
+    slots: Any,
+    *,
+    action_mode: str = "stock_check",
+    context_state: str = "resumed",
+    resume_source: str = "pure_inventory_stock_fast_path",
+) -> Any | None:
+    canonical_slots = canonical_context_from_slots(slots)
+    slot_values = slots.model_dump() if hasattr(slots, "model_dump") else dict(slots or {})
+
+    def _slot_value(name: str) -> Any:
+        if isinstance(slots, Mapping):
+            return slots.get(name, canonical_slots.get(name))
+        if slots is not None and hasattr(slots, name):
+            return getattr(slots, name, canonical_slots.get(name))
+        return slot_values.get(name, canonical_slots.get(name))
+
+    if str(_slot_value("stock_check_mode") or "") != "inventory_only":
+        return None
+    known_slots = {
+        "goods_no": _slot_value("goods_no"),
+        "tire_size": _slot_value("tire_size"),
+        "quantity": _slot_value("ord_qty") or _slot_value("quantity"),
+        "ord_qty": _slot_value("ord_qty") or _slot_value("quantity"),
+        "shop_id": _slot_value("shop_id"),
+        "shop_name": _slot_value("shop_name"),
+        "store_name": _slot_value("shop_name") or _slot_value("store_name"),
+        "pending_intent": _slot_value("pending_intent"),
+        "goal_type": _slot_value("goal_type"),
+        "stock_check_mode": "inventory_only",
+    }
+    filtered_known_slots = {k: v for k, v in known_slots.items() if v not in (None, "")}
+    frame = build_transaction_intent_frame(user_text, known_slots=filtered_known_slots)
+    if (
+        (frame.intent != "stock_store_search" or frame.sub_intent != "stock")
+        or str(frame.known_slots.get("stock_check_mode") or "") != "inventory_only"
+    ):
+        if not is_quantity_only_stock_followup_text(user_text):
+            return None
+        frame = IntentFrame(
+            domain=PolicyDomain.TRANSACTION,
+            intent="stock_store_search",
+            sub_intent="stock",
+            known_slots={
+                **filtered_known_slots,
+                "quantity": filtered_known_slots.get("quantity") or filtered_known_slots.get("ord_qty"),
+                "ord_qty": filtered_known_slots.get("ord_qty") or filtered_known_slots.get("quantity"),
+                "stock_check_mode": "inventory_only",
+            },
+            missing_slots=(),
+            entities={"stock_check_mode": "inventory_only"},
+        )
+    if (
+        frame.intent != "stock_store_search"
+        or frame.sub_intent != "stock"
+        or str(frame.known_slots.get("stock_check_mode") or "") != "inventory_only"
+    ):
+        return None
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text="재고 있어?" if is_quantity_only_stock_followup_text(user_text) else user_text,
+        known_slots=dict(frame.known_slots),
+    )
+    return build_turn_contract(
+        user_text=user_text,
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=response_decision,
+        merged_slots=slots,
+        action_mode=action_mode,
+        context_state=context_state,
+        resume_source=resume_source,
     )
 
 
