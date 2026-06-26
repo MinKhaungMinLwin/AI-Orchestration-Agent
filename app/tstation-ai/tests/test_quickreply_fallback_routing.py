@@ -772,6 +772,13 @@ def test_coupon_howto_gate_ignores_previous_product_recommendation_context() -> 
     assert decision.is_actionable is False
 
 
+def test_coupon_gate_routes_partner_member_coupon_policy_queries_to_support() -> None:
+    decision = decide_coupon_query_gate(user_text="제휴회원에게만 제공되는 쿠폰 보여줘")
+
+    assert decision.intent == CouponQueryIntent.PARTNER_MEMBER_COUPON_POLICY
+    assert decision.is_actionable is False
+
+
 @pytest.mark.parametrize(
     "user_text, expected_intent",
     [
@@ -15857,6 +15864,56 @@ def test_signup_first_purchase_benefit_contract_requires_faq_and_blocks_coupon_t
         "severity": "error",
         "assistant_response_text": "회원가입하시면 첫구매 쿠폰이 발급됩니다.",
     } in unverified_claim
+
+
+def test_partner_member_coupon_policy_contract_blocks_owned_coupon_tools() -> None:
+    contract = build_turn_contract(
+        user_text="제휴회원에게만 제공되는 쿠폰 보여줘",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:partner_member_coupon_policy"],
+            policy_intent="partner_member_coupon_policy",
+        ),
+    )
+
+    assert contract.domain == "support"
+    assert contract.intent == "partner_member_coupon_policy"
+    assert contract.known_slots["policy_intent"] == "partner_member_coupon_policy"
+    assert "search_faq_hybrid_tool" in contract.allowed_tools
+    assert "get_my_coupons_tool" in contract.forbidden_tools
+    assert "get_coupon_applicable_products_tool" in contract.forbidden_tools
+    assert "issue_coupon_tool" in contract.forbidden_tools
+
+    violations = response_contract_violations(
+        template="voucher",
+        called_tools=["get_my_coupons_tool"],
+        assistant_response_text="보유 쿠폰을 확인했어요.",
+        contract=contract,
+    )
+    assert {
+        "type": "forbidden_tool_for_contract",
+        "severity": "error",
+        "called_tools": ["get_my_coupons_tool"],
+        "forbidden_tools": [
+            "search_product_tool",
+            "get_final_price_tool",
+            "issue_coupon_tool",
+            "get_my_coupons_tool",
+            "get_coupon_applicable_products_tool",
+        ],
+    } in violations
+
+
+def test_partner_member_coupon_support_policy_guides_access_not_owned_coupon_lookup() -> None:
+    response_decision = decide_support_response(
+        intent="partner_member_coupon_policy",
+        user_text="복지몰 쿠폰 보여줘",
+    )
+
+    assert response_decision.metadata["response_shape_key"] == "partner_member_coupon_policy"
+    assert response_decision.template == TemplateName.QUICK_REPLY
+    assert "start_owned_coupon_lookup" in response_decision.forbidden_behaviors
+    assert "제휴사 전용 URL" in response_decision.assistant_guidance
 
 
 def test_signup_first_purchase_benefit_augments_faq_query() -> None:

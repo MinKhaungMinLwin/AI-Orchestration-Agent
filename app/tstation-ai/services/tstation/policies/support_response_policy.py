@@ -16,6 +16,10 @@ _SIGNUP_BENEFIT_RE = re.compile(
     r"(혜택|쿠폰|할인|서비스).{0,24}(회원\s*가입|신규\s*회원|첫\s*구매|처음\s*구매|가입하면)",
     re.IGNORECASE,
 )
+_PARTNER_MEMBER_COUPON_POLICY_RE = re.compile(
+    r"제휴\s*(?:회원|사|몰|전용)|복지몰|임직원|제휴사|제휴회원|제휴\s*쿠폰|제휴\s*혜택",
+    re.IGNORECASE,
+)
 _NONEXISTENT_BENEFIT_RE = re.compile(r"T\s*블랙|블랙\s*멤버십|VIP|브이아이피|블랙\s*카드|50\s*%", re.IGNORECASE)
 _HUMAN_RE = re.compile(r"상담원|사람\s*상담|고객센터|전화번호|연결", re.IGNORECASE)
 _PERSONAL_CONTACT_RE = re.compile(
@@ -110,6 +114,26 @@ def decide_support_response(
                 "신규 회원 혜택/서비스와 첫 구매 쿠폰 가능 여부를 요약한다. 계정별 발급 상태를 확인하지 않은 채 "
                 "쿠폰이 자동 발급된다고 단정하지 않는다. 보유 쿠폰 조회나 쿠폰 직접 발급으로 시작하지 말고, "
                 "쿠폰함/이벤트 페이지 CTA는 보조로 제공한다."
+            ),
+        )
+
+    if intent == "partner_member_coupon_policy" or (
+        _COUPON_RE.search(text) and _PARTNER_MEMBER_COUPON_POLICY_RE.search(text)
+    ):
+        return _decision(
+            response_shape_key="partner_member_coupon_policy",
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=(
+                "start_owned_coupon_lookup",
+                "claim_partner_member_verified",
+                "claim_coupon_already_issued",
+                "show_owned_coupon_voucher",
+            ),
+            assistant_guidance=(
+                "제휴회원/제휴사/복지몰/임직원 전용 쿠폰 문의는 보유 쿠폰 조회가 아니라 접근 권한/접속 경로 정책으로 안내한다. "
+                "현재 회원이 제휴회원인지 챗봇에서 직접 확인하지 못하면 그 한계를 명시하고, "
+                "제휴사 전용 URL 또는 제휴몰 경로에서 확인이 필요하며 제휴 기간과 제휴사별 조건이 다를 수 있다고 설명한다."
             ),
         )
 
