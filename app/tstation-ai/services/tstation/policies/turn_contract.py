@@ -234,6 +234,7 @@ class TurnContract:
             "resolvable_required_slots": list(self.resolvable_required_slots),
             "allowed_tools": list(self.allowed_tools),
             "forbidden_tools": list(self.forbidden_tools),
+            "blocked_tools": list(self.forbidden_tools),
             "response_decision": dict(self.response_decision or {}),
             "risk_level": self.risk_level,
             "fallback_reason": self.fallback_reason,

@@ -9820,6 +9820,9 @@ def test_turn_contract_trace_metadata_keeps_previous_flow_dormant_for_support_po
     assert payload["resume_anchor_detected"] is False
     assert payload["dormant_context_reason"] == "current_turn_action:support_policy_answer"
     assert payload["blocking_required_slots_source"] == "none"
+    assert payload["allowed_tools"] == ["search_faq_hybrid_tool"]
+    assert "search_faq_hybrid_tool" in payload["allowed_tools"]
+    assert "get_orders_of_user_tool" in payload["blocked_tools"]
 
 
 def test_turn_contract_trace_metadata_marks_reference_guard_blocking_slot_source() -> None:
@@ -9849,6 +9852,44 @@ def test_turn_contract_trace_metadata_marks_reference_guard_blocking_slot_source
     payload = contract.to_dict()
     assert "order" in payload["blocking_required_slots"]
     assert payload["blocking_required_slots_source"] == "current_intent+reference_guard:order"
+
+
+def test_direct_code_fast_path_event_records_allowed_and_blocked_tools_in_metadata() -> None:
+    contract = TurnContract(
+        domain="support",
+        intent="general_card_cancel_timing_policy",
+        allowed_tools=("search_faq_hybrid_tool",),
+        forbidden_tools=("get_orders_of_user_tool", "get_order_status_tool", "quick_order_tool"),
+        response_decision={"template": "quickReply", "metadata": {"response_shape_key": "general_card_cancel_timing_policy"}},
+    )
+    event = {
+        "type": "data",
+        "template": "quickReply",
+        "data": {"assistantResponse": "안내", "metadata": {}},
+    }
+
+    annotated = _annotate_direct_code_fast_path_event(
+        event,
+        turn_contract=contract,
+        contract_gate_reason="contract_matched:test",
+        direct_source="code_policy",
+        required_tools=("search_faq_hybrid_tool",),
+        emitted_template="quickReply",
+    )
+
+    assert annotated["allowed_tools"] == ["search_faq_hybrid_tool"]
+    assert annotated["blocked_tools"] == [
+        "get_orders_of_user_tool",
+        "get_order_status_tool",
+        "quick_order_tool",
+    ]
+    metadata = annotated["data"]["metadata"]
+    assert metadata["allowed_tools"] == ["search_faq_hybrid_tool"]
+    assert metadata["blocked_tools"] == [
+        "get_orders_of_user_tool",
+        "get_order_status_tool",
+        "quick_order_tool",
+    ]
 
 
 @pytest.mark.parametrize(

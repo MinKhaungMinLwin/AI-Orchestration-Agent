@@ -15341,6 +15341,8 @@ def _annotate_direct_code_fast_path_event(
 ) -> dict[str, Any]:
     if turn_contract is not None:
         event["contract_intent"] = str(turn_contract.intent or "")
+        event["allowed_tools"] = list(turn_contract.allowed_tools)
+        event["blocked_tools"] = list(turn_contract.forbidden_tools)
     event["contract_matched"] = True
     event["contract_gate_reason"] = contract_gate_reason
     event["contract_gate_result"] = "allowed"
@@ -15357,6 +15359,9 @@ def _annotate_direct_code_fast_path_event(
             metadata = {}
             event_data["metadata"] = metadata
         metadata["contract_intent"] = str(turn_contract.intent or "") if turn_contract is not None else ""
+        if turn_contract is not None:
+            metadata["allowed_tools"] = list(turn_contract.allowed_tools)
+            metadata["blocked_tools"] = list(turn_contract.forbidden_tools)
         metadata["contract_matched"] = True
         metadata["contract_gate_reason"] = contract_gate_reason
         metadata["contract_gate_result"] = "allowed"
@@ -15383,6 +15388,8 @@ def _record_contract_gate_metadata(
     event["contract_gate_reason"] = gate_reason
     if turn_contract is not None:
         event["contract_intent"] = str(turn_contract.intent or "")
+        event["allowed_tools"] = list(turn_contract.allowed_tools)
+        event["blocked_tools"] = list(turn_contract.forbidden_tools)
     if emitted_template:
         event["emitted_template"] = emitted_template
     if source:
@@ -15398,6 +15405,9 @@ def _record_contract_gate_metadata(
         metadata["contract_gate_result"] = gate_result
         metadata["contract_gate_reason"] = gate_reason
         metadata["contract_intent"] = str(turn_contract.intent or "") if turn_contract is not None else ""
+        if turn_contract is not None:
+            metadata["allowed_tools"] = list(turn_contract.allowed_tools)
+            metadata["blocked_tools"] = list(turn_contract.forbidden_tools)
         if emitted_template:
             metadata["emitted_template"] = emitted_template
         if source:
