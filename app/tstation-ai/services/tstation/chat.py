@@ -113,7 +113,6 @@ from services.tstation.policies.ui_action_policy import (
     apply_logistics_earliest_install_cta_action,
     apply_selected_order_context_for_purchase_cta,
     apply_preview_update_cta_action,
-    apply_ui_action_slot_patch,
     apply_vehicle_selection_slot_values,
     build_other_store_search_result_event,
     clear_invalid_store_identity_slots,
@@ -159,6 +158,7 @@ from services.tstation.policies.ui_action_policy import (
     is_quantity_only_stock_followup_text,
     is_resolved_size_store_availability_transaction_continuation,
     is_size_only_store_availability_continuation,
+    is_vehicle_tire_size_lookup_selection,
     oe_replacement_cta_context,
     oe_replacement_followup_brand_cd,
     preorder_slot_values_from_data,
@@ -176,7 +176,6 @@ from services.tstation.policies.ui_action_policy import (
     resolve_goods_no_from_product_template_selection,
     preview_location_slot_values_from_selection,
     resolve_shop_id_from_selection,
-    resolve_shop_id_from_history_template,
     resolve_store_selection_from_history_template,
     resolve_tire_size_from_history_template,
     resolve_vehicle_from_history_template,
@@ -186,11 +185,15 @@ from services.tstation.policies.ui_action_policy import (
     requested_day_label_from_availability_context,
     recent_store_name_for_availability_continuation,
     decide_store_availability_followup_action,
-    resolve_ui_action_context,
     store_availability_followup_context,
     apply_other_store_context_enrichment,
     normalize_preview_tool_result,
     prepare_ui_action_state,
+    apply_history_vehicle_selection_state,
+    apply_history_product_selection_state,
+    apply_history_location_selection_state,
+    resolve_recent_single_shop_id_from_context,
+    resolve_recent_store_name_from_messages,
     store_context_from_mapping,
     store_name_exact_match_row,
     should_reuse_vehicle_slots_for_oe_followup,
@@ -11173,7 +11176,7 @@ _MAINTENANCE_ADDON_CODES = frozenset({"121", "122"})
 
 
 def _maintenance_addon_store_context_from_location_template(user_text: str, template_data: dict | None) -> dict | None:
-    selection = TStationChatServiceV2._resolve_store_selection_from_history_template(user_text, template_data)
+    selection = resolve_store_selection_from_history_template(user_text, template_data)
     if not isinstance(selection, dict):
         if not isinstance(template_data, dict):
             return None
@@ -19468,164 +19471,6 @@ class TStationChatServiceV2:
         return selected
 
     @staticmethod
-    def _resolve_goods_no_from_selection(
-        user_text: str,
-        prev_tool_data: list[dict],
-        current_tire_size: str | None = None,
-    ) -> str | None:
-        return resolve_goods_no_from_selection(
-            user_text,
-            prev_tool_data,
-            current_tire_size=current_tire_size,
-        )
-
-    @staticmethod
-    def _confirmed_product_slot_values_from_event(event: dict) -> dict[str, Any] | None:
-        return confirmed_product_slot_values_from_event(event)
-
-    @staticmethod
-    def _confirmed_product_slot_values_for_purchase_cta(
-        *,
-        latest_quickreply_tmpl: dict | None = None,
-        latest_product_tmpl: dict | None = None,
-        prev_tool_data: list[dict] | None = None,
-    ) -> dict[str, Any] | None:
-        return confirmed_product_slot_values_for_purchase_cta(
-            latest_quickreply_tmpl=latest_quickreply_tmpl,
-            latest_product_tmpl=latest_product_tmpl,
-            prev_tool_data=prev_tool_data,
-        )
-
-    @staticmethod
-    def _preorder_slot_values_from_data(template_data: dict | None) -> dict[str, Any] | None:
-        return preorder_slot_values_from_data(template_data)
-
-    @staticmethod
-    def _datepick_slot_values_from_data(
-        template_data: dict | None,
-        *,
-        user_text: str | None = None,
-    ) -> dict[str, Any] | None:
-        return datepick_slot_values_from_data(
-            template_data,
-            user_text=user_text,
-        )
-
-    @staticmethod
-    def _resolve_tire_size_from_history_template(user_text: str, template_data: dict | None) -> str | None:
-        return resolve_tire_size_from_history_template(user_text, template_data)
-
-    @staticmethod
-    def _resolve_vehicle_from_history_template(user_text: str, template_data: dict | None) -> dict | None:
-        """Resolve a user's next-turn `listCar` pick back to the selected vehicle."""
-        return resolve_vehicle_from_history_template(user_text, template_data)
-
-    @staticmethod
-    def _is_vehicle_tire_size_lookup_selection(selected_vehicle: dict[str, Any] | None) -> bool:
-        if selected_vehicle is None:
-            return False
-        selection_context = selected_vehicle.get("selection_context") or {}
-        source_intent = str(selection_context.get("source_intent") or "").strip()
-        expected_contract_intent = str(selection_context.get("expected_contract_intent") or "").strip()
-        return source_intent == "vehicle_tire_size_lookup" or expected_contract_intent == "vehicle_tire_size_lookup"
-
-    @staticmethod
-    def _resolve_recent_product_search_keyword(prev_tool_data: list[dict]) -> str | None:
-        return resolve_recent_product_search_keyword(prev_tool_data)
-
-    @staticmethod
-    def _resolve_goods_no_from_recent_product_context(
-        prev_tool_data: list[dict],
-        tire_size: str | None,
-    ) -> str | None:
-        return resolve_goods_no_from_recent_product_context(prev_tool_data, tire_size)
-
-    @staticmethod
-    def _resolve_shop_id_from_selection(user_text: str, prev_tool_data: list[dict]) -> str | None:
-        return resolve_shop_id_from_selection(user_text, prev_tool_data)
-
-    @staticmethod
-    def _resolve_shop_id_from_history_template(user_text: str, template_data: dict | None) -> str | None:
-        return resolve_shop_id_from_history_template(user_text, template_data)
-
-    @staticmethod
-    def _resolve_store_selection_from_history_template(user_text: str, template_data: dict | None) -> dict | None:
-        return resolve_store_selection_from_history_template(user_text, template_data)
-
-    @staticmethod
-    def _preview_location_slot_values_from_selection(selection: dict | None) -> dict[str, Any] | None:
-        return preview_location_slot_values_from_selection(selection)
-
-    @staticmethod
-    def _resolve_recent_single_shop_id_from_context(prev_tool_data: list[dict]) -> str | None:
-        """Carry forward a single confirmed store from recent tool context.
-
-        This is intentionally narrower than `_resolve_shop_id_from_selection()`:
-        it does not match the current user text. It only returns a shop_id when
-        the previous context clearly contains one store, such as a just-rendered
-        store detail answer. That lets "내일 12시에 ... 장착하고싶어" continue
-        from the store just discussed without forcing the user to repeat it.
-        """
-        if not prev_tool_data:
-            return None
-
-        for entry in prev_tool_data:
-            tool = entry.get("tool")
-            data = entry.get("data")
-            tool_input = entry.get("input")
-
-            if tool == "get_store_detail_tool":
-                if isinstance(tool_input, dict):
-                    shop_id = str(tool_input.get("shop_id") or "").strip()
-                    if shop_id:
-                        return shop_id
-                if isinstance(data, dict):
-                    shop_id = str(data.get("shop_id") or "").strip()
-                    if shop_id:
-                        return shop_id
-
-            if tool in ("get_store_list_tool", "search_stores_tool", "get_nearby_stores_tool"):
-                items: list[dict] = []
-                if isinstance(data, list):
-                    items = [item for item in data if isinstance(item, dict) and not item.get("_truncated")]
-                elif isinstance(data, dict) and isinstance(data.get("stores"), list):
-                    items = [item for item in data["stores"] if isinstance(item, dict)]
-                if len(items) == 1:
-                    shop_id = str(items[0].get("shop_id") or "").strip()
-                    if shop_id:
-                        return shop_id
-
-        return None
-
-    @staticmethod
-    def _resolve_recent_store_name_from_messages(messages: list[dict]) -> str | None:
-        """Extract the most recent single store name shown in assistant text."""
-        for message in reversed(messages[-8:]):
-            if message.get("role") != "assistant":
-                continue
-            content = str(message.get("content") or "")
-            match = re.search(r"매장명\s*:\s*([^\n\r]+)", content)
-            if match:
-                store_name = re.sub(r"\s+", " ", match.group(1)).strip()
-                if store_name:
-                    return store_name
-        return None
-
-    @staticmethod
-    def _resolve_store_followup_from_quickreply_template(
-        user_text: str,
-        template_data: dict | None,
-    ) -> tuple[str | None, str | None]:
-        return resolve_store_followup_from_quickreply_template(user_text, template_data)
-
-    @staticmethod
-    def _resolve_store_followup_from_messages(
-        user_text: str,
-        messages: list[dict],
-    ) -> tuple[str | None, str | None]:
-        return resolve_store_followup_from_messages(user_text, messages)
-
-    @staticmethod
     async def chat(request: TStationChatRequest):
         """
         T-Station AI Chat V2 - Multi-Agent Streaming
@@ -20268,7 +20113,7 @@ class TStationChatServiceV2:
                     "[SLOTS] Demoted carried tire_size for fresh product transaction: %s",
                     demoted_size_context,
             )
-            preorder_slot_values = TStationChatServiceV2._preorder_slot_values_from_data(latest_preorder_tmpl)
+            preorder_slot_values = preorder_slot_values_from_data(latest_preorder_tmpl)
             preorder_confirmation_turn = _is_preorder_confirmation_reply(last_user_text, latest_preorder_tmpl)
             current_turn_order_recovery_anchor = _has_current_turn_order_recovery_anchor(
                 last_user_text,
@@ -20328,7 +20173,7 @@ class TStationChatServiceV2:
                     fill_only=False,
                 )
             datepick_template_for_recovery = latest_datepick_tmpl
-            datepick_slot_values = TStationChatServiceV2._datepick_slot_values_from_data(
+            datepick_slot_values = datepick_slot_values_from_data(
                 datepick_template_for_recovery,
                 user_text=last_user_text,
             )
@@ -20340,7 +20185,7 @@ class TStationChatServiceV2:
             ):
                 datepick_template_from_messages = _datepick_template_recovery_candidate_from_messages(enriched_messages)
                 if datepick_template_from_messages is not None:
-                    recovered_datepick_slot_values = TStationChatServiceV2._datepick_slot_values_from_data(
+                    recovered_datepick_slot_values = datepick_slot_values_from_data(
                         datepick_template_from_messages,
                         user_text=last_user_text,
                     )
@@ -21246,12 +21091,12 @@ class TStationChatServiceV2:
             # reuse that previous candidate directly instead of re-running a fresh
             # store-name search. This prevents `store_nm + region_code` mismatch
             # loops and keeps the flow on preview/schedule.
-            confirmed_store_name, confirmed_region = TStationChatServiceV2._resolve_store_followup_from_quickreply_template(
+            confirmed_store_name, confirmed_region = resolve_store_followup_from_quickreply_template(
                 last_user_text,
                 latest_quickreply_tmpl,
             )
             if confirmed_store_name is None and confirmed_region is None:
-                confirmed_store_name, confirmed_region = TStationChatServiceV2._resolve_store_followup_from_messages(
+                confirmed_store_name, confirmed_region = resolve_store_followup_from_messages(
                     last_user_text,
                     request.messages,
                 )
@@ -21287,7 +21132,7 @@ class TStationChatServiceV2:
                         "[ORDER_CTA] Recovered selected order context for purchase CTA: %s",
                         selected_context_values,
                     )
-                recovered_product_slots = TStationChatServiceV2._confirmed_product_slot_values_for_purchase_cta(
+                recovered_product_slots = confirmed_product_slot_values_for_purchase_cta(
                     latest_quickreply_tmpl=latest_quickreply_tmpl,
                     latest_product_tmpl=latest_product_tmpl,
                     prev_tool_data=prev_tool_data,
@@ -21325,22 +21170,24 @@ class TStationChatServiceV2:
             # actually calling a tool in the current turn — leaving goods_no=None in
             # slots and causing the coordinator's P0 safety check to stop the chain
             # before Transaction runs.
-            if merged_slots.goods_no is None and prev_tool_data:
-                resolved_goods_no = resolve_goods_no_from_selection(
-                    last_user_text,
-                    prev_tool_data,
-                    current_tire_size=merged_slots.tire_size,
-                )
-                if resolved_goods_no:
-                    merged_slots = merged_slots.apply_runtime_values(
-                        {"goods_no": resolved_goods_no},
-                        source="history_product_selection",
+            history_product_selection_state = apply_history_product_selection_state(
+                last_user_text=last_user_text,
+                prev_tool_data=prev_tool_data or [],
+                merged_slots=merged_slots,
+                resolve_goods_no_from_selection_fn=lambda user_text, tool_data, current_tire_size: (
+                    resolve_goods_no_from_selection(
+                        user_text,
+                        tool_data,
+                        current_tire_size=current_tire_size,
                     )
-                    goods_no_resolved_this_turn = True
-                    logger.debug(
-                        f"[SLOTS] Resolved goods_no={resolved_goods_no!r} from user's "
-                        f"list-selection against prior search_product_tool result"
-                    )
+                ),
+            )
+            merged_slots = history_product_selection_state.updated_slots
+            goods_no_resolved_this_turn = (
+                goods_no_resolved_this_turn or history_product_selection_state.goods_no_resolved
+            )
+            if history_product_selection_state.trace_metadata:
+                vehicle_selection_trace_metadata.update(dict(history_product_selection_state.trace_metadata))
 
             # 3.85) Resolve tire_size from the user's vehicle-selection reply matched
             # against the metadata of the most recent `listCar` template.
@@ -21357,94 +21204,36 @@ class TStationChatServiceV2:
             history_selected_vehicle = chip_selected_vehicle
             if history_selected_vehicle is None and latest_listcar_tmpl:
                 try:
-                    history_selected_vehicle = TStationChatServiceV2._resolve_vehicle_from_history_template(
-                        last_user_text,
-                        latest_listcar_tmpl,
+                    history_vehicle_selection_state = apply_history_vehicle_selection_state(
+                        last_user_text=last_user_text,
+                        latest_listcar_tmpl=latest_listcar_tmpl,
+                        prev_tool_data=prev_tool_data or [],
+                        merged_slots=merged_slots,
+                        existing_action_context=vehicle_ui_action_context,
+                        trace_metadata=vehicle_selection_trace_metadata,
+                        resolve_vehicle_from_history_template_fn=resolve_vehicle_from_history_template,
+                        resolve_tire_size_from_history_template_fn=resolve_tire_size_from_history_template,
+                        vehicle_slot_apply_fn=_apply_vehicle_selection_slot_values,
+                        recent_product_search_keyword_fn=resolve_recent_product_search_keyword,
+                        goods_no_from_recent_product_context_fn=resolve_goods_no_from_recent_product_context,
+                        build_vehicle_size_guidance_event_fn=_build_vehicle_size_guidance_event,
+                        build_staggered_vehicle_tire_selection_event_fn=_build_staggered_vehicle_tire_selection_event,
+                        listcar_allows_staggered_tire_prompt_fn=_listcar_allows_staggered_tire_prompt,
+                        is_vehicle_tire_size_lookup_selection_fn=is_vehicle_tire_size_lookup_selection,
                     )
                 except Exception as e:
                     logger.warning(f"[SLOTS] history vehicle resolver failed: {e}")
-            if history_selected_vehicle is not None:
-                previous_tire_size = merged_slots.tire_size
-                vehicle_slot_values = _vehicle_selection_slot_values(history_selected_vehicle)
-                if vehicle_ui_action_context is None:
-                    vehicle_ui_action_context = resolve_ui_action_context(
-                        selected_vehicle=history_selected_vehicle,
-                        selection_source="previous_listCar_candidate",
-                        previous_slots={
-                            "car_no": getattr(merged_slots, "car_no", None),
-                            "tire_size": getattr(merged_slots, "tire_size", None),
-                        },
-                        slot_patch=vehicle_slot_values,
+                else:
+                    history_selected_vehicle = history_vehicle_selection_state.selected_vehicle
+                    vehicle_ui_action_context = history_vehicle_selection_state.action_context
+                    vehicle_selection_trace_metadata.update(dict(history_vehicle_selection_state.trace_metadata))
+                    merged_slots = history_vehicle_selection_state.updated_slots
+                    tire_size_resolved_from_vehicle_selection = history_vehicle_selection_state.tire_size_resolved
+                    goods_no_resolved_this_turn = (
+                        goods_no_resolved_this_turn or history_vehicle_selection_state.goods_no_resolved
                     )
-                if vehicle_ui_action_context is not None:
-                    vehicle_selection_trace_metadata.update(dict(vehicle_ui_action_context.trace_metadata))
-                if vehicle_slot_values:
-                    if vehicle_ui_action_context is not None:
-                        merged_slots, slot_trace_metadata = apply_ui_action_slot_patch(
-                            merged_slots,
-                            vehicle_ui_action_context,
-                            slot_apply_fn=_apply_vehicle_selection_slot_values,
-                        )
-                        vehicle_selection_trace_metadata.update(slot_trace_metadata)
-                    else:
-                        merged_slots = _apply_vehicle_selection_slot_values(merged_slots, vehicle_slot_values)
-                        vehicle_selection_trace_metadata["slots_rewritten"] = True
-                    selected_tire_size = vehicle_slot_values.get("tire_size")
-                    if selected_tire_size and previous_tire_size != selected_tire_size:
-                        tire_size_resolved_from_vehicle_selection = True
-                selected_meta = history_selected_vehicle.get("meta") or {}
-                front_size, rear_size = _normalize_vehicle_tire_size_pair(selected_meta)
-                is_staggered_vehicle = _has_staggered_vehicle_tire_sizes(front_size, rear_size)
-                if TStationChatServiceV2._is_vehicle_tire_size_lookup_selection(history_selected_vehicle):
-                    current_vehicle_selection_prompt_event.set(
-                        _build_vehicle_size_guidance_event(history_selected_vehicle)
-                    )
-                elif is_staggered_vehicle and _listcar_allows_staggered_tire_prompt(latest_listcar_tmpl):
-                    current_vehicle_selection_prompt_event.set(
-                        _build_staggered_vehicle_tire_selection_event(history_selected_vehicle)
-                    )
-            if merged_slots.tire_size is None:
-                try:
-                    resolved_tire_size = TStationChatServiceV2._resolve_tire_size_from_history_template(
-                        last_user_text, latest_listcar_tmpl
-                    )
-                    if resolved_tire_size:
-                        merged_slots = merged_slots.apply_runtime_values(
-                            {"tire_size": resolved_tire_size},
-                            source="history_vehicle_size",
-                        )
-                        tire_size_resolved_from_vehicle_selection = True
-                        logger.debug(
-                            f"[SLOTS] Resolved tire_size={resolved_tire_size!r} from user's "
-                            f"vehicle-selection against last `listCar` template metadata"
-                        )
-                except Exception as e:
-                    logger.warning(f"[SLOTS] history tire_size resolver failed: {e}")
-
-            if tire_size_resolved_from_vehicle_selection and prev_tool_data:
-                recovered_keyword = TStationChatServiceV2._resolve_recent_product_search_keyword(prev_tool_data)
-                if recovered_keyword and not merged_slots.tire_model:
-                    merged_slots.tire_model = recovered_keyword
-                    logger.debug(
-                        f"[SLOTS] Recovered tire_model={recovered_keyword!r} from recent search_product_tool "
-                        "after vehicle selection"
-                    )
-
-                if merged_slots.goods_no is None:
-                    resolved_goods_no = TStationChatServiceV2._resolve_goods_no_from_recent_product_context(
-                        prev_tool_data,
-                        merged_slots.tire_size,
-                    )
-                    if resolved_goods_no:
-                        merged_slots = merged_slots.apply_runtime_values(
-                            {"goods_no": resolved_goods_no},
-                            source="recent_product_context",
-                        )
-                        goods_no_resolved_this_turn = True
-                        logger.debug(
-                            f"[SLOTS] Resolved goods_no={resolved_goods_no!r} from recent product context "
-                            f"using vehicle-selected tire_size={merged_slots.tire_size!r}"
-                        )
+                    if history_vehicle_selection_state.prompt_event is not None:
+                        current_vehicle_selection_prompt_event.set(history_vehicle_selection_state.prompt_event)
 
             cleared_recommendation_slots = _clear_stale_product_slots_for_new_recommendation(
                 merged_slots,
@@ -21468,7 +21257,7 @@ class TStationChatServiceV2:
             # this resolver the LLM tends to re-run get_store_list_tool and stall at the
             # location template instead of progressing to datepick.
             if merged_slots.shop_id is None and prev_tool_data:
-                resolved_shop_id = TStationChatServiceV2._resolve_shop_id_from_selection(last_user_text, prev_tool_data)
+                resolved_shop_id = resolve_shop_id_from_selection(last_user_text, prev_tool_data)
                 if resolved_shop_id:
                     merged_slots = merged_slots.apply_runtime_values(
                         {"shop_id": resolved_shop_id},
@@ -21501,38 +21290,25 @@ class TStationChatServiceV2:
             #    "data": {"stores": [...], "metadata": [{"shopId": "F00098"}, ...]}}
             if merged_slots.shop_id is None:
                 try:
-                    selected_location = TStationChatServiceV2._resolve_store_selection_from_history_template(
-                        last_user_text, latest_location_tmpl
+                    history_location_selection_state = apply_history_location_selection_state(
+                        last_user_text=last_user_text,
+                        latest_location_tmpl=latest_location_tmpl,
+                        merged_slots=merged_slots,
+                        resolve_store_selection_from_history_template_fn=resolve_store_selection_from_history_template,
+                        preview_location_slot_values_from_selection_fn=preview_location_slot_values_from_selection,
+                        selected_order_context_from_preview_values_fn=_selected_order_context_from_preview_values,
                     )
-                    resolved_shop_id = None
-                    if selected_location is not None:
-                        selected_meta = selected_location.get("meta") or {}
-                        if isinstance(selected_meta, dict):
-                            canonical_meta = canonical_context_from_template_boundary(selected_meta)
-                            resolved_shop_id = str(canonical_meta.get("shop_id") or "").strip() or None
-                    if resolved_shop_id:
-                        preview_values = TStationChatServiceV2._preview_location_slot_values_from_selection(
-                            selected_location
-                        ) or {"shop_id": resolved_shop_id}
-                        merged_slots = merged_slots.apply_runtime_values(
-                            preview_values,
-                            source="preview_location_template_selection"
-                            if preview_values.get("goods_no")
-                            else "location_template_selection",
-                        )
-                        selected_order_context = _selected_order_context_from_preview_values(preview_values)
-                        if selected_order_context:
-                            order_context = dict(merged_slots.order_context or {})
-                            order_context["selected_order_context"] = selected_order_context
-                            merged_slots.order_context = order_context
-                            merged_slots.pending_intent = "order"
-                            merged_slots.goal_type = "place_order"
-                            logger.debug(
-                                "[SLOTS] Promoted preview store selection to selected_order_context: %s",
-                                selected_order_context,
-                            )
+                    merged_slots = history_location_selection_state.updated_slots
+                    if history_location_selection_state.trace_metadata:
+                        vehicle_selection_trace_metadata.update(dict(history_location_selection_state.trace_metadata))
+                    if history_location_selection_state.selected_order_context:
                         logger.debug(
-                            f"[SLOTS] Resolved shop_id={resolved_shop_id!r} from user's "
+                            "[SLOTS] Promoted preview store selection to selected_order_context: %s",
+                            history_location_selection_state.selected_order_context,
+                        )
+                    if history_location_selection_state.resolved_shop_id:
+                        logger.debug(
+                            f"[SLOTS] Resolved shop_id={history_location_selection_state.resolved_shop_id!r} from user's "
                             f"list-selection against last `location` template metadata"
                         )
                 except Exception as e:
@@ -21555,7 +21331,7 @@ class TStationChatServiceV2:
                 and not _is_stock_store_candidate_search_followup(last_user_text, merged_slots)
                 and not current_turn_has_store_anchor
             ):
-                resolved_shop_id = TStationChatServiceV2._resolve_recent_single_shop_id_from_context(prev_tool_data)
+                resolved_shop_id = resolve_recent_single_shop_id_from_context(prev_tool_data)
                 if resolved_shop_id:
                     merged_slots = merged_slots.apply_runtime_values(
                         {"shop_id": resolved_shop_id},
@@ -21566,7 +21342,7 @@ class TStationChatServiceV2:
                         f"for fresh pending_intent={regex_slots.intent_candidate!r}"
                     )
                 else:
-                    resolved_store_name = TStationChatServiceV2._resolve_recent_store_name_from_messages(messages)
+                    resolved_store_name = resolve_recent_store_name_from_messages(messages)
                     if resolved_store_name:
                         merged_slots = merged_slots.apply_runtime_values(
                             {"shop_name": resolved_store_name},
@@ -25265,7 +25041,7 @@ class TStationChatServiceV2:
                 )
 
             latest_location_template = latest_template_data_from_messages(messages, "location")
-            selected_location = TStationChatServiceV2._resolve_store_selection_from_history_template(
+            selected_location = resolve_store_selection_from_history_template(
                 user_query,
                 latest_location_template,
             )
@@ -29020,7 +28796,7 @@ class TStationChatServiceV2:
                 logger.info("[CODE_FAST_PATH_GATE] blocked quick_order_execute success reason=%s", success_gate_reason)
                 return None
 
-            preorder_slot_values = TStationChatServiceV2._preorder_slot_values_from_data(latest_preorder_tmpl) or {}
+            preorder_slot_values = preorder_slot_values_from_data(latest_preorder_tmpl) or {}
             slot_values = (
                 initial_slots.model_dump()
                 if initial_slots is not None and hasattr(initial_slots, "model_dump")
@@ -30786,7 +30562,7 @@ class TStationChatServiceV2:
                             event_data = event.get("data", {})
                 if isinstance(event_data, dict):
                     _stage_comparison_context_slots(event)
-                    confirmed_product_slots = TStationChatServiceV2._confirmed_product_slot_values_from_event(event)
+                    confirmed_product_slots = confirmed_product_slot_values_from_event(event)
                     if confirmed_product_slots:
                         from schemas.tstation.slots import ConversationSlots
 
@@ -30807,7 +30583,7 @@ class TStationChatServiceV2:
                     if last_template == "preOrder" and can_commit_transaction_event_slots:
                         _standardize_preorder_metadata(event_data, pending_slots or initial_slots)
                     preorder_slots = (
-                        TStationChatServiceV2._preorder_slot_values_from_data(event_data)
+                        preorder_slot_values_from_data(event_data)
                         if can_commit_transaction_event_slots
                         else None
                     )
@@ -30826,7 +30602,7 @@ class TStationChatServiceV2:
                             pending_slots = updated_slots
                             logger.info("[PREORDER_SLOT_COMMIT] staged canonical order snapshot: %s", preorder_slots)
                     datepick_slots = (
-                        TStationChatServiceV2._datepick_slot_values_from_data(event)
+                        datepick_slot_values_from_data(event)
                         if can_commit_transaction_event_slots
                         else None
                     )

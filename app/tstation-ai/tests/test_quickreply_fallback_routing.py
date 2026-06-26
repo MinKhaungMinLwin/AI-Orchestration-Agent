@@ -412,6 +412,8 @@ from services.tstation.policies.ui_action_policy import (
     preview_location_slot_values_from_selection,
     preorder_slot_values_from_data,
     resolve_goods_no_from_recent_product_context,
+    resolve_recent_single_shop_id_from_context,
+    resolve_recent_store_name_from_messages,
     selected_order_context_from_preview_values,
     resolve_recent_product_search_keyword,
     resolve_goods_no_from_selection,
@@ -430,10 +432,14 @@ from services.tstation.policies.ui_action_policy import (
     goods_no_from_template_event,
     normalize_preview_tool_result,
     prepare_ui_action_state,
+    apply_history_vehicle_selection_state,
+    apply_history_product_selection_state,
+    apply_history_location_selection_state,
     build_store_availability_quantity_prompt_event,
     decide_store_availability_followup_action,
     validate_ui_actions_for_contract,
 )
+from services.tstation.policies.store_confirmation_policy import resolve_store_followup_from_quickreply_template
 from services.tstation.policies.pickup_service_gate import deterministic_pickup_service_gate_decision
 from services.tstation.policies.store_service_gate import (
     classify_store_name_role,
@@ -2799,7 +2805,7 @@ def test_parse_requested_reservation_date_supports_relative_weekday_expression()
 
 
 def test_store_confirmation_reply_reuses_confirmed_candidate_from_quickreply_template() -> None:
-    store_name, region = TStationChatServiceV2._resolve_store_followup_from_quickreply_template(
+    store_name, region = resolve_store_followup_from_quickreply_template(
         "네, 맞아요",
         {
             "template": "quickReply",
@@ -2820,7 +2826,7 @@ def test_store_confirmation_reply_reuses_confirmed_candidate_from_quickreply_tem
 
 
 def test_store_region_confirmation_reply_reuses_suggested_region_from_quickreply_template() -> None:
-    store_name, region = TStationChatServiceV2._resolve_store_followup_from_quickreply_template(
+    store_name, region = resolve_store_followup_from_quickreply_template(
         "네, 고성 지역으로 검색",
         {
             "template": "quickReply",
@@ -5621,7 +5627,7 @@ def test_recent_single_store_context_not_reused_when_current_turn_names_store() 
     assert regex_slots.pending_intent is None
     assert regex_slots.intent_candidate == "stock"
     assert regex_slots.shop_name == "모란점"
-    assert TStationChatServiceV2._resolve_recent_single_shop_id_from_context(prev_tool_data) == "F00409"
+    assert resolve_recent_single_shop_id_from_context(prev_tool_data) == "F00409"
     assert _is_new_store_name_anchor_for_current_turn(regex_slots.shop_name, None, "F00409") is True
 
 
@@ -9227,7 +9233,7 @@ def test_recent_single_store_context_can_carry_shop_id_from_detail_input() -> No
         }
     ]
 
-    assert TStationChatServiceV2._resolve_recent_single_shop_id_from_context(prev_tool_data) == "F07782"
+    assert resolve_recent_single_shop_id_from_context(prev_tool_data) == "F07782"
 
 
 def test_recent_single_store_context_can_carry_shop_id_from_single_store_list() -> None:
@@ -9245,7 +9251,7 @@ def test_recent_single_store_context_can_carry_shop_id_from_single_store_list() 
         }
     ]
 
-    assert TStationChatServiceV2._resolve_recent_single_shop_id_from_context(prev_tool_data) == "F07782"
+    assert resolve_recent_single_shop_id_from_context(prev_tool_data) == "F07782"
 
 
 def test_recent_single_store_context_does_not_guess_from_multi_store_list() -> None:
@@ -9259,7 +9265,7 @@ def test_recent_single_store_context_does_not_guess_from_multi_store_list() -> N
         }
     ]
 
-    assert TStationChatServiceV2._resolve_recent_single_shop_id_from_context(prev_tool_data) is None
+    assert resolve_recent_single_shop_id_from_context(prev_tool_data) is None
 
 
 def test_recent_store_name_can_be_carried_from_assistant_summary() -> None:
@@ -9274,7 +9280,7 @@ def test_recent_store_name_can_be_carried_from_assistant_summary() -> None:
         }
     ]
 
-    assert TStationChatServiceV2._resolve_recent_store_name_from_messages(messages) == "티스테이션 한남점"
+    assert resolve_recent_store_name_from_messages(messages) == "티스테이션 한남점"
 
 
 def test_store_contact_guidance_skips_without_store_identity() -> None:
@@ -10874,7 +10880,7 @@ def test_tool_store_selection_uses_tool_boundary_alias_normalization() -> None:
 
 
 def test_recent_product_context_goods_no_uses_tool_boundary_alias_normalization() -> None:
-    goods_no = TStationChatServiceV2._resolve_goods_no_from_recent_product_context(
+    goods_no = resolve_goods_no_from_recent_product_context(
         [
             {
                 "tool": "search_product_tool",
@@ -12205,6 +12211,121 @@ def test_prepare_ui_action_state_rewrites_vehicle_selection_before_routing() -> 
     assert prepared.rewritten_user_text == "14다5499 차량 타이어 사이즈 알려줘"
     assert prepared.trace_metadata["vehicle_selection_detected"] is True
     assert prepared.trace_metadata["slots_rewritten"] is True
+
+
+def test_apply_history_vehicle_selection_state_updates_slots_and_recent_product_context() -> None:
+    slots = ConversationSlots(car_no="61거1836", tire_size=None, goods_no=None, tire_model=None)
+    latest_listcar_tmpl = {
+        "listCar": [{
+            "carNo": "14다5499",
+            "carNm": "그랜저",
+            "tireSize": "2255518",
+            "tireSizeRe": "2255518",
+        }],
+        "metadata": [{
+            "ctaAction": "select_vehicle_candidate",
+            "source_intent": "vehicle_tire_size_lookup",
+            "expected_contract_intent": "vehicle_tire_size_lookup",
+            "carNo": "14다5499",
+            "carNm": "그랜저",
+            "tireSize": "2255518",
+            "tireSizeRe": "2255518",
+            "carType": "SUV",
+        }],
+    }
+
+    state = apply_history_vehicle_selection_state(
+        last_user_text="14다5499",
+        latest_listcar_tmpl=latest_listcar_tmpl,
+        prev_tool_data=[{"tool": "search_product_tool"}],
+        merged_slots=slots,
+        existing_action_context=None,
+        trace_metadata={},
+        resolve_vehicle_from_history_template_fn=lambda user_text, template: resolve_vehicle_from_history_template(
+            user_text, {"template": "listCar", "data": template}
+        ),
+        resolve_tire_size_from_history_template_fn=resolve_tire_size_from_history_template,
+        vehicle_slot_apply_fn=_apply_vehicle_selection_slot_values,
+        recent_product_search_keyword_fn=lambda prev_tool_data: "다이나프로 HL3",
+        goods_no_from_recent_product_context_fn=lambda prev_tool_data, tire_size: "G000000309715",
+        build_vehicle_size_guidance_event_fn=lambda selected: {"template": "quickReply", "data": {"assistantResponse": "ok"}},
+        build_staggered_vehicle_tire_selection_event_fn=lambda selected: {"template": "quickReply", "data": {}},
+        listcar_allows_staggered_tire_prompt_fn=lambda template: True,
+        is_vehicle_tire_size_lookup_selection_fn=lambda selected: True,
+    )
+
+    assert state.selected_vehicle is not None
+    assert state.updated_slots.car_no == "14다5499"
+    assert state.updated_slots.tire_size == "225/55R18"
+    assert state.updated_slots.goods_no == "G000000309715"
+    assert state.updated_slots.tire_model == "다이나프로 HL3"
+    assert state.tire_size_resolved is True
+    assert state.goods_no_resolved is True
+    assert state.prompt_event is not None
+    assert state.trace_metadata["selection_source"] == "previous_listCar_candidate"
+
+
+def test_apply_history_product_selection_state_resolves_goods_no_and_trace_metadata() -> None:
+    slots = ConversationSlots(goods_no=None, tire_size="225/55R18")
+    prev_tool_data = [{
+        "tool": "search_product_tool",
+        "data": [
+            {"goods_no": "G000000309715", "goods_nm": "다이나프로 HL3", "tire_size_1": "225/55R18"},
+            {"goods_no": "G000000309716", "goods_nm": "벤투스 S2 AS", "tire_size_1": "225/55R18"},
+        ],
+    }]
+
+    state = apply_history_product_selection_state(
+        last_user_text="다이나프로 HL3 225/55R18",
+        prev_tool_data=prev_tool_data,
+        merged_slots=slots,
+        resolve_goods_no_from_selection_fn=lambda user_text, tool_data, current_tire_size: resolve_goods_no_from_selection(
+            user_text,
+            tool_data,
+            current_tire_size=current_tire_size,
+        ),
+    )
+
+    assert state.updated_slots.goods_no == "G000000309715"
+    assert state.goods_no_resolved is True
+    assert state.trace_metadata["selected_entity_type"] == "product"
+    assert state.trace_metadata["selected_entity_id"] == "G000000309715"
+    assert state.trace_metadata["selection_source"] == "previous_product_candidate"
+    assert state.trace_metadata["validation_result"] == "resolved_from_history"
+
+
+def test_apply_history_location_selection_state_promotes_preview_store_context() -> None:
+    slots = ConversationSlots(shop_id=None, order_context=None, pending_intent=None, goal_type=None)
+    latest_location_tmpl = {
+        "stores": [{"nameAddress": "티스테이션 판교점"}],
+        "metadata": [{
+            "shopId": "F00098",
+            "shopName": "티스테이션 판교점",
+            "sourceTool": "transaction_store_preview_tool",
+            "goodsNo": "G000000309715",
+            "tireSize": "225/55R18",
+            "ordQty": 4,
+        }],
+    }
+
+    state = apply_history_location_selection_state(
+        last_user_text="이 매장 선택",
+        latest_location_tmpl=latest_location_tmpl,
+        merged_slots=slots,
+        resolve_store_selection_from_history_template_fn=lambda user_text, template: resolve_store_selection_from_history_template(
+            user_text, {"template": "location", "data": template}
+        ),
+        preview_location_slot_values_from_selection_fn=preview_location_slot_values_from_selection,
+        selected_order_context_from_preview_values_fn=selected_order_context_from_preview_values,
+    )
+
+    assert state.updated_slots.shop_id == "F00098"
+    assert state.updated_slots.pending_intent == "order"
+    assert state.updated_slots.goal_type == "place_order"
+    assert state.selected_order_context is not None
+    assert state.selected_order_context["shop_id"] == "F00098"
+    assert state.trace_metadata["selected_entity_type"] == "store"
+    assert state.trace_metadata["selection_source"] == "previous_location_candidate"
 
 
 def test_vehicle_tire_size_lookup_ui_action_validation_blocks_store_and_purchase_chips() -> None:

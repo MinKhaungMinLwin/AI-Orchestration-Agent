@@ -164,6 +164,33 @@ class PreparedUIActionState:
     trace_metadata: Mapping[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class HistoryVehicleSelectionState:
+    selected_vehicle: Mapping[str, Any] | None
+    action_context: UIActionContext | None
+    updated_slots: Any
+    trace_metadata: Mapping[str, Any] = field(default_factory=dict)
+    prompt_event: Mapping[str, Any] | None = None
+    tire_size_resolved: bool = False
+    goods_no_resolved: bool = False
+
+
+@dataclass(frozen=True)
+class HistoryProductSelectionState:
+    updated_slots: Any
+    goods_no_resolved: bool = False
+    trace_metadata: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class HistoryLocationSelectionState:
+    updated_slots: Any
+    selected_location: Mapping[str, Any] | None = None
+    resolved_shop_id: str | None = None
+    selected_order_context: Mapping[str, Any] | None = None
+    trace_metadata: Mapping[str, Any] = field(default_factory=dict)
+
+
 def _vehicle_value(selected_vehicle: Mapping[str, Any], *keys: str) -> str:
     selected_car = selected_vehicle.get("car") if isinstance(selected_vehicle.get("car"), Mapping) else {}
     selected_meta = selected_vehicle.get("meta") if isinstance(selected_vehicle.get("meta"), Mapping) else {}
@@ -1192,6 +1219,241 @@ def prepare_ui_action_state(
     )
 
 
+def apply_history_vehicle_selection_state(
+    *,
+    last_user_text: str,
+    latest_listcar_tmpl: Mapping[str, Any] | None,
+    prev_tool_data: list[dict[str, Any]] | None,
+    merged_slots: Any,
+    existing_action_context: UIActionContext | None,
+    trace_metadata: Mapping[str, Any] | None,
+    resolve_vehicle_from_history_template_fn: Callable[[str, Mapping[str, Any] | None], Mapping[str, Any] | None],
+    resolve_tire_size_from_history_template_fn: Callable[[str, Mapping[str, Any] | None], str | None],
+    vehicle_slot_apply_fn: Callable[[Any, dict[str, Any]], Any],
+    recent_product_search_keyword_fn: Callable[[list[dict[str, Any]]], str | None],
+    goods_no_from_recent_product_context_fn: Callable[[list[dict[str, Any]], str | None], str | None],
+    build_vehicle_size_guidance_event_fn: Callable[[Mapping[str, Any]], Mapping[str, Any] | None],
+    build_staggered_vehicle_tire_selection_event_fn: Callable[[Mapping[str, Any]], Mapping[str, Any] | None],
+    listcar_allows_staggered_tire_prompt_fn: Callable[[Mapping[str, Any] | None], bool],
+    is_vehicle_tire_size_lookup_selection_fn: Callable[[Mapping[str, Any] | None], bool],
+) -> HistoryVehicleSelectionState:
+    current_trace_metadata = dict(trace_metadata or {})
+    selected_vehicle = resolve_vehicle_from_history_template_fn(last_user_text, latest_listcar_tmpl)
+    action_context = existing_action_context
+    updated_slots = merged_slots
+    prompt_event: Mapping[str, Any] | None = None
+    tire_size_resolved = False
+    goods_no_resolved = False
+
+    if selected_vehicle is not None:
+        previous_tire_size = getattr(updated_slots, "tire_size", None)
+        vehicle_slot_values = vehicle_selection_slot_values(selected_vehicle)
+        if action_context is None:
+            action_context = resolve_ui_action_context(
+                selected_vehicle=selected_vehicle,
+                selection_source="previous_listCar_candidate",
+                previous_slots={
+                    "car_no": getattr(updated_slots, "car_no", None),
+                    "tire_size": getattr(updated_slots, "tire_size", None),
+                },
+                slot_patch=vehicle_slot_values,
+            )
+        if action_context is not None:
+            current_trace_metadata.update(dict(action_context.trace_metadata))
+        if vehicle_slot_values:
+            if action_context is not None:
+                updated_slots, slot_trace_metadata = apply_ui_action_slot_patch(
+                    updated_slots,
+                    action_context,
+                    slot_apply_fn=vehicle_slot_apply_fn,
+                )
+                current_trace_metadata.update(slot_trace_metadata)
+            else:
+                updated_slots = vehicle_slot_apply_fn(updated_slots, vehicle_slot_values)
+                current_trace_metadata["slots_rewritten"] = True
+            selected_tire_size = vehicle_slot_values.get("tire_size")
+            if selected_tire_size and previous_tire_size != selected_tire_size:
+                tire_size_resolved = True
+
+        selected_meta = selected_vehicle.get("meta") or {}
+        front_size, rear_size = normalize_vehicle_tire_size_pair(selected_meta)
+        is_staggered_vehicle = has_staggered_vehicle_tire_sizes(front_size, rear_size)
+        if is_vehicle_tire_size_lookup_selection_fn(selected_vehicle):
+            prompt_event = build_vehicle_size_guidance_event_fn(selected_vehicle)
+        elif is_staggered_vehicle and listcar_allows_staggered_tire_prompt_fn(latest_listcar_tmpl):
+            prompt_event = build_staggered_vehicle_tire_selection_event_fn(selected_vehicle)
+
+    if getattr(updated_slots, "tire_size", None) is None:
+        resolved_tire_size = resolve_tire_size_from_history_template_fn(last_user_text, latest_listcar_tmpl)
+        if resolved_tire_size:
+            updated_slots = updated_slots.apply_runtime_values(
+                {"tire_size": resolved_tire_size},
+                source="history_vehicle_size",
+            )
+            tire_size_resolved = True
+
+    if tire_size_resolved and prev_tool_data:
+        recovered_keyword = recent_product_search_keyword_fn(prev_tool_data)
+        if recovered_keyword and not getattr(updated_slots, "tire_model", None):
+            updated_slots.tire_model = recovered_keyword
+
+        if getattr(updated_slots, "goods_no", None) is None:
+            resolved_goods_no = goods_no_from_recent_product_context_fn(
+                prev_tool_data,
+                getattr(updated_slots, "tire_size", None),
+            )
+            if resolved_goods_no:
+                updated_slots = updated_slots.apply_runtime_values(
+                    {"goods_no": resolved_goods_no},
+                    source="recent_product_context",
+                )
+                goods_no_resolved = True
+
+    return HistoryVehicleSelectionState(
+        selected_vehicle=selected_vehicle,
+        action_context=action_context,
+        updated_slots=updated_slots,
+        trace_metadata=current_trace_metadata,
+        prompt_event=prompt_event,
+        tire_size_resolved=tire_size_resolved,
+        goods_no_resolved=goods_no_resolved,
+    )
+
+
+def apply_history_product_selection_state(
+    *,
+    last_user_text: str,
+    prev_tool_data: list[dict[str, Any]] | None,
+    merged_slots: Any,
+    resolve_goods_no_from_selection_fn: Callable[[str, list[dict[str, Any]], str | None], str | None],
+) -> HistoryProductSelectionState:
+    if getattr(merged_slots, "goods_no", None) is not None or not prev_tool_data:
+        return HistoryProductSelectionState(updated_slots=merged_slots)
+
+    resolved_goods_no = resolve_goods_no_from_selection_fn(
+        last_user_text,
+        prev_tool_data,
+        getattr(merged_slots, "tire_size", None),
+    )
+    if not resolved_goods_no:
+        return HistoryProductSelectionState(updated_slots=merged_slots)
+
+    updated_slots = merged_slots.apply_runtime_values(
+        {"goods_no": resolved_goods_no},
+        source="history_product_selection",
+    )
+    trace_metadata = {
+        "selected_entity_type": "product",
+        "selected_entity_id": resolved_goods_no,
+        "selection_source": "previous_product_candidate",
+        "validation_result": "resolved_from_history",
+        "fallback_behavior": "previous_product_candidate",
+    }
+    return HistoryProductSelectionState(
+        updated_slots=updated_slots,
+        goods_no_resolved=True,
+        trace_metadata=trace_metadata,
+    )
+
+
+def apply_history_location_selection_state(
+    *,
+    last_user_text: str,
+    latest_location_tmpl: Mapping[str, Any] | None,
+    merged_slots: Any,
+    resolve_store_selection_from_history_template_fn: Callable[[str, Mapping[str, Any] | None], Mapping[str, Any] | None],
+    preview_location_slot_values_from_selection_fn: Callable[[Mapping[str, Any] | None], dict[str, Any] | None],
+    selected_order_context_from_preview_values_fn: Callable[[Mapping[str, Any]], dict[str, Any]],
+) -> HistoryLocationSelectionState:
+    if getattr(merged_slots, "shop_id", None) is not None:
+        return HistoryLocationSelectionState(updated_slots=merged_slots)
+
+    selected_location = resolve_store_selection_from_history_template_fn(last_user_text, latest_location_tmpl)
+    resolved_shop_id = None
+    if selected_location is not None:
+        selected_meta = selected_location.get("meta") or {}
+        if isinstance(selected_meta, Mapping):
+            canonical_meta = canonical_context_from_template_boundary(selected_meta)
+            resolved_shop_id = str(canonical_meta.get("shop_id") or "").strip() or None
+    if not resolved_shop_id:
+        return HistoryLocationSelectionState(updated_slots=merged_slots, selected_location=selected_location)
+
+    preview_values = preview_location_slot_values_from_selection_fn(selected_location) or {"shop_id": resolved_shop_id}
+    updated_slots = merged_slots.apply_runtime_values(
+        preview_values,
+        source="preview_location_template_selection" if preview_values.get("goods_no") else "location_template_selection",
+    )
+    selected_order_context = None
+    if preview_values:
+        selected_order_context = selected_order_context_from_preview_values_fn(preview_values)
+        if selected_order_context:
+            order_context = dict(updated_slots.order_context or {})
+            order_context["selected_order_context"] = selected_order_context
+            updated_slots.order_context = order_context
+            updated_slots.pending_intent = "order"
+            updated_slots.goal_type = "place_order"
+    trace_metadata = {
+        "selected_entity_type": "store",
+        "selected_entity_id": resolved_shop_id,
+        "selection_source": "previous_location_candidate",
+        "validation_result": "resolved_from_history",
+        "fallback_behavior": "previous_location_candidate",
+    }
+    return HistoryLocationSelectionState(
+        updated_slots=updated_slots,
+        selected_location=selected_location,
+        resolved_shop_id=resolved_shop_id,
+        selected_order_context=selected_order_context,
+        trace_metadata=trace_metadata,
+    )
+
+
+def resolve_recent_single_shop_id_from_context(prev_tool_data: list[dict[str, Any]] | None) -> str | None:
+    if not prev_tool_data:
+        return None
+
+    for entry in prev_tool_data:
+        tool = entry.get("tool")
+        data = entry.get("data")
+        tool_input = entry.get("input")
+
+        if tool == "get_store_detail_tool":
+            if isinstance(tool_input, Mapping):
+                shop_id = str(tool_input.get("shop_id") or "").strip()
+                if shop_id:
+                    return shop_id
+            if isinstance(data, Mapping):
+                shop_id = str(data.get("shop_id") or "").strip()
+                if shop_id:
+                    return shop_id
+
+        if tool in ("get_store_list_tool", "search_stores_tool", "get_nearby_stores_tool"):
+            items: list[dict[str, Any]] = []
+            if isinstance(data, list):
+                items = [item for item in data if isinstance(item, Mapping) and not item.get("_truncated")]
+            elif isinstance(data, Mapping) and isinstance(data.get("stores"), list):
+                items = [item for item in data["stores"] if isinstance(item, Mapping)]
+            if len(items) == 1:
+                shop_id = str(items[0].get("shop_id") or "").strip()
+                if shop_id:
+                    return shop_id
+
+    return None
+
+
+def resolve_recent_store_name_from_messages(messages: list[dict[str, Any]]) -> str | None:
+    for message in reversed(messages[-8:]):
+        if message.get("role") != "assistant":
+            continue
+        content = str(message.get("content") or "")
+        match = re.search(r"매장명\s*:\s*([^\n\r]+)", content)
+        if match:
+            store_name = re.sub(r"\s+", " ", match.group(1)).strip()
+            if store_name:
+                return store_name
+    return None
+
+
 def chip_value(chip_context: Mapping[str, Any] | None, *keys: str) -> str:
     normalized_context = chip_context_dict(chip_context)
     if not normalized_context:
@@ -1510,6 +1772,17 @@ def resolve_tire_size_from_history_template(
     if front_size and rear_size and front_size != rear_size:
         return None
     return front_size or rear_size or None
+
+
+def is_vehicle_tire_size_lookup_selection(selected_vehicle: Mapping[str, Any] | None) -> bool:
+    if not isinstance(selected_vehicle, Mapping):
+        return False
+    selection_context = selected_vehicle.get("selection_context") or {}
+    if not isinstance(selection_context, Mapping):
+        return False
+    source_intent = str(selection_context.get("source_intent") or "").strip()
+    expected_contract_intent = str(selection_context.get("expected_contract_intent") or "").strip()
+    return source_intent == _VEHICLE_TIRE_SIZE_LOOKUP_INTENT or expected_contract_intent == _VEHICLE_TIRE_SIZE_LOOKUP_INTENT
 
 
 def resolve_store_selection_from_history_template(
