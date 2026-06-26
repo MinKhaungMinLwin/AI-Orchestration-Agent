@@ -20850,6 +20850,91 @@ def test_base_agent_contract_sensitive_tool_guard_skips_owned_lookup_contract() 
     assert events is None
 
 
+def test_trace_shaped_general_cancel_fee_policy_blocks_order_lookup_and_replaces_with_faq(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _DummyAgent(BaseAgent):
+        OUTPUT_TEMPLATE = None
+        TOOL_TO_AF_MAP: dict[str, str] = {}
+
+        def __init__(self) -> None:
+            self.name = "Transaction Agent"
+
+    from services.tstation.agents.e_support_agent import tools as support_tools
+
+    monkeypatch.setattr(
+        support_tools,
+        "search_faq_hybrid_tool",
+        SimpleNamespace(
+            invoke=lambda payload: {
+                "status": "success",
+                "data": {
+                    "items": [
+                        {
+                            "answer": "매장 방문 예약만 취소하는 경우 별도 취소 수수료는 없고, 주문이나 배송 진행 상태에 따라 비용 여부가 달라질 수 있습니다."
+                        }
+                    ]
+                },
+            }
+        ),
+    )
+
+    user_text = "오늘 오후 1시 예약인데 지금 취소하면 위약금 있어?"
+    known_slots = {
+        "tire_size": "225/45R17",
+        "requested_cal_day": "20260626",
+        "pending_intent": "reservation",
+        "goal_type": "store_finder",
+        "router_transaction_intent": "order_cancel_fee_inquiry",
+        "tire_size_front": "225/45R17",
+        "tire_size_rear": "225/45R17",
+        "car_no": "61거1836",
+        "car_lnc_cd": "W036269",
+        "car_type": "SEDAN",
+        "vehicle_type": "passenger",
+        "mbr_car_reg_seq": "2000003091",
+        "stock_check_mode": "inventory_only",
+    }
+    frame = build_transaction_intent_frame(user_text, known_slots=known_slots)
+    assert frame.intent == "general_cancel_fee_policy"
+    tool_plan = plan_transaction_tools(frame)
+    assert tool_plan.allowed_tools == ("search_faq_hybrid_tool",)
+    assert "get_orders_of_user_tool" in tool_plan.forbidden_tools
+
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text=user_text,
+        known_slots=frame.known_slots,
+    )
+    decision_token = current_transaction_response_decision.set(response_decision)
+    tool_plan_token = current_transaction_tool_plan.set(tool_plan)
+    user_text_token = current_user_text.set(user_text)
+    try:
+        agent = _DummyAgent()
+        events = agent._contract_sensitive_tool_guard_events(
+            "get_orders_of_user_tool",
+            [{"role": "user", "content": user_text}],
+            config=None,
+            response_streamer=None,
+            answering_emitted=False,
+        )
+    finally:
+        current_transaction_response_decision.reset(decision_token)
+        current_transaction_tool_plan.reset(tool_plan_token)
+        current_user_text.reset(user_text_token)
+
+    assert events is not None
+    tool_events = [event for event in events if event.get("type") == "tool"]
+    assert [event["tool"] for event in tool_events] == ["search_faq_hybrid_tool"]
+    data_event = next(event for event in events if event.get("type") == "data")
+    metadata = data_event["data"]["metadata"]
+    assert metadata["contract_tool_blocked"] is True
+    assert metadata["blocked_tool"] == "get_orders_of_user_tool"
+    assert metadata["replacement_tool"] == "search_faq_hybrid_tool"
+    assert metadata["contract_intent"] == "general_cancel_fee_policy"
+    assert "별도 취소 수수료는 없고" in str(data_event["data"]["assistantResponse"])
+
+
 def test_stream_response_multi_keeps_stream_alive_when_turn_contract_validation_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
