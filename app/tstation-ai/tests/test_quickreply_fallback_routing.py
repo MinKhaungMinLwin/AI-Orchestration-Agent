@@ -2638,6 +2638,22 @@ def test_general_card_cancel_timing_policy_contract_blocks_order_lookup_tools() 
     } in violations
 
 
+@pytest.mark.parametrize(
+    "user_text",
+    [
+        "카드사별 무이자 할부 알려줘",
+        "카드사 할인 혜택 있어?",
+        "카드사 결제 오류 같은데 왜 안 돼?",
+    ],
+)
+def test_card_company_queries_do_not_overmatch_card_cancel_timing_policy(user_text: str) -> None:
+    frame = build_transaction_intent_frame(user_text)
+    support_response = decide_support_response(intent=frame.intent, user_text=user_text, known_slots=dict(frame.known_slots))
+
+    assert frame.intent != "general_card_cancel_timing_policy"
+    assert support_response.metadata["response_shape_key"] != "general_card_cancel_timing_policy"
+
+
 def test_cancel_status_selector_auto_selects_single_cancelled_order_without_order_no() -> None:
     orders_result = {
         "status": "success",
