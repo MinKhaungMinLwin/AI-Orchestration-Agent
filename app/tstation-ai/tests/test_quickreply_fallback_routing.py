@@ -22973,6 +22973,8 @@ def test_support_faq_policy_event_for_promotion_gift_appends_partial_cancel_inva
 
     assert event is not None
     response = str(event["data"]["assistantResponse"])
+    lines = [line for line in response.splitlines() if line.strip()]
+    assert "부분 취소로 이벤트나 프로모션 지급 기준 수량에 미달할 수 있어요." in lines[0]
     assert "4개 구매 시 사은품이 지급되는 이벤트입니다." in response
     assert "부분 취소로 이벤트나 프로모션 지급 기준 수량에 미달할 수 있어요." in response
     assert "사은품 반납이 필요할 수 있고" in response
@@ -23056,6 +23058,7 @@ def test_support_faq_policy_event_for_assurance_service_compacts_long_source_sum
     assert "16,000km 이내" in lines[0]
     assert len(response) < 260
     assert "안심서비스는 타이어 2개 이상 구매 시 고객 과실로 파손되더라도 새 타이어 1개를 보상받을 수 있습니다." not in response
+    assert "안심서비스는 2개 이상, 안심플러스는 4개 구매 기준" in response
 
 
 def test_direct_faq_policy_tool_payload_builds_transaction_policy_event() -> None:

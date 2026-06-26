@@ -6548,6 +6548,20 @@ def _faq_policy_source_summary_text(tool_result: dict | None) -> str:
     return summary
 
 
+def _compact_policy_source_summary(
+    source_summary: str,
+    *,
+    max_len: int = 110,
+) -> str:
+    compact_summary = re.sub(r"\s+", " ", source_summary or "").strip()
+    if not compact_summary:
+        return ""
+    compact_summary = re.split(r"(?<=[.!?])\s+|(?<=[다요죠])\s+", compact_summary, maxsplit=1)[0].strip()
+    if len(compact_summary) > max_len:
+        compact_summary = f"{compact_summary[: max_len - 3].rstrip()}..."
+    return compact_summary
+
+
 def _build_general_cancel_fee_policy_event(user_query: str, *, tool_result: dict | None = None) -> dict:
     source_summary = _faq_policy_source_summary_text(tool_result)
     if source_summary:
@@ -6631,7 +6645,7 @@ def _build_support_faq_policy_event(
     required_guidance_by_intent = {
         "assurance_service_policy": (
             "안심서비스/안심플러스 보상은 장착 후 1년 이내, 주행거리 16,000km 이내 조건에서 확인돼요.\n"
-            "대상 타이어, 구매 수량, 장착 시점과 상세 약관에 따라 실제 적용 범위는 달라질 수 있어요."
+            "안심서비스는 2개 이상, 안심플러스는 4개 구매 기준과 대상 상품·약관에 따라 적용 범위가 달라질 수 있어요."
         ),
         "promotion_gift_policy": (
             "부분 취소로 이벤트나 프로모션 지급 기준 수량에 미달할 수 있어요.\n"
@@ -6699,10 +6713,14 @@ def _build_support_faq_policy_event(
             {"label": "처음으로", "domain": "LEADING"},
         ]
     if source_summary and intent == "assurance_service_policy":
-        compact_summary = re.sub(r"\s+", " ", source_summary).strip()
-        compact_summary = re.split(r"(?<=[.!?])\s+|(?<=[다요죠])\s+", compact_summary, maxsplit=1)[0].strip()
-        if len(compact_summary) > 110:
-            compact_summary = f"{compact_summary[:107].rstrip()}..."
+        compact_summary = _compact_policy_source_summary(source_summary, max_len=92)
+        assistant_response = (
+            required_guidance_by_intent[intent]
+            if not compact_summary
+            else f"{required_guidance_by_intent[intent]}\n\n{compact_summary}"
+        )
+    elif source_summary and intent == "promotion_gift_policy":
+        compact_summary = _compact_policy_source_summary(source_summary, max_len=72)
         assistant_response = (
             required_guidance_by_intent[intent]
             if not compact_summary
