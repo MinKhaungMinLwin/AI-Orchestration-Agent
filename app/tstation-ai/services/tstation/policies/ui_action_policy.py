@@ -34,6 +34,17 @@ _VEHICLE_SIZE_LOOKUP_ALLOWED_ACTIONS = frozenset({
 _VEHICLE_SIZE_LOOKUP_BLOCKED_LABEL_TOKENS = ("매장", "예약", "구매")
 _QUANTITY_LABEL_RE = re.compile(r"^\s*([1-4])\s*(?:개|본)\s*$")
 _CTA_CLARIFICATION_LABEL_RE = re.compile(r"(?:다른\s*)?(?:지역|장소|날짜|일정)\s*(?:입력|찾기|검색|확인)")
+_VEHICLE_PLATE_RE = re.compile(r"\d{2,3}\s*[가-힣]\s*\d{4}")
+_VEHICLE_BOUND_REQUEST_RE = re.compile(
+    r"내\s*차|내차|내\s*차량|내차량|차량번호|차\s*번호|"
+    r"내\s*[0-9a-zA-Z가-힣]+|"
+    r"\d{2,3}\s*[가-힣]\s*\d{4}",
+    re.IGNORECASE,
+)
+_VEHICLE_MATCH_STOPWORDS = {
+    "내", "차", "차량", "번호", "차량번호", "내차", "내차량", "알지", "맞는", "타이어", "보여줘",
+    "보여", "추천", "해줘", "찾아줘", "알려줘", "알려", "규격", "사이즈", "그리고", "그럼", "이건데",
+}
 _KOREAN_SELECTION_ORDINALS: tuple[tuple[tuple[str, ...], int], ...] = (
     (("첫번째", "첫째", "첫 번", "첫번", "1번째", "1번", "1.", "1)"), 0),
     (("두번째", "둘째", "두 번", "두번", "2번째", "2번", "2.", "2)"), 1),
@@ -782,6 +793,60 @@ def _normalize_vehicle_match_text(value: Any) -> str:
     return re.sub(r"[^0-9A-Za-z가-힣]", "", str(value or "")).lower()
 
 
+def _selection_context_from_vehicle_meta(meta: Mapping[str, Any]) -> dict[str, str]:
+    return {
+        "source_intent": str(meta.get("source_intent") or meta.get("sourceIntent") or "").strip(),
+        "expected_contract_intent": str(
+            meta.get("expected_contract_intent") or meta.get("expectedContractIntent") or ""
+        ).strip(),
+    }
+
+
+def _strip_vehicle_particle(token: str) -> str:
+    stripped = token
+    for suffix in ("으로", "에서", "하고", "이랑", "처럼", "이라", "이고", "인데", "으로요"):
+        if len(stripped) > len(suffix) + 1 and stripped.endswith(suffix):
+            stripped = stripped[: -len(suffix)]
+            break
+    for suffix in ("은", "는", "이", "가", "을", "를", "에", "도", "와", "과", "로", "요"):
+        if len(stripped) > len(suffix) + 1 and stripped.endswith(suffix):
+            stripped = stripped[: -len(suffix)]
+            break
+    return stripped
+
+
+def _vehicle_match_tokens(user_text: str) -> list[str]:
+    tokens: list[str] = []
+    for raw in re.findall(r"[0-9a-zA-Z가-힣]+", user_text or ""):
+        token = _strip_vehicle_particle(_normalize_vehicle_match_text(raw))
+        if len(token) < 2 or token in _VEHICLE_MATCH_STOPWORDS:
+            continue
+        tokens.append(token)
+    return tokens
+
+
+def _vehicle_candidate_tokens(car: Mapping[str, Any], meta: Mapping[str, Any]) -> set[str]:
+    source_values = [
+        car.get("licensePlate"),
+        car.get("info"),
+        car.get("description"),
+        meta.get("carNo"),
+        meta.get("carLncCd"),
+        meta.get("carMaker"),
+        meta.get("carModelDet"),
+        meta.get("carName"),
+        meta.get("carTrim"),
+        meta.get("carEngine"),
+    ]
+    tokens: set[str] = set()
+    for value in source_values:
+        for raw in re.findall(r"[0-9a-zA-Z가-힣]+", str(value or "")):
+            token = _normalize_vehicle_match_text(raw)
+            if len(token) >= 2:
+                tokens.add(token)
+    return tokens
+
+
 def _selection_ordinal_index(user_text: str, item_count: int) -> int | None:
     if not user_text or item_count <= 0:
         return None
@@ -899,6 +964,119 @@ def rewrite_vehicle_selection_user_text(
     if source_intent == "vehicle_tire_size_lookup":
         return f"{car_no} 차량 타이어 사이즈 알려줘"
     return last_user_text
+
+
+def resolve_vehicle_selection_from_listcar_event(
+    user_text: str,
+    event_data: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not _VEHICLE_BOUND_REQUEST_RE.search(user_text or ""):
+        return None
+    if not isinstance(event_data, Mapping):
+        return None
+    cars = event_data.get("listCar")
+    metadata = event_data.get("metadata")
+    if not isinstance(cars, list) or not isinstance(metadata, list) or not cars or len(cars) != len(metadata):
+        return None
+
+    plate_match = _VEHICLE_PLATE_RE.search(user_text or "")
+    if plate_match:
+        target_plate = _normalize_vehicle_match_text(plate_match.group(0))
+        plate_matches: list[dict[str, Any]] = []
+        for car, meta in zip(cars, metadata):
+            if not isinstance(car, Mapping) or not isinstance(meta, Mapping):
+                continue
+            plate = _normalize_vehicle_match_text(meta.get("carNo") or car.get("licensePlate"))
+            if plate == target_plate:
+                plate_matches.append(
+                    {"car": dict(car), "meta": dict(meta), "selection_context": _selection_context_from_vehicle_meta(meta)}
+                )
+        return plate_matches[0] if len(plate_matches) == 1 else None
+
+    tokens = _vehicle_match_tokens(user_text)
+    if not tokens:
+        return None
+
+    scored: list[tuple[int, int, dict[str, Any]]] = []
+    for car, meta in zip(cars, metadata):
+        if not isinstance(car, Mapping) or not isinstance(meta, Mapping):
+            continue
+        candidate_tokens = _vehicle_candidate_tokens(car, meta)
+        matched_tokens = [token for token in tokens if token in candidate_tokens]
+        if not matched_tokens:
+            continue
+        strong_matches = sum(1 for token in matched_tokens if any(ch.isdigit() for ch in token) or len(token) >= 3)
+        scored.append(
+            (
+                len(matched_tokens),
+                strong_matches,
+                {"car": dict(car), "meta": dict(meta), "selection_context": _selection_context_from_vehicle_meta(meta)},
+            )
+        )
+    if not scored:
+        return None
+    max_score = max(score for score, _, _ in scored)
+    top = [entry for entry in scored if entry[0] == max_score]
+    max_strong = max(strong for _, strong, _ in top)
+    top = [match for score, strong, match in top if strong == max_strong]
+    if len(top) != 1:
+        return None
+    if max_score == 1 and max_strong == 0:
+        return None
+    return top[0]
+
+
+def resolve_vehicle_from_history_template(
+    user_text: str,
+    template_data: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not user_text or not isinstance(template_data, Mapping):
+        return None
+
+    latest_listcar: Mapping[str, Any] | None = None
+    if template_data.get("template") == "listCar" and isinstance(template_data.get("data"), Mapping):
+        latest_listcar = template_data.get("data")
+    elif isinstance(template_data.get("listCar"), list):
+        latest_listcar = template_data
+    if latest_listcar is None:
+        return None
+
+    cars = latest_listcar.get("listCar") or []
+    metadata = latest_listcar.get("metadata") or []
+    if not isinstance(cars, list) or not isinstance(metadata, list) or len(cars) != len(metadata):
+        return None
+
+    ordinal_idx = _selection_ordinal_index(str(user_text or ""), len(metadata))
+    if ordinal_idx is not None:
+        car = cars[ordinal_idx]
+        meta = metadata[ordinal_idx]
+        if isinstance(car, Mapping) and isinstance(meta, Mapping):
+            return {"car": dict(car), "meta": dict(meta), "selection_context": _selection_context_from_vehicle_meta(meta)}
+
+    tokens = _vehicle_match_tokens(str(user_text or ""))
+    if tokens:
+        scored: list[tuple[int, int, dict[str, Any], dict[str, Any]]] = []
+        for car, meta in zip(cars, metadata):
+            if not isinstance(car, Mapping) or not isinstance(meta, Mapping):
+                continue
+            candidate_tokens = _vehicle_candidate_tokens(car, meta)
+            matched_tokens = [token for token in tokens if token in candidate_tokens]
+            if not matched_tokens:
+                continue
+            strong_matches = sum(1 for token in matched_tokens if any(ch.isdigit() for ch in token) or len(token) >= 3)
+            scored.append((len(matched_tokens), strong_matches, dict(car), dict(meta)))
+        if scored:
+            max_score = max(score for score, _, _, _ in scored)
+            top = [entry for entry in scored if entry[0] == max_score]
+            max_strong = max(strong for _, strong, _, _ in top)
+            top = [entry for entry in top if entry[1] == max_strong]
+            if max_score == 1 and max_strong == 0:
+                return None
+            if len(top) == 1:
+                _, _, car, meta = top[0]
+                return {"car": car, "meta": meta, "selection_context": _selection_context_from_vehicle_meta(meta)}
+
+    return resolve_vehicle_selection_from_listcar_event(user_text, latest_listcar)
 
 
 def resolve_goods_no_from_product_template_selection(user_text: str, template_data: Mapping[str, Any] | None) -> str | None:

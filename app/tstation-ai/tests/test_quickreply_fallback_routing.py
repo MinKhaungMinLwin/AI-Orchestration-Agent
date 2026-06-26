@@ -320,7 +320,6 @@ from services.tstation.chat import (
     _requested_maintenance_focus,
     _qc_skip_reason,
     _rule_based_classify,
-    _select_vehicle_from_listcar_event,
     _should_reuse_pending_vehicle_lookup_car_no,
     _should_prompt_order_quantity_before_store,
     _is_plain_store_search_reset_allowed,
@@ -402,6 +401,8 @@ from services.tstation.policies.ui_action_policy import (
     preview_action_mode_for_slots,
     resolve_ui_action_context,
     resolve_goods_no_from_product_template_selection,
+    resolve_vehicle_from_history_template,
+    resolve_vehicle_selection_from_listcar_event,
     resolve_vehicle_ui_selection_from_chip_context,
     rewrite_vehicle_selection_user_text,
     store_context_from_mapping,
@@ -8953,7 +8954,7 @@ def test_store_contact_guidance_skips_without_store_identity() -> None:
 
 
 def test_vehicle_auto_select_matches_exact_plate_from_listcar() -> None:
-    selected = _select_vehicle_from_listcar_event(
+    selected = resolve_vehicle_selection_from_listcar_event(
         "내 차 번호 205소 4214 알지? 맞는 타이어 보여줘.",
         {
             "listCar": [
@@ -8972,7 +8973,7 @@ def test_vehicle_auto_select_matches_exact_plate_from_listcar() -> None:
 
 
 def test_vehicle_auto_select_does_not_hijack_unregistered_plate() -> None:
-    selected = _select_vehicle_from_listcar_event(
+    selected = resolve_vehicle_selection_from_listcar_event(
         "내 차 번호 999가9999 알지? 맞는 타이어 보여줘.",
         {
             "listCar": [
@@ -9827,7 +9828,7 @@ def test_rule_based_classify_routes_default_tbot_shopping_cta_to_discovery() -> 
 
 
 def test_vehicle_auto_select_matches_unique_owned_model_from_listcar() -> None:
-    selected = _select_vehicle_from_listcar_event(
+    selected = resolve_vehicle_selection_from_listcar_event(
         "내 gv70 에 맞는 타이어 추천",
         {
             "listCar": [
@@ -11535,7 +11536,7 @@ def test_history_vehicle_selection_still_resolves_selected_vehicle_for_staggered
         },
     }
 
-    resolved = TStationChatServiceV2._resolve_vehicle_from_history_template("56모2162", template)
+    resolved = resolve_vehicle_from_history_template("56모2162", template)
 
     assert resolved is not None
     assert resolved["meta"]["carNo"] == "56모2162"
@@ -11557,7 +11558,7 @@ def test_history_vehicle_selection_resolves_ordinal_pick() -> None:
         },
     }
 
-    resolved = TStationChatServiceV2._resolve_vehicle_from_history_template("2번", template)
+    resolved = resolve_vehicle_from_history_template("2번", template)
 
     assert resolved is not None
     assert resolved["meta"]["carNo"] == "56모2162"
@@ -11599,7 +11600,7 @@ def test_history_vehicle_selection_resolves_model_name_pick() -> None:
         },
     }
 
-    resolved = TStationChatServiceV2._resolve_vehicle_from_history_template("GV70", template)
+    resolved = resolve_vehicle_from_history_template("GV70", template)
 
     assert resolved is not None
     assert resolved["meta"]["carNo"] == "205소4214"
@@ -11620,7 +11621,7 @@ def test_history_vehicle_selection_model_name_pick_requires_unique_match() -> No
         },
     }
 
-    resolved = TStationChatServiceV2._resolve_vehicle_from_history_template("제네시스", template)
+    resolved = resolve_vehicle_from_history_template("제네시스", template)
 
     assert resolved is None
 
@@ -11997,7 +11998,7 @@ def test_history_vehicle_selection_does_not_match_product_name_substring_to_vehi
         },
     }
 
-    resolved = TStationChatServiceV2._resolve_vehicle_from_history_template("벤투스 S2 AS 225/50R18", template)
+    resolved = resolve_vehicle_from_history_template("벤투스 S2 AS 225/50R18", template)
 
     assert resolved is None
 
@@ -12035,7 +12036,7 @@ def test_pending_vehicle_lookup_plate_is_reused_for_owner_only_followup() -> Non
 
 
 def test_vehicle_auto_select_prefers_exact_vehicle_tokens_over_loose_overlap() -> None:
-    selected = _select_vehicle_from_listcar_event(
+    selected = resolve_vehicle_selection_from_listcar_event(
         "내 차 BMW 3시리즈 GT 320d 이건데 전/후륜 규격이 다른게 있던데 뭘로 그럼 사이즈를 봐야해..?",
         {
             "listCar": [
@@ -12062,7 +12063,7 @@ def test_vehicle_auto_select_prefers_exact_vehicle_tokens_over_loose_overlap() -
 
 
 def test_vehicle_auto_select_keeps_listcar_when_model_match_is_ambiguous() -> None:
-    selected = _select_vehicle_from_listcar_event(
+    selected = resolve_vehicle_selection_from_listcar_event(
         "내 gv70 에 맞는 타이어 추천",
         {
             "listCar": [
@@ -17017,7 +17018,7 @@ def test_payment_error_troubleshooting_contract_requires_faq_first() -> None:
         template="quickReply",
         called_tools=["search_faq_hybrid_tool"],
         event_data={
-            "assistantResponse": "확인 가능한 FAQ 기준으로 팝업 차단 해제와 PC 웹 재시도를 먼저 확인해 주세요.",
+            "assistantResponse": "팝업 차단 해제와 PC 웹 재시도를 먼저 확인해 주세요.",
             "quickReplies": [{"label": "1:1 문의하기", "domain": "SUPPORT"}],
         },
         contract=contract,
@@ -17590,6 +17591,7 @@ def test_support_prompt_contains_payment_error_faq_first_policy() -> None:
     assert "payment_error_troubleshooting" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
     assert "search_faq_hybrid_tool" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
     assert "transfer_to_qna_tool` 단독 호출 금지" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
+    assert "확인 가능한 FAQ 기준" not in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
 
 
 def test_support_prompt_contains_faq_before_escalation_policy_buckets() -> None:

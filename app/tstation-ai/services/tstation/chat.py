@@ -29251,7 +29251,7 @@ class TStationChatServiceV2:
             event_data = listcar_event.get("data")
             if not isinstance(event_data, dict):
                 return [], None
-            selected = _select_vehicle_from_listcar_event(user_query, event_data)
+            selected = resolve_vehicle_selection_from_listcar_event(user_query, event_data)
             if selected is None:
                 return [], None
 
