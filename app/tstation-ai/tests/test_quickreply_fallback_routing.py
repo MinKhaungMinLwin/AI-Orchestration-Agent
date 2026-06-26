@@ -18557,6 +18557,62 @@ def test_assurance_service_policy_contract_blocks_overstated_compensation() -> N
     } in violations
 
 
+def test_tire_quality_warranty_policy_contract_blocks_irrelevant_manufacture_date_guidance() -> None:
+    contract = build_turn_contract(
+        user_text="측면이 부풀었는데 무상 A/S 돼?",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:tire_quality_warranty_policy"],
+            policy_intent="tire_quality_warranty_policy",
+        ),
+    )
+
+    violations = response_contract_violations(
+        template="quickReply",
+        called_tools=["search_faq_hybrid_tool"],
+        assistant_response_text="DOT 기준으로 제조일자를 확인할 수 있고 6~12개월 이내 제품은 정상 신품 범주입니다.",
+        contract=contract,
+    )
+
+    assert {
+        "type": "tire_quality_warranty_policy_irrelevant_manufacture_date_guidance",
+        "assistant_response_text": "DOT 기준으로 제조일자를 확인할 수 있고 6~12개월 이내 제품은 정상 신품 범주입니다.",
+        "severity": "error",
+    } in violations
+
+
+def test_tire_quality_warranty_policy_contract_requires_warranty_cta() -> None:
+    contract = build_turn_contract(
+        user_text="측면이 부풀었는데 무상 A/S 돼?",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:tire_quality_warranty_policy"],
+            policy_intent="tire_quality_warranty_policy",
+        ),
+    )
+
+    assistant_response = (
+        "사이드월 부풀음은 안전 관련 손상일 수 있어서 먼저 점검이 필요해요. "
+        "무상 수리나 교체 여부는 현장 점검 결과와 구매·장착 이력, 보증 또는 워런티 적용 여부에 따라 결정돼요. "
+        "워런티 서비스 적용 대상이면 상태 확인 후 안내받을 수 있어요."
+    )
+    violations = response_contract_violations(
+        template="quickReply",
+        called_tools=["search_faq_hybrid_tool"],
+        assistant_response_text=assistant_response,
+        event_data={
+            "assistantResponse": assistant_response,
+            "quickReplies": [{"label": "1:1 문의하기", "domain": "SUPPORT"}],
+        },
+        contract=contract,
+    )
+
+    assert {
+        "type": "tire_quality_warranty_policy_missing_warranty_cta",
+        "severity": "error",
+    } in violations
+
+
 def test_signup_first_purchase_benefit_contract_requires_faq_and_blocks_coupon_tools() -> None:
     contract = build_turn_contract(
         user_text="회원가입하면 첫구매 혜택은 뭐가 있어?",
@@ -22944,6 +23000,40 @@ def test_support_faq_policy_event_prefers_faq_source_summary_when_available() ->
     assert event["data"]["metadata"]["faqSourceSummaryUsed"] is True
 
 
+def test_support_faq_policy_event_selects_intent_relevant_faq_candidate_not_first_item() -> None:
+    tool_result = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "question": "품질보증 기준",
+                    "answer": "측면 부풀음은 점검 후 보증 여부를 확인합니다.",
+                    "score": 0.031,
+                    "source": "FAQ Hybrid",
+                },
+                {
+                    "question": "제조일자 기준",
+                    "answer": "타이어 제조일자는 DOT로 확인할 수 있으며, 일반적으로 6~12개월 이내 제품은 정상 신품 범주로 안내합니다.",
+                    "score": 0.028,
+                    "source": "FAQ Hybrid",
+                },
+            ]
+        },
+    }
+
+    event = _build_support_faq_policy_event(
+        "tire_manufacture_date_policy",
+        "DOT 기준으로 오래된 거 아냐?",
+        tool_result=tool_result,
+    )
+
+    assert event is not None
+    response = str(event["data"]["assistantResponse"])
+    assert "6~12개월 이내 제품은 정상 신품 범주" in response
+    assert "측면 부풀음은 점검 후 보증 여부를 확인합니다." not in response
+    assert event["data"]["metadata"]["faqSourceSummaryUsed"] is True
+
+
 def test_support_faq_policy_event_for_signup_uses_membership_cta() -> None:
     event = _build_support_faq_policy_event(
         "signup_first_purchase_benefit_policy",
@@ -23029,6 +23119,62 @@ def test_support_faq_policy_event_for_assurance_service_surfaces_core_conditions
     assert "장착 후 1년 이내" in first_line
     assert "16,000km 이내" in first_line
     assert "안심플러스는 구매 수량과 대상 상품 조건에 따라 보상 범위가 달라질 수 있습니다." in response
+
+
+def test_support_faq_policy_event_for_tire_quality_warranty_uses_invariant_and_warranty_cta() -> None:
+    event = _build_support_faq_policy_event(
+        "tire_quality_warranty_policy",
+        "측면이 부풀었는데 무상 A/S 돼?",
+        tool_result={
+            "status": "success",
+            "data": {
+                "items": [
+                    {
+                        "question": "품질보증 기준",
+                        "answer": "워런티 서비스 적용 대상이면 상태 점검 후 안내받을 수 있습니다.",
+                        "score": 0.024,
+                    }
+                ]
+            },
+        },
+    )
+
+    assert event is not None
+    response = str(event["data"]["assistantResponse"])
+    lines = [line for line in response.splitlines() if line.strip()]
+    assert "사이드월 부풀음은 안전 관련 손상일 수 있어서 먼저 점검이 필요해요." in lines[0]
+    assert "무상 수리나 교체 여부는 현장 점검 결과와 구매·장착 이력, 보증 또는 워런티 적용 여부에 따라 결정돼요." in response
+    assert "워런티 서비스 적용 대상이면 상태 확인 후 안내받을 수 있어요." in response
+    assert "워런티 서비스 적용 대상이면 상태 점검 후 안내받을 수 있습니다." in response
+    assert event["data"]["quickReplies"][0]["label"] == "나의 워런티 확인"
+    assert event["data"]["quickReplies"][0]["url"] == CTAUrls.WARRANTY_MAIN
+    assert event["data"]["metadata"]["faqSourceSummaryUsed"] is True
+
+
+def test_support_faq_policy_event_for_tire_quality_warranty_drops_manufacture_date_source_summary() -> None:
+    event = _build_support_faq_policy_event(
+        "tire_quality_warranty_policy",
+        "측면이 부풀었는데 무상 A/S 돼?",
+        tool_result={
+            "status": "success",
+            "data": {
+                "items": [
+                    {
+                        "question": "제조일자 기준",
+                        "answer": "DOT로 제조일자를 확인할 수 있고 6~12개월 이내 제품은 정상 신품 범주로 안내합니다.",
+                        "score": 0.027,
+                    }
+                ]
+            },
+        },
+    )
+
+    assert event is not None
+    response = str(event["data"]["assistantResponse"])
+    assert "DOT" not in response
+    assert "6~12개월" not in response
+    assert "사이드월 부풀음은 안전 관련 손상일 수 있어서 먼저 점검이 필요해요." in response
+    assert event["data"]["metadata"]["faqSourceSummaryUsed"] is False
 
 
 def test_support_faq_policy_event_for_assurance_service_compacts_long_source_summary() -> None:

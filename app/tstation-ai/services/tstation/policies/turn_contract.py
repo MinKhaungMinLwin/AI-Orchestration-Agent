@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 import re
 from typing import Any, Mapping
 
+from services.tstation.common.cta_urls import CTAUrls
 from services.tstation.policies.cross_domain_policy import CrossDomainPlan
 from services.tstation.policies.intent_frame import IntentFrame
 from services.tstation.policies.resolved_context import build_resolved_turn_context
@@ -1769,6 +1770,13 @@ def response_contract_violations(
     )
     if tire_condition_photo_violation is not None:
         violations.append(tire_condition_photo_violation)
+    tire_quality_warranty_violation = _tire_quality_warranty_policy_contract_violation(
+        assistant_response_text=assistant_response_text,
+        event_data=event_data,
+        contract=contract,
+    )
+    if tire_quality_warranty_violation is not None:
+        violations.append(tire_quality_warranty_violation)
     faq_first_support_violation = _faq_first_support_policy_contract_violation(
         user_text=user_text,
         assistant_response_text=assistant_response_text,
@@ -2418,6 +2426,25 @@ _FAQ_FIRST_SUPPORT_POLICY_UNSUPPORTED_ASSERTION_RE = {
     ),
     "tire_condition_photo_policy": re.compile(r"(더\s*타도\s*돼|주행\s*가능|안전합니다)", re.IGNORECASE),
 }
+_FAQ_POLICY_SOURCE_MIN_SCORE_BY_INTENT = {
+    "tire_manufacture_date_policy": 0.015,
+    "tire_quality_warranty_policy": 0.015,
+}
+_FAQ_POLICY_SOURCE_RELEVANCE_RE = {
+    "tire_manufacture_date_policy": re.compile(
+        r"제조\s*일자|제조일자|DOT|신품|유통|숙성|선입선출|6\s*~\s*12개월|6개월|12개월",
+        re.IGNORECASE,
+    ),
+    "tire_quality_warranty_policy": re.compile(
+        r"측면|사이드월|부풀|품질\s*보증|품질보증|무상\s*(?:A/?S|AS|as|교체|수리)|"
+        r"제조상\s*과실|점검|잔여\s*홈|워런티",
+        re.IGNORECASE,
+    ),
+}
+_TIRE_QUALITY_WARRANTY_MANUFACTURE_DRIFT_RE = re.compile(
+    r"선입선출|1년\s*이내\s*생산|최신\s*제조|DOT|제조\s*일자|제조일자|신품|6\s*~\s*12개월|6개월|12개월|유통",
+    re.IGNORECASE,
+)
 
 
 def _walk_string_values(obj: Any) -> list[str]:
@@ -2435,6 +2462,61 @@ def _walk_string_values(obj: Any) -> list[str]:
     return values
 
 
+def _faq_policy_candidate_score(candidate: Mapping[str, Any]) -> float | None:
+    raw_score = candidate.get("score")
+    if raw_score is None:
+        return None
+    try:
+        return float(raw_score)
+    except (TypeError, ValueError):
+        return None
+
+
+def _faq_policy_candidate_text(candidate: Mapping[str, Any]) -> str:
+    parts = [
+        str(candidate.get("question") or "").strip(),
+        str(
+            candidate.get("answer")
+            or candidate.get("pc_ans_cont")
+            or candidate.get("content")
+            or candidate.get("body")
+            or ""
+        ).strip(),
+    ]
+    return "\n".join(part for part in parts if part)
+
+
+def _faq_policy_candidates_from_output(output: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    data = output.get("data", output)
+    candidates: list[Any] = []
+    if isinstance(data, Mapping):
+        for key in ("items", "faqs", "results"):
+            value = data.get(key)
+            if isinstance(value, list):
+                candidates.extend(value)
+        if not candidates:
+            candidates.append(data)
+    elif isinstance(data, list):
+        candidates.extend(data)
+    return [candidate for candidate in candidates if isinstance(candidate, Mapping)]
+
+
+def _faq_policy_candidate_is_relevant(intent: str | None, candidate: Mapping[str, Any]) -> bool:
+    if not intent:
+        return True
+    text = _faq_policy_candidate_text(candidate)
+    if not text:
+        return False
+    score = _faq_policy_candidate_score(candidate)
+    min_score = _FAQ_POLICY_SOURCE_MIN_SCORE_BY_INTENT.get(intent)
+    if min_score is not None and score is not None and score < min_score:
+        return False
+    relevance_re = _FAQ_POLICY_SOURCE_RELEVANCE_RE.get(intent)
+    if relevance_re is None:
+        return True
+    return bool(relevance_re.search(text))
+
+
 def _faq_source_text(structured_sources: list[tuple[str, Mapping[str, Any]]] | tuple[tuple[str, Mapping[str, Any]], ...] | None) -> str:
     snippets: list[str] = []
     for tool_name, output in tuple(structured_sources or ()):
@@ -2442,6 +2524,20 @@ def _faq_source_text(structured_sources: list[tuple[str, Mapping[str, Any]]] | t
             continue
         snippets.extend(_walk_string_values(output))
     return "\n".join(snippets)
+
+
+def _faq_source_text_for_intent(
+    intent: str | None,
+    structured_sources: list[tuple[str, Mapping[str, Any]]] | tuple[tuple[str, Mapping[str, Any]], ...] | None,
+) -> str:
+    snippets: list[str] = []
+    for tool_name, output in tuple(structured_sources or ()):
+        if str(tool_name or "") not in _FAQ_SOURCE_TOOLS or not isinstance(output, Mapping):
+            continue
+        for candidate in _faq_policy_candidates_from_output(output):
+            if _faq_policy_candidate_is_relevant(intent, candidate):
+                snippets.append(_faq_policy_candidate_text(candidate))
+    return "\n".join(snippet for snippet in snippets if snippet)
 
 
 def _has_faq_source(
@@ -2566,7 +2662,7 @@ def _faq_first_support_policy_contract_violation(
     assertion_re = _FAQ_FIRST_SUPPORT_POLICY_UNSUPPORTED_ASSERTION_RE.get(intent)
     if not assistant_text or not assertion_re or not assertion_re.search(assistant_text):
         return None
-    faq_text = _faq_source_text(structured_sources)
+    faq_text = _faq_source_text_for_intent(intent, structured_sources) or _faq_source_text(structured_sources)
     if _faq_source_supports_assertion(intent, assistant_text, faq_text):
         return None
     violation_type = (
@@ -2580,6 +2676,48 @@ def _faq_first_support_policy_contract_violation(
         "type": violation_type,
         "assistant_response_text": assistant_text,
     }
+
+
+def _tire_quality_warranty_policy_contract_violation(
+    *,
+    assistant_response_text: str | None,
+    event_data: Mapping[str, Any] | None,
+    contract: TurnContract | None,
+) -> dict[str, Any] | None:
+    if contract is None or str(contract.intent or "") != "tire_quality_warranty_policy":
+        return None
+    assistant_text = str(assistant_response_text or "").strip()
+    if not assistant_text and isinstance(event_data, Mapping):
+        assistant_text = str(event_data.get("assistantResponse") or "").strip()
+    normalized_text = re.sub(r"\s+", "", assistant_text)
+    if _TIRE_QUALITY_WARRANTY_MANUFACTURE_DRIFT_RE.search(assistant_text):
+        return {
+            "type": "tire_quality_warranty_policy_irrelevant_manufacture_date_guidance",
+            "assistant_response_text": assistant_text[:160],
+            "severity": "error",
+        }
+    has_damage_guidance = "부풀" in normalized_text or "사이드월" in normalized_text or "측면" in normalized_text
+    has_inspection_guidance = "점검" in normalized_text or "상태확인" in normalized_text
+    has_policy_guidance = (
+        "구매" in normalized_text
+        and "장착" in normalized_text
+        and ("보증" in normalized_text or "워런티" in normalized_text)
+    )
+    if not (has_damage_guidance and has_inspection_guidance and has_policy_guidance):
+        return {
+            "type": "tire_quality_warranty_policy_missing_core_guidance",
+            "assistant_response_text": assistant_text[:160],
+            "severity": "error",
+        }
+    quick_replies = event_data.get("quickReplies") if isinstance(event_data, Mapping) else None
+    if isinstance(quick_replies, list):
+        first = quick_replies[0] if quick_replies else None
+        if not isinstance(first, Mapping) or str(first.get("url") or "") != CTAUrls.WARRANTY_MAIN:
+            return {
+                "type": "tire_quality_warranty_policy_missing_warranty_cta",
+                "severity": "error",
+            }
+    return None
 
 
 def _is_comparison_contract(contract: TurnContract | None) -> bool:

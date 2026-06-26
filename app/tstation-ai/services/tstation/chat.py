@@ -6536,18 +6536,6 @@ def _build_signup_first_purchase_benefit_event(user_query: str) -> dict:
     )
 
 
-def _faq_policy_source_summary_text(tool_result: dict | None) -> str:
-    if not isinstance(tool_result, dict):
-        return ""
-    answer = _first_faq_policy_answer([("search_faq_hybrid_tool", tool_result)])
-    if not answer:
-        return ""
-    summary = re.sub(r"\s+", " ", answer).strip()
-    if len(summary) > 260:
-        summary = f"{summary[:257].rstrip()}..."
-    return summary
-
-
 def _compact_policy_source_summary(
     source_summary: str,
     *,
@@ -6641,8 +6629,13 @@ def _build_support_faq_policy_event(
 ) -> dict | None:
     if intent not in _DIRECT_SUPPORT_FAQ_POLICY_INTENTS:
         return None
-    source_summary = _faq_policy_source_summary_text(tool_result)
+    source_summary = _faq_policy_source_summary_text(tool_result, intent=intent)
     required_guidance_by_intent = {
+        "tire_quality_warranty_policy": (
+            "사이드월 부풀음은 안전 관련 손상일 수 있어서 먼저 점검이 필요해요.\n"
+            "무상 수리나 교체 여부는 현장 점검 결과와 구매·장착 이력, 보증 또는 워런티 적용 여부에 따라 결정돼요.\n"
+            "워런티 서비스 적용 대상이면 상태 확인 후 안내받을 수 있어요."
+        ),
         "assurance_service_policy": (
             "안심서비스/안심플러스 보상은 장착 후 1년 이내, 주행거리 16,000km 이내 조건에서 확인돼요.\n"
             "안심서비스는 2개 이상, 안심플러스는 4개 구매 기준과 대상 상품·약관에 따라 적용 범위가 달라질 수 있어요."
@@ -6673,7 +6666,7 @@ def _build_support_faq_policy_event(
     }
     followup_by_intent = {
         "tire_manufacture_date_policy": "제조일자만으로 교환이나 환불을 단정하지 말고, 필요하면 제품 상태와 구매 이력도 함께 확인해 주세요.",
-        "tire_quality_warranty_policy": "품질보증이나 무상 교체 여부는 실제 점검 결과와 보증 조건을 함께 확인해야 해요.",
+        "tire_quality_warranty_policy": required_guidance_by_intent["tire_quality_warranty_policy"],
         "assurance_service_policy": required_guidance_by_intent["assurance_service_policy"],
         "reservation_policy_guidance": "실제 예약 변경이나 취소 전에는 예약 상세 안내도 함께 확인해 주세요.",
         "installation_work_policy": "추가 작업비나 현장 결제 여부는 정책과 작업 범위에 따라 달라질 수 있어요.",
@@ -6686,7 +6679,7 @@ def _build_support_faq_policy_event(
     }
     fallback_by_intent = {
         "tire_manufacture_date_policy": "타이어 제조일자와 신품 기준은 정책에 따라 안내되고, 제조일자만으로 불량이나 교환 가능 여부를 바로 단정할 수는 없어요.",
-        "tire_quality_warranty_policy": "품질보증과 무상 A/S 가능 여부는 보증 기준과 실제 점검 결과에 따라 달라질 수 있어요.",
+        "tire_quality_warranty_policy": required_guidance_by_intent["tire_quality_warranty_policy"],
         "assurance_service_policy": required_guidance_by_intent["assurance_service_policy"],
         "reservation_policy_guidance": "예약 가능 기간, 취소, 변경 조건은 정책 기준으로 먼저 확인해 보는 것이 안전해요.",
         "installation_work_policy": "공임, 장착비, 추가 작업 비용은 작업 범위와 정책에 따라 달라질 수 있어요.",
@@ -6712,8 +6705,21 @@ def _build_support_faq_policy_event(
             {"label": "1:1 문의하기", "domain": "SUPPORT"},
             {"label": "처음으로", "domain": "LEADING"},
         ]
+    elif intent == "tire_quality_warranty_policy":
+        quick_replies = [
+            {"label": "나의 워런티 확인", "url": CTAUrls.WARRANTY_MAIN, "domain": "SUPPORT"},
+            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+            {"label": "처음으로", "domain": "LEADING"},
+        ]
     if source_summary and intent == "assurance_service_policy":
         compact_summary = _compact_policy_source_summary(source_summary, max_len=92)
+        assistant_response = (
+            required_guidance_by_intent[intent]
+            if not compact_summary
+            else f"{required_guidance_by_intent[intent]}\n\n{compact_summary}"
+        )
+    elif source_summary and intent == "tire_quality_warranty_policy":
+        compact_summary = _compact_policy_source_summary(source_summary, max_len=88)
         assistant_response = (
             required_guidance_by_intent[intent]
             if not compact_summary
@@ -15245,21 +15251,106 @@ def _walk_faq_policy_strings(obj: Any) -> list[str]:
 
 
 def _first_faq_policy_answer(structured_sources: list[tuple[str, dict]]) -> str | None:
+    return _first_faq_policy_answer_for_intent(structured_sources)
+
+
+_FAQ_POLICY_SOURCE_MIN_SCORE_BY_INTENT = {
+    "tire_manufacture_date_policy": 0.015,
+    "tire_quality_warranty_policy": 0.015,
+}
+_FAQ_POLICY_SOURCE_RELEVANCE_RE = {
+    "tire_manufacture_date_policy": re.compile(
+        r"제조\s*일자|제조일자|DOT|신품|유통|숙성|선입선출|6\s*~\s*12개월|6개월|12개월",
+        re.IGNORECASE,
+    ),
+    "tire_quality_warranty_policy": re.compile(
+        r"측면|사이드월|부풀|품질\s*보증|품질보증|무상\s*(?:A/?S|AS|as|교체|수리)|"
+        r"제조상\s*과실|점검|잔여\s*홈|워런티",
+        re.IGNORECASE,
+    ),
+}
+
+
+def _faq_policy_source_summary_text(tool_result: dict | None, *, intent: str | None = None) -> str:
+    if not isinstance(tool_result, dict):
+        return ""
+    answer = _first_faq_policy_answer_for_intent([("search_faq_hybrid_tool", tool_result)], intent=intent)
+    if not answer:
+        return ""
+    summary = re.sub(r"\s+", " ", answer).strip()
+    if len(summary) > 260:
+        summary = f"{summary[:257].rstrip()}..."
+    return summary
+
+
+def _faq_policy_candidate_score(candidate: Mapping[str, Any]) -> float | None:
+    raw_score = candidate.get("score")
+    if raw_score is None:
+        return None
+    try:
+        return float(raw_score)
+    except (TypeError, ValueError):
+        return None
+
+
+def _faq_policy_candidate_text(candidate: Mapping[str, Any]) -> str:
+    parts = [
+        str(candidate.get("question") or "").strip(),
+        str(
+            candidate.get("answer")
+            or candidate.get("pc_ans_cont")
+            or candidate.get("content")
+            or candidate.get("body")
+            or ""
+        ).strip(),
+    ]
+    return "\n".join(part for part in parts if part)
+
+
+def _faq_policy_candidates_from_output(output: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    data = output.get("data", output)
+    candidates: list[Any] = []
+    if isinstance(data, Mapping):
+        for key in ("items", "faqs", "results"):
+            value = data.get(key)
+            if isinstance(value, list):
+                candidates.extend(value)
+        if not candidates:
+            candidates.append(data)
+    elif isinstance(data, list):
+        candidates.extend(data)
+    return [candidate for candidate in candidates if isinstance(candidate, Mapping)]
+
+
+def _faq_policy_candidate_is_relevant(intent: str | None, candidate: Mapping[str, Any]) -> bool:
+    if not intent:
+        return True
+    text = _faq_policy_candidate_text(candidate)
+    if not text:
+        return False
+    score = _faq_policy_candidate_score(candidate)
+    min_score = _FAQ_POLICY_SOURCE_MIN_SCORE_BY_INTENT.get(intent)
+    if min_score is not None and score is not None and score < min_score:
+        return False
+    relevance_re = _FAQ_POLICY_SOURCE_RELEVANCE_RE.get(intent)
+    if relevance_re is None:
+        return True
+    return bool(relevance_re.search(text))
+
+
+def _first_faq_policy_answer_for_intent(
+    structured_sources: list[tuple[str, dict]],
+    *,
+    intent: str | None = None,
+) -> str | None:
     for tool_name, output in structured_sources:
         if str(tool_name or "") not in _FAQ_POLICY_FALLBACK_SOURCE_TOOLS or not isinstance(output, Mapping):
             continue
-        data = output.get("data", output)
-        candidates: list[Any] = []
-        if isinstance(data, Mapping):
-            for key in ("items", "faqs", "results"):
-                value = data.get(key)
-                if isinstance(value, list):
-                    candidates.extend(value)
-            if not candidates:
-                candidates.append(data)
-        elif isinstance(data, list):
-            candidates.extend(data)
-        for candidate in candidates:
+        candidates = _faq_policy_candidates_from_output(output)
+        relevant_candidates = [
+            candidate for candidate in candidates if _faq_policy_candidate_is_relevant(intent, candidate)
+        ]
+        for candidate in relevant_candidates:
             if not isinstance(candidate, Mapping):
                 continue
             answer = (
@@ -15270,6 +15361,9 @@ def _first_faq_policy_answer(structured_sources: list[tuple[str, dict]]) -> str 
             )
             if isinstance(answer, str) and answer.strip():
                 return answer.strip()
+        if intent:
+            continue
+        data = output.get("data", output)
         strings = _walk_faq_policy_strings(data)
         if strings:
             return max(strings, key=len).strip()
@@ -15291,7 +15385,10 @@ def _build_faq_policy_source_grounded_fallback_event(
         for violation_type in violation_types
     ):
         return None
-    source_answer = _first_faq_policy_answer(structured_sources)
+    source_answer = _first_faq_policy_answer_for_intent(
+        structured_sources,
+        intent=str(turn_contract.intent or "") or None,
+    )
     if not source_answer:
         return None
     source_summary = re.sub(r"\s+", " ", source_answer).strip()

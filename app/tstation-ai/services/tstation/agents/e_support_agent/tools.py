@@ -384,6 +384,7 @@ def search_faq_hybrid_tool(query: str, top_k: int = 20) -> dict:
                 "question": r["payload"].get("question", ""),
                 "answer": r["payload"].get("answer", ""),
                 "metadata": r["payload"].get("metadata", {}),
+                "score": r.get("score"),
                 "source": "FAQ Hybrid",
             }
             for r in candidates
