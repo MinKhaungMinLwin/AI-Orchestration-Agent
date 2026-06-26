@@ -17797,6 +17797,78 @@ def test_router_store_service_search_contract_restores_transaction_route_from_su
     assert routing.override_reason == "restore_store_service_search_contract"
 
 
+def test_first_turn_slim_router_conversion_preserves_common_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    coordinator = StreamingMultiAgentCoordinator()
+    slim_result = chat_module._SlimMultiAgentDomain(
+        reason="test slim router",
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        execution_plan=["support:general_card_cancel_timing_policy"],
+        claim_check_type="none",
+        complaint_scope="none",
+        discovery_followup_intent="none",
+        carried_discovery_objective="none",
+        pending_check_topic="none",
+        pending_check_object_type="none",
+        pending_check_object_value="",
+        comparison_followup_intent="none",
+        comparison_metric="none",
+        recent_product_set_followup_type="none",
+        recent_product_set_metric="none",
+        recent_product_set_direction="none",
+        recent_product_set_price_basis="none",
+        requested_product_attribute="none",
+        policy_intent="general_card_cancel_timing_policy",
+        store_attribute_store_name="광교신도시점",
+        store_attribute_text="얼라인먼트 가능한지",
+        store_attribute_type="service",
+        store_attribute_verification_level="tool_verifiable",
+        service_name="타이어 보관서비스",
+        service_code="119",
+        region="강남",
+        place_query="강남역",
+        recommendation_scenario="none",
+        referred_object_status="resolved",
+        referred_object_type="none",
+        needs_clarification=False,
+        planner_confidence=0.93,
+        override_applied=True,
+        override_reason="preserve_router_policy_intent",
+        original_router_domains=[MultiAgentDomain.Domain.TRANSACTION],
+        original_router_execution_plan=["transaction:order_cancel_status_lookup"],
+        override_blocked=True,
+        blocked_override_reason="owned_order_anchor_missing",
+        agent_prompt_profile=chat_module.AgentPromptProfile.FULL,
+    )
+
+    class _StubStructuredModel:
+        def invoke(self, *_args, **_kwargs):
+            return slim_result
+
+    monkeypatch.setattr(chat_module, "_slim_intent_model", _StubStructuredModel())
+
+    domains, result = coordinator.classify_multi_intent([{"role": "user", "content": "취소 완료 문자 받았는데 카드 승인 취소 언제 돼?"}])
+
+    assert domains == [MultiAgentDomain.Domain.SUPPORT]
+    assert result is not None
+    assert result.user_behavior == ""
+    assert result.flow == ""
+    assert result.policy_intent == "general_card_cancel_timing_policy"
+    assert result.store_attribute_store_name == "광교신도시점"
+    assert result.store_attribute_text == "얼라인먼트 가능한지"
+    assert result.store_attribute_type == "service"
+    assert result.store_attribute_verification_level == "tool_verifiable"
+    assert result.service_name == "타이어 보관서비스"
+    assert result.service_code == "119"
+    assert result.region == "강남"
+    assert result.place_query == "강남역"
+    assert result.override_applied is True
+    assert result.override_reason == "preserve_router_policy_intent"
+    assert result.original_router_domains == [MultiAgentDomain.Domain.TRANSACTION]
+    assert result.original_router_execution_plan == ["transaction:order_cancel_status_lookup"]
+    assert result.override_blocked is True
+    assert result.blocked_override_reason == "owned_order_anchor_missing"
+
+
 def test_actual_store_service_search_sentence_prefers_store_search_contract_over_today_context() -> None:
     user_text = "윈터 타이어 끼고 싶은데, 지금 장착중인 타이어 보관해주는 매장이 경기권에 어디어디 있어?"
     frame = build_transaction_intent_frame(

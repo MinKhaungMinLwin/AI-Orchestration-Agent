@@ -3112,33 +3112,10 @@ class StreamingMultiAgentCoordinator:
             # Normalize slim result to MultiAgentDomain for downstream compat.
             # Empty narrative fields short-circuit _inject_conversation_context.
             if is_first_turn:
-                result = MultiAgentDomain(
-                    reason=raw_result.reason,
-                    domains=raw_result.domains,
-                    execution_plan=raw_result.execution_plan,
-                    user_behavior="",
-                    claim_check_type=raw_result.claim_check_type,
-                    complaint_scope=raw_result.complaint_scope,
-                    discovery_followup_intent=raw_result.discovery_followup_intent,
-                    carried_discovery_objective=raw_result.carried_discovery_objective,
-                    pending_check_topic=raw_result.pending_check_topic,
-                    pending_check_object_type=raw_result.pending_check_object_type,
-                    pending_check_object_value=raw_result.pending_check_object_value,
-                    comparison_followup_intent=raw_result.comparison_followup_intent,
-                    comparison_metric=raw_result.comparison_metric,
-                    recent_product_set_followup_type=raw_result.recent_product_set_followup_type,
-                    recent_product_set_metric=raw_result.recent_product_set_metric,
-                    recent_product_set_direction=raw_result.recent_product_set_direction,
-                    recent_product_set_price_basis=raw_result.recent_product_set_price_basis,
-                    requested_product_attribute=raw_result.requested_product_attribute,
-                    recommendation_scenario=raw_result.recommendation_scenario,
-                    referred_object_status=raw_result.referred_object_status,
-                    referred_object_type=raw_result.referred_object_type,
-                    needs_clarification=raw_result.needs_clarification,
-                    planner_confidence=raw_result.planner_confidence,
-                    agent_prompt_profile=raw_result.agent_prompt_profile,
-                    flow="",
-                )
+                result_payload = raw_result.model_dump()
+                result_payload["user_behavior"] = ""
+                result_payload["flow"] = ""
+                result = MultiAgentDomain(**result_payload)
             else:
                 result = raw_result
 
