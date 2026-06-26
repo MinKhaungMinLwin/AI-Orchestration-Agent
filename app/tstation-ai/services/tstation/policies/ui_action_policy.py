@@ -1218,6 +1218,45 @@ def preview_location_slot_values_from_selection(selection: Mapping[str, Any] | N
     return values or None
 
 
+def build_order_quantity_prompt_event(slots: Any) -> dict[str, Any]:
+    selected_size = normalize_tire_size(str(getattr(slots, "tire_size", None) or ""))
+    front_size = normalize_tire_size(str(getattr(slots, "tire_size_front", None) or ""))
+    rear_size = normalize_tire_size(str(getattr(slots, "tire_size_rear", None) or ""))
+    is_staggered = bool(front_size and rear_size and front_size != rear_size)
+
+    if is_staggered:
+        axle_label = "앞바퀴" if selected_size == front_size else "뒷바퀴" if selected_size == rear_size else "현재"
+        assistant_response = (
+            f"{axle_label} **{selected_size}** 기준으로 몇 개 구매하실까요?\n\n"
+            "이 차량은 앞/뒤 규격이 달라 현재 규격은 최대 2개까지 선택할 수 있어요."
+        )
+        quick_replies = [
+            {"label": "1개", "domain": "TRANSACTION"},
+            {"label": "2개", "domain": "TRANSACTION"},
+        ]
+    else:
+        size_text = f" **{selected_size}** 기준으로" if selected_size else ""
+        assistant_response = f"타이어{size_text} 몇 개 구매하실까요?"
+        quick_replies = [
+            {"label": "1개", "domain": "TRANSACTION"},
+            {"label": "2개", "domain": "TRANSACTION"},
+            {"label": "3개", "domain": "TRANSACTION"},
+            {"label": "4개", "domain": "TRANSACTION"},
+        ]
+
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "transaction",
+        "assistant_response_source": "code_order_quantity_prompt",
+        "data": {
+            "assistantResponse": assistant_response,
+            "quickReplies": quick_replies,
+            "predictedDomains": ["TRANSACTION"],
+        },
+    }
+
+
 def resolve_goods_no_from_product_template_selection(user_text: str, template_data: Mapping[str, Any] | None) -> str | None:
     if not user_text or not isinstance(template_data, Mapping):
         return None

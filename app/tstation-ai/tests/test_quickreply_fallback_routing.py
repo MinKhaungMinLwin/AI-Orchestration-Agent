@@ -148,7 +148,6 @@ from services.tstation.chat import (
     _apply_selected_order_context_for_purchase_cta,
     _apply_order_snapshot_slots,
     _standardize_preorder_metadata,
-    _build_order_quantity_prompt_event,
     _build_order_arrival_status_event,
     _build_order_cancel_status_event,
     _build_order_history_reorder_event,
@@ -388,6 +387,7 @@ from services.tstation.policies.ui_action_policy import (
     build_other_store_context_enrichment_input,
     build_other_store_preview_metadata,
     build_cta_preview_template_context,
+    build_order_quantity_prompt_event,
     build_preview_tool_mapped_event,
     build_other_store_search_result_event,
     build_other_store_stock_unavailable_event,
@@ -9986,7 +9986,7 @@ def test_order_quantity_prompt_for_staggered_vehicle_offers_only_one_or_two() ->
         tire_size_rear="255/50R18",
     )
 
-    event = _build_order_quantity_prompt_event(slots)
+    event = build_order_quantity_prompt_event(slots)
 
     assert event["template"] == "quickReply"
     assert "앞바퀴 **225/50R18** 기준으로 몇 개 구매" in event["data"]["assistantResponse"]

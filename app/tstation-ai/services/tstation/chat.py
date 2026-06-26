@@ -119,6 +119,7 @@ from services.tstation.policies.ui_action_policy import (
     build_other_store_preview_metadata,
     build_cta_preview_template_context,
     build_cta_preview_contract_gate,
+    build_order_quantity_prompt_event,
     build_preview_tool_mapped_event,
     build_store_availability_quantity_prompt_event,
     cta_preview_input_from_slots,
@@ -6893,43 +6894,6 @@ def _build_staggered_tire_quantity_limit_event(slots: Any) -> dict | None:
                 {"label": "1개", "domain": "TRANSACTION"},
                 {"label": "2개", "domain": "TRANSACTION"},
             ],
-            "predictedDomains": ["TRANSACTION"],
-        },
-    }
-
-
-def _build_order_quantity_prompt_event(slots: Any) -> dict:
-    selected_size = normalize_tire_size(str(getattr(slots, "tire_size", None) or ""))
-    if _is_staggered_selected_tire_size_context(slots):
-        front_size = normalize_tire_size(str(getattr(slots, "tire_size_front", None) or ""))
-        rear_size = normalize_tire_size(str(getattr(slots, "tire_size_rear", None) or ""))
-        axle_label = "앞바퀴" if selected_size == front_size else "뒷바퀴" if selected_size == rear_size else "현재"
-        assistant_response = (
-            f"{axle_label} **{selected_size}** 기준으로 몇 개 구매하실까요?\n\n"
-            "이 차량은 앞/뒤 규격이 달라 현재 규격은 최대 2개까지 선택할 수 있어요."
-        )
-        quick_replies = [
-            {"label": "1개", "domain": "TRANSACTION"},
-            {"label": "2개", "domain": "TRANSACTION"},
-        ]
-    else:
-        size_text = f" **{selected_size}** 기준으로" if selected_size else ""
-        assistant_response = f"타이어{size_text} 몇 개 구매하실까요?"
-        quick_replies = [
-            {"label": "1개", "domain": "TRANSACTION"},
-            {"label": "2개", "domain": "TRANSACTION"},
-            {"label": "3개", "domain": "TRANSACTION"},
-            {"label": "4개", "domain": "TRANSACTION"},
-        ]
-
-    return {
-        "type": "data",
-        "template": "quickReply",
-        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
-        "assistant_response_source": "code_order_quantity_prompt",
-        "data": {
-            "assistantResponse": assistant_response,
-            "quickReplies": quick_replies,
             "predictedDomains": ["TRANSACTION"],
         },
     }
@@ -22502,7 +22466,7 @@ class TStationChatServiceV2:
                 )
                 if selected_context_values:
                     if getattr(merged_slots, "ord_qty", None) is None:
-                        current_vehicle_selection_prompt_event.set(_build_order_quantity_prompt_event(merged_slots))
+                        current_vehicle_selection_prompt_event.set(build_order_quantity_prompt_event(merged_slots))
                 elif recovered_product_slots:
                     merged_slots = merged_slots.apply_runtime_values(
                         recovered_product_slots,
@@ -22518,7 +22482,7 @@ class TStationChatServiceV2:
                             merged_slots.goods_no,
                             last_user_text,
                         )
-                        current_vehicle_selection_prompt_event.set(_build_order_quantity_prompt_event(merged_slots))
+                        current_vehicle_selection_prompt_event.set(build_order_quantity_prompt_event(merged_slots))
                 elif merged_slots.goods_no is None:
                     merged_slots.pending_intent = "order"
                     merged_slots.goal_type = "place_order"
@@ -22833,7 +22797,7 @@ class TStationChatServiceV2:
                     merged_slots.region,
                     merged_slots.shop_id,
                 )
-                current_vehicle_selection_prompt_event.set(_build_order_quantity_prompt_event(merged_slots))
+                current_vehicle_selection_prompt_event.set(build_order_quantity_prompt_event(merged_slots))
 
             # 4) Save merged slots to Redis without blocking the async request path.
             await chat_history_svc.save_slots_async(request.session_id, merged_slots, user_id=request.user_id)
