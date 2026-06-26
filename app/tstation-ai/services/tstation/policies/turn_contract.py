@@ -3197,6 +3197,15 @@ def _derived_required_slots(
         required.append("product")
     if _REFERENCE_PURCHASE_RE.search(text) and not has_product:
         required.append("product")
+    has_owned_order_reference = bool(
+        known_slots.get("order_no")
+        or known_slots.get("order_no_suffix")
+        or known_slots.get("owned_anchor_target")
+        or known_slots.get("order_cancel_status_lookup")
+        or known_slots.get("reservation_store_reference")
+    )
+    if intent == "order_cancel_request" and _has_reference_signal(text) and not has_owned_order_reference:
+        required.append("order")
     return tuple(required)
 
 
@@ -3243,6 +3252,8 @@ def _fallback_reason(
 def _clarification_text(required_slots: tuple[str, ...]) -> str:
     if "product" in required_slots or "goods_no" in required_slots or "product_set" in required_slots:
         return "어떤 상품 기준으로 확인해드릴까요?"
+    if "order" in required_slots:
+        return "어떤 주문이나 예약을 취소하시려는지 알려주세요."
     if "tire_size" in required_slots:
         return "확인할 타이어 사이즈를 알려주세요."
     if "quantity" in required_slots:
@@ -3256,6 +3267,8 @@ def _clarification_chips(required_slots: tuple[str, ...]) -> list[dict[str, str]
     chips: list[dict[str, str]] = []
     if "product" in required_slots or "goods_no" in required_slots or "product_set" in required_slots:
         chips.append({"label": "상품명 입력", "domain": "DISCOVERY"})
+    if "order" in required_slots:
+        chips.append({"label": "주문 내역 보기", "domain": "TRANSACTION"})
     if "tire_size" in required_slots:
         chips.append({"label": "사이즈 입력", "domain": "DISCOVERY"})
     if "quantity" in required_slots:

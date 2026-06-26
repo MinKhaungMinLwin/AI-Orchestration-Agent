@@ -2698,6 +2698,30 @@ def test_order_cancel_request_and_status_remain_separate_from_fee_inquiry() -> N
     assert status_frame.intent == "order_cancel_status_lookup"
 
 
+def test_order_cancel_request_guard_keeps_deictic_reference_clarification() -> None:
+    user_text = "그거 취소해줘"
+    frame = build_transaction_intent_frame(user_text)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text=user_text,
+        known_slots=dict(frame.known_slots),
+    )
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=frame,
+        tool_plan=plan_transaction_tools(frame),
+        response_decision=response_decision,
+    )
+    event = build_required_slot_clarification_event(contract)
+
+    assert frame.intent == "order_cancel_request"
+    assert contract.blocking_required_slots == ("order",)
+    assert should_guard_required_slots(contract)
+    assert event["assistant_response_source"] == "code_turn_contract_required_slot_guard"
+    assert event["data"]["assistantResponse"] == "어떤 주문이나 예약을 취소하시려는지 알려주세요."
+    assert event["data"]["quickReplies"][0]["label"] == "주문 내역 보기"
+
+
 @pytest.mark.parametrize(
     "user_text",
     [
