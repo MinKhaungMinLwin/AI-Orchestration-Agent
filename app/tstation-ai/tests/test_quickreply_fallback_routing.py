@@ -404,6 +404,8 @@ from services.tstation.policies.ui_action_policy import (
     normalize_ui_action_metadata,
     preview_action_mode_for_slots,
     resolve_ui_action_context,
+    resolve_vehicle_ui_selection_from_chip_context,
+    rewrite_vehicle_selection_user_text,
     store_context_from_mapping,
     store_name_exact_match_row,
     normalize_preview_tool_result,
@@ -11587,7 +11589,7 @@ def test_chip_vehicle_selection_resolves_matching_candidate_from_recent_listcar(
         },
     }
 
-    resolved = TStationChatServiceV2._resolve_vehicle_from_chip_context(
+    resolved = resolve_vehicle_ui_selection_from_chip_context(
         {
             "cta_action": "select_vehicle_candidate",
             "source_intent": "vehicle_tire_size_lookup",
@@ -11620,7 +11622,7 @@ def test_chip_vehicle_selection_rejects_candidate_not_present_in_recent_listcar(
         },
     }
 
-    resolved = TStationChatServiceV2._resolve_vehicle_from_chip_context(
+    resolved = resolve_vehicle_ui_selection_from_chip_context(
         {
             "cta_action": "select_vehicle_candidate",
             "metadata": {
@@ -11635,7 +11637,7 @@ def test_chip_vehicle_selection_rejects_candidate_not_present_in_recent_listcar(
 
 
 def test_chip_vehicle_selection_rewrites_tire_size_lookup_followup_text() -> None:
-    rewritten = TStationChatServiceV2._rewrite_vehicle_selection_user_text(
+    rewritten = rewrite_vehicle_selection_user_text(
         "61거1836",
         {
             "car": {"licensePlate": "61거1836"},

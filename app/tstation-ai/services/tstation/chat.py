@@ -131,7 +131,9 @@ from services.tstation.policies.ui_action_policy import (
     preview_action_mode_for_slots,
     quickreply_cta_context_from_chip,
     quickreply_cta_context_from_template,
+    resolve_vehicle_ui_selection_from_chip_context,
     resolve_ui_action_context,
+    rewrite_vehicle_selection_user_text,
     apply_other_store_context_enrichment,
     normalize_preview_tool_result,
     store_context_from_mapping,
@@ -20802,100 +20804,6 @@ class TStationChatServiceV2:
         return _select_vehicle_from_listcar_event(user_text, latest_listcar)
 
     @staticmethod
-    def _resolve_vehicle_from_chip_context(chip_context: dict[str, Any] | None, template_data: dict | None) -> dict | None:
-        chip = chip_context_dict(chip_context)
-        if not chip or str(chip.get("cta_action") or "").strip() != "select_vehicle_candidate":
-            return None
-        if not isinstance(template_data, dict):
-            return None
-
-        latest_listcar: dict | None = None
-        if template_data.get("template") == "listCar" and isinstance(template_data.get("data"), dict):
-            latest_listcar = template_data.get("data")
-        elif isinstance(template_data.get("listCar"), list):
-            latest_listcar = template_data
-        if latest_listcar is None:
-            return None
-
-        cars = latest_listcar.get("listCar") or []
-        metadata = latest_listcar.get("metadata") or []
-        if not isinstance(cars, list) or not isinstance(metadata, list) or len(cars) != len(metadata):
-            return None
-
-        raw_meta = chip.get("metadata")
-        selection_meta = dict(raw_meta) if isinstance(raw_meta, dict) else {}
-        car_no = _normalize_vehicle_match_text(
-            chip.get("car_no") or chip.get("carNo") or selection_meta.get("car_no") or selection_meta.get("carNo")
-        )
-        mbr_car_reg_seq = str(
-            chip.get("mbr_car_reg_seq")
-            or chip.get("mbrCarRegSeq")
-            or selection_meta.get("mbr_car_reg_seq")
-            or selection_meta.get("mbrCarRegSeq")
-            or ""
-        ).strip()
-        car_lnc_cd = str(
-            chip.get("car_lnc_cd")
-            or chip.get("carLncCd")
-            or selection_meta.get("car_lnc_cd")
-            or selection_meta.get("carLncCd")
-            or ""
-        ).strip()
-        if not any((car_no, mbr_car_reg_seq, car_lnc_cd)):
-            return None
-
-        matches: list[dict[str, Any]] = []
-        for car, meta in zip(cars, metadata):
-            if not isinstance(car, dict) or not isinstance(meta, dict):
-                continue
-            meta_car_no = _normalize_vehicle_match_text(meta.get("carNo") or car.get("licensePlate"))
-            meta_reg_seq = str(meta.get("mbrCarRegSeq") or "").strip()
-            meta_car_lnc_cd = str(meta.get("carLncCd") or "").strip()
-            if car_no and meta_car_no != car_no:
-                continue
-            if mbr_car_reg_seq and meta_reg_seq != mbr_car_reg_seq:
-                continue
-            if car_lnc_cd and meta_car_lnc_cd != car_lnc_cd:
-                continue
-            matches.append(
-                {
-                    "car": car,
-                    "meta": meta,
-                    "selection_context": {
-                        "source_intent": str(
-                            chip.get("source_intent")
-                            or selection_meta.get("source_intent")
-                            or selection_meta.get("sourceIntent")
-                            or ""
-                        ).strip(),
-                        "expected_contract_intent": str(
-                            chip.get("expected_contract_intent")
-                            or selection_meta.get("expected_contract_intent")
-                            or selection_meta.get("expectedContractIntent")
-                            or ""
-                        ).strip(),
-                    },
-                }
-            )
-        return matches[0] if len(matches) == 1 else None
-
-    @staticmethod
-    def _rewrite_vehicle_selection_user_text(
-        last_user_text: str,
-        selected_vehicle: dict[str, Any] | None,
-    ) -> str:
-        if selected_vehicle is None:
-            return last_user_text
-        selection_context = selected_vehicle.get("selection_context") or {}
-        source_intent = str(selection_context.get("source_intent") or "").strip()
-        selected_car = selected_vehicle.get("car") or {}
-        selected_meta = selected_vehicle.get("meta") or {}
-        car_no = str(selected_meta.get("carNo") or selected_car.get("licensePlate") or last_user_text or "").strip()
-        if source_intent == "vehicle_tire_size_lookup":
-            return f"{car_no} 차량 타이어 사이즈 알려줘"
-        return last_user_text
-
-    @staticmethod
     def _is_vehicle_tire_size_lookup_selection(selected_vehicle: dict[str, Any] | None) -> bool:
         if selected_vehicle is None:
             return False
@@ -21690,7 +21598,7 @@ class TStationChatServiceV2:
                     raw_ui_action = dict(chip_context_values)
             if raw_ui_action and isinstance(request.slots, dict):
                 raw_ui_action.setdefault("slots", dict(request.slots))
-            chip_selected_vehicle = TStationChatServiceV2._resolve_vehicle_from_chip_context(
+            chip_selected_vehicle = resolve_vehicle_ui_selection_from_chip_context(
                 request.chip_context,
                 latest_listcar_tmpl,
             )
@@ -21760,7 +21668,7 @@ class TStationChatServiceV2:
                         )
 
             if chip_selected_vehicle is not None:
-                rewritten_vehicle_text = TStationChatServiceV2._rewrite_vehicle_selection_user_text(
+                rewritten_vehicle_text = rewrite_vehicle_selection_user_text(
                     last_user_text,
                     chip_selected_vehicle,
                 )

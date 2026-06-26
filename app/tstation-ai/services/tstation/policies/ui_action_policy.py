@@ -771,6 +771,109 @@ def chip_value(chip_context: Mapping[str, Any] | None, *keys: str) -> str:
     return ""
 
 
+def _normalize_vehicle_match_text(value: Any) -> str:
+    return re.sub(r"[^0-9A-Za-z가-힣]", "", str(value or "")).lower()
+
+
+def resolve_vehicle_ui_selection_from_chip_context(
+    chip_context: Mapping[str, Any] | None,
+    template_data: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    chip = chip_context_dict(chip_context)
+    if not chip or str(chip.get("cta_action") or "").strip() != "select_vehicle_candidate":
+        return None
+    if not isinstance(template_data, Mapping):
+        return None
+
+    latest_listcar: Mapping[str, Any] | None = None
+    if template_data.get("template") == "listCar" and isinstance(template_data.get("data"), Mapping):
+        latest_listcar = template_data.get("data")
+    elif isinstance(template_data.get("listCar"), list):
+        latest_listcar = template_data
+    if latest_listcar is None:
+        return None
+
+    cars = latest_listcar.get("listCar") or []
+    metadata = latest_listcar.get("metadata") or []
+    if not isinstance(cars, list) or not isinstance(metadata, list) or len(cars) != len(metadata):
+        return None
+
+    raw_meta = chip.get("metadata")
+    selection_meta = dict(raw_meta) if isinstance(raw_meta, Mapping) else {}
+    car_no = _normalize_vehicle_match_text(
+        chip.get("car_no") or chip.get("carNo") or selection_meta.get("car_no") or selection_meta.get("carNo")
+    )
+    mbr_car_reg_seq = str(
+        chip.get("mbr_car_reg_seq")
+        or chip.get("mbrCarRegSeq")
+        or selection_meta.get("mbr_car_reg_seq")
+        or selection_meta.get("mbrCarRegSeq")
+        or ""
+    ).strip()
+    car_lnc_cd = str(
+        chip.get("car_lnc_cd")
+        or chip.get("carLncCd")
+        or selection_meta.get("car_lnc_cd")
+        or selection_meta.get("carLncCd")
+        or ""
+    ).strip()
+    if not any((car_no, mbr_car_reg_seq, car_lnc_cd)):
+        return None
+
+    matches: list[dict[str, Any]] = []
+    for car, meta in zip(cars, metadata):
+        if not isinstance(car, Mapping) or not isinstance(meta, Mapping):
+            continue
+        meta_car_no = _normalize_vehicle_match_text(meta.get("carNo") or car.get("licensePlate"))
+        meta_reg_seq = str(meta.get("mbrCarRegSeq") or "").strip()
+        meta_car_lnc_cd = str(meta.get("carLncCd") or "").strip()
+        if car_no and meta_car_no != car_no:
+            continue
+        if mbr_car_reg_seq and meta_reg_seq != mbr_car_reg_seq:
+            continue
+        if car_lnc_cd and meta_car_lnc_cd != car_lnc_cd:
+            continue
+        matches.append(
+            {
+                "car": dict(car),
+                "meta": dict(meta),
+                "selection_context": {
+                    "source_intent": str(
+                        chip.get("source_intent")
+                        or selection_meta.get("source_intent")
+                        or selection_meta.get("sourceIntent")
+                        or ""
+                    ).strip(),
+                    "expected_contract_intent": str(
+                        chip.get("expected_contract_intent")
+                        or selection_meta.get("expected_contract_intent")
+                        or selection_meta.get("expectedContractIntent")
+                        or ""
+                    ).strip(),
+                },
+            }
+        )
+    return matches[0] if len(matches) == 1 else None
+
+
+def rewrite_vehicle_selection_user_text(
+    last_user_text: str,
+    selected_vehicle: Mapping[str, Any] | None,
+) -> str:
+    if selected_vehicle is None:
+        return last_user_text
+    selection_context = selected_vehicle.get("selection_context")
+    if not isinstance(selection_context, Mapping):
+        return last_user_text
+    source_intent = str(selection_context.get("source_intent") or "").strip()
+    selected_car = selected_vehicle.get("car") if isinstance(selected_vehicle.get("car"), Mapping) else {}
+    selected_meta = selected_vehicle.get("meta") if isinstance(selected_vehicle.get("meta"), Mapping) else {}
+    car_no = str(selected_meta.get("carNo") or selected_car.get("licensePlate") or last_user_text or "").strip()
+    if source_intent == "vehicle_tire_size_lookup":
+        return f"{car_no} 차량 타이어 사이즈 알려줘"
+    return last_user_text
+
+
 def quickreply_cta_context_from_template(template_data: Mapping[str, Any] | None) -> dict[str, Any]:
     if not isinstance(template_data, Mapping):
         return {}
