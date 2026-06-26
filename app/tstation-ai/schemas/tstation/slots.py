@@ -138,6 +138,7 @@ class ConversationSlots(BaseModel):
     user_preferences_text: Optional[str] = None
     pending_intent: Optional[PendingIntent] = None  # e.g. "price" — carried across turns, cleared by Coordinator when a matching tool runs.
     intent_candidate: Optional[PendingIntent] = Field(default=None, exclude=True)  # current-turn regex hint only; never persisted
+    goal_candidate: Optional[GoalType] = Field(default=None, exclude=True)  # current-turn regex hint only; never persisted
     pending_product_name: Optional[str] = None  # product name waiting for a missing slot follow-up
     pending_quantity_options: Optional[list[int]] = None  # quantity comparison options, e.g. [2, 4]
     pending_required_slot: Optional[str] = None  # missing slot requested in the previous assistant turn
@@ -681,7 +682,7 @@ class ConversationSlots(BaseModel):
     def extract_from_user_text(cls, user_text: str) -> "ConversationSlots":
         """Extract slot values from user message text using regex patterns.
 
-        Extracts: tire_size, goods_no, ord_qty, intent_candidate.
+        Extracts: tire_size, goods_no, ord_qty, intent_candidate, goal_candidate.
         tire_model, shop_name, car_model require LLM extraction (handled by Router).
         """
         slots = cls()
@@ -737,15 +738,15 @@ class ConversationSlots(BaseModel):
             # and a recommendation attribute. Product-like forms should be
             # searched first; attribute forms such as "마일리지 좋은 타이어" keep
             # the normal recommendation path below.
-            slots.goal_type = "product_search"
+            slots.goal_candidate = "product_search"
         elif cls.has_recommend_intent(user_text):
-            slots.goal_type = "product_recommend"
+            slots.goal_candidate = "product_recommend"
         elif cls.has_store_finder_intent(user_text):
             # Pure store search: no stock/price/order intent, but the user is
             # explicitly asking for a store. Routes through goal-router so the
             # follow-up region answer reuses the originating turn's context
             # (preferences) instead of running a generic store list.
-            slots.goal_type = "store_finder"
+            slots.goal_candidate = "store_finder"
         elif qty_match is not None and cls.has_product_keyword(user_text):
             # Product keyword + explicit quantity in the SAME turn (e.g.
             # "벤투스 S2 AS 245/45R18 4개") — no 가격/주문 verb, but quantity
@@ -754,13 +755,13 @@ class ConversationSlots(BaseModel):
             # routes to Transaction and `get_final_price_tool` runs
             # deterministically, instead of leaving the LLM to non-
             # deterministically choose between product card and price matrix.
-            slots.goal_type = "price_inquiry"
+            slots.goal_candidate = "price_inquiry"
         elif cls.has_product_keyword(user_text):
             # Bare product-keyword turn — no transactional intent, no recommend
             # verb, but a known brand/model is mentioned. Drive Discovery to
             # search the product immediately instead of letting the LLM emit a
             # "검색해 드릴까요?" confirmation quickReply.
-            slots.goal_type = "product_search"
+            slots.goal_candidate = "product_search"
 
         # Region extraction — gated to avoid false positives on common-noun
         # tokens that overlap with Seoul-gu names ("동작 안 해", "중구", "북구"...).

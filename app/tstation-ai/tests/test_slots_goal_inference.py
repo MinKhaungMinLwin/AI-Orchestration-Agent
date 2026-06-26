@@ -1,4 +1,4 @@
-"""Unit tests for ConversationSlots goal_type inference.
+"""Unit tests for ConversationSlots goal_candidate inference.
 
 Specifically protects the price_inquiry escalation when product keyword + qty
 co-occur in the same turn, while preserving existing precedence rules.
@@ -7,8 +7,8 @@ co-occur in the same turn, while preserving existing precedence rules.
 from schemas.tstation.slots import ConversationSlots
 
 
-def _goal(text: str) -> str | None:
-    return ConversationSlots.extract_from_user_text(text).goal_type
+def _goal_candidate(text: str) -> str | None:
+    return ConversationSlots.extract_from_user_text(text).goal_candidate
 
 
 # --------------------------------------------------------------------------- #
@@ -16,15 +16,15 @@ def _goal(text: str) -> str | None:
 # --------------------------------------------------------------------------- #
 
 def test_product_keyword_with_qty_escalates_to_price_inquiry() -> None:
-    assert _goal("벤투스 S2 AS 245/45R18 4개") == "price_inquiry"
+    assert _goal_candidate("벤투스 S2 AS 245/45R18 4개") == "price_inquiry"
 
 
 def test_product_keyword_with_qty_only_no_size_still_escalates() -> None:
-    assert _goal("벤투스 S2 4개") == "price_inquiry"
+    assert _goal_candidate("벤투스 S2 4개") == "price_inquiry"
 
 
 def test_other_model_keyword_with_qty_escalates() -> None:
-    assert _goal("다이나프로 HPX 2개") == "price_inquiry"
+    assert _goal_candidate("다이나프로 HPX 2개") == "price_inquiry"
 
 
 # --------------------------------------------------------------------------- #
@@ -32,11 +32,11 @@ def test_other_model_keyword_with_qty_escalates() -> None:
 # --------------------------------------------------------------------------- #
 
 def test_qty_only_no_keyword_does_not_escalate() -> None:
-    assert _goal("4개") is None
+    assert _goal_candidate("4개") is None
 
 
 def test_size_and_qty_without_keyword_does_not_escalate() -> None:
-    assert _goal("245/45R18 4개") is None
+    assert _goal_candidate("245/45R18 4개") is None
 
 
 # --------------------------------------------------------------------------- #
@@ -44,23 +44,23 @@ def test_size_and_qty_without_keyword_does_not_escalate() -> None:
 # --------------------------------------------------------------------------- #
 
 def test_product_keyword_alone_stays_product_search() -> None:
-    assert _goal("벤투스 S2 AS") == "product_search"
+    assert _goal_candidate("벤투스 S2 AS") == "product_search"
 
 
 def test_product_keyword_with_size_no_qty_stays_product_search() -> None:
-    assert _goal("벤투스 S2 AS 245/45R18") == "product_search"
+    assert _goal_candidate("벤투스 S2 AS 245/45R18") == "product_search"
 
 
 def test_mileage_product_like_query_goes_to_product_search() -> None:
-    assert _goal("마일리지 타이어") == "product_search"
-    assert _goal("마일리지 타이어 추천") == "product_search"
-    assert _goal("마일리지 플러스 2") == "product_search"
-    assert _goal("마일리지 플러스 3 추천해줘") == "product_search"
+    assert _goal_candidate("마일리지 타이어") == "product_search"
+    assert _goal_candidate("마일리지 타이어 추천") == "product_search"
+    assert _goal_candidate("마일리지 플러스 2") == "product_search"
+    assert _goal_candidate("마일리지 플러스 3 추천해줘") == "product_search"
 
 
 def test_mileage_attribute_query_stays_recommendation() -> None:
-    assert _goal("마일리지 좋은 타이어 추천") == "product_recommend"
-    assert _goal("수명 긴 타이어 추천") == "product_recommend"
+    assert _goal_candidate("마일리지 좋은 타이어 추천") == "product_recommend"
+    assert _goal_candidate("수명 긴 타이어 추천") == "product_recommend"
 
 
 # --------------------------------------------------------------------------- #
@@ -68,29 +68,30 @@ def test_mileage_attribute_query_stays_recommendation() -> None:
 # --------------------------------------------------------------------------- #
 
 def test_explicit_price_keyword_keeps_price_inquiry() -> None:
-    assert _goal("벤투스 4개 가격 얼마야") == "price_inquiry"
+    assert _goal_candidate("벤투스 4개 가격 얼마야") == "price_inquiry"
 
 
 def test_explicit_order_keyword_wins_over_qty_escalation() -> None:
-    assert _goal("벤투스 4개 주문할게") == "price_inquiry"
+    assert _goal_candidate("벤투스 4개 주문할게") == "price_inquiry"
 
 
 def test_explicit_stock_keyword_wins_over_qty_escalation() -> None:
-    assert _goal("벤투스 4개 재고 있어?") == "price_inquiry"
+    assert _goal_candidate("벤투스 4개 재고 있어?") == "price_inquiry"
 
 
 def test_recommend_keyword_wins_over_qty_escalation() -> None:
-    assert _goal("벤투스 4개 추천해줘") == "product_recommend"
+    assert _goal_candidate("벤투스 4개 추천해줘") == "product_recommend"
 
 
 def test_reservation_keyword_wins_over_qty_escalation() -> None:
-    assert _goal("벤투스 4개 예약하고 싶어") == "price_inquiry"
+    assert _goal_candidate("벤투스 4개 예약하고 싶어") == "price_inquiry"
 
 
 def test_store_finder_captures_unverifiable_preference_text() -> None:
     slots = ConversationSlots.extract_from_user_text("내 차 타스만인데 리프트 있어야 되더라고... 하남 지역에 리프트 있는 매장 있어?")
 
-    assert slots.goal_type == "store_finder"
+    assert slots.goal_type is None
+    assert slots.goal_candidate == "store_finder"
     assert slots.region == "하남"
     assert slots.user_preferences_text is not None
     assert "리프트" in slots.user_preferences_text
@@ -114,6 +115,17 @@ def test_region_change_clears_stale_store_identity() -> None:
     assert merged.shop_name is None
     assert merged.goods_no == "G000000312970"
     assert merged.ord_qty == 2
+
+
+def test_merge_does_not_promote_current_turn_goal_candidate_to_goal_type() -> None:
+    existing = ConversationSlots(pending_intent="order", goal_type="place_order")
+    new_turn = ConversationSlots.extract_from_user_text("벤투스 S2 AS 245/45R18 4개")
+
+    merged = existing.merge(new_turn)
+
+    assert new_turn.goal_candidate == "price_inquiry"
+    assert new_turn.goal_type is None
+    assert merged.goal_type == "place_order"
 
 
 def test_runtime_product_change_keeps_size_quantity_region_but_clears_product_dependents() -> None:
@@ -161,7 +173,8 @@ def test_named_store_stock_turn_extracts_store_name_without_region_reset() -> No
 
     assert slots.pending_intent is None
     assert slots.intent_candidate == "stock"
-    assert slots.goal_type == "product_search"
+    assert slots.goal_type is None
+    assert slots.goal_candidate == "product_search"
     assert slots.shop_name == "판교점"
     assert slots.region is None
 
