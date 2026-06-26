@@ -382,6 +382,7 @@ from services.tstation.policies.ui_action_policy import (
     build_order_quantity_prompt_event,
     build_manual_tire_size_input_event,
     build_preview_tool_mapped_event,
+    build_store_availability_followup_preview_event,
     build_staggered_tire_quantity_limit_event,
     build_staggered_vehicle_tire_selection_event,
     build_oe_replacement_same_product_brand_prompt_event,
@@ -921,6 +922,31 @@ def test_build_preview_tool_mapped_event_uses_fallback_and_source() -> None:
     )
 
     assert event["assistant_response_source"] == "code_cta_action_preview"
+    assert event["source_domain"] == "transaction"
+    assert event["template"] == "quickReply"
+
+
+def test_build_store_availability_followup_preview_event_uses_fallback_and_source() -> None:
+    fallback_event = build_store_availability_quantity_prompt_event(
+        product_keyword="벤투스 에어S",
+        tire_size="235/55R19",
+        store_name="티스테이션 판교점",
+        goods_no="G000000319593",
+    )
+    event = build_store_availability_followup_preview_event(
+        search_input={"keyword": "벤투스 에어S", "size": "235/55R19", "limit": 10},
+        search_result={"status": "success", "data": {"items": []}},
+        preview_input={"goods_no": "G000000319593", "ord_qty": 4, "store_nm": "티스테이션 판교점"},
+        preview_result={"status": "success", "data": {}},
+        template_builder=lambda tool_data, intro: None,
+        product_keyword="벤투스 에어S",
+        tire_size="235/55R19",
+        ord_qty=4,
+        store_name="티스테이션 판교점",
+        fallback_event=fallback_event,
+    )
+
+    assert event["assistant_response_source"] == "code_store_availability_size_followup"
     assert event["source_domain"] == "transaction"
     assert event["template"] == "quickReply"
 

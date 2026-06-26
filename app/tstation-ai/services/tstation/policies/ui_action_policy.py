@@ -595,6 +595,36 @@ def build_preview_tool_mapped_event(
     return mapped_event
 
 
+def build_store_availability_followup_preview_event(
+    *,
+    search_input: Mapping[str, Any],
+    search_result: Mapping[str, Any],
+    preview_input: Mapping[str, Any],
+    preview_result: Mapping[str, Any],
+    template_builder: Callable[[list[dict[str, Any]], str], dict[str, Any] | None],
+    product_keyword: str,
+    tire_size: str,
+    ord_qty: int,
+    store_name: str,
+    fallback_event: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    intro_text = f"{product_keyword} {tire_size} {ord_qty}개 기준으로 {store_name} 장착 가능 여부를 확인했어요."
+    mapped_event = template_builder(
+        [
+            {"tool": "search_product_tool", "args": dict(search_input), "data": dict(search_result)},
+            {"tool": "transaction_store_preview_tool", "args": dict(preview_input), "data": dict(preview_result)},
+        ],
+        intro_text,
+    )
+    if not isinstance(mapped_event, dict):
+        mapped_event = dict(fallback_event or cta_missing_slot_event("location"))
+    else:
+        mapped_event = dict(mapped_event)
+    mapped_event["source_domain"] = "transaction"
+    mapped_event["assistant_response_source"] = "code_store_availability_size_followup"
+    return mapped_event
+
+
 def build_cta_preview_contract_gate(
     *,
     user_text: str,

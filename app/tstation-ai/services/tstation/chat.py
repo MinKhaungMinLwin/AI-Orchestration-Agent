@@ -129,6 +129,7 @@ from services.tstation.policies.ui_action_policy import (
     build_staggered_vehicle_tire_selection_event,
     build_pure_inventory_stock_cta_payload,
     build_preview_tool_mapped_event,
+    build_store_availability_followup_preview_event,
     build_store_availability_quantity_prompt_event,
     has_staggered_vehicle_tire_sizes,
     is_manual_tire_size_input_selection,
@@ -6603,6 +6604,13 @@ def _build_support_faq_policy_event(
             "사진만으로는 마모 상태, 교체 필요 여부, 주행 안전을 확정할 수 없어요.\n"
             "가까운 티스테이션 매장이나 전문 점검으로 마모도와 손상 여부를 함께 확인해 주세요."
         ),
+        # TODO(tire_condition_photo_policy, after CTA refactor):
+        # - Expand this invariant to include:
+        #   1) "사진/파일 첨부가 필요한 경우 1:1 문의를 통해 등록"
+        #   2) "마모도 측정 서비스" explicit guidance
+        # - Keep this policy guidance before any RAG/source summary.
+        # - When CTA registry refactor lands, add 1:1 문의하기 / 마모도 측정 서비스 CTA
+        #   instead of overloading the body text further.
     }
     followup_by_intent = {
         "tire_manufacture_date_policy": "제조일자만으로 교환이나 환불을 단정하지 말고, 필요하면 제품 상태와 구매 이력도 함께 확인해 주세요.",
@@ -27482,21 +27490,19 @@ class TStationChatServiceV2:
                             "tool": "transaction_store_preview_tool",
                             "source_domain": "transaction",
                         })
-                        intro = f"{preferred_keyword} {tire_size} {ord_qty}개 기준으로 {store_name} 장착 가능 여부를 확인했어요."
-                        mapped_event = try_build_template(
-                            [
-                                {"tool": "search_product_tool", "args": tool_input, "data": search_result},
-                                {
-                                    "tool": "transaction_store_preview_tool",
-                                    "args": preview_input,
-                                    "data": preview_result,
-                                },
-                            ],
-                            intro,
+                        mapped_event = build_store_availability_followup_preview_event(
+                            search_input=tool_input,
+                            search_result=search_result,
+                            preview_input=preview_input,
+                            preview_result=preview_result,
+                            template_builder=try_build_template,
+                            product_keyword=preferred_keyword,
+                            tire_size=tire_size,
+                            ord_qty=int(ord_qty),
+                            store_name=store_name,
+                            fallback_event=build_store_availability_quantity_prompt_event(**followup_action["prompt_kwargs"]),
                         )
                         if mapped_event is not None:
-                            mapped_event["source_domain"] = MultiAgentDomain.Domain.TRANSACTION.value
-                            mapped_event["assistant_response_source"] = "code_store_availability_size_followup"
                             stock_event = _finalize_direct_code_event(
                                 mapped_event,
                                 turn_contract=turn_contract,
@@ -27505,14 +27511,7 @@ class TStationChatServiceV2:
                                 required_tools=("search_product_tool", "transaction_store_preview_tool"),
                             )
                             return (emitted_events, stock_event) if stock_event is not None else None
-                        fallback_event = _finalize_direct_code_event(
-                            build_store_availability_quantity_prompt_event(**followup_action["prompt_kwargs"]),
-                            turn_contract=turn_contract,
-                            intent="stock_store_search",
-                            source="code_store_availability_size_followup_fallback",
-                            required_tools=("search_product_tool", "transaction_store_preview_tool"),
-                        )
-                        return (emitted_events, fallback_event) if fallback_event is not None else None
+                        return None
 
                     if _is_coupon_discount_amount_context(initial_slots):
                         tire_size = str(tool_input.get("size") or "")
