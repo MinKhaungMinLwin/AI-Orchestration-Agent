@@ -1687,6 +1687,13 @@ def response_contract_violations(
     )
     if assurance_service_violation is not None:
         violations.append(assurance_service_violation)
+    tire_condition_photo_violation = _tire_condition_photo_policy_contract_violation(
+        user_text=user_text,
+        assistant_response_text=assistant_response_text,
+        contract=contract,
+    )
+    if tire_condition_photo_violation is not None:
+        violations.append(tire_condition_photo_violation)
     faq_first_support_violation = _faq_first_support_policy_contract_violation(
         user_text=user_text,
         assistant_response_text=assistant_response_text,
@@ -2304,7 +2311,6 @@ _FAQ_FIRST_SUPPORT_POLICY_INTENTS = {
     "reservation_policy_guidance",
     "installation_work_policy",
     "promotion_gift_policy",
-    "tire_condition_photo_policy",
 }
 
 _FAQ_SOURCE_TOOLS = frozenset({"get_faq_tool", "search_faq_rag_tool", "search_faq_hybrid_tool"})
@@ -2402,6 +2408,46 @@ def _requires_upload_capability_notice(user_text: str | None) -> bool:
     if _NON_UPLOAD_IMAGE_LOOKUP_RE.search(text):
         return False
     return bool(_USER_UPLOAD_REQUEST_RE.search(text))
+
+
+def _tire_condition_photo_policy_contract_violation(
+    *,
+    user_text: str | None = None,
+    assistant_response_text: str | None,
+    contract: TurnContract | None,
+) -> dict[str, Any] | None:
+    if contract is None or str(contract.intent or "") != "tire_condition_photo_policy":
+        return None
+    assistant_text = str(assistant_response_text or "").strip()
+    normalized_text = re.sub(r"\s+", "", assistant_text)
+    if _requires_upload_capability_notice(user_text):
+        has_upload_notice = any(token in normalized_text for token in ("업로드", "첨부", "파일"))
+        if not has_upload_notice:
+            return {
+                "type": "upload_capability_notice_missing",
+                "assistant_response_text": assistant_text[:160],
+                "severity": "error",
+            }
+    if re.search(r"(더\s*타도\s*돼|주행\s*가능|안전합니다)", assistant_text, re.IGNORECASE):
+        return {
+            "type": "tire_condition_photo_policy_safety_assertion_without_verification",
+            "assistant_response_text": assistant_text,
+            "severity": "error",
+        }
+    has_photo_limit = any(token in normalized_text for token in ("사진만으로는", "사진만으로", "판단불가", "확정할수없"))
+    has_qna_registration = "1:1문의" in normalized_text or "1대1문의" in normalized_text
+    has_measurement_or_inspection = (
+        "마모도측정서비스" in normalized_text
+        or ("마모도" in normalized_text and "측정" in normalized_text)
+        or "매장점검" in normalized_text
+        or "전문점검" in normalized_text
+    )
+    if not (has_photo_limit and has_qna_registration and has_measurement_or_inspection):
+        return {
+            "type": "tire_condition_photo_policy_missing_required_guidance",
+            "assistant_response_text": assistant_text,
+        }
+    return None
 
 
 def _faq_first_support_policy_contract_violation(

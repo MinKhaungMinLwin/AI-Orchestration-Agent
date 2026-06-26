@@ -47,6 +47,7 @@ from services.tstation.agents.e_support_agent.tools import (
     current_support_policy_intent,
 )
 from services.tstation.chat import (
+    _DIRECT_SUPPORT_FAQ_POLICY_INTENTS,
     _FALLBACK_COUPON,
     _FALLBACK_GENERIC,
     _FALLBACK_LEADING_PROGRESS,
@@ -357,6 +358,7 @@ from services.tstation.policies.transaction_response_policy import decide_transa
 from services.tstation.policies.support_response_policy import decide_support_response
 from services.tstation.policies.response_decision import ResponseDecision, ResponseShape, TemplateName, ToolPlan
 from services.tstation.policies.turn_contract import (
+    _FAQ_FIRST_SUPPORT_POLICY_INTENTS,
     TurnContract,
     build_required_slot_clarification_event,
     build_response_policy_guard_event,
@@ -17558,7 +17560,7 @@ def test_tire_condition_photo_policy_rejects_safety_assertion_after_faq() -> Non
 
     violations = response_contract_violations(
         template="quickReply",
-        called_tools=["search_faq_hybrid_tool"],
+        called_tools=[],
         assistant_response_text="사진상으로는 더 타도 돼 보여요.",
         contract=contract,
     )
@@ -17582,7 +17584,7 @@ def test_tire_condition_photo_policy_requires_upload_capability_notice() -> None
     violations = response_contract_violations(
         template="quickReply",
         user_text="사진 보낼 테니까 더 타도 되는지 봐줘",
-        called_tools=["search_faq_hybrid_tool"],
+        called_tools=[],
         assistant_response_text="타이어 상태는 사진만으로 안전 여부를 확정하기 어렵고, 점검 기준을 함께 확인해야 해요.",
         contract=contract,
     )
@@ -21919,6 +21921,11 @@ def test_support_faq_policy_event_for_tire_condition_photo_includes_upload_limit
     assert "마모도 측정 서비스 또는 가까운 티스테이션 매장 점검으로 확인해 주세요." in response
     assert "타이어 점검은 마모도와 손상 여부를 함께 확인하는 것이 좋습니다." not in response
     assert _labels(event["data"]["quickReplies"]) == ["가까운 매장 찾기", "1:1 문의하기", "처음으로"]
+
+
+def test_tire_condition_photo_policy_is_direct_fixed_response_intent() -> None:
+    assert "tire_condition_photo_policy" in _DIRECT_SUPPORT_FAQ_POLICY_INTENTS
+    assert "tire_condition_photo_policy" not in _FAQ_FIRST_SUPPORT_POLICY_INTENTS
 
 
 def test_support_faq_policy_event_for_assurance_service_surfaces_core_conditions_first() -> None:
