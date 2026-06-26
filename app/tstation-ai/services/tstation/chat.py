@@ -118,6 +118,7 @@ from services.tstation.policies.ui_action_policy import (
     build_other_store_context_enrichment_input,
     build_other_store_preview_metadata,
     build_cta_preview_template_context,
+    cta_preview_input_from_slots,
     build_quickreply_cta_clarification_event,
     chip_context_dict,
     chip_value,
@@ -5646,13 +5647,6 @@ _BOOKING_PREVIEW_CHIPS = [
         "metadata": {"intentKey": "today_install"},
     },
 ]
-def _store_area_hint_from_name(store_name: str | None) -> str:
-    text = str(store_name or "").strip()
-    text = re.sub(r"^(?:티스테이션|더타이어샵)\s*", "", text)
-    text = re.sub(r"(?:점|센터|지점)\s*$", "", text)
-    return text.strip()
-
-
 _AFFIRMATIVE_REPLY_RE = re.compile(r"^\s*(?:응|네|예|좋아|ㅇㅇ|그래|진행해|검색해줘)\s*$", re.IGNORECASE)
 _CURRENT_LOCATION_STORE_SEARCH_PROMPT_RE = re.compile(
     r"현재\s*위치\s*기반.*(?:가까운|주변)\s*매장\s*검색.*(?:진행|해드릴까요|할까요)|"
@@ -5701,72 +5695,6 @@ def _cta_missing_slot_event(missing_slot: str) -> dict:
         },
     }
 
-
-def _cta_preview_input_from_slots(
-    slots: Any,
-    *,
-    cta_context: dict[str, Any] | None = None,
-    other_store_search: bool = False,
-) -> tuple[dict[str, Any] | None, str | None]:
-    context = cta_context or {}
-    canonical_context = canonical_context_from_template_boundary(context)
-    goods_no = getattr(slots, "goods_no", None) or canonical_context.get("goods_no")
-    ord_qty_value = getattr(slots, "ord_qty", None) or canonical_context.get("ord_qty")
-    if not goods_no:
-        return None, "product"
-    if not ord_qty_value:
-        return None, "quantity"
-    store_context = store_context_from_mapping(context)
-    has_location = (
-        getattr(slots, "region", None)
-        or getattr(slots, "shop_name", None)
-        or getattr(slots, "shop_id", None)
-        or store_context.get("shop_name")
-        or (store_context.get("xpos") is not None and store_context.get("ypos") is not None)
-    )
-    if not has_location:
-        return None, "location"
-    try:
-        ord_qty = int(ord_qty_value)
-    except (TypeError, ValueError):
-        return None, "quantity"
-    preview_input: dict[str, Any] = {
-        "goods_no": str(goods_no),
-        "ord_qty": ord_qty,
-        "include_price": True,
-    }
-    if other_store_search:
-        excluded_shop_ids: list[str] = []
-        if store_context.get("shop_id"):
-            excluded_shop_ids.append(str(store_context["shop_id"]))
-        elif getattr(slots, "shop_id", None):
-            excluded_shop_ids.append(str(slots.shop_id))
-        if store_context.get("xpos") is not None and store_context.get("ypos") is not None:
-            preview_input["user_xpos"] = float(store_context["xpos"])
-            preview_input["user_ypos"] = float(store_context["ypos"])
-            preview_input["radius_km"] = 20.0
-        else:
-            area_hint = _store_area_hint_from_name(str(store_context.get("shop_name") or getattr(slots, "shop_name", "") or ""))
-            if area_hint:
-                preview_input["region_code"] = area_hint
-            elif getattr(slots, "region", None):
-                preview_input["region_code"] = slots.region
-            else:
-                return None, "location"
-        if excluded_shop_ids:
-            preview_input["exclude_shop_ids"] = excluded_shop_ids
-        preview_input["stock_check_mode"] = "inventory_only"
-    elif getattr(slots, "region", None):
-        preview_input["region_code"] = slots.region
-    elif getattr(slots, "shop_name", None):
-        preview_input["store_nm"] = slots.shop_name
-    elif store_context.get("shop_name"):
-        preview_input["store_nm"] = str(store_context["shop_name"])
-    if str(context.get("followupMode") or "") == "logistics_earliest_install_date":
-        preview_input["stock_check_mode"] = "logistics_only"
-    if getattr(slots, "requested_cal_day", None):
-        preview_input["requested_cal_day"] = slots.requested_cal_day
-    return preview_input, None
 def _sanitize_transaction_cta_contracts(event_data: dict[str, Any], *, source_domain: str) -> bool:
     if source_domain != MultiAgentDomain.Domain.TRANSACTION.value:
         return False
@@ -22544,7 +22472,7 @@ class TStationChatServiceV2:
                             store_context,
                         )
 
-                preview_input, missing_slot = _cta_preview_input_from_slots(
+                preview_input, missing_slot = cta_preview_input_from_slots(
                     merged_slots,
                     cta_context=enriched_cta_context,
                     other_store_search=True,
@@ -22667,7 +22595,7 @@ class TStationChatServiceV2:
                     {k: v for k, v in merged_slots.model_dump().items() if v not in (None, "", [], {})},
                     logistics_cta_metadata,
                 )
-                preview_input, missing_slot = _cta_preview_input_from_slots(
+                preview_input, missing_slot = cta_preview_input_from_slots(
                     merged_slots,
                     cta_context=enriched_cta_context,
                 )
@@ -22789,7 +22717,7 @@ class TStationChatServiceV2:
                     {k: v for k, v in before_cta_slots.items() if v not in (None, "", [], {})},
                     {k: v for k, v in merged_slots.model_dump().items() if v not in (None, "", [], {})},
                 )
-                preview_input, missing_slot = _cta_preview_input_from_slots(merged_slots)
+                preview_input, missing_slot = cta_preview_input_from_slots(merged_slots)
                 if missing_slot is not None:
                     missing_event = _cta_missing_slot_event(missing_slot)
                     guard_text = str((missing_event.get("data") or {}).get("assistantResponse") or "")

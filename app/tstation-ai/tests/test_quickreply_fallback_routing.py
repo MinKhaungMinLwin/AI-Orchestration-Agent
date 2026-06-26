@@ -337,7 +337,6 @@ from services.tstation.chat import (
     _sanitize_transaction_cta_contracts,
     _is_current_location_store_search_confirmation,
     _has_active_transaction_action_context,
-    _cta_preview_input_from_slots,
     _support_fast_path,
     MultiAgentDomain,
     StreamingMultiAgentCoordinator,
@@ -387,6 +386,7 @@ from services.tstation.policies.ui_action_policy import (
     apply_logistics_earliest_install_cta_action,
     apply_preview_update_cta_action,
     apply_ui_action_slot_patch,
+    cta_preview_input_from_slots,
     build_other_store_context_enrichment_input,
     build_other_store_preview_metadata,
     build_cta_preview_template_context,
@@ -758,7 +758,7 @@ def test_cta_preview_input_uses_recovered_region_and_requested_day() -> None:
         availability_intent="today_install",
     )
 
-    preview_input, missing_slot = _cta_preview_input_from_slots(slots)
+    preview_input, missing_slot = cta_preview_input_from_slots(slots)
 
     assert missing_slot is None
     assert preview_input == {
@@ -771,7 +771,7 @@ def test_cta_preview_input_uses_recovered_region_and_requested_day() -> None:
 
 
 def test_cta_preview_input_uses_template_boundary_alias_context() -> None:
-    preview_input, missing_slot = _cta_preview_input_from_slots(
+    preview_input, missing_slot = cta_preview_input_from_slots(
         ConversationSlots(region="서울", requested_cal_day="20260618"),
         cta_context={
             "goodsId": "G000000317729",
@@ -868,7 +868,7 @@ def test_build_cta_preview_template_context_includes_excluded_ids_and_action_mod
 
 
 def test_cta_preview_input_uses_canonical_store_context_from_template_aliases() -> None:
-    preview_input, missing_slot = _cta_preview_input_from_slots(
+    preview_input, missing_slot = cta_preview_input_from_slots(
         ConversationSlots(requested_cal_day="20260618"),
         cta_context={
             "goodsId": "G000000317729",
@@ -893,7 +893,7 @@ def test_cta_preview_input_uses_canonical_store_context_from_template_aliases() 
 def test_cta_preview_input_reports_missing_location_without_generic_guard() -> None:
     slots = ConversationSlots(goods_no="G000000317729", ord_qty=4)
 
-    preview_input, missing_slot = _cta_preview_input_from_slots(slots)
+    preview_input, missing_slot = cta_preview_input_from_slots(slots)
 
     assert preview_input is None
     assert missing_slot == "location"
@@ -20380,7 +20380,7 @@ def test_logistics_earliest_install_cta_context_builds_preview_tool_input() -> N
         goal_type="store_with_stock",
     )
 
-    preview_input, missing_slot = _cta_preview_input_from_slots(
+    preview_input, missing_slot = cta_preview_input_from_slots(
         slots,
         cta_context={
             "goodsNo": "G000000317735",
@@ -20461,7 +20461,7 @@ def test_other_store_cta_preview_uses_previous_store_radius_and_excludes_current
         availability_intent="today_install",
     )
 
-    preview_input, missing_slot = _cta_preview_input_from_slots(
+    preview_input, missing_slot = cta_preview_input_from_slots(
         slots,
         cta_context={
             "goodsNo": "G000000317735",

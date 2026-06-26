@@ -239,6 +239,82 @@ def build_cta_preview_template_context(
     return context
 
 
+def _store_area_hint_from_name(store_name: str | None) -> str:
+    text = str(store_name or "").strip()
+    text = re.sub(r"^(?:티스테이션|더타이어샵)\s*", "", text)
+    text = re.sub(r"(?:점|센터|지점)\s*$", "", text)
+    return text.strip()
+
+
+def cta_preview_input_from_slots(
+    slots: Any,
+    *,
+    cta_context: Mapping[str, Any] | None = None,
+    other_store_search: bool = False,
+) -> tuple[dict[str, Any] | None, str | None]:
+    context = cta_context or {}
+    canonical_context = canonical_context_from_template_boundary(context)
+    goods_no = getattr(slots, "goods_no", None) or canonical_context.get("goods_no")
+    ord_qty_value = getattr(slots, "ord_qty", None) or canonical_context.get("ord_qty")
+    if not goods_no:
+        return None, "product"
+    if not ord_qty_value:
+        return None, "quantity"
+    store_context = store_context_from_mapping(context)
+    has_location = (
+        getattr(slots, "region", None)
+        or getattr(slots, "shop_name", None)
+        or getattr(slots, "shop_id", None)
+        or store_context.get("shop_name")
+        or (store_context.get("xpos") is not None and store_context.get("ypos") is not None)
+    )
+    if not has_location:
+        return None, "location"
+    try:
+        ord_qty = int(ord_qty_value)
+    except (TypeError, ValueError):
+        return None, "quantity"
+    preview_input: dict[str, Any] = {
+        "goods_no": str(goods_no),
+        "ord_qty": ord_qty,
+        "include_price": True,
+    }
+    if other_store_search:
+        excluded_shop_ids: list[str] = []
+        if store_context.get("shop_id"):
+            excluded_shop_ids.append(str(store_context["shop_id"]))
+        elif getattr(slots, "shop_id", None):
+            excluded_shop_ids.append(str(slots.shop_id))
+        if store_context.get("xpos") is not None and store_context.get("ypos") is not None:
+            preview_input["user_xpos"] = float(store_context["xpos"])
+            preview_input["user_ypos"] = float(store_context["ypos"])
+            preview_input["radius_km"] = 20.0
+        else:
+            area_hint = _store_area_hint_from_name(
+                str(store_context.get("shop_name") or getattr(slots, "shop_name", "") or "")
+            )
+            if area_hint:
+                preview_input["region_code"] = area_hint
+            elif getattr(slots, "region", None):
+                preview_input["region_code"] = slots.region
+            else:
+                return None, "location"
+        if excluded_shop_ids:
+            preview_input["exclude_shop_ids"] = excluded_shop_ids
+        preview_input["stock_check_mode"] = "inventory_only"
+    elif getattr(slots, "region", None):
+        preview_input["region_code"] = slots.region
+    elif getattr(slots, "shop_name", None):
+        preview_input["store_nm"] = slots.shop_name
+    elif store_context.get("shop_name"):
+        preview_input["store_nm"] = str(store_context["shop_name"])
+    if str(context.get("followupMode") or "") == "logistics_earliest_install_date":
+        preview_input["stock_check_mode"] = "logistics_only"
+    if getattr(slots, "requested_cal_day", None):
+        preview_input["requested_cal_day"] = slots.requested_cal_day
+    return preview_input, None
+
+
 def _normalize_vehicle_contract_intent(intent: str | None) -> str:
     normalized = str(intent or "").strip()
     if normalized == "vehicle_information":
