@@ -2530,7 +2530,7 @@ def test_general_cancel_fee_policy_contract_rejects_order_lookup_and_order_detai
 
 def test_order_cancel_request_and_status_remain_separate_from_fee_inquiry() -> None:
     cancel_frame = build_transaction_intent_frame("예약 취소해줘")
-    status_frame = build_transaction_intent_frame("주문 취소됐어?")
+    status_frame = build_transaction_intent_frame("내 주문 취소됐어?")
 
     assert cancel_frame.intent == "order_cancel_request"
     assert decide_transaction_response(
@@ -2545,11 +2545,9 @@ def test_order_cancel_request_and_status_remain_separate_from_fee_inquiry() -> N
     "user_text",
     [
         "O202606170019357 주문취소된거 맞지?",
-        "취소 완료됐어?",
-        "취소 처리됐어?",
-        "취소 상태 확인해줘",
-        "카드 취소 승인됐어?",
-        "결제 취소됐어?",
+        "내 주문 카드 취소됐는지 확인해줘",
+        "방금 취소한 주문 환불 상태 봐줘",
+        "주문번호 123456 카드 승인취소 됐어?",
     ],
 )
 def test_order_cancel_status_lookup_query_is_not_cancel_request(user_text: str) -> None:
@@ -2570,6 +2568,33 @@ def test_order_cancel_status_lookup_query_is_not_cancel_request(user_text: str) 
     assert "direct_cancel_unavailable_guidance" in response_decision.forbidden_behaviors
 
 
+@pytest.mark.parametrize(
+    "user_text",
+    [
+        "취소 완료 문자 받았는데 카드 승인 취소 언제 돼?",
+        "카드 승인취소는 보통 며칠 걸려?",
+        "주문 취소하면 카드 환불 언제 돼?",
+        "결제 취소 반영 기간 알려줘",
+    ],
+)
+def test_general_card_cancel_timing_policy_does_not_route_to_owned_order_lookup(user_text: str) -> None:
+    frame = build_transaction_intent_frame(user_text)
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text=user_text,
+        known_slots=dict(frame.known_slots),
+    )
+    support_response = decide_support_response(intent=frame.intent, user_text=user_text, known_slots=dict(frame.known_slots))
+
+    assert frame.intent == "general_card_cancel_timing_policy"
+    assert tool_plan.allowed_tools == ("search_faq_hybrid_tool",)
+    assert "get_orders_of_user_tool" in tool_plan.forbidden_tools
+    assert "get_order_status_tool" in tool_plan.forbidden_tools
+    assert response_decision.metadata["response_shape_key"] == "general_card_cancel_timing_policy"
+    assert support_response.metadata["response_shape_key"] == "general_card_cancel_timing_policy"
+
+
 def test_order_cancel_status_lookup_with_order_no_prefers_status_tool() -> None:
     frame = build_transaction_intent_frame("O202606170019357 주문취소된거 맞지?")
     tool_plan = plan_transaction_tools(frame)
@@ -2578,6 +2603,39 @@ def test_order_cancel_status_lookup_with_order_no_prefers_status_tool() -> None:
     assert frame.known_slots["order_no"] == "O202606170019357"
     assert tool_plan.preferred_tool == "get_order_status_tool"
     assert tool_plan.tool_args_patch == {"query_no": "O202606170019357"}
+
+
+def test_general_card_cancel_timing_policy_contract_blocks_order_lookup_tools() -> None:
+    frame = build_transaction_intent_frame("취소 완료 문자 받았는데 카드 승인 취소 언제 돼?")
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text="취소 완료 문자 받았는데 카드 승인 취소 언제 돼?",
+        known_slots=dict(frame.known_slots),
+    )
+    contract = build_turn_contract(
+        user_text="취소 완료 문자 받았는데 카드 승인 취소 언제 돼?",
+        intent_frame=frame,
+        tool_plan=plan_transaction_tools(frame),
+        response_decision=response_decision,
+    )
+
+    violations = response_contract_violations(
+        template="quickReply",
+        assistant_response_text="주문 상태를 확인해보니 현재 취소 완료로 확인돼요.",
+        response_shape_key="order_cancel_status_summary",
+        called_tools=["get_orders_of_user_tool"],
+        contract=contract,
+    )
+
+    assert contract.intent == "general_card_cancel_timing_policy"
+    assert contract.domain == "support"
+    assert "get_orders_of_user_tool" in contract.forbidden_tools
+    assert {
+        "type": "general_card_cancel_timing_policy_used_order_lookup",
+        "called_tools": ["get_orders_of_user_tool"],
+        "response_shape_key": "order_cancel_status_summary",
+        "severity": "error",
+    } in violations
 
 
 def test_cancel_status_selector_auto_selects_single_cancelled_order_without_order_no() -> None:

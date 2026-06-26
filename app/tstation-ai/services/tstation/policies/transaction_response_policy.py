@@ -72,6 +72,8 @@ def decide_transaction_response(
         return _decide_order_arrival_status_lookup()
     if intent == "order_cancel_status_lookup":
         return _decide_order_cancel_status_lookup()
+    if intent == "general_card_cancel_timing_policy":
+        return _decide_general_card_cancel_timing_policy()
     if intent == "owned_order_cancel_fee_inquiry":
         return _decide_owned_order_cancel_fee_inquiry()
     if intent == "general_cancel_fee_policy":
@@ -522,6 +524,25 @@ def _decide_order_cancel_status_lookup() -> ResponseDecision:
             "이미 취소됐는지 또는 결제/카드 취소가 승인됐는지 확인하는 상태 조회다. 주문번호가 있으면 "
             "get_order_status_tool(query_no=...)을 우선 호출하고, 없으면 get_orders_of_user_tool로 최근 주문을 확인하거나 "
             "주문내역 CTA를 안내한다. '제가 직접 주문을 취소 처리할 수는 없어요' 같은 취소 실행 불가 안내로 정규화하지 않는다."
+        ),
+    )
+
+
+def _decide_general_card_cancel_timing_policy() -> ResponseDecision:
+    return _decision(
+        response_shape_key="general_card_cancel_timing_policy",
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        forbidden_behaviors=(
+            "start_owned_order_lookup",
+            "recent_order_auto_selection",
+            "order_cancel_request_normalizer",
+            "direct_cancel_unavailable_guidance",
+        ),
+        assistant_guidance=(
+            "취소 완료 후 카드 승인취소/환불 반영 기간을 묻는 일반 정책 문의다. 주문번호, 내 주문/내역, 상태 조회 요청 같은 "
+            "owned-order anchor가 없으면 get_orders_of_user_tool, get_order_status_tool, quick_order_tool을 호출하지 않는다. "
+            "카드사·결제수단별 반영 기간을 먼저 설명하고, 주문내역 확인 또는 1:1 문의 CTA는 보조로만 제공한다."
         ),
     )
 

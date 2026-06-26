@@ -371,6 +371,9 @@ def build_turn_contract(
     if code_intent == "maintenance_history_access_policy" or planner_intent == "maintenance_history_access_policy":
         domain = "support"
         intent = "maintenance_history_access_policy"
+    if code_intent == "general_card_cancel_timing_policy" or planner_intent == "general_card_cancel_timing_policy":
+        domain = "support"
+        intent = "general_card_cancel_timing_policy"
     if _is_discovery_event_content_contract(routing_result, planner_intent, code_intent):
         domain = "discovery"
         intent = planner_intent if planner_intent in {
@@ -503,6 +506,16 @@ def build_turn_contract(
                 "issue_coupon_tool",
                 "get_my_coupons_tool",
                 "get_coupon_applicable_products_tool",
+            ),
+        )
+    if intent == "general_card_cancel_timing_policy":
+        forbidden_tools = _merge_tuple(
+            forbidden_tools,
+            (
+                "get_orders_of_user_tool",
+                "get_order_status_tool",
+                "get_my_reservations_tool",
+                "quick_order_tool",
             ),
         )
 
@@ -1534,6 +1547,14 @@ def response_contract_violations(
     )
     if order_cancel_status_violation is not None:
         violations.append(order_cancel_status_violation)
+    general_card_cancel_timing_violation = _general_card_cancel_timing_policy_contract_violation(
+        assistant_response_text=assistant_response_text,
+        response_shape_key=response_shape_key,
+        called_tools=called_tools,
+        contract=contract,
+    )
+    if general_card_cancel_timing_violation is not None:
+        violations.append(general_card_cancel_timing_violation)
     order_cancel_fee_violation = _order_cancel_fee_inquiry_contract_violation(
         assistant_response_text=assistant_response_text,
         response_shape_key=response_shape_key,
@@ -2135,6 +2156,32 @@ def _order_cancel_status_contract_violation(
             "type": "order_cancel_status_without_order_lookup",
             "response_shape_key": str(response_shape_key or ""),
             "called_tools": sorted(tools),
+        }
+    return None
+
+
+def _general_card_cancel_timing_policy_contract_violation(
+    *,
+    assistant_response_text: str | None,
+    response_shape_key: str | None,
+    called_tools: list[str] | tuple[str, ...] | None,
+    contract: TurnContract | None,
+) -> dict[str, Any] | None:
+    if contract is None or str(contract.intent or "") != "general_card_cancel_timing_policy":
+        return None
+    tools = {str(tool) for tool in tuple(called_tools or ()) if str(tool).strip()}
+    blocked_tools = sorted(tools & {"get_orders_of_user_tool", "get_order_status_tool", "quick_order_tool"})
+    if blocked_tools:
+        return {
+            "type": "general_card_cancel_timing_policy_used_order_lookup",
+            "called_tools": blocked_tools,
+            "response_shape_key": str(response_shape_key or ""),
+        }
+    response_text = str(assistant_response_text or "")
+    if str(response_shape_key or "") == "order_cancel_status_summary" or "주문 상태를 확인해보니" in response_text:
+        return {
+            "type": "general_card_cancel_timing_policy_normalized_as_order_status_lookup",
+            "response_shape_key": str(response_shape_key or ""),
         }
     return None
 

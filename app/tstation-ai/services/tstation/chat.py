@@ -661,6 +661,7 @@ class MultiAgentDomain(BaseModel):
         "regional_price_policy",
         "price_policy_faq",
         "payment_error_troubleshooting",
+        "general_card_cancel_timing_policy",
         "signup_first_purchase_benefit_policy",
         "signup_coupon_guidance",
         "partner_member_coupon_policy",
@@ -1844,6 +1845,7 @@ class _SlimMultiAgentDomain(BaseModel):
         "regional_price_policy",
         "price_policy_faq",
         "payment_error_troubleshooting",
+        "general_card_cancel_timing_policy",
         "signup_first_purchase_benefit_policy",
         "signup_coupon_guidance",
         "partner_member_coupon_policy",
@@ -2037,6 +2039,7 @@ Complaint routing rule:
    - "regional_price_policy": 서울/제주 등 지역에 따라 최종가가 달라지는 정책 설명
    - "price_policy_faq": generic pricing policy FAQ that is not a live price lookup
    - "payment_error_troubleshooting": 결제 진행 중 오류/결제창 또는 결제 화면 문제/결제 진행 불가/장착일 선택란 미노출 등 checkout troubleshooting
+   - "general_card_cancel_timing_policy": 취소 완료 후 카드 승인취소/환불 반영 기간 안내. 주문 특정 없는 일반 정책 문의이며 owned-order 조회가 아님.
    - "signup_first_purchase_benefit_policy": 회원가입/신규회원/첫구매 혜택·쿠폰·서비스 안내. FAQ/RAG 정책 설명이며 내 쿠폰 조회/직접 발급이 아님.
    - "signup_coupon_guidance": 회원가입 전용/신규회원/웰컴 쿠폰 문의. 보유 쿠폰 조회가 아니라 가입 혜택/진행 중 혜택 안내.
    - "partner_member_coupon_policy": 제휴회원/제휴사/복지몰/임직원 전용 쿠폰·혜택 접근 조건 안내. 보유 쿠폰 조회가 아니라 제휴 전용 접속 경로/권한/기간 정책 안내.
@@ -2303,6 +2306,7 @@ Also set `policy_intent`:
 - regional final-price difference policy (서울 vs 제주 등) → `regional_price_policy`
 - generic pricing policy FAQ → `price_policy_faq`
 - checkout/payment troubleshooting (payment error, payment window/screen problem, payment cannot proceed, install-date selector missing during checkout) → SUPPORT, policy_intent=`payment_error_troubleshooting`
+- card cancel/refund timing policy without owned-order anchor ("취소 완료 문자 받았는데 카드 승인 취소 언제 돼?", "카드 승인취소는 보통 며칠 걸려?", "결제 취소 반영 기간 알려줘") → SUPPORT, policy_intent=`general_card_cancel_timing_policy`; do not start owned-order lookup unless the current turn includes an order number, "내 주문", "내역 봐줘", or another owned-order anchor.
 - signup/new-member/first-purchase benefit explanation ("회원가입하면 첫구매 혜택은 뭐가 있어?", "신규회원 혜택 알려줘", "가입하면 받을 수 있는 쿠폰 뭐야?") → SUPPORT, policy_intent=`signup_first_purchase_benefit_policy`; this is FAQ/RAG policy guidance, not owned coupon lookup or coupon issuance.
 - signup/new-member/welcome coupon guidance ("회원가입 전용 쿠폰 있어?", "신규회원 쿠폰 있어?", "가입하면 쿠폰 줘?", "웰컴 쿠폰 있나요?") → SUPPORT, policy_intent=`signup_coupon_guidance`; this is signup coupon guidance, not partner-member coupon policy and not owned coupon lookup.
 - partner-member-only coupon guidance ("제휴회원에게만 제공되는 쿠폰 보여줘", "제휴사 회원 전용 쿠폰 있어?", "복지몰 쿠폰 보여줘", "임직원 전용 쿠폰 안내해줘") → SUPPORT, policy_intent=`partner_member_coupon_policy`; this is access/policy guidance, not owned coupon lookup, coupon issuance, or coupon box listing.
@@ -6778,6 +6782,33 @@ def _build_signup_coupon_guidance_event(user_query: str) -> dict:
             "metadata": {
                 "responseShapeKey": "signup_coupon_guidance",
                 "signupCouponGuidance": True,
+                "userText": user_query,
+            },
+        },
+    }
+
+
+def _build_general_card_cancel_timing_policy_event(user_query: str) -> dict:
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.SUPPORT.value,
+        "assistant_response_source": "code_general_card_cancel_timing_policy",
+        "data": {
+            "assistantResponse": (
+                "취소 완료 후 카드 승인취소나 환불 반영 시점은 카드사와 결제수단에 따라 달라질 수 있어요.\n\n"
+                "보통은 영업일 기준으로 며칠 정도 소요될 수 있고, 카드 승인내역이나 결제수단별 반영 시점에 따라 실제 표시 시점이 달라질 수 있어요.\n\n"
+                "정확한 반영 여부는 카드사 승인내역이나 주문내역에서 함께 확인해 주세요."
+            ),
+            "quickReplies": [
+                {"label": "주문내역 확인", "domain": "TRANSACTION"},
+                {"label": "1:1 문의하기", "domain": "SUPPORT"},
+                {"label": "처음으로", "domain": "LEADING"},
+            ],
+            "predictedDomains": ["SUPPORT", "TRANSACTION"],
+            "metadata": {
+                "responseShapeKey": "general_card_cancel_timing_policy",
+                "generalCardCancelTimingPolicy": True,
                 "userText": user_query,
             },
         },
@@ -24810,6 +24841,30 @@ class TStationChatServiceV2:
                     },
                 )
             event_data = signup_coupon_event.get("data") if isinstance(signup_coupon_event.get("data"), dict) else {}
+            return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
+
+        if turn_contract and turn_contract.intent == "general_card_cancel_timing_policy":
+            card_cancel_timing_event = _build_general_card_cancel_timing_policy_event(last_user_text)
+            logger.info(
+                "[GENERAL_CARD_CANCEL_TIMING_POLICY] advisory response: text=%r session_id=%s",
+                last_user_text[:80],
+                request.session_id,
+            )
+            if request.stream:
+                return StreamingResponse(
+                    TStationChatServiceV2._stream_policy_guard_response(card_cancel_timing_event),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
+            event_data = (
+                card_cancel_timing_event.get("data")
+                if isinstance(card_cancel_timing_event.get("data"), dict)
+                else {}
+            )
             return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
 
         if turn_contract and turn_contract.intent == "store_visit_advisory":

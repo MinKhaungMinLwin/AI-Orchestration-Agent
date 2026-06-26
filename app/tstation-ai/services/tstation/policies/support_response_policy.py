@@ -20,6 +20,12 @@ _PARTNER_MEMBER_COUPON_POLICY_RE = re.compile(
     r"제휴\s*(?:회원|사|몰|전용)|복지몰|임직원|제휴사|제휴회원|제휴\s*쿠폰|제휴\s*혜택",
     re.IGNORECASE,
 )
+_CARD_CANCEL_TIMING_POLICY_RE = re.compile(
+    r"(?:카드|결제|환불|승인\s*취소|승인취소|취소\s*완료).{0,24}(?:언제|며칠|얼마나|반영|걸려|소요)|"
+    r"(?:언제|며칠|얼마나|반영|걸려|소요).{0,24}(?:카드|결제|환불|승인\s*취소|승인취소)|"
+    r"카드사|승인\s*취소\s*(?:언제|반영|걸려|소요)",
+    re.IGNORECASE,
+)
 _SIGNUP_COUPON_GUIDANCE_RE = re.compile(
     r"회원\s*가입|신규\s*회원|가입(?:하면|시)?|웰컴\s*쿠폰|가입\s*쿠폰|신규\s*가입|첫\s*가입",
     re.IGNORECASE,
@@ -233,6 +239,22 @@ def decide_support_response(
             assistant_guidance=(
                 "결제 오류/결제창/결제 진행 불가 문의는 FAQ hybrid 검색을 먼저 수행하고, FAQ 근거로 시도 가능한 해결 방법을 안내한다. "
                 "1:1 문의는 해결 방법 안내 후에도 문제가 지속될 때 fallback CTA로만 제공한다."
+            ),
+        )
+
+    if intent == "general_card_cancel_timing_policy" or _CARD_CANCEL_TIMING_POLICY_RE.search(text):
+        return _decision(
+            response_shape_key="general_card_cancel_timing_policy",
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=(
+                "start_owned_order_lookup",
+                "claim_specific_refund_completed",
+                "normalize_as_order_status_lookup",
+            ),
+            assistant_guidance=(
+                "카드 승인취소/환불 반영 기간 문의는 일반 정책 안내로 처리한다. 주문번호, 내 주문/상태 조회 같은 owned-order anchor 없이 "
+                "주문 조회를 시작하지 말고, 카드사/결제수단별 반영 기간과 확인 경로를 설명한다."
             ),
         )
 
