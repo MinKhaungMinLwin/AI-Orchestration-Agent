@@ -1176,6 +1176,7 @@ def _has_stored_transaction_context(slots: ConversationSlots) -> bool:
         or context.get("pending_order_context")
         or context.get("dormant_purchase_context")
         or context.get("dormant_stock_context")
+        or context.get("dormant_transaction_context")
     )
 
 
