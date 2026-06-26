@@ -1150,6 +1150,17 @@ class BaseAgent(ABC):
                                             ):
                                                 yield event
                                             return
+                                    guard_events = self._contract_sensitive_tool_guard_events(
+                                        tool_name,
+                                        messages,
+                                        config=config,
+                                        response_streamer=response_streamer,
+                                        answering_emitted=answering_emitted,
+                                    )
+                                    if guard_events is not None:
+                                        for event in guard_events:
+                                            yield event
+                                        return
                                     blocked_event = self._transaction_policy_blocked_event(tool_name, messages)
                                     if blocked_event is not None:
                                         logger.info(
@@ -1914,6 +1925,153 @@ class BaseAgent(ABC):
             "transaction_store_preview_tool": {"location", "datepick", "quickReply"},
         }
         return template in terminal_templates_by_tool.get(tool_name, set())
+
+    @staticmethod
+    def _annotate_contract_tool_block(
+        event: dict[str, Any],
+        *,
+        blocked_tool: str,
+        replacement_tool: str | None,
+        contract_intent: str,
+        allowed_tools: tuple[str, ...],
+        forbidden_tools: tuple[str, ...],
+        block_reason: str,
+    ) -> dict[str, Any]:
+        event["contract_tool_blocked"] = True
+        event["blocked_tool"] = blocked_tool
+        event["replacement_tool"] = replacement_tool or ""
+        event["contract_intent"] = contract_intent
+        event["block_reason"] = block_reason
+        event["allowed_tools"] = list(allowed_tools)
+        event["forbidden_tools"] = list(forbidden_tools)
+        event_data = event.get("data")
+        if isinstance(event_data, dict):
+            metadata = event_data.get("metadata")
+            if not isinstance(metadata, dict):
+                metadata = {}
+                event_data["metadata"] = metadata
+            metadata["contract_tool_blocked"] = True
+            metadata["blocked_tool"] = blocked_tool
+            metadata["replacement_tool"] = replacement_tool or ""
+            metadata["contract_intent"] = contract_intent
+            metadata["block_reason"] = block_reason
+            metadata["allowed_tools"] = list(allowed_tools)
+            metadata["forbidden_tools"] = list(forbidden_tools)
+        return event
+
+    def _contract_sensitive_tool_guard_events(
+        self,
+        tool_name: str,
+        messages: list[dict] | None,
+        *,
+        config: dict | None,
+        response_streamer: "_AssistantResponseStreamer | None",
+        answering_emitted: bool,
+    ) -> list[dict] | None:
+        try:
+            from services.tstation.policies.response_decision import TemplateName
+            from services.tstation.template_mapper import (
+                current_transaction_response_decision,
+                current_transaction_tool_plan,
+            )
+        except Exception:
+            return None
+
+        decision = current_transaction_response_decision.get()
+        tool_plan = current_transaction_tool_plan.get()
+        if decision is None or tool_plan is None or decision.template != TemplateName.QUICK_REPLY:
+            return None
+
+        allowed_tools = tuple(getattr(tool_plan, "allowed_tools", ()) or ())
+        forbidden_tools = tuple(getattr(tool_plan, "forbidden_tools", ()) or ())
+        preferred_tool = str(getattr(tool_plan, "preferred_tool", None) or "")
+        metadata = getattr(tool_plan, "metadata", None) or {}
+        contract_intent = str(metadata.get("response_intent") or "")
+        if not forbidden_tools or preferred_tool != "search_faq_hybrid_tool":
+            return None
+
+        block_reason = ""
+        if tool_name in forbidden_tools:
+            block_reason = "forbidden_tool_for_contract"
+        elif allowed_tools and tool_name not in allowed_tools:
+            block_reason = "tool_not_allowed_for_contract"
+        if not block_reason:
+            return None
+
+        user_query = _latest_user_text(messages or [])
+        logger.info(
+            "[%s] Contract tool guard blocked tool=%s replacement=%s intent=%s reason=%s",
+            self.name,
+            tool_name,
+            preferred_tool,
+            contract_intent,
+            block_reason,
+        )
+
+        try:
+            from services.tstation.agents.e_support_agent.tools import search_faq_hybrid_tool as _search_faq_hybrid_tool
+            from services.tstation.chat import (
+                _build_general_cancel_fee_policy_event,
+                _build_general_card_cancel_timing_policy_event,
+            )
+        except Exception:
+            return None
+
+        tool_input = {"query": user_query}
+        try:
+            raw_tool_result = _search_faq_hybrid_tool.invoke(tool_input)
+        except Exception as exc:
+            logger.exception("[%s] Replacement FAQ tool failed intent=%s", self.name, contract_intent)
+            raw_tool_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+        tool_result = raw_tool_result if isinstance(raw_tool_result, dict) else {"status": "success", "data": raw_tool_result}
+        tool_status = str(tool_result.get("status") or "success")
+        _emit_tool_summary_span(
+            config,
+            tool_name=preferred_tool,
+            tool_input=tool_input,
+            tool_result=tool_result,
+            tool_status=tool_status,
+            latency_ms=None,
+        )
+
+        if contract_intent == "general_cancel_fee_policy":
+            code_event = _build_general_cancel_fee_policy_event(user_query, tool_result=tool_result)
+        elif contract_intent == "general_card_cancel_timing_policy":
+            code_event = _build_general_card_cancel_timing_policy_event(user_query, tool_result=tool_result)
+        else:
+            return None
+        code_event = self._annotate_contract_tool_block(
+            code_event,
+            blocked_tool=tool_name,
+            replacement_tool=preferred_tool,
+            contract_intent=contract_intent,
+            allowed_tools=allowed_tools,
+            forbidden_tools=forbidden_tools,
+            block_reason=block_reason,
+        )
+        return [
+            {
+                "type": "status",
+                "status": "tool_start",
+                "tool": preferred_tool,
+                "display_name": "FAQ 확인 중...",
+            },
+            {
+                "type": "agent_flow",
+                "agent": "[FAQ AF]",
+                "agent_class": self.name,
+                "status": tool_status,
+            },
+            {
+                "type": "tool",
+                "input": tool_input,
+                "output": _sanitize_tool_output_for_sse(tool_result),
+                "slot_data": _slot_data_for_tool_event(preferred_tool, tool_result),
+                "node": "tools",
+                "tool": preferred_tool,
+            },
+            *self._code_template_events(code_event, response_streamer, answering_emitted),
+        ]
 
     @staticmethod
     def _transaction_policy_blocked_event(tool_name: str, messages: list[dict] | None = None) -> dict | None:

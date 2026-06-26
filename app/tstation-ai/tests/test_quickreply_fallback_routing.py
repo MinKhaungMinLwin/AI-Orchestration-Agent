@@ -33,6 +33,7 @@ from services.tstation.agents.b_discovery_agent.agent import (
     DISCOVERY_SEARCH_SYSTEM_PROMPT_TEMPLATE,
 )
 from services.tstation.agents.base_agent import (
+    BaseAgent,
     _build_registered_vehicle_staggered_tire_event,
     _is_staggered_registered_vehicle,
     _registered_vehicle_slot_values,
@@ -401,6 +402,7 @@ from services.tstation.template_mapper import (
     current_pending_intent,
     current_runflat_comparison,
     current_transaction_response_decision,
+    current_transaction_tool_plan,
     current_user_text,
     try_build_template,
 )
@@ -20630,6 +20632,113 @@ def test_direct_faq_policy_tool_payload_builds_transaction_policy_event() -> Non
     assert tool_result["status"] == "success"
     assert event["source_domain"] == "transaction"
     assert event["data"]["metadata"]["responseShapeKey"] == "general_cancel_fee_policy_summary"
+
+
+def test_base_agent_contract_sensitive_tool_guard_replaces_forbidden_lookup_with_faq(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _DummyAgent(BaseAgent):
+        OUTPUT_TEMPLATE = None
+        TOOL_TO_AF_MAP: dict[str, str] = {}
+
+        def __init__(self) -> None:
+            self.name = "Transaction Agent"
+
+    from services.tstation.agents.e_support_agent import tools as support_tools
+
+    monkeypatch.setattr(
+        support_tools,
+        "search_faq_hybrid_tool",
+        SimpleNamespace(
+            invoke=lambda payload: {
+                "status": "success",
+                "data": {
+                    "items": [
+                        {
+                            "answer": "장착 예약만 취소하는 경우 별도의 취소 수수료는 없으며 주문 상태에 따라 비용이 달라질 수 있습니다."
+                        }
+                    ]
+                },
+            }
+        ),
+    )
+
+    response_decision = ResponseDecision(
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        metadata={"response_shape_key": "general_cancel_fee_policy_summary"},
+    )
+    tool_plan = ToolPlan(
+        allowed_tools=("search_faq_hybrid_tool",),
+        preferred_tool="search_faq_hybrid_tool",
+        forbidden_tools=("get_orders_of_user_tool", "get_order_status_tool"),
+        metadata={"response_intent": "general_cancel_fee_policy"},
+    )
+    decision_token = current_transaction_response_decision.set(response_decision)
+    tool_plan_token = current_transaction_tool_plan.set(tool_plan)
+    user_text_token = current_user_text.set("예약 취소하면 비용 발생해?")
+    try:
+        agent = _DummyAgent()
+        events = agent._contract_sensitive_tool_guard_events(
+            "get_orders_of_user_tool",
+            [{"role": "user", "content": "예약 취소하면 비용 발생해?"}],
+            config=None,
+            response_streamer=None,
+            answering_emitted=False,
+        )
+    finally:
+        current_transaction_response_decision.reset(decision_token)
+        current_transaction_tool_plan.reset(tool_plan_token)
+        current_user_text.reset(user_text_token)
+
+    assert events is not None
+    tool_events = [event for event in events if event.get("type") == "tool"]
+    assert len(tool_events) == 1
+    assert tool_events[0]["tool"] == "search_faq_hybrid_tool"
+    data_events = [event for event in events if event.get("type") == "data"]
+    assert len(data_events) == 1
+    metadata = data_events[0]["data"]["metadata"]
+    assert metadata["contract_tool_blocked"] is True
+    assert metadata["blocked_tool"] == "get_orders_of_user_tool"
+    assert metadata["replacement_tool"] == "search_faq_hybrid_tool"
+    assert metadata["contract_intent"] == "general_cancel_fee_policy"
+
+
+def test_base_agent_contract_sensitive_tool_guard_skips_owned_lookup_contract() -> None:
+    class _DummyAgent(BaseAgent):
+        OUTPUT_TEMPLATE = None
+        TOOL_TO_AF_MAP: dict[str, str] = {}
+
+        def __init__(self) -> None:
+            self.name = "Transaction Agent"
+
+    response_decision = ResponseDecision(
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        metadata={"response_shape_key": "owned_order_cancel_fee_inquiry_summary"},
+    )
+    tool_plan = ToolPlan(
+        allowed_tools=("get_orders_of_user_tool", "get_order_status_tool"),
+        preferred_tool="get_orders_of_user_tool",
+        forbidden_tools=("search_faq_hybrid_tool",),
+        metadata={"response_intent": "owned_order_cancel_fee_inquiry"},
+    )
+    decision_token = current_transaction_response_decision.set(response_decision)
+    tool_plan_token = current_transaction_tool_plan.set(tool_plan)
+    try:
+        agent = _DummyAgent()
+        events = agent._contract_sensitive_tool_guard_events(
+            "get_orders_of_user_tool",
+            [{"role": "user", "content": "내 오늘 예약 취소하면 수수료 있어?"}],
+            config=None,
+            response_streamer=None,
+            answering_emitted=False,
+        )
+    finally:
+        current_transaction_response_decision.reset(decision_token)
+        current_transaction_tool_plan.reset(tool_plan_token)
+
+    assert events is None
 
 
 def test_stream_response_multi_keeps_stream_alive_when_turn_contract_validation_raises(
