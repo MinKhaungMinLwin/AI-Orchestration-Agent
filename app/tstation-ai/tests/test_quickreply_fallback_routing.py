@@ -391,6 +391,7 @@ from services.tstation.policies.ui_action_policy import (
     build_other_store_context_enrichment_input,
     build_other_store_preview_metadata,
     build_cta_preview_template_context,
+    build_preview_tool_mapped_event,
     build_other_store_search_result_event,
     build_other_store_stock_unavailable_event,
     build_logistics_earliest_install_fallback_event,
@@ -404,6 +405,7 @@ from services.tstation.policies.ui_action_policy import (
     resolve_ui_action_context,
     store_context_from_mapping,
     store_name_exact_match_row,
+    normalize_preview_tool_result,
     validate_ui_actions_for_contract,
 )
 from services.tstation.policies.pickup_service_gate import deterministic_pickup_service_gate_decision
@@ -876,6 +878,32 @@ def test_cta_missing_slot_event_returns_location_guidance_chips() -> None:
     assert event["template"] == "quickReply"
     assert "지역명이나 매장명" in event["data"]["assistantResponse"]
     assert _labels(event["data"]["quickReplies"])[:3] == ["서울", "강남", "송파"]
+
+
+def test_normalize_preview_tool_result_wraps_non_dict_parse_output() -> None:
+    normalized = normalize_preview_tool_result(
+        "raw-preview",
+        parse_tool_output_fn=lambda raw: ["unexpected", raw],
+    )
+
+    assert normalized["status"] == "error"
+    assert normalized["message"] == "Invalid tool response"
+
+
+def test_build_preview_tool_mapped_event_uses_fallback_and_source() -> None:
+    fallback_event = cta_missing_slot_event("location")
+    event = build_preview_tool_mapped_event(
+        preview_input={"goods_no": "G0001", "ord_qty": 4},
+        preview_result={"status": "success", "data": {}},
+        template_builder=lambda tool_data, intro: None,
+        intro_text="요청하신 조건으로 장착 가능 여부를 확인했어요.",
+        assistant_response_source="code_cta_action_preview",
+        fallback_event=fallback_event,
+    )
+
+    assert event["assistant_response_source"] == "code_cta_action_preview"
+    assert event["source_domain"] == "transaction"
+    assert event["template"] == "quickReply"
 
 
 def test_cta_preview_input_uses_canonical_store_context_from_template_aliases() -> None:

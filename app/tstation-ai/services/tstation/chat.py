@@ -118,6 +118,7 @@ from services.tstation.policies.ui_action_policy import (
     build_other_store_context_enrichment_input,
     build_other_store_preview_metadata,
     build_cta_preview_template_context,
+    build_preview_tool_mapped_event,
     cta_preview_input_from_slots,
     cta_missing_slot_event,
     build_quickreply_cta_clarification_event,
@@ -131,6 +132,7 @@ from services.tstation.policies.ui_action_policy import (
     quickreply_cta_context_from_template,
     resolve_ui_action_context,
     apply_other_store_context_enrichment,
+    normalize_preview_tool_result,
     store_context_from_mapping,
     store_name_exact_match_row,
     ui_action_trace_metadata,
@@ -22623,29 +22625,24 @@ class TStationChatServiceV2:
                     return TStationChatResponse(content=str((guard_event.get("data") or {}).get("assistantResponse") or ""))
                 try:
                     raw_preview = await asyncio.to_thread(_transaction_store_preview_tool.invoke, preview_input)
-                    preview_result = raw_preview if isinstance(raw_preview, dict) else qc_verifier.parse_tool_output(raw_preview)
-                    if not isinstance(preview_result, dict):
-                        preview_result = {
-                            "status": "error",
-                            "http_status": None,
-                            "message": "Invalid tool response",
-                            "data": {},
-                        }
+                    preview_result = normalize_preview_tool_result(
+                        raw_preview,
+                        parse_tool_output_fn=qc_verifier.parse_tool_output,
+                    )
                 except Exception as exc:
                     logger.exception("[CTA_ACTION] logistics earliest install preview failed input=%s", preview_input)
                     preview_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
 
-                mapped_event = _try_build_template(
-                    [{"tool": "transaction_store_preview_tool", "args": preview_input, "data": preview_result}],
-                    "물류 재고 기준으로 가장 빠른 장착 가능 일정을 확인했어요.",
-                )
-                if mapped_event is None:
-                    mapped_event = build_logistics_earliest_install_fallback_event(
+                mapped_event = build_preview_tool_mapped_event(
+                    preview_input=preview_input,
+                    preview_result=preview_result,
+                    template_builder=_try_build_template,
+                    intro_text="물류 재고 기준으로 가장 빠른 장착 가능 일정을 확인했어요.",
+                    assistant_response_source="code_logistics_earliest_install_date",
+                    fallback_event=build_logistics_earliest_install_fallback_event(
                         cta_context=enriched_cta_context,
-                    )
-                else:
-                    mapped_event["source_domain"] = MultiAgentDomain.Domain.TRANSACTION.value
-                    mapped_event["assistant_response_source"] = "code_logistics_earliest_install_date"
+                    ),
+                )
 
                 merged_slots.pending_intent = "stock"
                 merged_slots.goal_type = "store_with_stock"
@@ -22744,26 +22741,22 @@ class TStationChatServiceV2:
                     return TStationChatResponse(content=str((guard_event.get("data") or {}).get("assistantResponse") or ""))
                 try:
                     raw_preview = await asyncio.to_thread(_transaction_store_preview_tool.invoke, preview_input)
-                    preview_result = raw_preview if isinstance(raw_preview, dict) else qc_verifier.parse_tool_output(raw_preview)
-                    if not isinstance(preview_result, dict):
-                        preview_result = {
-                            "status": "error",
-                            "http_status": None,
-                            "message": "Invalid tool response",
-                            "data": {},
-                        }
+                    preview_result = normalize_preview_tool_result(
+                        raw_preview,
+                        parse_tool_output_fn=qc_verifier.parse_tool_output,
+                    )
                 except Exception as exc:
                     logger.exception("[CTA_ACTION] transaction_store_preview_tool failed input=%s", preview_input)
                     preview_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
 
-                mapped_event = _try_build_template(
-                    [{"tool": "transaction_store_preview_tool", "args": preview_input, "data": preview_result}],
-                    "요청하신 조건으로 장착 가능 여부를 확인했어요.",
+                mapped_event = build_preview_tool_mapped_event(
+                    preview_input=preview_input,
+                    preview_result=preview_result,
+                    template_builder=_try_build_template,
+                    intro_text="요청하신 조건으로 장착 가능 여부를 확인했어요.",
+                    assistant_response_source="code_cta_action_preview",
+                    fallback_event=cta_missing_slot_event("location"),
                 )
-                if mapped_event is None:
-                    mapped_event = cta_missing_slot_event("location")
-                mapped_event["source_domain"] = MultiAgentDomain.Domain.TRANSACTION.value
-                mapped_event["assistant_response_source"] = "code_cta_action_preview"
                 await chat_history_svc.save_slots_async(request.session_id, merged_slots, user_id=request.user_id)
                 if request.stream:
                     return StreamingResponse(

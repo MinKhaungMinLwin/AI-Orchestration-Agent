@@ -347,6 +347,44 @@ def cta_missing_slot_event(missing_slot: str) -> dict[str, Any]:
     }
 
 
+def normalize_preview_tool_result(
+    raw_preview: Any,
+    *,
+    parse_tool_output_fn: Callable[[Any], Any],
+) -> dict[str, Any]:
+    preview_result = raw_preview if isinstance(raw_preview, dict) else parse_tool_output_fn(raw_preview)
+    if isinstance(preview_result, dict):
+        return preview_result
+    return {
+        "status": "error",
+        "http_status": None,
+        "message": "Invalid tool response",
+        "data": {},
+    }
+
+
+def build_preview_tool_mapped_event(
+    *,
+    preview_input: Mapping[str, Any],
+    preview_result: Mapping[str, Any],
+    template_builder: Callable[[list[dict[str, Any]], str], dict[str, Any] | None],
+    intro_text: str,
+    assistant_response_source: str,
+    fallback_event: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    mapped_event = template_builder(
+        [{"tool": "transaction_store_preview_tool", "args": dict(preview_input), "data": dict(preview_result)}],
+        intro_text,
+    )
+    if not isinstance(mapped_event, dict):
+        mapped_event = dict(fallback_event or cta_missing_slot_event("location"))
+    else:
+        mapped_event = dict(mapped_event)
+    mapped_event["source_domain"] = "transaction"
+    mapped_event["assistant_response_source"] = assistant_response_source
+    return mapped_event
+
+
 def _normalize_vehicle_contract_intent(intent: str | None) -> str:
     normalized = str(intent or "").strip()
     if normalized == "vehicle_information":
