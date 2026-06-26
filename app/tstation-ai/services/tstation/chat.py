@@ -6849,18 +6849,73 @@ def _build_signup_first_purchase_benefit_event(user_query: str) -> dict:
     )
 
 
-def _build_general_card_cancel_timing_policy_event(user_query: str) -> dict:
+def _faq_policy_source_summary_text(tool_result: dict | None) -> str:
+    if not isinstance(tool_result, dict):
+        return ""
+    answer = _first_faq_policy_answer([("search_faq_hybrid_tool", tool_result)])
+    if not answer:
+        return ""
+    summary = re.sub(r"\s+", " ", answer).strip()
+    if len(summary) > 260:
+        summary = f"{summary[:257].rstrip()}..."
+    return summary
+
+
+def _build_general_cancel_fee_policy_event(user_query: str, *, tool_result: dict | None = None) -> dict:
+    source_summary = _faq_policy_source_summary_text(tool_result)
+    if source_summary:
+        assistant_response = (
+            f"확인된 FAQ 기준으로는 {source_summary}\n\n"
+            "구체적인 취소 비용 발생 여부는 주문/예약 유형과 진행 상태에 따라 달라질 수 있으니, 실제 취소 전에는 주문내역에서도 함께 확인해 주세요."
+        )
+    else:
+        assistant_response = (
+            "취소나 예약 변경 시 비용 발생 여부는 주문/예약 유형과 진행 상태에 따라 달라질 수 있어요.\n\n"
+            "실제 취소 전에는 주문내역의 안내 문구와 조건을 함께 확인해 주세요."
+        )
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+        "assistant_response_source": "code_general_cancel_fee_policy",
+        "data": {
+            "assistantResponse": assistant_response,
+            "quickReplies": [
+                {"label": "주문내역 확인", "domain": "TRANSACTION"},
+                {"label": "1:1 문의하기", "domain": "SUPPORT"},
+                {"label": "처음으로", "domain": "LEADING"},
+            ],
+            "predictedDomains": ["TRANSACTION", "SUPPORT"],
+            "metadata": {
+                "responseShapeKey": "general_cancel_fee_policy_summary",
+                "generalCancelFeePolicy": True,
+                "faqSourceSummaryUsed": bool(source_summary),
+                "userText": user_query,
+            },
+        },
+    }
+
+
+def _build_general_card_cancel_timing_policy_event(user_query: str, *, tool_result: dict | None = None) -> dict:
+    source_summary = _faq_policy_source_summary_text(tool_result)
+    if source_summary:
+        assistant_response = (
+            f"확인된 FAQ 기준으로는 {source_summary}\n\n"
+            "정확한 반영 여부는 카드사 승인내역이나 주문내역에서 함께 확인해 주세요."
+        )
+    else:
+        assistant_response = (
+            "취소 완료 후 카드 승인취소나 환불 반영 시점은 카드사와 결제수단에 따라 달라질 수 있어요.\n\n"
+            "보통은 영업일 기준으로 며칠 정도 소요될 수 있고, 카드 승인내역이나 결제수단별 반영 시점에 따라 실제 표시 시점이 달라질 수 있어요.\n\n"
+            "정확한 반영 여부는 카드사 승인내역이나 주문내역에서 함께 확인해 주세요."
+        )
     return {
         "type": "data",
         "template": "quickReply",
         "source_domain": MultiAgentDomain.Domain.SUPPORT.value,
         "assistant_response_source": "code_general_card_cancel_timing_policy",
         "data": {
-            "assistantResponse": (
-                "취소 완료 후 카드 승인취소나 환불 반영 시점은 카드사와 결제수단에 따라 달라질 수 있어요.\n\n"
-                "보통은 영업일 기준으로 며칠 정도 소요될 수 있고, 카드 승인내역이나 결제수단별 반영 시점에 따라 실제 표시 시점이 달라질 수 있어요.\n\n"
-                "정확한 반영 여부는 카드사 승인내역이나 주문내역에서 함께 확인해 주세요."
-            ),
+            "assistantResponse": assistant_response,
             "quickReplies": [
                 {"label": "주문내역 확인", "domain": "TRANSACTION"},
                 {"label": "1:1 문의하기", "domain": "SUPPORT"},
@@ -6870,10 +6925,54 @@ def _build_general_card_cancel_timing_policy_event(user_query: str) -> dict:
             "metadata": {
                 "responseShapeKey": "general_card_cancel_timing_policy",
                 "generalCardCancelTimingPolicy": True,
+                "faqSourceSummaryUsed": bool(source_summary),
                 "userText": user_query,
             },
         },
     }
+
+
+def _build_direct_faq_policy_event(
+    *,
+    turn_contract: TurnContract,
+    user_query: str,
+    tool_result: dict | None = None,
+) -> dict | None:
+    intent = str(turn_contract.intent or "")
+    if intent == "general_cancel_fee_policy":
+        event = _build_general_cancel_fee_policy_event(user_query, tool_result=tool_result)
+    elif intent == "general_card_cancel_timing_policy":
+        event = _build_general_card_cancel_timing_policy_event(user_query, tool_result=tool_result)
+    else:
+        return None
+    event["source_domain"] = str(turn_contract.domain or event.get("source_domain") or "").lower()
+    return event
+
+
+def _build_direct_faq_policy_tool_payload(
+    *,
+    turn_contract: TurnContract | None,
+    user_query: str,
+    raw_tool_result: Any,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]] | None:
+    if turn_contract is None:
+        return None
+    tool_result = raw_tool_result if isinstance(raw_tool_result, dict) else qc_verifier.parse_tool_output(raw_tool_result)
+    if not isinstance(tool_result, dict):
+        tool_result = {
+            "status": "error",
+            "http_status": None,
+            "message": "Invalid tool response",
+            "data": {},
+        }
+    event = _build_direct_faq_policy_event(
+        turn_contract=turn_contract,
+        user_query=user_query,
+        tool_result=tool_result,
+    )
+    if event is None:
+        return None
+    return {"query": user_query}, tool_result, event
 
 
 def _build_order_document_guidance_event(user_query: str) -> dict:
@@ -25336,16 +25435,57 @@ class TStationChatServiceV2:
             event_data = signup_benefit_event.get("data") if isinstance(signup_benefit_event.get("data"), dict) else {}
             return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
 
-        if turn_contract and turn_contract.intent == "general_card_cancel_timing_policy":
-            card_cancel_timing_event = _build_general_card_cancel_timing_policy_event(last_user_text)
+        if turn_contract and turn_contract.intent in {"general_cancel_fee_policy", "general_card_cancel_timing_policy"}:
+            from services.tstation.agents.e_support_agent.tools import search_faq_hybrid_tool as _search_faq_hybrid_tool
+
+            tool_input = {"query": last_user_text}
+            try:
+                raw_tool_result = await asyncio.to_thread(_search_faq_hybrid_tool.invoke, tool_input)
+            except Exception as exc:
+                logger.exception(
+                    "[FAQ_POLICY_DIRECT] tool failed intent=%s session_id=%s",
+                    turn_contract.intent,
+                    request.session_id,
+                )
+                raw_tool_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+
+            direct_tool_payload = _build_direct_faq_policy_tool_payload(
+                turn_contract=turn_contract,
+                user_query=last_user_text,
+                raw_tool_result=raw_tool_result,
+            )
+            if direct_tool_payload is None:
+                guard_event = build_response_policy_guard_event(turn_contract)
+                if request.stream:
+                    return StreamingResponse(
+                        TStationChatServiceV2._stream_policy_guard_response(guard_event),
+                        media_type="text/event-stream",
+                        headers={
+                            "Cache-Control": "no-cache",
+                            "Connection": "keep-alive",
+                            "X-Accel-Buffering": "no",
+                        },
+                    )
+                event_data = guard_event.get("data") if isinstance(guard_event.get("data"), dict) else {}
+                return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
+
+            direct_tool_input, direct_tool_result, direct_event = direct_tool_payload
             logger.info(
-                "[GENERAL_CARD_CANCEL_TIMING_POLICY] advisory response: text=%r session_id=%s",
-                last_user_text[:80],
+                "[FAQ_POLICY_DIRECT] intent=%s session_id=%s tool_status=%s",
+                turn_contract.intent,
                 request.session_id,
+                direct_tool_result.get("status"),
             )
             if request.stream:
                 return StreamingResponse(
-                    TStationChatServiceV2._stream_policy_guard_response(card_cancel_timing_event),
+                    TStationChatServiceV2._stream_faq_policy_tool_response(
+                        direct_tool_input,
+                        direct_tool_result,
+                        direct_event,
+                        turn_contract=turn_contract,
+                        intent=str(turn_contract.intent or ""),
+                        source="code_faq_policy_direct",
+                    ),
                     media_type="text/event-stream",
                     headers={
                         "Cache-Control": "no-cache",
@@ -25353,11 +25493,7 @@ class TStationChatServiceV2:
                         "X-Accel-Buffering": "no",
                     },
                 )
-            event_data = (
-                card_cancel_timing_event.get("data")
-                if isinstance(card_cancel_timing_event.get("data"), dict)
-                else {}
-            )
+            event_data = direct_event.get("data") if isinstance(direct_event.get("data"), dict) else {}
             return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
 
         if turn_contract and turn_contract.intent == "store_visit_advisory":
@@ -25679,6 +25815,46 @@ class TStationChatServiceV2:
         yield f"data: {json.dumps({'type': 'token', 'content': msg}, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps({'type': 'message', 'content': msg, 'agent': f'[{source_domain} AGENT]'}, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+        yield "data: [DONE]\n\n"
+
+    @staticmethod
+    def _stream_faq_policy_tool_response(
+        tool_input: dict,
+        tool_result: dict,
+        event: dict,
+        *,
+        turn_contract: TurnContract | None,
+        intent: str,
+        source: str,
+    ):
+        finalized_event = _finalize_direct_code_event(
+            event,
+            turn_contract=turn_contract,
+            intent=intent,
+            source=source,
+            required_tools=("search_faq_hybrid_tool",),
+            template="quickReply",
+        )
+        if finalized_event is None:
+            finalized_event = (
+                build_response_policy_guard_event(turn_contract)
+                if turn_contract is not None
+                else _build_missing_contract_guard_event(source=source, domain=MultiAgentDomain.Domain.TRANSACTION.value)
+            )
+        event = finalized_event
+        normalize_quickreply_ctas(event, contract=turn_contract)
+        source_domain = str(event.get("source_domain") or "transaction").lower()
+        agent_name = "[SUPPORT AGENT]" if source_domain == MultiAgentDomain.Domain.SUPPORT.value else "[TRANSACTION AGENT]"
+        agent_class = "Support Agent" if source_domain == MultiAgentDomain.Domain.SUPPORT.value else "Transaction Agent"
+        msg = str(((event.get("data") or {}) if isinstance(event.get("data"), dict) else {}).get("assistantResponse") or "")
+        yield f"data: {json.dumps({'type': 'status', 'status': 'tool_start', 'tool': 'search_faq_hybrid_tool', 'display_name': 'FAQ 확인 중...', 'source_domain': source_domain}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'type': 'agent_flow', 'agent': '[FAQ AF]', 'agent_class': agent_class, 'status': tool_result.get('status', 'success'), 'source_domain': source_domain}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'type': 'tool', 'input': tool_input, 'output': json.dumps(tool_result, ensure_ascii=False), 'node': 'tools', 'tool': 'search_faq_hybrid_tool', 'source_domain': source_domain}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        if msg:
+            yield f"data: {json.dumps({'type': 'message', 'content': msg, 'agent': agent_name}, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"

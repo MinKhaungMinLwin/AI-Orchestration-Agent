@@ -63,6 +63,9 @@ from services.tstation.chat import (
     _build_maintenance_history_access_policy_event,
     _build_maintenance_history_event,
     _build_order_document_guidance_event,
+    _build_direct_faq_policy_tool_payload,
+    _build_general_cancel_fee_policy_event,
+    _build_general_card_cancel_timing_policy_event,
     _build_signup_coupon_guidance_event,
     _build_signup_first_purchase_benefit_event,
     _build_owned_coupon_best_discount_event,
@@ -20543,6 +20546,90 @@ def test_response_decision_helper_uses_source_domain_contextvars() -> None:
     finally:
         current_discovery_response_decision.reset(discovery_token)
         current_transaction_response_decision.reset(transaction_token)
+
+
+def test_general_cancel_fee_policy_event_prefers_faq_source_summary_when_available() -> None:
+    tool_result = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "question": "예약 취소 비용 안내",
+                    "answer": "장착 예약만 취소하는 경우 별도의 취소 수수료는 없으며, 주문/배송 진행 상태에 따라 비용이 달라질 수 있습니다.",
+                    "source": "FAQ Hybrid",
+                }
+            ]
+        },
+    }
+
+    event = _build_general_cancel_fee_policy_event("예약 취소하면 비용 발생해?", tool_result=tool_result)
+    response = str(event["data"]["assistantResponse"])
+
+    assert "확인된 FAQ 기준으로는" in response
+    assert "별도의 취소 수수료는 없으며" in response
+    assert event["data"]["metadata"]["faqSourceSummaryUsed"] is True
+
+
+def test_general_card_cancel_timing_policy_event_prefers_faq_source_summary_when_available() -> None:
+    tool_result = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "question": "카드 승인취소 반영 기간",
+                    "answer": "카드 승인취소 및 환불 반영은 카드사와 결제수단에 따라 다르며 영업일 기준 수일이 소요될 수 있습니다.",
+                    "source": "FAQ Hybrid",
+                }
+            ]
+        },
+    }
+
+    event = _build_general_card_cancel_timing_policy_event(
+        "취소 완료 문자 받았는데 카드 승인 취소 언제 돼?",
+        tool_result=tool_result,
+    )
+    response = str(event["data"]["assistantResponse"])
+
+    assert "확인된 FAQ 기준으로는" in response
+    assert "영업일 기준 수일이 소요될 수 있습니다." in response
+    assert event["data"]["metadata"]["faqSourceSummaryUsed"] is True
+
+
+def test_direct_faq_policy_tool_payload_builds_transaction_policy_event() -> None:
+    contract = build_turn_contract(
+        user_text="예약 취소하면 비용 발생해?",
+        intent_frame=IntentFrame(domain=PolicyDomain.TRANSACTION, intent="general_cancel_fee_policy"),
+        tool_plan=ToolPlan(
+            allowed_tools=("search_faq_hybrid_tool",),
+            preferred_tool="search_faq_hybrid_tool",
+            forbidden_tools=("get_orders_of_user_tool",),
+            metadata={"response_intent": "general_cancel_fee_policy"},
+        ),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            metadata={"response_shape_key": "general_cancel_fee_policy_summary"},
+        ),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["transaction:general_cancel_fee_policy"],
+        ),
+    )
+    payload = _build_direct_faq_policy_tool_payload(
+        turn_contract=contract,
+        user_query="예약 취소하면 비용 발생해?",
+        raw_tool_result={
+            "status": "success",
+            "data": {"items": [{"answer": "장착 예약만 취소하는 경우 별도의 취소 수수료는 없습니다."}]},
+        },
+    )
+
+    assert payload is not None
+    tool_input, tool_result, event = payload
+    assert tool_input == {"query": "예약 취소하면 비용 발생해?"}
+    assert tool_result["status"] == "success"
+    assert event["source_domain"] == "transaction"
+    assert event["data"]["metadata"]["responseShapeKey"] == "general_cancel_fee_policy_summary"
 
 
 def test_stream_response_multi_keeps_stream_alive_when_turn_contract_validation_raises(
