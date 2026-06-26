@@ -168,6 +168,8 @@ _REFERENCE_GUARD_EXEMPT_INTENTS = frozenset({
     "store_service_availability",
     "general_cancel_fee_policy",
     "general_card_cancel_timing_policy",
+    "coupon_usage_policy",
+    "coupon_registration_policy",
     "maintenance_history_access_policy",
     "order_document_guidance",
     "legal_action_guidance_denied",
@@ -394,6 +396,12 @@ def build_turn_contract(
     if code_intent == "general_card_cancel_timing_policy" or planner_intent == "general_card_cancel_timing_policy":
         domain = "support"
         intent = "general_card_cancel_timing_policy"
+    if code_intent == "coupon_usage_policy" or planner_intent == "coupon_usage_policy":
+        domain = "support"
+        intent = "coupon_usage_policy"
+    if code_intent == "coupon_registration_policy" or planner_intent == "coupon_registration_policy":
+        domain = "support"
+        intent = "coupon_registration_policy"
     if _is_discovery_event_content_contract(routing_result, planner_intent, code_intent):
         domain = "discovery"
         intent = planner_intent if planner_intent in {
@@ -530,6 +538,26 @@ def build_turn_contract(
                 "get_coupon_applicable_products_tool",
             ),
         )
+    if intent == "coupon_usage_policy":
+        forbidden_tools = _merge_tuple(
+            forbidden_tools,
+            (
+                "issue_coupon_tool",
+                "get_my_coupons_tool",
+                "get_coupon_applicable_products_tool",
+                "get_final_price_tool",
+            ),
+        )
+    if intent == "coupon_registration_policy":
+        forbidden_tools = _merge_tuple(
+            forbidden_tools,
+            (
+                "issue_coupon_tool",
+                "get_my_coupons_tool",
+                "get_coupon_applicable_products_tool",
+                "get_final_price_tool",
+            ),
+        )
     if intent == "order_document_guidance":
         forbidden_tools = _merge_tuple(
             forbidden_tools,
@@ -622,6 +650,22 @@ def build_turn_contract(
             ),
             "metadata": {"response_shape_key": "order_document_guidance"},
         }
+    if intent in {"coupon_usage_policy", "coupon_registration_policy"} and response_decision_payload is None:
+        response_decision_payload = {
+            "response_shape": "summary",
+            "template": "quickReply",
+            "required_slots": [],
+            "forbidden_behaviors": [
+                "route_to_partner_coupon_policy",
+                "start_owned_coupon_lookup",
+                "require_product_clarification",
+            ],
+            "assistant_guidance": (
+                "쿠폰 일반 정책 문의는 FAQ hybrid 검색을 먼저 수행하고 사용처/등록 경로를 quickReply로 요약한다. "
+                "보유 쿠폰 조회나 상품별 적용 조회로 바로 전환하지 않는다."
+            ),
+            "metadata": {"response_shape_key": intent},
+        }
     if intent in {
         "tire_manufacture_date_policy",
         "tire_quality_warranty_policy",
@@ -630,6 +674,8 @@ def build_turn_contract(
         "installation_work_policy",
         "promotion_gift_policy",
         "tire_condition_photo_policy",
+        "coupon_usage_policy",
+        "coupon_registration_policy",
     } and response_decision_payload is None:
         response_decision_payload = {
             "response_shape": "summary",

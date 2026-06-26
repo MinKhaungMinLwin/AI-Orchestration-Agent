@@ -1358,6 +1358,36 @@ def test_coupon_howto_gate_ignores_previous_product_recommendation_context() -> 
     assert decision.is_actionable is False
 
 
+@pytest.mark.parametrize(
+    "user_text",
+    [
+        "온라인 주문 없이 매장에서 쿠폰 적용돼?",
+        "다운받은 쿠폰 현장 결제할 때도 쓸 수 있어?",
+        "티스테이션닷컴 쿠폰 오프라인 결제 가능해?",
+    ],
+)
+def test_coupon_gate_routes_usage_policy_queries_to_support(user_text: str) -> None:
+    decision = decide_coupon_query_gate(user_text=user_text)
+
+    assert decision.intent == CouponQueryIntent.COUPON_USAGE_POLICY
+    assert decision.is_actionable is False
+
+
+@pytest.mark.parametrize(
+    "user_text",
+    [
+        "쿠폰 번호 어디에 등록해?",
+        "쿠폰 코드 입력은 어디서 해?",
+        "쿠폰 등록 방법 알려줘",
+    ],
+)
+def test_coupon_gate_routes_registration_policy_queries_to_support(user_text: str) -> None:
+    decision = decide_coupon_query_gate(user_text=user_text)
+
+    assert decision.intent == CouponQueryIntent.COUPON_REGISTRATION_POLICY
+    assert decision.is_actionable is False
+
+
 def test_coupon_gate_routes_partner_member_coupon_policy_queries_to_support() -> None:
     decision = decide_coupon_query_gate(user_text="제휴회원에게만 제공되는 쿠폰 보여줘")
 
@@ -17876,6 +17906,39 @@ def test_partner_member_coupon_policy_contract_blocks_owned_coupon_tools() -> No
     )
 
 
+def test_coupon_usage_policy_contract_blocks_coupon_lookup_and_price_tools() -> None:
+    contract = build_turn_contract(
+        user_text="다운받은 쿠폰 현장 결제할 때도 쓸 수 있어?",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:coupon_usage_policy"],
+            policy_intent="coupon_usage_policy",
+        ),
+    )
+
+    assert contract.domain == "support"
+    assert contract.intent == "coupon_usage_policy"
+    assert contract.required_slots == ()
+    assert contract.blocking_required_slots == ()
+    assert "search_faq_hybrid_tool" in contract.allowed_tools
+    assert "get_my_coupons_tool" in contract.forbidden_tools
+    assert "get_coupon_applicable_products_tool" in contract.forbidden_tools
+    assert "get_final_price_tool" in contract.forbidden_tools
+
+
+def test_coupon_usage_support_policy_does_not_route_to_partner_or_owned_coupon_flow() -> None:
+    response_decision = decide_support_response(
+        intent="coupon_usage_policy",
+        user_text="다운받은 쿠폰 현장 결제할 때도 쓸 수 있어?",
+    )
+
+    assert response_decision.metadata["response_shape_key"] == "coupon_usage_policy"
+    assert response_decision.template == TemplateName.QUICK_REPLY
+    assert "route_to_partner_coupon_policy" in response_decision.forbidden_behaviors
+    assert "start_owned_coupon_lookup" in response_decision.forbidden_behaviors
+    assert "온라인 주문 전용 쿠폰이면 현장 결제에는 적용되지 않을 수 있다" in response_decision.assistant_guidance
+
+
 def test_promotion_gift_policy_contract_requires_partial_cancel_guidance_and_blocks_lookup_tools() -> None:
     contract = build_turn_contract(
         user_text="이벤트 적용 타이어 4개 구매하고 사은품 받았는데 뒤에 2개 취소하면 사은품 돌려줘야 해?",
@@ -18032,6 +18095,29 @@ def test_partner_member_coupon_policy_event_omits_chatbot_capability_disclaimer(
     assert "바로 보유 쿠폰이 없다고 단정할 수는 없어요" not in response
 
 
+def test_support_faq_policy_event_for_coupon_usage_filters_partner_only_summary() -> None:
+    event = _build_support_faq_policy_event(
+        "coupon_usage_policy",
+        "다운받은 쿠폰 현장 결제할 때도 쓸 수 있어?",
+        tool_result={
+            "status": "success",
+            "data": {
+                "items": [
+                    {
+                        "answer": "제휴사 전용 URL 또는 복지몰/임직원몰 같은 제휴 전용 경로로 접속해야 확인 가능해요."
+                    }
+                ]
+            },
+        },
+    )
+
+    assert event is not None
+    response = str(event["data"]["assistantResponse"])
+    assert "쿠폰은 쿠폰별 사용처와 유의사항에 따라 온라인 전용인지, 매장 사용이 가능한지 달라질 수 있어요." in response
+    assert "제휴사 전용 URL" not in response
+    assert "복지몰/임직원몰" not in response
+
+
 def test_signup_first_purchase_benefit_augments_faq_query() -> None:
     token = current_support_policy_intent.set("signup_first_purchase_benefit_policy")
     try:
@@ -18054,6 +18140,17 @@ def test_signup_coupon_guidance_augments_faq_query() -> None:
     assert "웰컴 쿠폰 있나요?" in query
     assert "all my T 회원 마케팅 수신 동의 5% 할인 쿠폰" in query
     assert "회원 가입 마케팅 활용 동의 쿠폰 혜택" in query
+
+
+def test_coupon_usage_policy_augments_faq_query() -> None:
+    token = current_support_policy_intent.set("coupon_usage_policy")
+    try:
+        query = _augment_faq_query_for_policy("다운받은 쿠폰 현장 결제할 때도 쓸 수 있어?")
+    finally:
+        current_support_policy_intent.reset(token)
+
+    assert "다운받은 쿠폰 현장 결제할 때도 쓸 수 있어?" in query
+    assert "쿠폰 사용처 온라인 전용 오프라인 매장 사용 현장 결제 유의사항" in query
 
 
 @pytest.mark.parametrize(

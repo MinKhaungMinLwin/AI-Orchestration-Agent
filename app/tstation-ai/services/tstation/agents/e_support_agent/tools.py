@@ -101,6 +101,12 @@ _PROMOTION_GIFT_POLICY_FAQ_ANCHORS = (
 _TIRE_CONDITION_PHOTO_POLICY_FAQ_ANCHORS = (
     "타이어 사진 판독 불가 매장 점검 마모도 측정",
 )
+_COUPON_USAGE_POLICY_FAQ_ANCHORS = (
+    "쿠폰 사용처 온라인 전용 오프라인 매장 사용 현장 결제 유의사항",
+)
+_COUPON_REGISTRATION_POLICY_FAQ_ANCHORS = (
+    "쿠폰 번호 등록 입력 사용 방법 쿠폰함",
+)
 
 
 def _augment_faq_query_for_policy(query: str) -> str:
@@ -126,6 +132,10 @@ def _augment_faq_query_for_policy(query: str) -> str:
         anchors = _PROMOTION_GIFT_POLICY_FAQ_ANCHORS
     elif policy_intent == "tire_condition_photo_policy":
         anchors = _TIRE_CONDITION_PHOTO_POLICY_FAQ_ANCHORS
+    elif policy_intent == "coupon_usage_policy":
+        anchors = _COUPON_USAGE_POLICY_FAQ_ANCHORS
+    elif policy_intent == "coupon_registration_policy":
+        anchors = _COUPON_REGISTRATION_POLICY_FAQ_ANCHORS
     else:
         return text
     missing_anchors = [anchor for anchor in anchors if anchor not in text]

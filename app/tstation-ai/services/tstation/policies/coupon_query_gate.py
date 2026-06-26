@@ -23,6 +23,8 @@ logger = logging.getLogger(__name__)
 class CouponQueryIntent(str, Enum):
     NONE = "none"
     ISSUE_HOWTO = "issue_howto"
+    COUPON_USAGE_POLICY = "coupon_usage_policy"
+    COUPON_REGISTRATION_POLICY = "coupon_registration_policy"
     SIGNUP_COUPON_GUIDANCE = "signup_coupon_guidance"
     PARTNER_MEMBER_COUPON_POLICY = "partner_member_coupon_policy"
     OWNED_COUPON_LOOKUP = "owned_coupon_lookup"
@@ -45,6 +47,8 @@ class CouponQueryGateDecision(BaseModel):
         return self.intent not in {
             CouponQueryIntent.NONE,
             CouponQueryIntent.ISSUE_HOWTO,
+            CouponQueryIntent.COUPON_USAGE_POLICY,
+            CouponQueryIntent.COUPON_REGISTRATION_POLICY,
             CouponQueryIntent.SIGNUP_COUPON_GUIDANCE,
             CouponQueryIntent.PARTNER_MEMBER_COUPON_POLICY,
             CouponQueryIntent.POLICY_INFO,
@@ -72,8 +76,20 @@ _COUPON_APPLICABLE_PRODUCT_ANCHOR_RE = re.compile(
     re.IGNORECASE,
 )
 _COUPON_ISSUE_HOWTO_RE = re.compile(
-    r"쿠폰.{0,24}(?:선물\s*받|번호|등록|발급|다운로드|받|어디서|어디\s*서|방법|사용\s*방법|쓰는\s*법)|"
-    r"(?:선물\s*받|번호|등록|발급|다운로드|받|어디서|어디\s*서|방법|사용\s*방법|쓰는\s*법).{0,24}쿠폰",
+    r"쿠폰.{0,24}(?:선물\s*받|발급|다운로드|받는?\s*방법|어디서\s*받|어디\s*서\s*받)|"
+    r"(?:선물\s*받|발급|다운로드|받는?\s*방법|어디서\s*받|어디\s*서\s*받).{0,24}쿠폰",
+    re.IGNORECASE,
+)
+_COUPON_REGISTRATION_POLICY_RE = re.compile(
+    r"쿠폰.{0,24}(?:번호|등록|입력|코드|등록\s*방법|어디서\s*등록)|"
+    r"(?:번호|등록|입력|코드|등록\s*방법|어디서\s*등록).{0,24}쿠폰",
+    re.IGNORECASE,
+)
+_COUPON_USAGE_POLICY_RE = re.compile(
+    r"쿠폰.{0,32}(?:현장\s*결제|매장\s*결제|오프라인|온라인\s*주문\s*없이|온라인\s*전용|매장\s*(?:사용|결제)|"
+    r"사용처|어디\s*(?:서|에)|쓸\s*수\s*있|사용\s*가능|현장(?:에서도)?|매장에서)|"
+    r"(?:현장\s*결제|매장\s*결제|오프라인|온라인\s*주문\s*없이|온라인\s*전용|매장\s*(?:사용|결제)|"
+    r"사용처|어디\s*(?:서|에)|쓸\s*수\s*있|사용\s*가능|현장(?:에서도)?|매장에서).{0,32}쿠폰",
     re.IGNORECASE,
 )
 _COUPON_STACKING_HOWTO_RE = re.compile(r"쿠폰.{0,24}(?:중복|같이|함께|동시)|(?:중복|같이|함께|동시).{0,24}쿠폰", re.IGNORECASE)
@@ -103,7 +119,12 @@ def should_consider_coupon_gate(user_text: str | None) -> bool:
     text = user_text or ""
     if _DEFAULT_BENEFIT_RE.search(text):
         return False
-    if _COUPON_ISSUE_HOWTO_RE.search(text) or _COUPON_STACKING_HOWTO_RE.search(text):
+    if (
+        _COUPON_ISSUE_HOWTO_RE.search(text)
+        or _COUPON_REGISTRATION_POLICY_RE.search(text)
+        or _COUPON_USAGE_POLICY_RE.search(text)
+        or _COUPON_STACKING_HOWTO_RE.search(text)
+    ):
         return True
     if _PRICE_OR_BENEFIT_ALERT_RE.search(text) and not _COUPON_APPLICABLE_PRODUCT_ANCHOR_RE.search(text):
         return False
@@ -145,6 +166,22 @@ def decide_coupon_query_gate(
             product_name=None,
             coupon_hint=None,
             reason="Deterministic coupon stacking policy/how-to query.",
+        )
+    if _COUPON_REGISTRATION_POLICY_RE.search(text):
+        return CouponQueryGateDecision(
+            intent=CouponQueryIntent.COUPON_REGISTRATION_POLICY,
+            confidence=0.92,
+            product_name=None,
+            coupon_hint="쿠폰",
+            reason="Deterministic coupon registration/input policy query.",
+        )
+    if _COUPON_USAGE_POLICY_RE.search(text) and not _PARTNER_MEMBER_COUPON_POLICY_RE.search(text):
+        return CouponQueryGateDecision(
+            intent=CouponQueryIntent.COUPON_USAGE_POLICY,
+            confidence=0.92,
+            product_name=None,
+            coupon_hint="쿠폰",
+            reason="Deterministic offline/online coupon usage policy query.",
         )
     if _COUPON_ISSUE_HOWTO_RE.search(text):
         return CouponQueryGateDecision(
@@ -211,9 +248,12 @@ def decide_coupon_query_gate(
     - If a product/pattern name is mentioned alongside a coupon cheapest/biggest-discount request, choose product_coupon_eligibility, not best_discount.
     - If the user asks what products a specific coupon/discount coupon applies to, choose coupon_applicable_products.
     - If the user asks how to get/download/issue a coupon, choose issue_howto.
+    - If the user asks where to register/input a coupon number/code, choose coupon_registration_policy.
+    - If the user asks whether a downloaded/online coupon can be used for store payment, offline payment, or without an online order, choose coupon_usage_policy.
     - If the user asks whether multiple coupons/deals/card benefits can be used together, choose stacking.
     - If the user asks about signup-only / new-member / welcome coupon guidance, choose signup_coupon_guidance.
     - If the user asks about partner-member-only / affiliate-only / welfare-mall / employee-only coupons or benefits, choose partner_member_coupon_policy.
+    - coupon_usage_policy is general coupon usage/channel policy, not partner_member_coupon_policy, not owned_coupon_lookup, and not product_coupon_eligibility.
     - signup_coupon_guidance is general signup/new-member coupon guidance, not partner_member_coupon_policy and not owned_coupon_lookup.
     - partner_member_coupon_policy is policy/access guidance, not owned_coupon_lookup, and must not assume the user already has the coupon.
     - If it is a general policy/explanation question, choose policy_info.

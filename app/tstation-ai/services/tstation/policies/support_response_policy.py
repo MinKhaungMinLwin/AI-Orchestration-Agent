@@ -20,6 +20,18 @@ _PARTNER_MEMBER_COUPON_POLICY_RE = re.compile(
     r"제휴\s*(?:회원|사|몰|전용)|복지몰|임직원|제휴사|제휴회원|제휴\s*쿠폰|제휴\s*혜택",
     re.IGNORECASE,
 )
+_COUPON_USAGE_POLICY_RE = re.compile(
+    r"쿠폰.{0,32}(?:현장\s*결제|매장\s*결제|오프라인|온라인\s*주문\s*없이|온라인\s*전용|매장\s*(?:사용|결제)|"
+    r"사용처|어디\s*(?:서|에)|쓸\s*수\s*있|사용\s*가능|현장(?:에서도)?|매장에서)|"
+    r"(?:현장\s*결제|매장\s*결제|오프라인|온라인\s*주문\s*없이|온라인\s*전용|매장\s*(?:사용|결제)|"
+    r"사용처|어디\s*(?:서|에)|쓸\s*수\s*있|사용\s*가능|현장(?:에서도)?|매장에서).{0,32}쿠폰",
+    re.IGNORECASE,
+)
+_COUPON_REGISTRATION_POLICY_RE = re.compile(
+    r"쿠폰.{0,24}(?:번호|등록|입력|코드|등록\s*방법|어디서\s*등록)|"
+    r"(?:번호|등록|입력|코드|등록\s*방법|어디서\s*등록).{0,24}쿠폰",
+    re.IGNORECASE,
+)
 _CARD_CANCEL_TIMING_POLICY_RE = re.compile(
     r"(?:카드|결제|환불|승인\s*취소|승인취소|취소\s*완료).{0,24}(?:언제|며칠|얼마나|반영|걸려|소요)|"
     r"(?:언제|며칠|얼마나|반영|걸려|소요).{0,24}(?:카드|결제|환불|승인\s*취소|승인취소)|"
@@ -150,6 +162,48 @@ def decide_support_response(
             template=TemplateName.QUICK_REPLY,
             forbidden_behaviors=("promise_coupon_issue", "invent_discount", "show_all_coupons_without_context"),
             assistant_guidance="임의 쿠폰 발급은 불가하다고 안내하고, 받을 수 있는 쿠폰은 쿠폰함에서 확인 가능하다고 안내한다.",
+        )
+
+    if intent == "coupon_registration_policy" or (_COUPON_RE.search(text) and _COUPON_REGISTRATION_POLICY_RE.search(text)):
+        return _decision(
+            response_shape_key="coupon_registration_policy",
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=(
+                "route_to_partner_coupon_policy",
+                "start_owned_coupon_lookup",
+                "claim_coupon_registered",
+                "require_product_clarification",
+            ),
+            assistant_guidance=(
+                "쿠폰 번호 등록/입력 문의는 제휴회원 쿠폰 정책이나 보유 쿠폰 조회로 보내지 않는다. "
+                "FAQ hybrid 검색을 먼저 수행하고, 쿠폰 등록 위치·입력 방법·쿠폰함 확인 경로를 정책 범위 안에서 안내한다. "
+                "상품명이나 특정 상품 적용 여부를 되묻지 않는다."
+            ),
+        )
+
+    if intent == "coupon_usage_policy" or (
+        _COUPON_RE.search(text)
+        and _COUPON_USAGE_POLICY_RE.search(text)
+        and not _PARTNER_MEMBER_COUPON_POLICY_RE.search(text)
+    ):
+        return _decision(
+            response_shape_key="coupon_usage_policy",
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=(
+                "route_to_partner_coupon_policy",
+                "start_owned_coupon_lookup",
+                "call_coupon_applicability_tools",
+                "require_product_clarification",
+                "claim_coupon_usage_confirmed",
+            ),
+            assistant_guidance=(
+                "일반 쿠폰 사용 정책 문의는 제휴회원/복지몰/임직원 전용 쿠폰 안내로 보내지 않는다. "
+                "FAQ hybrid 검색을 먼저 수행하고, 쿠폰별 사용처와 유의사항에 따라 온라인 전용인지 매장 사용 가능인지 다를 수 있다고 설명한다. "
+                "티스테이션닷컴에서 받은 쿠폰은 쿠폰 상세/유의사항의 사용처 확인이 필요하고, 온라인 주문 전용 쿠폰이면 현장 결제에는 적용되지 않을 수 있다고 안내한다. "
+                "보유 쿠폰 목록 조회나 상품별 적용 가능 여부 조회를 시작하지 말고, 현재 매장에서 결제 중이면 매장 직원에게 사용 가능 여부를 확인하도록 보조 안내한다."
+            ),
         )
 
     if intent == "personal_contact" or _PERSONAL_CONTACT_RE.search(text):

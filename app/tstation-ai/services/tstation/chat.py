@@ -761,6 +761,8 @@ class MultiAgentDomain(BaseModel):
         "installation_work_policy",
         "promotion_gift_policy",
         "tire_condition_photo_policy",
+        "coupon_usage_policy",
+        "coupon_registration_policy",
         "signup_first_purchase_benefit_policy",
         "signup_coupon_guidance",
         "partner_member_coupon_policy",
@@ -778,7 +780,7 @@ class MultiAgentDomain(BaseModel):
             "online-vs-store price policy, regional price policy, payment error troubleshooting, "
             "order document guidance, tire manufacture date policy, tire quality/warranty policy, "
             "assurance service policy, reservation policy guidance, installation/work policy, promotion/gift policy, "
-            "tire condition photo policy, "
+            "tire condition photo policy, coupon usage policy, coupon registration policy, "
             "signup/first-purchase benefit policy, signup coupon guidance, partner-member-only coupon policy, "
             "legal action guidance denial, store service availability, goods review lookup, "
             "store service review write CTA, or generic price policy FAQ. "
@@ -960,6 +962,8 @@ _CURRENT_TURN_SUPPORT_POLICY_ACTION_INTENTS = frozenset({
     "installation_work_policy",
     "promotion_gift_policy",
     "tire_condition_photo_policy",
+    "coupon_usage_policy",
+    "coupon_registration_policy",
     "signup_first_purchase_benefit_policy",
     "signup_coupon_guidance",
     "partner_member_coupon_policy",
@@ -1972,6 +1976,8 @@ class _SlimMultiAgentDomain(BaseModel):
         "installation_work_policy",
         "promotion_gift_policy",
         "tire_condition_photo_policy",
+        "coupon_usage_policy",
+        "coupon_registration_policy",
         "signup_first_purchase_benefit_policy",
         "signup_coupon_guidance",
         "partner_member_coupon_policy",
@@ -2175,6 +2181,8 @@ Complaint routing rule:
    - "promotion_gift_policy": 사은품, 선착순, 프로모션 조건 미달, 반납/차감 가능성 안내. 실시간 지급 여부 확정 금지.
    - "tire_condition_photo_policy": 사진만으로 타이어 상태/주행 안전 판정 불가 안내. 매장 점검/마모도 측정/1:1 문의는 보조.
    - "signup_first_purchase_benefit_policy": 회원가입/신규회원/첫구매 혜택·쿠폰·서비스 안내. FAQ/RAG 정책 설명이며 내 쿠폰 조회/직접 발급이 아님.
+   - "coupon_usage_policy": 쿠폰 온라인/오프라인 사용처, 현장 결제 가능 여부, 온라인 주문 없이 매장 사용 가능 여부 같은 일반 쿠폰 사용 정책 안내.
+   - "coupon_registration_policy": 쿠폰 번호 등록/입력/사용 방법/쿠폰함 등록 경로 같은 일반 쿠폰 등록 정책 안내.
    - "signup_coupon_guidance": 회원가입 전용/신규회원/웰컴 쿠폰 문의. 보유 쿠폰 조회가 아니라 가입 혜택/진행 중 혜택 안내.
    - "partner_member_coupon_policy": 제휴회원/제휴사/복지몰/임직원 전용 쿠폰·혜택 접근 조건 안내. 보유 쿠폰 조회가 아니라 제휴 전용 접속 경로/권한/기간 정책 안내.
    - "legal_action_guidance_denied": 티스테이션 매장/서비스/예약/장착/응대 불편과 함께 고소/소송/법적 대응/내용증명/분쟁조정/신고 방법을 묻는 경우. 법적 절차는 안내하지 않고 공식 CS 접수만 안내.
@@ -2450,6 +2458,8 @@ Also set `policy_intent`:
 - promotion/gift policy ("4짝 사고 사은품 받았는데 2짝 취소하면?", "선착순 끝났으면?", "사은품 반납해야 해?") → SUPPORT, policy_intent=`promotion_gift_policy`; explain policy/condition first, not direct compensation.
 - tire condition photo policy ("사진 보낼 테니까 더 타도 되는지 봐줘", "마모 사진 보고 괜찮은지 알려줘") → SUPPORT, policy_intent=`tire_condition_photo_policy`; explain that chatbot cannot determine safety from photos alone and guide inspection first.
 - signup/new-member/first-purchase benefit explanation ("회원가입하면 첫구매 혜택은 뭐가 있어?", "신규회원 혜택 알려줘", "가입하면 받을 수 있는 쿠폰 뭐야?") → SUPPORT, policy_intent=`signup_first_purchase_benefit_policy`; this is FAQ/RAG policy guidance, not owned coupon lookup or coupon issuance.
+- coupon usage policy ("다운받은 쿠폰 현장 결제할 때도 쓸 수 있어?", "온라인 주문 없이 매장에서 쿠폰 적용돼?", "티스테이션닷컴 쿠폰 오프라인 결제 가능해?") → SUPPORT, policy_intent=`coupon_usage_policy`; this is general coupon usage/channel guidance, not partner-member coupon policy, not owned coupon lookup, and not product applicability lookup.
+- coupon registration policy ("쿠폰 번호 어디에 등록해?", "쿠폰 코드 입력은 어디서 해?", "쿠폰 등록 방법 알려줘") → SUPPORT, policy_intent=`coupon_registration_policy`; this is coupon registration/how-to guidance, not owned coupon lookup and not partner-member coupon policy.
 - signup/new-member/welcome coupon guidance ("회원가입 전용 쿠폰 있어?", "신규회원 쿠폰 있어?", "가입하면 쿠폰 줘?", "웰컴 쿠폰 있나요?") → SUPPORT, policy_intent=`signup_coupon_guidance`; this is signup coupon guidance, not partner-member coupon policy and not owned coupon lookup.
 - partner-member-only coupon guidance ("제휴회원에게만 제공되는 쿠폰 보여줘", "제휴사 회원 전용 쿠폰 있어?", "복지몰 쿠폰 보여줘", "임직원 전용 쿠폰 안내해줘") → SUPPORT, policy_intent=`partner_member_coupon_policy`; this is access/policy guidance, not owned coupon lookup, coupon issuance, or coupon box listing.
 - T-Station store/service complaint mixed with legal action request (고소/소송/법적 대응/내용증명/분쟁조정/신고 방법) → SUPPORT, policy_intent=`legal_action_guidance_denied`; do not explain legal steps, institutions, documents, or procedures.
@@ -6459,6 +6469,21 @@ def _build_partner_member_coupon_policy_event(user_query: str) -> dict:
     }
 
 
+def _coupon_usage_summary_is_relevant(summary: str) -> bool:
+    normalized = re.sub(r"\s+", " ", str(summary or "")).strip()
+    if not normalized:
+        return False
+    if re.search(r"제휴\s*(?:회원|사|몰|전용)|복지몰|임직원|제휴사", normalized, re.IGNORECASE):
+        return False
+    return bool(
+        re.search(
+            r"현장\s*결제|매장\s*결제|오프라인|온라인\s*주문\s*없이|온라인\s*전용|사용처|유의사항|매장\s*사용",
+            normalized,
+            re.IGNORECASE,
+        )
+    )
+
+
 def _build_signup_member_coupon_guidance_event(user_query: str, *, response_shape_key: str) -> dict:
     return {
         "type": "data",
@@ -6598,6 +6623,15 @@ def _build_support_faq_policy_event(
             "기준 미달 시에는 사은품 반납이 필요할 수 있고, 반납이 어렵거나 조건에 따라 사은품 상당 금액을 차감한 뒤 환불될 수 있어요.\n"
             "최종 적용은 이벤트 상세 조건과 실제 주문/취소 처리 기준에 따라 달라져요."
         ),
+        "coupon_usage_policy": (
+            "쿠폰은 쿠폰별 사용처와 유의사항에 따라 온라인 전용인지, 매장 사용이 가능한지 달라질 수 있어요.\n"
+            "티스테이션닷컴에서 받은 쿠폰은 쿠폰 상세나 유의사항에서 사용처를 먼저 확인해 주세요.\n"
+            "온라인 주문 전용 쿠폰이면 현장 결제에는 적용되지 않을 수 있고, 매장에서 결제 중이라면 매장 직원에게 사용 가능 여부를 함께 확인해 주세요."
+        ),
+        "coupon_registration_policy": (
+            "쿠폰 번호나 코드 등록 위치는 쿠폰 안내 경로와 쿠폰함 정책에 따라 달라질 수 있어요.\n"
+            "쿠폰 등록/입력 위치와 사용 방법은 쿠폰 상세 안내와 쿠폰함 경로를 먼저 확인해 주세요."
+        ),
         "tire_condition_photo_policy": (
             "현재 챗봇에서는 사진이나 파일을 업로드해 확인받을 수 없어요.\n"
             "사진만으로는 타이어 마모 상태, 교체 필요 여부, 주행 안전을 확정할 수 없어요. "
@@ -6615,6 +6649,8 @@ def _build_support_faq_policy_event(
         "reservation_policy_guidance": "실제 예약 변경이나 취소 전에는 예약 상세 안내도 함께 확인해 주세요.",
         "installation_work_policy": "추가 작업비나 현장 결제 여부는 정책과 작업 범위에 따라 달라질 수 있어요.",
         "promotion_gift_policy": required_guidance_by_intent["promotion_gift_policy"],
+        "coupon_usage_policy": required_guidance_by_intent["coupon_usage_policy"],
+        "coupon_registration_policy": required_guidance_by_intent["coupon_registration_policy"],
         "tire_condition_photo_policy": required_guidance_by_intent["tire_condition_photo_policy"],
         "signup_first_purchase_benefit_policy": "실제 회원 상태와 쿠폰 노출 여부는 계정별로 다를 수 있으니, 회원 혜택 페이지나 쿠폰함에서도 함께 확인해 주세요.",
         "signup_coupon_guidance": "실제 발급 가능 여부와 노출 상태는 회원 상태와 마케팅 동의 여부에 따라 달라질 수 있어요.",
@@ -6626,6 +6662,8 @@ def _build_support_faq_policy_event(
         "reservation_policy_guidance": "예약 가능 기간, 취소, 변경 조건은 정책 기준으로 먼저 확인해 보는 것이 안전해요.",
         "installation_work_policy": "공임, 장착비, 추가 작업 비용은 작업 범위와 정책에 따라 달라질 수 있어요.",
         "promotion_gift_policy": required_guidance_by_intent["promotion_gift_policy"],
+        "coupon_usage_policy": required_guidance_by_intent["coupon_usage_policy"],
+        "coupon_registration_policy": required_guidance_by_intent["coupon_registration_policy"],
         "tire_condition_photo_policy": required_guidance_by_intent["tire_condition_photo_policy"],
         "signup_first_purchase_benefit_policy": "회원가입과 신규회원 혜택은 회원 상태, 마케팅 동의 여부, 진행 중 정책에 따라 달라질 수 있어요.",
         "signup_coupon_guidance": "신규회원과 가입 쿠폰 혜택은 회원 상태와 진행 중 정책에 따라 달라질 수 있어요.",
@@ -6655,6 +6693,11 @@ def _build_support_faq_policy_event(
             if not compact_summary
             else f"{required_guidance_by_intent[intent]}\n\n{compact_summary}"
         )
+    elif source_summary and intent == "coupon_usage_policy":
+        if _coupon_usage_summary_is_relevant(source_summary):
+            assistant_response = f"{source_summary}\n\n{followup_by_intent[intent]}"
+        else:
+            assistant_response = fallback_by_intent[intent]
     elif source_summary and intent != "tire_condition_photo_policy":
         assistant_response = f"{source_summary}\n\n{followup_by_intent[intent]}"
     else:
@@ -15062,6 +15105,8 @@ _FAQ_POLICY_FALLBACK_INTENTS = frozenset({
     "installation_work_policy",
     "promotion_gift_policy",
     "tire_condition_photo_policy",
+    "coupon_usage_policy",
+    "coupon_registration_policy",
 })
 _DIRECT_SUPPORT_FAQ_POLICY_INTENTS = _FAQ_POLICY_FALLBACK_INTENTS | {
     "signup_first_purchase_benefit_policy",
@@ -21803,6 +21848,8 @@ class TStationChatServiceV2:
             }
             route_coupon_support_intents = {
                 CouponQueryIntent.ISSUE_HOWTO,
+                CouponQueryIntent.COUPON_USAGE_POLICY,
+                CouponQueryIntent.COUPON_REGISTRATION_POLICY,
                 CouponQueryIntent.SIGNUP_COUPON_GUIDANCE,
                 CouponQueryIntent.PARTNER_MEMBER_COUPON_POLICY,
                 CouponQueryIntent.POLICY_INFO,
@@ -21856,7 +21903,12 @@ class TStationChatServiceV2:
                     agent_prompt_profile=AgentPromptProfile.FULL,
                     policy_intent=(
                         coupon_policy_intent
-                        if coupon_policy_intent in {"partner_member_coupon_policy", "signup_coupon_guidance"}
+                        if coupon_policy_intent in {
+                            "coupon_usage_policy",
+                            "coupon_registration_policy",
+                            "partner_member_coupon_policy",
+                            "signup_coupon_guidance",
+                        }
                         else "none"
                     ),
                 )

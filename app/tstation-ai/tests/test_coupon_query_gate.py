@@ -72,3 +72,39 @@ def test_coupon_gate_accepts_coupon_applicable_products() -> None:
 
     assert decision.intent == CouponQueryIntent.COUPON_APPLICABLE_PRODUCTS
     assert decision.coupon_hint == "16%"
+
+
+def test_coupon_gate_routes_offline_usage_policy_before_partner_policy() -> None:
+    decision = decide_coupon_query_gate(
+        user_text="다운받은 쿠폰 현장 결제할 때도 쓸 수 있어?",
+        model=_FakeGateModel(
+            CouponQueryGateDecision(
+                intent=CouponQueryIntent.PARTNER_MEMBER_COUPON_POLICY,
+                confidence=0.9,
+                product_name=None,
+                coupon_hint="partner_member",
+                reason="Incorrect partner-only route.",
+            )
+        ),
+    )
+
+    assert decision.intent == CouponQueryIntent.COUPON_USAGE_POLICY
+    assert decision.coupon_hint == "쿠폰"
+
+
+def test_coupon_gate_routes_coupon_registration_policy_deterministically() -> None:
+    decision = decide_coupon_query_gate(
+        user_text="쿠폰 번호 어디에 등록해?",
+        model=_FakeGateModel(
+            CouponQueryGateDecision(
+                intent=CouponQueryIntent.ISSUE_HOWTO,
+                confidence=0.88,
+                product_name=None,
+                coupon_hint="쿠폰",
+                reason="Generic how-to route.",
+            )
+        ),
+    )
+
+    assert decision.intent == CouponQueryIntent.COUPON_REGISTRATION_POLICY
+    assert decision.coupon_hint == "쿠폰"
