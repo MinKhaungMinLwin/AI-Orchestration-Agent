@@ -71,6 +71,11 @@ _SIGNUP_BENEFIT_FAQ_ANCHORS = (
     "회원 가입 시 발급되는 신규 회원 혜택 및 서비스",
     "신규 회원 첫 구매 쿠폰 혜택",
 )
+_SIGNUP_COUPON_FAQ_ANCHORS = (
+    "회원가입 신규회원 웰컴 쿠폰 혜택",
+    "회원 가입 시 발급되는 쿠폰 혜택",
+    "신규 회원 쿠폰 안내",
+)
 
 
 def _augment_faq_query_for_policy(query: str) -> str:
@@ -78,6 +83,8 @@ def _augment_faq_query_for_policy(query: str) -> str:
     policy_intent = current_support_policy_intent.get()
     if policy_intent == "payment_error_troubleshooting":
         anchors = _PAYMENT_ERROR_FAQ_ANCHORS
+    elif policy_intent == "signup_coupon_guidance":
+        anchors = _SIGNUP_COUPON_FAQ_ANCHORS
     elif policy_intent == "signup_first_purchase_benefit_policy":
         anchors = _SIGNUP_BENEFIT_FAQ_ANCHORS
     else:

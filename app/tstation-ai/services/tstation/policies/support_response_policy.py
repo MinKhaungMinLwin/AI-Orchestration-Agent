@@ -20,6 +20,10 @@ _PARTNER_MEMBER_COUPON_POLICY_RE = re.compile(
     r"제휴\s*(?:회원|사|몰|전용)|복지몰|임직원|제휴사|제휴회원|제휴\s*쿠폰|제휴\s*혜택",
     re.IGNORECASE,
 )
+_SIGNUP_COUPON_GUIDANCE_RE = re.compile(
+    r"회원\s*가입|신규\s*회원|가입(?:하면|시)?|웰컴\s*쿠폰|가입\s*쿠폰|신규\s*가입|첫\s*가입",
+    re.IGNORECASE,
+)
 _NONEXISTENT_BENEFIT_RE = re.compile(r"T\s*블랙|블랙\s*멤버십|VIP|브이아이피|블랙\s*카드|50\s*%", re.IGNORECASE)
 _HUMAN_RE = re.compile(r"상담원|사람\s*상담|고객센터|전화번호|연결", re.IGNORECASE)
 _PERSONAL_CONTACT_RE = re.compile(
@@ -117,6 +121,27 @@ def decide_support_response(
             ),
         )
 
+    if intent == "signup_coupon_guidance" or (
+        _COUPON_RE.search(text) and _SIGNUP_COUPON_GUIDANCE_RE.search(text)
+    ):
+        return _decision(
+            response_shape_key="signup_coupon_guidance",
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=(
+                "start_owned_coupon_lookup",
+                "route_to_partner_coupon_policy",
+                "claim_signup_coupon_already_issued",
+                "claim_signup_coupon_always_available",
+            ),
+            assistant_guidance=(
+                "회원가입 전용/신규회원/웰컴 쿠폰 문의는 제휴회원 쿠폰 안내로 보내지 않는다. "
+                "이벤트/프로모션 운영 시점에 따라 달라질 수 있음을 안내하고, 현재 진행 중인 혜택 확인 경로를 우선 제공한다. "
+                "이미 가입한 회원이라면 쿠폰함에서 발급된 쿠폰이 있는지 확인할 수 있다고만 안내하고, "
+                "가입 쿠폰이 반드시 있거나 이미 발급되었다고 단정하지 않는다."
+            ),
+        )
+
     if intent == "partner_member_coupon_policy" or (
         _COUPON_RE.search(text) and _PARTNER_MEMBER_COUPON_POLICY_RE.search(text)
     ):
@@ -129,6 +154,7 @@ def decide_support_response(
                 "claim_partner_member_verified",
                 "claim_coupon_already_issued",
                 "show_owned_coupon_voucher",
+                "route_to_signup_coupon_guidance",
             ),
             assistant_guidance=(
                 "제휴회원/제휴사/복지몰/임직원 전용 쿠폰 문의는 보유 쿠폰 조회가 아니라 접근 권한/접속 경로 정책으로 안내한다. "

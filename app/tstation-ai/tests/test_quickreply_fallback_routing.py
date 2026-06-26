@@ -780,6 +780,22 @@ def test_coupon_gate_routes_partner_member_coupon_policy_queries_to_support() ->
 
 
 @pytest.mark.parametrize(
+    "user_text",
+    [
+        "회원가입 전용 쿠폰이 있어?",
+        "신규회원 쿠폰 있어?",
+        "가입하면 쿠폰 주나요?",
+        "웰컴 쿠폰 있나요?",
+    ],
+)
+def test_coupon_gate_routes_signup_coupon_guidance_queries_to_support(user_text: str) -> None:
+    decision = decide_coupon_query_gate(user_text=user_text)
+
+    assert decision.intent == CouponQueryIntent.SIGNUP_COUPON_GUIDANCE
+    assert decision.is_actionable is False
+
+
+@pytest.mark.parametrize(
     "user_text, expected_intent",
     [
         ("내 쿠폰 뭐 있어?", CouponQueryIntent.OWNED_COUPON_LOOKUP),
@@ -15950,6 +15966,56 @@ def test_partner_member_coupon_policy_contract_blocks_owned_coupon_tools() -> No
     } in violations
 
 
+def test_signup_coupon_guidance_contract_blocks_owned_coupon_tools() -> None:
+    contract = build_turn_contract(
+        user_text="회원가입 전용 쿠폰이 있어?",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:signup_coupon_guidance"],
+            policy_intent="signup_coupon_guidance",
+        ),
+    )
+
+    assert contract.domain == "support"
+    assert contract.intent == "signup_coupon_guidance"
+    assert contract.known_slots["policy_intent"] == "signup_coupon_guidance"
+    assert "search_faq_hybrid_tool" in contract.allowed_tools
+    assert "get_my_coupons_tool" in contract.forbidden_tools
+    assert "get_coupon_applicable_products_tool" in contract.forbidden_tools
+    assert "issue_coupon_tool" in contract.forbidden_tools
+
+    violations = response_contract_violations(
+        template="voucher",
+        called_tools=["get_my_coupons_tool"],
+        assistant_response_text="보유 쿠폰을 확인했어요.",
+        contract=contract,
+    )
+    assert {
+        "type": "forbidden_tool_for_contract",
+        "severity": "error",
+        "called_tools": ["get_my_coupons_tool"],
+        "forbidden_tools": [
+            "search_product_tool",
+            "get_final_price_tool",
+            "issue_coupon_tool",
+            "get_my_coupons_tool",
+            "get_coupon_applicable_products_tool",
+        ],
+    } in violations
+
+
+def test_signup_coupon_support_policy_guides_benefit_page_not_partner_channel() -> None:
+    response_decision = decide_support_response(
+        intent="signup_coupon_guidance",
+        user_text="웰컴 쿠폰 있나요?",
+    )
+
+    assert response_decision.metadata["response_shape_key"] == "signup_coupon_guidance"
+    assert response_decision.template == TemplateName.QUICK_REPLY
+    assert "route_to_partner_coupon_policy" in response_decision.forbidden_behaviors
+    assert "제휴회원 쿠폰 안내로 보내지 않는다" in response_decision.assistant_guidance
+
+
 def test_partner_member_coupon_support_policy_guides_access_not_owned_coupon_lookup() -> None:
     response_decision = decide_support_response(
         intent="partner_member_coupon_policy",
@@ -15959,6 +16025,7 @@ def test_partner_member_coupon_support_policy_guides_access_not_owned_coupon_loo
     assert response_decision.metadata["response_shape_key"] == "partner_member_coupon_policy"
     assert response_decision.template == TemplateName.QUICK_REPLY
     assert "start_owned_coupon_lookup" in response_decision.forbidden_behaviors
+    assert "route_to_signup_coupon_guidance" in response_decision.forbidden_behaviors
     assert "제휴사 전용 URL" in response_decision.assistant_guidance
 
 
@@ -15972,6 +16039,18 @@ def test_signup_first_purchase_benefit_augments_faq_query() -> None:
     assert "회원가입하면 첫구매 혜택은 뭐가 있어?" in query
     assert "회원 가입 시 발급되는 신규 회원 혜택 및 서비스" in query
     assert "신규 회원 첫 구매 쿠폰 혜택" in query
+
+
+def test_signup_coupon_guidance_augments_faq_query() -> None:
+    token = current_support_policy_intent.set("signup_coupon_guidance")
+    try:
+        query = _augment_faq_query_for_policy("웰컴 쿠폰 있나요?")
+    finally:
+        current_support_policy_intent.reset(token)
+
+    assert "웰컴 쿠폰 있나요?" in query
+    assert "회원가입 신규회원 웰컴 쿠폰 혜택" in query
+    assert "회원 가입 시 발급되는 쿠폰 혜택" in query
 
 
 @pytest.mark.parametrize(

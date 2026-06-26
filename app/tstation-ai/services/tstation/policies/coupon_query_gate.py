@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 class CouponQueryIntent(str, Enum):
     NONE = "none"
     ISSUE_HOWTO = "issue_howto"
+    SIGNUP_COUPON_GUIDANCE = "signup_coupon_guidance"
     PARTNER_MEMBER_COUPON_POLICY = "partner_member_coupon_policy"
     OWNED_COUPON_LOOKUP = "owned_coupon_lookup"
     BEST_DISCOUNT = "best_discount"
@@ -44,6 +45,7 @@ class CouponQueryGateDecision(BaseModel):
         return self.intent not in {
             CouponQueryIntent.NONE,
             CouponQueryIntent.ISSUE_HOWTO,
+            CouponQueryIntent.SIGNUP_COUPON_GUIDANCE,
             CouponQueryIntent.PARTNER_MEMBER_COUPON_POLICY,
             CouponQueryIntent.POLICY_INFO,
             CouponQueryIntent.STACKING,
@@ -89,6 +91,10 @@ _COUPON_APPLICABLE_PRODUCTS_RE = re.compile(
 )
 _PARTNER_MEMBER_COUPON_POLICY_RE = re.compile(
     r"제휴\s*(?:회원|사|몰|전용)|복지몰|임직원|제휴사|제휴회원|제휴\s*쿠폰|제휴\s*혜택",
+    re.IGNORECASE,
+)
+_SIGNUP_COUPON_GUIDANCE_RE = re.compile(
+    r"회원\s*가입|신규\s*회원|가입(?:하면|시)?|웰컴\s*쿠폰|가입\s*쿠폰|신규\s*가입|첫\s*가입",
     re.IGNORECASE,
 )
 
@@ -164,6 +170,14 @@ def decide_coupon_query_gate(
             coupon_hint="쿠폰",
             reason="Deterministic product coupon eligibility query.",
         )
+    if _SIGNUP_COUPON_GUIDANCE_RE.search(text) and _COUPON_GATE_TRIGGER_RE.search(text):
+        return CouponQueryGateDecision(
+            intent=CouponQueryIntent.SIGNUP_COUPON_GUIDANCE,
+            confidence=0.92,
+            product_name=None,
+            coupon_hint="signup_coupon",
+            reason="Deterministic signup coupon guidance query.",
+        )
     if _PARTNER_MEMBER_COUPON_POLICY_RE.search(text):
         return CouponQueryGateDecision(
             intent=CouponQueryIntent.PARTNER_MEMBER_COUPON_POLICY,
@@ -198,7 +212,9 @@ def decide_coupon_query_gate(
     - If the user asks what products a specific coupon/discount coupon applies to, choose coupon_applicable_products.
     - If the user asks how to get/download/issue a coupon, choose issue_howto.
     - If the user asks whether multiple coupons/deals/card benefits can be used together, choose stacking.
+    - If the user asks about signup-only / new-member / welcome coupon guidance, choose signup_coupon_guidance.
     - If the user asks about partner-member-only / affiliate-only / welfare-mall / employee-only coupons or benefits, choose partner_member_coupon_policy.
+    - signup_coupon_guidance is general signup/new-member coupon guidance, not partner_member_coupon_policy and not owned_coupon_lookup.
     - partner_member_coupon_policy is policy/access guidance, not owned_coupon_lookup, and must not assume the user already has the coupon.
     - If it is a general policy/explanation question, choose policy_info.
     - If not coupon-related, choose none.

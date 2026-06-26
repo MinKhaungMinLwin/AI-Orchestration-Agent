@@ -487,6 +487,15 @@ def build_turn_contract(
                 "get_coupon_applicable_products_tool",
             ),
         )
+    if intent == "signup_coupon_guidance":
+        forbidden_tools = _merge_tuple(
+            forbidden_tools,
+            (
+                "issue_coupon_tool",
+                "get_my_coupons_tool",
+                "get_coupon_applicable_products_tool",
+            ),
+        )
     if intent == "partner_member_coupon_policy":
         forbidden_tools = _merge_tuple(
             forbidden_tools,

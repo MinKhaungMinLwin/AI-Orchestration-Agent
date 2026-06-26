@@ -662,6 +662,7 @@ class MultiAgentDomain(BaseModel):
         "price_policy_faq",
         "payment_error_troubleshooting",
         "signup_first_purchase_benefit_policy",
+        "signup_coupon_guidance",
         "partner_member_coupon_policy",
         "legal_action_guidance_denied",
         "store_service_search",
@@ -675,7 +676,7 @@ class MultiAgentDomain(BaseModel):
         description=(
             "Structured support/policy intent. Use this for non-transaction policy guidance such as shipping fee, "
             "online-vs-store price policy, regional price policy, payment error troubleshooting, "
-            "signup/first-purchase benefit policy, partner-member-only coupon policy, "
+            "signup/first-purchase benefit policy, signup coupon guidance, partner-member-only coupon policy, "
             "legal action guidance denial, store service availability, goods review lookup, "
             "store service review write CTA, or generic price policy FAQ. "
             "Use 'none' otherwise."
@@ -1844,6 +1845,7 @@ class _SlimMultiAgentDomain(BaseModel):
         "price_policy_faq",
         "payment_error_troubleshooting",
         "signup_first_purchase_benefit_policy",
+        "signup_coupon_guidance",
         "partner_member_coupon_policy",
         "legal_action_guidance_denied",
         "store_service_search",
@@ -2036,6 +2038,7 @@ Complaint routing rule:
    - "price_policy_faq": generic pricing policy FAQ that is not a live price lookup
    - "payment_error_troubleshooting": 결제 진행 중 오류/결제창 또는 결제 화면 문제/결제 진행 불가/장착일 선택란 미노출 등 checkout troubleshooting
    - "signup_first_purchase_benefit_policy": 회원가입/신규회원/첫구매 혜택·쿠폰·서비스 안내. FAQ/RAG 정책 설명이며 내 쿠폰 조회/직접 발급이 아님.
+   - "signup_coupon_guidance": 회원가입 전용/신규회원/웰컴 쿠폰 문의. 보유 쿠폰 조회가 아니라 가입 혜택/진행 중 혜택 안내.
    - "partner_member_coupon_policy": 제휴회원/제휴사/복지몰/임직원 전용 쿠폰·혜택 접근 조건 안내. 보유 쿠폰 조회가 아니라 제휴 전용 접속 경로/권한/기간 정책 안내.
    - "legal_action_guidance_denied": 티스테이션 매장/서비스/예약/장착/응대 불편과 함께 고소/소송/법적 대응/내용증명/분쟁조정/신고 방법을 묻는 경우. 법적 절차는 안내하지 않고 공식 CS 접수만 안내.
    - "store_service_search": 지역/근처/어디어디/찾아줘 + 서비스 조건 매장 검색
@@ -2301,6 +2304,7 @@ Also set `policy_intent`:
 - generic pricing policy FAQ → `price_policy_faq`
 - checkout/payment troubleshooting (payment error, payment window/screen problem, payment cannot proceed, install-date selector missing during checkout) → SUPPORT, policy_intent=`payment_error_troubleshooting`
 - signup/new-member/first-purchase benefit explanation ("회원가입하면 첫구매 혜택은 뭐가 있어?", "신규회원 혜택 알려줘", "가입하면 받을 수 있는 쿠폰 뭐야?") → SUPPORT, policy_intent=`signup_first_purchase_benefit_policy`; this is FAQ/RAG policy guidance, not owned coupon lookup or coupon issuance.
+- signup/new-member/welcome coupon guidance ("회원가입 전용 쿠폰 있어?", "신규회원 쿠폰 있어?", "가입하면 쿠폰 줘?", "웰컴 쿠폰 있나요?") → SUPPORT, policy_intent=`signup_coupon_guidance`; this is signup coupon guidance, not partner-member coupon policy and not owned coupon lookup.
 - partner-member-only coupon guidance ("제휴회원에게만 제공되는 쿠폰 보여줘", "제휴사 회원 전용 쿠폰 있어?", "복지몰 쿠폰 보여줘", "임직원 전용 쿠폰 안내해줘") → SUPPORT, policy_intent=`partner_member_coupon_policy`; this is access/policy guidance, not owned coupon lookup, coupon issuance, or coupon box listing.
 - T-Station store/service complaint mixed with legal action request (고소/소송/법적 대응/내용증명/분쟁조정/신고 방법) → SUPPORT, policy_intent=`legal_action_guidance_denied`; do not explain legal steps, institutions, documents, or procedures.
 - current event/benefit/deal list lookup ("이벤트 혜택 알려줘", "지금 받을 수 있는 혜택 알려줘", "기획전 알려줘") → DISCOVERY, agent_prompt_profile=`discovery_event_content`, execution_plan=`discovery:benefit_event_list_lookup` or `discovery:benefit_deal_list`
@@ -6746,6 +6750,34 @@ def _build_partner_member_coupon_policy_event(user_query: str) -> dict:
             "metadata": {
                 "responseShapeKey": "partner_member_coupon_policy",
                 "partnerMemberCouponPolicy": True,
+                "userText": user_query,
+            },
+        },
+    }
+
+
+def _build_signup_coupon_guidance_event(user_query: str) -> dict:
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.SUPPORT.value,
+        "assistant_response_source": "code_signup_coupon_guidance",
+        "data": {
+            "assistantResponse": (
+                "회원가입 전용 쿠폰이나 신규회원 혜택은 이벤트·프로모션 운영 시점에 따라 달라질 수 있어요.\n\n"
+                "현재 진행 중인 혜택은 이벤트/쿠폰/혜택 페이지에서 확인해 주세요.\n\n"
+                "이미 가입한 회원이라면 쿠폰함에 발급된 쿠폰이 있는지 확인할 수 있지만, "
+                "가입 쿠폰이 항상 제공되거나 이미 발급되어 있다고 바로 단정할 수는 없어요."
+            ),
+            "quickReplies": [
+                {"label": "진행 중 혜택 보기", "domain": "DISCOVERY"},
+                {"label": "쿠폰함 확인", "domain": "TRANSACTION"},
+                {"label": "1:1 문의하기", "domain": "SUPPORT"},
+            ],
+            "predictedDomains": ["SUPPORT", "DISCOVERY", "TRANSACTION"],
+            "metadata": {
+                "responseShapeKey": "signup_coupon_guidance",
+                "signupCouponGuidance": True,
                 "userText": user_query,
             },
         },
@@ -23191,6 +23223,7 @@ class TStationChatServiceV2:
             }
             route_coupon_support_intents = {
                 CouponQueryIntent.ISSUE_HOWTO,
+                CouponQueryIntent.SIGNUP_COUPON_GUIDANCE,
                 CouponQueryIntent.PARTNER_MEMBER_COUPON_POLICY,
                 CouponQueryIntent.POLICY_INFO,
                 CouponQueryIntent.STACKING,
@@ -23243,7 +23276,7 @@ class TStationChatServiceV2:
                     agent_prompt_profile=AgentPromptProfile.FULL,
                     policy_intent=(
                         coupon_policy_intent
-                        if coupon_policy_intent == "partner_member_coupon_policy"
+                        if coupon_policy_intent in {"partner_member_coupon_policy", "signup_coupon_guidance"}
                         else "none"
                     ),
                 )
@@ -24757,6 +24790,26 @@ class TStationChatServiceV2:
                     },
                 )
             event_data = partner_coupon_event.get("data") if isinstance(partner_coupon_event.get("data"), dict) else {}
+            return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
+
+        if turn_contract and turn_contract.intent == "signup_coupon_guidance":
+            signup_coupon_event = _build_signup_coupon_guidance_event(last_user_text)
+            logger.info(
+                "[SIGNUP_COUPON_GUIDANCE] advisory response: text=%r session_id=%s",
+                last_user_text[:80],
+                request.session_id,
+            )
+            if request.stream:
+                return StreamingResponse(
+                    TStationChatServiceV2._stream_policy_guard_response(signup_coupon_event),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
+            event_data = signup_coupon_event.get("data") if isinstance(signup_coupon_event.get("data"), dict) else {}
             return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
 
         if turn_contract and turn_contract.intent == "store_visit_advisory":
