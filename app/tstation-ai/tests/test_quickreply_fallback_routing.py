@@ -11509,6 +11509,91 @@ def test_product_booking_flow_metadata_carries_availability_slots() -> None:
     assert metadata["ui_action"]["entity_type"] == "product"
 
 
+def test_same_quantity_label_carries_different_contract_by_flow() -> None:
+    availability_contract = build_turn_contract(
+        user_text="4개",
+        intent_frame=IntentFrame(
+            domain=PolicyDomain.TRANSACTION,
+            intent="stock_store_search",
+            sub_intent="today_install",
+            known_slots={
+                "goods_no": "G000000309715",
+                "tire_size": "225/55R18",
+                "region": "동탄",
+                "availability_intent": "today_install",
+                "requested_cal_day": "20260626",
+                "pending_intent": "stock",
+                "goal_type": "store_with_stock",
+            },
+        ),
+        tool_plan=ToolPlan(
+            allowed_tools=("transaction_store_preview_tool",),
+            preferred_tool="transaction_store_preview_tool",
+        ),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            metadata={"response_shape_key": "quantity_prompt"},
+        ),
+        action_mode="stock_check",
+        context_state="resumed",
+    )
+    purchase_contract = build_turn_contract(
+        user_text="4개",
+        intent_frame=IntentFrame(
+            domain=PolicyDomain.TRANSACTION,
+            intent="quick_order_reservation",
+            sub_intent="quick_order_reservation",
+            known_slots={
+                "goods_no": "G000000309715",
+                "tire_size": "225/55R18",
+                "shop_name": "동탄석우점",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            },
+        ),
+        tool_plan=ToolPlan(
+            allowed_tools=("transaction_store_preview_tool", "quick_order_tool"),
+            preferred_tool="transaction_store_preview_tool",
+        ),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            metadata={"response_shape_key": "quantity_prompt"},
+        ),
+        action_mode="purchase_continuation",
+        context_state="resumed",
+    )
+
+    availability_event = {
+        "template": "quickReply",
+        "source_domain": "transaction",
+        "data": {
+            "assistantResponse": "수량을 선택해 주세요.",
+            "quickReplies": [{"label": "4개", "domain": "TRANSACTION"}],
+        },
+    }
+    purchase_event = {
+        "template": "quickReply",
+        "source_domain": "transaction",
+        "data": {
+            "assistantResponse": "수량을 선택해 주세요.",
+            "quickReplies": [{"label": "4개", "domain": "TRANSACTION"}],
+        },
+    }
+
+    normalize_ui_action_metadata(availability_event, contract=availability_contract)
+    normalize_ui_action_metadata(purchase_event, contract=purchase_contract)
+
+    availability_ui_action = availability_event["data"]["quickReplies"][0]["ui_action"]
+    purchase_ui_action = purchase_event["data"]["quickReplies"][0]["ui_action"]
+
+    assert availability_ui_action["expected_contract_intent"] == "stock_store_search"
+    assert availability_ui_action["slots"]["region"] == "동탄"
+    assert purchase_ui_action["expected_contract_intent"] == "quick_order_reservation"
+    assert purchase_ui_action["slots"]["shop_name"] == "동탄석우점"
+
+
 def test_history_vehicle_selection_does_not_match_product_name_substring_to_vehicle() -> None:
     template = {
         "template": "listCar",
