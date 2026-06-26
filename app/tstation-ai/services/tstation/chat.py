@@ -134,6 +134,8 @@ from services.tstation.policies.ui_action_policy import (
     quickreply_cta_context_from_chip,
     quickreply_cta_context_from_template,
     resolve_goods_no_from_product_template_selection,
+    resolve_vehicle_from_history_template,
+    resolve_vehicle_selection_from_listcar_event,
     resolve_vehicle_ui_selection_from_chip_context,
     resolve_ui_action_context,
     rewrite_vehicle_selection_user_text,
@@ -890,6 +892,26 @@ _ROUTER_PROTECTED_ACTIONS = frozenset({
     "store_schedule",
     "store_visit_advisory",
 })
+_CURRENT_TURN_SUPPORT_POLICY_ACTION_INTENTS = frozenset({
+    "shipping_fee_policy",
+    "online_store_price_policy",
+    "regional_price_policy",
+    "price_policy_faq",
+    "payment_error_troubleshooting",
+    "order_document_guidance",
+    "general_card_cancel_timing_policy",
+    "tire_manufacture_date_policy",
+    "tire_quality_warranty_policy",
+    "assurance_service_policy",
+    "reservation_policy_guidance",
+    "installation_work_policy",
+    "promotion_gift_policy",
+    "tire_condition_photo_policy",
+    "signup_first_purchase_benefit_policy",
+    "signup_coupon_guidance",
+    "partner_member_coupon_policy",
+    "legal_action_guidance_denied",
+})
 _RECENT_PRODUCT_SET_RANKING_TEXT_RE = re.compile(
     r"(?:이\s*중|이중|중에|목록|추천(?:해준|된)?|보여준|위\s*상품).{0,30}"
     r"(?:가장|제일|최저|저렴|싼|조용|소음|눈길|빗길|리뷰|평점|최근|신상|출시|suv|차종|가성비|프리미엄)|"
@@ -1129,6 +1151,14 @@ def _current_turn_action_mode(
     resume_source: str,
 ) -> str:
     plan_text = " ".join(str(item or "").lower() for item in (getattr(routing_result, "execution_plan", None) or ()))
+    policy_intent = str(getattr(routing_result, "policy_intent", "") or "").strip()
+    if (
+        routing_result is not None
+        and not bool(getattr(routing_result, "needs_clarification", False))
+        and domains == [MultiAgentDomain.Domain.SUPPORT]
+        and policy_intent in _CURRENT_TURN_SUPPORT_POLICY_ACTION_INTENTS
+    ):
+        return "support_policy_answer"
     if _router_contract_is_high_confidence_policy(routing_result):
         if MultiAgentDomain.Domain.SUPPORT in domains:
             return "support_policy_answer"
@@ -2783,7 +2813,6 @@ class StreamingMultiAgentCoordinator:
                 "내차 사이즈", "내 차 사이즈", "내차 규격", "내 차 규격",
                 "내차로 다시", "내 차로 다시",
                 "리뷰 영상", "유튜브", "동영상", "영상 보여",
-                "이벤트", "기획전",
             ],
             MultiAgentDomain.Domain.DISCOVERY,
         ),
@@ -5911,71 +5940,6 @@ def _vehicle_candidate_tokens(car: dict[str, Any], meta: dict[str, Any]) -> set[
             if len(token) >= 2:
                 tokens.add(token)
     return tokens
-
-
-def _selection_context_from_vehicle_meta(meta: dict[str, Any]) -> dict[str, str]:
-    return {
-        "source_intent": str(meta.get("source_intent") or meta.get("sourceIntent") or "").strip(),
-        "expected_contract_intent": str(
-            meta.get("expected_contract_intent") or meta.get("expectedContractIntent") or ""
-        ).strip(),
-    }
-
-
-def _select_vehicle_from_listcar_event(user_text: str, event_data: dict[str, Any]) -> dict | None:
-    """Return the uniquely identified vehicle from a listCar payload, if any."""
-    if not _VEHICLE_BOUND_REQUEST_RE.search(user_text or ""):
-        return None
-    cars = event_data.get("listCar")
-    metadata = event_data.get("metadata")
-    if not isinstance(cars, list) or not isinstance(metadata, list) or not cars or len(cars) != len(metadata):
-        return None
-
-    plate_match = _VEHICLE_PLATE_RE.search(user_text or "")
-    if plate_match:
-        target_plate = _normalize_vehicle_match_text(plate_match.group(0))
-        plate_matches: list[dict] = []
-        for car, meta in zip(cars, metadata):
-            if not isinstance(car, dict) or not isinstance(meta, dict):
-                continue
-            plate = _normalize_vehicle_match_text(meta.get("carNo") or car.get("licensePlate"))
-            if plate == target_plate:
-                plate_matches.append({"car": car, "meta": meta, "selection_context": _selection_context_from_vehicle_meta(meta)})
-        return plate_matches[0] if len(plate_matches) == 1 else None
-
-    tokens = _vehicle_match_tokens(user_text)
-    if not tokens:
-        return None
-
-    scored: list[tuple[int, int, dict]] = []
-    for car, meta in zip(cars, metadata):
-        if not isinstance(car, dict) or not isinstance(meta, dict):
-            continue
-        candidate_tokens = _vehicle_candidate_tokens(car, meta)
-        matched_tokens = [token for token in tokens if token in candidate_tokens]
-        if not matched_tokens:
-            continue
-        strong_matches = sum(
-            1 for token in matched_tokens if any(ch.isdigit() for ch in token) or len(token) >= 3
-        )
-        scored.append(
-            (
-                len(matched_tokens),
-                strong_matches,
-                {"car": car, "meta": meta, "selection_context": _selection_context_from_vehicle_meta(meta)},
-            )
-        )
-    if not scored:
-        return None
-    max_score = max(score for score, _, _ in scored)
-    top = [entry for entry in scored if entry[0] == max_score]
-    max_strong = max(strong for _, strong, _ in top)
-    top = [match for score, strong, match in top if strong == max_strong]
-    if len(top) != 1:
-        return None
-    if max_score == 1 and max_strong == 0:
-        return None
-    return top[0]
 
 
 def _recommendation_type_for_vehicle_auto_continue(user_text: str) -> str:
@@ -20631,65 +20595,7 @@ class TStationChatServiceV2:
     @staticmethod
     def _resolve_vehicle_from_history_template(user_text: str, template_data: dict | None) -> dict | None:
         """Resolve a user's next-turn `listCar` pick back to the selected vehicle."""
-        if not user_text or not isinstance(template_data, dict):
-            return None
-
-        def _selection_context_from_meta(meta: dict[str, Any]) -> dict[str, str]:
-            return {
-                "source_intent": str(meta.get("source_intent") or meta.get("sourceIntent") or "").strip(),
-                "expected_contract_intent": str(
-                    meta.get("expected_contract_intent") or meta.get("expectedContractIntent") or ""
-                ).strip(),
-            }
-
-        latest_listcar: dict | None = None
-        if template_data.get("template") == "listCar" and isinstance(template_data.get("data"), dict):
-            latest_listcar = template_data.get("data")
-        elif isinstance(template_data.get("listCar"), list):
-            latest_listcar = template_data
-        if latest_listcar is None:
-            return None
-
-        cars = latest_listcar.get("listCar") or []
-        metadata = latest_listcar.get("metadata") or []
-        if not isinstance(cars, list) or not isinstance(metadata, list) or len(cars) != len(metadata):
-            return None
-
-        ordinal_match = re.match(r"^\s*(\d+)\s*[\.\)번:]", str(user_text or ""))
-        if ordinal_match:
-            idx = int(ordinal_match.group(1)) - 1
-            if 0 <= idx < len(metadata):
-                car = cars[idx]
-                meta = metadata[idx]
-                if isinstance(car, dict) and isinstance(meta, dict):
-                    return {"car": car, "meta": meta, "selection_context": _selection_context_from_meta(meta)}
-
-        tokens = _vehicle_match_tokens(str(user_text or ""))
-        if tokens:
-            scored: list[tuple[int, int, dict, dict]] = []
-            for car, meta in zip(cars, metadata):
-                if not isinstance(car, dict) or not isinstance(meta, dict):
-                    continue
-                candidate_tokens = _vehicle_candidate_tokens(car, meta)
-                matched_tokens = [token for token in tokens if token in candidate_tokens]
-                if not matched_tokens:
-                    continue
-                strong_matches = sum(
-                    1 for token in matched_tokens if any(ch.isdigit() for ch in token) or len(token) >= 3
-                )
-                scored.append((len(matched_tokens), strong_matches, car, meta))
-            if scored:
-                max_score = max(score for score, _, _, _ in scored)
-                top = [entry for entry in scored if entry[0] == max_score]
-                max_strong = max(strong for _, strong, _, _ in top)
-                top = [entry for entry in top if entry[1] == max_strong]
-                if max_score == 1 and max_strong == 0:
-                    return None
-                if len(top) == 1:
-                    _, _, car, meta = top[0]
-                    return {"car": car, "meta": meta, "selection_context": _selection_context_from_meta(meta)}
-
-        return _select_vehicle_from_listcar_event(user_text, latest_listcar)
+        return resolve_vehicle_from_history_template(user_text, template_data)
 
     @staticmethod
     def _is_vehicle_tire_size_lookup_selection(selected_vehicle: dict[str, Any] | None) -> bool:

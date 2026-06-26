@@ -9278,6 +9278,52 @@ def test_high_confidence_support_policy_beats_purchase_keyword_action_mode() -> 
     )
 
 
+def test_promotion_gift_policy_beats_stale_purchase_context_without_high_confidence() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000309780",
+        tire_size="225/45R17",
+        ord_qty=4,
+        shop_name="판교점",
+        pending_intent="order",
+        goal_type="place_order",
+    )
+    routing_result = MultiAgentDomain(
+        reason="promotion gift policy question during order flow",
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        execution_plan=["support:promotion_gift_policy"],
+        user_behavior="asking gift policy during an order flow",
+        flow="support policy answer",
+        claim_check_type="none",
+        complaint_scope="none",
+        agent_prompt_profile="full",
+        policy_intent="promotion_gift_policy",
+        planner_confidence=0.61,
+    )
+
+    action_mode = _current_turn_action_mode(
+        user_text="주문 선착순으로 사은품 주는 이벤트가 진행중일때 선착순 끝났으면 결제해도 사은품 안줘?",
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        routing_result=routing_result,
+        regex_slots=ConversationSlots(pending_intent="order"),
+        merged_slots=slots,
+        explicit_override_reason="explicit_current_turn_purchase",
+        resume_source="none",
+    )
+    context_state = _context_state_for_action(action_mode=action_mode, resume_source="none", slots=slots)
+    if action_mode in {"purchase_continuation", "stock_check", "booking_continuation"}:
+        _stage_pending_order_context(slots, source=f"pre_policy_context:{context_state}")
+    else:
+        _stage_dormant_transaction_context(slots, source=f"pre_policy_context:{action_mode}")
+        _mask_dormant_transaction_action_slots(slots, source=f"pre_policy_context:{action_mode}")
+
+    assert action_mode == "support_policy_answer"
+    assert context_state == "dormant"
+    assert slots.pending_intent is None
+    assert slots.goal_type is None
+    assert slots.ord_qty is None
+    assert "dormant_purchase_context" in (slots.availability_context or {})
+
+
 def test_action_mode_resumes_stored_order_context_only_with_explicit_resume_anchor() -> None:
     slots = ConversationSlots(
         goods_no="G000000309780",
@@ -9599,6 +9645,11 @@ def test_delivery_policy_force_routes_to_support() -> None:
     result = StreamingMultiAgentCoordinator._force_keyword_routing("집으로 배송해줘")
 
     assert result is None
+
+
+@pytest.mark.parametrize("user_text", ["이벤트 목록 보여줘", "기획전 보여줘"])
+def test_event_and_deal_list_queries_do_not_force_discovery_keyword_route(user_text: str) -> None:
+    assert StreamingMultiAgentCoordinator._force_keyword_routing(user_text) is None
 
 
 def test_generic_application_question_does_not_force_route_to_pickup_support() -> None:
