@@ -120,6 +120,7 @@ from services.tstation.policies.ui_action_policy import (
     build_cta_preview_template_context,
     build_cta_preview_contract_gate,
     build_preview_tool_mapped_event,
+    build_store_availability_quantity_prompt_event,
     cta_preview_input_from_slots,
     cta_missing_slot_event,
     build_quickreply_cta_clarification_event,
@@ -16797,47 +16798,6 @@ def _apply_order_snapshot_slots(
     return slots.model_copy(update=update)
 
 
-def _build_store_availability_quantity_prompt_event(
-    *,
-    product_keyword: str,
-    tire_size: str,
-    store_name: str | None,
-    goods_no: str | None = None,
-    requested_day_label: str = "오늘",
-) -> dict:
-    store_label = str(store_name or "해당 매장").strip()
-    day_label = str(requested_day_label or "오늘").strip()
-    return {
-        "type": "data",
-        "template": "quickReply",
-        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
-        "assistant_response_source": "code_store_availability_size_followup_quantity_prompt",
-        "data": {
-            "assistantResponse": (
-                f"{product_keyword} {tire_size} 상품은 확인했어요. "
-                f"{store_label} {day_label} 장착 가능 여부를 확인하려면 장착 수량을 알려주세요."
-            ),
-            "quickReplies": [
-                {"label": "1개", "domain": "TRANSACTION"},
-                {"label": "2개", "domain": "TRANSACTION"},
-                {"label": "3개", "domain": "TRANSACTION"},
-                {"label": "4개", "domain": "TRANSACTION"},
-            ],
-            "predictedDomains": ["TRANSACTION"],
-            "metadata": {
-                "goodsId": goods_no,
-                "goodsNo": goods_no,
-                "goods_no": goods_no,
-                "tireSize": tire_size,
-                "tire_size": tire_size,
-                "productName": product_keyword,
-                "product_name": product_keyword,
-                "storeName": store_name,
-            },
-        },
-    }
-
-
 def _recent_product_coupon_price_target(user_text: str, recent_context: str) -> dict[str, Any] | None:
     current_size = normalize_tire_size(user_text)
     if not current_size:
@@ -28938,7 +28898,7 @@ class TStationChatServiceV2:
                         )
                         if not ord_qty:
                             quantity_event = _finalize_direct_code_event(
-                                _build_store_availability_quantity_prompt_event(
+                                build_store_availability_quantity_prompt_event(
                                     product_keyword=preferred_keyword,
                                     tire_size=tire_size,
                                     store_name=store_name,
@@ -28953,7 +28913,7 @@ class TStationChatServiceV2:
                             return (emitted_events, quantity_event) if quantity_event is not None else None
                         if not store_name:
                             store_event = _finalize_direct_code_event(
-                                _build_store_availability_quantity_prompt_event(
+                                build_store_availability_quantity_prompt_event(
                                     product_keyword=preferred_keyword,
                                     tire_size=tire_size,
                                     store_name=None,
@@ -29043,7 +29003,7 @@ class TStationChatServiceV2:
                             )
                             return (emitted_events, stock_event) if stock_event is not None else None
                         fallback_event = _finalize_direct_code_event(
-                            _build_store_availability_quantity_prompt_event(
+                            build_store_availability_quantity_prompt_event(
                                 product_keyword=preferred_keyword,
                                 tire_size=tire_size,
                                 store_name=store_name,

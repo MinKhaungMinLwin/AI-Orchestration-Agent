@@ -88,7 +88,6 @@ from services.tstation.chat import (
     _build_bare_product_search_tool_input,
     _build_external_price_comparison_event_from_search_results,
     _build_size_only_product_search_tool_input,
-    _build_store_availability_quantity_prompt_event,
     _store_visit_advisory_event,
     _is_pure_inventory_stock_ready,
     _is_quantity_only_stock_followup_text,
@@ -409,6 +408,7 @@ from services.tstation.policies.ui_action_policy import (
     store_name_exact_match_row,
     goods_no_from_template_event,
     normalize_preview_tool_result,
+    build_store_availability_quantity_prompt_event,
     validate_ui_actions_for_contract,
 )
 from services.tstation.policies.pickup_service_gate import deterministic_pickup_service_gate_decision
@@ -5620,7 +5620,7 @@ def test_size_only_store_availability_continuation_requires_availability_context
 
 
 def test_store_availability_size_followup_quantity_prompt_invariant() -> None:
-    event = _build_store_availability_quantity_prompt_event(
+    event = build_store_availability_quantity_prompt_event(
         product_keyword="벤투스 에어S",
         tire_size="235/55R19",
         store_name="티스테이션 판교점",

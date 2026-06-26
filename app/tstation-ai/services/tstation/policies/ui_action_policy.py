@@ -975,6 +975,47 @@ def goods_no_from_template_event(event: Mapping[str, Any] | None) -> str:
     return ""
 
 
+def build_store_availability_quantity_prompt_event(
+    *,
+    product_keyword: str,
+    tire_size: str,
+    store_name: str | None,
+    goods_no: str | None = None,
+    requested_day_label: str = "오늘",
+) -> dict[str, Any]:
+    store_label = str(store_name or "해당 매장").strip()
+    day_label = str(requested_day_label or "오늘").strip()
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "transaction",
+        "assistant_response_source": "code_store_availability_size_followup_quantity_prompt",
+        "data": {
+            "assistantResponse": (
+                f"{product_keyword} {tire_size} 상품은 확인했어요. "
+                f"{store_label} {day_label} 장착 가능 여부를 확인하려면 장착 수량을 알려주세요."
+            ),
+            "quickReplies": [
+                {"label": "1개", "domain": "TRANSACTION"},
+                {"label": "2개", "domain": "TRANSACTION"},
+                {"label": "3개", "domain": "TRANSACTION"},
+                {"label": "4개", "domain": "TRANSACTION"},
+            ],
+            "predictedDomains": ["TRANSACTION"],
+            "metadata": {
+                "goodsId": goods_no,
+                "goodsNo": goods_no,
+                "goods_no": goods_no,
+                "tireSize": tire_size,
+                "tire_size": tire_size,
+                "productName": product_keyword,
+                "product_name": product_keyword,
+                "storeName": store_name,
+            },
+        },
+    }
+
+
 def quickreply_cta_context_from_template(template_data: Mapping[str, Any] | None) -> dict[str, Any]:
     if not isinstance(template_data, Mapping):
         return {}
