@@ -20935,6 +20935,136 @@ def test_trace_shaped_general_cancel_fee_policy_blocks_order_lookup_and_replaces
     assert "별도 취소 수수료는 없고" in str(data_event["data"]["assistantResponse"])
 
 
+def test_stream_faq_policy_tool_response_emits_faq_tool_for_general_cancel_fee_policy() -> None:
+    contract = build_turn_contract(
+        user_text="예약 취소하면 비용 발생해?",
+        intent_frame=IntentFrame(domain=PolicyDomain.TRANSACTION, intent="general_cancel_fee_policy"),
+        tool_plan=ToolPlan(
+            allowed_tools=("search_faq_hybrid_tool",),
+            preferred_tool="search_faq_hybrid_tool",
+            forbidden_tools=("get_orders_of_user_tool", "get_order_status_tool"),
+            metadata={"response_intent": "general_cancel_fee_policy"},
+        ),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            metadata={"response_shape_key": "general_cancel_fee_policy_summary"},
+        ),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["transaction:general_cancel_fee_policy"],
+        ),
+    )
+    payload = _build_direct_faq_policy_tool_payload(
+        turn_contract=contract,
+        user_query="예약 취소하면 비용 발생해?",
+        raw_tool_result={
+            "status": "success",
+            "data": {
+                "items": [
+                    {
+                        "answer": "장착 예약만 취소하는 경우 별도의 취소 수수료는 없고 주문 상태에 따라 비용 여부가 달라질 수 있습니다."
+                    }
+                ]
+            },
+        },
+    )
+
+    assert payload is not None
+    tool_input, tool_result, event = payload
+
+    events = list(
+        TStationChatServiceV2._stream_faq_policy_tool_response(
+            tool_input,
+            tool_result,
+            event,
+            turn_contract=contract,
+            intent="general_cancel_fee_policy",
+            source="code_faq_policy_direct",
+        )
+    )
+    assert any(chunk == "data: [DONE]\n\n" for chunk in events)
+
+    parsed_events = []
+    for chunk in events:
+        if not chunk.startswith("data: ") or chunk == "data: [DONE]\n\n":
+            continue
+        parsed_events.append(json.loads(chunk[6:].strip()))
+
+    tool_event = next(event for event in parsed_events if event.get("type") == "tool")
+    data_event = next(event for event in parsed_events if event.get("type") == "data")
+    message_event = next(event for event in parsed_events if event.get("type") == "message")
+
+    assert tool_event["tool"] == "search_faq_hybrid_tool"
+    assert tool_event["source_domain"] == "transaction"
+    assert data_event["template"] == "quickReply"
+    assert data_event["source_domain"] == "transaction"
+    assert data_event["data"]["metadata"]["responseShapeKey"] == "general_cancel_fee_policy_summary"
+    assert "별도의 취소 수수료는 없고" in data_event["data"]["assistantResponse"]
+    assert "별도의 취소 수수료는 없고" in message_event["content"]
+
+
+def test_stream_faq_policy_tool_response_emits_support_quickreply_for_signup_policy() -> None:
+    contract = build_turn_contract(
+        user_text="가입하면 받을 수 있는 쿠폰 뭐야?",
+        intent_frame=IntentFrame(domain=PolicyDomain.SUPPORT, intent="signup_first_purchase_benefit_policy"),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            metadata={"response_shape_key": "signup_first_purchase_benefit_policy"},
+        ),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:signup_first_purchase_benefit_policy"],
+            policy_intent="signup_first_purchase_benefit_policy",
+        ),
+    )
+    payload = _build_direct_faq_policy_tool_payload(
+        turn_contract=contract,
+        user_query="가입하면 받을 수 있는 쿠폰 뭐야?",
+        raw_tool_result={
+            "status": "success",
+            "data": {
+                "items": [
+                    {
+                        "answer": "회원가입 혜택과 쿠폰은 회원 상태와 마케팅 동의 여부에 따라 달라질 수 있습니다."
+                    }
+                ]
+            },
+        },
+    )
+
+    assert payload is not None
+    tool_input, tool_result, event = payload
+
+    events = list(
+        TStationChatServiceV2._stream_faq_policy_tool_response(
+            tool_input,
+            tool_result,
+            event,
+            turn_contract=contract,
+            intent="signup_first_purchase_benefit_policy",
+            source="code_faq_policy_direct",
+        )
+    )
+    assert any(chunk == "data: [DONE]\n\n" for chunk in events)
+
+    parsed_events = []
+    for chunk in events:
+        if not chunk.startswith("data: ") or chunk == "data: [DONE]\n\n":
+            continue
+        parsed_events.append(json.loads(chunk[6:].strip()))
+
+    tool_event = next(event for event in parsed_events if event.get("type") == "tool")
+    data_event = next(event for event in parsed_events if event.get("type") == "data")
+
+    assert tool_event["tool"] == "search_faq_hybrid_tool"
+    assert tool_event["source_domain"] == "support"
+    assert data_event["source_domain"] == "support"
+    assert data_event["data"]["metadata"]["responseShapeKey"] == "signup_first_purchase_benefit_policy"
+    assert data_event["data"]["quickReplies"][0]["url"] == CTAUrls.MEMBERSHIP_BENEFIT
+
+
 def test_stream_response_multi_keeps_stream_alive_when_turn_contract_validation_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
