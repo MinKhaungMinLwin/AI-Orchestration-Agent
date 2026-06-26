@@ -6949,6 +6949,8 @@ def _build_support_faq_policy_event(
         "installation_work_policy": "추가 작업비나 현장 결제 여부는 정책과 작업 범위에 따라 달라질 수 있어요.",
         "promotion_gift_policy": "사은품 유지 여부나 차감 조건은 실제 주문 구성과 이벤트 기준을 함께 확인해야 해요.",
         "tire_condition_photo_policy": "사진만으로 주행 안전이나 교체 필요 여부를 단정하기는 어려워요. 필요하면 매장 점검도 함께 받아 주세요.",
+        "signup_first_purchase_benefit_policy": "실제 회원 상태와 쿠폰 노출 여부는 계정별로 다를 수 있으니, 회원 혜택 페이지나 쿠폰함에서도 함께 확인해 주세요.",
+        "signup_coupon_guidance": "실제 발급 가능 여부와 노출 상태는 회원 상태와 마케팅 동의 여부에 따라 달라질 수 있어요.",
     }
     fallback_by_intent = {
         "tire_manufacture_date_policy": "타이어 제조일자와 신품 기준은 정책에 따라 안내되고, 제조일자만으로 불량이나 교환 가능 여부를 바로 단정할 수는 없어요.",
@@ -6958,7 +6960,18 @@ def _build_support_faq_policy_event(
         "installation_work_policy": "공임, 장착비, 추가 작업 비용은 작업 범위와 정책에 따라 달라질 수 있어요.",
         "promotion_gift_policy": "사은품과 프로모션 유지 조건은 주문 변경 여부와 이벤트 기준에 따라 달라질 수 있어요.",
         "tire_condition_photo_policy": "타이어 상태는 사진만으로 안전 여부를 확정하기 어렵고, 점검 기준을 함께 확인해야 해요.",
+        "signup_first_purchase_benefit_policy": "회원가입과 신규회원 혜택은 회원 상태, 마케팅 동의 여부, 진행 중 정책에 따라 달라질 수 있어요.",
+        "signup_coupon_guidance": "신규회원과 가입 쿠폰 혜택은 회원 상태와 진행 중 정책에 따라 달라질 수 있어요.",
     }
+    quick_replies = [
+        {"label": "1:1 문의하기", "domain": "SUPPORT"},
+        {"label": "처음으로", "domain": "LEADING"},
+    ]
+    if intent in {"signup_first_purchase_benefit_policy", "signup_coupon_guidance"}:
+        quick_replies = [
+            {"label": "회원 혜택 확인", "url": CTAUrls.MEMBERSHIP_BENEFIT, "domain": "SUPPORT"},
+            {"label": "처음으로", "domain": "LEADING"},
+        ]
     if source_summary:
         assistant_response = f"확인된 FAQ 기준으로는 {source_summary}\n\n{followup_by_intent[intent]}"
     else:
@@ -6970,10 +6983,7 @@ def _build_support_faq_policy_event(
         "assistant_response_source": f"code_{intent}",
         "data": {
             "assistantResponse": assistant_response,
-            "quickReplies": [
-                {"label": "1:1 문의하기", "domain": "SUPPORT"},
-                {"label": "처음으로", "domain": "LEADING"},
-            ],
+            "quickReplies": quick_replies,
             "predictedDomains": ["SUPPORT"],
             "metadata": {
                 "responseShapeKey": intent,
@@ -16019,7 +16029,10 @@ _FAQ_POLICY_FALLBACK_INTENTS = frozenset({
     "promotion_gift_policy",
     "tire_condition_photo_policy",
 })
-_DIRECT_SUPPORT_FAQ_POLICY_INTENTS = _FAQ_POLICY_FALLBACK_INTENTS
+_DIRECT_SUPPORT_FAQ_POLICY_INTENTS = _FAQ_POLICY_FALLBACK_INTENTS | {
+    "signup_first_purchase_benefit_policy",
+    "signup_coupon_guidance",
+}
 _FAQ_POLICY_FALLBACK_SOURCE_TOOLS = frozenset({"get_faq_tool", "search_faq_rag_tool", "search_faq_hybrid_tool"})
 
 
@@ -25448,46 +25461,6 @@ class TStationChatServiceV2:
                     },
                 )
             event_data = order_document_event.get("data") if isinstance(order_document_event.get("data"), dict) else {}
-            return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
-
-        if turn_contract and turn_contract.intent == "signup_coupon_guidance":
-            signup_coupon_event = _build_signup_coupon_guidance_event(last_user_text)
-            logger.info(
-                "[SIGNUP_COUPON_GUIDANCE] advisory response: text=%r session_id=%s",
-                last_user_text[:80],
-                request.session_id,
-            )
-            if request.stream:
-                return StreamingResponse(
-                    TStationChatServiceV2._stream_policy_guard_response(signup_coupon_event),
-                    media_type="text/event-stream",
-                    headers={
-                        "Cache-Control": "no-cache",
-                        "Connection": "keep-alive",
-                        "X-Accel-Buffering": "no",
-                    },
-                )
-            event_data = signup_coupon_event.get("data") if isinstance(signup_coupon_event.get("data"), dict) else {}
-            return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
-
-        if turn_contract and turn_contract.intent == "signup_first_purchase_benefit_policy":
-            signup_benefit_event = _build_signup_first_purchase_benefit_event(last_user_text)
-            logger.info(
-                "[SIGNUP_FIRST_PURCHASE_BENEFIT] advisory response: text=%r session_id=%s",
-                last_user_text[:80],
-                request.session_id,
-            )
-            if request.stream:
-                return StreamingResponse(
-                    TStationChatServiceV2._stream_policy_guard_response(signup_benefit_event),
-                    media_type="text/event-stream",
-                    headers={
-                        "Cache-Control": "no-cache",
-                        "Connection": "keep-alive",
-                        "X-Accel-Buffering": "no",
-                    },
-                )
-            event_data = signup_benefit_event.get("data") if isinstance(signup_benefit_event.get("data"), dict) else {}
             return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
 
         if turn_contract and turn_contract.intent in (

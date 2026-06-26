@@ -20626,6 +20626,23 @@ def test_support_faq_policy_event_prefers_faq_source_summary_when_available() ->
     assert event["data"]["metadata"]["faqSourceSummaryUsed"] is True
 
 
+def test_support_faq_policy_event_for_signup_uses_membership_cta() -> None:
+    event = _build_support_faq_policy_event(
+        "signup_first_purchase_benefit_policy",
+        "회원가입하면 첫구매 혜택은 뭐가 있어?",
+        tool_result={
+            "status": "success",
+            "data": {"items": [{"answer": "회원 혜택과 쿠폰은 회원 상태와 마케팅 동의 여부에 따라 달라질 수 있습니다."}]},
+        },
+    )
+
+    assert event is not None
+    quick_replies = event["data"]["quickReplies"]
+    assert quick_replies[0]["label"] == "회원 혜택 확인"
+    assert quick_replies[0]["url"] == CTAUrls.MEMBERSHIP_BENEFIT
+    assert event["data"]["metadata"]["responseShapeKey"] == "signup_first_purchase_benefit_policy"
+
+
 def test_direct_faq_policy_tool_payload_builds_transaction_policy_event() -> None:
     contract = build_turn_contract(
         user_text="예약 취소하면 비용 발생해?",
@@ -20693,6 +20710,37 @@ def test_direct_faq_policy_tool_payload_builds_support_policy_event() -> None:
     assert tool_result["status"] == "success"
     assert event["source_domain"] == "support"
     assert event["data"]["metadata"]["responseShapeKey"] == "tire_manufacture_date_policy"
+
+
+def test_direct_faq_policy_tool_payload_builds_signup_support_policy_event() -> None:
+    contract = build_turn_contract(
+        user_text="가입하면 받을 수 있는 쿠폰 뭐야?",
+        intent_frame=IntentFrame(domain=PolicyDomain.SUPPORT, intent="signup_first_purchase_benefit_policy"),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            metadata={"response_shape_key": "signup_first_purchase_benefit_policy"},
+        ),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:signup_first_purchase_benefit_policy"],
+            policy_intent="signup_first_purchase_benefit_policy",
+        ),
+    )
+    payload = _build_direct_faq_policy_tool_payload(
+        turn_contract=contract,
+        user_query="가입하면 받을 수 있는 쿠폰 뭐야?",
+        raw_tool_result={
+            "status": "success",
+            "data": {"items": [{"answer": "회원 혜택과 쿠폰은 회원 상태와 마케팅 동의 여부에 따라 달라질 수 있습니다."}]},
+        },
+    )
+
+    assert payload is not None
+    _, _, event = payload
+    assert event["source_domain"] == "support"
+    assert event["data"]["quickReplies"][0]["url"] == CTAUrls.MEMBERSHIP_BENEFIT
+    assert event["data"]["metadata"]["responseShapeKey"] == "signup_first_purchase_benefit_policy"
 
 
 def test_base_agent_contract_sensitive_tool_guard_replaces_forbidden_lookup_with_faq(
