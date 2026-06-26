@@ -1,0 +1,183 @@
+from services.tstation.policies.transaction_response_policy import decide_transaction_response
+from services.tstation.policies.response_decision import ResponseShape, TemplateName
+
+
+def test_tc003_today_install_nearby_stock_renders_location_candidates() -> None:
+    decision = decide_transaction_response(
+        intent="stock_store_search",
+        user_text="dynapro HPX 오늘 장착 가능한 근처 매장 알려줘",
+        known_slots={
+            "product_name": "dynapro HPX",
+            "goods_no": "1029384",
+            "tire_size": "235/55R19",
+            "lat": 37.4,
+            "lng": 127.1,
+        },
+    )
+
+    assert decision.template == TemplateName.QUICK_REPLY
+    assert decision.response_shape == ResponseShape.CLARIFY
+    assert decision.metadata["response_shape_key"] == "missing_stock_search_slots"
+    assert decision.metadata["missing_slots"] == ("quantity",)
+    assert decision.required_slots == ()
+
+
+def test_tc031_product_named_stock_request_asks_for_all_missing_slots() -> None:
+    decision = decide_transaction_response(
+        intent="stock_store_search",
+        user_text="파주 시청 근처 더타이어샵 매장에 iON evo 재고 있을까? 오늘 당장 장착해야 하는데",
+        known_slots={"product_name": "iON evo", "place": "파주 시청"},
+    )
+
+    assert decision.template == TemplateName.QUICK_REPLY
+    assert decision.response_shape == ResponseShape.CLARIFY
+    assert decision.metadata["response_shape_key"] == "missing_stock_search_slots"
+    assert decision.metadata["missing_slots"] == ("tire_size", "quantity")
+    assert decision.required_slots == ()
+
+
+def test_tc049_invalid_gangnam_store_does_not_show_datepick() -> None:
+    decision = decide_transaction_response(
+        intent="store_schedule",
+        user_text="강남점에 방문해서 서비스 받고 싶은데, 예약 가능한 시간이 언제야?",
+        known_slots={"store_name": "강남점", "store_exact_match": False, "booking_type": "store_visit"},
+    )
+
+    assert decision.template == TemplateName.QUICK_REPLY
+    assert decision.response_shape == ResponseShape.CLARIFY
+    assert decision.metadata["response_shape_key"] == "unverified_store_schedule_lookup"
+    assert decision.required_slots == ()
+    assert "datepick_for_unverified_store" in decision.forbidden_behaviors
+    assert "pretend_store_exists" in decision.forbidden_behaviors
+
+
+def test_tc058_noon_request_keeps_datepick_but_blocks_noon_slot() -> None:
+    decision = decide_transaction_response(
+        intent="store_schedule",
+        user_text="12시에 작업 가능한 서울 지역 매장 있을까요?",
+        known_slots={"region": "서울", "booking_type": "store_visit"},
+    )
+
+    assert decision.template == TemplateName.DATE_PICK
+    assert decision.response_shape == ResponseShape.DATE_PICK
+    assert decision.metadata["response_shape_key"] == "time_filtered_schedule"
+    assert decision.forbidden_behaviors == ("show_blocked_noon_slot",)
+
+
+def test_tc219_unavailable_inventory_must_not_progress_to_schedule() -> None:
+    decision = decide_transaction_response(
+        intent="inventory_availability",
+        user_text="이거 판교점에 지금 재고 있어?",
+        known_slots={
+            "product_name": "iON evo AS",
+            "tire_size": "235/35R20",
+            "quantity": 4,
+            "store_name": "판교점",
+        },
+        tool_result={
+            "available_qty": 0,
+            "today_installable": False,
+            "tna_available": False,
+        },
+    )
+
+    assert decision.template == TemplateName.QUICK_REPLY
+    assert decision.response_shape == ResponseShape.NO_RESULT
+    assert decision.metadata["response_shape_key"] == "stock_unavailable"
+    assert "say_available_when_stock_zero" in decision.forbidden_behaviors
+    assert "datepick_for_unavailable_stock" in decision.forbidden_behaviors
+
+
+def test_inventory_tool_arrays_with_stock_are_available() -> None:
+    decision = decide_transaction_response(
+        intent="inventory_availability",
+        user_text="이거 역삼점에 지금 재고 있어?",
+        known_slots={
+            "product_name": "iON evo",
+            "quantity": 2,
+            "store_name": "역삼점",
+        },
+        tool_result={
+            "todayShopArray": [{"shopId": "F00098"}],
+            "tnaShopArray": [],
+        },
+    )
+
+    assert decision.template == TemplateName.LOCATION
+    assert decision.response_shape == ResponseShape.LOCATION
+    assert decision.metadata["response_shape_key"] == "stock_available"
+
+
+def test_store_specific_stock_request_requires_quantity_before_location() -> None:
+    decision = decide_transaction_response(
+        intent="stock_store_search",
+        user_text="이거 판교점에 재고 있어?",
+        known_slots={
+            "product_name": "iON evo",
+            "goods_no": "G000000319451",
+            "tire_size": "235/35R20",
+            "store_name": "판교점",
+        },
+    )
+
+    assert decision.template == TemplateName.QUICK_REPLY
+    assert decision.response_shape == ResponseShape.CLARIFY
+    assert decision.metadata["response_shape_key"] == "missing_stock_search_slots"
+    assert decision.metadata["missing_slots"] == ("quantity",)
+    assert decision.required_slots == ()
+
+
+def test_tc231_missing_size_does_not_build_null_order_summary() -> None:
+    decision = decide_transaction_response(
+        intent="quick_order_reservation",
+        user_text="키너지 ST AS 2개 서초점 오늘 장착 가능?",
+        known_slots={"product_name": "키너지 ST AS", "quantity": 2, "store_name": "서초점"},
+    )
+
+    assert decision.template == TemplateName.QUICK_REPLY
+    assert decision.response_shape == ResponseShape.CLARIFY
+    assert decision.metadata["response_shape_key"] == "missing_order_slots"
+    assert decision.metadata["missing_slots"] == ("tire_size",)
+    assert decision.required_slots == ()
+    assert "order_summary_with_null_required_fields" in decision.forbidden_behaviors
+
+
+def test_reservation_request_requires_quantity_when_product_size_store_are_known() -> None:
+    decision = decide_transaction_response(
+        intent="quick_order_reservation",
+        user_text="키너지 ST AS 서초점 예약해줘",
+        known_slots={
+            "product_name": "키너지 ST AS",
+            "goods_no": "G000000319451",
+            "tire_size": "205/55R17",
+            "store_name": "서초점",
+            "shop_id": "T00077",
+        },
+    )
+
+    assert decision.template == TemplateName.QUICK_REPLY
+    assert decision.response_shape == ResponseShape.CLARIFY
+    assert decision.metadata["response_shape_key"] == "missing_order_slots"
+    assert decision.metadata["missing_slots"] == ("quantity",)
+    assert decision.required_slots == ()
+
+
+def test_tc233_complete_product_quantity_store_request_shows_reservation_slots() -> None:
+    decision = decide_transaction_response(
+        intent="quick_order_reservation",
+        user_text="dynapro hpx 4개 티스테이션 오목천점 예약해줘",
+        known_slots={
+            "product_name": "dynapro HPX",
+            "goods_no": "1029384",
+            "tire_size": "235/55R19",
+            "quantity": 4,
+            "shop_id": "T01234",
+            "store_name": "티스테이션 오목천점",
+        },
+    )
+
+    assert decision.template == TemplateName.DATE_PICK
+    assert decision.response_shape == ResponseShape.DATE_PICK
+    assert decision.metadata["response_shape_key"] == "reservation_slots"
+    assert decision.required_slots == ()
+    assert "store_hours_instead_of_slots" in decision.forbidden_behaviors

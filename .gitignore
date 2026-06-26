@@ -29,12 +29,10 @@ logs
 **.pem**
 **.crt*
 dataset
-test
 temp/*
 
 # App
 app/tstation-ai/static/public/*
-app/tstation-ai/tests/
 app/tstation-ai/api/router_local.py
 playground
 bin

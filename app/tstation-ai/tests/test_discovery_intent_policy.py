@@ -117,7 +117,7 @@ def test_general_ev_recommendation_still_uses_recommendation_engine() -> None:
     plan = plan_discovery_tools(frame)
 
     assert frame.intent == "product_recommendation"
-    assert frame.sub_intent == "general_recommendation"
+    assert frame.sub_intent == "condition_recommendation"
     assert plan.preferred_tool == "get_products_recommendations_tool"
     assert plan.tool_args_patch == {"vehicle_type": "ev"}
 
@@ -127,7 +127,7 @@ def test_ev_low_noise_recommendation_keeps_ev_axis() -> None:
     plan = plan_discovery_tools(frame)
 
     assert frame.intent == "product_recommendation"
-    assert frame.sub_intent == "general_recommendation"
+    assert frame.sub_intent == "condition_recommendation"
     assert frame.entities["vehicle_category"] == "ev"
     assert frame.entities["quiet_focus"] is True
     assert plan.preferred_tool == "get_products_recommendations_tool"
@@ -148,7 +148,7 @@ def test_low_noise_recommendation_maps_to_low_vibration() -> None:
     plan = plan_discovery_tools(frame)
 
     assert frame.intent == "product_recommendation"
-    assert frame.sub_intent == "general_recommendation"
+    assert frame.sub_intent == "condition_recommendation"
     assert frame.entities["quiet_focus"] is True
     assert plan.tool_args_patch == {"rcmd_type": "low_vibration"}
 

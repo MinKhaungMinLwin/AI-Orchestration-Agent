@@ -1037,7 +1037,7 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
         if entities.get("brand_cd"):
             args["brand_cd"] = entities["brand_cd"]
         return ToolPlan(
-            allowed_tools=("search_product_tool",),
+            allowed_tools=("search_product_tool", "get_product_description_tool"),
             preferred_tool="search_product_tool",
             tool_args_patch=args,
             forbidden_tools=("get_products_recommendations_tool",),
@@ -1217,7 +1217,7 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             if entities.get("brand_cd"):
                 args["brand_cd"] = entities["brand_cd"]
         return ToolPlan(
-            allowed_tools=("search_product_tool", "get_product_description_tool"),
+            allowed_tools=("search_product_tool", "get_product_description_tool", "get_cheapest_price_tool"),
             preferred_tool="search_product_tool",
             tool_args_patch=args,
             forbidden_tools=("get_products_recommendations_tool", "product_card_first_response"),
@@ -1278,22 +1278,22 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
         args["rcmd_type"] = "fuel_efficiency"
     elif entities.get("performance") == "performance" and "rcmd_type" not in args:
         args["rcmd_type"] = "performance"
-    if entities.get("season") == "winter" and not entities.get("recommendation_scenario"):
+    if entities.get("season") == "winter" and not args.get("season_nm"):
         if args.get("rcmd_type"):
             args["season_nm"] = "겨울"
         else:
             args.update({"rcmd_type": "snow", "season_nm": "겨울"})
-    elif entities.get("season") == "all_weather" and not entities.get("recommendation_scenario"):
+    elif entities.get("season") == "all_weather" and not args.get("season_nm"):
         if args.get("rcmd_type"):
             args["season_nm"] = "올웨더"
         else:
             args.update({"rcmd_type": "all_weather", "season_nm": "올웨더"})
-    elif entities.get("season") == "all_season" and not entities.get("recommendation_scenario"):
+    elif entities.get("season") == "all_season" and not args.get("season_nm"):
         if args.get("rcmd_type"):
             args["season_nm"] = "사계절"
         else:
             args.update({"rcmd_type": "all_weather", "season_nm": "사계절"})
-    elif entities.get("season") == "summer" and not entities.get("recommendation_scenario"):
+    elif entities.get("season") == "summer" and not args.get("season_nm"):
         args["season_nm"] = "여름"
     if entities.get("explicit_tire_size") or entities.get("price_goal") != "similar_range":
         if entities.get("tire_size"):

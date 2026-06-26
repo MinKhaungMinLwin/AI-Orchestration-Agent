@@ -12,7 +12,12 @@ import re
 from typing import Any
 
 from services.tstation.policies.intent_frame import PolicyDomain
-from services.tstation.policies.store_service_gate import extract_store_attribute_inquiry, extract_valid_store_name
+from services.tstation.policies.store_service_gate import (
+    classify_store_name_role,
+    extract_store_attribute_inquiry,
+    extract_valid_store_name,
+    has_store_service_availability_signal,
+)
 
 
 _PRODUCT_HINT_RE = re.compile(
@@ -32,12 +37,6 @@ _RESERVATION_STORE_INFO_RE = re.compile(
     re.IGNORECASE,
 )
 _MAINTENANCE_ADDON_SERVICE_RE = re.compile(r"엔진\s*오일|실내\s*필터|필터|와이퍼|배터리|경정비", re.IGNORECASE)
-_STORE_SERVICE_AVAILABILITY_RE = re.compile(
-    r"보관\s*서비스|타이어\s*보관|윈터\s*타이어\s*보관|겨울\s*타이어\s*보관|"
-    r"보관\s*(?:돼|되|가능|되나요|가능해)|질소\s*충전|질소|"
-    r"야간\s*(?:정비|서비스|작업)|야간정비|얼라인먼트.{0,12}(?:잘|무료|가능)",
-    re.IGNORECASE,
-)
 _TIRE_SERVICE_RE = re.compile(r"타이어.{0,12}(?:교체|장착|서비스|작업)|(?:교체|장착).{0,12}타이어", re.IGNORECASE)
 _ADDON_WITH_RE = re.compile(r"같이|함께|동시|하면서|겸|추가|하고\s*싶", re.IGNORECASE)
 _PURCHASE_RE = re.compile(r"구매|주문|결제|살래|살게|사고\s*싶|사려고", re.IGNORECASE)
@@ -52,6 +51,10 @@ _REGION_HINT_RE = re.compile(
     re.IGNORECASE,
 )
 _PRICE_OR_COUPON_RE = re.compile(r"가격|할인가|최대\s*혜택|쿠폰|할인", re.IGNORECASE)
+_EXECUTABLE_PRICE_COUPON_RE = re.compile(
+    r"가격|할인가|최대\s*혜택|쿠폰.{0,12}적용|적용.{0,12}쿠폰",
+    re.IGNORECASE,
+)
 _PRODUCT_BENEFIT_LOOKUP_RE = re.compile(r"행사|이벤트|프로모션|기획전|딜|deal|쿠폰|할인권|혜택", re.IGNORECASE)
 _BENEFIT_STACKING_RE = re.compile(r"중복|같이|함께|동시|둘\s*다|다\s*돼|같이\s*돼", re.IGNORECASE)
 _REGIONAL_PRICE_POLICY_RE = re.compile(
@@ -67,7 +70,7 @@ _PATTERN_COUPON_RE = re.compile(
     re.IGNORECASE,
 )
 _SUPPORT_RE = re.compile(
-    r"만료|원복|상담원|고객센터|1:1|문의|불만|클레임|공기압|TPMS|티피엠에스|경고등",
+    r"보증|워런티|warranty|만료|원복|상담원|고객센터|1:1|문의|불만|클레임|공기압|TPMS|티피엠에스|경고등",
     re.IGNORECASE,
 )
 _DESCRIPTION_RE = re.compile(r"뭐야|뭔지|설명|차이|장점|왜|등급|연비|소음|마일리지|최신", re.IGNORECASE)
@@ -231,16 +234,29 @@ def plan_cross_domain_turn(user_text: str, *, known_slots: dict[str, Any] | None
     needs_support = bool(_SUPPORT_RE.search(text))
     needs_description = bool(_DESCRIPTION_RE.search(text))
     needs_pattern_coupon_lookup = bool(has_product_hint and _PATTERN_COUPON_RE.search(text))
+    needs_executable_price_coupon = bool(_EXECUTABLE_PRICE_COUPON_RE.search(text))
     needs_product_benefit_lookup = bool(
         has_product_hint
         and _PRODUCT_BENEFIT_LOOKUP_RE.search(text)
         and not _BENEFIT_STACKING_RE.search(text)
+        and not needs_pattern_coupon_lookup
+        and not needs_executable_price_coupon
     )
     needs_regional_price_policy = bool(_REGIONAL_PRICE_POLICY_RE.search(text))
-    has_current_store = bool(extract_valid_store_name(text) or _REGION_HINT_RE.search(text))
     carried_store_name = str(slots.get("store_name") or slots.get("shop_name") or "").strip()
-    store_attribute_inquiry = extract_store_attribute_inquiry(text, store_name=carried_store_name or None)
-    needs_store_service_availability = bool(_STORE_SERVICE_AVAILABILITY_RE.search(text))
+    current_store_name = extract_valid_store_name(text)
+    store_name_role = classify_store_name_role(text, store_name=current_store_name)
+    current_store_is_context = store_name_role.role == "context"
+    has_current_store = bool(
+        (current_store_name and not current_store_is_context)
+        or (not current_store_is_context and _REGION_HINT_RE.search(text))
+    )
+    store_attribute_inquiry = (
+        None
+        if current_store_is_context
+        else extract_store_attribute_inquiry(text, store_name=carried_store_name or None)
+    )
+    needs_store_service_availability = has_store_service_availability_signal(text)
     needs_stock_or_booking = bool(_STOCK_OR_BOOKING_RE.search(text) or (_PURCHASE_RE.search(text) and has_current_store))
     needs_reservation_store_info = bool(_RESERVATION_STORE_REF_RE.search(text) and _RESERVATION_STORE_INFO_RE.search(text))
     needs_maintenance_addon_with_tire = bool(

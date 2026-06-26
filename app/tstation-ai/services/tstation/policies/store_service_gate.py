@@ -32,6 +32,7 @@ STORE_ATTRIBUTE_VERIFICATION_LEVEL = Literal[
     "store_contact_required",
     "unsupported_or_policy",
 ]
+STORE_NAME_ROLE = Literal["target", "context", "none"]
 
 
 STORE_SERVICE_CATALOG: dict[str, dict[str, object]] = {
@@ -89,6 +90,12 @@ class StoreAttributeInquiry(BaseModel):
         default="store_contact_required",
         description="Whether the attribute can be answered from tool data or requires direct store contact.",
     )
+
+
+class StoreNameRoleDecision(BaseModel):
+    role: STORE_NAME_ROLE = Field(description="Whether the current-turn store name is an action target or context.")
+    store_name: str = Field(default="", description="Extracted current-turn store name, if any.")
+    reason: str = Field(description="Short English reason for traces/logs only.")
 
 
 STORE_CONTACT_REDIRECT_RE = re.compile(
@@ -151,6 +158,12 @@ _UNVERIFIABLE_STORE_PREFERENCE_RULES: tuple[tuple[re.Pattern[str], str], ...] = 
     ),
     (re.compile(r"숙련도|실력|잘\s*보는|잘하는|정확도|꼼꼼", re.IGNORECASE), "작업 숙련도"),
 )
+_STORE_SERVICE_AVAILABILITY_SIGNAL_RE = re.compile(
+    r"보관\s*서비스|타이어\s*보관|윈터\s*타이어\s*보관|겨울\s*타이어\s*보관|"
+    r"보관\s*(?:돼|되|가능|되나요|가능해)|질소\s*충전|질소|"
+    r"야간\s*(?:정비|서비스|작업)|야간정비|얼라인먼트.{0,12}(?:잘|무료|가능)",
+    re.IGNORECASE,
+)
 _STORE_NAME_RE = re.compile(r"((?:티스테이션\s*)?[가-힣A-Za-z0-9]+(?:점|매장))")
 _STORE_MENTION_CONTEXT_RE = re.compile(
     r"티스테이션|더타이어샵|매장|지점|장착점|주소|전화|연락처|영업|운영|휴무|"
@@ -189,6 +202,22 @@ _OPERATING_CONDITION_ATTRIBUTE_RE = re.compile(
     re.IGNORECASE,
 )
 _SUBJECTIVE_QUALITY_ATTRIBUTE_RE = re.compile(r"잘\s*(?:봐|보|하)|숙련도|실력|정확도|꼼꼼|친절|평가|평점", re.IGNORECASE)
+_WARRANTY_OR_COMPLAINT_CONTEXT_RE = re.compile(
+    r"보증|워런티|warranty|품질\s*보증|안심\s*서비스|안심서비스|클레임|불만|하자|불량|문제|"
+    r"마모|편마모|수명|보상|무상\s*(?:교체|교환)|환불|책임|광고(?:랑|와)?\s*다르",
+    re.IGNORECASE,
+)
+_STORE_TARGET_ACTION_RE = re.compile(
+    r"영업|운영|휴무|문\s*열|주소|위치|전화|연락처|정보|상세|사진|외관|내부|리뷰|후기|"
+    r"평점|평가|예약|재고|장착|교체|작업|가능|돼|되나|있어|보관|질소|얼라인먼트|리프트|"
+    r"야간\s*(?:정비|서비스|작업)|야간정비|대기실|대기\s*공간",
+    re.IGNORECASE,
+)
+_STORE_CONTEXT_MARKER_RE = re.compile(
+    r"에서\s*(?:교체|장착|구매|주문|방문|서비스|정비|받|했|한|산)|"
+    r"(?:교체|장착|구매|주문|방문|서비스|정비).{0,12}(?:했던|한|받은)\s*(?:매장|지점|곳)",
+    re.IGNORECASE,
+)
 
 
 def _normalize_store_name(value: str | None) -> str:
@@ -213,6 +242,44 @@ def extract_valid_store_name(text: str) -> str | None:
     return match.group(1)
 
 
+def classify_store_name_role(text: str, *, store_name: str | None = None) -> StoreNameRoleDecision:
+    """Classify whether a store mention is the current action target or background context."""
+    value = str(text or "")
+    extracted_store_name = _normalize_store_name(store_name) or _normalize_store_name(extract_valid_store_name(value))
+    if not extracted_store_name:
+        return StoreNameRoleDecision(role="none", reason="No valid current-turn store name.")
+
+    if _WARRANTY_OR_COMPLAINT_CONTEXT_RE.search(value) and _STORE_CONTEXT_MARKER_RE.search(value):
+        return StoreNameRoleDecision(
+            role="context",
+            store_name=extracted_store_name,
+            reason="Store mention describes prior service context for support/warranty complaint.",
+        )
+    if extract_store_attribute_inquiry(value, store_name=extracted_store_name) is not None:
+        return StoreNameRoleDecision(
+            role="target",
+            store_name=extracted_store_name,
+            reason="Store mention is the explicit target of an attribute/service question.",
+        )
+    if _STORE_TARGET_ACTION_RE.search(value) and not _WARRANTY_OR_COMPLAINT_CONTEXT_RE.search(value):
+        return StoreNameRoleDecision(
+            role="target",
+            store_name=extracted_store_name,
+            reason="Store mention is tied to a store lookup, booking, or attribute action.",
+        )
+    if _STORE_CONTEXT_MARKER_RE.search(value):
+        return StoreNameRoleDecision(
+            role="context",
+            store_name=extracted_store_name,
+            reason="Store mention is background information, not the current action target.",
+        )
+    return StoreNameRoleDecision(
+        role="target",
+        store_name=extracted_store_name,
+        reason="Bare or direct store mention defaults to target for store information lookup.",
+    )
+
+
 def extract_store_attribute_inquiry(
     text: str,
     *,
@@ -221,6 +288,8 @@ def extract_store_attribute_inquiry(
     """Extract a generic store attribute inquiry while preserving raw attribute text."""
     value = str(text or "").strip()
     if not value or _ADJACENT_NON_ATTRIBUTE_RE.search(value) or not _ATTRIBUTE_QUESTION_RE.search(value):
+        return None
+    if _WARRANTY_OR_COMPLAINT_CONTEXT_RE.search(value) and _STORE_CONTEXT_MARKER_RE.search(value):
         return None
     store_label = _normalize_store_name(store_name)
     if not store_label:
@@ -274,6 +343,11 @@ def unverifiable_store_preference_labels(text: str) -> list[str]:
         if pattern.search(text) and label not in labels:
             labels.append(label)
     return labels
+
+
+def has_store_service_availability_signal(text: str) -> bool:
+    """Return True for store service availability anchors shared across policy layers."""
+    return bool(_STORE_SERVICE_AVAILABILITY_SIGNAL_RE.search(text or ""))
 
 
 def is_store_contact_redirect_text(text: str) -> bool:

@@ -9,8 +9,10 @@ from typing import Any
 from services.tstation.policies.intent_frame import IntentFrame, PolicyDomain
 from services.tstation.policies.response_decision import ToolPlan
 from services.tstation.policies.store_service_gate import (
+    classify_store_name_role,
     extract_store_attribute_inquiry,
     extract_valid_store_name,
+    has_store_service_availability_signal,
     normalize_store_service_request,
 )
 
@@ -56,6 +58,30 @@ _RESERVATION_STORE_REF_RE = re.compile(
 )
 _RESERVATION_STORE_INFO_RE = re.compile(
     r"전화|전화번호|연락처|주소|위치|어디|영업|운영|휴무|정보|상세|가고\s*싶|연락|전화하고",
+    re.IGNORECASE,
+)
+_PLAIN_STORE_INFO_RE = re.compile(
+    r"정보|상세|주소|전화|전화번호|연락처|영업\s*시간|운영\s*시간|휴무|서비스|"
+    r"전경|사진|외관|내부|모습|이미지|매장\s*상세",
+    re.IGNORECASE,
+)
+_STORE_HOLIDAY_LOOKUP_RE = re.compile(
+    r"일요일|공휴일|휴일|휴무|명절|설날|설\s*연휴|추석|연휴|석가탄신일|어린이날|5\s*/\s*1|"
+    r"문\s*열|영업|운영|쉬나|쉬어",
+    re.IGNORECASE,
+)
+_STORE_NAME_CANDIDATE_RE = re.compile(r"((?:티스테이션\s*)?[가-힣A-Za-z0-9]+(?:점|매장))")
+_STORE_RESERVATION_ACTION_RE = re.compile(
+    r"예약\s*(?:가능|시간|일정|변경|바꾸|바꿔|취소|해줘|잡아)|"
+    r"방문\s*(?:가능|시간|일정|변경)|"
+    r"장착\s*(?:가능|예약|해줘)|"
+    r"\d{1,2}\s*시\s*로\s*(?:변경|바꿔)",
+    re.IGNORECASE,
+)
+_ORDER_HISTORY_REORDER_PREVIOUS_RE = re.compile(r"지난(?:번)?|이전|전에|예전|마지막|과거", re.IGNORECASE)
+_ORDER_HISTORY_REORDER_SOURCE_RE = re.compile(r"주문|구매|장착|교체|산|샀", re.IGNORECASE)
+_ORDER_HISTORY_REORDER_ACTION_RE = re.compile(
+    r"다시|재구매|같은|동일|또|구매|주문|장착|교체|살래|살게",
     re.IGNORECASE,
 )
 _RESERVATION_STATUS_LOOKUP_RE = re.compile(
@@ -130,12 +156,6 @@ _MAINTENANCE_HISTORY_SERVICE_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("경정비", (r"경정비",)),
 )
 _MAINTENANCE_ADDON_SERVICE_RE = re.compile(r"엔진\s*오일|실내\s*필터|필터|와이퍼|배터리|경정비", re.IGNORECASE)
-_STORE_SERVICE_AVAILABILITY_RE = re.compile(
-    r"보관\s*서비스|타이어\s*보관|윈터\s*타이어\s*보관|겨울\s*타이어\s*보관|"
-    r"보관\s*(?:돼|되|가능|되나요|가능해)|질소\s*충전|질소|"
-    r"야간\s*(?:정비|서비스|작업)|야간정비|얼라인먼트.{0,12}(?:잘|무료|가능)",
-    re.IGNORECASE,
-)
 _STORE_SERVICE_SEARCH_RE = re.compile(
     r"(?:매장|지점|곳).{0,20}(?:어디|찾|검색|알려|보여|있어|있나|가능)|"
     r"(?:어디|찾|검색|알려|보여|있어|있나|가능).{0,20}(?:매장|지점|곳)",
@@ -387,6 +407,48 @@ def _is_specific_store_recheck_turn(text: str, current_store_name: str | None, s
     return bool(current_store_name or slots.get("shop_id") or slots.get("shop_name") or slots.get("store_name"))
 
 
+def _extract_policy_store_name_candidate(text: str) -> str | None:
+    match = _STORE_NAME_CANDIDATE_RE.search(text or "")
+    if not match:
+        return None
+    return re.sub(r"^티스테이션\s+", "", re.sub(r"\s+", " ", match.group(1)).strip(), flags=re.IGNORECASE)
+
+
+def _is_plain_store_info_lookup(text: str) -> bool:
+    if not _PLAIN_STORE_INFO_RE.search(text or ""):
+        return False
+    if _STORE_RESERVATION_ACTION_RE.search(text or ""):
+        return False
+    store_name = _extract_policy_store_name_candidate(text)
+    if not store_name:
+        return False
+    if _SERVICE_DURATION_ADVISORY_RE.search(text or ""):
+        return False
+    if has_store_service_availability_signal(text):
+        return False
+    if extract_store_attribute_inquiry(text, store_name=store_name) is not None:
+        return False
+    return True
+
+
+def _is_store_holiday_lookup(text: str) -> bool:
+    value = text or ""
+    if not _STORE_HOLIDAY_LOOKUP_RE.search(value):
+        return False
+    if _STORE_RESERVATION_ACTION_RE.search(value):
+        return False
+    return bool(_extract_policy_store_name_candidate(value))
+
+
+def _is_order_history_reorder_turn(text: str) -> bool:
+    value = text or ""
+    return bool(
+        _ORDER_HISTORY_REORDER_PREVIOUS_RE.search(value)
+        and _ORDER_HISTORY_REORDER_SOURCE_RE.search(value)
+        and _ORDER_HISTORY_REORDER_ACTION_RE.search(value)
+    )
+
+
 def _is_preorder_ready_context(slots: dict[str, Any]) -> bool:
     if not slots:
         return False
@@ -458,9 +520,13 @@ def build_transaction_intent_frame(
     slots = dict(known_slots or {})
     explicit_tire_size = normalize_tire_size(text)
     current_store_name = _extract_store_name(text)
-    current_region = _extract_region(text)
+    raw_current_region = _extract_region(text)
     current_product_name = _extract_product_name(text)
     current_has_product = bool(current_product_name or _PRODUCT_HINT_RE.search(text))
+    current_store_name_role = classify_store_name_role(text, store_name=current_store_name)
+    current_store_is_context = current_store_name_role.role == "context"
+    current_region = None if current_store_is_context else raw_current_region
+    action_store_name = None if current_store_is_context else current_store_name
     current_store_search = bool(_STORE_SEARCH_RE.search(text))
     current_favorite_store_lookup = bool(_FAVORITE_STORE_RE.search(text))
     current_reservation_store_info_lookup = bool(
@@ -495,16 +561,23 @@ def build_transaction_intent_frame(
     current_maintenance_history_lookup = bool(
         _MAINTENANCE_HISTORY_LOOKUP_RE.search(text) and not current_maintenance_history_access_policy
     )
+    current_plain_store_info_lookup = bool(not current_store_is_context and _is_plain_store_info_lookup(text))
+    current_store_holiday_lookup = bool(not current_store_is_context and _is_store_holiday_lookup(text))
+    current_order_history_reorder = _is_order_history_reorder_turn(text)
     current_purchase = bool(_PURCHASE_RE.search(text))
     current_service_duration_advisory = bool(
         _SERVICE_DURATION_ADVISORY_RE.search(text) and not _RESERVATION_CHANGE_RE.search(text)
     )
-    current_store_attribute_inquiry = extract_store_attribute_inquiry(text, store_name=current_store_name)
+    current_store_attribute_inquiry = (
+        None
+        if current_store_is_context
+        else extract_store_attribute_inquiry(text, store_name=action_store_name)
+    )
     current_store_service_request = normalize_store_service_request(text)
-    current_store_service_availability = bool(_STORE_SERVICE_AVAILABILITY_RE.search(text))
+    current_store_service_availability = has_store_service_availability_signal(text)
     current_store_service_search = bool(
         current_store_service_request
-        and not current_store_name
+        and not action_store_name
         and _STORE_SERVICE_SEARCH_RE.search(text)
         and not current_stock
         and not current_price
@@ -518,7 +591,7 @@ def build_transaction_intent_frame(
     current_open_store_filter = bool(
         current_store_visit_advisory
         and _OPEN_STORE_FILTER_RE.search(text)
-        and not current_store_name
+        and not action_store_name
         and (current_region or _NEARBY_RE.search(text))
         and not current_has_product
     )
@@ -667,7 +740,7 @@ def build_transaction_intent_frame(
             else slots.get("product_name") or slots.get("tire_model") or slots.get("pattern_name")
         )
     )
-    store_name = current_store_name or (
+    store_name = action_store_name or (
         None
         if (plain_store_search and not preserve_transaction_product_context)
         or store_candidate_search
@@ -769,6 +842,18 @@ def build_transaction_intent_frame(
         intent = "maintenance_history_lookup"
         sub_intent = "service_history"
         entities["requested_service_item"] = _requested_maintenance_history_item(text)
+    elif current_order_history_reorder:
+        intent = "order_history_reorder"
+        sub_intent = "reorder_from_owned_history"
+        entities["owned_record_target"] = "order"
+    elif current_store_holiday_lookup:
+        intent = "store_holiday_lookup"
+        sub_intent = "store_holiday"
+        entities["store_name"] = _extract_policy_store_name_candidate(text) or store_name
+    elif current_plain_store_info_lookup:
+        intent = "plain_store_info_lookup"
+        sub_intent = "store_detail"
+        entities["store_name"] = _extract_policy_store_name_candidate(text) or store_name
     elif router_alert_contract:
         intent = "price_or_benefit_alert_request"
         sub_intent = "alert_request"
@@ -884,7 +969,7 @@ def build_transaction_intent_frame(
     elif (_RESERVATION_RE.search(text) or current_purchase) and has_product:
         intent = "quick_order_reservation"
         sub_intent = "reservation"
-    elif _STORE_SCHEDULE_RE.search(text) or _RESERVATION_RE.search(text):
+    elif (_STORE_SCHEDULE_RE.search(text) or _RESERVATION_RE.search(text)) and not current_store_is_context:
         intent = "store_schedule"
         sub_intent = "store_visit"
     else:
@@ -983,6 +1068,16 @@ def build_transaction_intent_frame(
         known["pending_intent"] = "maintenance_history_access_policy"
         known["goal_type"] = "maintenance_history_access_policy"
         known["maintenance_history_access_policy"] = True
+    if intent == "order_history_reorder":
+        known["pending_intent"] = "order_history_reorder"
+        known["goal_type"] = "order_history_reorder"
+        known["owned_record_target"] = "order"
+    if intent in {"plain_store_info_lookup", "store_holiday_lookup"}:
+        known["pending_intent"] = intent
+        known["goal_type"] = intent
+        if entities.get("store_name"):
+            known["store_name"] = entities["store_name"]
+            known["shop_name"] = entities["store_name"]
     if intent == "stock_store_search":
         known["stock_check_mode"] = str(entities.get("stock_check_mode") or "inventory_only")
         if requested_cal_day:
@@ -1286,6 +1381,37 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
             },
         )
 
+    if frame.intent == "order_history_reorder":
+        return ToolPlan(
+            allowed_tools=("get_orders_of_user_tool",),
+            preferred_tool="get_orders_of_user_tool",
+            tool_args_patch={},
+            forbidden_tools=(
+                "search_product_tool",
+                "get_products_recommendations_tool",
+                "quick_order_tool",
+                "get_store_schedule_tool",
+                "transaction_store_preview_tool",
+            ),
+            required_slots=(),
+            metadata={"response_intent": "order_history_reorder", "action": action},
+        )
+
+    if frame.intent in {"plain_store_info_lookup", "store_holiday_lookup"}:
+        return ToolPlan(
+            allowed_tools=("get_store_list_tool", "get_store_detail_tool"),
+            preferred_tool="get_store_list_tool",
+            tool_args_patch=_slot_args(frame, "store_name", "shop_id"),
+            forbidden_tools=(
+                "get_store_schedule_tool",
+                "transaction_store_preview_tool",
+                "quick_order_tool",
+                "get_store_inventory_tool",
+            ),
+            required_slots=(),
+            metadata={"response_intent": frame.intent, "action": action},
+        )
+
     if frame.intent == "maintenance_history_access_policy":
         return ToolPlan(
             allowed_tools=(),
@@ -1387,7 +1513,12 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
 
     if frame.intent == "quick_order_reservation":
         return ToolPlan(
-            allowed_tools=("transaction_store_preview_tool", "get_multi_store_schedule_tool", "get_store_schedule_tool"),
+            allowed_tools=(
+                "search_product_tool",
+                "transaction_store_preview_tool",
+                "get_multi_store_schedule_tool",
+                "get_store_schedule_tool",
+            ),
             preferred_tool="transaction_store_preview_tool",
             tool_args_patch=_slot_args(
                 frame, "goods_no", "tire_size", "quantity", "store_name", "region", "requested_cal_day"
@@ -1429,7 +1560,12 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
 
     if frame.intent == "price_or_coupon_check":
         return ToolPlan(
-            allowed_tools=("get_final_price_tool", "get_my_coupons_tool", "get_coupon_applicable_products_tool"),
+            allowed_tools=(
+                "search_product_tool",
+                "get_final_price_tool",
+                "get_my_coupons_tool",
+                "get_coupon_applicable_products_tool",
+            ),
             preferred_tool="get_final_price_tool",
             tool_args_patch=_slot_args(frame, "goods_no", "tire_size", "quantity"),
             required_slots=action_required_slots,

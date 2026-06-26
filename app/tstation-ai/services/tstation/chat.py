@@ -116,6 +116,7 @@ from services.tstation.policies.store_confirmation_policy import (
 )
 from services.tstation.policies.store_service_gate import (
     StoreAttributeInquiry,
+    classify_store_name_role,
     decide_store_service_gate,
     extract_store_attribute_inquiry,
     is_store_detail_page_cta_text,
@@ -14394,7 +14395,7 @@ def _is_product_attribute_lookup_query(user_text: str) -> bool:
         return False
     frame = build_discovery_intent_frame(user_text)
     product_names = tuple(frame.entities.get("product_names") or ())
-    if frame.sub_intent == "product_attribute_lookup" and bool(product_names):
+    if frame.sub_intent in {"product_attribute_lookup", "product_attribute_explanation"} and bool(product_names):
         return True
     decision = current_discovery_response_decision.get()
     decision_shape_key = str((decision.metadata or {}).get("response_shape_key") or "") if decision is not None else ""
@@ -15436,6 +15437,343 @@ def _build_turn_contract_fallback_event(
     return build_response_policy_guard_event(turn_contract)
 
 
+def _direct_code_fast_path_contract_gate(
+    *,
+    turn_contract: TurnContract | None,
+    intent: str,
+    template: str,
+    source: str,
+    required_tools: tuple[str, ...] = (),
+    allowed_intents: tuple[str, ...] = (),
+) -> tuple[bool, str]:
+    if turn_contract is None:
+        return False, "missing_turn_contract"
+    contract_intent = str(turn_contract.intent or "")
+    response_decision = turn_contract.response_decision or {}
+    response_metadata = response_decision.get("metadata") if isinstance(response_decision, Mapping) else {}
+    response_shape_key = str((response_metadata or {}).get("response_shape_key") or "")
+    acceptable_intents = {intent, *allowed_intents}
+    if not ({contract_intent, response_shape_key} & acceptable_intents):
+        return False, f"intent_mismatch:{contract_intent or 'none'}"
+    if violates_response_template_contract({"template": template}, turn_contract):
+        return False, f"template_forbidden:{template}"
+    forbidden_tools = set(str(tool) for tool in turn_contract.forbidden_tools)
+    blocked_tools = tuple(tool for tool in required_tools if tool in forbidden_tools)
+    if blocked_tools:
+        return False, f"tool_forbidden:{','.join(blocked_tools)}"
+    allowed_tools = set(str(tool) for tool in turn_contract.allowed_tools)
+    if required_tools and not allowed_tools:
+        return False, f"tool_not_allowed:{','.join(required_tools)}"
+    if required_tools:
+        missing_allowed = tuple(tool for tool in required_tools if tool not in allowed_tools)
+        if missing_allowed:
+            return False, f"tool_not_allowed:{','.join(missing_allowed)}"
+    return True, f"contract_matched:{source}"
+
+
+def _finalize_direct_code_event(
+    event: dict[str, Any] | None,
+    *,
+    turn_contract: TurnContract | None,
+    intent: str,
+    source: str,
+    required_tools: tuple[str, ...] = (),
+    allowed_intents: tuple[str, ...] = (),
+    template: str | None = None,
+) -> dict[str, Any] | None:
+    if not isinstance(event, dict):
+        return None
+    actual_template = str(template or event.get("template") or "")
+    allowed, reason = _direct_code_fast_path_contract_gate(
+        turn_contract=turn_contract,
+        intent=intent,
+        template=actual_template,
+        source=source,
+        required_tools=required_tools,
+        allowed_intents=allowed_intents,
+    )
+    if not allowed:
+        logger.info(
+            "[CODE_FAST_PATH_FINAL_GATE] blocked source=%s intent=%s template=%s reason=%s contract=%s",
+            source,
+            intent,
+            actual_template,
+            reason,
+            turn_contract.to_dict() if turn_contract else None,
+        )
+        return None
+    return _annotate_direct_code_fast_path_event(
+        event,
+        turn_contract=turn_contract,
+        contract_gate_reason=reason,
+        direct_source=source,
+        required_tools=required_tools,
+        emitted_template=actual_template,
+    )
+
+
+def _annotate_direct_code_fast_path_event(
+    event: dict[str, Any],
+    *,
+    turn_contract: TurnContract | None,
+    contract_gate_reason: str,
+    direct_source: str | None = None,
+    required_tools: tuple[str, ...] = (),
+    emitted_template: str | None = None,
+) -> dict[str, Any]:
+    if turn_contract is not None:
+        event["contract_intent"] = str(turn_contract.intent or "")
+    event["contract_matched"] = True
+    event["contract_gate_reason"] = contract_gate_reason
+    event["contract_gate_result"] = "allowed"
+    if direct_source:
+        event["direct_source"] = direct_source
+    if emitted_template:
+        event["emitted_template"] = emitted_template
+    if required_tools:
+        event["required_tools"] = list(required_tools)
+    event_data = event.get("data")
+    if isinstance(event_data, dict):
+        metadata = event_data.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
+            event_data["metadata"] = metadata
+        metadata["contract_intent"] = str(turn_contract.intent or "") if turn_contract is not None else ""
+        metadata["contract_matched"] = True
+        metadata["contract_gate_reason"] = contract_gate_reason
+        metadata["contract_gate_result"] = "allowed"
+        if direct_source:
+            metadata["direct_source"] = direct_source
+        if emitted_template:
+            metadata["emitted_template"] = emitted_template
+        if required_tools:
+            metadata["required_tools"] = list(required_tools)
+    return event
+
+
+def _record_contract_gate_metadata(
+    event: dict[str, Any],
+    *,
+    turn_contract: TurnContract | None,
+    gate_result: str,
+    gate_reason: str,
+    emitted_template: str | None = None,
+    source: str | None = None,
+    blocked_template: str | None = None,
+) -> dict[str, Any]:
+    event["contract_gate_result"] = gate_result
+    event["contract_gate_reason"] = gate_reason
+    if turn_contract is not None:
+        event["contract_intent"] = str(turn_contract.intent or "")
+    if emitted_template:
+        event["emitted_template"] = emitted_template
+    if source:
+        event["transform_source"] = source
+    if blocked_template:
+        event["blocked_template"] = blocked_template
+    event_data = event.get("data")
+    if isinstance(event_data, dict):
+        metadata = event_data.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
+            event_data["metadata"] = metadata
+        metadata["contract_gate_result"] = gate_result
+        metadata["contract_gate_reason"] = gate_reason
+        metadata["contract_intent"] = str(turn_contract.intent or "") if turn_contract is not None else ""
+        if emitted_template:
+            metadata["emitted_template"] = emitted_template
+        if source:
+            metadata["transform_source"] = source
+        if blocked_template:
+            metadata["blocked_template"] = blocked_template
+    return event
+
+
+_POLICY_GUARD_FORBIDDEN_TOOLS = (
+    "search_product_tool",
+    "get_products_recommendations_tool",
+    "get_best_selling_products_tool",
+    "get_final_price_tool",
+    "compare_discount_tool",
+    "transaction_store_preview_tool",
+    "get_store_schedule_tool",
+    "quick_order_tool",
+    "add_to_cart_tool",
+    "get_store_list_tool",
+    "get_store_detail_tool",
+    "get_orders_of_user_tool",
+    "get_order_status_tool",
+    "get_my_reservations_tool",
+)
+
+
+def _policy_guard_intent_from_event(event: dict[str, Any], source: str) -> str:
+    event_data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    metadata = event_data.get("metadata") if isinstance(event_data.get("metadata"), dict) else {}
+    response_shape = str(
+        metadata.get("response_shape_key")
+        or metadata.get("responseShapeKey")
+        or metadata.get("response_intent")
+        or ""
+    ).strip()
+    if response_shape:
+        return response_shape
+    return source or "policy_guard"
+
+
+def _finalize_policy_guard_event(
+    event: dict[str, Any],
+    *,
+    source: str | None = None,
+    intent: str | None = None,
+    domain: str | None = None,
+    reason: str = "contract_matched",
+) -> dict[str, Any]:
+    """Give deterministic pre-router policy/safety responses a concrete contract."""
+    actual_source = str(source or event.get("assistant_response_source") or "code_policy_guard")
+    actual_intent = str(intent or _policy_guard_intent_from_event(event, actual_source))
+    actual_template = str(event.get("template") or "quickReply")
+    actual_domain = str(domain or event.get("source_domain") or MultiAgentDomain.Domain.LEADING.value).lower()
+    event["assistant_response_source"] = actual_source
+    event.setdefault("source_domain", actual_domain)
+
+    event_data = event.get("data")
+    if isinstance(event_data, dict):
+        metadata = event_data.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
+            event_data["metadata"] = metadata
+        metadata.setdefault("response_shape_key", actual_intent)
+
+    turn_contract = TurnContract(
+        domain=actual_domain,
+        intent=actual_intent,
+        allowed_tools=(),
+        forbidden_tools=_POLICY_GUARD_FORBIDDEN_TOOLS,
+        response_decision={
+            "template": actual_template,
+            "metadata": {"response_shape_key": actual_intent},
+        },
+    )
+    finalized_event = _finalize_direct_code_event(
+        event,
+        turn_contract=turn_contract,
+        intent=actual_intent,
+        source=actual_source,
+        required_tools=(),
+        template=actual_template,
+    )
+    if finalized_event is None:
+        logger.warning(
+            "[POLICY_GUARD_CONTRACT] failed source=%s intent=%s template=%s reason=%s",
+            actual_source,
+            actual_intent,
+            actual_template,
+            reason,
+        )
+        return _record_contract_gate_metadata(
+            event,
+            turn_contract=turn_contract,
+            gate_result="blocked",
+            gate_reason=f"policy_guard_contract_failed:{actual_source}",
+            emitted_template=actual_template,
+            source=actual_source,
+            blocked_template=actual_template,
+        )
+    finalized_event["contract_gate_reason"] = f"{reason}:{actual_source}"
+    finalized_data = finalized_event.get("data")
+    if isinstance(finalized_data, dict):
+        metadata = finalized_data.get("metadata")
+        if isinstance(metadata, dict):
+            metadata["contract_gate_reason"] = finalized_event["contract_gate_reason"]
+    return finalized_event
+
+
+def _build_missing_contract_guard_event(*, source: str, domain: str = "transaction") -> dict[str, Any]:
+    return _finalize_policy_guard_event(
+        {
+            "type": "data",
+            "template": "quickReply",
+            "source_domain": domain,
+            "assistant_response_source": source,
+            "data": {
+                "assistantResponse": "현재 요청의 실행 범위를 확인하지 못해 바로 처리하지 않았어요. 다시 한 번 요청해 주세요.",
+                "quickReplies": [
+                    {"label": "다시 요청하기", "domain": domain.upper()},
+                    {"label": "1:1 문의하기", "domain": "SUPPORT"},
+                ],
+                "predictedDomains": [domain.upper()],
+                "metadata": {"response_shape_key": "missing_turn_contract_guard"},
+            },
+        },
+        source=source,
+        intent="missing_turn_contract_guard",
+        domain=domain,
+        reason="missing_contract_guard",
+    )
+
+
+def _finalize_coerced_template_event(
+    coerced_event: dict[str, Any] | None,
+    *,
+    original_event: dict[str, Any],
+    turn_contract: TurnContract | None,
+    source: str,
+) -> tuple[dict[str, Any], bool]:
+    if not isinstance(coerced_event, dict):
+        return original_event, False
+    coerced_template = str(coerced_event.get("template") or "")
+    original_template = str(original_event.get("template") or "")
+    if turn_contract is None:
+        logger.info(
+            "[TEMPLATE_COERCE_GATE] blocked source=%s template=%s reason=missing_turn_contract",
+            source,
+            coerced_template,
+        )
+        return (
+            _record_contract_gate_metadata(
+                original_event,
+                turn_contract=turn_contract,
+                gate_result="blocked",
+                gate_reason="missing_turn_contract",
+                emitted_template=original_template,
+                source=source,
+                blocked_template=coerced_template,
+            ),
+            False,
+        )
+    if violates_response_template_contract(coerced_event, turn_contract):
+        logger.info(
+            "[TEMPLATE_COERCE_GATE] blocked source=%s template=%s contract_intent=%s",
+            source,
+            coerced_template,
+            turn_contract.intent,
+        )
+        return (
+            _record_contract_gate_metadata(
+                original_event,
+                turn_contract=turn_contract,
+                gate_result="blocked",
+                gate_reason=f"template_forbidden:{coerced_template or 'unknown'}",
+                emitted_template=original_template,
+                source=source,
+                blocked_template=coerced_template,
+            ),
+            False,
+        )
+    return (
+        _record_contract_gate_metadata(
+            coerced_event,
+            turn_contract=turn_contract,
+            gate_result="allowed",
+            gate_reason=f"contract_matched:{source}",
+            emitted_template=coerced_template,
+            source=source,
+        ),
+        True,
+    )
+
+
 def _build_recommendation_contract_fallback_event(
     violations: list[dict[str, Any]] | tuple[dict[str, Any], ...],
     turn_contract: TurnContract | None,
@@ -15622,6 +15960,83 @@ def _is_pure_inventory_stock_ready(slots: Any | None) -> bool:
         and _slot_value("tire_size")
         and qty > 0
         and (_slot_value("shop_id") or _slot_value("shop_name") or _slot_value("store_name"))
+    )
+
+
+def _build_pure_inventory_stock_contract(
+    user_text: str,
+    slots: Any,
+    *,
+    action_mode: str = "stock_check",
+    context_state: str = "resumed",
+    resume_source: str = "pure_inventory_stock_fast_path",
+) -> TurnContract | None:
+    slot_values = slots.model_dump() if hasattr(slots, "model_dump") else dict(slots or {})
+
+    def _slot_value(name: str) -> Any:
+        if isinstance(slots, Mapping):
+            return slots.get(name)
+        return getattr(slots, name, slot_values.get(name))
+
+    if str(_slot_value("stock_check_mode") or "") != "inventory_only":
+        return None
+    known_slots = {
+        "goods_no": _slot_value("goods_no"),
+        "tire_size": _slot_value("tire_size"),
+        "quantity": _slot_value("ord_qty") or _slot_value("quantity"),
+        "ord_qty": _slot_value("ord_qty") or _slot_value("quantity"),
+        "shop_id": _slot_value("shop_id"),
+        "shop_name": _slot_value("shop_name"),
+        "store_name": _slot_value("shop_name") or _slot_value("store_name"),
+        "pending_intent": _slot_value("pending_intent"),
+        "goal_type": _slot_value("goal_type"),
+        "stock_check_mode": "inventory_only",
+    }
+    filtered_known_slots = {k: v for k, v in known_slots.items() if v not in (None, "")}
+    frame = build_transaction_intent_frame(
+        user_text,
+        known_slots=filtered_known_slots,
+    )
+    if (
+        (frame.intent != "stock_store_search" or frame.sub_intent != "stock")
+        or str(frame.known_slots.get("stock_check_mode") or "") != "inventory_only"
+    ):
+        if not _is_quantity_only_stock_followup_text(user_text):
+            return None
+        frame = IntentFrame(
+            domain=PolicyDomain.TRANSACTION,
+            intent="stock_store_search",
+            sub_intent="stock",
+            known_slots={
+                **filtered_known_slots,
+                "quantity": filtered_known_slots.get("quantity") or filtered_known_slots.get("ord_qty"),
+                "ord_qty": filtered_known_slots.get("ord_qty") or filtered_known_slots.get("quantity"),
+                "stock_check_mode": "inventory_only",
+            },
+            missing_slots=(),
+            entities={"stock_check_mode": "inventory_only"},
+        )
+    if (
+        frame.intent != "stock_store_search"
+        or frame.sub_intent != "stock"
+        or str(frame.known_slots.get("stock_check_mode") or "") != "inventory_only"
+    ):
+        return None
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text="재고 있어?" if _is_quantity_only_stock_followup_text(user_text) else user_text,
+        known_slots=dict(frame.known_slots),
+    )
+    return build_turn_contract(
+        user_text=user_text,
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=response_decision,
+        merged_slots=slots,
+        action_mode=action_mode,
+        context_state=context_state,
+        resume_source=resume_source,
     )
 
 
@@ -20460,30 +20875,60 @@ class TStationChatServiceV2:
             )
             frame = build_discovery_intent_frame(last_user_msg)
             tool_plan = plan_discovery_tools(frame)
+            response_decision = decide_discovery_response(frame)
+            pre_contract = build_turn_contract(
+                user_text=last_user_msg,
+                intent_frame=frame,
+                tool_plan=tool_plan,
+                response_decision=response_decision,
+            )
             tool_input = dict(tool_plan.tool_args_patch or {})
             event: dict | None = None
+            gate_allowed, gate_reason = _direct_code_fast_path_contract_gate(
+                turn_contract=pre_contract,
+                intent=str(frame.intent or "product_search"),
+                template="quickReply",
+                source="code_external_price_comparison_policy",
+                required_tools=("search_product_tool",),
+                allowed_intents=(str(frame.sub_intent or ""),),
+            )
             try:
-                from services.tstation.agents.b_discovery_agent.tools import search_product_tool as _search_product_tool
+                if gate_allowed:
+                    from services.tstation.agents.b_discovery_agent.tools import search_product_tool as _search_product_tool
 
-                raw_result = await asyncio.to_thread(_search_product_tool.invoke, tool_input)
-                search_result = raw_result if isinstance(raw_result, dict) else qc_verifier.parse_tool_output(raw_result)
-                if not isinstance(search_result, dict):
-                    search_result = {
-                        "status": "error",
-                        "http_status": None,
-                        "message": "Invalid tool response",
-                        "data": {},
-                    }
-                keyword = str(tool_input.get("keyword") or "").strip()
-                event = _build_external_price_comparison_event_from_search_results(
-                    last_user_msg,
-                    [(keyword, search_result)],
-                )
+                    raw_result = await asyncio.to_thread(_search_product_tool.invoke, tool_input)
+                    search_result = raw_result if isinstance(raw_result, dict) else qc_verifier.parse_tool_output(raw_result)
+                    if not isinstance(search_result, dict):
+                        search_result = {
+                            "status": "error",
+                            "http_status": None,
+                            "message": "Invalid tool response",
+                            "data": {},
+                        }
+                    keyword = str(tool_input.get("keyword") or "").strip()
+                    event = _build_external_price_comparison_event_from_search_results(
+                        last_user_msg,
+                        [(keyword, search_result)],
+                    )
+                else:
+                    logger.info("[CODE_FAST_PATH_GATE] blocked external_price_search reason=%s", gate_reason)
             except Exception as exc:
                 logger.exception("[EXTERNAL_PRICE] search_product_tool fast-path failed: %s", exc)
             if event is None:
                 event = _build_external_price_comparison_event_from_search_results(last_user_msg, [])
             if event is not None:
+                finalized_event = _finalize_direct_code_event(
+                    event,
+                    turn_contract=pre_contract,
+                    intent=str(frame.intent or "product_search"),
+                    source="code_external_price_comparison_policy",
+                    required_tools=("search_product_tool",) if gate_allowed else (),
+                    allowed_intents=(str(frame.sub_intent or ""),),
+                )
+                if finalized_event is not None:
+                    event = finalized_event
+                else:
+                    event = build_response_policy_guard_event(pre_contract)
                 assistant_text = str((event.get("data") or {}).get("assistantResponse") or "")
                 if request.stream:
                     return StreamingResponse(
@@ -21250,6 +21695,52 @@ class TStationChatServiceV2:
 
             chip_action_id = _chip_value(request.chip_context, "actionId", "action_id")
             cta_context = _merged_quickreply_cta_context(request.chip_context, latest_quickreply_tmpl)
+
+            def _build_cta_action_contract(source: str, required_tools: tuple[str, ...]) -> tuple[TurnContract, bool, str]:
+                cta_known_slots = {
+                    "goods_no": merged_slots.goods_no,
+                    "tire_size": merged_slots.tire_size,
+                    "quantity": merged_slots.ord_qty,
+                    "ord_qty": merged_slots.ord_qty,
+                    "shop_id": merged_slots.shop_id,
+                    "shop_name": merged_slots.shop_name,
+                    "store_name": merged_slots.shop_name,
+                    "region": merged_slots.region,
+                    "availability_intent": merged_slots.availability_intent,
+                    "requested_cal_day": merged_slots.requested_cal_day,
+                    "pending_intent": merged_slots.pending_intent or "stock",
+                    "goal_type": merged_slots.goal_type or "store_with_stock",
+                    "stock_check_mode": "preview",
+                }
+                cta_frame = build_transaction_intent_frame(
+                    last_user_text,
+                    known_slots={k: v for k, v in cta_known_slots.items() if v not in (None, "")},
+                )
+                cta_tool_plan = plan_transaction_tools(cta_frame)
+                cta_response_decision = decide_transaction_response(
+                    intent=cta_frame.intent,
+                    user_text=last_user_text,
+                    known_slots=dict(cta_frame.known_slots),
+                )
+                cta_contract = build_turn_contract(
+                    user_text=last_user_text,
+                    intent_frame=cta_frame,
+                    tool_plan=cta_tool_plan,
+                    response_decision=cta_response_decision,
+                    merged_slots=merged_slots,
+                    action_mode="stock_check",
+                    context_state="resumed",
+                    resume_source=f"cta_action:{source}",
+                )
+                allowed, reason = _direct_code_fast_path_contract_gate(
+                    turn_contract=cta_contract,
+                    intent="stock_store_search",
+                    template="quickReply",
+                    source=source,
+                    required_tools=required_tools,
+                )
+                return cta_contract, allowed, reason
+
             if chip_action_id in {"enter_region", "enter_date"} or (
                 not chip_action_id
                 and re.fullmatch(r"(?:다른\s*)?(?:지역|장소|날짜|일정)\s*(?:입력|찾기|검색|확인)", last_user_text)
@@ -21295,20 +21786,27 @@ class TStationChatServiceV2:
 
                     list_input = {"store_nm": str(store_context["shop_name"]), "limit": 10}
                     try:
-                        raw_list = await asyncio.to_thread(_cta_get_store_list_tool.invoke, list_input)
-                        list_result = raw_list if isinstance(raw_list, dict) else qc_verifier.parse_tool_output(raw_list)
-                        list_data = _unwrap_tool_data(list_result if isinstance(list_result, dict) else {})
-                        stores = list_data.get("stores") if isinstance(list_data, dict) else None
-                        if isinstance(stores, list):
-                            matched_store = _store_name_exact_match_row(
-                                str(store_context["shop_name"]),
-                                [store for store in stores if isinstance(store, dict)],
-                            )
-                            if matched_store is not None:
-                                store_context = _store_context_from_mapping(
-                                    {**matched_store, **store_context},
+                        _list_contract, list_allowed, list_reason = _build_cta_action_contract(
+                            "code_cta_store_context_enrichment",
+                            ("get_store_list_tool",),
+                        )
+                        if list_allowed:
+                            raw_list = await asyncio.to_thread(_cta_get_store_list_tool.invoke, list_input)
+                            list_result = raw_list if isinstance(raw_list, dict) else qc_verifier.parse_tool_output(raw_list)
+                            list_data = _unwrap_tool_data(list_result if isinstance(list_result, dict) else {})
+                            stores = list_data.get("stores") if isinstance(list_data, dict) else None
+                            if isinstance(stores, list):
+                                matched_store = _store_name_exact_match_row(
+                                    str(store_context["shop_name"]),
+                                    [store for store in stores if isinstance(store, dict)],
                                 )
-                                enriched_cta_context["currentStoreContext"] = store_context
+                                if matched_store is not None:
+                                    store_context = _store_context_from_mapping(
+                                        {**matched_store, **store_context},
+                                    )
+                                    enriched_cta_context["currentStoreContext"] = store_context
+                        else:
+                            logger.info("[CODE_FAST_PATH_GATE] blocked cta_store_context_enrichment reason=%s", list_reason)
                     except Exception:
                         logger.exception(
                             "[CTA_ACTION] failed to enrich previous store coordinates context=%s",
@@ -21359,6 +21857,24 @@ class TStationChatServiceV2:
                 _cta_current_pending_intent.set("stock")
                 _cta_current_goal_type.set("store_with_stock")
                 _cta_current_excluded_store_ids.set(excluded_ids)
+                cta_contract, preview_allowed, preview_reason = _build_cta_action_contract(
+                    "code_other_store_stock_search",
+                    ("transaction_store_preview_tool",),
+                )
+                if not preview_allowed:
+                    logger.info("[CODE_FAST_PATH_GATE] blocked other_store_stock_search reason=%s", preview_reason)
+                    guard_event = build_response_policy_guard_event(cta_contract)
+                    if request.stream:
+                        return StreamingResponse(
+                            TStationChatServiceV2._stream_policy_guard_response(guard_event),
+                            media_type="text/event-stream",
+                            headers={
+                                "Cache-Control": "no-cache",
+                                "Connection": "keep-alive",
+                                "X-Accel-Buffering": "no",
+                            },
+                        )
+                    return TStationChatResponse(content=str((guard_event.get("data") or {}).get("assistantResponse") or ""))
                 try:
                     raw_preview = await asyncio.to_thread(_transaction_store_preview_tool.invoke, preview_input)
                     preview_result = raw_preview if isinstance(raw_preview, dict) else qc_verifier.parse_tool_output(raw_preview)
@@ -21401,7 +21917,14 @@ class TStationChatServiceV2:
                 await chat_history_svc.save_slots_async(request.session_id, merged_slots, user_id=request.user_id)
                 if request.stream:
                     return StreamingResponse(
-                        TStationChatServiceV2._stream_cta_tool_response(preview_input, preview_result, mapped_event),
+                        TStationChatServiceV2._stream_cta_tool_response(
+                            preview_input,
+                            preview_result,
+                            mapped_event,
+                            turn_contract=cta_contract,
+                            source="code_other_store_stock_search",
+                            required_tools=("transaction_store_preview_tool",),
+                        ),
                         media_type="text/event-stream",
                         headers={
                             "Cache-Control": "no-cache",
@@ -21452,6 +21975,24 @@ class TStationChatServiceV2:
                 _cta_current_user_text.set(last_user_text)
                 _cta_current_pending_intent.set("stock")
                 _cta_current_goal_type.set("store_with_stock")
+                cta_contract, preview_allowed, preview_reason = _build_cta_action_contract(
+                    "code_logistics_earliest_install_date",
+                    ("transaction_store_preview_tool",),
+                )
+                if not preview_allowed:
+                    logger.info("[CODE_FAST_PATH_GATE] blocked logistics_earliest_install_date reason=%s", preview_reason)
+                    guard_event = build_response_policy_guard_event(cta_contract)
+                    if request.stream:
+                        return StreamingResponse(
+                            TStationChatServiceV2._stream_policy_guard_response(guard_event),
+                            media_type="text/event-stream",
+                            headers={
+                                "Cache-Control": "no-cache",
+                                "Connection": "keep-alive",
+                                "X-Accel-Buffering": "no",
+                            },
+                        )
+                    return TStationChatResponse(content=str((guard_event.get("data") or {}).get("assistantResponse") or ""))
                 try:
                     raw_preview = await asyncio.to_thread(_transaction_store_preview_tool.invoke, preview_input)
                     preview_result = raw_preview if isinstance(raw_preview, dict) else qc_verifier.parse_tool_output(raw_preview)
@@ -21508,7 +22049,14 @@ class TStationChatServiceV2:
                 await chat_history_svc.save_slots_async(request.session_id, merged_slots, user_id=request.user_id)
                 if request.stream:
                     return StreamingResponse(
-                        TStationChatServiceV2._stream_cta_tool_response(preview_input, preview_result, mapped_event),
+                        TStationChatServiceV2._stream_cta_tool_response(
+                            preview_input,
+                            preview_result,
+                            mapped_event,
+                            turn_contract=cta_contract,
+                            source="code_logistics_earliest_install_date",
+                            required_tools=("transaction_store_preview_tool",),
+                        ),
                         media_type="text/event-stream",
                         headers={
                             "Cache-Control": "no-cache",
@@ -21581,6 +22129,24 @@ class TStationChatServiceV2:
                     if merged_slots.pending_intent == "stock" or merged_slots.goal_type == "store_with_stock"
                     else "booking_continuation"
                 )
+                cta_contract, preview_allowed, preview_reason = _build_cta_action_contract(
+                    "code_cta_action_preview",
+                    ("transaction_store_preview_tool",),
+                )
+                if not preview_allowed:
+                    logger.info("[CODE_FAST_PATH_GATE] blocked cta_action_preview reason=%s", preview_reason)
+                    guard_event = build_response_policy_guard_event(cta_contract)
+                    if request.stream:
+                        return StreamingResponse(
+                            TStationChatServiceV2._stream_policy_guard_response(guard_event),
+                            media_type="text/event-stream",
+                            headers={
+                                "Cache-Control": "no-cache",
+                                "Connection": "keep-alive",
+                                "X-Accel-Buffering": "no",
+                            },
+                        )
+                    return TStationChatResponse(content=str((guard_event.get("data") or {}).get("assistantResponse") or ""))
                 try:
                     raw_preview = await asyncio.to_thread(_transaction_store_preview_tool.invoke, preview_input)
                     preview_result = raw_preview if isinstance(raw_preview, dict) else qc_verifier.parse_tool_output(raw_preview)
@@ -21606,7 +22172,14 @@ class TStationChatServiceV2:
                 await chat_history_svc.save_slots_async(request.session_id, merged_slots, user_id=request.user_id)
                 if request.stream:
                     return StreamingResponse(
-                        TStationChatServiceV2._stream_cta_tool_response(preview_input, preview_result, mapped_event),
+                        TStationChatServiceV2._stream_cta_tool_response(
+                            preview_input,
+                            preview_result,
+                            mapped_event,
+                            turn_contract=cta_contract,
+                            source="code_cta_action_preview",
+                            required_tools=("transaction_store_preview_tool",),
+                        ),
                         media_type="text/event-stream",
                         headers={
                             "Cache-Control": "no-cache",
@@ -22221,23 +22794,55 @@ class TStationChatServiceV2:
             and _is_quantity_only_stock_followup_text(last_user_text)
             and _is_pure_inventory_stock_ready(merged_slots)
         ):
-            logger.info(
-                "[PURE_INVENTORY_STOCK] pre-router deterministic response: session_id=%s goods_no=%s size=%s qty=%s store=%s",
-                request.session_id,
-                getattr(merged_slots, "goods_no", None),
-                getattr(merged_slots, "tire_size", None),
-                getattr(merged_slots, "ord_qty", None),
-                getattr(merged_slots, "shop_name", None) or getattr(merged_slots, "shop_id", None),
+            pure_inventory_contract = _build_pure_inventory_stock_contract(
+                last_user_text,
+                merged_slots,
+                action_mode="stock_check",
+                context_state="resumed",
+                resume_source="pure_inventory_stock_fast_path",
             )
-            return StreamingResponse(
-                TStationChatServiceV2._stream_pure_inventory_stock_response(merged_slots),
-                media_type="text/event-stream",
-                headers={
-                    "Cache-Control": "no-cache",
-                    "Connection": "keep-alive",
-                    "X-Accel-Buffering": "no",
-                },
-            )
+            if pure_inventory_contract is None:
+                logger.info("[PURE_INVENTORY_STOCK] skipped pre-router path: contract_unavailable")
+            else:
+                gate_allowed, gate_reason = _direct_code_fast_path_contract_gate(
+                    turn_contract=pure_inventory_contract,
+                    intent="stock_store_search",
+                    template="quickReply",
+                    source="code_pure_inventory_stock_resolver",
+                    required_tools=("get_store_inventory_tool", "get_logistics_inventory_tool"),
+                )
+                if not gate_allowed:
+                    logger.info("[CODE_FAST_PATH_GATE] blocked pure_inventory_stock reason=%s", gate_reason)
+                    guard_event = build_response_policy_guard_event(pure_inventory_contract)
+                    return StreamingResponse(
+                        TStationChatServiceV2._stream_policy_guard_response(guard_event),
+                        media_type="text/event-stream",
+                        headers={
+                            "Cache-Control": "no-cache",
+                            "Connection": "keep-alive",
+                            "X-Accel-Buffering": "no",
+                        },
+                    )
+                logger.info(
+                    "[PURE_INVENTORY_STOCK] pre-router deterministic response: session_id=%s goods_no=%s size=%s qty=%s store=%s",
+                    request.session_id,
+                    getattr(merged_slots, "goods_no", None),
+                    getattr(merged_slots, "tire_size", None),
+                    getattr(merged_slots, "ord_qty", None),
+                    getattr(merged_slots, "shop_name", None) or getattr(merged_slots, "shop_id", None),
+                )
+                return StreamingResponse(
+                    TStationChatServiceV2._stream_pure_inventory_stock_response(
+                        merged_slots,
+                        turn_contract=pure_inventory_contract,
+                    ),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
 
         # Domain classification (separate from slot processing — must not fail)
         # Fast-path order: chip_context → quickReplies → predictedDomains → goal/rule → LLM.
@@ -23928,6 +24533,13 @@ class TStationChatServiceV2:
                 "predictedDomains": ["SUPPORT"],
             },
         }
+        event = _finalize_policy_guard_event(
+            event,
+            source="code_pii_guardrail",
+            intent="pii_guardrail",
+            domain=MultiAgentDomain.Domain.LEADING.value,
+            reason="pre_contract_safety_guard",
+        )
         yield f"data: {json.dumps({'type': 'token', 'content': GUARDRAIL_RESPONSE}, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps({'type': 'message', 'content': GUARDRAIL_RESPONSE, 'agent': '[LEADING AGENT]'}, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
@@ -23957,6 +24569,13 @@ class TStationChatServiceV2:
                 "predictedDomains": ["TRANSACTION"],
             },
         }
+        data_event = _finalize_policy_guard_event(
+            data_event,
+            source="code_service_reservation_redirect",
+            intent="service_reservation_redirect",
+            domain=MultiAgentDomain.Domain.TRANSACTION.value,
+            reason="pre_contract_explicit_redirect_guard",
+        )
         yield f"data: {json.dumps(data_event, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
@@ -23987,6 +24606,13 @@ class TStationChatServiceV2:
                 "predictedDomains": ["DISCOVERY", "TRANSACTION"],
             },
         }
+        data_event = _finalize_policy_guard_event(
+            data_event,
+            source="code_regional_cheapest_policy",
+            intent="regional_cheapest_price_policy",
+            domain=MultiAgentDomain.Domain.LEADING.value,
+            reason="pre_contract_policy_guard",
+        )
         yield f"data: {json.dumps(data_event, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
@@ -23995,6 +24621,12 @@ class TStationChatServiceV2:
     @staticmethod
     def _stream_policy_guard_response(event: dict):
         """Stream a deterministic policy guard response without invoking agents."""
+        if not event.get("contract_gate_result"):
+            event = _finalize_policy_guard_event(
+                event,
+                source=str(event.get("assistant_response_source") or "code_policy_guard"),
+                reason="pre_contract_policy_guard",
+            )
         event_data = event.get("data") if isinstance(event.get("data"), dict) else {}
         msg = str(event_data.get("assistantResponse") or "")
         source_domain = str(event.get("source_domain") or "TRANSACTION").upper()
@@ -24006,8 +24638,33 @@ class TStationChatServiceV2:
         yield "data: [DONE]\n\n"
 
     @staticmethod
-    def _stream_cta_tool_response(tool_input: dict, tool_result: dict, event: dict):
+    def _stream_cta_tool_response(
+        tool_input: dict,
+        tool_result: dict,
+        event: dict,
+        *,
+        turn_contract: TurnContract | None = None,
+        source: str = "code_cta_tool_response",
+        required_tools: tuple[str, ...] = ("transaction_store_preview_tool",),
+    ):
         """Stream deterministic CTA action output after a direct tool invocation."""
+        finalized_event = _finalize_direct_code_event(
+            event,
+            turn_contract=turn_contract,
+            intent="stock_store_search",
+            source=source,
+            required_tools=required_tools,
+        )
+        if finalized_event is None:
+            finalized_event = (
+                build_response_policy_guard_event(turn_contract)
+                if turn_contract is not None
+                else _build_missing_contract_guard_event(
+                    source=str(event.get("assistant_response_source") or source),
+                    domain=MultiAgentDomain.Domain.TRANSACTION.value,
+                )
+            )
+        event = finalized_event
         event_data = event.get("data") if isinstance(event.get("data"), dict) else {}
         msg = str(event_data.get("assistantResponse") or "")
         yield f"data: {json.dumps({'type': 'status', 'status': 'tool_start', 'tool': 'transaction_store_preview_tool', 'display_name': '장착 가능 일정 확인 중...', 'source_domain': 'transaction'}, ensure_ascii=False)}\n\n"
@@ -24021,7 +24678,7 @@ class TStationChatServiceV2:
         yield "data: [DONE]\n\n"
 
     @staticmethod
-    async def _stream_pure_inventory_stock_response(slots: Any):
+    async def _stream_pure_inventory_stock_response(slots: Any, *, turn_contract: TurnContract | None = None):
         """Run pure store inventory lookup without waiting for router/agent LLM."""
         slot_values = slots.model_dump() if hasattr(slots, "model_dump") else dict(slots or {})
         goods_no = str(slot_values.get("goods_no") or "").strip()
@@ -24042,7 +24699,29 @@ class TStationChatServiceV2:
         except (TypeError, ValueError):
             ord_qty = 0
 
-        async def _finish(event: dict):
+        async def _finish(
+            event: dict,
+            *,
+            source: str,
+            required_tools: tuple[str, ...],
+        ):
+            finalized_event = _finalize_direct_code_event(
+                event,
+                turn_contract=turn_contract,
+                intent="stock_store_search",
+                source=source,
+                required_tools=required_tools,
+            )
+            if finalized_event is None:
+                finalized_event = (
+                    build_response_policy_guard_event(turn_contract)
+                    if turn_contract is not None
+                    else _build_missing_contract_guard_event(
+                        source=source,
+                        domain=MultiAgentDomain.Domain.TRANSACTION.value,
+                    )
+                )
+            event = finalized_event
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
             msg = str((event.get("data") or {}).get("assistantResponse") or "")
@@ -24070,7 +24749,7 @@ class TStationChatServiceV2:
                     "metadata": {"response_shape_key": "missing_stock_search_slots"},
                 },
             }
-            async for chunk in _finish(event):
+            async for chunk in _finish(event, source="code_pure_inventory_stock_missing_slots", required_tools=()):
                 yield chunk
             return
 
@@ -24092,6 +24771,29 @@ class TStationChatServiceV2:
             }
 
         if not shop_id:
+            list_gate_allowed, list_gate_reason = _direct_code_fast_path_contract_gate(
+                turn_contract=turn_contract,
+                intent="stock_store_search",
+                template="quickReply",
+                source="code_pure_inventory_stock_store_resolution",
+                required_tools=("get_store_list_tool",),
+            )
+            if not list_gate_allowed:
+                logger.info("[CODE_FAST_PATH_GATE] blocked pure_inventory_store_resolution reason=%s", list_gate_reason)
+                event = build_response_policy_guard_event(turn_contract) if turn_contract is not None else {
+                    "type": "data",
+                    "template": "quickReply",
+                    "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+                    "assistant_response_source": "code_pure_inventory_stock_store_resolution",
+                    "data": {"assistantResponse": "매장 정보를 다시 확인해 주세요.", "quickReplies": []},
+                }
+                async for chunk in _finish(
+                    event,
+                    source="code_pure_inventory_stock_store_resolution",
+                    required_tools=(),
+                ):
+                    yield chunk
+                return
             list_input = {"store_nm": store_name, "limit": 10}
             yield f"data: {json.dumps({'type': 'status', 'status': 'tool_start', 'tool': 'get_store_list_tool', 'display_name': '매장 조회 중...', 'source_domain': 'transaction'}, ensure_ascii=False)}\n\n"
             try:
@@ -24123,7 +24825,11 @@ class TStationChatServiceV2:
                         "predictedDomains": ["TRANSACTION"],
                     },
                 }
-                async for chunk in _finish(event):
+                async for chunk in _finish(
+                    event,
+                    source="code_pure_inventory_stock_store_resolution",
+                    required_tools=("get_store_list_tool",),
+                ):
                     yield chunk
                 return
             canonical_store = canonical_context_from_tool_boundary(matched_store)
@@ -24132,6 +24838,26 @@ class TStationChatServiceV2:
             if resolved_store_name:
                 store_name = resolved_store_name
             store_context = _store_context_from_mapping({**matched_store, "shopId": shop_id, "shopName": store_name})
+
+        inventory_gate_allowed, inventory_gate_reason = _direct_code_fast_path_contract_gate(
+            turn_contract=turn_contract,
+            intent="stock_store_search",
+            template="quickReply",
+            source="code_pure_inventory_stock_resolver",
+            required_tools=("get_store_inventory_tool", "get_logistics_inventory_tool"),
+        )
+        if not inventory_gate_allowed:
+            logger.info("[CODE_FAST_PATH_GATE] blocked pure_inventory_stock_tools reason=%s", inventory_gate_reason)
+            event = build_response_policy_guard_event(turn_contract) if turn_contract is not None else {
+                "type": "data",
+                "template": "quickReply",
+                "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+                "assistant_response_source": "code_pure_inventory_stock_resolver",
+                "data": {"assistantResponse": "재고 확인 조건을 다시 확인해 주세요.", "quickReplies": []},
+            }
+            async for chunk in _finish(event, source="code_pure_inventory_stock_resolver", required_tools=()):
+                yield chunk
+            return
 
         inventory_input = {
             "goods_list": [{"goodsNo": goods_no, "qty": str(ord_qty)}],
@@ -24159,7 +24885,11 @@ class TStationChatServiceV2:
                 store_context=store_context,
                 goods_no=goods_no,
             )
-            async for chunk in _finish(event):
+            async for chunk in _finish(
+                event,
+                source="code_pure_inventory_stock_resolver",
+                required_tools=("get_store_inventory_tool",),
+            ):
                 yield chunk
             return
 
@@ -24181,7 +24911,11 @@ class TStationChatServiceV2:
             store_context=store_context,
             goods_no=goods_no,
         )
-        async for chunk in _finish(event):
+        async for chunk in _finish(
+            event,
+            source="code_pure_inventory_stock_resolver",
+            required_tools=("get_store_inventory_tool", "get_logistics_inventory_tool"),
+        ):
             yield chunk
 
 
@@ -24330,6 +25064,39 @@ class TStationChatServiceV2:
             )
             return coupon_gate_decision
 
+        def _coupon_code_fast_path_gate(
+            *,
+            template: str,
+            source: str,
+            required_tools: tuple[str, ...],
+        ) -> tuple[bool, str]:
+            return _direct_code_fast_path_contract_gate(
+                turn_contract=turn_contract,
+                intent="price_or_coupon_check",
+                template=template,
+                source=source,
+                required_tools=required_tools,
+            )
+
+        def _finalize_coupon_code_event(
+            event: dict[str, Any] | None,
+            *,
+            source: str,
+            required_tools: tuple[str, ...],
+        ) -> dict[str, Any] | None:
+            finalized_event = _finalize_direct_code_event(
+                event,
+                turn_contract=turn_contract,
+                intent="price_or_coupon_check",
+                source=source,
+                required_tools=required_tools,
+            )
+            if finalized_event is not None:
+                return finalized_event
+            if turn_contract is not None:
+                return build_response_policy_guard_event(turn_contract)
+            return None
+
         def _recent_product_coupon_followup_target_for_turn() -> dict[str, Any] | None:
             return _recent_product_coupon_followup_target(user_query, recent_user_context_text)
 
@@ -24450,7 +25217,15 @@ class TStationChatServiceV2:
                 return None
             mapped_event["source_domain"] = MultiAgentDomain.Domain.DISCOVERY.value
             mapped_event["assistant_response_source"] = "code_best_seller_search"
-            return emitted_events, mapped_event
+            finalized_event = _finalize_direct_code_event(
+                mapped_event,
+                turn_contract=turn_contract,
+                intent="product_search",
+                source="code_best_seller_search",
+                required_tools=("get_best_selling_products_tool",),
+                allowed_intents=("best_seller_search",),
+            )
+            return (emitted_events, finalized_event) if finalized_event is not None else None
 
         async def _resolve_default_benefit_with_code() -> tuple[list[dict], dict] | None:
             router_event_list_lookup = any(
@@ -24458,6 +25233,17 @@ class TStationChatServiceV2:
                 for item in (getattr(routing_result, "execution_plan", None) or ())
             )
             if not is_default_benefit_request(user_query) and not router_event_list_lookup:
+                return None
+            gate_allowed, gate_reason = _direct_code_fast_path_contract_gate(
+                turn_contract=turn_contract,
+                intent="product_search",
+                template="quickReply",
+                source="code_default_benefit_event_deal",
+                required_tools=("get_events_tool", "get_deals_tool"),
+                allowed_intents=("benefit_event_list_lookup",),
+            )
+            if not gate_allowed:
+                logger.info("[CODE_FAST_PATH_GATE] blocked default_benefit reason=%s", gate_reason)
                 return None
 
             from services.tstation.agents.b_discovery_agent.tools import get_deals_tool as _deals_tool
@@ -24523,13 +25309,32 @@ class TStationChatServiceV2:
                     "source_domain": "discovery",
                 })
 
-            return emitted_events, _build_default_benefit_event(events_result, deals_result)
+            benefit_event = _finalize_direct_code_event(
+                _build_default_benefit_event(events_result, deals_result),
+                turn_contract=turn_contract,
+                intent="product_search",
+                source="code_default_benefit_event_deal",
+                required_tools=("get_events_tool", "get_deals_tool"),
+                allowed_intents=("benefit_event_list_lookup",),
+            )
+            return (emitted_events, benefit_event) if benefit_event is not None else None
 
         async def _resolve_payment_method_change_with_code() -> tuple[list[dict], dict] | None:
             if not (
                 _PAYMENT_METHOD_CHANGE_QUERY_RE.search(user_query or "")
                 or _PAYMENT_ACCOUNT_INFO_QUERY_RE.search(user_query or "")
             ):
+                return None
+            gate_allowed, gate_reason = _direct_code_fast_path_contract_gate(
+                turn_contract=turn_contract,
+                intent="payment_method_change_request",
+                template="quickReply",
+                source="code_payment_method_change",
+                required_tools=("get_orders_of_user_tool",),
+                allowed_intents=("payment_account_info_lookup",),
+            )
+            if not gate_allowed:
+                logger.info("[CODE_FAST_PATH_GATE] blocked payment_method_change reason=%s", gate_reason)
                 return None
 
             from services.tstation.agents.c_transaction_agent.tools import (
@@ -24569,15 +25374,33 @@ class TStationChatServiceV2:
             })
             rows = _order_rows_from_orders_result(orders_result)
             matches, match_reason, match_value = _select_order_rows_by_number(user_query, rows)
-            return emitted_events, _payment_method_order_selection_event(
-                user_text=user_query,
-                rows=matches,
-                match_reason=match_reason,
-                match_value=match_value,
+            payment_event = _finalize_direct_code_event(
+                _payment_method_order_selection_event(
+                    user_text=user_query,
+                    rows=matches,
+                    match_reason=match_reason,
+                    match_value=match_value,
+                ),
+                turn_contract=turn_contract,
+                intent="payment_method_change_request",
+                source="code_payment_method_change",
+                required_tools=("get_orders_of_user_tool",),
+                allowed_intents=("payment_account_info_lookup",),
             )
+            return (emitted_events, payment_event) if payment_event is not None else None
 
         async def _resolve_order_arrival_status_with_code() -> tuple[list[dict], dict] | None:
             if not _is_order_arrival_status_query(user_query):
+                return None
+            gate_allowed, gate_reason = _direct_code_fast_path_contract_gate(
+                turn_contract=turn_contract,
+                intent="order_arrival_status_lookup",
+                template="quickReply",
+                source="code_order_arrival_status",
+                required_tools=("get_orders_of_user_tool", "get_order_status_tool"),
+            )
+            if not gate_allowed:
+                logger.info("[CODE_FAST_PATH_GATE] blocked order_arrival_status reason=%s", gate_reason)
                 return None
 
             from services.tstation.agents.c_transaction_agent.tools import (
@@ -24655,10 +25478,27 @@ class TStationChatServiceV2:
                 "tool": "get_order_status_tool",
                 "source_domain": "transaction",
             })
-            return emitted_events, _build_order_arrival_status_event(status_result, order_row)
+            order_event = _finalize_direct_code_event(
+                _build_order_arrival_status_event(status_result, order_row),
+                turn_contract=turn_contract,
+                intent="order_arrival_status_lookup",
+                source="code_order_arrival_status",
+                required_tools=("get_orders_of_user_tool", "get_order_status_tool"),
+            )
+            return (emitted_events, order_event) if order_event is not None else None
 
         async def _resolve_order_cancel_status_with_code() -> tuple[list[dict], dict] | None:
             if not _is_order_cancel_status_lookup_query(user_query):
+                return None
+            gate_allowed, gate_reason = _direct_code_fast_path_contract_gate(
+                turn_contract=turn_contract,
+                intent="order_cancel_status_lookup",
+                template="quickReply",
+                source="code_order_cancel_status",
+                required_tools=("get_orders_of_user_tool", "get_order_status_tool"),
+            )
+            if not gate_allowed:
+                logger.info("[CODE_FAST_PATH_GATE] blocked order_cancel_status reason=%s", gate_reason)
                 return None
 
             from services.tstation.agents.c_transaction_agent.tools import (
@@ -24700,17 +25540,31 @@ class TStationChatServiceV2:
             })
             selection = _select_cancel_or_refund_order_rows(user_query, orders_result, messages)
             if selection.get("state") != "matched":
-                return emitted_events, _order_cancel_status_selection_event(selection)
+                selection_event = _finalize_direct_code_event(
+                    _order_cancel_status_selection_event(selection),
+                    turn_contract=turn_contract,
+                    intent="order_cancel_status_lookup",
+                    source="code_order_cancel_status",
+                    required_tools=("get_orders_of_user_tool", "get_order_status_tool"),
+                )
+                return (emitted_events, selection_event) if selection_event is not None else None
 
             order_row = selection.get("row") if isinstance(selection.get("row"), dict) else {}
             ord_no = _order_no_from_row(order_row)
             if not ord_no:
-                return emitted_events, _order_cancel_status_selection_event({
-                    "state": "no_cancel_or_refund_order",
-                    "rows": [],
-                    "match_reason": selection.get("match_reason") or "",
-                    "match_value": selection.get("match_value") or "",
-                })
+                selection_event = _finalize_direct_code_event(
+                    _order_cancel_status_selection_event({
+                        "state": "no_cancel_or_refund_order",
+                        "rows": [],
+                        "match_reason": selection.get("match_reason") or "",
+                        "match_value": selection.get("match_value") or "",
+                    }),
+                    turn_contract=turn_contract,
+                    intent="order_cancel_status_lookup",
+                    source="code_order_cancel_status",
+                    required_tools=("get_orders_of_user_tool", "get_order_status_tool"),
+                )
+                return (emitted_events, selection_event) if selection_event is not None else None
 
             status_input = {"query_no": ord_no}
             emitted_events.append({
@@ -24742,10 +25596,27 @@ class TStationChatServiceV2:
                 "tool": "get_order_status_tool",
                 "source_domain": "transaction",
             })
-            return emitted_events, _build_order_cancel_status_event(status_result, order_row)
+            status_event = _finalize_direct_code_event(
+                _build_order_cancel_status_event(status_result, order_row),
+                turn_contract=turn_contract,
+                intent="order_cancel_status_lookup",
+                source="code_order_cancel_status",
+                required_tools=("get_orders_of_user_tool", "get_order_status_tool"),
+            )
+            return (emitted_events, status_event) if status_event is not None else None
 
         async def _resolve_order_history_reorder_with_code() -> tuple[list[dict], dict] | None:
             if not _is_order_history_reorder_query(user_query):
+                return None
+            gate_allowed, gate_reason = _direct_code_fast_path_contract_gate(
+                turn_contract=turn_contract,
+                intent="order_history_reorder",
+                template="quickReply",
+                source="code_order_history_reorder",
+                required_tools=("get_orders_of_user_tool",),
+            )
+            if not gate_allowed:
+                logger.info("[CODE_FAST_PATH_GATE] blocked order_history_reorder reason=%s", gate_reason)
                 return None
 
             from services.tstation.agents.c_transaction_agent.tools import (
@@ -24786,17 +25657,47 @@ class TStationChatServiceV2:
 
             order_row, match_reason = _select_order_history_reorder_row(user_query, orders_result)
             if order_row is None:
-                return emitted_events, _order_history_reorder_choice_event(orders_result, match_reason)
-            return emitted_events, _build_order_history_reorder_event(
-                order_row,
-                match_reason=match_reason,
-                requested_plate=_extract_vehicle_plate_from_text(user_query),
+                choice_event = _finalize_direct_code_event(
+                    _order_history_reorder_choice_event(orders_result, match_reason),
+                    turn_contract=turn_contract,
+                    intent="order_history_reorder",
+                    source="code_order_history_reorder",
+                    required_tools=("get_orders_of_user_tool",),
+                )
+                return (emitted_events, choice_event) if choice_event is not None else None
+            reorder_event = _finalize_direct_code_event(
+                _build_order_history_reorder_event(
+                    order_row,
+                    match_reason=match_reason,
+                    requested_plate=_extract_vehicle_plate_from_text(user_query),
+                ),
+                turn_contract=turn_contract,
+                intent="order_history_reorder",
+                source="code_order_history_reorder",
+                required_tools=("get_orders_of_user_tool",),
             )
+            return (emitted_events, reorder_event) if reorder_event is not None else None
 
         async def _resolve_maintenance_history_lookup_with_code() -> tuple[list[dict], dict] | None:
             if _is_maintenance_history_access_policy_query(user_query):
-                return [], _build_maintenance_history_access_policy_event(user_query)
+                policy_event = _finalize_direct_code_event(
+                    _build_maintenance_history_access_policy_event(user_query),
+                    turn_contract=turn_contract,
+                    intent="maintenance_history_access_policy",
+                    source="code_maintenance_history_access_policy",
+                )
+                return ([], policy_event) if policy_event is not None else None
             if not _is_maintenance_history_lookup_query(user_query):
+                return None
+            gate_allowed, gate_reason = _direct_code_fast_path_contract_gate(
+                turn_contract=turn_contract,
+                intent="maintenance_history_lookup",
+                template="quickReply",
+                source="code_maintenance_history_lookup",
+                required_tools=("get_maintenance_history_tool",),
+            )
+            if not gate_allowed:
+                logger.info("[CODE_FAST_PATH_GATE] blocked maintenance_history_lookup reason=%s", gate_reason)
                 return None
 
             from services.tstation.agents.c_transaction_agent.tools import (
@@ -24834,10 +25735,27 @@ class TStationChatServiceV2:
                 "tool": "get_maintenance_history_tool",
                 "source_domain": "transaction",
             })
-            return emitted_events, _build_maintenance_history_event(history_result, user_query)
+            history_event = _finalize_direct_code_event(
+                _build_maintenance_history_event(history_result, user_query),
+                turn_contract=turn_contract,
+                intent="maintenance_history_lookup",
+                source="code_maintenance_history_lookup",
+                required_tools=("get_maintenance_history_tool",),
+            )
+            return (emitted_events, history_event) if history_event is not None else None
 
         async def _resolve_reservation_store_info_with_code() -> tuple[list[dict], dict] | None:
             if not _is_reservation_store_info_lookup_query(user_query):
+                return None
+            gate_allowed, gate_reason = _direct_code_fast_path_contract_gate(
+                turn_contract=turn_contract,
+                intent="reservation_store_info_lookup",
+                template="quickReply",
+                source="code_reservation_store_info",
+                required_tools=("get_my_reservations_tool",),
+            )
+            if not gate_allowed:
+                logger.info("[CODE_FAST_PATH_GATE] blocked reservation_store_info reason=%s", gate_reason)
                 return None
 
             from services.tstation.agents.c_transaction_agent.tools import (
@@ -24878,14 +25796,39 @@ class TStationChatServiceV2:
 
             reservation_row, match_reason = _select_reservation_store_row(user_query, reservations_result)
             if reservation_row is None:
-                return emitted_events, _reservation_store_not_found_event(match_reason)
-            return emitted_events, _build_reservation_store_info_event(reservation_row, match_reason=match_reason)
+                not_found_event = _finalize_direct_code_event(
+                    _reservation_store_not_found_event(match_reason),
+                    turn_contract=turn_contract,
+                    intent="reservation_store_info_lookup",
+                    source="code_reservation_store_info",
+                    required_tools=("get_my_reservations_tool",),
+                )
+                return (emitted_events, not_found_event) if not_found_event is not None else None
+            store_event = _finalize_direct_code_event(
+                _build_reservation_store_info_event(reservation_row, match_reason=match_reason),
+                turn_contract=turn_contract,
+                intent="reservation_store_info_lookup",
+                source="code_reservation_store_info",
+                required_tools=("get_my_reservations_tool",),
+            )
+            return (emitted_events, store_event) if store_event is not None else None
 
         async def _resolve_store_holiday_period_with_code() -> tuple[list[dict], dict] | None:
             if not _is_store_holiday_period_info_query(user_query):
                 return None
             store_name = _extract_store_holiday_store_name(user_query)
             if not store_name:
+                return None
+            gate_allowed, gate_reason = _direct_code_fast_path_contract_gate(
+                turn_contract=turn_contract,
+                intent="store_holiday_lookup",
+                template="quickReply",
+                source="code_store_holiday",
+                required_tools=("get_store_list_tool", "get_store_detail_tool"),
+                allowed_intents=("plain_store_info_lookup",),
+            )
+            if not gate_allowed:
+                logger.info("[CODE_FAST_PATH_GATE] blocked store_holiday reason=%s", gate_reason)
                 return None
 
             from services.tstation.agents.c_transaction_agent.tools import (
@@ -24980,7 +25923,15 @@ class TStationChatServiceV2:
                 "tool": "get_store_detail_tool",
                 "source_domain": "transaction",
             })
-            return emitted_events, _build_store_holiday_period_event(user_query, store_row, detail_result)
+            holiday_event = _finalize_direct_code_event(
+                _build_store_holiday_period_event(user_query, store_row, detail_result),
+                turn_contract=turn_contract,
+                intent="store_holiday_lookup",
+                source="code_store_holiday",
+                required_tools=("get_store_list_tool", "get_store_detail_tool"),
+                allowed_intents=("plain_store_info_lookup",),
+            )
+            return (emitted_events, holiday_event) if holiday_event is not None else None
 
         async def _resolve_store_attribute_inquiry_with_code() -> tuple[list[dict], dict] | None:
             router_policy_intent = str(getattr(routing_result, "policy_intent", "") or "")
@@ -24999,6 +25950,42 @@ class TStationChatServiceV2:
                 ).strip()
             inquiry = extract_store_attribute_inquiry(user_query, store_name=slot_store_name or None)
             current_store_name = _extract_plain_store_info_store_name(user_query)
+            store_name_role = classify_store_name_role(
+                user_query,
+                store_name=router_store_name or (inquiry.store_name if inquiry is not None else "") or current_store_name,
+            )
+            gate_allowed, gate_reason = _direct_code_fast_path_contract_gate(
+                turn_contract=turn_contract,
+                intent="store_attribute_inquiry",
+                template="quickReply",
+                source="code_store_attribute_inquiry",
+                required_tools=("get_store_list_tool", "get_store_detail_tool"),
+            )
+            if not gate_allowed:
+                logger.info(
+                    "[CODE_FAST_PATH_GATE] blocked store_attribute_inquiry reason=%s role=%s contract=%s",
+                    gate_reason,
+                    store_name_role.model_dump(),
+                    turn_contract.to_dict() if turn_contract else None,
+                )
+                return None
+            if store_name_role.role == "context":
+                logger.info(
+                    "[CODE_FAST_PATH_GATE] blocked contextual store mention for store_attribute role=%s contract=%s",
+                    store_name_role.model_dump(),
+                    turn_contract.to_dict() if turn_contract else None,
+                )
+                return None
+
+            def _finalize_store_attribute_event(event: dict[str, Any] | None) -> dict[str, Any] | None:
+                return _finalize_direct_code_event(
+                    event,
+                    turn_contract=turn_contract,
+                    intent="store_attribute_inquiry",
+                    source="code_store_attribute_inquiry",
+                    required_tools=("get_store_list_tool", "get_store_detail_tool"),
+                )
+
             latest_location_template = latest_template_data_from_messages(messages, "location")
             selected_location = TStationChatServiceV2._resolve_store_selection_from_history_template(
                 user_query,
@@ -25058,7 +26045,10 @@ class TStationChatServiceV2:
                     attribute_type=attribute_type,
                     verification_level=verification_level,
                 )
-                return ([], event) if event is not None else None
+                return (
+                    [],
+                    _finalize_store_attribute_event(event),
+                ) if event is not None else None
 
             from services.tstation.agents.c_transaction_agent.tools import (
                 get_store_detail_tool as _store_detail_tool,
@@ -25107,7 +26097,10 @@ class TStationChatServiceV2:
                     attribute_type=attribute_type,
                     verification_level=verification_level,
                 )
-                return (emitted_events, event) if event is not None else None
+                return (
+                    emitted_events,
+                    _finalize_store_attribute_event(event),
+                ) if event is not None else None
             store_rows = _dedupe_store_rows([store for store in stores if isinstance(store, dict)])
             store_row = _store_name_exact_match_row(store_name, store_rows)
             if store_row is None:
@@ -25128,7 +26121,10 @@ class TStationChatServiceV2:
                         attribute_type=attribute_type,
                         verification_level=verification_level,
                     )
-                return (emitted_events, event) if event is not None else None
+                return (
+                    emitted_events,
+                    _finalize_store_attribute_event(event),
+                ) if event is not None else None
 
             shop_id = str(store_row.get("shop_id") or store_row.get("shop_seq") or "").strip()
             if not shop_id:
@@ -25140,7 +26136,10 @@ class TStationChatServiceV2:
                     verification_level=verification_level,
                     store_info_entries=[{"tool": "get_store_list_tool", "args": list_input, "data": list_result}],
                 )
-                return (emitted_events, event) if event is not None else None
+                return (
+                    emitted_events,
+                    _finalize_store_attribute_event(event),
+                ) if event is not None else None
 
             detail_input = {"shop_id": shop_id, "cal_day": _requested_reservation_cal_day_or_today(user_query)}
             emitted_events.append({
@@ -25197,11 +26196,25 @@ class TStationChatServiceV2:
                     {"tool": "get_store_detail_tool", "args": detail_input, "data": detail_result},
                 ],
             )
-            return (emitted_events, event) if event is not None else None
+            return (
+                emitted_events,
+                _finalize_store_attribute_event(event),
+            ) if event is not None else None
 
         async def _resolve_plain_store_info_with_code() -> tuple[list[dict], dict] | None:
             store_name = _extract_plain_store_info_store_name(user_query)
             if not store_name:
+                return None
+            gate_allowed, gate_reason = _direct_code_fast_path_contract_gate(
+                turn_contract=turn_contract,
+                intent="plain_store_info_lookup",
+                template="quickReply",
+                source="code_plain_store_info",
+                required_tools=("get_store_list_tool", "get_store_detail_tool"),
+                allowed_intents=("store_search",),
+            )
+            if not gate_allowed:
+                logger.info("[CODE_FAST_PATH_GATE] blocked plain_store_info reason=%s", gate_reason)
                 return None
 
             from services.tstation.agents.c_transaction_agent.tools import (
@@ -25329,7 +26342,15 @@ class TStationChatServiceV2:
                         else:
                             event_data["predictedDomains"] = ["TRANSACTION"]
                         detail_event["assistant_response_source"] = "code_store_visual_detail_cta"
-            return emitted_events, detail_event
+            finalized_event = _finalize_direct_code_event(
+                detail_event,
+                turn_contract=turn_contract,
+                intent="plain_store_info_lookup",
+                source="code_plain_store_info",
+                required_tools=("get_store_list_tool", "get_store_detail_tool"),
+                allowed_intents=("store_search",),
+            )
+            return (emitted_events, finalized_event) if finalized_event is not None else None
 
         async def _resolve_coupon_applicability_with_code(
             my_coupons_result: dict | None = None,
@@ -25385,11 +26406,21 @@ class TStationChatServiceV2:
                 my_coupons_result,
             )
             if matched_coupon is None:
-                return emitted_events, _build_coupon_match_failure_event(user_query, ambiguous_coupons)
+                failure_event = _finalize_coupon_code_event(
+                    _build_coupon_match_failure_event(user_query, ambiguous_coupons),
+                    source="code_coupon_applicability_match_failure",
+                    required_tools=("get_my_coupons_tool",),
+                )
+                return (emitted_events, failure_event) if failure_event is not None else None
 
             matched_cpn_no = str(matched_coupon.get("cpn_no") or "").strip()
             if not matched_cpn_no:
-                return emitted_events, _build_coupon_match_failure_event(user_query)
+                failure_event = _finalize_coupon_code_event(
+                    _build_coupon_match_failure_event(user_query),
+                    source="code_coupon_applicability_match_failure",
+                    required_tools=("get_my_coupons_tool",),
+                )
+                return (emitted_events, failure_event) if failure_event is not None else None
 
             matched_channel_type = _coupon_channel_type(matched_coupon)
             is_channel_usage_query = _is_specific_coupon_usage_query(user_query)
@@ -25399,7 +26430,12 @@ class TStationChatServiceV2:
                     target_product_name=_coupon_target_product_name_for_query(user_query),
                 )
                 if channel_event is not None:
-                    return emitted_events, channel_event
+                    finalized_event = _finalize_coupon_code_event(
+                        channel_event,
+                        source="code_coupon_channel_policy",
+                        required_tools=("get_my_coupons_tool",),
+                    )
+                    return (emitted_events, finalized_event) if finalized_event is not None else None
 
             followup_tool_name = "get_coupon_applicable_products_tool"
             followup_input = {"cpn_no": [matched_cpn_no], "deal_no": None}
@@ -25450,18 +26486,33 @@ class TStationChatServiceV2:
                     matched_channel_type in {"store_only", "offline", "partner_only"}
                     or not _coupon_target_product_name_for_query(user_query)
                 ):
-                    return emitted_events, channel_event
-            return emitted_events, _build_coupon_applicability_event(
-                followup_result,
-                matched_coupon,
-                target_product_name=_coupon_target_product_name_for_query(user_query),
-                target_brand=_coupon_target_brand_for_query(user_query),
+                    finalized_event = _finalize_coupon_code_event(
+                        channel_event,
+                        source="code_coupon_channel_policy",
+                        required_tools=("get_my_coupons_tool", followup_tool_name),
+                    )
+                    return (emitted_events, finalized_event) if finalized_event is not None else None
+            applicability_event = _finalize_coupon_code_event(
+                _build_coupon_applicability_event(
+                    followup_result,
+                    matched_coupon,
+                    target_product_name=_coupon_target_product_name_for_query(user_query),
+                    target_brand=_coupon_target_brand_for_query(user_query),
+                ),
+                source="code_coupon_applicability",
+                required_tools=("get_my_coupons_tool", followup_tool_name),
             )
+            return (emitted_events, applicability_event) if applicability_event is not None else None
 
-        async def _resolve_owned_coupon_lookup_with_code() -> tuple[list[dict], dict]:
+        async def _resolve_owned_coupon_lookup_with_code() -> tuple[list[dict], dict] | None:
             emitted_events: list[dict] = []
             if _ALL_MY_T_BENEFIT_PAGE_RE.search(user_query or ""):
-                return emitted_events, _all_my_t_benefit_page_event()
+                benefit_page_event = _finalize_coupon_code_event(
+                    _all_my_t_benefit_page_event(),
+                    source="code_all_my_t_benefit_page",
+                    required_tools=(),
+                )
+                return (emitted_events, benefit_page_event) if benefit_page_event is not None else None
             from services.tstation.agents.c_transaction_agent.tools import get_my_coupons_tool as _my_coupons_tool
             from services.tstation.template_mapper import try_build_template
 
@@ -25508,12 +26559,22 @@ class TStationChatServiceV2:
             if mapped_event is not None:
                 mapped_event["source_domain"] = MultiAgentDomain.Domain.TRANSACTION.value
                 mapped_event["assistant_response_source"] = "code_coupon_lookup"
-                return emitted_events, mapped_event
-            return emitted_events, _coupon_box_event("보유 쿠폰을 확인했어요. 쿠폰함에서 자세한 내용을 확인해 주세요.")
+                finalized_event = _finalize_coupon_code_event(
+                    mapped_event,
+                    source="code_coupon_lookup",
+                    required_tools=("get_my_coupons_tool",),
+                )
+                return (emitted_events, finalized_event) if finalized_event is not None else None
+            coupon_box_event = _finalize_coupon_code_event(
+                _coupon_box_event("보유 쿠폰을 확인했어요. 쿠폰함에서 자세한 내용을 확인해 주세요."),
+                source="code_coupon_lookup",
+                required_tools=("get_my_coupons_tool",),
+            )
+            return (emitted_events, coupon_box_event) if coupon_box_event is not None else None
 
         async def _resolve_owned_coupon_expiry_lookup_with_code(
             my_coupons_result: dict | None = None,
-        ) -> tuple[list[dict], dict]:
+        ) -> tuple[list[dict], dict] | None:
             emitted_events: list[dict] = []
             from services.tstation.agents.c_transaction_agent.tools import get_my_coupons_tool as _my_coupons_tool
 
@@ -25554,11 +26615,16 @@ class TStationChatServiceV2:
                     "source_domain": "transaction",
                 })
 
-            return emitted_events, _build_owned_coupon_expiry_lookup_event(user_query, my_coupons_result)
+            expiry_event = _finalize_coupon_code_event(
+                _build_owned_coupon_expiry_lookup_event(user_query, my_coupons_result),
+                source="code_owned_coupon_expiry_lookup",
+                required_tools=("get_my_coupons_tool",),
+            )
+            return (emitted_events, expiry_event) if expiry_event is not None else None
 
         async def _resolve_owned_coupon_best_discount_with_code(
             my_coupons_result: dict | None = None,
-        ) -> tuple[list[dict], dict]:
+        ) -> tuple[list[dict], dict] | None:
             emitted_events: list[dict] = []
             from services.tstation.agents.c_transaction_agent.tools import get_my_coupons_tool as _my_coupons_tool
 
@@ -25599,7 +26665,12 @@ class TStationChatServiceV2:
                     "source_domain": "transaction",
                 })
 
-            return emitted_events, _build_owned_coupon_best_discount_event(my_coupons_result)
+            best_discount_event = _finalize_coupon_code_event(
+                _build_owned_coupon_best_discount_event(my_coupons_result),
+                source="code_owned_coupon_best_discount",
+                required_tools=("get_my_coupons_tool",),
+            )
+            return (emitted_events, best_discount_event) if best_discount_event is not None else None
 
         async def _resolve_oe_replacement_followup_with_code(
             confirmed_tire_size: str | None,
@@ -25613,7 +26684,14 @@ class TStationChatServiceV2:
                 and re.search(r"동일(?:한)?\s*상품|같은\s*상품", user_query, re.IGNORECASE)
                 and _oe_replacement_followup_brand_cd(user_query, recent_user_context_text) is None
             ):
-                return [], _build_oe_replacement_same_product_brand_prompt_event(confirmed_tire_size)
+                prompt_event = _finalize_direct_code_event(
+                    _build_oe_replacement_same_product_brand_prompt_event(confirmed_tire_size),
+                    turn_contract=turn_contract,
+                    intent="product_search",
+                    source="code_oe_replacement_same_product_brand_prompt",
+                    allowed_intents=("oe_re_product_filter_summary",),
+                )
+                return ([], prompt_event) if prompt_event is not None else None
 
             same_product_search_input = _build_oe_replacement_same_product_search_args(
                 user_query,
@@ -25621,6 +26699,17 @@ class TStationChatServiceV2:
                 confirmed_tire_size,
             )
             if same_product_search_input is not None:
+                gate_allowed, gate_reason = _direct_code_fast_path_contract_gate(
+                    turn_contract=turn_contract,
+                    intent="product_search",
+                    template="product",
+                    source="code_oe_replacement_same_product_search",
+                    required_tools=("search_product_tool",),
+                    allowed_intents=("oe_re_product_filter_summary", "product_search_summary"),
+                )
+                if not gate_allowed:
+                    logger.info("[CODE_FAST_PATH_GATE] blocked oe_replacement_same_product reason=%s", gate_reason)
+                    return None
                 emitted_events: list[dict] = []
                 from services.tstation.agents.b_discovery_agent.tools import (
                     search_product_tool as _search_product_tool,
@@ -25676,7 +26765,15 @@ class TStationChatServiceV2:
                     return None
                 mapped_event["source_domain"] = MultiAgentDomain.Domain.DISCOVERY.value
                 mapped_event["assistant_response_source"] = "code_oe_replacement_same_product_search"
-                return emitted_events, mapped_event
+                finalized_event = _finalize_direct_code_event(
+                    mapped_event,
+                    turn_contract=turn_contract,
+                    intent="product_search",
+                    source="code_oe_replacement_same_product_search",
+                    required_tools=("search_product_tool",),
+                    allowed_intents=("oe_re_product_filter_summary", "product_search_summary"),
+                )
+                return (emitted_events, finalized_event) if finalized_event is not None else None
 
             followup_input = _build_oe_replacement_followup_recommendation_args(
                 user_query,
@@ -25684,6 +26781,17 @@ class TStationChatServiceV2:
                 confirmed_tire_size,
             )
             if followup_input is None:
+                return None
+            gate_allowed, gate_reason = _direct_code_fast_path_contract_gate(
+                turn_contract=turn_contract,
+                intent="product_recommendation",
+                template="product",
+                source="code_oe_replacement_followup",
+                required_tools=("get_products_recommendations_tool",),
+                allowed_intents=("oe_re_product_filter_summary",),
+            )
+            if not gate_allowed:
+                logger.info("[CODE_FAST_PATH_GATE] blocked oe_replacement_followup reason=%s", gate_reason)
                 return None
 
             emitted_events: list[dict] = []
@@ -25737,7 +26845,15 @@ class TStationChatServiceV2:
                 return None
             mapped_event["source_domain"] = MultiAgentDomain.Domain.DISCOVERY.value
             mapped_event["assistant_response_source"] = "code_oe_replacement_followup"
-            return emitted_events, mapped_event
+            finalized_event = _finalize_direct_code_event(
+                mapped_event,
+                turn_contract=turn_contract,
+                intent="product_recommendation",
+                source="code_oe_replacement_followup",
+                required_tools=("get_products_recommendations_tool",),
+                allowed_intents=("oe_re_product_filter_summary",),
+            )
+            return (emitted_events, finalized_event) if finalized_event is not None else None
 
         async def _resolve_product_coupon_eligibility_with_code(
             my_coupons_result: dict | None = None,
@@ -25815,7 +26931,12 @@ class TStationChatServiceV2:
                     my_coupons_result,
                 )
                 if specific_coupon_row is None:
-                    return emitted_events, _build_coupon_match_failure_event(user_query, ambiguous_coupons)
+                    failure_event = _finalize_coupon_code_event(
+                        _build_coupon_match_failure_event(user_query, ambiguous_coupons),
+                        source="code_product_coupon_match_failure",
+                        required_tools=("get_my_coupons_tool",),
+                    )
+                    return (emitted_events, failure_event) if failure_event is not None else None
                 if (
                     _is_specific_coupon_usage_query(user_query)
                     and _coupon_channel_type(specific_coupon_row) in {"store_only", "offline", "partner_only"}
@@ -25825,7 +26946,12 @@ class TStationChatServiceV2:
                         target_product_name=target_product_name,
                     )
                     if channel_event is not None:
-                        return emitted_events, channel_event
+                        finalized_event = _finalize_coupon_code_event(
+                            channel_event,
+                            source="code_product_coupon_channel_policy",
+                            required_tools=("get_my_coupons_tool",),
+                        )
+                        return (emitted_events, finalized_event) if finalized_event is not None else None
 
             if (
                 target_tire_size
@@ -25932,17 +27058,27 @@ class TStationChatServiceV2:
                             "tire_model": preferred_keyword,
                             "ord_qty": int(target_quantity),
                         }
-                        return emitted_events, _build_transaction_unresolved_product_size_clarification_event(
-                            preferred_keyword,
-                            fallback_sizes,
-                            pending_intent="price",
-                            slots=coupon_slots,
+                        size_event = _finalize_coupon_code_event(
+                            _build_transaction_unresolved_product_size_clarification_event(
+                                preferred_keyword,
+                                fallback_sizes,
+                                pending_intent="price",
+                                slots=coupon_slots,
+                            ),
+                            source="code_product_coupon_price_size_clarification",
+                            required_tools=("search_product_tool",),
                         )
-                    return emitted_events, _build_product_coupon_price_no_product_event(
-                        preferred_keyword,
-                        target_tire_size,
-                        quantity=int(target_quantity),
+                        return (emitted_events, size_event) if size_event is not None else None
+                    no_product_event = _finalize_coupon_code_event(
+                        _build_product_coupon_price_no_product_event(
+                            preferred_keyword,
+                            target_tire_size,
+                            quantity=int(target_quantity),
+                        ),
+                        source="code_product_coupon_price_no_product",
+                        required_tools=("search_product_tool",),
                     )
+                    return (emitted_events, no_product_event) if no_product_event is not None else None
 
                 price_input = {"goods_no": goods_no}
                 emitted_events.append({
@@ -25981,7 +27117,12 @@ class TStationChatServiceV2:
                     quantity=int(target_quantity),
                 )
                 if price_event is not None:
-                    return emitted_events, price_event
+                    finalized_event = _finalize_coupon_code_event(
+                        price_event,
+                        source="code_product_coupon_price_amount",
+                        required_tools=("search_product_tool", "get_final_price_tool"),
+                    )
+                    return (emitted_events, finalized_event) if finalized_event is not None else None
                 return None
 
             from services.tstation.agents.c_transaction_agent.tools import (
@@ -26029,9 +27170,14 @@ class TStationChatServiceV2:
             coupon_rows = [specific_coupon_row] if specific_coupon_row else _coupon_rows_from_my_coupons(my_coupons_result)
             cpn_nos = [str(row.get("cpn_no") or "").strip() for row in coupon_rows if str(row.get("cpn_no") or "").strip()]
             if not cpn_nos:
-                return emitted_events, _coupon_box_event(
-                    "현재 보유 쿠폰을 확인하지 못했어요. 쿠폰함에서 보유 쿠폰을 먼저 확인해 주세요."
+                coupon_box_event = _finalize_coupon_code_event(
+                    _coupon_box_event(
+                        "현재 보유 쿠폰을 확인하지 못했어요. 쿠폰함에서 보유 쿠폰을 먼저 확인해 주세요."
+                    ),
+                    source="code_product_coupon_no_owned_coupons",
+                    required_tools=("get_my_coupons_tool",),
                 )
+                return (emitted_events, coupon_box_event) if coupon_box_event is not None else None
 
             followup_tool_name = "get_coupon_applicable_products_tool"
             followup_input = {"cpn_no": cpn_nos, "deal_no": None}
@@ -26069,12 +27215,17 @@ class TStationChatServiceV2:
                 "tool": followup_tool_name,
                 "source_domain": "transaction",
             })
-            return emitted_events, _build_product_coupon_eligibility_event(
-                followup_result,
-                coupon_rows,
-                target_product_name=target_product_name,
-                target_brand=_coupon_target_brand_for_query(user_query),
+            eligibility_event = _finalize_coupon_code_event(
+                _build_product_coupon_eligibility_event(
+                    followup_result,
+                    coupon_rows,
+                    target_product_name=target_product_name,
+                    target_brand=_coupon_target_brand_for_query(user_query),
+                ),
+                source="code_product_coupon_eligibility",
+                required_tools=("get_my_coupons_tool", followup_tool_name),
             )
+            return (emitted_events, eligibility_event) if eligibility_event is not None else None
 
         async def _resolve_product_comparison_with_code(
             comparison_query_override: str | None = None,
@@ -26087,6 +27238,16 @@ class TStationChatServiceV2:
             )
             product_names = _product_comparison_names(comparison_query)
             if len(product_names) < 2:
+                return None
+            gate_allowed, gate_reason = _direct_code_fast_path_contract_gate(
+                turn_contract=turn_contract,
+                intent="product_comparison",
+                template="quickReply",
+                source="code_product_comparison",
+                required_tools=("search_product_tool", "get_product_description_tool"),
+            )
+            if not gate_allowed:
+                logger.info("[CODE_FAST_PATH_GATE] blocked product_comparison reason=%s", gate_reason)
                 return None
             frame = build_discovery_intent_frame(comparison_query)
             tire_size = frame.entities.get("tire_size") or getattr(initial_slots, "tire_size", None)
@@ -26201,7 +27362,14 @@ class TStationChatServiceV2:
 
             compare_event = _build_product_comparison_event(comparison_query, product_rows)
             _stage_comparison_context_slots(compare_event)
-            return emitted_events, compare_event
+            finalized_event = _finalize_direct_code_event(
+                compare_event,
+                turn_contract=turn_contract,
+                intent="product_comparison",
+                source="code_product_comparison",
+                required_tools=("search_product_tool", "get_product_description_tool"),
+            )
+            return (emitted_events, finalized_event) if finalized_event is not None else None
 
         def _stage_comparison_context_slots(event: dict | None) -> None:
             nonlocal pending_slots
@@ -26242,6 +27410,17 @@ class TStationChatServiceV2:
             product_names: tuple[str, ...],
         ) -> tuple[list[dict], dict] | None:
             if len(product_names) < 2:
+                return None
+            gate_allowed, gate_reason = _direct_code_fast_path_contract_gate(
+                turn_contract=turn_contract,
+                intent="product_description",
+                template="quickReply",
+                source="code_multi_product_detail",
+                required_tools=("search_product_tool", "get_product_description_tool"),
+                allowed_intents=("multi_product_detail",),
+            )
+            if not gate_allowed:
+                logger.info("[CODE_FAST_PATH_GATE] blocked multi_product_detail reason=%s", gate_reason)
                 return None
 
             from services.tstation.agents.b_discovery_agent.tools import (
@@ -26350,10 +27529,18 @@ class TStationChatServiceV2:
                     row = {**row, "_available_tire_sizes": available_sizes}
                 product_rows.append((product_name, row))
 
-            return emitted_events, _build_multi_product_detail_quickreply_event(
-                product_rows,
-                size_specific=size_specific,
+            detail_event = _finalize_direct_code_event(
+                _build_multi_product_detail_quickreply_event(
+                    product_rows,
+                    size_specific=size_specific,
+                ),
+                turn_contract=turn_contract,
+                intent="product_description",
+                source="code_multi_product_detail",
+                required_tools=("search_product_tool", "get_product_description_tool"),
+                allowed_intents=("multi_product_detail",),
             )
+            return (emitted_events, detail_event) if detail_event is not None else None
 
         async def _resolve_product_attribute_with_code() -> tuple[list[dict], dict] | None:
             if is_external_price_comparison_request(user_query):
@@ -26365,6 +27552,17 @@ class TStationChatServiceV2:
                 return None
             product_names = tuple(frame.entities.get("product_names") or ())
             if not product_names:
+                return None
+            gate_allowed, gate_reason = _direct_code_fast_path_contract_gate(
+                turn_contract=turn_contract,
+                intent="product_description",
+                template="quickReply",
+                source="code_product_attribute_resolver",
+                required_tools=("search_product_tool",),
+                allowed_intents=("product_attribute_summary",),
+            )
+            if not gate_allowed:
+                logger.info("[CODE_FAST_PATH_GATE] blocked product_attribute reason=%s", gate_reason)
                 return None
 
             from services.tstation.agents.b_discovery_agent.tools import search_product_tool as _search_product_tool
@@ -26418,7 +27616,15 @@ class TStationChatServiceV2:
             )
             if event is None:
                 return None
-            return emitted_events, event
+            finalized_event = _finalize_direct_code_event(
+                event,
+                turn_contract=turn_contract,
+                intent="product_description",
+                source="code_product_attribute_resolver",
+                required_tools=("search_product_tool",),
+                allowed_intents=("product_attribute_summary",),
+            )
+            return (emitted_events, finalized_event) if finalized_event is not None else None
 
         async def _save_quantity_benefit_pending_slots(frame: Any) -> None:
             if not session_id:
@@ -26573,6 +27779,20 @@ class TStationChatServiceV2:
             frame = _quantity_benefit_frame_with_recent_context()
             if frame is None:
                 return None
+            gate_allowed, gate_reason = _direct_code_fast_path_contract_gate(
+                turn_contract=turn_contract,
+                intent="product_comparison",
+                template="quickReply",
+                source="code_quantity_benefit_comparison",
+                required_tools=(),
+                allowed_intents=(
+                    "quantity_benefit_comparison",
+                    "quantity_benefit_comparison_missing_product_or_size",
+                ),
+            )
+            if not gate_allowed:
+                logger.info("[CODE_FAST_PATH_GATE] blocked quantity_benefit reason=%s", gate_reason)
+                return None
 
             quantities = tuple(frame.entities.get("quantity_options") or (2, 4))
             if len(quantities) < 2:
@@ -26598,7 +27818,31 @@ class TStationChatServiceV2:
             if not goods_no:
                 if not confirmed_tire_size or not product_names:
                     await _save_quantity_benefit_pending_slots(frame)
-                    return emitted_events, _build_quantity_benefit_missing_event(frame)
+                    missing_event = _finalize_direct_code_event(
+                        _build_quantity_benefit_missing_event(frame),
+                        turn_contract=turn_contract,
+                        intent="product_comparison",
+                        source="code_quantity_benefit_missing",
+                        allowed_intents=(
+                            "quantity_benefit_comparison",
+                            "quantity_benefit_comparison_missing_product_or_size",
+                        ),
+                    )
+                    return (emitted_events, missing_event) if missing_event is not None else None
+                search_gate_allowed, search_gate_reason = _direct_code_fast_path_contract_gate(
+                    turn_contract=turn_contract,
+                    intent="product_comparison",
+                    template="quickReply",
+                    source="code_quantity_benefit_product_selection",
+                    required_tools=("search_product_tool",),
+                    allowed_intents=(
+                        "quantity_benefit_comparison",
+                        "quantity_benefit_comparison_missing_product_or_size",
+                    ),
+                )
+                if not search_gate_allowed:
+                    logger.info("[CODE_FAST_PATH_GATE] blocked quantity_benefit_search reason=%s", search_gate_reason)
+                    return None
 
                 from services.tstation.agents.b_discovery_agent.tools import search_product_tool as _search_product_tool
                 from services.tstation.template_mapper import try_build_template
@@ -26654,10 +27898,21 @@ class TStationChatServiceV2:
                     )
                     if mapped_event is None:
                         await _clear_quantity_benefit_pending_slots()
-                        return emitted_events, _build_quantity_benefit_not_found_event(
-                            preferred_keyword,
-                            str(confirmed_tire_size),
+                        not_found_event = _finalize_direct_code_event(
+                            _build_quantity_benefit_not_found_event(
+                                preferred_keyword,
+                                str(confirmed_tire_size),
+                            ),
+                            turn_contract=turn_contract,
+                            intent="product_comparison",
+                            source="code_quantity_benefit_not_found",
+                            required_tools=("search_product_tool",),
+                            allowed_intents=(
+                                "quantity_benefit_comparison",
+                                "quantity_benefit_comparison_missing_product_or_size",
+                            ),
                         )
+                        return (emitted_events, not_found_event) if not_found_event is not None else None
                     mapped_goods_no = _goods_no_from_template_event(mapped_event)
                     if mapped_goods_no:
                         goods_no = mapped_goods_no
@@ -26672,7 +27927,30 @@ class TStationChatServiceV2:
                             }
                         mapped_event["source_domain"] = MultiAgentDomain.Domain.DISCOVERY.value
                         mapped_event["assistant_response_source"] = "code_quantity_benefit_product_selection"
-                        return emitted_events, mapped_event
+                        selection_event = _finalize_direct_code_event(
+                            mapped_event,
+                            turn_contract=turn_contract,
+                            intent="product_comparison",
+                            source="code_quantity_benefit_product_selection",
+                            required_tools=("search_product_tool",),
+                            allowed_intents=(
+                                "quantity_benefit_comparison",
+                                "quantity_benefit_comparison_missing_product_or_size",
+                            ),
+                        )
+                        return (emitted_events, selection_event) if selection_event is not None else None
+
+            price_gate_allowed, price_gate_reason = _direct_code_fast_path_contract_gate(
+                turn_contract=turn_contract,
+                intent="product_comparison",
+                template="quickReply",
+                source="code_quantity_benefit_comparison",
+                required_tools=("get_cheapest_price_tool",),
+                allowed_intents=("quantity_benefit_comparison",),
+            )
+            if not price_gate_allowed:
+                logger.info("[CODE_FAST_PATH_GATE] blocked quantity_benefit_price reason=%s", price_gate_reason)
+                return None
 
             from services.tstation.agents.b_discovery_agent.tools import (
                 get_cheapest_price_tool as _get_cheapest_price_tool,
@@ -26715,9 +27993,28 @@ class TStationChatServiceV2:
             comparison_event = _build_quantity_benefit_comparison_event(price_results)
             if comparison_event is None:
                 await _clear_quantity_benefit_pending_slots()
-                return emitted_events, _build_quantity_benefit_missing_event(frame)
+                missing_event = _finalize_direct_code_event(
+                    _build_quantity_benefit_missing_event(frame),
+                    turn_contract=turn_contract,
+                    intent="product_comparison",
+                    source="code_quantity_benefit_missing",
+                    required_tools=("get_cheapest_price_tool",),
+                    allowed_intents=(
+                        "quantity_benefit_comparison",
+                        "quantity_benefit_comparison_missing_product_or_size",
+                    ),
+                )
+                return (emitted_events, missing_event) if missing_event is not None else None
             await _clear_quantity_benefit_pending_slots()
-            return emitted_events, comparison_event
+            finalized_event = _finalize_direct_code_event(
+                comparison_event,
+                turn_contract=turn_contract,
+                intent="product_comparison",
+                source="code_quantity_benefit_comparison",
+                required_tools=("get_cheapest_price_tool",),
+                allowed_intents=("quantity_benefit_comparison",),
+            )
+            return (emitted_events, finalized_event) if finalized_event is not None else None
 
         async def _resolve_bare_product_search_with_code() -> tuple[list[dict], dict] | None:
             if _router_contract_is_high_confidence_event_content(routing_result):
@@ -26739,9 +28036,16 @@ class TStationChatServiceV2:
                     # Discovery policy/tool path rather than collapsing into a
                     # generic code_bare_product_search description.
                     return None
-                return [], _build_product_objective_followup_clarification_event(
-                    followup_override.get("objective")
+                clarification_event = _finalize_direct_code_event(
+                    _build_product_objective_followup_clarification_event(
+                        followup_override.get("objective")
+                    ),
+                    turn_contract=turn_contract,
+                    intent="product_search",
+                    source="code_product_objective_followup_clarification",
+                    allowed_intents=("product_search_summary",),
                 )
+                return ([], clarification_event) if clarification_event is not None else None
             size_only_tool_input = _build_size_only_product_search_tool_input(
                 user_query,
                 prev_tool_data=prev_tool_data or [],
@@ -26780,6 +28084,30 @@ class TStationChatServiceV2:
 
             tool_input = _build_bare_product_search_tool_input(user_query) or size_only_tool_input
             if tool_input is None:
+                return None
+
+            required_bare_product_tools = ("search_product_tool",)
+            bare_product_intent = "product_search"
+            bare_product_allowed_intents = ("product_search_summary",)
+            if is_store_availability_size_followup:
+                required_bare_product_tools = ("search_product_tool", "transaction_store_preview_tool")
+                bare_product_intent = "stock_store_search"
+                bare_product_allowed_intents = ()
+            elif _is_coupon_discount_amount_context(initial_slots):
+                required_bare_product_tools = ("search_product_tool", "get_final_price_tool")
+                bare_product_intent = "price_or_coupon_check"
+                bare_product_allowed_intents = ("product_coupon_discount_amount",)
+
+            gate_allowed, gate_reason = _direct_code_fast_path_contract_gate(
+                turn_contract=turn_contract,
+                intent=bare_product_intent,
+                template="quickReply",
+                source="code_bare_product_search",
+                required_tools=required_bare_product_tools,
+                allowed_intents=bare_product_allowed_intents,
+            )
+            if not gate_allowed:
+                logger.info("[CODE_FAST_PATH_GATE] blocked bare_product_search reason=%s", gate_reason)
                 return None
 
             from services.tstation.agents.b_discovery_agent.tools import (
@@ -26863,21 +28191,35 @@ class TStationChatServiceV2:
                             recent_user_context_text,
                         )
                         if not ord_qty:
-                            return emitted_events, _build_store_availability_quantity_prompt_event(
-                                product_keyword=preferred_keyword,
-                                tire_size=tire_size,
-                                store_name=store_name,
-                                goods_no=goods_no,
-                                requested_day_label=requested_day_label,
+                            quantity_event = _finalize_direct_code_event(
+                                _build_store_availability_quantity_prompt_event(
+                                    product_keyword=preferred_keyword,
+                                    tire_size=tire_size,
+                                    store_name=store_name,
+                                    goods_no=goods_no,
+                                    requested_day_label=requested_day_label,
+                                ),
+                                turn_contract=turn_contract,
+                                intent="stock_store_search",
+                                source="code_store_availability_size_followup_quantity",
+                                required_tools=("search_product_tool",),
                             )
+                            return (emitted_events, quantity_event) if quantity_event is not None else None
                         if not store_name:
-                            return emitted_events, _build_store_availability_quantity_prompt_event(
-                                product_keyword=preferred_keyword,
-                                tire_size=tire_size,
-                                store_name=None,
-                                goods_no=goods_no,
-                                requested_day_label=requested_day_label,
+                            store_event = _finalize_direct_code_event(
+                                _build_store_availability_quantity_prompt_event(
+                                    product_keyword=preferred_keyword,
+                                    tire_size=tire_size,
+                                    store_name=None,
+                                    goods_no=goods_no,
+                                    requested_day_label=requested_day_label,
+                                ),
+                                turn_contract=turn_contract,
+                                intent="stock_store_search",
+                                source="code_store_availability_size_followup_store",
+                                required_tools=("search_product_tool",),
                             )
+                            return (emitted_events, store_event) if store_event is not None else None
 
                         preview_input = {
                             "goods_no": goods_no,
@@ -26946,14 +28288,28 @@ class TStationChatServiceV2:
                         if mapped_event is not None:
                             mapped_event["source_domain"] = MultiAgentDomain.Domain.TRANSACTION.value
                             mapped_event["assistant_response_source"] = "code_store_availability_size_followup"
-                            return emitted_events, mapped_event
-                        return emitted_events, _build_store_availability_quantity_prompt_event(
-                            product_keyword=preferred_keyword,
-                            tire_size=tire_size,
-                            store_name=store_name,
-                            goods_no=goods_no,
-                            requested_day_label=requested_day_label,
+                            stock_event = _finalize_direct_code_event(
+                                mapped_event,
+                                turn_contract=turn_contract,
+                                intent="stock_store_search",
+                                source="code_store_availability_size_followup",
+                                required_tools=("search_product_tool", "transaction_store_preview_tool"),
+                            )
+                            return (emitted_events, stock_event) if stock_event is not None else None
+                        fallback_event = _finalize_direct_code_event(
+                            _build_store_availability_quantity_prompt_event(
+                                product_keyword=preferred_keyword,
+                                tire_size=tire_size,
+                                store_name=store_name,
+                                goods_no=goods_no,
+                                requested_day_label=requested_day_label,
+                            ),
+                            turn_contract=turn_contract,
+                            intent="stock_store_search",
+                            source="code_store_availability_size_followup_fallback",
+                            required_tools=("search_product_tool", "transaction_store_preview_tool"),
                         )
+                        return (emitted_events, fallback_event) if fallback_event is not None else None
 
                     if _is_coupon_discount_amount_context(initial_slots):
                         tire_size = str(tool_input.get("size") or "")
@@ -27003,14 +28359,41 @@ class TStationChatServiceV2:
                             quantity=target_quantity,
                         )
                         if price_event is not None:
-                            return emitted_events, price_event
-                        return emitted_events, _build_product_coupon_price_no_product_event(
-                            str(getattr(initial_slots, "pending_product_name", None) or preferred_keyword),
-                            tire_size,
-                            quantity=target_quantity,
+                            finalized_event = _finalize_direct_code_event(
+                                price_event,
+                                turn_contract=turn_contract,
+                                intent="price_or_coupon_check",
+                                source="code_product_coupon_price_followup",
+                                required_tools=("search_product_tool", "get_final_price_tool"),
+                                allowed_intents=("product_coupon_discount_amount",),
+                            )
+                            return (emitted_events, finalized_event) if finalized_event is not None else None
+                        no_product_event = _finalize_direct_code_event(
+                            _build_product_coupon_price_no_product_event(
+                                str(getattr(initial_slots, "pending_product_name", None) or preferred_keyword),
+                                tire_size,
+                                quantity=target_quantity,
+                            ),
+                            turn_contract=turn_contract,
+                            intent="price_or_coupon_check",
+                            source="code_product_coupon_price_followup_no_product",
+                            required_tools=("search_product_tool", "get_final_price_tool"),
+                            allowed_intents=("product_coupon_discount_amount",),
                         )
+                        return (emitted_events, no_product_event) if no_product_event is not None else None
 
                     detail_input = {"goods_no": goods_no}
+                    detail_gate_allowed, detail_gate_reason = _direct_code_fast_path_contract_gate(
+                        turn_contract=turn_contract,
+                        intent="product_search",
+                        template="quickReply",
+                        source="code_bare_product_search_detail",
+                        required_tools=("search_product_tool", "get_product_description_tool"),
+                        allowed_intents=("product_search_summary",),
+                    )
+                    if not detail_gate_allowed:
+                        logger.info("[CODE_FAST_PATH_GATE] blocked bare_product_search_detail reason=%s", detail_gate_reason)
+                        return None
                     emitted_events.append({
                         "type": "status",
                         "status": "tool_start",
@@ -27047,7 +28430,15 @@ class TStationChatServiceV2:
                     })
                     detail_event = _build_product_description_quickreply_event(detail_result)
                     if detail_event is not None:
-                        return emitted_events, detail_event
+                        finalized_event = _finalize_direct_code_event(
+                            detail_event,
+                            turn_contract=turn_contract,
+                            intent="product_search",
+                            source="code_bare_product_search_detail",
+                            required_tools=("search_product_tool", "get_product_description_tool"),
+                            allowed_intents=("product_search_summary",),
+                        )
+                        return (emitted_events, finalized_event) if finalized_event is not None else None
                 elif (
                     size_only_tool_input is not None
                     and initial_slots is not None
@@ -27057,11 +28448,19 @@ class TStationChatServiceV2:
                     )
                     and str(getattr(initial_slots, "pending_product_name", None) or "").strip()
                 ):
-                    return emitted_events, _build_product_coupon_price_no_product_event(
-                        str(getattr(initial_slots, "pending_product_name", None) or preferred_keyword),
-                        str(tool_input.get("size") or ""),
-                        quantity=getattr(initial_slots, "ord_qty", None),
+                    no_product_event = _finalize_direct_code_event(
+                        _build_product_coupon_price_no_product_event(
+                            str(getattr(initial_slots, "pending_product_name", None) or preferred_keyword),
+                            str(tool_input.get("size") or ""),
+                            quantity=getattr(initial_slots, "ord_qty", None),
+                        ),
+                        turn_contract=turn_contract,
+                        intent="price_or_coupon_check",
+                        source="code_product_coupon_price_followup_no_product",
+                        required_tools=("search_product_tool",),
+                        allowed_intents=("product_coupon_discount_amount",),
                     )
+                    return (emitted_events, no_product_event) if no_product_event is not None else None
 
             mapped_event = try_build_template(
                 [{"tool": "search_product_tool", "args": tool_input, "data": search_result}],
@@ -27077,7 +28476,15 @@ class TStationChatServiceV2:
                 return None
             mapped_event["source_domain"] = MultiAgentDomain.Domain.DISCOVERY.value
             mapped_event["assistant_response_source"] = "code_bare_product_search"
-            return emitted_events, mapped_event
+            finalized_event = _finalize_direct_code_event(
+                mapped_event,
+                turn_contract=turn_contract,
+                intent="product_search",
+                source="code_bare_product_search",
+                required_tools=("search_product_tool",),
+                allowed_intents=("product_search_summary",),
+            )
+            return (emitted_events, finalized_event) if finalized_event is not None else None
 
         async def _resolve_multi_variant_recommendation_with_code() -> tuple[list[dict], dict] | None:
             stored_context = None
@@ -27100,6 +28507,16 @@ class TStationChatServiceV2:
             source_frame = constraints["source_frame"]
             variants = tuple(constraints.get("variants") or ())
             if len(variants) < 2:
+                return None
+            gate_allowed, gate_reason = _direct_code_fast_path_contract_gate(
+                turn_contract=turn_contract,
+                intent="product_recommendation",
+                template="product",
+                source="code_multi_variant_recommendation",
+                required_tools=("get_products_recommendations_tool",),
+            )
+            if not gate_allowed:
+                logger.info("[CODE_FAST_PATH_GATE] blocked multi_variant_recommendation reason=%s", gate_reason)
                 return None
 
             current_frame = build_discovery_intent_frame(user_query)
@@ -27204,7 +28621,14 @@ class TStationChatServiceV2:
                 return None
             mapped_event["source_domain"] = MultiAgentDomain.Domain.DISCOVERY.value
             mapped_event["assistant_response_source"] = "code_multi_variant_recommendation"
-            return emitted_events, mapped_event
+            finalized_event = _finalize_direct_code_event(
+                mapped_event,
+                turn_contract=turn_contract,
+                intent="product_recommendation",
+                source="code_multi_variant_recommendation",
+                required_tools=("get_products_recommendations_tool",),
+            )
+            return (emitted_events, finalized_event) if finalized_event is not None else None
 
         async def _auto_continue_selected_vehicle(
             listcar_event: dict,
@@ -27356,6 +28780,21 @@ class TStationChatServiceV2:
 
                 tool_name = "get_maintenance_dday_tool"
                 tool_input = {"mbr_car_reg_seq": selected_meta.get("mbrCarRegSeq") or None}
+                gate_allowed, gate_reason = _direct_code_fast_path_contract_gate(
+                    turn_contract=turn_contract,
+                    intent="maintenance_history_lookup",
+                    template="quickReply",
+                    source="code_vehicle_maintenance_dday",
+                    required_tools=(tool_name,),
+                    allowed_intents=(
+                        "maintenance_tip",
+                        "support_policy_answer",
+                        "vehicle_maintenance_dday",
+                    ),
+                )
+                if not gate_allowed:
+                    logger.info("[CODE_FAST_PATH_GATE] blocked vehicle_maintenance_dday reason=%s", gate_reason)
+                    return [], None
                 emitted_events = [{
                     "type": "status",
                     "status": "tool_start",
@@ -27390,14 +28829,45 @@ class TStationChatServiceV2:
                     "tool": tool_name,
                     "source_domain": "support",
                 })
-                return emitted_events, _build_maintenance_dday_event(tool_result, selected, user_query)
+                maintenance_event = _finalize_direct_code_event(
+                    _build_maintenance_dday_event(tool_result, selected, user_query),
+                    turn_contract=turn_contract,
+                    intent="maintenance_history_lookup",
+                    source="code_vehicle_maintenance_dday",
+                    required_tools=(tool_name,),
+                    allowed_intents=(
+                        "maintenance_tip",
+                        "support_policy_answer",
+                        "vehicle_maintenance_dday",
+                    ),
+                )
+                return (emitted_events, maintenance_event) if maintenance_event is not None else (emitted_events, None)
 
             vehicle_info_event = _build_vehicle_information_event(selected, user_query)
             if vehicle_info_event is not None:
-                return [], vehicle_info_event
+                finalized_event = _finalize_direct_code_event(
+                    vehicle_info_event,
+                    turn_contract=turn_contract,
+                    intent="product_recommendation",
+                    source="code_vehicle_information",
+                    allowed_intents=(
+                        "vehicle_resolved_recommendation",
+                        "catalog_recommendation",
+                        "product_search_summary",
+                        "vehicle_information",
+                    ),
+                )
+                return ([], finalized_event) if finalized_event is not None else ([], None)
 
             if _is_oe_replacement_context(recent_user_context_text, user_query):
-                return [], _build_oe_replacement_guidance_event(selected, user_query)
+                guidance_event = _finalize_direct_code_event(
+                    _build_oe_replacement_guidance_event(selected, user_query),
+                    turn_contract=turn_contract,
+                    intent="product_search",
+                    source="code_oe_replacement_guidance",
+                    allowed_intents=("oe_re_product_filter_summary",),
+                )
+                return ([], guidance_event) if guidance_event is not None else ([], None)
 
             if not (
                 source_domain == MultiAgentDomain.Domain.DISCOVERY.value
@@ -27418,6 +28888,21 @@ class TStationChatServiceV2:
             if purchase_slots is not None and tire_size:
                 product_keyword, brand_cd = _purchase_product_keyword(purchase_slots)
                 if product_keyword:
+                    purchase_search_gate_allowed, purchase_search_gate_reason = _direct_code_fast_path_contract_gate(
+                        turn_contract=turn_contract,
+                        intent="quick_order_reservation",
+                        template="quickReply",
+                        source="code_vehicle_purchase_product_resolution",
+                        required_tools=("search_product_tool",),
+                        allowed_intents=("stock_store_search",),
+                    )
+                    if not purchase_search_gate_allowed:
+                        logger.info(
+                            "[CODE_FAST_PATH_GATE] blocked vehicle_purchase_product_resolution reason=%s",
+                            purchase_search_gate_reason,
+                        )
+                        return [], None
+
                     from services.tstation.agents.b_discovery_agent.tools import search_product_tool as _search_product_tool
                     from services.tstation.agents.c_transaction_agent.tools import (
                         transaction_store_preview_tool as _transaction_store_preview_tool,
@@ -27470,16 +28955,71 @@ class TStationChatServiceV2:
                         if mapped_event is not None:
                             mapped_event["source_domain"] = MultiAgentDomain.Domain.DISCOVERY.value
                             mapped_event["assistant_response_source"] = "code_vehicle_purchase_product_selection"
-                            return emitted_events, mapped_event
-                        return emitted_events, _purchase_vehicle_missing_event(product_keyword, str(tire_size), "product")
+                            product_selection_event = _finalize_direct_code_event(
+                                mapped_event,
+                                turn_contract=turn_contract,
+                                intent="quick_order_reservation",
+                                source="code_vehicle_purchase_product_selection",
+                                required_tools=("search_product_tool",),
+                                allowed_intents=("stock_store_search",),
+                            )
+                            return (
+                                (emitted_events, product_selection_event)
+                                if product_selection_event is not None
+                                else ([], None)
+                            )
+                        missing_product_event = _finalize_direct_code_event(
+                            _purchase_vehicle_missing_event(product_keyword, str(tire_size), "product"),
+                            turn_contract=turn_contract,
+                            intent="quick_order_reservation",
+                            source="code_vehicle_purchase_missing_product",
+                            required_tools=("search_product_tool",),
+                            allowed_intents=("stock_store_search",),
+                        )
+                        return (emitted_events, missing_product_event) if missing_product_event is not None else ([], None)
 
                     ord_qty = _purchase_quantity(purchase_slots)
                     if not ord_qty:
-                        return emitted_events, _purchase_vehicle_missing_event(product_keyword, str(tire_size), "quantity")
+                        missing_quantity_event = _finalize_direct_code_event(
+                            _purchase_vehicle_missing_event(product_keyword, str(tire_size), "quantity"),
+                            turn_contract=turn_contract,
+                            intent="quick_order_reservation",
+                            source="code_vehicle_purchase_missing_quantity",
+                            required_tools=("search_product_tool",),
+                            allowed_intents=("stock_store_search",),
+                        )
+                        return (
+                            (emitted_events, missing_quantity_event)
+                            if missing_quantity_event is not None
+                            else ([], None)
+                        )
 
                     store_name = _purchase_store_name(purchase_slots)
                     if not store_name:
-                        return emitted_events, _purchase_vehicle_missing_event(product_keyword, str(tire_size), "store")
+                        missing_store_event = _finalize_direct_code_event(
+                            _purchase_vehicle_missing_event(product_keyword, str(tire_size), "store"),
+                            turn_contract=turn_contract,
+                            intent="quick_order_reservation",
+                            source="code_vehicle_purchase_missing_store",
+                            required_tools=("search_product_tool",),
+                            allowed_intents=("stock_store_search",),
+                        )
+                        return (emitted_events, missing_store_event) if missing_store_event is not None else ([], None)
+
+                    purchase_preview_gate_allowed, purchase_preview_gate_reason = _direct_code_fast_path_contract_gate(
+                        turn_contract=turn_contract,
+                        intent="quick_order_reservation",
+                        template="datepick",
+                        source="code_vehicle_purchase_continuation",
+                        required_tools=("search_product_tool", "transaction_store_preview_tool"),
+                        allowed_intents=("stock_store_search",),
+                    )
+                    if not purchase_preview_gate_allowed:
+                        logger.info(
+                            "[CODE_FAST_PATH_GATE] blocked vehicle_purchase_preview reason=%s",
+                            purchase_preview_gate_reason,
+                        )
+                        return [], None
 
                     preview_input = {
                         "goods_no": goods_no,
@@ -27530,8 +29070,24 @@ class TStationChatServiceV2:
                     if mapped_event is not None:
                         mapped_event["source_domain"] = MultiAgentDomain.Domain.TRANSACTION.value
                         mapped_event["assistant_response_source"] = "code_vehicle_purchase_continuation"
-                        return emitted_events, mapped_event
-                    return emitted_events, _purchase_vehicle_missing_event(product_keyword, str(tire_size), "store")
+                        purchase_event = _finalize_direct_code_event(
+                            mapped_event,
+                            turn_contract=turn_contract,
+                            intent="quick_order_reservation",
+                            source="code_vehicle_purchase_continuation",
+                            required_tools=("search_product_tool", "transaction_store_preview_tool"),
+                            allowed_intents=("stock_store_search",),
+                        )
+                        return (emitted_events, purchase_event) if purchase_event is not None else ([], None)
+                    fallback_store_event = _finalize_direct_code_event(
+                        _purchase_vehicle_missing_event(product_keyword, str(tire_size), "store"),
+                        turn_contract=turn_contract,
+                        intent="quick_order_reservation",
+                        source="code_vehicle_purchase_missing_store",
+                        required_tools=("search_product_tool", "transaction_store_preview_tool"),
+                        allowed_intents=("stock_store_search",),
+                    )
+                    return (emitted_events, fallback_store_event) if fallback_store_event is not None else ([], None)
 
             from services.tstation.agents.b_discovery_agent.tools import (
                 get_products_recommendations_tool as _recommendations_tool,
@@ -27539,6 +29095,20 @@ class TStationChatServiceV2:
             from services.tstation.template_mapper import try_build_template
 
             tool_name = "get_products_recommendations_tool"
+            recommendation_gate_allowed, recommendation_gate_reason = _direct_code_fast_path_contract_gate(
+                turn_contract=turn_contract,
+                intent="product_recommendation",
+                template="product",
+                source="code_vehicle_auto_select",
+                required_tools=(tool_name,),
+                allowed_intents=(
+                    "vehicle_resolved_recommendation",
+                    "vehicle_based_recommendation_refinement",
+                ),
+            )
+            if not recommendation_gate_allowed:
+                logger.info("[CODE_FAST_PATH_GATE] blocked vehicle_auto_select reason=%s", recommendation_gate_reason)
+                return [], None
             tool_input = {
                 "rcmd_type": _recommendation_type_for_vehicle_auto_continue(user_query),
                 "limit": 3,
@@ -27594,8 +29164,20 @@ class TStationChatServiceV2:
             if mapped_event is not None:
                 mapped_event["source_domain"] = MultiAgentDomain.Domain.DISCOVERY.value
                 mapped_event["assistant_response_source"] = "code_vehicle_auto_select"
-                return emitted_events, mapped_event
-            return emitted_events, {
+                recommendation_event = _finalize_direct_code_event(
+                    mapped_event,
+                    turn_contract=turn_contract,
+                    intent="product_recommendation",
+                    source="code_vehicle_auto_select",
+                    required_tools=(tool_name,),
+                    allowed_intents=(
+                        "vehicle_resolved_recommendation",
+                        "vehicle_based_recommendation_refinement",
+                    ),
+                )
+                return (emitted_events, recommendation_event) if recommendation_event is not None else ([], None)
+            fallback_recommendation_event = _finalize_direct_code_event(
+                {
                 "type": "data",
                 "template": "quickReply",
                 "source_domain": MultiAgentDomain.Domain.DISCOVERY.value,
@@ -27608,7 +29190,21 @@ class TStationChatServiceV2:
                     ],
                     "predictedDomains": ["DISCOVERY"],
                 },
-            }
+                },
+                turn_contract=turn_contract,
+                intent="product_recommendation",
+                source="code_vehicle_auto_select_fallback",
+                required_tools=(tool_name,),
+                allowed_intents=(
+                    "vehicle_resolved_recommendation",
+                    "vehicle_based_recommendation_refinement",
+                ),
+            )
+            return (
+                (emitted_events, fallback_recommendation_event)
+                if fallback_recommendation_event is not None
+                else ([], None)
+            )
 
         # 1. Iterate through the main coordinator stream
         yield f"data: {json.dumps({'type': 'agent_flow', 'agent': '[응답 생성 중]', 'status': 'processing'}, ensure_ascii=False)}\n\n"
@@ -27625,6 +29221,20 @@ class TStationChatServiceV2:
             if size_list_keyword:
                 from services.tstation.agents.b_discovery_agent.tools import search_product_tool as _search_product_tool
 
+                gate_allowed, gate_reason = _direct_code_fast_path_contract_gate(
+                    turn_contract=turn_contract,
+                    intent="price_or_coupon_check",
+                    template="quickReply",
+                    source="code_coupon_size_list_followup",
+                    required_tools=("search_product_tool",),
+                    allowed_intents=("product_coupon_discount_amount",),
+                )
+                if not gate_allowed:
+                    logger.info("[CODE_FAST_PATH_GATE] blocked coupon_size_list_followup reason=%s", gate_reason)
+                    guard_event = build_response_policy_guard_event(turn_contract) if turn_contract is not None else None
+                    if guard_event is not None:
+                        yield f"data: {json.dumps(guard_event, ensure_ascii=False)}\n\n"
+                    return
                 emitted_events: list[dict] = [{
                     "type": "status",
                     "status": "tool_start",
@@ -27666,6 +29276,18 @@ class TStationChatServiceV2:
                 )
                 if size_list_event is None:
                     size_list_event = _build_product_size_list_not_found_event(size_list_keyword)
+                size_list_event = _finalize_direct_code_event(
+                    size_list_event,
+                    turn_contract=turn_contract,
+                    intent="price_or_coupon_check",
+                    source="code_coupon_size_list_followup",
+                    required_tools=("search_product_tool",),
+                    allowed_intents=("product_coupon_discount_amount",),
+                )
+                if size_list_event is None:
+                    size_list_event = build_response_policy_guard_event(turn_contract) if turn_contract is not None else None
+                if size_list_event is None:
+                    return
                 yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
                 for code_event in emitted_events:
                     yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
@@ -27748,7 +29370,17 @@ class TStationChatServiceV2:
                 return
 
         if _should_prompt_for_new_product_compare_target(user_query, messages):
-            compare_prompt_event = _product_compare_target_prompt_event()
+            compare_prompt_event = _finalize_direct_code_event(
+                _product_compare_target_prompt_event(),
+                turn_contract=turn_contract,
+                intent="product_comparison",
+                source="code_product_compare_target_prompt",
+                allowed_intents=("product_comparison", "product_search_summary"),
+            )
+            if compare_prompt_event is None:
+                compare_prompt_event = build_response_policy_guard_event(turn_contract) if turn_contract is not None else None
+            if compare_prompt_event is None:
+                return
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps(compare_prompt_event, ensure_ascii=False)}\n\n"
@@ -27761,7 +29393,17 @@ class TStationChatServiceV2:
             return
 
         if _should_clarify_ambiguous_multi_product_query(user_query, messages, latest_quickreply_tmpl):
-            clarification_event = _multi_product_intent_clarification_event(_product_names_in_text(user_query))
+            clarification_event = _finalize_direct_code_event(
+                _multi_product_intent_clarification_event(_product_names_in_text(user_query)),
+                turn_contract=turn_contract,
+                intent="product_search",
+                source="code_multi_product_intent_clarification",
+                allowed_intents=("product_search_summary", "product_comparison"),
+            )
+            if clarification_event is None:
+                clarification_event = build_response_policy_guard_event(turn_contract) if turn_contract is not None else None
+            if clarification_event is None:
+                return
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps(clarification_event, ensure_ascii=False)}\n\n"
@@ -27777,7 +29419,16 @@ class TStationChatServiceV2:
             _router_contract_is_price_or_benefit_alert(routing_result)
             and not is_default_benefit_request(user_query)
         ):
-            alert_event = _price_or_benefit_alert_event()
+            alert_event = _finalize_direct_code_event(
+                _price_or_benefit_alert_event(),
+                turn_contract=turn_contract,
+                intent="price_or_benefit_alert_request",
+                source="code_price_or_benefit_alert",
+            )
+            if alert_event is None:
+                alert_event = build_response_policy_guard_event(turn_contract) if turn_contract is not None else None
+            if alert_event is None:
+                return
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps(alert_event, ensure_ascii=False)}\n\n"
@@ -27790,7 +29441,17 @@ class TStationChatServiceV2:
             return
 
         if _REMINDING_ALARM_QUERY_RE.search(user_query or "") and not _is_order_arrival_status_query(user_query):
-            alarm_event = _reminding_alarm_event()
+            alarm_event = _finalize_direct_code_event(
+                _reminding_alarm_event(),
+                turn_contract=turn_contract,
+                intent="reminding_alarm_request",
+                source="code_reminding_alarm",
+                allowed_intents=("support_policy_answer", "reminding_alarm_request"),
+            )
+            if alarm_event is None:
+                alarm_event = build_response_policy_guard_event(turn_contract) if turn_contract is not None else None
+            if alarm_event is None:
+                return
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[SUPPORT AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[SUPPORT AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps(alarm_event, ensure_ascii=False)}\n\n"
@@ -27917,35 +29578,126 @@ class TStationChatServiceV2:
         coupon_decision = await _get_coupon_gate_decision()
         coupon_gate_resolution: tuple[list[dict], dict] | None = None
         restored_coupon_product_target = _recent_product_coupon_followup_target_for_turn()
+        coupon_gate_reason = ""
         if _is_owned_coupon_expiry_lookup_query(user_query):
-            coupon_gate_resolution = await _resolve_owned_coupon_expiry_lookup_with_code()
-        elif restored_coupon_product_target:
-            coupon_gate_resolution = await _resolve_product_coupon_eligibility_with_code(
-                target_product_name=str(restored_coupon_product_target.get("product_name") or "").strip() or None
+            gate_allowed, coupon_gate_reason = _direct_code_fast_path_contract_gate(
+                turn_contract=turn_contract,
+                intent="price_or_coupon_check",
+                template="quickReply",
+                source="code_owned_coupon_expiry_lookup",
+                required_tools=("get_my_coupons_tool",),
             )
+            if gate_allowed:
+                coupon_gate_resolution = await _resolve_owned_coupon_expiry_lookup_with_code()
+            else:
+                logger.info("[CODE_FAST_PATH_GATE] blocked owned_coupon_expiry reason=%s", coupon_gate_reason)
+        elif restored_coupon_product_target:
+            gate_allowed, coupon_gate_reason = _direct_code_fast_path_contract_gate(
+                turn_contract=turn_contract,
+                intent="price_or_coupon_check",
+                template="quickReply",
+                source="code_product_coupon_followup",
+                required_tools=("get_my_coupons_tool", "get_coupon_applicable_products_tool"),
+            )
+            if gate_allowed:
+                coupon_gate_resolution = await _resolve_product_coupon_eligibility_with_code(
+                    target_product_name=str(restored_coupon_product_target.get("product_name") or "").strip() or None
+                )
+            else:
+                logger.info("[CODE_FAST_PATH_GATE] blocked product_coupon_followup reason=%s", coupon_gate_reason)
         elif _recent_product_coupon_price_target(user_query, recent_user_context_text):
-            coupon_gate_resolution = await _resolve_product_coupon_eligibility_with_code()
+            gate_allowed, coupon_gate_reason = _direct_code_fast_path_contract_gate(
+                turn_contract=turn_contract,
+                intent="price_or_coupon_check",
+                template="quickReply",
+                source="code_product_coupon_price_followup",
+                required_tools=("get_my_coupons_tool", "get_coupon_applicable_products_tool"),
+            )
+            if gate_allowed:
+                coupon_gate_resolution = await _resolve_product_coupon_eligibility_with_code()
+            else:
+                logger.info("[CODE_FAST_PATH_GATE] blocked product_coupon_price_followup reason=%s", coupon_gate_reason)
         elif coupon_decision is not None and coupon_decision.is_actionable:
             if coupon_decision.intent == CouponQueryIntent.OWNED_COUPON_LOOKUP:
-                coupon_gate_resolution = await _resolve_owned_coupon_lookup_with_code()
+                gate_allowed, coupon_gate_reason = _direct_code_fast_path_contract_gate(
+                    turn_contract=turn_contract,
+                    intent="price_or_coupon_check",
+                    template="voucher",
+                    source="code_owned_coupon_lookup",
+                    required_tools=("get_my_coupons_tool",),
+                )
+                if gate_allowed:
+                    coupon_gate_resolution = await _resolve_owned_coupon_lookup_with_code()
+                else:
+                    logger.info("[CODE_FAST_PATH_GATE] blocked owned_coupon_lookup reason=%s", coupon_gate_reason)
             elif coupon_decision.intent == CouponQueryIntent.PRODUCT_COUPON_ELIGIBILITY:
-                product_coupon_resolution = await _resolve_product_coupon_eligibility_with_code(
-                    target_product_name=coupon_decision.product_name
+                gate_allowed, coupon_gate_reason = _direct_code_fast_path_contract_gate(
+                    turn_contract=turn_contract,
+                    intent="price_or_coupon_check",
+                    template="quickReply",
+                    source="code_product_coupon_eligibility",
+                    required_tools=("get_my_coupons_tool", "get_coupon_applicable_products_tool"),
                 )
-                coupon_gate_resolution = product_coupon_resolution
+                if gate_allowed:
+                    product_coupon_resolution = await _resolve_product_coupon_eligibility_with_code(
+                        target_product_name=coupon_decision.product_name
+                    )
+                    coupon_gate_resolution = product_coupon_resolution
+                else:
+                    logger.info("[CODE_FAST_PATH_GATE] blocked product_coupon_eligibility reason=%s", coupon_gate_reason)
             elif coupon_decision.intent == CouponQueryIntent.BEST_DISCOUNT:
-                product_coupon_resolution = await _resolve_product_coupon_eligibility_with_code(
-                    target_product_name=coupon_decision.product_name
+                gate_allowed, coupon_gate_reason = _direct_code_fast_path_contract_gate(
+                    turn_contract=turn_contract,
+                    intent="price_or_coupon_check",
+                    template="quickReply",
+                    source="code_coupon_best_discount",
+                    required_tools=("get_my_coupons_tool", "get_coupon_applicable_products_tool"),
                 )
-                coupon_gate_resolution = product_coupon_resolution or await _resolve_owned_coupon_best_discount_with_code()
+                if gate_allowed:
+                    product_coupon_resolution = await _resolve_product_coupon_eligibility_with_code(
+                        target_product_name=coupon_decision.product_name
+                    )
+                    coupon_gate_resolution = (
+                        product_coupon_resolution or await _resolve_owned_coupon_best_discount_with_code()
+                    )
+                else:
+                    logger.info("[CODE_FAST_PATH_GATE] blocked coupon_best_discount reason=%s", coupon_gate_reason)
             elif _is_coupon_applicable_products_decision(
                 coupon_decision,
                 user_text=user_query,
                 slots=initial_slots,
                 recent_context=recent_user_context_text,
             ):
-                coupon_gate_resolution = await _resolve_coupon_applicability_with_code()
+                gate_allowed, coupon_gate_reason = _direct_code_fast_path_contract_gate(
+                    turn_contract=turn_contract,
+                    intent="price_or_coupon_check",
+                    template="quickReply",
+                    source="code_coupon_applicable_products",
+                    required_tools=("get_my_coupons_tool", "get_coupon_applicable_products_tool"),
+                )
+                if gate_allowed:
+                    coupon_gate_resolution = await _resolve_coupon_applicability_with_code()
+                else:
+                    logger.info("[CODE_FAST_PATH_GATE] blocked coupon_applicable_products reason=%s", coupon_gate_reason)
 
+        if coupon_gate_resolution is not None:
+            code_events, coupon_event = coupon_gate_resolution
+            coupon_required_tools = tuple(
+                tool
+                for tool in ("get_my_coupons_tool", "get_coupon_applicable_products_tool")
+                if tool in called_tool_names
+            )
+            coupon_event = _finalize_direct_code_event(
+                coupon_event,
+                turn_contract=turn_contract,
+                intent="price_or_coupon_check",
+                source="code_coupon_resolver",
+                required_tools=coupon_required_tools,
+            )
+            if coupon_event is None:
+                coupon_gate_resolution = None
+            else:
+                coupon_gate_resolution = (code_events, coupon_event)
         if coupon_gate_resolution is not None:
             code_events, coupon_event = coupon_gate_resolution
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
@@ -28045,6 +29797,16 @@ class TStationChatServiceV2:
 
         async def _resolve_quick_order_execute_with_code() -> tuple[list[dict], dict] | None:
             if not _is_preorder_confirmation_reply(user_query, latest_preorder_tmpl):
+                return None
+            success_gate_allowed, success_gate_reason = _direct_code_fast_path_contract_gate(
+                turn_contract=turn_contract,
+                intent="quick_order_execute",
+                template="orderComplete",
+                source="code_quick_order_execute_success",
+                required_tools=("quick_order_tool",),
+            )
+            if not success_gate_allowed:
+                logger.info("[CODE_FAST_PATH_GATE] blocked quick_order_execute success reason=%s", success_gate_reason)
                 return None
 
             preorder_slot_values = TStationChatServiceV2._preorder_slot_values_from_data(latest_preorder_tmpl) or {}
@@ -28160,50 +29922,64 @@ class TStationChatServiceV2:
                 str(preorder_payload.get("assistantResponse") or ""),
             )
             if not is_success:
-                return emitted_events, {
-                    "type": "data",
-                    "template": "quickReply",
-                    "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
-                    "assistant_response_source": "code_quick_order_execute_resolver",
-                    "data": {
-                        "assistantResponse": (
-                            "주문서 생성에 실패했어요. 주문 정보를 다시 확인해 주세요."
-                        ),
-                        "quickReplies": [
-                            {"label": "주문 정보 다시 확인", "domain": "TRANSACTION"},
-                            {"label": "장바구니 확인", "domain": "TRANSACTION", "url": CTAUrls.CART},
-                        ],
-                        "predictedDomains": ["TRANSACTION"],
-                        "metadata": {
-                            "response_shape_key": "quick_order_execute",
-                            "quickOrderToolCalled": True,
-                            "quickOrderResult": "failed",
+                failure_event = _finalize_direct_code_event(
+                    {
+                        "type": "data",
+                        "template": "quickReply",
+                        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+                        "assistant_response_source": "code_quick_order_execute_resolver",
+                        "data": {
+                            "assistantResponse": (
+                                "주문서 생성에 실패했어요. 주문 정보를 다시 확인해 주세요."
+                            ),
+                            "quickReplies": [
+                                {"label": "주문 정보 다시 확인", "domain": "TRANSACTION"},
+                                {"label": "장바구니 확인", "domain": "TRANSACTION", "url": CTAUrls.CART},
+                            ],
+                            "predictedDomains": ["TRANSACTION"],
+                            "metadata": {
+                                "response_shape_key": "quick_order_execute",
+                                "quickOrderToolCalled": True,
+                                "quickOrderResult": "failed",
+                            },
                         },
                     },
-                }
+                    turn_contract=turn_contract,
+                    intent="quick_order_execute",
+                    source="code_quick_order_execute_failure",
+                    required_tools=("quick_order_tool",),
+                )
+                return (emitted_events, failure_event) if failure_event is not None else None
             if mapped_event is None or mapped_event.get("template") != "orderComplete":
-                return emitted_events, {
-                    "type": "data",
-                    "template": "quickReply",
-                    "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
-                    "assistant_response_source": "code_quick_order_execute_resolver",
-                    "data": {
-                        "assistantResponse": (
-                            "주문서 생성 결과를 확인했지만 주문/결제 페이지 이동 정보가 부족해요. "
-                            "주문 정보를 다시 확인해 주세요."
-                        ),
-                        "quickReplies": [
-                            {"label": "주문 정보 다시 확인", "domain": "TRANSACTION"},
-                            {"label": "장바구니 확인", "domain": "TRANSACTION", "url": CTAUrls.CART},
-                        ],
-                        "predictedDomains": ["TRANSACTION"],
-                        "metadata": {
-                            "response_shape_key": "quick_order_execute",
-                            "quickOrderToolCalled": True,
-                            "quickOrderResult": "missing_order_page_payload",
+                missing_payload_event = _finalize_direct_code_event(
+                    {
+                        "type": "data",
+                        "template": "quickReply",
+                        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+                        "assistant_response_source": "code_quick_order_execute_resolver",
+                        "data": {
+                            "assistantResponse": (
+                                "주문서 생성 결과를 확인했지만 주문/결제 페이지 이동 정보가 부족해요. "
+                                "주문 정보를 다시 확인해 주세요."
+                            ),
+                            "quickReplies": [
+                                {"label": "주문 정보 다시 확인", "domain": "TRANSACTION"},
+                                {"label": "장바구니 확인", "domain": "TRANSACTION", "url": CTAUrls.CART},
+                            ],
+                            "predictedDomains": ["TRANSACTION"],
+                            "metadata": {
+                                "response_shape_key": "quick_order_execute",
+                                "quickOrderToolCalled": True,
+                                "quickOrderResult": "missing_order_page_payload",
+                            },
                         },
                     },
-                }
+                    turn_contract=turn_contract,
+                    intent="quick_order_execute",
+                    source="code_quick_order_execute_missing_payload",
+                    required_tools=("quick_order_tool",),
+                )
+                return (emitted_events, missing_payload_event) if missing_payload_event is not None else None
 
             mapped_event["source_domain"] = MultiAgentDomain.Domain.TRANSACTION.value
             mapped_event["assistant_response_source"] = "code_quick_order_execute_resolver"
@@ -28236,7 +30012,14 @@ class TStationChatServiceV2:
                     {"label": "주문 다시 확인", "domain": "TRANSACTION"},
                     {"label": "예약 시간 다시 선택", "domain": "TRANSACTION"},
                 ]
-            return emitted_events, mapped_event
+            order_complete_event = _finalize_direct_code_event(
+                mapped_event,
+                turn_contract=turn_contract,
+                intent="quick_order_execute",
+                source="code_quick_order_execute_success",
+                required_tools=("quick_order_tool",),
+            )
+            return (emitted_events, order_complete_event) if order_complete_event is not None else None
 
         quick_order_execute_resolution = await _resolve_quick_order_execute_with_code()
         if quick_order_execute_resolution is not None:
@@ -28302,6 +30085,38 @@ class TStationChatServiceV2:
                 return None
             if not (shop_id or store_name):
                 return None
+            pre_required_tools = ("get_store_inventory_tool",) if shop_id else (
+                "get_store_list_tool",
+                "get_store_inventory_tool",
+            )
+            gate_allowed, gate_reason = _direct_code_fast_path_contract_gate(
+                turn_contract=turn_contract,
+                intent="stock_store_search",
+                template="quickReply",
+                source="code_pure_inventory_stock",
+                required_tools=pre_required_tools,
+            )
+            if not gate_allowed:
+                logger.info("[CODE_FAST_PATH_GATE] blocked pure_inventory_stock reason=%s", gate_reason)
+                return None
+
+            def _finalize_pure_inventory_event(event: dict[str, Any] | None) -> dict[str, Any] | None:
+                required_tools = tuple(
+                    tool
+                    for tool in (
+                        "get_store_list_tool",
+                        "get_store_inventory_tool",
+                        "get_logistics_inventory_tool",
+                    )
+                    if tool in called_tool_names
+                )
+                return _finalize_direct_code_event(
+                    event,
+                    turn_contract=turn_contract,
+                    intent="stock_store_search",
+                    source="code_pure_inventory_stock",
+                    required_tools=required_tools,
+                )
 
             from services.tstation.agents.c_transaction_agent.tools import (
                 get_logistics_inventory_tool as _get_logistics_inventory_tool,
@@ -28359,8 +30174,9 @@ class TStationChatServiceV2:
                     if mapped_event is not None:
                         mapped_event["source_domain"] = MultiAgentDomain.Domain.TRANSACTION.value
                         mapped_event["assistant_response_source"] = "code_pure_inventory_stock_store_resolution"
-                        return emitted_events, mapped_event
-                    return emitted_events, {
+                        finalized_event = _finalize_pure_inventory_event(mapped_event)
+                        return (emitted_events, finalized_event) if finalized_event is not None else None
+                    fallback_event = {
                         "type": "data",
                         "template": "quickReply",
                         "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
@@ -28374,13 +30190,15 @@ class TStationChatServiceV2:
                             "predictedDomains": ["TRANSACTION"],
                         },
                     }
+                    finalized_event = _finalize_pure_inventory_event(fallback_event)
+                    return (emitted_events, finalized_event) if finalized_event is not None else None
                 shop_id = str(matched_store.get("shop_id") or "").strip()
                 resolved_store_name = str(matched_store.get("shop_nm") or matched_store.get("shop_name") or "").strip()
                 if resolved_store_name:
                     store_name = resolved_store_name
                 store_context = _store_context_from_mapping({**matched_store, "shopId": shop_id, "shopName": store_name})
                 if not shop_id:
-                    return emitted_events, {
+                    missing_store_event = {
                         "type": "data",
                         "template": "quickReply",
                         "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
@@ -28394,6 +30212,8 @@ class TStationChatServiceV2:
                             "predictedDomains": ["TRANSACTION"],
                         },
                     }
+                    finalized_event = _finalize_pure_inventory_event(missing_store_event)
+                    return (emitted_events, finalized_event) if finalized_event is not None else None
                 if initial_slots is not None:
                     initial_slots.shop_id = shop_id
                     if store_name:
@@ -28476,7 +30296,28 @@ class TStationChatServiceV2:
                     "args": logistics_input,
                     "data": logistics_result,
                 })
-                return emitted_events, _build_pure_inventory_stock_event(
+                stock_event = _finalize_pure_inventory_event(
+                    _build_pure_inventory_stock_event(
+                        store_name=store_name,
+                        tire_size=tire_size,
+                        ord_qty=ord_qty,
+                        logistics_result=logistics_result,
+                        store_context=store_context,
+                        goods_no=goods_no,
+                    )
+                )
+                return (emitted_events, stock_event) if stock_event is not None else None
+
+            intro = f"{store_name or '선택한 매장'}에서 {tire_size} {ord_qty}개 기준 재고를 확인했어요."
+            mapped_event = try_build_template(tool_entries, intro)
+            if mapped_event is not None:
+                mapped_event["source_domain"] = MultiAgentDomain.Domain.TRANSACTION.value
+                mapped_event["assistant_response_source"] = "code_pure_inventory_stock_resolver"
+                finalized_event = _finalize_pure_inventory_event(mapped_event)
+                return (emitted_events, finalized_event) if finalized_event is not None else None
+
+            stock_event = _finalize_pure_inventory_event(
+                _build_pure_inventory_stock_event(
                     store_name=store_name,
                     tire_size=tire_size,
                     ord_qty=ord_qty,
@@ -28484,22 +30325,8 @@ class TStationChatServiceV2:
                     store_context=store_context,
                     goods_no=goods_no,
                 )
-
-            intro = f"{store_name or '선택한 매장'}에서 {tire_size} {ord_qty}개 기준 재고를 확인했어요."
-            mapped_event = try_build_template(tool_entries, intro)
-            if mapped_event is not None:
-                mapped_event["source_domain"] = MultiAgentDomain.Domain.TRANSACTION.value
-                mapped_event["assistant_response_source"] = "code_pure_inventory_stock_resolver"
-                return emitted_events, mapped_event
-
-            return emitted_events, _build_pure_inventory_stock_event(
-                store_name=store_name,
-                tire_size=tire_size,
-                ord_qty=ord_qty,
-                logistics_result=logistics_result,
-                store_context=store_context,
-                goods_no=goods_no,
             )
+            return (emitted_events, stock_event) if stock_event is not None else None
 
         pure_inventory_stock_resolution = await _resolve_pure_inventory_stock_with_code()
         if pure_inventory_stock_resolution is not None:
@@ -28541,7 +30368,26 @@ class TStationChatServiceV2:
                     == "recent_product_set_size_availability"
                     or _is_recent_product_size_availability_query(user_query)
                 ):
-                    return [], _build_recent_product_size_availability_missing_context_event(requested_size)
+                    missing_event = _finalize_direct_code_event(
+                        _build_recent_product_size_availability_missing_context_event(requested_size),
+                        turn_contract=turn_contract,
+                        intent="product_search",
+                        source="code_recent_product_size_availability_missing_context",
+                        allowed_intents=("product_search_summary", "recent_product_set_size_availability"),
+                    )
+                    return ([], missing_event) if missing_event is not None else None
+                return None
+
+            gate_allowed, gate_reason = _direct_code_fast_path_contract_gate(
+                turn_contract=turn_contract,
+                intent="product_search",
+                template="quickReply",
+                source="code_recent_product_size_availability",
+                required_tools=("search_product_tool",),
+                allowed_intents=("product_search_summary", "recent_product_set_size_availability"),
+            )
+            if not gate_allowed:
+                logger.info("[CODE_FAST_PATH_GATE] blocked recent_product_size_availability reason=%s", gate_reason)
                 return None
 
             emitted_events: list[dict] = []
@@ -28560,7 +30406,14 @@ class TStationChatServiceV2:
                     latest_quickreply_tmpl=latest_quickreply_tmpl,
                 )
                 if existing_event is not None:
-                    return emitted_events, existing_event
+                    finalized_event = _finalize_direct_code_event(
+                        existing_event,
+                        turn_contract=turn_contract,
+                        intent="product_search",
+                        source="code_recent_product_size_availability_existing_rows",
+                        allowed_intents=("product_search_summary", "recent_product_set_size_availability"),
+                    )
+                    return (emitted_events, finalized_event) if finalized_event is not None else None
 
             from services.tstation.agents.b_discovery_agent.tools import search_product_tool as _search_product_tool
 
@@ -28616,7 +30469,15 @@ class TStationChatServiceV2:
             )
             if event is None:
                 return None
-            return emitted_events, event
+            finalized_event = _finalize_direct_code_event(
+                event,
+                turn_contract=turn_contract,
+                intent="product_search",
+                source="code_recent_product_size_availability",
+                required_tools=("search_product_tool",),
+                allowed_intents=("product_search_summary", "recent_product_set_size_availability"),
+            )
+            return (emitted_events, finalized_event) if finalized_event is not None else None
 
         recent_product_size_availability_resolution = await _resolve_recent_product_size_availability_with_code()
         if recent_product_size_availability_resolution is not None:
@@ -28656,47 +30517,71 @@ class TStationChatServiceV2:
                 slots=initial_slots,
             )
             if size_list_keyword:
-                from services.tstation.agents.b_discovery_agent.tools import search_product_tool as _search_product_tool
-
-                size_list_input = {"keyword": size_list_keyword, "limit": 10}
-                product_size_list_code_events.append({
-                    "type": "status",
-                    "status": "tool_start",
-                    "tool": "search_product_tool",
-                    "display_name": "상품 검색 중...",
-                    "source_domain": "discovery",
-                })
-                try:
-                    raw_size_list = await asyncio.to_thread(_search_product_tool.invoke, size_list_input)
-                    size_list_result = _tool_result_dict(raw_size_list)
-                except Exception as exc:
-                    logger.exception("[PRODUCT_SIZE_LIST] search_product_tool failed for %s", size_list_keyword)
-                    size_list_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
-                _record_code_tool_result("search_product_tool", size_list_input, size_list_result)
-                product_size_list_code_events.append({
-                    "type": "agent_flow",
-                    "agent": "[Product Search AF]",
-                    "agent_class": "Discovery Agent",
-                    "status": size_list_result.get("status", "success"),
-                    "source_domain": "discovery",
-                })
-                product_size_list_code_events.append({
-                    "type": "tool",
-                    "input": size_list_input,
-                    "output": json.dumps(size_list_result, ensure_ascii=False),
-                    "node": "tools",
-                    "tool": "search_product_tool",
-                    "source_domain": "discovery",
-                })
-                product_size_list_event = _build_product_size_list_event_from_search_results(
-                    user_query,
-                    [(size_list_keyword, size_list_result)],
-                    prev_tool_data=[],
-                    recent_context=recent_user_context_text,
-                    slots=initial_slots,
+                size_list_gate_allowed, size_list_gate_reason = _direct_code_fast_path_contract_gate(
+                    turn_contract=turn_contract,
+                    intent="product_search",
+                    template="quickReply",
+                    source="code_product_size_list",
+                    required_tools=("search_product_tool",),
+                    allowed_intents=("product_search_summary",),
                 )
-                if product_size_list_event is None and pending_size_list_product:
-                    product_size_list_event = _build_product_size_list_not_found_event(size_list_keyword)
+                if not size_list_gate_allowed:
+                    logger.info("[CODE_FAST_PATH_GATE] blocked product_size_list_search reason=%s", size_list_gate_reason)
+                    product_size_list_event = None
+                else:
+                    from services.tstation.agents.b_discovery_agent.tools import search_product_tool as _search_product_tool
+
+                    size_list_input = {"keyword": size_list_keyword, "limit": 10}
+                    product_size_list_code_events.append({
+                        "type": "status",
+                        "status": "tool_start",
+                        "tool": "search_product_tool",
+                        "display_name": "상품 검색 중...",
+                        "source_domain": "discovery",
+                    })
+                    try:
+                        raw_size_list = await asyncio.to_thread(_search_product_tool.invoke, size_list_input)
+                        size_list_result = _tool_result_dict(raw_size_list)
+                    except Exception as exc:
+                        logger.exception("[PRODUCT_SIZE_LIST] search_product_tool failed for %s", size_list_keyword)
+                        size_list_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+                    _record_code_tool_result("search_product_tool", size_list_input, size_list_result)
+                    product_size_list_code_events.append({
+                        "type": "agent_flow",
+                        "agent": "[Product Search AF]",
+                        "agent_class": "Discovery Agent",
+                        "status": size_list_result.get("status", "success"),
+                        "source_domain": "discovery",
+                    })
+                    product_size_list_code_events.append({
+                        "type": "tool",
+                        "input": size_list_input,
+                        "output": json.dumps(size_list_result, ensure_ascii=False),
+                        "node": "tools",
+                        "tool": "search_product_tool",
+                        "source_domain": "discovery",
+                    })
+                    product_size_list_event = _build_product_size_list_event_from_search_results(
+                        user_query,
+                        [(size_list_keyword, size_list_result)],
+                        prev_tool_data=[],
+                        recent_context=recent_user_context_text,
+                        slots=initial_slots,
+                    )
+                    if product_size_list_event is None and pending_size_list_product:
+                        product_size_list_event = _build_product_size_list_not_found_event(size_list_keyword)
+        if product_size_list_event is not None:
+            product_size_list_required_tools = (
+                ("search_product_tool",) if product_size_list_code_events else ()
+            )
+            product_size_list_event = _finalize_direct_code_event(
+                product_size_list_event,
+                turn_contract=turn_contract,
+                intent="product_search",
+                source="code_product_size_list",
+                required_tools=product_size_list_required_tools,
+                allowed_intents=("product_search_summary",),
+            )
         if product_size_list_event is not None:
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
             for code_event in product_size_list_code_events:
@@ -28764,6 +30649,26 @@ class TStationChatServiceV2:
 
         history_selected_vehicle_prompt_event = current_vehicle_selection_prompt_event.get()
         if history_selected_vehicle_prompt_event is not None:
+            history_selected_vehicle_prompt_event = _finalize_direct_code_event(
+                history_selected_vehicle_prompt_event,
+                turn_contract=turn_contract,
+                intent="product_recommendation",
+                source="code_history_selected_vehicle_prompt",
+                allowed_intents=(
+                    "vehicle_based_recommendation_refinement",
+                    "vehicle_resolved_recommendation",
+                    "catalog_recommendation",
+                    "product_search_summary",
+                ),
+            )
+            if history_selected_vehicle_prompt_event is None:
+                history_selected_vehicle_prompt_event = (
+                    build_response_policy_guard_event(turn_contract)
+                    if turn_contract is not None
+                    else None
+                )
+            if history_selected_vehicle_prompt_event is None:
+                return
             yield f"data: {json.dumps(history_selected_vehicle_prompt_event, ensure_ascii=False)}\n\n"
             assistant_response = str(
                 (history_selected_vehicle_prompt_event.get("data") or {}).get("assistantResponse") or ""
@@ -29087,12 +30992,20 @@ class TStationChatServiceV2:
                         and not coupon_resolver_ran
                         and _is_owned_coupon_expiry_lookup_query(user_query)
                     ):
-                        coupon_resolver_ran = True
-                        code_events, deterministic_coupon_event = (
-                            await _resolve_owned_coupon_expiry_lookup_with_code(parsed_for_verifier)
+                        gate_allowed, gate_reason = _coupon_code_fast_path_gate(
+                            template="quickReply",
+                            source="code_owned_coupon_expiry_lookup_post_tool",
+                            required_tools=("get_my_coupons_tool",),
                         )
-                        for code_event in code_events:
-                            yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+                        if gate_allowed:
+                            coupon_resolver_ran = True
+                            code_events, deterministic_coupon_event = (
+                                await _resolve_owned_coupon_expiry_lookup_with_code(parsed_for_verifier)
+                            )
+                            for code_event in code_events:
+                                yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+                        else:
+                            logger.info("[CODE_FAST_PATH_GATE] blocked post-tool owned_coupon_expiry reason=%s", gate_reason)
                     elif (
                         tool_name == "get_my_coupons_tool"
                         and not coupon_resolver_ran
@@ -29101,17 +31014,25 @@ class TStationChatServiceV2:
                             or _is_product_coupon_eligibility_query(user_query)
                         )
                     ):
-                        coupon_resolver_ran = True
-                        product_coupon_resolution = await _resolve_product_coupon_eligibility_with_code(
-                            parsed_for_verifier,
-                            target_product_name=(
-                                coupon_decision.product_name if coupon_decision is not None else None
-                            ),
+                        gate_allowed, gate_reason = _coupon_code_fast_path_gate(
+                            template="quickReply",
+                            source="code_product_coupon_eligibility_post_tool",
+                            required_tools=("get_my_coupons_tool", "get_coupon_applicable_products_tool"),
                         )
-                        if product_coupon_resolution is not None:
-                            code_events, deterministic_coupon_event = product_coupon_resolution
-                            for code_event in code_events:
-                                yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+                        if gate_allowed:
+                            coupon_resolver_ran = True
+                            product_coupon_resolution = await _resolve_product_coupon_eligibility_with_code(
+                                parsed_for_verifier,
+                                target_product_name=(
+                                    coupon_decision.product_name if coupon_decision is not None else None
+                                ),
+                            )
+                            if product_coupon_resolution is not None:
+                                code_events, deterministic_coupon_event = product_coupon_resolution
+                                for code_event in code_events:
+                                    yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+                        else:
+                            logger.info("[CODE_FAST_PATH_GATE] blocked post-tool product_coupon reason=%s", gate_reason)
                     elif (
                         tool_name == "get_my_coupons_tool"
                         and not coupon_resolver_ran
@@ -29120,12 +31041,22 @@ class TStationChatServiceV2:
                             or _is_owned_coupon_best_discount_query(user_query)
                         )
                     ):
-                        coupon_resolver_ran = True
-                        code_events, deterministic_coupon_event = (
-                            await _resolve_owned_coupon_best_discount_with_code(parsed_for_verifier)
+                        gate_allowed, gate_reason = _coupon_code_fast_path_gate(
+                            template="quickReply",
+                            source="code_coupon_best_discount_post_tool",
+                            required_tools=("get_my_coupons_tool",),
                         )
-                        for code_event in code_events:
-                            yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+                        if gate_allowed:
+                            coupon_resolver_ran = True
+                            best_discount_resolution = await _resolve_owned_coupon_best_discount_with_code(
+                                parsed_for_verifier
+                            )
+                            if best_discount_resolution is not None:
+                                code_events, deterministic_coupon_event = best_discount_resolution
+                                for code_event in code_events:
+                                    yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+                        else:
+                            logger.info("[CODE_FAST_PATH_GATE] blocked post-tool coupon_best_discount reason=%s", gate_reason)
                     elif (
                         tool_name == "get_my_coupons_tool"
                         and not coupon_resolver_ran
@@ -29143,12 +31074,20 @@ class TStationChatServiceV2:
                             )
                         )
                     ):
-                        coupon_resolver_ran = True
-                        code_events, deterministic_coupon_event = (
-                            await _resolve_coupon_applicability_with_code(parsed_for_verifier)
+                        gate_allowed, gate_reason = _coupon_code_fast_path_gate(
+                            template="quickReply",
+                            source="code_coupon_applicable_products_post_tool",
+                            required_tools=("get_my_coupons_tool", "get_coupon_applicable_products_tool"),
                         )
-                        for code_event in code_events:
-                            yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+                        if gate_allowed:
+                            coupon_resolver_ran = True
+                            code_events, deterministic_coupon_event = (
+                                await _resolve_coupon_applicability_with_code(parsed_for_verifier)
+                            )
+                            for code_event in code_events:
+                                yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+                        else:
+                            logger.info("[CODE_FAST_PATH_GATE] blocked post-tool coupon_applicable reason=%s", gate_reason)
 
                 continue
 
@@ -29186,10 +31125,16 @@ class TStationChatServiceV2:
                     )
                     if deterministic_external_price_event is not None:
                         logger.info("[EXTERNAL_PRICE] replacing data event with external price policy summary")
-                        event = deterministic_external_price_event
-                        last_template = "quickReply"
-                        last_template_source = "code_mapper"
-                        last_assistant_response_source = "code_external_price_comparison_policy"
+                        event, coercion_allowed = _finalize_coerced_template_event(
+                            deterministic_external_price_event,
+                            original_event=event,
+                            turn_contract=turn_contract,
+                            source="code_external_price_comparison_policy",
+                        )
+                        if coercion_allowed:
+                            last_template = "quickReply"
+                            last_template_source = "code_mapper"
+                            last_assistant_response_source = "code_external_price_comparison_policy"
                         event_data = event.get("data", {})
                         assistant_response = str(event_data.get("assistantResponse") or "")
                         draft_response = assistant_response
@@ -29226,14 +31171,20 @@ class TStationChatServiceV2:
                         last_assistant_response_source = "code_vehicle_auto_select"
                         event_data = event.get("data", {})
                     elif _is_oe_replacement_context(recent_user_context_text, user_query):
-                        event = _build_oe_replacement_guidance_event(
-                            None,
-                            user_query,
-                            include_vehicle_selection=True,
+                        event, coercion_allowed = _finalize_coerced_template_event(
+                            _build_oe_replacement_guidance_event(
+                                None,
+                                user_query,
+                                include_vehicle_selection=True,
+                            ),
+                            original_event=event,
+                            turn_contract=turn_contract,
+                            source="code_oe_replacement_guidance",
                         )
-                        last_template = "quickReply"
-                        last_template_source = "code_mapper"
-                        last_assistant_response_source = "code_oe_replacement_guidance"
+                        if coercion_allowed:
+                            last_template = "quickReply"
+                            last_template_source = "code_mapper"
+                            last_assistant_response_source = "code_oe_replacement_guidance"
                         event_data = event.get("data", {})
                     coerced_event = _coerce_unmatched_vehicle_listcar_to_owner_prompt(event, user_query)
                     if coerced_event is not None:
@@ -29257,10 +31208,16 @@ class TStationChatServiceV2:
                                     "[VEHICLE_OWNER_LOOKUP] staged pending unmatched plate=%s",
                                     pending_plate,
                                 )
-                        event = coerced_event
-                        last_template = "quickReply"
-                        last_template_source = "code_mapper"
-                        last_assistant_response_source = "code_vehicle_owner_lookup_prompt"
+                        event, coercion_allowed = _finalize_coerced_template_event(
+                            coerced_event,
+                            original_event=event,
+                            turn_contract=turn_contract,
+                            source="code_vehicle_owner_lookup_prompt",
+                        )
+                        if coercion_allowed:
+                            last_template = "quickReply"
+                            last_template_source = "code_mapper"
+                            last_assistant_response_source = "code_vehicle_owner_lookup_prompt"
                         event_data = event.get("data", {})
                 if event.get("template") == "product" and _is_product_size_list_intent(user_query):
                     deterministic_size_list_event = _build_product_size_list_event_from_search_results(
@@ -29272,10 +31229,16 @@ class TStationChatServiceV2:
                     )
                     if deterministic_size_list_event is not None:
                         logger.info("[PRODUCT_SIZE_LIST] replacing product card with size list quickReply")
-                        event = deterministic_size_list_event
-                        last_template = "quickReply"
-                        last_template_source = "code_mapper"
-                        last_assistant_response_source = "code_product_size_list"
+                        event, coercion_allowed = _finalize_coerced_template_event(
+                            deterministic_size_list_event,
+                            original_event=event,
+                            turn_contract=turn_contract,
+                            source="code_product_size_list",
+                        )
+                        if coercion_allowed:
+                            last_template = "quickReply"
+                            last_template_source = "code_mapper"
+                            last_assistant_response_source = "code_product_size_list"
                         event_data = event.get("data", {})
                         assistant_response = str(event_data.get("assistantResponse") or "")
                         draft_response = assistant_response
@@ -29291,10 +31254,16 @@ class TStationChatServiceV2:
                     logger.warning(
                         "[TEMPLATE_COERCE] transaction_store_preview quickReply time chips → datepick"
                     )
-                    event = coerced_event
-                    last_template = "datepick"
-                    last_template_source = "code_mapper"
-                    last_assistant_response_source = "code_mapper_preview_quickreply"
+                    event, coercion_allowed = _finalize_coerced_template_event(
+                        coerced_event,
+                        original_event=event,
+                        turn_contract=turn_contract,
+                        source="code_mapper_preview_quickreply",
+                    )
+                    if coercion_allowed:
+                        last_template = "datepick"
+                        last_template_source = "code_mapper"
+                        last_assistant_response_source = "code_mapper_preview_quickreply"
                     event_data = event.get("data", {})
                 coerced_event = None
                 if intent_group != "existing_reservation_management" and _allows_transaction_action_mode(stream_action_mode):
@@ -29307,50 +31276,80 @@ class TStationChatServiceV2:
                     logger.warning(
                         "[TEMPLATE_COERCE] transaction_store_preview order quickReply → datepick"
                     )
-                    event = coerced_event
-                    last_template = "datepick"
-                    last_template_source = "code_mapper"
-                    last_assistant_response_source = "code_mapper_order_preview_quickreply"
+                    event, coercion_allowed = _finalize_coerced_template_event(
+                        coerced_event,
+                        original_event=event,
+                        turn_contract=turn_contract,
+                        source="code_mapper_order_preview_quickreply",
+                    )
+                    if coercion_allowed:
+                        last_template = "datepick"
+                        last_template_source = "code_mapper"
+                        last_assistant_response_source = "code_mapper_order_preview_quickreply"
                     event_data = event.get("data", {})
                 coerced_event = filter_datepick_to_requested_weekday(event, user_query)
                 if coerced_event is not None:
                     logger.warning(
                         "[TEMPLATE_COERCE] datepick filtered to requested weekday"
                     )
-                    event = coerced_event
-                    last_template = "datepick"
-                    last_template_source = last_template_source or "code_mapper"
-                    last_assistant_response_source = "code_mapper_weekday_filter"
+                    event, coercion_allowed = _finalize_coerced_template_event(
+                        coerced_event,
+                        original_event=event,
+                        turn_contract=turn_contract,
+                        source="code_mapper_weekday_filter",
+                    )
+                    if coercion_allowed:
+                        last_template = "datepick"
+                        last_template_source = last_template_source or "code_mapper"
+                        last_assistant_response_source = "code_mapper_weekday_filter"
                     event_data = event.get("data", {})
                 coerced_event = filter_datepick_to_requested_date(event, user_query)
                 if coerced_event is not None:
                     logger.warning(
                         "[TEMPLATE_COERCE] datepick filtered to requested date"
                     )
-                    event = coerced_event
-                    last_template = "datepick"
-                    last_template_source = last_template_source or "code_mapper"
-                    last_assistant_response_source = "code_mapper_date_filter"
+                    event, coercion_allowed = _finalize_coerced_template_event(
+                        coerced_event,
+                        original_event=event,
+                        turn_contract=turn_contract,
+                        source="code_mapper_date_filter",
+                    )
+                    if coercion_allowed:
+                        last_template = "datepick"
+                        last_template_source = last_template_source or "code_mapper"
+                        last_assistant_response_source = "code_mapper_date_filter"
                     event_data = event.get("data", {})
                 coerced_event = _coerce_vehicle_type_compatibility_listcar_to_quickreply(event, user_query)
                 if coerced_event is not None:
                     logger.warning(
                         "[TEMPLATE_COERCE] discovery SUV/passenger compatibility listCar → quickReply"
                     )
-                    event = coerced_event
-                    last_template = "quickReply"
-                    last_template_source = "code_mapper"
-                    last_assistant_response_source = "code_mapper_vehicle_type_compatibility_guard"
+                    event, coercion_allowed = _finalize_coerced_template_event(
+                        coerced_event,
+                        original_event=event,
+                        turn_contract=turn_contract,
+                        source="code_mapper_vehicle_type_compatibility_guard",
+                    )
+                    if coercion_allowed:
+                        last_template = "quickReply"
+                        last_template_source = "code_mapper"
+                        last_assistant_response_source = "code_mapper_vehicle_type_compatibility_guard"
                     event_data = event.get("data", {})
                 coerced_event = _coerce_non_selection_listcar_to_quickreply(event)
                 if coerced_event is not None:
                     logger.warning(
                         "[TEMPLATE_COERCE] discovery listCar advice turn → quickReply"
                     )
-                    event = coerced_event
-                    last_template = "quickReply"
-                    last_template_source = "code_mapper"
-                    last_assistant_response_source = "code_mapper_listcar_advice_guard"
+                    event, coercion_allowed = _finalize_coerced_template_event(
+                        coerced_event,
+                        original_event=event,
+                        turn_contract=turn_contract,
+                        source="code_mapper_listcar_advice_guard",
+                    )
+                    if coercion_allowed:
+                        last_template = "quickReply"
+                        last_template_source = "code_mapper"
+                        last_assistant_response_source = "code_mapper_listcar_advice_guard"
                     event_data = event.get("data", {})
                 if TStationChatServiceV2._should_drop_template_for_intent_group(event, intent_group):
                     logger.warning(
@@ -29376,10 +31375,16 @@ class TStationChatServiceV2:
                     )
                     if deterministic_external_price_event is not None:
                         logger.info("[EXTERNAL_PRICE] replacing discovery event with external price policy summary")
-                        event = deterministic_external_price_event
-                        last_template = "quickReply"
-                        last_template_source = "code_mapper"
-                        last_assistant_response_source = "code_external_price_comparison_policy"
+                        event, coercion_allowed = _finalize_coerced_template_event(
+                            deterministic_external_price_event,
+                            original_event=event,
+                            turn_contract=turn_contract,
+                            source="code_external_price_comparison_policy",
+                        )
+                        if coercion_allowed:
+                            last_template = "quickReply"
+                            last_template_source = "code_mapper"
+                            last_assistant_response_source = "code_external_price_comparison_policy"
                         event_data = event.get("data", {})
                         assistant_response = str(event_data.get("assistantResponse") or "")
                         draft_response = assistant_response
@@ -29421,10 +31426,16 @@ class TStationChatServiceV2:
                                 yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
                     if deterministic_compare_event is not None:
                         logger.info("[PRODUCT_COMPARE] replacing discovery event with product detail comparison")
-                        event = deterministic_compare_event
-                        last_template = "quickReply"
-                        last_template_source = "code_mapper"
-                        last_assistant_response_source = "code_product_compare_resolver"
+                        event, coercion_allowed = _finalize_coerced_template_event(
+                            deterministic_compare_event,
+                            original_event=event,
+                            turn_contract=turn_contract,
+                            source="code_product_compare_resolver",
+                        )
+                        if coercion_allowed:
+                            last_template = "quickReply"
+                            last_template_source = "code_mapper"
+                            last_assistant_response_source = "code_product_compare_resolver"
                         event_data = event.get("data", {})
                         assistant_response = str(event_data.get("assistantResponse") or "")
                         draft_response = assistant_response
@@ -29465,10 +31476,16 @@ class TStationChatServiceV2:
                                 yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
                     if deterministic_attribute_event is not None:
                         logger.info("[PRODUCT_ATTRIBUTE] replacing discovery event with search result summary")
-                        event = deterministic_attribute_event
-                        last_template = "quickReply"
-                        last_template_source = "code_mapper"
-                        last_assistant_response_source = "code_product_attribute_resolver"
+                        event, coercion_allowed = _finalize_coerced_template_event(
+                            deterministic_attribute_event,
+                            original_event=event,
+                            turn_contract=turn_contract,
+                            source="code_product_attribute_resolver",
+                        )
+                        if coercion_allowed:
+                            last_template = "quickReply"
+                            last_template_source = "code_mapper"
+                            last_assistant_response_source = "code_product_attribute_resolver"
                         event_data = event.get("data", {})
                         assistant_response = str(event_data.get("assistantResponse") or "")
                         draft_response = assistant_response
@@ -29500,10 +31517,16 @@ class TStationChatServiceV2:
                             for code_event in code_events:
                                 yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
                             logger.info("[MULTI_VARIANT] replacing discovery event with fan-out result")
-                            event = deterministic_variant_event
-                            last_template = event.get("template") or last_template
-                            last_template_source = "code_mapper"
-                            last_assistant_response_source = "code_multi_variant_recommendation"
+                            event, coercion_allowed = _finalize_coerced_template_event(
+                                deterministic_variant_event,
+                                original_event=event,
+                                turn_contract=turn_contract,
+                                source="code_multi_variant_recommendation",
+                            )
+                            if coercion_allowed:
+                                last_template = event.get("template") or last_template
+                                last_template_source = "code_mapper"
+                                last_assistant_response_source = "code_multi_variant_recommendation"
                             event_data = event.get("data", {})
                 if isinstance(event_data, dict):
                     _stage_comparison_context_slots(event)
@@ -29601,10 +31624,16 @@ class TStationChatServiceV2:
                     == MultiAgentDomain.Domain.TRANSACTION.value
                     and _COUPON_ISSUE_INTENT_RE.search(user_query)
                 ):
-                    event = _coupon_issue_event()
-                    last_template = "quickReply"
-                    last_template_source = "code_mapper"
-                    last_assistant_response_source = "code_coupon_issue_guard"
+                    event, coercion_allowed = _finalize_coerced_template_event(
+                        _coupon_issue_event(),
+                        original_event=event,
+                        turn_contract=turn_contract,
+                        source="code_coupon_issue_guard",
+                    )
+                    if coercion_allowed:
+                        last_template = "quickReply"
+                        last_template_source = "code_mapper"
+                        last_assistant_response_source = "code_coupon_issue_guard"
                     event_data = event.get("data", {})
                     assistant_response = str(event_data.get("assistantResponse") or "")
                     draft_response = assistant_response
@@ -29619,10 +31648,16 @@ class TStationChatServiceV2:
                     logger.warning(
                         "[TEMPLATE_COERCE] transaction order summary quickReply → preOrder"
                     )
-                    event = coerced_event
-                    last_template = "preOrder"
-                    last_template_source = "code_mapper"
-                    last_assistant_response_source = "code_preorder_summary_guard"
+                    event, coercion_allowed = _finalize_coerced_template_event(
+                        coerced_event,
+                        original_event=event,
+                        turn_contract=turn_contract,
+                        source="code_preorder_summary_guard",
+                    )
+                    if coercion_allowed:
+                        last_template = "preOrder"
+                        last_template_source = "code_mapper"
+                        last_assistant_response_source = "code_preorder_summary_guard"
                     event_data = event.get("data", {})
                     assistant_response = str(event_data.get("assistantResponse") or "")
                     draft_response = assistant_response
@@ -29664,10 +31699,16 @@ class TStationChatServiceV2:
                     )
                     if repaired_product_description_event is not None:
                         logger.info("[PRODUCT_DESCRIPTION] replaced quickReply with deterministic detail summary")
-                        event = repaired_product_description_event
-                        last_template = "quickReply"
-                        last_template_source = "code_mapper"
-                        last_assistant_response_source = "code_product_description"
+                        event, coercion_allowed = _finalize_coerced_template_event(
+                            repaired_product_description_event,
+                            original_event=event,
+                            turn_contract=turn_contract,
+                            source="code_product_description",
+                        )
+                        if coercion_allowed:
+                            last_template = "quickReply"
+                            last_template_source = "code_mapper"
+                            last_assistant_response_source = "code_product_description"
                         event_data = event.get("data", {})
                         assistant_response = str(event_data.get("assistantResponse") or "")
                         draft_response = assistant_response
@@ -29706,10 +31747,16 @@ class TStationChatServiceV2:
                                     yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
                         if deterministic_compare_event is not None:
                             logger.info("[PRODUCT_COMPARE] replacing quickReply with existing search results")
-                            event = deterministic_compare_event
-                            last_template = "quickReply"
-                            last_template_source = "code_mapper"
-                            last_assistant_response_source = "code_product_compare_resolver"
+                            event, coercion_allowed = _finalize_coerced_template_event(
+                                deterministic_compare_event,
+                                original_event=event,
+                                turn_contract=turn_contract,
+                                source="code_product_compare_resolver",
+                            )
+                            if coercion_allowed:
+                                last_template = "quickReply"
+                                last_template_source = "code_mapper"
+                                last_assistant_response_source = "code_product_compare_resolver"
                             event_data = event.get("data", {})
                             assistant_response = str(event_data.get("assistantResponse") or "")
                             draft_response = assistant_response
@@ -29726,10 +31773,16 @@ class TStationChatServiceV2:
                                 for code_event in code_events:
                                     yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
                                 logger.info("[PRODUCT_COMPARE] replacing quickReply with code result")
-                                event = deterministic_grade_event
-                                last_template = "quickReply"
-                                last_template_source = "code_mapper"
-                                last_assistant_response_source = "code_product_compare_resolver"
+                                event, coercion_allowed = _finalize_coerced_template_event(
+                                    deterministic_grade_event,
+                                    original_event=event,
+                                    turn_contract=turn_contract,
+                                    source="code_product_compare_resolver",
+                                )
+                                if coercion_allowed:
+                                    last_template = "quickReply"
+                                    last_template_source = "code_mapper"
+                                    last_assistant_response_source = "code_product_compare_resolver"
                                 event_data = event.get("data", {})
                                 assistant_response = str(event_data.get("assistantResponse") or "")
                                 draft_response = assistant_response
@@ -29784,10 +31837,16 @@ class TStationChatServiceV2:
                         )
                         if store_detail_event is not None:
                             logger.info("[STORE_DETAIL] replaced vague quickReply with deterministic store detail")
-                            event = store_detail_event
-                            last_template = "quickReply"
-                            last_template_source = "code_mapper"
-                            last_assistant_response_source = "code_store_detail_resolver"
+                            event, coercion_allowed = _finalize_coerced_template_event(
+                                store_detail_event,
+                                original_event=event,
+                                turn_contract=turn_contract,
+                                source="code_store_detail_resolver",
+                            )
+                            if coercion_allowed:
+                                last_template = "quickReply"
+                                last_template_source = "code_mapper"
+                                last_assistant_response_source = "code_store_detail_resolver"
                             event_data = event.get("data", {})
                             assistant_response = str(event_data.get("assistantResponse") or "")
                             draft_response = assistant_response
@@ -29810,16 +31869,24 @@ class TStationChatServiceV2:
                             or _is_product_coupon_eligibility_query(user_query)
                         )
                     ):
-                        coupon_resolver_ran = True
-                        product_coupon_resolution = await _resolve_product_coupon_eligibility_with_code(
-                            target_product_name=(
-                                coupon_decision.product_name if coupon_decision is not None else None
-                            )
+                        gate_allowed, gate_reason = _coupon_code_fast_path_gate(
+                            template="quickReply",
+                            source="code_product_coupon_eligibility_data_event",
+                            required_tools=("get_my_coupons_tool", "get_coupon_applicable_products_tool"),
                         )
-                        if product_coupon_resolution is not None:
-                            code_events, deterministic_coupon_event = product_coupon_resolution
-                            for code_event in code_events:
-                                yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+                        if gate_allowed:
+                            coupon_resolver_ran = True
+                            product_coupon_resolution = await _resolve_product_coupon_eligibility_with_code(
+                                target_product_name=(
+                                    coupon_decision.product_name if coupon_decision is not None else None
+                                )
+                            )
+                            if product_coupon_resolution is not None:
+                                code_events, deterministic_coupon_event = product_coupon_resolution
+                                for code_event in code_events:
+                                    yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+                        else:
+                            logger.info("[CODE_FAST_PATH_GATE] blocked data-event product_coupon reason=%s", gate_reason)
                     elif (
                         deterministic_coupon_event is None
                         and not coupon_resolver_ran
@@ -29832,12 +31899,20 @@ class TStationChatServiceV2:
                             or _is_owned_coupon_best_discount_query(user_query)
                         )
                     ):
-                        coupon_resolver_ran = True
-                        code_events, deterministic_coupon_event = (
-                            await _resolve_owned_coupon_best_discount_with_code()
+                        gate_allowed, gate_reason = _coupon_code_fast_path_gate(
+                            template="quickReply",
+                            source="code_coupon_best_discount_data_event",
+                            required_tools=("get_my_coupons_tool",),
                         )
-                        for code_event in code_events:
-                            yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+                        if gate_allowed:
+                            coupon_resolver_ran = True
+                            best_discount_resolution = await _resolve_owned_coupon_best_discount_with_code()
+                            if best_discount_resolution is not None:
+                                code_events, deterministic_coupon_event = best_discount_resolution
+                                for code_event in code_events:
+                                    yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+                        else:
+                            logger.info("[CODE_FAST_PATH_GATE] blocked data-event coupon_best_discount reason=%s", gate_reason)
                     elif (
                         deterministic_coupon_event is None
                         and not coupon_resolver_ran
@@ -29855,12 +31930,20 @@ class TStationChatServiceV2:
                             or (coupon_decision is None and _is_strong_coupon_applicability_query(user_query))
                         )
                     ):
-                        coupon_resolver_ran = True
-                        code_events, deterministic_coupon_event = (
-                            await _resolve_coupon_applicability_with_code()
+                        gate_allowed, gate_reason = _coupon_code_fast_path_gate(
+                            template="quickReply",
+                            source="code_coupon_applicable_products_data_event",
+                            required_tools=("get_my_coupons_tool", "get_coupon_applicable_products_tool"),
                         )
-                        for code_event in code_events:
-                            yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+                        if gate_allowed:
+                            coupon_resolver_ran = True
+                            code_events, deterministic_coupon_event = (
+                                await _resolve_coupon_applicability_with_code()
+                            )
+                            for code_event in code_events:
+                                yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+                        else:
+                            logger.info("[CODE_FAST_PATH_GATE] blocked data-event coupon_applicable reason=%s", gate_reason)
                     elif (
                         deterministic_coupon_event is None
                         and not coupon_resolver_ran
@@ -29889,15 +31972,27 @@ class TStationChatServiceV2:
                             )
                         )
                     ):
-                        coupon_resolver_ran = True
-                        code_events, deterministic_coupon_event = (
-                            await _resolve_coupon_applicability_with_code()
+                        gate_allowed, gate_reason = _coupon_code_fast_path_gate(
+                            template="quickReply",
+                            source="code_coupon_applicable_products_text_repair",
+                            required_tools=("get_my_coupons_tool", "get_coupon_applicable_products_tool"),
                         )
-                        for code_event in code_events:
-                            yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+                        if gate_allowed:
+                            coupon_resolver_ran = True
+                            code_events, deterministic_coupon_event = (
+                                await _resolve_coupon_applicability_with_code()
+                            )
+                            for code_event in code_events:
+                                yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+                        else:
+                            logger.info("[CODE_FAST_PATH_GATE] blocked data-event coupon_text_repair reason=%s", gate_reason)
                     if deterministic_coupon_event is not None:
                         logger.info("[COUPON_RESOLVER] replacing LLM quickReply with code result")
-                        event = deterministic_coupon_event
+                        event = _annotate_direct_code_fast_path_event(
+                            deterministic_coupon_event,
+                            turn_contract=turn_contract,
+                            contract_gate_reason="contract_matched:code_coupon_resolver",
+                        )
                         last_template = "quickReply"
                         last_template_source = "code_mapper"
                         last_assistant_response_source = "code_coupon_resolver"
@@ -30041,10 +32136,16 @@ class TStationChatServiceV2:
                         logger.warning(
                             "[TEMPLATE_COERCE] schedule confirmation quickReply → latest datepick"
                         )
-                        event = coerced_event
-                        last_template = "datepick"
-                        last_template_source = "code_mapper"
-                        last_assistant_response_source = "code_mapper_schedule_confirmation"
+                        event, coercion_allowed = _finalize_coerced_template_event(
+                            coerced_event,
+                            original_event=event,
+                            turn_contract=turn_contract,
+                            source="code_mapper_schedule_confirmation",
+                        )
+                        if coercion_allowed:
+                            last_template = "datepick"
+                            last_template_source = "code_mapper"
+                            last_assistant_response_source = "code_mapper_schedule_confirmation"
                         event_data = event.get("data", {})
                         assistant_response = str(event_data.get("assistantResponse") or "")
                         draft_response = assistant_response
@@ -30155,6 +32256,42 @@ class TStationChatServiceV2:
                 validation_event["response_shape_key"] = _response_shape_key_for_source_domain(
                     validation_event["source_domain"]
                 )
+                def _record_stream_contract_gate_metadata(
+                    target_event: dict[str, Any],
+                    *,
+                    gate_result: str,
+                    gate_reason: str,
+                    emitted_template: str | None = None,
+                    source: str | None = None,
+                    blocked_template: str | None = None,
+                ) -> None:
+                    target_event["contract_gate_result"] = gate_result
+                    target_event["contract_gate_reason"] = gate_reason
+                    if turn_contract is not None:
+                        target_event["contract_intent"] = str(turn_contract.intent or "")
+                    if emitted_template:
+                        target_event["emitted_template"] = emitted_template
+                    if source:
+                        target_event["transform_source"] = source
+                    if blocked_template:
+                        target_event["blocked_template"] = blocked_template
+                    target_data = target_event.get("data")
+                    if not isinstance(target_data, dict):
+                        return
+                    metadata = target_data.get("metadata")
+                    if not isinstance(metadata, dict):
+                        metadata = {}
+                        target_data["metadata"] = metadata
+                    metadata["contract_gate_result"] = gate_result
+                    metadata["contract_gate_reason"] = gate_reason
+                    metadata["contract_intent"] = str(turn_contract.intent or "") if turn_contract is not None else ""
+                    if emitted_template:
+                        metadata["emitted_template"] = emitted_template
+                    if source:
+                        metadata["transform_source"] = source
+                    if blocked_template:
+                        metadata["blocked_template"] = blocked_template
+
                 try:
                     template_contract_violated = violates_response_template_contract(
                         validation_event,
@@ -30202,6 +32339,28 @@ class TStationChatServiceV2:
                         "content": assistant_response,
                         "agent": "[TRANSACTION AGENT]",
                     }]
+                    _record_stream_contract_gate_metadata(
+                        event,
+                        gate_result="blocked",
+                        gate_reason=(
+                            f"template_contract_violation:"
+                            f"{validation_event.get('template') or 'unknown'}"
+                        ),
+                        emitted_template=str(event.get("template") or ""),
+                        source=str(last_assistant_response_source or last_template_source or ""),
+                        blocked_template=str(validation_event.get("template") or ""),
+                    )
+                else:
+                    _record_stream_contract_gate_metadata(
+                        event,
+                        gate_result="allowed",
+                        gate_reason=(
+                            f"contract_validated:"
+                            f"{last_assistant_response_source or last_template_source or 'stream_event'}"
+                        ),
+                        emitted_template=str(event.get("template") or ""),
+                        source=str(last_assistant_response_source or last_template_source or ""),
+                    )
                 if isinstance(event_data, dict) and _normalize_tstation_cta_urls_for_origin(event_data):
                     logger.info("[CTA_URL] rebased T-Station CTA URLs to request origin host")
                 if _augment_recent_product_set_ranking_metadata(event, user_query):
@@ -30288,6 +32447,44 @@ class TStationChatServiceV2:
                 source_domain=str(turn_contract.domain or "") if turn_contract is not None else "",
             )
             if no_output_fallback_event is not None:
+                fallback_template = str(no_output_fallback_event.get("template") or "")
+                if (
+                    turn_contract is not None
+                    and violates_response_template_contract(no_output_fallback_event, turn_contract)
+                ):
+                    blocked_template = fallback_template
+                    no_output_fallback_event = (
+                        _build_turn_contract_fallback_event(
+                            turn_contract=turn_contract,
+                            user_text=user_query,
+                            tool_data_list=tool_context_items,
+                        )
+                        or build_response_policy_guard_event(turn_contract)
+                    )
+                    _record_contract_gate_metadata(
+                        no_output_fallback_event,
+                        turn_contract=turn_contract,
+                        gate_result="blocked",
+                        gate_reason=f"no_visible_output_template_forbidden:{blocked_template or 'unknown'}",
+                        emitted_template=str(no_output_fallback_event.get("template") or ""),
+                        source=str(
+                            no_output_fallback_event.get("assistant_response_source")
+                            or "code_no_visible_output_guard"
+                        ),
+                        blocked_template=blocked_template,
+                    )
+                else:
+                    _record_contract_gate_metadata(
+                        no_output_fallback_event,
+                        turn_contract=turn_contract,
+                        gate_result="allowed",
+                        gate_reason=f"no_visible_output_validated:{fallback_template or 'unknown'}",
+                        emitted_template=fallback_template,
+                        source=str(
+                            no_output_fallback_event.get("assistant_response_source")
+                            or "code_no_visible_output_guard"
+                        ),
+                    )
                 logger.warning(
                     "[NO_VISIBLE_OUTPUT] tool_called=%s forcing safe fallback=%s",
                     sorted(called_tool_names),
@@ -30523,6 +32720,18 @@ class TStationChatServiceV2:
                                     user_text=user_query,
                                     tool_data_list=tool_context_items,
                                 ) or build_response_policy_guard_event(turn_contract)
+                                _record_contract_gate_metadata(
+                                    fallback_event,
+                                    turn_contract=turn_contract,
+                                    gate_result="blocked",
+                                    gate_reason=f"qc_contract_violation:{len(hard_violations)}",
+                                    emitted_template=str(fallback_event.get("template") or ""),
+                                    source=str(
+                                        fallback_event.get("assistant_response_source")
+                                        or "code_turn_contract_qc_guard"
+                                    ),
+                                    blocked_template=str(last_template or ""),
+                                )
                                 buffered_data_events = [fallback_event]
                                 last_template = "quickReply"
                                 last_template_source = "turn_contract_qc"
@@ -30556,6 +32765,44 @@ class TStationChatServiceV2:
                                     mapper_tool_items,
                                     mismatches,
                                 ) or _qc_factual_mismatch_guard_event(mismatches)
+                                fallback_template = str(fallback_event.get("template") or "")
+                                if (
+                                    turn_contract is not None
+                                    and violates_response_template_contract(fallback_event, turn_contract)
+                                ):
+                                    blocked_template = fallback_template
+                                    fallback_event = (
+                                        _build_turn_contract_fallback_event(
+                                            turn_contract=turn_contract,
+                                            user_text=user_query,
+                                            tool_data_list=tool_context_items,
+                                        )
+                                        or build_response_policy_guard_event(turn_contract)
+                                    )
+                                    _record_contract_gate_metadata(
+                                        fallback_event,
+                                        turn_contract=turn_contract,
+                                        gate_result="blocked",
+                                        gate_reason=f"qc_fallback_template_forbidden:{blocked_template or 'unknown'}",
+                                        emitted_template=str(fallback_event.get("template") or ""),
+                                        source=str(
+                                            fallback_event.get("assistant_response_source")
+                                            or "code_qc_factual_mismatch_guard"
+                                        ),
+                                        blocked_template=blocked_template,
+                                    )
+                                else:
+                                    _record_contract_gate_metadata(
+                                        fallback_event,
+                                        turn_contract=turn_contract,
+                                        gate_result="allowed",
+                                        gate_reason=f"qc_fallback_validated:{fallback_template or 'unknown'}",
+                                        emitted_template=fallback_template,
+                                        source=str(
+                                            fallback_event.get("assistant_response_source")
+                                            or "code_qc_factual_mismatch_guard"
+                                        ),
+                                    )
                                 buffered_data_events = [fallback_event]
                                 last_template = str(fallback_event.get("template") or "quickReply")
                                 last_template_source = "qc_verifier"

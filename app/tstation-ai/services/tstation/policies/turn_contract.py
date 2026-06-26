@@ -575,7 +575,7 @@ def build_required_slot_clarification_event(contract: TurnContract) -> dict[str,
 
     message = _clarification_text(contract.blocking_required_slots)
     quick_replies = _clarification_chips(contract.blocking_required_slots)
-    return {
+    return _annotate_contract_guard_event({
         "type": "data",
         "template": "quickReply",
         "source_domain": "transaction",
@@ -589,7 +589,34 @@ def build_required_slot_clarification_event(contract: TurnContract) -> dict[str,
                 "requiredSlots": list(contract.blocking_required_slots),
             },
         },
-    }
+    }, contract, reason="required_slot_guard")
+
+
+def _annotate_contract_guard_event(
+    event: dict[str, Any],
+    contract: TurnContract,
+    *,
+    reason: str,
+) -> dict[str, Any]:
+    template = str(event.get("template") or "")
+    source = str(event.get("assistant_response_source") or "code_turn_contract_guard")
+    event["contract_intent"] = str(contract.intent or "")
+    event["contract_gate_result"] = "blocked"
+    event["contract_gate_reason"] = reason
+    event["emitted_template"] = template
+    event["direct_source"] = source
+    event_data = event.get("data")
+    if isinstance(event_data, dict):
+        metadata = event_data.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
+            event_data["metadata"] = metadata
+        metadata["contract_intent"] = str(contract.intent or "")
+        metadata["contract_gate_result"] = "blocked"
+        metadata["contract_gate_reason"] = reason
+        metadata["emitted_template"] = template
+        metadata["direct_source"] = source
+    return event
 
 
 def build_response_policy_guard_event(contract: TurnContract) -> dict[str, Any]:
@@ -607,7 +634,7 @@ def build_response_policy_guard_event(contract: TurnContract) -> dict[str, Any]:
     if not (forbidden_set & tool_error_behaviors):
         missing_slot_event = _build_missing_slot_action_prompt_event(contract)
         if missing_slot_event is not None:
-            return missing_slot_event
+            return _annotate_contract_guard_event(missing_slot_event, contract, reason="response_policy_guard")
 
     if _is_discovery_first_leg_transaction_contract(contract):
         intent = str(contract.intent or "")
@@ -746,7 +773,7 @@ def build_response_policy_guard_event(contract: TurnContract) -> dict[str, Any]:
         message = "현재 확인된 정보만으로 바로 진행하기 어려워요. 필요한 정보를 먼저 확인한 뒤 이어서 도와드릴게요."
         quick_replies = _clarification_chips(contract.required_slots or ("product",))
 
-    return {
+    return _annotate_contract_guard_event({
         "type": "data",
         "template": "quickReply",
         "source_domain": "transaction",
@@ -760,7 +787,7 @@ def build_response_policy_guard_event(contract: TurnContract) -> dict[str, Any]:
                 "forbiddenBehaviors": sorted(forbidden_set),
             },
         },
-    }
+    }, contract, reason="response_policy_guard")
 
 
 def _build_missing_slot_action_prompt_event(contract: TurnContract) -> dict[str, Any] | None:
@@ -1792,7 +1819,7 @@ def _tool_contract_violation(
     called_tools: list[str] | tuple[str, ...] | None,
     contract: TurnContract | None,
 ) -> dict[str, Any] | None:
-    if contract is None or not contract.allowed_tools or not called_tools:
+    if contract is None or not called_tools:
         return None
     called_tool_set = {str(tool) for tool in tuple(called_tools or ()) if str(tool).strip()}
     if (

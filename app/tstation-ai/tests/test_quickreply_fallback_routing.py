@@ -86,6 +86,7 @@ from services.tstation.chat import (
     _store_context_from_mapping,
     _is_pure_inventory_stock_ready,
     _is_quantity_only_stock_followup_text,
+    _build_pure_inventory_stock_contract,
     _external_price_search_results_from_sources,
     _build_product_description_quickreply_event,
     _build_multi_product_detail_quickreply_event,
@@ -231,6 +232,10 @@ from services.tstation.chat import (
     _is_private_contact_request,
     _privacy_contact_request_event,
     _build_recommendation_contract_fallback_event,
+    _annotate_direct_code_fast_path_event,
+    _direct_code_fast_path_contract_gate,
+    _finalize_coerced_template_event,
+    _finalize_direct_code_event,
     _choose_quickreply_fallback,
     _coerce_unmatched_vehicle_listcar_to_owner_prompt,
     _coerce_vehicle_type_compatibility_listcar_to_quickreply,
@@ -369,6 +374,7 @@ from services.tstation.policies.turn_contract import (
 )
 from services.tstation.policies.pickup_service_gate import deterministic_pickup_service_gate_decision
 from services.tstation.policies.store_service_gate import (
+    classify_store_name_role,
     decide_store_service_gate,
     extract_store_attribute_inquiry,
     extract_valid_store_name,
@@ -4533,6 +4539,13 @@ def test_pii_guardrail_detects_delete_request_and_streams_visible_fallback() -> 
 
     assert any(event.get("type") == "message" for event in events)
     assert any(event.get("type") == "data" and event.get("template") == "quickReply" for event in events)
+    data_event = next(event for event in events if event.get("type") == "data")
+    assert data_event["contract_gate_result"] == "allowed"
+    assert data_event["contract_intent"] == "pii_guardrail"
+    assert data_event["contract_gate_reason"] == "pre_contract_safety_guard:code_pii_guardrail"
+    assert data_event["direct_source"] == "code_pii_guardrail"
+    assert data_event["data"]["metadata"]["response_shape_key"] == "pii_guardrail"
+    assert data_event["data"]["metadata"]["emitted_template"] == "quickReply"
 
 
 @pytest.mark.parametrize(
@@ -16703,6 +16716,345 @@ def test_store_attribute_inquiry_keeps_adjacent_transaction_flows() -> None:
     assert order_install.intent != "store_attribute_inquiry"
 
 
+def test_store_name_role_marks_warranty_store_as_context() -> None:
+    decision = classify_store_name_role("광교신도시점에서 교체한 타이어가 벌써 마모됐는데 보증서비스 확인해줘")
+
+    assert decision.role == "context"
+    assert decision.store_name == "광교신도시점"
+    assert extract_store_attribute_inquiry("광교신도시점에서 교체한 타이어가 벌써 마모됐는데 보증서비스 확인해줘") is None
+
+
+@pytest.mark.parametrize(
+    "user_text",
+    [
+        "광교신도시점에서 교체한 타이어가 벌써 마모됐는데 보증서비스 확인해줘",
+        "광교신도시점에서 교체한 원 TC가 벌써 마모됐는데 보증서비스 확인해줘",
+        (
+            "35버0991 차량에 웨더플렉스GT 4개 장착해서 끼고 있는 중인데 "
+            "광교신도시점에서 교체한 뒤 사이드월이 벌써 갈라졌어. 보증서비스 확인해줘"
+        ),
+    ],
+)
+def test_store_context_role_prevents_store_attribute_plan_and_frame(user_text: str) -> None:
+    transaction_frame = build_transaction_intent_frame(user_text, known_slots={})
+    cross_domain_plan = plan_cross_domain_turn(user_text, known_slots={})
+
+    assert transaction_frame.intent != "store_attribute_inquiry"
+    assert transaction_frame.intent != "plain_store_info_lookup"
+    assert transaction_frame.intent != "store_holiday_lookup"
+    assert transaction_frame.intent != "store_schedule"
+    assert transaction_frame.intent != "store_visit_advisory"
+    assert "store_name" not in transaction_frame.known_slots
+    assert "region" not in transaction_frame.known_slots
+    transaction_tool_plan = plan_transaction_tools(transaction_frame)
+    assert "get_store_schedule_tool" not in transaction_tool_plan.allowed_tools
+    assert cross_domain_plan.primary_domain == PolicyDomain.SUPPORT
+    assert all(task.intent != "store_attribute_inquiry" for task in cross_domain_plan.subtasks)
+
+
+def test_store_attribute_direct_fast_path_is_blocked_by_support_contract() -> None:
+    contract = TurnContract(
+        domain="support",
+        intent="warranty_claim",
+        allowed_tools=("search_faq_hybrid_tool",),
+        forbidden_tools=("get_store_list_tool", "get_store_detail_tool"),
+        response_decision={"template": "quickReply", "metadata": {"response_shape_key": "warranty_claim"}},
+    )
+
+    allowed, reason = _direct_code_fast_path_contract_gate(
+        turn_contract=contract,
+        intent="store_attribute_inquiry",
+        template="quickReply",
+        source="code_store_attribute_inquiry",
+        required_tools=("get_store_list_tool", "get_store_detail_tool"),
+    )
+
+    assert allowed is False
+    assert reason == "intent_mismatch:warranty_claim"
+
+
+def test_store_attribute_direct_fast_path_requires_allowed_store_tools() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="store_attribute_inquiry",
+        allowed_tools=("get_store_list_tool", "get_store_detail_tool"),
+        forbidden_tools=("get_store_schedule_tool", "transaction_store_preview_tool"),
+        response_decision={"template": "quickReply", "metadata": {"response_shape_key": "store_attribute_inquiry"}},
+    )
+    event = _store_attribute_inquiry_event("정자점 야간정비 가능?", store_name="정자점")
+
+    allowed, reason = _direct_code_fast_path_contract_gate(
+        turn_contract=contract,
+        intent="store_attribute_inquiry",
+        template="quickReply",
+        source="code_store_attribute_inquiry",
+        required_tools=("get_store_list_tool", "get_store_detail_tool"),
+    )
+    annotated = _annotate_direct_code_fast_path_event(event, turn_contract=contract, contract_gate_reason=reason)
+
+    assert allowed is True
+    assert reason == "contract_matched:code_store_attribute_inquiry"
+    assert annotated["contract_intent"] == "store_attribute_inquiry"
+    assert annotated["contract_matched"] is True
+    assert annotated["data"]["metadata"]["contract_intent"] == "store_attribute_inquiry"
+    assert annotated["data"]["metadata"]["contract_matched"] is True
+
+
+def test_finalize_direct_code_event_uses_actual_template_and_records_metadata() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="store_attribute_inquiry",
+        allowed_tools=("get_store_list_tool",),
+        response_decision={"template": "quickReply", "metadata": {"response_shape_key": "store_attribute_inquiry"}},
+    )
+    event = {
+        "type": "data",
+        "template": "quickReply",
+        "data": {"metadata": {}},
+    }
+
+    finalized = _finalize_direct_code_event(
+        event,
+        turn_contract=contract,
+        intent="store_attribute_inquiry",
+        source="code_store_attribute_inquiry",
+        required_tools=("get_store_list_tool",),
+    )
+
+    assert finalized is not None
+    assert finalized["contract_matched"] is True
+    assert finalized["direct_source"] == "code_store_attribute_inquiry"
+    assert finalized["emitted_template"] == "quickReply"
+    assert finalized["required_tools"] == ["get_store_list_tool"]
+    assert finalized["data"]["metadata"]["direct_source"] == "code_store_attribute_inquiry"
+    assert finalized["data"]["metadata"]["emitted_template"] == "quickReply"
+    assert finalized["data"]["metadata"]["required_tools"] == ["get_store_list_tool"]
+
+
+def test_finalize_direct_code_event_blocks_actual_forbidden_template() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="quick_order_execute",
+        allowed_tools=("quick_order_tool",),
+        response_decision={
+            "template": "quickReply",
+            "metadata": {"response_shape_key": "quick_order_execute"},
+            "forbidden_behaviors": ("order_complete_on_tool_error",),
+        },
+    )
+    event = {"type": "data", "template": "orderComplete", "data": {"metadata": {}}}
+
+    finalized = _finalize_direct_code_event(
+        event,
+        turn_contract=contract,
+        intent="quick_order_execute",
+        source="code_quick_order_execute_success",
+        required_tools=("quick_order_tool",),
+    )
+
+    assert finalized is None
+
+
+def test_direct_fast_path_gate_treats_empty_allowed_tools_as_no_tools_allowed() -> None:
+    frame = build_discovery_intent_frame("승용차용 타이어가 뭐야?")
+    tool_plan = plan_discovery_tools(frame)
+    assert frame.sub_intent == "product_attribute_explanation"
+    assert tool_plan.allowed_tools == ()
+
+    contract = build_turn_contract(
+        user_text="승용차용 타이어가 뭐야?",
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=decide_discovery_response(frame),
+    )
+
+    allowed, reason = _direct_code_fast_path_contract_gate(
+        turn_contract=contract,
+        intent=contract.intent,
+        template="quickReply",
+        source="code_product_attribute_resolver",
+        required_tools=("search_product_tool",),
+    )
+
+    assert allowed is False
+    assert reason == "tool_not_allowed:search_product_tool"
+
+    violations = response_contract_violations(
+        template="quickReply",
+        assistant_response_source="code_product_attribute_resolver",
+        response_shape_key="product_attribute_summary",
+        called_tools=["search_product_tool"],
+        source_domain="discovery",
+        contract=contract,
+    )
+
+    assert {
+        "type": "unexpected_tool_for_contract",
+        "called_tools": ["search_product_tool"],
+        "allowed_tools": [],
+        "severity": "warning",
+    } in violations
+
+
+def test_finalize_direct_code_event_blocks_order_emit_under_support_contract() -> None:
+    contract = TurnContract(
+        domain="support",
+        intent="warranty_claim",
+        allowed_tools=("search_faq_hybrid_tool",),
+        forbidden_tools=("get_orders_of_user_tool", "quick_order_tool"),
+        response_decision={"template": "quickReply", "metadata": {"response_shape_key": "warranty_claim"}},
+    )
+    event = {"type": "data", "template": "quickReply", "data": {"metadata": {}}}
+
+    finalized = _finalize_direct_code_event(
+        event,
+        turn_contract=contract,
+        intent="order_history_reorder",
+        source="code_order_history_reorder",
+        required_tools=("get_orders_of_user_tool",),
+    )
+
+    assert finalized is None
+
+
+def test_finalize_direct_code_event_blocks_product_emit_under_support_contract() -> None:
+    contract = TurnContract(
+        domain="support",
+        intent="warranty_claim",
+        allowed_tools=("search_faq_hybrid_tool",),
+        forbidden_tools=("search_product_tool", "get_products_recommendations_tool"),
+        response_decision={"template": "quickReply", "metadata": {"response_shape_key": "warranty_claim"}},
+    )
+    event = {"type": "data", "template": "product", "data": {"metadata": {}}}
+
+    finalized = _finalize_direct_code_event(
+        event,
+        turn_contract=contract,
+        intent="product_search",
+        source="code_bare_product_search",
+        required_tools=("search_product_tool",),
+    )
+
+    assert finalized is None
+
+
+def test_finalize_direct_code_event_records_product_direct_metadata() -> None:
+    contract = TurnContract(
+        domain="discovery",
+        intent="product_search",
+        allowed_tools=("search_product_tool",),
+        response_decision={"template": "quickReply", "metadata": {"response_shape_key": "product_search_summary"}},
+    )
+    event = {"type": "data", "template": "quickReply", "data": {"metadata": {}}}
+
+    finalized = _finalize_direct_code_event(
+        event,
+        turn_contract=contract,
+        intent="product_search",
+        source="code_bare_product_search",
+        required_tools=("search_product_tool",),
+        allowed_intents=("product_search_summary",),
+    )
+
+    assert finalized is not None
+    assert finalized["contract_intent"] == "product_search"
+    assert finalized["direct_source"] == "code_bare_product_search"
+    assert finalized["emitted_template"] == "quickReply"
+    assert finalized["required_tools"] == ["search_product_tool"]
+    assert finalized["data"]["metadata"]["contract_gate_result"] == "allowed"
+
+
+def test_finalize_coerced_template_event_records_allowed_transform_metadata() -> None:
+    contract = TurnContract(
+        domain="discovery",
+        intent="product_search",
+        response_decision={"template": "quickReply", "metadata": {"response_shape_key": "product_search_summary"}},
+    )
+    original = {"type": "data", "template": "product", "data": {"metadata": {}}}
+    coerced = {"type": "data", "template": "quickReply", "data": {"metadata": {}}}
+
+    finalized, allowed = _finalize_coerced_template_event(
+        coerced,
+        original_event=original,
+        turn_contract=contract,
+        source="code_product_size_list",
+    )
+
+    assert allowed is True
+    assert finalized is coerced
+    assert finalized["contract_gate_result"] == "allowed"
+    assert finalized["contract_gate_reason"] == "contract_matched:code_product_size_list"
+    assert finalized["transform_source"] == "code_product_size_list"
+    assert finalized["emitted_template"] == "quickReply"
+    assert finalized["data"]["metadata"]["contract_gate_result"] == "allowed"
+    assert finalized["data"]["metadata"]["transform_source"] == "code_product_size_list"
+
+
+def test_finalize_coerced_template_event_keeps_original_when_template_forbidden() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="quick_order_execute",
+        allowed_tools=("quick_order_tool",),
+        response_decision={
+            "template": "quickReply",
+            "metadata": {"response_shape_key": "quick_order_execute"},
+            "forbidden_behaviors": ("order_complete_on_tool_error",),
+        },
+    )
+    original = {"type": "data", "template": "quickReply", "data": {"metadata": {}}}
+    coerced = {"type": "data", "template": "orderComplete", "data": {"metadata": {}}}
+
+    finalized, allowed = _finalize_coerced_template_event(
+        coerced,
+        original_event=original,
+        turn_contract=contract,
+        source="code_mapper_order_complete",
+    )
+
+    assert allowed is False
+    assert finalized is original
+    assert finalized["contract_gate_result"] == "blocked"
+    assert finalized["contract_gate_reason"] == "template_forbidden:orderComplete"
+    assert finalized["blocked_template"] == "orderComplete"
+    assert finalized["emitted_template"] == "quickReply"
+    assert finalized["data"]["metadata"]["blocked_template"] == "orderComplete"
+
+
+def test_vehicle_auto_continuation_tools_are_blocked_under_support_contract() -> None:
+    contract = TurnContract(
+        domain="support",
+        intent="maintenance_tip",
+        allowed_tools=("search_faq_hybrid_tool",),
+        forbidden_tools=(
+            "search_product_tool",
+            "get_products_recommendations_tool",
+            "transaction_store_preview_tool",
+        ),
+        response_decision={"template": "quickReply", "metadata": {"response_shape_key": "support_policy_answer"}},
+    )
+
+    recommendation_allowed, recommendation_reason = _direct_code_fast_path_contract_gate(
+        turn_contract=contract,
+        intent="product_recommendation",
+        template="product",
+        source="code_vehicle_auto_select",
+        required_tools=("get_products_recommendations_tool",),
+        allowed_intents=("vehicle_resolved_recommendation",),
+    )
+    purchase_allowed, purchase_reason = _direct_code_fast_path_contract_gate(
+        turn_contract=contract,
+        intent="quick_order_reservation",
+        template="datepick",
+        source="code_vehicle_purchase_continuation",
+        required_tools=("search_product_tool", "transaction_store_preview_tool"),
+    )
+
+    assert recommendation_allowed is False
+    assert recommendation_reason == "intent_mismatch:maintenance_tip"
+    assert purchase_allowed is False
+    assert purchase_reason == "intent_mismatch:maintenance_tip"
+
+
 def test_store_service_availability_is_support_advisory_not_store_schedule() -> None:
     user_text = "모란점 윈터타이어 보관서비스 가능해?"
     frame = build_transaction_intent_frame(user_text, known_slots={})
@@ -17150,29 +17502,39 @@ def test_store_visit_timing_advisory_does_not_expand_to_datepick(user_text: str)
     event = _store_visit_advisory_event(user_text, store_name=frame.known_slots.get("store_name"))
 
     assert StreamingMultiAgentCoordinator._force_keyword_routing(user_text) is None
-    assert frame.intent == "store_visit_advisory"
-    assert frame.sub_intent == "store_visit_timing"
-    assert tool_plan.allowed_tools == ()
+    if "문 열어" in user_text:
+        assert frame.intent == "store_holiday_lookup"
+        assert frame.sub_intent == "store_holiday"
+        assert tool_plan.allowed_tools == ("get_store_list_tool", "get_store_detail_tool")
+        assert response_decision.metadata["response_shape_key"] == "store_holiday_lookup"
+        assert "datepick_for_store_holiday" in response_decision.forbidden_behaviors
+    else:
+        assert frame.intent == "store_visit_advisory"
+        assert frame.sub_intent == "store_visit_timing"
+        assert tool_plan.allowed_tools == ()
+        assert response_decision.metadata["response_shape_key"] == "store_visit_advisory"
+        assert "datepick_for_store_visit_advisory" in response_decision.forbidden_behaviors
+        assert event["template"] == "quickReply"
+        assert "실시간 혼잡도" in event["data"]["assistantResponse"]
     assert "get_store_schedule_tool" in tool_plan.forbidden_tools
     assert response_decision.template == TemplateName.QUICK_REPLY
-    assert response_decision.metadata["response_shape_key"] == "store_visit_advisory"
-    assert "datepick_for_store_visit_advisory" in response_decision.forbidden_behaviors
     assert contract.blocking_required_slots == ()
     assert not should_guard_required_slots(contract)
-    assert event["template"] == "quickReply"
-    assert "실시간 혼잡도" in event["data"]["assistantResponse"]
 
     violations = response_contract_violations(
         template="datepick",
         assistant_response_text="예약 가능한 시간을 선택해 주세요.",
         assistant_response_source="transaction_agent",
-        response_shape_key="store_visit_advisory",
+        response_shape_key=str(response_decision.metadata["response_shape_key"]),
         called_tools=["get_store_schedule_tool"],
         source_domain="transaction",
         contract=contract,
     )
     violation_types = {violation["type"] for violation in violations}
-    assert "forbidden_template" in violation_types
+    if frame.intent == "store_holiday_lookup":
+        assert "forbidden_tool_for_contract" in violation_types
+    else:
+        assert "forbidden_template" in violation_types
 
 
 @pytest.mark.parametrize(
@@ -17296,6 +17658,61 @@ def test_quick_order_execute_promotes_ready_preorder_confirmation(user_text: str
     assert contract.intent == "quick_order_execute"
     assert contract.blocking_required_slots == ()
     assert not should_guard_required_slots(contract)
+
+
+def test_quick_order_execute_direct_fast_path_is_blocked_by_support_contract() -> None:
+    contract = TurnContract(
+        domain="support",
+        intent="warranty_claim",
+        allowed_tools=("search_faq_hybrid_tool",),
+        forbidden_tools=("quick_order_tool", "transaction_store_preview_tool", "get_store_schedule_tool"),
+        response_decision={"template": "quickReply", "metadata": {"response_shape_key": "warranty_claim"}},
+    )
+
+    allowed, reason = _direct_code_fast_path_contract_gate(
+        turn_contract=contract,
+        intent="quick_order_execute",
+        template="orderComplete",
+        source="code_quick_order_execute_success",
+        required_tools=("quick_order_tool",),
+    )
+
+    assert allowed is False
+    assert reason == "intent_mismatch:warranty_claim"
+
+
+def test_quick_order_execute_success_gate_checks_order_complete_template() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="quick_order_execute",
+        allowed_tools=("quick_order_tool",),
+        forbidden_tools=(),
+        response_decision={
+            "template": "quickReply",
+            "metadata": {"response_shape_key": "quick_order_execute"},
+            "forbidden_behaviors": ("order_complete_on_tool_error",),
+        },
+    )
+
+    quick_reply_allowed, quick_reply_reason = _direct_code_fast_path_contract_gate(
+        turn_contract=contract,
+        intent="quick_order_execute",
+        template="quickReply",
+        source="code_quick_order_execute_failure",
+        required_tools=("quick_order_tool",),
+    )
+    order_complete_allowed, order_complete_reason = _direct_code_fast_path_contract_gate(
+        turn_contract=contract,
+        intent="quick_order_execute",
+        template="orderComplete",
+        source="code_quick_order_execute_success",
+        required_tools=("quick_order_tool",),
+    )
+
+    assert quick_reply_allowed is True
+    assert quick_reply_reason == "contract_matched:code_quick_order_execute_failure"
+    assert order_complete_allowed is False
+    assert order_complete_reason == "template_forbidden:orderComplete"
 
 
 def test_preorder_slot_recovery_uses_ready_preorder_payload_as_execute_source() -> None:
@@ -18025,6 +18442,40 @@ def test_inventory_only_stock_path_allows_logistics_notice_without_datepick_or_p
     assert response_decision.template == TemplateName.QUICK_REPLY
     assert "datepick_for_pure_inventory_flow" in response_decision.forbidden_behaviors
     assert "preorder_for_pure_inventory_flow" in response_decision.forbidden_behaviors
+
+
+def test_pure_inventory_quantity_followup_contract_preserves_inventory_only_tools() -> None:
+    slots = {
+        "goods_no": "G000000317729",
+        "tire_size": "235/35R20",
+        "ord_qty": 4,
+        "shop_id": "S100",
+        "shop_name": "판교점",
+        "pending_intent": "stock",
+        "goal_type": "store_with_stock",
+        "stock_check_mode": "inventory_only",
+    }
+
+    direct_frame = build_transaction_intent_frame("4개", known_slots=slots)
+    assert direct_frame.known_slots["stock_check_mode"] == "preview"
+
+    contract = _build_pure_inventory_stock_contract("4개", slots)
+    assert contract is not None
+    assert contract.intent == "stock_store_search"
+    assert contract.known_slots["stock_check_mode"] == "inventory_only"
+    assert "get_store_inventory_tool" in contract.allowed_tools
+    assert "get_logistics_inventory_tool" in contract.allowed_tools
+
+    allowed, reason = _direct_code_fast_path_contract_gate(
+        turn_contract=contract,
+        intent="stock_store_search",
+        template="quickReply",
+        source="code_pure_inventory_stock_resolver",
+        required_tools=("get_store_inventory_tool", "get_logistics_inventory_tool"),
+    )
+
+    assert allowed is True
+    assert reason == "contract_matched:code_pure_inventory_stock_resolver"
 
 
 def test_pure_inventory_stock_event_mentions_logistics_date_without_emitting_datepick() -> None:

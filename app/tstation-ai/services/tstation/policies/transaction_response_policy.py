@@ -84,6 +84,12 @@ def decide_transaction_response(
         return _decide_maintenance_history_lookup(slots=slots)
     if intent == "maintenance_history_access_policy":
         return _decide_maintenance_history_access_policy()
+    if intent == "order_history_reorder":
+        return _decide_order_history_reorder()
+    if intent == "plain_store_info_lookup":
+        return _decide_plain_store_info_lookup()
+    if intent == "store_holiday_lookup":
+        return _decide_store_holiday_lookup()
     if intent == "price_or_benefit_alert_request":
         return _decide_price_or_benefit_alert_request(slots=slots)
     if intent == "inventory_availability":
@@ -382,6 +388,57 @@ def _decide_maintenance_history_lookup(*, slots: dict[str, Any]) -> ResponseDeci
             "사용자가 특정 항목을 언급했으면 tool 결과에서 해당 항목을 우선 필터링하고, 결과 응답에는 정비이력보기 CTA를 포함한다."
         ),
         metadata={"requested_service_item": requested_item} if requested_item else None,
+    )
+
+
+def _decide_order_history_reorder() -> ResponseDecision:
+    return _decision(
+        response_shape_key="order_history_reorder",
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        forbidden_behaviors=(
+            "quick_order_without_current_confirmation",
+            "product_search_for_owned_order_reorder",
+            "arbitrary_order_selection",
+        ),
+        assistant_guidance=(
+            "이전 주문 기반 재구매는 현재 턴의 owned order history 조회다. "
+            "get_orders_of_user_tool 결과에서 매칭된 이전 타이어만 요약하고, 바로 주문 완료/예약으로 진행하지 않는다."
+        ),
+    )
+
+
+def _decide_plain_store_info_lookup() -> ResponseDecision:
+    return _decision(
+        response_shape_key="plain_store_info_lookup",
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        forbidden_behaviors=(
+            "datepick_for_plain_store_info",
+            "booking_cta_for_plain_store_info",
+            "store_detail_without_store_tool",
+        ),
+        assistant_guidance=(
+            "특정 매장의 전화/주소/상세/사진 문의는 매장 정보 조회다. "
+            "get_store_list_tool/get_store_detail_tool 결과 범위에서만 안내하고 예약/재고/주문 CTA로 확장하지 않는다."
+        ),
+    )
+
+
+def _decide_store_holiday_lookup() -> ResponseDecision:
+    return _decision(
+        response_shape_key="store_holiday_lookup",
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        forbidden_behaviors=(
+            "datepick_for_store_holiday",
+            "booking_cta_for_store_holiday",
+            "assert_open_without_holiday_source",
+        ),
+        assistant_guidance=(
+            "특정 매장의 휴무/영업일 문의는 예약 가능 시간 조회가 아니라 매장 상세의 휴무 정보 확인이다. "
+            "get_store_list_tool/get_store_detail_tool 결과로 확인되는 휴무만 안내하고 운영 여부를 임의 단정하지 않는다."
+        ),
     )
 
 
