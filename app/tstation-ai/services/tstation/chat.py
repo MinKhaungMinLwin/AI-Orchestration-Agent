@@ -138,6 +138,7 @@ from services.tstation.policies.ui_action_policy import (
     classify_direct_cta_action,
     confirmed_product_slot_values_for_purchase_cta,
     confirmed_product_slot_values_from_event,
+    datepick_slot_values_from_data,
     goods_no_from_template_event,
     preorder_slot_values_from_data,
     merged_quickreply_cta_context,
@@ -19975,71 +19976,10 @@ class TStationChatServiceV2:
         *,
         user_text: str | None = None,
     ) -> dict[str, Any] | None:
-        """Extract durable order slots from a rendered datepick template payload.
-
-        Datepick cards carry the selected shop in metadata. The user's next
-        click may only say "주문 진행" / "주문 정보 확인", so preserve the
-        shop identity independently from the free-form text.
-        """
-        if not isinstance(template_data, dict):
-            return None
-        if template_data.get("template") == "datepick" and isinstance(template_data.get("data"), dict):
-            template_data = template_data["data"]
-
-        metadata = template_data.get("metadata")
-        if not isinstance(metadata, dict):
-            return None
-
-        slot_values: dict[str, Any] = {}
-        canonical_values = canonical_context_from_template_boundary(metadata)
-        shop_id = str(canonical_values.get("shop_id") or "").strip()
-        if shop_id:
-            slot_values["shop_id"] = shop_id
-        shop_name = str(canonical_values.get("shop_name") or "").strip()
-        if shop_name:
-            slot_values["shop_name"] = shop_name
-        goods_no = str(canonical_values.get("goods_no") or "").strip()
-        if goods_no:
-            slot_values["goods_no"] = goods_no
-        product_name = str(canonical_values.get("product_name") or "").strip()
-        if product_name:
-            slot_values["tire_model"] = product_name
-        tire_size = normalize_tire_size(canonical_values.get("tire_size") or "")
-        if tire_size:
-            slot_values["tire_size"] = tire_size
-        raw_qty = canonical_values.get("ord_qty")
-        if raw_qty is not None:
-            try:
-                qty = int(raw_qty)
-                if qty > 0:
-                    slot_values["ord_qty"] = qty
-            except (TypeError, ValueError):
-                pass
-        raw_amount = metadata.get("paymentAmount") or metadata.get("payment_amount")
-        if raw_amount is not None:
-            try:
-                amount = int(raw_amount)
-                if amount > 0:
-                    slot_values["payment_amount"] = amount
-            except (TypeError, ValueError):
-                pass
-
-        text = str(user_text or "").strip()
-        rsv_hour = _reservation_hour_from_text(text)
-        rsv_hour = rsv_hour or str(canonical_values.get("rsv_hour") or "").strip()
-        if rsv_hour:
-            slot_values["rsv_hour"] = rsv_hour
-
-        requested_cal_day = _datepick_requested_cal_day_from_text(
-            text,
+        return datepick_slot_values_from_data(
             template_data,
-            allow_selected_fallback=bool(text),
+            user_text=user_text,
         )
-        requested_cal_day = requested_cal_day or str(canonical_values.get("requested_cal_day") or "").strip()
-        if requested_cal_day:
-            slot_values["requested_cal_day"] = requested_cal_day
-
-        return slot_values or None
 
     @staticmethod
     def _resolve_tire_size_from_history_template(user_text: str, template_data: dict | None) -> str | None:

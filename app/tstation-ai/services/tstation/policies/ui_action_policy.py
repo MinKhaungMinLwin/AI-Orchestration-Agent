@@ -1882,6 +1882,103 @@ def preorder_slot_values_from_data(template_data: Mapping[str, Any] | None) -> d
     return slot_values or None
 
 
+def _datepick_requested_cal_day_from_text(
+    user_text: str,
+    datepick_data: Mapping[str, Any],
+    *,
+    allow_selected_fallback: bool = False,
+) -> str | None:
+    direct = _cal_day_from_korean_date_text(user_text)
+    if direct:
+        return direct
+
+    dates = datepick_data.get("dates")
+    if not isinstance(dates, list) or not dates:
+        return None
+    for date_item in dates:
+        if not isinstance(date_item, Mapping):
+            continue
+        label = str(date_item.get("date") or "")
+        cal_day = _cal_day_from_korean_date_text(label)
+        if cal_day and label and label in user_text:
+            return cal_day
+
+    if not allow_selected_fallback:
+        return None
+    selected_idx = datepick_data.get("selectedDate")
+    if isinstance(selected_idx, int) and 0 <= selected_idx < len(dates):
+        selected = dates[selected_idx]
+        if isinstance(selected, Mapping):
+            return _cal_day_from_korean_date_text(str(selected.get("date") or ""))
+    return None
+
+
+def datepick_slot_values_from_data(
+    template_data: Mapping[str, Any] | None,
+    *,
+    user_text: str | None = None,
+) -> dict[str, Any] | None:
+    if not isinstance(template_data, Mapping):
+        return None
+    if template_data.get("template") == "datepick" and isinstance(template_data.get("data"), Mapping):
+        template_data = template_data["data"]
+
+    metadata = template_data.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return None
+
+    slot_values: dict[str, Any] = {}
+    canonical_values = canonical_context_from_template_boundary(metadata)
+    shop_id = str(canonical_values.get("shop_id") or "").strip()
+    if shop_id:
+        slot_values["shop_id"] = shop_id
+    shop_name = str(canonical_values.get("shop_name") or "").strip()
+    if shop_name:
+        slot_values["shop_name"] = shop_name
+    goods_no = str(canonical_values.get("goods_no") or "").strip()
+    if goods_no:
+        slot_values["goods_no"] = goods_no
+    product_name = str(canonical_values.get("product_name") or "").strip()
+    if product_name:
+        slot_values["tire_model"] = product_name
+    tire_size = normalize_tire_size(canonical_values.get("tire_size") or "")
+    if tire_size:
+        slot_values["tire_size"] = tire_size
+    raw_qty = canonical_values.get("ord_qty")
+    if raw_qty is not None:
+        try:
+            qty = int(raw_qty)
+            if qty > 0:
+                slot_values["ord_qty"] = qty
+        except (TypeError, ValueError):
+            pass
+    raw_amount = metadata.get("paymentAmount") or metadata.get("payment_amount")
+    if raw_amount is not None:
+        try:
+            amount = int(raw_amount)
+            if amount > 0:
+                slot_values["payment_amount"] = amount
+        except (TypeError, ValueError):
+            pass
+
+    text = str(user_text or "").strip()
+    rsv_hour = _reservation_hour_from_text(text)
+    rsv_hour = rsv_hour or str(canonical_values.get("rsv_hour") or "").strip()
+    if rsv_hour:
+        slot_values["rsv_hour"] = rsv_hour
+
+    requested_cal_day = _datepick_requested_cal_day_from_text(
+        text,
+        template_data,
+        allow_selected_fallback=bool(text),
+    )
+    requested_cal_day = requested_cal_day or str(canonical_values.get("requested_cal_day") or "").strip()
+    if requested_cal_day:
+        slot_values["requested_cal_day"] = requested_cal_day
+
+    return slot_values or None
+
+
 def goods_no_from_template_event(event: Mapping[str, Any] | None) -> str:
     if not isinstance(event, Mapping):
         return ""

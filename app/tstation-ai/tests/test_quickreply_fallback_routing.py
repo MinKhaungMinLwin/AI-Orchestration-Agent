@@ -393,6 +393,7 @@ from services.tstation.policies.ui_action_policy import (
     classify_direct_cta_action,
     confirmed_product_slot_values_for_purchase_cta,
     confirmed_product_slot_values_from_event,
+    datepick_slot_values_from_data,
     is_manual_tire_size_input_selection,
     is_logistics_earliest_install_date_followup,
     is_staggered_selected_tire_size_context,
@@ -10112,7 +10113,7 @@ def test_datepick_metadata_recovers_order_store_slots() -> None:
         },
     }
 
-    values = TStationChatServiceV2._datepick_slot_values_from_data(datepick)
+    values = datepick_slot_values_from_data(datepick)
 
     assert values == {
         "shop_id": "F00405",
@@ -10139,7 +10140,7 @@ def test_datepick_selection_recovers_reservation_date_and_hour() -> None:
         "metadata": {"shopId": "F00405", "shopName": "티스테이션 경포점"},
     }
 
-    values = TStationChatServiceV2._datepick_slot_values_from_data(
+    values = datepick_slot_values_from_data(
         datepick,
         user_text="2026년 6월 24일 (수)\n13:00",
     )
@@ -10150,7 +10151,7 @@ def test_datepick_selection_recovers_reservation_date_and_hour() -> None:
 
 
 def test_datepick_metadata_recovery_uses_template_boundary_alias_normalization() -> None:
-    values = TStationChatServiceV2._datepick_slot_values_from_data({
+    values = datepick_slot_values_from_data({
         "metadata": {
             "storeId": "F00405",
             "storeName": "티스테이션 경포점",
@@ -10189,7 +10190,7 @@ def test_datepick_template_recovery_candidate_uses_recent_assistant_template_mar
     ]
 
     template = _datepick_template_recovery_candidate_from_messages(messages)
-    values = TStationChatServiceV2._datepick_slot_values_from_data(template)
+    values = datepick_slot_values_from_data(template)
 
     assert template is not None
     assert values is not None
