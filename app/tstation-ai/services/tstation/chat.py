@@ -119,6 +119,7 @@ from services.tstation.policies.ui_action_policy import (
     build_other_store_preview_metadata,
     build_cta_preview_template_context,
     cta_preview_input_from_slots,
+    cta_missing_slot_event,
     build_quickreply_cta_clarification_event,
     chip_context_dict,
     chip_value,
@@ -5663,37 +5664,6 @@ def _is_current_location_store_search_confirmation(user_text: str, latest_quickr
     assistant_text = str(latest_quickreply_tmpl.get("assistantResponse") or "")
     return bool(_CURRENT_LOCATION_STORE_SEARCH_PROMPT_RE.search(assistant_text))
 
-
-def _cta_missing_slot_event(missing_slot: str) -> dict:
-    if missing_slot == "location":
-        response = "확인할 지역명이나 매장명을 입력해 주세요. 이전 상품·수량·날짜 조건을 유지해서 다시 확인할게요."
-        chips = [
-            {"label": "서울", "domain": "TRANSACTION", "actionId": "change_region", "intentKey": "today_install"},
-            {"label": "강남", "domain": "TRANSACTION", "actionId": "change_region", "intentKey": "today_install"},
-            {"label": "송파", "domain": "TRANSACTION", "actionId": "change_region", "intentKey": "today_install"},
-        ]
-    elif missing_slot == "quantity":
-        response = "확인할 수량을 알려주세요."
-        chips = [
-            {"label": "1개", "domain": "TRANSACTION"},
-            {"label": "2개", "domain": "TRANSACTION"},
-            {"label": "3개", "domain": "TRANSACTION"},
-            {"label": "4개", "domain": "TRANSACTION"},
-        ]
-    else:
-        response = "상품 정보를 먼저 확인해야 다음 단계로 진행할 수 있어요."
-        chips = [{"label": "조건 다시 입력", "domain": "TRANSACTION"}]
-    return {
-        "type": "data",
-        "template": "quickReply",
-        "source_domain": "transaction",
-        "assistant_response_source": "code_cta_action_guard",
-        "data": {
-            "assistantResponse": response,
-            "quickReplies": chips,
-            "predictedDomains": ["TRANSACTION"],
-        },
-    }
 
 def _sanitize_transaction_cta_contracts(event_data: dict[str, Any], *, source_domain: str) -> bool:
     if source_domain != MultiAgentDomain.Domain.TRANSACTION.value:
@@ -22478,7 +22448,7 @@ class TStationChatServiceV2:
                     other_store_search=True,
                 )
                 if missing_slot is not None:
-                    missing_event = _cta_missing_slot_event(missing_slot)
+                    missing_event = cta_missing_slot_event(missing_slot)
                     guard_text = str((missing_event.get("data") or {}).get("assistantResponse") or "")
                     if request.stream:
                         return StreamingResponse(
@@ -22600,7 +22570,7 @@ class TStationChatServiceV2:
                     cta_context=enriched_cta_context,
                 )
                 if missing_slot is not None:
-                    missing_event = _cta_missing_slot_event(missing_slot)
+                    missing_event = cta_missing_slot_event(missing_slot)
                     guard_text = str((missing_event.get("data") or {}).get("assistantResponse") or "")
                     if request.stream:
                         return StreamingResponse(
@@ -22719,7 +22689,7 @@ class TStationChatServiceV2:
                 )
                 preview_input, missing_slot = cta_preview_input_from_slots(merged_slots)
                 if missing_slot is not None:
-                    missing_event = _cta_missing_slot_event(missing_slot)
+                    missing_event = cta_missing_slot_event(missing_slot)
                     guard_text = str((missing_event.get("data") or {}).get("assistantResponse") or "")
                     if request.stream:
                         return StreamingResponse(
@@ -22793,7 +22763,7 @@ class TStationChatServiceV2:
                     "요청하신 조건으로 장착 가능 여부를 확인했어요.",
                 )
                 if mapped_event is None:
-                    mapped_event = _cta_missing_slot_event("location")
+                    mapped_event = cta_missing_slot_event("location")
                 mapped_event["source_domain"] = MultiAgentDomain.Domain.TRANSACTION.value
                 mapped_event["assistant_response_source"] = "code_cta_action_preview"
                 await chat_history_svc.save_slots_async(request.session_id, merged_slots, user_id=request.user_id)

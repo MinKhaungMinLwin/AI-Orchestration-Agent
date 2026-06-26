@@ -315,6 +315,38 @@ def cta_preview_input_from_slots(
     return preview_input, None
 
 
+def cta_missing_slot_event(missing_slot: str) -> dict[str, Any]:
+    if missing_slot == "location":
+        response = "확인할 지역명이나 매장명을 입력해 주세요. 이전 상품·수량·날짜 조건을 유지해서 다시 확인할게요."
+        chips = [
+            {"label": "서울", "domain": "TRANSACTION", "actionId": "change_region", "intentKey": "today_install"},
+            {"label": "강남", "domain": "TRANSACTION", "actionId": "change_region", "intentKey": "today_install"},
+            {"label": "송파", "domain": "TRANSACTION", "actionId": "change_region", "intentKey": "today_install"},
+        ]
+    elif missing_slot == "quantity":
+        response = "확인할 수량을 알려주세요."
+        chips = [
+            {"label": "1개", "domain": "TRANSACTION"},
+            {"label": "2개", "domain": "TRANSACTION"},
+            {"label": "3개", "domain": "TRANSACTION"},
+            {"label": "4개", "domain": "TRANSACTION"},
+        ]
+    else:
+        response = "상품 정보를 먼저 확인해야 다음 단계로 진행할 수 있어요."
+        chips = [{"label": "조건 다시 입력", "domain": "TRANSACTION"}]
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "transaction",
+        "assistant_response_source": "code_cta_action_guard",
+        "data": {
+            "assistantResponse": response,
+            "quickReplies": chips,
+            "predictedDomains": ["TRANSACTION"],
+        },
+    }
+
+
 def _normalize_vehicle_contract_intent(intent: str | None) -> str:
     normalized = str(intent or "").strip()
     if normalized == "vehicle_information":

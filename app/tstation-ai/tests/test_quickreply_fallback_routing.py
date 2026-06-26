@@ -394,6 +394,7 @@ from services.tstation.policies.ui_action_policy import (
     build_other_store_stock_unavailable_event,
     build_logistics_earliest_install_fallback_event,
     build_quickreply_cta_clarification_event,
+    cta_missing_slot_event,
     classify_direct_cta_action,
     is_logistics_earliest_install_date_followup,
     merged_quickreply_cta_context,
@@ -865,6 +866,15 @@ def test_build_cta_preview_template_context_includes_excluded_ids_and_action_mod
     assert context["goal_type"] == "store_with_stock"
     assert context["excluded_ids"] == {"F00721"}
     assert context["action_mode"] == "stock_check"
+
+
+def test_cta_missing_slot_event_returns_location_guidance_chips() -> None:
+    event = cta_missing_slot_event("location")
+
+    assert event["assistant_response_source"] == "code_cta_action_guard"
+    assert event["template"] == "quickReply"
+    assert "지역명이나 매장명" in event["data"]["assistantResponse"]
+    assert _labels(event["data"]["quickReplies"])[:3] == ["서울", "강남", "송파"]
 
 
 def test_cta_preview_input_uses_canonical_store_context_from_template_aliases() -> None:
