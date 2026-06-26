@@ -147,6 +147,22 @@ def store_context_from_mapping(data: Mapping[str, Any] | None) -> dict[str, Any]
     return result
 
 
+def store_name_exact_match_row(store_name: str, stores: list[dict[str, Any]]) -> dict[str, Any] | None:
+    target = re.sub(r"\s+", "", str(store_name or "")).lower()
+    target = re.sub(r"^(?:티스테이션|더타이어샵|t'?station)", "", target, flags=re.IGNORECASE)
+    matches: list[dict[str, Any]] = []
+    for store in stores:
+        if not isinstance(store, dict):
+            continue
+        shop_name = re.sub(r"\s+", "", str(store.get("shop_nm") or store.get("shop_name") or "")).lower()
+        shop_name = re.sub(r"^(?:티스테이션|더타이어샵|t'?station)", "", shop_name, flags=re.IGNORECASE)
+        if shop_name == target:
+            matches.append(store)
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
 def _normalize_vehicle_contract_intent(intent: str | None) -> str:
     normalized = str(intent or "").strip()
     if normalized == "vehicle_information":

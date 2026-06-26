@@ -126,6 +126,7 @@ from services.tstation.policies.ui_action_policy import (
     quickreply_cta_context_from_template,
     resolve_ui_action_context,
     store_context_from_mapping,
+    store_name_exact_match_row,
     ui_action_trace_metadata,
     validate_ui_actions_for_contract,
 )
@@ -16556,23 +16557,6 @@ def _is_resolved_size_store_availability_transaction_continuation(
         or re.search(r"stock|inventory|재고|장착|store", execution_plan, re.IGNORECASE)
     )
 
-
-def _store_name_exact_match_row(store_name: str, stores: list[dict[str, Any]]) -> dict[str, Any] | None:
-    target = re.sub(r"\s+", "", str(store_name or "")).lower()
-    target = re.sub(r"^(?:티스테이션|더타이어샵|t'?station)", "", target, flags=re.IGNORECASE)
-    matches: list[dict[str, Any]] = []
-    for store in stores:
-        if not isinstance(store, dict):
-            continue
-        shop_name = re.sub(r"\s+", "", str(store.get("shop_nm") or store.get("shop_name") or "")).lower()
-        shop_name = re.sub(r"^(?:티스테이션|더타이어샵|t'?station)", "", shop_name, flags=re.IGNORECASE)
-        if shop_name == target:
-            matches.append(store)
-    if len(matches) == 1:
-        return matches[0]
-    return None
-
-
 def _store_row_value(store: Mapping[str, Any], *keys: str) -> str:
     for key in keys:
         value = store.get(key)
@@ -22551,7 +22535,7 @@ class TStationChatServiceV2:
                             list_data = _unwrap_tool_data(list_result if isinstance(list_result, dict) else {})
                             stores = list_data.get("stores") if isinstance(list_data, dict) else None
                             if isinstance(stores, list):
-                                matched_store = _store_name_exact_match_row(
+                                matched_store = store_name_exact_match_row(
                                     str(store_context["shop_name"]),
                                     [store for store in stores if isinstance(store, dict)],
                                 )
@@ -25848,7 +25832,7 @@ class TStationChatServiceV2:
             stores = list_data.get("stores") if isinstance(list_data, dict) else None
             if not isinstance(stores, list):
                 stores = []
-            matched_store = _store_name_exact_match_row(store_name, [store for store in stores if isinstance(store, dict)])
+            matched_store = store_name_exact_match_row(store_name, [store for store in stores if isinstance(store, dict)])
             if matched_store is None:
                 event = {
                     "type": "data",
@@ -27143,7 +27127,7 @@ class TStationChatServiceV2:
                     _finalize_store_attribute_event(event),
                 ) if event is not None else None
             store_rows = _dedupe_store_rows([store for store in stores if isinstance(store, dict)])
-            store_row = _store_name_exact_match_row(store_name, store_rows)
+            store_row = store_name_exact_match_row(store_name, store_rows)
             if store_row is None:
                 logger.info("[STORE_ATTRIBUTE] ambiguous store match; skip arbitrary detail store=%r rows=%d", store_name, len(store_rows))
                 event = _pending_store_attribute_selection_event(
@@ -31209,7 +31193,7 @@ class TStationChatServiceV2:
                 stores = list_data.get("stores") if isinstance(list_data, dict) else None
                 if not isinstance(stores, list):
                     stores = []
-                matched_store = _store_name_exact_match_row(store_name, [store for store in stores if isinstance(store, dict)])
+                matched_store = store_name_exact_match_row(store_name, [store for store in stores if isinstance(store, dict)])
                 if matched_store is None:
                     mapped_event = try_build_template(
                         tool_entries,

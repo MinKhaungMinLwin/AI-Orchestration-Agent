@@ -397,6 +397,7 @@ from services.tstation.policies.ui_action_policy import (
     preview_action_mode_for_slots,
     resolve_ui_action_context,
     store_context_from_mapping,
+    store_name_exact_match_row,
     validate_ui_actions_for_contract,
 )
 from services.tstation.policies.pickup_service_gate import deterministic_pickup_service_gate_decision
@@ -800,6 +801,19 @@ def test_store_context_mapping_exposes_canonical_keys_for_internal_decisions() -
     assert context["shopName"] == "티스테이션 판교점"
     assert context["xpos"] == 127.1122
     assert context["ypos"] == 37.3928
+
+
+def test_store_name_exact_match_row_ignores_brand_prefix_and_spacing() -> None:
+    matched = store_name_exact_match_row(
+        "티스테이션 판교점",
+        [
+            {"shop_nm": "판교점", "shop_id": "F00721"},
+            {"shop_nm": "분당점", "shop_id": "F00722"},
+        ],
+    )
+
+    assert matched is not None
+    assert matched["shop_id"] == "F00721"
 
 
 def test_cta_preview_input_uses_canonical_store_context_from_template_aliases() -> None:
