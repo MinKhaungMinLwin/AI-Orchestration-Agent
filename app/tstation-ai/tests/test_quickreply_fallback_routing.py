@@ -67,6 +67,7 @@ from services.tstation.chat import (
     _build_direct_faq_policy_tool_payload,
     _build_general_cancel_fee_policy_event,
     _build_general_card_cancel_timing_policy_event,
+    _build_support_faq_policy_event,
     _build_signup_coupon_guidance_event,
     _build_signup_first_purchase_benefit_event,
     _build_owned_coupon_best_discount_event,
@@ -20597,6 +20598,34 @@ def test_general_card_cancel_timing_policy_event_prefers_faq_source_summary_when
     assert event["data"]["metadata"]["faqSourceSummaryUsed"] is True
 
 
+def test_support_faq_policy_event_prefers_faq_source_summary_when_available() -> None:
+    tool_result = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "question": "제조일자 기준",
+                    "answer": "타이어 제조일자는 DOT로 확인할 수 있으며, 일반적으로 6~12개월 이내 제품은 정상 신품 범주로 안내합니다.",
+                    "source": "FAQ Hybrid",
+                }
+            ]
+        },
+    }
+
+    event = _build_support_faq_policy_event(
+        "tire_manufacture_date_policy",
+        "DOT 기준으로 오래된 거 아냐?",
+        tool_result=tool_result,
+    )
+
+    assert event is not None
+    response = str(event["data"]["assistantResponse"])
+    assert "확인된 FAQ 기준으로는" in response
+    assert "6~12개월 이내 제품은 정상 신품 범주" in response
+    assert event["source_domain"] == "support"
+    assert event["data"]["metadata"]["faqSourceSummaryUsed"] is True
+
+
 def test_direct_faq_policy_tool_payload_builds_transaction_policy_event() -> None:
     contract = build_turn_contract(
         user_text="예약 취소하면 비용 발생해?",
@@ -20632,6 +20661,38 @@ def test_direct_faq_policy_tool_payload_builds_transaction_policy_event() -> Non
     assert tool_result["status"] == "success"
     assert event["source_domain"] == "transaction"
     assert event["data"]["metadata"]["responseShapeKey"] == "general_cancel_fee_policy_summary"
+
+
+def test_direct_faq_policy_tool_payload_builds_support_policy_event() -> None:
+    contract = build_turn_contract(
+        user_text="DOT 기준으로 오래된 거 아냐?",
+        intent_frame=IntentFrame(domain=PolicyDomain.SUPPORT, intent="tire_manufacture_date_policy"),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            metadata={"response_shape_key": "tire_manufacture_date_policy"},
+        ),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:tire_manufacture_date_policy"],
+            policy_intent="tire_manufacture_date_policy",
+        ),
+    )
+    payload = _build_direct_faq_policy_tool_payload(
+        turn_contract=contract,
+        user_query="DOT 기준으로 오래된 거 아냐?",
+        raw_tool_result={
+            "status": "success",
+            "data": {"items": [{"answer": "DOT로 제조일자를 확인할 수 있고 일반적으로 6~12개월 이내 제품은 정상 신품으로 안내합니다."}]},
+        },
+    )
+
+    assert payload is not None
+    tool_input, tool_result, event = payload
+    assert tool_input == {"query": "DOT 기준으로 오래된 거 아냐?"}
+    assert tool_result["status"] == "success"
+    assert event["source_domain"] == "support"
+    assert event["data"]["metadata"]["responseShapeKey"] == "tire_manufacture_date_policy"
 
 
 def test_base_agent_contract_sensitive_tool_guard_replaces_forbidden_lookup_with_faq(

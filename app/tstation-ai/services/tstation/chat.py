@@ -6932,6 +6932,58 @@ def _build_general_card_cancel_timing_policy_event(user_query: str, *, tool_resu
     }
 
 
+def _build_support_faq_policy_event(
+    intent: str,
+    user_query: str,
+    *,
+    tool_result: dict | None = None,
+) -> dict | None:
+    if intent not in _DIRECT_SUPPORT_FAQ_POLICY_INTENTS:
+        return None
+    source_summary = _faq_policy_source_summary_text(tool_result)
+    followup_by_intent = {
+        "tire_manufacture_date_policy": "제조일자만으로 교환이나 환불을 단정하지 말고, 필요하면 제품 상태와 구매 이력도 함께 확인해 주세요.",
+        "tire_quality_warranty_policy": "품질보증이나 무상 교체 여부는 실제 점검 결과와 보증 조건을 함께 확인해야 해요.",
+        "assurance_service_policy": "보상이나 가입 가능 여부는 상세 조건과 적용 시점에 따라 달라질 수 있어요.",
+        "reservation_policy_guidance": "실제 예약 변경이나 취소 전에는 예약 상세 안내도 함께 확인해 주세요.",
+        "installation_work_policy": "추가 작업비나 현장 결제 여부는 정책과 작업 범위에 따라 달라질 수 있어요.",
+        "promotion_gift_policy": "사은품 유지 여부나 차감 조건은 실제 주문 구성과 이벤트 기준을 함께 확인해야 해요.",
+        "tire_condition_photo_policy": "사진만으로 주행 안전이나 교체 필요 여부를 단정하기는 어려워요. 필요하면 매장 점검도 함께 받아 주세요.",
+    }
+    fallback_by_intent = {
+        "tire_manufacture_date_policy": "타이어 제조일자와 신품 기준은 정책에 따라 안내되고, 제조일자만으로 불량이나 교환 가능 여부를 바로 단정할 수는 없어요.",
+        "tire_quality_warranty_policy": "품질보증과 무상 A/S 가능 여부는 보증 기준과 실제 점검 결과에 따라 달라질 수 있어요.",
+        "assurance_service_policy": "안심서비스와 디지털워런티 조건은 가입 시점과 적용 범위에 따라 달라질 수 있어요.",
+        "reservation_policy_guidance": "예약 가능 기간, 취소, 변경 조건은 정책 기준으로 먼저 확인해 보는 것이 안전해요.",
+        "installation_work_policy": "공임, 장착비, 추가 작업 비용은 작업 범위와 정책에 따라 달라질 수 있어요.",
+        "promotion_gift_policy": "사은품과 프로모션 유지 조건은 주문 변경 여부와 이벤트 기준에 따라 달라질 수 있어요.",
+        "tire_condition_photo_policy": "타이어 상태는 사진만으로 안전 여부를 확정하기 어렵고, 점검 기준을 함께 확인해야 해요.",
+    }
+    if source_summary:
+        assistant_response = f"확인된 FAQ 기준으로는 {source_summary}\n\n{followup_by_intent[intent]}"
+    else:
+        assistant_response = fallback_by_intent[intent]
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.SUPPORT.value,
+        "assistant_response_source": f"code_{intent}",
+        "data": {
+            "assistantResponse": assistant_response,
+            "quickReplies": [
+                {"label": "1:1 문의하기", "domain": "SUPPORT"},
+                {"label": "처음으로", "domain": "LEADING"},
+            ],
+            "predictedDomains": ["SUPPORT"],
+            "metadata": {
+                "responseShapeKey": intent,
+                "faqSourceSummaryUsed": bool(source_summary),
+                "userText": user_query,
+            },
+        },
+    }
+
+
 def _build_direct_faq_policy_event(
     *,
     turn_contract: TurnContract,
@@ -6944,7 +6996,9 @@ def _build_direct_faq_policy_event(
     elif intent == "general_card_cancel_timing_policy":
         event = _build_general_card_cancel_timing_policy_event(user_query, tool_result=tool_result)
     else:
-        return None
+        event = _build_support_faq_policy_event(intent, user_query, tool_result=tool_result)
+        if event is None:
+            return None
     event["source_domain"] = str(turn_contract.domain or event.get("source_domain") or "").lower()
     return event
 
@@ -15965,6 +16019,7 @@ _FAQ_POLICY_FALLBACK_INTENTS = frozenset({
     "promotion_gift_policy",
     "tire_condition_photo_policy",
 })
+_DIRECT_SUPPORT_FAQ_POLICY_INTENTS = _FAQ_POLICY_FALLBACK_INTENTS
 _FAQ_POLICY_FALLBACK_SOURCE_TOOLS = frozenset({"get_faq_tool", "search_faq_rag_tool", "search_faq_hybrid_tool"})
 
 
@@ -25435,7 +25490,9 @@ class TStationChatServiceV2:
             event_data = signup_benefit_event.get("data") if isinstance(signup_benefit_event.get("data"), dict) else {}
             return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
 
-        if turn_contract and turn_contract.intent in {"general_cancel_fee_policy", "general_card_cancel_timing_policy"}:
+        if turn_contract and turn_contract.intent in (
+            {"general_cancel_fee_policy", "general_card_cancel_timing_policy"} | _DIRECT_SUPPORT_FAQ_POLICY_INTENTS
+        ):
             from services.tstation.agents.e_support_agent.tools import search_faq_hybrid_tool as _search_faq_hybrid_tool
 
             tool_input = {"query": last_user_text}
