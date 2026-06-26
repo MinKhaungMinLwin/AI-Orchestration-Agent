@@ -3357,8 +3357,11 @@ def _map_list_car(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             })
             metadata.append({
                 "carNo": _get_str(row, "car_no"),
+                "car_no": _get_str(row, "car_no"),
                 "carLncCd": _get_str(row, "car_lnc_cd"),
+                "car_lnc_cd": _get_str(row, "car_lnc_cd"),
                 "mbrCarRegSeq": _get_str(row, "mbr_car_reg_seq", "mbr_car_unif_no") or None,
+                "mbr_car_reg_seq": _get_str(row, "mbr_car_reg_seq", "mbr_car_unif_no") or None,
                 "carMaker": _get_str(row, "car_maker") or None,
                 "carModelDet": _get_str(row, "car_model_det") or None,
                 "carName": _get_str(row, "car_nm") or None,
@@ -3372,11 +3375,17 @@ def _map_list_car(tool_data_list: list[dict], assistant_text: str) -> dict | Non
                 # later picks a car. Without this, filter_for_context drops
                 # car_no as PII and the resolver has no source to match on.
                 "tireSize": _get_str(row, "tire_size_fr") or None,
+                "tire_size_fr": _get_str(row, "tire_size_fr") or None,
                 "tireSizeRe": _get_str(row, "tire_size_re") or None,
+                "tire_size_re": _get_str(row, "tire_size_re") or None,
                 "vehicleType": _get_str(row, "car_type").lower() or None,
+                "vehicle_type": _get_str(row, "car_type").lower() or None,
                 "ctaAction": "select_vehicle_candidate",
+                "cta_action": "select_vehicle_candidate",
                 "sourceIntent": source_intent,
+                "source_intent": source_intent,
                 "expectedContractIntent": expected_contract_intent,
+                "expected_contract_intent": expected_contract_intent,
             })
     if not items:
         return None

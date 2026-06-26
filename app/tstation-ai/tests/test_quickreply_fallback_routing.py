@@ -234,6 +234,7 @@ from services.tstation.chat import (
     _store_attribute_inquiry_event,
     _store_service_availability_event,
     _build_vehicle_information_event,
+    _build_vehicle_size_guidance_event,
     _build_complaint_scope_guard_event,
     _is_private_contact_request,
     _privacy_contact_request_event,
@@ -11123,6 +11124,27 @@ def test_chip_vehicle_selection_rewrites_tire_size_lookup_followup_text() -> Non
     )
 
     assert rewritten == "61거1836 차량 타이어 사이즈 알려줘"
+
+
+def test_vehicle_size_guidance_event_carries_selected_vehicle_cta_metadata() -> None:
+    event = _build_vehicle_size_guidance_event(
+        {
+            "car": {"licensePlate": "14다5499", "info": "쏘렌토"},
+            "meta": {"carNo": "14다5499", "tireSize": "225/55R18", "tireSizeRe": "225/55R18"},
+            "selection_context": {"source_intent": "vehicle_tire_size_lookup"},
+        }
+    )
+
+    assert event is not None
+    assert "14다5499" in event["data"]["assistantResponse"]
+    assert "225/55R18" in event["data"]["assistantResponse"]
+    primary_chip = event["data"]["quickReplies"][0]
+    assert primary_chip["label"] == "이 사이즈로 타이어 보기"
+    assert primary_chip["cta_action"] == "search_products_by_selected_vehicle_size"
+    assert primary_chip["source_intent"] == "vehicle_tire_size_lookup"
+    assert primary_chip["expected_contract_intent"] == "product_recommendation"
+    assert primary_chip["metadata"]["car_no"] == "14다5499"
+    assert primary_chip["metadata"]["tire_size"] == "225/55R18"
 
 
 def test_history_vehicle_selection_does_not_match_product_name_substring_to_vehicle() -> None:

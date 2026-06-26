@@ -6245,6 +6245,15 @@ def _vehicle_candidate_tokens(car: dict[str, Any], meta: dict[str, Any]) -> set[
     return tokens
 
 
+def _selection_context_from_vehicle_meta(meta: dict[str, Any]) -> dict[str, str]:
+    return {
+        "source_intent": str(meta.get("source_intent") or meta.get("sourceIntent") or "").strip(),
+        "expected_contract_intent": str(
+            meta.get("expected_contract_intent") or meta.get("expectedContractIntent") or ""
+        ).strip(),
+    }
+
+
 def _select_vehicle_from_listcar_event(user_text: str, event_data: dict[str, Any]) -> dict | None:
     """Return the uniquely identified vehicle from a listCar payload, if any."""
     if not _VEHICLE_BOUND_REQUEST_RE.search(user_text or ""):
@@ -6263,7 +6272,7 @@ def _select_vehicle_from_listcar_event(user_text: str, event_data: dict[str, Any
                 continue
             plate = _normalize_vehicle_match_text(meta.get("carNo") or car.get("licensePlate"))
             if plate == target_plate:
-                plate_matches.append({"car": car, "meta": meta})
+                plate_matches.append({"car": car, "meta": meta, "selection_context": _selection_context_from_vehicle_meta(meta)})
         return plate_matches[0] if len(plate_matches) == 1 else None
 
     tokens = _vehicle_match_tokens(user_text)
@@ -6281,7 +6290,13 @@ def _select_vehicle_from_listcar_event(user_text: str, event_data: dict[str, Any
         strong_matches = sum(
             1 for token in matched_tokens if any(ch.isdigit() for ch in token) or len(token) >= 3
         )
-        scored.append((len(matched_tokens), strong_matches, {"car": car, "meta": meta}))
+        scored.append(
+            (
+                len(matched_tokens),
+                strong_matches,
+                {"car": car, "meta": meta, "selection_context": _selection_context_from_vehicle_meta(meta)},
+            )
+        )
     if not scored:
         return None
     max_score = max(score for score, _, _ in scored)
@@ -6901,6 +6916,7 @@ def _build_order_document_guidance_event(user_query: str) -> dict:
 def _build_vehicle_size_guidance_event(selected_vehicle: dict) -> dict | None:
     selected_car = selected_vehicle.get("car") or {}
     selected_meta = selected_vehicle.get("meta") or {}
+    selection_context = selected_vehicle.get("selection_context") or {}
     front_size = str(selected_meta.get("tireSize") or "").strip()
     rear_size = str(selected_meta.get("tireSizeRe") or "").strip()
     car_info = str(selected_car.get("info") or selected_car.get("description") or "선택하신 차량").strip()
@@ -6908,17 +6924,36 @@ def _build_vehicle_size_guidance_event(selected_vehicle: dict) -> dict | None:
     if not front_size and not rear_size:
         return None
 
+    selected_size = ""
     if front_size and rear_size and front_size != rear_size:
         response = (
-            f"**{car_info} ({car_no})**의 순정 규격은 전륜 **{front_size}**, 후륜 **{rear_size}**예요.\n\n"
+            f"**{car_no}** 차량의 타이어 사이즈는 전륜 **{front_size}**, 후륜 **{rear_size}**입니다.\n\n"
             "앞뒤 규격이 다르면 한 가지 사이즈만 보면 안 되고, 전륜용 2개와 후륜용 2개를 각각 맞는 규격으로 확인해야 해요."
         )
     else:
-        size = front_size or rear_size
+        selected_size = front_size or rear_size
         response = (
-            f"**{car_info} ({car_no})**의 전/후륜 규격은 동일하게 **{size}**예요.\n\n"
-            "같은 규격으로 상품을 확인하시면 됩니다."
+            f"**{car_no}** 차량의 타이어 사이즈는 **{selected_size}**입니다.\n\n"
+            f"{car_info} 차량은 전/후륜 동일 규격이에요."
         )
+
+    quick_replies = [
+        {
+            "label": "이 사이즈로 타이어 보기",
+            "domain": "DISCOVERY",
+            "cta_action": "search_products_by_selected_vehicle_size",
+            "source_intent": str(selection_context.get("source_intent") or "vehicle_tire_size_lookup"),
+            "expected_contract_intent": "product_recommendation",
+            "metadata": {
+                "car_no": car_no,
+                "tire_size": selected_size or front_size or rear_size,
+                "tire_size_fr": front_size or None,
+                "tire_size_re": rear_size or None,
+            },
+        },
+        {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
+        {"label": "다른 차량 확인", "domain": "DISCOVERY"},
+    ]
 
     return {
         "type": "data",
@@ -6927,12 +6962,13 @@ def _build_vehicle_size_guidance_event(selected_vehicle: dict) -> dict | None:
         "assistant_response_source": "code_vehicle_auto_select",
         "data": {
             "assistantResponse": response,
-            "quickReplies": [
-                {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
-                {"label": "맞는 타이어 추천", "domain": "DISCOVERY"},
-                {"label": "다른 차량 확인", "domain": "DISCOVERY"},
-            ],
+            "quickReplies": quick_replies,
             "predictedDomains": ["DISCOVERY"],
+            "metadata": {
+                "responseShapeKey": "vehicle_information",
+                "selectedCarNo": car_no,
+                "selectedTireSize": selected_size or front_size or rear_size,
+            },
         },
     }
 
@@ -20901,6 +20937,14 @@ class TStationChatServiceV2:
         if not user_text or not isinstance(template_data, dict):
             return None
 
+        def _selection_context_from_meta(meta: dict[str, Any]) -> dict[str, str]:
+            return {
+                "source_intent": str(meta.get("source_intent") or meta.get("sourceIntent") or "").strip(),
+                "expected_contract_intent": str(
+                    meta.get("expected_contract_intent") or meta.get("expectedContractIntent") or ""
+                ).strip(),
+            }
+
         latest_listcar: dict | None = None
         if template_data.get("template") == "listCar" and isinstance(template_data.get("data"), dict):
             latest_listcar = template_data.get("data")
@@ -20921,7 +20965,7 @@ class TStationChatServiceV2:
                 car = cars[idx]
                 meta = metadata[idx]
                 if isinstance(car, dict) and isinstance(meta, dict):
-                    return {"car": car, "meta": meta}
+                    return {"car": car, "meta": meta, "selection_context": _selection_context_from_meta(meta)}
 
         tokens = _vehicle_match_tokens(str(user_text or ""))
         if tokens:
@@ -20946,7 +20990,7 @@ class TStationChatServiceV2:
                     return None
                 if len(top) == 1:
                     _, _, car, meta = top[0]
-                    return {"car": car, "meta": meta}
+                    return {"car": car, "meta": meta, "selection_context": _selection_context_from_meta(meta)}
 
         return _select_vehicle_from_listcar_event(user_text, latest_listcar)
 
@@ -20973,9 +21017,23 @@ class TStationChatServiceV2:
 
         raw_meta = chip.get("metadata")
         selection_meta = dict(raw_meta) if isinstance(raw_meta, dict) else {}
-        car_no = _normalize_vehicle_match_text(selection_meta.get("car_no") or selection_meta.get("carNo"))
-        mbr_car_reg_seq = str(selection_meta.get("mbr_car_reg_seq") or selection_meta.get("mbrCarRegSeq") or "").strip()
-        car_lnc_cd = str(selection_meta.get("car_lnc_cd") or selection_meta.get("carLncCd") or "").strip()
+        car_no = _normalize_vehicle_match_text(
+            chip.get("car_no") or chip.get("carNo") or selection_meta.get("car_no") or selection_meta.get("carNo")
+        )
+        mbr_car_reg_seq = str(
+            chip.get("mbr_car_reg_seq")
+            or chip.get("mbrCarRegSeq")
+            or selection_meta.get("mbr_car_reg_seq")
+            or selection_meta.get("mbrCarRegSeq")
+            or ""
+        ).strip()
+        car_lnc_cd = str(
+            chip.get("car_lnc_cd")
+            or chip.get("carLncCd")
+            or selection_meta.get("car_lnc_cd")
+            or selection_meta.get("carLncCd")
+            or ""
+        ).strip()
         if not any((car_no, mbr_car_reg_seq, car_lnc_cd)):
             return None
 
@@ -21029,6 +21087,15 @@ class TStationChatServiceV2:
         if source_intent == "vehicle_tire_size_lookup":
             return f"{car_no} 차량 타이어 사이즈 알려줘"
         return last_user_text
+
+    @staticmethod
+    def _is_vehicle_tire_size_lookup_selection(selected_vehicle: dict[str, Any] | None) -> bool:
+        if selected_vehicle is None:
+            return False
+        selection_context = selected_vehicle.get("selection_context") or {}
+        source_intent = str(selection_context.get("source_intent") or "").strip()
+        expected_contract_intent = str(selection_context.get("expected_contract_intent") or "").strip()
+        return source_intent == "vehicle_tire_size_lookup" or expected_contract_intent == "vehicle_information"
 
     @staticmethod
     def _resolve_recent_product_search_keyword(prev_tool_data: list[dict]) -> str | None:
@@ -21756,6 +21823,16 @@ class TStationChatServiceV2:
         latest_datepick_tmpl: dict | None = None
         latest_quickreply_tmpl: dict | None = None
         latest_preorder_tmpl: dict | None = None
+        vehicle_selection_trace_metadata: dict[str, Any] = {
+            "vehicle_selection_detected": False,
+            "selection_source": None,
+            "selected_car_no": None,
+            "selected_tire_size": None,
+            "previous_car_no": None,
+            "previous_tire_size": None,
+            "slots_rewritten": False,
+            "contract_intent_before_router": None,
+        }
         for msg in reversed(request.messages):
             if msg.get("role") == "user":
                 last_user_text = msg.get("content", "")
@@ -21819,6 +21896,19 @@ class TStationChatServiceV2:
             logger.debug(f"[CHAT_V2] Messages: {json.dumps(messages, ensure_ascii=False, separators=(',', ':'))}")
 
             if chip_selected_vehicle is not None:
+                vehicle_selection_trace_metadata.update({
+                    "vehicle_selection_detected": True,
+                    "selection_source": "chip_context",
+                    "selected_car_no": str((chip_selected_vehicle.get("meta") or {}).get("carNo") or ""),
+                    "selected_tire_size": str(
+                        normalize_tire_size(str((chip_selected_vehicle.get("meta") or {}).get("tireSize") or ""))
+                        or normalize_tire_size(str((chip_selected_vehicle.get("meta") or {}).get("tireSizeRe") or ""))
+                        or ""
+                    ),
+                    "previous_car_no": str(getattr(existing_slots, "car_no", None) or ""),
+                    "previous_tire_size": str(getattr(existing_slots, "tire_size", None) or ""),
+                    "contract_intent_before_router": "vehicle_candidate_selected",
+                })
                 rewritten_vehicle_text = TStationChatServiceV2._rewrite_vehicle_selection_user_text(
                     last_user_text,
                     chip_selected_vehicle,
@@ -21826,6 +21916,7 @@ class TStationChatServiceV2:
                 vehicle_slot_values = _vehicle_selection_slot_values(chip_selected_vehicle)
                 if vehicle_slot_values:
                     existing_slots = _apply_vehicle_selection_slot_values(existing_slots, vehicle_slot_values)
+                    vehicle_selection_trace_metadata["slots_rewritten"] = True
                     logger.info(
                         "[VEHICLE_SELECTION] applied chip-selected vehicle slots before routing: %s",
                         vehicle_slot_values,
@@ -23137,17 +23228,37 @@ class TStationChatServiceV2:
                 except Exception as e:
                     logger.warning(f"[SLOTS] history vehicle resolver failed: {e}")
             if history_selected_vehicle is not None:
+                if not vehicle_selection_trace_metadata.get("vehicle_selection_detected"):
+                    selected_meta = history_selected_vehicle.get("meta") or {}
+                    vehicle_selection_trace_metadata.update({
+                        "vehicle_selection_detected": True,
+                        "selection_source": "previous_listCar_candidate",
+                        "selected_car_no": str(selected_meta.get("carNo") or ""),
+                        "selected_tire_size": str(
+                            normalize_tire_size(str(selected_meta.get("tireSize") or ""))
+                            or normalize_tire_size(str(selected_meta.get("tireSizeRe") or ""))
+                            or ""
+                        ),
+                        "previous_car_no": str(getattr(merged_slots, "car_no", None) or ""),
+                        "previous_tire_size": str(getattr(merged_slots, "tire_size", None) or ""),
+                        "contract_intent_before_router": "vehicle_candidate_selected",
+                    })
                 previous_tire_size = merged_slots.tire_size
                 vehicle_slot_values = _vehicle_selection_slot_values(history_selected_vehicle)
                 if vehicle_slot_values:
                     merged_slots = _apply_vehicle_selection_slot_values(merged_slots, vehicle_slot_values)
+                    vehicle_selection_trace_metadata["slots_rewritten"] = True
                     selected_tire_size = vehicle_slot_values.get("tire_size")
                     if selected_tire_size and previous_tire_size != selected_tire_size:
                         tire_size_resolved_from_vehicle_selection = True
                 selected_meta = history_selected_vehicle.get("meta") or {}
                 front_size, rear_size = _normalize_vehicle_tire_size_pair(selected_meta)
                 is_staggered_vehicle = _has_staggered_vehicle_tire_sizes(front_size, rear_size)
-                if is_staggered_vehicle and _listcar_allows_staggered_tire_prompt(latest_listcar_tmpl):
+                if TStationChatServiceV2._is_vehicle_tire_size_lookup_selection(history_selected_vehicle):
+                    current_vehicle_selection_prompt_event.set(
+                        _build_vehicle_size_guidance_event(history_selected_vehicle)
+                    )
+                elif is_staggered_vehicle and _listcar_allows_staggered_tire_prompt(latest_listcar_tmpl):
                     current_vehicle_selection_prompt_event.set(
                         _build_staggered_vehicle_tire_selection_event(history_selected_vehicle)
                     )
@@ -25386,6 +25497,7 @@ class TStationChatServiceV2:
                     prev_tool_data=prev_tool_data,
                     intent_group=intent_group,
                     turn_contract=turn_contract,
+                    vehicle_selection_trace_metadata=vehicle_selection_trace_metadata,
                 ),
                 media_type="text/event-stream",
                 headers={
@@ -25423,6 +25535,7 @@ class TStationChatServiceV2:
                 prev_tool_data=prev_tool_data,
                 intent_group=intent_group,
                 turn_contract=turn_contract,
+                vehicle_selection_trace_metadata=vehicle_selection_trace_metadata,
             ):
                 if event_str.startswith("data: "):
                     json_str = event_str[6:].strip()
@@ -25878,6 +25991,7 @@ class TStationChatServiceV2:
         prev_tool_data: list[dict] | None = None,
         intent_group: str | None = None,
         turn_contract: TurnContract | None = None,
+        vehicle_selection_trace_metadata: dict[str, Any] | None = None,
     ):
         """Stream response from multi-agent coordinator with Strict QC Layer."""
         from config.env import settings as _s
@@ -25906,6 +26020,7 @@ class TStationChatServiceV2:
         original_message_events = []  # Hold message events to sync history
         called_tool_names: set[str] = set()
         tool_errors: list[dict] = []
+        vehicle_selection_trace_metadata = dict(vehicle_selection_trace_metadata or {})
         last_template: str | None = None
         last_template_source: str | None = None
         last_assistant_response_source: str | None = None
@@ -31587,17 +31702,31 @@ class TStationChatServiceV2:
 
         history_selected_vehicle_prompt_event = current_vehicle_selection_prompt_event.get()
         if history_selected_vehicle_prompt_event is not None:
+            prompt_event_data = history_selected_vehicle_prompt_event.get("data") or {}
+            prompt_event_metadata = (
+                prompt_event_data.get("metadata") if isinstance(prompt_event_data, dict) else {}
+            )
+            response_shape_key = (
+                str(prompt_event_metadata.get("responseShapeKey") or "")
+                if isinstance(prompt_event_metadata, dict)
+                else ""
+            )
+            prompt_intent = "product_recommendation"
+            allowed_prompt_intents = (
+                "vehicle_based_recommendation_refinement",
+                "vehicle_resolved_recommendation",
+                "catalog_recommendation",
+                "product_search_summary",
+            )
+            if response_shape_key == "vehicle_information":
+                prompt_intent = "product_description"
+                allowed_prompt_intents = ("vehicle_information",)
             history_selected_vehicle_prompt_event = _finalize_direct_code_event(
                 history_selected_vehicle_prompt_event,
                 turn_contract=turn_contract,
-                intent="product_recommendation",
+                intent=prompt_intent,
                 source="code_history_selected_vehicle_prompt",
-                allowed_intents=(
-                    "vehicle_based_recommendation_refinement",
-                    "vehicle_resolved_recommendation",
-                    "catalog_recommendation",
-                    "product_search_summary",
-                ),
+                allowed_intents=allowed_prompt_intents,
             )
             if history_selected_vehicle_prompt_event is None:
                 history_selected_vehicle_prompt_event = (
@@ -33940,6 +34069,7 @@ class TStationChatServiceV2:
                 "latency_agent_llm_generation_ms": round(_lat_agent_llm_generation_ms),
                 "latency_qc_ms": round(_lat_qc_ms),
             }
+            _trace_metadata.update(vehicle_selection_trace_metadata)
             _trace_metadata.update(cta_trace_metadata(buffered_data_events))
             _trace_output = _truncate(draft_response)
             _trace_input = _truncate(_last_user)
