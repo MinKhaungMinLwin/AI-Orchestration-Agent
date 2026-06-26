@@ -130,6 +130,8 @@ from services.tstation.policies.ui_action_policy import (
     build_pure_inventory_stock_cta_payload,
     build_preview_tool_mapped_event,
     build_store_availability_followup_preview_event,
+    build_store_availability_preview_result_events,
+    build_store_availability_preview_status_event,
     build_store_availability_quantity_prompt_event,
     has_staggered_vehicle_tire_sizes,
     is_manual_tire_size_input_selection,
@@ -6601,16 +6603,13 @@ def _build_support_faq_policy_event(
         ),
         "tire_condition_photo_policy": (
             "현재 챗봇에서는 사진이나 파일을 업로드해 확인받을 수 없어요.\n"
-            "사진만으로는 마모 상태, 교체 필요 여부, 주행 안전을 확정할 수 없어요.\n"
-            "가까운 티스테이션 매장이나 전문 점검으로 마모도와 손상 여부를 함께 확인해 주세요."
+            "사진만으로는 타이어 마모 상태, 교체 필요 여부, 주행 안전을 확정할 수 없어요. "
+            "사진이나 파일 첨부가 필요한 경우 1:1 문의를 통해 등록해 주세요.\n"
+            "실제 마모도, 균열, 편마모, 손상 여부는 마모도 측정 서비스 또는 가까운 티스테이션 매장 점검으로 확인해 주세요."
         ),
         # TODO(tire_condition_photo_policy, after CTA refactor):
-        # - Expand this invariant to include:
-        #   1) "사진/파일 첨부가 필요한 경우 1:1 문의를 통해 등록"
-        #   2) "마모도 측정 서비스" explicit guidance
-        # - Keep this policy guidance before any RAG/source summary.
         # - When CTA registry refactor lands, add 1:1 문의하기 / 마모도 측정 서비스 CTA
-        #   instead of overloading the body text further.
+        #   instead of relying on body text only.
     }
     followup_by_intent = {
         "tire_manufacture_date_policy": "제조일자만으로 교환이나 환불을 단정하지 말고, 필요하면 제품 상태와 구매 이력도 함께 확인해 주세요.",
@@ -6659,7 +6658,7 @@ def _build_support_faq_policy_event(
             if not compact_summary
             else f"{required_guidance_by_intent[intent]}\n\n{compact_summary}"
         )
-    elif source_summary:
+    elif source_summary and intent != "tire_condition_photo_policy":
         assistant_response = f"{source_summary}\n\n{followup_by_intent[intent]}"
     else:
         assistant_response = fallback_by_intent[intent]
@@ -23442,6 +23441,39 @@ class TStationChatServiceV2:
             event_data = order_document_event.get("data") if isinstance(order_document_event.get("data"), dict) else {}
             return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
 
+        if turn_contract and turn_contract.intent == "tire_condition_photo_policy":
+            photo_policy_event = _build_support_faq_policy_event(
+                "tire_condition_photo_policy",
+                last_user_text,
+                tool_result=None,
+            )
+            if photo_policy_event is None:
+                guard_event = build_response_policy_guard_event(turn_contract)
+                if request.stream:
+                    return StreamingResponse(
+                        TStationChatServiceV2._stream_policy_guard_response(guard_event),
+                        media_type="text/event-stream",
+                        headers={
+                            "Cache-Control": "no-cache",
+                            "Connection": "keep-alive",
+                            "X-Accel-Buffering": "no",
+                        },
+                    )
+                event_data = guard_event.get("data") if isinstance(guard_event.get("data"), dict) else {}
+                return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
+            if request.stream:
+                return StreamingResponse(
+                    TStationChatServiceV2._stream_policy_guard_response(photo_policy_event),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
+            event_data = photo_policy_event.get("data") if isinstance(photo_policy_event.get("data"), dict) else {}
+            return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
+
         if turn_contract and turn_contract.intent in (
             {"general_cancel_fee_policy", "general_card_cancel_timing_policy"} | _DIRECT_SUPPORT_FAQ_POLICY_INTENTS
         ):
@@ -27450,13 +27482,7 @@ class TStationChatServiceV2:
                         ord_qty = followup_action.get("ord_qty")
                         store_name = str(followup_action.get("store_name") or "").strip()
                         tire_size = str(followup_action.get("tire_size") or "").strip()
-                        emitted_events.append({
-                            "type": "status",
-                            "status": "tool_start",
-                            "tool": "transaction_store_preview_tool",
-                            "display_name": "장착 가능 일정 확인 중...",
-                            "source_domain": "transaction",
-                        })
+                        emitted_events.append(build_store_availability_preview_status_event())
                         try:
                             raw_preview = await asyncio.to_thread(
                                 _transaction_store_preview_tool.invoke,
@@ -27475,21 +27501,12 @@ class TStationChatServiceV2:
                                 "data": {},
                             }
                         _record_code_tool_result("transaction_store_preview_tool", preview_input, preview_result)
-                        emitted_events.append({
-                            "type": "agent_flow",
-                            "agent": "[Store/Stock AF]",
-                            "agent_class": "Transaction Agent",
-                            "status": preview_result.get("status", "success"),
-                            "source_domain": "transaction",
-                        })
-                        emitted_events.append({
-                            "type": "tool",
-                            "input": preview_input,
-                            "output": json.dumps(preview_result, ensure_ascii=False),
-                            "node": "tools",
-                            "tool": "transaction_store_preview_tool",
-                            "source_domain": "transaction",
-                        })
+                        emitted_events.extend(
+                            build_store_availability_preview_result_events(
+                                preview_input=preview_input,
+                                preview_result=preview_result,
+                            )
+                        )
                         mapped_event = build_store_availability_followup_preview_event(
                             search_input=tool_input,
                             search_result=search_result,

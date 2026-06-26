@@ -625,6 +625,40 @@ def build_store_availability_followup_preview_event(
     return mapped_event
 
 
+def build_store_availability_preview_status_event() -> dict[str, Any]:
+    return {
+        "type": "status",
+        "status": "tool_start",
+        "tool": "transaction_store_preview_tool",
+        "display_name": "장착 가능 일정 확인 중...",
+        "source_domain": "transaction",
+    }
+
+
+def build_store_availability_preview_result_events(
+    *,
+    preview_input: Mapping[str, Any],
+    preview_result: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "type": "agent_flow",
+            "agent": "[Store/Stock AF]",
+            "agent_class": "Transaction Agent",
+            "status": preview_result.get("status", "success"),
+            "source_domain": "transaction",
+        },
+        {
+            "type": "tool",
+            "input": dict(preview_input),
+            "output": json.dumps(dict(preview_result), ensure_ascii=False),
+            "node": "tools",
+            "tool": "transaction_store_preview_tool",
+            "source_domain": "transaction",
+        },
+    ]
+
+
 def build_cta_preview_contract_gate(
     *,
     user_text: str,

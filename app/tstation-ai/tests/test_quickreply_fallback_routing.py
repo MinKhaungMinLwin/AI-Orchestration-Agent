@@ -383,6 +383,8 @@ from services.tstation.policies.ui_action_policy import (
     build_manual_tire_size_input_event,
     build_preview_tool_mapped_event,
     build_store_availability_followup_preview_event,
+    build_store_availability_preview_result_events,
+    build_store_availability_preview_status_event,
     build_staggered_tire_quantity_limit_event,
     build_staggered_vehicle_tire_selection_event,
     build_oe_replacement_same_product_brand_prompt_event,
@@ -949,6 +951,28 @@ def test_build_store_availability_followup_preview_event_uses_fallback_and_sourc
     assert event["assistant_response_source"] == "code_store_availability_size_followup"
     assert event["source_domain"] == "transaction"
     assert event["template"] == "quickReply"
+
+
+def test_build_store_availability_preview_status_event_uses_transaction_preview_tool() -> None:
+    event = build_store_availability_preview_status_event()
+
+    assert event["type"] == "status"
+    assert event["tool"] == "transaction_store_preview_tool"
+    assert event["source_domain"] == "transaction"
+
+
+def test_build_store_availability_preview_result_events_emit_agent_flow_and_tool() -> None:
+    events = build_store_availability_preview_result_events(
+        preview_input={"goods_no": "G000000319593", "ord_qty": 4, "store_nm": "티스테이션 판교점"},
+        preview_result={"status": "success", "data": {"inventory": {"todayShopArray": []}}},
+    )
+
+    assert len(events) == 2
+    assert events[0]["type"] == "agent_flow"
+    assert events[0]["agent"] == "[Store/Stock AF]"
+    assert events[1]["type"] == "tool"
+    assert events[1]["tool"] == "transaction_store_preview_tool"
+    assert "\"status\": \"success\"" in events[1]["output"]
 
 
 def test_build_cta_preview_contract_gate_builds_resumed_stock_contract() -> None:
@@ -21890,8 +21914,10 @@ def test_support_faq_policy_event_for_tire_condition_photo_includes_upload_limit
     assert event is not None
     response = str(event["data"]["assistantResponse"])
     assert "현재 챗봇에서는 사진이나 파일을 업로드해 확인받을 수 없어요." in response
-    assert "사진만으로는 마모 상태, 교체 필요 여부, 주행 안전을 확정할 수 없어요." in response
-    assert "가까운 티스테이션 매장이나 전문 점검으로 마모도와 손상 여부를 함께 확인해 주세요." in response
+    assert "사진이나 파일 첨부가 필요한 경우 1:1 문의를 통해 등록해 주세요." in response
+    assert "사진만으로는 타이어 마모 상태, 교체 필요 여부, 주행 안전을 확정할 수 없어요." in response
+    assert "마모도 측정 서비스 또는 가까운 티스테이션 매장 점검으로 확인해 주세요." in response
+    assert "타이어 점검은 마모도와 손상 여부를 함께 확인하는 것이 좋습니다." not in response
     assert _labels(event["data"]["quickReplies"]) == ["가까운 매장 찾기", "1:1 문의하기", "처음으로"]
 
 
