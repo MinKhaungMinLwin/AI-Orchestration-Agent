@@ -237,6 +237,7 @@ from services.tstation.chat import (
     _build_complaint_scope_guard_event,
     _is_private_contact_request,
     _privacy_contact_request_event,
+    _build_faq_policy_source_grounded_fallback_event,
     _build_recommendation_contract_fallback_event,
     _annotate_direct_code_fast_path_event,
     _direct_code_fast_path_contract_gate,
@@ -16094,6 +16095,112 @@ def test_tire_manufacture_date_policy_contract_requires_faq_before_qna() -> None
     } in violations
 
 
+def test_tire_manufacture_date_policy_allows_source_backed_conditional_exchange_phrase() -> None:
+    contract = build_turn_contract(
+        user_text="제조일자가 6개월 전 거야. 새 걸로 바꿔줘",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:tire_manufacture_date_policy"],
+            policy_intent="tire_manufacture_date_policy",
+        ),
+    )
+    faq_source = {
+        "status": "success",
+        "data": {
+            "items": [{
+                "question": "타이어 제조일자가 6개월 전이면 교환 대상인가요?",
+                "answer": "제조일자 6~12개월 이내 제품은 정상 신품으로 안내하며, 교환 가능 여부는 점검 기준에 따라 확인합니다.",
+                "source": "FAQ Hybrid",
+            }]
+        },
+    }
+
+    violations = response_contract_violations(
+        template="quickReply",
+        called_tools=["search_faq_hybrid_tool"],
+        structured_sources=[("search_faq_hybrid_tool", faq_source)],
+        assistant_response_text=(
+            "FAQ 기준으로 제조일자 6~12개월 이내 제품은 정상 신품으로 안내돼요. "
+            "교환 가능 여부 확인은 점검 기준에 따라 달라질 수 있어요."
+        ),
+        contract=contract,
+    )
+
+    assert violations == []
+
+
+def test_tire_manufacture_date_policy_blocks_unconditional_exchange_claim_against_faq_source() -> None:
+    contract = build_turn_contract(
+        user_text="제조일자가 6개월 전 거야. 새 걸로 바꿔줘",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:tire_manufacture_date_policy"],
+            policy_intent="tire_manufacture_date_policy",
+        ),
+    )
+    faq_source = {
+        "status": "success",
+        "data": {
+            "items": [{
+                "question": "타이어 제조일자가 6개월 전이면 교환 대상인가요?",
+                "answer": "제조일자 6~12개월 이내 제품은 정상 신품으로 안내하며, 교환 가능 여부는 점검 기준에 따라 확인합니다.",
+                "source": "FAQ Hybrid",
+            }]
+        },
+    }
+
+    violations = response_contract_violations(
+        template="quickReply",
+        called_tools=["search_faq_hybrid_tool"],
+        structured_sources=[("search_faq_hybrid_tool", faq_source)],
+        assistant_response_text="제조일자가 6개월 전이면 무조건 교환/환불 가능합니다.",
+        contract=contract,
+    )
+
+    assert {
+        "type": "tire_manufacture_date_policy_assertion_not_supported_by_faq_source",
+        "assistant_response_text": "제조일자가 6개월 전이면 무조건 교환/환불 가능합니다.",
+        "severity": "error",
+    } in violations
+
+
+def test_faq_policy_contract_violation_prefers_source_grounded_fallback() -> None:
+    contract = build_turn_contract(
+        user_text="제조일자가 6개월 전 거야. 새 걸로 바꿔줘",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:tire_manufacture_date_policy"],
+            policy_intent="tire_manufacture_date_policy",
+        ),
+    )
+    faq_source = {
+        "status": "success",
+        "data": {
+            "items": [{
+                "question": "타이어 제조일자가 6개월 전이면 교환 대상인가요?",
+                "answer": "제조일자 6~12개월 이내 제품은 정상 신품으로 안내합니다.",
+                "source": "FAQ Hybrid",
+            }]
+        },
+    }
+    violations = [{
+        "type": "tire_manufacture_date_policy_assertion_not_supported_by_faq_source",
+        "severity": "error",
+    }]
+
+    event = _build_faq_policy_source_grounded_fallback_event(
+        violations=violations,
+        turn_contract=contract,
+        structured_sources=[("search_faq_hybrid_tool", faq_source)],
+    )
+
+    assert event is not None
+    assert event["assistant_response_source"] == "code_faq_source_grounded_contract_fallback"
+    assert event["source_domain"] == MultiAgentDomain.Domain.SUPPORT.value
+    assert "제조일자 6~12개월 이내 제품은 정상 신품" in event["data"]["assistantResponse"]
+    assert "contractViolationTypes" in event["data"]["metadata"]
+
+
 def test_reservation_policy_guidance_contract_blocks_owned_lookup_tools() -> None:
     contract = build_turn_contract(
         user_text="몇 주 뒤까지 예약 가능해? 당일 취소 위약금도 있어?",
@@ -16130,7 +16237,7 @@ def test_tire_condition_photo_policy_rejects_safety_assertion_after_faq() -> Non
         contract=contract,
     )
     assert {
-        "type": "tire_condition_photo_policy_asserted_without_verification",
+        "type": "tire_condition_photo_policy_safety_assertion_without_verification",
         "assistant_response_text": "사진상으로는 더 타도 돼 보여요.",
         "severity": "error",
     } in violations

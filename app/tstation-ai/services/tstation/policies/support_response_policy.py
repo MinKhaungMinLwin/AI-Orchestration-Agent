@@ -161,6 +161,15 @@ def decide_support_response(
             assistant_guidance="개인 연락처는 제공할 수 없으며 공식 고객센터 또는 1:1 문의 경로만 안내한다.",
         )
 
+    if slots.get("qna_required"):
+        return _decision(
+            response_shape_key="qna_required",
+            response_shape=ResponseShape.ACTION_CONFIRM,
+            template=TemplateName.QNA_COMPLETE,
+            forbidden_behaviors=("answer_without_required_evidence",),
+            assistant_guidance="정책/주문 근거 확인이 필요한 건은 요약 후 1:1 문의로 연결한다.",
+        )
+
     if intent == "human_escalation" or _EXPLICIT_ESCALATION_RE.search(text):
         return _decision(
             response_shape_key="human_escalation",
@@ -505,15 +514,6 @@ def decide_support_response(
             template=TemplateName.QNA_COMPLETE,
             forbidden_behaviors=("overpromise_live_agent", "hide_official_contact"),
             assistant_guidance="챗봇 처리 한계를 인정하고 1:1 문의 또는 공식 고객센터 번호 안내로 연결한다.",
-        )
-
-    if slots.get("qna_required"):
-        return _decision(
-            response_shape_key="qna_required",
-            response_shape=ResponseShape.ACTION_CONFIRM,
-            template=TemplateName.QNA_COMPLETE,
-            forbidden_behaviors=("answer_without_required_evidence",),
-            assistant_guidance="정책/주문 근거 확인이 필요한 건은 요약 후 1:1 문의로 연결한다.",
         )
 
     return _decision(

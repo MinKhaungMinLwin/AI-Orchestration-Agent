@@ -15749,6 +15749,111 @@ def _build_turn_contract_required_slot_guard_event(
     return build_required_slot_clarification_event(turn_contract)
 
 
+_FAQ_POLICY_FALLBACK_INTENTS = frozenset({
+    "tire_manufacture_date_policy",
+    "tire_quality_warranty_policy",
+    "assurance_service_policy",
+    "reservation_policy_guidance",
+    "installation_work_policy",
+    "promotion_gift_policy",
+    "tire_condition_photo_policy",
+})
+_FAQ_POLICY_FALLBACK_SOURCE_TOOLS = frozenset({"get_faq_tool", "search_faq_rag_tool", "search_faq_hybrid_tool"})
+
+
+def _walk_faq_policy_strings(obj: Any) -> list[str]:
+    values: list[str] = []
+    if isinstance(obj, str):
+        stripped = obj.strip()
+        if stripped:
+            values.append(stripped)
+    elif isinstance(obj, Mapping):
+        for value in obj.values():
+            values.extend(_walk_faq_policy_strings(value))
+    elif isinstance(obj, list | tuple):
+        for item in obj:
+            values.extend(_walk_faq_policy_strings(item))
+    return values
+
+
+def _first_faq_policy_answer(structured_sources: list[tuple[str, dict]]) -> str | None:
+    for tool_name, output in structured_sources:
+        if str(tool_name or "") not in _FAQ_POLICY_FALLBACK_SOURCE_TOOLS or not isinstance(output, Mapping):
+            continue
+        data = output.get("data", output)
+        candidates: list[Any] = []
+        if isinstance(data, Mapping):
+            for key in ("items", "faqs", "results"):
+                value = data.get(key)
+                if isinstance(value, list):
+                    candidates.extend(value)
+            if not candidates:
+                candidates.append(data)
+        elif isinstance(data, list):
+            candidates.extend(data)
+        for candidate in candidates:
+            if not isinstance(candidate, Mapping):
+                continue
+            answer = (
+                candidate.get("answer")
+                or candidate.get("pc_ans_cont")
+                or candidate.get("content")
+                or candidate.get("body")
+            )
+            if isinstance(answer, str) and answer.strip():
+                return answer.strip()
+        strings = _walk_faq_policy_strings(data)
+        if strings:
+            return max(strings, key=len).strip()
+    return None
+
+
+def _build_faq_policy_source_grounded_fallback_event(
+    *,
+    violations: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+    turn_contract: TurnContract | None,
+    structured_sources: list[tuple[str, dict]],
+) -> dict[str, Any] | None:
+    if turn_contract is None or str(turn_contract.intent or "") not in _FAQ_POLICY_FALLBACK_INTENTS:
+        return None
+    violation_types = {str(violation.get("type") or "") for violation in violations}
+    if not any(
+        violation_type.endswith("_assertion_not_supported_by_faq_source")
+        or violation_type.endswith("_safety_assertion_without_verification")
+        for violation_type in violation_types
+    ):
+        return None
+    source_answer = _first_faq_policy_answer(structured_sources)
+    if not source_answer:
+        return None
+    source_summary = re.sub(r"\s+", " ", source_answer).strip()
+    if len(source_summary) > 260:
+        source_summary = f"{source_summary[:257].rstrip()}..."
+    assistant_response = (
+        f"확인된 FAQ 기준으로는 {source_summary}\n\n"
+        "따라서 교환, 환불, 보상 가능 여부는 FAQ 기준과 실제 점검 결과에 따라 확인해야 해요."
+    )
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.SUPPORT.value,
+        "assistant_response_source": "code_faq_source_grounded_contract_fallback",
+        "data": {
+            "assistantResponse": assistant_response,
+            "quickReplies": [
+                {"label": "FAQ 다시 확인", "domain": "SUPPORT"},
+                {"label": "1:1 문의하기", "domain": "SUPPORT"},
+            ],
+            "predictedDomains": ["SUPPORT"],
+            "metadata": {
+                "response_shape_key": str(turn_contract.intent or ""),
+                "fallback_source": "faq_source",
+                "contractViolationTypes": sorted(violation_types),
+            },
+        },
+    }
+
+
 def _build_turn_contract_fallback_event(
     *,
     turn_contract: TurnContract | None,
@@ -33264,6 +33369,7 @@ class TStationChatServiceV2:
                         for item in mapper_tool_items
                         if isinstance(item, Mapping)
                     ],
+                    structured_sources=structured_sources,
                     source_domain=current_contract_source_domain,
                     contract=turn_contract,
                 )
@@ -33397,7 +33503,11 @@ class TStationChatServiceV2:
                                 }),
                             )
                             if hard_violations and turn_contract is not None and not _parallel_qc:
-                                fallback_event = _build_recommendation_contract_fallback_event(
+                                fallback_event = _build_faq_policy_source_grounded_fallback_event(
+                                    violations=hard_violations,
+                                    turn_contract=turn_contract,
+                                    structured_sources=structured_sources,
+                                ) or _build_recommendation_contract_fallback_event(
                                     hard_violations,
                                     turn_contract,
                                 ) or _build_turn_contract_fallback_event(

@@ -1457,6 +1457,7 @@ def response_contract_violations(
     response_shape_key: str | None = None,
     called_tools: list[str] | tuple[str, ...] | None = None,
     tool_inputs: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...] | None = None,
+    structured_sources: list[tuple[str, Mapping[str, Any]]] | tuple[tuple[str, Mapping[str, Any]], ...] | None = None,
     event_data: Mapping[str, Any] | None = None,
     source_domain: str | None = None,
     contract: TurnContract | None,
@@ -1657,6 +1658,7 @@ def response_contract_violations(
     faq_first_support_violation = _faq_first_support_policy_contract_violation(
         assistant_response_text=assistant_response_text,
         called_tools=called_tools,
+        structured_sources=structured_sources,
         contract=contract,
     )
     if faq_first_support_violation is not None:
@@ -2203,24 +2205,94 @@ _FAQ_FIRST_SUPPORT_POLICY_INTENTS = {
     "tire_condition_photo_policy",
 }
 
-_FAQ_FIRST_SUPPORT_POLICY_ASSERTION_RE = {
-    "tire_manufacture_date_policy": re.compile(r"(교환|환불|불량).{0,8}(확정|가능|됩니다)|새\s*걸로\s*바꿔", re.IGNORECASE),
-    "tire_quality_warranty_policy": re.compile(r"무상.{0,8}(확정|가능|됩니다)|무료\s*교체", re.IGNORECASE),
-    "assurance_service_policy": re.compile(r"보상.{0,8}(확정|가능|됩니다)|자동\s*가입", re.IGNORECASE),
+_FAQ_SOURCE_TOOLS = frozenset({"get_faq_tool", "search_faq_rag_tool", "search_faq_hybrid_tool"})
+_FAQ_FIRST_SUPPORT_POLICY_UNSUPPORTED_ASSERTION_RE = {
+    "tire_manufacture_date_policy": re.compile(
+        r"(무조건|항상|바로|즉시|확정|반드시).{0,18}(교환|환불|새\s*걸|불량)|"
+        r"(교환|환불).{0,8}(확정|됩니다)|"
+        r"새\s*걸로\s*바꿔\s*(?:드릴게요|드립니다|드려요|줄게요|줍니다)",
+        re.IGNORECASE,
+    ),
+    "tire_quality_warranty_policy": re.compile(
+        r"(무조건|항상|바로|즉시|확정|반드시).{0,18}(무상|무료|교체|A/S|AS)|"
+        r"무상.{0,8}(확정|됩니다)|무료\s*교체\s*(?:됩니다|해\s*드)",
+        re.IGNORECASE,
+    ),
+    "assurance_service_policy": re.compile(
+        r"(무조건|항상|바로|즉시|확정|반드시|자동).{0,18}(보상|가입)|보상.{0,8}(확정|됩니다)",
+        re.IGNORECASE,
+    ),
     "tire_condition_photo_policy": re.compile(r"(더\s*타도\s*돼|주행\s*가능|안전합니다)", re.IGNORECASE),
 }
+
+
+def _walk_string_values(obj: Any) -> list[str]:
+    values: list[str] = []
+    if isinstance(obj, str):
+        stripped = obj.strip()
+        if stripped:
+            values.append(stripped)
+    elif isinstance(obj, Mapping):
+        for value in obj.values():
+            values.extend(_walk_string_values(value))
+    elif isinstance(obj, list | tuple):
+        for item in obj:
+            values.extend(_walk_string_values(item))
+    return values
+
+
+def _faq_source_text(structured_sources: list[tuple[str, Mapping[str, Any]]] | tuple[tuple[str, Mapping[str, Any]], ...] | None) -> str:
+    snippets: list[str] = []
+    for tool_name, output in tuple(structured_sources or ()):
+        if str(tool_name or "") not in _FAQ_SOURCE_TOOLS or not isinstance(output, Mapping):
+            continue
+        snippets.extend(_walk_string_values(output))
+    return "\n".join(snippets)
+
+
+def _has_faq_source(
+    structured_sources: list[tuple[str, Mapping[str, Any]]] | tuple[tuple[str, Mapping[str, Any]], ...] | None,
+) -> bool:
+    return bool(_faq_source_text(structured_sources))
+
+
+def _faq_source_supports_assertion(intent: str, assistant_text: str, faq_text: str) -> bool:
+    """Allow conditional policy wording when the same policy topic exists in FAQ source.
+
+    This does not try to prove every Korean sentence. It only prevents broad keyword hard-blocking for
+    source-backed conditional language such as "가능 여부 확인" while keeping absolute benefit/safety claims blocked.
+    """
+    if not faq_text.strip():
+        return False
+    if intent == "tire_condition_photo_policy":
+        return False
+    absolute_re = _FAQ_FIRST_SUPPORT_POLICY_UNSUPPORTED_ASSERTION_RE.get(intent)
+    if absolute_re and absolute_re.search(assistant_text):
+        return False
+    topic_tokens = {
+        "tire_manufacture_date_policy": ("제조", "제조일", "신품", "유통", "숙성", "6개월", "12개월"),
+        "tire_quality_warranty_policy": ("품질", "보증", "무상", "A/S", "AS", "잔여", "마모"),
+        "assurance_service_policy": ("안심", "워런티", "보상", "디지털", "가입"),
+        "reservation_policy_guidance": ("예약", "취소", "변경", "위약", "장착점"),
+        "installation_work_policy": ("공임", "장착", "얼라인먼트", "폐타이어", "현장"),
+        "promotion_gift_policy": ("사은품", "프로모션", "이벤트", "반납", "차감"),
+    }.get(intent, ())
+    if not topic_tokens:
+        return True
+    return any(token.lower() in faq_text.lower() for token in topic_tokens)
 
 
 def _faq_first_support_policy_contract_violation(
     *,
     assistant_response_text: str | None,
     called_tools: list[str] | tuple[str, ...] | None,
+    structured_sources: list[tuple[str, Mapping[str, Any]]] | tuple[tuple[str, Mapping[str, Any]], ...] | None,
     contract: TurnContract | None,
 ) -> dict[str, Any] | None:
     if contract is None or contract.intent not in _FAQ_FIRST_SUPPORT_POLICY_INTENTS:
         return None
     tools = list(called_tools or ())
-    has_faq = "search_faq_hybrid_tool" in tools
+    has_faq = bool(set(tools) & _FAQ_SOURCE_TOOLS)
     has_qna = "transfer_to_qna_tool" in tools
     if has_qna and not has_faq:
         return {
@@ -2228,13 +2300,30 @@ def _faq_first_support_policy_contract_violation(
             "called_tools": tools,
         }
     assistant_text = str(assistant_response_text or "").strip()
-    assertion_re = _FAQ_FIRST_SUPPORT_POLICY_ASSERTION_RE.get(str(contract.intent or ""))
-    if has_faq and assistant_text and assertion_re and assertion_re.search(assistant_text):
+    if assistant_text and not has_faq:
         return {
-            "type": f"{contract.intent}_asserted_without_verification",
-            "assistant_response_text": assistant_text,
+            "type": f"{contract.intent}_answer_without_faq_search",
+            "assistant_response_text": assistant_text[:160],
+            "called_tools": tools,
         }
-    return None
+    intent = str(contract.intent or "")
+    assertion_re = _FAQ_FIRST_SUPPORT_POLICY_UNSUPPORTED_ASSERTION_RE.get(intent)
+    if not assistant_text or not assertion_re or not assertion_re.search(assistant_text):
+        return None
+    faq_text = _faq_source_text(structured_sources)
+    if _faq_source_supports_assertion(intent, assistant_text, faq_text):
+        return None
+    violation_type = (
+        f"{contract.intent}_safety_assertion_without_verification"
+        if intent == "tire_condition_photo_policy"
+        else f"{contract.intent}_assertion_not_supported_by_faq_source"
+        if _has_faq_source(structured_sources)
+        else f"{contract.intent}_asserted_without_verification"
+    )
+    return {
+        "type": violation_type,
+        "assistant_response_text": assistant_text,
+    }
 
 
 def _is_comparison_contract(contract: TurnContract | None) -> bool:
