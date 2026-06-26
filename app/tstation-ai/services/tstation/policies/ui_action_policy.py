@@ -11,7 +11,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
-from services.tstation.policies.discovery_intent_policy import normalize_tire_size
+from services.tstation.policies.discovery_intent_policy import build_discovery_intent_frame, normalize_tire_size
 from services.tstation.policies.cta_registry import cta_trace_metadata, normalize_quickreply_ctas
 from services.tstation.policies.resolved_context import (
     canonical_context_from_template_boundary,
@@ -44,10 +44,36 @@ _TIRE_POSITION_FOLLOWUP_ACTION_RE = re.compile(
 _QUANTITY_LABEL_RE = re.compile(r"^\s*([1-4])\s*(?:개|본)\s*$")
 _CTA_CLARIFICATION_LABEL_RE = re.compile(r"(?:다른\s*)?(?:지역|장소|날짜|일정)\s*(?:입력|찾기|검색|확인)")
 _VEHICLE_PLATE_RE = re.compile(r"\d{2,3}\s*[가-힣]\s*\d{4}")
+_NON_SELF_CAR_RE = re.compile(
+    r"(내\s*차|저장\s*차|등록\s*차|보유\s*차|보유한\s*차|내가\s*가진\s*차)"
+    r"\s*(말고|말구|말로|아닌|아니라|아니고|빼고|이외|제외)"
+    r"|다른\s*차(?:종)?",
+    re.IGNORECASE,
+)
+_OE_REPLACEMENT_EQUIVALENT_RE = re.compile(
+    r"순정|출고|처음\s*끼|살\s*때\s*끼|끼워져\s*있|똑같|동일(?:한)?\s*상품|같은\s*상품|"
+    r"(?<![A-Za-z])(?:OE|RE)(?![A-Za-z])",
+    re.IGNORECASE,
+)
+_OWNED_VEHICLE_SELECTION_CTA_RE = re.compile(
+    r"^\s*(보유\s*차량\s*중\s*선택|내\s*차량\s*보기|내\s*차\s*보기|내\s*차(?:량)?로\s*찾기|"
+    r"차량\s*(?:정보로\s*)?찾기|차량\s*선택해서\s*찾기)\s*$",
+    re.IGNORECASE,
+)
+_OE_REPLACEMENT_FOLLOWUP_RE = re.compile(
+    r"교체용\s*상품\s*추천|호환\s*사이즈\s*추천|동일(?:한)?\s*상품\s*찾기|같은\s*상품\s*찾기",
+    re.IGNORECASE,
+)
 _VEHICLE_BOUND_REQUEST_RE = re.compile(
     r"내\s*차|내차|내\s*차량|내차량|차량번호|차\s*번호|"
     r"내\s*[0-9a-zA-Z가-힣]+|"
     r"\d{2,3}\s*[가-힣]\s*\d{4}",
+    re.IGNORECASE,
+)
+_VEHICLE_LIST_REQUEST_RE = re.compile(
+    r"내\s*차\s*목록|내차\s*목록|내차목록|내\s*차량|내차량|보유\s*차량|보유차량|"
+    r"보유차량\s*확인|내\s*등록차|등록차량|등록차|내\s*차\s*보여|내차\s*보여|내차보여|"
+    r"내\s*차\s*(?:사이즈|규격|로\s*다시)|내차\s*(?:사이즈|규격|로\s*다시)",
     re.IGNORECASE,
 )
 _VEHICLE_MATCH_STOPWORDS = {
@@ -2183,6 +2209,149 @@ def build_oe_replacement_same_product_brand_prompt_event(
             ],
             "predictedDomains": ["DISCOVERY"],
         },
+    }
+
+
+def extract_vehicle_plate_from_text(user_text: str | None) -> str | None:
+    match = _VEHICLE_PLATE_RE.search(user_text or "")
+    if not match:
+        return None
+    return re.sub(r"[^0-9가-힣]", "", match.group(0))
+
+
+def is_oe_replacement_equivalent_query(user_text: str | None) -> bool:
+    return bool(_OE_REPLACEMENT_EQUIVALENT_RE.search(user_text or ""))
+
+
+def is_owned_vehicle_selection_cta(user_text: str | None) -> bool:
+    return bool(_OWNED_VEHICLE_SELECTION_CTA_RE.match(user_text or ""))
+
+
+def is_oe_replacement_followup_query(user_text: str | None) -> bool:
+    return bool(_OE_REPLACEMENT_FOLLOWUP_RE.search(user_text or ""))
+
+
+def is_oe_replacement_context(
+    context_text: str | None,
+    current_text: str | None,
+    latest_quickreply_tmpl: Mapping[str, Any] | None = None,
+) -> bool:
+    if is_oe_replacement_equivalent_query(current_text):
+        return True
+    if is_owned_vehicle_selection_cta(current_text):
+        return False
+    if not is_oe_replacement_equivalent_query(context_text):
+        return False
+    cta_context = quickreply_cta_context_from_template(latest_quickreply_tmpl)
+    if not is_oe_replacement_cta_context(cta_context):
+        return False
+    return is_oe_replacement_followup_query(current_text) or bool(extract_vehicle_plate_from_text(current_text))
+
+
+def recommendation_type_for_vehicle_auto_continue(user_text: str) -> str:
+    text = user_text or ""
+    if re.search(r"연비|회전\s*저항|rr\b", text, re.IGNORECASE):
+        return "fuel_efficiency"
+    if re.search(r"세일|할인|할인율", text, re.IGNORECASE):
+        return "discount"
+    if re.search(r"가성비|저렴|싼|최저", text, re.IGNORECASE):
+        return "value"
+    if re.search(r"가족|패밀리|승차감|컴포트", text, re.IGNORECASE):
+        return "family"
+    if re.search(r"전기차|EV|ev|아이온|iON", text, re.IGNORECASE):
+        return "ev"
+    if re.search(r"겨울|윈터|눈길", text, re.IGNORECASE):
+        return "snow"
+    if re.search(r"여름|썸머", text, re.IGNORECASE):
+        return "summer"
+    if re.search(r"사계절|올시즌|all[-\s]?season|올웨더|전천후|all[-\s]?weather", text, re.IGNORECASE):
+        return "all_weather"
+    if re.search(r"빗길|젖은", text, re.IGNORECASE):
+        return "wet"
+    if re.search(r"정숙|조용|소음|진동", text, re.IGNORECASE):
+        return "low_vibration"
+    if re.search(r"퍼포먼스|스포츠|성능", text, re.IGNORECASE):
+        return "performance"
+    return "tstation"
+
+
+def should_reuse_vehicle_slots_for_oe_followup(
+    recent_context_text: str | None,
+    current_text: str | None,
+    tire_size: str | None,
+    latest_quickreply_tmpl: Mapping[str, Any] | None = None,
+) -> bool:
+    text = current_text or ""
+    if not tire_size:
+        return False
+    if not is_oe_replacement_context(recent_context_text, current_text, latest_quickreply_tmpl):
+        return False
+    if not is_oe_replacement_followup_query(text):
+        return False
+    if _NON_SELF_CAR_RE.search(text):
+        return False
+    if _VEHICLE_BOUND_REQUEST_RE.search(text) or _VEHICLE_LIST_REQUEST_RE.search(text):
+        return False
+    return True
+
+
+def build_oe_replacement_followup_recommendation_args(
+    current_text: str,
+    recent_context_text: str,
+    tire_size: str | None,
+    latest_quickreply_tmpl: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    if not should_reuse_vehicle_slots_for_oe_followup(
+        recent_context_text,
+        current_text,
+        tire_size,
+        latest_quickreply_tmpl,
+    ):
+        return None
+    return {
+        "rcmd_type": recommendation_type_for_vehicle_auto_continue(current_text),
+        "limit": 3,
+        "tire_size": str(tire_size),
+        "brand_cd": "HK",
+    }
+
+
+def oe_replacement_followup_brand_cd(current_text: str, recent_context_text: str) -> str | None:
+    current_frame = build_discovery_intent_frame(current_text)
+    current_brand_cd = str(current_frame.entities.get("brand_cd") or "").strip()
+    if current_brand_cd:
+        return current_brand_cd
+
+    context_frame = build_discovery_intent_frame(recent_context_text)
+    context_brand_cd = str(context_frame.entities.get("brand_cd") or "").strip()
+    if context_brand_cd:
+        return context_brand_cd
+
+    return None
+
+
+def build_oe_replacement_same_product_search_args(
+    current_text: str,
+    recent_context_text: str,
+    tire_size: str | None,
+    latest_quickreply_tmpl: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    if not should_reuse_vehicle_slots_for_oe_followup(
+        recent_context_text,
+        current_text,
+        tire_size,
+        latest_quickreply_tmpl,
+    ):
+        return None
+    if not re.search(r"동일(?:한)?\s*상품|같은\s*상품", current_text, re.IGNORECASE):
+        return None
+    brand_cd = oe_replacement_followup_brand_cd(current_text, recent_context_text)
+    if not brand_cd:
+        return None
+    return {
+        "size": str(tire_size),
+        "brand_cd": brand_cd,
+        "limit": 10,
     }
 
 

@@ -141,11 +141,20 @@ from services.tstation.policies.ui_action_policy import (
     confirmed_product_slot_values_for_purchase_cta,
     confirmed_product_slot_values_from_event,
     datepick_slot_values_from_data,
+    extract_vehicle_plate_from_text,
     build_oe_replacement_guidance_event,
+    build_oe_replacement_followup_recommendation_args,
+    build_oe_replacement_same_product_search_args,
     goods_no_from_template_event,
+    is_oe_replacement_context,
     is_oe_replacement_cta_context,
+    is_oe_replacement_equivalent_query,
+    is_oe_replacement_followup_query,
+    is_owned_vehicle_selection_cta,
     oe_replacement_cta_context,
+    oe_replacement_followup_brand_cd,
     preorder_slot_values_from_data,
+    recommendation_type_for_vehicle_auto_continue,
     resolve_goods_no_from_recent_product_context,
     resolve_recent_product_search_keyword,
     merged_quickreply_cta_context,
@@ -154,7 +163,6 @@ from services.tstation.policies.ui_action_policy import (
     selected_order_context_from_preview_values,
     preview_action_mode_for_slots,
     quickreply_cta_context_from_chip,
-    quickreply_cta_context_from_template,
     resolve_goods_no_from_selection,
     resolve_goods_no_from_product_template_selection,
     preview_location_slot_values_from_selection,
@@ -172,6 +180,7 @@ from services.tstation.policies.ui_action_policy import (
     normalize_preview_tool_result,
     store_context_from_mapping,
     store_name_exact_match_row,
+    should_reuse_vehicle_slots_for_oe_followup,
     ui_action_trace_metadata,
     validate_ui_actions_for_contract,
 )
@@ -5959,31 +5968,7 @@ def _vehicle_candidate_tokens(car: dict[str, Any], meta: dict[str, Any]) -> set[
     return tokens
 
 
-def _recommendation_type_for_vehicle_auto_continue(user_text: str) -> str:
-    text = user_text or ""
-    if re.search(r"연비|회전\s*저항|rr\b", text, re.IGNORECASE):
-        return "fuel_efficiency"
-    if re.search(r"세일|할인|할인율", text, re.IGNORECASE):
-        return "discount"
-    if re.search(r"가성비|저렴|싼|최저", text, re.IGNORECASE):
-        return "value"
-    if re.search(r"가족|패밀리|승차감|컴포트", text, re.IGNORECASE):
-        return "family"
-    if re.search(r"전기차|EV|ev|아이온|iON", text, re.IGNORECASE):
-        return "ev"
-    if re.search(r"겨울|윈터|눈길", text, re.IGNORECASE):
-        return "snow"
-    if re.search(r"여름|썸머", text, re.IGNORECASE):
-        return "summer"
-    if re.search(r"사계절|올시즌|all[-\s]?season|올웨더|전천후|all[-\s]?weather", text, re.IGNORECASE):
-        return "all_weather"
-    if re.search(r"빗길|젖은", text, re.IGNORECASE):
-        return "wet"
-    if re.search(r"정숙|조용|소음|진동", text, re.IGNORECASE):
-        return "low_vibration"
-    if re.search(r"퍼포먼스|스포츠|성능", text, re.IGNORECASE):
-        return "performance"
-    return "tstation"
+_recommendation_type_for_vehicle_auto_continue = recommendation_type_for_vehicle_auto_continue
 
 
 def _format_maintenance_dday_item(item: dict) -> str:
@@ -6594,6 +6579,11 @@ def _build_support_faq_policy_event(
             "기준 미달 시에는 사은품 반납이 필요할 수 있고, 반납이 어렵거나 조건에 따라 사은품 상당 금액을 차감한 뒤 환불될 수 있어요.\n"
             "최종 적용은 이벤트 상세 조건과 실제 주문/취소 처리 기준에 따라 달라져요."
         ),
+        "tire_condition_photo_policy": (
+            "현재 챗봇에서는 사진이나 파일을 업로드해 확인받을 수 없어요.\n"
+            "사진만으로는 마모 상태, 교체 필요 여부, 주행 안전을 확정할 수 없어요.\n"
+            "가까운 티스테이션 매장이나 전문 점검으로 마모도와 손상 여부를 함께 확인해 주세요."
+        ),
     }
     followup_by_intent = {
         "tire_manufacture_date_policy": "제조일자만으로 교환이나 환불을 단정하지 말고, 필요하면 제품 상태와 구매 이력도 함께 확인해 주세요.",
@@ -6602,7 +6592,7 @@ def _build_support_faq_policy_event(
         "reservation_policy_guidance": "실제 예약 변경이나 취소 전에는 예약 상세 안내도 함께 확인해 주세요.",
         "installation_work_policy": "추가 작업비나 현장 결제 여부는 정책과 작업 범위에 따라 달라질 수 있어요.",
         "promotion_gift_policy": required_guidance_by_intent["promotion_gift_policy"],
-        "tire_condition_photo_policy": "사진만으로 주행 안전이나 교체 필요 여부를 단정하기는 어려워요. 필요하면 매장 점검도 함께 받아 주세요.",
+        "tire_condition_photo_policy": required_guidance_by_intent["tire_condition_photo_policy"],
         "signup_first_purchase_benefit_policy": "실제 회원 상태와 쿠폰 노출 여부는 계정별로 다를 수 있으니, 회원 혜택 페이지나 쿠폰함에서도 함께 확인해 주세요.",
         "signup_coupon_guidance": "실제 발급 가능 여부와 노출 상태는 회원 상태와 마케팅 동의 여부에 따라 달라질 수 있어요.",
     }
@@ -6613,7 +6603,7 @@ def _build_support_faq_policy_event(
         "reservation_policy_guidance": "예약 가능 기간, 취소, 변경 조건은 정책 기준으로 먼저 확인해 보는 것이 안전해요.",
         "installation_work_policy": "공임, 장착비, 추가 작업 비용은 작업 범위와 정책에 따라 달라질 수 있어요.",
         "promotion_gift_policy": required_guidance_by_intent["promotion_gift_policy"],
-        "tire_condition_photo_policy": "타이어 상태는 사진만으로 안전 여부를 확정하기 어렵고, 점검 기준을 함께 확인해야 해요.",
+        "tire_condition_photo_policy": required_guidance_by_intent["tire_condition_photo_policy"],
         "signup_first_purchase_benefit_policy": "회원가입과 신규회원 혜택은 회원 상태, 마케팅 동의 여부, 진행 중 정책에 따라 달라질 수 있어요.",
         "signup_coupon_guidance": "신규회원과 가입 쿠폰 혜택은 회원 상태와 진행 중 정책에 따라 달라질 수 있어요.",
     }
@@ -6626,10 +6616,21 @@ def _build_support_faq_policy_event(
             {"label": "회원 혜택 확인", "url": CTAUrls.MEMBERSHIP_BENEFIT, "domain": "SUPPORT"},
             {"label": "처음으로", "domain": "LEADING"},
         ]
+    elif intent == "tire_condition_photo_policy":
+        quick_replies = [
+            {"label": "가까운 매장 찾기", "domain": "TRANSACTION"},
+            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+            {"label": "처음으로", "domain": "LEADING"},
+        ]
     if source_summary:
         assistant_response = f"{source_summary}\n\n{followup_by_intent[intent]}"
     else:
         assistant_response = fallback_by_intent[intent]
+    if intent != "tire_condition_photo_policy" and _should_lead_with_upload_capability_notice(user_query):
+        assistant_response = (
+            "현재 챗봇에서는 사진이나 파일을 업로드해 확인받을 수 없어요.\n\n"
+            f"{assistant_response}"
+        )
     return {
         "type": "data",
         "template": "quickReply",
@@ -7081,42 +7082,21 @@ def _is_order_history_reorder_query(user_text: str | None) -> bool:
     )
 
 
-def _extract_vehicle_plate_from_text(user_text: str | None) -> str | None:
-    match = _VEHICLE_PLATE_RE.search(user_text or "")
-    if not match:
-        return None
-    return re.sub(r"[^0-9가-힣]", "", match.group(0))
+_extract_vehicle_plate_from_text = extract_vehicle_plate_from_text
 
 
 def _is_oe_replacement_equivalent_query(user_text: str | None) -> bool:
     if _is_order_history_reorder_query(user_text):
         return False
-    return bool(_OE_REPLACEMENT_EQUIVALENT_RE.search(user_text or ""))
+    return is_oe_replacement_equivalent_query(user_text)
 
 
-def _is_owned_vehicle_selection_cta(user_text: str | None) -> bool:
-    return bool(_OWNED_VEHICLE_SELECTION_CTA_RE.match(user_text or ""))
+_is_owned_vehicle_selection_cta = is_owned_vehicle_selection_cta
 
 
 _oe_replacement_cta_context = oe_replacement_cta_context
 _is_oe_replacement_cta_context = is_oe_replacement_cta_context
-
-
-def _is_oe_replacement_context(
-    context_text: str | None,
-    current_text: str | None,
-    latest_quickreply_tmpl: dict | None = None,
-) -> bool:
-    if _is_oe_replacement_equivalent_query(current_text):
-        return True
-    if _is_owned_vehicle_selection_cta(current_text):
-        return False
-    if not _is_oe_replacement_equivalent_query(context_text):
-        return False
-    cta_context = quickreply_cta_context_from_template(latest_quickreply_tmpl)
-    if not _is_oe_replacement_cta_context(cta_context):
-        return False
-    return _is_oe_replacement_followup_query(current_text) or bool(_extract_vehicle_plate_from_text(current_text))
+_is_oe_replacement_context = is_oe_replacement_context
 
 
 def _should_force_best_seller_code_route(user_text: str | None, domains: list[MultiAgentDomain.Domain]) -> bool:
@@ -7150,91 +7130,11 @@ def _enrich_best_selling_result_for_product_cards(tool_result: dict) -> dict:
     return enriched_result
 
 
-def _is_oe_replacement_followup_query(user_text: str | None) -> bool:
-    return bool(_OE_REPLACEMENT_FOLLOWUP_RE.search(user_text or ""))
-
-
-def _should_reuse_vehicle_slots_for_oe_followup(
-    recent_context_text: str | None,
-    current_text: str | None,
-    tire_size: str | None,
-    latest_quickreply_tmpl: dict | None = None,
-) -> bool:
-    text = current_text or ""
-    if not tire_size:
-        return False
-    if not _is_oe_replacement_context(recent_context_text, current_text, latest_quickreply_tmpl):
-        return False
-    if not _is_oe_replacement_followup_query(text):
-        return False
-    if _NON_SELF_CAR_RE.search(text):
-        return False
-    if _VEHICLE_BOUND_REQUEST_RE.search(text) or _VEHICLE_LIST_REQUEST_RE.search(text):
-        return False
-    return True
-
-
-def _build_oe_replacement_followup_recommendation_args(
-    current_text: str,
-    recent_context_text: str,
-    tire_size: str | None,
-    latest_quickreply_tmpl: dict | None = None,
-) -> dict[str, Any] | None:
-    if not _should_reuse_vehicle_slots_for_oe_followup(
-        recent_context_text,
-        current_text,
-        tire_size,
-        latest_quickreply_tmpl,
-    ):
-        return None
-
-    tool_input: dict[str, Any] = {
-        "rcmd_type": _recommendation_type_for_vehicle_auto_continue(current_text),
-        "limit": 3,
-        "tire_size": str(tire_size),
-        "brand_cd": "HK",
-    }
-    return tool_input
-
-
-def _oe_replacement_followup_brand_cd(current_text: str, recent_context_text: str) -> str | None:
-    current_frame = build_discovery_intent_frame(current_text)
-    current_brand_cd = str(current_frame.entities.get("brand_cd") or "").strip()
-    if current_brand_cd:
-        return current_brand_cd
-
-    context_frame = build_discovery_intent_frame(recent_context_text)
-    context_brand_cd = str(context_frame.entities.get("brand_cd") or "").strip()
-    if context_brand_cd:
-        return context_brand_cd
-
-    return None
-
-
-def _build_oe_replacement_same_product_search_args(
-    current_text: str,
-    recent_context_text: str,
-    tire_size: str | None,
-    latest_quickreply_tmpl: dict | None = None,
-) -> dict[str, Any] | None:
-    if not _should_reuse_vehicle_slots_for_oe_followup(
-        recent_context_text,
-        current_text,
-        tire_size,
-        latest_quickreply_tmpl,
-    ):
-        return None
-    if not re.search(r"동일(?:한)?\s*상품|같은\s*상품", current_text, re.IGNORECASE):
-        return None
-    brand_cd = _oe_replacement_followup_brand_cd(current_text, recent_context_text)
-    if not brand_cd:
-        return None
-
-    return {
-        "size": str(tire_size),
-        "brand_cd": brand_cd,
-        "limit": 10,
-    }
+_is_oe_replacement_followup_query = is_oe_replacement_followup_query
+_should_reuse_vehicle_slots_for_oe_followup = should_reuse_vehicle_slots_for_oe_followup
+_build_oe_replacement_followup_recommendation_args = build_oe_replacement_followup_recommendation_args
+_oe_replacement_followup_brand_cd = oe_replacement_followup_brand_cd
+_build_oe_replacement_same_product_search_args = build_oe_replacement_same_product_search_args
 
 
 _build_oe_replacement_same_product_brand_prompt_event = build_oe_replacement_same_product_brand_prompt_event
@@ -10828,9 +10728,12 @@ def _recent_coupon_context_for_policy(
             break
         inspected += 1
         role = str(msg.get("role") or "").strip() or "unknown"
+        valid_selection_template = _template_data_from_assistant_message(msg) if role == "assistant" else None
         texts, payloads = _extract_text_and_payloads_from_message(msg)
         for payload in payloads:
             if not product_context:
+                if role == "assistant" and valid_selection_template is None:
+                    continue
                 product_context = _product_coupon_context_metadata_from_payload(payload)
                 if product_context:
                     lines.append("[이전 선택된 상품 데이터] " + json.dumps(product_context, ensure_ascii=False))
@@ -10840,6 +10743,8 @@ def _recent_coupon_context_for_policy(
             if not extracted or "USER CONTEXT INFORMATION" in extracted:
                 continue
             if role == "assistant":
+                if valid_selection_template is None and msg.get("template_data") is not None:
+                    continue
                 text_context = _product_coupon_context_metadata_from_text(extracted)
                 if text_context:
                     lines.append("[이전 선택된 상품 데이터] " + json.dumps(text_context, ensure_ascii=False))
@@ -15251,6 +15156,26 @@ _DIRECT_SUPPORT_FAQ_POLICY_INTENTS = _FAQ_POLICY_FALLBACK_INTENTS | {
     "signup_coupon_guidance",
 }
 _FAQ_POLICY_FALLBACK_SOURCE_TOOLS = frozenset({"get_faq_tool", "search_faq_rag_tool", "search_faq_hybrid_tool"})
+_USER_UPLOAD_REQUEST_RE = re.compile(
+    r"사진\s*(?:보낼|올릴|업로드|첨부)|이미지\s*(?:보낼|올릴|업로드|첨부)|"
+    r"파일\s*(?:보낼|올릴|업로드|첨부)|첨부\s*(?:할게|했어|하면|해도|해서)|"
+    r"(?:사진|이미지|파일).{0,8}(?:봐줘|봐\s*줄|확인해\s*줘)",
+    re.IGNORECASE,
+)
+_NON_UPLOAD_IMAGE_LOOKUP_RE = re.compile(
+    r"(?:매장|지점|상품|타이어).{0,10}(?:사진|이미지).{0,8}(?:보여|조회|찾아)|"
+    r"(?:사진|이미지).{0,8}(?:보여줘|조회해줘|찾아줘)",
+    re.IGNORECASE,
+)
+
+
+def _should_lead_with_upload_capability_notice(user_text: str | None) -> bool:
+    text = str(user_text or "").strip()
+    if not text:
+        return False
+    if _NON_UPLOAD_IMAGE_LOOKUP_RE.search(text):
+        return False
+    return bool(_USER_UPLOAD_REQUEST_RE.search(text))
 
 
 def _walk_faq_policy_strings(obj: Any) -> list[str]:
@@ -16233,6 +16158,27 @@ def _store_attribute_selection_continuation_from_location_selection(
 
 
 _PREVIOUS_SELECTION_DATA_MARKER = "[이전 선택된 상품 데이터]"
+_NON_SELECTION_HISTORY_SOURCES = frozenset({
+    "code_turn_contract_missing_slot_prompt",
+})
+
+
+def _selection_history_template_data(template_data: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(template_data, dict):
+        return None
+    data = template_data.get("data")
+    metadata = data.get("metadata") if isinstance(data, dict) else None
+    gate_result = str(
+        template_data.get("contract_gate_result")
+        or (metadata.get("contract_gate_result") if isinstance(metadata, Mapping) else "")
+        or ""
+    ).strip()
+    if gate_result == "blocked":
+        return None
+    assistant_response_source = str(template_data.get("assistant_response_source") or "").strip()
+    if assistant_response_source in _NON_SELECTION_HISTORY_SOURCES:
+        return None
+    return template_data
 
 
 def _template_data_from_assistant_message(message: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -16240,7 +16186,7 @@ def _template_data_from_assistant_message(message: dict[str, Any] | None) -> dic
         return None
     template_data = message.get("template_data")
     if isinstance(template_data, dict):
-        return template_data
+        return _selection_history_template_data(template_data)
     content = str(message.get("content") or "")
     if _PREVIOUS_SELECTION_DATA_MARKER not in content:
         return None
@@ -16252,7 +16198,7 @@ def _template_data_from_assistant_message(message: dict[str, Any] | None) -> dic
         parsed = json.loads(raw_json)
     except Exception:
         return None
-    return parsed if isinstance(parsed, dict) else None
+    return _selection_history_template_data(parsed if isinstance(parsed, dict) else None)
 
 
 def _recent_compare_context_from_messages(user_text: str, messages: list[dict[str, Any]] | None) -> dict[str, str]:
@@ -19330,9 +19276,11 @@ def _enrich_messages_with_template_data(
         # content, the chronologically-latest template_data wins — acceptable
         # because identical content typically implies identical structured data.
         template_map = {
-            msg["content"]: msg["template_data"]
+            msg["content"]: valid_template_data
             for msg in redis_messages
-            if msg.get("role") == "assistant" and msg.get("template_data") and msg.get("content")
+            if msg.get("role") == "assistant"
+            and (valid_template_data := _selection_history_template_data(msg.get("template_data")))
+            and msg.get("content")
         }
 
         if not template_map:
@@ -32226,6 +32174,7 @@ class TStationChatServiceV2:
                 )
                 contract_violations = response_contract_violations(
                     template=last_template,
+                    user_text=user_query,
                     assistant_response_text=draft_for_qc,
                     assistant_response_source=last_assistant_response_source,
                     compare_metric=current_contract_compare_metric,
