@@ -2636,6 +2636,55 @@ def requested_day_label_from_availability_context(user_text: str, recent_context
     return "오늘"
 
 
+def store_availability_followup_context(
+    *,
+    user_text: str,
+    recent_context: str,
+    tire_size: str,
+    goods_no: str,
+    slots: Any | None,
+    prev_tool_data: list[dict] | None = None,
+    messages: list[dict] | None = None,
+    parse_requested_reservation_date: Callable[[str], Any],
+    requested_reservation_cal_day_or_today: Callable[[str], str | None],
+) -> dict[str, Any]:
+    ord_qty = getattr(slots, "ord_qty", None) if slots is not None else None
+    try:
+        ord_qty = int(ord_qty) if ord_qty is not None else None
+    except (TypeError, ValueError):
+        ord_qty = None
+    store_name = recent_store_name_for_availability_continuation(
+        prev_tool_data=prev_tool_data or [],
+        recent_context=recent_context,
+        messages=messages,
+        slots=slots,
+    )
+    requested_day_label = requested_day_label_from_availability_context(user_text, recent_context)
+    requested_cal_day = requested_cal_day_from_availability_context(
+        user_text,
+        recent_context,
+        parse_requested_reservation_date=parse_requested_reservation_date,
+        requested_reservation_cal_day_or_today=requested_reservation_cal_day_or_today,
+    )
+    preview_input = {
+        "goods_no": goods_no,
+        "ord_qty": ord_qty,
+        "store_nm": store_name,
+        "include_price": True,
+    }
+    if requested_cal_day:
+        preview_input["requested_cal_day"] = requested_cal_day
+    return {
+        "tire_size": tire_size,
+        "goods_no": goods_no,
+        "ord_qty": ord_qty,
+        "store_name": store_name,
+        "requested_day_label": requested_day_label,
+        "requested_cal_day": requested_cal_day,
+        "preview_input": preview_input,
+    }
+
+
 def is_size_only_store_availability_continuation(
     user_text: str,
     *,

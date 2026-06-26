@@ -187,6 +187,7 @@ from services.tstation.policies.ui_action_policy import (
     recent_store_name_for_availability_continuation,
     resolve_ui_action_context,
     rewrite_vehicle_selection_user_text,
+    store_availability_followup_context,
     apply_other_store_context_enrichment,
     normalize_preview_tool_result,
     store_context_from_mapping,
@@ -27402,22 +27403,21 @@ class TStationChatServiceV2:
                         goal_type="store_with_stock" if is_store_availability_size_followup else None,
                     )
                     if is_store_availability_size_followup:
-                        tire_size = str(tool_input.get("size") or "")
-                        ord_qty = getattr(initial_slots, "ord_qty", None) if initial_slots is not None else None
-                        try:
-                            ord_qty = int(ord_qty) if ord_qty is not None else None
-                        except (TypeError, ValueError):
-                            ord_qty = None
-                        store_name = _recent_store_name_for_availability_continuation(
-                            prev_tool_data=prev_tool_data or [],
+                        followup_context = store_availability_followup_context(
+                            user_text=user_query,
                             recent_context=recent_user_context_text,
-                            messages=messages,
+                            tire_size=str(tool_input.get("size") or ""),
+                            goods_no=goods_no,
                             slots=initial_slots,
+                            prev_tool_data=prev_tool_data or [],
+                            messages=messages,
+                            parse_requested_reservation_date=_parse_requested_reservation_date,
+                            requested_reservation_cal_day_or_today=_requested_reservation_cal_day_or_today,
                         )
-                        requested_day_label = _requested_day_label_from_availability_context(
-                            user_query,
-                            recent_user_context_text,
-                        )
+                        tire_size = str(followup_context.get("tire_size") or "")
+                        ord_qty = followup_context.get("ord_qty")
+                        store_name = str(followup_context.get("store_name") or "").strip() or None
+                        requested_day_label = str(followup_context.get("requested_day_label") or "오늘")
                         if not ord_qty:
                             quantity_event = _finalize_direct_code_event(
                                 build_store_availability_quantity_prompt_event(
@@ -27449,18 +27449,7 @@ class TStationChatServiceV2:
                             )
                             return (emitted_events, store_event) if store_event is not None else None
 
-                        preview_input = {
-                            "goods_no": goods_no,
-                            "ord_qty": ord_qty,
-                            "store_nm": store_name,
-                            "include_price": True,
-                        }
-                        requested_cal_day = _requested_cal_day_from_availability_context(
-                            user_query,
-                            recent_user_context_text,
-                        )
-                        if requested_cal_day:
-                            preview_input["requested_cal_day"] = requested_cal_day
+                        preview_input = dict(followup_context.get("preview_input") or {})
                         emitted_events.append({
                             "type": "status",
                             "status": "tool_start",
