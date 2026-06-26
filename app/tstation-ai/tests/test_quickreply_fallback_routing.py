@@ -190,6 +190,7 @@ from services.tstation.chat import (
     _trace_final_error_state,
     _response_decision_for_source_domain,
     _response_shape_key_for_source_domain,
+    _resume_source_from_current_turn,
     _has_current_turn_p0_auto_chain_anchor,
     _promote_completed_speculative_router_contract,
     _restore_blocked_transaction_store_selection_contract,
@@ -9875,6 +9876,54 @@ def test_action_mode_resumes_dormant_reservation_context_as_booking_continuation
     assert _context_state_for_action(
         action_mode=action_mode,
         resume_source="explicit_user",
+        slots=slots,
+    ) == "resumed"
+
+
+@pytest.mark.parametrize(
+    ("user_text", "expected_resume_source"),
+    [
+        ("방금 보던 거 계속 진행해줘", "explicit_user"),
+        ("아까 보던 거로 예약할게", "explicit_user"),
+        ("그거 진행해줘", "none"),
+    ],
+)
+def test_resume_source_from_current_turn_recognizes_only_explicit_viewing_anchors(
+    user_text: str,
+    expected_resume_source: str,
+) -> None:
+    assert _resume_source_from_current_turn(user_text) == expected_resume_source
+
+
+def test_action_mode_resumes_dormant_order_context_from_viewing_anchor() -> None:
+    slots = ConversationSlots(
+        availability_context={
+            "dormant_purchase_context": {
+                "goods_no": "G000000309780",
+                "tire_size": "225/45R17",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+                "context_state": "dormant",
+            }
+        },
+    )
+
+    resume_source = _resume_source_from_current_turn("방금 보던 거 계속 진행해줘")
+    action_mode = _current_turn_action_mode(
+        user_text="방금 보던 거 계속 진행해줘",
+        domains=[MultiAgentDomain.Domain.LEADING],
+        routing_result=None,
+        regex_slots=ConversationSlots(),
+        merged_slots=slots,
+        explicit_override_reason=None,
+        resume_source=resume_source,
+    )
+
+    assert resume_source == "explicit_user"
+    assert action_mode == "purchase_continuation"
+    assert _context_state_for_action(
+        action_mode=action_mode,
+        resume_source=resume_source,
         slots=slots,
     ) == "resumed"
 
