@@ -111,6 +111,7 @@ from services.tstation.policies.pickup_service_gate import decide_pickup_service
 from services.tstation.policies.ui_action_policy import (
     UIActionContext,
     apply_logistics_earliest_install_cta_action,
+    apply_selected_order_context_for_purchase_cta,
     apply_preview_update_cta_action,
     apply_ui_action_slot_patch,
     build_other_store_search_result_event,
@@ -144,6 +145,7 @@ from services.tstation.policies.ui_action_policy import (
     merged_quickreply_cta_context,
     normalize_ui_action_metadata,
     normalize_vehicle_tire_size_pair,
+    selected_order_context_from_preview_values,
     preview_action_mode_for_slots,
     quickreply_cta_context_from_chip,
     quickreply_cta_context_from_template,
@@ -18583,53 +18585,8 @@ def _stage_pending_product_context_from_search(
     return pending_context
 
 
-def _selected_order_context_from_preview_values(preview_values: Mapping[str, Any]) -> dict[str, Any]:
-    if not preview_values.get("goods_no"):
-        return {}
-    context: dict[str, Any] = {}
-    for field in ("goods_no", "tire_size", "ord_qty", "region", "shop_id", "shop_name"):
-        value = preview_values.get(field)
-        if value not in (None, "", [], {}):
-            context[field] = value
-    for field in ("schedule_mode", "stock_check_mode"):
-        value = preview_values.get(field)
-        if value not in (None, "", [], {}):
-            context[field] = value
-    context["pending_intent"] = "order"
-    context["goal_type"] = "place_order"
-    context["source"] = "preview_location_template_selection"
-    return context
-
-
-def _apply_selected_order_context_for_purchase_cta(slots: ConversationSlots) -> tuple[ConversationSlots, dict[str, Any]]:
-    context_root = slots.order_context if isinstance(slots.order_context, dict) else {}
-    selected_context = context_root.get("selected_order_context")
-    if not isinstance(selected_context, dict):
-        return slots, {}
-    values = {
-        key: value
-        for key, value in selected_context.items()
-        if key
-        in {
-            "goods_no",
-            "tire_size",
-            "ord_qty",
-            "region",
-            "shop_id",
-            "shop_name",
-            "pending_intent",
-            "goal_type",
-            "requested_cal_day",
-            "rsv_hour",
-        }
-        and value not in (None, "", [], {})
-    }
-    if not values.get("goods_no"):
-        return slots, {}
-    values["pending_intent"] = "order"
-    values["goal_type"] = "place_order"
-    updated = slots.apply_runtime_values(values, source="selected_order_context", fill_only=False)
-    return updated, values
+_selected_order_context_from_preview_values = selected_order_context_from_preview_values
+_apply_selected_order_context_for_purchase_cta = apply_selected_order_context_for_purchase_cta
 
 
 _RECOMMENDATION_SIZE_REFERENCE_RE = re.compile(

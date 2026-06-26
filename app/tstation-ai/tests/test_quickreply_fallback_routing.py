@@ -143,8 +143,6 @@ from services.tstation.chat import (
     _clear_invalid_store_identity_slots,
     _is_invalid_store_slot_value,
     _is_resolved_size_store_availability_transaction_continuation,
-    _selected_order_context_from_preview_values,
-    _apply_selected_order_context_for_purchase_cta,
     _apply_order_snapshot_slots,
     _standardize_preorder_metadata,
     _build_order_arrival_status_event,
@@ -371,6 +369,7 @@ from services.tstation.policies.turn_contract import (
 )
 from services.tstation.policies.ui_action_policy import (
     apply_other_store_context_enrichment,
+    apply_selected_order_context_for_purchase_cta,
     apply_cta_context_to_slots,
     apply_logistics_earliest_install_cta_action,
     apply_preview_update_cta_action,
@@ -404,6 +403,7 @@ from services.tstation.policies.ui_action_policy import (
     preview_action_mode_for_slots,
     preview_location_slot_values_from_selection,
     preorder_slot_values_from_data,
+    selected_order_context_from_preview_values,
     resolve_goods_no_from_selection,
     resolve_ui_action_context,
     resolve_goods_no_from_product_template_selection,
@@ -16553,7 +16553,7 @@ def test_preview_store_selection_promotes_selected_order_context_for_order_cta()
         "pending_intent": "stock",
         "goal_type": "store_with_stock",
     }
-    selected_context = _selected_order_context_from_preview_values(preview_values)
+    selected_context = selected_order_context_from_preview_values(preview_values)
     assert "goodsNo" not in selected_context
     assert "tireSize" not in selected_context
     assert "ordQty" not in selected_context
@@ -16568,7 +16568,7 @@ def test_preview_store_selection_promotes_selected_order_context_for_order_cta()
         order_context={"selected_order_context": selected_context},
     )
 
-    updated, values = _apply_selected_order_context_for_purchase_cta(slots)
+    updated, values = apply_selected_order_context_for_purchase_cta(slots)
 
     assert values["goods_no"] == "G000000312989"
     assert values["tire_size"] == "245/45R18"

@@ -1979,6 +1979,55 @@ def datepick_slot_values_from_data(
     return slot_values or None
 
 
+def selected_order_context_from_preview_values(preview_values: Mapping[str, Any]) -> dict[str, Any]:
+    if not preview_values.get("goods_no"):
+        return {}
+    context: dict[str, Any] = {}
+    for key_name in ("goods_no", "tire_size", "ord_qty", "region", "shop_id", "shop_name"):
+        value = preview_values.get(key_name)
+        if value not in (None, "", [], {}):
+            context[key_name] = value
+    for key_name in ("schedule_mode", "stock_check_mode"):
+        value = preview_values.get(key_name)
+        if value not in (None, "", [], {}):
+            context[key_name] = value
+    context["pending_intent"] = "order"
+    context["goal_type"] = "place_order"
+    context["source"] = "preview_location_template_selection"
+    return context
+
+
+def apply_selected_order_context_for_purchase_cta(slots: Any) -> tuple[Any, dict[str, Any]]:
+    context_root = slots.order_context if isinstance(getattr(slots, "order_context", None), dict) else {}
+    selected_context = context_root.get("selected_order_context")
+    if not isinstance(selected_context, dict):
+        return slots, {}
+    values = {
+        key: value
+        for key, value in selected_context.items()
+        if key
+        in {
+            "goods_no",
+            "tire_size",
+            "ord_qty",
+            "region",
+            "shop_id",
+            "shop_name",
+            "pending_intent",
+            "goal_type",
+            "requested_cal_day",
+            "rsv_hour",
+        }
+        and value not in (None, "", [], {})
+    }
+    if not values.get("goods_no"):
+        return slots, {}
+    values["pending_intent"] = "order"
+    values["goal_type"] = "place_order"
+    updated = slots.apply_runtime_values(values, source="selected_order_context", fill_only=False)
+    return updated, values
+
+
 def goods_no_from_template_event(event: Mapping[str, Any] | None) -> str:
     if not isinstance(event, Mapping):
         return ""
