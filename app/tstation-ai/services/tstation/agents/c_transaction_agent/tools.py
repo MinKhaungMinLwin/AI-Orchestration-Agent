@@ -1211,9 +1211,19 @@ def search_stores_tool(
 
         stores = data.get("stores")
         if isinstance(stores, list):
-            sorted_stores = _sort_store_candidates([s for s in stores if isinstance(s, dict)], sort_by)
+            candidate_stores = [s for s in stores if isinstance(s, dict)]
+            if _should_apply_preferred_region_address_filter(
+                region_code=region_code,
+                store_nm=normalized_store_nm,
+                place_query=place_query,
+                xpos=xpos,
+                ypos=ypos,
+                source=search_meta.get("source"),
+            ):
+                candidate_stores = _filter_stores_by_preferred_region_address(region_code, candidate_stores)
+            sorted_stores = _sort_store_candidates(candidate_stores, sort_by)
             data["stores"] = sorted_stores[:final_limit]
-            search_meta["candidate_count"] = len(stores)
+            search_meta["candidate_count"] = len(candidate_stores)
             search_meta["returned_count"] = len(data["stores"])
             data["search"] = search_meta
         return _success_response(source_status, data)
@@ -1727,6 +1737,25 @@ def _shop_id(store: dict) -> str | None:
 _PREFERRED_REGION_ADDRESS_TOKENS = {
     "강남": ("강남구",),
 }
+
+
+def _should_apply_preferred_region_address_filter(
+    *,
+    region_code: str | None,
+    store_nm: str | None,
+    place_query: str | None,
+    xpos: float | None,
+    ypos: float | None,
+    source: str | None,
+) -> bool:
+    return bool(
+        region_code
+        and not store_nm
+        and not place_query
+        and xpos is None
+        and ypos is None
+        and str(source or "") == "list"
+    )
 
 
 def _filter_stores_by_preferred_region_address(region_code: str | None, stores: list[dict]) -> list[dict]:

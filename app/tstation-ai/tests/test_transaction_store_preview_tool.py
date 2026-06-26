@@ -418,6 +418,106 @@ def test_search_stores_blocks_foreign_region_business_place_fallback(monkeypatch
     assert [call.get("region_code") for call in store_calls] == ["베이징"]
 
 
+def test_search_stores_region_rating_prefers_address_matched_region(monkeypatch):
+    monkeypatch.setattr(
+        tools,
+        "_get_store_list_cached",
+        lambda **kwargs: {
+            "status": "success",
+            "http_status": 200,
+            "data": {
+                "stores": [
+                    {
+                        "shop_id": "F00011",
+                        "shop_nm": "티스테이션 강릉강남점",
+                        "addr_base": "강원특별자치도 강릉시 경강로",
+                        "road_addr_base": "강원특별자치도 강릉시 경강로",
+                        "rating_idx": 5.0,
+                    },
+                    {
+                        "shop_id": "F00012",
+                        "shop_nm": "티스테이션 역삼점",
+                        "addr_base": "서울특별시 강남구 테헤란로",
+                        "road_addr_base": "서울특별시 강남구 테헤란로",
+                        "rating_idx": 4.9,
+                    },
+                    {
+                        "shop_id": "F00013",
+                        "shop_nm": "티스테이션 삼성점",
+                        "addr_base": "서울특별시 강남구 삼성로",
+                        "road_addr_base": "서울특별시 강남구 삼성로",
+                        "rating_idx": 4.7,
+                    },
+                ]
+            },
+        },
+    )
+
+    result = tools.search_stores_tool.func(region_code="강남", sort_by="rating", limit=2)
+
+    assert result["status"] == "success"
+    assert [store["shop_id"] for store in result["data"]["stores"]] == ["F00012", "F00013"]
+    assert result["data"]["search"]["candidate_count"] == 2
+    assert result["data"]["search"]["returned_count"] == 2
+
+
+def test_search_stores_region_rating_keeps_specific_store_name_disambiguation(monkeypatch):
+    monkeypatch.setattr(
+        tools,
+        "_get_store_list_cached",
+        lambda **kwargs: {
+            "status": "success",
+            "http_status": 200,
+            "data": {
+                "stores": [
+                    {
+                        "shop_id": "F00001",
+                        "shop_nm": "티스테이션 강남점",
+                        "addr_base": "서울특별시 강남구 도곡로",
+                    },
+                    {
+                        "shop_id": "F90001",
+                        "shop_nm": "티스테이션 강릉강남점",
+                        "addr_base": "강원특별자치도 강릉시 경강로",
+                    },
+                ]
+            },
+        },
+    )
+
+    result = tools.search_stores_tool.func(store_nm="강남점", sort_by="rating", limit=5)
+
+    assert result["status"] == "success"
+    assert [store["shop_id"] for store in result["data"]["stores"]] == ["F00001", "F90001"]
+
+
+def test_search_stores_region_keeps_original_results_when_no_preferred_address_match(monkeypatch):
+    monkeypatch.setattr(
+        tools,
+        "_get_store_list_cached",
+        lambda **kwargs: {
+            "status": "success",
+            "http_status": 200,
+            "data": {
+                "stores": [
+                    {
+                        "shop_id": "T02396",
+                        "shop_nm": "티스테이션 강릉강남점",
+                        "addr_base": "강원특별자치도 강릉시 경강로",
+                        "road_addr_base": "강원특별자치도 강릉시 경강로",
+                        "rating_idx": 4.8,
+                    }
+                ]
+            },
+        },
+    )
+
+    result = tools.search_stores_tool.func(region_code="강릉", sort_by="rating", limit=5)
+
+    assert result["status"] == "success"
+    assert [store["shop_id"] for store in result["data"]["stores"]] == ["T02396"]
+
+
 def test_search_stores_complex_tool_passes_specialty_and_schedule_filters(monkeypatch):
     calls: list[dict] = []
 
