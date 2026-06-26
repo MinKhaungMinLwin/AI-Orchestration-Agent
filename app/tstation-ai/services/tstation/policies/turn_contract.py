@@ -371,6 +371,9 @@ def build_turn_contract(
     if code_intent == "maintenance_history_access_policy" or planner_intent == "maintenance_history_access_policy":
         domain = "support"
         intent = "maintenance_history_access_policy"
+    if code_intent == "order_document_guidance" or planner_intent == "order_document_guidance":
+        domain = "support"
+        intent = "order_document_guidance"
     if code_intent == "general_card_cancel_timing_policy" or planner_intent == "general_card_cancel_timing_policy":
         domain = "support"
         intent = "general_card_cancel_timing_policy"
@@ -508,6 +511,16 @@ def build_turn_contract(
                 "get_coupon_applicable_products_tool",
             ),
         )
+    if intent == "order_document_guidance":
+        forbidden_tools = _merge_tuple(
+            forbidden_tools,
+            (
+                "transfer_to_qna_tool",
+                "get_orders_of_user_tool",
+                "get_order_status_tool",
+                "quick_order_tool",
+            ),
+        )
     if intent == "general_card_cancel_timing_policy":
         forbidden_tools = _merge_tuple(
             forbidden_tools,
@@ -563,6 +576,22 @@ def build_turn_contract(
                 "법적 절차, 기관, 서류, 단계, 요건은 안내하지 않고 1:1 문의 또는 고객센터 불편 접수만 안내한다."
             ),
             "metadata": {"response_shape_key": "legal_action_guidance_denied"},
+        }
+    if intent == "order_document_guidance" and response_decision_payload is None:
+        response_decision_payload = {
+            "response_shape": "summary",
+            "template": "quickReply",
+            "required_slots": [],
+            "forbidden_behaviors": [
+                "direct_email_document_send",
+                "direct_qna_complete_first",
+                "skip_order_history_guidance",
+            ],
+            "assistant_guidance": (
+                "거래명세서/증빙 서류 문의는 이메일 직접 발송 불가를 먼저 설명하고 주문 내역 확인 경로를 우선 제시한다. "
+                "1:1 문의는 보조 CTA로만 둔다."
+            ),
+            "metadata": {"response_shape_key": "order_document_guidance"},
         }
 
     return TurnContract(
@@ -1571,6 +1600,14 @@ def response_contract_violations(
     )
     if payment_error_violation is not None:
         violations.append(payment_error_violation)
+    order_document_violation = _order_document_guidance_contract_violation(
+        template=template,
+        called_tools=called_tools,
+        event_data=event_data,
+        contract=contract,
+    )
+    if order_document_violation is not None:
+        violations.append(order_document_violation)
     signup_benefit_violation = _signup_first_purchase_benefit_contract_violation(
         assistant_response_text=assistant_response_text,
         called_tools=called_tools,
@@ -1674,6 +1711,47 @@ def _legal_action_guidance_contract_violation(
         "assistant_response_text": assistant_text[:160],
         "forbidden_behaviors": sorted(forbidden_set & _LEGAL_ACTION_FORBIDDEN_BEHAVIORS),
     }
+
+
+def _order_document_guidance_contract_violation(
+    *,
+    template: str | None,
+    called_tools: list[str] | tuple[str, ...] | None,
+    event_data: Mapping[str, Any] | None,
+    contract: TurnContract | None,
+) -> dict[str, Any] | None:
+    if contract is None or contract.intent != "order_document_guidance":
+        return None
+    tools = list(called_tools or ())
+    if "transfer_to_qna_tool" in tools or template == "qnaComplete":
+        return {
+            "type": "order_document_guidance_qna_direct",
+            "template": template,
+            "called_tools": tools,
+        }
+    assistant_text = ""
+    quick_replies: list[Mapping[str, Any]] = []
+    if isinstance(event_data, Mapping):
+        assistant_text = str(event_data.get("assistantResponse") or "").strip()
+        raw_replies = event_data.get("quickReplies")
+        if isinstance(raw_replies, list):
+            quick_replies = [item for item in raw_replies if isinstance(item, Mapping)]
+    if assistant_text and "이메일" not in assistant_text:
+        return {
+            "type": "order_document_guidance_missing_email_notice",
+            "assistant_response_text": assistant_text[:160],
+        }
+    has_order_history_cta = any(
+        "주문" in str(item.get("label") or "")
+        and "order-history" in str(item.get("url") or "")
+        for item in quick_replies
+    )
+    if quick_replies and not has_order_history_cta:
+        return {
+            "type": "order_document_guidance_missing_order_history_cta",
+            "quick_replies": [dict(item) for item in quick_replies[:3]],
+        }
+    return None
 
 
 def _recommendation_metadata(contract: TurnContract | None) -> dict[str, Any]:

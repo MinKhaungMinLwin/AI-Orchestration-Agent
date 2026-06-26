@@ -661,6 +661,7 @@ class MultiAgentDomain(BaseModel):
         "regional_price_policy",
         "price_policy_faq",
         "payment_error_troubleshooting",
+        "order_document_guidance",
         "general_card_cancel_timing_policy",
         "signup_first_purchase_benefit_policy",
         "signup_coupon_guidance",
@@ -677,6 +678,7 @@ class MultiAgentDomain(BaseModel):
         description=(
             "Structured support/policy intent. Use this for non-transaction policy guidance such as shipping fee, "
             "online-vs-store price policy, regional price policy, payment error troubleshooting, "
+            "order document guidance, "
             "signup/first-purchase benefit policy, signup coupon guidance, partner-member-only coupon policy, "
             "legal action guidance denial, store service availability, goods review lookup, "
             "store service review write CTA, or generic price policy FAQ. "
@@ -1845,6 +1847,7 @@ class _SlimMultiAgentDomain(BaseModel):
         "regional_price_policy",
         "price_policy_faq",
         "payment_error_troubleshooting",
+        "order_document_guidance",
         "general_card_cancel_timing_policy",
         "signup_first_purchase_benefit_policy",
         "signup_coupon_guidance",
@@ -2039,6 +2042,7 @@ Complaint routing rule:
    - "regional_price_policy": 서울/제주 등 지역에 따라 최종가가 달라지는 정책 설명
    - "price_policy_faq": generic pricing policy FAQ that is not a live price lookup
    - "payment_error_troubleshooting": 결제 진행 중 오류/결제창 또는 결제 화면 문제/결제 진행 불가/장착일 선택란 미노출 등 checkout troubleshooting
+   - "order_document_guidance": 거래명세서/영수증/구매 증빙/회사 제출용 서류/이메일 발송 가능 여부 안내. 직접 이메일 발송이나 즉시 1:1 접수보다 주문 내역 확인 CTA가 우선.
    - "general_card_cancel_timing_policy": 취소 완료 후 카드 승인취소/환불 반영 기간 안내. 주문 특정 없는 일반 정책 문의이며 owned-order 조회가 아님.
    - "signup_first_purchase_benefit_policy": 회원가입/신규회원/첫구매 혜택·쿠폰·서비스 안내. FAQ/RAG 정책 설명이며 내 쿠폰 조회/직접 발급이 아님.
    - "signup_coupon_guidance": 회원가입 전용/신규회원/웰컴 쿠폰 문의. 보유 쿠폰 조회가 아니라 가입 혜택/진행 중 혜택 안내.
@@ -2306,6 +2310,7 @@ Also set `policy_intent`:
 - regional final-price difference policy (서울 vs 제주 등) → `regional_price_policy`
 - generic pricing policy FAQ → `price_policy_faq`
 - checkout/payment troubleshooting (payment error, payment window/screen problem, payment cannot proceed, install-date selector missing during checkout) → SUPPORT, policy_intent=`payment_error_troubleshooting`
+- order document / receipt / proof guidance ("거래명세서 어디서 확인해?", "회사 제출용 거래명세서 필요한데 이메일로 보내줄 수 있어?", "영수증 확인 경로 알려줘", "구매 증빙 서류 어디서 봐?") → SUPPORT, policy_intent=`order_document_guidance`; answer with direct-email-not-supported plus order-history/document-check guidance first. If the user explicitly asks to file a 1:1 inquiry or 접수, human escalation may be used instead of this policy intent.
 - card cancel/refund timing policy without owned-order anchor ("취소 완료 문자 받았는데 카드 승인 취소 언제 돼?", "카드 승인취소는 보통 며칠 걸려?", "결제 취소 반영 기간 알려줘") → SUPPORT, policy_intent=`general_card_cancel_timing_policy`; do not start owned-order lookup unless the current turn includes an order number, "내 주문", "내역 봐줘", or another owned-order anchor.
 - signup/new-member/first-purchase benefit explanation ("회원가입하면 첫구매 혜택은 뭐가 있어?", "신규회원 혜택 알려줘", "가입하면 받을 수 있는 쿠폰 뭐야?") → SUPPORT, policy_intent=`signup_first_purchase_benefit_policy`; this is FAQ/RAG policy guidance, not owned coupon lookup or coupon issuance.
 - signup/new-member/welcome coupon guidance ("회원가입 전용 쿠폰 있어?", "신규회원 쿠폰 있어?", "가입하면 쿠폰 줘?", "웰컴 쿠폰 있나요?") → SUPPORT, policy_intent=`signup_coupon_guidance`; this is signup coupon guidance, not partner-member coupon policy and not owned coupon lookup.
@@ -6810,6 +6815,43 @@ def _build_general_card_cancel_timing_policy_event(user_query: str) -> dict:
                 "responseShapeKey": "general_card_cancel_timing_policy",
                 "generalCardCancelTimingPolicy": True,
                 "userText": user_query,
+            },
+        },
+    }
+
+
+def _build_order_document_guidance_event(user_query: str) -> dict:
+    order_no_match = _ORDER_NO_FOR_DESTINATION_CTA_RE.search(user_query or "")
+    order_no = ""
+    if order_no_match:
+        order_no = str(order_no_match.group("named") or order_no_match.group("bare") or "").strip()
+
+    primary_chip = (
+        {"label": "주문 상세 확인", "url": CTAUrls.ORDER_HISTORY_DETAIL.replace("<ord_no>", order_no), "domain": "TRANSACTION"}
+        if order_no
+        else {"label": "주문 내역 확인", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"}
+    )
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.SUPPORT.value,
+        "assistant_response_source": "code_order_document_guidance",
+        "data": {
+            "assistantResponse": (
+                "챗봇에서 거래명세서나 증빙서류를 이메일로 직접 발송해 드리기는 어려워요.\n\n"
+                "회사 제출용 거래명세서나 영수증이 필요하시면 주문 내역에서 해당 주문의 증빙/거래명세서 정보를 먼저 확인해 주세요.\n\n"
+                "별도 양식이나 이메일 발송 요청이 더 필요하면 1:1 문의로 접수해 주세요."
+            ),
+            "quickReplies": [
+                primary_chip,
+                {"label": "1:1 문의하기", "domain": "SUPPORT"},
+            ],
+            "predictedDomains": ["SUPPORT", "TRANSACTION"],
+            "metadata": {
+                "responseShapeKey": "order_document_guidance",
+                "orderDocumentGuidance": True,
+                "userText": user_query,
+                "ordNo": order_no,
             },
         },
     }
@@ -24821,6 +24863,26 @@ class TStationChatServiceV2:
                     },
                 )
             event_data = partner_coupon_event.get("data") if isinstance(partner_coupon_event.get("data"), dict) else {}
+            return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
+
+        if turn_contract and turn_contract.intent == "order_document_guidance":
+            order_document_event = _build_order_document_guidance_event(last_user_text)
+            logger.info(
+                "[ORDER_DOCUMENT_GUIDANCE] advisory response: text=%r session_id=%s",
+                last_user_text[:80],
+                request.session_id,
+            )
+            if request.stream:
+                return StreamingResponse(
+                    TStationChatServiceV2._stream_policy_guard_response(order_document_event),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
+            event_data = order_document_event.get("data") if isinstance(order_document_event.get("data"), dict) else {}
             return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
 
         if turn_contract and turn_contract.intent == "signup_coupon_guidance":

@@ -28,6 +28,11 @@ _CARD_CANCEL_TIMING_POLICY_RE = re.compile(
     r"승인\s*취소\s*(?:언제|반영|걸려|소요)",
     re.IGNORECASE,
 )
+_ORDER_DOCUMENT_GUIDANCE_RE = re.compile(
+    r"거래\s*명세서|거래명세서|영수증|구매\s*증빙|증빙\s*서류|제출용\s*서류|"
+    r"세금\s*계산서|이메일.{0,24}(?:보내|발송)|(?:보내|발송).{0,24}이메일",
+    re.IGNORECASE,
+)
 _SIGNUP_COUPON_GUIDANCE_RE = re.compile(
     r"회원\s*가입|신규\s*회원|가입(?:하면|시)?|웰컴\s*쿠폰|가입\s*쿠폰|신규\s*가입|첫\s*가입",
     re.IGNORECASE,
@@ -147,6 +152,24 @@ def decide_support_response(
                 "이벤트/프로모션 운영 시점에 따라 달라질 수 있음을 안내하고, 현재 진행 중인 혜택 확인 경로를 우선 제공한다. "
                 "이미 가입한 회원이라면 쿠폰함에서 발급된 쿠폰이 있는지 확인할 수 있다고만 안내하고, "
                 "가입 쿠폰이 반드시 있거나 이미 발급되었다고 단정하지 않는다."
+            ),
+        )
+
+    if intent == "order_document_guidance" or _ORDER_DOCUMENT_GUIDANCE_RE.search(text):
+        return _decision(
+            response_shape_key="order_document_guidance",
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=(
+                "direct_email_document_send",
+                "direct_qna_complete_first",
+                "skip_order_history_guidance",
+            ),
+            assistant_guidance=(
+                "거래명세서/영수증/구매 증빙/회사 제출용 서류 문의는 챗봇이 이메일 직접 발송을 처리할 수 없다고 먼저 안내한다. "
+                "그 다음 주문 내역에서 해당 주문의 증빙/거래명세서 정보를 확인하는 경로를 우선 제시하고, "
+                "별도 양식이나 이메일 발송 요청이 더 필요할 때만 1:1 문의를 보조 CTA로 둔다. "
+                "사용자가 명시적으로 접수/문의 생성을 요청하지 않는 한 qnaComplete를 바로 시작하지 않는다."
             ),
         )
 

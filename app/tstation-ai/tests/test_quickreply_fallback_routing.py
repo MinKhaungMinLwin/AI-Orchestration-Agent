@@ -62,6 +62,7 @@ from services.tstation.chat import (
     _build_maintenance_dday_event,
     _build_maintenance_history_access_policy_event,
     _build_maintenance_history_event,
+    _build_order_document_guidance_event,
     _build_owned_coupon_best_discount_event,
     _build_owned_coupon_expiry_lookup_event,
     _build_oe_replacement_guidance_event,
@@ -2985,6 +2986,30 @@ def test_destination_cta_mapper_uses_order_history_detail_when_order_number_is_v
         "/mypage/tstation/order-history/detail/O202605180019345"
     )
     assert event_data["metadata"]["destination"] == "order_history_detail"
+
+
+def test_build_order_document_guidance_event_prefers_order_history_cta() -> None:
+    event = _build_order_document_guidance_event("회사 제출용 거래명세서 필요한데 이메일로 보내줄 수 있어?")
+
+    assert event["template"] == "quickReply"
+    event_data = event["data"]
+    assert "이메일로 직접 발송" in event_data["assistantResponse"]
+    assert event_data["quickReplies"] == [
+        {"label": "주문 내역 확인", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"},
+        {"label": "1:1 문의하기", "domain": "SUPPORT"},
+    ]
+    assert event_data["metadata"]["responseShapeKey"] == "order_document_guidance"
+
+
+def test_build_order_document_guidance_event_uses_order_detail_when_order_number_is_present() -> None:
+    event = _build_order_document_guidance_event("주문번호 O202606220019363 거래명세서 이메일로 보내줄 수 있어?")
+
+    assert event["data"]["quickReplies"][0] == {
+        "label": "주문 상세 확인",
+        "url": CTAUrls.ORDER_HISTORY_DETAIL.replace("<ord_no>", "O202606220019363"),
+        "domain": "TRANSACTION",
+    }
+    assert event["data"]["metadata"]["ordNo"] == "O202606220019363"
 
 
 def test_destination_cta_mapper_does_not_touch_product_recommendation_or_existing_destination_url() -> None:
@@ -15957,6 +15982,64 @@ def test_payment_error_support_policy_guides_faq_before_qna() -> None:
     assert response_decision.template == TemplateName.QUICK_REPLY
     assert "qna_without_faq_solution" in response_decision.forbidden_behaviors
     assert "FAQ hybrid 검색을 먼저 수행" in response_decision.assistant_guidance
+
+
+def test_order_document_guidance_contract_blocks_direct_qna_and_order_lookup_tools() -> None:
+    contract = build_turn_contract(
+        user_text="회사 제출용 거래명세서 필요한데 이메일로 보내줄 수 있어?",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:order_document_guidance"],
+            policy_intent="order_document_guidance",
+        ),
+    )
+
+    assert contract.domain == "support"
+    assert contract.intent == "order_document_guidance"
+    assert contract.known_slots["policy_intent"] == "order_document_guidance"
+    assert "search_faq_hybrid_tool" in contract.allowed_tools
+    assert "transfer_to_qna_tool" in contract.forbidden_tools
+    assert "get_orders_of_user_tool" in contract.forbidden_tools
+
+    qna_violation = response_contract_violations(
+        template="qnaComplete",
+        called_tools=["transfer_to_qna_tool"],
+        event_data={"assistantResponse": "1:1 문의로 접수해 주세요."},
+        contract=contract,
+    )
+    assert {
+        "type": "order_document_guidance_qna_direct",
+        "template": "qnaComplete",
+        "called_tools": ["transfer_to_qna_tool"],
+        "severity": "error",
+    } in qna_violation
+
+    cta_violation = response_contract_violations(
+        template="quickReply",
+        called_tools=[],
+        event_data={
+            "assistantResponse": "거래명세서는 확인해 드릴게요.",
+            "quickReplies": [{"label": "1:1 문의하기", "domain": "SUPPORT"}],
+        },
+        contract=contract,
+    )
+    assert {
+        "type": "order_document_guidance_missing_email_notice",
+        "assistant_response_text": "거래명세서는 확인해 드릴게요.",
+        "severity": "error",
+    } in cta_violation
+
+
+def test_order_document_support_policy_prefers_order_history_before_qna() -> None:
+    response_decision = decide_support_response(
+        intent="order_document_guidance",
+        user_text="거래명세서 어디서 확인해?",
+    )
+
+    assert response_decision.metadata["response_shape_key"] == "order_document_guidance"
+    assert response_decision.template == TemplateName.QUICK_REPLY
+    assert "direct_qna_complete_first" in response_decision.forbidden_behaviors
+    assert "주문 내역" in response_decision.assistant_guidance
 
 
 def test_signup_first_purchase_benefit_contract_requires_faq_and_blocks_coupon_tools() -> None:
