@@ -10055,6 +10055,36 @@ def test_direct_code_fast_path_event_records_allowed_and_blocked_tools_in_metada
     ]
 
 
+def test_direct_code_fast_path_event_preserves_listcar_metadata_array() -> None:
+    contract = TurnContract(
+        domain="discovery",
+        intent="product_description",
+        allowed_tools=("get_my_cars_tool",),
+        response_decision={"template": "listCar", "metadata": {"response_shape_key": "vehicle_information"}},
+    )
+    metadata_rows = [{"carNo": "61거1836", "tireSize": "2254517"}]
+    event = {
+        "type": "data",
+        "template": "listCar",
+        "data": {
+            "assistantResponse": "차량을 선택해 주세요.",
+            "listCar": [{"licensePlate": "61거1836", "info": "제타"}],
+            "metadata": list(metadata_rows),
+        },
+    }
+
+    annotated = _annotate_direct_code_fast_path_event(
+        event,
+        turn_contract=contract,
+        contract_gate_reason="contract_matched:test",
+        emitted_template="listCar",
+    )
+
+    assert annotated["data"]["metadata"] == metadata_rows
+    assert annotated["data"]["contractMetadata"]["contract_gate_result"] == "allowed"
+    assert annotated["data"]["contractMetadata"]["contract_intent"] == "product_description"
+
+
 @pytest.mark.parametrize(
     (
         "user_text",
@@ -19876,6 +19906,34 @@ def test_finalize_direct_code_event_uses_actual_template_and_records_metadata() 
     assert finalized["data"]["metadata"]["direct_source"] == "code_store_attribute_inquiry"
     assert finalized["data"]["metadata"]["emitted_template"] == "quickReply"
     assert finalized["data"]["metadata"]["required_tools"] == ["get_store_list_tool"]
+
+
+def test_record_contract_gate_metadata_preserves_selection_metadata_array() -> None:
+    contract = TurnContract(
+        domain="discovery",
+        intent="product_description",
+        response_decision={"template": "listCar", "metadata": {"response_shape_key": "vehicle_information"}},
+    )
+    event = {
+        "type": "data",
+        "template": "listCar",
+        "data": {
+            "metadata": [{"carNo": "61거1836", "tireSize": "2254517"}],
+        },
+    }
+
+    finalized = chat_module._record_contract_gate_metadata(
+        event,
+        turn_contract=contract,
+        gate_result="allowed",
+        gate_reason="contract_matched:test_listcar",
+        emitted_template="listCar",
+        source="code_listcar",
+    )
+
+    assert finalized["data"]["metadata"] == [{"carNo": "61거1836", "tireSize": "2254517"}]
+    assert finalized["data"]["contractMetadata"]["contract_gate_result"] == "allowed"
+    assert finalized["data"]["contractMetadata"]["transform_source"] == "code_listcar"
 
 
 def test_finalize_direct_code_event_blocks_actual_forbidden_template() -> None:

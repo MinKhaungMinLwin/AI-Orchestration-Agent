@@ -15416,10 +15416,7 @@ def _annotate_direct_code_fast_path_event(
         event["required_tools"] = list(required_tools)
     event_data = event.get("data")
     if isinstance(event_data, dict):
-        metadata = event_data.get("metadata")
-        if not isinstance(metadata, dict):
-            metadata = {}
-            event_data["metadata"] = metadata
+        metadata = _contract_annotation_metadata(event_data)
         metadata["contract_intent"] = str(turn_contract.intent or "") if turn_contract is not None else ""
         if turn_contract is not None:
             metadata["allowed_tools"] = list(turn_contract.allowed_tools)
@@ -15460,10 +15457,7 @@ def _record_contract_gate_metadata(
         event["blocked_template"] = blocked_template
     event_data = event.get("data")
     if isinstance(event_data, dict):
-        metadata = event_data.get("metadata")
-        if not isinstance(metadata, dict):
-            metadata = {}
-            event_data["metadata"] = metadata
+        metadata = _contract_annotation_metadata(event_data)
         metadata["contract_gate_result"] = gate_result
         metadata["contract_gate_reason"] = gate_reason
         metadata["contract_intent"] = str(turn_contract.intent or "") if turn_contract is not None else ""
@@ -15477,6 +15471,18 @@ def _record_contract_gate_metadata(
         if blocked_template:
             metadata["blocked_template"] = blocked_template
     return event
+
+
+def _contract_annotation_metadata(event_data: dict[str, Any]) -> dict[str, Any]:
+    metadata = event_data.get("metadata")
+    if isinstance(metadata, dict):
+        return metadata
+    contract_metadata = event_data.get("contractMetadata")
+    if isinstance(contract_metadata, dict):
+        return contract_metadata
+    contract_metadata = {}
+    event_data["contractMetadata"] = contract_metadata
+    return contract_metadata
 
 
 _POLICY_GUARD_FORBIDDEN_TOOLS = (
@@ -31410,10 +31416,7 @@ class TStationChatServiceV2:
                     target_data = target_event.get("data")
                     if not isinstance(target_data, dict):
                         return
-                    metadata = target_data.get("metadata")
-                    if not isinstance(metadata, dict):
-                        metadata = {}
-                        target_data["metadata"] = metadata
+                    metadata = _contract_annotation_metadata(target_data)
                     metadata["contract_gate_result"] = gate_result
                     metadata["contract_gate_reason"] = gate_reason
                     metadata["contract_intent"] = str(turn_contract.intent or "") if turn_contract is not None else ""
