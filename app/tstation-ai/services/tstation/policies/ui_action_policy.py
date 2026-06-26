@@ -586,6 +586,54 @@ def classify_direct_cta_action(
     return None
 
 
+def apply_preview_update_cta_action(
+    slots: Any,
+    *,
+    chip_action_id: str | None,
+    user_text: str,
+    cta_context: Mapping[str, Any] | None,
+    regex_region: str | None = None,
+) -> tuple[Any, dict[str, Any]]:
+    updated_slots = apply_cta_context_to_slots(slots, cta_context)
+    action_id = str(chip_action_id or "").strip()
+    if action_id == "change_region":
+        if regex_region:
+            updated_slots.region = regex_region
+        elif str(user_text or "").strip():
+            updated_slots.region = re.sub(r"(?:은|는|으로|로|에서|에는|\?)\s*$", "", str(user_text).strip())
+        updated_slots.shop_id = None
+        updated_slots.shop_name = None
+    elif action_id == "change_date":
+        cleaned_text = str(user_text or "").strip()
+        if cleaned_text:
+            digits = re.sub(r"[^0-9]", "", cleaned_text)
+            if len(digits) == 8:
+                updated_slots.requested_cal_day = digits
+        if not getattr(updated_slots, "availability_intent", None):
+            updated_slots.availability_intent = "today_install"
+    if getattr(updated_slots, "availability_intent", None) == "today_install":
+        updated_slots.pending_intent = getattr(updated_slots, "pending_intent", None) or "stock"
+        updated_slots.goal_type = getattr(updated_slots, "goal_type", None) or "store_with_stock"
+    metadata = {
+        "chip_action_id": action_id,
+        "resolved_region": getattr(updated_slots, "region", None),
+        "resolved_requested_cal_day": getattr(updated_slots, "requested_cal_day", None),
+        "pending_intent": getattr(updated_slots, "pending_intent", None),
+        "goal_type": getattr(updated_slots, "goal_type", None),
+    }
+    return updated_slots, metadata
+
+
+def preview_action_mode_for_slots(slots: Any) -> str:
+    pending_intent = str(getattr(slots, "pending_intent", None) or "").strip()
+    goal_type = str(getattr(slots, "goal_type", None) or "").strip()
+    if pending_intent == "order" or goal_type == "place_order":
+        return "purchase_continuation"
+    if pending_intent == "stock" or goal_type == "store_with_stock":
+        return "stock_check"
+    return "booking_continuation"
+
+
 def normalize_ui_action_metadata(
     event: dict[str, Any],
     *,

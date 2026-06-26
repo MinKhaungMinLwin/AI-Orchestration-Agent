@@ -384,12 +384,14 @@ from services.tstation.policies.turn_contract import (
 )
 from services.tstation.policies.ui_action_policy import (
     apply_cta_context_to_slots,
+    apply_preview_update_cta_action,
     apply_ui_action_slot_patch,
     build_quickreply_cta_clarification_event,
     classify_direct_cta_action,
     is_logistics_earliest_install_date_followup,
     merged_quickreply_cta_context,
     normalize_ui_action_metadata,
+    preview_action_mode_for_slots,
     resolve_ui_action_context,
     validate_ui_actions_for_contract,
 )
@@ -549,6 +551,40 @@ def test_classify_direct_cta_action_routes_followup_modes() -> None:
         user_text="가장 빠른 예약일 확인",
         cta_context={"followupMode": "logistics_earliest_install_date"},
     ) == "logistics_earliest_install_date"
+
+
+def test_apply_preview_update_cta_action_updates_region_and_keeps_stock_flow() -> None:
+    slots = ConversationSlots(pending_intent="stock", goal_type="store_with_stock", region="강남", shop_name="강남점")
+
+    updated, metadata = apply_preview_update_cta_action(
+        slots,
+        chip_action_id="change_region",
+        user_text="동탄",
+        cta_context={"intentKey": "today_install"},
+        regex_region="동탄",
+    )
+
+    assert updated.region == "동탄"
+    assert updated.shop_name is None
+    assert updated.pending_intent == "stock"
+    assert updated.goal_type == "store_with_stock"
+    assert metadata["chip_action_id"] == "change_region"
+
+
+def test_apply_preview_update_cta_action_updates_date_and_preview_action_mode() -> None:
+    slots = ConversationSlots(pending_intent="order", goal_type="place_order")
+
+    updated, metadata = apply_preview_update_cta_action(
+        slots,
+        chip_action_id="change_date",
+        user_text="20260627",
+        cta_context={"intentKey": "today_install"},
+    )
+
+    assert updated.requested_cal_day == "20260627"
+    assert updated.availability_intent == "today_install"
+    assert metadata["resolved_requested_cal_day"] == "20260627"
+    assert preview_action_mode_for_slots(updated) == "purchase_continuation"
 
 
 def test_transaction_cta_sanitizer_removes_label_only_reservation_and_contracts_region() -> None:

@@ -111,6 +111,7 @@ from services.tstation.policies.pickup_service_gate import decide_pickup_service
 from services.tstation.policies.ui_action_policy import (
     UIActionContext,
     apply_cta_context_to_slots,
+    apply_preview_update_cta_action,
     apply_ui_action_slot_patch,
     build_quickreply_cta_clarification_event,
     chip_context_dict,
@@ -118,6 +119,7 @@ from services.tstation.policies.ui_action_policy import (
     classify_direct_cta_action,
     merged_quickreply_cta_context,
     normalize_ui_action_metadata,
+    preview_action_mode_for_slots,
     quickreply_cta_context_from_chip,
     quickreply_cta_context_from_template,
     resolve_ui_action_context,
@@ -22916,24 +22918,16 @@ class TStationChatServiceV2:
                 )
             elif direct_cta_action_kind == "preview_update":
                 before_cta_slots = merged_slots.model_dump()
-                merged_slots = apply_cta_context_to_slots(merged_slots, cta_context)
-                if chip_action_id == "change_region":
-                    if regex_slots.region:
-                        merged_slots.region = regex_slots.region
-                    elif last_user_text.strip():
-                        merged_slots.region = re.sub(r"(?:은|는|으로|로|에서|에는|\?)\s*$", "", last_user_text.strip())
-                    merged_slots.shop_id = None
-                    merged_slots.shop_name = None
-                elif chip_action_id == "change_date":
-                    merged_slots.requested_cal_day = _requested_reservation_cal_day_or_today(last_user_text)
-                    if not getattr(merged_slots, "availability_intent", None):
-                        merged_slots.availability_intent = "today_install"
-                if getattr(merged_slots, "availability_intent", None) == "today_install":
-                    merged_slots.pending_intent = merged_slots.pending_intent or "stock"
-                    merged_slots.goal_type = merged_slots.goal_type or "store_with_stock"
+                merged_slots, preview_update_metadata = apply_preview_update_cta_action(
+                    merged_slots,
+                    chip_action_id=chip_action_id,
+                    user_text=last_user_text,
+                    cta_context=cta_context,
+                    regex_region=regex_slots.region,
+                )
                 logger.info(
                     "[SLOTS] Applied CTA action context action=%s before=%s after=%s",
-                    chip_action_id,
+                    preview_update_metadata.get("chip_action_id") or chip_action_id,
                     {k: v for k, v in before_cta_slots.items() if v not in (None, "", [], {})},
                     {k: v for k, v in merged_slots.model_dump().items() if v not in (None, "", [], {})},
                 )
@@ -22969,13 +22963,7 @@ class TStationChatServiceV2:
                 _cta_current_user_text.set(last_user_text)
                 _cta_current_pending_intent.set(merged_slots.pending_intent)
                 _cta_current_goal_type.set(merged_slots.goal_type)
-                _cta_current_action_mode.set(
-                    "purchase_continuation"
-                    if merged_slots.pending_intent == "order" or merged_slots.goal_type == "place_order"
-                    else "stock_check"
-                    if merged_slots.pending_intent == "stock" or merged_slots.goal_type == "store_with_stock"
-                    else "booking_continuation"
-                )
+                _cta_current_action_mode.set(preview_action_mode_for_slots(merged_slots))
                 cta_contract, preview_allowed, preview_reason = _build_cta_action_contract(
                     "code_cta_action_preview",
                     ("transaction_store_preview_tool",),
