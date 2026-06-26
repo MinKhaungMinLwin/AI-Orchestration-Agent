@@ -120,6 +120,7 @@ from services.tstation.policies.ui_action_policy import (
     build_cta_preview_template_context,
     build_cta_preview_contract_gate,
     build_order_quantity_prompt_event,
+    build_pure_inventory_stock_cta_payload,
     build_preview_tool_mapped_event,
     build_store_availability_quantity_prompt_event,
     cta_preview_input_from_slots,
@@ -9716,49 +9717,22 @@ def _build_pure_inventory_stock_event(
             {"label": "대체상품 찾기", "domain": "DISCOVERY"},
         ]
         response_shape_key = "no_stock_anywhere"
-    current_store_context = store_context_from_mapping(store_context)
-    metadata = {
-        "response_shape_key": response_shape_key,
-        "stock_check_mode": "inventory_only",
-        "logisticsStockAvailable": has_logistics,
-        "reservationSaleAvailable": reservation_sale,
-        "rsvInstallDate": logistics.get("rsv_install_date") or "",
-    }
-    cta_context = {
-        "ordQty": ord_qty,
-        "tireSize": tire_size,
-        "intentKey": "today_install",
-        "pendingIntent": "stock",
-        "goalType": "store_with_stock",
-        "previousStockResult": "store_inventory_unavailable",
-        "followupMode": "logistics_earliest_install_date",
-        "stock_check_mode": "logistics_only",
-        "logisticsStockAvailable": has_logistics,
-        "reservationSaleAvailable": reservation_sale,
-        "rsvInstallDate": logistics.get("rsv_install_date") or "",
-        "currentStoreContext": current_store_context,
-    }
-    if goods_no:
-        cta_context["goodsNo"] = goods_no
-    if current_store_context:
-        metadata["currentStoreContext"] = current_store_context
-        metadata["ctaContext"] = cta_context
-        for reply in quick_replies:
-            if not isinstance(reply, dict):
-                continue
-            if str(reply.get("label") or "") == "가장 빠른 예약일 확인":
-                reply["actionId"] = "logistics_earliest_install_date"
-                reply["intentKey"] = "today_install"
-                reply["metadata"] = cta_context
-            if str(reply.get("actionId") or "") == "search_other_store":
-                reply["metadata"] = cta_context
-    else:
-        metadata["ctaContext"] = cta_context
-        for reply in quick_replies:
-            if isinstance(reply, dict) and str(reply.get("label") or "") == "가장 빠른 예약일 확인":
-                reply["actionId"] = "logistics_earliest_install_date"
-                reply["intentKey"] = "today_install"
-                reply["metadata"] = cta_context
+    quick_replies, metadata = build_pure_inventory_stock_cta_payload(
+        quick_replies=quick_replies,
+        store_context=store_context,
+        ord_qty=ord_qty,
+        tire_size=tire_size,
+        goods_no=goods_no,
+        response_shape_key=response_shape_key,
+        stock_check_mode="logistics_only",
+        logistics_stock_available=has_logistics,
+        reservation_sale_available=reservation_sale,
+        rsv_install_date=str(logistics.get("rsv_install_date") or ""),
+        previous_stock_result="store_inventory_unavailable",
+        followup_mode="logistics_earliest_install_date",
+        include_pending_stock_context=True,
+    )
+    metadata["stock_check_mode"] = "inventory_only"
     return {
         "type": "data",
         "template": "quickReply",
@@ -9783,23 +9757,26 @@ def _build_pure_inventory_store_stock_available_event(
 ) -> dict:
     store_label = store_name or "선택한 매장"
     response = f"{store_label}에서 {tire_size} {ord_qty}개 기준으로 오늘 바로 장착 가능한 매장 재고가 확인돼요."
-    current_store_context = store_context_from_mapping(store_context)
-    metadata = {
-        "response_shape_key": "stock_available",
-        "stock_check_mode": "inventory_only",
-        "storeStockAvailable": True,
-        "reservationUiEmitted": False,
-    }
-    if current_store_context:
-        metadata["currentStoreContext"] = current_store_context
-        metadata["ctaContext"] = {
-            "ordQty": ord_qty,
-            "tireSize": tire_size,
-            "intentKey": "today_install",
-            "currentStoreContext": current_store_context,
-        }
-        if goods_no:
-            metadata["ctaContext"]["goodsNo"] = goods_no
+    quick_replies, metadata = build_pure_inventory_stock_cta_payload(
+        quick_replies=[
+            {"label": "예약 가능 시간 확인", "domain": "TRANSACTION"},
+            {
+                "label": "다른 매장 검색",
+                "domain": "TRANSACTION",
+                "actionId": "search_other_store",
+                "intentKey": "today_install",
+            },
+            {"label": "다른 상품 추천", "domain": "DISCOVERY"},
+        ],
+        store_context=store_context,
+        ord_qty=ord_qty,
+        tire_size=tire_size,
+        goods_no=goods_no,
+        response_shape_key="stock_available",
+        stock_check_mode="inventory_only",
+        reservation_ui_emitted=False,
+    )
+    metadata["storeStockAvailable"] = True
     return {
         "type": "data",
         "template": "quickReply",
@@ -9807,17 +9784,7 @@ def _build_pure_inventory_store_stock_available_event(
         "assistant_response_source": "code_pure_inventory_stock_resolver",
         "data": {
             "assistantResponse": response,
-            "quickReplies": [
-                {"label": "예약 가능 시간 확인", "domain": "TRANSACTION"},
-                {
-                    "label": "다른 매장 검색",
-                    "domain": "TRANSACTION",
-                    "actionId": "search_other_store",
-                    "intentKey": "today_install",
-                    "metadata": metadata.get("ctaContext", {}),
-                },
-                {"label": "다른 상품 추천", "domain": "DISCOVERY"},
-            ],
+            "quickReplies": quick_replies,
             "predictedDomains": ["TRANSACTION", "DISCOVERY"],
             "metadata": metadata,
         },

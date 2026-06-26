@@ -1379,6 +1379,84 @@ def build_order_quantity_prompt_event(slots: Any) -> dict[str, Any]:
     }
 
 
+def build_pure_inventory_stock_cta_payload(
+    *,
+    quick_replies: list[dict[str, Any]],
+    store_context: Mapping[str, Any] | None,
+    ord_qty: int,
+    tire_size: str,
+    goods_no: str | None = None,
+    response_shape_key: str,
+    stock_check_mode: str,
+    logistics_stock_available: bool | None = None,
+    reservation_sale_available: bool | None = None,
+    rsv_install_date: str | None = None,
+    previous_stock_result: str | None = None,
+    followup_mode: str | None = None,
+    reservation_ui_emitted: bool | None = None,
+    include_pending_stock_context: bool = False,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    current_store_context = store_context_from_mapping(store_context)
+    metadata: dict[str, Any] = {
+        "response_shape_key": response_shape_key,
+        "stock_check_mode": stock_check_mode,
+    }
+    if logistics_stock_available is not None:
+        metadata["logisticsStockAvailable"] = logistics_stock_available
+    if reservation_sale_available is not None:
+        metadata["reservationSaleAvailable"] = reservation_sale_available
+    if rsv_install_date is not None:
+        metadata["rsvInstallDate"] = rsv_install_date
+    if reservation_ui_emitted is not None:
+        metadata["reservationUiEmitted"] = reservation_ui_emitted
+
+    cta_context: dict[str, Any] = {
+        "ordQty": ord_qty,
+        "tireSize": tire_size,
+        "intentKey": "today_install",
+        "currentStoreContext": current_store_context,
+    }
+    if include_pending_stock_context:
+        cta_context["pendingIntent"] = "stock"
+        cta_context["goalType"] = "store_with_stock"
+    if previous_stock_result:
+        cta_context["previousStockResult"] = previous_stock_result
+    if followup_mode:
+        cta_context["followupMode"] = followup_mode
+    if goods_no:
+        cta_context["goodsNo"] = goods_no
+    if logistics_stock_available is not None:
+        cta_context["logisticsStockAvailable"] = logistics_stock_available
+    if reservation_sale_available is not None:
+        cta_context["reservationSaleAvailable"] = reservation_sale_available
+    if rsv_install_date is not None:
+        cta_context["rsvInstallDate"] = rsv_install_date
+    if stock_check_mode:
+        cta_context["stock_check_mode"] = stock_check_mode
+
+    enriched_replies: list[dict[str, Any]] = []
+    for reply in quick_replies:
+        if not isinstance(reply, Mapping):
+            continue
+        enriched_reply = dict(reply)
+        label = str(enriched_reply.get("label") or "")
+        action_id = str(enriched_reply.get("actionId") or "")
+        if label == "가장 빠른 예약일 확인":
+            enriched_reply["actionId"] = "logistics_earliest_install_date"
+            enriched_reply["intentKey"] = "today_install"
+            enriched_reply["metadata"] = dict(cta_context)
+        elif action_id == "search_other_store":
+            enriched_reply["metadata"] = dict(cta_context)
+        elif label == "예약 가능 시간 확인":
+            enriched_reply["metadata"] = dict(cta_context)
+        enriched_replies.append(enriched_reply)
+
+    if current_store_context:
+        metadata["currentStoreContext"] = current_store_context
+    metadata["ctaContext"] = cta_context
+    return enriched_replies, metadata
+
+
 def resolve_goods_no_from_product_template_selection(user_text: str, template_data: Mapping[str, Any] | None) -> str | None:
     if not user_text or not isinstance(template_data, Mapping):
         return None
