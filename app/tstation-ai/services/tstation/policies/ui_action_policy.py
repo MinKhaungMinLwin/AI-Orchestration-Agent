@@ -496,6 +496,70 @@ def apply_cta_context_to_slots(slots: Any, cta_context: Mapping[str, Any] | None
         return slots
 
 
+def build_quickreply_cta_clarification_event(
+    user_text: str,
+    chip_context: Mapping[str, Any] | None,
+    *,
+    cta_context: Mapping[str, Any] | None = None,
+    allow_label_only: bool = True,
+) -> dict[str, Any] | None:
+    action_id = chip_value(chip_context, "actionId", "action_id")
+    text = str(user_text or "").strip()
+    metadata = dict(cta_context or {})
+    intent_key = str(metadata.get("intentKey") or chip_value(chip_context, "intentKey", "intent_key") or "today_install")
+    metadata.setdefault("intentKey", intent_key)
+    if action_id == "enter_region" or (
+        allow_label_only and re.fullmatch(r"(?:다른\s*)?(?:지역|장소)\s*(?:입력|찾기|검색)", text)
+    ):
+        return {
+            "type": "data",
+            "template": "quickReply",
+            "source_domain": "transaction",
+            "assistant_response_source": "code_cta_action_guard",
+            "data": {
+                "assistantResponse": "확인할 지역명을 입력해 주세요. 이전 상품·수량·날짜 조건을 유지해서 다시 확인할게요.",
+                "quickReplies": [
+                    {"label": "서울", "domain": "TRANSACTION", "actionId": "change_region", "intentKey": intent_key},
+                    {"label": "강남", "domain": "TRANSACTION", "actionId": "change_region", "intentKey": intent_key},
+                    {"label": "송파", "domain": "TRANSACTION", "actionId": "change_region", "intentKey": intent_key},
+                ],
+                "predictedDomains": ["TRANSACTION"],
+                "metadata": {"ctaContext": metadata},
+            },
+        }
+    if action_id == "enter_date" or (
+        allow_label_only and re.fullmatch(r"(?:다른\s*)?(?:날짜|일정)\s*(?:입력|확인|찾기|검색)", text)
+    ):
+        return {
+            "type": "data",
+            "template": "quickReply",
+            "source_domain": "transaction",
+            "assistant_response_source": "code_cta_action_guard",
+            "data": {
+                "assistantResponse": "확인할 날짜를 입력해 주세요. 예: 오늘, 내일, 6월 20일",
+                "quickReplies": [
+                    {"label": "오늘", "domain": "TRANSACTION", "actionId": "change_date", "intentKey": intent_key},
+                    {"label": "내일", "domain": "TRANSACTION", "actionId": "change_date", "intentKey": intent_key},
+                ],
+                "predictedDomains": ["TRANSACTION"],
+                "metadata": {"ctaContext": metadata},
+            },
+        }
+    return None
+
+
+def is_logistics_earliest_install_date_followup(
+    user_text: str,
+    cta_context: Mapping[str, Any] | None,
+) -> bool:
+    context = cta_context if isinstance(cta_context, Mapping) else {}
+    if str(context.get("followupMode") or "") == "logistics_earliest_install_date":
+        return True
+    if not context.get("logisticsStockAvailable"):
+        return False
+    return bool(re.search(r"가장\s*빠른\s*(?:예약일|장착일|날짜)|예약일\s*확인|장착일\s*확인", user_text or ""))
+
+
 def normalize_ui_action_metadata(
     event: dict[str, Any],
     *,

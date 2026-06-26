@@ -112,8 +112,10 @@ from services.tstation.policies.ui_action_policy import (
     UIActionContext,
     apply_cta_context_to_slots,
     apply_ui_action_slot_patch,
+    build_quickreply_cta_clarification_event,
     chip_context_dict,
     chip_value,
+    is_logistics_earliest_install_date_followup,
     merged_quickreply_cta_context,
     normalize_ui_action_metadata,
     quickreply_cta_context_from_chip,
@@ -5634,58 +5636,6 @@ _BOOKING_PREVIEW_CHIPS = [
         "metadata": {"intentKey": "today_install"},
     },
 ]
-
-
-def _quickreply_cta_clarification_event(
-    user_text: str,
-    chip_context: dict[str, Any] | None,
-    *,
-    cta_context: dict[str, Any] | None = None,
-    allow_label_only: bool = True,
-) -> dict | None:
-    action_id = chip_value(chip_context, "actionId", "action_id")
-    text = (user_text or "").strip()
-    metadata = dict(cta_context or {})
-    intent_key = str(metadata.get("intentKey") or chip_value(chip_context, "intentKey", "intent_key") or "today_install")
-    metadata.setdefault("intentKey", intent_key)
-    if action_id == "enter_region" or (
-        allow_label_only and re.fullmatch(r"(?:다른\s*)?(?:지역|장소)\s*(?:입력|찾기|검색)", text)
-    ):
-        return {
-            "type": "data",
-            "template": "quickReply",
-            "source_domain": "transaction",
-            "assistant_response_source": "code_cta_action_guard",
-            "data": {
-                "assistantResponse": "확인할 지역명을 입력해 주세요. 이전 상품·수량·날짜 조건을 유지해서 다시 확인할게요.",
-                "quickReplies": [
-                    {"label": "서울", "domain": "TRANSACTION", "actionId": "change_region", "intentKey": intent_key},
-                    {"label": "강남", "domain": "TRANSACTION", "actionId": "change_region", "intentKey": intent_key},
-                    {"label": "송파", "domain": "TRANSACTION", "actionId": "change_region", "intentKey": intent_key},
-                ],
-                "predictedDomains": ["TRANSACTION"],
-                "metadata": {"ctaContext": metadata},
-            },
-        }
-    if action_id == "enter_date" or (
-        allow_label_only and re.fullmatch(r"(?:다른\s*)?(?:날짜|일정)\s*(?:입력|확인|찾기|검색)", text)
-    ):
-        return {
-            "type": "data",
-            "template": "quickReply",
-            "source_domain": "transaction",
-            "assistant_response_source": "code_cta_action_guard",
-            "data": {
-                "assistantResponse": "확인할 날짜를 입력해 주세요. 예: 오늘, 내일, 6월 20일",
-                "quickReplies": [
-                    {"label": "오늘", "domain": "TRANSACTION", "actionId": "change_date", "intentKey": intent_key},
-                    {"label": "내일", "domain": "TRANSACTION", "actionId": "change_date", "intentKey": intent_key},
-                ],
-                "predictedDomains": ["TRANSACTION"],
-                "metadata": {"ctaContext": metadata},
-            },
-        }
-    return None
 def _float_or_none(value: Any) -> float | None:
     if value in (None, ""):
         return None
@@ -5863,20 +5813,6 @@ def _cta_preview_input_from_slots(
     if getattr(slots, "requested_cal_day", None):
         preview_input["requested_cal_day"] = slots.requested_cal_day
     return preview_input, None
-
-
-def _is_logistics_earliest_install_date_followup(
-    user_text: str,
-    cta_context: Mapping[str, Any] | None,
-) -> bool:
-    context = cta_context if isinstance(cta_context, Mapping) else {}
-    if str(context.get("followupMode") or "") == "logistics_earliest_install_date":
-        return True
-    if not context.get("logisticsStockAvailable"):
-        return False
-    return bool(re.search(r"가장\s*빠른\s*(?:예약일|장착일|날짜)|예약일\s*확인|장착일\s*확인", user_text or ""))
-
-
 def _preview_today_shop_ids(tool_result: dict[str, Any]) -> set[str]:
     data = _unwrap_tool_data(tool_result)
     inventory = data.get("inventory") if isinstance(data, dict) else None
@@ -21586,7 +21522,7 @@ class TStationChatServiceV2:
         early_cta_context = quickreply_cta_context_from_chip(request.chip_context)
         cta_clarification_event = None
         if early_cta_context:
-            cta_clarification_event = _quickreply_cta_clarification_event(
+            cta_clarification_event = build_quickreply_cta_clarification_event(
                 last_user_msg,
                 request.chip_context,
                 cta_context=early_cta_context,
@@ -22653,7 +22589,7 @@ class TStationChatServiceV2:
                 not chip_action_id
                 and re.fullmatch(r"(?:다른\s*)?(?:지역|장소|날짜|일정)\s*(?:입력|찾기|검색|확인)", last_user_text)
             ):
-                cta_clarification_event = _quickreply_cta_clarification_event(
+                cta_clarification_event = build_quickreply_cta_clarification_event(
                     last_user_text,
                     request.chip_context,
                     cta_context=cta_context,
@@ -22844,7 +22780,7 @@ class TStationChatServiceV2:
                     content=str((mapped_event.get("data") or {}).get("assistantResponse") or "")
                 )
             elif chip_action_id == "logistics_earliest_install_date" or (
-                not chip_action_id and _is_logistics_earliest_install_date_followup(last_user_text, cta_context)
+                not chip_action_id and is_logistics_earliest_install_date_followup(last_user_text, cta_context)
             ):
                 enriched_cta_context = dict(cta_context)
                 merged_slots = apply_cta_context_to_slots(merged_slots, enriched_cta_context)

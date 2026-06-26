@@ -335,7 +335,6 @@ from services.tstation.chat import (
     _should_force_warranty_claim_support_route,
     _should_force_best_seller_code_route,
     _enrich_best_selling_result_for_product_cards,
-    _quickreply_cta_clarification_event,
     _sanitize_transaction_cta_contracts,
     _is_current_location_store_search_confirmation,
     _has_active_transaction_action_context,
@@ -386,6 +385,8 @@ from services.tstation.policies.turn_contract import (
 from services.tstation.policies.ui_action_policy import (
     apply_cta_context_to_slots,
     apply_ui_action_slot_patch,
+    build_quickreply_cta_clarification_event,
+    is_logistics_earliest_install_date_followup,
     merged_quickreply_cta_context,
     normalize_ui_action_metadata,
     resolve_ui_action_context,
@@ -498,7 +499,7 @@ def test_chat_message_request_preserves_ui_action_and_slot_patch() -> None:
 
 
 def test_quickreply_cta_action_enter_region_asks_for_region_only() -> None:
-    event = _quickreply_cta_clarification_event(
+    event = build_quickreply_cta_clarification_event(
         "다른 지역 입력",
         {"domain": "TRANSACTION", "actionId": "enter_region", "intentKey": "today_install"},
         cta_context={"goodsNo": "G000000317729", "ordQty": 4, "requestedCalDay": "20260618"},
@@ -514,6 +515,13 @@ def test_quickreply_cta_action_enter_region_asks_for_region_only() -> None:
         "change_region",
         "change_region",
     ]
+
+
+def test_logistics_earliest_install_date_followup_detects_context_flag() -> None:
+    assert is_logistics_earliest_install_date_followup(
+        "가장 빠른 예약일 확인",
+        {"followupMode": "logistics_earliest_install_date"},
+    ) is True
 
 
 def test_transaction_cta_sanitizer_removes_label_only_reservation_and_contracts_region() -> None:
