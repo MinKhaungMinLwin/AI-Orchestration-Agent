@@ -8,12 +8,14 @@ CTA validation.
 from __future__ import annotations
 
 import re
+import json
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
 from services.tstation.policies.discovery_intent_policy import build_discovery_intent_frame, normalize_tire_size
 from services.tstation.policies.cta_registry import cta_trace_metadata, normalize_quickreply_ctas
 from services.tstation.policies.resolved_context import (
+    canonical_context_from_slots,
     canonical_context_from_template_boundary,
     canonical_context_from_tool_boundary,
 )
@@ -43,6 +45,7 @@ _TIRE_POSITION_FOLLOWUP_ACTION_RE = re.compile(
 )
 _QUANTITY_LABEL_RE = re.compile(r"^\s*([1-4])\s*(?:개|본)\s*$")
 _CTA_CLARIFICATION_LABEL_RE = re.compile(r"(?:다른\s*)?(?:지역|장소|날짜|일정)\s*(?:입력|찾기|검색|확인)")
+_SIZE_ONLY_RE = re.compile(r"^\s*\d{3}\s*[/\s]?\s*\d{2}\s*(?:R|\s|/)?\s*\d{2}\s*$", re.IGNORECASE)
 _VEHICLE_PLATE_RE = re.compile(r"\d{2,3}\s*[가-힣]\s*\d{4}")
 _NON_SELF_CAR_RE = re.compile(
     r"(내\s*차|저장\s*차|등록\s*차|보유\s*차|보유한\s*차|내가\s*가진\s*차)"
@@ -80,6 +83,10 @@ _VEHICLE_MATCH_STOPWORDS = {
     "내", "차", "차량", "번호", "차량번호", "내차", "내차량", "알지", "맞는", "타이어", "보여줘",
     "보여", "추천", "해줘", "찾아줘", "알려줘", "알려", "규격", "사이즈", "그리고", "그럼", "이건데",
 }
+_STORE_AVAILABILITY_CONTINUATION_RE = re.compile(
+    r"장착\s*가능|오늘|내일|예약|매장|지점|재고|스케줄|시간|방문",
+    re.IGNORECASE,
+)
 _KOREAN_SELECTION_ORDINALS: tuple[tuple[tuple[str, ...], int], ...] = (
     (("첫번째", "첫째", "첫 번", "첫번", "1번째", "1번", "1.", "1)"), 0),
     (("두번째", "둘째", "두 번", "두번", "2번째", "2번", "2.", "2)"), 1),
@@ -2537,6 +2544,79 @@ def build_store_availability_quantity_prompt_event(
             },
         },
     }
+
+
+def is_size_only_store_availability_continuation(
+    user_text: str,
+    *,
+    build_size_only_product_search_tool_input: Callable[..., dict[str, Any] | None],
+    prev_tool_data: list[dict] | None = None,
+    recent_context: str = "",
+    messages: list[dict] | None = None,
+    slots: Any | None = None,
+) -> bool:
+    if not _SIZE_ONLY_RE.match(str(user_text or "")):
+        return False
+    if not build_size_only_product_search_tool_input(
+        user_text,
+        prev_tool_data=prev_tool_data,
+        recent_context=recent_context,
+        slots=slots,
+    ):
+        return False
+    context_parts = [recent_context]
+    for message in reversed((messages or [])[-8:]):
+        content = str(message.get("content") or "")
+        template_data = message.get("template_data")
+        if isinstance(template_data, dict):
+            content += " " + json.dumps(template_data, ensure_ascii=False)
+        context_parts.append(content)
+    context_blob = "\n".join(part for part in context_parts if part)
+    return bool(_STORE_AVAILABILITY_CONTINUATION_RE.search(context_blob))
+
+
+def is_resolved_size_store_availability_transaction_continuation(
+    user_text: str,
+    *,
+    slots: Any | None,
+    routing_result: Any | None = None,
+    size_only_store_availability_continuation: bool = False,
+) -> bool:
+    if not size_only_store_availability_continuation:
+        return False
+    if not _SIZE_ONLY_RE.match(str(user_text or "")):
+        return False
+
+    canonical_slots = canonical_context_from_slots(slots)
+    if not (canonical_slots.get("goods_no") and canonical_slots.get("tire_size")):
+        return False
+    pending_intent = str(canonical_slots.get("pending_intent") or "").strip()
+    goal_type = str(canonical_slots.get("goal_type") or "").strip()
+    if pending_intent != "stock" and goal_type != "store_with_stock":
+        return False
+    has_scope = bool(
+        canonical_slots.get("region")
+        or canonical_slots.get("shop_id")
+        or canonical_slots.get("shop_name")
+        or canonical_slots.get("store_name")
+    )
+    availability_context = canonical_slots.get("availability_context")
+    if isinstance(availability_context, Mapping):
+        pending_context = availability_context.get("pending_order_context")
+        if isinstance(pending_context, Mapping):
+            has_scope = has_scope or bool(
+                pending_context.get("region") or pending_context.get("shop_id") or pending_context.get("shop_name")
+            )
+    if not has_scope:
+        return False
+    routing_topic = str(getattr(routing_result, "pending_check_topic", "") or "").strip()
+    followup_intent = str(getattr(routing_result, "discovery_followup_intent", "") or "").strip()
+    execution_plan = " ".join(str(item) for item in (getattr(routing_result, "execution_plan", []) or []))
+    return bool(
+        routing_topic in {"store_inventory", "today_install", "none", ""}
+        or followup_intent == "recent_product_set_size_availability"
+        or re.search(r"stock|inventory|재고|장착|store", execution_plan, re.IGNORECASE)
+    )
 
 
 def quickreply_cta_context_from_template(template_data: Mapping[str, Any] | None) -> dict[str, Any]:

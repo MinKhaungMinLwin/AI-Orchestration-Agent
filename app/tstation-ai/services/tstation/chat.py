@@ -152,6 +152,8 @@ from services.tstation.policies.ui_action_policy import (
     is_oe_replacement_equivalent_query,
     is_oe_replacement_followup_query,
     is_owned_vehicle_selection_cta,
+    is_resolved_size_store_availability_transaction_continuation,
+    is_size_only_store_availability_continuation,
     oe_replacement_cta_context,
     oe_replacement_followup_brand_cd,
     preorder_slot_values_from_data,
@@ -6577,6 +6579,10 @@ def _build_support_faq_policy_event(
         return None
     source_summary = _faq_policy_source_summary_text(tool_result)
     required_guidance_by_intent = {
+        "assurance_service_policy": (
+            "안심서비스/안심플러스 보상은 장착 후 1년 이내, 주행거리 16,000km 이내 조건에서 확인돼요.\n"
+            "대상 타이어, 구매 수량, 장착 시점과 상세 약관에 따라 실제 적용 범위는 달라질 수 있어요."
+        ),
         "promotion_gift_policy": (
             "부분 취소로 이벤트나 프로모션 지급 기준 수량에 미달할 수 있어요.\n"
             "기준 미달 시에는 사은품 반납이 필요할 수 있고, 반납이 어렵거나 조건에 따라 사은품 상당 금액을 차감한 뒤 환불될 수 있어요.\n"
@@ -6591,7 +6597,7 @@ def _build_support_faq_policy_event(
     followup_by_intent = {
         "tire_manufacture_date_policy": "제조일자만으로 교환이나 환불을 단정하지 말고, 필요하면 제품 상태와 구매 이력도 함께 확인해 주세요.",
         "tire_quality_warranty_policy": "품질보증이나 무상 교체 여부는 실제 점검 결과와 보증 조건을 함께 확인해야 해요.",
-        "assurance_service_policy": "보상이나 가입 가능 여부는 상세 조건과 적용 시점에 따라 달라질 수 있어요.",
+        "assurance_service_policy": required_guidance_by_intent["assurance_service_policy"],
         "reservation_policy_guidance": "실제 예약 변경이나 취소 전에는 예약 상세 안내도 함께 확인해 주세요.",
         "installation_work_policy": "추가 작업비나 현장 결제 여부는 정책과 작업 범위에 따라 달라질 수 있어요.",
         "promotion_gift_policy": required_guidance_by_intent["promotion_gift_policy"],
@@ -6602,7 +6608,7 @@ def _build_support_faq_policy_event(
     fallback_by_intent = {
         "tire_manufacture_date_policy": "타이어 제조일자와 신품 기준은 정책에 따라 안내되고, 제조일자만으로 불량이나 교환 가능 여부를 바로 단정할 수는 없어요.",
         "tire_quality_warranty_policy": "품질보증과 무상 A/S 가능 여부는 보증 기준과 실제 점검 결과에 따라 달라질 수 있어요.",
-        "assurance_service_policy": "안심서비스와 디지털워런티 조건은 가입 시점과 적용 범위에 따라 달라질 수 있어요.",
+        "assurance_service_policy": required_guidance_by_intent["assurance_service_policy"],
         "reservation_policy_guidance": "예약 가능 기간, 취소, 변경 조건은 정책 기준으로 먼저 확인해 보는 것이 안전해요.",
         "installation_work_policy": "공임, 장착비, 추가 작업 비용은 작업 범위와 정책에 따라 달라질 수 있어요.",
         "promotion_gift_policy": required_guidance_by_intent["promotion_gift_policy"],
@@ -6625,7 +6631,9 @@ def _build_support_faq_policy_event(
             {"label": "1:1 문의하기", "domain": "SUPPORT"},
             {"label": "처음으로", "domain": "LEADING"},
         ]
-    if source_summary:
+    if source_summary and intent == "assurance_service_policy":
+        assistant_response = f"{required_guidance_by_intent[intent]}\n\n{source_summary}"
+    elif source_summary:
         assistant_response = f"{source_summary}\n\n{followup_by_intent[intent]}"
     else:
         assistant_response = fallback_by_intent[intent]
@@ -15565,24 +15573,14 @@ def _is_size_only_store_availability_continuation(
     messages: list[dict] | None = None,
     slots: Any | None = None,
 ) -> bool:
-    if not _SIZE_ONLY_RE.match(str(user_text or "")):
-        return False
-    if not _build_size_only_product_search_tool_input(
+    return is_size_only_store_availability_continuation(
         user_text,
+        build_size_only_product_search_tool_input=_build_size_only_product_search_tool_input,
         prev_tool_data=prev_tool_data,
         recent_context=recent_context,
+        messages=messages,
         slots=slots,
-    ):
-        return False
-    context_parts = [recent_context]
-    for message in reversed((messages or [])[-8:]):
-        content = str(message.get("content") or "")
-        template_data = message.get("template_data")
-        if isinstance(template_data, dict):
-            content += " " + json.dumps(template_data, ensure_ascii=False)
-        context_parts.append(content)
-    context_blob = "\n".join(part for part in context_parts if part)
-    return bool(_STORE_AVAILABILITY_CONTINUATION_RE.search(context_blob))
+    )
 
 
 _INVALID_STORE_SLOT_VALUES = frozenset({"평점", "별점", "리뷰", "후기", "평가"})
@@ -15780,52 +15778,9 @@ def _build_pure_inventory_stock_contract(
     )
 
 
-def _is_resolved_size_store_availability_transaction_continuation(
-    user_text: str,
-    *,
-    slots: Any | None,
-    routing_result: Any | None = None,
-    size_only_store_availability_continuation: bool = False,
-) -> bool:
-    if not size_only_store_availability_continuation:
-        return False
-    if not _SIZE_ONLY_RE.match(str(user_text or "")):
-        return False
-
-    def _slot_value(name: str) -> Any:
-        if slots is None:
-            return None
-        if isinstance(slots, Mapping):
-            return slots.get(name)
-        return getattr(slots, name, None)
-
-    if not (_slot_value("goods_no") and _slot_value("tire_size")):
-        return False
-    pending_intent = str(_slot_value("pending_intent") or "").strip()
-    goal_type = str(_slot_value("goal_type") or "").strip()
-    if pending_intent != "stock" and goal_type != "store_with_stock":
-        return False
-    has_scope = bool(
-        _slot_value("region")
-        or _slot_value("shop_id")
-        or _slot_value("shop_name")
-        or _slot_value("store_name")
-    )
-    availability_context = _slot_value("availability_context")
-    if isinstance(availability_context, Mapping):
-        pending_context = availability_context.get("pending_order_context")
-        if isinstance(pending_context, Mapping):
-            has_scope = has_scope or bool(pending_context.get("region") or pending_context.get("shop_id") or pending_context.get("shop_name"))
-    if not has_scope:
-        return False
-    routing_topic = str(getattr(routing_result, "pending_check_topic", "") or "").strip()
-    followup_intent = str(getattr(routing_result, "discovery_followup_intent", "") or "").strip()
-    execution_plan = " ".join(str(item) for item in (getattr(routing_result, "execution_plan", []) or []))
-    return bool(
-        routing_topic in {"store_inventory", "today_install", "none", ""}
-        or followup_intent == "recent_product_set_size_availability"
-        or re.search(r"stock|inventory|재고|장착|store", execution_plan, re.IGNORECASE)
-    )
+_is_resolved_size_store_availability_transaction_continuation = (
+    is_resolved_size_store_availability_transaction_continuation
+)
 
 def _store_row_value(store: Mapping[str, Any], *keys: str) -> str:
     for key in keys:
