@@ -116,6 +116,7 @@ from services.tstation.policies.ui_action_policy import (
     apply_ui_action_slot_patch,
     apply_vehicle_selection_slot_values,
     build_other_store_search_result_event,
+    clear_invalid_store_identity_slots,
     build_logistics_earliest_install_fallback_event,
     build_other_store_context_enrichment_input,
     build_other_store_preview_metadata,
@@ -152,6 +153,7 @@ from services.tstation.policies.ui_action_policy import (
     is_oe_replacement_equivalent_query,
     is_oe_replacement_followup_query,
     is_owned_vehicle_selection_cta,
+    is_invalid_store_slot_value,
     is_pure_inventory_stock_ready,
     is_quantity_only_stock_followup_text,
     is_resolved_size_store_availability_transaction_continuation,
@@ -180,6 +182,9 @@ from services.tstation.policies.ui_action_policy import (
     resolve_vehicle_selection_from_listcar_event,
     resolve_vehicle_tire_position_selection,
     resolve_vehicle_ui_selection_from_chip_context,
+    requested_cal_day_from_availability_context,
+    requested_day_label_from_availability_context,
+    recent_store_name_for_availability_continuation,
     resolve_ui_action_context,
     rewrite_vehicle_selection_user_text,
     apply_other_store_context_enrichment,
@@ -15593,86 +15598,21 @@ def _is_size_only_store_availability_continuation(
         slots=slots,
     )
 
-
-_INVALID_STORE_SLOT_VALUES = frozenset({"평점", "별점", "리뷰", "후기", "평가"})
-
-
-def _is_invalid_store_slot_value(value: str | None) -> bool:
-    normalized = re.sub(r"\s+", "", str(value or "")).strip().lower()
-    normalized = re.sub(r"^(?:티스테이션|더타이어샵|t'?station)", "", normalized, flags=re.IGNORECASE)
-    return normalized in _INVALID_STORE_SLOT_VALUES
-
-
-def _clear_invalid_store_identity_slots(slots: ConversationSlots, *, source: str) -> dict[str, Any]:
-    shop_name = str(getattr(slots, "shop_name", None) or "").strip()
-    if not _is_invalid_store_slot_value(shop_name):
-        return {}
-    cleared = {"shop_name": shop_name, "source": source}
-    slots.shop_name = None
-    if getattr(slots, "shop_id", None) and source != "slot_sanitizer_keep_shop_id":
-        cleared["shop_id"] = slots.shop_id
-        slots.shop_id = None
-    context = dict(getattr(slots, "availability_context", None) or {})
-    pending_context = context.get("pending_order_context")
-    if isinstance(pending_context, dict) and _is_invalid_store_slot_value(str(pending_context.get("shop_name") or "")):
-        pending_context = dict(pending_context)
-        pending_context.pop("shop_name", None)
-        context["pending_order_context"] = pending_context
-        slots.availability_context = context
-        cleared["pending_order_context_shop_name"] = shop_name
-    return cleared
-
-
-def _recent_store_name_for_availability_continuation(
-    *,
-    prev_tool_data: list[dict] | None = None,
-    recent_context: str = "",
-    messages: list[dict] | None = None,
-    slots: Any | None = None,
-) -> str | None:
-    slot_store = str(getattr(slots, "shop_name", None) or "").strip() if slots is not None else ""
-    if slot_store and not _is_invalid_store_slot_value(slot_store):
-        return slot_store
-
-    for entry in reversed(prev_tool_data or []):
-        if entry.get("tool") not in ("search_stores_tool", "get_nearby_stores_tool", "get_store_list_tool"):
-            continue
-        data = entry.get("data")
-        items: list[dict] = []
-        if isinstance(data, list):
-            items = [item for item in data if isinstance(item, dict) and not item.get("_truncated")]
-        elif isinstance(data, dict) and isinstance(data.get("stores"), list):
-            items = [item for item in data["stores"] if isinstance(item, dict)]
-        if len(items) == 1:
-            store_name = str(items[0].get("shop_nm") or items[0].get("name") or "").strip()
-            if store_name and not _is_invalid_store_slot_value(store_name):
-                return store_name
-
-    context_parts = [recent_context]
-    for message in reversed((messages or [])[-8:]):
-        context_parts.append(str(message.get("content") or ""))
-    context_blob = "\n".join(part for part in context_parts if part)
-    match = re.search(r"(?:티스테이션\s*)?([A-Za-z0-9가-힣]+점)", context_blob)
-    if match and not _is_invalid_store_slot_value(match.group(0).strip()):
-        return match.group(0).strip()
-    return None
+_is_invalid_store_slot_value = is_invalid_store_slot_value
+_clear_invalid_store_identity_slots = clear_invalid_store_identity_slots
+_recent_store_name_for_availability_continuation = recent_store_name_for_availability_continuation
 
 
 def _requested_cal_day_from_availability_context(user_text: str, recent_context: str) -> str | None:
-    if _parse_requested_reservation_date(user_text) is not None:
-        return _requested_reservation_cal_day_or_today(user_text)
-    for line in reversed([part.strip() for part in str(recent_context or "").splitlines() if part.strip()]):
-        if _parse_requested_reservation_date(line) is not None:
-            return _requested_reservation_cal_day_or_today(line)
-    return None
+    return requested_cal_day_from_availability_context(
+        user_text,
+        recent_context,
+        parse_requested_reservation_date=_parse_requested_reservation_date,
+        requested_reservation_cal_day_or_today=_requested_reservation_cal_day_or_today,
+    )
 
 
-def _requested_day_label_from_availability_context(user_text: str, recent_context: str) -> str:
-    text = f"{user_text}\n{recent_context}"
-    for label in ("오늘", "내일", "모레"):
-        if label in text:
-            return label
-    return "오늘"
+_requested_day_label_from_availability_context = requested_day_label_from_availability_context
 
 
 _is_quantity_only_stock_followup_text = is_quantity_only_stock_followup_text

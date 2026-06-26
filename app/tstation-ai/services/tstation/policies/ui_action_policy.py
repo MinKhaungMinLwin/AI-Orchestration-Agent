@@ -92,6 +92,7 @@ _STORE_AVAILABILITY_CONTINUATION_RE = re.compile(
     r"장착\s*가능|오늘|내일|예약|매장|지점|재고|스케줄|시간|방문",
     re.IGNORECASE,
 )
+_INVALID_STORE_SLOT_VALUES = frozenset({"평점", "별점", "리뷰", "후기", "평가"})
 _KOREAN_SELECTION_ORDINALS: tuple[tuple[tuple[str, ...], int], ...] = (
     (("첫번째", "첫째", "첫 번", "첫번", "1번째", "1번", "1.", "1)"), 0),
     (("두번째", "둘째", "두 번", "두번", "2번째", "2번", "2.", "2)"), 1),
@@ -2549,6 +2550,90 @@ def build_store_availability_quantity_prompt_event(
             },
         },
     }
+
+
+def is_invalid_store_slot_value(value: str | None) -> bool:
+    normalized = re.sub(r"\s+", "", str(value or "")).strip().lower()
+    normalized = re.sub(r"^(?:티스테이션|더타이어샵|t'?station)", "", normalized, flags=re.IGNORECASE)
+    return normalized in _INVALID_STORE_SLOT_VALUES
+
+
+def clear_invalid_store_identity_slots(slots: ConversationSlots, *, source: str) -> dict[str, Any]:
+    shop_name = str(getattr(slots, "shop_name", None) or "").strip()
+    if not is_invalid_store_slot_value(shop_name):
+        return {}
+    cleared = {"shop_name": shop_name, "source": source}
+    slots.shop_name = None
+    if getattr(slots, "shop_id", None) and source != "slot_sanitizer_keep_shop_id":
+        cleared["shop_id"] = slots.shop_id
+        slots.shop_id = None
+    context = dict(getattr(slots, "availability_context", None) or {})
+    pending_context = context.get("pending_order_context")
+    if isinstance(pending_context, dict) and is_invalid_store_slot_value(str(pending_context.get("shop_name") or "")):
+        pending_context = dict(pending_context)
+        pending_context.pop("shop_name", None)
+        context["pending_order_context"] = pending_context
+        slots.availability_context = context
+        cleared["pending_order_context_shop_name"] = shop_name
+    return cleared
+
+
+def recent_store_name_for_availability_continuation(
+    *,
+    prev_tool_data: list[dict] | None = None,
+    recent_context: str = "",
+    messages: list[dict] | None = None,
+    slots: Any | None = None,
+) -> str | None:
+    slot_store = str(getattr(slots, "shop_name", None) or "").strip() if slots is not None else ""
+    if slot_store and not is_invalid_store_slot_value(slot_store):
+        return slot_store
+
+    for entry in reversed(prev_tool_data or []):
+        if entry.get("tool") not in ("search_stores_tool", "get_nearby_stores_tool", "get_store_list_tool"):
+            continue
+        data = entry.get("data")
+        items: list[dict] = []
+        if isinstance(data, list):
+            items = [item for item in data if isinstance(item, dict) and not item.get("_truncated")]
+        elif isinstance(data, dict) and isinstance(data.get("stores"), list):
+            items = [item for item in data["stores"] if isinstance(item, dict)]
+        if len(items) == 1:
+            store_name = str(items[0].get("shop_nm") or items[0].get("name") or "").strip()
+            if store_name and not is_invalid_store_slot_value(store_name):
+                return store_name
+
+    context_parts = [recent_context]
+    for message in reversed((messages or [])[-8:]):
+        context_parts.append(str(message.get("content") or ""))
+    context_blob = "\n".join(part for part in context_parts if part)
+    match = re.search(r"(?:티스테이션\s*)?([A-Za-z0-9가-힣]+점)", context_blob)
+    if match and not is_invalid_store_slot_value(match.group(0).strip()):
+        return match.group(0).strip()
+    return None
+
+
+def requested_cal_day_from_availability_context(
+    user_text: str,
+    recent_context: str,
+    *,
+    parse_requested_reservation_date: Callable[[str], Any],
+    requested_reservation_cal_day_or_today: Callable[[str], str | None],
+) -> str | None:
+    if parse_requested_reservation_date(user_text) is not None:
+        return requested_reservation_cal_day_or_today(user_text)
+    for line in reversed([part.strip() for part in str(recent_context or "").splitlines() if part.strip()]):
+        if parse_requested_reservation_date(line) is not None:
+            return requested_reservation_cal_day_or_today(line)
+    return None
+
+
+def requested_day_label_from_availability_context(user_text: str, recent_context: str) -> str:
+    text = f"{user_text}\n{recent_context}"
+    for label in ("오늘", "내일", "모레"):
+        if label in text:
+            return label
+    return "오늘"
 
 
 def is_size_only_store_availability_continuation(
