@@ -401,6 +401,8 @@ from services.tstation.policies.ui_action_policy import (
     preview_action_mode_for_slots,
     resolve_ui_action_context,
     resolve_goods_no_from_product_template_selection,
+    resolve_shop_id_from_history_template,
+    resolve_store_selection_from_history_template,
     resolve_tire_size_from_history_template,
     resolve_vehicle_from_history_template,
     resolve_vehicle_selection_from_listcar_event,
@@ -10396,7 +10398,7 @@ def test_preview_location_selection_recovers_transaction_slots() -> None:
         },
     }
 
-    selection = TStationChatServiceV2._resolve_store_selection_from_history_template(
+    selection = resolve_store_selection_from_history_template(
         "티스테이션 영등포점",
         latest_location,
     )
@@ -10434,13 +10436,13 @@ def test_preview_location_selection_uses_template_boundary_alias_normalization()
     }
 
     assert (
-        TStationChatServiceV2._resolve_shop_id_from_history_template(
+        resolve_shop_id_from_history_template(
             "이 매장 선택",
             latest_location,
         )
         == "C01306"
     )
-    selection = TStationChatServiceV2._resolve_store_selection_from_history_template(
+    selection = resolve_store_selection_from_history_template(
         "이 매장 선택",
         latest_location,
     )
@@ -18472,7 +18474,7 @@ def test_store_selection_resumes_pending_attribute_action_from_location_metadata
         verification_level="store_contact_required",
     )
 
-    selection = TStationChatServiceV2._resolve_store_selection_from_history_template(
+    selection = resolve_store_selection_from_history_template(
         "티스테이션 분당정자점",
         latest_location,
     )

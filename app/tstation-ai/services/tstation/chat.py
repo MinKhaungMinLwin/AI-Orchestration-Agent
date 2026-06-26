@@ -134,6 +134,8 @@ from services.tstation.policies.ui_action_policy import (
     quickreply_cta_context_from_chip,
     quickreply_cta_context_from_template,
     resolve_goods_no_from_product_template_selection,
+    resolve_shop_id_from_history_template,
+    resolve_store_selection_from_history_template,
     resolve_tire_size_from_history_template,
     resolve_vehicle_from_history_template,
     resolve_vehicle_selection_from_listcar_event,
@@ -20713,98 +20715,11 @@ class TStationChatServiceV2:
 
     @staticmethod
     def _resolve_shop_id_from_history_template(user_text: str, template_data: dict | None) -> str | None:
-        """Match a user's list-selection reply against the metadata of the most
-        recent assistant message that rendered a `location` template.
-
-        Used as a fallback when prev_tool_data lookup fails (e.g., tool entry
-        was evicted, or filter_for_context never persisted it). The template
-        metadata is the authoritative source of "what stores were actually
-        shown to the user", so matching against it is more robust than against
-        raw tool output.
-
-        Expected template_data shape (from chat_history_service.get_latest_template_data):
-            {"type": "data", "template": "location",
-             "data": {"stores": [{"nameAddress": "티스테이션 한남점", ...}],
-                      "metadata": [{"shopId": "F07782"}]}}
-
-        Matching strategy:
-          1. Ordinal at the start ("1.", "5번", "3)") → metadata[idx-1].shopId
-          2. Token-overlap against stores[].nameAddress — only resolves when
-             exactly ONE store has the top score
-        """
-        selected = TStationChatServiceV2._resolve_store_selection_from_history_template(user_text, template_data)
-        if selected is None:
-            return None
-        meta = selected.get("meta") or {}
-        canonical_meta = canonical_context_from_template_boundary(meta) if isinstance(meta, dict) else {}
-        shop_id = canonical_meta.get("shop_id")
-        return str(shop_id).strip() or None
+        return resolve_shop_id_from_history_template(user_text, template_data)
 
     @staticmethod
     def _resolve_store_selection_from_history_template(user_text: str, template_data: dict | None) -> dict | None:
-        """Return the matched store card and metadata from the last location template."""
-        if not user_text or not isinstance(template_data, dict):
-            return None
-
-        text = user_text.strip()
-
-        target_template: dict | None = None
-        if template_data.get("template") == "location" and isinstance(template_data.get("data"), dict):
-            target_template = template_data.get("data")
-        elif isinstance(template_data.get("stores"), list):
-            # Defensive: allow passing the inner payload directly.
-            target_template = template_data
-
-        if not target_template:
-            return None
-
-        stores = target_template.get("stores") or []
-        metadata = target_template.get("metadata") or []
-        if not isinstance(stores, list) or not isinstance(metadata, list):
-            return None
-        if not stores or len(stores) != len(metadata):
-            return None
-
-        # FE store-card chip phrases (isBookingFlow=True taps) carry no ordinal
-        # or store-name token — only resolvable when exactly 1 store was shown.
-        _STORE_SELECT_CHIPS = frozenset({"이 매장 선택", "이 매장으로", "이곳 선택"})
-        if text in _STORE_SELECT_CHIPS and len(stores) == 1:
-            meta = metadata[0]
-            store = stores[0]
-            canonical_meta = canonical_context_from_template_boundary(meta) if isinstance(meta, dict) else {}
-            if isinstance(meta, dict) and isinstance(store, dict) and canonical_meta.get("shop_id"):
-                return {"store": store, "meta": meta}
-
-        ordinal_match = re.match(r"^\s*(\d+)\s*[\.\)번:]", text)
-        if ordinal_match:
-            idx = int(ordinal_match.group(1)) - 1
-            if 0 <= idx < len(metadata):
-                meta = metadata[idx]
-                store = stores[idx]
-                canonical_meta = canonical_context_from_template_boundary(meta) if isinstance(meta, dict) else {}
-                if isinstance(meta, dict) and isinstance(store, dict) and canonical_meta.get("shop_id"):
-                    return {"store": store, "meta": meta}
-
-        tokens = [t for t in re.findall(r"[A-Za-z가-힣]+", text) if len(t) >= 2]
-        if tokens:
-            scored: list[tuple[int, dict, dict]] = []
-            for store, meta in zip(stores, metadata):
-                if not isinstance(store, dict) or not isinstance(meta, dict):
-                    continue
-                name = store.get("nameAddress") or store.get("name") or store.get("title") or ""
-                score = sum(1 for tok in tokens if tok in name)
-                if score > 0:
-                    scored.append((score, store, meta))
-            if scored:
-                max_score = max(s for s, _, _ in scored)
-                top = [(store, meta) for s, store, meta in scored if s == max_score]
-                if len(top) == 1:
-                    store, meta = top[0]
-                    canonical_meta = canonical_context_from_template_boundary(meta)
-                    if canonical_meta.get("shop_id"):
-                        return {"store": store, "meta": meta}
-
-        return None
+        return resolve_store_selection_from_history_template(user_text, template_data)
 
     @staticmethod
     def _preview_location_slot_values_from_selection(selection: dict | None) -> dict[str, Any] | None:

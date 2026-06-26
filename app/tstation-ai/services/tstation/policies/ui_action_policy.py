@@ -1098,6 +1098,79 @@ def resolve_tire_size_from_history_template(
     return front_size or rear_size or None
 
 
+def resolve_store_selection_from_history_template(
+    user_text: str,
+    template_data: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not user_text or not isinstance(template_data, Mapping):
+        return None
+
+    text = user_text.strip()
+    target_template: Mapping[str, Any] | None = None
+    if template_data.get("template") == "location" and isinstance(template_data.get("data"), Mapping):
+        target_template = template_data.get("data")
+    elif isinstance(template_data.get("stores"), list):
+        target_template = template_data
+    if not target_template:
+        return None
+
+    stores = target_template.get("stores") or []
+    metadata = target_template.get("metadata") or []
+    if not isinstance(stores, list) or not isinstance(metadata, list):
+        return None
+    if not stores or len(stores) != len(metadata):
+        return None
+
+    store_select_chips = frozenset({"이 매장 선택", "이 매장으로", "이곳 선택"})
+    if text in store_select_chips and len(stores) == 1:
+        meta = metadata[0]
+        store = stores[0]
+        canonical_meta = canonical_context_from_template_boundary(meta) if isinstance(meta, Mapping) else {}
+        if isinstance(meta, Mapping) and isinstance(store, Mapping) and canonical_meta.get("shop_id"):
+            return {"store": dict(store), "meta": dict(meta)}
+
+    ordinal_idx = _selection_ordinal_index(text, len(metadata))
+    if ordinal_idx is not None:
+        meta = metadata[ordinal_idx]
+        store = stores[ordinal_idx]
+        canonical_meta = canonical_context_from_template_boundary(meta) if isinstance(meta, Mapping) else {}
+        if isinstance(meta, Mapping) and isinstance(store, Mapping) and canonical_meta.get("shop_id"):
+            return {"store": dict(store), "meta": dict(meta)}
+
+    tokens = [t for t in re.findall(r"[A-Za-z가-힣]+", text) if len(t) >= 2]
+    if tokens:
+        scored: list[tuple[int, dict[str, Any], dict[str, Any]]] = []
+        for store, meta in zip(stores, metadata):
+            if not isinstance(store, Mapping) or not isinstance(meta, Mapping):
+                continue
+            name = store.get("nameAddress") or store.get("name") or store.get("title") or ""
+            score = sum(1 for tok in tokens if tok in str(name))
+            if score > 0:
+                scored.append((score, dict(store), dict(meta)))
+        if scored:
+            max_score = max(s for s, _, _ in scored)
+            top = [(store, meta) for s, store, meta in scored if s == max_score]
+            if len(top) == 1:
+                store, meta = top[0]
+                canonical_meta = canonical_context_from_template_boundary(meta)
+                if canonical_meta.get("shop_id"):
+                    return {"store": store, "meta": meta}
+    return None
+
+
+def resolve_shop_id_from_history_template(
+    user_text: str,
+    template_data: Mapping[str, Any] | None,
+) -> str | None:
+    selected = resolve_store_selection_from_history_template(user_text, template_data)
+    if selected is None:
+        return None
+    meta = selected.get("meta")
+    canonical_meta = canonical_context_from_template_boundary(meta) if isinstance(meta, Mapping) else {}
+    shop_id = canonical_meta.get("shop_id")
+    return str(shop_id).strip() or None
+
+
 def resolve_goods_no_from_product_template_selection(user_text: str, template_data: Mapping[str, Any] | None) -> str | None:
     if not user_text or not isinstance(template_data, Mapping):
         return None
