@@ -2685,6 +2685,89 @@ def test_general_cancel_fee_policy_contract_rejects_order_lookup_and_order_detai
     } in violations
 
 
+def test_general_cancel_fee_policy_allows_faq_only_trace_shaped_response_without_hard_violations() -> None:
+    user_text = "오늘 오후 1시 예약인데 지금 취소하면 위약금 있어?"
+    frame = build_transaction_intent_frame(
+        user_text,
+        known_slots={
+            "tire_size": "225/45R17",
+            "requested_cal_day": "20260626",
+            "pending_intent": "reservation",
+            "goal_type": "store_finder",
+            "router_transaction_intent": "order_cancel_fee_inquiry",
+            "tire_size_front": "225/45R17",
+            "tire_size_rear": "225/45R17",
+            "car_no": "61거1836",
+            "car_lnc_cd": "W036269",
+            "car_type": "SEDAN",
+            "vehicle_type": "passenger",
+            "mbr_car_reg_seq": "2000003091",
+            "stock_check_mode": "inventory_only",
+        },
+    )
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text=user_text,
+        known_slots=dict(frame.known_slots),
+    )
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=frame,
+        tool_plan=plan_transaction_tools(frame),
+        response_decision=response_decision,
+    )
+    faq_source = {
+        "status": "success",
+        "data": {
+            "items": [{
+                "answer": "매장 방문 예약만 취소하는 경우 별도 취소 수수료는 없고, 주문이나 배송 진행 상태에 따라 비용 여부가 달라질 수 있습니다.",
+                "source": "FAQ Hybrid",
+            }]
+        },
+    }
+
+    violations = response_contract_violations(
+        template="quickReply",
+        called_tools=["search_faq_hybrid_tool"],
+        structured_sources=[("search_faq_hybrid_tool", faq_source)],
+        assistant_response_text=(
+            "FAQ 기준으로는 매장 방문 예약만 취소하는 경우 별도 취소 수수료는 없고, "
+            "주문이나 배송 진행 상태에 따라 비용 여부가 달라질 수 있습니다."
+        ),
+        response_shape_key="general_cancel_fee_policy_summary",
+        source_domain="transaction",
+        contract=contract,
+    )
+
+    assert frame.intent == "general_cancel_fee_policy"
+    assert violations == []
+    assert hard_contract_violations(violations) == []
+
+
+def test_general_cancel_fee_policy_faq_only_response_has_no_qc_mismatch() -> None:
+    source = [
+        (
+            "search_faq_hybrid_tool",
+            {
+                "status": "success",
+                "data": {
+                    "items": [{
+                        "answer": "매장 방문 예약만 취소하는 경우 별도 취소 수수료는 없고, 주문이나 배송 진행 상태에 따라 비용 여부가 달라질 수 있습니다.",
+                        "source": "FAQ Hybrid",
+                    }]
+                },
+            },
+        )
+    ]
+
+    mismatches = qc_verifier.verify_draft(
+        "FAQ 기준으로는 매장 방문 예약만 취소하는 경우 별도 취소 수수료는 없고, 주문이나 배송 진행 상태에 따라 비용 여부가 달라질 수 있습니다.",
+        source,
+    )
+
+    assert mismatches == []
+
+
 def test_order_cancel_request_and_status_remain_separate_from_fee_inquiry() -> None:
     cancel_frame = build_transaction_intent_frame("예약 취소해줘")
     status_frame = build_transaction_intent_frame("내 주문 취소됐어?")
@@ -2817,6 +2900,48 @@ def test_general_card_cancel_timing_policy_contract_blocks_order_lookup_tools() 
         "response_shape_key": "order_cancel_status_summary",
         "severity": "error",
     } in violations
+
+
+def test_general_card_cancel_timing_policy_allows_faq_only_response_without_hard_violations() -> None:
+    user_text = "취소 완료 문자 받았는데 카드 승인 취소 언제 돼?"
+    frame = build_transaction_intent_frame(user_text)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text=user_text,
+        known_slots=dict(frame.known_slots),
+    )
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=frame,
+        tool_plan=plan_transaction_tools(frame),
+        response_decision=response_decision,
+    )
+    faq_source = {
+        "status": "success",
+        "data": {
+            "items": [{
+                "answer": "카드 승인취소나 환불 반영 시점은 카드사와 결제수단에 따라 달라질 수 있으며 보통 영업일 기준 며칠 정도 소요될 수 있습니다.",
+                "source": "FAQ Hybrid",
+            }]
+        },
+    }
+
+    violations = response_contract_violations(
+        template="quickReply",
+        called_tools=["search_faq_hybrid_tool"],
+        structured_sources=[("search_faq_hybrid_tool", faq_source)],
+        assistant_response_text=(
+            "FAQ 기준으로 카드 승인취소나 환불 반영 시점은 카드사와 결제수단에 따라 달라질 수 있고, "
+            "보통 영업일 기준 며칠 정도 소요될 수 있습니다."
+        ),
+        response_shape_key="general_card_cancel_timing_policy",
+        source_domain="transaction",
+        contract=contract,
+    )
+
+    assert frame.intent == "general_card_cancel_timing_policy"
+    assert violations == []
+    assert hard_contract_violations(violations) == []
 
 
 @pytest.mark.parametrize(
