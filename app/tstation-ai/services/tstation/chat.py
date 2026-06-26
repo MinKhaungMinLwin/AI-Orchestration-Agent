@@ -1176,6 +1176,7 @@ def _has_stored_transaction_context(slots: ConversationSlots) -> bool:
         or context.get("pending_order_context")
         or context.get("dormant_purchase_context")
         or context.get("dormant_stock_context")
+        or context.get("dormant_transaction_context")
     )
 
 
@@ -15341,6 +15342,8 @@ def _annotate_direct_code_fast_path_event(
 ) -> dict[str, Any]:
     if turn_contract is not None:
         event["contract_intent"] = str(turn_contract.intent or "")
+        event["allowed_tools"] = list(turn_contract.allowed_tools)
+        event["blocked_tools"] = list(turn_contract.forbidden_tools)
     event["contract_matched"] = True
     event["contract_gate_reason"] = contract_gate_reason
     event["contract_gate_result"] = "allowed"
@@ -15357,6 +15360,9 @@ def _annotate_direct_code_fast_path_event(
             metadata = {}
             event_data["metadata"] = metadata
         metadata["contract_intent"] = str(turn_contract.intent or "") if turn_contract is not None else ""
+        if turn_contract is not None:
+            metadata["allowed_tools"] = list(turn_contract.allowed_tools)
+            metadata["blocked_tools"] = list(turn_contract.forbidden_tools)
         metadata["contract_matched"] = True
         metadata["contract_gate_reason"] = contract_gate_reason
         metadata["contract_gate_result"] = "allowed"
@@ -15383,6 +15389,8 @@ def _record_contract_gate_metadata(
     event["contract_gate_reason"] = gate_reason
     if turn_contract is not None:
         event["contract_intent"] = str(turn_contract.intent or "")
+        event["allowed_tools"] = list(turn_contract.allowed_tools)
+        event["blocked_tools"] = list(turn_contract.forbidden_tools)
     if emitted_template:
         event["emitted_template"] = emitted_template
     if source:
@@ -15398,6 +15406,9 @@ def _record_contract_gate_metadata(
         metadata["contract_gate_result"] = gate_result
         metadata["contract_gate_reason"] = gate_reason
         metadata["contract_intent"] = str(turn_contract.intent or "") if turn_contract is not None else ""
+        if turn_contract is not None:
+            metadata["allowed_tools"] = list(turn_contract.allowed_tools)
+            metadata["blocked_tools"] = list(turn_contract.forbidden_tools)
         if emitted_template:
             metadata["emitted_template"] = emitted_template
         if source:
@@ -22901,6 +22912,8 @@ class TStationChatServiceV2:
             if len(recent_user_texts) >= 3:
                 break
         resume_source = _resume_source_from_current_turn(last_user_text)
+        previous_pending_intent = str(getattr(merged_slots, "pending_intent", None) or "").strip() or None
+        previous_goal_type = str(getattr(merged_slots, "goal_type", None) or "").strip() or None
         action_mode = _current_turn_action_mode(
             user_text=last_user_text,
             domains=domains,
@@ -22915,6 +22928,9 @@ class TStationChatServiceV2:
             resume_source=resume_source,
             slots=merged_slots,
         )
+        dormant_context_reason = None
+        if context_state == "dormant" and (previous_pending_intent or previous_goal_type):
+            dormant_context_reason = f"current_turn_action:{action_mode}"
         if action_mode in {"purchase_continuation", "stock_check", "booking_continuation"}:
             staged_pending_order_context = _stage_pending_order_context(
                 merged_slots,
@@ -23026,6 +23042,10 @@ class TStationChatServiceV2:
                     router_source=router_source_for_contract,
                     contract_source=contract_source_for_turn,
                     speculative_used_for_contract=speculative_used_for_contract,
+                    previous_pending_intent=previous_pending_intent,
+                    previous_goal_type=previous_goal_type,
+                    resume_anchor_detected=resume_source != "none",
+                    dormant_context_reason=dormant_context_reason,
                 )
             elif MultiAgentDomain.Domain.DISCOVERY in domains:
                 discovery_contract_slots = {
@@ -23058,6 +23078,10 @@ class TStationChatServiceV2:
                     router_source=router_source_for_contract,
                     contract_source=contract_source_for_turn,
                     speculative_used_for_contract=speculative_used_for_contract,
+                    previous_pending_intent=previous_pending_intent,
+                    previous_goal_type=previous_goal_type,
+                    resume_anchor_detected=resume_source != "none",
+                    dormant_context_reason=dormant_context_reason,
                 )
             else:
                 turn_contract = build_turn_contract(
@@ -23072,6 +23096,10 @@ class TStationChatServiceV2:
                     router_source=router_source_for_contract,
                     contract_source=contract_source_for_turn,
                     speculative_used_for_contract=speculative_used_for_contract,
+                    previous_pending_intent=previous_pending_intent,
+                    previous_goal_type=previous_goal_type,
+                    resume_anchor_detected=resume_source != "none",
+                    dormant_context_reason=dormant_context_reason,
                 )
             if vehicle_ui_action_context is not None:
                 vehicle_selection_trace_metadata["final_contract_intent"] = (

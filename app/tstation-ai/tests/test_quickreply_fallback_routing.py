@@ -9787,6 +9787,273 @@ def test_action_mode_resumes_dormant_stock_context_as_stock_check() -> None:
     ) == "resumed"
 
 
+def test_action_mode_resumes_dormant_reservation_context_as_booking_continuation() -> None:
+    slots = ConversationSlots(
+        availability_context={
+            "dormant_transaction_context": {
+                "shop_id": "F00721",
+                "shop_name": "티스테이션 판교점",
+                "pending_intent": "reservation",
+                "requested_cal_day": "20260627",
+                "context_state": "dormant",
+            }
+        },
+    )
+
+    action_mode = _current_turn_action_mode(
+        user_text="아까 예약 계속할게",
+        domains=[MultiAgentDomain.Domain.LEADING],
+        routing_result=None,
+        regex_slots=ConversationSlots(),
+        merged_slots=slots,
+        explicit_override_reason=None,
+        resume_source="explicit_user",
+    )
+
+    assert action_mode == "booking_continuation"
+    assert _context_state_for_action(
+        action_mode=action_mode,
+        resume_source="explicit_user",
+        slots=slots,
+    ) == "resumed"
+
+
+def test_turn_contract_trace_metadata_keeps_previous_flow_dormant_for_support_policy() -> None:
+    routing_result = MultiAgentDomain(
+        reason="support policy question during order flow",
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        execution_plan=["support:general_card_cancel_timing_policy"],
+        user_behavior="asking card cancel timing policy during an order flow",
+        flow="support policy answer",
+        claim_check_type="none",
+        complaint_scope="none",
+        agent_prompt_profile="full",
+        policy_intent="general_card_cancel_timing_policy",
+    )
+
+    contract = build_turn_contract(
+        user_text="취소 완료 문자 받았는데 카드 승인 취소 언제 돼?",
+        routing_result=routing_result,
+        merged_slots=ConversationSlots(),
+        action_mode="support_policy_answer",
+        context_state="dormant",
+        resume_source="none",
+        previous_pending_intent="order",
+        previous_goal_type="place_order",
+        resume_anchor_detected=False,
+        dormant_context_reason="current_turn_action:support_policy_answer",
+    )
+
+    payload = contract.to_dict()
+    assert payload["current_turn_intent"] == "general_card_cancel_timing_policy"
+    assert payload["previous_pending_intent"] == "order"
+    assert payload["previous_goal_type"] == "place_order"
+    assert payload["resume_anchor_detected"] is False
+    assert payload["dormant_context_reason"] == "current_turn_action:support_policy_answer"
+    assert payload["blocking_required_slots_source"] == "none"
+    assert payload["allowed_tools"] == ["search_faq_hybrid_tool"]
+    assert "search_faq_hybrid_tool" in payload["allowed_tools"]
+    assert "get_orders_of_user_tool" in payload["blocked_tools"]
+
+
+def test_reservation_policy_turn_keeps_previous_reservation_context_dormant_without_blocking() -> None:
+    routing_result = MultiAgentDomain(
+        reason="reservation policy question during reservation flow",
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        execution_plan=["support:reservation_policy_guidance"],
+        user_behavior="asking reservation policy during an existing reservation flow",
+        flow="support policy answer",
+        claim_check_type="none",
+        complaint_scope="none",
+        agent_prompt_profile="full",
+        policy_intent="reservation_policy_guidance",
+    )
+
+    contract = build_turn_contract(
+        user_text="예약 취소 수수료 정책 알려줘",
+        routing_result=routing_result,
+        merged_slots=ConversationSlots(
+            pending_intent="reservation",
+            shop_name="티스테이션 판교점",
+            requested_cal_day="20260627",
+            rsv_hour="1400",
+        ),
+        action_mode="support_policy_answer",
+        context_state="dormant",
+        resume_source="none",
+        previous_pending_intent="reservation",
+        previous_goal_type=None,
+        resume_anchor_detected=False,
+        dormant_context_reason="current_turn_action:support_policy_answer",
+    )
+
+    payload = contract.to_dict()
+    assert contract.intent == "reservation_policy_guidance"
+    assert contract.blocking_required_slots == ()
+    assert contract.required_slots == ()
+    assert payload["current_turn_intent"] == "reservation_policy_guidance"
+    assert payload["previous_pending_intent"] == "reservation"
+    assert payload["context_state"] == "dormant"
+    assert payload["blocking_required_slots_source"] == "none"
+    assert "get_my_reservations_tool" in payload["blocked_tools"]
+
+
+def test_store_finder_complaint_turn_keeps_previous_store_context_dormant_without_blocking() -> None:
+    routing_result = MultiAgentDomain(
+        reason="complaint during store-finder flow",
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        execution_plan=["support:tstation_service_complaint"],
+        user_behavior="complaining about waiting time after a store-finder flow",
+        flow="support policy answer",
+        claim_check_type="none",
+        complaint_scope="tstation_service_complaint",
+        agent_prompt_profile="full",
+        policy_intent="none",
+    )
+
+    contract = build_turn_contract(
+        user_text="예약 시간 맞췄는데 1시간 기다렸어. 보상 기준 있어?",
+        routing_result=routing_result,
+        merged_slots=ConversationSlots(
+            goal_type="store_finder",
+            pending_intent="reservation",
+            shop_id="F00721",
+            shop_name="티스테이션 판교점",
+            region="경기",
+        ),
+        action_mode="support_policy_answer",
+        context_state="dormant",
+        resume_source="none",
+        previous_pending_intent="reservation",
+        previous_goal_type="store_finder",
+        resume_anchor_detected=False,
+        dormant_context_reason="current_turn_action:support_policy_answer",
+    )
+
+    payload = contract.to_dict()
+    assert contract.domain == "support"
+    assert contract.blocking_required_slots == ()
+    assert "store" not in contract.required_slots
+    assert payload["previous_goal_type"] == "store_finder"
+    assert payload["previous_pending_intent"] == "reservation"
+    assert payload["context_state"] == "dormant"
+    assert payload["blocking_required_slots_source"] == "none"
+
+
+def test_second_store_selection_keeps_booking_continuation_contract() -> None:
+    latest_location = {
+        "template": "location",
+        "data": {
+            "stores": [
+                {"nameAddress": "티스테이션 영등포점"},
+                {"nameAddress": "티스테이션 강서점"},
+            ],
+            "metadata": [
+                {
+                    "shopId": "C01306",
+                    "shopName": "티스테이션 영등포점",
+                    "sourceTool": "transaction_store_preview_tool",
+                    "goodsNo": "G000000309780",
+                    "tireSize": "205/60R15",
+                    "ordQty": 4,
+                    "region": "서울",
+                    "pendingIntent": "order",
+                    "goalType": "place_order",
+                },
+                {
+                    "shopId": "C09999",
+                    "shopName": "티스테이션 강서점",
+                    "sourceTool": "transaction_store_preview_tool",
+                    "goodsNo": "G000000309780",
+                    "tireSize": "205/60R15",
+                    "ordQty": 4,
+                    "region": "서울",
+                    "pendingIntent": "order",
+                    "goalType": "place_order",
+                },
+            ],
+        },
+    }
+
+    selection = resolve_store_selection_from_history_template("두 번째 매장으로 예약", latest_location)
+    values = preview_location_slot_values_from_selection(selection)
+    frame = build_transaction_intent_frame("두 번째 매장으로 예약", known_slots=values)
+
+    assert values["shop_id"] == "C09999"
+    assert values["shop_name"] == "티스테이션 강서점"
+    assert values["pending_intent"] == "order"
+    assert values["goal_type"] == "place_order"
+    assert frame.intent == "quick_order_reservation"
+    assert frame.sub_intent == "reservation"
+
+
+def test_turn_contract_trace_metadata_marks_reference_guard_blocking_slot_source() -> None:
+    routing_result = MultiAgentDomain(
+        reason="owned order lookup needs order reference",
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        execution_plan=["transaction:order_cancel_status_lookup"],
+        user_behavior="asking cancel status without enough order reference",
+        flow="owned record lookup",
+        claim_check_type="none",
+        complaint_scope="none",
+        agent_prompt_profile="transaction_order",
+        referred_object_type="order",
+        referred_object_status="missing",
+        needs_clarification=True,
+    )
+
+    contract = build_turn_contract(
+        user_text="취소 상태 확인해줘",
+        routing_result=routing_result,
+        merged_slots=ConversationSlots(),
+        action_mode="owned_record_lookup",
+        context_state="active",
+        resume_source="none",
+    )
+
+    payload = contract.to_dict()
+    assert "order" in payload["blocking_required_slots"]
+    assert payload["blocking_required_slots_source"] == "current_intent+reference_guard:order"
+
+
+def test_direct_code_fast_path_event_records_allowed_and_blocked_tools_in_metadata() -> None:
+    contract = TurnContract(
+        domain="support",
+        intent="general_card_cancel_timing_policy",
+        allowed_tools=("search_faq_hybrid_tool",),
+        forbidden_tools=("get_orders_of_user_tool", "get_order_status_tool", "quick_order_tool"),
+        response_decision={"template": "quickReply", "metadata": {"response_shape_key": "general_card_cancel_timing_policy"}},
+    )
+    event = {
+        "type": "data",
+        "template": "quickReply",
+        "data": {"assistantResponse": "안내", "metadata": {}},
+    }
+
+    annotated = _annotate_direct_code_fast_path_event(
+        event,
+        turn_contract=contract,
+        contract_gate_reason="contract_matched:test",
+        direct_source="code_policy",
+        required_tools=("search_faq_hybrid_tool",),
+        emitted_template="quickReply",
+    )
+
+    assert annotated["allowed_tools"] == ["search_faq_hybrid_tool"]
+    assert annotated["blocked_tools"] == [
+        "get_orders_of_user_tool",
+        "get_order_status_tool",
+        "quick_order_tool",
+    ]
+    metadata = annotated["data"]["metadata"]
+    assert metadata["allowed_tools"] == ["search_faq_hybrid_tool"]
+    assert metadata["blocked_tools"] == [
+        "get_orders_of_user_tool",
+        "get_order_status_tool",
+        "quick_order_tool",
+    ]
+
+
 @pytest.mark.parametrize(
     (
         "user_text",

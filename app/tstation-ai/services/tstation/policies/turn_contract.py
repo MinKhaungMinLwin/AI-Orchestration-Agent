@@ -216,6 +216,12 @@ class TurnContract:
     router_source: str | None = None
     contract_source: str | None = None
     speculative_used_for_contract: bool = False
+    current_turn_intent: str | None = None
+    previous_pending_intent: str | None = None
+    previous_goal_type: str | None = None
+    resume_anchor_detected: bool = False
+    dormant_context_reason: str | None = None
+    blocking_required_slots_source: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -228,6 +234,7 @@ class TurnContract:
             "resolvable_required_slots": list(self.resolvable_required_slots),
             "allowed_tools": list(self.allowed_tools),
             "forbidden_tools": list(self.forbidden_tools),
+            "blocked_tools": list(self.forbidden_tools),
             "response_decision": dict(self.response_decision or {}),
             "risk_level": self.risk_level,
             "fallback_reason": self.fallback_reason,
@@ -253,6 +260,12 @@ class TurnContract:
             "router_source": self.router_source,
             "contract_source": self.contract_source,
             "speculative_used_for_contract": self.speculative_used_for_contract,
+            "current_turn_intent": self.current_turn_intent,
+            "previous_pending_intent": self.previous_pending_intent,
+            "previous_goal_type": self.previous_goal_type,
+            "resume_anchor_detected": self.resume_anchor_detected,
+            "dormant_context_reason": self.dormant_context_reason,
+            "blocking_required_slots_source": self.blocking_required_slots_source,
         }
 
 
@@ -272,6 +285,10 @@ def build_turn_contract(
     router_source: str = "unknown",
     contract_source: str | None = None,
     speculative_used_for_contract: bool = False,
+    previous_pending_intent: str | None = None,
+    previous_goal_type: str | None = None,
+    resume_anchor_detected: bool = False,
+    dormant_context_reason: str | None = None,
 ) -> TurnContract:
     """Combine policy objects into a single contract without changing execution."""
 
@@ -453,6 +470,12 @@ def build_turn_contract(
         resolvable_required_slots,
         intent=intent,
         routing_result=routing_result,
+    )
+    blocking_required_slots_source = _blocking_required_slots_source(
+        user_text=user_text,
+        intent=intent,
+        routing_result=routing_result,
+        blocking_required_slots=blocking_required_slots,
     )
     allowed_tools = tuple(tool_plan.allowed_tools) if tool_plan is not None else ()
     forbidden_tools = tuple(tool_plan.forbidden_tools) if tool_plan is not None else ()
@@ -729,6 +752,12 @@ def build_turn_contract(
         router_source=router_source,
         contract_source=contract_source or _planner_source(routing_result, cross_domain_plan),
         speculative_used_for_contract=speculative_used_for_contract,
+        current_turn_intent=intent,
+        previous_pending_intent=previous_pending_intent,
+        previous_goal_type=previous_goal_type,
+        resume_anchor_detected=resume_anchor_detected,
+        dormant_context_reason=dormant_context_reason,
+        blocking_required_slots_source=blocking_required_slots_source,
     )
 
 
@@ -3190,6 +3219,29 @@ def _blocking_required_slots(
         if slot not in blocking:
             blocking.append(slot)
     return tuple(blocking)
+
+
+def _blocking_required_slots_source(
+    *,
+    user_text: str,
+    intent: str,
+    routing_result: Any | None,
+    blocking_required_slots: tuple[str, ...],
+) -> str:
+    if not blocking_required_slots:
+        return "none"
+    if not _should_apply_reference_guard(
+        user_text=user_text,
+        intent=intent,
+        routing_result=routing_result,
+    ):
+        return "current_intent"
+    referred = _referred_objects(routing_result)
+    referred_type = str(referred.get("type") or "reference")
+    guard_slot = _slot_for_referred_object_type(referred_type)
+    if guard_slot in blocking_required_slots:
+        return f"current_intent+reference_guard:{referred_type}"
+    return "current_intent"
 
 
 def _is_blocking_reference(routing_result: Any | None, *, user_text: str = "", intent: str = "") -> bool:
