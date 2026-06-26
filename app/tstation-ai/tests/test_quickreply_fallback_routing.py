@@ -399,6 +399,7 @@ from services.tstation.policies.ui_action_policy import (
     merged_quickreply_cta_context,
     normalize_ui_action_metadata,
     preview_action_mode_for_slots,
+    preview_location_slot_values_from_selection,
     resolve_ui_action_context,
     resolve_goods_no_from_product_template_selection,
     resolve_shop_id_from_history_template,
@@ -10402,7 +10403,7 @@ def test_preview_location_selection_recovers_transaction_slots() -> None:
         "티스테이션 영등포점",
         latest_location,
     )
-    values = TStationChatServiceV2._preview_location_slot_values_from_selection(selection)
+    values = preview_location_slot_values_from_selection(selection)
 
     assert values == {
         "shop_id": "C01306",
@@ -10446,7 +10447,7 @@ def test_preview_location_selection_uses_template_boundary_alias_normalization()
         "이 매장 선택",
         latest_location,
     )
-    values = TStationChatServiceV2._preview_location_slot_values_from_selection(selection)
+    values = preview_location_slot_values_from_selection(selection)
 
     assert values == {
         "shop_id": "C01306",

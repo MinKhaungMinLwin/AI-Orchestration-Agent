@@ -1171,6 +1171,53 @@ def resolve_shop_id_from_history_template(
     return str(shop_id).strip() or None
 
 
+def preview_location_slot_values_from_selection(selection: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(selection, Mapping):
+        return None
+    meta = selection.get("meta")
+    if not isinstance(meta, Mapping):
+        return None
+    if (meta.get("sourceTool") or meta.get("source_tool")) != "transaction_store_preview_tool":
+        return None
+
+    values: dict[str, Any] = {}
+    canonical_meta = canonical_context_from_template_boundary(meta)
+    shop_id = str(canonical_meta.get("shop_id") or "").strip()
+    if shop_id:
+        values["shop_id"] = shop_id
+    shop_name = str(canonical_meta.get("shop_name") or "").strip()
+    if shop_name:
+        values["shop_name"] = shop_name
+    goods_no = str(canonical_meta.get("goods_no") or "").strip()
+    if goods_no:
+        values["goods_no"] = goods_no
+    tire_size = normalize_tire_size(canonical_meta.get("tire_size") or "")
+    if tire_size:
+        values["tire_size"] = tire_size
+    raw_qty = canonical_meta.get("ord_qty")
+    if raw_qty is not None:
+        try:
+            qty = int(raw_qty)
+            if qty > 0:
+                values["ord_qty"] = qty
+        except (TypeError, ValueError):
+            pass
+    region = str(canonical_meta.get("region") or "").strip()
+    if region:
+        values["region"] = region
+    pending_intent = str(meta.get("pendingIntent") or "").strip()
+    if pending_intent in {"stock", "order"}:
+        values["pending_intent"] = pending_intent
+    goal_type = str(meta.get("goalType") or "").strip()
+    if goal_type in {"store_with_stock", "place_order"}:
+        values["goal_type"] = goal_type
+    if not values.get("pending_intent") and values.get("goods_no") and values.get("ord_qty"):
+        values["pending_intent"] = "stock"
+    if not values.get("goal_type") and values.get("goods_no") and values.get("ord_qty"):
+        values["goal_type"] = "store_with_stock"
+    return values or None
+
+
 def resolve_goods_no_from_product_template_selection(user_text: str, template_data: Mapping[str, Any] | None) -> str | None:
     if not user_text or not isinstance(template_data, Mapping):
         return None
