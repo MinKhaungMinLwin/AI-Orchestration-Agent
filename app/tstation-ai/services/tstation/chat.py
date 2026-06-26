@@ -114,6 +114,7 @@ from services.tstation.policies.ui_action_policy import (
     apply_selected_order_context_for_purchase_cta,
     apply_preview_update_cta_action,
     apply_ui_action_slot_patch,
+    apply_vehicle_selection_slot_values,
     build_other_store_search_result_event,
     build_logistics_earliest_install_fallback_event,
     build_other_store_context_enrichment_input,
@@ -159,6 +160,7 @@ from services.tstation.policies.ui_action_policy import (
     resolve_recent_product_search_keyword,
     merged_quickreply_cta_context,
     normalize_ui_action_metadata,
+    normalize_vehicle_type_from_car_type,
     normalize_vehicle_tire_size_pair,
     selected_order_context_from_preview_values,
     preview_action_mode_for_slots,
@@ -183,6 +185,7 @@ from services.tstation.policies.ui_action_policy import (
     should_reuse_vehicle_slots_for_oe_followup,
     ui_action_trace_metadata,
     validate_ui_actions_for_contract,
+    vehicle_selection_slot_values,
 )
 from services.tstation.policies.store_confirmation_policy import (
     is_store_confirmation_reply,
@@ -6931,130 +6934,9 @@ def _is_quantityless_cart_or_order_cta(user_text: str | None) -> bool:
     return bool(_QUANTITYLESS_CART_ORDER_CTA_RE.search(str(user_text or "")))
 
 
-def _normalize_vehicle_type_from_car_type(raw_car_type: Any, *, fallback_text: str | None = None) -> str | None:
-    """Normalize registered car type into recommendation vehicle_type."""
-    combined = " ".join(
-        part
-        for part in (
-            str(raw_car_type or "").strip(),
-            str(fallback_text or "").strip(),
-        )
-        if part
-    )
-    if not combined:
-        return None
-
-    normalized = re.sub(r"[\s_\-/]+", "", combined).lower()
-    if re.search(r"전기차|electric|아이오닉|ioniq|electrified|gv70ev|\bev\b", combined, re.IGNORECASE):
-        return "ev"
-    if "스포츠유틸리티" in normalized or "suv" in normalized:
-        return "suv"
-    if any(token in normalized for token in ("승용차", "승용", "세단", "sedan", "스포츠카", "passenger")):
-        return "passenger"
-    if any(token in normalized for token in ("경트럭", "트럭", "truck", "밴", "van", "화물")):
-        return "truck_van"
-    return None
-
-
-def _vehicle_selection_slot_values(selected_vehicle: dict | None) -> dict[str, Any]:
-    selected_car = (selected_vehicle or {}).get("car") or {}
-    selected_meta = (selected_vehicle or {}).get("meta") or {}
-    front_size, rear_size = _normalize_vehicle_tire_size_pair(selected_meta)
-
-    slot_values: dict[str, Any] = {}
-    if front_size:
-        slot_values["tire_size_front"] = front_size
-    if rear_size:
-        slot_values["tire_size_rear"] = rear_size
-    if front_size and (not rear_size or front_size == rear_size):
-        slot_values["tire_size"] = front_size
-    elif rear_size and not front_size:
-        slot_values["tire_size"] = rear_size
-
-    raw_car_model = (
-        selected_meta.get("carModel")
-        or selected_meta.get("carNm")
-        or selected_car.get("model")
-        or selected_car.get("name")
-    )
-    car_model = str(raw_car_model or "").strip()
-    if car_model:
-        slot_values["car_model"] = car_model
-    car_no = str(selected_meta.get("carNo") or selected_car.get("licensePlate") or "").strip()
-    if car_no:
-        slot_values["car_no"] = car_no
-    car_lnc_cd = str(selected_meta.get("carLncCd") or "").strip()
-    if car_lnc_cd:
-        slot_values["car_lnc_cd"] = car_lnc_cd
-    raw_car_type = (
-        selected_meta.get("carType")
-        or selected_meta.get("car_type")
-        or selected_meta.get("carTypeNm")
-        or selected_meta.get("car_type_nm")
-        or selected_car.get("carType")
-        or selected_car.get("car_type")
-        or selected_car.get("type")
-        or selected_car.get("vehicleType")
-    )
-    car_type = str(raw_car_type or "").strip()
-    vehicle_type = _normalize_vehicle_type_from_car_type(
-        car_type,
-        fallback_text=" ".join(
-            part
-            for part in (
-                car_model,
-                str(selected_car.get("info") or selected_car.get("description") or "").strip(),
-            )
-            if part
-        ),
-    )
-    if car_type:
-        slot_values["car_type"] = car_type
-    if vehicle_type:
-        slot_values["vehicle_type"] = vehicle_type
-    mbr_car_reg_seq = str(selected_meta.get("mbrCarRegSeq") or "").strip()
-    if mbr_car_reg_seq:
-        slot_values["mbr_car_reg_seq"] = mbr_car_reg_seq
-
-    return slot_values
-
-
-def _apply_vehicle_selection_slot_values(base_slots: Any, slot_values: dict[str, Any]) -> Any:
-    """Apply selected-vehicle slots as one atomic replacement.
-
-    Generic ConversationSlots.merge() is field-ordered and may reset front/rear
-    sizes after setting them when car_model/car_no changes. Vehicle selection is
-    different: the vehicle identity and tire sizes arrive as one confirmed set.
-    """
-    updated = base_slots.model_copy()
-
-    vehicle_fields = {
-        "car_model",
-        "car_no",
-        "car_lnc_cd",
-        "car_type",
-        "vehicle_type",
-        "mbr_car_reg_seq",
-        "tire_size",
-        "tire_size_front",
-        "tire_size_rear",
-    }
-    for field in vehicle_fields:
-        setattr(updated, field, slot_values.get(field))
-
-    if getattr(updated, "tire_size", None) != getattr(base_slots, "tire_size", None):
-        updated.goods_no = None
-        updated.payment_amount = None
-
-    if (
-        getattr(updated, "car_no", None) != getattr(base_slots, "car_no", None)
-        or getattr(updated, "car_lnc_cd", None) != getattr(base_slots, "car_lnc_cd", None)
-        or getattr(updated, "car_model", None) != getattr(base_slots, "car_model", None)
-    ):
-        updated.goods_no = None
-        updated.payment_amount = None
-
-    return updated
+_normalize_vehicle_type_from_car_type = normalize_vehicle_type_from_car_type
+_vehicle_selection_slot_values = vehicle_selection_slot_values
+_apply_vehicle_selection_slot_values = apply_vehicle_selection_slot_values
 
 
 def _brand_label_for_code(brand_cd: str) -> str:
