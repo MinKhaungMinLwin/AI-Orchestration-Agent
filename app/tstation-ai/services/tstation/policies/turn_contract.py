@@ -90,6 +90,12 @@ _HIGH_RISK_TRANSACTION_TOOLS = frozenset({
     "get_orders_of_user_tool",
     "get_order_status_tool",
 })
+_STORE_SERVICE_SEARCH_TOOLS = frozenset({
+    "search_stores_tool",
+    "search_stores_complex_tool",
+    "get_store_list_tool",
+    "get_nearby_stores_tool",
+})
 _DISCOVERY_EVENT_CONTENT_TOOLS = frozenset({
     "search_product_tool",
     "get_product_applicable_events_tool",
@@ -1419,6 +1425,12 @@ def response_contract_violations(
     )
     if tool_contract_violation is not None:
         violations.append(tool_contract_violation)
+    store_service_search_violation = _store_service_search_contract_violation(
+        tool_inputs=tool_inputs,
+        contract=contract,
+    )
+    if store_service_search_violation is not None:
+        violations.append(store_service_search_violation)
     compare_violation = _comparison_contract_violation(
         assistant_response_text=assistant_response_text,
         assistant_response_source=assistant_response_source,
@@ -1861,6 +1873,63 @@ def _tool_contract_violation(
         "called_tools": unexpected,
         "allowed_tools": list(contract.allowed_tools),
     }
+
+
+def _normalize_service_code_values(value: Any) -> set[str]:
+    if value in (None, "", [], (), {}):
+        return set()
+    if isinstance(value, (list, tuple, set)):
+        return {str(item).strip() for item in value if str(item or "").strip()}
+    return {str(value).strip()} if str(value).strip() else set()
+
+
+def _store_service_search_contract_violation(
+    *,
+    tool_inputs: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...] | None,
+    contract: TurnContract | None,
+) -> dict[str, Any] | None:
+    if contract is None or contract.intent != "store_service_search" or not tool_inputs:
+        return None
+    known_slots = contract.known_slots or {}
+    expected_region = _slot_text(known_slots, "region")
+    expected_place_query = _slot_text(known_slots, "place_query")
+    expected_service_codes = _normalize_service_code_values(
+        known_slots.get("service_codes") or known_slots.get("service_code")
+    )
+    for tool_input in tool_inputs:
+        tool_name = str(tool_input.get("tool") or "")
+        if tool_name not in _STORE_SERVICE_SEARCH_TOOLS:
+            continue
+        args = tool_input.get("args") if isinstance(tool_input.get("args"), Mapping) else tool_input.get("input")
+        if not isinstance(args, Mapping):
+            continue
+        actual_region = str(args.get("region_code") or args.get("region") or "").strip()
+        actual_place_query = str(args.get("place_query") or "").strip()
+        actual_service_codes = _normalize_service_code_values(
+            args.get("svc_codes") or args.get("service_codes") or args.get("service_code") or args.get("svc_code")
+        )
+        if expected_region and actual_region and expected_region != actual_region:
+            return {
+                "type": "store_service_search_region_contract_drift",
+                "known_region": expected_region,
+                "tool_region": actual_region,
+                "tool": tool_name,
+            }
+        if expected_place_query and actual_place_query and expected_place_query != actual_place_query:
+            return {
+                "type": "store_service_search_place_query_contract_drift",
+                "known_place_query": expected_place_query,
+                "tool_place_query": actual_place_query,
+                "tool": tool_name,
+            }
+        if expected_service_codes and actual_service_codes and expected_service_codes.isdisjoint(actual_service_codes):
+            return {
+                "type": "store_service_search_service_code_contract_drift",
+                "known_service_codes": sorted(expected_service_codes),
+                "tool_service_codes": sorted(actual_service_codes),
+                "tool": tool_name,
+            }
+    return None
 
 
 def _is_comparison_contract(contract: TurnContract | None) -> bool:

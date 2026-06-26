@@ -1454,6 +1454,102 @@ def _should_emit_pre_router_store_service_guard(
     return bool(str(store_context_name or "").strip())
 
 
+_STORE_PREFERENCE_CARRY_RE = re.compile(
+    r"(?:그|이|저)\s*(?:조건|기준)(?:으로|대로)?|같은\s*(?:조건|기준)|그대로|이어서",
+    re.IGNORECASE,
+)
+_STORE_SERVICE_CONTEXT_TOOLS = frozenset({
+    "search_stores_tool",
+    "search_stores_complex_tool",
+    "get_store_list_tool",
+    "get_nearby_stores_tool",
+    "transaction_store_preview_tool",
+    "get_store_detail_tool",
+    "get_store_schedule_tool",
+    "get_multi_store_schedule_tool",
+})
+
+
+def _router_store_service_search_slots(routing_result: MultiAgentDomain | None) -> dict[str, Any]:
+    if routing_result is None:
+        return {}
+    if str(getattr(routing_result, "policy_intent", "") or "") != "store_service_search":
+        return {}
+    service_name = str(getattr(routing_result, "service_name", "") or "").strip()
+    service_code = str(getattr(routing_result, "service_code", "") or "").strip()
+    region = str(getattr(routing_result, "region", "") or "").strip()
+    place_query = str(getattr(routing_result, "place_query", "") or "").strip()
+    if not (service_name or service_code) or not (region or place_query):
+        return {}
+    slots: dict[str, Any] = {
+        "policy_intent": "store_service_search",
+        "service_name": service_name,
+        "service_code": service_code,
+        "region": region,
+        "place_query": place_query,
+    }
+    if service_code:
+        slots["service_codes"] = (service_code,)
+    return slots
+
+
+def _should_carry_store_finder_preference_into_service_search(user_text: str) -> bool:
+    text = str(user_text or "").strip()
+    if not text or not _STORE_PREFERENCE_CARRY_RE.search(text):
+        return False
+    return bool(unverifiable_store_preference_labels(text) or re.search(r"키즈존|휴게|대기실|쾌적|친절", text))
+
+
+def _sync_store_service_search_working_slots(
+    slots: ConversationSlots,
+    *,
+    user_text: str,
+    routing_result: MultiAgentDomain | None,
+) -> dict[str, Any]:
+    router_slots = _router_store_service_search_slots(routing_result)
+    if not router_slots:
+        return {}
+
+    metadata: dict[str, Any] = {"router_slots": dict(router_slots)}
+    stale_context: dict[str, Any] = {}
+    carry_preferences = _should_carry_store_finder_preference_into_service_search(user_text)
+    current_region = str(router_slots.get("region") or "").strip()
+    previous_region = str(getattr(slots, "region", "") or "").strip()
+    previous_preferences = str(getattr(slots, "user_preferences_text", "") or "").strip()
+
+    if previous_region and current_region and previous_region != current_region:
+        stale_context["region"] = previous_region
+    if previous_preferences and not carry_preferences:
+        stale_context["user_preferences_text"] = previous_preferences
+
+    previous_availability_context = dict(getattr(slots, "availability_context", None) or {})
+    if previous_availability_context and not carry_preferences:
+        stale_context["availability_context"] = previous_availability_context
+
+    if stale_context:
+        dormant_context = {
+            key: value
+            for key, value in previous_availability_context.items()
+            if str(key).startswith("dormant_")
+        }
+        slots.availability_context = {
+            **dormant_context,
+            "dormant_store_finder_context": {
+                **stale_context,
+                "source": "current_turn_store_service_search",
+            }
+        }
+        metadata["dormant_store_finder_context"] = stale_context
+
+    if current_region and previous_region != current_region:
+        slots.region = current_region
+        metadata["region"] = current_region
+    if previous_preferences and not carry_preferences:
+        slots.user_preferences_text = None
+        metadata["cleared_user_preferences_text"] = previous_preferences
+    return metadata
+
+
 def _store_attribute_selection_continuation_inquiry(
     *,
     user_text: str,
@@ -19886,6 +19982,7 @@ class TStationChatServiceV2:
         max_items: int = 3,
         *,
         intent_group: str | None = None,
+        store_service_search_slots: Mapping[str, Any] | None = None,
     ) -> list[dict]:
         """Select prompt context by confirmed data and recency.
 
@@ -19898,7 +19995,13 @@ class TStationChatServiceV2:
         candidate_tool_data = [
             item
             for item in tool_data
-            if not TStationChatServiceV2._should_exclude_tool_context_for_intent_group(item, intent_group)
+            if (
+                not TStationChatServiceV2._should_exclude_tool_context_for_intent_group(item, intent_group)
+                and not TStationChatServiceV2._should_exclude_tool_context_for_store_service_search(
+                    item,
+                    store_service_search_slots,
+                )
+            )
         ]
         if not candidate_tool_data:
             return []
@@ -19935,6 +20038,53 @@ class TStationChatServiceV2:
             "get_store_detail_tool",
             "transaction_store_preview_tool",
         }
+
+    @staticmethod
+    def _normalize_service_code_values(value: Any) -> set[str]:
+        if value in (None, "", [], (), {}):
+            return set()
+        if isinstance(value, (list, tuple, set)):
+            return {str(item).strip() for item in value if str(item or "").strip()}
+        return {str(value).strip()} if str(value).strip() else set()
+
+    @staticmethod
+    def _should_exclude_tool_context_for_store_service_search(
+        item: dict,
+        store_service_search_slots: Mapping[str, Any] | None,
+    ) -> bool:
+        if not store_service_search_slots:
+            return False
+        tool_name = str(item.get("tool") or "")
+        if tool_name not in _STORE_SERVICE_CONTEXT_TOOLS:
+            return False
+        args = item.get("args") if isinstance(item.get("args"), dict) else item.get("input")
+        if not isinstance(args, Mapping):
+            return True
+
+        current_region = str(store_service_search_slots.get("region") or "").strip()
+        current_place_query = str(store_service_search_slots.get("place_query") or "").strip()
+        current_service_codes = TStationChatServiceV2._normalize_service_code_values(
+            store_service_search_slots.get("service_codes") or store_service_search_slots.get("service_code")
+        )
+        arg_region = str(args.get("region_code") or args.get("region") or "").strip()
+        arg_place_query = str(args.get("place_query") or "").strip()
+        arg_service_codes = TStationChatServiceV2._normalize_service_code_values(
+            args.get("svc_codes") or args.get("service_codes") or args.get("service_code") or args.get("svc_code")
+        )
+
+        if current_region and arg_region and current_region != arg_region:
+            return True
+        if current_place_query and arg_place_query and current_place_query != arg_place_query:
+            return True
+        if current_service_codes and arg_service_codes and current_service_codes.isdisjoint(arg_service_codes):
+            return True
+        if args.get("shop_id") or args.get("store_nm"):
+            return True
+        if current_region and not arg_region and not arg_place_query:
+            return True
+        if current_service_codes and not arg_service_codes:
+            return True
+        return False
 
     @staticmethod
     def _should_drop_template_for_intent_group(event: dict, intent_group: str | None) -> bool:
@@ -24099,6 +24249,67 @@ class TStationChatServiceV2:
                 list(getattr(routing_result, "execution_plan", []) or []),
             )
 
+        store_service_slot_sync = _sync_store_service_search_working_slots(
+            merged_slots,
+            user_text=last_user_text,
+            routing_result=routing_result,
+        )
+        if store_service_slot_sync:
+            await chat_history_svc.save_slots_async(request.session_id, merged_slots, user_id=request.user_id)
+            prompt_slots = merged_slots.model_copy() if merged_slots is not None else None
+            if prompt_slots is not None and suppress_inherited_recommendation_context:
+                prompt_slots.tire_size = None
+                if prompt_slots.goal_type == "product_recommend":
+                    prompt_slots.goal_type = None
+                prompt_slots.recommendation_variants = None
+                prompt_slots.recommendation_limit_per_variant = None
+                prompt_slots.recommendation_source_text = None
+            slot_context = (
+                prompt_slots.to_prompt_context(include_pending_intent=False)
+                if prompt_slots is not None and prompt_slots.has_any()
+                else None
+            )
+            slot_context_with_intent = (
+                prompt_slots.to_prompt_context(include_pending_intent=True)
+                if prompt_slots is not None and prompt_slots.has_any()
+                else None
+            )
+            if slot_context_with_intent == slot_context:
+                slot_context_with_intent = None
+            followup_recommendation_context = None
+            if not suppress_inherited_recommendation_context:
+                followup_recommendation_context = _infer_followup_recommendation_context(messages, last_user_text)
+            if followup_recommendation_context:
+                slot_context = (
+                    f"{slot_context}\n\n{followup_recommendation_context}"
+                    if slot_context
+                    else followup_recommendation_context
+                )
+                slot_context_with_intent = (
+                    f"{slot_context_with_intent}\n\n{followup_recommendation_context}"
+                    if slot_context_with_intent
+                    else slot_context_with_intent
+                )
+            tool_context = None
+            if prev_tool_data and not suppress_inherited_recommendation_context:
+                ranking_followup_context = bool(_RECENT_PRODUCT_SET_RANKING_TEXT_RE.search(last_user_text or ""))
+                prompt_tool_data = TStationChatServiceV2._select_tool_context_for_prompt(
+                    prev_tool_data,
+                    merged_slots,
+                    max_items=5 if ranking_followup_context else 3,
+                    intent_group=intent_group,
+                    store_service_search_slots=store_service_slot_sync.get("router_slots"),
+                )
+                tool_context = TStationChatServiceV2._format_tool_context(
+                    prompt_tool_data,
+                    max_items=5 if ranking_followup_context else 3,
+                    max_rows=20 if ranking_followup_context else 5,
+                )
+                context_limit = 12000 if ranking_followup_context else 4000
+                if len(tool_context) > context_limit:
+                    tool_context = tool_context[:context_limit] + "\n... (일부 생략)"
+            logger.info("[SLOTS] Synced current-turn store_service_search slots: %s", store_service_slot_sync)
+
         restored_store_selection_domains = _restore_blocked_transaction_store_selection_contract(routing_result)
         if restored_store_selection_domains is not None:
             domains = restored_store_selection_domains
@@ -24234,22 +24445,9 @@ class TStationChatServiceV2:
             transaction_known_slots["router_transaction_intent"] = "price_or_benefit_alert_request"
         elif _router_contract_is_order_cancel_fee_inquiry(routing_result):
             transaction_known_slots["router_transaction_intent"] = "order_cancel_fee_inquiry"
-        if str(getattr(routing_result, "policy_intent", "") or "") == "store_service_search":
-            service_name = str(getattr(routing_result, "service_name", "") or "").strip()
-            service_code = str(getattr(routing_result, "service_code", "") or "").strip()
-            region = str(getattr(routing_result, "region", "") or "").strip()
-            place_query = str(getattr(routing_result, "place_query", "") or "").strip()
-            if (service_name or service_code) and (region or place_query):
-                transaction_known_slots["policy_intent"] = "store_service_search"
-                if service_name:
-                    transaction_known_slots["service_name"] = service_name
-                if service_code:
-                    transaction_known_slots["service_code"] = service_code
-                    transaction_known_slots["service_codes"] = (service_code,)
-                if region:
-                    transaction_known_slots["region"] = region
-                if place_query:
-                    transaction_known_slots["place_query"] = place_query
+        router_store_service_slots = _router_store_service_search_slots(routing_result)
+        if router_store_service_slots:
+            transaction_known_slots.update(router_store_service_slots)
         transaction_tool_patch, transaction_response_decision, transaction_tool_plan = _build_transaction_policy_context(
             domains=domains,
             last_user_text=last_user_text,

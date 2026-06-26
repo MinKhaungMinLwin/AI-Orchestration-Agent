@@ -107,6 +107,7 @@ from services.tstation.chat import (
     _apply_pending_object_check_slots,
     _clear_stale_product_slots_for_new_recommendation,
     _clear_stale_store_search_context_for_general_turn,
+    _sync_store_service_search_working_slots,
     _demote_stale_tire_size_for_new_product_transaction,
     _datepick_template_recovery_candidate_from_messages,
     _verified_datepick_order_values,
@@ -7599,6 +7600,33 @@ def test_existing_reservation_management_filters_stale_store_schedule_context() 
     )
 
     assert [item["tool"] for item in selected] == ["get_my_reservations_tool"]
+
+
+def test_store_service_search_filters_stale_store_finder_tool_context() -> None:
+    selected = TStationChatServiceV2._select_tool_context_for_prompt(
+        [
+            {
+                "tool": "get_store_list_tool",
+                "args": {"region_code": "강남"},
+                "data": {"stores": [{"shop_nm": "티스테이션 강남점"}]},
+            },
+            {
+                "tool": "search_stores_tool",
+                "args": {"region_code": "경기", "svc_codes": ["119"], "place_query": "경기권"},
+                "data": {"stores": [{"shop_nm": "티스테이션 수원점"}]},
+            },
+        ],
+        SimpleNamespace(region="경기"),
+        store_service_search_slots={
+            "policy_intent": "store_service_search",
+            "region": "경기",
+            "place_query": "경기권",
+            "service_code": "119",
+            "service_codes": ("119",),
+        },
+    )
+
+    assert [item["tool"] for item in selected] == ["search_stores_tool"]
 
 
 def test_existing_reservation_management_drops_schedule_templates() -> None:
@@ -15609,6 +15637,41 @@ def test_clear_stale_store_search_context_preserves_explicit_store_finder_turn()
     assert slots.shop_id == "F00721"
 
 
+def test_sync_store_service_search_working_slots_overrides_stale_store_finder_context() -> None:
+    slots = ConversationSlots(
+        goal_type="store_finder",
+        region="강남",
+        user_preferences_text="대기실에 키즈존이 있거나 휴게 공간이 쾌적한 매장 추천해 줘",
+        availability_context={"pending_order_context": {"region": "강남"}},
+    )
+
+    synced = _sync_store_service_search_working_slots(
+        slots,
+        user_text="윈터 타이어 끼고 싶은데, 지금 장착중인 타이어 보관해주는 매장이 경기권에 어디어디 있어?",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["transaction:store_service_search"],
+            policy_intent="store_service_search",
+            service_name="타이어 보관서비스",
+            service_code="119",
+            region="경기",
+            place_query="경기권",
+        ),
+    )
+
+    assert synced["router_slots"]["region"] == "경기"
+    assert slots.region == "경기"
+    assert slots.user_preferences_text is None
+    assert slots.availability_context == {
+        "dormant_store_finder_context": {
+            "region": "강남",
+            "user_preferences_text": "대기실에 키즈존이 있거나 휴게 공간이 쾌적한 매장 추천해 줘",
+            "availability_context": {"pending_order_context": {"region": "강남"}},
+            "source": "current_turn_store_service_search",
+        }
+    }
+
+
 def test_turn_contract_preserves_router_override_metadata() -> None:
     routing = _routing_result(
         domains=[MultiAgentDomain.Domain.SUPPORT],
@@ -17370,6 +17433,36 @@ def test_actual_store_service_search_sentence_prefers_store_search_contract_over
     assert "quick_order_tool" in tool_plan.forbidden_tools
     assert response_decision.template == TemplateName.LOCATION
     assert response_decision.metadata["response_shape_key"] == "store_service_search"
+
+
+def test_store_service_search_contract_detects_region_drift_against_tool_input() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="store_service_search",
+        known_slots={
+            "policy_intent": "store_service_search",
+            "region": "경기",
+            "place_query": "경기권",
+            "service_code": "119",
+            "service_codes": ("119",),
+        },
+        allowed_tools=("search_stores_tool", "get_store_list_tool"),
+    )
+
+    violations = response_contract_violations(
+        template="location",
+        assistant_response_source="transaction_policy",
+        called_tools=["search_stores_tool"],
+        tool_inputs=[
+            {
+                "tool": "search_stores_tool",
+                "args": {"region_code": "강남", "place_query": "경기권", "svc_codes": ["119"]},
+            }
+        ],
+        contract=contract,
+    )
+
+    assert any(v["type"] == "store_service_search_region_contract_drift" for v in violations)
 
 
 def test_cheongju_tire_storage_service_search_normalizes_service_code() -> None:
