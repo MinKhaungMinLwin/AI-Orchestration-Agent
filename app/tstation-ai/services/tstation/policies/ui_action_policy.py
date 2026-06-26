@@ -396,6 +396,106 @@ def validate_ui_actions_for_contract(
     return True
 
 
+def chip_context_dict(chip_context: Any | None) -> dict[str, Any]:
+    if isinstance(chip_context, dict):
+        return chip_context
+    if hasattr(chip_context, "model_dump"):
+        dumped = chip_context.model_dump()
+        return dumped if isinstance(dumped, dict) else {}
+    return {}
+
+
+def chip_value(chip_context: Mapping[str, Any] | None, *keys: str) -> str:
+    normalized_context = chip_context_dict(chip_context)
+    if not normalized_context:
+        return ""
+    for key in keys:
+        value = normalized_context.get(key)
+        if value not in (None, ""):
+            return str(value).strip()
+    return ""
+
+
+def quickreply_cta_context_from_template(template_data: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(template_data, Mapping):
+        return {}
+    data = template_data.get("data") if isinstance(template_data.get("data"), Mapping) else template_data
+    metadata = data.get("metadata") if isinstance(data, Mapping) else None
+    if not isinstance(metadata, Mapping):
+        return {}
+    cta_context = metadata.get("ctaContext")
+    return dict(cta_context) if isinstance(cta_context, Mapping) else {}
+
+
+def quickreply_cta_context_from_chip(chip_context: Mapping[str, Any] | None) -> dict[str, Any]:
+    normalized_context = chip_context_dict(chip_context)
+    if not normalized_context:
+        return {}
+    metadata = normalized_context.get("metadata")
+    context = dict(metadata) if isinstance(metadata, Mapping) else {}
+    for key in (
+        "cta_id",
+        "cta_action",
+        "expected_behavior",
+        "source_intent",
+        "expected_contract_intent",
+    ):
+        value = normalized_context.get(key)
+        if value not in (None, ""):
+            context.setdefault(key, value)
+    slots = normalized_context.get("slots")
+    if isinstance(slots, Mapping) and slots:
+        context.setdefault("slots", dict(slots))
+    return context
+
+
+def merged_quickreply_cta_context(
+    chip_context: Mapping[str, Any] | None,
+    latest_quickreply_tmpl: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    context = quickreply_cta_context_from_template(latest_quickreply_tmpl)
+    context.update(quickreply_cta_context_from_chip(chip_context))
+    intent_key = chip_value(chip_context, "intentKey", "intent_key")
+    if intent_key:
+        context.setdefault("intentKey", intent_key)
+    return context
+
+
+def apply_cta_context_to_slots(slots: Any, cta_context: Mapping[str, Any] | None, *, source: str = "quickreply_cta") -> Any:
+    if not isinstance(cta_context, Mapping):
+        return slots
+    values: dict[str, Any] = {}
+    canonical_context = canonical_context_from_template_boundary(cta_context)
+    for key in ("goods_no", "tire_size", "ord_qty", "region", "shop_name", "requested_cal_day"):
+        value = canonical_context.get(key)
+        if value in (None, "", []):
+            continue
+        if key == "ord_qty":
+            try:
+                value = int(value)
+            except (TypeError, ValueError):
+                continue
+        values[key] = value
+    region_code = cta_context.get("regionCode") or cta_context.get("region_code")
+    if region_code not in (None, "", []):
+        values["region"] = region_code
+    intent_key = cta_context.get("intentKey") or cta_context.get("intent_key")
+    if intent_key not in (None, "", []):
+        values["availability_intent"] = intent_key
+    if values.get("availability_intent") == "today_install":
+        values["pending_intent"] = getattr(slots, "pending_intent", None) or "stock"
+        values["goal_type"] = getattr(slots, "goal_type", None) or "store_with_stock"
+    if not values:
+        return slots
+    try:
+        return slots.apply_runtime_values(values, source=source, fill_only=True)
+    except Exception:
+        for key, value in values.items():
+            if getattr(slots, key, None) in (None, ""):
+                setattr(slots, key, value)
+        return slots
+
+
 def normalize_ui_action_metadata(
     event: dict[str, Any],
     *,

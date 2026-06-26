@@ -110,8 +110,14 @@ from services.tstation.policies.intent_frame import IntentFrame, PolicyDomain
 from services.tstation.policies.pickup_service_gate import decide_pickup_service_gate
 from services.tstation.policies.ui_action_policy import (
     UIActionContext,
+    apply_cta_context_to_slots,
     apply_ui_action_slot_patch,
+    chip_context_dict,
+    chip_value,
+    merged_quickreply_cta_context,
     normalize_ui_action_metadata,
+    quickreply_cta_context_from_chip,
+    quickreply_cta_context_from_template,
     resolve_ui_action_context,
     ui_action_trace_metadata,
     validate_ui_actions_for_contract,
@@ -5630,26 +5636,6 @@ _BOOKING_PREVIEW_CHIPS = [
 ]
 
 
-def _chip_context_dict(chip_context: Any | None) -> dict[str, Any]:
-    if isinstance(chip_context, dict):
-        return chip_context
-    if hasattr(chip_context, "model_dump"):
-        dumped = chip_context.model_dump()
-        return dumped if isinstance(dumped, dict) else {}
-    return {}
-
-
-def _chip_value(chip_context: dict[str, Any] | None, *keys: str) -> str:
-    chip_context = _chip_context_dict(chip_context)
-    if not chip_context:
-        return ""
-    for key in keys:
-        value = chip_context.get(key)
-        if value:
-            return str(value).strip()
-    return ""
-
-
 def _quickreply_cta_clarification_event(
     user_text: str,
     chip_context: dict[str, Any] | None,
@@ -5657,10 +5643,10 @@ def _quickreply_cta_clarification_event(
     cta_context: dict[str, Any] | None = None,
     allow_label_only: bool = True,
 ) -> dict | None:
-    action_id = _chip_value(chip_context, "actionId", "action_id")
+    action_id = chip_value(chip_context, "actionId", "action_id")
     text = (user_text or "").strip()
     metadata = dict(cta_context or {})
-    intent_key = str(metadata.get("intentKey") or _chip_value(chip_context, "intentKey", "intent_key") or "today_install")
+    intent_key = str(metadata.get("intentKey") or chip_value(chip_context, "intentKey", "intent_key") or "today_install")
     metadata.setdefault("intentKey", intent_key)
     if action_id == "enter_region" or (
         allow_label_only and re.fullmatch(r"(?:다른\s*)?(?:지역|장소)\s*(?:입력|찾기|검색)", text)
@@ -5700,50 +5686,6 @@ def _quickreply_cta_clarification_event(
             },
         }
     return None
-
-
-def _quickreply_cta_context_from_template(template_data: dict | None) -> dict[str, Any]:
-    if not isinstance(template_data, dict):
-        return {}
-    data = template_data.get("data") if isinstance(template_data.get("data"), dict) else template_data
-    metadata = data.get("metadata") if isinstance(data, dict) else None
-    if not isinstance(metadata, dict):
-        return {}
-    cta_context = metadata.get("ctaContext")
-    return dict(cta_context) if isinstance(cta_context, dict) else {}
-
-
-def _quickreply_cta_context_from_chip(chip_context: dict[str, Any] | None) -> dict[str, Any]:
-    chip_context = _chip_context_dict(chip_context)
-    if not chip_context:
-        return {}
-    metadata = chip_context.get("metadata")
-    context = dict(metadata) if isinstance(metadata, dict) else {}
-    for key in (
-        "cta_id",
-        "cta_action",
-        "expected_behavior",
-        "source_intent",
-        "expected_contract_intent",
-    ):
-        value = chip_context.get(key)
-        if value not in (None, ""):
-            context.setdefault(key, value)
-    return context
-
-
-def _merged_quickreply_cta_context(
-    chip_context: dict[str, Any] | None,
-    latest_quickreply_tmpl: dict | None,
-) -> dict[str, Any]:
-    context = _quickreply_cta_context_from_template(latest_quickreply_tmpl)
-    context.update(_quickreply_cta_context_from_chip(chip_context))
-    intent_key = _chip_value(chip_context, "intentKey", "intent_key")
-    if intent_key:
-        context.setdefault("intentKey", intent_key)
-    return context
-
-
 def _float_or_none(value: Any) -> float | None:
     if value in (None, ""):
         return None
@@ -5822,40 +5764,6 @@ def _is_current_location_store_search_confirmation(user_text: str, latest_quickr
         return False
     assistant_text = str(latest_quickreply_tmpl.get("assistantResponse") or "")
     return bool(_CURRENT_LOCATION_STORE_SEARCH_PROMPT_RE.search(assistant_text))
-
-
-def _apply_cta_context_to_slots(slots: Any, cta_context: dict[str, Any], *, source: str = "quickreply_cta") -> Any:
-    if not cta_context:
-        return slots
-    values: dict[str, Any] = {}
-    canonical_context = canonical_context_from_template_boundary(cta_context)
-    for key in ("goods_no", "tire_size", "ord_qty", "region", "shop_name", "requested_cal_day"):
-        value = canonical_context.get(key)
-        if value not in (None, "", []):
-            if key == "ord_qty":
-                try:
-                    value = int(value)
-                except (TypeError, ValueError):
-                    continue
-            values[key] = value
-    region_code = cta_context.get("regionCode") or cta_context.get("region_code")
-    if region_code not in (None, "", []):
-        values["region"] = region_code
-    intent_key = cta_context.get("intentKey") or cta_context.get("intent_key")
-    if intent_key not in (None, "", []):
-        values["availability_intent"] = intent_key
-    if values.get("availability_intent") == "today_install":
-        values["pending_intent"] = getattr(slots, "pending_intent", None) or "stock"
-        values["goal_type"] = getattr(slots, "goal_type", None) or "store_with_stock"
-    if not values:
-        return slots
-    try:
-        return slots.apply_runtime_values(values, source=source, fill_only=True)
-    except Exception:
-        for key, value in values.items():
-            if getattr(slots, key, None) in (None, ""):
-                setattr(slots, key, value)
-        return slots
 
 
 def _cta_missing_slot_event(missing_slot: str) -> dict:
@@ -7673,7 +7581,7 @@ def _is_oe_replacement_context(
         return False
     if not _is_oe_replacement_equivalent_query(context_text):
         return False
-    cta_context = _quickreply_cta_context_from_template(latest_quickreply_tmpl)
+    cta_context = quickreply_cta_context_from_template(latest_quickreply_tmpl)
     if not _is_oe_replacement_cta_context(cta_context):
         return False
     return _is_oe_replacement_followup_query(current_text) or bool(_extract_vehicle_plate_from_text(current_text))
@@ -21166,7 +21074,7 @@ class TStationChatServiceV2:
 
     @staticmethod
     def _resolve_vehicle_from_chip_context(chip_context: dict[str, Any] | None, template_data: dict | None) -> dict | None:
-        chip = _chip_context_dict(chip_context)
+        chip = chip_context_dict(chip_context)
         if not chip or str(chip.get("cta_action") or "").strip() != "select_vehicle_candidate":
             return None
         if not isinstance(template_data, dict):
@@ -21675,7 +21583,7 @@ class TStationChatServiceV2:
                 )
             return TStationChatResponse(content=guard_text)
 
-        early_cta_context = _quickreply_cta_context_from_chip(request.chip_context)
+        early_cta_context = quickreply_cta_context_from_chip(request.chip_context)
         cta_clarification_event = None
         if early_cta_context:
             cta_clarification_event = _quickreply_cta_clarification_event(
@@ -21688,7 +21596,7 @@ class TStationChatServiceV2:
             logger.info(
                 "[CHAT_V2] CTA action fast-path: text=%s action=%s",
                 last_user_msg[:80],
-                _chip_value(request.chip_context, "actionId", "action_id"),
+                chip_value(request.chip_context, "actionId", "action_id"),
             )
             guard_text = str((cta_clarification_event.get("data") or {}).get("assistantResponse") or "")
             if request.stream:
@@ -22044,11 +21952,11 @@ class TStationChatServiceV2:
             latest_quickreply_tmpl = latest_template_data_from_messages(recent_template_msgs, "quickReply")
             latest_product_tmpl = latest_template_data_from_messages(recent_template_msgs, "product")
             latest_preorder_tmpl = latest_template_data_from_messages(recent_template_msgs, "preOrder")
-            raw_ui_action = _chip_context_dict(request.ui_action)
+            raw_ui_action = chip_context_dict(request.ui_action)
             if not raw_ui_action:
-                raw_ui_action = _chip_context_dict(_chip_context_dict(request.chip_context).get("ui_action"))
+                raw_ui_action = chip_context_dict(chip_context_dict(request.chip_context).get("ui_action"))
             if not raw_ui_action:
-                chip_context_values = _chip_context_dict(request.chip_context)
+                chip_context_values = chip_context_dict(request.chip_context)
                 if chip_context_values.get("cta_action") or chip_context_values.get("slots"):
                     raw_ui_action = dict(chip_context_values)
             if raw_ui_action and isinstance(request.slots, dict):
@@ -22693,8 +22601,8 @@ class TStationChatServiceV2:
                     last_user_text,
                 )
 
-            chip_action_id = _chip_value(request.chip_context, "actionId", "action_id")
-            cta_context = _merged_quickreply_cta_context(request.chip_context, latest_quickreply_tmpl)
+            chip_action_id = chip_value(request.chip_context, "actionId", "action_id")
+            cta_context = merged_quickreply_cta_context(request.chip_context, latest_quickreply_tmpl)
 
             def _build_cta_action_contract(source: str, required_tools: tuple[str, ...]) -> tuple[TurnContract, bool, str]:
                 cta_known_slots = {
@@ -22939,7 +22847,7 @@ class TStationChatServiceV2:
                 not chip_action_id and _is_logistics_earliest_install_date_followup(last_user_text, cta_context)
             ):
                 enriched_cta_context = dict(cta_context)
-                merged_slots = _apply_cta_context_to_slots(merged_slots, enriched_cta_context)
+                merged_slots = apply_cta_context_to_slots(merged_slots, enriched_cta_context)
                 preview_input, missing_slot = _cta_preview_input_from_slots(
                     merged_slots,
                     cta_context=enriched_cta_context,
@@ -23069,7 +22977,7 @@ class TStationChatServiceV2:
                 )
             elif chip_action_id in {"change_region", "change_date"}:
                 before_cta_slots = merged_slots.model_dump()
-                merged_slots = _apply_cta_context_to_slots(merged_slots, cta_context)
+                merged_slots = apply_cta_context_to_slots(merged_slots, cta_context)
                 if chip_action_id == "change_region":
                     if regex_slots.region:
                         merged_slots.region = regex_slots.region
@@ -23876,7 +23784,7 @@ class TStationChatServiceV2:
         # node: input=last user text, output=domains. Any nested LLM call from
         # classify_multi_intent attaches under this span via parent_span_id.
         _chip_domain: str | None = None
-        _chip_ctx = _chip_context_dict(request.chip_context)
+        _chip_ctx = chip_context_dict(request.chip_context)
         _d = _chip_ctx.get("domain")
         if _d in _VALID_CHIP_DOMAINS:
             _chip_domain = _d

@@ -337,10 +337,8 @@ from services.tstation.chat import (
     _enrich_best_selling_result_for_product_cards,
     _quickreply_cta_clarification_event,
     _sanitize_transaction_cta_contracts,
-    _apply_cta_context_to_slots,
     _is_current_location_store_search_confirmation,
     _has_active_transaction_action_context,
-    _merged_quickreply_cta_context,
     _cta_preview_input_from_slots,
     _support_fast_path,
     MultiAgentDomain,
@@ -386,7 +384,9 @@ from services.tstation.policies.turn_contract import (
     warning_contract_violations,
 )
 from services.tstation.policies.ui_action_policy import (
+    apply_cta_context_to_slots,
     apply_ui_action_slot_patch,
+    merged_quickreply_cta_context,
     normalize_ui_action_metadata,
     resolve_ui_action_context,
     validate_ui_actions_for_contract,
@@ -552,7 +552,7 @@ def test_cta_context_recovers_from_latest_quickreply_template_when_chip_has_no_m
         },
     }
 
-    context = _merged_quickreply_cta_context(
+    context = merged_quickreply_cta_context(
         {"domain": "TRANSACTION", "actionId": "change_region", "intentKey": "today_install"},
         latest_quickreply,
     )
@@ -572,7 +572,7 @@ def test_apply_cta_context_to_slots_preserves_today_install_preview_slots() -> N
         "requestedCalDay": "20260618",
     }
 
-    updated = _apply_cta_context_to_slots(slots, context)
+    updated = apply_cta_context_to_slots(slots, context)
 
     assert updated.goods_no == "G000000317729"
     assert updated.tire_size == "235/35R20"
@@ -594,7 +594,7 @@ def test_apply_cta_context_to_slots_uses_template_boundary_alias_normalization()
         "storeName": "티스테이션 판교점",
     }
 
-    updated = _apply_cta_context_to_slots(slots, context)
+    updated = apply_cta_context_to_slots(slots, context)
 
     assert updated.goods_no == "G000000317729"
     assert updated.tire_size == "235/35R20"
