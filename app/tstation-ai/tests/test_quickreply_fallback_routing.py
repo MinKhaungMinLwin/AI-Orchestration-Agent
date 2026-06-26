@@ -384,8 +384,10 @@ from services.tstation.policies.turn_contract import (
 )
 from services.tstation.policies.ui_action_policy import (
     apply_cta_context_to_slots,
+    apply_logistics_earliest_install_cta_action,
     apply_preview_update_cta_action,
     apply_ui_action_slot_patch,
+    build_logistics_earliest_install_fallback_event,
     build_quickreply_cta_clarification_event,
     classify_direct_cta_action,
     is_logistics_earliest_install_date_followup,
@@ -585,6 +587,32 @@ def test_apply_preview_update_cta_action_updates_date_and_preview_action_mode() 
     assert updated.availability_intent == "today_install"
     assert metadata["resolved_requested_cal_day"] == "20260627"
     assert preview_action_mode_for_slots(updated) == "purchase_continuation"
+
+
+def test_apply_logistics_earliest_install_cta_action_sets_stock_resume_slots() -> None:
+    slots = ConversationSlots(requested_cal_day="20260627")
+
+    updated, metadata = apply_logistics_earliest_install_cta_action(
+        slots,
+        cta_context={"intentKey": "today_install", "requested_cal_day": "20260628"},
+    )
+
+    assert updated.pending_intent == "stock"
+    assert updated.goal_type == "store_with_stock"
+    assert updated.availability_intent == "today_install"
+    assert metadata["stock_check_mode"] == "logistics_only"
+    assert metadata["pending_intent"] == "stock"
+
+
+def test_build_logistics_earliest_install_fallback_event_uses_install_date() -> None:
+    event = build_logistics_earliest_install_fallback_event(
+        cta_context={"rsvInstallDate": "20260702", "intentKey": "today_install"},
+    )
+
+    assert event["assistant_response_source"] == "code_logistics_earliest_install_date"
+    assert event["template"] == "quickReply"
+    assert "2026년 7월 2일 이후" in event["data"]["assistantResponse"]
+    assert event["data"]["metadata"]["stock_check_mode"] == "logistics_only"
 
 
 def test_transaction_cta_sanitizer_removes_label_only_reservation_and_contracts_region() -> None:

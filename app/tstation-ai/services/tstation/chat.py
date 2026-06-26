@@ -110,9 +110,10 @@ from services.tstation.policies.intent_frame import IntentFrame, PolicyDomain
 from services.tstation.policies.pickup_service_gate import decide_pickup_service_gate
 from services.tstation.policies.ui_action_policy import (
     UIActionContext,
-    apply_cta_context_to_slots,
+    apply_logistics_earliest_install_cta_action,
     apply_preview_update_cta_action,
     apply_ui_action_slot_patch,
+    build_logistics_earliest_install_fallback_event,
     build_quickreply_cta_clarification_event,
     chip_context_dict,
     chip_value,
@@ -22788,7 +22789,17 @@ class TStationChatServiceV2:
                 )
             elif direct_cta_action_kind == "logistics_earliest_install_date":
                 enriched_cta_context = dict(cta_context)
-                merged_slots = apply_cta_context_to_slots(merged_slots, enriched_cta_context)
+                before_cta_slots = merged_slots.model_dump()
+                merged_slots, logistics_cta_metadata = apply_logistics_earliest_install_cta_action(
+                    merged_slots,
+                    cta_context=enriched_cta_context,
+                )
+                logger.info(
+                    "[SLOTS] Applied logistics CTA context before=%s after=%s metadata=%s",
+                    {k: v for k, v in before_cta_slots.items() if v not in (None, "", [], {})},
+                    {k: v for k, v in merged_slots.model_dump().items() if v not in (None, "", [], {})},
+                    logistics_cta_metadata,
+                )
                 preview_input, missing_slot = _cta_preview_input_from_slots(
                     merged_slots,
                     cta_context=enriched_cta_context,
@@ -22861,34 +22872,9 @@ class TStationChatServiceV2:
                     "물류 재고 기준으로 가장 빠른 장착 가능 일정을 확인했어요.",
                 )
                 if mapped_event is None:
-                    install_date = str(enriched_cta_context.get("rsvInstallDate") or "").strip()
-                    install_date_text = _format_yyyymmdd_korean(install_date) if install_date else ""
-                    response = (
-                        f"물류 재고 기준으로는 {install_date_text} 이후 장착 가능 여부를 확인할 수 있어요. "
-                        "정확한 예약 시간은 매장과 날짜를 확정한 뒤 확인해 주세요."
-                        if install_date_text
-                        else "물류 재고는 확인되지만 현재 가장 빠른 예약일은 확정되지 않았어요. 다른 매장이나 상품으로 확인해드릴게요."
+                    mapped_event = build_logistics_earliest_install_fallback_event(
+                        cta_context=enriched_cta_context,
                     )
-                    mapped_event = {
-                        "type": "data",
-                        "template": "quickReply",
-                        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
-                        "assistant_response_source": "code_logistics_earliest_install_date",
-                        "data": {
-                            "assistantResponse": response,
-                            "quickReplies": [
-                                {"label": "다른 매장 오늘장착 확인", "domain": "TRANSACTION"},
-                                {"label": "다른 날짜 확인", "domain": "TRANSACTION"},
-                                {"label": "다른 상품 추천", "domain": "DISCOVERY"},
-                            ],
-                            "predictedDomains": ["TRANSACTION", "DISCOVERY"],
-                            "metadata": {
-                                "response_shape_key": "logistics_earliest_install_date",
-                                "stock_check_mode": "logistics_only",
-                                "ctaContext": enriched_cta_context,
-                            },
-                        },
-                    }
                 else:
                     mapped_event["source_domain"] = MultiAgentDomain.Domain.TRANSACTION.value
                     mapped_event["assistant_response_source"] = "code_logistics_earliest_install_date"

@@ -624,6 +624,24 @@ def apply_preview_update_cta_action(
     return updated_slots, metadata
 
 
+def apply_logistics_earliest_install_cta_action(
+    slots: Any,
+    *,
+    cta_context: Mapping[str, Any] | None,
+) -> tuple[Any, dict[str, Any]]:
+    updated_slots = apply_cta_context_to_slots(slots, cta_context)
+    updated_slots.pending_intent = "stock"
+    updated_slots.goal_type = "store_with_stock"
+    metadata = {
+        "stock_check_mode": "logistics_only",
+        "pending_intent": getattr(updated_slots, "pending_intent", None),
+        "goal_type": getattr(updated_slots, "goal_type", None),
+        "requested_cal_day": getattr(updated_slots, "requested_cal_day", None),
+        "availability_intent": getattr(updated_slots, "availability_intent", None),
+    }
+    return updated_slots, metadata
+
+
 def preview_action_mode_for_slots(slots: Any) -> str:
     pending_intent = str(getattr(slots, "pending_intent", None) or "").strip()
     goal_type = str(getattr(slots, "goal_type", None) or "").strip()
@@ -632,6 +650,48 @@ def preview_action_mode_for_slots(slots: Any) -> str:
     if pending_intent == "stock" or goal_type == "store_with_stock":
         return "stock_check"
     return "booking_continuation"
+
+
+def _format_yyyymmdd_korean(value: str | None) -> str:
+    digits = re.sub(r"[^0-9]", "", str(value or ""))
+    if len(digits) != 8:
+        return ""
+    return f"{int(digits[:4])}년 {int(digits[4:6])}월 {int(digits[6:8])}일"
+
+
+def build_logistics_earliest_install_fallback_event(
+    *,
+    cta_context: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    context = dict(cta_context or {})
+    install_date = str(context.get("rsvInstallDate") or "").strip()
+    install_date_text = _format_yyyymmdd_korean(install_date) if install_date else ""
+    response = (
+        f"물류 재고 기준으로는 {install_date_text} 이후 장착 가능 여부를 확인할 수 있어요. "
+        "정확한 예약 시간은 매장과 날짜를 확정한 뒤 확인해 주세요."
+        if install_date_text
+        else "물류 재고는 확인되지만 현재 가장 빠른 예약일은 확정되지 않았어요. 다른 매장이나 상품으로 확인해드릴게요."
+    )
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "transaction",
+        "assistant_response_source": "code_logistics_earliest_install_date",
+        "data": {
+            "assistantResponse": response,
+            "quickReplies": [
+                {"label": "다른 매장 오늘장착 확인", "domain": "TRANSACTION"},
+                {"label": "다른 날짜 확인", "domain": "TRANSACTION"},
+                {"label": "다른 상품 추천", "domain": "DISCOVERY"},
+            ],
+            "predictedDomains": ["TRANSACTION", "DISCOVERY"],
+            "metadata": {
+                "response_shape_key": "logistics_earliest_install_date",
+                "stock_check_mode": "logistics_only",
+                "ctaContext": context,
+            },
+        },
+    }
 
 
 def normalize_ui_action_metadata(
