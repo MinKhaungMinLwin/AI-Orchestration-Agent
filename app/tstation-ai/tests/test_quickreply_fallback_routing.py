@@ -450,6 +450,7 @@ from services.tstation.policies.store_service_gate import (
 )
 from schemas.tstation.slots import CanonicalSlotState, ComparisonContext, ConversationSlots, RecommendationContext
 from services.tstation.template_mapper import (
+    _map_list_car,
     _map_location,
     _map_store_detail_info,
     current_action_mode,
@@ -12374,23 +12375,54 @@ def test_chip_vehicle_selection_rewrites_tire_size_lookup_followup_text() -> Non
 def test_vehicle_size_guidance_event_carries_selected_vehicle_cta_metadata() -> None:
     event = _build_vehicle_size_guidance_event(
         {
-            "car": {"licensePlate": "14다5499", "info": "쏘렌토"},
-            "meta": {"carNo": "14다5499", "tireSize": "225/55R18", "tireSizeRe": "225/55R18"},
+            "car": {"licensePlate": "14다5499", "info": "기아 쏘렌토"},
+            "meta": {
+                "carNo": "14다5499",
+                "carLncCd": "W099999",
+                "carType": "SUV",
+                "carModelDet": "기아 쏘렌토",
+                "tireSize": "225/55R18",
+                "tireSizeRe": "225/55R18",
+            },
             "selection_context": {"source_intent": "vehicle_tire_size_lookup"},
         }
     )
 
     assert event is not None
     assert "14다5499" in event["data"]["assistantResponse"]
+    assert "기아 쏘렌토" in event["data"]["assistantResponse"]
     assert "225/55R18" in event["data"]["assistantResponse"]
     primary_chip = event["data"]["quickReplies"][0]
-    assert primary_chip["label"] == "이 사이즈로 타이어 보기"
-    assert primary_chip["cta_action"] == "search_products_by_selected_vehicle_size"
+    assert primary_chip["label"] == "타이어 추천"
+    assert primary_chip["cta_action"] == "recommend_by_selected_vehicle_size"
     assert primary_chip["source_intent"] == "vehicle_tire_size_lookup"
     assert primary_chip["expected_contract_intent"] == "product_recommendation"
     assert primary_chip["metadata"]["car_no"] == "14다5499"
     assert primary_chip["metadata"]["tire_size"] == "225/55R18"
+    assert primary_chip["metadata"]["car_lnc_cd"] == "W099999"
+    assert primary_chip["metadata"]["vehicle_type"] == "suv"
     assert event["data"]["metadata"]["responseShapeKey"] == "vehicle_tire_size_lookup"
+
+
+def test_vehicle_size_guidance_event_formats_front_and_rear_sizes_when_staggered() -> None:
+    event = _build_vehicle_size_guidance_event(
+        {
+            "car": {"licensePlate": "56모2162", "info": "BMW 3시리즈 GT"},
+            "meta": {
+                "carNo": "56모2162",
+                "carModelDet": "BMW 3시리즈 GT",
+                "tireSize": "2255018",
+                "tireSizeRe": "2555018",
+            },
+            "selection_context": {"source_intent": "vehicle_tire_size_lookup"},
+        }
+    )
+
+    assert event is not None
+    response = event["data"]["assistantResponse"]
+    assert "앞 타이어: 225/50R18" in response
+    assert "뒤 타이어: 255/50R18" in response
+    assert "무엇을 도와드릴까요?" in response
 
 
 def test_vehicle_selection_ui_action_context_rewrites_trace_and_slots() -> None:
@@ -12480,6 +12512,51 @@ def test_prepare_ui_action_state_rewrites_vehicle_selection_before_routing() -> 
     assert prepared.trace_metadata["slots_rewritten"] is True
 
 
+def test_prepare_ui_action_state_prefers_request_ui_action_vehicle_selection() -> None:
+    slots = ConversationSlots(car_no="61거1836", tire_size="225/45R17")
+    latest_listcar_tmpl = {
+        "listCar": [{"licensePlate": "14다5499", "info": "그랜저"}],
+        "metadata": [{
+            "ctaAction": "select_vehicle_candidate",
+            "source_intent": "vehicle_tire_size_lookup",
+            "expected_contract_intent": "vehicle_tire_size_lookup",
+            "carNo": "14다5499",
+            "carLncCd": "W099999",
+            "mbrCarRegSeq": "2000004000",
+            "carModelDet": "그랜저",
+            "carType": "SEDAN",
+            "tireSize": "2255518",
+            "tireSizeRe": "2255518",
+        }],
+    }
+
+    prepared = prepare_ui_action_state(
+        ui_action={
+            "cta_action": "select_vehicle_candidate",
+            "source_intent": "vehicle_tire_size_lookup",
+            "expected_contract_intent": "vehicle_tire_size_lookup",
+            "slots": {
+                "car_no": "14다5499",
+                "car_lnc_cd": "W099999",
+                "mbr_car_reg_seq": "2000004000",
+            },
+        },
+        chip_context=None,
+        request_slots={"car_no": "14다5499"},
+        latest_listcar_tmpl=latest_listcar_tmpl,
+        last_user_text="14다5499",
+        existing_slots=slots,
+        generic_slot_apply_fn=lambda base_slots, values: base_slots.apply_runtime_values(values, source="ui_action"),
+        vehicle_slot_apply_fn=_apply_vehicle_selection_slot_values,
+    )
+
+    assert prepared.selected_vehicle is not None
+    assert prepared.updated_slots.car_no == "14다5499"
+    assert prepared.updated_slots.tire_size == "225/55R18"
+    assert prepared.trace_metadata["selection_source"] == "ui_action"
+    assert prepared.rewritten_user_text == "14다5499 차량 타이어 사이즈 알려줘"
+
+
 def test_apply_history_vehicle_selection_state_updates_slots_and_recent_product_context() -> None:
     slots = ConversationSlots(car_no="61거1836", tire_size=None, goods_no=None, tire_model=None)
     latest_listcar_tmpl = {
@@ -12530,6 +12607,82 @@ def test_apply_history_vehicle_selection_state_updates_slots_and_recent_product_
     assert state.goods_no_resolved is True
     assert state.prompt_event is not None
     assert state.trace_metadata["selection_source"] == "previous_listCar_candidate"
+
+
+def test_apply_history_vehicle_selection_state_does_not_invent_tire_size_from_visible_plate_only() -> None:
+    slots = ConversationSlots(car_no="61거1836", tire_size="225/45R17")
+    latest_listcar_tmpl = {
+        "listCar": [{"licensePlate": "14다5499", "info": "그랜저"}],
+        "metadata": [{
+            "ctaAction": "select_vehicle_candidate",
+            "source_intent": "vehicle_tire_size_lookup",
+            "expected_contract_intent": "vehicle_tire_size_lookup",
+            "carNo": "14다5499",
+        }],
+    }
+
+    state = apply_history_vehicle_selection_state(
+        last_user_text="14다5499",
+        latest_listcar_tmpl=latest_listcar_tmpl,
+        prev_tool_data=[],
+        merged_slots=slots,
+        existing_action_context=None,
+        trace_metadata={},
+        resolve_vehicle_from_history_template_fn=lambda user_text, template: resolve_vehicle_from_history_template(
+            user_text, {"template": "listCar", "data": template}
+        ),
+        resolve_tire_size_from_history_template_fn=resolve_tire_size_from_history_template,
+        vehicle_slot_apply_fn=_apply_vehicle_selection_slot_values,
+        recent_product_search_keyword_fn=lambda prev_tool_data: None,
+        goods_no_from_recent_product_context_fn=lambda prev_tool_data, tire_size: None,
+        build_vehicle_size_guidance_event_fn=lambda selected: _build_vehicle_size_guidance_event(selected),
+        build_staggered_vehicle_tire_selection_event_fn=lambda selected: {"template": "quickReply", "data": {}},
+        listcar_allows_staggered_tire_prompt_fn=lambda template: True,
+        is_vehicle_tire_size_lookup_selection_fn=lambda selected: True,
+    )
+
+    assert state.selected_vehicle is not None
+    assert state.updated_slots.car_no == "14다5499"
+    assert state.updated_slots.tire_size is None
+    assert state.tire_size_resolved is False
+    assert state.prompt_event is None
+    assert state.trace_metadata["selection_source"] == "previous_listCar_candidate"
+
+
+def test_map_list_car_includes_vehicle_selection_metadata_with_tire_sizes() -> None:
+    event = _map_list_car(
+        [
+            {
+                "tool": "get_my_cars_tool",
+                "data": {
+                    "items": [
+                        {
+                            "car_no": "61거1836",
+                            "car_lnc_cd": "W036269",
+                            "mbr_car_reg_seq": "2000003091",
+                            "car_nm": "뉴 제타(6세대) 2.0 TDI A/T",
+                            "car_model_det": "제타(6세대)",
+                            "car_type": "SEDAN",
+                            "tire_size_fr": "2254517",
+                            "tire_size_re": "2254517",
+                        }
+                    ]
+                },
+            }
+        ],
+        "등록된 차량 중에서 타이어 사이즈를 확인할 차량을 선택해 주세요.",
+    )
+
+    assert event is not None
+    assert event["template"] == "listCar"
+    metadata = event["data"]["metadata"][0]
+    assert metadata["carNo"] == "61거1836"
+    assert metadata["licensePlate"] == "61거1836"
+    assert metadata["mbrCarRegSeq"] == "2000003091"
+    assert metadata["carLncCd"] == "W036269"
+    assert metadata["tireSize"] == "2254517"
+    assert metadata["tireSizeRe"] == "2254517"
+    assert metadata["ctaAction"] == "select_vehicle_candidate"
 
 
 def test_apply_history_product_selection_state_resolves_goods_no_and_trace_metadata() -> None:
@@ -12601,7 +12754,7 @@ def test_vehicle_tire_size_lookup_ui_action_validation_blocks_store_and_purchase
         "data": {
             "assistantResponse": "61거1836 차량의 타이어 사이즈는 225/45R17입니다.",
             "quickReplies": [
-                {"label": "이 사이즈로 타이어 보기", "cta_action": "search_products_by_selected_vehicle_size"},
+                {"label": "타이어 추천", "cta_action": "recommend_by_selected_vehicle_size"},
                 {"label": "매장 찾기"},
                 {"label": "구매하기"},
                 {"label": "사이즈 직접 입력"},
@@ -12614,7 +12767,7 @@ def test_vehicle_tire_size_lookup_ui_action_validation_blocks_store_and_purchase
 
     assert changed is True
     assert [chip["label"] for chip in event["data"]["quickReplies"]] == [
-        "이 사이즈로 타이어 보기",
+        "타이어 추천",
         "사이즈 직접 입력",
     ]
 

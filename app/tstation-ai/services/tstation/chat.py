@@ -6815,35 +6815,96 @@ def _build_vehicle_size_guidance_event(selected_vehicle: dict) -> dict | None:
     selected_car = selected_vehicle.get("car") or {}
     selected_meta = selected_vehicle.get("meta") or {}
     selection_context = selected_vehicle.get("selection_context") or {}
-    front_size = str(selected_meta.get("tireSize") or "").strip()
-    rear_size = str(selected_meta.get("tireSizeRe") or "").strip()
-    car_no = str(selected_meta.get("carNo") or selected_car.get("licensePlate") or "").strip()
+    front_size = normalize_tire_size(
+        str(
+            selected_meta.get("tireSize")
+            or selected_meta.get("tireSizeFr")
+            or selected_meta.get("tire_size_fr")
+            or selected_meta.get("tire_size")
+            or ""
+        )
+    )
+    rear_size = normalize_tire_size(
+        str(
+            selected_meta.get("tireSizeRe")
+            or selected_meta.get("tireSizeRear")
+            or selected_meta.get("tire_size_re")
+            or ""
+        )
+    )
+    car_no = str(
+        selected_meta.get("carNo")
+        or selected_meta.get("car_no")
+        or selected_car.get("licensePlate")
+        or ""
+    ).strip()
     if not front_size and not rear_size:
         return None
 
+    car_display_name = str(
+        selected_meta.get("carModelDet")
+        or selected_meta.get("car_model_det")
+        or selected_meta.get("carName")
+        or selected_meta.get("carNm")
+        or selected_meta.get("car_nm")
+        or selected_car.get("info")
+        or selected_car.get("description")
+        or ""
+    ).strip()
+    car_maker = str(selected_meta.get("carMaker") or "").strip()
+    if car_display_name and car_maker and car_maker not in car_display_name:
+        car_display_name = f"{car_maker} {car_display_name}".strip()
+
     selected_size = ""
     if front_size and rear_size and front_size != rear_size:
-        response = f"{car_no} 차량의 타이어 사이즈는 전륜 {front_size}, 후륜 {rear_size}입니다."
+        size_text = f"앞 타이어: {front_size}\n뒤 타이어: {rear_size}"
     else:
         selected_size = front_size or rear_size
-        response = f"{car_no} 차량의 타이어 사이즈는 {selected_size}입니다."
+        size_text = f"해당 차량의 타이어 사이즈는 {selected_size}입니다."
+
+    response_lines = []
+    if car_no and car_display_name:
+        response_lines.append(f"{car_no} 차량은 {car_display_name}로 확인됐어요.")
+    elif car_no:
+        response_lines.append(f"{car_no} 차량 정보를 확인했어요.")
+    if front_size and rear_size and front_size != rear_size:
+        response_lines.append("해당 차량의 타이어 사이즈는")
+        response_lines.append(size_text)
+    else:
+        response_lines.append(size_text)
+    response_lines.append("무엇을 도와드릴까요?")
+    response = "\n\n".join(
+        [response_lines[0], "\n".join(response_lines[1:-1]), response_lines[-1]]
+        if len(response_lines) >= 3
+        else response_lines
+    )
+
+    vehicle_type = str(
+        normalize_vehicle_type_from_car_type(
+            selected_meta.get("carType") or selected_meta.get("car_type"),
+            fallback_text=car_display_name,
+        )
+        or ""
+    ).strip()
+    cta_metadata = {
+        "car_no": car_no,
+        "car_lnc_cd": str(selected_meta.get("carLncCd") or selected_meta.get("car_lnc_cd") or "").strip() or None,
+        "tire_size": selected_size or None,
+        "tire_size_front": front_size or None,
+        "tire_size_rear": rear_size or None,
+        "vehicle_type": vehicle_type or None,
+    }
 
     quick_replies = [
         {
-            "label": "이 사이즈로 타이어 보기",
+            "label": "타이어 추천",
             "domain": "DISCOVERY",
-            "cta_action": "search_products_by_selected_vehicle_size",
+            "cta_action": "recommend_by_selected_vehicle_size",
             "source_intent": str(selection_context.get("source_intent") or "vehicle_tire_size_lookup"),
             "expected_contract_intent": "product_recommendation",
-            "metadata": {
-                "car_no": car_no,
-                "tire_size": selected_size or front_size or rear_size,
-                "tire_size_fr": front_size or None,
-                "tire_size_re": rear_size or None,
-            },
+            "metadata": {k: v for k, v in cta_metadata.items() if v not in (None, "")},
         },
         {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
-        {"label": "다른 차량 확인", "domain": "DISCOVERY"},
     ]
 
     return {
@@ -19962,6 +20023,10 @@ class TStationChatServiceV2:
             logger.debug(f"[CHAT_V2] Messages: {json.dumps(messages, ensure_ascii=False, separators=(',', ':'))}")
 
             if chip_selected_vehicle is not None:
+                if current_vehicle_selection_prompt_event.get() is None and is_vehicle_tire_size_lookup_selection(
+                    chip_selected_vehicle
+                ):
+                    current_vehicle_selection_prompt_event.set(_build_vehicle_size_guidance_event(chip_selected_vehicle))
                 if vehicle_ui_action_context is not None and vehicle_ui_action_context.slot_patch:
                     logger.info(
                         "[VEHICLE_SELECTION] applied chip-selected vehicle slots before routing: %s",

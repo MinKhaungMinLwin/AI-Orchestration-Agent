@@ -34,13 +34,11 @@ _VEHICLE_TIRE_SIZE_LOOKUP_INTENT = "vehicle_tire_size_lookup"
 _STOCK_STORE_SEARCH_INTENT = "stock_store_search"
 _QUICK_ORDER_RESERVATION_INTENT = "quick_order_reservation"
 _VEHICLE_SIZE_LOOKUP_ALLOWED_LABELS = frozenset({
-    "이 사이즈로 타이어 보기",
-    "타이어 추천받기",
+    "타이어 추천",
     "사이즈 직접 입력",
-    "다른 차량 확인",
 })
 _VEHICLE_SIZE_LOOKUP_ALLOWED_ACTIONS = frozenset({
-    "search_products_by_selected_vehicle_size",
+    "recommend_by_selected_vehicle_size",
 })
 _VEHICLE_SIZE_LOOKUP_BLOCKED_LABEL_TOKENS = ("매장", "예약", "구매")
 _FRONT_TIRE_CHIP_LABEL = "앞바퀴사이즈"
@@ -261,8 +259,26 @@ def store_context_from_mapping(data: Mapping[str, Any] | None) -> dict[str, Any]
 
 
 def normalize_vehicle_tire_size_pair(selected_meta: Mapping[str, Any]) -> tuple[str | None, str | None]:
-    front_size = normalize_tire_size(str(selected_meta.get("tireSize") or selected_meta.get("tire_size") or ""))
-    rear_size = normalize_tire_size(str(selected_meta.get("tireSizeRe") or selected_meta.get("tire_size_re") or ""))
+    front_size = normalize_tire_size(
+        str(
+            selected_meta.get("tireSize")
+            or selected_meta.get("tireSizeFr")
+            or selected_meta.get("tireSizeFront")
+            or selected_meta.get("tire_size")
+            or selected_meta.get("tire_size_fr")
+            or selected_meta.get("tire_size_front")
+            or ""
+        )
+    )
+    rear_size = normalize_tire_size(
+        str(
+            selected_meta.get("tireSizeRe")
+            or selected_meta.get("tireSizeRear")
+            or selected_meta.get("tire_size_re")
+            or selected_meta.get("tire_size_rear")
+            or ""
+        )
+    )
     return front_size, rear_size
 
 
@@ -308,17 +324,29 @@ def vehicle_selection_slot_values(selected_vehicle: Mapping[str, Any] | None) ->
 
     raw_car_model = (
         selected_meta.get("carModel")
+        or selected_meta.get("carModelDet")
+        or selected_meta.get("car_model_det")
         or selected_meta.get("carNm")
+        or selected_meta.get("car_nm")
+        or selected_meta.get("carName")
         or selected_car.get("model")
         or selected_car.get("name")
+        or selected_car.get("info")
+        or selected_car.get("description")
     )
     car_model = str(raw_car_model or "").strip()
     if car_model:
         slot_values["car_model"] = car_model
-    car_no = str(selected_meta.get("carNo") or selected_car.get("licensePlate") or "").strip()
+    car_no = str(
+        selected_meta.get("carNo")
+        or selected_meta.get("car_no")
+        or selected_meta.get("licensePlate")
+        or selected_car.get("licensePlate")
+        or ""
+    ).strip()
     if car_no:
         slot_values["car_no"] = car_no
-    car_lnc_cd = str(selected_meta.get("carLncCd") or "").strip()
+    car_lnc_cd = str(selected_meta.get("carLncCd") or selected_meta.get("car_lnc_cd") or "").strip()
     if car_lnc_cd:
         slot_values["car_lnc_cd"] = car_lnc_cd
     raw_car_type = (
@@ -347,7 +375,13 @@ def vehicle_selection_slot_values(selected_vehicle: Mapping[str, Any] | None) ->
         slot_values["car_type"] = car_type
     if vehicle_type:
         slot_values["vehicle_type"] = vehicle_type
-    mbr_car_reg_seq = str(selected_meta.get("mbrCarRegSeq") or "").strip()
+    mbr_car_reg_seq = str(
+        selected_meta.get("mbrCarRegSeq")
+        or selected_meta.get("mbr_car_reg_seq")
+        or selected_meta.get("mbrCarUnifNo")
+        or selected_meta.get("mbr_car_unif_no")
+        or ""
+    ).strip()
     if mbr_car_reg_seq:
         slot_values["mbr_car_reg_seq"] = mbr_car_reg_seq
 
@@ -1149,10 +1183,19 @@ def prepare_ui_action_state(
     if raw_action and isinstance(request_slots, Mapping):
         raw_action.setdefault("slots", dict(request_slots))
 
-    selected_vehicle = resolve_vehicle_ui_selection_from_chip_context(
-        chip_context,
-        latest_listcar_tmpl,
-    )
+    selected_vehicle: dict[str, Any] | None = None
+    selected_vehicle_source = "chip_context"
+    if raw_action:
+        selected_vehicle = resolve_vehicle_ui_selection_from_chip_context(raw_action, latest_listcar_tmpl)
+        if selected_vehicle is not None:
+            selected_vehicle_source = "ui_action"
+    if selected_vehicle is None:
+        selected_vehicle = resolve_vehicle_ui_selection_from_chip_context(
+            chip_context,
+            latest_listcar_tmpl,
+        )
+        if selected_vehicle is not None:
+            selected_vehicle_source = "chip_context"
     action_context: UIActionContext | None = None
     rewritten_user_text = last_user_text
     updated_slots = existing_slots
@@ -1188,7 +1231,7 @@ def prepare_ui_action_state(
         vehicle_slot_values = vehicle_selection_slot_values(selected_vehicle)
         action_context = resolve_ui_action_context(
             selected_vehicle=selected_vehicle,
-            selection_source="chip_context",
+            selection_source=selected_vehicle_source,
             previous_slots={
                 "car_no": getattr(updated_slots, "car_no", None),
                 "tire_size": getattr(updated_slots, "tire_size", None),
@@ -1548,7 +1591,15 @@ def resolve_vehicle_ui_selection_from_chip_context(
     template_data: Mapping[str, Any] | None,
 ) -> dict[str, Any] | None:
     chip = chip_context_dict(chip_context)
-    if not chip or str(chip.get("cta_action") or "").strip() != "select_vehicle_candidate":
+    action_name = str(
+        chip.get("cta_action")
+        or chip.get("ctaAction")
+        or chip.get("action_type")
+        or chip.get("actionType")
+        or chip.get("action_name")
+        or ""
+    ).strip()
+    if not chip or action_name != "select_vehicle_candidate":
         return None
     if not isinstance(template_data, Mapping):
         return None
@@ -1568,19 +1619,35 @@ def resolve_vehicle_ui_selection_from_chip_context(
 
     raw_meta = chip.get("metadata")
     selection_meta = dict(raw_meta) if isinstance(raw_meta, Mapping) else {}
+    raw_slots = dict(chip.get("slots")) if isinstance(chip.get("slots"), Mapping) else {}
+    selection_slots = canonical_context_from_template_boundary(raw_slots or chip)
     car_no = _normalize_vehicle_match_text(
-        chip.get("car_no") or chip.get("carNo") or selection_meta.get("car_no") or selection_meta.get("carNo")
+        chip.get("car_no")
+        or chip.get("carNo")
+        or raw_slots.get("car_no")
+        or raw_slots.get("carNo")
+        or selection_slots.get("car_no")
+        or selection_meta.get("car_no")
+        or selection_meta.get("carNo")
     )
     mbr_car_reg_seq = str(
         chip.get("mbr_car_reg_seq")
         or chip.get("mbrCarRegSeq")
+        or raw_slots.get("mbr_car_reg_seq")
+        or raw_slots.get("mbrCarRegSeq")
+        or selection_slots.get("mbr_car_reg_seq")
         or selection_meta.get("mbr_car_reg_seq")
         or selection_meta.get("mbrCarRegSeq")
+        or selection_meta.get("mbr_car_unif_no")
+        or selection_meta.get("mbrCarUnifNo")
         or ""
     ).strip()
     car_lnc_cd = str(
         chip.get("car_lnc_cd")
         or chip.get("carLncCd")
+        or raw_slots.get("car_lnc_cd")
+        or raw_slots.get("carLncCd")
+        or selection_slots.get("car_lnc_cd")
         or selection_meta.get("car_lnc_cd")
         or selection_meta.get("carLncCd")
         or ""
@@ -1592,9 +1659,13 @@ def resolve_vehicle_ui_selection_from_chip_context(
     for car, meta in zip(cars, metadata):
         if not isinstance(car, Mapping) or not isinstance(meta, Mapping):
             continue
-        meta_car_no = _normalize_vehicle_match_text(meta.get("carNo") or car.get("licensePlate"))
-        meta_reg_seq = str(meta.get("mbrCarRegSeq") or "").strip()
-        meta_car_lnc_cd = str(meta.get("carLncCd") or "").strip()
+        meta_car_no = _normalize_vehicle_match_text(
+            meta.get("carNo") or meta.get("car_no") or meta.get("licensePlate") or car.get("licensePlate")
+        )
+        meta_reg_seq = str(
+            meta.get("mbrCarRegSeq") or meta.get("mbr_car_reg_seq") or meta.get("mbrCarUnifNo") or ""
+        ).strip()
+        meta_car_lnc_cd = str(meta.get("carLncCd") or meta.get("car_lnc_cd") or "").strip()
         if car_no and meta_car_no != car_no:
             continue
         if mbr_car_reg_seq and meta_reg_seq != mbr_car_reg_seq:
@@ -1608,12 +1679,14 @@ def resolve_vehicle_ui_selection_from_chip_context(
                 "selection_context": {
                     "source_intent": str(
                         chip.get("source_intent")
+                        or chip.get("sourceIntent")
                         or selection_meta.get("source_intent")
                         or selection_meta.get("sourceIntent")
                         or ""
                     ).strip(),
                     "expected_contract_intent": str(
                         chip.get("expected_contract_intent")
+                        or chip.get("expectedContractIntent")
                         or selection_meta.get("expected_contract_intent")
                         or selection_meta.get("expectedContractIntent")
                         or ""
