@@ -9928,6 +9928,39 @@ def test_action_mode_resumes_dormant_order_context_from_viewing_anchor() -> None
     ) == "resumed"
 
 
+def test_action_mode_does_not_resume_dormant_order_context_from_bare_reference() -> None:
+    slots = ConversationSlots(
+        availability_context={
+            "dormant_purchase_context": {
+                "goods_no": "G000000309780",
+                "tire_size": "225/45R17",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+                "context_state": "dormant",
+            }
+        },
+    )
+
+    resume_source = _resume_source_from_current_turn("그거 진행해줘")
+    action_mode = _current_turn_action_mode(
+        user_text="그거 진행해줘",
+        domains=[MultiAgentDomain.Domain.LEADING],
+        routing_result=None,
+        regex_slots=ConversationSlots(),
+        merged_slots=slots,
+        explicit_override_reason=None,
+        resume_source=resume_source,
+    )
+
+    assert resume_source == "none"
+    assert action_mode != "purchase_continuation"
+    assert _context_state_for_action(
+        action_mode=action_mode,
+        resume_source=resume_source,
+        slots=slots,
+    ) == "dormant"
+
+
 def test_turn_contract_trace_metadata_keeps_previous_flow_dormant_for_support_policy() -> None:
     routing_result = MultiAgentDomain(
         reason="support policy question during order flow",
