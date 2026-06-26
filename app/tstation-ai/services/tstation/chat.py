@@ -15317,6 +15317,34 @@ def _build_turn_contract_fallback_event(
     return build_response_policy_guard_event(turn_contract)
 
 
+def _history_selected_vehicle_prompt_contract_args(
+    response_shape_key: str | None,
+) -> tuple[str, tuple[str, ...]]:
+    if str(response_shape_key or "").strip() == "vehicle_tire_size_lookup":
+        return (
+            "vehicle_tire_size_lookup",
+            (
+                "vehicle_tire_size_lookup",
+                "product_description",
+                "product_recommendation",
+                "general_recommendation",
+                "vehicle_resolved_recommendation",
+                "catalog_recommendation",
+                "product_search_summary",
+                "discovery_summary",
+            ),
+        )
+    return (
+        "product_recommendation",
+        (
+            "vehicle_based_recommendation_refinement",
+            "vehicle_resolved_recommendation",
+            "catalog_recommendation",
+            "product_search_summary",
+        ),
+    )
+
+
 def _direct_code_fast_path_contract_gate(
     *,
     turn_contract: TurnContract | None,
@@ -29744,16 +29772,9 @@ class TStationChatServiceV2:
                 if isinstance(prompt_event_metadata, dict)
                 else ""
             )
-            prompt_intent = "product_recommendation"
-            allowed_prompt_intents = (
-                "vehicle_based_recommendation_refinement",
-                "vehicle_resolved_recommendation",
-                "catalog_recommendation",
-                "product_search_summary",
+            prompt_intent, allowed_prompt_intents = _history_selected_vehicle_prompt_contract_args(
+                response_shape_key
             )
-            if response_shape_key == "vehicle_tire_size_lookup":
-                prompt_intent = "product_description"
-                allowed_prompt_intents = ("vehicle_tire_size_lookup",)
             history_selected_vehicle_prompt_event = _finalize_direct_code_event(
                 history_selected_vehicle_prompt_event,
                 turn_contract=turn_contract,

@@ -110,6 +110,7 @@ from services.tstation.chat import (
     _build_turn_contract_required_slot_guard_event,
     _build_transaction_unresolved_product_resolution_event,
     _build_product_objective_followup_clarification_event,
+    _history_selected_vehicle_prompt_contract_args,
     _apply_pending_object_check_slots,
     _clear_stale_product_slots_for_new_recommendation,
     _clear_stale_store_search_context_for_general_turn,
@@ -20123,6 +20124,18 @@ def test_finalize_coerced_template_event_keeps_original_when_template_forbidden(
     assert finalized["blocked_template"] == "orderComplete"
     assert finalized["emitted_template"] == "quickReply"
     assert finalized["data"]["metadata"]["blocked_template"] == "orderComplete"
+
+
+def test_history_selected_vehicle_prompt_contract_args_allow_vehicle_size_prompt_under_recommendation() -> None:
+    prompt_intent, allowed_intents = _history_selected_vehicle_prompt_contract_args(
+        "vehicle_tire_size_lookup"
+    )
+
+    assert prompt_intent == "vehicle_tire_size_lookup"
+    assert "vehicle_tire_size_lookup" in allowed_intents
+    assert "product_recommendation" in allowed_intents
+    assert "general_recommendation" in allowed_intents
+    assert "discovery_summary" in allowed_intents
 
 
 def test_vehicle_auto_continuation_tools_are_blocked_under_support_contract() -> None:
