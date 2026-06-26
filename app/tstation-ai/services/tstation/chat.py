@@ -115,7 +115,7 @@ from services.tstation.policies.ui_action_policy import (
     build_quickreply_cta_clarification_event,
     chip_context_dict,
     chip_value,
-    is_logistics_earliest_install_date_followup,
+    classify_direct_cta_action,
     merged_quickreply_cta_context,
     normalize_ui_action_metadata,
     quickreply_cta_context_from_chip,
@@ -22539,6 +22539,16 @@ class TStationChatServiceV2:
 
             chip_action_id = chip_value(request.chip_context, "actionId", "action_id")
             cta_context = merged_quickreply_cta_context(request.chip_context, latest_quickreply_tmpl)
+            direct_cta_action_kind = classify_direct_cta_action(
+                chip_action_id=chip_action_id,
+                user_text=last_user_text,
+                cta_context=cta_context,
+                allow_label_only_clarification=True,
+                stock_store_candidate_search_followup=_is_stock_store_candidate_search_followup(
+                    last_user_text,
+                    merged_slots,
+                ),
+            )
 
             def _build_cta_action_contract(source: str, required_tools: tuple[str, ...]) -> tuple[TurnContract, bool, str]:
                 cta_known_slots = {
@@ -22585,10 +22595,7 @@ class TStationChatServiceV2:
                 )
                 return cta_contract, allowed, reason
 
-            if chip_action_id in {"enter_region", "enter_date"} or (
-                not chip_action_id
-                and re.fullmatch(r"(?:다른\s*)?(?:지역|장소|날짜|일정)\s*(?:입력|찾기|검색|확인)", last_user_text)
-            ):
+            if direct_cta_action_kind == "clarification":
                 cta_clarification_event = build_quickreply_cta_clarification_event(
                     last_user_text,
                     request.chip_context,
@@ -22614,9 +22621,7 @@ class TStationChatServiceV2:
                             },
                         )
                     return TStationChatResponse(content=guard_text)
-            elif chip_action_id == "search_other_store" or (
-                not chip_action_id and _is_stock_store_candidate_search_followup(last_user_text, merged_slots)
-            ):
+            elif direct_cta_action_kind == "search_other_store":
                 enriched_cta_context = dict(cta_context)
                 store_context = _store_context_from_mapping(enriched_cta_context)
                 if (
@@ -22779,9 +22784,7 @@ class TStationChatServiceV2:
                 return TStationChatResponse(
                     content=str((mapped_event.get("data") or {}).get("assistantResponse") or "")
                 )
-            elif chip_action_id == "logistics_earliest_install_date" or (
-                not chip_action_id and is_logistics_earliest_install_date_followup(last_user_text, cta_context)
-            ):
+            elif direct_cta_action_kind == "logistics_earliest_install_date":
                 enriched_cta_context = dict(cta_context)
                 merged_slots = apply_cta_context_to_slots(merged_slots, enriched_cta_context)
                 preview_input, missing_slot = _cta_preview_input_from_slots(
@@ -22911,7 +22914,7 @@ class TStationChatServiceV2:
                 return TStationChatResponse(
                     content=str((mapped_event.get("data") or {}).get("assistantResponse") or "")
                 )
-            elif chip_action_id in {"change_region", "change_date"}:
+            elif direct_cta_action_kind == "preview_update":
                 before_cta_slots = merged_slots.model_dump()
                 merged_slots = apply_cta_context_to_slots(merged_slots, cta_context)
                 if chip_action_id == "change_region":

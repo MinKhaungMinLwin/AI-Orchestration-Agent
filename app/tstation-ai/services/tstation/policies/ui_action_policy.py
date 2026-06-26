@@ -29,6 +29,7 @@ _VEHICLE_SIZE_LOOKUP_ALLOWED_ACTIONS = frozenset({
 })
 _VEHICLE_SIZE_LOOKUP_BLOCKED_LABEL_TOKENS = ("매장", "예약", "구매")
 _QUANTITY_LABEL_RE = re.compile(r"^\s*([1-4])\s*(?:개|본)\s*$")
+_CTA_CLARIFICATION_LABEL_RE = re.compile(r"(?:다른\s*)?(?:지역|장소|날짜|일정)\s*(?:입력|찾기|검색|확인)")
 
 _UI_ACTION_SLOT_KEYS = (
     "goods_no",
@@ -558,6 +559,31 @@ def is_logistics_earliest_install_date_followup(
     if not context.get("logisticsStockAvailable"):
         return False
     return bool(re.search(r"가장\s*빠른\s*(?:예약일|장착일|날짜)|예약일\s*확인|장착일\s*확인", user_text or ""))
+
+
+def classify_direct_cta_action(
+    *,
+    chip_action_id: str | None,
+    user_text: str,
+    cta_context: Mapping[str, Any] | None,
+    allow_label_only_clarification: bool = True,
+    stock_store_candidate_search_followup: bool = False,
+) -> str | None:
+    action_id = str(chip_action_id or "").strip()
+    text = str(user_text or "").strip()
+    if action_id in {"enter_region", "enter_date"}:
+        return "clarification"
+    if not action_id and allow_label_only_clarification and _CTA_CLARIFICATION_LABEL_RE.fullmatch(text):
+        return "clarification"
+    if action_id == "search_other_store" or (not action_id and stock_store_candidate_search_followup):
+        return "search_other_store"
+    if action_id == "logistics_earliest_install_date" or (
+        not action_id and is_logistics_earliest_install_date_followup(text, cta_context)
+    ):
+        return "logistics_earliest_install_date"
+    if action_id in {"change_region", "change_date"}:
+        return "preview_update"
+    return None
 
 
 def normalize_ui_action_metadata(

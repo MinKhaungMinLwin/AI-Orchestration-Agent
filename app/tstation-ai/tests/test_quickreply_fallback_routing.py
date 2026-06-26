@@ -386,6 +386,7 @@ from services.tstation.policies.ui_action_policy import (
     apply_cta_context_to_slots,
     apply_ui_action_slot_patch,
     build_quickreply_cta_clarification_event,
+    classify_direct_cta_action,
     is_logistics_earliest_install_date_followup,
     merged_quickreply_cta_context,
     normalize_ui_action_metadata,
@@ -522,6 +523,32 @@ def test_logistics_earliest_install_date_followup_detects_context_flag() -> None
         "가장 빠른 예약일 확인",
         {"followupMode": "logistics_earliest_install_date"},
     ) is True
+
+
+def test_classify_direct_cta_action_routes_clarification_and_preview_update() -> None:
+    assert classify_direct_cta_action(
+        chip_action_id="enter_region",
+        user_text="다른 지역 입력",
+        cta_context={},
+    ) == "clarification"
+    assert classify_direct_cta_action(
+        chip_action_id="change_date",
+        user_text="내일",
+        cta_context={"intentKey": "today_install"},
+    ) == "preview_update"
+
+
+def test_classify_direct_cta_action_routes_followup_modes() -> None:
+    assert classify_direct_cta_action(
+        chip_action_id="search_other_store",
+        user_text="다른 매장 찾기",
+        cta_context={},
+    ) == "search_other_store"
+    assert classify_direct_cta_action(
+        chip_action_id="",
+        user_text="가장 빠른 예약일 확인",
+        cta_context={"followupMode": "logistics_earliest_install_date"},
+    ) == "logistics_earliest_install_date"
 
 
 def test_transaction_cta_sanitizer_removes_label_only_reservation_and_contracts_region() -> None:
