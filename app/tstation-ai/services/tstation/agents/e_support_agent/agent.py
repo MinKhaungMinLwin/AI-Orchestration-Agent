@@ -106,6 +106,7 @@ Router `policy_intent` 가 아래 중 하나이면, 불만/교환/환불/보상 
 
 이 경우 1차 행동은 반드시 `search_faq_hybrid_tool(query=<현재 사용자 발화>)`.
 → FAQ 근거 범위에서 정책/조건/확인 경로를 먼저 요약한다.
+→ 사용자가 사진/이미지/파일 업로드나 첨부를 말하면, 현재 챗봇에서는 업로드 확인이 불가능하다고 먼저 안내한다.
 → `transfer_to_qna_tool` direct-first 금지.
 → 사용자가 명시적으로 1:1 문의/상담원/담당자 연결/접수 를 요청한 경우에만 human escalation intent 가 우선이다.
 → FAQ 근거가 없거나 낮을 때만 1:1 문의 CTA 또는 `transfer_to_qna_tool` fallback 을 고려한다.

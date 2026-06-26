@@ -69,6 +69,7 @@ from services.tstation.chat import (
     _build_general_card_cancel_timing_policy_event,
     _build_partner_member_coupon_policy_event,
     _build_support_faq_policy_event,
+    _enrich_messages_with_template_data,
     _build_signup_coupon_guidance_event,
     _build_signup_first_purchase_benefit_event,
     _build_owned_coupon_best_discount_event,
@@ -112,6 +113,7 @@ from services.tstation.chat import (
     _clear_stale_product_slots_for_new_recommendation,
     _clear_stale_store_search_context_for_general_turn,
     _sync_store_service_search_working_slots,
+    _template_data_from_assistant_message,
     _demote_stale_tire_size_for_new_product_transaction,
     _datepick_template_recovery_candidate_from_messages,
     _verified_datepick_order_values,
@@ -6895,6 +6897,81 @@ def test_coupon_gate_recent_context_includes_assistant_product_metadata() -> Non
     assert "215/55R17" in context
     assert "G000000123456" in context
     assert "cheapest_final_prc" in context
+
+
+def test_coupon_gate_recent_context_ignores_blocked_transaction_guard_template_data() -> None:
+    context = _recent_coupon_context_for_policy(
+        [
+            {
+                "role": "assistant",
+                "content": "다이나프로 HPX 255/45R20 2개 구매를 진행하려면 장착 매장이 필요해요.",
+                "template_data": {
+                    "template": "quickReply",
+                    "source_domain": "transaction",
+                    "assistant_response_source": "code_turn_contract_missing_slot_prompt",
+                    "contract_gate_result": "blocked",
+                    "data": {
+                        "assistantResponse": "다이나프로 HPX 255/45R20 2개 구매를 진행하려면 장착 매장이 필요해요.",
+                        "metadata": {
+                            "productName": "다이나프로 HPX",
+                            "tireSize": "255/45R20",
+                            "goodsNo": "G000000317666",
+                            "contract_gate_result": "blocked",
+                        },
+                    },
+                },
+            },
+            {"role": "user", "content": "쿠폰은 뭐가 적용돼?"},
+        ]
+    )
+
+    assert "[이전 선택된 상품 데이터]" not in context
+    assert "G000000317666" not in context
+
+
+def test_enrich_messages_with_template_data_skips_blocked_contract_guard_template() -> None:
+    messages = [
+        {"role": "assistant", "content": "다이나프로 HPX 255/45R20 2개 구매를 진행하려면 장착 매장이 필요해요."},
+    ]
+
+    enriched = _enrich_messages_with_template_data(
+        messages,
+        session_id="session",
+        assistant_template_messages=[
+            {
+                "role": "assistant",
+                "content": "다이나프로 HPX 255/45R20 2개 구매를 진행하려면 장착 매장이 필요해요.",
+                "template_data": {
+                    "template": "quickReply",
+                    "source_domain": "transaction",
+                    "assistant_response_source": "code_turn_contract_missing_slot_prompt",
+                    "contract_gate_result": "blocked",
+                    "data": {
+                        "assistantResponse": "다이나프로 HPX 255/45R20 2개 구매를 진행하려면 장착 매장이 필요해요.",
+                        "metadata": {
+                            "productName": "다이나프로 HPX",
+                            "tireSize": "255/45R20",
+                            "goodsNo": "G000000317666",
+                            "contract_gate_result": "blocked",
+                        },
+                    },
+                },
+            }
+        ],
+    )
+
+    assert "[이전 선택된 상품 데이터]" not in enriched[0]["content"]
+    assert _template_data_from_assistant_message(
+        {
+            "role": "assistant",
+            "template_data": {
+                "template": "quickReply",
+                "assistant_response_source": "code_turn_contract_missing_slot_prompt",
+                "contract_gate_result": "blocked",
+                "data": {"metadata": {"contract_gate_result": "blocked"}},
+            },
+        }
+    ) is None
 
 
 def test_recent_product_set_ranking_response_metadata_is_canonicalized() -> None:
@@ -17383,6 +17460,31 @@ def test_tire_condition_photo_policy_rejects_safety_assertion_after_faq() -> Non
     } in violations
 
 
+def test_tire_condition_photo_policy_requires_upload_capability_notice() -> None:
+    contract = build_turn_contract(
+        user_text="사진 보낼 테니까 더 타도 되는지 봐줘",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:tire_condition_photo_policy"],
+            policy_intent="tire_condition_photo_policy",
+        ),
+    )
+
+    violations = response_contract_violations(
+        template="quickReply",
+        user_text="사진 보낼 테니까 더 타도 되는지 봐줘",
+        called_tools=["search_faq_hybrid_tool"],
+        assistant_response_text="타이어 상태는 사진만으로 안전 여부를 확정하기 어렵고, 점검 기준을 함께 확인해야 해요.",
+        contract=contract,
+    )
+
+    assert {
+        "type": "upload_capability_notice_missing",
+        "assistant_response_text": "타이어 상태는 사진만으로 안전 여부를 확정하기 어렵고, 점검 기준을 함께 확인해야 해요.",
+        "severity": "error",
+    } in violations
+
+
 def test_signup_first_purchase_benefit_contract_requires_faq_and_blocks_coupon_tools() -> None:
     contract = build_turn_contract(
         user_text="회원가입하면 첫구매 혜택은 뭐가 있어?",
@@ -17723,6 +17825,11 @@ def test_support_prompt_contains_payment_error_faq_first_policy() -> None:
     assert "search_faq_hybrid_tool" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
     assert "transfer_to_qna_tool` 단독 호출 금지" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
     assert "확인 가능한 FAQ 기준" not in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
+
+
+def test_support_prompt_contains_upload_capability_notice_for_photo_policy() -> None:
+    assert "사진/이미지/파일 업로드나 첨부" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
+    assert "업로드 확인이 불가능" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
 
 
 def test_support_prompt_contains_faq_before_escalation_policy_buckets() -> None:
@@ -21635,6 +21742,24 @@ def test_support_faq_policy_event_for_promotion_gift_appends_partial_cancel_inva
     assert "사은품 반납이 필요할 수 있고" in response
     assert "사은품 상당 금액을 차감한 뒤 환불될 수 있어요." in response
     assert "이벤트 상세 조건과 실제 주문/취소 처리 기준에 따라 달라져요." in response
+
+
+def test_support_faq_policy_event_for_tire_condition_photo_includes_upload_limit_and_store_guidance() -> None:
+    event = _build_support_faq_policy_event(
+        "tire_condition_photo_policy",
+        "사진 보낼 테니까 더 타도 되는지 봐줘",
+        tool_result={
+            "status": "success",
+            "data": {"items": [{"answer": "타이어 점검은 마모도와 손상 여부를 함께 확인하는 것이 좋습니다."}]},
+        },
+    )
+
+    assert event is not None
+    response = str(event["data"]["assistantResponse"])
+    assert "현재 챗봇에서는 사진이나 파일을 업로드해 확인받을 수 없어요." in response
+    assert "사진만으로는 마모 상태, 교체 필요 여부, 주행 안전을 확정할 수 없어요." in response
+    assert "가까운 티스테이션 매장이나 전문 점검으로 마모도와 손상 여부를 함께 확인해 주세요." in response
+    assert _labels(event["data"]["quickReplies"]) == ["가까운 매장 찾기", "1:1 문의하기", "처음으로"]
 
 
 def test_direct_faq_policy_tool_payload_builds_transaction_policy_event() -> None:

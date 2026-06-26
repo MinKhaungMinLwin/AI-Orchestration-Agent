@@ -1468,6 +1468,7 @@ def _action_mode_contract_violation(
 def response_contract_violations(
     *,
     template: str | None,
+    user_text: str | None = None,
     assistant_response_text: str | None = None,
     assistant_response_source: str | None = None,
     compare_metric: str | None = None,
@@ -1681,6 +1682,7 @@ def response_contract_violations(
     if promotion_gift_violation is not None:
         violations.append(promotion_gift_violation)
     faq_first_support_violation = _faq_first_support_policy_contract_violation(
+        user_text=user_text,
         assistant_response_text=assistant_response_text,
         called_tools=called_tools,
         structured_sources=structured_sources,
@@ -2276,6 +2278,17 @@ _FAQ_FIRST_SUPPORT_POLICY_INTENTS = {
 }
 
 _FAQ_SOURCE_TOOLS = frozenset({"get_faq_tool", "search_faq_rag_tool", "search_faq_hybrid_tool"})
+_USER_UPLOAD_REQUEST_RE = re.compile(
+    r"사진\s*(?:보낼|올릴|업로드|첨부)|이미지\s*(?:보낼|올릴|업로드|첨부)|"
+    r"파일\s*(?:보낼|올릴|업로드|첨부)|첨부\s*(?:할게|했어|하면|해도|해서)|"
+    r"(?:사진|이미지|파일).{0,8}(?:봐줘|봐\s*줄|확인해\s*줘)",
+    re.IGNORECASE,
+)
+_NON_UPLOAD_IMAGE_LOOKUP_RE = re.compile(
+    r"(?:매장|지점|상품|타이어).{0,10}(?:사진|이미지).{0,8}(?:보여|조회|찾아)|"
+    r"(?:사진|이미지).{0,8}(?:보여줘|조회해줘|찾아줘)",
+    re.IGNORECASE,
+)
 _FAQ_FIRST_SUPPORT_POLICY_UNSUPPORTED_ASSERTION_RE = {
     "tire_manufacture_date_policy": re.compile(
         r"(무조건|항상|바로|즉시|확정|반드시).{0,18}(교환|환불|새\s*걸|불량)|"
@@ -2352,8 +2365,18 @@ def _faq_source_supports_assertion(intent: str, assistant_text: str, faq_text: s
     return any(token.lower() in faq_text.lower() for token in topic_tokens)
 
 
+def _requires_upload_capability_notice(user_text: str | None) -> bool:
+    text = str(user_text or "").strip()
+    if not text:
+        return False
+    if _NON_UPLOAD_IMAGE_LOOKUP_RE.search(text):
+        return False
+    return bool(_USER_UPLOAD_REQUEST_RE.search(text))
+
+
 def _faq_first_support_policy_contract_violation(
     *,
+    user_text: str | None = None,
     assistant_response_text: str | None,
     called_tools: list[str] | tuple[str, ...] | None,
     structured_sources: list[tuple[str, Mapping[str, Any]]] | tuple[tuple[str, Mapping[str, Any]], ...] | None,
@@ -2377,6 +2400,18 @@ def _faq_first_support_policy_contract_violation(
             "called_tools": tools,
         }
     intent = str(contract.intent or "")
+    if _requires_upload_capability_notice(user_text):
+        upload_notice_present = (
+            "업로드" in assistant_text
+            or "첨부" in assistant_text
+            or "파일" in assistant_text
+        )
+        if not upload_notice_present:
+            return {
+                "type": "upload_capability_notice_missing",
+                "assistant_response_text": assistant_text[:160],
+                "severity": "error",
+            }
     assertion_re = _FAQ_FIRST_SUPPORT_POLICY_UNSUPPORTED_ASSERTION_RE.get(intent)
     if not assistant_text or not assertion_re or not assertion_re.search(assistant_text):
         return None
