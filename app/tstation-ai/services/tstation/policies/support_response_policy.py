@@ -33,12 +33,49 @@ _ORDER_DOCUMENT_GUIDANCE_RE = re.compile(
     r"세금\s*계산서|이메일.{0,24}(?:보내|발송)|(?:보내|발송).{0,24}이메일",
     re.IGNORECASE,
 )
+_TIRE_MANUFACTURE_DATE_POLICY_RE = re.compile(
+    r"제조\s*일자|제조일자|제조\s*주차|DOT|최신\s*제조|언제\s*만든|오래된\s*거\s*아냐|신상품\s*맞",
+    re.IGNORECASE,
+)
+_TIRE_QUALITY_WARRANTY_POLICY_RE = re.compile(
+    r"측면.{0,12}부풀|사이드월.{0,12}부풀|품질\s*보증|품질보증|무상\s*(?:A/?S|as|교환)|제조상\s*과실|"
+    r"보증\s*기준|불량.{0,12}(무상|교환|보상)",
+    re.IGNORECASE,
+)
+_ASSURANCE_SERVICE_POLICY_RE = re.compile(
+    r"안심\s*서비스|안심서비스|안심\s*플러스|안심플러스|디지털\s*워런티|종이\s*보증서|"
+    r"보증서.{0,12}(분실|잃어버)|가입\s*가능\s*기간|장착비.{0,12}(따로|별도)",
+    re.IGNORECASE,
+)
+_RESERVATION_POLICY_GUIDANCE_RE = re.compile(
+    r"예약.{0,16}(취소|변경|장착점|매장\s*변경|몇\s*주|며칠\s*뒤|가능)|당일\s*취소|위약금|"
+    r"장착점\s*변경|몇\s*주\s*뒤까지\s*예약|예약\s*가능",
+    re.IGNORECASE,
+)
+_INSTALLATION_WORK_POLICY_RE = re.compile(
+    r"작업\s*중\s*취소|공임(?:비)?|장착비|폐타이어|얼라인먼트.{0,16}(현장\s*결제|추가|따로)|"
+    r"공임만\s*받고\s*장착|추가\s*작업",
+    re.IGNORECASE,
+)
+_PROMOTION_GIFT_POLICY_RE = re.compile(
+    r"사은품|선착순|프로모션.{0,12}(취소|반납|차감)|이벤트\s*조건|증정품|4짝.{0,16}2짝\s*취소",
+    re.IGNORECASE,
+)
+_TIRE_CONDITION_PHOTO_POLICY_RE = re.compile(
+    r"사진.{0,16}(더\s*타|타도\s*되|봐줘|판독|확인)|마모.{0,12}사진|타이어.{0,12}사진",
+    re.IGNORECASE,
+)
 _SIGNUP_COUPON_GUIDANCE_RE = re.compile(
     r"회원\s*가입|신규\s*회원|가입(?:하면|시)?|웰컴\s*쿠폰|가입\s*쿠폰|신규\s*가입|첫\s*가입",
     re.IGNORECASE,
 )
 _NONEXISTENT_BENEFIT_RE = re.compile(r"T\s*블랙|블랙\s*멤버십|VIP|브이아이피|블랙\s*카드|50\s*%", re.IGNORECASE)
 _HUMAN_RE = re.compile(r"상담원|사람\s*상담|고객센터|전화번호|연결", re.IGNORECASE)
+_EXPLICIT_ESCALATION_RE = re.compile(
+    r"1:1\s*문의|일대일\s*문의|상담원|상담사|사람\s*상담|문의\s*접수|접수해\s*줘|"
+    r"담당자.{0,8}(연결|문의)|상담\s*연결",
+    re.IGNORECASE,
+)
 _PERSONAL_CONTACT_RE = re.compile(
     r"개인\s*(?:핸드폰|휴대폰|전화|번호|연락처)"
     r"|(?:담당자|관리자|직원|사장님|매니저|점장).{0,16}(?:개인\s*)?(?:연락처|번호|전화번호|휴대폰|핸드폰)",
@@ -113,6 +150,139 @@ def decide_support_response(
             template=TemplateName.QUICK_REPLY,
             forbidden_behaviors=("promise_coupon_issue", "invent_discount", "show_all_coupons_without_context"),
             assistant_guidance="임의 쿠폰 발급은 불가하다고 안내하고, 받을 수 있는 쿠폰은 쿠폰함에서 확인 가능하다고 안내한다.",
+        )
+
+    if intent == "personal_contact" or _PERSONAL_CONTACT_RE.search(text):
+        return _decision(
+            response_shape_key="personal_contact_denied",
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=("share_personal_contact", "invent_staff_contact"),
+            assistant_guidance="개인 연락처는 제공할 수 없으며 공식 고객센터 또는 1:1 문의 경로만 안내한다.",
+        )
+
+    if intent == "human_escalation" or _EXPLICIT_ESCALATION_RE.search(text):
+        return _decision(
+            response_shape_key="human_escalation",
+            response_shape=ResponseShape.ACTION_CONFIRM,
+            template=TemplateName.QNA_COMPLETE,
+            forbidden_behaviors=("overpromise_live_agent", "hide_official_contact"),
+            assistant_guidance="챗봇 처리 한계를 인정하고 1:1 문의 또는 공식 고객센터 번호 안내로 연결한다.",
+        )
+
+    if intent == "tire_manufacture_date_policy" or _TIRE_MANUFACTURE_DATE_POLICY_RE.search(text):
+        return _decision(
+            response_shape_key="tire_manufacture_date_policy",
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=(
+                "transfer_to_qna_direct_first",
+                "claim_defect_from_manufacture_date_only",
+                "promise_exchange_or_refund",
+            ),
+            assistant_guidance=(
+                "타이어 제조일자/DOT/신품 여부 문의는 FAQ hybrid 검색을 먼저 수행하고, 검색 근거 범위 안에서 "
+                "6~12개월 이내 제품은 정상 신품 범주로 안내한다. 제조일자만으로 불량, 교환, 환불을 단정하지 말고 "
+                "정책 안내를 먼저 제공한다."
+            ),
+        )
+
+    if intent == "tire_quality_warranty_policy" or _TIRE_QUALITY_WARRANTY_POLICY_RE.search(text):
+        return _decision(
+            response_shape_key="tire_quality_warranty_policy",
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=(
+                "transfer_to_qna_direct_first",
+                "claim_free_replacement_without_inspection",
+                "normalize_as_store_attribute_inquiry",
+            ),
+            assistant_guidance=(
+                "측면 부풀음, 품질보증, 무상 A/S 기준 문의는 FAQ hybrid 검색을 먼저 수행하고, 제조상 과실 보증 기간, "
+                "잔여 홈 깊이, 현장 점검 필요 여부를 근거 기반으로 요약한다. 현재 매장명이나 과거 구매 맥락만으로 "
+                "특정 매장 속성 문의로 바꾸지 않는다."
+            ),
+        )
+
+    if intent == "assurance_service_policy" or _ASSURANCE_SERVICE_POLICY_RE.search(text):
+        return _decision(
+            response_shape_key="assurance_service_policy",
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=(
+                "transfer_to_qna_direct_first",
+                "claim_compensation_confirmed",
+                "skip_assurance_policy_summary",
+            ),
+            assistant_guidance=(
+                "안심서비스/안심플러스/디지털워런티/보증서 문의는 FAQ hybrid 검색을 먼저 수행하고, 가입 가능 기간, "
+                "보상 조건, 장착비/추가 비용 여부를 검색 근거 범위 안에서 설명한다. 보상 확정이나 자동 접수로 시작하지 않는다."
+            ),
+        )
+
+    if intent == "reservation_policy_guidance" or _RESERVATION_POLICY_GUIDANCE_RE.search(text):
+        return _decision(
+            response_shape_key="reservation_policy_guidance",
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=(
+                "transfer_to_qna_direct_first",
+                "start_owned_reservation_lookup_without_anchor",
+                "skip_reservation_policy_summary",
+            ),
+            assistant_guidance=(
+                "예약 가능 기간, 취소, 변경, 장착점 변경 같은 일반 예약 정책 문의는 FAQ hybrid 검색을 먼저 수행하고 "
+                "정책 안내를 quickReply로 요약한다. 주문번호, 내 예약, 오늘 예약 같은 owned anchor 없이 "
+                "개인 예약/주문 조회를 시작하지 않는다."
+            ),
+        )
+
+    if intent == "installation_work_policy" or _INSTALLATION_WORK_POLICY_RE.search(text):
+        return _decision(
+            response_shape_key="installation_work_policy",
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=(
+                "transfer_to_qna_direct_first",
+                "claim_store_specific_work_supported",
+                "skip_installation_policy_summary",
+            ),
+            assistant_guidance=(
+                "공임, 장착비, 추가 작업, 폐타이어 비용, 현장 결제 여부 같은 작업 정책 문의는 FAQ hybrid 검색을 먼저 수행하고 "
+                "일반 정책 범위만 요약한다. 매장별 가능 여부나 현장 운영을 확인 없이 단정하지 않는다."
+            ),
+        )
+
+    if intent == "promotion_gift_policy" or _PROMOTION_GIFT_POLICY_RE.search(text):
+        return _decision(
+            response_shape_key="promotion_gift_policy",
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=(
+                "transfer_to_qna_direct_first",
+                "claim_gift_kept_or_revoked",
+                "skip_promotion_condition_summary",
+            ),
+            assistant_guidance=(
+                "사은품/선착순/이벤트 조건 문의는 FAQ hybrid 검색을 먼저 수행하고, 조건 미달 시 반납 또는 차감 가능성과 "
+                "실시간 마감 확인 필요를 근거 범위 안에서 설명한다. 지급/미지급을 확정하지 않는다."
+            ),
+        )
+
+    if intent == "tire_condition_photo_policy" or _TIRE_CONDITION_PHOTO_POLICY_RE.search(text):
+        return _decision(
+            response_shape_key="tire_condition_photo_policy",
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=(
+                "transfer_to_qna_direct_first",
+                "judge_safety_from_photo_only",
+                "claim_safe_to_drive_without_inspection",
+            ),
+            assistant_guidance=(
+                "타이어 상태를 사진으로 봐달라는 문의는 FAQ hybrid 검색을 먼저 수행하되, 챗봇이 사진 판독이나 안전 여부를 확정할 수 "
+                "없다고 분명히 말한다. 매장 점검, 마모도 측정, 필요 시 1:1 문의 첨부 경로를 보조로 안내한다."
+            ),
         )
 
     if intent == "signup_first_purchase_benefit_policy" or _SIGNUP_BENEFIT_RE.search(text):
@@ -320,16 +490,7 @@ def decide_support_response(
             ),
         )
 
-    if intent == "personal_contact" or _PERSONAL_CONTACT_RE.search(text):
-        return _decision(
-            response_shape_key="personal_contact_denied",
-            response_shape=ResponseShape.SUMMARY,
-            template=TemplateName.QUICK_REPLY,
-            forbidden_behaviors=("share_personal_contact", "invent_staff_contact"),
-            assistant_guidance="개인 연락처는 제공할 수 없으며 공식 고객센터 또는 1:1 문의 경로만 안내한다.",
-        )
-
-    if intent == "human_escalation" or _HUMAN_RE.search(text):
+    if _HUMAN_RE.search(text):
         return _decision(
             response_shape_key="human_escalation",
             response_shape=ResponseShape.ACTION_CONFIRM,

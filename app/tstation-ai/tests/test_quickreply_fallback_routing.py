@@ -16042,6 +16042,76 @@ def test_order_document_support_policy_prefers_order_history_before_qna() -> Non
     assert "주문 내역" in response_decision.assistant_guidance
 
 
+def test_tire_manufacture_date_policy_contract_requires_faq_before_qna() -> None:
+    contract = build_turn_contract(
+        user_text="제조일자가 6개월 전 거야. 새 걸로 바꿔줘",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:tire_manufacture_date_policy"],
+            policy_intent="tire_manufacture_date_policy",
+        ),
+    )
+
+    assert contract.domain == "support"
+    assert contract.intent == "tire_manufacture_date_policy"
+    assert contract.known_slots["policy_intent"] == "tire_manufacture_date_policy"
+    assert "search_faq_hybrid_tool" in contract.allowed_tools
+
+    violations = response_contract_violations(
+        template="qnaComplete",
+        called_tools=["transfer_to_qna_tool"],
+        assistant_response_text="1:1 문의로 접수해 주세요.",
+        contract=contract,
+    )
+    assert {
+        "type": "tire_manufacture_date_policy_qna_without_faq_search",
+        "called_tools": ["transfer_to_qna_tool"],
+        "severity": "error",
+    } in violations
+
+
+def test_reservation_policy_guidance_contract_blocks_owned_lookup_tools() -> None:
+    contract = build_turn_contract(
+        user_text="몇 주 뒤까지 예약 가능해? 당일 취소 위약금도 있어?",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:reservation_policy_guidance"],
+            policy_intent="reservation_policy_guidance",
+        ),
+    )
+
+    assert contract.domain == "support"
+    assert contract.intent == "reservation_policy_guidance"
+    assert contract.known_slots["policy_intent"] == "reservation_policy_guidance"
+    assert "search_faq_hybrid_tool" in contract.allowed_tools
+    assert "get_orders_of_user_tool" in contract.forbidden_tools
+    assert "get_order_status_tool" in contract.forbidden_tools
+    assert "get_my_reservations_tool" in contract.forbidden_tools
+
+
+def test_tire_condition_photo_policy_rejects_safety_assertion_after_faq() -> None:
+    contract = build_turn_contract(
+        user_text="사진 보낼 테니까 더 타도 되는지 봐줘",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:tire_condition_photo_policy"],
+            policy_intent="tire_condition_photo_policy",
+        ),
+    )
+
+    violations = response_contract_violations(
+        template="quickReply",
+        called_tools=["search_faq_hybrid_tool"],
+        assistant_response_text="사진상으로는 더 타도 돼 보여요.",
+        contract=contract,
+    )
+    assert {
+        "type": "tire_condition_photo_policy_asserted_without_verification",
+        "assistant_response_text": "사진상으로는 더 타도 돼 보여요.",
+        "severity": "error",
+    } in violations
+
+
 def test_signup_first_purchase_benefit_contract_requires_faq_and_blocks_coupon_tools() -> None:
     contract = build_turn_contract(
         user_text="회원가입하면 첫구매 혜택은 뭐가 있어?",
@@ -16292,6 +16362,13 @@ def test_support_prompt_contains_payment_error_faq_first_policy() -> None:
     assert "payment_error_troubleshooting" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
     assert "search_faq_hybrid_tool" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
     assert "transfer_to_qna_tool` 단독 호출 금지" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
+
+
+def test_support_prompt_contains_faq_before_escalation_policy_buckets() -> None:
+    assert "FAQ before escalation policy buckets" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
+    assert "tire_manufacture_date_policy" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
+    assert "reservation_policy_guidance" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
+    assert "owned anchor" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
 
 
 def test_support_prompt_contains_legal_action_hard_stop() -> None:

@@ -531,6 +531,16 @@ def build_turn_contract(
                 "quick_order_tool",
             ),
         )
+    if intent == "reservation_policy_guidance":
+        forbidden_tools = _merge_tuple(
+            forbidden_tools,
+            (
+                "get_orders_of_user_tool",
+                "get_order_status_tool",
+                "get_my_reservations_tool",
+                "quick_order_tool",
+            ),
+        )
 
     drift = _contract_drift(
         code_domain=code_domain,
@@ -592,6 +602,26 @@ def build_turn_contract(
                 "1:1 문의는 보조 CTA로만 둔다."
             ),
             "metadata": {"response_shape_key": "order_document_guidance"},
+        }
+    if intent in {
+        "tire_manufacture_date_policy",
+        "tire_quality_warranty_policy",
+        "assurance_service_policy",
+        "reservation_policy_guidance",
+        "installation_work_policy",
+        "promotion_gift_policy",
+        "tire_condition_photo_policy",
+    } and response_decision_payload is None:
+        response_decision_payload = {
+            "response_shape": "summary",
+            "template": "quickReply",
+            "required_slots": [],
+            "forbidden_behaviors": [
+                "transfer_to_qna_direct_first",
+                "skip_policy_guidance",
+            ],
+            "assistant_guidance": "FAQ hybrid 검색을 먼저 수행하고 정책/조건을 quickReply로 요약한 뒤 필요 시에만 1:1 문의로 이어진다.",
+            "metadata": {"response_shape_key": intent},
         }
 
     return TurnContract(
@@ -1615,6 +1645,13 @@ def response_contract_violations(
     )
     if signup_benefit_violation is not None:
         violations.append(signup_benefit_violation)
+    faq_first_support_violation = _faq_first_support_policy_contract_violation(
+        assistant_response_text=assistant_response_text,
+        called_tools=called_tools,
+        contract=contract,
+    )
+    if faq_first_support_violation is not None:
+        violations.append(faq_first_support_violation)
     legal_action_violation = _legal_action_guidance_contract_violation(
         assistant_response_text=assistant_response_text,
         event_data=event_data,
@@ -2100,6 +2137,50 @@ def _signup_first_purchase_benefit_contract_violation(
     if re.search(r"(자동|바로|즉시).{0,12}(발급|지급)|발급됩니다", assistant_text) and "달라질 수" not in assistant_text:
         return {
             "type": "signup_first_purchase_benefit_asserted_unverified_coupon_issue",
+            "assistant_response_text": assistant_text,
+        }
+    return None
+
+
+_FAQ_FIRST_SUPPORT_POLICY_INTENTS = {
+    "tire_manufacture_date_policy",
+    "tire_quality_warranty_policy",
+    "assurance_service_policy",
+    "reservation_policy_guidance",
+    "installation_work_policy",
+    "promotion_gift_policy",
+    "tire_condition_photo_policy",
+}
+
+_FAQ_FIRST_SUPPORT_POLICY_ASSERTION_RE = {
+    "tire_manufacture_date_policy": re.compile(r"(교환|환불|불량).{0,8}(확정|가능|됩니다)|새\s*걸로\s*바꿔", re.IGNORECASE),
+    "tire_quality_warranty_policy": re.compile(r"무상.{0,8}(확정|가능|됩니다)|무료\s*교체", re.IGNORECASE),
+    "assurance_service_policy": re.compile(r"보상.{0,8}(확정|가능|됩니다)|자동\s*가입", re.IGNORECASE),
+    "tire_condition_photo_policy": re.compile(r"(더\s*타도\s*돼|주행\s*가능|안전합니다)", re.IGNORECASE),
+}
+
+
+def _faq_first_support_policy_contract_violation(
+    *,
+    assistant_response_text: str | None,
+    called_tools: list[str] | tuple[str, ...] | None,
+    contract: TurnContract | None,
+) -> dict[str, Any] | None:
+    if contract is None or contract.intent not in _FAQ_FIRST_SUPPORT_POLICY_INTENTS:
+        return None
+    tools = list(called_tools or ())
+    has_faq = "search_faq_hybrid_tool" in tools
+    has_qna = "transfer_to_qna_tool" in tools
+    if has_qna and not has_faq:
+        return {
+            "type": f"{contract.intent}_qna_without_faq_search",
+            "called_tools": tools,
+        }
+    assistant_text = str(assistant_response_text or "").strip()
+    assertion_re = _FAQ_FIRST_SUPPORT_POLICY_ASSERTION_RE.get(str(contract.intent or ""))
+    if has_faq and assistant_text and assertion_re and assertion_re.search(assistant_text):
+        return {
+            "type": f"{contract.intent}_asserted_without_verification",
             "assistant_response_text": assistant_text,
         }
     return None

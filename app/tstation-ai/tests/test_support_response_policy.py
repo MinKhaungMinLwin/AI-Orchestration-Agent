@@ -88,6 +88,51 @@ def test_signup_first_purchase_benefit_policy_text_trigger_without_explicit_inte
     assert decision.metadata["response_shape_key"] == "signup_first_purchase_benefit_policy"
 
 
+def test_tire_manufacture_date_policy_uses_faq_first_contract() -> None:
+    decision = decide_support_response(
+        intent="tire_manufacture_date_policy",
+        user_text="제조일자가 6개월 전 거야. 새 걸로 바꿔줘",
+    )
+
+    assert decision.template == TemplateName.QUICK_REPLY
+    assert decision.response_shape == ResponseShape.SUMMARY
+    assert decision.metadata["response_shape_key"] == "tire_manufacture_date_policy"
+    assert "transfer_to_qna_direct_first" in decision.forbidden_behaviors
+    assert "promise_exchange_or_refund" in decision.forbidden_behaviors
+
+
+def test_reservation_policy_guidance_text_trigger_without_owned_anchor() -> None:
+    decision = decide_support_response(
+        intent="support_faq",
+        user_text="몇 주 뒤까지 예약 가능해? 당일 취소 위약금도 있어?",
+    )
+
+    assert decision.template == TemplateName.QUICK_REPLY
+    assert decision.metadata["response_shape_key"] == "reservation_policy_guidance"
+    assert "start_owned_reservation_lookup_without_anchor" in decision.forbidden_behaviors
+
+
+def test_tire_condition_photo_policy_blocks_photo_only_safety_judgment() -> None:
+    decision = decide_support_response(
+        intent="support_faq",
+        user_text="사진 보낼 테니까 더 타도 되는지 봐줘",
+    )
+
+    assert decision.template == TemplateName.QUICK_REPLY
+    assert decision.metadata["response_shape_key"] == "tire_condition_photo_policy"
+    assert "judge_safety_from_photo_only" in decision.forbidden_behaviors
+
+
+def test_explicit_escalation_overrides_policy_bucket() -> None:
+    decision = decide_support_response(
+        intent="tire_manufacture_date_policy",
+        user_text="제조일자가 6개월 전인데 상담원 연결해줘",
+    )
+
+    assert decision.template == TemplateName.QNA_COMPLETE
+    assert decision.metadata["response_shape_key"] == "human_escalation"
+
+
 # --- TPMS / 공기압 경고등 회귀 테스트 ---
 
 

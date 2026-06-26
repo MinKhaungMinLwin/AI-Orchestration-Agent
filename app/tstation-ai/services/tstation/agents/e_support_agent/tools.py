@@ -76,6 +76,31 @@ _SIGNUP_COUPON_FAQ_ANCHORS = (
     "회원 가입 시 발급되는 쿠폰 혜택",
     "신규 회원 쿠폰 안내",
 )
+_TIRE_MANUFACTURE_DATE_FAQ_ANCHORS = (
+    "타이어 제조일자 DOT 신품 기준",
+    "6개월 12개월 이내 정상 신품",
+)
+_TIRE_QUALITY_WARRANTY_FAQ_ANCHORS = (
+    "타이어 품질보증 제조상 과실 무상 교환 기준",
+    "측면 부풀음 점검 품질보증 조건",
+)
+_ASSURANCE_SERVICE_FAQ_ANCHORS = (
+    "안심서비스 안심플러스 디지털워런티 가입 기간 보상 조건",
+    "보증서 분실 장착비 안내",
+)
+_RESERVATION_POLICY_GUIDANCE_FAQ_ANCHORS = (
+    "장착 예약 취소 변경 장착점 변경 정책",
+    "예약 가능 기간 위약금 안내",
+)
+_INSTALLATION_WORK_POLICY_FAQ_ANCHORS = (
+    "장착 공임 추가 작업 폐타이어 비용 얼라인먼트 현장 결제",
+)
+_PROMOTION_GIFT_POLICY_FAQ_ANCHORS = (
+    "사은품 선착순 프로모션 조건 미달 반납 차감",
+)
+_TIRE_CONDITION_PHOTO_POLICY_FAQ_ANCHORS = (
+    "타이어 사진 판독 불가 매장 점검 마모도 측정",
+)
 
 
 def _augment_faq_query_for_policy(query: str) -> str:
@@ -87,6 +112,20 @@ def _augment_faq_query_for_policy(query: str) -> str:
         anchors = _SIGNUP_COUPON_FAQ_ANCHORS
     elif policy_intent == "signup_first_purchase_benefit_policy":
         anchors = _SIGNUP_BENEFIT_FAQ_ANCHORS
+    elif policy_intent == "tire_manufacture_date_policy":
+        anchors = _TIRE_MANUFACTURE_DATE_FAQ_ANCHORS
+    elif policy_intent == "tire_quality_warranty_policy":
+        anchors = _TIRE_QUALITY_WARRANTY_FAQ_ANCHORS
+    elif policy_intent == "assurance_service_policy":
+        anchors = _ASSURANCE_SERVICE_FAQ_ANCHORS
+    elif policy_intent == "reservation_policy_guidance":
+        anchors = _RESERVATION_POLICY_GUIDANCE_FAQ_ANCHORS
+    elif policy_intent == "installation_work_policy":
+        anchors = _INSTALLATION_WORK_POLICY_FAQ_ANCHORS
+    elif policy_intent == "promotion_gift_policy":
+        anchors = _PROMOTION_GIFT_POLICY_FAQ_ANCHORS
+    elif policy_intent == "tire_condition_photo_policy":
+        anchors = _TIRE_CONDITION_PHOTO_POLICY_FAQ_ANCHORS
     else:
         return text
     missing_anchors = [anchor for anchor in anchors if anchor not in text]
