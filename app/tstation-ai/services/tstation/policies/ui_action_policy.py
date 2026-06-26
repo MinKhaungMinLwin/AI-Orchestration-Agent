@@ -163,6 +163,62 @@ def store_name_exact_match_row(store_name: str, stores: list[dict[str, Any]]) ->
     return None
 
 
+def build_other_store_context_enrichment_input(
+    cta_context: Mapping[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    store_context = store_context_from_mapping(cta_context)
+    if (
+        store_context
+        and (store_context.get("xpos") is None or store_context.get("ypos") is None)
+        and store_context.get("shop_name")
+    ):
+        return store_context, {"store_nm": str(store_context["shop_name"]), "limit": 10}
+    return store_context, None
+
+
+def apply_other_store_context_enrichment(
+    cta_context: Mapping[str, Any] | None,
+    *,
+    store_rows: list[dict[str, Any]] | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    enriched_cta_context = dict(cta_context or {})
+    store_context = store_context_from_mapping(enriched_cta_context)
+    if not store_context or not store_context.get("shop_name") or not isinstance(store_rows, list):
+        return enriched_cta_context, store_context
+    matched_store = store_name_exact_match_row(
+        str(store_context["shop_name"]),
+        [store for store in store_rows if isinstance(store, dict)],
+    )
+    if matched_store is None:
+        return enriched_cta_context, store_context
+    enriched_store_context = store_context_from_mapping({**matched_store, **store_context})
+    enriched_cta_context["currentStoreContext"] = enriched_store_context
+    return enriched_cta_context, enriched_store_context
+
+
+def build_other_store_preview_metadata(
+    *,
+    enriched_cta_context: Mapping[str, Any] | None,
+    original_cta_context: Mapping[str, Any] | None,
+    preview_input: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    store_context = store_context_from_mapping(enriched_cta_context)
+    canonical_cta_context = canonical_context_from_template_boundary(original_cta_context)
+    previous_store_name = str(
+        store_context.get("shop_name") or canonical_cta_context.get("shop_name") or ""
+    ).strip()
+    excluded_ids = {
+        str(shop_id)
+        for shop_id in ((preview_input or {}).get("exclude_shop_ids") or [])
+        if shop_id
+    }
+    return {
+        "store_context": store_context,
+        "previous_store_name": previous_store_name,
+        "excluded_ids": excluded_ids,
+    }
+
+
 def _normalize_vehicle_contract_intent(intent: str | None) -> str:
     normalized = str(intent or "").strip()
     if normalized == "vehicle_information":

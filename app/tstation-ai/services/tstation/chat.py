@@ -115,6 +115,8 @@ from services.tstation.policies.ui_action_policy import (
     apply_ui_action_slot_patch,
     build_other_store_search_result_event,
     build_logistics_earliest_install_fallback_event,
+    build_other_store_context_enrichment_input,
+    build_other_store_preview_metadata,
     build_quickreply_cta_clarification_event,
     chip_context_dict,
     chip_value,
@@ -125,6 +127,7 @@ from services.tstation.policies.ui_action_policy import (
     quickreply_cta_context_from_chip,
     quickreply_cta_context_from_template,
     resolve_ui_action_context,
+    apply_other_store_context_enrichment,
     store_context_from_mapping,
     store_name_exact_match_row,
     ui_action_trace_metadata,
@@ -22513,37 +22516,25 @@ class TStationChatServiceV2:
                     return TStationChatResponse(content=guard_text)
             elif direct_cta_action_kind == "search_other_store":
                 enriched_cta_context = dict(cta_context)
-                store_context = store_context_from_mapping(enriched_cta_context)
-                if (
-                    store_context
-                    and (store_context.get("xpos") is None or store_context.get("ypos") is None)
-                    and store_context.get("shop_name")
-                ):
+                store_context, enrichment_input = build_other_store_context_enrichment_input(enriched_cta_context)
+                if enrichment_input is not None:
                     from services.tstation.agents.c_transaction_agent.tools import (
                         get_store_list_tool as _cta_get_store_list_tool,
                     )
-
-                    list_input = {"store_nm": str(store_context["shop_name"]), "limit": 10}
                     try:
                         _list_contract, list_allowed, list_reason = _build_cta_action_contract(
                             "code_cta_store_context_enrichment",
                             ("get_store_list_tool",),
                         )
                         if list_allowed:
-                            raw_list = await asyncio.to_thread(_cta_get_store_list_tool.invoke, list_input)
+                            raw_list = await asyncio.to_thread(_cta_get_store_list_tool.invoke, enrichment_input)
                             list_result = raw_list if isinstance(raw_list, dict) else qc_verifier.parse_tool_output(raw_list)
                             list_data = _unwrap_tool_data(list_result if isinstance(list_result, dict) else {})
                             stores = list_data.get("stores") if isinstance(list_data, dict) else None
-                            if isinstance(stores, list):
-                                matched_store = store_name_exact_match_row(
-                                    str(store_context["shop_name"]),
-                                    [store for store in stores if isinstance(store, dict)],
-                                )
-                                if matched_store is not None:
-                                    store_context = store_context_from_mapping(
-                                        {**matched_store, **store_context},
-                                    )
-                                    enriched_cta_context["currentStoreContext"] = store_context
+                            enriched_cta_context, store_context = apply_other_store_context_enrichment(
+                                enriched_cta_context,
+                                store_rows=stores if isinstance(stores, list) else None,
+                            )
                         else:
                             logger.info("[CODE_FAST_PATH_GATE] blocked cta_store_context_enrichment reason=%s", list_reason)
                     except Exception:
@@ -22573,12 +22564,12 @@ class TStationChatServiceV2:
                     return TStationChatResponse(content=guard_text)
 
                 assert preview_input is not None
-                store_context = store_context_from_mapping(enriched_cta_context)
-                canonical_cta_context = canonical_context_from_template_boundary(cta_context)
-                previous_store_name = str(
-                    store_context.get("shop_name") or canonical_cta_context.get("shop_name") or ""
-                ).strip()
-                excluded_ids = {str(shop_id) for shop_id in preview_input.get("exclude_shop_ids", []) if shop_id}
+                other_store_preview_metadata = build_other_store_preview_metadata(
+                    enriched_cta_context=enriched_cta_context,
+                    original_cta_context=cta_context,
+                    preview_input=preview_input,
+                )
+                excluded_ids = set(other_store_preview_metadata["excluded_ids"])
 
                 from services.tstation.agents.c_transaction_agent.tools import (
                     transaction_store_preview_tool as _transaction_store_preview_tool,
@@ -22630,7 +22621,7 @@ class TStationChatServiceV2:
                 mapped_event = build_other_store_search_result_event(
                     preview_result=preview_result,
                     preview_input=preview_input,
-                    previous_store_name=previous_store_name,
+                    previous_store_name=str(other_store_preview_metadata["previous_store_name"]),
                     excluded_ids=excluded_ids,
                     template_builder=_try_build_template,
                 )

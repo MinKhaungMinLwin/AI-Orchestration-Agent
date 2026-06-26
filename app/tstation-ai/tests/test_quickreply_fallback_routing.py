@@ -382,10 +382,13 @@ from services.tstation.policies.turn_contract import (
     warning_contract_violations,
 )
 from services.tstation.policies.ui_action_policy import (
+    apply_other_store_context_enrichment,
     apply_cta_context_to_slots,
     apply_logistics_earliest_install_cta_action,
     apply_preview_update_cta_action,
     apply_ui_action_slot_patch,
+    build_other_store_context_enrichment_input,
+    build_other_store_preview_metadata,
     build_other_store_search_result_event,
     build_other_store_stock_unavailable_event,
     build_logistics_earliest_install_fallback_event,
@@ -814,6 +817,37 @@ def test_store_name_exact_match_row_ignores_brand_prefix_and_spacing() -> None:
 
     assert matched is not None
     assert matched["shop_id"] == "F00721"
+
+
+def test_build_other_store_context_enrichment_input_requires_missing_coordinates() -> None:
+    store_context, enrichment_input = build_other_store_context_enrichment_input(
+        {"currentStoreContext": {"shopName": "티스테이션 판교점"}}
+    )
+
+    assert store_context["shop_name"] == "티스테이션 판교점"
+    assert enrichment_input == {"store_nm": "티스테이션 판교점", "limit": 10}
+
+
+def test_apply_other_store_context_enrichment_merges_coordinates_from_store_rows() -> None:
+    enriched_cta_context, store_context = apply_other_store_context_enrichment(
+        {"currentStoreContext": {"shopName": "티스테이션 판교점"}},
+        store_rows=[{"shop_nm": "판교점", "shop_id": "F00721", "xpos": 127.11, "ypos": 37.39}],
+    )
+
+    assert store_context["shopId"] == "F00721"
+    assert store_context["xpos"] == 127.11
+    assert enriched_cta_context["currentStoreContext"]["shopId"] == "F00721"
+
+
+def test_build_other_store_preview_metadata_extracts_previous_store_and_excluded_ids() -> None:
+    metadata = build_other_store_preview_metadata(
+        enriched_cta_context={"currentStoreContext": {"shopName": "티스테이션 판교점"}},
+        original_cta_context={"shopName": "판교점"},
+        preview_input={"exclude_shop_ids": ["F00721", ""]},
+    )
+
+    assert metadata["previous_store_name"] == "티스테이션 판교점"
+    assert metadata["excluded_ids"] == {"F00721"}
 
 
 def test_cta_preview_input_uses_canonical_store_context_from_template_aliases() -> None:
