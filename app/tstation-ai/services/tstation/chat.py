@@ -134,6 +134,7 @@ from services.tstation.policies.ui_action_policy import (
     quickreply_cta_context_from_chip,
     quickreply_cta_context_from_template,
     resolve_goods_no_from_product_template_selection,
+    resolve_tire_size_from_history_template,
     resolve_vehicle_from_history_template,
     resolve_vehicle_selection_from_listcar_event,
     resolve_vehicle_ui_selection_from_chip_context,
@@ -20553,44 +20554,7 @@ class TStationChatServiceV2:
 
     @staticmethod
     def _resolve_tire_size_from_history_template(user_text: str, template_data: dict | None) -> str | None:
-        """Match a user's vehicle-selection reply against the metadata of the
-        most recent assistant message that rendered a `listCar` template, and
-        return the picked car's tireSize.
-
-        Mirrors `_resolve_shop_id_from_history_template` for cars. Uses the
-        listCar template metadata as the source of truth because:
-          - filter_for_context drops car_no as PII, so prev_tool_data has no
-            usable per-car identifiers.
-          - The listCar metadata is what was actually shown to the user and is
-            persisted to Redis history (template_data field).
-          - tireSize / tireSizeRe were added to CarMeta specifically so that
-            tire_size can be recovered at selection time without an extra LLM
-            tool call.
-
-        Expected template_data shape (from chat_history_service.get_latest_template_data):
-            {"type": "data", "template": "listCar",
-             "data": {"listCar": [{"licensePlate": "12가3456", "info": "K7 2.5 GDI", ...}],
-                      "metadata": [{"carNo": "12가3456", "carLncCd": "01",
-                                    "tireSize": "225/45R17", "tireSizeRe": "225/45R17"}]}}
-
-        Matching strategy (first hit wins):
-          1. License plate verbatim ("12가3456", "123가4567") against carNo.
-          2. Ordinal at the start ("1.", "1번", "2)") → metadata[idx-1].
-          3. Token-overlap against listCar[i].info — unique top scorer required.
-        """
-        if not user_text or not isinstance(template_data, dict):
-            return None
-        selected_vehicle = TStationChatServiceV2._resolve_vehicle_from_history_template(user_text, template_data)
-        if selected_vehicle is None:
-            return None
-        selected_meta = selected_vehicle.get("meta") or {}
-        front_size, rear_size = _normalize_vehicle_tire_size_pair(selected_meta)
-        if _has_staggered_vehicle_tire_sizes(front_size, rear_size):
-            return None
-        tire_size = front_size or rear_size
-        if tire_size:
-            return tire_size
-        return None
+        return resolve_tire_size_from_history_template(user_text, template_data)
 
     @staticmethod
     def _resolve_vehicle_from_history_template(user_text: str, template_data: dict | None) -> dict | None:

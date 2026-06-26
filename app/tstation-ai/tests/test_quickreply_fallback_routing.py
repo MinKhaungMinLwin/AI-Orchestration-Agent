@@ -401,6 +401,7 @@ from services.tstation.policies.ui_action_policy import (
     preview_action_mode_for_slots,
     resolve_ui_action_context,
     resolve_goods_no_from_product_template_selection,
+    resolve_tire_size_from_history_template,
     resolve_vehicle_from_history_template,
     resolve_vehicle_selection_from_listcar_event,
     resolve_vehicle_ui_selection_from_chip_context,
@@ -11517,7 +11518,7 @@ def test_history_vehicle_selection_does_not_auto_resolve_staggered_front_size() 
         },
     }
 
-    resolved = TStationChatServiceV2._resolve_tire_size_from_history_template("56모2162", template)
+    resolved = resolve_tire_size_from_history_template("56모2162", template)
 
     assert resolved is None
 
@@ -11580,7 +11581,7 @@ def test_history_tire_size_resolution_supports_ordinal_pick_for_same_size_vehicl
         },
     }
 
-    resolved = TStationChatServiceV2._resolve_tire_size_from_history_template("2)", template)
+    resolved = resolve_tire_size_from_history_template("2)", template)
 
     assert resolved == "225/45R17"
 

@@ -1079,6 +1079,25 @@ def resolve_vehicle_from_history_template(
     return resolve_vehicle_selection_from_listcar_event(user_text, latest_listcar)
 
 
+def resolve_tire_size_from_history_template(
+    user_text: str,
+    template_data: Mapping[str, Any] | None,
+) -> str | None:
+    if not user_text or not isinstance(template_data, Mapping):
+        return None
+    selected_vehicle = resolve_vehicle_from_history_template(user_text, template_data)
+    if selected_vehicle is None:
+        return None
+    selected_meta = selected_vehicle.get("meta")
+    if not isinstance(selected_meta, Mapping):
+        return None
+    front_size = normalize_tire_size(str(selected_meta.get("tireSize") or selected_meta.get("tire_size") or ""))
+    rear_size = normalize_tire_size(str(selected_meta.get("tireSizeRe") or selected_meta.get("tire_size_re") or ""))
+    if front_size and rear_size and front_size != rear_size:
+        return None
+    return front_size or rear_size or None
+
+
 def resolve_goods_no_from_product_template_selection(user_text: str, template_data: Mapping[str, Any] | None) -> str | None:
     if not user_text or not isinstance(template_data, Mapping):
         return None
