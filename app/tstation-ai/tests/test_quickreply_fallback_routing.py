@@ -1596,6 +1596,18 @@ def test_router_prompt_classifies_competitor_counterpart_as_discovery_guidance()
         assert "vehicle/size recommendation" in prompt
 
 
+def test_router_prompt_mentions_oe_re_as_fresh_discovery_flow() -> None:
+    slim_prompt = prompt_router_slim()
+    assert "discovery:oe_re_concept_explanation" in slim_prompt
+    assert "discovery:oe_re_product_filter" in slim_prompt
+    assert "2454518 사이즈 OE 타이어 있어?" in slim_prompt
+    assert "recent-product-set" in slim_prompt
+
+    multi_prompt = prompt_router_multi()
+    assert "Do NOT use recent_product_set_size_availability for OE/RE/순정/교체용 questions" in multi_prompt
+    assert "2454518 사이즈 OE 타이어 있어?" in multi_prompt
+
+
 def test_competitor_counterpart_guidance_does_not_hijack_plain_competitor_search() -> None:
     frame = build_discovery_intent_frame("미쉐린 크로스클라이밋2 검색해줘")
     plan = plan_discovery_tools(frame)
@@ -1741,13 +1753,30 @@ def test_order_source_filter_keeps_vehicle_fields_for_reorder_matching_context()
 
 def test_owned_vehicle_selection_cta_does_not_retrigger_oe_guidance() -> None:
     context = "내 차 살 때 끼워져 있던 타이어랑 똑같은 거 있어?\n보유차량 중 선택"
+    latest_oe_quickreply = {"metadata": {"ctaContext": {"source_intent": "oe_replacement_guidance"}}}
 
     assert _is_owned_vehicle_selection_cta("보유차량 중 선택")
     assert _is_owned_vehicle_selection_cta("내 차로 찾기")
     assert _is_owned_vehicle_selection_cta("차량 정보로 찾기")
-    assert not _is_oe_replacement_context(context, "보유차량 중 선택")
-    assert not _is_oe_replacement_context(context, "내 차로 찾기")
-    assert _is_oe_replacement_context(context, "205소4214")
+    assert not _is_oe_replacement_context(context, "보유차량 중 선택", latest_oe_quickreply)
+    assert not _is_oe_replacement_context(context, "내 차로 찾기", latest_oe_quickreply)
+    assert _is_oe_replacement_context(context, "205소4214", latest_oe_quickreply)
+
+
+def test_oe_replacement_context_requires_explicit_turn_or_oe_cta_metadata() -> None:
+    context = "내 차 살 때 끼워져 있던 타이어랑 똑같은 거 있어?"
+
+    assert not _is_oe_replacement_context(context, "쿠폰 뭐 있어?")
+    assert not _is_oe_replacement_context(
+        context,
+        "205소4214",
+        {"metadata": {"ctaContext": {"intentKey": "today_install"}}},
+    )
+    assert _is_oe_replacement_context(
+        context,
+        "205소4214",
+        {"metadata": {"ctaContext": {"source_intent": "oe_replacement_guidance"}}},
+    )
 
 
 def test_owned_vehicle_selection_cta_is_detected_after_context_extraction() -> None:
@@ -1773,6 +1802,8 @@ def test_oe_replacement_guidance_explains_oe_re_before_vehicle_selection() -> No
     assert "RE는 교체용" in response
     assert "차량을 선택해 주시면" in response
     assert _labels(event["data"]["quickReplies"]) == ["보유차량 중 선택", "차번+이름으로 검색", "사이즈 직접 입력"]
+    assert event["data"]["metadata"]["ctaContext"]["source_intent"] == "oe_replacement_guidance"
+    assert event["data"]["metadata"]["ctaContext"]["expected_contract_intent"] == "oe_re_product_filter_summary"
 
 
 def test_oe_replacement_guidance_does_not_recommend_vehicle_products_immediately() -> None:
@@ -1814,6 +1845,7 @@ def test_oe_replacement_followup_reuses_confirmed_tire_size() -> None:
         "교체용 상품 추천",
         "내 차 제네시스 GV70이고 미쉐린 타이어 끼고 있었던 거 같은데, 동일한 상품 판매하고 있어?\n교체용 상품 추천",
         "235/55R19",
+        {"metadata": {"ctaContext": {"source_intent": "oe_replacement_guidance"}}},
     )
 
     assert args is not None
@@ -1826,6 +1858,7 @@ def test_oe_replacement_same_product_followup_prefers_context_brand() -> None:
         "동일 상품 찾기",
         "내 차 제네시스 GV70이고 미쉐린 타이어 끼고 있었던 거 같은데, 동일한 상품 판매하고 있어?\n동일 상품 찾기",
         "235/55R19",
+        {"metadata": {"ctaContext": {"source_intent": "oe_replacement_guidance"}}},
     )
 
     assert args is not None
@@ -1838,6 +1871,7 @@ def test_oe_replacement_same_product_without_brand_returns_none() -> None:
         "동일 상품 찾기",
         "내 차 제네시스 GV70인데 동일한 상품 판매하고 있어?\n동일 상품 찾기",
         "235/55R19",
+        {"metadata": {"ctaContext": {"source_intent": "oe_replacement_guidance"}}},
     )
 
     assert args is None
@@ -1860,6 +1894,17 @@ def test_oe_replacement_followup_does_not_fire_for_unrelated_question() -> None:
         "쿠폰 뭐 있어?",
         "내 차 제네시스 GV70이고 미쉐린 타이어 끼고 있었던 거 같은데, 동일한 상품 판매하고 있어?\n쿠폰 뭐 있어?",
         "235/55R19",
+    )
+
+    assert args is None
+
+
+def test_oe_replacement_followup_requires_oe_quickreply_metadata_for_label_only_turn() -> None:
+    args = _build_oe_replacement_followup_recommendation_args(
+        "교체용 상품 추천",
+        "내 차 제네시스 GV70이고 미쉐린 타이어 끼고 있었던 거 같은데, 동일한 상품 판매하고 있어?\n교체용 상품 추천",
+        "235/55R19",
+        {"metadata": {"ctaContext": {"intentKey": "today_install"}}},
     )
 
     assert args is None

@@ -2346,9 +2346,11 @@ Also set `policy_intent`:
 - signup/new-member/welcome coupon guidance ("회원가입 전용 쿠폰 있어?", "신규회원 쿠폰 있어?", "가입하면 쿠폰 줘?", "웰컴 쿠폰 있나요?") → SUPPORT, policy_intent=`signup_coupon_guidance`; this is signup coupon guidance, not partner-member coupon policy and not owned coupon lookup.
 - partner-member-only coupon guidance ("제휴회원에게만 제공되는 쿠폰 보여줘", "제휴사 회원 전용 쿠폰 있어?", "복지몰 쿠폰 보여줘", "임직원 전용 쿠폰 안내해줘") → SUPPORT, policy_intent=`partner_member_coupon_policy`; this is access/policy guidance, not owned coupon lookup, coupon issuance, or coupon box listing.
 - T-Station store/service complaint mixed with legal action request (고소/소송/법적 대응/내용증명/분쟁조정/신고 방법) → SUPPORT, policy_intent=`legal_action_guidance_denied`; do not explain legal steps, institutions, documents, or procedures.
+- OE/RE concept or factory-tire equivalence/replacement turns ("OE랑 RE 차이가 뭐야?", "순정 타이어가 뭐야?", "출고 때 끼워진 거랑 같은 타이어 있어?", "순정이랑 비슷한 교체용 추천해줘", "2454518 사이즈 OE 타이어 있어?") → DISCOVERY, execution_plan=`discovery:oe_re_concept_explanation` for explanation turns or `discovery:oe_re_product_filter` when the current turn includes tire size/product/brand for lookup/filter. This is a fresh current-turn Discovery flow, not a recent product-list follow-up.
 - current event/benefit/deal list lookup ("이벤트 혜택 알려줘", "지금 받을 수 있는 혜택 알려줘", "기획전 알려줘") → DISCOVERY, agent_prompt_profile=`discovery_event_content`, execution_plan=`discovery:benefit_event_list_lookup` or `discovery:benefit_deal_list`
 - automatic price/coupon/event notification request ("가격 내려가면 알려줘", "쿠폰 이벤트 생기면 알림 줘", "문자 줘", "연락 줘") → TRANSACTION, execution_plan=`transaction:price_or_benefit_alert_request`; this is not a current event list lookup.
 - competitor product to Hankook lineup orientation ("미쉐린 크로스클라이밋2에 대응하는 한국타이어 라인업 알려줘", "CC2랑 비슷한 한타 뭐야") → DISCOVERY, agent_prompt_profile=`discovery_search`, execution_plan=`discovery:competitor_counterpart_guidance`; this is an informational answer, not vehicle/size recommendation or Transaction.
+- OE/RE explanation or factory-tire equivalence/replacement turns ("OE랑 RE 차이가 뭐야?", "순정 타이어가 뭐야?", "출고 때 끼워진 거랑 같은 타이어 있어?", "순정이랑 비슷한 교체용 추천해줘", "2454518 사이즈 OE 타이어 있어?") → DISCOVERY. Use `discovery:oe_re_concept_explanation` for concept/explanation turns and `discovery:oe_re_product_filter` when the current turn includes tire size, product, or brand to filter/lookup. Treat this as a fresh current-turn Discovery flow, not as a recent-product-set size follow-up and not as vehicle-information/store/order flow.
 - cancellation/return fee inquiry ("예약 취소에 따른 위약금이 있는지 알려줘", "예약 취소하면 비용이 발생하나요?", "오늘 취소하면 수수료 있나요?") → TRANSACTION, agent_prompt_profile=`transaction_order`, execution_plan=`transaction:order_cancel_fee_inquiry`; this is a fee/condition inquiry, not an order_cancel_request. Downstream policy must keep generic fee questions without owned-record anchors in FAQ/RAG contract and only allow order/reservation lookup when the turn specifies an owned order/reservation.
 - cancellation execution request ("예약 취소해줘", "주문 취소 처리해줘") → TRANSACTION, agent_prompt_profile=`transaction_order`, execution_plan=`transaction:order_cancel_request`.
 - 지역+서비스 조건 매장 검색 (경기권에 타이어 보관해주는 매장 어디 있어?, 청주에 타이어 보관서비스 가능한 매장 있어?, 경기권 얼라인먼트 가능한 매장 알려줘) → TRANSACTION, policy_intent=`store_service_search`, execution_plan=`transaction:store_service_search`
@@ -7416,8 +7418,40 @@ def _is_owned_vehicle_selection_cta(user_text: str | None) -> bool:
     return bool(_OWNED_VEHICLE_SELECTION_CTA_RE.match(user_text or ""))
 
 
-def _is_oe_replacement_context(context_text: str | None, current_text: str | None) -> bool:
-    return _is_oe_replacement_equivalent_query(context_text) and not _is_owned_vehicle_selection_cta(current_text)
+def _oe_replacement_cta_context() -> dict[str, str]:
+    return {
+        "intentKey": "oe_replacement",
+        "source_intent": "oe_replacement_guidance",
+        "expected_contract_intent": "oe_re_product_filter_summary",
+    }
+
+
+def _is_oe_replacement_cta_context(value: Mapping[str, Any] | None) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    source_intent = str(value.get("source_intent") or "").strip()
+    expected_contract_intent = str(value.get("expected_contract_intent") or "").strip()
+    return source_intent == "oe_replacement_guidance" or expected_contract_intent in {
+        "oe_re_product_filter_summary",
+        "oe_re_concept_explanation",
+    }
+
+
+def _is_oe_replacement_context(
+    context_text: str | None,
+    current_text: str | None,
+    latest_quickreply_tmpl: dict | None = None,
+) -> bool:
+    if _is_oe_replacement_equivalent_query(current_text):
+        return True
+    if _is_owned_vehicle_selection_cta(current_text):
+        return False
+    if not _is_oe_replacement_equivalent_query(context_text):
+        return False
+    cta_context = _quickreply_cta_context_from_template(latest_quickreply_tmpl)
+    if not _is_oe_replacement_cta_context(cta_context):
+        return False
+    return _is_oe_replacement_followup_query(current_text) or bool(_extract_vehicle_plate_from_text(current_text))
 
 
 def _should_force_best_seller_code_route(user_text: str | None, domains: list[MultiAgentDomain.Domain]) -> bool:
@@ -7459,11 +7493,12 @@ def _should_reuse_vehicle_slots_for_oe_followup(
     recent_context_text: str | None,
     current_text: str | None,
     tire_size: str | None,
+    latest_quickreply_tmpl: dict | None = None,
 ) -> bool:
     text = current_text or ""
     if not tire_size:
         return False
-    if not _is_oe_replacement_context(recent_context_text, current_text):
+    if not _is_oe_replacement_context(recent_context_text, current_text, latest_quickreply_tmpl):
         return False
     if not _is_oe_replacement_followup_query(text):
         return False
@@ -7478,8 +7513,14 @@ def _build_oe_replacement_followup_recommendation_args(
     current_text: str,
     recent_context_text: str,
     tire_size: str | None,
+    latest_quickreply_tmpl: dict | None = None,
 ) -> dict[str, Any] | None:
-    if not _should_reuse_vehicle_slots_for_oe_followup(recent_context_text, current_text, tire_size):
+    if not _should_reuse_vehicle_slots_for_oe_followup(
+        recent_context_text,
+        current_text,
+        tire_size,
+        latest_quickreply_tmpl,
+    ):
         return None
 
     tool_input: dict[str, Any] = {
@@ -7509,8 +7550,14 @@ def _build_oe_replacement_same_product_search_args(
     current_text: str,
     recent_context_text: str,
     tire_size: str | None,
+    latest_quickreply_tmpl: dict | None = None,
 ) -> dict[str, Any] | None:
-    if not _should_reuse_vehicle_slots_for_oe_followup(recent_context_text, current_text, tire_size):
+    if not _should_reuse_vehicle_slots_for_oe_followup(
+        recent_context_text,
+        current_text,
+        tire_size,
+        latest_quickreply_tmpl,
+    ):
         return None
     if not re.search(r"동일(?:한)?\s*상품|같은\s*상품", current_text, re.IGNORECASE):
         return None
@@ -7582,22 +7629,23 @@ def _build_oe_replacement_guidance_event(
     else:
         lines.append("동일 OE 상품 확인이 어려운 경우에는 같은 규격의 주력 교체용 상품을 대안으로 안내드릴게요.")
 
+    cta_context = _oe_replacement_cta_context()
     quick_replies = [
-        {"label": "차량 선택해서 찾기", "domain": "DISCOVERY"},
-        {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
-        {"label": "교체용 상품 추천", "domain": "DISCOVERY"},
+        {"label": "차량 선택해서 찾기", "domain": "DISCOVERY", "intentKey": "oe_replacement", "metadata": cta_context},
+        {"label": "사이즈 직접 입력", "domain": "DISCOVERY", "intentKey": "oe_replacement", "metadata": cta_context},
+        {"label": "교체용 상품 추천", "domain": "DISCOVERY", "intentKey": "oe_replacement", "metadata": cta_context},
     ]
     if selected_vehicle is not None:
         quick_replies = [
-            {"label": "동일 상품 찾기", "domain": "DISCOVERY"},
-            {"label": "교체용 상품 추천", "domain": "DISCOVERY"},
-            {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
+            {"label": "동일 상품 찾기", "domain": "DISCOVERY", "intentKey": "oe_replacement", "metadata": cta_context},
+            {"label": "교체용 상품 추천", "domain": "DISCOVERY", "intentKey": "oe_replacement", "metadata": cta_context},
+            {"label": "사이즈 직접 입력", "domain": "DISCOVERY", "intentKey": "oe_replacement", "metadata": cta_context},
         ]
     elif include_vehicle_selection:
         quick_replies = [
-            {"label": "보유차량 중 선택", "domain": "DISCOVERY"},
-            {"label": "차번+이름으로 검색", "domain": "DISCOVERY"},
-            {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
+            {"label": "보유차량 중 선택", "domain": "DISCOVERY", "intentKey": "oe_replacement", "metadata": cta_context},
+            {"label": "차번+이름으로 검색", "domain": "DISCOVERY", "intentKey": "oe_replacement", "metadata": cta_context},
+            {"label": "사이즈 직접 입력", "domain": "DISCOVERY", "intentKey": "oe_replacement", "metadata": cta_context},
         ]
 
     return {
@@ -7609,6 +7657,7 @@ def _build_oe_replacement_guidance_event(
             "assistantResponse": "\n".join(lines),
             "quickReplies": quick_replies,
             "predictedDomains": ["DISCOVERY"],
+            "metadata": {"ctaContext": cta_context, "response_shape_key": "oe_re_concept_explanation"},
         },
     }
 
@@ -27432,6 +27481,7 @@ class TStationChatServiceV2:
                     recent_user_context_text,
                     user_query,
                     confirmed_tire_size,
+                    latest_quickreply_tmpl,
                 )
                 and re.search(r"동일(?:한)?\s*상품|같은\s*상품", user_query, re.IGNORECASE)
                 and _oe_replacement_followup_brand_cd(user_query, recent_user_context_text) is None
@@ -27449,6 +27499,7 @@ class TStationChatServiceV2:
                 user_query,
                 recent_user_context_text,
                 confirmed_tire_size,
+                latest_quickreply_tmpl,
             )
             if same_product_search_input is not None:
                 gate_allowed, gate_reason = _direct_code_fast_path_contract_gate(
@@ -27531,6 +27582,7 @@ class TStationChatServiceV2:
                 user_query,
                 recent_user_context_text,
                 confirmed_tire_size,
+                latest_quickreply_tmpl,
             )
             if followup_input is None:
                 return None
@@ -29611,7 +29663,7 @@ class TStationChatServiceV2:
                 )
                 return ([], finalized_event) if finalized_event is not None else ([], None)
 
-            if _is_oe_replacement_context(recent_user_context_text, user_query):
+            if _is_oe_replacement_context(recent_user_context_text, user_query, latest_quickreply_tmpl):
                 guidance_event = _finalize_direct_code_event(
                     _build_oe_replacement_guidance_event(selected, user_query),
                     turn_contract=turn_contract,
@@ -31953,7 +32005,7 @@ class TStationChatServiceV2:
                         last_template_source = "code_mapper"
                         last_assistant_response_source = "code_vehicle_auto_select"
                         event_data = event.get("data", {})
-                    elif _is_oe_replacement_context(recent_user_context_text, user_query):
+                    elif _is_oe_replacement_context(recent_user_context_text, user_query, latest_quickreply_tmpl):
                         event, coercion_allowed = _finalize_coerced_template_event(
                             _build_oe_replacement_guidance_event(
                                 None,
