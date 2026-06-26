@@ -1959,6 +1959,69 @@ class BaseAgent(ABC):
             metadata["forbidden_tools"] = list(forbidden_tools)
         return event
 
+    def _blocked_contract_tool_guard_events(
+        self,
+        *,
+        tool_name: str,
+        contract_intent: str,
+        allowed_tools: tuple[str, ...],
+        forbidden_tools: tuple[str, ...],
+        required_slots: tuple[str, ...],
+        response_decision: Any,
+        block_reason: str,
+        response_streamer: "_AssistantResponseStreamer | None",
+        answering_emitted: bool,
+    ) -> list[dict] | None:
+        try:
+            from services.tstation.policies.turn_contract import (
+                TurnContract,
+                build_required_slot_clarification_event,
+                build_response_policy_guard_event,
+            )
+        except Exception:
+            return None
+
+        domain = "support" if "support" in str(self.name or "").lower() else "transaction"
+        known_slots: dict[str, Any] = {}
+        if required_slots:
+            if "product" in required_slots or "goods_no" in required_slots or "product_set" in required_slots:
+                known_slots["pending_intent"] = "price"
+                known_slots["goal_type"] = "price_inquiry"
+            elif "order" in required_slots:
+                known_slots["pending_intent"] = "order"
+                known_slots["goal_type"] = "place_order"
+            elif "store" in required_slots or "location" in required_slots:
+                known_slots["pending_intent"] = "stock"
+                known_slots["goal_type"] = "store_with_stock"
+
+        contract = TurnContract(
+            domain=domain,
+            intent=contract_intent or "contract_tool_guard",
+            known_slots=known_slots,
+            required_slots=required_slots,
+            allowed_tools=allowed_tools,
+            forbidden_tools=forbidden_tools,
+            response_decision=response_decision.to_dict() if hasattr(response_decision, "to_dict") else {},
+            action_mode="support_policy_answer" if domain == "support" else "unspecified",
+            context_state="dormant",
+        )
+        guard_event = (
+            build_required_slot_clarification_event(contract)
+            if required_slots
+            else build_response_policy_guard_event(contract)
+        )
+        guard_event = self._annotate_contract_tool_block(
+            guard_event,
+            blocked_tool=tool_name,
+            replacement_tool=None,
+            contract_intent=contract_intent or "contract_tool_guard",
+            allowed_tools=allowed_tools,
+            forbidden_tools=forbidden_tools,
+            block_reason=block_reason,
+        )
+        guard_event["assistant_response_source"] = "code_contract_tool_guard"
+        return [*self._code_template_events(guard_event, response_streamer, answering_emitted)]
+
     def _contract_sensitive_tool_guard_events(
         self,
         tool_name: str,
@@ -1987,7 +2050,8 @@ class BaseAgent(ABC):
         preferred_tool = str(getattr(tool_plan, "preferred_tool", None) or "")
         metadata = getattr(tool_plan, "metadata", None) or {}
         contract_intent = str(metadata.get("response_intent") or "")
-        if not forbidden_tools or preferred_tool != "search_faq_hybrid_tool":
+        required_slots = tuple(getattr(tool_plan, "required_slots", ()) or getattr(decision, "required_slots", ()) or ())
+        if not forbidden_tools and not allowed_tools:
             return None
 
         block_reason = ""
@@ -1997,6 +2061,19 @@ class BaseAgent(ABC):
             block_reason = "tool_not_allowed_for_contract"
         if not block_reason:
             return None
+
+        if preferred_tool != "search_faq_hybrid_tool":
+            return self._blocked_contract_tool_guard_events(
+                tool_name=tool_name,
+                contract_intent=contract_intent,
+                allowed_tools=allowed_tools,
+                forbidden_tools=forbidden_tools,
+                required_slots=required_slots,
+                response_decision=decision,
+                block_reason=block_reason,
+                response_streamer=response_streamer,
+                answering_emitted=answering_emitted,
+            )
 
         user_query = _latest_user_text(messages or [])
         logger.info(
@@ -2047,9 +2124,29 @@ class BaseAgent(ABC):
                 tool_result=tool_result,
             )
         else:
-            return None
+            return self._blocked_contract_tool_guard_events(
+                tool_name=tool_name,
+                contract_intent=contract_intent,
+                allowed_tools=allowed_tools,
+                forbidden_tools=forbidden_tools,
+                required_slots=required_slots,
+                response_decision=decision,
+                block_reason=block_reason,
+                response_streamer=response_streamer,
+                answering_emitted=answering_emitted,
+            )
         if not isinstance(code_event, dict):
-            return None
+            return self._blocked_contract_tool_guard_events(
+                tool_name=tool_name,
+                contract_intent=contract_intent,
+                allowed_tools=allowed_tools,
+                forbidden_tools=forbidden_tools,
+                required_slots=required_slots,
+                response_decision=decision,
+                block_reason=block_reason,
+                response_streamer=response_streamer,
+                answering_emitted=answering_emitted,
+            )
         code_event = self._annotate_contract_tool_block(
             code_event,
             blocked_tool=tool_name,
