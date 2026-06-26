@@ -385,6 +385,11 @@ from services.tstation.policies.turn_contract import (
     violates_response_template_contract,
     warning_contract_violations,
 )
+from services.tstation.policies.ui_action_policy import (
+    apply_ui_action_slot_patch,
+    resolve_ui_action_context,
+    validate_ui_actions_for_contract,
+)
 from services.tstation.policies.pickup_service_gate import deterministic_pickup_service_gate_decision
 from services.tstation.policies.store_service_gate import (
     classify_store_name_role,
@@ -2731,7 +2736,7 @@ def test_general_cancel_fee_policy_allows_faq_only_trace_shaped_response_without
         called_tools=["search_faq_hybrid_tool"],
         structured_sources=[("search_faq_hybrid_tool", faq_source)],
         assistant_response_text=(
-            "FAQ 기준으로는 매장 방문 예약만 취소하는 경우 별도 취소 수수료는 없고, "
+            "매장 방문 예약만 취소하는 경우 별도 취소 수수료는 없고, "
             "주문이나 배송 진행 상태에 따라 비용 여부가 달라질 수 있습니다."
         ),
         response_shape_key="general_cancel_fee_policy_summary",
@@ -2761,7 +2766,7 @@ def test_general_cancel_fee_policy_faq_only_response_has_no_qc_mismatch() -> Non
     ]
 
     mismatches = qc_verifier.verify_draft(
-        "FAQ 기준으로는 매장 방문 예약만 취소하는 경우 별도 취소 수수료는 없고, 주문이나 배송 진행 상태에 따라 비용 여부가 달라질 수 있습니다.",
+        "매장 방문 예약만 취소하는 경우 별도 취소 수수료는 없고, 주문이나 배송 진행 상태에 따라 비용 여부가 달라질 수 있습니다.",
         source,
     )
 
@@ -2931,7 +2936,7 @@ def test_general_card_cancel_timing_policy_allows_faq_only_response_without_hard
         called_tools=["search_faq_hybrid_tool"],
         structured_sources=[("search_faq_hybrid_tool", faq_source)],
         assistant_response_text=(
-            "FAQ 기준으로 카드 승인취소나 환불 반영 시점은 카드사와 결제수단에 따라 달라질 수 있고, "
+            "카드 승인취소나 환불 반영 시점은 카드사와 결제수단에 따라 달라질 수 있고, "
             "보통 영업일 기준 며칠 정도 소요될 수 있습니다."
         ),
         response_shape_key="general_card_cancel_timing_policy",
@@ -11300,6 +11305,72 @@ def test_vehicle_size_guidance_event_carries_selected_vehicle_cta_metadata() -> 
     assert primary_chip["expected_contract_intent"] == "product_recommendation"
     assert primary_chip["metadata"]["car_no"] == "14다5499"
     assert primary_chip["metadata"]["tire_size"] == "225/55R18"
+    assert event["data"]["metadata"]["responseShapeKey"] == "vehicle_tire_size_lookup"
+
+
+def test_vehicle_selection_ui_action_context_rewrites_trace_and_slots() -> None:
+    slots = ConversationSlots(car_no="61거1836", tire_size="225/45R17")
+    selected_vehicle = {
+        "car": {"licensePlate": "14다5499"},
+        "meta": {
+            "carNo": "14다5499",
+            "carLncCd": "W099999",
+            "mbrCarRegSeq": "2000004000",
+            "tireSize": "225/55R18",
+            "tireSizeRe": "225/55R18",
+            "carType": "SUV",
+        },
+        "selection_context": {
+            "source_intent": "vehicle_tire_size_lookup",
+            "expected_contract_intent": "vehicle_tire_size_lookup",
+        },
+    }
+
+    action_context = resolve_ui_action_context(
+        selected_vehicle=selected_vehicle,
+        selection_source="chip_context",
+        previous_slots={"car_no": slots.car_no, "tire_size": slots.tire_size},
+        slot_patch=_vehicle_selection_slot_values(selected_vehicle),
+    )
+
+    assert action_context is not None
+    patched_slots, trace_metadata = apply_ui_action_slot_patch(
+        slots,
+        action_context,
+        slot_apply_fn=_apply_vehicle_selection_slot_values,
+    )
+
+    assert patched_slots.car_no == "14다5499"
+    assert patched_slots.tire_size == "225/55R18"
+    assert trace_metadata["vehicle_selection_detected"] is True
+    assert trace_metadata["selection_source"] == "chip_context"
+    assert trace_metadata["contract_intent_before_router"] == "vehicle_tire_size_lookup"
+    assert trace_metadata["final_contract_intent"] == "vehicle_tire_size_lookup"
+    assert trace_metadata["slots_rewritten"] is True
+
+
+def test_vehicle_tire_size_lookup_ui_action_validation_blocks_store_and_purchase_chips() -> None:
+    event = {
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": "61거1836 차량의 타이어 사이즈는 225/45R17입니다.",
+            "quickReplies": [
+                {"label": "이 사이즈로 타이어 보기", "cta_action": "search_products_by_selected_vehicle_size"},
+                {"label": "매장 찾기"},
+                {"label": "구매하기"},
+                {"label": "사이즈 직접 입력"},
+            ],
+            "metadata": {"responseShapeKey": "vehicle_tire_size_lookup"},
+        },
+    }
+
+    changed = validate_ui_actions_for_contract(event)
+
+    assert changed is True
+    assert [chip["label"] for chip in event["data"]["quickReplies"]] == [
+        "이 사이즈로 타이어 보기",
+        "사이즈 직접 입력",
+    ]
 
 
 def test_history_vehicle_selection_does_not_match_product_name_substring_to_vehicle() -> None:
@@ -16509,7 +16580,7 @@ def test_tire_manufacture_date_policy_allows_source_backed_conditional_exchange_
         called_tools=["search_faq_hybrid_tool"],
         structured_sources=[("search_faq_hybrid_tool", faq_source)],
         assistant_response_text=(
-            "FAQ 기준으로 제조일자 6~12개월 이내 제품은 정상 신품으로 안내돼요. "
+            "제조일자 6~12개월 이내 제품은 정상 신품으로 안내돼요. "
             "교환 가능 여부 확인은 점검 기준에 따라 달라질 수 있어요."
         ),
         contract=contract,
@@ -20717,7 +20788,7 @@ def test_general_cancel_fee_policy_event_prefers_faq_source_summary_when_availab
     event = _build_general_cancel_fee_policy_event("예약 취소하면 비용 발생해?", tool_result=tool_result)
     response = str(event["data"]["assistantResponse"])
 
-    assert "확인된 FAQ 기준으로는" in response
+    assert "확인된 FAQ 기준으로는" not in response
     assert "별도의 취소 수수료는 없으며" in response
     assert event["data"]["metadata"]["faqSourceSummaryUsed"] is True
 
@@ -20742,7 +20813,7 @@ def test_general_card_cancel_timing_policy_event_prefers_faq_source_summary_when
     )
     response = str(event["data"]["assistantResponse"])
 
-    assert "확인된 FAQ 기준으로는" in response
+    assert "확인된 FAQ 기준으로는" not in response
     assert "영업일 기준 수일이 소요될 수 있습니다." in response
     assert event["data"]["metadata"]["faqSourceSummaryUsed"] is True
 
@@ -20769,7 +20840,7 @@ def test_support_faq_policy_event_prefers_faq_source_summary_when_available() ->
 
     assert event is not None
     response = str(event["data"]["assistantResponse"])
-    assert "확인된 FAQ 기준으로는" in response
+    assert "확인된 FAQ 기준으로는" not in response
     assert "6~12개월 이내 제품은 정상 신품 범주" in response
     assert event["source_domain"] == "support"
     assert event["data"]["metadata"]["faqSourceSummaryUsed"] is True

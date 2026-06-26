@@ -109,6 +109,12 @@ from services.tstation.policies.delivery_policy_gate import (
 )
 from services.tstation.policies.intent_frame import IntentFrame, PolicyDomain
 from services.tstation.policies.pickup_service_gate import decide_pickup_service_gate
+from services.tstation.policies.ui_action_policy import (
+    UIActionContext,
+    apply_ui_action_slot_patch,
+    resolve_ui_action_context,
+    validate_ui_actions_for_contract,
+)
 from services.tstation.policies.store_confirmation_policy import (
     is_store_confirmation_reply,
     is_store_confirmation_prompt,
@@ -6865,7 +6871,7 @@ def _build_general_cancel_fee_policy_event(user_query: str, *, tool_result: dict
     source_summary = _faq_policy_source_summary_text(tool_result)
     if source_summary:
         assistant_response = (
-            f"확인된 FAQ 기준으로는 {source_summary}\n\n"
+            f"{source_summary}\n\n"
             "구체적인 취소 비용 발생 여부는 주문/예약 유형과 진행 상태에 따라 달라질 수 있으니, 실제 취소 전에는 주문내역에서도 함께 확인해 주세요."
         )
     else:
@@ -6900,7 +6906,7 @@ def _build_general_card_cancel_timing_policy_event(user_query: str, *, tool_resu
     source_summary = _faq_policy_source_summary_text(tool_result)
     if source_summary:
         assistant_response = (
-            f"확인된 FAQ 기준으로는 {source_summary}\n\n"
+            f"{source_summary}\n\n"
             "정확한 반영 여부는 카드사 승인내역이나 주문내역에서 함께 확인해 주세요."
         )
     else:
@@ -6973,7 +6979,7 @@ def _build_support_faq_policy_event(
             {"label": "처음으로", "domain": "LEADING"},
         ]
     if source_summary:
-        assistant_response = f"확인된 FAQ 기준으로는 {source_summary}\n\n{followup_by_intent[intent]}"
+        assistant_response = f"{source_summary}\n\n{followup_by_intent[intent]}"
     else:
         assistant_response = fallback_by_intent[intent]
     return {
@@ -7082,23 +7088,16 @@ def _build_vehicle_size_guidance_event(selected_vehicle: dict) -> dict | None:
     selection_context = selected_vehicle.get("selection_context") or {}
     front_size = str(selected_meta.get("tireSize") or "").strip()
     rear_size = str(selected_meta.get("tireSizeRe") or "").strip()
-    car_info = str(selected_car.get("info") or selected_car.get("description") or "선택하신 차량").strip()
     car_no = str(selected_meta.get("carNo") or selected_car.get("licensePlate") or "").strip()
     if not front_size and not rear_size:
         return None
 
     selected_size = ""
     if front_size and rear_size and front_size != rear_size:
-        response = (
-            f"**{car_no}** 차량의 타이어 사이즈는 전륜 **{front_size}**, 후륜 **{rear_size}**입니다.\n\n"
-            "앞뒤 규격이 다르면 한 가지 사이즈만 보면 안 되고, 전륜용 2개와 후륜용 2개를 각각 맞는 규격으로 확인해야 해요."
-        )
+        response = f"{car_no} 차량의 타이어 사이즈는 전륜 {front_size}, 후륜 {rear_size}입니다."
     else:
         selected_size = front_size or rear_size
-        response = (
-            f"**{car_no}** 차량의 타이어 사이즈는 **{selected_size}**입니다.\n\n"
-            f"{car_info} 차량은 전/후륜 동일 규격이에요."
-        )
+        response = f"{car_no} 차량의 타이어 사이즈는 {selected_size}입니다."
 
     quick_replies = [
         {
@@ -7122,15 +7121,18 @@ def _build_vehicle_size_guidance_event(selected_vehicle: dict) -> dict | None:
         "type": "data",
         "template": "quickReply",
         "source_domain": MultiAgentDomain.Domain.DISCOVERY.value,
-        "assistant_response_source": "code_vehicle_auto_select",
+        "assistant_response_source": "code_vehicle_tire_size_lookup",
         "data": {
             "assistantResponse": response,
             "quickReplies": quick_replies,
             "predictedDomains": ["DISCOVERY"],
             "metadata": {
-                "responseShapeKey": "vehicle_information",
+                "responseShapeKey": "vehicle_tire_size_lookup",
+                "response_shape_key": "vehicle_tire_size_lookup",
                 "selectedCarNo": car_no,
+                "selected_car_no": car_no,
                 "selectedTireSize": selected_size or front_size or rear_size,
+                "selected_tire_size": selected_size or front_size or rear_size,
             },
         },
     }
@@ -16105,7 +16107,7 @@ def _build_faq_policy_source_grounded_fallback_event(
     if len(source_summary) > 260:
         source_summary = f"{source_summary[:257].rstrip()}..."
     assistant_response = (
-        f"확인된 FAQ 기준으로는 {source_summary}\n\n"
+        f"{source_summary}\n\n"
         "따라서 교환, 환불, 보상 가능 여부는 FAQ 기준과 실제 점검 결과에 따라 확인해야 해요."
     )
     return {
@@ -21262,7 +21264,7 @@ class TStationChatServiceV2:
         selection_context = selected_vehicle.get("selection_context") or {}
         source_intent = str(selection_context.get("source_intent") or "").strip()
         expected_contract_intent = str(selection_context.get("expected_contract_intent") or "").strip()
-        return source_intent == "vehicle_tire_size_lookup" or expected_contract_intent == "vehicle_information"
+        return source_intent == "vehicle_tire_size_lookup" or expected_contract_intent == "vehicle_tire_size_lookup"
 
     @staticmethod
     def _resolve_recent_product_search_keyword(prev_tool_data: list[dict]) -> str | None:
@@ -21990,6 +21992,7 @@ class TStationChatServiceV2:
         latest_datepick_tmpl: dict | None = None
         latest_quickreply_tmpl: dict | None = None
         latest_preorder_tmpl: dict | None = None
+        vehicle_ui_action_context: UIActionContext | None = None
         vehicle_selection_trace_metadata: dict[str, Any] = {
             "vehicle_selection_detected": False,
             "selection_source": None,
@@ -21999,6 +22002,7 @@ class TStationChatServiceV2:
             "previous_tire_size": None,
             "slots_rewritten": False,
             "contract_intent_before_router": None,
+            "final_contract_intent": None,
         }
         for msg in reversed(request.messages):
             if msg.get("role") == "user":
@@ -22063,27 +22067,33 @@ class TStationChatServiceV2:
             logger.debug(f"[CHAT_V2] Messages: {json.dumps(messages, ensure_ascii=False, separators=(',', ':'))}")
 
             if chip_selected_vehicle is not None:
-                vehicle_selection_trace_metadata.update({
-                    "vehicle_selection_detected": True,
-                    "selection_source": "chip_context",
-                    "selected_car_no": str((chip_selected_vehicle.get("meta") or {}).get("carNo") or ""),
-                    "selected_tire_size": str(
-                        normalize_tire_size(str((chip_selected_vehicle.get("meta") or {}).get("tireSize") or ""))
-                        or normalize_tire_size(str((chip_selected_vehicle.get("meta") or {}).get("tireSizeRe") or ""))
-                        or ""
-                    ),
-                    "previous_car_no": str(getattr(existing_slots, "car_no", None) or ""),
-                    "previous_tire_size": str(getattr(existing_slots, "tire_size", None) or ""),
-                    "contract_intent_before_router": "vehicle_candidate_selected",
-                })
                 rewritten_vehicle_text = TStationChatServiceV2._rewrite_vehicle_selection_user_text(
                     last_user_text,
                     chip_selected_vehicle,
                 )
                 vehicle_slot_values = _vehicle_selection_slot_values(chip_selected_vehicle)
+                vehicle_ui_action_context = resolve_ui_action_context(
+                    selected_vehicle=chip_selected_vehicle,
+                    selection_source="chip_context",
+                    previous_slots={
+                        "car_no": getattr(existing_slots, "car_no", None),
+                        "tire_size": getattr(existing_slots, "tire_size", None),
+                    },
+                    slot_patch=vehicle_slot_values,
+                )
+                if vehicle_ui_action_context is not None:
+                    vehicle_selection_trace_metadata.update(dict(vehicle_ui_action_context.trace_metadata))
                 if vehicle_slot_values:
-                    existing_slots = _apply_vehicle_selection_slot_values(existing_slots, vehicle_slot_values)
-                    vehicle_selection_trace_metadata["slots_rewritten"] = True
+                    if vehicle_ui_action_context is not None:
+                        existing_slots, slot_trace_metadata = apply_ui_action_slot_patch(
+                            existing_slots,
+                            vehicle_ui_action_context,
+                            slot_apply_fn=_apply_vehicle_selection_slot_values,
+                        )
+                        vehicle_selection_trace_metadata.update(slot_trace_metadata)
+                    else:
+                        existing_slots = _apply_vehicle_selection_slot_values(existing_slots, vehicle_slot_values)
+                        vehicle_selection_trace_metadata["slots_rewritten"] = True
                     logger.info(
                         "[VEHICLE_SELECTION] applied chip-selected vehicle slots before routing: %s",
                         vehicle_slot_values,
@@ -23395,26 +23405,31 @@ class TStationChatServiceV2:
                 except Exception as e:
                     logger.warning(f"[SLOTS] history vehicle resolver failed: {e}")
             if history_selected_vehicle is not None:
-                if not vehicle_selection_trace_metadata.get("vehicle_selection_detected"):
-                    selected_meta = history_selected_vehicle.get("meta") or {}
-                    vehicle_selection_trace_metadata.update({
-                        "vehicle_selection_detected": True,
-                        "selection_source": "previous_listCar_candidate",
-                        "selected_car_no": str(selected_meta.get("carNo") or ""),
-                        "selected_tire_size": str(
-                            normalize_tire_size(str(selected_meta.get("tireSize") or ""))
-                            or normalize_tire_size(str(selected_meta.get("tireSizeRe") or ""))
-                            or ""
-                        ),
-                        "previous_car_no": str(getattr(merged_slots, "car_no", None) or ""),
-                        "previous_tire_size": str(getattr(merged_slots, "tire_size", None) or ""),
-                        "contract_intent_before_router": "vehicle_candidate_selected",
-                    })
                 previous_tire_size = merged_slots.tire_size
                 vehicle_slot_values = _vehicle_selection_slot_values(history_selected_vehicle)
+                if vehicle_ui_action_context is None:
+                    vehicle_ui_action_context = resolve_ui_action_context(
+                        selected_vehicle=history_selected_vehicle,
+                        selection_source="previous_listCar_candidate",
+                        previous_slots={
+                            "car_no": getattr(merged_slots, "car_no", None),
+                            "tire_size": getattr(merged_slots, "tire_size", None),
+                        },
+                        slot_patch=vehicle_slot_values,
+                    )
+                if vehicle_ui_action_context is not None:
+                    vehicle_selection_trace_metadata.update(dict(vehicle_ui_action_context.trace_metadata))
                 if vehicle_slot_values:
-                    merged_slots = _apply_vehicle_selection_slot_values(merged_slots, vehicle_slot_values)
-                    vehicle_selection_trace_metadata["slots_rewritten"] = True
+                    if vehicle_ui_action_context is not None:
+                        merged_slots, slot_trace_metadata = apply_ui_action_slot_patch(
+                            merged_slots,
+                            vehicle_ui_action_context,
+                            slot_apply_fn=_apply_vehicle_selection_slot_values,
+                        )
+                        vehicle_selection_trace_metadata.update(slot_trace_metadata)
+                    else:
+                        merged_slots = _apply_vehicle_selection_slot_values(merged_slots, vehicle_slot_values)
+                        vehicle_selection_trace_metadata["slots_rewritten"] = True
                     selected_tire_size = vehicle_slot_values.get("tire_size")
                     if selected_tire_size and previous_tire_size != selected_tire_size:
                         tire_size_resolved_from_vehicle_selection = True
@@ -25315,6 +25330,14 @@ class TStationChatServiceV2:
                     router_source=router_source_for_contract,
                     contract_source=contract_source_for_turn,
                     speculative_used_for_contract=speculative_used_for_contract,
+                )
+            if vehicle_ui_action_context is not None:
+                vehicle_selection_trace_metadata["final_contract_intent"] = (
+                    vehicle_ui_action_context.contract_intent
+                )
+            elif turn_contract is not None:
+                vehicle_selection_trace_metadata["final_contract_intent"] = (
+                    str(turn_contract.sub_intent or turn_contract.intent or "").strip() or None
                 )
             logger.info("[TURN_CONTRACT] %s", turn_contract.to_dict() if turn_contract else None)
             if turn_contract and turn_contract.contract_drift:
@@ -30113,7 +30136,7 @@ class TStationChatServiceV2:
                         "vehicle_resolved_recommendation",
                         "catalog_recommendation",
                         "product_search_summary",
-                        "vehicle_information",
+                        "vehicle_tire_size_lookup",
                     ),
                 )
                 return ([], finalized_event) if finalized_event is not None else ([], None)
@@ -31924,9 +31947,9 @@ class TStationChatServiceV2:
                 "catalog_recommendation",
                 "product_search_summary",
             )
-            if response_shape_key == "vehicle_information":
+            if response_shape_key == "vehicle_tire_size_lookup":
                 prompt_intent = "product_description"
-                allowed_prompt_intents = ("vehicle_information",)
+                allowed_prompt_intents = ("vehicle_tire_size_lookup",)
             history_selected_vehicle_prompt_event = _finalize_direct_code_event(
                 history_selected_vehicle_prompt_event,
                 turn_contract=turn_contract,
@@ -33676,6 +33699,11 @@ class TStationChatServiceV2:
                     logger.info("[CTA_URL] rebased T-Station CTA URLs to request origin host")
                 if normalize_quickreply_ctas(event, contract=turn_contract):
                     logger.info("[CTA_REGISTRY] normalized quickReply CTA metadata before buffer")
+                if validate_ui_actions_for_contract(
+                    event,
+                    contract=turn_contract,
+                ):
+                    logger.info("[UI_ACTION_POLICY] filtered quickReply CTAs for structured UI action")
                 if _augment_recent_product_set_ranking_metadata(event, user_query):
                     logger.info("[RECENT_PRODUCT_SET] augmented ranking response metadata")
                 # Buffer data event — yield after QC so assistantResponse is always verified
