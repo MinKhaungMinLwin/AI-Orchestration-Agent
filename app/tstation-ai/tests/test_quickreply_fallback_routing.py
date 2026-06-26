@@ -17485,6 +17485,54 @@ def test_tire_condition_photo_policy_requires_upload_capability_notice() -> None
     } in violations
 
 
+def test_assurance_service_policy_contract_requires_core_conditions() -> None:
+    contract = build_turn_contract(
+        user_text="안심서비스랑 안심플러스 보상 조건이 정확히 어떻게 돼?",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:assurance_service_policy"],
+            policy_intent="assurance_service_policy",
+        ),
+    )
+
+    violations = response_contract_violations(
+        template="quickReply",
+        called_tools=["search_faq_hybrid_tool"],
+        assistant_response_text="보상이나 가입 가능 여부는 상세 조건과 적용 시점에 따라 달라질 수 있어요.",
+        contract=contract,
+    )
+
+    assert {
+        "type": "assurance_service_policy_missing_core_conditions",
+        "assistant_response_text": "보상이나 가입 가능 여부는 상세 조건과 적용 시점에 따라 달라질 수 있어요.",
+        "severity": "error",
+    } in violations
+
+
+def test_assurance_service_policy_contract_blocks_overstated_compensation() -> None:
+    contract = build_turn_contract(
+        user_text="안심서비스랑 안심플러스 보상 조건이 정확히 어떻게 돼?",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:assurance_service_policy"],
+            policy_intent="assurance_service_policy",
+        ),
+    )
+
+    violations = response_contract_violations(
+        template="quickReply",
+        called_tools=["search_faq_hybrid_tool"],
+        assistant_response_text="장착 후 1년 이내, 주행거리 16,000km 이내면 무조건 보상됩니다.",
+        contract=contract,
+    )
+
+    assert {
+        "type": "assurance_service_policy_overstated_compensation",
+        "assistant_response_text": "장착 후 1년 이내, 주행거리 16,000km 이내면 무조건 보상됩니다.",
+        "severity": "error",
+    } in violations
+
+
 def test_signup_first_purchase_benefit_contract_requires_faq_and_blocks_coupon_tools() -> None:
     contract = build_turn_contract(
         user_text="회원가입하면 첫구매 혜택은 뭐가 있어?",
@@ -21760,6 +21808,30 @@ def test_support_faq_policy_event_for_tire_condition_photo_includes_upload_limit
     assert "사진만으로는 마모 상태, 교체 필요 여부, 주행 안전을 확정할 수 없어요." in response
     assert "가까운 티스테이션 매장이나 전문 점검으로 마모도와 손상 여부를 함께 확인해 주세요." in response
     assert _labels(event["data"]["quickReplies"]) == ["가까운 매장 찾기", "1:1 문의하기", "처음으로"]
+
+
+def test_support_faq_policy_event_for_assurance_service_surfaces_core_conditions_first() -> None:
+    event = _build_support_faq_policy_event(
+        "assurance_service_policy",
+        "안심서비스랑 안심플러스 보상 조건이 정확히 어떻게 돼?",
+        tool_result={
+            "status": "success",
+            "data": {
+                "items": [
+                    {
+                        "answer": "안심플러스는 구매 수량과 대상 상품 조건에 따라 보상 범위가 달라질 수 있습니다."
+                    }
+                ]
+            },
+        },
+    )
+
+    assert event is not None
+    response = str(event["data"]["assistantResponse"])
+    first_line = response.splitlines()[0]
+    assert "장착 후 1년 이내" in first_line
+    assert "16,000km 이내" in first_line
+    assert "안심플러스는 구매 수량과 대상 상품 조건에 따라 보상 범위가 달라질 수 있습니다." in response
 
 
 def test_direct_faq_policy_tool_payload_builds_transaction_policy_event() -> None:

@@ -1681,6 +1681,12 @@ def response_contract_violations(
     )
     if promotion_gift_violation is not None:
         violations.append(promotion_gift_violation)
+    assurance_service_violation = _assurance_service_policy_contract_violation(
+        assistant_response_text=assistant_response_text,
+        contract=contract,
+    )
+    if assurance_service_violation is not None:
+        violations.append(assurance_service_violation)
     faq_first_support_violation = _faq_first_support_policy_contract_violation(
         user_text=user_text,
         assistant_response_text=assistant_response_text,
@@ -2263,6 +2269,30 @@ def _promotion_gift_policy_contract_violation(
             "type": "promotion_gift_policy_missing_partial_cancel_guidance",
             "assistant_response_text": assistant_text,
             "response_shape_key": str(response_shape_key or ""),
+        }
+    return None
+
+
+def _assurance_service_policy_contract_violation(
+    *,
+    assistant_response_text: str | None,
+    contract: TurnContract | None,
+) -> dict[str, Any] | None:
+    if contract is None or str(contract.intent or "") != "assurance_service_policy":
+        return None
+    assistant_text = str(assistant_response_text or "").strip()
+    normalized_text = re.sub(r"\s+", "", assistant_text)
+    has_time_condition = any(token in normalized_text for token in ("1년이내", "12개월이내"))
+    has_mileage_condition = any(token in normalized_text for token in ("16,000km이내", "16000km이내", "16000km", "16,000km"))
+    if not (has_time_condition and has_mileage_condition):
+        return {
+            "type": "assurance_service_policy_missing_core_conditions",
+            "assistant_response_text": assistant_text,
+        }
+    if re.search(r"(무조건|항상|자동|반드시).{0,12}보상|보상.{0,8}(확정|됩니다)", assistant_text, re.IGNORECASE):
+        return {
+            "type": "assurance_service_policy_overstated_compensation",
+            "assistant_response_text": assistant_text,
         }
     return None
 
