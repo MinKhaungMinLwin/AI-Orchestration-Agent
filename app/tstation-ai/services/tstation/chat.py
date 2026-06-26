@@ -6635,7 +6635,15 @@ def _build_support_faq_policy_event(
             {"label": "처음으로", "domain": "LEADING"},
         ]
     if source_summary and intent == "assurance_service_policy":
-        assistant_response = f"{required_guidance_by_intent[intent]}\n\n{source_summary}"
+        compact_summary = re.sub(r"\s+", " ", source_summary).strip()
+        compact_summary = re.split(r"(?<=[.!?])\s+|(?<=[다요죠])\s+", compact_summary, maxsplit=1)[0].strip()
+        if len(compact_summary) > 110:
+            compact_summary = f"{compact_summary[:107].rstrip()}..."
+        assistant_response = (
+            required_guidance_by_intent[intent]
+            if not compact_summary
+            else f"{required_guidance_by_intent[intent]}\n\n{compact_summary}"
+        )
     elif source_summary:
         assistant_response = f"{source_summary}\n\n{followup_by_intent[intent]}"
     else:

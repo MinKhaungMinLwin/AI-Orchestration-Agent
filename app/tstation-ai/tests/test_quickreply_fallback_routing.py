@@ -21834,6 +21834,35 @@ def test_support_faq_policy_event_for_assurance_service_surfaces_core_conditions
     assert "안심플러스는 구매 수량과 대상 상품 조건에 따라 보상 범위가 달라질 수 있습니다." in response
 
 
+def test_support_faq_policy_event_for_assurance_service_compacts_long_source_summary() -> None:
+    event = _build_support_faq_policy_event(
+        "assurance_service_policy",
+        "안심서비스랑 안심플러스 보상 조건이 정확히 어떻게 돼?",
+        tool_result={
+            "status": "success",
+            "data": {
+                "items": [
+                    {
+                        "answer": (
+                            "안심서비스와 안심플러스는 전국 티스테이션 매장, 더타이어샵 매장, 티스테이션닷컴 공식 홈페이지, "
+                            "네이버 스마트스토어에서 타이어 구매 시 가입 또는 적용이 가능합니다. "
+                            "안심서비스는 타이어 2개 이상 구매 시 고객 과실로 파손되더라도 새 타이어 1개를 보상받을 수 있습니다."
+                        )
+                    }
+                ]
+            },
+        },
+    )
+
+    assert event is not None
+    response = str(event["data"]["assistantResponse"])
+    lines = [line for line in response.splitlines() if line.strip()]
+    assert "장착 후 1년 이내" in lines[0]
+    assert "16,000km 이내" in lines[0]
+    assert len(response) < 260
+    assert "안심서비스는 타이어 2개 이상 구매 시 고객 과실로 파손되더라도 새 타이어 1개를 보상받을 수 있습니다." not in response
+
+
 def test_direct_faq_policy_tool_payload_builds_transaction_policy_event() -> None:
     contract = build_turn_contract(
         user_text="예약 취소하면 비용 발생해?",
