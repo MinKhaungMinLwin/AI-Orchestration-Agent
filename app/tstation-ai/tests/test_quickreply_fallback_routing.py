@@ -67,6 +67,7 @@ from services.tstation.chat import (
     _build_direct_faq_policy_tool_payload,
     _build_general_cancel_fee_policy_event,
     _build_general_card_cancel_timing_policy_event,
+    _build_partner_member_coupon_policy_event,
     _build_support_faq_policy_event,
     _build_signup_coupon_guidance_event,
     _build_signup_first_purchase_benefit_event,
@@ -17294,6 +17295,18 @@ def test_partner_member_coupon_support_policy_guides_access_not_owned_coupon_loo
     assert "start_owned_coupon_lookup" in response_decision.forbidden_behaviors
     assert "route_to_signup_coupon_guidance" in response_decision.forbidden_behaviors
     assert "제휴사 전용 URL" in response_decision.assistant_guidance
+
+
+def test_partner_member_coupon_policy_event_omits_chatbot_capability_disclaimer() -> None:
+    event = _build_partner_member_coupon_policy_event("제휴회원인데 할인 쿠폰이 왜 안 보여?")
+
+    response = event["data"]["assistantResponse"]
+
+    assert "제휴사 전용 URL" in response
+    assert "복지몰/임직원몰" in response
+    assert "챗봇에서는" not in response
+    assert "직접 확인하기 어려워서" not in response
+    assert "바로 보유 쿠폰이 없다고 단정할 수는 없어요" not in response
 
 
 def test_signup_first_purchase_benefit_augments_faq_query() -> None:
