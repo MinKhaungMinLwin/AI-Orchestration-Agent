@@ -182,16 +182,15 @@ from services.tstation.policies.ui_action_policy import (
     resolve_vehicle_from_history_template,
     resolve_vehicle_selection_from_listcar_event,
     resolve_vehicle_tire_position_selection,
-    resolve_vehicle_ui_selection_from_chip_context,
     requested_cal_day_from_availability_context,
     requested_day_label_from_availability_context,
     recent_store_name_for_availability_continuation,
     decide_store_availability_followup_action,
     resolve_ui_action_context,
-    rewrite_vehicle_selection_user_text,
     store_availability_followup_context,
     apply_other_store_context_enrichment,
     normalize_preview_tool_result,
+    prepare_ui_action_state,
     store_context_from_mapping,
     store_name_exact_match_row,
     should_reuse_vehicle_slots_for_oe_followup,
@@ -20006,19 +20005,26 @@ class TStationChatServiceV2:
             latest_quickreply_tmpl = latest_template_data_from_messages(recent_template_msgs, "quickReply")
             latest_product_tmpl = latest_template_data_from_messages(recent_template_msgs, "product")
             latest_preorder_tmpl = latest_template_data_from_messages(recent_template_msgs, "preOrder")
-            raw_ui_action = chip_context_dict(request.ui_action)
-            if not raw_ui_action:
-                raw_ui_action = chip_context_dict(chip_context_dict(request.chip_context).get("ui_action"))
-            if not raw_ui_action:
-                chip_context_values = chip_context_dict(request.chip_context)
-                if chip_context_values.get("cta_action") or chip_context_values.get("slots"):
-                    raw_ui_action = dict(chip_context_values)
-            if raw_ui_action and isinstance(request.slots, dict):
-                raw_ui_action.setdefault("slots", dict(request.slots))
-            chip_selected_vehicle = resolve_vehicle_ui_selection_from_chip_context(
-                request.chip_context,
-                latest_listcar_tmpl,
+            prepared_ui_action_state = prepare_ui_action_state(
+                ui_action=request.ui_action,
+                chip_context=request.chip_context,
+                request_slots=request.slots if isinstance(request.slots, dict) else None,
+                latest_listcar_tmpl=latest_listcar_tmpl,
+                last_user_text=last_user_text,
+                existing_slots=existing_slots,
+                generic_slot_apply_fn=lambda base_slots, values: base_slots.apply_runtime_values(
+                    values,
+                    source="ui_action",
+                ),
+                vehicle_slot_apply_fn=_apply_vehicle_selection_slot_values,
             )
+            raw_ui_action = dict(prepared_ui_action_state.raw_action or {})
+            chip_selected_vehicle = prepared_ui_action_state.selected_vehicle
+            if prepared_ui_action_state.action_context is not None:
+                vehicle_ui_action_context = prepared_ui_action_state.action_context
+            if prepared_ui_action_state.trace_metadata:
+                vehicle_selection_trace_metadata.update(dict(prepared_ui_action_state.trace_metadata))
+            existing_slots = prepared_ui_action_state.updated_slots
             _t_slots = time.perf_counter()
             logger.debug(f"[SLOTS] Loaded existing slots: {existing_slots.model_dump()}")
 
@@ -20054,68 +20060,18 @@ class TStationChatServiceV2:
             )
             logger.debug(f"[CHAT_V2] Messages: {json.dumps(messages, ensure_ascii=False, separators=(',', ':'))}")
 
-            if raw_ui_action and chip_selected_vehicle is None:
-                generic_ui_action_context = resolve_ui_action_context(
-                    raw_action=raw_ui_action,
-                    selected_vehicle=None,
-                    selection_source="ui_action",
-                    previous_slots={
-                        "car_no": getattr(existing_slots, "car_no", None),
-                        "tire_size": getattr(existing_slots, "tire_size", None),
-                        "goods_no": getattr(existing_slots, "goods_no", None),
-                        "ord_qty": getattr(existing_slots, "ord_qty", None),
-                    },
-                )
-                if generic_ui_action_context is not None:
-                    vehicle_ui_action_context = generic_ui_action_context
-                    vehicle_selection_trace_metadata.update(dict(generic_ui_action_context.trace_metadata))
-                    if generic_ui_action_context.slot_patch:
-                        existing_slots, slot_trace_metadata = apply_ui_action_slot_patch(
-                            existing_slots,
-                            generic_ui_action_context,
-                            slot_apply_fn=lambda base_slots, values: base_slots.apply_runtime_values(
-                                values,
-                                source="ui_action",
-                            ),
-                        )
-                        vehicle_selection_trace_metadata.update(slot_trace_metadata)
-                        logger.info(
-                            "[UI_ACTION] applied structured slot patch before routing: %s",
-                            generic_ui_action_context.slot_patch,
-                        )
-
             if chip_selected_vehicle is not None:
-                rewritten_vehicle_text = rewrite_vehicle_selection_user_text(
-                    last_user_text,
-                    chip_selected_vehicle,
-                )
-                vehicle_slot_values = _vehicle_selection_slot_values(chip_selected_vehicle)
-                vehicle_ui_action_context = resolve_ui_action_context(
-                    selected_vehicle=chip_selected_vehicle,
-                    selection_source="chip_context",
-                    previous_slots={
-                        "car_no": getattr(existing_slots, "car_no", None),
-                        "tire_size": getattr(existing_slots, "tire_size", None),
-                    },
-                    slot_patch=vehicle_slot_values,
-                )
-                if vehicle_ui_action_context is not None:
-                    vehicle_selection_trace_metadata.update(dict(vehicle_ui_action_context.trace_metadata))
-                if vehicle_slot_values:
-                    if vehicle_ui_action_context is not None:
-                        existing_slots, slot_trace_metadata = apply_ui_action_slot_patch(
-                            existing_slots,
-                            vehicle_ui_action_context,
-                            slot_apply_fn=_apply_vehicle_selection_slot_values,
-                        )
-                        vehicle_selection_trace_metadata.update(slot_trace_metadata)
-                    else:
-                        existing_slots = _apply_vehicle_selection_slot_values(existing_slots, vehicle_slot_values)
-                        vehicle_selection_trace_metadata["slots_rewritten"] = True
+                if vehicle_ui_action_context is not None and vehicle_ui_action_context.slot_patch:
                     logger.info(
                         "[VEHICLE_SELECTION] applied chip-selected vehicle slots before routing: %s",
-                        vehicle_slot_values,
+                        vehicle_ui_action_context.slot_patch,
                     )
+                elif raw_ui_action and vehicle_ui_action_context is not None and vehicle_ui_action_context.slot_patch:
+                    logger.info(
+                        "[UI_ACTION] applied structured slot patch before routing: %s",
+                        vehicle_ui_action_context.slot_patch,
+                    )
+                rewritten_vehicle_text = prepared_ui_action_state.rewritten_user_text
                 if rewritten_vehicle_text != last_user_text:
                     for message_list in (enriched_messages, messages, classifier_messages):
                         for msg in reversed(message_list):
@@ -20127,6 +20083,11 @@ class TStationChatServiceV2:
                         "[VEHICLE_SELECTION] rewrote vehicle selection follow-up text via chip_context: %s",
                         rewritten_vehicle_text,
                     )
+            elif raw_ui_action and vehicle_ui_action_context is not None and vehicle_ui_action_context.slot_patch:
+                logger.info(
+                    "[UI_ACTION] applied structured slot patch before routing: %s",
+                    vehicle_ui_action_context.slot_patch,
+                )
 
             pending_vehicle_lookup_car_no = str(
                 getattr(existing_slots, "pending_vehicle_lookup_car_no", None) or ""

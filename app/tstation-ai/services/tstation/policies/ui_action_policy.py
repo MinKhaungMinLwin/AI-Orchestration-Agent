@@ -154,6 +154,16 @@ class UIActionContext:
     payload: Mapping[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class PreparedUIActionState:
+    raw_action: Mapping[str, Any] | None
+    selected_vehicle: Mapping[str, Any] | None
+    action_context: UIActionContext | None
+    updated_slots: Any
+    rewritten_user_text: str
+    trace_metadata: Mapping[str, Any] = field(default_factory=dict)
+
+
 def _vehicle_value(selected_vehicle: Mapping[str, Any], *keys: str) -> str:
     selected_car = selected_vehicle.get("car") if isinstance(selected_vehicle.get("car"), Mapping) else {}
     selected_meta = selected_vehicle.get("meta") if isinstance(selected_vehicle.get("meta"), Mapping) else {}
@@ -1089,6 +1099,97 @@ def chip_context_dict(chip_context: Any | None) -> dict[str, Any]:
         dumped = chip_context.model_dump()
         return dumped if isinstance(dumped, dict) else {}
     return {}
+
+
+def prepare_ui_action_state(
+    *,
+    ui_action: Any | None,
+    chip_context: Any | None,
+    request_slots: Mapping[str, Any] | None,
+    latest_listcar_tmpl: Mapping[str, Any] | None,
+    last_user_text: str,
+    existing_slots: Any,
+    generic_slot_apply_fn: Callable[[Any, dict[str, Any]], Any],
+    vehicle_slot_apply_fn: Callable[[Any, dict[str, Any]], Any],
+) -> PreparedUIActionState:
+    raw_action = chip_context_dict(ui_action)
+    if not raw_action:
+        raw_action = chip_context_dict(chip_context_dict(chip_context).get("ui_action"))
+    if not raw_action:
+        chip_context_values = chip_context_dict(chip_context)
+        if chip_context_values.get("cta_action") or chip_context_values.get("slots"):
+            raw_action = dict(chip_context_values)
+    if raw_action and isinstance(request_slots, Mapping):
+        raw_action.setdefault("slots", dict(request_slots))
+
+    selected_vehicle = resolve_vehicle_ui_selection_from_chip_context(
+        chip_context,
+        latest_listcar_tmpl,
+    )
+    action_context: UIActionContext | None = None
+    rewritten_user_text = last_user_text
+    updated_slots = existing_slots
+    trace_metadata: dict[str, Any] = {}
+
+    if raw_action and selected_vehicle is None:
+        action_context = resolve_ui_action_context(
+            raw_action=raw_action,
+            selected_vehicle=None,
+            selection_source="ui_action",
+            previous_slots={
+                "car_no": getattr(existing_slots, "car_no", None),
+                "tire_size": getattr(existing_slots, "tire_size", None),
+                "goods_no": getattr(existing_slots, "goods_no", None),
+                "ord_qty": getattr(existing_slots, "ord_qty", None),
+            },
+        )
+        if action_context is not None:
+            trace_metadata.update(dict(action_context.trace_metadata))
+            if action_context.slot_patch:
+                updated_slots, slot_trace_metadata = apply_ui_action_slot_patch(
+                    existing_slots,
+                    action_context,
+                    slot_apply_fn=generic_slot_apply_fn,
+                )
+                trace_metadata.update(slot_trace_metadata)
+
+    if selected_vehicle is not None:
+        rewritten_user_text = rewrite_vehicle_selection_user_text(
+            last_user_text,
+            selected_vehicle,
+        )
+        vehicle_slot_values = vehicle_selection_slot_values(selected_vehicle)
+        action_context = resolve_ui_action_context(
+            selected_vehicle=selected_vehicle,
+            selection_source="chip_context",
+            previous_slots={
+                "car_no": getattr(updated_slots, "car_no", None),
+                "tire_size": getattr(updated_slots, "tire_size", None),
+            },
+            slot_patch=vehicle_slot_values,
+        )
+        if action_context is not None:
+            trace_metadata.update(dict(action_context.trace_metadata))
+        if vehicle_slot_values:
+            if action_context is not None:
+                updated_slots, slot_trace_metadata = apply_ui_action_slot_patch(
+                    updated_slots,
+                    action_context,
+                    slot_apply_fn=vehicle_slot_apply_fn,
+                )
+                trace_metadata.update(slot_trace_metadata)
+            else:
+                updated_slots = vehicle_slot_apply_fn(updated_slots, vehicle_slot_values)
+                trace_metadata["slots_rewritten"] = True
+
+    return PreparedUIActionState(
+        raw_action=raw_action or None,
+        selected_vehicle=selected_vehicle,
+        action_context=action_context,
+        updated_slots=updated_slots,
+        rewritten_user_text=rewritten_user_text,
+        trace_metadata=trace_metadata,
+    )
 
 
 def chip_value(chip_context: Mapping[str, Any] | None, *keys: str) -> str:

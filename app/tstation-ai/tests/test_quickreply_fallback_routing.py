@@ -429,6 +429,7 @@ from services.tstation.policies.ui_action_policy import (
     store_name_exact_match_row,
     goods_no_from_template_event,
     normalize_preview_tool_result,
+    prepare_ui_action_state,
     build_store_availability_quantity_prompt_event,
     decide_store_availability_followup_action,
     validate_ui_actions_for_contract,
@@ -537,6 +538,36 @@ def test_chat_message_request_preserves_ui_action_and_slot_patch() -> None:
     assert request.ui_action["action_type"] == "select_quantity"
     assert request.slots == {"goods_no": "G000000317729", "ord_qty": 4}
     assert request.chip_context.model_dump()["slots"]["ord_qty"] == 4
+
+
+def test_prepare_ui_action_state_applies_generic_slot_patch_before_routing() -> None:
+    slots = ConversationSlots(goods_no="G0001", ord_qty=None, pending_intent="stock", goal_type="store_with_stock")
+
+    prepared = prepare_ui_action_state(
+        ui_action={
+            "action_type": "select_quantity",
+            "cta_action": "select_quantity",
+            "source_intent": "stock_store_search",
+            "expected_contract_intent": "stock_store_search",
+            "slots": {"goods_no": "G0001", "ord_qty": 4, "region": "동탄"},
+        },
+        chip_context=None,
+        request_slots={"goods_no": "G0001", "ord_qty": 4, "region": "동탄"},
+        latest_listcar_tmpl=None,
+        last_user_text="4개",
+        existing_slots=slots,
+        generic_slot_apply_fn=lambda base_slots, values: base_slots.apply_runtime_values(values, source="ui_action"),
+        vehicle_slot_apply_fn=_apply_vehicle_selection_slot_values,
+    )
+
+    assert prepared.raw_action is not None
+    assert prepared.selected_vehicle is None
+    assert prepared.action_context is not None
+    assert prepared.updated_slots.ord_qty == 4
+    assert prepared.updated_slots.region == "동탄"
+    assert prepared.trace_metadata["ui_action_detected"] is True
+    assert prepared.trace_metadata["slots_rewritten"] is True
+    assert prepared.rewritten_user_text == "4개"
 
 
 def test_quickreply_cta_action_enter_region_asks_for_region_only() -> None:
@@ -12098,6 +12129,52 @@ def test_vehicle_selection_ui_action_context_rewrites_trace_and_slots() -> None:
     assert trace_metadata["contract_intent_before_router"] == "vehicle_tire_size_lookup"
     assert trace_metadata["final_contract_intent"] == "vehicle_tire_size_lookup"
     assert trace_metadata["slots_rewritten"] is True
+
+
+def test_prepare_ui_action_state_rewrites_vehicle_selection_before_routing() -> None:
+    slots = ConversationSlots(car_no="61거1836", tire_size="225/45R17")
+    latest_listcar_tmpl = {
+        "listCar": [{
+            "carNo": "14다5499",
+            "carNm": "그랜저",
+            "tireSize": "2255518",
+            "tireSizeRe": "2255518",
+        }],
+        "metadata": [{
+            "ctaAction": "select_vehicle_candidate",
+            "source_intent": "vehicle_tire_size_lookup",
+            "expected_contract_intent": "vehicle_tire_size_lookup",
+            "carNo": "14다5499",
+            "carNm": "그랜저",
+            "tireSize": "2255518",
+            "tireSizeRe": "2255518",
+        }],
+    }
+
+    prepared = prepare_ui_action_state(
+        ui_action=None,
+        chip_context={
+            "cta_action": "select_vehicle_candidate",
+            "car_no": "14다5499",
+            "tire_size_fr": "2255518",
+            "tire_size_re": "2255518",
+            "source_intent": "vehicle_tire_size_lookup",
+            "expected_contract_intent": "vehicle_tire_size_lookup",
+        },
+        request_slots=None,
+        latest_listcar_tmpl=latest_listcar_tmpl,
+        last_user_text="14다5499",
+        existing_slots=slots,
+        generic_slot_apply_fn=lambda base_slots, values: base_slots.apply_runtime_values(values, source="ui_action"),
+        vehicle_slot_apply_fn=_apply_vehicle_selection_slot_values,
+    )
+
+    assert prepared.selected_vehicle is not None
+    assert prepared.updated_slots.car_no == "14다5499"
+    assert prepared.updated_slots.tire_size == "225/55R18"
+    assert prepared.rewritten_user_text == "14다5499 차량 타이어 사이즈 알려줘"
+    assert prepared.trace_metadata["vehicle_selection_detected"] is True
+    assert prepared.trace_metadata["slots_rewritten"] is True
 
 
 def test_vehicle_tire_size_lookup_ui_action_validation_blocks_store_and_purchase_chips() -> None:
