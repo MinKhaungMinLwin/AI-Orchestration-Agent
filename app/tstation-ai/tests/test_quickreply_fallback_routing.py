@@ -11050,6 +11050,81 @@ def test_history_vehicle_selection_model_name_pick_requires_unique_match() -> No
     assert resolved is None
 
 
+def test_chip_vehicle_selection_resolves_matching_candidate_from_recent_listcar() -> None:
+    template = {
+        "template": "listCar",
+        "data": {
+            "listCar": [{"licensePlate": "61거1836", "info": "아반떼"}],
+            "metadata": [{
+                "carNo": "61거1836",
+                "mbrCarRegSeq": "2000003091",
+                "carLncCd": "W012345",
+                "tireSize": "225/45R17",
+                "tireSizeRe": "225/45R17",
+            }],
+        },
+    }
+
+    resolved = TStationChatServiceV2._resolve_vehicle_from_chip_context(
+        {
+            "cta_action": "select_vehicle_candidate",
+            "source_intent": "vehicle_tire_size_lookup",
+            "metadata": {
+                "car_no": "61거1836",
+                "mbr_car_reg_seq": "2000003091",
+                "car_lnc_cd": "W012345",
+            },
+        },
+        template,
+    )
+
+    assert resolved is not None
+    assert resolved["meta"]["carNo"] == "61거1836"
+    assert resolved["selection_context"]["source_intent"] == "vehicle_tire_size_lookup"
+
+
+def test_chip_vehicle_selection_rejects_candidate_not_present_in_recent_listcar() -> None:
+    template = {
+        "template": "listCar",
+        "data": {
+            "listCar": [{"licensePlate": "14다5499", "info": "쏘렌토"}],
+            "metadata": [{
+                "carNo": "14다5499",
+                "mbrCarRegSeq": "2000004000",
+                "carLncCd": "W099999",
+                "tireSize": "225/55R18",
+                "tireSizeRe": "225/55R18",
+            }],
+        },
+    }
+
+    resolved = TStationChatServiceV2._resolve_vehicle_from_chip_context(
+        {
+            "cta_action": "select_vehicle_candidate",
+            "metadata": {
+                "car_no": "61거1836",
+                "mbr_car_reg_seq": "2000003091",
+            },
+        },
+        template,
+    )
+
+    assert resolved is None
+
+
+def test_chip_vehicle_selection_rewrites_tire_size_lookup_followup_text() -> None:
+    rewritten = TStationChatServiceV2._rewrite_vehicle_selection_user_text(
+        "61거1836",
+        {
+            "car": {"licensePlate": "61거1836"},
+            "meta": {"carNo": "61거1836"},
+            "selection_context": {"source_intent": "vehicle_tire_size_lookup"},
+        },
+    )
+
+    assert rewritten == "61거1836 차량 타이어 사이즈 알려줘"
+
+
 def test_history_vehicle_selection_does_not_match_product_name_substring_to_vehicle() -> None:
     template = {
         "template": "listCar",
@@ -13718,6 +13793,19 @@ def test_vehicle_based_recommendation_refinement_preserves_previous_performance_
     assert decision is not None
     assert decision.metadata["response_shape_key"] == "vehicle_based_recommendation_refinement"
     assert "product_card_without_size" not in decision.forbidden_behaviors
+
+
+def test_vehicle_tire_size_lookup_contract_allows_registered_vehicle_list_tool() -> None:
+    frame = build_discovery_intent_frame("내 차에 맞는 타이어 사이즈는?")
+    tool_plan = plan_discovery_tools(frame)
+    decision = decide_discovery_response(frame)
+
+    assert frame.sub_intent == "vehicle_information"
+    assert frame.entities["vehicle_information_request"] == "tire_size_lookup"
+    assert tool_plan.allowed_tools == ("get_my_cars_tool",)
+    assert tool_plan.preferred_tool == "get_my_cars_tool"
+    assert decision.template == TemplateName.LIST_CAR
+    assert decision.metadata["response_shape_key"] == "vehicle_information"
 
 
 def test_vehicle_based_recommendation_refinement_preserves_previous_low_vibration_filter() -> None:

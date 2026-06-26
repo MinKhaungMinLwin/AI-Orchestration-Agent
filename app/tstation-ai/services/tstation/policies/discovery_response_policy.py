@@ -54,6 +54,18 @@ def decide_discovery_response(frame: IntentFrame) -> ResponseDecision:
     entities = frame.entities
     tire_size = entities.get("tire_size")
 
+    if frame.sub_intent == "vehicle_information":
+        return ResponseDecision(
+            response_shape=ResponseShape.LIST,
+            template=TemplateName.LIST_CAR,
+            required_slots=(),
+            forbidden_behaviors=("product_card_without_vehicle_selection",),
+            assistant_guidance=(
+                "등록 차량을 먼저 확인하고 사용자가 차량을 선택하면 해당 차량의 타이어 규격을 안내한다."
+            ),
+            metadata={"response_shape_key": "vehicle_information"},
+        )
+
     if frame.sub_intent == "external_price_comparison_request":
         return ResponseDecision(
             response_shape=ResponseShape.SUMMARY,

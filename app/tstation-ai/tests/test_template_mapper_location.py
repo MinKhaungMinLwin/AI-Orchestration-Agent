@@ -2165,6 +2165,9 @@ def test_listcar_kept_for_registered_vehicle_tire_size_prompt() -> None:
 
     assert result is not None
     assert result["template"] == "listCar"
+    assert result["data"]["metadata"][0]["ctaAction"] == "select_vehicle_candidate"
+    assert result["data"]["metadata"][0]["sourceIntent"] == "vehicle_tire_size_lookup"
+    assert result["data"]["metadata"][0]["expectedContractIntent"] == "vehicle_information"
 
 
 def test_ev_suitability_maps_to_quickreply_for_explanation_turn() -> None:

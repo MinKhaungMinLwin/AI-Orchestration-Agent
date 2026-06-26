@@ -675,8 +675,20 @@ class CarMeta(BaseModel):
 
     carNo: str = Field(..., min_length=1)
     carLncCd: str | None = None
+    mbrCarRegSeq: str | None = None
+    carMaker: str | None = None
+    carModelDet: str | None = None
+    carName: str | None = None
+    carTrim: str | None = None
+    carEngine: str | None = None
+    carType: str | None = None
+    car_type: str | None = None
+    vehicleType: str | None = None
     tireSize: str | None = None
     tireSizeRe: str | None = None
+    ctaAction: str | None = None
+    sourceIntent: str | None = None
+    expectedContractIntent: str | None = None
 
 
 class CarItem(BaseModel):

@@ -115,6 +115,11 @@ _CONCEPT_RE = re.compile(r"뭐야|무슨\s*뜻|의미|차이|설명", re.IGNOREC
 _BUY_RE = re.compile(r"구매|살래|주문|장바구니|결제", re.IGNORECASE)
 _PRICE_OR_COUPON_RE = re.compile(r"가격|얼마|할인가|최대\s*혜택|쿠폰|할인|혜택", re.IGNORECASE)
 _STOCK_OR_BOOKING_RE = re.compile(r"재고|오늘\s*장착|장착\s*가능|예약|매장|근처|주변", re.IGNORECASE)
+_VEHICLE_SIZE_LOOKUP_RE = re.compile(
+    r"(?:내\s*차|내차|내\s*차량|내차량|등록\s*차량|등록차).{0,24}(?:타이어\s*사이즈|타이어\s*규격|규격)|"
+    r"(?:타이어\s*사이즈|타이어\s*규격|규격).{0,24}(?:내\s*차|내차|내\s*차량|내차량|등록\s*차량|등록차)",
+    re.IGNORECASE,
+)
 _SIMILAR_PRICE_RE = re.compile(r"비슷한\s*가격|가격대|동급\s*가격", re.IGNORECASE)
 _QUANTITY_OPTION_RE = re.compile(r"(\d{1,2})\s*(?:개|본)")
 _QUANTITY_BENEFIT_RE = re.compile(r"할인|혜택|가격|금액|최종가|저렴|싼|싸|쿠폰", re.IGNORECASE)
@@ -699,6 +704,8 @@ def build_discovery_intent_frame(
         entities["discovery_followup_action"] = discovery_followup_action
     elif _MY_VEHICLE_RECOMMENDATION_RE.search(text) and (_RECOMMEND_RE.search(text) or _COMPARE_RE.search(text)):
         entities["discovery_followup_action"] = "vehicle_resolved_recommendation"
+    if _VEHICLE_SIZE_LOOKUP_RE.search(text):
+        entities["vehicle_information_request"] = "tire_size_lookup"
     scenario = recommendation_scenario_from_text(
         text,
         router_recommendation_scenario or context_recommendation_scenario,
@@ -801,6 +808,9 @@ def build_discovery_intent_frame(
     elif entities.get("discovery_followup_action") == "vehicle_resolved_recommendation":
         intent = "product_recommendation"
         sub_intent = "vehicle_resolved_recommendation"
+    elif entities.get("vehicle_information_request") == "tire_size_lookup":
+        intent = "product_description"
+        sub_intent = "vehicle_information"
     elif (
         oe_replacement_type
         and (
@@ -1027,6 +1037,12 @@ def build_discovery_intent_frame(
 
 def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
     entities = frame.entities
+    if frame.sub_intent == "vehicle_information":
+        return ToolPlan(
+            allowed_tools=("get_my_cars_tool",),
+            preferred_tool="get_my_cars_tool",
+            metadata={"response_intent": "vehicle_information"},
+        )
     if frame.sub_intent == "oe_re_product_filter":
         args = {"limit": 10}
         product_names = entities.get("product_names") or ()

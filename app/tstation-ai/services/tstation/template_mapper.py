@@ -3277,6 +3277,19 @@ def inject_product_tags_and_sanitize(
 
 # ── 2. listCar ──────────────────────────────────────────────────────────────────
 
+def _listcar_selection_contract_intent() -> tuple[str, str]:
+    user_text = str(current_user_text.get() or "").strip()
+    pending_intent = str(current_pending_intent.get() or "").strip()
+    goal_type = str(current_goal_type.get() or "").strip()
+
+    if "사이즈" in user_text and any(anchor in user_text for anchor in ("뭐", "알려", "확인", "규격", "?")):
+        return "vehicle_tire_size_lookup", "vehicle_information"
+    if pending_intent == "order" or goal_type == "place_order":
+        return "quick_order_reservation", "quick_order_reservation"
+    if pending_intent == "stock" or goal_type == "store_with_stock":
+        return "stock_store_search", "stock_store_search"
+    return "vehicle_resolved_recommendation", "product_recommendation"
+
 def _map_list_car(tool_data_list: list[dict], assistant_text: str) -> dict | None:
     # Maintenance D-day flow guard: when get_maintenance_dday_tool ran in the
     # same turn, get_my_cars_tool was used only to map car_no → mbr_car_reg_seq.
@@ -3315,6 +3328,7 @@ def _map_list_car(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     ):
         return None
     items, metadata = [], []
+    source_intent, expected_contract_intent = _listcar_selection_contract_intent()
     all_rows: list[dict] = []
     for entry in _find_entries(tool_data_list, "get_my_cars_tool", "get_user_vehicles_tool"):
         raw = _unwrap(entry)
@@ -3359,6 +3373,10 @@ def _map_list_car(tool_data_list: list[dict], assistant_text: str) -> dict | Non
                 # car_no as PII and the resolver has no source to match on.
                 "tireSize": _get_str(row, "tire_size_fr") or None,
                 "tireSizeRe": _get_str(row, "tire_size_re") or None,
+                "vehicleType": _get_str(row, "car_type").lower() or None,
+                "ctaAction": "select_vehicle_candidate",
+                "sourceIntent": source_intent,
+                "expectedContractIntent": expected_contract_intent,
             })
     if not items:
         return None
