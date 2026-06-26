@@ -9730,6 +9730,65 @@ def test_support_policy_action_mode_does_not_resume_purchase_from_regex_candidat
     assert _context_state_for_action(action_mode=action_mode, resume_source="none", slots=slots) == "dormant"
 
 
+def test_policy_turn_regex_extraction_keeps_purchase_signal_as_candidate_only() -> None:
+    user_text = "이벤트 적용 타이어 4개 구매하고 사은품 받았는데 뒤에 2개 취소하면 사은품 돌려줘야 해?"
+    slots = ConversationSlots.extract_from_user_text(user_text)
+
+    assert slots.ord_qty == 4
+    assert slots.pending_intent is None
+    assert slots.goal_type is None
+    assert slots.intent_candidate == "order"
+
+
+def test_promotion_gift_policy_action_mode_does_not_resume_purchase_from_real_regex_candidate() -> None:
+    user_text = "이벤트 적용 타이어 4개 구매하고 사은품 받았는데 뒤에 2개 취소하면 사은품 돌려줘야 해?"
+    regex_slots = ConversationSlots.extract_from_user_text(user_text)
+    slots = ConversationSlots(
+        goods_no="G000000309780",
+        tire_size="225/45R17",
+        ord_qty=4,
+        shop_name="판교점",
+        pending_intent="order",
+        goal_type="place_order",
+    )
+    routing_result = MultiAgentDomain(
+        reason="promotion gift policy question during purchase flow",
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        execution_plan=["support:promotion_gift_policy"],
+        user_behavior="asking gift policy during an order flow",
+        flow="support policy answer",
+        claim_check_type="none",
+        complaint_scope="none",
+        agent_prompt_profile="full",
+        policy_intent="promotion_gift_policy",
+        planner_confidence=0.82,
+    )
+
+    action_mode = _current_turn_action_mode(
+        user_text=user_text,
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        routing_result=routing_result,
+        regex_slots=regex_slots,
+        merged_slots=slots,
+        explicit_override_reason=None,
+        resume_source="none",
+    )
+    context_state = _context_state_for_action(action_mode=action_mode, resume_source="none", slots=slots)
+    if action_mode in {"purchase_continuation", "stock_check", "booking_continuation"}:
+        _stage_pending_order_context(slots, source=f"pre_policy_context:{context_state}")
+    else:
+        _stage_dormant_transaction_context(slots, source=f"pre_policy_context:{action_mode}")
+        _mask_dormant_transaction_action_slots(slots, source=f"pre_policy_context:{action_mode}")
+
+    assert regex_slots.intent_candidate == "order"
+    assert action_mode == "support_policy_answer"
+    assert context_state == "dormant"
+    assert slots.pending_intent is None
+    assert slots.goal_type is None
+    assert slots.ord_qty is None
+    assert "dormant_purchase_context" in (slots.availability_context or {})
+
+
 def test_action_mode_resumes_stored_order_context_only_with_explicit_resume_anchor() -> None:
     slots = ConversationSlots(
         goods_no="G000000309780",
