@@ -23671,6 +23671,62 @@ def test_stream_faq_policy_tool_response_emits_support_quickreply_for_signup_pol
     assert data_event["data"]["quickReplies"][0]["url"] == CTAUrls.MEMBERSHIP_BENEFIT
 
 
+def test_stream_cta_tool_response_falls_back_to_quickreply_when_template_is_forbidden() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="stock_store_search",
+        allowed_tools=("transaction_store_preview_tool",),
+        response_decision={
+            "template": "quickReply",
+            "metadata": {"response_shape_key": "stock_store_search"},
+            "forbidden_behaviors": ("datepick_for_unavailable_stock",),
+        },
+    )
+    tool_input = {"goods_no": "G000000309780", "tire_size": "225/45R17", "shop_id": "F00721"}
+    tool_result = {"status": "success", "data": {"items": [{"shop_id": "F00721"}]}}
+    event = {
+        "type": "data",
+        "template": "datepick",
+        "source_domain": "transaction",
+        "assistant_response_source": "code_cta_tool_response",
+        "data": {
+            "assistantResponse": "예약 시간을 선택해 주세요.",
+            "quickReplies": [],
+            "predictedDomains": ["TRANSACTION"],
+            "metadata": {"response_shape_key": "stock_store_search"},
+        },
+    }
+
+    events = list(
+        TStationChatServiceV2._stream_cta_tool_response(
+            tool_input,
+            tool_result,
+            event,
+            turn_contract=contract,
+            source="code_cta_tool_response",
+            required_tools=("transaction_store_preview_tool",),
+        )
+    )
+    assert any(chunk == "data: [DONE]\n\n" for chunk in events)
+
+    parsed_events = []
+    for chunk in events:
+        if not chunk.startswith("data: ") or chunk == "data: [DONE]\n\n":
+            continue
+        parsed_events.append(json.loads(chunk[6:].strip()))
+
+    tool_event = next(item for item in parsed_events if item.get("type") == "tool")
+    data_event = next(item for item in parsed_events if item.get("type") == "data")
+    message_event = next(item for item in parsed_events if item.get("type") == "message")
+
+    assert tool_event["tool"] == "transaction_store_preview_tool"
+    assert data_event["template"] == "quickReply"
+    assert data_event["assistant_response_source"] == "code_turn_contract_response_policy_guard"
+    assert data_event["data"]["metadata"]["contract_gate_reason"] == "response_policy_guard"
+    assert "바로 예약 가능한 재고를 확인하지 못했어요" in data_event["data"]["assistantResponse"]
+    assert "바로 예약 가능한 재고를 확인하지 못했어요" in message_event["content"]
+
+
 def test_stream_response_multi_keeps_stream_alive_when_turn_contract_validation_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
