@@ -72,8 +72,10 @@ def decide_transaction_response(
         return _decide_order_arrival_status_lookup()
     if intent == "order_cancel_status_lookup":
         return _decide_order_cancel_status_lookup()
-    if intent == "order_cancel_fee_inquiry":
-        return _decide_order_cancel_fee_inquiry()
+    if intent == "owned_order_cancel_fee_inquiry":
+        return _decide_owned_order_cancel_fee_inquiry()
+    if intent == "general_cancel_fee_policy":
+        return _decide_general_cancel_fee_policy()
     if intent == "order_cancel_request":
         return _decide_order_cancel_request()
     if intent == "payment_method_change_request":
@@ -463,24 +465,43 @@ def _decide_order_cancel_request() -> ResponseDecision:
     )
 
 
-def _decide_order_cancel_fee_inquiry() -> ResponseDecision:
+def _decide_owned_order_cancel_fee_inquiry() -> ResponseDecision:
     return _decision(
-        response_shape_key="order_cancel_fee_inquiry_summary",
+        response_shape_key="owned_order_cancel_fee_inquiry_summary",
         response_shape=ResponseShape.SUMMARY,
         template=TemplateName.QUICK_REPLY,
         forbidden_behaviors=(
             "direct_cancel_unavailable_guidance",
             "normalize_as_cancel_request",
             "arbitrary_past_order_fee_answer",
-            "ask_which_order_to_cancel",
             "promise_cancel_processing",
         ),
         assistant_guidance=(
-            "취소 실행 요청이 아니라 취소 비용/위약금/수수료 발생 여부 문의다. 특정 주문/예약이 없으면 과거 출고 주문을 "
-            "임의 선택해 비용을 단정하지 않는다. 활성 온라인 주문/예약이 정확히 1건이면 해당 상태 기준으로 조건부 안내하고, "
-            "온라인 주문 내역이 없거나 매장 방문 예약만 가능한 경우에는 매장 방문 예약은 별도 취소 수수료가 발생하지 않는다고 "
-            "안내한 뒤 예약/주문 내역 또는 1:1 문의 CTA를 제공한다. '제가 직접 주문을 취소 처리할 수는 없어요' 같은 "
-            "취소 실행 불가 안내로 정규화하지 않는다."
+            "취소 실행 요청이 아니라 사용자의 특정 주문/예약에 대한 취소 비용/위약금/수수료 발생 여부 문의다. "
+            "주문번호, 내 주문/내 예약, 오늘 예약, 방금 주문 같은 개인 anchor가 있을 때만 주문/예약 source를 조회한다. "
+            "선택된 주문 또는 매칭된 주문 상태 기준으로 조건부 안내하고, 주문이 아직 특정되지 않았거나 여러 건이면 선택을 요청할 수 있다. "
+            "'제가 직접 주문을 취소 처리할 수는 없어요' 같은 취소 실행 불가 안내로 정규화하지 않는다."
+        ),
+    )
+
+
+def _decide_general_cancel_fee_policy() -> ResponseDecision:
+    return _decision(
+        response_shape_key="general_cancel_fee_policy_summary",
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        forbidden_behaviors=(
+            "personal_order_lookup",
+            "recent_order_fee_assertion",
+            "normalize_as_cancel_request",
+            "cancel_detail_only_guidance",
+            "promise_cancel_processing",
+        ),
+        assistant_guidance=(
+            "취소 실행 요청이 아니라 일반 취소/위약금/수수료 정책 문의다. 현재 턴에 주문번호, 내 주문/내 예약, 오늘 예약, "
+            "방금 주문 같은 개인 주문 anchor가 없으면 개인 주문 조회를 하지 않는다. FAQ/RAG 근거로 취소 비용 발생 조건을 설명하고, "
+            "매장 방문 예약만 취소하는 경우 별도 취소 수수료가 발생하지 않는다는 안내와 함께 주문내역/1:1 문의 CTA를 보조로 제공한다. "
+            "주문 상세에서 취소 가능하다는 실행 안내만 단독으로 말하거나 최근 주문 1건을 임의 기준으로 비용을 단정하지 않는다."
         ),
     )
 

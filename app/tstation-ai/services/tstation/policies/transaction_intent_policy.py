@@ -197,6 +197,16 @@ _ORDER_CANCEL_FEE_INQUIRY_RE = re.compile(
     r"(?=.*(?:위약금|수수료|비용|배송비|택배비|왕복\s*배송비|물어내|발생|얼마(?!나)))",
     re.IGNORECASE,
 )
+_OWNED_ORDER_CANCEL_FEE_ANCHOR_RE = re.compile(
+    r"(?:\bO\d{8,}\b|"
+    r"내\s*(?:주문|예약)|"
+    r"내가\s*주문한\s*거|"
+    r"(?:주문|예약)\s*내역|"
+    r"(?:오늘|방금|최근)\s*(?:주문|예약)|"
+    r"(?:주문|예약)한\s*거)",
+    re.IGNORECASE,
+)
+_ORDER_CANCEL_FEE_REFERENCE_RE = re.compile(r"(?:이|그|해당)\s*(?:주문|예약|건|거)", re.IGNORECASE)
 _OTHER_STORE_RE = re.compile(r"다른\s*(?:매장|지점|곳)|다시\s*(?:확인|찾|검색)|새로\s*(?:찾|검색)", re.IGNORECASE)
 _STORE_SCOPE_FOLLOWUP_RE = re.compile(
     r"다른\s*(?:매장|지점|곳)|근처(?:에)?\s*(?:다른\s*)?(?:매장|지점|곳)|주변\s*(?:매장|지점)|"
@@ -510,6 +520,31 @@ def _is_quantity_only_followup(
     )
 
 
+def _has_owned_order_cancel_fee_anchor(text: str, slots: dict[str, Any]) -> bool:
+    if _ORDER_DIRECT_NO_RE.search(text) or _ORDER_NO_SUFFIX_RE.search(text):
+        return True
+    if _OWNED_ORDER_CANCEL_FEE_ANCHOR_RE.search(text):
+        return True
+    if not _ORDER_CANCEL_FEE_REFERENCE_RE.search(text):
+        return bool(
+            str(slots.get("referred_object_type") or "") == "order"
+            and str(slots.get("referred_object_status") or "resolved") in {"resolved", "resolvable_from_context"}
+        )
+    return bool(
+        slots.get("order_no")
+        or slots.get("order_no_suffix")
+        or slots.get("ord_no")
+        or slots.get("selected_order_no")
+        or slots.get("pending_order_no")
+        or slots.get("reservation_store_reference")
+        or slots.get("owned_record_target") in {"order", "reservation"}
+        or (
+            str(slots.get("referred_object_type") or "") == "order"
+            and str(slots.get("referred_object_status") or "resolved") in {"resolved", "resolvable_from_context"}
+        )
+    )
+
+
 def build_transaction_intent_frame(
     last_user_text: str,
     *,
@@ -545,6 +580,12 @@ def build_transaction_intent_frame(
             _ORDER_CANCEL_FEE_INQUIRY_RE.search(text)
             and not current_order_cancel_status_lookup
         )
+    )
+    current_owned_order_cancel_fee_inquiry = bool(
+        current_order_cancel_fee_inquiry and _has_owned_order_cancel_fee_anchor(text, slots)
+    )
+    current_general_cancel_fee_policy = bool(
+        current_order_cancel_fee_inquiry and not current_owned_order_cancel_fee_inquiry
     )
     current_order_cancel_request = bool(
         _ORDER_CANCEL_REQUEST_RE.search(text)
@@ -812,10 +853,21 @@ def build_transaction_intent_frame(
             entities["order_no"] = direct_order_match.group(0).upper()
         elif suffix_match:
             entities["order_no_suffix"] = suffix_match.group("suffix") or suffix_match.group("suffix2")
-    elif current_order_cancel_fee_inquiry:
-        intent = "order_cancel_fee_inquiry"
+    elif current_owned_order_cancel_fee_inquiry:
+        intent = "owned_order_cancel_fee_inquiry"
         sub_intent = "cancel_fee"
-        entities["order_cancel_fee_inquiry"] = True
+        entities["owned_order_cancel_fee_inquiry"] = True
+        direct_order_match = _ORDER_DIRECT_NO_RE.search(text)
+        suffix_match = _ORDER_NO_SUFFIX_RE.search(text)
+        entities["owned_anchor_target"] = "reservation" if "예약" in text and not direct_order_match else "order"
+        if direct_order_match:
+            entities["order_no"] = direct_order_match.group(0).upper()
+        elif suffix_match:
+            entities["order_no_suffix"] = suffix_match.group("suffix") or suffix_match.group("suffix2")
+    elif current_general_cancel_fee_policy:
+        intent = "general_cancel_fee_policy"
+        sub_intent = "cancel_fee_policy"
+        entities["general_cancel_fee_policy"] = True
     elif current_order_cancel_status_lookup:
         intent = "order_cancel_status_lookup"
         sub_intent = "cancel_status"
@@ -1042,10 +1094,20 @@ def build_transaction_intent_frame(
         known["order_cancel_status_lookup"] = True
         if entities.get("order_no"):
             known["order_no"] = entities["order_no"]
-    if intent == "order_cancel_fee_inquiry":
-        known["pending_intent"] = "order_cancel_fee_inquiry"
-        known["goal_type"] = "order_cancel_fee_inquiry"
-        known["order_cancel_fee_inquiry"] = True
+    if intent == "owned_order_cancel_fee_inquiry":
+        known["pending_intent"] = "owned_order_cancel_fee_inquiry"
+        known["goal_type"] = "owned_order_cancel_fee_inquiry"
+        known["owned_order_cancel_fee_inquiry"] = True
+        if entities.get("owned_anchor_target"):
+            known["owned_anchor_target"] = entities["owned_anchor_target"]
+        if entities.get("order_no"):
+            known["order_no"] = entities["order_no"]
+        if entities.get("order_no_suffix"):
+            known["order_no_suffix"] = entities["order_no_suffix"]
+    if intent == "general_cancel_fee_policy":
+        known["pending_intent"] = "general_cancel_fee_policy"
+        known["goal_type"] = "general_cancel_fee_policy"
+        known["general_cancel_fee_policy"] = True
     if intent == "order_cancel_request":
         known["pending_intent"] = "order_cancel_request"
         known["goal_type"] = "order_cancel_request"
@@ -1331,11 +1393,21 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
             metadata={"response_intent": "order_cancel_status_lookup", "action": action},
         )
 
-    if frame.intent == "order_cancel_fee_inquiry":
+    if frame.intent == "owned_order_cancel_fee_inquiry":
+        order_no = str(frame.known_slots.get("order_no") or frame.entities.get("order_no") or "").strip()
+        reservation_anchor = (
+            str(frame.known_slots.get("owned_anchor_target") or frame.entities.get("owned_anchor_target") or "") == "reservation"
+        )
         return ToolPlan(
-            allowed_tools=("get_orders_of_user_tool", "get_order_status_tool"),
-            preferred_tool="get_orders_of_user_tool",
-            tool_args_patch={},
+            allowed_tools=("get_my_reservations_tool", "get_orders_of_user_tool", "get_order_status_tool"),
+            preferred_tool=(
+                "get_order_status_tool"
+                if order_no
+                else "get_my_reservations_tool"
+                if reservation_anchor
+                else "get_orders_of_user_tool"
+            ),
+            tool_args_patch={"query_no": order_no} if order_no else {},
             forbidden_tools=(
                 "search_faq_hybrid_tool",
                 "get_store_schedule_tool",
@@ -1344,7 +1416,25 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
                 "quick_order_tool",
             ),
             required_slots=action_required_slots,
-            metadata={"response_intent": "order_cancel_fee_inquiry", "action": action},
+            metadata={"response_intent": "owned_order_cancel_fee_inquiry", "action": action},
+        )
+
+    if frame.intent == "general_cancel_fee_policy":
+        return ToolPlan(
+            allowed_tools=("search_faq_hybrid_tool",),
+            preferred_tool="search_faq_hybrid_tool",
+            tool_args_patch={},
+            forbidden_tools=(
+                "get_my_reservations_tool",
+                "get_orders_of_user_tool",
+                "get_order_status_tool",
+                "get_store_schedule_tool",
+                "search_stores_tool",
+                "get_store_list_tool",
+                "quick_order_tool",
+            ),
+            required_slots=action_required_slots,
+            metadata={"response_intent": "general_cancel_fee_policy", "action": action},
         )
 
     if frame.intent in {"payment_method_change_request", "payment_account_info_lookup"}:
@@ -1628,8 +1718,10 @@ def _transaction_action(frame: IntentFrame) -> str:
         return "order_arrival_status_lookup"
     if frame.intent == "order_cancel_status_lookup":
         return "order_cancel_status_lookup"
-    if frame.intent == "order_cancel_fee_inquiry":
-        return "order_cancel_fee_inquiry"
+    if frame.intent == "owned_order_cancel_fee_inquiry":
+        return "owned_order_cancel_fee_inquiry"
+    if frame.intent == "general_cancel_fee_policy":
+        return "general_cancel_fee_policy"
     if frame.intent == "order_cancel_request":
         return "order_cancel_request"
     if frame.intent == "maintenance_history_lookup":

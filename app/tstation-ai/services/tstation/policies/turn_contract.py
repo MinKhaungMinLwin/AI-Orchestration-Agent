@@ -1482,6 +1482,7 @@ def response_contract_violations(
     order_cancel_fee_violation = _order_cancel_fee_inquiry_contract_violation(
         assistant_response_text=assistant_response_text,
         response_shape_key=response_shape_key,
+        called_tools=called_tools,
         contract=contract,
     )
     if order_cancel_fee_violation is not None:
@@ -1999,19 +2000,46 @@ def _order_cancel_fee_inquiry_contract_violation(
     *,
     assistant_response_text: str | None,
     response_shape_key: str | None,
+    called_tools: list[str] | tuple[str, ...] | None,
     contract: TurnContract | None,
 ) -> dict[str, Any] | None:
-    if contract is None or str(contract.intent or "") != "order_cancel_fee_inquiry":
+    if contract is None:
         return None
+    intent = str(contract.intent or "")
     response_text = str(assistant_response_text or "")
+    tools = {str(tool) for tool in tuple(called_tools or ()) if str(tool).strip()}
+    if intent == "owned_order_cancel_fee_inquiry":
+        if response_text.startswith("제가 직접 주문을 취소 처리할 수는 없어요"):
+            return {
+                "type": "owned_order_cancel_fee_inquiry_normalized_as_cancel_request",
+                "response_shape_key": str(response_shape_key or ""),
+            }
+        return None
+    if intent != "general_cancel_fee_policy":
+        return None
+    owned_lookup_tools = {"get_my_reservations_tool", "get_orders_of_user_tool", "get_order_status_tool"}
+    if tools & owned_lookup_tools:
+        return {
+            "type": "general_cancel_fee_policy_used_order_lookup",
+            "response_shape_key": str(response_shape_key or ""),
+            "called_tools": sorted(tools & owned_lookup_tools),
+        }
     if response_text.startswith("제가 직접 주문을 취소 처리할 수는 없어요"):
         return {
-            "type": "order_cancel_fee_inquiry_normalized_as_cancel_request",
+            "type": "general_cancel_fee_policy_normalized_as_cancel_request",
             "response_shape_key": str(response_shape_key or ""),
         }
-    if re.search(r"어떤\s*주문을\s*취소|취소하려는\s*주문을\s*선택", response_text):
+    if re.search(r"최근\s*(?:온라인\s*)?(?:주문|예약)|확인된\s*온라인\s*주문(?:/예약)?\s*1건", response_text):
         return {
-            "type": "order_cancel_fee_inquiry_asked_cancel_selection",
+            "type": "general_cancel_fee_policy_asserted_recent_order_state",
+            "response_shape_key": str(response_shape_key or ""),
+        }
+    if (
+        re.search(r"주문\s*상세|취소\s*가능", response_text)
+        and not re.search(r"위약금|수수료|비용|배송비|택배비", response_text)
+    ):
+        return {
+            "type": "general_cancel_fee_policy_missing_fee_explanation",
             "response_shape_key": str(response_shape_key or ""),
         }
     return None

@@ -112,6 +112,58 @@ def test_order_history_reorder_contract_uses_owned_order_tool_only() -> None:
     assert decision.metadata["response_shape_key"] == "order_history_reorder"
 
 
+def test_general_cancel_fee_policy_uses_faq_only_contract() -> None:
+    user_text = "예약 취소에 따른 위약금이 있는지 알려줘"
+    frame = build_transaction_intent_frame(user_text, known_slots={})
+    plan = plan_transaction_tools(frame)
+    decision = decide_transaction_response(intent=frame.intent, user_text=user_text, known_slots=dict(frame.known_slots))
+
+    assert frame.intent == "general_cancel_fee_policy"
+    assert frame.sub_intent == "cancel_fee_policy"
+    assert frame.known_slots["pending_intent"] == "general_cancel_fee_policy"
+    assert plan.allowed_tools == ("search_faq_hybrid_tool",)
+    assert "get_my_reservations_tool" in plan.forbidden_tools
+    assert "get_orders_of_user_tool" in plan.forbidden_tools
+    assert "get_order_status_tool" in plan.forbidden_tools
+    assert decision.metadata["response_shape_key"] == "general_cancel_fee_policy_summary"
+
+
+def test_owned_order_cancel_fee_inquiry_uses_order_lookup_contract() -> None:
+    user_text = "내 오늘 예약 취소하면 수수료 있어?"
+    frame = build_transaction_intent_frame(user_text, known_slots={})
+    plan = plan_transaction_tools(frame)
+    decision = decide_transaction_response(intent=frame.intent, user_text=user_text, known_slots=dict(frame.known_slots))
+
+    assert frame.intent == "owned_order_cancel_fee_inquiry"
+    assert frame.sub_intent == "cancel_fee"
+    assert frame.known_slots["pending_intent"] == "owned_order_cancel_fee_inquiry"
+    assert plan.allowed_tools == ("get_my_reservations_tool", "get_orders_of_user_tool", "get_order_status_tool")
+    assert plan.preferred_tool == "get_my_reservations_tool"
+    assert "search_faq_hybrid_tool" in plan.forbidden_tools
+    assert decision.metadata["response_shape_key"] == "owned_order_cancel_fee_inquiry_summary"
+
+
+def test_order_number_cancel_fee_inquiry_prefers_order_status_tool() -> None:
+    user_text = "O202606220019363 취소하면 위약금 있어?"
+    frame = build_transaction_intent_frame(user_text, known_slots={})
+    plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "owned_order_cancel_fee_inquiry"
+    assert frame.known_slots["order_no"] == "O202606220019363"
+    assert plan.preferred_tool == "get_order_status_tool"
+    assert plan.tool_args_patch == {"query_no": "O202606220019363"}
+
+
+def test_order_suffix_cancel_fee_inquiry_keeps_owned_anchor() -> None:
+    user_text = "3708번 주문 취소하면 수수료 있어?"
+    frame = build_transaction_intent_frame(user_text, known_slots={})
+    plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "owned_order_cancel_fee_inquiry"
+    assert frame.known_slots["order_no_suffix"] == "3708"
+    assert plan.preferred_tool == "get_orders_of_user_tool"
+
+
 def test_tomorrow_install_region_request_preserves_requested_cal_day(monkeypatch) -> None:
     monkeypatch.setattr(policy, "_kst_today", lambda: policy.datetime.date(2026, 6, 16))
 

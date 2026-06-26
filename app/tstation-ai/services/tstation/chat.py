@@ -1912,6 +1912,8 @@ Complaint routing rule:
      * order_cancel_request = user asks to cancel/process/request cancellation ("예약 취소해줘", "주문 취소 처리해줘").
      * order_cancel_fee_inquiry = user asks whether cancellation causes costs/fees/penalties/shipping charges ("예약 취소에 따른 위약금이 있는지 알려줘", "예약 취소하면 비용이 발생하나요?", "오늘 취소하면 수수료 있나요?").
        Use execution_plan=["transaction:order_cancel_fee_inquiry"]. This is not a cancel execution request.
+       When the current turn has owned-record anchors such as order number, "내 주문/내 예약", "오늘 예약", "방금 주문", or a resolved order reference, mark it as an owned order/reservation fee inquiry.
+       When those anchors are absent, treat it as a general cancellation-fee policy question and do not assume a personal order lookup.
    - "discovery_recommendation": tire recommendation by vehicle, tire size, scenario, discount ranking WITHOUT a specific product name, or continuation from recommendation cards ("추천", "맞는 타이어", "12가3456 타이어", "세일 많이 하는 타이어", "할인율 높은 타이어")
    - "discovery_search": product search by name/keyword/brand/size (no goods_no), price/stock/discount-price query with product name only (e.g. "벤투스 S2 할인가 얼마야?", "다이나프로 HPX 할인된 가격", "마일리지 타이어", "마일리지 플러스 2"), run-flat vs normal price comparison, best-sellers/sales-rank requests ("많이 팔린/베스트셀러/잘 팔리는/잘 나가는/요즘 제일 인기 있는 거") — goods_no NOT yet known in context
    - "discovery_event_content": explicit events/deals/current benefit list requests ("이벤트 혜택 알려줘", "지금 받을 수 있는 혜택 알려줘", "기획전 알려줘", "행사 목록", "이벤트 대상 상품"), product-applicable events, YouTube/video.
@@ -2004,7 +2006,8 @@ DISCOVERY — product search, recommendation, compatibility (no goods_no yet):
 TRANSACTION — price/stock/store/order with goods_no already known in context:
 - "{{goods_no}} 가격 얼마야?", "주문/장바구니", "강남 매장", "예약 날짜", "한남점 선택", "주문 내역", "내 쿠폰", "오늘 취소하면 수수료 있나요?"
 - "가격 내려가면 알려줘", "쿠폰 이벤트 생기면 알림 줘", "이벤트 생기면 연락 줘" → TRANSACTION, execution_plan=["transaction:price_or_benefit_alert_request"], quickReply guidance only. Do not call event/deal/coupon issue tools and do not claim an alert was registered.
-- "예약 취소에 따른 위약금이 있는지 알려줘", "예약 취소하면 비용이 발생하나요?", "오늘 취소하면 수수료 있나요?" → TRANSACTION, agent_prompt_profile=transaction_order, execution_plan=["transaction:order_cancel_fee_inquiry"]. Fee/penalty inquiry only; do not classify as order_cancel_request and do not say the chatbot cannot directly cancel unless the user asks to cancel.
+- "예약 취소에 따른 위약금이 있는지 알려줘", "예약 취소하면 비용이 발생하나요?", "당일 예약 취소하면 위약금 있나요?" → TRANSACTION, agent_prompt_profile=transaction_order, execution_plan=["transaction:order_cancel_fee_inquiry"]. General fee/policy inquiry only; downstream policy must keep it in FAQ/RAG contract unless the turn contains owned-record anchors.
+- "내 오늘 예약 취소하면 수수료 있어?", "방금 주문한 거 취소하면 비용 나와?", "3708번 주문 취소하면 수수료 있어?" → TRANSACTION, agent_prompt_profile=transaction_order, execution_plan=["transaction:order_cancel_fee_inquiry"]. Owned order/reservation fee inquiry; downstream policy may use order/reservation lookup.
 - "예약 취소해줘", "주문 취소 처리해줘" → TRANSACTION, agent_prompt_profile=transaction_order, execution_plan=["transaction:order_cancel_request"].
 
 SUPPORT — policy, warranty, human agent:
@@ -2146,7 +2149,7 @@ Also set `policy_intent`:
 - current event/benefit/deal list lookup ("이벤트 혜택 알려줘", "지금 받을 수 있는 혜택 알려줘", "기획전 알려줘") → DISCOVERY, agent_prompt_profile=`discovery_event_content`, execution_plan=`discovery:benefit_event_list_lookup` or `discovery:benefit_deal_list`
 - automatic price/coupon/event notification request ("가격 내려가면 알려줘", "쿠폰 이벤트 생기면 알림 줘", "문자 줘", "연락 줘") → TRANSACTION, execution_plan=`transaction:price_or_benefit_alert_request`; this is not a current event list lookup.
 - competitor product to Hankook lineup orientation ("미쉐린 크로스클라이밋2에 대응하는 한국타이어 라인업 알려줘", "CC2랑 비슷한 한타 뭐야") → DISCOVERY, agent_prompt_profile=`discovery_search`, execution_plan=`discovery:competitor_counterpart_guidance`; this is an informational answer, not vehicle/size recommendation or Transaction.
-- cancellation/return fee inquiry ("예약 취소에 따른 위약금이 있는지 알려줘", "예약 취소하면 비용이 발생하나요?", "오늘 취소하면 수수료 있나요?") → TRANSACTION, agent_prompt_profile=`transaction_order`, execution_plan=`transaction:order_cancel_fee_inquiry`; this is a fee/condition inquiry, not an order_cancel_request.
+- cancellation/return fee inquiry ("예약 취소에 따른 위약금이 있는지 알려줘", "예약 취소하면 비용이 발생하나요?", "오늘 취소하면 수수료 있나요?") → TRANSACTION, agent_prompt_profile=`transaction_order`, execution_plan=`transaction:order_cancel_fee_inquiry`; this is a fee/condition inquiry, not an order_cancel_request. Downstream policy must keep generic fee questions without owned-record anchors in FAQ/RAG contract and only allow order/reservation lookup when the turn specifies an owned order/reservation.
 - cancellation execution request ("예약 취소해줘", "주문 취소 처리해줘") → TRANSACTION, agent_prompt_profile=`transaction_order`, execution_plan=`transaction:order_cancel_request`.
 - 지역+서비스 조건 매장 검색 (경기권에 타이어 보관해주는 매장 어디 있어?, 청주에 타이어 보관서비스 가능한 매장 있어?, 경기권 얼라인먼트 가능한 매장 알려줘) → TRANSACTION, policy_intent=`store_service_search`, execution_plan=`transaction:store_service_search`
 - specific-store attribute inquiry (정자점 야간정비 가능해?, 정자점 리프트 있어?, 정자점 질소충전 돼?, 정자점 얼라인먼트 잘 봐?) → `store_attribute_inquiry` with TRANSACTION store info lookup plus support-style contact guidance
@@ -2180,7 +2183,7 @@ RULES:
 - 온라인/오프라인/티스테이션 매장 가격이 왜 다른지 묻는 설명형 질문 → SUPPORT. 상품명이 있어도 상품 리스트/규격 선택을 요구하지 말 것.
 - 제주/서귀포/도서산간 + 배송비/추가 비용/온라인 가격 정책 질문 → SUPPORT
 - 픽업서비스/스마트픽업/차 가지러 와/차 가지러 올 수 있어/차량 수거 후 인도/집앞까지 데려다 줘/픽업 신청 방법/픽업 가능 거리/기사 위치 문의 → SUPPORT
-- 취소 수수료/취소비용/오늘 취소하면 수수료/예약 취소 비용/위약금/택배비 물어내야/왕복 배송비/반품수수료 → TRANSACTION, agent_prompt_profile=transaction_order, execution_plan=transaction:order_cancel_fee_inquiry
+- 취소 수수료/취소비용/오늘 취소하면 수수료/예약 취소 비용/위약금/택배비 물어내야/왕복 배송비/반품수수료 → TRANSACTION, agent_prompt_profile=transaction_order, execution_plan=transaction:order_cancel_fee_inquiry. Generic policy wording alone does not imply a personal order lookup.
 - Complaint tone alone is not enough for SUPPORT. First classify complaint_scope:
   - tstation_service_complaint → SUPPORT
   - out_of_scope_complaint → LEADING with support-scope guidance, no 상담/불편 접수
@@ -10177,7 +10180,33 @@ def _normalize_order_cancel_fee_inquiry_guidance(
         metadata = {}
     metadata.update({
         "orderCancelFeeInquiryNormalized": True,
-        "response_shape_key": "order_cancel_fee_inquiry_summary",
+        "response_shape_key": "owned_order_cancel_fee_inquiry_summary",
+    })
+    event_data["metadata"] = metadata
+    return True
+
+
+def _normalize_general_cancel_fee_policy_guidance(event_data: dict) -> bool:
+    if event_data.get("template") not in (None, "quickReply"):
+        return False
+
+    response = (
+        "예약/주문 취소 시 비용 발생 여부는 주문 유형과 진행 상태에 따라 달라질 수 있어요.\n\n"
+        "매장 방문 예약만 취소하는 경우에는 별도 취소 수수료가 발생하지 않는 것으로 안내돼요. "
+        "온라인 주문의 단순 변심 취소/반품은 배송 진행 상태에 따라 비용이 발생할 수 있으니 FAQ 안내와 주문 상세를 함께 확인해 주세요."
+    )
+    event_data["assistantResponse"] = response
+    event_data["quickReplies"] = [
+        {"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"},
+        {"label": "1:1 문의하기", "domain": "SUPPORT"},
+    ]
+    event_data["predictedDomains"] = _dedupe_domain_values(["TRANSACTION", "SUPPORT"])
+    metadata = event_data.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+    metadata.update({
+        "generalCancelFeePolicyNormalized": True,
+        "response_shape_key": "general_cancel_fee_policy_summary",
     })
     event_data["metadata"] = metadata
     return True
@@ -32194,13 +32223,20 @@ class TStationChatServiceV2:
                     if (
                         is_current_quickreply
                         and turn_contract is not None
-                        and turn_contract.intent == "order_cancel_fee_inquiry"
+                        and turn_contract.intent == "owned_order_cancel_fee_inquiry"
                         and _normalize_order_cancel_fee_inquiry_guidance(
                             event_data,
                             tool_data_list=[*(prev_tool_data or []), *tool_context_items],
                         )
                     ):
                         logger.info("[QUICKREPLY_FILTER] normalized order cancel fee inquiry guidance")
+                    if (
+                        is_current_quickreply
+                        and turn_contract is not None
+                        and turn_contract.intent == "general_cancel_fee_policy"
+                        and _normalize_general_cancel_fee_policy_guidance(event_data)
+                    ):
+                        logger.info("[QUICKREPLY_FILTER] normalized general cancel fee policy guidance")
                     if (
                         is_current_quickreply
                         and turn_contract is not None

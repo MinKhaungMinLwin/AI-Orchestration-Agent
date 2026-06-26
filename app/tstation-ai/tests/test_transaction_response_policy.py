@@ -127,6 +127,34 @@ def test_store_specific_stock_request_requires_quantity_before_location() -> Non
     assert decision.required_slots == ()
 
 
+def test_general_cancel_fee_policy_response_contract_prefers_summary() -> None:
+    decision = decide_transaction_response(
+        intent="general_cancel_fee_policy",
+        user_text="예약 취소하면 비용이 발생하나요?",
+        known_slots={"general_cancel_fee_policy": True},
+    )
+
+    assert decision.template == TemplateName.QUICK_REPLY
+    assert decision.response_shape == ResponseShape.SUMMARY
+    assert decision.metadata["response_shape_key"] == "general_cancel_fee_policy_summary"
+    assert "personal_order_lookup" in decision.forbidden_behaviors
+    assert "cancel_detail_only_guidance" in decision.forbidden_behaviors
+
+
+def test_owned_order_cancel_fee_inquiry_response_contract_stays_order_specific() -> None:
+    decision = decide_transaction_response(
+        intent="owned_order_cancel_fee_inquiry",
+        user_text="내 오늘 예약 취소하면 수수료 있어?",
+        known_slots={"owned_order_cancel_fee_inquiry": True},
+    )
+
+    assert decision.template == TemplateName.QUICK_REPLY
+    assert decision.response_shape == ResponseShape.SUMMARY
+    assert decision.metadata["response_shape_key"] == "owned_order_cancel_fee_inquiry_summary"
+    assert "normalize_as_cancel_request" in decision.forbidden_behaviors
+    assert "arbitrary_past_order_fee_answer" in decision.forbidden_behaviors
+
+
 def test_tc231_missing_size_does_not_build_null_order_summary() -> None:
     decision = decide_transaction_response(
         intent="quick_order_reservation",

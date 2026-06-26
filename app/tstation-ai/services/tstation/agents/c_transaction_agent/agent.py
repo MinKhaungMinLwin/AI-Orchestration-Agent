@@ -2067,7 +2067,10 @@ If the user asks about cancelling only part of a product order by quantity (e.g.
 - If the order type is unclear from tool output, default to the product order policy (not permitted).
 - Do NOT continue to steps 1–7 below once partial cancel guidance has been given.
 
-1. Call `get_orders_of_user_tool` FIRST to check the user's active/recent online orders. Do NOT answer from FAQ memory first.
+1. First decide whether the current turn has an owned-order/reservation anchor.
+   - Owned anchor examples: order number, order number suffix, "내 주문", "내 예약", "오늘 예약", "방금 주문", or a resolved "이 주문/그 예약" reference.
+   - If there is NO owned anchor and the user is asking a general cancellation-fee/policy question, answer from FAQ/policy guidance first and do NOT inspect recent orders.
+   - Only when an owned anchor exists may you call order/reservation lookup tools to answer that user's specific cancellation-fee question.
 2. If the user asks only about coupon restoration timing after cancellation (no direct cancellation request in the same turn), answer the restoration guide and offer a `quickReply` with `[{"label":"최근 주문 취소","domain":"TRANSACTION"}, {"label":"처음으로","domain":"LEADING"}]`. Do NOT direct to 1:1 문의 in this turn.
 3. If the user asks about coupon restoration while directly requesting cancellation, briefly explain that used coupons may be restored after cancellation depending on coupon conditions/validity, then continue the cancellation flow by listing orders first. Do NOT stop at coupon guidance.
 4. If the user clicks/sends "최근 주문 취소" or asks to cancel while mentioning coupon restoration and has not identified a specific order number, order item, or appointment date/time:
@@ -2868,7 +2871,10 @@ If the user asks about cancelling only part of a product order by quantity (e.g.
 - If the order type is unclear from tool output, default to the product order policy (not permitted).
 - Do NOT continue to steps 1–7 below once partial cancel guidance has been given.
 
-1. Call `get_orders_of_user_tool` FIRST to inspect active/recent online orders. Do NOT answer from FAQ memory first.
+1. First decide whether the current turn has an owned-order/reservation anchor.
+   - Owned anchor examples: order number, order number suffix, "내 주문", "내 예약", "오늘 예약", "방금 주문", or a resolved "이 주문/그 예약" reference.
+   - If there is NO owned anchor and the user is asking a general cancellation-fee/policy question, answer from FAQ/policy guidance first and do NOT inspect recent orders.
+   - Only when an owned anchor exists may you call order/reservation lookup tools to answer that user's specific cancellation-fee question.
 2. If the user asks only about coupon restoration timing after cancellation (no direct cancellation request in the same turn), answer the restoration guide and offer a `quickReply` with `[{"label":"최근 주문 취소","domain":"TRANSACTION"}, {"label":"처음으로","domain":"LEADING"}]`. Do NOT direct to 1:1 문의 in this turn.
 3. If the user asks about coupon restoration while directly requesting cancellation, briefly explain that used coupons may be restored after cancellation depending on coupon conditions/validity, then continue the cancellation flow by listing orders first. Do NOT stop at coupon guidance.
 4. If the user clicks/sends "최근 주문 취소" or asks to cancel while mentioning coupon restoration and has not identified a specific order number, order item, or appointment date/time:
