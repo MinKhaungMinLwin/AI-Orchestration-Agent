@@ -2458,6 +2458,49 @@ def test_general_cancel_fee_policy_fallback_does_not_require_router_slot() -> No
 @pytest.mark.parametrize(
     "user_text",
     [
+        "오늘 오후 1시 예약인데 지금 취소하면 위약금 있어?",
+        "예약 취소하면 비용 발생해?",
+    ],
+)
+def test_general_cancel_fee_policy_contract_skips_reference_guard_even_when_router_marks_order_missing(
+    user_text: str,
+) -> None:
+    frame = build_transaction_intent_frame(
+        user_text,
+        known_slots={"router_transaction_intent": "order_cancel_fee_inquiry"},
+    )
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text=user_text,
+        known_slots=dict(frame.known_slots),
+    )
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=response_decision,
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["transaction:order_cancel_fee_inquiry"],
+            referred_object_status="missing",
+            referred_object_type="order",
+            needs_clarification=True,
+        ),
+    )
+
+    assert frame.intent == "general_cancel_fee_policy"
+    assert contract.intent == "general_cancel_fee_policy"
+    assert contract.blocking_required_slots == ()
+    assert not should_guard_required_slots(contract)
+    assert contract.allowed_tools == ("search_faq_hybrid_tool",)
+    assert "get_orders_of_user_tool" in contract.forbidden_tools
+    assert "get_my_reservations_tool" in contract.forbidden_tools
+
+
+@pytest.mark.parametrize(
+    "user_text",
+    [
         "내 오늘 예약 취소하면 수수료 있어?",
         "O202606220019363 취소하면 위약금 있어?",
         "방금 주문한 거 취소하면 비용 나와?",
@@ -2483,6 +2526,34 @@ def test_owned_order_cancel_fee_inquiry_contract_uses_order_lookup(user_text: st
     assert tool_plan.allowed_tools == ("get_my_reservations_tool", "get_orders_of_user_tool", "get_order_status_tool")
     assert response_decision.metadata["response_shape_key"] == "owned_order_cancel_fee_inquiry_summary"
     assert contract.intent == "owned_order_cancel_fee_inquiry"
+
+
+def test_owned_order_cancel_fee_inquiry_still_keeps_order_reference_guard() -> None:
+    user_text = "3708번 주문 취소하면 수수료 있어?"
+    frame = build_transaction_intent_frame(user_text, known_slots={})
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text=user_text,
+        known_slots=dict(frame.known_slots),
+    )
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=response_decision,
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["transaction:owned_order_cancel_fee_inquiry"],
+            referred_object_status="missing",
+            referred_object_type="order",
+            needs_clarification=True,
+        ),
+    )
+
+    assert frame.intent == "owned_order_cancel_fee_inquiry"
+    assert "order" in contract.blocking_required_slots
+    assert should_guard_required_slots(contract)
 
 
 def test_order_cancel_fee_inquiry_normalizer_blocks_past_order_fee_assertion() -> None:

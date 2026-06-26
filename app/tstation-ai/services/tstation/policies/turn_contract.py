@@ -160,6 +160,20 @@ _LEGAL_ACTION_DENIAL_RE = re.compile(
     r"(?:안내|도움|제공).{0,16}(?:어렵|불가|드릴\s*수\s*없).{0,24}법적\s*(?:절차|조치|대응)",
     re.IGNORECASE,
 )
+_REFERENCE_GUARD_EXEMPT_INTENTS = frozenset({
+    "favorite_store_lookup",
+    "oe_re_concept_explanation",
+    "service_duration_advisory",
+    "maintenance_addon_with_tire_service",
+    "store_service_availability",
+    "general_cancel_fee_policy",
+    "general_card_cancel_timing_policy",
+    "maintenance_history_access_policy",
+    "order_document_guidance",
+    "legal_action_guidance_denied",
+    "store_service_advisory",
+    "store_visit_advisory",
+})
 
 
 @dataclass(frozen=True)
@@ -266,6 +280,9 @@ def build_turn_contract(
     code_intent = intent_frame.intent if intent_frame is not None else _intent_from_cross_domain(cross_domain_plan)
     domain = planner_domains[0] if planner_domains else code_domain
     intent = planner_intent or code_intent
+    if _should_lock_code_intent_contract(code_intent):
+        domain = code_domain
+        intent = code_intent
     sub_intent = intent_frame.sub_intent if intent_frame is not None else None
     known_slots = _compact_slots({
         **(dict(intent_frame.known_slots) if intent_frame is not None else {}),
@@ -3015,13 +3032,21 @@ def _should_apply_reference_guard(
 
 
 def _reference_guard_exempt_intent(intent: str) -> bool:
-    return str(intent or "") in {
-        "favorite_store_lookup",
-        "oe_re_concept_explanation",
-        "service_duration_advisory",
-        "maintenance_addon_with_tire_service",
-        "store_service_availability",
-    }
+    normalized = str(intent or "").strip()
+    if not normalized:
+        return False
+    if normalized in _REFERENCE_GUARD_EXEMPT_INTENTS:
+        return True
+    if normalized.endswith("_policy") or normalized.endswith("_guidance"):
+        return True
+    return False
+
+
+def _should_lock_code_intent_contract(intent: str) -> bool:
+    normalized = str(intent or "").strip()
+    if not normalized:
+        return False
+    return _reference_guard_exempt_intent(normalized)
 
 
 def _slot_for_referred_object_type(object_type: str) -> str:
