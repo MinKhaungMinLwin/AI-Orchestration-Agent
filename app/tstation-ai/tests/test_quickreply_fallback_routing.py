@@ -23052,6 +23052,75 @@ def test_base_agent_contract_sensitive_tool_guard_skips_owned_lookup_contract() 
     assert events is None
 
 
+def test_base_agent_contract_sensitive_tool_guard_replaces_coupon_usage_lookup_with_faq(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _DummyAgent(BaseAgent):
+        OUTPUT_TEMPLATE = None
+        TOOL_TO_AF_MAP: dict[str, str] = {}
+
+        def __init__(self) -> None:
+            self.name = "Support Agent"
+
+    from services.tstation.agents.e_support_agent import tools as support_tools
+
+    monkeypatch.setattr(
+        support_tools,
+        "search_faq_hybrid_tool",
+        SimpleNamespace(
+            invoke=lambda payload: {
+                "status": "success",
+                "data": {
+                    "items": [
+                        {
+                            "answer": "쿠폰별 사용처와 유의사항에 따라 온라인 전용인지, 매장 사용이 가능한지 다를 수 있습니다."
+                        }
+                    ]
+                },
+            }
+        ),
+    )
+
+    response_decision = ResponseDecision(
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        metadata={"response_shape_key": "coupon_usage_policy"},
+    )
+    tool_plan = ToolPlan(
+        allowed_tools=("search_faq_hybrid_tool",),
+        preferred_tool="search_faq_hybrid_tool",
+        forbidden_tools=("get_my_coupons_tool", "get_coupon_applicable_products_tool"),
+        metadata={"response_intent": "coupon_usage_policy"},
+    )
+    decision_token = current_transaction_response_decision.set(response_decision)
+    tool_plan_token = current_transaction_tool_plan.set(tool_plan)
+    user_text_token = current_user_text.set("다운받은 쿠폰 현장 결제할 때도 쓸 수 있어?")
+    try:
+        agent = _DummyAgent()
+        events = agent._contract_sensitive_tool_guard_events(
+            "get_my_coupons_tool",
+            [{"role": "user", "content": "다운받은 쿠폰 현장 결제할 때도 쓸 수 있어?"}],
+            config=None,
+            response_streamer=None,
+            answering_emitted=False,
+        )
+    finally:
+        current_transaction_response_decision.reset(decision_token)
+        current_transaction_tool_plan.reset(tool_plan_token)
+        current_user_text.reset(user_text_token)
+
+    assert events is not None
+    tool_events = [event for event in events if event.get("type") == "tool"]
+    assert [event["tool"] for event in tool_events] == ["search_faq_hybrid_tool"]
+    data_event = next(event for event in events if event.get("type") == "data")
+    metadata = data_event["data"]["metadata"]
+    assert metadata["contract_tool_blocked"] is True
+    assert metadata["blocked_tool"] == "get_my_coupons_tool"
+    assert metadata["replacement_tool"] == "search_faq_hybrid_tool"
+    assert metadata["contract_intent"] == "coupon_usage_policy"
+    assert "쿠폰은 쿠폰별 사용처와 유의사항" in str(data_event["data"]["assistantResponse"])
+
+
 def test_trace_shaped_general_cancel_fee_policy_blocks_order_lookup_and_replaces_with_faq(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

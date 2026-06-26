@@ -2011,8 +2011,10 @@ class BaseAgent(ABC):
         try:
             from services.tstation.agents.e_support_agent.tools import search_faq_hybrid_tool as _search_faq_hybrid_tool
             from services.tstation.chat import (
+                _DIRECT_SUPPORT_FAQ_POLICY_INTENTS,
                 _build_general_cancel_fee_policy_event,
                 _build_general_card_cancel_timing_policy_event,
+                _build_support_faq_policy_event,
             )
         except Exception:
             return None
@@ -2038,7 +2040,15 @@ class BaseAgent(ABC):
             code_event = _build_general_cancel_fee_policy_event(user_query, tool_result=tool_result)
         elif contract_intent == "general_card_cancel_timing_policy":
             code_event = _build_general_card_cancel_timing_policy_event(user_query, tool_result=tool_result)
+        elif contract_intent in _DIRECT_SUPPORT_FAQ_POLICY_INTENTS:
+            code_event = _build_support_faq_policy_event(
+                contract_intent,
+                user_query,
+                tool_result=tool_result,
+            )
         else:
+            return None
+        if not isinstance(code_event, dict):
             return None
         code_event = self._annotate_contract_tool_block(
             code_event,
