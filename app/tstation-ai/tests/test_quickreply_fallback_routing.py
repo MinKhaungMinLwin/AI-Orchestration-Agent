@@ -91,7 +91,6 @@ from services.tstation.chat import (
     _build_size_only_product_search_tool_input,
     _build_store_availability_quantity_prompt_event,
     _store_visit_advisory_event,
-    _store_context_from_mapping,
     _is_pure_inventory_stock_ready,
     _is_quantity_only_stock_followup_text,
     _build_pure_inventory_stock_contract,
@@ -397,6 +396,7 @@ from services.tstation.policies.ui_action_policy import (
     normalize_ui_action_metadata,
     preview_action_mode_for_slots,
     resolve_ui_action_context,
+    store_context_from_mapping,
     validate_ui_actions_for_contract,
 )
 from services.tstation.policies.pickup_service_gate import deterministic_pickup_service_gate_decision
@@ -785,7 +785,7 @@ def test_cta_preview_input_uses_template_boundary_alias_context() -> None:
 
 
 def test_store_context_mapping_exposes_canonical_keys_for_internal_decisions() -> None:
-    context = _store_context_from_mapping({
+    context = store_context_from_mapping({
         "currentStoreContext": {
             "storeId": "F00721",
             "storeName": "티스테이션 판교점",

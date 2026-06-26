@@ -91,6 +91,62 @@ def _vehicle_value(selected_vehicle: Mapping[str, Any], *keys: str) -> str:
     return ""
 
 
+def _float_or_none(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def store_context_from_mapping(data: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(data, Mapping):
+        return {}
+    context = data.get("currentStoreContext")
+    if isinstance(context, Mapping):
+        data = context
+    canonical_template = canonical_context_from_template_boundary(data)
+    canonical_tool = canonical_context_from_tool_boundary(data)
+    shop_id = str(canonical_template.get("shop_id") or canonical_tool.get("shop_id") or data.get("store_id") or "").strip()
+    shop_name = str(canonical_template.get("shop_name") or canonical_tool.get("shop_name") or "").strip()
+    xpos = _float_or_none(
+        data.get("xpos")
+        or data.get("x_pos")
+        or data.get("lng")
+        or data.get("longitude")
+        or data.get("user_xpos")
+    )
+    ypos = _float_or_none(
+        data.get("ypos")
+        or data.get("y_pos")
+        or data.get("lat")
+        or data.get("latitude")
+        or data.get("user_ypos")
+    )
+    address = str(
+        data.get("address")
+        or data.get("addr")
+        or data.get("roadAddress")
+        or data.get("road_address")
+        or ""
+    ).strip()
+    result: dict[str, Any] = {}
+    if shop_id:
+        result["shop_id"] = shop_id
+        result["shopId"] = shop_id
+    if shop_name:
+        result["shop_name"] = shop_name
+        result["shopName"] = shop_name
+    if xpos is not None:
+        result["xpos"] = xpos
+    if ypos is not None:
+        result["ypos"] = ypos
+    if address:
+        result["address"] = address
+    return result
+
+
 def _normalize_vehicle_contract_intent(intent: str | None) -> str:
     normalized = str(intent or "").strip()
     if normalized == "vehicle_information":

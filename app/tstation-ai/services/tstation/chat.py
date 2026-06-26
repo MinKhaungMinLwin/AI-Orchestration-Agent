@@ -125,6 +125,7 @@ from services.tstation.policies.ui_action_policy import (
     quickreply_cta_context_from_chip,
     quickreply_cta_context_from_template,
     resolve_ui_action_context,
+    store_context_from_mapping,
     ui_action_trace_metadata,
     validate_ui_actions_for_contract,
 )
@@ -5640,62 +5641,6 @@ _BOOKING_PREVIEW_CHIPS = [
         "metadata": {"intentKey": "today_install"},
     },
 ]
-def _float_or_none(value: Any) -> float | None:
-    if value in (None, ""):
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _store_context_from_mapping(data: Mapping[str, Any] | None) -> dict[str, Any]:
-    if not isinstance(data, Mapping):
-        return {}
-    context = data.get("currentStoreContext")
-    if isinstance(context, Mapping):
-        data = context
-    canonical_template = canonical_context_from_template_boundary(data)
-    canonical_tool = canonical_context_from_tool_boundary(data)
-    shop_id = str(canonical_template.get("shop_id") or canonical_tool.get("shop_id") or data.get("store_id") or "").strip()
-    shop_name = str(canonical_template.get("shop_name") or canonical_tool.get("shop_name") or "").strip()
-    xpos = _float_or_none(
-        data.get("xpos")
-        or data.get("x_pos")
-        or data.get("lng")
-        or data.get("longitude")
-        or data.get("user_xpos")
-    )
-    ypos = _float_or_none(
-        data.get("ypos")
-        or data.get("y_pos")
-        or data.get("lat")
-        or data.get("latitude")
-        or data.get("user_ypos")
-    )
-    address = str(
-        data.get("address")
-        or data.get("addr")
-        or data.get("roadAddress")
-        or data.get("road_address")
-        or ""
-    ).strip()
-    result: dict[str, Any] = {}
-    if shop_id:
-        result["shop_id"] = shop_id
-        result["shopId"] = shop_id
-    if shop_name:
-        result["shop_name"] = shop_name
-        result["shopName"] = shop_name
-    if xpos is not None:
-        result["xpos"] = xpos
-    if ypos is not None:
-        result["ypos"] = ypos
-    if address:
-        result["address"] = address
-    return result
-
-
 def _store_area_hint_from_name(store_name: str | None) -> str:
     text = str(store_name or "").strip()
     text = re.sub(r"^(?:티스테이션|더타이어샵)\s*", "", text)
@@ -5766,7 +5711,7 @@ def _cta_preview_input_from_slots(
         return None, "product"
     if not ord_qty_value:
         return None, "quantity"
-    store_context = _store_context_from_mapping(context)
+    store_context = store_context_from_mapping(context)
     has_location = (
         getattr(slots, "region", None)
         or getattr(slots, "shop_name", None)
@@ -9921,7 +9866,7 @@ def _build_pure_inventory_stock_event(
             {"label": "대체상품 찾기", "domain": "DISCOVERY"},
         ]
         response_shape_key = "no_stock_anywhere"
-    current_store_context = _store_context_from_mapping(store_context)
+    current_store_context = store_context_from_mapping(store_context)
     metadata = {
         "response_shape_key": response_shape_key,
         "stock_check_mode": "inventory_only",
@@ -9988,7 +9933,7 @@ def _build_pure_inventory_store_stock_available_event(
 ) -> dict:
     store_label = store_name or "선택한 매장"
     response = f"{store_label}에서 {tire_size} {ord_qty}개 기준으로 오늘 바로 장착 가능한 매장 재고가 확인돼요."
-    current_store_context = _store_context_from_mapping(store_context)
+    current_store_context = store_context_from_mapping(store_context)
     metadata = {
         "response_shape_key": "stock_available",
         "stock_check_mode": "inventory_only",
@@ -22584,7 +22529,7 @@ class TStationChatServiceV2:
                     return TStationChatResponse(content=guard_text)
             elif direct_cta_action_kind == "search_other_store":
                 enriched_cta_context = dict(cta_context)
-                store_context = _store_context_from_mapping(enriched_cta_context)
+                store_context = store_context_from_mapping(enriched_cta_context)
                 if (
                     store_context
                     and (store_context.get("xpos") is None or store_context.get("ypos") is None)
@@ -22611,7 +22556,7 @@ class TStationChatServiceV2:
                                     [store for store in stores if isinstance(store, dict)],
                                 )
                                 if matched_store is not None:
-                                    store_context = _store_context_from_mapping(
+                                    store_context = store_context_from_mapping(
                                         {**matched_store, **store_context},
                                     )
                                     enriched_cta_context["currentStoreContext"] = store_context
@@ -22644,7 +22589,7 @@ class TStationChatServiceV2:
                     return TStationChatResponse(content=guard_text)
 
                 assert preview_input is not None
-                store_context = _store_context_from_mapping(enriched_cta_context)
+                store_context = store_context_from_mapping(enriched_cta_context)
                 canonical_cta_context = canonical_context_from_template_boundary(cta_context)
                 previous_store_name = str(
                     store_context.get("shop_name") or canonical_cta_context.get("shop_name") or ""
@@ -25778,7 +25723,7 @@ class TStationChatServiceV2:
         tire_size = str(slot_values.get("tire_size") or "").strip()
         store_name = str(slot_values.get("shop_name") or slot_values.get("store_name") or "").strip()
         shop_id = str(slot_values.get("shop_id") or "").strip()
-        store_context: dict[str, Any] = _store_context_from_mapping(
+        store_context: dict[str, Any] = store_context_from_mapping(
             {
                 "shopId": shop_id,
                 "shopName": store_name,
@@ -25931,7 +25876,7 @@ class TStationChatServiceV2:
             resolved_store_name = str(canonical_store.get("shop_name") or "").strip()
             if resolved_store_name:
                 store_name = resolved_store_name
-            store_context = _store_context_from_mapping({**matched_store, "shopId": shop_id, "shopName": store_name})
+            store_context = store_context_from_mapping({**matched_store, "shopId": shop_id, "shopName": store_name})
 
         inventory_gate_allowed, inventory_gate_reason = _direct_code_fast_path_contract_gate(
             turn_contract=turn_contract,
@@ -31167,7 +31112,7 @@ class TStationChatServiceV2:
                 or ""
             ).strip()
             shop_id = str(frame.known_slots.get("shop_id") or "").strip()
-            store_context: dict[str, Any] = _store_context_from_mapping(
+            store_context: dict[str, Any] = store_context_from_mapping(
                 {
                     "shopId": shop_id,
                     "shopName": store_name,
@@ -31295,7 +31240,7 @@ class TStationChatServiceV2:
                 resolved_store_name = str(matched_store.get("shop_nm") or matched_store.get("shop_name") or "").strip()
                 if resolved_store_name:
                     store_name = resolved_store_name
-                store_context = _store_context_from_mapping({**matched_store, "shopId": shop_id, "shopName": store_name})
+                store_context = store_context_from_mapping({**matched_store, "shopId": shop_id, "shopName": store_name})
                 if not shop_id:
                     missing_store_event = {
                         "type": "data",
