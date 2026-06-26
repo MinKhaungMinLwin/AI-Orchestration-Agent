@@ -387,6 +387,8 @@ from services.tstation.policies.ui_action_policy import (
     apply_logistics_earliest_install_cta_action,
     apply_preview_update_cta_action,
     apply_ui_action_slot_patch,
+    build_other_store_search_result_event,
+    build_other_store_stock_unavailable_event,
     build_logistics_earliest_install_fallback_event,
     build_quickreply_cta_clarification_event,
     classify_direct_cta_action,
@@ -613,6 +615,42 @@ def test_build_logistics_earliest_install_fallback_event_uses_install_date() -> 
     assert event["template"] == "quickReply"
     assert "2026년 7월 2일 이후" in event["data"]["assistantResponse"]
     assert event["data"]["metadata"]["stock_check_mode"] == "logistics_only"
+
+
+def test_build_other_store_stock_unavailable_event_uses_radius_scope() -> None:
+    event = build_other_store_stock_unavailable_event(
+        store_name="티스테이션 판교점",
+        searched_by_radius=True,
+    )
+
+    assert event["assistant_response_source"] == "code_other_store_stock_search"
+    assert event["template"] == "quickReply"
+    assert "기준 반경 20km 내 다른 매장" in event["data"]["assistantResponse"]
+    assert event["data"]["metadata"]["radiusKm"] == 20
+
+
+def test_build_other_store_search_result_event_prefers_template_when_today_shop_exists() -> None:
+    event = build_other_store_search_result_event(
+        preview_result={
+            "status": "success",
+            "data": {
+                "inventory": {"todayShopArray": [{"shopId": "F12345"}]},
+                "stores": [{"shop_id": "F12345", "shop_nm": "티스테이션 동탄점"}],
+            },
+        },
+        preview_input={"goods_no": "G0001", "user_xpos": 127.0, "user_ypos": 37.0},
+        previous_store_name="티스테이션 판교점",
+        excluded_ids={"F00001"},
+        template_builder=lambda tool_data, intro: {
+            "template": "location",
+            "data": {"assistantResponse": intro, "toolRows": tool_data},
+        },
+    )
+
+    assert event["template"] == "location"
+    assert event["assistant_response_source"] == "code_other_store_stock_search"
+    assert event["source_domain"] == "transaction"
+    assert "기준 반경 20km 내 다른 매장의 오늘 장착 재고" in event["data"]["assistantResponse"]
 
 
 def test_transaction_cta_sanitizer_removes_label_only_reservation_and_contracts_region() -> None:

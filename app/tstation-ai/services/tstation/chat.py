@@ -113,6 +113,7 @@ from services.tstation.policies.ui_action_policy import (
     apply_logistics_earliest_install_cta_action,
     apply_preview_update_cta_action,
     apply_ui_action_slot_patch,
+    build_other_store_search_result_event,
     build_logistics_earliest_install_fallback_event,
     build_quickreply_cta_clarification_event,
     chip_context_dict,
@@ -5816,49 +5817,6 @@ def _cta_preview_input_from_slots(
     if getattr(slots, "requested_cal_day", None):
         preview_input["requested_cal_day"] = slots.requested_cal_day
     return preview_input, None
-def _preview_today_shop_ids(tool_result: dict[str, Any]) -> set[str]:
-    data = _unwrap_tool_data(tool_result)
-    inventory = data.get("inventory") if isinstance(data, dict) else None
-    if not isinstance(inventory, dict):
-        return set()
-    rows = inventory.get("todayShopArray")
-    if not isinstance(rows, list):
-        return set()
-    result: set[str] = set()
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        shop_id = str(canonical_context_from_tool_boundary(row).get("shop_id") or "").strip()
-        if shop_id:
-            result.add(shop_id)
-    return result
-
-
-def _other_store_no_today_stock_event(store_name: str, *, searched_by_radius: bool) -> dict:
-    store_label = store_name or "직전 매장"
-    scope = f"{store_label} 기준 반경 20km 내 다른 매장" if searched_by_radius else f"{store_label} 주변 다른 매장"
-    return {
-        "type": "data",
-        "template": "quickReply",
-        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
-        "assistant_response_source": "code_other_store_stock_search",
-        "data": {
-            "assistantResponse": f"{scope}에서도 오늘 장착 가능한 재고는 확인되지 않아요.",
-            "quickReplies": [
-                {"label": "다른 지역 입력", "domain": "TRANSACTION", "actionId": "enter_region", "intentKey": "today_install"},
-                {"label": "다른 날짜 확인", "domain": "TRANSACTION", "actionId": "enter_date", "intentKey": "today_install"},
-                {"label": "대체상품 찾기", "domain": "DISCOVERY"},
-            ],
-            "predictedDomains": ["TRANSACTION", "DISCOVERY"],
-            "metadata": {
-                "response_shape_key": "other_store_stock_unavailable",
-                "stock_check_mode": "inventory_only",
-                "radiusKm": 20 if searched_by_radius else None,
-            },
-        },
-    }
-
-
 def _sanitize_transaction_cta_contracts(event_data: dict[str, Any], *, source_domain: str) -> bool:
     if source_domain != MultiAgentDomain.Domain.TRANSACTION.value:
         return False
@@ -22687,7 +22645,6 @@ class TStationChatServiceV2:
 
                 assert preview_input is not None
                 store_context = _store_context_from_mapping(enriched_cta_context)
-                searched_by_radius = preview_input.get("user_xpos") is not None and preview_input.get("user_ypos") is not None
                 canonical_cta_context = canonical_context_from_template_boundary(cta_context)
                 previous_store_name = str(
                     store_context.get("shop_name") or canonical_cta_context.get("shop_name") or ""
@@ -22741,30 +22698,13 @@ class TStationChatServiceV2:
                     logger.exception("[CTA_ACTION] other-store preview failed input=%s", preview_input)
                     preview_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
 
-                today_shop_ids = _preview_today_shop_ids(preview_result) - excluded_ids
-                if not today_shop_ids:
-                    mapped_event = _other_store_no_today_stock_event(
-                        previous_store_name,
-                        searched_by_radius=searched_by_radius,
-                    )
-                else:
-                    intro_scope = (
-                        f"{previous_store_name} 기준 반경 20km 내 다른 매장의 오늘 장착 재고를 확인했어요."
-                        if searched_by_radius and previous_store_name
-                        else "다른 매장의 오늘 장착 재고를 확인했어요."
-                    )
-                    mapped_event = _try_build_template(
-                        [{"tool": "transaction_store_preview_tool", "args": preview_input, "data": preview_result}],
-                        intro_scope,
-                    )
-                    if mapped_event is None:
-                        mapped_event = _other_store_no_today_stock_event(
-                            previous_store_name,
-                            searched_by_radius=searched_by_radius,
-                        )
-                    else:
-                        mapped_event["source_domain"] = MultiAgentDomain.Domain.TRANSACTION.value
-                        mapped_event["assistant_response_source"] = "code_other_store_stock_search"
+                mapped_event = build_other_store_search_result_event(
+                    preview_result=preview_result,
+                    preview_input=preview_input,
+                    previous_store_name=previous_store_name,
+                    excluded_ids=excluded_ids,
+                    template_builder=_try_build_template,
+                )
 
                 await chat_history_svc.save_slots_async(request.session_id, merged_slots, user_id=request.user_id)
                 if request.stream:

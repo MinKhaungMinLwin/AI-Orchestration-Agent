@@ -12,7 +12,10 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
 from services.tstation.policies.cta_registry import cta_trace_metadata, normalize_quickreply_ctas
-from services.tstation.policies.resolved_context import canonical_context_from_template_boundary
+from services.tstation.policies.resolved_context import (
+    canonical_context_from_template_boundary,
+    canonical_context_from_tool_boundary,
+)
 
 
 _VEHICLE_TIRE_SIZE_LOOKUP_INTENT = "vehicle_tire_size_lookup"
@@ -692,6 +695,98 @@ def build_logistics_earliest_install_fallback_event(
             },
         },
     }
+
+
+def _unwrap_tool_data(tool_result: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(tool_result, Mapping):
+        return {}
+    data = tool_result.get("data")
+    return data if isinstance(data, Mapping) else dict(tool_result)
+
+
+def _preview_today_shop_ids(tool_result: Mapping[str, Any] | None) -> set[str]:
+    data = _unwrap_tool_data(tool_result)
+    inventory = data.get("inventory") if isinstance(data, Mapping) else None
+    if not isinstance(inventory, Mapping):
+        return set()
+    rows = inventory.get("todayShopArray")
+    if not isinstance(rows, list):
+        return set()
+    result: set[str] = set()
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        shop_id = str(canonical_context_from_tool_boundary(row).get("shop_id") or "").strip()
+        if shop_id:
+            result.add(shop_id)
+    return result
+
+
+def build_other_store_stock_unavailable_event(
+    *,
+    store_name: str,
+    searched_by_radius: bool,
+) -> dict[str, Any]:
+    store_label = store_name or "직전 매장"
+    scope = f"{store_label} 기준 반경 20km 내 다른 매장" if searched_by_radius else f"{store_label} 주변 다른 매장"
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "transaction",
+        "assistant_response_source": "code_other_store_stock_search",
+        "data": {
+            "assistantResponse": f"{scope}에서도 오늘 장착 가능한 재고는 확인되지 않아요.",
+            "quickReplies": [
+                {"label": "다른 지역 입력", "domain": "TRANSACTION", "actionId": "enter_region", "intentKey": "today_install"},
+                {"label": "다른 날짜 확인", "domain": "TRANSACTION", "actionId": "enter_date", "intentKey": "today_install"},
+                {"label": "대체상품 찾기", "domain": "DISCOVERY"},
+            ],
+            "predictedDomains": ["TRANSACTION", "DISCOVERY"],
+            "metadata": {
+                "response_shape_key": "other_store_stock_unavailable",
+                "stock_check_mode": "inventory_only",
+                "radiusKm": 20 if searched_by_radius else None,
+            },
+        },
+    }
+
+
+def build_other_store_search_result_event(
+    *,
+    preview_result: Mapping[str, Any] | None,
+    preview_input: Mapping[str, Any] | None,
+    previous_store_name: str,
+    excluded_ids: set[str] | None,
+    template_builder: Callable[[list[dict[str, Any]], str], dict[str, Any] | None],
+) -> dict[str, Any]:
+    input_payload = dict(preview_input or {})
+    excluded = {str(shop_id) for shop_id in (excluded_ids or set()) if shop_id}
+    searched_by_radius = input_payload.get("user_xpos") is not None and input_payload.get("user_ypos") is not None
+    today_shop_ids = _preview_today_shop_ids(preview_result) - excluded
+    if not today_shop_ids:
+        return build_other_store_stock_unavailable_event(
+            store_name=previous_store_name,
+            searched_by_radius=searched_by_radius,
+        )
+
+    intro_scope = (
+        f"{previous_store_name} 기준 반경 20km 내 다른 매장의 오늘 장착 재고를 확인했어요."
+        if searched_by_radius and previous_store_name
+        else "다른 매장의 오늘 장착 재고를 확인했어요."
+    )
+    mapped_event = template_builder(
+        [{"tool": "transaction_store_preview_tool", "args": input_payload, "data": dict(preview_result or {})}],
+        intro_scope,
+    )
+    if not isinstance(mapped_event, dict):
+        return build_other_store_stock_unavailable_event(
+            store_name=previous_store_name,
+            searched_by_radius=searched_by_radius,
+        )
+    normalized_event = dict(mapped_event)
+    normalized_event["source_domain"] = "transaction"
+    normalized_event["assistant_response_source"] = "code_other_store_stock_search"
+    return normalized_event
 
 
 def normalize_ui_action_metadata(
