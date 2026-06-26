@@ -7,10 +7,11 @@ CTA validation.
 
 from __future__ import annotations
 
-import re
 import json
+import logging
+import re
 from dataclasses import dataclass, field
-from typing import Any, Callable, Mapping
+from typing import Any, Awaitable, Callable, Mapping
 
 from schemas.tstation.slots import ConversationSlots
 from services.tstation.policies.intent_frame import IntentFrame, PolicyDomain
@@ -24,6 +25,9 @@ from services.tstation.policies.resolved_context import (
     canonical_context_from_template_boundary,
     canonical_context_from_tool_boundary,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 _VEHICLE_TIRE_SIZE_LOOKUP_INTENT = "vehicle_tire_size_lookup"
@@ -657,6 +661,59 @@ def build_store_availability_preview_result_events(
             "source_domain": "transaction",
         },
     ]
+
+
+async def run_store_availability_followup_preview(
+    *,
+    search_input: Mapping[str, Any],
+    search_result: Mapping[str, Any],
+    preview_input: Mapping[str, Any],
+    template_builder: Callable[[list[dict[str, Any]], str], dict[str, Any] | None],
+    product_keyword: str,
+    tire_size: str,
+    ord_qty: int,
+    store_name: str,
+    fallback_event: Mapping[str, Any] | None,
+    invoke_preview: Callable[[Mapping[str, Any]], Awaitable[Any]],
+    parse_tool_output_fn: Callable[[Any], Any],
+    record_tool_result_fn: Callable[[str, Mapping[str, Any], Mapping[str, Any]], None] | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    emitted_events = [build_store_availability_preview_status_event()]
+    try:
+        raw_preview = await invoke_preview(preview_input)
+        preview_result = normalize_preview_tool_result(raw_preview, parse_tool_output_fn=parse_tool_output_fn)
+    except Exception as exc:
+        logger.exception(
+            "[STORE_AVAILABILITY_SIZE_FOLLOWUP] transaction_store_preview_tool failed goods_no=%s",
+            str(preview_input.get("goods_no") or "").strip(),
+        )
+        preview_result = {
+            "status": "error",
+            "http_status": None,
+            "message": str(exc),
+            "data": {},
+        }
+    if record_tool_result_fn is not None:
+        record_tool_result_fn("transaction_store_preview_tool", preview_input, preview_result)
+    emitted_events.extend(
+        build_store_availability_preview_result_events(
+            preview_input=preview_input,
+            preview_result=preview_result,
+        )
+    )
+    mapped_event = build_store_availability_followup_preview_event(
+        search_input=search_input,
+        search_result=search_result,
+        preview_input=preview_input,
+        preview_result=preview_result,
+        template_builder=template_builder,
+        product_keyword=product_keyword,
+        tire_size=tire_size,
+        ord_qty=ord_qty,
+        store_name=store_name,
+        fallback_event=fallback_event,
+    )
+    return emitted_events, mapped_event
 
 
 def build_cta_preview_contract_gate(

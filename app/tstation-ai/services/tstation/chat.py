@@ -129,10 +129,8 @@ from services.tstation.policies.ui_action_policy import (
     build_staggered_vehicle_tire_selection_event,
     build_pure_inventory_stock_cta_payload,
     build_preview_tool_mapped_event,
-    build_store_availability_followup_preview_event,
-    build_store_availability_preview_result_events,
-    build_store_availability_preview_status_event,
     build_store_availability_quantity_prompt_event,
+    run_store_availability_followup_preview,
     has_staggered_vehicle_tire_sizes,
     is_manual_tire_size_input_selection,
     is_staggered_selected_tire_size_context,
@@ -27482,43 +27480,24 @@ class TStationChatServiceV2:
                         ord_qty = followup_action.get("ord_qty")
                         store_name = str(followup_action.get("store_name") or "").strip()
                         tire_size = str(followup_action.get("tire_size") or "").strip()
-                        emitted_events.append(build_store_availability_preview_status_event())
-                        try:
-                            raw_preview = await asyncio.to_thread(
-                                _transaction_store_preview_tool.invoke,
-                                preview_input,
-                            )
-                            preview_result = _tool_result_dict(raw_preview)
-                        except Exception as exc:
-                            logger.exception(
-                                "[STORE_AVAILABILITY_SIZE_FOLLOWUP] transaction_store_preview_tool failed goods_no=%s",
-                                goods_no,
-                            )
-                            preview_result = {
-                                "status": "error",
-                                "http_status": None,
-                                "message": str(exc),
-                                "data": {},
-                            }
-                        _record_code_tool_result("transaction_store_preview_tool", preview_input, preview_result)
-                        emitted_events.extend(
-                            build_store_availability_preview_result_events(
-                                preview_input=preview_input,
-                                preview_result=preview_result,
-                            )
-                        )
-                        mapped_event = build_store_availability_followup_preview_event(
+                        preview_events, mapped_event = await run_store_availability_followup_preview(
                             search_input=tool_input,
                             search_result=search_result,
                             preview_input=preview_input,
-                            preview_result=preview_result,
                             template_builder=try_build_template,
                             product_keyword=preferred_keyword,
                             tire_size=tire_size,
                             ord_qty=int(ord_qty),
                             store_name=store_name,
                             fallback_event=build_store_availability_quantity_prompt_event(**followup_action["prompt_kwargs"]),
+                            invoke_preview=lambda payload: asyncio.to_thread(
+                                _transaction_store_preview_tool.invoke,
+                                dict(payload),
+                            ),
+                            parse_tool_output_fn=_tool_result_dict,
+                            record_tool_result_fn=_record_code_tool_result,
                         )
+                        emitted_events.extend(preview_events)
                         if mapped_event is not None:
                             stock_event = _finalize_direct_code_event(
                                 mapped_event,

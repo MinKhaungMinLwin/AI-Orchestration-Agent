@@ -387,6 +387,7 @@ from services.tstation.policies.ui_action_policy import (
     build_store_availability_followup_preview_event,
     build_store_availability_preview_result_events,
     build_store_availability_preview_status_event,
+    run_store_availability_followup_preview,
     build_staggered_tire_quantity_limit_event,
     build_staggered_vehicle_tire_selection_event,
     build_oe_replacement_same_product_brand_prompt_event,
@@ -975,6 +976,83 @@ def test_build_store_availability_preview_result_events_emit_agent_flow_and_tool
     assert events[1]["type"] == "tool"
     assert events[1]["tool"] == "transaction_store_preview_tool"
     assert "\"status\": \"success\"" in events[1]["output"]
+
+
+def test_run_store_availability_followup_preview_builds_status_tool_and_mapped_event() -> None:
+    recorded: list[tuple[str, dict[str, object], dict[str, object]]] = []
+
+    async def _invoke_preview(payload: dict[str, object]) -> dict[str, object]:
+        assert payload["goods_no"] == "G000000319593"
+        return {"status": "success", "data": {"inventory": {"todayShopArray": [{"shopId": "F00098"}]}}}
+
+    events, mapped_event = asyncio.run(
+        run_store_availability_followup_preview(
+            search_input={"keyword": "벤투스 에어S", "size": "235/55R19", "limit": 10},
+            search_result={"status": "success", "data": {"items": [{"goods_no": "G000000319593"}]}},
+            preview_input={"goods_no": "G000000319593", "ord_qty": 4, "store_nm": "티스테이션 판교점"},
+            template_builder=lambda tool_data, intro: {
+                "template": "location",
+                "data": {"assistantResponse": intro, "toolCount": len(tool_data)},
+            },
+            product_keyword="벤투스 에어S",
+            tire_size="235/55R19",
+            ord_qty=4,
+            store_name="티스테이션 판교점",
+            fallback_event=cta_missing_slot_event("location"),
+            invoke_preview=_invoke_preview,
+            parse_tool_output_fn=lambda raw: raw,
+            record_tool_result_fn=lambda tool, tool_input, tool_result: recorded.append(
+                (tool, dict(tool_input), dict(tool_result))
+            ),
+        )
+    )
+
+    assert [event["type"] for event in events] == ["status", "agent_flow", "tool"]
+    assert events[0]["tool"] == "transaction_store_preview_tool"
+    assert events[1]["status"] == "success"
+    assert recorded == [
+        (
+            "transaction_store_preview_tool",
+            {"goods_no": "G000000319593", "ord_qty": 4, "store_nm": "티스테이션 판교점"},
+            {"status": "success", "data": {"inventory": {"todayShopArray": [{"shopId": "F00098"}]}}},
+        )
+    ]
+    assert mapped_event["template"] == "location"
+    assert mapped_event["assistant_response_source"] == "code_store_availability_size_followup"
+
+
+def test_run_store_availability_followup_preview_wraps_tool_failure() -> None:
+    recorded: list[tuple[str, dict[str, object], dict[str, object]]] = []
+
+    async def _invoke_preview(payload: dict[str, object]) -> dict[str, object]:
+        raise RuntimeError(f"preview failed for {payload['goods_no']}")
+
+    events, mapped_event = asyncio.run(
+        run_store_availability_followup_preview(
+            search_input={"keyword": "벤투스 에어S", "size": "235/55R19", "limit": 10},
+            search_result={"status": "success", "data": {"items": [{"goods_no": "G000000319593"}]}},
+            preview_input={"goods_no": "G000000319593", "ord_qty": 4, "store_nm": "티스테이션 판교점"},
+            template_builder=lambda tool_data, intro: None,
+            product_keyword="벤투스 에어S",
+            tire_size="235/55R19",
+            ord_qty=4,
+            store_name="티스테이션 판교점",
+            fallback_event=cta_missing_slot_event("location"),
+            invoke_preview=_invoke_preview,
+            parse_tool_output_fn=lambda raw: raw,
+            record_tool_result_fn=lambda tool, tool_input, tool_result: recorded.append(
+                (tool, dict(tool_input), dict(tool_result))
+            ),
+        )
+    )
+
+    assert [event["type"] for event in events] == ["status", "agent_flow", "tool"]
+    assert events[1]["status"] == "error"
+    assert recorded[0][0] == "transaction_store_preview_tool"
+    assert recorded[0][2]["status"] == "error"
+    assert "preview failed" in str(recorded[0][2]["message"])
+    assert mapped_event["template"] == "quickReply"
+    assert mapped_event["assistant_response_source"] == "code_store_availability_size_followup"
 
 
 def test_build_cta_preview_contract_gate_builds_resumed_stock_contract() -> None:
