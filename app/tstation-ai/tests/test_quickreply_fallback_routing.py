@@ -130,7 +130,6 @@ from services.tstation.chat import (
     _build_oe_replacement_same_product_search_args,
     _bare_product_search_followup_override,
     _build_discovery_policy_context,
-    _build_manual_tire_size_input_event,
     _build_missing_order_product_reselection_event,
     _allows_transaction_action_mode,
     _allows_outer_tool_slot_staging,
@@ -156,16 +155,10 @@ from services.tstation.chat import (
     _select_cancel_or_refund_order_rows,
     _select_order_rows_by_number,
     _is_preorder_confirmation_reply,
-    _build_staggered_vehicle_tire_selection_event,
-    _build_staggered_tire_quantity_limit_event,
-    _is_manual_tire_size_input_selection,
     _is_maintenance_history_access_policy_query,
     _is_maintenance_history_lookup_query,
     _is_order_quantity_prompt_continuation_text,
-    _is_staggered_selected_tire_size_context,
-    _listcar_allows_staggered_tire_prompt,
     _apply_vehicle_selection_slot_values,
-    _resolve_vehicle_tire_position_selection,
     _vehicle_selection_slot_values,
     _vehicle_based_recommendation_refinement_patch,
     _vehicle_type_compatibility_guard_event,
@@ -388,16 +381,23 @@ from services.tstation.policies.ui_action_policy import (
     build_other_store_preview_metadata,
     build_cta_preview_template_context,
     build_order_quantity_prompt_event,
+    build_manual_tire_size_input_event,
     build_preview_tool_mapped_event,
+    build_staggered_tire_quantity_limit_event,
+    build_staggered_vehicle_tire_selection_event,
     build_other_store_search_result_event,
     build_other_store_stock_unavailable_event,
     build_logistics_earliest_install_fallback_event,
     build_quickreply_cta_clarification_event,
     cta_missing_slot_event,
     classify_direct_cta_action,
+    is_manual_tire_size_input_selection,
     is_logistics_earliest_install_date_followup,
+    is_staggered_selected_tire_size_context,
+    listcar_allows_staggered_tire_prompt,
     merged_quickreply_cta_context,
     normalize_ui_action_metadata,
+    resolve_vehicle_tire_position_selection,
     preview_action_mode_for_slots,
     preview_location_slot_values_from_selection,
     resolve_goods_no_from_selection,
@@ -9880,7 +9880,7 @@ def test_vehicle_selection_slot_values_include_vehicle_identifiers() -> None:
 
 
 def test_staggered_vehicle_selection_event_prompts_for_front_or_rear_size() -> None:
-    event = _build_staggered_vehicle_tire_selection_event(
+    event = build_staggered_vehicle_tire_selection_event(
         {
             "car": {"licensePlate": "56모2162", "info": "BMW 3시리즈 그란 투리스모(6세대)"},
             "meta": {
@@ -9898,8 +9898,8 @@ def test_staggered_vehicle_selection_event_prompts_for_front_or_rear_size() -> N
 
 
 def test_staggered_prompt_is_not_allowed_for_support_originated_listcar() -> None:
-    assert _listcar_allows_staggered_tire_prompt({"template": "listCar", "source_domain": "support"}) is False
-    assert _listcar_allows_staggered_tire_prompt({"template": "listCar", "source_domain": "discovery"}) is True
+    assert listcar_allows_staggered_tire_prompt({"template": "listCar", "source_domain": "support"}) is False
+    assert listcar_allows_staggered_tire_prompt({"template": "listCar", "source_domain": "discovery"}) is True
 
 
 def test_manual_tire_size_chip_gets_deterministic_prompt() -> None:
@@ -9914,9 +9914,9 @@ def test_manual_tire_size_chip_gets_deterministic_prompt() -> None:
         },
     }
 
-    assert _is_manual_tire_size_input_selection("다른 사이즈 입력", latest_quickreply) is True
+    assert is_manual_tire_size_input_selection("다른 사이즈 입력", latest_quickreply) is True
 
-    event = _build_manual_tire_size_input_event()
+    event = build_manual_tire_size_input_event()
 
     assert event["template"] == "quickReply"
     assert "타이어 사이즈를 직접 입력" in event["data"]["assistantResponse"]
@@ -9935,7 +9935,7 @@ def test_vehicle_tire_position_selection_resolves_quickreply_chip_to_front_size(
         },
     }
 
-    resolved = _resolve_vehicle_tire_position_selection("앞바퀴사이즈", slots, latest_quickreply)
+    resolved = resolve_vehicle_tire_position_selection("앞바퀴사이즈", slots, latest_quickreply)
 
     assert resolved == "225/50R18"
 
@@ -9943,7 +9943,7 @@ def test_vehicle_tire_position_selection_resolves_quickreply_chip_to_front_size(
 def test_vehicle_tire_position_selection_resolves_rear_recommend_followup() -> None:
     slots = SimpleNamespace(tire_size_front="225/50R18", tire_size_rear="255/50R18")
 
-    resolved = _resolve_vehicle_tire_position_selection("뒤바퀴도 추천해줘", slots, None)
+    resolved = resolve_vehicle_tire_position_selection("뒤바퀴도 추천해줘", slots, None)
 
     assert resolved == "255/50R18도 추천해줘"
 
@@ -9951,7 +9951,7 @@ def test_vehicle_tire_position_selection_resolves_rear_recommend_followup() -> N
 def test_vehicle_tire_position_selection_preserves_transactional_intent_text() -> None:
     slots = SimpleNamespace(tire_size_front="225/50R18", tire_size_rear="255/50R18")
 
-    resolved = _resolve_vehicle_tire_position_selection("전륜 가격 알려줘", slots, None)
+    resolved = resolve_vehicle_tire_position_selection("전륜 가격 알려줘", slots, None)
 
     assert resolved == "225/50R18 가격 알려줘"
 
@@ -9963,7 +9963,7 @@ def test_staggered_selected_tire_size_context_detects_single_axle_size() -> None
         tire_size_rear="255/50R18",
     )
 
-    assert _is_staggered_selected_tire_size_context(slots) is True
+    assert is_staggered_selected_tire_size_context(slots) is True
 
 
 def test_staggered_tire_quantity_limit_event_offers_only_one_or_two() -> None:
@@ -9973,7 +9973,7 @@ def test_staggered_tire_quantity_limit_event_offers_only_one_or_two() -> None:
         tire_size_rear="255/50R18",
     )
 
-    event = _build_staggered_tire_quantity_limit_event(slots)
+    event = build_staggered_tire_quantity_limit_event(slots)
 
     assert event is not None
     assert event["template"] == "quickReply"

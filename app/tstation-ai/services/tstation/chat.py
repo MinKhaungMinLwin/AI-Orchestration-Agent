@@ -119,10 +119,17 @@ from services.tstation.policies.ui_action_policy import (
     build_other_store_preview_metadata,
     build_cta_preview_template_context,
     build_cta_preview_contract_gate,
+    build_manual_tire_size_input_event,
     build_order_quantity_prompt_event,
+    build_staggered_tire_quantity_limit_event,
+    build_staggered_vehicle_tire_selection_event,
     build_pure_inventory_stock_cta_payload,
     build_preview_tool_mapped_event,
     build_store_availability_quantity_prompt_event,
+    has_staggered_vehicle_tire_sizes,
+    is_manual_tire_size_input_selection,
+    is_staggered_selected_tire_size_context,
+    listcar_allows_staggered_tire_prompt,
     cta_preview_input_from_slots,
     cta_missing_slot_event,
     build_quickreply_cta_clarification_event,
@@ -132,6 +139,7 @@ from services.tstation.policies.ui_action_policy import (
     goods_no_from_template_event,
     merged_quickreply_cta_context,
     normalize_ui_action_metadata,
+    normalize_vehicle_tire_size_pair,
     preview_action_mode_for_slots,
     quickreply_cta_context_from_chip,
     quickreply_cta_context_from_template,
@@ -144,6 +152,7 @@ from services.tstation.policies.ui_action_policy import (
     resolve_tire_size_from_history_template,
     resolve_vehicle_from_history_template,
     resolve_vehicle_selection_from_listcar_event,
+    resolve_vehicle_tire_position_selection,
     resolve_vehicle_ui_selection_from_chip_context,
     resolve_ui_action_context,
     rewrite_vehicle_selection_user_text,
@@ -6819,15 +6828,6 @@ def _build_vehicle_information_event(selected_vehicle: dict, user_text: str) -> 
     }
 
 
-_FRONT_TIRE_CHIP_LABEL = "앞바퀴사이즈"
-_REAR_TIRE_CHIP_LABEL = "뒷바퀴사이즈"
-_CUSTOM_TIRE_CHIP_LABEL = "다른 사이즈 입력"
-_FRONT_TIRE_SELECTION_RE = re.compile(r"앞\s*바퀴|전륜|앞\s*타이어", re.IGNORECASE)
-_REAR_TIRE_SELECTION_RE = re.compile(r"뒤\s*바퀴|뒷\s*바퀴|후륜|뒤\s*타이어|뒷\s*타이어", re.IGNORECASE)
-_TIRE_POSITION_FOLLOWUP_ACTION_RE = re.compile(
-    r"추천|찾|검색|재고|가격|주문|구매|장착|진행|볼래|봐줘|알려줘|도\s*추천",
-    re.IGNORECASE,
-)
 _QUANTITYLESS_CART_ORDER_CTA_RE = re.compile(
     r"^\s*(?:장바구니\s*담기|장바구니에?\s*담(?:아줘|기)?|담아줘|구매하기|주문하기|바로\s*주문|결제하기)\s*$",
     re.IGNORECASE,
@@ -6842,15 +6842,15 @@ _PREORDER_CONFIRMATION_RE = re.compile(
     re.IGNORECASE,
 )
 
-
-def _normalize_vehicle_tire_size_pair(selected_meta: dict[str, Any]) -> tuple[str | None, str | None]:
-    front_size = normalize_tire_size(str(selected_meta.get("tireSize") or selected_meta.get("tire_size") or ""))
-    rear_size = normalize_tire_size(str(selected_meta.get("tireSizeRe") or selected_meta.get("tire_size_re") or ""))
-    return front_size, rear_size
-
-
-def _has_staggered_vehicle_tire_sizes(front_size: str | None, rear_size: str | None) -> bool:
-    return bool(front_size and rear_size and front_size != rear_size)
+_normalize_vehicle_tire_size_pair = normalize_vehicle_tire_size_pair
+_has_staggered_vehicle_tire_sizes = has_staggered_vehicle_tire_sizes
+_is_staggered_selected_tire_size_context = is_staggered_selected_tire_size_context
+_build_staggered_tire_quantity_limit_event = build_staggered_tire_quantity_limit_event
+_build_staggered_vehicle_tire_selection_event = build_staggered_vehicle_tire_selection_event
+_build_manual_tire_size_input_event = build_manual_tire_size_input_event
+_listcar_allows_staggered_tire_prompt = listcar_allows_staggered_tire_prompt
+_is_manual_tire_size_input_selection = is_manual_tire_size_input_selection
+_resolve_vehicle_tire_position_selection = resolve_vehicle_tire_position_selection
 
 
 def _preorder_payload(template_data: dict | None) -> dict[str, Any] | None:
@@ -6870,43 +6870,6 @@ def _is_preorder_confirmation_reply(user_text: str | None, latest_preorder_tmpl:
     if not _is_ready_preorder_template(latest_preorder_tmpl):
         return False
     return bool(_PREORDER_CONFIRMATION_RE.match(str(user_text or "").strip()))
-
-
-def _is_staggered_selected_tire_size_context(slots: Any) -> bool:
-    front_size = normalize_tire_size(str(getattr(slots, "tire_size_front", None) or ""))
-    rear_size = normalize_tire_size(str(getattr(slots, "tire_size_rear", None) or ""))
-    selected_size = normalize_tire_size(str(getattr(slots, "tire_size", None) or ""))
-    return (
-        _has_staggered_vehicle_tire_sizes(front_size, rear_size)
-        and selected_size in {front_size, rear_size}
-    )
-
-
-def _build_staggered_tire_quantity_limit_event(slots: Any) -> dict | None:
-    if not _is_staggered_selected_tire_size_context(slots):
-        return None
-
-    selected_size = normalize_tire_size(str(getattr(slots, "tire_size", None) or ""))
-    front_size = normalize_tire_size(str(getattr(slots, "tire_size_front", None) or ""))
-    rear_size = normalize_tire_size(str(getattr(slots, "tire_size_rear", None) or ""))
-    axle_label = "앞바퀴" if selected_size == front_size else "뒷바퀴" if selected_size == rear_size else "선택한"
-    return {
-        "type": "data",
-        "template": "quickReply",
-        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
-        "assistant_response_source": "code_staggered_tire_quantity_limit",
-        "data": {
-            "assistantResponse": (
-                f"앞/뒤 사이즈가 다른 차량은 {axle_label} 규격 **{selected_size}** 기준으로 "
-                "최대 2개까지 선택할 수 있어요.\n\n수량을 다시 선택해 주세요."
-            ),
-            "quickReplies": [
-                {"label": "1개", "domain": "TRANSACTION"},
-                {"label": "2개", "domain": "TRANSACTION"},
-            ],
-            "predictedDomains": ["TRANSACTION"],
-        },
-    }
 
 
 def _should_prompt_order_quantity_before_store(
@@ -6965,115 +6928,6 @@ def _is_order_quantity_prompt_continuation_text(user_text: str | None) -> bool:
 
 def _is_quantityless_cart_or_order_cta(user_text: str | None) -> bool:
     return bool(_QUANTITYLESS_CART_ORDER_CTA_RE.search(str(user_text or "")))
-
-
-def _build_staggered_vehicle_tire_selection_event(selected_vehicle: dict) -> dict | None:
-    selected_car = selected_vehicle.get("car") or {}
-    selected_meta = selected_vehicle.get("meta") or {}
-    front_size, rear_size = _normalize_vehicle_tire_size_pair(selected_meta)
-    if not _has_staggered_vehicle_tire_sizes(front_size, rear_size):
-        return None
-
-    car_info = str(selected_car.get("info") or selected_car.get("description") or "선택하신 차량").strip()
-    car_no = str(selected_meta.get("carNo") or selected_car.get("licensePlate") or "").strip()
-    vehicle_label = f"**{car_info} ({car_no})**" if car_no else f"**{car_info}**"
-    return {
-        "type": "data",
-        "template": "quickReply",
-        "source_domain": MultiAgentDomain.Domain.DISCOVERY.value,
-        "assistant_response_source": "code_vehicle_staggered_tire_prompt",
-        "data": {
-            "assistantResponse": (
-                f"{vehicle_label}의 규격은 전륜 **{front_size}**, 후륜 **{rear_size}**예요.\n\n"
-                "앞/뒤 사이즈가 다릅니다. 어떤 사이즈 기준으로 검색할까요?"
-            ),
-            "quickReplies": [
-                {"label": _FRONT_TIRE_CHIP_LABEL, "domain": "DISCOVERY"},
-                {"label": _REAR_TIRE_CHIP_LABEL, "domain": "DISCOVERY"},
-                {"label": _CUSTOM_TIRE_CHIP_LABEL, "domain": "DISCOVERY"},
-            ],
-            "predictedDomains": ["DISCOVERY"],
-        },
-    }
-
-
-def _build_manual_tire_size_input_event() -> dict:
-    return {
-        "type": "data",
-        "template": "quickReply",
-        "source_domain": MultiAgentDomain.Domain.DISCOVERY.value,
-        "assistant_response_source": "code_vehicle_manual_tire_size_prompt",
-        "data": {
-            "assistantResponse": "검색할 타이어 사이즈를 직접 입력해 주세요. 예: 225/50R18",
-            "quickReplies": [
-                {"label": "앞바퀴사이즈", "domain": "DISCOVERY"},
-                {"label": "뒷바퀴사이즈", "domain": "DISCOVERY"},
-            ],
-            "predictedDomains": ["DISCOVERY"],
-        },
-    }
-
-
-def _listcar_allows_staggered_tire_prompt(template_data: dict | None) -> bool:
-    if not isinstance(template_data, dict):
-        return True
-    source_domain = str(template_data.get("source_domain") or "").strip().lower()
-    return source_domain in {"", MultiAgentDomain.Domain.DISCOVERY.value}
-
-
-def _quickreply_labels(template_data: dict | None) -> set[str]:
-    labels: set[str] = set()
-    if not isinstance(template_data, dict):
-        return labels
-    data = template_data.get("data")
-    if not isinstance(data, dict):
-        return labels
-    for quick_reply in data.get("quickReplies") or []:
-        if isinstance(quick_reply, dict):
-            label = str(quick_reply.get("label") or "").strip()
-            if label:
-                labels.add(label)
-    return labels
-
-
-def _is_manual_tire_size_input_selection(user_text: str | None, latest_quickreply_tmpl: dict | None) -> bool:
-    return (
-        str(user_text or "").strip() == _CUSTOM_TIRE_CHIP_LABEL
-        and _CUSTOM_TIRE_CHIP_LABEL in _quickreply_labels(latest_quickreply_tmpl)
-    )
-
-
-def _resolve_vehicle_tire_position_selection(
-    user_text: str | None,
-    slots: Any,
-    latest_quickreply_tmpl: dict | None = None,
-) -> str | None:
-    text = str(user_text or "").strip()
-    if not text or normalize_tire_size(text):
-        return None
-
-    front_size = normalize_tire_size(str(getattr(slots, "tire_size_front", None) or ""))
-    rear_size = normalize_tire_size(str(getattr(slots, "tire_size_rear", None) or ""))
-    if not _has_staggered_vehicle_tire_sizes(front_size, rear_size):
-        return None
-
-    latest_labels = _quickreply_labels(latest_quickreply_tmpl)
-
-    if text == _FRONT_TIRE_CHIP_LABEL and _FRONT_TIRE_CHIP_LABEL in latest_labels:
-        return front_size
-    if text == _REAR_TIRE_CHIP_LABEL and _REAR_TIRE_CHIP_LABEL in latest_labels:
-        return rear_size
-    if text == _CUSTOM_TIRE_CHIP_LABEL and _CUSTOM_TIRE_CHIP_LABEL in latest_labels:
-        return None
-    if (
-        _FRONT_TIRE_SELECTION_RE.search(text)
-        and not _REAR_TIRE_SELECTION_RE.search(text)
-        and _TIRE_POSITION_FOLLOWUP_ACTION_RE.search(text)
-    ):
-        return _FRONT_TIRE_SELECTION_RE.sub(front_size, text, count=1)
-    if _REAR_TIRE_SELECTION_RE.search(text) and _TIRE_POSITION_FOLLOWUP_ACTION_RE.search(text):
-        return _REAR_TIRE_SELECTION_RE.sub(rear_size, text, count=1)
-    return None
 
 
 def _normalize_vehicle_type_from_car_type(raw_car_type: Any, *, fallback_text: str | None = None) -> str | None:
