@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from services.tstation.policies.policy_text_matchers import is_general_card_cancel_timing_policy_query
 from services.tstation.policies.response_decision import ResponseDecision, ResponseShape, TemplateName
 
 
@@ -30,14 +31,6 @@ _COUPON_USAGE_POLICY_RE = re.compile(
 _COUPON_REGISTRATION_POLICY_RE = re.compile(
     r"쿠폰.{0,24}(?:번호|등록|입력|코드|등록\s*방법|어디서\s*등록)|"
     r"(?:번호|등록|입력|코드|등록\s*방법|어디서\s*등록).{0,24}쿠폰",
-    re.IGNORECASE,
-)
-_CARD_CANCEL_TIMING_POLICY_RE = re.compile(
-    r"(?:카드|결제|환불|승인\s*취소|승인취소|취소\s*완료).{0,24}(?:언제|며칠|얼마나|반영|걸려|소요)|"
-    r"(?:언제|며칠|얼마나|반영|걸려|소요).{0,24}(?:카드|결제|환불|승인\s*취소|승인취소)|"
-    r"카드사.{0,24}(?:환불|승인\s*취소|승인취소|취소|반영|언제|며칠|얼마나|걸려|소요)|"
-    r"(?:환불|승인\s*취소|승인취소|취소|반영|언제|며칠|얼마나|걸려|소요).{0,24}카드사|"
-    r"승인\s*취소\s*(?:언제|반영|걸려|소요)",
     re.IGNORECASE,
 )
 _ORDER_DOCUMENT_GUIDANCE_RE = re.compile(
@@ -511,7 +504,7 @@ def decide_support_response(
             ),
         )
 
-    if intent == "general_card_cancel_timing_policy" or _CARD_CANCEL_TIMING_POLICY_RE.search(text):
+    if intent == "general_card_cancel_timing_policy" or is_general_card_cancel_timing_policy_query(text):
         return _decision(
             response_shape_key="general_card_cancel_timing_policy",
             response_shape=ResponseShape.SUMMARY,

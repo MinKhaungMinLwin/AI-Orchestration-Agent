@@ -7,6 +7,7 @@ import datetime
 from typing import Any
 
 from services.tstation.policies.intent_frame import IntentFrame, PolicyDomain
+from services.tstation.policies.policy_text_matchers import is_general_card_cancel_timing_policy_query
 from services.tstation.policies.response_decision import ToolPlan
 from services.tstation.policies.store_service_gate import (
     classify_store_name_role,
@@ -184,14 +185,6 @@ _ORDER_CANCEL_STATUS_LOOKUP_RE = re.compile(
     r"(?:주문|결제|카드)?\s*취소.{0,18}(?:됐|되었|완료|처리|상태|확인|승인|맞지|맞아|됐어|됐나요|됐는지)|"
     r"(?:취소|캔슬)(?:된\s*거|된거|완료|처리|상태|승인).{0,18}(?:맞|확인|됐|됐어|됐나요|알려)|"
     r"카드\s*취소\s*승인|결제\s*취소.{0,18}(?:됐|승인|처리|완료)",
-    re.IGNORECASE,
-)
-_CARD_CANCEL_TIMING_POLICY_RE = re.compile(
-    r"(?:카드|결제|환불|승인\s*취소|승인취소|취소\s*완료).{0,24}(?:언제|며칠|얼마나|반영|걸려|소요)|"
-    r"(?:언제|며칠|얼마나|반영|걸려|소요).{0,24}(?:카드|결제|환불|승인\s*취소|승인취소)|"
-    r"카드사.{0,24}(?:환불|승인\s*취소|승인취소|취소|반영|언제|며칠|얼마나|걸려|소요)|"
-    r"(?:환불|승인\s*취소|승인취소|취소|반영|언제|며칠|얼마나|걸려|소요).{0,24}카드사|"
-    r"승인\s*취소\s*(?:언제|반영|걸려|소요)",
     re.IGNORECASE,
 )
 _ORDER_CANCEL_REQUEST_RE = re.compile(
@@ -615,7 +608,7 @@ def build_transaction_intent_frame(
         current_order_cancel_status_signal and _has_owned_order_cancel_status_anchor(text, slots)
     )
     current_general_card_cancel_timing_policy = bool(
-        _CARD_CANCEL_TIMING_POLICY_RE.search(text)
+        is_general_card_cancel_timing_policy_query(text)
         and not _has_owned_order_cancel_status_anchor(text, slots)
     )
     router_order_cancel_fee_inquiry = str(slots.get("router_transaction_intent") or "") == "order_cancel_fee_inquiry"

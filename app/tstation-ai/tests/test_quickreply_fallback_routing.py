@@ -3544,6 +3544,21 @@ def test_card_company_queries_do_not_overmatch_card_cancel_timing_policy(user_te
     assert support_response.metadata["response_shape_key"] != "general_card_cancel_timing_policy"
 
 
+@pytest.mark.parametrize(
+    "user_text",
+    [
+        "카드사 환불은 보통 며칠 걸려?",
+        "카드사 승인취소 반영 언제 돼?",
+    ],
+)
+def test_card_company_timing_queries_still_route_to_card_cancel_timing_policy(user_text: str) -> None:
+    frame = build_transaction_intent_frame(user_text)
+    support_response = decide_support_response(intent=frame.intent, user_text=user_text, known_slots=dict(frame.known_slots))
+
+    assert frame.intent == "general_card_cancel_timing_policy"
+    assert support_response.metadata["response_shape_key"] == "general_card_cancel_timing_policy"
+
+
 def test_cancel_status_selector_auto_selects_single_cancelled_order_without_order_no() -> None:
     orders_result = {
         "status": "success",
@@ -20576,6 +20591,63 @@ def test_first_turn_slim_router_conversion_preserves_common_fields(monkeypatch: 
     assert result.original_router_domains == [MultiAgentDomain.Domain.TRANSACTION]
     assert result.original_router_execution_plan == ["transaction:order_cancel_status_lookup"]
     assert result.override_blocked is True
+    assert result.blocked_override_reason == "owned_order_anchor_missing"
+
+
+def test_coerce_router_result_to_multi_domain_preserves_common_fields_for_first_turn() -> None:
+    slim_result = chat_module._SlimMultiAgentDomain(
+        reason="test slim router",
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        execution_plan=["support:general_card_cancel_timing_policy"],
+        claim_check_type="none",
+        complaint_scope="none",
+        discovery_followup_intent="none",
+        carried_discovery_objective="none",
+        pending_check_topic="none",
+        pending_check_object_type="none",
+        pending_check_object_value="",
+        comparison_followup_intent="none",
+        comparison_metric="none",
+        recent_product_set_followup_type="none",
+        recent_product_set_metric="none",
+        recent_product_set_direction="none",
+        recent_product_set_price_basis="none",
+        requested_product_attribute="none",
+        policy_intent="general_card_cancel_timing_policy",
+        store_attribute_store_name="광교신도시점",
+        store_attribute_text="얼라인먼트 가능한지",
+        store_attribute_type="service",
+        store_attribute_verification_level="tool_verifiable",
+        service_name="타이어 보관서비스",
+        service_code="119",
+        region="강남",
+        place_query="강남역",
+        recommendation_scenario="none",
+        referred_object_status="resolved",
+        referred_object_type="none",
+        needs_clarification=False,
+        planner_confidence=0.93,
+        override_applied=True,
+        override_reason="preserve_router_policy_intent",
+        original_router_domains=[MultiAgentDomain.Domain.TRANSACTION],
+        original_router_execution_plan=["transaction:order_cancel_status_lookup"],
+        override_blocked=True,
+        blocked_override_reason="owned_order_anchor_missing",
+        agent_prompt_profile=chat_module.AgentPromptProfile.FULL,
+    )
+
+    result = chat_module._coerce_router_result_to_multi_domain(slim_result, is_first_turn=True)
+
+    assert result.user_behavior == ""
+    assert result.flow == ""
+    assert result.policy_intent == "general_card_cancel_timing_policy"
+    assert result.store_attribute_store_name == "광교신도시점"
+    assert result.store_attribute_text == "얼라인먼트 가능한지"
+    assert result.service_name == "타이어 보관서비스"
+    assert result.service_code == "119"
+    assert result.region == "강남"
+    assert result.place_query == "강남역"
+    assert result.override_reason == "preserve_router_policy_intent"
     assert result.blocked_override_reason == "owned_order_anchor_missing"
 
 

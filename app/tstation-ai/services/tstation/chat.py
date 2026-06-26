@@ -2057,6 +2057,22 @@ class _SlimMultiAgentDomain(BaseModel):
     )
 
 
+def _coerce_router_result_to_multi_domain(
+    raw_result: MultiAgentDomain | _SlimMultiAgentDomain,
+    *,
+    is_first_turn: bool,
+) -> MultiAgentDomain:
+    """Preserve all shared router fields when expanding the first-turn slim schema."""
+
+    if not is_first_turn:
+        return raw_result
+
+    result_payload = raw_result.model_dump()
+    result_payload["user_behavior"] = ""
+    result_payload["flow"] = ""
+    return MultiAgentDomain(**result_payload)
+
+
 # Module-level singletons — avoid re-wrapping LLM per request.
 # DECISION_LLM (small/fast) is sufficient for routing classification since the
 # schemas are descriptive only — no prescriptive `next_action` field that would
@@ -3264,13 +3280,7 @@ class StreamingMultiAgentCoordinator:
 
             # Normalize slim result to MultiAgentDomain for downstream compat.
             # Empty narrative fields short-circuit _inject_conversation_context.
-            if is_first_turn:
-                result_payload = raw_result.model_dump()
-                result_payload["user_behavior"] = ""
-                result_payload["flow"] = ""
-                result = MultiAgentDomain(**result_payload)
-            else:
-                result = raw_result
+            result = _coerce_router_result_to_multi_domain(raw_result, is_first_turn=is_first_turn)
 
             # Deterministic profile override — datepick selection turn must use FULL profile.
             # FE 가 datepick 슬롯 클릭 시 보내는 메시지 패턴 "YYYY년 M월 D일 (요일)\nHH:MM"
