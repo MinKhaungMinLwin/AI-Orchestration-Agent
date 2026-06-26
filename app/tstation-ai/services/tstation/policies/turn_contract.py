@@ -196,6 +196,10 @@ class TurnContract:
     action_mode: str = "unspecified"
     context_state: str = "dormant"
     resume_source: str = "none"
+    router_waited: bool = False
+    router_source: str | None = None
+    contract_source: str | None = None
+    speculative_used_for_contract: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -229,6 +233,10 @@ class TurnContract:
             "action_mode": self.action_mode,
             "context_state": self.context_state,
             "resume_source": self.resume_source,
+            "router_waited": self.router_waited,
+            "router_source": self.router_source,
+            "contract_source": self.contract_source,
+            "speculative_used_for_contract": self.speculative_used_for_contract,
         }
 
 
@@ -244,6 +252,10 @@ def build_turn_contract(
     action_mode: str = "unspecified",
     context_state: str = "dormant",
     resume_source: str = "none",
+    router_waited: bool = False,
+    router_source: str = "unknown",
+    contract_source: str | None = None,
+    speculative_used_for_contract: bool = False,
 ) -> TurnContract:
     """Combine policy objects into a single contract without changing execution."""
 
@@ -567,6 +579,10 @@ def build_turn_contract(
         action_mode=action_mode,
         context_state=context_state,
         resume_source=resume_source,
+        router_waited=router_waited,
+        router_source=router_source,
+        contract_source=contract_source or _planner_source(routing_result, cross_domain_plan),
+        speculative_used_for_contract=speculative_used_for_contract,
     )
 
 

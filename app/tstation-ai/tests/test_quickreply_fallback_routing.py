@@ -1308,6 +1308,52 @@ def test_completed_speculative_transaction_order_contract_promotes_over_discover
     assert promoted_routing is routing
 
 
+def test_turn_contract_marks_router_confirmed_before_use() -> None:
+    routing = _routing_result(
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        execution_plan=["support:signup_first_purchase_benefit_policy"],
+        policy_intent="signup_first_purchase_benefit_policy",
+    )
+
+    contract = build_turn_contract(
+        user_text="회원가입하면 첫구매 혜택은 뭐가 있어?",
+        routing_result=routing,
+        router_waited=True,
+        router_source="llm",
+        contract_source="router",
+        speculative_used_for_contract=False,
+    )
+
+    assert contract.router_waited is True
+    assert contract.router_source == "llm"
+    assert contract.contract_source == "router"
+    assert contract.speculative_used_for_contract is False
+
+
+def test_turn_contract_keeps_router_plan_over_cross_domain_plan() -> None:
+    routing = _routing_result(
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        execution_plan=["support:signup_first_purchase_benefit_policy"],
+        policy_intent="signup_first_purchase_benefit_policy",
+    )
+    cross_domain_plan = plan_cross_domain_turn("회원가입하면 첫구매 혜택은 뭐가 있어?", known_slots={})
+
+    contract = build_turn_contract(
+        user_text="회원가입하면 첫구매 혜택은 뭐가 있어?",
+        routing_result=routing,
+        cross_domain_plan=cross_domain_plan,
+        router_waited=True,
+        router_source="llm",
+        contract_source="router",
+        speculative_used_for_contract=False,
+    )
+
+    assert contract.planner_domains == ("support",)
+    assert contract.execution_plan == ("support:signup_first_purchase_benefit_policy",)
+    assert contract.contract_source == "router"
+    assert contract.speculative_used_for_contract is False
+
+
 def test_p0_auto_chain_requires_current_turn_transaction_anchor() -> None:
     stale_reservation_slots = ConversationSlots(
         pending_intent="reservation",

@@ -23458,6 +23458,11 @@ class TStationChatServiceV2:
                     ),
                 }),
             )
+        router_waited_for_contract = False
+        router_source_for_contract = "unknown"
+        contract_source_for_turn = "router_fallback"
+        speculative_used_for_contract = False
+
         promoted_domains, promoted_routing_result, promoted_router_contract = (
             _promote_completed_speculative_router_contract(
                 classify_future=speculative_classify_future,
@@ -23473,6 +23478,49 @@ class TStationChatServiceV2:
             if routing_result is not None:
                 messages = StreamingMultiAgentCoordinator._inject_conversation_context(messages, routing_result)
                 messages = StreamingMultiAgentCoordinator._inject_client_prompt(messages)
+        if speculative_classify_future is not None:
+            try:
+                verified_domains, verified_routing_result = await asyncio.to_thread(speculative_classify_future.result)
+                if verified_domains:
+                    domains = list(verified_domains)
+                if verified_routing_result is not None:
+                    routing_result = verified_routing_result
+                    messages = StreamingMultiAgentCoordinator._inject_conversation_context(messages, routing_result)
+                    messages = StreamingMultiAgentCoordinator._inject_client_prompt(messages)
+                router_waited_for_contract = True
+                router_source_for_contract = "llm"
+                contract_source_for_turn = "router"
+                speculative_used_for_contract = False
+                speculative_classify_future = None
+                logger.info(
+                    "[ROUTER_CONTRACT] waited for speculative router confirmation before contract: domains=%s plan=%s",
+                    [domain.value for domain in domains],
+                    list(getattr(routing_result, "execution_plan", []) or []),
+                )
+            except Exception:
+                logger.exception("[ROUTER_CONTRACT] failed to confirm speculative router before contract build")
+                if routing_result is None:
+                    fallback_domains = list(domains or [MultiAgentDomain.Domain.LEADING])
+                    routing_result = MultiAgentDomain(
+                        reason="router_timeout_fallback",
+                        domains=fallback_domains,
+                        execution_plan=[
+                            f"{domain.value}:router_timeout_fallback" for domain in fallback_domains
+                        ],
+                        user_behavior="router confirmation unavailable before turn-contract build",
+                        flow="router_timeout_fallback",
+                        claim_check_type="none",
+                        complaint_scope="none",
+                        agent_prompt_profile=AgentPromptProfile.FULL,
+                    )
+                router_waited_for_contract = True
+                router_source_for_contract = "llm"
+                contract_source_for_turn = "router_timeout_fallback"
+                speculative_used_for_contract = False
+                speculative_classify_future = None
+        elif routing_result is not None:
+            router_source_for_contract = "llm"
+            contract_source_for_turn = "router"
         _t_classify = time.perf_counter()
 
         if _is_preorder_confirmation_reply(last_user_text, latest_preorder_tmpl):
@@ -24135,6 +24183,7 @@ class TStationChatServiceV2:
             should_apply_cross_domain_route = (
                 bool(planned_domains)
                 and cross_domain_plan is not None
+                and routing_result is None
                 and not router_requires_reference_clarification
                 and (
                     cross_domain_plan.is_cross_domain
@@ -24184,6 +24233,14 @@ class TStationChatServiceV2:
                     [domain.value for domain in planned_domains],
                     getattr(routing_result, "referred_object_status", None),
                     getattr(routing_result, "referred_object_type", None),
+                )
+            elif routing_result is not None and planned_domains and planned_domains != domains:
+                logger.info(
+                    "[POLICY][cross-domain] skipped route override because router contract is source of truth: "
+                    "current=%s planned=%s plan=%s",
+                    [domain.value for domain in domains],
+                    [domain.value for domain in planned_domains],
+                    cross_domain_plan.to_dict() if cross_domain_plan is not None else None,
                 )
             if should_apply_cross_domain_route:
                 if explicit_override_reason:
@@ -24524,6 +24581,10 @@ class TStationChatServiceV2:
                     action_mode=action_mode,
                     context_state=context_state,
                     resume_source=resume_source,
+                    router_waited=router_waited_for_contract,
+                    router_source=router_source_for_contract,
+                    contract_source=contract_source_for_turn,
+                    speculative_used_for_contract=speculative_used_for_contract,
                 )
             elif MultiAgentDomain.Domain.DISCOVERY in domains:
                 discovery_contract_slots = {
@@ -24552,6 +24613,10 @@ class TStationChatServiceV2:
                     action_mode=action_mode,
                     context_state=context_state,
                     resume_source=resume_source,
+                    router_waited=router_waited_for_contract,
+                    router_source=router_source_for_contract,
+                    contract_source=contract_source_for_turn,
+                    speculative_used_for_contract=speculative_used_for_contract,
                 )
             else:
                 turn_contract = build_turn_contract(
@@ -24562,6 +24627,10 @@ class TStationChatServiceV2:
                     action_mode=action_mode,
                     context_state=context_state,
                     resume_source=resume_source,
+                    router_waited=router_waited_for_contract,
+                    router_source=router_source_for_contract,
+                    contract_source=contract_source_for_turn,
+                    speculative_used_for_contract=speculative_used_for_contract,
                 )
             logger.info("[TURN_CONTRACT] %s", turn_contract.to_dict() if turn_contract else None)
             if turn_contract and turn_contract.contract_drift:
@@ -31199,6 +31268,20 @@ class TStationChatServiceV2:
                             action_mode=stream_action_mode,
                             context_state=stream_context_state,
                             resume_source=stream_resume_source,
+                            router_waited=bool(getattr(turn_contract, "router_waited", False)) if turn_contract else False,
+                            router_source=str(getattr(turn_contract, "router_source", "unknown") or "unknown")
+                            if turn_contract
+                            else "unknown",
+                            contract_source=str(
+                                getattr(turn_contract, "contract_source", "router_fallback") or "router_fallback"
+                            )
+                            if turn_contract
+                            else "router_fallback",
+                            speculative_used_for_contract=bool(
+                                getattr(turn_contract, "speculative_used_for_contract", False)
+                            )
+                            if turn_contract
+                            else False,
                         )
                         logger.info("[TURN_CONTRACT] post-tool parse-failure update %s", turn_contract.to_dict())
                     if parsed_for_verifier is not None:
@@ -31292,6 +31375,23 @@ class TStationChatServiceV2:
                                 action_mode=stream_action_mode,
                                 context_state=stream_context_state,
                                 resume_source=stream_resume_source,
+                                router_waited=bool(getattr(turn_contract, "router_waited", False))
+                                if turn_contract
+                                else False,
+                                router_source=str(getattr(turn_contract, "router_source", "unknown") or "unknown")
+                                if turn_contract
+                                else "unknown",
+                                contract_source=str(
+                                    getattr(turn_contract, "contract_source", "router_fallback")
+                                    or "router_fallback"
+                                )
+                                if turn_contract
+                                else "router_fallback",
+                                speculative_used_for_contract=bool(
+                                    getattr(turn_contract, "speculative_used_for_contract", False)
+                                )
+                                if turn_contract
+                                else False,
                             )
                             logger.info("[TURN_CONTRACT] post-tool update %s", turn_contract.to_dict())
                     turn_tool_slots: dict[str, Any] = {}
