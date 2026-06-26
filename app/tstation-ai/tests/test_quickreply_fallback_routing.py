@@ -23271,6 +23271,50 @@ def test_base_agent_contract_sensitive_tool_guard_hard_blocks_without_faq_replac
     assert data_event["assistant_response_source"] == "code_contract_tool_guard"
 
 
+def test_base_agent_contract_sensitive_tool_guard_hard_blocks_tool_outside_allowed_list() -> None:
+    class _DummyAgent(BaseAgent):
+        OUTPUT_TEMPLATE = None
+        TOOL_TO_AF_MAP: dict[str, str] = {}
+
+        def __init__(self) -> None:
+            self.name = "Transaction Agent"
+
+    response_decision = ResponseDecision(
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        metadata={"response_shape_key": "narrow_policy_guard"},
+    )
+    tool_plan = ToolPlan(
+        allowed_tools=("search_faq_rag_tool",),
+        preferred_tool="search_faq_rag_tool",
+        forbidden_tools=(),
+        metadata={"response_intent": "narrow_policy_guard"},
+    )
+    decision_token = current_transaction_response_decision.set(response_decision)
+    tool_plan_token = current_transaction_tool_plan.set(tool_plan)
+    try:
+        agent = _DummyAgent()
+        events = agent._contract_sensitive_tool_guard_events(
+            "quick_order_tool",
+            [{"role": "user", "content": "이 정책 확인해줘"}],
+            config=None,
+            response_streamer=None,
+            answering_emitted=False,
+        )
+    finally:
+        current_transaction_response_decision.reset(decision_token)
+        current_transaction_tool_plan.reset(tool_plan_token)
+
+    assert events is not None
+    assert not [event for event in events if event.get("type") == "tool"]
+    data_event = next(event for event in events if event.get("type") == "data")
+    metadata = data_event["data"]["metadata"]
+    assert metadata["contract_tool_blocked"] is True
+    assert metadata["blocked_tool"] == "quick_order_tool"
+    assert metadata["replacement_tool"] == ""
+    assert metadata["block_reason"] == "tool_not_allowed_for_contract"
+
+
 def test_trace_shaped_general_cancel_fee_policy_blocks_order_lookup_and_replaces_with_faq(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
