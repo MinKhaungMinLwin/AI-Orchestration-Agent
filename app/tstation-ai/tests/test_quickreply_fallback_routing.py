@@ -15816,6 +15816,61 @@ def test_payment_error_support_policy_guides_faq_before_qna() -> None:
     assert "FAQ hybrid 검색을 먼저 수행" in response_decision.assistant_guidance
 
 
+def test_signup_first_purchase_benefit_contract_requires_faq_and_blocks_coupon_tools() -> None:
+    contract = build_turn_contract(
+        user_text="회원가입하면 첫구매 혜택은 뭐가 있어?",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:signup_first_purchase_benefit_policy"],
+            policy_intent="signup_first_purchase_benefit_policy",
+        ),
+    )
+
+    assert contract.domain == "support"
+    assert contract.intent == "signup_first_purchase_benefit_policy"
+    assert contract.known_slots["policy_intent"] == "signup_first_purchase_benefit_policy"
+    assert "search_faq_hybrid_tool" in contract.allowed_tools
+    assert "get_my_coupons_tool" in contract.forbidden_tools
+    assert "get_coupon_applicable_products_tool" in contract.forbidden_tools
+    assert "issue_coupon_tool" in contract.forbidden_tools
+
+    no_faq = response_contract_violations(
+        template="quickReply",
+        called_tools=[],
+        assistant_response_text="회원가입하시면 첫구매 쿠폰이 발급됩니다.",
+        contract=contract,
+    )
+    assert {
+        "type": "signup_first_purchase_benefit_without_faq_search",
+        "called_tools": [],
+        "severity": "error",
+    } in no_faq
+
+    unverified_claim = response_contract_violations(
+        template="quickReply",
+        called_tools=["search_faq_hybrid_tool"],
+        assistant_response_text="회원가입하시면 첫구매 쿠폰이 발급됩니다.",
+        contract=contract,
+    )
+    assert {
+        "type": "signup_first_purchase_benefit_asserted_unverified_coupon_issue",
+        "severity": "error",
+        "assistant_response_text": "회원가입하시면 첫구매 쿠폰이 발급됩니다.",
+    } in unverified_claim
+
+
+def test_signup_first_purchase_benefit_augments_faq_query() -> None:
+    token = current_support_policy_intent.set("signup_first_purchase_benefit_policy")
+    try:
+        query = _augment_faq_query_for_policy("회원가입하면 첫구매 혜택은 뭐가 있어?")
+    finally:
+        current_support_policy_intent.reset(token)
+
+    assert "회원가입하면 첫구매 혜택은 뭐가 있어?" in query
+    assert "회원 가입 시 발급되는 신규 회원 혜택 및 서비스" in query
+    assert "신규 회원 첫 구매 쿠폰 혜택" in query
+
+
 @pytest.mark.parametrize(
     "user_text",
     [

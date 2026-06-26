@@ -466,6 +466,15 @@ def build_turn_contract(
                 "search_product_tool",
             ),
         )
+    if intent == "signup_first_purchase_benefit_policy":
+        forbidden_tools = _merge_tuple(
+            forbidden_tools,
+            (
+                "issue_coupon_tool",
+                "get_my_coupons_tool",
+                "get_coupon_applicable_products_tool",
+            ),
+        )
 
     drift = _contract_drift(
         code_domain=code_domain,
@@ -1507,6 +1516,13 @@ def response_contract_violations(
     )
     if payment_error_violation is not None:
         violations.append(payment_error_violation)
+    signup_benefit_violation = _signup_first_purchase_benefit_contract_violation(
+        assistant_response_text=assistant_response_text,
+        called_tools=called_tools,
+        contract=contract,
+    )
+    if signup_benefit_violation is not None:
+        violations.append(signup_benefit_violation)
     legal_action_violation = _legal_action_guidance_contract_violation(
         assistant_response_text=assistant_response_text,
         event_data=event_data,
@@ -1929,6 +1945,30 @@ def _store_service_search_contract_violation(
                 "tool_service_codes": sorted(actual_service_codes),
                 "tool": tool_name,
             }
+    return None
+
+
+def _signup_first_purchase_benefit_contract_violation(
+    *,
+    assistant_response_text: str | None,
+    called_tools: list[str] | tuple[str, ...] | None,
+    contract: TurnContract | None,
+) -> dict[str, Any] | None:
+    if contract is None or contract.intent != "signup_first_purchase_benefit_policy":
+        return None
+    tools = list(called_tools or ())
+    has_faq = "search_faq_hybrid_tool" in tools
+    if not has_faq:
+        return {
+            "type": "signup_first_purchase_benefit_without_faq_search",
+            "called_tools": tools,
+        }
+    assistant_text = str(assistant_response_text or "").strip()
+    if re.search(r"(자동|바로|즉시).{0,12}(발급|지급)|발급됩니다", assistant_text) and "달라질 수" not in assistant_text:
+        return {
+            "type": "signup_first_purchase_benefit_asserted_unverified_coupon_issue",
+            "assistant_response_text": assistant_text,
+        }
     return None
 
 

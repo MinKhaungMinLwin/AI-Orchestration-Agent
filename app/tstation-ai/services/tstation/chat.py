@@ -661,6 +661,7 @@ class MultiAgentDomain(BaseModel):
         "regional_price_policy",
         "price_policy_faq",
         "payment_error_troubleshooting",
+        "signup_first_purchase_benefit_policy",
         "legal_action_guidance_denied",
         "store_service_search",
         "store_attribute_inquiry",
@@ -673,6 +674,7 @@ class MultiAgentDomain(BaseModel):
         description=(
             "Structured support/policy intent. Use this for non-transaction policy guidance such as shipping fee, "
             "online-vs-store price policy, regional price policy, payment error troubleshooting, "
+            "signup/first-purchase benefit policy, "
             "legal action guidance denial, store service availability, goods review lookup, "
             "store service review write CTA, or generic price policy FAQ. "
             "Use 'none' otherwise."
@@ -1840,6 +1842,7 @@ class _SlimMultiAgentDomain(BaseModel):
         "regional_price_policy",
         "price_policy_faq",
         "payment_error_troubleshooting",
+        "signup_first_purchase_benefit_policy",
         "legal_action_guidance_denied",
         "store_service_search",
         "store_attribute_inquiry",
@@ -2030,6 +2033,7 @@ Complaint routing rule:
    - "regional_price_policy": 서울/제주 등 지역에 따라 최종가가 달라지는 정책 설명
    - "price_policy_faq": generic pricing policy FAQ that is not a live price lookup
    - "payment_error_troubleshooting": 결제 진행 중 오류/결제창 또는 결제 화면 문제/결제 진행 불가/장착일 선택란 미노출 등 checkout troubleshooting
+   - "signup_first_purchase_benefit_policy": 회원가입/신규회원/첫구매 혜택·쿠폰·서비스 안내. FAQ/RAG 정책 설명이며 내 쿠폰 조회/직접 발급이 아님.
    - "legal_action_guidance_denied": 티스테이션 매장/서비스/예약/장착/응대 불편과 함께 고소/소송/법적 대응/내용증명/분쟁조정/신고 방법을 묻는 경우. 법적 절차는 안내하지 않고 공식 CS 접수만 안내.
    - "store_service_search": 지역/근처/어디어디/찾아줘 + 서비스 조건 매장 검색
    - "store_attribute_inquiry": 특정 매장의 서비스/장비/운영 조건/주관 품질 가능 여부 문의
@@ -2293,6 +2297,7 @@ Also set `policy_intent`:
 - regional final-price difference policy (서울 vs 제주 등) → `regional_price_policy`
 - generic pricing policy FAQ → `price_policy_faq`
 - checkout/payment troubleshooting (payment error, payment window/screen problem, payment cannot proceed, install-date selector missing during checkout) → SUPPORT, policy_intent=`payment_error_troubleshooting`
+- signup/new-member/first-purchase benefit explanation ("회원가입하면 첫구매 혜택은 뭐가 있어?", "신규회원 혜택 알려줘", "가입하면 받을 수 있는 쿠폰 뭐야?") → SUPPORT, policy_intent=`signup_first_purchase_benefit_policy`; this is FAQ/RAG policy guidance, not owned coupon lookup or coupon issuance.
 - T-Station store/service complaint mixed with legal action request (고소/소송/법적 대응/내용증명/분쟁조정/신고 방법) → SUPPORT, policy_intent=`legal_action_guidance_denied`; do not explain legal steps, institutions, documents, or procedures.
 - current event/benefit/deal list lookup ("이벤트 혜택 알려줘", "지금 받을 수 있는 혜택 알려줘", "기획전 알려줘") → DISCOVERY, agent_prompt_profile=`discovery_event_content`, execution_plan=`discovery:benefit_event_list_lookup` or `discovery:benefit_deal_list`
 - automatic price/coupon/event notification request ("가격 내려가면 알려줘", "쿠폰 이벤트 생기면 알림 줘", "문자 줘", "연락 줘") → TRANSACTION, execution_plan=`transaction:price_or_benefit_alert_request`; this is not a current event list lookup.

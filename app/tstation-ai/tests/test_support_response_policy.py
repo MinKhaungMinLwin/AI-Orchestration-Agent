@@ -64,6 +64,30 @@ def test_tc210_fake_vip_black_card_benefit_is_denied() -> None:
     assert "invent_discount" in decision.forbidden_behaviors
 
 
+def test_signup_first_purchase_benefit_policy_uses_faq_contract() -> None:
+    decision = decide_support_response(
+        intent="signup_first_purchase_benefit_policy",
+        user_text="회원가입하면 첫구매 혜택은 뭐가 있어?",
+    )
+
+    assert decision.template == TemplateName.QUICK_REPLY
+    assert decision.response_shape == ResponseShape.SUMMARY
+    assert decision.metadata["response_shape_key"] == "signup_first_purchase_benefit_policy"
+    assert "generic_marketing_answer_without_faq" in decision.forbidden_behaviors
+    assert "start_owned_coupon_lookup" in decision.forbidden_behaviors
+    assert "call_coupon_issue_tool" in decision.forbidden_behaviors
+
+
+def test_signup_first_purchase_benefit_policy_text_trigger_without_explicit_intent() -> None:
+    decision = decide_support_response(
+        intent="support_faq",
+        user_text="가입하면 받을 수 있는 쿠폰 뭐야?",
+    )
+
+    assert decision.template == TemplateName.QUICK_REPLY
+    assert decision.metadata["response_shape_key"] == "signup_first_purchase_benefit_policy"
+
+
 # --- TPMS / 공기압 경고등 회귀 테스트 ---
 
 

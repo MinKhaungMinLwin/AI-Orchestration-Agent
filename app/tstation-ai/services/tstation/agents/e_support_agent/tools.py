@@ -66,13 +66,23 @@ _PAYMENT_ERROR_FAQ_ANCHORS = (
     "모바일웹 앱 재시도",
     "PC 웹 재시도",
 )
+_SIGNUP_BENEFIT_FAQ_ANCHORS = (
+    "회원가입 신규회원 첫구매 혜택 쿠폰 all my T",
+    "회원 가입 시 발급되는 신규 회원 혜택 및 서비스",
+    "신규 회원 첫 구매 쿠폰 혜택",
+)
 
 
 def _augment_faq_query_for_policy(query: str) -> str:
     text = str(query or "").strip()
-    if current_support_policy_intent.get() != "payment_error_troubleshooting":
+    policy_intent = current_support_policy_intent.get()
+    if policy_intent == "payment_error_troubleshooting":
+        anchors = _PAYMENT_ERROR_FAQ_ANCHORS
+    elif policy_intent == "signup_first_purchase_benefit_policy":
+        anchors = _SIGNUP_BENEFIT_FAQ_ANCHORS
+    else:
         return text
-    missing_anchors = [anchor for anchor in _PAYMENT_ERROR_FAQ_ANCHORS if anchor not in text]
+    missing_anchors = [anchor for anchor in anchors if anchor not in text]
     if not missing_anchors:
         return text
     return " ".join(part for part in (text, *missing_anchors) if part)

@@ -11,6 +11,11 @@ from services.tstation.policies.response_decision import ResponseDecision, Respo
 _EXTREME_COUPON_RE = re.compile(r"90\s*%|99\s*%|파격\s*할인|발급해\s*줘|만들어\s*줘", re.IGNORECASE)
 _EXPIRED_COUPON_RE = re.compile(r"만료|끝난|종료|원복|복구|다시\s*쓰", re.IGNORECASE)
 _COUPON_RE = re.compile(r"쿠폰|할인권|혜택", re.IGNORECASE)
+_SIGNUP_BENEFIT_RE = re.compile(
+    r"(회원\s*가입|신규\s*회원|첫\s*구매|처음\s*구매|가입하면).{0,24}(혜택|쿠폰|할인|서비스)|"
+    r"(혜택|쿠폰|할인|서비스).{0,24}(회원\s*가입|신규\s*회원|첫\s*구매|처음\s*구매|가입하면)",
+    re.IGNORECASE,
+)
 _NONEXISTENT_BENEFIT_RE = re.compile(r"T\s*블랙|블랙\s*멤버십|VIP|브이아이피|블랙\s*카드|50\s*%", re.IGNORECASE)
 _HUMAN_RE = re.compile(r"상담원|사람\s*상담|고객센터|전화번호|연결", re.IGNORECASE)
 _PERSONAL_CONTACT_RE = re.compile(
@@ -87,6 +92,25 @@ def decide_support_response(
             template=TemplateName.QUICK_REPLY,
             forbidden_behaviors=("promise_coupon_issue", "invent_discount", "show_all_coupons_without_context"),
             assistant_guidance="임의 쿠폰 발급은 불가하다고 안내하고, 받을 수 있는 쿠폰은 쿠폰함에서 확인 가능하다고 안내한다.",
+        )
+
+    if intent == "signup_first_purchase_benefit_policy" or _SIGNUP_BENEFIT_RE.search(text):
+        return _decision(
+            response_shape_key="signup_first_purchase_benefit_policy",
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=(
+                "generic_marketing_answer_without_faq",
+                "promise_signup_coupon_issued",
+                "start_owned_coupon_lookup",
+                "call_coupon_issue_tool",
+            ),
+            assistant_guidance=(
+                "회원가입/신규회원/첫구매 혜택 문의는 FAQ hybrid 검색을 먼저 수행하고, 검색 근거 범위 안에서 "
+                "신규 회원 혜택/서비스와 첫 구매 쿠폰 가능 여부를 요약한다. 계정별 발급 상태를 확인하지 않은 채 "
+                "쿠폰이 자동 발급된다고 단정하지 않는다. 보유 쿠폰 조회나 쿠폰 직접 발급으로 시작하지 말고, "
+                "쿠폰함/이벤트 페이지 CTA는 보조로 제공한다."
+            ),
         )
 
     if intent == "expired_coupon" or (_COUPON_RE.search(text) and _EXPIRED_COUPON_RE.search(text)):
