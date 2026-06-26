@@ -50,6 +50,12 @@ _KOREAN_SELECTION_ORDINALS: tuple[tuple[tuple[str, ...], int], ...] = (
     (("두번째", "둘째", "두 번", "두번", "2번째", "2번", "2.", "2)"), 1),
     (("세번째", "셋째", "세 번", "세번", "3번째", "3번", "3.", "3)"), 2),
     (("네번째", "넷째", "네 번", "네번", "4번째", "4번", "4.", "4)"), 3),
+    (("다섯번째", "다섯째", "5번째", "5번", "5.", "5)"), 4),
+    (("여섯번째", "여섯째", "6번째", "6번", "6.", "6)"), 5),
+    (("일곱번째", "일곱째", "7번째", "7번", "7.", "7)"), 6),
+    (("여덟번째", "여덟째", "8번째", "8번", "8.", "8)"), 7),
+    (("아홉번째", "아홉째", "9번째", "9번", "9.", "9)"), 8),
+    (("열번째", "열째", "10번째", "10번", "10.", "10)"), 9),
 )
 
 _UI_ACTION_SLOT_KEYS = (
@@ -1266,6 +1272,71 @@ def resolve_shop_id_from_selection(user_text: str, prev_tool_data: list[dict[str
                 shop_id = canonical_context_from_tool_boundary(top[0]).get("shop_id")
                 if shop_id:
                     return str(shop_id)
+    return None
+
+
+def resolve_goods_no_from_selection(
+    user_text: str,
+    prev_tool_data: list[dict[str, Any]],
+    current_tire_size: str | None = None,
+) -> str | None:
+    if not user_text or not prev_tool_data:
+        return None
+
+    product_list_tools = {"search_product_tool", "get_products_recommendations_tool"}
+    items: list[dict[str, Any]] = []
+    for entry in reversed(prev_tool_data):
+        if entry.get("tool") not in product_list_tools:
+            continue
+        data = entry.get("data")
+        if isinstance(data, list):
+            items = [it for it in data if isinstance(it, dict) and not it.get("_truncated")]
+            break
+        if isinstance(data, Mapping) and isinstance(data.get("items"), list):
+            items = [it for it in data["items"] if isinstance(it, dict)]
+            break
+    if not items:
+        return None
+
+    text = str(user_text).strip()
+    ordinal_idx = _selection_ordinal_index(text, len(items))
+    if ordinal_idx is not None:
+        goods_no = canonical_context_from_tool_boundary(items[ordinal_idx]).get("goods_no")
+        if goods_no:
+            return str(goods_no)
+
+    target_size_from_text = normalize_tire_size(text)
+    target_size = target_size_from_text or normalize_tire_size(current_tire_size or "")
+    if not target_size:
+        return None
+
+    same_size = [
+        item
+        for item in items
+        if normalize_tire_size(canonical_context_from_tool_boundary(item).get("tire_size")) == target_size
+    ]
+    if target_size_from_text and len(same_size) == 1:
+        goods_no = canonical_context_from_tool_boundary(same_size[0]).get("goods_no")
+        if goods_no:
+            return str(goods_no)
+
+    tokens = [t.lower() for t in re.findall(r"[A-Za-z가-힣0-9]+", text) if len(t) >= 2]
+    best_item: dict[str, Any] | None = None
+    best_score = 0
+    tied = False
+    for item in same_size:
+        goods_nm = str(canonical_context_from_tool_boundary(item).get("product_name") or "").lower()
+        score = sum(1 for tok in tokens if tok in goods_nm)
+        if score > best_score:
+            best_score = score
+            best_item = item
+            tied = False
+        elif score == best_score and score > 0:
+            tied = True
+    if best_item is not None and best_score >= 2 and not tied:
+        goods_no = canonical_context_from_tool_boundary(best_item).get("goods_no")
+        if goods_no:
+            return str(goods_no)
     return None
 
 

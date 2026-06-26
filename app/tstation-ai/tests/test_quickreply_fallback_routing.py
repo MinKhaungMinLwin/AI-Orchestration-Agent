@@ -400,6 +400,7 @@ from services.tstation.policies.ui_action_policy import (
     normalize_ui_action_metadata,
     preview_action_mode_for_slots,
     preview_location_slot_values_from_selection,
+    resolve_goods_no_from_selection,
     resolve_ui_action_context,
     resolve_goods_no_from_product_template_selection,
     resolve_shop_id_from_selection,
@@ -12284,7 +12285,7 @@ def test_goods_no_from_selection_resolves_size_only_compact_input() -> None:
         }
     ]
 
-    assert TStationChatServiceV2._resolve_goods_no_from_selection("2654021", prev_tool_data) == "G2"
+    assert resolve_goods_no_from_selection("2654021", prev_tool_data) == "G2"
 
 
 def test_goods_no_from_selection_uses_tool_boundary_aliases() -> None:
@@ -12298,7 +12299,7 @@ def test_goods_no_from_selection_uses_tool_boundary_aliases() -> None:
         }
     ]
 
-    assert TStationChatServiceV2._resolve_goods_no_from_selection("2654021", prev_tool_data) == "G2"
+    assert resolve_goods_no_from_selection("2654021", prev_tool_data) == "G2"
 
 
 @pytest.mark.parametrize("text", ["첫번째 상품 가격 알려줘", "첫 번째 상품 가격 알려줘", "1번째 상품 가격"])
@@ -12313,7 +12314,7 @@ def test_goods_no_from_selection_resolves_korean_first_ordinal(text: str) -> Non
         }
     ]
 
-    assert TStationChatServiceV2._resolve_goods_no_from_selection(text, prev_tool_data) == "G000000319573"
+    assert resolve_goods_no_from_selection(text, prev_tool_data) == "G000000319573"
 
 
 def test_goods_no_from_selection_resolves_last_ordinal_against_latest_product_list() -> None:
@@ -12333,7 +12334,7 @@ def test_goods_no_from_selection_resolves_last_ordinal_against_latest_product_li
         },
     ]
 
-    assert TStationChatServiceV2._resolve_goods_no_from_selection("마지막 상품 가격 알려줘", prev_tool_data) == (
+    assert resolve_goods_no_from_selection("마지막 상품 가격 알려줘", prev_tool_data) == (
         "GREC00000002"
     )
 
@@ -12349,7 +12350,7 @@ def test_goods_no_from_selection_keeps_ambiguous_pronoun_unresolved() -> None:
         }
     ]
 
-    assert TStationChatServiceV2._resolve_goods_no_from_selection("그거 가격 알려줘", prev_tool_data) is None
+    assert resolve_goods_no_from_selection("그거 가격 알려줘", prev_tool_data) is None
 
 
 def test_goods_no_from_selection_uses_stored_tire_size_for_name_only_pick() -> None:
@@ -12365,7 +12366,7 @@ def test_goods_no_from_selection_uses_stored_tire_size_for_name_only_pick() -> N
     ]
 
     assert (
-        TStationChatServiceV2._resolve_goods_no_from_selection(
+        resolve_goods_no_from_selection(
             "벤투스 S2 AS 선택",
             prev_tool_data,
             current_tire_size="225/55R17",
@@ -13100,7 +13101,7 @@ def test_goods_no_from_selection_does_not_guess_ambiguous_name_with_stored_tire_
     ]
 
     assert (
-        TStationChatServiceV2._resolve_goods_no_from_selection(
+        resolve_goods_no_from_selection(
             "벤투스 선택",
             prev_tool_data,
             current_tire_size="225/55R17",
@@ -14904,7 +14905,7 @@ def test_product_selection_prefers_latest_recommendation_context_over_stale_sear
         },
     ]
 
-    goods_no = TStationChatServiceV2._resolve_goods_no_from_selection(
+    goods_no = resolve_goods_no_from_selection(
         "다이나프로 HPX 235/55R19",
         prev_tool_data,
     )
