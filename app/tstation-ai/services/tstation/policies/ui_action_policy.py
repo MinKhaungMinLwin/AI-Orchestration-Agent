@@ -2161,6 +2161,31 @@ def build_oe_replacement_guidance_event(
     }
 
 
+def build_oe_replacement_same_product_brand_prompt_event(
+    tire_size: str | None,
+) -> dict[str, Any]:
+    size_text = f"{tire_size} 기준으로 " if tire_size else ""
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "discovery",
+        "assistant_response_source": "code_oe_replacement_same_product_brand_prompt",
+        "data": {
+            "assistantResponse": (
+                f"{size_text}동일 상품은 기존 장착 브랜드를 알아야 더 정확하게 찾을 수 있어요.\n\n"
+                "브랜드를 알려주시면 그 기준으로 동일 상품을 찾아드릴게요. "
+                "브랜드가 기억나지 않으시면 한국타이어 교체용 상품으로 바로 추천해 드릴 수 있어요."
+            ),
+            "quickReplies": [
+                {"label": "미쉐린으로 동일 상품 찾기", "domain": "DISCOVERY"},
+                {"label": "한국타이어 교체용 추천", "domain": "DISCOVERY"},
+                {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
+            ],
+            "predictedDomains": ["DISCOVERY"],
+        },
+    }
+
+
 def goods_no_from_template_event(event: Mapping[str, Any] | None) -> str:
     if not isinstance(event, Mapping):
         return ""

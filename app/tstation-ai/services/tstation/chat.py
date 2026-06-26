@@ -121,6 +121,7 @@ from services.tstation.policies.ui_action_policy import (
     build_cta_preview_template_context,
     build_cta_preview_contract_gate,
     build_manual_tire_size_input_event,
+    build_oe_replacement_same_product_brand_prompt_event,
     build_order_quantity_prompt_event,
     build_staggered_tire_quantity_limit_event,
     build_staggered_vehicle_tire_selection_event,
@@ -7236,29 +7237,7 @@ def _build_oe_replacement_same_product_search_args(
     }
 
 
-def _build_oe_replacement_same_product_brand_prompt_event(
-    tire_size: str | None,
-) -> dict:
-    size_text = f"{tire_size} 기준으로 " if tire_size else ""
-    return {
-        "type": "data",
-        "template": "quickReply",
-        "source_domain": MultiAgentDomain.Domain.DISCOVERY.value,
-        "assistant_response_source": "code_oe_replacement_same_product_brand_prompt",
-        "data": {
-            "assistantResponse": (
-                f"{size_text}동일 상품은 기존 장착 브랜드를 알아야 더 정확하게 찾을 수 있어요.\n\n"
-                "브랜드를 알려주시면 그 기준으로 동일 상품을 찾아드릴게요. "
-                "브랜드가 기억나지 않으시면 한국타이어 교체용 상품으로 바로 추천해 드릴 수 있어요."
-            ),
-            "quickReplies": [
-                {"label": "미쉐린으로 동일 상품 찾기", "domain": "DISCOVERY"},
-                {"label": "한국타이어 교체용 추천", "domain": "DISCOVERY"},
-                {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
-            ],
-            "predictedDomains": ["DISCOVERY"],
-        },
-    }
+_build_oe_replacement_same_product_brand_prompt_event = build_oe_replacement_same_product_brand_prompt_event
 
 
 _build_oe_replacement_guidance_event = build_oe_replacement_guidance_event

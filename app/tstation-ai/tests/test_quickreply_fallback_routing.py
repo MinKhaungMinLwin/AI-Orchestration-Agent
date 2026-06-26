@@ -125,7 +125,6 @@ from services.tstation.chat import (
     _should_resolve_compare_target_product_pair,
     _should_skip_product_compare_override,
     _build_oe_replacement_followup_recommendation_args,
-    _build_oe_replacement_same_product_brand_prompt_event,
     _build_oe_replacement_same_product_search_args,
     _bare_product_search_followup_override,
     _build_discovery_policy_context,
@@ -383,6 +382,7 @@ from services.tstation.policies.ui_action_policy import (
     build_preview_tool_mapped_event,
     build_staggered_tire_quantity_limit_event,
     build_staggered_vehicle_tire_selection_event,
+    build_oe_replacement_same_product_brand_prompt_event,
     build_oe_replacement_guidance_event,
     build_other_store_search_result_event,
     build_other_store_stock_unavailable_event,
@@ -2274,7 +2274,7 @@ def test_oe_replacement_same_product_without_brand_returns_none() -> None:
 
 
 def test_oe_replacement_same_product_without_brand_prompts_for_brand() -> None:
-    event = _build_oe_replacement_same_product_brand_prompt_event("235/55R19")
+    event = build_oe_replacement_same_product_brand_prompt_event("235/55R19")
 
     assert event["assistant_response_source"] == "code_oe_replacement_same_product_brand_prompt"
     assert "브랜드를 알려주시면" in event["data"]["assistantResponse"]
