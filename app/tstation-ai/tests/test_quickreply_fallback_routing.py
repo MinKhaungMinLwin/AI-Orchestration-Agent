@@ -387,6 +387,7 @@ from services.tstation.policies.ui_action_policy import (
     apply_logistics_earliest_install_cta_action,
     apply_preview_update_cta_action,
     apply_ui_action_slot_patch,
+    build_cta_preview_contract_gate,
     cta_preview_input_from_slots,
     build_other_store_context_enrichment_input,
     build_other_store_preview_metadata,
@@ -904,6 +905,99 @@ def test_build_preview_tool_mapped_event_uses_fallback_and_source() -> None:
     assert event["assistant_response_source"] == "code_cta_action_preview"
     assert event["source_domain"] == "transaction"
     assert event["template"] == "quickReply"
+
+
+def test_build_cta_preview_contract_gate_builds_resumed_stock_contract() -> None:
+    captured: dict[str, object] = {}
+
+    class _Frame:
+        intent = "stock_store_search"
+        known_slots = {
+            "goods_no": "G1",
+            "ord_qty": 4,
+            "region": "동탄",
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+            "stock_check_mode": "preview",
+        }
+
+    def _build_intent_frame(user_text: str, *, known_slots: dict[str, object]) -> object:
+        captured["intent_frame_user_text"] = user_text
+        captured["intent_frame_known_slots"] = known_slots
+        return _Frame()
+
+    def _plan_tools(frame: object) -> object:
+        captured["tool_plan_frame"] = frame
+        return {"tools": ["transaction_store_preview_tool"]}
+
+    def _decide_response(*, intent: str, user_text: str, known_slots: dict[str, object]) -> object:
+        captured["response_intent"] = intent
+        captured["response_user_text"] = user_text
+        captured["response_known_slots"] = known_slots
+        return {"template": "quickReply"}
+
+    def _build_turn_contract(**kwargs: object) -> object:
+        captured["turn_contract_kwargs"] = kwargs
+        return {"contract": "ok", "known_slots": kwargs["intent_frame"].known_slots}
+
+    def _contract_gate(**kwargs: object) -> tuple[bool, str]:
+        captured["gate_kwargs"] = kwargs
+        return True, "allowed"
+
+    merged_slots = SimpleNamespace(
+        goods_no="G1",
+        tire_size="225/55R18",
+        ord_qty=4,
+        shop_id="S1",
+        shop_name="동탄점",
+        region="동탄",
+        availability_intent="today_install",
+        requested_cal_day="20260626",
+        pending_intent=None,
+        goal_type=None,
+    )
+
+    contract, allowed, reason = build_cta_preview_contract_gate(
+        user_text="4개",
+        merged_slots=merged_slots,
+        source="code_cta_action_preview",
+        required_tools=("transaction_store_preview_tool",),
+        build_intent_frame_fn=_build_intent_frame,
+        plan_tools_fn=_plan_tools,
+        decide_response_fn=_decide_response,
+        build_turn_contract_fn=_build_turn_contract,
+        contract_gate_fn=_contract_gate,
+    )
+
+    assert contract == {"contract": "ok", "known_slots": _Frame.known_slots}
+    assert allowed is True
+    assert reason == "allowed"
+    assert captured["intent_frame_user_text"] == "4개"
+    assert captured["intent_frame_known_slots"] == {
+        "goods_no": "G1",
+        "tire_size": "225/55R18",
+        "quantity": 4,
+        "ord_qty": 4,
+        "shop_id": "S1",
+        "shop_name": "동탄점",
+        "store_name": "동탄점",
+        "region": "동탄",
+        "availability_intent": "today_install",
+        "requested_cal_day": "20260626",
+        "pending_intent": "stock",
+        "goal_type": "store_with_stock",
+        "stock_check_mode": "preview",
+    }
+    assert captured["turn_contract_kwargs"]["action_mode"] == "stock_check"
+    assert captured["turn_contract_kwargs"]["context_state"] == "resumed"
+    assert captured["turn_contract_kwargs"]["resume_source"] == "cta_action:code_cta_action_preview"
+    assert captured["gate_kwargs"] == {
+        "turn_contract": contract,
+        "intent": "stock_store_search",
+        "template": "quickReply",
+        "source": "code_cta_action_preview",
+        "required_tools": ("transaction_store_preview_tool",),
+    }
 
 
 def test_cta_preview_input_uses_canonical_store_context_from_template_aliases() -> None:

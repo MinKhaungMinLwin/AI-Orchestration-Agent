@@ -118,6 +118,7 @@ from services.tstation.policies.ui_action_policy import (
     build_other_store_context_enrichment_input,
     build_other_store_preview_metadata,
     build_cta_preview_template_context,
+    build_cta_preview_contract_gate,
     build_preview_tool_mapped_event,
     cta_preview_input_from_slots,
     cta_missing_slot_event,
@@ -22342,51 +22343,6 @@ class TStationChatServiceV2:
                 ),
             )
 
-            def _build_cta_action_contract(source: str, required_tools: tuple[str, ...]) -> tuple[TurnContract, bool, str]:
-                cta_known_slots = {
-                    "goods_no": merged_slots.goods_no,
-                    "tire_size": merged_slots.tire_size,
-                    "quantity": merged_slots.ord_qty,
-                    "ord_qty": merged_slots.ord_qty,
-                    "shop_id": merged_slots.shop_id,
-                    "shop_name": merged_slots.shop_name,
-                    "store_name": merged_slots.shop_name,
-                    "region": merged_slots.region,
-                    "availability_intent": merged_slots.availability_intent,
-                    "requested_cal_day": merged_slots.requested_cal_day,
-                    "pending_intent": merged_slots.pending_intent or "stock",
-                    "goal_type": merged_slots.goal_type or "store_with_stock",
-                    "stock_check_mode": "preview",
-                }
-                cta_frame = build_transaction_intent_frame(
-                    last_user_text,
-                    known_slots={k: v for k, v in cta_known_slots.items() if v not in (None, "")},
-                )
-                cta_tool_plan = plan_transaction_tools(cta_frame)
-                cta_response_decision = decide_transaction_response(
-                    intent=cta_frame.intent,
-                    user_text=last_user_text,
-                    known_slots=dict(cta_frame.known_slots),
-                )
-                cta_contract = build_turn_contract(
-                    user_text=last_user_text,
-                    intent_frame=cta_frame,
-                    tool_plan=cta_tool_plan,
-                    response_decision=cta_response_decision,
-                    merged_slots=merged_slots,
-                    action_mode="stock_check",
-                    context_state="resumed",
-                    resume_source=f"cta_action:{source}",
-                )
-                allowed, reason = _direct_code_fast_path_contract_gate(
-                    turn_contract=cta_contract,
-                    intent="stock_store_search",
-                    template="quickReply",
-                    source=source,
-                    required_tools=required_tools,
-                )
-                return cta_contract, allowed, reason
-
             if direct_cta_action_kind == "clarification":
                 cta_clarification_event = build_quickreply_cta_clarification_event(
                     last_user_text,
@@ -22421,9 +22377,16 @@ class TStationChatServiceV2:
                         get_store_list_tool as _cta_get_store_list_tool,
                     )
                     try:
-                        _list_contract, list_allowed, list_reason = _build_cta_action_contract(
-                            "code_cta_store_context_enrichment",
-                            ("get_store_list_tool",),
+                        _list_contract, list_allowed, list_reason = build_cta_preview_contract_gate(
+                            user_text=last_user_text,
+                            merged_slots=merged_slots,
+                            source="code_cta_store_context_enrichment",
+                            required_tools=("get_store_list_tool",),
+                            build_intent_frame_fn=build_transaction_intent_frame,
+                            plan_tools_fn=plan_transaction_tools,
+                            decide_response_fn=decide_transaction_response,
+                            build_turn_contract_fn=build_turn_contract,
+                            contract_gate_fn=_direct_code_fast_path_contract_gate,
                         )
                         if list_allowed:
                             raw_list = await asyncio.to_thread(_cta_get_store_list_tool.invoke, enrichment_input)
@@ -22491,9 +22454,16 @@ class TStationChatServiceV2:
                 _cta_current_pending_intent.set(str(other_store_template_context["pending_intent"]))
                 _cta_current_goal_type.set(str(other_store_template_context["goal_type"]))
                 _cta_current_excluded_store_ids.set(set(other_store_template_context.get("excluded_ids") or set()))
-                cta_contract, preview_allowed, preview_reason = _build_cta_action_contract(
-                    "code_other_store_stock_search",
-                    ("transaction_store_preview_tool",),
+                cta_contract, preview_allowed, preview_reason = build_cta_preview_contract_gate(
+                    user_text=last_user_text,
+                    merged_slots=merged_slots,
+                    source="code_other_store_stock_search",
+                    required_tools=("transaction_store_preview_tool",),
+                    build_intent_frame_fn=build_transaction_intent_frame,
+                    plan_tools_fn=plan_transaction_tools,
+                    decide_response_fn=decide_transaction_response,
+                    build_turn_contract_fn=build_turn_contract,
+                    contract_gate_fn=_direct_code_fast_path_contract_gate,
                 )
                 if not preview_allowed:
                     logger.info("[CODE_FAST_PATH_GATE] blocked other_store_stock_search reason=%s", preview_reason)
@@ -22605,9 +22575,16 @@ class TStationChatServiceV2:
                 _cta_current_user_text.set(str(logistics_template_context["user_text"]))
                 _cta_current_pending_intent.set(str(logistics_template_context["pending_intent"]))
                 _cta_current_goal_type.set(str(logistics_template_context["goal_type"]))
-                cta_contract, preview_allowed, preview_reason = _build_cta_action_contract(
-                    "code_logistics_earliest_install_date",
-                    ("transaction_store_preview_tool",),
+                cta_contract, preview_allowed, preview_reason = build_cta_preview_contract_gate(
+                    user_text=last_user_text,
+                    merged_slots=merged_slots,
+                    source="code_logistics_earliest_install_date",
+                    required_tools=("transaction_store_preview_tool",),
+                    build_intent_frame_fn=build_transaction_intent_frame,
+                    plan_tools_fn=plan_transaction_tools,
+                    decide_response_fn=decide_transaction_response,
+                    build_turn_contract_fn=build_turn_contract,
+                    contract_gate_fn=_direct_code_fast_path_contract_gate,
                 )
                 if not preview_allowed:
                     logger.info("[CODE_FAST_PATH_GATE] blocked logistics_earliest_install_date reason=%s", preview_reason)
@@ -22721,9 +22698,16 @@ class TStationChatServiceV2:
                 _cta_current_pending_intent.set(str(preview_template_context["pending_intent"]))
                 _cta_current_goal_type.set(str(preview_template_context["goal_type"]))
                 _cta_current_action_mode.set(str(preview_template_context["action_mode"]))
-                cta_contract, preview_allowed, preview_reason = _build_cta_action_contract(
-                    "code_cta_action_preview",
-                    ("transaction_store_preview_tool",),
+                cta_contract, preview_allowed, preview_reason = build_cta_preview_contract_gate(
+                    user_text=last_user_text,
+                    merged_slots=merged_slots,
+                    source="code_cta_action_preview",
+                    required_tools=("transaction_store_preview_tool",),
+                    build_intent_frame_fn=build_transaction_intent_frame,
+                    plan_tools_fn=plan_transaction_tools,
+                    decide_response_fn=decide_transaction_response,
+                    build_turn_contract_fn=build_turn_contract,
+                    contract_gate_fn=_direct_code_fast_path_contract_gate,
                 )
                 if not preview_allowed:
                     logger.info("[CODE_FAST_PATH_GATE] blocked cta_action_preview reason=%s", preview_reason)

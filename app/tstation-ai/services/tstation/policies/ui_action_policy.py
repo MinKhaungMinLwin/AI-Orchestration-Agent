@@ -385,6 +385,63 @@ def build_preview_tool_mapped_event(
     return mapped_event
 
 
+def build_cta_preview_contract_gate(
+    *,
+    user_text: str,
+    merged_slots: Any,
+    source: str,
+    required_tools: tuple[str, ...],
+    build_intent_frame_fn: Callable[..., Any],
+    plan_tools_fn: Callable[[Any], Any],
+    decide_response_fn: Callable[..., Any],
+    build_turn_contract_fn: Callable[..., Any],
+    contract_gate_fn: Callable[..., tuple[bool, str]],
+) -> tuple[Any, bool, str]:
+    cta_known_slots = {
+        "goods_no": getattr(merged_slots, "goods_no", None),
+        "tire_size": getattr(merged_slots, "tire_size", None),
+        "quantity": getattr(merged_slots, "ord_qty", None),
+        "ord_qty": getattr(merged_slots, "ord_qty", None),
+        "shop_id": getattr(merged_slots, "shop_id", None),
+        "shop_name": getattr(merged_slots, "shop_name", None),
+        "store_name": getattr(merged_slots, "shop_name", None),
+        "region": getattr(merged_slots, "region", None),
+        "availability_intent": getattr(merged_slots, "availability_intent", None),
+        "requested_cal_day": getattr(merged_slots, "requested_cal_day", None),
+        "pending_intent": getattr(merged_slots, "pending_intent", None) or "stock",
+        "goal_type": getattr(merged_slots, "goal_type", None) or "store_with_stock",
+        "stock_check_mode": "preview",
+    }
+    cta_frame = build_intent_frame_fn(
+        user_text,
+        known_slots={k: v for k, v in cta_known_slots.items() if v not in (None, "")},
+    )
+    cta_tool_plan = plan_tools_fn(cta_frame)
+    cta_response_decision = decide_response_fn(
+        intent=cta_frame.intent,
+        user_text=user_text,
+        known_slots=dict(cta_frame.known_slots),
+    )
+    cta_contract = build_turn_contract_fn(
+        user_text=user_text,
+        intent_frame=cta_frame,
+        tool_plan=cta_tool_plan,
+        response_decision=cta_response_decision,
+        merged_slots=merged_slots,
+        action_mode="stock_check",
+        context_state="resumed",
+        resume_source=f"cta_action:{source}",
+    )
+    allowed, reason = contract_gate_fn(
+        turn_contract=cta_contract,
+        intent="stock_store_search",
+        template="quickReply",
+        source=source,
+        required_tools=required_tools,
+    )
+    return cta_contract, allowed, reason
+
+
 def _normalize_vehicle_contract_intent(intent: str | None) -> str:
     normalized = str(intent or "").strip()
     if normalized == "vehicle_information":
