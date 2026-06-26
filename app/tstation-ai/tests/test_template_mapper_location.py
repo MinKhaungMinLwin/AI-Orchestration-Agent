@@ -2169,9 +2169,11 @@ def test_listcar_kept_for_registered_vehicle_tire_size_prompt() -> None:
     assert result["data"]["metadata"][0]["cta_action"] == "select_vehicle_candidate"
     assert result["data"]["metadata"][0]["sourceIntent"] == "vehicle_tire_size_lookup"
     assert result["data"]["metadata"][0]["source_intent"] == "vehicle_tire_size_lookup"
-    assert result["data"]["metadata"][0]["expectedContractIntent"] == "vehicle_information"
-    assert result["data"]["metadata"][0]["expected_contract_intent"] == "vehicle_information"
+    assert result["data"]["metadata"][0]["expectedContractIntent"] == "vehicle_tire_size_lookup"
+    assert result["data"]["metadata"][0]["expected_contract_intent"] == "vehicle_tire_size_lookup"
     assert result["data"]["metadata"][0]["car_no"] == "205소4214"
+    assert result["data"]["metadata"][0]["car_nm"] == "GV70 2.5T 가솔린 AWD A/T"
+    assert result["data"]["metadata"][0]["car_model_det"] == "GV70 (1세대) (2021 - 2024)"
     assert result["data"]["metadata"][0]["tire_size_fr"] == "2355519"
 
 

@@ -681,7 +681,9 @@ class CarMeta(BaseModel):
     mbr_car_reg_seq: str | None = None
     carMaker: str | None = None
     carModelDet: str | None = None
+    car_model_det: str | None = None
     carName: str | None = None
+    car_nm: str | None = None
     carTrim: str | None = None
     carEngine: str | None = None
     carType: str | None = None

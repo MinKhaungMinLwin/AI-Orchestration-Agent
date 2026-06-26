@@ -3283,7 +3283,7 @@ def _listcar_selection_contract_intent() -> tuple[str, str]:
     goal_type = str(current_goal_type.get() or "").strip()
 
     if "사이즈" in user_text and any(anchor in user_text for anchor in ("뭐", "알려", "확인", "규격", "?")):
-        return "vehicle_tire_size_lookup", "vehicle_information"
+        return "vehicle_tire_size_lookup", "vehicle_tire_size_lookup"
     if pending_intent == "order" or goal_type == "place_order":
         return "quick_order_reservation", "quick_order_reservation"
     if pending_intent == "stock" or goal_type == "store_with_stock":
@@ -3364,7 +3364,9 @@ def _map_list_car(tool_data_list: list[dict], assistant_text: str) -> dict | Non
                 "mbr_car_reg_seq": _get_str(row, "mbr_car_reg_seq", "mbr_car_unif_no") or None,
                 "carMaker": _get_str(row, "car_maker") or None,
                 "carModelDet": _get_str(row, "car_model_det") or None,
+                "car_model_det": _get_str(row, "car_model_det") or None,
                 "carName": _get_str(row, "car_nm") or None,
+                "car_nm": _get_str(row, "car_nm") or None,
                 "carTrim": _get_str(row, "ver_opt_choc") or None,
                 "carEngine": _get_str(row, "car_engine") or None,
                 "carType": _get_str(row, "car_type") or None,
