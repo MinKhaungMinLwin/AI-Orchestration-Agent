@@ -219,6 +219,26 @@ def build_other_store_preview_metadata(
     }
 
 
+def build_cta_preview_template_context(
+    *,
+    user_text: str,
+    pending_intent: str,
+    goal_type: str,
+    excluded_ids: set[str] | None = None,
+    action_mode: str | None = None,
+) -> dict[str, Any]:
+    context: dict[str, Any] = {
+        "user_text": str(user_text or ""),
+        "pending_intent": str(pending_intent or ""),
+        "goal_type": str(goal_type or ""),
+    }
+    if excluded_ids:
+        context["excluded_ids"] = {str(shop_id) for shop_id in excluded_ids if shop_id}
+    if action_mode:
+        context["action_mode"] = str(action_mode)
+    return context
+
+
 def _normalize_vehicle_contract_intent(intent: str | None) -> str:
     normalized = str(intent or "").strip()
     if normalized == "vehicle_information":

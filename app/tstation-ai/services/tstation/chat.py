@@ -117,6 +117,7 @@ from services.tstation.policies.ui_action_policy import (
     build_logistics_earliest_install_fallback_event,
     build_other_store_context_enrichment_input,
     build_other_store_preview_metadata,
+    build_cta_preview_template_context,
     build_quickreply_cta_clarification_event,
     chip_context_dict,
     chip_value,
@@ -22582,10 +22583,16 @@ class TStationChatServiceV2:
                     try_build_template as _try_build_template,
                 )
 
-                _cta_current_user_text.set(last_user_text)
-                _cta_current_pending_intent.set("stock")
-                _cta_current_goal_type.set("store_with_stock")
-                _cta_current_excluded_store_ids.set(excluded_ids)
+                other_store_template_context = build_cta_preview_template_context(
+                    user_text=last_user_text,
+                    pending_intent="stock",
+                    goal_type="store_with_stock",
+                    excluded_ids=excluded_ids,
+                )
+                _cta_current_user_text.set(str(other_store_template_context["user_text"]))
+                _cta_current_pending_intent.set(str(other_store_template_context["pending_intent"]))
+                _cta_current_goal_type.set(str(other_store_template_context["goal_type"]))
+                _cta_current_excluded_store_ids.set(set(other_store_template_context.get("excluded_ids") or set()))
                 cta_contract, preview_allowed, preview_reason = _build_cta_action_contract(
                     "code_other_store_stock_search",
                     ("transaction_store_preview_tool",),
@@ -22692,9 +22699,14 @@ class TStationChatServiceV2:
                     try_build_template as _try_build_template,
                 )
 
-                _cta_current_user_text.set(last_user_text)
-                _cta_current_pending_intent.set("stock")
-                _cta_current_goal_type.set("store_with_stock")
+                logistics_template_context = build_cta_preview_template_context(
+                    user_text=last_user_text,
+                    pending_intent="stock",
+                    goal_type="store_with_stock",
+                )
+                _cta_current_user_text.set(str(logistics_template_context["user_text"]))
+                _cta_current_pending_intent.set(str(logistics_template_context["pending_intent"]))
+                _cta_current_goal_type.set(str(logistics_template_context["goal_type"]))
                 cta_contract, preview_allowed, preview_reason = _build_cta_action_contract(
                     "code_logistics_earliest_install_date",
                     ("transaction_store_preview_tool",),
@@ -22806,10 +22818,16 @@ class TStationChatServiceV2:
                     try_build_template as _try_build_template,
                 )
 
-                _cta_current_user_text.set(last_user_text)
-                _cta_current_pending_intent.set(merged_slots.pending_intent)
-                _cta_current_goal_type.set(merged_slots.goal_type)
-                _cta_current_action_mode.set(preview_action_mode_for_slots(merged_slots))
+                preview_template_context = build_cta_preview_template_context(
+                    user_text=last_user_text,
+                    pending_intent=str(merged_slots.pending_intent or ""),
+                    goal_type=str(merged_slots.goal_type or ""),
+                    action_mode=preview_action_mode_for_slots(merged_slots),
+                )
+                _cta_current_user_text.set(str(preview_template_context["user_text"]))
+                _cta_current_pending_intent.set(str(preview_template_context["pending_intent"]))
+                _cta_current_goal_type.set(str(preview_template_context["goal_type"]))
+                _cta_current_action_mode.set(str(preview_template_context["action_mode"]))
                 cta_contract, preview_allowed, preview_reason = _build_cta_action_contract(
                     "code_cta_action_preview",
                     ("transaction_store_preview_tool",),

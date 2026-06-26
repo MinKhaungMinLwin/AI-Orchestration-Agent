@@ -389,6 +389,7 @@ from services.tstation.policies.ui_action_policy import (
     apply_ui_action_slot_patch,
     build_other_store_context_enrichment_input,
     build_other_store_preview_metadata,
+    build_cta_preview_template_context,
     build_other_store_search_result_event,
     build_other_store_stock_unavailable_event,
     build_logistics_earliest_install_fallback_event,
@@ -848,6 +849,22 @@ def test_build_other_store_preview_metadata_extracts_previous_store_and_excluded
 
     assert metadata["previous_store_name"] == "티스테이션 판교점"
     assert metadata["excluded_ids"] == {"F00721"}
+
+
+def test_build_cta_preview_template_context_includes_excluded_ids_and_action_mode() -> None:
+    context = build_cta_preview_template_context(
+        user_text="다른 매장 찾아줘",
+        pending_intent="stock",
+        goal_type="store_with_stock",
+        excluded_ids={"F00721", ""},
+        action_mode="stock_check",
+    )
+
+    assert context["user_text"] == "다른 매장 찾아줘"
+    assert context["pending_intent"] == "stock"
+    assert context["goal_type"] == "store_with_stock"
+    assert context["excluded_ids"] == {"F00721"}
+    assert context["action_mode"] == "stock_check"
 
 
 def test_cta_preview_input_uses_canonical_store_context_from_template_aliases() -> None:
