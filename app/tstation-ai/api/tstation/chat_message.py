@@ -362,6 +362,8 @@ async def chat(chat_body: ChatMessageRequest, http_request: Request, user: dict 
         origin_host=_origin_host_from_request(http_request),
         user_info=chat_body.user_info,
         chip_context=chat_body.chip_context.model_dump() if chat_body.chip_context else None,
+        ui_action=chat_body.ui_action,
+        slots=chat_body.slots,
         **({"tracing_id": tracing_id} if tracing_id else {}),
     )
 

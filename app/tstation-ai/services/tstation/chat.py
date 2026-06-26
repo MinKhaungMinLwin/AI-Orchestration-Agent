@@ -102,7 +102,6 @@ from services.tstation.policies.coupon_query_gate import (
     decide_coupon_query_gate,
     should_consider_coupon_gate,
 )
-from services.tstation.policies.cta_registry import cta_trace_metadata, normalize_quickreply_ctas
 from services.tstation.policies.delivery_policy_gate import (
     DeliveryPolicyIntent,
     decide_delivery_policy_gate,
@@ -112,7 +111,9 @@ from services.tstation.policies.pickup_service_gate import decide_pickup_service
 from services.tstation.policies.ui_action_policy import (
     UIActionContext,
     apply_ui_action_slot_patch,
+    normalize_ui_action_metadata,
     resolve_ui_action_context,
+    ui_action_trace_metadata,
     validate_ui_actions_for_contract,
 )
 from services.tstation.policies.store_confirmation_policy import (
@@ -21953,6 +21954,9 @@ class TStationChatServiceV2:
             access_token=request.access_token,
             stream=request.stream,
             user_info=request.user_info,
+            chip_context=request.chip_context,
+            ui_action=request.ui_action,
+            slots=request.slots,
         )
         messages = TStationChatServiceV2._build_messages_with_user_info(_request_plain)
 
@@ -21994,6 +21998,16 @@ class TStationChatServiceV2:
         latest_preorder_tmpl: dict | None = None
         vehicle_ui_action_context: UIActionContext | None = None
         vehicle_selection_trace_metadata: dict[str, Any] = {
+            "ui_action_detected": False,
+            "ui_action_type": None,
+            "source_intent": None,
+            "expected_contract_intent": None,
+            "actual_contract_intent": None,
+            "selected_entity_type": None,
+            "selected_entity_id": None,
+            "validation_result": None,
+            "validation_reason": None,
+            "fallback_behavior": None,
             "vehicle_selection_detected": False,
             "selection_source": None,
             "selected_car_no": None,
@@ -22030,6 +22044,15 @@ class TStationChatServiceV2:
             latest_quickreply_tmpl = latest_template_data_from_messages(recent_template_msgs, "quickReply")
             latest_product_tmpl = latest_template_data_from_messages(recent_template_msgs, "product")
             latest_preorder_tmpl = latest_template_data_from_messages(recent_template_msgs, "preOrder")
+            raw_ui_action = _chip_context_dict(request.ui_action)
+            if not raw_ui_action:
+                raw_ui_action = _chip_context_dict(_chip_context_dict(request.chip_context).get("ui_action"))
+            if not raw_ui_action:
+                chip_context_values = _chip_context_dict(request.chip_context)
+                if chip_context_values.get("cta_action") or chip_context_values.get("slots"):
+                    raw_ui_action = dict(chip_context_values)
+            if raw_ui_action and isinstance(request.slots, dict):
+                raw_ui_action.setdefault("slots", dict(request.slots))
             chip_selected_vehicle = TStationChatServiceV2._resolve_vehicle_from_chip_context(
                 request.chip_context,
                 latest_listcar_tmpl,
@@ -22049,6 +22072,9 @@ class TStationChatServiceV2:
                 access_token=request.access_token,
                 stream=request.stream,
                 user_info=request.user_info,
+                chip_context=request.chip_context,
+                ui_action=request.ui_action,
+                slots=request.slots,
             )
             messages = TStationChatServiceV2._build_messages_with_user_info(_request_enriched)
             if len(messages) > _MAX_HISTORY_MESSAGES:
@@ -22065,6 +22091,36 @@ class TStationChatServiceV2:
                 messages_chars,
             )
             logger.debug(f"[CHAT_V2] Messages: {json.dumps(messages, ensure_ascii=False, separators=(',', ':'))}")
+
+            if raw_ui_action and chip_selected_vehicle is None:
+                generic_ui_action_context = resolve_ui_action_context(
+                    raw_action=raw_ui_action,
+                    selected_vehicle=None,
+                    selection_source="ui_action",
+                    previous_slots={
+                        "car_no": getattr(existing_slots, "car_no", None),
+                        "tire_size": getattr(existing_slots, "tire_size", None),
+                        "goods_no": getattr(existing_slots, "goods_no", None),
+                        "ord_qty": getattr(existing_slots, "ord_qty", None),
+                    },
+                )
+                if generic_ui_action_context is not None:
+                    vehicle_ui_action_context = generic_ui_action_context
+                    vehicle_selection_trace_metadata.update(dict(generic_ui_action_context.trace_metadata))
+                    if generic_ui_action_context.slot_patch:
+                        existing_slots, slot_trace_metadata = apply_ui_action_slot_patch(
+                            existing_slots,
+                            generic_ui_action_context,
+                            slot_apply_fn=lambda base_slots, values: base_slots.apply_runtime_values(
+                                values,
+                                source="ui_action",
+                            ),
+                        )
+                        vehicle_selection_trace_metadata.update(slot_trace_metadata)
+                        logger.info(
+                            "[UI_ACTION] applied structured slot patch before routing: %s",
+                            generic_ui_action_context.slot_patch,
+                        )
 
             if chip_selected_vehicle is not None:
                 rewritten_vehicle_text = TStationChatServiceV2._rewrite_vehicle_selection_user_text(
@@ -25846,7 +25902,7 @@ class TStationChatServiceV2:
             domain=MultiAgentDomain.Domain.LEADING.value,
             reason="pre_contract_policy_guard",
         )
-        normalize_quickreply_ctas(data_event)
+        normalize_ui_action_metadata(data_event)
         yield f"data: {json.dumps(data_event, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
@@ -25861,7 +25917,7 @@ class TStationChatServiceV2:
                 source=str(event.get("assistant_response_source") or "code_policy_guard"),
                 reason="pre_contract_policy_guard",
             )
-        normalize_quickreply_ctas(event)
+        normalize_ui_action_metadata(event)
         event_data = event.get("data") if isinstance(event.get("data"), dict) else {}
         msg = str(event_data.get("assistantResponse") or "")
         source_domain = str(event.get("source_domain") or "TRANSACTION").upper()
@@ -25897,7 +25953,7 @@ class TStationChatServiceV2:
                 else _build_missing_contract_guard_event(source=source, domain=MultiAgentDomain.Domain.TRANSACTION.value)
             )
         event = finalized_event
-        normalize_quickreply_ctas(event, contract=turn_contract)
+        normalize_ui_action_metadata(event, contract=turn_contract)
         source_domain = str(event.get("source_domain") or "transaction").lower()
         agent_name = "[SUPPORT AGENT]" if source_domain == MultiAgentDomain.Domain.SUPPORT.value else "[TRANSACTION AGENT]"
         agent_class = "Support Agent" if source_domain == MultiAgentDomain.Domain.SUPPORT.value else "Transaction Agent"
@@ -25940,7 +25996,7 @@ class TStationChatServiceV2:
                 )
             )
         event = finalized_event
-        normalize_quickreply_ctas(event, contract=turn_contract)
+        normalize_ui_action_metadata(event, contract=turn_contract)
         event_data = event.get("data") if isinstance(event.get("data"), dict) else {}
         msg = str(event_data.get("assistantResponse") or "")
         yield f"data: {json.dumps({'type': 'status', 'status': 'tool_start', 'tool': 'transaction_store_preview_tool', 'display_name': '장착 가능 일정 확인 중...', 'source_domain': 'transaction'}, ensure_ascii=False)}\n\n"
@@ -25998,7 +26054,7 @@ class TStationChatServiceV2:
                     )
                 )
             event = finalized_event
-            normalize_quickreply_ctas(event, contract=turn_contract)
+            normalize_ui_action_metadata(event, contract=turn_contract)
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
             msg = str((event.get("data") or {}).get("assistantResponse") or "")
@@ -33697,7 +33753,7 @@ class TStationChatServiceV2:
                     )
                 if isinstance(event_data, dict) and _normalize_tstation_cta_urls_for_origin(event_data):
                     logger.info("[CTA_URL] rebased T-Station CTA URLs to request origin host")
-                if normalize_quickreply_ctas(event, contract=turn_contract):
+                if normalize_ui_action_metadata(event, contract=turn_contract):
                     logger.info("[CTA_REGISTRY] normalized quickReply CTA metadata before buffer")
                 if validate_ui_actions_for_contract(
                     event,
@@ -33882,7 +33938,7 @@ class TStationChatServiceV2:
             # PARALLEL MODE: yield data events immediately so FE renders without waiting for QC.
             if _parallel_qc:
                 for buffered_evt in buffered_data_events:
-                    normalize_quickreply_ctas(buffered_evt, contract=turn_contract)
+                    normalize_ui_action_metadata(buffered_evt, contract=turn_contract)
                     _mark_first_visible()
                     yield f"data: {json.dumps(buffered_evt, ensure_ascii=False)}\n\n"
 
@@ -34188,7 +34244,7 @@ class TStationChatServiceV2:
                 # SEQUENTIAL (default): data events were buffered; yield them as-is now.
                 # Verifier never rewrites the draft, so no patching is needed.
                 for buffered_evt in buffered_data_events:
-                    normalize_quickreply_ctas(buffered_evt, contract=turn_contract)
+                    normalize_ui_action_metadata(buffered_evt, contract=turn_contract)
                     _mark_first_visible()
                     yield f"data: {json.dumps(buffered_evt, ensure_ascii=False)}\n\n"
 
@@ -34304,7 +34360,7 @@ class TStationChatServiceV2:
                 "latency_qc_ms": round(_lat_qc_ms),
             }
             _trace_metadata.update(vehicle_selection_trace_metadata)
-            _trace_metadata.update(cta_trace_metadata(buffered_data_events))
+            _trace_metadata.update(ui_action_trace_metadata(buffered_data_events))
             _trace_output = _truncate(draft_response)
             _trace_input = _truncate(_last_user)
             # Set both the parent span's own output AND the trace-level output.

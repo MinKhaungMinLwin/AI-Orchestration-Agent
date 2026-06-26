@@ -19,6 +19,8 @@ class ChipContext(BaseModel):
     expected_behavior: Optional[str] = Field(default=None, description="open_url, conversation_action, or dynamic_choice.")
     source_intent: Optional[str] = Field(default=None, description="Intent that emitted this CTA.")
     expected_contract_intent: Optional[str] = Field(default=None, description="Next-turn contract intent expected by the CTA.")
+    ui_action: Optional[dict] = Field(default=None, description="Normalized UI action envelope.")
+    slots: Optional[dict] = Field(default=None, description="Current-turn slot patch carried by the UI action.")
     metadata: Optional[dict] = Field(default=None, description="Action-specific metadata emitted with the chip.")
 
     model_config = {"extra": "allow"}
@@ -35,6 +37,8 @@ class ChatMessageRequest(BaseModel):
         default=None,
         description="Set by FE when the user taps a quick reply chip. Allows backend to skip LLM classifier.",
     )
+    ui_action: Optional[dict] = Field(default=None, description="Normalized UI action payload sent by the FE.")
+    slots: Optional[dict] = Field(default=None, description="Current-turn slot patch sent by the FE.")
 
     model_config = {
         "json_schema_extra": {

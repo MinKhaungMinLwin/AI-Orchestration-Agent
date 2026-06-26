@@ -7,11 +7,17 @@ CTA validation.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
+from services.tstation.policies.cta_registry import cta_trace_metadata, normalize_quickreply_ctas
+from services.tstation.policies.resolved_context import canonical_context_from_template_boundary
+
 
 _VEHICLE_TIRE_SIZE_LOOKUP_INTENT = "vehicle_tire_size_lookup"
+_STOCK_STORE_SEARCH_INTENT = "stock_store_search"
+_QUICK_ORDER_RESERVATION_INTENT = "quick_order_reservation"
 _VEHICLE_SIZE_LOOKUP_ALLOWED_LABELS = frozenset({
     "이 사이즈로 타이어 보기",
     "타이어 추천받기",
@@ -22,17 +28,49 @@ _VEHICLE_SIZE_LOOKUP_ALLOWED_ACTIONS = frozenset({
     "search_products_by_selected_vehicle_size",
 })
 _VEHICLE_SIZE_LOOKUP_BLOCKED_LABEL_TOKENS = ("매장", "예약", "구매")
+_QUANTITY_LABEL_RE = re.compile(r"^\s*([1-4])\s*(?:개|본)\s*$")
+
+_UI_ACTION_SLOT_KEYS = (
+    "goods_no",
+    "tire_size",
+    "tire_size_front",
+    "tire_size_rear",
+    "ord_qty",
+    "region",
+    "shop_id",
+    "shop_name",
+    "availability_intent",
+    "requested_cal_day",
+    "pending_intent",
+    "goal_type",
+    "stock_check_mode",
+    "car_no",
+    "car_lnc_cd",
+    "mbr_car_reg_seq",
+    "mbr_car_unif_no",
+    "car_nm",
+    "car_model_det",
+    "car_type",
+    "vehicle_type",
+)
 
 
 @dataclass(frozen=True)
 class UIActionContext:
+    action_type: str
     action_name: str
     selection_source: str
     contract_intent: str
     source_intent: str
     expected_contract_intent: str
+    expected_behavior: str | None = None
+    entity_type: str | None = None
+    entity_id: str | None = None
+    entity_label: str | None = None
+    slots: Mapping[str, Any] = field(default_factory=dict)
     slot_patch: Mapping[str, Any] = field(default_factory=dict)
     trace_metadata: Mapping[str, Any] = field(default_factory=dict)
+    raw_metadata: Mapping[str, Any] = field(default_factory=dict)
     payload: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -56,13 +94,177 @@ def _normalize_vehicle_contract_intent(intent: str | None) -> str:
     return normalized
 
 
+def _normalize_ui_action_mapping(raw_action: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(raw_action, Mapping):
+        return {}
+    normalized = dict(raw_action)
+    metadata = normalized.get("metadata")
+    if isinstance(metadata, Mapping):
+        normalized.setdefault("raw_metadata", dict(metadata))
+    slots = normalized.get("slots")
+    if not isinstance(slots, Mapping):
+        slots = normalized.get("slot_patch")
+    canonical_slots = canonical_context_from_template_boundary(slots if isinstance(slots, Mapping) else normalized)
+    if canonical_slots:
+        normalized["slots"] = canonical_slots
+    action_type = str(
+        normalized.get("action_type")
+        or normalized.get("cta_action")
+        or normalized.get("action_name")
+        or ""
+    ).strip()
+    normalized["action_type"] = action_type
+    if normalized.get("expected_contract_intent") == "vehicle_information":
+        normalized["expected_contract_intent"] = _VEHICLE_TIRE_SIZE_LOOKUP_INTENT
+    if normalized.get("source_intent") == "vehicle_information":
+        normalized["source_intent"] = _VEHICLE_TIRE_SIZE_LOOKUP_INTENT
+    return normalized
+
+
+def _ui_action_slot_patch(raw_action: Mapping[str, Any]) -> dict[str, Any]:
+    canonical = canonical_context_from_template_boundary(raw_action.get("slots"))
+    if not canonical:
+        canonical = canonical_context_from_template_boundary(raw_action)
+    patch: dict[str, Any] = {}
+    for key in _UI_ACTION_SLOT_KEYS:
+        value = canonical.get(key)
+        if value in (None, "", []):
+            continue
+        if key == "ord_qty":
+            try:
+                patch[key] = int(value)
+            except (TypeError, ValueError):
+                continue
+            continue
+        patch[key] = value
+    quantity_match = _QUANTITY_LABEL_RE.fullmatch(str(raw_action.get("entity_label") or raw_action.get("dynamic_value") or ""))
+    if quantity_match and "ord_qty" not in patch:
+        patch["ord_qty"] = int(quantity_match.group(1))
+    return patch
+
+
+def _ui_action_trace_metadata(
+    raw_action: Mapping[str, Any],
+    *,
+    selection_source: str,
+    contract_intent: str,
+    previous_slots: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    slot_patch = _ui_action_slot_patch(raw_action)
+    trace_metadata: dict[str, Any] = {
+        "ui_action_detected": True,
+        "ui_action_type": str(raw_action.get("action_type") or raw_action.get("cta_action") or "").strip() or None,
+        "source_intent": str(raw_action.get("source_intent") or "").strip() or None,
+        "expected_contract_intent": str(raw_action.get("expected_contract_intent") or "").strip() or None,
+        "actual_contract_intent": contract_intent or None,
+        "selected_entity_type": str(raw_action.get("entity_type") or "").strip() or None,
+        "selected_entity_id": str(raw_action.get("entity_id") or "").strip() or None,
+        "selection_source": selection_source,
+        "slots_rewritten": False,
+        "missing_slots": [],
+        "validation_result": "resolved",
+        "validation_reason": "ui_action_metadata",
+        "fallback_behavior": None,
+    }
+    if slot_patch:
+        trace_metadata["selected_slots"] = dict(slot_patch)
+    if previous_slots:
+        trace_metadata["previous_slots"] = {
+            key: value for key, value in previous_slots.items() if value not in (None, "", [])
+        }
+    if contract_intent == _VEHICLE_TIRE_SIZE_LOOKUP_INTENT:
+        trace_metadata.update({
+            "vehicle_selection_detected": True,
+            "selected_car_no": str(raw_action.get("entity_id") or slot_patch.get("car_no") or "").strip() or None,
+            "selected_tire_size": str(
+                slot_patch.get("tire_size")
+                or slot_patch.get("tire_size_front")
+                or slot_patch.get("tire_size_rear")
+                or ""
+            ).strip() or None,
+            "previous_car_no": str((previous_slots or {}).get("car_no") or ""),
+            "previous_tire_size": str((previous_slots or {}).get("tire_size") or ""),
+            "contract_intent_before_router": _VEHICLE_TIRE_SIZE_LOOKUP_INTENT,
+            "final_contract_intent": _VEHICLE_TIRE_SIZE_LOOKUP_INTENT,
+        })
+    return trace_metadata
+
+
+def _build_ui_action_context_from_raw(
+    raw_action: Mapping[str, Any],
+    *,
+    selection_source: str,
+    previous_slots: Mapping[str, Any] | None = None,
+) -> UIActionContext | None:
+    normalized = _normalize_ui_action_mapping(raw_action)
+    if not normalized:
+        return None
+    source_intent = _normalize_vehicle_contract_intent(str(normalized.get("source_intent") or "").strip())
+    expected_contract_intent = _normalize_vehicle_contract_intent(
+        str(normalized.get("expected_contract_intent") or "").strip()
+    )
+    contract_intent = expected_contract_intent or source_intent
+    if not contract_intent:
+        return None
+    slot_patch = _ui_action_slot_patch(normalized)
+    entity_label = str(
+        normalized.get("entity_label")
+        or normalized.get("label")
+        or normalized.get("entityLabel")
+        or normalized.get("dynamic_value")
+        or ""
+    ).strip()
+    entity_id = str(
+        normalized.get("entity_id")
+        or normalized.get("entityId")
+        or slot_patch.get("goods_no")
+        or slot_patch.get("car_no")
+        or ""
+    ).strip()
+    entity_type = str(
+        normalized.get("entity_type")
+        or normalized.get("entityType")
+        or ("vehicle" if contract_intent == _VEHICLE_TIRE_SIZE_LOOKUP_INTENT else "product")
+    ).strip()
+    trace_metadata = _ui_action_trace_metadata(
+        normalized,
+        selection_source=selection_source,
+        contract_intent=contract_intent,
+        previous_slots=previous_slots,
+    )
+    return UIActionContext(
+        action_type=str(normalized.get("action_type") or "").strip() or "select_ui_action",
+        action_name=str(normalized.get("cta_action") or normalized.get("action_type") or "select_ui_action"),
+        selection_source=selection_source,
+        contract_intent=contract_intent,
+        source_intent=source_intent or contract_intent,
+        expected_contract_intent=expected_contract_intent or contract_intent,
+        expected_behavior=str(normalized.get("expected_behavior") or "").strip() or None,
+        entity_type=entity_type or None,
+        entity_id=entity_id or None,
+        entity_label=entity_label or None,
+        slots=dict(normalized.get("slots") or {}),
+        slot_patch=slot_patch,
+        trace_metadata=trace_metadata,
+        raw_metadata=dict(normalized.get("raw_metadata") or normalized),
+        payload=dict(normalized),
+    )
+
+
 def resolve_ui_action_context(
     *,
+    raw_action: Mapping[str, Any] | None = None,
     selected_vehicle: Mapping[str, Any] | None,
     selection_source: str,
     previous_slots: Mapping[str, Any] | None = None,
     slot_patch: Mapping[str, Any] | None = None,
 ) -> UIActionContext | None:
+    if raw_action is not None:
+        return _build_ui_action_context_from_raw(
+            raw_action,
+            selection_source=selection_source,
+            previous_slots=previous_slots,
+        )
     if not isinstance(selected_vehicle, Mapping):
         return None
 
@@ -99,13 +301,20 @@ def resolve_ui_action_context(
         "final_contract_intent": _VEHICLE_TIRE_SIZE_LOOKUP_INTENT,
     }
     return UIActionContext(
+        action_type="select_vehicle",
         action_name="select_vehicle_candidate",
         selection_source=selection_source,
         contract_intent=_VEHICLE_TIRE_SIZE_LOOKUP_INTENT,
         source_intent=source_intent or _VEHICLE_TIRE_SIZE_LOOKUP_INTENT,
         expected_contract_intent=expected_contract_intent or _VEHICLE_TIRE_SIZE_LOOKUP_INTENT,
+        expected_behavior="conversation_action",
+        entity_type="vehicle",
+        entity_id=_vehicle_value(selected_vehicle, "carNo", "car_no", "licensePlate") or None,
+        entity_label=_vehicle_value(selected_vehicle, "carNo", "car_no", "licensePlate") or None,
+        slots=dict(slot_patch_dict),
         slot_patch=slot_patch_dict,
         trace_metadata=trace_metadata,
+        raw_metadata=dict(selection_context),
         payload=selected_vehicle,
     )
 
@@ -185,3 +394,165 @@ def validate_ui_actions_for_contract(
     if isinstance(metadata, dict):
         metadata["ui_action_validation"] = _VEHICLE_TIRE_SIZE_LOOKUP_INTENT
     return True
+
+
+def normalize_ui_action_metadata(
+    event: dict[str, Any],
+    *,
+    contract: Any | None = None,
+    source_intent: str | None = None,
+) -> bool:
+    """Attach a shared UI-action envelope to quickReply and product templates."""
+
+    changed = normalize_quickreply_ctas(event, contract=contract, source_intent=source_intent)
+    if not isinstance(event, dict):
+        return changed
+
+    template = str(event.get("template") or "")
+    data = event.get("data")
+    if not isinstance(data, dict):
+        return changed
+
+    contract_intent = _normalize_vehicle_contract_intent(
+        str(source_intent or getattr(contract, "intent", None) or "").strip()
+    ) or _normalize_vehicle_contract_intent(
+        str(getattr(contract, "sub_intent", None) or getattr(contract, "intent", None) or "").strip()
+    )
+    known_slots = dict(getattr(contract, "known_slots", {}) or {})
+    contract_domain = str(event.get("source_domain") or getattr(contract, "domain", "") or "").upper()
+
+    if template == "quickReply":
+        quick_replies = data.get("quickReplies")
+        if not isinstance(quick_replies, list):
+            return changed
+        for chip in quick_replies:
+            if not isinstance(chip, dict):
+                continue
+            metadata = chip.get("metadata") if isinstance(chip.get("metadata"), Mapping) else {}
+            label = str(chip.get("label") or "").strip()
+            slot_values = {
+                key: value for key, value in known_slots.items()
+                if key in _UI_ACTION_SLOT_KEYS and value not in (None, "", [])
+            }
+            quantity_match = _QUANTITY_LABEL_RE.fullmatch(label)
+            action_type = str(chip.get("cta_action") or metadata.get("cta_action") or "").strip()
+            if quantity_match:
+                slot_values["ord_qty"] = int(quantity_match.group(1))
+                action_type = "select_quantity"
+            if not action_type:
+                continue
+            expected_contract_intent = str(
+                chip.get("expected_contract_intent")
+                or metadata.get("expected_contract_intent")
+                or contract_intent
+                or ""
+            ).strip()
+            chip["source_intent"] = str(chip.get("source_intent") or metadata.get("source_intent") or contract_intent or "")
+            chip["expected_contract_intent"] = expected_contract_intent
+            chip["expected_behavior"] = str(
+                chip.get("expected_behavior") or metadata.get("expected_behavior") or "conversation_action"
+            )
+            chip["ui_action"] = {
+                "action_type": action_type,
+                "cta_action": action_type,
+                "expected_behavior": chip["expected_behavior"],
+                "source_intent": chip["source_intent"],
+                "expected_contract_intent": expected_contract_intent,
+                "entity_type": "quantity" if quantity_match else "quick_reply",
+                "entity_label": label,
+                "slots": slot_values,
+            }
+            metadata = dict(metadata)
+            metadata["ui_action"] = chip["ui_action"]
+            if slot_values:
+                metadata["slots"] = slot_values
+            chip["metadata"] = metadata
+            changed = True
+        return changed
+
+    if template == "product" and data.get("isBookingFlow") is True:
+        products = data.get("products")
+        metadata_list = data.get("metadata")
+        if not isinstance(products, list) or not isinstance(metadata_list, list):
+            return changed
+        if len(products) != len(metadata_list):
+            return changed
+        expected_contract_intent = contract_intent or _STOCK_STORE_SEARCH_INTENT
+        for product, metadata in zip(products, metadata_list):
+            if not isinstance(product, dict) or not isinstance(metadata, dict):
+                continue
+            product_context = canonical_context_from_template_boundary({**product, **metadata})
+            slot_values = {
+                key: value for key, value in known_slots.items()
+                if key in _UI_ACTION_SLOT_KEYS and value not in (None, "", [])
+            }
+            goods_no = str(product_context.get("goods_no") or "").strip()
+            tire_size = str(product_context.get("tire_size") or "").strip()
+            if goods_no:
+                slot_values["goods_no"] = goods_no
+            if tire_size:
+                slot_values["tire_size"] = tire_size
+            action_type = "select_product"
+            metadata["domain"] = metadata.get("domain") or contract_domain or "TRANSACTION"
+            metadata["cta_action"] = action_type
+            metadata["source_intent"] = metadata.get("source_intent") or expected_contract_intent
+            metadata["expected_contract_intent"] = (
+                metadata.get("expected_contract_intent") or expected_contract_intent
+            )
+            metadata["expected_behavior"] = metadata.get("expected_behavior") or "conversation_action"
+            metadata["slots"] = slot_values
+            metadata["ui_action"] = {
+                "action_type": action_type,
+                "cta_action": action_type,
+                "expected_behavior": metadata["expected_behavior"],
+                "source_intent": metadata["source_intent"],
+                "expected_contract_intent": metadata["expected_contract_intent"],
+                "entity_type": "product",
+                "entity_id": goods_no or None,
+                "entity_label": str(
+                    product_context.get("product_name") or product.get("titleProductName") or product.get("title") or ""
+                ).strip() or None,
+                "slots": slot_values,
+            }
+            changed = True
+        return changed
+
+    return changed
+
+
+def ui_action_trace_metadata(events: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarize emitted UI-action metadata for Langfuse trace metadata."""
+
+    trace = cta_trace_metadata(events)
+    first_ui_action: dict[str, Any] | None = None
+    for event in events:
+        data = event.get("data") if isinstance(event, Mapping) else None
+        if not isinstance(data, Mapping):
+            continue
+        if event.get("template") == "quickReply":
+            for chip in data.get("quickReplies") or []:
+                if not isinstance(chip, Mapping):
+                    continue
+                ui_action = chip.get("ui_action")
+                if isinstance(ui_action, Mapping):
+                    first_ui_action = dict(ui_action)
+                    break
+        elif event.get("template") == "product":
+            metadata_list = data.get("metadata")
+            if isinstance(metadata_list, list):
+                for metadata in metadata_list:
+                    if not isinstance(metadata, Mapping):
+                        continue
+                    ui_action = metadata.get("ui_action")
+                    if isinstance(ui_action, Mapping):
+                        first_ui_action = dict(ui_action)
+                        break
+        if first_ui_action is not None:
+            break
+    if first_ui_action is not None:
+        trace.update({
+            "ui_action_type": first_ui_action.get("action_type"),
+            "expected_contract_intent": first_ui_action.get("expected_contract_intent"),
+            "source_intent": first_ui_action.get("source_intent"),
+        })
+    return trace

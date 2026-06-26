@@ -387,6 +387,7 @@ from services.tstation.policies.turn_contract import (
 )
 from services.tstation.policies.ui_action_policy import (
     apply_ui_action_slot_patch,
+    normalize_ui_action_metadata,
     resolve_ui_action_context,
     validate_ui_actions_for_contract,
 )
@@ -469,6 +470,31 @@ def test_chip_context_preserves_action_contract_fields() -> None:
     assert dumped["cta_action"] == "enter_region"
     assert dumped["expected_contract_intent"] == "stock_store_search"
     assert dumped["metadata"]["goodsNo"] == "G000000317729"
+
+
+def test_chat_message_request_preserves_ui_action_and_slot_patch() -> None:
+    request = ChatMessageRequest(
+        content="4개",
+        session_id="s1",
+        chip_context={
+            "domain": "TRANSACTION",
+            "cta_action": "select_quantity",
+            "source_intent": "stock_store_search",
+            "expected_contract_intent": "stock_store_search",
+            "slots": {"goods_no": "G000000317729", "ord_qty": 4},
+        },
+        ui_action={
+            "action_type": "select_quantity",
+            "source_intent": "stock_store_search",
+            "expected_contract_intent": "stock_store_search",
+            "slots": {"goods_no": "G000000317729", "ord_qty": 4},
+        },
+        slots={"goods_no": "G000000317729", "ord_qty": 4},
+    )
+
+    assert request.ui_action["action_type"] == "select_quantity"
+    assert request.slots == {"goods_no": "G000000317729", "ord_qty": 4}
+    assert request.chip_context.model_dump()["slots"]["ord_qty"] == 4
 
 
 def test_quickreply_cta_action_enter_region_asks_for_region_only() -> None:
@@ -11371,6 +11397,116 @@ def test_vehicle_tire_size_lookup_ui_action_validation_blocks_store_and_purchase
         "이 사이즈로 타이어 보기",
         "사이즈 직접 입력",
     ]
+
+
+def test_dynamic_quantity_ui_action_metadata_uses_contract_slots() -> None:
+    contract = build_turn_contract(
+        user_text="4개",
+        intent_frame=IntentFrame(
+            domain=PolicyDomain.TRANSACTION,
+            intent="stock_store_search",
+            sub_intent="today_install",
+            known_slots={
+                "goods_no": "G000000309715",
+                "tire_size": "225/55R18",
+                "region": "동탄",
+                "availability_intent": "today_install",
+                "requested_cal_day": "20260626",
+                "pending_intent": "stock",
+                "goal_type": "store_with_stock",
+            },
+        ),
+        tool_plan=ToolPlan(
+            allowed_tools=("transaction_store_preview_tool", "get_store_list_tool"),
+            preferred_tool="transaction_store_preview_tool",
+        ),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            metadata={"response_shape_key": "quantity_prompt"},
+        ),
+        action_mode="stock_check",
+        context_state="resumed",
+    )
+    event = {
+        "template": "quickReply",
+        "source_domain": "transaction",
+        "data": {
+            "assistantResponse": "확인할 수량을 알려주세요.",
+            "quickReplies": [
+                {"label": "1개", "domain": "TRANSACTION"},
+                {"label": "2개", "domain": "TRANSACTION"},
+                {"label": "3개", "domain": "TRANSACTION"},
+                {"label": "4개", "domain": "TRANSACTION"},
+            ],
+        },
+    }
+
+    changed = normalize_ui_action_metadata(event, contract=contract)
+
+    assert changed is True
+    chip = event["data"]["quickReplies"][-1]
+    assert chip["cta_action"] == "select_dynamic_choice"
+    assert chip["ui_action"]["action_type"] == "select_quantity"
+    assert chip["ui_action"]["expected_contract_intent"] == "stock_store_search"
+    assert chip["ui_action"]["slots"]["ord_qty"] == 4
+    assert chip["ui_action"]["slots"]["goods_no"] == "G000000309715"
+    assert chip["metadata"]["slots"]["region"] == "동탄"
+
+
+def test_product_booking_flow_metadata_carries_availability_slots() -> None:
+    contract = build_turn_contract(
+        user_text="다이나프로 HL3 225/55R18",
+        intent_frame=IntentFrame(
+            domain=PolicyDomain.TRANSACTION,
+            intent="stock_store_search",
+            sub_intent="today_install",
+            known_slots={
+                "goods_no": "G000000309715",
+                "tire_size": "225/55R18",
+                "region": "동탄",
+                "availability_intent": "today_install",
+                "requested_cal_day": "20260626",
+                "pending_intent": "stock",
+                "goal_type": "store_with_stock",
+            },
+        ),
+        tool_plan=ToolPlan(
+            allowed_tools=("transaction_store_preview_tool", "get_store_list_tool"),
+            preferred_tool="transaction_store_preview_tool",
+        ),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.CARD,
+            template=TemplateName.PRODUCT,
+            metadata={"response_shape_key": "product_selection"},
+        ),
+        action_mode="stock_check",
+        context_state="resumed",
+    )
+    event = {
+        "template": "product",
+        "source_domain": "transaction",
+        "data": {
+            "assistantResponse": "상품을 선택해 주세요.",
+            "isBookingFlow": True,
+            "products": [{
+                "title": "다이나프로 HL3",
+                "titleProductName": "다이나프로 HL3",
+                "titleTires": "225/55R18",
+            }],
+            "metadata": [{"goodsId": "G000000309715"}],
+        },
+    }
+
+    changed = normalize_ui_action_metadata(event, contract=contract)
+
+    assert changed is True
+    metadata = event["data"]["metadata"][0]
+    assert metadata["cta_action"] == "select_product"
+    assert metadata["expected_contract_intent"] == "stock_store_search"
+    assert metadata["slots"]["goods_no"] == "G000000309715"
+    assert metadata["slots"]["requested_cal_day"] == "20260626"
+    assert metadata["ui_action"]["entity_type"] == "product"
 
 
 def test_history_vehicle_selection_does_not_match_product_name_substring_to_vehicle() -> None:
