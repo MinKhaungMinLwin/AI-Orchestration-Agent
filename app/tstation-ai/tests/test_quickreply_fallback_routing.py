@@ -9898,6 +9898,95 @@ def test_reservation_policy_turn_keeps_previous_reservation_context_dormant_with
     assert "get_my_reservations_tool" in payload["blocked_tools"]
 
 
+def test_store_finder_complaint_turn_keeps_previous_store_context_dormant_without_blocking() -> None:
+    routing_result = MultiAgentDomain(
+        reason="complaint during store-finder flow",
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        execution_plan=["support:tstation_service_complaint"],
+        user_behavior="complaining about waiting time after a store-finder flow",
+        flow="support policy answer",
+        claim_check_type="none",
+        complaint_scope="tstation_service_complaint",
+        agent_prompt_profile="full",
+        policy_intent="none",
+    )
+
+    contract = build_turn_contract(
+        user_text="예약 시간 맞췄는데 1시간 기다렸어. 보상 기준 있어?",
+        routing_result=routing_result,
+        merged_slots=ConversationSlots(
+            goal_type="store_finder",
+            pending_intent="reservation",
+            shop_id="F00721",
+            shop_name="티스테이션 판교점",
+            region="경기",
+        ),
+        action_mode="support_policy_answer",
+        context_state="dormant",
+        resume_source="none",
+        previous_pending_intent="reservation",
+        previous_goal_type="store_finder",
+        resume_anchor_detected=False,
+        dormant_context_reason="current_turn_action:support_policy_answer",
+    )
+
+    payload = contract.to_dict()
+    assert contract.domain == "support"
+    assert contract.blocking_required_slots == ()
+    assert "store" not in contract.required_slots
+    assert payload["previous_goal_type"] == "store_finder"
+    assert payload["previous_pending_intent"] == "reservation"
+    assert payload["context_state"] == "dormant"
+    assert payload["blocking_required_slots_source"] == "none"
+
+
+def test_second_store_selection_keeps_booking_continuation_contract() -> None:
+    latest_location = {
+        "template": "location",
+        "data": {
+            "stores": [
+                {"nameAddress": "티스테이션 영등포점"},
+                {"nameAddress": "티스테이션 강서점"},
+            ],
+            "metadata": [
+                {
+                    "shopId": "C01306",
+                    "shopName": "티스테이션 영등포점",
+                    "sourceTool": "transaction_store_preview_tool",
+                    "goodsNo": "G000000309780",
+                    "tireSize": "205/60R15",
+                    "ordQty": 4,
+                    "region": "서울",
+                    "pendingIntent": "order",
+                    "goalType": "place_order",
+                },
+                {
+                    "shopId": "C09999",
+                    "shopName": "티스테이션 강서점",
+                    "sourceTool": "transaction_store_preview_tool",
+                    "goodsNo": "G000000309780",
+                    "tireSize": "205/60R15",
+                    "ordQty": 4,
+                    "region": "서울",
+                    "pendingIntent": "order",
+                    "goalType": "place_order",
+                },
+            ],
+        },
+    }
+
+    selection = resolve_store_selection_from_history_template("두 번째 매장으로 예약", latest_location)
+    values = preview_location_slot_values_from_selection(selection)
+    frame = build_transaction_intent_frame("두 번째 매장으로 예약", known_slots=values)
+
+    assert values["shop_id"] == "C09999"
+    assert values["shop_name"] == "티스테이션 강서점"
+    assert values["pending_intent"] == "order"
+    assert values["goal_type"] == "place_order"
+    assert frame.intent == "quick_order_reservation"
+    assert frame.sub_intent == "reservation"
+
+
 def test_turn_contract_trace_metadata_marks_reference_guard_blocking_slot_source() -> None:
     routing_result = MultiAgentDomain(
         reason="owned order lookup needs order reference",
