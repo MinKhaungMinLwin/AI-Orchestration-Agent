@@ -403,7 +403,9 @@ from services.tstation.policies.ui_action_policy import (
     preview_action_mode_for_slots,
     preview_location_slot_values_from_selection,
     preorder_slot_values_from_data,
+    resolve_goods_no_from_recent_product_context,
     selected_order_context_from_preview_values,
+    resolve_recent_product_search_keyword,
     resolve_goods_no_from_selection,
     resolve_ui_action_context,
     resolve_goods_no_from_product_template_selection,
@@ -5422,7 +5424,8 @@ def test_recent_single_store_context_not_reused_when_current_turn_names_store() 
     ]
     regex_slots = ConversationSlots.extract_from_user_text("벤투스 S2 AS 2254517 4개 모란점 재고 확인해줘")
 
-    assert regex_slots.pending_intent == "stock"
+    assert regex_slots.pending_intent is None
+    assert regex_slots.intent_candidate == "stock"
     assert regex_slots.shop_name == "모란점"
     assert TStationChatServiceV2._resolve_recent_single_shop_id_from_context(prev_tool_data) == "F00409"
     assert _is_new_store_name_anchor_for_current_turn(regex_slots.shop_name, None, "F00409") is True
@@ -9335,6 +9338,64 @@ def test_promotion_gift_policy_beats_stale_purchase_context_without_high_confide
     assert "dormant_purchase_context" in (slots.availability_context or {})
 
 
+@pytest.mark.parametrize(
+    ("user_text", "policy_intent"),
+    [
+        (
+            "예약한 매장에 왔는데 주문한 거랑 다른 타이어가 왔어",
+            "tstation_service_complaint",
+        ),
+        (
+            "해외 비자카드로 결제하려는데 본인인증이 안 넘어가",
+            "payment_troubleshooting",
+        ),
+    ],
+)
+def test_support_policy_action_mode_does_not_resume_purchase_from_regex_candidate(
+    user_text: str,
+    policy_intent: str,
+) -> None:
+    regex_slots = ConversationSlots.extract_from_user_text(user_text)
+    slots = ConversationSlots(
+        goods_no="G000000309780",
+        tire_size="225/45R17",
+        ord_qty=4,
+        shop_name="판교점",
+        pending_intent="order",
+        goal_type="place_order",
+    )
+    routing_result = MultiAgentDomain(
+        reason="support policy question during purchase flow",
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        execution_plan=[f"support:{policy_intent}"],
+        user_behavior="support question",
+        flow="support policy answer",
+        claim_check_type="none",
+        complaint_scope="none",
+        agent_prompt_profile="full",
+        policy_intent=policy_intent,
+        planner_confidence=0.8,
+    )
+
+    action_mode = _current_turn_action_mode(
+        user_text=user_text,
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        routing_result=routing_result,
+        regex_slots=regex_slots,
+        merged_slots=slots,
+        explicit_override_reason=_explicit_current_turn_override_reason(
+            user_text=user_text,
+            regex_slots=regex_slots,
+            explicit_store_purchase_chain_request=False,
+        ),
+        resume_source="none",
+    )
+
+    assert regex_slots.pending_intent is None
+    assert action_mode == "support_policy_answer"
+    assert _context_state_for_action(action_mode=action_mode, resume_source="none", slots=slots) == "dormant"
+
+
 def test_action_mode_resumes_stored_order_context_only_with_explicit_resume_anchor() -> None:
     slots = ConversationSlots(
         goods_no="G000000309780",
@@ -12122,8 +12183,8 @@ def test_recent_product_search_keyword_is_recovered_after_vehicle_selection() ->
         }
     ]
 
-    assert TStationChatServiceV2._resolve_recent_product_search_keyword(prev_tool_data) == "옵티모"
-    assert TStationChatServiceV2._resolve_goods_no_from_recent_product_context(prev_tool_data, "235/55R19") is None
+    assert resolve_recent_product_search_keyword(prev_tool_data) == "옵티모"
+    assert resolve_goods_no_from_recent_product_context(prev_tool_data, "235/55R19") is None
 
 
 def test_recent_product_context_resolves_unique_goods_no_by_vehicle_selected_tire_size() -> None:
@@ -12140,7 +12201,7 @@ def test_recent_product_context_resolves_unique_goods_no_by_vehicle_selected_tir
     ]
 
     assert (
-        TStationChatServiceV2._resolve_goods_no_from_recent_product_context(prev_tool_data, "2355519")
+        resolve_goods_no_from_recent_product_context(prev_tool_data, "2355519")
         == "G2"
     )
 
@@ -19061,7 +19122,8 @@ def test_store_suffix_validation_keeps_real_store_contexts() -> None:
 
     assert business_hours.shop_name == "분당정자점"
     assert stock_lookup.shop_name == "한남점"
-    assert stock_lookup.pending_intent == "stock"
+    assert stock_lookup.pending_intent is None
+    assert stock_lookup.intent_candidate == "stock"
     assert night_service.shop_name == "정자점"
     assert extract_store_attribute_inquiry("정자점 야간정비 가능?") is not None
 

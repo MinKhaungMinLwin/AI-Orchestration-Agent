@@ -142,6 +142,8 @@ from services.tstation.policies.ui_action_policy import (
     datepick_slot_values_from_data,
     goods_no_from_template_event,
     preorder_slot_values_from_data,
+    resolve_goods_no_from_recent_product_context,
+    resolve_recent_product_search_keyword,
     merged_quickreply_cta_context,
     normalize_ui_action_metadata,
     normalize_vehicle_tire_size_pair,
@@ -1102,12 +1104,8 @@ def _explicit_current_turn_override_reason(
     regex_slots: ConversationSlots,
     explicit_store_purchase_chain_request: bool,
 ) -> str | None:
-    if explicit_store_purchase_chain_request or regex_slots.pending_intent == "order":
+    if explicit_store_purchase_chain_request:
         return "explicit_current_turn_purchase"
-    if regex_slots.pending_intent == "stock":
-        return "explicit_current_turn_stock_or_booking"
-    if regex_slots.pending_intent == "price":
-        return "explicit_current_turn_price_lookup"
     if re.search(r"가격|얼마|최종가|할인가|쿠폰", user_text or "", re.IGNORECASE) and (
         ConversationSlots.has_product_keyword(user_text) or normalize_tire_size(user_text)
     ):
@@ -1224,14 +1222,6 @@ def _current_turn_action_mode(
     ):
         return "owned_record_lookup"
 
-    if regex_slots.pending_intent == "order" or explicit_override_reason == "explicit_current_turn_purchase":
-        return "purchase_continuation"
-    if regex_slots.pending_intent == "stock" or explicit_override_reason == "explicit_current_turn_stock_or_booking":
-        return "stock_check"
-    if regex_slots.pending_intent == "price" or explicit_override_reason == "explicit_current_turn_price_lookup":
-        return "price_lookup"
-    if regex_slots.pending_intent == "reservation":
-        return "booking_continuation"
     if resume_source != "none" and _has_stored_transaction_context(merged_slots):
         pending_intent, goal_type = _stored_transaction_intent(merged_slots)
         if pending_intent == "order" or goal_type == "place_order":
@@ -1334,7 +1324,7 @@ def _has_current_turn_p0_auto_chain_anchor(
 ) -> bool:
     """Return whether this turn provides action evidence for Discovery->Transaction chaining."""
 
-    if regex_slots.pending_intent in _P0_AUTO_CHAIN_PENDING_INTENTS:
+    if regex_slots.intent_candidate in _P0_AUTO_CHAIN_PENDING_INTENTS:
         return True
     if explicit_override_reason in {
         "explicit_current_turn_price_lookup",
@@ -18174,7 +18164,7 @@ def _is_explicit_store_purchase_chain_request(text: str) -> bool:
 
 def _is_plain_store_search_turn(text: str, regex_slots: ConversationSlots) -> bool:
     """True for explicit general store searches that should not inherit stock/order state."""
-    if not text or regex_slots.pending_intent is not None:
+    if not text or regex_slots.intent_candidate is not None:
         return False
     if not ConversationSlots.has_store_finder_intent(text):
         return False
@@ -18212,7 +18202,7 @@ def _clear_stale_store_search_context_for_general_turn(
         MultiAgentDomain.Domain.SUPPORT.value,
     }:
         return {}
-    if regex_slots.pending_intent is not None or regex_slots.shop_name is not None or regex_slots.region is not None:
+    if regex_slots.intent_candidate is not None or regex_slots.shop_name is not None or regex_slots.region is not None:
         return {}
     if ConversationSlots.has_store_finder_intent(text):
         return {}
@@ -18268,7 +18258,7 @@ def _is_general_store_info_turn_with_explicit_store(
 ) -> bool:
     if not text or regex_slots.shop_name is None:
         return False
-    if regex_slots.pending_intent is not None:
+    if regex_slots.intent_candidate is not None:
         return False
     if _STORE_RESERVATION_ACTION_RE.search(text):
         return False
@@ -18712,7 +18702,7 @@ def _clear_stale_product_slots_for_new_recommendation(
     if not text or not ConversationSlots.has_recommend_intent(text):
         return {}
     fresh_brand_or_size_recommendation = _is_fresh_brand_or_size_recommendation_turn(text)
-    if regex_slots.pending_intent is not None or _SIZE_ONLY_RE.match(text):
+    if regex_slots.intent_candidate is not None or _SIZE_ONLY_RE.match(text):
         return {}
     if regex_slots.tire_size is not None and not fresh_brand_or_size_recommendation:
         return {}
@@ -19958,61 +19948,14 @@ class TStationChatServiceV2:
 
     @staticmethod
     def _resolve_recent_product_search_keyword(prev_tool_data: list[dict]) -> str | None:
-        """Return the most recent search_product_tool keyword from context."""
-        if not prev_tool_data:
-            return None
-
-        for entry in prev_tool_data:
-            if entry.get("tool") != "search_product_tool":
-                continue
-            tool_input = entry.get("input")
-            if not isinstance(tool_input, dict):
-                continue
-            keyword = (tool_input.get("keyword") or "").strip()
-            if keyword:
-                return keyword
-        return None
+        return resolve_recent_product_search_keyword(prev_tool_data)
 
     @staticmethod
     def _resolve_goods_no_from_recent_product_context(
         prev_tool_data: list[dict],
         tire_size: str | None,
     ) -> str | None:
-        """Resolve goods_no from the latest product-list context using tire size.
-
-        This is used when a stock/order flow first asked for vehicle/size, and
-        the user then selected a registered vehicle from listCar. At that point
-        the current-turn text is only a plate number, but the immediately prior
-        product-search context may already contain the target family/model.
-        """
-        target_size = normalize_tire_size(tire_size)
-        if not target_size or not prev_tool_data:
-            return None
-
-        items: list[dict] = []
-        PRODUCT_LIST_TOOLS = {"search_product_tool", "get_products_recommendations_tool"}
-        for entry in prev_tool_data:
-            if entry.get("tool") not in PRODUCT_LIST_TOOLS:
-                continue
-            data = entry.get("data")
-            if isinstance(data, list):
-                items = [it for it in data if isinstance(it, dict) and not it.get("_truncated")]
-                break
-            if isinstance(data, dict) and isinstance(data.get("items"), list):
-                items = [it for it in data["items"] if isinstance(it, dict)]
-                break
-        if not items:
-            return None
-
-        same_size = [
-            item
-            for item in items
-            if normalize_tire_size(canonical_context_from_tool_boundary(item).get("tire_size")) == target_size
-        ]
-        if len(same_size) != 1:
-            return None
-        goods_no = canonical_context_from_tool_boundary(same_size[0]).get("goods_no")
-        return goods_no if goods_no else None
+        return resolve_goods_no_from_recent_product_context(prev_tool_data, tire_size)
 
     @staticmethod
     def _resolve_shop_id_from_selection(user_text: str, prev_tool_data: list[dict]) -> str | None:
@@ -20753,7 +20696,7 @@ class TStationChatServiceV2:
                     )
             fresh_product_transaction_request = _is_fresh_product_transaction_request(
                 last_user_text,
-                regex_slots.pending_intent,
+                regex_slots.intent_candidate,
             )
             stale_goods_no = merged_slots.goods_no
             stale_tire_model = merged_slots.tire_model
@@ -20761,7 +20704,7 @@ class TStationChatServiceV2:
             if _clear_stale_product_identity_for_fresh_transaction(
                 merged_slots,
                 last_user_text,
-                regex_slots.pending_intent,
+                regex_slots.intent_candidate,
             ):
                 logger.info(
                     "[SLOTS] Fresh product transaction request in current turn; clearing stale product slots "
@@ -20773,7 +20716,7 @@ class TStationChatServiceV2:
             demoted_size_context = _demote_stale_tire_size_for_new_product_transaction(
                 merged_slots,
                 last_user_text,
-                regex_slots.pending_intent,
+                regex_slots.intent_candidate,
             )
             if demoted_size_context:
                 logger.info(
@@ -21107,7 +21050,7 @@ class TStationChatServiceV2:
             # merge() only applies non-None values so we can't express "clear" via
             # regex_slots alone — it has to happen here after the merge.
             user_asked_for_recommend = ConversationSlots.has_recommend_intent(last_user_text)
-            turn_has_new_transactional = regex_slots.pending_intent is not None
+            turn_has_new_transactional = regex_slots.intent_candidate is not None
             if merged_slots.pending_intent is not None and user_asked_for_recommend and not turn_has_new_transactional:
                 logger.debug(
                     f"[SLOTS] Clearing stale pending_intent={merged_slots.pending_intent!r} "
@@ -22062,7 +22005,7 @@ class TStationChatServiceV2:
             if (
                 merged_slots.shop_id is None
                 and prev_tool_data
-                and (regex_slots.pending_intent in ("order", "stock") or size_only_store_availability_continuation)
+                and (regex_slots.intent_candidate in ("order", "stock") or size_only_store_availability_continuation)
                 and not re.search(r"다른\s*매장|근처\s*매장|주변\s*매장|매장\s*찾|지역", last_user_text or "")
                 and not _is_stock_store_candidate_search_followup(last_user_text, merged_slots)
                 and not current_turn_has_store_anchor
@@ -22075,7 +22018,7 @@ class TStationChatServiceV2:
                     )
                     logger.debug(
                         f"[SLOTS] Carried forward shop_id={resolved_shop_id!r} from recent single-store context "
-                        f"for fresh pending_intent={regex_slots.pending_intent!r}"
+                        f"for fresh pending_intent={regex_slots.intent_candidate!r}"
                     )
                 else:
                     resolved_store_name = TStationChatServiceV2._resolve_recent_store_name_from_messages(messages)
@@ -22086,7 +22029,7 @@ class TStationChatServiceV2:
                         )
                         logger.debug(
                             f"[SLOTS] Carried forward shop_name={resolved_store_name!r} from recent assistant text "
-                            f"for fresh pending_intent={regex_slots.pending_intent!r}"
+                            f"for fresh pending_intent={regex_slots.intent_candidate!r}"
                         )
 
             if size_only_store_availability_continuation and not merged_slots.shop_name:
@@ -22791,7 +22734,7 @@ class TStationChatServiceV2:
         #   - This one fires when goods_no was resolved in a PRIOR turn and
         #     carried via slots into the current turn.
         #
-        # Guard: `regex_slots.pending_intent is not None` — the intent must be
+        # Guard: `regex_slots.intent_candidate is not None` — the intent must be
         # FRESHLY expressed in the current user message (regex extraction over
         # last_user_text). Using `merged_slots.pending_intent` would over-route
         # cases where a stale intent lingers from many turns ago without the
@@ -22802,12 +22745,12 @@ class TStationChatServiceV2:
             len(domains) == 1
             and domains[0] == MultiAgentDomain.Domain.DISCOVERY
             and merged_slots.goods_no is not None
-            and (regex_slots.pending_intent is not None or resolved_size_stock_continuation)
+            and (regex_slots.intent_candidate is not None or resolved_size_stock_continuation)
         ):
             logger.debug(
                 f"[COORDINATOR] P0c DISCOVERY→TX redirect: classifier=[DISCOVERY], "
                 f"goods_no={merged_slots.goods_no!r} (carried), "
-                f"fresh_intent={regex_slots.pending_intent!r}, "
+                f"fresh_intent={regex_slots.intent_candidate!r}, "
                 f"resolved_size_stock_continuation={resolved_size_stock_continuation!r}, "
                 f"session_id={request.session_id} → domains=[TRANSACTION]"
             )
@@ -22820,7 +22763,7 @@ class TStationChatServiceV2:
                 user_behavior=getattr(routing_result, "user_behavior", "") or "",
                 slots={
                     "goods_no_carried": merged_slots.goods_no,
-                    "fresh_intent": regex_slots.pending_intent,
+                    "fresh_intent": regex_slots.intent_candidate,
                     "resolved_size_stock_continuation": resolved_size_stock_continuation,
                     "tire_size": merged_slots.tire_size,
                     "region": merged_slots.region,
@@ -22952,7 +22895,7 @@ class TStationChatServiceV2:
                 logger.debug(
                     f"[COORDINATOR] P0 auto-chain gate triggered: "
                     f"pending_intent={merged_slots.pending_intent!r} "
-                    f"(fresh_this_turn={regex_slots.pending_intent!r}), goods_no=None, "
+                    f"(fresh_this_turn={regex_slots.intent_candidate!r}), goods_no=None, "
                     f"tire_size={merged_slots.tire_size!r}, tire_model={merged_slots.tire_model!r}, "
                     f"session_id={request.session_id} → domains=[DISCOVERY, TRANSACTION]"
                 )
@@ -22965,7 +22908,7 @@ class TStationChatServiceV2:
                     user_behavior=getattr(routing_result, "user_behavior", "") or "",
                     slots={
                         "pending_intent": merged_slots.pending_intent,
-                        "fresh_intent_this_turn": regex_slots.pending_intent,
+                        "fresh_intent_this_turn": regex_slots.intent_candidate,
                         "tire_size": merged_slots.tire_size,
                         "tire_model": merged_slots.tire_model,
                     },
@@ -23022,7 +22965,7 @@ class TStationChatServiceV2:
             # warrants a Discovery search.
             and (
                 (
-                    regex_slots.pending_intent in ("order", "stock", "price")
+                    regex_slots.intent_candidate in ("order", "stock", "price")
                     and (
                         regex_slots.tire_size is not None
                         or ConversationSlots.has_product_keyword(last_user_text)
@@ -23096,7 +23039,7 @@ class TStationChatServiceV2:
                         "tire_model": merged_slots.tire_model,
                         "has_product_keyword": ConversationSlots.has_product_keyword(last_user_text),
                         "fresh_product_transaction_request": fresh_product_transaction_request,
-                        "fresh_intent_this_turn": regex_slots.pending_intent,
+                        "fresh_intent_this_turn": regex_slots.intent_candidate,
                     },
                 )
 
@@ -23141,7 +23084,7 @@ class TStationChatServiceV2:
                     "[DISCOVERY, TRANSACTION] with discovery_search profile "
                     "(tire_size=%r, pending_intent=%r, session_id=%s)",
                     merged_slots.tire_size,
-                    regex_slots.pending_intent,
+                    regex_slots.intent_candidate,
                     request.session_id,
                 )
 

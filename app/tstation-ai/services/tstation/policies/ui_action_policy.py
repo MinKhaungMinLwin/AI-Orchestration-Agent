@@ -2028,6 +2028,55 @@ def apply_selected_order_context_for_purchase_cta(slots: Any) -> tuple[Any, dict
     return updated, values
 
 
+def resolve_recent_product_search_keyword(prev_tool_data: list[dict[str, Any]]) -> str | None:
+    if not prev_tool_data:
+        return None
+    for entry in prev_tool_data:
+        if entry.get("tool") != "search_product_tool":
+            continue
+        tool_input = entry.get("input")
+        if not isinstance(tool_input, Mapping):
+            continue
+        keyword = str(tool_input.get("keyword") or "").strip()
+        if keyword:
+            return keyword
+    return None
+
+
+def resolve_goods_no_from_recent_product_context(
+    prev_tool_data: list[dict[str, Any]],
+    tire_size: str | None,
+) -> str | None:
+    target_size = normalize_tire_size(tire_size)
+    if not target_size or not prev_tool_data:
+        return None
+
+    items: list[dict[str, Any]] = []
+    product_list_tools = {"search_product_tool", "get_products_recommendations_tool"}
+    for entry in prev_tool_data:
+        if entry.get("tool") not in product_list_tools:
+            continue
+        data = entry.get("data")
+        if isinstance(data, list):
+            items = [it for it in data if isinstance(it, dict) and not it.get("_truncated")]
+            break
+        if isinstance(data, Mapping) and isinstance(data.get("items"), list):
+            items = [it for it in data["items"] if isinstance(it, dict)]
+            break
+    if not items:
+        return None
+
+    same_size = [
+        item
+        for item in items
+        if normalize_tire_size(canonical_context_from_tool_boundary(item).get("tire_size")) == target_size
+    ]
+    if len(same_size) != 1:
+        return None
+    goods_no = canonical_context_from_tool_boundary(same_size[0]).get("goods_no")
+    return str(goods_no).strip() if goods_no else None
+
+
 def goods_no_from_template_event(event: Mapping[str, Any] | None) -> str:
     if not isinstance(event, Mapping):
         return ""
