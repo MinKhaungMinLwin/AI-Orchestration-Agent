@@ -136,6 +136,7 @@ from services.tstation.policies.ui_action_policy import (
     quickreply_cta_context_from_template,
     resolve_goods_no_from_product_template_selection,
     preview_location_slot_values_from_selection,
+    resolve_shop_id_from_selection,
     resolve_shop_id_from_history_template,
     resolve_store_selection_from_history_template,
     resolve_tire_size_from_history_template,
@@ -20597,86 +20598,7 @@ class TStationChatServiceV2:
 
     @staticmethod
     def _resolve_shop_id_from_selection(user_text: str, prev_tool_data: list[dict]) -> str | None:
-        """Match a user's list-selection reply against the prior
-        get_nearby_stores_tool / get_store_list_tool result and return the
-        shop_id of the matched store.
-
-        Mirrors _resolve_goods_no_from_selection for stores. When a store list
-        had more than 1 store, `_apply_tool_derived_slots` skips shop_id
-        auto-save (can't guess which one). This resolver fills that gap by
-        matching the user's selection reply to the prior list.
-
-        Matching strategy (first hit wins):
-          1. Ordinal at the start ("1.", "5번", "3)") → items[idx-1]
-          2. Token-overlap against shop_nm — only resolves when exactly ONE
-             store has the top score (≥1 token match), to avoid ambiguous
-             resolution when multiple stores share a substring like "한남점".
-
-        Expected tool_context entry shape (from filter_for_context):
-            {"tool": "search_stores_tool" | "get_nearby_stores_tool" | "get_store_list_tool",
-             "data": [{"shop_id": "F07782", "shop_nm": "티스테이션 한남점",
-                       "distance_km": 4.59, "addr_base": "..."}],
-             "input": {...}}
-        """
-        if not user_text or not prev_tool_data:
-            return None
-
-        STORE_TOOLS = {"search_stores_tool", "get_nearby_stores_tool", "get_store_list_tool"}
-        items: list[dict] = []
-        for entry in prev_tool_data:
-            if entry.get("tool") not in STORE_TOOLS:
-                continue
-            data = entry.get("data")
-            # Primary shape: filter_for_context stores data as a list directly
-            if isinstance(data, list):
-                items = [it for it in data if isinstance(it, dict) and not it.get("_truncated")]
-                break
-            # Defensive fallback: {"stores": [...]} shape (raw tool output)
-            if isinstance(data, dict) and isinstance(data.get("stores"), list):
-                items = [it for it in data["stores"] if isinstance(it, dict)]
-                break
-        if not items:
-            return None
-
-        text = user_text.strip()
-
-        # FE store-card chip phrases (isBookingFlow=True taps) carry no ordinal
-        # or store-name token — only resolvable when exactly 1 store was shown.
-        _STORE_SELECT_CHIPS = frozenset({"이 매장 선택", "이 매장으로", "이곳 선택"})
-        if text in _STORE_SELECT_CHIPS and len(items) == 1:
-            shop_id = canonical_context_from_tool_boundary(items[0]).get("shop_id")
-            if shop_id:
-                return shop_id
-
-        ordinal_match = re.match(r"^\s*(\d+)\s*[\.\)번:]", text)
-        if ordinal_match:
-            idx = int(ordinal_match.group(1)) - 1
-            if 0 <= idx < len(items):
-                shop_id = canonical_context_from_tool_boundary(items[idx]).get("shop_id")
-                if shop_id:
-                    return shop_id
-
-        # Token-overlap match against shop_nm. Require a unique top-scoring
-        # store to avoid auto-resolving ambiguous replies like a bare "한남점"
-        # that could match several brands at the same address area.
-        tokens = [t for t in re.findall(r"[A-Za-z가-힣]+", text) if len(t) >= 2]
-        if tokens:
-            scored: list[tuple[int, dict]] = []
-            for item in items:
-                canonical_item = canonical_context_from_tool_boundary(item)
-                shop_nm = canonical_item.get("shop_name") or ""
-                score = sum(1 for tok in tokens if tok in shop_nm)
-                if score > 0:
-                    scored.append((score, item))
-            if scored:
-                max_score = max(s for s, _ in scored)
-                top = [item for s, item in scored if s == max_score]
-                if len(top) == 1:
-                    shop_id = canonical_context_from_tool_boundary(top[0]).get("shop_id")
-                    if shop_id:
-                        return shop_id
-
-        return None
+        return resolve_shop_id_from_selection(user_text, prev_tool_data)
 
     @staticmethod
     def _resolve_shop_id_from_history_template(user_text: str, template_data: dict | None) -> str | None:

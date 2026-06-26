@@ -402,6 +402,7 @@ from services.tstation.policies.ui_action_policy import (
     preview_location_slot_values_from_selection,
     resolve_ui_action_context,
     resolve_goods_no_from_product_template_selection,
+    resolve_shop_id_from_selection,
     resolve_shop_id_from_history_template,
     resolve_store_selection_from_history_template,
     resolve_tire_size_from_history_template,
@@ -10462,7 +10463,7 @@ def test_preview_location_selection_uses_template_boundary_alias_normalization()
 
 
 def test_tool_store_selection_uses_tool_boundary_alias_normalization() -> None:
-    shop_id = TStationChatServiceV2._resolve_shop_id_from_selection(
+    shop_id = resolve_shop_id_from_selection(
         "티스테이션 영등포점",
         [
             {

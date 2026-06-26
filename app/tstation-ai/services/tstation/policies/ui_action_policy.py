@@ -1218,6 +1218,57 @@ def preview_location_slot_values_from_selection(selection: Mapping[str, Any] | N
     return values or None
 
 
+def resolve_shop_id_from_selection(user_text: str, prev_tool_data: list[dict[str, Any]]) -> str | None:
+    if not user_text or not prev_tool_data:
+        return None
+
+    store_tools = {"search_stores_tool", "get_nearby_stores_tool", "get_store_list_tool"}
+    items: list[dict[str, Any]] = []
+    for entry in prev_tool_data:
+        if entry.get("tool") not in store_tools:
+            continue
+        data = entry.get("data")
+        if isinstance(data, list):
+            items = [it for it in data if isinstance(it, dict) and not it.get("_truncated")]
+            break
+        if isinstance(data, Mapping) and isinstance(data.get("stores"), list):
+            items = [it for it in data["stores"] if isinstance(it, dict)]
+            break
+    if not items:
+        return None
+
+    text = user_text.strip()
+    store_select_chips = frozenset({"이 매장 선택", "이 매장으로", "이곳 선택"})
+    if text in store_select_chips and len(items) == 1:
+        shop_id = canonical_context_from_tool_boundary(items[0]).get("shop_id")
+        if shop_id:
+            return str(shop_id)
+
+    ordinal_idx = _selection_ordinal_index(text, len(items))
+    if ordinal_idx is not None:
+        shop_id = canonical_context_from_tool_boundary(items[ordinal_idx]).get("shop_id")
+        if shop_id:
+            return str(shop_id)
+
+    tokens = [t for t in re.findall(r"[A-Za-z가-힣]+", text) if len(t) >= 2]
+    if tokens:
+        scored: list[tuple[int, dict[str, Any]]] = []
+        for item in items:
+            canonical_item = canonical_context_from_tool_boundary(item)
+            shop_nm = str(canonical_item.get("shop_name") or "")
+            score = sum(1 for tok in tokens if tok in shop_nm)
+            if score > 0:
+                scored.append((score, item))
+        if scored:
+            max_score = max(s for s, _ in scored)
+            top = [item for s, item in scored if s == max_score]
+            if len(top) == 1:
+                shop_id = canonical_context_from_tool_boundary(top[0]).get("shop_id")
+                if shop_id:
+                    return str(shop_id)
+    return None
+
+
 def build_order_quantity_prompt_event(slots: Any) -> dict[str, Any]:
     selected_size = normalize_tire_size(str(getattr(slots, "tire_size", None) or ""))
     front_size = normalize_tire_size(str(getattr(slots, "tire_size_front", None) or ""))
