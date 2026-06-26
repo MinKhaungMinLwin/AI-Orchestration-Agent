@@ -11,6 +11,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
+from services.tstation.policies.discovery_intent_policy import normalize_tire_size
 from services.tstation.policies.cta_registry import cta_trace_metadata, normalize_quickreply_ctas
 from services.tstation.policies.resolved_context import (
     canonical_context_from_template_boundary,
@@ -33,6 +34,12 @@ _VEHICLE_SIZE_LOOKUP_ALLOWED_ACTIONS = frozenset({
 _VEHICLE_SIZE_LOOKUP_BLOCKED_LABEL_TOKENS = ("매장", "예약", "구매")
 _QUANTITY_LABEL_RE = re.compile(r"^\s*([1-4])\s*(?:개|본)\s*$")
 _CTA_CLARIFICATION_LABEL_RE = re.compile(r"(?:다른\s*)?(?:지역|장소|날짜|일정)\s*(?:입력|찾기|검색|확인)")
+_KOREAN_SELECTION_ORDINALS: tuple[tuple[tuple[str, ...], int], ...] = (
+    (("첫번째", "첫째", "첫 번", "첫번", "1번째", "1번", "1.", "1)"), 0),
+    (("두번째", "둘째", "두 번", "두번", "2번째", "2번", "2.", "2)"), 1),
+    (("세번째", "셋째", "세 번", "세번", "3번째", "3번", "3.", "3)"), 2),
+    (("네번째", "넷째", "네 번", "네번", "4번째", "4번", "4.", "4)"), 3),
+)
 
 _UI_ACTION_SLOT_KEYS = (
     "goods_no",
@@ -775,6 +782,26 @@ def _normalize_vehicle_match_text(value: Any) -> str:
     return re.sub(r"[^0-9A-Za-z가-힣]", "", str(value or "")).lower()
 
 
+def _selection_ordinal_index(user_text: str, item_count: int) -> int | None:
+    if not user_text or item_count <= 0:
+        return None
+
+    text = user_text.strip()
+    numeric_match = re.match(r"^\s*(\d+)\s*(?:[\.\)번:]|번째|째)", text)
+    if numeric_match:
+        idx = int(numeric_match.group(1)) - 1
+        return idx if 0 <= idx < item_count else None
+
+    compact = re.sub(r"\s+", "", text)
+    if compact.startswith(("마지막", "끝번째", "끝째")):
+        return item_count - 1
+
+    for prefixes, idx in _KOREAN_SELECTION_ORDINALS:
+        if any(compact.startswith(prefix) for prefix in prefixes):
+            return idx if idx < item_count else None
+    return None
+
+
 def resolve_vehicle_ui_selection_from_chip_context(
     chip_context: Mapping[str, Any] | None,
     template_data: Mapping[str, Any] | None,
@@ -872,6 +899,80 @@ def rewrite_vehicle_selection_user_text(
     if source_intent == "vehicle_tire_size_lookup":
         return f"{car_no} 차량 타이어 사이즈 알려줘"
     return last_user_text
+
+
+def resolve_goods_no_from_product_template_selection(user_text: str, template_data: Mapping[str, Any] | None) -> str | None:
+    if not user_text or not isinstance(template_data, Mapping):
+        return None
+    data = template_data.get("data") if isinstance(template_data.get("data"), Mapping) else template_data
+    if not isinstance(data, Mapping):
+        return None
+    products = data.get("products")
+    metadata = data.get("metadata")
+    if not isinstance(products, list) or not isinstance(metadata, list):
+        return None
+    if not products or len(products) != len(metadata):
+        return None
+
+    text = user_text.strip()
+    ordinal_idx = _selection_ordinal_index(text, len(metadata))
+    if ordinal_idx is not None and isinstance(metadata[ordinal_idx], Mapping):
+        goods_no = str(canonical_context_from_template_boundary(metadata[ordinal_idx]).get("goods_no") or "").strip()
+        return goods_no or None
+
+    target_size = normalize_tire_size(text)
+    tokens = [t.lower() for t in re.findall(r"[A-Za-z가-힣0-9]+", text) if len(t) >= 2]
+    best_goods_no = ""
+    best_score = 0
+    tied = False
+    for product, meta in zip(products, metadata):
+        if not isinstance(product, Mapping) or not isinstance(meta, Mapping):
+            continue
+        canonical_product = canonical_context_from_template_boundary(product)
+        canonical_meta = canonical_context_from_template_boundary(meta)
+        product_size = normalize_tire_size(str(canonical_product.get("tire_size") or ""))
+        if target_size and product_size != target_size:
+            continue
+        title = " ".join(
+            str(part or "")
+            for part in (
+                canonical_product.get("product_name"),
+                product.get("title"),
+            )
+        ).lower()
+        score = sum(1 for token in tokens if token in title)
+        goods_no = str(canonical_meta.get("goods_no") or "").strip()
+        if score > best_score:
+            best_score = score
+            best_goods_no = goods_no
+            tied = False
+        elif score == best_score and score > 0:
+            tied = True
+    if best_goods_no and best_score >= 2 and not tied:
+        return best_goods_no
+    return None
+
+
+def goods_no_from_template_event(event: Mapping[str, Any] | None) -> str:
+    if not isinstance(event, Mapping):
+        return ""
+    data = event.get("data")
+    if not isinstance(data, Mapping):
+        return ""
+    metadata = data.get("metadata")
+    if isinstance(metadata, Mapping):
+        canonical_metadata = canonical_context_from_template_boundary(metadata)
+        goods_no = str(canonical_metadata.get("goods_no") or metadata.get("goodsIdList") or "").strip()
+        if goods_no.startswith("G"):
+            return goods_no
+    for key in ("products", "productList", "items"):
+        rows = data.get(key)
+        if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], Mapping):
+            continue
+        row_goods_no = str(canonical_context_from_template_boundary(rows[0]).get("goods_no") or "").strip()
+        if row_goods_no.startswith("G"):
+            return row_goods_no
+    return ""
 
 
 def quickreply_cta_context_from_template(template_data: Mapping[str, Any] | None) -> dict[str, Any]:

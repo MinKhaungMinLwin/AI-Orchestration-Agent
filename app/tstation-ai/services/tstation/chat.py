@@ -126,11 +126,13 @@ from services.tstation.policies.ui_action_policy import (
     chip_context_dict,
     chip_value,
     classify_direct_cta_action,
+    goods_no_from_template_event,
     merged_quickreply_cta_context,
     normalize_ui_action_metadata,
     preview_action_mode_for_slots,
     quickreply_cta_context_from_chip,
     quickreply_cta_context_from_template,
+    resolve_goods_no_from_product_template_selection,
     resolve_vehicle_ui_selection_from_chip_context,
     resolve_ui_action_context,
     rewrite_vehicle_selection_user_text,
@@ -14017,58 +14019,6 @@ def _selection_ordinal_index(user_text: str, item_count: int) -> int | None:
     return None
 
 
-def _resolve_goods_no_from_product_template_selection(user_text: str, template_data: dict | None) -> str | None:
-    if not user_text or not isinstance(template_data, dict):
-        return None
-    data = template_data.get("data") if isinstance(template_data.get("data"), dict) else template_data
-    if not isinstance(data, dict):
-        return None
-    products = data.get("products")
-    metadata = data.get("metadata")
-    if not isinstance(products, list) or not isinstance(metadata, list):
-        return None
-    if not products or len(products) != len(metadata):
-        return None
-
-    text = user_text.strip()
-    ordinal_idx = _selection_ordinal_index(text, len(metadata))
-    if ordinal_idx is not None and isinstance(metadata[ordinal_idx], dict):
-        goods_no = str(canonical_context_from_template_boundary(metadata[ordinal_idx]).get("goods_no") or "").strip()
-        return goods_no or None
-
-    target_size = normalize_tire_size(text)
-    tokens = [t.lower() for t in re.findall(r"[A-Za-z가-힣0-9]+", text) if len(t) >= 2]
-    best_goods_no = ""
-    best_score = 0
-    tied = False
-    for product, meta in zip(products, metadata):
-        if not isinstance(product, dict) or not isinstance(meta, dict):
-            continue
-        canonical_product = canonical_context_from_template_boundary(product)
-        canonical_meta = canonical_context_from_template_boundary(meta)
-        product_size = normalize_tire_size(str(canonical_product.get("tire_size") or ""))
-        if target_size and product_size != target_size:
-            continue
-        title = " ".join(
-            str(part or "")
-            for part in (
-                canonical_product.get("product_name"),
-                product.get("title"),
-            )
-        ).lower()
-        score = sum(1 for token in tokens if token in title)
-        goods_no = str(canonical_meta.get("goods_no") or "").strip()
-        if score > best_score:
-            best_score = score
-            best_goods_no = goods_no
-            tied = False
-        elif score == best_score and score > 0:
-            tied = True
-    if best_goods_no and best_score >= 2 and not tied:
-        return best_goods_no
-    return None
-
-
 def _quantity_benefit_continuation_frame_from_pending(
     user_text: str,
     *,
@@ -14080,7 +14030,7 @@ def _quantity_benefit_continuation_frame_from_pending(
     current_size = normalize_tire_size(user_text)
     goods_no = str(
         current_goods_no
-        or _resolve_goods_no_from_product_template_selection(user_text, latest_product_tmpl)
+        or resolve_goods_no_from_product_template_selection(user_text, latest_product_tmpl)
         or getattr(slots, "goods_no", None)
         or ""
     ).strip()
@@ -14193,28 +14143,6 @@ def _build_quantity_benefit_comparison_event(price_results: dict[int, dict]) -> 
             },
         },
     }
-
-
-def _goods_no_from_template_event(event: dict | None) -> str:
-    if not isinstance(event, dict):
-        return ""
-    data = event.get("data")
-    if not isinstance(data, dict):
-        return ""
-    metadata = data.get("metadata")
-    if isinstance(metadata, dict):
-        canonical_metadata = canonical_context_from_template_boundary(metadata)
-        goods_no = str(canonical_metadata.get("goods_no") or metadata.get("goodsIdList") or "").strip()
-        if goods_no.startswith("G"):
-            return goods_no
-    for key in ("products", "productList", "items"):
-        rows = data.get(key)
-        if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict):
-            continue
-        row_goods_no = str(canonical_context_from_template_boundary(rows[0]).get("goods_no") or "").strip()
-        if row_goods_no.startswith("G"):
-            return row_goods_no
-    return ""
 
 
 def _build_product_comparison_event(
@@ -28731,7 +28659,7 @@ class TStationChatServiceV2:
                             ),
                         )
                         return (emitted_events, not_found_event) if not_found_event is not None else None
-                    mapped_goods_no = _goods_no_from_template_event(mapped_event)
+                    mapped_goods_no = goods_no_from_template_event(mapped_event)
                     if mapped_goods_no:
                         goods_no = mapped_goods_no
                     else:

@@ -84,8 +84,6 @@ from services.tstation.chat import (
     _build_transaction_policy_context,
     _build_product_attribute_event_from_search_results,
     _quantity_benefit_continuation_frame_from_pending,
-    _resolve_goods_no_from_product_template_selection,
-    _goods_no_from_template_event,
     _final_price_from_row,
     _build_bare_product_search_tool_input,
     _build_external_price_comparison_event_from_search_results,
@@ -404,10 +402,12 @@ from services.tstation.policies.ui_action_policy import (
     normalize_ui_action_metadata,
     preview_action_mode_for_slots,
     resolve_ui_action_context,
+    resolve_goods_no_from_product_template_selection,
     resolve_vehicle_ui_selection_from_chip_context,
     rewrite_vehicle_selection_user_text,
     store_context_from_mapping,
     store_name_exact_match_row,
+    goods_no_from_template_event,
     normalize_preview_tool_result,
     validate_ui_actions_for_contract,
 )
@@ -15785,7 +15785,7 @@ def test_goods_no_from_product_template_selection_resolves_named_variant() -> No
     }
 
     assert (
-        _resolve_goods_no_from_product_template_selection("옵티모 H426 245/45R19", product_template)
+        resolve_goods_no_from_product_template_selection("옵티모 H426 245/45R19", product_template)
         == "G000000309961"
     )
 
@@ -15800,7 +15800,7 @@ def test_goods_no_from_product_template_selection_resolves_korean_ordinal() -> N
     }
 
     assert (
-        _resolve_goods_no_from_product_template_selection("첫번째 상품 가격 알려줘", product_template)
+        resolve_goods_no_from_product_template_selection("첫번째 상품 가격 알려줘", product_template)
         == "G000000319573"
     )
 
@@ -15815,14 +15815,14 @@ def test_goods_no_from_product_template_selection_uses_template_boundary_aliases
     }
 
     assert (
-        _resolve_goods_no_from_product_template_selection("옵티모 H426 245/45R19", product_template)
+        resolve_goods_no_from_product_template_selection("옵티모 H426 245/45R19", product_template)
         == "G000000309961"
     )
 
 
 def test_goods_no_from_single_template_event_uses_template_boundary_aliases() -> None:
     assert (
-        _goods_no_from_template_event({
+        goods_no_from_template_event({
             "data": {
                 "products": [{"productName": "옵티모 H426", "tireSize": "245/45R19", "goodsNo": "G000000309961"}],
             }
