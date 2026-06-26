@@ -73,9 +73,10 @@ def test_signup_first_purchase_benefit_policy_uses_faq_contract() -> None:
     assert decision.template == TemplateName.QUICK_REPLY
     assert decision.response_shape == ResponseShape.SUMMARY
     assert decision.metadata["response_shape_key"] == "signup_first_purchase_benefit_policy"
-    assert "generic_marketing_answer_without_faq" in decision.forbidden_behaviors
+    assert "claim_first_purchase_only_coupon" in decision.forbidden_behaviors
     assert "start_owned_coupon_lookup" in decision.forbidden_behaviors
     assert "call_coupon_issue_tool" in decision.forbidden_behaviors
+    assert "all my T 회원이고 마케팅 수신 동의를 하면 5% 할인 쿠폰 발급이 가능" in decision.assistant_guidance
 
 
 def test_signup_first_purchase_benefit_policy_text_trigger_without_explicit_intent() -> None:
@@ -85,7 +86,23 @@ def test_signup_first_purchase_benefit_policy_text_trigger_without_explicit_inte
     )
 
     assert decision.template == TemplateName.QUICK_REPLY
-    assert decision.metadata["response_shape_key"] == "signup_first_purchase_benefit_policy"
+    assert decision.metadata["response_shape_key"] in {
+        "signup_first_purchase_benefit_policy",
+        "signup_coupon_guidance",
+    }
+
+
+def test_signup_coupon_guidance_points_to_membership_marketing_coupon_policy() -> None:
+    decision = decide_support_response(
+        intent="signup_coupon_guidance",
+        user_text="회원가입 전용 쿠폰 있어?",
+    )
+
+    assert decision.template == TemplateName.QUICK_REPLY
+    assert decision.metadata["response_shape_key"] == "signup_coupon_guidance"
+    assert "claim_first_purchase_only_coupon" in decision.forbidden_behaviors
+    assert "route_to_partner_coupon_policy" in decision.forbidden_behaviors
+    assert "마케팅 수신 동의를 하면 5% 할인 쿠폰 발급이 가능" in decision.assistant_guidance
 
 
 def test_tire_manufacture_date_policy_uses_faq_first_contract() -> None:

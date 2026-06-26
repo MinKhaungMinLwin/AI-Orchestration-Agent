@@ -6772,32 +6772,41 @@ def _build_partner_member_coupon_policy_event(user_query: str) -> dict:
     }
 
 
-def _build_signup_coupon_guidance_event(user_query: str) -> dict:
+def _build_signup_member_coupon_guidance_event(user_query: str, *, response_shape_key: str) -> dict:
     return {
         "type": "data",
         "template": "quickReply",
         "source_domain": MultiAgentDomain.Domain.SUPPORT.value,
-        "assistant_response_source": "code_signup_coupon_guidance",
+        "assistant_response_source": f"code_{response_shape_key}",
         "data": {
             "assistantResponse": (
-                "회원가입 전용 쿠폰이나 신규회원 혜택은 이벤트·프로모션 운영 시점에 따라 달라질 수 있어요.\n\n"
-                "현재 진행 중인 혜택은 이벤트/쿠폰/혜택 페이지에서 확인해 주세요.\n\n"
-                "이미 가입한 회원이라면 쿠폰함에 발급된 쿠폰이 있는지 확인할 수 있지만, "
-                "가입 쿠폰이 항상 제공되거나 이미 발급되어 있다고 바로 단정할 수는 없어요."
+                "확인된 정책 기준으로 all my T 회원이고 마케팅 수신 동의를 하면 5% 할인 쿠폰 발급이 가능해요.\n\n"
+                "첫구매 여부가 핵심 조건인 쿠폰으로 바로 안내되지는 않아요.\n\n"
+                "다만 고객님의 실제 회원 상태, 마케팅 수신 동의 상태, 쿠폰 발급 여부는 챗봇에서 직접 확정할 수 없어서 "
+                "조건 충족 시 발급 가능으로만 안내드리고 있어요."
             ),
             "quickReplies": [
-                {"label": "진행 중 혜택 보기", "domain": "DISCOVERY"},
-                {"label": "쿠폰함 확인", "domain": "TRANSACTION"},
-                {"label": "1:1 문의하기", "domain": "SUPPORT"},
+                {"label": "회원 혜택 확인", "url": CTAUrls.MEMBERSHIP_BENEFIT, "domain": "SUPPORT"},
             ],
-            "predictedDomains": ["SUPPORT", "DISCOVERY", "TRANSACTION"],
+            "predictedDomains": ["SUPPORT"],
             "metadata": {
-                "responseShapeKey": "signup_coupon_guidance",
-                "signupCouponGuidance": True,
+                "responseShapeKey": response_shape_key,
+                "signupMemberCouponGuidance": True,
                 "userText": user_query,
             },
         },
     }
+
+
+def _build_signup_coupon_guidance_event(user_query: str) -> dict:
+    return _build_signup_member_coupon_guidance_event(user_query, response_shape_key="signup_coupon_guidance")
+
+
+def _build_signup_first_purchase_benefit_event(user_query: str) -> dict:
+    return _build_signup_member_coupon_guidance_event(
+        user_query,
+        response_shape_key="signup_first_purchase_benefit_policy",
+    )
 
 
 def _build_general_card_cancel_timing_policy_event(user_query: str) -> dict:
@@ -24910,6 +24919,26 @@ class TStationChatServiceV2:
                     },
                 )
             event_data = signup_coupon_event.get("data") if isinstance(signup_coupon_event.get("data"), dict) else {}
+            return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
+
+        if turn_contract and turn_contract.intent == "signup_first_purchase_benefit_policy":
+            signup_benefit_event = _build_signup_first_purchase_benefit_event(last_user_text)
+            logger.info(
+                "[SIGNUP_FIRST_PURCHASE_BENEFIT] advisory response: text=%r session_id=%s",
+                last_user_text[:80],
+                request.session_id,
+            )
+            if request.stream:
+                return StreamingResponse(
+                    TStationChatServiceV2._stream_policy_guard_response(signup_benefit_event),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
+            event_data = signup_benefit_event.get("data") if isinstance(signup_benefit_event.get("data"), dict) else {}
             return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
 
         if turn_contract and turn_contract.intent == "general_card_cancel_timing_policy":

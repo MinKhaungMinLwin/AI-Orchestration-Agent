@@ -491,6 +491,7 @@ def build_turn_contract(
                 "issue_coupon_tool",
                 "get_my_coupons_tool",
                 "get_coupon_applicable_products_tool",
+                "transfer_to_qna_tool",
             ),
         )
     if intent == "signup_coupon_guidance":
@@ -500,6 +501,7 @@ def build_turn_contract(
                 "issue_coupon_tool",
                 "get_my_coupons_tool",
                 "get_coupon_applicable_products_tool",
+                "transfer_to_qna_tool",
             ),
         )
     if intent == "partner_member_coupon_policy":
@@ -1645,6 +1647,13 @@ def response_contract_violations(
     )
     if signup_benefit_violation is not None:
         violations.append(signup_benefit_violation)
+    signup_coupon_violation = _signup_coupon_guidance_contract_violation(
+        assistant_response_text=assistant_response_text,
+        called_tools=called_tools,
+        contract=contract,
+    )
+    if signup_coupon_violation is not None:
+        violations.append(signup_coupon_violation)
     faq_first_support_violation = _faq_first_support_policy_contract_violation(
         assistant_response_text=assistant_response_text,
         called_tools=called_tools,
@@ -2127,16 +2136,58 @@ def _signup_first_purchase_benefit_contract_violation(
     if contract is None or contract.intent != "signup_first_purchase_benefit_policy":
         return None
     tools = list(called_tools or ())
-    has_faq = "search_faq_hybrid_tool" in tools
-    if not has_faq:
+    if "transfer_to_qna_tool" in tools:
         return {
-            "type": "signup_first_purchase_benefit_without_faq_search",
+            "type": "signup_first_purchase_benefit_qna_direct",
             "called_tools": tools,
         }
     assistant_text = str(assistant_response_text or "").strip()
-    if re.search(r"(자동|바로|즉시).{0,12}(발급|지급)|발급됩니다", assistant_text) and "달라질 수" not in assistant_text:
+    if "첫구매" in assistant_text and "핵심 조건" not in assistant_text and "바로 안내되지는" not in assistant_text:
+        return {
+            "type": "signup_first_purchase_benefit_asserted_first_purchase_only",
+            "assistant_response_text": assistant_text,
+        }
+    if "마케팅 수신 동의" not in assistant_text or "5% 할인 쿠폰" not in assistant_text:
+        return {
+            "type": "signup_first_purchase_benefit_missing_membership_marketing_policy",
+            "assistant_response_text": assistant_text,
+        }
+    if re.search(r"(자동|바로|즉시).{0,12}(발급|지급)|이미.{0,8}(발급|지급)", assistant_text):
         return {
             "type": "signup_first_purchase_benefit_asserted_unverified_coupon_issue",
+            "assistant_response_text": assistant_text,
+        }
+    return None
+
+
+def _signup_coupon_guidance_contract_violation(
+    *,
+    assistant_response_text: str | None,
+    called_tools: list[str] | tuple[str, ...] | None,
+    contract: TurnContract | None,
+) -> dict[str, Any] | None:
+    if contract is None or contract.intent != "signup_coupon_guidance":
+        return None
+    tools = list(called_tools or ())
+    if "transfer_to_qna_tool" in tools:
+        return {
+            "type": "signup_coupon_guidance_qna_direct",
+            "called_tools": tools,
+        }
+    assistant_text = str(assistant_response_text or "").strip()
+    if "첫구매 고객에게만" in assistant_text or "첫구매 전용" in assistant_text:
+        return {
+            "type": "signup_coupon_guidance_asserted_first_purchase_only",
+            "assistant_response_text": assistant_text,
+        }
+    if "마케팅 수신 동의" not in assistant_text or "5% 할인 쿠폰" not in assistant_text:
+        return {
+            "type": "signup_coupon_guidance_missing_membership_marketing_policy",
+            "assistant_response_text": assistant_text,
+        }
+    if re.search(r"이미.{0,8}(발급|지급)|발급됐", assistant_text):
+        return {
+            "type": "signup_coupon_guidance_asserted_already_issued",
             "assistant_response_text": assistant_text,
         }
     return None

@@ -67,14 +67,14 @@ _PAYMENT_ERROR_FAQ_ANCHORS = (
     "PC 웹 재시도",
 )
 _SIGNUP_BENEFIT_FAQ_ANCHORS = (
-    "회원가입 신규회원 첫구매 혜택 쿠폰 all my T",
-    "회원 가입 시 발급되는 신규 회원 혜택 및 서비스",
-    "신규 회원 첫 구매 쿠폰 혜택",
+    "all my T 회원 마케팅 수신 동의 5% 할인 쿠폰",
+    "회원 가입 마케팅 활용 동의 쿠폰 혜택",
+    "신규 회원 혜택 all my T 5% 쿠폰",
 )
 _SIGNUP_COUPON_FAQ_ANCHORS = (
-    "회원가입 신규회원 웰컴 쿠폰 혜택",
-    "회원 가입 시 발급되는 쿠폰 혜택",
-    "신규 회원 쿠폰 안내",
+    "all my T 회원 마케팅 수신 동의 5% 할인 쿠폰",
+    "회원 가입 마케팅 활용 동의 쿠폰 혜택",
+    "신규 회원 쿠폰 안내 all my T 5% 쿠폰",
 )
 _TIRE_MANUFACTURE_DATE_FAQ_ANCHORS = (
     "타이어 제조일자 DOT 신품 기준",

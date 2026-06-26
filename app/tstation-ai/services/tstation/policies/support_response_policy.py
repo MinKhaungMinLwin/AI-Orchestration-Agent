@@ -285,27 +285,11 @@ def decide_support_response(
             ),
         )
 
-    if intent == "signup_first_purchase_benefit_policy" or _SIGNUP_BENEFIT_RE.search(text):
-        return _decision(
-            response_shape_key="signup_first_purchase_benefit_policy",
-            response_shape=ResponseShape.SUMMARY,
-            template=TemplateName.QUICK_REPLY,
-            forbidden_behaviors=(
-                "generic_marketing_answer_without_faq",
-                "promise_signup_coupon_issued",
-                "start_owned_coupon_lookup",
-                "call_coupon_issue_tool",
-            ),
-            assistant_guidance=(
-                "회원가입/신규회원/첫구매 혜택 문의는 FAQ hybrid 검색을 먼저 수행하고, 검색 근거 범위 안에서 "
-                "신규 회원 혜택/서비스와 첫 구매 쿠폰 가능 여부를 요약한다. 계정별 발급 상태를 확인하지 않은 채 "
-                "쿠폰이 자동 발급된다고 단정하지 않는다. 보유 쿠폰 조회나 쿠폰 직접 발급으로 시작하지 말고, "
-                "쿠폰함/이벤트 페이지 CTA는 보조로 제공한다."
-            ),
-        )
-
     if intent == "signup_coupon_guidance" or (
-        _COUPON_RE.search(text) and _SIGNUP_COUPON_GUIDANCE_RE.search(text)
+        intent != "signup_first_purchase_benefit_policy"
+        and intent != "signup_coupon_guidance"
+        and _COUPON_RE.search(text)
+        and _SIGNUP_COUPON_GUIDANCE_RE.search(text)
     ):
         return _decision(
             response_shape_key="signup_coupon_guidance",
@@ -316,12 +300,36 @@ def decide_support_response(
                 "route_to_partner_coupon_policy",
                 "claim_signup_coupon_already_issued",
                 "claim_signup_coupon_always_available",
+                "claim_first_purchase_only_coupon",
+                "direct_qna_complete_first",
             ),
             assistant_guidance=(
-                "회원가입 전용/신규회원/웰컴 쿠폰 문의는 제휴회원 쿠폰 안내로 보내지 않는다. "
-                "이벤트/프로모션 운영 시점에 따라 달라질 수 있음을 안내하고, 현재 진행 중인 혜택 확인 경로를 우선 제공한다. "
-                "이미 가입한 회원이라면 쿠폰함에서 발급된 쿠폰이 있는지 확인할 수 있다고만 안내하고, "
-                "가입 쿠폰이 반드시 있거나 이미 발급되었다고 단정하지 않는다."
+                "회원가입 전용/신규회원/웰컴/첫구매 쿠폰 문의는 제휴회원 쿠폰 안내로 보내지 않는다. "
+                "확인된 정책 기준으로 all my T 회원이고 마케팅 수신 동의를 하면 5% 할인 쿠폰 발급이 가능하다고 안내한다. "
+                "첫구매 여부를 핵심 조건으로 말하지 말고, 계정의 실제 회원 상태, 마케팅 수신 동의 상태, 발급 여부는 "
+                "챗봇이 직접 확정하지 않는다고 설명한다."
+            ),
+        )
+
+    if intent == "signup_first_purchase_benefit_policy" or (
+        intent != "signup_coupon_guidance" and _SIGNUP_BENEFIT_RE.search(text)
+    ):
+        return _decision(
+            response_shape_key="signup_first_purchase_benefit_policy",
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=(
+                "claim_first_purchase_only_coupon",
+                "promise_signup_coupon_issued",
+                "start_owned_coupon_lookup",
+                "call_coupon_issue_tool",
+                "direct_qna_complete_first",
+            ),
+            assistant_guidance=(
+                "회원가입/신규회원/첫구매 쿠폰 문의는 첫구매 전용 쿠폰으로 단정하지 않는다. 확인된 정책 기준으로 "
+                "all my T 회원이고 마케팅 수신 동의를 하면 5% 할인 쿠폰 발급이 가능하다고만 안내한다. "
+                "계정의 실제 회원 상태, 마케팅 수신 동의 상태, 발급 여부는 챗봇이 직접 확정하지 않으며, "
+                "조건 충족 시 발급 가능하다고만 표현한다. 보유 쿠폰 조회, 직접 발급, qnaComplete 직행으로 시작하지 않는다."
             ),
         )
 

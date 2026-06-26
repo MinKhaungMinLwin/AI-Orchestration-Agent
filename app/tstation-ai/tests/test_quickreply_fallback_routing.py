@@ -63,6 +63,8 @@ from services.tstation.chat import (
     _build_maintenance_history_access_policy_event,
     _build_maintenance_history_event,
     _build_order_document_guidance_event,
+    _build_signup_coupon_guidance_event,
+    _build_signup_first_purchase_benefit_event,
     _build_owned_coupon_best_discount_event,
     _build_owned_coupon_expiry_lookup_event,
     _build_oe_replacement_guidance_event,
@@ -739,6 +741,28 @@ def test_all_my_t_benefit_page_event_uses_dedicated_cta() -> None:
     assert "쿠폰함" not in event["data"]["assistantResponse"]
     assert _labels(event["data"]["quickReplies"]) == ["all my T 혜택 안내", "1:1 문의하기"]
     assert event["data"]["quickReplies"][0]["url"].endswith("/membership/dashboard/benefit")
+
+
+def test_build_signup_coupon_guidance_event_uses_membership_benefit_cta() -> None:
+    event = _build_signup_coupon_guidance_event("첫구매 쿠폰 있어?")
+
+    assert event["template"] == "quickReply"
+    assert event["assistant_response_source"] == "code_signup_coupon_guidance"
+    assert "all my T 회원" in event["data"]["assistantResponse"]
+    assert "마케팅 수신 동의" in event["data"]["assistantResponse"]
+    assert "첫구매 여부가 핵심 조건" in event["data"]["assistantResponse"]
+    assert _labels(event["data"]["quickReplies"]) == ["회원 혜택 확인"]
+    assert event["data"]["quickReplies"][0]["url"].endswith("/membership/dashboard/benefit")
+
+
+def test_build_signup_first_purchase_benefit_event_uses_membership_benefit_cta() -> None:
+    event = _build_signup_first_purchase_benefit_event("회원가입하면 첫구매 혜택은 뭐가 있어?")
+
+    assert event["template"] == "quickReply"
+    assert event["assistant_response_source"] == "code_signup_first_purchase_benefit_policy"
+    assert "5% 할인 쿠폰" in event["data"]["assistantResponse"]
+    assert _labels(event["data"]["quickReplies"]) == ["회원 혜택 확인"]
+    assert event["data"]["metadata"]["responseShapeKey"] == "signup_first_purchase_benefit_policy"
 
 
 def test_default_benefit_cta_skips_coupon_gate() -> None:
@@ -16129,30 +16153,31 @@ def test_signup_first_purchase_benefit_contract_requires_faq_and_blocks_coupon_t
     assert "get_my_coupons_tool" in contract.forbidden_tools
     assert "get_coupon_applicable_products_tool" in contract.forbidden_tools
     assert "issue_coupon_tool" in contract.forbidden_tools
-
-    no_faq = response_contract_violations(
-        template="quickReply",
-        called_tools=[],
-        assistant_response_text="회원가입하시면 첫구매 쿠폰이 발급됩니다.",
-        contract=contract,
-    )
-    assert {
-        "type": "signup_first_purchase_benefit_without_faq_search",
-        "called_tools": [],
-        "severity": "error",
-    } in no_faq
+    assert "transfer_to_qna_tool" in contract.forbidden_tools
 
     unverified_claim = response_contract_violations(
         template="quickReply",
-        called_tools=["search_faq_hybrid_tool"],
-        assistant_response_text="회원가입하시면 첫구매 쿠폰이 발급됩니다.",
+        called_tools=[],
+        assistant_response_text="회원가입하시면 첫구매 전용 쿠폰이 발급됩니다.",
         contract=contract,
     )
     assert {
-        "type": "signup_first_purchase_benefit_asserted_unverified_coupon_issue",
+        "type": "signup_first_purchase_benefit_asserted_first_purchase_only",
         "severity": "error",
-        "assistant_response_text": "회원가입하시면 첫구매 쿠폰이 발급됩니다.",
+        "assistant_response_text": "회원가입하시면 첫구매 전용 쿠폰이 발급됩니다.",
     } in unverified_claim
+
+    missing_policy = response_contract_violations(
+        template="quickReply",
+        called_tools=[],
+        assistant_response_text="회원가입 혜택은 페이지에서 확인해 주세요.",
+        contract=contract,
+    )
+    assert {
+        "type": "signup_first_purchase_benefit_missing_membership_marketing_policy",
+        "severity": "error",
+        "assistant_response_text": "회원가입 혜택은 페이지에서 확인해 주세요.",
+    } in missing_policy
 
 
 def test_partner_member_coupon_policy_contract_blocks_owned_coupon_tools() -> None:
@@ -16179,18 +16204,13 @@ def test_partner_member_coupon_policy_contract_blocks_owned_coupon_tools() -> No
         assistant_response_text="보유 쿠폰을 확인했어요.",
         contract=contract,
     )
-    assert {
-        "type": "forbidden_tool_for_contract",
-        "severity": "error",
-        "called_tools": ["get_my_coupons_tool"],
-        "forbidden_tools": [
-            "search_product_tool",
-            "get_final_price_tool",
-            "issue_coupon_tool",
-            "get_my_coupons_tool",
-            "get_coupon_applicable_products_tool",
-        ],
-    } in violations
+    assert any(
+        violation.get("type") == "forbidden_tool_for_contract"
+        and violation.get("called_tools") == ["get_my_coupons_tool"]
+        and "get_my_coupons_tool" in violation.get("forbidden_tools", [])
+        and "issue_coupon_tool" in violation.get("forbidden_tools", [])
+        for violation in violations
+    )
 
 
 def test_signup_coupon_guidance_contract_blocks_owned_coupon_tools() -> None:
@@ -16210,6 +16230,7 @@ def test_signup_coupon_guidance_contract_blocks_owned_coupon_tools() -> None:
     assert "get_my_coupons_tool" in contract.forbidden_tools
     assert "get_coupon_applicable_products_tool" in contract.forbidden_tools
     assert "issue_coupon_tool" in contract.forbidden_tools
+    assert "transfer_to_qna_tool" in contract.forbidden_tools
 
     violations = response_contract_violations(
         template="voucher",
@@ -16217,18 +16238,37 @@ def test_signup_coupon_guidance_contract_blocks_owned_coupon_tools() -> None:
         assistant_response_text="보유 쿠폰을 확인했어요.",
         contract=contract,
     )
+    assert any(
+        violation.get("type") == "forbidden_tool_for_contract"
+        and violation.get("called_tools") == ["get_my_coupons_tool"]
+        and "get_my_coupons_tool" in violation.get("forbidden_tools", [])
+        and "issue_coupon_tool" in violation.get("forbidden_tools", [])
+        for violation in violations
+    )
+
+    first_purchase_only = response_contract_violations(
+        template="quickReply",
+        called_tools=[],
+        assistant_response_text="첫구매 고객에게만 발급되는 쿠폰이에요.",
+        contract=contract,
+    )
     assert {
-        "type": "forbidden_tool_for_contract",
+        "type": "signup_coupon_guidance_asserted_first_purchase_only",
         "severity": "error",
-        "called_tools": ["get_my_coupons_tool"],
-        "forbidden_tools": [
-            "search_product_tool",
-            "get_final_price_tool",
-            "issue_coupon_tool",
-            "get_my_coupons_tool",
-            "get_coupon_applicable_products_tool",
-        ],
-    } in violations
+        "assistant_response_text": "첫구매 고객에게만 발급되는 쿠폰이에요.",
+    } in first_purchase_only
+
+    qna_direct = response_contract_violations(
+        template="qnaComplete",
+        called_tools=["transfer_to_qna_tool"],
+        assistant_response_text="1:1 문의로 접수해 주세요.",
+        contract=contract,
+    )
+    assert {
+        "type": "signup_coupon_guidance_qna_direct",
+        "called_tools": ["transfer_to_qna_tool"],
+        "severity": "error",
+    } in qna_direct
 
 
 def test_signup_coupon_support_policy_guides_benefit_page_not_partner_channel() -> None:
@@ -16240,7 +16280,7 @@ def test_signup_coupon_support_policy_guides_benefit_page_not_partner_channel() 
     assert response_decision.metadata["response_shape_key"] == "signup_coupon_guidance"
     assert response_decision.template == TemplateName.QUICK_REPLY
     assert "route_to_partner_coupon_policy" in response_decision.forbidden_behaviors
-    assert "제휴회원 쿠폰 안내로 보내지 않는다" in response_decision.assistant_guidance
+    assert "all my T 회원이고 마케팅 수신 동의를 하면 5% 할인 쿠폰 발급이 가능" in response_decision.assistant_guidance
 
 
 def test_partner_member_coupon_support_policy_guides_access_not_owned_coupon_lookup() -> None:
@@ -16264,8 +16304,8 @@ def test_signup_first_purchase_benefit_augments_faq_query() -> None:
         current_support_policy_intent.reset(token)
 
     assert "회원가입하면 첫구매 혜택은 뭐가 있어?" in query
-    assert "회원 가입 시 발급되는 신규 회원 혜택 및 서비스" in query
-    assert "신규 회원 첫 구매 쿠폰 혜택" in query
+    assert "all my T 회원 마케팅 수신 동의 5% 할인 쿠폰" in query
+    assert "회원 가입 마케팅 활용 동의 쿠폰 혜택" in query
 
 
 def test_signup_coupon_guidance_augments_faq_query() -> None:
@@ -16276,8 +16316,8 @@ def test_signup_coupon_guidance_augments_faq_query() -> None:
         current_support_policy_intent.reset(token)
 
     assert "웰컴 쿠폰 있나요?" in query
-    assert "회원가입 신규회원 웰컴 쿠폰 혜택" in query
-    assert "회원 가입 시 발급되는 쿠폰 혜택" in query
+    assert "all my T 회원 마케팅 수신 동의 5% 할인 쿠폰" in query
+    assert "회원 가입 마케팅 활용 동의 쿠폰 혜택" in query
 
 
 @pytest.mark.parametrize(
