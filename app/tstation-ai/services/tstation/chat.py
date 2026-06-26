@@ -139,6 +139,7 @@ from services.tstation.policies.ui_action_policy import (
     confirmed_product_slot_values_for_purchase_cta,
     confirmed_product_slot_values_from_event,
     goods_no_from_template_event,
+    preorder_slot_values_from_data,
     merged_quickreply_cta_context,
     normalize_ui_action_metadata,
     normalize_vehicle_tire_size_pair,
@@ -19966,75 +19967,7 @@ class TStationChatServiceV2:
 
     @staticmethod
     def _preorder_slot_values_from_data(template_data: dict | None) -> dict[str, Any] | None:
-        """Extract durable order slots from a rendered preOrder template payload."""
-        if not isinstance(template_data, dict):
-            return None
-        if template_data.get("template") == "preOrder" and isinstance(template_data.get("data"), dict):
-            template_data = template_data["data"]
-        if not template_data.get("isReadyToOrder"):
-            return None
-
-        metadata = template_data.get("metadata")
-        order_info = template_data.get("orderInfo")
-        if not isinstance(metadata, dict) or not isinstance(order_info, dict):
-            return None
-
-        slot_values: dict[str, Any] = {}
-        canonical_values = canonical_context_from_template_boundary(template_data)
-        goods_no = str(canonical_values.get("goods_no") or "").strip()
-        if goods_no:
-            slot_values["goods_no"] = goods_no
-
-        shop_id = str(canonical_values.get("shop_id") or "").strip()
-        if shop_id:
-            slot_values["shop_id"] = shop_id
-
-        store_name = str(canonical_values.get("shop_name") or "").strip()
-        if store_name:
-            slot_values["shop_name"] = store_name
-
-        raw_qty = canonical_values.get("ord_qty")
-        if raw_qty is not None:
-            try:
-                qty = int(raw_qty)
-                if qty > 0:
-                    slot_values["ord_qty"] = qty
-            except (TypeError, ValueError):
-                pass
-
-        raw_amount = order_info.get("paymentAmount") or metadata.get("paymentAmount") or metadata.get("payment_amount")
-        if raw_amount is not None:
-            try:
-                amount = int(raw_amount)
-                if amount > 0:
-                    slot_values["payment_amount"] = amount
-            except (TypeError, ValueError):
-                pass
-
-        product_text = str(order_info.get("product") or "").strip()
-        product_name = str(canonical_values.get("product_name") or "").strip() or product_text
-        if product_name:
-            slot_values["tire_model"] = re.sub(
-                r"\s*\d{3}\s*/?\s*\d{2}\s*R?\s*\d{2}\s*$",
-                "",
-                product_name,
-                flags=re.IGNORECASE,
-            ).strip() or product_name
-        tire_size = normalize_tire_size(canonical_values.get("tire_size") or product_text)
-        if tire_size:
-            slot_values["tire_size"] = tire_size
-
-        booking_datetime = str(order_info.get("bookingDateTime") or metadata.get("bookingDateTime") or "").strip()
-        requested_cal_day = _cal_day_from_korean_date_text(booking_datetime)
-        requested_cal_day = requested_cal_day or str(canonical_values.get("requested_cal_day") or "").strip()
-        if requested_cal_day:
-            slot_values["requested_cal_day"] = requested_cal_day
-        rsv_hour = _reservation_hour_from_text(booking_datetime)
-        rsv_hour = rsv_hour or str(canonical_values.get("rsv_hour") or "").strip()
-        if rsv_hour:
-            slot_values["rsv_hour"] = rsv_hour
-
-        return slot_values or None
+        return preorder_slot_values_from_data(template_data)
 
     @staticmethod
     def _datepick_slot_values_from_data(

@@ -402,6 +402,7 @@ from services.tstation.policies.ui_action_policy import (
     resolve_vehicle_tire_position_selection,
     preview_action_mode_for_slots,
     preview_location_slot_values_from_selection,
+    preorder_slot_values_from_data,
     resolve_goods_no_from_selection,
     resolve_ui_action_context,
     resolve_goods_no_from_product_template_selection,
@@ -15267,7 +15268,7 @@ def test_final_price_result_updates_payment_amount_with_cheapest_final_price_fir
 
 
 def test_preorder_template_payload_recovers_order_slots() -> None:
-    slot_values = TStationChatServiceV2._preorder_slot_values_from_data({
+    slot_values = preorder_slot_values_from_data({
         "assistantResponse": "주문 내용을 확인해 주세요.",
         "orderInfo": {
             "product": "벤투스 S2 AS 225/45R17",
@@ -15298,7 +15299,7 @@ def test_preorder_template_payload_recovers_order_slots() -> None:
 
 
 def test_preorder_template_payload_ignores_non_ready_card() -> None:
-    assert TStationChatServiceV2._preorder_slot_values_from_data({
+    assert preorder_slot_values_from_data({
         "orderInfo": {"storeName": "티스테이션 한남점"},
         "isReadyToOrder": False,
         "metadata": {"shopId": "F07782"},
@@ -15306,7 +15307,7 @@ def test_preorder_template_payload_ignores_non_ready_card() -> None:
 
 
 def test_preorder_template_payload_uses_template_boundary_alias_normalization() -> None:
-    slot_values = TStationChatServiceV2._preorder_slot_values_from_data({
+    slot_values = preorder_slot_values_from_data({
         "orderInfo": {
             "product": "벤투스 S2 AS 225/45R17",
             "quantity": "2",
@@ -15333,7 +15334,7 @@ def test_preorder_template_payload_uses_template_boundary_alias_normalization() 
 
 
 def test_preorder_template_payload_uses_metadata_product_name_only_through_boundary() -> None:
-    slot_values = TStationChatServiceV2._preorder_slot_values_from_data({
+    slot_values = preorder_slot_values_from_data({
         "orderInfo": {
             "quantity": "2",
             "storeName": "티스테이션 한남점",
@@ -19839,7 +19840,7 @@ def test_preorder_slot_recovery_uses_ready_preorder_payload_as_execute_source() 
         },
     }
 
-    assert TStationChatServiceV2._preorder_slot_values_from_data(preorder) == {
+    assert preorder_slot_values_from_data(preorder) == {
         "goods_no": "G000000317682",
         "shop_id": "F00721",
         "shop_name": "티스테이션 판교점",
