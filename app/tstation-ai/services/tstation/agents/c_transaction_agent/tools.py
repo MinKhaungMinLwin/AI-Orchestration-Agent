@@ -1068,6 +1068,11 @@ def search_stores_tool(
             "requested_limit": final_limit,
             "candidate_limit": candidate_cap,
         }
+        region_place_override_query = (
+            _region_coordinate_search_override(region_code)
+            if region_code and not normalized_store_nm and not place_query and xpos is None and ypos is None
+            else None
+        )
 
         if place_query:
             place_response = search_place(client=get_client(), query=place_query, size=1)
@@ -1088,6 +1093,36 @@ def search_stores_tool(
             search_meta.update({
                 "source": "place",
                 "place_query": place_query,
+                "place": _place_meta(place),
+            })
+        elif region_place_override_query:
+            place_response = search_place(client=get_client(), query=region_place_override_query, size=1)
+            if place_response.parsed is None:
+                return _error_response(
+                    place_response.status_code,
+                    f"HTTP {place_response.status_code}",
+                    place_response.content.decode(errors="ignore") or "Failed to search place",
+                )
+            place_data = _to_dict(place_response.parsed)
+            found_xpos, found_ypos, place = _first_place_coordinates(place_data if isinstance(place_data, dict) else {})
+            if found_xpos is None or found_ypos is None:
+                return _success_response(
+                    place_response.status_code,
+                    {
+                        "stores": [],
+                        "search": {
+                            **search_meta,
+                            "source": "region_place_override",
+                            "region_code": region_code,
+                            "place_query": region_place_override_query,
+                        },
+                    },
+                )
+            xpos, ypos = found_xpos, found_ypos
+            search_meta.update({
+                "source": "region_place_override",
+                "region_code": region_code,
+                "place_query": region_place_override_query,
                 "place": _place_meta(place),
             })
 
@@ -1737,6 +1772,9 @@ def _shop_id(store: dict) -> str | None:
 _PREFERRED_REGION_ADDRESS_TOKENS = {
     "강남": ("강남구",),
 }
+_REGION_COORDINATE_SEARCH_OVERRIDES = {
+    "강남": "강남역",
+}
 
 
 def _should_apply_preferred_region_address_filter(
@@ -1756,6 +1794,12 @@ def _should_apply_preferred_region_address_filter(
         and ypos is None
         and str(source or "") == "list"
     )
+
+
+def _region_coordinate_search_override(region_code: str | None) -> str | None:
+    if not region_code:
+        return None
+    return _REGION_COORDINATE_SEARCH_OVERRIDES.get(region_code.strip())
 
 
 def _filter_stores_by_preferred_region_address(region_code: str | None, stores: list[dict]) -> list[dict]:
