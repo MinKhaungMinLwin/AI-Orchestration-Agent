@@ -137,6 +137,7 @@ class ConversationSlots(BaseModel):
     # (region/address) is satisfied. Cleared automatically when goal_type flips.
     user_preferences_text: Optional[str] = None
     pending_intent: Optional[PendingIntent] = None  # e.g. "price" — carried across turns, cleared by Coordinator when a matching tool runs.
+    intent_candidate: Optional[PendingIntent] = Field(default=None, exclude=True)  # current-turn regex hint only; never persisted
     pending_product_name: Optional[str] = None  # product name waiting for a missing slot follow-up
     pending_quantity_options: Optional[list[int]] = None  # quantity comparison options, e.g. [2, 4]
     pending_required_slot: Optional[str] = None  # missing slot requested in the previous assistant turn
@@ -680,7 +681,7 @@ class ConversationSlots(BaseModel):
     def extract_from_user_text(cls, user_text: str) -> "ConversationSlots":
         """Extract slot values from user message text using regex patterns.
 
-        Extracts: tire_size, goods_no, ord_qty, pending_intent.
+        Extracts: tire_size, goods_no, ord_qty, intent_candidate.
         tire_model, shop_name, car_model require LLM extraction (handled by Router).
         """
         slots = cls()
@@ -704,15 +705,13 @@ class ConversationSlots(BaseModel):
         if shop_name_match and cls.has_valid_store_mention_context(user_text):
             slots.shop_name = shop_name_match.group(1)
 
-        # Intent: first matching pattern wins. Only set if a transactional keyword
-        # is found — a pure recommendation turn leaves pending_intent untouched
-        # so that prior-turn intents are preserved (see merge() logic).
-        # If the user explicitly asks for a recommendation, callers should instead
-        # clear pending_intent via has_recommend_intent() since switching back to
-        # discovery supersedes any stale transactional intent.
+        # Intent hint: first matching pattern wins. This is a current-turn regex
+        # candidate only; the executable pending_intent is fixed later by the
+        # router/policy/TurnContract layer and must not be started from slots
+        # extraction alone.
         for pattern, intent_value in cls._INTENT_PATTERNS:
             if pattern.search(user_text):
-                slots.pending_intent = intent_value
+                slots.intent_candidate = intent_value
                 break
 
         requested_cal_day = cls._extract_requested_cal_day(user_text)
@@ -721,20 +720,15 @@ class ConversationSlots(BaseModel):
             slots.availability_intent = "today_install"
             slots.requested_cal_day = requested_cal_day or cls._kst_today().strftime("%Y%m%d")
         elif requested_cal_day and (
-            slots.pending_intent in {"stock", "order", "reservation"}
+            slots.intent_candidate in {"stock", "order", "reservation"}
             or cls.has_store_finder_intent(user_text)
             or len(text_stripped) <= 12
         ):
             slots.requested_cal_day = requested_cal_day
 
-        # Goal type — derived from the same signals as pending_intent plus an
-        # explicit recommend check. Recommend takes priority so a fresh
-        # "추천해줘" turn flips a stale transactional goal back to discovery.
-        # Goal is left None when no signal is present so merge() preserves the
-        # previously detected goal across silent turns ("4개", region names).
-        # View-only inquiries (order history, coupon, etc.) leave goal_type
-        # untouched so the LLM domain classifier handles them — checklist-based
-        # fast-path routing would otherwise mis-route them to a product flow.
+        # Goal type — keep only explicit discovery/store-finder style hints here.
+        # Transactional goal_type/pending_intent must be fixed by router/policy/
+        # TurnContract instead of regex extraction.
         is_view_only = any(p.search(user_text) for p in cls._GOAL_VIEW_ONLY_PATTERNS)
         if is_view_only:
             pass
@@ -746,17 +740,6 @@ class ConversationSlots(BaseModel):
             slots.goal_type = "product_search"
         elif cls.has_recommend_intent(user_text):
             slots.goal_type = "product_recommend"
-        elif slots.pending_intent == "stock":
-            slots.goal_type = "store_with_stock"
-        elif slots.pending_intent == "price":
-            slots.goal_type = "price_inquiry"
-        elif slots.pending_intent == "order":
-            slots.goal_type = "place_order"
-        elif slots.pending_intent == "reservation":
-            # 서비스 방문 예약 — region 슬롯 채우기가 1차 미션이므로 store_finder
-            # 체크리스트 재사용. 매장 선택 후 일정 잡기(datepick)는 prompt 측에서
-            # chain 처리. 별도 reservation goal_type 신설은 follow-up 과제.
-            slots.goal_type = "store_finder"
         elif cls.has_store_finder_intent(user_text):
             # Pure store search: no stock/price/order intent, but the user is
             # explicitly asking for a store. Routes through goal-router so the
@@ -792,8 +775,8 @@ class ConversationSlots(BaseModel):
             and (
                 len(text_stripped) <= 8
                 or cls.has_store_finder_intent(user_text)
-                or slots.pending_intent == "stock"
-                or slots.pending_intent == "reservation"
+                or slots.intent_candidate == "stock"
+                or slots.intent_candidate == "reservation"
             )
         )
         if should_extract_region:
@@ -807,8 +790,8 @@ class ConversationSlots(BaseModel):
         # non-store turns ("강남 가는 길") so unrelated text doesn't leak in.
         is_store_related = (
             cls.has_store_finder_intent(user_text)
-            or slots.pending_intent == "stock"
-            or slots.pending_intent == "reservation"
+            or slots.intent_candidate == "stock"
+            or slots.intent_candidate == "reservation"
         )
         if is_store_related and cls._has_preference_hints(user_text):
             slots.user_preferences_text = user_text.strip()

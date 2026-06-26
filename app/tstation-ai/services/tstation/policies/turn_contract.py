@@ -168,6 +168,8 @@ _REFERENCE_GUARD_EXEMPT_INTENTS = frozenset({
     "store_service_availability",
     "general_cancel_fee_policy",
     "general_card_cancel_timing_policy",
+    "coupon_usage_policy",
+    "coupon_registration_policy",
     "maintenance_history_access_policy",
     "order_document_guidance",
     "legal_action_guidance_denied",
@@ -394,6 +396,12 @@ def build_turn_contract(
     if code_intent == "general_card_cancel_timing_policy" or planner_intent == "general_card_cancel_timing_policy":
         domain = "support"
         intent = "general_card_cancel_timing_policy"
+    if code_intent == "coupon_usage_policy" or planner_intent == "coupon_usage_policy":
+        domain = "support"
+        intent = "coupon_usage_policy"
+    if code_intent == "coupon_registration_policy" or planner_intent == "coupon_registration_policy":
+        domain = "support"
+        intent = "coupon_registration_policy"
     if _is_discovery_event_content_contract(routing_result, planner_intent, code_intent):
         domain = "discovery"
         intent = planner_intent if planner_intent in {
@@ -530,6 +538,26 @@ def build_turn_contract(
                 "get_coupon_applicable_products_tool",
             ),
         )
+    if intent == "coupon_usage_policy":
+        forbidden_tools = _merge_tuple(
+            forbidden_tools,
+            (
+                "issue_coupon_tool",
+                "get_my_coupons_tool",
+                "get_coupon_applicable_products_tool",
+                "get_final_price_tool",
+            ),
+        )
+    if intent == "coupon_registration_policy":
+        forbidden_tools = _merge_tuple(
+            forbidden_tools,
+            (
+                "issue_coupon_tool",
+                "get_my_coupons_tool",
+                "get_coupon_applicable_products_tool",
+                "get_final_price_tool",
+            ),
+        )
     if intent == "order_document_guidance":
         forbidden_tools = _merge_tuple(
             forbidden_tools,
@@ -622,6 +650,22 @@ def build_turn_contract(
             ),
             "metadata": {"response_shape_key": "order_document_guidance"},
         }
+    if intent in {"coupon_usage_policy", "coupon_registration_policy"} and response_decision_payload is None:
+        response_decision_payload = {
+            "response_shape": "summary",
+            "template": "quickReply",
+            "required_slots": [],
+            "forbidden_behaviors": [
+                "route_to_partner_coupon_policy",
+                "start_owned_coupon_lookup",
+                "require_product_clarification",
+            ],
+            "assistant_guidance": (
+                "쿠폰 일반 정책 문의는 FAQ hybrid 검색을 먼저 수행하고 사용처/등록 경로를 quickReply로 요약한다. "
+                "보유 쿠폰 조회나 상품별 적용 조회로 바로 전환하지 않는다."
+            ),
+            "metadata": {"response_shape_key": intent},
+        }
     if intent in {
         "tire_manufacture_date_policy",
         "tire_quality_warranty_policy",
@@ -630,6 +674,8 @@ def build_turn_contract(
         "installation_work_policy",
         "promotion_gift_policy",
         "tire_condition_photo_policy",
+        "coupon_usage_policy",
+        "coupon_registration_policy",
     } and response_decision_payload is None:
         response_decision_payload = {
             "response_shape": "summary",
@@ -1468,6 +1514,7 @@ def _action_mode_contract_violation(
 def response_contract_violations(
     *,
     template: str | None,
+    user_text: str | None = None,
     assistant_response_text: str | None = None,
     assistant_response_source: str | None = None,
     compare_metric: str | None = None,
@@ -1672,7 +1719,29 @@ def response_contract_violations(
     )
     if signup_coupon_violation is not None:
         violations.append(signup_coupon_violation)
+    promotion_gift_violation = _promotion_gift_policy_contract_violation(
+        assistant_response_text=assistant_response_text,
+        response_shape_key=response_shape_key,
+        called_tools=called_tools,
+        contract=contract,
+    )
+    if promotion_gift_violation is not None:
+        violations.append(promotion_gift_violation)
+    assurance_service_violation = _assurance_service_policy_contract_violation(
+        assistant_response_text=assistant_response_text,
+        contract=contract,
+    )
+    if assurance_service_violation is not None:
+        violations.append(assurance_service_violation)
+    tire_condition_photo_violation = _tire_condition_photo_policy_contract_violation(
+        user_text=user_text,
+        assistant_response_text=assistant_response_text,
+        contract=contract,
+    )
+    if tire_condition_photo_violation is not None:
+        violations.append(tire_condition_photo_violation)
     faq_first_support_violation = _faq_first_support_policy_contract_violation(
+        user_text=user_text,
         assistant_response_text=assistant_response_text,
         called_tools=called_tools,
         structured_sources=structured_sources,
@@ -2212,6 +2281,75 @@ def _signup_coupon_guidance_contract_violation(
     return None
 
 
+def _promotion_gift_policy_contract_violation(
+    *,
+    assistant_response_text: str | None,
+    response_shape_key: str | None,
+    called_tools: list[str] | tuple[str, ...] | None,
+    contract: TurnContract | None,
+) -> dict[str, Any] | None:
+    if contract is None or str(contract.intent or "") != "promotion_gift_policy":
+        return None
+    tools = {str(tool) for tool in tuple(called_tools or ()) if str(tool).strip()}
+    blocked_tools = sorted(
+        tools
+        & {
+            "search_product_tool",
+            "get_final_price_tool",
+            "get_orders_of_user_tool",
+            "get_order_status_tool",
+            "get_product_applicable_events_tool",
+            "get_product_promotions_tool",
+        }
+    )
+    if blocked_tools:
+        return {
+            "type": "promotion_gift_policy_used_forbidden_lookup",
+            "called_tools": blocked_tools,
+            "response_shape_key": str(response_shape_key or ""),
+        }
+    assistant_text = str(assistant_response_text or "").strip()
+    normalized_text = re.sub(r"\s+", "", assistant_text)
+    has_partial_cancel = any(token in normalized_text for token in ("부분취소", "일부취소", "취소"))
+    has_threshold_miss = any(token in normalized_text for token in ("기준수량", "기준미달", "수량미달", "조건미달"))
+    has_return_or_deduction = any(token in normalized_text for token in ("사은품반납", "반납", "차감", "상당금액"))
+    has_refund = "환불" in normalized_text
+    has_final_condition = any(
+        token in normalized_text for token in ("이벤트상세조건", "상세조건", "주문취소처리기준", "취소처리기준")
+    )
+    if not (has_partial_cancel and has_threshold_miss and has_return_or_deduction and has_refund and has_final_condition):
+        return {
+            "type": "promotion_gift_policy_missing_partial_cancel_guidance",
+            "assistant_response_text": assistant_text,
+            "response_shape_key": str(response_shape_key or ""),
+        }
+    return None
+
+
+def _assurance_service_policy_contract_violation(
+    *,
+    assistant_response_text: str | None,
+    contract: TurnContract | None,
+) -> dict[str, Any] | None:
+    if contract is None or str(contract.intent or "") != "assurance_service_policy":
+        return None
+    assistant_text = str(assistant_response_text or "").strip()
+    normalized_text = re.sub(r"\s+", "", assistant_text)
+    has_time_condition = any(token in normalized_text for token in ("1년이내", "12개월이내"))
+    has_mileage_condition = any(token in normalized_text for token in ("16,000km이내", "16000km이내", "16000km", "16,000km"))
+    if not (has_time_condition and has_mileage_condition):
+        return {
+            "type": "assurance_service_policy_missing_core_conditions",
+            "assistant_response_text": assistant_text,
+        }
+    if re.search(r"(무조건|항상|자동|반드시).{0,12}보상|보상.{0,8}(확정|됩니다)", assistant_text, re.IGNORECASE):
+        return {
+            "type": "assurance_service_policy_overstated_compensation",
+            "assistant_response_text": assistant_text,
+        }
+    return None
+
+
 _FAQ_FIRST_SUPPORT_POLICY_INTENTS = {
     "tire_manufacture_date_policy",
     "tire_quality_warranty_policy",
@@ -2219,10 +2357,20 @@ _FAQ_FIRST_SUPPORT_POLICY_INTENTS = {
     "reservation_policy_guidance",
     "installation_work_policy",
     "promotion_gift_policy",
-    "tire_condition_photo_policy",
 }
 
 _FAQ_SOURCE_TOOLS = frozenset({"get_faq_tool", "search_faq_rag_tool", "search_faq_hybrid_tool"})
+_USER_UPLOAD_REQUEST_RE = re.compile(
+    r"사진\s*(?:보낼|올릴|업로드|첨부)|이미지\s*(?:보낼|올릴|업로드|첨부)|"
+    r"파일\s*(?:보낼|올릴|업로드|첨부)|첨부\s*(?:할게|했어|하면|해도|해서)|"
+    r"(?:사진|이미지|파일).{0,8}(?:봐줘|봐\s*줄|확인해\s*줘)",
+    re.IGNORECASE,
+)
+_NON_UPLOAD_IMAGE_LOOKUP_RE = re.compile(
+    r"(?:매장|지점|상품|타이어).{0,10}(?:사진|이미지).{0,8}(?:보여|조회|찾아)|"
+    r"(?:사진|이미지).{0,8}(?:보여줘|조회해줘|찾아줘)",
+    re.IGNORECASE,
+)
 _FAQ_FIRST_SUPPORT_POLICY_UNSUPPORTED_ASSERTION_RE = {
     "tire_manufacture_date_policy": re.compile(
         r"(무조건|항상|바로|즉시|확정|반드시).{0,18}(교환|환불|새\s*걸|불량)|"
@@ -2299,8 +2447,58 @@ def _faq_source_supports_assertion(intent: str, assistant_text: str, faq_text: s
     return any(token.lower() in faq_text.lower() for token in topic_tokens)
 
 
+def _requires_upload_capability_notice(user_text: str | None) -> bool:
+    text = str(user_text or "").strip()
+    if not text:
+        return False
+    if _NON_UPLOAD_IMAGE_LOOKUP_RE.search(text):
+        return False
+    return bool(_USER_UPLOAD_REQUEST_RE.search(text))
+
+
+def _tire_condition_photo_policy_contract_violation(
+    *,
+    user_text: str | None = None,
+    assistant_response_text: str | None,
+    contract: TurnContract | None,
+) -> dict[str, Any] | None:
+    if contract is None or str(contract.intent or "") != "tire_condition_photo_policy":
+        return None
+    assistant_text = str(assistant_response_text or "").strip()
+    normalized_text = re.sub(r"\s+", "", assistant_text)
+    if _requires_upload_capability_notice(user_text):
+        has_upload_notice = any(token in normalized_text for token in ("업로드", "첨부", "파일"))
+        if not has_upload_notice:
+            return {
+                "type": "upload_capability_notice_missing",
+                "assistant_response_text": assistant_text[:160],
+                "severity": "error",
+            }
+    if re.search(r"(더\s*타도\s*돼|주행\s*가능|안전합니다)", assistant_text, re.IGNORECASE):
+        return {
+            "type": "tire_condition_photo_policy_safety_assertion_without_verification",
+            "assistant_response_text": assistant_text,
+            "severity": "error",
+        }
+    has_photo_limit = any(token in normalized_text for token in ("사진만으로는", "사진만으로", "판단불가", "확정할수없"))
+    has_qna_registration = "1:1문의" in normalized_text or "1대1문의" in normalized_text
+    has_measurement_or_inspection = (
+        "마모도측정서비스" in normalized_text
+        or ("마모도" in normalized_text and "측정" in normalized_text)
+        or "매장점검" in normalized_text
+        or "전문점검" in normalized_text
+    )
+    if not (has_photo_limit and has_qna_registration and has_measurement_or_inspection):
+        return {
+            "type": "tire_condition_photo_policy_missing_required_guidance",
+            "assistant_response_text": assistant_text,
+        }
+    return None
+
+
 def _faq_first_support_policy_contract_violation(
     *,
+    user_text: str | None = None,
     assistant_response_text: str | None,
     called_tools: list[str] | tuple[str, ...] | None,
     structured_sources: list[tuple[str, Mapping[str, Any]]] | tuple[tuple[str, Mapping[str, Any]], ...] | None,
@@ -2324,6 +2522,18 @@ def _faq_first_support_policy_contract_violation(
             "called_tools": tools,
         }
     intent = str(contract.intent or "")
+    if _requires_upload_capability_notice(user_text):
+        upload_notice_present = (
+            "업로드" in assistant_text
+            or "첨부" in assistant_text
+            or "파일" in assistant_text
+        )
+        if not upload_notice_present:
+            return {
+                "type": "upload_capability_notice_missing",
+                "assistant_response_text": assistant_text[:160],
+                "severity": "error",
+            }
     assertion_re = _FAQ_FIRST_SUPPORT_POLICY_UNSUPPORTED_ASSERTION_RE.get(intent)
     if not assistant_text or not assertion_re or not assertion_re.search(assistant_text):
         return None

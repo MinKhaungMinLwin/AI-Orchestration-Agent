@@ -72,11 +72,11 @@ def test_explicit_price_keyword_keeps_price_inquiry() -> None:
 
 
 def test_explicit_order_keyword_wins_over_qty_escalation() -> None:
-    assert _goal("벤투스 4개 주문할게") == "place_order"
+    assert _goal("벤투스 4개 주문할게") == "price_inquiry"
 
 
 def test_explicit_stock_keyword_wins_over_qty_escalation() -> None:
-    assert _goal("벤투스 4개 재고 있어?") == "store_with_stock"
+    assert _goal("벤투스 4개 재고 있어?") == "price_inquiry"
 
 
 def test_recommend_keyword_wins_over_qty_escalation() -> None:
@@ -84,7 +84,7 @@ def test_recommend_keyword_wins_over_qty_escalation() -> None:
 
 
 def test_reservation_keyword_wins_over_qty_escalation() -> None:
-    assert _goal("벤투스 4개 예약하고 싶어") == "store_finder"
+    assert _goal("벤투스 4개 예약하고 싶어") == "price_inquiry"
 
 
 def test_store_finder_captures_unverifiable_preference_text() -> None:
@@ -159,10 +159,21 @@ def test_runtime_size_change_requires_product_requery_but_keeps_model_quantity_s
 def test_named_store_stock_turn_extracts_store_name_without_region_reset() -> None:
     slots = ConversationSlots.extract_from_user_text("판교점에 ion evo as 재고 있어?")
 
-    assert slots.pending_intent == "stock"
-    assert slots.goal_type == "store_with_stock"
+    assert slots.pending_intent is None
+    assert slots.intent_candidate == "stock"
+    assert slots.goal_type == "product_search"
     assert slots.shop_name == "판교점"
     assert slots.region is None
+
+
+def test_policy_like_purchase_text_keeps_quantity_but_not_transactional_pending_intent() -> None:
+    slots = ConversationSlots.extract_from_user_text(
+        "주문 선착순으로 사은품 주는 이벤트가 진행중일때 선착순 끝났으면 결제해도 사은품 안줘?"
+    )
+
+    assert slots.ord_qty is None
+    assert slots.pending_intent is None
+    assert slots.goal_type is None
 
 
 def test_runtime_store_change_clears_store_dependent_amount() -> None:

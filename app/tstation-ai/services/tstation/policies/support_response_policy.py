@@ -20,6 +20,18 @@ _PARTNER_MEMBER_COUPON_POLICY_RE = re.compile(
     r"제휴\s*(?:회원|사|몰|전용)|복지몰|임직원|제휴사|제휴회원|제휴\s*쿠폰|제휴\s*혜택",
     re.IGNORECASE,
 )
+_COUPON_USAGE_POLICY_RE = re.compile(
+    r"쿠폰.{0,32}(?:현장\s*결제|매장\s*결제|오프라인|온라인\s*주문\s*없이|온라인\s*전용|매장\s*(?:사용|결제)|"
+    r"사용처|어디\s*(?:서|에)|쓸\s*수\s*있|사용\s*가능|현장(?:에서도)?|매장에서)|"
+    r"(?:현장\s*결제|매장\s*결제|오프라인|온라인\s*주문\s*없이|온라인\s*전용|매장\s*(?:사용|결제)|"
+    r"사용처|어디\s*(?:서|에)|쓸\s*수\s*있|사용\s*가능|현장(?:에서도)?|매장에서).{0,32}쿠폰",
+    re.IGNORECASE,
+)
+_COUPON_REGISTRATION_POLICY_RE = re.compile(
+    r"쿠폰.{0,24}(?:번호|등록|입력|코드|등록\s*방법|어디서\s*등록)|"
+    r"(?:번호|등록|입력|코드|등록\s*방법|어디서\s*등록).{0,24}쿠폰",
+    re.IGNORECASE,
+)
 _CARD_CANCEL_TIMING_POLICY_RE = re.compile(
     r"(?:카드|결제|환불|승인\s*취소|승인취소|취소\s*완료).{0,24}(?:언제|며칠|얼마나|반영|걸려|소요)|"
     r"(?:언제|며칠|얼마나|반영|걸려|소요).{0,24}(?:카드|결제|환불|승인\s*취소|승인취소)|"
@@ -152,6 +164,48 @@ def decide_support_response(
             assistant_guidance="임의 쿠폰 발급은 불가하다고 안내하고, 받을 수 있는 쿠폰은 쿠폰함에서 확인 가능하다고 안내한다.",
         )
 
+    if intent == "coupon_registration_policy" or (_COUPON_RE.search(text) and _COUPON_REGISTRATION_POLICY_RE.search(text)):
+        return _decision(
+            response_shape_key="coupon_registration_policy",
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=(
+                "route_to_partner_coupon_policy",
+                "start_owned_coupon_lookup",
+                "claim_coupon_registered",
+                "require_product_clarification",
+            ),
+            assistant_guidance=(
+                "쿠폰 번호 등록/입력 문의는 제휴회원 쿠폰 정책이나 보유 쿠폰 조회로 보내지 않는다. "
+                "FAQ hybrid 검색을 먼저 수행하고, 쿠폰 등록 위치·입력 방법·쿠폰함 확인 경로를 정책 범위 안에서 안내한다. "
+                "상품명이나 특정 상품 적용 여부를 되묻지 않는다."
+            ),
+        )
+
+    if intent == "coupon_usage_policy" or (
+        _COUPON_RE.search(text)
+        and _COUPON_USAGE_POLICY_RE.search(text)
+        and not _PARTNER_MEMBER_COUPON_POLICY_RE.search(text)
+    ):
+        return _decision(
+            response_shape_key="coupon_usage_policy",
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=(
+                "route_to_partner_coupon_policy",
+                "start_owned_coupon_lookup",
+                "call_coupon_applicability_tools",
+                "require_product_clarification",
+                "claim_coupon_usage_confirmed",
+            ),
+            assistant_guidance=(
+                "일반 쿠폰 사용 정책 문의는 제휴회원/복지몰/임직원 전용 쿠폰 안내로 보내지 않는다. "
+                "FAQ hybrid 검색을 먼저 수행하고, 쿠폰별 사용처와 유의사항에 따라 온라인 전용인지 매장 사용 가능인지 다를 수 있다고 설명한다. "
+                "티스테이션닷컴에서 받은 쿠폰은 쿠폰 상세/유의사항의 사용처 확인이 필요하고, 온라인 주문 전용 쿠폰이면 현장 결제에는 적용되지 않을 수 있다고 안내한다. "
+                "보유 쿠폰 목록 조회나 상품별 적용 가능 여부 조회를 시작하지 말고, 현재 매장에서 결제 중이면 매장 직원에게 사용 가능 여부를 확인하도록 보조 안내한다."
+            ),
+        )
+
     if intent == "personal_contact" or _PERSONAL_CONTACT_RE.search(text):
         return _decision(
             response_shape_key="personal_contact_denied",
@@ -225,7 +279,8 @@ def decide_support_response(
             ),
             assistant_guidance=(
                 "안심서비스/안심플러스/디지털워런티/보증서 문의는 FAQ hybrid 검색을 먼저 수행하고, 가입 가능 기간, "
-                "보상 조건, 장착비/추가 비용 여부를 검색 근거 범위 안에서 설명한다. 보상 확정이나 자동 접수로 시작하지 않는다."
+                "보상 조건, 장착비/추가 비용 여부를 검색 근거 범위 안에서 설명한다. 장착 후 1년 이내와 주행거리 "
+                "16,000km 이내 기준을 포함하되, 보상 확정이나 자동 접수처럼 말하지 않는다."
             ),
         )
 
@@ -289,8 +344,10 @@ def decide_support_response(
                 "claim_safe_to_drive_without_inspection",
             ),
             assistant_guidance=(
-                "타이어 상태를 사진으로 봐달라는 문의는 FAQ hybrid 검색을 먼저 수행하되, 챗봇이 사진 판독이나 안전 여부를 확정할 수 "
-                "없다고 분명히 말한다. 매장 점검, 마모도 측정, 필요 시 1:1 문의 첨부 경로를 보조로 안내한다."
+                "타이어 상태를 사진으로 봐달라는 문의는 FAQ/RAG 요약보다 고정 정책 안내를 우선한다. "
+                "현재 챗봇에서는 사진/파일 업로드 확인이 불가능하다고 먼저 안내하고, 사진만으로 마모 상태, 교체 필요 여부, "
+                "주행 안전을 확정할 수 없다고 분명히 말한다. 사진/파일 첨부가 필요하면 1:1 문의를 통해 등록하도록 안내하고, "
+                "실제 확인은 마모도 측정 서비스 또는 가까운 매장/전문 점검으로 유도한다."
             ),
         )
 

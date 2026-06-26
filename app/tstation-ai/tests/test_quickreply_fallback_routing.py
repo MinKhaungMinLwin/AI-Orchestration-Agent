@@ -47,6 +47,7 @@ from services.tstation.agents.e_support_agent.tools import (
     current_support_policy_intent,
 )
 from services.tstation.chat import (
+    _DIRECT_SUPPORT_FAQ_POLICY_INTENTS,
     _FALLBACK_COUPON,
     _FALLBACK_GENERIC,
     _FALLBACK_LEADING_PROGRESS,
@@ -67,12 +68,13 @@ from services.tstation.chat import (
     _build_direct_faq_policy_tool_payload,
     _build_general_cancel_fee_policy_event,
     _build_general_card_cancel_timing_policy_event,
+    _build_partner_member_coupon_policy_event,
     _build_support_faq_policy_event,
+    _enrich_messages_with_template_data,
     _build_signup_coupon_guidance_event,
     _build_signup_first_purchase_benefit_event,
     _build_owned_coupon_best_discount_event,
     _build_owned_coupon_expiry_lookup_event,
-    _build_oe_replacement_guidance_event,
     _build_product_coupon_eligibility_event,
     _build_product_coupon_price_amount_event,
     _build_product_coupon_price_no_product_event,
@@ -83,13 +85,10 @@ from services.tstation.chat import (
     _build_transaction_policy_context,
     _build_product_attribute_event_from_search_results,
     _quantity_benefit_continuation_frame_from_pending,
-    _resolve_goods_no_from_product_template_selection,
-    _goods_no_from_template_event,
     _final_price_from_row,
     _build_bare_product_search_tool_input,
     _build_external_price_comparison_event_from_search_results,
     _build_size_only_product_search_tool_input,
-    _build_store_availability_quantity_prompt_event,
     _store_visit_advisory_event,
     _is_pure_inventory_stock_ready,
     _is_quantity_only_stock_followup_text,
@@ -115,6 +114,7 @@ from services.tstation.chat import (
     _clear_stale_product_slots_for_new_recommendation,
     _clear_stale_store_search_context_for_general_turn,
     _sync_store_service_search_working_slots,
+    _template_data_from_assistant_message,
     _demote_stale_tire_size_for_new_product_transaction,
     _datepick_template_recovery_candidate_from_messages,
     _verified_datepick_order_values,
@@ -128,11 +128,9 @@ from services.tstation.chat import (
     _should_resolve_compare_target_product_pair,
     _should_skip_product_compare_override,
     _build_oe_replacement_followup_recommendation_args,
-    _build_oe_replacement_same_product_brand_prompt_event,
     _build_oe_replacement_same_product_search_args,
     _bare_product_search_followup_override,
     _build_discovery_policy_context,
-    _build_manual_tire_size_input_event,
     _build_missing_order_product_reselection_event,
     _allows_transaction_action_mode,
     _allows_outer_tool_slot_staging,
@@ -146,11 +144,8 @@ from services.tstation.chat import (
     _clear_invalid_store_identity_slots,
     _is_invalid_store_slot_value,
     _is_resolved_size_store_availability_transaction_continuation,
-    _selected_order_context_from_preview_values,
-    _apply_selected_order_context_for_purchase_cta,
     _apply_order_snapshot_slots,
     _standardize_preorder_metadata,
-    _build_order_quantity_prompt_event,
     _build_order_arrival_status_event,
     _build_order_cancel_status_event,
     _build_order_history_reorder_event,
@@ -159,16 +154,10 @@ from services.tstation.chat import (
     _select_cancel_or_refund_order_rows,
     _select_order_rows_by_number,
     _is_preorder_confirmation_reply,
-    _build_staggered_vehicle_tire_selection_event,
-    _build_staggered_tire_quantity_limit_event,
-    _is_manual_tire_size_input_selection,
     _is_maintenance_history_access_policy_query,
     _is_maintenance_history_lookup_query,
     _is_order_quantity_prompt_continuation_text,
-    _is_staggered_selected_tire_size_context,
-    _listcar_allows_staggered_tire_prompt,
     _apply_vehicle_selection_slot_values,
-    _resolve_vehicle_tire_position_selection,
     _vehicle_selection_slot_values,
     _vehicle_based_recommendation_refinement_patch,
     _vehicle_type_compatibility_guard_event,
@@ -322,7 +311,6 @@ from services.tstation.chat import (
     _requested_maintenance_focus,
     _qc_skip_reason,
     _rule_based_classify,
-    _select_vehicle_from_listcar_event,
     _should_reuse_pending_vehicle_lookup_car_no,
     _should_prompt_order_quantity_before_store,
     _is_plain_store_search_reset_allowed,
@@ -337,7 +325,6 @@ from services.tstation.chat import (
     _sanitize_transaction_cta_contracts,
     _is_current_location_store_search_confirmation,
     _has_active_transaction_action_context,
-    _cta_preview_input_from_slots,
     _support_fast_path,
     MultiAgentDomain,
     StreamingMultiAgentCoordinator,
@@ -371,6 +358,7 @@ from services.tstation.policies.transaction_response_policy import decide_transa
 from services.tstation.policies.support_response_policy import decide_support_response
 from services.tstation.policies.response_decision import ResponseDecision, ResponseShape, TemplateName, ToolPlan
 from services.tstation.policies.turn_contract import (
+    _FAQ_FIRST_SUPPORT_POLICY_INTENTS,
     TurnContract,
     build_required_slot_clarification_event,
     build_response_policy_guard_event,
@@ -383,27 +371,75 @@ from services.tstation.policies.turn_contract import (
 )
 from services.tstation.policies.ui_action_policy import (
     apply_other_store_context_enrichment,
+    apply_selected_order_context_for_purchase_cta,
     apply_cta_context_to_slots,
     apply_logistics_earliest_install_cta_action,
     apply_preview_update_cta_action,
     apply_ui_action_slot_patch,
+    build_cta_preview_contract_gate,
+    cta_preview_input_from_slots,
     build_other_store_context_enrichment_input,
     build_other_store_preview_metadata,
     build_cta_preview_template_context,
+    build_order_quantity_prompt_event,
+    build_manual_tire_size_input_event,
+    build_preview_tool_mapped_event,
+    build_store_availability_followup_preview_event,
+    build_store_availability_preview_result_events,
+    build_store_availability_preview_status_event,
+    run_store_availability_followup_preview,
+    build_staggered_tire_quantity_limit_event,
+    build_staggered_vehicle_tire_selection_event,
+    build_oe_replacement_same_product_brand_prompt_event,
+    build_oe_replacement_guidance_event,
     build_other_store_search_result_event,
     build_other_store_stock_unavailable_event,
     build_logistics_earliest_install_fallback_event,
     build_quickreply_cta_clarification_event,
+    cta_missing_slot_event,
     classify_direct_cta_action,
+    confirmed_product_slot_values_for_purchase_cta,
+    confirmed_product_slot_values_from_event,
+    datepick_slot_values_from_data,
+    is_manual_tire_size_input_selection,
     is_logistics_earliest_install_date_followup,
+    is_staggered_selected_tire_size_context,
+    listcar_allows_staggered_tire_prompt,
     merged_quickreply_cta_context,
     normalize_ui_action_metadata,
+    resolve_vehicle_tire_position_selection,
     preview_action_mode_for_slots,
+    preview_location_slot_values_from_selection,
+    preorder_slot_values_from_data,
+    resolve_goods_no_from_recent_product_context,
+    resolve_recent_single_shop_id_from_context,
+    resolve_recent_store_name_from_messages,
+    selected_order_context_from_preview_values,
+    resolve_recent_product_search_keyword,
+    resolve_goods_no_from_selection,
     resolve_ui_action_context,
+    resolve_goods_no_from_product_template_selection,
+    resolve_shop_id_from_selection,
+    resolve_shop_id_from_history_template,
+    resolve_store_selection_from_history_template,
+    resolve_tire_size_from_history_template,
+    resolve_vehicle_from_history_template,
+    resolve_vehicle_selection_from_listcar_event,
+    resolve_vehicle_ui_selection_from_chip_context,
+    rewrite_vehicle_selection_user_text,
     store_context_from_mapping,
     store_name_exact_match_row,
+    goods_no_from_template_event,
+    normalize_preview_tool_result,
+    prepare_ui_action_state,
+    apply_history_vehicle_selection_state,
+    apply_history_product_selection_state,
+    apply_history_location_selection_state,
+    build_store_availability_quantity_prompt_event,
+    decide_store_availability_followup_action,
     validate_ui_actions_for_contract,
 )
+from services.tstation.policies.store_confirmation_policy import resolve_store_followup_from_quickreply_template
 from services.tstation.policies.pickup_service_gate import deterministic_pickup_service_gate_decision
 from services.tstation.policies.store_service_gate import (
     classify_store_name_role,
@@ -508,6 +544,36 @@ def test_chat_message_request_preserves_ui_action_and_slot_patch() -> None:
     assert request.ui_action["action_type"] == "select_quantity"
     assert request.slots == {"goods_no": "G000000317729", "ord_qty": 4}
     assert request.chip_context.model_dump()["slots"]["ord_qty"] == 4
+
+
+def test_prepare_ui_action_state_applies_generic_slot_patch_before_routing() -> None:
+    slots = ConversationSlots(goods_no="G0001", ord_qty=None, pending_intent="stock", goal_type="store_with_stock")
+
+    prepared = prepare_ui_action_state(
+        ui_action={
+            "action_type": "select_quantity",
+            "cta_action": "select_quantity",
+            "source_intent": "stock_store_search",
+            "expected_contract_intent": "stock_store_search",
+            "slots": {"goods_no": "G0001", "ord_qty": 4, "region": "동탄"},
+        },
+        chip_context=None,
+        request_slots={"goods_no": "G0001", "ord_qty": 4, "region": "동탄"},
+        latest_listcar_tmpl=None,
+        last_user_text="4개",
+        existing_slots=slots,
+        generic_slot_apply_fn=lambda base_slots, values: base_slots.apply_runtime_values(values, source="ui_action"),
+        vehicle_slot_apply_fn=_apply_vehicle_selection_slot_values,
+    )
+
+    assert prepared.raw_action is not None
+    assert prepared.selected_vehicle is None
+    assert prepared.action_context is not None
+    assert prepared.updated_slots.ord_qty == 4
+    assert prepared.updated_slots.region == "동탄"
+    assert prepared.trace_metadata["ui_action_detected"] is True
+    assert prepared.trace_metadata["slots_rewritten"] is True
+    assert prepared.rewritten_user_text == "4개"
 
 
 def test_quickreply_cta_action_enter_region_asks_for_region_only() -> None:
@@ -758,7 +824,7 @@ def test_cta_preview_input_uses_recovered_region_and_requested_day() -> None:
         availability_intent="today_install",
     )
 
-    preview_input, missing_slot = _cta_preview_input_from_slots(slots)
+    preview_input, missing_slot = cta_preview_input_from_slots(slots)
 
     assert missing_slot is None
     assert preview_input == {
@@ -771,7 +837,7 @@ def test_cta_preview_input_uses_recovered_region_and_requested_day() -> None:
 
 
 def test_cta_preview_input_uses_template_boundary_alias_context() -> None:
-    preview_input, missing_slot = _cta_preview_input_from_slots(
+    preview_input, missing_slot = cta_preview_input_from_slots(
         ConversationSlots(region="서울", requested_cal_day="20260618"),
         cta_context={
             "goodsId": "G000000317729",
@@ -867,8 +933,260 @@ def test_build_cta_preview_template_context_includes_excluded_ids_and_action_mod
     assert context["action_mode"] == "stock_check"
 
 
+def test_cta_missing_slot_event_returns_location_guidance_chips() -> None:
+    event = cta_missing_slot_event("location")
+
+    assert event["assistant_response_source"] == "code_cta_action_guard"
+    assert event["template"] == "quickReply"
+    assert "지역명이나 매장명" in event["data"]["assistantResponse"]
+    assert _labels(event["data"]["quickReplies"])[:3] == ["서울", "강남", "송파"]
+
+
+def test_normalize_preview_tool_result_wraps_non_dict_parse_output() -> None:
+    normalized = normalize_preview_tool_result(
+        "raw-preview",
+        parse_tool_output_fn=lambda raw: ["unexpected", raw],
+    )
+
+    assert normalized["status"] == "error"
+    assert normalized["message"] == "Invalid tool response"
+
+
+def test_build_preview_tool_mapped_event_uses_fallback_and_source() -> None:
+    fallback_event = cta_missing_slot_event("location")
+    event = build_preview_tool_mapped_event(
+        preview_input={"goods_no": "G0001", "ord_qty": 4},
+        preview_result={"status": "success", "data": {}},
+        template_builder=lambda tool_data, intro: None,
+        intro_text="요청하신 조건으로 장착 가능 여부를 확인했어요.",
+        assistant_response_source="code_cta_action_preview",
+        fallback_event=fallback_event,
+    )
+
+    assert event["assistant_response_source"] == "code_cta_action_preview"
+    assert event["source_domain"] == "transaction"
+    assert event["template"] == "quickReply"
+
+
+def test_build_store_availability_followup_preview_event_uses_fallback_and_source() -> None:
+    fallback_event = build_store_availability_quantity_prompt_event(
+        product_keyword="벤투스 에어S",
+        tire_size="235/55R19",
+        store_name="티스테이션 판교점",
+        goods_no="G000000319593",
+    )
+    event = build_store_availability_followup_preview_event(
+        search_input={"keyword": "벤투스 에어S", "size": "235/55R19", "limit": 10},
+        search_result={"status": "success", "data": {"items": []}},
+        preview_input={"goods_no": "G000000319593", "ord_qty": 4, "store_nm": "티스테이션 판교점"},
+        preview_result={"status": "success", "data": {}},
+        template_builder=lambda tool_data, intro: None,
+        product_keyword="벤투스 에어S",
+        tire_size="235/55R19",
+        ord_qty=4,
+        store_name="티스테이션 판교점",
+        fallback_event=fallback_event,
+    )
+
+    assert event["assistant_response_source"] == "code_store_availability_size_followup"
+    assert event["source_domain"] == "transaction"
+    assert event["template"] == "quickReply"
+
+
+def test_build_store_availability_preview_status_event_uses_transaction_preview_tool() -> None:
+    event = build_store_availability_preview_status_event()
+
+    assert event["type"] == "status"
+    assert event["tool"] == "transaction_store_preview_tool"
+    assert event["source_domain"] == "transaction"
+
+
+def test_build_store_availability_preview_result_events_emit_agent_flow_and_tool() -> None:
+    events = build_store_availability_preview_result_events(
+        preview_input={"goods_no": "G000000319593", "ord_qty": 4, "store_nm": "티스테이션 판교점"},
+        preview_result={"status": "success", "data": {"inventory": {"todayShopArray": []}}},
+    )
+
+    assert len(events) == 2
+    assert events[0]["type"] == "agent_flow"
+    assert events[0]["agent"] == "[Store/Stock AF]"
+    assert events[1]["type"] == "tool"
+    assert events[1]["tool"] == "transaction_store_preview_tool"
+    assert "\"status\": \"success\"" in events[1]["output"]
+
+
+def test_run_store_availability_followup_preview_builds_status_tool_and_mapped_event() -> None:
+    recorded: list[tuple[str, dict[str, object], dict[str, object]]] = []
+
+    async def _invoke_preview(payload: dict[str, object]) -> dict[str, object]:
+        assert payload["goods_no"] == "G000000319593"
+        return {"status": "success", "data": {"inventory": {"todayShopArray": [{"shopId": "F00098"}]}}}
+
+    events, mapped_event = asyncio.run(
+        run_store_availability_followup_preview(
+            search_input={"keyword": "벤투스 에어S", "size": "235/55R19", "limit": 10},
+            search_result={"status": "success", "data": {"items": [{"goods_no": "G000000319593"}]}},
+            preview_input={"goods_no": "G000000319593", "ord_qty": 4, "store_nm": "티스테이션 판교점"},
+            template_builder=lambda tool_data, intro: {
+                "template": "location",
+                "data": {"assistantResponse": intro, "toolCount": len(tool_data)},
+            },
+            product_keyword="벤투스 에어S",
+            tire_size="235/55R19",
+            ord_qty=4,
+            store_name="티스테이션 판교점",
+            fallback_event=cta_missing_slot_event("location"),
+            invoke_preview=_invoke_preview,
+            parse_tool_output_fn=lambda raw: raw,
+            record_tool_result_fn=lambda tool, tool_input, tool_result: recorded.append(
+                (tool, dict(tool_input), dict(tool_result))
+            ),
+        )
+    )
+
+    assert [event["type"] for event in events] == ["status", "agent_flow", "tool"]
+    assert events[0]["tool"] == "transaction_store_preview_tool"
+    assert events[1]["status"] == "success"
+    assert recorded == [
+        (
+            "transaction_store_preview_tool",
+            {"goods_no": "G000000319593", "ord_qty": 4, "store_nm": "티스테이션 판교점"},
+            {"status": "success", "data": {"inventory": {"todayShopArray": [{"shopId": "F00098"}]}}},
+        )
+    ]
+    assert mapped_event["template"] == "location"
+    assert mapped_event["assistant_response_source"] == "code_store_availability_size_followup"
+
+
+def test_run_store_availability_followup_preview_wraps_tool_failure() -> None:
+    recorded: list[tuple[str, dict[str, object], dict[str, object]]] = []
+
+    async def _invoke_preview(payload: dict[str, object]) -> dict[str, object]:
+        raise RuntimeError(f"preview failed for {payload['goods_no']}")
+
+    events, mapped_event = asyncio.run(
+        run_store_availability_followup_preview(
+            search_input={"keyword": "벤투스 에어S", "size": "235/55R19", "limit": 10},
+            search_result={"status": "success", "data": {"items": [{"goods_no": "G000000319593"}]}},
+            preview_input={"goods_no": "G000000319593", "ord_qty": 4, "store_nm": "티스테이션 판교점"},
+            template_builder=lambda tool_data, intro: None,
+            product_keyword="벤투스 에어S",
+            tire_size="235/55R19",
+            ord_qty=4,
+            store_name="티스테이션 판교점",
+            fallback_event=cta_missing_slot_event("location"),
+            invoke_preview=_invoke_preview,
+            parse_tool_output_fn=lambda raw: raw,
+            record_tool_result_fn=lambda tool, tool_input, tool_result: recorded.append(
+                (tool, dict(tool_input), dict(tool_result))
+            ),
+        )
+    )
+
+    assert [event["type"] for event in events] == ["status", "agent_flow", "tool"]
+    assert events[1]["status"] == "error"
+    assert recorded[0][0] == "transaction_store_preview_tool"
+    assert recorded[0][2]["status"] == "error"
+    assert "preview failed" in str(recorded[0][2]["message"])
+    assert mapped_event["template"] == "quickReply"
+    assert mapped_event["assistant_response_source"] == "code_store_availability_size_followup"
+
+
+def test_build_cta_preview_contract_gate_builds_resumed_stock_contract() -> None:
+    captured: dict[str, object] = {}
+
+    class _Frame:
+        intent = "stock_store_search"
+        known_slots = {
+            "goods_no": "G1",
+            "ord_qty": 4,
+            "region": "동탄",
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+            "stock_check_mode": "preview",
+        }
+
+    def _build_intent_frame(user_text: str, *, known_slots: dict[str, object]) -> object:
+        captured["intent_frame_user_text"] = user_text
+        captured["intent_frame_known_slots"] = known_slots
+        return _Frame()
+
+    def _plan_tools(frame: object) -> object:
+        captured["tool_plan_frame"] = frame
+        return {"tools": ["transaction_store_preview_tool"]}
+
+    def _decide_response(*, intent: str, user_text: str, known_slots: dict[str, object]) -> object:
+        captured["response_intent"] = intent
+        captured["response_user_text"] = user_text
+        captured["response_known_slots"] = known_slots
+        return {"template": "quickReply"}
+
+    def _build_turn_contract(**kwargs: object) -> object:
+        captured["turn_contract_kwargs"] = kwargs
+        return {"contract": "ok", "known_slots": kwargs["intent_frame"].known_slots}
+
+    def _contract_gate(**kwargs: object) -> tuple[bool, str]:
+        captured["gate_kwargs"] = kwargs
+        return True, "allowed"
+
+    merged_slots = SimpleNamespace(
+        goods_no="G1",
+        tire_size="225/55R18",
+        ord_qty=4,
+        shop_id="S1",
+        shop_name="동탄점",
+        region="동탄",
+        availability_intent="today_install",
+        requested_cal_day="20260626",
+        pending_intent=None,
+        goal_type=None,
+    )
+
+    contract, allowed, reason = build_cta_preview_contract_gate(
+        user_text="4개",
+        merged_slots=merged_slots,
+        source="code_cta_action_preview",
+        required_tools=("transaction_store_preview_tool",),
+        build_intent_frame_fn=_build_intent_frame,
+        plan_tools_fn=_plan_tools,
+        decide_response_fn=_decide_response,
+        build_turn_contract_fn=_build_turn_contract,
+        contract_gate_fn=_contract_gate,
+    )
+
+    assert contract == {"contract": "ok", "known_slots": _Frame.known_slots}
+    assert allowed is True
+    assert reason == "allowed"
+    assert captured["intent_frame_user_text"] == "4개"
+    assert captured["intent_frame_known_slots"] == {
+        "goods_no": "G1",
+        "tire_size": "225/55R18",
+        "quantity": 4,
+        "ord_qty": 4,
+        "shop_id": "S1",
+        "shop_name": "동탄점",
+        "store_name": "동탄점",
+        "region": "동탄",
+        "availability_intent": "today_install",
+        "requested_cal_day": "20260626",
+        "pending_intent": "stock",
+        "goal_type": "store_with_stock",
+        "stock_check_mode": "preview",
+    }
+    assert captured["turn_contract_kwargs"]["action_mode"] == "stock_check"
+    assert captured["turn_contract_kwargs"]["context_state"] == "resumed"
+    assert captured["turn_contract_kwargs"]["resume_source"] == "cta_action:code_cta_action_preview"
+    assert captured["gate_kwargs"] == {
+        "turn_contract": contract,
+        "intent": "stock_store_search",
+        "template": "quickReply",
+        "source": "code_cta_action_preview",
+        "required_tools": ("transaction_store_preview_tool",),
+    }
+
+
 def test_cta_preview_input_uses_canonical_store_context_from_template_aliases() -> None:
-    preview_input, missing_slot = _cta_preview_input_from_slots(
+    preview_input, missing_slot = cta_preview_input_from_slots(
         ConversationSlots(requested_cal_day="20260618"),
         cta_context={
             "goodsId": "G000000317729",
@@ -893,7 +1211,7 @@ def test_cta_preview_input_uses_canonical_store_context_from_template_aliases() 
 def test_cta_preview_input_reports_missing_location_without_generic_guard() -> None:
     slots = ConversationSlots(goods_no="G000000317729", ord_qty=4)
 
-    preview_input, missing_slot = _cta_preview_input_from_slots(slots)
+    preview_input, missing_slot = cta_preview_input_from_slots(slots)
 
     assert preview_input is None
     assert missing_slot == "location"
@@ -1043,6 +1361,36 @@ def test_coupon_howto_gate_ignores_previous_product_recommendation_context() -> 
 
     assert decision.intent == CouponQueryIntent.ISSUE_HOWTO
     assert decision.product_name is None
+    assert decision.is_actionable is False
+
+
+@pytest.mark.parametrize(
+    "user_text",
+    [
+        "온라인 주문 없이 매장에서 쿠폰 적용돼?",
+        "다운받은 쿠폰 현장 결제할 때도 쓸 수 있어?",
+        "티스테이션닷컴 쿠폰 오프라인 결제 가능해?",
+    ],
+)
+def test_coupon_gate_routes_usage_policy_queries_to_support(user_text: str) -> None:
+    decision = decide_coupon_query_gate(user_text=user_text)
+
+    assert decision.intent == CouponQueryIntent.COUPON_USAGE_POLICY
+    assert decision.is_actionable is False
+
+
+@pytest.mark.parametrize(
+    "user_text",
+    [
+        "쿠폰 번호 어디에 등록해?",
+        "쿠폰 코드 입력은 어디서 해?",
+        "쿠폰 등록 방법 알려줘",
+    ],
+)
+def test_coupon_gate_routes_registration_policy_queries_to_support(user_text: str) -> None:
+    decision = decide_coupon_query_gate(user_text=user_text)
+
+    assert decision.intent == CouponQueryIntent.COUPON_REGISTRATION_POLICY
     assert decision.is_actionable is False
 
 
@@ -2037,7 +2385,7 @@ def test_owned_vehicle_selection_cta_is_detected_after_context_extraction() -> N
 
 
 def test_oe_replacement_guidance_explains_oe_re_before_vehicle_selection() -> None:
-    event = _build_oe_replacement_guidance_event(
+    event = build_oe_replacement_guidance_event(
         None,
         "내 차 살 때 끼워져 있던 타이어랑 똑같은 거 있어?",
         include_vehicle_selection=True,
@@ -2067,7 +2415,7 @@ def test_oe_replacement_guidance_does_not_recommend_vehicle_products_immediately
         },
     }
 
-    event = _build_oe_replacement_guidance_event(
+    event = build_oe_replacement_guidance_event(
         selected_vehicle,
         "내 차 제네시스 GV70이고 미쉐린 타이어 끼고 있었던 거 같은데, 동일한 상품 판매하고 있어?",
     )
@@ -2126,7 +2474,7 @@ def test_oe_replacement_same_product_without_brand_returns_none() -> None:
 
 
 def test_oe_replacement_same_product_without_brand_prompts_for_brand() -> None:
-    event = _build_oe_replacement_same_product_brand_prompt_event("235/55R19")
+    event = build_oe_replacement_same_product_brand_prompt_event("235/55R19")
 
     assert event["assistant_response_source"] == "code_oe_replacement_same_product_brand_prompt"
     assert "브랜드를 알려주시면" in event["data"]["assistantResponse"]
@@ -2457,7 +2805,7 @@ def test_parse_requested_reservation_date_supports_relative_weekday_expression()
 
 
 def test_store_confirmation_reply_reuses_confirmed_candidate_from_quickreply_template() -> None:
-    store_name, region = TStationChatServiceV2._resolve_store_followup_from_quickreply_template(
+    store_name, region = resolve_store_followup_from_quickreply_template(
         "네, 맞아요",
         {
             "template": "quickReply",
@@ -2478,7 +2826,7 @@ def test_store_confirmation_reply_reuses_confirmed_candidate_from_quickreply_tem
 
 
 def test_store_region_confirmation_reply_reuses_suggested_region_from_quickreply_template() -> None:
-    store_name, region = TStationChatServiceV2._resolve_store_followup_from_quickreply_template(
+    store_name, region = resolve_store_followup_from_quickreply_template(
         "네, 고성 지역으로 검색",
         {
             "template": "quickReply",
@@ -5276,9 +5624,10 @@ def test_recent_single_store_context_not_reused_when_current_turn_names_store() 
     ]
     regex_slots = ConversationSlots.extract_from_user_text("벤투스 S2 AS 2254517 4개 모란점 재고 확인해줘")
 
-    assert regex_slots.pending_intent == "stock"
+    assert regex_slots.pending_intent is None
+    assert regex_slots.intent_candidate == "stock"
     assert regex_slots.shop_name == "모란점"
-    assert TStationChatServiceV2._resolve_recent_single_shop_id_from_context(prev_tool_data) == "F00409"
+    assert resolve_recent_single_shop_id_from_context(prev_tool_data) == "F00409"
     assert _is_new_store_name_anchor_for_current_turn(regex_slots.shop_name, None, "F00409") is True
 
 
@@ -5485,7 +5834,7 @@ def test_size_only_store_availability_continuation_requires_availability_context
 
 
 def test_store_availability_size_followup_quantity_prompt_invariant() -> None:
-    event = _build_store_availability_quantity_prompt_event(
+    event = build_store_availability_quantity_prompt_event(
         product_keyword="벤투스 에어S",
         tire_size="235/55R19",
         store_name="티스테이션 판교점",
@@ -5506,6 +5855,64 @@ def test_store_availability_size_followup_quantity_prompt_invariant() -> None:
     assert event["data"]["metadata"]["goods_no"] == "G000000319593"
     assert event["data"]["metadata"]["tireSize"] == "235/55R19"
     assert event["data"]["metadata"]["tire_size"] == "235/55R19"
+
+
+def test_store_availability_followup_action_prompts_for_quantity_first() -> None:
+    action = decide_store_availability_followup_action(
+        product_keyword="벤투스 에어S",
+        followup_context={
+            "goods_no": "G000000319593",
+            "tire_size": "235/55R19",
+            "ord_qty": None,
+            "store_name": "티스테이션 판교점",
+            "requested_day_label": "오늘",
+        },
+    )
+
+    assert action["action"] == "prompt_quantity"
+    assert action["prompt_kwargs"]["product_keyword"] == "벤투스 에어S"
+    assert action["prompt_kwargs"]["store_name"] == "티스테이션 판교점"
+
+
+def test_store_availability_followup_action_requires_store_before_preview() -> None:
+    action = decide_store_availability_followup_action(
+        product_keyword="벤투스 에어S",
+        followup_context={
+            "goods_no": "G000000319593",
+            "tire_size": "235/55R19",
+            "ord_qty": 4,
+            "store_name": None,
+            "requested_day_label": "오늘",
+        },
+    )
+
+    assert action["action"] == "prompt_store"
+    assert action["prompt_kwargs"]["store_name"] is None
+
+
+def test_store_availability_followup_action_runs_preview_with_context() -> None:
+    action = decide_store_availability_followup_action(
+        product_keyword="벤투스 에어S",
+        followup_context={
+            "goods_no": "G000000319593",
+            "tire_size": "235/55R19",
+            "ord_qty": 4,
+            "store_name": "티스테이션 판교점",
+            "requested_day_label": "오늘",
+            "preview_input": {
+                "goods_no": "G000000319593",
+                "ord_qty": 4,
+                "store_nm": "티스테이션 판교점",
+                "include_price": True,
+                "requested_cal_day": "20260626",
+            },
+        },
+    )
+
+    assert action["action"] == "run_preview"
+    assert action["preview_input"]["requested_cal_day"] == "20260626"
+    assert action["store_name"] == "티스테이션 판교점"
+    assert action["ord_qty"] == 4
 
 
 def test_store_availability_continuation_recovers_recent_single_store_name() -> None:
@@ -6746,6 +7153,81 @@ def test_coupon_gate_recent_context_includes_assistant_product_metadata() -> Non
     assert "215/55R17" in context
     assert "G000000123456" in context
     assert "cheapest_final_prc" in context
+
+
+def test_coupon_gate_recent_context_ignores_blocked_transaction_guard_template_data() -> None:
+    context = _recent_coupon_context_for_policy(
+        [
+            {
+                "role": "assistant",
+                "content": "다이나프로 HPX 255/45R20 2개 구매를 진행하려면 장착 매장이 필요해요.",
+                "template_data": {
+                    "template": "quickReply",
+                    "source_domain": "transaction",
+                    "assistant_response_source": "code_turn_contract_missing_slot_prompt",
+                    "contract_gate_result": "blocked",
+                    "data": {
+                        "assistantResponse": "다이나프로 HPX 255/45R20 2개 구매를 진행하려면 장착 매장이 필요해요.",
+                        "metadata": {
+                            "productName": "다이나프로 HPX",
+                            "tireSize": "255/45R20",
+                            "goodsNo": "G000000317666",
+                            "contract_gate_result": "blocked",
+                        },
+                    },
+                },
+            },
+            {"role": "user", "content": "쿠폰은 뭐가 적용돼?"},
+        ]
+    )
+
+    assert "[이전 선택된 상품 데이터]" not in context
+    assert "G000000317666" not in context
+
+
+def test_enrich_messages_with_template_data_skips_blocked_contract_guard_template() -> None:
+    messages = [
+        {"role": "assistant", "content": "다이나프로 HPX 255/45R20 2개 구매를 진행하려면 장착 매장이 필요해요."},
+    ]
+
+    enriched = _enrich_messages_with_template_data(
+        messages,
+        session_id="session",
+        assistant_template_messages=[
+            {
+                "role": "assistant",
+                "content": "다이나프로 HPX 255/45R20 2개 구매를 진행하려면 장착 매장이 필요해요.",
+                "template_data": {
+                    "template": "quickReply",
+                    "source_domain": "transaction",
+                    "assistant_response_source": "code_turn_contract_missing_slot_prompt",
+                    "contract_gate_result": "blocked",
+                    "data": {
+                        "assistantResponse": "다이나프로 HPX 255/45R20 2개 구매를 진행하려면 장착 매장이 필요해요.",
+                        "metadata": {
+                            "productName": "다이나프로 HPX",
+                            "tireSize": "255/45R20",
+                            "goodsNo": "G000000317666",
+                            "contract_gate_result": "blocked",
+                        },
+                    },
+                },
+            }
+        ],
+    )
+
+    assert "[이전 선택된 상품 데이터]" not in enriched[0]["content"]
+    assert _template_data_from_assistant_message(
+        {
+            "role": "assistant",
+            "template_data": {
+                "template": "quickReply",
+                "assistant_response_source": "code_turn_contract_missing_slot_prompt",
+                "contract_gate_result": "blocked",
+                "data": {"metadata": {"contract_gate_result": "blocked"}},
+            },
+        }
+    ) is None
 
 
 def test_recent_product_set_ranking_response_metadata_is_canonicalized() -> None:
@@ -8751,7 +9233,7 @@ def test_recent_single_store_context_can_carry_shop_id_from_detail_input() -> No
         }
     ]
 
-    assert TStationChatServiceV2._resolve_recent_single_shop_id_from_context(prev_tool_data) == "F07782"
+    assert resolve_recent_single_shop_id_from_context(prev_tool_data) == "F07782"
 
 
 def test_recent_single_store_context_can_carry_shop_id_from_single_store_list() -> None:
@@ -8769,7 +9251,7 @@ def test_recent_single_store_context_can_carry_shop_id_from_single_store_list() 
         }
     ]
 
-    assert TStationChatServiceV2._resolve_recent_single_shop_id_from_context(prev_tool_data) == "F07782"
+    assert resolve_recent_single_shop_id_from_context(prev_tool_data) == "F07782"
 
 
 def test_recent_single_store_context_does_not_guess_from_multi_store_list() -> None:
@@ -8783,7 +9265,7 @@ def test_recent_single_store_context_does_not_guess_from_multi_store_list() -> N
         }
     ]
 
-    assert TStationChatServiceV2._resolve_recent_single_shop_id_from_context(prev_tool_data) is None
+    assert resolve_recent_single_shop_id_from_context(prev_tool_data) is None
 
 
 def test_recent_store_name_can_be_carried_from_assistant_summary() -> None:
@@ -8798,7 +9280,7 @@ def test_recent_store_name_can_be_carried_from_assistant_summary() -> None:
         }
     ]
 
-    assert TStationChatServiceV2._resolve_recent_store_name_from_messages(messages) == "티스테이션 한남점"
+    assert resolve_recent_store_name_from_messages(messages) == "티스테이션 한남점"
 
 
 def test_store_contact_guidance_skips_without_store_identity() -> None:
@@ -8818,7 +9300,7 @@ def test_store_contact_guidance_skips_without_store_identity() -> None:
 
 
 def test_vehicle_auto_select_matches_exact_plate_from_listcar() -> None:
-    selected = _select_vehicle_from_listcar_event(
+    selected = resolve_vehicle_selection_from_listcar_event(
         "내 차 번호 205소 4214 알지? 맞는 타이어 보여줘.",
         {
             "listCar": [
@@ -8837,7 +9319,7 @@ def test_vehicle_auto_select_matches_exact_plate_from_listcar() -> None:
 
 
 def test_vehicle_auto_select_does_not_hijack_unregistered_plate() -> None:
-    selected = _select_vehicle_from_listcar_event(
+    selected = resolve_vehicle_selection_from_listcar_event(
         "내 차 번호 999가9999 알지? 맞는 타이어 보여줘.",
         {
             "listCar": [
@@ -9141,6 +9623,109 @@ def test_high_confidence_support_policy_beats_purchase_keyword_action_mode() -> 
     assert slots.availability_context["dormant_purchase_context"]["source"] == (
         "pre_policy_context:support_policy_answer"
     )
+
+
+def test_promotion_gift_policy_beats_stale_purchase_context_without_high_confidence() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000309780",
+        tire_size="225/45R17",
+        ord_qty=4,
+        shop_name="판교점",
+        pending_intent="order",
+        goal_type="place_order",
+    )
+    routing_result = MultiAgentDomain(
+        reason="promotion gift policy question during order flow",
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        execution_plan=["support:promotion_gift_policy"],
+        user_behavior="asking gift policy during an order flow",
+        flow="support policy answer",
+        claim_check_type="none",
+        complaint_scope="none",
+        agent_prompt_profile="full",
+        policy_intent="promotion_gift_policy",
+        planner_confidence=0.61,
+    )
+
+    action_mode = _current_turn_action_mode(
+        user_text="주문 선착순으로 사은품 주는 이벤트가 진행중일때 선착순 끝났으면 결제해도 사은품 안줘?",
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        routing_result=routing_result,
+        regex_slots=ConversationSlots(pending_intent="order"),
+        merged_slots=slots,
+        explicit_override_reason="explicit_current_turn_purchase",
+        resume_source="none",
+    )
+    context_state = _context_state_for_action(action_mode=action_mode, resume_source="none", slots=slots)
+    if action_mode in {"purchase_continuation", "stock_check", "booking_continuation"}:
+        _stage_pending_order_context(slots, source=f"pre_policy_context:{context_state}")
+    else:
+        _stage_dormant_transaction_context(slots, source=f"pre_policy_context:{action_mode}")
+        _mask_dormant_transaction_action_slots(slots, source=f"pre_policy_context:{action_mode}")
+
+    assert action_mode == "support_policy_answer"
+    assert context_state == "dormant"
+    assert slots.pending_intent is None
+    assert slots.goal_type is None
+    assert slots.ord_qty is None
+    assert "dormant_purchase_context" in (slots.availability_context or {})
+
+
+@pytest.mark.parametrize(
+    ("user_text", "execution_plan", "policy_intent"),
+    [
+        (
+            "예약한 매장에 왔는데 주문한 거랑 다른 타이어가 왔어",
+            ["support:tstation_service_complaint"],
+            "none",
+        ),
+        (
+            "해외 비자카드로 결제하려는데 본인인증이 안 넘어가",
+            ["support:payment_error_troubleshooting"],
+            "payment_error_troubleshooting",
+        ),
+    ],
+)
+def test_support_policy_action_mode_does_not_resume_purchase_from_regex_candidate(
+    user_text: str,
+    execution_plan: list[str],
+    policy_intent: str,
+) -> None:
+    regex_slots = ConversationSlots.extract_from_user_text(user_text)
+    slots = ConversationSlots(
+        goods_no="G000000309780",
+        tire_size="225/45R17",
+        ord_qty=4,
+        shop_name="판교점",
+        pending_intent="order",
+        goal_type="place_order",
+    )
+    routing_result = MultiAgentDomain(
+        reason="support policy question during purchase flow",
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        execution_plan=execution_plan,
+        user_behavior="support question",
+        flow="support policy answer",
+        claim_check_type="none",
+        complaint_scope="none",
+        agent_prompt_profile="full",
+        policy_intent=policy_intent,
+        planner_confidence=0.8,
+    )
+
+    action_mode = _current_turn_action_mode(
+        user_text=user_text,
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        routing_result=routing_result,
+        regex_slots=regex_slots,
+        merged_slots=slots,
+        explicit_override_reason=None,
+        resume_source="none",
+    )
+
+    assert regex_slots.pending_intent is None
+    assert action_mode == "support_policy_answer"
+    assert _context_state_for_action(action_mode=action_mode, resume_source="none", slots=slots) == "dormant"
 
 
 def test_action_mode_resumes_stored_order_context_only_with_explicit_resume_anchor() -> None:
@@ -9466,6 +10051,11 @@ def test_delivery_policy_force_routes_to_support() -> None:
     assert result is None
 
 
+@pytest.mark.parametrize("user_text", ["이벤트 목록 보여줘", "기획전 보여줘"])
+def test_event_and_deal_list_queries_do_not_force_discovery_keyword_route(user_text: str) -> None:
+    assert StreamingMultiAgentCoordinator._force_keyword_routing(user_text) is None
+
+
 def test_generic_application_question_does_not_force_route_to_pickup_support() -> None:
     result = StreamingMultiAgentCoordinator._force_keyword_routing("신청 방법 안내해줘")
 
@@ -9641,7 +10231,7 @@ def test_rule_based_classify_routes_default_tbot_shopping_cta_to_discovery() -> 
 
 
 def test_vehicle_auto_select_matches_unique_owned_model_from_listcar() -> None:
-    selected = _select_vehicle_from_listcar_event(
+    selected = resolve_vehicle_selection_from_listcar_event(
         "내 gv70 에 맞는 타이어 추천",
         {
             "listCar": [
@@ -9687,7 +10277,7 @@ def test_vehicle_selection_slot_values_include_vehicle_identifiers() -> None:
 
 
 def test_staggered_vehicle_selection_event_prompts_for_front_or_rear_size() -> None:
-    event = _build_staggered_vehicle_tire_selection_event(
+    event = build_staggered_vehicle_tire_selection_event(
         {
             "car": {"licensePlate": "56모2162", "info": "BMW 3시리즈 그란 투리스모(6세대)"},
             "meta": {
@@ -9705,8 +10295,8 @@ def test_staggered_vehicle_selection_event_prompts_for_front_or_rear_size() -> N
 
 
 def test_staggered_prompt_is_not_allowed_for_support_originated_listcar() -> None:
-    assert _listcar_allows_staggered_tire_prompt({"template": "listCar", "source_domain": "support"}) is False
-    assert _listcar_allows_staggered_tire_prompt({"template": "listCar", "source_domain": "discovery"}) is True
+    assert listcar_allows_staggered_tire_prompt({"template": "listCar", "source_domain": "support"}) is False
+    assert listcar_allows_staggered_tire_prompt({"template": "listCar", "source_domain": "discovery"}) is True
 
 
 def test_manual_tire_size_chip_gets_deterministic_prompt() -> None:
@@ -9721,9 +10311,9 @@ def test_manual_tire_size_chip_gets_deterministic_prompt() -> None:
         },
     }
 
-    assert _is_manual_tire_size_input_selection("다른 사이즈 입력", latest_quickreply) is True
+    assert is_manual_tire_size_input_selection("다른 사이즈 입력", latest_quickreply) is True
 
-    event = _build_manual_tire_size_input_event()
+    event = build_manual_tire_size_input_event()
 
     assert event["template"] == "quickReply"
     assert "타이어 사이즈를 직접 입력" in event["data"]["assistantResponse"]
@@ -9742,7 +10332,7 @@ def test_vehicle_tire_position_selection_resolves_quickreply_chip_to_front_size(
         },
     }
 
-    resolved = _resolve_vehicle_tire_position_selection("앞바퀴사이즈", slots, latest_quickreply)
+    resolved = resolve_vehicle_tire_position_selection("앞바퀴사이즈", slots, latest_quickreply)
 
     assert resolved == "225/50R18"
 
@@ -9750,7 +10340,7 @@ def test_vehicle_tire_position_selection_resolves_quickreply_chip_to_front_size(
 def test_vehicle_tire_position_selection_resolves_rear_recommend_followup() -> None:
     slots = SimpleNamespace(tire_size_front="225/50R18", tire_size_rear="255/50R18")
 
-    resolved = _resolve_vehicle_tire_position_selection("뒤바퀴도 추천해줘", slots, None)
+    resolved = resolve_vehicle_tire_position_selection("뒤바퀴도 추천해줘", slots, None)
 
     assert resolved == "255/50R18도 추천해줘"
 
@@ -9758,7 +10348,7 @@ def test_vehicle_tire_position_selection_resolves_rear_recommend_followup() -> N
 def test_vehicle_tire_position_selection_preserves_transactional_intent_text() -> None:
     slots = SimpleNamespace(tire_size_front="225/50R18", tire_size_rear="255/50R18")
 
-    resolved = _resolve_vehicle_tire_position_selection("전륜 가격 알려줘", slots, None)
+    resolved = resolve_vehicle_tire_position_selection("전륜 가격 알려줘", slots, None)
 
     assert resolved == "225/50R18 가격 알려줘"
 
@@ -9770,7 +10360,7 @@ def test_staggered_selected_tire_size_context_detects_single_axle_size() -> None
         tire_size_rear="255/50R18",
     )
 
-    assert _is_staggered_selected_tire_size_context(slots) is True
+    assert is_staggered_selected_tire_size_context(slots) is True
 
 
 def test_staggered_tire_quantity_limit_event_offers_only_one_or_two() -> None:
@@ -9780,7 +10370,7 @@ def test_staggered_tire_quantity_limit_event_offers_only_one_or_two() -> None:
         tire_size_rear="255/50R18",
     )
 
-    event = _build_staggered_tire_quantity_limit_event(slots)
+    event = build_staggered_tire_quantity_limit_event(slots)
 
     assert event is not None
     assert event["template"] == "quickReply"
@@ -9795,7 +10385,7 @@ def test_order_quantity_prompt_for_staggered_vehicle_offers_only_one_or_two() ->
         tire_size_rear="255/50R18",
     )
 
-    event = _build_order_quantity_prompt_event(slots)
+    event = build_order_quantity_prompt_event(slots)
 
     assert event["template"] == "quickReply"
     assert "앞바퀴 **225/50R18** 기준으로 몇 개 구매" in event["data"]["assistantResponse"]
@@ -9916,7 +10506,7 @@ def test_datepick_metadata_recovers_order_store_slots() -> None:
         },
     }
 
-    values = TStationChatServiceV2._datepick_slot_values_from_data(datepick)
+    values = datepick_slot_values_from_data(datepick)
 
     assert values == {
         "shop_id": "F00405",
@@ -9943,7 +10533,7 @@ def test_datepick_selection_recovers_reservation_date_and_hour() -> None:
         "metadata": {"shopId": "F00405", "shopName": "티스테이션 경포점"},
     }
 
-    values = TStationChatServiceV2._datepick_slot_values_from_data(
+    values = datepick_slot_values_from_data(
         datepick,
         user_text="2026년 6월 24일 (수)\n13:00",
     )
@@ -9954,7 +10544,7 @@ def test_datepick_selection_recovers_reservation_date_and_hour() -> None:
 
 
 def test_datepick_metadata_recovery_uses_template_boundary_alias_normalization() -> None:
-    values = TStationChatServiceV2._datepick_slot_values_from_data({
+    values = datepick_slot_values_from_data({
         "metadata": {
             "storeId": "F00405",
             "storeName": "티스테이션 경포점",
@@ -9993,7 +10583,7 @@ def test_datepick_template_recovery_candidate_uses_recent_assistant_template_mar
     ]
 
     template = _datepick_template_recovery_candidate_from_messages(messages)
-    values = TStationChatServiceV2._datepick_slot_values_from_data(template)
+    values = datepick_slot_values_from_data(template)
 
     assert template is not None
     assert values is not None
@@ -10208,11 +10798,11 @@ def test_preview_location_selection_recovers_transaction_slots() -> None:
         },
     }
 
-    selection = TStationChatServiceV2._resolve_store_selection_from_history_template(
+    selection = resolve_store_selection_from_history_template(
         "티스테이션 영등포점",
         latest_location,
     )
-    values = TStationChatServiceV2._preview_location_slot_values_from_selection(selection)
+    values = preview_location_slot_values_from_selection(selection)
 
     assert values == {
         "shop_id": "C01306",
@@ -10246,17 +10836,17 @@ def test_preview_location_selection_uses_template_boundary_alias_normalization()
     }
 
     assert (
-        TStationChatServiceV2._resolve_shop_id_from_history_template(
+        resolve_shop_id_from_history_template(
             "이 매장 선택",
             latest_location,
         )
         == "C01306"
     )
-    selection = TStationChatServiceV2._resolve_store_selection_from_history_template(
+    selection = resolve_store_selection_from_history_template(
         "이 매장 선택",
         latest_location,
     )
-    values = TStationChatServiceV2._preview_location_slot_values_from_selection(selection)
+    values = preview_location_slot_values_from_selection(selection)
 
     assert values == {
         "shop_id": "C01306",
@@ -10271,7 +10861,7 @@ def test_preview_location_selection_uses_template_boundary_alias_normalization()
 
 
 def test_tool_store_selection_uses_tool_boundary_alias_normalization() -> None:
-    shop_id = TStationChatServiceV2._resolve_shop_id_from_selection(
+    shop_id = resolve_shop_id_from_selection(
         "티스테이션 영등포점",
         [
             {
@@ -10290,7 +10880,7 @@ def test_tool_store_selection_uses_tool_boundary_alias_normalization() -> None:
 
 
 def test_recent_product_context_goods_no_uses_tool_boundary_alias_normalization() -> None:
-    goods_no = TStationChatServiceV2._resolve_goods_no_from_recent_product_context(
+    goods_no = resolve_goods_no_from_recent_product_context(
         [
             {
                 "tool": "search_product_tool",
@@ -11309,7 +11899,7 @@ def test_confirmed_product_slot_values_from_cart_quickreply_metadata_includes_qu
         },
     }
 
-    assert TStationChatServiceV2._confirmed_product_slot_values_from_event(event) == {
+    assert confirmed_product_slot_values_from_event(event) == {
         "goods_no": "G000000309783",
         "ord_qty": 2,
         "tire_model": "벤투스 S2 AS",
@@ -11330,7 +11920,7 @@ def test_history_vehicle_selection_does_not_auto_resolve_staggered_front_size() 
         },
     }
 
-    resolved = TStationChatServiceV2._resolve_tire_size_from_history_template("56모2162", template)
+    resolved = resolve_tire_size_from_history_template("56모2162", template)
 
     assert resolved is None
 
@@ -11349,7 +11939,7 @@ def test_history_vehicle_selection_still_resolves_selected_vehicle_for_staggered
         },
     }
 
-    resolved = TStationChatServiceV2._resolve_vehicle_from_history_template("56모2162", template)
+    resolved = resolve_vehicle_from_history_template("56모2162", template)
 
     assert resolved is not None
     assert resolved["meta"]["carNo"] == "56모2162"
@@ -11371,7 +11961,7 @@ def test_history_vehicle_selection_resolves_ordinal_pick() -> None:
         },
     }
 
-    resolved = TStationChatServiceV2._resolve_vehicle_from_history_template("2번", template)
+    resolved = resolve_vehicle_from_history_template("2번", template)
 
     assert resolved is not None
     assert resolved["meta"]["carNo"] == "56모2162"
@@ -11393,7 +11983,7 @@ def test_history_tire_size_resolution_supports_ordinal_pick_for_same_size_vehicl
         },
     }
 
-    resolved = TStationChatServiceV2._resolve_tire_size_from_history_template("2)", template)
+    resolved = resolve_tire_size_from_history_template("2)", template)
 
     assert resolved == "225/45R17"
 
@@ -11413,7 +12003,7 @@ def test_history_vehicle_selection_resolves_model_name_pick() -> None:
         },
     }
 
-    resolved = TStationChatServiceV2._resolve_vehicle_from_history_template("GV70", template)
+    resolved = resolve_vehicle_from_history_template("GV70", template)
 
     assert resolved is not None
     assert resolved["meta"]["carNo"] == "205소4214"
@@ -11434,7 +12024,7 @@ def test_history_vehicle_selection_model_name_pick_requires_unique_match() -> No
         },
     }
 
-    resolved = TStationChatServiceV2._resolve_vehicle_from_history_template("제네시스", template)
+    resolved = resolve_vehicle_from_history_template("제네시스", template)
 
     assert resolved is None
 
@@ -11454,7 +12044,7 @@ def test_chip_vehicle_selection_resolves_matching_candidate_from_recent_listcar(
         },
     }
 
-    resolved = TStationChatServiceV2._resolve_vehicle_from_chip_context(
+    resolved = resolve_vehicle_ui_selection_from_chip_context(
         {
             "cta_action": "select_vehicle_candidate",
             "source_intent": "vehicle_tire_size_lookup",
@@ -11487,7 +12077,7 @@ def test_chip_vehicle_selection_rejects_candidate_not_present_in_recent_listcar(
         },
     }
 
-    resolved = TStationChatServiceV2._resolve_vehicle_from_chip_context(
+    resolved = resolve_vehicle_ui_selection_from_chip_context(
         {
             "cta_action": "select_vehicle_candidate",
             "metadata": {
@@ -11502,7 +12092,7 @@ def test_chip_vehicle_selection_rejects_candidate_not_present_in_recent_listcar(
 
 
 def test_chip_vehicle_selection_rewrites_tire_size_lookup_followup_text() -> None:
-    rewritten = TStationChatServiceV2._rewrite_vehicle_selection_user_text(
+    rewritten = rewrite_vehicle_selection_user_text(
         "61거1836",
         {
             "car": {"licensePlate": "61거1836"},
@@ -11575,6 +12165,167 @@ def test_vehicle_selection_ui_action_context_rewrites_trace_and_slots() -> None:
     assert trace_metadata["contract_intent_before_router"] == "vehicle_tire_size_lookup"
     assert trace_metadata["final_contract_intent"] == "vehicle_tire_size_lookup"
     assert trace_metadata["slots_rewritten"] is True
+
+
+def test_prepare_ui_action_state_rewrites_vehicle_selection_before_routing() -> None:
+    slots = ConversationSlots(car_no="61거1836", tire_size="225/45R17")
+    latest_listcar_tmpl = {
+        "listCar": [{
+            "carNo": "14다5499",
+            "carNm": "그랜저",
+            "tireSize": "2255518",
+            "tireSizeRe": "2255518",
+        }],
+        "metadata": [{
+            "ctaAction": "select_vehicle_candidate",
+            "source_intent": "vehicle_tire_size_lookup",
+            "expected_contract_intent": "vehicle_tire_size_lookup",
+            "carNo": "14다5499",
+            "carNm": "그랜저",
+            "tireSize": "2255518",
+            "tireSizeRe": "2255518",
+        }],
+    }
+
+    prepared = prepare_ui_action_state(
+        ui_action=None,
+        chip_context={
+            "cta_action": "select_vehicle_candidate",
+            "car_no": "14다5499",
+            "tire_size_fr": "2255518",
+            "tire_size_re": "2255518",
+            "source_intent": "vehicle_tire_size_lookup",
+            "expected_contract_intent": "vehicle_tire_size_lookup",
+        },
+        request_slots=None,
+        latest_listcar_tmpl=latest_listcar_tmpl,
+        last_user_text="14다5499",
+        existing_slots=slots,
+        generic_slot_apply_fn=lambda base_slots, values: base_slots.apply_runtime_values(values, source="ui_action"),
+        vehicle_slot_apply_fn=_apply_vehicle_selection_slot_values,
+    )
+
+    assert prepared.selected_vehicle is not None
+    assert prepared.updated_slots.car_no == "14다5499"
+    assert prepared.updated_slots.tire_size == "225/55R18"
+    assert prepared.rewritten_user_text == "14다5499 차량 타이어 사이즈 알려줘"
+    assert prepared.trace_metadata["vehicle_selection_detected"] is True
+    assert prepared.trace_metadata["slots_rewritten"] is True
+
+
+def test_apply_history_vehicle_selection_state_updates_slots_and_recent_product_context() -> None:
+    slots = ConversationSlots(car_no="61거1836", tire_size=None, goods_no=None, tire_model=None)
+    latest_listcar_tmpl = {
+        "listCar": [{
+            "carNo": "14다5499",
+            "carNm": "그랜저",
+            "tireSize": "2255518",
+            "tireSizeRe": "2255518",
+        }],
+        "metadata": [{
+            "ctaAction": "select_vehicle_candidate",
+            "source_intent": "vehicle_tire_size_lookup",
+            "expected_contract_intent": "vehicle_tire_size_lookup",
+            "carNo": "14다5499",
+            "carNm": "그랜저",
+            "tireSize": "2255518",
+            "tireSizeRe": "2255518",
+            "carType": "SUV",
+        }],
+    }
+
+    state = apply_history_vehicle_selection_state(
+        last_user_text="14다5499",
+        latest_listcar_tmpl=latest_listcar_tmpl,
+        prev_tool_data=[{"tool": "search_product_tool"}],
+        merged_slots=slots,
+        existing_action_context=None,
+        trace_metadata={},
+        resolve_vehicle_from_history_template_fn=lambda user_text, template: resolve_vehicle_from_history_template(
+            user_text, {"template": "listCar", "data": template}
+        ),
+        resolve_tire_size_from_history_template_fn=resolve_tire_size_from_history_template,
+        vehicle_slot_apply_fn=_apply_vehicle_selection_slot_values,
+        recent_product_search_keyword_fn=lambda prev_tool_data: "다이나프로 HL3",
+        goods_no_from_recent_product_context_fn=lambda prev_tool_data, tire_size: "G000000309715",
+        build_vehicle_size_guidance_event_fn=lambda selected: {"template": "quickReply", "data": {"assistantResponse": "ok"}},
+        build_staggered_vehicle_tire_selection_event_fn=lambda selected: {"template": "quickReply", "data": {}},
+        listcar_allows_staggered_tire_prompt_fn=lambda template: True,
+        is_vehicle_tire_size_lookup_selection_fn=lambda selected: True,
+    )
+
+    assert state.selected_vehicle is not None
+    assert state.updated_slots.car_no == "14다5499"
+    assert state.updated_slots.tire_size == "225/55R18"
+    assert state.updated_slots.goods_no == "G000000309715"
+    assert state.updated_slots.tire_model == "다이나프로 HL3"
+    assert state.tire_size_resolved is True
+    assert state.goods_no_resolved is True
+    assert state.prompt_event is not None
+    assert state.trace_metadata["selection_source"] == "previous_listCar_candidate"
+
+
+def test_apply_history_product_selection_state_resolves_goods_no_and_trace_metadata() -> None:
+    slots = ConversationSlots(goods_no=None, tire_size="225/55R18")
+    prev_tool_data = [{
+        "tool": "search_product_tool",
+        "data": [
+            {"goods_no": "G000000309715", "goods_nm": "다이나프로 HL3", "tire_size_1": "225/55R18"},
+            {"goods_no": "G000000309716", "goods_nm": "벤투스 S2 AS", "tire_size_1": "225/55R18"},
+        ],
+    }]
+
+    state = apply_history_product_selection_state(
+        last_user_text="다이나프로 HL3 225/55R18",
+        prev_tool_data=prev_tool_data,
+        merged_slots=slots,
+        resolve_goods_no_from_selection_fn=lambda user_text, tool_data, current_tire_size: resolve_goods_no_from_selection(
+            user_text,
+            tool_data,
+            current_tire_size=current_tire_size,
+        ),
+    )
+
+    assert state.updated_slots.goods_no == "G000000309715"
+    assert state.goods_no_resolved is True
+    assert state.trace_metadata["selected_entity_type"] == "product"
+    assert state.trace_metadata["selected_entity_id"] == "G000000309715"
+    assert state.trace_metadata["selection_source"] == "previous_product_candidate"
+    assert state.trace_metadata["validation_result"] == "resolved_from_history"
+
+
+def test_apply_history_location_selection_state_promotes_preview_store_context() -> None:
+    slots = ConversationSlots(shop_id=None, order_context=None, pending_intent=None, goal_type=None)
+    latest_location_tmpl = {
+        "stores": [{"nameAddress": "티스테이션 판교점"}],
+        "metadata": [{
+            "shopId": "F00098",
+            "shopName": "티스테이션 판교점",
+            "sourceTool": "transaction_store_preview_tool",
+            "goodsNo": "G000000309715",
+            "tireSize": "225/55R18",
+            "ordQty": 4,
+        }],
+    }
+
+    state = apply_history_location_selection_state(
+        last_user_text="이 매장 선택",
+        latest_location_tmpl=latest_location_tmpl,
+        merged_slots=slots,
+        resolve_store_selection_from_history_template_fn=lambda user_text, template: resolve_store_selection_from_history_template(
+            user_text, {"template": "location", "data": template}
+        ),
+        preview_location_slot_values_from_selection_fn=preview_location_slot_values_from_selection,
+        selected_order_context_from_preview_values_fn=selected_order_context_from_preview_values,
+    )
+
+    assert state.updated_slots.shop_id == "F00098"
+    assert state.updated_slots.pending_intent == "order"
+    assert state.updated_slots.goal_type == "place_order"
+    assert state.selected_order_context is not None
+    assert state.selected_order_context["shop_id"] == "F00098"
+    assert state.trace_metadata["selected_entity_type"] == "store"
+    assert state.trace_metadata["selection_source"] == "previous_location_candidate"
 
 
 def test_vehicle_tire_size_lookup_ui_action_validation_blocks_store_and_purchase_chips() -> None:
@@ -11811,7 +12562,7 @@ def test_history_vehicle_selection_does_not_match_product_name_substring_to_vehi
         },
     }
 
-    resolved = TStationChatServiceV2._resolve_vehicle_from_history_template("벤투스 S2 AS 225/50R18", template)
+    resolved = resolve_vehicle_from_history_template("벤투스 S2 AS 225/50R18", template)
 
     assert resolved is None
 
@@ -11849,7 +12600,7 @@ def test_pending_vehicle_lookup_plate_is_reused_for_owner_only_followup() -> Non
 
 
 def test_vehicle_auto_select_prefers_exact_vehicle_tokens_over_loose_overlap() -> None:
-    selected = _select_vehicle_from_listcar_event(
+    selected = resolve_vehicle_selection_from_listcar_event(
         "내 차 BMW 3시리즈 GT 320d 이건데 전/후륜 규격이 다른게 있던데 뭘로 그럼 사이즈를 봐야해..?",
         {
             "listCar": [
@@ -11876,7 +12627,7 @@ def test_vehicle_auto_select_prefers_exact_vehicle_tokens_over_loose_overlap() -
 
 
 def test_vehicle_auto_select_keeps_listcar_when_model_match_is_ambiguous() -> None:
-    selected = _select_vehicle_from_listcar_event(
+    selected = resolve_vehicle_selection_from_listcar_event(
         "내 gv70 에 맞는 타이어 추천",
         {
             "listCar": [
@@ -11925,8 +12676,8 @@ def test_recent_product_search_keyword_is_recovered_after_vehicle_selection() ->
         }
     ]
 
-    assert TStationChatServiceV2._resolve_recent_product_search_keyword(prev_tool_data) == "옵티모"
-    assert TStationChatServiceV2._resolve_goods_no_from_recent_product_context(prev_tool_data, "235/55R19") is None
+    assert resolve_recent_product_search_keyword(prev_tool_data) == "옵티모"
+    assert resolve_goods_no_from_recent_product_context(prev_tool_data, "235/55R19") is None
 
 
 def test_recent_product_context_resolves_unique_goods_no_by_vehicle_selected_tire_size() -> None:
@@ -11943,13 +12694,13 @@ def test_recent_product_context_resolves_unique_goods_no_by_vehicle_selected_tir
     ]
 
     assert (
-        TStationChatServiceV2._resolve_goods_no_from_recent_product_context(prev_tool_data, "2355519")
+        resolve_goods_no_from_recent_product_context(prev_tool_data, "2355519")
         == "G2"
     )
 
 
 def test_purchase_cta_recovers_confirmed_product_from_quickreply_metadata() -> None:
-    slots = TStationChatServiceV2._confirmed_product_slot_values_for_purchase_cta(
+    slots = confirmed_product_slot_values_for_purchase_cta(
         latest_quickreply_tmpl={
             "assistantResponse": "다이나프로 HPX 설명입니다.",
             "metadata": {
@@ -11969,7 +12720,7 @@ def test_purchase_cta_recovers_confirmed_product_from_quickreply_metadata() -> N
 
 
 def test_purchase_cta_recovers_confirmed_product_from_snake_case_quickreply_metadata() -> None:
-    slots = TStationChatServiceV2._confirmed_product_slot_values_for_purchase_cta(
+    slots = confirmed_product_slot_values_for_purchase_cta(
         latest_quickreply_tmpl={
             "assistantResponse": "다이나프로 HPX 상품은 확인했어요. 장착 수량을 알려주세요.",
             "metadata": {
@@ -11989,7 +12740,7 @@ def test_purchase_cta_recovers_confirmed_product_from_snake_case_quickreply_meta
 
 
 def test_purchase_cta_recovers_confirmed_product_from_recent_price_tool_input() -> None:
-    slots = TStationChatServiceV2._confirmed_product_slot_values_for_purchase_cta(
+    slots = confirmed_product_slot_values_for_purchase_cta(
         prev_tool_data=[
             {
                 "tool": "get_final_price_tool",
@@ -12003,7 +12754,7 @@ def test_purchase_cta_recovers_confirmed_product_from_recent_price_tool_input() 
 
 
 def test_purchase_cta_does_not_pick_first_product_from_unselected_candidate_list() -> None:
-    slots = TStationChatServiceV2._confirmed_product_slot_values_for_purchase_cta(
+    slots = confirmed_product_slot_values_for_purchase_cta(
         prev_tool_data=[
             {
                 "tool": "get_products_recommendations_tool",
@@ -12092,7 +12843,7 @@ def test_goods_no_from_selection_resolves_size_only_compact_input() -> None:
         }
     ]
 
-    assert TStationChatServiceV2._resolve_goods_no_from_selection("2654021", prev_tool_data) == "G2"
+    assert resolve_goods_no_from_selection("2654021", prev_tool_data) == "G2"
 
 
 def test_goods_no_from_selection_uses_tool_boundary_aliases() -> None:
@@ -12106,7 +12857,7 @@ def test_goods_no_from_selection_uses_tool_boundary_aliases() -> None:
         }
     ]
 
-    assert TStationChatServiceV2._resolve_goods_no_from_selection("2654021", prev_tool_data) == "G2"
+    assert resolve_goods_no_from_selection("2654021", prev_tool_data) == "G2"
 
 
 @pytest.mark.parametrize("text", ["첫번째 상품 가격 알려줘", "첫 번째 상품 가격 알려줘", "1번째 상품 가격"])
@@ -12121,7 +12872,7 @@ def test_goods_no_from_selection_resolves_korean_first_ordinal(text: str) -> Non
         }
     ]
 
-    assert TStationChatServiceV2._resolve_goods_no_from_selection(text, prev_tool_data) == "G000000319573"
+    assert resolve_goods_no_from_selection(text, prev_tool_data) == "G000000319573"
 
 
 def test_goods_no_from_selection_resolves_last_ordinal_against_latest_product_list() -> None:
@@ -12141,7 +12892,7 @@ def test_goods_no_from_selection_resolves_last_ordinal_against_latest_product_li
         },
     ]
 
-    assert TStationChatServiceV2._resolve_goods_no_from_selection("마지막 상품 가격 알려줘", prev_tool_data) == (
+    assert resolve_goods_no_from_selection("마지막 상품 가격 알려줘", prev_tool_data) == (
         "GREC00000002"
     )
 
@@ -12157,7 +12908,7 @@ def test_goods_no_from_selection_keeps_ambiguous_pronoun_unresolved() -> None:
         }
     ]
 
-    assert TStationChatServiceV2._resolve_goods_no_from_selection("그거 가격 알려줘", prev_tool_data) is None
+    assert resolve_goods_no_from_selection("그거 가격 알려줘", prev_tool_data) is None
 
 
 def test_goods_no_from_selection_uses_stored_tire_size_for_name_only_pick() -> None:
@@ -12173,7 +12924,7 @@ def test_goods_no_from_selection_uses_stored_tire_size_for_name_only_pick() -> N
     ]
 
     assert (
-        TStationChatServiceV2._resolve_goods_no_from_selection(
+        resolve_goods_no_from_selection(
             "벤투스 S2 AS 선택",
             prev_tool_data,
             current_tire_size="225/55R17",
@@ -12908,7 +13659,7 @@ def test_goods_no_from_selection_does_not_guess_ambiguous_name_with_stored_tire_
     ]
 
     assert (
-        TStationChatServiceV2._resolve_goods_no_from_selection(
+        resolve_goods_no_from_selection(
             "벤투스 선택",
             prev_tool_data,
             current_tire_size="225/55R17",
@@ -12931,7 +13682,7 @@ def test_confirmed_product_slot_values_from_single_product_event() -> None:
         },
     }
 
-    assert TStationChatServiceV2._confirmed_product_slot_values_from_event(event) == {
+    assert confirmed_product_slot_values_from_event(event) == {
         "goods_no": "G2",
         "tire_model": "벤투스 S1 에보 Z",
         "tire_size": "265/40R21",
@@ -12955,7 +13706,7 @@ def test_confirmed_product_slot_values_from_product_description_quickreply_event
         },
     }
 
-    assert TStationChatServiceV2._confirmed_product_slot_values_from_event(event) == {
+    assert confirmed_product_slot_values_from_event(event) == {
         "goods_no": "G000000309783",
         "tire_model": "벤투스 S2 AS",
         "tire_size": "225/45R17",
@@ -12974,7 +13725,7 @@ def test_confirmed_product_slot_values_ignore_multi_product_event() -> None:
         },
     }
 
-    assert TStationChatServiceV2._confirmed_product_slot_values_from_event(event) is None
+    assert confirmed_product_slot_values_from_event(event) is None
 
 
 def test_requested_maintenance_focus_matches_tire_query() -> None:
@@ -14712,7 +15463,7 @@ def test_product_selection_prefers_latest_recommendation_context_over_stale_sear
         },
     ]
 
-    goods_no = TStationChatServiceV2._resolve_goods_no_from_selection(
+    goods_no = resolve_goods_no_from_selection(
         "다이나프로 HPX 235/55R19",
         prev_tool_data,
     )
@@ -15072,7 +15823,7 @@ def test_final_price_result_updates_payment_amount_with_cheapest_final_price_fir
 
 
 def test_preorder_template_payload_recovers_order_slots() -> None:
-    slot_values = TStationChatServiceV2._preorder_slot_values_from_data({
+    slot_values = preorder_slot_values_from_data({
         "assistantResponse": "주문 내용을 확인해 주세요.",
         "orderInfo": {
             "product": "벤투스 S2 AS 225/45R17",
@@ -15103,7 +15854,7 @@ def test_preorder_template_payload_recovers_order_slots() -> None:
 
 
 def test_preorder_template_payload_ignores_non_ready_card() -> None:
-    assert TStationChatServiceV2._preorder_slot_values_from_data({
+    assert preorder_slot_values_from_data({
         "orderInfo": {"storeName": "티스테이션 한남점"},
         "isReadyToOrder": False,
         "metadata": {"shopId": "F07782"},
@@ -15111,7 +15862,7 @@ def test_preorder_template_payload_ignores_non_ready_card() -> None:
 
 
 def test_preorder_template_payload_uses_template_boundary_alias_normalization() -> None:
-    slot_values = TStationChatServiceV2._preorder_slot_values_from_data({
+    slot_values = preorder_slot_values_from_data({
         "orderInfo": {
             "product": "벤투스 S2 AS 225/45R17",
             "quantity": "2",
@@ -15138,7 +15889,7 @@ def test_preorder_template_payload_uses_template_boundary_alias_normalization() 
 
 
 def test_preorder_template_payload_uses_metadata_product_name_only_through_boundary() -> None:
-    slot_values = TStationChatServiceV2._preorder_slot_values_from_data({
+    slot_values = preorder_slot_values_from_data({
         "orderInfo": {
             "quantity": "2",
             "storeName": "티스테이션 한남점",
@@ -15650,7 +16401,7 @@ def test_goods_no_from_product_template_selection_resolves_named_variant() -> No
     }
 
     assert (
-        _resolve_goods_no_from_product_template_selection("옵티모 H426 245/45R19", product_template)
+        resolve_goods_no_from_product_template_selection("옵티모 H426 245/45R19", product_template)
         == "G000000309961"
     )
 
@@ -15665,7 +16416,7 @@ def test_goods_no_from_product_template_selection_resolves_korean_ordinal() -> N
     }
 
     assert (
-        _resolve_goods_no_from_product_template_selection("첫번째 상품 가격 알려줘", product_template)
+        resolve_goods_no_from_product_template_selection("첫번째 상품 가격 알려줘", product_template)
         == "G000000319573"
     )
 
@@ -15680,14 +16431,14 @@ def test_goods_no_from_product_template_selection_uses_template_boundary_aliases
     }
 
     assert (
-        _resolve_goods_no_from_product_template_selection("옵티모 H426 245/45R19", product_template)
+        resolve_goods_no_from_product_template_selection("옵티모 H426 245/45R19", product_template)
         == "G000000309961"
     )
 
 
 def test_goods_no_from_single_template_event_uses_template_boundary_aliases() -> None:
     assert (
-        _goods_no_from_template_event({
+        goods_no_from_template_event({
             "data": {
                 "products": [{"productName": "옵티모 H426", "tireSize": "245/45R19", "goodsNo": "G000000309961"}],
             }
@@ -16356,7 +17107,7 @@ def test_preview_store_selection_promotes_selected_order_context_for_order_cta()
         "pending_intent": "stock",
         "goal_type": "store_with_stock",
     }
-    selected_context = _selected_order_context_from_preview_values(preview_values)
+    selected_context = selected_order_context_from_preview_values(preview_values)
     assert "goodsNo" not in selected_context
     assert "tireSize" not in selected_context
     assert "ordQty" not in selected_context
@@ -16371,7 +17122,7 @@ def test_preview_store_selection_promotes_selected_order_context_for_order_cta()
         order_context={"selected_order_context": selected_context},
     )
 
-    updated, values = _apply_selected_order_context_for_purchase_cta(slots)
+    updated, values = apply_selected_order_context_for_purchase_cta(slots)
 
     assert values["goods_no"] == "G000000312989"
     assert values["tire_size"] == "245/45R18"
@@ -16831,7 +17582,7 @@ def test_payment_error_troubleshooting_contract_requires_faq_first() -> None:
         template="quickReply",
         called_tools=["search_faq_hybrid_tool"],
         event_data={
-            "assistantResponse": "확인 가능한 FAQ 기준으로 팝업 차단 해제와 PC 웹 재시도를 먼저 확인해 주세요.",
+            "assistantResponse": "팝업 차단 해제와 PC 웹 재시도를 먼저 확인해 주세요.",
             "quickReplies": [{"label": "1:1 문의하기", "domain": "SUPPORT"}],
         },
         contract=contract,
@@ -17115,13 +17866,86 @@ def test_tire_condition_photo_policy_rejects_safety_assertion_after_faq() -> Non
 
     violations = response_contract_violations(
         template="quickReply",
-        called_tools=["search_faq_hybrid_tool"],
+        called_tools=[],
         assistant_response_text="사진상으로는 더 타도 돼 보여요.",
         contract=contract,
     )
     assert {
         "type": "tire_condition_photo_policy_safety_assertion_without_verification",
         "assistant_response_text": "사진상으로는 더 타도 돼 보여요.",
+        "severity": "error",
+    } in violations
+
+
+def test_tire_condition_photo_policy_requires_upload_capability_notice() -> None:
+    contract = build_turn_contract(
+        user_text="사진 보낼 테니까 더 타도 되는지 봐줘",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:tire_condition_photo_policy"],
+            policy_intent="tire_condition_photo_policy",
+        ),
+    )
+
+    violations = response_contract_violations(
+        template="quickReply",
+        user_text="사진 보낼 테니까 더 타도 되는지 봐줘",
+        called_tools=[],
+        assistant_response_text="타이어 상태는 사진만으로 안전 여부를 확정하기 어렵고, 점검 기준을 함께 확인해야 해요.",
+        contract=contract,
+    )
+
+    assert {
+        "type": "upload_capability_notice_missing",
+        "assistant_response_text": "타이어 상태는 사진만으로 안전 여부를 확정하기 어렵고, 점검 기준을 함께 확인해야 해요.",
+        "severity": "error",
+    } in violations
+
+
+def test_assurance_service_policy_contract_requires_core_conditions() -> None:
+    contract = build_turn_contract(
+        user_text="안심서비스랑 안심플러스 보상 조건이 정확히 어떻게 돼?",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:assurance_service_policy"],
+            policy_intent="assurance_service_policy",
+        ),
+    )
+
+    violations = response_contract_violations(
+        template="quickReply",
+        called_tools=["search_faq_hybrid_tool"],
+        assistant_response_text="보상이나 가입 가능 여부는 상세 조건과 적용 시점에 따라 달라질 수 있어요.",
+        contract=contract,
+    )
+
+    assert {
+        "type": "assurance_service_policy_missing_core_conditions",
+        "assistant_response_text": "보상이나 가입 가능 여부는 상세 조건과 적용 시점에 따라 달라질 수 있어요.",
+        "severity": "error",
+    } in violations
+
+
+def test_assurance_service_policy_contract_blocks_overstated_compensation() -> None:
+    contract = build_turn_contract(
+        user_text="안심서비스랑 안심플러스 보상 조건이 정확히 어떻게 돼?",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:assurance_service_policy"],
+            policy_intent="assurance_service_policy",
+        ),
+    )
+
+    violations = response_contract_violations(
+        template="quickReply",
+        called_tools=["search_faq_hybrid_tool"],
+        assistant_response_text="장착 후 1년 이내, 주행거리 16,000km 이내면 무조건 보상됩니다.",
+        contract=contract,
+    )
+
+    assert {
+        "type": "assurance_service_policy_overstated_compensation",
+        "assistant_response_text": "장착 후 1년 이내, 주행거리 16,000km 이내면 무조건 보상됩니다.",
         "severity": "error",
     } in violations
 
@@ -17201,6 +18025,100 @@ def test_partner_member_coupon_policy_contract_blocks_owned_coupon_tools() -> No
         and "issue_coupon_tool" in violation.get("forbidden_tools", [])
         for violation in violations
     )
+
+
+def test_coupon_usage_policy_contract_blocks_coupon_lookup_and_price_tools() -> None:
+    contract = build_turn_contract(
+        user_text="다운받은 쿠폰 현장 결제할 때도 쓸 수 있어?",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:coupon_usage_policy"],
+            policy_intent="coupon_usage_policy",
+        ),
+    )
+
+    assert contract.domain == "support"
+    assert contract.intent == "coupon_usage_policy"
+    assert contract.required_slots == ()
+    assert contract.blocking_required_slots == ()
+    assert "search_faq_hybrid_tool" in contract.allowed_tools
+    assert "get_my_coupons_tool" in contract.forbidden_tools
+    assert "get_coupon_applicable_products_tool" in contract.forbidden_tools
+    assert "get_final_price_tool" in contract.forbidden_tools
+
+
+def test_coupon_usage_support_policy_does_not_route_to_partner_or_owned_coupon_flow() -> None:
+    response_decision = decide_support_response(
+        intent="coupon_usage_policy",
+        user_text="다운받은 쿠폰 현장 결제할 때도 쓸 수 있어?",
+    )
+
+    assert response_decision.metadata["response_shape_key"] == "coupon_usage_policy"
+    assert response_decision.template == TemplateName.QUICK_REPLY
+    assert "route_to_partner_coupon_policy" in response_decision.forbidden_behaviors
+    assert "start_owned_coupon_lookup" in response_decision.forbidden_behaviors
+    assert "온라인 주문 전용 쿠폰이면 현장 결제에는 적용되지 않을 수 있다" in response_decision.assistant_guidance
+
+
+def test_promotion_gift_policy_contract_requires_partial_cancel_guidance_and_blocks_lookup_tools() -> None:
+    contract = build_turn_contract(
+        user_text="이벤트 적용 타이어 4개 구매하고 사은품 받았는데 뒤에 2개 취소하면 사은품 돌려줘야 해?",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:promotion_gift_policy"],
+            policy_intent="promotion_gift_policy",
+        ),
+    )
+
+    assert contract.domain == "support"
+    assert contract.intent == "promotion_gift_policy"
+    assert "search_faq_hybrid_tool" in contract.allowed_tools
+    assert "search_product_tool" in contract.forbidden_tools
+    assert "get_final_price_tool" in contract.forbidden_tools
+
+    missing_guidance = response_contract_violations(
+        template="quickReply",
+        called_tools=["search_faq_hybrid_tool"],
+        assistant_response_text="4개 구매 시 사은품이 지급되는 이벤트입니다.",
+        contract=contract,
+    )
+    assert {
+        "type": "promotion_gift_policy_missing_partial_cancel_guidance",
+        "severity": "error",
+        "assistant_response_text": "4개 구매 시 사은품이 지급되는 이벤트입니다.",
+        "response_shape_key": "",
+    } in missing_guidance
+
+    forbidden_lookup = response_contract_violations(
+        template="quickReply",
+        called_tools=["search_faq_hybrid_tool", "get_product_promotions_tool"],
+        assistant_response_text=(
+            "부분 취소로 이벤트나 프로모션 지급 기준 수량에 미달할 수 있어요. "
+            "기준 미달 시에는 사은품 반납이 필요할 수 있고, 반납이 어렵거나 조건에 따라 "
+            "사은품 상당 금액을 차감한 뒤 환불될 수 있어요. 최종 적용은 이벤트 상세 조건과 "
+            "실제 주문/취소 처리 기준에 따라 달라져요."
+        ),
+        contract=contract,
+    )
+    assert {
+        "type": "promotion_gift_policy_used_forbidden_lookup",
+        "severity": "error",
+        "called_tools": ["get_product_promotions_tool"],
+        "response_shape_key": "",
+    } in forbidden_lookup
+
+    good = response_contract_violations(
+        template="quickReply",
+        called_tools=["search_faq_hybrid_tool"],
+        assistant_response_text=(
+            "부분 취소로 이벤트나 프로모션 지급 기준 수량에 미달할 수 있어요. "
+            "기준 미달 시에는 사은품 반납이 필요할 수 있고, 반납이 어렵거나 조건에 따라 "
+            "사은품 상당 금액을 차감한 뒤 환불될 수 있어요. 최종 적용은 이벤트 상세 조건과 "
+            "실제 주문/취소 처리 기준에 따라 달라져요."
+        ),
+        contract=contract,
+    )
+    assert hard_contract_violations(good) == []
 
 
 def test_signup_coupon_guidance_contract_blocks_owned_coupon_tools() -> None:
@@ -17286,6 +18204,41 @@ def test_partner_member_coupon_support_policy_guides_access_not_owned_coupon_loo
     assert "제휴사 전용 URL" in response_decision.assistant_guidance
 
 
+def test_partner_member_coupon_policy_event_omits_chatbot_capability_disclaimer() -> None:
+    event = _build_partner_member_coupon_policy_event("제휴회원인데 할인 쿠폰이 왜 안 보여?")
+
+    response = event["data"]["assistantResponse"]
+
+    assert "제휴사 전용 URL" in response
+    assert "복지몰/임직원몰" in response
+    assert "챗봇에서는" not in response
+    assert "직접 확인하기 어려워서" not in response
+    assert "바로 보유 쿠폰이 없다고 단정할 수는 없어요" not in response
+
+
+def test_support_faq_policy_event_for_coupon_usage_filters_partner_only_summary() -> None:
+    event = _build_support_faq_policy_event(
+        "coupon_usage_policy",
+        "다운받은 쿠폰 현장 결제할 때도 쓸 수 있어?",
+        tool_result={
+            "status": "success",
+            "data": {
+                "items": [
+                    {
+                        "answer": "제휴사 전용 URL 또는 복지몰/임직원몰 같은 제휴 전용 경로로 접속해야 확인 가능해요."
+                    }
+                ]
+            },
+        },
+    )
+
+    assert event is not None
+    response = str(event["data"]["assistantResponse"])
+    assert "쿠폰은 쿠폰별 사용처와 유의사항에 따라 온라인 전용인지, 매장 사용이 가능한지 달라질 수 있어요." in response
+    assert "제휴사 전용 URL" not in response
+    assert "복지몰/임직원몰" not in response
+
+
 def test_signup_first_purchase_benefit_augments_faq_query() -> None:
     token = current_support_policy_intent.set("signup_first_purchase_benefit_policy")
     try:
@@ -17308,6 +18261,17 @@ def test_signup_coupon_guidance_augments_faq_query() -> None:
     assert "웰컴 쿠폰 있나요?" in query
     assert "all my T 회원 마케팅 수신 동의 5% 할인 쿠폰" in query
     assert "회원 가입 마케팅 활용 동의 쿠폰 혜택" in query
+
+
+def test_coupon_usage_policy_augments_faq_query() -> None:
+    token = current_support_policy_intent.set("coupon_usage_policy")
+    try:
+        query = _augment_faq_query_for_policy("다운받은 쿠폰 현장 결제할 때도 쓸 수 있어?")
+    finally:
+        current_support_policy_intent.reset(token)
+
+    assert "다운받은 쿠폰 현장 결제할 때도 쓸 수 있어?" in query
+    assert "쿠폰 사용처 온라인 전용 오프라인 매장 사용 현장 결제 유의사항" in query
 
 
 @pytest.mark.parametrize(
@@ -17392,6 +18356,12 @@ def test_support_prompt_contains_payment_error_faq_first_policy() -> None:
     assert "payment_error_troubleshooting" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
     assert "search_faq_hybrid_tool" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
     assert "transfer_to_qna_tool` 단독 호출 금지" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
+    assert "확인 가능한 FAQ 기준" not in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
+
+
+def test_support_prompt_contains_upload_capability_notice_for_photo_policy() -> None:
+    assert "사진/이미지/파일 업로드나 첨부" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
+    assert "업로드 확인이 불가능" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
 
 
 def test_support_prompt_contains_faq_before_escalation_policy_buckets() -> None:
@@ -18271,7 +19241,7 @@ def test_store_selection_resumes_pending_attribute_action_from_location_metadata
         verification_level="store_contact_required",
     )
 
-    selection = TStationChatServiceV2._resolve_store_selection_from_history_template(
+    selection = resolve_store_selection_from_history_template(
         "티스테이션 분당정자점",
         latest_location,
     )
@@ -18790,7 +19760,8 @@ def test_store_suffix_validation_keeps_real_store_contexts() -> None:
 
     assert business_hours.shop_name == "분당정자점"
     assert stock_lookup.shop_name == "한남점"
-    assert stock_lookup.pending_intent == "stock"
+    assert stock_lookup.pending_intent is None
+    assert stock_lookup.intent_candidate == "stock"
     assert night_service.shop_name == "정자점"
     assert extract_store_attribute_inquiry("정자점 야간정비 가능?") is not None
 
@@ -19570,7 +20541,7 @@ def test_preorder_slot_recovery_uses_ready_preorder_payload_as_execute_source() 
         },
     }
 
-    assert TStationChatServiceV2._preorder_slot_values_from_data(preorder) == {
+    assert preorder_slot_values_from_data(preorder) == {
         "goods_no": "G000000317682",
         "shop_id": "F00721",
         "shop_name": "티스테이션 판교점",
@@ -20380,7 +21351,7 @@ def test_logistics_earliest_install_cta_context_builds_preview_tool_input() -> N
         goal_type="store_with_stock",
     )
 
-    preview_input, missing_slot = _cta_preview_input_from_slots(
+    preview_input, missing_slot = cta_preview_input_from_slots(
         slots,
         cta_context={
             "goodsNo": "G000000317735",
@@ -20461,7 +21432,7 @@ def test_other_store_cta_preview_uses_previous_store_radius_and_excludes_current
         availability_intent="today_install",
     )
 
-    preview_input, missing_slot = _cta_preview_input_from_slots(
+    preview_input, missing_slot = cta_preview_input_from_slots(
         slots,
         cta_context={
             "goodsNo": "G000000317735",
@@ -21284,6 +22255,103 @@ def test_support_faq_policy_event_for_signup_uses_membership_cta() -> None:
     assert quick_replies[0]["label"] == "회원 혜택 확인"
     assert quick_replies[0]["url"] == CTAUrls.MEMBERSHIP_BENEFIT
     assert event["data"]["metadata"]["responseShapeKey"] == "signup_first_purchase_benefit_policy"
+
+
+def test_support_faq_policy_event_for_promotion_gift_appends_partial_cancel_invariant() -> None:
+    event = _build_support_faq_policy_event(
+        "promotion_gift_policy",
+        "이벤트 적용 타이어 4개 구매하고 사은품 받았는데 뒤에 2개 취소하면 사은품 돌려줘야 해?",
+        tool_result={
+            "status": "success",
+            "data": {"items": [{"answer": "4개 구매 시 사은품이 지급되는 이벤트입니다."}]},
+        },
+    )
+
+    assert event is not None
+    response = str(event["data"]["assistantResponse"])
+    assert "4개 구매 시 사은품이 지급되는 이벤트입니다." in response
+    assert "부분 취소로 이벤트나 프로모션 지급 기준 수량에 미달할 수 있어요." in response
+    assert "사은품 반납이 필요할 수 있고" in response
+    assert "사은품 상당 금액을 차감한 뒤 환불될 수 있어요." in response
+    assert "이벤트 상세 조건과 실제 주문/취소 처리 기준에 따라 달라져요." in response
+
+
+def test_support_faq_policy_event_for_tire_condition_photo_includes_upload_limit_and_store_guidance() -> None:
+    event = _build_support_faq_policy_event(
+        "tire_condition_photo_policy",
+        "사진 보낼 테니까 더 타도 되는지 봐줘",
+        tool_result={
+            "status": "success",
+            "data": {"items": [{"answer": "타이어 점검은 마모도와 손상 여부를 함께 확인하는 것이 좋습니다."}]},
+        },
+    )
+
+    assert event is not None
+    response = str(event["data"]["assistantResponse"])
+    assert "현재 챗봇에서는 사진이나 파일을 업로드해 확인받을 수 없어요." in response
+    assert "사진이나 파일 첨부가 필요한 경우 1:1 문의를 통해 등록해 주세요." in response
+    assert "사진만으로는 타이어 마모 상태, 교체 필요 여부, 주행 안전을 확정할 수 없어요." in response
+    assert "마모도 측정 서비스 또는 가까운 티스테이션 매장 점검으로 확인해 주세요." in response
+    assert "타이어 점검은 마모도와 손상 여부를 함께 확인하는 것이 좋습니다." not in response
+    assert _labels(event["data"]["quickReplies"]) == ["가까운 매장 찾기", "1:1 문의하기", "처음으로"]
+
+
+def test_tire_condition_photo_policy_is_direct_fixed_response_intent() -> None:
+    assert "tire_condition_photo_policy" in _DIRECT_SUPPORT_FAQ_POLICY_INTENTS
+    assert "tire_condition_photo_policy" not in _FAQ_FIRST_SUPPORT_POLICY_INTENTS
+
+
+def test_support_faq_policy_event_for_assurance_service_surfaces_core_conditions_first() -> None:
+    event = _build_support_faq_policy_event(
+        "assurance_service_policy",
+        "안심서비스랑 안심플러스 보상 조건이 정확히 어떻게 돼?",
+        tool_result={
+            "status": "success",
+            "data": {
+                "items": [
+                    {
+                        "answer": "안심플러스는 구매 수량과 대상 상품 조건에 따라 보상 범위가 달라질 수 있습니다."
+                    }
+                ]
+            },
+        },
+    )
+
+    assert event is not None
+    response = str(event["data"]["assistantResponse"])
+    first_line = response.splitlines()[0]
+    assert "장착 후 1년 이내" in first_line
+    assert "16,000km 이내" in first_line
+    assert "안심플러스는 구매 수량과 대상 상품 조건에 따라 보상 범위가 달라질 수 있습니다." in response
+
+
+def test_support_faq_policy_event_for_assurance_service_compacts_long_source_summary() -> None:
+    event = _build_support_faq_policy_event(
+        "assurance_service_policy",
+        "안심서비스랑 안심플러스 보상 조건이 정확히 어떻게 돼?",
+        tool_result={
+            "status": "success",
+            "data": {
+                "items": [
+                    {
+                        "answer": (
+                            "안심서비스와 안심플러스는 전국 티스테이션 매장, 더타이어샵 매장, 티스테이션닷컴 공식 홈페이지, "
+                            "네이버 스마트스토어에서 타이어 구매 시 가입 또는 적용이 가능합니다. "
+                            "안심서비스는 타이어 2개 이상 구매 시 고객 과실로 파손되더라도 새 타이어 1개를 보상받을 수 있습니다."
+                        )
+                    }
+                ]
+            },
+        },
+    )
+
+    assert event is not None
+    response = str(event["data"]["assistantResponse"])
+    lines = [line for line in response.splitlines() if line.strip()]
+    assert "장착 후 1년 이내" in lines[0]
+    assert "16,000km 이내" in lines[0]
+    assert len(response) < 260
+    assert "안심서비스는 타이어 2개 이상 구매 시 고객 과실로 파손되더라도 새 타이어 1개를 보상받을 수 있습니다." not in response
 
 
 def test_direct_faq_policy_tool_payload_builds_transaction_policy_event() -> None:
