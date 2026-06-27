@@ -6941,7 +6941,7 @@ def test_best_selling_tool_enriches_price_and_description_fields(monkeypatch: py
                 ]
             }
 
-    def _fake_get_best_sellers(**_kwargs):
+    def _fake_search_best_sellers(**_kwargs):
         return SimpleNamespace(status_code=200, parsed=_Parsed(), content=b"")
 
     def _fake_price_enrich(items: list[dict]) -> list[dict]:
@@ -6957,11 +6957,11 @@ def test_best_selling_tool_enriches_price_and_description_fields(monkeypatch: py
         enriched[0]["prc_grd_nm"] = "프리미엄"
         return enriched
 
-    monkeypatch.setattr(discovery_tools, "get_best_sellers", _fake_get_best_sellers)
+    monkeypatch.setattr(discovery_tools, "search_best_sellers", _fake_search_best_sellers)
     monkeypatch.setattr(discovery_tools, "_enrich_items_with_price_fields", _fake_price_enrich)
     monkeypatch.setattr(discovery_tools, "_enrich_items_with_descriptions", _fake_description_enrich)
 
-    result = discovery_tools.get_best_selling_products_tool.invoke({"period": "3months", "limit": 5})
+    result = discovery_tools.get_best_selling_products_tool.invoke({"months": 3, "limit": 5})
 
     assert result["status"] == "success"
     item = result["data"]["items"][0]
@@ -9622,7 +9622,9 @@ def test_monthly_best_seller_request_forces_code_route_even_if_transaction_biase
         assert best_seller_period_from_text(text) == "month"
         assert frame.sub_intent == "best_seller_search"
         assert plan.allowed_tools == ("get_best_selling_products_tool",)
-        assert plan.tool_args_patch == {"period": "month", "limit": 5}
+        assert plan.tool_args_patch["limit"] == 5
+        assert "from_date" in plan.tool_args_patch
+        assert "to_date" in plan.tool_args_patch
         assert _should_force_best_seller_code_route(
             text,
             [MultiAgentDomain.Domain.TRANSACTION],
@@ -9651,7 +9653,7 @@ def test_unspecified_current_best_seller_request_forces_code_route() -> None:
         assert frame.sub_intent == "best_seller_search"
         assert plan.allowed_tools == ("get_best_selling_products_tool",)
         assert plan.preferred_tool == "get_best_selling_products_tool"
-        assert plan.tool_args_patch == {"period": "3months", "limit": 5}
+        assert plan.tool_args_patch == {"limit": 5}
         assert _should_force_best_seller_code_route(
             text,
             [MultiAgentDomain.Domain.LEADING],

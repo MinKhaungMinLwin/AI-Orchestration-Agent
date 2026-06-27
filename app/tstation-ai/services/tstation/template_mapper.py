@@ -283,6 +283,26 @@ _DEMOGRAPHIC_PREFERENCE_RE = re.compile(r"선호|좋아하는|많이\s*사는|�
 _DEMOGRAPHIC_CAVEAT_TEXT = "특정 나이대나 성별 기준으로 추천드리기는 어렵지만, 최근 인기 상품 위주로 안내드릴게요. "
 
 
+def _best_seller_period_label_from_args(args: dict[str, Any], raw: dict[str, Any] | None = None) -> str:
+    months = _get_num(args, "months", default=0)
+    if months:
+        return f"최근 {int(months)}개월"
+    from_date = _get_str(args, "from_date")
+    to_date = _get_str(args, "to_date")
+    if from_date and to_date:
+        if from_date == to_date:
+            return "오늘"
+        return f"{from_date}부터 {to_date}까지"
+    if isinstance(raw, dict):
+        period = raw.get("period")
+        if isinstance(period, dict):
+            raw_months = _get_num(period, "months", default=0)
+            if raw_months:
+                return f"최근 {int(raw_months)}개월"
+    period = _get_str(args, "period").lower() or "3months"
+    return _BEST_SELLER_PERIOD_DISPLAY.get(period, "최근 3개월")
+
+
 def _current_turn_user_text() -> str:
     text = current_user_text.get() or ""
     lines = [line.strip() for line in text.splitlines() if line.strip()]
@@ -2530,8 +2550,9 @@ def _product_result_context_message(tool_data_list: list[dict], item_count: int)
         args = entry.get("args") if isinstance(entry.get("args"), dict) else entry.get("input")
         args = args if isinstance(args, dict) else {}
 
-        period = _get_str(args, "period").lower() or "month"
-        period_label = _BEST_SELLER_PERIOD_DISPLAY.get(period, "이번 달")
+        period_label = _best_seller_period_label_from_args(args, raw if isinstance(raw, dict) else None)
+        vehicle_query = _get_str(raw if isinstance(raw, dict) else {}, "vehicle_query") or _get_str(args, "vehicle_query")
+        period_prefix = f"{vehicle_query} 기준 {period_label}" if vehicle_query else period_label
         top_name = ""
         if isinstance(rows, list) and rows:
             first = rows[0]
@@ -2545,12 +2566,12 @@ def _product_result_context_message(tool_data_list: list[dict], item_count: int)
 
         if top_name and _BEST_SELLER_COUNT_QUERY_RE.search(user_text):
             return (
-                f"{caveat}{period_label} 베스트셀러는 {top_name}예요. "
+                f"{caveat}{period_prefix} 베스트셀러는 {top_name}예요. "
                 f"정확한 판매 개수는 바로 안내드리기 어렵지만, 인기 상품 {item_count}개를 안내드립니다."
             )
         if top_name:
-            return f"{caveat}{period_label} 베스트셀러는 {top_name}예요. 인기 상품 {item_count}개를 안내드립니다."
-        return f"{caveat}{period_label} 인기 상품 {item_count}개를 안내드립니다. 원하시는 상품을 선택해 주세요."
+            return f"{caveat}{period_prefix} 베스트셀러는 {top_name}예요. 인기 상품 {item_count}개를 안내드립니다."
+        return f"{caveat}{period_prefix} 인기 상품 {item_count}개를 안내드립니다. 원하시는 상품을 선택해 주세요."
 
     for entry in reversed(_find_entries(tool_data_list, "search_product_tool")):
         args = entry.get("args") if isinstance(entry.get("args"), dict) else entry.get("input")
@@ -3109,6 +3130,7 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
 
     items, metadata = [], []
     seen_goods_ids: set[str] = set()
+    best_seller_fallback_event: dict | None = None
     # 회원 보유 쿠폰이 적용된 상품이 1건이라도 있으면 응답 말미에 안내 추가.
     has_cheapest_applied = False
     for entry in _find_entries(
@@ -3119,6 +3141,45 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
         "get_best_selling_products_tool",
     ):
         raw = _unwrap(entry)
+        if (
+            entry.get("tool") == "get_best_selling_products_tool"
+            and isinstance(raw, dict)
+            and str(raw.get("status") or "").strip().lower() in {"vehicle_unresolved", "resolved_no_order_data", "no_order_data"}
+        ):
+            fallback_message = "최근 인기 상품을 바로 찾지 못했어요."
+            status = str(raw.get("status") or "").strip().lower()
+            if status == "vehicle_unresolved":
+                fallback_message = "차종을 정확히 찾지 못했어요. 차종명을 다시 입력하거나 전체 베스트셀러를 확인해 주세요."
+            elif status == "resolved_no_order_data":
+                vehicle_query = _get_str(raw, "vehicle_query")
+                fallback_message = (
+                    f"{vehicle_query} 기준 주문 데이터가 아직 충분하지 않아요. 다른 범위로 확인해 보세요."
+                    if vehicle_query
+                    else "해당 조건의 주문 데이터가 아직 충분하지 않아요. 다른 범위로 확인해 보세요."
+                )
+            elif status == "no_order_data":
+                fallback_message = "해당 기간의 베스트셀러 데이터를 아직 확인하지 못했어요."
+            quick_replies: list[dict[str, Any]] = []
+            fallback_options = raw.get("fallback_options")
+            if isinstance(fallback_options, list):
+                for option in fallback_options[:3]:
+                    if not isinstance(option, dict):
+                        continue
+                    label = str(option.get("label") or "").strip()
+                    if label:
+                        quick_replies.append({"label": label, "domain": "DISCOVERY"})
+            if not quick_replies:
+                quick_replies.append({"label": "전체 베스트셀러", "domain": "DISCOVERY"})
+            best_seller_fallback_event = {
+                "type": "data",
+                "template": "quickReply",
+                "data": {
+                    "assistantResponse": fallback_message,
+                    "quickReplies": quick_replies,
+                    "predictedDomains": ["DISCOVERY"],
+                },
+                "assistant_response_source": "code_mapper_best_seller_fallback",
+            }
         rows = raw if isinstance(raw, list) else (raw.get("items") if isinstance(raw, dict) else [])
         if not isinstance(rows, list):
             continue
@@ -3184,6 +3245,8 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
             if goods_no:
                 seen_goods_ids.add(goods_no)
     if not items:
+        if best_seller_fallback_event is not None:
+            return best_seller_fallback_event
         return None
     items, metadata = items[:10], metadata[:10]
 

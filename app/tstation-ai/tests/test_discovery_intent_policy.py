@@ -1,6 +1,8 @@
 from services.tstation.policies.discovery_intent_policy import (
+    best_seller_search_params_from_text,
     best_seller_period_from_text,
     build_discovery_intent_frame,
+    extract_best_seller_vehicle_query,
     extract_quantity_options,
     is_best_seller_request,
     is_default_benefit_request,
@@ -31,7 +33,7 @@ def test_welcome_popular_tire_question_uses_three_month_best_sellers() -> None:
     assert frame.sub_intent == "best_seller_search"
     assert frame.entities["best_seller_period"] == "3months"
     assert plan.preferred_tool == "get_best_selling_products_tool"
-    assert plan.tool_args_patch == {"period": "3months", "limit": 5}
+    assert plan.tool_args_patch == {"limit": 5}
     assert "get_products_recommendations_tool" in plan.forbidden_tools
 
 
@@ -44,7 +46,7 @@ def test_demographic_preference_uses_three_month_best_sellers_not_segmented_reco
     assert frame.sub_intent == "best_seller_search"
     assert frame.entities["best_seller_period"] == "3months"
     assert plan.preferred_tool == "get_best_selling_products_tool"
-    assert plan.tool_args_patch == {"period": "3months", "limit": 5}
+    assert plan.tool_args_patch == {"limit": 5}
     assert "get_products_recommendations_tool" in plan.forbidden_tools
 
 
@@ -63,6 +65,8 @@ def test_best_seller_period_mapping_preserves_explicit_periods() -> None:
     assert best_seller_period_from_text("이번 주 잘 팔리는 타이어") == "week"
     assert best_seller_period_from_text("이번 달 베스트셀러") == "month"
     assert best_seller_period_from_text("인기 타이어") == "3months"
+    assert best_seller_search_params_from_text("3개월 베스트셀러") == {"months": 3}
+    assert best_seller_search_params_from_text("6개월 베스트셀러") == {"months": 6}
 
 
 def test_unspecified_current_popularity_wording_uses_best_sellers() -> None:
@@ -79,7 +83,7 @@ def test_unspecified_current_popularity_wording_uses_best_sellers() -> None:
         assert frame.sub_intent == "best_seller_search"
         assert frame.entities["best_seller_period"] == "3months"
         assert plan.allowed_tools == ("get_best_selling_products_tool",)
-        assert plan.tool_args_patch == {"period": "3months", "limit": 5}
+        assert plan.tool_args_patch == {"limit": 5}
 
 
 def test_non_sales_popularity_or_review_wording_does_not_use_best_sellers() -> None:
@@ -108,8 +112,19 @@ def test_aggregate_purchase_wording_uses_best_seller_not_purchase_flow() -> None
         assert frame.entities["best_seller_period"] == "month"
         assert plan.allowed_tools == ("get_best_selling_products_tool",)
         assert plan.preferred_tool == "get_best_selling_products_tool"
-        assert plan.tool_args_patch == {"period": "month", "limit": 5}
+        assert plan.tool_args_patch["limit"] == 5
+        assert "from_date" in plan.tool_args_patch
+        assert "to_date" in plan.tool_args_patch
         assert "get_products_recommendations_tool" in plan.forbidden_tools
+
+
+def test_vehicle_best_seller_query_populates_vehicle_query() -> None:
+    frame = build_discovery_intent_frame("그랜저 최근 3개월 베스트셀러 보여줘")
+    plan = plan_discovery_tools(frame)
+
+    assert extract_best_seller_vehicle_query("그랜저 최근 3개월 베스트셀러 보여줘") == "그랜저"
+    assert frame.entities["vehicle_query"] == "그랜저"
+    assert plan.tool_args_patch == {"limit": 5, "months": 3, "vehicle_query": "그랜저"}
 
 
 def test_general_ev_recommendation_still_uses_recommendation_engine() -> None:

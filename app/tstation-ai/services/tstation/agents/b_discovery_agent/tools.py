@@ -31,8 +31,8 @@ from common.tstation_be_api_client.hkt_api_client.api.product_description_af_상
 
 # Product Recommendation
 from common.tstation_be_api_client.hkt_api_client.api.product_recommendation_af_상품_추천.get_recommendations_api_product_recommend_get import sync_detailed as get_products_recommendations
-from common.tstation_be_api_client.hkt_api_client.api.product_recommendation_af_상품_추천.get_best_sellers_api_product_best_sellers_get import sync_detailed as get_best_sellers
-from common.tstation_be_api_client.hkt_api_client.models import BestSellerPeriod
+from common.tstation_be_api_client.hkt_api_client.api.product_recommendation_af_상품_추천.search_best_sellers_api_product_best_sellers_search_post import sync_detailed as search_best_sellers
+from common.tstation_be_api_client.hkt_api_client.models import BestSellerSearchRequest
 from common.tstation_be_api_client.hkt_api_client.models import RcmdType
 from common.tstation_be_api_client.hkt_api_client.models import VehicleType
 from common.tstation_be_api_client.hkt_api_client.types import UNSET
@@ -1671,61 +1671,68 @@ def get_final_price_tool(goods_no: str, member_type: str | None = None):
         return {"status": "error", "reason": str(e), "message": "Failed to get product price"}
 
 
-_BEST_SELLER_PERIOD_MAP: dict[str, BestSellerPeriod] = {
-    "day": BestSellerPeriod.DAY,
-    "week": BestSellerPeriod.WEEK,
-    "month": BestSellerPeriod.MONTH,
-    "3months": BestSellerPeriod.VALUE_3,
-}
-
-
 @tool
 @tool_cache(ttl=600)
-def get_best_selling_products_tool(period: str = "month", limit: int = 5):
+def get_best_selling_products_tool(
+    vehicle_query: str | None = None,
+    months: int | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    limit: int = 5,
+):
     """
-    기간별 베스트셀러 상품 조회 (PR_GOODS_SUM 판매 수량 기준 정렬).
+    통합 베스트셀러 상품 조회.
 
-    Period mapping (사용자 표현 → period 값):
-    - "오늘 가장 많이 팔린 상품 / 오늘의 베스트" → period="day"
-    - "이번 주 / 금주 베스트" → period="week"
-    - "이번 달 / 이달의 / 월별 베스트" → period="month"
-    - "요즘 / 최근 / 지금 가장 인기 있는 / 인기 / 잘 나가는 / 잘 팔리는" → period="3months"
-      (모호한 인기 표현은 최근 3개월 베스트셀러로 매핑)
-    - "최근 3개월 / 분기 베스트" → period="3months"
+    - vehicle_query 없으면 일반 베스트셀러
+    - vehicle_query 있으면 차종별 베스트셀러
+    - 기간 미지정이면 BE 기본 3개월 사용
 
     Args:
-        period (str): "day" | "week" | "month" | "3months". Default "month".
+        vehicle_query (str | None): 차종 검색어 (예: "그랜저", "벤츠 e300")
+        months (int | None): 최근 N개월
+        from_date (str | None): 조회 시작일 YYYY-MM-DD
+        to_date (str | None): 조회 종료일 YYYY-MM-DD
         limit (int): 반환 상품 수 (1-50). Default 5.
 
-    Response: BestSellerResponse — items 의 각 행에 goods_no, goods_nm,
-        tire_size_1/2, image_url, extra_fvr_sale_prc, extra_fvr_sale_per, sale_qty.
-        추가로 스펙 필드(big_goods_nm, tire_width/series/inch, t_wgt_idx/_kg/_spd,
-        t_highspd, season_nm, car_knd_nm, goods_pfm_nm, brand_nm, certify_brand_nm,
-        orpl_nm, t_rls_yearmon, t_comfort/silence/high_perform/handling/life_span/
-        snow/ice/dryroad_brk, rr, wet, label_pndb, wage_prc, wage_today_prc,
-        free_guarantee_yn, t_rlx_isn_yn) 도 함께 반환 — 사용자가 베스트셀러 상품의
-        사이즈/계절/브랜드/공임 등을 물으면 동일 응답에서 답변 가능.
-
-    Example: {"period": "3months", "limit": 5}
+    Example: {"vehicle_query": "그랜저", "months": 3, "limit": 5}
     """
-    logger.debug("[TOOL][get_best_selling_products_tool] Called with: period=%s, limit=%s", period, limit)
+    logger.debug(
+        "[TOOL][get_best_selling_products_tool] Called with: vehicle_query=%s, months=%s, from_date=%s, to_date=%s, limit=%s",
+        vehicle_query,
+        months,
+        from_date,
+        to_date,
+        limit,
+    )
 
-    period_enum = _BEST_SELLER_PERIOD_MAP.get(period)
-    if period_enum is None:
-        return {
-            "status": "error",
-            "reason": "InvalidArguments",
-            "message": f"period must be one of {sorted(_BEST_SELLER_PERIOD_MAP.keys())}; got {period!r}",
-        }
     if not isinstance(limit, int) or not (1 <= limit <= 50):
         return {
             "status": "error",
             "reason": "InvalidArguments",
             "message": "limit must be an int between 1 and 50",
         }
+    if months is not None and (not isinstance(months, int) or not (1 <= months <= 60)):
+        return {
+            "status": "error",
+            "reason": "InvalidArguments",
+            "message": "months must be an int between 1 and 60",
+        }
+    if bool(from_date) != bool(to_date):
+        return {
+            "status": "error",
+            "reason": "InvalidArguments",
+            "message": "from_date and to_date must be provided together",
+        }
 
     try:
-        response = get_best_sellers(client=get_client(), period=period_enum, limit=limit)
+        body = BestSellerSearchRequest(
+            vehicle_query=vehicle_query or UNSET,
+            months=months if months is not None else UNSET,
+            from_date=from_date or UNSET,
+            to_date=to_date or UNSET,
+            limit=limit,
+        )
+        response = search_best_sellers(client=get_client(), body=body)
         if response.parsed is None:
             return {
                 "status": "error",

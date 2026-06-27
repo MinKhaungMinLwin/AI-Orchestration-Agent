@@ -45,8 +45,10 @@ from services.tstation.policies.reservation_template_policy import (
     latest_template_data_from_messages,
 )
 from services.tstation.policies.discovery_intent_policy import (
+    best_seller_search_params_from_text,
     best_seller_period_from_text,
     build_discovery_intent_frame,
+    extract_best_seller_vehicle_query,
     extract_product_names,
     extract_product_attribute_metrics,
     extract_requested_product_attribute,
@@ -7789,6 +7791,24 @@ def _should_force_best_seller_code_route(user_text: str | None, domains: list[Mu
     if domains == [MultiAgentDomain.Domain.DISCOVERY]:
         return True
     return is_best_seller_request(text, include_demographic_preference=False)
+
+
+def _best_seller_tool_input_from_text(
+    user_text: str | None,
+    *,
+    limit: int = 5,
+    known_slots: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    tool_input: dict[str, Any] = {"limit": limit}
+    tool_input.update(best_seller_search_params_from_text(str(user_text or "")))
+    vehicle_query = ""
+    if isinstance(known_slots, Mapping):
+        vehicle_query = str(known_slots.get("vehicle_query") or "").strip()
+    if not vehicle_query:
+        vehicle_query = str(extract_best_seller_vehicle_query(str(user_text or "")) or "").strip()
+    if vehicle_query:
+        tool_input["vehicle_query"] = vehicle_query
+    return tool_input
 
 
 def _enrich_best_selling_result_for_product_cards(tool_result: dict) -> dict:
@@ -16961,7 +16981,7 @@ async def recover_blocked_fast_path_to_contract_tool(
             display_name = "상품 정보 확인 중..."
         elif preferred_tool == "get_best_selling_products_tool":
             if not tool_input:
-                tool_input = {"period": best_seller_period_from_text(user_text) or "3months", "limit": 5}
+                tool_input = _best_seller_tool_input_from_text(user_text, limit=5, known_slots=known_slots)
                 tool_input_source = "user_text"
             display_name = "인기 상품 조회 중..."
         elif preferred_tool == "get_my_cars_tool":
@@ -27377,11 +27397,12 @@ class TStationChatServiceV2:
         async def _resolve_best_selling_products_with_code() -> tuple[list[dict], dict] | None:
             if not _should_force_best_seller_code_route(user_query, domains):
                 return None
-            period = best_seller_period_from_text(user_query)
-            if not period:
-                return None
 
-            tool_input = {"period": period, "limit": 5}
+            tool_input = _best_seller_tool_input_from_text(
+                user_query,
+                limit=5,
+                known_slots=getattr(turn_contract, "known_slots", {}) if turn_contract is not None else {},
+            )
             from services.tstation.agents.b_discovery_agent.tools import (
                 get_best_selling_products_tool as _best_selling_tool,
             )
@@ -27399,7 +27420,7 @@ class TStationChatServiceV2:
                 best_selling_result = _tool_result_dict(raw_result)
                 best_selling_result = _enrich_best_selling_result_for_product_cards(best_selling_result)
             except Exception as exc:
-                logger.exception("[BEST_SELLER] get_best_selling_products_tool failed for period=%s", period)
+                logger.exception("[BEST_SELLER] get_best_selling_products_tool failed for input=%s", tool_input)
                 best_selling_result = {
                     "status": "error",
                     "http_status": None,
@@ -27423,10 +27444,52 @@ class TStationChatServiceV2:
                 "source_domain": "discovery",
             })
 
-            mapped_event = try_build_template(
-                [{"tool": "get_best_selling_products_tool", "args": tool_input, "data": best_selling_result}],
-                "최근 3개월 베스트셀러 상품을 안내드립니다.",
-            )
+            result_data = best_selling_result.get("data") if isinstance(best_selling_result, dict) else {}
+            result_status = str(result_data.get("status") or "").strip().lower() if isinstance(result_data, dict) else ""
+            fallback_options = result_data.get("fallback_options") if isinstance(result_data, dict) else None
+            vehicle_query = str(result_data.get("vehicle_query") or tool_input.get("vehicle_query") or "").strip() if isinstance(result_data, dict) else ""
+            if result_status in {"vehicle_unresolved", "resolved_no_order_data", "no_order_data"}:
+                fallback_message = "최근 3개월 베스트셀러 상품을 안내드립니다."
+                quick_replies: list[dict[str, Any]] = []
+                if result_status == "vehicle_unresolved":
+                    fallback_message = "차종을 정확히 찾지 못했어요. 차종명을 다시 입력하거나 전체 베스트셀러를 확인해 주세요."
+                elif result_status == "resolved_no_order_data":
+                    if vehicle_query:
+                        fallback_message = f"{vehicle_query} 기준 주문 데이터가 아직 충분하지 않아요. 다른 범위로 확인해 보세요."
+                    else:
+                        fallback_message = "해당 조건의 주문 데이터가 아직 충분하지 않아요. 다른 범위로 확인해 보세요."
+                elif result_status == "no_order_data":
+                    fallback_message = "해당 기간의 베스트셀러 데이터를 아직 확인하지 못했어요."
+                if isinstance(fallback_options, list):
+                    for option in fallback_options[:3]:
+                        if not isinstance(option, dict):
+                            continue
+                        label = str(option.get("label") or "").strip()
+                        if not label:
+                            continue
+                        quick_replies.append({"label": label, "domain": "DISCOVERY"})
+                if not quick_replies:
+                    quick_replies.append({"label": "전체 베스트셀러", "domain": "DISCOVERY"})
+                mapped_event = {
+                    "type": "data",
+                    "template": "quickReply",
+                    "data": {
+                        "assistantResponse": fallback_message,
+                        "quickReplies": quick_replies,
+                        "predictedDomains": ["DISCOVERY"],
+                    },
+                    "assistant_response_source": "code_best_seller_search_fallback",
+                    "source_domain": MultiAgentDomain.Domain.DISCOVERY.value,
+                }
+            else:
+                if vehicle_query:
+                    assistant_text = f"{vehicle_query} 기준 인기 상품을 안내드립니다."
+                else:
+                    assistant_text = "인기 상품을 안내드립니다."
+                mapped_event = try_build_template(
+                    [{"tool": "get_best_selling_products_tool", "args": tool_input, "data": best_selling_result}],
+                    assistant_text,
+                )
             if mapped_event is None:
                 return None
             mapped_event["source_domain"] = MultiAgentDomain.Domain.DISCOVERY.value

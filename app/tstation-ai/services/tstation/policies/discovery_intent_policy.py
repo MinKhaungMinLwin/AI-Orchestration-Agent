@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import date, timedelta
 from typing import Any, Mapping
 
 from services.tstation.policies.intent_frame import IntentFrame, PolicyDomain
@@ -556,6 +557,81 @@ def best_seller_period_from_text(text: str) -> str | None:
     return "3months"
 
 
+def best_seller_search_params_from_text(text: str) -> dict[str, str | int]:
+    text = text or ""
+    if not is_best_seller_request(text):
+        return {}
+
+    today = date.today()
+    if _BEST_SELLER_DAY_RE.search(text):
+        iso_today = today.isoformat()
+        return {"from_date": iso_today, "to_date": iso_today}
+    if _BEST_SELLER_WEEK_RE.search(text):
+        week_start = today - timedelta(days=today.weekday())
+        return {"from_date": week_start.isoformat(), "to_date": today.isoformat()}
+    if _BEST_SELLER_MONTH_RE.search(text):
+        month_start = today.replace(day=1)
+        return {"from_date": month_start.isoformat(), "to_date": today.isoformat()}
+
+    month_match = re.search(r"(?<!\d)(3|6|12)\s*개\s*월|(?<!\d)(3|6|12)\s*개월", text)
+    if month_match:
+        month_value = next((group for group in month_match.groups() if group), None)
+        if month_value is not None:
+            return {"months": int(month_value)}
+    if re.search(r"\b1\s*년\b|최근\s*1\s*년|12\s*개월", text):
+        return {"months": 12}
+    return {}
+
+
+_BEST_SELLER_VEHICLE_STRIP_RE = re.compile(
+    r"(?:최근\s*\d+\s*개월|오늘|이번\s*주|금주|이번\s*달|이달|월별|분기|요즘|최근|지금|"
+    r"가장|제일|잘\s*팔리는|잘\s*나가는|많이\s*(?:팔린|산|구매한)|인기\s*있는?|"
+    r"베스트셀러|베스트\s*셀러|상품|타이어|추천해줘|보여줘|알려줘|뭐야|\?|!)",
+    re.IGNORECASE,
+)
+_BEST_SELLER_NON_VEHICLE_ONLY_RE = re.compile(
+    r"^(?:\d+\s*개월?|오늘|이번\s*주|금주|이번\s*달|이달|월별|분기|요즘|최근|지금|\s)+$",
+    re.IGNORECASE,
+)
+_BEST_SELLER_VEHICLE_TOKEN_STOPWORDS = {
+    "요즘", "최근", "지금", "젤", "제일", "가장", "거", "것", "상품", "타이어", "인기", "있는", "많이",
+    "팔리는", "팔린", "팔리는거", "팔린거", "잘", "나가는", "베스트셀러", "선호하는", "좋아하는", "추천",
+    "추천해줘", "알려줘", "보여줘", "순위", "판매량", "는", "가", "이", "좀",
+}
+
+
+def extract_best_seller_vehicle_query(text: str) -> str | None:
+    text = str(text or "").strip()
+    if not text or not is_best_seller_request(text):
+        return None
+    if _DEMOGRAPHIC_ATTRIBUTE_RE.search(text) and _DEMOGRAPHIC_PREFERENCE_RE.search(text):
+        return None
+
+    candidate = _BEST_SELLER_VEHICLE_STRIP_RE.sub(" ", text)
+    candidate = re.sub(r"\s+", " ", candidate).strip(" ,.")
+    if not candidate or _BEST_SELLER_NON_VEHICLE_ONLY_RE.fullmatch(candidate):
+        return None
+    if normalize_tire_size(candidate):
+        return None
+    if re.fullmatch(r"(?:남성|여성|\d{2}대|\d{2}대\s*(?:남성|여성)?)", candidate):
+        return None
+    tokens = [
+        token for token in re.split(r"\s+", candidate)
+        if token and token not in _BEST_SELLER_VEHICLE_TOKEN_STOPWORDS
+    ]
+    tokens = [
+        token
+        for token in tokens
+        if len(token) >= 2 or re.search(r"[A-Za-z0-9]", token)
+    ]
+    if not tokens:
+        return None
+    cleaned_candidate = " ".join(tokens).strip()
+    if not cleaned_candidate or cleaned_candidate in _BEST_SELLER_VEHICLE_TOKEN_STOPWORDS:
+        return None
+    return cleaned_candidate
+
+
 def is_default_tire_shopping_request(text: str) -> bool:
     """Welcome CTA for starting the normal tire recommendation flow."""
     return bool(_DEFAULT_TIRE_SHOPPING_RE.search(text or ""))
@@ -782,6 +858,10 @@ def build_discovery_intent_frame(
     best_seller_period = best_seller_period_from_text(text)
     if best_seller_period:
         entities["best_seller_period"] = best_seller_period
+        entities.update(best_seller_search_params_from_text(text))
+        best_seller_vehicle_query = extract_best_seller_vehicle_query(text)
+        if best_seller_vehicle_query:
+            entities["vehicle_query"] = best_seller_vehicle_query
     if is_default_tire_shopping_request(text):
         entities["default_tire_shopping"] = True
     if is_default_benefit_request(text):
@@ -1152,7 +1232,11 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             },
         )
     if frame.sub_intent == "best_seller_search":
-        args = {"period": entities.get("best_seller_period") or "3months", "limit": 5}
+        args: dict[str, Any] = {"limit": 5}
+        for key in ("vehicle_query", "months", "from_date", "to_date"):
+            value = entities.get(key)
+            if value not in (None, "", (), []):
+                args[key] = value
         return ToolPlan(
             allowed_tools=("get_best_selling_products_tool",),
             preferred_tool="get_best_selling_products_tool",

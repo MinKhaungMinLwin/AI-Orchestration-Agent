@@ -3,9 +3,16 @@
 from .applied_coupon_item import AppliedCouponItem
 from .available_coupon_item import AvailableCouponItem
 from .available_coupon_response import AvailableCouponResponse
+from .best_seller_fallback_option import BestSellerFallbackOption
 from .best_seller_item import BestSellerItem
 from .best_seller_period import BestSellerPeriod
 from .best_seller_response import BestSellerResponse
+from .best_seller_search_period import BestSellerSearchPeriod
+from .best_seller_search_period_mode import BestSellerSearchPeriodMode
+from .best_seller_search_request import BestSellerSearchRequest
+from .best_seller_search_response import BestSellerSearchResponse
+from .best_seller_search_response_result_scope import BestSellerSearchResponseResultScope
+from .best_seller_search_response_status import BestSellerSearchResponseStatus
 from .car_maintenance_dday import CarMaintenanceDday
 from .car_model_group import CarModelGroup
 from .car_model_group_response import CarModelGroupResponse
@@ -114,15 +121,24 @@ from .tire_spec import TireSpec
 from .user_vehicle_lookup_response import UserVehicleLookupResponse
 from .validation_error import ValidationError
 from .validation_error_context import ValidationErrorContext
+from .vehicle_resolution import VehicleResolution
+from .vehicle_resolution_resolution_status import VehicleResolutionResolutionStatus
 from .vehicle_type import VehicleType
 
 __all__ = (
     "AppliedCouponItem",
     "AvailableCouponItem",
     "AvailableCouponResponse",
+    "BestSellerFallbackOption",
     "BestSellerItem",
     "BestSellerPeriod",
     "BestSellerResponse",
+    "BestSellerSearchPeriod",
+    "BestSellerSearchPeriodMode",
+    "BestSellerSearchRequest",
+    "BestSellerSearchResponse",
+    "BestSellerSearchResponseResultScope",
+    "BestSellerSearchResponseStatus",
     "CardInstallmentItem",
     "CardInstallmentListResponse",
     "CarMaintenanceDday",
@@ -227,5 +243,7 @@ __all__ = (
     "UserVehicleLookupResponse",
     "ValidationError",
     "ValidationErrorContext",
+    "VehicleResolution",
+    "VehicleResolutionResolutionStatus",
     "VehicleType",
 )
