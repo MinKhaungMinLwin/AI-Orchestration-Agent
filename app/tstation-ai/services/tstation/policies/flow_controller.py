@@ -308,6 +308,10 @@ def build_purchase_flow_fallback_event(
     slots = dict(known_slots or state.slot_patch or {})
     resolved_product = _resolved_purchase_product(slots=slots, tool_data_list=tool_data_list)
     merged_slots = {**slots, **resolved_product}
+    if resolved_product:
+        resumed_state = resolve_purchase_order_flow(intent=intent or "", known_slots=merged_slots)
+        if resumed_state is not None:
+            state = resumed_state
     metadata = {
         "flowId": state.flow_id,
         "flowStep": state.flow_step,
@@ -329,6 +333,16 @@ def build_purchase_flow_fallback_event(
         assistant_response = _purchase_missing_store_text(merged_slots)
     elif state.flow_step == "ask_quantity":
         assistant_response = _purchase_missing_quantity_text(merged_slots)
+    elif state.flow_step in {"resolve_product", "ask_size"}:
+        resolution_event = _purchase_product_resolution_event(
+            state=state,
+            slots=slots,
+            tool_data_list=tool_data_list,
+            blocked_tool=blocked_tool,
+        )
+        if resolution_event is not None:
+            return resolution_event
+        return None
     else:
         return None
 
@@ -452,6 +466,127 @@ def _search_payload_candidates(payload: Any) -> list[Any]:
 
 def _normalize_product_key(value: str) -> str:
     return re.sub(r"[^0-9a-z가-힣]", "", str(value or "").lower())
+
+
+def _matched_purchase_rows(*, slots: Mapping[str, Any], tool_data_list: list[dict] | None) -> list[dict]:
+    rows = _search_product_rows_from_entries(tool_data_list or [])
+    if not rows:
+        return []
+
+    target_name = str(
+        slots.get("product_name") or slots.get("tire_model") or slots.get("pending_product_name") or ""
+    ).strip()
+    target_size = normalize_tire_size(str(slots.get("tire_size") or ""))
+    matched_rows = rows
+    if target_name:
+        normalized_name = _normalize_product_key(target_name)
+        name_rows = [
+            row
+            for row in matched_rows
+            if normalized_name and normalized_name in _normalize_product_key(str(row.get("goods_nm") or ""))
+        ]
+        if name_rows:
+            matched_rows = name_rows
+    if target_size:
+        size_rows = [
+            row
+            for row in matched_rows
+            if normalize_tire_size(str(row.get("tire_size_1") or row.get("tire_size") or "")) == target_size
+        ]
+        if size_rows:
+            matched_rows = size_rows
+    return [row for row in matched_rows if isinstance(row, dict)]
+
+
+def _purchase_product_resolution_event(
+    *,
+    state: FlowState,
+    slots: Mapping[str, Any],
+    tool_data_list: list[dict] | None,
+    blocked_tool: str | None,
+) -> dict[str, Any] | None:
+    matched_rows = _matched_purchase_rows(slots=slots, tool_data_list=tool_data_list)
+    if not matched_rows:
+        return None
+
+    sizes = _purchase_size_candidates(matched_rows)
+    product_label = str(
+        slots.get("product_name") or slots.get("tire_model") or slots.get("pending_product_name") or "해당 상품"
+    ).strip() or "해당 상품"
+    metadata = {
+        "flowId": state.flow_id,
+        "flowStep": state.flow_step,
+        "missingSlots": list(state.missing_slots),
+        "response_shape_key": state.response_shape_key,
+        "productName": product_label,
+    }
+    if blocked_tool:
+        metadata["blockedTool"] = blocked_tool
+    quantity = slots.get("ord_qty") or slots.get("quantity")
+    if quantity not in (None, "", 0, "0"):
+        metadata["ordQty"] = quantity
+    store_name = str(slots.get("shop_name") or slots.get("store_name") or "").strip()
+    if store_name:
+        metadata["shopName"] = store_name
+    requested_cal_day = str(slots.get("requested_cal_day") or "").strip()
+    if requested_cal_day:
+        metadata["requestedCalDay"] = requested_cal_day
+    availability_intent = str(slots.get("availability_intent") or "").strip()
+    if availability_intent:
+        metadata["availabilityIntent"] = availability_intent
+
+    if len(sizes) > 1 and not normalize_tire_size(str(slots.get("tire_size") or "")):
+        return {
+            "type": "data",
+            "template": TemplateName.QUICK_REPLY.value,
+            "source_domain": "transaction",
+            "assistant_response_source": "code_purchase_flow_resolution_size_clarification",
+            "data": {
+                "assistantResponse": (
+                    f"{product_label} 구매를 진행하려면 타이어 사이즈를 먼저 선택해 주세요.\n"
+                    f"현재 확인되는 규격은 {', '.join(sizes[:8])}예요."
+                ),
+                "quickReplies": [
+                    *({"label": size, "domain": "DISCOVERY"} for size in sizes[:6]),
+                    {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
+                ],
+                "predictedDomains": ["TRANSACTION", "DISCOVERY"],
+                "metadata": {**metadata, "sizes": sizes},
+            },
+        }
+
+    return {
+        "type": "data",
+        "template": TemplateName.QUICK_REPLY.value,
+        "source_domain": "transaction",
+        "assistant_response_source": "code_purchase_flow_resolution_clarification",
+        "data": {
+            "assistantResponse": (
+                f"{product_label} 조건으로 확인되는 상품이 여러 개예요. "
+                "정확한 상품을 다시 선택하거나 규격을 알려주세요."
+            ),
+            "quickReplies": [
+                {"label": "상품 다시 선택", "domain": "DISCOVERY"},
+                {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
+                {"label": "타이어 추천", "domain": "DISCOVERY"},
+            ],
+            "predictedDomains": ["TRANSACTION", "DISCOVERY"],
+            "metadata": {**metadata, "candidateCount": len(matched_rows), "sizes": sizes},
+        },
+    }
+
+
+def _purchase_size_candidates(rows: list[dict]) -> list[str]:
+    sizes: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        tire_size = normalize_tire_size(str(row.get("tire_size_1") or row.get("tire_size") or ""))
+        compact = re.sub(r"[^0-9]", "", tire_size)
+        if not compact or compact in seen:
+            continue
+        seen.add(compact)
+        sizes.append(tire_size)
+    return sizes
 
 
 def _purchase_product_label(slots: Mapping[str, Any]) -> str:

@@ -38,6 +38,7 @@ from services.tstation.agents.base_agent import (
     _is_staggered_registered_vehicle,
     _registered_vehicle_slot_values,
     _slot_data_for_tool_event,
+    _tool_entries_from_previous_agent_facts,
 )
 from services.tstation.agents.c_transaction_agent.agent import TRANSACTION_ORDER_SYSTEM_PROMPT_TEMPLATE
 from services.tstation.agents.e_support_agent.agent import SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
@@ -349,6 +350,7 @@ from services.tstation.policies.delivery_policy_gate import (
     DeliveryPolicyIntent,
     decide_delivery_policy_gate,
 )
+from services.tstation.policies.flow_controller import build_purchase_flow_fallback_event
 from services.tstation.policies.intent_frame import IntentFrame, PolicyDomain
 from services.tstation.policies.resolved_context import (
     build_resolved_turn_context,
@@ -11844,10 +11846,92 @@ def test_turn_contract_fallback_event_uses_resolved_product_and_quantity_to_ask_
 
     assert event is not None
     assert event["template"] == "quickReply"
-    assert event["assistant_response_source"] == "code_transaction_missing_store_after_product_resolution"
+    assert event["assistant_response_source"] == "code_purchase_flow_fallback"
     assert "벤투스 S2 AS 245/45R18 2개 구매를 진행할 매장이나 지역을 알려주세요." in event["data"]["assistantResponse"]
     assert event["data"]["metadata"]["goodsNo"] == "G000000312679"
     assert event["data"]["metadata"]["ordQty"] == 2
+
+
+def test_purchase_flow_fallback_event_recomputes_to_ask_store_after_single_product_resolution() -> None:
+    event = build_purchase_flow_fallback_event(
+        intent="quick_order_reservation",
+        known_slots={
+            "tire_size": "245/45R19",
+            "ord_qty": 2,
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "product_name": "Ventus air S",
+        },
+        tool_data_list=[
+            {
+                "tool": "search_product_tool",
+                "input": {"keyword": "벤투스 에어S", "size": "245/45R19", "brand_cd": "HK"},
+                "data": {
+                    "items": [
+                        {
+                            "goods_no": "G000000319584",
+                            "goods_nm": "벤투스 에어S",
+                            "tire_size_1": "245/45R19",
+                        }
+                    ]
+                },
+            }
+        ],
+        blocked_tool="get_final_price_tool",
+    )
+
+    assert event is not None
+    assert event["assistant_response_source"] == "code_purchase_flow_fallback"
+    assert "245/45R19 2개 구매를 진행할 매장이나 지역을 알려주세요." in event["data"]["assistantResponse"]
+    assert event["data"]["metadata"]["flowStep"] == "ask_store"
+    assert event["data"]["metadata"]["goodsNo"] == "G000000319584"
+
+
+def test_purchase_flow_fallback_event_clarifies_size_when_product_resolution_has_multiple_sizes() -> None:
+    event = build_purchase_flow_fallback_event(
+        intent="quick_order_reservation",
+        known_slots={
+            "ord_qty": 2,
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "product_name": "Dynapro HPX",
+        },
+        tool_data_list=[
+            {
+                "tool": "search_product_tool",
+                "input": {"keyword": "Dynapro HPX", "brand_cd": "HK"},
+                "data": {
+                    "items": [
+                        {"goods_no": "G1", "goods_nm": "Dynapro HPX", "tire_size_1": "235/55R19"},
+                        {"goods_no": "G2", "goods_nm": "Dynapro HPX", "tire_size_1": "255/45R20"},
+                    ]
+                },
+            }
+        ],
+        blocked_tool="get_final_price_tool",
+    )
+
+    assert event is not None
+    assert event["assistant_response_source"] == "code_purchase_flow_resolution_size_clarification"
+    assert "타이어 사이즈를 먼저 선택해 주세요." in event["data"]["assistantResponse"]
+    assert _labels(event["data"]["quickReplies"]) == ["235/55R19", "255/45R20", "사이즈 직접 입력"]
+
+
+def test_tool_entries_from_previous_agent_facts_parses_search_product_rows() -> None:
+    entries = _tool_entries_from_previous_agent_facts(
+        [
+            {
+                "role": "assistant",
+                "content": (
+                    "[Previous agent tool facts]\n"
+                    '[{"tool":"search_product_tool","data":[{"goods_no":"G000000319584","goods_nm":"벤투스 에어S","tire_size_1":"245/45R19"}]}]'
+                ),
+            }
+        ]
+    )
+
+    assert len(entries) == 1
+    assert entries[0]["tool"] == "search_product_tool"
 
 
 def test_no_visible_output_fallback_event_builds_latest_compare_summary() -> None:
@@ -25123,6 +25207,70 @@ def test_base_agent_purchase_flow_tool_guard_uses_purchase_slot_prompt_instead_o
     assert "벤투스 S2 AS 245/45R18 2개 구매를 진행할 매장이나 지역을 알려주세요." in data_event["data"]["assistantResponse"]
     assert metadata["blocked_tool"] == "get_logistics_inventory_tool"
     assert metadata["block_reason"] == "forbidden_tool_for_contract"
+
+
+def test_base_agent_purchase_flow_tool_guard_uses_previous_agent_tool_facts_to_ask_store() -> None:
+    class _DummyAgent(BaseAgent):
+        OUTPUT_TEMPLATE = None
+        TOOL_TO_AF_MAP: dict[str, str] = {}
+
+        def __init__(self) -> None:
+            self.name = "Transaction Agent"
+
+    response_decision = ResponseDecision(
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        metadata={
+            "response_shape_key": "missing_order_slots",
+            "flow_id": "purchase_order",
+            "flow_step": "resolve_product",
+        },
+    )
+    tool_plan = ToolPlan(
+        allowed_tools=("search_product_tool",),
+        preferred_tool="search_product_tool",
+        forbidden_tools=("get_final_price_tool", "get_logistics_inventory_tool", "quick_order_tool"),
+        metadata={
+            "response_intent": "quick_order_reservation",
+            "flow_id": "purchase_order",
+            "flow_step": "resolve_product",
+            "flow_slots": {
+                "tire_size": "245/45R19",
+                "ord_qty": 2,
+                "pending_intent": "order",
+                "goal_type": "place_order",
+                "product_name": "Ventus air S",
+            },
+        },
+    )
+    decision_token = current_transaction_response_decision.set(response_decision)
+    tool_plan_token = current_transaction_tool_plan.set(tool_plan)
+    try:
+        agent = _DummyAgent()
+        events = agent._contract_sensitive_tool_guard_events(
+            "get_final_price_tool",
+            [
+                {"role": "user", "content": "벤투스 에어 s 2454519 2개 구매할래"},
+                {
+                    "role": "assistant",
+                    "content": (
+                        "[Previous agent tool facts]\n"
+                        '[{"tool":"search_product_tool","data":[{"goods_no":"G000000319584","goods_nm":"벤투스 에어S","tire_size_1":"245/45R19"}]}]'
+                    ),
+                },
+            ],
+            config=None,
+            response_streamer=None,
+            answering_emitted=False,
+        )
+    finally:
+        current_transaction_response_decision.reset(decision_token)
+        current_transaction_tool_plan.reset(tool_plan_token)
+
+    assert events is not None
+    data_event = next(event for event in events if event.get("type") == "data")
+    assert "245/45R19 2개 구매를 진행할 매장이나 지역을 알려주세요." in data_event["data"]["assistantResponse"]
+    assert data_event["data"]["metadata"]["goodsNo"] == "G000000319584"
 
 
 def test_trace_shaped_general_cancel_fee_policy_blocks_order_lookup_and_replaces_with_faq(

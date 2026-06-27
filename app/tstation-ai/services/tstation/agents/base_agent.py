@@ -166,6 +166,29 @@ def _messages_include_resolved_product_tool_fact(messages: list[dict]) -> bool:
     return False
 
 
+def _tool_entries_from_previous_agent_facts(messages: list[dict] | None) -> list[dict]:
+    if not messages:
+        return []
+    for msg in reversed(messages[-8:]):
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            continue
+        content = str(msg.get("content") or "")
+        marker = "[Previous agent tool facts]"
+        if marker not in content:
+            continue
+        payload = content.split(marker, 1)[-1].strip()
+        if not payload:
+            continue
+        try:
+            data = json.loads(payload)
+        except Exception:
+            logger.debug("[TOOL_FACTS] failed to parse previous agent tool facts")
+            continue
+        if isinstance(data, list):
+            return [entry for entry in data if isinstance(entry, dict)]
+    return []
+
+
 def _recent_context_text(messages: list[dict], *, limit: int = 8) -> str:
     lines: list[str] = []
     for msg in messages[-limit:]:
@@ -2067,6 +2090,7 @@ class BaseAgent(ABC):
             flow_event = build_purchase_flow_fallback_event(
                 intent=contract_intent,
                 known_slots=metadata.get("flow_slots") if isinstance(metadata.get("flow_slots"), dict) else {},
+                tool_data_list=_tool_entries_from_previous_agent_facts(messages),
                 blocked_tool=tool_name,
             )
             if flow_event is not None:
