@@ -15109,6 +15109,113 @@ def test_router_slot_fill_context_payload_restores_dormant_purchase_snapshot() -
     assert payload["last_requested_slot"] == "quantity"
 
 
+def test_router_slot_fill_context_payload_restores_store_schedule_snapshot() -> None:
+    payload = TStationChatServiceV2._router_slot_fill_context_payload(
+        slots=ConversationSlots(
+            pending_intent="reservation",
+            shop_id="F00405",
+            shop_name="티스테이션 경포점",
+        ),
+        user_text="내일 2시",
+        latest_product_tmpl=None,
+        latest_location_tmpl=None,
+        latest_datepick_tmpl=None,
+    )
+
+    assert payload["current_flow"] == "store_schedule"
+    assert payload["flow_step"] == "ask_schedule"
+    assert payload["known_slots"]["shop_id"] == "F00405"
+    assert payload["missing_slots"] == ["schedule"]
+    assert payload["last_requested_slot"] == "schedule"
+
+
+def test_router_slot_fill_context_payload_restores_stock_snapshot() -> None:
+    payload = TStationChatServiceV2._router_slot_fill_context_payload(
+        slots=ConversationSlots(
+            goods_no="G000000309715",
+            tire_size="225/55R18",
+            region="동탄",
+            availability_intent="today_install",
+            pending_intent="stock",
+            goal_type="store_with_stock",
+        ),
+        user_text="4개",
+        latest_product_tmpl=None,
+        latest_location_tmpl=None,
+        latest_datepick_tmpl=None,
+    )
+
+    assert payload["current_flow"] == "stock_store_search"
+    assert payload["flow_step"] == "ask_quantity"
+    assert payload["known_slots"]["goods_no"] == "G000000309715"
+    assert payload["known_slots"]["region"] == "동탄"
+    assert payload["missing_slots"] == ["quantity"]
+    assert payload["last_requested_slot"] == "quantity"
+
+
+def test_expected_slot_fill_precheck_accepts_direct_quantity_for_active_stock() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000309715",
+        tire_size="225/55R18",
+        region="동탄",
+        availability_intent="today_install",
+        pending_intent="stock",
+        goal_type="store_with_stock",
+    )
+    context = TStationChatServiceV2._router_slot_fill_context_payload(
+        slots=slots,
+        user_text="4개",
+        latest_product_tmpl=None,
+        latest_location_tmpl=None,
+        latest_datepick_tmpl=None,
+    )
+
+    precheck = TStationChatServiceV2._expected_slot_fill_precheck(
+        user_text="4개",
+        regex_slots=ConversationSlots.extract_from_user_text("4개"),
+        merged_slots=slots.merge(ConversationSlots.extract_from_user_text("4개")),
+        router_context=context,
+    )
+
+    assert context["current_flow"] == "stock_store_search"
+    assert precheck["matched"] is True
+    assert precheck["filled_slot"] == "quantity"
+    assert precheck["slot_patch"]["ord_qty"] == 4
+    assert precheck["slot_patch"]["pending_intent"] == "stock"
+    assert precheck["slot_patch"]["goal_type"] == "store_with_stock"
+    assert precheck["resume_source"] == "expected_slot_fill:quantity"
+
+
+def test_expected_slot_fill_precheck_accepts_schedule_for_store_schedule_flow() -> None:
+    slots = ConversationSlots(
+        pending_intent="reservation",
+        shop_id="F00405",
+        shop_name="티스테이션 경포점",
+    )
+    context = TStationChatServiceV2._router_slot_fill_context_payload(
+        slots=slots,
+        user_text="2026년 6월 27일 14:00",
+        latest_product_tmpl=None,
+        latest_location_tmpl=None,
+        latest_datepick_tmpl=None,
+    )
+
+    precheck = TStationChatServiceV2._expected_slot_fill_precheck(
+        user_text="2026년 6월 27일 14:00",
+        regex_slots=ConversationSlots(),
+        merged_slots=slots.merge(ConversationSlots(requested_cal_day="20260627", rsv_hour="14")),
+        router_context=context,
+    )
+
+    assert context["current_flow"] == "store_schedule"
+    assert precheck["matched"] is True
+    assert precheck["filled_slot"] == "schedule"
+    assert precheck["slot_patch"]["requested_cal_day"] == "20260627"
+    assert precheck["slot_patch"]["rsv_hour"] == "14"
+    assert precheck["slot_patch"]["pending_intent"] == "reservation"
+    assert precheck["resume_source"] == "expected_slot_fill:schedule"
+
+
 def test_expected_slot_fill_precheck_promotes_purchase_anchor_before_router() -> None:
     slots = ConversationSlots(goods_no="G000000319584", tire_size="245/45R19")
     context = TStationChatServiceV2._router_slot_fill_context_payload(

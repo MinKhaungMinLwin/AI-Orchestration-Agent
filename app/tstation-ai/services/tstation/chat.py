@@ -20471,6 +20471,8 @@ class TStationChatServiceV2:
             return "quick_order_reservation"
         if pending_intent == "stock" or goal_type == "store_with_stock":
             return "stock_store_search"
+        if pending_intent == "reservation" or goal_type == "store_schedule":
+            return "store_schedule"
         text = user_text or ""
         has_product_anchor = bool(
             getattr(slots, "goods_no", None)
@@ -20557,6 +20559,11 @@ class TStationChatServiceV2:
             if known_slots.get("region") or known_slots.get("shop_id") or known_slots.get("shop_name"):
                 return "show_store_candidates"
             return "stock_check"
+        if current_flow == "store_schedule":
+            missing = TStationChatServiceV2._router_slot_fill_missing_slots(current_flow, known_slots)
+            if missing:
+                return f"ask_{missing[0]}"
+            return "show_schedule"
         return "none"
 
     @staticmethod
@@ -20568,6 +20575,12 @@ class TStationChatServiceV2:
         if current_flow == "none":
             return []
         missing: list[str] = []
+        if current_flow == "store_schedule":
+            if not (known_slots.get("shop_id") or known_slots.get("shop_name")):
+                missing.append("store")
+            elif not (known_slots.get("requested_cal_day") and known_slots.get("rsv_hour")):
+                missing.append("schedule")
+            return missing
         if not known_slots.get("goods_no") and not known_slots.get("product_name"):
             missing.append("product")
         elif known_slots.get("product_name") and not known_slots.get("goods_no"):
@@ -20721,7 +20734,7 @@ class TStationChatServiceV2:
         region_store_input_resolution: RegionStoreInputContextResolution | None = None,
     ) -> dict[str, Any]:
         current_flow = str(router_context.get("current_flow") or "none")
-        if current_flow not in {"quick_order_reservation", "stock_store_search"}:
+        if current_flow not in {"quick_order_reservation", "stock_store_search", "store_schedule"}:
             return {"matched": False, "reason": "no_active_flow"}
         text = user_text or ""
         if re.search(
@@ -20782,6 +20795,8 @@ class TStationChatServiceV2:
         elif current_flow == "stock_store_search":
             slot_patch.setdefault("pending_intent", "stock")
             slot_patch.setdefault("goal_type", "store_with_stock")
+        elif current_flow == "store_schedule":
+            slot_patch.setdefault("pending_intent", "reservation")
 
         return {
             "matched": True,
