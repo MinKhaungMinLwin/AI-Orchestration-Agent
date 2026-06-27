@@ -44,14 +44,14 @@ class Settings(BaseSettings):
     TSTATION_BE_MCP: str
 
     # T-Station Web (chatbot CTA URLs surfaced in quickReply chips / qnaComplete redirects)
-    # Single source of truth — override per environment to flip QA → prod with one env change.
+    # Single source of truth — override per environment when a non-prod host is required.
     TSTATION_WEB_PC_BASE: str = Field(
-        default="https://wwwqa.tstation.com",
-        description="PC base URL for chatbot CTA links (mypage/store/promotion). Defaults to QA.",
+        default="https://www.tstation.com",
+        description="PC base URL for chatbot CTA links (mypage/store/promotion). Defaults to production.",
     )
     TSTATION_WEB_MOBILE_BASE: str = Field(
-        default="https://mqa.tstation.com",
-        description="Mobile base URL for chatbot CTA links (e.g., coupon list mobile redirect). Defaults to QA.",
+        default="https://m.tstation.com",
+        description="Mobile base URL for chatbot CTA links (e.g., coupon list mobile redirect). Defaults to production.",
     )
     ### -------------------------------
     # AI Internal Gateway
