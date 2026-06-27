@@ -2032,6 +2032,7 @@ class BaseAgent(ABC):
         answering_emitted: bool,
     ) -> list[dict] | None:
         try:
+            from services.tstation.policies.flow_controller import build_purchase_flow_fallback_event
             from services.tstation.policies.response_decision import TemplateName
             from services.tstation.template_mapper import (
                 current_transaction_response_decision,
@@ -2061,6 +2062,25 @@ class BaseAgent(ABC):
             block_reason = "tool_not_allowed_for_contract"
         if not block_reason:
             return None
+
+        if str(metadata.get("flow_id") or "") == "purchase_order":
+            flow_event = build_purchase_flow_fallback_event(
+                intent=contract_intent,
+                known_slots=metadata.get("flow_slots") if isinstance(metadata.get("flow_slots"), dict) else {},
+                blocked_tool=tool_name,
+            )
+            if flow_event is not None:
+                flow_event = self._annotate_contract_tool_block(
+                    flow_event,
+                    blocked_tool=tool_name,
+                    replacement_tool=None,
+                    contract_intent=contract_intent or "contract_tool_guard",
+                    allowed_tools=allowed_tools,
+                    forbidden_tools=forbidden_tools,
+                    block_reason=block_reason,
+                )
+                flow_event["assistant_response_source"] = "code_contract_tool_guard"
+                return [*self._code_template_events(flow_event, response_streamer, answering_emitted)]
 
         if preferred_tool != "search_faq_hybrid_tool":
             return self._blocked_contract_tool_guard_events(

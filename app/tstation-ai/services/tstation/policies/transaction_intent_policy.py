@@ -7,6 +7,7 @@ import datetime
 from typing import Any
 
 from services.tstation.policies.intent_frame import IntentFrame, PolicyDomain
+from services.tstation.policies.flow_controller import resolve_purchase_order_flow
 from services.tstation.policies.policy_text_matchers import is_general_card_cancel_timing_policy_query
 from services.tstation.policies.response_decision import ToolPlan
 from services.tstation.policies.store_service_gate import (
@@ -1784,6 +1785,24 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
         )
 
     if frame.intent == "quick_order_reservation":
+        flow_state = resolve_purchase_order_flow(intent=frame.intent, known_slots=frame.known_slots)
+        if flow_state is not None:
+            return ToolPlan(
+                allowed_tools=flow_state.allowed_tools,
+                preferred_tool=flow_state.preferred_tool,
+                tool_args_patch=dict(flow_state.slot_patch),
+                forbidden_tools=flow_state.forbidden_tools,
+                required_slots=flow_state.required_slots,
+                metadata={
+                    "response_intent": "quick_order_reservation",
+                    "action": action,
+                    "flow_id": flow_state.flow_id,
+                    "flow_step": flow_state.flow_step,
+                    "flow_slots": dict(flow_state.slot_patch),
+                    "flow_missing_slots": list(flow_state.missing_slots),
+                    "flow_response_shape_key": flow_state.response_shape_key,
+                },
+            )
         return ToolPlan(
             allowed_tools=(
                 "search_product_tool",
@@ -1801,6 +1820,7 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
         )
 
     if frame.intent == "quick_order_execute":
+        flow_state = resolve_purchase_order_flow(intent=frame.intent, known_slots=frame.known_slots)
         args = _slot_args(
             frame,
             "goods_no",
@@ -1812,6 +1832,23 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
             "car_lnc_cd",
             "payment_amount",
         )
+        if flow_state is not None:
+            return ToolPlan(
+                allowed_tools=flow_state.allowed_tools,
+                preferred_tool=flow_state.preferred_tool,
+                tool_args_patch={**dict(flow_state.slot_patch), **args},
+                forbidden_tools=flow_state.forbidden_tools,
+                required_slots=flow_state.required_slots,
+                metadata={
+                    "response_intent": "quick_order_execute",
+                    "action": action,
+                    "flow_id": flow_state.flow_id,
+                    "flow_step": flow_state.flow_step,
+                    "flow_slots": {**dict(flow_state.slot_patch), **args},
+                    "flow_missing_slots": list(flow_state.missing_slots),
+                    "flow_response_shape_key": flow_state.response_shape_key,
+                },
+            )
         if action_required_slots:
             return ToolPlan(
                 allowed_tools=(),

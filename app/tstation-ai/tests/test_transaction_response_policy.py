@@ -22,6 +22,69 @@ def test_tc003_today_install_nearby_stock_renders_location_candidates() -> None:
     assert decision.required_slots == ()
 
 
+def test_purchase_response_with_quantity_and_no_store_asks_store() -> None:
+    decision = decide_transaction_response(
+        intent="quick_order_reservation",
+        user_text="벤투스 S2 AS 245/45R18 2개 구매할래",
+        known_slots={
+            "goods_no": "G000000312679",
+            "tire_size": "245/45R18",
+            "ord_qty": 2,
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "tire_model": "벤투스 S2 AS",
+        },
+    )
+
+    assert decision.template == TemplateName.QUICK_REPLY
+    assert decision.response_shape == ResponseShape.CLARIFY
+    assert decision.metadata["flow_id"] == "purchase_order"
+    assert decision.metadata["flow_step"] == "ask_store"
+    assert decision.metadata["missing_slots"] == ("store",)
+    assert "get_final_price_tool" in decision.forbidden_behaviors
+    assert "get_logistics_inventory_tool" in decision.forbidden_behaviors
+
+
+def test_purchase_response_with_store_and_no_quantity_asks_quantity() -> None:
+    decision = decide_transaction_response(
+        intent="quick_order_reservation",
+        user_text="벤투스 S2 AS 245/45R18 한남점에서 구매할래",
+        known_slots={
+            "goods_no": "G000000312679",
+            "tire_size": "245/45R18",
+            "store_name": "한남점",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "tire_model": "벤투스 S2 AS",
+        },
+    )
+
+    assert decision.template == TemplateName.QUICK_REPLY
+    assert decision.metadata["flow_step"] == "ask_quantity"
+    assert decision.metadata["missing_slots"] == ("quantity",)
+
+
+def test_purchase_response_with_region_shows_store_candidates() -> None:
+    decision = decide_transaction_response(
+        intent="quick_order_reservation",
+        user_text="벤투스 S2 AS 245/45R18 2개 분당에서 구매할래",
+        known_slots={
+            "goods_no": "G000000312679",
+            "tire_size": "245/45R18",
+            "ord_qty": 2,
+            "region": "분당",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "tire_model": "벤투스 S2 AS",
+        },
+    )
+
+    assert decision.template == TemplateName.LOCATION
+    assert decision.response_shape == ResponseShape.LOCATION
+    assert decision.metadata["flow_step"] == "show_store_candidates"
+    assert decision.metadata["response_shape_key"] == "reservation_store_candidates"
+
+
 def test_tc031_product_named_stock_request_asks_for_all_missing_slots() -> None:
     decision = decide_transaction_response(
         intent="stock_store_search",

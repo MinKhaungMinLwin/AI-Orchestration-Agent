@@ -36,6 +36,74 @@ def test_tc003_today_install_nearby_stock_intent_prefers_preview_tool() -> None:
     assert decision.required_slots == ()
 
 
+def test_purchase_flow_with_quantity_and_no_store_resolves_to_ask_store() -> None:
+    user_text = "벤투스 S2 AS 245/45R18 2개 구매할래"
+    frame = build_transaction_intent_frame(
+        user_text,
+        known_slots={
+            "goods_no": "G000000312679",
+            "tire_size": "245/45R18",
+            "ord_qty": 2,
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "tire_model": "벤투스 S2 AS",
+        },
+    )
+    plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "quick_order_reservation"
+    assert plan.metadata["flow_id"] == "purchase_order"
+    assert plan.metadata["flow_step"] == "ask_store"
+    assert plan.allowed_tools == ()
+    assert "get_final_price_tool" in plan.forbidden_tools
+    assert "get_logistics_inventory_tool" in plan.forbidden_tools
+    assert "get_store_schedule_tool" in plan.forbidden_tools
+    assert "quick_order_tool" in plan.forbidden_tools
+
+
+def test_purchase_flow_with_store_and_no_quantity_resolves_to_ask_quantity() -> None:
+    user_text = "벤투스 S2 AS 245/45R18 한남점에서 구매할래"
+    frame = build_transaction_intent_frame(
+        user_text,
+        known_slots={
+            "goods_no": "G000000312679",
+            "tire_size": "245/45R18",
+            "store_name": "한남점",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "tire_model": "벤투스 S2 AS",
+        },
+    )
+    plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "quick_order_reservation"
+    assert plan.metadata["flow_step"] == "ask_quantity"
+    assert plan.allowed_tools == ()
+    assert plan.metadata["flow_slots"]["store_name"] == "한남점"
+
+
+def test_purchase_flow_with_region_resolves_to_show_store_candidates() -> None:
+    user_text = "벤투스 S2 AS 245/45R18 2개 분당에서 구매할래"
+    frame = build_transaction_intent_frame(
+        user_text,
+        known_slots={
+            "goods_no": "G000000312679",
+            "tire_size": "245/45R18",
+            "ord_qty": 2,
+            "region": "분당",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "tire_model": "벤투스 S2 AS",
+        },
+    )
+    plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "quick_order_reservation"
+    assert plan.metadata["flow_step"] == "show_store_candidates"
+    assert plan.preferred_tool == "transaction_store_preview_tool"
+    assert plan.allowed_tools == ("transaction_store_preview_tool",)
+
+
 def test_store_service_search_policy_uses_service_code_filter() -> None:
     frame = build_transaction_intent_frame("경기권에 타이어 보관해주는 매장 어디 있어?", known_slots={})
     plan = plan_transaction_tools(frame)

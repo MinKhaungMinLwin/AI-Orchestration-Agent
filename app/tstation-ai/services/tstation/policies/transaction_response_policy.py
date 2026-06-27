@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from services.tstation.policies.flow_controller import resolve_purchase_order_flow
 from services.tstation.policies.response_decision import ResponseDecision, ResponseShape, TemplateName
 
 
@@ -757,6 +758,21 @@ def _decide_inventory_availability(
 
 
 def _decide_quick_order_reservation(*, slots: dict[str, Any]) -> ResponseDecision:
+    flow_state = resolve_purchase_order_flow(intent="quick_order_reservation", known_slots=slots)
+    if flow_state is not None:
+        return _decision(
+            response_shape_key=flow_state.response_shape_key,
+            response_shape=_response_shape_from_template(flow_state.template),
+            template=flow_state.template,
+            required_slots=flow_state.missing_slots,
+            forbidden_behaviors=tuple(flow_state.forbidden_tools),
+            assistant_guidance=_purchase_flow_guidance(flow_state.flow_step),
+            metadata={
+                "missing_slots": tuple(flow_state.missing_slots),
+                "flow_id": flow_state.flow_id,
+                "flow_step": flow_state.flow_step,
+            },
+        )
     missing: list[str] = []
     if not (slots.get("goods_no") or slots.get("tire_size")):
         missing.append("tire_size")
@@ -817,6 +833,21 @@ def _decide_quick_order_reservation(*, slots: dict[str, Any]) -> ResponseDecisio
 
 
 def _decide_quick_order_execute(*, slots: dict[str, Any]) -> ResponseDecision:
+    flow_state = resolve_purchase_order_flow(intent="quick_order_execute", known_slots=slots)
+    if flow_state is not None:
+        return _decision(
+            response_shape_key=flow_state.response_shape_key,
+            response_shape=_response_shape_from_template(flow_state.template),
+            template=flow_state.template,
+            required_slots=flow_state.missing_slots,
+            forbidden_behaviors=tuple(flow_state.forbidden_tools),
+            assistant_guidance=_purchase_flow_guidance(flow_state.flow_step),
+            metadata={
+                "missing_slots": tuple(flow_state.missing_slots),
+                "flow_id": flow_state.flow_id,
+                "flow_step": flow_state.flow_step,
+            },
+        )
     missing: list[str] = []
     if not slots.get("goods_no"):
         missing.append("product")
@@ -864,6 +895,30 @@ def _decision(
         assistant_guidance=assistant_guidance,
         metadata={"response_shape_key": response_shape_key, **(metadata or {})},
     )
+
+
+def _response_shape_from_template(template: TemplateName) -> ResponseShape:
+    if template == TemplateName.LOCATION:
+        return ResponseShape.LOCATION
+    if template == TemplateName.DATE_PICK:
+        return ResponseShape.DATE_PICK
+    if template in {TemplateName.PRE_ORDER, TemplateName.ORDER_COMPLETE}:
+        return ResponseShape.ACTION_CONFIRM
+    return ResponseShape.CLARIFY
+
+
+def _purchase_flow_guidance(flow_step: str) -> str:
+    return {
+        "resolve_product": "구매 플로우를 이어가려면 먼저 상품을 확정한다.",
+        "ask_size": "구매 플로우를 이어가려면 먼저 타이어 사이즈를 확정한다.",
+        "ask_quantity": "구매 플로우를 이어가려면 수량을 먼저 수집한다.",
+        "ask_store": "구매 플로우를 이어가려면 매장 또는 지역을 먼저 수집한다.",
+        "show_store_candidates": "구매 가능한 매장 후보를 먼저 보여주고 사용자가 매장을 고르게 한다.",
+        "resolve_store": "입력된 매장명을 해소한 뒤 예약 가능 단계로 이어간다.",
+        "show_schedule": "상품, 수량, 매장이 확정되면 예약 가능한 날짜와 시간을 먼저 선택하게 한다.",
+        "build_preorder": "예약 날짜와 시간이 확정되면 preOrder 확인 단계로 이어간다.",
+        "execute_order": "preOrder 확인 후에만 quick_order_tool로 실제 주문을 실행한다.",
+    }.get(flow_step, "구매 플로우의 다음 단계만 안내한다.")
 
 
 def _needs_location_for_nearby_stock(text: str) -> bool:

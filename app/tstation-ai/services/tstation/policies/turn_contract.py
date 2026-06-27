@@ -8,6 +8,7 @@ from typing import Any, Mapping
 
 from services.tstation.common.cta_urls import CTAUrls
 from services.tstation.policies.cross_domain_policy import CrossDomainPlan
+from services.tstation.policies.flow_controller import build_purchase_flow_fallback_event
 from services.tstation.policies.intent_frame import IntentFrame
 from services.tstation.policies.resolved_context import build_resolved_turn_context
 from services.tstation.policies.response_decision import ResponseDecision, ToolPlan
@@ -226,6 +227,8 @@ class TurnContract:
     resume_anchor_detected: bool = False
     dormant_context_reason: str | None = None
     blocking_required_slots_source: str | None = None
+    flow_id: str | None = None
+    flow_step: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -270,6 +273,8 @@ class TurnContract:
             "resume_anchor_detected": self.resume_anchor_detected,
             "dormant_context_reason": self.dormant_context_reason,
             "blocking_required_slots_source": self.blocking_required_slots_source,
+            "flow_id": self.flow_id,
+            "flow_step": self.flow_step,
         }
 
 
@@ -383,6 +388,14 @@ def build_turn_contract(
             known_slots["oe_replacement_type"] = oe_replacement_type
         if stock_check_mode and not known_slots.get("stock_check_mode"):
             known_slots["stock_check_mode"] = stock_check_mode
+    flow_id = None
+    flow_step = None
+    if isinstance(tool_plan_metadata, Mapping):
+        flow_id = str(tool_plan_metadata.get("flow_id") or "").strip() or None
+        flow_step = str(tool_plan_metadata.get("flow_step") or "").strip() or None
+    if isinstance(response_metadata, Mapping):
+        flow_id = flow_id or (str(response_metadata.get("flow_id") or "").strip() or None)
+        flow_step = flow_step or (str(response_metadata.get("flow_step") or "").strip() or None)
 
     has_reference_signal = _has_reference_signal(user_text)
     if intent == "transaction_fallback" and _is_recoverable_today_install_stock_contract(known_slots):
@@ -779,6 +792,8 @@ def build_turn_contract(
         resume_anchor_detected=resume_anchor_detected,
         dormant_context_reason=dormant_context_reason,
         blocking_required_slots_source=blocking_required_slots_source,
+        flow_id=flow_id,
+        flow_step=flow_step,
     )
 
 
@@ -875,6 +890,12 @@ def build_response_policy_guard_event(contract: TurnContract) -> dict[str, Any]:
     response_decision = contract.response_decision or {}
     forbidden = response_decision.get("forbidden_behaviors") if isinstance(response_decision, Mapping) else ()
     forbidden_set = {str(item) for item in forbidden} if isinstance(forbidden, list | tuple) else set()
+    purchase_flow_event = build_purchase_flow_fallback_event(
+        intent=str(contract.intent or ""),
+        known_slots=contract.known_slots,
+    )
+    if purchase_flow_event is not None:
+        return _annotate_contract_guard_event(purchase_flow_event, contract, reason="response_policy_guard")
     if _support_answer_contract_owns_response(
         domain=str(contract.domain or ""),
         intent=str(contract.intent or ""),

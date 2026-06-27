@@ -14010,7 +14010,8 @@ def test_select_schedule_ui_action_keeps_quick_order_reservation_without_quick_o
     assert frame.intent == "quick_order_reservation"
     assert contract.intent == "quick_order_reservation"
     assert "quick_order_tool" not in tool_plan.allowed_tools
-    assert "transaction_store_preview_tool" in tool_plan.allowed_tools
+    assert tool_plan.metadata["flow_step"] == "build_preorder"
+    assert tool_plan.allowed_tools == ()
 
 
 def test_transaction_intent_frame_prefers_quick_order_reservation_for_selected_store_slot_fill() -> None:
@@ -25063,6 +25064,65 @@ def test_base_agent_contract_sensitive_tool_guard_hard_blocks_tool_outside_allow
     assert metadata["blocked_tool"] == "quick_order_tool"
     assert metadata["replacement_tool"] == ""
     assert metadata["block_reason"] == "tool_not_allowed_for_contract"
+
+
+def test_base_agent_purchase_flow_tool_guard_uses_purchase_slot_prompt_instead_of_generic_fallback() -> None:
+    class _DummyAgent(BaseAgent):
+        OUTPUT_TEMPLATE = None
+        TOOL_TO_AF_MAP: dict[str, str] = {}
+
+        def __init__(self) -> None:
+            self.name = "Transaction Agent"
+
+    response_decision = ResponseDecision(
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        metadata={
+            "response_shape_key": "missing_order_slots",
+            "flow_id": "purchase_order",
+            "flow_step": "ask_store",
+        },
+    )
+    tool_plan = ToolPlan(
+        allowed_tools=(),
+        preferred_tool=None,
+        forbidden_tools=("get_logistics_inventory_tool", "get_final_price_tool", "quick_order_tool"),
+        metadata={
+            "response_intent": "quick_order_reservation",
+            "flow_id": "purchase_order",
+            "flow_step": "ask_store",
+            "flow_slots": {
+                "goods_no": "G000000312679",
+                "tire_size": "245/45R18",
+                "ord_qty": 2,
+                "pending_intent": "order",
+                "goal_type": "place_order",
+                "tire_model": "벤투스 S2 AS",
+            },
+        },
+    )
+    decision_token = current_transaction_response_decision.set(response_decision)
+    tool_plan_token = current_transaction_tool_plan.set(tool_plan)
+    try:
+        agent = _DummyAgent()
+        events = agent._contract_sensitive_tool_guard_events(
+            "get_logistics_inventory_tool",
+            [{"role": "user", "content": "벤투스 S2 AS 245/45R18 2개 구매할래"}],
+            config=None,
+            response_streamer=None,
+            answering_emitted=False,
+        )
+    finally:
+        current_transaction_response_decision.reset(decision_token)
+        current_transaction_tool_plan.reset(tool_plan_token)
+
+    assert events is not None
+    data_event = next(event for event in events if event.get("type") == "data")
+    metadata = data_event["data"]["metadata"]
+    assert data_event["assistant_response_source"] == "code_contract_tool_guard"
+    assert "벤투스 S2 AS 245/45R18 2개 구매를 진행할 매장이나 지역을 알려주세요." in data_event["data"]["assistantResponse"]
+    assert metadata["blocked_tool"] == "get_logistics_inventory_tool"
+    assert metadata["block_reason"] == "forbidden_tool_for_contract"
 
 
 def test_trace_shaped_general_cancel_fee_policy_blocks_order_lookup_and_replaces_with_faq(

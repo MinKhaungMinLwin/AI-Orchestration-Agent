@@ -15651,6 +15651,15 @@ def _build_turn_contract_fallback_event(
         if should_guard_required_slots(turn_contract):
             return build_required_slot_clarification_event(turn_contract)
         return build_response_policy_guard_event(turn_contract)
+    from services.tstation.policies.flow_controller import build_purchase_flow_fallback_event
+
+    flow_event = build_purchase_flow_fallback_event(
+        intent=str(turn_contract.intent or ""),
+        known_slots=turn_contract.known_slots,
+        tool_data_list=tool_data_list,
+    )
+    if flow_event is not None:
+        return flow_event
     unresolved_event = _build_transaction_unresolved_product_resolution_event(
         user_text=user_text,
         slots=turn_contract.known_slots,
