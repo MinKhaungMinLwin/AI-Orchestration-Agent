@@ -1240,7 +1240,7 @@ def _interactive_flow_contract_intent_from_slots(
     goal_type = str(slot_values.get("goal_type") or "").strip()
     availability_intent = str(slot_values.get("availability_intent") or "").strip()
 
-    if pending_intent == "order" or goal_type == "place_order":
+    if pending_intent in {"order", "cart"} or goal_type in {"place_order", "add_to_cart"}:
         return _QUICK_ORDER_RESERVATION_INTENT
     if availability_intent == "today_install":
         return _STOCK_STORE_SEARCH_INTENT
@@ -1360,8 +1360,12 @@ def _with_existing_transaction_slot_fill_state(
 
     expected_contract_intent = str(action_context.expected_contract_intent or "").strip()
     if expected_contract_intent == _QUICK_ORDER_RESERVATION_INTENT:
-        slot_patch.setdefault("pending_intent", "order")
-        slot_patch.setdefault("goal_type", "place_order")
+        if slot_patch.get("pending_intent") == "cart" or slot_patch.get("goal_type") == "add_to_cart":
+            slot_patch.setdefault("pending_intent", "cart")
+            slot_patch.setdefault("goal_type", "add_to_cart")
+        else:
+            slot_patch.setdefault("pending_intent", "order")
+            slot_patch.setdefault("goal_type", "place_order")
         slot_patch.setdefault("stock_check_mode", "preview")
     elif expected_contract_intent == _STOCK_STORE_SEARCH_INTENT:
         slot_patch.setdefault("pending_intent", "stock")
@@ -2890,11 +2894,14 @@ def build_order_quantity_prompt_event(slots: Any) -> dict[str, Any]:
     front_size = normalize_tire_size(str(getattr(slots, "tire_size_front", None) or ""))
     rear_size = normalize_tire_size(str(getattr(slots, "tire_size_rear", None) or ""))
     is_staggered = bool(front_size and rear_size and front_size != rear_size)
+    pending_intent = str(getattr(slots, "pending_intent", None) or "").strip()
+    goal_type = str(getattr(slots, "goal_type", None) or "").strip()
+    is_cart_flow = pending_intent == "cart" or goal_type == "add_to_cart"
 
     if is_staggered:
         axle_label = "앞바퀴" if selected_size == front_size else "뒷바퀴" if selected_size == rear_size else "현재"
         assistant_response = (
-            f"{axle_label} **{selected_size}** 기준으로 몇 개 구매하실까요?\n\n"
+            f"{axle_label} **{selected_size}** 기준으로 몇 개 {'장바구니에 담을까요' if is_cart_flow else '구매하실까요'}?\n\n"
             "이 차량은 앞/뒤 규격이 달라 현재 규격은 최대 2개까지 선택할 수 있어요."
         )
         quick_replies = [
@@ -2903,13 +2910,52 @@ def build_order_quantity_prompt_event(slots: Any) -> dict[str, Any]:
         ]
     else:
         size_text = f" **{selected_size}** 기준으로" if selected_size else ""
-        assistant_response = f"타이어{size_text} 몇 개 구매하실까요?"
+        assistant_response = f"타이어{size_text} 몇 개 {'장바구니에 담을까요' if is_cart_flow else '구매하실까요'}?"
         quick_replies = [
             {"label": "1개", "domain": "TRANSACTION"},
             {"label": "2개", "domain": "TRANSACTION"},
             {"label": "3개", "domain": "TRANSACTION"},
             {"label": "4개", "domain": "TRANSACTION"},
         ]
+
+    slot_values: dict[str, Any] = {
+        "pending_intent": "cart" if is_cart_flow else "order",
+        "goal_type": "add_to_cart" if is_cart_flow else "place_order",
+    }
+    goods_no = getattr(slots, "goods_no", None)
+    if goods_no not in (None, ""):
+        slot_values["goods_no"] = goods_no
+    if selected_size:
+        slot_values["tire_size"] = selected_size
+    tire_model = getattr(slots, "tire_model", None)
+    if tire_model not in (None, ""):
+        slot_values["tire_model"] = tire_model
+
+    chip_metadata = {
+        "cta_action": "select_quantity",
+        "source_intent": _QUICK_ORDER_RESERVATION_INTENT,
+        "expected_contract_intent": _QUICK_ORDER_RESERVATION_INTENT,
+        "expected_behavior": "slot_fill",
+        "fills_slot": "ord_qty",
+        "slots": slot_values,
+    }
+    quick_replies = [{**chip, "metadata": chip_metadata} for chip in quick_replies]
+
+    cta_context: dict[str, Any] = {
+        "cta_action": "select_quantity",
+        "source_intent": _QUICK_ORDER_RESERVATION_INTENT,
+        "expected_contract_intent": _QUICK_ORDER_RESERVATION_INTENT,
+        "expected_behavior": "slot_fill",
+        "pendingIntent": slot_values["pending_intent"],
+        "goalType": slot_values["goal_type"],
+    }
+    if goods_no not in (None, ""):
+        cta_context["goodsNo"] = goods_no
+    if selected_size:
+        cta_context["tireSize"] = selected_size
+    if tire_model not in (None, ""):
+        cta_context["productName"] = tire_model
+    cta_context["slots"] = slot_values
 
     return {
         "type": "data",
@@ -2920,6 +2966,7 @@ def build_order_quantity_prompt_event(slots: Any) -> dict[str, Any]:
             "assistantResponse": assistant_response,
             "quickReplies": quick_replies,
             "predictedDomains": ["TRANSACTION"],
+            "metadata": {"ctaContext": cta_context},
         },
     }
 

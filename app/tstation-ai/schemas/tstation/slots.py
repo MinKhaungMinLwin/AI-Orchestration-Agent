@@ -30,7 +30,7 @@ def _store_name_values_conflict(old_val: Any, new_val: Any) -> bool:
 # "reservation" covers 매장 방문 예약 (타이어 장착 외에 와이퍼/배터리/얼라인먼트/경정비 등
 # 부가 서비스 예약 포함). Distinguished from "order" — "예약" 단독 발화는 서비스 방문이지
 # 상품 주문이 아니다. template_mapper 가 isBookingFlow=true 분기 시 함께 본다.
-PendingIntent = Literal["price", "stock", "order", "reservation", "quantity_benefit_comparison"]
+PendingIntent = Literal["price", "stock", "order", "reservation", "cart", "quantity_benefit_comparison"]
 AvailabilityIntent = Literal["today_install"]
 PendingCheckTopic = Literal[
     "safe_service",
@@ -57,6 +57,7 @@ GoalType = Literal[
     "price_inquiry",
     "coupon_discount_amount",
     "place_order",
+    "add_to_cart",
 ]
 
 

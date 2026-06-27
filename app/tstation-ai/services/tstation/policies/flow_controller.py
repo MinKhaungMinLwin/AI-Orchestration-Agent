@@ -47,7 +47,17 @@ class FlowState:
 
 
 _PURCHASE_FLOW_ID = "purchase_order"
+_CART_FLOW_ID = "cart_add"
 _PURCHASE_FORBIDDEN_TOOLS = (
+    "get_final_price_tool",
+    "get_logistics_inventory_tool",
+    "get_store_inventory_tool",
+    "transaction_store_preview_tool",
+    "get_store_schedule_tool",
+    "get_multi_store_schedule_tool",
+    "quick_order_tool",
+)
+_CART_FORBIDDEN_TOOLS = (
     "get_final_price_tool",
     "get_logistics_inventory_tool",
     "get_store_inventory_tool",
@@ -122,14 +132,17 @@ def resolve_purchase_order_flow(
     location_type = location_source_type(slots)
     requested_cal_day = str(slots.get("requested_cal_day") or "").strip()
     rsv_hour = str(slots.get("rsv_hour") or "").strip()
+    pending_intent = str(slots.get("pending_intent") or "").strip()
+    goal_type = str(slots.get("goal_type") or "").strip()
+    is_cart_flow = pending_intent == "cart" or goal_type == "add_to_cart"
 
     base_patch = _purchase_slot_patch(slots)
     base_metadata = {
-        "flow_id": _PURCHASE_FLOW_ID,
+        "flow_id": _CART_FLOW_ID if is_cart_flow else _PURCHASE_FLOW_ID,
         "flow_slots": base_patch,
     }
 
-    if intent == "quick_order_execute":
+    if intent == "quick_order_execute" and not is_cart_flow:
         execute_missing: list[str] = []
         if not goods_no:
             execute_missing.append("product")
@@ -199,15 +212,31 @@ def resolve_purchase_order_flow(
 
     if quantity in (None, "", 0, "0"):
         return FlowState(
-            flow_id=_PURCHASE_FLOW_ID,
+            flow_id=_CART_FLOW_ID if is_cart_flow else _PURCHASE_FLOW_ID,
             flow_step="ask_quantity",
             required_slots=("quantity",),
             missing_slots=("quantity",),
             allowed_tools=(),
-            forbidden_tools=_PURCHASE_FORBIDDEN_TOOLS,
+            forbidden_tools=_CART_FORBIDDEN_TOOLS if is_cart_flow else _PURCHASE_FORBIDDEN_TOOLS,
             preferred_tool=None,
             template=TemplateName.QUICK_REPLY,
             response_shape_key="missing_order_slots",
+            action_mode="purchase_continuation",
+            slot_patch=base_patch,
+            metadata=base_metadata,
+        )
+
+    if is_cart_flow:
+        return FlowState(
+            flow_id=_CART_FLOW_ID,
+            flow_step="execute_cart",
+            required_slots=(),
+            missing_slots=(),
+            allowed_tools=("save_to_cart_tool",),
+            forbidden_tools=_CART_FORBIDDEN_TOOLS,
+            preferred_tool="save_to_cart_tool",
+            template=TemplateName.ORDER_COMPLETE,
+            response_shape_key="cart_add_execute",
             action_mode="purchase_continuation",
             slot_patch=base_patch,
             metadata=base_metadata,
@@ -439,6 +468,8 @@ def _purchase_slot_patch(slots: Mapping[str, Any]) -> dict[str, Any]:
         patch["pending_intent"] = "order"
     if patch.get("goal_type") in (None, ""):
         patch["goal_type"] = "place_order"
+    if patch.get("pending_intent") == "cart":
+        patch["goal_type"] = "add_to_cart"
     if patch.get("tire_size"):
         patch["tire_size"] = normalize_tire_size(str(patch["tire_size"]))
     return patch

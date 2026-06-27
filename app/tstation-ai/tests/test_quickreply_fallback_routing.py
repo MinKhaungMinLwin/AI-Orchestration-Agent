@@ -267,6 +267,7 @@ from services.tstation.chat import (
     _inject_destination_cta_for_guidance,
     _ensure_my_goods_review_lookup_cta,
     _ensure_store_review_write_cta,
+    _is_add_to_cart_cta_context,
     _is_ev_suitability_turn,
     _extract_plain_store_info_store_name,
     _is_bare_product_name_search_query,
@@ -16723,6 +16724,81 @@ def test_confirmed_product_slot_values_from_product_description_quickreply_event
         "tire_model": "벤투스 S2 AS",
         "tire_size": "225/45R17",
     }
+
+
+def test_sanitize_transaction_cta_contracts_enriches_cart_quickreply_metadata() -> None:
+    event_data = {
+        "assistantResponse": "다이나프로 HPX 상품 설명이에요.",
+        "quickReplies": [
+            {"label": "구매하기", "domain": "TRANSACTION"},
+            {"label": "장바구니담기", "domain": "TRANSACTION"},
+        ],
+        "metadata": {
+            "goodsId": "G000000123456",
+            "productName": "Dynapro HPX",
+            "tireSize": "235/55R19",
+        },
+    }
+
+    changed = _sanitize_transaction_cta_contracts(
+        event_data,
+        source_domain="discovery",
+        turn_contract=None,
+        action_mode=None,
+    )
+
+    assert changed is True
+    cart_chip = next(chip for chip in event_data["quickReplies"] if chip["label"] == "장바구니담기")
+    assert cart_chip["cta_action"] == "add_to_cart"
+    assert cart_chip["expected_contract_intent"] == "quick_order_reservation"
+    assert cart_chip["metadata"]["slots"]["pending_intent"] == "cart"
+    assert cart_chip["metadata"]["slots"]["goal_type"] == "add_to_cart"
+
+
+def test_add_to_cart_cta_context_detection_prefers_metadata() -> None:
+    assert _is_add_to_cart_cta_context(
+        {
+            "cta_action": "add_to_cart",
+            "slots": {"pending_intent": "cart", "goal_type": "add_to_cart"},
+        },
+        "장바구니담기",
+    ) is True
+
+
+def test_build_order_quantity_prompt_event_uses_cart_copy_for_cart_flow() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000123456",
+        tire_model="Dynapro HPX",
+        tire_size="235/55R19",
+        pending_intent="cart",
+        goal_type="add_to_cart",
+    )
+
+    event = build_order_quantity_prompt_event(slots)
+
+    assert "장바구니에 담을까요" in event["data"]["assistantResponse"]
+    assert event["data"]["metadata"]["ctaContext"]["pendingIntent"] == "cart"
+    chip = event["data"]["quickReplies"][0]
+    assert chip["metadata"]["slots"]["pending_intent"] == "cart"
+    assert chip["metadata"]["slots"]["goal_type"] == "add_to_cart"
+
+
+def test_resolve_purchase_order_flow_uses_save_to_cart_tool_for_cart_context() -> None:
+    flow = resolve_purchase_order_flow(
+        intent="quick_order_reservation",
+        known_slots={
+            "goods_no": "G000000123456",
+            "tire_size": "235/55R19",
+            "ord_qty": 2,
+            "pending_intent": "cart",
+            "goal_type": "add_to_cart",
+        },
+    )
+
+    assert flow is not None
+    assert flow.flow_step == "execute_cart"
+    assert flow.preferred_tool == "save_to_cart_tool"
+    assert "save_to_cart_tool" in flow.allowed_tools
 
 
 def test_confirmed_product_slot_values_ignore_multi_product_event() -> None:

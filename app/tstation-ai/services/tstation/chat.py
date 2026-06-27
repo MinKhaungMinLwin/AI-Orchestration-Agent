@@ -1330,8 +1330,8 @@ def _validated_ui_action_slot_fill_router_skip(
 def _has_stored_transaction_context(slots: ConversationSlots) -> bool:
     context = slots.availability_context if isinstance(slots.availability_context, dict) else {}
     return bool(
-        slots.pending_intent in {"order", "stock", "reservation"}
-        or slots.goal_type in {"place_order", "store_with_stock"}
+        slots.pending_intent in {"order", "stock", "reservation", "cart"}
+        or slots.goal_type in {"place_order", "store_with_stock", "add_to_cart"}
         or context.get("pending_order_context")
         or context.get("dormant_purchase_context")
         or context.get("dormant_stock_context")
@@ -1419,7 +1419,7 @@ def _current_turn_action_mode(
 
     if resume_source != "none" and _has_stored_transaction_context(merged_slots):
         pending_intent, goal_type = _stored_transaction_intent(merged_slots)
-        if pending_intent == "order" or goal_type == "place_order":
+        if pending_intent in {"order", "cart"} or goal_type in {"place_order", "add_to_cart"}:
             return "purchase_continuation"
         if pending_intent == "stock" or goal_type == "store_with_stock":
             return "stock_check"
@@ -6120,6 +6120,7 @@ def _is_current_location_store_search_confirmation(user_text: str, latest_quickr
 
 _ORDER_HISTORY_CTA_LABEL_RE = re.compile(r"주문\s*내역|주문내역", re.IGNORECASE)
 _PURCHASE_CTA_LABELS = {"구매하기", "주문하기", "바로 주문", "바로 구매"}
+_CART_CTA_LABELS = {"장바구니담기", "장바구니 담기", "장바구니에 담아줘"}
 _ORDER_HISTORY_CTA_ALLOWED_INTENTS = frozenset({
     "order_history_lookup",
     "order_document_guidance",
@@ -6234,6 +6235,30 @@ def _sanitize_transaction_cta_contracts(
             chip.update({
                 "domain": "TRANSACTION",
                 "cta_action": "start_purchase",
+                "expected_behavior": "conversation_action",
+                "expected_contract_intent": "quick_order_reservation",
+                "metadata": metadata,
+            })
+            changed = True
+        if label in _CART_CTA_LABELS and product_context:
+            chip = dict(chip)
+            metadata = chip.get("metadata") if isinstance(chip.get("metadata"), dict) else {}
+            slots = {key: value for key, value in product_context.items() if value not in (None, "", [], {})}
+            metadata = {
+                **metadata,
+                "cta_action": "add_to_cart",
+                "source_intent": current_intent or "quick_order_reservation",
+                "expected_contract_intent": "quick_order_reservation",
+                "expected_behavior": "conversation_action",
+                "slots": {
+                    **slots,
+                    "pending_intent": "cart",
+                    "goal_type": "add_to_cart",
+                },
+            }
+            chip.update({
+                "domain": "TRANSACTION",
+                "cta_action": "add_to_cart",
                 "expected_behavior": "conversation_action",
                 "expected_contract_intent": "quick_order_reservation",
                 "metadata": metadata,
@@ -7540,7 +7565,10 @@ def _should_prompt_order_quantity_before_store(
         return False
     if getattr(slots, "ord_qty", None) is not None:
         return False
-    if getattr(slots, "pending_intent", None) != "order" and getattr(slots, "goal_type", None) != "place_order":
+    if (
+        getattr(slots, "pending_intent", None) not in {"order", "cart"}
+        and getattr(slots, "goal_type", None) not in {"place_order", "add_to_cart"}
+    ):
         return False
     if ConversationSlots.extract_from_user_text(text).ord_qty is not None:
         return False
@@ -7628,6 +7656,21 @@ def _is_order_quantity_prompt_continuation_text(user_text: str | None) -> bool:
 
 def _is_quantityless_cart_or_order_cta(user_text: str | None) -> bool:
     return bool(_QUANTITYLESS_CART_ORDER_CTA_RE.search(str(user_text or "")))
+
+
+def _is_add_to_cart_cta_context(cta_context: Mapping[str, Any] | None, user_text: str | None = None) -> bool:
+    if isinstance(cta_context, Mapping):
+        for key in ("cta_action", "ctaAction", "cta_id", "ctaId"):
+            value = str(cta_context.get(key) or "").strip().lower()
+            if value in {"add_to_cart", "cart.add"}:
+                return True
+        slots = cta_context.get("slots")
+        if isinstance(slots, Mapping):
+            pending_intent = str(slots.get("pending_intent") or slots.get("pendingIntent") or "").strip().lower()
+            goal_type = str(slots.get("goal_type") or slots.get("goalType") or "").strip().lower()
+            if pending_intent == "cart" or goal_type == "add_to_cart":
+                return True
+    return bool(re.fullmatch(r"\s*(?:장바구니\s*담기|장바구니에?\s*담(?:아줘|기)?|담아줘)\s*", str(user_text or ""), re.IGNORECASE))
 
 
 _normalize_vehicle_type_from_car_type = normalize_vehicle_type_from_car_type
@@ -11170,8 +11213,8 @@ def _reservation_date_range_guard_event(
     }
 
 
-_GATE_ADVISORY_TRANSACTION_GOALS = {"place_order", "store_with_stock"}
-_GATE_ADVISORY_TRANSACTION_INTENTS = {"order", "stock", "reservation"}
+_GATE_ADVISORY_TRANSACTION_GOALS = {"place_order", "store_with_stock", "add_to_cart"}
+_GATE_ADVISORY_TRANSACTION_INTENTS = {"order", "stock", "reservation", "cart"}
 _PURCHASE_OR_ORDER_CTA_RE = re.compile(
     r"구매하기|주문하기|결제하기|구매\s*할게|주문\s*할게|구매\s*해줘|주문\s*해줘|이걸로\s*(?:구매|주문)|"
     r"주문\s*확정|결제\s*진행|바로\s*주문",
@@ -19268,8 +19311,8 @@ def _current_request_allows_transaction_context_staging(slots: ConversationSlots
         action_mode = "unspecified"
     if action_mode == "unspecified":
         return bool(
-            getattr(slots, "pending_intent", None) in {"order", "stock", "price", "reservation"}
-            or getattr(slots, "goal_type", None) in {"place_order", "store_with_stock", "price_inquiry"}
+            getattr(slots, "pending_intent", None) in {"order", "stock", "price", "reservation", "cart"}
+            or getattr(slots, "goal_type", None) in {"place_order", "store_with_stock", "price_inquiry", "add_to_cart"}
         )
     return action_mode in {
         "purchase_continuation",
@@ -19289,7 +19332,7 @@ def _stage_dormant_transaction_context(slots: ConversationSlots, *, source: str)
         return {}
     context = dict(slots.availability_context or {})
     pending_intent = str(dormant_context.get("pending_intent") or slots.pending_intent or "")
-    if pending_intent == "order" or dormant_context.get("goal_type") == "place_order":
+    if pending_intent in {"order", "cart"} or dormant_context.get("goal_type") in {"place_order", "add_to_cart"}:
         key = "dormant_purchase_context"
     elif pending_intent == "stock" or dormant_context.get("goal_type") == "store_with_stock":
         key = "dormant_stock_context"
@@ -19308,10 +19351,10 @@ def _stage_dormant_transaction_context(slots: ConversationSlots, *, source: str)
 def _mask_dormant_transaction_action_slots(slots: ConversationSlots, *, source: str) -> dict[str, Any]:
     """Remove flat action slots after copying them into dormant context."""
     masked: dict[str, Any] = {}
-    if slots.pending_intent in {"order", "stock", "reservation", "price"}:
+    if slots.pending_intent in {"order", "stock", "reservation", "price", "cart"}:
         masked["pending_intent"] = slots.pending_intent
         slots.pending_intent = None
-    if slots.goal_type in {"place_order", "store_with_stock", "price_inquiry"}:
+    if slots.goal_type in {"place_order", "store_with_stock", "price_inquiry", "add_to_cart"}:
         masked["goal_type"] = slots.goal_type
         slots.goal_type = None
     if slots.pending_required_slot:
@@ -22882,6 +22925,8 @@ class TStationChatServiceV2:
                 and not regex_slots.tire_model
                 and not regex_slots.pending_product_name
             ):
+                cart_cta_context = merged_quickreply_cta_context(request.chip_context, latest_quickreply_tmpl)
+                is_cart_cta = _is_add_to_cart_cta_context(cart_cta_context, last_user_text)
                 selected_context_values: dict[str, Any] = {}
                 merged_slots, selected_context_values = _apply_selected_order_context_for_purchase_cta(merged_slots)
                 if selected_context_values:
@@ -22895,6 +22940,9 @@ class TStationChatServiceV2:
                     prev_tool_data=prev_tool_data,
                 )
                 if selected_context_values:
+                    if is_cart_cta:
+                        merged_slots.pending_intent = "cart"
+                        merged_slots.goal_type = "add_to_cart"
                     if getattr(merged_slots, "ord_qty", None) is None:
                         current_vehicle_selection_prompt_event.set(build_order_quantity_prompt_event(merged_slots))
                 elif recovered_product_slots:
@@ -22902,10 +22950,14 @@ class TStationChatServiceV2:
                         recovered_product_slots,
                         source="purchase_cta_product_recovery",
                     )
-                    if getattr(merged_slots, "pending_intent", None) is None:
-                        merged_slots.pending_intent = "order"
-                    if getattr(merged_slots, "goal_type", None) is None:
-                        merged_slots.goal_type = "place_order"
+                    if is_cart_cta:
+                        merged_slots.pending_intent = "cart"
+                        merged_slots.goal_type = "add_to_cart"
+                    else:
+                        if getattr(merged_slots, "pending_intent", None) is None:
+                            merged_slots.pending_intent = "order"
+                        if getattr(merged_slots, "goal_type", None) is None:
+                            merged_slots.goal_type = "place_order"
                     if getattr(merged_slots, "ord_qty", None) is None:
                         logger.info(
                             "[QTY_GUARD] Prompting quantity before cart/order CTA tool call: goods_no=%r user_text=%r",
@@ -22914,8 +22966,12 @@ class TStationChatServiceV2:
                         )
                         current_vehicle_selection_prompt_event.set(build_order_quantity_prompt_event(merged_slots))
                 elif merged_slots.goods_no is None:
-                    merged_slots.pending_intent = "order"
-                    merged_slots.goal_type = "place_order"
+                    if is_cart_cta:
+                        merged_slots.pending_intent = "cart"
+                        merged_slots.goal_type = "add_to_cart"
+                    else:
+                        merged_slots.pending_intent = "order"
+                        merged_slots.goal_type = "place_order"
                     logger.info(
                         "[ORDER_CTA] Bare purchase/cart CTA has no confirmed product source; prompting reselection"
                     )

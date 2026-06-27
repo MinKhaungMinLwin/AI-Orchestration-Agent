@@ -912,6 +912,7 @@ def _purchase_flow_guidance(flow_step: str) -> str:
         "resolve_product": "구매 플로우를 이어가려면 먼저 상품을 확정한다.",
         "ask_size": "구매 플로우를 이어가려면 먼저 타이어 사이즈를 확정한다.",
         "ask_quantity": "구매 플로우를 이어가려면 수량을 먼저 수집한다.",
+        "execute_cart": "장바구니 담기 플로우에서는 상품과 수량이 확정된 뒤에만 save_to_cart_tool을 실행한다.",
         "ask_store": "구매 플로우를 이어가려면 매장 또는 지역을 먼저 수집한다.",
         "show_store_candidates": "구매 가능한 매장 후보를 먼저 보여주고 사용자가 매장을 고르게 한다.",
         "resolve_store": "입력된 매장명을 해소한 뒤 예약 가능 단계로 이어간다.",

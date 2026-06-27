@@ -31,6 +31,7 @@ _BOOKING_DATETIME_SELECTION_RE = re.compile(
 _STOCK_RE = re.compile(r"재고|오늘\s*서비스|오늘서비스|당일\s*서비스|T\s*바로\s*배송|T바로배송", re.IGNORECASE)
 _RESERVATION_RE = re.compile(r"예약|장착|방문|갈게|가고\s*싶|작업", re.IGNORECASE)
 _PURCHASE_RE = re.compile(r"구매|주문|결제|살래|살게|사고\s*싶|사려고", re.IGNORECASE)
+_CART_RE = re.compile(r"장바구니|카트|담아|담기", re.IGNORECASE)
 _STORE_SCHEDULE_RE = re.compile(
     r"예약\s*가능|예약\s*(?:가능한\s*)?(?:시간|일정|슬롯)|"
     r"(?:방문\s*)?예약\s*(?:잡|해|걸|보여|알려)|"
@@ -409,7 +410,10 @@ def _is_stock_flow_context(slots: dict[str, Any]) -> bool:
 
 
 def _is_order_or_reservation_context(slots: dict[str, Any]) -> bool:
-    return bool(slots.get("pending_intent") in {"order", "reservation"} or slots.get("goal_type") == "place_order")
+    return bool(
+        slots.get("pending_intent") in {"order", "reservation", "cart"}
+        or slots.get("goal_type") in {"place_order", "add_to_cart"}
+    )
 
 
 def _is_preview_location_store_selection_turn(
@@ -671,6 +675,7 @@ def build_transaction_intent_frame(
     current_store_holiday_lookup = bool(not current_store_is_context and _is_store_holiday_lookup(text))
     current_order_history_reorder = _is_order_history_reorder_turn(text)
     current_purchase = bool(_PURCHASE_RE.search(text))
+    current_cart = bool(_CART_RE.search(text))
     current_service_duration_advisory = bool(
         _SERVICE_DURATION_ADVISORY_RE.search(text) and not _RESERVATION_CHANGE_RE.search(text)
     )
@@ -722,7 +727,9 @@ def build_transaction_intent_frame(
         and _ADDON_WITH_RE.search(text)
         and not current_service_duration_advisory
     )
-    current_reservation = bool(_RESERVATION_RE.search(text) or _STORE_SCHEDULE_RE.search(text) or current_purchase)
+    current_reservation = bool(
+        _RESERVATION_RE.search(text) or _STORE_SCHEDULE_RE.search(text) or current_purchase
+    )
     preview_location_store_selection = _is_preview_location_store_selection_turn(
         text,
         slots,
@@ -1120,7 +1127,7 @@ def build_transaction_intent_frame(
         sub_intent = "confirm"
     elif quantity_slot_fill_purchase_continuation:
         intent = "quick_order_reservation"
-        sub_intent = "reservation"
+        sub_intent = "cart" if slots.get("pending_intent") == "cart" or slots.get("goal_type") == "add_to_cart" else "reservation"
         entities["stock_check_mode"] = "preview"
     elif quantity_only_stock_continuation or quantity_slot_fill_stock_continuation:
         intent = "stock_store_search"
@@ -1149,11 +1156,20 @@ def build_transaction_intent_frame(
         _is_order_or_reservation_context(slots)
         and goods_no
         and stored_quantity
-        and slots.get("shop_id")
+        and (
+            slots.get("shop_id")
+            or slots.get("pending_intent") == "cart"
+            or slots.get("goal_type") == "add_to_cart"
+        )
     ):
         intent = "quick_order_reservation"
-        sub_intent = "reservation"
+        sub_intent = "cart" if slots.get("pending_intent") == "cart" or slots.get("goal_type") == "add_to_cart" else "reservation"
         entities["stock_check_mode"] = str(slots.get("stock_check_mode") or "preview")
+    elif _is_order_or_reservation_context(slots) and has_product and (
+        slots.get("pending_intent") == "cart" or slots.get("goal_type") == "add_to_cart" or current_cart
+    ):
+        intent = "quick_order_reservation"
+        sub_intent = "cart"
     elif (
         (slots.get("pending_intent") == "stock" or slots.get("goal_type") == "store_with_stock")
         and goods_no
@@ -1202,9 +1218,9 @@ def build_transaction_intent_frame(
         intent = "stock_store_search"
         sub_intent = "today_install" if today_requested else "stock"
         entities["stock_check_mode"] = "preview" if sub_intent == "today_install" else "inventory_only"
-    elif (_RESERVATION_RE.search(text) or current_purchase) and has_product:
+    elif (_RESERVATION_RE.search(text) or current_purchase or current_cart) and has_product:
         intent = "quick_order_reservation"
-        sub_intent = "reservation"
+        sub_intent = "cart" if current_cart else "reservation"
     elif (_STORE_SCHEDULE_RE.search(text) or _RESERVATION_RE.search(text)) and not current_store_is_context:
         intent = "store_schedule"
         sub_intent = "store_visit"
