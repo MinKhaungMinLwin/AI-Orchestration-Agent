@@ -7228,16 +7228,7 @@ def _build_support_faq_policy_event(
         ]
     elif intent == "tire_condition_photo_policy":
         quick_replies = [
-            {
-                "label": "마모도 측정 서비스",
-                "domain": "TRANSACTION",
-                "metadata": {
-                    "cta_action": "store_service_search",
-                    "source_intent": "tire_condition_photo_policy",
-                    "expected_contract_intent": "store_service_search",
-                    "service_name": "마모도 측정",
-                },
-            },
+            {"label": "마모도 측정 서비스", "url": CTAUrls.TIRE_CHECK, "domain": "TRANSACTION"},
             {"label": "1:1 문의하기", "domain": "SUPPORT"},
             {"label": "처음으로", "domain": "LEADING"},
         ]

@@ -27139,10 +27139,7 @@ def test_support_faq_policy_event_for_tire_condition_photo_includes_upload_limit
     quick_replies = event["data"]["quickReplies"]
     assert _labels(quick_replies) == ["마모도 측정 서비스", "1:1 문의하기", "처음으로"]
     assert quick_replies[0]["domain"] == "TRANSACTION"
-    assert quick_replies[0]["metadata"]["cta_action"] == "store_service_search"
-    assert quick_replies[0]["metadata"]["source_intent"] == "tire_condition_photo_policy"
-    assert quick_replies[0]["metadata"]["expected_contract_intent"] == "store_service_search"
-    assert quick_replies[0]["metadata"]["service_name"] == "마모도 측정"
+    assert quick_replies[0]["url"] == CTAUrls.TIRE_CHECK
 
 
 @pytest.mark.parametrize(
@@ -27165,8 +27162,15 @@ def test_tire_condition_photo_policy_ctas_do_not_regress_to_plain_store_search(u
     assert "교체하지 않아도 돼요" not in response
     assert labels == ["마모도 측정 서비스", "1:1 문의하기", "처음으로"]
     assert labels[0] != "가까운 매장 찾기"
-    assert quick_replies[0]["metadata"]["cta_action"] == "store_service_search"
-    assert quick_replies[0]["metadata"]["service_name"] == "마모도 측정"
+    assert quick_replies[0]["url"] == CTAUrls.TIRE_CHECK
+
+
+def test_rebase_tire_check_url_to_mobile_origin() -> None:
+    set_tstation_origin_host("m.tstation.com")
+    try:
+        assert chat_module.rebase_tstation_url_to_origin(CTAUrls.TIRE_CHECK) == "https://m.tstation.com/mypage/tireTest/tireCheck.do"
+    finally:
+        set_tstation_origin_host(None)
 
 
 def test_tire_condition_photo_policy_is_direct_fixed_response_intent() -> None:

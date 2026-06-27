@@ -89,6 +89,7 @@ _CTA_PATH_PAIRS: Final[tuple[_CTAPathPair, ...]] = (
         mobile_verified=True,
     ),
     _path_pair("REMINDING_ALARM", "/membership/reminding-alarm"),
+    _path_pair("TIRE_CHECK", "/mypage/tireTest/tireCheck.do"),
     _path_pair("TIRE_CHECK_RESULT_LIST", "/mypage/tireTest/tireCheckResultList.do"),
     _path_pair("SMART_PICKUP", "/membership/dashboard/membership_smartPickup"),
     _path_pair("SMART_PICKUP_LIST", "/mypage/tstation/reservation/pickupList"),
@@ -120,6 +121,7 @@ class CTAUrls:
     MY_COUPON_LIST_MOBILE: Final[str] = f"{_MOBILE}/coupon/myCouponList"
     WARRANTY_MAIN: Final[str] = f"{_PC}/mypage/tstation/warranty/main"
     REMINDING_ALARM: Final[str] = f"{_PC}/membership/reminding-alarm"
+    TIRE_CHECK: Final[str] = f"{_PC}/mypage/tireTest/tireCheck.do"
     TIRE_CHECK_RESULT_LIST: Final[str] = f"{_PC}/mypage/tireTest/tireCheckResultList.do"
     SMART_PICKUP: Final[str] = f"{_PC}/membership/dashboard/membership_smartPickup"
     SMART_PICKUP_LIST: Final[str] = f"{_PC}/mypage/tstation/reservation/pickupList"
@@ -147,6 +149,7 @@ _SENTINEL_MAP: Mapping[str, str] = {
     "__URL_MY_COUPON_LIST_MOBILE__": CTAUrls.MY_COUPON_LIST_MOBILE,
     "__URL_WARRANTY_MAIN__": CTAUrls.WARRANTY_MAIN,
     "__URL_REMINDING_ALARM__": CTAUrls.REMINDING_ALARM,
+    "__URL_TIRE_CHECK__": CTAUrls.TIRE_CHECK,
     "__URL_TIRE_CHECK_RESULT_LIST__": CTAUrls.TIRE_CHECK_RESULT_LIST,
     "__URL_SMART_PICKUP__": CTAUrls.SMART_PICKUP,
     "__URL_SMART_PICKUP_LIST__": CTAUrls.SMART_PICKUP_LIST,
