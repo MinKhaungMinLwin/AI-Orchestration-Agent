@@ -18168,6 +18168,35 @@ def test_support_policy_turn_contract_keeps_policy_intent_and_forbidden_product_
     ]
 
 
+def test_support_policy_turn_contract_clears_stale_transaction_blocking_slots() -> None:
+    contract = build_turn_contract(
+        user_text="측면이 부풀었는데 무상 A/S 돼?",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:tire_quality_warranty_policy"],
+            policy_intent="tire_quality_warranty_policy",
+        ),
+        merged_slots={
+            "goods_no": "G000000317666",
+            "tire_size": "255/45R20",
+            "ord_qty": 2,
+            "shop_id": "F00123",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        action_mode="support_policy_answer",
+        context_state="dormant",
+        dormant_context_reason="current_turn_action:support_policy_answer",
+    )
+
+    assert contract.intent == "tire_quality_warranty_policy"
+    assert contract.known_slots["goods_no"] == "G000000317666"
+    assert contract.known_slots["ord_qty"] == 2
+    assert contract.required_slots == ()
+    assert contract.blocking_required_slots == ()
+    assert contract.blocking_required_slots_source == "support_answer_contract"
+
+
 def test_payment_error_troubleshooting_contract_requires_faq_first() -> None:
     contract = build_turn_contract(
         user_text="결제 오류 나",
@@ -19013,6 +19042,37 @@ def test_legal_action_complaint_routes_to_support_scope_without_legal_steps() ->
         contract=contract,
     )
     assert good == []
+
+
+def test_support_response_policy_guard_uses_support_fallback_even_with_stale_purchase_context() -> None:
+    contract = build_turn_contract(
+        user_text="티스테이션 정자점 고소하는 법 알려줘",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:legal_action_guidance_denied"],
+            policy_intent="legal_action_guidance_denied",
+        ),
+        merged_slots={
+            "goods_no": "G000000317666",
+            "tire_size": "255/45R20",
+            "ord_qty": 2,
+            "shop_id": "F00123",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        action_mode="support_policy_answer",
+        context_state="dormant",
+        dormant_context_reason="current_turn_action:support_policy_answer",
+    )
+
+    event = build_response_policy_guard_event(contract)
+
+    assert event["assistant_response_source"] == "code_turn_contract_support_response_guard"
+    assert event["source_domain"] == "support"
+    assert "법적 절차나 방법은 안내하기 어렵고" in event["data"]["assistantResponse"]
+    assert "수량이 필요해요" not in event["data"]["assistantResponse"]
+    assert "장착 매장" not in event["data"]["assistantResponse"]
+    assert _labels(event["data"]["quickReplies"]) == ["1:1 문의하기", "처음으로"]
 
 
 def test_support_prompt_contains_payment_error_faq_first_policy() -> None:

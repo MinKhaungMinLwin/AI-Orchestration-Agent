@@ -174,9 +174,12 @@ _REFERENCE_GUARD_EXEMPT_INTENTS = frozenset({
     "maintenance_history_access_policy",
     "order_document_guidance",
     "legal_action_guidance_denied",
+    "human_escalation",
+    "support_faq",
     "store_service_advisory",
     "store_visit_advisory",
 })
+_SUPPORT_ANSWER_ACTION_MODES = frozenset({"support_policy_answer", "info_only"})
 
 
 @dataclass(frozen=True)
@@ -712,6 +715,11 @@ def build_turn_contract(
             "assistant_guidance": "FAQ hybrid 검색을 먼저 수행하고 정책/조건을 quickReply로 요약한 뒤 필요 시에만 1:1 문의로 이어진다.",
             "metadata": {"response_shape_key": intent},
         }
+    if _support_answer_contract_owns_response(domain=domain, intent=intent, action_mode=action_mode):
+        required_slots = ()
+        resolvable_required_slots = ()
+        blocking_required_slots = ()
+        blocking_required_slots_source = "support_answer_contract"
 
     return TurnContract(
         domain=domain,
@@ -786,6 +794,20 @@ def should_guard_required_slots(contract: TurnContract | None) -> bool:
     return str(contract.intent or "") in _HARD_REQUIRED_SLOT_GUARD_INTENTS
 
 
+def _support_answer_contract_owns_response(*, domain: str, intent: str, action_mode: str) -> bool:
+    if str(domain or "") != "support":
+        return False
+    normalized_intent = str(intent or "").strip()
+    normalized_mode = str(action_mode or "").strip()
+    if normalized_mode in _SUPPORT_ANSWER_ACTION_MODES:
+        return True
+    if normalized_intent in {"human_escalation", "legal_action_guidance_denied", "support_faq"}:
+        return True
+    if normalized_intent.endswith("_policy") or normalized_intent.endswith("_guidance"):
+        return True
+    return False
+
+
 def build_required_slot_clarification_event(contract: TurnContract) -> dict[str, Any]:
     """Build the quickReply used when a high-risk turn lacks required slots."""
 
@@ -841,6 +863,53 @@ def build_response_policy_guard_event(contract: TurnContract) -> dict[str, Any]:
     response_decision = contract.response_decision or {}
     forbidden = response_decision.get("forbidden_behaviors") if isinstance(response_decision, Mapping) else ()
     forbidden_set = {str(item) for item in forbidden} if isinstance(forbidden, list | tuple) else set()
+    if _support_answer_contract_owns_response(
+        domain=str(contract.domain or ""),
+        intent=str(contract.intent or ""),
+        action_mode=str(contract.action_mode or ""),
+    ):
+        intent = str(contract.intent or "")
+        response_shape_key = ""
+        assistant_guidance = ""
+        if isinstance(response_decision, Mapping):
+            metadata = response_decision.get("metadata")
+            if isinstance(metadata, Mapping):
+                response_shape_key = str(metadata.get("response_shape_key") or "")
+            assistant_guidance = str(response_decision.get("assistant_guidance") or "").strip()
+        if intent == "legal_action_guidance_denied":
+            message = "법적 절차나 방법은 안내하기 어렵고, 1:1 문의나 고객센터로 불편을 접수해 주세요."
+            quick_replies = [
+                {"label": "1:1 문의하기", "domain": "SUPPORT"},
+                {"label": "처음으로", "domain": "LEADING"},
+            ]
+        elif intent == "human_escalation":
+            message = "1:1 문의로 접수해 드릴 수 있어요. 문의할 내용을 남겨 주세요."
+            quick_replies = [
+                {"label": "1:1 문의하기", "domain": "SUPPORT"},
+                {"label": "처음으로", "domain": "LEADING"},
+            ]
+        else:
+            message = assistant_guidance or "현재 문의 기준으로 안내드릴게요. 필요하면 1:1 문의로 이어서 도와드릴게요."
+            quick_replies = [
+                {"label": "1:1 문의하기", "domain": "SUPPORT"},
+                {"label": "처음으로", "domain": "LEADING"},
+            ]
+        return _annotate_contract_guard_event({
+            "type": "data",
+            "template": "quickReply",
+            "source_domain": "support",
+            "assistant_response_source": "code_turn_contract_support_response_guard",
+            "data": {
+                "assistantResponse": message,
+                "quickReplies": quick_replies,
+                "predictedDomains": ["SUPPORT"],
+                "metadata": {
+                    "turnContract": contract.to_dict(),
+                    "forbiddenBehaviors": sorted(forbidden_set),
+                    "responseShapeKey": response_shape_key or intent,
+                },
+            },
+        }, contract, reason="response_policy_guard")
     tool_error_behaviors = {
         "assert_price_without_tool_result",
         "assert_coupon_without_tool_result",
