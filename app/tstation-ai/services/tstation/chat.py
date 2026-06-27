@@ -7546,9 +7546,9 @@ def _choose_quickreply_fallback(
             return chips, label
     domain = (source_domain or "").lower()
     text = assistant_text or ""
+    if _PURCHASE_STORE_SELECTION_TEXT_RE.search(text):
+        return _FALLBACK_TRANSACTION_STORE_SEARCH, "transaction_purchase_store_search"
     if domain == "transaction":
-        if _PURCHASE_STORE_SELECTION_TEXT_RE.search(text):
-            return _FALLBACK_TRANSACTION_STORE_SEARCH, "transaction_purchase_store_search"
         if _STORE_SCHEDULE_FALLBACK_RE.search(text):
             return _FALLBACK_TRANSACTION_STORE, "transaction_store_schedule"
         if _ORDER_PRICE_FALLBACK_RE.search(text) or called_tool_names & {

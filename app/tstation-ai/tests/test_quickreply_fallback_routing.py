@@ -17648,6 +17648,18 @@ def test_transaction_purchase_store_prompt_returns_region_chips() -> None:
     assert _labels(chips) == ["강남", "분당", "해운대", "주변 매장 찾기"]
 
 
+def test_discovery_purchase_store_prompt_still_returns_region_chips() -> None:
+    chips, label = _choose_quickreply_fallback(
+        set(),
+        "discovery",
+        "현재 상품과 수량까지는 확인됐고, 구매 진행을 위해서는 장착 매장 선택이 필요해요. 원하시는 지역이나 매장명을 알려주시면 이어서 재고와 방문 가능 일정을 확인해 드릴게요 😊",
+    )
+
+    assert label == "transaction_purchase_store_search"
+    assert chips == _FALLBACK_TRANSACTION_STORE_SEARCH
+    assert _labels(chips) == ["강남", "분당", "해운대", "주변 매장 찾기"]
+
+
 def test_transaction_purchase_store_prompt_replaces_validation_dead_end_chips() -> None:
     assert _looks_like_generic_dead_end_chips([
         {"label": "다시 시도", "domain": "LEADING"},
