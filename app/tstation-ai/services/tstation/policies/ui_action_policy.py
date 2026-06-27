@@ -104,6 +104,10 @@ _REGION_STORE_INPUT_RE = re.compile(
     r"^[\sA-Za-z0-9가-힣]+(?:점|역|동|구|시|군|로|가)?(?:은|는|으로|로|에서|에는)?\??\s*$",
     re.IGNORECASE,
 )
+_STORE_VIEW_LABEL_RE = re.compile(
+    r"^(?:(?P<region>[A-Za-z0-9가-힣\s]+)\s+)?(?:다른\s*)?매장\s*보기$|^(?:(?P<region_alt>[A-Za-z0-9가-힣\s]+)\s+)?매장\s*찾기$",
+    re.IGNORECASE,
+)
 _INVALID_STORE_SLOT_VALUES = frozenset({"평점", "별점", "리뷰", "후기", "평가"})
 _KOREAN_SELECTION_ORDINALS: tuple[tuple[tuple[str, ...], int], ...] = (
     (("첫번째", "첫째", "첫 번", "첫번", "1번째", "1번", "1.", "1)"), 0),
@@ -3557,6 +3561,13 @@ def _region_store_input_values(user_text: str, slots: Any) -> dict[str, Any]:
     text = str(user_text or "").strip()
     parsed = ConversationSlots.extract_from_user_text(text)
     values: dict[str, Any] = {}
+    label_match = _STORE_VIEW_LABEL_RE.fullmatch(text)
+    if label_match:
+        region = str(label_match.group("region") or label_match.group("region_alt") or "").strip()
+        if region:
+            values["region"] = region
+        values["store_view_requested"] = True
+        return values
     if parsed.region not in (None, ""):
         values["region"] = parsed.region
     if parsed.shop_name not in (None, ""):
@@ -3713,6 +3724,13 @@ def resolve_region_or_store_input_context(
         return RegionStoreInputContextResolution()
 
     input_values = _region_store_input_values(text, merged_slots)
+    cta_context = merged_quickreply_cta_context(chip_context, latest_quickreply_tmpl)
+    if not input_values and isinstance(cta_context.get("slots"), Mapping):
+        canonical_slot_values = canonical_context_from_template_boundary(cta_context.get("slots"))
+        if canonical_slot_values.get("region"):
+            input_values = {"region": canonical_slot_values["region"], "store_view_requested": True}
+        elif canonical_slot_values.get("shop_name"):
+            input_values = {"shop_name": canonical_slot_values["shop_name"], "store_view_requested": True}
     if not input_values:
         return RegionStoreInputContextResolution()
 
@@ -3725,7 +3743,6 @@ def resolve_region_or_store_input_context(
     ):
         return RegionStoreInputContextResolution()
 
-    cta_context = merged_quickreply_cta_context(chip_context, latest_quickreply_tmpl)
     resolution_source = None
     if isinstance(ui_action, Mapping) and ui_action:
         resolution_source = "ui_action"
@@ -3738,8 +3755,16 @@ def resolve_region_or_store_input_context(
             messages=messages,
         )
         if not prompt_detected:
-            return RegionStoreInputContextResolution()
-        resolution_source = prompt_source
+            availability_context = getattr(merged_slots, "availability_context", None)
+            if not isinstance(availability_context, Mapping):
+                return RegionStoreInputContextResolution()
+            pending_step = str(availability_context.get("pending_step") or "").strip()
+            awaiting_store_region = bool(availability_context.get("awaiting_store_region"))
+            if pending_step != "store_region_selection" and not awaiting_store_region:
+                return RegionStoreInputContextResolution()
+            resolution_source = "pending_step"
+        if resolution_source is None:
+            resolution_source = prompt_source
 
     for source_name, context in _transaction_context_candidates(merged_slots):
         if not (context.get("goods_no") and context.get("tire_size")):
@@ -3760,10 +3785,12 @@ def resolve_region_or_store_input_context(
                 "goal_type",
                 "availability_intent",
                 "requested_cal_day",
+                "stock_check_mode",
             )
             if context.get(key) not in (None, "")
         }
         slots_to_promote.update(input_values)
+        slots_to_promote.pop("store_view_requested", None)
         if input_values.get("region"):
             slots_to_promote["shop_id"] = None
             slots_to_promote["shop_name"] = None
@@ -3803,7 +3830,7 @@ def apply_cta_context_to_slots(slots: Any, cta_context: Mapping[str, Any] | None
         return slots
     values: dict[str, Any] = {}
     canonical_context = canonical_context_from_template_boundary(cta_context)
-    for key in ("goods_no", "tire_size", "ord_qty", "region", "shop_name", "requested_cal_day"):
+    for key in ("goods_no", "tire_size", "ord_qty", "region", "shop_name", "requested_cal_day", "stock_check_mode"):
         value = canonical_context.get(key)
         if value in (None, "", []):
             continue
@@ -3819,9 +3846,21 @@ def apply_cta_context_to_slots(slots: Any, cta_context: Mapping[str, Any] | None
     intent_key = cta_context.get("intentKey") or cta_context.get("intent_key")
     if intent_key not in (None, "", []):
         values["availability_intent"] = intent_key
+    for source_key, target_key in (
+        ("pending_intent", "pending_intent"),
+        ("pendingIntent", "pending_intent"),
+        ("goal_type", "goal_type"),
+        ("goalType", "goal_type"),
+        ("cta_action", "cta_action"),
+        ("ctaAction", "cta_action"),
+    ):
+        value = cta_context.get(source_key)
+        if value not in (None, "", []):
+            values[target_key] = value
     if values.get("availability_intent") == "today_install":
         values["pending_intent"] = getattr(slots, "pending_intent", None) or "stock"
         values["goal_type"] = getattr(slots, "goal_type", None) or "store_with_stock"
+    values.pop("cta_action", None)
     if not values:
         return slots
     try:

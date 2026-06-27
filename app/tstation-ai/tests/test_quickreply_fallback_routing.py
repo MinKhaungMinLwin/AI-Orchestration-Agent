@@ -17339,6 +17339,9 @@ def test_turn_contract_missing_prompt_uses_resolved_context_snapshot() -> None:
     assert "다이나프로 HPX 255/45R20 2개 구매를 진행하려면 장착 매장이 필요해요" in event["data"]["assistantResponse"]
     assert event["data"]["metadata"]["pendingOrderContext"]["goods_no"] == "G000000317666"
     assert event["data"]["metadata"]["pendingOrderContext"]["ord_qty"] == 2
+    assert event["data"]["quickReplies"][-1]["actionId"] == "enter_region"
+    assert event["data"]["quickReplies"][-1]["cta_action"] == "select_purchase_region"
+    assert event["data"]["quickReplies"][-1]["ctaContext"]["goods_no"] == "G000000317666"
 
 
 @pytest.mark.parametrize("user_text", ["내 단골매장이 어디지?", "단골매장 보여줘", "자주 가는 매장 알려줘", "마이샵 보여줘"])
@@ -21099,21 +21102,19 @@ def test_plain_region_store_search_still_uses_store_search() -> None:
 
 
 def test_region_input_resumes_dormant_purchase_store_selection_flow() -> None:
-    latest_quickreply_tmpl = {
-        "template": "quickReply",
-        "data": {
-            "assistantResponse": "구매를 진행하려면 장착 매장을 먼저 선택해야 해요. 어느 지역 매장을 찾아드릴까요? 😊",
-            "quickReplies": [{"label": "강남", "domain": "TRANSACTION"}],
-        },
-    }
     merged_slots = ConversationSlots(
         availability_context={
+            "awaiting_store_region": True,
+            "pending_step": "store_region_selection",
             "dormant_purchase_context": {
                 "goods_no": "G000000317735",
                 "tire_size": "225/45R17",
                 "ord_qty": 4,
                 "pending_intent": "order",
                 "goal_type": "place_order",
+                "stock_check_mode": "inventory_only",
+                "awaiting_store_region": True,
+                "pending_step": "store_region_selection",
                 "source": "pre_policy_context:support_policy_answer",
                 "context_state": "dormant",
             }
@@ -21124,7 +21125,7 @@ def test_region_input_resumes_dormant_purchase_store_selection_flow() -> None:
         user_text="분당",
         ui_action=None,
         chip_context=None,
-        latest_quickreply_tmpl=latest_quickreply_tmpl,
+        latest_quickreply_tmpl=None,
         latest_location_tmpl=None,
         messages=[],
         merged_slots=merged_slots,
@@ -21132,9 +21133,10 @@ def test_region_input_resumes_dormant_purchase_store_selection_flow() -> None:
     assert resolution.resolved is True
     assert resolution.flow_type == "purchase_region_selection"
     assert resolution.action_mode == "purchase_continuation"
-    assert resolution.resume_source == "region_store_followup:assistant_prompt"
+    assert resolution.resume_source == "region_store_followup:pending_step"
     assert resolution.slots_to_promote["goods_no"] == "G000000317735"
     assert resolution.slots_to_promote["region"] == "분당"
+    assert resolution.slots_to_promote["stock_check_mode"] == "inventory_only"
 
     updated_slots = apply_region_or_store_input_context_resolution(merged_slots, resolution)
     assert updated_slots.pending_intent == "order"
@@ -21170,6 +21172,8 @@ def test_region_input_resumes_dormant_stock_flow_for_today_install_prompt() -> N
     }
     merged_slots = ConversationSlots(
         availability_context={
+            "awaiting_store_region": True,
+            "pending_step": "store_region_selection",
             "dormant_stock_context": {
                 "goods_no": "G000000317735",
                 "tire_size": "235/45R18",
@@ -21178,6 +21182,9 @@ def test_region_input_resumes_dormant_stock_flow_for_today_install_prompt() -> N
                 "goal_type": "store_with_stock",
                 "availability_intent": "today_install",
                 "requested_cal_day": "20260627",
+                "stock_check_mode": "inventory_only",
+                "awaiting_store_region": True,
+                "pending_step": "store_region_selection",
                 "source": "pre_policy_context:support_policy_answer",
                 "context_state": "dormant",
             }
@@ -21220,6 +21227,93 @@ def test_region_input_resumes_dormant_stock_flow_for_today_install_prompt() -> N
     assert updated_slots.availability_intent == "today_install"
     assert tool_plan.preferred_tool == "transaction_store_preview_tool"
     assert "transaction_store_preview_tool" in tool_plan.allowed_tools
+    assert resolution.slots_to_promote["stock_check_mode"] == "inventory_only"
+
+
+def test_store_view_cta_with_pending_purchase_context_resumes_purchase_flow() -> None:
+    latest_quickreply_tmpl = {
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": "구매를 진행하려면 장착 매장이 필요해요. 어느 지역이나 매장에서 확인할까요?",
+            "quickReplies": [
+                {
+                    "label": "분당 매장 보기",
+                    "domain": "TRANSACTION",
+                    "cta_action": "show_purchase_region_stores",
+                }
+            ],
+            "metadata": {
+                "ctaContext": {
+                    "region": "분당",
+                    "goods_no": "G000000317735",
+                    "tire_size": "225/45R17",
+                    "ord_qty": 4,
+                    "pending_intent": "order",
+                    "goal_type": "place_order",
+                    "stock_check_mode": "inventory_only",
+                }
+            },
+        },
+    }
+    merged_slots = ConversationSlots(
+        availability_context={
+            "awaiting_store_region": True,
+            "pending_step": "store_region_selection",
+            "pending_order_context": {
+                "goods_no": "G000000317735",
+                "tire_size": "225/45R17",
+                "ord_qty": 4,
+                "pending_intent": "order",
+                "goal_type": "place_order",
+                "stock_check_mode": "inventory_only",
+            },
+        }
+    )
+
+    resolution = resolve_region_or_store_input_context(
+        user_text="분당 매장 보기",
+        ui_action=None,
+        chip_context={"cta_action": "show_purchase_region_stores"},
+        latest_quickreply_tmpl=latest_quickreply_tmpl,
+        latest_location_tmpl=None,
+        messages=[],
+        merged_slots=merged_slots,
+    )
+
+    assert resolution.resolved is True
+    assert resolution.flow_type == "purchase_region_selection"
+    assert resolution.action_mode == "purchase_continuation"
+    assert resolution.slots_to_promote["region"] == "분당"
+
+
+def test_recommendation_product_pick_defaults_to_product_description_contract() -> None:
+    routing_result = _routing_result(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        execution_plan=["discovery:discovery_recommendation"],
+    )
+    _patch, decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        last_user_text="dynapro hp3",
+        context_text="가성비 좋은 타이어 추천해줘\ndynapro hp3",
+        routing_result=routing_result,
+        tire_size=None,
+        recommendation_context={"recommendation_scenario": "general"},
+    )
+
+    assert decision is not None
+    assert decision.metadata["response_shape_key"] == "neutral_product_description"
+
+    detail_plan = plan_discovery_tools(
+        IntentFrame(
+            domain=PolicyDomain.DISCOVERY,
+            intent="product_description",
+            sub_intent="product_detail",
+            entities={"product_names": ("Dynapro HP3",)},
+            known_slots={},
+        )
+    )
+    assert detail_plan.allowed_tools == ("search_product_tool", "get_product_description_tool")
+    assert detail_plan.preferred_tool == "search_product_tool"
 
 
 def test_region_input_without_prompt_or_transaction_context_stays_plain_store_search() -> None:

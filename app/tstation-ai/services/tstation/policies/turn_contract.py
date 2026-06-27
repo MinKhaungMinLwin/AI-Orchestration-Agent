@@ -1318,6 +1318,19 @@ def _missing_slot_quickreply_event(
     quick_replies: list[dict[str, str]],
     missing_slot: str,
 ) -> dict[str, Any]:
+    pending_order_context = _pending_order_context_from_slots(_resolved_context_slots(contract))
+    enriched_quick_replies: list[dict[str, Any]] = []
+    for chip in quick_replies:
+        enriched = dict(chip)
+        if missing_slot == "store":
+            label = str(enriched.get("label") or "").strip()
+            if "지역" in label:
+                enriched["actionId"] = "enter_region"
+                enriched["cta_action"] = "select_purchase_region"
+            elif "매장" in label:
+                enriched["cta_action"] = "show_purchase_region_stores"
+            enriched["ctaContext"] = dict(pending_order_context)
+        enriched_quick_replies.append(enriched)
     return {
         "type": "data",
         "template": "quickReply",
@@ -1325,13 +1338,13 @@ def _missing_slot_quickreply_event(
         "assistant_response_source": "code_turn_contract_missing_slot_prompt",
         "data": {
             "assistantResponse": message,
-            "quickReplies": quick_replies,
+            "quickReplies": enriched_quick_replies,
             "predictedDomains": ["TRANSACTION", "DISCOVERY"],
             "metadata": {
                 "turnContract": contract.to_dict(),
                 "missingSlot": missing_slot,
                 "missingSlots": list(_missing_slots_for_action_prompt(contract)),
-                "pendingOrderContext": _pending_order_context_from_slots(_resolved_context_slots(contract)),
+                "pendingOrderContext": pending_order_context,
             },
         },
     }
@@ -1350,8 +1363,16 @@ def _pending_order_context_from_slots(known_slots: Mapping[str, Any]) -> dict[st
         ("ord_qty", "ord_qty"),
         ("ord_qty", "ordQty"),
         ("quantity", "ord_qty"),
+        ("stock_check_mode", "stock_check_mode"),
+        ("stock_check_mode", "stockCheckMode"),
         ("pending_intent", "pending_intent"),
+        ("pending_intent", "pendingIntent"),
         ("goal_type", "goal_type"),
+        ("goal_type", "goalType"),
+        ("pending_step", "pending_step"),
+        ("pending_step", "pendingStep"),
+        ("awaiting_store_region", "awaiting_store_region"),
+        ("awaiting_store_region", "awaitingStoreRegion"),
     ):
         value = known_slots.get(source_key)
         if value not in (None, "") and target_key not in context:

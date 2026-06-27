@@ -17715,6 +17715,22 @@ def _build_discovery_policy_context(
                         merged_entities[key] = context_frame.entities[key]
                 if merged_entities != discovery_frame.entities:
                     discovery_frame = replace(discovery_frame, entities=merged_entities)
+        if (
+            not transaction_followup_priority
+            and discovery_frame.intent == "product_search"
+            and discovery_frame.sub_intent == "product_name_search"
+            and len(tuple(discovery_frame.entities.get("product_names") or ())) == 1
+        ):
+            context_frame = build_discovery_intent_frame(
+                context_text,
+                known_slots=known_slots,
+            )
+            if context_frame.intent == "product_recommendation":
+                discovery_frame = replace(
+                    discovery_frame,
+                    intent="product_description",
+                    sub_intent="product_detail",
+                )
         discovery_tool_plan = plan_discovery_tools(discovery_frame)
         discovery_response_decision = decide_discovery_response(discovery_frame)
         if discovery_tool_plan.preferred_tool == "get_products_recommendations_tool":
@@ -18300,6 +18316,19 @@ def _pending_order_context_values(slots: ConversationSlots) -> dict[str, Any]:
         values["availability_intent"] = slots.availability_intent
     if getattr(slots, "requested_cal_day", None):
         values["requested_cal_day"] = slots.requested_cal_day
+    pending_intent = str(values.get("pending_intent") or getattr(slots, "pending_intent", None) or "").strip()
+    goal_type = str(values.get("goal_type") or getattr(slots, "goal_type", None) or "").strip()
+    needs_store_region = bool(
+        values.get("goods_no")
+        and values.get("tire_size")
+        and values.get("ord_qty")
+        and not (values.get("region") or values.get("shop_id") or values.get("shop_name"))
+        and (pending_intent in {"order", "stock"} or goal_type in {"place_order", "store_with_stock"})
+    )
+    if needs_store_region:
+        values["awaiting_store_region"] = True
+        values["pending_step"] = "store_region_selection"
+        values.setdefault("stock_check_mode", "inventory_only")
     return values
 
 
@@ -18320,6 +18349,9 @@ def _stage_pending_order_context(slots: ConversationSlots, *, source: str) -> di
     pending_context.setdefault("goal_type", "store_with_stock")
     pending_context["source"] = source
     context["pending_order_context"] = pending_context
+    if pending_context.get("awaiting_store_region"):
+        context["awaiting_store_region"] = True
+        context["pending_step"] = "store_region_selection"
     slots.availability_context = context
     return pending_context
 
@@ -18362,6 +18394,9 @@ def _stage_dormant_transaction_context(slots: ConversationSlots, *, source: str)
     dormant_context["source"] = source
     dormant_context["context_state"] = "dormant"
     context[key] = dormant_context
+    if dormant_context.get("awaiting_store_region"):
+        context["awaiting_store_region"] = True
+        context["pending_step"] = "store_region_selection"
     slots.availability_context = context
     return dormant_context
 
@@ -20802,28 +20837,27 @@ class TStationChatServiceV2:
                     last_user_text,
                 )
 
-            if not request.ui_action and not request.chip_context:
-                region_store_input_resolution = resolve_region_or_store_input_context(
-                    user_text=last_user_text,
-                    ui_action=request.ui_action,
-                    chip_context=request.chip_context,
-                    latest_quickreply_tmpl=latest_quickreply_tmpl,
-                    latest_location_tmpl=latest_location_tmpl,
-                    messages=request.messages,
-                    merged_slots=merged_slots,
+            region_store_input_resolution = resolve_region_or_store_input_context(
+                user_text=last_user_text,
+                ui_action=request.ui_action,
+                chip_context=request.chip_context,
+                latest_quickreply_tmpl=latest_quickreply_tmpl,
+                latest_location_tmpl=latest_location_tmpl,
+                messages=request.messages,
+                merged_slots=merged_slots,
+            )
+            if region_store_input_resolution.resolved:
+                merged_slots = apply_region_or_store_input_context_resolution(
+                    merged_slots,
+                    region_store_input_resolution,
+                    source="region_store_followup_context",
                 )
-                if region_store_input_resolution.resolved:
-                    merged_slots = apply_region_or_store_input_context_resolution(
-                        merged_slots,
-                        region_store_input_resolution,
-                        source="region_store_followup_context",
-                    )
-                    logger.info(
-                        "[SLOTS] Resolved region/store follow-up context flow=%s source=%s promoted_slots=%s",
-                        region_store_input_resolution.flow_type,
-                        region_store_input_resolution.resolution_source,
-                        dict(region_store_input_resolution.slots_to_promote),
-                    )
+                logger.info(
+                    "[SLOTS] Resolved region/store follow-up context flow=%s source=%s promoted_slots=%s",
+                    region_store_input_resolution.flow_type,
+                    region_store_input_resolution.resolution_source,
+                    dict(region_store_input_resolution.slots_to_promote),
+                )
 
             chip_action_id = chip_value(request.chip_context, "actionId", "action_id")
             cta_context = merged_quickreply_cta_context(request.chip_context, latest_quickreply_tmpl)
