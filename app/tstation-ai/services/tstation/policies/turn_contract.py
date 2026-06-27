@@ -165,6 +165,7 @@ _LEGAL_ACTION_DENIAL_RE = re.compile(
 _REFERENCE_GUARD_EXEMPT_INTENTS = frozenset({
     "favorite_store_lookup",
     "oe_re_concept_explanation",
+    "product_recommendation",
     "service_duration_advisory",
     "maintenance_addon_with_tire_service",
     "store_service_availability",
@@ -181,6 +182,14 @@ _REFERENCE_GUARD_EXEMPT_INTENTS = frozenset({
     "store_visit_advisory",
 })
 _SUPPORT_ANSWER_ACTION_MODES = frozenset({"support_policy_answer", "info_only"})
+_REFERENCE_GUARD_EXEMPT_DISCOVERY_PLAN_TOKENS = frozenset({
+    "general_recommendation",
+    "condition_recommendation",
+    "similar_price_recommendation",
+    "vehicle_based_recommendation_refinement",
+    "vehicle_resolved_recommendation",
+    "best_seller_search",
+})
 
 
 @dataclass(frozen=True)
@@ -3562,6 +3571,22 @@ def _has_blocking_reference(contract: TurnContract) -> bool:
     return True
 
 
+def _reference_guard_exempt_routing_result(routing_result: Any | None) -> bool:
+    if routing_result is None:
+        return False
+    domains = tuple(_domain_value(domain) for domain in (getattr(routing_result, "domains", None) or ()))
+    if domains and domains != ("discovery",):
+        return False
+    plan_items = tuple(str(item or "").strip().lower() for item in (getattr(routing_result, "execution_plan", None) or ()))
+    if any(
+        any(token in item for token in _REFERENCE_GUARD_EXEMPT_DISCOVERY_PLAN_TOKENS)
+        for item in plan_items
+    ):
+        return True
+    profile = str(getattr(getattr(routing_result, "agent_prompt_profile", None), "value", "") or "").lower()
+    return profile == "discovery_recommendation"
+
+
 def _should_apply_reference_guard(
     *,
     user_text: str,
@@ -3569,6 +3594,8 @@ def _should_apply_reference_guard(
     routing_result: Any | None,
 ) -> bool:
     if _reference_guard_exempt_intent(intent):
+        return False
+    if _reference_guard_exempt_routing_result(routing_result):
         return False
     referred = _referred_objects(routing_result)
     if not (
