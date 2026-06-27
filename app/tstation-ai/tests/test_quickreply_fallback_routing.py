@@ -27330,6 +27330,60 @@ def test_normalize_plan_intent_maps_best_seller_aliases() -> None:
     assert _normalize_plan_intent("get_best_selling_products_tool") == "best_seller_search"
     assert _normalize_plan_intent("best_seller") == "best_seller_search"
     assert _normalize_plan_intent("sales_rank") == "best_seller_search"
+    assert _normalize_plan_intent("query_order_data_for_vehicle_with_period") == "best_seller_search"
+    assert _normalize_plan_intent("best_seller_search_by_vehicle") == "best_seller_search"
+    assert _normalize_plan_intent("vehicle_best_seller_search") == "best_seller_search"
+    assert _normalize_plan_intent("order_data_for_vehicle") == "best_seller_search"
+
+
+def test_turn_contract_promotes_planner_best_seller_followup_to_best_seller_contract() -> None:
+    contract = build_turn_contract(
+        user_text="g70 1년 기준으로",
+        intent_frame=IntentFrame(domain=PolicyDomain.DISCOVERY, intent="general_recommendation"),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=("product_card_without_size", "price_without_size"),
+            metadata={"response_shape_key": "unsized_recommendation_summary"},
+        ),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY],
+            execution_plan=["discovery:query_order_data_for_vehicle_with_period"],
+        ),
+    )
+
+    assert contract.intent == "best_seller_search"
+    assert "get_best_selling_products_tool" in contract.allowed_tools
+    assert "get_products_recommendations_tool" in contract.forbidden_tools
+    assert contract.response_decision["template"] == "product"
+    assert contract.response_decision["metadata"]["response_shape_key"] == "best_seller_product_cards"
+
+
+def test_best_seller_no_data_fallback_filters_purchase_cta() -> None:
+    event = try_build_template(
+        [
+            {
+                "tool": "get_best_selling_products_tool",
+                "args": {"vehicle_query": "G70", "months": 12, "limit": 5},
+                "data": {
+                    "status": "resolved_no_order_data",
+                    "vehicle_query": "G70",
+                    "fallback_options": [
+                        {"label": "구매하기"},
+                        {"label": "전체 베스트셀러 보기"},
+                        {"label": "차종 다시 입력"},
+                    ],
+                },
+            }
+        ],
+        "G70 기준 인기 상품을 찾고 있어요.",
+    )
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    labels = [item["label"] for item in event["data"]["quickReplies"]]
+    assert "구매하기" not in labels
+    assert "전체 베스트셀러 보기" in labels
 
 
 def test_turn_contract_allows_compare_quickreply_during_discovery_first_leg_transaction_chain() -> None:

@@ -891,6 +891,13 @@ def build_turn_contract(
             "assistant_guidance": "FAQ hybrid 검색을 먼저 수행하고 정책/조건을 quickReply로 요약한 뒤 필요 시에만 1:1 문의로 이어진다.",
             "metadata": {"response_shape_key": intent},
         }
+    if planner_intent == "best_seller_search" and code_intent in {"product_recommendation", "general_recommendation"}:
+        domain = "discovery"
+        intent = "best_seller_search"
+        allowed_tools = _merge_tuple(allowed_tools, ("get_best_selling_products_tool",))
+        forbidden_tools = _merge_tuple(forbidden_tools, ("get_products_recommendations_tool",))
+        if _router_wins_response_decision_mismatch("best_seller_search", response_decision_payload):
+            response_decision_payload = _best_seller_response_decision_payload()
     router_wins_suppressed_required_slots = bool(
         router_wins_intent
         and (router_wins_preempted_required_slots or required_slots or resolvable_required_slots or blocking_required_slots)
@@ -3644,6 +3651,20 @@ def _response_policy_source(response_decision_payload: Mapping[str, Any] | None)
     return "response_decision" if response_decision_payload is not None else "none"
 
 
+def _best_seller_response_decision_payload() -> dict[str, Any]:
+    return {
+        "response_shape": "card",
+        "template": "product",
+        "required_slots": [],
+        "forbidden_behaviors": [
+            "use_generic_recommendation_engine",
+            "expose_sales_count",
+        ],
+        "assistant_guidance": "요청 기간/차종 기준 베스트셀러 도구 결과를 product 카드로 안내하고 판매 수량은 노출하지 않는다.",
+        "metadata": {"response_shape_key": "best_seller_product_cards"},
+    }
+
+
 def _stale_context_usage(*, router_wins_intent: str | None, context_state: str) -> str | None:
     if not router_wins_intent:
         return None
@@ -3810,6 +3831,10 @@ def _normalize_plan_intent(value: str) -> str:
         "get_best_selling_products_tool": "best_seller_search",
         "best_seller": "best_seller_search",
         "sales_rank": "best_seller_search",
+        "query_order_data_for_vehicle_with_period": "best_seller_search",
+        "best_seller_search_by_vehicle": "best_seller_search",
+        "vehicle_best_seller_search": "best_seller_search",
+        "order_data_for_vehicle": "best_seller_search",
     }
     return aliases.get(normalized, normalized or "unknown")
 

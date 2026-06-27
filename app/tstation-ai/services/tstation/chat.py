@@ -27984,6 +27984,8 @@ class TStationChatServiceV2:
                         label = str(option.get("label") or "").strip()
                         if not label:
                             continue
+                        if label in {"구매하기", "주문하기", "바로 구매", "바로 주문"}:
+                            continue
                         quick_replies.append({"label": label, "domain": "DISCOVERY"})
                 if not quick_replies:
                     quick_replies.append({"label": "전체 베스트셀러", "domain": "DISCOVERY"})

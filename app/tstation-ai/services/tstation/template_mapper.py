@@ -3166,6 +3166,8 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
                     if not isinstance(option, dict):
                         continue
                     label = str(option.get("label") or "").strip()
+                    if label in {"구매하기", "주문하기", "바로 구매", "바로 주문"}:
+                        continue
                     if label:
                         quick_replies.append({"label": label, "domain": "DISCOVERY"})
             if not quick_replies:
