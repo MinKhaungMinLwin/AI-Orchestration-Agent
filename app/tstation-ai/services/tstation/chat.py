@@ -7693,6 +7693,31 @@ def _is_order_history_reorder_query(user_text: str | None) -> bool:
     )
 
 
+def _is_order_history_lookup_query(user_text: str | None) -> bool:
+    text = str(user_text or "").strip()
+    if not text:
+        return False
+    if _is_order_history_reorder_query(text):
+        return False
+    if re.search(
+        r"주문\s*(?:내역|목록|페이지).{0,12}(?:이동|열어|들어가|바로가기|페이지)|"
+        r"(?:마이페이지|주문내역\s*페이지).{0,12}(?:이동|열어|들어가|바로가기)",
+        text,
+        re.IGNORECASE,
+    ):
+        return False
+    return bool(
+        re.search(
+            r"내\s*주문(?:\s*(?:내역|목록))?\s*(?:보여|조회|확인|알려)|"
+            r"주문\s*(?:내역|목록)\s*(?:보여|조회|확인|알려)|"
+            r"최근\s*주문(?:\s*내역)?\s*(?:보여|조회|확인|알려)|"
+            r"내가\s*주문한\s*거\s*(?:보여|조회|확인|알려)",
+            text,
+            re.IGNORECASE,
+        )
+    )
+
+
 _extract_vehicle_plate_from_text = extract_vehicle_plate_from_text
 
 
@@ -9852,6 +9877,137 @@ def _build_order_history_reorder_event(order_row: dict, *, match_reason: str, re
                 "ordQty": ord_qty,
                 "carNo": car_no,
             },
+        },
+    }
+
+
+def _build_order_history_lookup_event(orders_result: dict, *, user_text: str = "") -> dict:
+    rows = _order_rows_from_orders_result(orders_result)
+    tool_status = str(orders_result.get("status") or "").strip().lower()
+    metadata = {
+        "response_shape_key": "order_history_lookup",
+        "orderHistoryLookup": True,
+        "pageNavigationRequested": bool(
+            re.search(r"(?:이동|열어|들어가|바로가기|페이지)", str(user_text or ""), re.IGNORECASE)
+        ),
+    }
+
+    if tool_status == "error":
+        return {
+            "type": "data",
+            "template": "quickReply",
+            "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+            "assistant_response_source": "code_order_history_lookup",
+            "data": {
+                "assistantResponse": "주문내역을 불러오지 못했어요. 잠시 후 다시 시도해 주세요.",
+                "quickReplies": [
+                    {"label": "다시 시도", "domain": "TRANSACTION"},
+                    {"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"},
+                ],
+                "predictedDomains": ["TRANSACTION"],
+                "metadata": metadata | {"orderCount": 0, "lookupFailed": True},
+            },
+        }
+
+    grouped: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        ord_no = _order_no_from_row(row)
+        if not ord_no:
+            continue
+        group = grouped.setdefault(
+            ord_no,
+            {
+                "ord_no": ord_no,
+                "rows": [],
+                "status": "",
+                "goods_nm": "",
+                "qty": 0,
+                "date": "",
+            },
+        )
+        group["rows"].append(row)
+        if not group["status"]:
+            group["status"] = _order_row_value(row, "ord_prgs_stat_nm", "status_nm") or "상태 확인 필요"
+        if not group["goods_nm"]:
+            group["goods_nm"] = _order_row_value(row, "goods_nm", "goodsName") or "상품명 확인 필요"
+        qty_text = _order_row_value(row, "ord_qty", "ordQty")
+        if qty_text.isdigit():
+            group["qty"] += int(qty_text)
+        date_text = _date_label(_order_history_sort_key(row))
+        if date_text and date_text > str(group["date"] or ""):
+            group["date"] = date_text
+
+    summaries = sorted(grouped.values(), key=lambda item: str(item.get("date") or ""), reverse=True)
+    if not summaries:
+        return {
+            "type": "data",
+            "template": "quickReply",
+            "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+            "assistant_response_source": "code_order_history_lookup",
+            "data": {
+                "assistantResponse": "최근 주문 내역이 없어요.",
+                "quickReplies": [
+                    {"label": "상품 추천 받기", "domain": "DISCOVERY"},
+                    {"label": "매장 찾기", "domain": "TRANSACTION"},
+                ],
+                "predictedDomains": ["TRANSACTION", "DISCOVERY"],
+                "metadata": metadata | {"orderCount": 0, "lookupFailed": False},
+            },
+        }
+
+    table_lines = [
+        "| 주문번호 | 주문상태 | 상품명 | 수량 | 주문날짜 |",
+        "|---|---|---|---|---|",
+    ]
+    for item in summaries[:5]:
+        extra_count = max(len(item["rows"]) - 1, 0)
+        goods_nm = str(item["goods_nm"] or "상품명 확인 필요").replace("|", "/")
+        if extra_count:
+            goods_nm = f"{goods_nm} 외 {extra_count}개"
+        qty = item["qty"] if item["qty"] > 0 else "-"
+        date_text = item["date"] or "-"
+        status = str(item["status"] or "상태 확인 필요").replace("|", "/")
+        table_lines.append(f"| {item['ord_no']} | {status} | {goods_nm} | {qty} | {date_text} |")
+
+    latest_ord_no = str(summaries[0]["ord_no"] or "")
+    if len(summaries) == 1:
+        assistant_response = (
+            "최근 주문 1건을 확인했어요.\n\n"
+            + "\n".join(table_lines)
+            + "\n\n주문 상세도 함께 보실 수 있어요."
+        )
+        quick_replies = [
+            {"label": "주문 상세 보기", "url": CTAUrls.ORDER_HISTORY_DETAIL.replace("<ord_no>", latest_ord_no), "domain": "TRANSACTION"},
+            {"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"},
+        ]
+    else:
+        assistant_response = (
+            "최근 주문내역을 확인했어요.\n\n"
+            + "\n".join(table_lines)
+            + "\n\n어느 주문을 더 확인할지 주문번호를 말씀해 주세요. 전체 주문 내역은 아래 버튼에서 확인하실 수 있어요."
+        )
+        quick_replies = [
+            {"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"},
+        ]
+        if latest_ord_no:
+            quick_replies.append(
+                {
+                    "label": "최근 주문 상세 보기",
+                    "url": CTAUrls.ORDER_HISTORY_DETAIL.replace("<ord_no>", latest_ord_no),
+                    "domain": "TRANSACTION",
+                }
+            )
+
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+        "assistant_response_source": "code_order_history_lookup",
+        "data": {
+            "assistantResponse": assistant_response,
+            "quickReplies": quick_replies,
+            "predictedDomains": ["TRANSACTION"],
+            "metadata": metadata | {"orderCount": len(summaries), "latestOrdNo": latest_ord_no, "lookupFailed": False},
         },
     }
 
@@ -27583,6 +27739,64 @@ class TStationChatServiceV2:
             )
             return (emitted_events, reorder_event) if reorder_event is not None else None
 
+        async def _resolve_order_history_lookup_with_code() -> tuple[list[dict], dict] | None:
+            if not _is_order_history_lookup_query(user_query):
+                return None
+            gate_allowed, gate_reason = _direct_code_fast_path_contract_gate(
+                turn_contract=turn_contract,
+                intent="order_history_lookup",
+                template="quickReply",
+                source="code_order_history_lookup",
+                required_tools=("get_orders_of_user_tool",),
+            )
+            if not gate_allowed:
+                logger.info("[CODE_FAST_PATH_GATE] blocked order_history_lookup reason=%s", gate_reason)
+                return None
+
+            from services.tstation.agents.c_transaction_agent.tools import (
+                get_orders_of_user_tool as _orders_tool,
+            )
+
+            emitted_events: list[dict] = []
+            orders_input: dict[str, Any] = {}
+            emitted_events.append({
+                "type": "status",
+                "status": "tool_start",
+                "tool": "get_orders_of_user_tool",
+                "display_name": "주문 내역 조회 중...",
+                "source_domain": "transaction",
+            })
+            try:
+                raw_orders = await asyncio.to_thread(_orders_tool.invoke, orders_input)
+                orders_result = _tool_result_dict(raw_orders)
+            except Exception as exc:
+                logger.exception("[ORDER_HISTORY_LOOKUP] orders tool failed")
+                orders_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+            _record_code_tool_result("get_orders_of_user_tool", orders_input, orders_result)
+            emitted_events.append({
+                "type": "agent_flow",
+                "agent": "[Order / Delivery AF]",
+                "agent_class": "Transaction Agent",
+                "status": orders_result.get("status", "success"),
+                "source_domain": "transaction",
+            })
+            emitted_events.append({
+                "type": "tool",
+                "input": orders_input,
+                "output": json.dumps(orders_result, ensure_ascii=False),
+                "node": "tools",
+                "tool": "get_orders_of_user_tool",
+                "source_domain": "transaction",
+            })
+            order_history_event = _finalize_direct_code_event(
+                _build_order_history_lookup_event(orders_result, user_text=user_query),
+                turn_contract=turn_contract,
+                intent="order_history_lookup",
+                source="code_order_history_lookup",
+                required_tools=("get_orders_of_user_tool",),
+            )
+            return (emitted_events, order_history_event) if order_history_event is not None else None
+
         async def _resolve_maintenance_history_lookup_with_code() -> tuple[list[dict], dict] | None:
             if _is_maintenance_history_access_policy_query(user_query):
                 policy_event = _finalize_direct_code_event(
@@ -31404,6 +31618,22 @@ class TStationChatServiceV2:
             assistant_response = str((benefit_event.get("data") or {}).get("assistantResponse") or "")
             if assistant_response:
                 yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[DISCOVERY AGENT]'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
+        order_history_lookup_resolution = await _resolve_order_history_lookup_with_code()
+        if order_history_lookup_resolution is not None:
+            code_events, order_history_event = order_history_lookup_resolution
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+            for code_event in code_events:
+                yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(order_history_event, ensure_ascii=False)}\n\n"
+            assistant_response = str((order_history_event.get("data") or {}).get("assistantResponse") or "")
+            if assistant_response:
+                yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[TRANSACTION AGENT]'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
             yield "data: [DONE]\n\n"

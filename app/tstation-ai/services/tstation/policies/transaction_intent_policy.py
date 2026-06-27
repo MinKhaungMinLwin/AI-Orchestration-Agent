@@ -91,6 +91,18 @@ _ORDER_HISTORY_REORDER_ACTION_RE = re.compile(
     r"다시|재구매|같은|동일|또|구매|주문|장착|교체|살래|살게",
     re.IGNORECASE,
 )
+_ORDER_HISTORY_LOOKUP_RE = re.compile(
+    r"내\s*주문(?:\s*(?:내역|목록))?\s*(?:보여|조회|확인|알려)|"
+    r"주문\s*(?:내역|목록)\s*(?:보여|조회|확인|알려)|"
+    r"최근\s*주문(?:\s*내역)?\s*(?:보여|조회|확인|알려)|"
+    r"내가\s*주문한\s*거\s*(?:보여|조회|확인|알려)",
+    re.IGNORECASE,
+)
+_ORDER_HISTORY_PAGE_NAVIGATION_RE = re.compile(
+    r"주문\s*(?:내역|목록|페이지).{0,12}(?:이동|열어|들어가|바로가기|페이지)|"
+    r"(?:마이페이지|주문내역\s*페이지).{0,12}(?:이동|열어|들어가|바로가기)",
+    re.IGNORECASE,
+)
 _RESERVATION_STATUS_LOOKUP_RE = re.compile(
     r"내\s*예약|예약\s*(?:조회|내역|확인|상태)|다음\s*방문|예약\s*어떻게\s*돼|예약\s*어떻게돼|"
     r"내\s*예약\s*(?:시간|일정).{0,24}(?:바뀌었|바뀌|변경|밀렸|옮겨졌).{0,24}(?:조회|확인|봤|봐|알려)|"
@@ -516,6 +528,15 @@ def _is_order_history_reorder_turn(text: str) -> bool:
     )
 
 
+def _is_order_history_lookup_turn(text: str) -> bool:
+    value = text or ""
+    if _ORDER_HISTORY_PAGE_NAVIGATION_RE.search(value):
+        return False
+    if _is_order_history_reorder_turn(value):
+        return False
+    return bool(_ORDER_HISTORY_LOOKUP_RE.search(value))
+
+
 def _is_preorder_ready_context(slots: dict[str, Any]) -> bool:
     if not slots:
         return False
@@ -694,6 +715,7 @@ def build_transaction_intent_frame(
     current_maintenance_history_lookup = bool(
         _MAINTENANCE_HISTORY_LOOKUP_RE.search(text) and not current_maintenance_history_access_policy
     )
+    current_order_history_lookup = _is_order_history_lookup_turn(text)
     current_plain_store_info_lookup = bool(not current_store_is_context and _is_plain_store_info_lookup(text))
     current_store_holiday_lookup = bool(not current_store_is_context and _is_store_holiday_lookup(text))
     current_order_history_reorder = _is_order_history_reorder_turn(text)
@@ -1060,6 +1082,10 @@ def build_transaction_intent_frame(
         intent = "maintenance_history_lookup"
         sub_intent = "service_history"
         entities["requested_service_item"] = _requested_maintenance_history_item(text)
+    elif current_order_history_lookup:
+        intent = "order_history_lookup"
+        sub_intent = "owned_order_list"
+        entities["owned_record_target"] = "order"
     elif current_order_history_reorder:
         intent = "order_history_reorder"
         sub_intent = "reorder_from_owned_history"
@@ -1361,6 +1387,10 @@ def build_transaction_intent_frame(
         known["goal_type"] = "maintenance_history_lookup"
         if entities.get("requested_service_item"):
             known["requested_service_item"] = entities["requested_service_item"]
+    if intent == "order_history_lookup":
+        known["pending_intent"] = "order_history_lookup"
+        known["goal_type"] = "owned_record_lookup"
+        known["owned_record_target"] = "order"
     if intent == "maintenance_history_access_policy":
         known["pending_intent"] = "maintenance_history_access_policy"
         known["goal_type"] = "maintenance_history_access_policy"
@@ -1743,6 +1773,21 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
                     else {}
                 ),
             },
+        )
+
+    if frame.intent == "order_history_lookup":
+        return ToolPlan(
+            allowed_tools=("get_orders_of_user_tool",),
+            preferred_tool="get_orders_of_user_tool",
+            tool_args_patch={},
+            forbidden_tools=(
+                "quick_order_tool",
+                "search_product_tool",
+                "get_final_price_tool",
+                "transaction_store_preview_tool",
+            ),
+            required_slots=(),
+            metadata={"response_intent": "order_history_lookup", "action": action},
         )
 
     if frame.intent == "order_history_reorder":

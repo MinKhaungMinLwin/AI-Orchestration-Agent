@@ -73,6 +73,8 @@ def decide_transaction_response(
         return _decide_delivery_delay_reservation_schedule_policy()
     if intent == "order_arrival_status_lookup":
         return _decide_order_arrival_status_lookup()
+    if intent == "order_history_lookup":
+        return _decide_order_history_lookup()
     if intent == "order_cancel_status_lookup":
         return _decide_order_cancel_status_lookup()
     if intent == "general_card_cancel_timing_policy":
@@ -392,6 +394,25 @@ def _decide_order_arrival_status_lookup() -> ResponseDecision:
             "매장 도착/입고 문자를 받은 뒤 방문 가능 여부를 묻는 경우는 알림 설정이 아니라 주문/예약 상태 확인이다. "
             "주문/예약 source를 확인하고, 예약 시간이 있으면 예약 시간 기준 방문을 권장한다. "
             "예약 시간이 없으면 방문 전 매장 또는 주문내역 확인을 안내한다."
+        ),
+    )
+
+
+def _decide_order_history_lookup() -> ResponseDecision:
+    return _decision(
+        response_shape_key="order_history_lookup",
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        forbidden_behaviors=(
+            "order_history_url_primary_without_lookup",
+            "ask_order_number_before_list_lookup",
+            "product_search_for_owned_order_lookup",
+            "quick_order_for_owned_order_lookup",
+        ),
+        assistant_guidance=(
+            "주문내역/주문목록 조회는 주문번호 없이도 get_orders_of_user_tool을 먼저 호출한다. "
+            "최근 주문 목록을 챗봇 안에서 요약해 보여주고, 주문내역 URL이나 상세 CTA는 보조로만 제공한다. "
+            "주문내역 페이지 이동 의도가 명확한 경우에만 URL 이동 안내를 우선할 수 있다."
         ),
     )
 

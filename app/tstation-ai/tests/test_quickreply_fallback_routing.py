@@ -159,6 +159,7 @@ from services.tstation.chat import (
     _standardize_preorder_metadata,
     _build_order_arrival_status_event,
     _build_order_cancel_status_event,
+    _build_order_history_lookup_event,
     _build_order_history_reorder_event,
     _payment_method_order_selection_event,
     _order_cancel_status_selection_event,
@@ -167,6 +168,7 @@ from services.tstation.chat import (
     _is_preorder_confirmation_reply,
     _is_maintenance_history_access_policy_query,
     _is_maintenance_history_lookup_query,
+    _is_order_history_lookup_query,
     _is_order_quantity_prompt_continuation_text,
     _apply_vehicle_selection_slot_values,
     _vehicle_selection_slot_values,
@@ -2372,6 +2374,12 @@ def test_order_history_reorder_does_not_hijack_strong_oe_query() -> None:
     assert _is_oe_replacement_equivalent_query(text)
 
 
+def test_order_history_lookup_query_matches_list_request_but_not_page_navigation() -> None:
+    assert _is_order_history_lookup_query("주문내역 보여줘")
+    assert _is_order_history_lookup_query("최근 주문내역 확인해줘")
+    assert not _is_order_history_lookup_query("주문내역 페이지로 이동해줘")
+
+
 def test_order_history_reorder_prefers_car_no_over_same_tire_size() -> None:
     orders_result = {
         "status": "success",
@@ -2481,6 +2489,70 @@ def test_order_history_reorder_event_uses_matched_order_metadata() -> None:
     assert "205소4214" in event["data"]["assistantResponse"]
     assert "옵티모 H426 205/65R16" in event["data"]["assistantResponse"]
     assert event["data"]["metadata"]["goodsNo"] == "G0000001"
+
+
+def test_order_history_lookup_event_summarizes_recent_orders_in_chat() -> None:
+    event = _build_order_history_lookup_event(
+        {
+            "status": "success",
+            "data": {
+                "orders": [
+                    {
+                        "ord_no": "O202606280019999",
+                        "goods_nm": "아이온 에보 AS",
+                        "ord_qty": 2,
+                        "sys_reg_dtime": "2026-06-28T10:00:00",
+                        "detail": {"ord_prgs_stat_nm": "주문완료"},
+                    },
+                    {
+                        "ord_no": "O202606270019998",
+                        "goods_nm": "벤투스 S2 AS",
+                        "ord_qty": 4,
+                        "sys_reg_dtime": "2026-06-27T09:00:00",
+                        "detail": {"ord_prgs_stat_nm": "장착완료"},
+                    },
+                ]
+            },
+        },
+        user_text="주문내역 보여줘",
+    )
+
+    data = event["data"]
+    assert data["metadata"]["response_shape_key"] == "order_history_lookup"
+    assert "최근 주문내역을 확인했어요." in data["assistantResponse"]
+    assert "| 주문번호 | 주문상태 | 상품명 | 수량 | 주문날짜 |" in data["assistantResponse"]
+    assert "O202606280019999" in data["assistantResponse"]
+    assert data["quickReplies"][0] == {
+        "label": "주문 내역 보기",
+        "url": CTAUrls.ORDER_HISTORY,
+        "domain": "TRANSACTION",
+    }
+
+
+def test_order_history_lookup_event_uses_detail_cta_for_single_order() -> None:
+    event = _build_order_history_lookup_event(
+        {
+            "status": "success",
+            "data": {
+                "orders": [
+                    {
+                        "ord_no": "O202606280019999",
+                        "goods_nm": "아이온 에보 AS",
+                        "ord_qty": 2,
+                        "sys_reg_dtime": "2026-06-28T10:00:00",
+                        "detail": {"ord_prgs_stat_nm": "주문완료"},
+                    }
+                ]
+            },
+        },
+        user_text="최근 주문내역 확인해줘",
+    )
+
+    data = event["data"]
+    assert "최근 주문 1건을 확인했어요." in data["assistantResponse"]
+    assert data["quickReplies"][0]["label"] == "주문 상세 보기"
+    assert data["quickReplies"][0]["url"].endswith("/mypage/tstation/order-history/detail/O202606280019999")
+    assert data["quickReplies"][1]["label"] == "주문 내역 보기"
 
 
 def test_order_source_filter_keeps_vehicle_fields_for_reorder_matching_context() -> None:

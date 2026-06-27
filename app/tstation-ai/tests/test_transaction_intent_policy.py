@@ -277,6 +277,30 @@ def test_order_history_reorder_contract_uses_owned_order_tool_only() -> None:
     assert decision.metadata["response_shape_key"] == "order_history_reorder"
 
 
+def test_order_history_lookup_contract_uses_owned_order_list_tool() -> None:
+    user_text = "주문내역 보여줘"
+    frame = build_transaction_intent_frame(user_text, known_slots={})
+    plan = plan_transaction_tools(frame)
+    decision = decide_transaction_response(intent=frame.intent, user_text=user_text, known_slots=dict(frame.known_slots))
+
+    assert frame.intent == "order_history_lookup"
+    assert frame.sub_intent == "owned_order_list"
+    assert frame.known_slots["pending_intent"] == "order_history_lookup"
+    assert frame.known_slots["goal_type"] == "owned_record_lookup"
+    assert plan.allowed_tools == ("get_orders_of_user_tool",)
+    assert plan.preferred_tool == "get_orders_of_user_tool"
+    assert "quick_order_tool" in plan.forbidden_tools
+    assert "search_product_tool" in plan.forbidden_tools
+    assert "get_final_price_tool" in plan.forbidden_tools
+    assert decision.metadata["response_shape_key"] == "order_history_lookup"
+
+
+def test_order_history_page_navigation_does_not_promote_owned_order_list_lookup() -> None:
+    frame = build_transaction_intent_frame("주문내역 페이지로 이동해줘", known_slots={})
+
+    assert frame.intent != "order_history_lookup"
+
+
 def test_general_cancel_fee_policy_uses_faq_only_contract() -> None:
     user_text = "예약 취소에 따른 위약금이 있는지 알려줘"
     frame = build_transaction_intent_frame(user_text, known_slots={})

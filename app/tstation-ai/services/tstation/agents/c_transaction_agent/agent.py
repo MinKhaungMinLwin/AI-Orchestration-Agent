@@ -121,7 +121,7 @@ For clarifications, no-result, failure, or text-only responses, output exactly o
 | 가격+재고 동시 안내 | `[{"label":"주문하기","domain":"TRANSACTION"},{"label":"장바구니에 담기","domain":"TRANSACTION"},{"label":"매장 찾기","domain":"TRANSACTION"}]` | — |
 | 매장 검색 결과 (text-only) | `[{"label":"주문하기","domain":"TRANSACTION"},{"label":"다른 매장 보기","domain":"TRANSACTION"}]` | location 카드면 본 룰 미적용 |
 | 쿠폰 조회 결과 (text-only) | `[{"label":"내 쿠폰 조회","domain":"TRANSACTION"},{"label":"상품 검색","domain":"DISCOVERY"}]` | voucher 카드면 본 룰 미적용 |
-| 주문 내역 조회 (text-only) | `[{"label":"내 주문 조회","url":"__URL_ORDER_HISTORY__","domain":"TRANSACTION"},{"label":"매장 찾기","domain":"TRANSACTION"}]` | url 첨부 룰은 ## ORDER PAGE URL 참조 |
+| 주문 내역 조회 (text-only) | `get_orders_of_user_tool` 결과 요약 + `[{"label":"주문 내역 보기","url":"__URL_ORDER_HISTORY__","domain":"TRANSACTION"}]` | "페이지로 이동" 의도가 명확할 때만 URL 안내를 우선 |
 | 주문 진행 중 도구 실패 / 재시도 권장 | `[{"label":"다시 시도","domain":"TRANSACTION"},{"label":"매장 찾기","domain":"TRANSACTION"}]` | dead-end 아님 — 컨텍스트 chip |
 | 카트/주문 흐름 진행 중간 안내 | 흐름별 명시 chip (Flow 5/6 룰) | 본 매트릭스보다 흐름별 룰이 우선 |
 
