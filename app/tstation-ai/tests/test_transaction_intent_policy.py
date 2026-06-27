@@ -104,6 +104,53 @@ def test_purchase_flow_with_region_resolves_to_show_store_candidates() -> None:
     assert plan.allowed_tools == ("transaction_store_preview_tool",)
 
 
+def test_purchase_flow_frame_missing_slots_uses_flow_controller_for_schedule_step() -> None:
+    frame = build_transaction_intent_frame(
+        "티스테이션 판교점",
+        known_slots={
+            "goods_no": "G000000312679",
+            "tire_size": "245/45R18",
+            "ord_qty": 2,
+            "shop_id": "S001",
+            "shop_name": "티스테이션 판교점",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+    plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "quick_order_reservation"
+    assert frame.missing_slots == ("booking_datetime",)
+    assert plan.metadata["flow_step"] == "show_schedule"
+    assert plan.required_slots == ()
+    assert plan.allowed_tools == ("get_store_schedule_tool", "get_multi_store_schedule_tool")
+    assert plan.preferred_tool == "get_store_schedule_tool"
+
+
+def test_purchase_flow_frame_missing_slots_clears_when_booking_is_ready() -> None:
+    frame = build_transaction_intent_frame(
+        "2026년 6월 27일 09:00",
+        known_slots={
+            "goods_no": "G000000312679",
+            "tire_size": "245/45R18",
+            "ord_qty": 2,
+            "shop_id": "S001",
+            "shop_name": "티스테이션 판교점",
+            "requested_cal_day": "20260627",
+            "rsv_hour": "0900",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+    plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "quick_order_reservation"
+    assert frame.missing_slots == ()
+    assert plan.metadata["flow_step"] == "build_preorder"
+    assert plan.allowed_tools == ()
+    assert "quick_order_tool" in plan.forbidden_tools
+
+
 def test_store_service_search_policy_uses_service_code_filter() -> None:
     frame = build_transaction_intent_frame("경기권에 타이어 보관해주는 매장 어디 있어?", known_slots={})
     plan = plan_transaction_tools(frame)

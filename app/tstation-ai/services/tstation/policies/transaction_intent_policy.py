@@ -1362,6 +1362,11 @@ def build_transaction_intent_frame(
     if store_name and "store_exact_match" not in known and store_name in _KNOWN_UNVERIFIED_STORE_NAMES:
         known["store_exact_match"] = False
 
+    if intent in {"quick_order_reservation", "quick_order_execute"}:
+        flow_state = resolve_purchase_order_flow(intent=intent, known_slots=known)
+        if flow_state is not None:
+            missing_slots = flow_state.missing_slots
+
     return IntentFrame(
         domain=PolicyDomain.TRANSACTION,
         intent=intent,
