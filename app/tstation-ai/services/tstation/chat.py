@@ -16546,6 +16546,279 @@ def _finalize_direct_code_event(
     )
 
 
+_FAST_PATH_TRANSACTION_RECOVERY_BLOCKLIST = frozenset({
+    "quick_order_tool",
+    "transaction_store_preview_tool",
+    "get_store_schedule_tool",
+    "get_multi_store_schedule_tool",
+    "get_final_price_tool",
+    "get_logistics_inventory_tool",
+    "get_store_inventory_tool",
+})
+_FAST_PATH_DISCOVERY_RECOVERY_ALLOWED_TOOLS = frozenset({
+    "search_product_tool",
+    "get_product_description_tool",
+    "get_products_recommendations_tool",
+    "get_best_selling_products_tool",
+    "get_my_cars_tool",
+})
+_FAST_PATH_SUPPORT_RECOVERY_ALLOWED_TOOLS = frozenset({
+    "search_faq_hybrid_tool",
+})
+
+
+def _annotate_contract_tool_recovery_event(
+    event: dict[str, Any],
+    *,
+    turn_contract: TurnContract,
+    blocked_fast_path_source: str,
+    recovered_tool: str,
+    recovery_reason: str,
+    tool_input_source: str,
+) -> dict[str, Any]:
+    event["contract_intent"] = str(turn_contract.intent or "")
+    event["allowed_tools"] = list(turn_contract.allowed_tools)
+    event["blocked_tools"] = list(turn_contract.forbidden_tools)
+    event["assistant_response_source"] = "contract_tool_recovery_after_fast_path_block"
+    event["contract_tool_recovery"] = True
+    event["blocked_fast_path_source"] = blocked_fast_path_source
+    event["recovered_tool"] = recovered_tool
+    event["recovery_reason"] = recovery_reason
+    event["tool_input_source"] = tool_input_source
+    event_data = event.get("data")
+    if isinstance(event_data, dict):
+        metadata = _contract_annotation_metadata(event_data)
+        metadata["contract_intent"] = str(turn_contract.intent or "")
+        metadata["allowed_tools"] = list(turn_contract.allowed_tools)
+        metadata["blocked_tools"] = list(turn_contract.forbidden_tools)
+        metadata["assistant_response_source"] = "contract_tool_recovery_after_fast_path_block"
+        metadata["contract_tool_recovery"] = True
+        metadata["blocked_fast_path_source"] = blocked_fast_path_source
+        metadata["recovered_tool"] = recovered_tool
+        metadata["recovery_reason"] = recovery_reason
+        metadata["tool_input_source"] = tool_input_source
+    return event
+
+
+async def recover_blocked_fast_path_to_contract_tool(
+    *,
+    turn_contract: TurnContract | None,
+    user_text: str,
+    merged_slots: ConversationSlots | None,
+    blocked_fast_path_source: str,
+    member_no: str | None = None,
+) -> dict[str, Any] | None:
+    if turn_contract is None:
+        return None
+    if tuple(getattr(turn_contract, "blocking_required_slots", ()) or ()):
+        return None
+    if str(getattr(turn_contract, "context_state", "") or "") not in {"active", "resumed"}:
+        return None
+
+    allowed_tools = tuple(str(tool) for tool in (turn_contract.allowed_tools or ()) if str(tool))
+    forbidden_tools = {str(tool) for tool in (turn_contract.forbidden_tools or ()) if str(tool)}
+    if not allowed_tools:
+        return None
+
+    contract_intent = str(turn_contract.intent or "")
+    known_slots = dict(turn_contract.known_slots or {})
+    domain = str(turn_contract.domain or "").strip().lower()
+    preferred_tool = ""
+    tool_input: dict[str, Any] = {}
+    tool_input_source = ""
+    display_name = "정보 확인 중..."
+    source_domain = domain or "discovery"
+
+    if domain == PolicyDomain.DISCOVERY.value:
+        discovery_known_slots = {
+            key: value
+            for key, value in {
+                "tire_size": known_slots.get("tire_size") or getattr(merged_slots, "tire_size", None),
+                "goods_no": known_slots.get("goods_no") or getattr(merged_slots, "goods_no", None),
+                "vehicle_type": known_slots.get("vehicle_type") or getattr(merged_slots, "vehicle_type", None),
+                "brand_cd": known_slots.get("brand_cd"),
+                "discovery_followup_action": known_slots.get("discovery_followup_action"),
+                "pending_check_topic": known_slots.get("pending_check_topic"),
+                "pending_check_object_type": known_slots.get("pending_check_object_type"),
+                "pending_check_object_value": known_slots.get("pending_check_object_value"),
+            }.items()
+            if value not in (None, "")
+        }
+        frame = build_discovery_intent_frame(user_text, known_slots=discovery_known_slots)
+        tool_plan = plan_discovery_tools(frame)
+        planned_preferred_tool = str(getattr(tool_plan, "preferred_tool", None) or "")
+        if planned_preferred_tool and planned_preferred_tool in allowed_tools:
+            preferred_tool = planned_preferred_tool
+            tool_input = {
+                key: value
+                for key, value in dict(getattr(tool_plan, "tool_args_patch", {}) or {}).items()
+                if value not in (None, "", [], {})
+            }
+            tool_input_source = "discovery_tool_plan"
+        elif len(allowed_tools) == 1:
+            preferred_tool = allowed_tools[0]
+
+        if preferred_tool not in _FAST_PATH_DISCOVERY_RECOVERY_ALLOWED_TOOLS:
+            return None
+        if preferred_tool in forbidden_tools or preferred_tool in _FAST_PATH_TRANSACTION_RECOVERY_BLOCKLIST:
+            return None
+
+        if preferred_tool == "search_product_tool":
+            preferred_keyword = str(
+                known_slots.get("pending_product_name")
+                or known_slots.get("tire_model")
+                or getattr(merged_slots, "pending_product_name", None)
+                or getattr(merged_slots, "tire_model", None)
+                or ""
+            ).strip()
+            if preferred_keyword:
+                tool_input["keyword"] = preferred_keyword
+            if not tool_input:
+                keyword = preferred_keyword
+                if not keyword:
+                    product_names = extract_product_names(user_text)
+                    keyword = str(product_names[0] if product_names else "").strip()
+                if not keyword:
+                    return None
+                tool_input = {"keyword": keyword, "limit": 10}
+                brand_cd = str(known_slots.get("brand_cd") or "").strip()
+                if brand_cd:
+                    tool_input["brand_cd"] = brand_cd
+                tire_size = normalize_tire_size(str(known_slots.get("tire_size") or ""))
+                if tire_size:
+                    tool_input["size"] = tire_size
+                tool_input_source = tool_input_source or "known_slots"
+            display_name = "상품 검색 중..."
+        elif preferred_tool == "get_product_description_tool":
+            if not tool_input:
+                goods_no = str(known_slots.get("goods_no") or getattr(merged_slots, "goods_no", None) or "").strip()
+                if not goods_no:
+                    return None
+                tool_input = {"goods_no": goods_no}
+                tool_input_source = "known_slots"
+            display_name = "상품 정보 확인 중..."
+        elif preferred_tool == "get_best_selling_products_tool":
+            if not tool_input:
+                tool_input = {"period": best_seller_period_from_text(user_text) or "3months", "limit": 5}
+                tool_input_source = "user_text"
+            display_name = "인기 상품 조회 중..."
+        elif preferred_tool == "get_my_cars_tool":
+            if not tool_input:
+                member_no_value = str(member_no or "").strip()
+                if not member_no_value:
+                    return None
+                tool_input = {"mbr_no": member_no_value}
+                tool_input_source = "user_context"
+            display_name = "등록 차량 조회 중..."
+        elif preferred_tool == "get_products_recommendations_tool":
+            if not tool_input:
+                return None
+            display_name = "추천 상품 확인 중..."
+    elif domain == PolicyDomain.SUPPORT.value:
+        if len(allowed_tools) == 1:
+            preferred_tool = allowed_tools[0]
+        if preferred_tool != "search_faq_hybrid_tool":
+            return None
+        if preferred_tool in forbidden_tools:
+            return None
+        if str(turn_contract.intent or "") not in {"general_cancel_fee_policy", "general_card_cancel_timing_policy"} | _DIRECT_SUPPORT_FAQ_POLICY_INTENTS:
+            return None
+        tool_input = {"query": user_text}
+        tool_input_source = "user_text"
+        display_name = "FAQ 확인 중..."
+    else:
+        return None
+
+    if not preferred_tool or not tool_input:
+        return None
+
+    if preferred_tool in _FAST_PATH_TRANSACTION_RECOVERY_BLOCKLIST:
+        return None
+
+    if domain == PolicyDomain.DISCOVERY.value:
+        from services.tstation.agents.b_discovery_agent import tools as discovery_tools
+        from services.tstation.template_mapper import try_build_template
+
+        tool = getattr(discovery_tools, preferred_tool, None)
+        if tool is None or not hasattr(tool, "invoke"):
+            return None
+        raw_result = await asyncio.to_thread(tool.invoke, tool_input)
+        tool_result = raw_result if isinstance(raw_result, dict) else qc_verifier.parse_tool_output(raw_result)
+        if not isinstance(tool_result, dict):
+            tool_result = {"status": "error", "http_status": None, "message": "Invalid tool response", "data": {}}
+        if preferred_tool == "get_best_selling_products_tool":
+            tool_result = _enrich_best_selling_result_for_product_cards(tool_result)
+        if preferred_tool == "search_product_tool":
+            assistant_text = f"{str(tool_input.get('keyword') or '상품')} 상품을 확인했어요."
+        elif preferred_tool == "get_product_description_tool":
+            assistant_text = "상품 상세 정보를 확인했어요."
+        elif preferred_tool == "get_products_recommendations_tool":
+            assistant_text = "추천 상품을 확인했어요."
+        elif preferred_tool == "get_my_cars_tool":
+            assistant_text = "등록된 차량을 확인했어요."
+        else:
+            assistant_text = "요청하신 정보를 확인했어요."
+        mapped_event = try_build_template(
+            [{"tool": preferred_tool, "args": tool_input, "data": tool_result}],
+            assistant_text,
+        )
+        if not isinstance(mapped_event, dict):
+            return None
+        mapped_event["source_domain"] = source_domain
+    else:
+        from services.tstation.agents.e_support_agent.tools import search_faq_hybrid_tool as _search_faq_hybrid_tool
+
+        raw_result = await asyncio.to_thread(_search_faq_hybrid_tool.invoke, tool_input)
+        tool_result = raw_result if isinstance(raw_result, dict) else {"status": "success", "data": raw_result}
+        if contract_intent == "general_cancel_fee_policy":
+            mapped_event = _build_general_cancel_fee_policy_event(user_text, tool_result=tool_result)
+        elif contract_intent == "general_card_cancel_timing_policy":
+            mapped_event = _build_general_card_cancel_timing_policy_event(user_text, tool_result=tool_result)
+        else:
+            mapped_event = _build_support_faq_policy_event(contract_intent, user_text, tool_result=tool_result)
+        if not isinstance(mapped_event, dict):
+            return None
+
+    mapped_event = _annotate_contract_tool_recovery_event(
+        mapped_event,
+        turn_contract=turn_contract,
+        blocked_fast_path_source=blocked_fast_path_source,
+        recovered_tool=preferred_tool,
+        recovery_reason="fast_path_blocked_but_contract_tool_executable",
+        tool_input_source=tool_input_source or "contract_tool_plan",
+    )
+    return {
+        "tool_name": preferred_tool,
+        "tool_input": tool_input,
+        "tool_result": tool_result,
+        "event": mapped_event,
+        "events": [
+            {
+                "type": "status",
+                "status": "tool_start",
+                "tool": preferred_tool,
+                "display_name": display_name,
+                "source_domain": source_domain,
+            },
+            {
+                "type": "agent_flow",
+                "agent": "[CONTRACT RECOVERY AF]",
+                "agent_class": "Contract Recovery",
+                "status": tool_result.get("status", "success"),
+                "source_domain": source_domain,
+            },
+            {
+                "type": "tool",
+                "input": tool_input,
+                "output": json.dumps(tool_result, ensure_ascii=False),
+                "node": "tools",
+                "tool": preferred_tool,
+                "source_domain": source_domain,
+            },
+        ],
+    }
+
+
 def _annotate_direct_code_fast_path_event(
     event: dict[str, Any],
     *,
@@ -32330,11 +32603,27 @@ class TStationChatServiceV2:
                 allowed_intents=allowed_prompt_intents,
             )
             if history_selected_vehicle_prompt_event is None:
-                history_selected_vehicle_prompt_event = (
-                    build_response_policy_guard_event(turn_contract)
-                    if turn_contract is not None
-                    else None
+                recovered_fast_path = await recover_blocked_fast_path_to_contract_tool(
+                    turn_contract=turn_contract,
+                    user_text=user_query,
+                    merged_slots=initial_slots,
+                    blocked_fast_path_source="code_history_selected_vehicle_prompt",
                 )
+                if recovered_fast_path is not None:
+                    _record_code_tool_result(
+                        str(recovered_fast_path["tool_name"]),
+                        dict(recovered_fast_path["tool_input"]),
+                        dict(recovered_fast_path["tool_result"]),
+                    )
+                    for recovery_event in recovered_fast_path["events"]:
+                        yield f"data: {json.dumps(recovery_event, ensure_ascii=False)}\n\n"
+                    history_selected_vehicle_prompt_event = recovered_fast_path["event"]
+                else:
+                    history_selected_vehicle_prompt_event = (
+                        build_response_policy_guard_event(turn_contract)
+                        if turn_contract is not None
+                        else None
+                    )
             if history_selected_vehicle_prompt_event is None:
                 return
             yield f"data: {json.dumps(history_selected_vehicle_prompt_event, ensure_ascii=False)}\n\n"

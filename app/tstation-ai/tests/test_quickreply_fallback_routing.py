@@ -15913,6 +15913,100 @@ def test_purchase_cta_from_unsized_recommendation_does_not_recover_sku_slots() -
     )
 
 
+def test_recover_blocked_fast_path_to_contract_tool_runs_discovery_search_product(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured_input: dict[str, Any] = {}
+
+    def _fake_search_invoke(tool_input: dict[str, Any]) -> dict[str, Any]:
+        captured_input.update(tool_input)
+        return {
+            "status": "success",
+            "data": [
+                {"goods_no": "G1", "goods_nm": "아이온 에보 AS SUV", "tire_size_1": "265/45R20"},
+                {"goods_no": "G2", "goods_nm": "아이온 에보 AS SUV", "tire_size_1": "255/45R20"},
+            ],
+        }
+
+    def _fake_try_build_template(tool_data_list: list[dict[str, Any]], assistant_text: str) -> dict[str, Any]:
+        assert tool_data_list[0]["tool"] == "search_product_tool"
+        return {
+            "type": "data",
+            "template": "product",
+            "data": {
+                "assistantResponse": assistant_text,
+                "products": [
+                    {"titleProductName": "아이온 에보 AS SUV", "titleTires": "265/45R20"},
+                    {"titleProductName": "아이온 에보 AS SUV", "titleTires": "255/45R20"},
+                ],
+                "metadata": [{"goodsId": "G1"}, {"goodsId": "G2"}],
+            },
+        }
+
+    async def _fake_to_thread(func: Any, *args: Any, **kwargs: Any) -> Any:
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(
+        discovery_tools,
+        "search_product_tool",
+        SimpleNamespace(invoke=_fake_search_invoke),
+    )
+    monkeypatch.setattr(chat_module.asyncio, "to_thread", _fake_to_thread)
+    from services.tstation import template_mapper as template_mapper_module
+    monkeypatch.setattr(template_mapper_module, "try_build_template", _fake_try_build_template)
+
+    contract = TurnContract(
+        domain="discovery",
+        intent="product_search",
+        known_slots={"pending_product_name": "아이온 에보 AS SUV"},
+        allowed_tools=("search_product_tool",),
+        forbidden_tools=(),
+        blocking_required_slots=(),
+        context_state="active",
+        response_decision={"metadata": {"response_shape_key": "product_search_summary"}},
+    )
+
+    recovery = asyncio.run(
+        chat_module.recover_blocked_fast_path_to_contract_tool(
+            turn_contract=contract,
+            user_text="아이온 에보 AS",
+            merged_slots=ConversationSlots(pending_product_name="아이온 에보 AS SUV"),
+            blocked_fast_path_source="code_history_selected_vehicle_prompt",
+        )
+    )
+
+    assert recovery is not None
+    assert recovery["tool_name"] == "search_product_tool"
+    assert captured_input["keyword"] == "아이온 에보 AS SUV"
+    assert "size" not in captured_input
+    assert recovery["event"]["assistant_response_source"] == "contract_tool_recovery_after_fast_path_block"
+    metadata = recovery["event"]["data"]["contractMetadata"]
+    assert metadata["blocked_fast_path_source"] == "code_history_selected_vehicle_prompt"
+    assert metadata["recovered_tool"] == "search_product_tool"
+
+
+def test_recover_blocked_fast_path_to_contract_tool_does_not_run_transaction_preview() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="stock_store_search",
+        known_slots={"goods_no": "G1", "ord_qty": 4, "region": "분당"},
+        allowed_tools=("transaction_store_preview_tool",),
+        forbidden_tools=(),
+        blocking_required_slots=(),
+        context_state="active",
+        response_decision={"metadata": {"response_shape_key": "location"}},
+    )
+
+    recovery = asyncio.run(
+        chat_module.recover_blocked_fast_path_to_contract_tool(
+            turn_contract=contract,
+            user_text="분당",
+            merged_slots=ConversationSlots(goods_no="G1", ord_qty=4, region="분당"),
+            blocked_fast_path_source="code_history_selected_vehicle_prompt",
+        )
+    )
+
+    assert recovery is None
+
+
 def test_purchase_cta_recovers_confirmed_product_from_snake_case_quickreply_metadata() -> None:
     slots = confirmed_product_slot_values_for_purchase_cta(
         latest_quickreply_tmpl={
