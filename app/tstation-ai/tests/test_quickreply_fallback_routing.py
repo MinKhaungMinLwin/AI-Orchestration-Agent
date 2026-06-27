@@ -762,6 +762,116 @@ def test_transaction_cta_sanitizer_removes_label_only_reservation_and_contracts_
     assert event_data["quickReplies"][0]["actionId"] == "enter_region"
 
 
+def test_transaction_cta_sanitizer_blocks_order_history_cta_for_product_info_contract() -> None:
+    event_data = {
+        "assistantResponse": "상품 정보를 안내했어요.",
+        "quickReplies": [
+            {"label": "주문 내역 보기", "domain": "TRANSACTION", "url": CTAUrls.ORDER_HISTORY},
+            {"label": "타이어 추천", "domain": "DISCOVERY"},
+        ],
+    }
+
+    changed = _sanitize_transaction_cta_contracts(
+        event_data,
+        source_domain="discovery",
+        turn_contract=SimpleNamespace(
+            intent="product_description",
+            sub_intent="product_description",
+            action_mode="product_description",
+            missing_slots=(),
+            known_slots={},
+        ),
+        action_mode="product_description",
+    )
+
+    assert changed is True
+    assert _labels(event_data["quickReplies"]) == ["타이어 추천"]
+    assert event_data["metadata"]["cta_validation_result"] == "blocked"
+    assert event_data["metadata"]["blocked_ctas"][0]["label"] == "주문 내역 보기"
+
+
+def test_transaction_cta_sanitizer_allows_order_history_cta_for_order_document_guidance() -> None:
+    event_data = {
+        "assistantResponse": "거래명세서는 주문 내역에서 확인해 주세요.",
+        "quickReplies": [
+            {"label": "주문 내역 보기", "domain": "TRANSACTION", "url": CTAUrls.ORDER_HISTORY},
+            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+        ],
+    }
+
+    changed = _sanitize_transaction_cta_contracts(
+        event_data,
+        source_domain="support",
+        turn_contract=SimpleNamespace(
+            intent="order_document_guidance",
+            sub_intent="order_document_guidance",
+            action_mode="support_policy_answer",
+            missing_slots=(),
+            known_slots={},
+        ),
+        action_mode="support_policy_answer",
+    )
+
+    assert changed is False
+    assert _labels(event_data["quickReplies"]) == ["주문 내역 보기", "1:1 문의하기"]
+
+
+def test_transaction_cta_sanitizer_blocks_order_history_during_missing_purchase_slots() -> None:
+    event_data = {
+        "assistantResponse": "구매 수량을 알려주세요.",
+        "quickReplies": [{"label": "주문 내역 보기", "domain": "TRANSACTION", "url": CTAUrls.ORDER_HISTORY}],
+    }
+
+    changed = _sanitize_transaction_cta_contracts(
+        event_data,
+        source_domain="transaction",
+        turn_contract=SimpleNamespace(
+            intent="quick_order_reservation",
+            sub_intent="quick_order_reservation",
+            action_mode="purchase_continuation",
+            missing_slots=("quantity",),
+            known_slots={"goods_no": "G000000319584", "tire_size": "245/45R19"},
+        ),
+        action_mode="purchase_continuation",
+    )
+
+    assert changed is True
+    assert _labels(event_data["quickReplies"]) == ["조건 다시 입력"]
+    assert event_data["metadata"]["blocked_ctas"][0]["reason"].startswith("order_history_forbidden:")
+
+
+def test_transaction_cta_sanitizer_enriches_purchase_cta_with_product_context() -> None:
+    event_data = {
+        "assistantResponse": "상품을 확인했어요.",
+        "quickReplies": [{"label": "구매하기"}],
+    }
+
+    changed = _sanitize_transaction_cta_contracts(
+        event_data,
+        source_domain="discovery",
+        turn_contract=SimpleNamespace(
+            intent="product_description",
+            sub_intent="product_description",
+            action_mode="product_description",
+            missing_slots=(),
+            known_slots={
+                "goods_no": "G000000319584",
+                "tire_size": "245/45R19",
+                "product_name": "벤투스 에어S",
+            },
+        ),
+        action_mode="product_description",
+    )
+
+    assert changed is True
+    chip = event_data["quickReplies"][0]
+    assert chip["domain"] == "TRANSACTION"
+    assert chip["cta_action"] == "start_purchase"
+    assert chip["expected_contract_intent"] == "quick_order_reservation"
+    assert chip["metadata"]["slots"]["goods_no"] == "G000000319584"
+    assert chip["metadata"]["slots"]["pending_intent"] == "order"
+
+
 def test_cta_context_recovers_from_latest_quickreply_template_when_chip_has_no_metadata() -> None:
     latest_quickreply = {
         "template": "quickReply",

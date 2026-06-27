@@ -6090,15 +6090,85 @@ def _is_current_location_store_search_confirmation(user_text: str, latest_quickr
     return bool(_CURRENT_LOCATION_STORE_SEARCH_PROMPT_RE.search(assistant_text))
 
 
-def _sanitize_transaction_cta_contracts(event_data: dict[str, Any], *, source_domain: str) -> bool:
-    if source_domain != MultiAgentDomain.Domain.TRANSACTION.value:
-        return False
+_ORDER_HISTORY_CTA_LABEL_RE = re.compile(r"주문\s*내역|주문내역", re.IGNORECASE)
+_PURCHASE_CTA_LABELS = {"구매하기", "주문하기", "바로 주문", "바로 구매"}
+_ORDER_HISTORY_CTA_ALLOWED_INTENTS = frozenset({
+    "order_history_lookup",
+    "order_document_guidance",
+    "owned_order_cancel_fee_inquiry",
+    "order_cancel_request",
+    "order_cancel_status_lookup",
+    "order_arrival_status_lookup",
+    "payment_method_change_guidance",
+    "payment_error_troubleshooting",
+    "general_cancel_fee_policy",
+    "general_card_cancel_timing_policy",
+})
+
+
+def _contract_intent_value(turn_contract: Any | None) -> str:
+    return str(
+        getattr(turn_contract, "sub_intent", None)
+        or getattr(turn_contract, "intent", None)
+        or ""
+    ).strip()
+
+
+def _order_history_cta_allowed_for_contract(turn_contract: Any | None, action_mode: str | None) -> bool:
+    intent = _contract_intent_value(turn_contract)
+    if intent in _ORDER_HISTORY_CTA_ALLOWED_INTENTS:
+        return True
+    if intent.startswith("order_") and intent != "quick_order_reservation":
+        return True
+    if "owned_order" in intent or "order_document" in intent:
+        return True
+    if intent == "quick_order_reservation":
+        return not tuple(getattr(turn_contract, "missing_slots", ()) or ())
+    return str(action_mode or getattr(turn_contract, "action_mode", "") or "") in {
+        "owned_record_lookup",
+        "support_policy_answer",
+    } and bool(intent and "order" in intent)
+
+
+def _event_or_contract_product_context(event_data: Mapping[str, Any], turn_contract: Any | None) -> dict[str, Any]:
+    metadata = event_data.get("metadata") if isinstance(event_data.get("metadata"), Mapping) else {}
+    known_slots = getattr(turn_contract, "known_slots", None)
+    known_slots = known_slots if isinstance(known_slots, Mapping) else {}
+    context: dict[str, Any] = {}
+    for field, aliases in {
+        "goods_no": ("goods_no", "goodsNo"),
+        "tire_size": ("tire_size", "tireSize"),
+        "product_name": ("product_name", "productName", "goods_nm", "goodsNm"),
+        "ord_qty": ("ord_qty", "ordQty", "quantity"),
+    }.items():
+        for source in (known_slots, metadata):
+            for alias in aliases:
+                value = source.get(alias) if isinstance(source, Mapping) else None
+                if value not in (None, "", [], {}):
+                    context[field] = value
+                    break
+            if field in context:
+                break
+    return context
+
+
+def _sanitize_transaction_cta_contracts(
+    event_data: dict[str, Any],
+    *,
+    source_domain: str,
+    turn_contract: Any | None = None,
+    action_mode: str | None = None,
+) -> bool:
     chips = event_data.get("quickReplies")
     if not isinstance(chips, list):
         return False
     changed = False
     normalized: list[dict[str, Any]] = []
     seen_labels: set[str] = set()
+    blocked_ctas: list[dict[str, str]] = []
+    product_context = _event_or_contract_product_context(event_data, turn_contract)
+    current_action_mode = str(action_mode or getattr(turn_contract, "action_mode", "") or "")
+    current_intent = _contract_intent_value(turn_contract)
     for chip in chips:
         if not isinstance(chip, dict):
             continue
@@ -6107,7 +6177,46 @@ def _sanitize_transaction_cta_contracts(event_data: dict[str, Any], *, source_do
             continue
         action_id = str(chip.get("actionId") or chip.get("action_id") or "").strip()
         has_url = bool(chip.get("url"))
-        if label in {"다른 매장 찾기", "다른 지역 찾기"} and not action_id and not has_url:
+        if _ORDER_HISTORY_CTA_LABEL_RE.search(label) and not _order_history_cta_allowed_for_contract(
+            turn_contract,
+            current_action_mode,
+        ):
+            blocked_ctas.append({
+                "label": label,
+                "reason": f"order_history_forbidden:{current_intent or current_action_mode or 'unknown'}",
+            })
+            changed = True
+            continue
+        if label in _PURCHASE_CTA_LABELS and product_context:
+            chip = dict(chip)
+            metadata = chip.get("metadata") if isinstance(chip.get("metadata"), dict) else {}
+            slots = {key: value for key, value in product_context.items() if value not in (None, "", [], {})}
+            metadata = {
+                **metadata,
+                "cta_action": "start_purchase",
+                "source_intent": current_intent or "quick_order_reservation",
+                "expected_contract_intent": "quick_order_reservation",
+                "expected_behavior": "conversation_action",
+                "slots": {
+                    **slots,
+                    "pending_intent": "order",
+                    "goal_type": "place_order",
+                },
+            }
+            chip.update({
+                "domain": "TRANSACTION",
+                "cta_action": "start_purchase",
+                "expected_behavior": "conversation_action",
+                "expected_contract_intent": "quick_order_reservation",
+                "metadata": metadata,
+            })
+            changed = True
+        if (
+            source_domain == MultiAgentDomain.Domain.TRANSACTION.value
+            and label in {"다른 매장 찾기", "다른 지역 찾기"}
+            and not action_id
+            and not has_url
+        ):
             chip = {
                 "label": "다른 지역 입력",
                 "domain": "TRANSACTION",
@@ -6117,7 +6226,8 @@ def _sanitize_transaction_cta_contracts(event_data: dict[str, Any], *, source_do
             }
             label = "다른 지역 입력"
             changed = True
-        elif label == "예약하기" and not action_id and not has_url:
+        elif source_domain == MultiAgentDomain.Domain.TRANSACTION.value and label == "예약하기" and not action_id and not has_url:
+            blocked_ctas.append({"label": label, "reason": "label_only_reservation"})
             changed = True
             continue
         if label in seen_labels:
@@ -6125,6 +6235,16 @@ def _sanitize_transaction_cta_contracts(event_data: dict[str, Any], *, source_do
             continue
         seen_labels.add(label)
         normalized.append(chip)
+    if chips and not normalized and blocked_ctas:
+        normalized = [{
+            "label": "조건 다시 입력",
+            "domain": str(source_domain or "LEADING").upper(),
+            "metadata": {
+                "cta_validation_result": "fallback",
+                "cta_validation_reason": "all_ctas_blocked",
+            },
+        }]
+        changed = True
     if normalized != chips:
         event_data["quickReplies"] = normalized
         changed = True
@@ -6137,6 +6257,14 @@ def _sanitize_transaction_cta_contracts(event_data: dict[str, Any], *, source_do
                 if isinstance(chip, dict) and chip.get("domain")
             ],
         ])
+    if changed:
+        metadata = event_data.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
+            event_data["metadata"] = metadata
+        metadata["cta_validation_result"] = "blocked" if blocked_ctas else "normalized"
+        if blocked_ctas:
+            metadata["blocked_ctas"] = blocked_ctas
     return changed
 
 
@@ -32701,7 +32829,12 @@ class TStationChatServiceV2:
                             "content": assistant_response,
                             "agent": "[TRANSACTION AGENT]",
                         }]
-                    if _sanitize_transaction_cta_contracts(event_data, source_domain=source_domain):
+                    if _sanitize_transaction_cta_contracts(
+                        event_data,
+                        source_domain=source_domain,
+                        turn_contract=turn_contract,
+                        action_mode=stream_action_mode,
+                    ):
                         logger.info("[QUICKREPLY_FILTER] sanitized transaction CTA contracts")
                         assistant_response = str(event_data.get("assistantResponse") or "")
                         draft_response = assistant_response
