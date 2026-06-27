@@ -21058,6 +21058,12 @@ def _finalize_purchase_stock_slots_for_persistence(
         )
         metadata["final_persist_flow_state_after"] = dict(refreshed_context or {})
     final_context = dict(metadata.get("final_persist_flow_state_after") or {})
+    metadata["final_persist_purchase_intent_preserved"] = bool(
+        str((pending_context or {}).get("pending_intent") or "") == "order"
+        and str(final_context.get("pending_intent") or "") == "order"
+        and str((pending_context or {}).get("goal_type") or "") == "place_order"
+        and str(final_context.get("goal_type") or "") == "place_order"
+    )
     invariant_missing: list[str] = []
     if (
         is_purchase_flow_context(final_context)
@@ -21904,6 +21910,77 @@ def _trace_final_error_state(
     if tool_errors:
         return "recovered", "tool_error_recovered", False
     return "success", "none", False
+
+
+def _record_direct_return_trace(
+    *,
+    parent_span: Any | None,
+    trace_id: str | None,
+    session_id: str | None,
+    user_id: str | None,
+    user_text: str,
+    domains: list[Any] | None,
+    event: Mapping[str, Any] | None,
+    turn_contract: TurnContract | None = None,
+    direct_return_reason: str,
+    extra_metadata: Mapping[str, Any] | None = None,
+) -> None:
+    if parent_span is None or not isinstance(event, Mapping):
+        return
+    event_data = event.get("data") if isinstance(event.get("data"), Mapping) else {}
+    assistant_text = str(event_data.get("assistantResponse") or "")
+    final_template = str(event.get("template") or event_data.get("template") or "quickReply")
+    metadata = {
+        "route": "→".join(getattr(d, "value", str(d)) for d in (domains or [])),
+        "final_status": "success",
+        "error_class": "none",
+        "user_visible_error": False,
+        "template": final_template,
+        "final_template": final_template,
+        "assistant_response_source": str(event.get("assistant_response_source") or ""),
+        "source_domain": str(event.get("source_domain") or "").lower() or None,
+        "session_id": session_id,
+        "trace_id": trace_id,
+        "turn_contract": turn_contract.to_dict() if turn_contract else None,
+        "qc": "PASS",
+        "qc_executed": False,
+        "qc_skip_reason": "direct_return",
+        "direct_return_reason": direct_return_reason,
+        "direct_event_emitted": True,
+        "direct_event_template": final_template,
+    }
+    if extra_metadata:
+        metadata.update(dict(extra_metadata))
+    _trace_input = _truncate(user_text)
+    _trace_output = _truncate(assistant_text)
+    safe_trace_update(parent_span, output=_trace_output)
+    safe_trace_update(
+        parent_span,
+        trace=True,
+        name=(user_text[:60] if user_text else "chat"),
+        input=_trace_input,
+        output=_trace_output,
+        metadata=metadata,
+    )
+    try:
+        response_span = tracer.start_span(
+            name=(user_text[:60] if user_text else "response"),
+            trace_context={"trace_id": trace_id, "parent_span_id": parent_span.id},
+            input=_trace_input,
+        )
+        safe_trace_update(response_span, output=_trace_output)
+        safe_trace_update(
+            response_span,
+            trace=False,
+            name=(user_text[:60] if user_text else "response"),
+            input=_trace_input,
+            output=_trace_output,
+            metadata=metadata,
+        )
+        response_span.end()
+    except Exception:
+        logger.debug("[TRACE] Failed to record direct return response span", exc_info=True)
+    parent_span.end()
 
 
 def _strip_qc_verdict_from_user_text(text: str) -> str:
@@ -27205,6 +27282,18 @@ class TStationChatServiceV2:
                 request.session_id,
             )
             if request.stream:
+                _record_direct_return_trace(
+                    parent_span=_parent_span,
+                    trace_id=request.tracing_id,
+                    session_id=request.session_id,
+                    user_id=request.user_id,
+                    user_text=last_user_text,
+                    domains=domains,
+                    event=complaint_guard_event,
+                    turn_contract=turn_contract,
+                    direct_return_reason="complaint_scope_guard",
+                    extra_metadata=vehicle_selection_trace_metadata,
+                )
                 return StreamingResponse(
                     TStationChatServiceV2._stream_policy_guard_response(complaint_guard_event),
                     media_type="text/event-stream",
@@ -27228,6 +27317,18 @@ class TStationChatServiceV2:
                 request.session_id,
             )
             if request.stream:
+                _record_direct_return_trace(
+                    parent_span=_parent_span,
+                    trace_id=request.tracing_id,
+                    session_id=request.session_id,
+                    user_id=request.user_id,
+                    user_text=last_user_text,
+                    domains=domains,
+                    event=service_duration_event,
+                    turn_contract=turn_contract,
+                    direct_return_reason="service_duration_advisory",
+                    extra_metadata=vehicle_selection_trace_metadata,
+                )
                 return StreamingResponse(
                     TStationChatServiceV2._stream_policy_guard_response(service_duration_event),
                     media_type="text/event-stream",
@@ -27248,6 +27349,18 @@ class TStationChatServiceV2:
                 request.session_id,
             )
             if request.stream:
+                _record_direct_return_trace(
+                    parent_span=_parent_span,
+                    trace_id=request.tracing_id,
+                    session_id=request.session_id,
+                    user_id=request.user_id,
+                    user_text=last_user_text,
+                    domains=domains,
+                    event=partner_coupon_event,
+                    turn_contract=turn_contract,
+                    direct_return_reason="partner_member_coupon_policy",
+                    extra_metadata=vehicle_selection_trace_metadata,
+                )
                 return StreamingResponse(
                     TStationChatServiceV2._stream_policy_guard_response(partner_coupon_event),
                     media_type="text/event-stream",
@@ -27268,6 +27381,18 @@ class TStationChatServiceV2:
                 request.session_id,
             )
             if request.stream:
+                _record_direct_return_trace(
+                    parent_span=_parent_span,
+                    trace_id=request.tracing_id,
+                    session_id=request.session_id,
+                    user_id=request.user_id,
+                    user_text=last_user_text,
+                    domains=domains,
+                    event=order_document_event,
+                    turn_contract=turn_contract,
+                    direct_return_reason="order_document_guidance",
+                    extra_metadata=vehicle_selection_trace_metadata,
+                )
                 return StreamingResponse(
                     TStationChatServiceV2._stream_policy_guard_response(order_document_event),
                     media_type="text/event-stream",
@@ -27306,6 +27431,13 @@ class TStationChatServiceV2:
                 )
                 if direct_preorder_event is not None:
                     normalize_ui_action_metadata(direct_preorder_event, contract=turn_contract)
+                    vehicle_selection_trace_metadata.update({
+                        "direct_preorder_emitted": True,
+                        "direct_preorder_template": "preOrder",
+                        "direct_preorder_assistant_response_source": str(
+                            direct_preorder_event.get("assistant_response_source") or ""
+                        ),
+                    })
                     logger.info(
                         "[DIRECT_PREORDER] emitting reservation_confirmation_ready from validated schedule ui_action "
                         "session_id=%s goods_no=%s shop_id=%s requested_cal_day=%s rsv_hour=%s",
@@ -27317,6 +27449,18 @@ class TStationChatServiceV2:
                     )
         if direct_preorder_event is not None:
             if request.stream:
+                _record_direct_return_trace(
+                    parent_span=_parent_span,
+                    trace_id=request.tracing_id,
+                    session_id=request.session_id,
+                    user_id=request.user_id,
+                    user_text=last_user_text,
+                    domains=domains,
+                    event=direct_preorder_event,
+                    turn_contract=turn_contract,
+                    direct_return_reason="direct_preorder_schedule_selection",
+                    extra_metadata=vehicle_selection_trace_metadata,
+                )
                 return StreamingResponse(
                     TStationChatServiceV2._stream_policy_guard_response(direct_preorder_event),
                     media_type="text/event-stream",
@@ -27338,6 +27482,18 @@ class TStationChatServiceV2:
             if photo_policy_event is None:
                 guard_event = build_response_policy_guard_event(turn_contract)
                 if request.stream:
+                    _record_direct_return_trace(
+                        parent_span=_parent_span,
+                        trace_id=request.tracing_id,
+                        session_id=request.session_id,
+                        user_id=request.user_id,
+                        user_text=last_user_text,
+                        domains=domains,
+                        event=guard_event,
+                        turn_contract=turn_contract,
+                        direct_return_reason="response_policy_guard",
+                        extra_metadata=vehicle_selection_trace_metadata,
+                    )
                     return StreamingResponse(
                         TStationChatServiceV2._stream_policy_guard_response(guard_event),
                         media_type="text/event-stream",
@@ -27350,6 +27506,18 @@ class TStationChatServiceV2:
                 event_data = guard_event.get("data") if isinstance(guard_event.get("data"), dict) else {}
                 return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
             if request.stream:
+                _record_direct_return_trace(
+                    parent_span=_parent_span,
+                    trace_id=request.tracing_id,
+                    session_id=request.session_id,
+                    user_id=request.user_id,
+                    user_text=last_user_text,
+                    domains=domains,
+                    event=photo_policy_event,
+                    turn_contract=turn_contract,
+                    direct_return_reason="tire_condition_photo_policy",
+                    extra_metadata=vehicle_selection_trace_metadata,
+                )
                 return StreamingResponse(
                     TStationChatServiceV2._stream_policy_guard_response(photo_policy_event),
                     media_type="text/event-stream",

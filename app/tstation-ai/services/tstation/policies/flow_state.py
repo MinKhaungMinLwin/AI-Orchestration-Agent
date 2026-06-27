@@ -27,6 +27,20 @@ def _normalize_product_aliases(values: dict[str, Any]) -> None:
     values.setdefault("pending_product_name", product_name)
 
 
+def _is_purchase_intent_group(values: Mapping[str, Any]) -> bool:
+    return (
+        str(values.get("pending_intent") or "").strip() == "order"
+        or str(values.get("goal_type") or "").strip() == "place_order"
+    )
+
+
+def _is_stock_intent_group(values: Mapping[str, Any]) -> bool:
+    return (
+        str(values.get("pending_intent") or "").strip() == "stock"
+        or str(values.get("goal_type") or "").strip() == "store_with_stock"
+    )
+
+
 @dataclass(slots=True)
 class FlowStateMergeResult:
     state: "FlowState"
@@ -134,11 +148,20 @@ class FlowState:
             merged.payment["payment_amount_stale"] = True
             committed_fields.append("payment_amount_stale")
 
+        preserve_purchase_intent = _is_purchase_intent_group(merged.intent) and _is_stock_intent_group(delta.intent)
+
         for section_name in ("product", "store", "schedule", "payment", "intent"):
             target = getattr(merged, section_name)
             incoming = getattr(delta, section_name)
             for key, value in incoming.items():
                 if value in _EMPTY_VALUES:
+                    continue
+                if preserve_purchase_intent and section_name == "intent" and key in {
+                    "pending_intent",
+                    "goal_type",
+                    "stock_check_mode",
+                }:
+                    preserved_fields.append(key)
                     continue
                 if target.get(key) not in _EMPTY_VALUES and target.get(key) == value:
                     preserved_fields.append(key)

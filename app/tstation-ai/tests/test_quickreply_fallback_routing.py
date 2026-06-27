@@ -24909,6 +24909,55 @@ def test_final_persist_rehydrates_missing_product_fields_from_preview_tool_conte
     assert updated_slots.availability_context["pending_order_context"]["payment_amount"] == 308200
 
 
+def test_final_persist_rehydrate_preserves_existing_purchase_intent_over_flat_stock_metadata() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000310126",
+        tire_size="245/45R19",
+        ord_qty=2,
+        pending_intent="stock",
+        goal_type="store_with_stock",
+        stock_check_mode="inventory_only",
+        availability_context={
+            "pending_order_context": {
+                "goods_no": "G000000310126",
+                "tire_size": "245/45R19",
+                "ord_qty": 2,
+                "pending_intent": "order",
+                "goal_type": "place_order",
+                "flow_type": "purchase",
+            }
+        },
+    )
+    preview_result = {
+        "tool": "transaction_store_preview_tool",
+        "data": {
+            "status": "success",
+            "data": {
+                "stores": [
+                    {
+                        "goods_no": "G000000310126",
+                        "goods_nm": "벤투스 S2 AS",
+                        "tire_size": "245/45R19",
+                        "cheapest_final_prc": 154100,
+                    }
+                ]
+            },
+        },
+    }
+
+    updated_slots, metadata = _finalize_purchase_stock_slots_for_persistence(
+        slots=slots,
+        prev_tool_data=[preview_result],
+    )
+
+    assert metadata["final_persist_rehydrated"] is True
+    assert updated_slots.availability_context["pending_order_context"]["pending_intent"] == "order"
+    assert updated_slots.availability_context["pending_order_context"]["goal_type"] == "place_order"
+    assert updated_slots.availability_context["pending_order_context"]["flow_type"] == "purchase"
+    assert updated_slots.availability_context["pending_order_context"]["product_name"] == "벤투스 S2 AS"
+    assert updated_slots.availability_context["pending_order_context"]["payment_amount"] == 308200
+
+
 def test_store_view_cta_with_pending_purchase_context_resumes_purchase_flow() -> None:
     latest_quickreply_tmpl = {
         "template": "quickReply",
