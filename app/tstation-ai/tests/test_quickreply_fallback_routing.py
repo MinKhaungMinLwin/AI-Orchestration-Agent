@@ -166,6 +166,7 @@ from services.tstation.chat import (
     _select_cancel_or_refund_order_rows,
     _select_order_rows_by_number,
     _is_preorder_confirmation_reply,
+    _apply_purchase_stock_canonical_readthrough,
     _is_maintenance_history_access_policy_query,
     _is_maintenance_history_lookup_query,
     _is_order_history_lookup_query,
@@ -24502,6 +24503,82 @@ def test_region_input_after_purchase_prompt_overrides_dormant_stock_context_to_p
     assert "transaction_store_preview_tool" in tool_plan.allowed_tools
 
 
+def test_purchase_stock_canonical_readthrough_fills_missing_purchase_context_only() -> None:
+    slots = ConversationSlots(
+        tire_size="245/45R19",
+        ord_qty=2,
+        region="동탄",
+        availability_context={
+            "pending_order_context": {
+                "goods_no": "G000000310126",
+                "product_name": "벤투스 S2 AS",
+                "payment_amount": 308200,
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            }
+        },
+    )
+
+    updated_slots, metadata = _apply_purchase_stock_canonical_readthrough(
+        slots=slots,
+        user_text="동탄",
+        prev_tool_data=None,
+        current_slot_delta={"region": "동탄"},
+    )
+
+    assert updated_slots.goods_no == "G000000310126"
+    assert updated_slots.tire_model == "벤투스 S2 AS"
+    assert updated_slots.pending_product_name == "벤투스 S2 AS"
+    assert updated_slots.payment_amount == 308200
+    assert updated_slots.region == "동탄"
+    assert metadata["canonical_readthrough_applied"] is True
+    assert "goods_no" in metadata["canonical_filled_fields"]
+    assert "payment_amount" in metadata["canonical_filled_fields"]
+
+
+def test_purchase_stock_canonical_readthrough_uses_preview_price_basis_for_payment_amount() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000310126",
+        tire_size="245/45R19",
+        ord_qty=2,
+        availability_context={
+            "pending_order_context": {
+                "goods_no": "G000000310126",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            }
+        },
+    )
+    preview_result = {
+        "tool": "transaction_store_preview_tool",
+        "data": {
+            "status": "success",
+            "data": {
+                "stores": [
+                    {
+                        "goods_no": "G000000310126",
+                        "goods_nm": "벤투스 S2 AS",
+                        "tire_size": "245/45R19",
+                        "cheapest_final_prc": 154100,
+                    }
+                ]
+            },
+        },
+    }
+
+    updated_slots, metadata = _apply_purchase_stock_canonical_readthrough(
+        slots=slots,
+        user_text="동탄",
+        prev_tool_data=[preview_result],
+        current_slot_delta={"region": "동탄"},
+    )
+
+    assert updated_slots.payment_amount == 308200
+    assert updated_slots.tire_model == "벤투스 S2 AS"
+    assert metadata["canonical_price_basis"] == "cheapest_final_prc"
+    assert metadata["canonical_price_source_tool"] == "transaction_store_preview_tool"
+
+
 def test_store_view_cta_with_pending_purchase_context_resumes_purchase_flow() -> None:
     latest_quickreply_tmpl = {
         "template": "quickReply",
@@ -24589,6 +24666,45 @@ def test_purchase_cta_label_does_not_promote_region_slot() -> None:
 
     assert resolution.resolved is False
     assert merged_slots.region is None
+
+
+def test_quantity_only_stock_followup_text_accepts_piece_variants() -> None:
+    assert ConversationSlots.extract_from_user_text("4본").ord_qty == 4
+    assert ConversationSlots.extract_from_user_text("4짝").ord_qty == 4
+    assert ConversationSlots.extract_from_user_text("네 개").ord_qty == 4
+    assert _is_quantity_only_stock_followup_text("4본") is True
+    assert _is_quantity_only_stock_followup_text("4짝") is True
+    assert _is_quantity_only_stock_followup_text("네 개") is True
+
+
+def test_current_turn_action_mode_keeps_stock_followup_for_quantity_only_text() -> None:
+    merged_slots = ConversationSlots(
+        goods_no="G000000317735",
+        tire_size="235/45R18",
+        pending_intent="stock",
+        goal_type="store_with_stock",
+        availability_context={
+            "pending_order_context": {
+                "goods_no": "G000000317735",
+                "tire_size": "235/45R18",
+                "region": "분당",
+                "pending_intent": "stock",
+                "goal_type": "store_with_stock",
+            }
+        },
+    )
+
+    action_mode = _current_turn_action_mode(
+        user_text="네 개",
+        domains=[MultiAgentDomain.Domain.LEADING],
+        routing_result=_routing_result(domains=[MultiAgentDomain.Domain.LEADING], execution_plan=["leading:greeting"]),
+        regex_slots=ConversationSlots.extract_from_user_text("네 개"),
+        merged_slots=merged_slots,
+        explicit_override_reason=None,
+        resume_source="none",
+    )
+
+    assert action_mode == "stock_check"
 
 
 def test_has_location_source_accepts_browser_location_without_region() -> None:

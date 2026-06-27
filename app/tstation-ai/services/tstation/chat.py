@@ -1455,6 +1455,13 @@ def _current_turn_action_mode(
     ):
         return "stock_check"
 
+    if _is_quantity_only_stock_followup_text(user_text) and _has_stored_transaction_context(merged_slots):
+        pending_intent, goal_type = _stored_transaction_intent(merged_slots)
+        if pending_intent == "stock" or goal_type == "store_with_stock":
+            return "stock_check"
+        if pending_intent in {"order", "cart"} or goal_type in {"place_order", "add_to_cart"}:
+            return "purchase_continuation"
+
     if MultiAgentDomain.Domain.SUPPORT in domains:
         return "support_policy_answer"
     if MultiAgentDomain.Domain.DISCOVERY in domains:
@@ -20149,9 +20156,14 @@ def _stage_pending_order_context(slots: ConversationSlots, *, source: str) -> di
     ):
         return {}
     context = dict(slots.availability_context or {})
+    existing_pending_context = context.get("pending_order_context") if isinstance(context.get("pending_order_context"), dict) else {}
     pending_context = _pending_order_context_values(slots)
     if not pending_context:
         return {}
+    if isinstance(existing_pending_context, Mapping):
+        for key in ("price_basis", "price_source_tool"):
+            if existing_pending_context.get(key) not in (None, "", [], {}) and pending_context.get(key) in (None, "", [], {}):
+                pending_context[key] = existing_pending_context.get(key)
     pending_context.setdefault("pending_intent", "stock")
     pending_context.setdefault("goal_type", "store_with_stock")
     pending_context["source"] = source
@@ -20199,6 +20211,16 @@ def _stage_dormant_transaction_context(slots: ConversationSlots, *, source: str)
         key = "dormant_stock_context"
     else:
         key = "dormant_transaction_context"
+    existing_context = context.get(key) if isinstance(context.get(key), dict) else {}
+    if isinstance(existing_context, Mapping):
+        for extra_key in ("price_basis", "price_source_tool"):
+            if existing_context.get(extra_key) not in (None, "", [], {}) and dormant_context.get(extra_key) in (
+                None,
+                "",
+                [],
+                {},
+            ):
+                dormant_context[extra_key] = existing_context.get(extra_key)
     dormant_context["source"] = source
     dormant_context["context_state"] = "dormant"
     context[key] = dormant_context
@@ -20207,6 +20229,407 @@ def _stage_dormant_transaction_context(slots: ConversationSlots, *, source: str)
         context["pending_step"] = "store_region_selection"
     slots.availability_context = context
     return dormant_context
+
+
+def _extract_quantity_only_followup_value(user_text: str) -> int | None:
+    parsed = ConversationSlots.extract_from_user_text(str(user_text or "").strip())
+    return parsed.ord_qty
+
+
+def _canonical_purchase_stock_context_values(
+    *,
+    slots: ConversationSlots,
+    latest_product_tmpl: Mapping[str, Any] | None = None,
+    latest_location_tmpl: Mapping[str, Any] | None = None,
+    latest_datepick_tmpl: Mapping[str, Any] | None = None,
+    latest_preorder_tmpl: Mapping[str, Any] | None = None,
+    prev_tool_data: list[dict] | None = None,
+    current_slot_delta: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    current_values = {
+        "product_name": getattr(slots, "tire_model", None)
+        or getattr(slots, "product_name", None)
+        or getattr(slots, "pending_product_name", None),
+        "tire_model": getattr(slots, "tire_model", None) or getattr(slots, "pending_product_name", None),
+        "pending_product_name": getattr(slots, "pending_product_name", None) or getattr(slots, "tire_model", None),
+        "goods_no": getattr(slots, "goods_no", None),
+        "tire_size": getattr(slots, "tire_size", None),
+        "ord_qty": getattr(slots, "ord_qty", None),
+        "region": getattr(slots, "region", None),
+        "shop_id": getattr(slots, "shop_id", None),
+        "shop_name": getattr(slots, "shop_name", None),
+        "requested_cal_day": getattr(slots, "requested_cal_day", None),
+        "rsv_hour": getattr(slots, "rsv_hour", None),
+        "payment_amount": getattr(slots, "payment_amount", None),
+        "pending_intent": getattr(slots, "pending_intent", None),
+        "goal_type": getattr(slots, "goal_type", None),
+        "availability_intent": getattr(slots, "availability_intent", None),
+        "stock_check_mode": getattr(slots, "stock_check_mode", None),
+    }
+    availability_context = getattr(slots, "availability_context", None)
+    pending_context = availability_context.get("pending_order_context") if isinstance(availability_context, Mapping) else None
+    dormant_purchase_context = (
+        availability_context.get("dormant_purchase_context") if isinstance(availability_context, Mapping) else None
+    )
+    dormant_stock_context = (
+        availability_context.get("dormant_stock_context") if isinstance(availability_context, Mapping) else None
+    )
+    dormant_transaction_context = (
+        availability_context.get("dormant_transaction_context") if isinstance(availability_context, Mapping) else None
+    )
+    context_values: dict[str, Any] = {}
+    for source_context in (
+        pending_context if isinstance(pending_context, Mapping) else None,
+        dormant_purchase_context if isinstance(dormant_purchase_context, Mapping) else None,
+        dormant_stock_context if isinstance(dormant_stock_context, Mapping) else None,
+        dormant_transaction_context if isinstance(dormant_transaction_context, Mapping) else None,
+    ):
+        if not isinstance(source_context, Mapping):
+            continue
+        for key in (
+            "product_name",
+            "tire_model",
+            "pending_product_name",
+            "goods_no",
+            "tire_size",
+            "ord_qty",
+            "region",
+            "shop_id",
+            "shop_name",
+            "requested_cal_day",
+            "rsv_hour",
+            "payment_amount",
+            "pending_intent",
+            "goal_type",
+            "availability_intent",
+            "stock_check_mode",
+            "price_basis",
+            "price_source_tool",
+        ):
+            value = source_context.get(key)
+            if value not in (None, "", [], {}) and context_values.get(key) in (None, "", [], {}):
+                context_values[key] = value
+
+    template_values: dict[str, Any] = {}
+    for template_values_source in (
+        latest_datepick_tmpl,
+        latest_preorder_tmpl,
+        latest_location_tmpl,
+        latest_product_tmpl,
+    ):
+        if not isinstance(template_values_source, Mapping):
+            continue
+        canonical = canonical_context_from_template_boundary(template_values_source)
+        for key, value in canonical.items():
+            if value not in (None, "", [], {}) and template_values.get(key) in (None, "", [], {}):
+                template_values[key] = value
+
+    if isinstance(latest_datepick_tmpl, Mapping):
+        datepick_values = datepick_slot_values_from_data(latest_datepick_tmpl) or {}
+        for key in ("requested_cal_day", "rsv_hour", "shop_id", "shop_name", "goods_no", "product_name", "payment_amount"):
+            value = datepick_values.get(key)
+            if value not in (None, "", [], {}) and template_values.get(key) in (None, "", [], {}):
+                template_values[key] = value
+    if isinstance(latest_preorder_tmpl, Mapping):
+        preorder_values = preorder_slot_values_from_data(latest_preorder_tmpl) or {}
+        for key in ("requested_cal_day", "rsv_hour", "shop_id", "shop_name", "goods_no", "product_name", "payment_amount"):
+            value = preorder_values.get(key)
+            if value not in (None, "", [], {}) and template_values.get(key) in (None, "", [], {}):
+                template_values[key] = value
+
+    tool_values: dict[str, Any] = {}
+    for entry in reversed(prev_tool_data or []):
+        if not isinstance(entry, Mapping):
+            continue
+        tool_name = str(entry.get("tool") or "").strip()
+        if tool_name not in {"transaction_store_preview_tool", "get_final_price_tool", "search_product_tool"}:
+            continue
+        parsed_data = _unwrap_tool_data(entry.get("data"))
+        if tool_name == "search_product_tool":
+            rows = _search_product_rows_from_payload(parsed_data)
+            if not rows:
+                continue
+            matched_row = None
+            current_goods_no = str(current_values.get("goods_no") or context_values.get("goods_no") or "").strip()
+            current_tire_size = normalize_tire_size(
+                str(current_values.get("tire_size") or context_values.get("tire_size") or "")
+            )
+            for row in rows:
+                canonical_row = canonical_context_from_tool_boundary(row)
+                row_goods_no = str(canonical_row.get("goods_no") or "").strip()
+                row_tire_size = normalize_tire_size(str(canonical_row.get("tire_size") or ""))
+                if current_goods_no and row_goods_no != current_goods_no:
+                    continue
+                if current_tire_size and row_tire_size and row_tire_size != current_tire_size:
+                    continue
+                matched_row = row
+                break
+            canonical_row = canonical_context_from_tool_boundary(matched_row or rows[0])
+            for key in ("goods_no", "product_name", "tire_size"):
+                value = canonical_row.get(key)
+                if value not in (None, "", [], {}) and tool_values.get(key) in (None, "", [], {}):
+                    tool_values[key] = value
+            continue
+
+        price_data = parsed_data.get("data", parsed_data) if isinstance(parsed_data, Mapping) else parsed_data
+        if tool_name == "transaction_store_preview_tool" and isinstance(price_data, Mapping):
+            preview_candidates: list[Mapping[str, Any]] = []
+            stores = price_data.get("stores")
+            if isinstance(stores, list):
+                preview_candidates.extend(item for item in stores if isinstance(item, Mapping))
+            schedule = price_data.get("schedule")
+            if isinstance(schedule, Mapping):
+                schedule_stores = schedule.get("stores")
+                if isinstance(schedule_stores, list):
+                    preview_candidates.extend(item for item in schedule_stores if isinstance(item, Mapping))
+            if preview_candidates:
+                current_goods_no = str(current_values.get("goods_no") or context_values.get("goods_no") or "").strip()
+                current_tire_size = normalize_tire_size(
+                    str(current_values.get("tire_size") or context_values.get("tire_size") or "")
+                )
+                current_shop_id = str(current_values.get("shop_id") or context_values.get("shop_id") or "").strip()
+                current_shop_name = str(current_values.get("shop_name") or context_values.get("shop_name") or "").strip()
+                matched_candidate = None
+                for candidate in preview_candidates:
+                    candidate_goods_no = str(
+                        candidate.get("goods_no") or candidate.get("goodsNo") or ""
+                    ).strip()
+                    candidate_tire_size = normalize_tire_size(
+                        str(
+                            candidate.get("tire_size")
+                            or candidate.get("tireSize")
+                            or candidate.get("titleTires")
+                            or ""
+                        )
+                    )
+                    candidate_shop_id = str(
+                        candidate.get("shop_id") or candidate.get("shopId") or candidate.get("storeId") or ""
+                    ).strip()
+                    candidate_shop_name = str(
+                        candidate.get("shop_name")
+                        or candidate.get("shopName")
+                        or candidate.get("storeName")
+                        or candidate.get("nameAddress")
+                        or ""
+                    ).strip()
+                    if current_goods_no and candidate_goods_no and candidate_goods_no != current_goods_no:
+                        continue
+                    if current_tire_size and candidate_tire_size and candidate_tire_size != current_tire_size:
+                        continue
+                    if current_shop_id and candidate_shop_id and candidate_shop_id != current_shop_id:
+                        continue
+                    if current_shop_name and candidate_shop_name and current_shop_name not in candidate_shop_name:
+                        continue
+                    matched_candidate = candidate
+                    break
+                price_data = matched_candidate or preview_candidates[0]
+                canonical_candidate = canonical_context_from_tool_boundary(price_data)
+                for key in ("goods_no", "product_name", "tire_size", "shop_id", "shop_name", "requested_cal_day"):
+                    value = canonical_candidate.get(key)
+                    if value not in (None, "", [], {}) and tool_values.get(key) in (None, "", [], {}):
+                        tool_values[key] = value
+                product_name = (
+                    price_data.get("goods_nm")
+                    or price_data.get("goodsNm")
+                    or price_data.get("product_name")
+                    or price_data.get("productName")
+                )
+                if product_name and tool_values.get("product_name") in (None, "", [], {}):
+                    tool_values["product_name"] = str(product_name).strip()
+
+        if isinstance(price_data, Mapping):
+            price_basis = next(
+                (
+                    key
+                    for key in ("cheapest_final_prc", "final_unit_price", "final_prc", "extra_fvr_sale_prc", "sale_prc")
+                    if price_data.get(key) is not None
+                ),
+                None,
+            )
+            final_unit = price_data.get(price_basis) if price_basis else None
+            qty_value = (
+                current_values.get("ord_qty")
+                or context_values.get("ord_qty")
+                or tool_values.get("ord_qty")
+                or (current_slot_delta or {}).get("ord_qty")
+            )
+            if final_unit is not None and qty_value not in (None, "", 0):
+                parsed_final_unit = _to_int(final_unit)
+                if parsed_final_unit is not None:
+                    try:
+                        tool_values["payment_amount"] = int(parsed_final_unit * int(qty_value))
+                        tool_values["price_basis"] = price_basis
+                        tool_values["price_source_tool"] = tool_name
+                    except (TypeError, ValueError):
+                        pass
+
+    current_delta_values = dict(current_slot_delta or {})
+    merged: dict[str, Any] = {}
+    filled_fields: list[str] = []
+    conflicts: dict[str, dict[str, Any]] = {}
+    sources: dict[str, str] = {}
+    source_maps = (
+        ("current", current_delta_values),
+        ("slots", current_values),
+        ("context", context_values),
+        ("template", template_values),
+        ("tool", tool_values),
+    )
+    fields = (
+        "product_name",
+        "tire_model",
+        "pending_product_name",
+        "goods_no",
+        "tire_size",
+        "ord_qty",
+        "region",
+        "shop_id",
+        "shop_name",
+        "requested_cal_day",
+        "rsv_hour",
+        "payment_amount",
+        "pending_intent",
+        "goal_type",
+        "availability_intent",
+        "stock_check_mode",
+        "price_basis",
+        "price_source_tool",
+    )
+    for field in fields:
+        current_value = None
+        for source_name, values in source_maps:
+            value = values.get(field)
+            if value in (None, "", [], {}):
+                continue
+            if current_value in (None, "", [], {}):
+                current_value = value
+                merged[field] = value
+                sources[field] = source_name
+            elif value != current_value and field in {"goods_no", "shop_id"}:
+                conflicts[field] = {
+                    "existing": current_value,
+                    "candidate": value,
+                    "existing_source": sources.get(field),
+                    "candidate_source": source_name,
+                }
+                break
+        if field in current_delta_values and current_delta_values.get(field) not in (None, "", [], {}):
+            continue
+        if field in current_values and current_values.get(field) not in (None, "", [], {}):
+            continue
+        if field in merged and merged[field] not in (None, "", [], {}):
+            filled_fields.append(field)
+
+    product_name = merged.get("product_name") or merged.get("tire_model") or merged.get("pending_product_name")
+    if product_name not in (None, "", [], {}):
+        if merged.get("product_name") in (None, "", [], {}):
+            merged["product_name"] = product_name
+            sources["product_name"] = sources.get("tire_model") or sources.get("pending_product_name") or "context"
+            filled_fields.append("product_name")
+        if merged.get("tire_model") in (None, "", [], {}):
+            merged["tire_model"] = product_name
+            sources["tire_model"] = sources.get("product_name") or "context"
+            filled_fields.append("tire_model")
+        if merged.get("pending_product_name") in (None, "", [], {}):
+            merged["pending_product_name"] = product_name
+            sources["pending_product_name"] = sources.get("product_name") or "context"
+            filled_fields.append("pending_product_name")
+
+    return {
+        "merged": merged,
+        "filled_fields": sorted(dict.fromkeys(field for field in filled_fields if merged.get(field) not in (None, "", [], {}))),
+        "conflicts": conflicts,
+        "sources": sources,
+        "price_basis": merged.get("price_basis"),
+        "price_source_tool": merged.get("price_source_tool"),
+    }
+
+
+def _apply_purchase_stock_canonical_readthrough(
+    *,
+    slots: ConversationSlots,
+    user_text: str,
+    latest_product_tmpl: Mapping[str, Any] | None = None,
+    latest_location_tmpl: Mapping[str, Any] | None = None,
+    latest_datepick_tmpl: Mapping[str, Any] | None = None,
+    latest_preorder_tmpl: Mapping[str, Any] | None = None,
+    prev_tool_data: list[dict] | None = None,
+    current_slot_delta: Mapping[str, Any] | None = None,
+) -> tuple[ConversationSlots, dict[str, Any]]:
+    current_delta = dict(current_slot_delta or {})
+    if current_delta.get("ord_qty") in (None, "", [], {}):
+        qty_from_text = _extract_quantity_only_followup_value(user_text)
+        if qty_from_text is not None:
+            current_delta["ord_qty"] = qty_from_text
+
+    availability_context = getattr(slots, "availability_context", None)
+    has_transaction_context = _has_stored_transaction_context(slots) or bool(
+        isinstance(availability_context, Mapping)
+        and any(
+            isinstance(availability_context.get(key), Mapping)
+            for key in (
+                "pending_order_context",
+                "dormant_purchase_context",
+                "dormant_stock_context",
+                "dormant_transaction_context",
+            )
+        )
+    )
+    readthrough_signal = bool(
+        current_delta
+        or _is_quantity_only_stock_followup_text(user_text)
+        or getattr(slots, "requested_cal_day", None)
+        or getattr(slots, "rsv_hour", None)
+    )
+    if not has_transaction_context or not readthrough_signal:
+        return slots, {
+            "canonical_readthrough_applied": False,
+            "canonical_filled_fields": [],
+            "canonical_conflicts": {},
+            "canonical_sources": {},
+            "canonical_scope": "purchase_stock_only",
+        }
+
+    canonical_values = _canonical_purchase_stock_context_values(
+        slots=slots,
+        latest_product_tmpl=latest_product_tmpl,
+        latest_location_tmpl=latest_location_tmpl,
+        latest_datepick_tmpl=latest_datepick_tmpl,
+        latest_preorder_tmpl=latest_preorder_tmpl,
+        prev_tool_data=prev_tool_data,
+        current_slot_delta=current_delta,
+    )
+    slot_patch = {
+        key: value
+        for key, value in canonical_values["merged"].items()
+        if key not in {"price_basis", "price_source_tool"} and value not in (None, "", [], {})
+    }
+    updated_slots = slots.apply_runtime_values(slot_patch, source="purchase_stock_canonical_readthrough", fill_only=True)
+    if canonical_values.get("price_basis") not in (None, "", [], {}) or canonical_values.get("price_source_tool") not in (
+        None,
+        "",
+        [],
+        {},
+    ):
+        context = dict(getattr(updated_slots, "availability_context", None) or {})
+        pending_context = dict(context.get("pending_order_context") or {})
+        if canonical_values.get("price_basis") not in (None, "", [], {}):
+            pending_context.setdefault("price_basis", canonical_values["price_basis"])
+        if canonical_values.get("price_source_tool") not in (None, "", [], {}):
+            pending_context.setdefault("price_source_tool", canonical_values["price_source_tool"])
+        if pending_context:
+            context["pending_order_context"] = pending_context
+            updated_slots.availability_context = context
+    metadata = {
+        "canonical_readthrough_applied": bool(canonical_values.get("filled_fields")),
+        "canonical_filled_fields": list(canonical_values.get("filled_fields") or []),
+        "canonical_conflicts": dict(canonical_values.get("conflicts") or {}),
+        "canonical_sources": dict(canonical_values.get("sources") or {}),
+        "canonical_price_basis": canonical_values.get("price_basis"),
+        "canonical_price_source_tool": canonical_values.get("price_source_tool"),
+        "canonical_scope": "purchase_stock_only",
+    }
+    return updated_slots, metadata
 
 
 def _mask_dormant_transaction_action_slots(slots: ConversationSlots, *, source: str) -> dict[str, Any]:
@@ -23175,6 +23598,37 @@ class TStationChatServiceV2:
                 )
             else:
                 router_slot_fill_metadata["expected_slot_fill_precheck"] = expected_slot_fill_precheck
+            merged_slots, canonical_readthrough_metadata = _apply_purchase_stock_canonical_readthrough(
+                slots=merged_slots,
+                user_text=last_user_text,
+                latest_product_tmpl=latest_product_tmpl,
+                latest_location_tmpl=latest_location_tmpl,
+                latest_datepick_tmpl=latest_datepick_tmpl,
+                latest_preorder_tmpl=latest_preorder_tmpl,
+                prev_tool_data=prev_tool_data,
+                current_slot_delta={
+                    "ord_qty": getattr(regex_slots, "ord_qty", None),
+                    "region": getattr(regex_slots, "region", None),
+                    "shop_name": getattr(regex_slots, "shop_name", None),
+                    "requested_cal_day": getattr(regex_slots, "requested_cal_day", None),
+                    "availability_intent": getattr(regex_slots, "availability_intent", None),
+                },
+            )
+            if canonical_readthrough_metadata.get("canonical_readthrough_applied"):
+                logger.info(
+                    "[CANONICAL_READTHROUGH] filled=%s conflicts=%s sources=%s",
+                    canonical_readthrough_metadata.get("canonical_filled_fields"),
+                    canonical_readthrough_metadata.get("canonical_conflicts"),
+                    canonical_readthrough_metadata.get("canonical_sources"),
+                )
+            vehicle_selection_trace_metadata.update(canonical_readthrough_metadata)
+            router_slot_fill_context_payload = TStationChatServiceV2._router_slot_fill_context_payload(
+                slots=merged_slots,
+                user_text=last_user_text,
+                latest_product_tmpl=latest_product_tmpl,
+                latest_location_tmpl=latest_location_tmpl,
+                latest_datepick_tmpl=latest_datepick_tmpl,
+            )
             classifier_messages = TStationChatServiceV2._inject_router_slot_fill_context(
                 classifier_messages,
                 router_slot_fill_context_payload,
@@ -26049,6 +26503,8 @@ class TStationChatServiceV2:
                 "shop_name",
                 "product_name",
                 "payment_amount",
+                "price_basis",
+                "price_source_tool",
                 "pending_intent",
                 "goal_type",
                 "source",

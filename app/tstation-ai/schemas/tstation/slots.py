@@ -290,7 +290,26 @@ class ConversationSlots(BaseModel):
     )
     # "10개월"/"10개구" 처럼 "개" 뒤에 한글이 이어지는 경우 quantity 로 오추출되지 않도록
     # negative lookahead 로 차단. "4개", "4개 주세요", "4개." 는 정상 매칭.
-    _ORD_QTY_PATTERN: ClassVar[re.Pattern] = re.compile(r"(\d+)\s*개(?![가-힣])")
+    _ORD_QTY_PATTERN: ClassVar[re.Pattern] = re.compile(r"(\d+)\s*(?:개|본|짝)(?![가-힣])")
+    _ORD_QTY_KOREAN_PATTERN: ClassVar[re.Pattern] = re.compile(
+        r"\b(한|하나|두|둘|세|셋|네|넷|다섯|여섯|일곱|여덟|아홉|열)\s*개\b"
+    )
+    _KOREAN_QTY_VALUES: ClassVar[dict[str, int]] = {
+        "한": 1,
+        "하나": 1,
+        "두": 2,
+        "둘": 2,
+        "세": 3,
+        "셋": 3,
+        "네": 4,
+        "넷": 4,
+        "다섯": 5,
+        "여섯": 6,
+        "일곱": 7,
+        "여덟": 8,
+        "아홉": 9,
+        "열": 10,
+    }
     _TODAY_INSTALL_PATTERN: ClassVar[re.Pattern] = re.compile(
         r"오늘\s*(?:바로\s*)?장착|오늘\s*서비스|오늘서비스|당일\s*(?:장착|서비스)|"
         r"오늘\s*가능|바로\s*장착|지금\s*장착|당장\s*장착",
@@ -715,9 +734,9 @@ class ConversationSlots(BaseModel):
         if goods_no_match:
             slots.goods_no = goods_no_match.group(0)
 
-        qty_match = cls._ORD_QTY_PATTERN.search(user_text)
-        if qty_match:
-            slots.ord_qty = int(qty_match.group(1))
+        extracted_qty = cls._extract_order_quantity(user_text)
+        if extracted_qty is not None:
+            slots.ord_qty = extracted_qty
 
         shop_name_match = cls._SHOP_NAME_PATTERN.search(user_text)
         if shop_name_match and cls.has_valid_store_mention_context(user_text):
@@ -764,7 +783,7 @@ class ConversationSlots(BaseModel):
             # follow-up region answer reuses the originating turn's context
             # (preferences) instead of running a generic store list.
             slots.goal_candidate = "store_finder"
-        elif qty_match is not None and cls.has_product_keyword(user_text):
+        elif extracted_qty is not None and cls.has_product_keyword(user_text):
             # Product keyword + explicit quantity in the SAME turn (e.g.
             # "벤투스 S2 AS 245/45R18 4개") — no 가격/주문 verb, but quantity
             # signals the user is past pure browsing. Escalate to
@@ -815,6 +834,16 @@ class ConversationSlots(BaseModel):
             slots.user_preferences_text = user_text.strip()
 
         return slots
+
+    @classmethod
+    def _extract_order_quantity(cls, user_text: str) -> int | None:
+        qty_match = cls._ORD_QTY_PATTERN.search(user_text)
+        if qty_match:
+            return int(qty_match.group(1))
+        korean_qty_match = cls._ORD_QTY_KOREAN_PATTERN.search(user_text)
+        if korean_qty_match:
+            return cls._KOREAN_QTY_VALUES.get(str(korean_qty_match.group(1) or "").strip())
+        return None
 
     @classmethod
     def has_store_finder_intent(cls, user_text: str) -> bool:
