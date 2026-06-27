@@ -14474,6 +14474,99 @@ def test_region_input_context_resolution_marks_expected_region_slot_fill() -> No
     assert resolution.slots_to_promote["region"] == "분당"
 
 
+def test_direct_quantity_input_keeps_purchase_flow_and_moves_to_ask_store() -> None:
+    frame = build_transaction_intent_frame(
+        "2개",
+        known_slots={
+            "goods_no": "G000000319584",
+            "tire_size": "245/45R19",
+            "pending_product_name": "벤투스 에어S",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+    tool_plan = plan_transaction_tools(frame)
+    response = decide_transaction_response(
+        intent=frame.intent,
+        user_text="2개",
+        known_slots=dict(frame.known_slots),
+    )
+    contract = build_turn_contract(
+        user_text="2개",
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=response,
+        action_mode="purchase_continuation",
+        context_state="resumed",
+        resume_source="expected_slot_fill:quantity",
+    )
+
+    assert frame.intent == "quick_order_reservation"
+    assert frame.known_slots["ord_qty"] == 2
+    assert tool_plan.metadata["flow_id"] == "purchase_order"
+    assert tool_plan.metadata["flow_step"] == "ask_store"
+    assert response.metadata["response_shape_key"] == "missing_order_slots"
+    assert "store" in response.metadata["missing_slots"]
+    assert contract.context_state == "resumed"
+
+
+def test_direct_date_time_input_after_datepick_keeps_purchase_flow_and_builds_preorder() -> None:
+    datepick = {
+        "template": "datepick",
+        "data": {
+            "dates": [
+                {
+                    "date": "2026년 6월 24일 (수)",
+                    "available": True,
+                    "availableTimes": [9, 13],
+                    "index": 0,
+                }
+            ],
+            "selectedDate": 0,
+            "metadata": {
+                "shopId": "F00405",
+                "shopName": "티스테이션 경포점",
+                "goodsNo": "G000000317900",
+                "productName": "Dynapro HPX",
+                "tireSize": "235/55R19",
+                "ordQty": 2,
+                "pendingIntent": "order",
+                "goalType": "place_order",
+            },
+        },
+    }
+    slot_patch = datepick_slot_values_from_data(datepick, user_text="2026년 6월 24일 (수)\n13:00")
+    known_slots = {
+        "pending_intent": "order",
+        "goal_type": "place_order",
+        **(slot_patch or {}),
+    }
+
+    frame = build_transaction_intent_frame("2026년 6월 24일 (수)\n13:00", known_slots=known_slots)
+    tool_plan = plan_transaction_tools(frame)
+    contract = build_turn_contract(
+        user_text="2026년 6월 24일 (수)\n13:00",
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=decide_transaction_response(
+            intent=frame.intent,
+            user_text="2026년 6월 24일 (수)\n13:00",
+            known_slots=dict(frame.known_slots),
+        ),
+        action_mode="purchase_continuation",
+        context_state="resumed",
+        resume_source="expected_slot_fill:schedule",
+    )
+
+    assert frame.intent == "quick_order_reservation"
+    assert frame.known_slots["requested_cal_day"] == "20260624"
+    assert frame.known_slots["rsv_hour"] == "13"
+    assert tool_plan.metadata["flow_id"] == "purchase_order"
+    assert tool_plan.metadata["flow_step"] == "build_preorder"
+    assert tool_plan.allowed_tools == ()
+    assert contract.resume_source == "expected_slot_fill:schedule"
+
+
 def test_transaction_intent_frame_prefers_stock_store_search_for_region_slot_fill() -> None:
     frame = build_transaction_intent_frame(
         "분당",

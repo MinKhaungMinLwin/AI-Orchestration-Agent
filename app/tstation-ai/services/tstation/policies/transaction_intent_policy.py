@@ -809,6 +809,21 @@ def build_transaction_intent_frame(
             current_store_search=current_store_search,
         )
     )
+    quantity_slot_fill_purchase_continuation = (
+        _is_order_or_reservation_context(slots)
+        and bool(slots.get("goods_no") and (slots.get("tire_size") or slots.get("product_name") or slots.get("tire_model")))
+        and _is_quantity_only_followup(
+            text,
+            current_has_product=current_has_product,
+            explicit_tire_size=explicit_tire_size,
+            current_store_name=current_store_name,
+            current_region=current_region,
+            current_price=current_price,
+            current_purchase=current_purchase,
+            current_reservation=current_reservation,
+            current_store_search=current_store_search,
+        )
+    )
     quantity_only_stock_continuation = (
         _is_stock_flow_context(slots)
         and confirmed_product_quantity_context
@@ -1103,6 +1118,10 @@ def build_transaction_intent_frame(
     elif preorder_confirmation:
         intent = "quick_order_execute"
         sub_intent = "confirm"
+    elif quantity_slot_fill_purchase_continuation:
+        intent = "quick_order_reservation"
+        sub_intent = "reservation"
+        entities["stock_check_mode"] = "preview"
     elif quantity_only_stock_continuation or quantity_slot_fill_stock_continuation:
         intent = "stock_store_search"
         sub_intent = "today_install" if explicit_preview_request else ("reservation" if selected_store_schedule_ready else "stock")
