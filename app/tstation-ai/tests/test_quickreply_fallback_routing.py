@@ -19432,6 +19432,41 @@ def test_final_price_result_updates_payment_amount_with_cheapest_final_price_fir
     assert slots.payment_amount == (85000 + 12000) * 4
 
 
+def test_store_preview_result_updates_payment_amount_and_product_name_for_purchase_flow() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000310126",
+        tire_size="245/45R19",
+        ord_qty=2,
+        pending_intent="order",
+        goal_type="place_order",
+    )
+
+    changed = StreamingMultiAgentCoordinator._apply_tool_derived_slots(
+        slots,
+        "transaction_store_preview_tool",
+        {
+            "status": "success",
+            "data": {
+                "stores": [
+                    {
+                        "goods_no": "G000000310126",
+                        "goods_nm": "벤투스 S2 AS",
+                        "tire_size": "245/45R19",
+                        "cheapest_final_prc": 154100,
+                        "extra_fvr_sale_prc": 180500,
+                        "sale_prc": 231700,
+                    }
+                ]
+            },
+        },
+        tool_input={"goods_no": "G000000310126", "tire_size": "2454519", "ord_qty": 2},
+    )
+
+    assert changed is True
+    assert slots.tire_model == "벤투스 S2 AS"
+    assert slots.payment_amount == 308200
+
+
 def test_preorder_template_payload_recovers_order_slots() -> None:
     slot_values = preorder_slot_values_from_data({
         "assistantResponse": "주문 내용을 확인해 주세요.",
@@ -20617,6 +20652,7 @@ def test_pending_order_context_preserves_resolved_stock_slots() -> None:
         goods_no="G000000312989",
         tire_size="245/45R18",
         tire_model="키너지 EX",
+        payment_amount=198000,
         region="광주",
         pending_intent="stock",
         goal_type="store_with_stock",
@@ -20637,9 +20673,11 @@ def test_pending_order_context_preserves_resolved_stock_slots() -> None:
     slots.ord_qty = 2
     second_context = _stage_pending_order_context(slots, source="quantity_followup")
     assert second_context["ord_qty"] == 2
+    assert second_context["payment_amount"] == 198000
     assert slots.availability_context is not None
     assert slots.availability_context["pending_order_context"]["ord_qty"] == 2
     assert slots.availability_context["pending_order_context"]["product_name"] == "키너지 EX"
+    assert slots.availability_context["pending_order_context"]["payment_amount"] == 198000
 
 
 def test_product_search_stages_pending_stock_context_before_size_followup() -> None:
@@ -25459,6 +25497,35 @@ def test_direct_preorder_event_builds_ready_card_from_selected_schedule_slots() 
     assert event["data"]["metadata"]["shopId"] == "F00721"
     assert event["data"]["metadata"]["requestedCalDay"] == "20260623"
     assert event["data"]["metadata"]["rsvHour"] == "17"
+
+
+def test_direct_preorder_event_recovers_product_and_payment_from_pending_order_context() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000310126",
+        tire_size="245/45R19",
+        ord_qty=2,
+        shop_id="F07782",
+        shop_name="티스테이션 한남점",
+        requested_cal_day="20260623",
+        rsv_hour="17",
+        pending_intent="order",
+        goal_type="place_order",
+        availability_context={
+            "pending_order_context": {
+                "goods_no": "G000000310126",
+                "product_name": "벤투스 S2 AS",
+                "payment_amount": 308200,
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            }
+        },
+    )
+
+    event = _build_direct_preorder_event_from_slots(slots)
+
+    assert event is not None
+    assert event["data"]["orderInfo"]["product"] == "벤투스 S2 AS 245/45R19"
+    assert event["data"]["orderInfo"]["paymentAmount"] == 308200
 
 
 def test_ready_preorder_card_without_quick_order_tool_is_allowed_under_reservation_contract() -> None:

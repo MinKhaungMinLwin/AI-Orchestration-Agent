@@ -3998,7 +3998,7 @@ class StreamingMultiAgentCoordinator:
         # 산출된 슬롯은 다음 턴 LLM 컨텍스트(`[확인된 고객 정보]`)에 "결제금액"으로
         # 노출되어, 할부 계산 같은 후속 질문에서 LLM 이 단가·수량을 임의로 곱해
         # 가짜 총액을 만들지 않도록 한다.
-        if tool_name == "get_final_price_tool" and tool_succeeded:
+        if tool_name in {"get_final_price_tool", "transaction_store_preview_tool"} and tool_succeeded:
             if tool_input:
                 input_goods_no = str(tool_input.get("goods_no") or "").strip()
                 if input_goods_no:
@@ -4007,6 +4007,45 @@ class StreamingMultiAgentCoordinator:
                 if input_tire_size:
                     tool_slots["tire_size"] = input_tire_size
             price_data = parsed_data.get("data", parsed_data)
+            if tool_name == "transaction_store_preview_tool" and isinstance(price_data, dict):
+                price_candidates: list[dict[str, Any]] = []
+                stores = price_data.get("stores")
+                if isinstance(stores, list):
+                    price_candidates.extend(store for store in stores if isinstance(store, dict))
+                schedule = price_data.get("schedule")
+                if isinstance(schedule, dict):
+                    schedule_stores = schedule.get("stores")
+                    if isinstance(schedule_stores, list):
+                        price_candidates.extend(store for store in schedule_stores if isinstance(store, dict))
+
+                matching_goods_no = str(tool_slots.get("goods_no") or "").strip()
+                matching_tire_size = normalize_tire_size(tool_slots.get("tire_size") or "")
+                if price_candidates:
+                    matched_candidate = None
+                    for candidate in price_candidates:
+                        candidate_goods_no = str(
+                            candidate.get("goods_no") or candidate.get("goodsNo") or ""
+                        ).strip()
+                        candidate_tire_size = normalize_tire_size(
+                            candidate.get("tire_size")
+                            or candidate.get("tireSize")
+                            or candidate.get("titleTires")
+                            or ""
+                        )
+                        goods_match = not matching_goods_no or candidate_goods_no == matching_goods_no
+                        size_match = not matching_tire_size or candidate_tire_size == matching_tire_size
+                        if goods_match and size_match:
+                            matched_candidate = candidate
+                            break
+                    price_data = matched_candidate or price_candidates[0]
+                    candidate_product_name = (
+                        price_data.get("goods_nm")
+                        or price_data.get("goodsNm")
+                        or price_data.get("product_name")
+                        or price_data.get("productName")
+                    )
+                    if candidate_product_name and not tool_slots.get("tire_model"):
+                        tool_slots["tire_model"] = str(candidate_product_name).strip()
             if isinstance(price_data, dict):
                 final_unit = next(
                     (
@@ -8080,6 +8119,16 @@ def _build_direct_preorder_event_from_slots(
     latest_preorder_tmpl: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     slot_values = slot_state.model_dump() if hasattr(slot_state, "model_dump") else dict(slot_state or {})
+    availability_context = (
+        slot_values.get("availability_context")
+        if isinstance(slot_values.get("availability_context"), Mapping)
+        else {}
+    )
+    pending_order_context = (
+        availability_context.get("pending_order_context")
+        if isinstance(availability_context.get("pending_order_context"), Mapping)
+        else {}
+    )
     goods_no = str(slot_values.get("goods_no") or "").strip()
     tire_size = normalize_tire_size(slot_values.get("tire_size") or "")
     shop_id = str(slot_values.get("shop_id") or "").strip()
@@ -8108,15 +8157,21 @@ def _build_direct_preorder_event_from_slots(
     boundary_values = canonical_context_from_template_boundary(template_boundary)
     product_name = (
         str(slot_values.get("tire_model") or "").strip()
+        or str(slot_values.get("product_name") or "").strip()
         or str(datepick_slots.get("tire_model") or "").strip()
         or str(preorder_slots.get("tire_model") or "").strip()
+        or str(pending_order_context.get("product_name") or "").strip()
         or str(boundary_values.get("product_name") or "").strip()
     )
     product_label = f"{product_name} {tire_size}".strip() if product_name else tire_size
 
     payment_amount = slot_values.get("payment_amount")
     if payment_amount in (None, "", 0):
-        payment_amount = datepick_slots.get("payment_amount") or preorder_slots.get("payment_amount")
+        payment_amount = (
+            datepick_slots.get("payment_amount")
+            or preorder_slots.get("payment_amount")
+            or pending_order_context.get("payment_amount")
+        )
     try:
         normalized_payment_amount = int(payment_amount) if payment_amount not in (None, "", []) else None
     except (TypeError, ValueError):
@@ -20024,7 +20079,7 @@ def _demote_stale_tire_size_for_new_product_transaction(
 def _pending_order_context_values(slots: ConversationSlots) -> dict[str, Any]:
     values: dict[str, Any] = {}
     invalid_region = _is_invalid_region_action_label_text(getattr(slots, "region", None))
-    for field in ("goods_no", "tire_size", "ord_qty", "region", "shop_id", "shop_name"):
+    for field in ("goods_no", "tire_size", "ord_qty", "region", "shop_id", "shop_name", "payment_amount"):
         value = getattr(slots, field, None)
         if field == "shop_name" and _is_invalid_store_slot_value(str(value or "")):
             continue
@@ -20032,7 +20087,11 @@ def _pending_order_context_values(slots: ConversationSlots) -> dict[str, Any]:
             continue
         if value not in (None, "", [], {}):
             values[field] = value
-    product_name = getattr(slots, "tire_model", None) or getattr(slots, "pending_product_name", None)
+    product_name = (
+        getattr(slots, "tire_model", None)
+        or getattr(slots, "product_name", None)
+        or getattr(slots, "pending_product_name", None)
+    )
     if product_name:
         values["product_name"] = product_name
     if getattr(slots, "pending_intent", None):
@@ -25894,13 +25953,18 @@ class TStationChatServiceV2:
         transaction_known_slots = {
             "tire_size": merged_slots.tire_size,
             "goods_no": merged_slots.goods_no,
-            "product_name": merged_slots.tire_model,
+            "product_name": (
+                merged_slots.tire_model
+                or getattr(merged_slots, "product_name", None)
+                or merged_slots.pending_product_name
+            ),
             "quantity": merged_slots.ord_qty,
             "ord_qty": merged_slots.ord_qty,
             "shop_id": merged_slots.shop_id,
             "shop_name": merged_slots.shop_name,
             "store_name": merged_slots.shop_name,
             "region": merged_slots.region,
+            "payment_amount": merged_slots.payment_amount,
             "place_query": getattr(merged_slots, "place_query", None),
             "user_xpos": getattr(merged_slots, "user_xpos", None),
             "user_ypos": getattr(merged_slots, "user_ypos", None),
@@ -25934,7 +25998,19 @@ class TStationChatServiceV2:
         availability_context = merged_slots.availability_context if isinstance(getattr(merged_slots, "availability_context", None), dict) else {}
         pending_order_context = availability_context.get("pending_order_context") if isinstance(availability_context.get("pending_order_context"), dict) else {}
         if isinstance(pending_order_context, dict):
-            for key in ("goods_no", "tire_size", "ord_qty", "region", "shop_id", "shop_name", "pending_intent", "goal_type", "source"):
+            for key in (
+                "goods_no",
+                "tire_size",
+                "ord_qty",
+                "region",
+                "shop_id",
+                "shop_name",
+                "product_name",
+                "payment_amount",
+                "pending_intent",
+                "goal_type",
+                "source",
+            ):
                 value = pending_order_context.get(key)
                 if value not in (None, "") and transaction_known_slots.get(key) in (None, ""):
                     transaction_known_slots[key] = value
