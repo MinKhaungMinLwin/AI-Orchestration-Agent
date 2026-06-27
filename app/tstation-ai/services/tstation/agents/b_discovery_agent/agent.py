@@ -436,7 +436,8 @@ After user responds to Case 3:
      → 재시도 결과 1+건: 정상 추천 흐름 계속 진행. 인트로에 "[season_nm] 타이어 중 추천해 드릴게요 😊" 자연스럽게 포함.
      → 재시도도 0건: 아래 기본 0건 규칙 적용.
    - 그 외 0건 (season_nm 미전달 OR rcmd_type="tstation" 인데도 0건):
-     → quickReply: "해당 조건에 맞는 타이어를 찾을 수 없어요." + quickReplies: [{"label":"다른 조건으로 찾기","domain":"DISCOVERY"},{"label":"타이어 추천 받기","domain":"DISCOVERY"}].
+     → quickReply: "조건에 맞는 타이어를 찾지 못했어요. 차량 정보, 타이어 사이즈, 또는 원하시는 특징(예: 가성비, 정숙성, 사계절용)을 알려주시면 다시 찾아드릴게요 😊" + quickReplies: [{"label":"다른 조건으로 찾기","domain":"DISCOVERY"},{"label":"타이어 추천 받기","domain":"DISCOVERY"}].
+     ⚠️ 단순 "찾을 수 없어요" 통지로 끝내지 말 것 — 어떤 정보(차량/사이즈/특징)를 더 주면 도움이 되는지 구체적으로 물어야 한다.
 
    - 제휴사 가격은 JWT 토큰으로 자동 적용됩니다. entr_yn / entr_no 입력 불필요.
 2. Filter: compatible products only; sort by implied priority
