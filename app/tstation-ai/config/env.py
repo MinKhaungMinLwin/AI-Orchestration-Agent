@@ -1,7 +1,7 @@
 from enum import Enum
 
 from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings
 
 
 class Environment(str, Enum):
@@ -73,6 +73,8 @@ class Settings(BaseSettings):
     AI_QC_ENABLED: bool = False
     AI_QC_PARALLEL: bool = False
     AI_SPECULATIVE_CLASSIFY_ENABLED: bool = False
+    AI_ROUTER_USE_SLIM_PROMPT_V2: bool = True
+    AI_ROUTER_SKIP_VALIDATED_UI_ACTION: bool = True
     # External AI Providers
     UPSTAGE_API_KEY: str
     OPENAI_API_KEY: str

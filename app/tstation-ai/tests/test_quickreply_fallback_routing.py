@@ -17,6 +17,7 @@ import concurrent.futures
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -140,6 +141,7 @@ from services.tstation.chat import (
     _current_turn_action_mode,
     _is_structured_store_selection_turn,
     _resume_source_from_ui_action_context,
+    _validated_ui_action_slot_fill_router_skip,
     _has_current_turn_order_recovery_anchor,
     _mask_dormant_transaction_action_slots,
     _stage_dormant_transaction_context,
@@ -14718,6 +14720,189 @@ def test_router_slot_fill_resolution_rejects_non_transaction_action_context() ->
     assert resolution["matched"] is False
     assert resolution["resume_source"] == "none"
     assert resolution["slot_patch"] == {}
+
+
+def test_validated_ui_action_slot_fill_router_skip_builds_synthetic_route() -> None:
+    action_context = resolve_ui_action_context(
+        raw_action={
+            "action_type": "select_quantity",
+            "source_intent": "quick_order_reservation",
+            "expected_contract_intent": "quick_order_reservation",
+            "expected_behavior": "slot_fill",
+            "entity_type": "quantity",
+            "entity_id": "2",
+            "entity_label": "2개",
+            "slots": {
+                "goods_no": "G000000319584",
+                "tire_size": "245/45R19",
+                "ord_qty": 2,
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            },
+        },
+        selected_vehicle=None,
+        selection_source="ui_action",
+    )
+
+    result = _validated_ui_action_slot_fill_router_skip(action_context)
+
+    assert result is not None
+    domains, routing, metadata = result
+    assert domains == [MultiAgentDomain.Domain.TRANSACTION]
+    assert routing.is_slot_fill is True
+    assert routing.intent == "quick_order_reservation"
+    assert routing.filled_slot == "quantity"
+    assert routing.new_intent is False
+    assert metadata == {
+        "router_skipped": True,
+        "router_skip_reason": "validated_ui_action_slot_fill",
+        "filled_slot": "quantity",
+        "slot_fill_intent": "quick_order_reservation",
+        "resume_source": "router_slot_fill:quantity",
+        "expected_contract_intent": "quick_order_reservation",
+        "ui_action_type": "select_quantity",
+    }
+
+
+def test_validated_ui_action_slot_fill_router_skip_rejects_history_selection() -> None:
+    action_context = resolve_ui_action_context(
+        raw_action={
+            "action_type": "select_product",
+            "source_intent": "quick_order_reservation",
+            "expected_contract_intent": "quick_order_reservation",
+            "expected_behavior": "slot_fill",
+            "slots": {
+                "goods_no": "G000000319584",
+                "tire_size": "245/45R19",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            },
+        },
+        selected_vehicle=None,
+        selection_source="previous_product_candidate",
+    )
+
+    assert _validated_ui_action_slot_fill_router_skip(action_context) is None
+
+
+@pytest.mark.parametrize(
+    ("action_type", "expected_slot", "slots"),
+    [
+        (
+            "select_product",
+            "product",
+            {
+                "goods_no": "G000000319584",
+                "tire_size": "245/45R19",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            },
+        ),
+        (
+            "select_quantity",
+            "quantity",
+            {
+                "goods_no": "G000000319584",
+                "tire_size": "245/45R19",
+                "ord_qty": 2,
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            },
+        ),
+        (
+            "select_store",
+            "store",
+            {
+                "goods_no": "G000000319584",
+                "tire_size": "245/45R19",
+                "ord_qty": 2,
+                "shop_id": "S001",
+                "shop_name": "티스테이션 판교점",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            },
+        ),
+        (
+            "select_schedule",
+            "schedule",
+            {
+                "goods_no": "G000000319584",
+                "tire_size": "245/45R19",
+                "ord_qty": 2,
+                "shop_id": "S001",
+                "requested_cal_day": "20260627",
+                "rsv_hour": "0900",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            },
+        ),
+    ],
+)
+def test_validated_ui_action_slot_fill_router_skip_supports_structured_actions(
+    action_type: str,
+    expected_slot: str,
+    slots: dict[str, Any],
+) -> None:
+    action_context = resolve_ui_action_context(
+        raw_action={
+            "action_type": action_type,
+            "source_intent": "quick_order_reservation",
+            "expected_contract_intent": "quick_order_reservation",
+            "expected_behavior": "slot_fill",
+            "entity_type": expected_slot,
+            "entity_id": expected_slot,
+            "entity_label": expected_slot,
+            "slots": slots,
+        },
+        selected_vehicle=None,
+        selection_source="ui_action",
+    )
+
+    result = _validated_ui_action_slot_fill_router_skip(action_context)
+
+    assert result is not None
+    domains, routing, metadata = result
+    assert domains == [MultiAgentDomain.Domain.TRANSACTION]
+    assert routing.is_slot_fill is True
+    assert routing.intent == "quick_order_reservation"
+    assert routing.filled_slot == expected_slot
+    assert routing.new_intent is False
+    assert metadata["router_skipped"] is True
+    assert metadata["router_skip_reason"] == "validated_ui_action_slot_fill"
+    assert metadata["filled_slot"] == expected_slot
+    assert metadata["slot_fill_intent"] == "quick_order_reservation"
+    assert metadata["expected_contract_intent"] == "quick_order_reservation"
+
+
+def test_prompt_router_slim_v2_is_short_and_first_turn_scoped(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(chat_module.settings, "AI_ROUTER_USE_SLIM_PROMPT_V2", True)
+
+    prompt = prompt_router_slim()
+
+    assert "first-turn domain classifier" in prompt
+    assert "Discovery follow-up intent" not in prompt
+    assert "After a recent recommendation/search list" not in prompt
+    assert len(prompt) < 7000
+
+
+def test_prompt_router_slim_v2_keeps_required_first_turn_cases(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(chat_module.settings, "AI_ROUTER_USE_SLIM_PROMPT_V2", True)
+
+    prompt = prompt_router_slim()
+
+    assert "signup_first_purchase_benefit_policy" in prompt
+    assert "내 주문내역" in prompt
+    assert "Product name + price" in prompt
+    assert "강남역 근처 매장" in prompt
+
+
+def test_prompt_router_slim_legacy_flag_keeps_rollback_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(chat_module.settings, "AI_ROUTER_USE_SLIM_PROMPT_V2", False)
+
+    prompt = prompt_router_slim()
+
+    assert "After a recent recommendation/search list" in prompt
+    assert len(prompt) > 7000
 
 
 def test_router_slot_fill_context_payload_summarizes_purchase_state_and_candidates() -> None:

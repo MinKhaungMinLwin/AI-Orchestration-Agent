@@ -205,6 +205,7 @@ from services.tstation.policies.ui_action_policy import (
     store_context_from_mapping,
     store_name_exact_match_row,
     should_reuse_vehicle_slots_for_oe_followup,
+    transaction_slot_fill_resolution,
     ui_action_trace_metadata,
     validate_ui_actions_for_contract,
     vehicle_selection_slot_values,
@@ -586,7 +587,7 @@ class MultiAgentDomain(BaseModel):
                 data["blocked_override_reason"] = "none"
         return data
 
-    reason: str = Field(description="Reason for the classification, using english")
+    reason: str = Field(description="Short English classification reason.")
     domains: list[Domain] = Field(description="List of domains detected in the request, ordered by priority")
     execution_plan: list[str] = Field(
         description="Short ordered plan for the selected domains, without tool names or parameters"
@@ -1249,6 +1250,60 @@ def _resume_source_from_current_turn(user_text: str) -> str:
 
 def _resume_source_from_ui_action_context(action_context: UIActionContext | None) -> str:
     return expected_slot_fill_resume_source(action_context)
+
+
+def _validated_ui_action_slot_fill_router_skip(
+    action_context: UIActionContext | None,
+) -> tuple[list[MultiAgentDomain.Domain], MultiAgentDomain, dict[str, Any]] | None:
+    resolution = transaction_slot_fill_resolution(action_context)
+    if not resolution.get("matched") or action_context is None:
+        return None
+    if str(resolution.get("input_source") or "") not in {"ui_action", "chip_context"}:
+        return None
+    action_type = str(action_context.action_type or "").strip()
+    filled_slot = str(resolution.get("expected_slot") or "").strip()
+    if action_type not in {"select_product", "select_quantity", "select_store", "select_schedule"}:
+        return None
+    if filled_slot not in {"product", "quantity", "store", "schedule"}:
+        return None
+    flow_intent = str(resolution.get("flow_intent") or "").strip()
+    if flow_intent not in {"quick_order_reservation", "stock_store_search"}:
+        return None
+
+    resume_source = f"router_slot_fill:{filled_slot}"
+    domains = [MultiAgentDomain.Domain.TRANSACTION]
+    routing_result = MultiAgentDomain(
+        reason="validated_ui_action_slot_fill",
+        domains=domains,
+        execution_plan=[f"transaction:{flow_intent}:slot_fill:{filled_slot}"],
+        user_behavior=f"selecting {filled_slot} from structured UI action",
+        flow=f"validated UI action slot-fill resumes {flow_intent}",
+        claim_check_type="none",
+        complaint_scope="none",
+        agent_prompt_profile=AgentPromptProfile.TRANSACTION_STORE,
+        intent=flow_intent,
+        slot_fill_intent=flow_intent,
+        is_slot_fill=True,
+        filled_slot=filled_slot,
+        slot_fill_source=str(resolution.get("input_source") or "ui_action"),
+        candidate_reference={
+            "label": str(action_context.entity_label or action_context.entity_id or filled_slot),
+            "action_type": action_type,
+        },
+        continue_flow=True,
+        new_intent=False,
+        planner_confidence=1.0,
+    )
+    metadata = {
+        "router_skipped": True,
+        "router_skip_reason": "validated_ui_action_slot_fill",
+        "filled_slot": filled_slot,
+        "slot_fill_intent": flow_intent,
+        "resume_source": resume_source,
+        "expected_contract_intent": str(action_context.expected_contract_intent or "").strip() or flow_intent,
+        "ui_action_type": action_type,
+    }
+    return domains, routing_result, metadata
 
 
 def _has_stored_transaction_context(slots: ConversationSlots) -> bool:
@@ -1961,21 +2016,19 @@ class _SlimMultiAgentDomain(BaseModel):
 
     reason: str = Field(description="Reason for the classification, using english")
     domains: list[MultiAgentDomain.Domain] = Field(
-        description="List of domains detected in the request, ordered by priority"
+        description="Detected domain list, ordered by priority."
     )
     execution_plan: list[str] = Field(
-        description="Short ordered plan for the selected domains, without tool names or parameters"
+        description="Short ordered domain plan; no tool names or parameters."
     )
     claim_check_type: str = Field(
         description=(
-            "For Discovery product turns, classify product-related claim verification: 'none', "
-            "'verifiable_product_attribute', or 'unverified_external_claim'."
+            "Product claim check type: none, verifiable_product_attribute, or unverified_external_claim."
         ),
     )
     complaint_scope: Literal["none", "tstation_service_complaint", "out_of_scope_complaint", "unclear_complaint"] = Field(
         description=(
-            "Complaint/frustration scope: 'none', 'tstation_service_complaint', "
-            "'out_of_scope_complaint', or 'unclear_complaint'."
+            "Complaint scope: none, T-Station service, out-of-scope, or unclear."
         ),
     )
     discovery_followup_intent: Literal[
@@ -1985,18 +2038,14 @@ class _SlimMultiAgentDomain(BaseModel):
         "product_objective_followup",
     ] = Field(
         description=(
-            "Discovery follow-up intent: 'none', 'size_for_recommendation_continuation', "
-            "'recent_product_set_size_availability', or 'product_objective_followup'. "
-            "This is a first-turn classification with no prior context, so this "
-            "should almost always be 'none'."
+            "Discovery follow-up intent. First-turn value should almost always be none."
         ),
     )
     carried_discovery_objective: Literal[
         "none", "safe_service", "sound_absorber", "attribute_lookup", "recommendation_filter"
     ] = Field(
         description=(
-            "Set ONLY when discovery_followup_intent='product_objective_followup'. This is a first-turn "
-            "classification with no prior context, so this should almost always be 'none'."
+            "Prior discovery objective only for product_objective_followup; first-turn usually none."
         ),
     )
     pending_check_topic: Literal[
@@ -2010,11 +2059,11 @@ class _SlimMultiAgentDomain(BaseModel):
         "event_applicability",
     ] = Field(
         description=(
-            "Pending object eligibility/check topic. First-turn classification should usually return 'none'."
+            "Pending object eligibility/check topic. First-turn usually none."
         )
     )
     pending_check_object_type: Literal["none", "product_name", "tire_size", "store", "vehicle"] = Field(
-        description="Object type for pending_check_topic, or 'none'. First-turn classification should usually return 'none'."
+        description="Object type for pending_check_topic, or none."
     )
     pending_check_object_value: str = Field(
         description="Object value for pending_check_topic, or empty string."
@@ -2026,8 +2075,7 @@ class _SlimMultiAgentDomain(BaseModel):
         "generic_compare",
     ] = Field(
         description=(
-            "Comparison follow-up intent. This is a first-turn classification with no prior context, so this should "
-            "almost always be 'none'."
+            "Comparison follow-up intent. First-turn usually none."
         ),
     )
     comparison_metric: Literal[
@@ -2042,10 +2090,10 @@ class _SlimMultiAgentDomain(BaseModel):
         "car_type",
         "detail",
     ] = Field(
-        description="Resolved comparison axis, or 'none'. First-turn classification should usually return 'none'."
+        description="Resolved comparison axis, or none."
     )
     recent_product_set_followup_type: Literal["none", "rank_recent_product_set"] = Field(
-        description="Recent product-set follow-up type. First-turn classification should usually return 'none'."
+        description="Recent product-set follow-up type. First-turn usually none."
     )
     recent_product_set_metric: Literal[
         "none",
@@ -2060,12 +2108,12 @@ class _SlimMultiAgentDomain(BaseModel):
         "vehicle_type",
         "mileage",
         "detail",
-    ] = Field(description="Ranking metric for recent product-set follow-ups, or 'none'.")
+    ] = Field(description="Recent product-set ranking metric, or none.")
     recent_product_set_direction: Literal["none", "min", "max", "match", "compare"] = Field(
-        description="Ranking direction for recent product-set follow-ups."
+        description="Recent product-set ranking direction."
     )
     recent_product_set_price_basis: Literal["none", "cheapest_final_prc", "extra_fvr_sale_prc", "sale_prc"] = Field(
-        description="Price basis when recent_product_set_metric='price'."
+        description="Price basis for recent product-set price ranking."
     )
     requested_product_attribute: Literal[
         "none",
@@ -2084,7 +2132,7 @@ class _SlimMultiAgentDomain(BaseModel):
         "load",
         "speed",
     ] = Field(
-        description="Structured requested product attribute for Discovery product-detail turns, or 'none'."
+        description="Requested product attribute for Discovery detail turns, or none."
     )
     policy_intent: Literal[
         "none",
@@ -2116,16 +2164,16 @@ class _SlimMultiAgentDomain(BaseModel):
         "store_service_review_write",
         "store_review_write",
     ] = Field(
-        description="Structured support/policy intent, or 'none'."
+        description="Structured support/policy intent, or none."
     )
     store_attribute_store_name: str = Field(
-        description="For policy_intent='store_attribute_inquiry', the specific store name, or empty string."
+        description="Store name for store_attribute_inquiry, or empty string."
     )
     store_attribute_text: str = Field(
-        description="For policy_intent='store_attribute_inquiry', the raw requested store attribute phrase, or empty string."
+        description="Requested store attribute phrase, or empty string."
     )
     store_attribute_type: Literal["service", "equipment", "operating_condition", "subjective_quality", "unknown"] = Field(
-        description="Type of store_attribute_text for store_attribute_inquiry. Use 'unknown' otherwise."
+        description="Store attribute type; unknown otherwise."
     )
     store_attribute_verification_level: Literal[
         "tool_verifiable",
@@ -2135,41 +2183,40 @@ class _SlimMultiAgentDomain(BaseModel):
         description="Verification level for store_attribute_inquiry."
     )
     service_name: str = Field(
-        description="For policy_intent='store_service_search', normalized service name, or empty string."
+        description="Normalized service name for store_service_search, or empty string."
     )
     service_code: str = Field(
-        description="For policy_intent='store_service_search', primary normalized service code, or empty string."
+        description="Primary service code for store_service_search, or empty string."
     )
-    region: str = Field(description="For store_service_search, broad region/place, or empty string.")
-    place_query: str = Field(description="For store_service_search, raw place query, or empty string.")
+    region: str = Field(description="Broad region/place for store_service_search, or empty string.")
+    place_query: str = Field(description="Raw place query for store_service_search, or empty string.")
     recommendation_scenario: str = Field(
         description=(
-            "Discovery tire recommendation catalog key, or 'unknown_scenario'/'none'. "
-            "Classify only the scenario key; tool arguments are generated by policy."
+            "Discovery recommendation catalog key, unknown_scenario, or none."
         )
     )
     referred_object_status: Literal["resolved", "resolvable_from_context", "missing", "ambiguous"] = Field(
-        description="First-turn reference status; usually 'resolved' unless the user uses an unclear reference."
+        description="Reference status for the current turn."
     )
     referred_object_type: Literal["product", "product_set", "store", "order", "coupon", "none"] = Field(
-        description="Type of referred object, or 'none'."
+        description="Type of referred object, or none."
     )
-    needs_clarification: bool = Field(description="True when an unclear reference must be clarified.")
+    needs_clarification: bool = Field(description="True when an unclear reference needs clarification.")
     intent: Literal["none", "quick_order_reservation", "stock_store_search"] = Field(
         default="none",
-        description="Slot-fill flow intent for compatibility with router slot-fill metadata, or 'none'.",
+        description="Slot-fill flow intent alias, or none.",
     )
     slot_fill_intent: Literal["none", "quick_order_reservation", "stock_store_search"] = Field(
         default="none",
-        description="Existing transaction flow being filled by the current turn, or 'none'.",
+        description="Existing transaction flow being filled, or none.",
     )
     is_slot_fill: bool = Field(
         default=False,
-        description="True when the first-turn/current message fills a missing transaction slot from explicit context.",
+        description="True when current message fills an explicit transaction slot.",
     )
     filled_slot: Literal["none", "product", "quantity", "region", "store", "schedule"] = Field(
         default="none",
-        description="The slot filled by this turn when is_slot_fill=true.",
+        description="Slot filled by this turn, or none.",
     )
     slot_fill_source: Literal[
         "none",
@@ -2184,29 +2231,25 @@ class _SlimMultiAgentDomain(BaseModel):
     ] = Field(default="none", description="Evidence source for slot-fill classification.")
     candidate_reference: dict[str, str] = Field(
         default_factory=dict,
-        description="Human-readable slot-fill candidate reference. Code validates IDs.",
+        description="Human-readable candidate reference; code validates IDs.",
     )
-    continue_flow: bool = Field(default=False, description="True when deterministic validation should resume flow.")
-    new_intent: bool = Field(default=True, description="False only for slot-fill continuation turns.")
-    planner_confidence: float = Field(description="Planner confidence from 0.0 to 1.0.")
-    override_applied: bool = Field(description="True when deterministic logic overrode the original router contract.")
-    override_reason: str = Field(description="Structured override reason, or 'none'.")
+    continue_flow: bool = Field(default=False, description="True when validation should resume flow.")
+    new_intent: bool = Field(default=True, description="False only for slot-fill continuation.")
+    planner_confidence: float = Field(description="Planner confidence 0.0 to 1.0.")
+    override_applied: bool = Field(description="True when deterministic logic overrode router contract.")
+    override_reason: str = Field(description="Override reason, or none.")
     original_router_domains: list[MultiAgentDomain.Domain] = Field(
-        description="Original router domains before any deterministic override."
+        description="Original router domains before override."
     )
     original_router_execution_plan: list[str] = Field(
-        description="Original router execution plan before any deterministic override."
+        description="Original router execution plan before override."
     )
-    override_blocked: bool = Field(description="True when a candidate deterministic override was blocked.")
-    blocked_override_reason: str = Field(description="Why a candidate override was blocked, or 'none'.")
+    override_blocked: bool = Field(description="True when a deterministic override was blocked.")
+    blocked_override_reason: str = Field(description="Blocked override reason, or none.")
     agent_prompt_profile: AgentPromptProfile = Field(
         description=(
-            "Prompt profile for the selected domain agent. "
-            "Use 'transaction_*' for clear transaction flows; 'discovery_search' for product search by name/keyword/size, "
-            "price/stock/discount-price with specific product name, run-flat vs normal price comparison, or best-sellers (no goods_no in context); "
-            "'discovery_recommendation' for tire recommendation by vehicle, tire size, scenario, "
-            "discount ranking WITHOUT a specific product name, or continuation from recommendation cards; "
-            "'discovery_event_content' for events/deals/video; 'full' for compatibility-only or uncertain cases."
+            "Prompt profile: transaction_*, discovery_search, discovery_recommendation, "
+            "discovery_event_content, or full."
         )
     )
 
@@ -2629,6 +2672,65 @@ def prompt_router_slim() -> str:
     because there is no prior conversation context to leverage on a fresh
     session. Use only when the message history contains a single user message.
     """
+    if settings.AI_ROUTER_USE_SLIM_PROMPT_V2:
+        return """
+You are a first-turn domain classifier for T-Station AI (Hankook Tire).
+Classify the user's FIRST message into EXACTLY ONE domain and fill the structured fields.
+
+Default slot-fill fields for first turns:
+- intent="none", slot_fill_intent="none", is_slot_fill=false, filled_slot="none",
+  slot_fill_source="none", candidate_reference={}, continue_flow=false, new_intent=true.
+- Only use slot-fill values if an explicit ROUTER SLOT-FILL CONTEXT is present.
+
+DOMAINS:
+- LEADING: greeting or unclear request.
+- DISCOVERY: product search/recommendation/compatibility/product info. Use this for product name/brand/size
+  searches, product-name price questions without goods_no, tire recommendations, vehicle-fit requests,
+  OE/RE concept or replacement product questions, events/deals/video content, and competitor-to-Hankook lineup guidance.
+- TRANSACTION: owned records or executable commerce/store flows. Use this for my orders/reservations/coupons/cart,
+  order cancellation/cancel-fee inquiry, maintenance/service history lookup, store search by location/name,
+  store schedule/reservation, goods_no price/stock/order, automatic alert registration request, and product+size+order/store
+  requests that need Discovery first then Transaction.
+- SUPPORT: policy/FAQ/how-to/warranty/refund/general guidance, human escalation, smart pickup FAQ, T-Station complaints,
+  coupon usage/registration/signup/partner-member policy, discount stacking policy, shipping fee, online-vs-store price policy,
+  payment troubleshooting, order document guidance, reservation/work/promotion/tire-condition-photo policy, and legal-action denial.
+
+Critical first-turn routing:
+- Product name + price/stock/buy/order, no goods_no -> DISCOVERY. If same message has size plus explicit buy/order/store
+  request -> domains should still classify as DISCOVERY in the slim schema; downstream policy may chain Transaction.
+- G+12 digit goods_no + price/stock/order -> TRANSACTION.
+- "내 주문내역", "내 예약", "내 쿠폰", "쿠폰함", "정비이력/정비내역" -> TRANSACTION.
+- "강남역 근처 매장", "판교점 예약 가능?", "한남점 내일 예약" -> TRANSACTION.
+- "회원가입/신규회원/첫구매 혜택·쿠폰" -> SUPPORT, policy_intent=signup_first_purchase_benefit_policy
+  or signup_coupon_guidance.
+- "제휴회원/복지몰/임직원 전용 쿠폰" -> SUPPORT, policy_intent=partner_member_coupon_policy.
+- Coupon use/channel/registration/how-to policy -> SUPPORT, policy_intent=coupon_usage_policy or coupon_registration_policy.
+- Two or more discount means stacking ("쿠폰+딜", "기획전+쿠폰", "중복 가능") -> SUPPORT.
+- Tire manufacture date/DOT/newness -> SUPPORT, policy_intent=tire_manufacture_date_policy.
+- Sidewall bulge/quality warranty/free A/S -> SUPPORT, policy_intent=tire_quality_warranty_policy.
+- Assurance/digital warranty -> SUPPORT, policy_intent=assurance_service_policy.
+- General reservation cancellation/change/no-show policy without owned anchor -> SUPPORT, policy_intent=reservation_policy_guidance.
+- Installation/work/labor/field payment policy -> SUPPORT, policy_intent=installation_work_policy.
+- Promotion/gift/first-come/partial cancel gift policy -> SUPPORT, policy_intent=promotion_gift_policy.
+- Photo-based tire condition/safety judgment -> SUPPORT, policy_intent=tire_condition_photo_policy.
+- Payment error/checkout screen/install-date selector missing -> SUPPORT, policy_intent=payment_error_troubleshooting.
+- Receipt/trade statement/proof/email send possibility -> SUPPORT, policy_intent=order_document_guidance.
+- 제주/도서산간/서귀포 shipping fee -> SUPPORT, policy_intent=shipping_fee_policy.
+- Online vs store price/purchase method policy -> SUPPORT, policy_intent=online_store_price_policy.
+- Regional final-price policy -> SUPPORT, policy_intent=regional_price_policy.
+- Specific store attribute/service/equipment inquiry -> policy_intent=store_attribute_inquiry and fill store attribute fields.
+- Region + service-condition store search -> TRANSACTION, policy_intent=store_service_search; fill service/region when known.
+- Store/service review write path -> SUPPORT, policy_intent=store_service_review_write.
+- My product review lookup path -> SUPPORT, policy_intent=my_goods_review_lookup.
+- Complaint about T-Station service -> SUPPORT with complaint_scope=tstation_service_complaint.
+- Complaint outside T-Station scope -> LEADING with complaint_scope=out_of_scope_complaint.
+
+Output fields:
+- domains, reason, execution_plan, claim_check_type, complaint_scope, policy_intent, agent_prompt_profile.
+- Set planner_confidence high only when the first-turn intent is explicit.
+- Use agent_prompt_profile: transaction_coupon, transaction_order, transaction_store, transaction_price_stock,
+  discovery_search, discovery_recommendation, discovery_event_content, or full.
+"""
     return """
 You are a domain classifier for T-Station AI (Hankook Tire).
 Classify the user's FIRST message into EXACTLY ONE domain.
@@ -20774,6 +20876,7 @@ class TStationChatServiceV2:
         latest_preorder_tmpl: dict | None = None
         vehicle_ui_action_context: UIActionContext | None = None
         region_store_input_resolution = RegionStoreInputContextResolution()
+        validated_ui_action_router_skip_metadata: dict[str, Any] = {}
         vehicle_selection_trace_metadata: dict[str, Any] = {
             "ui_action_detected": False,
             "ui_action_type": None,
@@ -20989,14 +21092,32 @@ class TStationChatServiceV2:
             )
             vehicle_selection_trace_metadata["router_slot_fill_context"] = router_slot_fill_context_payload
 
-            classify_future = _try_submit_speculative(
-                _coordinator.classify_multi_intent,
-                classifier_messages,
-                session_id=request.session_id,
-                user_id=request.user_id,
-                trace_id=request.tracing_id,
-                parent_span_id=_parent_span_id,
+            validated_ui_action_router_skip = (
+                _validated_ui_action_slot_fill_router_skip(vehicle_ui_action_context)
+                if settings.AI_ROUTER_SKIP_VALIDATED_UI_ACTION
+                else None
             )
+            if validated_ui_action_router_skip is not None:
+                domains, routing_result, validated_ui_action_router_skip_metadata = validated_ui_action_router_skip
+                classify_future = concurrent.futures.Future()
+                classify_future.set_result((domains, routing_result))
+                router_slot_fill_metadata.update(validated_ui_action_router_skip_metadata)
+                vehicle_selection_trace_metadata.update(validated_ui_action_router_skip_metadata)
+                logger.info(
+                    "[ROUTER_SKIP] validated UI action slot-fill: slot=%s intent=%s source=%s",
+                    validated_ui_action_router_skip_metadata.get("filled_slot"),
+                    validated_ui_action_router_skip_metadata.get("slot_fill_intent"),
+                    validated_ui_action_router_skip_metadata.get("ui_action_type"),
+                )
+            else:
+                classify_future = _try_submit_speculative(
+                    _coordinator.classify_multi_intent,
+                    classifier_messages,
+                    session_id=request.session_id,
+                    user_id=request.user_id,
+                    trace_id=request.tracing_id,
+                    parent_span_id=_parent_span_id,
+                )
 
             # 2) Extract regex-based slots from the LATEST user message only
             regex_slots = ConversationSlots.extract_from_user_text(last_user_text)
@@ -22868,6 +22989,9 @@ class TStationChatServiceV2:
                         policy_preclassified_skip_decision,
                     )
                 classify_future = None
+            elif validated_ui_action_router_skip_metadata:
+                domains, routing_result = await asyncio.to_thread(classify_future.result)
+                _classify_path = "validated_ui_action_slot_fill"
             elif settings.AI_SPECULATIVE_CLASSIFY_ENABLED:
                 predicted_domains = None
                 if _chip_domain:
@@ -22925,6 +23049,11 @@ class TStationChatServiceV2:
                     "summary": _classify_summary,
                     "domains": [d.value for d in domains],
                     "path": _classify_path,
+                    "router_skipped": bool(validated_ui_action_router_skip_metadata),
+                    "router_skip_reason": validated_ui_action_router_skip_metadata.get("router_skip_reason"),
+                    "filled_slot": validated_ui_action_router_skip_metadata.get("filled_slot"),
+                    "slot_fill_intent": validated_ui_action_router_skip_metadata.get("slot_fill_intent"),
+                    "resume_source": validated_ui_action_router_skip_metadata.get("resume_source"),
                     "user_behavior": getattr(routing_result, "user_behavior", None) if routing_result else None,
                     "flow": getattr(routing_result, "flow", None) if routing_result else None,
                     "complaint_scope": getattr(routing_result, "complaint_scope", None) if routing_result else None,
