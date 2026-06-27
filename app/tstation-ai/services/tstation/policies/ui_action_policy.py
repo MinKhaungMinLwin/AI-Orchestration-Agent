@@ -94,6 +94,16 @@ _STORE_AVAILABILITY_CONTINUATION_RE = re.compile(
     r"장착\s*가능|오늘|내일|예약|매장|지점|재고|스케줄|시간|방문",
     re.IGNORECASE,
 )
+_REGION_STORE_SELECTION_PROMPT_RE = re.compile(
+    r"어느\s*지역\s*매장|장착\s*매장을?\s*(?:먼저\s*)?선택|"
+    r"예약\s*가능\s*시간.*매장을?\s*선택|다른\s*매장을?\s*(?:찾아|검색)|"
+    r"확인할\s*지역명을\s*입력|매장\s*선택\s*다시",
+    re.IGNORECASE,
+)
+_REGION_STORE_INPUT_RE = re.compile(
+    r"^[\sA-Za-z0-9가-힣]+(?:점|역|동|구|시|군|로|가)?(?:은|는|으로|로|에서|에는)?\??\s*$",
+    re.IGNORECASE,
+)
 _INVALID_STORE_SLOT_VALUES = frozenset({"평점", "별점", "리뷰", "후기", "평가"})
 _KOREAN_SELECTION_ORDINALS: tuple[tuple[tuple[str, ...], int], ...] = (
     (("첫번째", "첫째", "첫 번", "첫번", "1번째", "1번", "1.", "1)"), 0),
@@ -187,6 +197,20 @@ class HistoryLocationSelectionState:
     resolved_shop_id: str | None = None
     selected_order_context: Mapping[str, Any] | None = None
     trace_metadata: Mapping[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class RegionStoreInputContextResolution:
+    resolved: bool = False
+    flow_type: str = "plain_store_search"
+    action_mode: str = "store_search"
+    context_state: str = "dormant"
+    resume_source: str = "none"
+    slots_to_promote: Mapping[str, Any] = field(default_factory=dict)
+    expected_contract_intent: str | None = None
+    allowed_tools: tuple[str, ...] = ()
+    previous_context_source: str | None = None
+    resolution_source: str | None = None
 
 
 def _vehicle_value(selected_vehicle: Mapping[str, Any], *keys: str) -> str:
@@ -3527,6 +3551,251 @@ def merged_quickreply_cta_context(
     if intent_key:
         context.setdefault("intentKey", intent_key)
     return context
+
+
+def _region_store_input_values(user_text: str, slots: Any) -> dict[str, Any]:
+    text = str(user_text or "").strip()
+    parsed = ConversationSlots.extract_from_user_text(text)
+    values: dict[str, Any] = {}
+    if parsed.region not in (None, ""):
+        values["region"] = parsed.region
+    if parsed.shop_name not in (None, ""):
+        values["shop_name"] = parsed.shop_name
+    if values:
+        return values
+    cleaned = re.sub(r"(?:은|는|으로|로|에서|에는|\?)\s*$", "", text).strip()
+    if not cleaned:
+        return values
+    if cleaned.endswith("점"):
+        values["shop_name"] = cleaned
+    elif len(cleaned) <= 12 and re.fullmatch(r"[A-Za-z0-9가-힣\s]+", cleaned):
+        values["region"] = cleaned
+    return values
+
+
+def _region_store_prompt_signal(
+    *,
+    latest_quickreply_tmpl: Mapping[str, Any] | None,
+    latest_location_tmpl: Mapping[str, Any] | None,
+    messages: list[dict[str, Any]] | None,
+) -> tuple[bool, str | None]:
+    quickreply_data = (
+        latest_quickreply_tmpl.get("data")
+        if isinstance(latest_quickreply_tmpl, Mapping) and isinstance(latest_quickreply_tmpl.get("data"), Mapping)
+        else None
+    )
+    if isinstance(quickreply_data, Mapping):
+        assistant = str(quickreply_data.get("assistantResponse") or "")
+        if _REGION_STORE_SELECTION_PROMPT_RE.search(assistant):
+            return True, "assistant_prompt"
+        quick_replies = quickreply_data.get("quickReplies")
+        if isinstance(quick_replies, list):
+            for chip in quick_replies:
+                if not isinstance(chip, Mapping):
+                    continue
+                action_id = str(chip.get("actionId") or chip.get("action_id") or "").strip()
+                if action_id in {"enter_region", "change_region", "search_other_store"}:
+                    return True, f"quickreply:{action_id}"
+    location_data = (
+        latest_location_tmpl.get("data")
+        if isinstance(latest_location_tmpl, Mapping) and isinstance(latest_location_tmpl.get("data"), Mapping)
+        else None
+    )
+    if isinstance(location_data, Mapping):
+        assistant = str(location_data.get("assistantResponse") or "")
+        if bool(location_data.get("isBookingFlow")) and _REGION_STORE_SELECTION_PROMPT_RE.search(assistant):
+            return True, "location_prompt"
+    for message in reversed((messages or [])[-4:]):
+        if message.get("role") != "assistant":
+            continue
+        content = str(message.get("content") or "")
+        if _REGION_STORE_SELECTION_PROMPT_RE.search(content):
+            return True, "assistant_message"
+    return False, None
+
+
+def _transaction_context_candidates(slots: Any) -> list[tuple[str, dict[str, Any]]]:
+    candidates: list[tuple[str, dict[str, Any]]] = []
+    if isinstance(slots, Mapping):
+        raw_slots = dict(slots)
+    elif hasattr(slots, "model_dump"):
+        raw_slots = slots.model_dump(exclude_none=True)
+    else:
+        raw_slots = {}
+    active_context = {
+        key: raw_slots.get(key, getattr(slots, key, None))
+        for key in (
+            "goods_no",
+            "tire_size",
+            "ord_qty",
+            "region",
+            "shop_id",
+            "shop_name",
+            "pending_intent",
+            "goal_type",
+            "availability_intent",
+            "requested_cal_day",
+        )
+    }
+    if active_context.get("goods_no") and active_context.get("tire_size"):
+        candidates.append(("active_slots", active_context))
+    availability_context = raw_slots.get("availability_context", getattr(slots, "availability_context", None))
+    if not isinstance(availability_context, Mapping):
+        return candidates
+    for key in (
+        "pending_order_context",
+        "dormant_purchase_context",
+        "dormant_stock_context",
+        "dormant_transaction_context",
+    ):
+        candidate = availability_context.get(key)
+        if not isinstance(candidate, Mapping):
+            continue
+        normalized = dict(candidate)
+        if normalized.get("goods_no") and normalized.get("tire_size"):
+            candidates.append((key, normalized))
+    return candidates
+
+
+def _classify_region_store_flow(
+    context: Mapping[str, Any],
+    *,
+    cta_context: Mapping[str, Any] | None,
+) -> tuple[str, str, str | None, tuple[str, ...]]:
+    pending_intent = str(context.get("pending_intent") or "").strip()
+    goal_type = str(context.get("goal_type") or "").strip()
+    availability_intent = str(context.get("availability_intent") or "").strip()
+    intent_key = str((cta_context or {}).get("intentKey") or "").strip()
+
+    if availability_intent == "today_install" or intent_key == "today_install":
+        return (
+            "today_install_region_selection",
+            "stock_check",
+            _STOCK_STORE_SEARCH_INTENT,
+            ("transaction_store_preview_tool",),
+        )
+    if pending_intent == "order" or goal_type == "place_order":
+        return (
+            "purchase_region_selection",
+            "purchase_continuation",
+            _QUICK_ORDER_RESERVATION_INTENT,
+            ("transaction_store_preview_tool",),
+        )
+    if pending_intent == "stock" or goal_type == "store_with_stock":
+        return (
+            "stock_region_selection",
+            "stock_check",
+            _STOCK_STORE_SEARCH_INTENT,
+            ("transaction_store_preview_tool",),
+        )
+    if pending_intent == "reservation":
+        return (
+            "reservation_region_selection",
+            "booking_continuation",
+            _QUICK_ORDER_RESERVATION_INTENT,
+            ("transaction_store_preview_tool", "get_store_schedule_tool"),
+        )
+    return ("plain_store_search", "store_search", None, ())
+
+
+def resolve_region_or_store_input_context(
+    *,
+    user_text: str,
+    ui_action: Mapping[str, Any] | None,
+    chip_context: Mapping[str, Any] | None,
+    latest_quickreply_tmpl: Mapping[str, Any] | None,
+    latest_location_tmpl: Mapping[str, Any] | None,
+    messages: list[dict[str, Any]] | None,
+    merged_slots: Any,
+) -> RegionStoreInputContextResolution:
+    text = str(user_text or "").strip()
+    if not text:
+        return RegionStoreInputContextResolution()
+
+    input_values = _region_store_input_values(text, merged_slots)
+    if not input_values:
+        return RegionStoreInputContextResolution()
+
+    parsed = ConversationSlots.extract_from_user_text(text)
+    if (
+        parsed.ord_qty is not None
+        or normalize_tire_size(text) is not None
+        or ConversationSlots.has_product_keyword(text)
+        or not _REGION_STORE_INPUT_RE.match(text)
+    ):
+        return RegionStoreInputContextResolution()
+
+    cta_context = merged_quickreply_cta_context(chip_context, latest_quickreply_tmpl)
+    resolution_source = None
+    if isinstance(ui_action, Mapping) and ui_action:
+        resolution_source = "ui_action"
+    elif cta_context:
+        resolution_source = "chip_context"
+    else:
+        prompt_detected, prompt_source = _region_store_prompt_signal(
+            latest_quickreply_tmpl=latest_quickreply_tmpl,
+            latest_location_tmpl=latest_location_tmpl,
+            messages=messages,
+        )
+        if not prompt_detected:
+            return RegionStoreInputContextResolution()
+        resolution_source = prompt_source
+
+    for source_name, context in _transaction_context_candidates(merged_slots):
+        if not (context.get("goods_no") and context.get("tire_size")):
+            continue
+        flow_type, action_mode, expected_contract_intent, allowed_tools = _classify_region_store_flow(
+            context,
+            cta_context=cta_context,
+        )
+        if flow_type == "plain_store_search":
+            continue
+        slots_to_promote = {
+            key: context.get(key)
+            for key in (
+                "goods_no",
+                "tire_size",
+                "ord_qty",
+                "pending_intent",
+                "goal_type",
+                "availability_intent",
+                "requested_cal_day",
+            )
+            if context.get(key) not in (None, "")
+        }
+        slots_to_promote.update(input_values)
+        if input_values.get("region"):
+            slots_to_promote["shop_id"] = None
+            slots_to_promote["shop_name"] = None
+        return RegionStoreInputContextResolution(
+            resolved=True,
+            flow_type=flow_type,
+            action_mode=action_mode,
+            context_state="resumed",
+            resume_source=f"region_store_followup:{resolution_source}",
+            slots_to_promote=slots_to_promote,
+            expected_contract_intent=expected_contract_intent,
+            allowed_tools=allowed_tools,
+            previous_context_source=str(context.get("source") or source_name),
+            resolution_source=resolution_source,
+        )
+    return RegionStoreInputContextResolution()
+
+
+def apply_region_or_store_input_context_resolution(
+    slots: Any,
+    resolution: RegionStoreInputContextResolution,
+    *,
+    source: str = "region_store_input_context",
+) -> Any:
+    if not resolution.resolved or not resolution.slots_to_promote:
+        return slots
+    try:
+        return slots.apply_runtime_values(dict(resolution.slots_to_promote), source=source)
+    except Exception:
+        for key, value in dict(resolution.slots_to_promote).items():
+            setattr(slots, key, value)
+        return slots
 
 
 def apply_cta_context_to_slots(slots: Any, cta_context: Mapping[str, Any] | None, *, source: str = "quickreply_cta") -> Any:

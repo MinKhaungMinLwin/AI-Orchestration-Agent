@@ -372,6 +372,7 @@ from services.tstation.policies.turn_contract import (
     warning_contract_violations,
 )
 from services.tstation.policies.ui_action_policy import (
+    apply_region_or_store_input_context_resolution,
     apply_other_store_context_enrichment,
     apply_selected_order_context_for_purchase_cta,
     apply_cta_context_to_slots,
@@ -418,6 +419,7 @@ from services.tstation.policies.ui_action_policy import (
     resolve_recent_store_name_from_messages,
     selected_order_context_from_preview_values,
     resolve_recent_product_search_keyword,
+    resolve_region_or_store_input_context,
     resolve_goods_no_from_selection,
     resolve_ui_action_context,
     resolve_goods_no_from_product_template_selection,
@@ -21094,6 +21096,144 @@ def test_plain_region_store_search_still_uses_store_search() -> None:
     assert frame.known_slots["region"] == "강남"
     assert tool_plan.preferred_tool == "search_stores_tool"
     assert "get_store_schedule_tool" in tool_plan.forbidden_tools
+
+
+def test_region_input_resumes_dormant_purchase_store_selection_flow() -> None:
+    latest_quickreply_tmpl = {
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": "구매를 진행하려면 장착 매장을 먼저 선택해야 해요. 어느 지역 매장을 찾아드릴까요? 😊",
+            "quickReplies": [{"label": "강남", "domain": "TRANSACTION"}],
+        },
+    }
+    merged_slots = ConversationSlots(
+        availability_context={
+            "dormant_purchase_context": {
+                "goods_no": "G000000317735",
+                "tire_size": "225/45R17",
+                "ord_qty": 4,
+                "pending_intent": "order",
+                "goal_type": "place_order",
+                "source": "pre_policy_context:support_policy_answer",
+                "context_state": "dormant",
+            }
+        }
+    )
+
+    resolution = resolve_region_or_store_input_context(
+        user_text="분당",
+        ui_action=None,
+        chip_context=None,
+        latest_quickreply_tmpl=latest_quickreply_tmpl,
+        latest_location_tmpl=None,
+        messages=[],
+        merged_slots=merged_slots,
+    )
+    assert resolution.resolved is True
+    assert resolution.flow_type == "purchase_region_selection"
+    assert resolution.action_mode == "purchase_continuation"
+    assert resolution.resume_source == "region_store_followup:assistant_prompt"
+    assert resolution.slots_to_promote["goods_no"] == "G000000317735"
+    assert resolution.slots_to_promote["region"] == "분당"
+
+    updated_slots = apply_region_or_store_input_context_resolution(merged_slots, resolution)
+    assert updated_slots.pending_intent == "order"
+    assert updated_slots.goal_type == "place_order"
+    assert updated_slots.region == "분당"
+    assert updated_slots.ord_qty == 4
+
+    action_mode = _current_turn_action_mode(
+        user_text="분당",
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["transaction:store_search"],
+        ),
+        regex_slots=ConversationSlots.extract_from_user_text("분당"),
+        merged_slots=updated_slots,
+        explicit_override_reason=None,
+        resume_source=resolution.resume_source,
+    )
+    assert action_mode == "purchase_continuation"
+
+
+def test_region_input_resumes_dormant_stock_flow_for_today_install_prompt() -> None:
+    latest_quickreply_tmpl = {
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": "확인할 지역명을 입력해 주세요. 이전 상품·수량·날짜 조건을 유지해서 다시 확인할게요.",
+            "quickReplies": [
+                {"label": "서울", "domain": "TRANSACTION", "actionId": "change_region"},
+                {"label": "강남", "domain": "TRANSACTION", "actionId": "change_region"},
+            ],
+        },
+    }
+    merged_slots = ConversationSlots(
+        availability_context={
+            "dormant_stock_context": {
+                "goods_no": "G000000317735",
+                "tire_size": "235/45R18",
+                "ord_qty": 4,
+                "pending_intent": "stock",
+                "goal_type": "store_with_stock",
+                "availability_intent": "today_install",
+                "requested_cal_day": "20260627",
+                "source": "pre_policy_context:support_policy_answer",
+                "context_state": "dormant",
+            }
+        }
+    )
+
+    resolution = resolve_region_or_store_input_context(
+        user_text="강남",
+        ui_action=None,
+        chip_context=None,
+        latest_quickreply_tmpl=latest_quickreply_tmpl,
+        latest_location_tmpl=None,
+        messages=[],
+        merged_slots=merged_slots,
+    )
+    assert resolution.resolved is True
+    assert resolution.flow_type == "today_install_region_selection"
+    assert resolution.action_mode == "stock_check"
+    assert resolution.expected_contract_intent == "stock_store_search"
+
+    updated_slots = apply_region_or_store_input_context_resolution(merged_slots, resolution)
+    frame = build_transaction_intent_frame(
+        "강남",
+        known_slots={
+            "goods_no": updated_slots.goods_no,
+            "tire_size": updated_slots.tire_size,
+            "quantity": updated_slots.ord_qty,
+            "ord_qty": updated_slots.ord_qty,
+            "region": updated_slots.region,
+            "pending_intent": updated_slots.pending_intent,
+            "goal_type": updated_slots.goal_type,
+            "availability_intent": updated_slots.availability_intent,
+            "requested_cal_day": updated_slots.requested_cal_day,
+        },
+    )
+    tool_plan = plan_transaction_tools(frame)
+
+    assert updated_slots.region == "강남"
+    assert updated_slots.pending_intent == "stock"
+    assert updated_slots.availability_intent == "today_install"
+    assert tool_plan.preferred_tool == "transaction_store_preview_tool"
+    assert "transaction_store_preview_tool" in tool_plan.allowed_tools
+
+
+def test_region_input_without_prompt_or_transaction_context_stays_plain_store_search() -> None:
+    resolution = resolve_region_or_store_input_context(
+        user_text="분당",
+        ui_action=None,
+        chip_context=None,
+        latest_quickreply_tmpl=None,
+        latest_location_tmpl=None,
+        messages=[],
+        merged_slots=ConversationSlots(),
+    )
+
+    assert resolution.resolved is False
 
 
 @pytest.mark.parametrize(

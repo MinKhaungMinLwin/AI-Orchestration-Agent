@@ -110,6 +110,8 @@ from services.tstation.policies.intent_frame import IntentFrame, PolicyDomain
 from services.tstation.policies.pickup_service_gate import decide_pickup_service_gate
 from services.tstation.policies.ui_action_policy import (
     UIActionContext,
+    RegionStoreInputContextResolution,
+    apply_region_or_store_input_context_resolution,
     apply_logistics_earliest_install_cta_action,
     apply_selected_order_context_for_purchase_cta,
     apply_preview_update_cta_action,
@@ -176,6 +178,7 @@ from services.tstation.policies.ui_action_policy import (
     resolve_goods_no_from_product_template_selection,
     preview_location_slot_values_from_selection,
     resolve_shop_id_from_selection,
+    resolve_region_or_store_input_context,
     resolve_store_selection_from_history_template,
     resolve_tire_size_from_history_template,
     resolve_vehicle_from_history_template,
@@ -20136,6 +20139,7 @@ class TStationChatServiceV2:
         latest_quickreply_tmpl: dict | None = None
         latest_preorder_tmpl: dict | None = None
         vehicle_ui_action_context: UIActionContext | None = None
+        region_store_input_resolution = RegionStoreInputContextResolution()
         vehicle_selection_trace_metadata: dict[str, Any] = {
             "ui_action_detected": False,
             "ui_action_type": None,
@@ -20797,6 +20801,29 @@ class TStationChatServiceV2:
                     merged_slots.ord_qty,
                     last_user_text,
                 )
+
+            if not request.ui_action and not request.chip_context:
+                region_store_input_resolution = resolve_region_or_store_input_context(
+                    user_text=last_user_text,
+                    ui_action=request.ui_action,
+                    chip_context=request.chip_context,
+                    latest_quickreply_tmpl=latest_quickreply_tmpl,
+                    latest_location_tmpl=latest_location_tmpl,
+                    messages=request.messages,
+                    merged_slots=merged_slots,
+                )
+                if region_store_input_resolution.resolved:
+                    merged_slots = apply_region_or_store_input_context_resolution(
+                        merged_slots,
+                        region_store_input_resolution,
+                        source="region_store_followup_context",
+                    )
+                    logger.info(
+                        "[SLOTS] Resolved region/store follow-up context flow=%s source=%s promoted_slots=%s",
+                        region_store_input_resolution.flow_type,
+                        region_store_input_resolution.resolution_source,
+                        dict(region_store_input_resolution.slots_to_promote),
+                    )
 
             chip_action_id = chip_value(request.chip_context, "actionId", "action_id")
             cta_context = merged_quickreply_cta_context(request.chip_context, latest_quickreply_tmpl)
@@ -23193,8 +23220,17 @@ class TStationChatServiceV2:
             if len(recent_user_texts) >= 3:
                 break
         resume_source = _resume_source_from_current_turn(last_user_text)
+        if resume_source == "none" and region_store_input_resolution.resolved:
+            resume_source = region_store_input_resolution.resume_source
         previous_pending_intent = str(getattr(merged_slots, "pending_intent", None) or "").strip() or None
         previous_goal_type = str(getattr(merged_slots, "goal_type", None) or "").strip() or None
+        if region_store_input_resolution.resolved:
+            previous_pending_intent = previous_pending_intent or str(
+                region_store_input_resolution.slots_to_promote.get("pending_intent") or ""
+            ).strip() or None
+            previous_goal_type = previous_goal_type or str(
+                region_store_input_resolution.slots_to_promote.get("goal_type") or ""
+            ).strip() or None
         action_mode = _current_turn_action_mode(
             user_text=last_user_text,
             domains=domains,
