@@ -22078,6 +22078,38 @@ def test_support_response_policy_guard_uses_support_fallback_even_with_stale_pur
     assert _labels(event["data"]["quickReplies"]) == ["1:1 문의하기", "처음으로"]
 
 
+def test_support_response_policy_guard_uses_user_facing_complaint_copy_not_assistant_guidance() -> None:
+    contract = TurnContract(
+        domain="support",
+        intent="tstation_service_complaint",
+        action_mode="support_policy_answer",
+        context_state="dormant",
+        response_decision={
+            "template": "quickReply",
+            "assistant_guidance": "T-Station 범위의 불편 사항으로 응답하고, 이전 구매/예약/매장 문맥이 실행 flow를 재개하지 않게 한다.",
+            "metadata": {"response_shape_key": "support_complaint_guidance"},
+        },
+        known_slots={
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "shop_name": "티스테이션 판교점",
+        },
+    )
+
+    event = build_response_policy_guard_event(contract)
+    response = event["data"]["assistantResponse"]
+    metadata = event["data"]["metadata"]
+
+    assert "이용 중 불편을 겪으셨다면 죄송합니다." in response
+    assert "assistant_guidance" not in response
+    assert "실행 flow를 재개하지 않게" not in response
+    assert _labels(event["data"]["quickReplies"]) == ["1:1 문의하기", "처음으로"]
+    assert metadata["responseShapeKey"] == "support_complaint_guidance"
+    assert metadata["response_shape_key"] == "support_complaint_guidance"
+    assert metadata["assistant_response_source"] == "code_turn_contract_support_response_guard"
+    assert metadata["contract_intent"] == "tstation_service_complaint"
+
+
 def test_support_prompt_contains_payment_error_faq_first_policy() -> None:
     assert "payment_error_troubleshooting" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
     assert "search_faq_hybrid_tool" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
@@ -26176,6 +26208,63 @@ def test_missing_stock_search_slots_quickreply_is_allowed_for_stock_check_action
     violation_types = {violation["type"] for violation in violations}
     assert "action_mode_prompt_violation" not in violation_types
     assert "forbidden_template" not in violation_types
+
+
+def test_support_complaint_quickreply_is_not_flagged_by_reservation_time_wording() -> None:
+    contract = TurnContract(
+        domain="support",
+        intent="tstation_service_complaint",
+        action_mode="support_policy_answer",
+        context_state="dormant",
+        response_decision={
+            "template": "quickReply",
+            "metadata": {"response_shape_key": "support_complaint_guidance"},
+        },
+    )
+
+    violations = response_contract_violations(
+        template="quickReply",
+        assistant_response_text=(
+            "이용 중 불편을 겪으셨다면 죄송합니다. 예약 시간에 맞춰 방문하셨더라도 대기 지연이나 보상 가능 여부는 "
+            "매장 상황 확인이 필요해요. 정확한 확인을 위해 1:1 문의로 접수해 주세요."
+        ),
+        assistant_response_source="support_agent",
+        response_shape_key="support_complaint_guidance",
+        called_tools=[],
+        source_domain="support",
+        event_data={"metadata": {"response_shape_key": "support_complaint_guidance"}},
+        contract=contract,
+    )
+
+    violation_types = {violation["type"] for violation in violations}
+    assert "action_mode_prompt_violation" not in violation_types
+    assert "forbidden_template" not in violation_types
+
+
+def test_support_policy_answer_still_blocks_actual_schedule_progress_prompt() -> None:
+    contract = TurnContract(
+        domain="support",
+        intent="reservation_policy_guidance",
+        action_mode="support_policy_answer",
+        context_state="dormant",
+        response_decision={
+            "template": "quickReply",
+            "metadata": {"response_shape_key": "reservation_policy_guidance"},
+        },
+    )
+
+    violations = response_contract_violations(
+        template="quickReply",
+        assistant_response_text="예약 가능한 시간을 확인해 드릴게요. 진행할 예약 일정을 선택해 주세요.",
+        assistant_response_source="support_agent",
+        response_shape_key="reservation_policy_guidance",
+        called_tools=[],
+        source_domain="support",
+        event_data={"metadata": {"response_shape_key": "reservation_policy_guidance"}},
+        contract=contract,
+    )
+
+    assert "action_mode_prompt_violation" in {violation["type"] for violation in violations}
 
 
 def test_current_turn_action_mode_treats_today_install_product_resolution_chain_as_stock_check() -> None:

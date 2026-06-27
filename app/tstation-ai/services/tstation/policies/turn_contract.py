@@ -996,11 +996,42 @@ def _support_answer_contract_owns_response(*, domain: str, intent: str, action_m
     normalized_mode = str(action_mode or "").strip()
     if normalized_mode in _SUPPORT_ANSWER_ACTION_MODES:
         return True
-    if normalized_intent in {"human_escalation", "legal_action_guidance_denied", "support_faq"}:
+    if normalized_intent in {"human_escalation", "legal_action_guidance_denied", "support_faq", "tstation_service_complaint"}:
         return True
     if normalized_intent.endswith("_policy") or normalized_intent.endswith("_guidance"):
         return True
     return False
+
+
+def _support_guard_message_and_chips(
+    *,
+    intent: str,
+    response_shape_key: str,
+) -> tuple[str, list[dict[str, str]]]:
+    quick_replies = [
+        {"label": "1:1 문의하기", "domain": "SUPPORT"},
+        {"label": "처음으로", "domain": "LEADING"},
+    ]
+    if intent == "legal_action_guidance_denied":
+        return (
+            "법적 절차나 방법은 안내하기 어렵고, 1:1 문의나 고객센터로 불편을 접수해 주세요.",
+            quick_replies,
+        )
+    if intent == "human_escalation":
+        return (
+            "1:1 문의로 접수해 드릴 수 있어요. 문의할 내용을 남겨 주세요.",
+            quick_replies,
+        )
+    if intent == "tstation_service_complaint" or response_shape_key == "support_complaint_guidance":
+        return (
+            "이용 중 불편을 겪으셨다면 죄송합니다. 대기 지연이나 보상 가능 여부는 매장 상황 확인이 필요해요. "
+            "정확한 확인을 위해 1:1 문의로 접수해 주세요.",
+            quick_replies,
+        )
+    return (
+        "현재 문의 기준으로 안내드릴게요. 필요하면 1:1 문의로 이어서 도와드릴게요.",
+        quick_replies,
+    )
 
 
 def build_required_slot_clarification_event(contract: TurnContract) -> dict[str, Any]:
@@ -1071,30 +1102,14 @@ def build_response_policy_guard_event(contract: TurnContract) -> dict[str, Any]:
     ):
         intent = str(contract.intent or "")
         response_shape_key = ""
-        assistant_guidance = ""
         if isinstance(response_decision, Mapping):
             metadata = response_decision.get("metadata")
             if isinstance(metadata, Mapping):
                 response_shape_key = str(metadata.get("response_shape_key") or "")
-            assistant_guidance = str(response_decision.get("assistant_guidance") or "").strip()
-        if intent == "legal_action_guidance_denied":
-            message = "법적 절차나 방법은 안내하기 어렵고, 1:1 문의나 고객센터로 불편을 접수해 주세요."
-            quick_replies = [
-                {"label": "1:1 문의하기", "domain": "SUPPORT"},
-                {"label": "처음으로", "domain": "LEADING"},
-            ]
-        elif intent == "human_escalation":
-            message = "1:1 문의로 접수해 드릴 수 있어요. 문의할 내용을 남겨 주세요."
-            quick_replies = [
-                {"label": "1:1 문의하기", "domain": "SUPPORT"},
-                {"label": "처음으로", "domain": "LEADING"},
-            ]
-        else:
-            message = assistant_guidance or "현재 문의 기준으로 안내드릴게요. 필요하면 1:1 문의로 이어서 도와드릴게요."
-            quick_replies = [
-                {"label": "1:1 문의하기", "domain": "SUPPORT"},
-                {"label": "처음으로", "domain": "LEADING"},
-            ]
+        message, quick_replies = _support_guard_message_and_chips(
+            intent=intent,
+            response_shape_key=response_shape_key,
+        )
         return _annotate_contract_guard_event({
             "type": "data",
             "template": "quickReply",
@@ -1108,6 +1123,9 @@ def build_response_policy_guard_event(contract: TurnContract) -> dict[str, Any]:
                     "turnContract": contract.to_dict(),
                     "forbiddenBehaviors": sorted(forbidden_set),
                     "responseShapeKey": response_shape_key or intent,
+                    "response_shape_key": response_shape_key or intent,
+                    "assistant_response_source": "code_turn_contract_support_response_guard",
+                    "contract_intent": intent,
                 },
             },
         }, contract, reason="response_policy_guard")
@@ -1750,7 +1768,7 @@ def _is_purchase_bound_preview_event(event: Mapping[str, Any], contract: TurnCon
 
 
 _PURCHASE_OR_BOOKING_PROMPT_RE = re.compile(
-    r"구매를\s*(?:진행|이어)|주문을\s*(?:진행|이어)|예약(?:\s*가능|\s*시간|\s*일정|\s*을\s*진행)|"
+    r"구매를\s*(?:진행|이어)|주문을\s*(?:진행|이어)|예약(?:\s*가능(?:\s*시간)?|\s*일정을?\s*(?:진행|확인|선택)|\s*을\s*진행)|"
     r"장착\s*매장|장착할\s*규격|수량이\s*필요",
     re.IGNORECASE,
 )
@@ -1829,6 +1847,8 @@ def _action_mode_contract_violation(
             }
 
     assistant_text = str(event.get("assistant_response_text") or "")
+    if response_shape_key == "support_complaint_guidance":
+        return None
     if (
         action_mode
         in {"support_policy_answer", "product_description", "product_comparison", "owned_record_lookup", "store_search", "info_only"}
