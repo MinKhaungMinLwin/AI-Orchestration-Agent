@@ -2589,6 +2589,30 @@ def expected_slot_fill_resume_source(action_context: UIActionContext | None) -> 
     return f"expected_slot_fill:{expected_slot}"
 
 
+def transaction_slot_fill_resolution(action_context: UIActionContext | None) -> dict[str, Any]:
+    matched = is_expected_transaction_slot_fill(action_context)
+    if not matched or action_context is None:
+        return {
+            "matched": False,
+            "expected_slot": None,
+            "flow_intent": None,
+            "slot_patch": {},
+            "resume_source": "none",
+            "input_source": None,
+        }
+
+    action_type = str(action_context.action_type or "").strip()
+    expected_slot = _TRANSACTION_SLOT_FILL_ACTION_TO_SLOT.get(action_type)
+    return {
+        "matched": True,
+        "expected_slot": expected_slot,
+        "flow_intent": str(action_context.expected_contract_intent or action_context.contract_intent or "").strip(),
+        "slot_patch": dict(action_context.slot_patch or {}),
+        "resume_source": expected_slot_fill_resume_source(action_context),
+        "input_source": str(action_context.selection_source or "").strip() or None,
+    }
+
+
 def rewrite_transaction_selection_user_text(
     user_text: str,
     *,

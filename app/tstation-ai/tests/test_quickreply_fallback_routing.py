@@ -449,6 +449,7 @@ from services.tstation.policies.ui_action_policy import (
     apply_history_location_selection_state,
     build_store_availability_quantity_prompt_event,
     decide_store_availability_followup_action,
+    transaction_slot_fill_resolution,
     ui_action_trace_metadata,
     validate_ui_actions_for_contract,
 )
@@ -13831,6 +13832,21 @@ def test_resume_source_from_ui_action_context_promotes_transaction_quantity_resu
 
     assert _resume_source_from_ui_action_context(action_context) == "expected_slot_fill:quantity"
     assert expected_slot_fill_resume_source(action_context) == "expected_slot_fill:quantity"
+    assert transaction_slot_fill_resolution(action_context) == {
+        "matched": True,
+        "expected_slot": "quantity",
+        "flow_intent": "stock_store_search",
+        "slot_patch": {
+            "goods_no": "G000000309715",
+            "tire_size": "225/55R18",
+            "ord_qty": 4,
+            "region": "동탄",
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+        },
+        "resume_source": "expected_slot_fill:quantity",
+        "input_source": "ui_action",
+    }
 
     slots = ConversationSlots(
         goods_no="G000000309715",
@@ -14516,6 +14532,14 @@ def test_history_product_selection_state_promotes_purchase_slot_fill_and_rewrite
     assert state.action_context.action_type == "select_product"
     assert state.action_context.expected_contract_intent == "quick_order_reservation"
     assert expected_slot_fill_resume_source(state.action_context) == "expected_slot_fill:product"
+    product_resolution = transaction_slot_fill_resolution(state.action_context)
+    assert product_resolution["matched"] is True
+    assert product_resolution["expected_slot"] == "product"
+    assert product_resolution["flow_intent"] == "quick_order_reservation"
+    assert product_resolution["resume_source"] == "expected_slot_fill:product"
+    assert product_resolution["input_source"] == "previous_product_candidate"
+    assert product_resolution["slot_patch"]["goods_no"] == "G000000319584"
+    assert product_resolution["slot_patch"]["ord_qty"] == 2
     assert state.updated_slots.goods_no == "G000000319584"
     assert state.updated_slots.tire_size == "245/45R19"
     assert state.updated_slots.pending_intent == "order"
