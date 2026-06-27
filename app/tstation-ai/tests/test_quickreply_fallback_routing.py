@@ -68,6 +68,7 @@ from services.tstation.chat import (
     _build_maintenance_history_event,
     _build_order_document_guidance_event,
     _build_direct_faq_policy_tool_payload,
+    _build_direct_preorder_event_from_slots,
     _build_general_cancel_fee_policy_event,
     _build_general_card_cancel_timing_policy_event,
     _build_partner_member_coupon_policy_event,
@@ -14713,7 +14714,7 @@ def test_router_schema_defaults_slot_fill_fields_for_existing_construction() -> 
     assert routing.intent == "none"
     assert routing.filled_slot == "none"
     assert routing.slot_fill_intent == "none"
-    assert routing.candidate_reference == {}
+    assert chat_module._candidate_reference_to_dict(routing.candidate_reference, compact=True) == {}
     assert routing.continue_flow is False
     assert routing.new_intent is True
 
@@ -15024,6 +15025,8 @@ def test_router_structured_output_schema_marks_all_properties_required(model_cls
     assert "intent" in schema["required"]
     assert "slot_fill_intent" in schema["required"]
     assert "candidate_reference" in schema["required"]
+    candidate_reference_schema = schema["properties"]["candidate_reference"]
+    assert set(candidate_reference_schema["properties"]) == set(candidate_reference_schema["required"])
 
 
 def test_router_schema_failure_fallback_routes_plain_store_search_to_transaction() -> None:
@@ -24372,6 +24375,80 @@ def test_turn_contract_reports_preorder_confirmation_without_quick_order_tool() 
         "template": "quickReply",
         "assistant_response_text": "주문 확정 단계로 이어갑니다 😊",
     } in violations
+
+
+def test_direct_preorder_event_builds_ready_card_from_selected_schedule_slots() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000317682",
+        tire_model="다이나프로 HPX",
+        tire_size="235/55R19",
+        ord_qty=2,
+        shop_id="F00721",
+        shop_name="티스테이션 판교점",
+        requested_cal_day="20260623",
+        rsv_hour="17",
+        payment_amount=314400,
+        car_no="29조3344",
+        car_model="쏘렌토",
+        car_lnc_cd="W036270",
+        pending_intent="order",
+        goal_type="place_order",
+    )
+
+    event = _build_direct_preorder_event_from_slots(slots)
+
+    assert event is not None
+    assert event["template"] == "preOrder"
+    assert event["assistant_response_source"] == "code_reservation_confirmation_ready"
+    assert event["data"]["isReadyToOrder"] is True
+    assert event["data"]["isReadyToAddToCart"] is False
+    assert event["data"]["orderInfo"] == {
+        "carInfo": "쏘렌토 (29조3344)",
+        "product": "다이나프로 HPX 235/55R19",
+        "quantity": 2,
+        "storeName": "티스테이션 판교점",
+        "bookingDateTime": "2026년 6월 23일 (화) 17:00",
+        "paymentAmount": 314400,
+    }
+    assert event["data"]["metadata"]["goodsId"] == "G000000317682"
+    assert event["data"]["metadata"]["shopId"] == "F00721"
+    assert event["data"]["metadata"]["requestedCalDay"] == "20260623"
+    assert event["data"]["metadata"]["rsvHour"] == "17"
+
+
+def test_ready_preorder_card_without_quick_order_tool_is_allowed_under_reservation_contract() -> None:
+    contract = _transaction_turn_contract(
+        "2026년 6월 23일 (화)\n17:00",
+        {
+            "goods_no": "G000000317682",
+            "tire_model": "다이나프로 HPX",
+            "tire_size": "235/55R19",
+            "ord_qty": 2,
+            "shop_id": "F00721",
+            "shop_name": "티스테이션 판교점",
+            "requested_cal_day": "20260623",
+            "rsv_hour": "17",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+    preorder_event = _build_direct_preorder_event_from_slots(
+        ConversationSlots(**dict(contract.known_slots)),
+    )
+
+    violations = response_contract_violations(
+        template="preOrder",
+        assistant_response_text=str((preorder_event or {}).get("data", {}).get("assistantResponse") or ""),
+        assistant_response_source="code_reservation_confirmation_ready",
+        response_shape_key="reservation_confirmation_ready",
+        called_tools=[],
+        source_domain="transaction",
+        contract=contract,
+    )
+
+    assert contract.intent == "quick_order_reservation"
+    assert contract.response_decision["metadata"]["response_shape_key"] == "reservation_confirmation_ready"
+    assert violations == []
 
 
 def test_quick_order_reservation_keeps_datepick_guard_without_selected_datetime() -> None:

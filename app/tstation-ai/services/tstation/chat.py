@@ -9,10 +9,10 @@ import threading
 import logging
 import re
 import time
-from typing import Any, AsyncIterator, ClassVar, Iterator, Literal, Mapping
+from typing import Annotated, Any, AsyncIterator, ClassVar, Iterator, Literal, Mapping
 from textwrap import dedent
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, WithJsonSchema, model_validator
 from enum import Enum
 
 from services.tstation.common.cta_urls import CTAUrls, rebase_tstation_url_to_origin
@@ -490,6 +490,37 @@ def decide_next_action(
         )
 
 
+_CANDIDATE_REFERENCE_KEYS = ("label", "index", "type", "action_type", "source")
+_CANDIDATE_REFERENCE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "label": {"type": "string", "description": "Human-readable candidate label, or empty string."},
+        "index": {"type": "string", "description": "Human-readable candidate index like 'first' or '2', or empty string."},
+        "type": {"type": "string", "description": "Candidate type like product/store/schedule, or empty string."},
+        "action_type": {"type": "string", "description": "Structured UI action type when available, or empty string."},
+        "source": {"type": "string", "description": "Candidate reference source hint, or empty string."},
+    },
+    "required": list(_CANDIDATE_REFERENCE_KEYS),
+    "additionalProperties": False,
+}
+CandidateReferenceDict = Annotated[dict[str, str], WithJsonSchema(_CANDIDATE_REFERENCE_SCHEMA)]
+
+
+def _empty_candidate_reference() -> dict[str, str]:
+    return {key: "" for key in _CANDIDATE_REFERENCE_KEYS}
+
+
+def _candidate_reference_to_dict(value: Any, *, compact: bool = False) -> dict[str, str]:
+    normalized = _empty_candidate_reference()
+    if isinstance(value, Mapping):
+        for key in _CANDIDATE_REFERENCE_KEYS:
+            item = value.get(key)
+            normalized[key] = "" if item is None else str(item)
+    if not compact:
+        return normalized
+    return {key: item for key, item in normalized.items() if item}
+
+
 class MultiAgentDomain(BaseModel):
     """Router result that supports multiple domains (multi-intent)."""
 
@@ -533,7 +564,7 @@ class MultiAgentDomain(BaseModel):
             if "slot_fill_source" not in data:
                 data["slot_fill_source"] = "none"
             if "candidate_reference" not in data:
-                data["candidate_reference"] = {}
+                data["candidate_reference"] = _empty_candidate_reference()
             if "continue_flow" not in data:
                 data["continue_flow"] = False
             if "new_intent" not in data:
@@ -906,11 +937,8 @@ class MultiAgentDomain(BaseModel):
     ] = Field(
         description="Evidence source for slot-fill classification. Code validates IDs after routing.",
     )
-    candidate_reference: dict[str, str] = Field(
-        description=(
-            "Human-readable candidate reference such as {'label': '벤투스 에어S 242,100원'}. "
-            "Do not invent goods_no/shop_id here; code validates stable IDs."
-        ),
+    candidate_reference: CandidateReferenceDict = Field(
+        description="Human-readable candidate reference; do not invent goods_no/shop_id here.",
     )
     continue_flow: bool = Field(
         description="True when current flow should remain active/resumed after deterministic slot validation.",
@@ -1952,7 +1980,7 @@ class _SlimMultiAgentDomain(BaseModel):
             if "slot_fill_source" not in data:
                 data["slot_fill_source"] = "none"
             if "candidate_reference" not in data:
-                data["candidate_reference"] = {}
+                data["candidate_reference"] = _empty_candidate_reference()
             if "continue_flow" not in data:
                 data["continue_flow"] = False
             if "new_intent" not in data:
@@ -2218,7 +2246,7 @@ class _SlimMultiAgentDomain(BaseModel):
         "previous_datepick",
         "unknown",
     ] = Field(description="Evidence source for slot-fill classification.")
-    candidate_reference: dict[str, str] = Field(
+    candidate_reference: CandidateReferenceDict = Field(
         description="Human-readable candidate reference; code validates IDs.",
     )
     continue_flow: bool = Field(description="True when validation should resume flow.")
@@ -2667,7 +2695,7 @@ Classify the user's FIRST message into EXACTLY ONE domain and fill the structure
 
 Default slot-fill fields for first turns:
 - intent="none", slot_fill_intent="none", is_slot_fill=false, filled_slot="none",
-  slot_fill_source="none", candidate_reference={}, continue_flow=false, new_intent=true.
+  slot_fill_source="none", candidate_reference={"label":"","index":"","type":"","action_type":"","source":""}, continue_flow=false, new_intent=true.
 - Only use slot-fill values if an explicit ROUTER SLOT-FILL CONTEXT is present.
 
 DOMAINS:
@@ -2726,7 +2754,7 @@ Classify the user's FIRST message into EXACTLY ONE domain.
 Also output intent, slot_fill_intent, is_slot_fill, filled_slot, slot_fill_source, candidate_reference,
 continue_flow, and new_intent. On a normal first turn with no ROUTER SLOT-FILL CONTEXT, set
 intent="none", slot_fill_intent="none", is_slot_fill=false, filled_slot="none", slot_fill_source="none",
-candidate_reference={}, continue_flow=false, new_intent=true. If explicit router context is present,
+candidate_reference={"label":"","index":"","type":"","action_type":"","source":""}, continue_flow=false, new_intent=true. If explicit router context is present,
 apply the same slot-fill rules from the full router prompt; never invent stable IDs.
 
 DOMAINS:
@@ -7931,6 +7959,129 @@ def _standardize_preorder_metadata(event_data: dict, slot_state: Any | None) -> 
         )
         if value not in (None, ""):
             metadata[canonical] = value
+
+
+def _build_direct_preorder_event_from_slots(
+    slot_state: Any | None,
+    *,
+    latest_datepick_tmpl: Mapping[str, Any] | None = None,
+    latest_preorder_tmpl: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    slot_values = slot_state.model_dump() if hasattr(slot_state, "model_dump") else dict(slot_state or {})
+    goods_no = str(slot_values.get("goods_no") or "").strip()
+    tire_size = normalize_tire_size(slot_values.get("tire_size") or "")
+    shop_id = str(slot_values.get("shop_id") or "").strip()
+    shop_name = str(slot_values.get("shop_name") or slot_values.get("store_name") or "").strip()
+    requested_cal_day = str(slot_values.get("requested_cal_day") or "").strip()
+    rsv_hour = str(slot_values.get("rsv_hour") or "").strip()
+    if not (goods_no and tire_size and shop_id and shop_name and requested_cal_day and rsv_hour):
+        return None
+
+    try:
+        ord_qty = int(slot_values.get("ord_qty") or slot_values.get("quantity") or 0)
+    except (TypeError, ValueError):
+        ord_qty = 0
+    if ord_qty <= 0:
+        return None
+
+    datepick_slots = datepick_slot_values_from_data(latest_datepick_tmpl) or {}
+    preorder_slots = preorder_slot_values_from_data(latest_preorder_tmpl) or {}
+    template_boundary = (
+        latest_preorder_tmpl.get("data")
+        if isinstance(latest_preorder_tmpl, Mapping) and isinstance(latest_preorder_tmpl.get("data"), Mapping)
+        else latest_datepick_tmpl.get("data")
+        if isinstance(latest_datepick_tmpl, Mapping) and isinstance(latest_datepick_tmpl.get("data"), Mapping)
+        else {}
+    )
+    boundary_values = canonical_context_from_template_boundary(template_boundary)
+    product_name = (
+        str(slot_values.get("tire_model") or "").strip()
+        or str(datepick_slots.get("tire_model") or "").strip()
+        or str(preorder_slots.get("tire_model") or "").strip()
+        or str(boundary_values.get("product_name") or "").strip()
+    )
+    product_label = f"{product_name} {tire_size}".strip() if product_name else tire_size
+
+    payment_amount = slot_values.get("payment_amount")
+    if payment_amount in (None, "", 0):
+        payment_amount = datepick_slots.get("payment_amount") or preorder_slots.get("payment_amount")
+    try:
+        normalized_payment_amount = int(payment_amount) if payment_amount not in (None, "", []) else None
+    except (TypeError, ValueError):
+        normalized_payment_amount = None
+
+    booking_datetime = ""
+    try:
+        order_day = datetime.datetime.strptime(requested_cal_day, "%Y%m%d")
+        booking_datetime = (
+            f"{order_day.year}년 {order_day.month}월 {order_day.day}일 "
+            f"({_WEEKDAY_KO[order_day.weekday()]}) {int(rsv_hour):02d}:00"
+        )
+    except (TypeError, ValueError):
+        booking_datetime = ""
+    if not booking_datetime and isinstance(latest_preorder_tmpl, Mapping):
+        latest_preorder_payload = _preorder_payload(latest_preorder_tmpl) or {}
+        latest_order_info = (
+            latest_preorder_payload.get("orderInfo")
+            if isinstance(latest_preorder_payload.get("orderInfo"), dict)
+            else {}
+        )
+        booking_datetime = str(latest_order_info.get("bookingDateTime") or "").strip()
+
+    car_no = str(slot_values.get("car_no") or "").strip()
+    car_name = str(
+        slot_values.get("car_nm")
+        or slot_values.get("car_name")
+        or slot_values.get("car_model")
+        or ""
+    ).strip()
+    car_info = None
+    if car_name and car_no:
+        car_info = f"{car_name} ({car_no})"
+    elif car_name:
+        car_info = car_name
+    elif car_no:
+        car_info = car_no
+
+    event = {
+        "type": "data",
+        "template": "preOrder",
+        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+        "assistant_response_source": "code_reservation_confirmation_ready",
+        "data": {
+            "assistantResponse": "주문 정보를 확인해 주세요.",
+            "orderInfo": {
+                "carInfo": car_info,
+                "product": product_label,
+                "quantity": ord_qty,
+                "storeName": shop_name,
+                "bookingDateTime": booking_datetime or None,
+                "paymentAmount": normalized_payment_amount,
+            },
+            "isReadyToOrder": True,
+            "isReadyToAddToCart": False,
+            "metadata": {
+                "goodsNo": goods_no,
+                "goodsId": goods_no,
+                "shopId": shop_id,
+                "shopName": shop_name,
+                "storeName": shop_name,
+                "ordQty": ord_qty,
+                "quantity": ord_qty,
+                "requestedCalDay": requested_cal_day,
+                "rsvHour": rsv_hour,
+                "bookingDateTime": booking_datetime or None,
+                "paymentAmount": normalized_payment_amount,
+                "productName": product_name or None,
+                "tireSize": tire_size,
+                "carNo": car_no or None,
+                "carLncCd": str(slot_values.get("car_lnc_cd") or "").strip() or None,
+            },
+        },
+        "nextAction": {"type": "stop", "domain": None},
+    }
+    _standardize_preorder_metadata(event["data"], slot_state)
+    return event
 
 
 def _choose_quickreply_fallback(
@@ -24504,8 +24655,8 @@ class TStationChatServiceV2:
             if routing_result
             else "none",
             "router_candidate_reference": (
-                dict(getattr(routing_result, "candidate_reference", {}) or {})
-                if routing_result and isinstance(getattr(routing_result, "candidate_reference", None), Mapping)
+                _candidate_reference_to_dict(getattr(routing_result, "candidate_reference", None), compact=True)
+                if routing_result
                 else {}
             ),
             "router_slot_patch": {},
@@ -25037,7 +25188,64 @@ class TStationChatServiceV2:
                         "X-Accel-Buffering": "no",
                     },
                 )
-            event_data = order_document_event.get("data") if isinstance(order_document_event.get("data"), dict) else {}
+                event_data = order_document_event.get("data") if isinstance(order_document_event.get("data"), dict) else {}
+            return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
+
+        direct_preorder_event: dict[str, Any] | None = None
+        if (
+            turn_contract is not None
+            and vehicle_ui_action_context is not None
+            and str(vehicle_ui_action_context.action_type or "") == "select_schedule"
+            and bool(validated_ui_action_router_skip_metadata)
+        ):
+            response_metadata = (
+                turn_contract.response_decision.get("metadata")
+                if isinstance(turn_contract.response_decision, Mapping)
+                else {}
+            )
+            response_shape_key = str((response_metadata or {}).get("response_shape_key") or "")
+            flow_step = str((transaction_tool_plan.metadata or {}).get("flow_step") or "")
+            if (
+                str(turn_contract.intent or "") == "quick_order_reservation"
+                and response_shape_key == "reservation_confirmation_ready"
+                and flow_step == "build_preorder"
+            ):
+                direct_preorder_event = _build_direct_preorder_event_from_slots(
+                    merged_slots,
+                    latest_datepick_tmpl=latest_datepick_tmpl,
+                    latest_preorder_tmpl=latest_preorder_tmpl,
+                )
+                direct_preorder_event = _finalize_direct_code_event(
+                    direct_preorder_event,
+                    turn_contract=turn_contract,
+                    intent="quick_order_reservation",
+                    source="code_reservation_confirmation_ready",
+                    required_tools=(),
+                    template="preOrder",
+                )
+                if direct_preorder_event is not None:
+                    normalize_ui_action_metadata(direct_preorder_event, contract=turn_contract)
+                    logger.info(
+                        "[DIRECT_PREORDER] emitting reservation_confirmation_ready from validated schedule ui_action "
+                        "session_id=%s goods_no=%s shop_id=%s requested_cal_day=%s rsv_hour=%s",
+                        request.session_id,
+                        merged_slots.goods_no,
+                        merged_slots.shop_id,
+                        merged_slots.requested_cal_day,
+                        merged_slots.rsv_hour,
+                    )
+        if direct_preorder_event is not None:
+            if request.stream:
+                return StreamingResponse(
+                    TStationChatServiceV2._stream_policy_guard_response(direct_preorder_event),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
+            event_data = direct_preorder_event.get("data") if isinstance(direct_preorder_event.get("data"), dict) else {}
             return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
 
         if turn_contract and turn_contract.intent == "tire_condition_photo_policy":
