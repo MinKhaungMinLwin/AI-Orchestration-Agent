@@ -448,6 +448,7 @@ from services.tstation.policies.ui_action_policy import (
     apply_history_location_selection_state,
     build_store_availability_quantity_prompt_event,
     decide_store_availability_followup_action,
+    ui_action_trace_metadata,
     validate_ui_actions_for_contract,
 )
 from services.tstation.policies.store_confirmation_policy import resolve_store_followup_from_quickreply_template
@@ -11917,6 +11918,54 @@ def test_purchase_flow_fallback_event_clarifies_size_when_product_resolution_has
     assert _labels(event["data"]["quickReplies"]) == ["235/55R19", "255/45R20", "사이즈 직접 입력"]
 
 
+def test_purchase_flow_fallback_event_builds_structured_product_selection_quickreplies() -> None:
+    event = build_purchase_flow_fallback_event(
+        intent="quick_order_reservation",
+        known_slots={
+            "tire_size": "245/45R19",
+            "ord_qty": 2,
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "product_name": "벤투스 에어S",
+        },
+        tool_data_list=[
+            {
+                "tool": "search_product_tool",
+                "input": {"keyword": "벤투스 에어S", "size": "245/45R19", "brand_cd": "HK"},
+                "data": {
+                    "items": [
+                        {
+                            "goods_no": "G000000319584",
+                            "goods_nm": "벤투스 에어S",
+                            "tire_size_1": "245/45R19",
+                            "sale_prc": 242100,
+                        },
+                        {
+                            "goods_no": "G000000319585",
+                            "goods_nm": "벤투스 에어S",
+                            "tire_size_1": "245/45R19",
+                            "sale_prc": 255100,
+                        },
+                    ]
+                },
+            }
+        ],
+        blocked_tool="get_final_price_tool",
+    )
+
+    assert event is not None
+    assert event["assistant_response_source"] == "code_purchase_flow_resolution_clarification"
+    chips = event["data"]["quickReplies"]
+    assert chips[0]["label"] == "벤투스 에어S 245/45R19 242,100원"
+    assert chips[0]["cta_action"] == "select_product"
+    assert chips[0]["expected_behavior"] == "slot_fill"
+    assert chips[0]["expected_contract_intent"] == "quick_order_reservation"
+    assert chips[0]["metadata"]["goodsNo"] == "G000000319584"
+    assert chips[0]["metadata"]["ordQty"] == 2
+    assert chips[0]["metadata"]["slots"]["pending_intent"] == "order"
+    assert chips[0]["metadata"]["slots"]["goal_type"] == "place_order"
+
+
 def test_tool_entries_from_previous_agent_facts_parses_search_product_rows() -> None:
     entries = _tool_entries_from_previous_agent_facts(
         [
@@ -13399,10 +13448,12 @@ def test_product_booking_flow_metadata_carries_availability_slots() -> None:
     assert changed is True
     metadata = event["data"]["metadata"][0]
     assert metadata["cta_action"] == "select_product"
+    assert metadata["expected_behavior"] == "slot_fill"
     assert metadata["expected_contract_intent"] == "stock_store_search"
     assert metadata["slots"]["goods_no"] == "G000000309715"
     assert metadata["slots"]["requested_cal_day"] == "20260626"
     assert metadata["ui_action"]["entity_type"] == "product"
+    assert metadata["ui_action"]["expected_behavior"] == "slot_fill"
 
 
 def test_location_booking_flow_metadata_carries_store_selection_ui_action() -> None:
@@ -14004,6 +14055,190 @@ def test_support_policy_action_mode_beats_transaction_resume_from_quantity_ui_ac
     ) == "dormant"
 
 
+def test_prepare_ui_action_state_rewrites_structured_purchase_product_selection_text() -> None:
+    prepared = prepare_ui_action_state(
+        ui_action={
+            "action_type": "select_product",
+            "cta_action": "select_product",
+            "source_intent": "quick_order_reservation",
+            "expected_contract_intent": "quick_order_reservation",
+            "expected_behavior": "slot_fill",
+            "entity_label": "벤투스 에어S",
+            "slots": {
+                "goods_no": "G000000319584",
+                "tire_size": "245/45R19",
+                "ord_qty": 2,
+                "pending_intent": "order",
+                "goal_type": "place_order",
+                "tire_model": "벤투스 에어S",
+            },
+        },
+        chip_context=None,
+        request_slots=None,
+        latest_listcar_tmpl=None,
+        last_user_text="벤투스 에어S 245/45R19 242,100원",
+        existing_slots=ConversationSlots(),
+        generic_slot_apply_fn=lambda slots, values: slots.apply_runtime_values(values, source="ui_action"),
+        vehicle_slot_apply_fn=lambda slots, values: slots.apply_runtime_values(values, source="vehicle_ui_action"),
+    )
+
+    assert prepared.action_context is not None
+    assert prepared.action_context.action_type == "select_product"
+    assert prepared.updated_slots.goods_no == "G000000319584"
+    assert prepared.updated_slots.pending_intent == "order"
+    assert prepared.rewritten_user_text == "벤투스 에어S 245/45R19 2개 구매"
+
+
+def test_normalize_ui_action_metadata_keeps_structured_purchase_product_quickreply() -> None:
+    contract = build_turn_contract(
+        user_text="상품을 선택해 주세요",
+        intent_frame=IntentFrame(
+            domain=PolicyDomain.TRANSACTION,
+            intent="quick_order_reservation",
+            sub_intent="reservation",
+            known_slots={
+                "ord_qty": 2,
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            },
+        ),
+        tool_plan=ToolPlan(
+            allowed_tools=("search_product_tool",),
+            preferred_tool="search_product_tool",
+            metadata={"response_intent": "quick_order_reservation", "flow_id": "purchase_order", "flow_step": "resolve_product"},
+        ),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            metadata={"response_shape_key": "missing_order_slots", "flow_id": "purchase_order", "flow_step": "resolve_product"},
+        ),
+        action_mode="purchase_continuation",
+        context_state="resumed",
+    )
+    event = {
+        "template": "quickReply",
+        "source_domain": "transaction",
+        "data": {
+            "assistantResponse": "원하시는 상품을 선택해 주세요.",
+            "quickReplies": [
+                {
+                    "label": "벤투스 에어S 245/45R19 242,100원",
+                    "domain": "TRANSACTION",
+                    "cta_action": "select_product",
+                    "expected_behavior": "slot_fill",
+                    "expected_contract_intent": "quick_order_reservation",
+                    "metadata": {
+                        "goodsNo": "G000000319584",
+                        "ordQty": 2,
+                        "pendingIntent": "order",
+                        "goalType": "place_order",
+                        "slots": {
+                            "goods_no": "G000000319584",
+                            "tire_size": "245/45R19",
+                            "ord_qty": 2,
+                            "pending_intent": "order",
+                            "goal_type": "place_order",
+                            "tire_model": "벤투스 에어S",
+                        },
+                    },
+                }
+            ],
+            "metadata": {"response_shape_key": "missing_order_slots"},
+        },
+    }
+
+    changed = normalize_ui_action_metadata(event, contract=contract)
+
+    assert changed is True
+    chip = event["data"]["quickReplies"][0]
+    assert chip["ui_action"]["action_type"] == "select_product"
+    assert chip["ui_action"]["expected_behavior"] == "slot_fill"
+    assert chip["ui_action"]["expected_contract_intent"] == "quick_order_reservation"
+    assert chip["ui_action"]["slots"]["goods_no"] == "G000000319584"
+    assert chip["ui_action"]["slots"]["ord_qty"] == 2
+
+
+def test_prepare_ui_action_state_purchase_product_selection_trace_metadata_contains_flow_and_slot_patch() -> None:
+    prepared = prepare_ui_action_state(
+        ui_action={
+            "action_type": "select_product",
+            "cta_action": "select_product",
+            "source_intent": "quick_order_reservation",
+            "expected_contract_intent": "quick_order_reservation",
+            "expected_behavior": "slot_fill",
+            "fills_slot": "goods_no",
+            "flow_id": "purchase_order",
+            "flow_step": "resolve_product",
+            "entity_label": "벤투스 에어S",
+            "slots": {
+                "goods_no": "G000000319584",
+                "tire_size": "245/45R19",
+                "ord_qty": 2,
+                "pending_intent": "order",
+                "goal_type": "place_order",
+                "tire_model": "벤투스 에어S",
+            },
+        },
+        chip_context=None,
+        request_slots=None,
+        latest_listcar_tmpl=None,
+        last_user_text="벤투스 에어S 245/45R19 242,100원",
+        existing_slots=ConversationSlots(),
+        generic_slot_apply_fn=lambda slots, values: slots.apply_runtime_values(values, source="ui_action"),
+        vehicle_slot_apply_fn=lambda slots, values: slots.apply_runtime_values(values, source="vehicle_ui_action"),
+    )
+
+    trace = prepared.trace_metadata
+    assert trace["ui_action_detected"] is True
+    assert trace["selection_source"] == "ui_action"
+    assert trace["input_source"] == "ui_action"
+    assert trace["expected_contract_intent"] == "quick_order_reservation"
+    assert trace["expected_slot"] == "goods_no"
+    assert trace["flow_id"] == "purchase_order"
+    assert trace["flow_step"] == "resolve_product"
+    assert trace["slot_patch"]["goods_no"] == "G000000319584"
+    assert trace["slot_patch"]["ord_qty"] == 2
+
+
+def test_ui_action_trace_metadata_preserves_flow_and_slot_patch_from_quickreply_chip() -> None:
+    trace = ui_action_trace_metadata(
+        [
+            {
+                "template": "quickReply",
+                "data": {
+                    "quickReplies": [
+                        {
+                            "label": "벤투스 에어S 245/45R19 242,100원",
+                            "ui_action": {
+                                "action_type": "select_product",
+                                "source_intent": "quick_order_reservation",
+                                "expected_contract_intent": "quick_order_reservation",
+                                "fills_slot": "goods_no",
+                                "flow_id": "purchase_order",
+                                "flow_step": "resolve_product",
+                                "slots": {
+                                    "goods_no": "G000000319584",
+                                    "tire_size": "245/45R19",
+                                    "ord_qty": 2,
+                                },
+                            },
+                        }
+                    ]
+                },
+            }
+        ]
+    )
+
+    assert trace["ui_action_type"] == "select_product"
+    assert trace["expected_contract_intent"] == "quick_order_reservation"
+    assert trace["source_intent"] == "quick_order_reservation"
+    assert trace["expected_slot"] == "goods_no"
+    assert trace["flow_id"] == "purchase_order"
+    assert trace["flow_step"] == "resolve_product"
+    assert trace["slot_patch"]["goods_no"] == "G000000319584"
+    assert trace["slot_patch"]["ord_qty"] == 2
+
+
 def test_label_only_quantity_support_question_does_not_create_transaction_resume() -> None:
     slots = ConversationSlots(
         goods_no="G000000309715",
@@ -14115,6 +14350,88 @@ def test_transaction_intent_frame_prefers_quick_order_reservation_for_selected_s
 
     assert frame.intent == "quick_order_reservation"
     assert frame.sub_intent == "reservation"
+
+
+def test_history_product_selection_state_promotes_purchase_slot_fill_and_rewrites_text() -> None:
+    merged_slots = ConversationSlots(
+        ord_qty=2,
+        pending_product_name="벤투스 에어S",
+        pending_intent="order",
+        goal_type="place_order",
+    )
+
+    state = apply_history_product_selection_state(
+        last_user_text="벤투스 에어S 245/45R19 242,100원",
+        prev_tool_data=[
+            {
+                "tool": "search_product_tool",
+                "data": {
+                    "items": [
+                        {
+                            "goods_no": "G000000319584",
+                            "goods_nm": "벤투스 에어S",
+                            "tire_size_1": "245/45R19",
+                        },
+                        {
+                            "goods_no": "G000000319585",
+                            "goods_nm": "벤투스 에어S",
+                            "tire_size_1": "255/45R19",
+                        },
+                    ]
+                },
+            }
+        ],
+        merged_slots=merged_slots,
+        resolve_goods_no_from_selection_fn=lambda user_text, tool_data, current_tire_size: resolve_goods_no_from_selection(
+            user_text,
+            tool_data,
+            current_tire_size=current_tire_size,
+        ),
+    )
+
+    assert state.goods_no_resolved is True
+    assert state.action_context is not None
+    assert state.action_context.action_type == "select_product"
+    assert state.action_context.expected_contract_intent == "quick_order_reservation"
+    assert state.updated_slots.goods_no == "G000000319584"
+    assert state.updated_slots.tire_size == "245/45R19"
+    assert state.updated_slots.pending_intent == "order"
+    assert state.updated_slots.goal_type == "place_order"
+    assert state.rewritten_user_text == "벤투스 에어S 245/45R19 2개 구매"
+
+    frame = build_transaction_intent_frame(
+        state.rewritten_user_text,
+        known_slots=state.updated_slots.model_dump(),
+    )
+
+    assert frame.intent == "quick_order_reservation"
+    assert "store" in frame.missing_slots
+
+
+def test_region_followup_in_purchase_context_keeps_quick_order_reservation() -> None:
+    frame = build_transaction_intent_frame(
+        "분당",
+        known_slots={
+            "goods_no": "G000000319584",
+            "tire_size": "245/45R19",
+            "ord_qty": 2,
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "region": "분당",
+        },
+    )
+    tool_plan = plan_transaction_tools(frame)
+    response = decide_transaction_response(
+        intent=frame.intent,
+        user_text="분당",
+        known_slots=dict(frame.known_slots),
+    )
+
+    assert frame.intent == "quick_order_reservation"
+    assert frame.sub_intent == "reservation"
+    assert tool_plan.preferred_tool == "transaction_store_preview_tool"
+    assert response.template == TemplateName.LOCATION
+    assert response.metadata["response_shape_key"] == "reservation_store_candidates"
 
 
 def test_transaction_intent_frame_prefers_stock_store_search_for_region_slot_fill() -> None:
@@ -26010,7 +26327,10 @@ def test_inventory_availability_mismatch_recovers_tool_backed_location_event() -
     assert event is not None
     assert event["template"] == "location"
     assert event["assistant_response_source"] == "code_qc_inventory_availability_repair"
-    assert event["data"]["metadata"]["qcRepair"]["fields"] == ["inventory_availability"]
+    assert isinstance(event["data"]["metadata"], list)
+    assert event["data"]["metadata"][0]["shopId"] == "F00124"
+    assert event["data"]["metadata"][0]["sourceTool"] == "transaction_store_preview_tool"
+    assert event["data"]["qcRepair"]["fields"] == ["inventory_availability"]
     assert event["data"]["stores"][0]["nameAddress"] == "티스테이션 부산중동점"
 
 

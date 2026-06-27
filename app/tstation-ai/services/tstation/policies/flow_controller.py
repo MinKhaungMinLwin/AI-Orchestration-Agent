@@ -555,6 +555,29 @@ def _purchase_product_resolution_event(
             },
         }
 
+    candidate_quick_replies = _purchase_product_candidate_quick_replies(
+        rows=matched_rows,
+        slots=slots,
+        flow_id=state.flow_id,
+        flow_step=state.flow_step,
+    )
+    if candidate_quick_replies:
+        return {
+            "type": "data",
+            "template": TemplateName.QUICK_REPLY.value,
+            "source_domain": "transaction",
+            "assistant_response_source": "code_purchase_flow_resolution_clarification",
+            "data": {
+                "assistantResponse": (
+                    f"{product_label} 조건으로 확인되는 상품이 여러 개예요. "
+                    "원하시는 상품을 선택해 주세요."
+                ),
+                "quickReplies": candidate_quick_replies,
+                "predictedDomains": ["TRANSACTION", "DISCOVERY"],
+                "metadata": {**metadata, "candidateCount": len(matched_rows), "sizes": sizes},
+            },
+        }
+
     return {
         "type": "data",
         "template": TemplateName.QUICK_REPLY.value,
@@ -574,6 +597,95 @@ def _purchase_product_resolution_event(
             "metadata": {**metadata, "candidateCount": len(matched_rows), "sizes": sizes},
         },
     }
+
+
+def _purchase_product_candidate_quick_replies(
+    *,
+    rows: list[dict[str, Any]],
+    slots: Mapping[str, Any],
+    flow_id: str,
+    flow_step: str,
+) -> list[dict[str, Any]]:
+    quick_replies: list[dict[str, Any]] = []
+    seen_labels: set[str] = set()
+    quantity = slots.get("ord_qty") or slots.get("quantity")
+    try:
+        quantity_int = int(quantity) if quantity not in (None, "", 0, "0") else None
+    except (TypeError, ValueError):
+        quantity_int = None
+    pending_intent = str(slots.get("pending_intent") or "order").strip() or "order"
+    goal_type = str(slots.get("goal_type") or "place_order").strip() or "place_order"
+    availability_intent = str(slots.get("availability_intent") or "").strip()
+    requested_cal_day = str(slots.get("requested_cal_day") or "").strip()
+    region = str(slots.get("region") or "").strip()
+    stock_check_mode = str(slots.get("stock_check_mode") or "preview").strip() or "preview"
+
+    for row in rows[:6]:
+        product_name = str(row.get("goods_nm") or "").strip()
+        goods_no = str(row.get("goods_no") or "").strip()
+        tire_size = normalize_tire_size(str(row.get("tire_size_1") or row.get("tire_size") or ""))
+        if not (product_name and goods_no and tire_size):
+            continue
+        price_value = row.get("cheapest_final_prc") or row.get("sale_prc") or row.get("min_sale_prc")
+        try:
+            price_label = f" {int(price_value):,}원" if price_value not in (None, "", 0, "0") else ""
+        except (TypeError, ValueError):
+            price_label = ""
+        label = f"{product_name} {tire_size}{price_label}".strip()
+        if label in seen_labels:
+            continue
+        seen_labels.add(label)
+
+        slot_values: dict[str, Any] = {
+            "goods_no": goods_no,
+            "tire_size": tire_size,
+            "pending_intent": pending_intent,
+            "goal_type": goal_type,
+            "stock_check_mode": stock_check_mode,
+        }
+        if product_name:
+            slot_values["tire_model"] = product_name
+        if quantity_int:
+            slot_values["ord_qty"] = quantity_int
+        if availability_intent:
+            slot_values["availability_intent"] = availability_intent
+        if requested_cal_day:
+            slot_values["requested_cal_day"] = requested_cal_day
+        if region:
+            slot_values["region"] = region
+
+        chip_metadata: dict[str, Any] = {
+            "flowId": flow_id,
+            "flowStep": flow_step,
+            "productName": product_name,
+            "goodsNo": goods_no,
+            "tireSize": tire_size,
+            "pendingIntent": pending_intent,
+            "goalType": goal_type,
+            "stockCheckMode": stock_check_mode,
+            "slots": slot_values,
+        }
+        if quantity_int:
+            chip_metadata["ordQty"] = quantity_int
+        if availability_intent:
+            chip_metadata["availabilityIntent"] = availability_intent
+        if requested_cal_day:
+            chip_metadata["requestedCalDay"] = requested_cal_day
+        if region:
+            chip_metadata["region"] = region
+
+        quick_replies.append(
+            {
+                "label": label,
+                "domain": "TRANSACTION",
+                "cta_action": "select_product",
+                "source_intent": "quick_order_reservation",
+                "expected_contract_intent": "quick_order_reservation",
+                "expected_behavior": "slot_fill",
+                "metadata": chip_metadata,
+            }
+        )
+    return quick_replies
 
 
 def _purchase_size_candidates(rows: list[dict]) -> list[str]:

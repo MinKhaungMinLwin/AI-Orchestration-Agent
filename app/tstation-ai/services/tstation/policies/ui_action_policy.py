@@ -205,8 +205,10 @@ class HistoryVehicleSelectionState:
 @dataclass(frozen=True)
 class HistoryProductSelectionState:
     updated_slots: Any
+    action_context: UIActionContext | None = None
     goods_no_resolved: bool = False
     trace_metadata: Mapping[str, Any] = field(default_factory=dict)
+    rewritten_user_text: str = ""
 
 
 @dataclass(frozen=True)
@@ -939,9 +941,38 @@ def _ui_action_slot_patch(raw_action: Mapping[str, Any]) -> dict[str, Any]:
     canonical = canonical_context_from_template_boundary(normalized.get("slots"))
     if not canonical:
         canonical = canonical_context_from_template_boundary(normalized)
+    raw_slots = normalized.get("slots") if isinstance(normalized.get("slots"), Mapping) else {}
     patch: dict[str, Any] = {}
+    alias_map = {
+        "pending_intent": ("pending_intent", "pendingIntent"),
+        "goal_type": ("goal_type", "goalType"),
+        "availability_intent": ("availability_intent", "availabilityIntent"),
+        "requested_cal_day": ("requested_cal_day", "requestedCalDay"),
+        "stock_check_mode": ("stock_check_mode", "stockCheckMode"),
+        "shop_id": ("shop_id", "shopId"),
+        "shop_name": ("shop_name", "shopName"),
+        "goods_no": ("goods_no", "goodsNo", "goodsId"),
+        "tire_size": ("tire_size", "tireSize"),
+        "ord_qty": ("ord_qty", "ordQty", "quantity"),
+        "car_no": ("car_no", "carNo", "licensePlate"),
+        "car_lnc_cd": ("car_lnc_cd", "carLncCd"),
+        "mbr_car_reg_seq": ("mbr_car_reg_seq", "mbrCarRegSeq"),
+        "mbr_car_unif_no": ("mbr_car_unif_no", "mbrCarUnifNo"),
+        "car_nm": ("car_nm", "carName"),
+        "car_model_det": ("car_model_det", "carModelDet"),
+        "car_type": ("car_type", "carType"),
+        "vehicle_type": ("vehicle_type", "vehicleType"),
+        "tire_size_front": ("tire_size_front", "tireSizeFront", "tire_size_fr", "tireSizeFr"),
+        "tire_size_rear": ("tire_size_rear", "tireSizeRear", "tire_size_re", "tireSizeRe"),
+    }
     for key in _UI_ACTION_SLOT_KEYS:
         value = canonical.get(key)
+        if value in (None, "", []):
+            for alias in alias_map.get(key, (key,)):
+                alias_value = raw_slots.get(alias)
+                if alias_value not in (None, "", []):
+                    value = alias_value
+                    break
         if value in (None, "", []):
             continue
         if key == "ord_qty":
@@ -965,6 +996,28 @@ def _ui_action_trace_metadata(
     previous_slots: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
     slot_patch = _ui_action_slot_patch(raw_action)
+    raw_metadata = raw_action.get("raw_metadata") if isinstance(raw_action.get("raw_metadata"), Mapping) else {}
+    flow_id = str(
+        raw_action.get("flow_id")
+        or raw_action.get("flowId")
+        or raw_metadata.get("flow_id")
+        or raw_metadata.get("flowId")
+        or ""
+    ).strip() or None
+    flow_step = str(
+        raw_action.get("flow_step")
+        or raw_action.get("flowStep")
+        or raw_metadata.get("flow_step")
+        or raw_metadata.get("flowStep")
+        or ""
+    ).strip() or None
+    expected_slot = str(
+        raw_action.get("fills_slot")
+        or raw_action.get("fillsSlot")
+        or raw_metadata.get("fills_slot")
+        or raw_metadata.get("fillsSlot")
+        or ""
+    ).strip() or None
     trace_metadata: dict[str, Any] = {
         "ui_action_detected": True,
         "ui_action_type": str(raw_action.get("action_type") or raw_action.get("cta_action") or "").strip() or None,
@@ -973,7 +1026,11 @@ def _ui_action_trace_metadata(
         "actual_contract_intent": contract_intent or None,
         "selected_entity_type": str(raw_action.get("entity_type") or "").strip() or None,
         "selected_entity_id": str(raw_action.get("entity_id") or "").strip() or None,
+        "input_source": selection_source,
         "selection_source": selection_source,
+        "expected_slot": expected_slot,
+        "flow_id": flow_id,
+        "flow_step": flow_step,
         "slots_rewritten": False,
         "missing_slots": [],
         "validation_result": "resolved",
@@ -981,6 +1038,7 @@ def _ui_action_trace_metadata(
         "fallback_behavior": None,
     }
     if slot_patch:
+        trace_metadata["slot_patch"] = dict(slot_patch)
         trace_metadata["selected_slots"] = dict(slot_patch)
     if previous_slots:
         trace_metadata["previous_slots"] = {
@@ -1353,6 +1411,11 @@ def prepare_ui_action_state(
                     slot_apply_fn=generic_slot_apply_fn,
                 )
                 trace_metadata.update(slot_trace_metadata)
+                rewritten_user_text = rewrite_transaction_selection_user_text(
+                    last_user_text,
+                    action_context=action_context,
+                    slots=action_context.slot_patch,
+                )
 
     if selected_vehicle is not None:
         rewritten_user_text = rewrite_vehicle_selection_user_text(
@@ -1502,7 +1565,7 @@ def apply_history_product_selection_state(
     resolve_goods_no_from_selection_fn: Callable[[str, list[dict[str, Any]], str | None], str | None],
 ) -> HistoryProductSelectionState:
     if getattr(merged_slots, "goods_no", None) is not None or not prev_tool_data:
-        return HistoryProductSelectionState(updated_slots=merged_slots)
+        return HistoryProductSelectionState(updated_slots=merged_slots, rewritten_user_text=last_user_text)
 
     resolved_goods_no = resolve_goods_no_from_selection_fn(
         last_user_text,
@@ -1510,23 +1573,110 @@ def apply_history_product_selection_state(
         getattr(merged_slots, "tire_size", None),
     )
     if not resolved_goods_no:
-        return HistoryProductSelectionState(updated_slots=merged_slots)
+        return HistoryProductSelectionState(updated_slots=merged_slots, rewritten_user_text=last_user_text)
+
+    resolved_row = resolve_product_row_from_selection(
+        last_user_text,
+        prev_tool_data,
+        current_tire_size=getattr(merged_slots, "tire_size", None),
+    )
+    slot_patch: dict[str, Any] = {"goods_no": resolved_goods_no}
+    if isinstance(resolved_row, Mapping):
+        product_name = str(
+            canonical_context_from_tool_boundary(resolved_row).get("product_name")
+            or resolved_row.get("goods_nm")
+            or ""
+        ).strip()
+        tire_size = normalize_tire_size(
+            str(
+                canonical_context_from_tool_boundary(resolved_row).get("tire_size")
+                or resolved_row.get("tire_size_1")
+                or resolved_row.get("tire_size")
+                or ""
+            )
+        )
+        if product_name:
+            slot_patch["tire_model"] = product_name
+        if tire_size:
+            slot_patch["tire_size"] = tire_size
+
+    expected_contract_intent = _interactive_flow_contract_intent_from_slots(
+        {
+            "pending_intent": getattr(merged_slots, "pending_intent", None),
+            "goal_type": getattr(merged_slots, "goal_type", None),
+            "availability_intent": getattr(merged_slots, "availability_intent", None),
+        },
+        fallback_intent=None,
+    )
+    if expected_contract_intent in _TRANSACTION_SLOT_FILL_CONTRACT_INTENTS:
+        for field in (
+            "ord_qty",
+            "pending_intent",
+            "goal_type",
+            "availability_intent",
+            "requested_cal_day",
+            "region",
+            "stock_check_mode",
+            "shop_id",
+            "shop_name",
+            "rsv_hour",
+        ):
+            value = getattr(merged_slots, field, None)
+            if value not in (None, "", []):
+                slot_patch[field] = value
+
+    action_context: UIActionContext | None = None
+    trace_metadata: dict[str, Any] = {}
+    rewritten_user_text = last_user_text
+    if expected_contract_intent in _TRANSACTION_SLOT_FILL_CONTRACT_INTENTS:
+        action_context = resolve_ui_action_context(
+            raw_action={
+                "action_type": "select_product",
+                "cta_action": "select_product",
+                "expected_behavior": "slot_fill",
+                "source_intent": expected_contract_intent,
+                "expected_contract_intent": expected_contract_intent,
+                "entity_type": "product",
+                "entity_id": resolved_goods_no,
+                "entity_label": str(slot_patch.get("tire_model") or "").strip() or None,
+                "slots": slot_patch,
+            },
+            selected_vehicle=None,
+            selection_source="previous_product_candidate",
+            previous_slots={
+                "goods_no": getattr(merged_slots, "goods_no", None),
+                "tire_size": getattr(merged_slots, "tire_size", None),
+                "ord_qty": getattr(merged_slots, "ord_qty", None),
+            },
+        )
+        if action_context is not None:
+            trace_metadata.update(dict(action_context.trace_metadata))
+            trace_metadata["validation_result"] = "resolved_from_history"
+            trace_metadata["fallback_behavior"] = "previous_product_candidate"
+            rewritten_user_text = rewrite_transaction_selection_user_text(
+                last_user_text,
+                action_context=action_context,
+                slots=slot_patch,
+            )
+    if not trace_metadata:
+        trace_metadata = {
+            "selected_entity_type": "product",
+            "selected_entity_id": resolved_goods_no,
+            "selection_source": "previous_product_candidate",
+            "validation_result": "resolved_from_history",
+            "fallback_behavior": "previous_product_candidate",
+        }
 
     updated_slots = merged_slots.apply_runtime_values(
-        {"goods_no": resolved_goods_no},
+        slot_patch,
         source="history_product_selection",
     )
-    trace_metadata = {
-        "selected_entity_type": "product",
-        "selected_entity_id": resolved_goods_no,
-        "selection_source": "previous_product_candidate",
-        "validation_result": "resolved_from_history",
-        "fallback_behavior": "previous_product_candidate",
-    }
     return HistoryProductSelectionState(
         updated_slots=updated_slots,
+        action_context=action_context,
         goods_no_resolved=True,
         trace_metadata=trace_metadata,
+        rewritten_user_text=rewritten_user_text,
     )
 
 
@@ -2258,11 +2408,11 @@ def resolve_shop_id_from_selection(user_text: str, prev_tool_data: list[dict[str
     return None
 
 
-def resolve_goods_no_from_selection(
+def resolve_product_row_from_selection(
     user_text: str,
     prev_tool_data: list[dict[str, Any]],
     current_tire_size: str | None = None,
-) -> str | None:
+) -> dict[str, Any] | None:
     if not user_text or not prev_tool_data:
         return None
 
@@ -2284,9 +2434,10 @@ def resolve_goods_no_from_selection(
     text = str(user_text).strip()
     ordinal_idx = _selection_ordinal_index(text, len(items))
     if ordinal_idx is not None:
-        goods_no = canonical_context_from_tool_boundary(items[ordinal_idx]).get("goods_no")
+        item = items[ordinal_idx]
+        goods_no = canonical_context_from_tool_boundary(item).get("goods_no")
         if goods_no:
-            return str(goods_no)
+            return item
 
     target_size_from_text = normalize_tire_size(text)
     target_size = target_size_from_text or normalize_tire_size(current_tire_size or "")
@@ -2301,7 +2452,7 @@ def resolve_goods_no_from_selection(
     if target_size_from_text and len(same_size) == 1:
         goods_no = canonical_context_from_tool_boundary(same_size[0]).get("goods_no")
         if goods_no:
-            return str(goods_no)
+            return same_size[0]
 
     tokens = [t.lower() for t in re.findall(r"[A-Za-z가-힣0-9]+", text) if len(t) >= 2]
     best_item: dict[str, Any] | None = None
@@ -2319,8 +2470,76 @@ def resolve_goods_no_from_selection(
     if best_item is not None and best_score >= 2 and not tied:
         goods_no = canonical_context_from_tool_boundary(best_item).get("goods_no")
         if goods_no:
-            return str(goods_no)
+            return best_item
     return None
+
+
+def resolve_goods_no_from_selection(
+    user_text: str,
+    prev_tool_data: list[dict[str, Any]],
+    current_tire_size: str | None = None,
+) -> str | None:
+    selected_row = resolve_product_row_from_selection(
+        user_text,
+        prev_tool_data,
+        current_tire_size=current_tire_size,
+    )
+    if not isinstance(selected_row, Mapping):
+        return None
+    goods_no = canonical_context_from_tool_boundary(selected_row).get("goods_no")
+    return str(goods_no).strip() or None
+
+
+def rewrite_transaction_selection_user_text(
+    user_text: str,
+    *,
+    action_context: UIActionContext | None,
+    slots: Mapping[str, Any] | None,
+) -> str:
+    if action_context is None or not isinstance(slots, Mapping):
+        return user_text
+
+    action_type = str(action_context.action_type or "").strip()
+    expected_contract_intent = str(action_context.expected_contract_intent or "").strip()
+    if action_type != "select_product" or expected_contract_intent not in _TRANSACTION_SLOT_FILL_CONTRACT_INTENTS:
+        return user_text
+
+    product_name = str(
+        slots.get("tire_model") or slots.get("product_name") or action_context.entity_label or ""
+    ).strip()
+    tire_size = normalize_tire_size(str(slots.get("tire_size") or ""))
+    quantity = slots.get("ord_qty")
+    try:
+        quantity_int = int(quantity) if quantity not in (None, "") else None
+    except (TypeError, ValueError):
+        quantity_int = None
+    region = str(slots.get("region") or "").strip()
+    store_name = str(slots.get("shop_name") or slots.get("store_name") or "").strip()
+    requested_cal_day = str(slots.get("requested_cal_day") or "").strip()
+    availability_intent = str(slots.get("availability_intent") or "").strip()
+
+    parts = [part for part in (product_name, tire_size) if part]
+    if quantity_int:
+        parts.append(f"{quantity_int}개")
+
+    if expected_contract_intent == _QUICK_ORDER_RESERVATION_INTENT:
+        if store_name:
+            parts.append(f"{store_name}에서")
+        elif region:
+            parts.append(f"{region}에서")
+        parts.append("구매")
+        return " ".join(parts).strip() or user_text
+
+    if expected_contract_intent == _STOCK_STORE_SEARCH_INTENT:
+        if region:
+            parts.append(region)
+        if availability_intent == "today_install" or requested_cal_day:
+            parts.append("오늘 장착 가능한 매장")
+        else:
+            parts.append("재고 확인")
+        return " ".join(parts).strip() or user_text
+
+    return user_text
 
 
 def build_order_quantity_prompt_event(slots: Any) -> dict[str, Any]:
@@ -4409,6 +4628,12 @@ def normalize_ui_action_metadata(
                 key: value for key, value in known_slots.items()
                 if key in _UI_ACTION_SLOT_KEYS and value not in (None, "", [])
             }
+            metadata_slots_raw = dict(metadata.get("slots")) if isinstance(metadata.get("slots"), Mapping) else {}
+            metadata_slots = canonical_context_from_template_boundary(metadata_slots_raw)
+            for source_values in (metadata_slots_raw, metadata_slots, canonical_context_from_template_boundary(metadata)):
+                for key, value in dict(source_values).items():
+                    if key in _UI_ACTION_SLOT_KEYS and value not in (None, "", []):
+                        slot_values[key] = value
             quantity_match = _QUANTITY_LABEL_RE.fullmatch(label)
             action_type = str(chip.get("cta_action") or metadata.get("cta_action") or "").strip()
             if quantity_match:
@@ -4425,7 +4650,7 @@ def normalize_ui_action_metadata(
             chip["source_intent"] = str(chip.get("source_intent") or metadata.get("source_intent") or contract_intent or "")
             chip["expected_contract_intent"] = expected_contract_intent
             default_behavior = "conversation_action"
-            if action_type == "select_quantity" and expected_contract_intent in {
+            if action_type in {"select_quantity", "select_product"} and expected_contract_intent in {
                 _STOCK_STORE_SEARCH_INTENT,
                 _QUICK_ORDER_RESERVATION_INTENT,
             }:
@@ -4508,7 +4733,11 @@ def normalize_ui_action_metadata(
             metadata["expected_contract_intent"] = (
                 metadata.get("expected_contract_intent") or expected_contract_intent
             )
-            metadata["expected_behavior"] = metadata.get("expected_behavior") or "conversation_action"
+            metadata["expected_behavior"] = metadata.get("expected_behavior") or (
+                "slot_fill"
+                if expected_contract_intent in _TRANSACTION_SLOT_FILL_CONTRACT_INTENTS
+                else "conversation_action"
+            )
             metadata["slots"] = slot_values
             metadata["ui_action"] = {
                 "action_type": action_type,
@@ -4687,9 +4916,18 @@ def ui_action_trace_metadata(events: list[dict[str, Any]]) -> dict[str, Any]:
         if first_ui_action is not None:
             break
     if first_ui_action is not None:
+        ui_action_slots = (
+            dict(first_ui_action.get("slots"))
+            if isinstance(first_ui_action.get("slots"), Mapping)
+            else {}
+        )
         trace.update({
             "ui_action_type": first_ui_action.get("action_type"),
             "expected_contract_intent": first_ui_action.get("expected_contract_intent"),
             "source_intent": first_ui_action.get("source_intent"),
+            "expected_slot": first_ui_action.get("fills_slot") or first_ui_action.get("fillsSlot"),
+            "flow_id": first_ui_action.get("flow_id") or first_ui_action.get("flowId"),
+            "flow_step": first_ui_action.get("flow_step") or first_ui_action.get("flowStep"),
+            "slot_patch": ui_action_slots or None,
         })
     return trace

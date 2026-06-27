@@ -19404,13 +19404,18 @@ def _qc_inventory_availability_recovery_event(
     if isinstance(data, dict):
         recovered_data = dict(data)
         raw_metadata = recovered_data.get("metadata")
-        metadata = dict(raw_metadata) if isinstance(raw_metadata, dict) else {}
-        metadata["qcRepair"] = {
+        qc_repair = {
             "attempted": True,
             "fields": sorted(fields),
             "source": "tool_backed_inventory_availability",
         }
-        recovered_data["metadata"] = metadata
+        if isinstance(raw_metadata, list):
+            recovered_data["metadata"] = list(raw_metadata)
+            recovered_data["qcRepair"] = qc_repair
+        else:
+            metadata = dict(raw_metadata) if isinstance(raw_metadata, dict) else {}
+            metadata["qcRepair"] = qc_repair
+            recovered_data["metadata"] = metadata
         recovered_event["data"] = recovered_data
     return recovered_event
 
@@ -20561,6 +20566,18 @@ class TStationChatServiceV2:
                     "[UI_ACTION] applied structured slot patch before routing: %s",
                     vehicle_ui_action_context.slot_patch,
                 )
+                rewritten_ui_action_text = prepared_ui_action_state.rewritten_user_text
+                if rewritten_ui_action_text and rewritten_ui_action_text != last_user_text:
+                    for message_list in (enriched_messages, messages, classifier_messages):
+                        for msg in reversed(message_list):
+                            if msg.get("role") == "user":
+                                msg["content"] = rewritten_ui_action_text
+                                break
+                    last_user_text = rewritten_ui_action_text
+                    logger.info(
+                        "[UI_ACTION] rewrote structured selection follow-up text before routing: %s",
+                        rewritten_ui_action_text,
+                    )
 
             pending_vehicle_lookup_car_no = str(
                 getattr(existing_slots, "pending_vehicle_lookup_car_no", None) or ""
@@ -21805,11 +21822,25 @@ class TStationChatServiceV2:
                 ),
             )
             merged_slots = history_product_selection_state.updated_slots
+            if history_product_selection_state.action_context is not None:
+                vehicle_ui_action_context = history_product_selection_state.action_context
             goods_no_resolved_this_turn = (
                 goods_no_resolved_this_turn or history_product_selection_state.goods_no_resolved
             )
             if history_product_selection_state.trace_metadata:
                 vehicle_selection_trace_metadata.update(dict(history_product_selection_state.trace_metadata))
+            rewritten_product_text = history_product_selection_state.rewritten_user_text
+            if rewritten_product_text and rewritten_product_text != last_user_text:
+                for message_list in (enriched_messages, messages, classifier_messages):
+                    for msg in reversed(message_list):
+                        if msg.get("role") == "user":
+                            msg["content"] = rewritten_product_text
+                            break
+                last_user_text = rewritten_product_text
+                logger.info(
+                    "[PRODUCT_SELECTION] rewrote product selection follow-up text from previous candidate: %s",
+                    rewritten_product_text,
+                )
 
             # 3.85) Resolve tire_size from the user's vehicle-selection reply matched
             # against the metadata of the most recent `listCar` template.

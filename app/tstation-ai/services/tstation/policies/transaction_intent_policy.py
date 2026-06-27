@@ -1108,14 +1108,18 @@ def build_transaction_intent_frame(
         sub_intent = "today_install" if explicit_preview_request else ("reservation" if selected_store_schedule_ready else "stock")
         entities["stock_check_mode"] = "preview" if explicit_preview_request or selected_store_schedule_ready else "inventory_only"
     elif store_scope_product_continuation:
-        intent = "stock_store_search"
-        use_preview_scope = bool(
-            _is_order_or_reservation_context(slots)
-            or _is_today_install_context(slots, requested_cal_day)
-            or region_scope_product_continuation
-        )
-        sub_intent = "today_install" if use_preview_scope else "stock"
-        entities["stock_check_mode"] = "preview" if use_preview_scope else "inventory_only"
+        if _is_order_or_reservation_context(slots):
+            intent = "quick_order_reservation"
+            sub_intent = "reservation"
+            entities["stock_check_mode"] = "preview"
+        else:
+            intent = "stock_store_search"
+            use_preview_scope = bool(
+                _is_today_install_context(slots, requested_cal_day)
+                or region_scope_product_continuation
+            )
+            sub_intent = "today_install" if use_preview_scope else "stock"
+            entities["stock_check_mode"] = "preview" if use_preview_scope else "inventory_only"
     elif _PRICE_OR_COUPON_RE.search(text):
         intent = "price_or_coupon_check"
         sub_intent = "coupon" if "쿠폰" in text else "price"
