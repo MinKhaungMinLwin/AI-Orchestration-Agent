@@ -25496,6 +25496,44 @@ def test_ready_preorder_card_without_quick_order_tool_is_allowed_under_reservati
     assert violations == []
 
 
+def test_ready_preorder_card_without_quick_order_tool_is_allowed_under_slot_fill_schedule_contract() -> None:
+    contract = _transaction_turn_contract(
+        "2026년 6월 23일 (화)\n17:00",
+        {
+            "goods_no": "G000000317682",
+            "tire_model": "다이나프로 HPX",
+            "tire_size": "235/55R19",
+            "ord_qty": 2,
+            "shop_id": "F00721",
+            "shop_name": "티스테이션 판교점",
+            "requested_cal_day": "20260623",
+            "rsv_hour": "17",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+    contract = replace(
+        contract,
+        intent="quick_order_reservation_slot_fill_schedule",
+        action_mode="purchase_continuation",
+    )
+    preorder_event = _build_direct_preorder_event_from_slots(
+        ConversationSlots(**dict(contract.known_slots)),
+    )
+
+    violations = response_contract_violations(
+        template="preOrder",
+        assistant_response_text=str((preorder_event or {}).get("data", {}).get("assistantResponse") or ""),
+        assistant_response_source="code_reservation_confirmation_ready",
+        response_shape_key="reservation_confirmation_ready",
+        called_tools=[],
+        source_domain="transaction",
+        contract=contract,
+    )
+
+    assert violations == []
+
+
 def test_direct_preorder_condition_accepts_schedule_slot_fill_intent() -> None:
     contract = _transaction_turn_contract(
         "2026년 6월 30일 (화)\n17:00",
@@ -25523,6 +25561,17 @@ def test_direct_preorder_condition_accepts_schedule_slot_fill_intent() -> None:
         transaction_tool_plan=SimpleNamespace(metadata={"flow_step": "build_preorder"}),
     ) is True
 
+    allowed, reason = _direct_code_fast_path_contract_gate(
+        turn_contract=contract,
+        intent="quick_order_reservation",
+        template="preOrder",
+        source="code_reservation_confirmation_ready",
+        required_tools=(),
+    )
+
+    assert allowed is True
+    assert reason == "contract_matched:code_reservation_confirmation_ready"
+
 
 def test_direct_preorder_condition_uses_contract_flow_step_fallback() -> None:
     contract = _transaction_turn_contract(
@@ -25545,6 +25594,88 @@ def test_direct_preorder_condition_uses_contract_flow_step_fallback() -> None:
         contract,
         transaction_tool_plan=SimpleNamespace(metadata={}),
     ) is True
+
+
+def test_direct_preorder_gate_blocks_when_response_shape_key_differs() -> None:
+    contract = _transaction_turn_contract(
+        "2026년 6월 30일 (화)\n17:00",
+        {
+            "goods_no": "G000000310126",
+            "tire_model": "벤투스 S2 AS",
+            "tire_size": "245/45R19",
+            "ord_qty": 4,
+            "shop_id": "F00721",
+            "shop_name": "판교점",
+            "requested_cal_day": "20260630",
+            "rsv_hour": "17",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+    contract = replace(
+        contract,
+        intent="quick_order_reservation_slot_fill_schedule",
+        action_mode="purchase_continuation",
+        response_decision={
+            **dict(contract.response_decision),
+            "metadata": {
+                **dict((contract.response_decision or {}).get("metadata") or {}),
+                "response_shape_key": "transaction_fallback",
+            },
+        },
+    )
+
+    allowed, reason = _direct_code_fast_path_contract_gate(
+        turn_contract=contract,
+        intent="quick_order_reservation",
+        template="preOrder",
+        source="code_reservation_confirmation_ready",
+        required_tools=(),
+    )
+
+    assert allowed is False
+    assert reason == "intent_mismatch:quick_order_reservation_slot_fill_schedule"
+
+
+def test_direct_preorder_gate_blocks_when_required_summary_slots_missing() -> None:
+    contract = _transaction_turn_contract(
+        "2026년 6월 30일 (화)\n17:00",
+        {
+            "goods_no": "G000000310126",
+            "tire_model": "벤투스 S2 AS",
+            "tire_size": "245/45R19",
+            "ord_qty": 4,
+            "shop_name": "판교점",
+            "requested_cal_day": "20260630",
+            "rsv_hour": "17",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+    contract = replace(
+        contract,
+        intent="quick_order_reservation_slot_fill_schedule",
+        action_mode="purchase_continuation",
+        flow_step="build_preorder",
+        response_decision={
+            **dict(contract.response_decision),
+            "metadata": {
+                **dict((contract.response_decision or {}).get("metadata") or {}),
+                "response_shape_key": "reservation_confirmation_ready",
+            },
+        },
+    )
+
+    allowed, reason = _direct_code_fast_path_contract_gate(
+        turn_contract=contract,
+        intent="quick_order_reservation",
+        template="preOrder",
+        source="code_reservation_confirmation_ready",
+        required_tools=(),
+    )
+
+    assert allowed is False
+    assert reason == "intent_mismatch:quick_order_reservation_slot_fill_schedule"
 
 
 def test_quick_order_reservation_keeps_datepick_guard_without_selected_datetime() -> None:

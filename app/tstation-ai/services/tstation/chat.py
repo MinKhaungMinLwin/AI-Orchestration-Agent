@@ -8264,6 +8264,52 @@ def _should_emit_direct_preorder_from_schedule_selection(
     )
 
 
+def _has_ready_preorder_summary_slots(slots: Mapping[str, Any] | None) -> bool:
+    if not isinstance(slots, Mapping):
+        return False
+    quantity = slots.get("ord_qty") or slots.get("quantity")
+    try:
+        has_quantity = int(quantity or 0) > 0
+    except (TypeError, ValueError):
+        has_quantity = bool(quantity)
+    return bool(
+        slots.get("goods_no")
+        and (slots.get("tire_size") or slots.get("product_name") or slots.get("tire_model"))
+        and slots.get("shop_id")
+        and (slots.get("shop_name") or slots.get("store_name"))
+        and slots.get("requested_cal_day")
+        and slots.get("rsv_hour")
+        and has_quantity
+    )
+
+
+def _is_ready_preorder_fast_path_contract_match(
+    *,
+    turn_contract: TurnContract | None,
+    template: str,
+    source: str,
+    required_tools: tuple[str, ...],
+) -> bool:
+    if turn_contract is None:
+        return False
+    if template != "preOrder" or source != "code_reservation_confirmation_ready" or required_tools:
+        return False
+    if str(turn_contract.domain or "") != "transaction":
+        return False
+    response_decision = turn_contract.response_decision or {}
+    response_metadata = response_decision.get("metadata") if isinstance(response_decision, Mapping) else {}
+    response_shape_key = str((response_metadata or {}).get("response_shape_key") or "")
+    flow_step = str(getattr(turn_contract, "flow_step", "") or "")
+    action_mode = str(getattr(turn_contract, "action_mode", "") or "")
+    if response_shape_key != "reservation_confirmation_ready":
+        return False
+    if flow_step != "build_preorder":
+        return False
+    if action_mode != "purchase_continuation":
+        return False
+    return _has_ready_preorder_summary_slots(turn_contract.known_slots or {})
+
+
 def _choose_quickreply_fallback(
     called_tool_names: set[str],
     source_domain: str | None,
@@ -16634,6 +16680,15 @@ def _direct_code_fast_path_contract_gate(
 ) -> tuple[bool, str]:
     if turn_contract is None:
         return False, "missing_turn_contract"
+    if _is_ready_preorder_fast_path_contract_match(
+        turn_contract=turn_contract,
+        template=template,
+        source=source,
+        required_tools=required_tools,
+    ):
+        if violates_response_template_contract({"template": template}, turn_contract):
+            return False, f"template_forbidden:{template}"
+        return True, f"contract_matched:{source}"
     contract_intent = str(turn_contract.intent or "")
     response_decision = turn_contract.response_decision or {}
     response_metadata = response_decision.get("metadata") if isinstance(response_decision, Mapping) else {}

@@ -1998,6 +1998,7 @@ def response_contract_violations(
     if quick_order_violation is not None:
         violations.append(quick_order_violation)
     quick_order_reservation_violation = _quick_order_reservation_contract_violation(
+        template=template,
         assistant_response_text=assistant_response_text,
         assistant_response_source=assistant_response_source,
         response_shape_key=response_shape_key,
@@ -3387,6 +3388,7 @@ def _quick_order_execute_contract_violation(
 
 def _quick_order_reservation_contract_violation(
     *,
+    template: str | None,
     assistant_response_text: str | None,
     assistant_response_source: str | None,
     response_shape_key: str | None,
@@ -3396,6 +3398,26 @@ def _quick_order_reservation_contract_violation(
     if contract is None:
         return None
     if str(contract.intent or "") != "quick_order_reservation" and str(contract.known_slots.get("goal_type") or "") != "place_order":
+        return None
+    quantity = contract.known_slots.get("ord_qty") or contract.known_slots.get("quantity")
+    try:
+        has_quantity = int(quantity or 0) > 0
+    except (TypeError, ValueError):
+        has_quantity = bool(quantity)
+    is_ready_preorder_summary = bool(
+        str(assistant_response_source or "") == "code_reservation_confirmation_ready"
+        and str(response_shape_key or "") == "reservation_confirmation_ready"
+        and str(contract.flow_step or "") == "build_preorder"
+        and str(contract.action_mode or "") == "purchase_continuation"
+        and contract.known_slots.get("goods_no")
+        and (contract.known_slots.get("tire_size") or contract.known_slots.get("product_name") or contract.known_slots.get("tire_model"))
+        and contract.known_slots.get("shop_id")
+        and (contract.known_slots.get("shop_name") or contract.known_slots.get("store_name"))
+        and contract.known_slots.get("requested_cal_day")
+        and contract.known_slots.get("rsv_hour")
+        and has_quantity
+    )
+    if template == "preOrder" and is_ready_preorder_summary:
         return None
     called_tools = tuple(str(tool) for tool in tuple(called_tools or ()) if str(tool).strip())
     if called_tools:
