@@ -13449,6 +13449,155 @@ def test_resume_source_from_ui_action_context_promotes_transaction_quantity_resu
     assert _context_state_for_action(action_mode=action_mode, resume_source="ui_action:select_quantity", slots=slots) == "resumed"
 
 
+def test_quantity_ui_action_slot_patch_restores_stock_preview_contract() -> None:
+    base_slots = ConversationSlots(
+        goods_no="G000000309715",
+        tire_size="225/55R18",
+        region="동탄",
+        availability_intent="today_install",
+        requested_cal_day="20260626",
+        pending_intent="stock",
+        goal_type="store_with_stock",
+    )
+    prepared = prepare_ui_action_state(
+        ui_action={
+            "action_type": "select_quantity",
+            "cta_action": "select_quantity",
+            "source_intent": "stock_store_search",
+            "expected_contract_intent": "stock_store_search",
+            "slots": {
+                "goods_no": "G000000309715",
+                "tire_size": "225/55R18",
+                "region": "동탄",
+                "availability_intent": "today_install",
+                "requested_cal_day": "20260626",
+                "ord_qty": 4,
+                "pending_intent": "stock",
+                "goal_type": "store_with_stock",
+                "stock_check_mode": "preview",
+            },
+        },
+        chip_context=None,
+        request_slots=None,
+        latest_listcar_tmpl=None,
+        last_user_text="4개",
+        existing_slots=base_slots,
+        generic_slot_apply_fn=lambda slots, values: slots.apply_runtime_values(values, source="ui_action"),
+        vehicle_slot_apply_fn=lambda slots, values: slots.apply_runtime_values(values, source="vehicle_ui_action"),
+    )
+
+    patched_slots = prepared.updated_slots
+    frame = build_transaction_intent_frame(
+        "4개",
+        known_slots={
+            "goods_no": patched_slots.goods_no,
+            "tire_size": patched_slots.tire_size,
+            "ord_qty": patched_slots.ord_qty,
+            "region": patched_slots.region,
+            "availability_intent": patched_slots.availability_intent,
+            "requested_cal_day": patched_slots.requested_cal_day,
+            "pending_intent": patched_slots.pending_intent,
+            "goal_type": patched_slots.goal_type,
+            "stock_check_mode": getattr(patched_slots, "stock_check_mode", None),
+        },
+    )
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        known_slots=dict(frame.known_slots),
+        user_text="4개",
+    )
+    contract = build_turn_contract(
+        user_text="4개",
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=response_decision,
+        action_mode="stock_check",
+        context_state="resumed",
+        resume_source="ui_action:select_quantity",
+    )
+
+    assert prepared.trace_metadata["slots_rewritten"] is True
+    assert patched_slots.ord_qty == 4
+    assert frame.intent == "stock_store_search"
+    assert "transaction_store_preview_tool" in contract.allowed_tools
+
+
+def test_support_policy_action_mode_beats_transaction_resume_from_quantity_ui_action() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000309715",
+        tire_size="225/55R18",
+        ord_qty=4,
+        region="동탄",
+        pending_intent="stock",
+        goal_type="store_with_stock",
+    )
+    routing_result = MultiAgentDomain(
+        reason="promotion gift question after stock flow",
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        execution_plan=["support:promotion_gift_policy"],
+        user_behavior="asking support policy with stale transaction context",
+        flow="support policy answer",
+        claim_check_type="none",
+        complaint_scope="none",
+        agent_prompt_profile="full",
+        policy_intent="promotion_gift_policy",
+        planner_confidence=0.9,
+    )
+
+    action_mode = _current_turn_action_mode(
+        user_text="4개 구매한 사은품은 언제 와?",
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        routing_result=routing_result,
+        regex_slots=ConversationSlots(),
+        merged_slots=slots,
+        explicit_override_reason=None,
+        resume_source="ui_action:select_quantity",
+    )
+
+    assert action_mode == "support_policy_answer"
+    assert _context_state_for_action(
+        action_mode=action_mode,
+        resume_source="ui_action:select_quantity",
+        slots=slots,
+    ) == "dormant"
+
+
+def test_label_only_quantity_support_question_does_not_create_transaction_resume() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000309715",
+        tire_size="225/55R18",
+        region="동탄",
+        pending_intent="stock",
+        goal_type="store_with_stock",
+    )
+    routing_result = MultiAgentDomain(
+        reason="gift policy support question",
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        execution_plan=["support:promotion_gift_policy"],
+        user_behavior="support question",
+        flow="support policy answer",
+        claim_check_type="none",
+        complaint_scope="none",
+        agent_prompt_profile="full",
+        policy_intent="promotion_gift_policy",
+        planner_confidence=0.9,
+    )
+
+    action_mode = _current_turn_action_mode(
+        user_text="4개 구매한 사은품 언제 줘?",
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        routing_result=routing_result,
+        regex_slots=ConversationSlots.extract_from_user_text("4개 구매한 사은품 언제 줘?"),
+        merged_slots=slots,
+        explicit_override_reason=None,
+        resume_source=_resume_source_from_current_turn("4개 구매한 사은품 언제 줘?"),
+    )
+
+    assert _resume_source_from_current_turn("4개 구매한 사은품 언제 줘?") == "none"
+    assert action_mode == "support_policy_answer"
+
+
 def test_history_vehicle_selection_does_not_match_product_name_substring_to_vehicle() -> None:
     template = {
         "template": "listCar",
