@@ -20766,6 +20766,7 @@ class TStationChatServiceV2:
                 last_requested_slot in {"region", "store"}
                 or "region" in missing_slots
                 or "store" in missing_slots
+                or str(router_context.get("flow_step") or "") in {"show_store_candidates", "resolve_store"}
             )
         ):
             filled_slot = (
@@ -20775,6 +20776,34 @@ class TStationChatServiceV2:
                 else "region"
             )
             slot_patch.update(dict(region_store_input_resolution.slots_to_promote or {}))
+        elif (
+            str(router_context.get("flow_step") or "") in {"show_store_candidates", "resolve_store"}
+            and current_flow in {"quick_order_reservation", "stock_store_search"}
+            and getattr(merged_slots, "goods_no", None)
+            and getattr(merged_slots, "ord_qty", None)
+            and (
+                getattr(merged_slots, "region", None)
+                or getattr(merged_slots, "shop_id", None)
+                or getattr(merged_slots, "shop_name", None)
+            )
+        ):
+            filled_slot = "store" if getattr(merged_slots, "shop_id", None) or getattr(merged_slots, "shop_name", None) else "region"
+            for key in (
+                "goods_no",
+                "tire_size",
+                "ord_qty",
+                "region",
+                "shop_id",
+                "shop_name",
+                "pending_intent",
+                "goal_type",
+                "availability_intent",
+                "requested_cal_day",
+                "stock_check_mode",
+            ):
+                value = getattr(merged_slots, key, None)
+                if value not in (None, "", [], {}):
+                    slot_patch[key] = value
         elif (
             ("schedule" in missing_slots or last_requested_slot == "schedule")
             and getattr(merged_slots, "requested_cal_day", None)

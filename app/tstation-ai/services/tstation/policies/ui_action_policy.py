@@ -96,8 +96,14 @@ _STORE_AVAILABILITY_CONTINUATION_RE = re.compile(
 )
 _REGION_STORE_SELECTION_PROMPT_RE = re.compile(
     r"어느\s*지역\s*매장|장착\s*매장을?\s*(?:먼저\s*)?선택|"
+    r"구매를?\s*진행(?:할|하려면)?.*(?:매장|지역)|"
+    r"매장이나\s*지역을?\s*알려|"
     r"예약\s*가능\s*시간.*매장을?\s*선택|다른\s*매장을?\s*(?:찾아|검색)|"
     r"확인할\s*지역명을\s*입력|매장\s*선택\s*다시",
+    re.IGNORECASE,
+)
+_PURCHASE_REGION_STORE_PROMPT_RE = re.compile(
+    r"구매를?\s*진행(?:할|하려면)?.*(?:매장|지역)|매장이나\s*지역을?\s*알려",
     re.IGNORECASE,
 )
 _REGION_STORE_INPUT_RE = re.compile(
@@ -4307,6 +4313,26 @@ def _region_store_prompt_signal(
     return False, None
 
 
+def _purchase_region_store_prompt_signal(
+    *,
+    latest_quickreply_tmpl: Mapping[str, Any] | None,
+    messages: list[dict[str, Any]] | None,
+) -> bool:
+    if isinstance(latest_quickreply_tmpl, Mapping):
+        data = latest_quickreply_tmpl.get("data")
+        if isinstance(data, Mapping):
+            assistant = str(data.get("assistantResponse") or data.get("assistant_response") or "")
+            if _PURCHASE_REGION_STORE_PROMPT_RE.search(assistant):
+                return True
+    for message in reversed((messages or [])[-4:]):
+        if message.get("role") != "assistant":
+            continue
+        content = str(message.get("content") or "")
+        if _PURCHASE_REGION_STORE_PROMPT_RE.search(content):
+            return True
+    return False
+
+
 def _transaction_context_candidates(slots: Any) -> list[tuple[str, dict[str, Any]]]:
     candidates: list[tuple[str, dict[str, Any]]] = []
     if isinstance(slots, Mapping):
@@ -4354,12 +4380,20 @@ def _classify_region_store_flow(
     context: Mapping[str, Any],
     *,
     cta_context: Mapping[str, Any] | None,
+    purchase_prompt: bool = False,
 ) -> tuple[str, str, str | None, tuple[str, ...]]:
     pending_intent = str(context.get("pending_intent") or "").strip()
     goal_type = str(context.get("goal_type") or "").strip()
     availability_intent = str(context.get("availability_intent") or "").strip()
     intent_key = str((cta_context or {}).get("intentKey") or "").strip()
 
+    if purchase_prompt and availability_intent != "today_install" and intent_key != "today_install":
+        return (
+            "purchase_region_selection",
+            "purchase_continuation",
+            _QUICK_ORDER_RESERVATION_INTENT,
+            ("transaction_store_preview_tool",),
+        )
     if availability_intent == "today_install" or intent_key == "today_install":
         return (
             "today_install_region_selection",
@@ -4448,12 +4482,17 @@ def resolve_region_or_store_input_context(
         if resolution_source is None:
             resolution_source = prompt_source
 
+    purchase_prompt = _purchase_region_store_prompt_signal(
+        latest_quickreply_tmpl=latest_quickreply_tmpl,
+        messages=messages,
+    )
     for source_name, context in _transaction_context_candidates(merged_slots):
         if not (context.get("goods_no") and context.get("tire_size")):
             continue
         flow_type, action_mode, expected_contract_intent, allowed_tools = _classify_region_store_flow(
             context,
             cta_context=cta_context,
+            purchase_prompt=purchase_prompt,
         )
         if flow_type == "plain_store_search":
             continue
@@ -4472,6 +4511,12 @@ def resolve_region_or_store_input_context(
             if context.get(key) not in (None, "")
         }
         slots_to_promote.update(input_values)
+        if expected_contract_intent == _QUICK_ORDER_RESERVATION_INTENT and flow_type.startswith("purchase_"):
+            slots_to_promote["pending_intent"] = "order"
+            slots_to_promote["goal_type"] = "place_order"
+        elif expected_contract_intent == _STOCK_STORE_SEARCH_INTENT and flow_type.startswith(("stock_", "today_install_")):
+            slots_to_promote["pending_intent"] = "stock"
+            slots_to_promote["goal_type"] = "store_with_stock"
         slots_to_promote.pop("store_view_requested", None)
         expected_slot = "region" if input_values.get("region") else "store"
         if input_values.get("region"):

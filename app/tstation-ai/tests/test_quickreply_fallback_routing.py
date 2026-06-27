@@ -15186,6 +15186,41 @@ def test_expected_slot_fill_precheck_accepts_direct_quantity_for_active_stock() 
     assert precheck["resume_source"] == "expected_slot_fill:quantity"
 
 
+def test_expected_slot_fill_precheck_accepts_executable_store_candidate_step() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000310126",
+        tire_size="245/45R19",
+        ord_qty=2,
+        region="분당",
+        pending_intent="order",
+        goal_type="place_order",
+    )
+    context = TStationChatServiceV2._router_slot_fill_context_payload(
+        slots=slots,
+        user_text="분당",
+        latest_product_tmpl=None,
+        latest_location_tmpl=None,
+        latest_datepick_tmpl=None,
+    )
+
+    precheck = TStationChatServiceV2._expected_slot_fill_precheck(
+        user_text="분당",
+        regex_slots=ConversationSlots.extract_from_user_text("분당"),
+        merged_slots=slots,
+        router_context=context,
+    )
+
+    assert context["current_flow"] == "quick_order_reservation"
+    assert context["flow_step"] == "show_store_candidates"
+    assert context["missing_slots"] == []
+    assert precheck["matched"] is True
+    assert precheck["filled_slot"] == "region"
+    assert precheck["slot_patch"]["region"] == "분당"
+    assert precheck["slot_patch"]["pending_intent"] == "order"
+    assert precheck["slot_patch"]["goal_type"] == "place_order"
+    assert precheck["resume_source"] == "expected_slot_fill:region"
+
+
 def test_expected_slot_fill_precheck_accepts_schedule_for_store_schedule_flow() -> None:
     slots = ConversationSlots(
         pending_intent="reservation",
@@ -23621,6 +23656,59 @@ def test_region_input_resumes_dormant_stock_flow_for_today_install_prompt() -> N
     assert tool_plan.preferred_tool == "transaction_store_preview_tool"
     assert "transaction_store_preview_tool" in tool_plan.allowed_tools
     assert resolution.slots_to_promote["stock_check_mode"] == "inventory_only"
+
+
+def test_region_input_after_purchase_prompt_overrides_dormant_stock_context_to_purchase_flow() -> None:
+    latest_quickreply_tmpl = {
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": "벤투스 S2 AS 245/45R19 2개 구매를 진행할 매장이나 지역을 알려주세요.",
+            "quickReplies": [],
+        },
+    }
+    merged_slots = ConversationSlots(
+        availability_context={
+            "awaiting_store_region": True,
+            "pending_step": "store_region_selection",
+            "dormant_stock_context": {
+                "goods_no": "G000000310126",
+                "tire_size": "245/45R19",
+                "ord_qty": 2,
+                "pending_intent": "stock",
+                "goal_type": "store_with_stock",
+                "stock_check_mode": "inventory_only",
+                "awaiting_store_region": True,
+                "pending_step": "store_region_selection",
+                "source": "pre_policy_context:info_only",
+                "context_state": "dormant",
+            },
+        }
+    )
+
+    resolution = resolve_region_or_store_input_context(
+        user_text="분당",
+        ui_action=None,
+        chip_context=None,
+        latest_quickreply_tmpl=latest_quickreply_tmpl,
+        latest_location_tmpl=None,
+        messages=[],
+        merged_slots=merged_slots,
+    )
+    updated_slots = apply_region_or_store_input_context_resolution(merged_slots, resolution)
+    frame = build_transaction_intent_frame("분당", known_slots=updated_slots.model_dump())
+    tool_plan = plan_transaction_tools(frame)
+
+    assert resolution.resolved is True
+    assert resolution.flow_type == "purchase_region_selection"
+    assert resolution.action_mode == "purchase_continuation"
+    assert resolution.expected_contract_intent == "quick_order_reservation"
+    assert updated_slots.pending_intent == "order"
+    assert updated_slots.goal_type == "place_order"
+    assert updated_slots.region == "분당"
+    assert frame.intent == "quick_order_reservation"
+    assert tool_plan.metadata["flow_step"] == "show_store_candidates"
+    assert tool_plan.preferred_tool == "transaction_store_preview_tool"
+    assert "transaction_store_preview_tool" in tool_plan.allowed_tools
 
 
 def test_store_view_cta_with_pending_purchase_context_resumes_purchase_flow() -> None:
