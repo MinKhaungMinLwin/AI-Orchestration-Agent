@@ -21966,7 +21966,7 @@ def test_support_faq_policy_event_for_delivery_delay_reservation_schedule_uses_p
     assistant = event["data"]["assistantResponse"]
     assert "배송 지연으로 예약 일정이 자동 변경되지는 않아요." in assistant
     assert "해피콜" in assistant
-    assert _labels(event["data"]["quickReplies"]) == ["1:1 문의하기", "처음으로"]
+    assert _labels(event["data"]["quickReplies"]) == ["1:1 문의하기"]
 
 
 @pytest.mark.parametrize(
@@ -27043,6 +27043,7 @@ def test_support_faq_policy_event_for_signup_uses_membership_cta() -> None:
     quick_replies = event["data"]["quickReplies"]
     assert quick_replies[0]["label"] == "회원 혜택 확인"
     assert quick_replies[0]["url"] == CTAUrls.MEMBERSHIP_BENEFIT
+    assert _labels(quick_replies) == ["회원 혜택 확인"]
     assert event["data"]["metadata"]["responseShapeKey"] == "signup_first_purchase_benefit_policy"
 
 
@@ -27068,6 +27069,8 @@ def test_support_faq_policy_event_for_promotion_gift_appends_partial_cancel_inva
     assert event["data"]["metadata"]["faqSourceSummaryUsed"] is True
     assert event["data"]["metadata"]["faqSourceSummaryAppended"] is False
     assert not response.endswith("...")
+    assert _labels(event["data"]["quickReplies"]) == ["진행 중인 이벤트 보기"]
+    assert event["data"]["quickReplies"][0]["url"] == CTAUrls.PROMOTION_EVENT_LIST
 
 
 def test_support_faq_policy_event_for_coupon_usage_does_not_append_partner_or_raw_faq() -> None:
@@ -27094,6 +27097,8 @@ def test_support_faq_policy_event_for_coupon_usage_does_not_append_partner_or_ra
     assert "쿠폰은 쿠폰별 사용처와 유의사항에 따라" in response
     assert event["data"]["metadata"]["faqSourceSummaryAppended"] is False
     assert not response.endswith("...")
+    assert _labels(event["data"]["quickReplies"]) == ["쿠폰함 바로가기"]
+    assert event["data"]["quickReplies"][0]["url"] == CTAUrls.MY_COUPON_LIST_PC
 
 
 def test_support_policy_response_contract_reports_truncated_ellipsis() -> None:
@@ -27137,7 +27142,7 @@ def test_support_faq_policy_event_for_tire_condition_photo_includes_upload_limit
     assert "마모도 측정 서비스 또는 가까운 티스테이션 매장 점검으로 확인해 주세요." in response
     assert "타이어 점검은 마모도와 손상 여부를 함께 확인하는 것이 좋습니다." not in response
     quick_replies = event["data"]["quickReplies"]
-    assert _labels(quick_replies) == ["마모도 측정 서비스", "1:1 문의하기", "처음으로"]
+    assert _labels(quick_replies) == ["마모도 측정 서비스", "1:1 문의하기"]
     assert quick_replies[0]["domain"] == "TRANSACTION"
     assert quick_replies[0]["url"] == CTAUrls.TIRE_CHECK
 
@@ -27160,7 +27165,7 @@ def test_tire_condition_photo_policy_ctas_do_not_regress_to_plain_store_search(u
     assert "사진만으로는 타이어 마모 상태, 교체 필요 여부, 주행 안전을 확정할 수 없어요." in response
     assert "더 타도 돼요" not in response
     assert "교체하지 않아도 돼요" not in response
-    assert labels == ["마모도 측정 서비스", "1:1 문의하기", "처음으로"]
+    assert labels == ["마모도 측정 서비스", "1:1 문의하기"]
     assert labels[0] != "가까운 매장 찾기"
     assert quick_replies[0]["url"] == CTAUrls.TIRE_CHECK
 
@@ -27202,6 +27207,8 @@ def test_support_faq_policy_event_for_assurance_service_surfaces_core_conditions
     assert "안심플러스는 구매 수량과 대상 상품 조건에 따라 보상 범위가 달라질 수 있습니다." not in response
     assert event["data"]["metadata"]["faqSourceSummaryUsed"] is True
     assert event["data"]["metadata"]["faqSourceSummaryAppended"] is False
+    assert _labels(event["data"]["quickReplies"]) == ["나의 워런티 확인"]
+    assert event["data"]["quickReplies"][0]["url"] == CTAUrls.WARRANTY_MAIN
 
 
 def test_support_faq_policy_event_for_tire_quality_warranty_uses_invariant_and_warranty_cta() -> None:
@@ -27229,7 +27236,7 @@ def test_support_faq_policy_event_for_tire_quality_warranty_uses_invariant_and_w
     assert "무상 수리나 교체 여부는 현장 점검 결과와 구매·장착 이력, 보증 또는 워런티 적용 여부에 따라 결정돼요." in response
     assert "워런티 서비스 적용 대상이면 상태 확인 후 안내받을 수 있어요." in response
     assert "워런티 서비스 적용 대상이면 상태 점검 후 안내받을 수 있습니다." not in response
-    assert event["data"]["quickReplies"][0]["label"] == "나의 워런티 확인"
+    assert _labels(event["data"]["quickReplies"]) == ["나의 워런티 확인"]
     assert event["data"]["quickReplies"][0]["url"] == CTAUrls.WARRANTY_MAIN
     assert event["data"]["metadata"]["faqSourceSummaryUsed"] is False
     assert event["data"]["metadata"]["faqSourceSummaryAppended"] is False

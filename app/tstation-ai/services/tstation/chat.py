@@ -7217,27 +7217,7 @@ def _build_support_faq_policy_event(
         "signup_first_purchase_benefit_policy": "회원가입과 신규회원 혜택은 회원 상태, 마케팅 동의 여부, 진행 중 정책에 따라 달라질 수 있어요.",
         "signup_coupon_guidance": "신규회원과 가입 쿠폰 혜택은 회원 상태와 진행 중 정책에 따라 달라질 수 있어요.",
     }
-    quick_replies = [
-        {"label": "1:1 문의하기", "domain": "SUPPORT"},
-        {"label": "처음으로", "domain": "LEADING"},
-    ]
-    if intent in {"signup_first_purchase_benefit_policy", "signup_coupon_guidance"}:
-        quick_replies = [
-            {"label": "회원 혜택 확인", "url": CTAUrls.MEMBERSHIP_BENEFIT, "domain": "SUPPORT"},
-            {"label": "처음으로", "domain": "LEADING"},
-        ]
-    elif intent == "tire_condition_photo_policy":
-        quick_replies = [
-            {"label": "마모도 측정 서비스", "url": CTAUrls.TIRE_CHECK, "domain": "TRANSACTION"},
-            {"label": "1:1 문의하기", "domain": "SUPPORT"},
-            {"label": "처음으로", "domain": "LEADING"},
-        ]
-    elif intent == "tire_quality_warranty_policy":
-        quick_replies = [
-            {"label": "나의 워런티 확인", "url": CTAUrls.WARRANTY_MAIN, "domain": "SUPPORT"},
-            {"label": "1:1 문의하기", "domain": "SUPPORT"},
-            {"label": "처음으로", "domain": "LEADING"},
-        ]
+    quick_replies = _support_faq_policy_quick_replies(intent)
     response_source_summary = _policy_source_summary_for_response(intent, source_summary)
     if response_source_summary:
         assistant_response = f"{response_source_summary}\n\n{followup_by_intent[intent]}"
@@ -8189,6 +8169,43 @@ def _build_direct_preorder_event_from_slots(
     }
     _standardize_preorder_metadata(event["data"], slot_state)
     return event
+
+
+def _support_faq_policy_quick_replies(intent: str) -> list[dict[str, Any]]:
+    intent_url_ctas: dict[str, list[dict[str, Any]]] = {
+        "assurance_service_policy": [
+            {"label": "나의 워런티 확인", "url": CTAUrls.WARRANTY_MAIN, "domain": "SUPPORT"},
+        ],
+        "tire_quality_warranty_policy": [
+            {"label": "나의 워런티 확인", "url": CTAUrls.WARRANTY_MAIN, "domain": "SUPPORT"},
+        ],
+        "signup_first_purchase_benefit_policy": [
+            {"label": "회원 혜택 확인", "url": CTAUrls.MEMBERSHIP_BENEFIT, "domain": "SUPPORT"},
+        ],
+        "signup_coupon_guidance": [
+            {"label": "회원 혜택 확인", "url": CTAUrls.MEMBERSHIP_BENEFIT, "domain": "SUPPORT"},
+        ],
+        "promotion_gift_policy": [
+            {"label": "진행 중인 이벤트 보기", "url": CTAUrls.PROMOTION_EVENT_LIST, "domain": "DISCOVERY"},
+        ],
+        "coupon_usage_policy": [
+            {"label": "쿠폰함 바로가기", "url": CTAUrls.MY_COUPON_LIST_PC, "domain": "TRANSACTION"},
+        ],
+        "coupon_registration_policy": [
+            {"label": "쿠폰함 바로가기", "url": CTAUrls.MY_COUPON_LIST_PC, "domain": "TRANSACTION"},
+        ],
+    }
+    intent_action_ctas: dict[str, list[dict[str, Any]]] = {
+        "tire_condition_photo_policy": [
+            {"label": "마모도 측정 서비스", "url": CTAUrls.TIRE_CHECK, "domain": "TRANSACTION"},
+        ],
+    }
+    quick_replies = list(intent_url_ctas.get(intent) or intent_action_ctas.get(intent) or [])
+    if intent == "tire_condition_photo_policy":
+        quick_replies.append({"label": "1:1 문의하기", "domain": "SUPPORT"})
+    elif not quick_replies:
+        quick_replies.append({"label": "1:1 문의하기", "domain": "SUPPORT"})
+    return quick_replies
 
 
 def _should_emit_direct_preorder_from_schedule_selection(
