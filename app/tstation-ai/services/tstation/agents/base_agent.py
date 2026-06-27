@@ -2066,13 +2066,16 @@ class BaseAgent(ABC):
 
         decision = current_transaction_response_decision.get()
         tool_plan = current_transaction_tool_plan.get()
-        if decision is None or tool_plan is None or decision.template != TemplateName.QUICK_REPLY:
+        if decision is None or tool_plan is None:
             return None
 
         allowed_tools = tuple(getattr(tool_plan, "allowed_tools", ()) or ())
         forbidden_tools = tuple(getattr(tool_plan, "forbidden_tools", ()) or ())
         preferred_tool = str(getattr(tool_plan, "preferred_tool", None) or "")
         metadata = getattr(tool_plan, "metadata", None) or {}
+        flow_id = str(metadata.get("flow_id") or "")
+        if decision.template != TemplateName.QUICK_REPLY and flow_id != "purchase_order":
+            return None
         contract_intent = str(metadata.get("response_intent") or "")
         required_slots = tuple(getattr(tool_plan, "required_slots", ()) or getattr(decision, "required_slots", ()) or ())
         if not forbidden_tools and not allowed_tools:
@@ -2086,7 +2089,23 @@ class BaseAgent(ABC):
         if not block_reason:
             return None
 
-        if str(metadata.get("flow_id") or "") == "purchase_order":
+        if flow_id == "purchase_order":
+            replacement_events = self._preferred_contract_tool_replacement_events(
+                blocked_tool=tool_name,
+                preferred_tool=preferred_tool,
+                tool_plan=tool_plan,
+                metadata=metadata,
+                contract_intent=contract_intent,
+                allowed_tools=allowed_tools,
+                forbidden_tools=forbidden_tools,
+                required_slots=required_slots,
+                block_reason=block_reason,
+                config=config,
+                response_streamer=response_streamer,
+                answering_emitted=answering_emitted,
+            )
+            if replacement_events is not None:
+                return replacement_events
             flow_event = build_purchase_flow_fallback_event(
                 intent=contract_intent,
                 known_slots=metadata.get("flow_slots") if isinstance(metadata.get("flow_slots"), dict) else {},
@@ -2210,6 +2229,117 @@ class BaseAgent(ABC):
             {
                 "type": "agent_flow",
                 "agent": "[FAQ AF]",
+                "agent_class": self.name,
+                "status": tool_status,
+            },
+            {
+                "type": "tool",
+                "input": tool_input,
+                "output": _sanitize_tool_output_for_sse(tool_result),
+                "slot_data": _slot_data_for_tool_event(preferred_tool, tool_result),
+                "node": "tools",
+                "tool": preferred_tool,
+            },
+            *self._code_template_events(code_event, response_streamer, answering_emitted),
+        ]
+
+    def _preferred_contract_tool_replacement_events(
+        self,
+        *,
+        blocked_tool: str,
+        preferred_tool: str,
+        tool_plan: Any,
+        metadata: dict[str, Any],
+        contract_intent: str,
+        allowed_tools: tuple[str, ...],
+        forbidden_tools: tuple[str, ...],
+        required_slots: tuple[str, ...],
+        block_reason: str,
+        config: dict | None,
+        response_streamer: "_AssistantResponseStreamer | None",
+        answering_emitted: bool,
+    ) -> list[dict] | None:
+        if (
+            not preferred_tool
+            or required_slots
+            or preferred_tool in forbidden_tools
+            or (allowed_tools and preferred_tool not in allowed_tools)
+        ):
+            return None
+
+        try:
+            from services.tstation.agents.c_transaction_agent import tools as transaction_tools
+            from services.tstation.template_mapper import try_build_template
+        except Exception:
+            return None
+
+        replacement_tool = getattr(transaction_tools, preferred_tool, None)
+        if replacement_tool is None or not hasattr(replacement_tool, "invoke"):
+            return None
+
+        tool_input = {
+            key: value
+            for key, value in dict(getattr(tool_plan, "tool_args_patch", {}) or {}).items()
+            if value not in (None, "", [], {})
+        }
+        if not tool_input:
+            return None
+
+        logger.info(
+            "[%s] Contract tool guard blocked tool=%s replacement=%s intent=%s reason=%s",
+            self.name,
+            blocked_tool,
+            preferred_tool,
+            contract_intent,
+            block_reason,
+        )
+
+        started_at = time.perf_counter()
+        try:
+            raw_tool_result = replacement_tool.invoke(tool_input)
+        except Exception as exc:
+            logger.exception("[%s] Replacement transaction tool failed intent=%s", self.name, contract_intent)
+            raw_tool_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+        latency_ms = (time.perf_counter() - started_at) * 1000
+        tool_result = raw_tool_result if isinstance(raw_tool_result, dict) else {"status": "success", "data": raw_tool_result}
+        tool_status = str(tool_result.get("status") or "success")
+        _emit_tool_summary_span(
+            config,
+            tool_name=preferred_tool,
+            tool_input=tool_input,
+            tool_result=tool_result,
+            tool_status=tool_status,
+            latency_ms=latency_ms,
+        )
+
+        code_event = try_build_template(
+            [{"tool": preferred_tool, "args": tool_input, "data": tool_result}],
+            "",
+        )
+        if not isinstance(code_event, dict):
+            return None
+
+        code_event = self._annotate_contract_tool_block(
+            code_event,
+            blocked_tool=blocked_tool,
+            replacement_tool=preferred_tool,
+            contract_intent=contract_intent,
+            allowed_tools=allowed_tools,
+            forbidden_tools=forbidden_tools,
+            block_reason=block_reason,
+        )
+        code_event["assistant_response_source"] = "code_contract_tool_guard"
+        display_name = str(metadata.get("preferred_tool_display_name") or metadata.get("display_name") or "정보 확인 중...")
+        return [
+            {
+                "type": "status",
+                "status": "tool_start",
+                "tool": preferred_tool,
+                "display_name": display_name,
+            },
+            {
+                "type": "agent_flow",
+                "agent": "[Transaction AF]",
                 "agent_class": self.name,
                 "status": tool_status,
             },
