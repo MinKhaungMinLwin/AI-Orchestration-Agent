@@ -422,6 +422,7 @@ def build_turn_contract(
         domain = code_domain
         intent = code_intent
     sub_intent = intent_frame.sub_intent if intent_frame is not None else None
+    best_seller_anchor = is_best_seller_request(user_text, include_demographic_preference=False)
     known_slots = _compact_slots({
         **(dict(intent_frame.known_slots) if intent_frame is not None else {}),
         **_slots_from_model(merged_slots),
@@ -744,7 +745,13 @@ def build_turn_contract(
                 "get_final_price_tool",
             ),
         )
-    if planner_intent == "best_seller_search" and code_intent in {"product_recommendation", "general_recommendation"}:
+    if planner_intent == "best_seller_search" or (
+        best_seller_anchor
+        and (
+            str(sub_intent or "") == "best_seller_search"
+            or code_intent == "best_seller_search"
+        )
+    ):
         domain = "discovery"
         intent = "best_seller_search"
         allowed_tools = _merge_tuple(allowed_tools, ("get_best_selling_products_tool",))
@@ -906,7 +913,13 @@ def build_turn_contract(
             "assistant_guidance": "FAQ hybrid 검색을 먼저 수행하고 정책/조건을 quickReply로 요약한 뒤 필요 시에만 1:1 문의로 이어진다.",
             "metadata": {"response_shape_key": intent},
         }
-    if planner_intent == "best_seller_search" and code_intent in {"product_recommendation", "general_recommendation"}:
+    if planner_intent == "best_seller_search" or (
+        best_seller_anchor
+        and (
+            str(sub_intent or "") == "best_seller_search"
+            or code_intent == "best_seller_search"
+        )
+    ):
         domain = "discovery"
         intent = "best_seller_search"
         allowed_tools = _merge_tuple(allowed_tools, ("get_best_selling_products_tool",))
@@ -3889,6 +3902,8 @@ def _normalize_plan_intent(value: str) -> str:
         "discovery_event_content": "product_event_lookup",
         "get_best_selling_products_for_vehicle_timeframe": "best_seller_search",
         "get_best_selling_products_for_vehicle": "best_seller_search",
+        "best_seller_list_by_vehicle_and_size_and_period": "best_seller_search",
+        "get_best_selling_tire_by_model_and_size": "best_seller_search",
         "get_best_selling_products_tool": "best_seller_search",
         "best_seller": "best_seller_search",
         "sales_rank": "best_seller_search",

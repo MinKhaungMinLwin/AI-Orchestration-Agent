@@ -71,6 +71,7 @@ from services.tstation.chat import (
     _build_direct_faq_policy_tool_payload,
     _build_direct_preorder_event_from_slots,
     _build_best_seller_contract_override_event,
+    _recover_missing_best_seller_contract_tool_event,
     _build_general_cancel_fee_policy_event,
     _build_general_card_cancel_timing_policy_event,
     _build_partner_member_coupon_policy_event,
@@ -27442,6 +27443,8 @@ def test_turn_contract_still_blocks_discovery_product_card_without_current_tool_
 def test_normalize_plan_intent_maps_best_seller_aliases() -> None:
     assert _normalize_plan_intent("get_best_selling_products_for_vehicle_timeframe") == "best_seller_search"
     assert _normalize_plan_intent("get_best_selling_products_for_vehicle") == "best_seller_search"
+    assert _normalize_plan_intent("best_seller_list_by_vehicle_and_size_and_period") == "best_seller_search"
+    assert _normalize_plan_intent("get_best_selling_tire_by_model_and_size") == "best_seller_search"
     assert _normalize_plan_intent("get_best_selling_products_tool") == "best_seller_search"
     assert _normalize_plan_intent("best_seller") == "best_seller_search"
     assert _normalize_plan_intent("sales_rank") == "best_seller_search"
@@ -27475,6 +27478,33 @@ def test_turn_contract_promotes_planner_best_seller_followup_to_best_seller_cont
         routing_result=_routing_result(
             domains=[MultiAgentDomain.Domain.DISCOVERY],
             execution_plan=["discovery:query_order_data_for_vehicle_with_period"],
+        ),
+    )
+
+    assert contract.intent == "best_seller_search"
+    assert "get_best_selling_products_tool" in contract.allowed_tools
+    assert "get_products_recommendations_tool" in contract.forbidden_tools
+    assert contract.response_decision["template"] == "product"
+    assert contract.response_decision["metadata"]["response_shape_key"] == "best_seller_product_cards"
+
+
+def test_turn_contract_promotes_code_best_seller_sub_intent_even_when_planner_stays_general_recommendation() -> None:
+    contract = build_turn_contract(
+        user_text="g70에 가장 많이 팔린 타이어",
+        intent_frame=IntentFrame(
+            domain=PolicyDomain.DISCOVERY,
+            intent="general_recommendation",
+            sub_intent="best_seller_search",
+        ),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=("product_card_without_size", "price_without_size"),
+            metadata={"response_shape_key": "unsized_recommendation_summary"},
+        ),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY],
+            execution_plan=["discovery:vehicle_tire_recommendation_prompt"],
         ),
     )
 
@@ -27622,6 +27652,68 @@ def test_best_seller_contract_override_uses_tool_template_instead_of_agent_clari
     assert event is not None
     assert event["template"] == "product"
     assert event["assistant_response_source"] == "code_best_seller_contract_override"
+
+
+def test_recover_missing_best_seller_contract_tool_event_runs_tool_and_returns_product() -> None:
+    contract = build_turn_contract(
+        user_text="g70에 가장 많이 팔린 타이어",
+        intent_frame=IntentFrame(
+            domain=PolicyDomain.DISCOVERY,
+            intent="general_recommendation",
+            sub_intent="best_seller_search",
+        ),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=("product_card_without_size", "price_without_size"),
+            metadata={"response_shape_key": "unsized_recommendation_summary"},
+        ),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY],
+            execution_plan=["discovery:vehicle_tire_recommendation_prompt"],
+        ),
+    )
+
+    def _fake_invoke(_args: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "status": "success",
+            "data": {
+                "status": "success",
+                "vehicle_query": "G70",
+                "items": [
+                    {
+                        "goods_no": "G0001",
+                        "goods_nm": "벤투스 S2 AS",
+                        "tire_size_1": "225/45R18",
+                        "sale_prc": 210000,
+                    }
+                ],
+            },
+        }
+
+    async def _fake_to_thread(func: Any, *args: Any, **kwargs: Any) -> Any:
+        return func(*args, **kwargs)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(
+        discovery_tools,
+        "get_best_selling_products_tool",
+        SimpleNamespace(invoke=_fake_invoke),
+    )
+    monkeypatch.setattr(chat_module.asyncio, "to_thread", _fake_to_thread)
+    try:
+        event = asyncio.run(
+            _recover_missing_best_seller_contract_tool_event(
+                user_text="g70에 가장 많이 팔린 타이어",
+                turn_contract=contract,
+            )
+        )
+    finally:
+        monkeypatch.undo()
+
+    assert event is not None
+    assert event["template"] == "product"
+    assert event["assistant_response_source"] == "code_best_seller_contract_recovery"
 
 
 def test_turn_contract_allows_compare_quickreply_during_discovery_first_leg_transaction_chain() -> None:

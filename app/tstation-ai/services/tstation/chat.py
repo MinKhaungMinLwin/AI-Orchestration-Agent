@@ -17490,6 +17490,100 @@ def _build_best_seller_contract_override_event(
     )
 
 
+async def _recover_missing_best_seller_contract_tool_event(
+    *,
+    user_text: str,
+    turn_contract: TurnContract | None,
+) -> dict[str, Any] | None:
+    if turn_contract is None or str(turn_contract.intent or "") != "best_seller_search":
+        return None
+    tool_input = _best_seller_tool_input_from_text(
+        user_text,
+        limit=5,
+        known_slots=getattr(turn_contract, "known_slots", {}) if turn_contract is not None else {},
+    )
+    from services.tstation.agents.b_discovery_agent.tools import (
+        get_best_selling_products_tool as _best_selling_tool,
+    )
+    from services.tstation.template_mapper import try_build_template
+
+    try:
+        raw_result = await asyncio.to_thread(_best_selling_tool.invoke, tool_input)
+        best_selling_result = (
+            raw_result if isinstance(raw_result, dict) else qc_verifier.parse_tool_output(raw_result) or {}
+        )
+        best_selling_result = _enrich_best_selling_result_for_product_cards(best_selling_result)
+    except Exception as exc:
+        logger.exception("[BEST_SELLER] contract recovery failed for input=%s", tool_input)
+        best_selling_result = {
+            "status": "error",
+            "http_status": None,
+            "message": str(exc),
+            "data": {},
+        }
+
+    result_data = best_selling_result.get("data") if isinstance(best_selling_result, dict) else {}
+    result_status = str(result_data.get("status") or "").strip().lower() if isinstance(result_data, dict) else ""
+    fallback_options = result_data.get("fallback_options") if isinstance(result_data, dict) else None
+    vehicle_query = str(result_data.get("vehicle_query") or tool_input.get("vehicle_query") or "").strip() if isinstance(
+        result_data, dict
+    ) else ""
+    if result_status in {"vehicle_unresolved", "resolved_no_order_data", "no_order_data"}:
+        fallback_message = "최근 3개월 베스트셀러 상품을 안내드립니다."
+        quick_replies: list[dict[str, Any]] = []
+        if result_status == "vehicle_unresolved":
+            fallback_message = "차종을 정확히 찾지 못했어요. 차종명을 다시 입력하거나 전체 베스트셀러를 확인해 주세요."
+        elif result_status == "resolved_no_order_data":
+            fallback_message = (
+                f"{vehicle_query} 기준 주문 데이터가 아직 충분하지 않아요. 다른 범위로 확인해 보세요."
+                if vehicle_query
+                else "해당 조건의 주문 데이터가 아직 충분하지 않아요. 다른 범위로 확인해 보세요."
+            )
+        elif result_status == "no_order_data":
+            fallback_message = "해당 기간의 베스트셀러 데이터를 아직 확인하지 못했어요."
+        if isinstance(fallback_options, list):
+            for option in fallback_options[:3]:
+                if not isinstance(option, dict):
+                    continue
+                label = str(option.get("label") or "").strip()
+                if not label or label in {"구매하기", "주문하기", "바로 구매", "바로 주문", "내 차량 보기"}:
+                    continue
+                quick_replies.append({"label": label, "domain": "DISCOVERY"})
+        if not quick_replies:
+            quick_replies.append({"label": "전체 베스트셀러", "domain": "DISCOVERY"})
+        mapped_event = {
+            "type": "data",
+            "template": "quickReply",
+            "data": {
+                "assistantResponse": fallback_message,
+                "quickReplies": quick_replies,
+                "predictedDomains": ["DISCOVERY"],
+            },
+            "assistant_response_source": "code_best_seller_contract_recovery_fallback",
+            "source_domain": MultiAgentDomain.Domain.DISCOVERY.value,
+            "called_tools": ["get_best_selling_products_tool"],
+        }
+    else:
+        assistant_text = f"{vehicle_query} 기준 인기 상품을 안내드립니다." if vehicle_query else "인기 상품을 안내드립니다."
+        mapped_event = try_build_template(
+            [{"tool": "get_best_selling_products_tool", "args": tool_input, "data": best_selling_result}],
+            assistant_text,
+        )
+        if not isinstance(mapped_event, dict):
+            return None
+        mapped_event["source_domain"] = MultiAgentDomain.Domain.DISCOVERY.value
+        mapped_event["assistant_response_source"] = "code_best_seller_contract_recovery"
+        mapped_event["called_tools"] = ["get_best_selling_products_tool"]
+    return _finalize_direct_code_event(
+        mapped_event,
+        turn_contract=turn_contract,
+        intent="product_search",
+        source="code_best_seller_contract_recovery",
+        required_tools=("get_best_selling_products_tool",),
+        allowed_intents=("best_seller_search",),
+    )
+
+
 def _is_size_only_store_availability_continuation(
     user_text: str,
     *,
@@ -35809,6 +35903,33 @@ class TStationChatServiceV2:
                     no_output_fallback_event.get("assistant_response_source")
                     or "code_no_visible_output_guard"
                 )
+
+        if (
+            turn_contract is not None
+            and str(turn_contract.intent or "") == "best_seller_search"
+            and "get_best_selling_products_tool" not in called_tool_names
+        ):
+            recovered_best_seller_event = await _recover_missing_best_seller_contract_tool_event(
+                user_text=user_query,
+                turn_contract=turn_contract,
+            )
+            if recovered_best_seller_event is not None:
+                assistant_response = str((recovered_best_seller_event.get("data") or {}).get("assistantResponse") or "")
+                buffered_data_events = [recovered_best_seller_event]
+                original_message_events = [{
+                    "type": "message",
+                    "content": assistant_response,
+                    "agent": "[DISCOVERY AGENT]",
+                }]
+                draft_response = assistant_response
+                draft_for_qc = assistant_response
+                last_template = str(recovered_best_seller_event.get("template") or "")
+                last_template_source = "best_seller_contract_recovery"
+                last_assistant_response_source = str(
+                    recovered_best_seller_event.get("assistant_response_source")
+                    or "code_best_seller_contract_recovery"
+                )
+                called_tool_names.add("get_best_selling_products_tool")
 
         best_seller_override_event = _build_best_seller_contract_override_event(
             turn_contract=turn_contract,
