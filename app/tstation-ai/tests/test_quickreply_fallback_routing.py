@@ -23008,13 +23008,13 @@ def test_support_faq_policy_event_selects_intent_relevant_faq_candidate_not_firs
                 {
                     "question": "품질보증 기준",
                     "answer": "측면 부풀음은 점검 후 보증 여부를 확인합니다.",
-                    "score": 0.031,
+                    "score": 0.31,
                     "source": "FAQ Hybrid",
                 },
                 {
                     "question": "제조일자 기준",
                     "answer": "타이어 제조일자는 DOT로 확인할 수 있으며, 일반적으로 6~12개월 이내 제품은 정상 신품 범주로 안내합니다.",
-                    "score": 0.028,
+                    "score": 0.28,
                     "source": "FAQ Hybrid",
                 },
             ]
@@ -23032,6 +23032,42 @@ def test_support_faq_policy_event_selects_intent_relevant_faq_candidate_not_firs
     assert "6~12개월 이내 제품은 정상 신품 범주" in response
     assert "측면 부풀음은 점검 후 보증 여부를 확인합니다." not in response
     assert event["data"]["metadata"]["faqSourceSummaryUsed"] is True
+
+
+def test_support_faq_policy_event_drops_source_summary_when_cross_topic_scores_are_too_close() -> None:
+    tool_result = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "question": "제조일자 기준",
+                    "answer": "타이어 제조일자는 DOT로 확인할 수 있으며 일반적으로 6~12개월 이내 제품은 정상 신품 범주로 안내합니다.",
+                    "score": 0.24,
+                    "metadata": {"category": "manufacture"},
+                    "source": "FAQ Hybrid",
+                },
+                {
+                    "question": "DOT 보증 확인",
+                    "answer": "DOT 기준 제조 시점과 워런티 확인이 함께 필요할 수 있습니다.",
+                    "score": 0.22,
+                    "metadata": {"category": "warranty"},
+                    "source": "FAQ Hybrid",
+                },
+            ]
+        },
+    }
+
+    event = _build_support_faq_policy_event(
+        "tire_manufacture_date_policy",
+        "DOT 기준으로 오래된 거 아냐?",
+        tool_result=tool_result,
+    )
+
+    assert event is not None
+    response = str(event["data"]["assistantResponse"])
+    assert "6~12개월 이내 제품은 정상 신품 범주" not in response
+    assert "타이어 제조일자와 신품 기준은 정책에 따라 안내" in response
+    assert event["data"]["metadata"]["faqSourceSummaryUsed"] is False
 
 
 def test_support_faq_policy_event_for_signup_uses_membership_cta() -> None:

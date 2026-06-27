@@ -15255,8 +15255,10 @@ def _first_faq_policy_answer(structured_sources: list[tuple[str, dict]]) -> str 
 
 
 _FAQ_POLICY_SOURCE_MIN_SCORE_BY_INTENT = {
-    "tire_manufacture_date_policy": 0.015,
-    "tire_quality_warranty_policy": 0.015,
+    "tire_manufacture_date_policy": 0.2,
+    "tire_quality_warranty_policy": 0.2,
+    "reservation_no_show_fee_policy": 0.2,
+    "promotion_gift_delivery_policy": 0.2,
 }
 _FAQ_POLICY_SOURCE_RELEVANCE_RE = {
     "tire_manufacture_date_policy": re.compile(
@@ -15268,6 +15270,23 @@ _FAQ_POLICY_SOURCE_RELEVANCE_RE = {
         r"제조상\s*과실|점검|잔여\s*홈|워런티",
         re.IGNORECASE,
     ),
+}
+_FAQ_POLICY_ALLOW_TOKENS = {
+    "tire_manufacture_date_policy": ("제조일자", "DOT", "신품", "유통", "숙성", "선입선출", "6개월", "12개월"),
+    "tire_quality_warranty_policy": ("측면", "사이드월", "부풀", "품질보증", "무상", "점검", "워런티"),
+    "reservation_no_show_fee_policy": ("미방문", "예약시간", "못 갔", "취소", "수수료", "위약금", "환불"),
+    "promotion_gift_delivery_policy": ("사은품", "지급", "배송", "수령", "언제"),
+}
+_FAQ_POLICY_DENY_TOKENS = {
+    "tire_quality_warranty_policy": ("제조일자", "DOT", "선입선출", "1년 이내 생산", "최신 제조", "신품", "6개월", "12개월"),
+    "reservation_no_show_fee_policy": ("예약 방법", "장착점 선택", "고객정보 입력"),
+    "promotion_gift_delivery_policy": ("부분 취소", "반납", "차감"),
+}
+_FAQ_POLICY_SCORE_GAP_BY_INTENT = {
+    "tire_manufacture_date_policy": 0.04,
+    "tire_quality_warranty_policy": 0.04,
+    "reservation_no_show_fee_policy": 0.04,
+    "promotion_gift_delivery_policy": 0.04,
 }
 
 
@@ -15333,9 +15352,37 @@ def _faq_policy_candidate_is_relevant(intent: str | None, candidate: Mapping[str
     if min_score is not None and score is not None and score < min_score:
         return False
     relevance_re = _FAQ_POLICY_SOURCE_RELEVANCE_RE.get(intent)
-    if relevance_re is None:
-        return True
-    return bool(relevance_re.search(text))
+    if relevance_re is not None and not relevance_re.search(text):
+        return False
+    lowered_text = text.lower()
+    allow_tokens = _FAQ_POLICY_ALLOW_TOKENS.get(intent, ())
+    if allow_tokens and not any(token.lower() in lowered_text for token in allow_tokens):
+        return False
+    deny_tokens = _FAQ_POLICY_DENY_TOKENS.get(intent, ())
+    if deny_tokens and any(token.lower() in lowered_text for token in deny_tokens):
+        return False
+    return True
+
+
+def _faq_policy_candidate_topic(intent: str | None, candidate: Mapping[str, Any]) -> str:
+    metadata = candidate.get("metadata")
+    if isinstance(metadata, Mapping):
+        for key in ("category", "category_name", "faq_category", "mdcl_cd", "lrcl_cd"):
+            value = str(metadata.get(key) or "").strip()
+            if value:
+                return value.lower()
+    text = _faq_policy_candidate_text(candidate).lower()
+    if intent == "tire_quality_warranty_policy":
+        if any(token in text for token in ("측면", "사이드월", "부풀", "품질보증", "워런티")):
+            return "warranty"
+        if any(token in text for token in ("제조일자", "dot", "선입선출", "신품")):
+            return "manufacture"
+    if intent == "tire_manufacture_date_policy":
+        if any(token in text for token in ("제조일자", "dot", "선입선출", "신품", "6개월", "12개월")):
+            return "manufacture"
+        if any(token in text for token in ("측면", "사이드월", "부풀", "품질보증", "워런티")):
+            return "warranty"
+    return ""
 
 
 def _first_faq_policy_answer_for_intent(
@@ -15350,6 +15397,15 @@ def _first_faq_policy_answer_for_intent(
         relevant_candidates = [
             candidate for candidate in candidates if _faq_policy_candidate_is_relevant(intent, candidate)
         ]
+        if intent and len(relevant_candidates) >= 2:
+            top_score = _faq_policy_candidate_score(relevant_candidates[0]) or 0.0
+            second_score = _faq_policy_candidate_score(relevant_candidates[1]) or 0.0
+            score_gap = top_score - second_score
+            top_topic = _faq_policy_candidate_topic(intent, relevant_candidates[0])
+            second_topic = _faq_policy_candidate_topic(intent, relevant_candidates[1])
+            required_gap = _FAQ_POLICY_SCORE_GAP_BY_INTENT.get(intent, 0.0)
+            if top_topic and second_topic and top_topic != second_topic and score_gap < required_gap:
+                continue
         for candidate in relevant_candidates:
             if not isinstance(candidate, Mapping):
                 continue

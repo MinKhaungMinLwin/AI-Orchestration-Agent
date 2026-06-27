@@ -343,7 +343,7 @@ def search_faq_rag_tool(
         return _error_response(None, str(e), "Failed to search FAQs using RAG")
 
 @tool
-def search_faq_hybrid_tool(query: str, top_k: int = 20) -> dict:
+def search_faq_hybrid_tool(query: str, top_k: int = 5) -> dict:
     """
     [HYBRID] FAQ search: keyword search + semantic search → RRF reranking → top_k items.
 
@@ -352,7 +352,7 @@ def search_faq_hybrid_tool(query: str, top_k: int = 20) -> dict:
 
     Args:
         query (str): User question in Korean.
-        top_k (int): Max results to return (default 20).
+        top_k (int): Max results to return (default 5).
 
     Example: {"query": "환불 정책이 어떻게 되나요?"}
     """
@@ -385,6 +385,11 @@ def search_faq_hybrid_tool(query: str, top_k: int = 20) -> dict:
                 "answer": r["payload"].get("answer", ""),
                 "metadata": r["payload"].get("metadata", {}),
                 "score": r.get("score"),
+                "raw_score": r.get("raw_score"),
+                "rank": r.get("rank"),
+                "source_rank_type": r.get("source_rank_type"),
+                "semantic_rank": r.get("semantic_rank"),
+                "keyword_rank": r.get("keyword_rank"),
                 "source": "FAQ Hybrid",
             }
             for r in candidates

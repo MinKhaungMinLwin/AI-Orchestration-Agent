@@ -2427,8 +2427,10 @@ _FAQ_FIRST_SUPPORT_POLICY_UNSUPPORTED_ASSERTION_RE = {
     "tire_condition_photo_policy": re.compile(r"(더\s*타도\s*돼|주행\s*가능|안전합니다)", re.IGNORECASE),
 }
 _FAQ_POLICY_SOURCE_MIN_SCORE_BY_INTENT = {
-    "tire_manufacture_date_policy": 0.015,
-    "tire_quality_warranty_policy": 0.015,
+    "tire_manufacture_date_policy": 0.2,
+    "tire_quality_warranty_policy": 0.2,
+    "reservation_no_show_fee_policy": 0.2,
+    "promotion_gift_delivery_policy": 0.2,
 }
 _FAQ_POLICY_SOURCE_RELEVANCE_RE = {
     "tire_manufacture_date_policy": re.compile(
@@ -2440,6 +2442,17 @@ _FAQ_POLICY_SOURCE_RELEVANCE_RE = {
         r"제조상\s*과실|점검|잔여\s*홈|워런티",
         re.IGNORECASE,
     ),
+}
+_FAQ_POLICY_ALLOW_TOKENS = {
+    "tire_manufacture_date_policy": ("제조일자", "DOT", "신품", "유통", "숙성", "선입선출", "6개월", "12개월"),
+    "tire_quality_warranty_policy": ("측면", "사이드월", "부풀", "품질보증", "무상", "점검", "워런티"),
+    "reservation_no_show_fee_policy": ("미방문", "예약시간", "못 갔", "취소", "수수료", "위약금", "환불"),
+    "promotion_gift_delivery_policy": ("사은품", "지급", "배송", "수령", "언제"),
+}
+_FAQ_POLICY_DENY_TOKENS = {
+    "tire_quality_warranty_policy": ("제조일자", "DOT", "선입선출", "1년 이내 생산", "최신 제조", "신품", "6개월", "12개월"),
+    "reservation_no_show_fee_policy": ("예약 방법", "장착점 선택", "고객정보 입력"),
+    "promotion_gift_delivery_policy": ("부분 취소", "반납", "차감"),
 }
 _TIRE_QUALITY_WARRANTY_MANUFACTURE_DRIFT_RE = re.compile(
     r"선입선출|1년\s*이내\s*생산|최신\s*제조|DOT|제조\s*일자|제조일자|신품|6\s*~\s*12개월|6개월|12개월|유통",
@@ -2512,9 +2525,16 @@ def _faq_policy_candidate_is_relevant(intent: str | None, candidate: Mapping[str
     if min_score is not None and score is not None and score < min_score:
         return False
     relevance_re = _FAQ_POLICY_SOURCE_RELEVANCE_RE.get(intent)
-    if relevance_re is None:
-        return True
-    return bool(relevance_re.search(text))
+    if relevance_re is not None and not relevance_re.search(text):
+        return False
+    lowered_text = text.lower()
+    allow_tokens = _FAQ_POLICY_ALLOW_TOKENS.get(intent, ())
+    if allow_tokens and not any(token.lower() in lowered_text for token in allow_tokens):
+        return False
+    deny_tokens = _FAQ_POLICY_DENY_TOKENS.get(intent, ())
+    if deny_tokens and any(token.lower() in lowered_text for token in deny_tokens):
+        return False
+    return True
 
 
 def _faq_source_text(structured_sources: list[tuple[str, Mapping[str, Any]]] | tuple[tuple[str, Mapping[str, Any]], ...] | None) -> str:
