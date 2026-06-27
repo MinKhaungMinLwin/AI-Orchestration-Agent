@@ -336,6 +336,7 @@ from services.tstation.chat import (
     MultiAgentDomain,
     StreamingMultiAgentCoordinator,
     TStationChatServiceV2,
+    _SlimMultiAgentDomain,
     prompt_router_multi,
     prompt_router_slim,
 )
@@ -14903,6 +14904,32 @@ def test_prompt_router_slim_legacy_flag_keeps_rollback_path(monkeypatch: pytest.
 
     assert "After a recent recommendation/search list" in prompt
     assert len(prompt) > 7000
+
+
+@pytest.mark.parametrize("model_cls", [MultiAgentDomain, _SlimMultiAgentDomain])
+def test_router_structured_output_schema_marks_all_properties_required(model_cls: type) -> None:
+    schema = model_cls.model_json_schema()
+
+    assert set(schema["properties"]) == set(schema["required"])
+    assert "intent" in schema["required"]
+    assert "slot_fill_intent" in schema["required"]
+    assert "candidate_reference" in schema["required"]
+
+
+def test_router_schema_failure_fallback_routes_plain_store_search_to_transaction() -> None:
+    routing = StreamingMultiAgentCoordinator._schema_failure_fallback_routing("가까운 티스테이션은 어디야?")
+
+    assert routing is not None
+    assert routing.domains == [MultiAgentDomain.Domain.TRANSACTION]
+    assert routing.agent_prompt_profile == chat_module.AgentPromptProfile.TRANSACTION_STORE
+
+
+def test_router_schema_failure_fallback_routes_tire_recommendation_to_discovery() -> None:
+    routing = StreamingMultiAgentCoordinator._schema_failure_fallback_routing("2454519 타이어 추천")
+
+    assert routing is not None
+    assert routing.domains == [MultiAgentDomain.Domain.DISCOVERY]
+    assert routing.agent_prompt_profile == chat_module.AgentPromptProfile.DISCOVERY_RECOMMENDATION
 
 
 def test_router_slot_fill_context_payload_summarizes_purchase_state_and_candidates() -> None:

@@ -872,28 +872,24 @@ class MultiAgentDomain(BaseModel):
         description="True when missing or ambiguous referred objects must be clarified before tool execution."
     )
     intent: Literal["none", "quick_order_reservation", "stock_store_search"] = Field(
-        default="none",
         description=(
             "Slot-fill flow intent for compatibility with router slot-fill metadata. "
             "Use the same value as slot_fill_intent, or 'none'."
         ),
     )
     slot_fill_intent: Literal["none", "quick_order_reservation", "stock_store_search"] = Field(
-        default="none",
         description=(
             "Existing transaction flow that the current user message is filling. Use 'quick_order_reservation' "
             "or 'stock_store_search' only when is_slot_fill=true and the current input should continue that flow."
         ),
     )
     is_slot_fill: bool = Field(
-        default=False,
         description=(
             "True when the current user message is not a new intent, but fills a missing product/quantity/region/"
             "store/schedule slot for an active purchase or stock flow shown in router context."
         ),
     )
     filled_slot: Literal["none", "product", "quantity", "region", "store", "schedule"] = Field(
-        default="none",
         description="The slot filled by this turn when is_slot_fill=true; otherwise 'none'.",
     )
     slot_fill_source: Literal[
@@ -907,22 +903,18 @@ class MultiAgentDomain(BaseModel):
         "previous_datepick",
         "unknown",
     ] = Field(
-        default="none",
         description="Evidence source for slot-fill classification. Code validates IDs after routing.",
     )
     candidate_reference: dict[str, str] = Field(
-        default_factory=dict,
         description=(
             "Human-readable candidate reference such as {'label': '벤투스 에어S 242,100원'}. "
             "Do not invent goods_no/shop_id here; code validates stable IDs."
         ),
     )
     continue_flow: bool = Field(
-        default=False,
         description="True when current flow should remain active/resumed after deterministic slot validation.",
     )
     new_intent: bool = Field(
-        default=True,
         description="False only when the current turn is a validated continuation/slot-fill of the prior flow.",
     )
     planner_confidence: float = Field(
@@ -2203,19 +2195,15 @@ class _SlimMultiAgentDomain(BaseModel):
     )
     needs_clarification: bool = Field(description="True when an unclear reference needs clarification.")
     intent: Literal["none", "quick_order_reservation", "stock_store_search"] = Field(
-        default="none",
         description="Slot-fill flow intent alias, or none.",
     )
     slot_fill_intent: Literal["none", "quick_order_reservation", "stock_store_search"] = Field(
-        default="none",
         description="Existing transaction flow being filled, or none.",
     )
     is_slot_fill: bool = Field(
-        default=False,
         description="True when current message fills an explicit transaction slot.",
     )
     filled_slot: Literal["none", "product", "quantity", "region", "store", "schedule"] = Field(
-        default="none",
         description="Slot filled by this turn, or none.",
     )
     slot_fill_source: Literal[
@@ -2228,13 +2216,12 @@ class _SlimMultiAgentDomain(BaseModel):
         "previous_template",
         "previous_datepick",
         "unknown",
-    ] = Field(default="none", description="Evidence source for slot-fill classification.")
+    ] = Field(description="Evidence source for slot-fill classification.")
     candidate_reference: dict[str, str] = Field(
-        default_factory=dict,
         description="Human-readable candidate reference; code validates IDs.",
     )
-    continue_flow: bool = Field(default=False, description="True when validation should resume flow.")
-    new_intent: bool = Field(default=True, description="False only for slot-fill continuation.")
+    continue_flow: bool = Field(description="True when validation should resume flow.")
+    new_intent: bool = Field(description="False only for slot-fill continuation.")
     planner_confidence: float = Field(description="Planner confidence 0.0 to 1.0.")
     override_applied: bool = Field(description="True when deterministic logic overrode router contract.")
     override_reason: str = Field(description="Override reason, or none.")
@@ -3486,6 +3473,48 @@ class StreamingMultiAgentCoordinator:
                     )
         return None
 
+    @classmethod
+    def _schema_failure_fallback_routing(cls, user_input: str) -> "MultiAgentDomain | None":
+        """Minimal deterministic fallback when structured router schema invocation fails.
+
+        This is intentionally narrower than the normal router. It only prevents
+        obvious store-search and tire-recommendation turns from falling into
+        LEADING when the structured output call itself is rejected.
+        """
+
+        text = (user_input or "").strip()
+        if not text:
+            return None
+        if re.search(r"티스테이션|매장|장착점|지점|근처|주변|가까운", text, re.IGNORECASE) and not re.search(
+            r"온라인|오프라인|가격\s*차이|왜\s*달라|쿠폰|현장\s*결제",
+            text,
+            re.IGNORECASE,
+        ):
+            return MultiAgentDomain(
+                reason="schema failure fallback matched store-search anchor",
+                domains=[MultiAgentDomain.Domain.TRANSACTION],
+                execution_plan=["Run TRANSACTION store search flow for current-turn store/location request"],
+                user_behavior="asking for store search or nearby T-Station location",
+                agent_prompt_profile=AgentPromptProfile.TRANSACTION_STORE,
+                claim_check_type="none",
+                complaint_scope="none",
+                flow="router schema failure fallback — transaction store search",
+            )
+        if re.search(r"추천|맞는\s*타이어|타이어\s*찾", text, re.IGNORECASE) and (
+            normalize_tire_size(text) or "타이어" in text or ConversationSlots.has_product_keyword(text)
+        ):
+            return MultiAgentDomain(
+                reason="schema failure fallback matched tire recommendation anchor",
+                domains=[MultiAgentDomain.Domain.DISCOVERY],
+                execution_plan=["Run DISCOVERY tire recommendation/search flow for current-turn recommendation request"],
+                user_behavior="asking for tire recommendation",
+                agent_prompt_profile=AgentPromptProfile.DISCOVERY_RECOMMENDATION,
+                claim_check_type="none",
+                complaint_scope="none",
+                flow="router schema failure fallback — discovery recommendation",
+            )
+        return None
+
     def classify_multi_intent(
         self,
         messages: list,
@@ -3609,6 +3638,14 @@ class StreamingMultiAgentCoordinator:
 
         except Exception as e:
             logger.exception(f"[MULTI-DOMAIN] Classification failed: {e}")
+            fallback_result = self._schema_failure_fallback_routing(last_user_text)
+            if fallback_result is not None:
+                logger.warning(
+                    "[MULTI-DOMAIN] Structured router failed; using deterministic fallback domains=%s text=%r",
+                    fallback_result.domains,
+                    last_user_text[:80],
+                )
+                return fallback_result.domains, fallback_result
             return [MultiAgentDomain.Domain.LEADING], None
 
     @staticmethod
