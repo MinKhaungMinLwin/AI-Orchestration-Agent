@@ -2736,8 +2736,13 @@ def router_slot_fill_resolution(
             action_context.expected_contract_intent or action_context.contract_intent or ""
         ).strip()
     candidate_reference = getattr(routing_result, "candidate_reference", {}) or {}
-    if not isinstance(candidate_reference, Mapping):
+    if hasattr(candidate_reference, "model_dump"):
+        candidate_reference = candidate_reference.model_dump()
+    elif isinstance(candidate_reference, Mapping):
+        candidate_reference = dict(candidate_reference)
+    else:
         candidate_reference = {}
+    candidate_reference = {key: value for key, value in candidate_reference.items() if value}
     patch = dict(slot_patch or (action_context.slot_patch if action_context is not None else {}) or {})
     return {
         "matched": True,
@@ -2745,7 +2750,7 @@ def router_slot_fill_resolution(
         "flow_intent": flow_intent or None,
         "slot_patch": patch,
         "resume_source": router_slot_fill_resume_source(routing_result, validated_slot=expected_slot),
-        "candidate_reference": dict(candidate_reference),
+        "candidate_reference": candidate_reference,
     }
 
 
