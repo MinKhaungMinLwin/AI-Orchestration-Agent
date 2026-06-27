@@ -313,6 +313,24 @@ def test_delivery_delay_reservation_schedule_policy_uses_faq_only_contract() -> 
     assert decision.metadata["response_shape_key"] == "delivery_delay_reservation_schedule_policy"
 
 
+def test_delivery_delay_reservation_schedule_policy_overrides_owned_reservation_phrase() -> None:
+    user_text = "주문하면서 매장, 일정 다 예약했는데, 배송이 지연되고 있다고 문자가 왔어. 내 예약도 자동으로 변경되나?"
+    frame = build_transaction_intent_frame(
+        user_text,
+        known_slots={"comparison_context": {"product_names": ["아이온 에보 AS", "아이온 에보 AS SUV"]}},
+    )
+    plan = plan_transaction_tools(frame)
+    decision = decide_transaction_response(intent=frame.intent, user_text=user_text, known_slots=dict(frame.known_slots))
+
+    assert frame.intent == "delivery_delay_reservation_schedule_policy"
+    assert frame.known_slots["goal_type"] == "support_policy_answer"
+    assert plan.allowed_tools == ("search_faq_hybrid_tool",)
+    assert "get_my_reservations_tool" in plan.forbidden_tools
+    assert "get_orders_of_user_tool" in plan.forbidden_tools
+    assert "get_store_schedule_tool" in plan.forbidden_tools
+    assert decision.metadata["response_shape_key"] == "delivery_delay_reservation_schedule_policy"
+
+
 def test_owned_order_cancel_fee_inquiry_uses_order_lookup_contract() -> None:
     user_text = "내 오늘 예약 취소하면 수수료 있어?"
     frame = build_transaction_intent_frame(user_text, known_slots={})

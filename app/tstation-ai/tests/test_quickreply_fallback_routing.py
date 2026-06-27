@@ -9682,6 +9682,27 @@ def test_action_mode_keeps_order_history_as_owned_record_lookup_with_stale_order
     assert _context_state_for_action(action_mode=action_mode, resume_source="none", slots=slots) == "dormant"
 
 
+def test_current_turn_action_mode_prefers_support_policy_for_delivery_delay_reservation_question() -> None:
+    action_mode = _current_turn_action_mode(
+        user_text="주문하면서 매장, 일정 다 예약했는데, 배송이 지연되고 있다고 문자가 왔어. 내 예약도 자동으로 변경되나?",
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:delivery_delay_reservation_schedule_policy"],
+            policy_intent="delivery_delay_reservation_schedule_policy",
+            needs_clarification=False,
+        ),
+        regex_slots=ConversationSlots(),
+        merged_slots=ConversationSlots(
+            comparison_context={"product_names": ["아이온 에보 AS", "아이온 에보 AS SUV"]},
+        ),
+        explicit_override_reason=None,
+        resume_source="none",
+    )
+
+    assert action_mode == "support_policy_answer"
+
+
 @pytest.mark.parametrize(
     ("user_text", "domains", "execution_plan", "expected_mode"),
     [

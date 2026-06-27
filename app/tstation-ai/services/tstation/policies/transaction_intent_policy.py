@@ -113,7 +113,7 @@ _RESERVATION_AVAILABILITY_OR_BOOKING_RE = re.compile(
     re.IGNORECASE,
 )
 _DELIVERY_DELAY_RE = re.compile(
-    r"배송\s*지연|배송이\s*늦|상품\s*미도착|미도착|입고\s*지연|도착이\s*늦|배송\s*늦",
+    r"배송(?:이)?\s*지연|배송이\s*늦|상품\s*미도착|미도착|입고\s*지연|도착이\s*늦|배송\s*늦",
     re.IGNORECASE,
 )
 _RESERVATION_AUTO_CHANGE_POLICY_RE = re.compile(
@@ -643,11 +643,18 @@ def build_transaction_intent_frame(
     current_reservation_store_info_lookup = bool(
         _RESERVATION_STORE_REF_RE.search(text) and _RESERVATION_STORE_INFO_RE.search(text)
     )
+    current_delivery_delay_reservation_schedule_policy = bool(
+        _DELIVERY_DELAY_RE.search(text)
+        and _RESERVATION_AUTO_CHANGE_POLICY_RE.search(text)
+        and not current_reservation_store_info_lookup
+        and not _ORDER_DIRECT_NO_RE.search(text)
+    )
     owned_reservation_change_status_lookup = bool(_OWNED_RESERVATION_CHANGE_STATUS_RE.search(text))
     current_reservation_status_lookup = bool(
         (_RESERVATION_STATUS_LOOKUP_RE.search(text) or owned_reservation_change_status_lookup)
         and (owned_reservation_change_status_lookup or not _RESERVATION_AVAILABILITY_OR_BOOKING_RE.search(text))
         and not current_reservation_store_info_lookup
+        and not current_delivery_delay_reservation_schedule_policy
     )
     current_order_cancel_status_signal = bool(_ORDER_CANCEL_STATUS_LOOKUP_RE.search(text))
     current_owned_order_cancel_status_lookup = bool(
@@ -680,13 +687,6 @@ def build_transaction_intent_frame(
     current_payment_method_change = bool(_PAYMENT_METHOD_CHANGE_RE.search(text))
     current_payment_account_info = bool(_PAYMENT_ACCOUNT_INFO_RE.search(text))
     current_store_arrival_visit_guidance = bool(_STORE_ARRIVAL_NOTIFICATION_VISIT_RE.search(text))
-    current_delivery_delay_reservation_schedule_policy = bool(
-        _DELIVERY_DELAY_RE.search(text)
-        and _RESERVATION_AUTO_CHANGE_POLICY_RE.search(text)
-        and not current_reservation_status_lookup
-        and not current_reservation_store_info_lookup
-        and not _ORDER_DIRECT_NO_RE.search(text)
-    )
     current_stock = bool(_STOCK_RE.search(text) or _TODAY_RE.search(text))
     current_price = bool(_PRICE_OR_COUPON_RE.search(text))
     router_alert_contract = str(slots.get("router_transaction_intent") or "") == "price_or_benefit_alert_request"
