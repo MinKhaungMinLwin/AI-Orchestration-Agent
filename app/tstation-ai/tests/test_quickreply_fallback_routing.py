@@ -11797,6 +11797,59 @@ def test_turn_contract_fallback_event_prefers_size_clarification_without_blockin
     assert event["data"]["metadata"]["shopName"] == "판교점"
 
 
+def test_turn_contract_fallback_event_uses_resolved_product_and_quantity_to_ask_for_store() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="quick_order_reservation",
+        known_slots={
+            "tire_size": "245/45R18",
+            "ord_qty": 2,
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "tire_model": "벤투스 S2 AS",
+        },
+        required_slots=(),
+        blocking_required_slots=(),
+        resolvable_required_slots=(),
+        allowed_tools=("search_product_tool", "transaction_store_preview_tool"),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=("answer_from_previous_recommendation",),
+            metadata={"response_shape_key": "missing_order_slots"},
+        ).to_dict(),
+        action_mode="purchase_continuation",
+        context_state="active",
+    )
+
+    event = _build_turn_contract_fallback_event(
+        turn_contract=contract,
+        user_text="벤투스 S2 AS 245/45R18 2개 구매하고싶어",
+        tool_data_list=[
+            {
+                "tool": "search_product_tool",
+                "input": {"keyword": "벤투스 S2 AS", "size": "245/45R18", "brand_cd": "HK"},
+                "data": {
+                    "items": [
+                        {
+                            "goods_no": "G000000312679",
+                            "goods_nm": "벤투스 S2 AS",
+                            "tire_size_1": "245/45R18",
+                        }
+                    ]
+                },
+            }
+        ],
+    )
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    assert event["assistant_response_source"] == "code_transaction_missing_store_after_product_resolution"
+    assert "벤투스 S2 AS 245/45R18 2개 구매를 진행할 매장이나 지역을 알려주세요." in event["data"]["assistantResponse"]
+    assert event["data"]["metadata"]["goodsNo"] == "G000000312679"
+    assert event["data"]["metadata"]["ordQty"] == 2
+
+
 def test_no_visible_output_fallback_event_builds_latest_compare_summary() -> None:
     contract = build_turn_contract(
         user_text="ventus s2 as, ventus air s 중에 뭐가 더 신상품?",
@@ -23546,6 +23599,52 @@ def test_current_turn_action_mode_treats_today_install_product_resolution_chain_
     )
 
     assert action_mode == "stock_check"
+
+
+def test_current_turn_action_mode_treats_continue_purchase_chain_as_purchase_continuation() -> None:
+    action_mode = chat_module._current_turn_action_mode(
+        user_text="벤투스 S2 AS 245/45R18 2개 구매하고싶어",
+        domains=[MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION],
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["discovery:resolve_product", "transaction:continue_purchase"],
+        ),
+        regex_slots=ConversationSlots(tire_size="245/45R18", ord_qty=2),
+        merged_slots=ConversationSlots(
+            tire_size="245/45R18",
+            ord_qty=2,
+            pending_product_name="벤투스 S2 AS",
+            pending_intent="order",
+            goal_type="place_order",
+        ),
+        explicit_override_reason=None,
+        resume_source="none",
+    )
+
+    assert action_mode == "purchase_continuation"
+
+
+def test_quick_order_reservation_with_region_runs_store_candidate_step_instead_of_missing_store() -> None:
+    frame = build_transaction_intent_frame(
+        "벤투스 S2 AS 245/45R18 2개 분당에서 구매할래",
+        known_slots={
+            "goods_no": "G000000312679",
+            "tire_size": "245/45R18",
+            "ord_qty": 2,
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "region": "분당",
+        },
+    )
+    tool_plan = plan_transaction_tools(frame)
+    decision = decide_transaction_response(intent=frame.intent, known_slots=dict(frame.known_slots))
+
+    assert frame.intent == "quick_order_reservation"
+    assert "store" not in frame.missing_slots
+    assert "store" not in tool_plan.required_slots
+    assert tool_plan.preferred_tool == "transaction_store_preview_tool"
+    assert decision.template == TemplateName.LOCATION
+    assert decision.metadata["response_shape_key"] == "reservation_store_candidates"
 
 
 def test_turn_contract_reports_missing_inventory_tool_for_pure_stock_contract() -> None:

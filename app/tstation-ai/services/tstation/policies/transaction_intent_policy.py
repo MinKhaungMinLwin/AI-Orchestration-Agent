@@ -1976,7 +1976,7 @@ def _action_required_slots(frame: IntentFrame, action: str) -> tuple[str, ...]:
     elif action == "quick_order_reservation":
         add("product", not frame.known_slots.get("goods_no"))
         add("quantity", not (frame.known_slots.get("quantity") or frame.known_slots.get("ord_qty")))
-        add("store", not _has_action_store(frame))
+        add("store", not (_has_action_store(frame) or frame.known_slots.get("region") or frame.known_slots.get("place")))
     elif action == "quick_order_execute":
         add("product", not frame.known_slots.get("goods_no"))
         add("quantity", not (frame.known_slots.get("quantity") or frame.known_slots.get("ord_qty")))
@@ -2026,7 +2026,7 @@ def _missing_slots_for_intent(
             missing.append("tire_size")
         if not quantity:
             missing.append("quantity")
-        if not has_store:
+        if not (has_store or has_location):
             missing.append("store")
     elif intent == "quick_order_execute":
         if not goods_no:

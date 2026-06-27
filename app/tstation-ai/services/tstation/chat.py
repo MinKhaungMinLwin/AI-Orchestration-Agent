@@ -1332,7 +1332,10 @@ def _current_turn_action_mode(
             )
         ):
             return "owned_record_lookup"
-        if any(token in plan_text for token in ("quick_order", "place_order", "add_to_cart", "cart", "checkout")):
+        if any(
+            token in plan_text
+            for token in ("quick_order", "place_order", "continue_purchase", "add_to_cart", "cart", "checkout")
+        ):
             return "purchase_continuation"
         if "stock" in plan_text or "inventory" in plan_text:
             return "stock_check"
@@ -15140,6 +15143,128 @@ def _build_transaction_unresolved_product_resolution_event(
     )
 
 
+def _resolved_transaction_product_from_search_tool(
+    *,
+    slots: Any | None,
+    tool_data_list: list[dict] | None = None,
+) -> dict[str, Any] | None:
+    pending_intent = _transactional_pending_intent_from_slots(slots)
+    if pending_intent not in {"order", "stock", "price"}:
+        return None
+
+    last_search_entry: dict[str, Any] | None = None
+    for entry in reversed(tool_data_list or []):
+        if entry.get("tool") == "search_product_tool":
+            last_search_entry = entry
+            break
+    if last_search_entry is None:
+        return None
+
+    rows = _search_product_rows_from_payload(last_search_entry.get("data"))
+    if not rows:
+        return None
+
+    slot_tire_size = normalize_tire_size(str(_slot_value(slots, "tire_size") or ""))
+    slot_product_name = str(
+        _slot_value(slots, "product_name")
+        or _slot_value(slots, "tire_model")
+        or _slot_value(slots, "pending_product_name")
+        or ""
+    ).strip()
+    search_input = last_search_entry.get("input") if isinstance(last_search_entry.get("input"), dict) else last_search_entry.get("args")
+    if not isinstance(search_input, dict):
+        search_input = {}
+    search_keyword = str(search_input.get("keyword") or "").strip()
+    product_name = slot_product_name or search_keyword
+
+    matched_rows = _search_result_rows_for_product(rows, product_name) if product_name else list(rows)
+    if slot_tire_size:
+        sized_rows = [
+            row
+            for row in matched_rows
+            if normalize_tire_size(str(canonical_context_from_tool_boundary(row).get("tire_size") or ""))
+            == slot_tire_size
+        ]
+        if sized_rows:
+            matched_rows = sized_rows
+    if len(matched_rows) != 1:
+        return None
+
+    canonical_row = canonical_context_from_tool_boundary(matched_rows[0])
+    goods_no = str(canonical_row.get("goods_no") or "").strip()
+    tire_size = normalize_tire_size(str(canonical_row.get("tire_size") or "")) or slot_tire_size
+    resolved_product_name = str(canonical_row.get("product_name") or product_name or "").strip()
+    if not goods_no:
+        return None
+    return {
+        "goods_no": goods_no,
+        "product_name": resolved_product_name,
+        "tire_size": tire_size,
+        "pending_intent": pending_intent,
+    }
+
+
+def _build_transaction_resolved_product_missing_store_event(
+    *,
+    slots: Any | None,
+    tool_data_list: list[dict] | None = None,
+) -> dict[str, Any] | None:
+    if _transactional_pending_intent_from_slots(slots) != "order":
+        return None
+    if _slot_value(slots, "shop_id") or _slot_value(slots, "shop_name") or _slot_value(slots, "store_name"):
+        return None
+    if _slot_value(slots, "region") or _slot_value(slots, "place"):
+        return None
+
+    quantity = _slot_value(slots, "ord_qty") or _slot_value(slots, "quantity")
+    if quantity in (None, "", 0, "0"):
+        return None
+
+    resolved_product = _resolved_transaction_product_from_search_tool(
+        slots=slots,
+        tool_data_list=tool_data_list,
+    )
+    if resolved_product is None:
+        return None
+
+    product_name = str(resolved_product.get("product_name") or "").strip()
+    tire_size = normalize_tire_size(str(resolved_product.get("tire_size") or ""))
+    product_label = " ".join(part for part in (product_name, tire_size) if part)
+    quantity_text = str(quantity).strip()
+    assistant_response = (
+        f"{product_label} {quantity_text}개 구매를 진행할 매장이나 지역을 알려주세요."
+        if product_label
+        else "구매를 진행할 매장이나 지역을 알려주세요."
+    )
+    metadata = {
+        "response_shape_key": "missing_order_slots",
+        "missingSlot": "store",
+        "missingSlots": ["store"],
+        "goodsNo": resolved_product.get("goods_no"),
+        "productName": resolved_product.get("product_name"),
+        "tireSize": resolved_product.get("tire_size"),
+        "ordQty": quantity,
+        "pendingIntent": "order",
+        "goalType": "place_order",
+    }
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+        "assistant_response_source": "code_transaction_missing_store_after_product_resolution",
+        "data": {
+            "assistantResponse": assistant_response,
+            "quickReplies": [
+                {"label": "내 주변 매장 찾기", "domain": "TRANSACTION"},
+                {"label": "지역/매장 입력", "domain": "TRANSACTION"},
+                {"label": "단골매장 보기", "domain": "TRANSACTION"},
+            ],
+            "predictedDomains": ["TRANSACTION", "DISCOVERY"],
+            "metadata": metadata,
+        },
+    }
+
+
 def _is_compare_contract_for_no_output(contract: TurnContract | None) -> bool:
     if contract is None:
         return False
@@ -15533,6 +15658,12 @@ def _build_turn_contract_fallback_event(
     )
     if unresolved_event is not None:
         return unresolved_event
+    resolved_product_store_prompt = _build_transaction_resolved_product_missing_store_event(
+        slots=turn_contract.known_slots,
+        tool_data_list=tool_data_list,
+    )
+    if resolved_product_store_prompt is not None:
+        return resolved_product_store_prompt
     if should_guard_required_slots(turn_contract):
         return build_required_slot_clarification_event(turn_contract)
     return build_response_policy_guard_event(turn_contract)

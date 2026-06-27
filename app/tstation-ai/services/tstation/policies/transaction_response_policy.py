@@ -762,7 +762,14 @@ def _decide_quick_order_reservation(*, slots: dict[str, Any]) -> ResponseDecisio
         missing.append("tire_size")
     if not slots.get("quantity") and not slots.get("ord_qty"):
         missing.append("quantity")
-    if not (slots.get("shop_id") or slots.get("store_name")):
+    has_store_scope = bool(
+        slots.get("shop_id")
+        or slots.get("store_name")
+        or slots.get("shop_name")
+        or slots.get("region")
+        or slots.get("place")
+    )
+    if not has_store_scope:
         missing.append("store")
 
     if missing:
@@ -773,6 +780,18 @@ def _decide_quick_order_reservation(*, slots: dict[str, Any]) -> ResponseDecisio
             forbidden_behaviors=_NO_ORDER_NULL_FORBIDDEN,
             assistant_guidance="주문 요약을 만들기 전에 누락된 필수 주문 정보를 먼저 수집한다.",
             metadata={"missing_slots": tuple(missing)},
+        )
+
+    if not (slots.get("shop_id") or slots.get("store_name") or slots.get("shop_name")) and (
+        slots.get("region") or slots.get("place")
+    ):
+        return _decision(
+            response_shape_key="reservation_store_candidates",
+            response_shape=ResponseShape.LOCATION,
+            template=TemplateName.LOCATION,
+            forbidden_behaviors=_NO_ORDER_NULL_FORBIDDEN + ("store_hours_instead_of_slots",),
+            assistant_guidance="상품과 수량이 확인되고 지역만 있으면 먼저 매장 후보를 보여준 뒤 사용자가 매장을 고르게 한다.",
+            metadata={"next_step": "store_selection"},
         )
 
     if _has_selected_booking_datetime(slots):
