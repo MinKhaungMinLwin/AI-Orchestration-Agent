@@ -1904,6 +1904,9 @@ def response_contract_violations(
             "response_shape_key": str(event.get("response_shape_key") or ""),
             "assistant_response_source": str(event.get("assistant_response_source") or ""),
         })
+    truncated_policy_response = _truncated_policy_response_violation(event=event, contract=contract)
+    if truncated_policy_response is not None:
+        violations.append(truncated_policy_response)
     discovery_first_leg_violation = _is_discovery_first_leg_transaction_violation(event, contract)
     if discovery_first_leg_violation:
         violations.append({
@@ -3651,6 +3654,34 @@ def _is_unsupported_discovery_product_template_without_current_source(
     if called_tools & _DISCOVERY_PRODUCT_SOURCE_TOOLS:
         return False
     return True
+
+
+def _truncated_policy_response_violation(
+    *,
+    event: Mapping[str, Any],
+    contract: TurnContract | None,
+) -> dict[str, Any] | None:
+    if contract is None:
+        return None
+    intent = str(contract.intent or "")
+    if not (
+        contract.domain == "support"
+        or intent.endswith("_policy")
+        or intent.endswith("_guidance")
+        or intent in _FAQ_FIRST_SUPPORT_POLICY_INTENTS
+    ):
+        return None
+    response_text = str(event.get("assistant_response_text") or "").strip()
+    data = event.get("data")
+    if not response_text and isinstance(data, Mapping):
+        response_text = str(data.get("assistantResponse") or "").strip()
+    if not response_text.endswith("..."):
+        return None
+    return {
+        "type": "truncated_policy_response",
+        "response_shape_key": str(event.get("response_shape_key") or ""),
+        "assistant_response_source": str(event.get("assistant_response_source") or ""),
+    }
 
 
 def _execution_plan(routing_result: Any | None, plan: CrossDomainPlan | None) -> tuple[str, ...]:

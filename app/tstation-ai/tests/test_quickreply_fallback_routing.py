@@ -26876,7 +26876,7 @@ def test_response_decision_helper_uses_source_domain_contextvars() -> None:
         current_transaction_response_decision.reset(transaction_token)
 
 
-def test_general_cancel_fee_policy_event_prefers_faq_source_summary_when_available() -> None:
+def test_general_cancel_fee_policy_event_does_not_append_raw_faq_summary() -> None:
     tool_result = {
         "status": "success",
         "data": {
@@ -26894,11 +26894,14 @@ def test_general_cancel_fee_policy_event_prefers_faq_source_summary_when_availab
     response = str(event["data"]["assistantResponse"])
 
     assert "확인된 FAQ 기준으로는" not in response
-    assert "별도의 취소 수수료는 없으며" in response
+    assert "별도의 취소 수수료는 없으며" not in response
+    assert "취소나 예약 변경 시 비용 발생 여부는 주문/예약 유형과 진행 상태에 따라 달라질 수 있어요." in response
+    assert not response.endswith("...")
     assert event["data"]["metadata"]["faqSourceSummaryUsed"] is True
+    assert event["data"]["metadata"]["faqSourceSummaryAppended"] is False
 
 
-def test_general_card_cancel_timing_policy_event_prefers_faq_source_summary_when_available() -> None:
+def test_general_card_cancel_timing_policy_event_does_not_append_raw_faq_summary() -> None:
     tool_result = {
         "status": "success",
         "data": {
@@ -26919,8 +26922,11 @@ def test_general_card_cancel_timing_policy_event_prefers_faq_source_summary_when
     response = str(event["data"]["assistantResponse"])
 
     assert "확인된 FAQ 기준으로는" not in response
-    assert "영업일 기준 수일이 소요될 수 있습니다." in response
+    assert "영업일 기준 수일이 소요될 수 있습니다." not in response
+    assert "보통은 영업일 기준으로 며칠 정도 소요될 수 있고" in response
+    assert not response.endswith("...")
     assert event["data"]["metadata"]["faqSourceSummaryUsed"] is True
+    assert event["data"]["metadata"]["faqSourceSummaryAppended"] is False
 
 
 def test_support_faq_policy_event_prefers_faq_source_summary_when_available() -> None:
@@ -26949,6 +26955,7 @@ def test_support_faq_policy_event_prefers_faq_source_summary_when_available() ->
     assert "6~12개월 이내 제품은 정상 신품 범주" in response
     assert event["source_domain"] == "support"
     assert event["data"]["metadata"]["faqSourceSummaryUsed"] is True
+    assert event["data"]["metadata"]["faqSourceSummaryAppended"] is True
 
 
 def test_support_faq_policy_event_selects_intent_relevant_faq_candidate_not_first_item() -> None:
@@ -26983,6 +26990,7 @@ def test_support_faq_policy_event_selects_intent_relevant_faq_candidate_not_firs
     assert "6~12개월 이내 제품은 정상 신품 범주" in response
     assert "측면 부풀음은 점검 후 보증 여부를 확인합니다." not in response
     assert event["data"]["metadata"]["faqSourceSummaryUsed"] is True
+    assert event["data"]["metadata"]["faqSourceSummaryAppended"] is True
 
 
 def test_support_faq_policy_event_drops_source_summary_when_cross_topic_scores_are_too_close() -> None:
@@ -27052,11 +27060,63 @@ def test_support_faq_policy_event_for_promotion_gift_appends_partial_cancel_inva
     response = str(event["data"]["assistantResponse"])
     lines = [line for line in response.splitlines() if line.strip()]
     assert "부분 취소로 이벤트나 프로모션 지급 기준 수량에 미달할 수 있어요." in lines[0]
-    assert "4개 구매 시 사은품이 지급되는 이벤트입니다." in response
+    assert "4개 구매 시 사은품이 지급되는 이벤트입니다." not in response
     assert "부분 취소로 이벤트나 프로모션 지급 기준 수량에 미달할 수 있어요." in response
     assert "사은품 반납이 필요할 수 있고" in response
     assert "사은품 상당 금액을 차감한 뒤 환불될 수 있어요." in response
     assert "이벤트 상세 조건과 실제 주문/취소 처리 기준에 따라 달라져요." in response
+    assert event["data"]["metadata"]["faqSourceSummaryUsed"] is True
+    assert event["data"]["metadata"]["faqSourceSummaryAppended"] is False
+    assert not response.endswith("...")
+
+
+def test_support_faq_policy_event_for_coupon_usage_does_not_append_partner_or_raw_faq() -> None:
+    event = _build_support_faq_policy_event(
+        "coupon_usage_policy",
+        "현장 결제에도 쿠폰 쓸 수 있어?",
+        tool_result={
+            "status": "success",
+            "data": {
+                "items": [
+                    {
+                        "answer": "제휴회원 전용 쿠폰은 복지몰 또는 임직원몰 전용 경로에서 확인할 수 있습니다.",
+                        "score": 0.44,
+                    }
+                ]
+            },
+        },
+    )
+
+    assert event is not None
+    response = str(event["data"]["assistantResponse"])
+    assert "제휴회원 전용 쿠폰" not in response
+    assert "복지몰" not in response
+    assert "쿠폰은 쿠폰별 사용처와 유의사항에 따라" in response
+    assert event["data"]["metadata"]["faqSourceSummaryAppended"] is False
+    assert not response.endswith("...")
+
+
+def test_support_policy_response_contract_reports_truncated_ellipsis() -> None:
+    contract = build_turn_contract(
+        user_text="현장 결제에도 쿠폰 쓸 수 있어?",
+        intent_frame=IntentFrame(domain=PolicyDomain.SUPPORT, intent="coupon_usage_policy"),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:coupon_usage_policy"],
+            policy_intent="coupon_usage_policy",
+        ),
+    )
+
+    violations = response_contract_violations(
+        template="quickReply",
+        assistant_response_text="쿠폰은 쿠폰별 사용처와 유의사항에 따라 달라질 수 있어요...",
+        assistant_response_source="code_coupon_usage_policy",
+        response_shape_key="coupon_usage_policy",
+        source_domain="support",
+        contract=contract,
+    )
+
+    assert {"type": "truncated_policy_response", "response_shape_key": "coupon_usage_policy", "assistant_response_source": "code_coupon_usage_policy"} in violations
 
 
 def test_support_faq_policy_event_for_tire_condition_photo_includes_upload_limit_and_store_guidance() -> None:
@@ -27135,7 +27195,9 @@ def test_support_faq_policy_event_for_assurance_service_surfaces_core_conditions
     first_line = response.splitlines()[0]
     assert "장착 후 1년 이내" in first_line
     assert "16,000km 이내" in first_line
-    assert "안심플러스는 구매 수량과 대상 상품 조건에 따라 보상 범위가 달라질 수 있습니다." in response
+    assert "안심플러스는 구매 수량과 대상 상품 조건에 따라 보상 범위가 달라질 수 있습니다." not in response
+    assert event["data"]["metadata"]["faqSourceSummaryUsed"] is True
+    assert event["data"]["metadata"]["faqSourceSummaryAppended"] is False
 
 
 def test_support_faq_policy_event_for_tire_quality_warranty_uses_invariant_and_warranty_cta() -> None:
@@ -27162,10 +27224,11 @@ def test_support_faq_policy_event_for_tire_quality_warranty_uses_invariant_and_w
     assert "사이드월 부풀음은 안전 관련 손상일 수 있어서 먼저 점검이 필요해요." in lines[0]
     assert "무상 수리나 교체 여부는 현장 점검 결과와 구매·장착 이력, 보증 또는 워런티 적용 여부에 따라 결정돼요." in response
     assert "워런티 서비스 적용 대상이면 상태 확인 후 안내받을 수 있어요." in response
-    assert "워런티 서비스 적용 대상이면 상태 점검 후 안내받을 수 있습니다." in response
+    assert "워런티 서비스 적용 대상이면 상태 점검 후 안내받을 수 있습니다." not in response
     assert event["data"]["quickReplies"][0]["label"] == "나의 워런티 확인"
     assert event["data"]["quickReplies"][0]["url"] == CTAUrls.WARRANTY_MAIN
-    assert event["data"]["metadata"]["faqSourceSummaryUsed"] is True
+    assert event["data"]["metadata"]["faqSourceSummaryUsed"] is False
+    assert event["data"]["metadata"]["faqSourceSummaryAppended"] is False
 
 
 def test_support_faq_policy_event_for_tire_quality_warranty_drops_manufacture_date_source_summary() -> None:
@@ -27194,7 +27257,7 @@ def test_support_faq_policy_event_for_tire_quality_warranty_drops_manufacture_da
     assert event["data"]["metadata"]["faqSourceSummaryUsed"] is False
 
 
-def test_support_faq_policy_event_for_assurance_service_compacts_long_source_summary() -> None:
+def test_support_faq_policy_event_for_assurance_service_does_not_append_long_source_summary() -> None:
     event = _build_support_faq_policy_event(
         "assurance_service_policy",
         "안심서비스랑 안심플러스 보상 조건이 정확히 어떻게 돼?",
@@ -27222,6 +27285,9 @@ def test_support_faq_policy_event_for_assurance_service_compacts_long_source_sum
     assert len(response) < 260
     assert "안심서비스는 타이어 2개 이상 구매 시 고객 과실로 파손되더라도 새 타이어 1개를 보상받을 수 있습니다." not in response
     assert "안심서비스는 2개 이상, 안심플러스는 4개 구매 기준" in response
+    assert event["data"]["metadata"]["faqSourceSummaryUsed"] is True
+    assert event["data"]["metadata"]["faqSourceSummaryAppended"] is False
+    assert not response.endswith("...")
 
 
 def test_direct_faq_policy_tool_payload_builds_transaction_policy_event() -> None:

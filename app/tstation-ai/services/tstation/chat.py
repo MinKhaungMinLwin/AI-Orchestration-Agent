@@ -7061,24 +7061,34 @@ def _compact_policy_source_summary(
     compact_summary = re.sub(r"\s+", " ", source_summary or "").strip()
     if not compact_summary:
         return ""
-    compact_summary = re.split(r"(?<=[.!?])\s+|(?<=[다요죠])\s+", compact_summary, maxsplit=1)[0].strip()
-    if len(compact_summary) > max_len:
-        compact_summary = f"{compact_summary[: max_len - 3].rstrip()}..."
-    return compact_summary
+    sentence_candidates = [
+        sentence.strip()
+        for sentence in re.split(r"(?<=[.!?])\s+|(?<=[다요죠])\s+", compact_summary)
+        if sentence.strip()
+    ]
+    if not sentence_candidates:
+        return ""
+    first_sentence = sentence_candidates[0]
+    return first_sentence if len(first_sentence) <= max_len else ""
+
+
+_POLICY_SOURCE_APPEND_ALLOWLIST = frozenset({
+    "tire_manufacture_date_policy",
+})
+
+
+def _policy_source_summary_for_response(intent: str, source_summary: str) -> str:
+    if intent not in _POLICY_SOURCE_APPEND_ALLOWLIST:
+        return ""
+    return _compact_policy_source_summary(source_summary, max_len=120)
 
 
 def _build_general_cancel_fee_policy_event(user_query: str, *, tool_result: dict | None = None) -> dict:
     source_summary = _faq_policy_source_summary_text(tool_result)
-    if source_summary:
-        assistant_response = (
-            f"{source_summary}\n\n"
-            "구체적인 취소 비용 발생 여부는 주문/예약 유형과 진행 상태에 따라 달라질 수 있으니, 실제 취소 전에는 주문내역에서도 함께 확인해 주세요."
-        )
-    else:
-        assistant_response = (
-            "취소나 예약 변경 시 비용 발생 여부는 주문/예약 유형과 진행 상태에 따라 달라질 수 있어요.\n\n"
-            "실제 취소 전에는 주문내역의 안내 문구와 조건을 함께 확인해 주세요."
-        )
+    assistant_response = (
+        "취소나 예약 변경 시 비용 발생 여부는 주문/예약 유형과 진행 상태에 따라 달라질 수 있어요.\n\n"
+        "실제 취소 전에는 주문내역의 안내 문구와 조건을 함께 확인해 주세요."
+    )
     return {
         "type": "data",
         "template": "quickReply",
@@ -7096,6 +7106,7 @@ def _build_general_cancel_fee_policy_event(user_query: str, *, tool_result: dict
                 "responseShapeKey": "general_cancel_fee_policy_summary",
                 "generalCancelFeePolicy": True,
                 "faqSourceSummaryUsed": bool(source_summary),
+                "faqSourceSummaryAppended": False,
                 "userText": user_query,
             },
         },
@@ -7104,17 +7115,11 @@ def _build_general_cancel_fee_policy_event(user_query: str, *, tool_result: dict
 
 def _build_general_card_cancel_timing_policy_event(user_query: str, *, tool_result: dict | None = None) -> dict:
     source_summary = _faq_policy_source_summary_text(tool_result)
-    if source_summary:
-        assistant_response = (
-            f"{source_summary}\n\n"
-            "정확한 반영 여부는 카드사 승인내역이나 주문내역에서 함께 확인해 주세요."
-        )
-    else:
-        assistant_response = (
-            "취소 완료 후 카드 승인취소나 환불 반영 시점은 카드사와 결제수단에 따라 달라질 수 있어요.\n\n"
-            "보통은 영업일 기준으로 며칠 정도 소요될 수 있고, 카드 승인내역이나 결제수단별 반영 시점에 따라 실제 표시 시점이 달라질 수 있어요.\n\n"
-            "정확한 반영 여부는 카드사 승인내역이나 주문내역에서 함께 확인해 주세요."
-        )
+    assistant_response = (
+        "취소 완료 후 카드 승인취소나 환불 반영 시점은 카드사와 결제수단에 따라 달라질 수 있어요.\n\n"
+        "보통은 영업일 기준으로 며칠 정도 소요될 수 있고, 카드 승인내역이나 결제수단별 반영 시점에 따라 실제 표시 시점이 달라질 수 있어요.\n\n"
+        "정확한 반영 여부는 카드사 승인내역이나 주문내역에서 함께 확인해 주세요."
+    )
     return {
         "type": "data",
         "template": "quickReply",
@@ -7132,6 +7137,7 @@ def _build_general_card_cancel_timing_policy_event(user_query: str, *, tool_resu
                 "responseShapeKey": "general_card_cancel_timing_policy",
                 "generalCardCancelTimingPolicy": True,
                 "faqSourceSummaryUsed": bool(source_summary),
+                "faqSourceSummaryAppended": False,
                 "userText": user_query,
             },
         },
@@ -7241,34 +7247,9 @@ def _build_support_faq_policy_event(
             {"label": "1:1 문의하기", "domain": "SUPPORT"},
             {"label": "처음으로", "domain": "LEADING"},
         ]
-    if source_summary and intent == "assurance_service_policy":
-        compact_summary = _compact_policy_source_summary(source_summary, max_len=92)
-        assistant_response = (
-            required_guidance_by_intent[intent]
-            if not compact_summary
-            else f"{required_guidance_by_intent[intent]}\n\n{compact_summary}"
-        )
-    elif source_summary and intent == "tire_quality_warranty_policy":
-        compact_summary = _compact_policy_source_summary(source_summary, max_len=88)
-        assistant_response = (
-            required_guidance_by_intent[intent]
-            if not compact_summary
-            else f"{required_guidance_by_intent[intent]}\n\n{compact_summary}"
-        )
-    elif source_summary and intent == "promotion_gift_policy":
-        compact_summary = _compact_policy_source_summary(source_summary, max_len=72)
-        assistant_response = (
-            required_guidance_by_intent[intent]
-            if not compact_summary
-            else f"{required_guidance_by_intent[intent]}\n\n{compact_summary}"
-        )
-    elif source_summary and intent == "coupon_usage_policy":
-        if _coupon_usage_summary_is_relevant(source_summary):
-            assistant_response = f"{source_summary}\n\n{followup_by_intent[intent]}"
-        else:
-            assistant_response = fallback_by_intent[intent]
-    elif source_summary and intent != "tire_condition_photo_policy":
-        assistant_response = f"{source_summary}\n\n{followup_by_intent[intent]}"
+    response_source_summary = _policy_source_summary_for_response(intent, source_summary)
+    if response_source_summary:
+        assistant_response = f"{response_source_summary}\n\n{followup_by_intent[intent]}"
     else:
         assistant_response = fallback_by_intent[intent]
     if intent != "tire_condition_photo_policy" and _should_lead_with_upload_capability_notice(user_query):
@@ -7288,6 +7269,7 @@ def _build_support_faq_policy_event(
             "metadata": {
                 "responseShapeKey": intent,
                 "faqSourceSummaryUsed": bool(source_summary),
+                "faqSourceSummaryAppended": bool(response_source_summary),
                 "userText": user_query,
             },
         },
@@ -16232,9 +16214,9 @@ def _faq_policy_source_summary_text(tool_result: dict | None, *, intent: str | N
     if not answer:
         return ""
     summary = re.sub(r"\s+", " ", answer).strip()
-    if len(summary) > 260:
-        summary = f"{summary[:257].rstrip()}..."
-    return summary
+    if len(summary) <= 260:
+        return summary
+    return _compact_policy_source_summary(summary, max_len=260)
 
 
 def _faq_policy_candidate_score(candidate: Mapping[str, Any]) -> float | None:
@@ -16382,9 +16364,9 @@ def _build_faq_policy_source_grounded_fallback_event(
     )
     if not source_answer:
         return None
-    source_summary = re.sub(r"\s+", " ", source_answer).strip()
-    if len(source_summary) > 260:
-        source_summary = f"{source_summary[:257].rstrip()}..."
+    source_summary = _compact_policy_source_summary(source_answer, max_len=260)
+    if not source_summary:
+        return None
     assistant_response = (
         f"{source_summary}\n\n"
         "따라서 교환, 환불, 보상 가능 여부는 FAQ 기준과 실제 점검 결과에 따라 확인해야 해요."
