@@ -13112,6 +13112,12 @@ def _pick_product_row_from_search_result(
             continue
         row_terms = _coupon_product_match_keys(row_name)
         score = len(target_terms & row_terms)
+        row_norm = _normalize_coupon_match_text(row_name)
+        target_norm = _normalize_coupon_match_text(product_name)
+        if target_norm and row_norm and row_norm == target_norm:
+            score = max(score, 100)
+        elif target_canonical_names and row_canonical_names and (target_canonical_names & row_canonical_names):
+            score = max(score, 10)
         if score <= 0 and any(
             target and row_term and (target in row_term or row_term in target)
             for target in target_terms
@@ -13127,7 +13133,15 @@ def _pick_product_row_from_search_result(
                 if not isinstance(row, dict):
                     continue
                 row_name = str(canonical_context_from_tool_boundary(row).get("product_name") or "").strip()
-                if row_name:
+                row_tokens = _product_name_match_tokens(row_name)
+                target_tokens = _product_name_match_tokens(product_name)
+                unsafe_prefix_variant_match = bool(
+                    target_tokens
+                    and row_tokens
+                    and target_tokens < row_tokens
+                    and _normalize_coupon_match_text(product_name) != _normalize_coupon_match_text(row_name)
+                )
+                if row_name and not unsafe_prefix_variant_match:
                     return row
         return None
     return best_row
@@ -13157,6 +13171,35 @@ def _resolved_comparison_rows_are_distinct(product_rows: list[tuple[str, dict | 
     left_norm = _normalize_coupon_match_text(left_label)
     right_norm = _normalize_coupon_match_text(right_label)
     return bool(left_norm and right_norm and left_norm != right_norm)
+
+
+def _build_product_comparison_distinct_target_event(product_rows: list[tuple[str, dict | None]]) -> dict:
+    requested_names = [str(name or "").strip() for name, _row in product_rows[:2]]
+    left_name = requested_names[0] if requested_names else "첫 번째 상품"
+    right_name = requested_names[1] if len(requested_names) > 1 else "두 번째 상품"
+    assistant = (
+        f"{left_name}와 {right_name}를 구분해서 비교하려면 각 상품의 정확한 규격이나 상품명을 다시 확인해야 해요. "
+        "상품을 다시 선택해 주시면 정확히 비교해 드릴게요."
+    )
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.DISCOVERY.value,
+        "assistant_response_source": "code_product_compare_resolver",
+        "data": {
+            "assistantResponse": assistant,
+            "quickReplies": [
+                {"label": "상품명 다시 입력", "domain": "DISCOVERY"},
+                {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
+                {"label": "내 차량 보기", "domain": "DISCOVERY"},
+            ],
+            "predictedDomains": ["DISCOVERY"],
+            "metadata": {
+                "response_shape_key": "product_comparison_disambiguation",
+                "productNames": [name for name in requested_names if name],
+            },
+        },
+    }
 
 
 def _unique_product_row_from_sized_search_result(tool_result: dict, product_name: str, tire_size: str) -> dict | None:
@@ -13908,6 +13951,9 @@ def _build_product_comparison_fallback_event(product_rows: list[tuple[str, dict 
     found_rows = [(name, row) for name, row in product_rows if row is not None]
     missing_names = [name for name, row in product_rows if row is None]
 
+    if len(found_rows) >= 2 and not _resolved_comparison_rows_are_distinct(found_rows[:2]):
+        return _build_product_comparison_distinct_target_event(product_rows)
+
     if len(found_rows) < 2:
         if found_rows and missing_names:
             found_name = found_rows[0][0]
@@ -14499,6 +14545,9 @@ def _build_product_comparison_event(
     user_text: str,
     product_rows: list[tuple[str, dict | None]],
 ) -> dict:
+    fallback_event = _build_product_comparison_fallback_event(product_rows)
+    if fallback_event:
+        return fallback_event
     product_rows = [
         (
             str((row or {}).get("goods_nm") or (row or {}).get("title") or name).strip() or name,
@@ -14506,9 +14555,6 @@ def _build_product_comparison_event(
         )
         for name, row in product_rows
     ]
-    fallback_event = _build_product_comparison_fallback_event(product_rows)
-    if fallback_event:
-        return fallback_event
 
     compare_metric, comparison_followup_intent, sub_intent = _comparison_context_from_policy_or_text(user_text)
     (left_name, left_row), (right_name, right_row) = product_rows[:2]  # guarded by fallback above
@@ -28953,7 +28999,10 @@ class TStationChatServiceV2:
                     )
                 product_rows.append((product_name, row))
 
-            compare_event = _build_product_comparison_event(comparison_query, product_rows)
+            if len(product_rows) >= 2 and all(isinstance(row, dict) for _name, row in product_rows[:2]) and not _resolved_comparison_rows_are_distinct(product_rows):
+                compare_event = _build_product_comparison_distinct_target_event(product_rows)
+            else:
+                compare_event = _build_product_comparison_event(comparison_query, product_rows)
             _stage_comparison_context_slots(compare_event)
             finalized_event = _finalize_direct_code_event(
                 compare_event,

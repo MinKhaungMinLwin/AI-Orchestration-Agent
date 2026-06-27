@@ -6654,6 +6654,19 @@ def test_product_row_picker_can_use_first_row_fallback_for_product_specific_sear
     assert row["goods_nm"] == "벤투스 에어 에스"
 
 
+def test_product_row_picker_fallback_rejects_longer_variant_prefix_match() -> None:
+    row = _pick_product_row_from_search_result(
+        {
+            "status": "success",
+            "data": {"items": [{"goods_no": "G-AS-SUV", "goods_nm": "아이온 에보 AS SUV"}]},
+        },
+        "아이온 에보 AS",
+        allow_first_row_fallback=True,
+    )
+
+    assert row is None
+
+
 def test_latest_comparison_uses_search_keyword_to_match_rows() -> None:
     event = _build_product_comparison_event_from_search_results(
         "dynapro HPX, dynapro HP3 중에 최신상품이 뭐야? 헷갈리넹",
@@ -6744,6 +6757,20 @@ def test_product_comparison_event_does_not_build_when_both_targets_resolve_to_sa
     )
 
     assert event is None
+
+
+def test_product_comparison_event_asks_for_disambiguation_when_targets_collapse_to_same_product() -> None:
+    event = _build_product_comparison_event(
+        "아이온 에보 AS 랑 아이온 에보 AS suv 비교해줘",
+        [
+            ("아이온 에보 AS", {"goods_no": "G-AS-SUV", "goods_nm": "아이온 에보 AS SUV"}),
+            ("아이온 에보 AS SUV", {"goods_no": "G-AS-SUV", "goods_nm": "아이온 에보 AS SUV"}),
+        ],
+    )
+
+    assert event["assistant_response_source"] == "code_product_compare_resolver"
+    assert "구분해서 비교하려면" in event["data"]["assistantResponse"]
+    assert event["data"]["metadata"]["productNames"] == ["아이온 에보 AS", "아이온 에보 AS SUV"]
 
 
 def test_grade_comparison_partial_search_results_defer_to_code_resolver() -> None:
