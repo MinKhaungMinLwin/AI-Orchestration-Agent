@@ -7182,9 +7182,6 @@ def _build_support_faq_policy_event(
             "사진이나 파일 첨부가 필요한 경우 1:1 문의를 통해 등록해 주세요.\n"
             "실제 마모도, 균열, 편마모, 손상 여부는 마모도 측정 서비스 또는 가까운 티스테이션 매장 점검으로 확인해 주세요."
         ),
-        # TODO(tire_condition_photo_policy, after CTA refactor):
-        # - When CTA registry refactor lands, add 1:1 문의하기 / 마모도 측정 서비스 CTA
-        #   instead of relying on body text only.
     }
     followup_by_intent = {
         "tire_manufacture_date_policy": "제조일자만으로 교환이나 환불을 단정하지 말고, 필요하면 제품 상태와 구매 이력도 함께 확인해 주세요.",
@@ -7225,7 +7222,16 @@ def _build_support_faq_policy_event(
         ]
     elif intent == "tire_condition_photo_policy":
         quick_replies = [
-            {"label": "가까운 매장 찾기", "domain": "TRANSACTION"},
+            {
+                "label": "마모도 측정 서비스",
+                "domain": "TRANSACTION",
+                "metadata": {
+                    "cta_action": "store_service_search",
+                    "source_intent": "tire_condition_photo_policy",
+                    "expected_contract_intent": "store_service_search",
+                    "service_name": "마모도 측정",
+                },
+            },
             {"label": "1:1 문의하기", "domain": "SUPPORT"},
             {"label": "처음으로", "domain": "LEADING"},
         ]
