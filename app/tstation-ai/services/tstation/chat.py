@@ -7848,11 +7848,20 @@ def _coerce_non_selection_listcar_to_quickreply(event: dict) -> dict | None:
     """
     if event.get("template") != "listCar":
         return None
-    source_domain = str(event.get("source_domain") or "").lower()
-    if source_domain != "discovery":
-        return None
     event_data = event.get("data")
     if not isinstance(event_data, dict):
+        return None
+    contract_meta = event_data.get("contractMetadata")
+    if isinstance(contract_meta, dict):
+        contract_intent = str(contract_meta.get("contract_intent") or "").strip()
+        response_shape_key = str(contract_meta.get("response_shape_key") or "").strip()
+        if (
+            contract_intent in {"vehicle_tire_size_lookup", "my_vehicle_lookup"}
+            or response_shape_key in {"vehicle_information", "vehicle_based_recommendation_refinement"}
+        ):
+            return None
+    source_domain = str(event.get("source_domain") or "").lower()
+    if source_domain != "discovery":
         return None
     assistant_text = str(event_data.get("assistantResponse") or "")
     if _looks_like_vehicle_selection_prompt(assistant_text):

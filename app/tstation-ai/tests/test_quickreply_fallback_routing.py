@@ -249,6 +249,7 @@ from services.tstation.chat import (
     _finalize_coerced_template_event,
     _finalize_direct_code_event,
     _choose_quickreply_fallback,
+    _coerce_non_selection_listcar_to_quickreply,
     _coerce_unmatched_vehicle_listcar_to_owner_prompt,
     _coerce_vehicle_type_compatibility_listcar_to_quickreply,
     _coupon_channel_type,
@@ -13241,6 +13242,60 @@ def test_map_list_car_includes_vehicle_selection_metadata_with_tire_sizes() -> N
     assert metadata["tireSize"] == "2254517"
     assert metadata["tireSizeRe"] == "2254517"
     assert metadata["ctaAction"] == "select_vehicle_candidate"
+
+
+def test_map_list_car_forces_vehicle_list_for_vehicle_recommendation_refinement() -> None:
+    decision = SimpleNamespace(metadata={"response_shape_key": "vehicle_based_recommendation_refinement"})
+    decision_token = current_discovery_response_decision.set(decision)
+    text_token = current_user_text.set("내 차로 확인")
+    try:
+        event = _map_list_car(
+            [
+                {
+                    "tool": "get_my_cars_tool",
+                    "data": {
+                        "items": [
+                            {
+                                "car_no": "61거1836",
+                                "car_lnc_cd": "W036269",
+                                "mbr_car_reg_seq": "2000003091",
+                                "car_nm": "뉴 제타(6세대) 2.0 TDI A/T",
+                                "car_model_det": "제타(6세대)",
+                                "car_type": "SEDAN",
+                                "tire_size_fr": "2254517",
+                                "tire_size_re": "2254517",
+                            }
+                        ]
+                    },
+                }
+            ],
+            "차량 정보를 확인했어요.",
+        )
+    finally:
+        current_user_text.reset(text_token)
+        current_discovery_response_decision.reset(decision_token)
+
+    assert event is not None
+    assert event["template"] == "listCar"
+    assert event["data"]["metadata"][0]["carNo"] == "61거1836"
+
+
+def test_non_selection_listcar_is_not_coerced_for_vehicle_information_contract() -> None:
+    event = {
+        "template": "listCar",
+        "source_domain": "discovery",
+        "data": {
+            "assistantResponse": "차량 정보를 확인했어요.",
+            "listCar": [{"licensePlate": "61거1836", "info": "제타"}],
+            "metadata": [{"carNo": "61거1836", "ctaAction": "select_vehicle_candidate"}],
+            "contractMetadata": {
+                "contract_intent": "vehicle_tire_size_lookup",
+                "response_shape_key": "vehicle_information",
+            },
+        },
+    }
+
+    assert _coerce_non_selection_listcar_to_quickreply(event) is None
 
 
 def test_apply_history_product_selection_state_resolves_goods_no_and_trace_metadata() -> None:

@@ -201,6 +201,28 @@ _DISCOVERY_SIZED_PRODUCT_CHIPS = [
     {"label": "재고/장착 매장 확인", "domain": "TRANSACTION"},
     {"label": "구매하기", "domain": "TRANSACTION"},
 ]
+_FORCED_LISTCAR_RESPONSE_SHAPE_KEYS = frozenset({
+    "vehicle_information",
+    "vehicle_based_recommendation_refinement",
+})
+_EXPLICIT_VEHICLE_LIST_REQUEST_LABELS = frozenset({
+    "내 차로 확인",
+    "내차로 확인",
+    "내 차량으로 확인",
+    "내차목록",
+    "내 차 목록",
+    "내차 목록",
+    "내차목록 보여줘",
+    "내 차 목록 보여줘",
+    "내 차량 보기",
+    "내 차 보여줘",
+    "내차 보여줘",
+    "보유 차량 확인",
+    "보유차량 확인",
+})
+_NORMALIZED_EXPLICIT_VEHICLE_LIST_REQUEST_LABELS = frozenset(
+    re.sub(r"\s+", "", label) for label in _EXPLICIT_VEHICLE_LIST_REQUEST_LABELS
+)
 _VEHICLE_PLATE_RE = re.compile(r"\d{2,3}\s*[가-힣]\s*\d{4}")
 _VEHICLE_OWNER_RE = re.compile(
     r"(?:\d{2,3}\s*[가-힣]\s*\d{4}\s+[가-힣]{2,4}|[가-힣]{2,4}\s+\d{2,3}\s*[가-힣]\s*\d{4})"
@@ -607,7 +629,10 @@ def _possessive_vehicle_model_mentions(user_text: str) -> list[str]:
 
 def _should_suppress_listcar_for_possessive_model_mismatch(rows: list[dict]) -> bool:
     user_text = current_user_text.get() or ""
-    if _EXPLICIT_VEHICLE_LIST_REQUEST_RE.search(user_text):
+    if (
+        _EXPLICIT_VEHICLE_LIST_REQUEST_RE.search(user_text)
+        or re.sub(r"\s+", "", user_text) in _NORMALIZED_EXPLICIT_VEHICLE_LIST_REQUEST_LABELS
+    ):
         return False
     requested_models = _possessive_vehicle_model_mentions(user_text)
     if not requested_models or not rows:
@@ -3310,8 +3335,17 @@ def _map_list_car(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     # actually asking the user to choose one car. In those turns, re-rendering
     # the full vehicle list is misleading noise. Only render listCar when the
     # assistant text clearly asks the user to pick / confirm a vehicle.
+    user_text = str(current_user_text.get() or "").strip()
+    normalized_user_text = re.sub(r"\s+", "", user_text)
+    decision = current_discovery_response_decision.get()
+    response_shape_key = str((decision.metadata or {}).get("response_shape_key") or "") if decision else ""
+    force_listcar = (
+        response_shape_key in _FORCED_LISTCAR_RESPONSE_SHAPE_KEYS
+        or bool(_EXPLICIT_VEHICLE_LIST_REQUEST_RE.search(user_text))
+        or normalized_user_text in _NORMALIZED_EXPLICIT_VEHICLE_LIST_REQUEST_LABELS
+    )
     text = (assistant_text or "").strip()
-    if text and not any(
+    if text and not force_listcar and not any(
         needle in text
         for needle in (
             "선택",
