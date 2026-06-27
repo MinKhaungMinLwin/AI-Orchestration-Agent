@@ -20694,6 +20694,66 @@ def test_pending_order_context_preserves_resolved_stock_slots() -> None:
     assert slots.availability_context["pending_order_context"]["payment_amount"] == 198000
 
 
+def test_pending_order_context_preserves_existing_product_and_price_on_region_followup() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000310126",
+        tire_size="245/45R19",
+        ord_qty=2,
+        region="동탄",
+        pending_intent="order",
+        goal_type="place_order",
+        availability_context={
+            "pending_order_context": {
+                "goods_no": "G000000310126",
+                "product_name": "벤투스 S2 AS",
+                "tire_model": "벤투스 S2 AS",
+                "pending_product_name": "벤투스 S2 AS",
+                "payment_amount": 308200,
+                "price_basis": "cheapest_final_prc",
+                "price_source_tool": "transaction_store_preview_tool",
+            }
+        },
+    )
+
+    context = _stage_pending_order_context(slots, source="region_followup")
+
+    assert context["product_name"] == "벤투스 S2 AS"
+    assert context["tire_model"] == "벤투스 S2 AS"
+    assert context["pending_product_name"] == "벤투스 S2 AS"
+    assert context["payment_amount"] == 308200
+    assert context["region"] == "동탄"
+    assert context["price_basis"] == "cheapest_final_prc"
+    assert context["price_source_tool"] == "transaction_store_preview_tool"
+
+
+def test_pending_order_context_qty_change_clears_stale_payment_amount() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000310126",
+        tire_size="245/45R19",
+        ord_qty=4,
+        pending_intent="order",
+        goal_type="place_order",
+        availability_context={
+            "pending_order_context": {
+                "goods_no": "G000000310126",
+                "product_name": "벤투스 S2 AS",
+                "ord_qty": 2,
+                "payment_amount": 308200,
+                "price_basis": "cheapest_final_prc",
+                "price_source_tool": "transaction_store_preview_tool",
+            }
+        },
+    )
+
+    context = _stage_pending_order_context(slots, source="quantity_followup")
+
+    assert context["ord_qty"] == 4
+    assert "payment_amount" not in context
+    assert context["payment_amount_stale"] is True
+    assert "price_basis" not in context
+    assert "price_source_tool" not in context
+
+
 def test_product_search_stages_pending_stock_context_before_size_followup() -> None:
     slots = ConversationSlots(
         region="광주",

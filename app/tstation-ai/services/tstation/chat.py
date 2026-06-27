@@ -20119,6 +20119,8 @@ def _pending_order_context_values(slots: ConversationSlots) -> dict[str, Any]:
     for field in (
         "goods_no",
         "tire_size",
+        "tire_model",
+        "pending_product_name",
         "ord_qty",
         "region",
         "shop_id",
@@ -20126,6 +20128,8 @@ def _pending_order_context_values(slots: ConversationSlots) -> dict[str, Any]:
         "payment_amount",
         "requested_cal_day",
         "rsv_hour",
+        "availability_intent",
+        "stock_check_mode",
     ):
         value = getattr(slots, field, None)
         if field == "shop_name" and _is_invalid_store_slot_value(str(value or "")):
@@ -20149,17 +20153,6 @@ def _pending_order_context_values(slots: ConversationSlots) -> dict[str, Any]:
         values["availability_intent"] = slots.availability_intent
     if getattr(slots, "requested_cal_day", None):
         values["requested_cal_day"] = slots.requested_cal_day
-    availability_context = getattr(slots, "availability_context", None)
-    if isinstance(availability_context, Mapping):
-        existing_pending_context = (
-            availability_context.get("pending_order_context")
-            if isinstance(availability_context.get("pending_order_context"), Mapping)
-            else {}
-        )
-        for field in ("price_basis", "price_source_tool"):
-            value = existing_pending_context.get(field)
-            if value not in (None, "", [], {}):
-                values[field] = value
     pending_intent = str(values.get("pending_intent") or getattr(slots, "pending_intent", None) or "").strip()
     goal_type = str(values.get("goal_type") or getattr(slots, "goal_type", None) or "").strip()
     needs_store_region = bool(
@@ -20174,6 +20167,87 @@ def _pending_order_context_values(slots: ConversationSlots) -> dict[str, Any]:
         values["pending_step"] = "store_region_selection"
         values.setdefault("stock_check_mode", "inventory_only")
     return values
+
+
+def _merge_pending_order_context(
+    existing_context: Mapping[str, Any] | None,
+    incoming_context: Mapping[str, Any] | None,
+    *,
+    source: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    existing = dict(existing_context or {})
+    incoming = {
+        key: value
+        for key, value in dict(incoming_context or {}).items()
+        if value not in (None, "", [], {})
+    }
+    merged = dict(existing)
+    committed_fields: list[str] = []
+    cleared_fields: list[str] = []
+    conflicts: dict[str, dict[str, Any]] = {}
+    payment_amount_stale = False
+
+    existing_goods_no = str(existing.get("goods_no") or "").strip()
+    incoming_goods_no = str(incoming.get("goods_no") or "").strip()
+    if existing_goods_no and incoming_goods_no and existing_goods_no != incoming_goods_no:
+        conflicts["goods_no"] = {"existing": existing_goods_no, "incoming": incoming_goods_no}
+        for field in ("shop_id", "shop_name", "requested_cal_day", "rsv_hour", "payment_amount", "price_basis", "price_source_tool"):
+            if merged.pop(field, None) not in (None, "", [], {}):
+                cleared_fields.append(field)
+        merged.pop("payment_amount_stale", None)
+
+    existing_shop_id = str(existing.get("shop_id") or "").strip()
+    incoming_shop_id = str(incoming.get("shop_id") or "").strip()
+    if existing_shop_id and incoming_shop_id and existing_shop_id != incoming_shop_id:
+        conflicts["shop_id"] = {"existing": existing_shop_id, "incoming": incoming_shop_id}
+        for field in ("requested_cal_day", "rsv_hour", "payment_amount", "price_basis", "price_source_tool"):
+            if merged.pop(field, None) not in (None, "", [], {}):
+                cleared_fields.append(field)
+        merged.pop("payment_amount_stale", None)
+
+    existing_qty = existing.get("ord_qty")
+    incoming_qty = incoming.get("ord_qty")
+    qty_changed = False
+    try:
+        qty_changed = (
+            existing_qty not in (None, "", [], {})
+            and incoming_qty not in (None, "", [], {})
+            and int(existing_qty) != int(incoming_qty)
+        )
+    except (TypeError, ValueError):
+        qty_changed = False
+    if qty_changed and incoming.get("payment_amount") in (None, "", [], {}):
+        if merged.pop("payment_amount", None) not in (None, "", [], {}):
+            cleared_fields.append("payment_amount")
+        if merged.pop("price_basis", None) not in (None, "", [], {}):
+            cleared_fields.append("price_basis")
+        if merged.pop("price_source_tool", None) not in (None, "", [], {}):
+            cleared_fields.append("price_source_tool")
+        payment_amount_stale = True
+
+    for key, value in incoming.items():
+        if merged.get(key) != value:
+            committed_fields.append(key)
+        merged[key] = value
+
+    if merged.get("payment_amount") not in (None, "", [], {}):
+        merged.pop("payment_amount_stale", None)
+    elif payment_amount_stale:
+        merged["payment_amount_stale"] = True
+
+    merged["source"] = source
+    metadata = {
+        "slot_commit_event": source,
+        "committed_fields": sorted(dict.fromkeys(committed_fields)),
+        "cleared_fields": sorted(dict.fromkeys(cleared_fields)),
+        "flow_state_before": existing,
+        "flow_state_delta": incoming,
+        "flow_state_after": dict(merged),
+        "flow_state_commit_source": source,
+        "flow_state_conflicts": conflicts,
+        "payment_amount_stale": bool(merged.get("payment_amount_stale")),
+    }
+    return merged, metadata
 
 
 def _stage_pending_order_context(slots: ConversationSlots, *, source: str) -> dict[str, Any]:
@@ -20191,19 +20265,33 @@ def _stage_pending_order_context(slots: ConversationSlots, *, source: str) -> di
     pending_context = _pending_order_context_values(slots)
     if not pending_context:
         return {}
-    if isinstance(existing_pending_context, Mapping):
-        for key in ("price_basis", "price_source_tool"):
-            if existing_pending_context.get(key) not in (None, "", [], {}) and pending_context.get(key) in (None, "", [], {}):
-                pending_context[key] = existing_pending_context.get(key)
     pending_context.setdefault("pending_intent", "stock")
     pending_context.setdefault("goal_type", "store_with_stock")
-    pending_context["source"] = source
-    context["pending_order_context"] = pending_context
-    if pending_context.get("awaiting_store_region"):
+    merged_pending_context, commit_metadata = _merge_pending_order_context(
+        existing_pending_context,
+        pending_context,
+        source=source,
+    )
+    context["pending_order_context"] = merged_pending_context
+    if merged_pending_context.get("awaiting_store_region"):
         context["awaiting_store_region"] = True
         context["pending_step"] = "store_region_selection"
+    elif not merged_pending_context.get("awaiting_store_region"):
+        context.pop("awaiting_store_region", None)
+        context.pop("pending_step", None)
     slots.availability_context = context
-    return pending_context
+    logger.info(
+        "[FLOW_STATE_COMMIT] event=%s committed=%s cleared=%s stale=%s before=%s delta=%s after=%s conflicts=%s",
+        commit_metadata["slot_commit_event"],
+        commit_metadata["committed_fields"],
+        commit_metadata["cleared_fields"],
+        commit_metadata["payment_amount_stale"],
+        commit_metadata["flow_state_before"],
+        commit_metadata["flow_state_delta"],
+        commit_metadata["flow_state_after"],
+        commit_metadata["flow_state_conflicts"],
+    )
+    return merged_pending_context
 
 
 def _current_request_allows_transaction_context_staging(slots: ConversationSlots) -> bool:
@@ -34604,6 +34692,8 @@ class TStationChatServiceV2:
                                 "[PRODUCT_SLOT_STAGE] staged confirmed product slots from event: %s",
                                 confirmed_product_slots,
                             )
+                        if _current_request_allows_transaction_context_staging(updated_slots):
+                            _stage_pending_order_context(updated_slots, source="product_event")
                     can_commit_transaction_event_slots = _allows_transaction_action_mode(stream_action_mode)
                     if last_template == "preOrder" and can_commit_transaction_event_slots:
                         _standardize_preorder_metadata(event_data, pending_slots or initial_slots)
@@ -34626,6 +34716,8 @@ class TStationChatServiceV2:
                         if updated_slots.model_dump() != base_slots.model_dump():
                             pending_slots = updated_slots
                             logger.info("[PREORDER_SLOT_COMMIT] staged canonical order snapshot: %s", preorder_slots)
+                        if _current_request_allows_transaction_context_staging(updated_slots):
+                            _stage_pending_order_context(updated_slots, source="preorder_event")
                     datepick_slots = (
                         datepick_slot_values_from_data(event)
                         if can_commit_transaction_event_slots
@@ -34653,6 +34745,8 @@ class TStationChatServiceV2:
                         if updated_slots.model_dump() != base_slots.model_dump():
                             pending_slots = updated_slots
                             logger.info("[DATEPICK_SLOT_STAGE] staged order slots from datepick event: %s", datepick_slots)
+                        if _current_request_allows_transaction_context_staging(updated_slots):
+                            _stage_pending_order_context(updated_slots, source="datepick_event")
                     if event_data.get("assistantResponse"):
                         assistant_response = _sanitize_response(event_data["assistantResponse"])
                         event_data["assistantResponse"] = assistant_response
