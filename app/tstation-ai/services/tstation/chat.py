@@ -152,6 +152,7 @@ from services.tstation.policies.ui_action_policy import (
     action_mode_for_transaction_slot_fill,
     expected_slot_fill_resume_source,
     goods_no_from_template_event,
+    is_router_transaction_slot_fill,
     is_expected_transaction_slot_fill,
     is_oe_replacement_context,
     is_oe_replacement_cta_context,
@@ -182,6 +183,7 @@ from services.tstation.policies.ui_action_policy import (
     preview_location_slot_values_from_selection,
     resolve_shop_id_from_selection,
     resolve_region_or_store_input_context,
+    router_slot_fill_resolution,
     resolve_store_selection_from_history_template,
     resolve_tire_size_from_history_template,
     resolve_vehicle_from_history_template,
@@ -518,6 +520,22 @@ class MultiAgentDomain(BaseModel):
                 data["referred_object_type"] = "none"
             if "needs_clarification" not in data:
                 data["needs_clarification"] = False
+            if "intent" not in data:
+                data["intent"] = data.get("slot_fill_intent") or "none"
+            if "slot_fill_intent" not in data:
+                data["slot_fill_intent"] = data.get("intent") or "none"
+            if "is_slot_fill" not in data:
+                data["is_slot_fill"] = False
+            if "filled_slot" not in data:
+                data["filled_slot"] = "none"
+            if "slot_fill_source" not in data:
+                data["slot_fill_source"] = "none"
+            if "candidate_reference" not in data:
+                data["candidate_reference"] = {}
+            if "continue_flow" not in data:
+                data["continue_flow"] = False
+            if "new_intent" not in data:
+                data["new_intent"] = True
             if "planner_confidence" not in data:
                 data["planner_confidence"] = 0.0
             if "comparison_followup_intent" not in data:
@@ -851,6 +869,60 @@ class MultiAgentDomain(BaseModel):
     )
     needs_clarification: bool = Field(
         description="True when missing or ambiguous referred objects must be clarified before tool execution."
+    )
+    intent: Literal["none", "quick_order_reservation", "stock_store_search"] = Field(
+        default="none",
+        description=(
+            "Slot-fill flow intent for compatibility with router slot-fill metadata. "
+            "Use the same value as slot_fill_intent, or 'none'."
+        ),
+    )
+    slot_fill_intent: Literal["none", "quick_order_reservation", "stock_store_search"] = Field(
+        default="none",
+        description=(
+            "Existing transaction flow that the current user message is filling. Use 'quick_order_reservation' "
+            "or 'stock_store_search' only when is_slot_fill=true and the current input should continue that flow."
+        ),
+    )
+    is_slot_fill: bool = Field(
+        default=False,
+        description=(
+            "True when the current user message is not a new intent, but fills a missing product/quantity/region/"
+            "store/schedule slot for an active purchase or stock flow shown in router context."
+        ),
+    )
+    filled_slot: Literal["none", "product", "quantity", "region", "store", "schedule"] = Field(
+        default="none",
+        description="The slot filled by this turn when is_slot_fill=true; otherwise 'none'.",
+    )
+    slot_fill_source: Literal[
+        "none",
+        "previous_candidate",
+        "router_context",
+        "ui_action",
+        "chip_context",
+        "direct_text",
+        "previous_template",
+        "previous_datepick",
+        "unknown",
+    ] = Field(
+        default="none",
+        description="Evidence source for slot-fill classification. Code validates IDs after routing.",
+    )
+    candidate_reference: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Human-readable candidate reference such as {'label': '벤투스 에어S 242,100원'}. "
+            "Do not invent goods_no/shop_id here; code validates stable IDs."
+        ),
+    )
+    continue_flow: bool = Field(
+        default=False,
+        description="True when current flow should remain active/resumed after deterministic slot validation.",
+    )
+    new_intent: bool = Field(
+        default=True,
+        description="False only when the current turn is a validated continuation/slot-fill of the prior flow.",
     )
     planner_confidence: float = Field(
         description="Planner confidence from 0.0 to 1.0 for the chosen domains/plan/reference judgment."
@@ -1821,6 +1893,22 @@ class _SlimMultiAgentDomain(BaseModel):
                 data["referred_object_type"] = "none"
             if "needs_clarification" not in data:
                 data["needs_clarification"] = False
+            if "intent" not in data:
+                data["intent"] = data.get("slot_fill_intent") or "none"
+            if "slot_fill_intent" not in data:
+                data["slot_fill_intent"] = data.get("intent") or "none"
+            if "is_slot_fill" not in data:
+                data["is_slot_fill"] = False
+            if "filled_slot" not in data:
+                data["filled_slot"] = "none"
+            if "slot_fill_source" not in data:
+                data["slot_fill_source"] = "none"
+            if "candidate_reference" not in data:
+                data["candidate_reference"] = {}
+            if "continue_flow" not in data:
+                data["continue_flow"] = False
+            if "new_intent" not in data:
+                data["new_intent"] = True
             if "planner_confidence" not in data:
                 data["planner_confidence"] = 0.0
             if "comparison_followup_intent" not in data:
@@ -2067,6 +2155,39 @@ class _SlimMultiAgentDomain(BaseModel):
         description="Type of referred object, or 'none'."
     )
     needs_clarification: bool = Field(description="True when an unclear reference must be clarified.")
+    intent: Literal["none", "quick_order_reservation", "stock_store_search"] = Field(
+        default="none",
+        description="Slot-fill flow intent for compatibility with router slot-fill metadata, or 'none'.",
+    )
+    slot_fill_intent: Literal["none", "quick_order_reservation", "stock_store_search"] = Field(
+        default="none",
+        description="Existing transaction flow being filled by the current turn, or 'none'.",
+    )
+    is_slot_fill: bool = Field(
+        default=False,
+        description="True when the first-turn/current message fills a missing transaction slot from explicit context.",
+    )
+    filled_slot: Literal["none", "product", "quantity", "region", "store", "schedule"] = Field(
+        default="none",
+        description="The slot filled by this turn when is_slot_fill=true.",
+    )
+    slot_fill_source: Literal[
+        "none",
+        "previous_candidate",
+        "router_context",
+        "ui_action",
+        "chip_context",
+        "direct_text",
+        "previous_template",
+        "previous_datepick",
+        "unknown",
+    ] = Field(default="none", description="Evidence source for slot-fill classification.")
+    candidate_reference: dict[str, str] = Field(
+        default_factory=dict,
+        description="Human-readable slot-fill candidate reference. Code validates IDs.",
+    )
+    continue_flow: bool = Field(default=False, description="True when deterministic validation should resume flow.")
+    new_intent: bool = Field(default=True, description="False only for slot-fill continuation turns.")
     planner_confidence: float = Field(description="Planner confidence from 0.0 to 1.0.")
     override_applied: bool = Field(description="True when deterministic logic overrode the original router contract.")
     override_reason: str = Field(description="Structured override reason, or 'none'.")
@@ -2123,12 +2244,34 @@ def prompt_router_multi() -> str:
 You are a domain classifier for T-Station AI (Hankook Tire).
 Read the FULL conversation history to classify the current user message.
 
-Produce 21 outputs:
+Produce 29 outputs:
 1. domains — ONE OR MORE domains based on detected intents (ordered by priority)
 2. reason — why you chose these domains
 3. execution_plan — short ordered plan for the selected domains, without tool names or parameters
 4. user_behavior — what the user is currently doing based on the full conversation (e.g. "selecting car from list shown in previous turn", "providing tire size", "confirming product")
 5. flow — one-line summary of the journey so far (e.g. "user requested tires → agent showed 2 cars → user selecting")
+5a. intent — "quick_order_reservation", "stock_store_search", or "none" for slot-fill flow compatibility
+5b. slot_fill_intent — same value as intent when is_slot_fill=true, otherwise "none"
+5c. is_slot_fill — true only when the current message fills a missing slot for current_flow in ROUTER SLOT-FILL CONTEXT
+5d. filled_slot — product | quantity | region | store | schedule | none
+5e. slot_fill_source — previous_candidate | router_context | ui_action | chip_context | direct_text | previous_template | previous_datepick | unknown | none
+5f. candidate_reference — label/index/type reference only; never invent goods_no/shop_id
+5g. continue_flow — true when the existing current_flow should resume after code validation
+5h. new_intent — false only for a slot-fill continuation; true for support/FAQ/complaint or any fresh request
+
+If a message named "ROUTER SLOT-FILL CONTEXT" is present, use it as structured state for the previous active flow.
+It may include current_flow, known_slots, missing_slots, last_requested_slot, and last_candidates.
+Rules:
+- When current_flow is quick_order_reservation or stock_store_search and the current user message fills
+  last_requested_slot (or exactly selects one of last_candidates), set is_slot_fill=true,
+  filled_slot=<that slot>, intent=<current_flow>, slot_fill_intent=<current_flow>, continue_flow=true, new_intent=false,
+  domains=["transaction"], and candidate_reference with only human-readable label/index/type.
+- Examples: "벤투스 에어S 242,100원" after product candidates => filled_slot=product;
+  "2개"/"4개" after quantity prompt => filled_slot=quantity; "분당" after store/region prompt => filled_slot=region;
+  "티스테이션 판교점" after location candidates => filled_slot=store; "내일 2시" after datepick prompt => filled_slot=schedule.
+- Do NOT output goods_no, shop_id, schedule IDs, or tool arguments in candidate_reference. Code validates stable IDs.
+- If the current user asks a new support/FAQ/policy/complaint question, set is_slot_fill=false, continue_flow=false,
+  new_intent=true and route by the current intent even if current_flow exists.
 
 6. claim_check_type — for product-related claim verification:
    - "none": normal product description/search/recommendation, e.g. "벤투스 에어S 설명해줘"
@@ -2489,6 +2632,12 @@ def prompt_router_slim() -> str:
     return """
 You are a domain classifier for T-Station AI (Hankook Tire).
 Classify the user's FIRST message into EXACTLY ONE domain.
+
+Also output intent, slot_fill_intent, is_slot_fill, filled_slot, slot_fill_source, candidate_reference,
+continue_flow, and new_intent. On a normal first turn with no ROUTER SLOT-FILL CONTEXT, set
+intent="none", slot_fill_intent="none", is_slot_fill=false, filled_slot="none", slot_fill_source="none",
+candidate_reference={}, continue_flow=false, new_intent=true. If explicit router context is present,
+apply the same slot-fill rules from the full router prompt; never invent stable IDs.
 
 DOMAINS:
 - TRANSACTION: store search by location or name (강남/근처/올마이티/All My T); goods_no (G+12 digits) price/stock/order; store visit reservation (specific date/time slot booking); reservation time change (예약 시간 변경/방문 시간 변경/일정 변경/시간 바꿀 수 있어); cart; coupon inquiry (내 쿠폰/쿠폰함/쿠폰 사용 조건/쿠폰 어떻게 써/쿠폰 사용법) [⚠️ NOT SUPPORT]; order history (내 주문내역/주문 조회/내 주문/내가 주문한 거) [⚠️ NOT SUPPORT]; maintenance/service history lookup (정비이력/정비내역/관리받은 내역/서비스 이력) [⚠️ NOT SUPPORT — must query member history]; order cancellation (주문 취소/취소하고 싶어/취소해줘) [⚠️ NOT SUPPORT]; cancellation/return fee inquiry (취소 수수료/취소비용/오늘 취소하면 수수료/예약 취소 비용/택배비/왕복 배송비/반품 비용/반품수수료) [⚠️ NOT SUPPORT — must check order/logistics state].
@@ -20045,6 +20194,208 @@ class TStationChatServiceV2:
         return selected
 
     @staticmethod
+    def _router_slot_fill_current_flow(slots: ConversationSlots | None) -> str:
+        if slots is None:
+            return "none"
+        pending_intent = str(getattr(slots, "pending_intent", "") or "").strip()
+        goal_type = str(getattr(slots, "goal_type", "") or "").strip()
+        if pending_intent == "order" or goal_type == "place_order":
+            return "quick_order_reservation"
+        if pending_intent == "stock" or goal_type == "store_with_stock":
+            return "stock_store_search"
+        availability_context = getattr(slots, "availability_context", None)
+        if isinstance(availability_context, Mapping):
+            for key in ("pending_order_context", "dormant_purchase_context"):
+                context = availability_context.get(key)
+                if isinstance(context, Mapping) and (
+                    context.get("pending_intent") == "order" or context.get("goal_type") == "place_order"
+                ):
+                    return "quick_order_reservation"
+            for key in ("dormant_stock_context", "dormant_transaction_context"):
+                context = availability_context.get(key)
+                if isinstance(context, Mapping) and (
+                    context.get("pending_intent") == "stock" or context.get("goal_type") == "store_with_stock"
+                ):
+                    return "stock_store_search"
+        return "none"
+
+    @staticmethod
+    def _router_slot_fill_known_slots(slots: ConversationSlots | None) -> dict[str, Any]:
+        if slots is None:
+            return {}
+        values = {
+            "product_name": getattr(slots, "tire_model", None) or getattr(slots, "pending_product_name", None),
+            "goods_no": getattr(slots, "goods_no", None),
+            "tire_size": getattr(slots, "tire_size", None),
+            "ord_qty": getattr(slots, "ord_qty", None),
+            "region": getattr(slots, "region", None),
+            "shop_id": getattr(slots, "shop_id", None),
+            "shop_name": getattr(slots, "shop_name", None),
+            "requested_cal_day": getattr(slots, "requested_cal_day", None),
+            "rsv_hour": getattr(slots, "rsv_hour", None),
+        }
+        return {key: value for key, value in values.items() if value not in (None, "", [], {})}
+
+    @staticmethod
+    def _router_slot_fill_missing_slots(current_flow: str, known_slots: Mapping[str, Any]) -> list[str]:
+        if current_flow == "none":
+            return []
+        missing: list[str] = []
+        if not known_slots.get("goods_no") and not known_slots.get("product_name"):
+            missing.append("product")
+        elif known_slots.get("product_name") and not known_slots.get("goods_no"):
+            missing.append("product")
+        if current_flow == "quick_order_reservation":
+            if known_slots.get("goods_no") and not known_slots.get("ord_qty"):
+                missing.append("quantity")
+            if known_slots.get("goods_no") and known_slots.get("ord_qty") and not (
+                known_slots.get("region") or known_slots.get("shop_id") or known_slots.get("shop_name")
+            ):
+                missing.append("store")
+            if known_slots.get("shop_id") and not (
+                known_slots.get("requested_cal_day") and known_slots.get("rsv_hour")
+            ):
+                missing.append("schedule")
+        elif current_flow == "stock_store_search":
+            if known_slots.get("goods_no") and not known_slots.get("ord_qty"):
+                missing.append("quantity")
+            if known_slots.get("goods_no") and known_slots.get("ord_qty") and not (
+                known_slots.get("region") or known_slots.get("shop_id") or known_slots.get("shop_name")
+            ):
+                missing.append("region")
+        return missing
+
+    @staticmethod
+    def _router_slot_fill_product_candidates(template_data: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+        if not isinstance(template_data, Mapping):
+            return []
+        data = template_data.get("data") if isinstance(template_data.get("data"), Mapping) else template_data
+        products = data.get("products") if isinstance(data, Mapping) else None
+        metadata = data.get("metadata") if isinstance(data, Mapping) else None
+        if not isinstance(products, list):
+            return []
+        rows: list[dict[str, Any]] = []
+        metadata_list = metadata if isinstance(metadata, list) else []
+        for idx, product in enumerate(products[:5]):
+            if not isinstance(product, Mapping):
+                continue
+            meta = metadata_list[idx] if idx < len(metadata_list) and isinstance(metadata_list[idx], Mapping) else {}
+            canonical = canonical_context_from_template_boundary({**dict(product), **dict(meta)})
+            label_parts = [
+                str(canonical.get("product_name") or product.get("titleProductName") or product.get("title") or ""),
+                str(canonical.get("tire_size") or product.get("titleTires") or ""),
+            ]
+            price = product.get("price") or product.get("finalPrice") or meta.get("price")
+            if price not in (None, "", 0):
+                try:
+                    label_parts.append(f"{int(str(price).replace(',', '')):,}원")
+                except (TypeError, ValueError):
+                    label_parts.append(str(price))
+            label = " ".join(part.strip() for part in label_parts if part and str(part).strip())
+            rows.append({
+                "type": "product",
+                "label": label,
+                "stable_id_summary": str(canonical.get("goods_no") or meta.get("entity_id") or "")[:24],
+            })
+        return rows
+
+    @staticmethod
+    def _router_slot_fill_store_candidates(template_data: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+        if not isinstance(template_data, Mapping):
+            return []
+        data = template_data.get("data") if isinstance(template_data.get("data"), Mapping) else template_data
+        stores = data.get("stores") if isinstance(data, Mapping) else None
+        metadata = data.get("metadata") if isinstance(data, Mapping) else None
+        if not isinstance(stores, list):
+            return []
+        metadata_list = metadata if isinstance(metadata, list) else []
+        rows: list[dict[str, Any]] = []
+        for idx, store in enumerate(stores[:5]):
+            if not isinstance(store, Mapping):
+                continue
+            meta = metadata_list[idx] if idx < len(metadata_list) and isinstance(metadata_list[idx], Mapping) else {}
+            canonical = canonical_context_from_template_boundary({**dict(store), **dict(meta)})
+            label = str(
+                canonical.get("shop_name")
+                or store.get("nameAddress")
+                or store.get("name")
+                or store.get("title")
+                or ""
+            ).strip()
+            rows.append({
+                "type": "store",
+                "label": label,
+                "stable_id_summary": str(canonical.get("shop_id") or "")[:24],
+            })
+        return rows
+
+    @staticmethod
+    def _router_slot_fill_schedule_candidates(template_data: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+        if not isinstance(template_data, Mapping):
+            return []
+        data = template_data.get("data") if isinstance(template_data.get("data"), Mapping) else template_data
+        quick_replies = data.get("quickReplies") if isinstance(data, Mapping) else None
+        if not isinstance(quick_replies, list):
+            return []
+        rows: list[dict[str, Any]] = []
+        for chip in quick_replies[:8]:
+            if not isinstance(chip, Mapping):
+                continue
+            label = str(chip.get("label") or chip.get("text") or chip.get("title") or "").strip()
+            if label:
+                rows.append({"type": "schedule", "label": label, "stable_id_summary": ""})
+        return rows
+
+    @staticmethod
+    def _router_slot_fill_context_payload(
+        *,
+        slots: ConversationSlots | None,
+        latest_product_tmpl: Mapping[str, Any] | None,
+        latest_location_tmpl: Mapping[str, Any] | None,
+        latest_datepick_tmpl: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        current_flow = TStationChatServiceV2._router_slot_fill_current_flow(slots)
+        known_slots = TStationChatServiceV2._router_slot_fill_known_slots(slots)
+        missing_slots = TStationChatServiceV2._router_slot_fill_missing_slots(current_flow, known_slots)
+        last_requested_slot = str(getattr(slots, "pending_required_slot", None) or "").strip()
+        if last_requested_slot == "booking_datetime":
+            last_requested_slot = "schedule"
+        if not last_requested_slot and missing_slots:
+            last_requested_slot = missing_slots[0]
+        last_candidates: list[dict[str, Any]] = []
+        last_candidates.extend(TStationChatServiceV2._router_slot_fill_product_candidates(latest_product_tmpl))
+        last_candidates.extend(TStationChatServiceV2._router_slot_fill_store_candidates(latest_location_tmpl))
+        last_candidates.extend(TStationChatServiceV2._router_slot_fill_schedule_candidates(latest_datepick_tmpl))
+        return {
+            "current_flow": current_flow,
+            "known_slots": known_slots,
+            "missing_slots": missing_slots,
+            "last_requested_slot": last_requested_slot or "none",
+            "last_candidates": [row for row in last_candidates if row.get("label")],
+        }
+
+    @staticmethod
+    def _inject_router_slot_fill_context(
+        messages: list[dict],
+        context_payload: Mapping[str, Any],
+    ) -> list[dict]:
+        if context_payload.get("current_flow") == "none" and not context_payload.get("last_candidates"):
+            return messages
+        context_message = {
+            "role": "system",
+            "content": "ROUTER SLOT-FILL CONTEXT:\n"
+            + json.dumps(context_payload, ensure_ascii=False, separators=(",", ":")),
+        }
+        injected = [dict(message) for message in messages]
+        insert_at = len(injected)
+        for idx in range(len(injected) - 1, -1, -1):
+            if injected[idx].get("role") == "user":
+                insert_at = idx
+                break
+        injected.insert(insert_at, context_message)
+        return injected
+
+    @staticmethod
     async def chat(request: TStationChatRequest):
         """
         T-Station AI Chat V2 - Multi-Agent Streaming
@@ -20444,6 +20795,7 @@ class TStationChatServiceV2:
             "contract_intent_before_router": None,
             "final_contract_intent": None,
         }
+        router_slot_fill_metadata: dict[str, Any] = {}
         for msg in reversed(request.messages):
             if msg.get("role") == "user":
                 last_user_text = msg.get("content", "")
@@ -20624,6 +20976,18 @@ class TStationChatServiceV2:
                     "[VEHICLE_TIRE_SELECTION] rewrote front/rear tire selection follow-up to text=%s",
                     resolved_position_size,
                 )
+
+            router_slot_fill_context_payload = TStationChatServiceV2._router_slot_fill_context_payload(
+                slots=existing_slots,
+                latest_product_tmpl=latest_product_tmpl,
+                latest_location_tmpl=latest_location_tmpl,
+                latest_datepick_tmpl=latest_datepick_tmpl,
+            )
+            classifier_messages = TStationChatServiceV2._inject_router_slot_fill_context(
+                classifier_messages,
+                router_slot_fill_context_payload,
+            )
+            vehicle_selection_trace_metadata["router_slot_fill_context"] = router_slot_fill_context_payload
 
             classify_future = _try_submit_speculative(
                 _coordinator.classify_multi_intent,
@@ -23597,6 +23961,95 @@ class TStationChatServiceV2:
             resume_source = location_selection_resume_source
         if resume_source == "none" and region_store_input_resolution.resolved:
             resume_source = region_store_input_resolution.resume_source
+        router_slot_fill_metadata: dict[str, Any] = {
+            "router_is_slot_fill": bool(getattr(routing_result, "is_slot_fill", False)) if routing_result else False,
+            "router_filled_slot": str(getattr(routing_result, "filled_slot", "none") or "none")
+            if routing_result
+            else "none",
+            "router_slot_fill_source": str(getattr(routing_result, "slot_fill_source", "none") or "none")
+            if routing_result
+            else "none",
+            "router_slot_fill_intent": str(getattr(routing_result, "slot_fill_intent", "none") or "none")
+            if routing_result
+            else "none",
+            "router_candidate_reference": (
+                dict(getattr(routing_result, "candidate_reference", {}) or {})
+                if routing_result and isinstance(getattr(routing_result, "candidate_reference", None), Mapping)
+                else {}
+            ),
+            "router_slot_patch": {},
+            "router_slot_fill_validated": False,
+        }
+        router_slot_fill_metadata["filled_slot"] = router_slot_fill_metadata["router_filled_slot"]
+        router_slot_fill_metadata["candidate_reference"] = router_slot_fill_metadata["router_candidate_reference"]
+        router_slot_fill_metadata["slot_patch"] = {}
+        router_slot_fill = router_slot_fill_resolution(routing_result, action_context=vehicle_ui_action_context)
+        if not router_slot_fill["matched"] and region_store_input_resolution.resolved:
+            region_store_expected_slot = "none"
+            if region_store_input_resolution.resume_source.startswith("expected_slot_fill:"):
+                region_store_expected_slot = region_store_input_resolution.resume_source.split(":", 1)[1]
+            router_slot_fill = router_slot_fill_resolution(
+                routing_result,
+                slot_patch=region_store_input_resolution.slots_to_promote,
+                validated_slot=region_store_expected_slot,
+            )
+        if (
+            not router_slot_fill["matched"]
+            and location_selection_resume_source == "expected_slot_fill:store"
+            and getattr(merged_slots, "shop_id", None)
+        ):
+            router_slot_fill = router_slot_fill_resolution(
+                routing_result,
+                slot_patch={
+                    "shop_id": merged_slots.shop_id,
+                    "shop_name": merged_slots.shop_name,
+                    "goods_no": merged_slots.goods_no,
+                    "tire_size": merged_slots.tire_size,
+                    "ord_qty": merged_slots.ord_qty,
+                    "pending_intent": merged_slots.pending_intent,
+                    "goal_type": merged_slots.goal_type,
+                },
+                validated_slot="store",
+            )
+        if (
+            not router_slot_fill["matched"]
+            and is_router_transaction_slot_fill(routing_result, validated_slot="quantity")
+            and getattr(regex_slots, "ord_qty", None) is not None
+            and _has_stored_transaction_context(merged_slots)
+        ):
+            router_slot_fill = router_slot_fill_resolution(
+                routing_result,
+                slot_patch={"ord_qty": regex_slots.ord_qty},
+                validated_slot="quantity",
+            )
+        if (
+            not router_slot_fill["matched"]
+            and is_router_transaction_slot_fill(routing_result, validated_slot="schedule")
+            and getattr(merged_slots, "requested_cal_day", None)
+            and getattr(merged_slots, "rsv_hour", None)
+            and _has_stored_transaction_context(merged_slots)
+        ):
+            router_slot_fill = router_slot_fill_resolution(
+                routing_result,
+                slot_patch={
+                    "requested_cal_day": merged_slots.requested_cal_day,
+                    "rsv_hour": merged_slots.rsv_hour,
+                },
+                validated_slot="schedule",
+            )
+        if router_slot_fill["matched"]:
+            router_resume_source = str(router_slot_fill.get("resume_source") or "none")
+            if router_resume_source != "none":
+                resume_source = router_resume_source
+            router_slot_fill_metadata.update({
+                "router_slot_fill_validated": True,
+                "router_slot_patch": dict(router_slot_fill.get("slot_patch") or {}),
+                "slot_patch": dict(router_slot_fill.get("slot_patch") or {}),
+            })
+            vehicle_selection_trace_metadata.update({
+                "selection_source": router_resume_source,
+                "slots_rewritten": bool(router_slot_fill.get("slot_patch")),
+            })
         previous_pending_intent = str(getattr(merged_slots, "pending_intent", None) or "").strip() or None
         previous_goal_type = str(getattr(merged_slots, "goal_type", None) or "").strip() or None
         if region_store_input_resolution.resolved:
@@ -23851,6 +24304,16 @@ class TStationChatServiceV2:
                 vehicle_selection_trace_metadata["final_contract_intent"] = (
                     str(turn_contract.sub_intent or turn_contract.intent or "").strip() or None
                 )
+            router_slot_fill_metadata["flow_step_before"] = (
+                (vehicle_selection_trace_metadata.get("router_slot_fill_context") or {}).get("last_requested_slot")
+                if isinstance(vehicle_selection_trace_metadata.get("router_slot_fill_context"), Mapping)
+                else None
+            )
+            router_slot_fill_metadata["flow_step_after"] = (
+                dict(getattr(transaction_tool_plan, "metadata", {}) or {}).get("flow_step")
+                if transaction_tool_plan is not None
+                else None
+            )
             logger.info("[TURN_CONTRACT] %s", turn_contract.to_dict() if turn_contract else None)
             if turn_contract and turn_contract.contract_drift:
                 logger.warning("[TURN_CONTRACT] planner/code drift %s", turn_contract.to_dict()["contract_drift"])
@@ -24232,6 +24695,7 @@ class TStationChatServiceV2:
                     intent_group=intent_group,
                     turn_contract=turn_contract,
                     vehicle_selection_trace_metadata=vehicle_selection_trace_metadata,
+                    router_slot_fill_metadata=router_slot_fill_metadata,
                 ),
                 media_type="text/event-stream",
                 headers={
@@ -24270,6 +24734,7 @@ class TStationChatServiceV2:
                 intent_group=intent_group,
                 turn_contract=turn_contract,
                 vehicle_selection_trace_metadata=vehicle_selection_trace_metadata,
+                router_slot_fill_metadata=router_slot_fill_metadata,
             ):
                 if event_str.startswith("data: "):
                     json_str = event_str[6:].strip()
@@ -24766,6 +25231,7 @@ class TStationChatServiceV2:
         intent_group: str | None = None,
         turn_contract: TurnContract | None = None,
         vehicle_selection_trace_metadata: dict[str, Any] | None = None,
+        router_slot_fill_metadata: dict[str, Any] | None = None,
     ):
         """Stream response from multi-agent coordinator with Strict QC Layer."""
         from config.env import settings as _s
@@ -24795,6 +25261,7 @@ class TStationChatServiceV2:
         called_tool_names: set[str] = set()
         tool_errors: list[dict] = []
         vehicle_selection_trace_metadata = dict(vehicle_selection_trace_metadata or {})
+        router_slot_fill_metadata = dict(router_slot_fill_metadata or {})
         last_template: str | None = None
         last_template_source: str | None = None
         last_assistant_response_source: str | None = None
@@ -32770,6 +33237,7 @@ class TStationChatServiceV2:
                 "latency_qc_ms": round(_lat_qc_ms),
             }
             _trace_metadata.update(vehicle_selection_trace_metadata)
+            _trace_metadata.update(router_slot_fill_metadata)
             _trace_metadata.update(ui_action_trace_metadata(buffered_data_events))
             _trace_output = _truncate(draft_response)
             _trace_input = _truncate(_last_user)

@@ -1179,6 +1179,35 @@ def is_expected_transaction_slot_fill(action_context: UIActionContext | None) ->
     )
 
 
+def is_router_transaction_slot_fill(
+    routing_result: Any | None,
+    *,
+    validated_slot: str | None = None,
+) -> bool:
+    if routing_result is None or not bool(getattr(routing_result, "is_slot_fill", False)):
+        return False
+    filled_slot = str(getattr(routing_result, "filled_slot", "") or "").strip()
+    if filled_slot == "none" or filled_slot not in {"product", "quantity", "region", "store", "schedule"}:
+        return False
+    if validated_slot is not None and filled_slot != validated_slot:
+        return False
+    slot_fill_intent = str(getattr(routing_result, "slot_fill_intent", "") or "").strip()
+    if slot_fill_intent not in {"", "none", _QUICK_ORDER_RESERVATION_INTENT, _STOCK_STORE_SEARCH_INTENT}:
+        return False
+    return bool(getattr(routing_result, "continue_flow", False))
+
+
+def router_slot_fill_resume_source(
+    routing_result: Any | None,
+    *,
+    validated_slot: str | None = None,
+) -> str:
+    if not is_router_transaction_slot_fill(routing_result, validated_slot=validated_slot):
+        return "none"
+    filled_slot = str(getattr(routing_result, "filled_slot", "") or "").strip()
+    return f"router_slot_fill:{filled_slot}"
+
+
 def action_mode_for_transaction_slot_fill(action_context: UIActionContext | None) -> str | None:
     if not is_expected_transaction_slot_fill(action_context):
         return None
@@ -2565,6 +2594,35 @@ def resolve_product_row_from_selection(
         if goods_no:
             return same_size[0]
 
+    price_values = {
+        int(value.replace(",", ""))
+        for value in re.findall(r"\d[\d,]{3,}", text)
+        if value.replace(",", "").isdigit()
+    }
+    if price_values:
+        price_matches: list[dict[str, Any]] = []
+        for item in same_size:
+            for price_key in (
+                "cheapest_final_prc",
+                "final_unit_price",
+                "final_prc",
+                "extra_fvr_sale_prc",
+                "price",
+                "sale_prc",
+            ):
+                raw_price = item.get(price_key)
+                try:
+                    item_price = int(str(raw_price).replace(",", ""))
+                except (TypeError, ValueError):
+                    continue
+                if item_price in price_values:
+                    price_matches.append(item)
+                    break
+        if len(price_matches) == 1:
+            goods_no = canonical_context_from_tool_boundary(price_matches[0]).get("goods_no")
+            if goods_no:
+                return price_matches[0]
+
     tokens = [t.lower() for t in re.findall(r"[A-Za-z가-힣0-9]+", text) if len(t) >= 2]
     best_item: dict[str, Any] | None = None
     best_score = 0
@@ -2632,6 +2690,56 @@ def transaction_slot_fill_resolution(action_context: UIActionContext | None) -> 
         "slot_patch": dict(action_context.slot_patch or {}),
         "resume_source": expected_slot_fill_resume_source(action_context),
         "input_source": str(action_context.selection_source or "").strip() or None,
+    }
+
+
+def router_slot_fill_resolution(
+    routing_result: Any | None,
+    *,
+    action_context: UIActionContext | None = None,
+    slot_patch: Mapping[str, Any] | None = None,
+    validated_slot: str | None = None,
+) -> dict[str, Any]:
+    if action_context is not None and not is_expected_transaction_slot_fill(action_context) and validated_slot is None:
+        return {
+            "matched": False,
+            "expected_slot": None,
+            "flow_intent": None,
+            "slot_patch": {},
+            "resume_source": "none",
+            "candidate_reference": {},
+        }
+    action_slot = None
+    if action_context is not None:
+        action_type = str(action_context.action_type or "").strip()
+        action_slot = _TRANSACTION_SLOT_FILL_ACTION_TO_SLOT.get(action_type)
+    expected_slot = validated_slot or action_slot
+    matched = is_router_transaction_slot_fill(routing_result, validated_slot=expected_slot)
+    if not matched:
+        return {
+            "matched": False,
+            "expected_slot": expected_slot,
+            "flow_intent": None,
+            "slot_patch": {},
+            "resume_source": "none",
+            "candidate_reference": {},
+        }
+    flow_intent = str(getattr(routing_result, "slot_fill_intent", "") or "").strip()
+    if action_context is not None:
+        flow_intent = flow_intent or str(
+            action_context.expected_contract_intent or action_context.contract_intent or ""
+        ).strip()
+    candidate_reference = getattr(routing_result, "candidate_reference", {}) or {}
+    if not isinstance(candidate_reference, Mapping):
+        candidate_reference = {}
+    patch = dict(slot_patch or (action_context.slot_patch if action_context is not None else {}) or {})
+    return {
+        "matched": True,
+        "expected_slot": expected_slot or str(getattr(routing_result, "filled_slot", "") or "").strip(),
+        "flow_intent": flow_intent or None,
+        "slot_patch": patch,
+        "resume_source": router_slot_fill_resume_source(routing_result, validated_slot=expected_slot),
+        "candidate_reference": dict(candidate_reference),
     }
 
 

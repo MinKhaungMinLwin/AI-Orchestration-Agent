@@ -411,6 +411,7 @@ from services.tstation.policies.ui_action_policy import (
     confirmed_product_slot_values_from_event,
     datepick_slot_values_from_data,
     expected_slot_fill_resume_source,
+    is_router_transaction_slot_fill,
     is_manual_tire_size_input_selection,
     is_logistics_earliest_install_date_followup,
     is_expected_transaction_slot_fill,
@@ -449,6 +450,7 @@ from services.tstation.policies.ui_action_policy import (
     apply_history_location_selection_state,
     build_store_availability_quantity_prompt_event,
     decide_store_availability_followup_action,
+    router_slot_fill_resolution,
     transaction_slot_fill_resolution,
     ui_action_trace_metadata,
     validate_ui_actions_for_contract,
@@ -14580,6 +14582,212 @@ def test_history_product_selection_state_promotes_purchase_slot_fill_and_rewrite
 
     assert frame.intent == "quick_order_reservation"
     assert "store" in frame.missing_slots
+
+
+def test_router_schema_defaults_slot_fill_fields_for_existing_construction() -> None:
+    routing = MultiAgentDomain(
+        reason="support policy",
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        execution_plan=["support:policy"],
+        user_behavior="asking policy",
+        flow="policy turn",
+        claim_check_type="none",
+        complaint_scope="none",
+        agent_prompt_profile="full",
+    )
+
+    assert routing.is_slot_fill is False
+    assert routing.intent == "none"
+    assert routing.filled_slot == "none"
+    assert routing.slot_fill_intent == "none"
+    assert routing.candidate_reference == {}
+    assert routing.continue_flow is False
+    assert routing.new_intent is True
+
+
+def test_router_slot_fill_resolution_uses_router_resume_source_after_code_validation() -> None:
+    action_context = resolve_ui_action_context(
+        raw_action={
+            "action_type": "select_product",
+            "expected_behavior": "slot_fill",
+            "source_intent": "quick_order_reservation",
+            "expected_contract_intent": "quick_order_reservation",
+            "entity_type": "product",
+            "entity_id": "G000000319584",
+            "entity_label": "벤투스 에어S 242,100원",
+            "slots": {
+                "goods_no": "G000000319584",
+                "tire_size": "245/45R19",
+                "ord_qty": 2,
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            },
+        },
+        selected_vehicle=None,
+        selection_source="previous_product_candidate",
+    )
+    routing = MultiAgentDomain(
+        reason="product candidate fills purchase product slot",
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        execution_plan=["transaction:continue_purchase"],
+        user_behavior="selecting previous product candidate",
+        flow="purchase product selection",
+        claim_check_type="none",
+        complaint_scope="none",
+        agent_prompt_profile="transaction_store",
+        intent="quick_order_reservation",
+        slot_fill_intent="quick_order_reservation",
+        is_slot_fill=True,
+        filled_slot="product",
+        slot_fill_source="previous_candidate",
+        candidate_reference={"label": "벤투스 에어S 242,100원"},
+        continue_flow=True,
+        new_intent=False,
+    )
+
+    assert is_router_transaction_slot_fill(routing, validated_slot="product") is True
+    resolution = router_slot_fill_resolution(routing, action_context=action_context)
+    assert resolution["matched"] is True
+    assert resolution["resume_source"] == "router_slot_fill:product"
+    assert resolution["slot_patch"]["goods_no"] == "G000000319584"
+    assert resolution["candidate_reference"] == {"label": "벤투스 에어S 242,100원"}
+
+
+def test_router_slot_fill_resolution_rejects_unvalidated_or_wrong_slot() -> None:
+    routing = MultiAgentDomain(
+        reason="router thought store slot fill",
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        execution_plan=["transaction:continue_purchase"],
+        user_behavior="selecting store",
+        flow="purchase store selection",
+        claim_check_type="none",
+        complaint_scope="none",
+        agent_prompt_profile="transaction_store",
+        intent="quick_order_reservation",
+        slot_fill_intent="quick_order_reservation",
+        is_slot_fill=True,
+        filled_slot="store",
+        slot_fill_source="previous_candidate",
+        candidate_reference={"label": "티스테이션 판교점"},
+        continue_flow=True,
+        new_intent=False,
+    )
+
+    assert is_router_transaction_slot_fill(routing, validated_slot="product") is False
+    resolution = router_slot_fill_resolution(routing, validated_slot="product")
+    assert resolution["matched"] is False
+    assert resolution["resume_source"] == "none"
+    assert resolution["slot_patch"] == {}
+
+
+def test_router_slot_fill_resolution_rejects_non_transaction_action_context() -> None:
+    vehicle_context = UIActionContext(
+        action_type="select_vehicle",
+        action_name="select_vehicle_candidate",
+        selection_source="previous_listCar_candidate",
+        contract_intent="vehicle_tire_size_lookup",
+        source_intent="vehicle_tire_size_lookup",
+        expected_contract_intent="vehicle_tire_size_lookup",
+        expected_behavior="conversation_action",
+        entity_type="vehicle",
+        entity_id="61거1836",
+        entity_label="61거1836",
+        slot_patch={"car_no": "61거1836", "tire_size": "225/45R17"},
+    )
+    routing = MultiAgentDomain(
+        reason="router thought product slot fill",
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        execution_plan=["transaction:continue_purchase"],
+        user_behavior="selecting product",
+        flow="purchase product selection",
+        claim_check_type="none",
+        complaint_scope="none",
+        agent_prompt_profile="transaction_store",
+        intent="quick_order_reservation",
+        slot_fill_intent="quick_order_reservation",
+        is_slot_fill=True,
+        filled_slot="product",
+        slot_fill_source="previous_candidate",
+        candidate_reference={"label": "벤투스 에어S"},
+        continue_flow=True,
+        new_intent=False,
+    )
+
+    resolution = router_slot_fill_resolution(routing, action_context=vehicle_context)
+
+    assert resolution["matched"] is False
+    assert resolution["resume_source"] == "none"
+    assert resolution["slot_patch"] == {}
+
+
+def test_router_slot_fill_context_payload_summarizes_purchase_state_and_candidates() -> None:
+    payload = TStationChatServiceV2._router_slot_fill_context_payload(
+        slots=ConversationSlots(
+            tire_model="벤투스 에어S",
+            ord_qty=2,
+            pending_intent="order",
+            goal_type="place_order",
+            pending_required_slot="product",
+        ),
+        latest_product_tmpl={
+            "template": "product",
+            "data": {
+                "products": [
+                    {
+                        "titleProductName": "벤투스 에어S",
+                        "titleTires": "245/45R19",
+                        "price": 242100,
+                    }
+                ],
+                "metadata": [{"goodsNo": "G000000319584"}],
+            },
+        },
+        latest_location_tmpl=None,
+        latest_datepick_tmpl=None,
+    )
+
+    assert payload["current_flow"] == "quick_order_reservation"
+    assert payload["known_slots"]["product_name"] == "벤투스 에어S"
+    assert payload["known_slots"]["ord_qty"] == 2
+    assert payload["missing_slots"] == ["product"]
+    assert payload["last_requested_slot"] == "product"
+    assert payload["last_candidates"] == [
+        {
+            "type": "product",
+            "label": "벤투스 에어S 245/45R19 242,100원",
+            "stable_id_summary": "G000000319584",
+        }
+    ]
+
+
+def test_resolve_goods_no_from_selection_uses_price_when_same_size_candidates_are_ambiguous() -> None:
+    goods_no = resolve_goods_no_from_selection(
+        "벤투스 에어S 242,100원",
+        [
+            {
+                "tool": "search_product_tool",
+                "data": {
+                    "items": [
+                        {
+                            "goods_no": "G000000319584",
+                            "goods_nm": "벤투스 에어S",
+                            "tire_size_1": "245/45R19",
+                            "final_prc": 242100,
+                        },
+                        {
+                            "goods_no": "G000000319585",
+                            "goods_nm": "벤투스 에어S",
+                            "tire_size_1": "245/45R19",
+                            "final_prc": 260000,
+                        },
+                    ]
+                },
+            }
+        ],
+        current_tire_size="245/45R19",
+    )
+
+    assert goods_no == "G000000319584"
 
 
 def test_region_followup_in_purchase_context_keeps_quick_order_reservation() -> None:
