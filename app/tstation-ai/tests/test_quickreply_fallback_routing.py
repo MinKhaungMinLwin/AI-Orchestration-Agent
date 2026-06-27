@@ -420,6 +420,7 @@ from services.tstation.policies.ui_action_policy import (
     classify_direct_cta_action,
     confirmed_product_slot_values_for_purchase_cta,
     confirmed_product_slot_values_from_event,
+    selected_product_name_for_purchase_cta,
     datepick_slot_values_from_data,
     expected_slot_fill_resume_source,
     is_router_transaction_slot_fill,
@@ -13329,6 +13330,42 @@ def test_apply_history_product_selection_state_resolves_goods_no_and_trace_metad
     assert state.trace_metadata["validation_result"] == "resolved_from_history"
 
 
+def test_apply_history_product_selection_state_keeps_product_family_for_unsized_recommendation() -> None:
+    slots = ConversationSlots(goods_no=None, tire_size=None)
+    prev_tool_data = [{
+        "tool": "get_products_recommendations_tool",
+        "input": {"rcmd_type": "sound_absorber"},
+        "data": [
+            {"goods_no": "G000000318219", "goods_nm": "아이온 ST AS SUV", "tire_size_1": "235/55R19"},
+            {"goods_no": "G000000319575", "goods_nm": "벤투스 에어S", "tire_size_1": "245/40R19"},
+            {"goods_no": "G000000319633", "goods_nm": "아이온 에보 AS SUV", "tire_size_1": "265/45R20"},
+        ],
+    }]
+
+    state = apply_history_product_selection_state(
+        last_user_text="아이온 에보 as",
+        prev_tool_data=prev_tool_data,
+        merged_slots=slots,
+        latest_quickreply_tmpl={
+            "metadata": {"responseShapeKey": "technology_explanation_then_unsized_recommendation_summary"},
+        },
+        resolve_goods_no_from_selection_fn=lambda user_text, tool_data, current_tire_size: resolve_goods_no_from_selection(
+            user_text,
+            tool_data,
+            current_tire_size=current_tire_size,
+        ),
+    )
+
+    assert state.updated_slots.goods_no is None
+    assert state.updated_slots.tire_size is None
+    assert state.updated_slots.tire_model == "아이온 에보 AS SUV"
+    assert state.updated_slots.pending_product_name == "아이온 에보 AS SUV"
+    assert state.goods_no_resolved is False
+    assert state.requires_size_resolution is True
+    assert state.selected_product_name == "아이온 에보 AS SUV"
+    assert state.trace_metadata["validation_result"] == "unsized_candidate_requires_size"
+
+
 def test_previous_product_candidate_without_transaction_anchor_forces_product_description() -> None:
     should_force = _should_force_previous_product_candidate_description(
         goods_no_resolved=True,
@@ -15801,6 +15838,52 @@ def test_purchase_cta_recovers_confirmed_product_from_quickreply_metadata() -> N
         "tire_size": "235/55R19",
         "tire_model": "다이나프로 HPX",
     }
+
+
+def test_purchase_cta_from_unsized_recommendation_does_not_recover_sku_slots() -> None:
+    latest_product_tmpl = {
+        "products": [
+            {
+                "titleProductName": "아이온 에보 AS SUV",
+                "titleTires": "265/45R20",
+            }
+        ],
+        "metadata": [{"goodsId": "G000000319633"}],
+    }
+    prev_tool_data = [
+        {
+            "tool": "get_products_recommendations_tool",
+            "input": {"rcmd_type": "sound_absorber"},
+            "data": [
+                {"goods_no": "G000000319633", "goods_nm": "아이온 에보 AS SUV", "tire_size_1": "265/45R20"},
+            ],
+        },
+        {
+            "tool": "get_product_description_tool",
+            "input": {"goods_no": "G000000319633"},
+            "data": {"data": {"goods_no": "G000000319633", "goods_nm": "아이온 에보 AS SUV", "tire_size_1": "265/45R20"}},
+        },
+    ]
+
+    slots = confirmed_product_slot_values_for_purchase_cta(
+        latest_quickreply_tmpl={
+            "metadata": {"responseShapeKey": "technology_explanation_then_unsized_recommendation_summary"},
+        },
+        latest_product_tmpl=latest_product_tmpl,
+        prev_tool_data=prev_tool_data,
+    )
+
+    assert slots is None
+    assert (
+        selected_product_name_for_purchase_cta(
+            latest_quickreply_tmpl={
+                "metadata": {"responseShapeKey": "technology_explanation_then_unsized_recommendation_summary"},
+            },
+            latest_product_tmpl=latest_product_tmpl,
+            prev_tool_data=prev_tool_data,
+        )
+        == "아이온 에보 AS SUV"
+    )
 
 
 def test_purchase_cta_recovers_confirmed_product_from_snake_case_quickreply_metadata() -> None:

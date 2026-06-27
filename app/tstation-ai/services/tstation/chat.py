@@ -145,6 +145,7 @@ from services.tstation.policies.ui_action_policy import (
     classify_direct_cta_action,
     confirmed_product_slot_values_for_purchase_cta,
     confirmed_product_slot_values_from_event,
+    selected_product_name_for_purchase_cta,
     datepick_slot_values_from_data,
     extract_vehicle_plate_from_text,
     build_oe_replacement_guidance_event,
@@ -19886,6 +19887,39 @@ def _build_missing_order_product_reselection_event() -> dict[str, Any]:
     }
 
 
+def _build_unsized_product_vehicle_or_size_prompt_event(
+    product_name: str | None,
+    *,
+    pending_intent: str | None,
+) -> dict[str, Any]:
+    product_label = str(product_name or "선택하신 상품").strip() or "선택하신 상품"
+    action_label = _transactional_resolution_action_label(pending_intent, None)
+    assistant_response = (
+        f"{product_label} 상품을 선택하셨어요.\n"
+        f"{action_label}를 진행하려면 차량 또는 타이어 사이즈를 먼저 확인해 주세요."
+    )
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+        "assistant_response_source": "code_unsized_product_selection_requires_size",
+        "data": {
+            "assistantResponse": assistant_response,
+            "quickReplies": [
+                {"label": "보유차량 중 선택", "domain": "DISCOVERY"},
+                {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
+            ],
+            "predictedDomains": ["TRANSACTION", "DISCOVERY"],
+            "metadata": {
+                "productName": product_label,
+                "pendingIntent": pending_intent,
+                "missingSlot": "tire_size",
+                "selectionSource": "unsized_recommendation",
+            },
+        },
+    }
+
+
 def _infer_followup_recommendation_context(messages: list[dict], last_user_text: str) -> str | None:
     """Infer the scenario/category to preserve when the user replies with only a tire size or car pick.
 
@@ -23194,6 +23228,11 @@ class TStationChatServiceV2:
                     latest_product_tmpl=latest_product_tmpl,
                     prev_tool_data=prev_tool_data,
                 )
+                unsized_selected_product_name = selected_product_name_for_purchase_cta(
+                    latest_quickreply_tmpl=latest_quickreply_tmpl,
+                    latest_product_tmpl=latest_product_tmpl,
+                    prev_tool_data=prev_tool_data,
+                )
                 if selected_context_values:
                     if is_cart_cta:
                         merged_slots.pending_intent = "cart"
@@ -23220,6 +23259,19 @@ class TStationChatServiceV2:
                             last_user_text,
                         )
                         current_vehicle_selection_prompt_event.set(build_order_quantity_prompt_event(merged_slots))
+                elif unsized_selected_product_name:
+                    if is_cart_cta:
+                        merged_slots.pending_intent = "cart"
+                        merged_slots.goal_type = "add_to_cart"
+                    else:
+                        merged_slots.pending_intent = "order"
+                        merged_slots.goal_type = "place_order"
+                    current_vehicle_selection_prompt_event.set(
+                        _build_unsized_product_vehicle_or_size_prompt_event(
+                            unsized_selected_product_name,
+                            pending_intent=getattr(merged_slots, "pending_intent", None),
+                        )
+                    )
                 elif merged_slots.goods_no is None:
                     if is_cart_cta:
                         merged_slots.pending_intent = "cart"
@@ -23249,6 +23301,8 @@ class TStationChatServiceV2:
                         current_tire_size=current_tire_size,
                     )
                 ),
+                latest_quickreply_tmpl=latest_quickreply_tmpl,
+                latest_product_tmpl=latest_product_tmpl,
             )
             merged_slots = history_product_selection_state.updated_slots
             if history_product_selection_state.action_context is not None:
@@ -23258,6 +23312,16 @@ class TStationChatServiceV2:
             )
             if history_product_selection_state.trace_metadata:
                 vehicle_selection_trace_metadata.update(dict(history_product_selection_state.trace_metadata))
+            if (
+                current_vehicle_selection_prompt_event.get() is None
+                and history_product_selection_state.requires_size_resolution
+            ):
+                current_vehicle_selection_prompt_event.set(
+                    _build_unsized_product_vehicle_or_size_prompt_event(
+                        history_product_selection_state.selected_product_name,
+                        pending_intent=getattr(merged_slots, "pending_intent", None),
+                    )
+                )
             rewritten_product_text = history_product_selection_state.rewritten_user_text
             if rewritten_product_text and rewritten_product_text != last_user_text:
                 for message_list in (enriched_messages, messages, classifier_messages):

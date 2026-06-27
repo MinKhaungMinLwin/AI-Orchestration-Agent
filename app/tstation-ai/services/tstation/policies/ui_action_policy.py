@@ -193,6 +193,12 @@ _TRANSACTION_SLOT_FILL_ACTION_TO_SLOT = {
     "select_store": "store",
     "select_schedule": "schedule",
 }
+_UNSIZED_RECOMMENDATION_RESPONSE_SHAPE_KEYS = frozenset({
+    "technology_explanation_then_unsized_recommendation_summary",
+    "safe_service_explanation_then_unsized_recommendation_summary",
+    "catalog_unsized_recommendation_summary",
+    "unsized_recommendation_summary",
+})
 
 
 @dataclass(frozen=True)
@@ -242,6 +248,8 @@ class HistoryProductSelectionState:
     goods_no_resolved: bool = False
     trace_metadata: Mapping[str, Any] = field(default_factory=dict)
     rewritten_user_text: str = ""
+    requires_size_resolution: bool = False
+    selected_product_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1770,9 +1778,40 @@ def apply_history_product_selection_state(
     prev_tool_data: list[dict[str, Any]] | None,
     merged_slots: Any,
     resolve_goods_no_from_selection_fn: Callable[[str, list[dict[str, Any]], str | None], str | None],
+    latest_quickreply_tmpl: Mapping[str, Any] | None = None,
+    latest_product_tmpl: Mapping[str, Any] | None = None,
 ) -> HistoryProductSelectionState:
     if getattr(merged_slots, "goods_no", None) is not None or not prev_tool_data:
         return HistoryProductSelectionState(updated_slots=merged_slots, rewritten_user_text=last_user_text)
+
+    if _is_unsized_recommendation_source(
+        latest_quickreply_tmpl=latest_quickreply_tmpl,
+        latest_product_tmpl=latest_product_tmpl,
+        prev_tool_data=prev_tool_data,
+    ) and not normalize_tire_size(last_user_text or ""):
+        selected_product_name = _selected_product_name_from_previous_candidates(last_user_text, prev_tool_data)
+        if selected_product_name:
+            updated_slots = merged_slots.apply_runtime_values(
+                {
+                    "tire_model": selected_product_name,
+                    "pending_product_name": selected_product_name,
+                },
+                source="previous_unsized_product_candidate",
+            )
+            return HistoryProductSelectionState(
+                updated_slots=updated_slots,
+                rewritten_user_text=last_user_text,
+                trace_metadata={
+                    "selection_source": "previous_product_candidate_unsized",
+                    "selected_entity_type": "product_family",
+                    "selected_product_name": selected_product_name,
+                    "goods_no_resolved": False,
+                    "requires_size_resolution": True,
+                    "validation_result": "unsized_candidate_requires_size",
+                },
+                requires_size_resolution=True,
+                selected_product_name=selected_product_name,
+            )
 
     resolved_goods_no = resolve_goods_no_from_selection_fn(
         last_user_text,
@@ -2748,6 +2787,131 @@ def resolve_goods_no_from_selection(
     return str(goods_no).strip() or None
 
 
+def _candidate_product_rows(prev_tool_data: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    product_list_tools = {"search_product_tool", "get_products_recommendations_tool"}
+    for entry in reversed(prev_tool_data or []):
+        if entry.get("tool") not in product_list_tools:
+            continue
+        data = entry.get("data")
+        if isinstance(data, list):
+            return [it for it in data if isinstance(it, dict) and not it.get("_truncated")]
+        if isinstance(data, Mapping) and isinstance(data.get("items"), list):
+            return [it for it in data["items"] if isinstance(it, dict)]
+    return []
+
+
+def _selected_product_name_from_previous_candidates(
+    user_text: str,
+    prev_tool_data: list[dict[str, Any]] | None,
+) -> str | None:
+    text = str(user_text or "").strip()
+    if not text:
+        return None
+
+    items = _candidate_product_rows(prev_tool_data)
+    if not items:
+        return None
+
+    ordinal_idx = _selection_ordinal_index(text, len(items))
+    if ordinal_idx is not None:
+        product_name = str(canonical_context_from_tool_boundary(items[ordinal_idx]).get("product_name") or "").strip()
+        return product_name or None
+
+    normalized_text = text.casefold()
+    matched_names: list[str] = []
+    for item in items:
+        product_name = str(canonical_context_from_tool_boundary(item).get("product_name") or "").strip()
+        if not product_name:
+            continue
+        compact_text = re.sub(r"[^0-9A-Za-z가-힣]+", "", normalized_text)
+        compact_product_name = re.sub(r"[^0-9A-Za-z가-힣]+", "", product_name.casefold())
+        if normalized_text in product_name.casefold() or (compact_text and compact_text in compact_product_name):
+            if product_name not in matched_names:
+                matched_names.append(product_name)
+    if len(matched_names) == 1:
+        return matched_names[0]
+
+    tokens = [t.lower() for t in re.findall(r"[A-Za-z가-힣0-9]+", text) if len(t) >= 2]
+    best_name = ""
+    best_score = 0
+    tied = False
+    for item in items:
+        product_name = str(canonical_context_from_tool_boundary(item).get("product_name") or "").strip()
+        if not product_name:
+            continue
+        score = sum(1 for tok in tokens if tok in product_name.lower())
+        if score > best_score:
+            best_score = score
+            best_name = product_name
+            tied = False
+        elif score == best_score and score > 0 and product_name != best_name:
+            tied = True
+    if best_name and best_score >= 2 and not tied:
+        return best_name
+    return None
+
+
+def _template_response_shape_key(template_data: Mapping[str, Any] | None) -> str:
+    if not isinstance(template_data, Mapping):
+        return ""
+    metadata = template_data.get("metadata")
+    if isinstance(metadata, Mapping):
+        response_shape_key = str(
+            metadata.get("responseShapeKey")
+            or metadata.get("response_shape_key")
+            or ""
+        ).strip()
+        if response_shape_key:
+            return response_shape_key
+    contract_metadata = template_data.get("contractMetadata")
+    if isinstance(contract_metadata, Mapping):
+        return str(
+            contract_metadata.get("responseShapeKey")
+            or contract_metadata.get("response_shape_key")
+            or ""
+        ).strip()
+    return ""
+
+
+def _tool_entry_is_unsized_recommendation(entry: Mapping[str, Any]) -> bool:
+    tool = str(entry.get("tool") or "").strip()
+    if tool not in {"get_products_recommendations_tool", "search_product_tool"}:
+        return False
+    tool_input = entry.get("input") if isinstance(entry.get("input"), Mapping) else entry.get("args")
+    tool_input = tool_input if isinstance(tool_input, Mapping) else {}
+    canonical_input = canonical_context_from_tool_boundary(tool_input)
+    return not any(
+        canonical_input.get(key)
+        for key in ("tire_size", "size", "car_no", "mbr_car_reg_seq", "car_lnc_cd")
+    )
+
+
+def _is_unsized_recommendation_source(
+    *,
+    latest_quickreply_tmpl: Mapping[str, Any] | None = None,
+    latest_product_tmpl: Mapping[str, Any] | None = None,
+    prev_tool_data: list[dict[str, Any]] | None = None,
+) -> bool:
+    for template_data in (latest_quickreply_tmpl, latest_product_tmpl):
+        if _template_response_shape_key(template_data) in _UNSIZED_RECOMMENDATION_RESPONSE_SHAPE_KEYS:
+            return True
+
+    for entry in reversed(prev_tool_data or []):
+        if not isinstance(entry, Mapping):
+            continue
+        if _tool_entry_is_unsized_recommendation(entry):
+            return True
+        if str(entry.get("tool") or "").strip() in {
+            "get_product_description_tool",
+            "get_final_price_tool",
+            "transaction_store_preview_tool",
+            "get_store_schedule_tool",
+            "quick_order_tool",
+        }:
+            break
+    return False
+
+
 def expected_slot_fill_resume_source(action_context: UIActionContext | None) -> str:
     if not is_expected_transaction_slot_fill(action_context):
         return "none"
@@ -3306,6 +3470,13 @@ def confirmed_product_slot_values_for_purchase_cta(
     latest_product_tmpl: Mapping[str, Any] | None = None,
     prev_tool_data: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
+    if _is_unsized_recommendation_source(
+        latest_quickreply_tmpl=latest_quickreply_tmpl,
+        latest_product_tmpl=latest_product_tmpl,
+        prev_tool_data=prev_tool_data,
+    ):
+        return None
+
     for template, data in (
         ("quickReply", latest_quickreply_tmpl),
         ("product", latest_product_tmpl),
@@ -3358,6 +3529,46 @@ def confirmed_product_slot_values_for_purchase_cta(
             if slot_values.get("goods_no"):
                 return slot_values
 
+    return None
+
+
+def selected_product_name_for_purchase_cta(
+    *,
+    latest_quickreply_tmpl: Mapping[str, Any] | None = None,
+    latest_product_tmpl: Mapping[str, Any] | None = None,
+    prev_tool_data: list[dict[str, Any]] | None = None,
+) -> str | None:
+    for template in (latest_quickreply_tmpl, latest_product_tmpl):
+        if not isinstance(template, Mapping):
+            continue
+        metadata = template.get("metadata")
+        if isinstance(metadata, Mapping):
+            canonical_values = canonical_context_from_template_boundary(metadata)
+            product_name = str(canonical_values.get("product_name") or "").strip()
+            if product_name:
+                return product_name
+
+        products = template.get("products")
+        if isinstance(products, list) and products:
+            first_product = products[0]
+            if isinstance(first_product, Mapping):
+                product_name = str(
+                    first_product.get("titleProductName")
+                    or first_product.get("productName")
+                    or ""
+                ).strip()
+                if product_name:
+                    return product_name
+
+    for entry in reversed(prev_tool_data or []):
+        if not isinstance(entry, Mapping):
+            continue
+        data = entry.get("data")
+        payload = data.get("data") if isinstance(data, Mapping) and isinstance(data.get("data"), Mapping) else data
+        payload = payload if isinstance(payload, Mapping) else {}
+        product_name = str(canonical_context_from_tool_boundary(payload).get("product_name") or "").strip()
+        if product_name:
+            return product_name
     return None
 
 
