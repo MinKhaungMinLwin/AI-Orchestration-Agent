@@ -77,6 +77,7 @@ _DISCOVERY_PRODUCT_SOURCE_TOOLS = frozenset({
     "search_product_tool",
     "get_products_recommendations_tool",
     "get_best_selling_products_tool",
+    "get_newest_products_tool",
 })
 _COMPARISON_RESOLVER_TOOLS = _DISCOVERY_PRODUCT_SOURCE_TOOLS | frozenset({"get_product_description_tool"})
 _HIGH_RISK_TRANSACTION_TOOLS = frozenset({
@@ -728,6 +729,10 @@ def build_turn_contract(
                 "get_final_price_tool",
             ),
         )
+    if planner_intent == "best_seller_search" and code_intent in {"product_recommendation", "general_recommendation"}:
+        domain = "discovery"
+        intent = "best_seller_search"
+        allowed_tools = _merge_tuple(allowed_tools, ("get_best_selling_products_tool",))
     if intent == "order_document_guidance":
         forbidden_tools = _merge_tuple(
             forbidden_tools,
@@ -1638,6 +1643,8 @@ def violates_response_template_contract(event: Mapping[str, Any], contract: Turn
         return True
     if _action_mode_contract_violation(event=event, contract=contract) is not None:
         return True
+    if _is_discovery_product_template_compatible(event, contract):
+        return False
     if _is_unsupported_discovery_product_template_without_current_source(event, contract):
         return True
     response_decision = contract.response_decision or {}
@@ -1648,6 +1655,39 @@ def violates_response_template_contract(event: Mapping[str, Any], contract: Turn
         template in _FORBIDDEN_BEHAVIOR_TEMPLATE_BLOCKS.get(str(behavior), ())
         for behavior in _effective_forbidden_behaviors(event, contract, forbidden_behaviors)
     )
+
+
+def _discovery_product_payload_has_items(event: Mapping[str, Any]) -> bool:
+    data = event.get("data")
+    if not isinstance(data, Mapping):
+        return False
+    products = data.get("products")
+    if not isinstance(products, list):
+        return False
+    return any(isinstance(product, Mapping) for product in products)
+
+
+def _is_discovery_product_template_compatible(
+    event: Mapping[str, Any],
+    contract: TurnContract | None,
+) -> bool:
+    if contract is None:
+        return False
+    if str(contract.domain or "").lower() != "discovery":
+        return False
+    if str(event.get("template") or "") != "product":
+        return False
+    if str(event.get("source_domain") or "").lower() != "discovery":
+        return False
+    called_tools = {str(tool) for tool in tuple(event.get("called_tools") or ()) if str(tool).strip()}
+    if not called_tools or not (called_tools & _DISCOVERY_PRODUCT_SOURCE_TOOLS):
+        return False
+    forbidden_tools = {str(tool) for tool in tuple(contract.forbidden_tools or ()) if str(tool).strip()}
+    if called_tools & forbidden_tools:
+        return False
+    if not _discovery_product_payload_has_items(event):
+        return False
+    return True
 
 
 def _effective_forbidden_behaviors(
@@ -3766,6 +3806,10 @@ def _normalize_plan_intent(value: str) -> str:
         "event_lookup": "product_event_lookup",
         "product_event": "product_event_lookup",
         "discovery_event_content": "product_event_lookup",
+        "get_best_selling_products_for_vehicle_timeframe": "best_seller_search",
+        "get_best_selling_products_tool": "best_seller_search",
+        "best_seller": "best_seller_search",
+        "sales_rank": "best_seller_search",
     }
     return aliases.get(normalized, normalized or "unknown")
 
@@ -4220,6 +4264,8 @@ def _augment_allowed_tools_for_discovery_resolution(
     known_slots: Mapping[str, Any],
     cross_domain_plan: CrossDomainPlan | None,
 ) -> tuple[str, ...]:
+    if intent == "best_seller_search":
+        return _merge_tuple(allowed_tools, ("get_best_selling_products_tool",))
     if not _is_discovery_first_cross_domain_resolution_contract(
         intent=intent,
         known_slots=known_slots,

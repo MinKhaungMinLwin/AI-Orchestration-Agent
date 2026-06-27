@@ -379,6 +379,7 @@ from services.tstation.policies.support_response_policy import decide_support_re
 from services.tstation.policies.response_decision import ResponseDecision, ResponseShape, TemplateName, ToolPlan
 from services.tstation.policies.turn_contract import (
     _FAQ_FIRST_SUPPORT_POLICY_INTENTS,
+    _normalize_plan_intent,
     TurnContract,
     build_required_slot_clarification_event,
     build_response_policy_guard_event,
@@ -27238,6 +27239,86 @@ def test_turn_contract_keeps_product_template_when_current_turn_has_product_sour
         },
         contract,
     )
+
+
+def test_turn_contract_allows_best_seller_product_cards_from_current_tool_even_when_response_shape_is_unsized() -> None:
+    contract = build_turn_contract(
+        user_text="지금 가장 인기 있는 5시리즈 타이어",
+        intent_frame=IntentFrame(domain=PolicyDomain.DISCOVERY, intent="product_recommendation"),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=("product_card_without_size", "price_without_size"),
+            metadata={"response_shape_key": "unsized_recommendation_summary"},
+        ),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY],
+            execution_plan=["discovery:get_best_selling_products_for_vehicle_timeframe"],
+        ),
+    )
+
+    event = {
+        "template": "product",
+        "source_domain": "discovery",
+        "assistant_response_source": "code_mapper",
+        "response_shape_key": "unsized_recommendation_summary",
+        "called_tools": ["get_best_selling_products_tool"],
+        "data": {
+            "products": [
+                {
+                    "titleProductName": "아이온 에보 AS SUV",
+                    "titleTires": "245/45R19",
+                    "price": 231000,
+                }
+            ]
+        },
+    }
+
+    assert not violates_response_template_contract(event, contract)
+    assert response_contract_violations(
+        template=event["template"],
+        assistant_response_source=event["assistant_response_source"],
+        response_shape_key=event["response_shape_key"],
+        called_tools=event["called_tools"],
+        event_data=event["data"],
+        source_domain=event["source_domain"],
+        contract=contract,
+    ) == []
+
+
+def test_turn_contract_still_blocks_discovery_product_card_without_current_tool_items() -> None:
+    contract = build_turn_contract(
+        user_text="지금 가장 인기 있는 5시리즈 타이어",
+        intent_frame=IntentFrame(domain=PolicyDomain.DISCOVERY, intent="product_recommendation"),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=("product_card_without_size", "price_without_size"),
+            metadata={"response_shape_key": "unsized_recommendation_summary"},
+        ),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY],
+            execution_plan=["discovery:get_best_selling_products_for_vehicle_timeframe"],
+        ),
+    )
+
+    event = {
+        "template": "product",
+        "source_domain": "discovery",
+        "assistant_response_source": "code_mapper",
+        "response_shape_key": "unsized_recommendation_summary",
+        "called_tools": ["get_best_selling_products_tool"],
+        "data": {"products": []},
+    }
+
+    assert violates_response_template_contract(event, contract)
+
+
+def test_normalize_plan_intent_maps_best_seller_aliases() -> None:
+    assert _normalize_plan_intent("get_best_selling_products_for_vehicle_timeframe") == "best_seller_search"
+    assert _normalize_plan_intent("get_best_selling_products_tool") == "best_seller_search"
+    assert _normalize_plan_intent("best_seller") == "best_seller_search"
+    assert _normalize_plan_intent("sales_rank") == "best_seller_search"
 
 
 def test_turn_contract_allows_compare_quickreply_during_discovery_first_leg_transaction_chain() -> None:
