@@ -20720,6 +20720,16 @@ class TStationChatServiceV2:
             current_turn_store_name = regex_slots.shop_name
             current_turn_has_store_anchor = bool(current_turn_store_name or regex_slots.region)
             explicit_store_info_cleanup: dict[str, Any] = {}
+            preview_location_direct_selection = None
+            preview_location_direct_values: dict[str, Any] | None = None
+            if current_turn_store_name and latest_location_tmpl:
+                preview_location_direct_selection = resolve_store_selection_from_history_template(
+                    last_user_text,
+                    latest_location_tmpl,
+                )
+                preview_location_direct_values = preview_location_slot_values_from_selection(
+                    preview_location_direct_selection
+                )
             size_only_store_availability_continuation = _is_size_only_store_availability_continuation(
                 last_user_text,
                 prev_tool_data=prev_tool_data,
@@ -20748,6 +20758,9 @@ class TStationChatServiceV2:
                         "payment_amount",
                     )
                 )
+            ) and not (
+                preview_location_direct_values
+                and str(preview_location_direct_values.get("source_tool") or "") == "transaction_store_preview_tool"
             ):
                 before_slots = merged_slots.model_dump()
                 explicit_store_info_cleanup = _clear_stale_slots_for_explicit_store_info_turn(
@@ -21742,6 +21755,49 @@ class TStationChatServiceV2:
                         logger.debug(
                             f"[SLOTS] Resolved shop_id={history_location_selection_state.resolved_shop_id!r} from user's "
                             f"list-selection against last `location` template metadata"
+                        )
+                    elif (
+                        current_turn_store_name
+                        and preview_location_direct_values
+                        and str(preview_location_direct_values.get("source_tool") or "") == "transaction_store_preview_tool"
+                    ):
+                        merged_slots = merged_slots.apply_runtime_values(
+                            {
+                                key: value
+                                for key, value in preview_location_direct_values.items()
+                                if key in {
+                                    "shop_id",
+                                    "shop_name",
+                                    "goods_no",
+                                    "tire_size",
+                                    "ord_qty",
+                                    "region",
+                                    "pending_intent",
+                                    "goal_type",
+                                }
+                            },
+                            source="preview_location_store_name_selection",
+                        )
+                        if preview_location_direct_values.get("pending_intent") == "order":
+                            order_context = dict(merged_slots.order_context or {})
+                            order_context["selected_order_context"] = _selected_order_context_from_preview_values(
+                                preview_location_direct_values
+                            )
+                            merged_slots.order_context = order_context
+                        location_selection_resume_source = "location_selection:transaction_store_preview"
+                        vehicle_selection_trace_metadata.update({
+                            "location_selection_source_tool": "transaction_store_preview_tool",
+                            "location_selection_flow_type": "purchase_location_selection"
+                            if preview_location_direct_values.get("pending_intent") == "order"
+                            else "stock_location_selection",
+                            "selected_shop_id": str(preview_location_direct_values.get("shop_id") or "").strip() or None,
+                            "location_selection_contract_action": "purchase_continuation"
+                            if preview_location_direct_values.get("pending_intent") == "order"
+                            else "stock_check",
+                        })
+                        logger.debug(
+                            "[SLOTS] Recovered preview-origin store-name selection from location metadata: %s",
+                            preview_location_direct_values,
                         )
                 except Exception as e:
                     logger.warning(f"[SLOTS] history shop_id fallback failed: {e}")
@@ -23433,12 +23489,24 @@ class TStationChatServiceV2:
             "goal_type": merged_slots.goal_type,
             "stock_check_mode": getattr(merged_slots, "stock_check_mode", None),
         }
+        availability_context = merged_slots.availability_context if isinstance(getattr(merged_slots, "availability_context", None), dict) else {}
+        pending_order_context = availability_context.get("pending_order_context") if isinstance(availability_context.get("pending_order_context"), dict) else {}
+        if isinstance(pending_order_context, dict):
+            for key in ("goods_no", "tire_size", "ord_qty", "region", "shop_name", "pending_intent", "goal_type", "source"):
+                value = pending_order_context.get(key)
+                if value not in (None, "") and transaction_known_slots.get(key) in (None, ""):
+                    transaction_known_slots[key] = value
         selected_order_context = merged_slots.order_context.get("selected_order_context") if isinstance(getattr(merged_slots, "order_context", None), dict) else None
         if isinstance(selected_order_context, dict):
             for key in ("stock_check_mode", "schedule_mode", "source_tool"):
                 value = selected_order_context.get(key)
                 if value not in (None, ""):
                     transaction_known_slots[key] = value
+        if (
+            transaction_known_slots.get("source_tool") in (None, "")
+            and str(pending_order_context.get("source") or "") == "tool:transaction_store_preview_tool"
+        ):
+            transaction_known_slots["source_tool"] = "transaction_store_preview_tool"
         if _router_contract_is_price_or_benefit_alert(routing_result):
             transaction_known_slots["router_transaction_intent"] = "price_or_benefit_alert_request"
         elif _router_contract_is_order_cancel_fee_inquiry(routing_result):

@@ -1578,6 +1578,12 @@ def _normalize_vehicle_match_text(value: Any) -> str:
     return re.sub(r"[^0-9A-Za-z가-힣]", "", str(value or "")).lower()
 
 
+def _normalize_store_name_for_match(value: Any) -> str:
+    normalized = re.sub(r"[^0-9A-Za-z가-힣]", "", str(value or "")).lower()
+    normalized = re.sub(r"^(?:티스테이션|더타이어샵|tstation)", "", normalized, flags=re.IGNORECASE)
+    return normalized
+
+
 def _selection_context_from_vehicle_meta(meta: Mapping[str, Any]) -> dict[str, str]:
     return {
         "source_intent": str(meta.get("source_intent") or meta.get("sourceIntent") or "").strip(),
@@ -1944,33 +1950,68 @@ def resolve_store_selection_from_history_template(
     metadata = target_template.get("metadata") or []
     if not isinstance(stores, list) or not isinstance(metadata, list):
         return None
-    if not stores or len(stores) != len(metadata):
+    if not metadata:
+        return None
+
+    rows: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for idx, meta in enumerate(metadata):
+        if not isinstance(meta, Mapping):
+            continue
+        store = stores[idx] if idx < len(stores) and isinstance(stores[idx], Mapping) else {}
+        rows.append((dict(store), dict(meta)))
+    if not rows:
         return None
 
     store_select_chips = frozenset({"이 매장 선택", "이 매장으로", "이곳 선택"})
-    if text in store_select_chips and len(stores) == 1:
-        meta = metadata[0]
-        store = stores[0]
+    if text in store_select_chips and len(rows) == 1:
+        store, meta = rows[0]
         canonical_meta = canonical_context_from_template_boundary(meta) if isinstance(meta, Mapping) else {}
-        if isinstance(meta, Mapping) and isinstance(store, Mapping) and canonical_meta.get("shop_id"):
+        if canonical_meta.get("shop_id"):
             return {"store": dict(store), "meta": dict(meta)}
 
-    ordinal_idx = _selection_ordinal_index(text, len(metadata))
+    ordinal_idx = _selection_ordinal_index(text, len(rows))
     if ordinal_idx is not None:
-        meta = metadata[ordinal_idx]
-        store = stores[ordinal_idx]
+        store, meta = rows[ordinal_idx]
         canonical_meta = canonical_context_from_template_boundary(meta) if isinstance(meta, Mapping) else {}
-        if isinstance(meta, Mapping) and isinstance(store, Mapping) and canonical_meta.get("shop_id"):
+        if canonical_meta.get("shop_id"):
             return {"store": dict(store), "meta": dict(meta)}
+
+    normalized_text = _normalize_store_name_for_match(text)
+    exact_matches: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for store, meta in rows:
+        canonical_meta = canonical_context_from_template_boundary(meta)
+        candidates = [
+            canonical_meta.get("shop_name"),
+            store.get("nameAddress"),
+            store.get("name"),
+            store.get("title"),
+        ]
+        if any(_normalize_store_name_for_match(candidate) == normalized_text for candidate in candidates if candidate):
+            if canonical_meta.get("shop_id"):
+                exact_matches.append((store, meta))
+    if len(exact_matches) == 1:
+        store, meta = exact_matches[0]
+        return {"store": dict(store), "meta": dict(meta)}
 
     tokens = [t for t in re.findall(r"[A-Za-z가-힣]+", text) if len(t) >= 2]
     if tokens:
         scored: list[tuple[int, dict[str, Any], dict[str, Any]]] = []
-        for store, meta in zip(stores, metadata):
-            if not isinstance(store, Mapping) or not isinstance(meta, Mapping):
-                continue
-            name = store.get("nameAddress") or store.get("name") or store.get("title") or ""
-            score = sum(1 for tok in tokens if tok in str(name))
+        for store, meta in rows:
+            canonical_meta = canonical_context_from_template_boundary(meta)
+            name_candidates = [
+                canonical_meta.get("shop_name"),
+                store.get("nameAddress"),
+                store.get("name"),
+                store.get("title"),
+            ]
+            score = max(
+                (
+                    sum(1 for tok in tokens if tok in str(name_candidate))
+                    for name_candidate in name_candidates
+                    if name_candidate
+                ),
+                default=0,
+            )
             if score > 0:
                 scored.append((score, dict(store), dict(meta)))
         if scored:

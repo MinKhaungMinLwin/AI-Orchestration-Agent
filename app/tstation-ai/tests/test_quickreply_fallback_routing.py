@@ -12994,13 +12994,46 @@ def test_apply_history_location_selection_state_preserves_preview_schedule_metad
     assert state.trace_metadata["metadata_overrode_stale_stock_check_mode"] is True
 
 
+def test_resolve_store_selection_from_history_template_matches_preview_store_name_direct_input() -> None:
+    latest_location = {
+        "template": "location",
+        "data": {
+            "stores": [{"nameAddress": "티스테이션 분당정자점"}],
+            "metadata": [
+                {
+                    "shopId": "F00123",
+                    "shopName": "티스테이션 분당정자점",
+                    "sourceTool": "transaction_store_preview_tool",
+                    "goodsNo": "G000000309715",
+                    "tireSize": "225/55R18",
+                    "ordQty": 4,
+                    "pendingIntent": "order",
+                    "goalType": "place_order",
+                    "scheduleMode": "general",
+                }
+            ],
+        },
+    }
+
+    selection = resolve_store_selection_from_history_template("티스테이션 분당정자점", latest_location)
+    values = preview_location_slot_values_from_selection(selection)
+
+    assert selection is not None
+    assert values is not None
+    assert values["shop_id"] == "F00123"
+    assert values["shop_name"] == "티스테이션 분당정자점"
+    assert values["pending_intent"] == "order"
+    assert values["goal_type"] == "place_order"
+    assert values["source_tool"] == "transaction_store_preview_tool"
+
+
 def test_location_selection_preview_purchase_flow_keeps_quick_order_reservation_contract() -> None:
     values = {
         "goods_no": "G000000309715",
         "tire_size": "225/55R18",
         "ord_qty": 4,
-        "shop_id": "F00098",
-        "shop_name": "티스테이션 판교점",
+        "shop_id": "F00123",
+        "shop_name": "티스테이션 분당정자점",
         "region": "분당",
         "pending_intent": "order",
         "goal_type": "place_order",
@@ -13008,15 +13041,15 @@ def test_location_selection_preview_purchase_flow_keeps_quick_order_reservation_
         "source_tool": "transaction_store_preview_tool",
     }
 
-    frame = build_transaction_intent_frame("티스테이션 판교점 선택", known_slots=values)
+    frame = build_transaction_intent_frame("티스테이션 분당정자점", known_slots=values)
     tool_plan = plan_transaction_tools(frame)
     contract = build_turn_contract(
-        user_text="티스테이션 판교점 선택",
+        user_text="티스테이션 분당정자점",
         intent_frame=frame,
         tool_plan=tool_plan,
         response_decision=decide_transaction_response(
             intent=frame.intent,
-            user_text="티스테이션 판교점 선택",
+            user_text="티스테이션 분당정자점",
             known_slots=dict(frame.known_slots),
         ),
         merged_slots=ConversationSlots(**values),
