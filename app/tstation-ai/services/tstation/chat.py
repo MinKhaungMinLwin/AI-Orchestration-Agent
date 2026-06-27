@@ -4056,27 +4056,9 @@ class StreamingMultiAgentCoordinator:
                     if candidate_product_name and not tool_slots.get("tire_model"):
                         tool_slots["tire_model"] = str(candidate_product_name).strip()
             if isinstance(price_data, dict):
-                final_unit = next(
-                    (
-                        price_data.get(key)
-                        for key in ("cheapest_final_prc", "final_unit_price", "final_prc", "extra_fvr_sale_prc", "sale_prc")
-                        if price_data.get(key) is not None
-                    ),
-                    None,
-                )
-                wage = price_data.get("wage_prc") or 0
-                qty = slots.ord_qty
-                if final_unit is not None and qty is not None and qty > 0:
-                    try:
-                        parsed_final_unit = _to_int(final_unit)
-                        parsed_wage = _to_int(wage) or 0
-                        if parsed_final_unit is not None:
-                            tool_slots["payment_amount"] = int((parsed_final_unit + parsed_wage) * int(qty))
-                    except (TypeError, ValueError):
-                        logger.debug(
-                            "[SLOTS] payment_amount calc skipped: non-numeric inputs "
-                            f"(final_unit={final_unit!r}, wage={wage!r}, qty={qty!r})"
-                        )
+                preview_payment = _preview_payment_metadata(price_data, ord_qty=slots.ord_qty)
+                if preview_payment:
+                    tool_slots.update(preview_payment)
 
         tool_slot_extractors = {
             "search_product_tool": ["goods_no"],
@@ -8003,6 +7985,37 @@ def _parse_krw_amount(raw: str) -> int | None:
     return int(digits) if digits else None
 
 
+def _preview_price_unit_and_basis(price_data: Mapping[str, Any] | None) -> tuple[int | None, str | None]:
+    if not isinstance(price_data, Mapping):
+        return None, None
+    for key in ("cheapest_final_prc", "extra_fvr_sale_prc", "sale_prc"):
+        parsed = _to_int(price_data.get(key))
+        if parsed is not None and parsed > 0:
+            return int(parsed), key
+    return None, None
+
+
+def _preview_payment_metadata(
+    price_data: Mapping[str, Any] | None,
+    *,
+    ord_qty: Any,
+) -> dict[str, Any]:
+    unit_price, price_basis = _preview_price_unit_and_basis(price_data)
+    if unit_price is None or price_basis is None:
+        return {}
+    try:
+        quantity = int(ord_qty)
+    except (TypeError, ValueError):
+        return {}
+    if quantity <= 0:
+        return {}
+    return {
+        "payment_amount": int(unit_price * quantity),
+        "price_basis": price_basis,
+        "price_source_tool": "transaction_store_preview_tool",
+    }
+
+
 def _coerce_order_summary_quickreply_to_preorder(
     event: dict,
     slot_state: Any | None,
@@ -8117,6 +8130,16 @@ def _standardize_preorder_metadata(event_data: dict, slot_state: Any | None) -> 
         or order_info.get("paymentAmount")
         or (getattr(slot_state, "payment_amount", None) if slot_state is not None else None)
     )
+    price_basis = (
+        metadata.get("priceBasis")
+        or metadata.get("price_basis")
+        or (getattr(slot_state, "price_basis", None) if slot_state is not None else None)
+    )
+    price_source_tool = (
+        metadata.get("priceSourceTool")
+        or metadata.get("price_source_tool")
+        or (getattr(slot_state, "price_source_tool", None) if slot_state is not None else None)
+    )
     goods_no = canonical_metadata.get("goods_no") or canonical_event.get("goods_no") or canonical_slots.get("goods_no")
     product_name = (
         canonical_metadata.get("product_name")
@@ -8146,6 +8169,8 @@ def _standardize_preorder_metadata(event_data: dict, slot_state: Any | None) -> 
     metadata["requestedCalDay"] = requested_cal_day
     metadata["rsvHour"] = rsv_hour
     metadata["paymentAmount"] = payment_amount
+    metadata["priceBasis"] = price_basis
+    metadata["priceSourceTool"] = price_source_tool
     metadata["productName"] = product_name
     metadata["tireSize"] = tire_size
     metadata["storeName"] = store_name
@@ -8168,6 +8193,7 @@ def _build_direct_preorder_event_from_slots(
     *,
     latest_datepick_tmpl: Mapping[str, Any] | None = None,
     latest_preorder_tmpl: Mapping[str, Any] | None = None,
+    prev_tool_data: list[dict] | None = None,
 ) -> dict[str, Any] | None:
     slot_values = slot_state.model_dump() if hasattr(slot_state, "model_dump") else dict(slot_state or {})
     availability_context = (
@@ -8217,12 +8243,65 @@ def _build_direct_preorder_event_from_slots(
     product_label = f"{product_name} {tire_size}".strip() if product_name else tire_size
 
     payment_amount = slot_values.get("payment_amount")
+    price_basis = slot_values.get("price_basis")
+    price_source_tool = slot_values.get("price_source_tool")
+    payment_amount_missing_reason = None
     if payment_amount in (None, "", 0):
         payment_amount = (
             datepick_slots.get("payment_amount")
             or preorder_slots.get("payment_amount")
             or pending_order_context.get("payment_amount")
         )
+        price_basis = (
+            datepick_slots.get("price_basis")
+            or preorder_slots.get("price_basis")
+            or pending_order_context.get("price_basis")
+        )
+        price_source_tool = (
+            datepick_slots.get("price_source_tool")
+            or preorder_slots.get("price_source_tool")
+            or pending_order_context.get("price_source_tool")
+        )
+    if (
+        payment_amount in (None, "", 0)
+        and goods_no
+        and ord_qty > 0
+    ):
+        for entry in reversed(prev_tool_data or []):
+            if str(entry.get("tool") or "").strip() != "transaction_store_preview_tool":
+                continue
+            parsed_data = _unwrap_tool_data(entry.get("data"))
+            payload = parsed_data.get("data", parsed_data) if isinstance(parsed_data, Mapping) else {}
+            candidates: list[Mapping[str, Any]] = []
+            if isinstance(payload, Mapping):
+                stores = payload.get("stores")
+                if isinstance(stores, list):
+                    candidates.extend(item for item in stores if isinstance(item, Mapping))
+                schedule = payload.get("schedule")
+                if isinstance(schedule, Mapping):
+                    schedule_stores = schedule.get("stores")
+                    if isinstance(schedule_stores, list):
+                        candidates.extend(item for item in schedule_stores if isinstance(item, Mapping))
+            for candidate in candidates:
+                candidate_goods_no = str(candidate.get("goods_no") or candidate.get("goodsNo") or "").strip()
+                candidate_tire_size = normalize_tire_size(
+                    candidate.get("tire_size") or candidate.get("tireSize") or candidate.get("titleTires") or ""
+                )
+                if candidate_goods_no and candidate_goods_no != goods_no:
+                    continue
+                if candidate_tire_size and candidate_tire_size != tire_size:
+                    continue
+                preview_payment = _preview_payment_metadata(candidate, ord_qty=ord_qty)
+                if preview_payment:
+                    payment_amount = preview_payment.get("payment_amount")
+                    price_basis = preview_payment.get("price_basis")
+                    price_source_tool = preview_payment.get("price_source_tool")
+                    payment_amount_missing_reason = "recovered_from_latest_preview_tool"
+                    break
+            if payment_amount not in (None, "", 0):
+                break
+    if payment_amount in (None, "", 0):
+        payment_amount_missing_reason = payment_amount_missing_reason or "missing_payment_amount"
     try:
         normalized_payment_amount = int(payment_amount) if payment_amount not in (None, "", []) else None
     except (TypeError, ValueError):
@@ -8292,6 +8371,9 @@ def _build_direct_preorder_event_from_slots(
                 "paymentAmount": normalized_payment_amount,
                 "productName": product_name or None,
                 "tireSize": tire_size,
+                "priceBasis": price_basis or None,
+                "priceSourceTool": price_source_tool or None,
+                "paymentAmountMissingReason": payment_amount_missing_reason,
                 "carNo": car_no or None,
                 "carLncCd": str(slot_values.get("car_lnc_cd") or "").strip() or None,
                 "missingPreorderContext": [],
@@ -18029,6 +18111,8 @@ def _verified_datepick_order_values(slot_values: Mapping[str, Any] | None) -> di
         "requested_cal_day",
         "rsv_hour",
         "payment_amount",
+        "price_basis",
+        "price_source_tool",
     ):
         value = slot_values.get(field) if isinstance(slot_values, Mapping) else None
         if value is not None:
@@ -18046,6 +18130,8 @@ _ORDER_SNAPSHOT_FIELDS: tuple[str, ...] = (
     "requested_cal_day",
     "rsv_hour",
     "payment_amount",
+    "price_basis",
+    "price_source_tool",
 )
 
 
@@ -20314,6 +20400,8 @@ def _pending_order_context_values(slots: ConversationSlots) -> dict[str, Any]:
         "shop_id",
         "shop_name",
         "payment_amount",
+        "price_basis",
+        "price_source_tool",
         "requested_cal_day",
         "rsv_hour",
         "availability_intent",
@@ -20748,31 +20836,16 @@ def _flow_state_from_purchase_stock_sources(
                 if product_name and tool_values.get("product_name") in (None, "", [], {}):
                     tool_values["product_name"] = str(product_name).strip()
 
-        if isinstance(price_data, Mapping):
-            price_basis = next(
-                (
-                    key
-                    for key in ("cheapest_final_prc", "final_unit_price", "final_prc", "extra_fvr_sale_prc", "sale_prc")
-                    if price_data.get(key) is not None
-                ),
-                None,
-            )
-            final_unit = price_data.get(price_basis) if price_basis else None
+        if isinstance(price_data, Mapping) and tool_name == "transaction_store_preview_tool":
             qty_value = (
                 current_values.get("ord_qty")
                 or flow_state_before.get("ord_qty")
                 or tool_values.get("ord_qty")
                 or (current_slot_delta or {}).get("ord_qty")
             )
-            if final_unit is not None and qty_value not in (None, "", 0):
-                parsed_final_unit = _to_int(final_unit)
-                if parsed_final_unit is not None:
-                    try:
-                        tool_values["payment_amount"] = int(parsed_final_unit * int(qty_value))
-                        tool_values["price_basis"] = price_basis
-                        tool_values["price_source_tool"] = tool_name
-                    except (TypeError, ValueError):
-                        pass
+            preview_payment = _preview_payment_metadata(price_data, ord_qty=qty_value)
+            if preview_payment:
+                tool_values.update(preview_payment)
 
     current_delta_values = {
         key: value for key, value in dict(current_slot_delta or {}).items() if value not in (None, "", [], {})
@@ -20922,9 +20995,7 @@ def _apply_purchase_stock_canonical_readthrough(
         current_slot_delta=current_delta,
     )
     slot_patch = {
-        key: value
-        for key, value in canonical_values["merged"].items()
-        if key not in {"price_basis", "price_source_tool"} and value not in (None, "", [], {})
+        key: value for key, value in canonical_values["merged"].items() if value not in (None, "", [], {})
     }
     updated_slots = slots.apply_runtime_values(slot_patch, source="purchase_stock_canonical_readthrough", fill_only=True)
     context = dict(getattr(updated_slots, "availability_context", None) or {})
@@ -21015,6 +21086,9 @@ def _finalize_purchase_stock_slots_for_persistence(
     metadata: dict[str, Any] = {
         "final_persist_rehydrated": False,
         "final_persist_flow_state_before": dict(pending_context or {}),
+        "payment_amount": (pending_context or {}).get("payment_amount"),
+        "price_basis": (pending_context or {}).get("price_basis"),
+        "price_source_tool": (pending_context or {}).get("price_source_tool"),
     }
     if needs_rehydrate:
         canonical_values = _flow_state_from_purchase_stock_sources(
@@ -21029,7 +21103,7 @@ def _finalize_purchase_stock_slots_for_persistence(
         slot_patch = {
             key: value
             for key, value in dict(canonical_values.get("merged") or {}).items()
-            if key not in {"price_basis", "price_source_tool"} and value not in (None, "", [], {})
+            if value not in (None, "", [], {})
         }
         updated_slots = slots.apply_runtime_values(
             slot_patch,
@@ -21058,6 +21132,9 @@ def _finalize_purchase_stock_slots_for_persistence(
         )
         metadata["final_persist_flow_state_after"] = dict(refreshed_context or {})
     final_context = dict(metadata.get("final_persist_flow_state_after") or {})
+    metadata["payment_amount"] = final_context.get("payment_amount")
+    metadata["price_basis"] = final_context.get("price_basis")
+    metadata["price_source_tool"] = final_context.get("price_source_tool")
     metadata["final_persist_purchase_intent_preserved"] = bool(
         str((pending_context or {}).get("pending_intent") or "") == "order"
         and str(final_context.get("pending_intent") or "") == "order"
@@ -21080,6 +21157,13 @@ def _finalize_purchase_stock_slots_for_persistence(
     ):
         invariant_missing.extend(["product_name", "tire_model", "pending_product_name"])
     metadata["final_persist_invariant_missing_fields"] = invariant_missing
+    metadata["payment_amount_missing_reason"] = (
+        None
+        if final_context.get("payment_amount") not in (None, "", 0)
+        else "missing_after_final_persist"
+        if str(final_context.get("price_source_tool") or "") == "transaction_store_preview_tool"
+        else "no_preview_price_source"
+    )
     if invariant_missing:
         logger.warning(
             "[FINAL_PERSIST] purchase flow state invariant missing fields=%s context=%s",
@@ -27420,6 +27504,7 @@ class TStationChatServiceV2:
                     merged_slots,
                     latest_datepick_tmpl=latest_datepick_tmpl,
                     latest_preorder_tmpl=latest_preorder_tmpl,
+                    prev_tool_data=prev_tool_data,
                 )
                 direct_preorder_event = _finalize_direct_code_event(
                     direct_preorder_event,
@@ -27431,12 +27516,22 @@ class TStationChatServiceV2:
                 )
                 if direct_preorder_event is not None:
                     normalize_ui_action_metadata(direct_preorder_event, contract=turn_contract)
+                    direct_preorder_metadata = (
+                        direct_preorder_event.get("data", {}).get("metadata")
+                        if isinstance(direct_preorder_event.get("data"), Mapping)
+                        and isinstance(direct_preorder_event.get("data", {}).get("metadata"), Mapping)
+                        else {}
+                    )
                     vehicle_selection_trace_metadata.update({
                         "direct_preorder_emitted": True,
                         "direct_preorder_template": "preOrder",
                         "direct_preorder_assistant_response_source": str(
                             direct_preorder_event.get("assistant_response_source") or ""
                         ),
+                        "payment_amount": direct_preorder_metadata.get("paymentAmount"),
+                        "price_basis": direct_preorder_metadata.get("priceBasis"),
+                        "price_source_tool": direct_preorder_metadata.get("priceSourceTool"),
+                        "payment_amount_missing_reason": direct_preorder_metadata.get("paymentAmountMissingReason"),
                     })
                     logger.info(
                         "[DIRECT_PREORDER] emitting reservation_confirmation_ready from validated schedule ui_action "

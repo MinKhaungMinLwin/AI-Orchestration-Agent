@@ -3714,6 +3714,12 @@ def preorder_slot_values_from_data(template_data: Mapping[str, Any] | None) -> d
                 slot_values["payment_amount"] = amount
         except (TypeError, ValueError):
             pass
+    price_basis = str(metadata.get("priceBasis") or metadata.get("price_basis") or "").strip()
+    if price_basis:
+        slot_values["price_basis"] = price_basis
+    price_source_tool = str(metadata.get("priceSourceTool") or metadata.get("price_source_tool") or "").strip()
+    if price_source_tool:
+        slot_values["price_source_tool"] = price_source_tool
 
     product_text = str(order_info.get("product") or "").strip()
     product_name = str(canonical_values.get("product_name") or "").strip() or product_text
@@ -3819,6 +3825,12 @@ def datepick_slot_values_from_data(
                 slot_values["payment_amount"] = amount
         except (TypeError, ValueError):
             pass
+    price_basis = str(metadata.get("priceBasis") or metadata.get("price_basis") or "").strip()
+    if price_basis:
+        slot_values["price_basis"] = price_basis
+    price_source_tool = str(metadata.get("priceSourceTool") or metadata.get("price_source_tool") or "").strip()
+    if price_source_tool:
+        slot_values["price_source_tool"] = price_source_tool
 
     text = str(user_text or "").strip()
     rsv_hour = _reservation_hour_from_text(text)
@@ -3842,7 +3854,17 @@ def selected_order_context_from_preview_values(preview_values: Mapping[str, Any]
     if not preview_values.get("goods_no"):
         return {}
     context: dict[str, Any] = {}
-    for key_name in ("goods_no", "tire_size", "ord_qty", "region", "shop_id", "shop_name"):
+    for key_name in (
+        "goods_no",
+        "tire_size",
+        "ord_qty",
+        "region",
+        "shop_id",
+        "shop_name",
+        "payment_amount",
+        "price_basis",
+        "price_source_tool",
+    ):
         value = preview_values.get(key_name)
         if value not in (None, "", [], {}):
             context[key_name] = value

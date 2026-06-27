@@ -146,6 +146,8 @@ class ConversationSlots(BaseModel):
     # LLM 이 컨텍스트만으로 단가·수량 곱셈을 추측해 hallucination 하지 않고
     # 결정적 값을 그대로 인용할 수 있다. (예: 할부 계산 질문)
     payment_amount: Optional[int] = None
+    price_basis: Optional[str] = None
+    price_source_tool: Optional[str] = None
     # Free-form user store-selection criteria captured on the originating turn
     # (e.g. "친절한 직원, 얼라인먼트, 워셔액 무료"). Sticky across slot-fill
     # turns so the agent can re-apply the criteria once the missing slot
@@ -178,13 +180,13 @@ class ConversationSlots(BaseModel):
     # goods_no represents a new concrete SKU, so the old tire_size must be
     # re-confirmed instead of silently surviving.
     DEPENDENT_RESETS: ClassVar[dict[str, list[str]]] = {
-        "pending_product_name": ["goods_no", "payment_amount"],
-        "tire_model": ["goods_no", "payment_amount"],
-        "tire_size": ["goods_no", "payment_amount"],
-        "tire_size_front": ["goods_no", "payment_amount"],
-        "tire_size_rear": ["goods_no", "payment_amount"],
-        "goods_no": ["tire_model", "tire_size", "payment_amount"],
-        "ord_qty": ["payment_amount"],
+        "pending_product_name": ["goods_no", "payment_amount", "price_basis", "price_source_tool"],
+        "tire_model": ["goods_no", "payment_amount", "price_basis", "price_source_tool"],
+        "tire_size": ["goods_no", "payment_amount", "price_basis", "price_source_tool"],
+        "tire_size_front": ["goods_no", "payment_amount", "price_basis", "price_source_tool"],
+        "tire_size_rear": ["goods_no", "payment_amount", "price_basis", "price_source_tool"],
+        "goods_no": ["tire_model", "tire_size", "payment_amount", "price_basis", "price_source_tool"],
+        "ord_qty": ["payment_amount", "price_basis", "price_source_tool"],
         "shop_name": ["shop_id"],
         "car_model": [
             "car_no",
@@ -197,6 +199,8 @@ class ConversationSlots(BaseModel):
             "tire_size_rear",
             "goods_no",
             "payment_amount",
+            "price_basis",
+            "price_source_tool",
         ],
         "car_no": [
             "car_model",
@@ -209,6 +213,8 @@ class ConversationSlots(BaseModel):
             "tire_size_rear",
             "goods_no",
             "payment_amount",
+            "price_basis",
+            "price_source_tool",
         ],
         # When the goal flips, drop free-form store preferences (they are session-specific).
         # Region changes mean the user is searching a new area, not confirming the
@@ -225,15 +231,15 @@ class ConversationSlots(BaseModel):
         # Runtime product resolution is usually "same size, different model".
         # Keep tire_size so Discovery/Transaction can re-query the new SKU under
         # the user's active size, but never keep old product label or amount.
-        "goods_no": ["tire_model", "payment_amount"],
-        "pending_product_name": ["goods_no", "payment_amount"],
-        "tire_model": ["goods_no", "payment_amount"],
-        "tire_size": ["goods_no", "payment_amount"],
-        "tire_size_front": ["goods_no", "payment_amount"],
-        "tire_size_rear": ["goods_no", "payment_amount"],
-        "ord_qty": ["payment_amount"],
-        "shop_name": ["shop_id", "payment_amount"],
-        "shop_id": ["payment_amount"],
+        "goods_no": ["tire_model", "payment_amount", "price_basis", "price_source_tool"],
+        "pending_product_name": ["goods_no", "payment_amount", "price_basis", "price_source_tool"],
+        "tire_model": ["goods_no", "payment_amount", "price_basis", "price_source_tool"],
+        "tire_size": ["goods_no", "payment_amount", "price_basis", "price_source_tool"],
+        "tire_size_front": ["goods_no", "payment_amount", "price_basis", "price_source_tool"],
+        "tire_size_rear": ["goods_no", "payment_amount", "price_basis", "price_source_tool"],
+        "ord_qty": ["payment_amount", "price_basis", "price_source_tool"],
+        "shop_name": ["shop_id", "payment_amount", "price_basis", "price_source_tool"],
+        "shop_id": ["payment_amount", "price_basis", "price_source_tool"],
         "region": ["shop_id", "shop_name"],
         "car_model": [
             "car_no",
@@ -246,6 +252,8 @@ class ConversationSlots(BaseModel):
             "tire_size_rear",
             "goods_no",
             "payment_amount",
+            "price_basis",
+            "price_source_tool",
         ],
         "car_no": [
             "car_model",
@@ -258,6 +266,8 @@ class ConversationSlots(BaseModel):
             "tire_size_rear",
             "goods_no",
             "payment_amount",
+            "price_basis",
+            "price_source_tool",
         ],
     }
     PRODUCT_IDENTITY_FIELDS: ClassVar[set[str]] = {
@@ -983,6 +993,8 @@ class ConversationSlots(BaseModel):
             "requested_cal_day": "요청 장착일",
             "rsv_hour": "요청 예약시간",
             "payment_amount": "결제금액",
+            "price_basis": "결제금액 기준",
+            "price_source_tool": "결제금액 출처",
             "pending_check_topic": "확인 대기 주제",
             "pending_check_object_type": "확인 대상 유형",
             "pending_check_object_value": "확인 대상 값",
@@ -1111,6 +1123,8 @@ class CanonicalSlotState(BaseModel):
     )
     PRICE_FIELDS: ClassVar[tuple[str, ...]] = (
         "payment_amount",
+        "price_basis",
+        "price_source_tool",
         "price_facts",
         "coupon_facts",
     )

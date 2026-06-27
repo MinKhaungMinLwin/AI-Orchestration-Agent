@@ -19599,6 +19599,8 @@ def test_store_preview_result_updates_payment_amount_and_product_name_for_purcha
     assert changed is True
     assert slots.tire_model == "벤투스 S2 AS"
     assert slots.payment_amount == 308200
+    assert slots.price_basis == "cheapest_final_prc"
+    assert slots.price_source_tool == "transaction_store_preview_tool"
 
 
 def test_preorder_template_payload_recovers_order_slots() -> None:
@@ -19616,6 +19618,8 @@ def test_preorder_template_payload_recovers_order_slots() -> None:
         "metadata": {
             "goodsId": "G000000309783",
             "shopId": "F07782",
+            "priceBasis": "cheapest_final_prc",
+            "priceSourceTool": "transaction_store_preview_tool",
         },
     })
 
@@ -19625,6 +19629,8 @@ def test_preorder_template_payload_recovers_order_slots() -> None:
         "shop_name": "티스테이션 한남점",
         "ord_qty": 2,
         "payment_amount": 237600,
+        "price_basis": "cheapest_final_prc",
+        "price_source_tool": "transaction_store_preview_tool",
         "tire_model": "벤투스 S2 AS",
         "tire_size": "225/45R17",
         "requested_cal_day": "20260609",
@@ -19652,6 +19658,9 @@ def test_preorder_template_payload_uses_template_boundary_alias_normalization() 
         "metadata": {
             "goodsNo": "G000000309783",
             "storeId": "F07782",
+            "paymentAmount": 237600,
+            "priceBasis": "cheapest_final_prc",
+            "priceSourceTool": "transaction_store_preview_tool",
         },
     })
 
@@ -19660,6 +19669,9 @@ def test_preorder_template_payload_uses_template_boundary_alias_normalization() 
         "shop_id": "F07782",
         "shop_name": "티스테이션 한남점",
         "ord_qty": 2,
+        "payment_amount": 237600,
+        "price_basis": "cheapest_final_prc",
+        "price_source_tool": "transaction_store_preview_tool",
         "tire_model": "벤투스 S2 AS",
         "tire_size": "225/45R17",
         "requested_cal_day": "20260609",
@@ -19702,6 +19714,8 @@ def test_order_snapshot_commit_preserves_product_and_payment_across_store_select
         tire_size="225/45R17",
         ord_qty=2,
         payment_amount=237600,
+        price_basis="cheapest_final_prc",
+        price_source_tool="transaction_store_preview_tool",
         pending_intent="order",
         goal_type="place_order",
     )
@@ -19722,6 +19736,8 @@ def test_order_snapshot_commit_preserves_product_and_payment_across_store_select
     assert updated.tire_size == "225/45R17"
     assert updated.ord_qty == 2
     assert updated.payment_amount == 237600
+    assert updated.price_basis == "cheapest_final_prc"
+    assert updated.price_source_tool == "transaction_store_preview_tool"
     assert updated.shop_id == "F07782"
     assert updated.requested_cal_day == "20260624"
     assert updated.rsv_hour == "17"
@@ -24903,10 +24919,20 @@ def test_final_persist_rehydrates_missing_product_fields_from_preview_tool_conte
     assert updated_slots.tire_model == "벤투스 S2 AS"
     assert updated_slots.pending_product_name == "벤투스 S2 AS"
     assert updated_slots.payment_amount == 308200
+    assert updated_slots.price_basis == "cheapest_final_prc"
+    assert updated_slots.price_source_tool == "transaction_store_preview_tool"
     assert updated_slots.availability_context["pending_order_context"]["product_name"] == "벤투스 S2 AS"
     assert updated_slots.availability_context["pending_order_context"]["tire_model"] == "벤투스 S2 AS"
     assert updated_slots.availability_context["pending_order_context"]["pending_product_name"] == "벤투스 S2 AS"
     assert updated_slots.availability_context["pending_order_context"]["payment_amount"] == 308200
+    assert updated_slots.availability_context["pending_order_context"]["price_basis"] == "cheapest_final_prc"
+    assert (
+        updated_slots.availability_context["pending_order_context"]["price_source_tool"]
+        == "transaction_store_preview_tool"
+    )
+    assert metadata["price_basis"] == "cheapest_final_prc"
+    assert metadata["price_source_tool"] == "transaction_store_preview_tool"
+    assert metadata["payment_amount_missing_reason"] is None
 
 
 def test_final_persist_rehydrate_preserves_existing_purchase_intent_over_flat_stock_metadata() -> None:
@@ -26072,6 +26098,58 @@ def test_direct_preorder_event_recovers_product_and_payment_from_pending_order_c
     assert event["data"]["orderInfo"]["product"] == "벤투스 S2 AS 245/45R19"
     assert event["data"]["orderInfo"]["paymentAmount"] == 308200
     assert event["data"]["metadata"]["missingPreorderContext"] == []
+
+
+def test_direct_preorder_event_recovers_payment_from_latest_preview_tool_result() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000310126",
+        tire_size="245/45R19",
+        ord_qty=2,
+        shop_id="F07782",
+        shop_name="티스테이션 한남점",
+        requested_cal_day="20260623",
+        rsv_hour="17",
+        pending_intent="order",
+        goal_type="place_order",
+        availability_context={
+            "pending_order_context": {
+                "goods_no": "G000000310126",
+                "product_name": "벤투스 S2 AS",
+                "price_source_tool": "transaction_store_preview_tool",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            }
+        },
+    )
+
+    event = _build_direct_preorder_event_from_slots(
+        slots,
+        prev_tool_data=[
+            {
+                "tool": "transaction_store_preview_tool",
+                "data": {
+                    "status": "success",
+                    "data": {
+                        "stores": [
+                            {
+                                "goods_no": "G000000310126",
+                                "goods_nm": "벤투스 S2 AS",
+                                "tire_size": "245/45R19",
+                                "cheapest_final_prc": 154100,
+                            }
+                        ]
+                    },
+                },
+            }
+        ],
+    )
+
+    assert event is not None
+    assert event["data"]["orderInfo"]["product"] == "벤투스 S2 AS 245/45R19"
+    assert event["data"]["orderInfo"]["paymentAmount"] == 308200
+    assert event["data"]["metadata"]["priceBasis"] == "cheapest_final_prc"
+    assert event["data"]["metadata"]["priceSourceTool"] == "transaction_store_preview_tool"
+    assert event["data"]["metadata"]["paymentAmountMissingReason"] == "recovered_from_latest_preview_tool"
 
 
 def test_ready_preorder_card_without_quick_order_tool_is_allowed_under_reservation_contract() -> None:
