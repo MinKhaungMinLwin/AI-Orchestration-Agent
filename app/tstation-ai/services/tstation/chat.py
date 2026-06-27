@@ -4096,14 +4096,19 @@ class StreamingMultiAgentCoordinator:
                 data = stores[0] if isinstance(stores, list) and len(stores) == 1 else None
 
             if isinstance(data, dict):
+                canonical_tool_data = canonical_context_from_tool_boundary(data)
                 for field in fields:
-                    val = canonical_context_from_tool_boundary(data).get(field)
+                    val = canonical_tool_data.get(field)
                     if val:
                         tool_slots[field] = val
                 if tool_name == "search_product_tool" and tool_slots.get("goods_no"):
-                    tire_size = canonical_context_from_tool_boundary(data).get("tire_size")
+                    tire_size = canonical_tool_data.get("tire_size")
                     if tire_size:
                         tool_slots["tire_size"] = tire_size
+                    product_name = canonical_tool_data.get("product_name")
+                    if product_name:
+                        tool_slots["tire_model"] = str(product_name).strip()
+                        tool_slots["pending_product_name"] = str(product_name).strip()
 
         if tool_name == "search_product_tool" and tool_succeeded:
             staged_context = _stage_pending_product_context_from_search(
@@ -20824,6 +20829,83 @@ def _apply_purchase_stock_canonical_readthrough(
     return updated_slots, metadata
 
 
+def _finalize_purchase_stock_slots_for_persistence(
+    *,
+    slots: ConversationSlots,
+    latest_product_tmpl: Mapping[str, Any] | None = None,
+    latest_location_tmpl: Mapping[str, Any] | None = None,
+    latest_datepick_tmpl: Mapping[str, Any] | None = None,
+    latest_preorder_tmpl: Mapping[str, Any] | None = None,
+    prev_tool_data: list[dict] | None = None,
+) -> tuple[ConversationSlots, dict[str, Any]]:
+    availability_context = getattr(slots, "availability_context", None)
+    pending_context = (
+        availability_context.get("pending_order_context")
+        if isinstance(availability_context, Mapping) and isinstance(availability_context.get("pending_order_context"), Mapping)
+        else {}
+    )
+    needs_rehydrate = bool(
+        isinstance(pending_context, Mapping)
+        and pending_context.get("goods_no")
+        and (
+            not pending_context.get("product_name")
+            or not pending_context.get("tire_model")
+            or not pending_context.get("pending_product_name")
+            or (
+                pending_context.get("ord_qty") not in (None, "", 0)
+                and pending_context.get("payment_amount") in (None, "", [], {})
+            )
+        )
+    )
+    updated_slots = slots
+    metadata: dict[str, Any] = {
+        "final_persist_rehydrated": False,
+        "final_persist_flow_state_before": dict(pending_context or {}),
+    }
+    if needs_rehydrate:
+        canonical_values = _flow_state_from_purchase_stock_sources(
+            slots=slots,
+            latest_product_tmpl=latest_product_tmpl,
+            latest_location_tmpl=latest_location_tmpl,
+            latest_datepick_tmpl=latest_datepick_tmpl,
+            latest_preorder_tmpl=latest_preorder_tmpl,
+            prev_tool_data=prev_tool_data,
+            current_slot_delta={},
+        )
+        slot_patch = {
+            key: value
+            for key, value in dict(canonical_values.get("merged") or {}).items()
+            if key not in {"price_basis", "price_source_tool"} and value not in (None, "", [], {})
+        }
+        updated_slots = slots.apply_runtime_values(
+            slot_patch,
+            source="final_persist_purchase_stock_rehydrate",
+            fill_only=True,
+        )
+        _stage_pending_order_context(updated_slots, source="final_persist_rehydrate")
+        refreshed_context = (
+            updated_slots.availability_context.get("pending_order_context")
+            if isinstance(updated_slots.availability_context, Mapping)
+            and isinstance(updated_slots.availability_context.get("pending_order_context"), Mapping)
+            else {}
+        )
+        metadata.update({
+            "final_persist_rehydrated": True,
+            "final_persist_flow_state_after": dict(refreshed_context or {}),
+            "final_persist_canonical_sources": dict(canonical_values.get("sources") or {}),
+        })
+    else:
+        _stage_pending_order_context(updated_slots, source="final_persist")
+        refreshed_context = (
+            updated_slots.availability_context.get("pending_order_context")
+            if isinstance(updated_slots.availability_context, Mapping)
+            and isinstance(updated_slots.availability_context.get("pending_order_context"), Mapping)
+            else {}
+        )
+        metadata["final_persist_flow_state_after"] = dict(refreshed_context or {})
+    return updated_slots, metadata
+
+
 def _mask_dormant_transaction_action_slots(slots: ConversationSlots, *, source: str) -> dict[str, Any]:
     """Remove flat action slots after copying them into dormant context."""
     masked: dict[str, Any] = {}
@@ -23040,6 +23122,7 @@ class TStationChatServiceV2:
         predicted_domain_values: list[str] = []
         latest_datepick_tmpl: dict | None = None
         latest_quickreply_tmpl: dict | None = None
+        latest_location_tmpl: dict | None = None
         latest_preorder_tmpl: dict | None = None
         vehicle_ui_action_context: UIActionContext | None = None
         region_store_input_resolution = RegionStoreInputContextResolution()
@@ -27283,6 +27366,7 @@ class TStationChatServiceV2:
                     request_started_at=_t0,
                     latest_datepick_tmpl=latest_datepick_tmpl,
                     latest_quickreply_tmpl=latest_quickreply_tmpl,
+                    latest_location_tmpl=latest_location_tmpl,
                     latest_preorder_tmpl=latest_preorder_tmpl,
                     latest_product_tmpl=latest_product_tmpl,
                     prev_tool_data=prev_tool_data,
@@ -27322,6 +27406,7 @@ class TStationChatServiceV2:
                 request_started_at=_t0,
                 latest_datepick_tmpl=latest_datepick_tmpl,
                 latest_quickreply_tmpl=latest_quickreply_tmpl,
+                latest_location_tmpl=latest_location_tmpl,
                 latest_preorder_tmpl=latest_preorder_tmpl,
                 latest_product_tmpl=latest_product_tmpl,
                 prev_tool_data=prev_tool_data,
@@ -27819,6 +27904,7 @@ class TStationChatServiceV2:
         request_started_at: float | None = None,
         latest_datepick_tmpl: dict | None = None,
         latest_quickreply_tmpl: dict | None = None,
+        latest_location_tmpl: dict | None = None,
         latest_preorder_tmpl: dict | None = None,
         latest_product_tmpl: dict | None = None,
         prev_tool_data: list[dict] | None = None,
@@ -36120,6 +36206,21 @@ class TStationChatServiceV2:
                     user_id=user_id,
                 )
                 if pending_slots is not None:
+                    pending_slots, final_persist_metadata = _finalize_purchase_stock_slots_for_persistence(
+                        slots=pending_slots,
+                        latest_product_tmpl=latest_product_tmpl,
+                        latest_location_tmpl=latest_location_tmpl,
+                        latest_datepick_tmpl=latest_datepick_tmpl,
+                        latest_preorder_tmpl=latest_preorder_tmpl,
+                        prev_tool_data=prev_tool_data,
+                    )
+                    logger.info(
+                        "[FINAL_PERSIST] rehydrated=%s before=%s after=%s sources=%s",
+                        final_persist_metadata.get("final_persist_rehydrated"),
+                        final_persist_metadata.get("final_persist_flow_state_before"),
+                        final_persist_metadata.get("final_persist_flow_state_after"),
+                        final_persist_metadata.get("final_persist_canonical_sources"),
+                    )
                     await history_svc.save_slots_async(session_id, pending_slots, user_id=user_id)
             except Exception as e:
                 logger.warning(f"[STREAM_CTX] Failed to save stream context: {e}")

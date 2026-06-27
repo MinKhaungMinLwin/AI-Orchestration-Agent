@@ -168,6 +168,7 @@ from services.tstation.chat import (
     _select_order_rows_by_number,
     _is_preorder_confirmation_reply,
     _apply_purchase_stock_canonical_readthrough,
+    _finalize_purchase_stock_slots_for_persistence,
     _is_maintenance_history_access_policy_query,
     _is_maintenance_history_lookup_query,
     _is_order_history_lookup_query,
@@ -24650,6 +24651,57 @@ def test_purchase_stock_canonical_readthrough_uses_preview_price_basis_for_payme
         updated_slots.availability_context["pending_order_context"]["price_source_tool"]
         == "transaction_store_preview_tool"
     )
+
+
+def test_final_persist_rehydrates_missing_product_fields_from_preview_tool_context() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000310126",
+        tire_size="245/45R19",
+        ord_qty=2,
+        region="분당",
+        pending_intent="order",
+        goal_type="place_order",
+        availability_context={
+            "pending_order_context": {
+                "goods_no": "G000000310126",
+                "tire_size": "245/45R19",
+                "ord_qty": 2,
+                "region": "분당",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            }
+        },
+    )
+    preview_result = {
+        "tool": "transaction_store_preview_tool",
+        "data": {
+            "status": "success",
+            "data": {
+                "stores": [
+                    {
+                        "goods_no": "G000000310126",
+                        "goods_nm": "벤투스 S2 AS",
+                        "tire_size": "245/45R19",
+                        "cheapest_final_prc": 154100,
+                    }
+                ]
+            },
+        },
+    }
+
+    updated_slots, metadata = _finalize_purchase_stock_slots_for_persistence(
+        slots=slots,
+        prev_tool_data=[preview_result],
+    )
+
+    assert metadata["final_persist_rehydrated"] is True
+    assert updated_slots.tire_model == "벤투스 S2 AS"
+    assert updated_slots.pending_product_name == "벤투스 S2 AS"
+    assert updated_slots.payment_amount == 308200
+    assert updated_slots.availability_context["pending_order_context"]["product_name"] == "벤투스 S2 AS"
+    assert updated_slots.availability_context["pending_order_context"]["tire_model"] == "벤투스 S2 AS"
+    assert updated_slots.availability_context["pending_order_context"]["pending_product_name"] == "벤투스 S2 AS"
+    assert updated_slots.availability_context["pending_order_context"]["payment_amount"] == 308200
 
 
 def test_store_view_cta_with_pending_purchase_context_resumes_purchase_flow() -> None:
