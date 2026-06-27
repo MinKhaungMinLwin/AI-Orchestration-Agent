@@ -13615,7 +13615,21 @@ def test_location_booking_flow_metadata_carries_store_selection_ui_action() -> N
     assert metadata["ui_action"]["entity_type"] == "store"
     assert metadata["ui_action"]["fills_slot"] == "shop_id"
     assert metadata["slots"]["shop_id"] == "A0001"
-    assert metadata["slots"]["goods_no"] == "G000000309715"
+    assert "goods_no" not in metadata["slots"]
+
+    prepared = prepare_ui_action_state(
+        ui_action=metadata["ui_action"],
+        chip_context=None,
+        request_slots=None,
+        latest_listcar_tmpl=None,
+        last_user_text="티스테이션 동탄석우점",
+        existing_slots=ConversationSlots(**contract.known_slots),
+        generic_slot_apply_fn=lambda slots, values: slots.apply_runtime_values(values, source="ui_action"),
+        vehicle_slot_apply_fn=lambda slots, values: slots.apply_runtime_values(values, source="vehicle_ui_action"),
+    )
+    assert prepared.updated_slots.goods_no == "G000000309715"
+    assert prepared.updated_slots.shop_id == "A0001"
+    assert expected_slot_fill_resume_source(prepared.action_context) == "expected_slot_fill:store"
 
 
 def test_location_booking_flow_metadata_overrides_store_search_contract_with_purchase_context() -> None:
@@ -13670,8 +13684,21 @@ def test_location_booking_flow_metadata_overrides_store_search_contract_with_pur
     assert metadata["expected_contract_intent"] == "quick_order_reservation"
     assert metadata["ui_action"]["source_intent"] == "quick_order_reservation"
     assert metadata["ui_action"]["expected_contract_intent"] == "quick_order_reservation"
-    assert metadata["slots"]["pending_intent"] == "order"
-    assert metadata["slots"]["goal_type"] == "place_order"
+    assert metadata["slots"] == {"shop_id": "F00721", "shop_name": "티스테이션 판교점"}
+
+    prepared = prepare_ui_action_state(
+        ui_action=metadata["ui_action"],
+        chip_context=None,
+        request_slots=None,
+        latest_listcar_tmpl=None,
+        last_user_text="티스테이션 판교점",
+        existing_slots=ConversationSlots(**contract.known_slots),
+        generic_slot_apply_fn=lambda slots, values: slots.apply_runtime_values(values, source="ui_action"),
+        vehicle_slot_apply_fn=lambda slots, values: slots.apply_runtime_values(values, source="vehicle_ui_action"),
+    )
+    assert prepared.updated_slots.pending_intent == "order"
+    assert prepared.updated_slots.goal_type == "place_order"
+    assert prepared.updated_slots.shop_id == "F00721"
 
 
 def test_datepick_metadata_carries_schedule_selection_ui_action() -> None:
@@ -13722,8 +13749,8 @@ def test_datepick_metadata_carries_schedule_selection_ui_action() -> None:
     assert metadata["expected_behavior"] == "slot_fill"
     assert metadata["ui_action"]["entity_type"] == "schedule"
     assert metadata["ui_action"]["fills_slot"] == "requested_cal_day,rsv_hour"
-    assert metadata["slots"]["shop_id"] == "A0001"
-    assert metadata["slots"]["goods_no"] == "G000000309715"
+    assert metadata["slots"] == {}
+    assert metadata["ui_action"]["entity_id"] == "A0001"
 
 
 def test_same_quantity_label_carries_different_contract_by_flow() -> None:

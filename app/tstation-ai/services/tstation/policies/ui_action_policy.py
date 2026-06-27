@@ -1792,6 +1792,28 @@ def apply_history_location_selection_state(
         return HistoryLocationSelectionState(updated_slots=merged_slots, selected_location=selected_location)
 
     preview_values = preview_location_slot_values_from_selection_fn(selected_location) or {"shop_id": resolved_shop_id}
+    preview_values = dict(preview_values)
+    if preview_values.get("shop_id"):
+        for field_name in (
+            "goods_no",
+            "tire_size",
+            "ord_qty",
+            "region",
+            "pending_intent",
+            "goal_type",
+            "stock_check_mode",
+            "source_tool",
+            "schedule_mode",
+        ):
+            if preview_values.get(field_name) in (None, "", []):
+                value = _slot_value_from_any(merged_slots, field_name)
+                if value not in (None, "", []):
+                    preview_values[field_name] = value
+        if preview_values.get("source_tool") in (None, "") and (
+            preview_values.get("pending_intent") in {"order", "stock"}
+            or preview_values.get("goal_type") in {"place_order", "store_with_stock"}
+        ):
+            preview_values["source_tool"] = "transaction_store_preview_tool"
     source_tool = str(preview_values.get("source_tool") or "").strip()
     pending_intent = str(preview_values.get("pending_intent") or "").strip()
     goal_type = str(preview_values.get("goal_type") or "").strip()
@@ -4946,7 +4968,8 @@ def normalize_ui_action_metadata(
             )
             metadata["expected_contract_intent"] = expected_contract_intent
             metadata["expected_behavior"] = metadata.get("expected_behavior") or "slot_fill"
-            metadata["slots"] = slot_values
+            ui_action_slots = _minimal_ui_action_slot_values("select_store", slot_values)
+            metadata["slots"] = ui_action_slots
             metadata["ui_action"] = {
                 "action_type": "select_store",
                 "cta_action": "select_store",
@@ -4959,7 +4982,7 @@ def normalize_ui_action_metadata(
                     store_context.get("shop_name") or store.get("nameAddress") or store.get("name") or ""
                 ).strip() or None,
                 "fills_slot": "shop_id",
-                "slots": slot_values,
+                "slots": ui_action_slots,
             }
             changed = True
         return changed
@@ -4998,7 +5021,8 @@ def normalize_ui_action_metadata(
         )
         metadata["expected_contract_intent"] = expected_contract_intent
         metadata["expected_behavior"] = metadata.get("expected_behavior") or "slot_fill"
-        metadata["slots"] = slot_values
+        ui_action_slots = _minimal_ui_action_slot_values("select_schedule", slot_values)
+        metadata["slots"] = ui_action_slots
         metadata["ui_action"] = {
             "action_type": "select_schedule",
             "cta_action": "select_schedule",
@@ -5009,7 +5033,7 @@ def normalize_ui_action_metadata(
             "entity_id": str(canonical_metadata.get("shop_id") or "").strip() or None,
             "entity_label": str(canonical_metadata.get("shop_name") or "").strip() or None,
             "fills_slot": "requested_cal_day,rsv_hour",
-            "slots": slot_values,
+            "slots": ui_action_slots,
         }
         changed = True
         return changed
