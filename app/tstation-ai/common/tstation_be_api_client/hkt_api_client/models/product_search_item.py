@@ -30,8 +30,6 @@ class ProductSearchItem:
             으로 정규화) / '스탠다드' / '이코노미'. 표시·답변용 — 검색 정렬/필터 기준 아님
         goods_pfm_nm (None | str | Unset): 퍼포먼스 분류명 (PR_GOODS_BASE.GOODS_PFM_NM). 값 매핑: 'COMFORT'(정숙/승차감) /
             'SPORT'(고속/제동성) / 'RUNFLAT'(런플랫) 등. 표시·답변용 — 검색 정렬/필터 기준 아님
-        goods_dtl_pfm_nm (None | str | Unset): 세부 퍼포먼스 분류명 (PR_GOODS_BASE.GOODS_DTL_PFM_NM)
-        sound_absorber_yn (None | str | Unset): 흡음재 적용 여부 Y/N (GOODS_DTL_PFM_NM LIKE '%흡음%' 기준)
         t_oe_maker_1 (None | str | Unset): OE 메이커 코드/명 (PR_GOODS_BASE.T_OE_MAKER_1)
         oe_badge_yn (None | str | Unset): OE 뱃지 노출 여부. T_OE_MAKER_1 값이 있으면 Y, 없으면 N
         sale_prc (int | None | Unset): 기본 판매가 (PR_ITEM_PRC_INFO.SALE_PRC)
@@ -83,8 +81,6 @@ class ProductSearchItem:
     label_pndb: None | str | Unset = UNSET
     prc_grd_nm: None | str | Unset = UNSET
     goods_pfm_nm: None | str | Unset = UNSET
-    goods_dtl_pfm_nm: None | str | Unset = UNSET
-    sound_absorber_yn: None | str | Unset = UNSET
     t_oe_maker_1: None | str | Unset = UNSET
     oe_badge_yn: None | str | Unset = UNSET
     sale_prc: int | None | Unset = UNSET
@@ -184,18 +180,6 @@ class ProductSearchItem:
             goods_pfm_nm = UNSET
         else:
             goods_pfm_nm = self.goods_pfm_nm
-
-        goods_dtl_pfm_nm: None | str | Unset
-        if isinstance(self.goods_dtl_pfm_nm, Unset):
-            goods_dtl_pfm_nm = UNSET
-        else:
-            goods_dtl_pfm_nm = self.goods_dtl_pfm_nm
-
-        sound_absorber_yn: None | str | Unset
-        if isinstance(self.sound_absorber_yn, Unset):
-            sound_absorber_yn = UNSET
-        else:
-            sound_absorber_yn = self.sound_absorber_yn
 
         t_oe_maker_1: None | str | Unset
         if isinstance(self.t_oe_maker_1, Unset):
@@ -437,10 +421,6 @@ class ProductSearchItem:
             field_dict["prc_grd_nm"] = prc_grd_nm
         if goods_pfm_nm is not UNSET:
             field_dict["goods_pfm_nm"] = goods_pfm_nm
-        if goods_dtl_pfm_nm is not UNSET:
-            field_dict["goods_dtl_pfm_nm"] = goods_dtl_pfm_nm
-        if sound_absorber_yn is not UNSET:
-            field_dict["sound_absorber_yn"] = sound_absorber_yn
         if t_oe_maker_1 is not UNSET:
             field_dict["t_oe_maker_1"] = t_oe_maker_1
         if oe_badge_yn is not UNSET:
@@ -605,24 +585,6 @@ class ProductSearchItem:
             return cast(None | str | Unset, data)
 
         goods_pfm_nm = _parse_goods_pfm_nm(d.pop("goods_pfm_nm", UNSET))
-
-        def _parse_goods_dtl_pfm_nm(data: object) -> None | str | Unset:
-            if data is None:
-                return data
-            if isinstance(data, Unset):
-                return data
-            return cast(None | str | Unset, data)
-
-        goods_dtl_pfm_nm = _parse_goods_dtl_pfm_nm(d.pop("goods_dtl_pfm_nm", UNSET))
-
-        def _parse_sound_absorber_yn(data: object) -> None | str | Unset:
-            if data is None:
-                return data
-            if isinstance(data, Unset):
-                return data
-            return cast(None | str | Unset, data)
-
-        sound_absorber_yn = _parse_sound_absorber_yn(d.pop("sound_absorber_yn", UNSET))
 
         def _parse_t_oe_maker_1(data: object) -> None | str | Unset:
             if data is None:
@@ -953,8 +915,6 @@ class ProductSearchItem:
             label_pndb=label_pndb,
             prc_grd_nm=prc_grd_nm,
             goods_pfm_nm=goods_pfm_nm,
-            goods_dtl_pfm_nm=goods_dtl_pfm_nm,
-            sound_absorber_yn=sound_absorber_yn,
             t_oe_maker_1=t_oe_maker_1,
             oe_badge_yn=oe_badge_yn,
             sale_prc=sale_prc,
