@@ -69,7 +69,7 @@ from services.tstation.policies.price_response_policy import (
 )
 from services.tstation.policies.transaction_intent_policy import build_transaction_intent_frame, plan_transaction_tools
 from services.tstation.policies.transaction_response_policy import decide_transaction_response
-from services.tstation.policies.response_decision import ResponseDecision, ResponseShape, TemplateName
+from services.tstation.policies.response_decision import ResponseDecision, ResponseShape, TemplateName, ToolPlan
 from services.tstation.policies.resolved_context import (
     canonical_context_from_slots,
     canonical_context_from_template_boundary,
@@ -7549,6 +7549,51 @@ def _should_prompt_order_quantity_before_store(
     return _is_order_quantity_prompt_continuation_text(text)
 
 
+_PREVIOUS_PRODUCT_SELECTION_TRANSACTION_ANCHOR_RE = re.compile(
+    r"구매|주문|장바구니|가격|할인|쿠폰|재고|매장|오늘\s*장착|당일\s*장착|예약",
+    re.IGNORECASE,
+)
+
+
+def _has_transaction_anchor_for_previous_product_selection(
+    user_text: str | None,
+    *,
+    regex_slots: ConversationSlots,
+) -> bool:
+    if regex_slots.intent_candidate in {"order", "price", "stock"}:
+        return True
+    if regex_slots.shop_name is not None or regex_slots.region is not None:
+        return True
+    return bool(_PREVIOUS_PRODUCT_SELECTION_TRANSACTION_ANCHOR_RE.search(str(user_text or "")))
+
+
+def _has_active_transaction_context_for_previous_product_selection(slots: ConversationSlots) -> bool:
+    pending_intent = str(getattr(slots, "pending_intent", None) or "").strip()
+    goal_type = str(getattr(slots, "goal_type", None) or "").strip()
+    return (
+        pending_intent in {"order", "stock", "price"}
+        or goal_type in {"place_order", "store_with_stock", "price_inquiry", "coupon_discount_amount", "product_coupon_discount_amount"}
+    )
+
+
+def _should_force_previous_product_candidate_description(
+    *,
+    goods_no_resolved: bool,
+    selection_source: str,
+    user_text: str | None,
+    regex_slots: ConversationSlots,
+    slots: ConversationSlots,
+    resolved_size_stock_continuation: bool,
+) -> bool:
+    return bool(
+        goods_no_resolved
+        and selection_source == "previous_product_candidate"
+        and not _has_transaction_anchor_for_previous_product_selection(user_text, regex_slots=regex_slots)
+        and not _has_active_transaction_context_for_previous_product_selection(slots)
+        and not resolved_size_stock_continuation
+    )
+
+
 def _is_order_quantity_prompt_continuation_text(user_text: str | None) -> bool:
     text = str(user_text or "").strip()
     if not text:
@@ -13164,7 +13209,7 @@ def _product_description_lines_and_metadata(
 
 
 _PRODUCT_DESCRIPTION_INFO_CHIPS: list[dict[str, str]] = [
-    {"label": "가격 확인", "domain": "TRANSACTION"},
+    {"label": "구매하기", "domain": "TRANSACTION"},
     {"label": "재고 확인", "domain": "TRANSACTION"},
     {"label": "다른 상품 보기", "domain": "DISCOVERY"},
 ]
@@ -23746,6 +23791,34 @@ class TStationChatServiceV2:
             routing_result=routing_result,
             size_only_store_availability_continuation=size_only_store_availability_continuation,
         )
+        previous_product_candidate_description_override = _should_force_previous_product_candidate_description(
+            goods_no_resolved=history_product_selection_state.goods_no_resolved,
+            selection_source=str(history_product_selection_state.trace_metadata.get("selection_source") or ""),
+            user_text=last_user_text,
+            regex_slots=regex_slots,
+            slots=merged_slots,
+            resolved_size_stock_continuation=resolved_size_stock_continuation,
+        )
+        if previous_product_candidate_description_override:
+            previous_domains = list(domains)
+            domains = [MultiAgentDomain.Domain.DISCOVERY]
+            routing_result = MultiAgentDomain(
+                reason="previous_product_candidate_product_description",
+                domains=domains,
+                execution_plan=["discovery:product_description"],
+                user_behavior="selecting a previous product candidate without transaction anchor",
+                flow="previous_product_candidate_description",
+                claim_check_type="none",
+                complaint_scope="none",
+                agent_prompt_profile=AgentPromptProfile.DISCOVERY_SEARCH,
+                planner_confidence=1.0,
+            )
+            skip_decision = False
+            speculative_classify_future = None
+            logger.info(
+                "[COORDINATOR] Previous product candidate selection without transaction anchor: %s -> [discovery:product_description]",
+                [domain.value for domain in previous_domains],
+            )
 
         # Post-classification redirect: when the user's current-turn reply was a
         # list-selection that just resolved goods_no (via step 3.8) and a
@@ -24983,11 +25056,32 @@ class TStationChatServiceV2:
                     "pending_check_object_type": merged_slots.pending_check_object_type,
                     "pending_check_object_value": merged_slots.pending_check_object_value,
                 }
-                contract_frame = build_discovery_intent_frame(
-                    last_user_text,
-                    known_slots={k: v for k, v in discovery_contract_slots.items() if v not in (None, "")},
-                )
-                contract_tool_plan = plan_discovery_tools(contract_frame)
+                if previous_product_candidate_description_override and merged_slots.goods_no is not None:
+                    description_entities: dict[str, Any] = {"product_names": ()}
+                    if merged_slots.tire_model:
+                        description_entities["product_names"] = (str(merged_slots.tire_model),)
+                    if merged_slots.tire_size:
+                        description_entities["tire_size"] = str(merged_slots.tire_size)
+                    contract_frame = IntentFrame(
+                        domain=PolicyDomain.DISCOVERY,
+                        intent="product_description",
+                        sub_intent="product_detail",
+                        entities=description_entities,
+                        known_slots={k: v for k, v in discovery_contract_slots.items() if v not in (None, "")},
+                        missing_slots=(),
+                    )
+                    contract_tool_plan = ToolPlan(
+                        allowed_tools=("get_product_description_tool",),
+                        preferred_tool="get_product_description_tool",
+                        tool_args_patch={"goods_no": merged_slots.goods_no},
+                        metadata={"response_intent": "product_detail", "selection_source": "previous_product_candidate"},
+                    )
+                else:
+                    contract_frame = build_discovery_intent_frame(
+                        last_user_text,
+                        known_slots={k: v for k, v in discovery_contract_slots.items() if v not in (None, "")},
+                    )
+                    contract_tool_plan = plan_discovery_tools(contract_frame)
                 turn_contract = build_turn_contract(
                     user_text=last_user_text,
                     intent_frame=contract_frame,
@@ -28623,6 +28717,79 @@ class TStationChatServiceV2:
             )
             return (emitted_events, detail_event) if detail_event is not None else None
 
+        async def _resolve_previous_product_candidate_description_with_code() -> tuple[list[dict], dict] | None:
+            if str((vehicle_selection_trace_metadata or {}).get("selection_source") or "") != "previous_product_candidate":
+                return None
+            if turn_contract is None or str(turn_contract.intent or "") != "product_description":
+                return None
+            goods_no = str(getattr(initial_slots, "goods_no", None) or "").strip()
+            if not goods_no:
+                return None
+            gate_allowed, gate_reason = _direct_code_fast_path_contract_gate(
+                turn_contract=turn_contract,
+                intent="product_description",
+                template="quickReply",
+                source="code_previous_product_candidate_description",
+                required_tools=("get_product_description_tool",),
+            )
+            if not gate_allowed:
+                logger.info(
+                    "[CODE_FAST_PATH_GATE] blocked previous_product_candidate_description reason=%s",
+                    gate_reason,
+                )
+                return None
+
+            from services.tstation.agents.b_discovery_agent.tools import (
+                get_product_description_tool as _get_product_description_tool,
+            )
+
+            detail_input = {"goods_no": goods_no}
+            emitted_events: list[dict] = [{
+                "type": "status",
+                "status": "tool_start",
+                "tool": "get_product_description_tool",
+                "display_name": "상품 상세 정보 조회 중...",
+                "source_domain": "discovery",
+            }]
+            try:
+                raw_detail = await asyncio.to_thread(_get_product_description_tool.invoke, detail_input)
+                detail_result = _tool_result_dict(raw_detail)
+            except Exception as exc:
+                logger.exception(
+                    "[PREVIOUS_PRODUCT_CANDIDATE] get_product_description_tool failed for %s",
+                    goods_no,
+                )
+                detail_result = {
+                    "status": "error",
+                    "http_status": None,
+                    "message": str(exc),
+                    "data": {},
+                }
+            _record_code_tool_result("get_product_description_tool", detail_input, detail_result)
+            emitted_events.append({
+                "type": "agent_flow",
+                "agent": "[Product Description AF]",
+                "agent_class": "Discovery Agent",
+                "status": detail_result.get("status", "success"),
+                "source_domain": "discovery",
+            })
+            emitted_events.append({
+                "type": "tool",
+                "input": detail_input,
+                "output": json.dumps(detail_result, ensure_ascii=False),
+                "node": "tools",
+                "tool": "get_product_description_tool",
+                "source_domain": "discovery",
+            })
+            detail_event = _finalize_direct_code_event(
+                _build_product_description_quickreply_event(detail_result),
+                turn_contract=turn_contract,
+                intent="product_description",
+                source="code_previous_product_candidate_description",
+                required_tools=("get_product_description_tool",),
+            )
+            return (emitted_events, detail_event) if detail_event is not None else None
+
         async def _resolve_product_attribute_with_code() -> tuple[list[dict], dict] | None:
             if is_external_price_comparison_request(user_query):
                 return None
@@ -30311,6 +30478,22 @@ class TStationChatServiceV2:
                 yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
                 yield "data: [DONE]\n\n"
                 return
+
+        previous_product_candidate_description = await _resolve_previous_product_candidate_description_with_code()
+        if previous_product_candidate_description is not None:
+            code_events, detail_event = previous_product_candidate_description
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+            for code_event in code_events:
+                yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(detail_event, ensure_ascii=False)}\n\n"
+            assistant_response = str((detail_event.get("data") or {}).get("assistantResponse") or "")
+            if assistant_response:
+                yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[DISCOVERY AGENT]'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
 
         multi_product_detail_names = _multi_product_detail_continuation_names(
             user_query,

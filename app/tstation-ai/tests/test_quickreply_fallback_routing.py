@@ -196,6 +196,7 @@ from services.tstation.chat import (
     _trace_final_error_state,
     _response_decision_for_source_domain,
     _response_shape_key_for_source_domain,
+    _should_force_previous_product_candidate_description,
     _resume_source_from_current_turn,
     _has_current_turn_p0_auto_chain_anchor,
     _promote_completed_speculative_router_contract,
@@ -6356,7 +6357,7 @@ def test_product_description_quickreply_stays_description_focused() -> None:
     assert "최종 혜택가" not in assistant_response
     assert "정가" not in assistant_response
     assert "리뷰는 68건" in assistant_response
-    assert [reply["label"] for reply in event["data"]["quickReplies"]] == ["가격 확인", "재고 확인", "다른 상품 보기"]
+    assert [reply["label"] for reply in event["data"]["quickReplies"]] == ["구매하기", "재고 확인", "다른 상품 보기"]
     assert event["data"]["metadata"] == {
         "goodsId": "G000000309783",
         "tireSize": "225/45R17",
@@ -13253,6 +13254,32 @@ def test_apply_history_product_selection_state_resolves_goods_no_and_trace_metad
     assert state.trace_metadata["selected_entity_id"] == "G000000309715"
     assert state.trace_metadata["selection_source"] == "previous_product_candidate"
     assert state.trace_metadata["validation_result"] == "resolved_from_history"
+
+
+def test_previous_product_candidate_without_transaction_anchor_forces_product_description() -> None:
+    should_force = _should_force_previous_product_candidate_description(
+        goods_no_resolved=True,
+        selection_source="previous_product_candidate",
+        user_text="다이나프로 HL3 225/55R18",
+        regex_slots=ConversationSlots.extract_from_user_text("다이나프로 HL3 225/55R18"),
+        slots=ConversationSlots(goods_no="G000000309715", tire_size="225/55R18"),
+        resolved_size_stock_continuation=False,
+    )
+
+    assert should_force is True
+
+
+def test_previous_product_candidate_with_transaction_anchor_keeps_transaction_flow() -> None:
+    should_force = _should_force_previous_product_candidate_description(
+        goods_no_resolved=True,
+        selection_source="previous_product_candidate",
+        user_text="다이나프로 HL3 225/55R18 가격 얼마야?",
+        regex_slots=ConversationSlots.extract_from_user_text("다이나프로 HL3 225/55R18 가격 얼마야?"),
+        slots=ConversationSlots(goods_no="G000000309715", tire_size="225/55R18", pending_intent="price"),
+        resolved_size_stock_continuation=False,
+    )
+
+    assert should_force is False
 
 
 def test_apply_history_location_selection_state_promotes_preview_store_context() -> None:
