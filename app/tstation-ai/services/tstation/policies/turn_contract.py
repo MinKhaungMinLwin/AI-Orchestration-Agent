@@ -466,6 +466,12 @@ def build_turn_contract(
             cross_domain_plan=cross_domain_plan,
         ),
     )
+    required_slots = _strip_downstream_transaction_required_slots_for_discovery_resolution(
+        required_slots,
+        intent=intent,
+        known_slots=known_slots,
+        cross_domain_plan=cross_domain_plan,
+    )
     required_slots = _filter_satisfied_required_slots(required_slots, known_slots)
     resolvable_required_slots = _resolvable_required_slots(required_slots, cross_domain_plan, known_slots)
     blocking_required_slots = _blocking_required_slots(
@@ -482,6 +488,12 @@ def build_turn_contract(
         blocking_required_slots=blocking_required_slots,
     )
     allowed_tools = tuple(tool_plan.allowed_tools) if tool_plan is not None else ()
+    allowed_tools = _augment_allowed_tools_for_discovery_resolution(
+        allowed_tools,
+        intent=intent,
+        known_slots=known_slots,
+        cross_domain_plan=cross_domain_plan,
+    )
     forbidden_tools = tuple(tool_plan.forbidden_tools) if tool_plan is not None else ()
     if planner_intent == "quick_order_execute" and _has_quick_order_execute_slots(known_slots):
         allowed_tools = _merge_tuple(allowed_tools, ("quick_order_tool",))
@@ -3723,6 +3735,58 @@ def _has_discovery_product_resolution_task(plan: CrossDomainPlan | None) -> bool
     if plan is None:
         return False
     return any(task.intent == "resolve_or_describe_product" for task in plan.subtasks)
+
+
+def _is_discovery_first_cross_domain_resolution_contract(
+    *,
+    intent: str,
+    known_slots: Mapping[str, Any],
+    cross_domain_plan: CrossDomainPlan | None,
+) -> bool:
+    if intent != "resolve_or_describe_product" or known_slots.get("goods_no"):
+        return False
+    if cross_domain_plan is None or not cross_domain_plan.is_cross_domain:
+        return False
+    subtasks = tuple(cross_domain_plan.subtasks or ())
+    if len(subtasks) < 2:
+        return False
+    first_task = subtasks[0]
+    first_domain = str(getattr(first_task.domain, "value", first_task.domain) or "")
+    return first_domain == "discovery" and str(first_task.intent or "") == "resolve_or_describe_product" and any(
+        str(getattr(task.domain, "value", task.domain) or "") == "transaction" for task in subtasks[1:]
+    )
+
+
+def _strip_downstream_transaction_required_slots_for_discovery_resolution(
+    required_slots: tuple[str, ...],
+    *,
+    intent: str,
+    known_slots: Mapping[str, Any],
+    cross_domain_plan: CrossDomainPlan | None,
+) -> tuple[str, ...]:
+    if not _is_discovery_first_cross_domain_resolution_contract(
+        intent=intent,
+        known_slots=known_slots,
+        cross_domain_plan=cross_domain_plan,
+    ):
+        return required_slots
+    return tuple(slot for slot in required_slots if slot in {"product", "goods_no", "product_set", "tire_size"})
+
+
+def _augment_allowed_tools_for_discovery_resolution(
+    allowed_tools: tuple[str, ...],
+    *,
+    intent: str,
+    known_slots: Mapping[str, Any],
+    cross_domain_plan: CrossDomainPlan | None,
+) -> tuple[str, ...]:
+    if not _is_discovery_first_cross_domain_resolution_contract(
+        intent=intent,
+        known_slots=known_slots,
+        cross_domain_plan=cross_domain_plan,
+    ):
+        return allowed_tools
+    return _merge_tuple(allowed_tools, ("search_product_tool",))
 
 
 def _risk_level(

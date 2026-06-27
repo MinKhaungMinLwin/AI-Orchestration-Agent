@@ -19528,6 +19528,62 @@ def test_turn_contract_does_not_guard_cross_domain_product_price_resolution(user
     assert any(item["field"] == "intent" for item in contract.contract_drift)
 
 
+def test_turn_contract_keeps_discovery_resolution_open_before_today_install_missing_slots() -> None:
+    user_text = "키너지 4S2 245/45R18 오늘 장착 가능한 매장"
+    cross_domain_plan = plan_cross_domain_turn(user_text, known_slots={})
+    frame = build_transaction_intent_frame(user_text, known_slots={})
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text=user_text,
+        known_slots=dict(frame.known_slots),
+    )
+
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=response_decision,
+        cross_domain_plan=cross_domain_plan,
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["discovery:resolve_or_describe_product", "transaction:stock_store_or_reservation"],
+        ),
+    )
+
+    assert contract.intent == "resolve_or_describe_product"
+    assert "search_product_tool" in contract.allowed_tools
+    assert "transaction_store_preview_tool" in contract.allowed_tools
+    assert contract.required_slots == ()
+    assert contract.blocking_required_slots == ()
+    assert not should_guard_required_slots(contract)
+
+
+def test_transaction_policy_context_allows_search_product_for_discovery_first_today_install_chain() -> None:
+    user_text = "키너지 4S2 245/45R18 오늘 장착 가능한 매장"
+    cross_domain_plan = plan_cross_domain_turn(user_text, known_slots={})
+
+    _, response_decision, tool_plan = _build_transaction_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION],
+        last_user_text=user_text,
+        known_slots={
+            "product_name": "4S2",
+            "tire_size": "245/45R18",
+            "availability_intent": "today_install",
+            "requested_cal_day": datetime.datetime.now().strftime("%Y%m%d"),
+        },
+        cross_domain_plan=cross_domain_plan,
+    )
+
+    assert response_decision is not None
+    assert tool_plan is not None
+    assert "search_product_tool" in tool_plan.allowed_tools
+    assert "transaction_store_preview_tool" in tool_plan.allowed_tools
+    assert tool_plan.required_slots == ()
+    assert tool_plan.metadata["cross_domain_resolution_stage"] == "discovery_first"
+    assert tool_plan.metadata["requires_product_resolution"] is True
+
+
 @pytest.mark.parametrize("user_text", ["그거 구매할래", "그거 가격 알려줘", "두 개 다 재고 있어?"])
 def test_turn_contract_blocks_missing_or_ambiguous_referred_object(user_text: str) -> None:
     contract = build_turn_contract(

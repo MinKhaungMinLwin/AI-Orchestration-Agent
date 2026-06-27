@@ -17797,6 +17797,7 @@ def _build_transaction_policy_context(
     last_user_text: str,
     known_slots: dict[str, Any],
     messages: list[dict] | None = None,
+    cross_domain_plan: Any | None = None,
 ) -> tuple[dict[str, Any], Any | None, Any | None]:
     """Build request-scoped Transaction response policy context.
 
@@ -17830,6 +17831,11 @@ def _build_transaction_policy_context(
 
         transaction_frame = build_transaction_intent_frame(last_user_text, known_slots=known_slots)
         transaction_tool_plan = plan_transaction_tools(transaction_frame)
+        transaction_tool_plan = _augment_transaction_tool_plan_for_discovery_resolution(
+            transaction_tool_plan,
+            cross_domain_plan=cross_domain_plan,
+            known_slots=transaction_frame.known_slots,
+        )
         transaction_response_decision = decide_transaction_response(
             intent=transaction_frame.intent,
             user_text=last_user_text,
@@ -17855,6 +17861,56 @@ def _build_transaction_policy_context(
     except Exception:
         logger.exception("[POLICY][transaction] Failed to build transaction policy context")
         return {}, None, None
+
+
+def _is_cross_domain_discovery_product_resolution_pending(
+    *,
+    cross_domain_plan: Any | None,
+    known_slots: Mapping[str, Any] | None,
+) -> bool:
+    if cross_domain_plan is None or not getattr(cross_domain_plan, "is_cross_domain", False):
+        return False
+    if (known_slots or {}).get("goods_no"):
+        return False
+    subtasks = tuple(getattr(cross_domain_plan, "subtasks", ()) or ())
+    if len(subtasks) < 2:
+        return False
+    first_task = subtasks[0]
+    return (
+        getattr(first_task, "domain", None) == PolicyDomain.DISCOVERY
+        and str(getattr(first_task, "intent", "") or "") == "resolve_or_describe_product"
+        and any(getattr(task, "domain", None) == PolicyDomain.TRANSACTION for task in subtasks[1:])
+    )
+
+
+def _augment_transaction_tool_plan_for_discovery_resolution(
+    tool_plan: Any | None,
+    *,
+    cross_domain_plan: Any | None,
+    known_slots: Mapping[str, Any] | None,
+):
+    if tool_plan is None or not _is_cross_domain_discovery_product_resolution_pending(
+        cross_domain_plan=cross_domain_plan,
+        known_slots=known_slots,
+    ):
+        return tool_plan
+    allowed_tools = tuple(dict.fromkeys((*tuple(getattr(tool_plan, "allowed_tools", ()) or ()), "search_product_tool")))
+    required_slots = tuple(
+        slot
+        for slot in tuple(getattr(tool_plan, "required_slots", ()) or ())
+        if slot in {"product", "goods_no", "product_set", "tire_size"}
+    )
+    metadata = {
+        **dict(getattr(tool_plan, "metadata", None) or {}),
+        "cross_domain_resolution_stage": "discovery_first",
+        "requires_product_resolution": True,
+    }
+    return replace(
+        tool_plan,
+        allowed_tools=allowed_tools,
+        required_slots=required_slots,
+        metadata=metadata,
+    )
 
 
 _TODAY_INSTALL_CONTEXT_RE = re.compile(
@@ -23363,6 +23419,7 @@ class TStationChatServiceV2:
             last_user_text=last_user_text,
             known_slots={k: v for k, v in transaction_known_slots.items() if v not in (None, "")},
             messages=request.messages,
+            cross_domain_plan=cross_domain_plan,
         )
         current_transaction_store_preview_tool_patch.set(transaction_tool_patch)
         current_transaction_response_decision.set(transaction_response_decision)
