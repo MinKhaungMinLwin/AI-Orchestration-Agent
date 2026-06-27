@@ -12995,7 +12995,7 @@ def test_apply_history_location_selection_state_preserves_preview_schedule_metad
     assert state.trace_metadata["metadata_overrode_stale_stock_check_mode"] is True
 
 
-def test_resolve_store_selection_from_history_template_matches_preview_store_name_direct_input() -> None:
+def test_resolve_store_selection_from_history_template_requires_selection_anchor_for_store_name() -> None:
     latest_location = {
         "template": "location",
         "data": {
@@ -13017,6 +13017,32 @@ def test_resolve_store_selection_from_history_template_matches_preview_store_nam
     }
 
     selection = resolve_store_selection_from_history_template("티스테이션 분당정자점", latest_location)
+
+    assert selection is None
+
+
+def test_resolve_store_selection_from_history_template_matches_anchored_store_name_input() -> None:
+    latest_location = {
+        "template": "location",
+        "data": {
+            "stores": [{"nameAddress": "티스테이션 분당정자점"}],
+            "metadata": [
+                {
+                    "shopId": "F00123",
+                    "shopName": "티스테이션 분당정자점",
+                    "sourceTool": "transaction_store_preview_tool",
+                    "goodsNo": "G000000309715",
+                    "tireSize": "225/55R18",
+                    "ordQty": 4,
+                    "pendingIntent": "order",
+                    "goalType": "place_order",
+                    "scheduleMode": "general",
+                }
+            ],
+        },
+    }
+
+    selection = resolve_store_selection_from_history_template("티스테이션 분당정자점으로 예약", latest_location)
     values = preview_location_slot_values_from_selection(selection)
 
     assert selection is not None
@@ -13523,6 +13549,91 @@ def test_quantity_ui_action_slot_patch_restores_stock_preview_contract() -> None
     assert "transaction_store_preview_tool" in contract.allowed_tools
 
 
+def test_quantity_ui_action_followup_runs_preview_tool_when_slots_are_ready() -> None:
+    base_slots = ConversationSlots(
+        goods_no="G000000309715",
+        tire_size="225/55R18",
+        region="동탄",
+        availability_intent="today_install",
+        requested_cal_day="20260626",
+        pending_intent="stock",
+        goal_type="store_with_stock",
+        stock_check_mode="preview",
+    )
+    prepared = prepare_ui_action_state(
+        ui_action={
+            "action_type": "select_quantity",
+            "cta_action": "select_quantity",
+            "source_intent": "stock_store_search",
+            "expected_contract_intent": "stock_store_search",
+            "slots": {
+                "goods_no": "G000000309715",
+                "tire_size": "225/55R18",
+                "region": "동탄",
+                "availability_intent": "today_install",
+                "requested_cal_day": "20260626",
+                "ord_qty": 4,
+                "pending_intent": "stock",
+                "goal_type": "store_with_stock",
+                "stock_check_mode": "preview",
+            },
+        },
+        chip_context=None,
+        request_slots=None,
+        latest_listcar_tmpl=None,
+        last_user_text="4개",
+        existing_slots=base_slots,
+        generic_slot_apply_fn=lambda slots, values: slots.apply_runtime_values(values, source="ui_action"),
+        vehicle_slot_apply_fn=lambda slots, values: slots.apply_runtime_values(values, source="vehicle_ui_action"),
+    )
+    preview_input, missing_slot = cta_preview_input_from_slots(
+        prepared.updated_slots,
+        cta_context={},
+        other_store_search=False,
+    )
+
+    assert missing_slot is None
+    assert preview_input is not None
+    assert preview_input["goods_no"] == "G000000309715"
+    assert preview_input["ord_qty"] == 4
+    assert preview_input["region_code"] == "동탄"
+
+    recorded: list[tuple[str, dict[str, object], dict[str, object]]] = []
+
+    async def _invoke_preview(payload: dict[str, object]) -> dict[str, object]:
+        return {
+            "status": "success",
+            "data": {"inventory": {"todayShopArray": [{"shopId": "F00098"}]}},
+        }
+
+    events, _mapped_event = asyncio.run(
+        run_store_availability_followup_preview(
+            search_input={"keyword": "다이나프로 HL3", "size": "225/55R18", "limit": 10},
+            search_result={"status": "success", "data": {"items": [{"goods_no": "G000000309715"}]}},
+            preview_input=preview_input,
+            template_builder=lambda tool_data, intro: {
+                "template": "location",
+                "data": {"assistantResponse": intro, "toolCount": len(tool_data)},
+            },
+            product_keyword="다이나프로 HL3",
+            tire_size="225/55R18",
+            ord_qty=4,
+            store_name=None,
+            fallback_event=cta_missing_slot_event("location"),
+            invoke_preview=_invoke_preview,
+            parse_tool_output_fn=lambda raw: raw,
+            record_tool_result_fn=lambda tool, tool_input, tool_result: recorded.append(
+                (tool, dict(tool_input), dict(tool_result))
+            ),
+        )
+    )
+
+    assert events[-1]["type"] == "tool"
+    assert events[-1]["tool"] == "transaction_store_preview_tool"
+    assert recorded[0][0] == "transaction_store_preview_tool"
+    assert recorded[0][1]["ord_qty"] == 4
+
+
 def test_support_policy_action_mode_beats_transaction_resume_from_quantity_ui_action() -> None:
     slots = ConversationSlots(
         goods_no="G000000309715",
@@ -13596,6 +13707,64 @@ def test_label_only_quantity_support_question_does_not_create_transaction_resume
 
     assert _resume_source_from_current_turn("4개 구매한 사은품 언제 줘?") == "none"
     assert action_mode == "support_policy_answer"
+
+
+def test_select_schedule_ui_action_keeps_quick_order_reservation_without_quick_order_tool() -> None:
+    action_context = resolve_ui_action_context(
+        raw_action={
+            "action_type": "select_schedule",
+            "source_intent": "quick_order_reservation",
+            "expected_contract_intent": "quick_order_reservation",
+            "slots": {
+                "goods_no": "G000000309715",
+                "tire_size": "225/55R18",
+                "ord_qty": 4,
+                "shop_id": "A0001",
+                "shop_name": "티스테이션 동탄석우점",
+                "requested_cal_day": "20260627",
+                "rsv_hour": "09",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            },
+        },
+        selected_vehicle=None,
+        selection_source="ui_action",
+    )
+
+    assert _resume_source_from_ui_action_context(action_context) == "ui_action:select_schedule"
+
+    known_slots = {
+        "goods_no": "G000000309715",
+        "tire_size": "225/55R18",
+        "ord_qty": 4,
+        "shop_id": "A0001",
+        "shop_name": "티스테이션 동탄석우점",
+        "requested_cal_day": "20260627",
+        "rsv_hour": "09",
+        "pending_intent": "order",
+        "goal_type": "place_order",
+    }
+    frame = build_transaction_intent_frame("2026년 6월 27일 (토)\n09:00", known_slots=known_slots)
+    tool_plan = plan_transaction_tools(frame)
+    contract = build_turn_contract(
+        user_text="2026년 6월 27일 (토)\n09:00",
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=decide_transaction_response(
+            intent=frame.intent,
+            user_text="2026년 6월 27일 (토)\n09:00",
+            known_slots=dict(frame.known_slots),
+        ),
+        merged_slots=ConversationSlots(**known_slots),
+        action_mode="purchase_continuation",
+        context_state="resumed",
+        resume_source="ui_action:select_schedule",
+    )
+
+    assert frame.intent == "quick_order_reservation"
+    assert contract.intent == "quick_order_reservation"
+    assert "quick_order_tool" not in tool_plan.allowed_tools
+    assert "transaction_store_preview_tool" in tool_plan.allowed_tools
 
 
 def test_history_vehicle_selection_does_not_match_product_name_substring_to_vehicle() -> None:

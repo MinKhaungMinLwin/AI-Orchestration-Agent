@@ -23,6 +23,10 @@ _QUANTITY_RE = re.compile(r"(\d+)\s*(?:개|본|짝)")
 _TODAY_RE = re.compile(r"오늘|당일|지금|바로|당장", re.IGNORECASE)
 _RELATIVE_RESERVATION_DATE_RE = re.compile(r"내일|모레", re.IGNORECASE)
 _EXPLICIT_MD_DATE_RE = re.compile(r"(?:(20\d{2})\s*년\s*)?(\d{1,2})\s*월\s*(\d{1,2})\s*일")
+_BOOKING_DATETIME_SELECTION_RE = re.compile(
+    r"(?:20\d{2}\s*년\s*)?\d{1,2}\s*월\s*\d{1,2}\s*일(?:\s*\([^)]+\))?\s*(?:\n|\s)\s*\d{1,2}:\d{2}",
+    re.IGNORECASE,
+)
 _STOCK_RE = re.compile(r"재고|오늘\s*서비스|오늘서비스|당일\s*서비스|T\s*바로\s*배송|T바로배송", re.IGNORECASE)
 _RESERVATION_RE = re.compile(r"예약|장착|방문|갈게|가고\s*싶|작업", re.IGNORECASE)
 _PURCHASE_RE = re.compile(r"구매|주문|결제|살래|살게|사고\s*싶|사려고", re.IGNORECASE)
@@ -769,6 +773,12 @@ def build_transaction_intent_frame(
         and not current_purchase
         and not current_reservation
         and not plain_store_search
+        and not (
+            _BOOKING_DATETIME_SELECTION_RE.search(text)
+            and _is_order_or_reservation_context(slots)
+            and _has_confirmed_store_context(slots)
+            and slots.get("rsv_hour")
+        )
     )
     store_scope_product_continuation = (
         confirmed_product_quantity_context
@@ -899,6 +909,14 @@ def build_transaction_intent_frame(
         and tire_size
         and quantity
         and (store_name or slots.get("shop_id") or slots.get("shop_name") or slots.get("store_name"))
+    )
+    selected_schedule_followup = bool(
+        _BOOKING_DATETIME_SELECTION_RE.search(text)
+        and has_product
+        and _has_confirmed_store_context(slots)
+        and _is_order_or_reservation_context(slots)
+        and slots.get("requested_cal_day")
+        and slots.get("rsv_hour")
     )
 
     entities: dict[str, Any] = {
@@ -1090,6 +1108,9 @@ def build_transaction_intent_frame(
     elif _PRICE_OR_COUPON_RE.search(text):
         intent = "price_or_coupon_check"
         sub_intent = "coupon" if "쿠폰" in text else "price"
+    elif selected_schedule_followup:
+        intent = "quick_order_reservation"
+        sub_intent = "reservation"
     elif (
         _STORE_SCHEDULE_RE.search(text)
         and has_product

@@ -108,6 +108,10 @@ _STORE_VIEW_LABEL_RE = re.compile(
     r"^(?:(?P<region>[A-Za-z0-9가-힣\s]+)\s+)?(?:다른\s*)?매장\s*보기$|^(?:(?P<region_alt>[A-Za-z0-9가-힣\s]+)\s+)?매장\s*찾기$",
     re.IGNORECASE,
 )
+_STORE_SELECTION_ACTION_RE = re.compile(
+    r"선택|고를게|정할게|여기로|이곳으로|이\s*매장으로|예약|진행|장착|주문",
+    re.IGNORECASE,
+)
 _INVALID_STORE_SLOT_VALUES = frozenset({"평점", "별점", "리뷰", "후기", "평가"})
 _KOREAN_SELECTION_ORDINALS: tuple[tuple[tuple[str, ...], int], ...] = (
     (("첫번째", "첫째", "첫 번", "첫번", "1번째", "1번", "1.", "1)"), 0),
@@ -1992,6 +1996,7 @@ def resolve_store_selection_from_history_template(
             return {"store": dict(store), "meta": dict(meta)}
 
     normalized_text = _normalize_store_name_for_match(text)
+    has_selection_anchor = bool(_STORE_SELECTION_ACTION_RE.search(text))
     exact_matches: list[tuple[dict[str, Any], dict[str, Any]]] = []
     for store, meta in rows:
         canonical_meta = canonical_context_from_template_boundary(meta)
@@ -2004,12 +2009,12 @@ def resolve_store_selection_from_history_template(
         if any(_normalize_store_name_for_match(candidate) == normalized_text for candidate in candidates if candidate):
             if canonical_meta.get("shop_id"):
                 exact_matches.append((store, meta))
-    if len(exact_matches) == 1:
+    if has_selection_anchor and len(exact_matches) == 1:
         store, meta = exact_matches[0]
         return {"store": dict(store), "meta": dict(meta)}
 
     tokens = [t for t in re.findall(r"[A-Za-z가-힣]+", text) if len(t) >= 2]
-    if tokens:
+    if has_selection_anchor and tokens:
         scored: list[tuple[int, dict[str, Any], dict[str, Any]]] = []
         for store, meta in rows:
             canonical_meta = canonical_context_from_template_boundary(meta)
