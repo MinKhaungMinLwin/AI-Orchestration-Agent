@@ -77,6 +77,7 @@ from services.tstation.policies.resolved_context import (
     canonical_context_from_template_boundary,
     canonical_context_from_tool_boundary,
 )
+from services.tstation.policies.flow_state import commit_purchase_flow_state, is_purchase_flow_context
 from services.tstation.policies.turn_contract import (
     TurnContract,
     build_required_slot_clarification_event,
@@ -20320,6 +20321,10 @@ def _merge_pending_order_context(
     *,
     source: str,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
+    if is_purchase_flow_context(existing_context, incoming_context):
+        result = commit_purchase_flow_state(existing_context, incoming_context, source=source)
+        return result.state.to_pending_order_context(), result.metadata
+
     existing = dict(existing_context or {})
     incoming = {
         key: value
@@ -20882,29 +20887,42 @@ def _apply_purchase_stock_canonical_readthrough(
     updated_slots = slots.apply_runtime_values(slot_patch, source="purchase_stock_canonical_readthrough", fill_only=True)
     context = dict(getattr(updated_slots, "availability_context", None) or {})
     pending_context = dict(context.get("pending_order_context") or {})
-    for key in (
-        "goods_no",
-        "product_name",
-        "tire_model",
-        "pending_product_name",
-        "tire_size",
-        "ord_qty",
-        "region",
-        "shop_id",
-        "shop_name",
-        "requested_cal_day",
-        "rsv_hour",
-        "payment_amount",
-        "price_basis",
-        "price_source_tool",
-        "pending_intent",
-        "goal_type",
-        "availability_intent",
-        "stock_check_mode",
-    ):
-        value = canonical_values["merged"].get(key)
-        if value not in (None, "", [], {}):
-            pending_context[key] = value
+    merged_candidate = {
+        key: value
+        for key, value in canonical_values["merged"].items()
+        if value not in (None, "", [], {})
+    }
+    if is_purchase_flow_context(pending_context, merged_candidate):
+        commit_result = commit_purchase_flow_state(
+            pending_context,
+            merged_candidate,
+            source="purchase_stock_canonical_readthrough",
+        )
+        pending_context = commit_result.state.to_pending_order_context()
+    else:
+        for key in (
+            "goods_no",
+            "product_name",
+            "tire_model",
+            "pending_product_name",
+            "tire_size",
+            "ord_qty",
+            "region",
+            "shop_id",
+            "shop_name",
+            "requested_cal_day",
+            "rsv_hour",
+            "payment_amount",
+            "price_basis",
+            "price_source_tool",
+            "pending_intent",
+            "goal_type",
+            "availability_intent",
+            "stock_check_mode",
+        ):
+            value = canonical_values["merged"].get(key)
+            if value not in (None, "", [], {}):
+                pending_context[key] = value
     if pending_context:
         context["pending_order_context"] = pending_context
         updated_slots.availability_context = context
@@ -20997,6 +21015,29 @@ def _finalize_purchase_stock_slots_for_persistence(
             else {}
         )
         metadata["final_persist_flow_state_after"] = dict(refreshed_context or {})
+    final_context = dict(metadata.get("final_persist_flow_state_after") or {})
+    invariant_missing: list[str] = []
+    if (
+        is_purchase_flow_context(final_context)
+        and final_context.get("goods_no")
+        and final_context.get("tire_size")
+        and final_context.get("ord_qty") not in (None, "", 0)
+        and final_context.get("pending_intent") == "order"
+        and final_context.get("goal_type") == "place_order"
+        and not (
+            final_context.get("product_name")
+            or final_context.get("tire_model")
+            or final_context.get("pending_product_name")
+        )
+    ):
+        invariant_missing.extend(["product_name", "tire_model", "pending_product_name"])
+    metadata["final_persist_invariant_missing_fields"] = invariant_missing
+    if invariant_missing:
+        logger.warning(
+            "[FINAL_PERSIST] purchase flow state invariant missing fields=%s context=%s",
+            invariant_missing,
+            final_context,
+        )
     return updated_slots, metadata
 
 

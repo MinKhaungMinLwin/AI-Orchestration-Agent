@@ -29,6 +29,7 @@ from services.tstation.common.pii_guardrail import check_pii
 from services.tstation.common.tstation_be_client import set_tstation_origin_host
 from services.tstation.source_filter import _ORDER_FIELDS_BASE
 from services.tstation.template_mapper import _safe_service_unsized_policy_response
+from services.tstation.policies.flow_state import FlowState, commit_purchase_flow_state
 from services.tstation.agents.b_discovery_agent import tools as discovery_tools
 from services.tstation.agents.b_discovery_agent.agent import (
     DISCOVERY_AGENT_SYSTEM_PROMPT_TEMPLATE,
@@ -20698,6 +20699,93 @@ def test_pending_order_context_preserves_resolved_stock_slots() -> None:
     assert slots.availability_context["pending_order_context"]["payment_amount"] == 198000
 
 
+def test_purchase_flow_state_region_delta_preserves_product_context() -> None:
+    result = commit_purchase_flow_state(
+        {
+            "goods_no": "G000000310126",
+            "product_name": "벤투스 S2 AS",
+            "tire_model": "벤투스 S2 AS",
+            "pending_product_name": "벤투스 S2 AS",
+            "tire_size": "245/45R19",
+            "ord_qty": 2,
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        {"region": "분당", "pending_intent": "order", "goal_type": "place_order"},
+        source="region_followup",
+    )
+
+    context = result.state.to_pending_order_context()
+    assert context["flow_type"] == "purchase"
+    assert context["product_name"] == "벤투스 S2 AS"
+    assert context["tire_model"] == "벤투스 S2 AS"
+    assert context["pending_product_name"] == "벤투스 S2 AS"
+    assert context["region"] == "분당"
+    assert result.metadata["preserved_fields"]
+
+
+def test_purchase_flow_state_product_change_clears_store_schedule_payment() -> None:
+    result = commit_purchase_flow_state(
+        {
+            "goods_no": "OLD",
+            "product_name": "이전 상품",
+            "tire_size": "245/45R19",
+            "ord_qty": 2,
+            "region": "분당",
+            "shop_id": "S1",
+            "shop_name": "티스테이션 분당정자점",
+            "requested_cal_day": "2026-07-01",
+            "rsv_hour": "16:00",
+            "payment_amount": 308200,
+            "price_basis": "cheapest_final_prc",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        {
+            "goods_no": "NEW",
+            "product_name": "새 상품",
+            "tire_size": "245/45R19",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        source="product_change",
+    )
+
+    context = result.state.to_pending_order_context()
+    assert context["goods_no"] == "NEW"
+    assert context["product_name"] == "새 상품"
+    assert "shop_id" not in context
+    assert "requested_cal_day" not in context
+    assert "payment_amount" not in context
+    assert "price_basis" not in context
+    assert "goods_no" in result.metadata["flow_state_conflicts"]
+    assert "shop_id" in result.metadata["cleared_fields"]
+
+
+def test_purchase_flow_state_quantity_change_marks_payment_stale() -> None:
+    result = FlowState.from_pending_order_context(
+        {
+            "goods_no": "G000000310126",
+            "product_name": "벤투스 S2 AS",
+            "tire_size": "245/45R19",
+            "ord_qty": 2,
+            "payment_amount": 308200,
+            "price_basis": "cheapest_final_prc",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        }
+    ).merge(
+        FlowState.from_flat_delta({"ord_qty": 4, "pending_intent": "order", "goal_type": "place_order"}, source="qty"),
+        source="quantity_followup",
+    )
+
+    context = result.state.to_pending_order_context()
+    assert context["ord_qty"] == 4
+    assert context["payment_amount_stale"] is True
+    assert "payment_amount" not in context
+    assert "price_basis" not in context
+
+
 def test_pending_order_context_preserves_existing_product_and_price_on_region_followup() -> None:
     slots = ConversationSlots(
         goods_no="G000000310126",
@@ -24696,6 +24784,7 @@ def test_final_persist_rehydrates_missing_product_fields_from_preview_tool_conte
     )
 
     assert metadata["final_persist_rehydrated"] is True
+    assert metadata["final_persist_invariant_missing_fields"] == []
     assert updated_slots.tire_model == "벤투스 S2 AS"
     assert updated_slots.pending_product_name == "벤투스 S2 AS"
     assert updated_slots.payment_amount == 308200
