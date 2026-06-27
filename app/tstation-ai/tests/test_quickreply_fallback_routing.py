@@ -14961,7 +14961,8 @@ def test_router_slot_fill_context_payload_summarizes_purchase_state_and_candidat
     assert payload["current_flow"] == "quick_order_reservation"
     assert payload["known_slots"]["product_name"] == "벤투스 에어S"
     assert payload["known_slots"]["ord_qty"] == 2
-    assert payload["missing_slots"] == ["product"]
+    assert payload["flow_step"] == "ask_size"
+    assert payload["missing_slots"] == ["tire_size"]
     assert payload["last_requested_slot"] == "product"
     assert payload["last_candidates"] == [
         {
@@ -14970,6 +14971,111 @@ def test_router_slot_fill_context_payload_summarizes_purchase_state_and_candidat
             "stable_id_summary": "G000000319584",
         }
     ]
+
+
+def test_router_slot_fill_context_payload_restores_dormant_purchase_snapshot() -> None:
+    payload = TStationChatServiceV2._router_slot_fill_context_payload(
+        slots=ConversationSlots(
+            availability_context={
+                "dormant_purchase_context": {
+                    "goods_no": "G000000319584",
+                    "tire_size": "245/45R19",
+                    "product_name": "벤투스 에어S",
+                    "pending_intent": "order",
+                    "goal_type": "place_order",
+                }
+            }
+        ),
+        user_text="4개",
+        latest_product_tmpl=None,
+        latest_location_tmpl=None,
+        latest_datepick_tmpl=None,
+    )
+
+    assert payload["current_flow"] == "quick_order_reservation"
+    assert payload["flow_step"] == "ask_quantity"
+    assert payload["known_slots"]["goods_no"] == "G000000319584"
+    assert payload["missing_slots"] == ["quantity"]
+    assert payload["last_requested_slot"] == "quantity"
+
+
+def test_expected_slot_fill_precheck_promotes_purchase_anchor_before_router() -> None:
+    slots = ConversationSlots(goods_no="G000000319584", tire_size="245/45R19")
+    context = TStationChatServiceV2._router_slot_fill_context_payload(
+        slots=slots,
+        user_text="구매할래",
+        latest_product_tmpl=None,
+        latest_location_tmpl=None,
+        latest_datepick_tmpl=None,
+    )
+
+    precheck = TStationChatServiceV2._expected_slot_fill_precheck(
+        user_text="구매할래",
+        regex_slots=ConversationSlots.extract_from_user_text("구매할래"),
+        merged_slots=slots,
+        router_context=context,
+    )
+
+    assert context["current_flow"] == "quick_order_reservation"
+    assert context["flow_step"] == "ask_quantity"
+    assert precheck["matched"] is True
+    assert precheck["filled_slot"] == "purchase_anchor"
+    assert precheck["slot_patch"]["pending_intent"] == "order"
+    assert precheck["slot_patch"]["goal_type"] == "place_order"
+
+
+def test_expected_slot_fill_precheck_accepts_direct_quantity_for_active_purchase() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000319584",
+        tire_size="245/45R19",
+        pending_intent="order",
+        goal_type="place_order",
+    )
+    context = TStationChatServiceV2._router_slot_fill_context_payload(
+        slots=slots,
+        user_text="4개",
+        latest_product_tmpl=None,
+        latest_location_tmpl=None,
+        latest_datepick_tmpl=None,
+    )
+
+    precheck = TStationChatServiceV2._expected_slot_fill_precheck(
+        user_text="4개",
+        regex_slots=ConversationSlots.extract_from_user_text("4개"),
+        merged_slots=slots.merge(ConversationSlots.extract_from_user_text("4개")),
+        router_context=context,
+    )
+
+    assert context["flow_step"] == "ask_quantity"
+    assert precheck["matched"] is True
+    assert precheck["filled_slot"] == "quantity"
+    assert precheck["slot_patch"]["ord_qty"] == 4
+    assert precheck["resume_source"] == "expected_slot_fill:quantity"
+
+
+def test_expected_slot_fill_precheck_rejects_support_policy_anchor() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000319584",
+        tire_size="245/45R19",
+        pending_intent="order",
+        goal_type="place_order",
+    )
+    context = TStationChatServiceV2._router_slot_fill_context_payload(
+        slots=slots,
+        user_text="작년에 산 타이어 보증 돼?",
+        latest_product_tmpl=None,
+        latest_location_tmpl=None,
+        latest_datepick_tmpl=None,
+    )
+
+    precheck = TStationChatServiceV2._expected_slot_fill_precheck(
+        user_text="작년에 산 타이어 보증 돼?",
+        regex_slots=ConversationSlots.extract_from_user_text("작년에 산 타이어 보증 돼?"),
+        merged_slots=slots,
+        router_context=context,
+    )
+
+    assert precheck == {"matched": False, "reason": "support_or_policy_anchor"}
 
 
 def test_resolve_goods_no_from_selection_uses_price_when_same_size_candidates_are_ambiguous() -> None:

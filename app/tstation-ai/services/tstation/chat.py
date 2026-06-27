@@ -96,6 +96,7 @@ from services.tstation.policies.cross_domain_policy import (
     plan_cross_domain_turn,
     should_defer_product_price_explanation_to_classifier,
 )
+from services.tstation.policies.flow_controller import resolve_purchase_order_flow
 from services.tstation.policies.coupon_query_gate import (
     CouponQueryGateDecision,
     CouponQueryIntent,
@@ -1228,7 +1229,7 @@ def _explicit_current_turn_override_reason(
 _EXPLICIT_RESUME_ANCHOR_RE = re.compile(
     r"계속\s*(?:진행|이어|해)|이어\s*(?:진행|해)|아까\s*(?:구매|주문|재고|예약)\s*(?:이어|계속)|"
     r"(?:구매|주문|예약)\s*계속|이걸로\s*(?:진행|구매|주문)|"
-    r"구매하기|주문하기|장바구니\s*(?:담기|담아)|예약\s*(?:진행|계속)|"
+    r"구매하기|주문하기|구매\s*할래|주문\s*할래|장바구니\s*(?:담기|담아)|예약\s*(?:진행|계속)|"
     r"방금\s*보던\s*거(?:로)?\s*(?:계속|진행|구매|주문|예약)|아까\s*보던\s*거(?:로)?\s*(?:계속|진행|구매|주문|예약)",
     re.IGNORECASE,
 )
@@ -20333,7 +20334,7 @@ class TStationChatServiceV2:
         return selected
 
     @staticmethod
-    def _router_slot_fill_current_flow(slots: ConversationSlots | None) -> str:
+    def _router_slot_fill_current_flow(slots: ConversationSlots | None, user_text: str = "") -> str:
         if slots is None:
             return "none"
         pending_intent = str(getattr(slots, "pending_intent", "") or "").strip()
@@ -20341,6 +20342,21 @@ class TStationChatServiceV2:
         if pending_intent == "order" or goal_type == "place_order":
             return "quick_order_reservation"
         if pending_intent == "stock" or goal_type == "store_with_stock":
+            return "stock_store_search"
+        text = user_text or ""
+        has_product_anchor = bool(
+            getattr(slots, "goods_no", None)
+            or (
+                getattr(slots, "tire_size", None)
+                and (getattr(slots, "tire_model", None) or getattr(slots, "pending_product_name", None))
+            )
+        )
+        if has_product_anchor and _resume_source_from_current_turn(text) != "none":
+            return "quick_order_reservation"
+        if (
+            has_product_anchor
+            and re.search(r"재고|오늘\s*장착|당일\s*장착|장착\s*가능|가능\s*매장", text, re.IGNORECASE)
+        ):
             return "stock_store_search"
         availability_context = getattr(slots, "availability_context", None)
         if isinstance(availability_context, Mapping):
@@ -20373,7 +20389,51 @@ class TStationChatServiceV2:
             "requested_cal_day": getattr(slots, "requested_cal_day", None),
             "rsv_hour": getattr(slots, "rsv_hour", None),
         }
+        availability_context = getattr(slots, "availability_context", None)
+        if isinstance(availability_context, Mapping):
+            for context_key in (
+                "pending_order_context",
+                "dormant_purchase_context",
+                "dormant_stock_context",
+                "dormant_transaction_context",
+            ):
+                context = availability_context.get(context_key)
+                if not isinstance(context, Mapping):
+                    continue
+                for key in (
+                    "product_name",
+                    "goods_no",
+                    "tire_size",
+                    "ord_qty",
+                    "region",
+                    "shop_id",
+                    "shop_name",
+                    "requested_cal_day",
+                    "rsv_hour",
+                    "pending_intent",
+                    "goal_type",
+                ):
+                    if values.get(key) in (None, "", [], {}) and context.get(key) not in (None, "", [], {}):
+                        values[key] = context.get(key)
         return {key: value for key, value in values.items() if value not in (None, "", [], {})}
+
+    @staticmethod
+    def _router_slot_fill_flow_step(current_flow: str, known_slots: Mapping[str, Any]) -> str:
+        if current_flow == "quick_order_reservation":
+            state = resolve_purchase_order_flow(intent="quick_order_reservation", known_slots=known_slots)
+            return state.flow_step if state is not None else "none"
+        if current_flow == "stock_store_search":
+            missing = TStationChatServiceV2._router_slot_fill_missing_slots(current_flow, known_slots)
+            if missing:
+                return f"ask_{missing[0]}"
+            if known_slots.get("region") or known_slots.get("shop_id") or known_slots.get("shop_name"):
+                return "show_store_candidates"
+            return "stock_check"
+        return "none"
+
+    @staticmethod
+    def _normalize_router_missing_slot(slot: str) -> str:
+        return "schedule" if slot == "booking_datetime" else slot
 
     @staticmethod
     def _router_slot_fill_missing_slots(current_flow: str, known_slots: Mapping[str, Any]) -> list[str]:
@@ -20489,13 +20549,22 @@ class TStationChatServiceV2:
     def _router_slot_fill_context_payload(
         *,
         slots: ConversationSlots | None,
+        user_text: str = "",
         latest_product_tmpl: Mapping[str, Any] | None,
         latest_location_tmpl: Mapping[str, Any] | None,
         latest_datepick_tmpl: Mapping[str, Any] | None,
     ) -> dict[str, Any]:
-        current_flow = TStationChatServiceV2._router_slot_fill_current_flow(slots)
+        current_flow = TStationChatServiceV2._router_slot_fill_current_flow(slots, user_text=user_text)
         known_slots = TStationChatServiceV2._router_slot_fill_known_slots(slots)
-        missing_slots = TStationChatServiceV2._router_slot_fill_missing_slots(current_flow, known_slots)
+        flow_step = TStationChatServiceV2._router_slot_fill_flow_step(current_flow, known_slots)
+        if current_flow == "quick_order_reservation":
+            flow_state = resolve_purchase_order_flow(intent="quick_order_reservation", known_slots=known_slots)
+            missing_slots = [
+                TStationChatServiceV2._normalize_router_missing_slot(slot)
+                for slot in (flow_state.missing_slots if flow_state is not None else ())
+            ]
+        else:
+            missing_slots = TStationChatServiceV2._router_slot_fill_missing_slots(current_flow, known_slots)
         last_requested_slot = str(getattr(slots, "pending_required_slot", None) or "").strip()
         if last_requested_slot == "booking_datetime":
             last_requested_slot = "schedule"
@@ -20507,10 +20576,93 @@ class TStationChatServiceV2:
         last_candidates.extend(TStationChatServiceV2._router_slot_fill_schedule_candidates(latest_datepick_tmpl))
         return {
             "current_flow": current_flow,
+            "flow_step": flow_step,
             "known_slots": known_slots,
             "missing_slots": missing_slots,
             "last_requested_slot": last_requested_slot or "none",
             "last_candidates": [row for row in last_candidates if row.get("label")],
+        }
+
+    @staticmethod
+    def _expected_slot_fill_precheck(
+        *,
+        user_text: str,
+        regex_slots: ConversationSlots,
+        merged_slots: ConversationSlots,
+        router_context: Mapping[str, Any],
+        region_store_input_resolution: RegionStoreInputContextResolution | None = None,
+    ) -> dict[str, Any]:
+        current_flow = str(router_context.get("current_flow") or "none")
+        if current_flow not in {"quick_order_reservation", "stock_store_search"}:
+            return {"matched": False, "reason": "no_active_flow"}
+        text = user_text or ""
+        if re.search(
+            r"보증|워런티|무상|품질|불량|환불|취소|쿠폰|사은품|문의|상담|클레임|고소|소송",
+            text,
+            re.IGNORECASE,
+        ):
+            return {"matched": False, "reason": "support_or_policy_anchor"}
+
+        missing_slots = {
+            str(slot or "").strip()
+            for slot in (router_context.get("missing_slots") or [])
+            if str(slot or "").strip()
+        }
+        last_requested_slot = str(router_context.get("last_requested_slot") or "none").strip()
+        slot_patch: dict[str, Any] = {}
+        filled_slot = "none"
+
+        if current_flow == "quick_order_reservation" and _resume_source_from_current_turn(text) != "none":
+            filled_slot = "purchase_anchor"
+            slot_patch.update({"pending_intent": "order", "goal_type": "place_order"})
+        elif "quantity" in missing_slots and getattr(regex_slots, "ord_qty", None) is not None:
+            filled_slot = "quantity"
+            slot_patch["ord_qty"] = regex_slots.ord_qty
+        elif (
+            region_store_input_resolution is not None
+            and region_store_input_resolution.resolved
+            and (
+                last_requested_slot in {"region", "store"}
+                or "region" in missing_slots
+                or "store" in missing_slots
+            )
+        ):
+            filled_slot = (
+                "store"
+                if region_store_input_resolution.resume_source.endswith(":store")
+                or region_store_input_resolution.slots_to_promote.get("shop_id")
+                else "region"
+            )
+            slot_patch.update(dict(region_store_input_resolution.slots_to_promote or {}))
+        elif (
+            ("schedule" in missing_slots or last_requested_slot == "schedule")
+            and getattr(merged_slots, "requested_cal_day", None)
+            and getattr(merged_slots, "rsv_hour", None)
+        ):
+            filled_slot = "schedule"
+            slot_patch.update({
+                "requested_cal_day": merged_slots.requested_cal_day,
+                "rsv_hour": merged_slots.rsv_hour,
+            })
+
+        if filled_slot == "none":
+            return {"matched": False, "reason": "input_does_not_fill_expected_slot"}
+
+        if current_flow == "quick_order_reservation":
+            slot_patch.setdefault("pending_intent", "order")
+            slot_patch.setdefault("goal_type", "place_order")
+        elif current_flow == "stock_store_search":
+            slot_patch.setdefault("pending_intent", "stock")
+            slot_patch.setdefault("goal_type", "store_with_stock")
+
+        return {
+            "matched": True,
+            "current_flow": current_flow,
+            "filled_slot": filled_slot,
+            "slot_patch": {key: value for key, value in slot_patch.items() if value not in (None, "", [], {})},
+            "resume_source": f"expected_slot_fill:{filled_slot}",
+            "flow_step_before": router_context.get("flow_step"),
+            "missing_slots": list(router_context.get("missing_slots") or []),
         }
 
     @staticmethod
@@ -21117,45 +21269,6 @@ class TStationChatServiceV2:
                     resolved_position_size,
                 )
 
-            router_slot_fill_context_payload = TStationChatServiceV2._router_slot_fill_context_payload(
-                slots=existing_slots,
-                latest_product_tmpl=latest_product_tmpl,
-                latest_location_tmpl=latest_location_tmpl,
-                latest_datepick_tmpl=latest_datepick_tmpl,
-            )
-            classifier_messages = TStationChatServiceV2._inject_router_slot_fill_context(
-                classifier_messages,
-                router_slot_fill_context_payload,
-            )
-            vehicle_selection_trace_metadata["router_slot_fill_context"] = router_slot_fill_context_payload
-
-            validated_ui_action_router_skip = (
-                _validated_ui_action_slot_fill_router_skip(vehicle_ui_action_context)
-                if settings.AI_ROUTER_SKIP_VALIDATED_UI_ACTION
-                else None
-            )
-            if validated_ui_action_router_skip is not None:
-                domains, routing_result, validated_ui_action_router_skip_metadata = validated_ui_action_router_skip
-                classify_future = concurrent.futures.Future()
-                classify_future.set_result((domains, routing_result))
-                router_slot_fill_metadata.update(validated_ui_action_router_skip_metadata)
-                vehicle_selection_trace_metadata.update(validated_ui_action_router_skip_metadata)
-                logger.info(
-                    "[ROUTER_SKIP] validated UI action slot-fill: slot=%s intent=%s source=%s",
-                    validated_ui_action_router_skip_metadata.get("filled_slot"),
-                    validated_ui_action_router_skip_metadata.get("slot_fill_intent"),
-                    validated_ui_action_router_skip_metadata.get("ui_action_type"),
-                )
-            else:
-                classify_future = _try_submit_speculative(
-                    _coordinator.classify_multi_intent,
-                    classifier_messages,
-                    session_id=request.session_id,
-                    user_id=request.user_id,
-                    trace_id=request.tracing_id,
-                    parent_span_id=_parent_span_id,
-                )
-
             # 2) Extract regex-based slots from the LATEST user message only
             regex_slots = ConversationSlots.extract_from_user_text(last_user_text)
             invalid_regex_store = _clear_invalid_store_identity_slots(regex_slots, source="regex_slots")
@@ -21656,6 +21769,82 @@ class TStationChatServiceV2:
                     region_store_input_resolution.flow_type,
                     region_store_input_resolution.resolution_source,
                     dict(region_store_input_resolution.slots_to_promote),
+                )
+
+            router_slot_fill_context_payload = TStationChatServiceV2._router_slot_fill_context_payload(
+                slots=merged_slots,
+                user_text=last_user_text,
+                latest_product_tmpl=latest_product_tmpl,
+                latest_location_tmpl=latest_location_tmpl,
+                latest_datepick_tmpl=latest_datepick_tmpl,
+            )
+            expected_slot_fill_precheck = TStationChatServiceV2._expected_slot_fill_precheck(
+                user_text=last_user_text,
+                regex_slots=regex_slots,
+                merged_slots=merged_slots,
+                router_context=router_slot_fill_context_payload,
+                region_store_input_resolution=region_store_input_resolution,
+            )
+            if expected_slot_fill_precheck.get("matched"):
+                precheck_slot_patch = dict(expected_slot_fill_precheck.get("slot_patch") or {})
+                if precheck_slot_patch:
+                    merged_slots = merged_slots.apply_runtime_values(
+                        precheck_slot_patch,
+                        source="expected_slot_fill_precheck",
+                    )
+                    router_slot_fill_context_payload = TStationChatServiceV2._router_slot_fill_context_payload(
+                        slots=merged_slots,
+                        user_text=last_user_text,
+                        latest_product_tmpl=latest_product_tmpl,
+                        latest_location_tmpl=latest_location_tmpl,
+                        latest_datepick_tmpl=latest_datepick_tmpl,
+                    )
+                router_slot_fill_metadata.update({
+                    "expected_slot_fill_precheck": expected_slot_fill_precheck,
+                    "slot_patch": precheck_slot_patch,
+                    "filled_slot": str(expected_slot_fill_precheck.get("filled_slot") or "none"),
+                })
+                logger.info(
+                    "[EXPECTED_SLOT_FILL] pre-router match flow=%s slot=%s patch=%s",
+                    expected_slot_fill_precheck.get("current_flow"),
+                    expected_slot_fill_precheck.get("filled_slot"),
+                    precheck_slot_patch,
+                )
+            else:
+                router_slot_fill_metadata["expected_slot_fill_precheck"] = expected_slot_fill_precheck
+            classifier_messages = TStationChatServiceV2._inject_router_slot_fill_context(
+                classifier_messages,
+                router_slot_fill_context_payload,
+            )
+            vehicle_selection_trace_metadata["active_flow_snapshot_before_router"] = router_slot_fill_context_payload
+            vehicle_selection_trace_metadata["router_slot_fill_context"] = router_slot_fill_context_payload
+            vehicle_selection_trace_metadata["expected_slot_fill_precheck"] = expected_slot_fill_precheck
+
+            validated_ui_action_router_skip = (
+                _validated_ui_action_slot_fill_router_skip(vehicle_ui_action_context)
+                if settings.AI_ROUTER_SKIP_VALIDATED_UI_ACTION
+                else None
+            )
+            if validated_ui_action_router_skip is not None:
+                domains, routing_result, validated_ui_action_router_skip_metadata = validated_ui_action_router_skip
+                classify_future = concurrent.futures.Future()
+                classify_future.set_result((domains, routing_result))
+                router_slot_fill_metadata.update(validated_ui_action_router_skip_metadata)
+                vehicle_selection_trace_metadata.update(validated_ui_action_router_skip_metadata)
+                logger.info(
+                    "[ROUTER_SKIP] validated UI action slot-fill: slot=%s intent=%s source=%s",
+                    validated_ui_action_router_skip_metadata.get("filled_slot"),
+                    validated_ui_action_router_skip_metadata.get("slot_fill_intent"),
+                    validated_ui_action_router_skip_metadata.get("ui_action_type"),
+                )
+            else:
+                classify_future = _try_submit_speculative(
+                    _coordinator.classify_multi_intent,
+                    classifier_messages,
+                    session_id=request.session_id,
+                    user_id=request.user_id,
+                    trace_id=request.tracing_id,
+                    parent_span_id=_parent_span_id,
                 )
 
             chip_action_id = chip_value(request.chip_context, "actionId", "action_id")
@@ -23091,6 +23280,10 @@ class TStationChatServiceV2:
                     "filled_slot": validated_ui_action_router_skip_metadata.get("filled_slot"),
                     "slot_fill_intent": validated_ui_action_router_skip_metadata.get("slot_fill_intent"),
                     "resume_source": validated_ui_action_router_skip_metadata.get("resume_source"),
+                    "active_flow_snapshot_before_router": vehicle_selection_trace_metadata.get(
+                        "active_flow_snapshot_before_router"
+                    ),
+                    "expected_slot_fill_precheck": vehicle_selection_trace_metadata.get("expected_slot_fill_precheck"),
                     "user_behavior": getattr(routing_result, "user_behavior", None) if routing_result else None,
                     "flow": getattr(routing_result, "flow", None) if routing_result else None,
                     "complaint_scope": getattr(routing_result, "complaint_scope", None) if routing_result else None,
@@ -24127,7 +24320,7 @@ class TStationChatServiceV2:
             resume_source = location_selection_resume_source
         if resume_source == "none" and region_store_input_resolution.resolved:
             resume_source = region_store_input_resolution.resume_source
-        router_slot_fill_metadata: dict[str, Any] = {
+        router_slot_fill_metadata.update({
             "router_is_slot_fill": bool(getattr(routing_result, "is_slot_fill", False)) if routing_result else False,
             "router_filled_slot": str(getattr(routing_result, "filled_slot", "none") or "none")
             if routing_result
@@ -24145,10 +24338,10 @@ class TStationChatServiceV2:
             ),
             "router_slot_patch": {},
             "router_slot_fill_validated": False,
-        }
-        router_slot_fill_metadata["filled_slot"] = router_slot_fill_metadata["router_filled_slot"]
+        })
+        router_slot_fill_metadata.setdefault("filled_slot", router_slot_fill_metadata["router_filled_slot"])
         router_slot_fill_metadata["candidate_reference"] = router_slot_fill_metadata["router_candidate_reference"]
-        router_slot_fill_metadata["slot_patch"] = {}
+        router_slot_fill_metadata.setdefault("slot_patch", {})
         router_slot_fill = router_slot_fill_resolution(routing_result, action_context=vehicle_ui_action_context)
         if not router_slot_fill["matched"] and region_store_input_resolution.resolved:
             region_store_expected_slot = "none"
@@ -24216,6 +24409,54 @@ class TStationChatServiceV2:
                 "selection_source": router_resume_source,
                 "slots_rewritten": bool(router_slot_fill.get("slot_patch")),
             })
+        expected_slot_fill_precheck = (
+            router_slot_fill_metadata.get("expected_slot_fill_precheck")
+            if isinstance(router_slot_fill_metadata.get("expected_slot_fill_precheck"), Mapping)
+            else {}
+        )
+        if expected_slot_fill_precheck.get("matched") and not _router_contract_is_high_confidence_policy(routing_result):
+            expected_flow = str(expected_slot_fill_precheck.get("current_flow") or "").strip()
+            if expected_flow in {"quick_order_reservation", "stock_store_search"}:
+                original_domains = [domain.value for domain in (domains or [])]
+                original_intent = str(getattr(routing_result, "intent", "none") or "none") if routing_result else "none"
+                filled_slot_for_precheck = str(expected_slot_fill_precheck.get("filled_slot") or "none")
+                domains = [MultiAgentDomain.Domain.TRANSACTION]
+                routing_result = MultiAgentDomain(
+                    reason="expected_slot_fill_precheck",
+                    domains=domains,
+                    execution_plan=[f"transaction:{expected_flow}:slot_fill:{filled_slot_for_precheck}"],
+                    user_behavior="filling an expected transaction slot for the active flow",
+                    flow=f"expected slot-fill resumes {expected_flow}",
+                    claim_check_type="none",
+                    complaint_scope="none",
+                    agent_prompt_profile=AgentPromptProfile.TRANSACTION_STORE,
+                    intent=expected_flow,
+                    slot_fill_intent=expected_flow,
+                    is_slot_fill=True,
+                    filled_slot=(
+                        filled_slot_for_precheck
+                        if filled_slot_for_precheck in {"product", "quantity", "region", "store", "schedule"}
+                        else "none"
+                    ),
+                    slot_fill_source="router_context",
+                    candidate_reference={"source": "expected_slot_fill_precheck"},
+                    continue_flow=True,
+                    new_intent=False,
+                    planner_confidence=1.0,
+                )
+                precheck_resume_source = str(expected_slot_fill_precheck.get("resume_source") or "none")
+                if precheck_resume_source != "none":
+                    resume_source = precheck_resume_source
+                router_slot_fill_metadata.update({
+                    "contract_corrected_from": {
+                        "domains": original_domains,
+                        "intent": original_intent,
+                    },
+                    "contract_correction_reason": "expected_slot_fill_precheck",
+                    "router_slot_fill_validated": True,
+                    "router_slot_patch": dict(expected_slot_fill_precheck.get("slot_patch") or {}),
+                    "slot_patch": dict(expected_slot_fill_precheck.get("slot_patch") or {}),
+                })
         previous_pending_intent = str(getattr(merged_slots, "pending_intent", None) or "").strip() or None
         previous_goal_type = str(getattr(merged_slots, "goal_type", None) or "").strip() or None
         if region_store_input_resolution.resolved:
