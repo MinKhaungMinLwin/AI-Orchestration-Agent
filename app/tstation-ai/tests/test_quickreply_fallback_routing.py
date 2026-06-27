@@ -12693,7 +12693,19 @@ def test_fresh_transaction_clear_keeps_current_product_entity_after_pending_upda
     assert slots.tire_model == "벤투스 에어S"
 
 
-@pytest.mark.parametrize("text", ["장바구니담기", "장바구니 담기", "장바구니에 담아줘", "구매하기", "주문하기"])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "장바구니담기",
+        "장바구니 담기",
+        "장바구니에 담아줘",
+        "장바구니에 넣어줘",
+        "이거 카트에 넣어",
+        "아까 상품 장바구니에 넣어줘",
+        "구매하기",
+        "주문하기",
+    ],
+)
 def test_quantityless_cart_order_cta_detects_button_labels(text: str) -> None:
     assert _is_quantityless_cart_or_order_cta(text) is True
 
@@ -16765,6 +16777,15 @@ def test_add_to_cart_cta_context_detection_prefers_metadata() -> None:
         },
         "장바구니담기",
     ) is True
+
+
+@pytest.mark.parametrize("text", ["장바구니에 넣어줘", "이거 카트에 넣어", "아까 상품 장바구니에 넣어줘"])
+def test_add_to_cart_cta_context_detection_supports_free_text_cart_variants(text: str) -> None:
+    assert _is_add_to_cart_cta_context(None, text) is True
+
+
+def test_resume_source_from_current_turn_recognizes_cart_resume_anchor() -> None:
+    assert _resume_source_from_current_turn("아까 상품 장바구니에 넣어줘") == "explicit_user"
 
 
 def test_build_order_quantity_prompt_event_uses_cart_copy_for_cart_flow() -> None:

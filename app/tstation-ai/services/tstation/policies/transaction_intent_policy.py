@@ -31,7 +31,7 @@ _BOOKING_DATETIME_SELECTION_RE = re.compile(
 _STOCK_RE = re.compile(r"재고|오늘\s*서비스|오늘서비스|당일\s*서비스|T\s*바로\s*배송|T바로배송", re.IGNORECASE)
 _RESERVATION_RE = re.compile(r"예약|장착|방문|갈게|가고\s*싶|작업", re.IGNORECASE)
 _PURCHASE_RE = re.compile(r"구매|주문|결제|살래|살게|사고\s*싶|사려고", re.IGNORECASE)
-_CART_RE = re.compile(r"장바구니|카트|담아|담기", re.IGNORECASE)
+_CART_RE = re.compile(r"장바구니|카트|담아|담기|넣어|넣기", re.IGNORECASE)
 _STORE_SCHEDULE_RE = re.compile(
     r"예약\s*가능|예약\s*(?:가능한\s*)?(?:시간|일정|슬롯)|"
     r"(?:방문\s*)?예약\s*(?:잡|해|걸|보여|알려)|"

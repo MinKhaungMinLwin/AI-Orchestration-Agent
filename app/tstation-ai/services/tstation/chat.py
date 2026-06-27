@@ -1257,7 +1257,10 @@ def _explicit_current_turn_override_reason(
 _EXPLICIT_RESUME_ANCHOR_RE = re.compile(
     r"계속\s*(?:진행|이어|해)|이어\s*(?:진행|해)|아까\s*(?:구매|주문|재고|예약)\s*(?:이어|계속)|"
     r"(?:구매|주문|예약)\s*계속|이걸로\s*(?:진행|구매|주문)|"
-    r"구매하기|주문하기|구매\s*할래|주문\s*할래|장바구니\s*(?:담기|담아)|예약\s*(?:진행|계속)|"
+    r"구매하기|주문하기|구매\s*할래|주문\s*할래|"
+    r"(?:장바구니|카트)(?:\s*에)?\s*(?:담기|담아|넣어줘|넣어|넣기)|"
+    r"아까\s*상품(?:을)?\s*(?:장바구니|카트)(?:\s*에)?\s*(?:담아|담기|넣어줘|넣어|넣기)|"
+    r"이거\s*카트(?:\s*에)?\s*넣(?:어줘|어|기)|예약\s*(?:진행|계속)|"
     r"방금\s*보던\s*거(?:로)?\s*(?:계속|진행|구매|주문|예약)|아까\s*보던\s*거(?:로)?\s*(?:계속|진행|구매|주문|예약)",
     re.IGNORECASE,
 )
@@ -6120,7 +6123,14 @@ def _is_current_location_store_search_confirmation(user_text: str, latest_quickr
 
 _ORDER_HISTORY_CTA_LABEL_RE = re.compile(r"주문\s*내역|주문내역", re.IGNORECASE)
 _PURCHASE_CTA_LABELS = {"구매하기", "주문하기", "바로 주문", "바로 구매"}
-_CART_CTA_LABELS = {"장바구니담기", "장바구니 담기", "장바구니에 담아줘"}
+_CART_CTA_LABELS = {
+    "장바구니담기",
+    "장바구니 담기",
+    "장바구니에 담아줘",
+    "장바구니에 넣어줘",
+    "카트에 넣어",
+    "이거 카트에 넣어",
+}
 _ORDER_HISTORY_CTA_ALLOWED_INTENTS = frozenset({
     "order_history_lookup",
     "order_document_guidance",
@@ -7509,7 +7519,9 @@ def _build_vehicle_information_event(selected_vehicle: dict, user_text: str) -> 
 
 
 _QUANTITYLESS_CART_ORDER_CTA_RE = re.compile(
-    r"^\s*(?:장바구니\s*담기|장바구니에?\s*담(?:아줘|기)?|담아줘|구매하기|주문하기|바로\s*주문|결제하기)\s*$",
+    r"^\s*(?:(?:아까\s*상품|이거|그거)\s*)?"
+    r"(?:장바구니\s*담기|장바구니에?\s*담(?:아줘|기)?|장바구니에?\s*넣(?:어줘|어|기)?|"
+    r"카트에?\s*넣(?:어줘|어|기)?|담아줘|구매하기|주문하기|바로\s*주문|결제하기)\s*$",
     re.IGNORECASE,
 )
 _PREORDER_CONFIRMATION_RE = re.compile(
@@ -7670,7 +7682,15 @@ def _is_add_to_cart_cta_context(cta_context: Mapping[str, Any] | None, user_text
             goal_type = str(slots.get("goal_type") or slots.get("goalType") or "").strip().lower()
             if pending_intent == "cart" or goal_type == "add_to_cart":
                 return True
-    return bool(re.fullmatch(r"\s*(?:장바구니\s*담기|장바구니에?\s*담(?:아줘|기)?|담아줘)\s*", str(user_text or ""), re.IGNORECASE))
+    return bool(
+        re.fullmatch(
+            r"\s*(?:(?:아까\s*상품|이거|그거)\s*)?"
+            r"(?:장바구니\s*담기|장바구니에?\s*담(?:아줘|기)?|장바구니에?\s*넣(?:어줘|어|기)?|"
+            r"카트에?\s*넣(?:어줘|어|기)?|담아줘)\s*",
+            str(user_text or ""),
+            re.IGNORECASE,
+        )
+    )
 
 
 _normalize_vehicle_type_from_car_type = normalize_vehicle_type_from_car_type

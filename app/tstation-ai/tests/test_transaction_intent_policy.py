@@ -61,6 +61,26 @@ def test_purchase_flow_with_quantity_and_no_store_resolves_to_ask_store() -> Non
     assert "quick_order_tool" in plan.forbidden_tools
 
 
+def test_cart_free_text_with_product_context_keeps_cart_sub_intent() -> None:
+    frame = build_transaction_intent_frame(
+        "장바구니에 넣어줘",
+        known_slots={
+            "goods_no": "G000000312679",
+            "tire_size": "245/45R18",
+            "tire_model": "벤투스 S2 AS",
+            "pending_intent": "cart",
+            "goal_type": "add_to_cart",
+        },
+    )
+    plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "quick_order_reservation"
+    assert frame.sub_intent == "cart"
+    assert frame.missing_slots == ("quantity",)
+    assert plan.allowed_tools == ()
+    assert plan.metadata["flow_step"] == "ask_quantity"
+
+
 def test_purchase_flow_with_store_and_no_quantity_resolves_to_ask_quantity() -> None:
     user_text = "벤투스 S2 AS 245/45R18 한남점에서 구매할래"
     frame = build_transaction_intent_frame(
