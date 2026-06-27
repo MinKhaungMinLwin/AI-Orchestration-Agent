@@ -25237,6 +25237,33 @@ def test_best_seller_contract_ignores_missing_product_reference_guard() -> None:
     assert not should_guard_required_slots(contract)
 
 
+def test_vehicle_best_seller_query_ignores_missing_product_reference_guard() -> None:
+    user_text = "gv70에 가장 많이 팔린 타이어"
+    frame = build_discovery_intent_frame(user_text, known_slots={})
+    tool_plan = plan_discovery_tools(frame)
+    response_decision = decide_discovery_response(frame)
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=response_decision,
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY],
+            execution_plan=["discovery:vehicle_best_seller_search"],
+            agent_prompt_profile="discovery_search",
+            referred_object_status="missing",
+            referred_object_type="product",
+            needs_clarification=True,
+        ),
+    )
+
+    assert frame.sub_intent == "best_seller_search"
+    assert "get_best_selling_products_tool" in tool_plan.allowed_tools
+    assert contract.intent == "best_seller_search"
+    assert contract.blocking_required_slots == ()
+    assert not should_guard_required_slots(contract)
+
+
 def test_region_input_without_prompt_or_transaction_context_stays_plain_store_search() -> None:
     resolution = resolve_region_or_store_input_context(
         user_text="분당",
@@ -27530,6 +27557,7 @@ def test_turn_contract_still_blocks_discovery_product_card_without_current_tool_
 
 
 def test_normalize_plan_intent_maps_best_seller_aliases() -> None:
+    assert _normalize_plan_intent("get_best_selling_product_for_vehicle") == "best_seller_search"
     assert _normalize_plan_intent("get_best_selling_products_for_vehicle_timeframe") == "best_seller_search"
     assert _normalize_plan_intent("get_best_selling_products_for_vehicle") == "best_seller_search"
     assert _normalize_plan_intent("best_seller_list_by_vehicle_and_size_and_period") == "best_seller_search"

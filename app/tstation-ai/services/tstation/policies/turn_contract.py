@@ -8,7 +8,7 @@ from typing import Any, Mapping
 
 from services.tstation.common.cta_urls import CTAUrls
 from services.tstation.policies.cross_domain_policy import CrossDomainPlan
-from services.tstation.policies.discovery_intent_policy import is_best_seller_request
+from services.tstation.policies.discovery_intent_policy import extract_best_seller_vehicle_query, is_best_seller_request
 from services.tstation.policies.flow_controller import build_purchase_flow_fallback_event
 from services.tstation.policies.intent_frame import IntentFrame
 from services.tstation.policies.resolved_context import build_resolved_turn_context
@@ -176,6 +176,7 @@ _BEST_SELLER_DISALLOWED_CTA_LABELS = frozenset({
     "차량번호로 확인",
 })
 _REFERENCE_GUARD_EXEMPT_INTENTS = frozenset({
+    "best_seller_search",
     "favorite_store_lookup",
     "oe_re_concept_explanation",
     "product_recommendation",
@@ -203,6 +204,12 @@ _REFERENCE_GUARD_EXEMPT_DISCOVERY_PLAN_TOKENS = frozenset({
     "vehicle_based_recommendation_refinement",
     "vehicle_resolved_recommendation",
     "best_seller_search",
+    "get_best_selling_product_for_vehicle",
+    "get_best_selling_products_for_vehicle",
+    "get_best_selling_tire_by_model_and_size",
+    "best_seller_list_by_vehicle_and_size_and_period",
+    "query_order_data_for_vehicle_with_period",
+    "vehicle_best_seller_search",
 })
 ROUTER_WINS_INFORMATIONAL_INTENTS = frozenset({
     "product_detail_lookup",
@@ -3900,6 +3907,7 @@ def _normalize_plan_intent(value: str) -> str:
         "event_lookup": "product_event_lookup",
         "product_event": "product_event_lookup",
         "discovery_event_content": "product_event_lookup",
+        "get_best_selling_product_for_vehicle": "best_seller_search",
         "get_best_selling_products_for_vehicle_timeframe": "best_seller_search",
         "get_best_selling_products_for_vehicle": "best_seller_search",
         "best_seller_list_by_vehicle_and_size_and_period": "best_seller_search",
@@ -4138,6 +4146,12 @@ def _should_apply_reference_guard(
     ):
         return False
     referred_type = str(referred.get("type") or "none")
+    if (
+        referred_type in {"product", "product_set"}
+        and is_best_seller_request(user_text, include_demographic_preference=False)
+        and extract_best_seller_vehicle_query(user_text)
+    ):
+        return False
     has_reference_signal = _has_reference_signal(user_text)
     if referred_type == "none":
         return has_reference_signal
