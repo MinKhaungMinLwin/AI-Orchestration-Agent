@@ -149,7 +149,9 @@ from services.tstation.policies.ui_action_policy import (
     build_oe_replacement_guidance_event,
     build_oe_replacement_followup_recommendation_args,
     build_oe_replacement_same_product_search_args,
+    action_mode_for_transaction_slot_fill,
     goods_no_from_template_event,
+    is_expected_transaction_slot_fill,
     is_oe_replacement_context,
     is_oe_replacement_cta_context,
     is_oe_replacement_equivalent_query,
@@ -23451,11 +23453,21 @@ class TStationChatServiceV2:
             explicit_override_reason=explicit_override_reason,
             resume_source=resume_source,
         )
+        slot_fill_action_mode = action_mode_for_transaction_slot_fill(vehicle_ui_action_context)
+        support_hard_stop = action_mode == "support_policy_answer"
+        if slot_fill_action_mode and not support_hard_stop:
+            action_mode = slot_fill_action_mode
+            if resume_source == "none":
+                resume_source = _resume_source_from_ui_action_context(vehicle_ui_action_context)
+            if resume_source == "none" and vehicle_ui_action_context is not None:
+                resume_source = f"slot_fill:{vehicle_ui_action_context.action_type}"
         context_state = _context_state_for_action(
             action_mode=action_mode,
             resume_source=resume_source,
             slots=merged_slots,
         )
+        if slot_fill_action_mode and not support_hard_stop:
+            context_state = "resumed"
         dormant_context_reason = None
         if context_state == "dormant" and (previous_pending_intent or previous_goal_type):
             dormant_context_reason = f"current_turn_action:{action_mode}"
@@ -23513,6 +23525,7 @@ class TStationChatServiceV2:
         current_discovery_recommendation_tool_patch.set(discovery_tool_patch)
         current_discovery_search_tool_patch.set(discovery_tool_patch)
         current_discovery_response_decision.set(discovery_response_decision)
+        current_ui_action_context = vehicle_ui_action_context
         transaction_known_slots = {
             "tire_size": merged_slots.tire_size,
             "goods_no": merged_slots.goods_no,
@@ -23520,6 +23533,7 @@ class TStationChatServiceV2:
             "quantity": merged_slots.ord_qty,
             "ord_qty": merged_slots.ord_qty,
             "shop_id": merged_slots.shop_id,
+            "shop_name": merged_slots.shop_name,
             "store_name": merged_slots.shop_name,
             "region": merged_slots.region,
             "availability_intent": merged_slots.availability_intent,
@@ -23529,16 +23543,36 @@ class TStationChatServiceV2:
             "goal_type": merged_slots.goal_type,
             "stock_check_mode": getattr(merged_slots, "stock_check_mode", None),
         }
+        if current_ui_action_context is not None and is_expected_transaction_slot_fill(current_ui_action_context):
+            ui_action_metadata = {
+                **dict(current_ui_action_context.slots or {}),
+                **dict(current_ui_action_context.raw_metadata or {}),
+            }
+            for field, aliases in {
+                "shop_id": ("shop_id", "shopId"),
+                "shop_name": ("shop_name", "shopName"),
+                "pending_intent": ("pending_intent", "pendingIntent"),
+                "goal_type": ("goal_type", "goalType"),
+                "stock_check_mode": ("stock_check_mode", "stockCheckMode"),
+                "source_tool": ("source_tool", "sourceTool"),
+                "schedule_mode": ("schedule_mode", "scheduleMode"),
+                "schedule_tier": ("schedule_tier", "scheduleTier"),
+            }.items():
+                for alias in aliases:
+                    value = ui_action_metadata.get(alias)
+                    if value not in (None, "", []):
+                        transaction_known_slots[field] = value
+                        break
         availability_context = merged_slots.availability_context if isinstance(getattr(merged_slots, "availability_context", None), dict) else {}
         pending_order_context = availability_context.get("pending_order_context") if isinstance(availability_context.get("pending_order_context"), dict) else {}
         if isinstance(pending_order_context, dict):
-            for key in ("goods_no", "tire_size", "ord_qty", "region", "shop_name", "pending_intent", "goal_type", "source"):
+            for key in ("goods_no", "tire_size", "ord_qty", "region", "shop_id", "shop_name", "pending_intent", "goal_type", "source"):
                 value = pending_order_context.get(key)
                 if value not in (None, "") and transaction_known_slots.get(key) in (None, ""):
                     transaction_known_slots[key] = value
         selected_order_context = merged_slots.order_context.get("selected_order_context") if isinstance(getattr(merged_slots, "order_context", None), dict) else None
         if isinstance(selected_order_context, dict):
-            for key in ("stock_check_mode", "schedule_mode", "source_tool"):
+            for key in ("stock_check_mode", "schedule_mode", "schedule_tier", "source_tool"):
                 value = selected_order_context.get(key)
                 if value not in (None, ""):
                     transaction_known_slots[key] = value

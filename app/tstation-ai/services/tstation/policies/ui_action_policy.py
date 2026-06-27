@@ -150,6 +150,16 @@ _UI_ACTION_SLOT_KEYS = (
     "car_type",
     "vehicle_type",
 )
+_TRANSACTION_SLOT_FILL_ACTION_TYPES = frozenset({
+    "select_quantity",
+    "select_product",
+    "select_store",
+    "select_schedule",
+})
+_TRANSACTION_SLOT_FILL_CONTRACT_INTENTS = frozenset({
+    _STOCK_STORE_SEARCH_INTENT,
+    _QUICK_ORDER_RESERVATION_INTENT,
+})
 
 
 @dataclass(frozen=True)
@@ -893,12 +903,23 @@ def _normalize_ui_action_mapping(raw_action: Mapping[str, Any] | None) -> dict[s
     metadata = normalized.get("metadata")
     if isinstance(metadata, Mapping):
         normalized.setdefault("raw_metadata", dict(metadata))
+    metadata_slots_raw = dict(metadata.get("slots")) if isinstance(metadata, Mapping) and isinstance(metadata.get("slots"), Mapping) else {}
+    metadata_slots = canonical_context_from_template_boundary(metadata_slots_raw)
     slots = normalized.get("slots")
     if not isinstance(slots, Mapping):
         slots = normalized.get("slot_patch")
-    canonical_slots = canonical_context_from_template_boundary(slots if isinstance(slots, Mapping) else normalized)
-    if canonical_slots:
-        normalized["slots"] = canonical_slots
+    ui_action_slots_raw = dict(slots) if isinstance(slots, Mapping) else {}
+    ui_action_slots = canonical_context_from_template_boundary(ui_action_slots_raw)
+    canonical_top_level = canonical_context_from_template_boundary(normalized)
+    merged_slots = {
+        **metadata_slots_raw,
+        **metadata_slots,
+        **ui_action_slots_raw,
+        **ui_action_slots,
+        **canonical_top_level,
+    }
+    if merged_slots:
+        normalized["slots"] = merged_slots
     action_type = str(
         normalized.get("action_type")
         or normalized.get("cta_action")
@@ -914,9 +935,10 @@ def _normalize_ui_action_mapping(raw_action: Mapping[str, Any] | None) -> dict[s
 
 
 def _ui_action_slot_patch(raw_action: Mapping[str, Any]) -> dict[str, Any]:
-    canonical = canonical_context_from_template_boundary(raw_action.get("slots"))
+    normalized = _normalize_ui_action_mapping(raw_action)
+    canonical = canonical_context_from_template_boundary(normalized.get("slots"))
     if not canonical:
-        canonical = canonical_context_from_template_boundary(raw_action)
+        canonical = canonical_context_from_template_boundary(normalized)
     patch: dict[str, Any] = {}
     for key in _UI_ACTION_SLOT_KEYS:
         value = canonical.get(key)
@@ -1075,6 +1097,46 @@ def _interactive_flow_contract_intent_from_slots(
     if pending_intent == "reservation":
         return _QUICK_ORDER_RESERVATION_INTENT
     return str(fallback_intent or "").strip()
+
+
+def is_expected_transaction_slot_fill(action_context: UIActionContext | None) -> bool:
+    if action_context is None or not action_context.slot_patch:
+        return False
+    expected_behavior = str(action_context.expected_behavior or "").strip()
+    expected_contract_intent = str(action_context.expected_contract_intent or "").strip()
+    action_type = str(action_context.action_type or "").strip()
+    return (
+        expected_behavior == "slot_fill"
+        and expected_contract_intent in _TRANSACTION_SLOT_FILL_CONTRACT_INTENTS
+        and action_type in _TRANSACTION_SLOT_FILL_ACTION_TYPES
+    )
+
+
+def action_mode_for_transaction_slot_fill(action_context: UIActionContext | None) -> str | None:
+    if not is_expected_transaction_slot_fill(action_context):
+        return None
+    expected_contract_intent = str(action_context.expected_contract_intent or "").strip()
+    action_type = str(action_context.action_type or "").strip()
+    if action_type == "select_schedule":
+        payload_slots = (
+            action_context.payload.get("slots")
+            if isinstance(action_context.payload, Mapping) and isinstance(action_context.payload.get("slots"), Mapping)
+            else {}
+        )
+        slots = {
+            **dict(action_context.raw_metadata or {}),
+            **dict(payload_slots or {}),
+            **dict(action_context.slots or {}),
+            **dict(action_context.slot_patch or {}),
+        }
+        if str(slots.get("pending_intent") or "").strip() == "reservation":
+            return "booking_continuation"
+        return "purchase_continuation"
+    if expected_contract_intent == _STOCK_STORE_SEARCH_INTENT:
+        return "stock_check"
+    if expected_contract_intent == _QUICK_ORDER_RESERVATION_INTENT:
+        return "purchase_continuation"
+    return None
 
 
 def resolve_ui_action_context(

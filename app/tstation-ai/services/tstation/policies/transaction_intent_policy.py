@@ -861,7 +861,16 @@ def build_transaction_intent_frame(
         or store_candidate_search
         or specific_store_recheck
     )
-    preserve_transaction_product_context = preserve_pending_today_install or store_scope_product_continuation
+    purchase_store_slot_fill_context = bool(
+        _is_order_or_reservation_context(slots)
+        and (slots.get("ord_qty") or slots.get("quantity"))
+        and (slots.get("shop_id") or slots.get("shop_name") or slots.get("store_name"))
+    )
+    preserve_transaction_product_context = (
+        preserve_pending_today_install
+        or store_scope_product_continuation
+        or purchase_store_slot_fill_context
+    )
     goods_no = (
         None
         if plain_store_search and not current_has_product and not preserve_transaction_product_context
@@ -904,10 +913,11 @@ def build_transaction_intent_frame(
         )
     )
     today_requested = bool(_TODAY_RE.search(text))
+    stored_quantity = quantity or slots.get("ord_qty") or slots.get("quantity")
     selected_store_schedule_ready = bool(
         has_product
         and tire_size
-        and quantity
+        and stored_quantity
         and (store_name or slots.get("shop_id") or slots.get("shop_name") or slots.get("store_name"))
     )
     selected_schedule_followup = bool(
@@ -1111,6 +1121,26 @@ def build_transaction_intent_frame(
     elif selected_schedule_followup:
         intent = "quick_order_reservation"
         sub_intent = "reservation"
+    elif (
+        _is_order_or_reservation_context(slots)
+        and goods_no
+        and stored_quantity
+        and slots.get("shop_id")
+    ):
+        intent = "quick_order_reservation"
+        sub_intent = "reservation"
+        entities["stock_check_mode"] = str(slots.get("stock_check_mode") or "preview")
+    elif (
+        (slots.get("pending_intent") == "stock" or slots.get("goal_type") == "store_with_stock")
+        and goods_no
+        and stored_quantity
+        and (region or slots.get("region"))
+    ):
+        intent = "stock_store_search"
+        sub_intent = "today_install" if _is_today_install_context(slots, requested_cal_day) else "stock"
+        entities["stock_check_mode"] = str(
+            slots.get("stock_check_mode") or ("preview" if sub_intent == "today_install" else "inventory_only")
+        )
     elif (
         _STORE_SCHEDULE_RE.search(text)
         and has_product

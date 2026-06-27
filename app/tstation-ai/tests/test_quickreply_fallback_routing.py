@@ -375,6 +375,7 @@ from services.tstation.policies.turn_contract import (
 )
 from services.tstation.policies.ui_action_policy import (
     UIActionContext,
+    action_mode_for_transaction_slot_fill,
     apply_region_or_store_input_context_resolution,
     apply_other_store_context_enrichment,
     apply_selected_order_context_for_purchase_cta,
@@ -409,6 +410,7 @@ from services.tstation.policies.ui_action_policy import (
     datepick_slot_values_from_data,
     is_manual_tire_size_input_selection,
     is_logistics_earliest_install_date_followup,
+    is_expected_transaction_slot_fill,
     is_staggered_selected_tire_size_context,
     listcar_allows_staggered_tire_prompt,
     merged_quickreply_cta_context,
@@ -13567,6 +13569,105 @@ def test_resume_source_from_ui_action_context_promotes_transaction_quantity_resu
     assert _context_state_for_action(action_mode=action_mode, resume_source="ui_action:select_quantity", slots=slots) == "resumed"
 
 
+def test_transaction_slot_fill_helpers_classify_purchase_and_schedule_actions() -> None:
+    purchase_store_action = resolve_ui_action_context(
+        raw_action={
+            "action_type": "select_store",
+            "source_intent": "quick_order_reservation",
+            "expected_contract_intent": "quick_order_reservation",
+            "expected_behavior": "slot_fill",
+            "slots": {
+                "goods_no": "G000000319451",
+                "tire_size": "245/45R18",
+                "ord_qty": 4,
+                "shop_id": "F00721",
+                "shop_name": "티스테이션 판교점",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            },
+        },
+        selected_vehicle=None,
+        selection_source="ui_action",
+    )
+    reservation_schedule_action = resolve_ui_action_context(
+        raw_action={
+            "action_type": "select_schedule",
+            "source_intent": "quick_order_reservation",
+            "expected_contract_intent": "quick_order_reservation",
+            "expected_behavior": "slot_fill",
+            "slots": {
+                "goods_no": "G000000319451",
+                "tire_size": "245/45R18",
+                "ord_qty": 4,
+                "shop_id": "F00721",
+                "shop_name": "티스테이션 판교점",
+                "requested_cal_day": "20260627",
+                "rsv_hour": "09",
+                "pending_intent": "reservation",
+                "goal_type": "place_order",
+            },
+        },
+        selected_vehicle=None,
+        selection_source="ui_action",
+    )
+
+    assert is_expected_transaction_slot_fill(purchase_store_action) is True
+    assert action_mode_for_transaction_slot_fill(purchase_store_action) == "purchase_continuation"
+    assert is_expected_transaction_slot_fill(reservation_schedule_action) is True
+    assert action_mode_for_transaction_slot_fill(reservation_schedule_action) == "booking_continuation"
+
+
+def test_prepare_ui_action_state_prefers_top_level_preview_metadata_for_store_selection() -> None:
+    base_slots = ConversationSlots(
+        goods_no="G000000319451",
+        tire_size="245/45R18",
+        ord_qty=4,
+        region="분당",
+        pending_intent="order",
+        goal_type="place_order",
+        stock_check_mode="inventory_only",
+    )
+    prepared = prepare_ui_action_state(
+        ui_action={
+            "action_type": "select_store",
+            "cta_action": "select_store",
+            "source_intent": "quick_order_reservation",
+            "expected_contract_intent": "quick_order_reservation",
+            "expected_behavior": "slot_fill",
+            "shopId": "F00721",
+            "shopName": "티스테이션 판교점",
+            "pendingIntent": "order",
+            "goalType": "place_order",
+            "stockCheckMode": "preview",
+            "sourceTool": "transaction_store_preview_tool",
+            "slots": {
+                "goods_no": "G000000319451",
+                "tire_size": "245/45R18",
+                "ord_qty": 4,
+                "region": "분당",
+                "shop_id": "F00721",
+                "shop_name": "판교점",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+                "stock_check_mode": "inventory_only",
+            },
+        },
+        chip_context=None,
+        request_slots=None,
+        latest_listcar_tmpl=None,
+        last_user_text="티스테이션 판교점",
+        existing_slots=base_slots,
+        generic_slot_apply_fn=lambda slots, values: slots.apply_runtime_values(values, source="ui_action"),
+        vehicle_slot_apply_fn=lambda slots, values: slots.apply_runtime_values(values, source="vehicle_ui_action"),
+    )
+
+    assert prepared.action_context is not None
+    assert prepared.action_context.slot_patch["stock_check_mode"] == "preview"
+    assert prepared.action_context.slot_patch["shop_name"] == "티스테이션 판교점"
+    assert prepared.updated_slots.stock_check_mode == "preview"
+    assert prepared.updated_slots.shop_name == "티스테이션 판교점"
+
+
 def test_quantity_ui_action_slot_patch_restores_stock_preview_contract() -> None:
     base_slots = ConversationSlots(
         goods_no="G000000309715",
@@ -13857,6 +13958,44 @@ def test_select_schedule_ui_action_keeps_quick_order_reservation_without_quick_o
     assert contract.intent == "quick_order_reservation"
     assert "quick_order_tool" not in tool_plan.allowed_tools
     assert "transaction_store_preview_tool" in tool_plan.allowed_tools
+
+
+def test_transaction_intent_frame_prefers_quick_order_reservation_for_selected_store_slot_fill() -> None:
+    frame = build_transaction_intent_frame(
+        "티스테이션 판교점",
+        known_slots={
+            "goods_no": "G000000319451",
+            "tire_size": "245/45R18",
+            "ord_qty": 4,
+            "shop_id": "F00721",
+            "shop_name": "티스테이션 판교점",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "stock_check_mode": "preview",
+        },
+    )
+
+    assert frame.intent == "quick_order_reservation"
+    assert frame.sub_intent == "reservation"
+
+
+def test_transaction_intent_frame_prefers_stock_store_search_for_region_slot_fill() -> None:
+    frame = build_transaction_intent_frame(
+        "분당",
+        known_slots={
+            "goods_no": "G000000319451",
+            "tire_size": "245/45R18",
+            "ord_qty": 4,
+            "region": "분당",
+            "availability_intent": "today_install",
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+            "stock_check_mode": "preview",
+        },
+    )
+
+    assert frame.intent == "stock_store_search"
+    assert frame.sub_intent == "today_install"
 
 
 def test_history_vehicle_selection_does_not_match_product_name_substring_to_vehicle() -> None:
