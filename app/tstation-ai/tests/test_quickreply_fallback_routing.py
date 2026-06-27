@@ -13322,6 +13322,62 @@ def test_location_booking_flow_metadata_carries_store_selection_ui_action() -> N
     assert metadata["slots"]["goods_no"] == "G000000309715"
 
 
+def test_location_booking_flow_metadata_overrides_store_search_contract_with_purchase_context() -> None:
+    contract = build_turn_contract(
+        user_text="매장을 선택해 주세요",
+        intent_frame=IntentFrame(
+            domain=PolicyDomain.TRANSACTION,
+            intent="store_search",
+            sub_intent="region",
+            known_slots={
+                "goods_no": "G000000319451",
+                "tire_size": "245/45R18",
+                "ord_qty": 4,
+                "region": "분당",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+                "stock_check_mode": "inventory_only",
+            },
+        ),
+        tool_plan=ToolPlan(
+            allowed_tools=("search_stores_tool", "get_store_list_tool"),
+            preferred_tool="search_stores_tool",
+        ),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.CARD,
+            template=TemplateName.LOCATION,
+            metadata={"response_shape_key": "store_selection"},
+        ),
+        action_mode="purchase_continuation",
+        context_state="resumed",
+    )
+    event = {
+        "template": "location",
+        "source_domain": "transaction",
+        "data": {
+            "assistantResponse": "원하시는 매장을 선택해 주세요.",
+            "isBookingFlow": True,
+            "stores": [
+                {"nameAddress": "티스테이션 판교점", "detailAddress": "경기 성남시"},
+            ],
+            "metadata": [
+                {"shopId": "F00721", "shopName": "티스테이션 판교점"},
+            ],
+        },
+    }
+
+    changed = normalize_ui_action_metadata(event, contract=contract)
+
+    assert changed is True
+    metadata = event["data"]["metadata"][0]
+    assert metadata["source_intent"] == "quick_order_reservation"
+    assert metadata["expected_contract_intent"] == "quick_order_reservation"
+    assert metadata["ui_action"]["source_intent"] == "quick_order_reservation"
+    assert metadata["ui_action"]["expected_contract_intent"] == "quick_order_reservation"
+    assert metadata["slots"]["pending_intent"] == "order"
+    assert metadata["slots"]["goal_type"] == "place_order"
+
+
 def test_datepick_metadata_carries_schedule_selection_ui_action() -> None:
     contract = build_turn_contract(
         user_text="날짜를 선택해 주세요",

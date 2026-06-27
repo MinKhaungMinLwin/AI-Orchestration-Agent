@@ -1057,6 +1057,26 @@ def _build_ui_action_context_from_raw(
     )
 
 
+def _interactive_flow_contract_intent_from_slots(
+    slot_values: Mapping[str, Any],
+    *,
+    fallback_intent: str | None,
+) -> str:
+    pending_intent = str(slot_values.get("pending_intent") or "").strip()
+    goal_type = str(slot_values.get("goal_type") or "").strip()
+    availability_intent = str(slot_values.get("availability_intent") or "").strip()
+
+    if pending_intent == "order" or goal_type == "place_order":
+        return _QUICK_ORDER_RESERVATION_INTENT
+    if availability_intent == "today_install":
+        return _STOCK_STORE_SEARCH_INTENT
+    if pending_intent == "stock" or goal_type == "store_with_stock":
+        return _STOCK_STORE_SEARCH_INTENT
+    if pending_intent == "reservation":
+        return _QUICK_ORDER_RESERVATION_INTENT
+    return str(fallback_intent or "").strip()
+
+
 def resolve_ui_action_context(
     *,
     raw_action: Mapping[str, Any] | None = None,
@@ -4451,7 +4471,10 @@ def normalize_ui_action_metadata(
             return changed
         if len(stores) != len(metadata_list):
             return changed
-        default_contract_intent = contract_intent or _STOCK_STORE_SEARCH_INTENT
+        default_contract_intent = _interactive_flow_contract_intent_from_slots(
+            known_slots,
+            fallback_intent=contract_intent or _STOCK_STORE_SEARCH_INTENT,
+        )
         for store, metadata in zip(stores, metadata_list):
             if not isinstance(store, dict) or not isinstance(metadata, dict):
                 continue
@@ -4463,15 +4486,26 @@ def normalize_ui_action_metadata(
             for key, value in store_context.items():
                 if key in _UI_ACTION_SLOT_KEYS and value not in (None, "", []):
                     slot_values[key] = value
-            expected_contract_intent = str(
-                metadata.get("expected_contract_intent")
-                or metadata.get("source_intent")
-                or default_contract_intent
-                or ""
-            ).strip()
+            expected_contract_intent = _interactive_flow_contract_intent_from_slots(
+                slot_values,
+                fallback_intent=str(
+                    metadata.get("expected_contract_intent")
+                    or metadata.get("source_intent")
+                    or default_contract_intent
+                    or ""
+                ).strip(),
+            )
             metadata["domain"] = metadata.get("domain") or contract_domain or "TRANSACTION"
             metadata["cta_action"] = "select_store"
-            metadata["source_intent"] = metadata.get("source_intent") or expected_contract_intent
+            metadata["source_intent"] = _interactive_flow_contract_intent_from_slots(
+                slot_values,
+                fallback_intent=str(
+                    metadata.get("source_intent")
+                    or metadata.get("expected_contract_intent")
+                    or default_contract_intent
+                    or ""
+                ).strip(),
+            )
             metadata["expected_contract_intent"] = expected_contract_intent
             metadata["expected_behavior"] = metadata.get("expected_behavior") or "slot_fill"
             metadata["slots"] = slot_values
@@ -4504,15 +4538,26 @@ def normalize_ui_action_metadata(
         for key, value in canonical_metadata.items():
             if key in _UI_ACTION_SLOT_KEYS and value not in (None, "", []):
                 slot_values[key] = value
-        expected_contract_intent = str(
-            metadata.get("expected_contract_intent")
-            or metadata.get("source_intent")
-            or contract_intent
-            or _QUICK_ORDER_RESERVATION_INTENT
-        ).strip()
+        expected_contract_intent = _interactive_flow_contract_intent_from_slots(
+            slot_values,
+            fallback_intent=str(
+                metadata.get("expected_contract_intent")
+                or metadata.get("source_intent")
+                or contract_intent
+                or _QUICK_ORDER_RESERVATION_INTENT
+            ).strip(),
+        )
         metadata["domain"] = metadata.get("domain") or contract_domain or "TRANSACTION"
         metadata["cta_action"] = metadata.get("cta_action") or "select_schedule"
-        metadata["source_intent"] = metadata.get("source_intent") or expected_contract_intent
+        metadata["source_intent"] = _interactive_flow_contract_intent_from_slots(
+            slot_values,
+            fallback_intent=str(
+                metadata.get("source_intent")
+                or metadata.get("expected_contract_intent")
+                or contract_intent
+                or _QUICK_ORDER_RESERVATION_INTENT
+            ).strip(),
+        )
         metadata["expected_contract_intent"] = expected_contract_intent
         metadata["expected_behavior"] = metadata.get("expected_behavior") or "slot_fill"
         metadata["slots"] = slot_values
