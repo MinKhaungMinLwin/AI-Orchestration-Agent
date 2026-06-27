@@ -1601,6 +1601,18 @@ def _action_mode_contract_violation(
             "template": template,
         }
     data = event.get("data")
+    response_shape_key = str(
+        event.get("response_shape_key")
+        or (
+            data.get("metadata", {}).get("response_shape_key")
+            if isinstance(data, Mapping) and isinstance(data.get("metadata"), Mapping)
+            else ""
+        )
+        or ((contract.response_decision or {}).get("metadata") or {}).get("response_shape_key")
+        or ""
+    )
+    if response_shape_key == "missing_stock_search_slots" and template == "quickReply":
+        return None
     if (
         template == "location"
         and isinstance(data, Mapping)
@@ -1632,6 +1644,7 @@ def _action_mode_contract_violation(
         action_mode
         in {"support_policy_answer", "product_description", "product_comparison", "owned_record_lookup", "store_search", "info_only"}
         and _PURCHASE_OR_BOOKING_PROMPT_RE.search(assistant_text)
+        and response_shape_key != "missing_stock_search_slots"
     ):
         return {
             "type": "action_mode_prompt_violation",

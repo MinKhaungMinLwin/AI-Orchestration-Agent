@@ -22740,6 +22740,67 @@ def test_turn_contract_qc_reports_forbidden_template_violation() -> None:
     }]
 
 
+def test_missing_stock_search_slots_quickreply_is_allowed_for_stock_check_action_mode() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="stock_store_search",
+        known_slots={
+            "goods_no": "G000000312679",
+            "tire_size": "245/45R18",
+            "availability_intent": "today_install",
+            "requested_cal_day": "20260627",
+        },
+        allowed_tools=("search_product_tool", "transaction_store_preview_tool"),
+        response_decision={
+            "template": "quickReply",
+            "metadata": {"response_shape_key": "missing_stock_search_slots"},
+            "forbidden_behaviors": ["empty_location_card", "ask_unrelated_reset"],
+        },
+        action_mode="store_search",
+        context_state="active",
+    )
+
+    violations = response_contract_violations(
+        template="quickReply",
+        assistant_response_text=(
+            "키너지 4S2 245/45R18 상품을 확인했어요. "
+            "오늘 장착 가능한 매장을 보려면 장착 수량과 지역이 필요해요. 몇 개를 장착하실 예정인가요?"
+        ),
+        assistant_response_source="transaction_agent",
+        response_shape_key="missing_stock_search_slots",
+        called_tools=["search_product_tool"],
+        source_domain="transaction",
+        event_data={"metadata": {"response_shape_key": "missing_stock_search_slots"}},
+        contract=contract,
+    )
+
+    violation_types = {violation["type"] for violation in violations}
+    assert "action_mode_prompt_violation" not in violation_types
+    assert "forbidden_template" not in violation_types
+
+
+def test_current_turn_action_mode_treats_today_install_product_resolution_chain_as_stock_check() -> None:
+    action_mode = chat_module._current_turn_action_mode(
+        user_text="키너지 4S2 245/45R18 오늘 장착 가능한 매장",
+        domains=[MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION],
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["discovery:resolve_or_describe_product", "transaction:stock_store_or_reservation"],
+        ),
+        regex_slots=ConversationSlots(tire_size="245/45R18"),
+        merged_slots=ConversationSlots(
+            tire_size="245/45R18",
+            availability_intent="today_install",
+            requested_cal_day="20260627",
+            pending_product_name="키너지 4S2",
+        ),
+        explicit_override_reason=None,
+        resume_source="none",
+    )
+
+    assert action_mode == "stock_check"
+
+
 def test_turn_contract_reports_missing_inventory_tool_for_pure_stock_contract() -> None:
     contract = build_turn_contract(
         user_text="4개",

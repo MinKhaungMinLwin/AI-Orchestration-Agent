@@ -1272,6 +1272,26 @@ def _current_turn_action_mode(
             return "booking_continuation"
         return "purchase_continuation"
 
+    if (
+        MultiAgentDomain.Domain.TRANSACTION in domains
+        and (
+            "stock_store_or_reservation" in plan_text
+            or "today_install" in plan_text
+            or str(getattr(merged_slots, "availability_intent", None) or "") == "today_install"
+            or bool(getattr(merged_slots, "requested_cal_day", None))
+        )
+        and any(
+            (
+                getattr(regex_slots, "tire_size", None),
+                getattr(merged_slots, "tire_size", None),
+                getattr(merged_slots, "goods_no", None),
+                getattr(merged_slots, "tire_model", None),
+                getattr(merged_slots, "pending_product_name", None),
+            )
+        )
+    ):
+        return "stock_check"
+
     if MultiAgentDomain.Domain.SUPPORT in domains:
         return "support_policy_answer"
     if MultiAgentDomain.Domain.DISCOVERY in domains:
