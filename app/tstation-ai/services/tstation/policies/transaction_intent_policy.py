@@ -407,6 +407,27 @@ def _is_order_or_reservation_context(slots: dict[str, Any]) -> bool:
     return bool(slots.get("pending_intent") in {"order", "reservation"} or slots.get("goal_type") == "place_order")
 
 
+def _is_preview_location_store_selection_turn(
+    text: str,
+    slots: dict[str, Any],
+    *,
+    current_has_product: bool,
+    explicit_tire_size: str | None,
+    current_price: bool,
+    current_purchase: bool,
+    current_reservation: bool,
+) -> bool:
+    if str(slots.get("source_tool") or "") != "transaction_store_preview_tool":
+        return False
+    if not (_has_confirmed_product_quantity_context(slots) and _has_confirmed_store_context(slots)):
+        return False
+    if current_has_product or explicit_tire_size or extract_quantity(text):
+        return False
+    if current_price or current_purchase or current_reservation:
+        return False
+    return True
+
+
 def _is_today_install_context(slots: dict[str, Any], requested_cal_day: str | None = None) -> bool:
     return bool(
         slots.get("availability_intent") == "today_install"
@@ -697,6 +718,15 @@ def build_transaction_intent_frame(
         and not current_service_duration_advisory
     )
     current_reservation = bool(_RESERVATION_RE.search(text) or _STORE_SCHEDULE_RE.search(text) or current_purchase)
+    preview_location_store_selection = _is_preview_location_store_selection_turn(
+        text,
+        slots,
+        current_has_product=current_has_product,
+        explicit_tire_size=explicit_tire_size,
+        current_price=current_price,
+        current_purchase=current_purchase,
+        current_reservation=current_reservation,
+    )
     plain_store_search = (
         current_store_search
         and not current_favorite_store_lookup
@@ -1078,12 +1108,20 @@ def build_transaction_intent_frame(
     elif current_favorite_store_lookup:
         intent = "favorite_store_lookup"
         sub_intent = "favorite"
-    elif _STORE_SEARCH_RE.search(text) and has_location and not has_product:
+    elif _STORE_SEARCH_RE.search(text) and has_location and not has_product and not preview_location_store_selection:
         intent = "store_search"
         sub_intent = "nearby" if entities["nearby"] else "region"
     elif _STOCK_RE.search(text) and selected_store_schedule_ready and not today_requested:
         intent = "stock_store_search"
         sub_intent = "reservation"
+        entities["stock_check_mode"] = "preview"
+    elif preview_location_store_selection and _is_order_or_reservation_context(slots):
+        intent = "quick_order_reservation"
+        sub_intent = "reservation"
+        entities["stock_check_mode"] = "preview"
+    elif preview_location_store_selection:
+        intent = "stock_store_search"
+        sub_intent = "today_install" if _is_today_install_context(slots, requested_cal_day) else "reservation"
         entities["stock_check_mode"] = "preview"
     elif (_STOCK_RE.search(text) or today_requested) and has_product:
         intent = "stock_store_search"

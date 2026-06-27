@@ -21697,6 +21697,7 @@ class TStationChatServiceV2:
             # template_data shape (from chat_message.py):
             #   {"type": "data", "template": "location",
             #    "data": {"stores": [...], "metadata": [{"shopId": "F00098"}, ...]}}
+            location_selection_resume_source = "none"
             if merged_slots.shop_id is None:
                 try:
                     history_location_selection_state = apply_history_location_selection_state(
@@ -21710,6 +21711,8 @@ class TStationChatServiceV2:
                     merged_slots = history_location_selection_state.updated_slots
                     if history_location_selection_state.trace_metadata:
                         vehicle_selection_trace_metadata.update(dict(history_location_selection_state.trace_metadata))
+                    if history_location_selection_state.resume_source != "none":
+                        location_selection_resume_source = history_location_selection_state.resume_source
                     if history_location_selection_state.selected_order_context:
                         logger.debug(
                             "[SLOTS] Promoted preview store selection to selected_order_context: %s",
@@ -23310,6 +23313,8 @@ class TStationChatServiceV2:
             if len(recent_user_texts) >= 3:
                 break
         resume_source = _resume_source_from_current_turn(last_user_text)
+        if resume_source == "none" and location_selection_resume_source != "none":
+            resume_source = location_selection_resume_source
         if resume_source == "none" and region_store_input_resolution.resolved:
             resume_source = region_store_input_resolution.resume_source
         previous_pending_intent = str(getattr(merged_slots, "pending_intent", None) or "").strip() or None
@@ -23406,7 +23411,14 @@ class TStationChatServiceV2:
             "rsv_hour": merged_slots.rsv_hour,
             "pending_intent": merged_slots.pending_intent,
             "goal_type": merged_slots.goal_type,
+            "stock_check_mode": getattr(merged_slots, "stock_check_mode", None),
         }
+        selected_order_context = merged_slots.order_context.get("selected_order_context") if isinstance(getattr(merged_slots, "order_context", None), dict) else None
+        if isinstance(selected_order_context, dict):
+            for key in ("stock_check_mode", "schedule_mode", "source_tool"):
+                value = selected_order_context.get(key)
+                if value not in (None, ""):
+                    transaction_known_slots[key] = value
         if _router_contract_is_price_or_benefit_alert(routing_result):
             transaction_known_slots["router_transaction_intent"] = "price_or_benefit_alert_request"
         elif _router_contract_is_order_cancel_fee_inquiry(routing_result):

@@ -11268,8 +11268,11 @@ def test_preview_location_selection_recovers_transaction_slots() -> None:
         "tire_size": "205/60R15",
         "ord_qty": 4,
         "region": "서울",
+        "source_tool": "transaction_store_preview_tool",
         "pending_intent": "stock",
         "goal_type": "store_with_stock",
+        "stock_check_mode": "preview",
+        "schedule_mode": "logistics_only",
     }
 
 
@@ -12931,10 +12934,102 @@ def test_apply_history_location_selection_state_promotes_preview_store_context()
     assert state.updated_slots.shop_id == "F00098"
     assert state.updated_slots.pending_intent == "order"
     assert state.updated_slots.goal_type == "place_order"
+    assert state.flow_type == "purchase_location_selection"
+    assert state.resume_source == "location_selection:transaction_store_preview"
     assert state.selected_order_context is not None
     assert state.selected_order_context["shop_id"] == "F00098"
+    assert state.trace_metadata["location_selection_source_tool"] == "transaction_store_preview_tool"
+    assert state.trace_metadata["location_selection_flow_type"] == "purchase_location_selection"
     assert state.trace_metadata["selected_entity_type"] == "store"
     assert state.trace_metadata["selection_source"] == "previous_location_candidate"
+
+
+def test_apply_history_location_selection_state_preserves_preview_schedule_metadata_for_purchase_flow() -> None:
+    slots = ConversationSlots(
+        shop_id=None,
+        order_context=None,
+        pending_intent="stock",
+        goal_type="store_with_stock",
+        stock_check_mode="inventory_only",
+    )
+    latest_location_tmpl = {
+        "stores": [{"nameAddress": "티스테이션 판교점"}],
+        "metadata": [{
+            "shopId": "F00098",
+            "shopName": "티스테이션 판교점",
+            "sourceTool": "transaction_store_preview_tool",
+            "goodsNo": "G000000309715",
+            "tireSize": "225/55R18",
+            "ordQty": 4,
+            "region": "분당",
+            "pendingIntent": "order",
+            "goalType": "place_order",
+            "stockCheckMode": "preview",
+            "scheduleMode": "logistics_only",
+            "slots": [{"cal_day": "20260630", "tm": "11"}],
+        }],
+    }
+
+    state = apply_history_location_selection_state(
+        last_user_text="티스테이션 판교점 선택",
+        latest_location_tmpl=latest_location_tmpl,
+        merged_slots=slots,
+        resolve_store_selection_from_history_template_fn=lambda user_text, template: resolve_store_selection_from_history_template(
+            user_text, {"template": "location", "data": template}
+        ),
+        preview_location_slot_values_from_selection_fn=preview_location_slot_values_from_selection,
+        selected_order_context_from_preview_values_fn=selected_order_context_from_preview_values,
+    )
+
+    assert state.updated_slots.shop_id == "F00098"
+    assert state.updated_slots.pending_intent == "order"
+    assert state.updated_slots.goal_type == "place_order"
+    assert state.selected_order_context is not None
+    assert state.selected_order_context["stock_check_mode"] == "preview"
+    assert state.selected_order_context["schedule_mode"] == "logistics_only"
+    assert state.selected_order_context["slots"] == [{"cal_day": "20260630", "tm": "11"}]
+    assert state.trace_metadata["selected_schedule_mode"] == "logistics_only"
+    assert state.trace_metadata["selected_slots_count"] == 1
+    assert state.trace_metadata["location_selection_contract_action"] == "purchase_continuation"
+    assert state.trace_metadata["metadata_overrode_stale_stock_check_mode"] is True
+
+
+def test_location_selection_preview_purchase_flow_keeps_quick_order_reservation_contract() -> None:
+    values = {
+        "goods_no": "G000000309715",
+        "tire_size": "225/55R18",
+        "ord_qty": 4,
+        "shop_id": "F00098",
+        "shop_name": "티스테이션 판교점",
+        "region": "분당",
+        "pending_intent": "order",
+        "goal_type": "place_order",
+        "stock_check_mode": "preview",
+        "source_tool": "transaction_store_preview_tool",
+    }
+
+    frame = build_transaction_intent_frame("티스테이션 판교점 선택", known_slots=values)
+    tool_plan = plan_transaction_tools(frame)
+    contract = build_turn_contract(
+        user_text="티스테이션 판교점 선택",
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=decide_transaction_response(
+            intent=frame.intent,
+            user_text="티스테이션 판교점 선택",
+            known_slots=dict(frame.known_slots),
+        ),
+        merged_slots=ConversationSlots(**values),
+        action_mode="purchase_continuation",
+        context_state="resumed",
+        resume_source="location_selection:transaction_store_preview",
+    )
+
+    assert frame.intent == "quick_order_reservation"
+    assert contract.intent == "quick_order_reservation"
+    assert contract.action_mode == "purchase_continuation"
+    assert contract.resume_source == "location_selection:transaction_store_preview"
+    assert "get_store_schedule_tool" in contract.allowed_tools
 
 
 def test_vehicle_tire_size_lookup_ui_action_validation_blocks_store_and_purchase_chips() -> None:

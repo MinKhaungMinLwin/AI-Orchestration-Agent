@@ -200,6 +200,8 @@ class HistoryLocationSelectionState:
     selected_location: Mapping[str, Any] | None = None
     resolved_shop_id: str | None = None
     selected_order_context: Mapping[str, Any] | None = None
+    flow_type: str = "plain_store_search"
+    resume_source: str = "none"
     trace_metadata: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -1450,12 +1452,28 @@ def apply_history_location_selection_state(
         return HistoryLocationSelectionState(updated_slots=merged_slots, selected_location=selected_location)
 
     preview_values = preview_location_slot_values_from_selection_fn(selected_location) or {"shop_id": resolved_shop_id}
+    source_tool = str(preview_values.get("source_tool") or "").strip()
+    pending_intent = str(preview_values.get("pending_intent") or "").strip()
+    goal_type = str(preview_values.get("goal_type") or "").strip()
+    flow_type = "plain_store_search"
+    resume_source = "none"
+    if source_tool == "transaction_store_preview_tool":
+        if pending_intent == "order" or goal_type == "place_order":
+            flow_type = "purchase_location_selection"
+        elif pending_intent == "stock" or goal_type == "store_with_stock":
+            flow_type = "stock_location_selection"
+        else:
+            flow_type = "preview_location_selection"
+        resume_source = "location_selection:transaction_store_preview"
+    elif source_tool in {"search_stores_tool", "get_store_list_tool", "get_nearby_stores_tool"}:
+        flow_type = "store_search_location_selection"
+        resume_source = "location_selection:store_search"
     updated_slots = merged_slots.apply_runtime_values(
         preview_values,
         source="preview_location_template_selection" if preview_values.get("goods_no") else "location_template_selection",
     )
     selected_order_context = None
-    if preview_values:
+    if preview_values and flow_type == "purchase_location_selection":
         selected_order_context = selected_order_context_from_preview_values_fn(preview_values)
         if selected_order_context:
             order_context = dict(updated_slots.order_context or {})
@@ -1463,18 +1481,38 @@ def apply_history_location_selection_state(
             updated_slots.order_context = order_context
             updated_slots.pending_intent = "order"
             updated_slots.goal_type = "place_order"
+    elif preview_values and flow_type == "stock_location_selection":
+        updated_slots.pending_intent = "stock"
+        updated_slots.goal_type = "store_with_stock"
     trace_metadata = {
         "selected_entity_type": "store",
         "selected_entity_id": resolved_shop_id,
         "selection_source": "previous_location_candidate",
         "validation_result": "resolved_from_history",
         "fallback_behavior": "previous_location_candidate",
+        "location_selection_source_tool": source_tool or None,
+        "location_selection_flow_type": flow_type,
+        "selected_shop_id": resolved_shop_id,
+        "selected_schedule_mode": str(preview_values.get("schedule_mode") or "").strip() or None,
+        "selected_slots_count": len(preview_values.get("slots") or ()) if isinstance(preview_values.get("slots"), list) else 0,
+        "location_selection_contract_action": (
+            "purchase_continuation"
+            if flow_type == "purchase_location_selection"
+            else "stock_check" if flow_type == "stock_location_selection" else "store_search"
+        ),
+        "metadata_overrode_stale_stock_check_mode": bool(
+            preview_values.get("stock_check_mode")
+            and str(getattr(merged_slots, "stock_check_mode", None) or "") != str(preview_values.get("stock_check_mode") or "")
+        ),
+        "location_selection_resume_source": resume_source,
     }
     return HistoryLocationSelectionState(
         updated_slots=updated_slots,
         selected_location=selected_location,
         resolved_shop_id=resolved_shop_id,
         selected_order_context=selected_order_context,
+        flow_type=flow_type,
+        resume_source=resume_source,
         trace_metadata=trace_metadata,
     )
 
@@ -1993,16 +2031,36 @@ def preview_location_slot_values_from_selection(selection: Mapping[str, Any] | N
     region = str(canonical_meta.get("region") or "").strip()
     if region:
         values["region"] = region
+    source_tool = str(meta.get("sourceTool") or meta.get("source_tool") or "").strip()
+    if source_tool:
+        values["source_tool"] = source_tool
     pending_intent = str(meta.get("pendingIntent") or "").strip()
     if pending_intent in {"stock", "order"}:
         values["pending_intent"] = pending_intent
     goal_type = str(meta.get("goalType") or "").strip()
     if goal_type in {"store_with_stock", "place_order"}:
         values["goal_type"] = goal_type
+    stock_check_mode = str(
+        meta.get("stockCheckMode")
+        or meta.get("stock_check_mode")
+        or meta.get("inventoryMode")
+        or meta.get("inventory_mode")
+        or ""
+    ).strip()
+    if stock_check_mode:
+        values["stock_check_mode"] = stock_check_mode
+    schedule_mode = str(meta.get("scheduleMode") or meta.get("schedule_mode") or "").strip()
+    if schedule_mode:
+        values["schedule_mode"] = schedule_mode
+    slots = meta.get("slots")
+    if isinstance(slots, list):
+        normalized_slots = [dict(slot) for slot in slots if isinstance(slot, Mapping)]
+        if normalized_slots:
+            values["slots"] = normalized_slots
     if not values.get("pending_intent") and values.get("goods_no") and values.get("ord_qty"):
-        values["pending_intent"] = "stock"
+        values["pending_intent"] = "order" if source_tool == "transaction_store_preview_tool" else "stock"
     if not values.get("goal_type") and values.get("goods_no") and values.get("ord_qty"):
-        values["goal_type"] = "store_with_stock"
+        values["goal_type"] = "place_order" if source_tool == "transaction_store_preview_tool" else "store_with_stock"
     return values or None
 
 
@@ -2747,6 +2805,14 @@ def selected_order_context_from_preview_values(preview_values: Mapping[str, Any]
         value = preview_values.get(key_name)
         if value not in (None, "", [], {}):
             context[key_name] = value
+    slots = preview_values.get("slots")
+    if isinstance(slots, list):
+        normalized_slots = [dict(slot) for slot in slots if isinstance(slot, Mapping)]
+        if normalized_slots:
+            context["slots"] = normalized_slots
+    source_tool = preview_values.get("source_tool")
+    if source_tool not in (None, "", [], {}):
+        context["source_tool"] = source_tool
     context["pending_intent"] = "order"
     context["goal_type"] = "place_order"
     context["source"] = "preview_location_template_selection"
@@ -2773,6 +2839,7 @@ def apply_selected_order_context_for_purchase_cta(slots: Any) -> tuple[Any, dict
             "goal_type",
             "requested_cal_day",
             "rsv_hour",
+            "stock_check_mode",
         }
         and value not in (None, "", [], {})
     }
