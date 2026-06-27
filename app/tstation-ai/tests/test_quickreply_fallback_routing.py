@@ -20901,6 +20901,50 @@ def test_order_document_support_policy_prefers_order_history_before_qna() -> Non
     assert "주문 내역" in response_decision.assistant_guidance
 
 
+def test_delivery_delay_reservation_schedule_policy_contract_blocks_owned_lookup_and_schedule_tools() -> None:
+    contract = build_turn_contract(
+        user_text="주문 다 했는데 배송 지연 되면 예약 일정도 자동으로 변경돼?",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:delivery_delay_reservation_schedule_policy"],
+            policy_intent="delivery_delay_reservation_schedule_policy",
+        ),
+        merged_slots={
+            "goods_no": "G000000317666",
+            "ord_qty": 2,
+            "shop_id": "F00123",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        action_mode="support_policy_answer",
+        context_state="dormant",
+        dormant_context_reason="current_turn_action:support_policy_answer",
+    )
+
+    assert contract.domain == "support"
+    assert contract.intent == "delivery_delay_reservation_schedule_policy"
+    assert contract.required_slots == ()
+    assert contract.blocking_required_slots == ()
+    assert "search_faq_hybrid_tool" in contract.allowed_tools
+    assert "get_my_reservations_tool" in contract.forbidden_tools
+    assert "get_orders_of_user_tool" in contract.forbidden_tools
+    assert "get_order_status_tool" in contract.forbidden_tools
+    assert "get_store_schedule_tool" in contract.forbidden_tools
+    assert "transaction_store_preview_tool" in contract.forbidden_tools
+
+
+def test_delivery_delay_reservation_schedule_support_policy_prefers_quickreply_policy_answer() -> None:
+    response_decision = decide_support_response(
+        intent="delivery_delay_reservation_schedule_policy",
+        user_text="배송 지연 문자가 왔어. 내 예약도 자동 변경되나?",
+    )
+
+    assert response_decision.metadata["response_shape_key"] == "delivery_delay_reservation_schedule_policy"
+    assert response_decision.template == TemplateName.QUICK_REPLY
+    assert "start_owned_reservation_lookup" in response_decision.forbidden_behaviors
+    assert "자동 변경" in response_decision.assistant_guidance
+
+
 def test_tire_manufacture_date_policy_contract_requires_faq_before_qna() -> None:
     contract = build_turn_contract(
         user_text="제조일자가 6개월 전 거야. 새 걸로 바꿔줘",
@@ -21528,6 +21572,31 @@ def test_coupon_usage_policy_augments_faq_query() -> None:
 
     assert "다운받은 쿠폰 현장 결제할 때도 쓸 수 있어?" in query
     assert "쿠폰 사용처 온라인 전용 오프라인 매장 사용 현장 결제 유의사항" in query
+
+
+def test_delivery_delay_reservation_schedule_policy_augments_faq_query() -> None:
+    token = current_support_policy_intent.set("delivery_delay_reservation_schedule_policy")
+    try:
+        query = _augment_faq_query_for_policy("배송 지연 문자가 왔어. 내 예약도 자동 변경되나?")
+    finally:
+        current_support_policy_intent.reset(token)
+
+    assert "배송 지연 문자가 왔어. 내 예약도 자동 변경되나?" in query
+    assert "배송 지연 예약 일정 자동 변경 해피콜 상품 미도착 일정 조정" in query
+
+
+def test_support_faq_policy_event_for_delivery_delay_reservation_schedule_uses_policy_fallback() -> None:
+    event = _build_support_faq_policy_event(
+        "delivery_delay_reservation_schedule_policy",
+        "배송 지연 문자가 왔어. 내 예약도 자동 변경되나?",
+        tool_result={"status": "success", "data": {"items": []}},
+    )
+
+    assert event is not None
+    assistant = event["data"]["assistantResponse"]
+    assert "배송 지연으로 예약 일정이 자동 변경되지는 않아요." in assistant
+    assert "해피콜" in assistant
+    assert _labels(event["data"]["quickReplies"]) == ["1:1 문의하기", "처음으로"]
 
 
 @pytest.mark.parametrize(

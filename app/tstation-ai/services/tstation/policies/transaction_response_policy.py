@@ -69,6 +69,8 @@ def decide_transaction_response(
         return _decide_reservation_store_info_lookup()
     if intent == "reservation_status_lookup":
         return _decide_reservation_status_lookup()
+    if intent == "delivery_delay_reservation_schedule_policy":
+        return _decide_delivery_delay_reservation_schedule_policy()
     if intent == "order_arrival_status_lookup":
         return _decide_order_arrival_status_lookup()
     if intent == "order_cancel_status_lookup":
@@ -353,6 +355,24 @@ def _decide_reservation_status_lookup() -> ResponseDecision:
             "기존 예약 상태/존재 확인은 현재 턴의 owned-record 조회다. "
             "stale 상품/매장 슬롯으로 상품 검색이나 예약 가능 시간 조회로 돌리지 말고, "
             "get_my_reservations_tool 또는 주문/예약 source를 확인한 뒤 확인된 예약만 안내한다."
+        ),
+    )
+
+
+def _decide_delivery_delay_reservation_schedule_policy() -> ResponseDecision:
+    return _decision(
+        response_shape_key="delivery_delay_reservation_schedule_policy",
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        forbidden_behaviors=(
+            "start_owned_reservation_lookup",
+            "normalize_as_store_schedule_lookup",
+            "claim_personal_reservation_changed",
+        ),
+        assistant_guidance=(
+            "배송 지연 시 예약 일정이 자동 변경되는지 묻는 질문은 일반 정책 안내다. "
+            "개인 주문/예약 조회나 매장 예약 시간 조회를 시작하지 말고, 배송 지연으로 예약 일정이 자동 변경되지는 않으며 "
+            "상품이 예약 일정에 맞춰 도착하지 않으면 해피콜 등으로 안내받을 수 있다고 설명한다."
         ),
     )
 

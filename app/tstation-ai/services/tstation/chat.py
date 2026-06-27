@@ -814,6 +814,7 @@ class MultiAgentDomain(BaseModel):
         "payment_error_troubleshooting",
         "order_document_guidance",
         "general_card_cancel_timing_policy",
+        "delivery_delay_reservation_schedule_policy",
         "tire_manufacture_date_policy",
         "tire_quality_warranty_policy",
         "assurance_service_policy",
@@ -1058,6 +1059,7 @@ _CURRENT_TURN_SUPPORT_POLICY_ACTION_INTENTS = frozenset({
     "payment_error_troubleshooting",
     "order_document_guidance",
     "general_card_cancel_timing_policy",
+    "delivery_delay_reservation_schedule_policy",
     "tire_manufacture_date_policy",
     "tire_quality_warranty_policy",
     "assurance_service_policy",
@@ -2167,6 +2169,7 @@ class _SlimMultiAgentDomain(BaseModel):
         "payment_error_troubleshooting",
         "order_document_guidance",
         "general_card_cancel_timing_policy",
+        "delivery_delay_reservation_schedule_policy",
         "tire_manufacture_date_policy",
         "tire_quality_warranty_policy",
         "assurance_service_policy",
@@ -7167,6 +7170,11 @@ def _build_support_faq_policy_event(
             "쿠폰 번호나 코드 등록 위치는 쿠폰 안내 경로와 쿠폰함 정책에 따라 달라질 수 있어요.\n"
             "쿠폰 등록/입력 위치와 사용 방법은 쿠폰 상세 안내와 쿠폰함 경로를 먼저 확인해 주세요."
         ),
+        "delivery_delay_reservation_schedule_policy": (
+            "배송 지연으로 예약 일정이 자동 변경되지는 않아요.\n"
+            "매장별 지정 예약 일정에 상품이 제때 도착하지 않으면 해피콜 등으로 별도 안내드릴 수 있어요.\n"
+            "안내를 받으시면 매장이나 고객센터 안내에 따라 일정을 조정해 주세요."
+        ),
         "tire_condition_photo_policy": (
             "현재 챗봇에서는 사진이나 파일을 업로드해 확인받을 수 없어요.\n"
             "사진만으로는 타이어 마모 상태, 교체 필요 여부, 주행 안전을 확정할 수 없어요. "
@@ -7181,6 +7189,7 @@ def _build_support_faq_policy_event(
         "tire_manufacture_date_policy": "제조일자만으로 교환이나 환불을 단정하지 말고, 필요하면 제품 상태와 구매 이력도 함께 확인해 주세요.",
         "tire_quality_warranty_policy": required_guidance_by_intent["tire_quality_warranty_policy"],
         "assurance_service_policy": required_guidance_by_intent["assurance_service_policy"],
+        "delivery_delay_reservation_schedule_policy": required_guidance_by_intent["delivery_delay_reservation_schedule_policy"],
         "reservation_policy_guidance": "실제 예약 변경이나 취소 전에는 예약 상세 안내도 함께 확인해 주세요.",
         "installation_work_policy": "추가 작업비나 현장 결제 여부는 정책과 작업 범위에 따라 달라질 수 있어요.",
         "promotion_gift_policy": required_guidance_by_intent["promotion_gift_policy"],
@@ -7194,6 +7203,7 @@ def _build_support_faq_policy_event(
         "tire_manufacture_date_policy": "타이어 제조일자와 신품 기준은 정책에 따라 안내되고, 제조일자만으로 불량이나 교환 가능 여부를 바로 단정할 수는 없어요.",
         "tire_quality_warranty_policy": required_guidance_by_intent["tire_quality_warranty_policy"],
         "assurance_service_policy": required_guidance_by_intent["assurance_service_policy"],
+        "delivery_delay_reservation_schedule_policy": required_guidance_by_intent["delivery_delay_reservation_schedule_policy"],
         "reservation_policy_guidance": "예약 가능 기간, 취소, 변경 조건은 정책 기준으로 먼저 확인해 보는 것이 안전해요.",
         "installation_work_policy": "공임, 장착비, 추가 작업 비용은 작업 범위와 정책에 따라 달라질 수 있어요.",
         "promotion_gift_policy": required_guidance_by_intent["promotion_gift_policy"],
@@ -16073,6 +16083,7 @@ _FAQ_POLICY_FALLBACK_INTENTS = frozenset({
     "tire_quality_warranty_policy",
     "assurance_service_policy",
     "reservation_policy_guidance",
+    "delivery_delay_reservation_schedule_policy",
     "installation_work_policy",
     "promotion_gift_policy",
     "tire_condition_photo_policy",

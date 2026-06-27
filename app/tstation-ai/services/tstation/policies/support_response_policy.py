@@ -57,6 +57,12 @@ _RESERVATION_POLICY_GUIDANCE_RE = re.compile(
     r"장착점\s*변경|몇\s*주\s*뒤까지\s*예약|예약\s*가능",
     re.IGNORECASE,
 )
+_DELIVERY_DELAY_RESERVATION_SCHEDULE_POLICY_RE = re.compile(
+    r"(?=.*(?:배송\s*지연|상품\s*미도착|미도착|입고\s*지연|배송\s*늦))"
+    r"(?=.*(?:예약\s*(?:일정|시간)?.{0,8}자동\s*(?:변경|바뀌|밀리)|"
+    r"자동\s*(?:변경|바뀌|밀리).{0,20}예약|예약\s*(?:일정|시간)?.{0,12}(?:변경되|바뀌|밀리)))",
+    re.IGNORECASE,
+)
 _INSTALLATION_WORK_POLICY_RE = re.compile(
     r"작업\s*중\s*취소|공임(?:비)?|장착비|폐타이어|얼라인먼트.{0,16}(현장\s*결제|추가|따로)|"
     r"공임만\s*받고\s*장착|추가\s*작업",
@@ -240,6 +246,23 @@ def decide_support_response(
                 "타이어 제조일자/DOT/신품 여부 문의는 FAQ hybrid 검색을 먼저 수행하고, 검색 근거 범위 안에서 "
                 "6~12개월 이내 제품은 정상 신품 범주로 안내한다. 제조일자만으로 불량, 교환, 환불을 단정하지 말고 "
                 "정책 안내를 먼저 제공한다."
+            ),
+        )
+
+    if intent == "delivery_delay_reservation_schedule_policy" or _DELIVERY_DELAY_RESERVATION_SCHEDULE_POLICY_RE.search(text):
+        return _decision(
+            response_shape_key="delivery_delay_reservation_schedule_policy",
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=(
+                "start_owned_reservation_lookup",
+                "normalize_as_store_schedule_lookup",
+                "claim_personal_reservation_changed",
+            ),
+            assistant_guidance=(
+                "배송 지연 때문에 예약 일정이 자동 변경되는지 묻는 경우는 일반 정책 안내다. "
+                "내 예약/주문 조회나 매장 예약 가능 시간 조회를 먼저 시작하지 말고, 배송 지연으로 예약 일정이 자동 변경되지는 않으며 "
+                "상품이 예약 일정에 맞춰 도착하지 않으면 매장 해피콜 등으로 안내받을 수 있다고 설명한다."
             ),
         )
 

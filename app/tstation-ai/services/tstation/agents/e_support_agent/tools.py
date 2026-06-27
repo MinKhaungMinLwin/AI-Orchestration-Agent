@@ -107,6 +107,9 @@ _COUPON_USAGE_POLICY_FAQ_ANCHORS = (
 _COUPON_REGISTRATION_POLICY_FAQ_ANCHORS = (
     "쿠폰 번호 등록 입력 사용 방법 쿠폰함",
 )
+_DELIVERY_DELAY_RESERVATION_SCHEDULE_POLICY_FAQ_ANCHORS = (
+    "배송 지연 예약 일정 자동 변경 해피콜 상품 미도착 일정 조정",
+)
 
 
 def _augment_faq_query_for_policy(query: str) -> str:
@@ -136,6 +139,8 @@ def _augment_faq_query_for_policy(query: str) -> str:
         anchors = _COUPON_USAGE_POLICY_FAQ_ANCHORS
     elif policy_intent == "coupon_registration_policy":
         anchors = _COUPON_REGISTRATION_POLICY_FAQ_ANCHORS
+    elif policy_intent == "delivery_delay_reservation_schedule_policy":
+        anchors = _DELIVERY_DELAY_RESERVATION_SCHEDULE_POLICY_FAQ_ANCHORS
     else:
         return text
     missing_anchors = [anchor for anchor in anchors if anchor not in text]

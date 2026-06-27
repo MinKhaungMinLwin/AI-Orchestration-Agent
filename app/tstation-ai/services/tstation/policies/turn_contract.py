@@ -175,6 +175,7 @@ _REFERENCE_GUARD_EXEMPT_INTENTS = frozenset({
     "coupon_registration_policy",
     "maintenance_history_access_policy",
     "order_document_guidance",
+    "delivery_delay_reservation_schedule_policy",
     "legal_action_guidance_denied",
     "human_escalation",
     "support_faq",
@@ -436,6 +437,9 @@ def build_turn_contract(
     if code_intent == "order_document_guidance" or planner_intent == "order_document_guidance":
         domain = "support"
         intent = "order_document_guidance"
+    if code_intent == "delivery_delay_reservation_schedule_policy" or planner_intent == "delivery_delay_reservation_schedule_policy":
+        domain = "support"
+        intent = "delivery_delay_reservation_schedule_policy"
     if code_intent == "general_card_cancel_timing_policy" or planner_intent == "general_card_cancel_timing_policy":
         domain = "support"
         intent = "general_card_cancel_timing_policy"
@@ -629,6 +633,17 @@ def build_turn_contract(
                 "quick_order_tool",
             ),
         )
+    if intent == "delivery_delay_reservation_schedule_policy":
+        forbidden_tools = _merge_tuple(
+            forbidden_tools,
+            (
+                "get_my_reservations_tool",
+                "get_orders_of_user_tool",
+                "get_order_status_tool",
+                "get_store_schedule_tool",
+                "transaction_store_preview_tool",
+            ),
+        )
     if intent == "general_card_cancel_timing_policy":
         forbidden_tools = _merge_tuple(
             forbidden_tools,
@@ -710,6 +725,23 @@ def build_turn_contract(
                 "1:1 문의는 보조 CTA로만 둔다."
             ),
             "metadata": {"response_shape_key": "order_document_guidance"},
+        }
+    if intent == "delivery_delay_reservation_schedule_policy" and response_decision_payload is None:
+        response_decision_payload = {
+            "response_shape": "summary",
+            "template": "quickReply",
+            "required_slots": [],
+            "forbidden_behaviors": [
+                "start_owned_reservation_lookup",
+                "normalize_as_store_schedule_lookup",
+                "claim_personal_reservation_changed",
+            ],
+            "assistant_guidance": (
+                "배송 지연으로 예약 일정이 자동 변경되는지 묻는 질문은 일반 정책 안내로 답한다. "
+                "배송 지연으로 예약 일정이 자동 변경되지는 않으며, 상품이 예약 일정에 맞춰 도착하지 않으면 "
+                "매장 해피콜 등으로 안내받을 수 있다고 설명한다."
+            ),
+            "metadata": {"response_shape_key": "delivery_delay_reservation_schedule_policy"},
         }
     if intent in {"coupon_usage_policy", "coupon_registration_policy"} and response_decision_payload is None:
         response_decision_payload = {
