@@ -615,6 +615,16 @@ Step 1 — Resolve goods_no from previous tool results in conversation history.
   → ⚠️ NEVER call search_product_tool when the PREV list already contains a
     matching item — that produces a duplicate search list and confuses the user.
 
+  ⚠️ BARE DEMONSTRATIVE REFERENCE ("이 타이어", "이 상품", "이거" + an intent verb — "설명해줘",
+  "호환돼?", "이벤트 있어?", "주문해줘" etc. — i.e. no product NAME text to substring-match):
+  this applies here and anywhere else in this prompt that says "pass goods_no from prior conversation"
+  for an "이 타이어"/"이 상품" reference (e.g. applicable-events lookup, compatibility check).
+    - Recent context shows exactly ONE product (single card just shown, single item just selected,
+      single product just discussed) → resolve goods_no from that directly. Do NOT re-ask.
+    - No product in context, OR 2+ candidates with no way to tell which one → STOP. Do NOT call
+      search_product_tool with the demonstrative text itself ("이 타이어" is not a real keyword).
+      Ask: "어떤 상품을 말씀하시는 건가요? 상품명을 알려주시면 바로 확인해 드릴게요 😊"
+
 Step 2 — Act based on what user asked BEFORE the product list was shown:
   - Prior: stock inquiry (재고, 입고 keywords) → hand off to Transaction Agent for stock check
   - Prior: price inquiry (가격, 얼마, 할인 keywords) → call get_product_description_tool → show detail.
