@@ -24532,9 +24532,14 @@ def test_purchase_stock_canonical_readthrough_fills_missing_purchase_context_onl
     assert updated_slots.pending_product_name == "벤투스 S2 AS"
     assert updated_slots.payment_amount == 308200
     assert updated_slots.region == "동탄"
-    assert metadata["canonical_readthrough_applied"] is True
-    assert "goods_no" in metadata["canonical_filled_fields"]
-    assert "payment_amount" in metadata["canonical_filled_fields"]
+    assert metadata["flow_state_read_applied"] is True
+    assert metadata["flow_state_before"]["goods_no"] == "G000000310126"
+    assert metadata["flow_state_delta"]["region"] == "동탄"
+    assert metadata["flow_state_after"]["payment_amount"] == 308200
+    assert metadata["flow_state_after"]["goods_no"] == "G000000310126"
+    assert "tire_model" in metadata["flow_state_filled_fields"]
+    assert updated_slots.availability_context["pending_order_context"]["product_name"] == "벤투스 S2 AS"
+    assert updated_slots.availability_context["pending_order_context"]["payment_amount"] == 308200
 
 
 def test_purchase_stock_canonical_readthrough_uses_preview_price_basis_for_payment_amount() -> None:
@@ -24576,8 +24581,13 @@ def test_purchase_stock_canonical_readthrough_uses_preview_price_basis_for_payme
 
     assert updated_slots.payment_amount == 308200
     assert updated_slots.tire_model == "벤투스 S2 AS"
-    assert metadata["canonical_price_basis"] == "cheapest_final_prc"
-    assert metadata["canonical_price_source_tool"] == "transaction_store_preview_tool"
+    assert metadata["price_basis"] == "cheapest_final_prc"
+    assert metadata["price_source_tool"] == "transaction_store_preview_tool"
+    assert updated_slots.availability_context["pending_order_context"]["price_basis"] == "cheapest_final_prc"
+    assert (
+        updated_slots.availability_context["pending_order_context"]["price_source_tool"]
+        == "transaction_store_preview_tool"
+    )
 
 
 def test_store_view_cta_with_pending_purchase_context_resumes_purchase_flow() -> None:
@@ -25666,6 +25676,7 @@ def test_direct_preorder_event_recovers_product_and_payment_from_pending_order_c
     assert event is not None
     assert event["data"]["orderInfo"]["product"] == "벤투스 S2 AS 245/45R19"
     assert event["data"]["orderInfo"]["paymentAmount"] == 308200
+    assert event["data"]["metadata"]["missingPreorderContext"] == []
 
 
 def test_ready_preorder_card_without_quick_order_tool_is_allowed_under_reservation_contract() -> None:

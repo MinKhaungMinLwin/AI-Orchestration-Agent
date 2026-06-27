@@ -8270,10 +8270,20 @@ def _build_direct_preorder_event_from_slots(
                 "tireSize": tire_size,
                 "carNo": car_no or None,
                 "carLncCd": str(slot_values.get("car_lnc_cd") or "").strip() or None,
+                "missingPreorderContext": [],
             },
         },
         "nextAction": {"type": "stop", "domain": None},
     }
+    missing_preorder_context: list[str] = []
+    if not product_name:
+        missing_preorder_context.append("product_name")
+    if not tire_size:
+        missing_preorder_context.append("tire_size")
+    if normalized_payment_amount is None:
+        missing_preorder_context.append("payment_amount")
+    if missing_preorder_context:
+        event["data"]["metadata"]["missingPreorderContext"] = missing_preorder_context
     _standardize_preorder_metadata(event["data"], slot_state)
     return event
 
@@ -20106,7 +20116,17 @@ def _demote_stale_tire_size_for_new_product_transaction(
 def _pending_order_context_values(slots: ConversationSlots) -> dict[str, Any]:
     values: dict[str, Any] = {}
     invalid_region = _is_invalid_region_action_label_text(getattr(slots, "region", None))
-    for field in ("goods_no", "tire_size", "ord_qty", "region", "shop_id", "shop_name", "payment_amount"):
+    for field in (
+        "goods_no",
+        "tire_size",
+        "ord_qty",
+        "region",
+        "shop_id",
+        "shop_name",
+        "payment_amount",
+        "requested_cal_day",
+        "rsv_hour",
+    ):
         value = getattr(slots, field, None)
         if field == "shop_name" and _is_invalid_store_slot_value(str(value or "")):
             continue
@@ -20129,6 +20149,17 @@ def _pending_order_context_values(slots: ConversationSlots) -> dict[str, Any]:
         values["availability_intent"] = slots.availability_intent
     if getattr(slots, "requested_cal_day", None):
         values["requested_cal_day"] = slots.requested_cal_day
+    availability_context = getattr(slots, "availability_context", None)
+    if isinstance(availability_context, Mapping):
+        existing_pending_context = (
+            availability_context.get("pending_order_context")
+            if isinstance(availability_context.get("pending_order_context"), Mapping)
+            else {}
+        )
+        for field in ("price_basis", "price_source_tool"):
+            value = existing_pending_context.get(field)
+            if value not in (None, "", [], {}):
+                values[field] = value
     pending_intent = str(values.get("pending_intent") or getattr(slots, "pending_intent", None) or "").strip()
     goal_type = str(values.get("goal_type") or getattr(slots, "goal_type", None) or "").strip()
     needs_store_region = bool(
@@ -20236,7 +20267,7 @@ def _extract_quantity_only_followup_value(user_text: str) -> int | None:
     return parsed.ord_qty
 
 
-def _canonical_purchase_stock_context_values(
+def _flow_state_from_purchase_stock_sources(
     *,
     slots: ConversationSlots,
     latest_product_tmpl: Mapping[str, Any] | None = None,
@@ -20277,7 +20308,7 @@ def _canonical_purchase_stock_context_values(
     dormant_transaction_context = (
         availability_context.get("dormant_transaction_context") if isinstance(availability_context, Mapping) else None
     )
-    context_values: dict[str, Any] = {}
+    flow_state_before: dict[str, Any] = {}
     for source_context in (
         pending_context if isinstance(pending_context, Mapping) else None,
         dormant_purchase_context if isinstance(dormant_purchase_context, Mapping) else None,
@@ -20307,8 +20338,8 @@ def _canonical_purchase_stock_context_values(
             "price_source_tool",
         ):
             value = source_context.get(key)
-            if value not in (None, "", [], {}) and context_values.get(key) in (None, "", [], {}):
-                context_values[key] = value
+            if value not in (None, "", [], {}) and flow_state_before.get(key) in (None, "", [], {}):
+                flow_state_before[key] = value
 
     template_values: dict[str, Any] = {}
     for template_values_source in (
@@ -20350,9 +20381,9 @@ def _canonical_purchase_stock_context_values(
             if not rows:
                 continue
             matched_row = None
-            current_goods_no = str(current_values.get("goods_no") or context_values.get("goods_no") or "").strip()
+            current_goods_no = str(current_values.get("goods_no") or flow_state_before.get("goods_no") or "").strip()
             current_tire_size = normalize_tire_size(
-                str(current_values.get("tire_size") or context_values.get("tire_size") or "")
+                str(current_values.get("tire_size") or flow_state_before.get("tire_size") or "")
             )
             for row in rows:
                 canonical_row = canonical_context_from_tool_boundary(row)
@@ -20383,12 +20414,12 @@ def _canonical_purchase_stock_context_values(
                 if isinstance(schedule_stores, list):
                     preview_candidates.extend(item for item in schedule_stores if isinstance(item, Mapping))
             if preview_candidates:
-                current_goods_no = str(current_values.get("goods_no") or context_values.get("goods_no") or "").strip()
+                current_goods_no = str(current_values.get("goods_no") or flow_state_before.get("goods_no") or "").strip()
                 current_tire_size = normalize_tire_size(
-                    str(current_values.get("tire_size") or context_values.get("tire_size") or "")
+                    str(current_values.get("tire_size") or flow_state_before.get("tire_size") or "")
                 )
-                current_shop_id = str(current_values.get("shop_id") or context_values.get("shop_id") or "").strip()
-                current_shop_name = str(current_values.get("shop_name") or context_values.get("shop_name") or "").strip()
+                current_shop_id = str(current_values.get("shop_id") or flow_state_before.get("shop_id") or "").strip()
+                current_shop_name = str(current_values.get("shop_name") or flow_state_before.get("shop_name") or "").strip()
                 matched_candidate = None
                 for candidate in preview_candidates:
                     candidate_goods_no = str(
@@ -20449,7 +20480,7 @@ def _canonical_purchase_stock_context_values(
             final_unit = price_data.get(price_basis) if price_basis else None
             qty_value = (
                 current_values.get("ord_qty")
-                or context_values.get("ord_qty")
+                or flow_state_before.get("ord_qty")
                 or tool_values.get("ord_qty")
                 or (current_slot_delta or {}).get("ord_qty")
             )
@@ -20463,15 +20494,17 @@ def _canonical_purchase_stock_context_values(
                     except (TypeError, ValueError):
                         pass
 
-    current_delta_values = dict(current_slot_delta or {})
-    merged: dict[str, Any] = {}
+    current_delta_values = {
+        key: value for key, value in dict(current_slot_delta or {}).items() if value not in (None, "", [], {})
+    }
+    merged: dict[str, Any] = dict(flow_state_before)
     filled_fields: list[str] = []
     conflicts: dict[str, dict[str, Any]] = {}
     sources: dict[str, str] = {}
     source_maps = (
-        ("current", current_delta_values),
+        ("delta", current_delta_values),
+        ("flow_state", flow_state_before),
         ("slots", current_values),
-        ("context", context_values),
         ("template", template_values),
         ("tool", tool_values),
     )
@@ -20496,7 +20529,9 @@ def _canonical_purchase_stock_context_values(
         "price_source_tool",
     )
     for field in fields:
-        current_value = None
+        current_value = merged.get(field)
+        if current_value not in (None, "", [], {}):
+            sources.setdefault(field, "flow_state")
         for source_name, values in source_maps:
             value = values.get(field)
             if value in (None, "", [], {}):
@@ -20509,15 +20544,15 @@ def _canonical_purchase_stock_context_values(
                 conflicts[field] = {
                     "existing": current_value,
                     "candidate": value,
-                    "existing_source": sources.get(field),
+                    "existing_source": sources.get(field) or "flow_state",
                     "candidate_source": source_name,
                 }
                 break
-        if field in current_delta_values and current_delta_values.get(field) not in (None, "", [], {}):
-            continue
-        if field in current_values and current_values.get(field) not in (None, "", [], {}):
-            continue
-        if field in merged and merged[field] not in (None, "", [], {}):
+        if (
+            field not in flow_state_before
+            and field in merged
+            and merged[field] not in (None, "", [], {})
+        ):
             filled_fields.append(field)
 
     product_name = merged.get("product_name") or merged.get("tire_model") or merged.get("pending_product_name")
@@ -20536,8 +20571,12 @@ def _canonical_purchase_stock_context_values(
             filled_fields.append("pending_product_name")
 
     return {
+        "flow_state_before": flow_state_before,
+        "flow_state_delta": current_delta_values,
         "merged": merged,
-        "filled_fields": sorted(dict.fromkeys(field for field in filled_fields if merged.get(field) not in (None, "", [], {}))),
+        "filled_fields": sorted(
+            dict.fromkeys(field for field in filled_fields if merged.get(field) not in (None, "", [], {}))
+        ),
         "conflicts": conflicts,
         "sources": sources,
         "price_basis": merged.get("price_basis"),
@@ -20583,14 +20622,17 @@ def _apply_purchase_stock_canonical_readthrough(
     )
     if not has_transaction_context or not readthrough_signal:
         return slots, {
-            "canonical_readthrough_applied": False,
-            "canonical_filled_fields": [],
-            "canonical_conflicts": {},
+            "flow_state_read_applied": False,
+            "flow_state_before": {},
+            "flow_state_delta": current_delta,
+            "flow_state_after": {},
+            "flow_state_filled_fields": [],
+            "flow_state_conflicts": {},
             "canonical_sources": {},
-            "canonical_scope": "purchase_stock_only",
+            "flow_state_scope": "purchase_stock_only",
         }
 
-    canonical_values = _canonical_purchase_stock_context_values(
+    canonical_values = _flow_state_from_purchase_stock_sources(
         slots=slots,
         latest_product_tmpl=latest_product_tmpl,
         latest_location_tmpl=latest_location_tmpl,
@@ -20605,29 +20647,45 @@ def _apply_purchase_stock_canonical_readthrough(
         if key not in {"price_basis", "price_source_tool"} and value not in (None, "", [], {})
     }
     updated_slots = slots.apply_runtime_values(slot_patch, source="purchase_stock_canonical_readthrough", fill_only=True)
-    if canonical_values.get("price_basis") not in (None, "", [], {}) or canonical_values.get("price_source_tool") not in (
-        None,
-        "",
-        [],
-        {},
+    context = dict(getattr(updated_slots, "availability_context", None) or {})
+    pending_context = dict(context.get("pending_order_context") or {})
+    for key in (
+        "goods_no",
+        "product_name",
+        "tire_model",
+        "pending_product_name",
+        "tire_size",
+        "ord_qty",
+        "region",
+        "shop_id",
+        "shop_name",
+        "requested_cal_day",
+        "rsv_hour",
+        "payment_amount",
+        "price_basis",
+        "price_source_tool",
+        "pending_intent",
+        "goal_type",
+        "availability_intent",
+        "stock_check_mode",
     ):
-        context = dict(getattr(updated_slots, "availability_context", None) or {})
-        pending_context = dict(context.get("pending_order_context") or {})
-        if canonical_values.get("price_basis") not in (None, "", [], {}):
-            pending_context.setdefault("price_basis", canonical_values["price_basis"])
-        if canonical_values.get("price_source_tool") not in (None, "", [], {}):
-            pending_context.setdefault("price_source_tool", canonical_values["price_source_tool"])
-        if pending_context:
-            context["pending_order_context"] = pending_context
-            updated_slots.availability_context = context
+        value = canonical_values["merged"].get(key)
+        if value not in (None, "", [], {}):
+            pending_context[key] = value
+    if pending_context:
+        context["pending_order_context"] = pending_context
+        updated_slots.availability_context = context
     metadata = {
-        "canonical_readthrough_applied": bool(canonical_values.get("filled_fields")),
-        "canonical_filled_fields": list(canonical_values.get("filled_fields") or []),
-        "canonical_conflicts": dict(canonical_values.get("conflicts") or {}),
+        "flow_state_read_applied": bool(canonical_values.get("merged")),
+        "flow_state_before": dict(canonical_values.get("flow_state_before") or {}),
+        "flow_state_delta": dict(canonical_values.get("flow_state_delta") or {}),
+        "flow_state_after": dict(canonical_values.get("merged") or {}),
+        "flow_state_filled_fields": list(canonical_values.get("filled_fields") or []),
+        "flow_state_conflicts": dict(canonical_values.get("conflicts") or {}),
         "canonical_sources": dict(canonical_values.get("sources") or {}),
-        "canonical_price_basis": canonical_values.get("price_basis"),
-        "canonical_price_source_tool": canonical_values.get("price_source_tool"),
-        "canonical_scope": "purchase_stock_only",
+        "price_basis": canonical_values.get("price_basis"),
+        "price_source_tool": canonical_values.get("price_source_tool"),
+        "flow_state_scope": "purchase_stock_only",
     }
     return updated_slots, metadata
 
@@ -23614,11 +23672,14 @@ class TStationChatServiceV2:
                     "availability_intent": getattr(regex_slots, "availability_intent", None),
                 },
             )
-            if canonical_readthrough_metadata.get("canonical_readthrough_applied"):
+            if canonical_readthrough_metadata.get("flow_state_read_applied"):
                 logger.info(
-                    "[CANONICAL_READTHROUGH] filled=%s conflicts=%s sources=%s",
-                    canonical_readthrough_metadata.get("canonical_filled_fields"),
-                    canonical_readthrough_metadata.get("canonical_conflicts"),
+                    "[FLOW_STATE] before=%s delta=%s after=%s filled=%s conflicts=%s sources=%s",
+                    canonical_readthrough_metadata.get("flow_state_before"),
+                    canonical_readthrough_metadata.get("flow_state_delta"),
+                    canonical_readthrough_metadata.get("flow_state_after"),
+                    canonical_readthrough_metadata.get("flow_state_filled_fields"),
+                    canonical_readthrough_metadata.get("flow_state_conflicts"),
                     canonical_readthrough_metadata.get("canonical_sources"),
                 )
             vehicle_selection_trace_metadata.update(canonical_readthrough_metadata)
