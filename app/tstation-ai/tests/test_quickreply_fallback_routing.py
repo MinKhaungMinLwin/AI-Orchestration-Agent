@@ -15496,6 +15496,7 @@ def test_router_slot_fill_context_payload_restores_dormant_purchase_snapshot() -
                     "goods_no": "G000000319584",
                     "tire_size": "245/45R19",
                     "product_name": "벤투스 에어S",
+                    "payment_amount": 484200,
                     "pending_intent": "order",
                     "goal_type": "place_order",
                 }
@@ -15510,6 +15511,8 @@ def test_router_slot_fill_context_payload_restores_dormant_purchase_snapshot() -
     assert payload["current_flow"] == "quick_order_reservation"
     assert payload["flow_step"] == "ask_quantity"
     assert payload["known_slots"]["goods_no"] == "G000000319584"
+    assert payload["known_slots"]["product_name"] == "벤투스 에어S"
+    assert payload["known_slots"]["payment_amount"] == 484200
     assert payload["missing_slots"] == ["quantity"]
     assert payload["last_requested_slot"] == "quantity"
 
@@ -15594,8 +15597,11 @@ def test_expected_slot_fill_precheck_accepts_direct_quantity_for_active_stock() 
 def test_expected_slot_fill_precheck_accepts_executable_store_candidate_step() -> None:
     slots = ConversationSlots(
         goods_no="G000000310126",
+        tire_model="벤투스 S2 AS",
+        pending_product_name="벤투스 S2 AS",
         tire_size="245/45R19",
         ord_qty=2,
+        payment_amount=308200,
         region="분당",
         pending_intent="order",
         goal_type="place_order",
@@ -15621,6 +15627,10 @@ def test_expected_slot_fill_precheck_accepts_executable_store_candidate_step() -
     assert precheck["matched"] is True
     assert precheck["filled_slot"] == "region"
     assert precheck["slot_patch"]["region"] == "분당"
+    assert precheck["slot_patch"]["product_name"] == "벤투스 S2 AS"
+    assert precheck["slot_patch"]["tire_model"] == "벤투스 S2 AS"
+    assert precheck["slot_patch"]["pending_product_name"] == "벤투스 S2 AS"
+    assert precheck["slot_patch"]["payment_amount"] == 308200
     assert precheck["slot_patch"]["pending_intent"] == "order"
     assert precheck["slot_patch"]["goal_type"] == "place_order"
     assert precheck["resume_source"] == "expected_slot_fill:region"
@@ -24304,8 +24314,12 @@ def test_region_input_resumes_dormant_purchase_store_selection_flow() -> None:
             "pending_step": "store_region_selection",
             "dormant_purchase_context": {
                 "goods_no": "G000000317735",
+                "product_name": "벤투스 S2 AS",
+                "tire_model": "벤투스 S2 AS",
+                "pending_product_name": "벤투스 S2 AS",
                 "tire_size": "225/45R17",
                 "ord_qty": 4,
+                "payment_amount": 616400,
                 "pending_intent": "order",
                 "goal_type": "place_order",
                 "stock_check_mode": "inventory_only",
@@ -24331,6 +24345,10 @@ def test_region_input_resumes_dormant_purchase_store_selection_flow() -> None:
     assert resolution.action_mode == "purchase_continuation"
     assert resolution.resume_source == "expected_slot_fill:region"
     assert resolution.slots_to_promote["goods_no"] == "G000000317735"
+    assert resolution.slots_to_promote["product_name"] == "벤투스 S2 AS"
+    assert resolution.slots_to_promote["tire_model"] == "벤투스 S2 AS"
+    assert resolution.slots_to_promote["pending_product_name"] == "벤투스 S2 AS"
+    assert resolution.slots_to_promote["payment_amount"] == 616400
     assert resolution.slots_to_promote["region"] == "분당"
     assert resolution.slots_to_promote["stock_check_mode"] == "inventory_only"
 
@@ -24339,6 +24357,9 @@ def test_region_input_resumes_dormant_purchase_store_selection_flow() -> None:
     assert updated_slots.goal_type == "place_order"
     assert updated_slots.region == "분당"
     assert updated_slots.ord_qty == 4
+    assert updated_slots.tire_model == "벤투스 S2 AS"
+    assert updated_slots.pending_product_name == "벤투스 S2 AS"
+    assert updated_slots.payment_amount == 616400
 
     action_mode = _current_turn_action_mode(
         user_text="분당",

@@ -158,7 +158,10 @@ _UI_ACTION_SLOT_KEYS = (
     "tire_size",
     "tire_size_front",
     "tire_size_rear",
+    "tire_model",
+    "pending_product_name",
     "ord_qty",
+    "payment_amount",
     "region",
     "shop_id",
     "shop_name",
@@ -4698,9 +4701,13 @@ def _transaction_context_candidates(slots: Any) -> list[tuple[str, dict[str, Any
     active_context = {
         key: raw_slots.get(key, getattr(slots, key, None))
         for key in (
+            "product_name",
+            "tire_model",
+            "pending_product_name",
             "goods_no",
             "tire_size",
             "ord_qty",
+            "payment_amount",
             "region",
             "shop_id",
             "shop_name",
@@ -4710,6 +4717,8 @@ def _transaction_context_candidates(slots: Any) -> list[tuple[str, dict[str, Any
             "requested_cal_day",
         )
     }
+    if active_context.get("product_name") in (None, "", [], {}):
+        active_context["product_name"] = active_context.get("tire_model") or active_context.get("pending_product_name")
     if active_context.get("goods_no") and active_context.get("tire_size"):
         candidates.append(("active_slots", active_context))
     availability_context = raw_slots.get("availability_context", getattr(slots, "availability_context", None))
@@ -4869,9 +4878,13 @@ def resolve_region_or_store_input_context(
         slots_to_promote = {
             key: context.get(key)
             for key in (
+                "product_name",
+                "tire_model",
+                "pending_product_name",
                 "goods_no",
                 "tire_size",
                 "ord_qty",
+                "payment_amount",
                 "pending_intent",
                 "goal_type",
                 "availability_intent",

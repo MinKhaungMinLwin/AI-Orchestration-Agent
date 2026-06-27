@@ -21674,6 +21674,7 @@ class TStationChatServiceV2:
             "goods_no": getattr(slots, "goods_no", None),
             "tire_size": getattr(slots, "tire_size", None),
             "ord_qty": getattr(slots, "ord_qty", None),
+            "payment_amount": getattr(slots, "payment_amount", None),
             "region": getattr(slots, "region", None),
             "shop_id": getattr(slots, "shop_id", None),
             "shop_name": getattr(slots, "shop_name", None),
@@ -21696,6 +21697,7 @@ class TStationChatServiceV2:
                     "goods_no",
                     "tire_size",
                     "ord_qty",
+                    "payment_amount",
                     "region",
                     "shop_id",
                     "shop_name",
@@ -21950,9 +21952,13 @@ class TStationChatServiceV2:
         ):
             filled_slot = "store" if getattr(merged_slots, "shop_id", None) or getattr(merged_slots, "shop_name", None) else "region"
             for key in (
+                "product_name",
+                "tire_model",
+                "pending_product_name",
                 "goods_no",
                 "tire_size",
                 "ord_qty",
+                "payment_amount",
                 "region",
                 "shop_id",
                 "shop_name",
@@ -21965,6 +21971,10 @@ class TStationChatServiceV2:
                 value = getattr(merged_slots, key, None)
                 if value not in (None, "", [], {}):
                     slot_patch[key] = value
+            if slot_patch.get("product_name") in (None, "", [], {}):
+                derived_product_name = slot_patch.get("tire_model") or slot_patch.get("pending_product_name")
+                if derived_product_name not in (None, "", [], {}):
+                    slot_patch["product_name"] = derived_product_name
         elif (
             ("schedule" in missing_slots or last_requested_slot == "schedule")
             and getattr(merged_slots, "requested_cal_day", None)
@@ -25766,9 +25776,21 @@ class TStationChatServiceV2:
                 slot_patch={
                     "shop_id": merged_slots.shop_id,
                     "shop_name": merged_slots.shop_name,
+                    "product_name": (
+                        getattr(merged_slots, "tire_model", None)
+                        or getattr(merged_slots, "product_name", None)
+                        or getattr(merged_slots, "pending_product_name", None)
+                    ),
+                    "tire_model": (
+                        getattr(merged_slots, "tire_model", None)
+                        or getattr(merged_slots, "pending_product_name", None)
+                    ),
+                    "pending_product_name": getattr(merged_slots, "pending_product_name", None)
+                    or getattr(merged_slots, "tire_model", None),
                     "goods_no": merged_slots.goods_no,
                     "tire_size": merged_slots.tire_size,
                     "ord_qty": merged_slots.ord_qty,
+                    "payment_amount": merged_slots.payment_amount,
                     "pending_intent": merged_slots.pending_intent,
                     "goal_type": merged_slots.goal_type,
                 },
