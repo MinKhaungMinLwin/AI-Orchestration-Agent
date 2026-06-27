@@ -207,6 +207,16 @@ def test_runtime_store_change_clears_store_dependent_amount() -> None:
     assert updated.ord_qty == 2
 
 
+def test_runtime_same_store_name_variant_preserves_shop_id() -> None:
+    existing = ConversationSlots(shop_id="F00721", shop_name="티스테이션 판교점", payment_amount=240000)
+
+    updated = existing.apply_runtime_values({"shop_name": "판교점"}, source="store_selection")
+
+    assert updated.shop_id == "F00721"
+    assert updated.shop_name == "판교점"
+    assert updated.payment_amount == 240000
+
+
 def test_runtime_vehicle_change_clears_vehicle_bound_product_slots() -> None:
     existing = ConversationSlots(
         car_no="12가3456",

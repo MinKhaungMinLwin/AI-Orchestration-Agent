@@ -137,6 +137,7 @@ from services.tstation.chat import (
     _allows_outer_tool_slot_staging,
     _context_state_for_action,
     _current_turn_action_mode,
+    _is_structured_store_selection_turn,
     _resume_source_from_ui_action_context,
     _has_current_turn_order_recovery_anchor,
     _mask_dormant_transaction_action_slots,
@@ -373,6 +374,7 @@ from services.tstation.policies.turn_contract import (
     warning_contract_violations,
 )
 from services.tstation.policies.ui_action_policy import (
+    UIActionContext,
     apply_region_or_store_input_context_resolution,
     apply_other_store_context_enrichment,
     apply_selected_order_context_for_purchase_cta,
@@ -12270,6 +12272,23 @@ def test_user_merge_goods_no_change_requires_size_reconfirmation() -> None:
     assert merged.ord_qty == 4
 
 
+def test_user_merge_same_store_name_variant_preserves_shop_id() -> None:
+    base = ConversationSlots(
+        shop_id="F00721",
+        shop_name="티스테이션 판교점",
+        goods_no="G-OLD",
+        ord_qty=4,
+        payment_amount=400000,
+    )
+
+    merged = base.merge(ConversationSlots(shop_name="판교점"))
+
+    assert merged.shop_id == "F00721"
+    assert merged.shop_name == "판교점"
+    assert merged.goods_no == "G-OLD"
+    assert merged.ord_qty == 4
+
+
 def test_runtime_goods_no_change_preserves_active_size_and_quantity() -> None:
     base = ConversationSlots(
         goods_no="G-OLD",
@@ -12314,6 +12333,23 @@ def test_size_quantity_and_store_slot_resets_are_canonical() -> None:
     assert changed_region.region == "성남"
     assert changed_region.shop_id is None
     assert changed_region.shop_name is None
+
+
+def test_structured_store_selection_turn_skips_same_store_cleanup() -> None:
+    action_context = UIActionContext(
+        action_type="select_store",
+        action_name="select_store",
+        selection_source="ui_action",
+        contract_intent="quick_order_reservation",
+        source_intent="quick_order_reservation",
+        expected_contract_intent="quick_order_reservation",
+        entity_id="F00721",
+        entity_label="티스테이션 판교점",
+        slot_patch={"shop_id": "F00721", "shop_name": "티스테이션 판교점"},
+    )
+
+    assert _is_structured_store_selection_turn(action_context, current_store_name="판교점") is True
+    assert _is_structured_store_selection_turn(action_context, current_store_name="한남점") is False
 
 
 def test_fresh_transaction_clear_keeps_current_product_entity_after_pending_update() -> None:

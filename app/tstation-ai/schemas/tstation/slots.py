@@ -10,6 +10,20 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger(__name__)
 
 
+def _normalize_store_name_for_identity_compare(value: Any) -> str:
+    normalized = re.sub(r"[^0-9A-Za-z가-힣]", "", str(value or "")).lower()
+    normalized = re.sub(r"^(?:티스테이션|더타이어샵|t'?station)", "", normalized, flags=re.IGNORECASE)
+    return normalized
+
+
+def _store_name_values_conflict(old_val: Any, new_val: Any) -> bool:
+    old_name = _normalize_store_name_for_identity_compare(old_val)
+    new_name = _normalize_store_name_for_identity_compare(new_val)
+    if old_name and new_name:
+        return old_name != new_name
+    return old_val != new_val
+
+
 # Unfulfilled user intent carried across turns until explicitly fulfilled by a matching tool call.
 # "recommend" is the default/implicit intent and is intentionally NOT stored as a pending intent —
 # only actionable transactional intents are tracked here.
@@ -567,7 +581,8 @@ class ConversationSlots(BaseModel):
             # Value changed -> reset dependent slots. Product identity fields
             # invalidate goods_no even on None -> value because goods_no belongs
             # to a concrete product+size combination.
-            should_reset_dependents = old_val is not None and old_val != new_val
+            value_conflict = _store_name_values_conflict(old_val, new_val) if field == "shop_name" else old_val != new_val
+            should_reset_dependents = old_val is not None and value_conflict
             if not should_reset_dependents and field in self.PRODUCT_IDENTITY_FIELDS and old_val != new_val:
                 should_reset_dependents = any(getattr(merged, dep, None) is not None for dep in self.DEPENDENT_RESETS.get(field, []))
             if should_reset_dependents:
@@ -606,7 +621,8 @@ class ConversationSlots(BaseModel):
             old_val = getattr(updated, field)
             if fill_only and old_val is not None:
                 continue
-            should_reset_dependents = old_val is not None and old_val != new_val
+            value_conflict = _store_name_values_conflict(old_val, new_val) if field == "shop_name" else old_val != new_val
+            should_reset_dependents = old_val is not None and value_conflict
             if not should_reset_dependents and field in self.PRODUCT_IDENTITY_FIELDS and old_val != new_val:
                 should_reset_dependents = any(
                     getattr(updated, dep, None) is not None

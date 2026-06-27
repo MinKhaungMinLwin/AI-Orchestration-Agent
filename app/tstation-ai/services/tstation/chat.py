@@ -18233,6 +18233,26 @@ def _is_new_store_name_anchor_for_current_turn(
     return bool(existing_shop_name or existing_shop_id)
 
 
+def _is_structured_store_selection_turn(
+    action_context: UIActionContext | None,
+    *,
+    current_store_name: str | None,
+) -> bool:
+    if action_context is None or action_context.action_type != "select_store":
+        return False
+    slot_patch = dict(action_context.slot_patch or {})
+    selected_shop_id = str(slot_patch.get("shop_id") or action_context.entity_id or "").strip()
+    if not selected_shop_id:
+        return False
+    selected_shop_name = str(slot_patch.get("shop_name") or action_context.entity_label or "").strip()
+    if current_store_name and selected_shop_name:
+        current = _normalize_store_name_for_slot_compare(current_store_name)
+        selected = _normalize_store_name_for_slot_compare(selected_shop_name)
+        if current and selected and current != selected:
+            return False
+    return True
+
+
 def _is_general_store_info_turn_with_explicit_store(
     text: str,
     regex_slots: ConversationSlots,
@@ -20734,6 +20754,10 @@ class TStationChatServiceV2:
             current_turn_store_name = regex_slots.shop_name
             current_turn_has_store_anchor = bool(current_turn_store_name or regex_slots.region)
             explicit_store_info_cleanup: dict[str, Any] = {}
+            structured_store_selection_turn = _is_structured_store_selection_turn(
+                vehicle_ui_action_context,
+                current_store_name=current_turn_store_name,
+            )
             preview_location_direct_selection = None
             preview_location_direct_values: dict[str, Any] | None = None
             if current_turn_store_name and latest_location_tmpl:
@@ -20752,7 +20776,7 @@ class TStationChatServiceV2:
                 slots=merged_slots,
             )
             explicit_store_info_turn = _is_general_store_info_turn_with_explicit_store(last_user_text, regex_slots)
-            if current_turn_store_name and explicit_store_info_turn and (
+            if current_turn_store_name and explicit_store_info_turn and not structured_store_selection_turn and (
                 _is_new_store_name_anchor_for_current_turn(
                     current_turn_store_name,
                     existing_slots.shop_name,
@@ -20787,7 +20811,7 @@ class TStationChatServiceV2:
                     {k: v for k, v in before_slots.items() if v not in (None, "", [], {})},
                     {k: v for k, v in merged_slots.model_dump().items() if v not in (None, "", [], {})},
                 )
-            elif _is_new_store_name_anchor_for_current_turn(
+            elif not structured_store_selection_turn and _is_new_store_name_anchor_for_current_turn(
                 current_turn_store_name,
                 existing_slots.shop_name,
                 existing_slots.shop_id,
