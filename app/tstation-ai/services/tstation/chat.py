@@ -8355,10 +8355,27 @@ def _should_emit_direct_preorder_from_schedule_selection(
         contract_intent == "quick_order_reservation"
         or contract_intent.startswith("quick_order_reservation_slot_fill_")
     )
-    return (
+    if (
         response_shape_key == "reservation_confirmation_ready"
         and flow_step == "build_preorder"
         and (is_purchase_reservation_intent or action_mode == "purchase_continuation")
+    ):
+        return True
+
+    known_slots = turn_contract.known_slots or {}
+    quantity = known_slots.get("ord_qty") or known_slots.get("quantity")
+    try:
+        has_quantity = int(quantity or 0) > 0
+    except (TypeError, ValueError):
+        has_quantity = bool(quantity)
+    return bool(
+        action_mode == "purchase_continuation"
+        and known_slots.get("goods_no")
+        and known_slots.get("tire_size")
+        and has_quantity
+        and (known_slots.get("shop_id") or known_slots.get("shop_name"))
+        and known_slots.get("requested_cal_day")
+        and known_slots.get("rsv_hour")
     )
 
 
@@ -8399,13 +8416,20 @@ def _is_ready_preorder_fast_path_contract_match(
     response_shape_key = str((response_metadata or {}).get("response_shape_key") or "")
     flow_step = str(getattr(turn_contract, "flow_step", "") or "")
     action_mode = str(getattr(turn_contract, "action_mode", "") or "")
-    if response_shape_key != "reservation_confirmation_ready":
-        return False
-    if flow_step != "build_preorder":
-        return False
-    if action_mode != "purchase_continuation":
-        return False
-    return _has_ready_preorder_summary_slots(turn_contract.known_slots or {})
+    if (
+        response_shape_key == "reservation_confirmation_ready"
+        and flow_step == "build_preorder"
+        and action_mode == "purchase_continuation"
+    ):
+        return _has_ready_preorder_summary_slots(turn_contract.known_slots or {})
+    return bool(
+        action_mode == "purchase_continuation"
+        and _has_ready_preorder_summary_slots(turn_contract.known_slots or {})
+        and (
+            str((turn_contract.known_slots or {}).get("pending_intent") or "") == "order"
+            or str((turn_contract.known_slots or {}).get("goal_type") or "") == "place_order"
+        )
+    )
 
 
 def _choose_quickreply_fallback(
@@ -26884,10 +26908,12 @@ class TStationChatServiceV2:
             "goal_type": merged_slots.goal_type,
             "stock_check_mode": getattr(merged_slots, "stock_check_mode", None),
         }
+        availability_context = merged_slots.availability_context if isinstance(getattr(merged_slots, "availability_context", None), dict) else {}
+        pending_order_context = availability_context.get("pending_order_context") if isinstance(availability_context.get("pending_order_context"), dict) else {}
         if current_ui_action_context is not None and is_expected_transaction_slot_fill(current_ui_action_context):
             ui_action_metadata = {
-                **dict(current_ui_action_context.slots or {}),
                 **dict(current_ui_action_context.raw_metadata or {}),
+                **dict(current_ui_action_context.slots or {}),
             }
             for field, aliases in {
                 "shop_id": ("shop_id", "shopId"),
@@ -26904,8 +26930,20 @@ class TStationChatServiceV2:
                     if value not in (None, "", []):
                         transaction_known_slots[field] = value
                         break
-        availability_context = merged_slots.availability_context if isinstance(getattr(merged_slots, "availability_context", None), dict) else {}
-        pending_order_context = availability_context.get("pending_order_context") if isinstance(availability_context.get("pending_order_context"), dict) else {}
+            if (
+                str(current_ui_action_context.action_type or "") == "select_schedule"
+                and str(current_ui_action_context.expected_contract_intent or "") == "quick_order_reservation"
+                and str(transaction_known_slots.get("pending_intent") or "") != "reservation"
+                and (
+                    str(merged_slots.pending_intent or "") == "order"
+                    or str(merged_slots.goal_type or "") == "place_order"
+                    or str((pending_order_context or {}).get("pending_intent") or "") == "order"
+                    or str((pending_order_context or {}).get("goal_type") or "") == "place_order"
+                )
+            ):
+                transaction_known_slots["pending_intent"] = "order"
+                transaction_known_slots["goal_type"] = "place_order"
+                transaction_known_slots["stock_check_mode"] = "preview"
         if isinstance(pending_order_context, dict):
             for key in (
                 "goods_no",

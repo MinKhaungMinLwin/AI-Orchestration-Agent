@@ -467,6 +467,7 @@ from services.tstation.policies.ui_action_policy import (
     has_location_source,
     normalize_preview_tool_result,
     prepare_ui_action_state,
+    _with_existing_transaction_slot_fill_state,
     apply_history_vehicle_selection_state,
     apply_history_product_selection_state,
     apply_history_location_selection_state,
@@ -15019,10 +15020,106 @@ def test_select_schedule_ui_action_keeps_quick_order_reservation_without_quick_o
     )
 
     assert frame.intent == "quick_order_reservation"
-    assert contract.intent == "quick_order_reservation"
+    assert contract.action_mode == "purchase_continuation"
+    assert contract.response_decision["metadata"]["response_shape_key"] == "reservation_confirmation_ready"
     assert "quick_order_tool" not in tool_plan.allowed_tools
     assert tool_plan.metadata["flow_step"] == "build_preorder"
     assert tool_plan.allowed_tools == ()
+
+
+def test_select_schedule_purchase_flow_overrides_stock_metadata_with_existing_purchase_state() -> None:
+    action_context = resolve_ui_action_context(
+        raw_action={
+            "action_type": "select_schedule",
+            "source_intent": "quick_order_reservation",
+            "expected_contract_intent": "quick_order_reservation",
+            "slots": {
+                "goods_no": "G000000310126",
+                "tire_size": "245/45R19",
+                "ord_qty": 2,
+                "shop_id": "A0001",
+                "shop_name": "티스테이션 한남점",
+                "requested_cal_day": "20260630",
+                "rsv_hour": "16:00",
+                "pending_intent": "stock",
+                "goal_type": "store_with_stock",
+                "stock_check_mode": "inventory_only",
+            },
+        },
+        selected_vehicle=None,
+        selection_source="ui_action",
+    )
+
+    updated_context = _with_existing_transaction_slot_fill_state(
+        action_context,
+        ConversationSlots(
+            goods_no="G000000310126",
+            tire_size="245/45R19",
+            ord_qty=2,
+            shop_id="A0001",
+            shop_name="티스테이션 한남점",
+            pending_intent="order",
+            goal_type="place_order",
+            stock_check_mode="preview",
+            availability_context={
+                "pending_order_context": {
+                    "goods_no": "G000000310126",
+                    "product_name": "벤투스 S2 AS",
+                    "pending_intent": "order",
+                    "goal_type": "place_order",
+                }
+            },
+        ),
+    )
+
+    assert updated_context.slot_patch["pending_intent"] == "order"
+    assert updated_context.slot_patch["goal_type"] == "place_order"
+    assert updated_context.slot_patch["stock_check_mode"] == "preview"
+    assert updated_context.slot_patch["requested_cal_day"] == "20260630"
+    assert updated_context.slot_patch["rsv_hour"] == "16:00"
+    assert updated_context.trace_metadata["intent_overrode_ui_metadata"] is True
+    assert updated_context.trace_metadata["schedule_action_flow_type"] == "purchase"
+
+
+def test_select_schedule_stock_flow_keeps_stock_metadata() -> None:
+    action_context = resolve_ui_action_context(
+        raw_action={
+            "action_type": "select_schedule",
+            "source_intent": "stock_store_search",
+            "expected_contract_intent": "stock_store_search",
+            "slots": {
+                "goods_no": "G000000310126",
+                "tire_size": "245/45R19",
+                "ord_qty": 2,
+                "shop_id": "A0001",
+                "shop_name": "티스테이션 한남점",
+                "requested_cal_day": "20260630",
+                "rsv_hour": "16:00",
+                "pending_intent": "stock",
+                "goal_type": "store_with_stock",
+                "stock_check_mode": "inventory_only",
+            },
+        },
+        selected_vehicle=None,
+        selection_source="ui_action",
+    )
+
+    updated_context = _with_existing_transaction_slot_fill_state(
+        action_context,
+        ConversationSlots(
+            goods_no="G000000310126",
+            tire_size="245/45R19",
+            ord_qty=2,
+            pending_intent="stock",
+            goal_type="store_with_stock",
+            stock_check_mode="inventory_only",
+        ),
+    )
+
+    assert updated_context.slot_patch["pending_intent"] == "stock"
+    assert updated_context.slot_patch["goal_type"] == "store_with_stock"
+    assert updated_context.slot_patch["stock_check_mode"] == "inventory_only"
+    assert updated_context.trace_metadata["schedule_action_flow_type"] == "stock"
 
 
 def test_transaction_intent_frame_prefers_quick_order_reservation_for_selected_store_slot_fill() -> None:
@@ -26038,11 +26135,55 @@ def test_direct_preorder_condition_uses_contract_flow_step_fallback() -> None:
             "goal_type": "place_order",
         },
     )
+    contract = replace(contract, action_mode="purchase_continuation")
 
     assert _should_emit_direct_preorder_from_schedule_selection(
         contract,
         transaction_tool_plan=SimpleNamespace(metadata={}),
     ) is True
+
+
+def test_direct_preorder_condition_allows_purchase_schedule_structural_fallback() -> None:
+    contract = _transaction_turn_contract(
+        "2026년 6월 30일 (화)\n17:00",
+        {
+            "goods_no": "G000000310126",
+            "tire_model": "벤투스 S2 AS",
+            "tire_size": "245/45R19",
+            "ord_qty": 4,
+            "shop_id": "F00721",
+            "shop_name": "판교점",
+            "requested_cal_day": "20260630",
+            "rsv_hour": "17",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+    contract = replace(
+        contract,
+        response_decision={
+            **dict(contract.response_decision or {}),
+            "metadata": {"response_shape_key": "stock_store_candidates"},
+        },
+        action_mode="purchase_continuation",
+        intent="quick_order_reservation_slot_fill_schedule",
+    )
+
+    assert _should_emit_direct_preorder_from_schedule_selection(
+        contract,
+        transaction_tool_plan=SimpleNamespace(metadata={"flow_step": "show_store_candidates"}),
+    ) is True
+
+    allowed, reason = _direct_code_fast_path_contract_gate(
+        turn_contract=contract,
+        intent="quick_order_reservation",
+        template="preOrder",
+        source="code_reservation_confirmation_ready",
+        required_tools=(),
+    )
+
+    assert allowed is True
+    assert reason == "contract_matched:code_reservation_confirmation_ready"
 
 
 def test_direct_preorder_gate_blocks_when_response_shape_key_differs() -> None:

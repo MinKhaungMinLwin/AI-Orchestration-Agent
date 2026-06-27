@@ -1337,6 +1337,25 @@ def _slot_value_from_any(slots: Any, key: str) -> Any:
     return getattr(slots, key, None)
 
 
+def _existing_purchase_flow_state(slots: Any) -> bool:
+    pending_intent = str(_slot_value_from_any(slots, "pending_intent") or "").strip()
+    goal_type = str(_slot_value_from_any(slots, "goal_type") or "").strip()
+    if pending_intent == "reservation":
+        return False
+    if pending_intent == "order" or goal_type == "place_order":
+        return True
+    availability_context = _slot_value_from_any(slots, "availability_context")
+    pending_order_context = (
+        availability_context.get("pending_order_context")
+        if isinstance(availability_context, Mapping) and isinstance(availability_context.get("pending_order_context"), Mapping)
+        else {}
+    )
+    return (
+        str(pending_order_context.get("pending_intent") or "").strip() == "order"
+        or str(pending_order_context.get("goal_type") or "").strip() == "place_order"
+    )
+
+
 def _with_existing_transaction_slot_fill_state(
     action_context: UIActionContext,
     existing_slots: Any,
@@ -1370,22 +1389,82 @@ def _with_existing_transaction_slot_fill_state(
             slot_patch[field_name] = existing_value
 
     expected_contract_intent = str(action_context.expected_contract_intent or "").strip()
-    if expected_contract_intent == _QUICK_ORDER_RESERVATION_INTENT:
+    action_type = str(action_context.action_type or "").strip()
+    existing_pending_intent = str(_slot_value_from_any(existing_slots, "pending_intent") or "").strip() or None
+    existing_goal_type = str(_slot_value_from_any(existing_slots, "goal_type") or "").strip() or None
+    ui_pending_intent_before = str(slot_patch.get("pending_intent") or "").strip() or None
+    ui_goal_type_before = str(slot_patch.get("goal_type") or "").strip() or None
+    intent_overrode_ui_metadata = False
+    schedule_action_flow_type = None
+    if (
+        action_type == "select_schedule"
+        and expected_contract_intent == _QUICK_ORDER_RESERVATION_INTENT
+        and _existing_purchase_flow_state(existing_slots)
+        and str(slot_patch.get("pending_intent") or "").strip() != "reservation"
+    ):
+        purchase_schedule_slot_patch = {
+            key: value
+            for key, value in slot_patch.items()
+            if key in {
+                "requested_cal_day",
+                "rsv_hour",
+                "shop_id",
+                "shop_name",
+                "goods_no",
+                "tire_size",
+                "ord_qty",
+                "product_name",
+                "tire_model",
+                "pending_product_name",
+                "payment_amount",
+                "price_basis",
+                "price_source_tool",
+                "region",
+                "availability_intent",
+                "source_tool",
+                "schedule_mode",
+            }
+        }
+        slot_patch = purchase_schedule_slot_patch
+        slot_patch["pending_intent"] = "order"
+        slot_patch["goal_type"] = "place_order"
+        slot_patch["stock_check_mode"] = "preview"
+        intent_overrode_ui_metadata = True
+        schedule_action_flow_type = "purchase"
+    elif expected_contract_intent == _QUICK_ORDER_RESERVATION_INTENT:
         if slot_patch.get("pending_intent") == "cart" or slot_patch.get("goal_type") == "add_to_cart":
             slot_patch.setdefault("pending_intent", "cart")
             slot_patch.setdefault("goal_type", "add_to_cart")
+            schedule_action_flow_type = "cart" if action_type == "select_schedule" else schedule_action_flow_type
         else:
             slot_patch.setdefault("pending_intent", "order")
             slot_patch.setdefault("goal_type", "place_order")
+            schedule_action_flow_type = "purchase" if action_type == "select_schedule" else schedule_action_flow_type
         slot_patch.setdefault("stock_check_mode", "preview")
     elif expected_contract_intent == _STOCK_STORE_SEARCH_INTENT:
         slot_patch.setdefault("pending_intent", "stock")
         slot_patch.setdefault("goal_type", "store_with_stock")
+        schedule_action_flow_type = "stock" if action_type == "select_schedule" else schedule_action_flow_type
 
     expected_slot = _TRANSACTION_SLOT_FILL_ACTION_TO_SLOT.get(str(action_context.action_type or "").strip())
     trace_metadata = dict(action_context.trace_metadata or {})
     trace_metadata["slot_patch"] = dict(slot_patch)
     trace_metadata["selected_slots"] = dict(slot_patch)
+    if action_type == "select_schedule":
+        trace_metadata["ui_action_intent_before"] = {
+            "pending_intent": ui_pending_intent_before,
+            "goal_type": ui_goal_type_before,
+        }
+        trace_metadata["ui_action_intent_after"] = {
+            "pending_intent": str(slot_patch.get("pending_intent") or "").strip() or None,
+            "goal_type": str(slot_patch.get("goal_type") or "").strip() or None,
+        }
+        trace_metadata["flow_state_intent_source"] = {
+            "pending_intent": existing_pending_intent,
+            "goal_type": existing_goal_type,
+        }
+        trace_metadata["intent_overrode_ui_metadata"] = intent_overrode_ui_metadata
+        trace_metadata["schedule_action_flow_type"] = schedule_action_flow_type
     if expected_slot and not trace_metadata.get("expected_slot"):
         trace_metadata["expected_slot"] = expected_slot
 
