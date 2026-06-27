@@ -18959,6 +18959,49 @@ def _normalize_store_name_for_slot_compare(store_name: str | None) -> str:
     return normalized
 
 
+_INVALID_REGION_ACTION_LABELS = frozenset({
+    "구매하기",
+    "구매",
+    "주문하기",
+    "주문",
+    "진행",
+    "진행하기",
+    "선택",
+    "확인",
+    "네",
+    "예",
+    "ㅇㅇ",
+})
+
+
+def _is_invalid_region_action_label_text(value: Any) -> bool:
+    normalized = re.sub(r"\s+", " ", str(value or "").strip())
+    if not normalized:
+        return False
+    return normalized in _INVALID_REGION_ACTION_LABELS
+
+
+def _clear_invalid_action_label_region(slots: ConversationSlots, *, source: str) -> dict[str, Any]:
+    region = getattr(slots, "region", None)
+    if not _is_invalid_region_action_label_text(region):
+        return {}
+    cleared: dict[str, Any] = {"region": region, "source": source}
+    slots.region = None
+    context = dict(getattr(slots, "availability_context", None) or {})
+    for key in ("pending_order_context", "dormant_purchase_context", "dormant_stock_context", "dormant_transaction_context"):
+        candidate = context.get(key)
+        if not isinstance(candidate, Mapping):
+            continue
+        if _is_invalid_region_action_label_text(candidate.get("region")):
+            normalized = dict(candidate)
+            normalized.pop("region", None)
+            context[key] = normalized
+            cleared[f"{key}_region"] = candidate.get("region")
+    slots.availability_context = context
+    logger.info("[SLOTS] Cleared invalid action-label region from %s: %s", source, cleared)
+    return cleared
+
+
 def _is_new_store_name_anchor_for_current_turn(
     current_store_name: str | None,
     existing_shop_name: str | None,
@@ -19155,9 +19198,12 @@ def _demote_stale_tire_size_for_new_product_transaction(
 
 def _pending_order_context_values(slots: ConversationSlots) -> dict[str, Any]:
     values: dict[str, Any] = {}
+    invalid_region = _is_invalid_region_action_label_text(getattr(slots, "region", None))
     for field in ("goods_no", "tire_size", "ord_qty", "region", "shop_id", "shop_name"):
         value = getattr(slots, field, None)
         if field == "shop_name" and _is_invalid_store_slot_value(str(value or "")):
+            continue
+        if field == "region" and invalid_region:
             continue
         if value not in (None, "", [], {}):
             values[field] = value
@@ -19190,6 +19236,7 @@ def _pending_order_context_values(slots: ConversationSlots) -> dict[str, Any]:
 
 def _stage_pending_order_context(slots: ConversationSlots, *, source: str) -> dict[str, Any]:
     """Persist stock/order product context separately from stale flat slots."""
+    _clear_invalid_action_label_region(slots, source=f"{source}:pending_order_context")
     _clear_invalid_store_identity_slots(slots, source=f"{source}:pending_order_context")
     if not (
         slots.goods_no
@@ -19235,6 +19282,7 @@ def _current_request_allows_transaction_context_staging(slots: ConversationSlots
 
 def _stage_dormant_transaction_context(slots: ConversationSlots, *, source: str) -> dict[str, Any]:
     """Keep prior transaction context available for grounding without making it active."""
+    _clear_invalid_action_label_region(slots, source=f"{source}:dormant_transaction_context")
     _clear_invalid_store_identity_slots(slots, source=f"{source}:dormant_transaction_context")
     dormant_context = _pending_order_context_values(slots)
     if not dormant_context:

@@ -355,7 +355,7 @@ from services.tstation.policies.delivery_policy_gate import (
     DeliveryPolicyIntent,
     decide_delivery_policy_gate,
 )
-from services.tstation.policies.flow_controller import build_purchase_flow_fallback_event
+from services.tstation.policies.flow_controller import build_purchase_flow_fallback_event, resolve_purchase_order_flow
 from services.tstation.policies.intent_frame import IntentFrame, PolicyDomain
 from services.tstation.policies.resolved_context import (
     build_resolved_turn_context,
@@ -448,6 +448,7 @@ from services.tstation.policies.ui_action_policy import (
     store_context_from_mapping,
     store_name_exact_match_row,
     goods_no_from_template_event,
+    has_location_source,
     normalize_preview_tool_result,
     prepare_ui_action_state,
     apply_history_vehicle_selection_state,
@@ -15813,7 +15814,7 @@ def test_purchase_cta_with_recovered_product_context_routes_to_quick_order_reser
     assert frame.known_slots["pending_intent"] == "order"
     assert frame.known_slots["goal_type"] == "place_order"
     assert "quantity" in frame.missing_slots
-    assert "store" in frame.missing_slots
+    assert "store" not in frame.missing_slots
     assert plan.metadata["response_intent"] == "quick_order_reservation"
 
 
@@ -23795,6 +23796,81 @@ def test_store_view_cta_with_pending_purchase_context_resumes_purchase_flow() ->
     assert resolution.flow_type == "purchase_region_selection"
     assert resolution.action_mode == "purchase_continuation"
     assert resolution.slots_to_promote["region"] == "분당"
+
+
+def test_purchase_cta_label_does_not_promote_region_slot() -> None:
+    latest_quickreply_tmpl = {
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": "상품을 확인했어요.",
+            "quickReplies": [{"label": "구매하기", "domain": "TRANSACTION", "cta_action": "start_purchase"}],
+        },
+    }
+    merged_slots = ConversationSlots(
+        availability_context={
+            "pending_order_context": {
+                "goods_no": "G000000317735",
+                "tire_size": "225/45R17",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            }
+        }
+    )
+
+    resolution = resolve_region_or_store_input_context(
+        user_text="구매하기",
+        ui_action=None,
+        chip_context={"cta_action": "start_purchase"},
+        latest_quickreply_tmpl=latest_quickreply_tmpl,
+        latest_location_tmpl=None,
+        messages=[],
+        merged_slots=merged_slots,
+    )
+
+    assert resolution.resolved is False
+    assert merged_slots.region is None
+
+
+def test_has_location_source_accepts_browser_location_without_region() -> None:
+    assert has_location_source({"user_xpos": 127.12, "user_ypos": 37.39}) is True
+    assert has_location_source({"region": "구매하기"}) is False
+
+
+def test_purchase_flow_ignores_invalid_action_label_region() -> None:
+    flow_state = resolve_purchase_order_flow(
+        intent="quick_order_reservation",
+        known_slots={
+            "goods_no": "G000000317735",
+            "tire_size": "225/45R17",
+            "ord_qty": 4,
+            "region": "구매하기",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+
+    assert flow_state is not None
+    assert flow_state.flow_step == "ask_store"
+    assert flow_state.response_shape_key == "missing_order_slots"
+
+
+def test_purchase_flow_accepts_browser_location_as_store_candidate_source() -> None:
+    flow_state = resolve_purchase_order_flow(
+        intent="quick_order_reservation",
+        known_slots={
+            "goods_no": "G000000317735",
+            "tire_size": "225/45R17",
+            "ord_qty": 4,
+            "user_xpos": 127.12,
+            "user_ypos": 37.39,
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+
+    assert flow_state is not None
+    assert flow_state.flow_step == "show_store_candidates"
+    assert flow_state.preferred_tool == "transaction_store_preview_tool"
 
 
 def test_recommendation_product_pick_defaults_to_product_description_contract() -> None:

@@ -53,6 +53,27 @@ _TIRE_POSITION_FOLLOWUP_ACTION_RE = re.compile(
 _QUANTITY_LABEL_RE = re.compile(r"^\s*([1-4])\s*(?:개|본)\s*$")
 _CTA_CLARIFICATION_LABEL_RE = re.compile(r"(?:다른\s*)?(?:지역|장소|날짜|일정)\s*(?:입력|찾기|검색|확인)")
 _SIZE_ONLY_RE = re.compile(r"^\s*\d{3}\s*[/\s]?\s*\d{2}\s*(?:R|\s|/)?\s*\d{2}\s*$", re.IGNORECASE)
+_REGION_FALLBACK_DENYLIST = frozenset({
+    "구매하기",
+    "구매",
+    "주문하기",
+    "주문",
+    "진행",
+    "진행하기",
+    "선택",
+    "확인",
+    "네",
+    "예",
+    "ㅇㅇ",
+})
+_REGION_EXTRACTION_BLOCKED_ACTIONS = frozenset({
+    "start_purchase",
+    "purchase.start",
+    "select_product",
+    "select_quantity",
+    "select_store",
+    "select_schedule",
+})
 _VEHICLE_PLATE_RE = re.compile(r"\d{2,3}\s*[가-힣]\s*\d{4}")
 _NON_SELF_CAR_RE = re.compile(
     r"(내\s*차|저장\s*차|등록\s*차|보유\s*차|보유한\s*차|내가\s*가진\s*차)"
@@ -268,6 +289,53 @@ def _float_or_none(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _normalized_region_candidate_text(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip())
+
+
+def _is_invalid_region_candidate_text(value: Any) -> bool:
+    normalized = _normalized_region_candidate_text(value)
+    if not normalized:
+        return False
+    return normalized in _REGION_FALLBACK_DENYLIST
+
+
+def location_source_type_from_mapping(
+    values: Mapping[str, Any] | None,
+    *,
+    store_context: Mapping[str, Any] | None = None,
+) -> str:
+    data = dict(values or {})
+    store = dict(store_context or {})
+    shop_id = str(data.get("shop_id") or data.get("shopId") or store.get("shop_id") or store.get("shopId") or "").strip()
+    shop_name = str(
+        data.get("shop_name")
+        or data.get("shopName")
+        or data.get("store_name")
+        or data.get("storeName")
+        or store.get("shop_name")
+        or store.get("shopName")
+        or ""
+    ).strip()
+    place_query = str(data.get("place_query") or data.get("placeQuery") or data.get("place") or "").strip()
+    region = _normalized_region_candidate_text(data.get("region"))
+    if shop_id or shop_name:
+        return "store"
+    if place_query:
+        return "place"
+    xpos = _float_or_none(data.get("user_xpos") or data.get("xpos") or store.get("xpos"))
+    ypos = _float_or_none(data.get("user_ypos") or data.get("ypos") or store.get("ypos"))
+    if xpos is not None and ypos is not None:
+        return "browser_location"
+    if region and not _is_invalid_region_candidate_text(region):
+        return "region"
+    return "none"
+
+
+def has_location_source(values: Mapping[str, Any] | None, *, store_context: Mapping[str, Any] | None = None) -> bool:
+    return location_source_type_from_mapping(values, store_context=store_context) != "none"
 
 
 def store_context_from_mapping(data: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -605,12 +673,14 @@ def cta_preview_input_from_slots(
     if not ord_qty_value:
         return None, "quantity"
     store_context = store_context_from_mapping(context)
-    has_location = (
-        getattr(slots, "region", None)
-        or getattr(slots, "shop_name", None)
-        or getattr(slots, "shop_id", None)
-        or store_context.get("shop_name")
-        or (store_context.get("xpos") is not None and store_context.get("ypos") is not None)
+    has_location = has_location_source(
+        {
+            "region": getattr(slots, "region", None),
+            "shop_name": getattr(slots, "shop_name", None),
+            "shop_id": getattr(slots, "shop_id", None),
+            "place_query": canonical_context.get("place_query") or context.get("place_query"),
+        },
+        store_context=store_context,
     )
     if not has_location:
         return None, "location"
@@ -634,24 +704,33 @@ def cta_preview_input_from_slots(
             preview_input["user_ypos"] = float(store_context["ypos"])
             preview_input["radius_km"] = 20.0
         else:
-            area_hint = _store_area_hint_from_name(
-                str(store_context.get("shop_name") or getattr(slots, "shop_name", "") or "")
-            )
-            if area_hint:
-                preview_input["region_code"] = area_hint
-            elif getattr(slots, "region", None):
-                preview_input["region_code"] = slots.region
+            place_query = str(canonical_context.get("place_query") or context.get("place_query") or "").strip()
+            if place_query:
+                preview_input["place_query"] = place_query
             else:
-                return None, "location"
+                area_hint = _store_area_hint_from_name(
+                    str(store_context.get("shop_name") or getattr(slots, "shop_name", "") or "")
+                )
+                if area_hint:
+                    preview_input["region_code"] = area_hint
+                elif getattr(slots, "region", None) and not _is_invalid_region_candidate_text(getattr(slots, "region", None)):
+                    preview_input["region_code"] = slots.region
+                else:
+                    return None, "location"
         if excluded_shop_ids:
             preview_input["exclude_shop_ids"] = excluded_shop_ids
         preview_input["stock_check_mode"] = "inventory_only"
-    elif getattr(slots, "region", None):
+    elif getattr(slots, "region", None) and not _is_invalid_region_candidate_text(getattr(slots, "region", None)):
         preview_input["region_code"] = slots.region
+    elif str(canonical_context.get("place_query") or context.get("place_query") or "").strip():
+        preview_input["place_query"] = str(canonical_context.get("place_query") or context.get("place_query") or "").strip()
     elif getattr(slots, "shop_name", None):
         preview_input["store_nm"] = slots.shop_name
     elif store_context.get("shop_name"):
         preview_input["store_nm"] = str(store_context["shop_name"])
+    elif store_context.get("xpos") is not None and store_context.get("ypos") is not None:
+        preview_input["user_xpos"] = float(store_context["xpos"])
+        preview_input["user_ypos"] = float(store_context["ypos"])
     if str(context.get("followupMode") or "") == "logistics_earliest_install_date":
         preview_input["stock_check_mode"] = "logistics_only"
     if getattr(slots, "requested_cal_day", None):
@@ -4250,18 +4329,24 @@ def merged_quickreply_cta_context(
     return context
 
 
-def _region_store_input_values(user_text: str, slots: Any) -> dict[str, Any]:
+def _region_store_input_values(
+    user_text: str,
+    slots: Any,
+    *,
+    allow_region_fallback: bool = False,
+    block_region_text: bool = False,
+) -> dict[str, Any]:
     text = str(user_text or "").strip()
     parsed = ConversationSlots.extract_from_user_text(text)
     values: dict[str, Any] = {}
     label_match = _STORE_VIEW_LABEL_RE.fullmatch(text)
     if label_match:
         region = str(label_match.group("region") or label_match.group("region_alt") or "").strip()
-        if region:
+        if region and not _is_invalid_region_candidate_text(region):
             values["region"] = region
         values["store_view_requested"] = True
         return values
-    if parsed.region not in (None, ""):
+    if parsed.region not in (None, "") and not _is_invalid_region_candidate_text(parsed.region):
         values["region"] = parsed.region
     if parsed.shop_name not in (None, ""):
         values["shop_name"] = parsed.shop_name
@@ -4272,7 +4357,13 @@ def _region_store_input_values(user_text: str, slots: Any) -> dict[str, Any]:
         return values
     if cleaned.endswith("점"):
         values["shop_name"] = cleaned
-    elif len(cleaned) <= 12 and re.fullmatch(r"[A-Za-z0-9가-힣\s]+", cleaned):
+    elif (
+        allow_region_fallback
+        and not block_region_text
+        and len(cleaned) <= 12
+        and re.fullmatch(r"[A-Za-z0-9가-힣\s]+", cleaned)
+        and not _is_invalid_region_candidate_text(cleaned)
+    ):
         values["region"] = cleaned
     return values
 
@@ -4443,17 +4534,23 @@ def resolve_region_or_store_input_context(
     text = str(user_text or "").strip()
     if not text:
         return RegionStoreInputContextResolution()
-
-    input_values = _region_store_input_values(text, merged_slots)
     cta_context = merged_quickreply_cta_context(chip_context, latest_quickreply_tmpl)
+    action_type = str(
+        ((ui_action or {}).get("action_type") or (ui_action or {}).get("cta_action") or cta_context.get("cta_action") or "")
+    ).strip()
+    block_region_text = action_type in _REGION_EXTRACTION_BLOCKED_ACTIONS
+    input_values = _region_store_input_values(
+        text,
+        merged_slots,
+        allow_region_fallback=False,
+        block_region_text=block_region_text,
+    )
     if not input_values and isinstance(cta_context.get("slots"), Mapping):
         canonical_slot_values = canonical_context_from_template_boundary(cta_context.get("slots"))
-        if canonical_slot_values.get("region"):
+        if canonical_slot_values.get("region") and not _is_invalid_region_candidate_text(canonical_slot_values.get("region")):
             input_values = {"region": canonical_slot_values["region"], "store_view_requested": True}
         elif canonical_slot_values.get("shop_name"):
             input_values = {"shop_name": canonical_slot_values["shop_name"], "store_view_requested": True}
-    if not input_values:
-        return RegionStoreInputContextResolution()
 
     parsed = ConversationSlots.extract_from_user_text(text)
     if (
@@ -4486,6 +4583,16 @@ def resolve_region_or_store_input_context(
             resolution_source = "pending_step"
         if resolution_source is None:
             resolution_source = prompt_source
+
+    if not input_values:
+        input_values = _region_store_input_values(
+            text,
+            merged_slots,
+            allow_region_fallback=True,
+            block_region_text=block_region_text,
+        )
+    if not input_values:
+        return RegionStoreInputContextResolution()
 
     purchase_prompt = _purchase_region_store_prompt_signal(
         latest_quickreply_tmpl=latest_quickreply_tmpl,

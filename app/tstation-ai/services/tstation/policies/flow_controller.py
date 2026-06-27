@@ -56,6 +56,54 @@ _PURCHASE_FORBIDDEN_TOOLS = (
     "get_multi_store_schedule_tool",
     "quick_order_tool",
 )
+_INVALID_REGION_LABELS = frozenset({
+    "구매하기",
+    "구매",
+    "주문하기",
+    "주문",
+    "진행",
+    "진행하기",
+    "선택",
+    "확인",
+    "네",
+    "예",
+    "ㅇㅇ",
+})
+
+
+def _normalized_region_text(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip())
+
+
+def _is_invalid_region_text(value: Any) -> bool:
+    normalized = _normalized_region_text(value)
+    if not normalized:
+        return False
+    return normalized in _INVALID_REGION_LABELS
+
+
+def location_source_type(known_slots: Mapping[str, Any] | None) -> str:
+    slots = dict(known_slots or {})
+    shop_id = str(slots.get("shop_id") or "").strip()
+    store_name = str(slots.get("store_name") or slots.get("shop_name") or "").strip()
+    place_query = str(slots.get("place_query") or slots.get("place") or "").strip()
+    region = _normalized_region_text(slots.get("region"))
+    user_xpos = slots.get("user_xpos") if slots.get("user_xpos") not in ("", None) else slots.get("xpos")
+    user_ypos = slots.get("user_ypos") if slots.get("user_ypos") not in ("", None) else slots.get("ypos")
+
+    if shop_id or store_name:
+        return "store"
+    if place_query:
+        return "place"
+    if user_xpos not in ("", None) and user_ypos not in ("", None):
+        return "browser_location"
+    if region and not _is_invalid_region_text(region):
+        return "region"
+    return "none"
+
+
+def has_location_source(known_slots: Mapping[str, Any] | None) -> bool:
+    return location_source_type(known_slots) != "none"
 
 
 def resolve_purchase_order_flow(
@@ -71,8 +119,7 @@ def resolve_purchase_order_flow(
     tire_size = normalize_tire_size(str(slots.get("tire_size") or ""))
     quantity = slots.get("ord_qty") or slots.get("quantity")
     shop_id = str(slots.get("shop_id") or "").strip()
-    region = str(slots.get("region") or slots.get("place") or "").strip()
-    store_name = str(slots.get("store_name") or slots.get("shop_name") or "").strip()
+    location_type = location_source_type(slots)
     requested_cal_day = str(slots.get("requested_cal_day") or "").strip()
     rsv_hour = str(slots.get("rsv_hour") or "").strip()
 
@@ -166,7 +213,7 @@ def resolve_purchase_order_flow(
             metadata=base_metadata,
         )
 
-    if not shop_id and not region and not store_name:
+    if not shop_id and location_type == "none":
         return FlowState(
             flow_id=_PURCHASE_FLOW_ID,
             flow_step="ask_store",
@@ -182,7 +229,7 @@ def resolve_purchase_order_flow(
             metadata=base_metadata,
         )
 
-    if not shop_id and region:
+    if not shop_id and location_type in {"region", "place", "browser_location"}:
         return FlowState(
             flow_id=_PURCHASE_FLOW_ID,
             flow_step="show_store_candidates",
@@ -205,7 +252,7 @@ def resolve_purchase_order_flow(
             metadata=base_metadata,
         )
 
-    if not shop_id and store_name:
+    if not shop_id and location_type == "store":
         return FlowState(
             flow_id=_PURCHASE_FLOW_ID,
             flow_step="resolve_store",
@@ -374,6 +421,11 @@ def _purchase_slot_patch(slots: Mapping[str, Any]) -> dict[str, Any]:
         "shop_name",
         "store_name",
         "region",
+        "place_query",
+        "user_xpos",
+        "user_ypos",
+        "xpos",
+        "ypos",
         "place",
         "requested_cal_day",
         "rsv_hour",
