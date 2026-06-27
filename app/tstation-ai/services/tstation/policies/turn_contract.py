@@ -8,6 +8,7 @@ from typing import Any, Mapping
 
 from services.tstation.common.cta_urls import CTAUrls
 from services.tstation.policies.cross_domain_policy import CrossDomainPlan
+from services.tstation.policies.discovery_intent_policy import is_best_seller_request
 from services.tstation.policies.flow_controller import build_purchase_flow_fallback_event
 from services.tstation.policies.intent_frame import IntentFrame
 from services.tstation.policies.resolved_context import build_resolved_turn_context
@@ -163,6 +164,17 @@ _LEGAL_ACTION_DENIAL_RE = re.compile(
     r"(?:안내|도움|제공).{0,16}(?:어렵|불가|드릴\s*수\s*없).{0,24}법적\s*(?:절차|조치|대응)",
     re.IGNORECASE,
 )
+_BEST_SELLER_SIZE_CLARIFICATION_RE = re.compile(
+    r"(정확한\s*사이즈|사이즈\s*(?:정보|직접\s*입력)|연식/트림에\s*따라|연식/트림|차량번호|내\s*차량)",
+    re.IGNORECASE,
+)
+_BEST_SELLER_DISALLOWED_CTA_LABELS = frozenset({
+    "사이즈 직접 입력",
+    "내 차량 보기",
+    "내 차로 찾기",
+    "내 차량으로 확인",
+    "차량번호로 확인",
+})
 _REFERENCE_GUARD_EXEMPT_INTENTS = frozenset({
     "favorite_store_lookup",
     "oe_re_concept_explanation",
@@ -389,7 +401,10 @@ def build_turn_contract(
 
     planner_domains = _planner_domains(routing_result, cross_domain_plan)
     execution_plan = _execution_plan(routing_result, cross_domain_plan)
-    planner_intent = _planner_intent(routing_result, cross_domain_plan)
+    planner_intent = _planner_best_seller_intent(
+        _planner_intent(routing_result, cross_domain_plan),
+        user_text=user_text,
+    )
     policy_intent = str(getattr(routing_result, "policy_intent", "") or "")
     router_wins_intent = _router_wins_information_intent(
         planner_intent=planner_intent,
@@ -2152,6 +2167,14 @@ def response_contract_violations(
     )
     if tire_quality_warranty_violation is not None:
         violations.append(tire_quality_warranty_violation)
+    best_seller_violation = _best_seller_search_contract_violation(
+        assistant_response_text=assistant_response_text,
+        called_tools=called_tools,
+        event_data=event_data,
+        contract=contract,
+    )
+    if best_seller_violation is not None:
+        violations.append(best_seller_violation)
     faq_first_support_violation = _faq_first_support_policy_contract_violation(
         user_text=user_text,
         assistant_response_text=assistant_response_text,
@@ -2181,6 +2204,43 @@ def response_contract_violations(
     if recommendation_tool_drift is not None:
         violations.append(recommendation_tool_drift)
     return [_with_contract_violation_severity(violation) for violation in violations]
+
+
+def _best_seller_search_contract_violation(
+    *,
+    assistant_response_text: str | None,
+    called_tools: list[str] | tuple[str, ...] | None,
+    event_data: Mapping[str, Any] | None,
+    contract: TurnContract | None,
+) -> dict[str, Any] | None:
+    if contract is None or str(contract.intent or "") != "best_seller_search":
+        return None
+    tools = [str(tool) for tool in tuple(called_tools or ()) if str(tool).strip()]
+    if "get_products_recommendations_tool" in tools:
+        return {
+            "type": "best_seller_search_used_recommendation_tool",
+            "called_tools": tools,
+        }
+    assistant_text = str(assistant_response_text or "").strip()
+    if assistant_text and _BEST_SELLER_SIZE_CLARIFICATION_RE.search(assistant_text):
+        return {
+            "type": "best_seller_search_drifted_to_size_clarification",
+            "assistant_response_text": assistant_text[:200],
+        }
+    quick_replies = event_data.get("quickReplies") if isinstance(event_data, Mapping) else None
+    if isinstance(quick_replies, list):
+        labels = {
+            str(item.get("label") or "").strip()
+            for item in quick_replies
+            if isinstance(item, Mapping) and str(item.get("label") or "").strip()
+        }
+        blocked = sorted(labels & _BEST_SELLER_DISALLOWED_CTA_LABELS)
+        if blocked:
+            return {
+                "type": "best_seller_search_disallowed_clarification_cta",
+                "quick_replies": blocked,
+            }
+    return None
 
 
 def _payment_error_troubleshooting_contract_violation(
@@ -3828,6 +3888,7 @@ def _normalize_plan_intent(value: str) -> str:
         "product_event": "product_event_lookup",
         "discovery_event_content": "product_event_lookup",
         "get_best_selling_products_for_vehicle_timeframe": "best_seller_search",
+        "get_best_selling_products_for_vehicle": "best_seller_search",
         "get_best_selling_products_tool": "best_seller_search",
         "best_seller": "best_seller_search",
         "sales_rank": "best_seller_search",
@@ -3837,6 +3898,16 @@ def _normalize_plan_intent(value: str) -> str:
         "order_data_for_vehicle": "best_seller_search",
     }
     return aliases.get(normalized, normalized or "unknown")
+
+
+def _planner_best_seller_intent(value: str | None, *, user_text: str) -> str:
+    normalized = _normalize_plan_intent(str(value or ""))
+    if normalized in {"vehicle_tire_recommendation_prompt", "recommend_tire_for_vehicle"} and is_best_seller_request(
+        user_text,
+        include_demographic_preference=False,
+    ):
+        return "best_seller_search"
+    return normalized
 
 
 def _is_discovery_event_content_contract(

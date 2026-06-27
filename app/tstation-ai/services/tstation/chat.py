@@ -17439,6 +17439,52 @@ def _build_recommendation_contract_fallback_event(
     }
 
 
+def _build_best_seller_contract_override_event(
+    *,
+    turn_contract: TurnContract | None,
+    tool_data_list: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    if turn_contract is None or str(turn_contract.intent or "") != "best_seller_search":
+        return None
+    entries = [
+        entry
+        for entry in tool_data_list
+        if isinstance(entry, Mapping) and str(entry.get("tool") or "") == "get_best_selling_products_tool"
+    ]
+    if not entries:
+        return None
+    latest_entry = entries[-1]
+    args = latest_entry.get("args") if isinstance(latest_entry.get("args"), Mapping) else {}
+    raw_result = latest_entry.get("data") if isinstance(latest_entry.get("data"), Mapping) else {}
+    result_data = raw_result.get("data") if isinstance(raw_result.get("data"), Mapping) else raw_result
+    vehicle_query = str(
+        (
+            result_data.get("vehicle_query")
+            if isinstance(result_data, Mapping)
+            else ""
+        )
+        or (args.get("vehicle_query") if isinstance(args, Mapping) else "")
+        or ""
+    ).strip()
+    assistant_text = f"{vehicle_query} 기준 인기 상품을 안내드립니다." if vehicle_query else "인기 상품을 안내드립니다."
+
+    from services.tstation.template_mapper import try_build_template
+
+    mapped_event = try_build_template(tool_data_list, assistant_text)
+    if not isinstance(mapped_event, dict):
+        return None
+    mapped_event["source_domain"] = MultiAgentDomain.Domain.DISCOVERY.value
+    mapped_event["assistant_response_source"] = "code_best_seller_contract_override"
+    return _finalize_direct_code_event(
+        mapped_event,
+        turn_contract=turn_contract,
+        intent="product_search",
+        source="code_best_seller_contract_override",
+        required_tools=("get_best_selling_products_tool",),
+        allowed_intents=("best_seller_search",),
+    )
+
+
 def _is_size_only_store_availability_continuation(
     user_text: str,
     *,
@@ -35678,6 +35724,26 @@ class TStationChatServiceV2:
                     or "code_no_visible_output_guard"
                 )
 
+        best_seller_override_event = _build_best_seller_contract_override_event(
+            turn_contract=turn_contract,
+            tool_data_list=mapper_tool_items,
+        )
+        if best_seller_override_event is not None:
+            assistant_response = str((best_seller_override_event.get("data") or {}).get("assistantResponse") or "")
+            buffered_data_events = [best_seller_override_event]
+            original_message_events = [{
+                "type": "message",
+                "content": assistant_response,
+                "agent": "[DISCOVERY AGENT]",
+            }]
+            draft_response = assistant_response
+            draft_for_qc = assistant_response
+            last_template = str(best_seller_override_event.get("template") or "")
+            last_template_source = "best_seller_contract_override"
+            last_assistant_response_source = str(
+                best_seller_override_event.get("assistant_response_source") or "code_best_seller_contract_override"
+            )
+
         # 2. QC VERIFIER (deterministic)
         # Gated by AI_QC_ENABLED. Scans the draft for prices, goods_no, and
         # shop_id literals and checks them against the raw tool outputs
@@ -35749,6 +35815,7 @@ class TStationChatServiceV2:
                         if isinstance(item, Mapping)
                     ],
                     structured_sources=structured_sources,
+                    event_data=(buffered_data_events[-1].get("data") if buffered_data_events else None),
                     source_domain=current_contract_source_domain,
                     contract=turn_contract,
                 )

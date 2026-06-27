@@ -70,6 +70,7 @@ from services.tstation.chat import (
     _build_order_document_guidance_event,
     _build_direct_faq_policy_tool_payload,
     _build_direct_preorder_event_from_slots,
+    _build_best_seller_contract_override_event,
     _build_general_cancel_fee_policy_event,
     _build_general_card_cancel_timing_policy_event,
     _build_partner_member_coupon_policy_event,
@@ -380,6 +381,7 @@ from services.tstation.policies.response_decision import ResponseDecision, Respo
 from services.tstation.policies.turn_contract import (
     _FAQ_FIRST_SUPPORT_POLICY_INTENTS,
     _normalize_plan_intent,
+    _planner_best_seller_intent,
     TurnContract,
     build_required_slot_clarification_event,
     build_response_policy_guard_event,
@@ -27387,6 +27389,7 @@ def test_turn_contract_still_blocks_discovery_product_card_without_current_tool_
 
 def test_normalize_plan_intent_maps_best_seller_aliases() -> None:
     assert _normalize_plan_intent("get_best_selling_products_for_vehicle_timeframe") == "best_seller_search"
+    assert _normalize_plan_intent("get_best_selling_products_for_vehicle") == "best_seller_search"
     assert _normalize_plan_intent("get_best_selling_products_tool") == "best_seller_search"
     assert _normalize_plan_intent("best_seller") == "best_seller_search"
     assert _normalize_plan_intent("sales_rank") == "best_seller_search"
@@ -27394,6 +27397,17 @@ def test_normalize_plan_intent_maps_best_seller_aliases() -> None:
     assert _normalize_plan_intent("best_seller_search_by_vehicle") == "best_seller_search"
     assert _normalize_plan_intent("vehicle_best_seller_search") == "best_seller_search"
     assert _normalize_plan_intent("order_data_for_vehicle") == "best_seller_search"
+
+
+def test_planner_best_seller_intent_promotes_vehicle_recommendation_prompt_with_popularity_context() -> None:
+    assert (
+        _planner_best_seller_intent("vehicle_tire_recommendation_prompt", user_text="그랜저에 가장 인기 있는 타이어")
+        == "best_seller_search"
+    )
+    assert (
+        _planner_best_seller_intent("recommend_tire_for_vehicle", user_text="쏘나타에 많이 팔린 타이어")
+        == "best_seller_search"
+    )
 
 
 def test_turn_contract_promotes_planner_best_seller_followup_to_best_seller_contract() -> None:
@@ -27444,6 +27458,118 @@ def test_best_seller_no_data_fallback_filters_purchase_cta() -> None:
     labels = [item["label"] for item in event["data"]["quickReplies"]]
     assert "구매하기" not in labels
     assert "전체 베스트셀러 보기" in labels
+
+
+def test_best_seller_contract_flags_size_clarification_and_disallowed_ctas() -> None:
+    contract = build_turn_contract(
+        user_text="그랜저에 가장 인기 있는 타이어",
+        intent_frame=IntentFrame(domain=PolicyDomain.DISCOVERY, intent="product_recommendation"),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=("product_card_without_size",),
+            metadata={"response_shape_key": "unsized_recommendation_summary"},
+        ),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY],
+            execution_plan=["discovery:vehicle_tire_recommendation_prompt"],
+        ),
+    )
+
+    violations = response_contract_violations(
+        template="quickReply",
+        assistant_response_text="연식/트림에 따라 사이즈가 다를 수 있어요. 타이어 추천을 위해 정확한 사이즈 정보가 필요해요.",
+        assistant_response_source="discovery_agent",
+        response_shape_key="best_seller_product_cards",
+        called_tools=["get_best_selling_products_tool"],
+        event_data={
+            "assistantResponse": "연식/트림에 따라 사이즈가 다를 수 있어요.",
+            "quickReplies": [
+                {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
+                {"label": "내 차량 보기", "domain": "DISCOVERY"},
+            ],
+        },
+        source_domain="discovery",
+        contract=contract,
+    )
+
+    violation_types = {item["type"] for item in violations}
+    assert "best_seller_search_drifted_to_size_clarification" in violation_types
+
+
+def test_best_seller_contract_flags_recommendation_tool_drift() -> None:
+    contract = build_turn_contract(
+        user_text="5시리즈에 가장 인기 있는 타이어",
+        intent_frame=IntentFrame(domain=PolicyDomain.DISCOVERY, intent="general_recommendation"),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=("product_card_without_size",),
+            metadata={"response_shape_key": "unsized_recommendation_summary"},
+        ),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY],
+            execution_plan=["discovery:get_best_selling_products_for_vehicle"],
+        ),
+    )
+
+    violations = response_contract_violations(
+        template="product",
+        assistant_response_source="code_mapper",
+        response_shape_key="best_seller_product_cards",
+        called_tools=["get_products_recommendations_tool"],
+        event_data={"products": [{"titleProductName": "벤투스 S2 AS", "titleTires": "245/45R19"}]},
+        source_domain="discovery",
+        contract=contract,
+    )
+
+    assert any(item["type"] == "best_seller_search_used_recommendation_tool" for item in violations)
+
+
+def test_best_seller_contract_override_uses_tool_template_instead_of_agent_clarification() -> None:
+    contract = build_turn_contract(
+        user_text="그랜저에 가장 인기 있는 타이어",
+        intent_frame=IntentFrame(domain=PolicyDomain.DISCOVERY, intent="product_recommendation"),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=("product_card_without_size",),
+            metadata={"response_shape_key": "unsized_recommendation_summary"},
+        ),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY],
+            execution_plan=["discovery:vehicle_tire_recommendation_prompt"],
+        ),
+    )
+
+    event = _build_best_seller_contract_override_event(
+        turn_contract=contract,
+        tool_data_list=[
+            {
+                "tool": "get_best_selling_products_tool",
+                "args": {"vehicle_query": "그랜저", "months": 3, "limit": 5},
+                "data": {
+                    "status": "success",
+                    "data": {
+                        "status": "success",
+                        "vehicle_query": "그랜저",
+                        "items": [
+                            {
+                                "goods_no": "G0001",
+                                "goods_nm": "아이온 에보 AS SUV",
+                                "tire_size_1": "245/45R19",
+                                "sale_prc": 250000,
+                            }
+                        ],
+                    },
+                },
+            }
+        ],
+    )
+
+    assert event is not None
+    assert event["template"] == "product"
+    assert event["assistant_response_source"] == "code_best_seller_contract_override"
 
 
 def test_turn_contract_allows_compare_quickreply_during_discovery_first_leg_transaction_chain() -> None:
