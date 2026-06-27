@@ -1172,6 +1172,20 @@ def _resume_source_from_current_turn(user_text: str) -> str:
     return "none"
 
 
+def _resume_source_from_ui_action_context(action_context: UIActionContext | None) -> str:
+    if action_context is None:
+        return "none"
+    contract_intent = str(
+        action_context.expected_contract_intent or action_context.contract_intent or ""
+    ).strip()
+    if contract_intent not in {"stock_store_search", "quick_order_reservation"}:
+        return "none"
+    action_type = str(action_context.action_type or "").strip()
+    if action_type in {"select_quantity", "select_product", "select_store", "select_schedule"}:
+        return f"ui_action:{action_type}"
+    return "none"
+
+
 def _has_stored_transaction_context(slots: ConversationSlots) -> bool:
     context = slots.availability_context if isinstance(slots.availability_context, dict) else {}
     return bool(
@@ -23389,6 +23403,8 @@ class TStationChatServiceV2:
             if len(recent_user_texts) >= 3:
                 break
         resume_source = _resume_source_from_current_turn(last_user_text)
+        if resume_source == "none":
+            resume_source = _resume_source_from_ui_action_context(vehicle_ui_action_context)
         if resume_source == "none" and location_selection_resume_source != "none":
             resume_source = location_selection_resume_source
         if resume_source == "none" and region_store_input_resolution.resolved:

@@ -137,6 +137,7 @@ from services.tstation.chat import (
     _allows_outer_tool_slot_staging,
     _context_state_for_action,
     _current_turn_action_mode,
+    _resume_source_from_ui_action_context,
     _has_current_turn_order_recovery_anchor,
     _mask_dormant_transaction_action_slots,
     _stage_dormant_transaction_context,
@@ -13138,6 +13139,10 @@ def test_dynamic_quantity_ui_action_metadata_uses_contract_slots() -> None:
     chip = event["data"]["quickReplies"][-1]
     assert chip["cta_action"] == "select_dynamic_choice"
     assert chip["ui_action"]["action_type"] == "select_quantity"
+    assert chip["ui_action"]["expected_behavior"] == "slot_fill"
+    assert chip["ui_action"]["fills_slot"] == "ord_qty"
+    assert chip["ui_action"]["flow_id"] == "stock_to_install_purchase"
+    assert chip["ui_action"]["next_state"] == "stock_check_ready"
     assert chip["ui_action"]["expected_contract_intent"] == "stock_store_search"
     assert chip["ui_action"]["slots"]["ord_qty"] == 4
     assert chip["ui_action"]["slots"]["goods_no"] == "G000000309715"
@@ -13197,6 +13202,114 @@ def test_product_booking_flow_metadata_carries_availability_slots() -> None:
     assert metadata["slots"]["goods_no"] == "G000000309715"
     assert metadata["slots"]["requested_cal_day"] == "20260626"
     assert metadata["ui_action"]["entity_type"] == "product"
+
+
+def test_location_booking_flow_metadata_carries_store_selection_ui_action() -> None:
+    contract = build_turn_contract(
+        user_text="매장을 선택해 주세요",
+        intent_frame=IntentFrame(
+            domain=PolicyDomain.TRANSACTION,
+            intent="stock_store_search",
+            sub_intent="today_install",
+            known_slots={
+                "goods_no": "G000000309715",
+                "tire_size": "225/55R18",
+                "ord_qty": 4,
+                "region": "동탄",
+                "pending_intent": "stock",
+                "goal_type": "store_with_stock",
+                "stock_check_mode": "preview",
+            },
+        ),
+        tool_plan=ToolPlan(
+            allowed_tools=("transaction_store_preview_tool",),
+            preferred_tool="transaction_store_preview_tool",
+        ),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.CARD,
+            template=TemplateName.LOCATION,
+            metadata={"response_shape_key": "store_selection"},
+        ),
+        action_mode="stock_check",
+        context_state="resumed",
+    )
+    event = {
+        "template": "location",
+        "source_domain": "transaction",
+        "data": {
+            "assistantResponse": "원하시는 매장을 선택해 주세요.",
+            "isBookingFlow": True,
+            "stores": [
+                {"nameAddress": "티스테이션 동탄석우점", "detailAddress": "경기 화성시"},
+            ],
+            "metadata": [
+                {"shopId": "A0001", "shopName": "티스테이션 동탄석우점"},
+            ],
+        },
+    }
+
+    changed = normalize_ui_action_metadata(event, contract=contract)
+
+    assert changed is True
+    metadata = event["data"]["metadata"][0]
+    assert metadata["cta_action"] == "select_store"
+    assert metadata["expected_behavior"] == "slot_fill"
+    assert metadata["ui_action"]["entity_type"] == "store"
+    assert metadata["ui_action"]["fills_slot"] == "shop_id"
+    assert metadata["slots"]["shop_id"] == "A0001"
+    assert metadata["slots"]["goods_no"] == "G000000309715"
+
+
+def test_datepick_metadata_carries_schedule_selection_ui_action() -> None:
+    contract = build_turn_contract(
+        user_text="날짜를 선택해 주세요",
+        intent_frame=IntentFrame(
+            domain=PolicyDomain.TRANSACTION,
+            intent="quick_order_reservation",
+            sub_intent="quick_order_reservation",
+            known_slots={
+                "goods_no": "G000000309715",
+                "tire_size": "225/55R18",
+                "ord_qty": 4,
+                "shop_id": "A0001",
+                "shop_name": "티스테이션 동탄석우점",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            },
+        ),
+        tool_plan=ToolPlan(
+            allowed_tools=("get_store_schedule_tool",),
+            preferred_tool="get_store_schedule_tool",
+        ),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.CARD,
+            template=TemplateName.DATE_PICK,
+            metadata={"response_shape_key": "schedule_selection"},
+        ),
+        action_mode="booking_continuation",
+        context_state="resumed",
+    )
+    event = {
+        "template": "datepick",
+        "source_domain": "transaction",
+        "data": {
+            "assistantResponse": "예약 시간을 선택해 주세요.",
+            "dates": [{"date": "2026년 6월 27일 (토)", "availableTimes": [9, 10]}],
+            "selectedDate": 0,
+            "metadata": {"shopId": "A0001", "shopName": "티스테이션 동탄석우점"},
+        },
+    }
+
+    changed = normalize_ui_action_metadata(event, contract=contract)
+
+    assert changed is True
+    metadata = event["data"]["metadata"]
+    assert metadata["cta_action"] == "select_schedule"
+    assert metadata["expected_behavior"] == "slot_fill"
+    assert metadata["ui_action"]["entity_type"] == "schedule"
+    assert metadata["ui_action"]["fills_slot"] == "requested_cal_day,rsv_hour"
+    assert metadata["slots"]["shop_id"] == "A0001"
+    assert metadata["slots"]["goods_no"] == "G000000309715"
 
 
 def test_same_quantity_label_carries_different_contract_by_flow() -> None:
@@ -13282,6 +13395,58 @@ def test_same_quantity_label_carries_different_contract_by_flow() -> None:
     assert availability_ui_action["slots"]["region"] == "동탄"
     assert purchase_ui_action["expected_contract_intent"] == "quick_order_reservation"
     assert purchase_ui_action["slots"]["shop_name"] == "동탄석우점"
+
+
+def test_resume_source_from_ui_action_context_promotes_transaction_quantity_resume() -> None:
+    action_context = resolve_ui_action_context(
+        raw_action={
+            "action_type": "select_quantity",
+            "source_intent": "stock_store_search",
+            "expected_contract_intent": "stock_store_search",
+            "slots": {
+                "goods_no": "G000000309715",
+                "tire_size": "225/55R18",
+                "ord_qty": 4,
+                "region": "동탄",
+                "pending_intent": "stock",
+                "goal_type": "store_with_stock",
+            },
+        },
+        selected_vehicle=None,
+        selection_source="ui_action",
+    )
+
+    assert _resume_source_from_ui_action_context(action_context) == "ui_action:select_quantity"
+
+    slots = ConversationSlots(
+        goods_no="G000000309715",
+        tire_size="225/55R18",
+        ord_qty=4,
+        region="동탄",
+        pending_intent="stock",
+        goal_type="store_with_stock",
+    )
+    action_mode = _current_turn_action_mode(
+        user_text="4개",
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        routing_result=MultiAgentDomain(
+            reason="quantity fill in stock flow",
+            domains=[MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["transaction:stock_store_search"],
+            user_behavior="filling missing quantity in active stock flow",
+            flow="transaction resume",
+            claim_check_type="none",
+            complaint_scope="none",
+            agent_prompt_profile="full",
+        ),
+        regex_slots=ConversationSlots(),
+        merged_slots=slots,
+        explicit_override_reason=None,
+        resume_source="ui_action:select_quantity",
+    )
+
+    assert action_mode == "stock_check"
+    assert _context_state_for_action(action_mode=action_mode, resume_source="ui_action:select_quantity", slots=slots) == "resumed"
 
 
 def test_history_vehicle_selection_does_not_match_product_name_substring_to_vehicle() -> None:

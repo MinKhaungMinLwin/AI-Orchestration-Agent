@@ -133,6 +133,7 @@ _UI_ACTION_SLOT_KEYS = (
     "shop_name",
     "availability_intent",
     "requested_cal_day",
+    "rsv_hour",
     "pending_intent",
     "goal_type",
     "stock_check_mode",
@@ -1008,10 +1009,24 @@ def _build_ui_action_context_from_raw(
         or slot_patch.get("car_no")
         or ""
     ).strip()
+    action_type = str(normalized.get("action_type") or "").strip()
+    inferred_entity_type = (
+        "vehicle"
+        if contract_intent == _VEHICLE_TIRE_SIZE_LOOKUP_INTENT
+        else "quantity"
+        if action_type == "select_quantity"
+        else "store"
+        if action_type == "select_store"
+        else "schedule"
+        if action_type == "select_schedule"
+        else "product"
+        if action_type == "select_product"
+        else "quick_reply"
+    )
     entity_type = str(
         normalized.get("entity_type")
         or normalized.get("entityType")
-        or ("vehicle" if contract_intent == _VEHICLE_TIRE_SIZE_LOOKUP_INTENT else "product")
+        or inferred_entity_type
     ).strip()
     trace_metadata = _ui_action_trace_metadata(
         normalized,
@@ -1020,7 +1035,7 @@ def _build_ui_action_context_from_raw(
         previous_slots=previous_slots,
     )
     return UIActionContext(
-        action_type=str(normalized.get("action_type") or "").strip() or "select_ui_action",
+        action_type=action_type or "select_ui_action",
         action_name=str(normalized.get("cta_action") or normalized.get("action_type") or "select_ui_action"),
         selection_source=selection_source,
         contract_intent=contract_intent,
@@ -4322,9 +4337,21 @@ def normalize_ui_action_metadata(
             ).strip()
             chip["source_intent"] = str(chip.get("source_intent") or metadata.get("source_intent") or contract_intent or "")
             chip["expected_contract_intent"] = expected_contract_intent
-            chip["expected_behavior"] = str(
-                chip.get("expected_behavior") or metadata.get("expected_behavior") or "conversation_action"
+            default_behavior = "conversation_action"
+            if action_type == "select_quantity" and expected_contract_intent in {
+                _STOCK_STORE_SEARCH_INTENT,
+                _QUICK_ORDER_RESERVATION_INTENT,
+            }:
+                default_behavior = "slot_fill"
+            expected_behavior = str(
+                chip.get("expected_behavior") or metadata.get("expected_behavior") or default_behavior
             )
+            if action_type == "select_quantity" and expected_contract_intent in {
+                _STOCK_STORE_SEARCH_INTENT,
+                _QUICK_ORDER_RESERVATION_INTENT,
+            } and expected_behavior == "dynamic_choice":
+                expected_behavior = "slot_fill"
+            chip["expected_behavior"] = expected_behavior
             chip["ui_action"] = {
                 "action_type": action_type,
                 "cta_action": action_type,
@@ -4335,10 +4362,32 @@ def normalize_ui_action_metadata(
                 "entity_label": label,
                 "slots": slot_values,
             }
+            if action_type == "select_quantity" and expected_contract_intent in {
+                _STOCK_STORE_SEARCH_INTENT,
+                _QUICK_ORDER_RESERVATION_INTENT,
+            }:
+                flow_id = (
+                    "stock_to_install_purchase"
+                    if expected_contract_intent == _STOCK_STORE_SEARCH_INTENT
+                    else "quick_order_reservation"
+                )
+                chip["ui_action"]["fills_slot"] = "ord_qty"
+                chip["ui_action"]["flow_id"] = flow_id
+                chip["ui_action"]["flow_state"] = "quantity_required"
+                chip["ui_action"]["next_state"] = (
+                    "stock_check_ready"
+                    if expected_contract_intent == _STOCK_STORE_SEARCH_INTENT
+                    else "quantity_selected"
+                )
             metadata = dict(metadata)
             metadata["ui_action"] = chip["ui_action"]
             if slot_values:
                 metadata["slots"] = slot_values
+            if action_type == "select_quantity" and expected_contract_intent in {
+                _STOCK_STORE_SEARCH_INTENT,
+                _QUICK_ORDER_RESERVATION_INTENT,
+            }:
+                metadata["fills_slot"] = "ord_qty"
             chip["metadata"] = metadata
             changed = True
         return changed
@@ -4390,6 +4439,93 @@ def normalize_ui_action_metadata(
             changed = True
         return changed
 
+    if template == "location" and data.get("isBookingFlow") is True:
+        stores = data.get("stores")
+        metadata_list = data.get("metadata")
+        if not isinstance(stores, list) or not isinstance(metadata_list, list):
+            return changed
+        if len(stores) != len(metadata_list):
+            return changed
+        default_contract_intent = contract_intent or _STOCK_STORE_SEARCH_INTENT
+        for store, metadata in zip(stores, metadata_list):
+            if not isinstance(store, dict) or not isinstance(metadata, dict):
+                continue
+            store_context = canonical_context_from_template_boundary({**store, **metadata})
+            slot_values = {
+                key: value for key, value in known_slots.items()
+                if key in _UI_ACTION_SLOT_KEYS and value not in (None, "", [])
+            }
+            for key, value in store_context.items():
+                if key in _UI_ACTION_SLOT_KEYS and value not in (None, "", []):
+                    slot_values[key] = value
+            expected_contract_intent = str(
+                metadata.get("expected_contract_intent")
+                or metadata.get("source_intent")
+                or default_contract_intent
+                or ""
+            ).strip()
+            metadata["domain"] = metadata.get("domain") or contract_domain or "TRANSACTION"
+            metadata["cta_action"] = "select_store"
+            metadata["source_intent"] = metadata.get("source_intent") or expected_contract_intent
+            metadata["expected_contract_intent"] = expected_contract_intent
+            metadata["expected_behavior"] = metadata.get("expected_behavior") or "slot_fill"
+            metadata["slots"] = slot_values
+            metadata["ui_action"] = {
+                "action_type": "select_store",
+                "cta_action": "select_store",
+                "expected_behavior": metadata["expected_behavior"],
+                "source_intent": metadata["source_intent"],
+                "expected_contract_intent": metadata["expected_contract_intent"],
+                "entity_type": "store",
+                "entity_id": str(store_context.get("shop_id") or "").strip() or None,
+                "entity_label": str(
+                    store_context.get("shop_name") or store.get("nameAddress") or store.get("name") or ""
+                ).strip() or None,
+                "fills_slot": "shop_id",
+                "slots": slot_values,
+            }
+            changed = True
+        return changed
+
+    if template == "datepick":
+        metadata = data.get("metadata")
+        if not isinstance(metadata, dict):
+            return changed
+        slot_values = {
+            key: value for key, value in known_slots.items()
+            if key in _UI_ACTION_SLOT_KEYS and value not in (None, "", [])
+        }
+        canonical_metadata = canonical_context_from_template_boundary(metadata)
+        for key, value in canonical_metadata.items():
+            if key in _UI_ACTION_SLOT_KEYS and value not in (None, "", []):
+                slot_values[key] = value
+        expected_contract_intent = str(
+            metadata.get("expected_contract_intent")
+            or metadata.get("source_intent")
+            or contract_intent
+            or _QUICK_ORDER_RESERVATION_INTENT
+        ).strip()
+        metadata["domain"] = metadata.get("domain") or contract_domain or "TRANSACTION"
+        metadata["cta_action"] = metadata.get("cta_action") or "select_schedule"
+        metadata["source_intent"] = metadata.get("source_intent") or expected_contract_intent
+        metadata["expected_contract_intent"] = expected_contract_intent
+        metadata["expected_behavior"] = metadata.get("expected_behavior") or "slot_fill"
+        metadata["slots"] = slot_values
+        metadata["ui_action"] = {
+            "action_type": "select_schedule",
+            "cta_action": "select_schedule",
+            "expected_behavior": metadata["expected_behavior"],
+            "source_intent": metadata["source_intent"],
+            "expected_contract_intent": metadata["expected_contract_intent"],
+            "entity_type": "schedule",
+            "entity_id": str(canonical_metadata.get("shop_id") or "").strip() or None,
+            "entity_label": str(canonical_metadata.get("shop_name") or "").strip() or None,
+            "fills_slot": "requested_cal_day,rsv_hour",
+            "slots": slot_values,
+        }
+        changed = True
+        return changed
+
     return changed
 
 
@@ -4420,6 +4556,22 @@ def ui_action_trace_metadata(events: list[dict[str, Any]]) -> dict[str, Any]:
                     if isinstance(ui_action, Mapping):
                         first_ui_action = dict(ui_action)
                         break
+        elif event.get("template") == "location":
+            metadata_list = data.get("metadata")
+            if isinstance(metadata_list, list):
+                for metadata in metadata_list:
+                    if not isinstance(metadata, Mapping):
+                        continue
+                    ui_action = metadata.get("ui_action")
+                    if isinstance(ui_action, Mapping):
+                        first_ui_action = dict(ui_action)
+                        break
+        elif event.get("template") == "datepick":
+            metadata = data.get("metadata")
+            if isinstance(metadata, Mapping):
+                ui_action = metadata.get("ui_action")
+                if isinstance(ui_action, Mapping):
+                    first_ui_action = dict(ui_action)
         if first_ui_action is not None:
             break
     if first_ui_action is not None:
