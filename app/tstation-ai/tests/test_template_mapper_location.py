@@ -634,6 +634,60 @@ def test_map_product_deduplicates_same_recommendation_goods_from_guard_and_tool(
     assert "올웨더 대안 상품 2개" in event["data"]["assistantResponse"]
 
 
+def test_product_card_includes_sound_absorber_tag_from_search_result() -> None:
+    event = try_build_template(
+        [
+            _search_product_entry(
+                keyword="벤투스 에어S",
+                size="245/45R19",
+                items=[
+                    {
+                        "goods_no": "G000000319584",
+                        "goods_nm": "벤투스 에어S",
+                        "tire_size_1": "245/45R19",
+                        "prc_grd_nm": "프리미엄",
+                        "goods_pfm_nm": "COMFORT",
+                        "goods_dtl_pfm_nm": "흡음재",
+                        "sound_absorber_yn": "Y",
+                    }
+                ],
+            )
+        ],
+        "상품을 확인했어요.",
+    )
+
+    assert event is not None
+    tags = event["data"]["products"][0]["tags"]
+    assert {"text": "흡음재", "primary": False} in tags
+
+
+def test_product_card_includes_sound_absorber_tag_from_recommendation_result() -> None:
+    event = try_build_template(
+        [
+            _recommendation_entry(
+                args={"rcmd_type": "sound_absorber", "limit": 3, "brand_cd": "HK", "tire_size": "245/45R19"},
+                data={
+                    "items": [
+                        {
+                            "goods_no": "G000000319584",
+                            "goods_nm": "벤투스 에어S",
+                            "tire_size_1": "245/45R19",
+                            "goods_pfm_nm": "COMFORT",
+                            "goods_dtl_pfm_nm": "흡음재",
+                            "sound_absorber_yn": "Y",
+                        }
+                    ]
+                },
+            )
+        ],
+        "흡음재 적용 상품을 확인했어요.",
+    )
+
+    assert event is not None
+    tags = event["data"]["products"][0]["tags"]
+    assert {"text": "흡음재", "primary": False} in tags
+
+
 def test_empty_recommendation_result_maps_to_no_result_quickreply() -> None:
     event = try_build_template(
         [
@@ -1066,6 +1120,9 @@ def _attribute_compare_search_entries() -> list[dict]:
                             "tire_size_1": "245/45R18",
                             "t_life_span": "4.0",
                             "rr": "3",
+                            "goods_pfm_nm": "COMFORT",
+                            "goods_dtl_pfm_nm": "흡음재",
+                            "sound_absorber_yn": "Y",
                             "sys_reg_dtime": "2024-06-13 15:50:56",
                             "t_rls_yearmon": "2024년 7월",
                         }
@@ -1086,6 +1143,8 @@ def _attribute_compare_search_entries() -> list[dict]:
                             "tire_size_1": "235/55R19",
                             "t_life_span": "5.0",
                             "rr": "4",
+                            "goods_pfm_nm": "COMFORT",
+                            "goods_dtl_pfm_nm": "SUV 마일리지",
                             "sys_reg_dtime": "2022-11-10 10:00:00",
                             "t_rls_yearmon": "2023년 1월",
                         }
@@ -2055,6 +2114,29 @@ def test_metric_comparison_policy_ranks_fuel_efficiency_from_rr() -> None:
     assert "- 키너지 EX: 회전저항/RR 3등급" in assistant_response
     assert "사이즈:" not in assistant_response
     assert "등급 숫자가 낮을수록" in assistant_response
+
+
+def test_metric_comparison_policy_includes_goods_detail_performance_name() -> None:
+    current_user_text.set("벤투스 에어S랑 다이나프로 HPX 특화 사양 비교해줘")
+    current_discovery_response_decision.set(
+        ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            metadata={
+                "response_shape_key": "metric_comparison_summary",
+                "compare_metric": "detail",
+            },
+        )
+    )
+
+    result = try_build_template(_attribute_compare_search_entries()[:2], "비교해드릴게요.")
+
+    assert result is not None
+    assert result["template"] == "quickReply"
+    assistant_response = result["data"]["assistantResponse"]
+    assert "비교 대상의 특화 사양은 아래처럼 확인돼요." in assistant_response
+    assert "- 벤투스 에어S: 특화 사양 COMFORT / 흡음재" in assistant_response
+    assert "- 다이나프로 HPX: 특화 사양 COMFORT / SUV 마일리지" in assistant_response
 
 
 def test_metric_comparison_policy_answers_latest_product_confidently() -> None:

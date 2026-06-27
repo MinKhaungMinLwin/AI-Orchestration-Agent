@@ -12,7 +12,7 @@ import contextvars
 import datetime
 import logging
 import re
-from typing import Any
+from typing import Any, Mapping
 
 from services.tstation.common.cta_urls import CTAUrls
 from services.tstation.policies.reservation_template_policy import (
@@ -1614,6 +1614,17 @@ _GOODS_PFM_SUMMARY_LABELS: dict[str, str] = {
 }
 
 
+def _has_sound_absorber(row: Mapping[str, Any]) -> bool:
+    if _get_str(row, "sound_absorber_yn").upper() in {"Y", "O", "TRUE", "1"}:
+        return True
+    return "흡음" in _get_str(row, "goods_dtl_pfm_nm")
+
+
+def _append_sound_absorber_tag(tags: list[dict], row: Mapping[str, Any]) -> None:
+    if _has_sound_absorber(row) and not any(tag.get("text") == "흡음재" for tag in tags):
+        tags.append({"text": "흡음재", "primary": False})
+
+
 def _tool_args(entry: dict) -> dict:
     args = entry.get("args") or entry.get("input") or {}
     return args if isinstance(args, dict) else {}
@@ -2193,6 +2204,12 @@ def _format_product_attribute(metric: str, rows: list[dict]) -> tuple[str, bool]
     if metric == "car_type":
         values = _unique_nonempty([_get_str(row, "car_knd_nm") for row in rows])
         return (f"차종 구분 {', '.join(values[:3])}" if values else "차종 구분 확인되지 않음", False)
+    if metric == "detail":
+        values = _unique_nonempty([
+            " / ".join(filter(None, [_get_str(row, "goods_pfm_nm"), _get_str(row, "goods_dtl_pfm_nm")]))
+            for row in rows
+        ])
+        return (f"특화 사양 {', '.join(values[:3])}" if values else "특화 사양 확인되지 않음", False)
     return "", False
 
 
@@ -2390,6 +2407,12 @@ def _product_metric_comparison_policy_response(tool_data_list: list[dict]) -> st
     grouped = _collect_product_comparison_rows(tool_data_list)
     if not grouped:
         return ""
+    if metric == "detail":
+        lines = ["비교 대상의 특화 사양은 아래처럼 확인돼요."]
+        for name, rows in list(grouped.items())[:6]:
+            detail, _ = _format_product_attribute("detail", rows)
+            lines.append(f"- {name}: {detail or '특화 사양 확인되지 않음'}")
+        return "\n".join(lines)
 
     ranked: list[tuple[str, float | None, str]] = []
     for name, rows in grouped.items():
@@ -3136,6 +3159,7 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
             goods_pfm_label = _GOODS_PFM_LABELS.get(goods_pfm_code)
             if goods_pfm_label:
                 tags.append({"text": goods_pfm_label, "primary": False})
+            _append_sound_absorber_tag(tags, row)
             items.append({
                 "imageUrl": _get_str(row, "image_url"),
                 "title": title,
@@ -3291,6 +3315,7 @@ def inject_product_tags_and_sanitize(
             goods_pfm_label = _GOODS_PFM_LABELS.get(goods_pfm_code)
             if goods_pfm_label:
                 tags.append({"text": goods_pfm_label, "primary": False})
+            _append_sound_absorber_tag(tags, row)
             product["titleProductName"] = _get_str(row, "goods_nm", "title")
             product["titleTires"] = _get_str(row, "tire_size_1", "tire_size_2")
             product["brandName"] = _normalize_brand_name(_get_str(row, "brand_nm"))

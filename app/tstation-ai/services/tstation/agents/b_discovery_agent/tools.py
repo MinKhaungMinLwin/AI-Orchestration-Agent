@@ -190,6 +190,7 @@ _TRIM_KEEP_FIELDS: frozenset[str] = frozenset({
     "t_highspd", "t_highspd_cd", "t_high_hand_avg",
     "t_com_sil_avg", "t_com_cvs", "t_milg_cvs",
     "t_wgt_idx", "t_wgt_idx_kg", "t_tray_ware", "t_rlx_isn_yn",
+    "goods_dtl_pfm_nm", "sound_absorber_yn",
     # Categorical attributes referenced by the agent / template_mapper
     "goods_pfm_nm", "season_nm", "car_knd_nm", "prc_grd_nm", "wrt_grte_term",
     "t_oe_maker_1", "oe_badge_yn",
@@ -620,7 +621,7 @@ def search_product_tool(
     Item field hints (사용자 질문 → 참조 필드):
         - 사이즈/규격: tire_size_1, tire_width, tire_series, inch
         - 하중·속도: t_wgt_idx, t_wgt_idx_kg, t_wgt_spd, t_highspd
-        - 계절/차종/성능: season_nm, car_knd_nm, goods_pfm_nm
+        - 계절/차종/성능: season_nm, car_knd_nm, goods_pfm_nm, goods_dtl_pfm_nm, sound_absorber_yn
         - 브랜드/원산지/출시: brand_nm, certify_brand_nm, orpl_nm, t_rls_yearmon
         - EU 라벨: rr (회전저항), wet (젖은노면), label_pndb (소음 dB)
         - 공임/보증: wage_prc (공임비), wage_today_prc (오늘 공임), free_guarantee_yn (무상교환), t_rlx_isn_yn (안심보험)
@@ -913,7 +914,7 @@ def get_product_description_tool(goods_no: str):
         - 식별/표기: goods_nm, big_goods_nm, ptrn_d_nm
         - 사이즈/규격: tire_size_1, tire_width, tire_series, inch
         - 하중·속도: t_wgt_idx, t_wgt_idx_kg, t_wgt_spd, t_highspd
-        - 계절/차종/성능: season_nm, car_knd_nm, goods_pfm_nm
+        - 계절/차종/성능: season_nm, car_knd_nm, goods_pfm_nm, goods_dtl_pfm_nm, sound_absorber_yn
         - 브랜드/원산지/출시: brand_nm, certify_brand_nm, orpl_nm, t_rls_yearmon
         - 성능 점수: t_comfort, t_silence, t_high_perform, t_handling, t_life_span,
           t_snow, t_ice, t_dryroad_brk
