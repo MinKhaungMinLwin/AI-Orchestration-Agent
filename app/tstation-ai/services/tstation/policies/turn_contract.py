@@ -191,6 +191,71 @@ _REFERENCE_GUARD_EXEMPT_DISCOVERY_PLAN_TOKENS = frozenset({
     "vehicle_resolved_recommendation",
     "best_seller_search",
 })
+ROUTER_WINS_INFORMATIONAL_INTENTS = frozenset({
+    "product_detail_lookup",
+    "product_description",
+    "product_comparison",
+    "product_size_list_lookup",
+    "delivery_delay_reservation_schedule_policy",
+    "coupon_usage_policy",
+    "coupon_registration_policy",
+    "coupon_stacking_policy",
+    "signup_first_purchase_benefit_policy",
+    "signup_coupon_guidance",
+    "partner_member_coupon_policy",
+    "general_cancel_fee_policy",
+    "general_card_cancel_timing_policy",
+    "reservation_policy_guidance",
+    "installation_work_policy",
+    "promotion_gift_policy",
+    "tire_condition_photo_policy",
+    "tire_manufacture_date_policy",
+    "tire_quality_warranty_policy",
+    "assurance_service_policy",
+    "maintenance_history_access_policy",
+    "order_document_guidance",
+    "payment_error_troubleshooting",
+    "shipping_fee_policy",
+    "online_store_price_policy",
+    "regional_price_policy",
+    "legal_action_guidance_denied",
+    "tstation_service_complaint",
+    "support_faq",
+    "policy_notice_or_escalation",
+})
+_ROUTER_WINS_EXECUTION_EXCLUDED_INTENTS = frozenset({
+    "quick_order_reservation",
+    "quick_order_execute",
+    "cart_add",
+    "cart_continuation",
+    "stock_store_search",
+    "store_schedule",
+    "selected_store_schedule",
+    "reservation_store_info_lookup",
+    "reservation_status_lookup",
+    "order_cancel_status_lookup",
+    "owned_order_cancel_fee_inquiry",
+    "owned_coupon_lookup",
+    "maintenance_history_lookup",
+})
+_ROUTER_WINS_TRANSACTION_FORBIDDEN_TOOLS = frozenset({
+    "quick_order_tool",
+    "save_to_cart_tool",
+    "transaction_store_preview_tool",
+    "get_store_schedule_tool",
+    "get_multi_store_schedule_tool",
+    "get_store_inventory_tool",
+    "get_logistics_inventory_tool",
+    "get_final_price_tool",
+    "compare_discount_tool",
+    "get_orders_of_user_tool",
+    "get_order_status_tool",
+    "get_my_reservations_tool",
+    "get_my_coupons_tool",
+    "get_available_coupons_tool",
+    "get_coupon_applicable_products_tool",
+    "issue_coupon_tool",
+})
 
 
 @dataclass(frozen=True)
@@ -239,6 +304,11 @@ class TurnContract:
     blocking_required_slots_source: str | None = None
     flow_id: str | None = None
     flow_step: str | None = None
+    router_wins_applied: bool = False
+    code_frame_intent: str | None = None
+    drift_resolution: str | None = None
+    stale_context_used_for: str | None = None
+    response_policy_source: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -285,6 +355,11 @@ class TurnContract:
             "blocking_required_slots_source": self.blocking_required_slots_source,
             "flow_id": self.flow_id,
             "flow_step": self.flow_step,
+            "router_wins_applied": self.router_wins_applied,
+            "code_frame_intent": self.code_frame_intent,
+            "drift_resolution": self.drift_resolution,
+            "stale_context_used_for": self.stale_context_used_for,
+            "response_policy_source": self.response_policy_source,
         }
 
 
@@ -314,11 +389,20 @@ def build_turn_contract(
     planner_domains = _planner_domains(routing_result, cross_domain_plan)
     execution_plan = _execution_plan(routing_result, cross_domain_plan)
     planner_intent = _planner_intent(routing_result, cross_domain_plan)
+    policy_intent = str(getattr(routing_result, "policy_intent", "") or "")
+    router_wins_intent = _router_wins_information_intent(
+        planner_intent=planner_intent,
+        policy_intent=policy_intent,
+        routing_result=routing_result,
+    )
     code_domain = _domain_value(intent_frame.domain) if intent_frame is not None else _domain_from_routing(routing_result)
     code_intent = intent_frame.intent if intent_frame is not None else _intent_from_cross_domain(cross_domain_plan)
     domain = planner_domains[0] if planner_domains else code_domain
     intent = planner_intent or code_intent
-    if _should_lock_code_intent_contract(code_intent):
+    if router_wins_intent:
+        domain = _router_wins_domain(router_wins_intent, planner_domains)
+        intent = router_wins_intent
+    elif _should_lock_code_intent_contract(code_intent):
         domain = code_domain
         intent = code_intent
     sub_intent = intent_frame.sub_intent if intent_frame is not None else None
@@ -378,7 +462,6 @@ def build_turn_contract(
             known_slots["recommendation_expected_tool_args"] = {
                 key: value for key, value in expected_tool_args.items() if value not in (None, "")
             }
-    policy_intent = str(getattr(routing_result, "policy_intent", "") or "")
     if policy_intent and policy_intent != "none":
         known_slots["policy_intent"] = policy_intent
     response_metadata = response_decision.metadata if response_decision is not None else {}
@@ -467,6 +550,9 @@ def build_turn_contract(
         intent = "quick_order_execute"
     if code_intent == "order_cancel_status_lookup":
         intent = "order_cancel_status_lookup"
+    if router_wins_intent:
+        domain = _router_wins_domain(router_wins_intent, planner_domains)
+        intent = router_wins_intent
     action_required_slots = tool_plan.required_slots if tool_plan is not None else ()
     fallback_required_slots = (
         intent_frame.missing_slots
@@ -492,6 +578,9 @@ def build_turn_contract(
             cross_domain_plan=cross_domain_plan,
         ),
     )
+    router_wins_preempted_required_slots = bool(router_wins_intent and required_slots)
+    if router_wins_intent:
+        required_slots = ()
     required_slots = _strip_downstream_transaction_required_slots_for_discovery_resolution(
         required_slots,
         intent=intent,
@@ -521,6 +610,13 @@ def build_turn_contract(
         cross_domain_plan=cross_domain_plan,
     )
     forbidden_tools = tuple(tool_plan.forbidden_tools) if tool_plan is not None else ()
+    if router_wins_intent:
+        router_allowed_tools, router_forbidden_tools = _router_wins_tool_boundary(router_wins_intent)
+        allowed_tools = router_allowed_tools
+        forbidden_tools = _merge_tuple(
+            tuple(tool for tool in forbidden_tools if tool not in router_allowed_tools),
+            router_forbidden_tools,
+        )
     if planner_intent == "quick_order_execute" and _has_quick_order_execute_slots(known_slots):
         allowed_tools = _merge_tuple(allowed_tools, ("quick_order_tool",))
         forbidden_tools = tuple(tool for tool in forbidden_tools if tool != "quick_order_tool")
@@ -533,6 +629,15 @@ def build_turn_contract(
         forbidden_tools = _merge_tuple(
             forbidden_tools,
             ("search_product_tool", "get_final_price_tool"),
+        )
+    if router_wins_intent:
+        domain = _router_wins_domain(router_wins_intent, planner_domains)
+        intent = router_wins_intent
+        router_allowed_tools, router_forbidden_tools = _router_wins_tool_boundary(router_wins_intent)
+        allowed_tools = router_allowed_tools
+        forbidden_tools = _merge_tuple(
+            tuple(tool for tool in forbidden_tools if tool not in router_allowed_tools),
+            router_forbidden_tools,
         )
     if intent == "legal_action_guidance_denied":
         allowed_tools = _merge_tuple(allowed_tools, ("transfer_to_qna_tool",))
@@ -781,11 +886,22 @@ def build_turn_contract(
             "assistant_guidance": "FAQ hybrid 검색을 먼저 수행하고 정책/조건을 quickReply로 요약한 뒤 필요 시에만 1:1 문의로 이어진다.",
             "metadata": {"response_shape_key": intent},
         }
+    router_wins_suppressed_required_slots = bool(
+        router_wins_intent
+        and (router_wins_preempted_required_slots or required_slots or resolvable_required_slots or blocking_required_slots)
+    )
     if _support_answer_contract_owns_response(domain=domain, intent=intent, action_mode=action_mode):
         required_slots = ()
         resolvable_required_slots = ()
         blocking_required_slots = ()
         blocking_required_slots_source = "support_answer_contract"
+    if router_wins_intent:
+        required_slots = ()
+        resolvable_required_slots = ()
+        blocking_required_slots = ()
+        blocking_required_slots_source = "router_wins_information_contract" if router_wins_suppressed_required_slots else "none"
+        if _router_wins_response_decision_mismatch(router_wins_intent, response_decision_payload):
+            response_decision_payload = _router_wins_response_decision(router_wins_intent)
 
     return TurnContract(
         domain=domain,
@@ -835,6 +951,17 @@ def build_turn_contract(
         blocking_required_slots_source=blocking_required_slots_source,
         flow_id=flow_id,
         flow_step=flow_step,
+        router_wins_applied=bool(router_wins_intent),
+        code_frame_intent=str(code_intent or "") or None,
+        drift_resolution=(
+            f"router_intent:{router_wins_intent}_kept_over_code_frame:{code_intent}"
+            if router_wins_intent and code_intent and code_intent != router_wins_intent
+            else "router_intent_kept"
+            if router_wins_intent
+            else None
+        ),
+        stale_context_used_for=_stale_context_usage(router_wins_intent=router_wins_intent, context_state=context_state),
+        response_policy_source="router_intent" if router_wins_intent else _response_policy_source(response_decision_payload),
     )
 
 
@@ -3291,6 +3418,153 @@ def _comparison_metric_row_label(metric: str) -> str:
         "car_type": "차종",
         "detail": "특징",
     }.get(str(metric or ""), "")
+
+
+def _router_wins_information_intent(
+    *,
+    planner_intent: str | None,
+    policy_intent: str,
+    routing_result: Any | None,
+) -> str | None:
+    candidates = (
+        str(policy_intent or "").strip(),
+        str(planner_intent or "").strip(),
+    )
+    for candidate in candidates:
+        if not candidate or candidate == "none" or candidate in _ROUTER_WINS_EXECUTION_EXCLUDED_INTENTS:
+            continue
+        if candidate in ROUTER_WINS_INFORMATIONAL_INTENTS:
+            return candidate
+        if candidate.endswith("_policy") or candidate.endswith("_guidance"):
+            return candidate
+    complaint_scope = str(getattr(routing_result, "complaint_scope", "") or "").strip()
+    if complaint_scope == "tstation_service_complaint":
+        return "tstation_service_complaint"
+    return None
+
+
+def _router_wins_domain(intent: str, planner_domains: tuple[str, ...]) -> str:
+    if intent in {
+        "product_detail_lookup",
+        "product_description",
+        "product_comparison",
+        "product_size_list_lookup",
+    }:
+        return "discovery"
+    if intent in ROUTER_WINS_INFORMATIONAL_INTENTS or intent.endswith("_policy") or intent.endswith("_guidance"):
+        return "support"
+    return planner_domains[0] if planner_domains else "support"
+
+
+def _router_wins_tool_boundary(intent: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    if intent == "product_size_list_lookup":
+        return (
+            ("search_product_tool",),
+            tuple(
+                tool
+                for tool in _ROUTER_WINS_TRANSACTION_FORBIDDEN_TOOLS
+                | {"get_products_recommendations_tool", "get_product_description_tool"}
+                if tool != "search_product_tool"
+            ),
+        )
+    if intent in {"product_detail_lookup", "product_description"}:
+        return (
+            ("search_product_tool", "get_product_description_tool"),
+            tuple(
+                tool
+                for tool in _ROUTER_WINS_TRANSACTION_FORBIDDEN_TOOLS | {"get_products_recommendations_tool"}
+                if tool not in {"search_product_tool", "get_product_description_tool"}
+            ),
+        )
+    if intent == "product_comparison":
+        return (
+            ("search_product_tool", "get_product_description_tool", "get_cheapest_price_tool"),
+            tuple(
+                tool
+                for tool in _ROUTER_WINS_TRANSACTION_FORBIDDEN_TOOLS | {"get_products_recommendations_tool"}
+                if tool not in {"search_product_tool", "get_product_description_tool", "get_cheapest_price_tool"}
+            ),
+        )
+    if intent == "tstation_service_complaint":
+        return (
+            ("search_faq_hybrid_tool", "transfer_to_qna_tool"),
+            tuple(
+                tool
+                for tool in _ROUTER_WINS_TRANSACTION_FORBIDDEN_TOOLS
+                if tool not in {"search_faq_hybrid_tool", "transfer_to_qna_tool"}
+            ),
+        )
+    return (
+        ("search_faq_hybrid_tool",),
+        tuple(tool for tool in _ROUTER_WINS_TRANSACTION_FORBIDDEN_TOOLS if tool != "search_faq_hybrid_tool"),
+    )
+
+
+def _router_wins_response_shape_key(intent: str) -> str:
+    return {
+        "product_detail_lookup": "neutral_product_description",
+        "product_description": "neutral_product_description",
+        "product_comparison": "metric_comparison_summary",
+        "product_size_list_lookup": "product_size_list_lookup",
+        "tstation_service_complaint": "support_complaint_guidance",
+    }.get(intent, intent)
+
+
+def _response_shape_key(response_decision_payload: Mapping[str, Any] | None) -> str:
+    metadata = response_decision_payload.get("metadata") if isinstance(response_decision_payload, Mapping) else None
+    if isinstance(metadata, Mapping):
+        return str(metadata.get("response_shape_key") or "")
+    return ""
+
+
+def _router_wins_response_decision(intent: str) -> dict[str, Any]:
+    response_shape_key = _router_wins_response_shape_key(intent)
+    if intent in {"product_detail_lookup", "product_description"}:
+        guidance = "현재 턴의 상품 설명 의도에 맞춰 상품 정보/특징을 요약한다. 추천/구매/매장 흐름으로 전환하지 않는다."
+    elif intent == "product_comparison":
+        guidance = "현재 턴의 비교 대상 상품만 구분해 비교한다. 같은 goods_no 두 번 비교하거나 이전 추천 정책으로 응답하지 않는다."
+    elif intent == "product_size_list_lookup":
+        guidance = "현재 턴의 사이즈 목록 조회 의도에 맞춰 search_product_tool 결과의 규격 목록을 안내한다."
+    elif intent == "tstation_service_complaint":
+        guidance = "T-Station 범위의 불편 사항으로 응답하고, 이전 구매/예약/매장 문맥이 실행 flow를 재개하지 않게 한다."
+    else:
+        guidance = "현재 턴의 FAQ/정책 intent 기준으로 안내하고 개인 조회, 구매, 예약 실행 flow로 전환하지 않는다."
+    return {
+        "response_shape": "summary",
+        "template": "quickReply",
+        "required_slots": [],
+        "forbidden_behaviors": [
+            "resume_stale_transaction_flow",
+            "start_owned_record_lookup",
+            "normalize_as_purchase_or_schedule",
+        ],
+        "assistant_guidance": guidance,
+        "metadata": {"response_shape_key": response_shape_key},
+    }
+
+
+def _router_wins_response_decision_mismatch(intent: str, response_decision_payload: Mapping[str, Any] | None) -> bool:
+    if response_decision_payload is None:
+        return True
+    response_shape_key = _response_shape_key(response_decision_payload)
+    expected = _router_wins_response_shape_key(intent)
+    if intent == "product_comparison":
+        return response_shape_key not in {"metric_comparison_summary", "grade_comparison_summary", expected}
+    if intent in {"product_detail_lookup", "product_description"}:
+        return response_shape_key not in {"neutral_product_description", "product_description_answer", expected}
+    return response_shape_key != expected
+
+
+def _response_policy_source(response_decision_payload: Mapping[str, Any] | None) -> str:
+    return "response_decision" if response_decision_payload is not None else "none"
+
+
+def _stale_context_usage(*, router_wins_intent: str | None, context_state: str) -> str | None:
+    if not router_wins_intent:
+        return None
+    if str(context_state or "") == "dormant":
+        return "known_slots_only"
+    return "current_intent_supporting_evidence"
 
 
 def _domain_value(value: Any) -> str:

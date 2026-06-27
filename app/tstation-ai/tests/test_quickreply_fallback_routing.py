@@ -10178,6 +10178,151 @@ def test_turn_contract_trace_metadata_keeps_previous_flow_dormant_for_support_po
     assert "get_orders_of_user_tool" in payload["blocked_tools"]
 
 
+def test_router_wins_size_list_keeps_informational_intent_over_stale_recommendation_frame() -> None:
+    routing_result = _routing_result(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        execution_plan=["discovery:product_size_list_lookup"],
+        referred_object_type="product",
+    )
+    stale_frame = IntentFrame(
+        domain=PolicyDomain.DISCOVERY,
+        intent="product_recommendation",
+        sub_intent="sound_absorber_recommendation",
+        entities={"recommendation_scenario": "sound_absorber"},
+        known_slots={"recommendation_scenario": "sound_absorber", "pending_product_name": "아이온 에보 AS SUV"},
+        missing_slots=("tire_size",),
+    )
+    stale_tool_plan = ToolPlan(
+        allowed_tools=("get_products_recommendations_tool",),
+        preferred_tool="get_products_recommendations_tool",
+        required_slots=("tire_size",),
+        metadata={"response_intent": "unsized_recommendation_summary"},
+    )
+    stale_response = ResponseDecision(
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        required_slots=("tire_size",),
+        metadata={"response_shape_key": "unsized_recommendation_summary"},
+    )
+
+    contract = build_turn_contract(
+        user_text="사이즈 다 보여줘",
+        intent_frame=stale_frame,
+        tool_plan=stale_tool_plan,
+        response_decision=stale_response,
+        routing_result=routing_result,
+        merged_slots=ConversationSlots(
+            tire_model="아이온 에보 AS SUV",
+            availability_context={"recommendation_context": {"recommendation_scenario": "sound_absorber"}},
+        ),
+        action_mode="info_only",
+        context_state="dormant",
+    )
+
+    payload = contract.to_dict()
+    assert contract.domain == "discovery"
+    assert contract.intent == "product_size_list_lookup"
+    assert contract.blocking_required_slots == ()
+    assert contract.allowed_tools == ("search_product_tool",)
+    assert "get_products_recommendations_tool" in contract.forbidden_tools
+    assert payload["router_wins_applied"] is True
+    assert payload["code_frame_intent"] == "product_recommendation"
+    assert payload["blocking_required_slots_source"] == "router_wins_information_contract"
+    assert payload["response_decision"]["metadata"]["response_shape_key"] == "product_size_list_lookup"
+    assert payload["stale_context_used_for"] == "known_slots_only"
+
+
+def test_router_wins_delivery_policy_blocks_store_schedule_code_frame() -> None:
+    routing_result = _routing_result(
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        execution_plan=["support:delivery_delay_reservation_schedule_policy"],
+        policy_intent="delivery_delay_reservation_schedule_policy",
+        referred_object_type="store",
+        needs_clarification=True,
+    )
+    store_schedule_frame = IntentFrame(
+        domain=PolicyDomain.TRANSACTION,
+        intent="store_schedule",
+        sub_intent="store_visit",
+        entities={},
+        known_slots={"pending_intent": "reservation", "shop_name": "분당정자점"},
+        missing_slots=("store",),
+    )
+    store_schedule_plan = ToolPlan(
+        allowed_tools=("get_store_schedule_tool",),
+        preferred_tool="get_store_schedule_tool",
+        required_slots=("store",),
+        metadata={"response_intent": "store_schedule"},
+    )
+
+    contract = build_turn_contract(
+        user_text="주문 다 했는데 배송 지연되면 예약 일정도 자동 변경돼?",
+        intent_frame=store_schedule_frame,
+        tool_plan=store_schedule_plan,
+        routing_result=routing_result,
+        merged_slots=ConversationSlots(pending_intent="reservation", shop_name="분당정자점"),
+        action_mode="support_policy_answer",
+        context_state="dormant",
+        previous_pending_intent="reservation",
+    )
+
+    payload = contract.to_dict()
+    assert contract.domain == "support"
+    assert contract.intent == "delivery_delay_reservation_schedule_policy"
+    assert contract.required_slots == ()
+    assert contract.blocking_required_slots == ()
+    assert contract.allowed_tools == ("search_faq_hybrid_tool",)
+    assert "get_store_schedule_tool" in contract.forbidden_tools
+    assert payload["blocking_required_slots_source"] == "router_wins_information_contract"
+    assert payload["router_wins_applied"] is True
+    assert payload["code_frame_intent"] == "store_schedule"
+    assert "router_intent:delivery_delay_reservation_schedule_policy_kept_over_code_frame:store_schedule" == payload[
+        "drift_resolution"
+    ]
+
+
+def test_router_wins_coupon_usage_policy_blocks_owned_coupon_and_product_lookup_context() -> None:
+    routing_result = _routing_result(
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        execution_plan=["support:coupon_usage_policy"],
+        policy_intent="coupon_usage_policy",
+        referred_object_type="coupon",
+        needs_clarification=True,
+    )
+    coupon_frame = IntentFrame(
+        domain=PolicyDomain.TRANSACTION,
+        intent="product_coupon_eligibility",
+        sub_intent="coupon_check",
+        entities={},
+        known_slots={"goods_no": "G0000001", "pending_intent": "coupon"},
+        missing_slots=("product",),
+    )
+    coupon_plan = ToolPlan(
+        allowed_tools=("get_my_coupons_tool", "get_coupon_applicable_products_tool"),
+        preferred_tool="get_my_coupons_tool",
+        required_slots=("product",),
+        metadata={"response_intent": "product_coupon_eligibility"},
+    )
+
+    contract = build_turn_contract(
+        user_text="현장 결제에도 쿠폰 쓸 수 있어?",
+        intent_frame=coupon_frame,
+        tool_plan=coupon_plan,
+        routing_result=routing_result,
+        merged_slots=ConversationSlots(goods_no="G0000001"),
+        action_mode="support_policy_answer",
+        context_state="dormant",
+    )
+
+    assert contract.domain == "support"
+    assert contract.intent == "coupon_usage_policy"
+    assert contract.blocking_required_slots == ()
+    assert contract.allowed_tools == ("search_faq_hybrid_tool",)
+    assert "get_my_coupons_tool" in contract.forbidden_tools
+    assert "get_coupon_applicable_products_tool" in contract.forbidden_tools
+    assert contract.to_dict()["response_policy_source"] == "router_intent"
+
+
 def test_reservation_policy_turn_keeps_previous_reservation_context_dormant_without_blocking() -> None:
     routing_result = MultiAgentDomain(
         reason="reservation policy question during reservation flow",
