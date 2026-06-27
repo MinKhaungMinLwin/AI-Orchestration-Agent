@@ -343,6 +343,8 @@ from services.tstation.chat import (
     _should_replace_discovery_dead_end_chips,
     _should_force_warranty_claim_support_route,
     _should_force_best_seller_code_route,
+    _should_dispatch_best_seller_contract_tool,
+    _best_seller_tool_input_from_text,
     _enrich_best_selling_result_for_product_cards,
     _sanitize_transaction_cta_contracts,
     _is_current_location_store_search_confirmation,
@@ -9666,6 +9668,22 @@ def test_unspecified_current_best_seller_request_forces_code_route() -> None:
             text,
             [MultiAgentDomain.Domain.LEADING],
         )
+
+
+def test_vehicle_best_seller_request_forces_code_route_without_explicit_period() -> None:
+    text = "gv70에 가장 많이 팔린 타이어"
+    frame = build_discovery_intent_frame(text)
+    plan = plan_discovery_tools(frame)
+    tool_input = _best_seller_tool_input_from_text(text, limit=5)
+
+    assert is_best_seller_request(text)
+    assert frame.sub_intent == "best_seller_search"
+    assert plan.allowed_tools == ("get_best_selling_products_tool",)
+    assert tool_input == {"vehicle_query": "gv70", "limit": 5}
+    assert _should_force_best_seller_code_route(
+        text,
+        [MultiAgentDomain.Domain.TRANSACTION],
+    )
 
 
 def test_non_best_seller_recommendation_requests_do_not_force_best_seller_route() -> None:
@@ -27698,6 +27716,7 @@ def test_turn_contract_still_blocks_discovery_product_card_without_current_tool_
 
 
 def test_normalize_plan_intent_maps_best_seller_aliases() -> None:
+    assert _normalize_plan_intent("get_best_selling_tires_for_vehicle") == "best_seller_search"
     assert _normalize_plan_intent("get_best_selling_product_for_vehicle") == "best_seller_search"
     assert _normalize_plan_intent("get_best_selling_products_for_vehicle_timeframe") == "best_seller_search"
     assert _normalize_plan_intent("get_best_selling_products_for_vehicle") == "best_seller_search"
@@ -27972,6 +27991,33 @@ def test_recover_missing_best_seller_contract_tool_event_runs_tool_and_returns_p
     assert event is not None
     assert event["template"] == "product"
     assert event["assistant_response_source"] == "code_best_seller_contract_recovery"
+
+
+def test_best_seller_contract_dispatch_runs_without_explicit_period_or_router_bias() -> None:
+    contract = build_turn_contract(
+        user_text="gv70에 가장 많이 팔린 타이어",
+        intent_frame=IntentFrame(
+            domain=PolicyDomain.DISCOVERY,
+            intent="general_recommendation",
+            sub_intent="best_seller_search",
+        ),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=("product_card_without_size",),
+            metadata={"response_shape_key": "unsized_recommendation_summary"},
+        ),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["discovery:get_best_selling_tires_for_vehicle"],
+        ),
+    )
+
+    assert _should_dispatch_best_seller_contract_tool(
+        user_text="gv70에 가장 많이 팔린 타이어",
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        turn_contract=contract,
+    )
 
 
 def test_turn_contract_allows_compare_quickreply_during_discovery_first_leg_transaction_chain() -> None:

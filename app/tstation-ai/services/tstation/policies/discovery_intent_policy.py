@@ -598,6 +598,7 @@ _BEST_SELLER_VEHICLE_TOKEN_STOPWORDS = {
     "팔리는", "팔린", "팔리는거", "팔린거", "잘", "나가는", "베스트셀러", "선호하는", "좋아하는", "추천",
     "추천해줘", "알려줘", "보여줘", "순위", "판매량", "는", "가", "이", "좀",
 }
+_BEST_SELLER_VEHICLE_TRAILING_PARTICLE_RE = re.compile(r"(?:에서|으로|로|에|은|는|이|가|도|만|과|와)$")
 
 
 def extract_best_seller_vehicle_query(text: str) -> str | None:
@@ -627,6 +628,7 @@ def extract_best_seller_vehicle_query(text: str) -> str | None:
     if not tokens:
         return None
     cleaned_candidate = " ".join(tokens).strip()
+    cleaned_candidate = _BEST_SELLER_VEHICLE_TRAILING_PARTICLE_RE.sub("", cleaned_candidate).strip()
     if not cleaned_candidate or cleaned_candidate in _BEST_SELLER_VEHICLE_TOKEN_STOPWORDS:
         return None
     return cleaned_candidate

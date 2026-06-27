@@ -46,7 +46,6 @@ from services.tstation.policies.reservation_template_policy import (
 )
 from services.tstation.policies.discovery_intent_policy import (
     best_seller_search_params_from_text,
-    best_seller_period_from_text,
     build_discovery_intent_frame,
     extract_best_seller_vehicle_query,
     extract_product_names,
@@ -7796,14 +7795,33 @@ def _should_force_best_seller_code_route(user_text: str | None, domains: list[Mu
     best-seller lookups, not the user's own purchase/order flow.
     """
     text = user_text or ""
-    if not best_seller_period_from_text(text):
-        return False
     frame = build_discovery_intent_frame(text)
     if frame.sub_intent != "best_seller_search":
         return False
     if domains == [MultiAgentDomain.Domain.DISCOVERY]:
         return True
     return is_best_seller_request(text, include_demographic_preference=False)
+
+
+def _should_dispatch_best_seller_contract_tool(
+    *,
+    user_text: str | None,
+    domains: list[MultiAgentDomain.Domain],
+    turn_contract: TurnContract | None,
+) -> bool:
+    if _should_force_best_seller_code_route(user_text, domains):
+        return True
+    if turn_contract is None:
+        return False
+    if str(turn_contract.domain or "") != MultiAgentDomain.Domain.DISCOVERY.value:
+        return False
+    if str(turn_contract.intent or "") != "best_seller_search":
+        return False
+    if "get_best_selling_products_tool" not in tuple(turn_contract.allowed_tools or ()):
+        return False
+    if tuple(turn_contract.blocking_required_slots or ()):
+        return False
+    return True
 
 
 def _best_seller_tool_input_from_text(
@@ -28305,7 +28323,11 @@ class TStationChatServiceV2:
             )
 
         async def _resolve_best_selling_products_with_code() -> tuple[list[dict], dict] | None:
-            if not _should_force_best_seller_code_route(user_query, domains):
+            if not _should_dispatch_best_seller_contract_tool(
+                user_text=user_query,
+                domains=domains,
+                turn_contract=turn_contract,
+            ):
                 return None
 
             tool_input = _best_seller_tool_input_from_text(
