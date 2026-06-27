@@ -8172,6 +8172,37 @@ def _build_direct_preorder_event_from_slots(
     return event
 
 
+def _should_emit_direct_preorder_from_schedule_selection(
+    turn_contract: TurnContract | None,
+    *,
+    transaction_tool_plan: ToolPlan | None = None,
+) -> bool:
+    if turn_contract is None:
+        return False
+
+    response_metadata = (
+        turn_contract.response_decision.get("metadata")
+        if isinstance(turn_contract.response_decision, Mapping)
+        else {}
+    )
+    response_shape_key = str((response_metadata or {}).get("response_shape_key") or "")
+    flow_step = str((getattr(transaction_tool_plan, "metadata", None) or {}).get("flow_step") or "")
+    if not flow_step:
+        flow_step = str((response_metadata or {}).get("flow_step") or "")
+
+    contract_intent = str(turn_contract.intent or "")
+    action_mode = str(getattr(turn_contract, "action_mode", "") or "")
+    is_purchase_reservation_intent = (
+        contract_intent == "quick_order_reservation"
+        or contract_intent.startswith("quick_order_reservation_slot_fill_")
+    )
+    return (
+        response_shape_key == "reservation_confirmation_ready"
+        and flow_step == "build_preorder"
+        and (is_purchase_reservation_intent or action_mode == "purchase_continuation")
+    )
+
+
 def _choose_quickreply_fallback(
     called_tool_names: set[str],
     source_domain: str | None,
@@ -25396,17 +25427,9 @@ class TStationChatServiceV2:
             and str(vehicle_ui_action_context.action_type or "") == "select_schedule"
             and bool(validated_ui_action_router_skip_metadata)
         ):
-            response_metadata = (
-                turn_contract.response_decision.get("metadata")
-                if isinstance(turn_contract.response_decision, Mapping)
-                else {}
-            )
-            response_shape_key = str((response_metadata or {}).get("response_shape_key") or "")
-            flow_step = str((transaction_tool_plan.metadata or {}).get("flow_step") or "")
-            if (
-                str(turn_contract.intent or "") == "quick_order_reservation"
-                and response_shape_key == "reservation_confirmation_ready"
-                and flow_step == "build_preorder"
+            if _should_emit_direct_preorder_from_schedule_selection(
+                turn_contract,
+                transaction_tool_plan=transaction_tool_plan,
             ):
                 direct_preorder_event = _build_direct_preorder_event_from_slots(
                     merged_slots,

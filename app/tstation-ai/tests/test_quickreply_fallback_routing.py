@@ -14,6 +14,7 @@ from __future__ import annotations
 import datetime
 import asyncio
 import concurrent.futures
+from dataclasses import replace
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -89,6 +90,7 @@ from services.tstation.chat import (
     _build_product_attribute_event_from_search_results,
     _quantity_benefit_continuation_frame_from_pending,
     _final_price_from_row,
+    _should_emit_direct_preorder_from_schedule_selection,
     _build_bare_product_search_tool_input,
     _build_external_price_comparison_event_from_search_results,
     _build_size_only_product_search_tool_input,
@@ -24680,6 +24682,57 @@ def test_ready_preorder_card_without_quick_order_tool_is_allowed_under_reservati
     assert contract.intent == "quick_order_reservation"
     assert contract.response_decision["metadata"]["response_shape_key"] == "reservation_confirmation_ready"
     assert violations == []
+
+
+def test_direct_preorder_condition_accepts_schedule_slot_fill_intent() -> None:
+    contract = _transaction_turn_contract(
+        "2026년 6월 30일 (화)\n17:00",
+        {
+            "goods_no": "G000000310126",
+            "tire_model": "벤투스 S2 AS",
+            "tire_size": "245/45R19",
+            "ord_qty": 4,
+            "shop_id": "F00721",
+            "shop_name": "판교점",
+            "requested_cal_day": "20260630",
+            "rsv_hour": "17",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+    contract = replace(
+        contract,
+        intent="quick_order_reservation_slot_fill_schedule",
+        action_mode="purchase_continuation",
+    )
+
+    assert _should_emit_direct_preorder_from_schedule_selection(
+        contract,
+        transaction_tool_plan=SimpleNamespace(metadata={"flow_step": "build_preorder"}),
+    ) is True
+
+
+def test_direct_preorder_condition_uses_contract_flow_step_fallback() -> None:
+    contract = _transaction_turn_contract(
+        "2026년 6월 30일 (화)\n17:00",
+        {
+            "goods_no": "G000000310126",
+            "tire_model": "벤투스 S2 AS",
+            "tire_size": "245/45R19",
+            "ord_qty": 4,
+            "shop_id": "F00721",
+            "shop_name": "판교점",
+            "requested_cal_day": "20260630",
+            "rsv_hour": "17",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+
+    assert _should_emit_direct_preorder_from_schedule_selection(
+        contract,
+        transaction_tool_plan=SimpleNamespace(metadata={}),
+    ) is True
 
 
 def test_quick_order_reservation_keeps_datepick_guard_without_selected_datetime() -> None:
