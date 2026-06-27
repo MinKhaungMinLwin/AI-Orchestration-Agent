@@ -18746,6 +18746,139 @@ def _build_transaction_policy_context(
         return {}, None, None
 
 
+_EXPLICIT_PURCHASE_CONTRACT_SIGNAL_RE = re.compile(
+    r"구매|주문|결제|살래|살게|사고\s*싶|사려고|구매할래|주문할래",
+    re.IGNORECASE,
+)
+
+
+def _single_resolved_search_product_row(tool_result: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(tool_result, Mapping):
+        return None
+    data = tool_result.get("data")
+    items = data.get("items") if isinstance(data, Mapping) else None
+    if not isinstance(items, list) or len(items) != 1 or not isinstance(items[0], Mapping):
+        return None
+    canonical = canonical_context_from_tool_boundary(items[0])
+    goods_no = str(canonical.get("goods_no") or "").strip()
+    if not goods_no:
+        return None
+    return {
+        "goods_no": goods_no,
+        "tire_size": normalize_tire_size(str(canonical.get("tire_size") or "")) or None,
+        "product_name": str(
+            canonical.get("product_name") or canonical.get("goods_nm") or canonical.get("titleProductName") or ""
+        ).strip()
+        or None,
+    }
+
+
+def _should_promote_single_turn_purchase_after_product_resolution(
+    *,
+    user_text: str,
+    slots: Mapping[str, Any] | None,
+    routing_result: Any | None,
+) -> bool:
+    known_slots = dict(slots or {})
+    if str(known_slots.get("pending_intent") or "").strip() == "cart":
+        return False
+    if str(known_slots.get("goal_type") or "").strip() == "add_to_cart":
+        return False
+    if str(known_slots.get("pending_intent") or "").strip() == "order":
+        return True
+    if str(known_slots.get("goal_type") or "").strip() == "place_order":
+        return True
+    if _EXPLICIT_PURCHASE_CONTRACT_SIGNAL_RE.search(user_text or ""):
+        return True
+    plan_text = " ".join(str(item or "").strip().lower() for item in (getattr(routing_result, "execution_plan", None) or ()))
+    return any(token in plan_text for token in ("continue_purchase", "quick_order_reservation"))
+
+
+def _promote_single_turn_purchase_contract_from_search_product(
+    *,
+    user_text: str,
+    tool_result: Mapping[str, Any] | None,
+    merged_slots: ConversationSlots | None,
+    routing_result: Any | None,
+) -> tuple[ConversationSlots, IntentFrame, ToolPlan, ResponseDecision] | None:
+    resolved_row = _single_resolved_search_product_row(tool_result)
+    if resolved_row is None:
+        return None
+    base_slots = merged_slots.model_copy() if merged_slots is not None else ConversationSlots()
+    runtime_values = {
+        "goods_no": resolved_row["goods_no"],
+        "tire_size": resolved_row.get("tire_size"),
+        "tire_model": resolved_row.get("product_name"),
+        "pending_product_name": resolved_row.get("product_name"),
+    }
+    promoted_slots = base_slots.apply_runtime_values(
+        {key: value for key, value in runtime_values.items() if value not in (None, "", [], {})},
+        source="single_turn_purchase_product_resolution",
+    )
+    promotion_slot_state = {
+        key: value
+        for key, value in promoted_slots.model_dump().items()
+        if value not in (None, "", [], {})
+    }
+    if not _should_promote_single_turn_purchase_after_product_resolution(
+        user_text=user_text,
+        slots=promotion_slot_state,
+        routing_result=routing_result,
+    ):
+        return None
+    if promotion_slot_state.get("goods_no") in (None, ""):
+        return None
+    if promotion_slot_state.get("tire_size") in (None, ""):
+        return None
+    if promotion_slot_state.get("ord_qty") in (None, "", 0, "0"):
+        return None
+    if str(promotion_slot_state.get("pending_intent") or "").strip() in {"", "price", "stock"}:
+        promotion_slot_state["pending_intent"] = "order"
+    if str(promotion_slot_state.get("goal_type") or "").strip() in {"", "price_inquiry", "store_with_stock"}:
+        promotion_slot_state["goal_type"] = "place_order"
+    known_slots = {
+        key: value
+        for key, value in {
+            "goods_no": promotion_slot_state.get("goods_no"),
+            "tire_size": promotion_slot_state.get("tire_size"),
+            "product_name": promotion_slot_state.get("tire_model") or promotion_slot_state.get("pending_product_name"),
+            "quantity": promotion_slot_state.get("ord_qty") or promotion_slot_state.get("quantity"),
+            "ord_qty": promotion_slot_state.get("ord_qty") or promotion_slot_state.get("quantity"),
+            "shop_id": promotion_slot_state.get("shop_id"),
+            "shop_name": promotion_slot_state.get("shop_name") or promotion_slot_state.get("store_name"),
+            "store_name": promotion_slot_state.get("shop_name") or promotion_slot_state.get("store_name"),
+            "region": promotion_slot_state.get("region"),
+            "place_query": promotion_slot_state.get("place_query"),
+            "user_xpos": promotion_slot_state.get("user_xpos"),
+            "user_ypos": promotion_slot_state.get("user_ypos"),
+            "availability_intent": promotion_slot_state.get("availability_intent"),
+            "requested_cal_day": promotion_slot_state.get("requested_cal_day"),
+            "rsv_hour": promotion_slot_state.get("rsv_hour"),
+            "pending_intent": promotion_slot_state.get("pending_intent"),
+            "goal_type": promotion_slot_state.get("goal_type"),
+            "stock_check_mode": promotion_slot_state.get("stock_check_mode"),
+        }.items()
+        if value not in (None, "", [], {})
+    }
+    transaction_frame = build_transaction_intent_frame(user_text, known_slots=known_slots)
+    if transaction_frame.intent != "quick_order_reservation":
+        return None
+    transaction_tool_plan = plan_transaction_tools(transaction_frame)
+    transaction_response_decision = decide_transaction_response(
+        intent=transaction_frame.intent,
+        user_text=user_text,
+        known_slots=dict(transaction_frame.known_slots),
+    )
+    promoted_slots = promoted_slots.apply_runtime_values(
+        {
+            "pending_intent": str(transaction_frame.known_slots.get("pending_intent") or "order"),
+            "goal_type": str(transaction_frame.known_slots.get("goal_type") or "place_order"),
+        },
+        source="single_turn_purchase_contract_promotion",
+    )
+    return promoted_slots, transaction_frame, transaction_tool_plan, transaction_response_decision
+
+
 def _is_cross_domain_discovery_product_resolution_pending(
     *,
     cross_domain_plan: Any | None,
@@ -25116,6 +25249,9 @@ class TStationChatServiceV2:
             "shop_name": merged_slots.shop_name,
             "store_name": merged_slots.shop_name,
             "region": merged_slots.region,
+            "place_query": getattr(merged_slots, "place_query", None),
+            "user_xpos": getattr(merged_slots, "user_xpos", None),
+            "user_ypos": getattr(merged_slots, "user_ypos", None),
             "availability_intent": merged_slots.availability_intent,
             "requested_cal_day": merged_slots.requested_cal_day,
             "rsv_hour": merged_slots.rsv_hour,
@@ -32373,6 +32509,66 @@ class TStationChatServiceV2:
                         if updated_slots.model_dump() != base_slots.model_dump():
                             pending_slots = updated_slots
                             logger.info("[SLOTS] staged outer tool slots from %s: %s", tool_name, turn_tool_slots)
+                    if tool_name == "search_product_tool":
+                        promoted_purchase = _promote_single_turn_purchase_contract_from_search_product(
+                            user_text=user_query,
+                            tool_result=parsed_for_verifier if isinstance(parsed_for_verifier, Mapping) else None,
+                            merged_slots=pending_slots or initial_slots,
+                            routing_result=routing_result,
+                        )
+                        if promoted_purchase is not None:
+                            (
+                                pending_slots,
+                                promoted_frame,
+                                promoted_tool_plan,
+                                promoted_response_decision,
+                            ) = promoted_purchase
+                            turn_contract = build_turn_contract(
+                                user_text=user_query,
+                                intent_frame=promoted_frame,
+                                tool_plan=promoted_tool_plan,
+                                response_decision=promoted_response_decision,
+                                routing_result=routing_result,
+                                merged_slots=pending_slots,
+                                action_mode=stream_action_mode,
+                                context_state=stream_context_state,
+                                resume_source=stream_resume_source,
+                                router_waited=bool(getattr(turn_contract, "router_waited", False))
+                                if turn_contract
+                                else False,
+                                router_source=str(getattr(turn_contract, "router_source", "unknown") or "unknown")
+                                if turn_contract
+                                else "unknown",
+                                contract_source=str(
+                                    getattr(turn_contract, "contract_source", "router_fallback") or "router_fallback"
+                                )
+                                if turn_contract
+                                else "router_fallback",
+                                speculative_used_for_contract=bool(
+                                    getattr(turn_contract, "speculative_used_for_contract", False)
+                                )
+                                if turn_contract
+                                else False,
+                            )
+                            current_transaction_response_decision.set(promoted_response_decision)
+                            current_transaction_tool_plan.set(promoted_tool_plan)
+                            promoted_tool_patch = (
+                                dict(promoted_tool_plan.tool_args_patch)
+                                if promoted_tool_plan.preferred_tool == "transaction_store_preview_tool"
+                                else {}
+                            )
+                            from services.tstation.agents.c_transaction_agent.tools import (
+                                current_transaction_store_preview_tool_patch as _preview_patch_var,
+                            )
+
+                            _preview_patch_var.set(promoted_tool_patch)
+                            logger.info(
+                                "[TURN_CONTRACT] promoted single-turn purchase after search_product_tool "
+                                "intent=%s flow_step=%s allowed_tools=%s",
+                                promoted_frame.intent,
+                                dict(getattr(promoted_tool_plan, "metadata", {}) or {}).get("flow_step"),
+                                tuple(getattr(promoted_tool_plan, "allowed_tools", ()) or ()),
+                            )
 
                     coupon_decision = await _get_coupon_gate_decision()
                     if (

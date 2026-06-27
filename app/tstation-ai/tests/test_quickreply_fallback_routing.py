@@ -88,6 +88,7 @@ from services.tstation.chat import (
     _build_store_holiday_period_event,
     _build_transaction_policy_context,
     _build_product_attribute_event_from_search_results,
+    _promote_single_turn_purchase_contract_from_search_product,
     _quantity_benefit_continuation_frame_from_pending,
     _final_price_from_row,
     _should_emit_direct_preorder_from_schedule_selection,
@@ -24025,6 +24026,128 @@ def test_purchase_flow_accepts_browser_location_as_store_candidate_source() -> N
     assert flow_state is not None
     assert flow_state.flow_step == "show_store_candidates"
     assert flow_state.preferred_tool == "transaction_store_preview_tool"
+
+
+def test_promote_single_turn_purchase_contract_from_search_product_keeps_store_name_resolution() -> None:
+    promoted = _promote_single_turn_purchase_contract_from_search_product(
+        user_text="벤투스 s2 as 2454519 2개 한남점에서 구매할래",
+        tool_result={
+            "data": {
+                "items": [
+                    {
+                        "goods_no": "G000000312679",
+                        "goods_nm": "벤투스 S2 AS",
+                        "tire_size_1": "245/45R19",
+                    }
+                ]
+            }
+        },
+        merged_slots=ConversationSlots(
+            tire_model="벤투스 S2 AS",
+            tire_size="245/45R19",
+            ord_qty=2,
+            shop_name="한남점",
+            pending_intent="order",
+            goal_type="place_order",
+        ),
+        routing_result=SimpleNamespace(execution_plan=["discovery:resolve_product", "transaction:continue_purchase"]),
+    )
+
+    assert promoted is not None
+    promoted_slots, promoted_frame, promoted_tool_plan, _decision = promoted
+    assert promoted_slots.goods_no == "G000000312679"
+    assert promoted_frame.intent == "quick_order_reservation"
+    assert promoted_frame.known_slots["shop_name"] == "한남점"
+    assert promoted_tool_plan.preferred_tool == "transaction_store_preview_tool"
+    assert promoted_tool_plan.metadata["flow_step"] == "resolve_store"
+    assert "search_product_tool" not in promoted_tool_plan.allowed_tools
+
+
+def test_promote_single_turn_purchase_contract_from_search_product_keeps_region_preview() -> None:
+    promoted = _promote_single_turn_purchase_contract_from_search_product(
+        user_text="벤투스 s2 as 2454519 2개 분당에서 구매할래",
+        tool_result={
+            "data": {
+                "items": [
+                    {
+                        "goods_no": "G000000312679",
+                        "goods_nm": "벤투스 S2 AS",
+                        "tire_size_1": "245/45R19",
+                    }
+                ]
+            }
+        },
+        merged_slots=ConversationSlots(
+            tire_model="벤투스 S2 AS",
+            tire_size="245/45R19",
+            ord_qty=2,
+            region="분당",
+            pending_intent="order",
+            goal_type="place_order",
+        ),
+        routing_result=SimpleNamespace(execution_plan=["discovery:resolve_product", "transaction:continue_purchase"]),
+    )
+
+    assert promoted is not None
+    _promoted_slots, promoted_frame, promoted_tool_plan, _decision = promoted
+    assert promoted_frame.intent == "quick_order_reservation"
+    assert promoted_tool_plan.preferred_tool == "transaction_store_preview_tool"
+    assert promoted_tool_plan.metadata["flow_step"] == "show_store_candidates"
+
+
+def test_promote_single_turn_purchase_contract_from_search_product_without_location_asks_store() -> None:
+    promoted = _promote_single_turn_purchase_contract_from_search_product(
+        user_text="벤투스 s2 as 2454519 2개 구매할래",
+        tool_result={
+            "data": {
+                "items": [
+                    {
+                        "goods_no": "G000000312679",
+                        "goods_nm": "벤투스 S2 AS",
+                        "tire_size_1": "245/45R19",
+                    }
+                ]
+            }
+        },
+        merged_slots=ConversationSlots(
+            tire_model="벤투스 S2 AS",
+            tire_size="245/45R19",
+            ord_qty=2,
+            pending_intent="order",
+            goal_type="place_order",
+        ),
+        routing_result=SimpleNamespace(execution_plan=["discovery:resolve_product", "transaction:continue_purchase"]),
+    )
+
+    assert promoted is not None
+    _promoted_slots, promoted_frame, promoted_tool_plan, _decision = promoted
+    assert promoted_frame.intent == "quick_order_reservation"
+    assert promoted_tool_plan.allowed_tools == ()
+    assert promoted_tool_plan.metadata["flow_step"] == "ask_store"
+
+
+def test_promote_single_turn_purchase_contract_from_search_product_skips_multi_match() -> None:
+    promoted = _promote_single_turn_purchase_contract_from_search_product(
+        user_text="벤투스 s2 as 2454519 2개 구매할래",
+        tool_result={
+            "data": {
+                "items": [
+                    {"goods_no": "G1", "goods_nm": "벤투스 S2 AS", "tire_size_1": "245/45R19"},
+                    {"goods_no": "G2", "goods_nm": "벤투스 S2 AS", "tire_size_1": "245/45R19"},
+                ]
+            }
+        },
+        merged_slots=ConversationSlots(
+            tire_model="벤투스 S2 AS",
+            tire_size="245/45R19",
+            ord_qty=2,
+            pending_intent="order",
+            goal_type="place_order",
+        ),
+        routing_result=SimpleNamespace(execution_plan=["discovery:resolve_product", "transaction:continue_purchase"]),
+    )
+
+    assert promoted is None
 
 
 def test_recommendation_product_pick_defaults_to_product_description_contract() -> None:
