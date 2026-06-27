@@ -1268,6 +1268,23 @@ def _with_existing_transaction_slot_fill_state(
     )
 
 
+def _minimal_ui_action_slot_values(action_type: str, slot_values: Mapping[str, Any]) -> dict[str, Any]:
+    keys_by_action = {
+        "select_product": ("goods_no", "tire_size", "tire_model", "product_name"),
+        "select_quantity": ("ord_qty",),
+        "select_store": ("shop_id", "shop_name"),
+        "select_schedule": ("requested_cal_day", "rsv_hour"),
+    }
+    allowed_keys = keys_by_action.get(str(action_type or "").strip())
+    if not allowed_keys:
+        return dict(slot_values)
+    return {
+        key: slot_values[key]
+        for key in allowed_keys
+        if slot_values.get(key) not in (None, "", [])
+    }
+
+
 def resolve_ui_action_context(
     *,
     raw_action: Mapping[str, Any] | None = None,
@@ -4747,6 +4764,7 @@ def normalize_ui_action_metadata(
             } and expected_behavior == "dynamic_choice":
                 expected_behavior = "slot_fill"
             chip["expected_behavior"] = expected_behavior
+            ui_action_slots = _minimal_ui_action_slot_values(action_type, slot_values)
             chip["ui_action"] = {
                 "action_type": action_type,
                 "cta_action": action_type,
@@ -4755,7 +4773,7 @@ def normalize_ui_action_metadata(
                 "expected_contract_intent": expected_contract_intent,
                 "entity_type": "quantity" if quantity_match else "quick_reply",
                 "entity_label": label,
-                "slots": slot_values,
+                "slots": ui_action_slots,
             }
             if action_type in _TRANSACTION_SLOT_FILL_ACTION_TO_SLOT:
                 chip["ui_action"]["fills_slot"] = (
@@ -4789,8 +4807,8 @@ def normalize_ui_action_metadata(
                 )
             metadata = dict(metadata)
             metadata["ui_action"] = chip["ui_action"]
-            if slot_values:
-                metadata["slots"] = slot_values
+            if ui_action_slots:
+                metadata["slots"] = ui_action_slots
             if action_type == "select_quantity" and expected_contract_intent in {
                 _STOCK_STORE_SEARCH_INTENT,
                 _QUICK_ORDER_RESERVATION_INTENT,
@@ -4824,9 +4842,17 @@ def normalize_ui_action_metadata(
                 slot_values["goods_no"] = goods_no
             if tire_size:
                 slot_values["tire_size"] = tire_size
+            product_name = str(
+                product_context.get("product_name") or product.get("titleProductName") or product.get("title") or ""
+            ).strip()
+            if product_name:
+                slot_values["tire_model"] = product_name
             action_type = "select_product"
+            ui_action_slots = _minimal_ui_action_slot_values(action_type, slot_values)
             metadata["domain"] = metadata.get("domain") or contract_domain or "TRANSACTION"
             metadata["cta_action"] = action_type
+            metadata["fills_slot"] = metadata.get("fills_slot") or "product"
+            metadata["entity_id"] = metadata.get("entity_id") or goods_no or None
             metadata["source_intent"] = metadata.get("source_intent") or expected_contract_intent
             metadata["expected_contract_intent"] = (
                 metadata.get("expected_contract_intent") or expected_contract_intent
@@ -4836,19 +4862,18 @@ def normalize_ui_action_metadata(
                 if expected_contract_intent in _TRANSACTION_SLOT_FILL_CONTRACT_INTENTS
                 else "conversation_action"
             )
-            metadata["slots"] = slot_values
+            metadata["slots"] = ui_action_slots
             metadata["ui_action"] = {
                 "action_type": action_type,
                 "cta_action": action_type,
+                "fills_slot": "product",
                 "expected_behavior": metadata["expected_behavior"],
                 "source_intent": metadata["source_intent"],
                 "expected_contract_intent": metadata["expected_contract_intent"],
                 "entity_type": "product",
                 "entity_id": goods_no or None,
-                "entity_label": str(
-                    product_context.get("product_name") or product.get("titleProductName") or product.get("title") or ""
-                ).strip() or None,
-                "slots": slot_values,
+                "entity_label": product_name or None,
+                "slots": ui_action_slots,
             }
             changed = True
         return changed

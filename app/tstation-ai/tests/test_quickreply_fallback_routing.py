@@ -13457,10 +13457,108 @@ def test_product_booking_flow_metadata_carries_availability_slots() -> None:
     assert metadata["cta_action"] == "select_product"
     assert metadata["expected_behavior"] == "slot_fill"
     assert metadata["expected_contract_intent"] == "stock_store_search"
+    assert metadata["fills_slot"] == "product"
     assert metadata["slots"]["goods_no"] == "G000000309715"
-    assert metadata["slots"]["requested_cal_day"] == "20260626"
+    assert metadata["slots"]["tire_size"] == "225/55R18"
+    assert "requested_cal_day" not in metadata["slots"]
+    assert "region" not in metadata["slots"]
     assert metadata["ui_action"]["entity_type"] == "product"
+    assert metadata["ui_action"]["fills_slot"] == "product"
     assert metadata["ui_action"]["expected_behavior"] == "slot_fill"
+
+    prepared = prepare_ui_action_state(
+        ui_action=metadata["ui_action"],
+        chip_context=None,
+        request_slots=None,
+        latest_listcar_tmpl=None,
+        last_user_text="다이나프로 HL3",
+        existing_slots=ConversationSlots(**contract.known_slots),
+        generic_slot_apply_fn=lambda slots, values: slots.apply_runtime_values(values, source="ui_action"),
+        vehicle_slot_apply_fn=lambda slots, values: slots.apply_runtime_values(values, source="vehicle_ui_action"),
+    )
+    assert prepared.updated_slots.requested_cal_day == "20260626"
+    assert prepared.updated_slots.region == "동탄"
+    assert prepared.action_context is not None
+    assert expected_slot_fill_resume_source(prepared.action_context) == "expected_slot_fill:product"
+
+
+def test_purchase_product_card_metadata_is_minimal_and_server_slots_restore_order_flow() -> None:
+    contract = build_turn_contract(
+        user_text="상품을 선택해 주세요",
+        intent_frame=IntentFrame(
+            domain=PolicyDomain.TRANSACTION,
+            intent="quick_order_reservation",
+            sub_intent="reservation",
+            known_slots={
+                "ord_qty": 2,
+                "pending_intent": "order",
+                "goal_type": "place_order",
+                "stock_check_mode": "preview",
+            },
+        ),
+        tool_plan=ToolPlan(
+            allowed_tools=("search_product_tool",),
+            preferred_tool="search_product_tool",
+            metadata={"response_intent": "quick_order_reservation", "flow_id": "purchase_order", "flow_step": "resolve_product"},
+        ),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.CARD,
+            template=TemplateName.PRODUCT,
+            metadata={"response_shape_key": "product_selection"},
+        ),
+        action_mode="purchase_continuation",
+        context_state="resumed",
+    )
+    event = {
+        "template": "product",
+        "source_domain": "transaction",
+        "data": {
+            "assistantResponse": "상품을 선택해 주세요.",
+            "isBookingFlow": True,
+            "products": [{
+                "title": "벤투스 에어S",
+                "titleProductName": "벤투스 에어S",
+                "titleTires": "245/45R19",
+            }],
+            "metadata": [{"goodsId": "G000000319584"}],
+        },
+    }
+
+    changed = normalize_ui_action_metadata(event, contract=contract)
+
+    assert changed is True
+    metadata = event["data"]["metadata"][0]
+    assert metadata["expected_contract_intent"] == "quick_order_reservation"
+    assert metadata["fills_slot"] == "product"
+    assert metadata["slots"] == {
+        "goods_no": "G000000319584",
+        "tire_size": "245/45R19",
+        "tire_model": "벤투스 에어S",
+    }
+    assert "ord_qty" not in metadata["slots"]
+    assert "pending_intent" not in metadata["slots"]
+
+    prepared = prepare_ui_action_state(
+        ui_action=metadata["ui_action"],
+        chip_context=None,
+        request_slots=None,
+        latest_listcar_tmpl=None,
+        last_user_text="벤투스 에어S",
+        existing_slots=ConversationSlots(**contract.known_slots),
+        generic_slot_apply_fn=lambda slots, values: slots.apply_runtime_values(values, source="ui_action"),
+        vehicle_slot_apply_fn=lambda slots, values: slots.apply_runtime_values(values, source="vehicle_ui_action"),
+    )
+    frame = build_transaction_intent_frame(
+        prepared.rewritten_user_text,
+        known_slots=prepared.updated_slots.model_dump(),
+    )
+    tool_plan = plan_transaction_tools(frame)
+
+    assert prepared.updated_slots.ord_qty == 2
+    assert prepared.updated_slots.pending_intent == "order"
+    assert expected_slot_fill_resume_source(prepared.action_context) == "expected_slot_fill:product"
+    assert frame.intent == "quick_order_reservation"
+    assert tool_plan.metadata["flow_step"] == "ask_store"
 
 
 def test_location_booking_flow_metadata_carries_store_selection_ui_action() -> None:
@@ -14163,7 +14261,22 @@ def test_normalize_ui_action_metadata_keeps_structured_purchase_product_quickrep
     assert chip["ui_action"]["expected_behavior"] == "slot_fill"
     assert chip["ui_action"]["expected_contract_intent"] == "quick_order_reservation"
     assert chip["ui_action"]["slots"]["goods_no"] == "G000000319584"
-    assert chip["ui_action"]["slots"]["ord_qty"] == 2
+    assert "ord_qty" not in chip["ui_action"]["slots"]
+    assert "pending_intent" not in chip["ui_action"]["slots"]
+
+    prepared = prepare_ui_action_state(
+        ui_action=chip["ui_action"],
+        chip_context=None,
+        request_slots=None,
+        latest_listcar_tmpl=None,
+        last_user_text="벤투스 에어S 245/45R19 242,100원",
+        existing_slots=ConversationSlots(**contract.known_slots),
+        generic_slot_apply_fn=lambda slots, values: slots.apply_runtime_values(values, source="ui_action"),
+        vehicle_slot_apply_fn=lambda slots, values: slots.apply_runtime_values(values, source="vehicle_ui_action"),
+    )
+    assert prepared.updated_slots.ord_qty == 2
+    assert prepared.updated_slots.pending_intent == "order"
+    assert prepared.updated_slots.goal_type == "place_order"
 
 
 def test_prepare_ui_action_state_purchase_product_selection_trace_metadata_contains_flow_and_slot_patch() -> None:
