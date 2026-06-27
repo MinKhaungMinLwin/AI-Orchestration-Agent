@@ -150,6 +150,7 @@ from services.tstation.policies.ui_action_policy import (
     build_oe_replacement_followup_recommendation_args,
     build_oe_replacement_same_product_search_args,
     action_mode_for_transaction_slot_fill,
+    expected_slot_fill_resume_source,
     goods_no_from_template_event,
     is_expected_transaction_slot_fill,
     is_oe_replacement_context,
@@ -1175,17 +1176,7 @@ def _resume_source_from_current_turn(user_text: str) -> str:
 
 
 def _resume_source_from_ui_action_context(action_context: UIActionContext | None) -> str:
-    if action_context is None:
-        return "none"
-    contract_intent = str(
-        action_context.expected_contract_intent or action_context.contract_intent or ""
-    ).strip()
-    if contract_intent not in {"stock_store_search", "quick_order_reservation"}:
-        return "none"
-    action_type = str(action_context.action_type or "").strip()
-    if action_type in {"select_quantity", "select_product", "select_store", "select_schedule"}:
-        return f"ui_action:{action_type}"
-    return "none"
+    return expected_slot_fill_resume_source(action_context)
 
 
 def _has_stored_transaction_context(slots: ConversationSlots) -> bool:
@@ -21995,7 +21986,7 @@ class TStationChatServiceV2:
                                 preview_location_direct_values
                             )
                             merged_slots.order_context = order_context
-                        location_selection_resume_source = "location_selection:transaction_store_preview"
+                        location_selection_resume_source = "expected_slot_fill:store"
                         vehicle_selection_trace_metadata.update({
                             "location_selection_source_tool": "transaction_store_preview_tool",
                             "location_selection_flow_type": "purchase_location_selection"
@@ -23630,8 +23621,6 @@ class TStationChatServiceV2:
             action_mode = slot_fill_action_mode
             if resume_source == "none":
                 resume_source = _resume_source_from_ui_action_context(vehicle_ui_action_context)
-            if resume_source == "none" and vehicle_ui_action_context is not None:
-                resume_source = f"slot_fill:{vehicle_ui_action_context.action_type}"
         context_state = _context_state_for_action(
             action_mode=action_mode,
             resume_source=resume_source,

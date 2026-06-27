@@ -410,6 +410,7 @@ from services.tstation.policies.ui_action_policy import (
     confirmed_product_slot_values_for_purchase_cta,
     confirmed_product_slot_values_from_event,
     datepick_slot_values_from_data,
+    expected_slot_fill_resume_source,
     is_manual_tire_size_input_selection,
     is_logistics_earliest_install_date_followup,
     is_expected_transaction_slot_fill,
@@ -11960,10 +11961,16 @@ def test_purchase_flow_fallback_event_builds_structured_product_selection_quickr
     assert chips[0]["cta_action"] == "select_product"
     assert chips[0]["expected_behavior"] == "slot_fill"
     assert chips[0]["expected_contract_intent"] == "quick_order_reservation"
+    assert chips[0]["fills_slot"] == "product"
     assert chips[0]["metadata"]["goodsNo"] == "G000000319584"
-    assert chips[0]["metadata"]["ordQty"] == 2
-    assert chips[0]["metadata"]["slots"]["pending_intent"] == "order"
-    assert chips[0]["metadata"]["slots"]["goal_type"] == "place_order"
+    assert "ordQty" not in chips[0]["metadata"]
+    assert "pendingIntent" not in chips[0]["metadata"]
+    assert "goalType" not in chips[0]["metadata"]
+    assert chips[0]["metadata"]["slots"] == {
+        "goods_no": "G000000319584",
+        "tire_size": "245/45R19",
+        "tire_model": "벤투스 에어S",
+    }
 
 
 def test_tool_entries_from_previous_agent_facts_parses_search_product_rows() -> None:
@@ -13160,7 +13167,7 @@ def test_apply_history_location_selection_state_promotes_preview_store_context()
     assert state.updated_slots.pending_intent == "order"
     assert state.updated_slots.goal_type == "place_order"
     assert state.flow_type == "purchase_location_selection"
-    assert state.resume_source == "location_selection:transaction_store_preview"
+    assert state.resume_source == "expected_slot_fill:store"
     assert state.selected_order_context is not None
     assert state.selected_order_context["shop_id"] == "F00098"
     assert state.trace_metadata["location_selection_source_tool"] == "transaction_store_preview_tool"
@@ -13306,13 +13313,13 @@ def test_location_selection_preview_purchase_flow_keeps_quick_order_reservation_
         merged_slots=ConversationSlots(**values),
         action_mode="purchase_continuation",
         context_state="resumed",
-        resume_source="location_selection:transaction_store_preview",
+        resume_source="expected_slot_fill:store",
     )
 
     assert frame.intent == "quick_order_reservation"
     assert contract.intent == "quick_order_reservation"
     assert contract.action_mode == "purchase_continuation"
-    assert contract.resume_source == "location_selection:transaction_store_preview"
+    assert contract.resume_source == "expected_slot_fill:store"
     assert "get_store_schedule_tool" in contract.allowed_tools
 
 
@@ -13724,7 +13731,8 @@ def test_resume_source_from_ui_action_context_promotes_transaction_quantity_resu
         selection_source="ui_action",
     )
 
-    assert _resume_source_from_ui_action_context(action_context) == "ui_action:select_quantity"
+    assert _resume_source_from_ui_action_context(action_context) == "expected_slot_fill:quantity"
+    assert expected_slot_fill_resume_source(action_context) == "expected_slot_fill:quantity"
 
     slots = ConversationSlots(
         goods_no="G000000309715",
@@ -13750,11 +13758,11 @@ def test_resume_source_from_ui_action_context_promotes_transaction_quantity_resu
         regex_slots=ConversationSlots(),
         merged_slots=slots,
         explicit_override_reason=None,
-        resume_source="ui_action:select_quantity",
+        resume_source="expected_slot_fill:quantity",
     )
 
     assert action_mode == "stock_check"
-    assert _context_state_for_action(action_mode=action_mode, resume_source="ui_action:select_quantity", slots=slots) == "resumed"
+    assert _context_state_for_action(action_mode=action_mode, resume_source="expected_slot_fill:quantity", slots=slots) == "resumed"
 
 
 def test_transaction_slot_fill_helpers_classify_purchase_and_schedule_actions() -> None:
@@ -13921,7 +13929,7 @@ def test_quantity_ui_action_slot_patch_restores_stock_preview_contract() -> None
         response_decision=response_decision,
         action_mode="stock_check",
         context_state="resumed",
-        resume_source="ui_action:select_quantity",
+        resume_source="expected_slot_fill:quantity",
     )
 
     assert prepared.trace_metadata["slots_rewritten"] is True
@@ -14044,13 +14052,13 @@ def test_support_policy_action_mode_beats_transaction_resume_from_quantity_ui_ac
         regex_slots=ConversationSlots(),
         merged_slots=slots,
         explicit_override_reason=None,
-        resume_source="ui_action:select_quantity",
+        resume_source="expected_slot_fill:quantity",
     )
 
     assert action_mode == "support_policy_answer"
     assert _context_state_for_action(
         action_mode=action_mode,
-        resume_source="ui_action:select_quantity",
+        resume_source="expected_slot_fill:quantity",
         slots=slots,
     ) == "dormant"
 
@@ -14166,16 +14174,13 @@ def test_prepare_ui_action_state_purchase_product_selection_trace_metadata_conta
             "source_intent": "quick_order_reservation",
             "expected_contract_intent": "quick_order_reservation",
             "expected_behavior": "slot_fill",
-            "fills_slot": "goods_no",
+            "fills_slot": "product",
             "flow_id": "purchase_order",
             "flow_step": "resolve_product",
             "entity_label": "벤투스 에어S",
             "slots": {
                 "goods_no": "G000000319584",
                 "tire_size": "245/45R19",
-                "ord_qty": 2,
-                "pending_intent": "order",
-                "goal_type": "place_order",
                 "tire_model": "벤투스 에어S",
             },
         },
@@ -14183,7 +14188,11 @@ def test_prepare_ui_action_state_purchase_product_selection_trace_metadata_conta
         request_slots=None,
         latest_listcar_tmpl=None,
         last_user_text="벤투스 에어S 245/45R19 242,100원",
-        existing_slots=ConversationSlots(),
+        existing_slots=ConversationSlots(
+            ord_qty=2,
+            pending_intent="order",
+            goal_type="place_order",
+        ),
         generic_slot_apply_fn=lambda slots, values: slots.apply_runtime_values(values, source="ui_action"),
         vehicle_slot_apply_fn=lambda slots, values: slots.apply_runtime_values(values, source="vehicle_ui_action"),
     )
@@ -14193,11 +14202,12 @@ def test_prepare_ui_action_state_purchase_product_selection_trace_metadata_conta
     assert trace["selection_source"] == "ui_action"
     assert trace["input_source"] == "ui_action"
     assert trace["expected_contract_intent"] == "quick_order_reservation"
-    assert trace["expected_slot"] == "goods_no"
+    assert trace["expected_slot"] == "product"
     assert trace["flow_id"] == "purchase_order"
     assert trace["flow_step"] == "resolve_product"
     assert trace["slot_patch"]["goods_no"] == "G000000319584"
     assert trace["slot_patch"]["ord_qty"] == 2
+    assert trace["slot_patch"]["pending_intent"] == "order"
 
 
 def test_ui_action_trace_metadata_preserves_flow_and_slot_patch_from_quickreply_chip() -> None:
@@ -14213,13 +14223,12 @@ def test_ui_action_trace_metadata_preserves_flow_and_slot_patch_from_quickreply_
                                 "action_type": "select_product",
                                 "source_intent": "quick_order_reservation",
                                 "expected_contract_intent": "quick_order_reservation",
-                                "fills_slot": "goods_no",
+                                "fills_slot": "product",
                                 "flow_id": "purchase_order",
                                 "flow_step": "resolve_product",
                                 "slots": {
                                     "goods_no": "G000000319584",
                                     "tire_size": "245/45R19",
-                                    "ord_qty": 2,
                                 },
                             },
                         }
@@ -14232,11 +14241,11 @@ def test_ui_action_trace_metadata_preserves_flow_and_slot_patch_from_quickreply_
     assert trace["ui_action_type"] == "select_product"
     assert trace["expected_contract_intent"] == "quick_order_reservation"
     assert trace["source_intent"] == "quick_order_reservation"
-    assert trace["expected_slot"] == "goods_no"
+    assert trace["expected_slot"] == "product"
     assert trace["flow_id"] == "purchase_order"
     assert trace["flow_step"] == "resolve_product"
     assert trace["slot_patch"]["goods_no"] == "G000000319584"
-    assert trace["slot_patch"]["ord_qty"] == 2
+    assert "ord_qty" not in trace["slot_patch"]
 
 
 def test_label_only_quantity_support_question_does_not_create_transaction_resume() -> None:
@@ -14296,7 +14305,7 @@ def test_select_schedule_ui_action_keeps_quick_order_reservation_without_quick_o
         selection_source="ui_action",
     )
 
-    assert _resume_source_from_ui_action_context(action_context) == "ui_action:select_schedule"
+    assert _resume_source_from_ui_action_context(action_context) == "expected_slot_fill:schedule"
 
     known_slots = {
         "goods_no": "G000000309715",
@@ -14323,7 +14332,7 @@ def test_select_schedule_ui_action_keeps_quick_order_reservation_without_quick_o
         merged_slots=ConversationSlots(**known_slots),
         action_mode="purchase_continuation",
         context_state="resumed",
-        resume_source="ui_action:select_schedule",
+        resume_source="expected_slot_fill:schedule",
     )
 
     assert frame.intent == "quick_order_reservation"
@@ -14393,6 +14402,7 @@ def test_history_product_selection_state_promotes_purchase_slot_fill_and_rewrite
     assert state.action_context is not None
     assert state.action_context.action_type == "select_product"
     assert state.action_context.expected_contract_intent == "quick_order_reservation"
+    assert expected_slot_fill_resume_source(state.action_context) == "expected_slot_fill:product"
     assert state.updated_slots.goods_no == "G000000319584"
     assert state.updated_slots.tire_size == "245/45R19"
     assert state.updated_slots.pending_intent == "order"
@@ -14432,6 +14442,36 @@ def test_region_followup_in_purchase_context_keeps_quick_order_reservation() -> 
     assert tool_plan.preferred_tool == "transaction_store_preview_tool"
     assert response.template == TemplateName.LOCATION
     assert response.metadata["response_shape_key"] == "reservation_store_candidates"
+
+
+def test_region_input_context_resolution_marks_expected_region_slot_fill() -> None:
+    resolution = resolve_region_or_store_input_context(
+        user_text="분당",
+        ui_action=None,
+        chip_context=None,
+        latest_quickreply_tmpl={
+            "template": "quickReply",
+            "data": {
+                "assistantResponse": "구매를 진행할 매장을 확인할 지역명을 입력해 주세요.",
+                "quickReplies": [{"label": "분당", "domain": "TRANSACTION"}],
+            },
+        },
+        latest_location_tmpl=None,
+        messages=[],
+        merged_slots=ConversationSlots(
+            goods_no="G000000319584",
+            tire_size="245/45R19",
+            ord_qty=2,
+            pending_intent="order",
+            goal_type="place_order",
+            stock_check_mode="preview",
+        ),
+    )
+
+    assert resolution.resolved is True
+    assert resolution.expected_contract_intent == "quick_order_reservation"
+    assert resolution.resume_source == "expected_slot_fill:region"
+    assert resolution.slots_to_promote["region"] == "분당"
 
 
 def test_transaction_intent_frame_prefers_stock_store_search_for_region_slot_fill() -> None:
@@ -22486,7 +22526,7 @@ def test_region_input_resumes_dormant_purchase_store_selection_flow() -> None:
     assert resolution.resolved is True
     assert resolution.flow_type == "purchase_region_selection"
     assert resolution.action_mode == "purchase_continuation"
-    assert resolution.resume_source == "region_store_followup:pending_step"
+    assert resolution.resume_source == "expected_slot_fill:region"
     assert resolution.slots_to_promote["goods_no"] == "G000000317735"
     assert resolution.slots_to_promote["region"] == "분당"
     assert resolution.slots_to_promote["stock_check_mode"] == "inventory_only"

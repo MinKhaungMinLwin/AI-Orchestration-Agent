@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Awaitable, Callable, Mapping
 
 from schemas.tstation.slots import ConversationSlots
@@ -160,6 +160,12 @@ _TRANSACTION_SLOT_FILL_CONTRACT_INTENTS = frozenset({
     _STOCK_STORE_SEARCH_INTENT,
     _QUICK_ORDER_RESERVATION_INTENT,
 })
+_TRANSACTION_SLOT_FILL_ACTION_TO_SLOT = {
+    "select_product": "product",
+    "select_quantity": "quantity",
+    "select_store": "store",
+    "select_schedule": "schedule",
+}
 
 
 @dataclass(frozen=True)
@@ -1018,6 +1024,9 @@ def _ui_action_trace_metadata(
         or raw_metadata.get("fillsSlot")
         or ""
     ).strip() or None
+    if expected_slot is None:
+        action_type = str(raw_action.get("action_type") or raw_action.get("cta_action") or "").strip()
+        expected_slot = _TRANSACTION_SLOT_FILL_ACTION_TO_SLOT.get(action_type)
     trace_metadata: dict[str, Any] = {
         "ui_action_detected": True,
         "ui_action_type": str(raw_action.get("action_type") or raw_action.get("cta_action") or "").strip() or None,
@@ -1164,7 +1173,7 @@ def is_expected_transaction_slot_fill(action_context: UIActionContext | None) ->
     expected_contract_intent = str(action_context.expected_contract_intent or "").strip()
     action_type = str(action_context.action_type or "").strip()
     return (
-        expected_behavior == "slot_fill"
+        expected_behavior in {"", "slot_fill"}
         and expected_contract_intent in _TRANSACTION_SLOT_FILL_CONTRACT_INTENTS
         and action_type in _TRANSACTION_SLOT_FILL_ACTION_TYPES
     )
@@ -1195,6 +1204,68 @@ def action_mode_for_transaction_slot_fill(action_context: UIActionContext | None
     if expected_contract_intent == _QUICK_ORDER_RESERVATION_INTENT:
         return "purchase_continuation"
     return None
+
+
+def _slot_value_from_any(slots: Any, key: str) -> Any:
+    if isinstance(slots, Mapping):
+        return slots.get(key)
+    return getattr(slots, key, None)
+
+
+def _with_existing_transaction_slot_fill_state(
+    action_context: UIActionContext,
+    existing_slots: Any,
+) -> UIActionContext:
+    if not is_expected_transaction_slot_fill(action_context):
+        return action_context
+
+    slot_patch = dict(action_context.slot_patch or {})
+    for field_name in (
+        "goods_no",
+        "tire_size",
+        "tire_model",
+        "product_name",
+        "ord_qty",
+        "region",
+        "shop_id",
+        "shop_name",
+        "availability_intent",
+        "requested_cal_day",
+        "rsv_hour",
+        "pending_intent",
+        "goal_type",
+        "stock_check_mode",
+        "source_tool",
+        "schedule_mode",
+    ):
+        if slot_patch.get(field_name) not in (None, "", []):
+            continue
+        existing_value = _slot_value_from_any(existing_slots, field_name)
+        if existing_value not in (None, "", []):
+            slot_patch[field_name] = existing_value
+
+    expected_contract_intent = str(action_context.expected_contract_intent or "").strip()
+    if expected_contract_intent == _QUICK_ORDER_RESERVATION_INTENT:
+        slot_patch.setdefault("pending_intent", "order")
+        slot_patch.setdefault("goal_type", "place_order")
+        slot_patch.setdefault("stock_check_mode", "preview")
+    elif expected_contract_intent == _STOCK_STORE_SEARCH_INTENT:
+        slot_patch.setdefault("pending_intent", "stock")
+        slot_patch.setdefault("goal_type", "store_with_stock")
+
+    expected_slot = _TRANSACTION_SLOT_FILL_ACTION_TO_SLOT.get(str(action_context.action_type or "").strip())
+    trace_metadata = dict(action_context.trace_metadata or {})
+    trace_metadata["slot_patch"] = dict(slot_patch)
+    trace_metadata["selected_slots"] = dict(slot_patch)
+    if expected_slot and not trace_metadata.get("expected_slot"):
+        trace_metadata["expected_slot"] = expected_slot
+
+    return replace(
+        action_context,
+        slots={**dict(action_context.slots or {}), **slot_patch},
+        slot_patch=slot_patch,
+        trace_metadata=trace_metadata,
+    )
 
 
 def resolve_ui_action_context(
@@ -1403,6 +1474,7 @@ def prepare_ui_action_state(
             },
         )
         if action_context is not None:
+            action_context = _with_existing_transaction_slot_fill_state(action_context, existing_slots)
             trace_metadata.update(dict(action_context.trace_metadata))
             if action_context.slot_patch:
                 updated_slots, slot_trace_metadata = apply_ui_action_slot_patch(
@@ -1715,7 +1787,7 @@ def apply_history_location_selection_state(
             flow_type = "stock_location_selection"
         else:
             flow_type = "preview_location_selection"
-        resume_source = "location_selection:transaction_store_preview"
+        resume_source = "expected_slot_fill:store"
     elif source_tool in {"search_stores_tool", "get_store_list_tool", "get_nearby_stores_tool"}:
         flow_type = "store_search_location_selection"
         resume_source = "location_selection:store_search"
@@ -2488,6 +2560,16 @@ def resolve_goods_no_from_selection(
         return None
     goods_no = canonical_context_from_tool_boundary(selected_row).get("goods_no")
     return str(goods_no).strip() or None
+
+
+def expected_slot_fill_resume_source(action_context: UIActionContext | None) -> str:
+    if not is_expected_transaction_slot_fill(action_context):
+        return "none"
+    action_type = str(getattr(action_context, "action_type", "") or "").strip()
+    expected_slot = _TRANSACTION_SLOT_FILL_ACTION_TO_SLOT.get(action_type)
+    if not expected_slot:
+        return "none"
+    return f"expected_slot_fill:{expected_slot}"
 
 
 def rewrite_transaction_selection_user_text(
@@ -4220,6 +4302,7 @@ def resolve_region_or_store_input_context(
         }
         slots_to_promote.update(input_values)
         slots_to_promote.pop("store_view_requested", None)
+        expected_slot = "region" if input_values.get("region") else "store"
         if input_values.get("region"):
             slots_to_promote["shop_id"] = None
             slots_to_promote["shop_name"] = None
@@ -4228,7 +4311,7 @@ def resolve_region_or_store_input_context(
             flow_type=flow_type,
             action_mode=action_mode,
             context_state="resumed",
-            resume_source=f"region_store_followup:{resolution_source}",
+            resume_source=f"expected_slot_fill:{expected_slot}",
             slots_to_promote=slots_to_promote,
             expected_contract_intent=expected_contract_intent,
             allowed_tools=allowed_tools,
@@ -4674,6 +4757,19 @@ def normalize_ui_action_metadata(
                 "entity_label": label,
                 "slots": slot_values,
             }
+            if action_type in _TRANSACTION_SLOT_FILL_ACTION_TO_SLOT:
+                chip["ui_action"]["fills_slot"] = (
+                    chip.get("fills_slot")
+                    or metadata.get("fills_slot")
+                    or metadata.get("fillsSlot")
+                    or _TRANSACTION_SLOT_FILL_ACTION_TO_SLOT[action_type]
+                )
+            if action_type == "select_product":
+                chip["ui_action"]["entity_type"] = "product"
+                chip["ui_action"]["entity_id"] = (
+                    str(chip.get("entity_id") or metadata.get("entity_id") or metadata.get("goodsNo") or "").strip()
+                    or slot_values.get("goods_no")
+                )
             if action_type == "select_quantity" and expected_contract_intent in {
                 _STOCK_STORE_SEARCH_INTENT,
                 _QUICK_ORDER_RESERVATION_INTENT,
@@ -4700,6 +4796,8 @@ def normalize_ui_action_metadata(
                 _QUICK_ORDER_RESERVATION_INTENT,
             }:
                 metadata["fills_slot"] = "ord_qty"
+            elif action_type in _TRANSACTION_SLOT_FILL_ACTION_TO_SLOT:
+                metadata["fills_slot"] = chip["ui_action"].get("fills_slot")
             chip["metadata"] = metadata
             changed = True
         return changed

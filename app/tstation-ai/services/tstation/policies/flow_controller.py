@@ -608,17 +608,6 @@ def _purchase_product_candidate_quick_replies(
 ) -> list[dict[str, Any]]:
     quick_replies: list[dict[str, Any]] = []
     seen_labels: set[str] = set()
-    quantity = slots.get("ord_qty") or slots.get("quantity")
-    try:
-        quantity_int = int(quantity) if quantity not in (None, "", 0, "0") else None
-    except (TypeError, ValueError):
-        quantity_int = None
-    pending_intent = str(slots.get("pending_intent") or "order").strip() or "order"
-    goal_type = str(slots.get("goal_type") or "place_order").strip() or "place_order"
-    availability_intent = str(slots.get("availability_intent") or "").strip()
-    requested_cal_day = str(slots.get("requested_cal_day") or "").strip()
-    region = str(slots.get("region") or "").strip()
-    stock_check_mode = str(slots.get("stock_check_mode") or "preview").strip() or "preview"
 
     for row in rows[:6]:
         product_name = str(row.get("goods_nm") or "").strip()
@@ -639,46 +628,25 @@ def _purchase_product_candidate_quick_replies(
         slot_values: dict[str, Any] = {
             "goods_no": goods_no,
             "tire_size": tire_size,
-            "pending_intent": pending_intent,
-            "goal_type": goal_type,
-            "stock_check_mode": stock_check_mode,
         }
         if product_name:
             slot_values["tire_model"] = product_name
-        if quantity_int:
-            slot_values["ord_qty"] = quantity_int
-        if availability_intent:
-            slot_values["availability_intent"] = availability_intent
-        if requested_cal_day:
-            slot_values["requested_cal_day"] = requested_cal_day
-        if region:
-            slot_values["region"] = region
 
         chip_metadata: dict[str, Any] = {
             "flowId": flow_id,
             "flowStep": flow_step,
-            "productName": product_name,
             "goodsNo": goods_no,
             "tireSize": tire_size,
-            "pendingIntent": pending_intent,
-            "goalType": goal_type,
-            "stockCheckMode": stock_check_mode,
             "slots": slot_values,
         }
-        if quantity_int:
-            chip_metadata["ordQty"] = quantity_int
-        if availability_intent:
-            chip_metadata["availabilityIntent"] = availability_intent
-        if requested_cal_day:
-            chip_metadata["requestedCalDay"] = requested_cal_day
-        if region:
-            chip_metadata["region"] = region
 
         quick_replies.append(
             {
                 "label": label,
                 "domain": "TRANSACTION",
                 "cta_action": "select_product",
+                "fills_slot": "product",
+                "entity_id": goods_no,
                 "source_intent": "quick_order_reservation",
                 "expected_contract_intent": "quick_order_reservation",
                 "expected_behavior": "slot_fill",
