@@ -18815,6 +18815,8 @@ def _promote_single_turn_purchase_contract_from_search_product(
         {key: value for key, value in runtime_values.items() if value not in (None, "", [], {})},
         source="single_turn_purchase_product_resolution",
     )
+    if getattr(promoted_slots, "stock_check_mode", None) == "inventory_only":
+        promoted_slots.stock_check_mode = None
     promotion_slot_state = {
         key: value
         for key, value in promoted_slots.model_dump().items()
@@ -18877,6 +18879,55 @@ def _promote_single_turn_purchase_contract_from_search_product(
         source="single_turn_purchase_contract_promotion",
     )
     return promoted_slots, transaction_frame, transaction_tool_plan, transaction_response_decision
+
+
+def _preview_schedule_store_slot_values(tool_result: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(tool_result, Mapping):
+        return {}
+    data = tool_result.get("data")
+    schedule = data.get("schedule") if isinstance(data, Mapping) else None
+    stores = schedule.get("stores") if isinstance(schedule, Mapping) else None
+    if not isinstance(stores, list):
+        return {}
+    for store in stores:
+        if not isinstance(store, Mapping):
+            continue
+        slots = store.get("slots")
+        if not isinstance(slots, list) or not slots:
+            continue
+        shop_id = str(store.get("shop_id") or store.get("shopId") or "").strip()
+        if not shop_id:
+            continue
+        values = {
+            "shop_id": shop_id,
+            "shop_name": str(store.get("shop_nm") or store.get("shopName") or "").strip() or None,
+            "schedule_mode": str(store.get("mode") or "").strip() or None,
+        }
+        return {key: value for key, value in values.items() if value not in (None, "", [], {})}
+    return {}
+
+
+def _post_tool_purchase_preview_contract_context(
+    *,
+    tool_name: str,
+    known_slots: Mapping[str, Any] | None,
+    tool_result: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    if tool_name != "transaction_store_preview_tool":
+        return None
+    slots = dict(known_slots or {})
+    if str(slots.get("pending_intent") or "").strip() != "order" and str(slots.get("goal_type") or "").strip() != "place_order":
+        return None
+    schedule_store_slots = _preview_schedule_store_slot_values(tool_result)
+    if not schedule_store_slots:
+        return None
+    contract_slots = dict(slots)
+    contract_slots.update(schedule_store_slots)
+    contract_slots.pop("stock_check_mode", None)
+    return {
+        "intent": "quick_order_reservation",
+        "known_slots": contract_slots,
+    }
 
 
 def _is_cross_domain_discovery_product_resolution_pending(
@@ -32373,13 +32424,27 @@ class TStationChatServiceV2:
                                 })
                             tool_error_summary = _tool_error_summary(tool_name, parsed_for_verifier)
                             if tool_name in {"transaction_store_preview_tool", "get_store_inventory_tool"}:
-                                post_tool_intent = "inventory_availability"
-                                post_tool_response_decision = decide_transaction_response(
-                                    intent=post_tool_intent,
-                                    user_text=user_query,
+                                promoted_preview_contract = _post_tool_purchase_preview_contract_context(
+                                    tool_name=tool_name,
                                     known_slots=policy_slots,
-                                    tool_result=parsed_for_verifier,
+                                    tool_result=parsed_for_verifier if isinstance(parsed_for_verifier, Mapping) else None,
                                 )
+                                if promoted_preview_contract is not None:
+                                    post_tool_intent = str(promoted_preview_contract["intent"] or "quick_order_reservation")
+                                    policy_slots = dict(promoted_preview_contract["known_slots"])
+                                    post_tool_response_decision = decide_transaction_response(
+                                        intent=post_tool_intent,
+                                        user_text=user_query,
+                                        known_slots=policy_slots,
+                                    )
+                                else:
+                                    post_tool_intent = "inventory_availability"
+                                    post_tool_response_decision = decide_transaction_response(
+                                        intent=post_tool_intent,
+                                        user_text=user_query,
+                                        known_slots=policy_slots,
+                                        tool_result=parsed_for_verifier,
+                                    )
                             elif tool_error_summary is not None:
                                 post_tool_intent = _post_tool_policy_intent(tool_name)
                                 post_tool_response_decision = _tool_error_response_decision(tool_name)
@@ -32412,39 +32477,73 @@ class TStationChatServiceV2:
                                     ),
                                     metadata=dict(post_tool_policy_metadata),
                                 )
-                            inventory_frame = IntentFrame(
-                                domain=PolicyDomain.TRANSACTION,
-                                intent=post_tool_intent,
-                                known_slots=policy_slots,
-                                source=f"tool_result:{tool_name}",
-                            )
-                            turn_contract = build_turn_contract(
-                                user_text=user_query,
-                                intent_frame=inventory_frame,
-                                response_decision=post_tool_response_decision,
-                                routing_result=routing_result,
-                                merged_slots=pending_slots or initial_slots,
-                                action_mode=stream_action_mode,
-                                context_state=stream_context_state,
-                                resume_source=stream_resume_source,
-                                router_waited=bool(getattr(turn_contract, "router_waited", False))
-                                if turn_contract
-                                else False,
-                                router_source=str(getattr(turn_contract, "router_source", "unknown") or "unknown")
-                                if turn_contract
-                                else "unknown",
-                                contract_source=str(
-                                    getattr(turn_contract, "contract_source", "router_fallback")
-                                    or "router_fallback"
+                            if post_tool_intent == "quick_order_reservation":
+                                inventory_frame = build_transaction_intent_frame(user_query, known_slots=policy_slots)
+                                inventory_tool_plan = plan_transaction_tools(inventory_frame)
+                                turn_contract = build_turn_contract(
+                                    user_text=user_query,
+                                    intent_frame=inventory_frame,
+                                    tool_plan=inventory_tool_plan,
+                                    response_decision=post_tool_response_decision,
+                                    routing_result=routing_result,
+                                    merged_slots=pending_slots or initial_slots,
+                                    action_mode=stream_action_mode,
+                                    context_state=stream_context_state,
+                                    resume_source=stream_resume_source,
+                                    router_waited=bool(getattr(turn_contract, "router_waited", False))
+                                    if turn_contract
+                                    else False,
+                                    router_source=str(getattr(turn_contract, "router_source", "unknown") or "unknown")
+                                    if turn_contract
+                                    else "unknown",
+                                    contract_source=str(
+                                        getattr(turn_contract, "contract_source", "router_fallback")
+                                        or "router_fallback"
+                                    )
+                                    if turn_contract
+                                    else "router_fallback",
+                                    speculative_used_for_contract=bool(
+                                        getattr(turn_contract, "speculative_used_for_contract", False)
+                                    )
+                                    if turn_contract
+                                    else False,
                                 )
-                                if turn_contract
-                                else "router_fallback",
-                                speculative_used_for_contract=bool(
-                                    getattr(turn_contract, "speculative_used_for_contract", False)
+                                current_transaction_response_decision.set(post_tool_response_decision)
+                                current_transaction_tool_plan.set(inventory_tool_plan)
+                            else:
+                                inventory_frame = IntentFrame(
+                                    domain=PolicyDomain.TRANSACTION,
+                                    intent=post_tool_intent,
+                                    known_slots=policy_slots,
+                                    source=f"tool_result:{tool_name}",
                                 )
-                                if turn_contract
-                                else False,
-                            )
+                                turn_contract = build_turn_contract(
+                                    user_text=user_query,
+                                    intent_frame=inventory_frame,
+                                    response_decision=post_tool_response_decision,
+                                    routing_result=routing_result,
+                                    merged_slots=pending_slots or initial_slots,
+                                    action_mode=stream_action_mode,
+                                    context_state=stream_context_state,
+                                    resume_source=stream_resume_source,
+                                    router_waited=bool(getattr(turn_contract, "router_waited", False))
+                                    if turn_contract
+                                    else False,
+                                    router_source=str(getattr(turn_contract, "router_source", "unknown") or "unknown")
+                                    if turn_contract
+                                    else "unknown",
+                                    contract_source=str(
+                                        getattr(turn_contract, "contract_source", "router_fallback")
+                                        or "router_fallback"
+                                    )
+                                    if turn_contract
+                                    else "router_fallback",
+                                    speculative_used_for_contract=bool(
+                                        getattr(turn_contract, "speculative_used_for_contract", False)
+                                    )
+                                    if turn_contract
+                                    else False,
+                                )
                             logger.info("[TURN_CONTRACT] post-tool update %s", turn_contract.to_dict())
                     turn_tool_slots: dict[str, Any] = {}
                     if tool_name == "search_product_tool" and isinstance(parsed_for_verifier, dict):

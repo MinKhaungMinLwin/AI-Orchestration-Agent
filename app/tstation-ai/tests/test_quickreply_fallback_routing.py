@@ -88,6 +88,7 @@ from services.tstation.chat import (
     _build_store_holiday_period_event,
     _build_transaction_policy_context,
     _build_product_attribute_event_from_search_results,
+    _post_tool_purchase_preview_contract_context,
     _promote_single_turn_purchase_contract_from_search_product,
     _quantity_benefit_continuation_frame_from_pending,
     _final_price_from_row,
@@ -24148,6 +24149,75 @@ def test_promote_single_turn_purchase_contract_from_search_product_skips_multi_m
     )
 
     assert promoted is None
+
+
+def test_promote_single_turn_purchase_contract_from_search_product_clears_inventory_only() -> None:
+    promoted = _promote_single_turn_purchase_contract_from_search_product(
+        user_text="다이나프로 hpx 2154518 2개 한남점에서 구매",
+        tool_result={
+            "data": {
+                "items": [
+                    {
+                        "goods_no": "G000000317677",
+                        "goods_nm": "다이나프로 HPX",
+                        "tire_size_1": "215/45R18",
+                    }
+                ]
+            }
+        },
+        merged_slots=ConversationSlots(
+            tire_model="다이나프로 HPX",
+            tire_size="215/45R18",
+            ord_qty=2,
+            shop_name="한남점",
+            pending_intent="order",
+            goal_type="place_order",
+            stock_check_mode="inventory_only",
+        ),
+        routing_result=SimpleNamespace(execution_plan=["discovery:resolve_product", "transaction:continue_purchase"]),
+    )
+
+    assert promoted is not None
+    promoted_slots, promoted_frame, promoted_tool_plan, _decision = promoted
+    assert "stock_check_mode" not in promoted_slots.model_dump(exclude_none=True)
+    assert "stock_check_mode" not in promoted_frame.known_slots
+    assert promoted_tool_plan.metadata["flow_step"] == "resolve_store"
+
+
+def test_post_tool_purchase_preview_contract_context_promotes_schedule_slots_to_purchase_flow() -> None:
+    promoted = _post_tool_purchase_preview_contract_context(
+        tool_name="transaction_store_preview_tool",
+        known_slots={
+            "goods_no": "G000000317677",
+            "tire_size": "215/45R18",
+            "ord_qty": 2,
+            "shop_name": "한남점",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "stock_check_mode": "inventory_only",
+        },
+        tool_result={
+            "status": "success",
+            "data": {
+                "schedule": {
+                    "stores": [{
+                        "shop_id": "F07782",
+                        "shop_nm": "티스테이션 한남점",
+                        "mode": "in_store_logistics_combined",
+                        "is_installable": True,
+                        "slots": [{"cal_day": "20260628", "tm": "09"}],
+                    }],
+                },
+            },
+        },
+    )
+
+    assert promoted is not None
+    assert promoted["intent"] == "quick_order_reservation"
+    assert promoted["known_slots"]["shop_id"] == "F07782"
+    assert promoted["known_slots"]["shop_name"] == "티스테이션 한남점"
+    assert promoted["known_slots"]["schedule_mode"] == "in_store_logistics_combined"
+    assert "stock_check_mode" not in promoted["known_slots"]
 
 
 def test_recommendation_product_pick_defaults_to_product_description_contract() -> None:
