@@ -98,7 +98,7 @@ from services.tstation.policies.cross_domain_policy import (
     plan_cross_domain_turn,
     should_defer_product_price_explanation_to_classifier,
 )
-from services.tstation.policies.flow_controller import resolve_purchase_order_flow
+from services.tstation.policies.flow_controller import build_purchase_flow_fallback_event, resolve_purchase_order_flow
 from services.tstation.policies.coupon_query_gate import (
     CouponQueryGateDecision,
     CouponQueryIntent,
@@ -19851,6 +19851,65 @@ def _promote_single_turn_purchase_contract_from_search_product(
     return promoted_slots, transaction_frame, transaction_tool_plan, transaction_response_decision
 
 
+def _build_purchase_size_selection_event_from_search_result(
+    *,
+    user_text: str,
+    search_result: Mapping[str, Any] | None,
+    tool_input: Mapping[str, Any] | None,
+    known_slots: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    slots = dict(known_slots or {})
+    pending_intent = str(slots.get("pending_intent") or "").strip() or "order"
+    if not _is_fresh_product_transaction_request(user_text, pending_intent):
+        return None
+    if normalize_tire_size(str((tool_input or {}).get("size") or "")):
+        return None
+
+    if str(slots.get("pending_intent") or "").strip() != "order" and str(slots.get("goal_type") or "").strip() != "place_order":
+        return None
+
+    product_name = str(
+        slots.get("product_name")
+        or slots.get("tire_model")
+        or slots.get("pending_product_name")
+        or (tool_input or {}).get("keyword")
+        or ""
+    ).strip()
+    if not product_name:
+        return None
+
+    purchase_known_slots = {
+        key: value
+        for key, value in {
+            "product_name": product_name,
+            "pending_product_name": product_name,
+            "tire_model": product_name,
+            "ord_qty": slots.get("ord_qty") or slots.get("quantity"),
+            "quantity": slots.get("ord_qty") or slots.get("quantity"),
+            "shop_name": slots.get("shop_name") or slots.get("store_name"),
+            "store_name": slots.get("shop_name") or slots.get("store_name"),
+            "region": slots.get("region"),
+            "requested_cal_day": slots.get("requested_cal_day"),
+            "rsv_hour": slots.get("rsv_hour"),
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        }.items()
+        if value not in (None, "", [], {})
+    }
+
+    return build_purchase_flow_fallback_event(
+        intent="quick_order_reservation",
+        known_slots=purchase_known_slots,
+        tool_data_list=[
+            {
+                "tool": "search_product_tool",
+                "args": dict(tool_input or {}),
+                "data": dict(search_result or {}),
+            }
+        ],
+    )
+
+
 def _preview_schedule_store_slot_values(tool_result: Mapping[str, Any] | None) -> dict[str, Any]:
     if not isinstance(tool_result, Mapping):
         return {}
@@ -26436,6 +26495,56 @@ class TStationChatServiceV2:
                     request.session_id,
                 )
 
+        fresh_unsized_product_keyword = _fresh_transaction_product_keyword(
+            last_user_text,
+            regex_slots.intent_candidate,
+        )
+        if (
+            fresh_product_transaction_request
+            and merged_slots.goods_no is None
+            and merged_slots.tire_size is None
+            and fresh_unsized_product_keyword
+            and not _DATEPICK_SELECTION_RE.match(last_user_text or "")
+        ):
+            if _should_preserve_router_contract(
+                routing_result=routing_result,
+                candidate_override="fresh_unsized_product_transaction",
+                override_reason=explicit_override_reason,
+            ):
+                _mark_router_override_blocked(
+                    routing_result,
+                    previous_domains=list(domains),
+                    previous_execution_plan=list(getattr(routing_result, "execution_plan", []) or []),
+                )
+            else:
+                previous_domains = list(domains)
+                previous_execution_plan = list(getattr(routing_result, "execution_plan", []) or [])
+                domains = [MultiAgentDomain.Domain.DISCOVERY]
+                routing_result = MultiAgentDomain(
+                    reason="fresh_unsized_product_transaction_search_first",
+                    domains=domains,
+                    execution_plan=["discovery:resolve_product_for_purchase_size_selection"],
+                    user_behavior="providing a new tire product name without size and with transactional intent",
+                    flow="fresh unsized product transaction",
+                    claim_check_type="none",
+                    complaint_scope="none",
+                    agent_prompt_profile=AgentPromptProfile.DISCOVERY_SEARCH,
+                    override_applied=True,
+                    override_reason=explicit_override_reason or "missing_tire_size_for_explicit_purchase_product",
+                    original_router_domains=previous_domains,
+                    original_router_execution_plan=previous_execution_plan,
+                )
+                skip_decision = False
+                speculative_classify_future = None
+                logger.info(
+                    "[COORDINATOR] Fresh unsized product transaction route: forcing "
+                    "[DISCOVERY] with discovery_search profile "
+                    "(product=%r, pending_intent=%r, session_id=%s)",
+                    fresh_unsized_product_keyword,
+                    regex_slots.intent_candidate,
+                    request.session_id,
+                )
+
         # P0d profile upgrade: classifier picked [TRANSACTION] + transaction_price_stock,
         # but the user is mid-order (pending_intent=order + goods_no resolved). The
         # narrow price_stock profile lacks order-flow CTA guidance — its Output Policy
@@ -31872,6 +31981,25 @@ class TStationChatServiceV2:
                 "tool": "search_product_tool",
                 "source_domain": "discovery",
             })
+
+            purchase_size_selection_event = _build_purchase_size_selection_event_from_search_result(
+                user_text=user_query,
+                search_result=search_result,
+                tool_input=tool_input,
+                known_slots=getattr(turn_contract, "known_slots", {}) if turn_contract is not None else {},
+            )
+            if purchase_size_selection_event is not None:
+                purchase_size_selection_event["source_domain"] = MultiAgentDomain.Domain.DISCOVERY.value
+                finalized_event = _finalize_direct_code_event(
+                    purchase_size_selection_event,
+                    turn_contract=turn_contract,
+                    intent="product_search",
+                    source="code_purchase_size_selection_search",
+                    required_tools=("search_product_tool",),
+                    allowed_intents=("product_search_summary", "resolve_or_describe_product"),
+                )
+                if finalized_event is not None:
+                    return emitted_events, finalized_event
 
             if tool_input.get("size"):
                 row = _unique_product_row_from_sized_search_result(

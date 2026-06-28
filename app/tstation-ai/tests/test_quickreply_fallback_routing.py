@@ -345,6 +345,7 @@ from services.tstation.chat import (
     _should_force_best_seller_code_route,
     _should_dispatch_best_seller_contract_tool,
     _best_seller_tool_input_from_text,
+    _build_purchase_size_selection_event_from_search_result,
     _enrich_best_selling_result_for_product_cards,
     _sanitize_transaction_cta_contracts,
     _is_current_location_store_search_confirmation,
@@ -12336,6 +12337,36 @@ def test_purchase_flow_fallback_event_clarifies_size_when_product_resolution_has
     assert event["assistant_response_source"] == "code_purchase_flow_resolution_size_clarification"
     assert "타이어 사이즈를 먼저 선택해 주세요." in event["data"]["assistantResponse"]
     assert _labels(event["data"]["quickReplies"]) == ["235/55R19", "255/45R20", "사이즈 직접 입력"]
+    assert event["data"]["metadata"]["pendingIntent"] == "order"
+    assert event["data"]["metadata"]["goalType"] == "place_order"
+
+
+def test_build_purchase_size_selection_event_from_search_result_uses_search_rows_for_fresh_order() -> None:
+    event = _build_purchase_size_selection_event_from_search_result(
+        user_text="벤투스 노블 1 구매하고 싶어",
+        search_result={
+            "status": "success",
+            "data": {
+                "items": [
+                    {"goods_no": "G1", "goods_nm": "벤투스 노블 1", "tire_size_1": "225/45R18"},
+                    {"goods_no": "G2", "goods_nm": "벤투스 노블 1", "tire_size_1": "245/45R18"},
+                ]
+            },
+        },
+        tool_input={"keyword": "벤투스 노블 1", "limit": 10},
+        known_slots={"pending_intent": "order", "goal_type": "place_order", "ord_qty": 2},
+    )
+
+    assert event is not None
+    assert event["assistant_response_source"] == "code_purchase_flow_resolution_size_clarification"
+    assert _labels(event["data"]["quickReplies"]) == ["225/45R18", "245/45R18", "사이즈 직접 입력"]
+    metadata = event["data"]["metadata"]
+    assert metadata["flowId"] == "purchase_order"
+    assert metadata["flowStep"] == "ask_size"
+    assert metadata["productName"] == "벤투스 노블 1"
+    assert metadata["pendingIntent"] == "order"
+    assert metadata["goalType"] == "place_order"
+    assert metadata["sizes"] == ["225/45R18", "245/45R18"]
 
 
 def test_purchase_flow_fallback_event_builds_structured_product_selection_quickreplies() -> None:

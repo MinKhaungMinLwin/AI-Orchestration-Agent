@@ -602,6 +602,8 @@ def _purchase_product_resolution_event(
         "missingSlots": list(state.missing_slots),
         "response_shape_key": state.response_shape_key,
         "productName": product_label,
+        "pendingIntent": str(slots.get("pending_intent") or "order"),
+        "goalType": str(slots.get("goal_type") or "place_order"),
     }
     if blocked_tool:
         metadata["blockedTool"] = blocked_tool
@@ -618,7 +620,7 @@ def _purchase_product_resolution_event(
     if availability_intent:
         metadata["availabilityIntent"] = availability_intent
 
-    if len(sizes) > 1 and not normalize_tire_size(str(slots.get("tire_size") or "")):
+    if sizes and not normalize_tire_size(str(slots.get("tire_size") or "")):
         return {
             "type": "data",
             "template": TemplateName.QUICK_REPLY.value,
