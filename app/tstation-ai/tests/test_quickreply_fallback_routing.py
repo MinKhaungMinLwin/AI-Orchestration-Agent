@@ -383,6 +383,7 @@ from services.tstation.policies import schedule_tool_gate
 from services.tstation.policies.transaction_intent_policy import build_transaction_intent_frame, plan_transaction_tools
 from services.tstation.policies.transaction_response_policy import decide_transaction_response
 from services.tstation.policies.support_response_policy import (
+    build_support_faq_source_grounded_reply,
     build_support_faq_policy_reply,
     decide_support_response,
     resolve_support_faq_policy_context,
@@ -28879,11 +28880,11 @@ def test_general_cancel_fee_policy_event_does_not_append_raw_faq_summary() -> No
     response = str(event["data"]["assistantResponse"])
 
     assert "확인된 FAQ 기준으로는" not in response
-    assert "별도의 취소 수수료는 없으며" not in response
-    assert "예약만 잡아둔 상태라면 별도의 취소 수수료가 없다고 안내돼요." in response
+    assert "장착 예약만 취소하는 경우 별도의 취소 수수료는 없으며" in response
     assert not response.endswith("...")
     assert event["data"]["metadata"]["faqSourceSummaryUsed"] is True
     assert event["data"]["metadata"]["faqSourceSummaryAppended"] is False
+    assert event["data"]["metadata"]["sourceGroundedReplyUsed"] is True
 
 
 def test_general_card_cancel_timing_policy_event_does_not_append_raw_faq_summary() -> None:
@@ -28907,11 +28908,11 @@ def test_general_card_cancel_timing_policy_event_does_not_append_raw_faq_summary
     response = str(event["data"]["assistantResponse"])
 
     assert "확인된 FAQ 기준으로는" not in response
-    assert "영업일 기준 수일이 소요될 수 있습니다." not in response
-    assert "카드 승인 취소 반영은 카드사와 결제수단에 따라 달라지고" in response
+    assert "영업일 기준 수일이 소요될 수 있습니다." in response
     assert not response.endswith("...")
     assert event["data"]["metadata"]["faqSourceSummaryUsed"] is True
     assert event["data"]["metadata"]["faqSourceSummaryAppended"] is False
+    assert event["data"]["metadata"]["sourceGroundedReplyUsed"] is True
 
 
 def test_support_faq_policy_event_prefers_faq_source_summary_when_available() -> None:
@@ -28937,12 +28938,13 @@ def test_support_faq_policy_event_prefers_faq_source_summary_when_available() ->
     assert event is not None
     response = str(event["data"]["assistantResponse"])
     assert "확인된 FAQ 기준으로는" not in response
-    assert "제조일자 6~12개월 이내 제품은 정상 신품 범주로 안내되는 경우가 있어요." in response
+    assert "일반적으로 6~12개월 이내 제품은 정상 신품 범주로 안내합니다." in response
     assert event["source_domain"] == "support"
     assert event["data"]["metadata"]["faqSourceSummaryUsed"] is True
     assert event["data"]["metadata"]["faqSourceSummaryAppended"] is False
     assert event["data"]["metadata"]["policyGroup"] == "product_condition_policy"
     assert event["data"]["metadata"]["factType"] == "manufacture_date"
+    assert event["data"]["metadata"]["sourceGroundedReplyUsed"] is True
 
 
 def test_support_faq_policy_event_selects_intent_relevant_faq_candidate_not_first_item() -> None:
@@ -28974,10 +28976,12 @@ def test_support_faq_policy_event_selects_intent_relevant_faq_candidate_not_firs
 
     assert event is not None
     response = str(event["data"]["assistantResponse"])
-    assert "제조일자 6~12개월 이내 제품은 정상 신품 범주로 안내되는 경우가 있어요." in response
+    assert "타이어 제조일자는 DOT로 확인할 수 있으며, 일반적으로 6~12개월 이내 제품은 정상 신품 범주로 안내합니다." not in response
     assert "측면 부풀음은 점검 후 보증 여부를 확인합니다." not in response
+    assert "제조일자만으로 불량이나 교환·환불 가능 여부를 바로 단정할 수는 없어요." in response
     assert event["data"]["metadata"]["faqSourceSummaryUsed"] is True
     assert event["data"]["metadata"]["faqSourceSummaryAppended"] is False
+    assert event["data"]["metadata"].get("sourceGroundedReplyUsed") is not True
 
 
 def test_support_faq_policy_event_drops_source_summary_when_cross_topic_scores_are_too_close() -> None:
@@ -29011,7 +29015,7 @@ def test_support_faq_policy_event_drops_source_summary_when_cross_topic_scores_a
 
     assert event is not None
     response = str(event["data"]["assistantResponse"])
-    assert "제조일자 6~12개월 이내 제품은 정상 신품 범주로 안내되는 경우가 있어요." in response
+    assert "일반적으로 6~12개월 이내 제품은 정상 신품 범주로 안내합니다." not in response
     assert "DOT 보증 확인" not in response
     assert event["data"]["metadata"]["faqSourceSummaryUsed"] is False
     assert event["data"]["metadata"]["faqSourceSummaryAppended"] is False
@@ -29133,7 +29137,6 @@ def test_support_faq_policy_reply_filters_wrong_categories_for_visit_cancel() ->
     )
 
     assert reply is not None
-    assert "예약만 잡아둔 상태라면 별도의 취소 수수료가 없다고 안내돼요." in reply["assistant_response"]
     assert "타이어 개당 1만 원" in reply["assistant_response"]
     assert reply["metadata"]["policyGroup"] == "reservation_installation_policy"
     assert reply["metadata"]["factType"] == "mixed_cancel_fee_generalized"
@@ -29213,6 +29216,98 @@ def test_support_faq_policy_reply_builds_mixed_cancel_generalized_answer_when_al
     assert reply["metadata"]["facts"]["visit_reservation_cancel_method"] == "고객센터 전화"
     assert reply["metadata"]["facts"]["online_order_cancel_fee_amount"] == "타이어 개당 1만 원"
     assert reply["metadata"]["facts"]["card_refund_timing"] == "1~3영업일"
+
+
+def test_support_faq_source_grounded_reply_uses_top1_and_drops_card_sentence_without_card_anchor() -> None:
+    tool_result = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "question": "온라인몰 결제 후 예약 취소",
+                    "answer": (
+                        "온라인몰에서 결제까지 완료된 주문은 배송 현황에 따라 타이어 개당 1만 원 취소 수수료가 발생할 수 있습니다. "
+                        "결제 취소 후 카드 환불 반영은 보통 1~3영업일 정도 소요될 수 있습니다."
+                    ),
+                    "score": 0.31,
+                    "metadata": {"category_lv1": "주문/결제", "category_lv2": "주문"},
+                },
+                {
+                    "question": "카드 환불 시점",
+                    "answer": "카드 환불은 보통 1~3영업일이 소요될 수 있습니다.",
+                    "score": 0.29,
+                    "metadata": {"category_lv1": "주문/결제", "category_lv2": "결제"},
+                },
+            ]
+        },
+    }
+
+    reply = build_support_faq_source_grounded_reply(
+        intent="reservation_policy_guidance",
+        user_text="온라인에서 결제후에 매장 예약 취소하면 위약금 있어?",
+        tool_result=tool_result,
+    )
+
+    assert reply is not None
+    response = reply["assistant_response"]
+    assert "타이어 개당 1만 원" in response
+    assert "카드 환불" not in response
+    assert reply["metadata"]["sourceGroundedReplyUsed"] is True
+
+
+def test_support_faq_source_grounded_reply_allows_card_refund_sentence_for_card_anchor() -> None:
+    tool_result = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "question": "카드 승인취소 반영 기간",
+                    "answer": "카드 승인취소 및 환불 반영은 카드사와 결제수단에 따라 다르며 영업일 기준 1~3일이 소요될 수 있습니다.",
+                    "score": 0.33,
+                    "metadata": {"category_lv1": "주문/결제", "category_lv2": "결제"},
+                }
+            ]
+        },
+    }
+
+    reply = build_support_faq_source_grounded_reply(
+        intent="general_card_cancel_timing_policy",
+        user_text="카드 승인취소는 언제 반영돼?",
+        tool_result=tool_result,
+    )
+
+    assert reply is not None
+    assert "영업일 기준 1~3일" in reply["assistant_response"]
+
+
+def test_support_faq_source_grounded_reply_blocks_manufacture_top1_on_warranty_question_when_score_gap_small() -> None:
+    tool_result = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "question": "제조일자 기준",
+                    "answer": "DOT로 제조일자를 확인할 수 있고 6~12개월 이내 제품은 정상 신품 범주로 안내합니다.",
+                    "score": 0.24,
+                    "metadata": {"category": "manufacture"},
+                },
+                {
+                    "question": "품질보증 기준",
+                    "answer": "측면 부풀음은 현장 점검 후 보증 여부를 확인합니다.",
+                    "score": 0.22,
+                    "metadata": {"category": "warranty"},
+                },
+            ]
+        },
+    }
+
+    reply = build_support_faq_source_grounded_reply(
+        intent="tire_quality_warranty_policy",
+        user_text="측면 부풀었는데 보증 돼?",
+        tool_result=tool_result,
+    )
+
+    assert reply is None
 
 
 def test_support_faq_policy_reply_builds_visit_only_answer_from_mixed_cancel_candidates() -> None:
@@ -29404,9 +29499,9 @@ def test_support_faq_policy_event_uses_bucketed_store_change_reply() -> None:
     assert event["template"] == "quickReply"
     assert event["data"]["metadata"]["policyGroup"] == "reservation_installation_policy"
     assert event["data"]["metadata"]["factType"] == "store_change"
-    assert event["data"]["metadata"]["factExtractionApplied"] is True
-    assert "방문 날짜를 유지한 채 지점 변경이 가능한 경우도 있지만" in event["data"]["assistantResponse"]
-    assert "예약 날짜를 유지한 채 방문 지점 변경이 가능한 경우도 있으나" not in event["data"]["assistantResponse"]
+    assert event["data"]["metadata"]["factExtractionApplied"] is False
+    assert event["data"]["metadata"]["sourceGroundedReplyUsed"] is True
+    assert "예약 날짜를 유지한 채 방문 지점 변경이 가능한 경우도 있으나" in event["data"]["assistantResponse"]
 
 
 def test_support_faq_policy_event_uses_order_history_cta_for_reservation_policy() -> None:

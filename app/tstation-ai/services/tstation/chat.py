@@ -71,6 +71,7 @@ from services.tstation.policies.price_response_policy import (
 from services.tstation.policies.transaction_intent_policy import build_transaction_intent_frame, plan_transaction_tools
 from services.tstation.policies.transaction_response_policy import decide_transaction_response
 from services.tstation.policies.support_response_policy import (
+    build_support_faq_source_grounded_reply,
     build_support_faq_policy_reply,
 )
 from services.tstation.policies.response_decision import ResponseDecision, ResponseShape, TemplateName, ToolPlan
@@ -7141,7 +7142,11 @@ def _policy_source_summary_for_response(intent: str, source_summary: str) -> str
 
 
 def _build_general_cancel_fee_policy_event(user_query: str, *, tool_result: dict | None = None) -> dict:
-    bucket_reply = build_support_faq_policy_reply(
+    bucket_reply = build_support_faq_source_grounded_reply(
+        intent="general_cancel_fee_policy",
+        user_text=user_query,
+        tool_result=tool_result,
+    ) or build_support_faq_policy_reply(
         intent="general_cancel_fee_policy",
         user_text=user_query,
         tool_result=tool_result,
@@ -7196,7 +7201,11 @@ def _build_general_cancel_fee_policy_event(user_query: str, *, tool_result: dict
 
 
 def _build_general_card_cancel_timing_policy_event(user_query: str, *, tool_result: dict | None = None) -> dict:
-    bucket_reply = build_support_faq_policy_reply(
+    bucket_reply = build_support_faq_source_grounded_reply(
+        intent="general_card_cancel_timing_policy",
+        user_text=user_query,
+        tool_result=tool_result,
+    ) or build_support_faq_policy_reply(
         intent="general_card_cancel_timing_policy",
         user_text=user_query,
         tool_result=tool_result,
@@ -7259,7 +7268,11 @@ def _build_support_faq_policy_event(
 ) -> dict | None:
     if intent not in _DIRECT_SUPPORT_FAQ_POLICY_INTENTS:
         return None
-    bucket_reply = build_support_faq_policy_reply(
+    bucket_reply = build_support_faq_source_grounded_reply(
+        intent=intent,
+        user_text=user_query,
+        tool_result=tool_result,
+    ) or build_support_faq_policy_reply(
         intent=intent,
         user_text=user_query,
         tool_result=tool_result,

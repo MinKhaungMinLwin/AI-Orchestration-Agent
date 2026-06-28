@@ -62,6 +62,27 @@ _SUPPORT_FACT_TYPE_TO_BUCKET: dict[tuple[str, str], str] = {
     (_PURCHASE_ORDER_POLICY, "online_order_cancel_fee"): "online_order_cancel_fee_policy",
     (_PAYMENT_REFUND_POLICY, "card_cancel_timing"): "card_cancel_timing_policy",
 }
+_SUPPORT_FAQ_SOURCE_MIN_SCORE_BY_INTENT: dict[str, float] = {
+    "tire_manufacture_date_policy": 0.2,
+    "tire_quality_warranty_policy": 0.2,
+    "general_card_cancel_timing_policy": 0.18,
+    "reservation_policy_guidance": 0.18,
+    "general_cancel_fee_policy": 0.18,
+}
+_SUPPORT_FAQ_SOURCE_SCORE_GAP_BY_INTENT: dict[str, float] = {
+    "tire_manufacture_date_policy": 0.04,
+    "tire_quality_warranty_policy": 0.04,
+    "general_card_cancel_timing_policy": 0.03,
+    "reservation_policy_guidance": 0.03,
+    "general_cancel_fee_policy": 0.03,
+}
+_SUPPORT_FAQ_SOURCE_GROUNDED_ALLOWLIST = frozenset({
+    "general_cancel_fee_policy",
+    "general_card_cancel_timing_policy",
+    "reservation_policy_guidance",
+    "tire_manufacture_date_policy",
+    "tire_quality_warranty_policy",
+})
 _ALLOWED_CATEGORY_NAMES_BY_POLICY_GROUP: dict[str, tuple[tuple[str, str], ...]] = {
     _RESERVATION_INSTALLATION_POLICY: (("배송/장착", "장착"), ("상품/서비스", "서비스")),
     _PAYMENT_REFUND_POLICY: (("주문/결제", "결제"),),
@@ -109,6 +130,16 @@ def _support_faq_candidates(tool_result: Mapping[str, Any] | None) -> list[Mappi
     return []
 
 
+def _support_faq_candidate_score(candidate: Mapping[str, Any]) -> float | None:
+    raw_score = candidate.get("score")
+    if raw_score is None:
+        return None
+    try:
+        return float(raw_score)
+    except (TypeError, ValueError):
+        return None
+
+
 def _support_faq_candidate_categories(candidate: Mapping[str, Any]) -> tuple[str, str, str, str]:
     metadata = candidate.get("metadata")
     meta = metadata if isinstance(metadata, Mapping) else {}
@@ -129,6 +160,124 @@ def _support_faq_candidate_categories(candidate: Mapping[str, Any]) -> tuple[str
     code1 = _normalize_support_faq_text(meta.get("lrcl_cd") or meta.get("category_lv1_cd") or "")
     code2 = _normalize_support_faq_text(meta.get("mdcl_cd") or meta.get("category_lv2_cd") or "")
     return lv1, lv2, code1, code2
+
+
+def _support_faq_candidate_topic(
+    *,
+    intent: str,
+    policy_group: str,
+    fact_type: str,
+    candidate: Mapping[str, Any],
+) -> str:
+    lv1, lv2, _, _ = _support_faq_candidate_categories(candidate)
+    category_topic = f"{lv1}>{lv2}".strip(">")
+    if category_topic:
+        return category_topic.lower()
+    text = _support_faq_candidate_text(candidate).lower()
+    if intent == "tire_manufacture_date_policy":
+        if any(token in text for token in ("측면", "사이드월", "품질보증", "워런티")):
+            return "warranty"
+        if any(token in text for token in ("제조일자", "dot", "신품", "6개월", "12개월")):
+            return "manufacture"
+    if intent == "tire_quality_warranty_policy":
+        if any(token in text for token in ("측면", "사이드월", "품질보증", "워런티")):
+            return "warranty"
+        if any(token in text for token in ("제조일자", "dot", "신품", "6개월", "12개월")):
+            return "manufacture"
+    if policy_group == _RESERVATION_INSTALLATION_POLICY and fact_type == "mixed_cancel_fee_generalized":
+        if re.search(r"카드|환불|승인\s*취소|영업일", text, re.IGNORECASE):
+            return "card_refund"
+        if _ONLINE_ORDER_CANCEL_RE.search(text):
+            return "online_order_cancel"
+        if _RESERVATION_RE.search(text):
+            return "visit_reservation_cancel"
+    return category_topic.lower() if category_topic else ""
+
+
+def _support_faq_question_anchor_allowed(intent: str, text: str) -> bool:
+    if intent == "general_card_cancel_timing_policy":
+        return bool(re.search(r"카드|환불|승인취소|승인\s*취소|반영|영업일|언제", text, re.IGNORECASE))
+    return True
+
+
+def _support_faq_split_sentences(text: str) -> list[str]:
+    normalized = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not normalized:
+        return []
+    parts = [
+        part.strip()
+        for part in re.split(r"(?<=[.!?])\s+|(?<=요)\s+|(?<=다)\s+", normalized)
+        if part.strip()
+    ]
+    return parts[:3]
+
+
+def _support_faq_sentence_allowed(
+    *,
+    intent: str,
+    user_text: str,
+    policy_group: str,
+    fact_type: str,
+    sentence: str,
+) -> bool:
+    normalized_sentence = str(sentence or "").strip()
+    if not normalized_sentence:
+        return False
+    if intent == "general_card_cancel_timing_policy":
+        return bool(re.search(r"카드|환불|승인\s*취소|반영|영업일", normalized_sentence, re.IGNORECASE))
+    if intent == "tire_manufacture_date_policy":
+        return bool(re.search(r"제조일자|DOT|신품|개월|주차", normalized_sentence, re.IGNORECASE))
+    if intent == "tire_quality_warranty_policy":
+        return bool(re.search(r"측면|사이드월|부풀|보증|워런티|점검", normalized_sentence, re.IGNORECASE))
+    if policy_group == _RESERVATION_INSTALLATION_POLICY and fact_type == "mixed_cancel_fee_generalized":
+        allow_reservation = bool(
+            _RESERVATION_RE.search(normalized_sentence) and re.search(r"예약|방문|장착|매장", user_text, re.IGNORECASE)
+        )
+        allow_order = bool(
+            _ONLINE_ORDER_CANCEL_RE.search(normalized_sentence) and re.search(r"결제|주문|온라인|배송", user_text, re.IGNORECASE)
+        )
+        allow_card = bool(
+            re.search(r"카드|환불|승인\s*취소|반영|영업일", normalized_sentence, re.IGNORECASE)
+            and _support_faq_question_anchor_allowed(intent, user_text)
+        )
+        return allow_reservation or allow_order or allow_card
+    if policy_group == _PURCHASE_ORDER_POLICY and fact_type == "online_order_cancel_fee":
+        return bool(_ONLINE_ORDER_CANCEL_RE.search(normalized_sentence) or re.search(r"취소|반품|수수료", normalized_sentence, re.IGNORECASE))
+    if policy_group == _PAYMENT_REFUND_POLICY and fact_type == "payment_error_troubleshooting":
+        return bool(_PAYMENT_ERROR_RE.search(normalized_sentence))
+    return True
+
+
+def _compact_support_faq_answer(
+    *,
+    intent: str,
+    user_text: str,
+    policy_group: str,
+    fact_type: str,
+    candidate: Mapping[str, Any],
+) -> str:
+    answer = _normalize_support_faq_text(
+        candidate.get("answer")
+        or candidate.get("pc_ans_cont")
+        or candidate.get("content")
+        or candidate.get("body")
+        or ""
+    )
+    if not answer:
+        return ""
+    sentences = _support_faq_split_sentences(answer)
+    kept = [
+        sentence
+        for sentence in sentences
+        if _support_faq_sentence_allowed(
+            intent=intent,
+            user_text=user_text,
+            policy_group=policy_group,
+            fact_type=fact_type,
+            sentence=sentence,
+        )
+    ]
+    return "\n".join(kept[:3]).strip()
 
 
 def resolve_support_faq_policy_context(intent: str, user_text: str) -> dict[str, Any] | None:
@@ -575,6 +724,98 @@ def _build_support_faq_policy_reply(
             "실제 마모도, 균열, 편마모, 손상 여부는 마모도 측정 서비스 또는 가까운 티스테이션 매장 점검으로 확인해 주세요."
         )
     return response, _support_faq_reply_ctas(policy_group, fact_type)
+
+
+def build_support_faq_source_grounded_reply(
+    *,
+    intent: str,
+    user_text: str,
+    tool_result: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    if intent not in _SUPPORT_FAQ_SOURCE_GROUNDED_ALLOWLIST:
+        return None
+    resolution = resolve_support_faq_policy_context(intent, user_text)
+    if not resolution or resolution.get("needs_clarification"):
+        return None
+
+    policy_group = str(resolution.get("policy_group") or "").strip()
+    fact_type = str(resolution.get("fact_type") or "").strip()
+    if not policy_group or not fact_type:
+        return None
+
+    filtered, excluded_candidates = _filter_support_faq_candidates(policy_group, fact_type, tool_result)
+    if not filtered:
+        return None
+
+    ranked = sorted(
+        enumerate(filtered),
+        key=lambda item: (_support_faq_candidate_score(item[1]) is not None, _support_faq_candidate_score(item[1]) or 0.0, -item[0]),
+        reverse=True,
+    )
+    top_candidate = ranked[0][1]
+    top_score = _support_faq_candidate_score(top_candidate)
+    min_score = _SUPPORT_FAQ_SOURCE_MIN_SCORE_BY_INTENT.get(intent)
+    if min_score is not None and top_score is not None and top_score < min_score:
+        return None
+
+    broader_candidates = _support_faq_candidates(tool_result)
+    broader_ranked = sorted(
+        enumerate(broader_candidates),
+        key=lambda item: (_support_faq_candidate_score(item[1]) is not None, _support_faq_candidate_score(item[1]) or 0.0, -item[0]),
+        reverse=True,
+    )
+    competing_candidate = next(
+        (candidate for _, candidate in broader_ranked if candidate is not top_candidate),
+        None,
+    )
+    if competing_candidate is not None:
+        second_candidate = competing_candidate
+        second_score = _support_faq_candidate_score(second_candidate) or 0.0
+        top_topic = _support_faq_candidate_topic(
+            intent=intent,
+            policy_group=policy_group,
+            fact_type=fact_type,
+            candidate=top_candidate,
+        )
+        second_topic = _support_faq_candidate_topic(
+            intent=intent,
+            policy_group=policy_group,
+            fact_type=fact_type,
+            candidate=second_candidate,
+        )
+        required_gap = _SUPPORT_FAQ_SOURCE_SCORE_GAP_BY_INTENT.get(intent, 0.0)
+        if top_topic and second_topic and top_topic != second_topic and (top_score or 0.0) - second_score < required_gap:
+            return None
+
+    compact_answer = _compact_support_faq_answer(
+        intent=intent,
+        user_text=user_text,
+        policy_group=policy_group,
+        fact_type=fact_type,
+        candidate=top_candidate,
+    )
+    if not compact_answer:
+        return None
+
+    return {
+        "assistant_response": compact_answer,
+        "quick_replies": _support_faq_reply_ctas(policy_group, fact_type),
+        "metadata": {
+            "policyGroup": policy_group,
+            "factType": fact_type,
+            "clarificationNeeded": False,
+            "safeFallbackUsed": False,
+            "sourceGroundedReplyUsed": True,
+            "filteredFaqCount": len(filtered),
+            "excludedFaqCount": len(excluded_candidates),
+            "factExtractionApplied": False,
+            "topFaqScore": top_score,
+            "topFaqCategory": {
+                "categoryLv1": _support_faq_candidate_categories(top_candidate)[0] or None,
+                "categoryLv2": _support_faq_candidate_categories(top_candidate)[1] or None,
+            },
+        },
+    }
 
 
 def build_support_faq_policy_reply(
