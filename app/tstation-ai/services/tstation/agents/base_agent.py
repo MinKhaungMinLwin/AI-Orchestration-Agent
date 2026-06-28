@@ -117,6 +117,11 @@ _POSSESSIVE_VEHICLE_MODEL_STOPWORDS = {
     "호환",
     "가능",
 }
+_CONTRACT_REQUIRED_LISTCAR_RESPONSE_SHAPE_KEYS = frozenset({
+    "vehicle_information",
+    "vehicle_based_recommendation_refinement",
+    "vehicle_resolved_recommendation",
+})
 
 
 def _normalize_vehicle_key(value: Any) -> str:
@@ -518,6 +523,29 @@ def _should_defer_listcar_for_possessive_model_mismatch(
     if not requested_models:
         return False
     return not _has_registered_vehicle_model_match(rows, requested_models)
+
+
+def _contract_requires_listcar_fast_path(tool_name: str, tool_result: Any) -> bool:
+    if tool_name not in {"get_my_cars_tool", "get_user_vehicles_tool"}:
+        return False
+    if not isinstance(tool_result, dict) or tool_result.get("status") != "success":
+        return False
+    rows = _extract_tool_rows(tool_result)
+    if not rows:
+        return False
+    try:
+        from services.tstation.template_mapper import current_discovery_response_decision
+
+        decision = current_discovery_response_decision.get()
+    except Exception:
+        decision = None
+    if decision is None:
+        return False
+    decision_metadata = getattr(decision, "metadata", None) or {}
+    template = getattr(decision, "template", None)
+    template_value = str(getattr(template, "value", template) or "").strip()
+    response_shape_key = str(decision_metadata.get("response_shape_key") or "").strip()
+    return template_value == "listCar" or response_shape_key in _CONTRACT_REQUIRED_LISTCAR_RESPONSE_SHAPE_KEYS
 
 
 def _resolve_registered_vehicle_match(tool_name: str, tool_result: Any, messages: list[dict]) -> dict | None:
@@ -1521,6 +1549,45 @@ class BaseAgent(ABC):
                                         "slot_values": _registered_vehicle_slot_values(registered_vehicle_match),
                                     }
                                     yield staggered_event
+                                    return
+                            if (
+                                message.name in {"get_my_cars_tool", "get_user_vehicles_tool"}
+                                and _contract_requires_listcar_fast_path(message.name, tool_result)
+                            ):
+                                if _should_defer_listcar_for_possessive_model_mismatch(
+                                    message.name,
+                                    tool_result,
+                                    messages,
+                                ):
+                                    logger.info(
+                                        "[%s] Skip contract-required listCar fast-path after possessive vehicle model mismatch",
+                                        self.name,
+                                    )
+                                    continue
+                                if registered_vehicle_match is not None:
+                                    logger.info(
+                                        "[%s] Skip contract-required listCar fast-path after unique registered-vehicle match car_no=%s",
+                                        self.name,
+                                        registered_vehicle_match.get("car_no"),
+                                    )
+                                    continue
+                                code_event = self._try_code_template(
+                                    accumulated_tool_data,
+                                    response_streamer,
+                                    accumulated_text,
+                                )
+                                if self._is_fast_path_code_event(message.name, code_event):
+                                    logger.info(
+                                        "[%s] Force contract-required listCar fast-path after tool=%s",
+                                        self.name,
+                                        message.name,
+                                    )
+                                    for event in self._code_template_events(
+                                        code_event,
+                                        response_streamer,
+                                        answering_emitted,
+                                    ):
+                                        yield event
                                     return
                             if suppress_tokens and message.name in self._FAST_PATH_CODE_MAPPER_TOOLS:
                                 if _should_skip_support_search_product_fast_path(self.name, message.name):

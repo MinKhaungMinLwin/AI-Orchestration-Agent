@@ -650,6 +650,11 @@ def _possessive_vehicle_model_mentions(user_text: str) -> list[str]:
 
 def _should_suppress_listcar_for_possessive_model_mismatch(rows: list[dict]) -> bool:
     user_text = current_user_text.get() or ""
+    decision = current_discovery_response_decision.get()
+    response_shape_key = str((decision.metadata or {}).get("response_shape_key") or "") if decision else ""
+    decision_template = str(getattr(getattr(decision, "template", None), "value", getattr(decision, "template", None)) or "")
+    if decision_template == "listCar" or response_shape_key in _FORCED_LISTCAR_RESPONSE_SHAPE_KEYS:
+        return False
     if (
         _EXPLICIT_VEHICLE_LIST_REQUEST_RE.search(user_text)
         or re.sub(r"\s+", "", user_text) in _NORMALIZED_EXPLICIT_VEHICLE_LIST_REQUEST_LABELS
