@@ -19609,7 +19609,12 @@ def _build_transaction_policy_context(
             messages=messages,
         )
         price_frame = build_price_intent_frame(last_user_text, known_slots=known_slots)
-        if (
+        # coupon_usage_policy / coupon_registration_policy questions are general policy inquiries.
+        # Applying price forbidden_behaviors here triggers a code-level fallback and blocks the agent
+        # from looking up actual coupon channel data (coupon_channel_type: online/offline/onoff).
+        _planner_policy_intent = str(known_slots.get("planner_policy_intent") or "")
+        _is_coupon_policy_inquiry = _planner_policy_intent in {"coupon_usage_policy", "coupon_registration_policy"}
+        if not _is_coupon_policy_inquiry and (
             price_frame.intent != "price_coupon_summary"
             or price_frame.entities.get("has_coupon_keyword")
             or price_frame.entities.get("has_promotion_keyword")
@@ -27661,6 +27666,9 @@ class TStationChatServiceV2:
         router_store_service_slots = _router_store_service_search_slots(routing_result)
         if router_store_service_slots:
             transaction_known_slots.update(router_store_service_slots)
+        planner_policy_intent = str(getattr(routing_result, "policy_intent", "") or "")
+        if planner_policy_intent:
+            transaction_known_slots["planner_policy_intent"] = planner_policy_intent
         transaction_tool_patch, transaction_response_decision, transaction_tool_plan = _build_transaction_policy_context(
             domains=domains,
             last_user_text=last_user_text,
