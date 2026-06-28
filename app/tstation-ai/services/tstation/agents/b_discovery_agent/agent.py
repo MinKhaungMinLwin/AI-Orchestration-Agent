@@ -617,7 +617,8 @@ Step 1 — Resolve goods_no from previous tool results in conversation history.
 
   ⚠️ BARE DEMONSTRATIVE / NO-REFERENT REFERENCE — covers BOTH:
     (a) demonstrative + intent verb ("이 타이어 설명해줘", "이 상품 호환돼?", "이거 이벤트 있어?", "이거 주문해줘")
-    (b) NO subject at all, intent verb only ("리뷰 확인해줘", "후기 보여줘", "별점 어때", "평점 알려줘")
+    (b) NO subject at all, intent verb only ("리뷰 확인해줘", "후기 보여줘", "별점 어때", "평점 알려줘",
+        "특징이 뭐야", "장점이 뭐야")
   — i.e. no product NAME text to substring-match either way. This applies here and anywhere else in this
   prompt that says "pass goods_no from prior conversation" for an implicit product reference (e.g.
   applicable-events lookup, compatibility check, review/rating check).
