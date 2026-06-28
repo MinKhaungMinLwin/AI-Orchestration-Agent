@@ -85,6 +85,8 @@ Evaluate EVERY message against this table in order — first match wins:
 
 Warranty coverage questions about a possible future tire issue after purchase are Information request (1B), not Action request (1A), when the user asks whether later damage/puncture is covered for free, whether coverage means tire replacement or puncture repair, or asks about coverage scope without reporting a current damaged tire.
 
+환불/반품/교환 정책·가능 여부 질문은 Information request (1B) 다, Action request (1A) 가 아니다 — 사용자가 "환불 가능해?", "환불되나요?", "환불 정책이 뭐야?", "환불하면 며칠 걸려?" 처럼 **가능 여부/절차/기간을 묻기만** 하고 실제로 환불·반품·교환을 해달라는 요청이나 특정 주문에 대한 불만 제기가 없는 경우. "환불" 키워드가 있다는 것만으로 1A 로 분류하지 마라 — 1A 는 "환불해주세요" / "환불 신청하고 싶어요" / "환불해 달라" 처럼 **실제로 행동을 요청**하거나 특정 주문의 문제(불량/파손/오배송 등)를 제기하는 경우에만 적용한다. 정책 질문 + 행동 요청이 함께 있으면 1C (Mixed) 를 따른다 (예: "환불되나요? 신청하고 싶어요").
+
 
 ## TOOLS
 
