@@ -1163,6 +1163,19 @@ def decide_support_response(
             ),
         )
 
+    if intent == "tire_storage_service" or _TIRE_STORAGE_RE.search(text):
+        return _decision(
+            response_shape_key="keep_service_hist_cta",
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=("auto_escalate_to_qna", "skip_storage_history_cta"),
+            assistant_guidance=(
+                "매장에 보관한 타이어는 보관 서비스 이력에서 확인할 수 있음을 안내하고 "
+                "keepservice-hist CTA를 첫 번째 chip으로 제공한다. "
+                "분실·훼손 언급이 있어도 1:1 문의 자동 연결 금지 — 보관 이력 확인을 우선."
+            ),
+        )
+
     if intent == "store_service_availability" or _STORE_SERVICE_AVAILABILITY_RE.search(text):
         return _decision(
             response_shape_key="store_service_availability",
@@ -1227,19 +1240,6 @@ def decide_support_response(
             assistant_guidance=(
                 "매장 리뷰/후기/칭찬/별점 작성 경로는 마이페이지 > 매장서비스 내역만 안내한다. "
                 "STORE_SERVICE_HISTORY CTA가 첫 번째 quickReply가 아니면 보정 대상이다."
-            ),
-        )
-
-    if intent == "tire_storage_service" or _TIRE_STORAGE_RE.search(text):
-        return _decision(
-            response_shape_key="keep_service_hist_cta",
-            response_shape=ResponseShape.SUMMARY,
-            template=TemplateName.QUICK_REPLY,
-            forbidden_behaviors=("auto_escalate_to_qna", "skip_storage_history_cta"),
-            assistant_guidance=(
-                "매장에 보관한 타이어는 보관 서비스 이력에서 확인할 수 있음을 안내하고 "
-                "keepservice-hist CTA를 첫 번째 chip으로 제공한다. "
-                "분실·훼손 언급이 있어도 1:1 문의 자동 연결 금지 — 보관 이력 확인을 우선."
             ),
         )
 

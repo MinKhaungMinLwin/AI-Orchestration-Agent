@@ -24805,6 +24805,25 @@ def test_cheongju_tire_storage_service_search_normalizes_service_code() -> None:
     assert tool_plan.tool_args_patch["svc_codes"] == ["119"]
 
 
+def test_gyeonggi_tire_storage_service_search_uses_transaction_location_contract() -> None:
+    user_text = "경기권에 타이어 보관해주는 매장 어디 있어?"
+    frame = build_transaction_intent_frame(user_text, known_slots={})
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text=user_text,
+        known_slots=dict(frame.known_slots),
+    )
+
+    assert frame.intent == "store_service_search"
+    assert frame.sub_intent == "store_service_search"
+    assert frame.known_slots["region"] == "경기"
+    assert frame.known_slots["service_codes"] == ("119",)
+    assert tool_plan.allowed_tools == ("search_stores_tool", "get_store_list_tool")
+    assert response_decision.template == TemplateName.LOCATION
+    assert response_decision.metadata["response_shape_key"] == "store_service_search"
+
+
 def test_region_alignment_service_search_uses_alignment_codes() -> None:
     frame = build_transaction_intent_frame("경기권 얼라인먼트 가능한 매장 알려줘", known_slots={})
     tool_plan = plan_transaction_tools(frame)
@@ -24836,9 +24855,18 @@ def test_store_service_search_without_region_requires_region_only() -> None:
 
 def test_owned_tire_storage_history_question_stays_out_of_store_service_search() -> None:
     frame = build_transaction_intent_frame("맡긴 타이어 어디서 확인해?", known_slots={})
+    response_decision = decide_support_response(intent="tire_storage_service", user_text="맡긴 타이어 어디서 확인해?")
 
     assert frame.intent != "store_service_search"
     assert frame.intent != "store_service_advisory"
+    assert response_decision.metadata["response_shape_key"] == "keep_service_hist_cta"
+
+
+def test_tire_storage_service_howto_stays_in_support_policy() -> None:
+    response_decision = decide_support_response(intent="tire_storage_service", user_text="타이어 보관서비스 어떻게 이용해?")
+
+    assert response_decision.template == TemplateName.QUICK_REPLY
+    assert response_decision.metadata["response_shape_key"] == "keep_service_hist_cta"
 
 
 def test_tire_service_with_maintenance_addon_uses_transaction_store_service_action() -> None:

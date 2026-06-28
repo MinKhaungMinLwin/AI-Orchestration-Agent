@@ -2726,7 +2726,8 @@ DOMAINS:
   order cancellation/cancel-fee inquiry, maintenance/service history lookup, store search by location/name,
   store schedule/reservation, goods_no price/stock/order, automatic alert registration request, and product+size+order/store
   requests that need Discovery first then Transaction.
-- SUPPORT: policy/FAQ/how-to/warranty/refund/general guidance, human escalation, smart pickup FAQ, T-Station complaints,
+- SUPPORT: policy/FAQ/how-to/warranty/refund/general guidance, tire-storage how-to/history/policy (보관서비스 이용 방법,
+  맡긴 타이어 확인, 보관 분실/훼손, 보관 기간/정책), human escalation, smart pickup FAQ, T-Station complaints,
   coupon usage/registration/signup/partner-member policy, discount stacking policy, shipping fee, online-vs-store price policy,
   payment troubleshooting, order document guidance, reservation/work/promotion/tire-condition-photo policy, and legal-action denial.
 
@@ -2755,6 +2756,7 @@ Critical first-turn routing:
 - Regional final-price policy -> SUPPORT, policy_intent=regional_price_policy.
 - Specific store attribute/service/equipment inquiry -> policy_intent=store_attribute_inquiry and fill store attribute fields.
 - Region + service-condition store search -> TRANSACTION, policy_intent=store_service_search; fill service/region when known.
+- Specific-store service availability like "모란점 타이어 보관 가능해?" -> TRANSACTION store attribute inquiry, not SUPPORT.
 - Store/service review write path -> SUPPORT, policy_intent=store_service_review_write.
 - My product review lookup path -> SUPPORT, policy_intent=my_goods_review_lookup.
 - Complaint about T-Station service -> SUPPORT with complaint_scope=tstation_service_complaint.
@@ -2779,7 +2781,7 @@ apply the same slot-fill rules from the full router prompt; never invent stable 
 DOMAINS:
 - TRANSACTION: store search by location or name (강남/근처/올마이티/All My T); goods_no (G+12 digits) price/stock/order; store visit reservation (specific date/time slot booking); reservation time change (예약 시간 변경/방문 시간 변경/일정 변경/시간 바꿀 수 있어); cart; coupon inquiry (내 쿠폰/쿠폰함/쿠폰 사용 조건/쿠폰 어떻게 써/쿠폰 사용법) [⚠️ NOT SUPPORT]; order history (내 주문내역/주문 조회/내 주문/내가 주문한 거) [⚠️ NOT SUPPORT]; maintenance/service history lookup (정비이력/정비내역/관리받은 내역/서비스 이력) [⚠️ NOT SUPPORT — must query member history]; order cancellation (주문 취소/취소하고 싶어/취소해줘) [⚠️ NOT SUPPORT]; cancellation/return fee inquiry (취소 수수료/취소비용/오늘 취소하면 수수료/예약 취소 비용/택배비/왕복 배송비/반품 비용/반품수수료) [⚠️ NOT SUPPORT — must check order/logistics state].
 - DISCOVERY: product search by name or keyword; tire recommendation; vehicle-tire compatibility; product specs/features/videos; run-flat vs normal tire price comparison; price/stock/buy with PRODUCT NAME ONLY (no goods_no — Discovery resolves goods_no first).
-- SUPPORT: warranty, returns, refund, general maintenance info, **per-vehicle maintenance D-day / 정비 시기·주기 / 교체 시기 / 점검 만기일 (내 차 정비 일정 / 엔진오일 언제 갈아야 / all my T 점검 만기 / 타이어 교체 시기)** [⚠️ NOT TRANSACTION — registered-car D-day matrix, not a store-visit slot booking], store-specific service availability policy when NO specific store is named, shipping fee policy (배송비/도서산간/제주/서귀포), online-vs-store price policy, 1:1 문의, 상담원 연결, T-Station service complaints (tires/products/orders/payment/delivery/installation/stores/coupons/vehicles/chatbot answers), smart pickup / pickup-service FAQ (픽업서비스, 스마트픽업, 차 가지러 와, 차 가지러 올 수 있어, 차량 수거 후 인도, 집앞까지 데려다 줘, 픽업 신청 방법, 픽업 가능 거리, 기사 위치/도착 문의). ⚠️ Do NOT route cancellation fee questions here — Transaction checks actual order state.
+- SUPPORT: warranty, returns, refund, general maintenance info, **per-vehicle maintenance D-day / 정비 시기·주기 / 교체 시기 / 점검 만기일 (내 차 정비 일정 / 엔진오일 언제 갈아야 / all my T 점검 만기 / 타이어 교체 시기)** [⚠️ NOT TRANSACTION — registered-car D-day matrix, not a store-visit slot booking], tire-storage how-to/history/policy questions (보관서비스 어떻게 이용해, 맡긴 타이어 어디서 확인해, 보관 중 분실/훼손, 보관 기간/정책), shipping fee policy (배송비/도서산간/제주/서귀포), online-vs-store price policy, 1:1 문의, 상담원 연결, T-Station service complaints (tires/products/orders/payment/delivery/installation/stores/coupons/vehicles/chatbot answers), smart pickup / pickup-service FAQ (픽업서비스, 스마트픽업, 차 가지러 와, 차 가지러 올 수 있어, 차량 수거 후 인도, 집앞까지 데려다 줘, 픽업 신청 방법, 픽업 가능 거리, 기사 위치/도착 문의). ⚠️ Region + service-condition store search and specific-store service availability are NOT SUPPORT.
 - LEADING: pure greeting; unclear intent; bare re-trigger words (다시/또) with no domain anchor.
 
 Also set `policy_intent`:
@@ -2797,6 +2799,7 @@ Also set `policy_intent`:
 - installation/work policy ("작업 중 취소하면 공임비?", "공임만 받고 장착 가능?", "얼라인먼트 현장 결제야?") → SUPPORT, policy_intent=`installation_work_policy`; this is work-policy guidance, not store-specific confirmation.
 - promotion/gift policy ("4짝 사고 사은품 받았는데 2짝 취소하면?", "선착순 끝났으면?", "사은품 반납해야 해?") → SUPPORT, policy_intent=`promotion_gift_policy`; explain policy/condition first, not direct compensation.
 - tire condition photo policy ("사진 보낼 테니까 더 타도 되는지 봐줘", "마모 사진 보고 괜찮은지 알려줘") → SUPPORT, policy_intent=`tire_condition_photo_policy`; explain that chatbot cannot determine safety from photos alone and guide inspection first.
+- tire storage service how-to/history/policy ("타이어 보관서비스 어떻게 이용해?", "맡긴 타이어 어디서 확인해?", "보관 중 분실되면 어떻게 돼?", "보관 기간 지나면?") → SUPPORT, policy_intent=`tire_storage_service`; this is usage/history/policy guidance, not store search.
 - signup/new-member/first-purchase benefit explanation ("회원가입하면 첫구매 혜택은 뭐가 있어?", "신규회원 혜택 알려줘", "가입하면 받을 수 있는 쿠폰 뭐야?") → SUPPORT, policy_intent=`signup_first_purchase_benefit_policy`; this is FAQ/RAG policy guidance, not owned coupon lookup or coupon issuance.
 - coupon usage policy ("다운받은 쿠폰 현장 결제할 때도 쓸 수 있어?", "온라인 주문 없이 매장에서 쿠폰 적용돼?", "티스테이션닷컴 쿠폰 오프라인 결제 가능해?") → SUPPORT, policy_intent=`coupon_usage_policy`; this is general coupon usage/channel guidance, not partner-member coupon policy, not owned coupon lookup, and not product applicability lookup.
 - coupon registration policy ("쿠폰 번호 어디에 등록해?", "쿠폰 코드 입력은 어디서 해?", "쿠폰 등록 방법 알려줘") → SUPPORT, policy_intent=`coupon_registration_policy`; this is coupon registration/how-to guidance, not owned coupon lookup and not partner-member coupon policy.
@@ -2813,6 +2816,7 @@ Also set `policy_intent`:
 - 지역+서비스 조건 매장 검색 (경기권에 타이어 보관해주는 매장 어디 있어?, 청주에 타이어 보관서비스 가능한 매장 있어?, 경기권 얼라인먼트 가능한 매장 알려줘) → TRANSACTION, policy_intent=`store_service_search`, execution_plan=`transaction:store_service_search`
 - specific-store attribute inquiry (정자점 야간정비 가능해?, 정자점 리프트 있어?, 정자점 질소충전 돼?, 정자점 얼라인먼트 잘 봐?) → `store_attribute_inquiry` with TRANSACTION store info lookup plus support-style contact guidance
   Also fill `store_attribute_store_name`, `store_attribute_text`, `store_attribute_type`, and `store_attribute_verification_level`.
+- specific-store service availability (모란점 타이어 보관 가능해?, 정자점 윈터타이어 보관서비스 가능해?) → TRANSACTION `store_attribute_inquiry`; do NOT convert to broad region search and do NOT route to SUPPORT.
 - store service advisory with no specific store/region (보관서비스 돼?, 얼라인먼트 잘 봐?) → `store_service_advisory`
 - goods review lookup path (내가 쓴 리뷰 어디서 봐?, 내가 작성한 리뷰 확인, 베스트리뷰 확인 어디서 해?, 상품 리뷰/구매후기 확인) → `my_goods_review_lookup`
 - store/service review write path (매장 리뷰 어디다 써?, 매장서비스 후기 작성, 남양주점 별점 5점 남기고 싶어, 지점 칭찬 리뷰 작성하고 싶어) → `store_service_review_write`
