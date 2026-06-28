@@ -1187,6 +1187,9 @@ def build_response_policy_guard_event(contract: TurnContract) -> dict[str, Any]:
     )
     if purchase_flow_event is not None:
         return _annotate_contract_guard_event(purchase_flow_event, contract, reason="response_policy_guard")
+    unknown_store_service_event = _build_unknown_store_service_guard_event(contract)
+    if unknown_store_service_event is not None:
+        return _annotate_contract_guard_event(unknown_store_service_event, contract, reason="response_policy_guard")
     if _support_answer_contract_owns_response(
         domain=str(contract.domain or ""),
         intent=str(contract.intent or ""),
@@ -1384,6 +1387,64 @@ def build_response_policy_guard_event(contract: TurnContract) -> dict[str, Any]:
             },
         },
     }, contract, reason="response_policy_guard")
+
+
+def _build_unknown_store_service_guard_event(contract: TurnContract) -> dict[str, Any] | None:
+    if str(contract.intent or "") != "unsupported_or_unmapped_store_service_policy":
+        return None
+    known_slots = contract.known_slots or {}
+    service_name = str(known_slots.get("service_name") or "해당 서비스").strip()
+    store_name = str(known_slots.get("store_name") or known_slots.get("shop_name") or "").strip()
+    region = str(known_slots.get("region") or known_slots.get("place_query") or "").strip()
+    if store_name:
+        assistant_response = (
+            "현재 챗봇에서는 해당 서비스의 매장별 예약 가능 여부를 바로 확인할 수 없어요.\n\n"
+            f"{store_name}에서 {service_name} 운영 여부는 매장별 기준이 달라서 방문 예정 매장에 직접 문의해 주세요."
+        )
+        quick_replies = [
+            {"label": "매장 전화번호 확인", "domain": "TRANSACTION"},
+            {"label": "매장 상세보기", "domain": "TRANSACTION"},
+            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+        ]
+    elif region:
+        assistant_response = (
+            "현재 챗봇에서는 해당 서비스의 매장별 예약 가능 여부를 바로 확인할 수 없어요.\n\n"
+            f"{region} 기준으로 방문 예정 매장명을 알려주시면 기본 매장 정보와 함께 안내해드릴게요."
+        )
+        quick_replies = [
+            {"label": "매장명 입력", "domain": "TRANSACTION"},
+            {"label": "매장 찾기", "domain": "TRANSACTION"},
+            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+        ]
+    else:
+        assistant_response = (
+            "현재 챗봇에서는 해당 서비스의 매장별 예약 가능 여부를 바로 확인할 수 없어요.\n\n"
+            "세차나 튜닝처럼 매장별 운영 서비스는 지역이나 방문 예정 매장을 알려주시면 확인 방법을 안내해드릴게요."
+        )
+        quick_replies = [
+            {"label": "매장명 입력", "domain": "TRANSACTION"},
+            {"label": "지역 입력", "domain": "TRANSACTION"},
+            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+        ]
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "transaction",
+        "assistant_response_source": "code_unknown_store_service_policy",
+        "data": {
+            "assistantResponse": assistant_response,
+            "quickReplies": quick_replies,
+            "predictedDomains": ["TRANSACTION", "SUPPORT"],
+            "metadata": {
+                "response_shape_key": "unsupported_or_unmapped_store_service_policy",
+                "assistant_response_source": "code_unknown_store_service_policy",
+                "contract_intent": "unsupported_or_unmapped_store_service_policy",
+                "service_name": service_name,
+                "store_name": store_name,
+                "region": region,
+            },
+        },
+    }
 
 
 def _build_missing_slot_action_prompt_event(contract: TurnContract) -> dict[str, Any] | None:

@@ -746,10 +746,16 @@ def build_transaction_intent_frame(
         else extract_store_attribute_inquiry(text, store_name=action_store_name)
     )
     current_store_service_request = normalize_store_service_request(text)
+    router_policy_intent = str(slots.get("policy_intent") or "")
     router_store_service_search = (
-        str(slots.get("policy_intent") or "") == "store_service_search"
+        router_policy_intent in {
+            "store_service_search",
+            "unsupported_or_unmapped_store_service_policy",
+        }
         and bool(str(slots.get("service_name") or slots.get("service_code") or "").strip())
-        and bool(str(slots.get("region") or slots.get("place_query") or "").strip())
+        and bool(
+            str(slots.get("region") or slots.get("place_query") or slots.get("store_name") or "").strip()
+        )
     )
     router_store_service_codes = tuple(
         str(code).strip()
@@ -759,7 +765,14 @@ def build_transaction_intent_frame(
     current_store_service_availability = has_store_service_availability_signal(text)
     current_store_service_search = bool(
         (
-            router_store_service_search
+            (
+                router_store_service_search
+                and router_policy_intent == "unsupported_or_unmapped_store_service_policy"
+            )
+            or (
+                router_store_service_search
+                and not action_store_name
+            )
             or (
                 current_store_service_request
                 and _STORE_SERVICE_SEARCH_RE.search(text)
@@ -768,7 +781,6 @@ def build_transaction_intent_frame(
                 and not current_purchase
             )
         )
-        and not action_store_name
     )
     current_store_visit_advisory = bool(
         _STORE_VISIT_ADVISORY_RE.search(text)
@@ -1146,8 +1158,6 @@ def build_transaction_intent_frame(
         entities["attribute_type"] = current_store_attribute_inquiry.attribute_type
         entities["verification_level"] = current_store_attribute_inquiry.verification_level
     elif current_store_service_search:
-        intent = "store_service_search"
-        sub_intent = "store_service_search"
         service_name = str(
             (current_store_service_request or {}).get("service_name")
             or slots.get("service_name")
@@ -1157,6 +1167,13 @@ def build_transaction_intent_frame(
             (current_store_service_request or {}).get("service_codes")
             or router_store_service_codes
         )
+        unknown_service_requested = bool(service_codes) and all(str(code).strip() == "unknown" for code in service_codes)
+        intent = (
+            "unsupported_or_unmapped_store_service_policy"
+            if unknown_service_requested
+            else "store_service_search"
+        )
+        sub_intent = intent
         entities["service_name"] = service_name
         entities["service_codes"] = service_codes
         entities["service_key"] = str(
@@ -1164,6 +1181,9 @@ def build_transaction_intent_frame(
             or slots.get("service_key")
             or service_name
         ).strip()
+        policy_store_name = _extract_policy_store_name_candidate(text) or store_name
+        if policy_store_name:
+            entities["store_name"] = policy_store_name
     elif current_store_service_availability and not (current_stock or current_price or current_purchase):
         intent = "store_service_advisory"
         sub_intent = "store_service_advisory"
@@ -1339,6 +1359,13 @@ def build_transaction_intent_frame(
         known["service_type"] = "store_service_search"
         known["service_name"] = entities.get("service_name")
         known["service_codes"] = tuple(entities.get("service_codes") or ())
+    if intent == "unsupported_or_unmapped_store_service_policy":
+        known["goal_type"] = "unsupported_or_unmapped_store_service_policy"
+        known["service_type"] = "unsupported_or_unmapped_store_service_policy"
+        known["service_name"] = entities.get("service_name")
+        known["service_codes"] = tuple(entities.get("service_codes") or ())
+        if entities.get("store_name"):
+            known["store_name"] = entities.get("store_name")
     if intent == "store_service_advisory":
         known["goal_type"] = "store_service_advisory"
         known["service_type"] = "store_service_advisory"
@@ -1614,6 +1641,31 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
                 "action": action,
                 "service_name": frame.known_slots.get("service_name") or frame.entities.get("service_name"),
                 "service_codes": service_codes,
+            },
+        )
+
+    if frame.intent == "unsupported_or_unmapped_store_service_policy":
+        args = _slot_args(frame, "store_name", "region")
+        if frame.known_slots.get("region"):
+            args["region_code"] = frame.known_slots["region"]
+            args["place_query"] = frame.known_slots.get("place_query") or frame.known_slots["region"]
+        return ToolPlan(
+            allowed_tools=("get_store_list_tool", "get_store_detail_tool"),
+            preferred_tool="get_store_list_tool" if frame.known_slots.get("store_name") else None,
+            tool_args_patch=args,
+            forbidden_tools=(
+                "search_stores_tool",
+                "transaction_store_preview_tool",
+                "get_store_schedule_tool",
+                "get_multi_store_schedule_tool",
+                "quick_order_tool",
+            ),
+            required_slots=action_required_slots,
+            metadata={
+                "response_intent": "unsupported_or_unmapped_store_service_policy",
+                "action": action,
+                "service_name": frame.known_slots.get("service_name") or frame.entities.get("service_name"),
+                "service_codes": tuple(frame.known_slots.get("service_codes") or frame.entities.get("service_codes") or ()),
             },
         )
 
@@ -2099,6 +2151,8 @@ def _transaction_action(frame: IntentFrame) -> str:
         return "open_store_filter"
     if frame.intent == "store_service_search":
         return "store_service_search"
+    if frame.intent == "unsupported_or_unmapped_store_service_policy":
+        return "unsupported_or_unmapped_store_service_policy"
     if frame.intent == "store_service_advisory":
         return "store_service_advisory"
     if frame.intent == "service_duration_advisory":
@@ -2207,6 +2261,8 @@ def _action_required_slots(frame: IntentFrame, action: str) -> tuple[str, ...]:
         add("store", not _has_action_store(frame))
     elif action == "store_service_search":
         add("region", not frame.known_slots.get("region"))
+    elif action == "unsupported_or_unmapped_store_service_policy":
+        return ()
     elif action == "store_service_availability":
         return ()
     elif action == "store_service_advisory":
@@ -2264,6 +2320,8 @@ def _missing_slots_for_intent(
     elif intent == "store_service_search":
         if not has_location:
             missing.append("region")
+    elif intent == "unsupported_or_unmapped_store_service_policy":
+        return ()
     return tuple(missing)
 
 

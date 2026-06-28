@@ -31697,6 +31697,97 @@ def test_stream_response_multi_keeps_stream_alive_when_turn_contract_validation_
     assert any(event.get("type") == "DONE" for event in parsed_events)
 
 
+def test_unknown_store_service_policy_guard_uses_dedicated_quickreply_not_generic_fallback() -> None:
+    contract = build_turn_contract(
+        user_text="분당 정자점에서 세차 서비스도 하는 것 같은데 예약은 어디서 해?",
+        intent_frame=IntentFrame(
+            domain=PolicyDomain.TRANSACTION,
+            intent="unsupported_or_unmapped_store_service_policy",
+            known_slots={
+                "service_name": "세차",
+                "service_code": "unknown",
+                "service_codes": ("unknown",),
+                "store_name": "분당 정자점",
+                "region": "분당",
+            },
+        ),
+        tool_plan=ToolPlan(
+            allowed_tools=("get_store_list_tool", "get_store_detail_tool"),
+            preferred_tool="get_store_list_tool",
+            forbidden_tools=(
+                "search_stores_tool",
+                "transaction_store_preview_tool",
+                "get_store_schedule_tool",
+                "quick_order_tool",
+            ),
+            metadata={"response_intent": "unsupported_or_unmapped_store_service_policy"},
+        ),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=(
+                "generic_fallback_for_unknown_store_service",
+                "schedule_tool_for_unknown_store_service",
+                "datepick_for_unknown_store_service",
+            ),
+            metadata={"response_shape_key": "unsupported_or_unmapped_store_service_policy"},
+        ),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["transaction:unsupported_or_unmapped_store_service_policy"],
+            policy_intent="unsupported_or_unmapped_store_service_policy",
+            service_name="세차",
+            service_code="unknown",
+            region="분당",
+            place_query="분당",
+        ),
+    )
+
+    event = build_response_policy_guard_event(contract)
+
+    assert event["template"] == "quickReply"
+    assert event["assistant_response_source"] == "code_unknown_store_service_policy"
+    assert "매장별 예약 가능 여부를 바로 확인할 수 없어요" in event["data"]["assistantResponse"]
+    assert "직접 문의해 주세요" in event["data"]["assistantResponse"]
+
+
+def test_unknown_store_service_policy_contract_blocks_datepick_and_schedule_style_reply() -> None:
+    contract = build_turn_contract(
+        user_text="강남점에서 튜닝도 해줘?",
+        intent_frame=IntentFrame(
+            domain=PolicyDomain.TRANSACTION,
+            intent="unsupported_or_unmapped_store_service_policy",
+            known_slots={
+                "service_name": "튜닝",
+                "service_code": "unknown",
+                "service_codes": ("unknown",),
+                "store_name": "강남점",
+            },
+        ),
+        tool_plan=ToolPlan(
+            allowed_tools=("get_store_list_tool", "get_store_detail_tool"),
+            preferred_tool="get_store_list_tool",
+            forbidden_tools=("get_store_schedule_tool", "transaction_store_preview_tool", "quick_order_tool"),
+            metadata={"response_intent": "unsupported_or_unmapped_store_service_policy"},
+        ),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=("datepick_for_unknown_store_service", "schedule_tool_for_unknown_store_service"),
+            metadata={"response_shape_key": "unsupported_or_unmapped_store_service_policy"},
+        ),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["transaction:unsupported_or_unmapped_store_service_policy"],
+            policy_intent="unsupported_or_unmapped_store_service_policy",
+            service_name="튜닝",
+            service_code="unknown",
+        ),
+    )
+
+    assert violates_response_template_contract({"template": "datepick"}, contract) is True
+    assert violates_response_template_contract({"template": "quickReply"}, contract) is False
+
 def test_turn_contract_reports_product_template_without_current_source_even_without_called_tools() -> None:
     contract = build_turn_contract(
         user_text="그럼 가격은?",

@@ -1749,22 +1749,31 @@ def _restore_store_service_search_contract(
 ) -> list[MultiAgentDomain.Domain] | None:
     if routing_result is None:
         return None
-    if str(getattr(routing_result, "policy_intent", "") or "") != "store_service_search":
+    policy_intent = str(getattr(routing_result, "policy_intent", "") or "")
+    if policy_intent not in {
+        "store_service_search",
+        "unsupported_or_unmapped_store_service_policy",
+    }:
         return None
     service_name = str(getattr(routing_result, "service_name", "") or "").strip()
     service_code = str(getattr(routing_result, "service_code", "") or "").strip()
     region = str(getattr(routing_result, "region", "") or "").strip()
     place_query = str(getattr(routing_result, "place_query", "") or "").strip()
+    store_name = str(
+        getattr(routing_result, "store_attribute_store_name", "")
+        or getattr(routing_result, "store_name", "")
+        or ""
+    ).strip()
     if not (service_name or service_code):
         return None
-    if not (region or place_query):
+    if not (region or place_query or store_name):
         return None
     if bool(getattr(routing_result, "needs_clarification", False)):
         return None
     domains = list(getattr(routing_result, "domains", []) or [])
     execution_plan = list(getattr(routing_result, "execution_plan", []) or [])
     target_domains = [MultiAgentDomain.Domain.TRANSACTION]
-    target_plan = ["transaction:store_service_search"]
+    target_plan = [f"transaction:{policy_intent}"]
     if domains == target_domains and execution_plan == target_plan:
         return None
 
@@ -1814,21 +1823,32 @@ _STORE_SERVICE_CONTEXT_TOOLS = frozenset({
 def _router_store_service_search_slots(routing_result: MultiAgentDomain | None) -> dict[str, Any]:
     if routing_result is None:
         return {}
-    if str(getattr(routing_result, "policy_intent", "") or "") != "store_service_search":
+    policy_intent = str(getattr(routing_result, "policy_intent", "") or "")
+    if policy_intent not in {
+        "store_service_search",
+        "unsupported_or_unmapped_store_service_policy",
+    }:
         return {}
     service_name = str(getattr(routing_result, "service_name", "") or "").strip()
     service_code = str(getattr(routing_result, "service_code", "") or "").strip()
     region = str(getattr(routing_result, "region", "") or "").strip()
     place_query = str(getattr(routing_result, "place_query", "") or "").strip()
-    if not (service_name or service_code) or not (region or place_query):
+    store_name = str(
+        getattr(routing_result, "store_attribute_store_name", "")
+        or getattr(routing_result, "store_name", "")
+        or ""
+    ).strip()
+    if not (service_name or service_code) or not (region or place_query or store_name):
         return {}
     slots: dict[str, Any] = {
-        "policy_intent": "store_service_search",
+        "policy_intent": policy_intent,
         "service_name": service_name,
         "service_code": service_code,
         "region": region,
         "place_query": place_query,
     }
+    if store_name:
+        slots["store_name"] = store_name
     if service_code:
         slots["service_codes"] = (service_code,)
     return slots
@@ -1855,6 +1875,7 @@ def _sync_store_service_search_working_slots(
     stale_context: dict[str, Any] = {}
     carry_preferences = _should_carry_store_finder_preference_into_service_search(user_text)
     current_region = str(router_slots.get("region") or "").strip()
+    current_store_name = str(router_slots.get("store_name") or "").strip()
     previous_region = str(getattr(slots, "region", "") or "").strip()
     previous_preferences = str(getattr(slots, "user_preferences_text", "") or "").strip()
 
@@ -1885,6 +1906,9 @@ def _sync_store_service_search_working_slots(
     if current_region and previous_region != current_region:
         slots.region = current_region
         metadata["region"] = current_region
+    if current_store_name and str(getattr(slots, "store_name", "") or "").strip() != current_store_name:
+        slots.store_name = current_store_name
+        metadata["store_name"] = current_store_name
     if previous_preferences and not carry_preferences:
         slots.user_preferences_text = None
         metadata["cleared_user_preferences_text"] = previous_preferences
@@ -12629,6 +12653,82 @@ def _store_attribute_inquiry_event(
 
 def _store_service_availability_event(user_text: str, *, store_name: str | None = None) -> dict | None:
     return _store_attribute_inquiry_event(user_text, store_name=store_name)
+
+
+def _unsupported_or_unmapped_store_service_event(
+    user_text: str,
+    *,
+    service_name: str | None = None,
+    store_name: str | None = None,
+    region: str | None = None,
+    store_info_entries: list[dict] | None = None,
+) -> dict:
+    resolved_service_name = str(service_name or "해당 서비스").strip()
+    resolved_store_name = str(store_name or "").strip()
+    resolved_region = str(region or "").strip()
+    store_info_summary = _build_store_detail_summary_from_context(store_info_entries or [])
+    if resolved_store_name:
+        store_info_block = f"\n\n확인된 매장 정보\n{store_info_summary}" if store_info_summary else ""
+        assistant_response = (
+            "현재 챗봇에서는 해당 서비스의 매장별 예약 가능 여부를 바로 확인할 수 없어요.\n\n"
+            f"{resolved_store_name}에서 {resolved_service_name} 운영 여부는 매장별 기준이 달라서 방문 예정 매장에 직접 문의해 주세요."
+            f"{store_info_block}"
+        )
+        quick_replies = [
+            {"label": "매장 전화번호 확인", "domain": "TRANSACTION"},
+            {"label": "매장 상세보기", "domain": "TRANSACTION"},
+            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+        ]
+        for entry in store_info_entries or []:
+            raw = _unwrap_tool_data(entry.get("data"))
+            if not isinstance(raw, dict):
+                continue
+            store_seq = str(raw.get("shop_seq") or raw.get("shop_id") or "").strip()
+            if store_seq:
+                quick_replies[1] = {
+                    "label": "매장 상세보기",
+                    "url": CTAUrls.STORE_DETAIL.replace("<shop_seq>", store_seq),
+                    "domain": "TRANSACTION",
+                }
+                break
+    elif resolved_region:
+        assistant_response = (
+            "현재 챗봇에서는 해당 서비스의 매장별 예약 가능 여부를 바로 확인할 수 없어요.\n\n"
+            f"{resolved_region} 기준으로 방문 예정 매장명을 알려주시면 기본 매장 정보와 함께 안내해드릴게요."
+        )
+        quick_replies = [
+            {"label": "매장명 입력", "domain": "TRANSACTION"},
+            {"label": "매장 찾기", "domain": "TRANSACTION"},
+            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+        ]
+    else:
+        assistant_response = (
+            "현재 챗봇에서는 해당 서비스의 매장별 예약 가능 여부를 바로 확인할 수 없어요.\n\n"
+            "세차나 튜닝처럼 매장별 운영 서비스는 방문 예정 매장이나 지역을 알려주시면 확인 방법을 안내해드릴게요."
+        )
+        quick_replies = [
+            {"label": "매장명 입력", "domain": "TRANSACTION"},
+            {"label": "지역 입력", "domain": "TRANSACTION"},
+            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+        ]
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+        "assistant_response_source": "code_unknown_store_service_policy",
+        "data": {
+            "assistantResponse": assistant_response,
+            "quickReplies": quick_replies,
+            "predictedDomains": ["TRANSACTION", "SUPPORT"],
+            "metadata": {
+                "responseShapeKey": "unsupported_or_unmapped_store_service_policy",
+                "serviceName": resolved_service_name,
+                "store_name": resolved_store_name,
+                "region": resolved_region,
+                "store_info_lookup": bool(store_info_summary),
+            },
+        },
+    }
 
 
 _MAINTENANCE_ADDON_CODES = frozenset({"121", "122"})
@@ -30575,6 +30675,202 @@ class TStationChatServiceV2:
             )
             return (emitted_events, finalized_event) if finalized_event is not None else None
 
+        async def _resolve_unknown_store_service_policy_with_code() -> tuple[list[dict], dict] | None:
+            contract_intent = str(getattr(turn_contract, "intent", "") or "")
+            router_policy_intent = str(getattr(routing_result, "policy_intent", "") or "")
+            if contract_intent != "unsupported_or_unmapped_store_service_policy" and (
+                router_policy_intent != "unsupported_or_unmapped_store_service_policy"
+            ):
+                return None
+
+            service_name = str(
+                getattr(routing_result, "service_name", "")
+                or getattr(initial_slots, "service_name", "")
+                or "해당 서비스"
+            ).strip()
+            slot_store_name = str(
+                getattr(initial_slots, "store_name", None)
+                or getattr(initial_slots, "shop_name", None)
+                or ""
+            ).strip()
+            store_name = str(
+                getattr(routing_result, "store_name", "")
+                or getattr(routing_result, "store_attribute_store_name", "")
+                or _extract_plain_store_info_store_name(user_query)
+                or slot_store_name
+                or ""
+            ).strip()
+            region = str(
+                getattr(routing_result, "region", "")
+                or getattr(routing_result, "place_query", "")
+                or getattr(initial_slots, "region", "")
+                or ""
+            ).strip()
+            gate_allowed, gate_reason = _direct_code_fast_path_contract_gate(
+                turn_contract=turn_contract,
+                intent="unsupported_or_unmapped_store_service_policy",
+                template="quickReply",
+                source="code_unknown_store_service_policy",
+                required_tools=("get_store_list_tool", "get_store_detail_tool") if store_name else (),
+            )
+            if not gate_allowed:
+                logger.info("[CODE_FAST_PATH_GATE] blocked unknown_store_service reason=%s", gate_reason)
+                return None
+
+            def _finalize_unknown_store_service_event(event: dict[str, Any] | None) -> dict[str, Any] | None:
+                return _finalize_direct_code_event(
+                    event,
+                    turn_contract=turn_contract,
+                    intent="unsupported_or_unmapped_store_service_policy",
+                    source="code_unknown_store_service_policy",
+                    required_tools=("get_store_list_tool", "get_store_detail_tool") if store_name else (),
+                )
+
+            if not store_name:
+                event = _unsupported_or_unmapped_store_service_event(
+                    user_query,
+                    service_name=service_name,
+                    region=region,
+                )
+                finalized_event = _finalize_unknown_store_service_event(event)
+                return ([], finalized_event) if finalized_event is not None else None
+
+            from services.tstation.agents.c_transaction_agent.tools import (
+                get_store_detail_tool as _store_detail_tool,
+                get_store_list_tool as _store_list_tool,
+            )
+
+            emitted_events: list[dict] = []
+            list_input = {"store_nm": store_name, "limit": 3}
+            emitted_events.append({
+                "type": "status",
+                "status": "tool_start",
+                "tool": "get_store_list_tool",
+                "display_name": "매장 조회 중...",
+                "source_domain": "transaction",
+            })
+            try:
+                raw_list = await asyncio.to_thread(_store_list_tool.invoke, list_input)
+                list_result = _tool_result_dict(raw_list)
+            except Exception as exc:
+                logger.exception("[UNKNOWN_STORE_SERVICE] store list tool failed")
+                list_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+            _record_code_tool_result("get_store_list_tool", list_input, list_result)
+            emitted_events.append({
+                "type": "agent_flow",
+                "agent": "[Store AF]",
+                "agent_class": "Transaction Agent",
+                "status": list_result.get("status", "success"),
+                "source_domain": "transaction",
+            })
+            emitted_events.append({
+                "type": "tool",
+                "input": list_input,
+                "output": json.dumps(list_result, ensure_ascii=False),
+                "node": "tools",
+                "tool": "get_store_list_tool",
+                "source_domain": "transaction",
+            })
+
+            list_data = _unwrap_tool_data(list_result)
+            stores = list_data.get("stores") if isinstance(list_data, dict) else None
+            if not isinstance(stores, list) or not stores:
+                event = _unsupported_or_unmapped_store_service_event(
+                    user_query,
+                    service_name=service_name,
+                    store_name=store_name,
+                )
+                finalized_event = _finalize_unknown_store_service_event(event)
+                return (emitted_events, finalized_event) if finalized_event is not None else None
+
+            store_rows = _dedupe_store_rows([store for store in stores if isinstance(store, dict)])
+            store_row = store_name_exact_match_row(store_name, store_rows)
+            if store_row is None:
+                logger.info(
+                    "[UNKNOWN_STORE_SERVICE] ambiguous store match; skip arbitrary detail store=%r rows=%d",
+                    store_name,
+                    len(store_rows),
+                )
+                event = _unsupported_or_unmapped_store_service_event(
+                    user_query,
+                    service_name=service_name,
+                    store_name=store_name,
+                )
+                finalized_event = _finalize_unknown_store_service_event(event)
+                return (emitted_events, finalized_event) if finalized_event is not None else None
+
+            shop_id = str(store_row.get("shop_id") or store_row.get("shop_seq") or "").strip()
+            if not shop_id:
+                event = _unsupported_or_unmapped_store_service_event(
+                    user_query,
+                    service_name=service_name,
+                    store_name=store_name,
+                    store_info_entries=[{"tool": "get_store_list_tool", "args": list_input, "data": list_result}],
+                )
+                finalized_event = _finalize_unknown_store_service_event(event)
+                return (emitted_events, finalized_event) if finalized_event is not None else None
+
+            detail_input = {"shop_id": shop_id, "cal_day": _requested_reservation_cal_day_or_today(user_query)}
+            emitted_events.append({
+                "type": "status",
+                "status": "tool_start",
+                "tool": "get_store_detail_tool",
+                "display_name": "매장 상세 정보 조회 중...",
+                "source_domain": "transaction",
+            })
+            try:
+                raw_detail = await asyncio.to_thread(_store_detail_tool.invoke, detail_input)
+                detail_result = _tool_result_dict(raw_detail)
+            except Exception as exc:
+                logger.exception("[UNKNOWN_STORE_SERVICE] store detail tool failed")
+                detail_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+            _record_code_tool_result("get_store_detail_tool", detail_input, detail_result)
+            emitted_events.append({
+                "type": "agent_flow",
+                "agent": "[Store AF]",
+                "agent_class": "Transaction Agent",
+                "status": detail_result.get("status", "success"),
+                "source_domain": "transaction",
+            })
+            emitted_events.append({
+                "type": "tool",
+                "input": detail_input,
+                "output": json.dumps(detail_result, ensure_ascii=False),
+                "node": "tools",
+                "tool": "get_store_detail_tool",
+                "source_domain": "transaction",
+            })
+
+            if initial_slots is not None and isinstance(detail_result, dict) and detail_result.get("status") == "success":
+                detail_data = _unwrap_tool_data(detail_result)
+                initial_slots.shop_id = shop_id
+                if isinstance(detail_data, dict):
+                    initial_slots.shop_name = str(
+                        detail_data.get("shop_nm") or store_row.get("shop_nm") or store_name
+                    ).strip()
+                    initial_slots.store_name = initial_slots.shop_name
+                if session_id:
+                    try:
+                        from services.tstation.chat_history_service import get_chat_history_service
+
+                        history_svc = get_chat_history_service()
+                        await history_svc.save_slots_async(session_id, initial_slots, user_id=user_id)
+                    except Exception:
+                        logger.exception("[UNKNOWN_STORE_SERVICE] failed to persist store slots")
+
+            event = _unsupported_or_unmapped_store_service_event(
+                user_query,
+                service_name=service_name,
+                store_name=store_name,
+                region=region,
+                store_info_entries=[
+                    {"tool": "get_store_list_tool", "args": list_input, "data": list_result},
+                    {"tool": "get_store_detail_tool", "args": detail_input, "data": detail_result},
+                ],
+            )
+            finalized_event = _finalize_unknown_store_service_event(event)
+            return (emitted_events, finalized_event) if finalized_event is not None else None
+
         async def _resolve_coupon_applicability_with_code(
             my_coupons_result: dict | None = None,
         ) -> tuple[list[dict], dict]:
@@ -34039,6 +34335,22 @@ class TStationChatServiceV2:
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps(store_attribute_event, ensure_ascii=False)}\n\n"
             assistant_response = str((store_attribute_event.get("data") or {}).get("assistantResponse") or "")
+            if assistant_response:
+                yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[TRANSACTION AGENT]'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
+        unknown_store_service_resolution = await _resolve_unknown_store_service_policy_with_code()
+        if unknown_store_service_resolution is not None:
+            code_events, unknown_store_service_event = unknown_store_service_resolution
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+            for code_event in code_events:
+                yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(unknown_store_service_event, ensure_ascii=False)}\n\n"
+            assistant_response = str((unknown_store_service_event.get("data") or {}).get("assistantResponse") or "")
             if assistant_response:
                 yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[TRANSACTION AGENT]'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"

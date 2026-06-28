@@ -51,6 +51,8 @@ def decide_transaction_response(
         return _decide_open_store_search()
     if intent == "store_service_search":
         return _decide_store_service_search(slots=slots)
+    if intent == "unsupported_or_unmapped_store_service_policy":
+        return _decide_unsupported_or_unmapped_store_service_policy(slots=slots)
     if intent == "store_service_advisory":
         return _decide_store_service_advisory()
     if intent == "store_visit_advisory":
@@ -311,6 +313,49 @@ def _decide_store_service_advisory() -> ResponseDecision:
             "지역이나 특정 매장이 없는 서비스 가능 여부 질문은 일반 안내로 답하고, "
             "검색하려면 지역 또는 매장명을 요청한다."
         ),
+    )
+
+
+def _decide_unsupported_or_unmapped_store_service_policy(*, slots: dict[str, Any]) -> ResponseDecision:
+    has_store = bool(str(slots.get("store_name") or slots.get("shop_name") or "").strip())
+    has_region = bool(str(slots.get("region") or slots.get("place_query") or "").strip())
+    assistant_guidance = (
+        "매핑되지 않은 매장 서비스 문의는 예약 가능 여부를 단정하지 않는다. "
+        "특정 매장이 있으면 get_store_list_tool/get_store_detail_tool까지만 사용해 매장 기본정보를 안내하고, "
+        "해당 서비스 운영 여부와 예약 가능 여부는 매장 직접 확인으로 마무리한다. "
+        "특정 매장이 없으면 지역 또는 매장명만 짧게 요청하고 schedule/datepick/quick_order로 전환하지 않는다."
+    )
+    if not (has_store or has_region):
+        return _decision(
+            response_shape_key="unsupported_or_unmapped_store_service_policy_missing_scope",
+            response_shape=ResponseShape.CLARIFY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=(
+                "generic_fallback_for_unknown_store_service",
+                "schedule_tool_for_unknown_store_service",
+                "datepick_for_unknown_store_service",
+                "claim_unknown_store_service_available",
+            ),
+            assistant_guidance=assistant_guidance,
+            metadata={"service_name": slots.get("service_name")},
+        )
+    return _decision(
+        response_shape_key="unsupported_or_unmapped_store_service_policy",
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        forbidden_behaviors=(
+            "generic_fallback_for_unknown_store_service",
+            "schedule_tool_for_unknown_store_service",
+            "datepick_for_unknown_store_service",
+            "claim_unknown_store_service_available",
+        ),
+        assistant_guidance=assistant_guidance,
+        metadata={
+            "service_name": slots.get("service_name"),
+            "service_codes": tuple(slots.get("service_codes") or ()),
+            "store_name": slots.get("store_name") or slots.get("shop_name"),
+            "region": slots.get("region") or slots.get("place_query"),
+        },
     )
 
 
