@@ -19603,6 +19603,74 @@ def test_store_preview_result_updates_payment_amount_and_product_name_for_purcha
     assert slots.price_source_tool == "transaction_store_preview_tool"
 
 
+def test_store_preview_result_uses_payload_price_before_store_candidate_prices() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000310126",
+        tire_size="245/45R19",
+        ord_qty=2,
+        pending_intent="order",
+        goal_type="place_order",
+    )
+
+    changed = StreamingMultiAgentCoordinator._apply_tool_derived_slots(
+        slots,
+        "transaction_store_preview_tool",
+        {
+            "status": "success",
+            "data": {
+                "price": {
+                    "cheapest_final_prc": 154100,
+                    "sale_prc": 231700,
+                },
+                "stores": [
+                    {
+                        "goods_no": "G000000310126",
+                        "goods_nm": "벤투스 S2 AS",
+                        "tire_size": "245/45R19",
+                        "cheapest_final_prc": 160000,
+                    }
+                ],
+            },
+        },
+        tool_input={"goods_no": "G000000310126", "tire_size": "2454519", "ord_qty": 2},
+    )
+
+    assert changed is True
+    assert slots.payment_amount == 308200
+    assert slots.price_basis == "cheapest_final_prc"
+    assert slots.price_source_tool == "transaction_store_preview_tool"
+
+
+def test_store_preview_result_uses_payload_final_price_when_member_price_missing() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000310126",
+        tire_size="245/45R19",
+        ord_qty=2,
+        pending_intent="order",
+        goal_type="place_order",
+    )
+
+    changed = StreamingMultiAgentCoordinator._apply_tool_derived_slots(
+        slots,
+        "transaction_store_preview_tool",
+        {
+            "status": "success",
+            "data": {
+                "price": {
+                    "final_price": 180500,
+                    "sale_prc": 231700,
+                }
+            },
+        },
+        tool_input={"goods_no": "G000000310126", "tire_size": "2454519", "ord_qty": 2},
+    )
+
+    assert changed is True
+    assert slots.payment_amount == 361000
+    assert slots.price_basis == "final_price"
+    assert slots.price_source_tool == "transaction_store_preview_tool"
+
+
 def test_preorder_template_payload_recovers_order_slots() -> None:
     slot_values = preorder_slot_values_from_data({
         "assistantResponse": "주문 내용을 확인해 주세요.",
@@ -24843,14 +24911,17 @@ def test_purchase_stock_canonical_readthrough_uses_preview_price_basis_for_payme
         "data": {
             "status": "success",
             "data": {
+                "price": {
+                    "cheapest_final_prc": 154100,
+                },
                 "stores": [
                     {
                         "goods_no": "G000000310126",
                         "goods_nm": "벤투스 S2 AS",
                         "tire_size": "245/45R19",
-                        "cheapest_final_prc": 154100,
+                        "cheapest_final_prc": 160000,
                     }
-                ]
+                ],
             },
         },
     }
@@ -24897,14 +24968,17 @@ def test_final_persist_rehydrates_missing_product_fields_from_preview_tool_conte
         "data": {
             "status": "success",
             "data": {
+                "price": {
+                    "cheapest_final_prc": 154100,
+                },
                 "stores": [
                     {
                         "goods_no": "G000000310126",
                         "goods_nm": "벤투스 S2 AS",
                         "tire_size": "245/45R19",
-                        "cheapest_final_prc": 154100,
+                        "cheapest_final_prc": 160000,
                     }
-                ]
+                ],
             },
         },
     }
@@ -26130,14 +26204,17 @@ def test_direct_preorder_event_recovers_payment_from_latest_preview_tool_result(
                 "data": {
                     "status": "success",
                     "data": {
+                        "price": {
+                            "cheapest_final_prc": 154100,
+                        },
                         "stores": [
                             {
                                 "goods_no": "G000000310126",
                                 "goods_nm": "벤투스 S2 AS",
                                 "tire_size": "245/45R19",
-                                "cheapest_final_prc": 154100,
+                                "cheapest_final_prc": 160000,
                             }
-                        ]
+                        ],
                     },
                 },
             }
@@ -26149,7 +26226,8 @@ def test_direct_preorder_event_recovers_payment_from_latest_preview_tool_result(
     assert event["data"]["orderInfo"]["paymentAmount"] == 308200
     assert event["data"]["metadata"]["priceBasis"] == "cheapest_final_prc"
     assert event["data"]["metadata"]["priceSourceTool"] == "transaction_store_preview_tool"
-    assert event["data"]["metadata"]["paymentAmountMissingReason"] == "recovered_from_latest_preview_tool"
+    assert event["data"]["metadata"]["paymentAmountSource"] == "preview_tool.price"
+    assert event["data"]["metadata"]["paymentAmountMissingReason"] is None
 
 
 def test_ready_preorder_card_without_quick_order_tool_is_allowed_under_reservation_contract() -> None:

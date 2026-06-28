@@ -4016,6 +4016,7 @@ class StreamingMultiAgentCoordinator:
                 if input_tire_size:
                     tool_slots["tire_size"] = input_tire_size
             price_data = parsed_data.get("data", parsed_data)
+            preview_payload = price_data if tool_name == "transaction_store_preview_tool" and isinstance(price_data, dict) else None
             if tool_name == "transaction_store_preview_tool" and isinstance(price_data, dict):
                 price_candidates: list[dict[str, Any]] = []
                 stores = price_data.get("stores")
@@ -4056,7 +4057,21 @@ class StreamingMultiAgentCoordinator:
                     if candidate_product_name and not tool_slots.get("tire_model"):
                         tool_slots["tire_model"] = str(candidate_product_name).strip()
             if isinstance(price_data, dict):
-                preview_payment = _preview_payment_metadata(price_data, ord_qty=slots.ord_qty)
+                preview_price_data = (
+                    preview_payload.get("price")
+                    if isinstance(preview_payload, Mapping) and isinstance(preview_payload.get("price"), Mapping)
+                    else price_data
+                )
+                preview_source = (
+                    "preview_tool.price"
+                    if isinstance(preview_payload, Mapping) and isinstance(preview_payload.get("price"), Mapping)
+                    else "preview_tool.store_candidate"
+                )
+                preview_payment = _preview_payment_metadata(
+                    preview_price_data,
+                    ord_qty=slots.ord_qty,
+                    payment_amount_source=preview_source,
+                )
                 if preview_payment:
                     tool_slots.update(preview_payment)
 
@@ -7988,31 +8003,60 @@ def _parse_krw_amount(raw: str) -> int | None:
 def _preview_price_unit_and_basis(price_data: Mapping[str, Any] | None) -> tuple[int | None, str | None]:
     if not isinstance(price_data, Mapping):
         return None, None
-    for key in ("cheapest_final_prc", "extra_fvr_sale_prc", "sale_prc"):
+    for key in (
+        "cheapest_final_prc",
+        "final_unit_price",
+        "final_prc",
+        "final_price",
+        "finalPrice",
+        "extra_fvr_sale_prc",
+        "sale_prc",
+    ):
         parsed = _to_int(price_data.get(key))
         if parsed is not None and parsed > 0:
             return int(parsed), key
     return None, None
 
 
-def _preview_payment_metadata(
+def _preview_payment_details(
     price_data: Mapping[str, Any] | None,
     *,
     ord_qty: Any,
+    payment_amount_source: str,
 ) -> dict[str, Any]:
     unit_price, price_basis = _preview_price_unit_and_basis(price_data)
     if unit_price is None or price_basis is None:
-        return {}
+        return {"payment_amount_missing_reason": "preview_price_missing"}
     try:
         quantity = int(ord_qty)
     except (TypeError, ValueError):
-        return {}
+        return {"payment_amount_missing_reason": "quantity_missing"}
     if quantity <= 0:
-        return {}
+        return {"payment_amount_missing_reason": "quantity_missing"}
     return {
         "payment_amount": int(unit_price * quantity),
         "price_basis": price_basis,
         "price_source_tool": "transaction_store_preview_tool",
+        "payment_amount_source": payment_amount_source,
+        "payment_amount_missing_reason": None,
+    }
+
+
+def _preview_payment_metadata(
+    price_data: Mapping[str, Any] | None,
+    *,
+    ord_qty: Any,
+    payment_amount_source: str = "preview_tool.store_candidate",
+) -> dict[str, Any]:
+    details = _preview_payment_details(
+        price_data,
+        ord_qty=ord_qty,
+        payment_amount_source=payment_amount_source,
+    )
+    return {
+        key: details[key]
+        for key in ("payment_amount", "price_basis", "price_source_tool")
+        if details.get(key) not in (None, "", [], {})
     }
 
 
@@ -8140,6 +8184,7 @@ def _standardize_preorder_metadata(event_data: dict, slot_state: Any | None) -> 
         or metadata.get("price_source_tool")
         or (getattr(slot_state, "price_source_tool", None) if slot_state is not None else None)
     )
+    payment_amount_source = metadata.get("paymentAmountSource") or metadata.get("payment_amount_source")
     goods_no = canonical_metadata.get("goods_no") or canonical_event.get("goods_no") or canonical_slots.get("goods_no")
     product_name = (
         canonical_metadata.get("product_name")
@@ -8171,6 +8216,7 @@ def _standardize_preorder_metadata(event_data: dict, slot_state: Any | None) -> 
     metadata["paymentAmount"] = payment_amount
     metadata["priceBasis"] = price_basis
     metadata["priceSourceTool"] = price_source_tool
+    metadata["paymentAmountSource"] = payment_amount_source
     metadata["productName"] = product_name
     metadata["tireSize"] = tire_size
     metadata["storeName"] = store_name
@@ -8246,6 +8292,7 @@ def _build_direct_preorder_event_from_slots(
     price_basis = slot_values.get("price_basis")
     price_source_tool = slot_values.get("price_source_tool")
     payment_amount_missing_reason = None
+    payment_amount_source = None
     if payment_amount in (None, "", 0):
         payment_amount = (
             datepick_slots.get("payment_amount")
@@ -8272,6 +8319,19 @@ def _build_direct_preorder_event_from_slots(
                 continue
             parsed_data = _unwrap_tool_data(entry.get("data"))
             payload = parsed_data.get("data", parsed_data) if isinstance(parsed_data, Mapping) else {}
+            preview_price_payload = payload.get("price") if isinstance(payload, Mapping) and isinstance(payload.get("price"), Mapping) else None
+            preview_payment_details = _preview_payment_details(
+                preview_price_payload,
+                ord_qty=ord_qty,
+                payment_amount_source="preview_tool.price",
+            )
+            if preview_payment_details.get("payment_amount") not in (None, "", 0):
+                payment_amount = preview_payment_details.get("payment_amount")
+                price_basis = preview_payment_details.get("price_basis")
+                price_source_tool = preview_payment_details.get("price_source_tool")
+                payment_amount_source = preview_payment_details.get("payment_amount_source")
+                payment_amount_missing_reason = preview_payment_details.get("payment_amount_missing_reason")
+                break
             candidates: list[Mapping[str, Any]] = []
             if isinstance(payload, Mapping):
                 stores = payload.get("stores")
@@ -8291,11 +8351,16 @@ def _build_direct_preorder_event_from_slots(
                     continue
                 if candidate_tire_size and candidate_tire_size != tire_size:
                     continue
-                preview_payment = _preview_payment_metadata(candidate, ord_qty=ord_qty)
-                if preview_payment:
-                    payment_amount = preview_payment.get("payment_amount")
-                    price_basis = preview_payment.get("price_basis")
-                    price_source_tool = preview_payment.get("price_source_tool")
+                preview_payment_details = _preview_payment_details(
+                    candidate,
+                    ord_qty=ord_qty,
+                    payment_amount_source="preview_tool.store_candidate",
+                )
+                if preview_payment_details.get("payment_amount") not in (None, "", 0):
+                    payment_amount = preview_payment_details.get("payment_amount")
+                    price_basis = preview_payment_details.get("price_basis")
+                    price_source_tool = preview_payment_details.get("price_source_tool")
+                    payment_amount_source = preview_payment_details.get("payment_amount_source")
                     payment_amount_missing_reason = "recovered_from_latest_preview_tool"
                     break
             if payment_amount not in (None, "", 0):
@@ -8373,6 +8438,7 @@ def _build_direct_preorder_event_from_slots(
                 "tireSize": tire_size,
                 "priceBasis": price_basis or None,
                 "priceSourceTool": price_source_tool or None,
+                "paymentAmountSource": payment_amount_source or None,
                 "paymentAmountMissingReason": payment_amount_missing_reason,
                 "carNo": car_no or None,
                 "carLncCd": str(slot_values.get("car_lnc_cd") or "").strip() or None,
@@ -14650,9 +14716,9 @@ def _final_price_from_row(row: dict) -> int | None:
         "cheapest_final_prc",
         "final_unit_price",
         "final_prc",
+        "final_price",
         "finalPrice",
         "extra_fvr_sale_prc",
-        "price",
         "sale_prc",
     ):
         value = row.get(key)
@@ -20771,6 +20837,7 @@ def _flow_state_from_purchase_stock_sources(
             continue
 
         price_data = parsed_data.get("data", parsed_data) if isinstance(parsed_data, Mapping) else parsed_data
+        preview_payload = price_data if tool_name == "transaction_store_preview_tool" and isinstance(price_data, Mapping) else None
         if tool_name == "transaction_store_preview_tool" and isinstance(price_data, Mapping):
             preview_candidates: list[Mapping[str, Any]] = []
             stores = price_data.get("stores")
@@ -20843,9 +20910,38 @@ def _flow_state_from_purchase_stock_sources(
                 or tool_values.get("ord_qty")
                 or (current_slot_delta or {}).get("ord_qty")
             )
-            preview_payment = _preview_payment_metadata(price_data, ord_qty=qty_value)
+            preview_price_payload = (
+                preview_payload.get("price")
+                if isinstance(preview_payload, Mapping) and isinstance(preview_payload.get("price"), Mapping)
+                else None
+            )
+            preview_payment_details = _preview_payment_details(
+                preview_price_payload,
+                ord_qty=qty_value,
+                payment_amount_source="preview_tool.price",
+            )
+            preview_payment = {
+                key: preview_payment_details.get(key)
+                for key in ("payment_amount", "price_basis", "price_source_tool")
+                if preview_payment_details.get(key) not in (None, "", [], {})
+            }
+            if not preview_payment:
+                preview_payment_details = _preview_payment_details(
+                    price_data,
+                    ord_qty=qty_value,
+                    payment_amount_source="preview_tool.store_candidate",
+                )
+                preview_payment = {
+                    key: preview_payment_details.get(key)
+                    for key in ("payment_amount", "price_basis", "price_source_tool")
+                    if preview_payment_details.get(key) not in (None, "", [], {})
+                }
             if preview_payment:
                 tool_values.update(preview_payment)
+                tool_values["payment_amount_source"] = preview_payment_details.get("payment_amount_source")
+                tool_values["payment_amount_missing_reason"] = preview_payment_details.get("payment_amount_missing_reason")
+            elif preview_payment_details.get("payment_amount_missing_reason"):
+                tool_values["payment_amount_missing_reason"] = preview_payment_details.get("payment_amount_missing_reason")
 
     current_delta_values = {
         key: value for key, value in dict(current_slot_delta or {}).items() if value not in (None, "", [], {})
@@ -20934,6 +21030,8 @@ def _flow_state_from_purchase_stock_sources(
         "sources": sources,
         "price_basis": merged.get("price_basis"),
         "price_source_tool": merged.get("price_source_tool"),
+        "payment_amount_source": tool_values.get("payment_amount_source"),
+        "payment_amount_missing_reason": tool_values.get("payment_amount_missing_reason"),
     }
 
 
@@ -21049,6 +21147,8 @@ def _apply_purchase_stock_canonical_readthrough(
         "canonical_sources": dict(canonical_values.get("sources") or {}),
         "price_basis": canonical_values.get("price_basis"),
         "price_source_tool": canonical_values.get("price_source_tool"),
+        "payment_amount_source": canonical_values.get("payment_amount_source"),
+        "payment_amount_missing_reason": canonical_values.get("payment_amount_missing_reason"),
         "flow_state_scope": "purchase_stock_only",
     }
     return updated_slots, metadata
@@ -21089,6 +21189,7 @@ def _finalize_purchase_stock_slots_for_persistence(
         "payment_amount": (pending_context or {}).get("payment_amount"),
         "price_basis": (pending_context or {}).get("price_basis"),
         "price_source_tool": (pending_context or {}).get("price_source_tool"),
+        "payment_amount_source": (pending_context or {}).get("payment_amount_source"),
     }
     if needs_rehydrate:
         canonical_values = _flow_state_from_purchase_stock_sources(
@@ -21121,6 +21222,8 @@ def _finalize_purchase_stock_slots_for_persistence(
             "final_persist_rehydrated": True,
             "final_persist_flow_state_after": dict(refreshed_context or {}),
             "final_persist_canonical_sources": dict(canonical_values.get("sources") or {}),
+            "payment_amount_source": canonical_values.get("payment_amount_source"),
+            "payment_amount_missing_reason": canonical_values.get("payment_amount_missing_reason"),
         })
     else:
         _stage_pending_order_context(updated_slots, source="final_persist")
@@ -21135,6 +21238,7 @@ def _finalize_purchase_stock_slots_for_persistence(
     metadata["payment_amount"] = final_context.get("payment_amount")
     metadata["price_basis"] = final_context.get("price_basis")
     metadata["price_source_tool"] = final_context.get("price_source_tool")
+    metadata["payment_amount_source"] = final_context.get("payment_amount_source")
     metadata["final_persist_purchase_intent_preserved"] = bool(
         str((pending_context or {}).get("pending_intent") or "") == "order"
         and str(final_context.get("pending_intent") or "") == "order"
@@ -21157,13 +21261,12 @@ def _finalize_purchase_stock_slots_for_persistence(
     ):
         invariant_missing.extend(["product_name", "tire_model", "pending_product_name"])
     metadata["final_persist_invariant_missing_fields"] = invariant_missing
-    metadata["payment_amount_missing_reason"] = (
-        None
-        if final_context.get("payment_amount") not in (None, "", 0)
-        else "missing_after_final_persist"
-        if str(final_context.get("price_source_tool") or "") == "transaction_store_preview_tool"
-        else "no_preview_price_source"
-    )
+    if final_context.get("payment_amount") not in (None, "", 0):
+        metadata["payment_amount_missing_reason"] = None
+    elif str(final_context.get("price_source_tool") or "") == "transaction_store_preview_tool":
+        metadata["payment_amount_missing_reason"] = metadata.get("payment_amount_missing_reason") or "missing_after_final_persist"
+    else:
+        metadata["payment_amount_missing_reason"] = metadata.get("payment_amount_missing_reason") or "no_preview_price_source"
     if invariant_missing:
         logger.warning(
             "[FINAL_PERSIST] purchase flow state invariant missing fields=%s context=%s",
@@ -27531,6 +27634,7 @@ class TStationChatServiceV2:
                         "payment_amount": direct_preorder_metadata.get("paymentAmount"),
                         "price_basis": direct_preorder_metadata.get("priceBasis"),
                         "price_source_tool": direct_preorder_metadata.get("priceSourceTool"),
+                        "payment_amount_source": direct_preorder_metadata.get("paymentAmountSource"),
                         "payment_amount_missing_reason": direct_preorder_metadata.get("paymentAmountMissingReason"),
                     })
                     logger.info(

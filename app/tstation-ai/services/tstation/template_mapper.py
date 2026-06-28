@@ -602,9 +602,9 @@ def _display_final_unit_price(row: dict) -> int:
         "cheapest_final_prc",
         "final_unit_price",
         "final_prc",
+        "final_price",
         "finalPrice",
         "extra_fvr_sale_prc",
-        "price",
         "sale_prc",
     ):
         value = int(_get_num(row, key, default=0))
