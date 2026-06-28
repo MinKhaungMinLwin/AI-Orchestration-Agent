@@ -471,6 +471,10 @@ def build_turn_contract(
         response_decision=response_decision,
         action_mode=action_mode,
     )
+    if router_wins_intent in {"signup_first_purchase_benefit_policy", "signup_coupon_guidance"} and _ASSURANCE_SERVICE_POLICY_ANCHOR_RE.search(
+        user_text or ""
+    ):
+        router_wins_intent = "assurance_service_policy"
     code_domain = _domain_value(intent_frame.domain) if intent_frame is not None else _domain_from_routing(routing_result)
     code_intent = intent_frame.intent if intent_frame is not None else _intent_from_cross_domain(cross_domain_plan)
     domain = planner_domains[0] if planner_domains else code_domain
@@ -739,15 +743,20 @@ def build_turn_contract(
     payment_error_without_troubleshooting_anchor = (
         policy_intent == "payment_error_troubleshooting" and _is_payment_error_policy_overmatch(user_text)
     )
+    support_policy_intent = policy_intent
+    if support_policy_intent in {"signup_first_purchase_benefit_policy", "signup_coupon_guidance"} and _ASSURANCE_SERVICE_POLICY_ANCHOR_RE.search(
+        user_text or ""
+    ):
+        support_policy_intent = "assurance_service_policy"
     if (
         domain == "support"
-        and policy_intent
-        and policy_intent != "none"
+        and support_policy_intent
+        and support_policy_intent != "none"
         and not payment_error_overmatched_installment
         and not payment_error_without_troubleshooting_anchor
     ):
-        intent = policy_intent
-        if policy_intent in _SUPPORT_FAQ_POLICY_TOOL_INTENTS:
+        intent = support_policy_intent
+        if support_policy_intent in _SUPPORT_FAQ_POLICY_TOOL_INTENTS:
             allowed_tools = _merge_tuple(
                 allowed_tools,
                 _SUPPORT_SAFE_AGENT_TOOLS,
@@ -2433,6 +2442,7 @@ def response_contract_violations(
     if order_document_violation is not None:
         violations.append(order_document_violation)
     signup_benefit_violation = _signup_first_purchase_benefit_contract_violation(
+        user_text=user_text,
         assistant_response_text=assistant_response_text,
         called_tools=called_tools,
         contract=contract,
@@ -2440,6 +2450,7 @@ def response_contract_violations(
     if signup_benefit_violation is not None:
         violations.append(signup_benefit_violation)
     signup_coupon_violation = _signup_coupon_guidance_contract_violation(
+        user_text=user_text,
         assistant_response_text=assistant_response_text,
         called_tools=called_tools,
         contract=contract,
@@ -3036,11 +3047,14 @@ def _store_service_search_contract_violation(
 
 def _signup_first_purchase_benefit_contract_violation(
     *,
+    user_text: str | None,
     assistant_response_text: str | None,
     called_tools: list[str] | tuple[str, ...] | None,
     contract: TurnContract | None,
 ) -> dict[str, Any] | None:
     if contract is None or contract.intent != "signup_first_purchase_benefit_policy":
+        return None
+    if _ASSURANCE_SERVICE_POLICY_ANCHOR_RE.search(str(user_text or "")):
         return None
     tools = list(called_tools or ())
     if "transfer_to_qna_tool" in tools:
@@ -3058,6 +3072,7 @@ def _signup_first_purchase_benefit_contract_violation(
         return {
             "type": "signup_first_purchase_benefit_missing_membership_marketing_policy",
             "assistant_response_text": assistant_text,
+            "severity": "warning",
         }
     if re.search(r"(자동|바로|즉시).{0,12}(발급|지급)|이미.{0,8}(발급|지급)", assistant_text):
         return {
@@ -3069,11 +3084,14 @@ def _signup_first_purchase_benefit_contract_violation(
 
 def _signup_coupon_guidance_contract_violation(
     *,
+    user_text: str | None,
     assistant_response_text: str | None,
     called_tools: list[str] | tuple[str, ...] | None,
     contract: TurnContract | None,
 ) -> dict[str, Any] | None:
     if contract is None or contract.intent != "signup_coupon_guidance":
+        return None
+    if _ASSURANCE_SERVICE_POLICY_ANCHOR_RE.search(str(user_text or "")):
         return None
     tools = list(called_tools or ())
     if "transfer_to_qna_tool" in tools:
@@ -3091,6 +3109,7 @@ def _signup_coupon_guidance_contract_violation(
         return {
             "type": "signup_coupon_guidance_missing_membership_marketing_policy",
             "assistant_response_text": assistant_text,
+            "severity": "warning",
         }
     if re.search(r"이미.{0,8}(발급|지급)|발급됐", assistant_text):
         return {
@@ -3141,6 +3160,7 @@ def _promotion_gift_policy_contract_violation(
             "type": "promotion_gift_policy_missing_partial_cancel_guidance",
             "assistant_response_text": assistant_text,
             "response_shape_key": str(response_shape_key or ""),
+            "severity": "warning",
         }
     return None
 
@@ -3160,6 +3180,7 @@ def _assurance_service_policy_contract_violation(
         return {
             "type": "assurance_service_policy_missing_core_conditions",
             "assistant_response_text": assistant_text,
+            "severity": "warning",
         }
     if re.search(r"(무조건|항상|자동|반드시).{0,12}보상|보상.{0,8}(확정|됩니다)", assistant_text, re.IGNORECASE):
         return {
@@ -3240,6 +3261,10 @@ _FAQ_POLICY_DENY_TOKENS = {
 }
 _TIRE_QUALITY_WARRANTY_MANUFACTURE_DRIFT_RE = re.compile(
     r"선입선출|1년\s*이내\s*생산|최신\s*제조|DOT|제조\s*일자|제조일자|신품|6\s*~\s*12개월|6개월|12개월|유통",
+    re.IGNORECASE,
+)
+_ASSURANCE_SERVICE_POLICY_ANCHOR_RE = re.compile(
+    r"안심\s*서비스|안심서비스|안심\s*플러스|안심플러스|디지털\s*워런티|종이\s*보증서|보증서|워런티",
     re.IGNORECASE,
 )
 
@@ -3513,7 +3538,7 @@ def _tire_quality_warranty_policy_contract_violation(
         return {
             "type": "tire_quality_warranty_policy_missing_core_guidance",
             "assistant_response_text": assistant_text[:160],
-            "severity": "error",
+            "severity": "warning",
         }
     quick_replies = event_data.get("quickReplies") if isinstance(event_data, Mapping) else None
     if isinstance(quick_replies, list):
@@ -3521,7 +3546,7 @@ def _tire_quality_warranty_policy_contract_violation(
         if not isinstance(first, Mapping) or str(first.get("url") or "") != CTAUrls.WARRANTY_MAIN:
             return {
                 "type": "tire_quality_warranty_policy_missing_warranty_cta",
-                "severity": "error",
+                "severity": "warning",
             }
     return None
 

@@ -1,5 +1,5 @@
 from services.tstation.policies.response_decision import ResponseShape, TemplateName
-from services.tstation.policies.support_response_policy import decide_support_response
+from services.tstation.policies.support_response_policy import decide_support_response, resolve_support_faq_policy_context
 
 
 def test_tc186_extreme_coupon_issue_is_denied_with_coupon_box_guidance() -> None:
@@ -103,6 +103,21 @@ def test_signup_coupon_guidance_points_to_membership_marketing_coupon_policy() -
     assert "claim_first_purchase_only_coupon" in decision.forbidden_behaviors
     assert "route_to_partner_coupon_policy" in decision.forbidden_behaviors
     assert "마케팅 수신 동의를 하면 5% 할인 쿠폰 발급이 가능" in decision.assistant_guidance
+
+
+def test_signup_benefit_intent_with_assurance_anchor_prefers_assurance_service_policy() -> None:
+    decision = decide_support_response(
+        intent="signup_first_purchase_benefit_policy",
+        user_text="안심서비스 가입 어떻게 하나요?",
+    )
+
+    assert decision.metadata["response_shape_key"] == "assurance_service_policy"
+    assert decision.template == TemplateName.QUICK_REPLY
+    assert "장착 후 1년 이내" in decision.assistant_guidance
+    assert "마케팅 수신 동의를 하면 5% 할인 쿠폰 발급이 가능" not in decision.assistant_guidance
+
+    resolution = resolve_support_faq_policy_context("signup_first_purchase_benefit_policy", "안심서비스 가입 어떻게 하나요?")
+    assert resolution == {"policy_group": "assurance_warranty_policy", "fact_type": "assurance_coverage_condition"}
 
 
 def test_tire_manufacture_date_policy_uses_faq_first_contract() -> None:

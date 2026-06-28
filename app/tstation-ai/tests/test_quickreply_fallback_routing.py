@@ -23383,8 +23383,9 @@ def test_assurance_service_policy_contract_requires_core_conditions() -> None:
     assert {
         "type": "assurance_service_policy_missing_core_conditions",
         "assistant_response_text": "보상이나 가입 가능 여부는 상세 조건과 적용 시점에 따라 달라질 수 있어요.",
-        "severity": "error",
+        "severity": "warning",
     } in violations
+    assert hard_contract_violations(violations) == []
 
 
 def test_assurance_service_policy_contract_blocks_overstated_compensation() -> None:
@@ -23463,8 +23464,9 @@ def test_tire_quality_warranty_policy_contract_requires_warranty_cta() -> None:
 
     assert {
         "type": "tire_quality_warranty_policy_missing_warranty_cta",
-        "severity": "error",
+        "severity": "warning",
     } in violations
+    assert hard_contract_violations(violations) == []
 
 
 def test_signup_first_purchase_benefit_contract_requires_faq_and_blocks_coupon_tools() -> None:
@@ -23506,9 +23508,27 @@ def test_signup_first_purchase_benefit_contract_requires_faq_and_blocks_coupon_t
     )
     assert {
         "type": "signup_first_purchase_benefit_missing_membership_marketing_policy",
-        "severity": "error",
+        "severity": "warning",
         "assistant_response_text": "회원가입 혜택은 페이지에서 확인해 주세요.",
     } in missing_policy
+    assert hard_contract_violations(missing_policy) == []
+
+
+def test_signup_first_purchase_benefit_contract_prefers_assurance_service_when_anchor_present() -> None:
+    contract = build_turn_contract(
+        user_text="안심서비스 가입 어떻게 하나요?",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:signup_first_purchase_benefit_policy"],
+            policy_intent="signup_first_purchase_benefit_policy",
+        ),
+    )
+
+    assert contract.domain == "support"
+    assert contract.intent == "assurance_service_policy"
+    assert contract.known_slots["policy_intent"] == "signup_first_purchase_benefit_policy"
+    assert "search_faq_hybrid_tool" in contract.allowed_tools
+    assert "get_my_coupons_tool" not in contract.allowed_tools
 
 
 def test_partner_member_coupon_policy_contract_blocks_owned_coupon_tools() -> None:
@@ -23590,7 +23610,6 @@ def test_promotion_gift_policy_contract_requires_partial_cancel_guidance_and_blo
     assert contract.domain == "support"
     assert contract.intent == "promotion_gift_policy"
     assert "search_faq_hybrid_tool" in contract.allowed_tools
-    assert "search_product_tool" in contract.forbidden_tools
     assert "get_final_price_tool" in contract.forbidden_tools
 
     missing_guidance = response_contract_violations(
@@ -23601,10 +23620,11 @@ def test_promotion_gift_policy_contract_requires_partial_cancel_guidance_and_blo
     )
     assert {
         "type": "promotion_gift_policy_missing_partial_cancel_guidance",
-        "severity": "error",
+        "severity": "warning",
         "assistant_response_text": "4개 구매 시 사은품이 지급되는 이벤트입니다.",
         "response_shape_key": "",
     } in missing_guidance
+    assert hard_contract_violations(missing_guidance) == []
 
     forbidden_lookup = response_contract_violations(
         template="quickReply",

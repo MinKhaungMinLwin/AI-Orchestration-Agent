@@ -70,6 +70,10 @@ _PAYMENT_METHOD_OR_COUPON_POLICY_RE = re.compile(
     re.IGNORECASE,
 )
 _ASSURANCE_DOCUMENT_LOST_RE = re.compile(r"보증서.{0,12}(분실|잃어버|없어)|종이\s*보증서", re.IGNORECASE)
+_ASSURANCE_SERVICE_POLICY_ANCHOR_RE = re.compile(
+    r"안심\s*서비스|안심서비스|안심\s*플러스|안심플러스|디지털\s*워런티|종이\s*보증서|보증서|워런티",
+    re.IGNORECASE,
+)
 _PROMOTION_PARTIAL_CANCEL_RE = re.compile(
     r"부분\s*취소|[0-9]+\s*(?:짝|개)\s*취소|반납|차감|돌려줘야",
     re.IGNORECASE,
@@ -851,6 +855,8 @@ def _build_support_faq_safe_fallback_reply(
 def resolve_support_faq_policy_context(intent: str, user_text: str) -> dict[str, Any] | None:
     normalized_intent = str(intent or "").strip()
     text = str(user_text or "")
+    if normalized_intent in {"signup_first_purchase_benefit_policy", "signup_coupon_guidance"} and _ASSURANCE_SERVICE_POLICY_ANCHOR_RE.search(text):
+        normalized_intent = "assurance_service_policy"
     if normalized_intent not in _SUPPORT_FAQ_POLICY_GROUP_INTENTS and not _WRONG_ITEM_RE.search(text):
         return None
 
@@ -1851,6 +1857,8 @@ def decide_support_response(
     """Return Support response contracts for policy-sensitive cases."""
     text = user_text or ""
     slots = known_slots or {}
+    if intent in {"signup_first_purchase_benefit_policy", "signup_coupon_guidance"} and _ASSURANCE_SERVICE_POLICY_ANCHOR_RE.search(text):
+        intent = "assurance_service_policy"
 
     if intent == "legal_action_guidance_denied" or (
         _LEGAL_ACTION_RE.search(text) and _LEGAL_ACTION_TSTATION_SCOPE_RE.search(text)
