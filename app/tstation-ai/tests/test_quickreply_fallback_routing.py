@@ -13916,6 +13916,54 @@ def test_discovery_policy_context_resumes_recommendation_active_flow_without_rou
     assert patch["allow_cross_brand_fill"] is False
 
 
+def test_contract_required_vehicle_recommendation_detects_only_recommendation_contract() -> None:
+    contract = TurnContract(
+        domain="discovery",
+        intent="product_recommendation",
+        sub_intent="vehicle_based_recommendation_refinement",
+        known_slots={"tire_size": "225/45R17", "car_lnc_cd": "W036269"},
+        allowed_tools=("get_products_recommendations_tool",),
+        forbidden_tools=(),
+        blocking_required_slots=(),
+        context_state="active",
+        response_decision={"template": "product"},
+    )
+
+    assert chat_module._is_contract_required_vehicle_recommendation(contract, ConversationSlots()) is True
+    assert chat_module._is_contract_required_vehicle_recommendation(None, ConversationSlots()) is False
+    assert (
+        chat_module._is_contract_required_vehicle_recommendation(
+            contract,
+            ConversationSlots(pending_intent="order", tire_size="225/45R17"),
+        )
+        is False
+    )
+
+
+def test_complete_active_recommendation_flow_for_direct_return_moves_to_dormant() -> None:
+    slots = ConversationSlots(
+        availability_context={
+            "active_flow_context": {
+                "flow_type": "recommendation",
+                "status": "active",
+                "flow_step": "select_vehicle",
+                "recommendation": {
+                    "scenario": "all_weather",
+                    "tool_args_patch": {"rcmd_type": "all_weather", "season_nm": "올웨더"},
+                },
+            }
+        }
+    )
+
+    updated_slots, completed_flow = chat_module._complete_active_recommendation_flow_for_direct_return(slots)
+
+    assert updated_slots is not None
+    assert completed_flow is not None
+    assert "active_flow_context" not in updated_slots.availability_context
+    assert updated_slots.availability_context["dormant_recommendation_context"]["status"] == "completed"
+    assert updated_slots.availability_context["dormant_recommendation_context"]["flow_step"] == "recommend_products"
+
+
 def test_recommendation_active_flow_does_not_resume_without_context_or_for_purchase_flow() -> None:
     assert (
         recommendation_vehicle_selection_patch(
@@ -16875,6 +16923,56 @@ def test_recover_blocked_fast_path_to_contract_tool_runs_recommendation_refineme
     metadata = recovery["event"]["data"]["contractMetadata"]
     assert metadata["recovered_tool"] == "get_products_recommendations_tool"
     assert metadata["tool_input_source"] == "turn_contract_required_recommendation"
+
+
+def test_recover_contract_required_vehicle_recommendation_ignores_stale_expected_args(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_recover(**kwargs: Any) -> dict[str, Any] | None:
+        return {"tool_input": chat_module._contract_required_recommendation_tool_input(
+            turn_contract=kwargs["turn_contract"],
+            known_slots=kwargs["turn_contract"].known_slots,
+            merged_slots=kwargs["merged_slots"],
+        )}
+
+    monkeypatch.setattr(chat_module, "recover_blocked_fast_path_to_contract_tool", _fake_recover)
+
+    contract = TurnContract(
+        domain="discovery",
+        intent="product_recommendation",
+        sub_intent="vehicle_based_recommendation_refinement",
+        known_slots={
+            "tire_size": "225/45R17",
+            "car_lnc_cd": "W036269",
+            "recommendation_expected_tool_args": {"tire_size": "225/45R17"},
+            "recommendation_context": {
+                "rcmd_type": "all_weather",
+                "season_nm": "올웨더",
+                "tool_args_patch": {"rcmd_type": "all_weather", "season_nm": "올웨더"},
+            },
+        },
+        allowed_tools=("get_products_recommendations_tool",),
+        forbidden_tools=(),
+        blocking_required_slots=(),
+        context_state="active",
+        response_decision={"template": "product"},
+    )
+
+    recovered = asyncio.run(
+        chat_module._recover_contract_required_vehicle_recommendation(
+            turn_contract=contract,
+            user_text="61거1836",
+            merged_slots=ConversationSlots(tire_size="225/45R17", car_lnc_cd="W036269"),
+        )
+    )
+
+    assert recovered is not None
+    assert recovered["tool_input"] == {
+        "rcmd_type": "all_weather",
+        "season_nm": "올웨더",
+        "tire_size": "225/45R17",
+        "car_lnc_cd": "W036269",
+    }
 
 
 def test_purchase_cta_recovers_confirmed_product_from_snake_case_quickreply_metadata() -> None:

@@ -17209,6 +17209,46 @@ _FAST_PATH_SUPPORT_RECOVERY_ALLOWED_TOOLS = frozenset({
 })
 
 
+def _is_contract_required_vehicle_recommendation(
+    turn_contract: TurnContract | None,
+    slots: Any | None = None,
+) -> bool:
+    if turn_contract is None:
+        return False
+    if str(turn_contract.domain or "").strip().lower() != PolicyDomain.DISCOVERY.value:
+        return False
+    if str(turn_contract.intent or "").strip() != "product_recommendation":
+        return False
+    if str(turn_contract.sub_intent or "").strip() != "vehicle_based_recommendation_refinement":
+        return False
+    response_decision = turn_contract.response_decision or {}
+    if str(response_decision.get("template") or "").strip().lower() != "product":
+        return False
+    allowed_tools = {str(tool) for tool in tuple(turn_contract.allowed_tools or ()) if str(tool).strip()}
+    if "get_products_recommendations_tool" not in allowed_tools:
+        return False
+
+    pending_intent = str(
+        getattr(slots, "pending_intent", None) or turn_contract.known_slots.get("pending_intent") or ""
+    ).strip()
+    goal_type = str(
+        getattr(slots, "goal_type", None) or turn_contract.known_slots.get("goal_type") or ""
+    ).strip()
+    if pending_intent in {"order", "stock"} or goal_type in {"place_order", "store_with_stock"}:
+        return False
+
+    if _is_active_order_flow_slots(slots):
+        return False
+
+    tire_size = str(
+        getattr(slots, "tire_size", None) or turn_contract.known_slots.get("tire_size") or ""
+    ).strip()
+    car_lnc_cd = str(
+        getattr(slots, "car_lnc_cd", None) or turn_contract.known_slots.get("car_lnc_cd") or ""
+    ).strip()
+    return bool(tire_size or car_lnc_cd)
+
+
 def _contract_required_recommendation_tool_input(
     *,
     turn_contract: TurnContract,
@@ -17268,6 +17308,52 @@ def _contract_required_recommendation_tool_input(
     if tool_input.get("tire_size") in (None, "") and tool_input.get("car_lnc_cd") in (None, ""):
         return {}
     return tool_input
+
+
+async def _recover_contract_required_vehicle_recommendation(
+    *,
+    turn_contract: TurnContract | None,
+    user_text: str,
+    merged_slots: ConversationSlots | None,
+    blocked_fast_path_source: str = "contract_required_vehicle_recommendation",
+) -> dict[str, Any] | None:
+    if not _is_contract_required_vehicle_recommendation(turn_contract, merged_slots):
+        return None
+    return await recover_blocked_fast_path_to_contract_tool(
+        turn_contract=turn_contract,
+        user_text=user_text,
+        merged_slots=merged_slots,
+        blocked_fast_path_source=blocked_fast_path_source,
+    )
+
+
+def _complete_active_recommendation_flow_for_direct_return(
+    slots: ConversationSlots | None,
+) -> tuple[ConversationSlots | None, dict[str, Any] | None]:
+    if slots is None:
+        return None, None
+    availability_context = (
+        dict(slots.availability_context)
+        if isinstance(getattr(slots, "availability_context", None), dict)
+        else {}
+    )
+    active_context = availability_context.get("active_flow_context")
+    if not isinstance(active_context, Mapping) or str(active_context.get("flow_type") or "") != "recommendation":
+        return slots, None
+    commit_result = commit_flow_state(
+        active_context,
+        {"flow_type": "recommendation"},
+        source="direct_return:recommendation_completed",
+        flow_type="recommendation",
+        flow_step="recommend_products",
+        status="completed",
+    )
+    completed_context = commit_result.state.to_active_flow_context()
+    availability_context["dormant_recommendation_context"] = completed_context
+    availability_context.pop("active_flow_context", None)
+    updated_slots = slots.model_copy()
+    updated_slots.availability_context = availability_context
+    return updated_slots, completed_context
 
 
 def _annotate_contract_tool_recovery_event(
@@ -34853,6 +34939,40 @@ class TStationChatServiceV2:
             if assistant_response:
                 yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[DISCOVERY AGENT]'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
+        contract_required_vehicle_recommendation = await _recover_contract_required_vehicle_recommendation(
+            turn_contract=turn_contract,
+            user_text=user_query,
+            merged_slots=pending_slots or initial_slots,
+        )
+        if contract_required_vehicle_recommendation is not None:
+            _record_code_tool_result(
+                str(contract_required_vehicle_recommendation["tool_name"]),
+                dict(contract_required_vehicle_recommendation["tool_input"]),
+                dict(contract_required_vehicle_recommendation["tool_result"]),
+            )
+            completed_slots, completed_flow = _complete_active_recommendation_flow_for_direct_return(
+                pending_slots or initial_slots
+            )
+            if completed_slots is not None:
+                pending_slots = completed_slots
+            if completed_flow is not None:
+                vehicle_selection_trace_metadata["active_flow_context_completed"] = True
+                vehicle_selection_trace_metadata["dormant_recommendation_context"] = completed_flow
+            await _persist_pending_slots_for_direct_return()
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+            for recovery_event in contract_required_vehicle_recommendation["events"]:
+                yield f"data: {json.dumps(recovery_event, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+            product_event = contract_required_vehicle_recommendation["event"]
+            yield f"data: {json.dumps(product_event, ensure_ascii=False)}\n\n"
+            assistant_response = str((product_event.get("data") or {}).get("assistantResponse") or "")
+            if assistant_response:
+                yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[DISCOVERY AGENT]'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
             yield "data: [DONE]\n\n"
             return
 
