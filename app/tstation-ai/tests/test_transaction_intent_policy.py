@@ -235,15 +235,11 @@ def test_router_structured_store_service_search_overrides_generic_store_search_t
     assert decision.metadata["response_shape_key"] == "store_service_search"
 
 
-def test_router_structured_unknown_store_service_uses_policy_contract() -> None:
+def test_specific_store_unknown_service_uses_store_attribute_inquiry_contract() -> None:
     user_text = "분당 정자점에서 세차 서비스도 하는 것 같은데 예약은 어디서 해?"
     frame = build_transaction_intent_frame(
         user_text,
         known_slots={
-            "policy_intent": "unsupported_or_unmapped_store_service_policy",
-            "service_name": "세차",
-            "service_code": "unknown",
-            "service_codes": ("unknown",),
             "store_name": "분당 정자점",
             "place_query": "분당",
         },
@@ -255,15 +251,14 @@ def test_router_structured_unknown_store_service_uses_policy_contract() -> None:
         known_slots=dict(frame.known_slots),
     )
 
-    assert frame.intent == "unsupported_or_unmapped_store_service_policy"
-    assert frame.known_slots["service_codes"] == ("unknown",)
+    assert frame.intent == "store_attribute_inquiry"
     assert frame.known_slots["store_name"] == "분당 정자점"
+    assert frame.known_slots["attribute_text"] == "세차 서비스 운영 여부"
     assert plan.allowed_tools == ("get_store_list_tool", "get_store_detail_tool")
     assert "get_store_schedule_tool" in plan.forbidden_tools
     assert "transaction_store_preview_tool" in plan.forbidden_tools
-    assert "quick_order_tool" in plan.forbidden_tools
     assert decision.template == TemplateName.QUICK_REPLY
-    assert decision.metadata["response_shape_key"] == "unsupported_or_unmapped_store_service_policy"
+    assert decision.metadata["response_shape_key"] == "store_attribute_inquiry"
 
 
 def test_plain_store_info_lookup_allows_store_detail_tools() -> None:

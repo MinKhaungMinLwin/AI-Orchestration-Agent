@@ -24321,6 +24321,21 @@ def test_store_attribute_inquiry_preserves_uncataloged_attribute_text() -> None:
     assert inquiry.verification_level == "store_contact_required"
 
 
+def test_store_attribute_inquiry_handles_unknown_service_with_reservation_phrase() -> None:
+    user_text = "분당 정자점에서 세차 서비스도 하는 것 같은데 예약은 어디서 해?"
+    inquiry = extract_store_attribute_inquiry(user_text)
+    frame = build_transaction_intent_frame(user_text, known_slots={})
+
+    assert inquiry is not None
+    assert inquiry.store_name == "분당 정자점"
+    assert inquiry.attribute_text == "세차 서비스 운영 여부"
+    assert inquiry.attribute_type == "service"
+    assert inquiry.verification_level == "store_contact_required"
+    assert frame.intent == "store_attribute_inquiry"
+    assert frame.known_slots["store_name"] == "분당 정자점"
+    assert frame.known_slots["attribute_text"] == "세차 서비스 운영 여부"
+
+
 def test_store_attribute_inquiry_router_fields_handle_store_name_after_attribute() -> None:
     user_text = "야간정비도 가능한가요? 티스테이션 정자점"
     event = _store_attribute_inquiry_event(
@@ -31754,9 +31769,9 @@ def test_stream_response_multi_keeps_stream_alive_when_turn_contract_validation_
     assert any(event.get("type") == "DONE" for event in parsed_events)
 
 
-def test_unknown_store_service_policy_guard_uses_dedicated_quickreply_not_generic_fallback() -> None:
+def test_unknown_store_service_policy_guard_uses_dedicated_quickreply_for_generic_service_question() -> None:
     contract = build_turn_contract(
-        user_text="분당 정자점에서 세차 서비스도 하는 것 같은데 예약은 어디서 해?",
+        user_text="세차 서비스 예약은 어디서 확인해?",
         intent_frame=IntentFrame(
             domain=PolicyDomain.TRANSACTION,
             intent="unsupported_or_unmapped_store_service_policy",
@@ -31764,13 +31779,11 @@ def test_unknown_store_service_policy_guard_uses_dedicated_quickreply_not_generi
                 "service_name": "세차",
                 "service_code": "unknown",
                 "service_codes": ("unknown",),
-                "store_name": "분당 정자점",
-                "region": "분당",
             },
         ),
         tool_plan=ToolPlan(
             allowed_tools=("get_store_list_tool", "get_store_detail_tool"),
-            preferred_tool="get_store_list_tool",
+            preferred_tool=None,
             forbidden_tools=(
                 "search_stores_tool",
                 "transaction_store_preview_tool",
@@ -31795,8 +31808,6 @@ def test_unknown_store_service_policy_guard_uses_dedicated_quickreply_not_generi
             policy_intent="unsupported_or_unmapped_store_service_policy",
             service_name="세차",
             service_code="unknown",
-            region="분당",
-            place_query="분당",
         ),
     )
 
@@ -31810,7 +31821,7 @@ def test_unknown_store_service_policy_guard_uses_dedicated_quickreply_not_generi
 
 def test_unknown_store_service_policy_contract_blocks_datepick_and_schedule_style_reply() -> None:
     contract = build_turn_contract(
-        user_text="강남점에서 튜닝도 해줘?",
+        user_text="튜닝도 해줘?",
         intent_frame=IntentFrame(
             domain=PolicyDomain.TRANSACTION,
             intent="unsupported_or_unmapped_store_service_policy",
@@ -31818,12 +31829,11 @@ def test_unknown_store_service_policy_contract_blocks_datepick_and_schedule_styl
                 "service_name": "튜닝",
                 "service_code": "unknown",
                 "service_codes": ("unknown",),
-                "store_name": "강남점",
             },
         ),
         tool_plan=ToolPlan(
             allowed_tools=("get_store_list_tool", "get_store_detail_tool"),
-            preferred_tool="get_store_list_tool",
+            preferred_tool=None,
             forbidden_tools=("get_store_schedule_tool", "transaction_store_preview_tool", "quick_order_tool"),
             metadata={"response_intent": "unsupported_or_unmapped_store_service_policy"},
         ),

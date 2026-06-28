@@ -134,6 +134,14 @@ _UNVERIFIABLE_STORE_PREFERENCE_RULES: tuple[tuple[re.Pattern[str], str], ...] = 
         ),
         "타이어 보관 서비스 운영 여부",
     ),
+    (
+        re.compile(r"세차(?:\s*서비스)?|손세차|자동세차", re.IGNORECASE),
+        "세차 서비스 운영 여부",
+    ),
+    (
+        re.compile(r"튜닝(?:\s*서비스)?|광택|썬팅|디테일링|랩핑|유리막|언더코팅|블랙박스", re.IGNORECASE),
+        "튜닝/부가 서비스 운영 여부",
+    ),
     (re.compile(r"리프트|대형\s*리프트|차량용\s*리프트", re.IGNORECASE), "리프트 보유 여부"),
     (re.compile(r"야간\s*(?:정비|서비스|작업)|야간정비", re.IGNORECASE), "야간정비 운영 여부"),
     (re.compile(r"질소\s*충전|질소", re.IGNORECASE), "질소 충전 여부"),
@@ -193,6 +201,12 @@ _ATTRIBUTE_SUFFIX_RE = re.compile(
 )
 _ATTRIBUTE_STOPWORDS_RE = re.compile(
     r"^(?:티스테이션|더타이어샵|그리고|혹시|그럼|거기|해당\s*매장|매장|지점)\s*",
+    re.IGNORECASE,
+)
+_SERVICE_RESERVATION_TAIL_RE = re.compile(
+    r"(?:도\s*하는\s*것\s*같은데|도\s*하나|도\s*해줘|도\s*돼|도\s*되나|"
+    r"예약(?:은|은요|은 어디서|은 어떻게)?|어디서\s*해|어떻게\s*해|문의(?:는|는요)?|확인(?:은|은요)?)"
+    r".*$",
     re.IGNORECASE,
 )
 _TOOL_VERIFIABLE_ATTRIBUTE_RE = re.compile(r"주소|전화|전화번호|연락처|영업\s*시간|운영\s*시간|휴무|위치", re.IGNORECASE)
@@ -287,7 +301,7 @@ def extract_store_attribute_inquiry(
 ) -> StoreAttributeInquiry | None:
     """Extract a generic store attribute inquiry while preserving raw attribute text."""
     value = str(text or "").strip()
-    if not value or _ADJACENT_NON_ATTRIBUTE_RE.search(value) or not _ATTRIBUTE_QUESTION_RE.search(value):
+    if not value or not _ATTRIBUTE_QUESTION_RE.search(value):
         return None
     if _WARRANTY_OR_COMPLAINT_CONTEXT_RE.search(value) and _STORE_CONTEXT_MARKER_RE.search(value):
         return None
@@ -298,15 +312,20 @@ def extract_store_attribute_inquiry(
             store_label = _normalize_store_name(extracted_store_name)
     if not store_label:
         return None
+    labels = unverifiable_store_preference_labels(value)
+    adjacent_non_attribute = _ADJACENT_NON_ATTRIBUTE_RE.search(value)
+    if adjacent_non_attribute and not labels:
+        return None
 
     working = value
     if store_label:
         working = re.sub(rf"(?:티스테이션\s*)?{re.escape(store_label)}", " ", working, count=1, flags=re.IGNORECASE)
+    if labels:
+        working = _SERVICE_RESERVATION_TAIL_RE.sub("", working).strip()
     working = _ATTRIBUTE_SUFFIX_RE.sub("", working).strip()
     working = _ATTRIBUTE_STOPWORDS_RE.sub("", working).strip()
     working = re.sub(r"^(?:에서|에|도|은|는|이|가|을|를|혹시)\s*", "", working).strip()
     working = re.sub(r"\s+", " ", working).strip(" ?!.")
-    labels = unverifiable_store_preference_labels(value)
     attribute_text = working or (labels[0] if labels else "")
     if not attribute_text:
         return None
