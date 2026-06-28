@@ -390,7 +390,7 @@ from services.tstation.policies import support_response_policy as support_respon
 from services.tstation.policies.transaction_intent_policy import build_transaction_intent_frame, plan_transaction_tools
 from services.tstation.policies.transaction_response_policy import decide_transaction_response
 from services.tstation.policies.support_response_policy import (
-    build_support_faq_llm_grounded_reply,
+    build_support_faq_evidence_grounded_reply,
     build_support_faq_source_grounded_reply,
     build_support_faq_policy_reply,
     decide_support_response,
@@ -29549,12 +29549,12 @@ def test_support_faq_policy_reply_builds_mixed_cancel_generalized_answer_when_al
     assert reply is not None
     assert reply["metadata"]["policyGroup"] == "reservation_installation_policy"
     assert reply["metadata"]["factType"] == "mixed_cancel_fee_generalized"
-    assert reply["metadata"]["generalizedAnswerUsed"] is True
+    assert reply["metadata"]["generalizedAnswerUsed"] is False
     assert reply["metadata"]["clarificationNeeded"] is False
     assert reply["metadata"]["safeFallbackUsed"] is False
     response = reply["assistant_response"]
-    assert "예약만 잡아둔 상태라면 취소는 고객센터를 통해 처리할 수 있고" in response
-    assert "온라인몰에서 결제까지 완료된 주문이라면 배송 현황에 따라 취소 수수료가 발생할 수 있고" in response
+    assert "예약 취소 비용은 방문 예약만 취소하는 건인지, 온라인몰 결제 주문까지 함께 취소하는 건인지에 따라 달라질 수 있어요." in response
+    assert "여기서 한 가지 조건으로 단정하기는 어려워요." in response
     assert "카드 환불 반영은 보통 1~3영업일" not in response
     assert reply["metadata"]["facts"]["visit_reservation_cancel_method"] == "고객센터 전화"
     assert reply["metadata"]["facts"]["online_order_cancel_fee_amount"] == "타이어 개당 1만 원"
@@ -29665,7 +29665,7 @@ def test_support_faq_policy_reply_drops_card_refund_fact_without_card_anchor() -
     assert "card_refund_timing" not in reply["metadata"]["facts"]
 
 
-def test_support_faq_llm_grounded_reply_uses_top1_source_scope_without_card_timing_anchor(
+def test_support_faq_evidence_grounded_reply_filters_prompt_evidence_by_scope(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     tool_result = {
@@ -29690,13 +29690,19 @@ def test_support_faq_llm_grounded_reply_uses_top1_source_scope_without_card_timi
             ]
         },
     }
+    captured_prompt: dict[str, str] = {}
+
+    def _fake_invoke(prompt: str) -> str:
+        captured_prompt["value"] = prompt
+        return "온라인몰에서 결제까지 완료된 주문은 배송 현황에 따라 타이어 개당 1만 원 취소 수수료가 발생할 수 있어요."
+
     monkeypatch.setattr(
         support_response_policy_module,
         "_invoke_support_faq_grounded_llm",
-        lambda prompt: "온라인몰에서 결제까지 완료된 주문은 배송 현황에 따라 타이어 개당 1만 원 취소 수수료가 발생할 수 있어요.",
+        _fake_invoke,
     )
 
-    reply = build_support_faq_llm_grounded_reply(
+    reply = build_support_faq_evidence_grounded_reply(
         intent="reservation_policy_guidance",
         user_text="온라인에서 결제후에 매장 예약 취소하면 위약금 있어?",
         tool_result=tool_result,
@@ -29705,11 +29711,15 @@ def test_support_faq_llm_grounded_reply_uses_top1_source_scope_without_card_timi
     assert reply is not None
     assert "타이어 개당 1만 원" in reply["assistant_response"]
     assert "카드 환불" not in reply["assistant_response"]
-    assert reply["metadata"]["faqLlmGroundedReplyUsed"] is True
+    assert reply["metadata"]["evidenceGroundedReplyUsed"] is True
     assert reply["metadata"]["factExtractionApplied"] is False
+    assert '"evidence_type": "online_order_cancel_fee"' in captured_prompt["value"]
+    assert '"cancel_method"' in captured_prompt["value"]
+    assert '"evidence_type": "reservation_cancel_method"' not in captured_prompt["value"]
+    assert '"evidence_type": "card_refund_timing"' not in captured_prompt["value"]
 
 
-def test_support_faq_llm_grounded_reply_blocks_unsupported_numeric_fact(
+def test_support_faq_evidence_grounded_reply_blocks_unsupported_numeric_fact(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     tool_result = {
@@ -29731,7 +29741,7 @@ def test_support_faq_llm_grounded_reply_blocks_unsupported_numeric_fact(
         lambda prompt: "카드 승인취소 반영은 영업일 기준 7일이 걸릴 수 있어요.",
     )
 
-    reply = build_support_faq_llm_grounded_reply(
+    reply = build_support_faq_evidence_grounded_reply(
         intent="general_card_cancel_timing_policy",
         user_text="카드 승인취소는 언제 반영돼?",
         tool_result=tool_result,

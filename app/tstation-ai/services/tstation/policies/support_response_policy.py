@@ -99,6 +99,25 @@ _SUPPORT_FAQ_LLM_TOP_K_BY_INTENT: dict[str, int] = {
     "assurance_service_policy": 3,
     "payment_error_troubleshooting": 3,
 }
+_SUPPORT_FAQ_SCOPE_TO_EVIDENCE_TYPES: dict[str, tuple[str, ...]] = {
+    "fee_or_penalty": (
+        "reservation_cancel_method",
+        "online_order_cancel_fee",
+        "delivered_item_return_fee",
+        "installation_work_fee",
+        "promotion_gift_partial_cancel",
+    ),
+    "cancel_method": ("reservation_cancel_method",),
+    "refund_timing": ("card_refund_timing",),
+    "delivery_stage": ("online_order_cancel_fee", "delivered_item_return_fee"),
+    "work_started": ("installation_work_fee",),
+    "store_change": ("store_change_policy",),
+    "warranty_condition": ("warranty_condition",),
+    "manufacture_date_policy": ("manufacture_date_policy",),
+    "payment_error": ("payment_error_troubleshooting",),
+    "promotion_condition": ("promotion_gift_partial_cancel", "promotion_gift_policy_general"),
+    "document_status": ("assurance_document_lost",),
+}
 _ALLOWED_CATEGORY_NAMES_BY_POLICY_GROUP: dict[str, tuple[tuple[str, str], ...]] = {
     _RESERVATION_INSTALLATION_POLICY: (("배송/장착", "장착"), ("상품/서비스", "서비스")),
     _PAYMENT_REFUND_POLICY: (("주문/결제", "결제"),),
@@ -337,6 +356,193 @@ def _support_faq_strip_card_refund_facts_for_non_anchor(
     return stripped
 
 
+def _classify_faq_evidence(
+    candidate: Mapping[str, Any],
+    *,
+    policy_group: str,
+    fact_type: str,
+) -> str | None:
+    text = _support_faq_candidate_text(candidate)
+    if not text:
+        return None
+    if policy_group == _RESERVATION_INSTALLATION_POLICY:
+        if _support_faq_candidate_matches_fact_type("work_started_cancel", candidate):
+            return "installation_work_fee"
+        if _support_faq_candidate_matches_fact_type("store_change", candidate):
+            return "store_change_policy"
+        if _support_faq_candidate_matches_fact_type("online_order_cancel_fee", candidate):
+            return "online_order_cancel_fee"
+        if _support_faq_candidate_matches_fact_type("card_cancel_timing", candidate):
+            return "card_refund_timing"
+        if _support_faq_candidate_matches_fact_type("visit_reservation_cancel", candidate):
+            return "reservation_cancel_method"
+    if policy_group == _PURCHASE_ORDER_POLICY:
+        if fact_type == "wrong_item_or_fitment_issue":
+            return "delivered_item_return_fee"
+        if _support_faq_candidate_matches_fact_type("online_order_cancel_fee", candidate):
+            return "online_order_cancel_fee"
+    if policy_group == _PAYMENT_REFUND_POLICY:
+        if fact_type == "payment_error_troubleshooting":
+            return "payment_error_troubleshooting"
+        if _support_faq_candidate_matches_fact_type("card_cancel_timing", candidate):
+            return "card_refund_timing"
+    if policy_group == _ASSURANCE_WARRANTY_POLICY:
+        if fact_type == "assurance_document_lost":
+            return "assurance_document_lost"
+        return "warranty_condition"
+    if policy_group == _BENEFIT_PROMOTION_POLICY:
+        if fact_type == "promotion_gift_partial_cancel":
+            return "promotion_gift_partial_cancel"
+        return "promotion_gift_policy_general"
+    if policy_group == _PRODUCT_CONDITION_POLICY:
+        if fact_type == "manufacture_date":
+            return "manufacture_date_policy"
+        return "warranty_condition"
+    return None
+
+
+def _infer_user_faq_scope(
+    *,
+    intent: str,
+    user_text: str,
+    policy_group: str,
+    fact_type: str,
+) -> dict[str, Any]:
+    scopes: list[str] = []
+    primary_evidence_types: list[str] = []
+    supporting_evidence_types: list[str] = []
+    text = str(user_text or "")
+    has_refund_anchor = _support_faq_question_anchor_allowed(intent, text)
+
+    if policy_group == _PAYMENT_REFUND_POLICY and fact_type == "card_cancel_timing":
+        scopes.append("refund_timing")
+        primary_evidence_types.append("card_refund_timing")
+    elif policy_group == _PAYMENT_REFUND_POLICY and fact_type == "payment_error_troubleshooting":
+        scopes.append("payment_error")
+        primary_evidence_types.append("payment_error_troubleshooting")
+    elif policy_group == _PRODUCT_CONDITION_POLICY and fact_type == "manufacture_date":
+        scopes.append("manufacture_date_policy")
+        primary_evidence_types.append("manufacture_date_policy")
+    elif policy_group == _ASSURANCE_WARRANTY_POLICY and fact_type == "assurance_document_lost":
+        scopes.append("document_status")
+        primary_evidence_types.append("assurance_document_lost")
+    elif policy_group == _ASSURANCE_WARRANTY_POLICY:
+        scopes.append("warranty_condition")
+        primary_evidence_types.append("warranty_condition")
+    elif policy_group == _BENEFIT_PROMOTION_POLICY:
+        scopes.append("promotion_condition")
+        primary_evidence_types.append(
+            "promotion_gift_partial_cancel" if fact_type == "promotion_gift_partial_cancel" else "promotion_gift_policy_general"
+        )
+    elif policy_group == _RESERVATION_INSTALLATION_POLICY and fact_type == "store_change":
+        scopes.append("store_change")
+        primary_evidence_types.append("store_change_policy")
+    elif policy_group == _RESERVATION_INSTALLATION_POLICY and fact_type == "work_started_cancel":
+        scopes.extend(["work_started", "fee_or_penalty"])
+        primary_evidence_types.append("installation_work_fee")
+    elif policy_group == _PURCHASE_ORDER_POLICY and fact_type == "online_order_cancel_fee":
+        scopes.extend(["fee_or_penalty", "delivery_stage"])
+        primary_evidence_types.append("online_order_cancel_fee")
+    elif policy_group == _PURCHASE_ORDER_POLICY and fact_type == "wrong_item_or_fitment_issue":
+        scopes.append("delivery_stage")
+        primary_evidence_types.append("delivered_item_return_fee")
+    elif policy_group == _RESERVATION_INSTALLATION_POLICY and fact_type == "mixed_cancel_fee_generalized":
+        scopes.append("fee_or_penalty")
+        if _RESERVATION_RE.search(text):
+            scopes.append("cancel_method")
+            primary_evidence_types.append("reservation_cancel_method")
+        if _ORDER_RE.search(text):
+            scopes.append("delivery_stage")
+            if "reservation_cancel_method" in primary_evidence_types:
+                supporting_evidence_types.append("online_order_cancel_fee")
+            else:
+                primary_evidence_types.append("online_order_cancel_fee")
+        if has_refund_anchor:
+            scopes.append("refund_timing")
+            supporting_evidence_types.append("card_refund_timing")
+        if not primary_evidence_types:
+            primary_evidence_types.append("reservation_cancel_method")
+    else:
+        default_primary_by_fact_type = {
+            "visit_reservation_cancel": "reservation_cancel_method",
+            "online_order_cancel_fee": "online_order_cancel_fee",
+            "card_cancel_timing": "card_refund_timing",
+            "work_started_cancel": "installation_work_fee",
+            "store_change": "store_change_policy",
+            "quality_warranty_condition": "warranty_condition",
+            "manufacture_date": "manufacture_date_policy",
+            "payment_error_troubleshooting": "payment_error_troubleshooting",
+            "promotion_gift_partial_cancel": "promotion_gift_partial_cancel",
+            "promotion_gift_policy_general": "promotion_gift_policy_general",
+            "assurance_coverage_condition": "warranty_condition",
+            "assurance_document_lost": "assurance_document_lost",
+        }
+        default_primary = default_primary_by_fact_type.get(fact_type)
+        if default_primary:
+            primary_evidence_types.append(default_primary)
+
+    allowed_evidence_types: list[str] = []
+    for scope in scopes:
+        allowed_evidence_types.extend(_SUPPORT_FAQ_SCOPE_TO_EVIDENCE_TYPES.get(scope, ()))
+    allowed_evidence_types.extend(primary_evidence_types)
+    allowed_evidence_types.extend(supporting_evidence_types)
+    if not has_refund_anchor:
+        allowed_evidence_types = [evidence_type for evidence_type in allowed_evidence_types if evidence_type != "card_refund_timing"]
+        supporting_evidence_types = [evidence_type for evidence_type in supporting_evidence_types if evidence_type != "card_refund_timing"]
+
+    return {
+        "scopes": list(dict.fromkeys(scopes)),
+        "primary_evidence_types": list(dict.fromkeys(primary_evidence_types)),
+        "supporting_evidence_types": list(dict.fromkeys(supporting_evidence_types)),
+        "allowed_evidence_types": list(dict.fromkeys(allowed_evidence_types)),
+        "refund_timing_allowed": has_refund_anchor,
+    }
+
+
+def _select_evidence_for_scope(
+    *,
+    intent: str,
+    user_text: str,
+    policy_group: str,
+    fact_type: str,
+    candidates: list[Mapping[str, Any]],
+    scope_info: Mapping[str, Any],
+) -> dict[str, Any]:
+    primary_types = set(scope_info.get("primary_evidence_types") or [])
+    supporting_types = set(scope_info.get("supporting_evidence_types") or [])
+    allowed_types = set(scope_info.get("allowed_evidence_types") or [])
+
+    primary: list[dict[str, Any]] = []
+    supporting: list[dict[str, Any]] = []
+    excluded: list[dict[str, Any]] = []
+
+    for candidate in _support_faq_ranked_candidates(candidates):
+        evidence_type = _classify_faq_evidence(candidate, policy_group=policy_group, fact_type=fact_type)
+        entry = {
+            "candidate": candidate,
+            "evidence_type": evidence_type,
+        }
+        if not evidence_type or evidence_type not in allowed_types:
+            excluded.append(entry)
+            continue
+        if evidence_type in primary_types:
+            primary.append(entry)
+        elif evidence_type in supporting_types:
+            supporting.append(entry)
+        else:
+            excluded.append(entry)
+
+    selected = primary + supporting
+    return {
+        "primary": primary,
+        "supporting": supporting,
+        "selected": selected,
+        "excluded": excluded,
+        "selected_candidates": [entry["candidate"] for entry in selected],
+        "selected_evidence_types": [str(entry["evidence_type"]) for entry in selected if entry.get("evidence_type")],
+    }
+
+
 def _support_faq_grounded_prompt(
     *,
     intent: str,
@@ -382,6 +588,69 @@ def _support_faq_grounded_prompt(
     )
 
 
+def _support_faq_evidence_grounded_prompt(
+    *,
+    intent: str,
+    user_text: str,
+    policy_group: str,
+    fact_type: str,
+    scope_info: Mapping[str, Any],
+    selected_evidence: Mapping[str, Any],
+) -> str:
+    evidence_blocks: list[str] = []
+    for rank, entry in enumerate(selected_evidence.get("primary") or [], start=1):
+        candidate = entry["candidate"]
+        lv1, lv2, _, _ = _support_faq_candidate_categories(candidate)
+        evidence_blocks.append(
+            json.dumps(
+                {
+                    "role": "primary",
+                    "rank": rank,
+                    "evidence_type": entry.get("evidence_type"),
+                    "category_lv1": lv1 or None,
+                    "category_lv2": lv2 or None,
+                    "question": _normalize_support_faq_text(candidate.get("question") or ""),
+                    "answer": _normalize_support_faq_text(candidate.get("answer") or candidate.get("pc_ans_cont") or ""),
+                },
+                ensure_ascii=False,
+            )
+        )
+    supporting_offset = len(evidence_blocks)
+    for rank, entry in enumerate(selected_evidence.get("supporting") or [], start=1):
+        candidate = entry["candidate"]
+        lv1, lv2, _, _ = _support_faq_candidate_categories(candidate)
+        evidence_blocks.append(
+            json.dumps(
+                {
+                    "role": "supporting",
+                    "rank": supporting_offset + rank,
+                    "evidence_type": entry.get("evidence_type"),
+                    "category_lv1": lv1 or None,
+                    "category_lv2": lv2 or None,
+                    "question": _normalize_support_faq_text(candidate.get("question") or ""),
+                    "answer": _normalize_support_faq_text(candidate.get("answer") or candidate.get("pc_ans_cont") or ""),
+                },
+                ensure_ascii=False,
+            )
+        )
+    return (
+        "당신은 T'Station FAQ 답변 보조기입니다.\n"
+        "사용자 질문 범위에 맞는 근거만 사용해 2~3문장 한국어 답변을 작성하세요.\n"
+        "규칙:\n"
+        "- 아래 evidence에 없는 사실, 숫자, 기간, 금액을 추가하지 마세요.\n"
+        "- 질문 scope 밖 내용은 쓰지 마세요.\n"
+        "- 서로 다른 조건은 섞지 말고 구분해서 설명하세요.\n"
+        "- 직접 근거가 부족하면 '확인이 필요해요'처럼 단정하지 말고 답하세요.\n"
+        "- 답변 안에 FAQ, RAG, 후보, rank, score 같은 표현을 쓰지 마세요.\n"
+        f"- intent={intent}, policy_group={policy_group}, fact_type={fact_type}\n"
+        f"- question_scopes={json.dumps(list(scope_info.get('scopes') or []), ensure_ascii=False)}\n"
+        f"- allowed_evidence_types={json.dumps(list(scope_info.get('allowed_evidence_types') or []), ensure_ascii=False)}\n\n"
+        f"사용자 질문:\n{_normalize_support_faq_text(user_text)}\n\n"
+        f"evidence:\n" + "\n".join(evidence_blocks) + "\n\n"
+        "출력은 답변 본문만 작성하세요."
+    )
+
+
 def _invoke_support_faq_grounded_llm(prompt: str) -> str:
     from services.tstation.agents.router import DECISION_LLM
 
@@ -416,17 +685,26 @@ def _support_faq_post_check_failure(
     user_text: str,
     answer: str,
     source_candidates: list[Mapping[str, Any]],
+    scope_info: Mapping[str, Any] | None = None,
+    selected_evidence_types: list[str] | None = None,
 ) -> str | None:
     normalized_answer = _normalize_support_faq_text(answer)
     if not normalized_answer:
         return "empty_answer"
     if re.search(r"faq\s*기준|rag\s*기준|후보|rank|score", normalized_answer, re.IGNORECASE):
         return "source_reference_exposed"
-    if re.search(r"카드|환불|승인\s*취소|반영|영업일", normalized_answer, re.IGNORECASE) and not _support_faq_question_anchor_allowed(
-        intent, user_text
-    ):
+    scope_set = set(scope_info.get("scopes") or []) if isinstance(scope_info, Mapping) else set()
+    evidence_type_set = set(selected_evidence_types or [])
+    refund_allowed = (
+        "refund_timing" in scope_set
+        or "card_refund_timing" in evidence_type_set
+        or _support_faq_question_anchor_allowed(intent, user_text)
+    )
+    if re.search(r"카드|환불|승인\s*취소|반영|영업일", normalized_answer, re.IGNORECASE) and not refund_allowed:
         return "card_refund_anchor_missing"
-    if intent == "tire_quality_warranty_policy" and re.search(r"제조일자|dot", normalized_answer, re.IGNORECASE):
+    if "manufacture_date_policy" not in evidence_type_set and intent == "tire_quality_warranty_policy" and re.search(
+        r"제조일자|dot", normalized_answer, re.IGNORECASE
+    ):
         return "manufacture_drift"
 
     source_text = "\n".join(_support_faq_candidate_text(candidate) for candidate in source_candidates)
@@ -762,6 +1040,12 @@ def _build_support_faq_policy_reply(
                 "방문 예약만 취소하는 건인지, 온라인몰에서 결제까지 완료된 주문인지에 따라 결론이 달라질 수 있어요.\n"
                 "실제 취소 전에는 주문/예약 내역이나 고객센터 안내를 먼저 확인해 주세요."
             )
+        elif has_visit and has_order:
+            response = (
+                "예약 취소 비용은 방문 예약만 취소하는 건인지, 온라인몰 결제 주문까지 함께 취소하는 건인지에 따라 달라질 수 있어요.\n"
+                "예약 상태와 주문 진행 상태를 함께 확인해야 해서 여기서 한 가지 조건으로 단정하기는 어려워요.\n"
+                "실제 취소 전에는 주문/예약 내역이나 고객센터 안내를 먼저 확인해 주세요."
+            )
         else:
             lines: list[str] = []
             if has_visit:
@@ -793,10 +1077,6 @@ def _build_support_faq_policy_reply(
                         "다만 온라인몰에서 결제까지 완료된 주문이라면 "
                         f"{condition_text} 취소 수수료가 발생할 수 있다고 안내돼요."
                     )
-            if has_card:
-                lines.append(
-                    f"결제 취소가 완료된 뒤 카드 환불 반영은 보통 {facts.get('card_refund_timing')} 정도 걸릴 수 있어요."
-                )
             response = "\n\n".join(lines)
     elif policy_group == _RESERVATION_INSTALLATION_POLICY and fact_type == "store_change":
         allowed_text = "방문 지점 변경 가능 여부는 예약 정책과 현재 예약 상태에 따라 달라질 수 있어요."
@@ -973,7 +1253,7 @@ def build_support_faq_source_grounded_reply(
     }
 
 
-def build_support_faq_llm_grounded_reply(
+def build_support_faq_evidence_grounded_reply(
     *,
     intent: str,
     user_text: str,
@@ -994,7 +1274,25 @@ def build_support_faq_llm_grounded_reply(
     if not filtered:
         return None
 
-    ranked = _support_faq_ranked_candidates(filtered)
+    scope_info = _infer_user_faq_scope(
+        intent=intent,
+        user_text=user_text,
+        policy_group=policy_group,
+        fact_type=fact_type,
+    )
+    selected_evidence = _select_evidence_for_scope(
+        intent=intent,
+        user_text=user_text,
+        policy_group=policy_group,
+        fact_type=fact_type,
+        candidates=filtered,
+        scope_info=scope_info,
+    )
+    selected_candidates = list(selected_evidence.get("selected_candidates") or [])
+    if not selected_candidates:
+        return None
+
+    ranked = _support_faq_ranked_candidates(selected_candidates)
     top_candidate = ranked[0]
     top_score = _support_faq_candidate_score(top_candidate)
     min_score = _SUPPORT_FAQ_SOURCE_MIN_SCORE_BY_INTENT.get(intent)
@@ -1005,7 +1303,7 @@ def build_support_faq_llm_grounded_reply(
         intent=intent,
         user_text=user_text,
         top_candidate=top_candidate,
-        candidates=filtered,
+        candidates=selected_candidates,
     )
     if competing_candidate is not None:
         second_score = _support_faq_candidate_score(competing_candidate) or 0.0
@@ -1026,12 +1324,16 @@ def build_support_faq_llm_grounded_reply(
             return None
 
     top_k = _SUPPORT_FAQ_LLM_TOP_K_BY_INTENT.get(intent, 3)
-    prompt = _support_faq_grounded_prompt(
+    prompt = _support_faq_evidence_grounded_prompt(
         intent=intent,
         user_text=user_text,
         policy_group=policy_group,
         fact_type=fact_type,
-        candidates=ranked[:top_k],
+        scope_info=scope_info,
+        selected_evidence={
+            "primary": (selected_evidence.get("primary") or [])[:top_k],
+            "supporting": (selected_evidence.get("supporting") or [])[: max(0, top_k - len(selected_evidence.get("primary") or []))],
+        },
     )
     try:
         assistant_response = _invoke_support_faq_grounded_llm(prompt)
@@ -1046,6 +1348,8 @@ def build_support_faq_llm_grounded_reply(
         user_text=user_text,
         answer=assistant_response,
         source_candidates=ranked[:top_k],
+        scope_info=scope_info,
+        selected_evidence_types=list(selected_evidence.get("selected_evidence_types") or []),
     )
     if failure_reason is not None:
         return None
@@ -1058,19 +1362,31 @@ def build_support_faq_llm_grounded_reply(
             "factType": fact_type,
             "clarificationNeeded": False,
             "safeFallbackUsed": False,
+            "evidenceGroundedReplyUsed": True,
             "faqLlmGroundedReplyUsed": True,
             "sourceGroundedReplyUsed": False,
-            "filteredFaqCount": len(filtered),
+            "filteredFaqCount": len(selected_candidates),
             "excludedFaqCount": len(excluded_candidates),
             "factExtractionApplied": False,
             "topFaqScore": top_score,
             "llmGroundedCandidateCount": min(len(ranked), top_k),
+            "faqScopes": list(scope_info.get("scopes") or []),
+            "selectedEvidenceTypes": list(selected_evidence.get("selected_evidence_types") or []),
             "topFaqCategory": {
                 "categoryLv1": _support_faq_candidate_categories(top_candidate)[0] or None,
                 "categoryLv2": _support_faq_candidate_categories(top_candidate)[1] or None,
             },
         },
     }
+
+
+def build_support_faq_llm_grounded_reply(
+    *,
+    intent: str,
+    user_text: str,
+    tool_result: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    return build_support_faq_evidence_grounded_reply(intent=intent, user_text=user_text, tool_result=tool_result)
 
 
 def build_support_faq_policy_reply(
@@ -1127,9 +1443,7 @@ def build_support_faq_policy_reply(
             "policyGroup": policy_group,
             "factType": fact_type,
             "clarificationNeeded": False,
-            "generalizedAnswerUsed": bool(
-                policy_group == _RESERVATION_INSTALLATION_POLICY and fact_type == "mixed_cancel_fee_generalized"
-            ),
+            "generalizedAnswerUsed": False,
             "safeFallbackUsed": safe_fallback_used,
             "filteredFaqCount": len(filtered),
             "excludedFaqCount": len(excluded_candidates),
