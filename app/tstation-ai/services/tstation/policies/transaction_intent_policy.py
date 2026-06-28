@@ -1578,7 +1578,7 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
                     "get_multi_store_schedule_tool",
                     "quick_order_tool",
                 ),
-                required_slots=action_required_slots,
+                required_slots=(),
                 metadata={
                     "response_intent": "stock_store_search",
                     "stock_check_mode": "preview",

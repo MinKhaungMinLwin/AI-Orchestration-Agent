@@ -675,6 +675,16 @@ def build_turn_contract(
         known_slots=known_slots,
         cross_domain_plan=cross_domain_plan,
     )
+    selected_store_schedule_continuation = _selected_store_schedule_continuation_matches(
+        intent=intent,
+        known_slots=known_slots,
+        resume_source=resume_source,
+    )
+    if selected_store_schedule_continuation:
+        required_slots = tuple(
+            slot for slot in required_slots
+            if slot not in {"requested_cal_day", "rsv_hour", "booking_datetime"}
+        )
     required_slots = _filter_satisfied_required_slots(required_slots, known_slots)
     resolvable_required_slots = _resolvable_required_slots(required_slots, cross_domain_plan, known_slots)
     blocking_required_slots = _blocking_required_slots(
@@ -708,11 +718,7 @@ def build_turn_contract(
     if planner_intent == "quick_order_execute" and _has_quick_order_execute_slots(known_slots):
         allowed_tools = _merge_tuple(allowed_tools, ("quick_order_tool",))
         forbidden_tools = tuple(tool for tool in forbidden_tools if tool != "quick_order_tool")
-    if _selected_store_schedule_continuation_matches(
-        intent=intent,
-        known_slots=known_slots,
-        resume_source=resume_source,
-    ):
+    if selected_store_schedule_continuation:
         allowed_tools = ("get_store_schedule_tool",)
         forbidden_tools = _merge_tuple(
             tuple(tool for tool in forbidden_tools if tool != "get_store_schedule_tool"),
@@ -960,6 +966,10 @@ def build_turn_contract(
     ).to_dict()
 
     response_decision_payload = response_decision.to_dict() if response_decision is not None else None
+    if selected_store_schedule_continuation and _selected_store_schedule_response_decision_mismatch(
+        response_decision_payload
+    ):
+        response_decision_payload = _selected_store_schedule_response_decision_payload(known_slots)
     if intent == "legal_action_guidance_denied" and response_decision_payload is None:
         response_decision_payload = {
             "response_shape": "action_confirm",
@@ -2048,8 +2058,12 @@ def _selected_store_schedule_continuation_matches(
     known_slots: Mapping[str, Any],
     resume_source: str,
 ) -> bool:
-    if str(intent or "") not in {"stock_store_search", "stock_store_search_slot_fill_store"}:
-        return False
+    normalized_intent = str(intent or "").strip()
+    if normalized_intent not in {"stock_store_search", "stock_store_search_slot_fill_store"}:
+        pending_intent = str(known_slots.get("pending_intent") or "").strip()
+        goal_type = str(known_slots.get("goal_type") or "").strip()
+        if normalized_intent != "unknown" or (pending_intent != "stock" and goal_type != "store_with_stock"):
+            return False
     if str(resume_source or "") not in {
         "expected_slot_fill:store",
         "router_slot_fill:store",
@@ -2070,6 +2084,38 @@ def _selected_store_schedule_continuation_matches(
         and (known_slots.get("ord_qty") or known_slots.get("quantity"))
         and str(known_slots.get("source_tool") or "") == "transaction_store_preview_tool"
     )
+
+
+def _selected_store_schedule_response_decision_mismatch(response_decision: Mapping[str, Any] | None) -> bool:
+    if not isinstance(response_decision, Mapping):
+        return True
+    metadata = response_decision.get("metadata")
+    response_shape_key = str(metadata.get("response_shape_key") or "") if isinstance(metadata, Mapping) else ""
+    return str(response_decision.get("template") or "") != "datepick" or response_shape_key != "reservation_slots"
+
+
+def _selected_store_schedule_response_decision_payload(known_slots: Mapping[str, Any]) -> dict[str, Any]:
+    schedule_mode = str(
+        known_slots.get("schedule_mode")
+        or known_slots.get("inventory_mode")
+        or ""
+    ).strip()
+    return {
+        "response_shape": "date_pick",
+        "template": "datepick",
+        "required_slots": [],
+        "forbidden_behaviors": [
+            "hide_available_stock",
+            "empty_select_only_response",
+            "preorder",
+        ],
+        "assistant_guidance": "선택한 매장 후보의 예약 가능 일정을 바로 datepick으로 이어간다.",
+        "metadata": {
+            "response_shape_key": "reservation_slots",
+            "stock_check_mode": "preview",
+            "schedule_mode": schedule_mode,
+        },
+    }
 
 
 def _is_selected_store_schedule_continuation_contract(contract: TurnContract | None) -> bool:

@@ -29026,8 +29026,13 @@ def test_turn_contract_allows_stock_store_slot_fill_store_schedule_continuation_
 
     assert tool_plan.preferred_tool == "get_store_schedule_tool"
     assert tool_plan.tool_args_patch == {"shop_id": "F00098", "mode": "logistics_only"}
+    assert tool_plan.required_slots == ()
     assert response_decision.template == TemplateName.DATE_PICK
     assert contract.allowed_tools == ("get_store_schedule_tool",)
+    assert contract.required_slots == ()
+    assert contract.resolvable_required_slots == ()
+    assert contract.blocking_required_slots == ()
+    assert not should_guard_required_slots(contract)
     assert "transaction_store_preview_tool" in contract.forbidden_tools
     assert "search_stores_tool" in contract.forbidden_tools
     assert "get_nearby_stores_tool" in contract.forbidden_tools
@@ -29038,6 +29043,86 @@ def test_turn_contract_allows_stock_store_slot_fill_store_schedule_continuation_
         response_shape_key="reservation_slots",
         called_tools=["get_store_schedule_tool"],
         tool_inputs=[{"tool": "get_store_schedule_tool", "args": {"shop_id": "F00098", "mode": "logistics_only"}}],
+        source_domain="transaction",
+        contract=contract,
+    ) == []
+
+
+def test_turn_contract_recovers_stale_selected_store_schedule_required_date_guard() -> None:
+    frame = IntentFrame(
+        domain=PolicyDomain.TRANSACTION,
+        intent="stock_store_search_slot_fill_store",
+        known_slots={
+            "goods_no": "G000000310126",
+            "tire_size": "245/45R19",
+            "ord_qty": 2,
+            "shop_id": "F00071",
+            "shop_name": "티스테이션 분당정자점",
+            "source_tool": "transaction_store_preview_tool",
+            "stock_check_mode": "preview",
+            "schedule_mode": "in_store_logistics_combined",
+            "schedule_tier": "in_store_logistics_combined",
+            "inventory_mode": "in_store_logistics_combined",
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+        },
+    )
+    stale_tool_plan = ToolPlan(
+        allowed_tools=("get_store_schedule_tool",),
+        preferred_tool="get_store_schedule_tool",
+        tool_args_patch={"shop_id": "F00071", "mode": "in_store_logistics_combined"},
+        forbidden_tools=(
+            "transaction_store_preview_tool",
+            "get_store_inventory_tool",
+            "get_logistics_inventory_tool",
+            "get_store_list_tool",
+            "get_nearby_stores_tool",
+            "search_stores_tool",
+            "get_multi_store_schedule_tool",
+            "quick_order_tool",
+        ),
+        required_slots=("requested_cal_day",),
+        metadata={"response_intent": "stock_store_search", "stock_check_mode": "preview"},
+    )
+    stale_response_decision = ResponseDecision(
+        response_shape=ResponseShape.CLARIFY,
+        template=TemplateName.QUICK_REPLY,
+        required_slots=("requested_cal_day",),
+        forbidden_behaviors=("empty_location_card",),
+        assistant_guidance="예약 일정을 확인하려면 날짜를 먼저 요청한다.",
+        metadata={"response_shape_key": "missing_stock_search_slots", "missing_slots": ("requested_cal_day",)},
+    )
+
+    contract = build_turn_contract(
+        user_text="티스테이션 분당정자점",
+        intent_frame=frame,
+        tool_plan=stale_tool_plan,
+        response_decision=stale_response_decision,
+        action_mode="stock_check",
+        context_state="resumed",
+        resume_source="expected_slot_fill:store",
+    )
+
+    assert contract.allowed_tools == ("get_store_schedule_tool",)
+    assert contract.required_slots == ()
+    assert contract.resolvable_required_slots == ()
+    assert contract.blocking_required_slots == ()
+    assert not should_guard_required_slots(contract)
+    assert contract.response_decision["template"] == "datepick"
+    assert contract.response_decision["required_slots"] == []
+    assert contract.response_decision["metadata"]["response_shape_key"] == "reservation_slots"
+    assert contract.response_decision["metadata"]["schedule_mode"] == "in_store_logistics_combined"
+    assert response_contract_violations(
+        template="datepick",
+        assistant_response_source="code_mapper",
+        response_shape_key="reservation_slots",
+        called_tools=["get_store_schedule_tool"],
+        tool_inputs=[
+            {
+                "tool": "get_store_schedule_tool",
+                "args": {"shop_id": "F00071", "mode": "in_store_logistics_combined"},
+            }
+        ],
         source_domain="transaction",
         contract=contract,
     ) == []
