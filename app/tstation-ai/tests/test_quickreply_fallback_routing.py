@@ -28699,7 +28699,7 @@ def test_general_cancel_fee_policy_event_does_not_append_raw_faq_summary() -> No
 
     assert "확인된 FAQ 기준으로는" not in response
     assert "별도의 취소 수수료는 없으며" not in response
-    assert "방문 예약만 취소하는 건이라면 별도의 취소 수수료가 없다고 안내드릴 수 있어요." in response
+    assert "예약만 잡아둔 상태라면 별도의 취소 수수료가 없다고 안내돼요." in response
     assert not response.endswith("...")
     assert event["data"]["metadata"]["faqSourceSummaryUsed"] is True
     assert event["data"]["metadata"]["faqSourceSummaryAppended"] is False
@@ -28908,19 +28908,20 @@ def test_support_faq_policy_context_resolves_visit_reservation_cancel() -> None:
 
     assert result == {
         "policy_group": "reservation_installation_policy",
-        "fact_type": "visit_reservation_cancel",
+        "fact_type": "mixed_cancel_fee_generalized",
     }
 
 
-def test_support_faq_policy_context_requests_clarification_for_mixed_cancel_scope() -> None:
+def test_support_faq_policy_context_resolves_mixed_cancel_scope_to_generalized_answer() -> None:
     result = resolve_support_faq_policy_context(
         "reservation_policy_guidance",
         "예약도 잡혀 있고 결제도 했는데 지금 취소하면 위약금 있어?",
     )
 
-    assert result is not None
-    assert result["needs_clarification"] is True
-    assert result["clarification_reason"] == "mixed_cancel_scope"
+    assert result == {
+        "policy_group": "reservation_installation_policy",
+        "fact_type": "mixed_cancel_fee_generalized",
+    }
 
 
 def test_support_faq_policy_reply_filters_wrong_categories_for_visit_cancel() -> None:
@@ -28951,12 +28952,12 @@ def test_support_faq_policy_reply_filters_wrong_categories_for_visit_cancel() ->
     )
 
     assert reply is not None
-    assert "별도의 취소 수수료가 없다고 안내드릴 수 있어요" in reply["assistant_response"]
-    assert "타이어 1개당 1만 원" not in reply["assistant_response"]
+    assert "예약만 잡아둔 상태라면 별도의 취소 수수료가 없다고 안내돼요." in reply["assistant_response"]
+    assert "타이어 개당 1만 원" in reply["assistant_response"]
     assert reply["metadata"]["policyGroup"] == "reservation_installation_policy"
-    assert reply["metadata"]["factType"] == "visit_reservation_cancel"
-    assert reply["metadata"]["filteredFaqCount"] == 1
-    assert reply["metadata"]["excludedFaqCount"] == 1
+    assert reply["metadata"]["factType"] == "mixed_cancel_fee_generalized"
+    assert reply["metadata"]["filteredFaqCount"] == 2
+    assert reply["metadata"]["excludedFaqCount"] == 0
     assert reply["metadata"]["factExtractionApplied"] is True
 
 
@@ -28983,10 +28984,133 @@ def test_support_faq_policy_reply_uses_safe_fallback_when_visit_cancel_has_no_al
 
     assert reply is not None
     assert reply["metadata"]["policyGroup"] == "reservation_installation_policy"
-    assert reply["metadata"]["factType"] == "visit_reservation_cancel"
+    assert reply["metadata"]["factType"] == "mixed_cancel_fee_generalized"
+    assert reply["metadata"]["safeFallbackUsed"] is False
+    assert "결제 완료 주문" in reply["assistant_response"] or "온라인몰에서 결제까지 완료된 주문" in reply["assistant_response"]
+
+
+def test_support_faq_policy_reply_builds_mixed_cancel_generalized_answer_when_allowed_candidates_exist() -> None:
+    tool_result = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "question": "방문 예약 취소",
+                    "answer": "방문 예약만 한 경우 고객센터 전화로 취소 가능하며 요청 시 바로 취소 처리됩니다.",
+                    "metadata": {"category_lv1": "배송/장착", "category_lv2": "장착"},
+                },
+                {
+                    "question": "결제 완료 주문 취소",
+                    "answer": "결제 완료 주문 취소는 배송 현황에 따라 타이어 개당 1만 원 취소 수수료가 발생할 수 있습니다.",
+                    "metadata": {"category_lv1": "주문/결제", "category_lv2": "주문"},
+                },
+                {
+                    "question": "카드 환불 시점",
+                    "answer": "결제 취소 후 카드 환불 반영은 보통 1~3영업일 정도 소요될 수 있습니다.",
+                    "metadata": {"category_lv1": "주문/결제", "category_lv2": "결제"},
+                },
+            ]
+        },
+    }
+
+    reply = build_support_faq_policy_reply(
+        intent="reservation_policy_guidance",
+        user_text="오늘 오후 2시 예약인데 지금 취소하면 위약금 있어?",
+        tool_result=tool_result,
+    )
+
+    assert reply is not None
+    assert reply["metadata"]["policyGroup"] == "reservation_installation_policy"
+    assert reply["metadata"]["factType"] == "mixed_cancel_fee_generalized"
+    assert reply["metadata"]["generalizedAnswerUsed"] is True
+    assert reply["metadata"]["clarificationNeeded"] is False
+    assert reply["metadata"]["safeFallbackUsed"] is False
+    response = reply["assistant_response"]
+    assert "예약만 잡아둔 상태라면 취소는 고객센터를 통해 처리할 수 있고" in response
+    assert "온라인몰에서 결제까지 완료된 주문이라면 배송 현황에 따라 취소 수수료가 발생할 수 있고" in response
+    assert "카드 환불 반영은 보통 1~3영업일" in response
+    assert reply["metadata"]["facts"]["visit_reservation_cancel_method"] == "고객센터 전화"
+    assert reply["metadata"]["facts"]["online_order_cancel_fee_amount"] == "타이어 개당 1만 원"
+    assert reply["metadata"]["facts"]["card_refund_timing"] == "1~3영업일"
+
+
+def test_support_faq_policy_reply_builds_visit_only_answer_from_mixed_cancel_candidates() -> None:
+    tool_result = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "question": "방문 예약 취소",
+                    "answer": "방문 예약만 한 경우 고객센터 전화로 취소 가능하며 요청 시 바로 취소 처리됩니다.",
+                    "metadata": {"category_lv1": "배송/장착", "category_lv2": "장착"},
+                }
+            ]
+        },
+    }
+
+    reply = build_support_faq_policy_reply(
+        intent="reservation_policy_guidance",
+        user_text="예약 취소하면 비용 있어?",
+        tool_result=tool_result,
+    )
+
+    assert reply is not None
+    assert reply["metadata"]["factType"] == "mixed_cancel_fee_generalized"
+    assert "예약만 잡아둔 상태라면 취소는 고객센터를 통해 처리할 수 있고" in reply["assistant_response"]
+    assert "타이어 개당 1만 원" not in reply["assistant_response"]
+
+
+def test_support_faq_policy_reply_builds_order_only_answer_from_mixed_cancel_candidates() -> None:
+    tool_result = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "question": "결제 완료 주문 취소",
+                    "answer": "결제 완료 주문 취소는 배송 현황에 따라 타이어 개당 1만 원 취소 수수료가 발생할 수 있습니다.",
+                    "metadata": {"category_lv1": "주문/결제", "category_lv2": "주문"},
+                }
+            ]
+        },
+    }
+
+    reply = build_support_faq_policy_reply(
+        intent="reservation_policy_guidance",
+        user_text="당일 예약 취소하면 수수료 나와?",
+        tool_result=tool_result,
+    )
+
+    assert reply is not None
+    assert reply["metadata"]["factType"] == "mixed_cancel_fee_generalized"
+    assert "타이어 개당 1만 원" in reply["assistant_response"]
+    assert "별도의 취소 수수료가 없다고" not in reply["assistant_response"]
+
+
+def test_support_faq_policy_reply_uses_safe_fallback_when_mixed_cancel_has_no_allowed_candidates() -> None:
+    tool_result = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "question": "프로모션 사은품",
+                    "answer": "이벤트 사은품은 조건에 따라 달라집니다.",
+                    "metadata": {"category_lv1": "혜택/프로모션", "category_lv2": "프로모션"},
+                }
+            ]
+        },
+    }
+
+    reply = build_support_faq_policy_reply(
+        intent="reservation_policy_guidance",
+        user_text="오늘 오후 2시 예약인데 지금 취소하면 위약금 있어?",
+        tool_result=tool_result,
+    )
+
+    assert reply is not None
+    assert reply["metadata"]["policyGroup"] == "reservation_installation_policy"
+    assert reply["metadata"]["factType"] == "mixed_cancel_fee_generalized"
     assert reply["metadata"]["safeFallbackUsed"] is True
-    assert "별도의 취소 수수료" not in reply["assistant_response"]
-    assert "예약/장착 관련 비용은 예약 유형과 진행 상태에 따라 달라질 수 있어요." in reply["assistant_response"]
+    assert "주문/예약 내역이나 고객센터 안내를 먼저 확인해 주세요." in reply["assistant_response"]
 
 
 def test_support_faq_policy_reply_builds_card_cancel_timing_from_allowed_category() -> None:
@@ -29102,6 +29226,30 @@ def test_support_faq_policy_event_uses_bucketed_store_change_reply() -> None:
     assert event["data"]["metadata"]["factExtractionApplied"] is True
     assert "방문 날짜를 유지한 채 지점 변경이 가능한 경우도 있지만" in event["data"]["assistantResponse"]
     assert "예약 날짜를 유지한 채 방문 지점 변경이 가능한 경우도 있으나" not in event["data"]["assistantResponse"]
+
+
+def test_support_faq_policy_event_uses_order_history_cta_for_reservation_policy() -> None:
+    event = _build_support_faq_policy_event(
+        "reservation_policy_guidance",
+        "오늘 오후 2시 예약인데 지금 취소하면 위약금 있어?",
+        tool_result={
+            "status": "success",
+            "data": {
+                "items": [
+                    {
+                        "answer": "방문 예약만 한 경우 고객센터 전화로 취소 가능하며 요청 시 바로 취소 처리됩니다.",
+                        "metadata": {"category_lv1": "배송/장착", "category_lv2": "장착"},
+                    }
+                ]
+            },
+        },
+    )
+
+    assert event is not None
+    quick_replies = event["data"]["quickReplies"]
+    assert _labels(quick_replies) == ["주문/예약 내역 보기", "1:1 문의하기"]
+    assert quick_replies[0]["cta_action"] == "open_order_history"
+    assert quick_replies[0]["expected_contract_intent"] == "get_my_reservations"
 
 
 def test_support_faq_policy_event_for_assurance_document_lost_sets_policy_group_and_fact_type() -> None:

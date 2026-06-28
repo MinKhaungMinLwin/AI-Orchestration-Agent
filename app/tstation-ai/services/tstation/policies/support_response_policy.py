@@ -38,6 +38,10 @@ _WORK_STARTED_RE = re.compile(
     r"작업\s*시작|작업\s*중|기존\s*타이어|다\s*뺐|탈거|분리|장착\s*하려고|공임비",
     re.IGNORECASE,
 )
+_ONLINE_ORDER_CANCEL_RE = re.compile(
+    r"결제\s*완료\s*주문|온라인몰|주문\s*취소|취소\s*수수료|타이어\s*(?:개당|1개당)|개당\s*1만\s*원|배송\s*(?:현황|상태|진행)",
+    re.IGNORECASE,
+)
 _PAYMENT_ERROR_RE = re.compile(
     r"결제\s*(?:오류|에러|실패|안\s*돼|안\s*되|안\s*열)|결제창|결제\s*화면|승인\s*실패|장착일\s*선택란",
     re.IGNORECASE,
@@ -191,23 +195,9 @@ def resolve_support_faq_policy_context(intent: str, user_text: str) -> dict[str,
         if has_store_change:
             return {"policy_group": _RESERVATION_INSTALLATION_POLICY, "fact_type": "store_change"}
         if has_cancel and has_reservation and has_order:
-            return {
-                "policy_group": None,
-                "fact_type": None,
-                "needs_clarification": True,
-                "clarification_reason": "mixed_cancel_scope",
-                "assistant_response": (
-                    "방문 예약만 취소하는 건인지, 결제 완료 주문 취소인지, 장착 작업이 이미 시작된 건인지 "
-                    "알려주시면 정확히 안내드릴게요."
-                ),
-                "quick_replies": [
-                    {"label": "방문 예약 취소", "domain": "SUPPORT"},
-                    {"label": "결제 완료 주문 취소", "domain": "SUPPORT"},
-                    {"label": "작업 시작 후 취소", "domain": "SUPPORT"},
-                ],
-            }
+            return {"policy_group": _RESERVATION_INSTALLATION_POLICY, "fact_type": "mixed_cancel_fee_generalized"}
         if has_cancel and has_reservation and not has_order:
-            return {"policy_group": _RESERVATION_INSTALLATION_POLICY, "fact_type": "visit_reservation_cancel"}
+            return {"policy_group": _RESERVATION_INSTALLATION_POLICY, "fact_type": "mixed_cancel_fee_generalized"}
         if has_cancel and has_order and not has_reservation:
             return {"policy_group": _PURCHASE_ORDER_POLICY, "fact_type": "online_order_cancel_fee"}
     if _WRONG_ITEM_RE.search(text):
@@ -219,12 +209,18 @@ def _support_faq_candidate_matches_fact_type(fact_type: str, candidate: Mapping[
     text = _support_faq_candidate_text(candidate)
     if fact_type == "visit_reservation_cancel":
         return bool(_RESERVATION_RE.search(text) and (_CANCEL_RE.search(text) or _FEE_RE.search(text)))
+    if fact_type == "mixed_cancel_fee_generalized":
+        return bool(
+            (_RESERVATION_RE.search(text) and (_CANCEL_RE.search(text) or _FEE_RE.search(text)))
+            or (_ORDER_RE.search(text) and (_CANCEL_RE.search(text) or _FEE_RE.search(text)))
+            or re.search(r"카드|승인\s*취소|환불\s*반영|영업일", text, re.IGNORECASE)
+        )
     if fact_type == "store_change":
         return bool(_STORE_CHANGE_RE.search(text) and _CHANGE_RE.search(text))
     if fact_type == "work_started_cancel":
         return bool(_WORK_STARTED_RE.search(text) and (_CANCEL_RE.search(text) or _FEE_RE.search(text)))
     if fact_type == "online_order_cancel_fee":
-        return bool(_ORDER_RE.search(text) and (_CANCEL_RE.search(text) or _FEE_RE.search(text)))
+        return bool(_ONLINE_ORDER_CANCEL_RE.search(text))
     if fact_type == "card_cancel_timing":
         return bool(re.search(r"카드|승인\s*취소|환불\s*반영|영업일", text, re.IGNORECASE))
     if fact_type == "payment_error_troubleshooting":
@@ -253,8 +249,12 @@ def _filter_support_faq_candidates(
     fact_type: str,
     tool_result: Mapping[str, Any] | None,
 ) -> tuple[list[Mapping[str, Any]], list[Mapping[str, Any]]]:
-    allowed_names = _ALLOWED_CATEGORY_NAMES_BY_POLICY_GROUP.get(policy_group, ())
-    allowed_codes = _ALLOWED_CATEGORY_CODES_BY_POLICY_GROUP.get(policy_group, ())
+    if policy_group == _RESERVATION_INSTALLATION_POLICY and fact_type == "mixed_cancel_fee_generalized":
+        allowed_names = (("배송/장착", "장착"), ("주문/결제", "주문"), ("주문/결제", "결제"))
+        allowed_codes = (("C01", "C0106"), ("C01", "C0104"), ("C01", "C0105"))
+    else:
+        allowed_names = _ALLOWED_CATEGORY_NAMES_BY_POLICY_GROUP.get(policy_group, ())
+        allowed_codes = _ALLOWED_CATEGORY_CODES_BY_POLICY_GROUP.get(policy_group, ())
     included: list[Mapping[str, Any]] = []
     excluded: list[Mapping[str, Any]] = []
     for candidate in _support_faq_candidates(tool_result):
@@ -287,6 +287,42 @@ def _extract_support_faq_policy_facts(
             else "depends"
         )
         facts["cancel_method"] = "reservation_only"
+    elif policy_group == _RESERVATION_INSTALLATION_POLICY and fact_type == "mixed_cancel_fee_generalized":
+        reservation_text = "\n".join(
+            _support_faq_candidate_text(candidate)
+            for candidate in candidates
+            if _support_faq_candidate_matches_fact_type("visit_reservation_cancel", candidate)
+        )
+        order_text = "\n".join(
+            _support_faq_candidate_text(candidate)
+            for candidate in candidates
+            if _support_faq_candidate_matches_fact_type("online_order_cancel_fee", candidate)
+        )
+        card_text = "\n".join(
+            _support_faq_candidate_text(candidate)
+            for candidate in candidates
+            if _support_faq_candidate_matches_fact_type("card_cancel_timing", candidate)
+        )
+        facts["visitReservationCancel"] = bool(reservation_text)
+        facts["visit_reservation_fee_condition"] = (
+            "none"
+            if re.search(r"별도(?:의)?\s*(?:취소\s*)?(?:수수료|위약금).{0,8}(없|않)", reservation_text, re.IGNORECASE)
+            else "depends"
+        )
+        if re.search(r"고객센터|전화", reservation_text, re.IGNORECASE):
+            facts["visit_reservation_cancel_method"] = "고객센터 전화"
+        if re.search(r"바로\s*취소\s*처리|즉시\s*취소", reservation_text, re.IGNORECASE):
+            facts["visit_reservation_cancel_effect"] = "요청 시 바로 취소 처리"
+        order_amount_match = re.search(r"(?:타이어\s*(?:개당|1개당)|개당)\s*1만\s*원", order_text, re.IGNORECASE)
+        if order_amount_match:
+            facts["online_order_cancel_fee_amount"] = "타이어 개당 1만 원"
+            facts["onlineOrderCancelFee"] = "타이어 개당 1만 원 가능"
+        if re.search(r"배송\s*(?:현황|상태)|배송\s*진행", order_text, re.IGNORECASE):
+            facts["online_order_cancel_fee_condition"] = "배송 현황에 따라"
+        card_timing_match = re.search(r"([0-9]+(?:\s*[~-]\s*[0-9]+)?\s*영업일)", card_text, re.IGNORECASE)
+        if card_timing_match:
+            facts["card_refund_timing"] = card_timing_match.group(1).replace(" ", "")
+            facts["cardRefundTiming"] = facts["card_refund_timing"]
     elif policy_group == _PURCHASE_ORDER_POLICY and fact_type == "online_order_cancel_fee":
         amount_match = re.search(r"(?:타이어\s*1개당|1본당|개당)\s*1만\s*원", combined, re.IGNORECASE)
         facts["fee_condition"] = "per_item_fee" if amount_match else "depends"
@@ -358,8 +394,18 @@ def _support_faq_reply_ctas(policy_group: str, fact_type: str) -> list[dict[str,
             {"label": "1:1 문의하기", "domain": "SUPPORT"},
             {"label": "고객센터 안내", "domain": "SUPPORT"},
         ]
+    if policy_group == _RESERVATION_INSTALLATION_POLICY:
+        return [
+            {
+                "label": "주문/예약 내역 보기",
+                "domain": "TRANSACTION",
+                "cta_action": "open_order_history",
+                "expected_contract_intent": "get_my_reservations",
+            },
+            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+        ]
     return [
-        {"label": "예약 상세 확인", "domain": "TRANSACTION"},
+        {"label": "주문/예약 내역 보기", "domain": "TRANSACTION"},
         {"label": "1:1 문의하기", "domain": "SUPPORT"},
     ]
 
@@ -390,6 +436,60 @@ def _build_support_faq_policy_reply(
                 "예약 취소만으로 끝나는 건인지부터 먼저 확인하시는 게 안전해요.\n"
                 "실제 취소 전에는 예약 상세 안내를 먼저 확인해 주세요."
             )
+    elif policy_group == _RESERVATION_INSTALLATION_POLICY and fact_type == "mixed_cancel_fee_generalized":
+        has_visit = bool(
+            facts.get("visit_reservation_cancel_method")
+            or facts.get("visit_reservation_cancel_effect")
+            or facts.get("visitReservationCancel")
+        )
+        has_order = bool(
+            facts.get("online_order_cancel_fee_amount")
+            or facts.get("online_order_cancel_fee_condition")
+            or facts.get("onlineOrderCancelFee")
+        )
+        has_card = bool(facts.get("card_refund_timing") or facts.get("cardRefundTiming"))
+        if not (has_visit or has_order or has_card):
+            response = (
+                "예약/장착 관련 비용은 예약 유형과 진행 상태에 따라 달라질 수 있어요.\n"
+                "방문 예약만 취소하는 건인지, 온라인몰에서 결제까지 완료된 주문인지에 따라 결론이 달라질 수 있어요.\n"
+                "실제 취소 전에는 주문/예약 내역이나 고객센터 안내를 먼저 확인해 주세요."
+            )
+        else:
+            lines: list[str] = []
+            if has_visit:
+                if facts.get("visit_reservation_fee_condition") == "none" and facts.get("visit_reservation_cancel_method") != "고객센터 전화":
+                    sentence = "예약만 잡아둔 상태라면 별도의 취소 수수료가 없다고 안내돼요."
+                else:
+                    sentence = "예약만 잡아둔 상태라면 취소는"
+                if facts.get("visit_reservation_cancel_method") == "고객센터 전화":
+                    sentence += " 고객센터를 통해 처리할 수 있고,"
+                elif not sentence.endswith("안내돼요."):
+                    sentence += " 고객센터 안내 기준으로 처리 여부를 확인할 수 있고,"
+                if facts.get("visit_reservation_cancel_effect") == "요청 시 바로 취소 처리":
+                    sentence += " 요청 시 바로 취소 처리되는 것으로 안내돼요."
+                elif facts.get("visit_reservation_fee_condition") == "none" and not has_order and not has_card:
+                    sentence = "방문 예약만 취소하는 건이라면 별도의 취소 수수료가 없다고 안내드릴 수 있어요."
+                elif not sentence.endswith("안내돼요."):
+                    sentence += " 요청 즉시 처리 여부는 안내 기준에 따라 달라질 수 있어요."
+                lines.append(sentence)
+            if has_order:
+                condition_text = str(facts.get("online_order_cancel_fee_condition") or "배송 진행 상태에 따라").strip()
+                amount_text = str(facts.get("online_order_cancel_fee_amount") or "").strip()
+                if amount_text:
+                    lines.append(
+                        "다만 온라인몰에서 결제까지 완료된 주문이라면 "
+                        f"{condition_text} 취소 수수료가 발생할 수 있고, FAQ 기준으로는 {amount_text} 안내돼요."
+                    )
+                else:
+                    lines.append(
+                        "다만 온라인몰에서 결제까지 완료된 주문이라면 "
+                        f"{condition_text} 취소 수수료가 발생할 수 있다고 안내돼요."
+                    )
+            if has_card:
+                lines.append(
+                    f"결제 취소가 완료된 뒤 카드 환불 반영은 보통 {facts.get('card_refund_timing')} 정도 걸릴 수 있어요."
+                )
+            response = "\n\n".join(lines)
     elif policy_group == _RESERVATION_INSTALLATION_POLICY and fact_type == "store_change":
         allowed_text = "방문 지점 변경 가능 여부는 예약 정책과 현재 예약 상태에 따라 달라질 수 있어요."
         if facts.get("store_change_allowed") == "allowed":
@@ -531,6 +631,9 @@ def build_support_faq_policy_reply(
             "policyGroup": policy_group,
             "factType": fact_type,
             "clarificationNeeded": False,
+            "generalizedAnswerUsed": bool(
+                policy_group == _RESERVATION_INSTALLATION_POLICY and fact_type == "mixed_cancel_fee_generalized"
+            ),
             "safeFallbackUsed": safe_fallback_used,
             "filteredFaqCount": len(filtered),
             "excludedFaqCount": len(excluded_candidates),
