@@ -133,6 +133,25 @@ def _decide_stock_store_search(*, text: str, slots: dict[str, Any]) -> ResponseD
     has_location = bool(slots.get("region") or slots.get("place") or slots.get("lat") or slots.get("lng"))
     has_quantity = bool(slots.get("quantity") or slots.get("ord_qty"))
     stock_check_mode = str(slots.get("stock_check_mode") or "inventory_only")
+    schedule_mode = str(slots.get("schedule_mode") or slots.get("inventory_mode") or "").strip()
+
+    if (
+        stock_check_mode == "preview"
+        and slots.get("shop_id")
+        and schedule_mode
+        and slots.get("source_tool") == "transaction_store_preview_tool"
+        and has_goods
+        and has_size
+        and has_quantity
+    ):
+        return _decision(
+            response_shape_key="reservation_slots",
+            response_shape=ResponseShape.DATE_PICK,
+            template=TemplateName.DATE_PICK,
+            forbidden_behaviors=("hide_available_stock", "empty_select_only_response", "preorder"),
+            assistant_guidance="선택한 매장 후보의 예약 가능 일정을 바로 datepick으로 이어간다.",
+            metadata={"stock_check_mode": "preview", "schedule_mode": schedule_mode},
+        )
 
     required_slots: list[str] = []
     if not has_product:

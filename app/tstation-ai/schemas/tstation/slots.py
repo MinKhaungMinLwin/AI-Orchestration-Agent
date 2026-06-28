@@ -139,6 +139,10 @@ class ConversationSlots(BaseModel):
     pending_vehicle_lookup_car_no: Optional[str] = None  # unmatched plate awaiting owner name
     region: Optional[str] = None         # e.g. "분당" — region/area for store_finder goal
     availability_intent: Optional[AvailabilityIntent] = None  # e.g. "today_install"
+    stock_check_mode: Optional[str] = None
+    schedule_mode: Optional[str] = None
+    schedule_tier: Optional[str] = None
+    inventory_mode: Optional[str] = None
     requested_cal_day: Optional[str] = None  # YYYYMMDD requested install/reservation date
     rsv_hour: Optional[str] = None       # HH from datepick selection for quick_order_tool
     # 결제금액(원). `get_final_price_tool` 결과 + `ord_qty` 로 산출되거나
@@ -148,6 +152,7 @@ class ConversationSlots(BaseModel):
     payment_amount: Optional[int] = None
     price_basis: Optional[str] = None
     price_source_tool: Optional[str] = None
+    source_tool: Optional[str] = None
     # Free-form user store-selection criteria captured on the originating turn
     # (e.g. "친절한 직원, 얼라인먼트, 워셔액 무료"). Sticky across slot-fill
     # turns so the agent can re-apply the criteria once the missing slot

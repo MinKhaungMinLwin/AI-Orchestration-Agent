@@ -170,12 +170,16 @@ _UI_ACTION_SLOT_KEYS = (
     "region",
     "shop_id",
     "shop_name",
+    "source_tool",
     "availability_intent",
     "requested_cal_day",
     "rsv_hour",
     "pending_intent",
     "goal_type",
     "stock_check_mode",
+    "schedule_mode",
+    "schedule_tier",
+    "inventory_mode",
     "car_no",
     "car_lnc_cd",
     "mbr_car_reg_seq",
@@ -1056,8 +1060,12 @@ def _ui_action_slot_patch(raw_action: Mapping[str, Any]) -> dict[str, Any]:
         "availability_intent": ("availability_intent", "availabilityIntent"),
         "requested_cal_day": ("requested_cal_day", "requestedCalDay"),
         "stock_check_mode": ("stock_check_mode", "stockCheckMode"),
+        "schedule_mode": ("schedule_mode", "scheduleMode"),
+        "schedule_tier": ("schedule_tier", "scheduleTier"),
+        "inventory_mode": ("inventory_mode", "inventoryMode"),
         "shop_id": ("shop_id", "shopId"),
         "shop_name": ("shop_name", "shopName"),
+        "source_tool": ("source_tool", "sourceTool"),
         "goods_no": ("goods_no", "goodsNo", "goodsId"),
         "tire_size": ("tire_size", "tireSize"),
         "ord_qty": ("ord_qty", "ordQty", "quantity"),
@@ -1485,7 +1493,18 @@ def _minimal_ui_action_slot_values(action_type: str, slot_values: Mapping[str, A
     keys_by_action = {
         "select_product": ("goods_no", "tire_size", "tire_model", "product_name"),
         "select_quantity": ("ord_qty",),
-        "select_store": ("shop_id", "shop_name"),
+        "select_store": (
+            "shop_id",
+            "shop_name",
+            "goods_no",
+            "tire_size",
+            "ord_qty",
+            "source_tool",
+            "stock_check_mode",
+            "schedule_mode",
+            "schedule_tier",
+            "inventory_mode",
+        ),
         "select_schedule": ("requested_cal_day", "rsv_hour"),
     }
     allowed_keys = keys_by_action.get(str(action_type or "").strip())
@@ -2703,6 +2722,12 @@ def preview_location_slot_values_from_selection(selection: Mapping[str, Any] | N
     schedule_mode = str(meta.get("scheduleMode") or meta.get("schedule_mode") or "").strip()
     if schedule_mode:
         values["schedule_mode"] = schedule_mode
+    schedule_tier = str(meta.get("scheduleTier") or meta.get("schedule_tier") or "").strip()
+    if schedule_tier:
+        values["schedule_tier"] = schedule_tier
+    inventory_mode = str(meta.get("inventoryMode") or meta.get("inventory_mode") or "").strip()
+    if inventory_mode:
+        values["inventory_mode"] = inventory_mode
     slots = meta.get("slots")
     if isinstance(slots, list):
         normalized_slots = [dict(slot) for slot in slots if isinstance(slot, Mapping)]
@@ -3876,7 +3901,7 @@ def selected_order_context_from_preview_values(preview_values: Mapping[str, Any]
         value = preview_values.get(key_name)
         if value not in (None, "", [], {}):
             context[key_name] = value
-    for key_name in ("schedule_mode", "stock_check_mode"):
+    for key_name in ("schedule_mode", "stock_check_mode", "schedule_tier", "inventory_mode"):
         value = preview_values.get(key_name)
         if value not in (None, "", [], {}):
             context[key_name] = value

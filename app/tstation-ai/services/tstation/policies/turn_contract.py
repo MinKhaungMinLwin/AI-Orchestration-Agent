@@ -530,6 +530,12 @@ def build_turn_contract(
             known_slots["recommendation_expected_tool_args"] = {
                 key: value for key, value in expected_tool_args.items() if value not in (None, "")
             }
+        schedule_mode = str(tool_plan_metadata.get("schedule_mode") or "").strip()
+        stock_check_mode = str(tool_plan_metadata.get("stock_check_mode") or "").strip()
+        if schedule_mode and not known_slots.get("schedule_mode"):
+            known_slots["schedule_mode"] = schedule_mode
+        if stock_check_mode and not known_slots.get("stock_check_mode"):
+            known_slots["stock_check_mode"] = stock_check_mode
     if policy_intent and policy_intent != "none":
         known_slots["policy_intent"] = policy_intent
     response_metadata = response_decision.metadata if response_decision is not None else {}
@@ -539,6 +545,7 @@ def build_turn_contract(
         comparison_followup_intent = str(response_metadata.get("comparison_followup_intent") or "")
         oe_replacement_type = str(response_metadata.get("oe_replacement_type") or "")
         stock_check_mode = str(response_metadata.get("stock_check_mode") or "")
+        schedule_mode = str(response_metadata.get("schedule_mode") or "").strip()
         if requested_product_attribute and not known_slots.get("requested_product_attribute"):
             known_slots["requested_product_attribute"] = requested_product_attribute
         if compare_metric and not known_slots.get("compare_metric"):
@@ -549,6 +556,8 @@ def build_turn_contract(
             known_slots["oe_replacement_type"] = oe_replacement_type
         if stock_check_mode and not known_slots.get("stock_check_mode"):
             known_slots["stock_check_mode"] = stock_check_mode
+        if schedule_mode and not known_slots.get("schedule_mode"):
+            known_slots["schedule_mode"] = schedule_mode
     flow_id = None
     flow_step = None
     if isinstance(tool_plan_metadata, Mapping):
@@ -690,6 +699,23 @@ def build_turn_contract(
     if planner_intent == "quick_order_execute" and _has_quick_order_execute_slots(known_slots):
         allowed_tools = _merge_tuple(allowed_tools, ("quick_order_tool",))
         forbidden_tools = tuple(tool for tool in forbidden_tools if tool != "quick_order_tool")
+    if _selected_store_schedule_continuation_matches(
+        intent=intent,
+        known_slots=known_slots,
+        resume_source=resume_source,
+    ):
+        allowed_tools = ("get_store_schedule_tool",)
+        forbidden_tools = _merge_tuple(
+            tuple(tool for tool in forbidden_tools if tool != "get_store_schedule_tool"),
+            (
+                "transaction_store_preview_tool",
+                "get_store_inventory_tool",
+                "get_logistics_inventory_tool",
+                "get_store_list_tool",
+                "get_multi_store_schedule_tool",
+                "quick_order_tool",
+            ),
+        )
     payment_error_overmatched_installment = (
         policy_intent == "payment_error_troubleshooting" and _CARD_INSTALLMENT_LOOKUP_RE.search(user_text or "") is not None
     )
@@ -1891,6 +1917,12 @@ def _effective_forbidden_behaviors(
             for behavior in behaviors
             if behavior not in {"datepick_for_unavailable_stock", "datepick_for_pure_inventory_flow"}
         )
+    if _is_selected_store_schedule_continuation_contract(contract):
+        return tuple(
+            behavior
+            for behavior in behaviors
+            if behavior not in {"datepick_before_store_selection", "preorder"}
+        )
     if not _is_purchase_bound_preview_event(event, contract):
         return behaviors
     return tuple(
@@ -1988,6 +2020,46 @@ def _is_purchase_bound_preview_event(event: Mapping[str, Any], contract: TurnCon
     metadata = data.get("metadata") if isinstance(data, Mapping) else None
     source_tool = str(metadata.get("sourceTool") or metadata.get("source_tool") or "") if isinstance(metadata, Mapping) else ""
     return "transaction_store_preview_tool" in called_tools or source_tool == "transaction_store_preview_tool"
+
+
+def _selected_store_schedule_continuation_matches(
+    *,
+    intent: str,
+    known_slots: Mapping[str, Any],
+    resume_source: str,
+) -> bool:
+    if str(intent or "") != "stock_store_search":
+        return False
+    if str(resume_source or "") not in {
+        "expected_slot_fill:store",
+        "router_slot_fill:store",
+        "validated_ui_action_slot_fill",
+    }:
+        return False
+    schedule_mode = str(
+        known_slots.get("schedule_mode")
+        or known_slots.get("inventory_mode")
+        or ""
+    ).strip()
+    return bool(
+        known_slots.get("shop_id")
+        and schedule_mode
+        and known_slots.get("goods_no")
+        and known_slots.get("tire_size")
+        and (known_slots.get("ord_qty") or known_slots.get("quantity"))
+        and str(known_slots.get("stock_check_mode") or "") == "preview"
+        and str(known_slots.get("source_tool") or "") == "transaction_store_preview_tool"
+    )
+
+
+def _is_selected_store_schedule_continuation_contract(contract: TurnContract | None) -> bool:
+    if contract is None:
+        return False
+    return _selected_store_schedule_continuation_matches(
+        intent=str(contract.intent or ""),
+        known_slots=contract.known_slots or {},
+        resume_source=str(contract.resume_source or ""),
+    )
 
 
 _PURCHASE_OR_BOOKING_PROMPT_RE = re.compile(
@@ -2193,6 +2265,12 @@ def response_contract_violations(
     )
     if store_service_search_violation is not None:
         violations.append(store_service_search_violation)
+    selected_store_schedule_violation = _selected_store_schedule_contract_violation(
+        tool_inputs=tool_inputs,
+        contract=contract,
+    )
+    if selected_store_schedule_violation is not None:
+        violations.append(selected_store_schedule_violation)
     compare_violation = _comparison_contract_violation(
         assistant_response_text=assistant_response_text,
         assistant_response_source=assistant_response_source,
@@ -2789,6 +2867,46 @@ def _tool_contract_violation(
         "called_tools": unexpected,
         "allowed_tools": list(contract.allowed_tools),
     }
+
+
+def _selected_store_schedule_contract_violation(
+    *,
+    tool_inputs: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...] | None,
+    contract: TurnContract | None,
+) -> dict[str, Any] | None:
+    if contract is None or not _is_selected_store_schedule_continuation_contract(contract) or not tool_inputs:
+        return None
+    known_slots = contract.known_slots or {}
+    expected_shop_id = str(known_slots.get("shop_id") or "").strip()
+    expected_mode = str(
+        known_slots.get("schedule_mode")
+        or known_slots.get("inventory_mode")
+        or ""
+    ).strip()
+    for tool_input in tool_inputs:
+        tool_name = str(tool_input.get("tool") or "")
+        if tool_name != "get_store_schedule_tool":
+            continue
+        args = tool_input.get("args") if isinstance(tool_input.get("args"), Mapping) else tool_input.get("input")
+        if not isinstance(args, Mapping):
+            continue
+        actual_shop_id = str(args.get("shop_id") or "").strip()
+        actual_mode = str(args.get("mode") or "").strip()
+        if actual_shop_id != expected_shop_id:
+            return {
+                "type": "selected_store_schedule_shop_mismatch",
+                "expected_shop_id": expected_shop_id,
+                "actual_shop_id": actual_shop_id,
+                "severity": "error",
+            }
+        if actual_mode != expected_mode:
+            return {
+                "type": "selected_store_schedule_mode_mismatch",
+                "expected_mode": expected_mode,
+                "actual_mode": actual_mode,
+                "severity": "error",
+            }
+    return None
 
 
 def _normalize_service_code_values(value: Any) -> set[str]:
@@ -3602,6 +3720,7 @@ def _stock_contract_violation(
         and (contract.known_slots.get("ord_qty") or contract.known_slots.get("quantity"))
         and "get_store_schedule_tool" in called_tools
         and "transaction_store_preview_tool" not in called_tools
+        and not _is_selected_store_schedule_continuation_contract(contract)
     ):
         return {
             "type": "datepick_without_product_conditioned_preview_tool",

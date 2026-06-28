@@ -1547,6 +1547,43 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
             "shop_name",
         )
         stock_check_mode = str(frame.known_slots.get("stock_check_mode") or frame.entities.get("stock_check_mode") or "")
+        selected_store_schedule_mode = str(
+            frame.known_slots.get("schedule_mode")
+            or frame.known_slots.get("inventory_mode")
+            or ""
+        ).strip()
+        if (
+            frame.known_slots.get("shop_id")
+            and selected_store_schedule_mode
+            and str(frame.known_slots.get("source_tool") or "") == "transaction_store_preview_tool"
+            and frame.known_slots.get("goods_no")
+            and frame.known_slots.get("tire_size")
+            and (frame.known_slots.get("ord_qty") or frame.known_slots.get("quantity"))
+            and stock_check_mode == "preview"
+        ):
+            return ToolPlan(
+                allowed_tools=("get_store_schedule_tool",),
+                preferred_tool="get_store_schedule_tool",
+                tool_args_patch={
+                    "shop_id": str(frame.known_slots["shop_id"]),
+                    "mode": selected_store_schedule_mode,
+                },
+                forbidden_tools=(
+                    "transaction_store_preview_tool",
+                    "get_store_inventory_tool",
+                    "get_logistics_inventory_tool",
+                    "get_store_list_tool",
+                    "get_multi_store_schedule_tool",
+                    "quick_order_tool",
+                ),
+                required_slots=action_required_slots,
+                metadata={
+                    "response_intent": "stock_store_search",
+                    "stock_check_mode": "preview",
+                    "schedule_mode": selected_store_schedule_mode,
+                    "action": action,
+                },
+            )
         if frame.entities.get("today_requested"):
             args["today_only"] = True
         if stock_check_mode == "inventory_only" and frame.sub_intent == "stock":

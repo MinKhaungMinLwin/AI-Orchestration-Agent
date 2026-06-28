@@ -776,6 +776,8 @@ def _preview_location_metadata(
     if schedule_mode:
         metadata["scheduleMode"] = schedule_mode
         metadata["schedule_mode"] = schedule_mode
+        metadata["inventoryMode"] = schedule_mode
+        metadata["inventory_mode"] = schedule_mode
     if schedule_tier:
         metadata["scheduleTier"] = schedule_tier
         metadata["schedule_tier"] = schedule_tier
