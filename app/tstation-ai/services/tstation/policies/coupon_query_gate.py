@@ -94,6 +94,21 @@ _COUPON_USAGE_POLICY_RE = re.compile(
 )
 _COUPON_STACKING_HOWTO_RE = re.compile(r"쿠폰.{0,24}(?:중복|같이|함께|동시)|(?:중복|같이|함께|동시).{0,24}쿠폰", re.IGNORECASE)
 _OWNED_COUPON_LOOKUP_RE = re.compile(r"(?:내|나의|보유|가지고\s*있는|있는).{0,16}쿠폰|쿠폰.{0,16}(?:뭐\s*있|보여|조회|확인)", re.IGNORECASE)
+# Extracts the qualifier immediately before "쿠폰" to identify a specific coupon.
+# "21% 상품할인쿠폰 오프라인?" → "상품할인" / "패밀리 쿠폰 오프라인?" → "패밀리"
+# Generic demonstratives (이/그/저/해당 etc.) are excluded — they don't identify a coupon.
+_COUPON_QUALIFIER_RE = re.compile(r"(\S+)\s*쿠폰", re.IGNORECASE)
+_GENERIC_COUPON_QUALIFIERS = {"이", "그", "저", "해당", "이런", "그런", "어떤", "한", "이번", "본", "특정", "내", "나의"}
+
+
+def _extract_specific_coupon_hint(text: str) -> str | None:
+    """Return the qualifier before '쿠폰' if it identifies a specific coupon, else None."""
+    m = _COUPON_QUALIFIER_RE.search(text)
+    if m:
+        qualifier = m.group(1).strip()
+        if qualifier and qualifier not in _GENERIC_COUPON_QUALIFIERS:
+            return qualifier
+    return None
 _PRODUCT_COUPON_ELIGIBILITY_RE = re.compile(
     r"(?:벤투스|ventus|다이나프로|dynapro|키너지|kinergy|아이온|ion|옵티모|optimo|미쉐린|michelin|cc2)"
     r".{0,30}(?:쿠폰|할인권).{0,24}(?:있|돼|되|쓸|사용|적용)|"
@@ -176,6 +191,15 @@ def decide_coupon_query_gate(
             reason="Deterministic coupon registration/input policy query.",
         )
     if _COUPON_USAGE_POLICY_RE.search(text) and not _PARTNER_MEMBER_COUPON_POLICY_RE.search(text):
+        specific_hint = _extract_specific_coupon_hint(text)
+        if specific_hint:
+            return CouponQueryGateDecision(
+                intent=CouponQueryIntent.OWNED_COUPON_LOOKUP,
+                confidence=0.88,
+                product_name=None,
+                coupon_hint=specific_hint,
+                reason=f"Specific coupon channel inquiry (hint={specific_hint!r}) → lookup coupon_channel_type from owned coupons.",
+            )
         return CouponQueryGateDecision(
             intent=CouponQueryIntent.COUPON_USAGE_POLICY,
             confidence=0.92,
