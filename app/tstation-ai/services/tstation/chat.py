@@ -14063,6 +14063,7 @@ def _product_description_lines_and_metadata(
     row: dict,
     *,
     size_specific: bool = True,
+    include_price: bool = False,
 ) -> tuple[list[str], dict[str, str]]:
     canonical_row = canonical_context_from_tool_boundary(row)
     goods_no = str(canonical_row.get("goods_no") or "").strip()
@@ -14122,6 +14123,11 @@ def _product_description_lines_and_metadata(
     if tech:
         lines.extend(["", tech[:160]])
 
+    if include_price:
+        price_lines = _product_description_price_lines(row)
+        if price_lines:
+            lines.extend([""] + price_lines)
+
     performance_bits: list[str] = []
     if comfort and comfort > 0:
         performance_bits.append(f"승차감 {comfort:g}/5")
@@ -14155,6 +14161,50 @@ def _product_description_lines_and_metadata(
         metadata["productName"] = name
 
     return lines, metadata
+
+
+_PRODUCT_DESCRIPTION_PRICE_CONTEXT_RE = re.compile(r"가격|얼마|최종가|할인가|혜택가|쿠폰", re.IGNORECASE)
+
+
+def _product_description_price_context(user_text: str | None = None) -> bool:
+    try:
+        from services.tstation.template_mapper import current_goal_type, current_pending_intent, current_user_text
+
+        recent_user_text = str(current_user_text.get() or "")
+        pending_intent = str(current_pending_intent.get() or "").strip()
+        goal_type = str(current_goal_type.get() or "").strip()
+    except Exception:
+        recent_user_text = ""
+        pending_intent = ""
+        goal_type = ""
+
+    text = " ".join(part for part in (str(user_text or "").strip(), recent_user_text.strip()) if part).strip()
+    if text and _PRODUCT_DESCRIPTION_PRICE_CONTEXT_RE.search(text):
+        return True
+    return pending_intent == "price" or goal_type == "price_inquiry"
+
+
+def _product_description_price_lines(row: Mapping[str, Any]) -> list[str]:
+    sale_prc = _to_int(row.get("sale_prc"))
+    extra_fvr_sale_prc = _to_int(row.get("extra_fvr_sale_prc"))
+    cheapest_final_prc = _to_int(row.get("cheapest_final_prc"))
+
+    if sale_prc is None and extra_fvr_sale_prc is None and cheapest_final_prc is None:
+        return []
+
+    lines: list[str] = []
+    if sale_prc is not None:
+        lines.append(f"현재 확인 기준 정가는 {_format_krw(sale_prc)}예요.")
+        if cheapest_final_prc is not None:
+            lines.append(f"회원 보유 쿠폰 적용 시 최저 혜택가는 {_format_krw(cheapest_final_prc)}까지 확인돼요.")
+        elif extra_fvr_sale_prc is not None and extra_fvr_sale_prc != sale_prc:
+            lines.append(f"현재 확인 기준 혜택가는 {_format_krw(extra_fvr_sale_prc)}까지 확인돼요.")
+        return lines
+
+    best_price = cheapest_final_prc or extra_fvr_sale_prc
+    if best_price is not None:
+        lines.append(f"현재 확인 기준 가격은 {_format_krw(best_price)}예요.")
+    return lines
 
 
 _PRODUCT_DESCRIPTION_INFO_CHIPS: list[dict[str, str]] = [
@@ -14193,7 +14243,10 @@ def _build_product_description_quickreply_event(detail_result: dict) -> dict | N
     if not isinstance(row, dict) or not row:
         return None
 
-    lines, metadata = _product_description_lines_and_metadata(row)
+    lines, metadata = _product_description_lines_and_metadata(
+        row,
+        include_price=_product_description_price_context(),
+    )
 
     return {
         "type": "data",

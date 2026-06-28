@@ -6527,6 +6527,100 @@ def test_product_description_quickreply_stays_description_focused() -> None:
     }
 
 
+def test_product_description_quickreply_includes_sale_price_when_price_context_present() -> None:
+    user_text_token = current_user_text.set("ventus air s 타이어 가격 얼마야?")
+    pending_token = current_pending_intent.set("price")
+    goal_token = current_goal_type.set("price_inquiry")
+    try:
+        event = _build_product_description_quickreply_event({
+            "status": "success",
+            "data": {
+                "goods_nm": "벤투스 에어S",
+                "big_goods_nm": "벤투스",
+                "goods_no": "G000000380117",
+                "tire_size_1": "245/45R18",
+                "slogan": "프리미엄이 제공하는 품격있는 정숙성과 승차감",
+                "season_nm": "사계절",
+                "car_knd_nm": "승용차",
+                "goods_pfm_nm": "COMFORT",
+                "sale_prc": 152500,
+            },
+        })
+    finally:
+        current_goal_type.reset(goal_token)
+        current_pending_intent.reset(pending_token)
+        current_user_text.reset(user_text_token)
+
+    assert event is not None
+    assistant_response = event["data"]["assistantResponse"]
+    assert "벤투스 에어S는 프리미엄이 제공하는 품격있는 정숙성과 승차감 상품이에요." in assistant_response
+    assert "선택한 규격은 245/45R18예요." in assistant_response
+    assert "현재 확인 기준 정가는 152,500원예요." in assistant_response
+    assert "혜택가" not in assistant_response
+    assert [reply["label"] for reply in event["data"]["quickReplies"]] == ["구매하기", "재고 확인", "다른 상품 보기"]
+
+
+def test_product_description_quickreply_prefers_cheapest_final_price_over_extra_discount() -> None:
+    user_text_token = current_user_text.set("ventus air s 타이어 가격 얼마야?")
+    pending_token = current_pending_intent.set("price")
+    goal_token = current_goal_type.set("price_inquiry")
+    try:
+        event = _build_product_description_quickreply_event({
+            "status": "success",
+            "data": {
+                "goods_nm": "벤투스 에어S",
+                "big_goods_nm": "벤투스",
+                "goods_no": "G000000380117",
+                "tire_size_1": "245/45R18",
+                "season_nm": "사계절",
+                "car_knd_nm": "승용차",
+                "goods_pfm_nm": "COMFORT",
+                "sale_prc": 180000,
+                "extra_fvr_sale_prc": 140000,
+                "cheapest_final_prc": 118800,
+            },
+        })
+    finally:
+        current_goal_type.reset(goal_token)
+        current_pending_intent.reset(pending_token)
+        current_user_text.reset(user_text_token)
+
+    assert event is not None
+    assistant_response = event["data"]["assistantResponse"]
+    assert "현재 확인 기준 정가는 180,000원예요." in assistant_response
+    assert "회원 보유 쿠폰 적용 시 최저 혜택가는 118,800원까지 확인돼요." in assistant_response
+    assert "140,000원" not in assistant_response
+
+
+def test_product_description_quickreply_omits_price_lines_when_price_fields_missing() -> None:
+    user_text_token = current_user_text.set("ventus air s 타이어 가격 얼마야?")
+    pending_token = current_pending_intent.set("price")
+    goal_token = current_goal_type.set("price_inquiry")
+    try:
+        event = _build_product_description_quickreply_event({
+            "status": "success",
+            "data": {
+                "goods_nm": "벤투스 에어S",
+                "big_goods_nm": "벤투스",
+                "goods_no": "G000000380117",
+                "tire_size_1": "245/45R18",
+                "season_nm": "사계절",
+                "car_knd_nm": "승용차",
+                "goods_pfm_nm": "COMFORT",
+            },
+        })
+    finally:
+        current_goal_type.reset(goal_token)
+        current_pending_intent.reset(pending_token)
+        current_user_text.reset(user_text_token)
+
+    assert event is not None
+    assistant_response = event["data"]["assistantResponse"]
+    assert "정가" not in assistant_response
+    assert "혜택가" not in assistant_response
+    assert "가격" not in assistant_response
+
+
 def test_product_description_claim_check_prefix_uses_policy_decision_only() -> None:
     frame = build_discovery_intent_frame("벤투스 air S가 우주 항공국 인증 제품이라던데 사실이야?")
     decision = decide_discovery_response(frame)
