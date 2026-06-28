@@ -113,6 +113,9 @@ _DELIVERY_DELAY_RESERVATION_SCHEDULE_POLICY_FAQ_ANCHORS = (
 _RESERVATION_WINDOW_POLICY_FAQ_ANCHORS = (
     "장착 예약일 최대 30일 이내 구매일로부터 1개월 이내 사전 구매 지원 불가",
 )
+_EXTERNAL_TIRE_INSTALL_POLICY_FAQ_ANCHORS = (
+    "타이어만 별도 수령 직접 장착 불가 온라인몰 지정 장착점 발송 장착 오프라인 매장 구매 후 장착 가능 장착비 매장별 상이",
+)
 
 
 def _augment_faq_query_for_policy(query: str) -> str:
@@ -146,6 +149,8 @@ def _augment_faq_query_for_policy(query: str) -> str:
         anchors = _DELIVERY_DELAY_RESERVATION_SCHEDULE_POLICY_FAQ_ANCHORS
     elif policy_intent == "reservation_window_policy":
         anchors = _RESERVATION_WINDOW_POLICY_FAQ_ANCHORS
+    elif policy_intent == "external_tire_install_policy":
+        anchors = _EXTERNAL_TIRE_INSTALL_POLICY_FAQ_ANCHORS
     else:
         return text
     missing_anchors = [anchor for anchor in anchors if anchor not in text]
@@ -353,7 +358,7 @@ def search_faq_rag_tool(
         return _error_response(None, str(e), "Failed to search FAQs using RAG")
 
 @tool
-def search_faq_hybrid_tool(query: str, top_k: int = 5) -> dict:
+def search_faq_hybrid_tool(query: str, top_k: int = 8) -> dict:
     """
     [HYBRID] FAQ search: keyword search + semantic search → RRF reranking → top_k items.
 
@@ -362,7 +367,7 @@ def search_faq_hybrid_tool(query: str, top_k: int = 5) -> dict:
 
     Args:
         query (str): User question in Korean.
-        top_k (int): Max results to return (default 5).
+        top_k (int): Max results to return (default 8).
 
     Example: {"query": "환불 정책이 어떻게 되나요?"}
     """

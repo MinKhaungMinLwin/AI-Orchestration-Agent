@@ -29,6 +29,7 @@ _SUPPORT_FAQ_POLICY_GROUP_INTENTS = frozenset({
     "assurance_service_policy",
     "reservation_policy_guidance",
     "installation_work_policy",
+    "external_tire_install_policy",
     "promotion_gift_policy",
     "tire_condition_photo_policy",
 })
@@ -39,7 +40,13 @@ _FEE_RE = re.compile(r"위약금|수수료|공임비|비용|차감", re.IGNORECA
 _STORE_CHANGE_RE = re.compile(r"장착점|지점|매장|방문\s*지점", re.IGNORECASE)
 _CHANGE_RE = re.compile(r"변경|바꿀|바꾸|옮길|이동", re.IGNORECASE)
 _WORK_STARTED_RE = re.compile(
-    r"작업\s*시작|작업\s*중|기존\s*타이어|다\s*뺐|탈거|분리|장착\s*하려고|공임비",
+    r"작업\s*시작|작업\s*중|이미\s*장착|장착\s*중|기존\s*타이어.{0,8}(?:다\s*뺐|탈거|분리)|탈거|분리|장착\s*작업",
+    re.IGNORECASE,
+)
+_EXTERNAL_TIRE_INSTALL_POLICY_RE = re.compile(
+    r"인터넷(?:에서)?\s*(?:산|구매한)|외부\s*구매|사제\s*타이어|"
+    r"가져가(?:서)?\s*장착|반입\s*장착|들고\s*가(?:서)?\s*장착|"
+    r"공임만\s*받고\s*장착|타이어만\s*장착|타이어만\s*(?:가져가|들고가)",
     re.IGNORECASE,
 )
 _ONLINE_ORDER_CANCEL_RE = re.compile(
@@ -72,6 +79,7 @@ _SUPPORT_FAQ_SOURCE_MIN_SCORE_BY_INTENT: dict[str, float] = {
     "general_card_cancel_timing_policy": 0.18,
     "reservation_policy_guidance": 0.18,
     "reservation_window_policy": 0.18,
+    "external_tire_install_policy": 0.18,
     "general_cancel_fee_policy": 0.18,
 }
 _SUPPORT_FAQ_SOURCE_SCORE_GAP_BY_INTENT: dict[str, float] = {
@@ -80,12 +88,14 @@ _SUPPORT_FAQ_SOURCE_SCORE_GAP_BY_INTENT: dict[str, float] = {
     "general_card_cancel_timing_policy": 0.03,
     "reservation_policy_guidance": 0.03,
     "reservation_window_policy": 0.03,
+    "external_tire_install_policy": 0.03,
     "general_cancel_fee_policy": 0.03,
 }
 _SUPPORT_FAQ_SOURCE_GROUNDED_ALLOWLIST = frozenset({
     "general_cancel_fee_policy",
     "general_card_cancel_timing_policy",
     "reservation_window_policy",
+    "external_tire_install_policy",
     "reservation_policy_guidance",
     "tire_manufacture_date_policy",
     "tire_quality_warranty_policy",
@@ -94,16 +104,9 @@ _SUPPORT_FAQ_LLM_GROUNDED_ALLOWLIST = frozenset(_SUPPORT_FAQ_SOURCE_GROUNDED_ALL
     "assurance_service_policy",
     "payment_error_troubleshooting",
 })
-_SUPPORT_FAQ_LLM_TOP_K_BY_INTENT: dict[str, int] = {
-    "general_cancel_fee_policy": 3,
-    "general_card_cancel_timing_policy": 3,
-    "reservation_window_policy": 3,
-    "reservation_policy_guidance": 3,
-    "tire_manufacture_date_policy": 3,
-    "tire_quality_warranty_policy": 3,
-    "assurance_service_policy": 3,
-    "payment_error_troubleshooting": 3,
-}
+_SUPPORT_FAQ_RETRIEVAL_TOP_K = 8
+_SUPPORT_FAQ_MAX_LLM_EVIDENCE = 4
+_SUPPORT_FAQ_LLM_RETRY_LIMIT = 1
 _SUPPORT_FAQ_SCOPE_TO_EVIDENCE_TYPES: dict[str, tuple[str, ...]] = {
     "fee_or_penalty": (
         "reservation_cancel_method",
@@ -121,6 +124,11 @@ _SUPPORT_FAQ_SCOPE_TO_EVIDENCE_TYPES: dict[str, tuple[str, ...]] = {
         "reservation_window_limit",
         "advance_booking_not_supported",
         "reservation_required_with_purchase",
+    ),
+    "external_tire_install": (
+        "external_tire_install_restriction",
+        "online_purchase_install_flow",
+        "store_specific_install_fee",
     ),
     "warranty_condition": ("warranty_condition",),
     "manufacture_date_policy": ("manufacture_date_policy",),
@@ -376,6 +384,13 @@ def _classify_faq_evidence(
     if not text:
         return None
     if policy_group == _RESERVATION_INSTALLATION_POLICY:
+        if _support_faq_candidate_matches_fact_type("external_tire_install", candidate):
+            lowered_text = text.lower()
+            if any(token in lowered_text for token in ("별도 수령", "직접 장착", "반입", "타이어만", "불가")):
+                return "external_tire_install_restriction"
+            if any(token in lowered_text for token in ("온라인몰", "지정 장착점", "발송")):
+                return "online_purchase_install_flow"
+            return "store_specific_install_fee"
         if _support_faq_candidate_matches_fact_type("work_started_cancel", candidate):
             return "installation_work_fee"
         if _support_faq_candidate_matches_fact_type("store_change", candidate):
@@ -455,6 +470,10 @@ def _infer_user_faq_scope(
         scopes.append("reservation_window")
         primary_evidence_types.append("reservation_window_limit")
         supporting_evidence_types.extend(["advance_booking_not_supported", "reservation_required_with_purchase"])
+    elif policy_group == _RESERVATION_INSTALLATION_POLICY and fact_type == "external_tire_install":
+        scopes.append("external_tire_install")
+        primary_evidence_types.append("external_tire_install_restriction")
+        supporting_evidence_types.extend(["online_purchase_install_flow", "store_specific_install_fee"])
     elif policy_group == _RESERVATION_INSTALLATION_POLICY and fact_type == "store_change":
         scopes.append("store_change")
         primary_evidence_types.append("store_change_policy")
@@ -490,6 +509,7 @@ def _infer_user_faq_scope(
             "card_cancel_timing": "card_refund_timing",
             "work_started_cancel": "installation_work_fee",
             "reservation_window": "reservation_window_limit",
+            "external_tire_install": "external_tire_install_restriction",
             "store_change": "store_change_policy",
             "quality_warranty_condition": "warranty_condition",
             "manufacture_date": "manufacture_date_policy",
@@ -562,6 +582,30 @@ def _select_evidence_for_scope(
         "excluded": excluded,
         "selected_candidates": [entry["candidate"] for entry in selected],
         "selected_evidence_types": [str(entry["evidence_type"]) for entry in selected if entry.get("evidence_type")],
+    }
+
+
+def _truncate_selected_evidence(
+    selected_evidence: Mapping[str, Any],
+    *,
+    max_items: int = _SUPPORT_FAQ_MAX_LLM_EVIDENCE,
+) -> dict[str, Any]:
+    primary = list(selected_evidence.get("primary") or [])
+    supporting = list(selected_evidence.get("supporting") or [])
+    limited_primary = primary[:max_items]
+    remaining = max(0, max_items - len(limited_primary))
+    limited_supporting = supporting[:remaining]
+    selected = [*limited_primary, *limited_supporting]
+    return {
+        "primary": limited_primary,
+        "supporting": limited_supporting,
+        "selected": selected,
+        "selected_candidates": [entry["candidate"] for entry in selected if isinstance(entry, Mapping) and entry.get("candidate")],
+        "selected_evidence_types": [
+            str(entry["evidence_type"])
+            for entry in selected
+            if isinstance(entry, Mapping) and entry.get("evidence_type")
+        ],
     }
 
 
@@ -673,6 +717,15 @@ def _support_faq_evidence_grounded_prompt(
     )
 
 
+def _support_faq_retry_prompt(prompt: str, failure_reason: str) -> str:
+    retry_note = (
+        "\n\n이전 답변 초안은 정책 post-check를 통과하지 못했습니다.\n"
+        f"실패 이유: {failure_reason}\n"
+        "이번에는 실패 이유에 해당하는 내용은 제거하고, evidence에 직접 있는 내용만 사용해 다시 답변하세요."
+    )
+    return f"{prompt}{retry_note}"
+
+
 def _invoke_support_faq_grounded_llm(prompt: str) -> str:
     from services.tstation.agents.router import DECISION_LLM
 
@@ -728,6 +781,8 @@ def _support_faq_post_check_failure(
         r"제조일자|dot", normalized_answer, re.IGNORECASE
     ):
         return "manufacture_drift"
+    if "external_tire_install" in scope_set and re.search(r"무조건|항상|확실히", normalized_answer, re.IGNORECASE):
+        return "unsupported_absolute_claim"
 
     source_text = "\n".join(_support_faq_candidate_text(candidate) for candidate in source_candidates)
     allowed_numeric_facts = _support_faq_numeric_facts(source_text)
@@ -735,6 +790,39 @@ def _support_faq_post_check_failure(
     if any(fact not in allowed_numeric_facts for fact in answer_numeric_facts):
         return "unsupported_numeric_fact"
     return None
+
+
+def _build_support_faq_safe_fallback_reply(
+    *,
+    policy_group: str,
+    fact_type: str,
+    filtered_candidates: list[Mapping[str, Any]],
+    excluded_candidates: list[Mapping[str, Any]],
+    fallback_reason: str,
+) -> dict[str, Any]:
+    response, quick_replies = _build_support_faq_policy_reply(
+        policy_group,
+        fact_type,
+        {},
+        safe_fallback_used=True,
+    )
+    return {
+        "assistant_response": response,
+        "quick_replies": quick_replies,
+        "metadata": {
+            "policyGroup": policy_group,
+            "factType": fact_type,
+            "clarificationNeeded": False,
+            "safeFallbackUsed": True,
+            "sourceGroundedReplyUsed": False,
+            "evidenceGroundedReplyUsed": False,
+            "faqLlmGroundedReplyUsed": False,
+            "fallbackReason": fallback_reason,
+            "filteredFaqCount": len(filtered_candidates),
+            "excludedFaqCount": len(excluded_candidates),
+            "factExtractionApplied": False,
+        },
+    }
 
 
 def resolve_support_faq_policy_context(intent: str, user_text: str) -> dict[str, Any] | None:
@@ -753,6 +841,8 @@ def resolve_support_faq_policy_context(intent: str, user_text: str) -> dict[str,
         return {"policy_group": _PAYMENT_REFUND_POLICY, "fact_type": "card_cancel_timing"}
     if normalized_intent == "reservation_window_policy":
         return {"policy_group": _RESERVATION_INSTALLATION_POLICY, "fact_type": "reservation_window"}
+    if normalized_intent == "external_tire_install_policy":
+        return {"policy_group": _RESERVATION_INSTALLATION_POLICY, "fact_type": "external_tire_install"}
     if normalized_intent == "payment_error_troubleshooting" or _PAYMENT_ERROR_RE.search(text):
         return {"policy_group": _PAYMENT_REFUND_POLICY, "fact_type": "payment_error_troubleshooting"}
     if normalized_intent == "tire_manufacture_date_policy":
@@ -832,6 +922,18 @@ def _support_faq_candidate_matches_fact_type(fact_type: str, candidate: Mapping[
             re.search(r"30일|1개월|한\s*달|두\s*달|2\s*달|최대|예약\s*가능\s*기간|사전\s*구매", text, re.IGNORECASE)
             and _RESERVATION_RE.search(text)
         )
+    if fact_type == "external_tire_install":
+        return bool(
+            _EXTERNAL_TIRE_INSTALL_POLICY_RE.search(text)
+            or re.search(
+                r"타이어만.{0,16}(?:직접\s*장착|장착\s*불가|별도\s*수령)|"
+                r"온라인몰.{0,24}(?:지정\s*장착점|발송|장착)|"
+                r"오프라인\s*매장.{0,24}(?:구매|장착)|"
+                r"장착비.{0,16}(?:매장별|상이)",
+                text,
+                re.IGNORECASE,
+            )
+        )
     if fact_type == "online_order_cancel_fee":
         return bool(_ONLINE_ORDER_CANCEL_RE.search(text))
     if fact_type == "card_cancel_timing":
@@ -865,6 +967,9 @@ def _filter_support_faq_candidates(
     if policy_group == _RESERVATION_INSTALLATION_POLICY and fact_type == "mixed_cancel_fee_generalized":
         allowed_names = (("배송/장착", "장착"), ("주문/결제", "주문"), ("주문/결제", "결제"))
         allowed_codes = (("C01", "C0106"), ("C01", "C0104"), ("C01", "C0105"))
+    elif policy_group == _RESERVATION_INSTALLATION_POLICY and fact_type == "external_tire_install":
+        allowed_names = (("배송/장착", "장착"), ("상품/서비스", "서비스"), ("주문/결제", "주문"))
+        allowed_codes = (("C01", "C0106"), ("C03", "C0302"), ("C01", "C0104"))
     else:
         allowed_names = _ALLOWED_CATEGORY_NAMES_BY_POLICY_GROUP.get(policy_group, ())
         allowed_codes = _ALLOWED_CATEGORY_CODES_BY_POLICY_GROUP.get(policy_group, ())
@@ -961,6 +1066,15 @@ def _extract_support_faq_policy_facts(
             facts["advance_booking_not_supported"] = True
         if re.search(r"구매일로부터|주문\s*후|결제\s*후", combined, re.IGNORECASE):
             facts["reservation_required_with_purchase"] = True
+    elif policy_group == _RESERVATION_INSTALLATION_POLICY and fact_type == "external_tire_install":
+        if re.search(r"별도\s*수령|직접\s*장착|반입", combined, re.IGNORECASE) and re.search(r"불가|지원하지\s*않", combined, re.IGNORECASE):
+            facts["external_tire_install_restriction"] = "direct_install_not_supported"
+        if re.search(r"온라인몰|지정\s*장착점|발송", combined, re.IGNORECASE):
+            facts["online_purchase_install_flow"] = True
+        if re.search(r"오프라인\s*매장|매장\s*구매", combined, re.IGNORECASE):
+            facts["offline_store_purchase_install"] = True
+        if re.search(r"장착비|공임|매장별\s*상이|가격\s*상이", combined, re.IGNORECASE):
+            facts["store_specific_install_fee"] = True
     elif policy_group == _RESERVATION_INSTALLATION_POLICY and fact_type == "store_change":
         facts["store_change_allowed"] = (
             "allowed"
@@ -1017,6 +1131,11 @@ def _support_faq_reply_ctas(policy_group: str, fact_type: str) -> list[dict[str,
         return [
             {"label": "1:1 문의하기", "domain": "SUPPORT"},
             {"label": "고객센터 안내", "domain": "SUPPORT"},
+        ]
+    if policy_group == _RESERVATION_INSTALLATION_POLICY and fact_type == "external_tire_install":
+        return [
+            {"label": "가까운 매장 찾기", "domain": "TRANSACTION"},
+            {"label": "1:1 문의하기", "domain": "SUPPORT"},
         ]
     if policy_group == _RESERVATION_INSTALLATION_POLICY:
         return [
@@ -1121,7 +1240,7 @@ def _build_support_faq_policy_reply(
         response = (
             f"장착 예약일은 보통 {limit_text}로 안내돼요.\n"
             "두 달 뒤처럼 범위를 넘는 예약은 지원되지 않거나 진행이 어려울 수 있어요.\n"
-            "실제 예약 가능한 시간 확인은 이 범위 안에서만 매장/지역 기준으로 조회해 주세요."
+            "실제 일정 확인은 이 범위 안에서만 추가로 진행해 주세요."
         )
     elif policy_group == _RESERVATION_INSTALLATION_POLICY and fact_type == "store_change":
         allowed_text = "방문 지점 변경 가능 여부는 예약 정책과 현재 예약 상태에 따라 달라질 수 있어요."
@@ -1138,6 +1257,19 @@ def _build_support_faq_policy_reply(
             "기존 타이어 탈거나 장착 작업이 진행됐다면 현장 작업 범위 기준으로 비용 여부가 달라질 수 있어요.\n"
             "실제 취소 전에는 작업 범위와 비용 기준을 매장이나 고객센터 안내로 확인해 주세요."
         )
+    elif policy_group == _RESERVATION_INSTALLATION_POLICY and fact_type == "external_tire_install":
+        if safe_fallback_used:
+            response = (
+                "외부 구매 타이어를 매장에 반입해 장착하는 건은 FAQ만으로 일괄 가능하다고 단정하기 어려워요.\n"
+                "구매 경로와 매장 운영 기준에 따라 장착 가능 여부나 비용 기준이 달라질 수 있어요.\n"
+                "방문 전에는 해당 매장 운영 기준이나 고객센터 안내를 먼저 확인해 주세요."
+            )
+        else:
+            response = (
+                "외부 구매 타이어 반입 장착은 구매 경로와 장착 방식에 따라 기준이 달라질 수 있어요.\n"
+                "온라인몰 주문은 지정 장착점 발송/장착 기준으로 안내되고, 별도 수령 후 직접 반입 장착은 지원되지 않거나 제한될 수 있어요.\n"
+                "오프라인 매장 구매 후 장착이나 장착비 기준은 매장별 운영에 따라 달라질 수 있으니 방문 전 확인해 주세요."
+            )
     elif policy_group == _PURCHASE_ORDER_POLICY and fact_type == "online_order_cancel_fee":
         amount_text = facts.get("fee_amount") or "취소 시점과 주문 상태에 따라 비용이 달라질 수 있어요."
         response = (
@@ -1307,8 +1439,26 @@ def build_support_faq_evidence_grounded_reply(
     if intent not in _SUPPORT_FAQ_LLM_GROUNDED_ALLOWLIST:
         return None
     resolution = resolve_support_faq_policy_context(intent, user_text)
-    if not resolution or resolution.get("needs_clarification"):
+    if not resolution:
         return None
+    if resolution.get("needs_clarification"):
+        return {
+            "assistant_response": str(resolution.get("assistant_response") or ""),
+            "quick_replies": list(resolution.get("quick_replies") or []),
+            "metadata": {
+                "policyGroup": resolution.get("policy_group"),
+                "factType": resolution.get("fact_type"),
+                "clarificationNeeded": True,
+                "clarificationReason": resolution.get("clarification_reason"),
+                "safeFallbackUsed": False,
+                "sourceGroundedReplyUsed": False,
+                "evidenceGroundedReplyUsed": False,
+                "faqLlmGroundedReplyUsed": False,
+                "filteredFaqCount": 0,
+                "excludedFaqCount": 0,
+                "factExtractionApplied": False,
+            },
+        }
 
     policy_group = str(resolution.get("policy_group") or "").strip()
     fact_type = str(resolution.get("fact_type") or "").strip()
@@ -1317,7 +1467,13 @@ def build_support_faq_evidence_grounded_reply(
 
     filtered, excluded_candidates = _filter_support_faq_candidates(policy_group, fact_type, tool_result)
     if not filtered:
-        return None
+        return _build_support_faq_safe_fallback_reply(
+            policy_group=policy_group,
+            fact_type=fact_type,
+            filtered_candidates=[],
+            excluded_candidates=excluded_candidates,
+            fallback_reason="no_filtered_candidates",
+        )
 
     scope_info = _infer_user_faq_scope(
         intent=intent,
@@ -1333,42 +1489,33 @@ def build_support_faq_evidence_grounded_reply(
         candidates=filtered,
         scope_info=scope_info,
     )
+    selected_evidence = {
+        **selected_evidence,
+        **_truncate_selected_evidence(selected_evidence, max_items=_SUPPORT_FAQ_MAX_LLM_EVIDENCE),
+    }
     selected_candidates = list(selected_evidence.get("selected_candidates") or [])
     if not selected_candidates:
-        return None
+        return _build_support_faq_safe_fallback_reply(
+            policy_group=policy_group,
+            fact_type=fact_type,
+            filtered_candidates=filtered,
+            excluded_candidates=excluded_candidates,
+            fallback_reason="no_selected_evidence",
+        )
 
     ranked = _support_faq_ranked_candidates(selected_candidates)
     top_candidate = ranked[0]
     top_score = _support_faq_candidate_score(top_candidate)
     min_score = _SUPPORT_FAQ_SOURCE_MIN_SCORE_BY_INTENT.get(intent)
     if min_score is not None and top_score is not None and top_score < min_score:
-        return None
-
-    competing_candidate = _support_faq_grounded_competing_candidate(
-        intent=intent,
-        user_text=user_text,
-        top_candidate=top_candidate,
-        candidates=selected_candidates,
-    )
-    if competing_candidate is not None:
-        second_score = _support_faq_candidate_score(competing_candidate) or 0.0
-        top_topic = _support_faq_candidate_topic(
-            intent=intent,
+        return _build_support_faq_safe_fallback_reply(
             policy_group=policy_group,
             fact_type=fact_type,
-            candidate=top_candidate,
+            filtered_candidates=selected_candidates,
+            excluded_candidates=excluded_candidates,
+            fallback_reason="top_score_below_min",
         )
-        second_topic = _support_faq_candidate_topic(
-            intent=intent,
-            policy_group=policy_group,
-            fact_type=fact_type,
-            candidate=competing_candidate,
-        )
-        required_gap = _SUPPORT_FAQ_SOURCE_SCORE_GAP_BY_INTENT.get(intent, 0.0)
-        if top_topic and second_topic and top_topic != second_topic and (top_score or 0.0) - second_score < required_gap:
-            return None
 
-    top_k = _SUPPORT_FAQ_LLM_TOP_K_BY_INTENT.get(intent, 3)
     prompt = _support_faq_evidence_grounded_prompt(
         intent=intent,
         user_text=user_text,
@@ -1376,28 +1523,42 @@ def build_support_faq_evidence_grounded_reply(
         fact_type=fact_type,
         scope_info=scope_info,
         selected_evidence={
-            "primary": (selected_evidence.get("primary") or [])[:top_k],
-            "supporting": (selected_evidence.get("supporting") or [])[: max(0, top_k - len(selected_evidence.get("primary") or []))],
+            "primary": list(selected_evidence.get("primary") or []),
+            "supporting": list(selected_evidence.get("supporting") or []),
         },
     )
-    try:
-        assistant_response = _invoke_support_faq_grounded_llm(prompt)
-    except Exception:
-        return None
-
-    if not assistant_response:
-        return None
-
-    failure_reason = _support_faq_post_check_failure(
-        intent=intent,
-        user_text=user_text,
-        answer=assistant_response,
-        source_candidates=ranked[:top_k],
-        scope_info=scope_info,
-        selected_evidence_types=list(selected_evidence.get("selected_evidence_types") or []),
-    )
-    if failure_reason is not None:
-        return None
+    assistant_response = ""
+    failure_reason: str | None = None
+    source_candidates = ranked[:_SUPPORT_FAQ_MAX_LLM_EVIDENCE]
+    for attempt in range(_SUPPORT_FAQ_LLM_RETRY_LIMIT + 1):
+        current_prompt = prompt if attempt == 0 or failure_reason is None else _support_faq_retry_prompt(prompt, failure_reason)
+        try:
+            assistant_response = _invoke_support_faq_grounded_llm(current_prompt)
+        except Exception:
+            assistant_response = ""
+            failure_reason = "llm_invoke_failed"
+            continue
+        if not assistant_response:
+            failure_reason = "empty_answer"
+            continue
+        failure_reason = _support_faq_post_check_failure(
+            intent=intent,
+            user_text=user_text,
+            answer=assistant_response,
+            source_candidates=source_candidates,
+            scope_info=scope_info,
+            selected_evidence_types=list(selected_evidence.get("selected_evidence_types") or []),
+        )
+        if failure_reason is None:
+            break
+    if not assistant_response or failure_reason is not None:
+        return _build_support_faq_safe_fallback_reply(
+            policy_group=policy_group,
+            fact_type=fact_type,
+            filtered_candidates=selected_candidates,
+            excluded_candidates=excluded_candidates,
+            fallback_reason=str(failure_reason or "llm_answer_missing"),
+        )
 
     return {
         "assistant_response": assistant_response,
@@ -1414,7 +1575,7 @@ def build_support_faq_evidence_grounded_reply(
             "excludedFaqCount": len(excluded_candidates),
             "factExtractionApplied": False,
             "topFaqScore": top_score,
-            "llmGroundedCandidateCount": min(len(ranked), top_k),
+            "llmGroundedCandidateCount": len(source_candidates),
             "faqScopes": list(scope_info.get("scopes") or []),
             "selectedEvidenceTypes": list(selected_evidence.get("selected_evidence_types") or []),
             "topFaqCategory": {
@@ -1589,8 +1750,14 @@ _DELIVERY_DELAY_RESERVATION_SCHEDULE_POLICY_RE = re.compile(
     re.IGNORECASE,
 )
 _INSTALLATION_WORK_POLICY_RE = re.compile(
-    r"작업\s*중\s*취소|공임(?:비)?|장착비|폐타이어|얼라인먼트.{0,16}(현장\s*결제|추가|따로)|"
-    r"공임만\s*받고\s*장착|추가\s*작업",
+    r"작업\s*중\s*취소|장착비|폐타이어|얼라인먼트.{0,16}(현장\s*결제|추가|따로)|"
+    r"추가\s*작업|공임(?:비)?.{0,12}(?:취소|작업\s*시작|탈거|분리|이미\s*장착|장착\s*중)",
+    re.IGNORECASE,
+)
+_EXTERNAL_TIRE_INSTALL_SUPPORT_POLICY_RE = re.compile(
+    r"인터넷(?:에서)?\s*(?:산|구매한)|외부\s*구매|사제\s*타이어|"
+    r"가져가(?:서)?\s*장착|반입\s*장착|들고\s*가(?:서)?\s*장착|"
+    r"공임만\s*받고\s*장착|타이어만\s*장착",
     re.IGNORECASE,
 )
 _PROMOTION_GIFT_POLICY_RE = re.compile(
@@ -1856,6 +2023,23 @@ def decide_support_response(
                 "예약 가능 기간, 취소, 변경, 장착점 변경 같은 일반 예약 정책 문의는 FAQ hybrid 검색을 먼저 수행하고 "
                 "정책 안내를 quickReply로 요약한다. 주문번호, 내 예약, 오늘 예약 같은 owned anchor 없이 "
                 "개인 예약/주문 조회를 시작하지 않는다."
+            ),
+        )
+
+    if intent == "external_tire_install_policy" or _EXTERNAL_TIRE_INSTALL_SUPPORT_POLICY_RE.search(text):
+        return _decision(
+            response_shape_key="external_tire_install_policy",
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=(
+                "transfer_to_qna_direct_first",
+                "claim_external_tire_install_supported",
+                "reuse_work_started_cancel_guidance",
+            ),
+            assistant_guidance=(
+                "외부 구매 타이어 반입 장착 문의는 FAQ hybrid 검색을 먼저 수행하고, 온라인몰 지정 장착점 발송/장착 기준, "
+                "별도 수령 후 직접 반입 장착 제한 여부, 오프라인 매장 구매 후 장착 및 매장별 비용 차이만 근거 범위에서 요약한다. "
+                "작업 시작 후 취소/위약금 안내로 바꾸지 말고, 매장별 운영 확인이 필요하다는 점을 함께 안내한다."
             ),
         )
 

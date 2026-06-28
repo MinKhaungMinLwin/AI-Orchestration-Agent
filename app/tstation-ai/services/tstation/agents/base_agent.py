@@ -2250,7 +2250,7 @@ class BaseAgent(ABC):
         except Exception:
             return None
 
-        tool_input = {"query": user_query}
+        tool_input = {"query": user_query, "top_k": 8}
         try:
             raw_tool_result = _search_faq_hybrid_tool.invoke(tool_input)
         except Exception as exc:

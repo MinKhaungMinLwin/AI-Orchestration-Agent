@@ -102,6 +102,7 @@ Router `policy_intent` 가 아래 중 하나이면, 불만/교환/환불/보상 
 - `reservation_policy_guidance`
 - `reservation_window_policy`
 - `installation_work_policy`
+- `external_tire_install_policy`
 - `promotion_gift_policy`
 - `tire_condition_photo_policy`
 

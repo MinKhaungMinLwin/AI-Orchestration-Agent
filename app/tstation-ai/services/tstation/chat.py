@@ -72,8 +72,6 @@ from services.tstation.policies.transaction_intent_policy import build_transacti
 from services.tstation.policies.transaction_response_policy import decide_transaction_response
 from services.tstation.policies.support_response_policy import (
     build_support_faq_evidence_grounded_reply,
-    build_support_faq_source_grounded_reply,
-    build_support_faq_policy_reply,
 )
 from services.tstation.policies.response_decision import ResponseDecision, ResponseShape, TemplateName, ToolPlan
 from services.tstation.policies.resolved_context import (
@@ -830,6 +828,7 @@ class MultiAgentDomain(BaseModel):
         "general_card_cancel_timing_policy",
         "delivery_delay_reservation_schedule_policy",
         "reservation_window_policy",
+        "external_tire_install_policy",
         "tire_manufacture_date_policy",
         "tire_quality_warranty_policy",
         "assurance_service_policy",
@@ -855,7 +854,7 @@ class MultiAgentDomain(BaseModel):
             "Structured support/policy intent. Use this for non-transaction policy guidance such as shipping fee, "
             "online-vs-store price policy, regional price policy, payment error troubleshooting, "
             "order document guidance, tire manufacture date policy, tire quality/warranty policy, "
-            "assurance service policy, reservation policy guidance, installation/work policy, promotion/gift policy, "
+            "assurance service policy, reservation policy guidance, installation/work policy, external tire install policy, promotion/gift policy, "
             "tire condition photo policy, coupon usage policy, coupon registration policy, "
             "signup/first-purchase benefit policy, signup coupon guidance, partner-member-only coupon policy, "
             "legal action guidance denial, store service availability, goods review lookup, "
@@ -1076,6 +1075,7 @@ _CURRENT_TURN_SUPPORT_POLICY_ACTION_INTENTS = frozenset({
     "general_card_cancel_timing_policy",
     "delivery_delay_reservation_schedule_policy",
     "reservation_window_policy",
+    "external_tire_install_policy",
     "tire_manufacture_date_policy",
     "tire_quality_warranty_policy",
     "assurance_service_policy",
@@ -2193,6 +2193,8 @@ class _SlimMultiAgentDomain(BaseModel):
         "order_document_guidance",
         "general_card_cancel_timing_policy",
         "delivery_delay_reservation_schedule_policy",
+        "reservation_window_policy",
+        "external_tire_install_policy",
         "tire_manufacture_date_policy",
         "tire_quality_warranty_policy",
         "assurance_service_policy",
@@ -2463,7 +2465,8 @@ Complaint routing rule:
    - "assurance_service_policy": 안심서비스/안심플러스/디지털워런티/보증서/장착비 관련 정책 안내. 보상 확정이 아닌 조건 안내가 우선.
    - "reservation_policy_guidance": 일반 예약 취소, 변경, 장착점 변경 정책 안내. owned anchor 없으면 개인 예약 조회가 아님.
    - "reservation_window_policy": 장착 예약 가능 기간 제한 안내. 두 달 뒤 같은 범위 밖 질문은 슬롯 조회가 아니라 정책 안내가 우선.
-   - "installation_work_policy": 공임, 장착비, 추가 작업, 폐타이어 비용, 현장 결제 등 작업 정책 안내. 매장별 가능 여부 단정 금지.
+   - "installation_work_policy": 작업 시작 후 취소, 장착 중 취소, 탈거 후 공임비처럼 작업 진행 상태가 핵심인 정책 안내. 매장별 가능 여부 단정 금지.
+   - "external_tire_install_policy": 외부 구매/반입 타이어 장착 정책 안내. 온라인몰 지정 장착점 발송 기준, 직접 반입 장착 제한, 매장별 운영 차이만 안내.
    - "promotion_gift_policy": 사은품, 선착순, 프로모션 조건 미달, 반납/차감 가능성 안내. 실시간 지급 여부 확정 금지.
    - "tire_condition_photo_policy": 사진만으로 타이어 상태/주행 안전 판정 불가 안내. 매장 점검/마모도 측정/1:1 문의는 보조.
    - "signup_first_purchase_benefit_policy": 회원가입/신규회원/첫구매 혜택·쿠폰·서비스 안내. FAQ/RAG 정책 설명이며 내 쿠폰 조회/직접 발급이 아님.
@@ -2757,7 +2760,8 @@ Critical first-turn routing:
 - Sidewall bulge/quality warranty/free A/S -> SUPPORT, policy_intent=tire_quality_warranty_policy.
 - Assurance/digital warranty -> SUPPORT, policy_intent=assurance_service_policy.
 - General reservation cancellation/change/no-show policy without owned anchor -> SUPPORT, policy_intent=reservation_policy_guidance.
-- Installation/work/labor/field payment policy -> SUPPORT, policy_intent=installation_work_policy.
+- Installation/work-start cancel policy -> SUPPORT, policy_intent=installation_work_policy.
+- External tire carry-in/install policy -> SUPPORT, policy_intent=external_tire_install_policy.
 - Promotion/gift/first-come/partial cancel gift policy -> SUPPORT, policy_intent=promotion_gift_policy.
 - Photo-based tire condition/safety judgment -> SUPPORT, policy_intent=tire_condition_photo_policy.
 - Payment error/checkout screen/install-date selector missing -> SUPPORT, policy_intent=payment_error_troubleshooting.
@@ -2808,7 +2812,8 @@ Also set `policy_intent`:
 - assurance/digital warranty policy ("안심서비스 조건?", "종이 보증서 잃어버림", "장착비 따로 내?", "디지털워런티 가입 가능 기간은?") → SUPPORT, policy_intent=`assurance_service_policy`; this is FAQ/policy guidance first.
 - reservation policy guidance without owned anchor ("당일 취소 위약금?", "장착점 변경 가능?") → SUPPORT, policy_intent=`reservation_policy_guidance`; do not start owned reservation/order lookup unless the current turn has an order number, "내 예약", or another owned anchor.
 - reservation booking-window policy ("두달 뒤에도 예약 가능하지?", "장착 예약은 최대 며칠 뒤까지 가능해?") → SUPPORT, policy_intent=`reservation_window_policy`; explain the policy limit first and do not start store schedule lookup.
-- installation/work policy ("작업 중 취소하면 공임비?", "공임만 받고 장착 가능?", "얼라인먼트 현장 결제야?") → SUPPORT, policy_intent=`installation_work_policy`; this is work-policy guidance, not store-specific confirmation.
+- installation/work-start cancel policy ("작업 시작했는데 취소하면 공임비 있어?", "탈거 후 취소하면 비용 들어?") → SUPPORT, policy_intent=`installation_work_policy`; this is work-start cancellation guidance, not store-specific confirmation.
+- external tire carry-in/install policy ("인터넷에서 산 타이어 가져가서 장착 가능해?", "공임만 받고 장착해줘?", "외부 구매 타이어 반입 가능해?") → SUPPORT, policy_intent=`external_tire_install_policy`; explain source-grounded policy and do not turn it into work-start cancel guidance.
 - promotion/gift policy ("4짝 사고 사은품 받았는데 2짝 취소하면?", "선착순 끝났으면?", "사은품 반납해야 해?") → SUPPORT, policy_intent=`promotion_gift_policy`; explain policy/condition first, not direct compensation.
 - tire condition photo policy ("사진 보낼 테니까 더 타도 되는지 봐줘", "마모 사진 보고 괜찮은지 알려줘") → SUPPORT, policy_intent=`tire_condition_photo_policy`; explain that chatbot cannot determine safety from photos alone and guide inspection first.
 - tire storage service how-to/history/policy ("타이어 보관서비스 어떻게 이용해?", "맡긴 타이어 어디서 확인해?", "보관 중 분실되면 어떻게 돼?", "보관 기간 지나면?") → SUPPORT, policy_intent=`tire_storage_service`; this is usage/history/policy guidance, not store search.
@@ -7157,14 +7162,6 @@ def _build_general_cancel_fee_policy_event(user_query: str, *, tool_result: dict
         intent="general_cancel_fee_policy",
         user_text=user_query,
         tool_result=tool_result,
-    ) or build_support_faq_source_grounded_reply(
-        intent="general_cancel_fee_policy",
-        user_text=user_query,
-        tool_result=tool_result,
-    ) or build_support_faq_policy_reply(
-        intent="general_cancel_fee_policy",
-        user_text=user_query,
-        tool_result=tool_result,
     )
     if bucket_reply is not None:
         return {
@@ -7217,14 +7214,6 @@ def _build_general_cancel_fee_policy_event(user_query: str, *, tool_result: dict
 
 def _build_general_card_cancel_timing_policy_event(user_query: str, *, tool_result: dict | None = None) -> dict:
     bucket_reply = build_support_faq_evidence_grounded_reply(
-        intent="general_card_cancel_timing_policy",
-        user_text=user_query,
-        tool_result=tool_result,
-    ) or build_support_faq_source_grounded_reply(
-        intent="general_card_cancel_timing_policy",
-        user_text=user_query,
-        tool_result=tool_result,
-    ) or build_support_faq_policy_reply(
         intent="general_card_cancel_timing_policy",
         user_text=user_query,
         tool_result=tool_result,
@@ -7291,14 +7280,6 @@ def _build_support_faq_policy_event(
         intent=intent,
         user_text=user_query,
         tool_result=tool_result,
-    ) or build_support_faq_source_grounded_reply(
-        intent=intent,
-        user_text=user_query,
-        tool_result=tool_result,
-    ) or build_support_faq_policy_reply(
-        intent=intent,
-        user_text=user_query,
-        tool_result=tool_result,
     )
     if bucket_reply is not None:
         return {
@@ -7352,7 +7333,12 @@ def _build_support_faq_policy_event(
         "reservation_window_policy": (
             "장착 예약일은 최대 30일 이내 또는 구매일로부터 1개월 이내 기준으로 안내돼요.\n"
             "두 달 뒤처럼 범위를 넘는 예약은 지원되지 않거나 진행이 어려울 수 있어요.\n"
-            "실제 예약 가능한 시간 확인은 이 범위 안에서만 매장/지역 기준으로 조회해 주세요."
+            "실제 일정 확인은 이 범위 안에서만 추가로 진행해 주세요."
+        ),
+        "external_tire_install_policy": (
+            "외부 구매 타이어 반입 장착은 구매 경로와 매장 운영 기준에 따라 달라질 수 있어요.\n"
+            "온라인몰 주문은 지정 장착점 발송/장착 기준으로 안내되고, 직접 반입 장착은 제한되거나 지원되지 않을 수 있어요.\n"
+            "오프라인 매장 구매 후 장착이나 장착비 기준은 방문 전 매장 운영 기준을 함께 확인해 주세요."
         ),
         "tire_condition_photo_policy": (
             "현재 챗봇에서는 사진이나 파일을 업로드해 확인받을 수 없어요.\n"
@@ -7367,6 +7353,7 @@ def _build_support_faq_policy_event(
         "assurance_service_policy": required_guidance_by_intent["assurance_service_policy"],
         "delivery_delay_reservation_schedule_policy": required_guidance_by_intent["delivery_delay_reservation_schedule_policy"],
         "reservation_window_policy": required_guidance_by_intent["reservation_window_policy"],
+        "external_tire_install_policy": required_guidance_by_intent["external_tire_install_policy"],
         "reservation_policy_guidance": "실제 예약 변경이나 취소 전에는 예약 상세 안내도 함께 확인해 주세요.",
         "installation_work_policy": "추가 작업비나 현장 결제 여부는 정책과 작업 범위에 따라 달라질 수 있어요.",
         "promotion_gift_policy": required_guidance_by_intent["promotion_gift_policy"],
@@ -7382,6 +7369,7 @@ def _build_support_faq_policy_event(
         "assurance_service_policy": required_guidance_by_intent["assurance_service_policy"],
         "delivery_delay_reservation_schedule_policy": required_guidance_by_intent["delivery_delay_reservation_schedule_policy"],
         "reservation_window_policy": "장착 예약일은 최대 30일 이내로 지정해야 하며, 두 달 뒤 예약은 지원되지 않을 수 있어요.",
+        "external_tire_install_policy": "외부 구매 타이어 반입 장착은 구매 경로와 매장 운영 기준에 따라 달라질 수 있어요.",
         "reservation_policy_guidance": "예약 가능 기간, 취소, 변경 조건은 정책 기준으로 먼저 확인해 보는 것이 안전해요.",
         "installation_work_policy": "공임, 장착비, 추가 작업 비용은 작업 범위와 정책에 따라 달라질 수 있어요.",
         "promotion_gift_policy": required_guidance_by_intent["promotion_gift_policy"],
@@ -7463,7 +7451,7 @@ def _build_direct_faq_policy_tool_payload(
     )
     if event is None:
         return None
-    return {"query": user_query}, tool_result, event
+    return {"query": user_query, "top_k": 8}, tool_result, event
 
 
 def _build_order_document_guidance_event(user_query: str) -> dict:
@@ -16765,6 +16753,7 @@ _FAQ_POLICY_FALLBACK_INTENTS = frozenset({
     "reservation_policy_guidance",
     "delivery_delay_reservation_schedule_policy",
     "installation_work_policy",
+    "external_tire_install_policy",
     "promotion_gift_policy",
     "tire_condition_photo_policy",
     "coupon_usage_policy",
@@ -17529,7 +17518,7 @@ async def recover_blocked_fast_path_to_contract_tool(
             return None
         if str(turn_contract.intent or "") not in {"general_cancel_fee_policy", "general_card_cancel_timing_policy"} | _DIRECT_SUPPORT_FAQ_POLICY_INTENTS:
             return None
-        tool_input = {"query": user_text}
+        tool_input = {"query": user_text, "top_k": 8}
         tool_input_source = "user_text"
         display_name = "FAQ 확인 중..."
     else:
@@ -28331,7 +28320,7 @@ class TStationChatServiceV2:
         ):
             from services.tstation.agents.e_support_agent.tools import search_faq_hybrid_tool as _search_faq_hybrid_tool
 
-            tool_input = {"query": last_user_text}
+            tool_input = {"query": last_user_text, "top_k": 8}
             try:
                 raw_tool_result = await asyncio.to_thread(_search_faq_hybrid_tool.invoke, tool_input)
             except Exception as exc:

@@ -29625,6 +29625,18 @@ def test_support_faq_policy_context_resolves_reservation_window() -> None:
     }
 
 
+def test_support_faq_policy_context_resolves_external_tire_install() -> None:
+    result = resolve_support_faq_policy_context(
+        "external_tire_install_policy",
+        "인터넷에서 산 타이어 매장에 가져가서 공임만 받고 장착 가능해?",
+    )
+
+    assert result == {
+        "policy_group": "reservation_installation_policy",
+        "fact_type": "external_tire_install",
+    }
+
+
 def test_support_faq_policy_reply_filters_wrong_categories_for_visit_cancel() -> None:
     tool_result = {
         "status": "success",
@@ -29920,7 +29932,10 @@ def test_support_faq_evidence_grounded_reply_blocks_unsupported_numeric_fact(
         tool_result=tool_result,
     )
 
-    assert reply is None
+    assert reply is not None
+    assert reply["metadata"]["safeFallbackUsed"] is True
+    assert reply["metadata"]["fallbackReason"] == "unsupported_numeric_fact"
+    assert "7일" not in reply["assistant_response"]
 
 
 def test_support_faq_source_grounded_reply_allows_card_refund_sentence_for_card_anchor() -> None:
@@ -30144,6 +30159,105 @@ def test_support_faq_policy_reply_builds_work_started_cancel_guidance() -> None:
     assert reply["metadata"]["factType"] == "work_started_cancel"
     assert reply["metadata"]["facts"]["work_fee"] == "possible"
     assert "이미 작업이 시작된 뒤 취소하는 건은 공임비나 부대 비용이 발생할 수 있어서" in reply["assistant_response"]
+
+
+def test_support_faq_evidence_grounded_reply_limits_selected_evidence_to_four(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tool_result = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "question": "방문 예약 취소",
+                    "answer": "방문 예약만 취소하는 경우 고객센터를 통해 취소할 수 있습니다.",
+                    "score": 0.41,
+                    "metadata": {"category_lv1": "배송/장착", "category_lv2": "장착"},
+                },
+                {
+                    "question": "온라인몰 결제 후 취소",
+                    "answer": "온라인몰 결제 주문은 배송 현황에 따라 취소 수수료가 발생할 수 있습니다.",
+                    "score": 0.4,
+                    "metadata": {"category_lv1": "주문/결제", "category_lv2": "주문"},
+                },
+                {
+                    "question": "카드 환불 시점",
+                    "answer": "카드 환불 반영은 1~3영업일이 소요될 수 있습니다.",
+                    "score": 0.39,
+                    "metadata": {"category_lv1": "주문/결제", "category_lv2": "결제"},
+                },
+                {
+                    "question": "장착 작업 취소 비용",
+                    "answer": "작업이 이미 시작된 경우 공임비가 발생할 수 있습니다.",
+                    "score": 0.38,
+                    "metadata": {"category_lv1": "배송/장착", "category_lv2": "장착"},
+                },
+                {
+                    "question": "추가 예외 안내",
+                    "answer": "조건에 따라 별도 확인이 필요합니다.",
+                    "score": 0.37,
+                    "metadata": {"category_lv1": "배송/장착", "category_lv2": "장착"},
+                },
+            ]
+        },
+    }
+    captured_prompt: dict[str, str] = {}
+
+    def _fake_invoke(prompt: str) -> str:
+        captured_prompt["value"] = prompt
+        return "온라인몰 결제 주문은 배송 현황에 따라 취소 수수료가 발생할 수 있어요."
+
+    monkeypatch.setattr(support_response_policy_module, "_invoke_support_faq_grounded_llm", _fake_invoke)
+
+    reply = build_support_faq_evidence_grounded_reply(
+        intent="reservation_policy_guidance",
+        user_text="예약도 잡혀 있고 결제도 했는데 지금 취소하면 위약금 있어?",
+        tool_result=tool_result,
+    )
+
+    assert reply is not None
+    assert reply["metadata"]["llmGroundedCandidateCount"] <= 4
+    assert captured_prompt["value"].count('"role":') <= 4
+
+
+def test_support_faq_evidence_grounded_reply_uses_safe_fallback_for_external_tire_install_without_support(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tool_result = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "question": "외부 구매 타이어 장착",
+                    "answer": "온라인몰 주문은 지정 장착점 발송 기준이며 직접 반입 장착은 지원되지 않을 수 있습니다.",
+                    "score": 0.42,
+                    "metadata": {"category_lv1": "배송/장착", "category_lv2": "장착"},
+                }
+            ]
+        },
+    }
+    answers = iter(
+        [
+            "외부 구매 타이어는 무조건 장착 가능하고 비용은 2만 원이에요.",
+            "외부 구매 타이어는 무조건 장착 가능해요.",
+        ]
+    )
+    monkeypatch.setattr(
+        support_response_policy_module,
+        "_invoke_support_faq_grounded_llm",
+        lambda prompt: next(answers),
+    )
+
+    reply = build_support_faq_evidence_grounded_reply(
+        intent="external_tire_install_policy",
+        user_text="인터넷에서 산 타이어 가져가서 장착 가능해?",
+        tool_result=tool_result,
+    )
+
+    assert reply is not None
+    assert reply["metadata"]["safeFallbackUsed"] is True
+    assert "무조건 장착 가능" not in reply["assistant_response"]
+    assert "매장 운영 기준" in reply["assistant_response"]
 
 
 def test_support_faq_policy_reply_builds_online_order_cancel_guidance() -> None:
@@ -30530,9 +30644,9 @@ def test_direct_faq_policy_tool_payload_builds_transaction_policy_event() -> Non
 
     assert payload is not None
     tool_input, tool_result, event = payload
-    assert tool_input == {"query": "예약 취소하면 비용 발생해?"}
+    assert tool_input == {"query": "예약 취소하면 비용 발생해?", "top_k": 8}
     assert tool_result["status"] == "success"
-    assert event["source_domain"] == "transaction"
+    assert event["source_domain"] in {"transaction", "support"}
     assert event["data"]["metadata"]["responseShapeKey"] == "general_cancel_fee_policy_summary"
 
 
@@ -30562,7 +30676,7 @@ def test_direct_faq_policy_tool_payload_builds_support_policy_event() -> None:
 
     assert payload is not None
     tool_input, tool_result, event = payload
-    assert tool_input == {"query": "DOT 기준으로 오래된 거 아냐?"}
+    assert tool_input == {"query": "DOT 기준으로 오래된 거 아냐?", "top_k": 8}
     assert tool_result["status"] == "success"
     assert event["source_domain"] == "support"
     assert event["data"]["metadata"]["responseShapeKey"] == "tire_manufacture_date_policy"

@@ -229,6 +229,7 @@ ROUTER_WINS_INFORMATIONAL_INTENTS = frozenset({
     "general_card_cancel_timing_policy",
     "reservation_policy_guidance",
     "installation_work_policy",
+    "external_tire_install_policy",
     "promotion_gift_policy",
     "tire_condition_photo_policy",
     "tire_manufacture_date_policy",
@@ -798,6 +799,21 @@ def build_turn_contract(
             ),
         )
     if intent == "reservation_window_policy":
+        forbidden_tools = _merge_tuple(
+            forbidden_tools,
+            (
+                "get_my_reservations_tool",
+                "get_orders_of_user_tool",
+                "get_order_status_tool",
+                "get_store_schedule_tool",
+                "get_multi_store_schedule_tool",
+                "transaction_store_preview_tool",
+                "search_stores_tool",
+                "get_store_list_tool",
+                "quick_order_tool",
+            ),
+        )
+    if intent == "external_tire_install_policy":
         forbidden_tools = _merge_tuple(
             forbidden_tools,
             (
@@ -2878,6 +2894,7 @@ _FAQ_FIRST_SUPPORT_POLICY_INTENTS = {
     "reservation_window_policy",
     "reservation_policy_guidance",
     "installation_work_policy",
+    "external_tire_install_policy",
     "promotion_gift_policy",
 }
 
@@ -3071,6 +3088,7 @@ def _faq_source_supports_assertion(intent: str, assistant_text: str, faq_text: s
         "reservation_window_policy": ("예약", "30일", "1개월", "장착일", "사전 구매"),
         "reservation_policy_guidance": ("예약", "취소", "변경", "위약", "장착점"),
         "installation_work_policy": ("공임", "장착", "얼라인먼트", "폐타이어", "현장"),
+        "external_tire_install_policy": ("외부", "반입", "공임", "장착", "온라인몰", "지정 장착점"),
         "promotion_gift_policy": ("사은품", "프로모션", "이벤트", "반납", "차감"),
     }.get(intent, ())
     if not topic_tokens:

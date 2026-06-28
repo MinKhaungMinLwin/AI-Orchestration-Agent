@@ -141,6 +141,17 @@ def test_reservation_window_policy_text_trigger_blocks_schedule_lookup() -> None
     assert "require_store_slot_for_window_policy" in decision.forbidden_behaviors
 
 
+def test_external_tire_install_policy_text_trigger_blocks_work_started_cancel_drift() -> None:
+    decision = decide_support_response(
+        intent="support_faq",
+        user_text="인터넷에서 산 타이어 가져가서 공임만 받고 장착 가능해?",
+    )
+
+    assert decision.template == TemplateName.QUICK_REPLY
+    assert decision.metadata["response_shape_key"] == "external_tire_install_policy"
+    assert "reuse_work_started_cancel_guidance" in decision.forbidden_behaviors
+
+
 def test_tire_condition_photo_policy_blocks_photo_only_safety_judgment() -> None:
     decision = decide_support_response(
         intent="support_faq",
