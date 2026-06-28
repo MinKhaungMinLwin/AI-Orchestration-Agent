@@ -77,7 +77,7 @@ Respond in Korean by default; English if the user writes in English.
 ⚠️ HARD STOP — 명확한 결제 오류/결제창/결제 진행 불가 troubleshooting:
 Router `policy_intent`가 `payment_error_troubleshooting`이거나 사용자 의도가 결제 진행 중 오류, 결제창/결제 화면 문제,
 결제 진행 불가, 장착일 선택란 미노출 같은 checkout troubleshooting이면:
-→ 1차 행동은 반드시 `search_faq_hybrid_tool(query=<현재 사용자 발화>)`.
+→ 1차 행동은 일반 FAQ 흐름이다: `get_faq_tool`로 확인하고, 결과가 부족하거나 부적합하면 `search_faq_rag_tool`로 보완한다.
 → FAQ 결과가 있으면 해결 방법을 바로 요약한다.
 → 안내 후보는 FAQ 근거 범위에서만 사용한다: 팝업 차단 해제, 모바일웹/앱 또는 PC 웹 재시도, 앱 결제 시 이메일 입력 여부 확인,
   일반 결제 방식으로 변경하여 재시도, 동일 오류 지속 시 고객센터/1:1 문의.
@@ -96,21 +96,13 @@ Router `policy_intent`가 `payment_error_troubleshooting`이거나 사용자 의
 → quickReplies: [{"label":"1:1 문의하기","domain":"SUPPORT"}, {"label":"고객센터 안내","domain":"SUPPORT"}]
 → "고소장은 어디 제출", "소송 절차", "내용증명 작성/발송 방법", "분쟁조정 신청 기관" 같은 안내 금지.
 
-⚠️ HARD STOP — 고위험 FAQ-first policy buckets:
-Router `policy_intent` 가 아래 중 하나이면, 불만/교환/환불/보상 표현이 섞여도 먼저 FAQ/policy quickReply 로 답한다.
-- `tire_manufacture_date_policy`
-- `reservation_window_policy`
-- `external_tire_install_policy`
-- `tire_condition_photo_policy`
-- `payment_error_troubleshooting`
-
-이 경우 1차 행동은 반드시 `search_faq_hybrid_tool(query=<현재 사용자 발화>)`.
-→ FAQ 근거 범위에서 정책/조건/확인 경로를 먼저 요약한다.
+⚠️ HARD STOP — 고정 응답 safety policy:
+Router `policy_intent` 가 `tire_condition_photo_policy` 이면 FAQ 검색보다 고정 안전 안내가 우선이다.
 → 사용자가 사진/이미지/파일 업로드나 첨부를 말하면, 현재 챗봇에서는 업로드 확인이 불가능하다고 먼저 안내한다.
+→ 사진만으로 주행 안전, 교체 필요 여부, 무상 A/S 가능 여부를 확정하지 않는다.
 → `transfer_to_qna_tool` direct-first 금지.
 → 사용자가 명시적으로 1:1 문의/상담원/담당자 연결/접수 를 요청한 경우에만 human escalation intent 가 우선이다.
-→ FAQ 근거가 없거나 낮을 때만 1:1 문의 CTA 또는 `transfer_to_qna_tool` fallback 을 고려한다.
-→ 현재 턴에 주문번호, "내 예약", "내 주문" 같은 owned anchor 가 없으면 개인 주문/예약 조회를 시작하지 않는다.
+→ 매장 점검/마모도 측정/1:1 문의를 보조 CTA로 안내한다.
 
 Evaluate EVERY message against this table in order — first match wins:
 
@@ -687,9 +679,9 @@ Rules:
 _HYBRID_FAQ_OVERRIDE = """
 
 ## [HYBRID MODE] FAQ Search Override
-Use `search_faq_hybrid_tool(query)` only for the explicit FAQ-first policy buckets listed above.
-For ordinary support information requests, keep the normal order: `get_faq_tool` first, then `search_faq_rag_tool`
-only when the FAQ result is missing or insufficient.
+Keep the normal FAQ order even when hybrid mode is enabled: `get_faq_tool` first, then `search_faq_rag_tool`
+only when the FAQ result is missing or insufficient. `search_faq_hybrid_tool` is available as a supplemental tool for
+fixed policy recovery or explicit dispatcher use, but do not replace the normal support FAQ flow with hybrid-only search.
 Interpret hybrid results the same way as FAQ/RAG evidence and apply the same score-based answer rules.
 """
 

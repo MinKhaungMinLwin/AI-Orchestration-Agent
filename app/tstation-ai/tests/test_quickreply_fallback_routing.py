@@ -23804,13 +23804,11 @@ def test_support_prompt_contains_upload_capability_notice_for_photo_policy() -> 
     assert "업로드 확인이 불가능" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
 
 
-def test_support_prompt_contains_narrow_faq_first_policy_buckets() -> None:
-    assert "고위험 FAQ-first policy buckets" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
-    assert "tire_manufacture_date_policy" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
-    assert "reservation_window_policy" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
-    assert "payment_error_troubleshooting" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
+def test_support_prompt_contains_fixed_safety_policy_only() -> None:
+    assert "고정 응답 safety policy" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
+    assert "tire_condition_photo_policy" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
     assert "reservation_policy_guidance" not in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
-    assert "owned anchor" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
+    assert "사진만으로 주행 안전" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
 
 
 def test_support_prompt_contains_legal_action_hard_stop() -> None:
@@ -31137,7 +31135,7 @@ def test_direct_faq_policy_tool_payload_builds_transaction_policy_event() -> Non
     assert event["data"]["metadata"]["responseShapeKey"] == "general_cancel_fee_policy_summary"
 
 
-def test_direct_faq_policy_tool_payload_builds_support_policy_event() -> None:
+def test_direct_faq_policy_tool_payload_skips_standard_support_policy_event() -> None:
     contract = build_turn_contract(
         user_text="DOT 기준으로 오래된 거 아냐?",
         intent_frame=IntentFrame(domain=PolicyDomain.SUPPORT, intent="tire_manufacture_date_policy"),
@@ -31161,12 +31159,7 @@ def test_direct_faq_policy_tool_payload_builds_support_policy_event() -> None:
         },
     )
 
-    assert payload is not None
-    tool_input, tool_result, event = payload
-    assert tool_input == {"query": "DOT 기준으로 오래된 거 아냐?", "top_k": 8}
-    assert tool_result["status"] == "success"
-    assert event["source_domain"] == "support"
-    assert event["data"]["metadata"]["responseShapeKey"] == "tire_manufacture_date_policy"
+    assert payload is None
 
 
 def test_direct_faq_policy_tool_payload_skips_signup_support_policy_event() -> None:

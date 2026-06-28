@@ -16899,11 +16899,7 @@ def _build_turn_contract_required_slot_guard_event(
 
 
 _FAQ_POLICY_FALLBACK_INTENTS = frozenset({
-    "tire_manufacture_date_policy",
-    "reservation_window_policy",
-    "external_tire_install_policy",
     "tire_condition_photo_policy",
-    "payment_error_troubleshooting",
 })
 _DIRECT_SUPPORT_FAQ_POLICY_INTENTS = _FAQ_POLICY_FALLBACK_INTENTS
 _FAQ_POLICY_FALLBACK_SOURCE_TOOLS = frozenset({"get_faq_tool", "search_faq_rag_tool", "search_faq_hybrid_tool"})
@@ -17660,7 +17656,7 @@ async def recover_blocked_fast_path_to_contract_tool(
             return None
         if preferred_tool in forbidden_tools:
             return None
-        if str(turn_contract.intent or "") not in {"general_cancel_fee_policy", "general_card_cancel_timing_policy"} | _DIRECT_SUPPORT_FAQ_POLICY_INTENTS:
+        if str(turn_contract.intent or "") not in _DIRECT_SUPPORT_FAQ_POLICY_INTENTS:
             return None
         tool_input = {"query": user_text, "top_k": 8}
         tool_input_source = "user_text"
@@ -28548,9 +28544,7 @@ class TStationChatServiceV2:
             event_data = photo_policy_event.get("data") if isinstance(photo_policy_event.get("data"), dict) else {}
             return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
 
-        if turn_contract and turn_contract.intent in (
-            {"general_cancel_fee_policy", "general_card_cancel_timing_policy"} | _DIRECT_SUPPORT_FAQ_POLICY_INTENTS
-        ):
+        if turn_contract and turn_contract.intent in _DIRECT_SUPPORT_FAQ_POLICY_INTENTS:
             from services.tstation.agents.e_support_agent.tools import search_faq_hybrid_tool as _search_faq_hybrid_tool
 
             tool_input = {"query": last_user_text, "top_k": 8}
