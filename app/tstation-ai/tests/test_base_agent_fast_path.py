@@ -1,5 +1,6 @@
 import json
 
+import pytest
 from langchain_core.messages import AIMessage, ToolMessage
 
 from services.tstation.agents.base_agent import (
@@ -16,7 +17,11 @@ from services.tstation.agents.base_agent import (
     _vehicle_owner_lookup_args_after_registered_mismatch,
 )
 from services.tstation.policies.response_decision import ResponseDecision, ResponseShape, TemplateName
-from services.tstation.template_mapper import current_transaction_response_decision, current_user_text
+from services.tstation.template_mapper import (
+    current_discovery_response_decision,
+    current_transaction_response_decision,
+    current_user_text,
+)
 
 
 def test_fast_path_allows_product_search_product_template():
@@ -570,6 +575,51 @@ def test_possessive_model_match_keeps_registered_vehicle_flow():
         tool_result,
         [{"role": "user", "content": "내 차 제타에 맞는 타이어 추천"}],
     )
+
+    assert should_defer is False
+
+
+@pytest.mark.parametrize(
+    "user_text",
+    [
+        "내 차 기준으로 한국타이어 올웨더 상품 추천해줘",
+        "내 차량 기반으로 사계절 추천해줘",
+    ],
+)
+def test_vehicle_resolved_recommendation_contract_keeps_listcar_fast_path(user_text: str) -> None:
+    tool_result = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "car_no": "29조3344",
+                    "car_lnc_cd": "W036270",
+                    "car_nm": "뉴 제타(6세대) 2.0 TDI A/T",
+                    "car_model_det": "제타(6세대) (2011 - 2016)",
+                    "tire_size_fr": "2254517",
+                }
+            ]
+        },
+    }
+    token = current_discovery_response_decision.set(
+        ResponseDecision(
+            response_shape=ResponseShape.LIST,
+            template=TemplateName.LIST_CAR,
+            required_slots=(),
+            metadata={
+                "response_shape_key": "vehicle_resolved_recommendation",
+                "flow_step": "select_vehicle",
+            },
+        )
+    )
+    try:
+        should_defer = _should_defer_listcar_for_possessive_model_mismatch(
+            "get_my_cars_tool",
+            tool_result,
+            [{"role": "user", "content": user_text}],
+        )
+    finally:
+        current_discovery_response_decision.reset(token)
 
     assert should_defer is False
 

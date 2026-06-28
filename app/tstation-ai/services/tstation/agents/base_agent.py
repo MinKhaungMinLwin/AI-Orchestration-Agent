@@ -484,6 +484,22 @@ def _should_defer_listcar_for_possessive_model_mismatch(
         return False
     if not isinstance(tool_result, dict) or tool_result.get("status") != "success":
         return False
+    try:
+        from services.tstation.template_mapper import current_discovery_response_decision
+
+        decision = current_discovery_response_decision.get()
+    except Exception:
+        decision = None
+    if decision is not None:
+        decision_metadata = getattr(decision, "metadata", None) or {}
+        template = getattr(decision, "template", None)
+        template_value = getattr(template, "value", template)
+        if (
+            str(template_value or "").strip() == "listCar"
+            and str(decision_metadata.get("response_shape_key") or "").strip() == "vehicle_resolved_recommendation"
+            and str(decision_metadata.get("flow_step") or "").strip() == "select_vehicle"
+        ):
+            return False
     if _is_explicit_vehicle_list_request(messages):
         return False
     user_text = _latest_user_text(messages)

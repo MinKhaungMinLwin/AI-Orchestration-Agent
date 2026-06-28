@@ -7938,8 +7938,12 @@ def _coerce_non_selection_listcar_to_quickreply(event: dict) -> dict | None:
         contract_intent = str(contract_meta.get("contract_intent") or "").strip()
         response_shape_key = str(contract_meta.get("response_shape_key") or "").strip()
         if (
-            contract_intent in {"vehicle_tire_size_lookup", "my_vehicle_lookup"}
-            or response_shape_key in {"vehicle_information", "vehicle_based_recommendation_refinement"}
+            contract_intent in {"vehicle_tire_size_lookup", "my_vehicle_lookup", "vehicle_resolved_recommendation"}
+            or response_shape_key in {
+                "vehicle_information",
+                "vehicle_based_recommendation_refinement",
+                "vehicle_resolved_recommendation",
+            }
         ):
             return None
     source_domain = str(event.get("source_domain") or "").lower()

@@ -13721,6 +13721,24 @@ def test_non_selection_listcar_is_not_coerced_for_vehicle_information_contract()
     assert _coerce_non_selection_listcar_to_quickreply(event) is None
 
 
+def test_non_selection_listcar_is_not_coerced_for_vehicle_resolved_recommendation_contract() -> None:
+    event = {
+        "template": "listCar",
+        "source_domain": "discovery",
+        "data": {
+            "assistantResponse": "차량을 선택해 주세요.",
+            "listCar": [{"licensePlate": "205소4214", "info": "GV70"}],
+            "metadata": [{"carNo": "205소4214", "ctaAction": "select_vehicle_candidate"}],
+            "contractMetadata": {
+                "contract_intent": "vehicle_resolved_recommendation",
+                "response_shape_key": "vehicle_resolved_recommendation",
+            },
+        },
+    }
+
+    assert _coerce_non_selection_listcar_to_quickreply(event) is None
+
+
 def test_apply_history_product_selection_state_resolves_goods_no_and_trace_metadata() -> None:
     slots = ConversationSlots(goods_no=None, tire_size="225/55R18")
     prev_tool_data = [{
