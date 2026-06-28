@@ -1526,7 +1526,7 @@ def _align_domains_to_turn_contract(
 ) -> list[MultiAgentDomain.Domain]:
     if turn_contract is None:
         return domains
-    if action_mode != "support_policy_answer":
+    if action_mode not in {"support_policy_answer", "info_only"}:
         return domains
     if str(turn_contract.domain or "") != MultiAgentDomain.Domain.SUPPORT.value:
         return domains
@@ -17357,11 +17357,13 @@ def _finalize_direct_code_event(
 _FAST_PATH_TRANSACTION_RECOVERY_BLOCKLIST = frozenset({
     "quick_order_tool",
     "transaction_store_preview_tool",
-    "get_store_schedule_tool",
     "get_multi_store_schedule_tool",
     "get_final_price_tool",
     "get_logistics_inventory_tool",
     "get_store_inventory_tool",
+})
+_FAST_PATH_TRANSACTION_RECOVERY_ALLOWED_TOOLS = frozenset({
+    "get_store_schedule_tool",
 })
 _FAST_PATH_DISCOVERY_RECOVERY_ALLOWED_TOOLS = frozenset({
     "search_product_tool",
@@ -17476,6 +17478,75 @@ def _contract_required_recommendation_tool_input(
     return tool_input
 
 
+def _is_contract_required_stock_store_schedule(turn_contract: TurnContract | None) -> bool:
+    if turn_contract is None:
+        return False
+    if str(turn_contract.domain or "").strip().lower() != PolicyDomain.TRANSACTION.value:
+        return False
+    if str(turn_contract.intent or "").strip() not in {"stock_store_search", "stock_store_search_slot_fill_store"}:
+        return False
+    response_decision = turn_contract.response_decision or {}
+    if str(response_decision.get("template") or "").strip() != "datepick":
+        return False
+    metadata = response_decision.get("metadata")
+    response_shape_key = str(metadata.get("response_shape_key") or "") if isinstance(metadata, Mapping) else ""
+    if response_shape_key and response_shape_key != "reservation_slots":
+        return False
+    allowed_tools = {str(tool) for tool in tuple(turn_contract.allowed_tools or ()) if str(tool).strip()}
+    if "get_store_schedule_tool" not in allowed_tools:
+        return False
+    if "get_store_schedule_tool" in {str(tool) for tool in tuple(turn_contract.forbidden_tools or ()) if str(tool).strip()}:
+        return False
+    if tuple(turn_contract.blocking_required_slots or ()):
+        return False
+    known_slots = turn_contract.known_slots or {}
+    schedule_mode = str(
+        known_slots.get("schedule_mode")
+        or known_slots.get("inventory_mode")
+        or ""
+    ).strip()
+    return bool(
+        known_slots.get("shop_id")
+        and schedule_mode
+        and known_slots.get("goods_no")
+        and known_slots.get("tire_size")
+        and (known_slots.get("ord_qty") or known_slots.get("quantity"))
+        and str(known_slots.get("source_tool") or "") == "transaction_store_preview_tool"
+    )
+
+
+def _contract_required_stock_store_schedule_tool_input(turn_contract: TurnContract) -> dict[str, Any]:
+    if not _is_contract_required_stock_store_schedule(turn_contract):
+        return {}
+    known_slots = turn_contract.known_slots or {}
+    shop_id = str(known_slots.get("shop_id") or "").strip()
+    schedule_mode = str(
+        known_slots.get("schedule_mode")
+        or known_slots.get("inventory_mode")
+        or ""
+    ).strip()
+    if not shop_id or not schedule_mode:
+        return {}
+    return {"shop_id": shop_id, "mode": schedule_mode}
+
+
+async def _recover_contract_required_stock_store_schedule(
+    *,
+    turn_contract: TurnContract | None,
+    user_text: str,
+    merged_slots: ConversationSlots | None,
+    blocked_fast_path_source: str = "contract_required_stock_store_schedule",
+) -> dict[str, Any] | None:
+    if not _is_contract_required_stock_store_schedule(turn_contract):
+        return None
+    return await recover_blocked_fast_path_to_contract_tool(
+        turn_contract=turn_contract,
+        user_text=user_text,
+        merged_slots=merged_slots,
+        blocked_fast_path_source=blocked_fast_path_source,
+    )
+
+
 async def _recover_contract_required_vehicle_recommendation(
     *,
     turn_contract: TurnContract | None,
@@ -17520,6 +17591,34 @@ def _complete_active_recommendation_flow_for_direct_return(
     updated_slots = slots.model_copy()
     updated_slots.availability_context = availability_context
     return updated_slots, completed_context
+
+
+def _advance_active_stock_flow_for_schedule_direct_return(
+    slots: ConversationSlots | None,
+) -> tuple[ConversationSlots | None, dict[str, Any] | None]:
+    if slots is None:
+        return None, None
+    availability_context = (
+        dict(slots.availability_context)
+        if isinstance(getattr(slots, "availability_context", None), dict)
+        else {}
+    )
+    active_context = availability_context.get("active_flow_context")
+    if not isinstance(active_context, Mapping) or str(active_context.get("flow_type") or "") != "stock":
+        return slots, None
+    commit_result = commit_flow_state(
+        active_context,
+        {"flow_type": "stock"},
+        source="direct_return:stock_schedule_datepick",
+        flow_type="stock",
+        flow_step="show_schedule_datepick",
+        status="active",
+    )
+    updated_context = commit_result.state.to_active_flow_context()
+    availability_context["active_flow_context"] = updated_context
+    updated_slots = slots.model_copy()
+    updated_slots.availability_context = availability_context
+    return updated_slots, updated_context
 
 
 def _annotate_contract_tool_recovery_event(
@@ -17698,6 +17797,20 @@ async def recover_blocked_fast_path_to_contract_tool(
         tool_input = {"query": user_text, "top_k": 8}
         tool_input_source = "user_text"
         display_name = "FAQ 확인 중..."
+    elif domain == PolicyDomain.TRANSACTION.value:
+        contract_required_schedule_input = _contract_required_stock_store_schedule_tool_input(turn_contract)
+        if len(allowed_tools) == 1:
+            preferred_tool = allowed_tools[0]
+        if preferred_tool not in _FAST_PATH_TRANSACTION_RECOVERY_ALLOWED_TOOLS:
+            return None
+        if preferred_tool in forbidden_tools:
+            return None
+        if preferred_tool != "get_store_schedule_tool" or not contract_required_schedule_input:
+            return None
+        tool_input = dict(contract_required_schedule_input)
+        tool_input_source = "turn_contract_required_stock_store_schedule"
+        display_name = "예약 가능 일정 확인 중..."
+        source_domain = PolicyDomain.TRANSACTION.value
     else:
         return None
 
@@ -17707,10 +17820,15 @@ async def recover_blocked_fast_path_to_contract_tool(
     if preferred_tool in _FAST_PATH_TRANSACTION_RECOVERY_BLOCKLIST:
         return None
 
-    if domain == PolicyDomain.DISCOVERY.value:
+    if domain in {PolicyDomain.DISCOVERY.value, PolicyDomain.TRANSACTION.value}:
         from services.tstation.template_mapper import try_build_template
 
-        tool = getattr(discovery_tools, preferred_tool, None)
+        if domain == PolicyDomain.DISCOVERY.value:
+            tool = getattr(discovery_tools, preferred_tool, None)
+        else:
+            from services.tstation.agents.c_transaction_agent import tools as transaction_tools
+
+            tool = getattr(transaction_tools, preferred_tool, None)
         if tool is None or not hasattr(tool, "invoke"):
             return None
         raw_result = await asyncio.to_thread(tool.invoke, tool_input)
@@ -17727,6 +17845,8 @@ async def recover_blocked_fast_path_to_contract_tool(
             assistant_text = "추천 상품을 확인했어요."
         elif preferred_tool == "get_my_cars_tool":
             assistant_text = "등록된 차량을 확인했어요."
+        elif preferred_tool == "get_store_schedule_tool":
+            assistant_text = "예약 가능 일정을 확인했어요."
         else:
             assistant_text = "요청하신 정보를 확인했어요."
         mapped_event = try_build_template(
@@ -35472,6 +35592,40 @@ class TStationChatServiceV2:
             assistant_response = str((product_event.get("data") or {}).get("assistantResponse") or "")
             if assistant_response:
                 yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[DISCOVERY AGENT]'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
+        contract_required_stock_store_schedule = await _recover_contract_required_stock_store_schedule(
+            turn_contract=turn_contract,
+            user_text=user_query,
+            merged_slots=pending_slots or initial_slots,
+        )
+        if contract_required_stock_store_schedule is not None:
+            _record_code_tool_result(
+                str(contract_required_stock_store_schedule["tool_name"]),
+                dict(contract_required_stock_store_schedule["tool_input"]),
+                dict(contract_required_stock_store_schedule["tool_result"]),
+            )
+            stock_slots, stock_flow = _advance_active_stock_flow_for_schedule_direct_return(
+                pending_slots or initial_slots
+            )
+            if stock_slots is not None:
+                pending_slots = stock_slots
+            if stock_flow is not None:
+                vehicle_selection_trace_metadata["active_stock_flow_context_scheduled"] = True
+                vehicle_selection_trace_metadata["active_stock_flow_context_after_schedule"] = stock_flow
+            await _persist_pending_slots_for_direct_return()
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+            for recovery_event in contract_required_stock_store_schedule["events"]:
+                yield f"data: {json.dumps(recovery_event, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+            schedule_event = contract_required_stock_store_schedule["event"]
+            yield f"data: {json.dumps(schedule_event, ensure_ascii=False)}\n\n"
+            assistant_response = str((schedule_event.get("data") or {}).get("assistantResponse") or "")
+            if assistant_response:
+                yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[TRANSACTION AGENT]'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
             yield "data: [DONE]\n\n"

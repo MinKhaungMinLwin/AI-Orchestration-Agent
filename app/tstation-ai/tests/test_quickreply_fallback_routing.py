@@ -10766,7 +10766,7 @@ def test_support_policy_contract_aligns_transaction_route_to_support_agent() -> 
         domains=[MultiAgentDomain.Domain.TRANSACTION],
         routing_result=routing_result,
         turn_contract=contract,
-        action_mode="support_policy_answer",
+        action_mode="info_only",
     )
 
     assert aligned_domains == [MultiAgentDomain.Domain.SUPPORT]
@@ -17123,6 +17123,119 @@ def test_recover_blocked_fast_path_to_contract_tool_does_not_run_transaction_pre
     )
 
     assert recovery is None
+
+
+def test_recover_blocked_fast_path_to_contract_tool_runs_selected_store_schedule_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_input: dict[str, Any] = {}
+
+    def _fake_schedule_invoke(tool_input: dict[str, Any]) -> dict[str, Any]:
+        captured_input.update(tool_input)
+        return {
+            "status": "success",
+            "data": {
+                "shop_id": tool_input["shop_id"],
+                "shop_nm": "티스테이션 분당정자점",
+                "mode": tool_input["mode"],
+                "is_installable": True,
+                "slots": [
+                    {"cal_day": "20260629", "tm": "0900"},
+                    {"cal_day": "20260629", "tm": "1000"},
+                ],
+            },
+        }
+
+    def _fake_try_build_template(tool_data_list: list[dict[str, Any]], assistant_text: str) -> dict[str, Any]:
+        assert tool_data_list[0]["tool"] == "get_store_schedule_tool"
+        assert tool_data_list[0]["args"] == {"shop_id": "F00071", "mode": "in_store_logistics_combined"}
+        return {
+            "type": "data",
+            "template": "datepick",
+            "data": {
+                "assistantResponse": assistant_text,
+                "dates": [{"date": "2026년 6월 29일", "availableTimes": [9, 10], "available": True}],
+                "metadata": {"responseShapeKey": "reservation_slots"},
+            },
+        }
+
+    async def _fake_to_thread(func: Any, *args: Any, **kwargs: Any) -> Any:
+        return func(*args, **kwargs)
+
+    from services.tstation.agents.c_transaction_agent import tools as transaction_tools
+    from services.tstation import template_mapper as template_mapper_module
+
+    monkeypatch.setattr(
+        transaction_tools,
+        "get_store_schedule_tool",
+        SimpleNamespace(invoke=_fake_schedule_invoke),
+    )
+    monkeypatch.setattr(chat_module.asyncio, "to_thread", _fake_to_thread)
+    monkeypatch.setattr(template_mapper_module, "try_build_template", _fake_try_build_template)
+
+    contract = TurnContract(
+        domain="transaction",
+        intent="stock_store_search_slot_fill_store",
+        known_slots={
+            "goods_no": "G000000310126",
+            "tire_size": "245/45R19",
+            "ord_qty": 2,
+            "shop_id": "F00071",
+            "shop_name": "티스테이션 분당정자점",
+            "source_tool": "transaction_store_preview_tool",
+            "stock_check_mode": "preview",
+            "schedule_mode": "in_store_logistics_combined",
+            "schedule_tier": "in_store_logistics_combined",
+            "inventory_mode": "in_store_logistics_combined",
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+        },
+        allowed_tools=("get_store_schedule_tool",),
+        forbidden_tools=(
+            "transaction_store_preview_tool",
+            "get_store_inventory_tool",
+            "get_logistics_inventory_tool",
+            "get_store_list_tool",
+            "get_nearby_stores_tool",
+            "search_stores_tool",
+            "get_multi_store_schedule_tool",
+            "quick_order_tool",
+        ),
+        blocking_required_slots=(),
+        context_state="resumed",
+        response_decision={
+            "template": "datepick",
+            "metadata": {
+                "response_shape_key": "reservation_slots",
+                "schedule_mode": "in_store_logistics_combined",
+            },
+        },
+    )
+
+    assert chat_module._is_contract_required_stock_store_schedule(contract) is True
+    assert chat_module._contract_required_stock_store_schedule_tool_input(contract) == {
+        "shop_id": "F00071",
+        "mode": "in_store_logistics_combined",
+    }
+
+    recovery = asyncio.run(
+        chat_module.recover_blocked_fast_path_to_contract_tool(
+            turn_contract=contract,
+            user_text="티스테이션 분당정자점",
+            merged_slots=ConversationSlots(),
+            blocked_fast_path_source="contract_required_stock_store_schedule",
+        )
+    )
+
+    assert recovery is not None
+    assert recovery["tool_name"] == "get_store_schedule_tool"
+    assert captured_input == {"shop_id": "F00071", "mode": "in_store_logistics_combined"}
+    assert recovery["events"][0]["tool"] == "get_store_schedule_tool"
+    assert recovery["events"][2]["tool"] == "get_store_schedule_tool"
+    assert recovery["event"]["template"] == "datepick"
+    metadata = recovery["event"]["data"]["metadata"]
+    assert metadata["recovered_tool"] == "get_store_schedule_tool"
+    assert metadata["tool_input_source"] == "turn_contract_required_stock_store_schedule"
 
 
 def test_recover_blocked_fast_path_to_contract_tool_runs_recommendation_refinement_contract(
