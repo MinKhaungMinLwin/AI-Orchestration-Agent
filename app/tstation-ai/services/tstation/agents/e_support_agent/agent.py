@@ -74,7 +74,7 @@ Respond in Korean by default; English if the user writes in English.
       {"label":"처음으로","domain":"LEADING"}
     ]
 
-⚠️ HARD STOP — 결제 오류/결제창/결제 진행 불가 troubleshooting:
+⚠️ HARD STOP — 명확한 결제 오류/결제창/결제 진행 불가 troubleshooting:
 Router `policy_intent`가 `payment_error_troubleshooting`이거나 사용자 의도가 결제 진행 중 오류, 결제창/결제 화면 문제,
 결제 진행 불가, 장착일 선택란 미노출 같은 checkout troubleshooting이면:
 → 1차 행동은 반드시 `search_faq_hybrid_tool(query=<현재 사용자 발화>)`.
@@ -83,6 +83,8 @@ Router `policy_intent`가 `payment_error_troubleshooting`이거나 사용자 의
   일반 결제 방식으로 변경하여 재시도, 동일 오류 지속 시 고객센터/1:1 문의.
 → `transfer_to_qna_tool` 단독 호출 금지. 해결 방법 없이 "1:1 문의로 접수해 주세요"만 말하지 않는다.
 → 단, 사용자가 명시적으로 상담원 연결/1:1 문의 접수를 요청한 경우는 human escalation intent가 우선이며 `transfer_to_qna_tool` 허용.
+→ 무이자 할부, 카드사별 개월수, 카드사 포인트/제휴 혜택, 결제 실패 후 쿠폰 복원은 결제 오류 troubleshooting 이 아니다.
+  해당 질문은 아래 tool table에 따라 `get_card_installments_tool`, `check_coupon_stacking_tool`, 또는 일반 FAQ 흐름으로 처리한다.
 → FAQ에 없는 특정 결제수단, 브라우저, 외부 결제사 장애 원인을 단정하지 않는다. 먼저 시도해볼 수 있는 방법 중심으로 안내한다.
 
 ⚠️ HARD STOP — 매장/서비스 불만 + 법적 조치 요청:
@@ -94,17 +96,13 @@ Router `policy_intent`가 `payment_error_troubleshooting`이거나 사용자 의
 → quickReplies: [{"label":"1:1 문의하기","domain":"SUPPORT"}, {"label":"고객센터 안내","domain":"SUPPORT"}]
 → "고소장은 어디 제출", "소송 절차", "내용증명 작성/발송 방법", "분쟁조정 신청 기관" 같은 안내 금지.
 
-⚠️ HARD STOP — FAQ before escalation policy buckets:
+⚠️ HARD STOP — 고위험 FAQ-first policy buckets:
 Router `policy_intent` 가 아래 중 하나이면, 불만/교환/환불/보상 표현이 섞여도 먼저 FAQ/policy quickReply 로 답한다.
 - `tire_manufacture_date_policy`
-- `tire_quality_warranty_policy`
-- `assurance_service_policy`
-- `reservation_policy_guidance`
 - `reservation_window_policy`
-- `installation_work_policy`
 - `external_tire_install_policy`
-- `promotion_gift_policy`
 - `tire_condition_photo_policy`
+- `payment_error_troubleshooting`
 
 이 경우 1차 행동은 반드시 `search_faq_hybrid_tool(query=<현재 사용자 발화>)`.
 → FAQ 근거 범위에서 정책/조건/확인 경로를 먼저 요약한다.
@@ -689,9 +687,10 @@ Rules:
 _HYBRID_FAQ_OVERRIDE = """
 
 ## [HYBRID MODE] FAQ Search Override
-Use `search_faq_hybrid_tool(query)` for ALL FAQ queries (Intent 1B, 1C, warranty policy questions).
-Do NOT call `get_faq_tool` or `search_faq_rag_tool` — `search_faq_hybrid_tool` handles retrieval internally.
-Interpret the returned items the same way as `get_faq_tool` results and apply the same score-based answer rules.
+Use `search_faq_hybrid_tool(query)` only for the explicit FAQ-first policy buckets listed above.
+For ordinary support information requests, keep the normal order: `get_faq_tool` first, then `search_faq_rag_tool`
+only when the FAQ result is missing or insufficient.
+Interpret hybrid results the same way as FAQ/RAG evidence and apply the same score-based answer rules.
 """
 
 
@@ -704,15 +703,11 @@ def get_support_system_prompt() -> str:
 
 
 def get_support_tools() -> list:
-    from config.env import settings
-
     faq_tools = [
         get_faq_tool,
         search_faq_rag_tool,
         search_faq_hybrid_tool,
     ]
-    if getattr(settings, "FAQ_SEARCH_MODE", "hybrid") == "hybrid":
-        faq_tools = [search_faq_hybrid_tool]
 
     return [
         *faq_tools,

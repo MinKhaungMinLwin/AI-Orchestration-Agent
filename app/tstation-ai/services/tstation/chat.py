@@ -16898,22 +16898,12 @@ def _build_turn_contract_required_slot_guard_event(
 
 _FAQ_POLICY_FALLBACK_INTENTS = frozenset({
     "tire_manufacture_date_policy",
-    "tire_quality_warranty_policy",
-    "assurance_service_policy",
     "reservation_window_policy",
-    "reservation_policy_guidance",
-    "delivery_delay_reservation_schedule_policy",
-    "installation_work_policy",
     "external_tire_install_policy",
-    "promotion_gift_policy",
     "tire_condition_photo_policy",
-    "coupon_usage_policy",
-    "coupon_registration_policy",
+    "payment_error_troubleshooting",
 })
-_DIRECT_SUPPORT_FAQ_POLICY_INTENTS = _FAQ_POLICY_FALLBACK_INTENTS | {
-    "signup_first_purchase_benefit_policy",
-    "signup_coupon_guidance",
-}
+_DIRECT_SUPPORT_FAQ_POLICY_INTENTS = _FAQ_POLICY_FALLBACK_INTENTS
 _FAQ_POLICY_FALLBACK_SOURCE_TOOLS = frozenset({"get_faq_tool", "search_faq_rag_tool", "search_faq_hybrid_tool"})
 _USER_UPLOAD_REQUEST_RE = re.compile(
     r"사진\s*(?:보낼|올릴|업로드|첨부)|이미지\s*(?:보낼|올릴|업로드|첨부)|"

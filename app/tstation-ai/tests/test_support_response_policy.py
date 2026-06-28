@@ -150,6 +150,30 @@ def test_payment_error_troubleshooting_does_not_absorb_card_installment_lookup()
     assert decision.metadata["response_shape_key"] == "support_faq_summary"
 
 
+def test_payment_error_troubleshooting_does_not_absorb_card_points_or_coupon_restore() -> None:
+    card_points = decide_support_response(
+        intent="payment_error_troubleshooting",
+        user_text="신용카드 결제할 때 카드사 포인트 쓸 수 있나요?",
+    )
+    coupon_restore = decide_support_response(
+        intent="payment_error_troubleshooting",
+        user_text="결제하다가 오류났는데 쿠폰은 다시 돌아옴?",
+    )
+
+    assert card_points.metadata["response_shape_key"] == "support_faq_summary"
+    assert coupon_restore.metadata["response_shape_key"] == "support_faq_summary"
+
+
+def test_payment_error_troubleshooting_keeps_checkout_screen_error_faq_first() -> None:
+    decision = decide_support_response(
+        intent="payment_error_troubleshooting",
+        user_text="카카오페이 결제 누르면 화면이 하얗게 멈춰",
+    )
+
+    assert decision.metadata["response_shape_key"] == "payment_error_troubleshooting"
+    assert "qna_without_faq_solution" in decision.forbidden_behaviors
+
+
 def test_external_tire_install_policy_text_trigger_blocks_work_started_cancel_drift() -> None:
     decision = decide_support_response(
         intent="support_faq",

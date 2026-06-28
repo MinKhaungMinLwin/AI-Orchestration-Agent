@@ -54,12 +54,19 @@ _ONLINE_ORDER_CANCEL_RE = re.compile(
     re.IGNORECASE,
 )
 _PAYMENT_ERROR_RE = re.compile(
-    r"결제\s*(?:오류|에러|실패|안\s*돼|안\s*되|안\s*열)|결제창|결제\s*화면|승인\s*실패|장착일\s*선택란",
+    r"결제\s*(?:오류|에러|실패|안\s*돼|안\s*되|안\s*열|진행\s*불가)|"
+    r"결제.{0,16}(?:창|화면).{0,16}(?:안\s*열|안\s*떠|멈|하얗|오류|에러|먹통)|"
+    r"(?:창|화면).{0,16}(?:멈|하얗|먹통).{0,16}결제|"
+    r"승인\s*실패|본인\s*인증.{0,8}(?:실패|안\s*돼|안\s*되)|장착일\s*선택란",
     re.IGNORECASE,
 )
 _CARD_INSTALLMENT_LOOKUP_RE = re.compile(
     r"무이자|할부|몇\s*개?월|[0-9]{1,2}\s*개?월|개월수|카드사별|현대카드|신한카드|삼성카드|국민카드|"
     r"롯데카드|하나카드|농협카드|우리카드|비씨카드|BC카드|스마트\s*페이|smart\s*pay|smartpay",
+    re.IGNORECASE,
+)
+_PAYMENT_METHOD_OR_COUPON_POLICY_RE = re.compile(
+    r"쿠폰|포인트|제휴\s*혜택|제휴카드|카드사\s*혜택|카드\s*혜택|복원|원복|다시\s*돌아",
     re.IGNORECASE,
 )
 _ASSURANCE_DOCUMENT_LOST_RE = re.compile(r"보증서.{0,12}(분실|잃어버|없어)|종이\s*보증서", re.IGNORECASE)
@@ -190,6 +197,13 @@ def _support_faq_candidates(tool_result: Mapping[str, Any] | None) -> list[Mappi
 
 def _is_card_installment_lookup_query(text: str) -> bool:
     return bool(_CARD_INSTALLMENT_LOOKUP_RE.search(str(text or "")))
+
+
+def _is_payment_error_troubleshooting_query(text: str) -> bool:
+    value = str(text or "")
+    return bool(_PAYMENT_ERROR_RE.search(value)) and not (
+        _is_card_installment_lookup_query(value) or _PAYMENT_METHOD_OR_COUPON_POLICY_RE.search(value)
+    )
 
 
 def _support_faq_candidate_score(candidate: Mapping[str, Any]) -> float | None:
@@ -852,9 +866,9 @@ def resolve_support_faq_policy_context(intent: str, user_text: str) -> dict[str,
         return {"policy_group": _RESERVATION_INSTALLATION_POLICY, "fact_type": "reservation_window"}
     if normalized_intent == "external_tire_install_policy":
         return {"policy_group": _RESERVATION_INSTALLATION_POLICY, "fact_type": "external_tire_install"}
-    if normalized_intent == "payment_error_troubleshooting" and _is_card_installment_lookup_query(text):
+    if normalized_intent == "payment_error_troubleshooting" and not _is_payment_error_troubleshooting_query(text):
         return None
-    if (normalized_intent == "payment_error_troubleshooting" or _PAYMENT_ERROR_RE.search(text)) and not _is_card_installment_lookup_query(text):
+    if normalized_intent == "payment_error_troubleshooting" or _is_payment_error_troubleshooting_query(text):
         return {"policy_group": _PAYMENT_REFUND_POLICY, "fact_type": "payment_error_troubleshooting"}
     if normalized_intent == "tire_manufacture_date_policy":
         return {"policy_group": _PRODUCT_CONDITION_POLICY, "fact_type": "manufacture_date"}
@@ -2262,7 +2276,7 @@ def decide_support_response(
             ),
         )
 
-    if intent == "payment_error_troubleshooting" and not _is_card_installment_lookup_query(text):
+    if intent == "payment_error_troubleshooting" and _is_payment_error_troubleshooting_query(text):
         return _decision(
             response_shape_key="payment_error_troubleshooting",
             response_shape=ResponseShape.SUMMARY,

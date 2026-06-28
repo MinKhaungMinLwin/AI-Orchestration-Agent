@@ -22595,6 +22595,9 @@ def test_payment_error_troubleshooting_contract_requires_faq_first() -> None:
     assert contract.intent == "payment_error_troubleshooting"
     assert contract.known_slots["policy_intent"] == "payment_error_troubleshooting"
     assert "search_faq_hybrid_tool" in contract.allowed_tools
+    assert "get_faq_tool" in contract.allowed_tools
+    assert "search_faq_rag_tool" in contract.allowed_tools
+    assert "get_card_installments_tool" in contract.allowed_tools
     assert "search_product_tool" in contract.forbidden_tools
     assert "get_final_price_tool" in contract.forbidden_tools
 
@@ -22678,6 +22681,43 @@ def test_payment_error_troubleshooting_contract_does_not_override_card_installme
     assert contract.intent == "card_installment_lookup"
     assert "search_faq_hybrid_tool" not in contract.allowed_tools
     assert contract.known_slots["policy_intent"] == "payment_error_troubleshooting"
+
+
+def test_payment_error_troubleshooting_contract_does_not_override_card_points_or_coupon_restore() -> None:
+    for user_text in (
+        "신용카드 결제할 때 카드사 포인트 쓸 수 있나요?",
+        "결제하다가 오류났는데 쿠폰은 다시 돌아옴?",
+    ):
+        contract = build_turn_contract(
+            user_text=user_text,
+            intent_frame=IntentFrame(domain=PolicyDomain.SUPPORT, intent="support_faq"),
+            routing_result=_routing_result(
+                domains=[MultiAgentDomain.Domain.SUPPORT],
+                execution_plan=["support:payment_error_troubleshooting"],
+                policy_intent="payment_error_troubleshooting",
+            ),
+        )
+
+        assert contract.domain == "support"
+        assert contract.intent == "support_faq"
+        assert "search_faq_hybrid_tool" not in contract.allowed_tools
+        assert contract.known_slots["policy_intent"] == "payment_error_troubleshooting"
+
+
+def test_payment_error_troubleshooting_contract_keeps_checkout_screen_error_faq_first() -> None:
+    contract = build_turn_contract(
+        user_text="카카오페이 결제 누르면 화면이 하얗게 멈춰",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:payment_error_troubleshooting"],
+            policy_intent="payment_error_troubleshooting",
+        ),
+    )
+
+    assert contract.intent == "payment_error_troubleshooting"
+    assert "search_faq_hybrid_tool" in contract.allowed_tools
+    assert "get_faq_tool" in contract.allowed_tools
+    assert "search_faq_rag_tool" in contract.allowed_tools
 
 
 def test_order_document_guidance_contract_blocks_direct_qna_and_order_lookup_tools() -> None:
@@ -23646,11 +23686,12 @@ def test_support_prompt_contains_upload_capability_notice_for_photo_policy() -> 
     assert "업로드 확인이 불가능" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
 
 
-def test_support_prompt_contains_faq_before_escalation_policy_buckets() -> None:
-    assert "FAQ before escalation policy buckets" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
+def test_support_prompt_contains_narrow_faq_first_policy_buckets() -> None:
+    assert "고위험 FAQ-first policy buckets" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
     assert "tire_manufacture_date_policy" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
-    assert "reservation_policy_guidance" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
     assert "reservation_window_policy" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
+    assert "payment_error_troubleshooting" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
+    assert "reservation_policy_guidance" not in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
     assert "owned anchor" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
 
 
@@ -30957,7 +30998,7 @@ def test_direct_faq_policy_tool_payload_builds_support_policy_event() -> None:
     assert event["data"]["metadata"]["responseShapeKey"] == "tire_manufacture_date_policy"
 
 
-def test_direct_faq_policy_tool_payload_builds_signup_support_policy_event() -> None:
+def test_direct_faq_policy_tool_payload_skips_signup_support_policy_event() -> None:
     contract = build_turn_contract(
         user_text="가입하면 받을 수 있는 쿠폰 뭐야?",
         intent_frame=IntentFrame(domain=PolicyDomain.SUPPORT, intent="signup_first_purchase_benefit_policy"),
@@ -30981,11 +31022,7 @@ def test_direct_faq_policy_tool_payload_builds_signup_support_policy_event() -> 
         },
     )
 
-    assert payload is not None
-    _, _, event = payload
-    assert event["source_domain"] == "support"
-    assert event["data"]["quickReplies"][0]["url"] == CTAUrls.MEMBERSHIP_BENEFIT
-    assert event["data"]["metadata"]["responseShapeKey"] == "signup_first_purchase_benefit_policy"
+    assert payload is None
 
 
 def test_base_agent_contract_sensitive_tool_guard_replaces_forbidden_lookup_with_faq(
@@ -31715,15 +31752,16 @@ def test_stream_faq_policy_tool_response_emits_faq_tool_for_general_cancel_fee_p
     message_event = next(event for event in parsed_events if event.get("type") == "message")
 
     assert tool_event["tool"] == "search_faq_hybrid_tool"
-    assert tool_event["source_domain"] == "transaction"
+    assert tool_event["source_domain"] == "support"
     assert data_event["template"] == "quickReply"
-    assert data_event["source_domain"] == "transaction"
+    assert data_event["source_domain"] == "support"
     assert data_event["data"]["metadata"]["responseShapeKey"] == "general_cancel_fee_policy_summary"
-    assert "별도의 취소 수수료는 없고" in data_event["data"]["assistantResponse"]
-    assert "별도의 취소 수수료는 없고" in message_event["content"]
+    assert "예약/장착 관련 비용" in data_event["data"]["assistantResponse"]
+    assert "주문/예약 내역" in data_event["data"]["assistantResponse"]
+    assert "예약/장착 관련 비용" in message_event["content"]
 
 
-def test_stream_faq_policy_tool_response_emits_support_quickreply_for_signup_policy() -> None:
+def test_stream_faq_policy_tool_response_skips_direct_signup_policy() -> None:
     contract = build_turn_contract(
         user_text="가입하면 받을 수 있는 쿠폰 뭐야?",
         intent_frame=IntentFrame(domain=PolicyDomain.SUPPORT, intent="signup_first_purchase_benefit_policy"),
@@ -31753,35 +31791,7 @@ def test_stream_faq_policy_tool_response_emits_support_quickreply_for_signup_pol
         },
     )
 
-    assert payload is not None
-    tool_input, tool_result, event = payload
-
-    events = list(
-        TStationChatServiceV2._stream_faq_policy_tool_response(
-            tool_input,
-            tool_result,
-            event,
-            turn_contract=contract,
-            intent="signup_first_purchase_benefit_policy",
-            source="code_faq_policy_direct",
-        )
-    )
-    assert any(chunk == "data: [DONE]\n\n" for chunk in events)
-
-    parsed_events = []
-    for chunk in events:
-        if not chunk.startswith("data: ") or chunk == "data: [DONE]\n\n":
-            continue
-        parsed_events.append(json.loads(chunk[6:].strip()))
-
-    tool_event = next(event for event in parsed_events if event.get("type") == "tool")
-    data_event = next(event for event in parsed_events if event.get("type") == "data")
-
-    assert tool_event["tool"] == "search_faq_hybrid_tool"
-    assert tool_event["source_domain"] == "support"
-    assert data_event["source_domain"] == "support"
-    assert data_event["data"]["metadata"]["responseShapeKey"] == "signup_first_purchase_benefit_policy"
-    assert data_event["data"]["quickReplies"][0]["url"] == CTAUrls.MEMBERSHIP_BENEFIT
+    assert payload is None
 
 
 def test_stream_cta_tool_response_falls_back_to_quickreply_when_template_is_forbidden() -> None:

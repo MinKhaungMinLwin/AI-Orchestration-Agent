@@ -251,28 +251,34 @@ _SUPPORT_FAQ_POLICY_TOOL_INTENTS = frozenset({
     "general_card_cancel_timing_policy",
     "payment_error_troubleshooting",
     "tire_manufacture_date_policy",
-    "tire_quality_warranty_policy",
-    "assurance_service_policy",
     "reservation_window_policy",
-    "reservation_policy_guidance",
-    "delivery_delay_reservation_schedule_policy",
-    "installation_work_policy",
     "external_tire_install_policy",
-    "promotion_gift_policy",
     "tire_condition_photo_policy",
-    "coupon_usage_policy",
-    "coupon_registration_policy",
-    "signup_first_purchase_benefit_policy",
-    "signup_coupon_guidance",
-    "partner_member_coupon_policy",
-    "order_document_guidance",
-    "shipping_fee_policy",
-    "online_store_price_policy",
-    "regional_price_policy",
 })
+_SUPPORT_SAFE_AGENT_TOOLS = (
+    "get_faq_tool",
+    "search_faq_rag_tool",
+    "search_faq_hybrid_tool",
+    "get_card_installments_tool",
+    "get_product_warranties_tool",
+    "get_my_warranties_tool",
+    "get_maintenance_dday_tool",
+    "check_coupon_stacking_tool",
+)
 _CARD_INSTALLMENT_LOOKUP_RE = re.compile(
     r"무이자|할부|몇\s*개?월|[0-9]{1,2}\s*개?월|개월수|카드사별|현대카드|신한카드|삼성카드|국민카드|"
     r"롯데카드|하나카드|농협카드|우리카드|비씨카드|BC카드|스마트\s*페이|smart\s*pay|smartpay",
+    re.IGNORECASE,
+)
+_PAYMENT_TROUBLESHOOTING_RE = re.compile(
+    r"결제\s*(?:오류|에러|실패|안\s*돼|안\s*되|안\s*열|진행\s*불가)|"
+    r"결제.{0,16}(?:창|화면).{0,16}(?:안\s*열|안\s*떠|멈|하얗|오류|에러|먹통)|"
+    r"(?:창|화면).{0,16}(?:멈|하얗|먹통).{0,16}결제|"
+    r"승인\s*실패|본인\s*인증.{0,8}(?:실패|안\s*돼|안\s*되)|장착일\s*선택란",
+    re.IGNORECASE,
+)
+_PAYMENT_METHOD_OR_COUPON_POLICY_RE = re.compile(
+    r"쿠폰|포인트|제휴\s*혜택|제휴카드|카드사\s*혜택|카드\s*혜택|복원|원복|다시\s*돌아",
     re.IGNORECASE,
 )
 _COMPARISON_ROUTER_WINS_FOLLOWUP_INTENTS = frozenset({
@@ -454,7 +460,10 @@ def build_turn_contract(
         user_text=user_text,
     )
     policy_intent = str(getattr(routing_result, "policy_intent", "") or "")
+    if planner_intent == "payment_error_troubleshooting" and _is_payment_error_policy_overmatch(user_text):
+        planner_intent = None
     router_wins_intent = _router_wins_information_intent(
+        user_text=user_text,
         planner_intent=planner_intent,
         policy_intent=policy_intent,
         routing_result=routing_result,
@@ -719,12 +728,21 @@ def build_turn_contract(
     payment_error_overmatched_installment = (
         policy_intent == "payment_error_troubleshooting" and _CARD_INSTALLMENT_LOOKUP_RE.search(user_text or "") is not None
     )
-    if domain == "support" and policy_intent and policy_intent != "none" and not payment_error_overmatched_installment:
+    payment_error_without_troubleshooting_anchor = (
+        policy_intent == "payment_error_troubleshooting" and _is_payment_error_policy_overmatch(user_text)
+    )
+    if (
+        domain == "support"
+        and policy_intent
+        and policy_intent != "none"
+        and not payment_error_overmatched_installment
+        and not payment_error_without_troubleshooting_anchor
+    ):
         intent = policy_intent
         if policy_intent in _SUPPORT_FAQ_POLICY_TOOL_INTENTS:
             allowed_tools = _merge_tuple(
                 allowed_tools,
-                ("search_faq_hybrid_tool",),
+                _SUPPORT_SAFE_AGENT_TOOLS,
             )
             forbidden_tools = _merge_tuple(
                 forbidden_tools,
@@ -3858,6 +3876,7 @@ def _comparison_metric_row_label(metric: str) -> str:
 
 def _router_wins_information_intent(
     *,
+    user_text: str = "",
     planner_intent: str | None,
     policy_intent: str,
     routing_result: Any | None,
@@ -3880,6 +3899,8 @@ def _router_wins_information_intent(
     for candidate in candidates:
         if not candidate or candidate == "none" or candidate in _ROUTER_WINS_EXECUTION_EXCLUDED_INTENTS:
             continue
+        if candidate == "payment_error_troubleshooting" and _is_payment_error_policy_overmatch(user_text):
+            continue
         if candidate in ROUTER_WINS_INFORMATIONAL_INTENTS:
             return candidate
         if candidate.endswith("_policy") or candidate.endswith("_guidance"):
@@ -3888,6 +3909,15 @@ def _router_wins_information_intent(
     if complaint_scope == "tstation_service_complaint":
         return "tstation_service_complaint"
     return None
+
+
+def _is_payment_error_policy_overmatch(user_text: str | None) -> bool:
+    text = str(user_text or "")
+    return (
+        _CARD_INSTALLMENT_LOOKUP_RE.search(text) is not None
+        or _PAYMENT_TROUBLESHOOTING_RE.search(text) is None
+        or _PAYMENT_METHOD_OR_COUPON_POLICY_RE.search(text) is not None
+    )
 
 
 def _comparison_router_wins_intent(
@@ -3977,8 +4007,8 @@ def _router_wins_tool_boundary(intent: str) -> tuple[tuple[str, ...], tuple[str,
             ),
         )
     return (
-        ("search_faq_hybrid_tool",),
-        tuple(tool for tool in _ROUTER_WINS_TRANSACTION_FORBIDDEN_TOOLS if tool != "search_faq_hybrid_tool"),
+        _SUPPORT_SAFE_AGENT_TOOLS,
+        tuple(tool for tool in _ROUTER_WINS_TRANSACTION_FORBIDDEN_TOOLS if tool not in _SUPPORT_SAFE_AGENT_TOOLS),
     )
 
 
