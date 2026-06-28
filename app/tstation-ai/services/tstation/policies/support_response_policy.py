@@ -478,7 +478,7 @@ def _build_support_faq_policy_reply(
                 if amount_text:
                     lines.append(
                         "다만 온라인몰에서 결제까지 완료된 주문이라면 "
-                        f"{condition_text} 취소 수수료가 발생할 수 있고, FAQ 기준으로는 {amount_text} 안내돼요."
+                        f"{condition_text} 취소 수수료가 발생할 수 있고, {amount_text} 안내가 있어요."
                     )
                 else:
                     lines.append(
@@ -509,7 +509,7 @@ def _build_support_faq_policy_reply(
         amount_text = facts.get("fee_amount") or "취소 시점과 주문 상태에 따라 비용이 달라질 수 있어요."
         response = (
             "결제 완료 주문 취소 기준으로는 배송/처리 진행 상태에 따라 취소 비용이 달라질 수 있어요.\n"
-            f"현재 FAQ 근거로는 {amount_text} 기준 안내가 우선이에요.\n"
+            f"{amount_text} 기준 안내가 확인돼요.\n"
             "실제 차감 여부는 주문 상태와 취소 시점을 함께 확인해 주세요."
         )
     elif policy_group == _PURCHASE_ORDER_POLICY and fact_type == "wrong_item_or_fitment_issue":
