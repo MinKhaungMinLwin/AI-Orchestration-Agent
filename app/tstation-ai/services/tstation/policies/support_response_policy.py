@@ -82,6 +82,12 @@ _WRONG_ITEM_RE = re.compile(
     r"다른\s*(?:타이어|상품).{0,12}(왔|도착)|오배송|잘못\s*온|규격.{0,8}(안\s*맞|다르)|맞지\s*않",
     re.IGNORECASE,
 )
+_POST_INSTALL_CONCERN_RE = re.compile(
+    r"(?:교체|설치|장착|교체하고나서).{0,12}(?:소음|우는\s*소리|진동|이상한\s*소리)|"
+    r"타이어\s*(?:소음|우|진동|이상|문제)|"
+    r"(?:새\s*|새로운\s*)?타이어.{0,12}(?:소음|우|진동|이상)",
+    re.IGNORECASE,
+)
 _SUPPORT_FACT_TYPE_TO_BUCKET: dict[tuple[str, str], str] = {
     (_RESERVATION_INSTALLATION_POLICY, "visit_reservation_cancel"): "visit_reservation_cancel_policy",
     (_RESERVATION_INSTALLATION_POLICY, "store_change"): "reservation_store_change_policy",
@@ -929,8 +935,35 @@ def resolve_support_faq_policy_context(intent: str, user_text: str) -> dict[str,
             return {"policy_group": _RESERVATION_INSTALLATION_POLICY, "fact_type": "mixed_cancel_fee_generalized"}
         if has_cancel and has_order and not has_reservation:
             return {"policy_group": _PURCHASE_ORDER_POLICY, "fact_type": "online_order_cancel_fee"}
+    if _POST_INSTALL_CONCERN_RE.search(text):
+        return {
+            "policy_group": _PRODUCT_CONDITION_POLICY,
+            "fact_type": "post_installation_quality_concern",
+            "needs_direct_escalation": True,
+            "assistant_response": (
+                "소음이 느껴지니 정확히 진단받으시는 게 좋겠어요. 새 타이어는 초기 적응 단계에서 음감이 다를 수 있고, "
+                "휠 밸런스나 정렬 상태에 따라 진동이 발생할 수도 있습니다.\n\n"
+                "가까운 매장에 방문해서 정밀 점검을 받아보세요."
+            ),
+            "quick_replies": [
+                {"label": "내 주문 조회", "url": CTAUrls.ORDER_HISTORY, "domain": "SUPPORT"},
+                {"label": "1:1 문의하기", "domain": "SUPPORT"},
+            ],
+        }
     if _WRONG_ITEM_RE.search(text):
-        return {"policy_group": _PURCHASE_ORDER_POLICY, "fact_type": "wrong_item_or_fitment_issue"}
+        return {
+            "policy_group": _PURCHASE_ORDER_POLICY,
+            "fact_type": "wrong_item_or_fitment_issue",
+            "needs_direct_escalation": True,
+            "assistant_response": (
+                "주문하신 제품과 달라서 놀라셨겠어요. "
+                "매장 직원분께 상황을 말씀해 주시거나, 고객센터(080-022-8272)로 연락주시면 즉시 처리해 드리겠습니다."
+            ),
+            "quick_replies": [
+                {"label": "내 주문 조회", "url": CTAUrls.ORDER_HISTORY, "domain": "SUPPORT"},
+                {"label": "1:1 문의하기", "domain": "SUPPORT"},
+            ],
+        }
     return None
 
 
