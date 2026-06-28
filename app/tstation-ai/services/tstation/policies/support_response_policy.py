@@ -3,10 +3,307 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Mapping
 
 from services.tstation.policies.policy_text_matchers import is_general_card_cancel_timing_policy_query
 from services.tstation.policies.response_decision import ResponseDecision, ResponseShape, TemplateName
+
+
+_VISIT_CANCEL_BUCKET = "visit_reservation_cancel_policy"
+_ONLINE_CANCEL_BUCKET = "online_order_cancel_fee_policy"
+_CARD_CANCEL_BUCKET = "card_cancel_timing_policy"
+_WORK_STARTED_BUCKET = "work_started_cancel_fee_policy"
+_STORE_CHANGE_BUCKET = "reservation_store_change_policy"
+_CANCEL_POLICY_BUCKETS = frozenset({
+    _VISIT_CANCEL_BUCKET,
+    _ONLINE_CANCEL_BUCKET,
+    _CARD_CANCEL_BUCKET,
+    _WORK_STARTED_BUCKET,
+    _STORE_CHANGE_BUCKET,
+})
+_SUPPORT_FAQ_POLICY_BUCKET_INTENTS = frozenset({
+    "general_cancel_fee_policy",
+    "general_card_cancel_timing_policy",
+    "reservation_policy_guidance",
+    "installation_work_policy",
+})
+_RESERVATION_RE = re.compile(r"예약|방문|장착(?:\s*예약)?|오후\s*\d+시|당일", re.IGNORECASE)
+_ORDER_RE = re.compile(r"주문|결제|카드|승인|배송|온라인", re.IGNORECASE)
+_CANCEL_RE = re.compile(r"취소|환불|철회", re.IGNORECASE)
+_FEE_RE = re.compile(r"위약금|수수료|공임비|비용|차감", re.IGNORECASE)
+_STORE_CHANGE_RE = re.compile(r"장착점|지점|매장|방문\s*지점", re.IGNORECASE)
+_CHANGE_RE = re.compile(r"변경|바꿀|바꾸|옮길|이동", re.IGNORECASE)
+_WORK_STARTED_RE = re.compile(
+    r"작업\s*시작|작업\s*중|기존\s*타이어|다\s*뺐|탈거|분리|장착\s*하려고|공임비",
+    re.IGNORECASE,
+)
+_CATEGORY_HINTS_BY_BUCKET: dict[str, tuple[tuple[str, str], ...]] = {
+    _VISIT_CANCEL_BUCKET: (("배송/장착", "장착"),),
+    _ONLINE_CANCEL_BUCKET: (("주문/결제", "결제"), ("주문/결제", "주문")),
+    _CARD_CANCEL_BUCKET: (("주문/결제", "결제"),),
+    _WORK_STARTED_BUCKET: (("배송/장착", "장착"), ("상품/서비스", "서비스")),
+    _STORE_CHANGE_BUCKET: (("배송/장착", "장착"),),
+}
+_CATEGORY_CODE_HINTS_BY_BUCKET: dict[str, tuple[tuple[str, str], ...]] = {
+    _VISIT_CANCEL_BUCKET: (("C01", "C0106"),),
+    _ONLINE_CANCEL_BUCKET: (("C01", "C0104"), ("C01", "C0105")),
+    _CARD_CANCEL_BUCKET: (("C01", "C0105"),),
+    _WORK_STARTED_BUCKET: (("C01", "C0106"), ("C03", "C0302")),
+    _STORE_CHANGE_BUCKET: (("C01", "C0106"),),
+}
+
+
+def _normalize_support_faq_text(text: str) -> str:
+    return re.sub(r"\s+", " ", str(text or "")).strip()
+
+
+def _support_faq_candidate_text(candidate: Mapping[str, Any]) -> str:
+    parts = [
+        _normalize_support_faq_text(candidate.get("question") or ""),
+        _normalize_support_faq_text(
+            candidate.get("answer")
+            or candidate.get("pc_ans_cont")
+            or candidate.get("content")
+            or candidate.get("body")
+            or ""
+        ),
+    ]
+    return "\n".join(part for part in parts if part)
+
+
+def _support_faq_candidates(tool_result: Mapping[str, Any] | None) -> list[Mapping[str, Any]]:
+    if not isinstance(tool_result, Mapping):
+        return []
+    data = tool_result.get("data", tool_result)
+    if isinstance(data, Mapping):
+        items = data.get("items")
+        if isinstance(items, list):
+            return [item for item in items if isinstance(item, Mapping)]
+    return []
+
+
+def _support_faq_candidate_categories(candidate: Mapping[str, Any]) -> tuple[str, str, str, str]:
+    metadata = candidate.get("metadata")
+    meta = metadata if isinstance(metadata, Mapping) else {}
+    lv1 = _normalize_support_faq_text(
+        meta.get("category_lv1")
+        or meta.get("lrcl_nm")
+        or meta.get("categoryLv1")
+        or meta.get("large_category")
+        or ""
+    )
+    lv2 = _normalize_support_faq_text(
+        meta.get("category_lv2")
+        or meta.get("mdcl_nm")
+        or meta.get("categoryLv2")
+        or meta.get("medium_category")
+        or ""
+    )
+    code1 = _normalize_support_faq_text(meta.get("lrcl_cd") or meta.get("category_lv1_cd") or "")
+    code2 = _normalize_support_faq_text(meta.get("mdcl_cd") or meta.get("category_lv2_cd") or "")
+    return lv1, lv2, code1, code2
+
+
+def resolve_support_faq_policy_bucket(intent: str, user_text: str) -> dict[str, Any] | None:
+    normalized_intent = str(intent or "").strip()
+    text = str(user_text or "")
+    if normalized_intent == "general_card_cancel_timing_policy":
+        return {"bucket": _CARD_CANCEL_BUCKET}
+    if normalized_intent == "installation_work_policy":
+        if _WORK_STARTED_RE.search(text) and _CANCEL_RE.search(text):
+            return {"bucket": _WORK_STARTED_BUCKET}
+        return None
+    if normalized_intent not in {"general_cancel_fee_policy", "reservation_policy_guidance"}:
+        return None
+    if _STORE_CHANGE_RE.search(text) and _CHANGE_RE.search(text):
+        return {"bucket": _STORE_CHANGE_BUCKET}
+    has_cancel = bool(_CANCEL_RE.search(text) or _FEE_RE.search(text))
+    has_reservation = bool(_RESERVATION_RE.search(text))
+    has_order = bool(_ORDER_RE.search(text))
+    if _WORK_STARTED_RE.search(text) and has_cancel:
+        return {"bucket": _WORK_STARTED_BUCKET}
+    if has_cancel and has_reservation and not has_order:
+        return {"bucket": _VISIT_CANCEL_BUCKET}
+    if has_cancel and has_order and not has_reservation:
+        return {"bucket": _ONLINE_CANCEL_BUCKET}
+    if has_cancel and has_order and has_reservation:
+        return {
+            "bucket": None,
+            "needs_clarification": True,
+            "clarification_reason": "mixed_cancel_scope",
+            "assistant_response": "방문 예약 취소인지, 결제 완료 주문 취소인지 먼저 알려주시면 정확히 안내드릴게요.",
+            "quick_replies": [
+                {"label": "방문 예약 취소", "domain": "SUPPORT"},
+                {"label": "결제 완료 주문 취소", "domain": "SUPPORT"},
+            ],
+        }
+    return None
+
+
+def _support_faq_bucket_allowed_candidate(bucket: str, candidate: Mapping[str, Any]) -> bool:
+    allowed_names = _CATEGORY_HINTS_BY_BUCKET.get(bucket, ())
+    allowed_codes = _CATEGORY_CODE_HINTS_BY_BUCKET.get(bucket, ())
+    lv1, lv2, code1, code2 = _support_faq_candidate_categories(candidate)
+    if any(lv1 == name1 and lv2 == name2 for name1, name2 in allowed_names if lv1 and lv2):
+        return True
+    if any(code1 == name1 and code2 == name2 for name1, name2 in allowed_codes if code1 and code2):
+        return True
+
+    text = _support_faq_candidate_text(candidate)
+    if bucket == _VISIT_CANCEL_BUCKET:
+        return bool(_RESERVATION_RE.search(text) and _CANCEL_RE.search(text))
+    if bucket == _ONLINE_CANCEL_BUCKET:
+        return bool(_ORDER_RE.search(text) and _CANCEL_RE.search(text))
+    if bucket == _CARD_CANCEL_BUCKET:
+        return bool(re.search(r"카드|승인\s*취소|환불\s*반영|영업일", text, re.IGNORECASE))
+    if bucket == _WORK_STARTED_BUCKET:
+        return bool(_WORK_STARTED_RE.search(text) and _FEE_RE.search(text))
+    if bucket == _STORE_CHANGE_BUCKET:
+        return bool(_STORE_CHANGE_RE.search(text) and _CHANGE_RE.search(text))
+    return False
+
+
+def _extract_support_faq_policy_facts(bucket: str, candidates: list[Mapping[str, Any]]) -> dict[str, Any]:
+    combined = "\n".join(_support_faq_candidate_text(candidate) for candidate in candidates)
+    facts: dict[str, Any] = {}
+    if bucket == _VISIT_CANCEL_BUCKET:
+        facts["fee_condition"] = (
+            "none"
+            if re.search(r"별도(?:의)?\s*(?:취소\s*)?(?:수수료|위약금).{0,8}(없|않)", combined, re.IGNORECASE)
+            else "depends"
+        )
+        facts["cancel_method"] = "reservation_only"
+    elif bucket == _ONLINE_CANCEL_BUCKET:
+        amount_match = re.search(r"(?:타이어\s*1개당|1본당|개당)\s*1만\s*원", combined, re.IGNORECASE)
+        facts["fee_condition"] = "per_item_fee" if amount_match else "depends"
+        facts["fee_amount"] = "타이어 1개당 1만 원" if amount_match else None
+    elif bucket == _CARD_CANCEL_BUCKET:
+        timing_match = re.search(r"영업일\s*기준\s*([0-9]+(?:\s*[~-]\s*[0-9]+)?일?)", combined, re.IGNORECASE)
+        facts["refund_timing"] = timing_match.group(1).replace(" ", "") if timing_match else None
+        facts["refund_timing_source"] = "card_company"
+    elif bucket == _WORK_STARTED_BUCKET:
+        facts["fee_condition"] = "work_started_check_required"
+        if re.search(r"공임(?:비)?", combined, re.IGNORECASE):
+            facts["work_fee"] = "possible"
+        if re.search(r"폐타이어", combined, re.IGNORECASE):
+            facts["disposal_fee"] = "possible"
+    elif bucket == _STORE_CHANGE_BUCKET:
+        facts["store_change_allowed"] = (
+            "allowed"
+            if re.search(r"변경\s*(?:가능|할\s*수\s*있)", combined, re.IGNORECASE)
+            else "depends"
+        )
+    return facts
+
+
+def build_support_faq_policy_bucket_reply(
+    *,
+    intent: str,
+    user_text: str,
+    tool_result: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    resolution = resolve_support_faq_policy_bucket(intent, user_text)
+    if not resolution:
+        return None
+    if resolution.get("needs_clarification"):
+        return {
+            "assistant_response": resolution["assistant_response"],
+            "quick_replies": list(resolution.get("quick_replies") or []),
+            "metadata": {
+                "supportFaqBucket": None,
+                "clarificationNeeded": True,
+                "clarificationReason": resolution.get("clarification_reason"),
+                "filteredFaqCount": 0,
+                "excludedFaqCount": 0,
+                "factExtractionApplied": False,
+            },
+        }
+
+    bucket = str(resolution.get("bucket") or "").strip()
+    if bucket not in _CANCEL_POLICY_BUCKETS:
+        return None
+    candidates = _support_faq_candidates(tool_result)
+    filtered = [candidate for candidate in candidates if _support_faq_bucket_allowed_candidate(bucket, candidate)]
+    excluded = len(candidates) - len(filtered)
+    facts = _extract_support_faq_policy_facts(bucket, filtered)
+
+    if bucket == _VISIT_CANCEL_BUCKET:
+        if facts.get("fee_condition") == "none":
+            response = (
+                "방문 예약만 취소하는 건이라면 별도의 취소 수수료가 없다고 안내드릴 수 있어요.\n"
+                "다만 실제 주문이나 배송이 함께 걸린 건이면 비용 조건이 달라질 수 있으니 예약 상세도 같이 확인해 주세요."
+            )
+        else:
+            response = (
+                "방문 예약 취소 비용은 예약만 취소하는 경우인지, 주문이나 배송이 함께 진행된 건인지에 따라 달라질 수 있어요.\n"
+                "실제 취소 전에는 예약 상세 안내를 먼저 확인해 주세요."
+            )
+        quick_replies = [
+            {"label": "예약 상세 확인", "domain": "TRANSACTION"},
+            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+        ]
+    elif bucket == _ONLINE_CANCEL_BUCKET:
+        amount_text = facts.get("fee_amount") or "취소 시점과 주문 상태에 따라 비용이 달라질 수 있어요."
+        response = (
+            f"결제 완료 주문 취소 기준으로는 배송/처리 진행 상태에 따라 취소 비용이 달라질 수 있어요.\n"
+            f"현재 FAQ 근거로는 {amount_text} 기준 안내가 우선이고, 실제 차감 여부는 주문 상태를 함께 확인해 주세요."
+        )
+        quick_replies = [
+            {"label": "주문내역 확인", "domain": "TRANSACTION"},
+            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+        ]
+    elif bucket == _CARD_CANCEL_BUCKET:
+        timing_text = facts.get("refund_timing") or "영업일 기준 수일"
+        response = (
+            f"카드 승인 취소 반영은 카드사와 결제수단에 따라 달라지고, 보통 {timing_text} 정도 걸릴 수 있어요.\n"
+            "정확한 반영 여부는 카드사 승인내역과 주문내역을 함께 확인해 주세요."
+        )
+        quick_replies = [
+            {"label": "주문내역 확인", "domain": "TRANSACTION"},
+            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+        ]
+    elif bucket == _WORK_STARTED_BUCKET:
+        response = (
+            "이미 작업이 시작된 뒤 취소하는 건은 공임비나 부대 비용이 발생할 수 있어서 작업 진행 범위를 먼저 확인해야 해요.\n"
+            "기존 타이어 탈거나 장착 작업이 진행됐다면 현장 작업 범위 기준으로 비용 여부를 안내받아 주세요."
+        )
+        quick_replies = [
+            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+            {"label": "고객센터 안내", "domain": "SUPPORT"},
+        ]
+    else:
+        allowed_text = "방문 지점 변경 가능 여부는 예약 정책과 현재 예약 상태에 따라 달라질 수 있어요."
+        if facts.get("store_change_allowed") == "allowed":
+            allowed_text = "방문 날짜를 유지한 채 지점 변경이 가능한 경우도 있지만, 예약 정책과 현재 예약 상태를 함께 확인해야 해요."
+        response = (
+            f"{allowed_text}\n"
+            "실제 변경 전에는 예약 상세나 고객센터 안내 기준으로 변경 가능 여부를 먼저 확인해 주세요."
+        )
+        quick_replies = [
+            {"label": "예약 상세 확인", "domain": "TRANSACTION"},
+            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+        ]
+
+    allowed_categories = [
+        {
+            "categoryLv1": _support_faq_candidate_categories(candidate)[0] or None,
+            "categoryLv2": _support_faq_candidate_categories(candidate)[1] or None,
+        }
+        for candidate in filtered
+    ]
+    return {
+        "assistant_response": response,
+        "quick_replies": quick_replies,
+        "metadata": {
+            "supportFaqBucket": bucket,
+            "clarificationNeeded": False,
+            "filteredFaqCount": len(filtered),
+            "excludedFaqCount": excluded,
+            "allowedCategories": allowed_categories,
+            "factExtractionApplied": True,
+            "facts": facts,
+        },
+    }
 
 
 _EXTREME_COUPON_RE = re.compile(r"90\s*%|99\s*%|파격\s*할인|발급해\s*줘|만들어\s*줘", re.IGNORECASE)

@@ -70,6 +70,9 @@ from services.tstation.policies.price_response_policy import (
 )
 from services.tstation.policies.transaction_intent_policy import build_transaction_intent_frame, plan_transaction_tools
 from services.tstation.policies.transaction_response_policy import decide_transaction_response
+from services.tstation.policies.support_response_policy import (
+    build_support_faq_policy_bucket_reply,
+)
 from services.tstation.policies.response_decision import ResponseDecision, ResponseShape, TemplateName, ToolPlan
 from services.tstation.policies.resolved_context import (
     canonical_context_from_slots,
@@ -7134,6 +7137,31 @@ def _policy_source_summary_for_response(intent: str, source_summary: str) -> str
 
 
 def _build_general_cancel_fee_policy_event(user_query: str, *, tool_result: dict | None = None) -> dict:
+    bucket_reply = build_support_faq_policy_bucket_reply(
+        intent="general_cancel_fee_policy",
+        user_text=user_query,
+        tool_result=tool_result,
+    )
+    if bucket_reply is not None:
+        return {
+            "type": "data",
+            "template": "quickReply",
+            "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+            "assistant_response_source": "code_general_cancel_fee_policy",
+            "data": {
+                "assistantResponse": str(bucket_reply["assistant_response"]),
+                "quickReplies": list(bucket_reply.get("quick_replies") or []),
+                "predictedDomains": ["TRANSACTION", "SUPPORT"],
+                "metadata": {
+                    "responseShapeKey": "general_cancel_fee_policy_summary",
+                    "generalCancelFeePolicy": True,
+                    "faqSourceSummaryUsed": bool(_faq_policy_source_summary_text(tool_result)),
+                    "faqSourceSummaryAppended": False,
+                    "userText": user_query,
+                    **dict(bucket_reply.get("metadata") or {}),
+                },
+            },
+        }
     source_summary = _faq_policy_source_summary_text(tool_result)
     assistant_response = (
         "취소나 예약 변경 시 비용 발생 여부는 주문/예약 유형과 진행 상태에 따라 달라질 수 있어요.\n\n"
@@ -7164,6 +7192,31 @@ def _build_general_cancel_fee_policy_event(user_query: str, *, tool_result: dict
 
 
 def _build_general_card_cancel_timing_policy_event(user_query: str, *, tool_result: dict | None = None) -> dict:
+    bucket_reply = build_support_faq_policy_bucket_reply(
+        intent="general_card_cancel_timing_policy",
+        user_text=user_query,
+        tool_result=tool_result,
+    )
+    if bucket_reply is not None:
+        return {
+            "type": "data",
+            "template": "quickReply",
+            "source_domain": MultiAgentDomain.Domain.SUPPORT.value,
+            "assistant_response_source": "code_general_card_cancel_timing_policy",
+            "data": {
+                "assistantResponse": str(bucket_reply["assistant_response"]),
+                "quickReplies": list(bucket_reply.get("quick_replies") or []),
+                "predictedDomains": ["SUPPORT", "TRANSACTION"],
+                "metadata": {
+                    "responseShapeKey": "general_card_cancel_timing_policy",
+                    "generalCardCancelTimingPolicy": True,
+                    "faqSourceSummaryUsed": bool(_faq_policy_source_summary_text(tool_result)),
+                    "faqSourceSummaryAppended": False,
+                    "userText": user_query,
+                    **dict(bucket_reply.get("metadata") or {}),
+                },
+            },
+        }
     source_summary = _faq_policy_source_summary_text(tool_result)
     assistant_response = (
         "취소 완료 후 카드 승인취소나 환불 반영 시점은 카드사와 결제수단에 따라 달라질 수 있어요.\n\n"
@@ -7202,6 +7255,30 @@ def _build_support_faq_policy_event(
 ) -> dict | None:
     if intent not in _DIRECT_SUPPORT_FAQ_POLICY_INTENTS:
         return None
+    bucket_reply = build_support_faq_policy_bucket_reply(
+        intent=intent,
+        user_text=user_query,
+        tool_result=tool_result,
+    )
+    if bucket_reply is not None:
+        return {
+            "type": "data",
+            "template": "quickReply",
+            "source_domain": MultiAgentDomain.Domain.SUPPORT.value,
+            "assistant_response_source": f"code_{intent}",
+            "data": {
+                "assistantResponse": str(bucket_reply["assistant_response"]),
+                "quickReplies": list(bucket_reply.get("quick_replies") or _support_faq_policy_quick_replies(intent)),
+                "predictedDomains": ["SUPPORT"],
+                "metadata": {
+                    "responseShapeKey": intent,
+                    "faqSourceSummaryUsed": bool(_faq_policy_source_summary_text(tool_result, intent=intent)),
+                    "faqSourceSummaryAppended": False,
+                    "userText": user_query,
+                    **dict(bucket_reply.get("metadata") or {}),
+                },
+            },
+        }
     source_summary = _faq_policy_source_summary_text(tool_result, intent=intent)
     required_guidance_by_intent = {
         "tire_quality_warranty_policy": (

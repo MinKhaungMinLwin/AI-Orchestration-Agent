@@ -382,7 +382,11 @@ from services.tstation.policies.resolved_context import (
 from services.tstation.policies import schedule_tool_gate
 from services.tstation.policies.transaction_intent_policy import build_transaction_intent_frame, plan_transaction_tools
 from services.tstation.policies.transaction_response_policy import decide_transaction_response
-from services.tstation.policies.support_response_policy import decide_support_response
+from services.tstation.policies.support_response_policy import (
+    build_support_faq_policy_bucket_reply,
+    decide_support_response,
+    resolve_support_faq_policy_bucket,
+)
 from services.tstation.policies.response_decision import ResponseDecision, ResponseShape, TemplateName, ToolPlan
 from services.tstation.policies.turn_contract import (
     _FAQ_FIRST_SUPPORT_POLICY_INTENTS,
@@ -28695,7 +28699,7 @@ def test_general_cancel_fee_policy_event_does_not_append_raw_faq_summary() -> No
 
     assert "확인된 FAQ 기준으로는" not in response
     assert "별도의 취소 수수료는 없으며" not in response
-    assert "취소나 예약 변경 시 비용 발생 여부는 주문/예약 유형과 진행 상태에 따라 달라질 수 있어요." in response
+    assert "방문 예약만 취소하는 건이라면 별도의 취소 수수료가 없다고 안내드릴 수 있어요." in response
     assert not response.endswith("...")
     assert event["data"]["metadata"]["faqSourceSummaryUsed"] is True
     assert event["data"]["metadata"]["faqSourceSummaryAppended"] is False
@@ -28723,7 +28727,7 @@ def test_general_card_cancel_timing_policy_event_does_not_append_raw_faq_summary
 
     assert "확인된 FAQ 기준으로는" not in response
     assert "영업일 기준 수일이 소요될 수 있습니다." not in response
-    assert "보통은 영업일 기준으로 며칠 정도 소요될 수 있고" in response
+    assert "카드 승인 취소 반영은 카드사와 결제수단에 따라 달라지고" in response
     assert not response.endswith("...")
     assert event["data"]["metadata"]["faqSourceSummaryUsed"] is True
     assert event["data"]["metadata"]["faqSourceSummaryAppended"] is False
@@ -28891,6 +28895,173 @@ def test_support_faq_policy_event_for_coupon_usage_does_not_append_partner_or_ra
     )
 
     assert event is not None
+
+
+def test_support_faq_policy_bucket_resolves_visit_reservation_cancel_policy() -> None:
+    result = resolve_support_faq_policy_bucket(
+        "reservation_policy_guidance",
+        "오늘 오후 2시 예약인데 지금 취소하면 위약금 있어?",
+    )
+
+    assert result == {"bucket": "visit_reservation_cancel_policy"}
+
+
+def test_support_faq_policy_bucket_requests_clarification_for_mixed_cancel_scope() -> None:
+    result = resolve_support_faq_policy_bucket(
+        "reservation_policy_guidance",
+        "예약도 잡혀 있고 결제도 했는데 지금 취소하면 위약금 있어?",
+    )
+
+    assert result is not None
+    assert result["needs_clarification"] is True
+    assert result["clarification_reason"] == "mixed_cancel_scope"
+
+
+def test_support_faq_policy_bucket_reply_filters_wrong_categories_for_visit_cancel() -> None:
+    tool_result = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "question": "주문 취소 수수료",
+                    "answer": "결제 완료 주문은 타이어 1개당 1만 원 취소 비용이 발생할 수 있습니다.",
+                    "metadata": {"category_lv1": "주문/결제", "category_lv2": "결제"},
+                    "source": "FAQ Hybrid",
+                },
+                {
+                    "question": "방문 예약 취소",
+                    "answer": "장착 예약만 취소하는 경우 별도의 취소 수수료는 없습니다.",
+                    "metadata": {"category_lv1": "배송/장착", "category_lv2": "장착"},
+                    "source": "FAQ Hybrid",
+                },
+            ]
+        },
+    }
+
+    reply = build_support_faq_policy_bucket_reply(
+        intent="reservation_policy_guidance",
+        user_text="오늘 오후 2시 예약인데 지금 취소하면 위약금 있어?",
+        tool_result=tool_result,
+    )
+
+    assert reply is not None
+    assert "별도의 취소 수수료가 없다고 안내드릴 수 있어요" in reply["assistant_response"]
+    assert "타이어 1개당 1만 원" not in reply["assistant_response"]
+    assert reply["metadata"]["supportFaqBucket"] == "visit_reservation_cancel_policy"
+    assert reply["metadata"]["filteredFaqCount"] == 1
+    assert reply["metadata"]["excludedFaqCount"] == 1
+    assert reply["metadata"]["factExtractionApplied"] is True
+
+
+def test_support_faq_policy_bucket_reply_builds_card_cancel_timing_from_allowed_category() -> None:
+    tool_result = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "question": "카드 승인 취소 반영",
+                    "answer": "카드 승인 취소 반영은 카드사와 결제수단에 따라 다르며 영업일 기준 3~5일 정도 소요될 수 있습니다.",
+                    "metadata": {"category_lv1": "주문/결제", "category_lv2": "결제"},
+                    "source": "FAQ Hybrid",
+                }
+            ]
+        },
+    }
+
+    reply = build_support_faq_policy_bucket_reply(
+        intent="general_card_cancel_timing_policy",
+        user_text="취소 완료 문자 받았는데 카드 승인 취소 언제 돼?",
+        tool_result=tool_result,
+    )
+
+    assert reply is not None
+    assert "보통 3~5일 정도 걸릴 수 있어요" in reply["assistant_response"]
+    assert "카드 승인 취소 반영은 카드사와 결제수단에 따라 다르며" not in reply["assistant_response"]
+    assert reply["metadata"]["supportFaqBucket"] == "card_cancel_timing_policy"
+    assert reply["metadata"]["facts"]["refund_timing"] == "3~5일"
+
+
+def test_support_faq_policy_bucket_reply_builds_work_started_cancel_guidance() -> None:
+    tool_result = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "question": "작업 중 취소 비용",
+                    "answer": "장착 작업이 이미 진행된 경우에는 공임비 등 작업 범위 기준으로 비용이 발생할 수 있습니다.",
+                    "metadata": {"category_lv1": "배송/장착", "category_lv2": "장착"},
+                    "source": "FAQ Hybrid",
+                }
+            ]
+        },
+    }
+
+    reply = build_support_faq_policy_bucket_reply(
+        intent="installation_work_policy",
+        user_text="새 타이어 장착하려고 기존 타이어 다 뺐는데 지금 취소하면 공임비 받아?",
+        tool_result=tool_result,
+    )
+
+    assert reply is not None
+    assert reply["metadata"]["supportFaqBucket"] == "work_started_cancel_fee_policy"
+    assert reply["metadata"]["facts"]["work_fee"] == "possible"
+    assert "이미 작업이 시작된 뒤 취소하는 건은 공임비나 부대 비용이 발생할 수 있어서" in reply["assistant_response"]
+
+
+def test_support_faq_policy_bucket_reply_builds_online_order_cancel_guidance() -> None:
+    tool_result = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "question": "결제 완료 주문 취소 비용",
+                    "answer": "단순 변심 취소/반품은 타이어 1개당 1만 원 기준으로 비용이 발생할 수 있습니다.",
+                    "metadata": {"category_lv1": "주문/결제", "category_lv2": "결제"},
+                    "source": "FAQ Hybrid",
+                }
+            ]
+        },
+    }
+
+    reply = build_support_faq_policy_bucket_reply(
+        intent="general_cancel_fee_policy",
+        user_text="결제 완료한 주문 지금 취소하면 수수료 있어?",
+        tool_result=tool_result,
+    )
+
+    assert reply is not None
+    assert reply["metadata"]["supportFaqBucket"] == "online_order_cancel_fee_policy"
+    assert reply["metadata"]["facts"]["fee_amount"] == "타이어 1개당 1만 원"
+    assert "타이어 1개당 1만 원 기준 안내가 우선" in reply["assistant_response"]
+
+
+def test_support_faq_policy_event_uses_bucketed_store_change_reply() -> None:
+    tool_result = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "question": "예약 지점 변경",
+                    "answer": "예약 날짜를 유지한 채 방문 지점 변경이 가능한 경우도 있으나 예약 상태에 따라 확인이 필요합니다.",
+                    "metadata": {"category_lv1": "배송/장착", "category_lv2": "장착"},
+                    "source": "FAQ Hybrid",
+                }
+            ]
+        },
+    }
+
+    event = _build_support_faq_policy_event(
+        "reservation_policy_guidance",
+        "이미 예약했는데 날짜는 두고 방문 지점만 바꿀 수 있어?",
+        tool_result=tool_result,
+    )
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    assert event["data"]["metadata"]["supportFaqBucket"] == "reservation_store_change_policy"
+    assert event["data"]["metadata"]["factExtractionApplied"] is True
+    assert "예약 날짜를 유지한 채 지점 변경이 가능한 경우도 있지만" in event["data"]["assistantResponse"]
+    assert "예약 날짜를 유지한 채 방문 지점 변경이 가능한 경우도 있으나" not in event["data"]["assistantResponse"]
     response = str(event["data"]["assistantResponse"])
     assert "제휴회원 전용 쿠폰" not in response
     assert "복지몰" not in response
