@@ -305,6 +305,11 @@ _TODAY_INSTALL_OR_RESERVATION_RE = re.compile(
     r"몇\s*시|시간|스케줄",
     re.IGNORECASE,
 )
+_SCHEDULE_PREVIEW_SIGNAL_RE = re.compile(
+    r"(?:다음\s*주|다음주|이번\s*주|이번주|주중|주말|평일|며칠\s*뒤|몇\s*일\s*뒤|\d+\s*일\s*뒤|언제|"
+    r"장착\s*가능|예약\s*가능|가능한\s*(?:시간|일정|슬롯)|예약\s*(?:시간|일정|슬롯)|스케줄)",
+    re.IGNORECASE,
+)
 _QUICK_ORDER_CONFIRM_RE = re.compile(
     r"^\s*(?:"
     r"주문\s*확정|구매하기|주문하기|결제하기|"
@@ -1016,6 +1021,28 @@ def build_transaction_intent_frame(
         and stored_quantity
         and (store_name or slots.get("shop_id") or slots.get("shop_name") or slots.get("store_name"))
     )
+    schedule_preview_requested = bool(
+        _SCHEDULE_PREVIEW_SIGNAL_RE.search(text)
+        and not _TODAY_RE.search(text)
+        and not _is_today_install_context(slots, requested_cal_day)
+    )
+    stock_context_has_product = bool(
+        current_has_product
+        or slots.get("goods_no")
+        or slots.get("product_name")
+        or slots.get("tire_model")
+        or slots.get("pattern_name")
+        or slots.get("pending_product_name")
+    )
+    stock_context_has_location = bool(
+        current_region
+        or store_name
+        or slots.get("region")
+        or slots.get("place")
+        or slots.get("shop_id")
+        or slots.get("shop_name")
+        or slots.get("store_name")
+    )
     selected_schedule_followup = bool(
         _BOOKING_DATETIME_SELECTION_RE.search(text)
         and has_product
@@ -1239,6 +1266,15 @@ def build_transaction_intent_frame(
             )
             sub_intent = "today_install" if use_preview_scope else "stock"
             entities["stock_check_mode"] = "preview" if use_preview_scope else "inventory_only"
+    elif (
+        _is_stock_flow_context(slots)
+        and schedule_preview_requested
+        and stock_context_has_product
+        and stock_context_has_location
+    ):
+        intent = "stock_store_search"
+        sub_intent = "reservation"
+        entities["stock_check_mode"] = "preview"
     elif _PRICE_OR_COUPON_RE.search(text):
         intent = "price_or_coupon_check"
         sub_intent = "coupon" if "쿠폰" in text else "price"

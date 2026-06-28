@@ -646,6 +646,35 @@ def test_product_size_store_today_install_can_go_straight_to_preview() -> None:
     assert decision.required_slots == ()
 
 
+def test_stock_flow_future_schedule_request_promotes_preview_mode() -> None:
+    frame = build_transaction_intent_frame(
+        "다음주 중 장착 가능해?",
+        known_slots={
+            "goods_no": "G000000310126",
+            "product_name": "다이나프로 HP3",
+            "tire_size": "245/45R19",
+            "ord_qty": 4,
+            "region": "동탄",
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+        },
+    )
+    plan = plan_transaction_tools(frame)
+    decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text="다음주 중 장착 가능해?",
+        known_slots=dict(frame.known_slots),
+    )
+
+    assert frame.intent == "stock_store_search"
+    assert frame.sub_intent == "reservation"
+    assert frame.known_slots["stock_check_mode"] == "preview"
+    assert plan.preferred_tool == "transaction_store_preview_tool"
+    assert plan.tool_args_patch["region"] == "동탄"
+    assert decision.template == TemplateName.LOCATION
+    assert decision.metadata["stock_check_mode"] == "preview"
+
+
 def test_product_store_purchase_without_size_blocks_store_transaction_tools() -> None:
     frame = build_transaction_intent_frame("판교점에서 dynapro hpx 2개 구매하고싶어")
     plan = plan_transaction_tools(frame)

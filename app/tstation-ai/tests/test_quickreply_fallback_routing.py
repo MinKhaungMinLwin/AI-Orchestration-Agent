@@ -29229,6 +29229,51 @@ def test_turn_contract_blocks_general_schedule_datepick_for_preview_stock_contra
     } in violations
 
 
+def test_future_schedule_stock_flow_builds_preview_contract() -> None:
+    frame = build_transaction_intent_frame(
+        "다음주 중 장착 가능해?",
+        known_slots={
+            "goods_no": "G000000310126",
+            "product_name": "다이나프로 HP3",
+            "tire_size": "245/45R19",
+            "ord_qty": 4,
+            "region": "동탄",
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+        },
+    )
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text="다음주 중 장착 가능해?",
+        known_slots=dict(frame.known_slots),
+    )
+    contract = build_turn_contract(
+        user_text="다음주 중 장착 가능해?",
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=response_decision,
+        action_mode="stock_check",
+    )
+
+    assert frame.intent == "stock_store_search"
+    assert frame.sub_intent == "reservation"
+    assert frame.known_slots["stock_check_mode"] == "preview"
+    assert tool_plan.preferred_tool == "transaction_store_preview_tool"
+    assert response_decision.template == TemplateName.LOCATION
+    assert contract.known_slots["stock_check_mode"] == "preview"
+    assert contract.allowed_tools == ("transaction_store_preview_tool", "get_store_inventory_tool", "get_store_list_tool")
+    assert "transaction_store_preview_tool" not in contract.forbidden_tools
+    assert response_contract_violations(
+        template="location",
+        assistant_response_source="code_mapper",
+        response_shape_key="stock_store_candidates",
+        called_tools=["transaction_store_preview_tool"],
+        source_domain="transaction",
+        contract=contract,
+    ) == []
+
+
 def test_turn_contract_allows_selected_store_schedule_continuation_for_preview_stock_contract() -> None:
     frame = IntentFrame(
         domain=PolicyDomain.TRANSACTION,
