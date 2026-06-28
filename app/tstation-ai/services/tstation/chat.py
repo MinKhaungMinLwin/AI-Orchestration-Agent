@@ -328,6 +328,10 @@ current_vehicle_selection_prompt_event: ContextVar[dict | None] = ContextVar(
     "current_vehicle_selection_prompt_event",
     default=None,
 )
+_current_router_preview_seed: ContextVar[dict[str, Any] | None] = ContextVar(
+    "_current_router_preview_seed",
+    default=None,
+)
 
 _HIGH_RISK_POST_TOOL_CONTRACT_TOOLS = frozenset({
     "transaction_store_preview_tool",
@@ -1652,6 +1656,52 @@ def _has_current_turn_p0_auto_chain_anchor(
     }:
         return True
     return bool(normalize_tire_size(user_text) or ConversationSlots.has_product_keyword(user_text))
+
+
+_TRANSACTION_PREVIEW_SEED_SCHEDULE_RE = re.compile(
+    r"다음\s*주|이번\s*주|주중|주말|평일|장착\s*가능|예약\s*가능|가능한\s*(?:시간|날짜|일정)|언제\s*(?:장착|예약|방문|가능)|며칠\s*뒤|\d+\s*일\s*뒤",
+    re.IGNORECASE,
+)
+_TRANSACTION_PREVIEW_SEED_PLAN_KEYWORDS = frozenset({
+    "transaction", "stock_store", "store_preview", "store_inventory", "reservation",
+})
+
+
+def _is_router_transaction_preview_seed_turn(
+    *,
+    routing_result: MultiAgentDomain | None,
+    policy_plan: Any | None,
+    user_text: str,
+    merged_slots: ConversationSlots,
+) -> bool:
+    """True when router has store-preview intent but goods_no needs Discovery to resolve first.
+
+    Fires for queries like "다이나프로 HP3 235/55R19 4개, 동탄에서 다음주 중에 장착가능해?"
+    where the planner has a transaction:store_inventory subtask but goods_no is unknown.
+    """
+    if merged_slots.goods_no is not None:
+        return False
+    has_product = bool(merged_slots.tire_model or merged_slots.tire_size)
+    if not has_product:
+        has_product = bool(normalize_tire_size(user_text) or ConversationSlots.has_product_keyword(user_text))
+    if not has_product:
+        return False
+    has_tx_signal = False
+    if routing_result is not None:
+        pending_check_topic = str(getattr(routing_result, "pending_check_topic", "") or "")
+        if pending_check_topic == "store_inventory":
+            has_tx_signal = True
+        if not has_tx_signal:
+            exec_plan = " ".join(str(item) for item in (getattr(routing_result, "execution_plan", None) or ()))
+            has_tx_signal = any(kw in exec_plan.lower() for kw in _TRANSACTION_PREVIEW_SEED_PLAN_KEYWORDS)
+    if not has_tx_signal and policy_plan is not None:
+        has_tx_signal = any(
+            task.domain.value == "transaction"
+            for task in (getattr(policy_plan, "subtasks", None) or ())
+        )
+    if not has_tx_signal:
+        return False
+    return bool(_TRANSACTION_PREVIEW_SEED_SCHEDULE_RE.search(user_text or ""))
 
 
 def _should_preserve_router_contract(
@@ -4405,6 +4455,7 @@ class StreamingMultiAgentCoordinator:
                         current_transaction_store_preview_tool_patch,
                     )
 
+                    _chained_seed = _current_router_preview_seed.get(None)
                     transaction_known_slots = {
                         "tire_size": getattr(pending_slots, "tire_size", None),
                         "goods_no": getattr(pending_slots, "goods_no", None),
@@ -4416,6 +4467,18 @@ class StreamingMultiAgentCoordinator:
                         "region": getattr(pending_slots, "region", None),
                         "availability_intent": getattr(pending_slots, "availability_intent", None),
                         "requested_cal_day": getattr(pending_slots, "requested_cal_day", None),
+                        "pending_intent": (
+                            getattr(pending_slots, "pending_intent", None)
+                            or ((_chained_seed or {}).get("pending_intent"))
+                        ),
+                        "goal_type": (
+                            getattr(pending_slots, "goal_type", None)
+                            or ((_chained_seed or {}).get("goal_type"))
+                        ),
+                        "stock_check_mode": (
+                            getattr(pending_slots, "stock_check_mode", None)
+                            or ((_chained_seed or {}).get("stock_check_mode"))
+                        ),
                     }
                     if _router_contract_is_order_cancel_fee_inquiry(active_routing_result):
                         transaction_known_slots["router_transaction_intent"] = "order_cancel_fee_inquiry"
@@ -19730,6 +19793,129 @@ def _promote_single_turn_purchase_contract_from_search_product(
     return promoted_slots, transaction_frame, transaction_tool_plan, transaction_response_decision
 
 
+def _should_promote_single_turn_stock_preview_after_product_resolution(
+    *,
+    user_text: str,
+    slots: Mapping[str, Any] | None,
+    routing_result: Any | None,
+) -> bool:
+    known_slots = dict(slots or {})
+    if str(known_slots.get("pending_intent") or "").strip() == "stock":
+        return True
+    if str(known_slots.get("goal_type") or "").strip() == "store_with_stock":
+        return True
+    seed = _current_router_preview_seed.get(None)
+    if seed and seed.get("pending_intent") == "stock":
+        return True
+    if _TRANSACTION_PREVIEW_SEED_SCHEDULE_RE.search(user_text or ""):
+        plan_text = " ".join(
+            str(item or "").strip().lower()
+            for item in (getattr(routing_result, "execution_plan", None) or ())
+        )
+        return any(kw in plan_text for kw in ("stock_store", "store_preview", "store_inventory", "transaction"))
+    return False
+
+
+def _promote_single_turn_stock_preview_from_search_product(
+    *,
+    user_text: str,
+    tool_result: Mapping[str, Any] | None,
+    merged_slots: ConversationSlots | None,
+    routing_result: Any | None,
+) -> tuple[ConversationSlots, IntentFrame, ToolPlan, ResponseDecision] | None:
+    """Promote turn_contract to stock_store_search+preview after Discovery resolves goods_no.
+
+    Parallel to _promote_single_turn_purchase_contract_from_search_product but for
+    schedule-preview flows ("다음주 장착가능해?") triggered by P0c router_transaction_preview_seed.
+    """
+    resolved_row = _single_resolved_search_product_row(tool_result)
+    if resolved_row is None:
+        return None
+    base_slots = merged_slots.model_copy() if merged_slots is not None else ConversationSlots()
+    runtime_values = {
+        "goods_no": resolved_row["goods_no"],
+        "tire_size": resolved_row.get("tire_size"),
+        "tire_model": resolved_row.get("product_name"),
+        "pending_product_name": resolved_row.get("product_name"),
+    }
+    promoted_slots = base_slots.apply_runtime_values(
+        {key: value for key, value in runtime_values.items() if value not in (None, "", [], {})},
+        source="single_turn_stock_preview_product_resolution",
+    )
+    if getattr(promoted_slots, "stock_check_mode", None) == "inventory_only":
+        promoted_slots.stock_check_mode = None
+    promotion_slot_state = {
+        key: value
+        for key, value in promoted_slots.model_dump().items()
+        if value not in (None, "", [], {})
+    }
+    seed = _current_router_preview_seed.get(None)
+    if seed:
+        for _sk in ("pending_intent", "goal_type", "stock_check_mode"):
+            if promotion_slot_state.get(_sk) in (None, ""):
+                promotion_slot_state[_sk] = seed.get(_sk)
+    if not _should_promote_single_turn_stock_preview_after_product_resolution(
+        user_text=user_text,
+        slots=promotion_slot_state,
+        routing_result=routing_result,
+    ):
+        return None
+    if promotion_slot_state.get("goods_no") in (None, ""):
+        return None
+    known_slots = {
+        key: value
+        for key, value in {
+            "goods_no": promotion_slot_state.get("goods_no"),
+            "tire_size": promotion_slot_state.get("tire_size"),
+            "product_name": (
+                promotion_slot_state.get("tire_model") or promotion_slot_state.get("pending_product_name")
+            ),
+            "quantity": promotion_slot_state.get("ord_qty") or promotion_slot_state.get("quantity"),
+            "ord_qty": promotion_slot_state.get("ord_qty") or promotion_slot_state.get("quantity"),
+            "shop_id": promotion_slot_state.get("shop_id"),
+            "shop_name": promotion_slot_state.get("shop_name") or promotion_slot_state.get("store_name"),
+            "store_name": promotion_slot_state.get("shop_name") or promotion_slot_state.get("store_name"),
+            "region": promotion_slot_state.get("region"),
+            "place_query": promotion_slot_state.get("place_query"),
+            "user_xpos": promotion_slot_state.get("user_xpos"),
+            "user_ypos": promotion_slot_state.get("user_ypos"),
+            "availability_intent": promotion_slot_state.get("availability_intent"),
+            "requested_cal_day": promotion_slot_state.get("requested_cal_day"),
+            "pending_intent": promotion_slot_state.get("pending_intent") or "stock",
+            "goal_type": promotion_slot_state.get("goal_type") or "store_with_stock",
+            "stock_check_mode": promotion_slot_state.get("stock_check_mode") or "preview",
+        }.items()
+        if value not in (None, "", [], {})
+    }
+    transaction_frame = build_transaction_intent_frame(user_text, known_slots=known_slots)
+    if transaction_frame.intent not in {"stock_store_search", "quick_order_reservation"}:
+        return None
+    if str(transaction_frame.known_slots.get("stock_check_mode") or "") == "inventory_only":
+        known_slots["stock_check_mode"] = "preview"
+        transaction_frame = build_transaction_intent_frame(user_text, known_slots=known_slots)
+    transaction_tool_plan = plan_transaction_tools(transaction_frame)
+    if transaction_tool_plan.preferred_tool not in {
+        "transaction_store_preview_tool",
+        "get_store_inventory_tool",
+        "get_store_list_tool",
+    }:
+        return None
+    transaction_response_decision = decide_transaction_response(
+        intent=transaction_frame.intent,
+        user_text=user_text,
+        known_slots=dict(transaction_frame.known_slots),
+    )
+    promoted_slots = promoted_slots.apply_runtime_values(
+        {
+            "pending_intent": str(transaction_frame.known_slots.get("pending_intent") or "stock"),
+            "goal_type": str(transaction_frame.known_slots.get("goal_type") or "store_with_stock"),
+            "stock_check_mode": str(transaction_frame.known_slots.get("stock_check_mode") or "preview"),
+        },
+        source="single_turn_stock_preview_contract_promotion",
+    )
+    return promoted_slots, transaction_frame, transaction_tool_plan, transaction_response_decision
+
+
 def _build_purchase_size_selection_event_from_search_result(
     *,
     user_text: str,
@@ -26070,6 +26256,70 @@ class TStationChatServiceV2:
             )
             domains = [MultiAgentDomain.Domain.TRANSACTION]
 
+        # P0d Router Transaction Preview Seed: policy_product_resolution_first fired
+        # (domains=[DISCOVERY] only) but the router/policy plan has a transaction
+        # store-inventory/store-preview intent AND the text signals a schedule-preview
+        # request ("장착가능", "다음주 예약가능" etc.). Promote to [DISCOVERY, TRANSACTION]
+        # so Transaction can run transaction_store_preview_tool after Discovery
+        # resolves goods_no. Seed values are stored in _current_router_preview_seed
+        # ContextVar so the inner coordinator refresh and promotion function can access them.
+        if (
+            len(domains) == 1
+            and domains[0] == MultiAgentDomain.Domain.DISCOVERY
+            and merged_slots.goods_no is None
+            and not _DATEPICK_SELECTION_RE.match(last_user_text or "")
+            and _is_router_transaction_preview_seed_turn(
+                routing_result=routing_result,
+                policy_plan=policy_plan,
+                user_text=last_user_text,
+                merged_slots=merged_slots,
+            )
+            and not _should_preserve_router_contract(
+                routing_result=routing_result,
+                candidate_override="router_transaction_preview_seed",
+                override_reason=None,
+            )
+        ):
+            _p0d_prev_domains = list(domains)
+            _p0d_prev_exec_plan = list(getattr(routing_result, "execution_plan", []) or [])
+            domains = [MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION]
+            skip_decision = True
+            _current_router_preview_seed.set({
+                "pending_intent": "stock",
+                "goal_type": "store_with_stock",
+                "stock_check_mode": "preview",
+                "flow_step": "pending_product_resolution",
+                "source": "router_transaction_preview_seed",
+            })
+            _mark_router_override_applied(
+                routing_result,
+                previous_domains=_p0d_prev_domains,
+                previous_execution_plan=_p0d_prev_exec_plan,
+                reason="router_transaction_preview_seed",
+            )
+            logger.info(
+                "[COORDINATOR] P0d router_transaction_preview_seed: [DISCOVERY] → [DISCOVERY, TRANSACTION] "
+                "(session_id=%s text=%r tire=%r region=%r)",
+                request.session_id,
+                (last_user_text or "")[:60],
+                merged_slots.tire_size or merged_slots.tire_model,
+                merged_slots.region,
+            )
+            log_classifier_redirect(
+                trace_id=request.tracing_id,
+                rule="P0d_router_transaction_preview_seed",
+                classifier_domains=["discovery"],
+                corrected_domains=["discovery", "transaction"],
+                user_text=last_user_text,
+                user_behavior=getattr(routing_result, "user_behavior", "") or "",
+                slots={
+                    "tire_size": merged_slots.tire_size,
+                    "tire_model": merged_slots.tire_model,
+                    "region": merged_slots.region,
+                    "ord_qty": merged_slots.ord_qty,
+                },
+            )
+
         # P0 auto-chain code gate: when a price/stock/order intent is outstanding
         # and the current turn supplies its own transactional/product anchor, but
         # no goods_no is yet confirmed, override the classifier's single-domain
@@ -27328,6 +27578,14 @@ class TStationChatServiceV2:
             "schedule_tier": getattr(merged_slots, "schedule_tier", None),
             "inventory_mode": getattr(merged_slots, "inventory_mode", None),
         }
+        _outer_seed = _current_router_preview_seed.get(None)
+        if _outer_seed is not None:
+            if transaction_known_slots.get("pending_intent") in (None, ""):
+                transaction_known_slots["pending_intent"] = _outer_seed.get("pending_intent")
+            if transaction_known_slots.get("goal_type") in (None, ""):
+                transaction_known_slots["goal_type"] = _outer_seed.get("goal_type")
+            if transaction_known_slots.get("stock_check_mode") in (None, ""):
+                transaction_known_slots["stock_check_mode"] = _outer_seed.get("stock_check_mode")
         availability_context = merged_slots.availability_context if isinstance(getattr(merged_slots, "availability_context", None), dict) else {}
         pending_order_context = availability_context.get("pending_order_context") if isinstance(availability_context.get("pending_order_context"), dict) else {}
         if current_ui_action_context is not None and is_expected_transaction_slot_fill(current_ui_action_context):
@@ -35293,6 +35551,58 @@ class TStationChatServiceV2:
                                 promoted_frame.intent,
                                 dict(getattr(promoted_tool_plan, "metadata", {}) or {}).get("flow_step"),
                                 tuple(getattr(promoted_tool_plan, "allowed_tools", ()) or ()),
+                            )
+
+                    elif _current_router_preview_seed.get(None) is not None:
+                        promoted_stock_preview = _promote_single_turn_stock_preview_from_search_product(
+                            user_text=user_query,
+                            tool_result=parsed_for_verifier if isinstance(parsed_for_verifier, Mapping) else None,
+                            merged_slots=pending_slots or initial_slots,
+                            routing_result=routing_result,
+                        )
+                        if promoted_stock_preview is not None:
+                            (
+                                pending_slots,
+                                promoted_frame,
+                                promoted_tool_plan,
+                                promoted_response_decision,
+                            ) = promoted_stock_preview
+                            turn_contract = build_turn_contract(
+                                user_text=user_query,
+                                intent_frame=promoted_frame,
+                                tool_plan=promoted_tool_plan,
+                                response_decision=promoted_response_decision,
+                                routing_result=routing_result,
+                                merged_slots=pending_slots,
+                                action_mode=stream_action_mode,
+                                context_state=stream_context_state,
+                                resume_source=stream_resume_source,
+                                router_waited=bool(getattr(turn_contract, "router_waited", False)) if turn_contract else False,
+                                router_source=str(getattr(turn_contract, "router_source", "unknown") or "unknown") if turn_contract else "unknown",
+                                contract_source=str(
+                                    getattr(turn_contract, "contract_source", "router_fallback") or "router_fallback"
+                                ) if turn_contract else "router_fallback",
+                                speculative_used_for_contract=bool(
+                                    getattr(turn_contract, "speculative_used_for_contract", False)
+                                ) if turn_contract else False,
+                            )
+                            current_transaction_response_decision.set(promoted_response_decision)
+                            current_transaction_tool_plan.set(promoted_tool_plan)
+                            promoted_stock_tool_patch = (
+                                dict(promoted_tool_plan.tool_args_patch)
+                                if promoted_tool_plan.preferred_tool == "transaction_store_preview_tool"
+                                else {}
+                            )
+                            from services.tstation.agents.c_transaction_agent.tools import (
+                                current_transaction_store_preview_tool_patch as _stock_preview_patch_var,
+                            )
+                            _stock_preview_patch_var.set(promoted_stock_tool_patch)
+                            logger.info(
+                                "[TURN_CONTRACT] promoted single-turn stock preview after search_product_tool "
+                                "intent=%s stock_check_mode=%s preferred_tool=%s",
+                                promoted_frame.intent,
+                                promoted_frame.known_slots.get("stock_check_mode"),
+                                promoted_tool_plan.preferred_tool,
                             )
 
                     coupon_decision = await _get_coupon_gate_decision()
