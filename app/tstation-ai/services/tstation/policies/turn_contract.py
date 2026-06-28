@@ -245,6 +245,15 @@ ROUTER_WINS_INFORMATIONAL_INTENTS = frozenset({
     "support_faq",
     "policy_notice_or_escalation",
 })
+_COMPARISON_ROUTER_WINS_FOLLOWUP_INTENTS = frozenset({
+    "generic_compare",
+    "new_compare_metric",
+    "continue_previous_compare_metric",
+})
+_COMPARISON_ROUTER_WINS_RESPONSE_SHAPES = frozenset({
+    "metric_comparison_summary",
+    "grade_comparison_summary",
+})
 _ROUTER_WINS_EXECUTION_EXCLUDED_INTENTS = frozenset({
     "quick_order_reservation",
     "quick_order_execute",
@@ -419,6 +428,9 @@ def build_turn_contract(
         planner_intent=planner_intent,
         policy_intent=policy_intent,
         routing_result=routing_result,
+        intent_frame=intent_frame,
+        response_decision=response_decision,
+        action_mode=action_mode,
     )
     code_domain = _domain_value(intent_frame.domain) if intent_frame is not None else _domain_from_routing(routing_result)
     code_intent = intent_frame.intent if intent_frame is not None else _intent_from_cross_domain(cross_domain_plan)
@@ -3599,7 +3611,18 @@ def _router_wins_information_intent(
     planner_intent: str | None,
     policy_intent: str,
     routing_result: Any | None,
+    intent_frame: IntentFrame | None = None,
+    response_decision: ResponseDecision | None = None,
+    action_mode: str = "",
 ) -> str | None:
+    comparison_intent = _comparison_router_wins_intent(
+        routing_result=routing_result,
+        intent_frame=intent_frame,
+        response_decision=response_decision,
+        action_mode=action_mode,
+    )
+    if comparison_intent:
+        return comparison_intent
     candidates = (
         str(policy_intent or "").strip(),
         str(planner_intent or "").strip(),
@@ -3614,6 +3637,41 @@ def _router_wins_information_intent(
     complaint_scope = str(getattr(routing_result, "complaint_scope", "") or "").strip()
     if complaint_scope == "tstation_service_complaint":
         return "tstation_service_complaint"
+    return None
+
+
+def _comparison_router_wins_intent(
+    *,
+    routing_result: Any | None,
+    intent_frame: IntentFrame | None,
+    response_decision: ResponseDecision | None,
+    action_mode: str,
+) -> str | None:
+    frame_entities = intent_frame.entities if intent_frame is not None else {}
+    response_metadata = response_decision.metadata if response_decision is not None else {}
+    comparison_followup_intent = str(
+        getattr(routing_result, "comparison_followup_intent", None)
+        or frame_entities.get("comparison_followup_intent")
+        or response_metadata.get("comparison_followup_intent")
+        or ""
+    ).strip()
+    comparison_metric = str(
+        getattr(routing_result, "comparison_metric", None)
+        or frame_entities.get("compare_metric")
+        or response_metadata.get("compare_metric")
+        or ""
+    ).strip()
+    response_shape_key = str(response_metadata.get("response_shape_key") or "").strip()
+    routed_action_mode = str(getattr(routing_result, "action_mode", "") or "").strip()
+    current_action_mode = str(action_mode or "").strip()
+    if comparison_followup_intent in _COMPARISON_ROUTER_WINS_FOLLOWUP_INTENTS:
+        return "product_comparison"
+    if comparison_metric and comparison_metric != "none":
+        return "product_comparison"
+    if current_action_mode == "product_comparison" or routed_action_mode == "product_comparison":
+        return "product_comparison"
+    if response_shape_key in _COMPARISON_ROUTER_WINS_RESPONSE_SHAPES:
+        return "product_comparison"
     return None
 
 
@@ -3895,6 +3953,9 @@ def _normalize_plan_intent(value: str) -> str:
         "resolve_product": "resolve_or_describe_product",
         "continue_purchase": "quick_order_reservation",
         "quick_order_confirmed": "quick_order_execute",
+        "product_compare_tool": "product_comparison",
+        "metric_comparison_summary": "product_comparison",
+        "grade_comparison_summary": "product_comparison",
         "transaction_price_stock": "price_or_coupon_check",
         "discovery_search": "resolve_or_describe_product",
         "promotion_lookup": "product_promotion_lookup",

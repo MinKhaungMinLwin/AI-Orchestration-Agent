@@ -4473,6 +4473,19 @@ def test_generic_product_comparison_defaults_to_features_and_reviews() -> None:
     assert "상품 정보를 상품별 표로 비교해드릴게요." in assistant
     assert "| 항목 | 다이나프로 HPX | 윈터 아이셉트 에보3 X |" not in assistant
     assert "**다이나프로 HPX**" in assistant
+    assert event["data"]["metadata"]["requestedProductNames"] == ["다이나프로 HPX", "윈터 아이셉트 에보3 X"]
+    assert event["data"]["metadata"]["resolvedProducts"] == [
+        {
+            "requestedName": "다이나프로 HPX",
+            "goodsNo": "",
+            "productName": "다이나프로 HPX",
+        },
+        {
+            "requestedName": "윈터 아이셉트 에보3 X",
+            "goodsNo": "",
+            "productName": "윈터 아이셉트 에보3 X",
+        },
+    ]
     assert "**윈터 아이셉트 에보3 X**" in assistant
     assert "| 특징 | SUV용 사계절 컴포트 타이어 |" in assistant
     assert "| 특징 | 겨울철 눈길과 빙판 주행에 초점을 둔 SUV 윈터 타이어 |" in assistant
@@ -4490,6 +4503,46 @@ def test_generic_product_comparison_defaults_to_features_and_reviews() -> None:
     assert "| 느낌" not in assistant
     assert "가격 기준" not in assistant
     assert "249,700" not in assistant
+
+
+def test_product_comparison_event_preserves_requested_and_resolved_product_metadata() -> None:
+    event = _build_product_comparison_event(
+        "키너지 ex랑 옵티모랑 비교해줘",
+        [
+            (
+                "키너지 EX",
+                {
+                    "goods_no": "G0001",
+                    "goods_nm": "키너지 EX",
+                    "sale_prc": 120000,
+                },
+            ),
+            (
+                "옵티모",
+                {
+                    "goods_no": "G0002",
+                    "goods_nm": "옵티모 H426",
+                    "sale_prc": 130000,
+                },
+            ),
+        ],
+    )
+
+    metadata = event["data"]["metadata"]
+
+    assert metadata["requestedProductNames"] == ["키너지 EX", "옵티모"]
+    assert metadata["resolvedProducts"] == [
+        {
+            "requestedName": "키너지 EX",
+            "goodsNo": "G0001",
+            "productName": "키너지 EX",
+        },
+        {
+            "requestedName": "옵티모",
+            "goodsNo": "G0002",
+            "productName": "옵티모 H426",
+        },
+    ]
 
 
 def test_product_comparison_table_does_not_expose_goods_no() -> None:
@@ -26332,6 +26385,80 @@ def test_ready_preorder_card_without_quick_order_tool_is_allowed_under_slot_fill
     )
 
     assert violations == []
+
+
+def test_turn_contract_promotes_router_comparison_signal_into_product_comparison() -> None:
+    contract = build_turn_contract(
+        user_text="키너지 ex랑 옵티모랑 비교해줘",
+        intent_frame=IntentFrame(
+            domain=PolicyDomain.DISCOVERY,
+            intent="unknown",
+            entities={
+                "product_names": ("키너지 EX", "옵티모"),
+                "comparison_followup_intent": "generic_compare",
+                "compare_metric": "detail",
+            },
+        ),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            metadata={
+                "response_shape_key": "metric_comparison_summary",
+                "comparison_followup_intent": "generic_compare",
+                "compare_metric": "detail",
+            },
+        ),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY],
+            execution_plan=["discovery:resolve_product"],
+            comparison_followup_intent="generic_compare",
+            comparison_metric="detail",
+            referred_object_type="product_set",
+        ),
+        action_mode="product_comparison",
+    )
+
+    assert contract.domain == "discovery"
+    assert contract.intent == "product_comparison"
+    assert contract.known_slots["comparison_followup_intent"] == "generic_compare"
+    assert contract.known_slots["compare_metric"] == "detail"
+    assert "search_product_tool" in contract.allowed_tools
+    assert "get_product_description_tool" in contract.allowed_tools
+
+
+def test_compare_quickreply_contract_gate_accepts_metric_summary_alias() -> None:
+    contract = build_turn_contract(
+        user_text="키너지 ex랑 옵티모랑 비교해줘",
+        intent_frame=IntentFrame(domain=PolicyDomain.DISCOVERY, intent="unknown"),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            metadata={
+                "response_shape_key": "metric_comparison_summary",
+                "comparison_followup_intent": "generic_compare",
+                "compare_metric": "detail",
+            },
+        ),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY],
+            execution_plan=["discovery:resolve_product"],
+            comparison_followup_intent="generic_compare",
+            comparison_metric="detail",
+        ),
+        action_mode="product_comparison",
+    )
+
+    allowed, reason = _direct_code_fast_path_contract_gate(
+        turn_contract=contract,
+        intent="product_comparison",
+        template="quickReply",
+        source="code_product_comparison",
+        required_tools=("search_product_tool", "get_product_description_tool"),
+        allowed_intents=("product_compare_tool", "metric_comparison_summary", "grade_comparison_summary"),
+    )
+
+    assert allowed is True
+    assert reason == "contract_matched:code_product_comparison"
 
 
 def test_direct_preorder_condition_accepts_schedule_slot_fill_intent() -> None:

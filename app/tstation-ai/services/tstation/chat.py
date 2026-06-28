@@ -15034,6 +15034,7 @@ def _build_product_comparison_event(
     fallback_event = _build_product_comparison_fallback_event(product_rows)
     if fallback_event:
         return fallback_event
+    requested_product_names = [str(name or "").strip() for name, _row in product_rows[:2]]
     product_rows = [
         (
             str((row or {}).get("goods_nm") or (row or {}).get("title") or name).strip() or name,
@@ -15044,6 +15045,18 @@ def _build_product_comparison_event(
 
     compare_metric, comparison_followup_intent, sub_intent = _comparison_context_from_policy_or_text(user_text)
     (left_name, left_row), (right_name, right_row) = product_rows[:2]  # guarded by fallback above
+    resolved_products = [
+        {
+            "requestedName": requested_product_names[0] or left_name,
+            "goodsNo": str(left_row.get("goods_no") or "").strip(),
+            "productName": left_name,
+        },
+        {
+            "requestedName": requested_product_names[1] or right_name,
+            "goodsNo": str(right_row.get("goods_no") or "").strip(),
+            "productName": right_name,
+        },
+    ]
 
     if not compare_metric and sub_intent not in {"grade_compare", "mileage_compare", "latest_compare", "attribute_compare"}:
         assistant = _build_product_feature_review_comparison(left_name, left_row, right_name, right_row)
@@ -15225,6 +15238,11 @@ def _build_product_comparison_event(
                     else "metric_comparison_summary"
                 ),
                 "productNames": [left_name, right_name],
+                "requestedProductNames": [
+                    requested_product_names[0] or left_name,
+                    requested_product_names[1] or right_name,
+                ],
+                "resolvedProducts": resolved_products,
                 "compareMetric": compare_metric or "detail",
                 "compare_metric": compare_metric or "detail",
                 "comparison_followup_intent": comparison_followup_intent or "none",
@@ -30993,6 +31011,7 @@ class TStationChatServiceV2:
                 template="quickReply",
                 source="code_product_comparison",
                 required_tools=("search_product_tool", "get_product_description_tool"),
+                allowed_intents=("product_compare_tool", "metric_comparison_summary", "grade_comparison_summary"),
             )
             if not gate_allowed:
                 logger.info("[CODE_FAST_PATH_GATE] blocked product_comparison reason=%s", gate_reason)
@@ -31119,6 +31138,7 @@ class TStationChatServiceV2:
                 intent="product_comparison",
                 source="code_product_comparison",
                 required_tools=("search_product_tool", "get_product_description_tool"),
+                allowed_intents=("product_compare_tool", "metric_comparison_summary", "grade_comparison_summary"),
             )
             return (emitted_events, finalized_event) if finalized_event is not None else None
 
