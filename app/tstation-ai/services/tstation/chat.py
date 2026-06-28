@@ -28418,6 +28418,32 @@ class TStationChatServiceV2:
             turn_contract=turn_contract,
             action_mode=action_mode,
         )
+        if (
+            turn_contract is not None
+            and turn_contract.domain == "support"
+            and action_mode in {"support_policy_answer", "info_only"}
+        ):
+            aligned_tool_plan = ToolPlan(
+                allowed_tools=turn_contract.allowed_tools,
+                forbidden_tools=turn_contract.forbidden_tools,
+                required_slots=turn_contract.required_slots,
+                preferred_tool="search_faq_hybrid_tool" if "search_faq_hybrid_tool" in turn_contract.allowed_tools else None,
+                metadata={
+                    "response_intent": turn_contract.intent,
+                    **(turn_contract.known_slots or {}),
+                }
+            )
+            contract_rd = turn_contract.response_decision or {}
+            aligned_decision = ResponseDecision(
+                response_shape=ResponseShape(contract_rd.get("response_shape", "summary")),
+                template=TemplateName(contract_rd.get("template", "quickReply")),
+                required_slots=tuple(contract_rd.get("required_slots", ())),
+                forbidden_behaviors=tuple(contract_rd.get("forbidden_behaviors", ())),
+                assistant_guidance=str(contract_rd.get("assistant_guidance", "")),
+                metadata=dict(contract_rd.get("metadata", {}) or {}),
+            )
+            current_transaction_tool_plan.set(aligned_tool_plan)
+            current_transaction_response_decision.set(aligned_decision)
         current_runflat_comparison.set(bool(
             re.search(r"런\s*플랫|런플랫|run[-\s]?flat|runflat", last_user_text, re.IGNORECASE)
             and re.search(r"가격|차이|비싸|얼마|비용|추가|더\s*내", last_user_text, re.IGNORECASE)
