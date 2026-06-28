@@ -67,6 +67,7 @@ from services.tstation.chat import (
     _ALL_MY_T_BENEFIT_PAGE_RE,
     _COUPON_ISSUE_INTENT_RE,
     _all_my_t_benefit_page_event,
+    _apply_default_benefit_router_override,
     _build_coupon_applicability_event,
     _build_coupon_channel_policy_event,
     _build_default_benefit_event,
@@ -11168,6 +11169,62 @@ def test_default_benefit_direct_code_gate_allows_support_misroute_via_sub_intent
     assert contract.sub_intent == "benefit_event_list_lookup"
     assert allowed is True
     assert reason == "contract_matched:code_default_benefit_event_deal"
+
+
+@pytest.mark.parametrize(
+    "user_text",
+    [
+        "지금 받을 수 있는 혜택은?",
+        "현재 받을 수 있는 혜택 알려줘",
+        "진행 중인 이벤트",
+        "이벤트 혜택 알려줘",
+    ],
+)
+def test_default_benefit_router_override_beats_support_promotion_policy(user_text: str) -> None:
+    routing_result = MultiAgentDomain(
+        reason="available benefits or promotions -> support related to promotion or coupon policies",
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        execution_plan=["support"],
+        user_behavior="support policy answer",
+        flow="support policy answer",
+        claim_check_type="none",
+        complaint_scope="none",
+        policy_intent="promotion_gift_policy",
+        agent_prompt_profile=chat_module.AgentPromptProfile.FULL,
+        planner_confidence=0.93,
+    )
+
+    domains, overridden_routing, applied = _apply_default_benefit_router_override(
+        user_text=user_text,
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        routing_result=routing_result,
+    )
+
+    assert applied is True
+    assert domains == [MultiAgentDomain.Domain.DISCOVERY]
+    assert overridden_routing is not None
+    assert overridden_routing.domains == [MultiAgentDomain.Domain.DISCOVERY]
+    assert overridden_routing.execution_plan == ["discovery:benefit_event_list_lookup"]
+    assert overridden_routing.agent_prompt_profile == chat_module.AgentPromptProfile.DISCOVERY_EVENT_CONTENT
+    assert overridden_routing.policy_intent == "none"
+    assert overridden_routing.override_applied is True
+    assert overridden_routing.override_reason == "default_benefit_discovery_override"
+    assert overridden_routing.original_router_domains == [MultiAgentDomain.Domain.SUPPORT]
+
+    frame = build_discovery_intent_frame(user_text)
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=frame,
+        tool_plan=plan_discovery_tools(frame),
+        response_decision=decide_discovery_response(frame),
+        routing_result=overridden_routing,
+    )
+
+    assert contract.domain == "discovery"
+    assert contract.intent == "benefit_event_list_lookup"
+    assert contract.sub_intent == "benefit_event_list_lookup"
+    assert contract.allowed_tools == ("get_events_tool", "get_deals_tool")
+    assert "search_faq_hybrid_tool" not in contract.allowed_tools
 
 
 @pytest.mark.parametrize("execution_plan", [["discovery:benefit_event_list_lookup"], ["discovery:benefit_deal_list"]])

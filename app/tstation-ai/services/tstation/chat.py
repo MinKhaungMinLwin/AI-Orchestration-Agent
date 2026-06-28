@@ -1682,6 +1682,57 @@ def _mark_router_override_blocked(
     routing_result.blocked_override_reason = "conflicts_with_high_confidence_router_contract"
 
 
+def _apply_default_benefit_router_override(
+    *,
+    user_text: str,
+    domains: list[MultiAgentDomain.Domain],
+    routing_result: MultiAgentDomain | None,
+) -> tuple[list[MultiAgentDomain.Domain], MultiAgentDomain | None, bool]:
+    if not is_default_benefit_request(user_text):
+        return domains, routing_result, False
+
+    previous_domains = list(getattr(routing_result, "domains", []) or domains)
+    previous_execution_plan = list(getattr(routing_result, "execution_plan", []) or [])
+    domains = [MultiAgentDomain.Domain.DISCOVERY]
+    if routing_result is None:
+        routing_result = MultiAgentDomain(
+            reason="default_benefit_discovery_override",
+            domains=domains,
+            execution_plan=["discovery:benefit_event_list_lookup"],
+            user_behavior="current benefit/event list lookup should stay on discovery event content",
+            flow="default_benefit_discovery_override",
+            claim_check_type="none",
+            complaint_scope="none",
+            policy_intent="none",
+            agent_prompt_profile=AgentPromptProfile.DISCOVERY_EVENT_CONTENT,
+            planner_confidence=1.0,
+            override_applied=True,
+            override_reason="default_benefit_discovery_override",
+            original_router_domains=previous_domains,
+            original_router_execution_plan=previous_execution_plan,
+        )
+        return domains, routing_result, True
+
+    _mark_router_override_applied(
+        routing_result,
+        previous_domains=previous_domains,
+        previous_execution_plan=previous_execution_plan,
+        reason="default_benefit_discovery_override",
+    )
+    routing_result.reason = "default_benefit_discovery_override"
+    routing_result.domains = domains
+    routing_result.execution_plan = ["discovery:benefit_event_list_lookup"]
+    routing_result.user_behavior = "current benefit/event list lookup should stay on discovery event content"
+    routing_result.flow = "default_benefit_discovery_override"
+    routing_result.policy_intent = "none"
+    routing_result.claim_check_type = "none"
+    routing_result.complaint_scope = "none"
+    routing_result.agent_prompt_profile = AgentPromptProfile.DISCOVERY_EVENT_CONTENT
+    if float(getattr(routing_result, "planner_confidence", 0.0) or 0.0) < 1.0:
+        routing_result.planner_confidence = 1.0
+    return domains, routing_result, True
+
+
 def _is_transaction_store_selection_plan(execution_plan: list[str] | tuple[str, ...] | None) -> bool:
     return any(str(item or "").strip().lower() == "transaction:store_selection" for item in (execution_plan or ()))
 
@@ -26558,6 +26609,20 @@ class TStationChatServiceV2:
             router_source_for_contract = "llm"
             contract_source_for_turn = "router"
         _t_classify = time.perf_counter()
+
+        domains, routing_result, default_benefit_router_override_applied = _apply_default_benefit_router_override(
+            user_text=last_user_text,
+            domains=list(domains),
+            routing_result=routing_result,
+        )
+        if default_benefit_router_override_applied:
+            speculative_classify_future = None
+            skip_decision = False
+            logger.info(
+                "[COORDINATOR] Default benefit route override: forcing [discovery:benefit_event_list_lookup] "
+                "(session_id=%s)",
+                request.session_id,
+            )
 
         if _is_preorder_confirmation_reply(last_user_text, latest_preorder_tmpl):
             previous_domains = list(domains)

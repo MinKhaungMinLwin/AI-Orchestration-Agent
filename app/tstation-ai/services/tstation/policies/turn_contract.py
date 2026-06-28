@@ -572,19 +572,21 @@ def build_turn_contract(
         domain = "support"
         intent = "coupon_registration_policy"
     if _is_discovery_event_content_contract(routing_result, planner_intent, code_intent):
+        discovery_event_content_intents = {
+            "benefit_event_list_lookup",
+            "benefit_deal_list",
+            "product_event_lookup",
+            "product_promotion_lookup",
+            "product_coupon_lookup",
+            "product_deal_lookup",
+        }
         domain = "discovery"
-        intent = planner_intent if planner_intent in {
-            "product_event_lookup",
-            "product_promotion_lookup",
-            "product_coupon_lookup",
-            "product_deal_lookup",
-        } else code_intent if code_intent in {
-            "product_event_lookup",
-            "product_promotion_lookup",
-            "product_coupon_lookup",
-            "product_deal_lookup",
-        } else "product_event_lookup"
-        known_slots["goal_type"] = "product_event_lookup"
+        intent = (
+            planner_intent if planner_intent in discovery_event_content_intents
+            else code_intent if code_intent in discovery_event_content_intents
+            else "product_event_lookup"
+        )
+        known_slots["goal_type"] = intent
     if planner_intent == "quick_order_execute" and _has_quick_order_execute_slots(known_slots):
         intent = "quick_order_execute"
     if code_intent == "order_cancel_status_lookup":
