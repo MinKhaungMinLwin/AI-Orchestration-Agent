@@ -17114,11 +17114,12 @@ def _direct_code_fast_path_contract_gate(
             return False, f"template_forbidden:{template}"
         return True, f"contract_matched:{source}"
     contract_intent = str(turn_contract.intent or "")
+    contract_sub_intent = str(getattr(turn_contract, "sub_intent", "") or "")
     response_decision = turn_contract.response_decision or {}
     response_metadata = response_decision.get("metadata") if isinstance(response_decision, Mapping) else {}
     response_shape_key = str((response_metadata or {}).get("response_shape_key") or "")
     acceptable_intents = {intent, *allowed_intents}
-    if not ({contract_intent, response_shape_key} & acceptable_intents):
+    if not ({contract_intent, contract_sub_intent, response_shape_key} & acceptable_intents):
         return False, f"intent_mismatch:{contract_intent or 'none'}"
     if violates_response_template_contract({"template": template}, turn_contract):
         return False, f"template_forbidden:{template}"

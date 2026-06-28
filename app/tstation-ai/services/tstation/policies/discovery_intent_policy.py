@@ -1183,7 +1183,7 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
                 "external_price_scraping",
             ),
         )
-    if frame.sub_intent in {"benefit_event_list_lookup", "benefit_event_deal_list"}:
+    if frame.sub_intent == "benefit_event_list_lookup":
         return ToolPlan(
             allowed_tools=("get_events_tool", "get_deals_tool"),
             preferred_tool="get_events_tool",

@@ -399,6 +399,7 @@ from services.tstation.policies.support_response_policy import (
 from services.tstation.policies.response_decision import ResponseDecision, ResponseShape, TemplateName, ToolPlan
 from services.tstation.policies.turn_contract import (
     _FAQ_FIRST_SUPPORT_POLICY_INTENTS,
+    _is_discovery_event_content_contract,
     _normalize_plan_intent,
     _planner_best_seller_intent,
     TurnContract,
@@ -11136,6 +11137,50 @@ def test_event_benefit_lookup_is_discovery_contract_not_alert_request() -> None:
     assert "get_my_coupons_tool" in tool_plan.forbidden_tools
     assert transaction_frame.intent != "price_or_benefit_alert_request"
     assert transaction_tool_plan.metadata["response_intent"] != "price_or_benefit_alert_request"
+
+
+def test_default_benefit_direct_code_gate_allows_support_misroute_via_sub_intent() -> None:
+    user_text = "지금 받을 수 있는 혜택은?"
+    frame = build_discovery_intent_frame(user_text)
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=frame,
+        tool_plan=plan_discovery_tools(frame),
+        response_decision=decide_discovery_response(frame),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:policy_answer"],
+            agent_prompt_profile="full",
+        ),
+    )
+
+    allowed, reason = _direct_code_fast_path_contract_gate(
+        turn_contract=contract,
+        intent="product_search",
+        template="quickReply",
+        source="code_default_benefit_event_deal",
+        required_tools=("get_events_tool", "get_deals_tool"),
+        allowed_intents=("benefit_event_list_lookup",),
+    )
+
+    assert contract.domain == "support"
+    assert contract.intent == "policy_answer"
+    assert contract.sub_intent == "benefit_event_list_lookup"
+    assert allowed is True
+    assert reason == "contract_matched:code_default_benefit_event_deal"
+
+
+@pytest.mark.parametrize("execution_plan", [["discovery:benefit_event_list_lookup"], ["discovery:benefit_deal_list"]])
+def test_turn_contract_treats_benefit_lists_as_discovery_event_content(execution_plan: list[str]) -> None:
+    assert _is_discovery_event_content_contract(
+        _routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=execution_plan,
+            agent_prompt_profile="full",
+        ),
+        None,
+        None,
+    )
 
 
 def test_price_or_benefit_alert_requires_router_contract() -> None:

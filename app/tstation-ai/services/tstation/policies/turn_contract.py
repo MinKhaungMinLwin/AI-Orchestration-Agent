@@ -4038,6 +4038,8 @@ def _is_discovery_event_content_contract(
     code_intent: str | None,
 ) -> bool:
     event_intents = {
+        "benefit_event_list_lookup",
+        "benefit_deal_list",
         "product_event_lookup",
         "product_promotion_lookup",
         "product_coupon_lookup",
@@ -4052,6 +4054,8 @@ def _is_discovery_event_content_contract(
     return any(
         token in plan_text
         for token in (
+            "benefit_event_list_lookup",
+            "benefit_deal_list",
             "product_event_lookup",
             "product_promotion_lookup",
             "product_coupon_lookup",
