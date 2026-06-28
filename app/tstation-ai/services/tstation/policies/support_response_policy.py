@@ -1893,36 +1893,6 @@ def decide_support_response(
     slots = known_slots or {}
     if intent in {"signup_first_purchase_benefit_policy", "signup_coupon_guidance"} and _ASSURANCE_SERVICE_POLICY_ANCHOR_RE.search(text):
         intent = "assurance_service_policy"
-    if intent == "post_installation_quality_concern":
-        return _decision(
-            response_shape_key="post_installation_quality_concern",
-            response_shape=ResponseShape.SUMMARY,
-            template=TemplateName.QUICK_REPLY,
-            forbidden_behaviors=(
-                "transfer_to_qna_direct_first",
-                "promise_refund_from_noise_only",
-                "skip_post_installation_quality_guidance",
-            ),
-            assistant_guidance=(
-                "타이어 교체 후 소음이나 진동이 심해졌다는 문의는 장착 상태, 휠 밸런스, 얼라인먼트, 타이어 상태를 함께 점검하는 안내로 처리한다. "
-                "단순 환불로 바로 단정하지 말고 정밀 점검을 권한다."
-            ),
-        )
-    if intent in {"onsite_delivery_mismatch", "wrong_item_or_fitment_issue"}:
-        return _decision(
-            response_shape_key="onsite_delivery_mismatch",
-            response_shape=ResponseShape.SUMMARY,
-            template=TemplateName.QUICK_REPLY,
-            forbidden_behaviors=(
-                "transfer_to_qna_direct_first",
-                "treat_as_generic_complaint",
-                "skip_wrong_item_guidance",
-            ),
-            assistant_guidance=(
-                "주문한 타이어와 다른 제품을 장착했거나 규격이 맞지 않는 문의는 주문 상품명, 사이즈, 실제 장착 내역을 함께 확인하는 안내로 처리한다. "
-                "즉시 1:1 문의로만 보내지 말고 주문내역 확인과 현장 확인을 먼저 안내한다."
-            ),
-        )
 
     if intent == "legal_action_guidance_denied" or (
         _LEGAL_ACTION_RE.search(text) and _LEGAL_ACTION_TSTATION_SCOPE_RE.search(text)
@@ -1971,8 +1941,7 @@ def decide_support_response(
         )
 
     if intent == "coupon_usage_policy" or (
-        intent != "expired_coupon"
-        and _COUPON_RE.search(text)
+        _COUPON_RE.search(text)
         and _COUPON_USAGE_POLICY_RE.search(text)
         and not _PARTNER_MEMBER_COUPON_POLICY_RE.search(text)
     ):

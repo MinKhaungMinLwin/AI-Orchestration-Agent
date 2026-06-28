@@ -133,32 +133,6 @@ def test_tire_manufacture_date_policy_uses_faq_first_contract() -> None:
     assert "promise_exchange_or_refund" in decision.forbidden_behaviors
 
 
-def test_post_installation_quality_concern_uses_policy_fallback_not_qna() -> None:
-    decision = decide_support_response(
-        intent="post_installation_quality_concern",
-        user_text="타이어 교체 후 소음 너무 심해졌어. 환불해줘",
-    )
-
-    assert decision.template == TemplateName.QUICK_REPLY
-    assert decision.response_shape == ResponseShape.SUMMARY
-    assert decision.metadata["response_shape_key"] == "post_installation_quality_concern"
-    assert "transfer_to_qna_direct_first" in decision.forbidden_behaviors
-    assert "정밀 점검" in decision.assistant_guidance
-
-
-def test_onsite_delivery_mismatch_uses_policy_fallback_not_qna() -> None:
-    decision = decide_support_response(
-        intent="onsite_delivery_mismatch",
-        user_text="매장에서 주문한 타이어와 다른 걸 장착했고 집에 도착해서 알아챘다. 어떻게 해야합니까?",
-    )
-
-    assert decision.template == TemplateName.QUICK_REPLY
-    assert decision.response_shape == ResponseShape.SUMMARY
-    assert decision.metadata["response_shape_key"] == "onsite_delivery_mismatch"
-    assert "transfer_to_qna_direct_first" in decision.forbidden_behaviors
-    assert "주문내역 확인" in decision.assistant_guidance
-
-
 def test_reservation_policy_guidance_text_trigger_without_owned_anchor() -> None:
     decision = decide_support_response(
         intent="support_faq",

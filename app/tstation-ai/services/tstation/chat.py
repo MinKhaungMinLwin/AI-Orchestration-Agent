@@ -871,7 +871,6 @@ class MultiAgentDomain(BaseModel):
         "external_tire_install_policy",
         "tire_manufacture_date_policy",
         "tire_quality_warranty_policy",
-        "post_installation_quality_concern",
         "assurance_service_policy",
         "reservation_policy_guidance",
         "installation_work_policy",
@@ -890,14 +889,13 @@ class MultiAgentDomain(BaseModel):
         "my_goods_review_lookup",
         "store_service_review_write",
         "store_review_write",
-        "post_installation_quality_concern",
         "onsite_delivery_mismatch",
     ] = Field(
         description=(
             "Structured support/policy intent. Use this for non-transaction policy guidance such as shipping fee, "
             "online-vs-store price policy, regional price policy, payment error troubleshooting, "
             "order document guidance, tire manufacture date policy, tire quality/warranty policy, "
-            "post-installation quality concern, assurance service policy, reservation policy guidance, installation/work policy, external tire install policy, promotion/gift policy, "
+            "assurance service policy, reservation policy guidance, installation/work policy, external tire install policy, promotion/gift policy, "
             "tire condition photo policy, coupon usage policy, coupon registration policy, "
             "signup/first-purchase benefit policy, signup coupon guidance, partner-member-only coupon policy, "
             "legal action guidance denial, store service availability, goods review lookup, "
@@ -2400,7 +2398,6 @@ class _SlimMultiAgentDomain(BaseModel):
         "external_tire_install_policy",
         "tire_manufacture_date_policy",
         "tire_quality_warranty_policy",
-        "post_installation_quality_concern",
         "assurance_service_policy",
         "reservation_policy_guidance",
         "installation_work_policy",
@@ -2979,7 +2976,6 @@ Critical first-turn routing:
 - Specific-store service availability like "모란점 타이어 보관 가능해?" -> TRANSACTION store attribute inquiry, not SUPPORT.
 - Store/service review write path -> SUPPORT, policy_intent=store_service_review_write.
 - My product review lookup path -> SUPPORT, policy_intent=my_goods_review_lookup.
-- Post-installation noise/vibration concern -> SUPPORT, policy_intent=post_installation_quality_concern.
 - Wrong/different item delivered or installed at store (e.g. "주문한 거랑 다른 타이어", "다른 걸 장착", "잘못된 제품") -> SUPPORT, policy_intent=onsite_delivery_mismatch.
 - Complaint about T-Station service -> SUPPORT with complaint_scope=tstation_service_complaint.
 - Complaint outside T-Station scope -> LEADING with complaint_scope=out_of_scope_complaint.
@@ -3127,8 +3123,6 @@ EXAMPLES (tricky cases):
 - "요즘 취업도 안 되고 되는 일이 없어" → LEADING, complaint_scope=out_of_scope_complaint
 - "타이어 주문했는데 계속 오류나고 되는 일이 없어" → SUPPORT, complaint_scope=tstation_service_complaint
 - "너 답변이 계속 틀려서 짜증나" → SUPPORT, complaint_scope=tstation_service_complaint
-- "타이어 교체 후 소음이 심해졌어", "장착 후 진동이 느껴져" → SUPPORT, policy_intent=post_installation_quality_concern
-- "매장에서 주문한 타이어와 다른 걸 장착했어", "다른 걸 장착했고 집에 와서 알아챘어" → SUPPORT, policy_intent=onsite_delivery_mismatch
 - "되는 일이 없어 짜증나" → LEADING, complaint_scope=unclear_complaint
 - [Prior unsized recommendation: "승용차용 조용한 타이어 추천"] "2454518" → DISCOVERY, discovery_followup_intent=size_for_recommendation_continuation, user_behavior="providing tire size for the prior quiet passenger recommendation"
 - [After previous size continuation for 245/45R18] "키너지 ST AS" → DISCOVERY, discovery_followup_intent=none, agent_prompt_profile=discovery_search, user_behavior="selecting product within the confirmed 245/45R18 recommendation context"
@@ -6832,14 +6826,6 @@ def _build_support_faq_policy_event(
             "무상 수리나 교체 여부는 현장 점검 결과와 구매·장착 이력, 보증 또는 워런티 적용 여부에 따라 결정돼요.\n"
             "워런티 서비스 적용 대상이면 상태 확인 후 안내받을 수 있어요."
         ),
-        "post_installation_quality_concern": (
-            "타이어 교체 후 소음이나 진동이 심해졌다면 장착 상태, 휠 밸런스, 얼라인먼트, 타이어 상태를 함께 점검해 보는 것이 좋아요.\n"
-            "단순 환불로 바로 단정하지 말고 정밀 점검을 먼저 권장드려요."
-        ),
-        "onsite_delivery_mismatch": (
-            "주문한 타이어와 다른 제품을 장착했거나 규격이 맞지 않는 경우에는 주문 상품명, 사이즈, 실제 장착 내역을 함께 확인해야 해요.\n"
-            "즉시 1:1 문의로만 보내지 말고 주문내역 확인과 현장 확인을 먼저 안내해 주세요."
-        ),
         "assurance_service_policy": (
             "안심서비스/안심플러스 보상은 장착 후 1년 이내, 주행거리 16,000km 이내 조건에서 확인돼요.\n"
             "안심서비스는 2개 이상, 안심플러스는 4개 구매 기준과 대상 상품·약관에 따라 적용 범위가 달라질 수 있어요."
@@ -6883,8 +6869,6 @@ def _build_support_faq_policy_event(
     followup_by_intent = {
         "tire_manufacture_date_policy": "제조일자만으로 교환이나 환불을 단정하지 말고, 필요하면 제품 상태와 구매 이력도 함께 확인해 주세요.",
         "tire_quality_warranty_policy": required_guidance_by_intent["tire_quality_warranty_policy"],
-        "post_installation_quality_concern": required_guidance_by_intent["post_installation_quality_concern"],
-        "onsite_delivery_mismatch": required_guidance_by_intent["onsite_delivery_mismatch"],
         "assurance_service_policy": required_guidance_by_intent["assurance_service_policy"],
         "delivery_delay_reservation_schedule_policy": required_guidance_by_intent["delivery_delay_reservation_schedule_policy"],
         "reservation_window_policy": required_guidance_by_intent["reservation_window_policy"],
@@ -6901,14 +6885,6 @@ def _build_support_faq_policy_event(
     fallback_by_intent = {
         "tire_manufacture_date_policy": "타이어 제조일자와 신품 기준은 정책에 따라 안내되고, 제조일자만으로 불량이나 교환 가능 여부를 바로 단정할 수는 없어요.",
         "tire_quality_warranty_policy": required_guidance_by_intent["tire_quality_warranty_policy"],
-        "post_installation_quality_concern": (
-            "타이어 교체 후 소음이나 진동이 심해졌다면 장착 상태, 휠 밸런스, 얼라인먼트, 타이어 상태를 함께 점검해 보는 것이 좋아요.\n"
-            "단순 환불로 바로 단정하지 말고 정밀 점검을 먼저 권장드려요."
-        ),
-        "onsite_delivery_mismatch": (
-            "주문한 타이어와 다른 제품을 장착했거나 규격이 맞지 않는 경우에는 주문 상품명, 사이즈, 실제 장착 내역을 함께 확인해야 해요.\n"
-            "주문내역 확인과 현장 확인 결과를 기준으로 안내받으실 수 있어요."
-        ),
         "assurance_service_policy": required_guidance_by_intent["assurance_service_policy"],
         "delivery_delay_reservation_schedule_policy": required_guidance_by_intent["delivery_delay_reservation_schedule_policy"],
         "reservation_window_policy": "장착 예약일은 최대 30일 이내로 지정해야 하며, 두 달 뒤 예약은 지원되지 않을 수 있어요.",
@@ -7877,14 +7853,6 @@ def _build_direct_preorder_event_from_slots(
 
 def _support_faq_policy_quick_replies(intent: str) -> list[dict[str, Any]]:
     intent_url_ctas: dict[str, list[dict[str, Any]]] = {
-        "post_installation_quality_concern": [
-            {"label": "내 주문 조회", "url": CTAUrls.ORDER_HISTORY, "domain": "SUPPORT"},
-            {"label": "1:1 문의하기", "domain": "SUPPORT"},
-        ],
-        "onsite_delivery_mismatch": [
-            {"label": "내 주문 조회", "url": CTAUrls.ORDER_HISTORY, "domain": "SUPPORT"},
-            {"label": "1:1 문의하기", "domain": "SUPPORT"},
-        ],
         "assurance_service_policy": [
             {"label": "나의 워런티 확인", "url": CTAUrls.WARRANTY_MAIN, "domain": "SUPPORT"},
         ],
@@ -16182,9 +16150,7 @@ def _build_turn_contract_required_slot_guard_event(
 
 
 _FAQ_POLICY_FALLBACK_INTENTS = frozenset({
-    "post_installation_quality_concern",
     "tire_condition_photo_policy",
-    "onsite_delivery_mismatch",
 })
 _DIRECT_SUPPORT_FAQ_POLICY_INTENTS = _FAQ_POLICY_FALLBACK_INTENTS
 _FAQ_POLICY_FALLBACK_SOURCE_TOOLS = frozenset({"get_faq_tool", "search_faq_rag_tool", "search_faq_hybrid_tool"})
