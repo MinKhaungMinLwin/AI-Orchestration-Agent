@@ -17197,6 +17197,62 @@ _FAST_PATH_SUPPORT_RECOVERY_ALLOWED_TOOLS = frozenset({
 })
 
 
+def _contract_required_recommendation_tool_input(
+    *,
+    turn_contract: TurnContract,
+    known_slots: Mapping[str, Any],
+    merged_slots: ConversationSlots | None,
+    policy_tool_patch: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    if str(turn_contract.domain or "").strip().lower() != PolicyDomain.DISCOVERY.value:
+        return {}
+    if str(turn_contract.intent or "").strip() != "product_recommendation":
+        return {}
+    if str(turn_contract.sub_intent or "").strip() != "vehicle_based_recommendation_refinement":
+        return {}
+    response_decision = turn_contract.response_decision or {}
+    response_template = str(response_decision.get("template") or "").strip().lower()
+    if response_template and response_template != "product":
+        return {}
+    allowed_tools = {str(tool) for tool in tuple(turn_contract.allowed_tools or ()) if str(tool).strip()}
+    if "get_products_recommendations_tool" not in allowed_tools:
+        return {}
+
+    tool_input: dict[str, Any] = {}
+    expected_args = known_slots.get("recommendation_expected_tool_args")
+    if isinstance(expected_args, Mapping):
+        for key, value in expected_args.items():
+            if value not in (None, "", [], {}):
+                tool_input[str(key)] = value
+
+    recommendation_context = known_slots.get("recommendation_context")
+    if isinstance(recommendation_context, Mapping):
+        tool_args_patch = recommendation_context.get("tool_args_patch")
+        if isinstance(tool_args_patch, Mapping):
+            for key, value in tool_args_patch.items():
+                if value not in (None, "", [], {}):
+                    tool_input.setdefault(str(key), value)
+
+    slot_sources = (
+        known_slots,
+        merged_slots.model_dump() if merged_slots is not None else {},
+        dict(policy_tool_patch or {}),
+    )
+    for key in ("tire_size", "car_lnc_cd", "rcmd_type", "season_nm", "brand_cd", "allow_cross_brand_fill"):
+        for source in slot_sources:
+            if not isinstance(source, Mapping):
+                continue
+            value = source.get(key)
+            if value in (None, "", [], {}):
+                continue
+            tool_input.setdefault(key, value)
+            break
+
+    if tool_input.get("tire_size") in (None, "") and tool_input.get("car_lnc_cd") in (None, ""):
+        return {}
+    return tool_input
+
+
 def _annotate_contract_tool_recovery_event(
     event: dict[str, Any],
     *,
@@ -17260,12 +17316,21 @@ async def recover_blocked_fast_path_to_contract_tool(
     source_domain = domain or "discovery"
 
     if domain == PolicyDomain.DISCOVERY.value:
+        from services.tstation.agents.b_discovery_agent import tools as discovery_tools
+
+        contract_required_recommendation_input = _contract_required_recommendation_tool_input(
+            turn_contract=turn_contract,
+            known_slots=known_slots,
+            merged_slots=merged_slots,
+            policy_tool_patch=discovery_tools.current_discovery_recommendation_tool_patch.get(),
+        )
         discovery_known_slots = {
             key: value
             for key, value in {
                 "tire_size": known_slots.get("tire_size") or getattr(merged_slots, "tire_size", None),
                 "goods_no": known_slots.get("goods_no") or getattr(merged_slots, "goods_no", None),
                 "vehicle_type": known_slots.get("vehicle_type") or getattr(merged_slots, "vehicle_type", None),
+                "car_lnc_cd": known_slots.get("car_lnc_cd") or getattr(merged_slots, "car_lnc_cd", None),
                 "brand_cd": known_slots.get("brand_cd"),
                 "discovery_followup_action": known_slots.get("discovery_followup_action"),
                 "pending_check_topic": known_slots.get("pending_check_topic"),
@@ -17285,8 +17350,14 @@ async def recover_blocked_fast_path_to_contract_tool(
                 if value not in (None, "", [], {})
             }
             tool_input_source = "discovery_tool_plan"
+            if preferred_tool == "get_products_recommendations_tool" and contract_required_recommendation_input:
+                tool_input = dict(contract_required_recommendation_input)
+                tool_input_source = "turn_contract_required_recommendation"
         elif len(allowed_tools) == 1:
             preferred_tool = allowed_tools[0]
+            if preferred_tool == "get_products_recommendations_tool" and contract_required_recommendation_input:
+                tool_input = dict(contract_required_recommendation_input)
+                tool_input_source = "turn_contract_required_recommendation"
 
         if preferred_tool not in _FAST_PATH_DISCOVERY_RECOVERY_ALLOWED_TOOLS:
             return None
@@ -17342,6 +17413,9 @@ async def recover_blocked_fast_path_to_contract_tool(
             display_name = "등록 차량 조회 중..."
         elif preferred_tool == "get_products_recommendations_tool":
             if not tool_input:
+                tool_input = dict(contract_required_recommendation_input)
+                tool_input_source = tool_input_source or "turn_contract_required_recommendation"
+            if not tool_input:
                 return None
             display_name = "추천 상품 확인 중..."
     elif domain == PolicyDomain.SUPPORT.value:
@@ -17366,7 +17440,6 @@ async def recover_blocked_fast_path_to_contract_tool(
         return None
 
     if domain == PolicyDomain.DISCOVERY.value:
-        from services.tstation.agents.b_discovery_agent import tools as discovery_tools
         from services.tstation.template_mapper import try_build_template
 
         tool = getattr(discovery_tools, preferred_tool, None)
@@ -19525,7 +19598,13 @@ def _build_discovery_policy_context(
             )
             if active_recommendation_context:
                 known_slots["recommendation_context"] = active_recommendation_context
-            for key in ("tire_size", "vehicle_type", "car_lnc_cd", "recommendation_scenario"):
+            for key in (
+                "tire_size",
+                "vehicle_type",
+                "car_lnc_cd",
+                "recommendation_scenario",
+                "recommendation_expected_tool_args",
+            ):
                 if active_flow_patch.get(key) not in (None, "", [], {}):
                     known_slots[key] = active_flow_patch[key]
         if comparison_context:
@@ -34787,7 +34866,7 @@ class TStationChatServiceV2:
                 recovered_fast_path = await recover_blocked_fast_path_to_contract_tool(
                     turn_contract=turn_contract,
                     user_text=user_query,
-                    merged_slots=initial_slots,
+                    merged_slots=pending_slots or initial_slots,
                     blocked_fast_path_source="code_history_selected_vehicle_prompt",
                 )
                 if recovered_fast_path is not None:
@@ -35843,6 +35922,36 @@ class TStationChatServiceV2:
                                 "[FLOW_STATE] Stored recommendation active flow after listCar: %s",
                                 availability_context["active_flow_context"],
                             )
+                    if (
+                        str(event.get("template") or "") == "product"
+                        and str(event.get("source_domain", "")).lower() == MultiAgentDomain.Domain.DISCOVERY.value
+                        and "get_products_recommendations_tool" in called_tool_names
+                    ):
+                        availability_context = (
+                            dict(base_slots_for_flow.availability_context)
+                            if isinstance(getattr(base_slots_for_flow, "availability_context", None), dict)
+                            else {}
+                        )
+                        active_context = availability_context.get("active_flow_context")
+                        if isinstance(active_context, Mapping) and str(active_context.get("flow_type") or "") == "recommendation":
+                            commit_result = commit_flow_state(
+                                active_context,
+                                {"flow_type": "recommendation"},
+                                source="product_event:recommendation_completed",
+                                flow_type="recommendation",
+                                flow_step="recommend_products",
+                                status="completed",
+                            )
+                            availability_context["active_flow_context"] = commit_result.state.to_active_flow_context()
+                            updated_slots = base_slots_for_flow.model_copy()
+                            updated_slots.availability_context = availability_context
+                            if updated_slots.model_dump() != base_slots_for_flow.model_dump():
+                                pending_slots = updated_slots
+                                vehicle_selection_trace_metadata["active_flow_context_completed"] = True
+                                logger.info(
+                                    "[FLOW_STATE] Completed recommendation active flow after product event: %s",
+                                    availability_context["active_flow_context"],
+                                )
                     _stage_comparison_context_slots(event)
                     confirmed_product_slots = confirmed_product_slot_values_from_event(event)
                     if confirmed_product_slots:

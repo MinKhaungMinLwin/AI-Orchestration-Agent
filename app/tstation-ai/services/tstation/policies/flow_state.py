@@ -271,7 +271,9 @@ class FlowState:
         merged.meta.update(_non_empty_mapping(delta.meta))
         merged.meta["source"] = source
         merged.meta["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        merged.status = delta.status if delta.status in {"active", "dormant", "resumed"} else merged.status
+        merged.status = (
+            delta.status if delta.status in {"active", "dormant", "resumed", "completed"} else merged.status
+        )
         after = merged.to_pending_order_context()
 
         return FlowStateMergeResult(
@@ -328,7 +330,9 @@ class FlowState:
         merged.meta.update(_non_empty_mapping(delta.meta))
         merged.meta["source"] = source
         merged.meta["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        merged.status = delta.status if delta.status in {"active", "dormant", "resumed"} else merged.status
+        merged.status = (
+            delta.status if delta.status in {"active", "dormant", "resumed", "completed"} else merged.status
+        )
         after = merged.to_active_flow_context()
         return FlowStateMergeResult(
             state=merged,
@@ -512,6 +516,18 @@ def recommendation_vehicle_selection_patch(
         for key in ("rcmd_type", "season_nm", "brand_cd", "allow_cross_brand_fill"):
             if source_patch.get(key) not in _EMPTY_VALUES:
                 patch.setdefault(key, source_patch[key])
+    patch["recommendation_expected_tool_args"] = {
+        key: value
+        for key, value in {
+            "tire_size": patch.get("tire_size"),
+            "car_lnc_cd": patch.get("car_lnc_cd"),
+            "rcmd_type": patch.get("rcmd_type"),
+            "season_nm": patch.get("season_nm"),
+            "brand_cd": patch.get("brand_cd"),
+            "allow_cross_brand_fill": patch.get("allow_cross_brand_fill"),
+        }.items()
+        if value not in _EMPTY_VALUES
+    }
     return patch
 
 

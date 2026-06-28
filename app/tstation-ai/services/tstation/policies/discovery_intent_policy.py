@@ -36,6 +36,7 @@ def _recommendation_expected_tool_args(args: Mapping[str, Any]) -> dict[str, Any
         "vehicle_type",
         "season_nm",
         "tire_size",
+        "car_lnc_cd",
         "brand_cd",
         "allow_cross_brand_fill",
         "pfm_nm",

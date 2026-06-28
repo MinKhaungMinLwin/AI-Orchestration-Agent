@@ -13866,6 +13866,14 @@ def test_recommendation_active_flow_selection_patch_promotes_refinement() -> Non
     assert patch["brand_cd"] == "HK"
     assert patch["allow_cross_brand_fill"] is False
     assert patch["recommendation_context"]["fitment_source"] == "selected_vehicle"
+    assert patch["recommendation_expected_tool_args"] == {
+        "tire_size": "225/45R17",
+        "car_lnc_cd": "W036269",
+        "rcmd_type": "all_weather",
+        "season_nm": "올웨더",
+        "brand_cd": "HK",
+        "allow_cross_brand_fill": False,
+    }
 
 
 def test_discovery_policy_context_resumes_recommendation_active_flow_without_router_continue() -> None:
@@ -16742,6 +16750,126 @@ def test_recover_blocked_fast_path_to_contract_tool_does_not_run_transaction_pre
     )
 
     assert recovery is None
+
+
+def test_recover_blocked_fast_path_to_contract_tool_runs_recommendation_refinement_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_input: dict[str, Any] = {}
+
+    def _fake_recommend_invoke(tool_input: dict[str, Any]) -> dict[str, Any]:
+        captured_input.update(tool_input)
+        return {
+            "status": "success",
+            "data": {
+                "items": [
+                    {
+                        "goods_no": "G1",
+                        "goods_nm": "키너지 4S2",
+                        "tire_size_1": "225/45R17",
+                        "brand_nm": "한국",
+                    }
+                ]
+            },
+        }
+
+    def _fake_try_build_template(tool_data_list: list[dict[str, Any]], assistant_text: str) -> dict[str, Any]:
+        assert tool_data_list[0]["tool"] == "get_products_recommendations_tool"
+        return {
+            "type": "data",
+            "template": "product",
+            "data": {
+                "assistantResponse": assistant_text,
+                "products": [{"titleProductName": "키너지 4S2", "titleTires": "225/45R17"}],
+                "metadata": [{"goodsId": "G1"}],
+            },
+        }
+
+    async def _fake_to_thread(func: Any, *args: Any, **kwargs: Any) -> Any:
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(
+        discovery_tools,
+        "get_products_recommendations_tool",
+        SimpleNamespace(invoke=_fake_recommend_invoke),
+    )
+    monkeypatch.setattr(chat_module.asyncio, "to_thread", _fake_to_thread)
+    from services.tstation import template_mapper as template_mapper_module
+
+    monkeypatch.setattr(template_mapper_module, "try_build_template", _fake_try_build_template)
+
+    contract = TurnContract(
+        domain="discovery",
+        intent="product_recommendation",
+        sub_intent="vehicle_based_recommendation_refinement",
+        known_slots={
+            "tire_size": "225/45R17",
+            "car_lnc_cd": "W036269",
+            "recommendation_expected_tool_args": {
+                "tire_size": "225/45R17",
+                "car_lnc_cd": "W036269",
+                "rcmd_type": "all_weather",
+                "season_nm": "올웨더",
+            },
+            "recommendation_context": {
+                "tool_args_patch": {
+                    "rcmd_type": "all_weather",
+                    "season_nm": "올웨더",
+                    "brand_cd": "HK",
+                }
+            },
+            "discovery_followup_action": "vehicle_based_recommendation_refinement",
+        },
+        allowed_tools=("get_my_cars_tool", "get_products_recommendations_tool"),
+        forbidden_tools=(),
+        blocking_required_slots=(),
+        context_state="active",
+        response_decision={"template": "product", "metadata": {"response_shape_key": "vehicle_based_recommendation_refinement"}},
+    )
+
+    patch_token = discovery_tools.current_discovery_recommendation_tool_patch.set(
+        {
+            "tire_size": "225/45R17",
+            "car_lnc_cd": "W036269",
+            "rcmd_type": "all_weather",
+            "season_nm": "올웨더",
+        }
+    )
+    try:
+        recovery = asyncio.run(
+            chat_module.recover_blocked_fast_path_to_contract_tool(
+                turn_contract=contract,
+                user_text="61거1836",
+                merged_slots=ConversationSlots(
+                    tire_size="225/45R17",
+                    car_lnc_cd="W036269",
+                    recommendation_context={
+                        "tool_args_patch": {
+                            "rcmd_type": "all_weather",
+                            "season_nm": "올웨더",
+                            "brand_cd": "HK",
+                        }
+                    },
+                ),
+                blocked_fast_path_source="code_history_selected_vehicle_prompt",
+            )
+        )
+    finally:
+        discovery_tools.current_discovery_recommendation_tool_patch.reset(patch_token)
+
+    assert recovery is not None
+    assert recovery["tool_name"] == "get_products_recommendations_tool"
+    assert captured_input == {
+        "tire_size": "225/45R17",
+        "car_lnc_cd": "W036269",
+        "rcmd_type": "all_weather",
+        "season_nm": "올웨더",
+        "brand_cd": "HK",
+    }
+    assert recovery["event"]["template"] == "product"
+    metadata = recovery["event"]["data"]["contractMetadata"]
+    assert metadata["recovered_tool"] == "get_products_recommendations_tool"
+    assert metadata["tool_input_source"] == "turn_contract_required_recommendation"
 
 
 def test_purchase_cta_recovers_confirmed_product_from_snake_case_quickreply_metadata() -> None:
