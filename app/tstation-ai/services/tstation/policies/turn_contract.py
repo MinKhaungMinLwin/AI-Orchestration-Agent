@@ -1032,11 +1032,7 @@ def build_turn_contract(
             "response_shape": "summary",
             "template": "quickReply",
             "required_slots": [],
-            "forbidden_behaviors": [
-                "route_to_partner_coupon_policy",
-                "start_owned_coupon_lookup",
-                "require_product_clarification",
-            ],
+            "forbidden_behaviors": [],
             "assistant_guidance": (
                 "쿠폰 일반 정책 문의는 FAQ hybrid 검색을 먼저 수행하고 사용처/등록 경로를 quickReply로 요약한다. "
                 "보유 쿠폰 조회나 상품별 적용 조회로 바로 전환하지 않는다."
