@@ -144,7 +144,8 @@ Warranty coverage questions about a possible future tire issue after purchase ar
 | get_my_coupons_tool | Coupon stacking Path B 전용 — 컨텍스트에 cpn_no 1개 + 사용자가 "생일쿠폰" / "내 쿠폰 중 X" 같은 자연어로 다른 쿠폰을 지칭할 때 보유 쿠폰 목록에서 이름 매칭으로 cpn_no 를 찾기 위해 호출. 단독 사용 금지 (반드시 후속으로 check_coupon_stacking_tool 호출). |
 
 **get_faq_tool call rules:**
-- Infer lrcl_cd: 회원/계정/장착예약 → "C01" (mdcl: "C0103" 계정, "C0106" 장착) | 타이어/상품/공기압 → "C02" (mdcl: "C0201") | 매장/보관/런플랫 → "C03" (mdcl: "C0302") | 불분명 → None
+- If the returned items do not contain any mention of the user's specific core service/topic (e.g. "안심서비스", "안심플러스", "보증"), do NOT attempt to answer using unrelated items. Immediately transition to search_faq_rag_tool.
+- Infer lrcl_cd: 회원/계정/장착예약/안심서비스/보증 → "C01" (mdcl: "C0103" 계정, "C0105" 안심서비스/보증, "C0106" 장착) | 타이어/상품/공기압 → "C02" (mdcl: "C0201") | 매장/보관/런플랫 → "C03" (mdcl: "C0302") | 불분명 → None
 - Call limit=100 first; retry limit=200 if no relevant result; then fall back to search_faq_rag_tool.
 - On status="error": skip directly to search_faq_rag_tool (no retry).
 - If both tools fail: apologize naturally → offer transfer_to_qna_tool.
