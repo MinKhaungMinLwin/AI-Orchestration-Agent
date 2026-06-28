@@ -624,6 +624,48 @@ def test_vehicle_resolved_recommendation_contract_keeps_listcar_fast_path(user_t
     assert should_defer is False
 
 
+def test_vehicle_based_recommendation_refinement_with_multiple_cars_keeps_listcar_fast_path() -> None:
+    tool_result = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "car_no": "205소4214",
+                    "car_lnc_cd": "W049847",
+                    "car_nm": "GV70 2.5T 가솔린 AWD A/T",
+                    "car_model_det": "GV70",
+                    "tire_size_fr": "2355519",
+                },
+                {
+                    "car_no": "29조3344",
+                    "car_lnc_cd": "W036270",
+                    "car_nm": "뉴 제타(6세대) 2.0 TDI A/T",
+                    "car_model_det": "제타(6세대) (2011 - 2016)",
+                    "tire_size_fr": "2254517",
+                },
+            ]
+        },
+    }
+    token = current_discovery_response_decision.set(
+        ResponseDecision(
+            response_shape=ResponseShape.CARD,
+            template=TemplateName.PRODUCT,
+            required_slots=("tire_size",),
+            metadata={"response_shape_key": "vehicle_based_recommendation_refinement"},
+        )
+    )
+    try:
+        should_defer = _should_defer_listcar_for_possessive_model_mismatch(
+            "get_my_cars_tool",
+            tool_result,
+            [{"role": "user", "content": "내 차 기준으로 한국타이어 올웨더 상품 추천해줘"}],
+        )
+    finally:
+        current_discovery_response_decision.reset(token)
+
+    assert should_defer is False
+
+
 def test_registered_vehicle_recommendation_uses_current_user_text_only():
     tool_result = {
         "status": "success",

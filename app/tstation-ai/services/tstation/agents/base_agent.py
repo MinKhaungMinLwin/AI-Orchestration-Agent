@@ -484,6 +484,9 @@ def _should_defer_listcar_for_possessive_model_mismatch(
         return False
     if not isinstance(tool_result, dict) or tool_result.get("status") != "success":
         return False
+    rows = _extract_tool_rows(tool_result)
+    if not rows:
+        return False
     try:
         from services.tstation.template_mapper import current_discovery_response_decision
 
@@ -494,10 +497,18 @@ def _should_defer_listcar_for_possessive_model_mismatch(
         decision_metadata = getattr(decision, "metadata", None) or {}
         template = getattr(decision, "template", None)
         template_value = getattr(template, "value", template)
+        response_shape_key = str(decision_metadata.get("response_shape_key") or "").strip()
+        flow_step = str(decision_metadata.get("flow_step") or "").strip()
         if (
-            str(template_value or "").strip() == "listCar"
-            and str(decision_metadata.get("response_shape_key") or "").strip() == "vehicle_resolved_recommendation"
-            and str(decision_metadata.get("flow_step") or "").strip() == "select_vehicle"
+            response_shape_key == "vehicle_resolved_recommendation"
+            and str(template_value or "").strip() == "listCar"
+            and flow_step == "select_vehicle"
+        ):
+            return False
+        if (
+            response_shape_key == "vehicle_based_recommendation_refinement"
+            and len(rows) >= 2
+            and str(template_value or "").strip() in {"", "listCar", "product"}
         ):
             return False
     if _is_explicit_vehicle_list_request(messages):
@@ -505,9 +516,6 @@ def _should_defer_listcar_for_possessive_model_mismatch(
     user_text = _latest_user_text(messages)
     requested_models = _possessive_vehicle_model_mentions(user_text)
     if not requested_models:
-        return False
-    rows = _extract_tool_rows(tool_result)
-    if not rows:
         return False
     return not _has_registered_vehicle_model_match(rows, requested_models)
 
