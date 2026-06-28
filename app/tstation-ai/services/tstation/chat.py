@@ -127,29 +127,29 @@ from services.tstation.policies.ui_action_policy import (
     RegionStoreInputContextResolution,
     apply_region_or_store_input_context_resolution,
     apply_logistics_earliest_install_cta_action,
-    apply_selected_order_context_for_purchase_cta,
+    apply_selected_order_context_for_purchase_cta as _apply_selected_order_context_for_purchase_cta,
     apply_preview_update_cta_action,
-    apply_vehicle_selection_slot_values,
+    apply_vehicle_selection_slot_values as _apply_vehicle_selection_slot_values,
     build_other_store_search_result_event,
-    clear_invalid_store_identity_slots,
+    clear_invalid_store_identity_slots as _clear_invalid_store_identity_slots,
     build_logistics_earliest_install_fallback_event,
     build_other_store_context_enrichment_input,
     build_other_store_preview_metadata,
     build_cta_preview_template_context,
     build_cta_preview_contract_gate,
-    build_manual_tire_size_input_event,
-    build_oe_replacement_same_product_brand_prompt_event,
+    build_manual_tire_size_input_event as _build_manual_tire_size_input_event,
+    build_oe_replacement_same_product_brand_prompt_event as _build_oe_replacement_same_product_brand_prompt_event,
     build_order_quantity_prompt_event,
-    build_staggered_tire_quantity_limit_event,
-    build_staggered_vehicle_tire_selection_event,
+    build_staggered_tire_quantity_limit_event as _build_staggered_tire_quantity_limit_event,
+    build_staggered_vehicle_tire_selection_event as _build_staggered_vehicle_tire_selection_event,
     build_pure_inventory_stock_cta_payload,
     build_preview_tool_mapped_event,
     build_store_availability_quantity_prompt_event,
     run_store_availability_followup_preview,
     has_staggered_vehicle_tire_sizes,
-    is_manual_tire_size_input_selection,
-    is_staggered_selected_tire_size_context,
-    listcar_allows_staggered_tire_prompt,
+    is_manual_tire_size_input_selection as _is_manual_tire_size_input_selection,
+    is_staggered_selected_tire_size_context as _is_staggered_selected_tire_size_context,
+    listcar_allows_staggered_tire_prompt as _listcar_allows_staggered_tire_prompt,
     cta_preview_input_from_slots,
     cta_missing_slot_event,
     build_quickreply_cta_clarification_event,
@@ -160,37 +160,37 @@ from services.tstation.policies.ui_action_policy import (
     confirmed_product_slot_values_from_event,
     selected_product_name_for_purchase_cta,
     datepick_slot_values_from_data,
-    extract_vehicle_plate_from_text,
-    build_oe_replacement_guidance_event,
-    build_oe_replacement_followup_recommendation_args,
-    build_oe_replacement_same_product_search_args,
+    extract_vehicle_plate_from_text as _extract_vehicle_plate_from_text,
+    build_oe_replacement_guidance_event as _build_oe_replacement_guidance_event,
+    build_oe_replacement_followup_recommendation_args as _build_oe_replacement_followup_recommendation_args,
+    build_oe_replacement_same_product_search_args as _build_oe_replacement_same_product_search_args,
     action_mode_for_transaction_slot_fill,
     expected_slot_fill_resume_source,
     goods_no_from_template_event,
     is_router_transaction_slot_fill,
     is_expected_transaction_slot_fill,
-    is_oe_replacement_context,
+    is_oe_replacement_context as _is_oe_replacement_context,
     is_oe_replacement_cta_context,
     is_oe_replacement_equivalent_query,
-    is_oe_replacement_followup_query,
-    is_owned_vehicle_selection_cta,
-    is_invalid_store_slot_value,
-    is_pure_inventory_stock_ready,
-    is_quantity_only_stock_followup_text,
+    is_oe_replacement_followup_query as _is_oe_replacement_followup_query,
+    is_owned_vehicle_selection_cta as _is_owned_vehicle_selection_cta,
+    is_invalid_store_slot_value as _is_invalid_store_slot_value,
+    is_pure_inventory_stock_ready as _is_pure_inventory_stock_ready,
+    is_quantity_only_stock_followup_text as _is_quantity_only_stock_followup_text,
     is_resolved_size_store_availability_transaction_continuation,
     is_size_only_store_availability_continuation,
     is_vehicle_tire_size_lookup_selection,
     oe_replacement_cta_context,
-    oe_replacement_followup_brand_cd,
+    oe_replacement_followup_brand_cd as _oe_replacement_followup_brand_cd,
     preorder_slot_values_from_data,
-    recommendation_type_for_vehicle_auto_continue,
+    recommendation_type_for_vehicle_auto_continue as _recommendation_type_for_vehicle_auto_continue,
     resolve_goods_no_from_recent_product_context,
     resolve_recent_product_search_keyword,
     merged_quickreply_cta_context,
     normalize_ui_action_metadata,
     normalize_vehicle_type_from_car_type,
     normalize_vehicle_tire_size_pair,
-    selected_order_context_from_preview_values,
+    selected_order_context_from_preview_values as _selected_order_context_from_preview_values,
     preview_action_mode_for_slots,
     quickreply_cta_context_from_chip,
     resolve_goods_no_from_selection,
@@ -203,10 +203,10 @@ from services.tstation.policies.ui_action_policy import (
     resolve_tire_size_from_history_template,
     resolve_vehicle_from_history_template,
     resolve_vehicle_selection_from_listcar_event,
-    resolve_vehicle_tire_position_selection,
+    resolve_vehicle_tire_position_selection as _resolve_vehicle_tire_position_selection,
     requested_cal_day_from_availability_context,
     requested_day_label_from_availability_context,
-    recent_store_name_for_availability_continuation,
+    recent_store_name_for_availability_continuation as _recent_store_name_for_availability_continuation,
     decide_store_availability_followup_action,
     store_availability_followup_context,
     apply_other_store_context_enrichment,
@@ -219,12 +219,12 @@ from services.tstation.policies.ui_action_policy import (
     resolve_recent_store_name_from_messages,
     store_context_from_mapping,
     store_name_exact_match_row,
-    should_reuse_vehicle_slots_for_oe_followup,
+    should_reuse_vehicle_slots_for_oe_followup as _should_reuse_vehicle_slots_for_oe_followup,
     transaction_slot_fill_resolution,
     ui_action_trace_metadata,
     validate_ui_actions_for_contract,
-    vehicle_selection_slot_values,
-    build_pure_inventory_stock_contract,
+    vehicle_selection_slot_values as _vehicle_selection_slot_values,
+    build_pure_inventory_stock_contract as _build_pure_inventory_stock_contract,
 )
 from services.tstation.policies.store_confirmation_policy import (
     is_store_confirmation_reply,
@@ -6713,7 +6713,6 @@ def _vehicle_candidate_tokens(car: dict[str, Any], meta: dict[str, Any]) -> set[
     return tokens
 
 
-_recommendation_type_for_vehicle_auto_continue = recommendation_type_for_vehicle_auto_continue
 
 
 def _format_maintenance_dday_item(item: dict) -> str:
@@ -7780,15 +7779,6 @@ _PREORDER_CONFIRMATION_RE = re.compile(
     re.IGNORECASE,
 )
 
-_normalize_vehicle_tire_size_pair = normalize_vehicle_tire_size_pair
-_has_staggered_vehicle_tire_sizes = has_staggered_vehicle_tire_sizes
-_is_staggered_selected_tire_size_context = is_staggered_selected_tire_size_context
-_build_staggered_tire_quantity_limit_event = build_staggered_tire_quantity_limit_event
-_build_staggered_vehicle_tire_selection_event = build_staggered_vehicle_tire_selection_event
-_build_manual_tire_size_input_event = build_manual_tire_size_input_event
-_listcar_allows_staggered_tire_prompt = listcar_allows_staggered_tire_prompt
-_is_manual_tire_size_input_selection = is_manual_tire_size_input_selection
-_resolve_vehicle_tire_position_selection = resolve_vehicle_tire_position_selection
 
 
 def _preorder_payload(template_data: dict | None) -> dict[str, Any] | None:
@@ -7939,9 +7929,6 @@ def _is_add_to_cart_cta_context(cta_context: Mapping[str, Any] | None, user_text
     )
 
 
-_normalize_vehicle_type_from_car_type = normalize_vehicle_type_from_car_type
-_vehicle_selection_slot_values = vehicle_selection_slot_values
-_apply_vehicle_selection_slot_values = apply_vehicle_selection_slot_values
 
 
 def _brand_label_for_code(brand_cd: str) -> str:
@@ -7994,7 +7981,6 @@ def _is_order_history_lookup_query(user_text: str | None) -> bool:
     )
 
 
-_extract_vehicle_plate_from_text = extract_vehicle_plate_from_text
 
 
 def _is_oe_replacement_equivalent_query(user_text: str | None) -> bool:
@@ -8003,12 +7989,8 @@ def _is_oe_replacement_equivalent_query(user_text: str | None) -> bool:
     return is_oe_replacement_equivalent_query(user_text)
 
 
-_is_owned_vehicle_selection_cta = is_owned_vehicle_selection_cta
 
 
-_oe_replacement_cta_context = oe_replacement_cta_context
-_is_oe_replacement_cta_context = is_oe_replacement_cta_context
-_is_oe_replacement_context = is_oe_replacement_context
 
 
 def _should_force_best_seller_code_route(user_text: str | None, domains: list[MultiAgentDomain.Domain]) -> bool:
@@ -8079,17 +8061,10 @@ def _enrich_best_selling_result_for_product_cards(tool_result: dict) -> dict:
     return enriched_result
 
 
-_is_oe_replacement_followup_query = is_oe_replacement_followup_query
-_should_reuse_vehicle_slots_for_oe_followup = should_reuse_vehicle_slots_for_oe_followup
-_build_oe_replacement_followup_recommendation_args = build_oe_replacement_followup_recommendation_args
-_oe_replacement_followup_brand_cd = oe_replacement_followup_brand_cd
-_build_oe_replacement_same_product_search_args = build_oe_replacement_same_product_search_args
 
 
-_build_oe_replacement_same_product_brand_prompt_event = build_oe_replacement_same_product_brand_prompt_event
 
 
-_build_oe_replacement_guidance_event = build_oe_replacement_guidance_event
 
 
 def _coerce_vehicle_type_compatibility_listcar_to_quickreply(event: dict, user_query: str | None) -> dict | None:
@@ -18441,9 +18416,6 @@ def _is_size_only_store_availability_continuation(
         slots=slots,
     )
 
-_is_invalid_store_slot_value = is_invalid_store_slot_value
-_clear_invalid_store_identity_slots = clear_invalid_store_identity_slots
-_recent_store_name_for_availability_continuation = recent_store_name_for_availability_continuation
 
 
 def _requested_cal_day_from_availability_context(user_text: str, recent_context: str) -> str | None:
@@ -18455,12 +18427,8 @@ def _requested_cal_day_from_availability_context(user_text: str, recent_context:
     )
 
 
-_requested_day_label_from_availability_context = requested_day_label_from_availability_context
 
 
-_is_quantity_only_stock_followup_text = is_quantity_only_stock_followup_text
-_is_pure_inventory_stock_ready = is_pure_inventory_stock_ready
-_build_pure_inventory_stock_contract = build_pure_inventory_stock_contract
 
 
 _is_resolved_size_store_availability_transaction_continuation = (
@@ -22212,8 +22180,6 @@ def _stage_pending_product_context_from_search(
     return pending_context
 
 
-_selected_order_context_from_preview_values = selected_order_context_from_preview_values
-_apply_selected_order_context_for_purchase_cta = apply_selected_order_context_for_purchase_cta
 
 
 _RECOMMENDATION_SIZE_REFERENCE_RE = re.compile(
