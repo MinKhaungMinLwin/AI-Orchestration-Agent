@@ -310,10 +310,9 @@ def _support_faq_grounded_competing_candidate(
     intent: str,
     user_text: str,
     top_candidate: Mapping[str, Any],
-    tool_result: Mapping[str, Any] | None,
+    candidates: list[Mapping[str, Any]],
 ) -> Mapping[str, Any] | None:
-    broader_candidates = _support_faq_ranked_candidates(_support_faq_candidates(tool_result))
-    for candidate in broader_candidates:
+    for candidate in _support_faq_ranked_candidates(candidates):
         if candidate is top_candidate:
             continue
         if not _support_faq_question_anchor_allowed(intent, user_text) and _support_faq_candidate_matches_fact_type(
@@ -322,6 +321,20 @@ def _support_faq_grounded_competing_candidate(
             continue
         return candidate
     return None
+
+
+def _support_faq_strip_card_refund_facts_for_non_anchor(
+    *,
+    intent: str,
+    user_text: str,
+    facts: dict[str, Any],
+) -> dict[str, Any]:
+    if _support_faq_question_anchor_allowed(intent, user_text):
+        return facts
+    stripped = dict(facts)
+    stripped.pop("card_refund_timing", None)
+    stripped.pop("cardRefundTiming", None)
+    return stripped
 
 
 def _support_faq_grounded_prompt(
@@ -567,6 +580,8 @@ def _filter_support_faq_candidates(
 
 
 def _extract_support_faq_policy_facts(
+    intent: str,
+    user_text: str,
     policy_group: str,
     fact_type: str,
     candidates: list[Mapping[str, Any]],
@@ -654,7 +669,7 @@ def _extract_support_faq_policy_facts(
     elif policy_group == _PAYMENT_REFUND_POLICY and fact_type == "payment_error_troubleshooting":
         issue_match = re.search(r"결제창|결제\s*화면|장착일\s*선택란|승인\s*실패|결제\s*오류", combined, re.IGNORECASE)
         facts["issue_scope"] = issue_match.group(0) if issue_match else None
-    return facts
+    return _support_faq_strip_card_refund_facts_for_non_anchor(intent=intent, user_text=user_text, facts=facts)
 
 
 def _support_faq_reply_ctas(policy_group: str, fact_type: str) -> list[dict[str, Any]]:
@@ -906,7 +921,7 @@ def build_support_faq_source_grounded_reply(
         intent=intent,
         user_text=user_text,
         top_candidate=top_candidate,
-        tool_result=tool_result,
+        candidates=filtered,
     )
     if competing_candidate is not None:
         second_candidate = competing_candidate
@@ -990,7 +1005,7 @@ def build_support_faq_llm_grounded_reply(
         intent=intent,
         user_text=user_text,
         top_candidate=top_candidate,
-        tool_result=tool_result,
+        candidates=filtered,
     )
     if competing_candidate is not None:
         second_score = _support_faq_candidate_score(competing_candidate) or 0.0
@@ -1089,7 +1104,7 @@ def build_support_faq_policy_reply(
         return None
     filtered, excluded_candidates = _filter_support_faq_candidates(policy_group, fact_type, tool_result)
     safe_fallback_used = not filtered
-    facts = _extract_support_faq_policy_facts(policy_group, fact_type, filtered)
+    facts = _extract_support_faq_policy_facts(intent, user_text, policy_group, fact_type, filtered)
     response, quick_replies = _build_support_faq_policy_reply(
         policy_group,
         fact_type,

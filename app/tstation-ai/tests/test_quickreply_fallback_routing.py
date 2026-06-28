@@ -29555,10 +29555,10 @@ def test_support_faq_policy_reply_builds_mixed_cancel_generalized_answer_when_al
     response = reply["assistant_response"]
     assert "예약만 잡아둔 상태라면 취소는 고객센터를 통해 처리할 수 있고" in response
     assert "온라인몰에서 결제까지 완료된 주문이라면 배송 현황에 따라 취소 수수료가 발생할 수 있고" in response
-    assert "카드 환불 반영은 보통 1~3영업일" in response
+    assert "카드 환불 반영은 보통 1~3영업일" not in response
     assert reply["metadata"]["facts"]["visit_reservation_cancel_method"] == "고객센터 전화"
     assert reply["metadata"]["facts"]["online_order_cancel_fee_amount"] == "타이어 개당 1만 원"
-    assert reply["metadata"]["facts"]["card_refund_timing"] == "1~3영업일"
+    assert "card_refund_timing" not in reply["metadata"]["facts"]
 
 
 def test_support_faq_source_grounded_reply_uses_top1_and_drops_card_sentence_without_card_anchor() -> None:
@@ -29596,6 +29596,73 @@ def test_support_faq_source_grounded_reply_uses_top1_and_drops_card_sentence_wit
     assert "타이어 개당 1만 원" in response
     assert "카드 환불" not in response
     assert reply["metadata"]["sourceGroundedReplyUsed"] is True
+
+
+def test_support_faq_source_grounded_reply_ignores_unfiltered_competing_candidate_for_gap_guard() -> None:
+    tool_result = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "question": "매장 방문 예약 후 매장에 재고가 없으면 예약 취소",
+                    "answer": "매장 방문 예약만 취소하는 경우 별도 취소 수수료 없이 처리될 수 있습니다.",
+                    "score": 1.0,
+                    "metadata": {"category_lv1": "배송/장착", "category_lv2": "장착"},
+                },
+                {
+                    "question": "온라인몰에서 주문한 뒤 매장에서 현장 결제할 수 있나요?",
+                    "answer": "온라인몰 주문 후 현장 결제는 불가합니다.",
+                    "score": 0.9776,
+                    "metadata": {"category_lv1": "주문/결제", "category_lv2": "주문"},
+                },
+            ]
+        },
+    }
+
+    reply = build_support_faq_source_grounded_reply(
+        intent="general_cancel_fee_policy",
+        user_text="예약 취소하면 비용 있어?",
+        tool_result=tool_result,
+    )
+
+    assert reply is not None
+    assert "별도 취소 수수료" in reply["assistant_response"]
+    assert reply["metadata"]["sourceGroundedReplyUsed"] is True
+
+
+def test_support_faq_policy_reply_drops_card_refund_fact_without_card_anchor() -> None:
+    tool_result = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "question": "방문 예약 취소",
+                    "answer": "방문 예약만 한 경우 고객센터 전화로 취소 가능하며 요청 시 바로 취소 처리됩니다.",
+                    "metadata": {"category_lv1": "배송/장착", "category_lv2": "장착"},
+                },
+                {
+                    "question": "결제 완료 주문 취소",
+                    "answer": "결제 완료 주문 취소는 배송 현황에 따라 타이어 개당 1만 원 취소 수수료가 발생할 수 있습니다.",
+                    "metadata": {"category_lv1": "주문/결제", "category_lv2": "주문"},
+                },
+                {
+                    "question": "카드 환불 시점",
+                    "answer": "결제 취소 후 카드 환불 반영은 보통 1~3영업일 정도 소요될 수 있습니다.",
+                    "metadata": {"category_lv1": "주문/결제", "category_lv2": "결제"},
+                },
+            ]
+        },
+    }
+
+    reply = build_support_faq_policy_reply(
+        intent="reservation_policy_guidance",
+        user_text="오늘 오후 2시 예약인데 지금 취소하면 위약금 있어?",
+        tool_result=tool_result,
+    )
+
+    assert reply is not None
+    assert "카드 환불 반영" not in reply["assistant_response"]
+    assert "card_refund_timing" not in reply["metadata"]["facts"]
 
 
 def test_support_faq_llm_grounded_reply_uses_top1_source_scope_without_card_timing_anchor(
@@ -29698,7 +29765,7 @@ def test_support_faq_source_grounded_reply_allows_card_refund_sentence_for_card_
     assert "영업일 기준 1~3일" in reply["assistant_response"]
 
 
-def test_support_faq_source_grounded_reply_blocks_manufacture_top1_on_warranty_question_when_score_gap_small() -> None:
+def test_support_faq_source_grounded_reply_prefers_filtered_warranty_candidate_when_cross_topic_gap_is_small() -> None:
     tool_result = {
         "status": "success",
         "data": {
@@ -29725,7 +29792,9 @@ def test_support_faq_source_grounded_reply_blocks_manufacture_top1_on_warranty_q
         tool_result=tool_result,
     )
 
-    assert reply is None
+    assert reply is not None
+    assert "측면 부풀음은 현장 점검 후 보증 여부를 확인합니다." in reply["assistant_response"]
+    assert "제조일자" not in reply["assistant_response"]
 
 
 def test_support_faq_policy_reply_builds_visit_only_answer_from_mixed_cancel_candidates() -> None:
