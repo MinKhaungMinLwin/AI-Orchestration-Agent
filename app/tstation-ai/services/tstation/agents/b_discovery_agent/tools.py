@@ -87,6 +87,9 @@ def _apply_recommendation_policy_patch(
     if not patch:
         return rcmd_type, brand_cd, tire_size, sort_by, season_nm, pfm_nm, prc_grd, vehicle_type
 
+    suppress_vehicle_type_filter = bool(patch.get("suppress_vehicle_type_filter"))
+    suppress_season_filter = bool(patch.get("suppress_season_filter"))
+
     patched_rcmd_type = patch.get("rcmd_type")
     if patched_rcmd_type:
         rcmd_type = patched_rcmd_type if isinstance(patched_rcmd_type, RcmdType) else RcmdType(str(patched_rcmd_type))
@@ -104,6 +107,10 @@ def _apply_recommendation_policy_patch(
         prc_grd = str(patch["prc_grd"])
     if not vehicle_type and patch.get("vehicle_type"):
         vehicle_type = str(patch["vehicle_type"])
+    if suppress_season_filter:
+        season_nm = None
+    if suppress_vehicle_type_filter:
+        vehicle_type = None
     return rcmd_type, brand_cd, tire_size, sort_by, season_nm, pfm_nm, prc_grd, vehicle_type
 
 

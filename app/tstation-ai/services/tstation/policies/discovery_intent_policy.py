@@ -788,7 +788,7 @@ def build_discovery_intent_frame(
         text,
         router_recommendation_scenario or context_recommendation_scenario,
     )
-    if general_tire_recommendation and scenario is not None and scenario.key == "ev":
+    if general_tire_recommendation:
         scenario = None
     product_resolution_transaction_anchor = bool(
         (products or product_families)
@@ -831,8 +831,8 @@ def build_discovery_intent_frame(
         entities["quiet_focus"] = True
     if general_tire_recommendation:
         entities["vehicle_category"] = "passenger"
-        entities["applied_vehicle_type"] = "passenger"
         entities["general_tire_preference"] = "non_ev"
+        entities["rcmd_type"] = "tstation"
     elif _EV_RECOMMENDATION_RE.search(text):
         entities["vehicle_category"] = "ev"
     elif _SUV_RECOMMENDATION_RE.search(text):
@@ -1370,8 +1370,13 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             forbidden_tools=("generic_unsized_recommendation",),
         )
     args = dict(entities.get("recommendation_scenario_tool_args_patch") or {})
+    if entities.get("general_tire_preference") == "non_ev":
+        args["rcmd_type"] = "tstation"
+        args["suppress_vehicle_type_filter"] = True
+        args["suppress_season_filter"] = True
     if entities.get("vehicle_category"):
-        args.setdefault("vehicle_type", entities["vehicle_category"])
+        if entities.get("general_tire_preference") != "non_ev":
+            args.setdefault("vehicle_type", entities["vehicle_category"])
     if entities.get("quiet_focus") and "rcmd_type" not in args:
         args["rcmd_type"] = "low_vibration"
     elif entities.get("value_focus") and "rcmd_type" not in args:
@@ -1397,6 +1402,8 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             args.update({"rcmd_type": "all_weather", "season_nm": "사계절"})
     elif entities.get("season") == "summer" and not args.get("season_nm"):
         args["season_nm"] = "여름"
+    if entities.get("general_tire_preference") == "non_ev":
+        args.pop("season_nm", None)
     if entities.get("explicit_tire_size") or entities.get("price_goal") != "similar_range":
         if entities.get("tire_size"):
             args["tire_size"] = entities["tire_size"]
@@ -1406,6 +1413,8 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
         args["brand_cd"] = entities["brand_cd"]
         if frame.intent == "product_recommendation":
             args["allow_cross_brand_fill"] = False
+    if entities.get("general_tire_preference") == "non_ev":
+        args.pop("vehicle_type", None)
     allowed_tools = ("get_products_recommendations_tool",)
     required_slots: tuple[str, ...] = ()
     metadata: dict[str, Any] = {
@@ -1421,13 +1430,18 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
         )
         if key in entities
     }
+    expected_tool_args = _recommendation_expected_tool_args(args)
+    if expected_tool_args:
+        metadata["recommendation_expected_tool_args"] = expected_tool_args
     if metadata:
-        metadata["response_intent"] = "catalog_recommendation"
-        metadata["forbidden_behaviors"] = (
-            "drop_recommendation_scenario",
-            "claim_unsupported_scenario_as_exact",
+        metadata.setdefault("response_intent", "catalog_recommendation")
+        metadata.setdefault(
+            "forbidden_behaviors",
+            (
+                "drop_recommendation_scenario",
+                "claim_unsupported_scenario_as_exact",
+            ),
         )
-        metadata["recommendation_expected_tool_args"] = _recommendation_expected_tool_args(args)
     if entities.get("discovery_followup_action") == "vehicle_resolved_recommendation":
         metadata = {
             **metadata,

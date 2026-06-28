@@ -18190,13 +18190,18 @@ def test_general_tire_for_ev_vehicle_recommendation_uses_passenger_vehicle_type(
 
     assert frame.intent == "product_recommendation"
     assert frame.entities["vehicle_category"] == "passenger"
+    assert frame.entities["general_tire_preference"] == "non_ev"
     assert "recommendation_scenario" not in frame.entities
     assert "requested_product_attribute" not in frame.entities
     assert plan.allowed_tools == ("get_products_recommendations_tool",)
-    assert plan.tool_args_patch["vehicle_type"] == "passenger"
+    assert plan.tool_args_patch["rcmd_type"] == "tstation"
+    assert "vehicle_type" not in plan.tool_args_patch
+    assert "season_nm" not in plan.tool_args_patch
+    assert plan.tool_args_patch["suppress_vehicle_type_filter"] is True
+    assert plan.tool_args_patch["suppress_season_filter"] is True
     assert plan.tool_args_patch["tire_size"] == "245/40R20"
-    assert plan.metadata["recommendation_expected_tool_args"]["vehicle_type"] == "passenger"
     assert plan.metadata["recommendation_expected_tool_args"]["tire_size"] == "245/40R20"
+    assert "vehicle_type" not in plan.metadata["recommendation_expected_tool_args"]
 
     violations = response_contract_violations(
         template="product",
@@ -18205,7 +18210,7 @@ def test_general_tire_for_ev_vehicle_recommendation_uses_passenger_vehicle_type(
         tool_inputs=[
             {
                 "tool": "get_products_recommendations_tool",
-                "args": {"vehicle_type": "passenger", "tire_size": "245/40R20"},
+                "args": {"rcmd_type": "tstation", "tire_size": "245/40R20", "brand_cd": "HK"},
             }
         ],
         contract=contract,
@@ -18245,12 +18250,105 @@ def test_general_tire_recommendation_by_size_uses_passenger_vehicle_type() -> No
 
     assert frame.intent == "product_recommendation"
     assert frame.entities["vehicle_category"] == "passenger"
-    assert plan.tool_args_patch["vehicle_type"] == "passenger"
+    assert frame.entities["general_tire_preference"] == "non_ev"
+    assert plan.tool_args_patch["rcmd_type"] == "tstation"
+    assert "vehicle_type" not in plan.tool_args_patch
     assert plan.tool_args_patch["tire_size"] == "245/40R20"
     assert plan.metadata["recommendation_expected_tool_args"] == {
-        "vehicle_type": "passenger",
+        "rcmd_type": "tstation",
         "tire_size": "245/40R20",
     }
+
+
+def test_general_tire_recommendation_followup_ignores_stale_allweather_context_filters() -> None:
+    last_user_text = "245/40R20 사이즈, 아이온6에 전기차 전용 타이어 말고 일반타이어 낄 수 있는걸로 추천해줘"
+    context_text = (
+        "내 차 기준으로 한국타이어 올웨더 상품 추천해줘\n"
+        "미쉐린 크로스클라이밋2에 대응할 만한 한국타이어 라인업을 알려줘\n"
+        f"{last_user_text}"
+    )
+
+    patch, decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        last_user_text=last_user_text,
+        context_text=context_text,
+        tire_size="245/40R20",
+    )
+
+    assert decision is not None
+    assert patch["rcmd_type"] == "tstation"
+    assert patch["tire_size"] == "245/40R20"
+    assert patch["brand_cd"] == "HK"
+    assert patch["allow_cross_brand_fill"] is False
+    assert patch["suppress_vehicle_type_filter"] is True
+    assert patch["suppress_season_filter"] is True
+    assert "vehicle_type" not in patch
+    assert "season_nm" not in patch
+
+
+def test_general_tire_recommendation_followup_matches_new_session_tool_args() -> None:
+    utterance = "245/40R20 사이즈, 아이온6에 전기차 전용 타이어 말고 일반타이어 낄 수 있는걸로 추천해줘"
+
+    followup_patch, _followup_decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        last_user_text=utterance,
+        context_text=(
+            "내 차 기준으로 한국타이어 올웨더 상품 추천해줘\n"
+            "미쉐린 크로스클라이밋2에 대응할 만한 한국타이어 라인업을 알려줘\n"
+            f"{utterance}"
+        ),
+        tire_size="245/40R20",
+    )
+    new_session_patch, _new_session_decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        last_user_text=utterance,
+        context_text=utterance,
+        tire_size="245/40R20",
+    )
+
+    assert followup_patch == new_session_patch
+
+
+def test_general_tire_policy_patch_clears_llm_vehicle_type_and_season_filters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class _Response:
+        status_code = 200
+        parsed = {"rcmd_type": "tstation", "total": 1, "items": []}
+
+    def _fake_recommendations(**kwargs):
+        captured.update(kwargs)
+        return _Response()
+
+    monkeypatch.setattr(discovery_tools, "get_products_recommendations", _fake_recommendations)
+    token = discovery_tools.current_discovery_recommendation_tool_patch.set({
+        "rcmd_type": "tstation",
+        "brand_cd": "HK",
+        "tire_size": "245/40R20",
+        "allow_cross_brand_fill": False,
+        "suppress_vehicle_type_filter": True,
+        "suppress_season_filter": True,
+    })
+    try:
+        result = discovery_tools.get_products_recommendations_tool.func(
+            rcmd_type="all_weather",
+            limit=3,
+            brand_cd="HK",
+            tire_size="245/40R20",
+            season_nm="올웨더",
+            vehicle_type="passenger",
+        )
+    finally:
+        discovery_tools.current_discovery_recommendation_tool_patch.reset(token)
+
+    assert result["status"] == "success"
+    assert captured["rcmd_type"] == discovery_tools.RcmdType.TSTATION
+    assert captured["brand_cd"] == "HK"
+    assert captured["tire_size"] == "245/40R20"
+    assert captured["vehicle_type"] is None
+    assert captured["season_nm"] is None
 
 
 def test_recommendation_tool_input_drift_detected_by_turn_contract() -> None:
