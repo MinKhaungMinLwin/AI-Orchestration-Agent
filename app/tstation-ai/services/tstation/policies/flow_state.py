@@ -406,9 +406,14 @@ def stock_store_candidates_flow_delta(
     *,
     event: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    if not isinstance(event, Mapping) or event.get("template") != "location":
+    if not isinstance(event, Mapping):
         return {}
-    event_data = event.get("data") if isinstance(event.get("data"), Mapping) else {}
+    if event.get("template") == "location":
+        event_data = event.get("data") if isinstance(event.get("data"), Mapping) else {}
+    elif isinstance(event.get("stores"), list):
+        event_data = event
+    else:
+        return {}
     stores = event_data.get("stores") if isinstance(event_data, Mapping) else None
     metadata = event_data.get("metadata") if isinstance(event_data, Mapping) else None
     if not isinstance(stores, list) or not isinstance(metadata, list):

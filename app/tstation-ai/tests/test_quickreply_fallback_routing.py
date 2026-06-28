@@ -11999,6 +11999,49 @@ def test_stock_store_location_event_stores_candidate_flow_state() -> None:
     ]
 
 
+def test_stock_store_location_payload_stores_candidate_flow_state_without_event_wrapper() -> None:
+    location_payload = {
+        "stores": [{"nameAddress": "티스테이션 분당정자점"}],
+        "metadata": [
+            {
+                "shopId": "F00071",
+                "shopName": "티스테이션 분당정자점",
+                "sourceTool": "transaction_store_preview_tool",
+                "scheduleMode": "in_store_logistics_combined",
+                "scheduleTier": "in_store_logistics_combined",
+                "inventoryMode": "in_store_logistics_combined",
+                "goodsNo": "G000000310126",
+                "ordQty": 2,
+                "region": "분당",
+                "pendingIntent": "stock",
+                "goalType": "store_with_stock",
+            }
+        ],
+    }
+
+    delta = stock_store_candidates_flow_delta(event=location_payload)
+    patch = stock_store_candidate_selection_patch(
+        active_flow_context=commit_flow_state(
+            {},
+            delta,
+            source="location_template:stock_store_candidates",
+            flow_type="stock",
+            flow_step="show_store_candidates",
+        ).state.to_active_flow_context(),
+        user_text="티스테이션 분당정자점",
+        selection_hint={},
+    )
+
+    assert patch["shop_id"] == "F00071"
+    assert patch["shop_name"] == "티스테이션 분당정자점"
+    assert patch["schedule_mode"] == "in_store_logistics_combined"
+    assert patch["source_tool"] == "transaction_store_preview_tool"
+    assert patch["goods_no"] == "G000000310126"
+    assert patch["ord_qty"] == 2
+    assert patch["pending_intent"] == "stock"
+    assert patch["goal_type"] == "store_with_stock"
+
+
 @pytest.mark.parametrize(
     ("schedule_mode", "user_text"),
     [

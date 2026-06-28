@@ -27811,6 +27811,36 @@ class TStationChatServiceV2:
             and isinstance(merged_slots.availability_context.get("active_flow_context"), Mapping)
             else {}
         )
+        if (
+            not active_stock_flow_context
+            or not isinstance(active_stock_flow_context.get("last_candidates"), list)
+            or not active_stock_flow_context.get("last_candidates")
+        ):
+            expected_slot_fill_precheck = (
+                router_slot_fill_metadata.get("expected_slot_fill_precheck")
+                if isinstance(router_slot_fill_metadata.get("expected_slot_fill_precheck"), Mapping)
+                else {}
+            )
+            should_restore_stock_candidates_from_template = bool(
+                raw_ui_action
+                or (
+                    expected_slot_fill_precheck.get("matched")
+                    and str(expected_slot_fill_precheck.get("current_flow") or "") == "stock_store_search"
+                    and str(expected_slot_fill_precheck.get("filled_slot") or "") == "store"
+                )
+            )
+            if should_restore_stock_candidates_from_template:
+                stock_store_flow_delta = stock_store_candidates_flow_delta(event=latest_location_tmpl)
+                if stock_store_flow_delta:
+                    commit_result = commit_flow_state(
+                        {},
+                        stock_store_flow_delta,
+                        source="location_template:stock_store_candidates",
+                        flow_type="stock",
+                        flow_step="show_store_candidates",
+                    )
+                    active_stock_flow_context = commit_result.state.to_active_flow_context()
+                    vehicle_selection_trace_metadata["active_stock_flow_restored_from_location_template"] = True
         stock_store_selection_patch = stock_store_candidate_selection_patch(
             active_flow_context=active_stock_flow_context,
             user_text=last_user_text,
