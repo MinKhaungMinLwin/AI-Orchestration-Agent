@@ -5,27 +5,28 @@ from __future__ import annotations
 import re
 from typing import Any, Mapping
 
+from services.tstation.common.cta_urls import CTAUrls
 from services.tstation.policies.policy_text_matchers import is_general_card_cancel_timing_policy_query
 from services.tstation.policies.response_decision import ResponseDecision, ResponseShape, TemplateName
 
 
-_VISIT_CANCEL_BUCKET = "visit_reservation_cancel_policy"
-_ONLINE_CANCEL_BUCKET = "online_order_cancel_fee_policy"
-_CARD_CANCEL_BUCKET = "card_cancel_timing_policy"
-_WORK_STARTED_BUCKET = "work_started_cancel_fee_policy"
-_STORE_CHANGE_BUCKET = "reservation_store_change_policy"
-_CANCEL_POLICY_BUCKETS = frozenset({
-    _VISIT_CANCEL_BUCKET,
-    _ONLINE_CANCEL_BUCKET,
-    _CARD_CANCEL_BUCKET,
-    _WORK_STARTED_BUCKET,
-    _STORE_CHANGE_BUCKET,
-})
-_SUPPORT_FAQ_POLICY_BUCKET_INTENTS = frozenset({
+_RESERVATION_INSTALLATION_POLICY = "reservation_installation_policy"
+_PAYMENT_REFUND_POLICY = "payment_refund_policy"
+_ASSURANCE_WARRANTY_POLICY = "assurance_warranty_policy"
+_BENEFIT_PROMOTION_POLICY = "benefit_promotion_policy"
+_PRODUCT_CONDITION_POLICY = "product_condition_policy"
+_PURCHASE_ORDER_POLICY = "purchase_order_policy"
+_SUPPORT_FAQ_POLICY_GROUP_INTENTS = frozenset({
     "general_cancel_fee_policy",
     "general_card_cancel_timing_policy",
+    "payment_error_troubleshooting",
+    "tire_manufacture_date_policy",
+    "tire_quality_warranty_policy",
+    "assurance_service_policy",
     "reservation_policy_guidance",
     "installation_work_policy",
+    "promotion_gift_policy",
+    "tire_condition_photo_policy",
 })
 _RESERVATION_RE = re.compile(r"예약|방문|장착(?:\s*예약)?|오후\s*\d+시|당일", re.IGNORECASE)
 _ORDER_RE = re.compile(r"주문|결제|카드|승인|배송|온라인", re.IGNORECASE)
@@ -37,19 +38,41 @@ _WORK_STARTED_RE = re.compile(
     r"작업\s*시작|작업\s*중|기존\s*타이어|다\s*뺐|탈거|분리|장착\s*하려고|공임비",
     re.IGNORECASE,
 )
-_CATEGORY_HINTS_BY_BUCKET: dict[str, tuple[tuple[str, str], ...]] = {
-    _VISIT_CANCEL_BUCKET: (("배송/장착", "장착"),),
-    _ONLINE_CANCEL_BUCKET: (("주문/결제", "결제"), ("주문/결제", "주문")),
-    _CARD_CANCEL_BUCKET: (("주문/결제", "결제"),),
-    _WORK_STARTED_BUCKET: (("배송/장착", "장착"), ("상품/서비스", "서비스")),
-    _STORE_CHANGE_BUCKET: (("배송/장착", "장착"),),
+_PAYMENT_ERROR_RE = re.compile(
+    r"결제\s*(?:오류|에러|실패|안\s*돼|안\s*되|안\s*열)|결제창|결제\s*화면|승인\s*실패|장착일\s*선택란",
+    re.IGNORECASE,
+)
+_ASSURANCE_DOCUMENT_LOST_RE = re.compile(r"보증서.{0,12}(분실|잃어버|없어)|종이\s*보증서", re.IGNORECASE)
+_PROMOTION_PARTIAL_CANCEL_RE = re.compile(
+    r"부분\s*취소|[0-9]+\s*(?:짝|개)\s*취소|반납|차감|돌려줘야",
+    re.IGNORECASE,
+)
+_WRONG_ITEM_RE = re.compile(
+    r"다른\s*(?:타이어|상품).{0,12}(왔|도착)|오배송|잘못\s*온|규격.{0,8}(안\s*맞|다르)|맞지\s*않",
+    re.IGNORECASE,
+)
+_SUPPORT_FACT_TYPE_TO_BUCKET: dict[tuple[str, str], str] = {
+    (_RESERVATION_INSTALLATION_POLICY, "visit_reservation_cancel"): "visit_reservation_cancel_policy",
+    (_RESERVATION_INSTALLATION_POLICY, "store_change"): "reservation_store_change_policy",
+    (_RESERVATION_INSTALLATION_POLICY, "work_started_cancel"): "work_started_cancel_fee_policy",
+    (_PURCHASE_ORDER_POLICY, "online_order_cancel_fee"): "online_order_cancel_fee_policy",
+    (_PAYMENT_REFUND_POLICY, "card_cancel_timing"): "card_cancel_timing_policy",
 }
-_CATEGORY_CODE_HINTS_BY_BUCKET: dict[str, tuple[tuple[str, str], ...]] = {
-    _VISIT_CANCEL_BUCKET: (("C01", "C0106"),),
-    _ONLINE_CANCEL_BUCKET: (("C01", "C0104"), ("C01", "C0105")),
-    _CARD_CANCEL_BUCKET: (("C01", "C0105"),),
-    _WORK_STARTED_BUCKET: (("C01", "C0106"), ("C03", "C0302")),
-    _STORE_CHANGE_BUCKET: (("C01", "C0106"),),
+_ALLOWED_CATEGORY_NAMES_BY_POLICY_GROUP: dict[str, tuple[tuple[str, str], ...]] = {
+    _RESERVATION_INSTALLATION_POLICY: (("배송/장착", "장착"), ("상품/서비스", "서비스")),
+    _PAYMENT_REFUND_POLICY: (("주문/결제", "결제"),),
+    _ASSURANCE_WARRANTY_POLICY: (("상품/서비스", "서비스"), ("상품/서비스", "상품")),
+    _BENEFIT_PROMOTION_POLICY: (("혜택/프로모션", "프로모션"), ("혜택/프로모션", "쿠폰"), ("회원", "회원가입")),
+    _PRODUCT_CONDITION_POLICY: (("상품/서비스", "상품"), ("상품/서비스", "서비스")),
+    _PURCHASE_ORDER_POLICY: (("주문/결제", "주문"), ("주문/결제", "결제")),
+}
+_ALLOWED_CATEGORY_CODES_BY_POLICY_GROUP: dict[str, tuple[tuple[str, str], ...]] = {
+    _RESERVATION_INSTALLATION_POLICY: (("C01", "C0106"), ("C03", "C0302")),
+    _PAYMENT_REFUND_POLICY: (("C01", "C0105"),),
+    _ASSURANCE_WARRANTY_POLICY: (("C03", "C0302"), ("C03", "C0301")),
+    _BENEFIT_PROMOTION_POLICY: (("C04", "C0401"), ("C04", "C0402"), ("C05", "C0501")),
+    _PRODUCT_CONDITION_POLICY: (("C03", "C0301"), ("C03", "C0302")),
+    _PURCHASE_ORDER_POLICY: (("C01", "C0104"), ("C01", "C0105")),
 }
 
 
@@ -104,105 +127,363 @@ def _support_faq_candidate_categories(candidate: Mapping[str, Any]) -> tuple[str
     return lv1, lv2, code1, code2
 
 
-def resolve_support_faq_policy_bucket(intent: str, user_text: str) -> dict[str, Any] | None:
+def resolve_support_faq_policy_context(intent: str, user_text: str) -> dict[str, Any] | None:
     normalized_intent = str(intent or "").strip()
     text = str(user_text or "")
-    if normalized_intent == "general_card_cancel_timing_policy":
-        return {"bucket": _CARD_CANCEL_BUCKET}
-    if normalized_intent == "installation_work_policy":
-        if _WORK_STARTED_RE.search(text) and _CANCEL_RE.search(text):
-            return {"bucket": _WORK_STARTED_BUCKET}
+    if normalized_intent not in _SUPPORT_FAQ_POLICY_GROUP_INTENTS and not _WRONG_ITEM_RE.search(text):
         return None
-    if normalized_intent not in {"general_cancel_fee_policy", "reservation_policy_guidance"}:
-        return None
-    if _STORE_CHANGE_RE.search(text) and _CHANGE_RE.search(text):
-        return {"bucket": _STORE_CHANGE_BUCKET}
+
     has_cancel = bool(_CANCEL_RE.search(text) or _FEE_RE.search(text))
     has_reservation = bool(_RESERVATION_RE.search(text))
     has_order = bool(_ORDER_RE.search(text))
-    if _WORK_STARTED_RE.search(text) and has_cancel:
-        return {"bucket": _WORK_STARTED_BUCKET}
-    if has_cancel and has_reservation and not has_order:
-        return {"bucket": _VISIT_CANCEL_BUCKET}
-    if has_cancel and has_order and not has_reservation:
-        return {"bucket": _ONLINE_CANCEL_BUCKET}
-    if has_cancel and has_order and has_reservation:
+    has_work_started = bool(_WORK_STARTED_RE.search(text) and has_cancel)
+    has_store_change = bool(_STORE_CHANGE_RE.search(text) and _CHANGE_RE.search(text))
+
+    if normalized_intent == "general_card_cancel_timing_policy" or is_general_card_cancel_timing_policy_query(text):
+        return {"policy_group": _PAYMENT_REFUND_POLICY, "fact_type": "card_cancel_timing"}
+    if normalized_intent == "payment_error_troubleshooting" or _PAYMENT_ERROR_RE.search(text):
+        return {"policy_group": _PAYMENT_REFUND_POLICY, "fact_type": "payment_error_troubleshooting"}
+    if normalized_intent == "tire_manufacture_date_policy":
+        return {"policy_group": _PRODUCT_CONDITION_POLICY, "fact_type": "manufacture_date"}
+    if normalized_intent == "tire_condition_photo_policy":
+        return {"policy_group": _PRODUCT_CONDITION_POLICY, "fact_type": "photo_condition_check"}
+    if normalized_intent == "tire_quality_warranty_policy":
+        return {"policy_group": _ASSURANCE_WARRANTY_POLICY, "fact_type": "quality_warranty_condition"}
+    if normalized_intent == "assurance_service_policy":
+        strong_fact_types = []
+        if _ASSURANCE_DOCUMENT_LOST_RE.search(text):
+            strong_fact_types.append("assurance_document_lost")
+        if re.search(r"조건|보상|가입|워런티|안심\s*서비스|안심플러스", text, re.IGNORECASE):
+            strong_fact_types.append("assurance_coverage_condition")
+        if len(strong_fact_types) > 1:
+            return {
+                "policy_group": _ASSURANCE_WARRANTY_POLICY,
+                "fact_type": None,
+                "needs_clarification": True,
+                "clarification_reason": "assurance_scope_ambiguous",
+                "assistant_response": "안심서비스 보상 조건을 묻는 건지, 보증서 분실 후 확인 방법을 묻는 건지 알려주시면 정확히 안내드릴게요.",
+                "quick_replies": [
+                    {"label": "보상 조건", "url": CTAUrls.WARRANTY_MAIN, "domain": "SUPPORT"},
+                    {"label": "보증서 분실", "url": CTAUrls.WARRANTY_MAIN, "domain": "SUPPORT"},
+                ],
+            }
+        fact_type = strong_fact_types[0] if strong_fact_types else None
+        if fact_type is None:
+            return {
+                "policy_group": _ASSURANCE_WARRANTY_POLICY,
+                "fact_type": None,
+                "needs_clarification": True,
+                "clarification_reason": "assurance_fact_type_missing",
+                "assistant_response": "안심서비스 보상 조건인지, 보증서 분실인지처럼 확인하려는 항목을 알려주시면 정확히 안내드릴게요.",
+                "quick_replies": [{"label": "나의 워런티 확인", "url": CTAUrls.WARRANTY_MAIN, "domain": "SUPPORT"}],
+            }
+        return {"policy_group": _ASSURANCE_WARRANTY_POLICY, "fact_type": fact_type}
+    if normalized_intent == "promotion_gift_policy":
         return {
-            "bucket": None,
-            "needs_clarification": True,
-            "clarification_reason": "mixed_cancel_scope",
-            "assistant_response": "방문 예약 취소인지, 결제 완료 주문 취소인지 먼저 알려주시면 정확히 안내드릴게요.",
-            "quick_replies": [
-                {"label": "방문 예약 취소", "domain": "SUPPORT"},
-                {"label": "결제 완료 주문 취소", "domain": "SUPPORT"},
-            ],
+            "policy_group": _BENEFIT_PROMOTION_POLICY,
+            "fact_type": "promotion_gift_partial_cancel" if _PROMOTION_PARTIAL_CANCEL_RE.search(text) else "promotion_gift_policy_general",
         }
+    if normalized_intent == "installation_work_policy" and has_work_started:
+        return {"policy_group": _RESERVATION_INSTALLATION_POLICY, "fact_type": "work_started_cancel"}
+    if normalized_intent in {"general_cancel_fee_policy", "reservation_policy_guidance", "installation_work_policy"}:
+        if has_work_started:
+            return {"policy_group": _RESERVATION_INSTALLATION_POLICY, "fact_type": "work_started_cancel"}
+        if has_store_change:
+            return {"policy_group": _RESERVATION_INSTALLATION_POLICY, "fact_type": "store_change"}
+        if has_cancel and has_reservation and has_order:
+            return {
+                "policy_group": None,
+                "fact_type": None,
+                "needs_clarification": True,
+                "clarification_reason": "mixed_cancel_scope",
+                "assistant_response": (
+                    "방문 예약만 취소하는 건인지, 결제 완료 주문 취소인지, 장착 작업이 이미 시작된 건인지 "
+                    "알려주시면 정확히 안내드릴게요."
+                ),
+                "quick_replies": [
+                    {"label": "방문 예약 취소", "domain": "SUPPORT"},
+                    {"label": "결제 완료 주문 취소", "domain": "SUPPORT"},
+                    {"label": "작업 시작 후 취소", "domain": "SUPPORT"},
+                ],
+            }
+        if has_cancel and has_reservation and not has_order:
+            return {"policy_group": _RESERVATION_INSTALLATION_POLICY, "fact_type": "visit_reservation_cancel"}
+        if has_cancel and has_order and not has_reservation:
+            return {"policy_group": _PURCHASE_ORDER_POLICY, "fact_type": "online_order_cancel_fee"}
+    if _WRONG_ITEM_RE.search(text):
+        return {"policy_group": _PURCHASE_ORDER_POLICY, "fact_type": "wrong_item_or_fitment_issue"}
     return None
 
 
-def _support_faq_bucket_allowed_candidate(bucket: str, candidate: Mapping[str, Any]) -> bool:
-    allowed_names = _CATEGORY_HINTS_BY_BUCKET.get(bucket, ())
-    allowed_codes = _CATEGORY_CODE_HINTS_BY_BUCKET.get(bucket, ())
-    lv1, lv2, code1, code2 = _support_faq_candidate_categories(candidate)
-    if any(lv1 == name1 and lv2 == name2 for name1, name2 in allowed_names if lv1 and lv2):
-        return True
-    if any(code1 == name1 and code2 == name2 for name1, name2 in allowed_codes if code1 and code2):
-        return True
-
+def _support_faq_candidate_matches_fact_type(fact_type: str, candidate: Mapping[str, Any]) -> bool:
     text = _support_faq_candidate_text(candidate)
-    if bucket == _VISIT_CANCEL_BUCKET:
-        return bool(_RESERVATION_RE.search(text) and _CANCEL_RE.search(text))
-    if bucket == _ONLINE_CANCEL_BUCKET:
-        return bool(_ORDER_RE.search(text) and _CANCEL_RE.search(text))
-    if bucket == _CARD_CANCEL_BUCKET:
-        return bool(re.search(r"카드|승인\s*취소|환불\s*반영|영업일", text, re.IGNORECASE))
-    if bucket == _WORK_STARTED_BUCKET:
-        return bool(_WORK_STARTED_RE.search(text) and _FEE_RE.search(text))
-    if bucket == _STORE_CHANGE_BUCKET:
+    if fact_type == "visit_reservation_cancel":
+        return bool(_RESERVATION_RE.search(text) and (_CANCEL_RE.search(text) or _FEE_RE.search(text)))
+    if fact_type == "store_change":
         return bool(_STORE_CHANGE_RE.search(text) and _CHANGE_RE.search(text))
+    if fact_type == "work_started_cancel":
+        return bool(_WORK_STARTED_RE.search(text) and (_CANCEL_RE.search(text) or _FEE_RE.search(text)))
+    if fact_type == "online_order_cancel_fee":
+        return bool(_ORDER_RE.search(text) and (_CANCEL_RE.search(text) or _FEE_RE.search(text)))
+    if fact_type == "card_cancel_timing":
+        return bool(re.search(r"카드|승인\s*취소|환불\s*반영|영업일", text, re.IGNORECASE))
+    if fact_type == "payment_error_troubleshooting":
+        return bool(_PAYMENT_ERROR_RE.search(text))
+    if fact_type == "assurance_coverage_condition":
+        return bool(re.search(r"안심\s*서비스|안심플러스|보상|가입|워런티|16,?000km|1년", text, re.IGNORECASE))
+    if fact_type == "assurance_document_lost":
+        return bool(_ASSURANCE_DOCUMENT_LOST_RE.search(text))
+    if fact_type == "quality_warranty_condition":
+        return bool(_TIRE_QUALITY_WARRANTY_POLICY_RE.search(text))
+    if fact_type == "promotion_gift_partial_cancel":
+        return bool(re.search(r"사은품|이벤트|프로모션", text, re.IGNORECASE) and _PROMOTION_PARTIAL_CANCEL_RE.search(text))
+    if fact_type == "promotion_gift_policy_general":
+        return bool(re.search(r"사은품|이벤트|프로모션|선착순", text, re.IGNORECASE))
+    if fact_type == "manufacture_date":
+        return bool(_TIRE_MANUFACTURE_DATE_POLICY_RE.search(text))
+    if fact_type == "photo_condition_check":
+        return bool(_TIRE_CONDITION_PHOTO_POLICY_RE.search(text) or re.search(r"사진|마모|손상|더\s*타", text, re.IGNORECASE))
+    if fact_type == "wrong_item_or_fitment_issue":
+        return bool(_WRONG_ITEM_RE.search(text))
     return False
 
 
-def _extract_support_faq_policy_facts(bucket: str, candidates: list[Mapping[str, Any]]) -> dict[str, Any]:
+def _filter_support_faq_candidates(
+    policy_group: str,
+    fact_type: str,
+    tool_result: Mapping[str, Any] | None,
+) -> tuple[list[Mapping[str, Any]], list[Mapping[str, Any]]]:
+    allowed_names = _ALLOWED_CATEGORY_NAMES_BY_POLICY_GROUP.get(policy_group, ())
+    allowed_codes = _ALLOWED_CATEGORY_CODES_BY_POLICY_GROUP.get(policy_group, ())
+    included: list[Mapping[str, Any]] = []
+    excluded: list[Mapping[str, Any]] = []
+    for candidate in _support_faq_candidates(tool_result):
+        lv1, lv2, code1, code2 = _support_faq_candidate_categories(candidate)
+        has_category = bool((lv1 and lv2) or (code1 and code2))
+        if has_category:
+            category_allowed = any(lv1 == name1 and lv2 == name2 for name1, name2 in allowed_names if lv1 and lv2)
+            code_allowed = any(code1 == name1 and code2 == name2 for name1, name2 in allowed_codes if code1 and code2)
+            if not category_allowed and not code_allowed:
+                excluded.append(candidate)
+                continue
+        if _support_faq_candidate_matches_fact_type(fact_type, candidate):
+            included.append(candidate)
+        else:
+            excluded.append(candidate)
+    return included, excluded
+
+
+def _extract_support_faq_policy_facts(
+    policy_group: str,
+    fact_type: str,
+    candidates: list[Mapping[str, Any]],
+) -> dict[str, Any]:
     combined = "\n".join(_support_faq_candidate_text(candidate) for candidate in candidates)
     facts: dict[str, Any] = {}
-    if bucket == _VISIT_CANCEL_BUCKET:
+    if policy_group == _RESERVATION_INSTALLATION_POLICY and fact_type == "visit_reservation_cancel":
         facts["fee_condition"] = (
             "none"
             if re.search(r"별도(?:의)?\s*(?:취소\s*)?(?:수수료|위약금).{0,8}(없|않)", combined, re.IGNORECASE)
             else "depends"
         )
         facts["cancel_method"] = "reservation_only"
-    elif bucket == _ONLINE_CANCEL_BUCKET:
+    elif policy_group == _PURCHASE_ORDER_POLICY and fact_type == "online_order_cancel_fee":
         amount_match = re.search(r"(?:타이어\s*1개당|1본당|개당)\s*1만\s*원", combined, re.IGNORECASE)
         facts["fee_condition"] = "per_item_fee" if amount_match else "depends"
         facts["fee_amount"] = "타이어 1개당 1만 원" if amount_match else None
-    elif bucket == _CARD_CANCEL_BUCKET:
+    elif policy_group == _PAYMENT_REFUND_POLICY and fact_type == "card_cancel_timing":
         timing_match = re.search(r"영업일\s*기준\s*([0-9]+(?:\s*[~-]\s*[0-9]+)?일?)", combined, re.IGNORECASE)
         facts["refund_timing"] = timing_match.group(1).replace(" ", "") if timing_match else None
         facts["refund_timing_source"] = "card_company"
-    elif bucket == _WORK_STARTED_BUCKET:
+    elif policy_group == _RESERVATION_INSTALLATION_POLICY and fact_type == "work_started_cancel":
         facts["fee_condition"] = "work_started_check_required"
         if re.search(r"공임(?:비)?", combined, re.IGNORECASE):
             facts["work_fee"] = "possible"
         if re.search(r"폐타이어", combined, re.IGNORECASE):
             facts["disposal_fee"] = "possible"
-    elif bucket == _STORE_CHANGE_BUCKET:
+    elif policy_group == _RESERVATION_INSTALLATION_POLICY and fact_type == "store_change":
         facts["store_change_allowed"] = (
             "allowed"
-            if re.search(r"변경\s*(?:가능|할\s*수\s*있)", combined, re.IGNORECASE)
+            if re.search(r"변경(?:이)?\s*(?:가능|할\s*수\s*있|가능한\s*경우)", combined, re.IGNORECASE)
             else "depends"
         )
+    elif policy_group == _ASSURANCE_WARRANTY_POLICY and fact_type == "assurance_coverage_condition":
+        facts["year_limit"] = "1년" if re.search(r"1년\s*이내", combined, re.IGNORECASE) else None
+        facts["mileage_limit"] = "16,000km" if re.search(r"16[, ]?000\s*km", combined, re.IGNORECASE) else None
+        facts["assurance_min_qty"] = "2개" if re.search(r"2개\s*이상", combined, re.IGNORECASE) else None
+        facts["plus_min_qty"] = "4개" if re.search(r"4개\s*(?:구매|이상)", combined, re.IGNORECASE) else None
+    elif policy_group == _ASSURANCE_WARRANTY_POLICY and fact_type == "assurance_document_lost":
+        facts["digital_or_history_check"] = bool(re.search(r"디지털|구매\s*이력|장착\s*이력|워런티", combined, re.IGNORECASE))
+    elif policy_group == _ASSURANCE_WARRANTY_POLICY and fact_type == "quality_warranty_condition":
+        facts["inspection_required"] = True
+    elif policy_group == _BENEFIT_PROMOTION_POLICY and fact_type == "promotion_gift_partial_cancel":
+        facts["gift_return_required"] = bool(re.search(r"반납", combined, re.IGNORECASE))
+        facts["refund_deduction_possible"] = bool(re.search(r"차감", combined, re.IGNORECASE))
+    elif policy_group == _PRODUCT_CONDITION_POLICY and fact_type == "manufacture_date":
+        freshness_match = re.search(r"([0-9]+(?:\s*[~-]\s*[0-9]+)?\s*개월)\s*이내", combined, re.IGNORECASE)
+        facts["freshness_window"] = freshness_match.group(1).replace(" ", "") + " 이내" if freshness_match else None
+    elif policy_group == _PAYMENT_REFUND_POLICY and fact_type == "payment_error_troubleshooting":
+        issue_match = re.search(r"결제창|결제\s*화면|장착일\s*선택란|승인\s*실패|결제\s*오류", combined, re.IGNORECASE)
+        facts["issue_scope"] = issue_match.group(0) if issue_match else None
     return facts
 
 
-def build_support_faq_policy_bucket_reply(
+def _support_faq_reply_ctas(policy_group: str, fact_type: str) -> list[dict[str, Any]]:
+    if policy_group == _ASSURANCE_WARRANTY_POLICY:
+        return [{"label": "나의 워런티 확인", "url": CTAUrls.WARRANTY_MAIN, "domain": "SUPPORT"}]
+    if policy_group == _BENEFIT_PROMOTION_POLICY:
+        return [{"label": "진행 중인 이벤트 보기", "url": CTAUrls.PROMOTION_EVENT_LIST, "domain": "DISCOVERY"}]
+    if policy_group == _PRODUCT_CONDITION_POLICY and fact_type == "photo_condition_check":
+        return [
+            {"label": "마모도 측정 서비스", "url": CTAUrls.TIRE_CHECK, "domain": "TRANSACTION"},
+            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+        ]
+    if policy_group == _PURCHASE_ORDER_POLICY:
+        return [
+            {"label": "주문내역 확인", "domain": "TRANSACTION"},
+            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+        ]
+    if policy_group == _PAYMENT_REFUND_POLICY and fact_type == "payment_error_troubleshooting":
+        return [
+            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+            {"label": "고객센터 안내", "domain": "SUPPORT"},
+        ]
+    if policy_group == _PAYMENT_REFUND_POLICY:
+        return [
+            {"label": "주문내역 확인", "domain": "TRANSACTION"},
+            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+        ]
+    if policy_group == _RESERVATION_INSTALLATION_POLICY and fact_type == "work_started_cancel":
+        return [
+            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+            {"label": "고객센터 안내", "domain": "SUPPORT"},
+        ]
+    return [
+        {"label": "예약 상세 확인", "domain": "TRANSACTION"},
+        {"label": "1:1 문의하기", "domain": "SUPPORT"},
+    ]
+
+
+def _build_support_faq_policy_reply(
+    policy_group: str,
+    fact_type: str,
+    facts: Mapping[str, Any],
+    *,
+    safe_fallback_used: bool,
+) -> tuple[str, list[dict[str, Any]]]:
+    if policy_group == _RESERVATION_INSTALLATION_POLICY and fact_type == "visit_reservation_cancel":
+        if safe_fallback_used:
+            response = (
+                "예약/장착 관련 비용은 예약 유형과 진행 상태에 따라 달라질 수 있어요.\n"
+                "방문 예약만 취소하는 건인지, 주문이나 배송이 함께 진행된 건인지에 따라 결론이 달라질 수 있어요.\n"
+                "실제 취소 전 예약 상세 또는 고객센터 안내를 확인해 주세요."
+            )
+        elif facts.get("fee_condition") == "none":
+            response = (
+                "방문 예약만 취소하는 건이라면 별도의 취소 수수료가 없다고 안내드릴 수 있어요.\n"
+                "다만 실제 주문이나 배송이 함께 걸린 건이면 비용 조건이 달라질 수 있어요.\n"
+                "실제 취소 전에는 예약 상세나 고객센터 안내를 함께 확인해 주세요."
+            )
+        else:
+            response = (
+                "방문 예약 취소 비용은 예약만 취소하는 경우인지, 주문이나 배송이 함께 진행된 건인지에 따라 달라질 수 있어요.\n"
+                "예약 취소만으로 끝나는 건인지부터 먼저 확인하시는 게 안전해요.\n"
+                "실제 취소 전에는 예약 상세 안내를 먼저 확인해 주세요."
+            )
+    elif policy_group == _RESERVATION_INSTALLATION_POLICY and fact_type == "store_change":
+        allowed_text = "방문 지점 변경 가능 여부는 예약 정책과 현재 예약 상태에 따라 달라질 수 있어요."
+        if facts.get("store_change_allowed") == "allowed":
+            allowed_text = "방문 날짜를 유지한 채 지점 변경이 가능한 경우도 있지만, 예약 정책과 현재 예약 상태를 함께 확인해야 해요."
+        response = (
+            f"{allowed_text}\n"
+            "지점만 바꾸는 건인지, 일정도 함께 바꾸는 건인지에 따라 안내 기준이 달라질 수 있어요.\n"
+            "실제 변경 전에는 예약 상세나 고객센터 안내 기준으로 변경 가능 여부를 먼저 확인해 주세요."
+        )
+    elif policy_group == _RESERVATION_INSTALLATION_POLICY and fact_type == "work_started_cancel":
+        response = (
+            "이미 작업이 시작된 뒤 취소하는 건은 공임비나 부대 비용이 발생할 수 있어서 작업 진행 범위를 먼저 확인해야 해요.\n"
+            "기존 타이어 탈거나 장착 작업이 진행됐다면 현장 작업 범위 기준으로 비용 여부가 달라질 수 있어요.\n"
+            "실제 취소 전에는 작업 범위와 비용 기준을 매장이나 고객센터 안내로 확인해 주세요."
+        )
+    elif policy_group == _PURCHASE_ORDER_POLICY and fact_type == "online_order_cancel_fee":
+        amount_text = facts.get("fee_amount") or "취소 시점과 주문 상태에 따라 비용이 달라질 수 있어요."
+        response = (
+            "결제 완료 주문 취소 기준으로는 배송/처리 진행 상태에 따라 취소 비용이 달라질 수 있어요.\n"
+            f"현재 FAQ 근거로는 {amount_text} 기준 안내가 우선이에요.\n"
+            "실제 차감 여부는 주문 상태와 취소 시점을 함께 확인해 주세요."
+        )
+    elif policy_group == _PURCHASE_ORDER_POLICY and fact_type == "wrong_item_or_fitment_issue":
+        response = (
+            "주문한 상품과 다른 타이어가 도착했거나 장착 규격이 맞지 않다면 바로 장착 진행을 단정하면 안 돼요.\n"
+            "주문 상품명, 사이즈, 실제 도착 상품, 차량 적합 여부를 함께 확인해야 해요.\n"
+            "주문내역과 현장 확인 결과를 기준으로 매장이나 고객센터 안내를 받아 주세요."
+        )
+    elif policy_group == _PAYMENT_REFUND_POLICY and fact_type == "card_cancel_timing":
+        timing_text = facts.get("refund_timing") or "영업일 기준 수일"
+        response = (
+            f"카드 승인 취소 반영은 카드사와 결제수단에 따라 달라지고, 보통 {timing_text} 정도 걸릴 수 있어요.\n"
+            "실제 반영 시점은 카드사 처리와 주문 취소 완료 시점에 따라 달라질 수 있어요.\n"
+            "정확한 반영 여부는 카드사 승인내역과 주문내역을 함께 확인해 주세요."
+        )
+    elif policy_group == _PAYMENT_REFUND_POLICY and fact_type == "payment_error_troubleshooting":
+        response = (
+            "결제 오류는 결제수단, 결제창 상태, 장착일 선택 단계 같은 현재 진행 화면에 따라 원인이 달라질 수 있어요.\n"
+            "오류 문구, 결제수단, 어느 화면에서 멈췄는지를 확인해야 정확한 안내가 가능해요.\n"
+            "같은 문제가 계속되면 1:1 문의나 고객센터로 오류 화면 정보를 함께 남겨 주세요."
+        )
+    elif policy_group == _ASSURANCE_WARRANTY_POLICY and fact_type == "assurance_coverage_condition":
+        response = (
+            "안심서비스/안심플러스 보상 조건은 장착 후 1년 이내, 주행거리 16,000km 이내 같은 기본 조건을 먼저 확인해야 해요.\n"
+            "안심서비스는 2개 이상, 안심플러스는 4개 구매 기준과 대상 상품·약관에 따라 적용 범위가 달라질 수 있어요.\n"
+            "보상 여부는 실제 구매 수량, 대상 상품, 손상 상태를 함께 확인해 주세요."
+        )
+    elif policy_group == _ASSURANCE_WARRANTY_POLICY and fact_type == "assurance_document_lost":
+        response = (
+            "종이 보증서를 분실했더라도 디지털 워런티나 구매·장착 이력 기준으로 먼저 확인이 필요해요.\n"
+            "보증서 원본만으로 처리 여부를 단정하기보다는 워런티 등록 여부와 구매 이력을 함께 봐야 해요.\n"
+            "워런티 정보 확인이 필요하면 나의 워런티 화면이나 고객센터 안내를 함께 확인해 주세요."
+        )
+    elif policy_group == _ASSURANCE_WARRANTY_POLICY and fact_type == "quality_warranty_condition":
+        response = (
+            "사이드월 부풀음은 안전 관련 손상일 수 있어서 먼저 점검이 필요해요.\n"
+            "무상 수리나 교체 여부는 현장 점검 결과와 구매·장착 이력, 보증 또는 워런티 적용 여부에 따라 결정돼요.\n"
+            "워런티 서비스 적용 대상이면 상태 확인 후 안내받을 수 있어요."
+        )
+    elif policy_group == _BENEFIT_PROMOTION_POLICY and fact_type == "promotion_gift_partial_cancel":
+        response = (
+            "부분 취소로 이벤트나 프로모션 지급 기준 수량에 미달할 수 있어요.\n"
+            "기준 미달 시에는 사은품 반납이 필요할 수 있고, 반납이 어렵거나 조건에 따라 사은품 상당 금액을 차감한 뒤 환불될 수 있어요.\n"
+            "최종 적용은 이벤트 상세 조건과 실제 주문/취소 처리 기준에 따라 달라져요."
+        )
+    elif policy_group == _BENEFIT_PROMOTION_POLICY:
+        response = (
+            "사은품이나 프로모션 적용 여부는 이벤트 조건과 참여 시점에 따라 달라질 수 있어요.\n"
+            "선착순 마감 여부나 지급 기준 충족 여부를 함께 확인해야 결론이 달라질 수 있어요.\n"
+            "실제 적용 전에는 이벤트 상세 조건을 먼저 확인해 주세요."
+        )
+    elif policy_group == _PRODUCT_CONDITION_POLICY and fact_type == "manufacture_date":
+        freshness_text = facts.get("freshness_window") or "6~12개월 이내"
+        response = (
+            f"제조일자 {freshness_text} 제품은 정상 신품 범주로 안내되는 경우가 있어요.\n"
+            "다만 제조일자만으로 불량이나 교환·환불 가능 여부를 바로 단정할 수는 없어요.\n"
+            "실제 판단 전에는 제품 상태와 구매 이력도 함께 확인해 주세요."
+        )
+    else:
+        response = (
+            "현재 챗봇에서는 사진이나 파일을 업로드해 확인받을 수 없어요.\n"
+            "사진만으로는 타이어 마모 상태, 교체 필요 여부, 주행 안전을 확정할 수 없어요. 사진이나 파일 첨부가 필요한 경우 1:1 문의를 통해 등록해 주세요.\n"
+            "실제 마모도, 균열, 편마모, 손상 여부는 마모도 측정 서비스 또는 가까운 티스테이션 매장 점검으로 확인해 주세요."
+        )
+    return response, _support_faq_reply_ctas(policy_group, fact_type)
+
+
+def build_support_faq_policy_reply(
     *,
     intent: str,
     user_text: str,
     tool_result: Mapping[str, Any] | None,
 ) -> dict[str, Any] | None:
-    resolution = resolve_support_faq_policy_bucket(intent, user_text)
+    resolution = resolve_support_faq_policy_context(intent, user_text)
     if not resolution:
         return None
     if resolution.get("needs_clarification"):
@@ -210,79 +491,30 @@ def build_support_faq_policy_bucket_reply(
             "assistant_response": resolution["assistant_response"],
             "quick_replies": list(resolution.get("quick_replies") or []),
             "metadata": {
-                "supportFaqBucket": None,
+                "policyGroup": resolution.get("policy_group"),
+                "factType": resolution.get("fact_type"),
                 "clarificationNeeded": True,
                 "clarificationReason": resolution.get("clarification_reason"),
+                "safeFallbackUsed": False,
                 "filteredFaqCount": 0,
                 "excludedFaqCount": 0,
                 "factExtractionApplied": False,
             },
         }
 
-    bucket = str(resolution.get("bucket") or "").strip()
-    if bucket not in _CANCEL_POLICY_BUCKETS:
+    policy_group = str(resolution.get("policy_group") or "").strip()
+    fact_type = str(resolution.get("fact_type") or "").strip()
+    if not policy_group or not fact_type:
         return None
-    candidates = _support_faq_candidates(tool_result)
-    filtered = [candidate for candidate in candidates if _support_faq_bucket_allowed_candidate(bucket, candidate)]
-    excluded = len(candidates) - len(filtered)
-    facts = _extract_support_faq_policy_facts(bucket, filtered)
-
-    if bucket == _VISIT_CANCEL_BUCKET:
-        if facts.get("fee_condition") == "none":
-            response = (
-                "방문 예약만 취소하는 건이라면 별도의 취소 수수료가 없다고 안내드릴 수 있어요.\n"
-                "다만 실제 주문이나 배송이 함께 걸린 건이면 비용 조건이 달라질 수 있으니 예약 상세도 같이 확인해 주세요."
-            )
-        else:
-            response = (
-                "방문 예약 취소 비용은 예약만 취소하는 경우인지, 주문이나 배송이 함께 진행된 건인지에 따라 달라질 수 있어요.\n"
-                "실제 취소 전에는 예약 상세 안내를 먼저 확인해 주세요."
-            )
-        quick_replies = [
-            {"label": "예약 상세 확인", "domain": "TRANSACTION"},
-            {"label": "1:1 문의하기", "domain": "SUPPORT"},
-        ]
-    elif bucket == _ONLINE_CANCEL_BUCKET:
-        amount_text = facts.get("fee_amount") or "취소 시점과 주문 상태에 따라 비용이 달라질 수 있어요."
-        response = (
-            f"결제 완료 주문 취소 기준으로는 배송/처리 진행 상태에 따라 취소 비용이 달라질 수 있어요.\n"
-            f"현재 FAQ 근거로는 {amount_text} 기준 안내가 우선이고, 실제 차감 여부는 주문 상태를 함께 확인해 주세요."
-        )
-        quick_replies = [
-            {"label": "주문내역 확인", "domain": "TRANSACTION"},
-            {"label": "1:1 문의하기", "domain": "SUPPORT"},
-        ]
-    elif bucket == _CARD_CANCEL_BUCKET:
-        timing_text = facts.get("refund_timing") or "영업일 기준 수일"
-        response = (
-            f"카드 승인 취소 반영은 카드사와 결제수단에 따라 달라지고, 보통 {timing_text} 정도 걸릴 수 있어요.\n"
-            "정확한 반영 여부는 카드사 승인내역과 주문내역을 함께 확인해 주세요."
-        )
-        quick_replies = [
-            {"label": "주문내역 확인", "domain": "TRANSACTION"},
-            {"label": "1:1 문의하기", "domain": "SUPPORT"},
-        ]
-    elif bucket == _WORK_STARTED_BUCKET:
-        response = (
-            "이미 작업이 시작된 뒤 취소하는 건은 공임비나 부대 비용이 발생할 수 있어서 작업 진행 범위를 먼저 확인해야 해요.\n"
-            "기존 타이어 탈거나 장착 작업이 진행됐다면 현장 작업 범위 기준으로 비용 여부를 안내받아 주세요."
-        )
-        quick_replies = [
-            {"label": "1:1 문의하기", "domain": "SUPPORT"},
-            {"label": "고객센터 안내", "domain": "SUPPORT"},
-        ]
-    else:
-        allowed_text = "방문 지점 변경 가능 여부는 예약 정책과 현재 예약 상태에 따라 달라질 수 있어요."
-        if facts.get("store_change_allowed") == "allowed":
-            allowed_text = "방문 날짜를 유지한 채 지점 변경이 가능한 경우도 있지만, 예약 정책과 현재 예약 상태를 함께 확인해야 해요."
-        response = (
-            f"{allowed_text}\n"
-            "실제 변경 전에는 예약 상세나 고객센터 안내 기준으로 변경 가능 여부를 먼저 확인해 주세요."
-        )
-        quick_replies = [
-            {"label": "예약 상세 확인", "domain": "TRANSACTION"},
-            {"label": "1:1 문의하기", "domain": "SUPPORT"},
-        ]
+    filtered, excluded_candidates = _filter_support_faq_candidates(policy_group, fact_type, tool_result)
+    safe_fallback_used = not filtered
+    facts = _extract_support_faq_policy_facts(policy_group, fact_type, filtered)
+    response, quick_replies = _build_support_faq_policy_reply(
+        policy_group,
+        fact_type,
+        facts,
+        safe_fallback_used=safe_fallback_used,
+    )
 
     allowed_categories = [
         {
@@ -291,19 +523,50 @@ def build_support_faq_policy_bucket_reply(
         }
         for candidate in filtered
     ]
+    bucket = _SUPPORT_FACT_TYPE_TO_BUCKET.get((policy_group, fact_type))
     return {
         "assistant_response": response,
         "quick_replies": quick_replies,
         "metadata": {
-            "supportFaqBucket": bucket,
+            "policyGroup": policy_group,
+            "factType": fact_type,
             "clarificationNeeded": False,
+            "safeFallbackUsed": safe_fallback_used,
             "filteredFaqCount": len(filtered),
-            "excludedFaqCount": excluded,
+            "excludedFaqCount": len(excluded_candidates),
             "allowedCategories": allowed_categories,
             "factExtractionApplied": True,
             "facts": facts,
+            "supportFaqBucket": bucket,
         },
     }
+
+
+def resolve_support_faq_policy_bucket(intent: str, user_text: str) -> dict[str, Any] | None:
+    resolution = resolve_support_faq_policy_context(intent, user_text)
+    if resolution is None:
+        return None
+    if resolution.get("needs_clarification"):
+        return {
+            "bucket": None,
+            "needs_clarification": True,
+            "clarification_reason": resolution.get("clarification_reason"),
+            "assistant_response": resolution.get("assistant_response"),
+            "quick_replies": list(resolution.get("quick_replies") or []),
+        }
+    bucket = _SUPPORT_FACT_TYPE_TO_BUCKET.get(
+        (str(resolution.get("policy_group") or ""), str(resolution.get("fact_type") or ""))
+    )
+    return {"bucket": bucket} if bucket else None
+
+
+def build_support_faq_policy_bucket_reply(
+    *,
+    intent: str,
+    user_text: str,
+    tool_result: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    return build_support_faq_policy_reply(intent=intent, user_text=user_text, tool_result=tool_result)
 
 
 _EXTREME_COUPON_RE = re.compile(r"90\s*%|99\s*%|파격\s*할인|발급해\s*줘|만들어\s*줘", re.IGNORECASE)

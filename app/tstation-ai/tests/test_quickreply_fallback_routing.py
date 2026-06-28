@@ -383,9 +383,9 @@ from services.tstation.policies import schedule_tool_gate
 from services.tstation.policies.transaction_intent_policy import build_transaction_intent_frame, plan_transaction_tools
 from services.tstation.policies.transaction_response_policy import decide_transaction_response
 from services.tstation.policies.support_response_policy import (
-    build_support_faq_policy_bucket_reply,
+    build_support_faq_policy_reply,
     decide_support_response,
-    resolve_support_faq_policy_bucket,
+    resolve_support_faq_policy_context,
 )
 from services.tstation.policies.response_decision import ResponseDecision, ResponseShape, TemplateName, ToolPlan
 from services.tstation.policies.turn_contract import (
@@ -28756,10 +28756,12 @@ def test_support_faq_policy_event_prefers_faq_source_summary_when_available() ->
     assert event is not None
     response = str(event["data"]["assistantResponse"])
     assert "확인된 FAQ 기준으로는" not in response
-    assert "6~12개월 이내 제품은 정상 신품 범주" in response
+    assert "제조일자 6~12개월 이내 제품은 정상 신품 범주로 안내되는 경우가 있어요." in response
     assert event["source_domain"] == "support"
     assert event["data"]["metadata"]["faqSourceSummaryUsed"] is True
-    assert event["data"]["metadata"]["faqSourceSummaryAppended"] is True
+    assert event["data"]["metadata"]["faqSourceSummaryAppended"] is False
+    assert event["data"]["metadata"]["policyGroup"] == "product_condition_policy"
+    assert event["data"]["metadata"]["factType"] == "manufacture_date"
 
 
 def test_support_faq_policy_event_selects_intent_relevant_faq_candidate_not_first_item() -> None:
@@ -28791,10 +28793,10 @@ def test_support_faq_policy_event_selects_intent_relevant_faq_candidate_not_firs
 
     assert event is not None
     response = str(event["data"]["assistantResponse"])
-    assert "6~12개월 이내 제품은 정상 신품 범주" in response
+    assert "제조일자 6~12개월 이내 제품은 정상 신품 범주로 안내되는 경우가 있어요." in response
     assert "측면 부풀음은 점검 후 보증 여부를 확인합니다." not in response
     assert event["data"]["metadata"]["faqSourceSummaryUsed"] is True
-    assert event["data"]["metadata"]["faqSourceSummaryAppended"] is True
+    assert event["data"]["metadata"]["faqSourceSummaryAppended"] is False
 
 
 def test_support_faq_policy_event_drops_source_summary_when_cross_topic_scores_are_too_close() -> None:
@@ -28828,9 +28830,10 @@ def test_support_faq_policy_event_drops_source_summary_when_cross_topic_scores_a
 
     assert event is not None
     response = str(event["data"]["assistantResponse"])
-    assert "6~12개월 이내 제품은 정상 신품 범주" not in response
-    assert "타이어 제조일자와 신품 기준은 정책에 따라 안내" in response
+    assert "제조일자 6~12개월 이내 제품은 정상 신품 범주로 안내되는 경우가 있어요." in response
+    assert "DOT 보증 확인" not in response
     assert event["data"]["metadata"]["faqSourceSummaryUsed"] is False
+    assert event["data"]["metadata"]["faqSourceSummaryAppended"] is False
 
 
 def test_support_faq_policy_event_for_signup_uses_membership_cta() -> None:
@@ -28897,17 +28900,20 @@ def test_support_faq_policy_event_for_coupon_usage_does_not_append_partner_or_ra
     assert event is not None
 
 
-def test_support_faq_policy_bucket_resolves_visit_reservation_cancel_policy() -> None:
-    result = resolve_support_faq_policy_bucket(
+def test_support_faq_policy_context_resolves_visit_reservation_cancel() -> None:
+    result = resolve_support_faq_policy_context(
         "reservation_policy_guidance",
         "오늘 오후 2시 예약인데 지금 취소하면 위약금 있어?",
     )
 
-    assert result == {"bucket": "visit_reservation_cancel_policy"}
+    assert result == {
+        "policy_group": "reservation_installation_policy",
+        "fact_type": "visit_reservation_cancel",
+    }
 
 
-def test_support_faq_policy_bucket_requests_clarification_for_mixed_cancel_scope() -> None:
-    result = resolve_support_faq_policy_bucket(
+def test_support_faq_policy_context_requests_clarification_for_mixed_cancel_scope() -> None:
+    result = resolve_support_faq_policy_context(
         "reservation_policy_guidance",
         "예약도 잡혀 있고 결제도 했는데 지금 취소하면 위약금 있어?",
     )
@@ -28917,7 +28923,7 @@ def test_support_faq_policy_bucket_requests_clarification_for_mixed_cancel_scope
     assert result["clarification_reason"] == "mixed_cancel_scope"
 
 
-def test_support_faq_policy_bucket_reply_filters_wrong_categories_for_visit_cancel() -> None:
+def test_support_faq_policy_reply_filters_wrong_categories_for_visit_cancel() -> None:
     tool_result = {
         "status": "success",
         "data": {
@@ -28938,7 +28944,7 @@ def test_support_faq_policy_bucket_reply_filters_wrong_categories_for_visit_canc
         },
     }
 
-    reply = build_support_faq_policy_bucket_reply(
+    reply = build_support_faq_policy_reply(
         intent="reservation_policy_guidance",
         user_text="오늘 오후 2시 예약인데 지금 취소하면 위약금 있어?",
         tool_result=tool_result,
@@ -28947,13 +28953,43 @@ def test_support_faq_policy_bucket_reply_filters_wrong_categories_for_visit_canc
     assert reply is not None
     assert "별도의 취소 수수료가 없다고 안내드릴 수 있어요" in reply["assistant_response"]
     assert "타이어 1개당 1만 원" not in reply["assistant_response"]
-    assert reply["metadata"]["supportFaqBucket"] == "visit_reservation_cancel_policy"
+    assert reply["metadata"]["policyGroup"] == "reservation_installation_policy"
+    assert reply["metadata"]["factType"] == "visit_reservation_cancel"
     assert reply["metadata"]["filteredFaqCount"] == 1
     assert reply["metadata"]["excludedFaqCount"] == 1
     assert reply["metadata"]["factExtractionApplied"] is True
 
 
-def test_support_faq_policy_bucket_reply_builds_card_cancel_timing_from_allowed_category() -> None:
+def test_support_faq_policy_reply_uses_safe_fallback_when_visit_cancel_has_no_allowed_candidates() -> None:
+    tool_result = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "question": "주문 취소 비용",
+                    "answer": "결제 완료 주문은 타이어 1개당 1만 원 취소 비용이 발생할 수 있습니다.",
+                    "metadata": {"category_lv1": "주문/결제", "category_lv2": "결제"},
+                    "source": "FAQ Hybrid",
+                }
+            ]
+        },
+    }
+
+    reply = build_support_faq_policy_reply(
+        intent="reservation_policy_guidance",
+        user_text="오늘 오후 2시 예약인데 지금 취소하면 위약금 있어?",
+        tool_result=tool_result,
+    )
+
+    assert reply is not None
+    assert reply["metadata"]["policyGroup"] == "reservation_installation_policy"
+    assert reply["metadata"]["factType"] == "visit_reservation_cancel"
+    assert reply["metadata"]["safeFallbackUsed"] is True
+    assert "별도의 취소 수수료" not in reply["assistant_response"]
+    assert "예약/장착 관련 비용은 예약 유형과 진행 상태에 따라 달라질 수 있어요." in reply["assistant_response"]
+
+
+def test_support_faq_policy_reply_builds_card_cancel_timing_from_allowed_category() -> None:
     tool_result = {
         "status": "success",
         "data": {
@@ -28968,7 +29004,7 @@ def test_support_faq_policy_bucket_reply_builds_card_cancel_timing_from_allowed_
         },
     }
 
-    reply = build_support_faq_policy_bucket_reply(
+    reply = build_support_faq_policy_reply(
         intent="general_card_cancel_timing_policy",
         user_text="취소 완료 문자 받았는데 카드 승인 취소 언제 돼?",
         tool_result=tool_result,
@@ -28977,11 +29013,12 @@ def test_support_faq_policy_bucket_reply_builds_card_cancel_timing_from_allowed_
     assert reply is not None
     assert "보통 3~5일 정도 걸릴 수 있어요" in reply["assistant_response"]
     assert "카드 승인 취소 반영은 카드사와 결제수단에 따라 다르며" not in reply["assistant_response"]
-    assert reply["metadata"]["supportFaqBucket"] == "card_cancel_timing_policy"
+    assert reply["metadata"]["policyGroup"] == "payment_refund_policy"
+    assert reply["metadata"]["factType"] == "card_cancel_timing"
     assert reply["metadata"]["facts"]["refund_timing"] == "3~5일"
 
 
-def test_support_faq_policy_bucket_reply_builds_work_started_cancel_guidance() -> None:
+def test_support_faq_policy_reply_builds_work_started_cancel_guidance() -> None:
     tool_result = {
         "status": "success",
         "data": {
@@ -28996,19 +29033,20 @@ def test_support_faq_policy_bucket_reply_builds_work_started_cancel_guidance() -
         },
     }
 
-    reply = build_support_faq_policy_bucket_reply(
+    reply = build_support_faq_policy_reply(
         intent="installation_work_policy",
         user_text="새 타이어 장착하려고 기존 타이어 다 뺐는데 지금 취소하면 공임비 받아?",
         tool_result=tool_result,
     )
 
     assert reply is not None
-    assert reply["metadata"]["supportFaqBucket"] == "work_started_cancel_fee_policy"
+    assert reply["metadata"]["policyGroup"] == "reservation_installation_policy"
+    assert reply["metadata"]["factType"] == "work_started_cancel"
     assert reply["metadata"]["facts"]["work_fee"] == "possible"
     assert "이미 작업이 시작된 뒤 취소하는 건은 공임비나 부대 비용이 발생할 수 있어서" in reply["assistant_response"]
 
 
-def test_support_faq_policy_bucket_reply_builds_online_order_cancel_guidance() -> None:
+def test_support_faq_policy_reply_builds_online_order_cancel_guidance() -> None:
     tool_result = {
         "status": "success",
         "data": {
@@ -29023,14 +29061,15 @@ def test_support_faq_policy_bucket_reply_builds_online_order_cancel_guidance() -
         },
     }
 
-    reply = build_support_faq_policy_bucket_reply(
+    reply = build_support_faq_policy_reply(
         intent="general_cancel_fee_policy",
         user_text="결제 완료한 주문 지금 취소하면 수수료 있어?",
         tool_result=tool_result,
     )
 
     assert reply is not None
-    assert reply["metadata"]["supportFaqBucket"] == "online_order_cancel_fee_policy"
+    assert reply["metadata"]["policyGroup"] == "purchase_order_policy"
+    assert reply["metadata"]["factType"] == "online_order_cancel_fee"
     assert reply["metadata"]["facts"]["fee_amount"] == "타이어 1개당 1만 원"
     assert "타이어 1개당 1만 원 기준 안내가 우선" in reply["assistant_response"]
 
@@ -29058,18 +29097,82 @@ def test_support_faq_policy_event_uses_bucketed_store_change_reply() -> None:
 
     assert event is not None
     assert event["template"] == "quickReply"
-    assert event["data"]["metadata"]["supportFaqBucket"] == "reservation_store_change_policy"
+    assert event["data"]["metadata"]["policyGroup"] == "reservation_installation_policy"
+    assert event["data"]["metadata"]["factType"] == "store_change"
     assert event["data"]["metadata"]["factExtractionApplied"] is True
-    assert "예약 날짜를 유지한 채 지점 변경이 가능한 경우도 있지만" in event["data"]["assistantResponse"]
+    assert "방문 날짜를 유지한 채 지점 변경이 가능한 경우도 있지만" in event["data"]["assistantResponse"]
     assert "예약 날짜를 유지한 채 방문 지점 변경이 가능한 경우도 있으나" not in event["data"]["assistantResponse"]
+
+
+def test_support_faq_policy_event_for_assurance_document_lost_sets_policy_group_and_fact_type() -> None:
+    event = _build_support_faq_policy_event(
+        "assurance_service_policy",
+        "종이 보증서 잃어버렸는데 어떻게 확인해?",
+        tool_result={
+            "status": "success",
+            "data": {
+                "items": [
+                    {
+                        "answer": "디지털 워런티 또는 구매 이력 기준으로 확인이 필요합니다.",
+                        "metadata": {"category_lv1": "상품/서비스", "category_lv2": "서비스"},
+                    }
+                ]
+            },
+        },
+    )
+
+    assert event is not None
     response = str(event["data"]["assistantResponse"])
-    assert "제휴회원 전용 쿠폰" not in response
-    assert "복지몰" not in response
-    assert "쿠폰은 쿠폰별 사용처와 유의사항에 따라" in response
-    assert event["data"]["metadata"]["faqSourceSummaryAppended"] is False
-    assert not response.endswith("...")
-    assert _labels(event["data"]["quickReplies"]) == ["쿠폰함 바로가기"]
-    assert event["data"]["quickReplies"][0]["url"] == CTAUrls.MY_COUPON_LIST_PC
+    assert event["data"]["metadata"]["policyGroup"] == "assurance_warranty_policy"
+    assert event["data"]["metadata"]["factType"] == "assurance_document_lost"
+    assert "종이 보증서를 분실했더라도 디지털 워런티나 구매·장착 이력 기준으로 먼저 확인이 필요해요." in response
+    assert _labels(event["data"]["quickReplies"]) == ["나의 워런티 확인"]
+
+
+def test_support_faq_policy_event_for_promotion_partial_cancel_sets_group_and_fact_type() -> None:
+    event = _build_support_faq_policy_event(
+        "promotion_gift_policy",
+        "사은품 받은 뒤 2짝만 부분 취소하면 반납해야 해?",
+        tool_result={
+            "status": "success",
+            "data": {
+                "items": [
+                    {
+                        "answer": "부분 취소 시 사은품 반납 또는 차감이 발생할 수 있습니다.",
+                        "metadata": {"category_lv1": "혜택/프로모션", "category_lv2": "프로모션"},
+                    }
+                ]
+            },
+        },
+    )
+
+    assert event is not None
+    assert event["data"]["metadata"]["policyGroup"] == "benefit_promotion_policy"
+    assert event["data"]["metadata"]["factType"] == "promotion_gift_partial_cancel"
+    assert event["data"]["metadata"]["safeFallbackUsed"] is False
+
+
+def test_support_faq_policy_reply_for_wrong_item_issue_uses_purchase_order_group() -> None:
+    reply = build_support_faq_policy_reply(
+        intent="general_cancel_fee_policy",
+        user_text="예약한 매장에 왔는데 주문한 거랑 다른 타이어가 왔어",
+        tool_result={
+            "status": "success",
+            "data": {
+                "items": [
+                    {
+                        "answer": "오배송이나 규격 불일치 시 주문 상품과 실제 도착 상품을 함께 확인해 주세요.",
+                        "metadata": {"category_lv1": "주문/결제", "category_lv2": "주문"},
+                    }
+                ]
+            },
+        },
+    )
+
+    assert reply is not None
+    assert reply["metadata"]["policyGroup"] == "purchase_order_policy"
+    assert reply["metadata"]["factType"] == "wrong_item_or_fitment_issue"
+    assert "주문한 상품과 다른 타이어가 도착했거나 장착 규격이 맞지 않다면" in reply["assistant_response"]
 
 
 def test_support_policy_response_contract_reports_truncated_ellipsis() -> None:
