@@ -829,6 +829,7 @@ class MultiAgentDomain(BaseModel):
         "order_document_guidance",
         "general_card_cancel_timing_policy",
         "delivery_delay_reservation_schedule_policy",
+        "reservation_window_policy",
         "tire_manufacture_date_policy",
         "tire_quality_warranty_policy",
         "assurance_service_policy",
@@ -1074,6 +1075,7 @@ _CURRENT_TURN_SUPPORT_POLICY_ACTION_INTENTS = frozenset({
     "order_document_guidance",
     "general_card_cancel_timing_policy",
     "delivery_delay_reservation_schedule_policy",
+    "reservation_window_policy",
     "tire_manufacture_date_policy",
     "tire_quality_warranty_policy",
     "assurance_service_policy",
@@ -2459,7 +2461,8 @@ Complaint routing rule:
    - "tire_manufacture_date_policy": 타이어 제조일자/DOT/신품 여부/최신 제조 관련 정책 안내. 제조일자만으로 교환·환불·불량 단정 금지.
    - "tire_quality_warranty_policy": 측면 부풀음/품질보증/무상 A/S/제조상 과실 보증 기준 안내. 현장 점검 전 무상 교체 확정 금지.
    - "assurance_service_policy": 안심서비스/안심플러스/디지털워런티/보증서/장착비 관련 정책 안내. 보상 확정이 아닌 조건 안내가 우선.
-   - "reservation_policy_guidance": 일반 예약 가능 기간, 취소, 변경, 장착점 변경 정책 안내. owned anchor 없으면 개인 예약 조회가 아님.
+   - "reservation_policy_guidance": 일반 예약 취소, 변경, 장착점 변경 정책 안내. owned anchor 없으면 개인 예약 조회가 아님.
+   - "reservation_window_policy": 장착 예약 가능 기간 제한 안내. 두 달 뒤 같은 범위 밖 질문은 슬롯 조회가 아니라 정책 안내가 우선.
    - "installation_work_policy": 공임, 장착비, 추가 작업, 폐타이어 비용, 현장 결제 등 작업 정책 안내. 매장별 가능 여부 단정 금지.
    - "promotion_gift_policy": 사은품, 선착순, 프로모션 조건 미달, 반납/차감 가능성 안내. 실시간 지급 여부 확정 금지.
    - "tire_condition_photo_policy": 사진만으로 타이어 상태/주행 안전 판정 불가 안내. 매장 점검/마모도 측정/1:1 문의는 보조.
@@ -2803,7 +2806,8 @@ Also set `policy_intent`:
 - tire manufacture date / DOT / new-product policy ("제조일자가 6개월 전 거야. 새 걸로 바꿔줘", "DOT 기준으로 오래된 거 아냐?", "최신 제조 상품 맞아?") → SUPPORT, policy_intent=`tire_manufacture_date_policy`; this is FAQ/policy guidance first, not direct exchange/refund or defect confirmation.
 - tire quality warranty / free-AS criteria ("측면이 부풀었는데 무상 A/S 돼?", "품질보증 기준이 뭐야?", "제조상 과실이면 무상교환이야?") → SUPPORT, policy_intent=`tire_quality_warranty_policy`; this is warranty-policy guidance first, not direct compensation approval.
 - assurance/digital warranty policy ("안심서비스 조건?", "종이 보증서 잃어버림", "장착비 따로 내?", "디지털워런티 가입 가능 기간은?") → SUPPORT, policy_intent=`assurance_service_policy`; this is FAQ/policy guidance first.
-- reservation policy guidance without owned anchor ("몇 주 뒤까지 예약 가능?", "당일 취소 위약금?", "장착점 변경 가능?") → SUPPORT, policy_intent=`reservation_policy_guidance`; do not start owned reservation/order lookup unless the current turn has an order number, "내 예약", or another owned anchor.
+- reservation policy guidance without owned anchor ("당일 취소 위약금?", "장착점 변경 가능?") → SUPPORT, policy_intent=`reservation_policy_guidance`; do not start owned reservation/order lookup unless the current turn has an order number, "내 예약", or another owned anchor.
+- reservation booking-window policy ("두달 뒤에도 예약 가능하지?", "장착 예약은 최대 며칠 뒤까지 가능해?") → SUPPORT, policy_intent=`reservation_window_policy`; explain the policy limit first and do not start store schedule lookup.
 - installation/work policy ("작업 중 취소하면 공임비?", "공임만 받고 장착 가능?", "얼라인먼트 현장 결제야?") → SUPPORT, policy_intent=`installation_work_policy`; this is work-policy guidance, not store-specific confirmation.
 - promotion/gift policy ("4짝 사고 사은품 받았는데 2짝 취소하면?", "선착순 끝났으면?", "사은품 반납해야 해?") → SUPPORT, policy_intent=`promotion_gift_policy`; explain policy/condition first, not direct compensation.
 - tire condition photo policy ("사진 보낼 테니까 더 타도 되는지 봐줘", "마모 사진 보고 괜찮은지 알려줘") → SUPPORT, policy_intent=`tire_condition_photo_policy`; explain that chatbot cannot determine safety from photos alone and guide inspection first.
@@ -7345,6 +7349,11 @@ def _build_support_faq_policy_event(
             "매장별 지정 예약 일정에 상품이 제때 도착하지 않으면 해피콜 등으로 별도 안내드릴 수 있어요.\n"
             "안내를 받으시면 매장이나 고객센터 안내에 따라 일정을 조정해 주세요."
         ),
+        "reservation_window_policy": (
+            "장착 예약일은 최대 30일 이내 또는 구매일로부터 1개월 이내 기준으로 안내돼요.\n"
+            "두 달 뒤처럼 범위를 넘는 예약은 지원되지 않거나 진행이 어려울 수 있어요.\n"
+            "실제 예약 가능한 시간 확인은 이 범위 안에서만 매장/지역 기준으로 조회해 주세요."
+        ),
         "tire_condition_photo_policy": (
             "현재 챗봇에서는 사진이나 파일을 업로드해 확인받을 수 없어요.\n"
             "사진만으로는 타이어 마모 상태, 교체 필요 여부, 주행 안전을 확정할 수 없어요. "
@@ -7357,6 +7366,7 @@ def _build_support_faq_policy_event(
         "tire_quality_warranty_policy": required_guidance_by_intent["tire_quality_warranty_policy"],
         "assurance_service_policy": required_guidance_by_intent["assurance_service_policy"],
         "delivery_delay_reservation_schedule_policy": required_guidance_by_intent["delivery_delay_reservation_schedule_policy"],
+        "reservation_window_policy": required_guidance_by_intent["reservation_window_policy"],
         "reservation_policy_guidance": "실제 예약 변경이나 취소 전에는 예약 상세 안내도 함께 확인해 주세요.",
         "installation_work_policy": "추가 작업비나 현장 결제 여부는 정책과 작업 범위에 따라 달라질 수 있어요.",
         "promotion_gift_policy": required_guidance_by_intent["promotion_gift_policy"],
@@ -7371,6 +7381,7 @@ def _build_support_faq_policy_event(
         "tire_quality_warranty_policy": required_guidance_by_intent["tire_quality_warranty_policy"],
         "assurance_service_policy": required_guidance_by_intent["assurance_service_policy"],
         "delivery_delay_reservation_schedule_policy": required_guidance_by_intent["delivery_delay_reservation_schedule_policy"],
+        "reservation_window_policy": "장착 예약일은 최대 30일 이내로 지정해야 하며, 두 달 뒤 예약은 지원되지 않을 수 있어요.",
         "reservation_policy_guidance": "예약 가능 기간, 취소, 변경 조건은 정책 기준으로 먼저 확인해 보는 것이 안전해요.",
         "installation_work_policy": "공임, 장착비, 추가 작업 비용은 작업 범위와 정책에 따라 달라질 수 있어요.",
         "promotion_gift_policy": required_guidance_by_intent["promotion_gift_policy"],
@@ -16750,6 +16761,7 @@ _FAQ_POLICY_FALLBACK_INTENTS = frozenset({
     "tire_manufacture_date_policy",
     "tire_quality_warranty_policy",
     "assurance_service_policy",
+    "reservation_window_policy",
     "reservation_policy_guidance",
     "delivery_delay_reservation_schedule_policy",
     "installation_work_policy",

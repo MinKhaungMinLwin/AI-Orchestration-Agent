@@ -124,6 +124,13 @@ _RESERVATION_AVAILABILITY_OR_BOOKING_RE = re.compile(
     r"(?:가능한\s*)?(?:예약\s*)?(?:시간표|스케줄|슬롯)\s*(?:보여|알려|확인)",
     re.IGNORECASE,
 )
+_RESERVATION_WINDOW_POLICY_RE = re.compile(
+    r"(?:두\s*달|2\s*달|한\s*달\s*넘|1\s*달\s*넘|30일\s*(?:이후|뒤)|"
+    r"최대\s*(?:며칠|몇\s*일|몇\s*주)|언제까지\s*장착\s*예약|예약\s*가능\s*기간|"
+    r"장착\s*예약(?:은)?\s*최대\s*(?:며칠|몇\s*일|몇\s*주)|"
+    r"(?:두\s*달|2\s*달).{0,12}예약\s*가능|예약.{0,12}(?:30일|1개월|한\s*달).{0,8}(?:이내|까지))",
+    re.IGNORECASE,
+)
 _DELIVERY_DELAY_RE = re.compile(
     r"배송(?:이)?\s*지연|배송이\s*늦|상품\s*미도착|미도착|입고\s*지연|도착이\s*늦|배송\s*늦",
     re.IGNORECASE,
@@ -664,6 +671,14 @@ def build_transaction_intent_frame(
     current_reservation_store_info_lookup = bool(
         _RESERVATION_STORE_REF_RE.search(text) and _RESERVATION_STORE_INFO_RE.search(text)
     )
+    current_reservation_window_policy = bool(
+        _RESERVATION_WINDOW_POLICY_RE.search(text)
+        and _RESERVATION_RE.search(text)
+        and not current_reservation_store_info_lookup
+        and not _ORDER_DIRECT_NO_RE.search(text)
+        and not _RELATIVE_RESERVATION_DATE_RE.search(text)
+        and not _EXPLICIT_MD_DATE_RE.search(text)
+    )
     current_delivery_delay_reservation_schedule_policy = bool(
         _DELIVERY_DELAY_RE.search(text)
         and _RESERVATION_AUTO_CHANGE_POLICY_RE.search(text)
@@ -675,6 +690,7 @@ def build_transaction_intent_frame(
         (_RESERVATION_STATUS_LOOKUP_RE.search(text) or owned_reservation_change_status_lookup)
         and (owned_reservation_change_status_lookup or not _RESERVATION_AVAILABILITY_OR_BOOKING_RE.search(text))
         and not current_reservation_store_info_lookup
+        and not current_reservation_window_policy
         and not current_delivery_delay_reservation_schedule_policy
     )
     current_order_cancel_status_signal = bool(_ORDER_CANCEL_STATUS_LOOKUP_RE.search(text))
@@ -1070,6 +1086,10 @@ def build_transaction_intent_frame(
         intent = "delivery_delay_reservation_schedule_policy"
         sub_intent = "reservation_schedule_policy"
         entities["delivery_delay_reservation_schedule_policy"] = True
+    elif current_reservation_window_policy:
+        intent = "reservation_window_policy"
+        sub_intent = "reservation_window_policy"
+        entities["reservation_window_policy"] = True
     elif current_store_arrival_visit_guidance:
         intent = "order_arrival_status_lookup"
         sub_intent = "store_arrival_visit_guidance"
@@ -1345,6 +1365,10 @@ def build_transaction_intent_frame(
         known["pending_intent"] = "delivery_delay_reservation_schedule_policy"
         known["goal_type"] = "support_policy_answer"
         known["delivery_delay_reservation_schedule_policy"] = True
+    if intent == "reservation_window_policy":
+        known["pending_intent"] = "reservation_window_policy"
+        known["goal_type"] = "support_policy_answer"
+        known["reservation_window_policy"] = True
     if intent == "order_cancel_status_lookup":
         known["pending_intent"] = "order_cancel_status_lookup"
         known["goal_type"] = "order_cancel_status_lookup"
@@ -1660,6 +1684,26 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
             ),
             required_slots=(),
             metadata={"response_intent": "delivery_delay_reservation_schedule_policy", "action": action},
+        )
+
+    if frame.intent == "reservation_window_policy":
+        return ToolPlan(
+            allowed_tools=("search_faq_hybrid_tool",),
+            preferred_tool="search_faq_hybrid_tool",
+            tool_args_patch={},
+            forbidden_tools=(
+                "get_my_reservations_tool",
+                "get_orders_of_user_tool",
+                "get_order_status_tool",
+                "get_store_schedule_tool",
+                "get_multi_store_schedule_tool",
+                "transaction_store_preview_tool",
+                "search_stores_tool",
+                "get_store_list_tool",
+                "quick_order_tool",
+            ),
+            required_slots=(),
+            metadata={"response_intent": "reservation_window_policy", "action": action},
         )
 
     if frame.intent == "order_cancel_status_lookup":
@@ -2072,6 +2116,8 @@ def _transaction_action(frame: IntentFrame) -> str:
     if frame.intent == "order_arrival_status_lookup":
         return "order_arrival_status_lookup"
     if frame.intent == "delivery_delay_reservation_schedule_policy":
+        return "support_policy_answer"
+    if frame.intent == "reservation_window_policy":
         return "support_policy_answer"
     if frame.intent == "order_cancel_status_lookup":
         return "order_cancel_status_lookup"

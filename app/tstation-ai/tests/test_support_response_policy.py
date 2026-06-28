@@ -129,6 +129,18 @@ def test_reservation_policy_guidance_text_trigger_without_owned_anchor() -> None
     assert "start_owned_reservation_lookup_without_anchor" in decision.forbidden_behaviors
 
 
+def test_reservation_window_policy_text_trigger_blocks_schedule_lookup() -> None:
+    decision = decide_support_response(
+        intent="support_faq",
+        user_text="장착 예약은 최대 며칠 뒤까지 가능해?",
+    )
+
+    assert decision.template == TemplateName.QUICK_REPLY
+    assert decision.metadata["response_shape_key"] == "reservation_window_policy"
+    assert "normalize_as_store_schedule_lookup" in decision.forbidden_behaviors
+    assert "require_store_slot_for_window_policy" in decision.forbidden_behaviors
+
+
 def test_tire_condition_photo_policy_blocks_photo_only_safety_judgment() -> None:
     decision = decide_support_response(
         intent="support_faq",

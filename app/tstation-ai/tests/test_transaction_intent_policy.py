@@ -355,6 +355,46 @@ def test_delivery_delay_reservation_schedule_policy_overrides_owned_reservation_
     assert decision.metadata["response_shape_key"] == "delivery_delay_reservation_schedule_policy"
 
 
+def test_reservation_window_policy_uses_faq_only_contract() -> None:
+    user_text = "두달 뒤에도 예약 가능하지?"
+    frame = build_transaction_intent_frame(user_text, known_slots={})
+    plan = plan_transaction_tools(frame)
+    decision = decide_transaction_response(intent=frame.intent, user_text=user_text, known_slots=dict(frame.known_slots))
+
+    assert frame.intent == "reservation_window_policy"
+    assert frame.sub_intent == "reservation_window_policy"
+    assert frame.known_slots["pending_intent"] == "reservation_window_policy"
+    assert frame.known_slots["goal_type"] == "support_policy_answer"
+    assert plan.allowed_tools == ("search_faq_hybrid_tool",)
+    assert plan.preferred_tool == "search_faq_hybrid_tool"
+    assert "get_store_schedule_tool" in plan.forbidden_tools
+    assert "get_store_list_tool" in plan.forbidden_tools
+    assert "get_my_reservations_tool" in plan.forbidden_tools
+    assert decision.metadata["response_shape_key"] == "reservation_window_policy"
+
+
+def test_reservation_window_policy_overrides_stale_store_context() -> None:
+    user_text = "강남점 두 달 뒤 예약 가능한 시간 보여줘"
+    frame = build_transaction_intent_frame(
+        user_text,
+        known_slots={"pending_intent": "store_finder", "shop_name": "티스테이션 강남점"},
+    )
+    plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "reservation_window_policy"
+    assert frame.known_slots["goal_type"] == "support_policy_answer"
+    assert plan.allowed_tools == ("search_faq_hybrid_tool",)
+    assert "get_store_schedule_tool" in plan.forbidden_tools
+    assert plan.required_slots == ()
+
+
+def test_relative_reservation_date_keeps_store_schedule_lookup() -> None:
+    user_text = "강남점 내일 예약 가능해?"
+    frame = build_transaction_intent_frame(user_text, known_slots={})
+
+    assert frame.intent != "reservation_window_policy"
+
+
 def test_owned_order_cancel_fee_inquiry_uses_order_lookup_contract() -> None:
     user_text = "내 오늘 예약 취소하면 수수료 있어?"
     frame = build_transaction_intent_frame(user_text, known_slots={})

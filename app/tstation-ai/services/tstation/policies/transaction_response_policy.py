@@ -71,6 +71,8 @@ def decide_transaction_response(
         return _decide_reservation_status_lookup()
     if intent == "delivery_delay_reservation_schedule_policy":
         return _decide_delivery_delay_reservation_schedule_policy()
+    if intent == "reservation_window_policy":
+        return _decide_reservation_window_policy()
     if intent == "order_arrival_status_lookup":
         return _decide_order_arrival_status_lookup()
     if intent == "order_history_lookup":
@@ -375,6 +377,24 @@ def _decide_delivery_delay_reservation_schedule_policy() -> ResponseDecision:
             "배송 지연 시 예약 일정이 자동 변경되는지 묻는 질문은 일반 정책 안내다. "
             "개인 주문/예약 조회나 매장 예약 시간 조회를 시작하지 말고, 배송 지연으로 예약 일정이 자동 변경되지는 않으며 "
             "상품이 예약 일정에 맞춰 도착하지 않으면 해피콜 등으로 안내받을 수 있다고 설명한다."
+        ),
+    )
+
+
+def _decide_reservation_window_policy() -> ResponseDecision:
+    return _decision(
+        response_shape_key="reservation_window_policy",
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        forbidden_behaviors=(
+            "start_owned_reservation_lookup",
+            "normalize_as_store_schedule_lookup",
+            "require_store_slot_for_window_policy",
+        ),
+        assistant_guidance=(
+            "장착 예약 가능 기간을 묻는 질문은 슬롯 조회가 아니라 일반 정책 안내다. "
+            "매장명이나 기존 예약 문맥이 있어도 get_store_schedule_tool, search_stores_tool, get_store_list_tool로 돌리지 말고 "
+            "최대 예약 가능 기간과 범위 밖 예약 제한을 먼저 설명한다."
         ),
     )
 

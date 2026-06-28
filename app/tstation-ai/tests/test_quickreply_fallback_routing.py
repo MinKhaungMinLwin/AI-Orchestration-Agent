@@ -22684,6 +22684,36 @@ def test_reservation_policy_guidance_contract_blocks_owned_lookup_tools() -> Non
     assert "get_my_reservations_tool" in contract.forbidden_tools
 
 
+def test_reservation_window_policy_contract_blocks_schedule_and_store_lookup_tools() -> None:
+    contract = build_turn_contract(
+        user_text="두달 뒤에도 예약 가능하지?",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:reservation_window_policy"],
+            policy_intent="reservation_window_policy",
+        ),
+        merged_slots={
+            "shop_name": "티스테이션 강남점",
+            "pending_intent": "store_finder",
+            "goal_type": "find_store",
+        },
+        action_mode="support_policy_answer",
+        context_state="dormant",
+        dormant_context_reason="current_turn_action:support_policy_answer",
+    )
+
+    assert contract.domain == "support"
+    assert contract.intent == "reservation_window_policy"
+    assert contract.required_slots == ()
+    assert contract.blocking_required_slots == ()
+    assert "search_faq_hybrid_tool" in contract.allowed_tools
+    assert "get_store_schedule_tool" in contract.forbidden_tools
+    assert "get_multi_store_schedule_tool" in contract.forbidden_tools
+    assert "transaction_store_preview_tool" in contract.forbidden_tools
+    assert "search_stores_tool" in contract.forbidden_tools
+    assert "get_store_list_tool" in contract.forbidden_tools
+
+
 def test_tire_condition_photo_policy_rejects_safety_assertion_after_faq() -> None:
     contract = build_turn_contract(
         user_text="사진 보낼 테니까 더 타도 되는지 봐줘",
@@ -23171,6 +23201,17 @@ def test_delivery_delay_reservation_schedule_policy_augments_faq_query() -> None
     assert "배송 지연 예약 일정 자동 변경 해피콜 상품 미도착 일정 조정" in query
 
 
+def test_reservation_window_policy_augments_faq_query() -> None:
+    token = current_support_policy_intent.set("reservation_window_policy")
+    try:
+        query = _augment_faq_query_for_policy("두달 뒤에도 예약 가능하지?")
+    finally:
+        current_support_policy_intent.reset(token)
+
+    assert "두달 뒤에도 예약 가능하지?" in query
+    assert "장착 예약일 최대 30일 이내 구매일로부터 1개월 이내 사전 구매 지원 불가" in query
+
+
 def test_support_faq_policy_event_for_delivery_delay_reservation_schedule_uses_policy_fallback() -> None:
     event = _build_support_faq_policy_event(
         "delivery_delay_reservation_schedule_policy",
@@ -23183,6 +23224,22 @@ def test_support_faq_policy_event_for_delivery_delay_reservation_schedule_uses_p
     assert "배송 지연으로 예약 일정이 자동 변경되지는 않아요." in assistant
     assert "해피콜" in assistant
     assert _labels(event["data"]["quickReplies"]) == ["1:1 문의하기"]
+
+
+def test_support_faq_policy_event_for_reservation_window_uses_policy_fallback() -> None:
+    event = _build_support_faq_policy_event(
+        "reservation_window_policy",
+        "두달 뒤에도 예약 가능하지?",
+        tool_result={"status": "success", "data": {"items": []}},
+    )
+
+    assert event is not None
+    assistant = str(event["data"]["assistantResponse"])
+    assert "30일" in assistant or "1개월" in assistant
+    assert "두 달 뒤" in assistant or "두달 뒤" in assistant
+    assert "매장명" not in assistant
+    assert "지역" not in assistant
+    assert "예약 가능한 시간" not in assistant
 
 
 @pytest.mark.parametrize(
@@ -23342,6 +23399,7 @@ def test_support_prompt_contains_faq_before_escalation_policy_buckets() -> None:
     assert "FAQ before escalation policy buckets" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
     assert "tire_manufacture_date_policy" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
     assert "reservation_policy_guidance" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
+    assert "reservation_window_policy" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
     assert "owned anchor" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
 
 
@@ -29457,6 +29515,18 @@ def test_support_faq_policy_context_resolves_mixed_cancel_scope_to_generalized_a
     }
 
 
+def test_support_faq_policy_context_resolves_reservation_window() -> None:
+    result = resolve_support_faq_policy_context(
+        "reservation_window_policy",
+        "장착 예약은 최대 며칠 뒤까지 가능해?",
+    )
+
+    assert result == {
+        "policy_group": "reservation_installation_policy",
+        "fact_type": "reservation_window",
+    }
+
+
 def test_support_faq_policy_reply_filters_wrong_categories_for_visit_cancel() -> None:
     tool_result = {
         "status": "success",
@@ -29918,6 +29988,36 @@ def test_support_faq_policy_reply_builds_card_cancel_timing_from_allowed_categor
     assert reply["metadata"]["policyGroup"] == "payment_refund_policy"
     assert reply["metadata"]["factType"] == "card_cancel_timing"
     assert reply["metadata"]["facts"]["refund_timing"] == "3~5일"
+
+
+def test_support_faq_policy_reply_builds_reservation_window_guidance() -> None:
+    tool_result = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "question": "장착 예약일은 언제까지 선택할 수 있나요?",
+                    "answer": "장착 예약일은 최대 30일 이내 또는 구매일로부터 1개월 이내로 안내되며, 사전 구매만 먼저 진행하는 방식은 지원되지 않습니다.",
+                    "metadata": {"category_lv1": "배송/장착", "category_lv2": "장착"},
+                    "source": "FAQ Hybrid",
+                }
+            ]
+        },
+    }
+
+    reply = build_support_faq_policy_reply(
+        intent="reservation_window_policy",
+        user_text="두달 뒤에도 예약 가능하지?",
+        tool_result=tool_result,
+    )
+
+    assert reply is not None
+    assert reply["metadata"]["policyGroup"] == "reservation_installation_policy"
+    assert reply["metadata"]["factType"] == "reservation_window"
+    assert reply["metadata"]["factExtractionApplied"] is True
+    assert "30일 이내" in reply["assistant_response"] or "1개월 이내" in reply["assistant_response"]
+    assert "두 달 뒤" in reply["assistant_response"] or "두달 뒤" in reply["assistant_response"]
+    assert "예약 가능한 시간" not in reply["assistant_response"]
 
 
 def test_support_faq_policy_reply_builds_work_started_cancel_guidance() -> None:

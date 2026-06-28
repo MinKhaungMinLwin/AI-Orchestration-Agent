@@ -110,6 +110,9 @@ _COUPON_REGISTRATION_POLICY_FAQ_ANCHORS = (
 _DELIVERY_DELAY_RESERVATION_SCHEDULE_POLICY_FAQ_ANCHORS = (
     "배송 지연 예약 일정 자동 변경 해피콜 상품 미도착 일정 조정",
 )
+_RESERVATION_WINDOW_POLICY_FAQ_ANCHORS = (
+    "장착 예약일 최대 30일 이내 구매일로부터 1개월 이내 사전 구매 지원 불가",
+)
 
 
 def _augment_faq_query_for_policy(query: str) -> str:
@@ -141,6 +144,8 @@ def _augment_faq_query_for_policy(query: str) -> str:
         anchors = _COUPON_REGISTRATION_POLICY_FAQ_ANCHORS
     elif policy_intent == "delivery_delay_reservation_schedule_policy":
         anchors = _DELIVERY_DELAY_RESERVATION_SCHEDULE_POLICY_FAQ_ANCHORS
+    elif policy_intent == "reservation_window_policy":
+        anchors = _RESERVATION_WINDOW_POLICY_FAQ_ANCHORS
     else:
         return text
     missing_anchors = [anchor for anchor in anchors if anchor not in text]

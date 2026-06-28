@@ -797,6 +797,21 @@ def build_turn_contract(
                 "transaction_store_preview_tool",
             ),
         )
+    if intent == "reservation_window_policy":
+        forbidden_tools = _merge_tuple(
+            forbidden_tools,
+            (
+                "get_my_reservations_tool",
+                "get_orders_of_user_tool",
+                "get_order_status_tool",
+                "get_store_schedule_tool",
+                "get_multi_store_schedule_tool",
+                "transaction_store_preview_tool",
+                "search_stores_tool",
+                "get_store_list_tool",
+                "quick_order_tool",
+            ),
+        )
     if intent == "general_card_cancel_timing_policy":
         forbidden_tools = _merge_tuple(
             forbidden_tools,
@@ -2860,6 +2875,7 @@ _FAQ_FIRST_SUPPORT_POLICY_INTENTS = {
     "tire_manufacture_date_policy",
     "tire_quality_warranty_policy",
     "assurance_service_policy",
+    "reservation_window_policy",
     "reservation_policy_guidance",
     "installation_work_policy",
     "promotion_gift_policy",
@@ -3052,6 +3068,7 @@ def _faq_source_supports_assertion(intent: str, assistant_text: str, faq_text: s
         "tire_manufacture_date_policy": ("제조", "제조일", "신품", "유통", "숙성", "6개월", "12개월"),
         "tire_quality_warranty_policy": ("품질", "보증", "무상", "A/S", "AS", "잔여", "마모"),
         "assurance_service_policy": ("안심", "워런티", "보상", "디지털", "가입"),
+        "reservation_window_policy": ("예약", "30일", "1개월", "장착일", "사전 구매"),
         "reservation_policy_guidance": ("예약", "취소", "변경", "위약", "장착점"),
         "installation_work_policy": ("공임", "장착", "얼라인먼트", "폐타이어", "현장"),
         "promotion_gift_policy": ("사은품", "프로모션", "이벤트", "반납", "차감"),

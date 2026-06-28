@@ -22,6 +22,7 @@ _PURCHASE_ORDER_POLICY = "purchase_order_policy"
 _SUPPORT_FAQ_POLICY_GROUP_INTENTS = frozenset({
     "general_cancel_fee_policy",
     "general_card_cancel_timing_policy",
+    "reservation_window_policy",
     "payment_error_troubleshooting",
     "tire_manufacture_date_policy",
     "tire_quality_warranty_policy",
@@ -70,6 +71,7 @@ _SUPPORT_FAQ_SOURCE_MIN_SCORE_BY_INTENT: dict[str, float] = {
     "tire_quality_warranty_policy": 0.2,
     "general_card_cancel_timing_policy": 0.18,
     "reservation_policy_guidance": 0.18,
+    "reservation_window_policy": 0.18,
     "general_cancel_fee_policy": 0.18,
 }
 _SUPPORT_FAQ_SOURCE_SCORE_GAP_BY_INTENT: dict[str, float] = {
@@ -77,11 +79,13 @@ _SUPPORT_FAQ_SOURCE_SCORE_GAP_BY_INTENT: dict[str, float] = {
     "tire_quality_warranty_policy": 0.04,
     "general_card_cancel_timing_policy": 0.03,
     "reservation_policy_guidance": 0.03,
+    "reservation_window_policy": 0.03,
     "general_cancel_fee_policy": 0.03,
 }
 _SUPPORT_FAQ_SOURCE_GROUNDED_ALLOWLIST = frozenset({
     "general_cancel_fee_policy",
     "general_card_cancel_timing_policy",
+    "reservation_window_policy",
     "reservation_policy_guidance",
     "tire_manufacture_date_policy",
     "tire_quality_warranty_policy",
@@ -93,6 +97,7 @@ _SUPPORT_FAQ_LLM_GROUNDED_ALLOWLIST = frozenset(_SUPPORT_FAQ_SOURCE_GROUNDED_ALL
 _SUPPORT_FAQ_LLM_TOP_K_BY_INTENT: dict[str, int] = {
     "general_cancel_fee_policy": 3,
     "general_card_cancel_timing_policy": 3,
+    "reservation_window_policy": 3,
     "reservation_policy_guidance": 3,
     "tire_manufacture_date_policy": 3,
     "tire_quality_warranty_policy": 3,
@@ -112,6 +117,11 @@ _SUPPORT_FAQ_SCOPE_TO_EVIDENCE_TYPES: dict[str, tuple[str, ...]] = {
     "delivery_stage": ("online_order_cancel_fee", "delivered_item_return_fee"),
     "work_started": ("installation_work_fee",),
     "store_change": ("store_change_policy",),
+    "reservation_window": (
+        "reservation_window_limit",
+        "advance_booking_not_supported",
+        "reservation_required_with_purchase",
+    ),
     "warranty_condition": ("warranty_condition",),
     "manufacture_date_policy": ("manufacture_date_policy",),
     "payment_error": ("payment_error_troubleshooting",),
@@ -370,6 +380,13 @@ def _classify_faq_evidence(
             return "installation_work_fee"
         if _support_faq_candidate_matches_fact_type("store_change", candidate):
             return "store_change_policy"
+        if _support_faq_candidate_matches_fact_type("reservation_window", candidate):
+            lowered_text = text.lower()
+            if any(token in lowered_text for token in ("30일", "1개월", "한달", "한 달", "최대")):
+                return "reservation_window_limit"
+            if any(token in lowered_text for token in ("사전 구매", "사전구매", "지원하지 않", "불가")):
+                return "advance_booking_not_supported"
+            return "reservation_required_with_purchase"
         if _support_faq_candidate_matches_fact_type("online_order_cancel_fee", candidate):
             return "online_order_cancel_fee"
         if _support_faq_candidate_matches_fact_type("card_cancel_timing", candidate):
@@ -434,6 +451,10 @@ def _infer_user_faq_scope(
         primary_evidence_types.append(
             "promotion_gift_partial_cancel" if fact_type == "promotion_gift_partial_cancel" else "promotion_gift_policy_general"
         )
+    elif policy_group == _RESERVATION_INSTALLATION_POLICY and fact_type == "reservation_window":
+        scopes.append("reservation_window")
+        primary_evidence_types.append("reservation_window_limit")
+        supporting_evidence_types.extend(["advance_booking_not_supported", "reservation_required_with_purchase"])
     elif policy_group == _RESERVATION_INSTALLATION_POLICY and fact_type == "store_change":
         scopes.append("store_change")
         primary_evidence_types.append("store_change_policy")
@@ -468,6 +489,7 @@ def _infer_user_faq_scope(
             "online_order_cancel_fee": "online_order_cancel_fee",
             "card_cancel_timing": "card_refund_timing",
             "work_started_cancel": "installation_work_fee",
+            "reservation_window": "reservation_window_limit",
             "store_change": "store_change_policy",
             "quality_warranty_condition": "warranty_condition",
             "manufacture_date": "manufacture_date_policy",
@@ -729,6 +751,8 @@ def resolve_support_faq_policy_context(intent: str, user_text: str) -> dict[str,
 
     if normalized_intent == "general_card_cancel_timing_policy" or is_general_card_cancel_timing_policy_query(text):
         return {"policy_group": _PAYMENT_REFUND_POLICY, "fact_type": "card_cancel_timing"}
+    if normalized_intent == "reservation_window_policy":
+        return {"policy_group": _RESERVATION_INSTALLATION_POLICY, "fact_type": "reservation_window"}
     if normalized_intent == "payment_error_troubleshooting" or _PAYMENT_ERROR_RE.search(text):
         return {"policy_group": _PAYMENT_REFUND_POLICY, "fact_type": "payment_error_troubleshooting"}
     if normalized_intent == "tire_manufacture_date_policy":
@@ -803,6 +827,11 @@ def _support_faq_candidate_matches_fact_type(fact_type: str, candidate: Mapping[
         return bool(_STORE_CHANGE_RE.search(text) and _CHANGE_RE.search(text))
     if fact_type == "work_started_cancel":
         return bool(_WORK_STARTED_RE.search(text) and (_CANCEL_RE.search(text) or _FEE_RE.search(text)))
+    if fact_type == "reservation_window":
+        return bool(
+            re.search(r"30일|1개월|한\s*달|두\s*달|2\s*달|최대|예약\s*가능\s*기간|사전\s*구매", text, re.IGNORECASE)
+            and _RESERVATION_RE.search(text)
+        )
     if fact_type == "online_order_cancel_fee":
         return bool(_ONLINE_ORDER_CANCEL_RE.search(text))
     if fact_type == "card_cancel_timing":
@@ -923,6 +952,15 @@ def _extract_support_faq_policy_facts(
             facts["work_fee"] = "possible"
         if re.search(r"폐타이어", combined, re.IGNORECASE):
             facts["disposal_fee"] = "possible"
+    elif policy_group == _RESERVATION_INSTALLATION_POLICY and fact_type == "reservation_window":
+        if re.search(r"30일\s*이내|최대\s*30일", combined, re.IGNORECASE):
+            facts["reservation_window_limit"] = "30일 이내"
+        elif re.search(r"1개월\s*이내|한\s*달\s*이내|구매일로부터\s*1개월", combined, re.IGNORECASE):
+            facts["reservation_window_limit"] = "구매일로부터 1개월 이내"
+        if re.search(r"사전\s*구매|사전구매", combined, re.IGNORECASE) and re.search(r"불가|지원하지\s*않", combined, re.IGNORECASE):
+            facts["advance_booking_not_supported"] = True
+        if re.search(r"구매일로부터|주문\s*후|결제\s*후", combined, re.IGNORECASE):
+            facts["reservation_required_with_purchase"] = True
     elif policy_group == _RESERVATION_INSTALLATION_POLICY and fact_type == "store_change":
         facts["store_change_allowed"] = (
             "allowed"
@@ -1078,6 +1116,13 @@ def _build_support_faq_policy_reply(
                         f"{condition_text} 취소 수수료가 발생할 수 있다고 안내돼요."
                     )
             response = "\n\n".join(lines)
+    elif policy_group == _RESERVATION_INSTALLATION_POLICY and fact_type == "reservation_window":
+        limit_text = str(facts.get("reservation_window_limit") or "최대 30일 이내").strip()
+        response = (
+            f"장착 예약일은 보통 {limit_text}로 안내돼요.\n"
+            "두 달 뒤처럼 범위를 넘는 예약은 지원되지 않거나 진행이 어려울 수 있어요.\n"
+            "실제 예약 가능한 시간 확인은 이 범위 안에서만 매장/지역 기준으로 조회해 주세요."
+        )
     elif policy_group == _RESERVATION_INSTALLATION_POLICY and fact_type == "store_change":
         allowed_text = "방문 지점 변경 가능 여부는 예약 정책과 현재 예약 상태에 따라 달라질 수 있어요."
         if facts.get("store_change_allowed") == "allowed":
@@ -1530,6 +1575,13 @@ _RESERVATION_POLICY_GUIDANCE_RE = re.compile(
     r"장착점\s*변경|몇\s*주\s*뒤까지\s*예약|예약\s*가능",
     re.IGNORECASE,
 )
+_RESERVATION_WINDOW_POLICY_RE = re.compile(
+    r"두\s*달\s*뒤|2\s*달\s*뒤|한\s*달\s*넘|1\s*달\s*넘|30일\s*(?:이후|뒤)|"
+    r"최대\s*(?:며칠|몇\s*일|몇\s*주)\s*뒤까지|예약\s*가능\s*기간|언제까지\s*장착\s*예약|"
+    r"장착\s*예약(?:은)?\s*최대\s*(?:며칠|몇\s*일|몇\s*주)|"
+    r"(?:두\s*달|2\s*달).{0,12}예약\s*가능|예약.{0,12}(?:30일|1개월|한\s*달).{0,8}(?:이내|까지)",
+    re.IGNORECASE,
+)
 _DELIVERY_DELAY_RESERVATION_SCHEDULE_POLICY_RE = re.compile(
     r"(?=.*(?:배송\s*지연|상품\s*미도착|미도착|입고\s*지연|배송\s*늦))"
     r"(?=.*(?:예약\s*(?:일정|시간)?.{0,8}자동\s*(?:변경|바뀌|밀리)|"
@@ -1770,6 +1822,23 @@ def decide_support_response(
                 "안심서비스/안심플러스/디지털워런티/보증서 문의는 FAQ hybrid 검색을 먼저 수행하고, 가입 가능 기간, "
                 "보상 조건, 장착비/추가 비용 여부를 검색 근거 범위 안에서 설명한다. 장착 후 1년 이내와 주행거리 "
                 "16,000km 이내 기준을 포함하되, 보상 확정이나 자동 접수처럼 말하지 않는다."
+            ),
+        )
+
+    if intent == "reservation_window_policy" or _RESERVATION_WINDOW_POLICY_RE.search(text):
+        return _decision(
+            response_shape_key="reservation_window_policy",
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=(
+                "transfer_to_qna_direct_first",
+                "normalize_as_store_schedule_lookup",
+                "require_store_slot_for_window_policy",
+            ),
+            assistant_guidance=(
+                "예약 가능 기간 제한 문의는 FAQ hybrid 검색을 먼저 수행하고, 장착 예약일 최대 기간과 범위 밖 예약 제한을 "
+                "정책 기준으로 quickReply에 요약한다. 두 달 뒤처럼 범위를 넘는 요청은 매장 슬롯 조회로 바꾸지 말고 "
+                "정책 제한을 먼저 설명한다."
             ),
         )
 
