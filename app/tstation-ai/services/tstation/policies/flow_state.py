@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import re
 from typing import Any, Mapping
 
 
@@ -37,6 +38,7 @@ _SCHEDULE_FIELDS = ("requested_cal_day", "rsv_hour")
 _PAYMENT_FIELDS = ("payment_amount", "price_basis", "price_source_tool", "payment_amount_stale")
 _INTENT_FIELDS = ("pending_intent", "goal_type", "stock_check_mode", "schedule_mode", "availability_intent")
 _ACTIVE_FLOW_TYPES = {"purchase", "recommendation", "stock", "booking"}
+_STORE_SELECTION_CHIPS = {"이 매장 선택", "이 매장으로", "이곳 선택"}
 
 
 def _non_empty_mapping(values: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -87,6 +89,7 @@ class FlowState:
     payment: dict[str, Any] = field(default_factory=dict)
     intent: dict[str, Any] = field(default_factory=dict)
     meta: dict[str, Any] = field(default_factory=dict)
+    candidates: list[dict[str, Any]] = field(default_factory=list)
 
     @classmethod
     def purchase(cls, status: str = "active") -> "FlowState":
@@ -116,6 +119,7 @@ class FlowState:
             for key in ("source", "updated_at", "awaiting_store_region", "pending_step")
             if flat.get(key) not in _EMPTY_VALUES
         }
+        state.candidates = _candidate_values(flat.get("last_candidates"))
         return state
 
     @classmethod
@@ -162,6 +166,7 @@ class FlowState:
             for key in ("awaiting_store_region", "pending_step")
             if flat.get(key) not in _EMPTY_VALUES
         }
+        state.candidates = _candidate_values(flat.get("last_candidates"))
         state.meta["source"] = source
         return state
 
@@ -189,6 +194,8 @@ class FlowState:
                 context[section_name] = values
         if self.meta.get("source") not in _EMPTY_VALUES:
             context["source"] = self.meta["source"]
+        if self.candidates:
+            context["last_candidates"] = [dict(candidate) for candidate in self.candidates]
         return _non_empty_mapping(context)
 
     def to_pending_order_context(self) -> dict[str, Any]:
@@ -269,6 +276,9 @@ class FlowState:
             merged.payment.pop("payment_amount_stale", None)
         _normalize_product_aliases(merged.product)
         merged.meta.update(_non_empty_mapping(delta.meta))
+        if delta.candidates:
+            merged.candidates = [dict(candidate) for candidate in delta.candidates]
+            committed_fields.append("last_candidates")
         merged.meta["source"] = source
         merged.meta["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
         merged.status = (
@@ -327,6 +337,9 @@ class FlowState:
                 target[key] = value
                 committed_fields.append(key)
 
+        if delta.candidates:
+            merged.candidates = [dict(candidate) for candidate in delta.candidates]
+            committed_fields.append("last_candidates")
         merged.meta.update(_non_empty_mapping(delta.meta))
         merged.meta["source"] = source
         merged.meta["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -387,6 +400,104 @@ def commit_flow_state(
     delta_state = FlowState.from_flat_delta(delta, source=source, flow_type=flow_type, flow_step=flow_step)
     delta_state.status = status
     return existing_state.merge(delta_state, source=source)
+
+
+def stock_store_candidates_flow_delta(
+    *,
+    event: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    if not isinstance(event, Mapping) or event.get("template") != "location":
+        return {}
+    event_data = event.get("data") if isinstance(event.get("data"), Mapping) else {}
+    stores = event_data.get("stores") if isinstance(event_data, Mapping) else None
+    metadata = event_data.get("metadata") if isinstance(event_data, Mapping) else None
+    if not isinstance(stores, list) or not isinstance(metadata, list):
+        return {}
+
+    candidates: list[dict[str, Any]] = []
+    known_slots: dict[str, Any] = {}
+    for idx, meta in enumerate(metadata):
+        if not isinstance(meta, Mapping):
+            continue
+        source_tool = str(meta.get("sourceTool") or meta.get("source_tool") or "").strip()
+        if source_tool != "transaction_store_preview_tool":
+            continue
+        shop_id = str(meta.get("shopId") or meta.get("shop_id") or "").strip()
+        if not shop_id:
+            continue
+        store = stores[idx] if idx < len(stores) and isinstance(stores[idx], Mapping) else {}
+        candidate = _stock_store_candidate_from_metadata(store, meta)
+        if not candidate:
+            continue
+        candidates.append(candidate)
+        for key in ("goods_no", "tire_size", "ord_qty", "region", "pending_intent", "goal_type"):
+            if known_slots.get(key) in _EMPTY_VALUES and candidate.get(key) not in _EMPTY_VALUES:
+                known_slots[key] = candidate[key]
+    if not candidates:
+        return {}
+    pending_intent = str(known_slots.get("pending_intent") or "").strip()
+    goal_type = str(known_slots.get("goal_type") or "").strip()
+    if pending_intent not in {"stock", ""} and goal_type != "store_with_stock":
+        return {}
+    return {
+        "flow_type": "stock",
+        "status": "active",
+        "flow_step": "show_store_candidates",
+        "stock_check_mode": "preview",
+        "pending_intent": "stock",
+        "goal_type": "store_with_stock",
+        "last_candidates": candidates,
+        **known_slots,
+    }
+
+
+def stock_store_candidate_selection_patch(
+    *,
+    active_flow_context: Mapping[str, Any] | None,
+    user_text: str,
+    selection_hint: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    active_flow = FlowState.from_active_flow_context(active_flow_context)
+    if active_flow.flow_type != "stock" or active_flow.flow_step != "show_store_candidates":
+        return {}
+    if active_flow.status not in {"active", "resumed"}:
+        return {}
+    candidates = [candidate for candidate in active_flow.candidates if isinstance(candidate, Mapping)]
+    if not candidates:
+        return {}
+
+    selected, ambiguous = _select_stock_store_candidate(
+        candidates,
+        user_text=user_text,
+        selection_hint=_non_empty_mapping(selection_hint),
+    )
+    if not selected:
+        return {"_stock_store_candidate_ambiguous": True} if ambiguous else {}
+
+    patch = {
+        key: selected[key]
+        for key in (
+            "shop_id",
+            "shop_name",
+            "schedule_mode",
+            "schedule_tier",
+            "inventory_mode",
+            "source_tool",
+            "goods_no",
+            "tire_size",
+            "ord_qty",
+            "region",
+            "payment_amount",
+        )
+        if selected.get(key) not in _EMPTY_VALUES
+    }
+    patch.update({
+        "pending_intent": "stock",
+        "goal_type": "store_with_stock",
+        "stock_check_mode": "preview",
+        "flow_step": "selected_store_schedule",
+    })
+    return patch
 
 
 def recommendation_listcar_flow_delta(
@@ -517,6 +628,135 @@ def recommendation_vehicle_selection_patch(
             if source_patch.get(key) not in _EMPTY_VALUES:
                 patch.setdefault(key, source_patch[key])
     return patch
+
+
+def _candidate_values(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [_non_empty_mapping(item) for item in value if isinstance(item, Mapping)]
+
+
+def _stock_store_candidate_from_metadata(store: Mapping[str, Any], meta: Mapping[str, Any]) -> dict[str, Any]:
+    shop_id = str(meta.get("shopId") or meta.get("shop_id") or "").strip()
+    shop_name = str(
+        meta.get("shopName")
+        or meta.get("shop_name")
+        or store.get("nameAddress")
+        or store.get("name")
+        or store.get("title")
+        or ""
+    ).strip()
+    schedule_mode = str(meta.get("scheduleMode") or meta.get("schedule_mode") or "").strip()
+    inventory_mode = str(meta.get("inventoryMode") or meta.get("inventory_mode") or schedule_mode or "").strip()
+    if not shop_id or not schedule_mode:
+        return {}
+    stable_id = str(meta.get("stableId") or meta.get("stable_id") or shop_id).strip()
+    candidate = {
+        "type": "store",
+        "stable_id": stable_id,
+        "label": shop_name or shop_id,
+        "shop_id": shop_id,
+        "shop_name": shop_name,
+        "schedule_mode": schedule_mode,
+        "schedule_tier": str(meta.get("scheduleTier") or meta.get("schedule_tier") or schedule_mode).strip(),
+        "inventory_mode": inventory_mode,
+        "source_tool": "transaction_store_preview_tool",
+        "goods_no": str(meta.get("goodsNo") or meta.get("goods_no") or "").strip(),
+        "tire_size": str(meta.get("tireSize") or meta.get("tire_size") or "").strip(),
+        "region": str(meta.get("region") or "").strip(),
+        "pending_intent": str(meta.get("pendingIntent") or meta.get("pending_intent") or "stock").strip(),
+        "goal_type": str(meta.get("goalType") or meta.get("goal_type") or "store_with_stock").strip(),
+    }
+    raw_qty = meta.get("ordQty") if meta.get("ordQty") not in _EMPTY_VALUES else meta.get("ord_qty")
+    try:
+        qty = int(raw_qty)
+    except (TypeError, ValueError):
+        qty = 0
+    if qty > 0:
+        candidate["ord_qty"] = qty
+    payment_amount = meta.get("paymentAmount") if meta.get("paymentAmount") not in _EMPTY_VALUES else meta.get(
+        "payment_amount"
+    )
+    if payment_amount not in _EMPTY_VALUES:
+        candidate["payment_amount"] = payment_amount
+    return _non_empty_mapping(candidate)
+
+
+def _select_stock_store_candidate(
+    candidates: list[Mapping[str, Any]],
+    *,
+    user_text: str,
+    selection_hint: Mapping[str, Any],
+) -> tuple[Mapping[str, Any] | None, bool]:
+    hinted_id = str(
+        selection_hint.get("stable_id")
+        or selection_hint.get("stableId")
+        or selection_hint.get("shop_id")
+        or selection_hint.get("shopId")
+        or selection_hint.get("entity_id")
+        or ""
+    ).strip()
+    if hinted_id:
+        exact = [
+            candidate
+            for candidate in candidates
+            if hinted_id
+            in {
+                str(candidate.get("stable_id") or "").strip(),
+                str(candidate.get("shop_id") or "").strip(),
+            }
+        ]
+        if len(exact) == 1:
+            return exact[0], False
+        if len(exact) > 1:
+            return None, True
+
+    hinted_label = str(
+        selection_hint.get("label")
+        or selection_hint.get("entity_label")
+        or selection_hint.get("shop_name")
+        or selection_hint.get("shopName")
+        or ""
+    ).strip()
+    text = hinted_label or str(user_text or "").strip()
+    if text in _STORE_SELECTION_CHIPS and len(candidates) == 1:
+        return candidates[0], False
+    normalized_text = _normalize_store_label(text)
+    if not normalized_text:
+        return None, False
+
+    exact_matches = [
+        candidate
+        for candidate in candidates
+        if any(
+            _normalize_store_label(value) == normalized_text
+            for value in (candidate.get("label"), candidate.get("shop_name"))
+            if value not in _EMPTY_VALUES
+        )
+    ]
+    if len(exact_matches) == 1:
+        return exact_matches[0], False
+    if len(exact_matches) > 1:
+        return None, True
+
+    partial_matches = [
+        candidate
+        for candidate in candidates
+        if any(
+            normalized_text in _normalize_store_label(value) or _normalize_store_label(value) in normalized_text
+            for value in (candidate.get("label"), candidate.get("shop_name"))
+            if value not in _EMPTY_VALUES
+        )
+    ]
+    if len(partial_matches) == 1:
+        return partial_matches[0], False
+    return None, len(partial_matches) > 1
+
+
+def _normalize_store_label(value: Any) -> str:
+    text = str(value or "").lower()
+    text = re.sub(r"[\s\-_()]+", "", text)
+    return text.replace("티스테이션", "").replace("tstation", "")
 
 
 def _clear_section(section: dict[str, Any]) -> list[str]:

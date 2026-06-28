@@ -721,6 +721,8 @@ def build_turn_contract(
                 "get_store_inventory_tool",
                 "get_logistics_inventory_tool",
                 "get_store_list_tool",
+                "get_nearby_stores_tool",
+                "search_stores_tool",
                 "get_multi_store_schedule_tool",
                 "quick_order_tool",
             ),
@@ -2046,12 +2048,13 @@ def _selected_store_schedule_continuation_matches(
     known_slots: Mapping[str, Any],
     resume_source: str,
 ) -> bool:
-    if str(intent or "") != "stock_store_search":
+    if str(intent or "") not in {"stock_store_search", "stock_store_search_slot_fill_store"}:
         return False
     if str(resume_source or "") not in {
         "expected_slot_fill:store",
         "router_slot_fill:store",
         "validated_ui_action_slot_fill",
+        "location_selection:stock_store_search",
     }:
         return False
     schedule_mode = str(
@@ -2065,7 +2068,6 @@ def _selected_store_schedule_continuation_matches(
         and known_slots.get("goods_no")
         and known_slots.get("tire_size")
         and (known_slots.get("ord_qty") or known_slots.get("quantity"))
-        and str(known_slots.get("stock_check_mode") or "") == "preview"
         and str(known_slots.get("source_tool") or "") == "transaction_store_preview_tool"
     )
 

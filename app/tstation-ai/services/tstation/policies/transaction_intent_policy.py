@@ -1534,7 +1534,7 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
                 "guard": "require_product_size_before_transaction",
             },
         )
-    if frame.intent == "stock_store_search":
+    if frame.intent in {"stock_store_search", "stock_store_search_slot_fill_store"}:
         args = _slot_args(
             frame,
             "goods_no",
@@ -1559,7 +1559,7 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
             and frame.known_slots.get("goods_no")
             and frame.known_slots.get("tire_size")
             and (frame.known_slots.get("ord_qty") or frame.known_slots.get("quantity"))
-            and stock_check_mode == "preview"
+            and stock_check_mode in {"", "preview", "inventory_only"}
         ):
             return ToolPlan(
                 allowed_tools=("get_store_schedule_tool",),
@@ -1573,6 +1573,8 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
                     "get_store_inventory_tool",
                     "get_logistics_inventory_tool",
                     "get_store_list_tool",
+                    "get_nearby_stores_tool",
+                    "search_stores_tool",
                     "get_multi_store_schedule_tool",
                     "quick_order_tool",
                 ),

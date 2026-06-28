@@ -85,6 +85,8 @@ from services.tstation.policies.flow_state import (
     is_purchase_flow_context,
     recommendation_listcar_flow_delta,
     recommendation_vehicle_selection_patch,
+    stock_store_candidate_selection_patch,
+    stock_store_candidates_flow_delta,
 )
 from services.tstation.policies.turn_contract import (
     TurnContract,
@@ -27793,6 +27795,76 @@ class TStationChatServiceV2:
             previous_goal_type = previous_goal_type or str(
                 region_store_input_resolution.slots_to_promote.get("goal_type") or ""
             ).strip() or None
+        stock_store_selection_hint: dict[str, Any] = {}
+        if vehicle_ui_action_context is not None:
+            stock_store_selection_hint.update(dict(vehicle_ui_action_context.raw_metadata or {}))
+            stock_store_selection_hint.update(dict(vehicle_ui_action_context.slots or {}))
+            stock_store_selection_hint.update(dict(vehicle_ui_action_context.slot_patch or {}))
+            if vehicle_ui_action_context.entity_id:
+                stock_store_selection_hint["entity_id"] = vehicle_ui_action_context.entity_id
+            if vehicle_ui_action_context.entity_label:
+                stock_store_selection_hint["entity_label"] = vehicle_ui_action_context.entity_label
+        if isinstance(raw_ui_action, Mapping):
+            stock_store_selection_hint.update(dict(raw_ui_action))
+            raw_action_slots = raw_ui_action.get("slots")
+            if isinstance(raw_action_slots, Mapping):
+                stock_store_selection_hint.update(dict(raw_action_slots))
+        active_stock_flow_context = (
+            merged_slots.availability_context.get("active_flow_context")
+            if isinstance(getattr(merged_slots, "availability_context", None), dict)
+            and isinstance(merged_slots.availability_context.get("active_flow_context"), Mapping)
+            else {}
+        )
+        stock_store_selection_patch = stock_store_candidate_selection_patch(
+            active_flow_context=active_stock_flow_context,
+            user_text=last_user_text,
+            selection_hint=stock_store_selection_hint,
+        )
+        if stock_store_selection_patch and not stock_store_selection_patch.get("_stock_store_candidate_ambiguous"):
+            slot_patch = {
+                key: value
+                for key, value in stock_store_selection_patch.items()
+                if key != "flow_step" and value not in (None, "", [], {})
+            }
+            before_stock_slots = merged_slots.model_dump()
+            merged_slots = merged_slots.apply_runtime_values(
+                slot_patch,
+                source="active_stock_store_candidate_selection",
+            )
+            availability_context = (
+                dict(merged_slots.availability_context)
+                if isinstance(getattr(merged_slots, "availability_context", None), dict)
+                else {}
+            )
+            active_context = availability_context.get("active_flow_context")
+            commit_result = commit_flow_state(
+                active_context if isinstance(active_context, Mapping) else active_stock_flow_context,
+                slot_patch,
+                source="location_selection:stock_store_search",
+                flow_type="stock",
+                flow_step="selected_store_schedule",
+                status="resumed",
+            )
+            availability_context["active_flow_context"] = commit_result.state.to_active_flow_context()
+            merged_slots.availability_context = availability_context
+            if merged_slots.model_dump() != before_stock_slots:
+                vehicle_selection_trace_metadata.update({
+                    "active_stock_flow_resume_applied": True,
+                    "active_stock_flow_resume_source": "active_flow_context",
+                    "active_stock_flow_resume_patch_keys": sorted(slot_patch),
+                    "selected_shop_id": str(slot_patch.get("shop_id") or "").strip() or None,
+                    "selected_schedule_mode": str(slot_patch.get("schedule_mode") or "").strip() or None,
+                    "location_selection_source_tool": "transaction_store_preview_tool",
+                    "location_selection_flow_type": "stock_location_selection",
+                    "location_selection_contract_action": "stock_check",
+                })
+            if resume_source == "none":
+                resume_source = "location_selection:stock_store_search"
+            previous_pending_intent = str(getattr(merged_slots, "pending_intent", None) or "").strip() or None
+            previous_goal_type = str(getattr(merged_slots, "goal_type", None) or "").strip() or None
+            logger.info("[FLOW_STATE] Resumed stock store flow from selected candidate: %s", slot_patch)
+        elif stock_store_selection_patch.get("_stock_store_candidate_ambiguous"):
+            vehicle_selection_trace_metadata["active_stock_flow_resume_ambiguous"] = True
         action_mode = _current_turn_action_mode(
             user_text=last_user_text,
             domains=domains,
@@ -27931,6 +28003,10 @@ class TStationChatServiceV2:
             "pending_intent": merged_slots.pending_intent,
             "goal_type": merged_slots.goal_type,
             "stock_check_mode": getattr(merged_slots, "stock_check_mode", None),
+            "source_tool": getattr(merged_slots, "source_tool", None),
+            "schedule_mode": getattr(merged_slots, "schedule_mode", None),
+            "schedule_tier": getattr(merged_slots, "schedule_tier", None),
+            "inventory_mode": getattr(merged_slots, "inventory_mode", None),
         }
         availability_context = merged_slots.availability_context if isinstance(getattr(merged_slots, "availability_context", None), dict) else {}
         pending_order_context = availability_context.get("pending_order_context") if isinstance(availability_context.get("pending_order_context"), dict) else {}
@@ -27948,6 +28024,7 @@ class TStationChatServiceV2:
                 "source_tool": ("source_tool", "sourceTool"),
                 "schedule_mode": ("schedule_mode", "scheduleMode"),
                 "schedule_tier": ("schedule_tier", "scheduleTier"),
+                "inventory_mode": ("inventory_mode", "inventoryMode"),
             }.items():
                 for alias in aliases:
                     value = ui_action_metadata.get(alias)
@@ -36412,6 +36489,37 @@ class TStationChatServiceV2:
                             })
                             logger.info(
                                 "[FLOW_STATE] Stored recommendation active flow after listCar: %s",
+                                availability_context["active_flow_context"],
+                            )
+                    stock_store_flow_delta = stock_store_candidates_flow_delta(event=event)
+                    if (
+                        stock_store_flow_delta
+                        and str(event.get("source_domain", "")).lower() == MultiAgentDomain.Domain.TRANSACTION.value
+                    ):
+                        availability_context = (
+                            dict(base_slots_for_flow.availability_context)
+                            if isinstance(getattr(base_slots_for_flow, "availability_context", None), dict)
+                            else {}
+                        )
+                        active_context = availability_context.get("active_flow_context")
+                        commit_result = commit_flow_state(
+                            active_context if isinstance(active_context, Mapping) else {},
+                            stock_store_flow_delta,
+                            source="location_event:stock_store_candidates",
+                            flow_type="stock",
+                            flow_step="show_store_candidates",
+                        )
+                        availability_context["active_flow_context"] = commit_result.state.to_active_flow_context()
+                        updated_slots = base_slots_for_flow.model_copy()
+                        updated_slots.availability_context = availability_context
+                        if updated_slots.model_dump() != base_slots_for_flow.model_dump():
+                            pending_slots = updated_slots
+                            vehicle_selection_trace_metadata.update({
+                                "active_stock_flow_context_stored": True,
+                                "active_stock_flow_context_after": availability_context["active_flow_context"],
+                            })
+                            logger.info(
+                                "[FLOW_STATE] Stored stock store active flow after location: %s",
                                 availability_context["active_flow_context"],
                             )
                     if (

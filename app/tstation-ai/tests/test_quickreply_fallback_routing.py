@@ -35,6 +35,8 @@ from services.tstation.policies.flow_state import (
     commit_purchase_flow_state,
     recommendation_listcar_flow_delta,
     recommendation_vehicle_selection_patch,
+    stock_store_candidate_selection_patch,
+    stock_store_candidates_flow_delta,
 )
 from services.tstation.agents.b_discovery_agent import tools as discovery_tools
 from services.tstation.agents.b_discovery_agent.agent import (
@@ -11933,6 +11935,122 @@ def test_stock_store_selection_followup_prefers_schedule_tool_with_selected_mode
     assert response_decision.template == TemplateName.DATE_PICK
     assert response_decision.metadata["response_shape_key"] == "reservation_slots"
     assert response_decision.metadata["schedule_mode"] == "logistics_only"
+
+
+def test_stock_store_location_event_stores_candidate_flow_state() -> None:
+    event = {
+        "template": "location",
+        "source_domain": "transaction",
+        "data": {
+            "stores": [{"nameAddress": "티스테이션 역삼점"}],
+            "metadata": [
+                {
+                    "shopId": "F00098",
+                    "shopName": "티스테이션 역삼점",
+                    "sourceTool": "transaction_store_preview_tool",
+                    "scheduleMode": "logistics_only",
+                    "scheduleTier": "logistics_only",
+                    "inventoryMode": "logistics_only",
+                    "goodsNo": "G000000310126",
+                    "tireSize": "245/45R19",
+                    "ordQty": 4,
+                    "region": "강남",
+                    "paymentAmount": 616400,
+                    "pendingIntent": "stock",
+                    "goalType": "store_with_stock",
+                }
+            ],
+        },
+    }
+
+    delta = stock_store_candidates_flow_delta(event=event)
+    result = commit_flow_state(
+        {},
+        delta,
+        source="location_event:stock_store_candidates",
+        flow_type="stock",
+        flow_step="show_store_candidates",
+    )
+    context = result.state.to_active_flow_context()
+
+    assert context["flow_type"] == "stock"
+    assert context["flow_step"] == "show_store_candidates"
+    assert context["intent"]["pending_intent"] == "stock"
+    assert context["intent"]["goal_type"] == "store_with_stock"
+    assert context["last_candidates"] == [
+        {
+            "type": "store",
+            "stable_id": "F00098",
+            "label": "티스테이션 역삼점",
+            "shop_id": "F00098",
+            "shop_name": "티스테이션 역삼점",
+            "schedule_mode": "logistics_only",
+            "schedule_tier": "logistics_only",
+            "inventory_mode": "logistics_only",
+            "source_tool": "transaction_store_preview_tool",
+            "goods_no": "G000000310126",
+            "tire_size": "245/45R19",
+            "region": "강남",
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+            "ord_qty": 4,
+            "payment_amount": 616400,
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("schedule_mode", "user_text"),
+    [
+        ("logistics_only", "티스테이션 역삼점"),
+        ("in_store_only", "역삼점"),
+        ("in_store_logistics_combined", "티스테이션 역삼점"),
+        ("tna_only", "이 매장 선택"),
+        ("today_only", "티스테이션 역삼점"),
+    ],
+)
+def test_stock_store_candidate_selection_patch_restores_schedule_mode(schedule_mode: str, user_text: str) -> None:
+    active_flow_context = {
+        "flow_type": "stock",
+        "status": "active",
+        "flow_step": "show_store_candidates",
+        "intent": {"pending_intent": "stock", "goal_type": "store_with_stock", "stock_check_mode": "preview"},
+        "last_candidates": [
+            {
+                "type": "store",
+                "stable_id": "F00098",
+                "label": "티스테이션 역삼점",
+                "shop_id": "F00098",
+                "shop_name": "티스테이션 역삼점",
+                "schedule_mode": schedule_mode,
+                "schedule_tier": schedule_mode,
+                "inventory_mode": schedule_mode,
+                "source_tool": "transaction_store_preview_tool",
+                "goods_no": "G000000310126",
+                "tire_size": "245/45R19",
+                "ord_qty": 4,
+                "region": "강남",
+                "payment_amount": 616400,
+            }
+        ],
+    }
+
+    patch = stock_store_candidate_selection_patch(
+        active_flow_context=active_flow_context,
+        user_text=user_text,
+        selection_hint={},
+    )
+
+    assert patch["shop_id"] == "F00098"
+    assert patch["schedule_mode"] == schedule_mode
+    assert patch["inventory_mode"] == schedule_mode
+    assert patch["source_tool"] == "transaction_store_preview_tool"
+    assert patch["goods_no"] == "G000000310126"
+    assert patch["tire_size"] == "245/45R19"
+    assert patch["ord_qty"] == 4
+    assert patch["pending_intent"] == "stock"
+    assert patch["goal_type"] == "store_with_stock"
+    assert patch["stock_check_mode"] == "preview"
 
 
 def test_preview_location_selection_uses_template_boundary_alias_normalization() -> None:
@@ -28826,6 +28944,59 @@ def test_turn_contract_allows_selected_store_schedule_continuation_for_preview_s
         response_shape_key="reservation_slots",
         called_tools=["get_store_schedule_tool"],
         tool_inputs=[{"tool": "get_store_schedule_tool", "args": {"shop_id": "C01306", "mode": "logistics_only"}}],
+        source_domain="transaction",
+        contract=contract,
+    ) == []
+
+
+def test_turn_contract_allows_stock_store_slot_fill_store_schedule_continuation_with_stale_inventory_mode() -> None:
+    frame = IntentFrame(
+        domain=PolicyDomain.TRANSACTION,
+        intent="stock_store_search_slot_fill_store",
+        known_slots={
+            "goods_no": "G000000310126",
+            "tire_size": "245/45R19",
+            "ord_qty": 4,
+            "shop_id": "F00098",
+            "shop_name": "티스테이션 역삼점",
+            "source_tool": "transaction_store_preview_tool",
+            "stock_check_mode": "inventory_only",
+            "schedule_mode": "logistics_only",
+            "inventory_mode": "logistics_only",
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+        },
+    )
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text="티스테이션 역삼점",
+        known_slots=dict(frame.known_slots),
+    )
+    contract = build_turn_contract(
+        user_text="티스테이션 역삼점",
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=response_decision,
+        action_mode="stock_check",
+        context_state="resumed",
+        resume_source="location_selection:stock_store_search",
+    )
+
+    assert tool_plan.preferred_tool == "get_store_schedule_tool"
+    assert tool_plan.tool_args_patch == {"shop_id": "F00098", "mode": "logistics_only"}
+    assert response_decision.template == TemplateName.DATE_PICK
+    assert contract.allowed_tools == ("get_store_schedule_tool",)
+    assert "transaction_store_preview_tool" in contract.forbidden_tools
+    assert "search_stores_tool" in contract.forbidden_tools
+    assert "get_nearby_stores_tool" in contract.forbidden_tools
+    assert "quick_order_tool" in contract.forbidden_tools
+    assert response_contract_violations(
+        template="datepick",
+        assistant_response_source="code_mapper",
+        response_shape_key="reservation_slots",
+        called_tools=["get_store_schedule_tool"],
+        tool_inputs=[{"tool": "get_store_schedule_tool", "args": {"shop_id": "F00098", "mode": "logistics_only"}}],
         source_domain="transaction",
         contract=contract,
     ) == []

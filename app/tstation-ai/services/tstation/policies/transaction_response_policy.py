@@ -43,7 +43,7 @@ def decide_transaction_response(
     slots = known_slots or {}
     text = user_text or ""
 
-    if intent == "stock_store_search":
+    if intent in {"stock_store_search", "stock_store_search_slot_fill_store"}:
         return _decide_stock_store_search(text=text, slots=slots)
     if intent == "store_schedule":
         return _decide_store_schedule(text=text, slots=slots)
@@ -136,7 +136,7 @@ def _decide_stock_store_search(*, text: str, slots: dict[str, Any]) -> ResponseD
     schedule_mode = str(slots.get("schedule_mode") or slots.get("inventory_mode") or "").strip()
 
     if (
-        stock_check_mode == "preview"
+        stock_check_mode in {"preview", "inventory_only"}
         and slots.get("shop_id")
         and schedule_mode
         and slots.get("source_tool") == "transaction_store_preview_tool"
