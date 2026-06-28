@@ -31431,6 +31431,36 @@ def test_tire_condition_photo_policy_ctas_do_not_regress_to_plain_store_search(u
     assert quick_replies[0]["url"] == CTAUrls.TIRE_CHECK
 
 
+def test_support_policy_event_for_post_installation_quality_concern_stays_on_policy_path() -> None:
+    event = _build_support_faq_policy_event(
+        "post_installation_quality_concern",
+        "타이어 교체 후 소음 너무 심해졌어. 환불해줘",
+    )
+
+    assert event is not None
+    response = str(event["data"]["assistantResponse"])
+    quick_replies = event["data"]["quickReplies"]
+    assert "장착 상태, 휠 밸런스, 얼라인먼트, 타이어 상태" in response
+    assert "정밀 점검" in response
+    assert _labels(quick_replies) == ["내 주문 조회", "1:1 문의하기"]
+    assert quick_replies[0]["url"] == CTAUrls.ORDER_HISTORY
+
+
+def test_support_policy_event_for_onsite_delivery_mismatch_stays_on_policy_path() -> None:
+    event = _build_support_faq_policy_event(
+        "onsite_delivery_mismatch",
+        "매장에서 주문한 타이어와 다른 걸 장착했고 집에 도착해서 알아챘다. 어떻게 해야합니까?",
+    )
+
+    assert event is not None
+    response = str(event["data"]["assistantResponse"])
+    quick_replies = event["data"]["quickReplies"]
+    assert "주문 상품명, 사이즈, 실제 장착 내역" in response
+    assert "주문내역 확인" in response
+    assert _labels(quick_replies) == ["내 주문 조회", "1:1 문의하기"]
+    assert quick_replies[0]["url"] == CTAUrls.ORDER_HISTORY
+
+
 def test_rebase_tire_check_url_to_mobile_origin() -> None:
     set_tstation_origin_host("m.tstation.com")
     try:
