@@ -24063,6 +24063,7 @@ def test_support_response_policy_guard_uses_support_fallback_even_with_stale_pur
     assert "법적 절차나 방법은 안내하기 어렵고" in event["data"]["assistantResponse"]
     assert "수량이 필요해요" not in event["data"]["assistantResponse"]
     assert "장착 매장" not in event["data"]["assistantResponse"]
+    assert "원하시면 1:1 문의로 접수하실 수 있도록 도와드릴게요." in event["data"]["assistantResponse"]
     assert _labels(event["data"]["quickReplies"]) == ["1:1 문의하기", "처음으로"]
 
 
@@ -24089,6 +24090,7 @@ def test_support_response_policy_guard_uses_user_facing_complaint_copy_not_assis
     metadata = event["data"]["metadata"]
 
     assert "이용 중 불편을 겪으셨다면 죄송합니다." in response
+    assert "앞 작업 지연, 현장 접수/장착 상황, 매장 혼잡도에 따라 대기 시간이 발생할 수 있어요." in response
     assert "assistant_guidance" not in response
     assert "실행 flow를 재개하지 않게" not in response
     assert _labels(event["data"]["quickReplies"]) == ["1:1 문의하기", "처음으로"]
@@ -28879,8 +28881,8 @@ def test_support_complaint_quickreply_is_not_flagged_by_reservation_time_wording
     violations = response_contract_violations(
         template="quickReply",
         assistant_response_text=(
-            "이용 중 불편을 겪으셨다면 죄송합니다. 예약 시간에 맞춰 방문하셨더라도 대기 지연이나 보상 가능 여부는 "
-            "매장 상황 확인이 필요해요. 정확한 확인을 위해 1:1 문의로 접수해 주세요."
+            "이용 중 불편을 겪으셨다면 죄송합니다. 예약 시간에 맞춰 방문하셨더라도 앞 작업 지연, 현장 접수/장착 상황, "
+            "매장 혼잡도에 따라 대기 시간이 발생할 수 있어요. 원하시면 1:1 문의로 접수하실 수 있도록 도와드릴게요."
         ),
         assistant_response_source="support_agent",
         response_shape_key="support_complaint_guidance",

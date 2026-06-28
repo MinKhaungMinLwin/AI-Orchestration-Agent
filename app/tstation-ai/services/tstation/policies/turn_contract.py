@@ -1216,8 +1216,8 @@ def _support_guard_message_and_chips(
         )
     if intent == "tstation_service_complaint" or response_shape_key == "support_complaint_guidance":
         return (
-            "이용 중 불편을 겪으셨다면 죄송합니다. 대기 지연이나 보상 가능 여부는 매장 상황 확인이 필요해요. "
-            "정확한 확인을 위해 1:1 문의로 접수해 주세요.",
+            "이용 중 불편을 겪으셨다면 죄송합니다. 예약 시간에 맞춰 방문하셨더라도 앞 작업 지연, 현장 접수/장착 상황, "
+            "매장 혼잡도에 따라 대기 시간이 발생할 수 있어요. 원하시면 1:1 문의로 접수하실 수 있도록 도와드릴게요.",
             quick_replies,
         )
     return (
