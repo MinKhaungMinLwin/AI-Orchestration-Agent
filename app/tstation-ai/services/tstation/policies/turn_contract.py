@@ -2215,6 +2215,8 @@ def _action_mode_contract_violation(
         in {"support_policy_answer", "product_description", "product_comparison", "owned_record_lookup", "store_search", "info_only"}
         and _PURCHASE_OR_BOOKING_PROMPT_RE.search(assistant_text)
         and response_shape_key != "missing_stock_search_slots"
+        and str(contract.intent or "") != "reservation_policy_guidance"
+        and str(contract.sub_intent or "") != "reservation_window_policy"
     ):
         return {
             "type": "action_mode_prompt_violation",
