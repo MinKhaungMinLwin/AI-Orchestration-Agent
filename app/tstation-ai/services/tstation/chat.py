@@ -27584,8 +27584,9 @@ class TStationChatServiceV2:
                 transaction_known_slots["pending_intent"] = _outer_seed.get("pending_intent")
             if transaction_known_slots.get("goal_type") in (None, ""):
                 transaction_known_slots["goal_type"] = _outer_seed.get("goal_type")
-            if transaction_known_slots.get("stock_check_mode") in (None, ""):
-                transaction_known_slots["stock_check_mode"] = _outer_seed.get("stock_check_mode")
+            seed_stock_mode = _outer_seed.get("stock_check_mode")
+            if seed_stock_mode and transaction_known_slots.get("stock_check_mode") == "inventory_only":
+                transaction_known_slots["stock_check_mode"] = seed_stock_mode
         availability_context = merged_slots.availability_context if isinstance(getattr(merged_slots, "availability_context", None), dict) else {}
         pending_order_context = availability_context.get("pending_order_context") if isinstance(availability_context.get("pending_order_context"), dict) else {}
         if current_ui_action_context is not None and is_expected_transaction_slot_fill(current_ui_action_context):
