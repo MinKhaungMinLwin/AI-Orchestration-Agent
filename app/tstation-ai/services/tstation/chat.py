@@ -257,32 +257,31 @@ from config.tracing import (
     tracer,
     set_trace_name as _set_trace_name,
 )
+from services.tstation.helpers.quickreply import (
+    _AFFIRMATIVE_REPLY_RE as _AFFIRMATIVE_REPLY_RE,
+    _BOOKING_PREVIEW_CHIPS as _BOOKING_PREVIEW_CHIPS,
+    _CART_CTA_LABELS as _CART_CTA_LABELS,
+    _CURRENT_LOCATION_STORE_SEARCH_PROMPT_RE as _CURRENT_LOCATION_STORE_SEARCH_PROMPT_RE,
+    _LISTCAR_SELECTION_NEEDLES as _LISTCAR_SELECTION_NEEDLES,
+    _ORDER_CANCEL_REFUND_QUERY_RE as _ORDER_CANCEL_REFUND_QUERY_RE,
+    _ORDER_HISTORY_CTA_ALLOWED_INTENTS as _ORDER_HISTORY_CTA_ALLOWED_INTENTS,
+    _ORDER_HISTORY_CTA_LABEL_RE as _ORDER_HISTORY_CTA_LABEL_RE,
+    _PURCHASE_CTA_LABELS as _PURCHASE_CTA_LABELS,
+    _RESERVATION_CHANGE_POSSIBLE_COPY_RE as _RESERVATION_CHANGE_POSSIBLE_COPY_RE,
+    _VAGUE_STORE_DETAIL_TEXT_RE as _VAGUE_STORE_DETAIL_TEXT_RE,
+    _contract_intent_value as _contract_intent_value,
+    _event_or_contract_product_context as _event_or_contract_product_context,
+    _is_current_location_store_search_confirmation as _is_current_location_store_search_confirmation,
+    _looks_like_vehicle_selection_prompt as _looks_like_vehicle_selection_prompt,
+    _normalize_booking_preview_quickreply as _normalize_booking_preview_quickreply,
+    _normalize_existing_reservation_change_quickreply as _normalize_existing_reservation_change_quickreply,
+    _order_history_cta_allowed_for_contract as _order_history_cta_allowed_for_contract,
+    _sanitize_transaction_cta_contracts as _sanitize_transaction_cta_contracts,
+    _should_replace_vague_store_detail_quickreply as _should_replace_vague_store_detail_quickreply,
+    _store_detail_quickreply_from_sources as _store_detail_quickreply_from_sources,
+)
 
 logger = logging.getLogger(__name__)
-
-from services.tstation.helpers.quickreply import (
-    _AFFIRMATIVE_REPLY_RE,
-    _BOOKING_PREVIEW_CHIPS,
-    _CART_CTA_LABELS,
-    _CURRENT_LOCATION_STORE_SEARCH_PROMPT_RE,
-    _LISTCAR_SELECTION_NEEDLES,
-    _ORDER_CANCEL_REFUND_QUERY_RE,
-    _ORDER_HISTORY_CTA_ALLOWED_INTENTS,
-    _ORDER_HISTORY_CTA_LABEL_RE,
-    _PURCHASE_CTA_LABELS,
-    _RESERVATION_CHANGE_POSSIBLE_COPY_RE,
-    _VAGUE_STORE_DETAIL_TEXT_RE,
-    _contract_intent_value,
-    _event_or_contract_product_context,
-    _is_current_location_store_search_confirmation,
-    _looks_like_vehicle_selection_prompt,
-    _normalize_booking_preview_quickreply,
-    _normalize_existing_reservation_change_quickreply,
-    _order_history_cta_allowed_for_contract,
-    _sanitize_transaction_cta_contracts,
-    _should_replace_vague_store_detail_quickreply,
-    _store_detail_quickreply_from_sources,
-)
 
 class NextAction(str, Enum):
     STOP = "stop"
