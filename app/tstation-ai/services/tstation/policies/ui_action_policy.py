@@ -31,6 +31,11 @@ logger = logging.getLogger(__name__)
 
 
 _VEHICLE_TIRE_SIZE_LOOKUP_INTENT = "vehicle_tire_size_lookup"
+_VEHICLE_SELECTION_CONTRACT_INTENTS = frozenset({
+    _VEHICLE_TIRE_SIZE_LOOKUP_INTENT,
+    "vehicle_resolved_recommendation",
+    "vehicle_based_recommendation_refinement",
+})
 _STOCK_STORE_SEARCH_INTENT = "stock_store_search"
 _QUICK_ORDER_RESERVATION_INTENT = "quick_order_reservation"
 _VEHICLE_SIZE_LOOKUP_ALLOWED_LABELS = frozenset({
@@ -1149,7 +1154,7 @@ def _ui_action_trace_metadata(
         trace_metadata["previous_slots"] = {
             key: value for key, value in previous_slots.items() if value not in (None, "", [])
         }
-    if contract_intent == _VEHICLE_TIRE_SIZE_LOOKUP_INTENT:
+    if contract_intent in _VEHICLE_SELECTION_CONTRACT_INTENTS:
         trace_metadata.update({
             "vehicle_selection_detected": True,
             "selected_car_no": str(raw_action.get("entity_id") or slot_patch.get("car_no") or "").strip() or None,
@@ -1161,8 +1166,8 @@ def _ui_action_trace_metadata(
             ).strip() or None,
             "previous_car_no": str((previous_slots or {}).get("car_no") or ""),
             "previous_tire_size": str((previous_slots or {}).get("tire_size") or ""),
-            "contract_intent_before_router": _VEHICLE_TIRE_SIZE_LOOKUP_INTENT,
-            "final_contract_intent": _VEHICLE_TIRE_SIZE_LOOKUP_INTENT,
+            "contract_intent_before_router": contract_intent,
+            "final_contract_intent": contract_intent,
         })
     return trace_metadata
 
@@ -1201,7 +1206,7 @@ def _build_ui_action_context_from_raw(
     action_type = str(normalized.get("action_type") or "").strip()
     inferred_entity_type = (
         "vehicle"
-        if contract_intent == _VEHICLE_TIRE_SIZE_LOOKUP_INTENT
+        if contract_intent in _VEHICLE_SELECTION_CONTRACT_INTENTS or action_type == "select_vehicle_candidate"
         else "quantity"
         if action_type == "select_quantity"
         else "store"
@@ -1520,7 +1525,7 @@ def resolve_ui_action_context(
         selection_context.get("expected_contract_intent")
     )
     contract_intent = expected_contract_intent or source_intent
-    if contract_intent != _VEHICLE_TIRE_SIZE_LOOKUP_INTENT:
+    if contract_intent not in _VEHICLE_SELECTION_CONTRACT_INTENTS:
         return None
 
     slot_patch_dict = {
@@ -1539,16 +1544,16 @@ def resolve_ui_action_context(
         "previous_car_no": str((previous_slots or {}).get("car_no") or ""),
         "previous_tire_size": str((previous_slots or {}).get("tire_size") or ""),
         "slots_rewritten": False,
-        "contract_intent_before_router": _VEHICLE_TIRE_SIZE_LOOKUP_INTENT,
-        "final_contract_intent": _VEHICLE_TIRE_SIZE_LOOKUP_INTENT,
+        "contract_intent_before_router": contract_intent,
+        "final_contract_intent": contract_intent,
     }
     return UIActionContext(
         action_type="select_vehicle",
         action_name="select_vehicle_candidate",
         selection_source=selection_source,
-        contract_intent=_VEHICLE_TIRE_SIZE_LOOKUP_INTENT,
-        source_intent=source_intent or _VEHICLE_TIRE_SIZE_LOOKUP_INTENT,
-        expected_contract_intent=expected_contract_intent or _VEHICLE_TIRE_SIZE_LOOKUP_INTENT,
+        contract_intent=contract_intent,
+        source_intent=source_intent or contract_intent,
+        expected_contract_intent=expected_contract_intent or contract_intent,
         expected_behavior="conversation_action",
         entity_type="vehicle",
         entity_id=_vehicle_value(selected_vehicle, "carNo", "car_no", "licensePlate") or None,
@@ -2528,7 +2533,10 @@ def is_vehicle_tire_size_lookup_selection(selected_vehicle: Mapping[str, Any] | 
         return False
     source_intent = str(selection_context.get("source_intent") or "").strip()
     expected_contract_intent = str(selection_context.get("expected_contract_intent") or "").strip()
-    return source_intent == _VEHICLE_TIRE_SIZE_LOOKUP_INTENT or expected_contract_intent == _VEHICLE_TIRE_SIZE_LOOKUP_INTENT
+    return (
+        source_intent in _VEHICLE_SELECTION_CONTRACT_INTENTS
+        or expected_contract_intent in _VEHICLE_SELECTION_CONTRACT_INTENTS
+    )
 
 
 def resolve_store_selection_from_history_template(

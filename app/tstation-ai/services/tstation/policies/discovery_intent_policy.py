@@ -1428,10 +1428,20 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             "claim_unsupported_scenario_as_exact",
         )
         metadata["recommendation_expected_tool_args"] = _recommendation_expected_tool_args(args)
-    if entities.get("discovery_followup_action") in {
-        "vehicle_based_recommendation_refinement",
-        "vehicle_resolved_recommendation",
-    }:
+    if entities.get("discovery_followup_action") == "vehicle_resolved_recommendation":
+        metadata = {
+            **metadata,
+            "response_intent": "vehicle_resolved_recommendation",
+            "flow_step": "select_vehicle",
+        }
+        return ToolPlan(
+            allowed_tools=("get_my_cars_tool",),
+            preferred_tool="get_my_cars_tool",
+            tool_args_patch={},
+            forbidden_tools=("get_products_recommendations_tool",),
+            metadata=metadata,
+        )
+    if entities.get("discovery_followup_action") == "vehicle_based_recommendation_refinement":
         allowed_tools = ("get_my_cars_tool", "get_products_recommendations_tool")
         required_slots = ("tire_size",)
         metadata = {**metadata, "response_intent": entities["discovery_followup_action"]}

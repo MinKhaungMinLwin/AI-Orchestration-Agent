@@ -204,6 +204,7 @@ _DISCOVERY_SIZED_PRODUCT_CHIPS = [
 _FORCED_LISTCAR_RESPONSE_SHAPE_KEYS = frozenset({
     "vehicle_information",
     "vehicle_based_recommendation_refinement",
+    "vehicle_resolved_recommendation",
 })
 _EXPLICIT_VEHICLE_LIST_REQUEST_LABELS = frozenset({
     "내 차로 확인",
@@ -3403,7 +3404,7 @@ def _listcar_selection_contract_intent() -> tuple[str, str]:
         return "quick_order_reservation", "quick_order_reservation"
     if pending_intent == "stock" or goal_type == "store_with_stock":
         return "stock_store_search", "stock_store_search"
-    return "vehicle_resolved_recommendation", "product_recommendation"
+    return "vehicle_resolved_recommendation", "vehicle_resolved_recommendation"
 
 def _map_list_car(tool_data_list: list[dict], assistant_text: str) -> dict | None:
     # Maintenance D-day flow guard: when get_maintenance_dday_tool ran in the

@@ -35147,17 +35147,7 @@ class TStationChatServiceV2:
                             last_template_source = "code_mapper"
                             last_assistant_response_source = "code_product_attribute_resolver"
                             event_data = event.get("data", {})
-                    code_events, auto_selected_event = await _auto_continue_selected_vehicle(event)
-                    if event.get("template") == "listCar" and auto_selected_event is not None:
-                        logger.info("[VEHICLE_AUTO_SELECT] replacing listCar with continued vehicle flow")
-                        for code_event in code_events:
-                            yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
-                        event = auto_selected_event
-                        last_template = event.get("template") or last_template
-                        last_template_source = "code_mapper"
-                        last_assistant_response_source = "code_vehicle_auto_select"
-                        event_data = event.get("data", {})
-                    elif _is_oe_replacement_context(recent_user_context_text, user_query, latest_quickreply_tmpl):
+                    if _is_oe_replacement_context(recent_user_context_text, user_query, latest_quickreply_tmpl):
                         event, coercion_allowed = _finalize_coerced_template_event(
                             _build_oe_replacement_guidance_event(
                                 None,

@@ -13405,6 +13405,49 @@ def test_vehicle_selection_ui_action_context_rewrites_trace_and_slots() -> None:
     assert trace_metadata["slots_rewritten"] is True
 
 
+def test_vehicle_recommendation_selection_ui_action_context_uses_vehicle_resolved_contract() -> None:
+    slots = ConversationSlots(car_no="61거1836", tire_size="225/45R17")
+    selected_vehicle = {
+        "car": {"licensePlate": "205소4214"},
+        "meta": {
+            "carNo": "205소4214",
+            "carLncCd": "W049847",
+            "mbrCarRegSeq": "2000002944",
+            "tireSize": "2355519",
+            "tireSizeRe": "2355519",
+            "carType": "SUV",
+        },
+        "selection_context": {
+            "source_intent": "vehicle_resolved_recommendation",
+            "expected_contract_intent": "vehicle_resolved_recommendation",
+        },
+    }
+
+    action_context = resolve_ui_action_context(
+        selected_vehicle=selected_vehicle,
+        selection_source="chip_context",
+        previous_slots={"car_no": slots.car_no, "tire_size": slots.tire_size},
+        slot_patch=_vehicle_selection_slot_values(selected_vehicle),
+    )
+
+    assert action_context is not None
+    assert action_context.contract_intent == "vehicle_resolved_recommendation"
+    assert action_context.slot_patch["car_lnc_cd"] == "W049847"
+    assert action_context.slot_patch["vehicle_type"] == "suv"
+
+    patched_slots, trace_metadata = apply_ui_action_slot_patch(
+        slots,
+        action_context,
+        slot_apply_fn=_apply_vehicle_selection_slot_values,
+    )
+
+    assert patched_slots.car_no == "205소4214"
+    assert patched_slots.tire_size == "235/55R19"
+    assert patched_slots.car_lnc_cd == "W049847"
+    assert patched_slots.vehicle_type == "suv"
+    assert trace_metadata["final_contract_intent"] == "vehicle_resolved_recommendation"
+
+
 def test_prepare_ui_action_state_rewrites_vehicle_selection_before_routing() -> None:
     slots = ConversationSlots(car_no="61거1836", tire_size="225/45R17")
     latest_listcar_tmpl = {
@@ -19106,15 +19149,17 @@ def test_vehicle_resolved_all_weather_recommendation_contract_allows_product_car
 
     assert frame.sub_intent == "vehicle_resolved_recommendation"
     assert frame.entities["discovery_followup_action"] == "vehicle_resolved_recommendation"
-    assert tool_plan.allowed_tools == ("get_my_cars_tool", "get_products_recommendations_tool")
-    assert tool_plan.required_slots == ("tire_size",)
+    assert tool_plan.allowed_tools == ("get_my_cars_tool",)
+    assert tool_plan.preferred_tool == "get_my_cars_tool"
+    assert "get_products_recommendations_tool" in tool_plan.forbidden_tools
+    assert tool_plan.metadata["flow_step"] == "select_vehicle"
     assert decision.metadata["response_shape_key"] == "vehicle_resolved_recommendation"
-    assert "product_card_without_size" not in decision.forbidden_behaviors
-    assert contract.required_slots == ("tire_size",)
-    assert contract.resolvable_required_slots == ("tire_size",)
+    assert decision.template == TemplateName.LIST_CAR
+    assert "product_card_without_vehicle_selection" in decision.forbidden_behaviors
+    assert contract.required_slots == ()
+    assert contract.resolvable_required_slots == ()
     assert contract.blocking_required_slots == ()
     assert not should_guard_required_slots(contract)
-
     violations = response_contract_violations(
         template="product",
         assistant_response_source="code_mapper",
@@ -19133,9 +19178,7 @@ def test_vehicle_resolved_all_weather_recommendation_contract_allows_product_car
     )
 
     violation_types = {violation["type"] for violation in violations}
-    assert "forbidden_template" not in violation_types
-    assert "product_card_without_size" not in str(violations)
-    assert "unexpected_tool_for_contract" not in violation_types
+    assert "forbidden_template" in violation_types or "forbidden_tool_for_contract" in violation_types
 
 
 def test_vehicle_resolved_all_weather_compare_request_still_prioritizes_product_card() -> None:
@@ -19146,9 +19189,9 @@ def test_vehicle_resolved_all_weather_compare_request_still_prioritizes_product_
 
     assert frame.sub_intent == "vehicle_resolved_recommendation"
     assert frame.entities["discovery_followup_action"] == "vehicle_resolved_recommendation"
-    assert tool_plan.allowed_tools == ("get_my_cars_tool", "get_products_recommendations_tool")
-    assert decision.template == TemplateName.PRODUCT
-    assert "product_card_without_size" not in decision.forbidden_behaviors
+    assert tool_plan.allowed_tools == ("get_my_cars_tool",)
+    assert decision.template == TemplateName.LIST_CAR
+    assert "product_card_without_vehicle_selection" in decision.forbidden_behaviors
 
 
 def test_unsized_all_weather_recommendation_still_blocks_product_card() -> None:

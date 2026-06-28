@@ -327,11 +327,20 @@ def decide_discovery_response(frame: IntentFrame) -> ResponseDecision:
         )
 
     if frame.intent == "product_recommendation" and not tire_size:
-        if entities.get("discovery_followup_action") in {
-            "vehicle_based_recommendation_refinement",
-            "vehicle_resolved_recommendation",
-        }:
-            response_shape_key = str(entities.get("discovery_followup_action") or "vehicle_resolved_recommendation")
+        if entities.get("discovery_followup_action") == "vehicle_resolved_recommendation":
+            return ResponseDecision(
+                response_shape=ResponseShape.LIST,
+                template=TemplateName.LIST_CAR,
+                required_slots=(),
+                forbidden_behaviors=("product_card_without_vehicle_selection",),
+                assistant_guidance=(
+                    "등록 차량 목록을 listCar로 보여주고 사용자가 차량을 직접 선택할 때까지 대기한다. "
+                    "선택 전에는 추천 도구를 실행하지 않는다."
+                ),
+                metadata=_metadata(frame, response_shape_key="vehicle_resolved_recommendation", flow_step="select_vehicle"),
+            )
+        if entities.get("discovery_followup_action") == "vehicle_based_recommendation_refinement":
+            response_shape_key = str(entities.get("discovery_followup_action") or "vehicle_based_recommendation_refinement")
             return ResponseDecision(
                 response_shape=ResponseShape.CARD,
                 template=TemplateName.PRODUCT,

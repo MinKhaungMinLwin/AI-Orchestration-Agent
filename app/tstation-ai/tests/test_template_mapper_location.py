@@ -2226,6 +2226,10 @@ def test_listcar_kept_when_possessive_model_matches_registered_car() -> None:
 
     assert result is not None
     assert result["template"] == "listCar"
+    assert result["data"]["metadata"][0]["sourceIntent"] == "vehicle_resolved_recommendation"
+    assert result["data"]["metadata"][0]["source_intent"] == "vehicle_resolved_recommendation"
+    assert result["data"]["metadata"][0]["expectedContractIntent"] == "vehicle_resolved_recommendation"
+    assert result["data"]["metadata"][0]["expected_contract_intent"] == "vehicle_resolved_recommendation"
 
 
 def test_listcar_kept_for_vehicle_size_retry_request() -> None:
