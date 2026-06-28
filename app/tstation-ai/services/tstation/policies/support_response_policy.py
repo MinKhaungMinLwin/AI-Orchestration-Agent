@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any, Mapping
+
+from langchain_core.messages import HumanMessage
 
 from services.tstation.common.cta_urls import CTAUrls
 from services.tstation.policies.policy_text_matchers import is_general_card_cancel_timing_policy_query
@@ -83,6 +86,19 @@ _SUPPORT_FAQ_SOURCE_GROUNDED_ALLOWLIST = frozenset({
     "tire_manufacture_date_policy",
     "tire_quality_warranty_policy",
 })
+_SUPPORT_FAQ_LLM_GROUNDED_ALLOWLIST = frozenset(_SUPPORT_FAQ_SOURCE_GROUNDED_ALLOWLIST | {
+    "assurance_service_policy",
+    "payment_error_troubleshooting",
+})
+_SUPPORT_FAQ_LLM_TOP_K_BY_INTENT: dict[str, int] = {
+    "general_cancel_fee_policy": 3,
+    "general_card_cancel_timing_policy": 3,
+    "reservation_policy_guidance": 3,
+    "tire_manufacture_date_policy": 3,
+    "tire_quality_warranty_policy": 3,
+    "assurance_service_policy": 3,
+    "payment_error_troubleshooting": 3,
+}
 _ALLOWED_CATEGORY_NAMES_BY_POLICY_GROUP: dict[str, tuple[tuple[str, str], ...]] = {
     _RESERVATION_INSTALLATION_POLICY: (("배송/장착", "장착"), ("상품/서비스", "서비스")),
     _PAYMENT_REFUND_POLICY: (("주문/결제", "결제"),),
@@ -195,9 +211,7 @@ def _support_faq_candidate_topic(
 
 
 def _support_faq_question_anchor_allowed(intent: str, text: str) -> bool:
-    if intent == "general_card_cancel_timing_policy":
-        return bool(re.search(r"카드|환불|승인취소|승인\s*취소|반영|영업일|언제", text, re.IGNORECASE))
-    return True
+    return bool(re.search(r"카드|환불|승인취소|승인\s*취소|반영|영업일|언제", text, re.IGNORECASE))
 
 
 def _support_faq_split_sentences(text: str) -> list[str]:
@@ -278,6 +292,136 @@ def _compact_support_faq_answer(
         )
     ]
     return "\n".join(kept[:3]).strip()
+
+
+def _support_faq_ranked_candidates(candidates: list[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    return [
+        candidate
+        for _, candidate in sorted(
+            enumerate(candidates),
+            key=lambda item: (_support_faq_candidate_score(item[1]) is not None, _support_faq_candidate_score(item[1]) or 0.0, -item[0]),
+            reverse=True,
+        )
+    ]
+
+
+def _support_faq_grounded_competing_candidate(
+    *,
+    intent: str,
+    user_text: str,
+    top_candidate: Mapping[str, Any],
+    tool_result: Mapping[str, Any] | None,
+) -> Mapping[str, Any] | None:
+    broader_candidates = _support_faq_ranked_candidates(_support_faq_candidates(tool_result))
+    for candidate in broader_candidates:
+        if candidate is top_candidate:
+            continue
+        if not _support_faq_question_anchor_allowed(intent, user_text) and _support_faq_candidate_matches_fact_type(
+            "card_cancel_timing", candidate
+        ):
+            continue
+        return candidate
+    return None
+
+
+def _support_faq_grounded_prompt(
+    *,
+    intent: str,
+    user_text: str,
+    policy_group: str,
+    fact_type: str,
+    candidates: list[Mapping[str, Any]],
+) -> str:
+    candidate_blocks: list[str] = []
+    for rank, candidate in enumerate(candidates, start=1):
+        lv1, lv2, _, _ = _support_faq_candidate_categories(candidate)
+        payload = {
+            "rank": rank,
+            "score": _support_faq_candidate_score(candidate),
+            "category_lv1": lv1 or None,
+            "category_lv2": lv2 or None,
+            "question": _normalize_support_faq_text(candidate.get("question") or ""),
+            "answer": _normalize_support_faq_text(
+                candidate.get("answer")
+                or candidate.get("pc_ans_cont")
+                or candidate.get("content")
+                or candidate.get("body")
+                or ""
+            ),
+        }
+        candidate_blocks.append(json.dumps(payload, ensure_ascii=False))
+    candidates_text = "\n".join(candidate_blocks)
+    return (
+        "당신은 T'Station FAQ 답변 보조기입니다.\n"
+        "사용자 질문과 FAQ 후보만 보고 2~3문장 한국어 답변을 작성하세요.\n"
+        "규칙:\n"
+        "- FAQ 후보 question/answer에 없는 사실, 숫자, 기간, 금액은 절대 추가하지 마세요.\n"
+        "- 사용자 질문과 직접 관련 없는 후보 내용은 제외하세요.\n"
+        "- 카드 승인취소/환불 반영 기간은 사용자가 카드/환불/승인취소/반영 시점을 직접 물은 경우에만 포함하세요.\n"
+        "- 취소 수수료 질문에는 환불 반영 기간을 넣지 마세요.\n"
+        "- 제조일자/DOT 내용은 제조일자 질문에만 사용하세요.\n"
+        "- 답변 안에 'FAQ 기준', 'RAG 기준', '후보', 'rank', 'score' 같은 표현을 쓰지 마세요.\n"
+        "- 근거가 부족하면 확인이 필요하다고 짧게 말하세요.\n"
+        f"- policy_group={policy_group}, fact_type={fact_type}, intent={intent}\n\n"
+        f"사용자 질문:\n{_normalize_support_faq_text(user_text)}\n\n"
+        f"FAQ 후보:\n{candidates_text}\n\n"
+        "출력은 답변 본문만 작성하세요."
+    )
+
+
+def _invoke_support_faq_grounded_llm(prompt: str) -> str:
+    from services.tstation.agents.router import DECISION_LLM
+
+    result = DECISION_LLM.invoke([HumanMessage(content=prompt)])
+    content = result.content if hasattr(result, "content") else result
+    return _normalize_support_faq_text(content)
+
+
+def _support_faq_numeric_facts(text: str) -> set[str]:
+    normalized = re.sub(r"\s+", "", str(text or "")).lower().replace(",", "")
+    patterns = [
+        r"\d+(?:[~-]\d+)?영업일",
+        r"\d+(?:[~-]\d+)?일",
+        r"\d+(?:[~-]\d+)?개월",
+        r"\d+년",
+        r"\d+km",
+        r"\d+만?원",
+        r"\d+개",
+        r"\d+짝",
+        r"\d+본",
+        r"\d+(?:[~-]\d+)?",
+    ]
+    found: set[str] = set()
+    for pattern in patterns:
+        found.update(re.findall(pattern, normalized, re.IGNORECASE))
+    return found
+
+
+def _support_faq_post_check_failure(
+    *,
+    intent: str,
+    user_text: str,
+    answer: str,
+    source_candidates: list[Mapping[str, Any]],
+) -> str | None:
+    normalized_answer = _normalize_support_faq_text(answer)
+    if not normalized_answer:
+        return "empty_answer"
+    if re.search(r"faq\s*기준|rag\s*기준|후보|rank|score", normalized_answer, re.IGNORECASE):
+        return "source_reference_exposed"
+    if re.search(r"카드|환불|승인\s*취소|반영|영업일", normalized_answer, re.IGNORECASE) and not _support_faq_question_anchor_allowed(
+        intent, user_text
+    ):
+        return "card_refund_anchor_missing"
+    if intent == "tire_quality_warranty_policy" and re.search(r"제조일자|dot", normalized_answer, re.IGNORECASE):
+        return "manufacture_drift"
+
+    source_text = "\n".join(_support_faq_candidate_text(candidate) for candidate in source_candidates)
+    allowed_numeric_facts = _support_faq_numeric_facts(source_text)
+    answer_numeric_facts = _support_faq_numeric_facts(normalized_answer)
+    if any(fact not in allowed_numeric_facts for fact in answer_numeric_facts):
+        return "unsupported_numeric_fact"
+    return None
 
 
 def resolve_support_faq_policy_context(intent: str, user_text: str) -> dict[str, Any] | None:
@@ -758,15 +902,11 @@ def build_support_faq_source_grounded_reply(
     if min_score is not None and top_score is not None and top_score < min_score:
         return None
 
-    broader_candidates = _support_faq_candidates(tool_result)
-    broader_ranked = sorted(
-        enumerate(broader_candidates),
-        key=lambda item: (_support_faq_candidate_score(item[1]) is not None, _support_faq_candidate_score(item[1]) or 0.0, -item[0]),
-        reverse=True,
-    )
-    competing_candidate = next(
-        (candidate for _, candidate in broader_ranked if candidate is not top_candidate),
-        None,
+    competing_candidate = _support_faq_grounded_competing_candidate(
+        intent=intent,
+        user_text=user_text,
+        top_candidate=top_candidate,
+        tool_result=tool_result,
     )
     if competing_candidate is not None:
         second_candidate = competing_candidate
@@ -810,6 +950,106 @@ def build_support_faq_source_grounded_reply(
             "excludedFaqCount": len(excluded_candidates),
             "factExtractionApplied": False,
             "topFaqScore": top_score,
+            "topFaqCategory": {
+                "categoryLv1": _support_faq_candidate_categories(top_candidate)[0] or None,
+                "categoryLv2": _support_faq_candidate_categories(top_candidate)[1] or None,
+            },
+        },
+    }
+
+
+def build_support_faq_llm_grounded_reply(
+    *,
+    intent: str,
+    user_text: str,
+    tool_result: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    if intent not in _SUPPORT_FAQ_LLM_GROUNDED_ALLOWLIST:
+        return None
+    resolution = resolve_support_faq_policy_context(intent, user_text)
+    if not resolution or resolution.get("needs_clarification"):
+        return None
+
+    policy_group = str(resolution.get("policy_group") or "").strip()
+    fact_type = str(resolution.get("fact_type") or "").strip()
+    if not policy_group or not fact_type:
+        return None
+
+    filtered, excluded_candidates = _filter_support_faq_candidates(policy_group, fact_type, tool_result)
+    if not filtered:
+        return None
+
+    ranked = _support_faq_ranked_candidates(filtered)
+    top_candidate = ranked[0]
+    top_score = _support_faq_candidate_score(top_candidate)
+    min_score = _SUPPORT_FAQ_SOURCE_MIN_SCORE_BY_INTENT.get(intent)
+    if min_score is not None and top_score is not None and top_score < min_score:
+        return None
+
+    competing_candidate = _support_faq_grounded_competing_candidate(
+        intent=intent,
+        user_text=user_text,
+        top_candidate=top_candidate,
+        tool_result=tool_result,
+    )
+    if competing_candidate is not None:
+        second_score = _support_faq_candidate_score(competing_candidate) or 0.0
+        top_topic = _support_faq_candidate_topic(
+            intent=intent,
+            policy_group=policy_group,
+            fact_type=fact_type,
+            candidate=top_candidate,
+        )
+        second_topic = _support_faq_candidate_topic(
+            intent=intent,
+            policy_group=policy_group,
+            fact_type=fact_type,
+            candidate=competing_candidate,
+        )
+        required_gap = _SUPPORT_FAQ_SOURCE_SCORE_GAP_BY_INTENT.get(intent, 0.0)
+        if top_topic and second_topic and top_topic != second_topic and (top_score or 0.0) - second_score < required_gap:
+            return None
+
+    top_k = _SUPPORT_FAQ_LLM_TOP_K_BY_INTENT.get(intent, 3)
+    prompt = _support_faq_grounded_prompt(
+        intent=intent,
+        user_text=user_text,
+        policy_group=policy_group,
+        fact_type=fact_type,
+        candidates=ranked[:top_k],
+    )
+    try:
+        assistant_response = _invoke_support_faq_grounded_llm(prompt)
+    except Exception:
+        return None
+
+    if not assistant_response:
+        return None
+
+    failure_reason = _support_faq_post_check_failure(
+        intent=intent,
+        user_text=user_text,
+        answer=assistant_response,
+        source_candidates=ranked[:top_k],
+    )
+    if failure_reason is not None:
+        return None
+
+    return {
+        "assistant_response": assistant_response,
+        "quick_replies": _support_faq_reply_ctas(policy_group, fact_type),
+        "metadata": {
+            "policyGroup": policy_group,
+            "factType": fact_type,
+            "clarificationNeeded": False,
+            "safeFallbackUsed": False,
+            "faqLlmGroundedReplyUsed": True,
+            "sourceGroundedReplyUsed": False,
+            "filteredFaqCount": len(filtered),
+            "excludedFaqCount": len(excluded_candidates),
+            "factExtractionApplied": False,
+            "topFaqScore": top_score,
+            "llmGroundedCandidateCount": min(len(ranked), top_k),
             "topFaqCategory": {
                 "categoryLv1": _support_faq_candidate_categories(top_candidate)[0] or None,
                 "categoryLv2": _support_faq_candidate_categories(top_candidate)[1] or None,

@@ -386,9 +386,11 @@ from services.tstation.policies.resolved_context import (
     canonical_context_from_tool_boundary,
 )
 from services.tstation.policies import schedule_tool_gate
+from services.tstation.policies import support_response_policy as support_response_policy_module
 from services.tstation.policies.transaction_intent_policy import build_transaction_intent_frame, plan_transaction_tools
 from services.tstation.policies.transaction_response_policy import decide_transaction_response
 from services.tstation.policies.support_response_policy import (
+    build_support_faq_llm_grounded_reply,
     build_support_faq_source_grounded_reply,
     build_support_faq_policy_reply,
     decide_support_response,
@@ -7557,6 +7559,34 @@ def test_enrich_messages_with_template_data_skips_blocked_contract_guard_templat
             },
         }
     ) is None
+
+
+def test_enrich_messages_with_template_data_skips_support_policy_quickreply_template() -> None:
+    messages = [{"role": "assistant", "content": "예약 취소 비용은 진행 상태에 따라 달라질 수 있어요."}]
+
+    enriched = _enrich_messages_with_template_data(
+        messages,
+        session_id="session",
+        assistant_template_messages=[
+            {
+                "role": "assistant",
+                "content": "예약 취소 비용은 진행 상태에 따라 달라질 수 있어요.",
+                "template_data": {
+                    "template": "quickReply",
+                    "assistant_response_source": "code_general_cancel_fee_policy",
+                    "data": {
+                        "assistantResponse": "예약 취소 비용은 진행 상태에 따라 달라질 수 있어요.",
+                        "metadata": {
+                            "policyGroup": "reservation_installation_policy",
+                            "factType": "mixed_cancel_fee_generalized",
+                        },
+                    },
+                },
+            }
+        ],
+    )
+
+    assert "[이전 선택된 상품 데이터]" not in enriched[0]["content"]
 
 
 def test_recent_product_set_ranking_response_metadata_is_canonicalized() -> None:
@@ -29438,6 +29468,81 @@ def test_support_faq_source_grounded_reply_uses_top1_and_drops_card_sentence_wit
     assert "타이어 개당 1만 원" in response
     assert "카드 환불" not in response
     assert reply["metadata"]["sourceGroundedReplyUsed"] is True
+
+
+def test_support_faq_llm_grounded_reply_uses_top1_source_scope_without_card_timing_anchor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tool_result = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "question": "온라인몰 결제 후 예약 취소",
+                    "answer": (
+                        "온라인몰에서 결제까지 완료된 주문은 배송 현황에 따라 타이어 개당 1만 원 취소 수수료가 발생할 수 있습니다. "
+                        "결제 취소 후 카드 환불 반영은 보통 1~3영업일 정도 소요될 수 있습니다."
+                    ),
+                    "score": 0.31,
+                    "metadata": {"category_lv1": "주문/결제", "category_lv2": "주문"},
+                },
+                {
+                    "question": "카드 환불 시점",
+                    "answer": "카드 환불은 보통 1~3영업일이 소요될 수 있습니다.",
+                    "score": 0.29,
+                    "metadata": {"category_lv1": "주문/결제", "category_lv2": "결제"},
+                },
+            ]
+        },
+    }
+    monkeypatch.setattr(
+        support_response_policy_module,
+        "_invoke_support_faq_grounded_llm",
+        lambda prompt: "온라인몰에서 결제까지 완료된 주문은 배송 현황에 따라 타이어 개당 1만 원 취소 수수료가 발생할 수 있어요.",
+    )
+
+    reply = build_support_faq_llm_grounded_reply(
+        intent="reservation_policy_guidance",
+        user_text="온라인에서 결제후에 매장 예약 취소하면 위약금 있어?",
+        tool_result=tool_result,
+    )
+
+    assert reply is not None
+    assert "타이어 개당 1만 원" in reply["assistant_response"]
+    assert "카드 환불" not in reply["assistant_response"]
+    assert reply["metadata"]["faqLlmGroundedReplyUsed"] is True
+    assert reply["metadata"]["factExtractionApplied"] is False
+
+
+def test_support_faq_llm_grounded_reply_blocks_unsupported_numeric_fact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tool_result = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "question": "카드 승인취소 반영 기간",
+                    "answer": "카드 승인취소 및 환불 반영은 카드사와 결제수단에 따라 다르며 영업일 기준 1~3일이 소요될 수 있습니다.",
+                    "score": 0.33,
+                    "metadata": {"category_lv1": "주문/결제", "category_lv2": "결제"},
+                }
+            ]
+        },
+    }
+    monkeypatch.setattr(
+        support_response_policy_module,
+        "_invoke_support_faq_grounded_llm",
+        lambda prompt: "카드 승인취소 반영은 영업일 기준 7일이 걸릴 수 있어요.",
+    )
+
+    reply = build_support_faq_llm_grounded_reply(
+        intent="general_card_cancel_timing_policy",
+        user_text="카드 승인취소는 언제 반영돼?",
+        tool_result=tool_result,
+    )
+
+    assert reply is None
 
 
 def test_support_faq_source_grounded_reply_allows_card_refund_sentence_for_card_anchor() -> None:
