@@ -19255,6 +19255,151 @@ def test_vehicle_based_recommendation_refinement_contract_allows_vehicle_lookup_
     assert not should_guard_required_slots(contract)
 
 
+def test_followup_vehicle_pick_promotes_vehicle_based_recommendation_refinement_contract() -> None:
+    recommendation_context = RecommendationContext(
+        scenario="all_weather",
+        tool_args_patch={
+            "rcmd_type": "all_weather",
+            "season_nm": "올웨더",
+            "brand_cd": "HK",
+            "allow_cross_brand_fill": False,
+        },
+    )
+    patch, decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        last_user_text="61거1836",
+        context_text=(
+            "내 차 기준으로 한국타이어 올웨더 상품 추천해줘\n"
+            '{"type":"data","template":"listCar","data":{"metadata":[{"carNo":"61거1836","tireSize":"2254517","carLncCd":"W036269"}]}}'
+        ),
+        tire_size="225/45R17",
+        recommendation_context=recommendation_context,
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY],
+            execution_plan=["discovery:recommendation_by_vehicle_and_scenario"],
+            candidate_reference={"type": "vehicle", "label": "61거1836"},
+            continue_flow=True,
+            new_intent=False,
+            recommendation_scenario="all_weather",
+        ),
+    )
+
+    assert patch["discovery_followup_action"] == "vehicle_based_recommendation_refinement"
+    assert patch["tire_size"] == "225/45R17"
+    assert patch["rcmd_type"] == "all_weather"
+    assert patch["season_nm"] == "올웨더"
+    assert patch["brand_cd"] == "HK"
+    assert patch["allow_cross_brand_fill"] is False
+    assert decision is not None
+    assert decision.template == TemplateName.PRODUCT
+    assert decision.metadata["response_shape_key"] == "vehicle_based_recommendation_refinement"
+
+    frame = build_discovery_intent_frame(
+        "61거1836",
+        known_slots={
+            "tire_size": "225/45R17",
+            "recommendation_context": recommendation_context.to_policy_dict(),
+            "recommendation_scenario": "all_weather",
+            "discovery_followup_action": patch["discovery_followup_action"],
+        },
+    )
+    tool_plan = plan_discovery_tools(frame)
+    contract = build_turn_contract(
+        user_text="61거1836",
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=decision,
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY],
+            execution_plan=["discovery:recommendation_by_vehicle_and_scenario"],
+            candidate_reference={"type": "vehicle", "label": "61거1836"},
+            continue_flow=True,
+            new_intent=False,
+            recommendation_scenario="all_weather",
+        ),
+    )
+
+    assert frame.sub_intent == "vehicle_based_recommendation_refinement"
+    assert tool_plan.allowed_tools == ("get_my_cars_tool", "get_products_recommendations_tool")
+    assert contract.sub_intent == "vehicle_based_recommendation_refinement"
+
+
+def test_followup_vehicle_pick_bridge_does_not_promote_without_recommendation_context() -> None:
+    patch, decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        last_user_text="61거1836",
+        context_text='{"type":"data","template":"listCar","data":{"metadata":[{"carNo":"61거1836","tireSize":"2254517"}]}}',
+        tire_size="225/45R17",
+        recommendation_context=None,
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY],
+            execution_plan=["discovery:recommendation_by_vehicle_and_scenario"],
+            candidate_reference={"type": "vehicle", "label": "61거1836"},
+            continue_flow=True,
+            new_intent=False,
+            recommendation_scenario="none",
+        ),
+    )
+
+    assert "discovery_followup_action" not in patch
+    assert decision is not None
+    assert decision.metadata["response_shape_key"] != "vehicle_based_recommendation_refinement"
+
+
+def test_followup_vehicle_pick_bridge_does_not_promote_transaction_priority() -> None:
+    recommendation_context = RecommendationContext(
+        scenario="all_weather",
+        tool_args_patch={"rcmd_type": "all_weather", "season_nm": "올웨더", "brand_cd": "HK"},
+    )
+    patch, decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        last_user_text="61거1836",
+        context_text='{"type":"data","template":"listCar","data":{"metadata":[{"carNo":"61거1836","tireSize":"2254517"}]}}',
+        tire_size="225/45R17",
+        recommendation_context=recommendation_context,
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY],
+            execution_plan=["discovery:recommendation_by_vehicle_and_scenario", "transaction:continue_purchase"],
+            candidate_reference={"type": "vehicle", "label": "61거1836"},
+            continue_flow=True,
+            new_intent=False,
+            recommendation_scenario="all_weather",
+        ),
+        pending_intent="order",
+        goal_type="place_order",
+    )
+
+    assert "discovery_followup_action" not in patch
+    assert decision is not None
+    assert decision.metadata["response_shape_key"] != "vehicle_based_recommendation_refinement"
+
+
+def test_followup_vehicle_pick_bridge_does_not_promote_without_recovered_tire_size() -> None:
+    recommendation_context = RecommendationContext(
+        scenario="all_weather",
+        tool_args_patch={"rcmd_type": "all_weather", "season_nm": "올웨더", "brand_cd": "HK"},
+    )
+    patch, decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        last_user_text="99가9999",
+        context_text='{"type":"data","template":"listCar","data":{"metadata":[{"carNo":"61거1836"}]}}',
+        tire_size=None,
+        recommendation_context=recommendation_context,
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY],
+            execution_plan=["discovery:recommendation_by_vehicle_and_scenario"],
+            candidate_reference={"type": "vehicle", "label": "99가9999"},
+            continue_flow=True,
+            new_intent=False,
+            recommendation_scenario="all_weather",
+        ),
+    )
+
+    assert "discovery_followup_action" not in patch
+    assert decision is not None
+    assert decision.metadata["response_shape_key"] != "vehicle_based_recommendation_refinement"
+
+
 def test_vehicle_resolved_all_weather_recommendation_contract_allows_product_card() -> None:
     user_text = "내 차에 적합한 올웨더 상품 추천해줘. 그리고 추천되는 상품들 장단점 비교해주고"
     frame = build_discovery_intent_frame(user_text)
@@ -23071,6 +23216,10 @@ def _routing_result(
     referred_object_status: str = "resolved",
     referred_object_type: str = "none",
     needs_clarification: bool = False,
+    candidate_reference: dict[str, str] | None = None,
+    continue_flow: bool = False,
+    new_intent: bool = True,
+    recommendation_scenario: str = "none",
 ) -> MultiAgentDomain:
     return MultiAgentDomain(
         reason="test",
@@ -23093,6 +23242,10 @@ def _routing_result(
         referred_object_status=referred_object_status,
         referred_object_type=referred_object_type,
         needs_clarification=needs_clarification,
+        candidate_reference=candidate_reference or {},
+        continue_flow=continue_flow,
+        new_intent=new_intent,
+        recommendation_scenario=recommendation_scenario,
         planner_confidence=0.91,
         agent_prompt_profile=agent_prompt_profile,
     )
@@ -29195,7 +29348,7 @@ def test_support_faq_policy_reply_builds_online_order_cancel_guidance() -> None:
     assert reply["metadata"]["policyGroup"] == "purchase_order_policy"
     assert reply["metadata"]["factType"] == "online_order_cancel_fee"
     assert reply["metadata"]["facts"]["fee_amount"] == "타이어 1개당 1만 원"
-    assert "타이어 1개당 1만 원 기준 안내가 우선" in reply["assistant_response"]
+    assert "타이어 1개당 1만 원 기준 안내가 확인돼요." in reply["assistant_response"]
 
 
 def test_support_faq_policy_event_uses_bucketed_store_change_reply() -> None:

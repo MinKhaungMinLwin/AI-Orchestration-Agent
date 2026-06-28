@@ -19262,6 +19262,63 @@ def _has_transaction_followup_priority(
     return any(str(item).strip().startswith("transaction:") for item in execution_plan)
 
 
+def _vehicle_followup_recommendation_bridge_patch(
+    *,
+    routing_result: Any | None,
+    recommendation_context: Mapping[str, Any] | None,
+    tire_size: str | None,
+    tire_size_front: str | None,
+    tire_size_rear: str | None,
+    transaction_followup_priority: bool,
+) -> dict[str, Any]:
+    if routing_result is None or transaction_followup_priority:
+        return {}
+    if not bool(getattr(routing_result, "continue_flow", False)):
+        return {}
+    candidate_reference = _candidate_reference_to_dict(getattr(routing_result, "candidate_reference", None), compact=True)
+    if str(candidate_reference.get("type") or "").strip() != "vehicle":
+        return {}
+    execution_plan = tuple(str(item or "").strip().lower() for item in (getattr(routing_result, "execution_plan", None) or ()))
+    if not any("recommendation_by_vehicle_and_scenario" in item for item in execution_plan):
+        return {}
+
+    normalized_recommendation_context = _recommendation_context_policy_dict(recommendation_context)
+    recommendation_scenario = str(
+        normalized_recommendation_context.get("recommendation_scenario")
+        or normalized_recommendation_context.get("scenario")
+        or getattr(routing_result, "recommendation_scenario", "")
+        or ""
+    ).strip()
+    if recommendation_scenario == "none":
+        recommendation_scenario = ""
+    if not normalized_recommendation_context and not recommendation_scenario:
+        return {}
+
+    recovered_tire_size = (
+        normalize_tire_size(str(tire_size or ""))
+        or normalize_tire_size(str(tire_size_front or ""))
+        or normalize_tire_size(str(tire_size_rear or ""))
+    )
+    if not recovered_tire_size:
+        return {}
+
+    patch: dict[str, Any] = {
+        "discovery_followup_action": "vehicle_based_recommendation_refinement",
+        "tire_size": recovered_tire_size,
+    }
+    if recommendation_scenario:
+        patch["recommendation_scenario"] = recommendation_scenario
+
+    for source_key in ("tool_args_patch", "expected_tool_args"):
+        source_patch = normalized_recommendation_context.get(source_key)
+        if not isinstance(source_patch, Mapping):
+            continue
+        for key, value in source_patch.items():
+            if value not in (None, "", [], {}):
+                patch.setdefault(str(key), value)
+    return patch
+
+
 def _is_explicit_product_attribute_query(text: str, discovery_frame: Any | None = None) -> bool:
     if discovery_frame is not None:
         if discovery_frame.sub_intent in {
@@ -19543,8 +19600,20 @@ def _build_discovery_policy_context(
                 known_slots["comparison_followup_intent"] = recovered_followup_intent
                 known_slots["comparison_metric"] = recovered_metric
         vehicle_refinement_patch = _vehicle_based_recommendation_refinement_patch(last_user_text, context_text)
+        vehicle_followup_bridge_patch = _vehicle_followup_recommendation_bridge_patch(
+            routing_result=routing_result,
+            recommendation_context=recommendation_context,
+            tire_size=tire_size,
+            tire_size_front=tire_size_front,
+            tire_size_rear=tire_size_rear,
+            transaction_followup_priority=transaction_followup_priority,
+        )
         if vehicle_refinement_patch:
             known_slots["discovery_followup_action"] = "vehicle_based_recommendation_refinement"
+        elif vehicle_followup_bridge_patch:
+            known_slots["discovery_followup_action"] = "vehicle_based_recommendation_refinement"
+            if vehicle_followup_bridge_patch.get("recommendation_scenario"):
+                known_slots["recommendation_scenario"] = vehicle_followup_bridge_patch["recommendation_scenario"]
         supported_followup_override = _bare_product_search_followup_override(
             last_user_text,
             context_text=context_text,
@@ -19567,7 +19636,18 @@ def _build_discovery_policy_context(
             last_user_text,
             known_slots=known_slots,
         )
-        if vehicle_refinement_patch and discovery_frame.intent == "product_recommendation":
+        if vehicle_followup_bridge_patch:
+            entities = dict(discovery_frame.entities)
+            entities["discovery_followup_action"] = "vehicle_based_recommendation_refinement"
+            if known_slots.get("recommendation_scenario"):
+                entities.setdefault("recommendation_scenario", known_slots["recommendation_scenario"])
+            discovery_frame = replace(
+                discovery_frame,
+                intent="product_recommendation",
+                sub_intent="vehicle_based_recommendation_refinement",
+                entities=entities,
+            )
+        elif vehicle_refinement_patch and discovery_frame.intent == "product_recommendation":
             entities = dict(discovery_frame.entities)
             entities["discovery_followup_action"] = "vehicle_based_recommendation_refinement"
             discovery_frame = replace(
@@ -19685,6 +19765,20 @@ def _build_discovery_policy_context(
                 )
         discovery_tool_plan = plan_discovery_tools(discovery_frame)
         discovery_response_decision = decide_discovery_response(discovery_frame)
+        if (
+            vehicle_followup_bridge_patch
+            and discovery_tool_plan.preferred_tool == "get_products_recommendations_tool"
+            and discovery_response_decision.template != TemplateName.PRODUCT
+        ):
+            discovery_response_decision = replace(
+                discovery_response_decision,
+                response_shape=ResponseShape.CARD,
+                template=TemplateName.PRODUCT,
+                metadata={
+                    **dict(discovery_response_decision.metadata or {}),
+                    "response_shape_key": "vehicle_based_recommendation_refinement",
+                },
+            )
         if discovery_tool_plan.preferred_tool == "get_products_recommendations_tool":
             discovery_tool_patch = dict(discovery_tool_plan.tool_args_patch)
         elif discovery_tool_plan.preferred_tool == "search_product_tool" and discovery_tool_plan.tool_args_patch.get(
@@ -19695,6 +19789,10 @@ def _build_discovery_policy_context(
             discovery_tool_patch = {}
         if vehicle_refinement_patch:
             for key, value in vehicle_refinement_patch.items():
+                if value not in (None, ""):
+                    discovery_tool_patch.setdefault(key, value)
+        if vehicle_followup_bridge_patch:
+            for key, value in vehicle_followup_bridge_patch.items():
                 if value not in (None, ""):
                     discovery_tool_patch.setdefault(key, value)
         if effective_supported_objective == "sound_absorber":
