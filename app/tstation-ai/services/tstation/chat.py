@@ -1517,6 +1517,43 @@ def _current_turn_action_mode(
     return "info_only"
 
 
+def _align_domains_to_turn_contract(
+    *,
+    domains: list[MultiAgentDomain.Domain],
+    routing_result: MultiAgentDomain | None,
+    turn_contract: TurnContract | None,
+    action_mode: str,
+) -> list[MultiAgentDomain.Domain]:
+    if turn_contract is None:
+        return domains
+    if action_mode != "support_policy_answer":
+        return domains
+    if str(turn_contract.domain or "") != MultiAgentDomain.Domain.SUPPORT.value:
+        return domains
+    contract_intent = str(turn_contract.sub_intent or turn_contract.intent or "").strip()
+    if contract_intent not in _CURRENT_TURN_SUPPORT_POLICY_ACTION_INTENTS:
+        return domains
+
+    support_domains = [MultiAgentDomain.Domain.SUPPORT]
+    if domains == support_domains:
+        return domains
+
+    if routing_result is not None:
+        if not routing_result.original_router_domains:
+            routing_result.original_router_domains = list(domains)
+        if not routing_result.original_router_execution_plan:
+            routing_result.original_router_execution_plan = list(getattr(routing_result, "execution_plan", []) or [])
+        routing_result.domains = support_domains
+        routing_result.execution_plan = [f"support:{contract_intent}"]
+        routing_result.agent_prompt_profile = AgentPromptProfile.FULL
+    logger.info(
+        "[TURN_CONTRACT] aligned execution domains to support policy contract: intent=%s previous_domains=%s",
+        contract_intent,
+        [domain.value for domain in domains],
+    )
+    return support_domains
+
+
 def _context_state_for_action(
     *,
     action_mode: str,
@@ -28255,6 +28292,12 @@ class TStationChatServiceV2:
                     _turn_contract_span.update(output=turn_contract.to_dict())
         except Exception:
             logger.exception("[TURN_CONTRACT] Failed to build turn contract")
+        domains = _align_domains_to_turn_contract(
+            domains=domains,
+            routing_result=routing_result,
+            turn_contract=turn_contract,
+            action_mode=action_mode,
+        )
         current_runflat_comparison.set(bool(
             re.search(r"런\s*플랫|런플랫|run[-\s]?flat|runflat", last_user_text, re.IGNORECASE)
             and re.search(r"가격|차이|비싸|얼마|비용|추가|더\s*내", last_user_text, re.IGNORECASE)

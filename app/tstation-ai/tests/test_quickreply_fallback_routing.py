@@ -154,6 +154,7 @@ from services.tstation.chat import (
     _build_missing_order_product_reselection_event,
     _allows_transaction_action_mode,
     _allows_outer_tool_slot_staging,
+    _align_domains_to_turn_contract,
     _context_state_for_action,
     _current_turn_action_mode,
     _is_structured_store_selection_turn,
@@ -10739,6 +10740,41 @@ def test_direct_code_fast_path_event_records_allowed_and_blocked_tools_in_metada
         "get_order_status_tool",
         "quick_order_tool",
     ]
+
+
+def test_support_policy_contract_aligns_transaction_route_to_support_agent() -> None:
+    routing_result = MultiAgentDomain(
+        reason="router drifted booking-window policy to transaction schedule",
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        execution_plan=["transaction:store_schedule"],
+        user_behavior="asking reservation booking-window policy",
+        flow="support policy answer",
+        claim_check_type="none",
+        complaint_scope="none",
+        agent_prompt_profile=chat_module.AgentPromptProfile.TRANSACTION_STORE,
+        policy_intent="reservation_window_policy",
+    )
+    contract = TurnContract(
+        domain="support",
+        intent="reservation_policy_guidance",
+        sub_intent="reservation_window_policy",
+        allowed_tools=("get_faq_tool", "search_faq_rag_tool", "search_faq_hybrid_tool"),
+        forbidden_tools=("get_store_schedule_tool", "get_store_list_tool"),
+    )
+
+    aligned_domains = _align_domains_to_turn_contract(
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        routing_result=routing_result,
+        turn_contract=contract,
+        action_mode="support_policy_answer",
+    )
+
+    assert aligned_domains == [MultiAgentDomain.Domain.SUPPORT]
+    assert routing_result.domains == [MultiAgentDomain.Domain.SUPPORT]
+    assert routing_result.execution_plan == ["support:reservation_window_policy"]
+    assert routing_result.original_router_domains == [MultiAgentDomain.Domain.TRANSACTION]
+    assert routing_result.original_router_execution_plan == ["transaction:store_schedule"]
+    assert routing_result.agent_prompt_profile == chat_module.AgentPromptProfile.FULL
 
 
 def test_direct_code_fast_path_event_preserves_listcar_metadata_array() -> None:
