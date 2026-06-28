@@ -13866,14 +13866,6 @@ def test_recommendation_active_flow_selection_patch_promotes_refinement() -> Non
     assert patch["brand_cd"] == "HK"
     assert patch["allow_cross_brand_fill"] is False
     assert patch["recommendation_context"]["fitment_source"] == "selected_vehicle"
-    assert patch["recommendation_expected_tool_args"] == {
-        "tire_size": "225/45R17",
-        "car_lnc_cd": "W036269",
-        "rcmd_type": "all_weather",
-        "season_nm": "올웨더",
-        "brand_cd": "HK",
-        "allow_cross_brand_fill": False,
-    }
 
 
 def test_discovery_policy_context_resumes_recommendation_active_flow_without_router_continue() -> None:
@@ -16805,13 +16797,9 @@ def test_recover_blocked_fast_path_to_contract_tool_runs_recommendation_refineme
         known_slots={
             "tire_size": "225/45R17",
             "car_lnc_cd": "W036269",
-            "recommendation_expected_tool_args": {
-                "tire_size": "225/45R17",
-                "car_lnc_cd": "W036269",
+            "recommendation_context": {
                 "rcmd_type": "all_weather",
                 "season_nm": "올웨더",
-            },
-            "recommendation_context": {
                 "tool_args_patch": {
                     "rcmd_type": "all_weather",
                     "season_nm": "올웨더",
@@ -16827,35 +16815,52 @@ def test_recover_blocked_fast_path_to_contract_tool_runs_recommendation_refineme
         response_decision={"template": "product", "metadata": {"response_shape_key": "vehicle_based_recommendation_refinement"}},
     )
 
-    patch_token = discovery_tools.current_discovery_recommendation_tool_patch.set(
-        {
-            "tire_size": "225/45R17",
-            "car_lnc_cd": "W036269",
-            "rcmd_type": "all_weather",
-            "season_nm": "올웨더",
-        }
+    tool_input = chat_module._contract_required_recommendation_tool_input(
+        turn_contract=contract,
+        known_slots=contract.known_slots,
+        merged_slots=ConversationSlots(
+            tire_size="225/45R17",
+            car_lnc_cd="W036269",
+            recommendation_context={
+                "rcmd_type": "all_weather",
+                "season_nm": "올웨더",
+                "tool_args_patch": {
+                    "rcmd_type": "all_weather",
+                    "season_nm": "올웨더",
+                    "brand_cd": "HK",
+                },
+            },
+        ),
     )
-    try:
-        recovery = asyncio.run(
-            chat_module.recover_blocked_fast_path_to_contract_tool(
-                turn_contract=contract,
-                user_text="61거1836",
-                merged_slots=ConversationSlots(
-                    tire_size="225/45R17",
-                    car_lnc_cd="W036269",
-                    recommendation_context={
-                        "tool_args_patch": {
-                            "rcmd_type": "all_weather",
-                            "season_nm": "올웨더",
-                            "brand_cd": "HK",
-                        }
-                    },
-                ),
-                blocked_fast_path_source="code_history_selected_vehicle_prompt",
-            )
+
+    assert tool_input == {
+        "rcmd_type": "all_weather",
+        "season_nm": "올웨더",
+        "brand_cd": "HK",
+        "tire_size": "225/45R17",
+        "car_lnc_cd": "W036269",
+    }
+
+    recovery = asyncio.run(
+        chat_module.recover_blocked_fast_path_to_contract_tool(
+            turn_contract=contract,
+            user_text="61거1836",
+            merged_slots=ConversationSlots(
+                tire_size="225/45R17",
+                car_lnc_cd="W036269",
+                recommendation_context={
+                    "rcmd_type": "all_weather",
+                    "season_nm": "올웨더",
+                    "tool_args_patch": {
+                        "rcmd_type": "all_weather",
+                        "season_nm": "올웨더",
+                        "brand_cd": "HK",
+                    }
+                },
+            ),
+            blocked_fast_path_source="code_history_selected_vehicle_prompt",
         )
-    finally:
-        discovery_tools.current_discovery_recommendation_tool_patch.reset(patch_token)
+    )
 
     assert recovery is not None
     assert recovery["tool_name"] == "get_products_recommendations_tool"

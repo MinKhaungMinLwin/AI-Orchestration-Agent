@@ -516,18 +516,6 @@ def recommendation_vehicle_selection_patch(
         for key in ("rcmd_type", "season_nm", "brand_cd", "allow_cross_brand_fill"):
             if source_patch.get(key) not in _EMPTY_VALUES:
                 patch.setdefault(key, source_patch[key])
-    patch["recommendation_expected_tool_args"] = {
-        key: value
-        for key, value in {
-            "tire_size": patch.get("tire_size"),
-            "car_lnc_cd": patch.get("car_lnc_cd"),
-            "rcmd_type": patch.get("rcmd_type"),
-            "season_nm": patch.get("season_nm"),
-            "brand_cd": patch.get("brand_cd"),
-            "allow_cross_brand_fill": patch.get("allow_cross_brand_fill"),
-        }.items()
-        if value not in _EMPTY_VALUES
-    }
     return patch
 
 

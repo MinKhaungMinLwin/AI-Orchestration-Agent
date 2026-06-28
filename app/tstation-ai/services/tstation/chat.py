@@ -17202,7 +17202,6 @@ def _contract_required_recommendation_tool_input(
     turn_contract: TurnContract,
     known_slots: Mapping[str, Any],
     merged_slots: ConversationSlots | None,
-    policy_tool_patch: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
     if str(turn_contract.domain or "").strip().lower() != PolicyDomain.DISCOVERY.value:
         return {}
@@ -17219,34 +17218,40 @@ def _contract_required_recommendation_tool_input(
         return {}
 
     tool_input: dict[str, Any] = {}
-    expected_args = known_slots.get("recommendation_expected_tool_args")
-    if isinstance(expected_args, Mapping):
-        for key, value in expected_args.items():
-            if value not in (None, "", [], {}):
-                tool_input[str(key)] = value
-
     recommendation_context = known_slots.get("recommendation_context")
     if isinstance(recommendation_context, Mapping):
         tool_args_patch = recommendation_context.get("tool_args_patch")
         if isinstance(tool_args_patch, Mapping):
             for key, value in tool_args_patch.items():
                 if value not in (None, "", [], {}):
-                    tool_input.setdefault(str(key), value)
+                    tool_input[str(key)] = value
+        for key in ("rcmd_type", "season_nm", "brand_cd", "allow_cross_brand_fill"):
+            value = recommendation_context.get(key)
+            if value not in (None, "", [], {}):
+                tool_input.setdefault(str(key), value)
 
     slot_sources = (
         known_slots,
         merged_slots.model_dump() if merged_slots is not None else {},
-        dict(policy_tool_patch or {}),
     )
-    for key in ("tire_size", "car_lnc_cd", "rcmd_type", "season_nm", "brand_cd", "allow_cross_brand_fill"):
+    for key in ("tire_size", "car_lnc_cd", "vehicle_type"):
         for source in slot_sources:
             if not isinstance(source, Mapping):
                 continue
             value = source.get(key)
             if value in (None, "", [], {}):
                 continue
-            tool_input.setdefault(key, value)
+            tool_input[key] = value
             break
+
+    if tool_input.get("tire_size") in (None, "") and isinstance(recommendation_context, Mapping):
+        value = recommendation_context.get("tire_size")
+        if value not in (None, "", [], {}):
+            tool_input["tire_size"] = value
+    if tool_input.get("car_lnc_cd") in (None, "") and isinstance(recommendation_context, Mapping):
+        value = recommendation_context.get("car_lnc_cd")
+        if value not in (None, "", [], {}):
+            tool_input["car_lnc_cd"] = value
 
     if tool_input.get("tire_size") in (None, "") and tool_input.get("car_lnc_cd") in (None, ""):
         return {}
@@ -17322,7 +17327,6 @@ async def recover_blocked_fast_path_to_contract_tool(
             turn_contract=turn_contract,
             known_slots=known_slots,
             merged_slots=merged_slots,
-            policy_tool_patch=discovery_tools.current_discovery_recommendation_tool_patch.get(),
         )
         discovery_known_slots = {
             key: value
@@ -19603,7 +19607,6 @@ def _build_discovery_policy_context(
                 "vehicle_type",
                 "car_lnc_cd",
                 "recommendation_scenario",
-                "recommendation_expected_tool_args",
             ):
                 if active_flow_patch.get(key) not in (None, "", [], {}):
                     known_slots[key] = active_flow_patch[key]
