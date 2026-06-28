@@ -29,6 +29,7 @@ from services.tstation.common.pii_guardrail import check_pii
 from services.tstation.common.tstation_be_client import set_tstation_origin_host
 from services.tstation.source_filter import _ORDER_FIELDS_BASE
 from services.tstation.template_mapper import _safe_service_unsized_policy_response
+from services.tstation.template_mapper import _product_search_policy_response
 from services.tstation.policies.flow_state import (
     FlowState,
     commit_flow_state,
@@ -6525,6 +6526,31 @@ def test_product_description_quickreply_stays_description_focused() -> None:
         "tireSize": "225/45R17",
         "productName": "벤투스 S2 AS",
     }
+
+
+def test_product_search_summary_followup_phrase_uses_action_safe_copy() -> None:
+    response = _product_search_policy_response([
+        {
+            "tool": "search_product_tool",
+            "args": {"size": "245/45R18"},
+            "data": {
+                "status": "success",
+                "data": {
+                    "items": [
+                        {
+                            "goods_nm": "벤투스 에어S",
+                            "tire_size_1": "245/45R18",
+                            "tire_size_2": "245/45R18",
+                            "pc_prod_tech_desc": "<ol><li>정숙성: 우수</li></ol>",
+                        }
+                    ]
+                },
+            },
+        }
+    ])
+
+    assert "원하시면 가격이나 재고도 이어서 확인해 드릴 수 있어요." in response
+    assert "가격, 재고, 구매를 이어서 확인할 수 있어요." not in response
 
 
 def test_product_description_quickreply_includes_sale_price_when_price_context_present() -> None:

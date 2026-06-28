@@ -2003,7 +2003,7 @@ def _product_search_policy_response(tool_data_list: list[dict]) -> str:
         lines.append("")
     if requested_size:
         lines.extend([
-            "가격, 재고, 구매를 이어서 확인할 수 있어요.",
+            "원하시면 가격이나 재고도 이어서 확인해 드릴 수 있어요.",
         ])
     else:
         lines.extend([
