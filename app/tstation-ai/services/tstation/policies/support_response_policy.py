@@ -32,6 +32,7 @@ _SUPPORT_FAQ_POLICY_GROUP_INTENTS = frozenset({
     "external_tire_install_policy",
     "promotion_gift_policy",
     "tire_condition_photo_policy",
+    "onsite_delivery_mismatch",
 })
 _RESERVATION_RE = re.compile(r"예약|방문|장착(?:\s*예약)?|오후\s*\d+시|당일", re.IGNORECASE)
 _ORDER_RE = re.compile(r"주문|결제|카드|승인|배송|온라인", re.IGNORECASE)
@@ -863,7 +864,7 @@ def resolve_support_faq_policy_context(intent: str, user_text: str) -> dict[str,
     text = str(user_text or "")
     if normalized_intent in {"signup_first_purchase_benefit_policy", "signup_coupon_guidance"} and _ASSURANCE_SERVICE_POLICY_ANCHOR_RE.search(text):
         normalized_intent = "assurance_service_policy"
-    if normalized_intent not in _SUPPORT_FAQ_POLICY_GROUP_INTENTS and not _WRONG_ITEM_RE.search(text):
+    if normalized_intent not in _SUPPORT_FAQ_POLICY_GROUP_INTENTS and not _POST_INSTALL_CONCERN_RE.search(text) and not _WRONG_ITEM_RE.search(text):
         return None
 
     has_cancel = bool(_CANCEL_RE.search(text) or _FEE_RE.search(text))
@@ -950,7 +951,7 @@ def resolve_support_faq_policy_context(intent: str, user_text: str) -> dict[str,
                 {"label": "1:1 문의하기", "domain": "SUPPORT"},
             ],
         }
-    if _WRONG_ITEM_RE.search(text):
+    if normalized_intent == "onsite_delivery_mismatch" or _WRONG_ITEM_RE.search(text):
         return {
             "policy_group": _PURCHASE_ORDER_POLICY,
             "fact_type": "wrong_item_or_fitment_issue",

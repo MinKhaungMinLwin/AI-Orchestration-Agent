@@ -889,6 +889,7 @@ class MultiAgentDomain(BaseModel):
         "my_goods_review_lookup",
         "store_service_review_write",
         "store_review_write",
+        "onsite_delivery_mismatch",
     ] = Field(
         description=(
             "Structured support/policy intent. Use this for non-transaction policy guidance such as shipping fee, "
@@ -898,7 +899,8 @@ class MultiAgentDomain(BaseModel):
             "tire condition photo policy, coupon usage policy, coupon registration policy, "
             "signup/first-purchase benefit policy, signup coupon guidance, partner-member-only coupon policy, "
             "legal action guidance denial, store service availability, goods review lookup, "
-            "store service review write CTA, or generic price policy FAQ. "
+            "store service review write CTA, generic price policy FAQ, "
+            "or onsite delivery mismatch (wrong item / wrong tire delivered or installed at the store). "
             "Use 'none' otherwise."
         ),
     )
@@ -1129,6 +1131,7 @@ _CURRENT_TURN_SUPPORT_POLICY_ACTION_INTENTS = frozenset({
     "signup_coupon_guidance",
     "partner_member_coupon_policy",
     "legal_action_guidance_denied",
+    "onsite_delivery_mismatch",
 })
 _RECENT_PRODUCT_SET_RANKING_TEXT_RE = re.compile(
     r"(?:이\s*중|이중|중에|목록|추천(?:해준|된)?|보여준|위\s*상품).{0,30}"
@@ -2413,6 +2416,7 @@ class _SlimMultiAgentDomain(BaseModel):
         "my_goods_review_lookup",
         "store_service_review_write",
         "store_review_write",
+        "onsite_delivery_mismatch",
     ] = Field(
         description="Structured support/policy intent, or none."
     )
@@ -2972,6 +2976,7 @@ Critical first-turn routing:
 - Specific-store service availability like "모란점 타이어 보관 가능해?" -> TRANSACTION store attribute inquiry, not SUPPORT.
 - Store/service review write path -> SUPPORT, policy_intent=store_service_review_write.
 - My product review lookup path -> SUPPORT, policy_intent=my_goods_review_lookup.
+- Wrong/different item delivered or installed at store (e.g. "주문한 거랑 다른 타이어", "다른 걸 장착", "잘못된 제품") -> SUPPORT, policy_intent=onsite_delivery_mismatch.
 - Complaint about T-Station service -> SUPPORT with complaint_scope=tstation_service_complaint.
 - Complaint outside T-Station scope -> LEADING with complaint_scope=out_of_scope_complaint.
 
