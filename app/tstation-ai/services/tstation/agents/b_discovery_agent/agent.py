@@ -614,6 +614,11 @@ Step 1 — Resolve goods_no from previous tool results in conversation history.
     search_product_tool(keyword) as a last resort. NEVER fabricate goods_no.
   → ⚠️ NEVER call search_product_tool when the PREV list already contains a
     matching item — that produces a duplicate search list and confuses the user.
+  → ⚠️ If this last-resort search_product_tool ALSO returns 0 items (product genuinely does not exist,
+    e.g. "Ventus Z99 설명해줘" with a fabricated/unknown model name) → STOP. Do NOT call
+    get_product_description_tool with a guessed/fabricated goods_no. Emit `quickReply`: assistantResponse
+    "고객님, '<상품명>' 상품을 찾을 수 없어요. 상품명을 다시 확인해 주시거나 다른 상품을 찾아드릴까요? 😊"
+    + quickReplies [{"label":"상품명으로 다시 찾기","domain":"DISCOVERY"},{"label":"타이어 추천 받기","domain":"DISCOVERY"}].
 
   ⚠️ BARE DEMONSTRATIVE / NO-REFERENT REFERENCE — covers BOTH:
     (a) demonstrative + intent verb ("이 타이어 설명해줘", "이 상품 호환돼?", "이거 이벤트 있어?", "이거 주문해줘")
