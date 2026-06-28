@@ -22629,6 +22629,23 @@ def test_payment_error_support_policy_guides_faq_before_qna() -> None:
     assert "FAQ hybrid 검색을 먼저 수행" in response_decision.assistant_guidance
 
 
+def test_payment_error_troubleshooting_contract_does_not_override_card_installment_lookup() -> None:
+    contract = build_turn_contract(
+        user_text="현대카드 무이자 할부 몇개월까지 돼?",
+        intent_frame=IntentFrame(domain=PolicyDomain.SUPPORT, intent="card_installment_lookup"),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:payment_error_troubleshooting"],
+            policy_intent="payment_error_troubleshooting",
+        ),
+    )
+
+    assert contract.domain == "support"
+    assert contract.intent == "card_installment_lookup"
+    assert "search_faq_hybrid_tool" not in contract.allowed_tools
+    assert contract.known_slots["policy_intent"] == "payment_error_troubleshooting"
+
+
 def test_order_document_guidance_contract_blocks_direct_qna_and_order_lookup_tools() -> None:
     contract = build_turn_contract(
         user_text="회사 제출용 거래명세서 필요한데 이메일로 보내줄 수 있어?",

@@ -246,6 +246,35 @@ ROUTER_WINS_INFORMATIONAL_INTENTS = frozenset({
     "support_faq",
     "policy_notice_or_escalation",
 })
+_SUPPORT_FAQ_POLICY_TOOL_INTENTS = frozenset({
+    "general_cancel_fee_policy",
+    "general_card_cancel_timing_policy",
+    "payment_error_troubleshooting",
+    "tire_manufacture_date_policy",
+    "tire_quality_warranty_policy",
+    "assurance_service_policy",
+    "reservation_window_policy",
+    "reservation_policy_guidance",
+    "delivery_delay_reservation_schedule_policy",
+    "installation_work_policy",
+    "external_tire_install_policy",
+    "promotion_gift_policy",
+    "tire_condition_photo_policy",
+    "coupon_usage_policy",
+    "coupon_registration_policy",
+    "signup_first_purchase_benefit_policy",
+    "signup_coupon_guidance",
+    "partner_member_coupon_policy",
+    "order_document_guidance",
+    "shipping_fee_policy",
+    "online_store_price_policy",
+    "regional_price_policy",
+})
+_CARD_INSTALLMENT_LOOKUP_RE = re.compile(
+    r"무이자|할부|몇\s*개?월|[0-9]{1,2}\s*개?월|개월수|카드사별|현대카드|신한카드|삼성카드|국민카드|"
+    r"롯데카드|하나카드|농협카드|우리카드|비씨카드|BC카드|스마트\s*페이|smart\s*pay|smartpay",
+    re.IGNORECASE,
+)
 _COMPARISON_ROUTER_WINS_FOLLOWUP_INTENTS = frozenset({
     "generic_compare",
     "new_compare_metric",
@@ -661,16 +690,20 @@ def build_turn_contract(
     if planner_intent == "quick_order_execute" and _has_quick_order_execute_slots(known_slots):
         allowed_tools = _merge_tuple(allowed_tools, ("quick_order_tool",))
         forbidden_tools = tuple(tool for tool in forbidden_tools if tool != "quick_order_tool")
-    if domain == "support" and policy_intent and policy_intent != "none":
+    payment_error_overmatched_installment = (
+        policy_intent == "payment_error_troubleshooting" and _CARD_INSTALLMENT_LOOKUP_RE.search(user_text or "") is not None
+    )
+    if domain == "support" and policy_intent and policy_intent != "none" and not payment_error_overmatched_installment:
         intent = policy_intent
-        allowed_tools = _merge_tuple(
-            allowed_tools,
-            ("search_faq_hybrid_tool",),
-        )
-        forbidden_tools = _merge_tuple(
-            forbidden_tools,
-            ("search_product_tool", "get_final_price_tool"),
-        )
+        if policy_intent in _SUPPORT_FAQ_POLICY_TOOL_INTENTS:
+            allowed_tools = _merge_tuple(
+                allowed_tools,
+                ("search_faq_hybrid_tool",),
+            )
+            forbidden_tools = _merge_tuple(
+                forbidden_tools,
+                ("search_product_tool", "get_final_price_tool"),
+            )
     if router_wins_intent:
         domain = _router_wins_domain(router_wins_intent, planner_domains)
         intent = router_wins_intent

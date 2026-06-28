@@ -141,6 +141,15 @@ def test_reservation_window_policy_text_trigger_blocks_schedule_lookup() -> None
     assert "require_store_slot_for_window_policy" in decision.forbidden_behaviors
 
 
+def test_payment_error_troubleshooting_does_not_absorb_card_installment_lookup() -> None:
+    decision = decide_support_response(
+        intent="payment_error_troubleshooting",
+        user_text="현대카드 무이자 할부 몇개월까지 돼?",
+    )
+
+    assert decision.metadata["response_shape_key"] == "support_faq_summary"
+
+
 def test_external_tire_install_policy_text_trigger_blocks_work_started_cancel_drift() -> None:
     decision = decide_support_response(
         intent="support_faq",

@@ -57,6 +57,11 @@ _PAYMENT_ERROR_RE = re.compile(
     r"결제\s*(?:오류|에러|실패|안\s*돼|안\s*되|안\s*열)|결제창|결제\s*화면|승인\s*실패|장착일\s*선택란",
     re.IGNORECASE,
 )
+_CARD_INSTALLMENT_LOOKUP_RE = re.compile(
+    r"무이자|할부|몇\s*개?월|[0-9]{1,2}\s*개?월|개월수|카드사별|현대카드|신한카드|삼성카드|국민카드|"
+    r"롯데카드|하나카드|농협카드|우리카드|비씨카드|BC카드|스마트\s*페이|smart\s*pay|smartpay",
+    re.IGNORECASE,
+)
 _ASSURANCE_DOCUMENT_LOST_RE = re.compile(r"보증서.{0,12}(분실|잃어버|없어)|종이\s*보증서", re.IGNORECASE)
 _PROMOTION_PARTIAL_CANCEL_RE = re.compile(
     r"부분\s*취소|[0-9]+\s*(?:짝|개)\s*취소|반납|차감|돌려줘야",
@@ -181,6 +186,10 @@ def _support_faq_candidates(tool_result: Mapping[str, Any] | None) -> list[Mappi
         if isinstance(items, list):
             return [item for item in items if isinstance(item, Mapping)]
     return []
+
+
+def _is_card_installment_lookup_query(text: str) -> bool:
+    return bool(_CARD_INSTALLMENT_LOOKUP_RE.search(str(text or "")))
 
 
 def _support_faq_candidate_score(candidate: Mapping[str, Any]) -> float | None:
@@ -843,7 +852,9 @@ def resolve_support_faq_policy_context(intent: str, user_text: str) -> dict[str,
         return {"policy_group": _RESERVATION_INSTALLATION_POLICY, "fact_type": "reservation_window"}
     if normalized_intent == "external_tire_install_policy":
         return {"policy_group": _RESERVATION_INSTALLATION_POLICY, "fact_type": "external_tire_install"}
-    if normalized_intent == "payment_error_troubleshooting" or _PAYMENT_ERROR_RE.search(text):
+    if normalized_intent == "payment_error_troubleshooting" and _is_card_installment_lookup_query(text):
+        return None
+    if (normalized_intent == "payment_error_troubleshooting" or _PAYMENT_ERROR_RE.search(text)) and not _is_card_installment_lookup_query(text):
         return {"policy_group": _PAYMENT_REFUND_POLICY, "fact_type": "payment_error_troubleshooting"}
     if normalized_intent == "tire_manufacture_date_policy":
         return {"policy_group": _PRODUCT_CONDITION_POLICY, "fact_type": "manufacture_date"}
@@ -2251,7 +2262,7 @@ def decide_support_response(
             ),
         )
 
-    if intent == "payment_error_troubleshooting":
+    if intent == "payment_error_troubleshooting" and not _is_card_installment_lookup_query(text):
         return _decision(
             response_shape_key="payment_error_troubleshooting",
             response_shape=ResponseShape.SUMMARY,
