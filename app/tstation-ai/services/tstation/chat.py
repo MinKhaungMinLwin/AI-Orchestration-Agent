@@ -80,7 +80,13 @@ from services.tstation.policies.resolved_context import (
     canonical_context_from_template_boundary,
     canonical_context_from_tool_boundary,
 )
-from services.tstation.policies.flow_state import commit_purchase_flow_state, is_purchase_flow_context
+from services.tstation.policies.flow_state import (
+    commit_flow_state,
+    commit_purchase_flow_state,
+    is_purchase_flow_context,
+    recommendation_listcar_flow_delta,
+    recommendation_vehicle_selection_patch,
+)
 from services.tstation.policies.turn_contract import (
     TurnContract,
     build_required_slot_clarification_event,
@@ -19461,6 +19467,7 @@ def _build_discovery_policy_context(
     tire_size_front: str | None = None,
     tire_size_rear: str | None = None,
     recommendation_context: Mapping[str, Any] | None = None,
+    active_flow_resume_patch: Mapping[str, Any] | None = None,
     comparison_context: Mapping[str, Any] | None = None,
     routing_result: Any | None = None,
     pending_intent: str | None = None,
@@ -19491,6 +19498,21 @@ def _build_discovery_policy_context(
             ).strip()
             if scenario:
                 known_slots["recommendation_scenario"] = scenario
+        active_flow_patch = {
+            key: value
+            for key, value in dict(active_flow_resume_patch or {}).items()
+            if value not in (None, "", [], {})
+        }
+        if active_flow_patch:
+            known_slots["discovery_followup_action"] = "vehicle_based_recommendation_refinement"
+            active_recommendation_context = _recommendation_context_policy_dict(
+                active_flow_patch.get("recommendation_context")
+            )
+            if active_recommendation_context:
+                known_slots["recommendation_context"] = active_recommendation_context
+            for key in ("tire_size", "vehicle_type", "car_lnc_cd", "recommendation_scenario"):
+                if active_flow_patch.get(key) not in (None, "", [], {}):
+                    known_slots[key] = active_flow_patch[key]
         if comparison_context:
             normalized_comparison_context = _comparison_context_dict(comparison_context)
             product_names = normalized_comparison_context.get("product_names")
@@ -19625,7 +19647,11 @@ def _build_discovery_policy_context(
             tire_size_rear=tire_size_rear,
             transaction_followup_priority=transaction_followup_priority,
         )
-        if vehicle_refinement_patch:
+        if active_flow_patch:
+            known_slots["discovery_followup_action"] = "vehicle_based_recommendation_refinement"
+            if active_flow_patch.get("recommendation_scenario"):
+                known_slots["recommendation_scenario"] = active_flow_patch["recommendation_scenario"]
+        elif vehicle_refinement_patch:
             known_slots["discovery_followup_action"] = "vehicle_based_recommendation_refinement"
         elif vehicle_followup_bridge_patch:
             known_slots["discovery_followup_action"] = "vehicle_based_recommendation_refinement"
@@ -19653,7 +19679,20 @@ def _build_discovery_policy_context(
             last_user_text,
             known_slots=known_slots,
         )
-        if vehicle_followup_bridge_patch:
+        if active_flow_patch:
+            entities = dict(discovery_frame.entities)
+            entities["discovery_followup_action"] = "vehicle_based_recommendation_refinement"
+            if known_slots.get("recommendation_scenario"):
+                entities.setdefault("recommendation_scenario", known_slots["recommendation_scenario"])
+            if known_slots.get("recommendation_context"):
+                entities["recommendation_context"] = known_slots["recommendation_context"]
+            discovery_frame = replace(
+                discovery_frame,
+                intent="product_recommendation",
+                sub_intent="vehicle_based_recommendation_refinement",
+                entities=entities,
+            )
+        elif vehicle_followup_bridge_patch:
             entities = dict(discovery_frame.entities)
             entities["discovery_followup_action"] = "vehicle_based_recommendation_refinement"
             if known_slots.get("recommendation_scenario"):
@@ -19783,7 +19822,7 @@ def _build_discovery_policy_context(
         discovery_tool_plan = plan_discovery_tools(discovery_frame)
         discovery_response_decision = decide_discovery_response(discovery_frame)
         if (
-            vehicle_followup_bridge_patch
+            (active_flow_patch or vehicle_followup_bridge_patch)
             and discovery_tool_plan.preferred_tool == "get_products_recommendations_tool"
             and discovery_response_decision.template != TemplateName.PRODUCT
         ):
@@ -19806,6 +19845,12 @@ def _build_discovery_policy_context(
             discovery_tool_patch = {}
         if vehicle_refinement_patch:
             for key, value in vehicle_refinement_patch.items():
+                if value not in (None, ""):
+                    discovery_tool_patch.setdefault(key, value)
+        if active_flow_patch:
+            for key, value in active_flow_patch.items():
+                if key == "recommendation_context":
+                    continue
                 if value not in (None, ""):
                     discovery_tool_patch.setdefault(key, value)
         if vehicle_followup_bridge_patch:
@@ -27465,6 +27510,39 @@ class TStationChatServiceV2:
         current_confirmed_tire_size.set(merged_slots.tire_size)
         current_user_text.set("\n".join(reversed(recent_user_texts)) or last_user_text)
         current_user_preferences_text.set(merged_slots.user_preferences_text or "")
+        active_flow_resume_patch: dict[str, Any] = {}
+        selected_vehicle_slots: dict[str, Any] = {}
+        if history_selected_vehicle is not None:
+            selected_vehicle_slots = _vehicle_selection_slot_values(history_selected_vehicle)
+        availability_context_for_active_flow = (
+            merged_slots.availability_context
+            if isinstance(getattr(merged_slots, "availability_context", None), dict)
+            else {}
+        )
+        active_flow_context = (
+            availability_context_for_active_flow.get("active_flow_context")
+            if isinstance(availability_context_for_active_flow.get("active_flow_context"), Mapping)
+            else {}
+        )
+        if selected_vehicle_slots:
+            active_flow_resume_patch = recommendation_vehicle_selection_patch(
+                active_flow_context=active_flow_context,
+                selected_vehicle_slots=selected_vehicle_slots,
+            )
+        if active_flow_resume_patch:
+            merged_slots = merged_slots.apply_runtime_values(
+                active_flow_resume_patch,
+                source="active_recommendation_flow_resume",
+            )
+            vehicle_selection_trace_metadata.update({
+                "active_flow_resume_applied": True,
+                "active_flow_resume_source": "active_flow_context",
+                "active_flow_resume_patch_keys": sorted(active_flow_resume_patch),
+            })
+            logger.info(
+                "[FLOW_STATE] Resumed recommendation active flow from vehicle selection: %s",
+                active_flow_resume_patch,
+            )
         discovery_tool_patch, discovery_response_decision = _build_discovery_policy_context(
             domains=domains,
             last_user_text=last_user_text,
@@ -27476,6 +27554,7 @@ class TStationChatServiceV2:
             tire_size_front=merged_slots.tire_size_front,
             tire_size_rear=merged_slots.tire_size_rear,
             recommendation_context=merged_slots.recommendation_context,
+            active_flow_resume_patch=active_flow_resume_patch,
             comparison_context=merged_slots.comparison_context,
             routing_result=routing_result,
             pending_intent=merged_slots.pending_intent,
@@ -35702,6 +35781,53 @@ class TStationChatServiceV2:
                                 last_assistant_response_source = "code_multi_variant_recommendation"
                             event_data = event.get("data", {})
                 if isinstance(event_data, dict):
+                    base_slots_for_flow = pending_slots
+                    if base_slots_for_flow is None:
+                        base_slots_for_flow = (
+                            initial_slots.model_copy() if initial_slots is not None else ConversationSlots()
+                        )
+                    response_shape_key = ""
+                    response_decision = turn_contract.response_decision if turn_contract is not None else None
+                    if isinstance(response_decision, Mapping):
+                        response_metadata = response_decision.get("metadata")
+                        if isinstance(response_metadata, Mapping):
+                            response_shape_key = str(response_metadata.get("response_shape_key") or "").strip()
+                    recommendation_flow_delta = recommendation_listcar_flow_delta(
+                        event=event,
+                        recommendation_context=getattr(base_slots_for_flow, "recommendation_context", None),
+                        contract_intent=str(turn_contract.intent or "") if turn_contract is not None else None,
+                        response_shape_key=response_shape_key,
+                    )
+                    if (
+                        recommendation_flow_delta
+                        and str(event.get("source_domain", "")).lower() == MultiAgentDomain.Domain.DISCOVERY.value
+                    ):
+                        availability_context = (
+                            dict(base_slots_for_flow.availability_context)
+                            if isinstance(getattr(base_slots_for_flow, "availability_context", None), dict)
+                            else {}
+                        )
+                        active_context = availability_context.get("active_flow_context")
+                        commit_result = commit_flow_state(
+                            active_context if isinstance(active_context, Mapping) else {},
+                            recommendation_flow_delta,
+                            source="listcar_event:vehicle_resolved_recommendation",
+                            flow_type="recommendation",
+                            flow_step="select_vehicle",
+                        )
+                        availability_context["active_flow_context"] = commit_result.state.to_active_flow_context()
+                        updated_slots = base_slots_for_flow.model_copy()
+                        updated_slots.availability_context = availability_context
+                        if updated_slots.model_dump() != base_slots_for_flow.model_dump():
+                            pending_slots = updated_slots
+                            vehicle_selection_trace_metadata.update({
+                                "active_flow_context_stored": True,
+                                "active_flow_context_after": availability_context["active_flow_context"],
+                            })
+                            logger.info(
+                                "[FLOW_STATE] Stored recommendation active flow after listCar: %s",
+                                availability_context["active_flow_context"],
+                            )
                     _stage_comparison_context_slots(event)
                     confirmed_product_slots = confirmed_product_slot_values_from_event(event)
                     if confirmed_product_slots:

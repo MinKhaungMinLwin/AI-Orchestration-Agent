@@ -29,7 +29,13 @@ from services.tstation.common.pii_guardrail import check_pii
 from services.tstation.common.tstation_be_client import set_tstation_origin_host
 from services.tstation.source_filter import _ORDER_FIELDS_BASE
 from services.tstation.template_mapper import _safe_service_unsized_policy_response
-from services.tstation.policies.flow_state import FlowState, commit_purchase_flow_state
+from services.tstation.policies.flow_state import (
+    FlowState,
+    commit_flow_state,
+    commit_purchase_flow_state,
+    recommendation_listcar_flow_delta,
+    recommendation_vehicle_selection_patch,
+)
 from services.tstation.agents.b_discovery_agent import tools as discovery_tools
 from services.tstation.agents.b_discovery_agent.agent import (
     DISCOVERY_AGENT_SYSTEM_PROMPT_TEMPLATE,
@@ -13742,6 +13748,185 @@ def test_non_selection_listcar_is_not_coerced_for_vehicle_resolved_recommendatio
     }
 
     assert _coerce_non_selection_listcar_to_quickreply(event) is None
+
+
+def test_recommendation_listcar_flow_delta_stores_active_recommendation_flow() -> None:
+    event = {
+        "template": "listCar",
+        "source_domain": "discovery",
+        "data": {
+            "listCar": [{"licensePlate": "61거1836", "info": "제타"}],
+            "metadata": [{
+                "carNo": "61거1836",
+                "expected_contract_intent": "vehicle_resolved_recommendation",
+            }],
+        },
+    }
+
+    delta = recommendation_listcar_flow_delta(
+        event=event,
+        recommendation_context={
+            "recommendation_scenario": "all_weather",
+            "tool_args_patch": {
+                "rcmd_type": "all_weather",
+                "season_nm": "올웨더",
+                "brand_cd": "HK",
+                "allow_cross_brand_fill": False,
+            },
+        },
+        contract_intent="vehicle_resolved_recommendation",
+        response_shape_key="vehicle_resolved_recommendation",
+    )
+    commit_result = commit_flow_state(
+        {},
+        delta,
+        source="test_listcar_event",
+        flow_type="recommendation",
+        flow_step="select_vehicle",
+    )
+    active_flow = commit_result.state.to_active_flow_context()
+
+    assert active_flow["flow_type"] == "recommendation"
+    assert active_flow["flow_step"] == "select_vehicle"
+    assert active_flow["intent"]["pending_intent"] == "product_recommendation"
+    assert active_flow["intent"]["goal_type"] == "recommend_tire"
+    assert active_flow["vehicle"]["selection_required"] is True
+    assert active_flow["recommendation"]["rcmd_type"] == "all_weather"
+    assert active_flow["recommendation"]["season_nm"] == "올웨더"
+    assert active_flow["recommendation"]["brand_cd"] == "HK"
+
+
+def test_recommendation_active_flow_selection_patch_promotes_refinement() -> None:
+    active_flow_context = {
+        "flow_type": "recommendation",
+        "status": "active",
+        "flow_step": "select_vehicle",
+        "intent": {
+            "pending_intent": "product_recommendation",
+            "goal_type": "recommend_tire",
+        },
+        "vehicle": {"selection_required": True},
+        "recommendation": {
+            "recommendation_scenario": "all_weather",
+            "tool_args_patch": {
+                "rcmd_type": "all_weather",
+                "season_nm": "올웨더",
+                "brand_cd": "HK",
+                "allow_cross_brand_fill": False,
+            },
+        },
+    }
+
+    patch = recommendation_vehicle_selection_patch(
+        active_flow_context=active_flow_context,
+        selected_vehicle_slots={
+            "car_no": "61거1836",
+            "car_lnc_cd": "W036269",
+            "tire_size": "225/45R17",
+            "vehicle_type": "sedan",
+        },
+    )
+
+    assert patch["discovery_followup_action"] == "vehicle_based_recommendation_refinement"
+    assert patch["recommendation_scenario"] == "all_weather"
+    assert patch["tire_size"] == "225/45R17"
+    assert patch["car_lnc_cd"] == "W036269"
+    assert patch["rcmd_type"] == "all_weather"
+    assert patch["season_nm"] == "올웨더"
+    assert patch["brand_cd"] == "HK"
+    assert patch["allow_cross_brand_fill"] is False
+    assert patch["recommendation_context"]["fitment_source"] == "selected_vehicle"
+
+
+def test_discovery_policy_context_resumes_recommendation_active_flow_without_router_continue() -> None:
+    active_flow_patch = recommendation_vehicle_selection_patch(
+        active_flow_context={
+            "flow_type": "recommendation",
+            "status": "active",
+            "flow_step": "select_vehicle",
+            "recommendation": {
+                "recommendation_scenario": "all_weather",
+                "tool_args_patch": {
+                    "rcmd_type": "all_weather",
+                    "season_nm": "올웨더",
+                    "brand_cd": "HK",
+                    "allow_cross_brand_fill": False,
+                },
+            },
+        },
+        selected_vehicle_slots={
+            "car_no": "61거1836",
+            "car_lnc_cd": "W036269",
+            "tire_size": "225/45R17",
+        },
+    )
+
+    patch, decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        last_user_text="61거1836",
+        context_text="61거1836",
+        tire_size="225/45R17",
+        recommendation_context=active_flow_patch["recommendation_context"],
+        active_flow_resume_patch=active_flow_patch,
+        routing_result=SimpleNamespace(
+            continue_flow=False,
+            execution_plan=["discovery:recommend_all_weather_tires_for_vehicle"],
+            recommendation_scenario="none",
+        ),
+    )
+
+    assert decision is not None
+    assert decision.template.value == "product"
+    assert decision.metadata["response_shape_key"] == "vehicle_based_recommendation_refinement"
+    assert patch["tire_size"] == "225/45R17"
+    assert patch["car_lnc_cd"] == "W036269"
+    assert patch["rcmd_type"] == "all_weather"
+    assert patch["season_nm"] == "올웨더"
+    assert patch["brand_cd"] == "HK"
+    assert patch["allow_cross_brand_fill"] is False
+
+
+def test_recommendation_active_flow_does_not_resume_without_context_or_for_purchase_flow() -> None:
+    assert (
+        recommendation_vehicle_selection_patch(
+            active_flow_context={},
+            selected_vehicle_slots={"car_lnc_cd": "W036269", "tire_size": "225/45R17"},
+        )
+        == {}
+    )
+    assert (
+        recommendation_vehicle_selection_patch(
+            active_flow_context={
+                "flow_type": "purchase",
+                "status": "active",
+                "flow_step": "select_vehicle",
+            },
+            selected_vehicle_slots={"car_lnc_cd": "W036269", "tire_size": "225/45R17"},
+        )
+        == {}
+    )
+
+
+def test_recommendation_active_flow_does_not_resume_staggered_vehicle_without_selected_size() -> None:
+    patch = recommendation_vehicle_selection_patch(
+        active_flow_context={
+            "flow_type": "recommendation",
+            "status": "active",
+            "flow_step": "select_vehicle",
+            "recommendation": {
+                "recommendation_scenario": "all_weather",
+                "tool_args_patch": {"rcmd_type": "all_weather", "season_nm": "올웨더"},
+            },
+        },
+        selected_vehicle_slots={
+            "car_no": "56모2162",
+            "car_lnc_cd": "W088888",
+            "tire_size_front": "225/50R18",
+            "tire_size_rear": "255/50R18",
+        },
+    )
+
+    assert patch == {}
 
 
 def test_apply_history_product_selection_state_resolves_goods_no_and_trace_metadata() -> None:
