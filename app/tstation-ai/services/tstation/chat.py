@@ -12053,6 +12053,7 @@ def _store_attribute_inquiry_event(
     )
     store_info_summary = _build_store_detail_summary_from_context(store_info_entries or [])
     if store_label:
+        store_info_confirmed = bool(_store_attribute_row_from_entries(store_info_entries))
         assessment_text, assessment_status = _store_attribute_assessment_text(
             store_label=store_label,
             attribute_text=service_label,
@@ -12065,23 +12066,30 @@ def _store_attribute_inquiry_event(
         assistant_response = (
             f"{assessment_text}{contact_sentence}{store_info_block}"
         )
-        quick_replies = [
-            {"label": "매장 전화번호 확인", "domain": "TRANSACTION"},
-            {"label": "매장 상세보기", "domain": "TRANSACTION"},
-            {"label": "매장 예약", "domain": "TRANSACTION"},
-        ]
-        for entry in store_info_entries or []:
-            raw = _unwrap_tool_data(entry.get("data"))
-            if not isinstance(raw, dict):
-                continue
-            store_seq = str(raw.get("shop_seq") or raw.get("shop_id") or "").strip()
-            if store_seq:
-                quick_replies[1] = {
-                    "label": "매장 상세보기",
-                    "url": CTAUrls.STORE_DETAIL.replace("<shop_seq>", store_seq),
-                    "domain": "TRANSACTION",
-                }
-                break
+        if store_info_confirmed:
+            quick_replies = [
+                {"label": "매장 전화번호 확인", "domain": "TRANSACTION"},
+                {"label": "매장 상세보기", "domain": "TRANSACTION"},
+                {"label": "매장 예약", "domain": "TRANSACTION"},
+            ]
+            for entry in store_info_entries or []:
+                raw = _unwrap_tool_data(entry.get("data"))
+                if not isinstance(raw, dict):
+                    continue
+                store_seq = str(raw.get("shop_seq") or raw.get("shop_id") or "").strip()
+                if store_seq:
+                    quick_replies[1] = {
+                        "label": "매장 상세보기",
+                        "url": CTAUrls.STORE_DETAIL.replace("<shop_seq>", store_seq),
+                        "domain": "TRANSACTION",
+                    }
+                    break
+        else:
+            quick_replies = [
+                {"label": "매장명 다시 입력", "domain": "SUPPORT"},
+                {"label": "매장 찾기", "domain": "TRANSACTION"},
+                {"label": "1:1 문의하기", "domain": "SUPPORT"},
+            ]
     else:
         assessment_status = "missing_store"
         assistant_response = (

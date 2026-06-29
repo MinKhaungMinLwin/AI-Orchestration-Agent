@@ -28390,6 +28390,29 @@ def test_store_attribute_inquiry_with_store_uses_store_info_lookup_contract() ->
     assert "preOrder" not in json.dumps(event, ensure_ascii=False)
 
 
+def test_store_attribute_inquiry_without_store_info_suppresses_store_specific_ctas() -> None:
+    event = _store_attribute_inquiry_event(
+        "야간정비도 가능한가요? 티스테이션 정자점",
+        store_name="정자점",
+        attribute_text="야간정비",
+        attribute_type="operating_condition",
+        verification_level="store_contact_required",
+        store_info_entries=[],
+    )
+
+    assert event is not None
+    assistant = event["data"]["assistantResponse"]
+    labels = [reply["label"] for reply in event["data"]["quickReplies"]]
+    assert "현재 조회된 매장 정보가 없어" in assistant
+    assert labels == ["매장명 다시 입력", "매장 찾기", "1:1 문의하기"]
+    assert "매장 전화번호 확인" not in labels
+    assert "매장 상세보기" not in labels
+    assert "매장 예약" not in labels
+    assert event["assistant_response_source"] == "code_store_attribute_inquiry_guard"
+    assert event["data"]["metadata"]["attributeAssessmentStatus"] == "not_checked"
+    assert event["data"]["metadata"]["store_info_lookup"] is False
+
+
 @pytest.mark.parametrize(
     ("end_time", "expected", "status"),
     [
