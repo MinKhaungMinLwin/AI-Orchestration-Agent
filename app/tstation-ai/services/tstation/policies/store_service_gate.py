@@ -193,6 +193,18 @@ _ATTRIBUTE_QUESTION_RE = re.compile(
     r"해\s*줘|해줘|운영\s*해|운영해|영업\s*하|영업하|문\s*여|문여|잘\s*(?:봐|보|하)",
     re.IGNORECASE,
 )
+_TRANSACTION_ACTION_REQUEST_RE = re.compile(
+    r"주문\s*해\s*줘|주문해줘|구매\s*해\s*줘|구매해줘|결제|장바구니|카트|"
+    r"살래|살게|사고\s*싶|사려고|구매\s*할래|주문\s*할래",
+    re.IGNORECASE,
+)
+_TRANSACTION_OBJECT_ANCHOR_RE = re.compile(
+    r"\d+\s*개|"
+    r"\d{3}\s*/?\s*\d{2}\s*R?\s*\d{2}|"
+    r"Kinergy|Ventus|Dynapro|Optimo|Laufenn|iON|"
+    r"키너지|벤투스|다이나프로|옵티모|아이온|라우펜|타이어",
+    re.IGNORECASE,
+)
 _ADJACENT_NON_ATTRIBUTE_RE = re.compile(
     r"내\s*차\s*정비\s*(?:일정|시기)|정비\s*이력|정비이력|정비\s*내역|정비내역|"
     r"주문한\s*거.{0,20}(?:장착|예약)\s*가능|예약\s*(?:조회|내역|확인|상태)|"
@@ -321,6 +333,12 @@ def extract_store_attribute_inquiry(
     if not store_label:
         return None
     labels = unverifiable_store_preference_labels(value)
+    if (
+        not labels
+        and _TRANSACTION_ACTION_REQUEST_RE.search(value)
+        and _TRANSACTION_OBJECT_ANCHOR_RE.search(value)
+    ):
+        return None
     adjacent_non_attribute = _ADJACENT_NON_ATTRIBUTE_RE.search(value)
     if adjacent_non_attribute and not labels:
         return None

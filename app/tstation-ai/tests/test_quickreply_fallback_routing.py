@@ -25988,10 +25988,13 @@ def test_store_attribute_inquiry_keeps_adjacent_transaction_flows() -> None:
     maintenance_dday = build_transaction_intent_frame("내 차 정비 일정 알려줘", known_slots={})
     maintenance_history = build_transaction_intent_frame("정비이력 보여줘", known_slots={})
     order_install = build_transaction_intent_frame("주문한 거 정자점에서 장착 가능해?", known_slots={})
+    product_order = build_transaction_intent_frame("Kinergy EX 2개, 매장은 판교점으로 주문해줘", known_slots={})
 
     assert maintenance_dday.intent != "store_attribute_inquiry"
     assert maintenance_history.intent == "maintenance_history_lookup"
     assert order_install.intent != "store_attribute_inquiry"
+    assert product_order.intent != "store_attribute_inquiry"
+    assert extract_store_attribute_inquiry("Kinergy EX 2개, 매장은 판교점으로 주문해줘") is None
 
 
 def test_store_name_role_marks_warranty_store_as_context() -> None:
@@ -26516,6 +26519,19 @@ def test_pre_router_store_service_guard_keeps_specific_store_attribute_flow() ->
         decision=decision,
         store_context_name="광교신도시점",
     ) is True
+
+
+def test_pre_router_store_service_guard_skips_product_order_request() -> None:
+    user_text = "Kinergy EX 2개, 매장은 판교점으로 주문해줘"
+    decision = decide_store_service_gate(user_text=user_text)
+
+    assert decision.intent == "none"
+    assert extract_store_attribute_inquiry(user_text) is None
+    assert _should_emit_pre_router_store_service_guard(
+        user_text=user_text,
+        decision=decision,
+        store_context_name="판교점",
+    ) is False
 
 
 @pytest.mark.parametrize(

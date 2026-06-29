@@ -18891,7 +18891,9 @@ _GENERAL_TIRE_RECOMMENDATION_QUERY_RE = re.compile(
 _EV_BLOCKING_TRANSACTION_GOALS = {"store_with_stock", "place_order"}
 _STORE_SERVICE_ROUTE_EXCLUSION_RE = re.compile(
     r"(?:매장|지점|곳).{0,16}(?:추천|찾아|검색|보여|알려)|"
-    r"(?:추천|찾아|검색|보여|알려).{0,16}(?:매장|지점|곳)",
+    r"(?:추천|찾아|검색|보여|알려).{0,16}(?:매장|지점|곳)|"
+    r"주문\s*해\s*줘|주문해줘|구매\s*해\s*줘|구매해줘|결제|장바구니|카트|"
+    r"살래|살게|사고\s*싶|사려고|구매\s*할래|주문\s*할래",
     re.IGNORECASE,
 )
 _NIGHT_STORE_ATTRIBUTE_LOOKUP_RE = re.compile(
