@@ -100,6 +100,16 @@ _WARRANTY_CLAIM_STRONG_RE = re.compile(
     r"하자\s*아니|클레임|품질\s*보증|품질보증",
     re.IGNORECASE,
 )
+_TIRE_MANUFACTURE_DATE_POLICY_RE = re.compile(
+    r"제조\s*일자|제조일자|제조\s*주차|DOT|최신\s*제조|언제\s*만든|오래된\s*거\s*아냐|"
+    r"신상품\s*맞|신품|생산\s*(?:일자|주차|시점)|타이어마다.{0,12}DOT|DOT.{0,12}(?:다르|달라)",
+    re.IGNORECASE,
+)
+_TIRE_QUALITY_WARRANTY_POLICY_RE = re.compile(
+    r"측면.{0,12}부풀|사이드월.{0,12}부풀|품질\s*보증|품질보증|무상\s*(?:A/?S|as|교환)|"
+    r"제조상\s*과실|보증\s*기준|불량.{0,12}(?:무상|교환|보상)",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -299,6 +309,19 @@ def plan_cross_domain_turn(user_text: str, *, known_slots: dict[str, Any] | None
                     domain=PolicyDomain.SUPPORT,
                     intent="price_policy_faq",
                     reason="지역/매장별 가격 동일 여부는 실제 가격 조회가 아닌 가격 정책 FAQ임",
+                ),
+            ),
+            response_strategy="single_domain_response",
+        )
+
+    if _TIRE_MANUFACTURE_DATE_POLICY_RE.search(text) and not _TIRE_QUALITY_WARRANTY_POLICY_RE.search(text):
+        return CrossDomainPlan(
+            primary_domain=PolicyDomain.SUPPORT,
+            subtasks=(
+                DomainSubtask(
+                    domain=PolicyDomain.SUPPORT,
+                    intent="tire_manufacture_date_policy",
+                    reason="DOT/제조일자/신품 여부 질문은 교환 표현이 있어도 제조일자 정책 안내가 우선임",
                 ),
             ),
             response_strategy="single_domain_response",
