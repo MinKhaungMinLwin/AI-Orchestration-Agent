@@ -23558,6 +23558,53 @@ def test_tire_manufacture_date_policy_contract_requires_faq_before_qna() -> None
     } in violations
 
 
+def test_dot_manufacture_date_anchor_normalizes_overmatched_quality_warranty_contract() -> None:
+    contract = build_turn_contract(
+        user_text="장착하러 매장 왔는데 왜 타이어마다 dot 가 달라? 바꿔줄수 있는거?",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:tire_quality_warranty_policy"],
+            policy_intent="tire_quality_warranty_policy",
+        ),
+    )
+
+    assert contract.domain == "support"
+    assert contract.intent == "tire_manufacture_date_policy"
+    assert contract.known_slots["policy_intent"] == "tire_manufacture_date_policy"
+    assert "search_faq_hybrid_tool" in contract.allowed_tools
+    assert "search_product_tool" in contract.forbidden_tools
+
+
+def test_quality_damage_anchor_keeps_quality_warranty_contract_over_dot_reference() -> None:
+    contract = build_turn_contract(
+        user_text="DOT도 다른데 측면이 부풀었어. 품질보증으로 무상 A/S 돼?",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:tire_quality_warranty_policy"],
+            policy_intent="tire_quality_warranty_policy",
+        ),
+    )
+
+    assert contract.domain == "support"
+    assert contract.intent == "tire_quality_warranty_policy"
+    assert contract.known_slots["policy_intent"] == "tire_quality_warranty_policy"
+
+
+def test_dot_warranty_word_without_damage_anchor_still_normalizes_to_manufacture_date_policy() -> None:
+    contract = build_turn_contract(
+        user_text="DOT가 타이어마다 다른데 워런티나 교환 기준이 어떻게 돼?",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:tire_quality_warranty_policy"],
+            policy_intent="tire_quality_warranty_policy",
+        ),
+    )
+
+    assert contract.domain == "support"
+    assert contract.intent == "tire_manufacture_date_policy"
+    assert contract.known_slots["policy_intent"] == "tire_manufacture_date_policy"
+
+
 def test_tire_manufacture_date_policy_allows_source_backed_conditional_exchange_phrase() -> None:
     contract = build_turn_contract(
         user_text="제조일자가 6개월 전 거야. 새 걸로 바꿔줘",
@@ -30678,6 +30725,33 @@ def test_support_faq_policy_event_prefers_faq_source_summary_when_available() ->
     assert event["data"]["metadata"]["sourceGroundedReplyUsed"] is True
 
 
+def test_support_faq_policy_event_uses_dot_general_guidance_when_quality_router_overmatches() -> None:
+    event = _build_support_faq_policy_event(
+        "tire_quality_warranty_policy",
+        "장착하러 매장 왔는데 왜 타이어마다 dot 가 달라? 바꿔줄수 있는거?",
+        tool_result={"status": "success", "data": {"items": []}},
+    )
+
+    assert event is not None
+    response = str(event["data"]["assistantResponse"])
+    assert "DOT" in response
+    assert "생산 주차" in response
+    assert "교환 대상이라고 단정하기는 어려워요" in response
+    assert "현장 매장 직원" in response
+    assert "1:1 문의" in response
+    assert "FAQ" not in response
+    assert "사이드월" not in response
+    assert "측면" not in response
+    assert "잔여 홈" not in response
+    assert "무상 처리됩니다" not in response
+    assert "제조상 과실입니다" not in response
+    assert _labels(event["data"]["quickReplies"]) == ["1:1 문의하기"]
+    assert event["data"]["metadata"]["policyGroup"] == "product_condition_policy"
+    assert event["data"]["metadata"]["factType"] == "manufacture_date"
+    assert event["data"]["metadata"]["safeFallbackUsed"] is True
+    assert event["data"]["metadata"]["sourceGroundedReplyUsed"] is False
+
+
 def test_support_faq_policy_event_selects_intent_relevant_faq_candidate_not_first_item() -> None:
     tool_result = {
         "status": "success",
@@ -31188,6 +31262,17 @@ def test_support_faq_source_grounded_reply_allows_card_refund_sentence_for_card_
 
     assert reply is not None
     assert "영업일 기준 1~3일" in reply["assistant_response"]
+
+
+def test_support_faq_question_anchor_does_not_allow_when_alone_for_card_refund() -> None:
+    assert not support_response_policy_module._support_faq_question_anchor_allowed(
+        "general_card_cancel_timing_policy",
+        "언제 돼?",
+    )
+    assert support_response_policy_module._support_faq_question_anchor_allowed(
+        "general_card_cancel_timing_policy",
+        "카드 승인취소는 언제 반영돼?",
+    )
 
 
 def test_support_faq_source_grounded_reply_prefers_filtered_warranty_candidate_when_cross_topic_gap_is_small() -> None:

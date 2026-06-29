@@ -13,6 +13,7 @@ from services.tstation.policies.flow_controller import build_purchase_flow_fallb
 from services.tstation.policies.intent_frame import IntentFrame
 from services.tstation.policies.resolved_context import build_resolved_turn_context
 from services.tstation.policies.response_decision import ResponseDecision, ToolPlan
+from services.tstation.policies.support_response_policy import _is_tire_manufacture_date_question
 
 
 _HIGH_RISK_INTENTS = frozenset({
@@ -482,6 +483,14 @@ def build_turn_contract(
     policy_intent = str(getattr(routing_result, "policy_intent", "") or "")
     if planner_intent == "payment_error_troubleshooting" and _is_payment_error_policy_overmatch(user_text):
         planner_intent = None
+    if _should_normalize_dot_manufacture_date_policy(
+        user_text=user_text,
+        policy_intent=policy_intent,
+        planner_intent=planner_intent,
+    ):
+        policy_intent = "tire_manufacture_date_policy"
+        if planner_intent == "tire_quality_warranty_policy":
+            planner_intent = "tire_manufacture_date_policy"
     router_wins_intent = _router_wins_current_turn_intent(
         user_text=user_text,
         planner_intent=planner_intent,
@@ -497,6 +506,17 @@ def build_turn_contract(
         router_wins_intent = "assurance_service_policy"
     code_domain = _domain_value(intent_frame.domain) if intent_frame is not None else _domain_from_routing(routing_result)
     code_intent = intent_frame.intent if intent_frame is not None else _intent_from_cross_domain(cross_domain_plan)
+    if _should_normalize_dot_manufacture_date_policy(
+        user_text=user_text,
+        policy_intent=policy_intent,
+        planner_intent=planner_intent,
+        code_intent=code_intent,
+    ):
+        policy_intent = "tire_manufacture_date_policy"
+        if planner_intent == "tire_quality_warranty_policy":
+            planner_intent = "tire_manufacture_date_policy"
+        if code_intent == "tire_quality_warranty_policy":
+            code_intent = "tire_manufacture_date_policy"
     domain = planner_domains[0] if planner_domains else code_domain
     intent = planner_intent or code_intent
     if router_wins_intent:
@@ -4088,6 +4108,23 @@ def _router_wins_current_turn_intent(
         if candidate in ROUTER_WINS_EXECUTION_BOUNDARY_INTENTS:
             return candidate
     return None
+
+
+def _should_normalize_dot_manufacture_date_policy(
+    *,
+    user_text: str,
+    policy_intent: str | None = None,
+    planner_intent: str | None = None,
+    code_intent: str | None = None,
+) -> bool:
+    candidates = {
+        str(policy_intent or "").strip(),
+        str(planner_intent or "").strip(),
+        str(code_intent or "").strip(),
+    }
+    if "tire_quality_warranty_policy" not in candidates:
+        return False
+    return _is_tire_manufacture_date_question(user_text)
 
 
 def _is_payment_error_policy_overmatch(user_text: str | None) -> bool:

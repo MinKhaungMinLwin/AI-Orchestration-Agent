@@ -89,6 +89,15 @@ _POST_INSTALL_CONCERN_RE = re.compile(
     r"(?:새\s*|새로운\s*)?타이어.{0,12}(?:소음|우|진동|이상)",
     re.IGNORECASE,
 )
+_TIRE_MANUFACTURE_DATE_ANCHOR_RE = re.compile(
+    r"DOT|제조\s*일자|제조일자|제조\s*주차|생산\s*주차|신품|최신\s*제조|언제\s*만든|오래된\s*거\s*아냐|"
+    r"타이어마다.{0,12}(?:DOT|제조|생산)|(?:DOT|제조|생산).{0,12}(?:다르|차이)",
+    re.IGNORECASE,
+)
+_TIRE_QUALITY_DAMAGE_ANCHOR_RE = re.compile(
+    r"측면|사이드월|부풀|품질\s*보증|품질보증|제조상\s*과실|보증\s*기준|잔여\s*홈",
+    re.IGNORECASE,
+)
 _SUPPORT_FACT_TYPE_TO_BUCKET: dict[tuple[str, str], str] = {
     (_RESERVATION_INSTALLATION_POLICY, "visit_reservation_cancel"): "visit_reservation_cancel_policy",
     (_RESERVATION_INSTALLATION_POLICY, "store_change"): "reservation_store_change_policy",
@@ -282,7 +291,7 @@ def _support_faq_candidate_topic(
 
 
 def _support_faq_question_anchor_allowed(intent: str, text: str) -> bool:
-    return bool(re.search(r"카드|환불|승인취소|승인\s*취소|반영|영업일|언제", text, re.IGNORECASE))
+    return bool(re.search(r"카드|환불|승인취소|승인\s*취소|반영|영업일", text, re.IGNORECASE))
 
 
 def _support_faq_split_sentences(text: str) -> list[str]:
@@ -864,6 +873,8 @@ def resolve_support_faq_policy_context(intent: str, user_text: str) -> dict[str,
     text = str(user_text or "")
     if normalized_intent in {"signup_first_purchase_benefit_policy", "signup_coupon_guidance"} and _ASSURANCE_SERVICE_POLICY_ANCHOR_RE.search(text):
         normalized_intent = "assurance_service_policy"
+    if normalized_intent == "tire_quality_warranty_policy" and _is_tire_manufacture_date_question(text):
+        normalized_intent = "tire_manufacture_date_policy"
     if normalized_intent not in _SUPPORT_FAQ_POLICY_GROUP_INTENTS and not _POST_INSTALL_CONCERN_RE.search(text) and not _WRONG_ITEM_RE.search(text):
         return None
 
@@ -968,6 +979,15 @@ def resolve_support_faq_policy_context(intent: str, user_text: str) -> dict[str,
     return None
 
 
+def _is_tire_manufacture_date_question(text: str, *, include_candidate_terms: bool = False) -> bool:
+    value = str(text or "")
+    if _TIRE_QUALITY_DAMAGE_ANCHOR_RE.search(value):
+        return False
+    if _TIRE_MANUFACTURE_DATE_ANCHOR_RE.search(value):
+        return True
+    return bool(include_candidate_terms and _TIRE_MANUFACTURE_DATE_POLICY_RE.search(value))
+
+
 def _support_faq_candidate_matches_fact_type(fact_type: str, candidate: Mapping[str, Any]) -> bool:
     text = _support_faq_candidate_text(candidate)
     if fact_type == "visit_reservation_cancel":
@@ -1016,7 +1036,7 @@ def _support_faq_candidate_matches_fact_type(fact_type: str, candidate: Mapping[
     if fact_type == "promotion_gift_policy_general":
         return bool(re.search(r"사은품|이벤트|프로모션|선착순", text, re.IGNORECASE))
     if fact_type == "manufacture_date":
-        return bool(_TIRE_MANUFACTURE_DATE_POLICY_RE.search(text))
+        return _is_tire_manufacture_date_question(text, include_candidate_terms=True)
     if fact_type == "photo_condition_check":
         return bool(_TIRE_CONDITION_PHOTO_POLICY_RE.search(text) or re.search(r"사진|마모|손상|더\s*타", text, re.IGNORECASE))
     if fact_type == "wrong_item_or_fitment_issue":
@@ -1177,6 +1197,8 @@ def _support_faq_reply_ctas(policy_group: str, fact_type: str) -> list[dict[str,
             {"label": "마모도 측정 서비스", "url": CTAUrls.TIRE_CHECK, "domain": "TRANSACTION"},
             {"label": "1:1 문의하기", "domain": "SUPPORT"},
         ]
+    if policy_group == _PRODUCT_CONDITION_POLICY and fact_type == "manufacture_date":
+        return [{"label": "1:1 문의하기", "domain": "SUPPORT"}]
     if policy_group == _PURCHASE_ORDER_POLICY:
         return [
             {"label": "주문내역 확인", "domain": "TRANSACTION"},
@@ -1325,7 +1347,7 @@ def _build_support_faq_policy_reply(
     elif policy_group == _RESERVATION_INSTALLATION_POLICY and fact_type == "external_tire_install":
         if safe_fallback_used:
             response = (
-                "외부 구매 타이어를 매장에 반입해 장착하는 건은 FAQ만으로 일괄 가능하다고 단정하기 어려워요.\n"
+                "외부 구매 타이어를 매장에 반입해 장착하는 건은 확인된 안내만으로 일괄 가능하다고 단정하기 어려워요.\n"
                 "구매 경로와 매장 운영 기준에 따라 장착 가능 여부나 비용 기준이 달라질 수 있어요.\n"
                 "방문 전에는 해당 매장 운영 기준이나 고객센터 안내를 먼저 확인해 주세요."
             )
@@ -1392,12 +1414,20 @@ def _build_support_faq_policy_reply(
             "실제 적용 전에는 이벤트 상세 조건을 먼저 확인해 주세요."
         )
     elif policy_group == _PRODUCT_CONDITION_POLICY and fact_type == "manufacture_date":
-        freshness_text = facts.get("freshness_window") or "6~12개월 이내"
-        response = (
-            f"제조일자 {freshness_text} 제품은 정상 신품 범주로 안내되는 경우가 있어요.\n"
-            "다만 제조일자만으로 불량이나 교환·환불 가능 여부를 바로 단정할 수는 없어요.\n"
-            "실제 판단 전에는 제품 상태와 구매 이력도 함께 확인해 주세요."
-        )
+        if safe_fallback_used:
+            response = (
+                "정확히 일치하는 제조일자 항목은 찾지 못했지만, 타이어마다 DOT가 다를 수는 있어요.\n"
+                "DOT는 생산 주차와 생산 연도를 나타내며, 같은 장착 건에서도 물류 출고 상황에 따라 생산 주차가 서로 다를 수 있습니다.\n"
+                "다만 DOT가 다르다는 이유만으로 바로 교환 대상이라고 단정하기는 어려워요.\n"
+                "현장 매장 직원에게 제품 상태와 DOT 차이를 확인 요청해 주세요. 정확한 처리 기준 확인이 필요하면 1:1 문의로 접수해 드릴게요."
+            )
+        else:
+            freshness_text = facts.get("freshness_window") or "6~12개월 이내"
+            response = (
+                f"제조일자 {freshness_text} 제품은 정상 신품 범주로 안내되는 경우가 있어요.\n"
+                "다만 제조일자만으로 불량이나 교환·환불 가능 여부를 바로 단정할 수는 없어요.\n"
+                "실제 판단 전에는 제품 상태와 구매 이력도 함께 확인해 주세요."
+            )
     else:
         response = (
             "현재 챗봇에서는 사진이나 파일을 업로드해 확인받을 수 없어요.\n"
@@ -1991,7 +2021,10 @@ def decide_support_response(
             assistant_guidance="챗봇 처리 한계를 인정하고 1:1 문의 또는 공식 고객센터 번호 안내로 연결한다.",
         )
 
-    if intent == "tire_manufacture_date_policy" or _TIRE_MANUFACTURE_DATE_POLICY_RE.search(text):
+    if intent == "tire_manufacture_date_policy" or _is_tire_manufacture_date_question(
+        text,
+        include_candidate_terms=True,
+    ):
         return _decision(
             response_shape_key="tire_manufacture_date_policy",
             response_shape=ResponseShape.SUMMARY,

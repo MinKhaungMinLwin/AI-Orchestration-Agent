@@ -10689,7 +10689,7 @@ def _normalize_general_cancel_fee_policy_guidance(event_data: dict) -> bool:
     response = (
         "예약/주문 취소 시 비용 발생 여부는 주문 유형과 진행 상태에 따라 달라질 수 있어요.\n\n"
         "매장 방문 예약만 취소하는 경우에는 별도 취소 수수료가 발생하지 않는 것으로 안내돼요. "
-        "온라인 주문의 단순 변심 취소/반품은 배송 진행 상태에 따라 비용이 발생할 수 있으니 FAQ 안내와 주문 상세를 함께 확인해 주세요."
+        "온라인 주문의 단순 변심 취소/반품은 배송 진행 상태에 따라 비용이 발생할 수 있으니 정책 안내와 주문 상세를 함께 확인해 주세요."
     )
     event_data["assistantResponse"] = response
     event_data["quickReplies"] = [
@@ -16402,7 +16402,7 @@ def _build_faq_policy_source_grounded_fallback_event(
         return None
     assistant_response = (
         f"{source_summary}\n\n"
-        "따라서 교환, 환불, 보상 가능 여부는 FAQ 기준과 실제 점검 결과에 따라 확인해야 해요."
+        "따라서 교환, 환불, 보상 가능 여부는 확인된 안내와 실제 점검 결과에 따라 확인해야 해요."
     )
     return {
         "type": "data",
@@ -16412,7 +16412,7 @@ def _build_faq_policy_source_grounded_fallback_event(
         "data": {
             "assistantResponse": assistant_response,
             "quickReplies": [
-                {"label": "FAQ 다시 확인", "domain": "SUPPORT"},
+                {"label": "안내 다시 확인", "domain": "SUPPORT"},
                 {"label": "1:1 문의하기", "domain": "SUPPORT"},
             ],
             "predictedDomains": ["SUPPORT"],

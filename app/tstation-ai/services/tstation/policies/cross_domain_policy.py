@@ -18,6 +18,7 @@ from services.tstation.policies.store_service_gate import (
     extract_valid_store_name,
     has_store_service_availability_signal,
 )
+from services.tstation.policies.support_response_policy import _is_tire_manufacture_date_question
 
 
 _PRODUCT_HINT_RE = re.compile(
@@ -98,16 +99,6 @@ _WARRANTY_CLAIM_REFERENCE_RE = re.compile(
 _WARRANTY_CLAIM_STRONG_RE = re.compile(
     r"무료\s*교체|무상\s*교환|무상\s*교체|보상\s*해\s*줘|보상해줘|책임\s*져|책임져|"
     r"하자\s*아니|클레임|품질\s*보증|품질보증",
-    re.IGNORECASE,
-)
-_TIRE_MANUFACTURE_DATE_POLICY_RE = re.compile(
-    r"제조\s*일자|제조일자|제조\s*주차|DOT|최신\s*제조|언제\s*만든|오래된\s*거\s*아냐|"
-    r"신상품\s*맞|신품|생산\s*(?:일자|주차|시점)|타이어마다.{0,12}DOT|DOT.{0,12}(?:다르|달라)",
-    re.IGNORECASE,
-)
-_TIRE_QUALITY_WARRANTY_POLICY_RE = re.compile(
-    r"측면.{0,12}부풀|사이드월.{0,12}부풀|품질\s*보증|품질보증|무상\s*(?:A/?S|as|교환)|"
-    r"제조상\s*과실|보증\s*기준|불량.{0,12}(?:무상|교환|보상)",
     re.IGNORECASE,
 )
 
@@ -314,7 +305,7 @@ def plan_cross_domain_turn(user_text: str, *, known_slots: dict[str, Any] | None
             response_strategy="single_domain_response",
         )
 
-    if _TIRE_MANUFACTURE_DATE_POLICY_RE.search(text) and not _TIRE_QUALITY_WARRANTY_POLICY_RE.search(text):
+    if _is_tire_manufacture_date_question(text, include_candidate_terms=True):
         return CrossDomainPlan(
             primary_domain=PolicyDomain.SUPPORT,
             subtasks=(
