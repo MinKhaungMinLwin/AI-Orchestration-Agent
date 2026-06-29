@@ -4208,6 +4208,11 @@ def _router_wins_tool_boundary(intent: str) -> tuple[tuple[str, ...], tuple[str,
                 if tool not in {"search_faq_hybrid_tool", "transfer_to_qna_tool"}
             ),
         )
+    if intent in _SUPPORT_FAQ_POLICY_TOOL_INTENTS:
+        return (
+            _SUPPORT_SAFE_AGENT_TOOLS,
+            tuple(tool for tool in _ROUTER_WINS_TRANSACTION_FORBIDDEN_TOOLS if tool not in _SUPPORT_SAFE_AGENT_TOOLS),
+        )
     return (
         ("search_faq_hybrid_tool",),
         tuple(tool for tool in _ROUTER_WINS_TRANSACTION_FORBIDDEN_TOOLS if tool != "search_faq_hybrid_tool"),
