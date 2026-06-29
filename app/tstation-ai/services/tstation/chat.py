@@ -10098,6 +10098,50 @@ def _build_reservation_store_info_event(reservation_row: dict, *, match_reason: 
     }
 
 
+def _build_reservation_status_lookup_event(reservations_result: dict) -> dict:
+    rows = sorted(_reservation_rows_from_result(reservations_result), key=_reservation_sort_key, reverse=True)
+    metadata = {
+        "responseShapeKey": "reservation_status_lookup",
+        "reservationStatusSource": "reservation_history",
+        "reservationCount": len(rows),
+    }
+    if not rows:
+        response = "예약 내역을 확인했지만 현재 예약된 매장 방문은 찾지 못했어요."
+        quick_replies = [
+            {"label": "매장 찾기", "domain": "TRANSACTION"},
+            {"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"},
+        ]
+    else:
+        lines = ["예약 내역을 확인했어요."]
+        for idx, row in enumerate(rows[:3], start=1):
+            shop_nm = _reservation_row_value(row, "shop_nm", "shopName", "store_name", "storeName") or "매장명 확인 필요"
+            rsv_dtime = _reservation_row_value(row, "vst_rsv_dtime", "rsv_dtime") or "예약 일시 확인 필요"
+            status = _reservation_row_value(row, "shop_vst_rsv_sts_label", "status_nm", "status") or "상태 확인 필요"
+            rsv_label = _reservation_row_value(row, "shop_rsv_sct_label", "reservationType")
+            label_part = f" / {rsv_label}" if rsv_label else ""
+            lines.append(f"{idx}. {shop_nm} / {rsv_dtime} / {status}{label_part}")
+        if len(rows) > 3:
+            lines.append(f"외 {len(rows) - 3}건은 예약 내역에서 확인해 주세요.")
+        response = "\n".join(lines)
+        quick_replies = [
+            {"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"},
+            {"label": "다른 예약 확인", "domain": "TRANSACTION"},
+        ]
+
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+        "assistant_response_source": "code_reservation_status_lookup",
+        "data": {
+            "assistantResponse": response,
+            "quickReplies": quick_replies,
+            "predictedDomains": ["TRANSACTION"],
+            "metadata": metadata,
+        },
+    }
+
+
 def _stock_inventory_rows(raw_inventory: object, key: str) -> list[dict]:
     if not isinstance(raw_inventory, dict):
         return []
@@ -16964,6 +17008,14 @@ _FAST_PATH_TRANSACTION_RECOVERY_ALLOWED_TOOLS = frozenset({
     "get_store_inventory_tool",
     "get_store_list_tool",
     "search_stores_tool",
+    "get_my_reservations_tool",
+})
+_OWNED_RECORD_RECOVERY_TOOLS = frozenset({
+    "get_my_reservations_tool",
+})
+_OWNED_RECORD_RECOVERY_INTENTS = frozenset({
+    "reservation_status_lookup",
+    "reservation_store_info_lookup",
 })
 _TRANSACTION_STORE_PREVIEW_RECOVERY_INTENTS = frozenset({
     "quick_order_reservation",
@@ -17597,6 +17649,25 @@ def _contract_required_transaction_tool_input(
         if preview_input:
             return preview_input, "turn_contract_required_transaction_store_preview", "장착 가능 매장 확인 중..."
         return None
+    if preferred_tool in _OWNED_RECORD_RECOVERY_TOOLS:
+        if str(turn_contract.intent or "").strip() not in _OWNED_RECORD_RECOVERY_INTENTS:
+            return None
+        if preferred_tool in {str(tool) for tool in tuple(turn_contract.forbidden_tools or ()) if str(tool).strip()}:
+            return None
+        tool_args_patch = (
+            dict(turn_contract.tool_args_patch)
+            if isinstance(getattr(turn_contract, "tool_args_patch", None), Mapping)
+            else {}
+        )
+        tool_input = {
+            str(key): value
+            for key, value in tool_args_patch.items()
+            if value not in (None, "", [], {})
+        }
+        if preferred_tool == "get_my_reservations_tool":
+            tool_input.setdefault("sct_cd", "all")
+            return tool_input, "turn_contract_required_owned_record_lookup", "예약 내역 조회 중..."
+        return None
     if (
         preferred_tool
         and (
@@ -17718,6 +17789,30 @@ async def _recover_contract_required_transaction_store_preview(
     )
 
 
+async def _recover_contract_required_owned_record_lookup(
+    *,
+    turn_contract: TurnContract | None,
+    user_text: str,
+    merged_slots: ConversationSlots | None,
+    blocked_fast_path_source: str = "contract_required_owned_record_lookup",
+) -> dict[str, Any] | None:
+    if turn_contract is None:
+        return None
+    if str(turn_contract.domain or "").strip().lower() != PolicyDomain.TRANSACTION.value:
+        return None
+    if str(turn_contract.intent or "").strip() not in _OWNED_RECORD_RECOVERY_INTENTS:
+        return None
+    preferred_tool = str(getattr(turn_contract, "preferred_tool", None) or "").strip()
+    if preferred_tool not in _OWNED_RECORD_RECOVERY_TOOLS:
+        return None
+    return await recover_blocked_fast_path_to_contract_tool(
+        turn_contract=turn_contract,
+        user_text=user_text,
+        merged_slots=merged_slots,
+        blocked_fast_path_source=blocked_fast_path_source,
+    )
+
+
 async def _recover_contract_required_tool(
     *,
     turn_contract: TurnContract | None,
@@ -17743,6 +17838,14 @@ async def _recover_contract_required_tool(
     )
     if preview_recovery is not None:
         return preview_recovery
+    owned_record_recovery = await _recover_contract_required_owned_record_lookup(
+        turn_contract=turn_contract,
+        user_text=user_text,
+        merged_slots=merged_slots,
+        blocked_fast_path_source=blocked_fast_path_source,
+    )
+    if owned_record_recovery is not None:
+        return owned_record_recovery
     return await _recover_contract_required_vehicle_recommendation(
         turn_contract=turn_contract,
         user_text=user_text,
@@ -18586,6 +18689,16 @@ async def recover_blocked_fast_path_to_contract_tool(
             [{"tool": preferred_tool, "args": tool_input, "data": tool_result}],
             assistant_text,
         )
+        if not isinstance(mapped_event, dict) and preferred_tool == "get_my_reservations_tool":
+            if contract_intent == "reservation_store_info_lookup":
+                reservation_row, match_reason = _select_reservation_store_row(user_text, tool_result)
+                mapped_event = (
+                    _build_reservation_store_info_event(reservation_row, match_reason=match_reason)
+                    if reservation_row is not None
+                    else _reservation_store_not_found_event(match_reason)
+                )
+            else:
+                mapped_event = _build_reservation_status_lookup_event(tool_result)
         if not isinstance(mapped_event, dict):
             return None
         mapped_event["source_domain"] = source_domain

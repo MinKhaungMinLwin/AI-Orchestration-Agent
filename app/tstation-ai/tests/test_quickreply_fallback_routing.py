@@ -20062,6 +20062,126 @@ def test_contract_required_tool_candidate_uses_contract_preferred_tool_args() ->
     assert candidate.source_domain == "transaction"
 
 
+def test_contract_required_tool_candidate_uses_owned_reservation_lookup_contract() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="reservation_status_lookup",
+        sub_intent="owned_record_status",
+        known_slots={
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "owned_record_target": "reservation",
+            "requested_cal_day": "20260630",
+        },
+        allowed_tools=("get_my_reservations_tool", "get_orders_of_user_tool", "get_order_status_tool"),
+        forbidden_tools=("search_product_tool", "get_store_schedule_tool", "transaction_store_preview_tool"),
+        preferred_tool="get_my_reservations_tool",
+        tool_args_patch={"sct_cd": "all"},
+        blocking_required_slots=(),
+        context_state="resumed",
+        response_decision={
+            "template": "quickReply",
+            "metadata": {"response_shape_key": "reservation_status_lookup"},
+        },
+    )
+
+    candidate = chat_module._contract_required_tool_candidate(
+        turn_contract=contract,
+        user_text="오늘 오후에 예약한 거 있지?",
+        merged_slots=ConversationSlots(
+            pending_intent="order",
+            goal_type="place_order",
+            requested_cal_day="20260630",
+        ),
+    )
+
+    assert candidate is not None
+    assert candidate.tool_name == "get_my_reservations_tool"
+    assert candidate.tool_input == {"sct_cd": "all"}
+    assert candidate.tool_input_source == "turn_contract_required_owned_record_lookup"
+    assert candidate.display_name == "예약 내역 조회 중..."
+
+
+def test_recover_contract_required_tool_runs_owned_reservation_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_input: dict[str, Any] = {}
+
+    def _fake_reservations_invoke(tool_input: dict[str, Any]) -> dict[str, Any]:
+        captured_input.update(tool_input)
+        return {
+            "status": "success",
+            "data": {
+                "reservations": [
+                    {
+                        "shop_nm": "티스테이션 광교신도시점",
+                        "vst_rsv_dtime": "2026-06-30 15:00",
+                        "shop_vst_rsv_sts_label": "예약확정",
+                        "shop_rsv_sct_label": "구매후방문예약",
+                    }
+                ]
+            },
+        }
+
+    async def _fake_to_thread(func: Any, *args: Any, **kwargs: Any) -> Any:
+        return func(*args, **kwargs)
+
+    from services.tstation.agents.c_transaction_agent import tools as transaction_tools
+
+    monkeypatch.setattr(
+        transaction_tools,
+        "get_my_reservations_tool",
+        SimpleNamespace(invoke=_fake_reservations_invoke),
+    )
+    monkeypatch.setattr(chat_module.asyncio, "to_thread", _fake_to_thread)
+
+    contract = TurnContract(
+        domain="transaction",
+        intent="reservation_status_lookup",
+        sub_intent="owned_record_status",
+        known_slots={
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "owned_record_target": "reservation",
+            "requested_cal_day": "20260630",
+        },
+        allowed_tools=("get_my_reservations_tool", "get_orders_of_user_tool", "get_order_status_tool"),
+        forbidden_tools=("search_product_tool", "get_store_schedule_tool", "transaction_store_preview_tool"),
+        preferred_tool="get_my_reservations_tool",
+        tool_args_patch={"sct_cd": "all"},
+        blocking_required_slots=(),
+        context_state="resumed",
+        response_decision={
+            "template": "quickReply",
+            "metadata": {"response_shape_key": "reservation_status_lookup"},
+        },
+    )
+
+    recovery = asyncio.run(
+        chat_module._recover_contract_required_tool(
+            turn_contract=contract,
+            user_text="오늘 오후에 예약한 거 있지?",
+            merged_slots=ConversationSlots(
+                pending_intent="order",
+                goal_type="place_order",
+                requested_cal_day="20260630",
+            ),
+            blocked_fast_path_source="contract_required_tool_executor",
+        )
+    )
+
+    assert recovery is not None
+    assert recovery["tool_name"] == "get_my_reservations_tool"
+    assert captured_input == {"sct_cd": "all"}
+    assert recovery["event"]["template"] == "quickReply"
+    assert recovery["event"]["assistant_response_source"] == "contract_tool_recovery_after_fast_path_block"
+    assert recovery["event"]["data"]["assistantResponse"].startswith("예약 내역을 확인했어요.")
+    assert "티스테이션 광교신도시점" in recovery["event"]["data"]["assistantResponse"]
+    metadata = recovery["event"]["data"]["metadata"]
+    assert metadata["recovered_tool"] == "get_my_reservations_tool"
+    assert metadata["tool_input_source"] == "turn_contract_required_owned_record_lookup"
+
+
 def test_contract_required_tool_candidate_uses_active_flow_progress_store_lookup() -> None:
     active_context = commit_flow_state(
         {},
