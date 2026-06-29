@@ -1676,6 +1676,24 @@ def test_discovery_policy_product_search_summary_does_not_reference_missing_card
     assert result["assistant_response_source"] == "discovery_policy"
 
 
+def test_discovery_policy_empty_product_search_says_not_found() -> None:
+    current_user_text.set("벤투스 노블 1 구매하고 싶어")
+    decision = decide_discovery_response(build_discovery_intent_frame("벤투스 노블 1 구매하고 싶어"))
+    current_discovery_response_decision.set(decision)
+
+    result = try_build_template(
+        [_search_product_entry(keyword="Ventus", size=None, items=[])],
+        "검색된 상품 정보를 기준으로 안내드릴게요.",
+    )
+
+    assert result is not None
+    assert result["template"] == "quickReply"
+    assistant_response = result["data"]["assistantResponse"]
+    assert "Ventus 상품은 현재 검색 결과에서 찾지 못했어요." in assistant_response
+    assert "검색된 상품 정보를 기준" not in assistant_response
+    assert result["assistant_response_source"] == "discovery_policy"
+
+
 def test_unverified_claim_prefix_applies_to_neutral_product_summary_mapper() -> None:
     text = "벤투스 air S가 우주 항공국 인증 제품이라던데 사실이야?"
     current_user_text.set(text)

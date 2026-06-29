@@ -52,13 +52,14 @@ def test_product_keyword_with_size_no_qty_stays_product_search() -> None:
 
 
 def test_mileage_product_like_query_goes_to_product_search() -> None:
-    assert _goal_candidate("마일리지 타이어") == "product_search"
-    assert _goal_candidate("마일리지 타이어 추천") == "product_search"
     assert _goal_candidate("마일리지 플러스 2") == "product_search"
     assert _goal_candidate("마일리지 플러스 3 추천해줘") == "product_search"
+    assert _goal_candidate("mileage plus 추천") == "product_search"
 
 
 def test_mileage_attribute_query_stays_recommendation() -> None:
+    assert _goal_candidate("마일리지 타이어") == "product_recommend"
+    assert _goal_candidate("마일리지 타이어 추천") == "product_recommend"
     assert _goal_candidate("마일리지 좋은 타이어 추천") == "product_recommend"
     assert _goal_candidate("수명 긴 타이어 추천") == "product_recommend"
 
@@ -247,3 +248,15 @@ def test_seoul_region_followup_is_extracted() -> None:
     slots = ConversationSlots.extract_from_user_text("서울은?")
 
     assert slots.region == "서울"
+
+
+def test_composite_gyeonggi_gwangju_region_is_preserved() -> None:
+    slots = ConversationSlots.extract_from_user_text("다이나프로 HL3 경기도 광주 지역 매장에서 다음 주에 장착 가능?")
+
+    assert slots.region == "경기도 광주"
+
+
+def test_composite_gwangju_metro_region_is_preserved() -> None:
+    slots = ConversationSlots.extract_from_user_text("광주광역시 광산구 매장 있어?")
+
+    assert slots.region == "광주광역시 광산구"

@@ -3,6 +3,7 @@ import pytest
 from services.tstation.policies.cross_domain_policy import (
     agent_domain_values_for_initial_route,
     agent_domain_values_for_plan,
+    is_safe_service_tire_recommendation_request,
     is_warranty_claim_signal,
     plan_cross_domain_turn,
     should_defer_product_price_explanation_to_classifier,
@@ -143,6 +144,28 @@ def test_mileage_recommendation_does_not_become_warranty_claim() -> None:
 
     assert not is_warranty_claim_signal(text)
     assert plan.primary_domain == PolicyDomain.UNKNOWN
+
+
+def test_safe_service_target_tire_question_routes_to_discovery_recommendation() -> None:
+    text = "안심서비스 가능한 타이어는?"
+    plan = plan_cross_domain_turn(text)
+
+    assert is_safe_service_tire_recommendation_request(text)
+    assert plan.primary_domain == PolicyDomain.DISCOVERY
+    assert agent_domain_values_for_plan(plan) == ["discovery"]
+    assert plan.subtasks[0].intent == "safe_service_tire_recommendation"
+
+
+def test_safe_service_owned_or_compensation_questions_stay_support() -> None:
+    for text in (
+        "나 안심서비스 가입했던것 같은데 확인해줘",
+        "안심서비스 보상 조건이 어떻게 돼?",
+        "안심서비스 가입 방법 알려줘",
+    ):
+        plan = plan_cross_domain_turn(text)
+
+        assert not is_safe_service_tire_recommendation_request(text)
+        assert plan.primary_domain == PolicyDomain.SUPPORT
 
 
 def test_sized_regional_product_price_lookup_stays_transaction_flow() -> None:

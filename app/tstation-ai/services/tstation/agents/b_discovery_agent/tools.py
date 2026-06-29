@@ -97,15 +97,15 @@ def _apply_recommendation_policy_patch(
         brand_cd = str(patch["brand_cd"])
     if not tire_size and not car_lnc_cd and patch.get("tire_size"):
         tire_size = str(patch["tire_size"])
-    if not sort_by and patch.get("sort_by"):
+    if patch.get("sort_by"):
         sort_by = str(patch["sort_by"])
-    if not season_nm and patch.get("season_nm"):
+    if patch.get("season_nm"):
         season_nm = str(patch["season_nm"])
-    if not pfm_nm and patch.get("pfm_nm"):
+    if patch.get("pfm_nm"):
         pfm_nm = str(patch["pfm_nm"])
-    if not prc_grd and patch.get("prc_grd"):
+    if patch.get("prc_grd"):
         prc_grd = str(patch["prc_grd"])
-    if not vehicle_type and patch.get("vehicle_type"):
+    if patch.get("vehicle_type"):
         vehicle_type = str(patch["vehicle_type"])
     if suppress_season_filter:
         season_nm = None

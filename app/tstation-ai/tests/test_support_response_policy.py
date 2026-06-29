@@ -133,6 +133,19 @@ def test_tire_manufacture_date_policy_uses_faq_first_contract() -> None:
     assert "promise_exchange_or_refund" in decision.forbidden_behaviors
 
 
+def test_post_install_noise_refund_uses_tire_quality_warranty_policy() -> None:
+    decision = decide_support_response(
+        intent="single_domain",
+        user_text="타이어 갈고 고속도로 주행 시 노면 소음이 너무 심해졌어. 내 잘못아닌거 같은데, 환불해줘",
+    )
+
+    assert decision.template == TemplateName.QUICK_REPLY
+    assert decision.response_shape == ResponseShape.SUMMARY
+    assert decision.metadata["response_shape_key"] == "tire_quality_warranty_policy"
+    assert "transfer_to_qna_direct_first" in decision.forbidden_behaviors
+    assert "claim_free_replacement_without_inspection" in decision.forbidden_behaviors
+
+
 def test_reservation_policy_guidance_text_trigger_without_owned_anchor() -> None:
     decision = decide_support_response(
         intent="support_faq",

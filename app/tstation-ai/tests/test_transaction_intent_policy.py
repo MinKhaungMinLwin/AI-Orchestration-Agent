@@ -1,4 +1,7 @@
+from dataclasses import replace
+
 from services.tstation.policies.response_decision import TemplateName
+from services.tstation.policies.flow_state import purchase_context_vehicle_selection_patch
 from services.tstation.policies import transaction_intent_policy as policy
 from services.tstation.policies.transaction_intent_policy import (
     build_transaction_intent_frame,
@@ -100,6 +103,57 @@ def test_purchase_flow_with_store_and_no_quantity_resolves_to_ask_quantity() -> 
     assert plan.metadata["flow_step"] == "ask_quantity"
     assert plan.allowed_tools == ()
     assert plan.metadata["flow_slots"]["store_name"] == "한남점"
+
+
+def test_purchase_continuation_after_vehicle_selection_resolves_to_ask_quantity() -> None:
+    frame = replace(
+        build_transaction_intent_frame(
+            "61거1836",
+            known_slots={
+                "goods_no": "G000000312679",
+                "product_name": "Ventus S2 AS",
+                "pending_product_name": "Ventus S2 AS",
+                "tire_model": "Ventus S2 AS",
+                "tire_size": "225/45R17",
+                "car_no": "61거1836",
+                "car_lnc_cd": "W036269",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            },
+        ),
+        intent="quick_order_reservation_continue",
+    )
+    plan = plan_transaction_tools(frame)
+
+    assert plan.metadata["response_intent"] == "quick_order_reservation_continue"
+    assert plan.metadata["flow_id"] == "purchase_order"
+    assert plan.metadata["flow_step"] == "ask_quantity"
+    assert plan.required_slots == ("quantity",)
+    assert plan.allowed_tools == ()
+
+
+def test_purchase_vehicle_selection_patch_promotes_resolved_goods_no() -> None:
+    patch = purchase_context_vehicle_selection_patch(
+        parent_context={
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "pending_product_name": "Ventus S2 AS",
+        },
+        selected_vehicle_slots={
+            "car_no": "61거1836",
+            "tire_size": "225/45R17",
+        },
+        current_slots={
+            "goods_no": "G000000312679",
+            "product_name": "Ventus S2 AS",
+            "tire_model": "Ventus S2 AS",
+        },
+    )
+
+    assert patch["goods_no"] == "G000000312679"
+    assert patch["product_name"] == "Ventus S2 AS"
+    assert patch["tire_model"] == "Ventus S2 AS"
+    assert patch["tire_size"] == "225/45R17"
 
 
 def test_purchase_flow_with_region_resolves_to_show_store_candidates() -> None:
@@ -228,6 +282,8 @@ def test_router_structured_store_service_search_overrides_generic_store_search_t
     assert frame.intent == "store_service_search"
     assert frame.known_slots["region"] == "경기"
     assert frame.known_slots["service_codes"] == ("119",)
+    assert "requested_cal_day" not in frame.known_slots
+    assert "availability_intent" not in frame.known_slots
     assert plan.allowed_tools == ("search_stores_tool", "get_store_list_tool")
     assert "get_store_schedule_tool" in plan.forbidden_tools
     assert "transaction_store_preview_tool" in plan.forbidden_tools
@@ -731,6 +787,96 @@ def test_tc020_gwanggyo_nearby_store_search_prefers_unified_search() -> None:
     assert plan.tool_args_patch["region_code"] == "광교"
     assert plan.tool_args_patch["place_query"] == "광교"
     assert "transaction_store_preview_tool" in plan.forbidden_tools
+
+
+def test_stock_inventory_nearby_store_lookup_prefers_unified_store_search() -> None:
+    frame = build_transaction_intent_frame(
+        "벤투스 S2 AS 2454519 4개 강남역 근처 재고 있는 매장 찾아줘",
+        known_slots={
+            "goods_no": "G000000310126",
+            "tire_size": "245/45R19",
+            "ord_qty": 4,
+            "region": "강남",
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+            "stock_check_mode": "inventory_only",
+        },
+    )
+    frame = replace(
+        frame,
+        sub_intent="stock",
+        known_slots={**dict(frame.known_slots), "stock_check_mode": "inventory_only"},
+        entities={**dict(frame.entities), "stock_check_mode": "inventory_only"},
+    )
+    plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "stock_store_search"
+    assert frame.entities["nearby"] is True
+    assert "search_stores_tool" in plan.allowed_tools
+    assert "get_store_list_tool" in plan.allowed_tools
+    assert plan.preferred_tool == "search_stores_tool"
+    assert plan.tool_args_patch["place_query"] == "강남"
+    assert "quick_order_tool" not in plan.allowed_tools
+
+
+def test_stock_inventory_region_store_lookup_keeps_store_list_preferred() -> None:
+    frame = build_transaction_intent_frame(
+        "벤투스 S2 AS 2454519 4개 강남 재고 있는 매장 찾아줘",
+        known_slots={
+            "goods_no": "G000000310126",
+            "tire_size": "245/45R19",
+            "ord_qty": 4,
+            "region": "강남",
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+            "stock_check_mode": "inventory_only",
+        },
+    )
+    frame = replace(
+        frame,
+        sub_intent="stock",
+        known_slots={**dict(frame.known_slots), "stock_check_mode": "inventory_only"},
+        entities={**dict(frame.entities), "stock_check_mode": "inventory_only"},
+    )
+    plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "stock_store_search"
+    assert frame.entities["nearby"] is False
+    assert "search_stores_tool" in plan.allowed_tools
+    assert plan.preferred_tool == "get_store_list_tool"
+    assert plan.tool_args_patch["region_code"] == "강남"
+
+
+def test_stock_inventory_mode_overrides_non_stock_sub_intent_preview_boundary() -> None:
+    frame = build_transaction_intent_frame(
+        "네, 문정 지역으로 검색",
+        known_slots={
+            "goods_no": "G000000310126",
+            "tire_size": "245/45R19",
+            "ord_qty": 2,
+            "region": "문정",
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+            "stock_check_mode": "inventory_only",
+        },
+    )
+    frame = replace(
+        frame,
+        sub_intent="store_lookup",
+        known_slots={**dict(frame.known_slots), "stock_check_mode": "inventory_only"},
+        entities={**dict(frame.entities), "stock_check_mode": "inventory_only"},
+    )
+    plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "stock_store_search"
+    assert plan.metadata["tool_boundary"] == "stock_inventory_store_lookup"
+    assert plan.metadata["stock_check_mode"] == "inventory_only"
+    assert plan.preferred_tool == "get_store_list_tool"
+    assert "get_store_list_tool" in plan.allowed_tools
+    assert "search_stores_tool" in plan.allowed_tools
+    assert "transaction_store_preview_tool" in plan.forbidden_tools
+    assert "transaction_store_preview_tool" not in plan.allowed_tools
+    assert plan.tool_args_patch["region_code"] == "문정"
 
 
 def test_tc049_store_visit_schedule_for_unverified_store_keeps_store_schedule_intent() -> None:

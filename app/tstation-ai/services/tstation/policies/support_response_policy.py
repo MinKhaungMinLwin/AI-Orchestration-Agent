@@ -76,6 +76,12 @@ _ASSURANCE_SERVICE_POLICY_ANCHOR_RE = re.compile(
     r"안심\s*서비스|안심서비스|안심\s*플러스|안심플러스|디지털\s*워런티|종이\s*보증서|보증서|워런티",
     re.IGNORECASE,
 )
+_ASSURANCE_PRODUCT_ELIGIBILITY_RE = re.compile(
+    r"(?:가능|대상|적용|가입).{0,16}(?:타이어|상품|제품|모델)|"
+    r"(?:타이어|상품|제품|모델).{0,16}(?:가능|대상|적용|가입)|"
+    r"어떤\s*(?:타이어|상품|제품|모델)",
+    re.IGNORECASE,
+)
 _PROMOTION_PARTIAL_CANCEL_RE = re.compile(
     r"부분\s*취소|[0-9]+\s*(?:짝|개)\s*취소|반납|차감|돌려줘야",
     re.IGNORECASE,
@@ -85,11 +91,26 @@ _WRONG_ITEM_RE = re.compile(
     re.IGNORECASE,
 )
 _POST_INSTALL_CONCERN_RE = re.compile(
-    r"(?:교체|설치|장착|교체하고나서).{0,12}(?:소음|우는\s*소리|진동|이상한\s*소리)|"
-    r"타이어\s*(?:소음|우|진동|이상|문제)|"
+    r"(?:교체|설치|장착|갈고|교체하고나서).{0,24}(?:소음|노면\s*소음|우는\s*소리|진동|이상한\s*소리)|"
+    r"타이어.{0,12}(?:소음|노면\s*소음|우|진동|이상|문제)|"
     r"(?:새\s*|새로운\s*)?타이어.{0,12}(?:소음|우|진동|이상)",
     re.IGNORECASE,
 )
+_POST_INSTALL_CLAIM_ACTION_RE = re.compile(
+    r"환불|교환|보상|책임|클레임|불량|하자|못\s*쓰|못쓸|내\s*잘못\s*아닌",
+    re.IGNORECASE,
+)
+
+
+def is_post_install_quality_concern(user_text: str | None) -> bool:
+    return _POST_INSTALL_CONCERN_RE.search(str(user_text or "")) is not None
+
+
+def is_post_install_quality_claim(user_text: str | None) -> bool:
+    text = str(user_text or "")
+    return _POST_INSTALL_CONCERN_RE.search(text) is not None and _POST_INSTALL_CLAIM_ACTION_RE.search(text) is not None
+
+
 _TIRE_MANUFACTURE_DATE_ANCHOR_RE = re.compile(
     r"DOT|제조\s*일자|제조일자|제조\s*주차|생산\s*주차|신품|최신\s*제조|언제\s*만든|오래된\s*거\s*아냐|"
     r"타이어마다.{0,12}(?:DOT|제조|생산)|(?:DOT|제조|생산).{0,12}(?:다르|차이)",
@@ -840,6 +861,7 @@ def _build_support_faq_safe_fallback_reply(
     *,
     policy_group: str,
     fact_type: str,
+    user_text: str = "",
     filtered_candidates: list[Mapping[str, Any]],
     excluded_candidates: list[Mapping[str, Any]],
     fallback_reason: str,
@@ -849,6 +871,7 @@ def _build_support_faq_safe_fallback_reply(
         fact_type,
         {},
         safe_fallback_used=True,
+        user_text=user_text,
     )
     return {
         "assistant_response": response,
@@ -1194,8 +1217,19 @@ def _extract_support_faq_policy_facts(
     return _support_faq_strip_card_refund_facts_for_non_anchor(intent=intent, user_text=user_text, facts=facts)
 
 
-def _support_faq_reply_ctas(policy_group: str, fact_type: str) -> list[dict[str, Any]]:
+def _is_assurance_product_eligibility_question(user_text: str) -> bool:
+    return bool(_ASSURANCE_SERVICE_POLICY_ANCHOR_RE.search(user_text or "")) and bool(
+        _ASSURANCE_PRODUCT_ELIGIBILITY_RE.search(user_text or "")
+    )
+
+
+def _support_faq_reply_ctas(policy_group: str, fact_type: str, *, user_text: str = "") -> list[dict[str, Any]]:
     if policy_group == _ASSURANCE_WARRANTY_POLICY:
+        if fact_type == "assurance_coverage_condition" and _is_assurance_product_eligibility_question(user_text):
+            return [
+                {"label": "차량으로 확인하기", "domain": "DISCOVERY"},
+                {"label": "타이어 사이즈 입력", "domain": "DISCOVERY"},
+            ]
         return [{"label": "나의 워런티 확인", "url": CTAUrls.WARRANTY_MAIN, "domain": "SUPPORT"}]
     if policy_group == _BENEFIT_PROMOTION_POLICY:
         return [{"label": "진행 중인 이벤트 보기", "url": CTAUrls.PROMOTION_EVENT_LIST, "domain": "DISCOVERY"}]
@@ -1259,6 +1293,7 @@ def _build_support_faq_policy_reply(
     facts: Mapping[str, Any],
     *,
     safe_fallback_used: bool,
+    user_text: str = "",
 ) -> tuple[str, list[dict[str, Any]]]:
     if policy_group == _RESERVATION_INSTALLATION_POLICY and fact_type == "visit_reservation_cancel":
         if safe_fallback_used:
@@ -1450,10 +1485,10 @@ def _build_support_faq_policy_reply(
     else:
         response = (
             "현재 챗봇에서는 사진이나 파일을 업로드해 확인받을 수 없어요.\n"
-            "사진만으로는 타이어 마모 상태, 교체 필요 여부, 주행 안전을 확정할 수 없어요. 사진이나 파일 첨부가 필요한 경우 1:1 문의를 통해 등록해 주세요.\n"
+            "사진이나 파일 첨부가 필요한 경우 1:1 문의를 통해 등록해 주세요.\n"
             "실제 마모도, 균열, 편마모, 손상 여부는 마모도 측정 서비스 또는 가까운 티스테이션 매장 점검으로 확인해 주세요."
         )
-    return response, _support_faq_reply_ctas(policy_group, fact_type)
+    return response, _support_faq_reply_ctas(policy_group, fact_type, user_text=user_text)
 
 
 def build_support_faq_source_grounded_reply(
@@ -1584,6 +1619,7 @@ def build_support_faq_evidence_grounded_reply(
         return _build_support_faq_safe_fallback_reply(
             policy_group=policy_group,
             fact_type=fact_type,
+            user_text=user_text,
             filtered_candidates=[],
             excluded_candidates=excluded_candidates,
             fallback_reason="no_filtered_candidates",
@@ -1612,6 +1648,7 @@ def build_support_faq_evidence_grounded_reply(
         return _build_support_faq_safe_fallback_reply(
             policy_group=policy_group,
             fact_type=fact_type,
+            user_text=user_text,
             filtered_candidates=filtered,
             excluded_candidates=excluded_candidates,
             fallback_reason="no_selected_evidence",
@@ -1625,6 +1662,7 @@ def build_support_faq_evidence_grounded_reply(
         return _build_support_faq_safe_fallback_reply(
             policy_group=policy_group,
             fact_type=fact_type,
+            user_text=user_text,
             filtered_candidates=selected_candidates,
             excluded_candidates=excluded_candidates,
             fallback_reason="top_score_below_min",
@@ -1669,6 +1707,7 @@ def build_support_faq_evidence_grounded_reply(
         return _build_support_faq_safe_fallback_reply(
             policy_group=policy_group,
             fact_type=fact_type,
+            user_text=user_text,
             filtered_candidates=selected_candidates,
             excluded_candidates=excluded_candidates,
             fallback_reason=str(failure_reason or "llm_answer_missing"),
@@ -1746,6 +1785,7 @@ def build_support_faq_policy_reply(
         fact_type,
         facts,
         safe_fallback_used=safe_fallback_used,
+        user_text=user_text,
     )
 
     allowed_categories = [
@@ -2092,7 +2132,11 @@ def decide_support_response(
             ),
         )
 
-    if intent == "tire_quality_warranty_policy" or _TIRE_QUALITY_WARRANTY_POLICY_RE.search(text):
+    if (
+        intent == "tire_quality_warranty_policy"
+        or _TIRE_QUALITY_WARRANTY_POLICY_RE.search(text)
+        or _POST_INSTALL_CONCERN_RE.search(text)
+    ):
         return _decision(
             response_shape_key="tire_quality_warranty_policy",
             response_shape=ResponseShape.SUMMARY,

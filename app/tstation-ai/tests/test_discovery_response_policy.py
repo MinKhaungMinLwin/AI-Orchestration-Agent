@@ -176,9 +176,18 @@ def test_tc047_similar_price_does_not_require_size_unconditionally() -> None:
     assert "drop_latest_size_specific_context" in decision.forbidden_behaviors
 
 
-def test_tc215_mileage_product_bias_response_is_neutral() -> None:
+def test_tc215_mileage_tire_bias_response_is_neutral_description() -> None:
     decision = decide_discovery_response(
         build_discovery_intent_frame("마일리지 타이어 이거는 택시기사들이 쓰는거 아냐? 별로지?")
+    )
+
+    assert decision.metadata["response_shape_key"] == "neutral_product_description"
+    assert "occupation_stereotype" in decision.forbidden_behaviors
+
+
+def test_mileage_plus_product_bias_response_is_neutral_search_summary() -> None:
+    decision = decide_discovery_response(
+        build_discovery_intent_frame("마일리지 플러스 이거는 택시기사들이 쓰는거 아냐? 별로지?")
     )
 
     assert decision.metadata["response_shape_key"] == "product_search_summary"
@@ -197,8 +206,16 @@ def test_tc015_restock_inquiry_uses_summary_not_product_cards() -> None:
     assert "promise_restock_date_without_source" in decision.forbidden_behaviors
 
 
-def test_mileage_product_search_summary_does_not_promise_cards() -> None:
+def test_mileage_tire_recommendation_uses_catalog_summary() -> None:
     decision = decide_discovery_response(build_discovery_intent_frame("마일리지 타이어 추천"))
+
+    assert decision.metadata["response_shape_key"] == "catalog_unsized_recommendation_summary"
+    assert decision.template == TemplateName.QUICK_REPLY
+    assert "drop_recommendation_scenario" in decision.forbidden_behaviors
+
+
+def test_mileage_plus_product_search_summary_does_not_promise_cards() -> None:
+    decision = decide_discovery_response(build_discovery_intent_frame("마일리지 플러스 추천"))
 
     assert decision.metadata["response_shape_key"] == "product_search_summary"
     assert decision.template == TemplateName.QUICK_REPLY

@@ -217,6 +217,44 @@ def _should_skip_support_search_product_fast_path(agent_name: str, tool_name: st
     return tool_name == "search_product_tool" and "support" in str(agent_name or "").lower()
 
 
+def _should_defer_search_product_fast_path_for_stock_contract(
+    tool_name: str,
+    code_event: dict | None,
+) -> bool:
+    if tool_name != "search_product_tool":
+        return False
+    if not isinstance(code_event, dict) or code_event.get("type") != "data":
+        return False
+    if str(code_event.get("template") or "") not in {"product", "quickReply"}:
+        return False
+    try:
+        from services.tstation.template_mapper import (
+            current_transaction_response_decision,
+            current_transaction_tool_plan,
+        )
+    except Exception:
+        return False
+
+    decision = current_transaction_response_decision.get()
+    tool_plan = current_transaction_tool_plan.get()
+    if decision is None or tool_plan is None:
+        return False
+    allowed_tools = {str(tool) for tool in tuple(getattr(tool_plan, "allowed_tools", ()) or ()) if str(tool)}
+    forbidden_tools = {str(tool) for tool in tuple(getattr(tool_plan, "forbidden_tools", ()) or ()) if str(tool)}
+    if "get_store_list_tool" not in allowed_tools or "get_store_list_tool" in forbidden_tools:
+        return False
+    metadata = getattr(decision, "metadata", None) or {}
+    plan_metadata = getattr(tool_plan, "metadata", None) or {}
+    response_shape_key = str(metadata.get("response_shape_key") or plan_metadata.get("response_shape_key") or "")
+    stock_check_mode = str(metadata.get("stock_check_mode") or plan_metadata.get("stock_check_mode") or "")
+    required_slots = tuple(getattr(decision, "required_slots", ()) or ())
+    return bool(
+        response_shape_key in {"missing_stock_search_slots", "stock_inventory_lookup"}
+        or stock_check_mode == "inventory_only"
+        or ("product" in required_slots and "get_store_inventory_tool" in allowed_tools)
+    )
+
+
 def _product_name_for_warranty_result(accumulated_tool_data: list[dict], goods_no: str | None) -> str:
     if not goods_no:
         return "해당 상품"
@@ -1626,6 +1664,15 @@ class BaseAgent(ABC):
                                     accumulated_text,
                                 )
                                 if self._is_fast_path_code_event(message.name, code_event):
+                                    if _should_defer_search_product_fast_path_for_stock_contract(
+                                        message.name,
+                                        code_event,
+                                    ):
+                                        logger.info(
+                                            "[%s] Defer search_product_tool fast-path for contract-required stock lookup",
+                                            self.name,
+                                        )
+                                        continue
                                     logger.info(
                                         "[%s] Deterministic template fast-path after tool=%s template=%s",
                                         self.name,

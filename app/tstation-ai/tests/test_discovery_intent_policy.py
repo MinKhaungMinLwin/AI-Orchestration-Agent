@@ -177,7 +177,17 @@ def test_default_tbot_shopping_cta_uses_basic_recommendation_flow() -> None:
     assert frame.sub_intent == "general_recommendation"
     assert frame.entities["default_tire_shopping"] is True
     assert plan.preferred_tool == "get_products_recommendations_tool"
-    assert plan.tool_args_patch == {}
+    assert plan.tool_args_patch == {"rcmd_type": "tstation"}
+
+
+def test_plain_tire_recommendation_uses_general_tstation_recommendation() -> None:
+    frame = build_discovery_intent_frame("타이어 추천")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.intent == "product_recommendation"
+    assert frame.sub_intent == "general_recommendation"
+    assert plan.preferred_tool == "get_products_recommendations_tool"
+    assert plan.tool_args_patch == {"rcmd_type": "tstation"}
 
 
 def test_default_benefit_cta_uses_events_and_deals_not_coupons() -> None:
@@ -430,22 +440,45 @@ def test_tc047_similar_price_recommendation_does_not_inject_confirmed_size() -> 
     assert "tire_size" not in plan.tool_args_patch
 
 
-def test_tc215_mileage_product_with_occupation_bias_is_product_description_guardrail() -> None:
+def test_tc215_mileage_tire_with_occupation_bias_is_description_guardrail() -> None:
     frame = build_discovery_intent_frame("마일리지 타이어 이거는 택시기사들이 쓰는거 아냐? 별로지?")
 
+    assert frame.intent == "product_description"
+    assert frame.sub_intent == "mileage_bias_guardrail"
+    assert frame.entities["guardrail"] == "occupation_neutral"
+    assert frame.entities["compare_metric"] == "mileage"
+
+
+def test_mileage_plus_with_occupation_bias_stays_product_search_guardrail() -> None:
+    frame = build_discovery_intent_frame("마일리지 플러스 이거는 택시기사들이 쓰는거 아냐? 별로지?")
+
     assert frame.intent == "product_search"
+    assert frame.sub_intent == "product_name_search"
     assert frame.entities["guardrail"] == "occupation_neutral"
     assert frame.entities["product_keyword"] == "마일리지"
     assert frame.entities["product_names"] == ("Mileage Plus",)
 
 
-def test_mileage_product_recommendation_searches_product_name_not_attribute() -> None:
+def test_mileage_tire_recommendation_uses_attribute_recommendation() -> None:
     frame = build_discovery_intent_frame("마일리지 타이어 추천")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.intent == "product_recommendation"
+    assert frame.sub_intent == "condition_recommendation"
+    assert frame.entities["recommendation_scenario"] == "long_distance"
+    assert "product_keyword" not in frame.entities
+    assert plan.preferred_tool == "get_products_recommendations_tool"
+    assert plan.tool_args_patch["rcmd_type"] == "long_distance"
+
+
+def test_mileage_plus_recommendation_searches_product_name() -> None:
+    frame = build_discovery_intent_frame("마일리지 플러스 추천")
     plan = plan_discovery_tools(frame)
 
     assert frame.intent == "product_search"
     assert frame.sub_intent == "product_name_search"
     assert frame.entities["product_keyword"] == "마일리지"
+    assert frame.entities["product_names"] == ("Mileage Plus",)
     assert plan.preferred_tool == "search_product_tool"
 
 
@@ -557,9 +590,26 @@ def test_mileage_attribute_recommendation_remains_attribute_recommendation() -> 
     plan = plan_discovery_tools(frame)
 
     assert frame.intent == "product_recommendation"
-    assert frame.sub_intent == "general_recommendation"
+    assert frame.sub_intent == "condition_recommendation"
+    assert frame.entities["recommendation_scenario"] == "long_distance"
     assert "product_keyword" not in frame.entities
     assert plan.preferred_tool == "get_products_recommendations_tool"
+    assert plan.tool_args_patch["rcmd_type"] == "long_distance"
+    assert plan.metadata["recommendation_expected_tool_args"] == {"rcmd_type": "long_distance"}
+
+
+def test_router_mileage_scenario_uses_long_distance_recommendation_contract() -> None:
+    frame = build_discovery_intent_frame(
+        "우버 운영하고 있는데 마일리지 무조건 긴거 추천",
+        known_slots={"recommendation_scenario": "mileage"},
+    )
+    plan = plan_discovery_tools(frame)
+
+    assert frame.intent == "product_recommendation"
+    assert frame.entities["recommendation_scenario"] == "long_distance"
+    assert plan.preferred_tool == "get_products_recommendations_tool"
+    assert plan.tool_args_patch["rcmd_type"] == "long_distance"
+    assert plan.metadata["recommendation_expected_tool_args"] == {"rcmd_type": "long_distance"}
 
 
 def test_fuel_efficiency_recommendation_uses_recommendation_flow_not_explanation() -> None:

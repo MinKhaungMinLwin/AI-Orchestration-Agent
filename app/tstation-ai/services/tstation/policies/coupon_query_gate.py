@@ -98,7 +98,30 @@ _OWNED_COUPON_LOOKUP_RE = re.compile(r"(?:내|나의|보유|가지고\s*있는|�
 # "21% 상품할인쿠폰 오프라인?" → "상품할인" / "패밀리 쿠폰 오프라인?" → "패밀리"
 # Generic demonstratives (이/그/저/해당 etc.) are excluded — they don't identify a coupon.
 _COUPON_QUALIFIER_RE = re.compile(r"(\S+)\s*쿠폰", re.IGNORECASE)
-_GENERIC_COUPON_QUALIFIERS = {"이", "그", "저", "해당", "이런", "그런", "어떤", "한", "이번", "본", "특정", "내", "나의"}
+_GENERIC_COUPON_QUALIFIERS = {
+    "이",
+    "그",
+    "저",
+    "해당",
+    "이런",
+    "그런",
+    "어떤",
+    "한",
+    "이번",
+    "본",
+    "특정",
+    "내",
+    "나의",
+    "있는",
+    "받은",
+    "다운받은",
+    "다운로드한",
+    "발급받은",
+}
+_GENERIC_COUPON_QUALIFIER_RE = re.compile(
+    r"(?:에서|으로|없이)$|^(?:온라인|오프라인|현장|매장|티스테이션닷컴|tstation\.com)$",
+    re.IGNORECASE,
+)
 
 
 def _extract_specific_coupon_hint(text: str) -> str | None:
@@ -106,13 +129,20 @@ def _extract_specific_coupon_hint(text: str) -> str | None:
     m = _COUPON_QUALIFIER_RE.search(text)
     if m:
         qualifier = m.group(1).strip()
-        if qualifier and qualifier not in _GENERIC_COUPON_QUALIFIERS:
+        if (
+            qualifier
+            and qualifier not in _GENERIC_COUPON_QUALIFIERS
+            and not _GENERIC_COUPON_QUALIFIER_RE.search(qualifier)
+        ):
             return qualifier
     return None
+
+
+_PRODUCT_NAME_TOKEN = r"(?:벤투스|ventus|다이나프로|dynapro|키너지|kinergy|아이온|ion|옵티모|optimo|미쉐린|michelin|cc2)"
 _PRODUCT_COUPON_ELIGIBILITY_RE = re.compile(
-    r"(?:벤투스|ventus|다이나프로|dynapro|키너지|kinergy|아이온|ion|옵티모|optimo|미쉐린|michelin|cc2)"
-    r".{0,30}(?:쿠폰|할인권).{0,24}(?:있|돼|되|쓸|사용|적용)|"
-    r"(?:쿠폰|할인권).{0,24}(?:벤투스|ventus|다이나프로|dynapro|키너지|kinergy|아이온|ion|옵티모|optimo|미쉐린|michelin|cc2)",
+    rf"{_PRODUCT_NAME_TOKEN}.{{0,30}}(?:쓸\s*수\s*있는|사용\s*가능(?:한)?|적용\s*가능(?:한)?).{{0,12}}(?:쿠폰|할인권)|"
+    rf"{_PRODUCT_NAME_TOKEN}.{{0,30}}(?:쿠폰|할인권).{{0,24}}(?:있|돼|되|쓸|사용|적용)|"
+    rf"(?:쿠폰|할인권).{{0,24}}{_PRODUCT_NAME_TOKEN}",
     re.IGNORECASE,
 )
 _COUPON_APPLICABLE_PRODUCTS_RE = re.compile(
@@ -190,6 +220,14 @@ def decide_coupon_query_gate(
             coupon_hint="쿠폰",
             reason="Deterministic coupon registration/input policy query.",
         )
+    if _PRODUCT_COUPON_ELIGIBILITY_RE.search(text):
+        return CouponQueryGateDecision(
+            intent=CouponQueryIntent.PRODUCT_COUPON_ELIGIBILITY,
+            confidence=0.88,
+            product_name=None,
+            coupon_hint="쿠폰",
+            reason="Deterministic product coupon eligibility query.",
+        )
     if _COUPON_USAGE_POLICY_RE.search(text) and not _PARTNER_MEMBER_COUPON_POLICY_RE.search(text):
         specific_hint = _extract_specific_coupon_hint(text)
         if specific_hint:
@@ -222,14 +260,6 @@ def decide_coupon_query_gate(
             product_name=None,
             coupon_hint="쿠폰",
             reason="Deterministic coupon applicable products query.",
-        )
-    if _PRODUCT_COUPON_ELIGIBILITY_RE.search(text):
-        return CouponQueryGateDecision(
-            intent=CouponQueryIntent.PRODUCT_COUPON_ELIGIBILITY,
-            confidence=0.88,
-            product_name=None,
-            coupon_hint="쿠폰",
-            reason="Deterministic product coupon eligibility query.",
         )
     if _SIGNUP_COUPON_GUIDANCE_RE.search(text) and _COUPON_GATE_TRIGGER_RE.search(text):
         return CouponQueryGateDecision(
