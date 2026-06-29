@@ -264,6 +264,7 @@ _SUPPORT_FAQ_POLICY_TOOL_INTENTS = frozenset({
     "payment_error_troubleshooting",
     "compatibility_advisory",
     "tire_manufacture_date_policy",
+    "tire_quality_warranty_policy",
     "reservation_window_policy",
     "external_tire_install_policy",
     "tire_condition_photo_policy",
@@ -869,7 +870,7 @@ def build_turn_contract(
             )
             forbidden_tools = _merge_tuple(
                 forbidden_tools,
-                ("search_product_tool", "get_final_price_tool"),
+                ("search_product_tool", "get_final_price_tool", "transfer_to_qna_tool"),
             )
     if router_wins_intent:
         domain = _router_wins_domain(router_wins_intent, planner_domains)

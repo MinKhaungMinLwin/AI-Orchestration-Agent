@@ -26542,6 +26542,52 @@ def test_support_policy_turn_contract_clears_stale_transaction_blocking_slots() 
     assert contract.blocking_required_slots_source == "support_answer_contract"
 
 
+def test_post_install_noise_refund_forced_route_uses_quality_warranty_policy() -> None:
+    user_text = "타이어 갈고 고속도로 주행 시 노면 소음이 너무 심해졌어. 진짜 못쓸정도야. 내 잘못아닌거 같은데, 환불해줘"
+    routing = StreamingMultiAgentCoordinator._force_keyword_routing(user_text)
+
+    assert routing is not None
+    assert routing.domains == [MultiAgentDomain.Domain.SUPPORT]
+    assert routing.execution_plan == ["support:tire_quality_warranty_policy"]
+    assert routing.policy_intent == "tire_quality_warranty_policy"
+    assert routing.complaint_scope == "tstation_service_complaint"
+    assert routing.flow == "post-install quality/refund claim routed to FAQ-first warranty policy"
+
+
+def test_post_install_noise_refund_contract_requires_faq_first_not_qna_direct() -> None:
+    user_text = "타이어 갈고 고속도로 주행 시 노면 소음이 너무 심해졌어. 진짜 못쓸정도야. 내 잘못아닌거 같은데, 환불해줘"
+    contract = build_turn_contract(
+        user_text=user_text,
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:tire_quality_warranty_policy"],
+            policy_intent="tire_quality_warranty_policy",
+            complaint_scope="tstation_service_complaint",
+        ),
+        action_mode="support_policy_answer",
+        context_state="active",
+    )
+
+    assert contract.domain == "support"
+    assert contract.intent == "tire_quality_warranty_policy"
+    assert "search_faq_hybrid_tool" in contract.allowed_tools
+    assert "transfer_to_qna_tool" in contract.forbidden_tools
+
+    violations = response_contract_violations(
+        template="qnaComplete",
+        called_tools=["transfer_to_qna_tool"],
+        event_data={"assistantResponse": "불편사항 접수해 드릴게요."},
+        contract=contract,
+    )
+    assert any(
+        violation.get("type") == "forbidden_tool_for_contract"
+        and violation.get("severity") == "error"
+        and violation.get("called_tools") == ["transfer_to_qna_tool"]
+        and "transfer_to_qna_tool" in violation.get("forbidden_tools", [])
+        for violation in violations
+    )
+
+
 def test_payment_error_troubleshooting_contract_requires_faq_first() -> None:
     contract = build_turn_contract(
         user_text="결제 오류 나",

@@ -76,6 +76,7 @@ from services.tstation.policies.transaction_intent_policy import (
 from services.tstation.policies.transaction_response_policy import decide_transaction_response
 from services.tstation.policies.support_response_policy import (
     build_support_faq_evidence_grounded_reply,
+    is_post_install_quality_claim,
 )
 from services.tstation.policies.response_decision import ResponseDecision, ResponseShape, TemplateName, ToolPlan
 from services.tstation.policies.resolved_context import (
@@ -3874,6 +3875,18 @@ class StreamingMultiAgentCoordinator:
         for keywords, domain in cls._KEYWORD_FORCE_TABLE:
             for kw in keywords:
                 if kw in text:
+                    if domain == MultiAgentDomain.Domain.SUPPORT and is_post_install_quality_claim(text):
+                        return MultiAgentDomain(
+                            reason=f"hardcoded keyword routing matched '{kw}' with post-install quality concern",
+                            domains=[MultiAgentDomain.Domain.SUPPORT],
+                            execution_plan=["support:tire_quality_warranty_policy"],
+                            user_behavior="asking about post-install tire quality concern and refund/compensation",
+                            agent_prompt_profile=AgentPromptProfile.FULL,
+                            claim_check_type="none",
+                            complaint_scope="tstation_service_complaint",
+                            policy_intent="tire_quality_warranty_policy",
+                            flow="post-install quality/refund claim routed to FAQ-first warranty policy",
+                        )
                     return MultiAgentDomain(
                         reason=f"hardcoded keyword routing matched '{kw}'",
                         domains=[domain],

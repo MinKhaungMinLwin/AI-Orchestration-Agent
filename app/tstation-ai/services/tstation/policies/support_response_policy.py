@@ -91,11 +91,26 @@ _WRONG_ITEM_RE = re.compile(
     re.IGNORECASE,
 )
 _POST_INSTALL_CONCERN_RE = re.compile(
-    r"(?:교체|설치|장착|교체하고나서).{0,12}(?:소음|우는\s*소리|진동|이상한\s*소리)|"
-    r"타이어\s*(?:소음|우|진동|이상|문제)|"
+    r"(?:교체|설치|장착|갈고|교체하고나서).{0,24}(?:소음|노면\s*소음|우는\s*소리|진동|이상한\s*소리)|"
+    r"타이어.{0,12}(?:소음|노면\s*소음|우|진동|이상|문제)|"
     r"(?:새\s*|새로운\s*)?타이어.{0,12}(?:소음|우|진동|이상)",
     re.IGNORECASE,
 )
+_POST_INSTALL_CLAIM_ACTION_RE = re.compile(
+    r"환불|교환|보상|책임|클레임|불량|하자|못\s*쓰|못쓸|내\s*잘못\s*아닌",
+    re.IGNORECASE,
+)
+
+
+def is_post_install_quality_concern(user_text: str | None) -> bool:
+    return _POST_INSTALL_CONCERN_RE.search(str(user_text or "")) is not None
+
+
+def is_post_install_quality_claim(user_text: str | None) -> bool:
+    text = str(user_text or "")
+    return _POST_INSTALL_CONCERN_RE.search(text) is not None and _POST_INSTALL_CLAIM_ACTION_RE.search(text) is not None
+
+
 _TIRE_MANUFACTURE_DATE_ANCHOR_RE = re.compile(
     r"DOT|제조\s*일자|제조일자|제조\s*주차|생산\s*주차|신품|최신\s*제조|언제\s*만든|오래된\s*거\s*아냐|"
     r"타이어마다.{0,12}(?:DOT|제조|생산)|(?:DOT|제조|생산).{0,12}(?:다르|차이)",
@@ -2117,7 +2132,11 @@ def decide_support_response(
             ),
         )
 
-    if intent == "tire_quality_warranty_policy" or _TIRE_QUALITY_WARRANTY_POLICY_RE.search(text):
+    if (
+        intent == "tire_quality_warranty_policy"
+        or _TIRE_QUALITY_WARRANTY_POLICY_RE.search(text)
+        or _POST_INSTALL_CONCERN_RE.search(text)
+    ):
         return _decision(
             response_shape_key="tire_quality_warranty_policy",
             response_shape=ResponseShape.SUMMARY,
