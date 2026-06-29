@@ -16882,7 +16882,13 @@ def _is_contract_required_selected_store_schedule(
         return False
     if str(turn_contract.domain or "").strip().lower() != PolicyDomain.TRANSACTION.value:
         return False
-    if str(turn_contract.intent or "").strip() not in {"stock_store_search", "stock_store_search_slot_fill_store"}:
+    contract_intent = str(turn_contract.intent or "").strip()
+    if contract_intent not in {
+        "stock_store_search",
+        "stock_store_search_slot_fill_store",
+        "store_schedule",
+        "selected_store_schedule",
+    }:
         return False
     response_decision = turn_contract.response_decision or {}
     if str(response_decision.get("template") or "").strip() != "datepick":
@@ -16898,6 +16904,10 @@ def _is_contract_required_selected_store_schedule(
         return False
     if tuple(turn_contract.blocking_required_slots or ()):
         return False
+    selected_store_slots = _selected_store_slots_from_merged_slots(
+        merged_slots,
+        allowed_flow_types=frozenset({"stock", "store_schedule"}),
+    )
     known_slots = _effective_known_slots_with_selected_store(
         turn_contract,
         merged_slots,
@@ -16908,6 +16918,11 @@ def _is_contract_required_selected_store_schedule(
         or known_slots.get("inventory_mode")
         or ""
     ).strip()
+    if contract_intent in {"store_schedule", "selected_store_schedule"}:
+        return bool(
+            selected_store_slots.get("flow_type") == "store_schedule"
+            and selected_store_slots.get("shop_id")
+        )
     return bool(
         known_slots.get("shop_id")
         and schedule_mode
@@ -16936,6 +16951,8 @@ def _contract_required_selected_store_schedule_tool_input(
         or known_slots.get("inventory_mode")
         or ""
     ).strip()
+    if str(turn_contract.intent or "").strip() in {"store_schedule", "selected_store_schedule"}:
+        schedule_mode = schedule_mode or "general"
     if not shop_id or not schedule_mode:
         return {}
     return {"shop_id": shop_id, "mode": schedule_mode}

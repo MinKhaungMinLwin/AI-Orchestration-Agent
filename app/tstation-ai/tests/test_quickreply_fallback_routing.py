@@ -12807,6 +12807,67 @@ def test_contract_required_schedule_tool_input_uses_selected_store_active_flow()
     ) == {"shop_id": "F00071", "mode": "in_store_logistics_combined"}
 
 
+def test_contract_required_store_schedule_tool_input_uses_selected_store_active_flow() -> None:
+    active_context = {
+        "flow_type": "store_schedule",
+        "status": "resumed",
+        "flow_step": "store_selected",
+        "store": {"shop_id": "F00003", "shop_name": "티스테이션 역삼점"},
+        "last_candidates": [
+            {
+                "type": "store",
+                "shop_id": "F00003",
+                "shop_name": "티스테이션 역삼점",
+                "source_tool": "get_store_list_tool",
+                "region": "강남",
+            }
+        ],
+    }
+    contract = TurnContract(
+        domain="transaction",
+        intent="store_schedule",
+        known_slots={},
+        allowed_tools=("get_store_schedule_tool",),
+        forbidden_tools=("transaction_store_preview_tool", "quick_order_tool", "get_store_list_tool"),
+        blocking_required_slots=(),
+        context_state="resumed",
+        response_decision={"template": "datepick", "metadata": {"response_shape_key": "reservation_slots"}},
+    )
+    merged_slots = ConversationSlots(availability_context={"active_flow_context": active_context})
+
+    assert chat_module._is_contract_required_selected_store_schedule(contract, merged_slots=merged_slots) is True
+    assert chat_module._contract_required_selected_store_schedule_tool_input(
+        contract,
+        merged_slots=merged_slots,
+    ) == {"shop_id": "F00003", "mode": "general"}
+
+
+def test_contract_required_store_schedule_tool_input_rejects_generic_store_selection() -> None:
+    active_context = {
+        "flow_type": "store_search",
+        "status": "resumed",
+        "flow_step": "store_selected",
+        "store": {"shop_id": "F10002", "shop_name": "티스테이션 광교신도시점"},
+    }
+    contract = TurnContract(
+        domain="transaction",
+        intent="store_schedule",
+        known_slots={},
+        allowed_tools=("get_store_schedule_tool",),
+        forbidden_tools=("transaction_store_preview_tool", "quick_order_tool", "get_store_list_tool"),
+        blocking_required_slots=(),
+        context_state="resumed",
+        response_decision={"template": "datepick", "metadata": {"response_shape_key": "reservation_slots"}},
+    )
+    merged_slots = ConversationSlots(availability_context={"active_flow_context": active_context})
+
+    assert chat_module._is_contract_required_selected_store_schedule(contract, merged_slots=merged_slots) is False
+    assert chat_module._contract_required_selected_store_schedule_tool_input(
+        contract,
+        merged_slots=merged_slots,
+    ) == {}
+
+
 def test_contract_required_inventory_tool_input_uses_selected_store_active_flow() -> None:
     active_context = {
         "flow_type": "stock",
