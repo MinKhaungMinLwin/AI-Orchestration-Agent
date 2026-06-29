@@ -20656,6 +20656,78 @@ _NIGHT_STORE_TIME_ANCHOR_RE = re.compile(r"야간|심야|퇴근\s*후|퇴근후|
 _EV_BLOCKING_TRANSACTION_INTENTS = {"stock", "order", "reservation"}
 _SIZE_ONLY_RE = re.compile(r"^\s*\d{3}\s*[/\s]?\s*\d{2}\s*(?:R|\s|/)?\s*\d{2}\s*$", re.IGNORECASE)
 _VEHICLE_PLATE_ONLY_RE = re.compile(r"^\s*\d{2,3}[가-힣]\d{4}\s*$")
+
+
+def _vehicle_plate_only_value(user_text: str | None) -> str | None:
+    text = str(user_text or "").strip()
+    if not text:
+        return None
+    match = _VEHICLE_PLATE_RE.search(text)
+    if not match:
+        return None
+    plate = re.sub(r"[^0-9가-힣]+", "", match.group(0))
+    normalized_text = re.sub(r"[^0-9가-힣]+", "", text)
+    if plate and normalized_text == plate and _VEHICLE_PLATE_ONLY_RE.match(plate):
+        return plate
+    return None
+
+
+def _has_vehicle_selection_context(
+    *,
+    latest_listcar_tmpl: Mapping[str, Any] | None,
+    latest_quickreply_tmpl: Mapping[str, Any] | None,
+    chip_context: Mapping[str, Any] | None,
+) -> bool:
+    if isinstance(latest_listcar_tmpl, Mapping) and latest_listcar_tmpl:
+        return True
+    if isinstance(chip_context, Mapping) and chip_context:
+        return True
+    quickreply_blob = json.dumps(latest_quickreply_tmpl, ensure_ascii=False) if isinstance(latest_quickreply_tmpl, Mapping) else ""
+    return bool(
+        quickreply_blob
+        and (
+            "추천받으실 차량을 선택" in quickreply_blob
+            or "보유차량" in quickreply_blob
+            or "내 차량 보기" in quickreply_blob
+            or "listCar" in quickreply_blob
+        )
+    )
+
+
+def _build_vehicle_plate_owner_clarification_event(plate: str) -> dict[str, Any]:
+    assistant_text = (
+        f"차량번호 **{plate}** 기준으로 검색하려면 소유주명 확인이 함께 필요해요.\n"
+        "차량번호와 이름을 같이 알려주시면 해당 차량 기준으로 타이어 검색을 도와드릴게요.\n\n"
+        f"예: {plate} 홍길동"
+    )
+    event = {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.LEADING.value,
+        "assistant_response_source": "code_vehicle_plate_owner_clarification",
+        "data": {
+            "assistantResponse": assistant_text,
+            "quickReplies": [
+                {"label": "타이어 사이즈로 찾기", "domain": "DISCOVERY"},
+                {"label": "내 등록 차량 보기", "domain": "DISCOVERY"},
+                {"label": "처음으로", "domain": "LEADING"},
+            ],
+            "predictedDomains": ["DISCOVERY"],
+            "metadata": {
+                "response_shape_key": "vehicle_plate_owner_clarification",
+                "pendingVehicleLookupCarNo": plate,
+            },
+        },
+    }
+    return _finalize_policy_guard_event(
+        event,
+        source="code_vehicle_plate_owner_clarification",
+        intent="vehicle_plate_owner_clarification",
+        domain=MultiAgentDomain.Domain.LEADING.value,
+        reason="pre_contract_vehicle_plate_owner_required",
+    )
+
+
 _RECOMMENDATION_BRIDGE_RE = re.compile(
     r"추천|규격|사이즈|차종|차량|타이어|전용|적합|맞는|찾기|골라",
     re.IGNORECASE,
@@ -26161,6 +26233,35 @@ class TStationChatServiceV2:
                         "[VEHICLE_OWNER_LOOKUP] normalized owner-first vehicle lookup text: %s",
                         normalized_vehicle_owner_text,
                     )
+
+            plate_only_value = _vehicle_plate_only_value(last_user_text)
+            if (
+                plate_only_value
+                and not _has_vehicle_selection_context(
+                    latest_listcar_tmpl=latest_listcar_tmpl,
+                    latest_quickreply_tmpl=latest_quickreply_tmpl,
+                    chip_context=request.chip_context if isinstance(request.chip_context, Mapping) else None,
+                )
+            ):
+                existing_slots.pending_vehicle_lookup_car_no = plate_only_value
+                await chat_history_svc.save_slots_async(request.session_id, existing_slots, user_id=request.user_id)
+                vehicle_plate_event = _build_vehicle_plate_owner_clarification_event(plate_only_value)
+                logger.info(
+                    "[VEHICLE_OWNER_LOOKUP] staged plate-only owner clarification before routing plate=%s",
+                    plate_only_value,
+                )
+                if request.stream:
+                    return StreamingResponse(
+                        TStationChatServiceV2._stream_policy_guard_response(vehicle_plate_event),
+                        media_type="text/event-stream",
+                        headers={
+                            "Cache-Control": "no-cache",
+                            "Connection": "keep-alive",
+                            "X-Accel-Buffering": "no",
+                        },
+                    )
+                event_data = vehicle_plate_event.get("data") if isinstance(vehicle_plate_event.get("data"), dict) else {}
+                return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
 
             if _is_manual_tire_size_input_selection(last_user_text, latest_quickreply_tmpl):
                 current_vehicle_selection_prompt_event.set(_build_manual_tire_size_input_event())

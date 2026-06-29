@@ -24666,6 +24666,44 @@ def test_non_self_vehicle_plate_owner_lookup_stages_plate_only_until_owner_name(
     assert _should_reuse_pending_vehicle_lookup_car_no(None, "홍길동", "29조3344") is True
 
 
+def test_vehicle_plate_only_owner_clarification_event_asks_for_plate_and_owner_name() -> None:
+    plate = chat_module._vehicle_plate_only_value("29조 3344")
+    event = chat_module._build_vehicle_plate_owner_clarification_event(plate or "")
+
+    assert plate == "29조3344"
+    assert event["template"] == "quickReply"
+    assert event["assistant_response_source"] == "code_vehicle_plate_owner_clarification"
+    assistant = event["data"]["assistantResponse"]
+    labels = _labels(event["data"]["quickReplies"])
+    assert "차량번호 **29조3344**" in assistant
+    assert "차량번호와 이름을 같이 알려주시면" in assistant
+    assert "해당 차량 기준으로 타이어 검색" in assistant
+    assert "29조3344 홍길동" in assistant
+    assert "정민경 고객님" not in assistant
+    assert "어떤 종류의 타이어" not in assistant
+    assert labels == ["타이어 사이즈로 찾기", "내 등록 차량 보기", "처음으로"]
+
+
+def test_vehicle_plate_only_guard_does_not_apply_in_vehicle_selection_context() -> None:
+    latest_listcar = {"template": "listCar", "data": {"cars": [{"licensePlate": "29조3344"}]}}
+    latest_quickreply = {
+        "template": "quickReply",
+        "data": {"assistantResponse": "추천받으실 차량을 선택해 주세요."},
+    }
+
+    assert chat_module._vehicle_plate_only_value("29조3344") == "29조3344"
+    assert chat_module._has_vehicle_selection_context(
+        latest_listcar_tmpl=latest_listcar,
+        latest_quickreply_tmpl=None,
+        chip_context=None,
+    )
+    assert chat_module._has_vehicle_selection_context(
+        latest_listcar_tmpl=None,
+        latest_quickreply_tmpl=latest_quickreply,
+        chip_context=None,
+    )
+
+
 def test_vehicle_owner_lookup_normalizes_both_orders_without_treating_non_self_prefix_as_name() -> None:
     assert _normalize_vehicle_owner_lookup_text("29조3344 홍길동") == "29조3344 홍길동"
     assert _normalize_vehicle_owner_lookup_text("홍길동 29조3344") == "29조3344 홍길동"
