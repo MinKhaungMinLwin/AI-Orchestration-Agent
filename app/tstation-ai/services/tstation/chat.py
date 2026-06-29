@@ -16963,6 +16963,11 @@ _FAST_PATH_TRANSACTION_RECOVERY_ALLOWED_TOOLS = frozenset({
     "get_store_list_tool",
     "search_stores_tool",
 })
+_TRANSACTION_STORE_PREVIEW_RECOVERY_INTENTS = frozenset({
+    "quick_order_reservation",
+    "quick_order_with_product_and_quantity",
+    "stock_store_search",
+})
 _FAST_PATH_DISCOVERY_RECOVERY_ALLOWED_TOOLS = frozenset({
     "search_product_tool",
     "get_product_description_tool",
@@ -17483,6 +17488,97 @@ def _contract_required_stock_inventory_store_lookup_tool_input(
     return stock_inventory_store_lookup_tool_input(known_slots, preferred_tool=tool)
 
 
+def _is_contract_required_transaction_store_preview(
+    turn_contract: TurnContract | None,
+    *,
+    merged_slots: ConversationSlots | None = None,
+) -> bool:
+    if turn_contract is None:
+        return False
+    if str(turn_contract.domain or "").strip().lower() != PolicyDomain.TRANSACTION.value:
+        return False
+    if str(getattr(turn_contract, "preferred_tool", "") or "").strip() != "transaction_store_preview_tool":
+        return False
+    allowed_tools = {str(tool) for tool in tuple(turn_contract.allowed_tools or ()) if str(tool).strip()}
+    forbidden_tools = {str(tool) for tool in tuple(turn_contract.forbidden_tools or ()) if str(tool).strip()}
+    if "transaction_store_preview_tool" not in allowed_tools or "transaction_store_preview_tool" in forbidden_tools:
+        return False
+    if tuple(getattr(turn_contract, "blocking_required_slots", ()) or ()):
+        return False
+    if str(getattr(turn_contract, "context_state", "") or "").strip() not in {"active", "resumed"}:
+        return False
+
+    contract_intent = str(turn_contract.intent or "").strip()
+    response_decision = turn_contract.response_decision or {}
+    response_metadata = response_decision.get("metadata") if isinstance(response_decision, Mapping) else {}
+    response_shape_key = str(response_metadata.get("response_shape_key") or "") if isinstance(response_metadata, Mapping) else ""
+    if contract_intent not in _TRANSACTION_STORE_PREVIEW_RECOVERY_INTENTS and response_shape_key not in {
+        "reservation_store_candidates",
+        "stock_store_preview",
+    }:
+        return False
+
+    contract_seed = turn_contract.contract_seed if isinstance(turn_contract.contract_seed, Mapping) else {}
+    ui_action = contract_seed.get("ui_action") if isinstance(contract_seed.get("ui_action"), Mapping) else {}
+    expected_intent = str(ui_action.get("expected_contract_intent") or "").strip()
+    action_type = str(ui_action.get("action_type") or ui_action.get("cta_action") or "").strip()
+    resume_source = str(getattr(turn_contract, "resume_source", "") or contract_seed.get("resume_source") or "").strip()
+    action_mode = str(getattr(turn_contract, "action_mode", "") or "").strip()
+    current_turn_grounded = (
+        resume_source not in {"", "none"}
+        or (action_type == "select_product" and expected_intent in {"quick_order_reservation", "stock_store_search"})
+        or action_mode in {"purchase_continuation", "stock_check"}
+    )
+    if not current_turn_grounded:
+        return False
+
+    known_slots = _contract_read_through_known_slots(
+        turn_contract,
+        merged_slots,
+        allowed_flow_types=frozenset({"purchase", "stock"}),
+    )
+    return bool(
+        known_slots.get("goods_no")
+        and known_slots.get("tire_size")
+        and (known_slots.get("ord_qty") or known_slots.get("quantity"))
+        and (
+            known_slots.get("shop_id")
+            or known_slots.get("shop_name")
+            or known_slots.get("store_name")
+            or known_slots.get("region")
+        )
+    )
+
+
+def _contract_required_transaction_store_preview_tool_input(
+    turn_contract: TurnContract,
+    *,
+    merged_slots: ConversationSlots | None = None,
+) -> dict[str, Any]:
+    if not _is_contract_required_transaction_store_preview(turn_contract, merged_slots=merged_slots):
+        return {}
+    known_slots = _contract_read_through_known_slots(
+        turn_contract,
+        merged_slots,
+        allowed_flow_types=frozenset({"purchase", "stock"}),
+    )
+    tool_args_patch = (
+        dict(turn_contract.tool_args_patch)
+        if isinstance(getattr(turn_contract, "tool_args_patch", None), Mapping)
+        else {}
+    )
+    tool_input = {
+        str(key): value
+        for key, value in {**known_slots, **tool_args_patch}.items()
+        if value not in (None, "", [], {})
+    }
+    if tool_input.get("quantity") in (None, "", [], {}) and tool_input.get("ord_qty") not in (None, "", [], {}):
+        tool_input["quantity"] = tool_input["ord_qty"]
+    if tool_input.get("store_name") in (None, "", [], {}) and tool_input.get("shop_name") not in (None, "", [], {}):
+        tool_input["store_name"] = tool_input["shop_name"]
+    return tool_input
+
+
 def _contract_required_transaction_tool_input(
     *,
     turn_contract: TurnContract,
@@ -17490,6 +17586,14 @@ def _contract_required_transaction_tool_input(
     merged_slots: ConversationSlots | None = None,
 ) -> tuple[dict[str, Any], str, str] | None:
     if str(turn_contract.domain or "").strip().lower() != PolicyDomain.TRANSACTION.value:
+        return None
+    if preferred_tool == "transaction_store_preview_tool":
+        preview_input = _contract_required_transaction_store_preview_tool_input(
+            turn_contract,
+            merged_slots=merged_slots,
+        )
+        if preview_input:
+            return preview_input, "turn_contract_required_transaction_store_preview", "장착 가능 매장 확인 중..."
         return None
     if (
         preferred_tool
@@ -18324,7 +18428,10 @@ def _contract_required_tool_candidate(
 
     if not preferred_tool or not tool_input:
         return None
-    if preferred_tool in _FAST_PATH_TRANSACTION_RECOVERY_BLOCKLIST:
+    if preferred_tool in _FAST_PATH_TRANSACTION_RECOVERY_BLOCKLIST and not (
+        preferred_tool == "transaction_store_preview_tool"
+        and _is_contract_required_transaction_store_preview(turn_contract, merged_slots=merged_slots)
+    ):
         return None
     return _ContractRequiredToolCandidate(
         tool_name=preferred_tool,
