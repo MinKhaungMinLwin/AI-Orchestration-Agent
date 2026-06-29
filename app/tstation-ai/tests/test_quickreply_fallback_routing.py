@@ -107,6 +107,7 @@ from services.tstation.chat import (
     _build_product_attribute_event_from_search_results,
     _post_tool_purchase_preview_contract_context,
     _promote_single_turn_purchase_contract_from_search_product,
+    _promote_single_turn_stock_inventory_from_search_product,
     _quantity_benefit_continuation_frame_from_pending,
     _final_price_from_row,
     _should_emit_direct_preorder_from_schedule_selection,
@@ -13701,6 +13702,46 @@ def test_transaction_unresolved_product_resolution_event_returns_not_found_for_z
     assert "Dynapro HPX 상품을 찾지 못해 가격 확인 흐름을 이어서 진행하지 못했어요." in event["data"]["assistantResponse"]
 
 
+def test_turn_contract_required_slot_guard_explains_sized_product_search_zero_rows() -> None:
+    contract = build_turn_contract(
+        user_text="벤투스 S2 AS 2454519 4개 재고 확인해줘",
+        intent_frame=IntentFrame(domain=PolicyDomain.TRANSACTION, intent="stock_store_search"),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            required_slots=("product",),
+        ),
+        tool_plan=ToolPlan(required_slots=("product",)),
+        merged_slots=ConversationSlots(
+            tire_model="벤투스 S2 AS",
+            tire_size="245/45R19",
+            ord_qty=4,
+            stock_check_mode="inventory_only",
+        ),
+        routing_result=_routing_result(execution_plan=["transaction:stock_store_or_reservation"]),
+        action_mode="stock_check",
+    )
+
+    event = _build_turn_contract_required_slot_guard_event(
+        turn_contract=contract,
+        user_text="벤투스 S2 AS 2454519 4개 재고 확인해줘",
+        tool_data_list=[
+            {
+                "tool": "search_product_tool",
+                "input": {"keyword": "벤투스 S2 AS", "size": "245/45R19", "limit": 10},
+                "data": {"status": "success", "data": {"items": []}},
+            }
+        ],
+    )
+
+    assert event is not None
+    assert event["assistant_response_source"] == "code_transaction_sized_product_not_found"
+    assert "벤투스 S2 AS 245/45R19 규격 상품을 찾지 못해 재고 확인을 이어서 진행하지 못했어요." in (
+        event["data"]["assistantResponse"]
+    )
+    assert _labels(event["data"]["quickReplies"]) == ["상품명 다시 입력", "사이즈 다시 입력", "타이어 추천"]
+
+
 def test_transaction_unresolved_product_resolution_event_filters_size_candidates_by_product_name() -> None:
     slots = ConversationSlots(
         pending_intent="order",
@@ -19484,6 +19525,55 @@ def test_final_price_tool_success_preserves_goods_no_for_next_purchase_cta() -> 
     assert changed is True
     assert slots.goods_no == "G000000317729"
     assert slots.tire_size == "235/55R19"
+
+
+def test_single_search_product_result_persists_product_flow_state_for_stock() -> None:
+    slots = ConversationSlots(tire_size="245/45R19", ord_qty=4, stock_check_mode="inventory_only")
+
+    changed = StreamingMultiAgentCoordinator._apply_tool_derived_slots(
+        slots,
+        "search_product_tool",
+        {
+            "status": "success",
+            "data": {
+                "items": [
+                    {
+                        "goods_no": "G000000310126",
+                        "goods_nm": "벤투스 S2 AS",
+                        "tire_size_1": "245/45R19",
+                    }
+                ]
+            },
+        },
+        {"keyword": "벤투스 S2 AS", "size": "245/45R19"},
+    )
+
+    assert changed is True
+    assert slots.goods_no == "G000000310126"
+    active_context = slots.availability_context["active_flow_context"]
+    assert active_context["flow_type"] == "stock"
+    assert active_context["flow_step"] == "product_selected"
+    assert active_context["product"]["goods_no"] == "G000000310126"
+    assert active_context["intent"]["pending_intent"] == "stock"
+    assert active_context["intent"]["goal_type"] == "store_with_stock"
+
+
+def test_store_detail_and_schedule_results_persist_confirmed_store_flow_state() -> None:
+    slots = ConversationSlots(pending_intent="reservation", goal_type="store_finder")
+
+    changed = StreamingMultiAgentCoordinator._apply_tool_derived_slots(
+        slots,
+        "get_store_schedule_tool",
+        {"status": "success", "data": {"items": []}},
+        {"shop_id": "F00721", "requested_cal_day": "20260630"},
+    )
+
+    assert changed is True
+    assert slots.shop_id == "F00721"
+    active_context = slots.availability_context["active_flow_context"]
+    assert active_context["flow_type"] == "store_schedule"
+    assert active_context["flow_step"] == "store_selected"
+    assert active_context["store"]["shop_id"] == "F00721"
 
 
 def test_purchase_cta_with_recovered_product_context_routes_to_quick_order_reservation() -> None:
@@ -29076,6 +29166,50 @@ def test_promote_single_turn_purchase_contract_from_search_product_clears_invent
     assert "stock_check_mode" not in promoted_slots.model_dump(exclude_none=True)
     assert "stock_check_mode" not in promoted_frame.known_slots
     assert promoted_tool_plan.metadata["flow_step"] == "resolve_store"
+
+
+def test_promote_single_turn_stock_inventory_from_search_product_runs_region_lookup_contract() -> None:
+    promoted = _promote_single_turn_stock_inventory_from_search_product(
+        user_text="벤투스 S2 AS 2454519 4개 강남역 근처 재고 있는 매장 찾아줘",
+        tool_result={
+            "data": {
+                "items": [
+                    {
+                        "goods_no": "G000000310126",
+                        "goods_nm": "벤투스 S2 AS",
+                        "tire_size_1": "245/45R19",
+                    }
+                ]
+            }
+        },
+        merged_slots=ConversationSlots(
+            tire_model="벤투스 S2 AS",
+            tire_size="245/45R19",
+            ord_qty=4,
+            region="강남",
+            stock_check_mode="inventory_only",
+        ),
+        routing_result=SimpleNamespace(
+            execution_plan=["discovery:resolve_or_describe_product", "transaction:stock_store_or_reservation"]
+        ),
+    )
+
+    assert promoted is not None
+    promoted_slots, promoted_frame, promoted_tool_plan, decision = promoted
+    assert promoted_slots.goods_no == "G000000310126"
+    assert promoted_frame.intent == "stock_store_search"
+    assert promoted_frame.known_slots["pending_intent"] == "stock"
+    assert promoted_frame.known_slots["goal_type"] == "store_with_stock"
+    assert promoted_frame.known_slots["ord_qty"] == 4
+    assert promoted_frame.known_slots["region"] == "강남"
+    assert promoted_tool_plan.preferred_tool == "get_store_list_tool"
+    assert promoted_tool_plan.metadata["stock_check_mode"] == "inventory_only"
+    assert decision.metadata["response_shape_key"] == "stock_inventory_lookup"
+    active_context = promoted_slots.availability_context["active_flow_context"]
+    assert active_context["flow_type"] == "stock"
+    assert active_context["flow_step"] == "product_selected"
+    assert active_context["product"]["goods_no"] == "G000000310126"
+    assert active_context["product"]["ord_qty"] == 4
 
 
 def test_post_tool_purchase_preview_contract_context_promotes_schedule_slots_to_purchase_flow() -> None:
