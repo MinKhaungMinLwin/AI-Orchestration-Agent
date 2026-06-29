@@ -2184,6 +2184,42 @@ def test_turn_contract_keeps_router_plan_over_cross_domain_plan() -> None:
     assert contract.speculative_used_for_contract is False
 
 
+def test_turn_contract_keeps_router_support_compatibility_over_product_description_context() -> None:
+    routing = _routing_result(
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        execution_plan=["support:compatibility_advisory"],
+    )
+    product_description_frame = IntentFrame(
+        domain=PolicyDomain.DISCOVERY,
+        intent="product_description",
+        sub_intent="product_detail",
+        known_slots={"goods_no": "G000000317733", "tire_size": "255/45R19"},
+    )
+    product_description_tool_plan = ToolPlan(
+        allowed_tools=("get_product_description_tool",),
+        preferred_tool="get_product_description_tool",
+        tool_args_patch={"goods_no": "G000000317733"},
+    )
+
+    contract = build_turn_contract(
+        user_text="나 전기차 타이어 보고 있는데 1개는 아이온, 3개는 키너지로 교체해도 되나",
+        intent_frame=product_description_frame,
+        tool_plan=product_description_tool_plan,
+        routing_result=routing,
+        merged_slots=ConversationSlots(goods_no="G000000317733", tire_size="255/45R19"),
+        router_waited=True,
+        router_source="llm",
+        contract_source="router",
+    )
+
+    assert contract.domain == "support"
+    assert contract.intent == "compatibility_advisory"
+    assert contract.router_wins_applied is True
+    assert "search_faq_hybrid_tool" in contract.allowed_tools
+    assert "get_product_description_tool" not in contract.allowed_tools
+    assert contract.response_decision["metadata"]["response_shape_key"] == "compatibility_advisory"
+
+
 def test_safe_service_tire_recommendation_policy_forces_discovery_over_support_router() -> None:
     plan = plan_cross_domain_turn("안심서비스 가능한 타이어는?", known_slots={})
     support_routing = _routing_result(
@@ -16807,6 +16843,27 @@ def test_previous_product_candidate_without_transaction_anchor_forces_product_de
     )
 
     assert should_force is True
+
+
+def test_previous_product_candidate_support_advisory_router_keeps_current_turn_support_intent() -> None:
+    routing = _routing_result(
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        execution_plan=["support:compatibility_advisory"],
+    )
+
+    should_force = _should_force_previous_product_candidate_description(
+        goods_no_resolved=True,
+        selection_source="previous_product_candidate",
+        user_text="나 전기차 타이어 보고 있는데 1개는 아이온, 3개는 키너지로 교체해도 되나",
+        regex_slots=ConversationSlots.extract_from_user_text(
+            "나 전기차 타이어 보고 있는데 1개는 아이온, 3개는 키너지로 교체해도 되나"
+        ),
+        slots=ConversationSlots(goods_no="G000000317733", tire_size="255/45R19"),
+        resolved_size_stock_continuation=False,
+        routing_result=routing,
+    )
+
+    assert should_force is False
 
 
 def test_previous_product_candidate_with_transaction_anchor_keeps_transaction_flow() -> None:

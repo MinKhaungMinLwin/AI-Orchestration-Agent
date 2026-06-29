@@ -1178,6 +1178,41 @@ def _router_contract_is_high_confidence_policy(routing_result: MultiAgentDomain 
     return bool(execution_plan and all(_NON_TRANSACTION_POLICY_PLAN_RE.search(item) for item in execution_plan))
 
 
+_SUPPORT_ADVISORY_PLAN_INTENTS = frozenset({
+    "compatibility_advisory",
+    "support_faq",
+})
+
+
+def _normalize_router_plan_intent(value: str) -> str:
+    token = str(value or "").strip()
+    if ":" in token:
+        token = token.rsplit(":", 1)[-1]
+    return re.sub(r"[^a-zA-Z0-9_]+", "_", token.lower()).strip("_")
+
+
+def _router_contract_is_high_confidence_support_answer(routing_result: MultiAgentDomain | None) -> bool:
+    if _router_contract_is_high_confidence_policy(routing_result):
+        return True
+    if routing_result is None:
+        return False
+    if bool(getattr(routing_result, "needs_clarification", False)):
+        return False
+    if float(getattr(routing_result, "planner_confidence", 0.0) or 0.0) < _ROUTER_OVERRIDE_PRESERVE_CONFIDENCE:
+        return False
+    domains = list(getattr(routing_result, "domains", []) or [])
+    if domains != [MultiAgentDomain.Domain.SUPPORT]:
+        return False
+    plan_intents = {
+        _normalize_router_plan_intent(item)
+        for item in (getattr(routing_result, "execution_plan", None) or ())
+        if str(item or "").strip()
+    }
+    if plan_intents & _SUPPORT_ADVISORY_PLAN_INTENTS:
+        return True
+    return any(intent.endswith("_advisory") for intent in plan_intents)
+
+
 def _router_contract_is_high_confidence_comparison(routing_result: MultiAgentDomain | None) -> bool:
     if routing_result is None:
         return False
@@ -7215,6 +7250,7 @@ def _should_force_previous_product_candidate_description(
     regex_slots: ConversationSlots,
     slots: ConversationSlots,
     resolved_size_stock_continuation: bool,
+    routing_result: MultiAgentDomain | None = None,
 ) -> bool:
     return bool(
         goods_no_resolved
@@ -7222,6 +7258,7 @@ def _should_force_previous_product_candidate_description(
         and not _has_transaction_anchor_for_previous_product_selection(user_text, regex_slots=regex_slots)
         and not _has_active_transaction_context_for_previous_product_selection(slots)
         and not resolved_size_stock_continuation
+        and not _router_contract_is_high_confidence_support_answer(routing_result)
     )
 
 
@@ -27940,6 +27977,7 @@ class TStationChatServiceV2:
             regex_slots=regex_slots,
             slots=merged_slots,
             resolved_size_stock_continuation=resolved_size_stock_continuation,
+            routing_result=routing_result,
         )
         if previous_product_candidate_description_override:
             previous_domains = list(domains)
