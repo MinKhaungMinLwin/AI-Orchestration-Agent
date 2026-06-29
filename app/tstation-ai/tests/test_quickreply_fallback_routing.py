@@ -19010,6 +19010,24 @@ def test_router_slot_fill_context_payload_restores_stock_snapshot() -> None:
     assert payload["last_requested_slot"] == "quantity"
 
 
+def test_router_slot_fill_current_flow_uses_pending_order_context_for_stock_resume() -> None:
+    flow = TStationChatServiceV2._router_slot_fill_current_flow(
+        ConversationSlots(
+            availability_context={
+                "pending_order_context": {
+                    "pending_intent": "stock",
+                    "goal_type": "store_with_stock",
+                    "goods_no": "G000000309922",
+                    "region": "경기도 광주",
+                }
+            }
+        ),
+        user_text="235/50R19",
+    )
+
+    assert flow == "stock_store_search"
+
+
 def test_expected_slot_fill_precheck_accepts_direct_quantity_for_active_stock() -> None:
     slots = ConversationSlots(
         goods_no="G000000309715",

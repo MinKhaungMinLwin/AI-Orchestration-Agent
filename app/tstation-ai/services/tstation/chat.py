@@ -25437,10 +25437,12 @@ class TStationChatServiceV2:
         if isinstance(availability_context, Mapping):
             for key in ("pending_order_context", "dormant_purchase_context"):
                 context = availability_context.get(key)
-                if isinstance(context, Mapping) and (
-                    context.get("pending_intent") == "order" or context.get("goal_type") == "place_order"
-                ):
+                if not isinstance(context, Mapping):
+                    continue
+                if context.get("pending_intent") == "order" or context.get("goal_type") == "place_order":
                     return "quick_order_reservation"
+                if context.get("pending_intent") == "stock" or context.get("goal_type") == "store_with_stock":
+                    return "stock_store_search"
             for key in ("dormant_stock_context", "dormant_transaction_context"):
                 context = availability_context.get(key)
                 if isinstance(context, Mapping) and (
