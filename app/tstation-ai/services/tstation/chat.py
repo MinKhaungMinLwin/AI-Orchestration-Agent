@@ -17077,6 +17077,8 @@ def _contract_required_recommendation_tool_input(
         tool_input.setdefault("brand_cd", known_slots.get("brand_cd") or "HK")
     elif response_shape_key == "sized_technology_recommendation_cards":
         tool_input.setdefault("rcmd_type", "sound_absorber")
+    else:
+        tool_input.setdefault("rcmd_type", "tstation")
 
     slot_sources = (
         turn_contract.tool_args_patch if isinstance(turn_contract.tool_args_patch, Mapping) else {},

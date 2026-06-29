@@ -16157,6 +16157,7 @@ def test_contract_required_vehicle_selection_recommendation_uses_current_turn_co
     assert candidate is not None
     assert candidate.tool_name == "get_products_recommendations_tool"
     assert candidate.tool_input == {
+        "rcmd_type": "tstation",
         "tire_size": "235/55R19",
         "car_lnc_cd": "W049847",
         "vehicle_type": "suv",
