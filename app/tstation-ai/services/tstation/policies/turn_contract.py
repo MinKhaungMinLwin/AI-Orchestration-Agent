@@ -3192,6 +3192,19 @@ def _normalize_service_code_values(value: Any) -> set[str]:
     return {str(value).strip()} if str(value).strip() else set()
 
 
+def _store_search_location_values_match(*, expected: str, actual: str, region: str = "") -> bool:
+    expected_value = str(expected or "").strip()
+    actual_value = str(actual or "").strip()
+    region_value = str(region or "").strip()
+    if not expected_value or not actual_value:
+        return True
+    if expected_value == actual_value:
+        return True
+    if region_value and actual_value == region_value:
+        return expected_value == region_value or region_value in expected_value
+    return len(actual_value) >= 2 and actual_value in expected_value
+
+
 def _store_service_search_contract_violation(
     *,
     tool_inputs: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...] | None,
@@ -3224,7 +3237,11 @@ def _store_service_search_contract_violation(
                 "tool_region": actual_region,
                 "tool": tool_name,
             }
-        if expected_place_query and actual_place_query and expected_place_query != actual_place_query:
+        if expected_place_query and actual_place_query and not _store_search_location_values_match(
+            expected=expected_place_query,
+            actual=actual_place_query,
+            region=expected_region,
+        ):
             return {
                 "type": "store_service_search_place_query_contract_drift",
                 "known_place_query": expected_place_query,

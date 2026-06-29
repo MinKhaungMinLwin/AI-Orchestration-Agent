@@ -1496,6 +1496,12 @@ def _current_turn_action_mode(
     plan_text = " ".join(str(item or "").lower() for item in (getattr(routing_result, "execution_plan", None) or ()))
     policy_intent = str(getattr(routing_result, "policy_intent", "") or "").strip()
     if (
+        MultiAgentDomain.Domain.TRANSACTION in domains
+        and policy_intent in {"store_service_search", "unsupported_or_unmapped_store_service_policy"}
+        and not bool(getattr(routing_result, "needs_clarification", False))
+    ):
+        return "store_search"
+    if (
         routing_result is not None
         and not bool(getattr(routing_result, "needs_clarification", False))
         and domains == [MultiAgentDomain.Domain.SUPPORT]
@@ -25243,6 +25249,19 @@ class TStationChatServiceV2:
         return {str(value).strip()} if str(value).strip() else set()
 
     @staticmethod
+    def _store_search_location_values_match(*, expected: str, actual: str, region: str = "") -> bool:
+        expected_value = str(expected or "").strip()
+        actual_value = str(actual or "").strip()
+        region_value = str(region or "").strip()
+        if not expected_value or not actual_value:
+            return True
+        if expected_value == actual_value:
+            return True
+        if region_value and actual_value == region_value:
+            return expected_value == region_value or region_value in expected_value
+        return len(actual_value) >= 2 and actual_value in expected_value
+
+    @staticmethod
     def _should_exclude_tool_context_for_store_service_search(
         item: dict,
         store_service_search_slots: Mapping[str, Any] | None,
@@ -25269,7 +25288,11 @@ class TStationChatServiceV2:
 
         if current_region and arg_region and current_region != arg_region:
             return True
-        if current_place_query and arg_place_query and current_place_query != arg_place_query:
+        if current_place_query and arg_place_query and not TStationChatServiceV2._store_search_location_values_match(
+            expected=current_place_query,
+            actual=arg_place_query,
+            region=current_region,
+        ):
             return True
         if current_service_codes and arg_service_codes and current_service_codes.isdisjoint(arg_service_codes):
             return True
