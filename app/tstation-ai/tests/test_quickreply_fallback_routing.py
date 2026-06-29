@@ -387,7 +387,11 @@ from services.tstation.policies.delivery_policy_gate import (
     DeliveryPolicyIntent,
     decide_delivery_policy_gate,
 )
-from services.tstation.policies.flow_controller import build_purchase_flow_fallback_event, resolve_purchase_order_flow
+from services.tstation.policies.flow_controller import (
+    build_purchase_flow_fallback_event,
+    resolve_purchase_order_flow,
+    transition_current_flow,
+)
 from services.tstation.policies.intent_frame import IntentFrame, PolicyDomain
 from services.tstation.policies.resolved_context import (
     build_resolved_turn_context,
@@ -12595,6 +12599,79 @@ def test_apply_router_evidence_snapshot_keeps_pre_override_router_intent() -> No
     assert final_evidence["intent"] == "quick_order_reservation"
     assert updated.pending_intent is None
     assert updated.goal_type is None
+
+
+def test_flow_transition_shell_separates_current_recommendation_from_parent_order_context() -> None:
+    slots = ConversationSlots(
+        ord_qty=4,
+        shop_name="광교신도시점",
+        tire_size="235/55R19",
+        availability_context={
+            "active_flow_context": {
+                "flow_type": "recommendation",
+                "status": "active",
+                "flow_step": "select_vehicle",
+                "intent": {"pending_intent": "product_recommendation", "goal_type": "recommend_tire"},
+            },
+            "pending_order_context": {
+                "ord_qty": 4,
+                "shop_name": "광교신도시점",
+                "tire_size": "235/55R19",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            },
+        },
+    )
+    router_evidence = {
+        "domain": "discovery",
+        "intent": "vehicle_based_tire_recommendation",
+        "execution_plan": ["discovery:vehicle_based_tire_recommendation"],
+        "source": "llm",
+    }
+
+    transition = transition_current_flow(
+        user_text="205소4214",
+        router_evidence=router_evidence,
+        existing_slots=slots,
+        extracted_slots=ConversationSlots(),
+        resume_source="none",
+    )
+
+    assert transition.metadata["flow_transition_shell"] is True
+    assert transition.metadata["flow_transition_applied"] is False
+    assert transition.metadata["transition_kind"] == "current_flow_with_parent_context"
+    assert transition.current_flow_state["flow_type"] == "recommendation"
+    assert transition.current_flow_state["flow_step"] == "select_vehicle"
+    assert transition.parent_flow_state["flow_type"] == "purchase"
+    assert transition.parent_flow_state["intent"] == "order"
+    assert transition.contract_seed["router_evidence"]["intent"] == "vehicle_based_tire_recommendation"
+    assert "parent_flow_context" in transition.context_evidence
+    assert slots.pending_intent is None
+    assert slots.goal_type is None
+
+
+def test_flow_transition_shell_router_observed_does_not_create_execution_intent() -> None:
+    slots = ConversationSlots()
+    router_evidence = {
+        "domain": "transaction",
+        "intent": "stock_store_search",
+        "execution_plan": ["transaction:stock_store_search"],
+        "source": "llm",
+    }
+
+    transition = transition_current_flow(
+        user_text="재고 있는 매장 찾아줘",
+        router_evidence=router_evidence,
+        existing_slots=slots,
+        extracted_slots=ConversationSlots(),
+    )
+
+    assert transition.metadata["transition_kind"] == "current_flow_observed"
+    assert transition.current_flow_state["flow_type"] == "transaction"
+    assert transition.current_flow_state["intent"] == "stock_store_search"
+    assert transition.flow_transition["applied"] is False
+    assert slots.pending_intent is None
+    assert slots.goal_type is None
 
 
 @pytest.mark.parametrize(

@@ -112,7 +112,11 @@ from services.tstation.policies.cross_domain_policy import (
     plan_cross_domain_turn,
     should_defer_product_price_explanation_to_classifier,
 )
-from services.tstation.policies.flow_controller import build_purchase_flow_fallback_event, resolve_purchase_order_flow
+from services.tstation.policies.flow_controller import (
+    build_purchase_flow_fallback_event,
+    resolve_purchase_order_flow,
+    transition_current_flow,
+)
 from services.tstation.policies.coupon_query_gate import (
     CouponQueryGateDecision,
     CouponQueryIntent,
@@ -27476,6 +27480,24 @@ class TStationChatServiceV2:
             resume_source = location_selection_resume_source
         if resume_source == "none" and region_store_input_resolution.resolved:
             resume_source = region_store_input_resolution.resume_source
+        flow_transition = transition_current_flow(
+            user_text=last_user_text,
+            router_evidence=latest_router_evidence_snapshot,
+            existing_slots=merged_slots,
+            extracted_slots=regex_slots,
+            ui_action=raw_ui_action if isinstance(raw_ui_action, Mapping) else None,
+            resume_source=resume_source,
+        )
+        vehicle_selection_trace_metadata.update({
+            "flow_transition_shell": flow_transition.metadata.get("flow_transition_shell"),
+            "flow_transition_kind": flow_transition.metadata.get("transition_kind"),
+            "flow_transition_applied": flow_transition.metadata.get("flow_transition_applied"),
+            "current_flow_type": flow_transition.metadata.get("current_flow_type"),
+            "current_flow_step": flow_transition.metadata.get("current_flow_step"),
+            "parent_flow_type": flow_transition.metadata.get("parent_flow_type"),
+            "contract_seed_keys": flow_transition.metadata.get("contract_seed_keys"),
+            "context_evidence_keys": flow_transition.metadata.get("context_evidence_keys"),
+        })
         router_slot_fill_metadata.update({
             "router_is_slot_fill": bool(getattr(routing_result, "is_slot_fill", False)) if routing_result else False,
             "router_filled_slot": str(getattr(routing_result, "filled_slot", "none") or "none")

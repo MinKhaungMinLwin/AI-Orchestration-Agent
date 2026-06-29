@@ -46,6 +46,28 @@ class FlowState:
         }
 
 
+@dataclass(frozen=True)
+class FlowTransition:
+    """Read-only current/parent flow snapshot for the next FlowController migration."""
+
+    current_flow_state: Mapping[str, Any] = field(default_factory=dict)
+    parent_flow_state: Mapping[str, Any] = field(default_factory=dict)
+    flow_transition: Mapping[str, Any] = field(default_factory=dict)
+    contract_seed: Mapping[str, Any] = field(default_factory=dict)
+    context_evidence: Mapping[str, Any] = field(default_factory=dict)
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "current_flow_state": dict(self.current_flow_state),
+            "parent_flow_state": dict(self.parent_flow_state),
+            "flow_transition": dict(self.flow_transition),
+            "contract_seed": dict(self.contract_seed),
+            "context_evidence": dict(self.context_evidence),
+            "metadata": dict(self.metadata),
+        }
+
+
 _PURCHASE_FLOW_ID = "purchase_order"
 _CART_FLOW_ID = "cart_add"
 _PURCHASE_FORBIDDEN_TOOLS = (
@@ -114,6 +136,202 @@ def location_source_type(known_slots: Mapping[str, Any] | None) -> str:
 
 def has_location_source(known_slots: Mapping[str, Any] | None) -> bool:
     return location_source_type(known_slots) != "none"
+
+
+def _non_empty_mapping(values: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(values, Mapping):
+        return {}
+    return {key: value for key, value in dict(values).items() if value not in (None, "", [], {})}
+
+
+def _mapping_value(values: Mapping[str, Any] | None, key: str) -> dict[str, Any]:
+    value = values.get(key) if isinstance(values, Mapping) else None
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _availability_context_from_slots(slots: Any | Mapping[str, Any] | None) -> dict[str, Any]:
+    if isinstance(slots, Mapping):
+        value = slots.get("availability_context")
+    else:
+        value = getattr(slots, "availability_context", None)
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _parent_flow_context(availability_context: Mapping[str, Any]) -> dict[str, Any]:
+    for key in (
+        "pending_order_context",
+        "dormant_transaction_context",
+        "dormant_purchase_context",
+        "dormant_stock_context",
+    ):
+        context = _mapping_value(availability_context, key)
+        if context:
+            context.setdefault("context_key", key)
+            return context
+    return {}
+
+
+def _compact_slot_snapshot(slots: Any | Mapping[str, Any] | None) -> dict[str, Any]:
+    fields = (
+        "goods_no",
+        "tire_size",
+        "ord_qty",
+        "shop_id",
+        "shop_name",
+        "region",
+        "pending_intent",
+        "goal_type",
+        "requested_cal_day",
+        "rsv_hour",
+    )
+    snapshot: dict[str, Any] = {}
+    for field_name in fields:
+        value = slots.get(field_name) if isinstance(slots, Mapping) else getattr(slots, field_name, None)
+        if value not in (None, "", [], {}):
+            snapshot[field_name] = value
+    return snapshot
+
+
+def _ui_action_snapshot(ui_action: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(ui_action, Mapping):
+        return {}
+    snapshot: dict[str, Any] = {}
+    for key in ("action_type", "cta_action", "expected_contract_intent", "entity_type", "entity_id", "entity_label"):
+        value = ui_action.get(key)
+        if value not in (None, "", [], {}):
+            snapshot[key] = value
+    return snapshot
+
+
+def _flow_state_summary(context: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(context, Mapping) or not context:
+        return {}
+    intent = _mapping_value(context, "intent")
+    context_key = str(context.get("context_key") or "").strip()
+    flow_type = context.get("flow_type") or _flow_type_from_context_key(context_key)
+    return {
+        key: value
+        for key, value in {
+            "flow_type": flow_type,
+            "status": context.get("status"),
+            "flow_step": context.get("flow_step") or context.get("pending_step"),
+            "intent": intent.get("pending_intent") or context.get("pending_intent"),
+            "goal_type": intent.get("goal_type") or context.get("goal_type"),
+            "context_key": context_key,
+        }.items()
+        if value not in (None, "", [], {})
+    }
+
+
+def _flow_type_from_context_key(context_key: str) -> str:
+    if context_key in {"pending_order_context", "dormant_purchase_context", "dormant_transaction_context"}:
+        return "purchase"
+    if context_key == "dormant_stock_context":
+        return "stock"
+    return ""
+
+
+def _current_flow_state(active_flow: Mapping[str, Any], router_evidence: Mapping[str, Any]) -> dict[str, Any]:
+    current = _flow_state_summary(active_flow)
+    if current:
+        return current
+    router_intent = str(router_evidence.get("intent") or "").strip()
+    router_domain = str(router_evidence.get("domain") or "").strip()
+    if not router_intent and not router_domain:
+        return {}
+    return {
+        key: value
+        for key, value in {
+            "flow_type": router_domain or "current_turn",
+            "status": "observed",
+            "flow_step": "router_observed",
+            "intent": router_intent,
+        }.items()
+        if value not in (None, "", [], {})
+    }
+
+
+def _transition_kind(
+    current_flow_state: Mapping[str, Any],
+    parent_flow_state: Mapping[str, Any],
+    router_evidence: Mapping[str, Any],
+) -> str:
+    current_type = str(current_flow_state.get("flow_type") or "").strip()
+    parent_type = str(parent_flow_state.get("flow_type") or "").strip()
+    router_intent = str(router_evidence.get("intent") or "").strip()
+    if current_type and parent_type and current_type != parent_type:
+        return "current_flow_with_parent_context"
+    if current_type:
+        return "current_flow_observed"
+    if parent_type:
+        return "parent_context_only"
+    if router_intent:
+        return "router_observed"
+    return "none"
+
+
+def transition_current_flow(
+    *,
+    user_text: str,
+    router_evidence: Mapping[str, Any] | None = None,
+    existing_slots: Any | Mapping[str, Any] | None = None,
+    extracted_slots: Any | Mapping[str, Any] | None = None,
+    ui_action: Mapping[str, Any] | None = None,
+    resume_source: str = "none",
+) -> FlowTransition:
+    """Build read-only flow transition metadata; it must not authorize tool execution."""
+    router_snapshot = _non_empty_mapping(router_evidence)
+    availability_context = _availability_context_from_slots(existing_slots)
+    active_flow = _mapping_value(availability_context, "active_flow_context")
+    parent_flow = _parent_flow_context(availability_context)
+    extracted_snapshot = _compact_slot_snapshot(extracted_slots)
+    existing_snapshot = _compact_slot_snapshot(existing_slots)
+    ui_action_snapshot = _ui_action_snapshot(ui_action)
+
+    current_flow_state = _current_flow_state(active_flow, router_snapshot)
+    parent_flow_state = _flow_state_summary(parent_flow)
+    transition_kind = _transition_kind(current_flow_state, parent_flow_state, router_snapshot)
+    contract_seed = {
+        "router_evidence": router_snapshot,
+        "ui_action": ui_action_snapshot,
+        "resume_source": resume_source if resume_source else "none",
+        "current_flow": {
+            key: current_flow_state.get(key)
+            for key in ("flow_type", "flow_step", "intent", "goal_type")
+            if current_flow_state.get(key) not in (None, "", [], {})
+        },
+    }
+    context_evidence = {
+        "active_flow_context": active_flow,
+        "parent_flow_context": parent_flow,
+        "existing_slots": existing_snapshot,
+        "extracted_slots": extracted_snapshot,
+    }
+    context_evidence = {key: value for key, value in context_evidence.items() if value not in (None, "", [], {})}
+    metadata = {
+        "flow_transition_shell": True,
+        "flow_transition_applied": False,
+        "transition_kind": transition_kind,
+        "current_flow_type": str(current_flow_state.get("flow_type") or "none"),
+        "current_flow_step": str(current_flow_state.get("flow_step") or "none"),
+        "parent_flow_type": str(parent_flow_state.get("flow_type") or "none"),
+        "contract_seed_keys": sorted(contract_seed),
+        "context_evidence_keys": sorted(context_evidence),
+        "router_intent": str(router_snapshot.get("intent") or "none"),
+        "user_text_present": bool(str(user_text or "").strip()),
+    }
+    return FlowTransition(
+        current_flow_state=current_flow_state,
+        parent_flow_state=parent_flow_state,
+        flow_transition={
+            "kind": transition_kind,
+            "applied": False,
+            "reason": "metadata_only_shell",
+        },
+        contract_seed=contract_seed,
+        context_evidence=context_evidence,
+        metadata=metadata,
+    )
 
 
 def resolve_purchase_order_flow(
