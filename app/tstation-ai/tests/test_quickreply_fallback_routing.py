@@ -496,6 +496,7 @@ from services.tstation.policies.ui_action_policy import (
     apply_history_vehicle_selection_state,
     apply_history_product_selection_state,
     apply_history_location_selection_state,
+    replace_current_turn_product_context,
     build_store_availability_quantity_prompt_event,
     decide_store_availability_followup_action,
     router_slot_fill_resolution,
@@ -13762,6 +13763,111 @@ def test_runtime_product_or_size_change_invalidates_goods_no() -> None:
     assert changed_size.goods_no is None
     assert changed_front.goods_no is None
     assert changed_rear.goods_no is None
+
+
+def test_current_turn_product_replacement_clears_product_dependent_context_but_keeps_size_qty_store() -> None:
+    slots = ConversationSlots(
+        goods_no="G-KINERGY",
+        pending_product_name="Kinergy EX",
+        tire_model="Kinergy EX",
+        tire_size="225/45R19",
+        ord_qty=2,
+        shop_name="판교점",
+        payment_amount=300000,
+        requested_cal_day="20260701",
+        rsv_hour="1000",
+        price_facts={"source": "old_price"},
+        coupon_facts={"source": "old_coupon"},
+        availability_context={
+            "pending_order_context": {
+                "goods_no": "G-KINERGY",
+                "product_name": "Kinergy EX",
+                "tire_size": "225/45R19",
+                "ord_qty": 2,
+                "shop_name": "판교점",
+                "payment_amount": 300000,
+                "requested_cal_day": "20260701",
+                "rsv_hour": "1000",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            }
+        },
+        pending_intent="order",
+        goal_type="place_order",
+    )
+
+    updated, metadata = replace_current_turn_product_context(slots, "벤투스 S2 AS 는?")
+
+    assert metadata["current_turn_product_replaced"] is True
+    assert metadata["replacement_product_name"] == "Ventus S2 AS"
+    assert updated.pending_product_name == "Ventus S2 AS"
+    assert updated.tire_model == "Ventus S2 AS"
+    assert updated.tire_size == "225/45R19"
+    assert updated.ord_qty == 2
+    assert updated.shop_name == "판교점"
+    assert updated.goods_no is None
+    assert updated.payment_amount is None
+    assert updated.requested_cal_day is None
+    assert updated.rsv_hour is None
+    assert updated.price_facts is None
+    assert updated.coupon_facts is None
+    pending_context = updated.availability_context["pending_order_context"]
+    assert pending_context["pending_product_name"] == "Ventus S2 AS"
+    assert pending_context["tire_size"] == "225/45R19"
+    assert pending_context["ord_qty"] == 2
+    assert pending_context["shop_name"] == "판교점"
+    assert "goods_no" not in pending_context
+    assert "payment_amount" not in pending_context
+    assert "requested_cal_day" not in pending_context
+    assert "rsv_hour" not in pending_context
+
+
+def test_current_turn_same_product_does_not_clear_existing_goods_no() -> None:
+    slots = ConversationSlots(
+        goods_no="G-S2",
+        pending_product_name="Ventus S2 AS",
+        tire_model="Ventus S2 AS",
+        tire_size="225/45R19",
+        payment_amount=300000,
+    )
+
+    updated, metadata = replace_current_turn_product_context(slots, "벤투스 S2 AS 는?")
+
+    assert metadata == {}
+    assert updated.goods_no == "G-S2"
+    assert updated.payment_amount == 300000
+
+
+def test_current_turn_same_product_korean_alias_does_not_clear_existing_goods_no() -> None:
+    slots = ConversationSlots(
+        goods_no="G-S2",
+        pending_product_name="벤투스 S2 AS",
+        tire_model="벤투스 S2 AS",
+        tire_size="225/45R19",
+        payment_amount=300000,
+    )
+
+    updated, metadata = replace_current_turn_product_context(slots, "벤투스 S2 AS 는?")
+
+    assert metadata == {}
+    assert updated.goods_no == "G-S2"
+    assert updated.payment_amount == 300000
+
+
+def test_current_turn_size_only_recommendation_does_not_replace_product_context() -> None:
+    slots = ConversationSlots(
+        goods_no="G-S2",
+        pending_product_name="Ventus S2 AS",
+        tire_model="Ventus S2 AS",
+        tire_size="225/45R19",
+        payment_amount=300000,
+    )
+
+    updated, metadata = replace_current_turn_product_context(slots, "2454518 추천")
+
+    assert metadata == {}
+    assert updated.goods_no == "G-S2"
+    assert updated.pending_product_name == "Ventus S2 AS"
 
 
 def test_user_merge_goods_no_change_requires_size_reconfirmation() -> None:

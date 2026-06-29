@@ -210,6 +210,7 @@ from services.tstation.policies.ui_action_policy import (
     apply_history_vehicle_selection_state,
     apply_history_product_selection_state,
     apply_history_location_selection_state,
+    replace_current_turn_product_context,
     resolve_recent_single_shop_id_from_context,
     resolve_recent_store_name_from_messages,
     store_context_from_mapping,
@@ -1481,6 +1482,17 @@ def _current_turn_action_mode(
         )
     ):
         return "owned_record_lookup"
+
+    routing_intent = str(getattr(routing_result, "intent", "") or "").strip()
+    if (
+        routing_intent == "resolve_product_for_purchase_size_selection"
+        or "resolve_product_for_purchase_size_selection" in plan_text
+    ) and (
+        getattr(merged_slots, "pending_intent", None) == "order"
+        or getattr(merged_slots, "goal_type", None) == "place_order"
+        or explicit_override_reason == "explicit_current_turn_purchase"
+    ):
+        return "purchase_continuation"
 
     if resume_source != "none" and _has_stored_transaction_context(merged_slots):
         pending_intent, goal_type = _stored_transaction_intent(merged_slots)
@@ -24179,6 +24191,18 @@ class TStationChatServiceV2:
                         parsed_tire_size,
                         parsed_quantity,
                     )
+            replaced_product_slots, product_replacement_metadata = replace_current_turn_product_context(
+                merged_slots,
+                last_user_text,
+                regex_slots,
+            )
+            if product_replacement_metadata:
+                merged_slots = replaced_product_slots
+                vehicle_selection_trace_metadata.update(product_replacement_metadata)
+                logger.info(
+                    "[SLOTS] Current-turn product replaced stale context: %s",
+                    product_replacement_metadata,
+                )
             fresh_product_transaction_request = _is_fresh_product_transaction_request(
                 last_user_text,
                 regex_slots.intent_candidate,
@@ -26922,6 +26946,15 @@ class TStationChatServiceV2:
                 )
                 skip_decision = False
                 speculative_classify_future = None
+                merged_slots = merged_slots.apply_runtime_values(
+                    {
+                        "tire_model": fresh_unsized_product_keyword,
+                        "pending_product_name": fresh_unsized_product_keyword,
+                        "pending_intent": "order",
+                        "goal_type": "place_order",
+                    },
+                    source="fresh_unsized_product_transaction",
+                )
                 logger.info(
                     "[COORDINATOR] Fresh unsized product transaction route: forcing "
                     "[DISCOVERY] with discovery_search profile "
