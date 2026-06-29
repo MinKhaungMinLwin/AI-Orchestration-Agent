@@ -12723,7 +12723,8 @@ def test_flow_transition_shell_records_selected_product_without_executing() -> N
     )
 
     assert transition.metadata["selected_product_resolved"] is True
-    assert transition.flow_transition["applied"] is False
+    assert transition.flow_transition["applied"] is True
+    assert transition.flow_transition["reason"] == "selected_product_flow_state"
     assert transition.contract_seed["ui_action"]["action_type"] == "select_product"
     assert transition.contract_seed["ui_action"]["slot_patch"]["goods_no"] == "G000000310126"
     assert transition.context_evidence["selected_product"] == {
@@ -12732,7 +12733,74 @@ def test_flow_transition_shell_records_selected_product_without_executing() -> N
         "tire_size": "245/45R19",
         "selection_source": "previous_product_candidate",
     }
+    active_flow_context = transition.flow_transition["active_flow_context"]
+    assert active_flow_context["flow_type"] == "purchase"
+    assert active_flow_context["flow_step"] == "product_selected"
+    assert active_flow_context["product"]["goods_no"] == "G000000310126"
+    assert active_flow_context["product"]["product_name"] == "Ventus S2 AS"
+    assert active_flow_context["product"]["tire_size"] == "245/45R19"
+    assert active_flow_context["intent"]["pending_intent"] == "order"
+    assert active_flow_context["intent"]["goal_type"] == "place_order"
     assert slots.goods_no is None
+
+
+def test_flow_transition_records_discovery_selected_product_flow_state_without_execution_intent() -> None:
+    slots = ConversationSlots(
+        tire_size="235/55R19",
+        availability_context={
+            "dormant_recommendation_context": {
+                "flow_type": "recommendation",
+                "status": "completed",
+                "flow_step": "recommend_products",
+                "intent": {"pending_intent": "product_recommendation", "goal_type": "recommend_tire"},
+            },
+        },
+    )
+    action_context = UIActionContext(
+        action_type="select_product",
+        action_name="select_product",
+        selection_source="previous_product_candidate",
+        contract_intent="product_description",
+        source_intent="product_description",
+        expected_contract_intent="product_description",
+        expected_behavior="context_evidence",
+        entity_type="product",
+        entity_id="G000000309714",
+        entity_label="다이나프로 HL3",
+        slot_patch={
+            "goods_no": "G000000309714",
+            "tire_model": "다이나프로 HL3",
+            "tire_size": "235/55R19",
+        },
+    )
+
+    transition = transition_current_flow(
+        user_text="HL3",
+        router_evidence={
+            "domain": "discovery",
+            "intent": "get_product_description_tool",
+            "execution_plan": ["discovery:get_product_description_tool"],
+            "source": "llm",
+        },
+        existing_slots=slots,
+        extracted_slots=ConversationSlots(),
+        ui_action=action_context,
+    )
+
+    active_flow_context = transition.flow_transition["active_flow_context"]
+    assert transition.flow_transition["applied"] is True
+    assert active_flow_context["flow_type"] == "recommendation"
+    assert active_flow_context["flow_step"] == "product_selected"
+    assert active_flow_context["product"] == {
+        "goods_no": "G000000309714",
+        "product_name": "다이나프로 HL3",
+        "tire_model": "다이나프로 HL3",
+        "pending_product_name": "다이나프로 HL3",
+        "tire_size": "235/55R19",
+    }
+    assert "intent" not in active_flow_context
+    assert slots.pending_intent is None
+    assert slots.goal_type is None
 
 
 @pytest.mark.parametrize(

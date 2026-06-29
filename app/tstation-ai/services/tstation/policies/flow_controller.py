@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 import re
 from typing import Any, Mapping
 
@@ -247,6 +248,84 @@ def _selected_product_from_ui_action(ui_action_snapshot: Mapping[str, Any]) -> d
     }
 
 
+def _selected_product_flow_type(
+    *,
+    current_flow_state: Mapping[str, Any],
+    parent_flow_state: Mapping[str, Any],
+    router_evidence: Mapping[str, Any],
+    selected_product: Mapping[str, Any],
+) -> str:
+    slot_pending_intent = str(selected_product.get("pending_intent") or "").strip()
+    slot_goal_type = str(selected_product.get("goal_type") or "").strip()
+    if slot_pending_intent in {"order", "cart"} or slot_goal_type in {"place_order", "add_to_cart"}:
+        return "purchase"
+    parent_flow_type = str(parent_flow_state.get("flow_type") or "").strip()
+    if parent_flow_type == "purchase":
+        return "purchase"
+    current_flow_type = str(current_flow_state.get("flow_type") or "").strip()
+    if current_flow_type in {"purchase", "recommendation", "stock", "booking"}:
+        return current_flow_type
+    router_domain = str(router_evidence.get("domain") or "").strip().lower()
+    if router_domain == "transaction":
+        return "purchase"
+    return "recommendation"
+
+
+def _selected_product_flow_context(
+    *,
+    current_flow_state: Mapping[str, Any],
+    parent_flow_state: Mapping[str, Any],
+    router_evidence: Mapping[str, Any],
+    selected_product: Mapping[str, Any],
+    ui_action_snapshot: Mapping[str, Any],
+) -> dict[str, Any]:
+    if not selected_product:
+        return {}
+    slot_patch = ui_action_snapshot.get("slot_patch") if isinstance(ui_action_snapshot.get("slot_patch"), Mapping) else {}
+    flow_type = _selected_product_flow_type(
+        current_flow_state=current_flow_state,
+        parent_flow_state=parent_flow_state,
+        router_evidence=router_evidence,
+        selected_product={**dict(slot_patch), **dict(selected_product)},
+    )
+    product_name = selected_product.get("product_name") or slot_patch.get("product_name") or slot_patch.get("tire_model")
+    product = {
+        key: value
+        for key, value in {
+            "goods_no": selected_product.get("goods_no") or slot_patch.get("goods_no"),
+            "product_name": product_name,
+            "tire_model": product_name,
+            "pending_product_name": product_name,
+            "tire_size": selected_product.get("tire_size") or slot_patch.get("tire_size"),
+            "ord_qty": slot_patch.get("ord_qty"),
+        }.items()
+        if value not in (None, "", [], {})
+    }
+    intent = {
+        key: value
+        for key, value in {
+            "pending_intent": slot_patch.get("pending_intent"),
+            "goal_type": slot_patch.get("goal_type"),
+            "stock_check_mode": slot_patch.get("stock_check_mode"),
+            "availability_intent": slot_patch.get("availability_intent"),
+        }.items()
+        if value not in (None, "", [], {})
+    }
+    return {
+        key: value
+        for key, value in {
+            "flow_type": flow_type,
+            "status": "active",
+            "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "flow_step": "product_selected",
+            "product": product,
+            "intent": intent,
+            "source": "flow_controller:select_product",
+        }.items()
+        if value not in (None, "", [], {})
+    }
+
+
 def _flow_state_summary(context: Mapping[str, Any] | None) -> dict[str, Any]:
     if not isinstance(context, Mapping) or not context:
         return {}
@@ -336,6 +415,13 @@ def transition_current_flow(
     current_flow_state = _current_flow_state(active_flow, router_snapshot)
     parent_flow_state = _flow_state_summary(parent_flow)
     transition_kind = _transition_kind(current_flow_state, parent_flow_state, router_snapshot)
+    selected_product_flow_context = _selected_product_flow_context(
+        current_flow_state=current_flow_state,
+        parent_flow_state=parent_flow_state,
+        router_evidence=router_snapshot,
+        selected_product=selected_product,
+        ui_action_snapshot=ui_action_snapshot,
+    )
     contract_seed = {
         "router_evidence": router_snapshot,
         "ui_action": ui_action_snapshot,
@@ -356,7 +442,7 @@ def transition_current_flow(
     context_evidence = {key: value for key, value in context_evidence.items() if value not in (None, "", [], {})}
     metadata = {
         "flow_transition_shell": True,
-        "flow_transition_applied": False,
+        "flow_transition_applied": bool(selected_product_flow_context),
         "transition_kind": transition_kind,
         "current_flow_type": str(current_flow_state.get("flow_type") or "none"),
         "current_flow_step": str(current_flow_state.get("flow_step") or "none"),
@@ -372,8 +458,9 @@ def transition_current_flow(
         parent_flow_state=parent_flow_state,
         flow_transition={
             "kind": transition_kind,
-            "applied": False,
-            "reason": "metadata_only_shell",
+            "applied": bool(selected_product_flow_context),
+            "reason": "selected_product_flow_state" if selected_product_flow_context else "metadata_only_shell",
+            "active_flow_context": selected_product_flow_context,
         },
         contract_seed=contract_seed,
         context_evidence=context_evidence,

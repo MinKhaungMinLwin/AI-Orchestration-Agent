@@ -27500,6 +27500,25 @@ class TStationChatServiceV2:
             "flow_selected_product_resolved": flow_transition.metadata.get("selected_product_resolved"),
             "flow_selected_product": flow_transition.context_evidence.get("selected_product"),
         })
+        flow_transition_active_context = flow_transition.flow_transition.get("active_flow_context")
+        if isinstance(flow_transition_active_context, Mapping) and flow_transition_active_context:
+            availability_context = (
+                dict(merged_slots.availability_context)
+                if isinstance(getattr(merged_slots, "availability_context", None), dict)
+                else {}
+            )
+            previous_active_context = availability_context.get("active_flow_context")
+            availability_context["active_flow_context"] = dict(flow_transition_active_context)
+            merged_slots = merged_slots.model_copy()
+            merged_slots.availability_context = availability_context
+            vehicle_selection_trace_metadata.update({
+                "flow_transition_active_context_stored": True,
+                "flow_transition_active_context_before": (
+                    dict(previous_active_context) if isinstance(previous_active_context, Mapping) else {}
+                ),
+                "flow_transition_active_context_after": dict(flow_transition_active_context),
+            })
+            logger.info("[FLOW_STATE] Applied FlowController transition: %s", flow_transition_active_context)
         router_slot_fill_metadata.update({
             "router_is_slot_fill": bool(getattr(routing_result, "is_slot_fill", False)) if routing_result else False,
             "router_filled_slot": str(getattr(routing_result, "filled_slot", "none") or "none")
