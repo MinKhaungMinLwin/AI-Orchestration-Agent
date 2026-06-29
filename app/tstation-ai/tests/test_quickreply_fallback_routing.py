@@ -12455,6 +12455,7 @@ def test_stock_store_location_event_stores_candidate_flow_state() -> None:
             "goal_type": "store_with_stock",
             "ord_qty": 4,
             "payment_amount": 616400,
+            "flow_type": "stock",
         }
     ]
 
@@ -12500,6 +12501,200 @@ def test_stock_store_location_payload_stores_candidate_flow_state_without_event_
     assert patch["ord_qty"] == 2
     assert patch["pending_intent"] == "stock"
     assert patch["goal_type"] == "store_with_stock"
+
+
+def test_stock_inventory_store_list_event_stores_and_selects_store_candidate() -> None:
+    event = {
+        "template": "location",
+        "source_domain": "transaction",
+        "data": {
+            "stores": [
+                {"nameAddress": "티스테이션 강남역점"},
+                {"nameAddress": "티스테이션 역삼점"},
+            ],
+            "metadata": [
+                {
+                    "shopId": "F00002",
+                    "shopName": "티스테이션 강남역점",
+                    "sourceTool": "get_store_list_tool",
+                    "goodsNo": "G000000310126",
+                    "tireSize": "245/45R19",
+                    "ordQty": 4,
+                    "region": "강남",
+                    "pendingIntent": "stock",
+                    "goalType": "store_with_stock",
+                    "stockCheckMode": "inventory_only",
+                    "inventoryMode": "inventory_only",
+                },
+                {
+                    "shopId": "F00003",
+                    "shopName": "티스테이션 역삼점",
+                    "sourceTool": "get_store_list_tool",
+                    "goodsNo": "G000000310126",
+                    "tireSize": "245/45R19",
+                    "ordQty": 4,
+                    "region": "강남",
+                    "pendingIntent": "stock",
+                    "goalType": "store_with_stock",
+                    "stockCheckMode": "inventory_only",
+                    "inventoryMode": "inventory_only",
+                },
+            ],
+        },
+    }
+
+    active_context = commit_flow_state(
+        {
+            "flow_type": "stock",
+            "status": "active",
+            "flow_step": "quantity_selected",
+            "product": {"goods_no": "G000000310126", "tire_size": "245/45R19", "ord_qty": 4},
+            "quantity": {"ord_qty": 4},
+            "intent": {"pending_intent": "stock", "goal_type": "store_with_stock"},
+        },
+        stock_store_candidates_flow_delta(event=event),
+        source="location_event:stock_store_candidates",
+        flow_type="stock",
+        flow_step="show_store_candidates",
+    ).state.to_active_flow_context()
+
+    assert active_context["flow_step"] == "show_store_candidates"
+    assert active_context["intent"]["stock_check_mode"] == "inventory_only"
+    assert active_context["last_candidates"][0]["source_tool"] == "get_store_list_tool"
+    assert active_context["last_candidates"][0]["stock_check_mode"] == "inventory_only"
+    assert active_context["last_candidates"][0]["goods_no"] == "G000000310126"
+    assert active_context["last_candidates"][0]["ord_qty"] == 4
+
+    patch = stock_store_candidate_selection_patch(
+        active_flow_context=active_context,
+        user_text="첫번째",
+        selection_hint={},
+    )
+
+    assert patch["shop_id"] == "F00002"
+    assert patch["shop_name"] == "티스테이션 강남역점"
+    assert patch["source_tool"] == "get_store_list_tool"
+    assert patch["stock_check_mode"] == "inventory_only"
+    assert patch["inventory_mode"] == "inventory_only"
+    assert patch["flow_step"] == "store_selected"
+    assert patch["goods_no"] == "G000000310126"
+    assert patch["tire_size"] == "245/45R19"
+    assert patch["ord_qty"] == 4
+
+
+@pytest.mark.parametrize(
+    ("source_tool", "expected_flow_type"),
+    (
+        ("search_stores_tool", "store_search"),
+        ("get_nearby_stores_tool", "store_search"),
+        ("search_stores_complex_tool", "store_service_search"),
+        ("get_favorite_stores_tool", "favorite_store"),
+    ),
+)
+def test_store_location_event_stores_generic_candidates_without_stock_intent(
+    source_tool: str,
+    expected_flow_type: str,
+) -> None:
+    event = {
+        "template": "location",
+        "source_domain": "transaction",
+        "data": {
+            "stores": [
+                {"nameAddress": "티스테이션 판교점"},
+                {"nameAddress": "티스테이션 광교신도시점"},
+            ],
+            "metadata": [
+                {
+                    "shopId": "F10001",
+                    "shopName": "티스테이션 판교점",
+                    "sourceTool": source_tool,
+                    "region": "판교",
+                },
+                {
+                    "shopId": "F10002",
+                    "shopName": "티스테이션 광교신도시점",
+                    "sourceTool": source_tool,
+                    "region": "광교",
+                },
+            ],
+        },
+    }
+
+    delta = stock_store_candidates_flow_delta(event=event)
+    active_context = commit_flow_state(
+        {},
+        delta,
+        source=f"location_event:{expected_flow_type}_store_candidates",
+        flow_type=str(delta.get("flow_type") or "store_search"),
+        flow_step=str(delta.get("flow_step") or "show_store_candidates"),
+    ).state.to_active_flow_context()
+
+    assert active_context["flow_type"] == expected_flow_type
+    assert active_context["flow_step"] == "show_store_candidates"
+    assert "intent" not in active_context
+    assert active_context["last_candidates"][0]["source_tool"] == source_tool
+    assert active_context["last_candidates"][0]["flow_type"] == expected_flow_type
+    assert "pending_intent" not in active_context["last_candidates"][0]
+    assert "goal_type" not in active_context["last_candidates"][0]
+
+    patch = stock_store_candidate_selection_patch(
+        active_flow_context=active_context,
+        user_text="2번",
+        selection_hint={},
+    )
+
+    assert patch["shop_id"] == "F10002"
+    assert patch["shop_name"] == "티스테이션 광교신도시점"
+    assert patch["_flow_type"] == expected_flow_type
+    assert patch["flow_step"] == "store_selected"
+    assert "pending_intent" not in patch
+    assert "goal_type" not in patch
+    assert "stock_check_mode" not in patch
+
+
+def test_get_store_list_schedule_event_stores_schedule_candidate_flow() -> None:
+    event = {
+        "template": "location",
+        "source_domain": "transaction",
+        "data": {
+            "stores": [{"nameAddress": "티스테이션 역삼점"}],
+            "metadata": [
+                {
+                    "shopId": "F00003",
+                    "shopName": "티스테이션 역삼점",
+                    "sourceTool": "get_store_list_tool",
+                    "region": "강남",
+                }
+            ],
+            "contractMetadata": {
+                "contract_intent": "store_schedule",
+                "response_shape_key": "unverified_store_schedule_lookup",
+            },
+        },
+    }
+
+    delta = stock_store_candidates_flow_delta(event=event)
+    active_context = commit_flow_state(
+        {},
+        delta,
+        source="location_event:store_schedule_store_candidates",
+        flow_type=str(delta.get("flow_type") or "store_search"),
+        flow_step=str(delta.get("flow_step") or "show_store_candidates"),
+    ).state.to_active_flow_context()
+
+    assert active_context["flow_type"] == "store_schedule"
+    assert "intent" not in active_context
+
+    patch = stock_store_candidate_selection_patch(
+        active_flow_context=active_context,
+        user_text="역삼",
+        selection_hint={},
+    )
+
+    assert patch["shop_id"] == "F00003"
+    assert patch["_flow_type"] == "store_schedule"
+    assert patch["flow_step"] == "store_selected"
+    assert "pending_intent" not in patch
 
 
 def test_latest_router_evidence_uses_router_plan_without_execution_slots() -> None:
@@ -18584,6 +18779,14 @@ def test_recover_contract_required_stock_inventory_region_lookup_runs_store_list
     assert recovery["event"]["template"] == "location"
     assert recovery["event"]["recovered_tool"] == "get_store_list_tool"
     assert recovery["event"]["tool_input_source"] == "turn_contract_required_stock_inventory_store_lookup"
+    location_metadata = recovery["event"]["data"]["metadata"][0]
+    assert location_metadata["sourceTool"] == "get_store_list_tool"
+    assert location_metadata["goodsNo"] == "G000000310126"
+    assert location_metadata["tireSize"] == "245/45R19"
+    assert location_metadata["ordQty"] == 4
+    assert location_metadata["pendingIntent"] == "stock"
+    assert location_metadata["goalType"] == "store_with_stock"
+    assert location_metadata["stockCheckMode"] == "inventory_only"
 
 
 def test_recover_blocked_fast_path_to_contract_tool_runs_selected_store_schedule_contract(

@@ -17118,6 +17118,81 @@ def _annotate_contract_tool_recovery_event(
     return event
 
 
+def _annotate_stock_inventory_store_lookup_event(
+    event: dict[str, Any],
+    *,
+    turn_contract: TurnContract,
+    tool_input: Mapping[str, Any],
+) -> None:
+    response_decision = turn_contract.response_decision or {}
+    response_metadata = response_decision.get("metadata") if isinstance(response_decision, Mapping) else {}
+    response_shape_key = str(response_metadata.get("response_shape_key") or "") if isinstance(response_metadata, Mapping) else ""
+    if response_shape_key != "stock_inventory_lookup":
+        return
+    event_data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    stores = event_data.get("stores") if isinstance(event_data, dict) else None
+    metadata = event_data.get("metadata") if isinstance(event_data, dict) else None
+    if not isinstance(stores, list) or not isinstance(metadata, list):
+        return
+    known_slots = turn_contract.known_slots or {}
+    region = str(
+        known_slots.get("region")
+        or known_slots.get("place_query")
+        or tool_input.get("region_code")
+        or ""
+    ).strip()
+    common = {
+        "sourceTool": "get_store_list_tool",
+        "source_tool": "get_store_list_tool",
+        "goodsNo": known_slots.get("goods_no"),
+        "goods_no": known_slots.get("goods_no"),
+        "tireSize": known_slots.get("tire_size"),
+        "tire_size": known_slots.get("tire_size"),
+        "ordQty": known_slots.get("ord_qty") or known_slots.get("quantity"),
+        "ord_qty": known_slots.get("ord_qty") or known_slots.get("quantity"),
+        "region": region,
+        "pendingIntent": "stock",
+        "pending_intent": "stock",
+        "goalType": "store_with_stock",
+        "goal_type": "store_with_stock",
+        "stockCheckMode": "inventory_only",
+        "stock_check_mode": "inventory_only",
+        "inventoryMode": "inventory_only",
+        "inventory_mode": "inventory_only",
+    }
+    for idx, meta in enumerate(metadata):
+        if not isinstance(meta, dict):
+            continue
+        store = stores[idx] if idx < len(stores) and isinstance(stores[idx], Mapping) else {}
+        canonical_store = canonical_context_from_template_boundary(meta)
+        if not canonical_store:
+            canonical_store = canonical_context_from_tool_boundary(store)
+        shop_id = str(
+            meta.get("shopId")
+            or meta.get("shop_id")
+            or canonical_store.get("shop_id")
+            or ""
+        ).strip()
+        shop_name = str(
+            meta.get("shopName")
+            or meta.get("shop_name")
+            or canonical_store.get("shop_name")
+            or store.get("nameAddress")
+            or store.get("name")
+            or ""
+        ).strip()
+        if shop_id:
+            meta.setdefault("shopId", shop_id)
+            meta.setdefault("shop_id", shop_id)
+            meta.setdefault("stableId", shop_id)
+        if shop_name:
+            meta.setdefault("shopName", shop_name)
+            meta.setdefault("shop_name", shop_name)
+        for key, value in common.items():
+            if value not in (None, "", [], {}):
+                meta.setdefault(key, value)
+
+
 async def recover_blocked_fast_path_to_contract_tool(
     *,
     turn_contract: TurnContract | None,
@@ -17319,6 +17394,12 @@ async def recover_blocked_fast_path_to_contract_tool(
         if not isinstance(mapped_event, dict):
             return None
         mapped_event["source_domain"] = source_domain
+        if preferred_tool == "get_store_list_tool" and tool_input_source == "turn_contract_required_stock_inventory_store_lookup":
+            _annotate_stock_inventory_store_lookup_event(
+                mapped_event,
+                turn_contract=turn_contract,
+                tool_input=tool_input,
+            )
     else:
         from services.tstation.agents.e_support_agent.tools import search_faq_hybrid_tool as _search_faq_hybrid_tool
 
@@ -27780,12 +27861,13 @@ class TStationChatServiceV2:
             if should_restore_stock_candidates_from_template:
                 stock_store_flow_delta = stock_store_candidates_flow_delta(event=latest_location_tmpl)
                 if stock_store_flow_delta:
+                    stock_store_flow_type = str(stock_store_flow_delta.get("flow_type") or "stock")
                     commit_result = commit_flow_state(
                         {},
                         stock_store_flow_delta,
-                        source="location_template:stock_store_candidates",
-                        flow_type="stock",
-                        flow_step="show_store_candidates",
+                        source=f"location_template:{stock_store_flow_type}_store_candidates",
+                        flow_type=stock_store_flow_type,
+                        flow_step=str(stock_store_flow_delta.get("flow_step") or "show_store_candidates"),
                     )
                     active_stock_flow_context = commit_result.state.to_active_flow_context()
                     vehicle_selection_trace_metadata["active_stock_flow_restored_from_location_template"] = True
@@ -27798,7 +27880,7 @@ class TStationChatServiceV2:
             slot_patch = {
                 key: value
                 for key, value in stock_store_selection_patch.items()
-                if key != "flow_step" and value not in (None, "", [], {})
+                if key != "flow_step" and not key.startswith("_") and value not in (None, "", [], {})
             }
             before_stock_slots = merged_slots.model_dump()
             merged_slots = merged_slots.apply_runtime_values(
@@ -27811,12 +27893,13 @@ class TStationChatServiceV2:
                 else {}
             )
             active_context = availability_context.get("active_flow_context")
+            stock_store_flow_type = str(stock_store_selection_patch.get("_flow_type") or "stock")
             commit_result = commit_flow_state(
                 active_context if isinstance(active_context, Mapping) else active_stock_flow_context,
                 slot_patch,
-                source="location_selection:stock_store_search",
-                flow_type="stock",
-                flow_step="selected_store_schedule",
+                source=f"location_selection:{stock_store_flow_type}",
+                flow_type=stock_store_flow_type,
+                flow_step=str(stock_store_selection_patch.get("flow_step") or "selected_store_schedule"),
                 status="resumed",
             )
             availability_context["active_flow_context"] = commit_result.state.to_active_flow_context()
@@ -27828,12 +27911,12 @@ class TStationChatServiceV2:
                     "active_stock_flow_resume_patch_keys": sorted(slot_patch),
                     "selected_shop_id": str(slot_patch.get("shop_id") or "").strip() or None,
                     "selected_schedule_mode": str(slot_patch.get("schedule_mode") or "").strip() or None,
-                    "location_selection_source_tool": "transaction_store_preview_tool",
-                    "location_selection_flow_type": "stock_location_selection",
-                    "location_selection_contract_action": "stock_check",
+                    "location_selection_source_tool": str(slot_patch.get("source_tool") or "").strip() or None,
+                    "location_selection_flow_type": stock_store_flow_type,
+                    "location_selection_contract_action": "stock_check" if stock_store_flow_type == "stock" else "store_select",
                 })
             if resume_source == "none":
-                resume_source = "location_selection:stock_store_search"
+                resume_source = f"location_selection:{stock_store_flow_type}"
             previous_pending_intent = str(getattr(merged_slots, "pending_intent", None) or "").strip() or None
             previous_goal_type = str(getattr(merged_slots, "goal_type", None) or "").strip() or None
             logger.info("[FLOW_STATE] Resumed stock store flow from selected candidate: %s", slot_patch)
@@ -36641,6 +36724,7 @@ class TStationChatServiceV2:
                         stock_store_flow_delta
                         and str(event.get("source_domain", "")).lower() == MultiAgentDomain.Domain.TRANSACTION.value
                     ):
+                        stock_store_flow_type = str(stock_store_flow_delta.get("flow_type") or "stock")
                         availability_context = (
                             dict(base_slots_for_flow.availability_context)
                             if isinstance(getattr(base_slots_for_flow, "availability_context", None), dict)
@@ -36650,9 +36734,9 @@ class TStationChatServiceV2:
                         commit_result = commit_flow_state(
                             active_context if isinstance(active_context, Mapping) else {},
                             stock_store_flow_delta,
-                            source="location_event:stock_store_candidates",
-                            flow_type="stock",
-                            flow_step="show_store_candidates",
+                            source=f"location_event:{stock_store_flow_type}_store_candidates",
+                            flow_type=stock_store_flow_type,
+                            flow_step=str(stock_store_flow_delta.get("flow_step") or "show_store_candidates"),
                         )
                         availability_context["active_flow_context"] = commit_result.state.to_active_flow_context()
                         updated_slots = base_slots_for_flow.model_copy()
@@ -36662,9 +36746,10 @@ class TStationChatServiceV2:
                             vehicle_selection_trace_metadata.update({
                                 "active_stock_flow_context_stored": True,
                                 "active_stock_flow_context_after": availability_context["active_flow_context"],
+                                "active_store_candidate_flow_type": stock_store_flow_type,
                             })
                             logger.info(
-                                "[FLOW_STATE] Stored stock store active flow after location: %s",
+                                "[FLOW_STATE] Stored store candidate active flow after location: %s",
                                 availability_context["active_flow_context"],
                             )
                     if (
