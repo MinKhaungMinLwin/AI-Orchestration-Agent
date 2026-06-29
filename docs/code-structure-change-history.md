@@ -255,6 +255,49 @@ FlowState progress candidate 1차는 transaction-side store/inventory/schedule t
 - candidate builder와 tool invoke/template mapping을 `chat.py` 밖 executor 계층으로 이동한다.
 - BaseAgent guard도 같은 candidate source를 소비하게 해 chat-side recovery와 agent execution boundary를 맞춘다.
 
+## 2026-06-30 구조 변경 적용: FlowState progress 전진 1~3단계
+
+### 배경
+
+FlowState progress를 candidate가 읽기 시작했지만, tool 결과 저장 시 active flow context에 필요한 evidence가 모두
+보존되지 않으면 progress가 다음 step으로 전진하지 못한다.
+
+대표적으로 stock flow에서는 다음 순서가 필요하다.
+
+```text
+search_product_tool result -> goods_no 저장
+-> progress 재평가: resolve_store/search_stores_tool
+-> store lookup result 또는 store selection -> shop_id 저장
+-> progress 재평가: check_inventory/get_store_inventory_tool
+```
+
+### 적용 내용
+
+1단계는 product resolve 후 store evidence 보존이다.
+
+- `search_product_tool` 결과로 `goods_no`를 저장할 때 기존 `region/place_query/shop_name` evidence를 active flow delta에
+  함께 보존한다.
+- nearby/place search로 해석된 stock flow에서는 `region`을 `place_query`로 active flow에 직접 넣어
+  `search_stores_tool` progress가 유지되게 했다.
+
+2단계는 store resolve 후 target action 전진이다.
+
+- store lookup/schedule/inventory tool 결과로 `shop_id/shop_name`이 확정될 때 flat slot의 product/quantity/intent evidence를
+  active flow delta에 함께 병합한다.
+- 단일 store result는 `store_selected` 후 `check_inventory/get_store_inventory_tool` progress로 재평가된다.
+
+3단계는 progress candidate 판정 위치 이동이다.
+
+- FlowState progress가 어떤 tool candidate가 될 수 있는지 판단하는 `flow_progress_tool_candidate()`를 `flow_state.py`에 둔다.
+- `chat.py`는 active context를 읽고 helper 결과를 `_ContractRequiredToolCandidate`로 감싸는 orchestration 역할만 한다.
+- 실제 tool invoke/template mapping은 아직 `chat.py`에 남겼다. 이번 단계에서 대규모 executor 이동은 하지 않았다.
+
+### 남은 방향
+
+- candidate dataclass, invoke, template mapping을 별도 executor 모듈로 분리한다.
+- BaseAgent `code_contract_tool_guard`가 같은 progress/candidate source를 소비하게 한다.
+- purchase flow의 schedule/payment 단계도 같은 progress graph로 확장한다.
+
 ## 2026-06-29 구조 변경 계획: current-turn execution boundary와 parent flow 분리
 
 ### 배경

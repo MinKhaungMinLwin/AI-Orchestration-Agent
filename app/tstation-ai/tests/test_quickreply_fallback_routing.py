@@ -20028,6 +20028,48 @@ def test_store_detail_and_schedule_results_persist_confirmed_store_flow_state() 
     assert active_context["store"]["shop_id"] == "F00721"
 
 
+def test_single_store_result_advances_stock_flow_to_inventory_lookup() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000310126",
+        tire_size="245/45R19",
+        ord_qty=4,
+        pending_intent="stock",
+        goal_type="store_with_stock",
+        stock_check_mode="inventory_only",
+    )
+
+    changed = StreamingMultiAgentCoordinator._apply_tool_derived_slots(
+        slots,
+        "search_stores_tool",
+        {
+            "status": "success",
+            "data": {
+                "stores": [
+                    {
+                        "shop_id": "F00002",
+                        "shop_nm": "티스테이션 강남역점",
+                    }
+                ]
+            },
+        },
+        {"limit": 10, "place_query": "강남역"},
+    )
+
+    assert changed is True
+    assert slots.shop_id == "F00002"
+    active_context = slots.availability_context["active_flow_context"]
+    assert active_context["flow_type"] == "stock"
+    assert active_context["flow_step"] == "store_selected"
+    assert active_context["store"]["shop_id"] == "F00002"
+    assert active_context["store"]["shop_name"] == "티스테이션 강남역점"
+    assert active_context["current_step"] == "check_inventory"
+    assert active_context["next_tool"] == "get_store_inventory_tool"
+    assert active_context["tool_args_patch"] == {
+        "goods_list": [{"goodsNo": "G000000310126", "qty": "4"}],
+        "shop_id_list": [{"shopId": "F00002"}],
+    }
+
+
 def test_purchase_cta_with_recovered_product_context_routes_to_quick_order_reservation() -> None:
     frame = build_transaction_intent_frame(
         "구매하기",
@@ -30006,9 +30048,7 @@ def test_advance_stock_flow_after_search_product_result_runs_store_lookup(
     assert advancement["turn_contract"].response_decision["template"] == "location"
     assert advancement["contract_required_tool"]["tool_name"] == "search_stores_tool"
     assert advancement["contract_required_tool"]["event"]["template"] == "location"
-    assert advancement["contract_required_tool"]["event"]["tool_input_source"] == (
-        "turn_contract_required_stock_inventory_store_lookup"
-    )
+    assert advancement["contract_required_tool"]["event"]["tool_input_source"] == "flow_state_progress"
     assert advancement["contract_required_tool"]["event"]["blocked_fast_path_source"] == (
         "advance_current_flow_after_tool_result:search_product_tool"
     )
@@ -30016,6 +30056,10 @@ def test_advance_stock_flow_after_search_product_result_runs_store_lookup(
     assert active_context["flow_type"] == "stock"
     assert active_context["product"]["goods_no"] == "G000000310126"
     assert active_context["product"]["ord_qty"] == 4
+    assert active_context["store"]["place_query"] == "강남"
+    assert active_context["current_step"] == "resolve_store"
+    assert active_context["next_tool"] == "search_stores_tool"
+    assert active_context["tool_args_patch"] == {"limit": 10, "place_query": "강남"}
 
 
 def test_advance_stock_flow_from_confirmed_state_runs_store_lookup(

@@ -340,6 +340,89 @@ def flow_progress_from_active_context(
     return progress
 
 
+def flow_progress_tool_candidate(
+    progress: Mapping[str, Any] | None,
+    *,
+    domain: str,
+    contract_intent: str,
+    response_shape_key: str,
+    allowed_tools: tuple[str, ...],
+    forbidden_tools: set[str],
+) -> dict[str, Any]:
+    """Return a safe tool candidate from stored flow progress without executing it."""
+
+    if not isinstance(progress, Mapping) or not progress:
+        return {}
+    normalized_domain = str(domain or "").strip().lower()
+    flow_type = str(progress.get("flow_type") or "").strip()
+    current_step = str(progress.get("current_step") or "").strip()
+    next_tool = str(progress.get("next_tool") or "").strip()
+    intent = str(contract_intent or "").strip()
+    shape = str(response_shape_key or "").strip()
+
+    if (
+        normalized_domain == "discovery"
+        and flow_type in {"stock", "purchase"}
+        and current_step == "resolve_product"
+        and next_tool == "search_product_tool"
+    ):
+        if intent not in {"product_search", "resolve_or_describe_product"} and shape not in {
+            "product_search_summary",
+            "missing_stock_search_slots",
+            "missing_order_slots",
+        }:
+            return {}
+        display_name = "상품 검색 중..."
+    elif normalized_domain == "transaction":
+        if flow_type == "stock":
+            intent_aligned = (
+                intent in {"stock_store_search", "stock_store_search_slot_fill_store", "fill_quantity_slot"}
+                or shape == "stock_inventory_lookup"
+            )
+        elif flow_type == "store_schedule":
+            intent_aligned = intent in {"store_schedule", "selected_store_schedule"} or shape in {
+                "reservation_slots",
+                "unverified_store_schedule_lookup",
+            }
+        else:
+            intent_aligned = intent in {
+                "quick_order_reservation",
+                "store_schedule",
+                "selected_store_schedule",
+            }
+        if not intent_aligned:
+            return {}
+        if next_tool not in {"search_stores_tool", "get_store_list_tool", "get_store_schedule_tool", "get_store_inventory_tool"}:
+            return {}
+        display_name = {
+            "search_stores_tool": "매장 정보 확인 중...",
+            "get_store_list_tool": "매장 정보 확인 중...",
+            "get_store_schedule_tool": "예약 가능 일정 확인 중...",
+            "get_store_inventory_tool": "매장 재고 확인 중...",
+        }.get(next_tool, "정보 확인 중...")
+    else:
+        return {}
+
+    if not next_tool or next_tool not in allowed_tools or next_tool in forbidden_tools:
+        return {}
+    tool_input = {
+        str(key): value
+        for key, value in dict(progress.get("tool_args_patch") or {}).items()
+        if value not in _EMPTY_VALUES
+    }
+    if not tool_input:
+        return {}
+    if next_tool == "search_product_tool" and not tool_input.get("keyword"):
+        return {}
+    return {
+        "tool_name": next_tool,
+        "tool_input": tool_input,
+        "tool_input_source": "flow_state_progress",
+        "display_name": display_name,
+        "source_domain": normalized_domain,
+    }
+
+
 @dataclass(slots=True)
 class FlowStateMergeResult:
     state: "FlowState"

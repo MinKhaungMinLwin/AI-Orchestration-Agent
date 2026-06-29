@@ -88,6 +88,7 @@ from services.tstation.policies.flow_state import (
     commit_flow_state,
     commit_purchase_flow_state,
     flow_progress_from_active_context,
+    flow_progress_tool_candidate,
     is_purchase_flow_context,
     latest_router_evidence,
     purchase_context_vehicle_selection_patch,
@@ -4406,6 +4407,10 @@ class StreamingMultiAgentCoordinator:
                     parsed_data=parsed_data,
                 )
                 if store_values:
+                    store_values = {
+                        **_active_flow_values_from_slots(updated),
+                        **store_values,
+                    }
                     updated = _with_confirmed_tool_flow_state(
                         updated,
                         values=store_values,
@@ -17709,11 +17714,16 @@ def _product_flow_values_from_resolved_search(
     pending_intent = None
     goal_type = None
     stock_check_mode = None
+    store_values: dict[str, Any] = {}
     if slots is not None:
         ord_qty = getattr(slots, "ord_qty", None) or getattr(slots, "quantity", None)
         pending_intent = getattr(slots, "pending_intent", None)
         goal_type = getattr(slots, "goal_type", None)
         stock_check_mode = getattr(slots, "stock_check_mode", None)
+        for key in ("shop_id", "shop_name", "store_name", "region", "place_query", "user_xpos", "user_ypos"):
+            value = getattr(slots, key, None)
+            if value not in (None, "", [], {}):
+                store_values[key] = value
     if str(stock_check_mode or "").strip() == "inventory_only":
         pending_intent = pending_intent or "stock"
         goal_type = goal_type or "store_with_stock"
@@ -17727,6 +17737,30 @@ def _product_flow_values_from_resolved_search(
         "pending_intent": pending_intent,
         "goal_type": goal_type,
         "stock_check_mode": stock_check_mode,
+        **store_values,
+    }
+    return {key: value for key, value in values.items() if value not in (None, "", [], {})}
+
+
+def _active_flow_values_from_slots(slots: ConversationSlots | None) -> dict[str, Any]:
+    if slots is None:
+        return {}
+    values = {
+        "goods_no": getattr(slots, "goods_no", None),
+        "product_name": getattr(slots, "tire_model", None) or getattr(slots, "pending_product_name", None),
+        "tire_model": getattr(slots, "tire_model", None),
+        "pending_product_name": getattr(slots, "pending_product_name", None),
+        "tire_size": getattr(slots, "tire_size", None),
+        "ord_qty": getattr(slots, "ord_qty", None),
+        "shop_id": getattr(slots, "shop_id", None),
+        "shop_name": getattr(slots, "shop_name", None),
+        "region": getattr(slots, "region", None),
+        "pending_intent": getattr(slots, "pending_intent", None),
+        "goal_type": getattr(slots, "goal_type", None),
+        "stock_check_mode": getattr(slots, "stock_check_mode", None),
+        "schedule_mode": getattr(slots, "schedule_mode", None),
+        "schedule_tier": getattr(slots, "schedule_tier", None),
+        "inventory_mode": getattr(slots, "inventory_mode", None),
     }
     return {key: value for key, value in values.items() if value not in (None, "", [], {})}
 
@@ -17880,9 +17914,21 @@ def _promote_single_turn_stock_inventory_from_search_product(
         merged_slots=promoted_slots,
     ):
         return None
+    product_flow_store_patch: dict[str, Any] = {}
+    if (
+        (
+            transaction_tool_plan.preferred_tool == "search_stores_tool"
+            or bool(dict(transaction_frame.entities or {}).get("nearby"))
+        )
+        and promotion_slot_state.get("region")
+        and not promotion_slot_state.get("place_query")
+    ):
+        product_flow_store_patch["place_query"] = promotion_slot_state["region"]
+    product_flow_values = _product_flow_values_from_resolved_search(resolved_row=resolved_row, slots=promoted_slots)
+    product_flow_values.update(product_flow_store_patch)
     promoted_slots = _with_confirmed_tool_flow_state(
         promoted_slots,
-        values=_product_flow_values_from_resolved_search(resolved_row=resolved_row, slots=promoted_slots),
+        values=product_flow_values,
         source="tool:search_product_tool",
         flow_type="stock",
         flow_step="product_selected",
@@ -18223,85 +18269,29 @@ def _contract_required_tool_candidate_from_flow_progress(
     )
     if not progress:
         return None
-    flow_type = str(progress.get("flow_type") or "").strip()
     contract_intent = str(turn_contract.intent or "").strip()
     response_decision = turn_contract.response_decision or {}
     response_metadata = response_decision.get("metadata") if isinstance(response_decision, Mapping) else {}
     response_shape_key = str(response_metadata.get("response_shape_key") or "") if isinstance(response_metadata, Mapping) else ""
-    next_tool = str(progress.get("next_tool") or "").strip()
-    if (
-        domain == PolicyDomain.DISCOVERY.value
-        and flow_type in {"stock", "purchase"}
-        and str(progress.get("current_step") or "").strip() == "resolve_product"
-        and next_tool == "search_product_tool"
-    ):
-        if contract_intent not in {"product_search", "resolve_or_describe_product"} and response_shape_key not in {
-            "product_search_summary",
-            "missing_stock_search_slots",
-            "missing_order_slots",
-        }:
-            return None
-        if next_tool not in allowed_tools or next_tool in forbidden_tools:
-            return None
-        tool_input = {
-            str(key): value
-            for key, value in dict(progress.get("tool_args_patch") or {}).items()
-            if value not in (None, "", [], {})
-        }
-        if not tool_input.get("keyword"):
-            return None
-        return _ContractRequiredToolCandidate(
-            tool_name=next_tool,
-            tool_input=tool_input,
-            tool_input_source="flow_state_progress",
-            display_name="상품 검색 중...",
-            source_domain=PolicyDomain.DISCOVERY.value,
-        )
-    if domain != PolicyDomain.TRANSACTION.value:
+    candidate = flow_progress_tool_candidate(
+        progress,
+        domain=domain,
+        contract_intent=contract_intent,
+        response_shape_key=response_shape_key,
+        allowed_tools=allowed_tools,
+        forbidden_tools=forbidden_tools,
+    )
+    if not candidate:
         return None
-    if flow_type == "stock":
-        intent_aligned = (
-            contract_intent in {"stock_store_search", "stock_store_search_slot_fill_store", "fill_quantity_slot"}
-            or response_shape_key == "stock_inventory_lookup"
-        )
-    elif flow_type == "store_schedule":
-        intent_aligned = contract_intent in {"store_schedule", "selected_store_schedule"} or response_shape_key in {
-            "reservation_slots",
-            "unverified_store_schedule_lookup",
-        }
-    else:
-        intent_aligned = contract_intent in {
-            "quick_order_reservation",
-            "store_schedule",
-            "selected_store_schedule",
-        }
-    if not intent_aligned:
+    next_tool = str(candidate.get("tool_name") or "").strip()
+    if domain == PolicyDomain.TRANSACTION.value and next_tool in _FAST_PATH_TRANSACTION_RECOVERY_BLOCKLIST:
         return None
-    if not next_tool or next_tool not in allowed_tools or next_tool in forbidden_tools:
-        return None
-    if next_tool not in {"search_stores_tool", "get_store_list_tool", "get_store_schedule_tool", "get_store_inventory_tool"}:
-        return None
-    if next_tool in _FAST_PATH_TRANSACTION_RECOVERY_BLOCKLIST:
-        return None
-    tool_input = {
-        str(key): value
-        for key, value in dict(progress.get("tool_args_patch") or {}).items()
-        if value not in (None, "", [], {})
-    }
-    if not tool_input:
-        return None
-    display_name_by_tool = {
-        "search_stores_tool": "매장 정보 확인 중...",
-        "get_store_list_tool": "매장 정보 확인 중...",
-        "get_store_schedule_tool": "예약 가능 일정 확인 중...",
-        "get_store_inventory_tool": "매장 재고 확인 중...",
-    }
     return _ContractRequiredToolCandidate(
         tool_name=next_tool,
-        tool_input=tool_input,
-        tool_input_source="flow_state_progress",
-        display_name=display_name_by_tool.get(next_tool, "정보 확인 중..."),
-        source_domain=PolicyDomain.TRANSACTION.value,
+        tool_input=dict(candidate.get("tool_input") or {}),
+        tool_input_source=str(candidate.get("tool_input_source") or "flow_state_progress"),
+        display_name=str(candidate.get("display_name") or "정보 확인 중..."),
+        source_domain=str(candidate.get("source_domain") or domain),
     )
 
 
