@@ -86,7 +86,7 @@ _TIRE_QUALITY_WARRANTY_FAQ_ANCHORS = (
 )
 _ASSURANCE_SERVICE_FAQ_ANCHORS = (
     "안심서비스 안심플러스 디지털워런티 가입 기간 보상 조건",
-    "보증서 분실 장착비 안내",
+    "보증서 분실 장착비 별도 부담 안내",
 )
 _RESERVATION_POLICY_GUIDANCE_FAQ_ANCHORS = (
     "장착 예약 취소 변경 장착점 변경 정책",

@@ -1470,7 +1470,7 @@ def _build_support_faq_policy_reply(
     else:
         response = (
             "현재 챗봇에서는 사진이나 파일을 업로드해 확인받을 수 없어요.\n"
-            "사진만으로는 타이어 마모 상태, 교체 필요 여부, 주행 안전을 확정할 수 없어요. 사진이나 파일 첨부가 필요한 경우 1:1 문의를 통해 등록해 주세요.\n"
+            "사진이나 파일 첨부가 필요한 경우 1:1 문의를 통해 등록해 주세요.\n"
             "실제 마모도, 균열, 편마모, 손상 여부는 마모도 측정 서비스 또는 가까운 티스테이션 매장 점검으로 확인해 주세요."
         )
     return response, _support_faq_reply_ctas(policy_group, fact_type, user_text=user_text)

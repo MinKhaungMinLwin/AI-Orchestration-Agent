@@ -36011,7 +36011,7 @@ def test_support_faq_policy_event_for_tire_condition_photo_includes_upload_limit
     response = str(event["data"]["assistantResponse"])
     assert "현재 챗봇에서는 사진이나 파일을 업로드해 확인받을 수 없어요." in response
     assert "사진이나 파일 첨부가 필요한 경우 1:1 문의를 통해 등록해 주세요." in response
-    assert "사진만으로는 타이어 마모 상태, 교체 필요 여부, 주행 안전을 확정할 수 없어요." in response
+    assert "사진만으로는 타이어 마모 상태, 교체 필요 여부, 주행 안전을 확정할 수 없어요." not in response
     assert "마모도 측정 서비스 또는 가까운 티스테이션 매장 점검으로 확인해 주세요." in response
     assert "타이어 점검은 마모도와 손상 여부를 함께 확인하는 것이 좋습니다." not in response
     quick_replies = event["data"]["quickReplies"]
@@ -36035,7 +36035,7 @@ def test_tire_condition_photo_policy_ctas_do_not_regress_to_plain_store_search(u
     response = str(event["data"]["assistantResponse"])
     quick_replies = event["data"]["quickReplies"]
     labels = _labels(quick_replies)
-    assert "사진만으로는 타이어 마모 상태, 교체 필요 여부, 주행 안전을 확정할 수 없어요." in response
+    assert "사진만으로는 타이어 마모 상태, 교체 필요 여부, 주행 안전을 확정할 수 없어요." not in response
     assert "더 타도 돼요" not in response
     assert "교체하지 않아도 돼요" not in response
     assert labels == ["마모도 측정 서비스", "1:1 문의하기"]
@@ -36077,6 +36077,7 @@ def test_support_faq_policy_event_for_assurance_service_surfaces_core_conditions
     first_line = response.splitlines()[0]
     assert "장착 후 1년 이내" in first_line
     assert "16,000km 이내" in first_line
+    assert "장착비는 별도" in response
     assert "안심플러스는 구매 수량과 대상 상품 조건에 따라 보상 범위가 달라질 수 있습니다." not in response
     assert event["data"]["metadata"]["faqSourceSummaryUsed"] is True
     assert event["data"]["metadata"]["faqSourceSummaryAppended"] is False
@@ -36114,10 +36115,11 @@ def test_support_faq_policy_event_for_assurance_product_target_uses_product_chec
 def test_support_faq_policy_event_for_assurance_compensation_keeps_warranty_cta() -> None:
     event = _build_support_faq_policy_event(
         "assurance_service_policy",
-        "안심서비스 보상 조건이 어떻게 돼?",
+        "안심서비스 보상신청해서 내일 갈건데, 장착비 내야해?",
     )
 
     assert event is not None
+    assert "장착비는 별도" in event["data"]["assistantResponse"]
     assert _labels(event["data"]["quickReplies"]) == ["나의 워런티 확인"]
     assert event["data"]["quickReplies"][0]["url"] == CTAUrls.WARRANTY_MAIN
 
