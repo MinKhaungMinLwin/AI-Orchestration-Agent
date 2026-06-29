@@ -139,6 +139,11 @@ def set_tstation_origin_host(origin_host: str | None) -> None:
     _tstation_be_client.set_origin_host(origin_host)
 
 
+def get_tstation_origin_host() -> str | None:
+    """Return original T-Station access host for current request."""
+    return _tstation_origin_host.get()
+
+
 def get_tstation_be_client(token: str | None = None) -> AuthenticatedClient:
     """Get authenticated client with optional token."""
     return _tstation_be_client.get_client(token)

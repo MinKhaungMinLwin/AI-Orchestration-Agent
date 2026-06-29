@@ -1,5 +1,6 @@
 import logging
 import os
+import contextvars
 from typing import Any
 
 from common.qna_payload import make_qna_payload_urls
@@ -52,6 +53,154 @@ from services.tstation.rag.rag_config import RAGDynamicConfig
 from config.env import settings
 
 logger = logging.getLogger(__name__)
+
+current_support_policy_intent: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "current_support_policy_intent",
+    default="none",
+)
+_PAYMENT_ERROR_FAQ_ANCHORS = (
+    "결제 오류",
+    "결제창 열리지 않음",
+    "결제 진행 불가",
+    "팝업 차단",
+    "모바일웹 앱 재시도",
+    "PC 웹 재시도",
+)
+_SIGNUP_BENEFIT_FAQ_ANCHORS = (
+    "all my T 회원 마케팅 수신 동의 5% 할인 쿠폰",
+    "회원 가입 마케팅 활용 동의 쿠폰 혜택",
+    "신규 회원 혜택 all my T 5% 쿠폰",
+)
+_SIGNUP_COUPON_FAQ_ANCHORS = (
+    "all my T 회원 마케팅 수신 동의 5% 할인 쿠폰",
+    "회원 가입 마케팅 활용 동의 쿠폰 혜택",
+    "신규 회원 쿠폰 안내 all my T 5% 쿠폰",
+)
+_TIRE_MANUFACTURE_DATE_FAQ_ANCHORS = (
+    "타이어 제조일자 DOT 신품 기준",
+    "6개월 12개월 이내 정상 신품",
+)
+_TIRE_QUALITY_WARRANTY_FAQ_ANCHORS = (
+    "타이어 품질보증 제조상 과실 무상 교환 기준",
+    "측면 부풀음 점검 품질보증 조건",
+)
+_ASSURANCE_SERVICE_FAQ_ANCHORS = (
+    "안심서비스 안심플러스 디지털워런티 가입 기간 보상 조건",
+    "보증서 분실 장착비 안내",
+)
+_RESERVATION_POLICY_GUIDANCE_FAQ_ANCHORS = (
+    "장착 예약 취소 변경 장착점 변경 정책",
+    "예약 가능 기간 위약금 안내",
+)
+_INSTALLATION_WORK_POLICY_FAQ_ANCHORS = (
+    "장착 공임 추가 작업 폐타이어 비용 얼라인먼트 현장 결제",
+)
+_PROMOTION_GIFT_POLICY_FAQ_ANCHORS = (
+    "사은품 선착순 프로모션 조건 미달 반납 차감",
+)
+_TIRE_CONDITION_PHOTO_POLICY_FAQ_ANCHORS = (
+    "타이어 사진 판독 불가 매장 점검 마모도 측정",
+)
+_COUPON_USAGE_POLICY_FAQ_ANCHORS = (
+    "쿠폰 사용처 온라인 전용 오프라인 매장 사용 현장 결제 유의사항",
+)
+_COUPON_REGISTRATION_POLICY_FAQ_ANCHORS = (
+    "쿠폰 번호 등록 입력 사용 방법 쿠폰함",
+)
+_DELIVERY_DELAY_RESERVATION_SCHEDULE_POLICY_FAQ_ANCHORS = (
+    "배송 지연 예약 일정 자동 변경 해피콜 상품 미도착 일정 조정",
+)
+_RESERVATION_WINDOW_POLICY_FAQ_ANCHORS = (
+    "장착 예약일 최대 30일 이내 구매일로부터 1개월 이내 사전 구매 지원 불가",
+)
+_EXTERNAL_TIRE_INSTALL_POLICY_FAQ_ANCHORS = (
+    "타이어만 별도 수령 직접 장착 불가 온라인몰 지정 장착점 발송 장착 오프라인 매장 구매 후 장착 가능 장착비 매장별 상이",
+)
+
+
+def _augment_faq_query_for_policy(query: str) -> str:
+    text = str(query or "").strip()
+    policy_intent = current_support_policy_intent.get()
+    if policy_intent == "payment_error_troubleshooting":
+        anchors = _PAYMENT_ERROR_FAQ_ANCHORS
+    elif policy_intent == "signup_coupon_guidance":
+        anchors = _SIGNUP_COUPON_FAQ_ANCHORS
+    elif policy_intent == "signup_first_purchase_benefit_policy":
+        anchors = _SIGNUP_BENEFIT_FAQ_ANCHORS
+    elif policy_intent == "tire_manufacture_date_policy":
+        anchors = _TIRE_MANUFACTURE_DATE_FAQ_ANCHORS
+    elif policy_intent == "tire_quality_warranty_policy":
+        anchors = _TIRE_QUALITY_WARRANTY_FAQ_ANCHORS
+    elif policy_intent == "assurance_service_policy":
+        anchors = _ASSURANCE_SERVICE_FAQ_ANCHORS
+    elif policy_intent == "reservation_policy_guidance":
+        anchors = _RESERVATION_POLICY_GUIDANCE_FAQ_ANCHORS
+    elif policy_intent == "installation_work_policy":
+        anchors = _INSTALLATION_WORK_POLICY_FAQ_ANCHORS
+    elif policy_intent == "promotion_gift_policy":
+        anchors = _PROMOTION_GIFT_POLICY_FAQ_ANCHORS
+    elif policy_intent == "tire_condition_photo_policy":
+        anchors = _TIRE_CONDITION_PHOTO_POLICY_FAQ_ANCHORS
+    elif policy_intent == "coupon_usage_policy":
+        anchors = _COUPON_USAGE_POLICY_FAQ_ANCHORS
+    elif policy_intent == "coupon_registration_policy":
+        anchors = _COUPON_REGISTRATION_POLICY_FAQ_ANCHORS
+    elif policy_intent == "delivery_delay_reservation_schedule_policy":
+        anchors = _DELIVERY_DELAY_RESERVATION_SCHEDULE_POLICY_FAQ_ANCHORS
+    elif policy_intent == "reservation_window_policy":
+        anchors = _RESERVATION_WINDOW_POLICY_FAQ_ANCHORS
+    elif policy_intent == "external_tire_install_policy":
+        anchors = _EXTERNAL_TIRE_INSTALL_POLICY_FAQ_ANCHORS
+    else:
+        return text
+    missing_anchors = [anchor for anchor in anchors if anchor not in text]
+    if not missing_anchors:
+        return text
+    return " ".join(part for part in (text, *missing_anchors) if part)
+
+
+_GENERAL_INSTALLMENT_TYPE = "일반"
+_SMARTPAY_INSTALLMENT_TYPE = "스마트페이"
+
+
+def _normalize_card_installment_payment_type(payment_type: str | None) -> str:
+    value = str(payment_type or _GENERAL_INSTALLMENT_TYPE).strip().lower().replace(" ", "")
+    if value in {"", "general", "normal", "일반", "일반결제", "card", "cards"}:
+        return _GENERAL_INSTALLMENT_TYPE
+    if value in {"smartpay", "스마트페이", "스마트페이결제", "smart"}:
+        return _SMARTPAY_INSTALLMENT_TYPE
+    if value in {"all", "both", "전체", "둘다", "모두"}:
+        return "전체"
+    return _GENERAL_INSTALLMENT_TYPE
+
+
+def _filter_card_installments_by_payment_type(payload: dict[str, Any], payment_type: str | None) -> dict[str, Any]:
+    """Keep general card installments and Smart Pay rows separate."""
+    normalized_type = _normalize_card_installment_payment_type(payment_type)
+    cards = payload.get("cards")
+    if not isinstance(cards, list):
+        return payload
+
+    def _row_payment_type(row: Any) -> str:
+        if not isinstance(row, dict):
+            return _GENERAL_INSTALLMENT_TYPE
+        return _normalize_card_installment_payment_type(str(row.get("payment_type") or ""))
+
+    general_cards = [row for row in cards if _row_payment_type(row) == _GENERAL_INSTALLMENT_TYPE]
+    smartpay_cards = [row for row in cards if _row_payment_type(row) == _SMARTPAY_INSTALLMENT_TYPE]
+    filtered = dict(payload)
+    filtered["payment_type_filter"] = normalized_type
+    if normalized_type == _SMARTPAY_INSTALLMENT_TYPE:
+        filtered["cards"] = smartpay_cards
+    elif normalized_type == "전체":
+        filtered["cards"] = cards
+        filtered["cards_by_payment_type"] = {
+            _GENERAL_INSTALLMENT_TYPE: general_cards,
+            _SMARTPAY_INSTALLMENT_TYPE: smartpay_cards,
+        }
+    else:
+        filtered["cards"] = general_cards
+    return filtered
 
 
 DOMAIN = {
@@ -209,7 +358,7 @@ def search_faq_rag_tool(
         return _error_response(None, str(e), "Failed to search FAQs using RAG")
 
 @tool
-def search_faq_hybrid_tool(query: str, top_k: int = 20) -> dict:
+def search_faq_hybrid_tool(query: str, top_k: int = 8) -> dict:
     """
     [HYBRID] FAQ search: keyword search + semantic search → RRF reranking → top_k items.
 
@@ -218,10 +367,11 @@ def search_faq_hybrid_tool(query: str, top_k: int = 20) -> dict:
 
     Args:
         query (str): User question in Korean.
-        top_k (int): Max results to return (default 20).
+        top_k (int): Max results to return (default 8).
 
     Example: {"query": "환불 정책이 어떻게 되나요?"}
     """
+    query = _augment_faq_query_for_policy(query)
     logger.debug("[TOOL][search_faq_hybrid_tool] query=%s top_k=%s", query, top_k)
     try:
         openai_api_key = os.getenv("OPENAI_API_KEY") or settings.OPENAI_API_KEY
@@ -249,6 +399,12 @@ def search_faq_hybrid_tool(query: str, top_k: int = 20) -> dict:
                 "question": r["payload"].get("question", ""),
                 "answer": r["payload"].get("answer", ""),
                 "metadata": r["payload"].get("metadata", {}),
+                "score": r.get("score"),
+                "raw_score": r.get("raw_score"),
+                "rank": r.get("rank"),
+                "source_rank_type": r.get("source_rank_type"),
+                "semantic_rank": r.get("semantic_rank"),
+                "keyword_rank": r.get("keyword_rank"),
                 "source": "FAQ Hybrid",
             }
             for r in candidates
@@ -490,7 +646,10 @@ def get_my_warranties_tool():
 
 @tool
 @tool_cache(ttl=3600)
-def get_card_installments_tool(tgt_amt: int | None = None):
+def get_card_installments_tool(
+    tgt_amt: int | None = None,
+    payment_type: str | None = _GENERAL_INSTALLMENT_TYPE,
+):
     """
     진행중인 카드사별 무이자 할부 가능 정보를 조회한다 (OP_NINT_INST_BASE + OP_NINT_INST_DTL_INFO).
 
@@ -502,6 +661,8 @@ def get_card_installments_tool(tgt_amt: int | None = None):
     Args:
         tgt_amt: 결제 예상 금액(원). 지정하면 NDI.TGT_AMT <= tgt_amt 인 행만 반환
             (즉 그 금액 이상부터 적용되는 무이자 행). 미지정 시 전체 진행중 카드.
+        payment_type: 조회할 결제 기준. 일반 카드 무이자 질문은 "일반", 스마트페이 명시 질문은
+            "스마트페이", 둘 다 비교 요청은 "전체". 기본값은 "일반".
 
     Returns: status/http_status/data. data 구조:
         {"cards": [
@@ -514,11 +675,13 @@ def get_card_installments_tool(tgt_amt: int | None = None):
 
         - 진행중 (SYSDATE BETWEEN APLY_STRT_DTIME AND APLY_END_DTIME) 만 포함.
         - 같은 카드사라도 결제유형(일반/스마트페이) 또는 기준금액별로 row 분리.
+        - 기본 응답은 일반 카드 무이자 row 만 포함한다. 스마트페이 row 는 payment_type="스마트페이"
+          또는 "전체" 요청에서만 포함한다.
         - months 는 NINT_N_MM_YN='Y' 인 N 만 오름차순. N ∈ {2,3,...,12,24}.
         - iscm_nm 은 FN_GET_COMMON_NAME_AI('PAY014') 결과 — 매핑 부재 시 null.
-        - payment_type 은 사용자 응답에 노출 금지 (실제 결제는 챗봇 밖에서 진행).
+        - payment_type 은 내부 필터 기준이다. 사용자 응답에는 내부 필드명/row 개념을 노출하지 않는다.
     """
-    logger.debug("[TOOL][get_card_installments_tool] tgt_amt=%s", tgt_amt)
+    logger.debug("[TOOL][get_card_installments_tool] tgt_amt=%s payment_type=%s", tgt_amt, payment_type)
     try:
         kwargs: dict[str, Any] = {"client": get_client()}
         if tgt_amt is not None:
@@ -530,7 +693,10 @@ def get_card_installments_tool(tgt_amt: int | None = None):
                 f"HTTP {response.status_code}",
                 response.content.decode(errors="ignore") or "Failed to get card installments",
             )
-        return _success_response(response.status_code, _to_dict(response.parsed))
+        parsed = _to_dict(response.parsed)
+        if isinstance(parsed, dict):
+            parsed = _filter_card_installments_by_payment_type(parsed, payment_type)
+        return _success_response(response.status_code, parsed)
     except Exception as e:
         logger.exception("[TOOL][get_card_installments_tool] Failed")
         return _error_response(None, str(e), "Failed to get card installments")

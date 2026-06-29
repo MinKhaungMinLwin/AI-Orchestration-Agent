@@ -99,6 +99,35 @@ def test_warranty_claim_or_product_warranty_routes_to_support(text: str) -> None
     assert plan.subtasks[0].intent == "warranty_claim"
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "장착하러 매장 왔는데 왜 타이어마다 dot 가 달라? 바꿔줄수 있는거야?",
+        "타이어마다 DOT가 다른데 교환 가능한가요?",
+        "제조일자가 6개월 전 거야. 새 걸로 바꿔줘",
+    ],
+)
+def test_tire_manufacture_date_policy_preempts_generic_exchange_remedy(text: str) -> None:
+    plan = plan_cross_domain_turn(text)
+
+    assert plan.is_cross_domain is False
+    assert plan.primary_domain == PolicyDomain.SUPPORT
+    assert agent_domain_values_for_plan(plan) == ["support"]
+    assert plan.subtasks[0].intent == "tire_manufacture_date_policy"
+    assert plan.subtasks[0].intent != "warranty_claim"
+
+
+def test_tire_quality_warranty_anchor_still_routes_to_warranty_claim() -> None:
+    text = "벤투스 에어S 측면이 부풀었는데 품질보증 대상이야?"
+    plan = plan_cross_domain_turn(text)
+
+    assert is_warranty_claim_signal(text)
+    assert plan.is_cross_domain is False
+    assert plan.primary_domain == PolicyDomain.SUPPORT
+    assert agent_domain_values_for_plan(plan) == ["support"]
+    assert plan.subtasks[0].intent == "warranty_claim"
+
+
 def test_product_description_does_not_become_warranty_claim() -> None:
     text = "ventus air S 설명해줘"
     plan = plan_cross_domain_turn(text)

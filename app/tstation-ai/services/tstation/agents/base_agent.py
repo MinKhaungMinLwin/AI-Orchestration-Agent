@@ -117,6 +117,11 @@ _POSSESSIVE_VEHICLE_MODEL_STOPWORDS = {
     "호환",
     "가능",
 }
+_CONTRACT_REQUIRED_LISTCAR_RESPONSE_SHAPE_KEYS = frozenset({
+    "vehicle_information",
+    "vehicle_based_recommendation_refinement",
+    "vehicle_resolved_recommendation",
+})
 
 
 def _normalize_vehicle_key(value: Any) -> str:
@@ -164,6 +169,29 @@ def _messages_include_resolved_product_tool_fact(messages: list[dict]) -> bool:
         if "search_product_tool" in content and re.search(r"\bG\d{9,}\b", content):
             return True
     return False
+
+
+def _tool_entries_from_previous_agent_facts(messages: list[dict] | None) -> list[dict]:
+    if not messages:
+        return []
+    for msg in reversed(messages[-8:]):
+        if not isinstance(msg, dict) or msg.get("role") != "assistant":
+            continue
+        content = str(msg.get("content") or "")
+        marker = "[Previous agent tool facts]"
+        if marker not in content:
+            continue
+        payload = content.split(marker, 1)[-1].strip()
+        if not payload:
+            continue
+        try:
+            data = json.loads(payload)
+        except Exception:
+            logger.debug("[TOOL_FACTS] failed to parse previous agent tool facts")
+            continue
+        if isinstance(data, list):
+            return [entry for entry in data if isinstance(entry, dict)]
+    return []
 
 
 def _recent_context_text(messages: list[dict], *, limit: int = 8) -> str:
@@ -461,16 +489,63 @@ def _should_defer_listcar_for_possessive_model_mismatch(
         return False
     if not isinstance(tool_result, dict) or tool_result.get("status") != "success":
         return False
+    rows = _extract_tool_rows(tool_result)
+    if not rows:
+        return False
+    try:
+        from services.tstation.template_mapper import current_discovery_response_decision
+
+        decision = current_discovery_response_decision.get()
+    except Exception:
+        decision = None
+    if decision is not None:
+        decision_metadata = getattr(decision, "metadata", None) or {}
+        template = getattr(decision, "template", None)
+        template_value = getattr(template, "value", template)
+        response_shape_key = str(decision_metadata.get("response_shape_key") or "").strip()
+        flow_step = str(decision_metadata.get("flow_step") or "").strip()
+        if (
+            response_shape_key == "vehicle_resolved_recommendation"
+            and str(template_value or "").strip() == "listCar"
+            and flow_step == "select_vehicle"
+        ):
+            return False
+        if (
+            response_shape_key == "vehicle_based_recommendation_refinement"
+            and len(rows) >= 2
+            and str(template_value or "").strip() in {"", "listCar", "product"}
+        ):
+            return False
     if _is_explicit_vehicle_list_request(messages):
         return False
     user_text = _latest_user_text(messages)
     requested_models = _possessive_vehicle_model_mentions(user_text)
     if not requested_models:
         return False
+    return not _has_registered_vehicle_model_match(rows, requested_models)
+
+
+def _contract_requires_listcar_fast_path(tool_name: str, tool_result: Any) -> bool:
+    if tool_name not in {"get_my_cars_tool", "get_user_vehicles_tool"}:
+        return False
+    if not isinstance(tool_result, dict) or tool_result.get("status") != "success":
+        return False
     rows = _extract_tool_rows(tool_result)
     if not rows:
         return False
-    return not _has_registered_vehicle_model_match(rows, requested_models)
+    try:
+        from services.tstation.template_mapper import current_discovery_response_decision
+
+        decision = current_discovery_response_decision.get()
+    except Exception:
+        decision = None
+    if decision is None:
+        return False
+    decision_metadata = getattr(decision, "metadata", None) or {}
+    template = getattr(decision, "template", None)
+    template_value = str(getattr(template, "value", template) or "").strip()
+    response_shape_key = str(decision_metadata.get("response_shape_key") or "").strip()
+    return template_value == "listCar" or response_shape_key in _CONTRACT_REQUIRED_LISTCAR_RESPONSE_SHAPE_KEYS
 
 
 def _resolve_registered_vehicle_match(tool_name: str, tool_result: Any, messages: list[dict]) -> dict | None:
@@ -1091,10 +1166,28 @@ class BaseAgent(ABC):
                                         "started_at": time.perf_counter(),
                                     }
                                     if tool_name == "get_store_schedule_tool":
+                                        tool_plan = None
+                                        tool_plan_allowed = False
+                                        try:
+                                            from services.tstation.template_mapper import current_transaction_tool_plan
+
+                                            tool_plan = current_transaction_tool_plan.get()
+                                        except Exception:
+                                            tool_plan = None
+                                        if tool_plan is not None:
+                                            allowed_tools = tuple(getattr(tool_plan, "allowed_tools", ()) or ())
+                                            forbidden_tools = tuple(getattr(tool_plan, "forbidden_tools", ()) or ())
+                                            required_slots = tuple(getattr(tool_plan, "required_slots", ()) or ())
+                                            tool_plan_allowed = (
+                                                tool_name in allowed_tools
+                                                and tool_name not in forbidden_tools
+                                                and not required_slots
+                                            )
                                         gate_decision = decide_schedule_tool_gate(
                                             user_text=_latest_user_text(messages),
                                             tool_args=tc.get("args", {}),
                                             recent_context=_recent_context_text(messages),
+                                            allowed_by_tool_plan=tool_plan_allowed,
                                         )
                                         cfgable = (
                                             (config or {}).get("configurable", {})
@@ -1132,6 +1225,17 @@ class BaseAgent(ABC):
                                             ):
                                                 yield event
                                             return
+                                    guard_events = self._contract_sensitive_tool_guard_events(
+                                        tool_name,
+                                        messages,
+                                        config=config,
+                                        response_streamer=response_streamer,
+                                        answering_emitted=answering_emitted,
+                                    )
+                                    if guard_events is not None:
+                                        for event in guard_events:
+                                            yield event
+                                        return
                                     blocked_event = self._transaction_policy_blocked_event(tool_name, messages)
                                     if blocked_event is not None:
                                         logger.info(
@@ -1445,6 +1549,45 @@ class BaseAgent(ABC):
                                         "slot_values": _registered_vehicle_slot_values(registered_vehicle_match),
                                     }
                                     yield staggered_event
+                                    return
+                            if (
+                                message.name in {"get_my_cars_tool", "get_user_vehicles_tool"}
+                                and _contract_requires_listcar_fast_path(message.name, tool_result)
+                            ):
+                                if _should_defer_listcar_for_possessive_model_mismatch(
+                                    message.name,
+                                    tool_result,
+                                    messages,
+                                ):
+                                    logger.info(
+                                        "[%s] Skip contract-required listCar fast-path after possessive vehicle model mismatch",
+                                        self.name,
+                                    )
+                                    continue
+                                if registered_vehicle_match is not None:
+                                    logger.info(
+                                        "[%s] Skip contract-required listCar fast-path after unique registered-vehicle match car_no=%s",
+                                        self.name,
+                                        registered_vehicle_match.get("car_no"),
+                                    )
+                                    continue
+                                code_event = self._try_code_template(
+                                    accumulated_tool_data,
+                                    response_streamer,
+                                    accumulated_text,
+                                )
+                                if self._is_fast_path_code_event(message.name, code_event):
+                                    logger.info(
+                                        "[%s] Force contract-required listCar fast-path after tool=%s",
+                                        self.name,
+                                        message.name,
+                                    )
+                                    for event in self._code_template_events(
+                                        code_event,
+                                        response_streamer,
+                                        answering_emitted,
+                                    ):
+                                        yield event
                                     return
                             if suppress_tokens and message.name in self._FAST_PATH_CODE_MAPPER_TOOLS:
                                 if _should_skip_support_search_product_fast_path(self.name, message.name):
@@ -1898,6 +2041,411 @@ class BaseAgent(ABC):
         return template in terminal_templates_by_tool.get(tool_name, set())
 
     @staticmethod
+    def _annotate_contract_tool_block(
+        event: dict[str, Any],
+        *,
+        blocked_tool: str,
+        replacement_tool: str | None,
+        contract_intent: str,
+        allowed_tools: tuple[str, ...],
+        forbidden_tools: tuple[str, ...],
+        block_reason: str,
+    ) -> dict[str, Any]:
+        event["contract_tool_blocked"] = True
+        event["blocked_tool"] = blocked_tool
+        event["replacement_tool"] = replacement_tool or ""
+        event["contract_intent"] = contract_intent
+        event["block_reason"] = block_reason
+        event["allowed_tools"] = list(allowed_tools)
+        event["forbidden_tools"] = list(forbidden_tools)
+        event_data = event.get("data")
+        if isinstance(event_data, dict):
+            metadata = event_data.get("metadata")
+            if not isinstance(metadata, dict):
+                metadata = {}
+                event_data["metadata"] = metadata
+            metadata["contract_tool_blocked"] = True
+            metadata["blocked_tool"] = blocked_tool
+            metadata["replacement_tool"] = replacement_tool or ""
+            metadata["contract_intent"] = contract_intent
+            metadata["block_reason"] = block_reason
+            metadata["allowed_tools"] = list(allowed_tools)
+            metadata["forbidden_tools"] = list(forbidden_tools)
+        return event
+
+    def _blocked_contract_tool_guard_events(
+        self,
+        *,
+        tool_name: str,
+        contract_intent: str,
+        allowed_tools: tuple[str, ...],
+        forbidden_tools: tuple[str, ...],
+        required_slots: tuple[str, ...],
+        response_decision: Any,
+        block_reason: str,
+        response_streamer: "_AssistantResponseStreamer | None",
+        answering_emitted: bool,
+    ) -> list[dict] | None:
+        try:
+            from services.tstation.policies.turn_contract import (
+                TurnContract,
+                build_required_slot_clarification_event,
+                build_response_policy_guard_event,
+            )
+        except Exception:
+            return None
+
+        domain = "support" if "support" in str(self.name or "").lower() else "transaction"
+        known_slots: dict[str, Any] = {}
+        if required_slots:
+            if "product" in required_slots or "goods_no" in required_slots or "product_set" in required_slots:
+                known_slots["pending_intent"] = "price"
+                known_slots["goal_type"] = "price_inquiry"
+            elif "order" in required_slots:
+                known_slots["pending_intent"] = "order"
+                known_slots["goal_type"] = "place_order"
+            elif "store" in required_slots or "location" in required_slots:
+                known_slots["pending_intent"] = "stock"
+                known_slots["goal_type"] = "store_with_stock"
+
+        contract = TurnContract(
+            domain=domain,
+            intent=contract_intent or "contract_tool_guard",
+            known_slots=known_slots,
+            required_slots=required_slots,
+            allowed_tools=allowed_tools,
+            forbidden_tools=forbidden_tools,
+            response_decision=response_decision.to_dict() if hasattr(response_decision, "to_dict") else {},
+            action_mode="support_policy_answer" if domain == "support" else "unspecified",
+            context_state="dormant",
+        )
+        guard_event = (
+            build_required_slot_clarification_event(contract)
+            if required_slots
+            else build_response_policy_guard_event(contract)
+        )
+        guard_event = self._annotate_contract_tool_block(
+            guard_event,
+            blocked_tool=tool_name,
+            replacement_tool=None,
+            contract_intent=contract_intent or "contract_tool_guard",
+            allowed_tools=allowed_tools,
+            forbidden_tools=forbidden_tools,
+            block_reason=block_reason,
+        )
+        guard_event["assistant_response_source"] = "code_contract_tool_guard"
+        return [*self._code_template_events(guard_event, response_streamer, answering_emitted)]
+
+    def _contract_sensitive_tool_guard_events(
+        self,
+        tool_name: str,
+        messages: list[dict] | None,
+        *,
+        config: dict | None,
+        response_streamer: "_AssistantResponseStreamer | None",
+        answering_emitted: bool,
+    ) -> list[dict] | None:
+        try:
+            from services.tstation.policies.flow_controller import build_purchase_flow_fallback_event
+            from services.tstation.policies.response_decision import TemplateName
+            from services.tstation.template_mapper import (
+                current_transaction_response_decision,
+                current_transaction_tool_plan,
+            )
+        except Exception:
+            return None
+
+        decision = current_transaction_response_decision.get()
+        tool_plan = current_transaction_tool_plan.get()
+        if decision is None or tool_plan is None:
+            return None
+
+        allowed_tools = tuple(getattr(tool_plan, "allowed_tools", ()) or ())
+        forbidden_tools = tuple(getattr(tool_plan, "forbidden_tools", ()) or ())
+        preferred_tool = str(getattr(tool_plan, "preferred_tool", None) or "")
+        metadata = getattr(tool_plan, "metadata", None) or {}
+        flow_id = str(metadata.get("flow_id") or "")
+        if decision.template != TemplateName.QUICK_REPLY and flow_id != "purchase_order":
+            return None
+        contract_intent = str(metadata.get("response_intent") or "")
+        required_slots = tuple(getattr(tool_plan, "required_slots", ()) or getattr(decision, "required_slots", ()) or ())
+        if not forbidden_tools and not allowed_tools:
+            return None
+
+        block_reason = ""
+        if tool_name in forbidden_tools:
+            block_reason = "forbidden_tool_for_contract"
+        elif allowed_tools and tool_name not in allowed_tools:
+            block_reason = "tool_not_allowed_for_contract"
+        if not block_reason:
+            return None
+
+        if flow_id == "purchase_order":
+            replacement_events = self._preferred_contract_tool_replacement_events(
+                blocked_tool=tool_name,
+                preferred_tool=preferred_tool,
+                tool_plan=tool_plan,
+                metadata=metadata,
+                contract_intent=contract_intent,
+                allowed_tools=allowed_tools,
+                forbidden_tools=forbidden_tools,
+                required_slots=required_slots,
+                block_reason=block_reason,
+                config=config,
+                response_streamer=response_streamer,
+                answering_emitted=answering_emitted,
+            )
+            if replacement_events is not None:
+                return replacement_events
+            flow_event = build_purchase_flow_fallback_event(
+                intent=contract_intent,
+                known_slots=metadata.get("flow_slots") if isinstance(metadata.get("flow_slots"), dict) else {},
+                tool_data_list=_tool_entries_from_previous_agent_facts(messages),
+                blocked_tool=tool_name,
+            )
+            if flow_event is not None:
+                flow_event = self._annotate_contract_tool_block(
+                    flow_event,
+                    blocked_tool=tool_name,
+                    replacement_tool=None,
+                    contract_intent=contract_intent or "contract_tool_guard",
+                    allowed_tools=allowed_tools,
+                    forbidden_tools=forbidden_tools,
+                    block_reason=block_reason,
+                )
+                flow_event["assistant_response_source"] = "code_contract_tool_guard"
+                return [*self._code_template_events(flow_event, response_streamer, answering_emitted)]
+
+        if preferred_tool != "search_faq_hybrid_tool":
+            return self._blocked_contract_tool_guard_events(
+                tool_name=tool_name,
+                contract_intent=contract_intent,
+                allowed_tools=allowed_tools,
+                forbidden_tools=forbidden_tools,
+                required_slots=required_slots,
+                response_decision=decision,
+                block_reason=block_reason,
+                response_streamer=response_streamer,
+                answering_emitted=answering_emitted,
+            )
+
+        user_query = _latest_user_text(messages or [])
+        logger.info(
+            "[%s] Contract tool guard blocked tool=%s replacement=%s intent=%s reason=%s",
+            self.name,
+            tool_name,
+            preferred_tool,
+            contract_intent,
+            block_reason,
+        )
+
+        try:
+            from services.tstation.agents.e_support_agent.tools import search_faq_hybrid_tool as _search_faq_hybrid_tool
+            from services.tstation.chat import (
+                _DIRECT_SUPPORT_FAQ_POLICY_INTENTS,
+                _build_general_cancel_fee_policy_event,
+                _build_general_card_cancel_timing_policy_event,
+                _build_support_faq_policy_event,
+            )
+        except Exception:
+            return None
+
+        tool_input = {"query": user_query, "top_k": 8}
+        try:
+            raw_tool_result = _search_faq_hybrid_tool.invoke(tool_input)
+        except Exception as exc:
+            logger.exception("[%s] Replacement FAQ tool failed intent=%s", self.name, contract_intent)
+            raw_tool_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+        tool_result = raw_tool_result if isinstance(raw_tool_result, dict) else {"status": "success", "data": raw_tool_result}
+        tool_status = str(tool_result.get("status") or "success")
+        _emit_tool_summary_span(
+            config,
+            tool_name=preferred_tool,
+            tool_input=tool_input,
+            tool_result=tool_result,
+            tool_status=tool_status,
+            latency_ms=None,
+        )
+
+        if contract_intent == "general_cancel_fee_policy":
+            code_event = _build_general_cancel_fee_policy_event(user_query, tool_result=tool_result)
+        elif contract_intent == "general_card_cancel_timing_policy":
+            code_event = _build_general_card_cancel_timing_policy_event(user_query, tool_result=tool_result)
+        elif contract_intent in _DIRECT_SUPPORT_FAQ_POLICY_INTENTS:
+            code_event = _build_support_faq_policy_event(
+                contract_intent,
+                user_query,
+                tool_result=tool_result,
+            )
+        else:
+            return self._blocked_contract_tool_guard_events(
+                tool_name=tool_name,
+                contract_intent=contract_intent,
+                allowed_tools=allowed_tools,
+                forbidden_tools=forbidden_tools,
+                required_slots=required_slots,
+                response_decision=decision,
+                block_reason=block_reason,
+                response_streamer=response_streamer,
+                answering_emitted=answering_emitted,
+            )
+        if not isinstance(code_event, dict):
+            return self._blocked_contract_tool_guard_events(
+                tool_name=tool_name,
+                contract_intent=contract_intent,
+                allowed_tools=allowed_tools,
+                forbidden_tools=forbidden_tools,
+                required_slots=required_slots,
+                response_decision=decision,
+                block_reason=block_reason,
+                response_streamer=response_streamer,
+                answering_emitted=answering_emitted,
+            )
+        code_event = self._annotate_contract_tool_block(
+            code_event,
+            blocked_tool=tool_name,
+            replacement_tool=preferred_tool,
+            contract_intent=contract_intent,
+            allowed_tools=allowed_tools,
+            forbidden_tools=forbidden_tools,
+            block_reason=block_reason,
+        )
+        return [
+            {
+                "type": "status",
+                "status": "tool_start",
+                "tool": preferred_tool,
+                "display_name": "FAQ 확인 중...",
+            },
+            {
+                "type": "agent_flow",
+                "agent": "[FAQ AF]",
+                "agent_class": self.name,
+                "status": tool_status,
+            },
+            {
+                "type": "tool",
+                "input": tool_input,
+                "output": _sanitize_tool_output_for_sse(tool_result),
+                "slot_data": _slot_data_for_tool_event(preferred_tool, tool_result),
+                "node": "tools",
+                "tool": preferred_tool,
+            },
+            *self._code_template_events(code_event, response_streamer, answering_emitted),
+        ]
+
+    def _preferred_contract_tool_replacement_events(
+        self,
+        *,
+        blocked_tool: str,
+        preferred_tool: str,
+        tool_plan: Any,
+        metadata: dict[str, Any],
+        contract_intent: str,
+        allowed_tools: tuple[str, ...],
+        forbidden_tools: tuple[str, ...],
+        required_slots: tuple[str, ...],
+        block_reason: str,
+        config: dict | None,
+        response_streamer: "_AssistantResponseStreamer | None",
+        answering_emitted: bool,
+    ) -> list[dict] | None:
+        if (
+            not preferred_tool
+            or required_slots
+            or preferred_tool in forbidden_tools
+            or (allowed_tools and preferred_tool not in allowed_tools)
+        ):
+            return None
+
+        try:
+            from services.tstation.agents.c_transaction_agent import tools as transaction_tools
+            from services.tstation.template_mapper import try_build_template
+        except Exception:
+            return None
+
+        replacement_tool = getattr(transaction_tools, preferred_tool, None)
+        if replacement_tool is None or not hasattr(replacement_tool, "invoke"):
+            return None
+
+        tool_input = {
+            key: value
+            for key, value in dict(getattr(tool_plan, "tool_args_patch", {}) or {}).items()
+            if value not in (None, "", [], {})
+        }
+        if not tool_input:
+            return None
+
+        logger.info(
+            "[%s] Contract tool guard blocked tool=%s replacement=%s intent=%s reason=%s",
+            self.name,
+            blocked_tool,
+            preferred_tool,
+            contract_intent,
+            block_reason,
+        )
+
+        started_at = time.perf_counter()
+        try:
+            raw_tool_result = replacement_tool.invoke(tool_input)
+        except Exception as exc:
+            logger.exception("[%s] Replacement transaction tool failed intent=%s", self.name, contract_intent)
+            raw_tool_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+        latency_ms = (time.perf_counter() - started_at) * 1000
+        tool_result = raw_tool_result if isinstance(raw_tool_result, dict) else {"status": "success", "data": raw_tool_result}
+        tool_status = str(tool_result.get("status") or "success")
+        _emit_tool_summary_span(
+            config,
+            tool_name=preferred_tool,
+            tool_input=tool_input,
+            tool_result=tool_result,
+            tool_status=tool_status,
+            latency_ms=latency_ms,
+        )
+
+        code_event = try_build_template(
+            [{"tool": preferred_tool, "args": tool_input, "data": tool_result}],
+            "",
+        )
+        if not isinstance(code_event, dict):
+            return None
+
+        code_event = self._annotate_contract_tool_block(
+            code_event,
+            blocked_tool=blocked_tool,
+            replacement_tool=preferred_tool,
+            contract_intent=contract_intent,
+            allowed_tools=allowed_tools,
+            forbidden_tools=forbidden_tools,
+            block_reason=block_reason,
+        )
+        code_event["assistant_response_source"] = "code_contract_tool_guard"
+        display_name = str(metadata.get("preferred_tool_display_name") or metadata.get("display_name") or "정보 확인 중...")
+        return [
+            {
+                "type": "status",
+                "status": "tool_start",
+                "tool": preferred_tool,
+                "display_name": display_name,
+            },
+            {
+                "type": "agent_flow",
+                "agent": "[Transaction AF]",
+                "agent_class": self.name,
+                "status": tool_status,
+            },
+            {
+                "type": "tool",
+                "input": tool_input,
+                "output": _sanitize_tool_output_for_sse(tool_result),
+                "slot_data": _slot_data_for_tool_event(preferred_tool, tool_result),
+                "node": "tools",
+                "tool": preferred_tool,
+            },
+            *self._code_template_events(code_event, response_streamer, answering_emitted),
+        ]
+
+    @staticmethod
     def _transaction_policy_blocked_event(tool_name: str, messages: list[dict] | None = None) -> dict | None:
         """Return a deterministic clarification when Transaction lacks required slots."""
         transaction_tools_requiring_slots = {
@@ -1916,11 +2464,35 @@ class BaseAgent(ABC):
             return None
         try:
             from services.tstation.policies.response_decision import TemplateName
-            from services.tstation.template_mapper import current_transaction_response_decision
+            from services.tstation.template_mapper import (
+                current_transaction_response_decision,
+                current_transaction_tool_plan,
+            )
         except Exception:
             return None
 
         decision = current_transaction_response_decision.get()
+        tool_plan = current_transaction_tool_plan.get()
+        safe_lookup_intents = {
+            "store_search",
+            "favorite_store_lookup",
+            "product_coupon_eligibility",
+            "coupon_applicable_products",
+            "coupon_pattern_applicability",
+            "order_history_lookup",
+            "reservation_lookup",
+        }
+        tool_plan_intent = ""
+        if tool_plan is not None:
+            metadata = getattr(tool_plan, "metadata", None) or {}
+            tool_plan_intent = str(metadata.get("response_intent") or "")
+        if (
+            tool_plan is not None
+            and tool_name in getattr(tool_plan, "allowed_tools", ())
+            and not getattr(tool_plan, "required_slots", ())
+            and tool_plan_intent in safe_lookup_intents
+        ):
+            return None
         if (
             decision is None
             or decision.template != TemplateName.QUICK_REPLY

@@ -41,6 +41,8 @@ class ProductDescResponse:
         season_nm (None | str | Unset): 계절 속성 (SEASON_NM)
         car_knd_nm (None | str | Unset): 차종 속성 (CAR_KND_NM)
         goods_pfm_nm (None | str | Unset): 성능 속성 (GOODS_PFM_NM)
+        goods_dtl_pfm_nm (None | str | Unset): 세부 퍼포먼스 분류명 (PR_GOODS_BASE.GOODS_DTL_PFM_NM)
+        sound_absorber_yn (None | str | Unset): 흡음재 적용 여부 Y/N (GOODS_DTL_PFM_NM LIKE '%흡음%' 기준)
         t_oe_maker_1 (None | str | Unset): OE 메이커 코드/명 (PR_GOODS_BASE.T_OE_MAKER_1)
         oe_badge_yn (None | str | Unset): OE 뱃지 노출 여부. T_OE_MAKER_1 값이 있으면 Y, 없으면 N
         brand_nm (None | str | Unset): 브랜드명 (BRAND_NM)
@@ -91,6 +93,8 @@ class ProductDescResponse:
     season_nm: None | str | Unset = UNSET
     car_knd_nm: None | str | Unset = UNSET
     goods_pfm_nm: None | str | Unset = UNSET
+    goods_dtl_pfm_nm: None | str | Unset = UNSET
+    sound_absorber_yn: None | str | Unset = UNSET
     t_oe_maker_1: None | str | Unset = UNSET
     oe_badge_yn: None | str | Unset = UNSET
     brand_nm: None | str | Unset = UNSET
@@ -234,6 +238,18 @@ class ProductDescResponse:
             goods_pfm_nm = UNSET
         else:
             goods_pfm_nm = self.goods_pfm_nm
+
+        goods_dtl_pfm_nm: None | str | Unset
+        if isinstance(self.goods_dtl_pfm_nm, Unset):
+            goods_dtl_pfm_nm = UNSET
+        else:
+            goods_dtl_pfm_nm = self.goods_dtl_pfm_nm
+
+        sound_absorber_yn: None | str | Unset
+        if isinstance(self.sound_absorber_yn, Unset):
+            sound_absorber_yn = UNSET
+        else:
+            sound_absorber_yn = self.sound_absorber_yn
 
         t_oe_maker_1: None | str | Unset
         if isinstance(self.t_oe_maker_1, Unset):
@@ -462,6 +478,10 @@ class ProductDescResponse:
             field_dict["car_knd_nm"] = car_knd_nm
         if goods_pfm_nm is not UNSET:
             field_dict["goods_pfm_nm"] = goods_pfm_nm
+        if goods_dtl_pfm_nm is not UNSET:
+            field_dict["goods_dtl_pfm_nm"] = goods_dtl_pfm_nm
+        if sound_absorber_yn is not UNSET:
+            field_dict["sound_absorber_yn"] = sound_absorber_yn
         if t_oe_maker_1 is not UNSET:
             field_dict["t_oe_maker_1"] = t_oe_maker_1
         if oe_badge_yn is not UNSET:
@@ -694,6 +714,24 @@ class ProductDescResponse:
             return cast(None | str | Unset, data)
 
         goods_pfm_nm = _parse_goods_pfm_nm(d.pop("goods_pfm_nm", UNSET))
+
+        def _parse_goods_dtl_pfm_nm(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        goods_dtl_pfm_nm = _parse_goods_dtl_pfm_nm(d.pop("goods_dtl_pfm_nm", UNSET))
+
+        def _parse_sound_absorber_yn(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        sound_absorber_yn = _parse_sound_absorber_yn(d.pop("sound_absorber_yn", UNSET))
 
         def _parse_t_oe_maker_1(data: object) -> None | str | Unset:
             if data is None:
@@ -999,6 +1037,8 @@ class ProductDescResponse:
             season_nm=season_nm,
             car_knd_nm=car_knd_nm,
             goods_pfm_nm=goods_pfm_nm,
+            goods_dtl_pfm_nm=goods_dtl_pfm_nm,
+            sound_absorber_yn=sound_absorber_yn,
             t_oe_maker_1=t_oe_maker_1,
             oe_badge_yn=oe_badge_yn,
             brand_nm=brand_nm,

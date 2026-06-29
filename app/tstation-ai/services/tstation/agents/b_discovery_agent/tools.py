@@ -31,8 +31,8 @@ from common.tstation_be_api_client.hkt_api_client.api.product_description_af_상
 
 # Product Recommendation
 from common.tstation_be_api_client.hkt_api_client.api.product_recommendation_af_상품_추천.get_recommendations_api_product_recommend_get import sync_detailed as get_products_recommendations
-from common.tstation_be_api_client.hkt_api_client.api.product_recommendation_af_상품_추천.get_best_sellers_api_product_best_sellers_get import sync_detailed as get_best_sellers
-from common.tstation_be_api_client.hkt_api_client.models import BestSellerPeriod
+from common.tstation_be_api_client.hkt_api_client.api.product_recommendation_af_상품_추천.search_best_sellers_api_product_best_sellers_search_post import sync_detailed as search_best_sellers
+from common.tstation_be_api_client.hkt_api_client.models import BestSellerSearchRequest
 from common.tstation_be_api_client.hkt_api_client.models import RcmdType
 from common.tstation_be_api_client.hkt_api_client.models import VehicleType
 from common.tstation_be_api_client.hkt_api_client.types import UNSET
@@ -59,6 +59,9 @@ current_confirmed_tire_size: contextvars.ContextVar[str | None] = contextvars.Co
 current_discovery_recommendation_tool_patch: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar(
     "current_discovery_recommendation_tool_patch", default={}
 )
+current_discovery_search_tool_patch: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar(
+    "current_discovery_search_tool_patch", default={}
+)
 
 _RECOMMENDATION_LIMIT_CAP = 10
 
@@ -84,6 +87,9 @@ def _apply_recommendation_policy_patch(
     if not patch:
         return rcmd_type, brand_cd, tire_size, sort_by, season_nm, pfm_nm, prc_grd, vehicle_type
 
+    suppress_vehicle_type_filter = bool(patch.get("suppress_vehicle_type_filter"))
+    suppress_season_filter = bool(patch.get("suppress_season_filter"))
+
     patched_rcmd_type = patch.get("rcmd_type")
     if patched_rcmd_type:
         rcmd_type = patched_rcmd_type if isinstance(patched_rcmd_type, RcmdType) else RcmdType(str(patched_rcmd_type))
@@ -101,6 +107,10 @@ def _apply_recommendation_policy_patch(
         prc_grd = str(patch["prc_grd"])
     if not vehicle_type and patch.get("vehicle_type"):
         vehicle_type = str(patch["vehicle_type"])
+    if suppress_season_filter:
+        season_nm = None
+    if suppress_vehicle_type_filter:
+        vehicle_type = None
     return rcmd_type, brand_cd, tire_size, sort_by, season_nm, pfm_nm, prc_grd, vehicle_type
 
 
@@ -187,6 +197,7 @@ _TRIM_KEEP_FIELDS: frozenset[str] = frozenset({
     "t_highspd", "t_highspd_cd", "t_high_hand_avg",
     "t_com_sil_avg", "t_com_cvs", "t_milg_cvs",
     "t_wgt_idx", "t_wgt_idx_kg", "t_tray_ware", "t_rlx_isn_yn",
+    "goods_dtl_pfm_nm", "sound_absorber_yn",
     # Categorical attributes referenced by the agent / template_mapper
     "goods_pfm_nm", "season_nm", "car_knd_nm", "prc_grd_nm", "wrt_grte_term",
     "t_oe_maker_1", "oe_badge_yn",
@@ -280,20 +291,19 @@ def _filter_by_price(
     min_price: int | None,
     max_price: int | None,
 ) -> list[dict]:
-    """Filter items by effective price (sale price preferred over original).
+    """Filter items by user-facing final price.
 
     Items with no price information are excluded when a price filter is active —
     we cannot verify they are within budget.
 
-    Applied BEFORE _enrich_items_with_descriptions to avoid fetching descriptions
-    for items that will be discarded. extra_fvr_sale_prc comes from the main
-    search/recommendation BE response so it is available on raw items.
+    The product card displays cheapest_final_prc first, then falls back to
+    extra_fvr_sale_prc, so filtering must use the same visible price basis.
     """
     if not min_price and not max_price:
         return items
     result = []
     for item in items:
-        effective_price = item.get("extra_fvr_sale_prc") or item.get("price") or 0
+        effective_price = _price_filter_basis(item)
         if not effective_price:
             continue
         if min_price and effective_price < min_price:
@@ -302,6 +312,19 @@ def _filter_by_price(
             continue
         result.append(item)
     return result
+
+
+def _price_filter_basis(item: dict) -> int:
+    """Visible price basis for min_price/max_price filters."""
+    for key in ("cheapest_final_prc", "extra_fvr_sale_prc"):
+        value = item.get(key)
+        if value in (None, "", 0):
+            continue
+        try:
+            return int(str(value).replace(",", ""))
+        except (TypeError, ValueError):
+            continue
+    return 0
 
 
 def _slim_product_item(item: dict) -> dict:
@@ -605,11 +628,36 @@ def search_product_tool(
     Item field hints (사용자 질문 → 참조 필드):
         - 사이즈/규격: tire_size_1, tire_width, tire_series, inch
         - 하중·속도: t_wgt_idx, t_wgt_idx_kg, t_wgt_spd, t_highspd
-        - 계절/차종/성능: season_nm, car_knd_nm, goods_pfm_nm
+        - 계절/차종/성능: season_nm, car_knd_nm, goods_pfm_nm, goods_dtl_pfm_nm, sound_absorber_yn
         - 브랜드/원산지/출시: brand_nm, certify_brand_nm, orpl_nm, t_rls_yearmon
         - EU 라벨: rr (회전저항), wet (젖은노면), label_pndb (소음 dB)
         - 공임/보증: wage_prc (공임비), wage_today_prc (오늘 공임), free_guarantee_yn (무상교환), t_rlx_isn_yn (안심보험)
     """
+    policy_patch = current_discovery_search_tool_patch.get()
+    if policy_patch:
+        before_policy = {
+            "keyword": keyword,
+            "size": size,
+            "brand_cd": brand_cd,
+            "sort_by": sort_by,
+            "min_price": min_price,
+            "max_price": max_price,
+        }
+        if not size and policy_patch.get("size"):
+            size = str(policy_patch["size"])
+        logger.info(
+            "[TOOL][search_product_tool] Applied discovery policy patch=%s before=%s after=%s",
+            policy_patch,
+            before_policy,
+            {
+                "keyword": keyword,
+                "size": size,
+                "brand_cd": brand_cd,
+                "sort_by": sort_by,
+                "min_price": min_price,
+                "max_price": max_price,
+            },
+        )
     normalized_keyword = _strip_brand_only_keyword(keyword)
     if normalized_keyword != keyword:
         logger.debug(
@@ -873,7 +921,7 @@ def get_product_description_tool(goods_no: str):
         - 식별/표기: goods_nm, big_goods_nm, ptrn_d_nm
         - 사이즈/규격: tire_size_1, tire_width, tire_series, inch
         - 하중·속도: t_wgt_idx, t_wgt_idx_kg, t_wgt_spd, t_highspd
-        - 계절/차종/성능: season_nm, car_knd_nm, goods_pfm_nm
+        - 계절/차종/성능: season_nm, car_knd_nm, goods_pfm_nm, goods_dtl_pfm_nm, sound_absorber_yn
         - 브랜드/원산지/출시: brand_nm, certify_brand_nm, orpl_nm, t_rls_yearmon
         - 성능 점수: t_comfort, t_silence, t_high_perform, t_handling, t_life_span,
           t_snow, t_ice, t_dryroad_brk
@@ -888,9 +936,12 @@ def get_product_description_tool(goods_no: str):
               discount_amt}. 자연어 답변에 cpn_nm 인용 권장 (예: "한국타이어 18% 상품
               할인쿠폰 적용 시 …").
 
-    If `cheapest_final_prc` is non-null, prefer phrasing like
-    "정가 {sale_prc:,}원 → 최종 혜택가 {cheapest_final_prc:,}원" with the
-    applied coupon names. If null, fall back to sale_prc only.
+    Price/coupon fields are reference facts, not a default narration target.
+    Use `sale_prc` / `cheapest_final_prc` / coupon names only when the current
+    turn explicitly asks for price, discount, or coupon applicability, or when
+    a downstream price flow requested those values. For normal product
+    explanation turns, prefer feature / review / rating summary and leave
+    price handling to price tools.
 
     Args:
         goods_no (str): Product number.
@@ -1627,61 +1678,68 @@ def get_final_price_tool(goods_no: str, member_type: str | None = None):
         return {"status": "error", "reason": str(e), "message": "Failed to get product price"}
 
 
-_BEST_SELLER_PERIOD_MAP: dict[str, BestSellerPeriod] = {
-    "day": BestSellerPeriod.DAY,
-    "week": BestSellerPeriod.WEEK,
-    "month": BestSellerPeriod.MONTH,
-    "3months": BestSellerPeriod.VALUE_3,
-}
-
-
 @tool
 @tool_cache(ttl=600)
-def get_best_selling_products_tool(period: str = "month", limit: int = 5):
+def get_best_selling_products_tool(
+    vehicle_query: str | None = None,
+    months: int | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    limit: int = 5,
+):
     """
-    기간별 베스트셀러 상품 조회 (PR_GOODS_SUM 판매 수량 기준 정렬).
+    통합 베스트셀러 상품 조회.
 
-    Period mapping (사용자 표현 → period 값):
-    - "오늘 가장 많이 팔린 상품 / 오늘의 베스트" → period="day"
-    - "이번 주 / 금주 베스트" → period="week"
-    - "이번 달 / 이달의 / 월별 베스트" → period="month"
-    - "요즘 / 최근 / 지금 가장 인기 있는 / 인기 / 잘 나가는 / 잘 팔리는" → period="3months"
-      (모호한 인기 표현은 최근 3개월 베스트셀러로 매핑)
-    - "최근 3개월 / 분기 베스트" → period="3months"
+    - vehicle_query 없으면 일반 베스트셀러
+    - vehicle_query 있으면 차종별 베스트셀러
+    - 기간 미지정이면 BE 기본 3개월 사용
 
     Args:
-        period (str): "day" | "week" | "month" | "3months". Default "month".
+        vehicle_query (str | None): 차종 검색어 (예: "그랜저", "벤츠 e300")
+        months (int | None): 최근 N개월
+        from_date (str | None): 조회 시작일 YYYY-MM-DD
+        to_date (str | None): 조회 종료일 YYYY-MM-DD
         limit (int): 반환 상품 수 (1-50). Default 5.
 
-    Response: BestSellerResponse — items 의 각 행에 goods_no, goods_nm,
-        tire_size_1/2, image_url, extra_fvr_sale_prc, extra_fvr_sale_per, sale_qty.
-        추가로 스펙 필드(big_goods_nm, tire_width/series/inch, t_wgt_idx/_kg/_spd,
-        t_highspd, season_nm, car_knd_nm, goods_pfm_nm, brand_nm, certify_brand_nm,
-        orpl_nm, t_rls_yearmon, t_comfort/silence/high_perform/handling/life_span/
-        snow/ice/dryroad_brk, rr, wet, label_pndb, wage_prc, wage_today_prc,
-        free_guarantee_yn, t_rlx_isn_yn) 도 함께 반환 — 사용자가 베스트셀러 상품의
-        사이즈/계절/브랜드/공임 등을 물으면 동일 응답에서 답변 가능.
-
-    Example: {"period": "3months", "limit": 5}
+    Example: {"vehicle_query": "그랜저", "months": 3, "limit": 5}
     """
-    logger.debug("[TOOL][get_best_selling_products_tool] Called with: period=%s, limit=%s", period, limit)
+    logger.debug(
+        "[TOOL][get_best_selling_products_tool] Called with: vehicle_query=%s, months=%s, from_date=%s, to_date=%s, limit=%s",
+        vehicle_query,
+        months,
+        from_date,
+        to_date,
+        limit,
+    )
 
-    period_enum = _BEST_SELLER_PERIOD_MAP.get(period)
-    if period_enum is None:
-        return {
-            "status": "error",
-            "reason": "InvalidArguments",
-            "message": f"period must be one of {sorted(_BEST_SELLER_PERIOD_MAP.keys())}; got {period!r}",
-        }
     if not isinstance(limit, int) or not (1 <= limit <= 50):
         return {
             "status": "error",
             "reason": "InvalidArguments",
             "message": "limit must be an int between 1 and 50",
         }
+    if months is not None and (not isinstance(months, int) or not (1 <= months <= 60)):
+        return {
+            "status": "error",
+            "reason": "InvalidArguments",
+            "message": "months must be an int between 1 and 60",
+        }
+    if bool(from_date) != bool(to_date):
+        return {
+            "status": "error",
+            "reason": "InvalidArguments",
+            "message": "from_date and to_date must be provided together",
+        }
 
     try:
-        response = get_best_sellers(client=get_client(), period=period_enum, limit=limit)
+        body = BestSellerSearchRequest(
+            vehicle_query=vehicle_query or UNSET,
+            months=months if months is not None else UNSET,
+            from_date=from_date or UNSET,
+            to_date=to_date or UNSET,
+            limit=limit,
+        )
+        response = search_best_sellers(client=get_client(), body=body)
         if response.parsed is None:
             return {
                 "status": "error",

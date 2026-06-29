@@ -29,12 +29,10 @@ logs
 **.pem**
 **.crt*
 dataset
-test
 temp/*
 
 # App
 app/tstation-ai/static/public/*
-app/tstation-ai/tests/
 app/tstation-ai/api/router_local.py
 playground
 bin
@@ -51,6 +49,7 @@ backup/*
 docker/qdrant_storage/collections/
 /qdrant_storage/
 example/
+/docs/*
 /docs/test-questions/
 /docs/inventory-and-reservation-flow.md
 

@@ -1,11 +1,13 @@
 import json
 
+import pytest
 from langchain_core.messages import AIMessage, ToolMessage
 
 from services.tstation.agents.base_agent import (
     BaseAgent,
     _AssistantResponseStreamer,
     _build_owner_vehicle_lookup_event,
+    _contract_requires_listcar_fast_path,
     _build_product_warranty_quickreply_event,
     _is_explicit_vehicle_list_request,
     _normalize_qty_quick_replies,
@@ -16,7 +18,11 @@ from services.tstation.agents.base_agent import (
     _vehicle_owner_lookup_args_after_registered_mismatch,
 )
 from services.tstation.policies.response_decision import ResponseDecision, ResponseShape, TemplateName
-from services.tstation.template_mapper import current_transaction_response_decision, current_user_text
+from services.tstation.template_mapper import (
+    current_discovery_response_decision,
+    current_transaction_response_decision,
+    current_user_text,
+)
 
 
 def test_fast_path_allows_product_search_product_template():
@@ -572,6 +578,180 @@ def test_possessive_model_match_keeps_registered_vehicle_flow():
     )
 
     assert should_defer is False
+
+
+@pytest.mark.parametrize(
+    "user_text",
+    [
+        "내 차 기준으로 한국타이어 올웨더 상품 추천해줘",
+        "내 차량 기반으로 사계절 추천해줘",
+    ],
+)
+def test_vehicle_resolved_recommendation_contract_keeps_listcar_fast_path(user_text: str) -> None:
+    tool_result = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "car_no": "29조3344",
+                    "car_lnc_cd": "W036270",
+                    "car_nm": "뉴 제타(6세대) 2.0 TDI A/T",
+                    "car_model_det": "제타(6세대) (2011 - 2016)",
+                    "tire_size_fr": "2254517",
+                }
+            ]
+        },
+    }
+    token = current_discovery_response_decision.set(
+        ResponseDecision(
+            response_shape=ResponseShape.LIST,
+            template=TemplateName.LIST_CAR,
+            required_slots=(),
+            metadata={
+                "response_shape_key": "vehicle_resolved_recommendation",
+                "flow_step": "select_vehicle",
+            },
+        )
+    )
+    try:
+        should_defer = _should_defer_listcar_for_possessive_model_mismatch(
+            "get_my_cars_tool",
+            tool_result,
+            [{"role": "user", "content": user_text}],
+        )
+    finally:
+        current_discovery_response_decision.reset(token)
+
+    assert should_defer is False
+
+
+def test_vehicle_based_recommendation_refinement_with_multiple_cars_keeps_listcar_fast_path() -> None:
+    tool_result = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "car_no": "205소4214",
+                    "car_lnc_cd": "W049847",
+                    "car_nm": "GV70 2.5T 가솔린 AWD A/T",
+                    "car_model_det": "GV70",
+                    "tire_size_fr": "2355519",
+                },
+                {
+                    "car_no": "29조3344",
+                    "car_lnc_cd": "W036270",
+                    "car_nm": "뉴 제타(6세대) 2.0 TDI A/T",
+                    "car_model_det": "제타(6세대) (2011 - 2016)",
+                    "tire_size_fr": "2254517",
+                },
+            ]
+        },
+    }
+    token = current_discovery_response_decision.set(
+        ResponseDecision(
+            response_shape=ResponseShape.CARD,
+            template=TemplateName.PRODUCT,
+            required_slots=("tire_size",),
+            metadata={"response_shape_key": "vehicle_based_recommendation_refinement"},
+        )
+    )
+    try:
+        should_defer = _should_defer_listcar_for_possessive_model_mismatch(
+            "get_my_cars_tool",
+            tool_result,
+            [{"role": "user", "content": "내 차 기준으로 한국타이어 올웨더 상품 추천해줘"}],
+        )
+    finally:
+        current_discovery_response_decision.reset(token)
+
+    assert should_defer is False
+
+
+def test_contract_required_listcar_fast_path_applies_to_vehicle_selection_shapes() -> None:
+    tool_result = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "car_no": "205소4214",
+                    "car_lnc_cd": "W049847",
+                    "car_nm": "GV70 2.5T 가솔린 AWD A/T",
+                    "car_model_det": "GV70",
+                    "tire_size_fr": "2355519",
+                }
+            ]
+        },
+    }
+    for response_shape_key, template in (
+        ("vehicle_information", TemplateName.LIST_CAR),
+        ("vehicle_resolved_recommendation", TemplateName.LIST_CAR),
+        ("vehicle_based_recommendation_refinement", TemplateName.PRODUCT),
+    ):
+        token = current_discovery_response_decision.set(
+            ResponseDecision(
+                response_shape=ResponseShape.LIST if template == TemplateName.LIST_CAR else ResponseShape.CARD,
+                template=template,
+                required_slots=(),
+                metadata={"response_shape_key": response_shape_key},
+            )
+        )
+        try:
+            assert _contract_requires_listcar_fast_path("get_my_cars_tool", tool_result) is True
+        finally:
+            current_discovery_response_decision.reset(token)
+
+
+def test_try_code_template_keeps_listcar_for_contract_even_with_plain_text_response() -> None:
+    accumulated_tool_data = [
+        {
+            "tool": "get_my_cars_tool",
+            "data": {
+                "status": "success",
+                "data": {
+                    "items": [
+                        {
+                            "car_no": "205소4214",
+                            "car_lnc_cd": "W049847",
+                            "car_maker": "GENESIS",
+                            "car_nm": "GV70 2.5T 가솔린 AWD A/T",
+                            "car_model_det": "GV70",
+                            "tire_size_fr": "2355519",
+                        },
+                        {
+                            "car_no": "29조3344",
+                            "car_lnc_cd": "W036270",
+                            "car_maker": "VOLKSWAGEN",
+                            "car_nm": "뉴 제타(6세대) 2.0 TDI A/T",
+                            "car_model_det": "제타(6세대)",
+                            "tire_size_fr": "2254517",
+                        },
+                    ]
+                },
+            },
+        }
+    ]
+    user_token = current_user_text.set("내 차 기준으로 한국타이어 올웨더 상품 추천해줘")
+    decision_token = current_discovery_response_decision.set(
+        ResponseDecision(
+            response_shape=ResponseShape.CARD,
+            template=TemplateName.PRODUCT,
+            required_slots=("tire_size",),
+            metadata={"response_shape_key": "vehicle_based_recommendation_refinement"},
+        )
+    )
+    try:
+        code_event = BaseAgent._try_code_template(
+            accumulated_tool_data,
+            response_streamer=None,
+            accumulated_text="등록 차량을 기준으로 추천을 이어갈게요.",
+        )
+    finally:
+        current_discovery_response_decision.reset(decision_token)
+        current_user_text.reset(user_token)
+
+    assert code_event is not None
+    assert code_event["template"] == "listCar"
+    assert BaseAgent._is_fast_path_code_event("get_my_cars_tool", code_event) is True
 
 
 def test_registered_vehicle_recommendation_uses_current_user_text_only():

@@ -27,6 +27,7 @@ from config.sec import get_api_key, security
 from schemas.tstation.chat_message import (
     ChatMessageRequest,
     ChatMessageResponse,
+    QuickOrderActionRequest,
     SessionListResponse,
     SessionInfo,
     ChatHistoryResponse,
@@ -39,6 +40,7 @@ from schemas.tstation.chat_message import (
 )
 from services.tstation.chat_history_service import get_chat_history_service
 from services.tstation.chat import TStationChatServiceV2
+from services.tstation.common.cta_urls import CTAUrls
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -48,6 +50,9 @@ _TSTATION_ORIGIN_HOSTS = {
     "mqa.tstation.com",
     "mbiz.tstation.com",
     "bizqa.tstation.com",
+    "www.tstation.com",
+    "m.tstation.com",
+    "biz.tstation.com",
 }
 
 
@@ -159,6 +164,131 @@ def _ensure_session_owner(service, session_id: str, user_id: str) -> None:
         raise HTTPException(status_code=404, detail="Session not found")
 
 
+def _quick_order_action_event(message: str, *, metadata: dict | None = None) -> dict:
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "transaction",
+        "assistant_response_source": "code_quick_order_action_guard",
+        "data": {
+            "assistantResponse": message,
+            "quickReplies": [
+                {"label": "주문 정보 다시 확인", "domain": "TRANSACTION"},
+                {"label": "장바구니 확인", "domain": "TRANSACTION", "url": CTAUrls.CART},
+            ],
+            "predictedDomains": ["TRANSACTION"],
+            "metadata": metadata or {},
+        },
+    }
+
+
+def _quick_order_action_parse_booking_datetime(raw: str | None) -> tuple[str | None, str | None]:
+    text = str(raw or "").strip()
+    if not text:
+        return None, None
+    match = re.search(
+        r"(\d{4})\D+(\d{1,2})\D+(\d{1,2})\D+(?:\([^)]*\)\s*)?(\d{1,2})\s*(?::\s*\d{1,2}|시)?",
+        text,
+    )
+    if not match:
+        return None, None
+    year, month, day, hour = (int(part) for part in match.groups())
+    return f"{year:04d}{month:02d}{day:02d}", f"{hour:02d}"
+
+
+def _latest_preorder_payload(history: list[dict]) -> dict:
+    for message in reversed(history):
+        template_data = message.get("template_data")
+        if not isinstance(template_data, dict):
+            continue
+        if template_data.get("template") == "preOrder" and isinstance(template_data.get("data"), dict):
+            return template_data["data"]
+        if isinstance(template_data.get("orderInfo"), dict) and template_data.get("isReadyToOrder"):
+            return template_data
+    return {}
+
+
+def _normalize_quick_order_action_payload(action_payload: dict, preorder_payload: dict) -> dict:
+    metadata = preorder_payload.get("metadata") if isinstance(preorder_payload.get("metadata"), dict) else {}
+    order_info = preorder_payload.get("orderInfo") if isinstance(preorder_payload.get("orderInfo"), dict) else {}
+    payload = {**metadata, **action_payload}
+
+    requested_cal_day = str(payload.get("requestedCalDay") or payload.get("requested_cal_day") or "").strip()
+    rsv_hour = str(payload.get("rsvHour") or payload.get("rsv_hour") or "").strip()
+    if not (requested_cal_day and rsv_hour):
+        parsed_day, parsed_hour = _quick_order_action_parse_booking_datetime(
+            payload.get("bookingDateTime") or order_info.get("bookingDateTime")
+        )
+        requested_cal_day = requested_cal_day or (parsed_day or "")
+        rsv_hour = rsv_hour or (parsed_hour or "")
+
+    raw_qty = payload.get("ordQty") or payload.get("ord_qty") or payload.get("quantity") or order_info.get("quantity")
+    raw_amount = payload.get("paymentAmount") or payload.get("payment_amount") or order_info.get("paymentAmount")
+    normalized: dict[str, object] = {
+        "goods_no": str(payload.get("goodsNo") or payload.get("goodsId") or payload.get("goods_no") or "").strip(),
+        "shop_id": str(payload.get("shopId") or payload.get("shop_id") or "").strip(),
+        "requested_cal_day": requested_cal_day,
+        "rsv_hour": str(rsv_hour).split(":", 1)[0].zfill(2) if rsv_hour else "",
+        "car_no": str(payload.get("carNo") or payload.get("car_no") or "").strip(),
+        "car_lnc_cd": str(payload.get("carLncCd") or payload.get("car_lnc_cd") or "").strip(),
+        "product_name": str(payload.get("productName") or order_info.get("product") or "").strip(),
+        "tire_size": str(payload.get("tireSize") or "").strip(),
+        "store_name": str(payload.get("storeName") or payload.get("shopName") or order_info.get("storeName") or "").strip(),
+        "booking_datetime": str(payload.get("bookingDateTime") or order_info.get("bookingDateTime") or "").strip(),
+    }
+    try:
+        normalized["ord_qty"] = int(raw_qty or 0)
+    except (TypeError, ValueError):
+        normalized["ord_qty"] = 0
+    try:
+        normalized["payment_amount"] = int(raw_amount or 0)
+    except (TypeError, ValueError):
+        normalized["payment_amount"] = 0
+    return normalized
+
+
+def _validate_quick_order_action_payload(normalized: dict, preorder_payload: dict) -> tuple[bool, str]:
+    required = ("goods_no", "shop_id", "requested_cal_day", "rsv_hour")
+    missing = [field for field in required if not normalized.get(field)]
+    if int(normalized.get("ord_qty") or 0) <= 0:
+        missing.append("ord_qty")
+    if missing:
+        return False, "missing:" + ",".join(missing)
+
+    metadata = preorder_payload.get("metadata") if isinstance(preorder_payload.get("metadata"), dict) else {}
+    order_info = preorder_payload.get("orderInfo") if isinstance(preorder_payload.get("orderInfo"), dict) else {}
+    expected_goods_no = str(metadata.get("goodsNo") or metadata.get("goodsId") or "").strip()
+    expected_shop_id = str(metadata.get("shopId") or "").strip()
+    if expected_goods_no and expected_goods_no != normalized.get("goods_no"):
+        return False, "goods_no_mismatch"
+    if expected_shop_id and expected_shop_id != normalized.get("shop_id"):
+        return False, "shop_id_mismatch"
+
+    expected_amount_raw = metadata.get("paymentAmount") or order_info.get("paymentAmount")
+    try:
+        expected_amount = int(expected_amount_raw or 0)
+    except (TypeError, ValueError):
+        expected_amount = 0
+    payment_amount = int(normalized.get("payment_amount") or 0)
+    if expected_amount and payment_amount:
+        tolerance = max(1000, int(expected_amount * 0.1))
+        if abs(expected_amount - payment_amount) > tolerance:
+            return False, "payment_amount_mismatch"
+    return True, "ok"
+
+
+def _dict_tool_result(raw_result) -> dict:
+    if isinstance(raw_result, dict):
+        return raw_result
+    if isinstance(raw_result, str):
+        try:
+            parsed = json.loads(raw_result)
+            return parsed if isinstance(parsed, dict) else {"status": "success", "data": parsed}
+        except json.JSONDecodeError:
+            return {"status": "success", "data": raw_result}
+    return {"status": "success", "data": raw_result}
+
+
 @router.post("/chat", dependencies=[Depends(get_api_key)])
 async def chat(chat_body: ChatMessageRequest, http_request: Request, user: dict = Security(get_api_key)):
     """
@@ -232,6 +362,8 @@ async def chat(chat_body: ChatMessageRequest, http_request: Request, user: dict 
         origin_host=_origin_host_from_request(http_request),
         user_info=chat_body.user_info,
         chip_context=chat_body.chip_context.model_dump() if chat_body.chip_context else None,
+        ui_action=chat_body.ui_action,
+        slots=chat_body.slots,
         **({"tracing_id": tracing_id} if tracing_id else {}),
     )
 
@@ -386,6 +518,192 @@ async def stream_chat_response(chat_request, session_id: str, user_msg_id: str, 
 
     finally:
         await _redis.delete(_streaming_key)
+
+
+@router.post("/actions/quick-order", dependencies=[Depends(get_api_key)])
+async def quick_order_action(
+    action_body: QuickOrderActionRequest,
+    http_request: Request,
+    user: dict = Security(get_api_key),
+):
+    """Execute a ready preOrder CTA as a structured action without LLM/router."""
+    user_id = user.get("user_id")
+    service = get_chat_history_service()
+    await asyncio.to_thread(_ensure_session_owner, service, action_body.session_id, user_id)
+
+    from services.tstation.chat_history_service import get_async_redis_client
+
+    _redis = get_async_redis_client()
+    _streaming_key = _STREAMING_KEY.format(action_body.session_id)
+    if not await _redis.set(_streaming_key, "1", nx=True, ex=_STREAMING_TTL):
+        raise HTTPException(status_code=409, detail="session_busy")
+
+    action_id = str(action_body.message_id or uuid.uuid4().hex)
+    dedup_key = f"chat:action:quick_order:{action_body.session_id}:{action_id}"
+    if not await _redis.set(dedup_key, "1", nx=True, ex=120):
+        await _redis.delete(_streaming_key)
+        raise HTTPException(status_code=409, detail="duplicate_action")
+
+    user_msg_id = await asyncio.to_thread(
+        service.save_message,
+        action_body.session_id,
+        "user",
+        "주문하기",
+        user_id=user_id,
+    )
+
+    async def _stream():
+        assistant_response = ""
+        template_data = None
+        try:
+            from services.tstation.common.tstation_be_client import set_tstation_be_token, set_tstation_origin_host
+
+            set_tstation_be_token(user.get("token"))
+            set_tstation_origin_host(_origin_host_from_request(http_request))
+
+            initial_response = {
+                "session_id": action_body.session_id,
+                "message_id": user_msg_id,
+                "role": "user",
+                "content": "주문하기",
+                "created_at": get_current_time(),
+                "stream_started": True,
+            }
+            yield f"data: {json.dumps(initial_response, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'agent_flow', 'agent': '[응답 생성 중]', 'status': 'processing'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+
+            history = await asyncio.to_thread(service.get_history, action_body.session_id)
+            preorder_payload = _latest_preorder_payload(history)
+            normalized = _normalize_quick_order_action_payload(action_body.payload.model_dump(), preorder_payload)
+            valid, reason = _validate_quick_order_action_payload(normalized, preorder_payload)
+            if action_body.action != "quick_order_execute":
+                valid, reason = False, "unsupported_action"
+            if not valid:
+                event = _quick_order_action_event(
+                    "주문 정보를 다시 확인해 주세요.",
+                    metadata={
+                        "action": "quick_order_execute",
+                        "router_skipped": True,
+                        "source": "preOrder_action",
+                        "validationReason": reason,
+                    },
+                )
+                template_data = event
+                assistant_response = event["data"]["assistantResponse"]
+                yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[TRANSACTION AGENT]'}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+                yield "data: [DONE]\n\n"
+                return
+
+            tool_input = {
+                "goods_no": str(normalized["goods_no"]),
+                "ord_qty": int(normalized["ord_qty"]),
+                "shop_id": str(normalized["shop_id"]),
+                "rsv_date": str(normalized["requested_cal_day"]),
+                "rsv_hour": str(normalized["rsv_hour"]),
+            }
+            if normalized.get("car_lnc_cd"):
+                tool_input["car_lnc_cd"] = str(normalized["car_lnc_cd"])
+            status_event = {
+                "type": "status",
+                "status": "tool_start",
+                "tool": "quick_order_tool",
+                "display_name": "주문서 생성 중...",
+                "source_domain": "transaction",
+            }
+            yield f"data: {json.dumps(status_event, ensure_ascii=False)}\n\n"
+
+            from services.tstation.agents.c_transaction_agent.tools import quick_order_tool
+            from services.tstation.template_mapper import try_build_template
+
+            try:
+                raw_result = await asyncio.to_thread(quick_order_tool.invoke, tool_input)
+                quick_order_result = _dict_tool_result(raw_result)
+            except Exception as exc:
+                logger.exception("[QUICK_ORDER_ACTION] quick_order_tool failed: %s", exc)
+                quick_order_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+
+            agent_flow_event = {
+                "type": "agent_flow",
+                "agent": "[Quick Shopping AF]",
+                "agent_class": "Transaction Agent",
+                "status": quick_order_result.get("status", "success"),
+                "source_domain": "transaction",
+            }
+            tool_event = {
+                "type": "tool",
+                "input": tool_input,
+                "output": json.dumps(quick_order_result, ensure_ascii=False),
+                "node": "tools",
+                "tool": "quick_order_tool",
+                "source_domain": "transaction",
+            }
+            yield f"data: {json.dumps(agent_flow_event, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(tool_event, ensure_ascii=False)}\n\n"
+
+            event = try_build_template(
+                [{"tool": "quick_order_tool", "args": tool_input, "data": quick_order_result}],
+                "",
+            )
+            if event is None:
+                event = _quick_order_action_event(
+                    "주문서 생성에 실패했어요. 주문 정보를 다시 확인해 주세요.",
+                    metadata={
+                        "action": "quick_order_execute",
+                        "router_skipped": True,
+                        "source": "preOrder_action",
+                        "called_tools": ["quick_order_tool"],
+                    },
+                )
+            event.setdefault("source_domain", "transaction")
+            event.setdefault("assistant_response_source", "code_quick_order_action")
+            event_data = event.get("data") if isinstance(event.get("data"), dict) else {}
+            metadata = event_data.setdefault("metadata", {}) if isinstance(event_data, dict) else {}
+            if isinstance(metadata, dict):
+                metadata.update({
+                    "action": "quick_order_execute",
+                    "router_skipped": True,
+                    "source": "preOrder_action",
+                    "called_tools": ["quick_order_tool"],
+                })
+            assistant_response = str(event_data.get("assistantResponse") or "")
+            template_data = event
+
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            if assistant_response:
+                yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[TRANSACTION AGENT]'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+        finally:
+            await _redis.delete(_streaming_key)
+            if assistant_response:
+                from services.tstation.history_summarizer import refresh_summary
+
+                asyncio.create_task(asyncio.to_thread(
+                    service.save_message,
+                    action_body.session_id,
+                    "assistant",
+                    assistant_response,
+                    template_data=template_data,
+                    user_id=user_id,
+                )).add_done_callback(_log_task_error)
+                asyncio.create_task(refresh_summary(action_body.session_id)).add_done_callback(_log_task_error)
+
+    return StreamingResponse(
+        _stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/sessions", dependencies=[Depends(get_api_key)], response_model=SessionListResponse)

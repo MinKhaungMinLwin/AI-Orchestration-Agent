@@ -23,10 +23,10 @@ _BIRTHDAY_COUPON_RE = re.compile(r"생일|birthday", re.IGNORECASE)
 _FAMILY_COUPON_RE = re.compile(r"패밀리|family", re.IGNORECASE)
 _EMPLOYEE_COUPON_RE = re.compile(r"임직원|employee|직원", re.IGNORECASE)
 _PERCENT_COUPON_RE = re.compile(r"(\d{1,2})\s*%")
-_SIZE_COMPACT_RE = re.compile(r"\b(\d{3})\s*/?\s*(\d{2})\s*R?\s*(\d{2})\b", re.IGNORECASE)
+_SIZE_COMPACT_RE = re.compile(r"\b(\d{3})\s*/?\s*(\d)(\d)(?:\3)?\s*R?\s*(\d{2})\b", re.IGNORECASE)
 _QUANTITY_RE = re.compile(r"\b(\d{1,2})\s*(?:개|본|짝)\b")
 _PRODUCT_RE = re.compile(
-    r"키너지\s*EX|kinergy\s*EX|벤투스\s*(?:air\s*S|S2\s*AS)|ventus\s*(?:air\s*S|S2\s*AS)|"
+    r"키너지\s*EX|kinergy\s*EX|벤투스\s*(?:에어\s*S|air\s*S|S2\s*AS)|ventus\s*(?:air\s*S|S2\s*AS)|"
     r"다이나프로\s*HPX|dynapro\s*HPX|아이온|iON",
     re.IGNORECASE,
 )
@@ -65,11 +65,24 @@ def build_price_intent_frame(
         entities["coupon_scope"] = "pattern"
     size_match = _SIZE_COMPACT_RE.search(text)
     if size_match:
-        entities["tire_size"] = f"{size_match.group(1)}/{size_match.group(2)}R{size_match.group(3)}"
+        entities["tire_size"] = (
+            f"{size_match.group(1)}/{size_match.group(2)}{size_match.group(3)}R{size_match.group(4)}"
+        )
         entities["explicit_tire_size"] = entities["tire_size"]
     quantity_match = _QUANTITY_RE.search(text)
     if quantity_match:
         entities["quantity"] = int(quantity_match.group(1))
+
+    is_coupon_discount_amount_query = bool(
+        _COUPON_RE.search(text)
+        and (entities.get("product_name") or slots.get("goods_no") or slots.get("pending_product_name"))
+        and re.search(
+            r"할인\s*받|할인\s*금액|할인액|최종\s*(?:혜택가|금액|가격)|"
+            r"쿠폰\s*적용\s*(?:하면|시).*얼마|얼마\s*나와|얼마야",
+            text,
+            re.IGNORECASE,
+        )
+    )
 
     if _NONEXISTENT_BENEFIT_RE.search(text) and (_ISSUE_RE.search(text) or _COUPON_RE.search(text)):
         intent = "nonexistent_benefit"
@@ -87,6 +100,9 @@ def build_price_intent_frame(
     elif (_COUPON_RE.search(text) or _PROMOTION_RE.search(text)) and _STACKING_RE.search(text):
         intent = "coupon_stacking_check"
         sub_intent = "coupon_or_promotion_stacking"
+    elif is_coupon_discount_amount_query:
+        intent = "product_coupon_discount_amount"
+        sub_intent = "coupon_discount_amount"
     elif _COUPON_RE.search(text) and percent_match and re.search(r"적용\s*가능|대상|상품", text):
         intent = "coupon_applicable_products"
         sub_intent = "discount_rate_coupon_targets"
@@ -146,6 +162,14 @@ def plan_price_tools(frame: IntentFrame) -> ToolPlan:
             preferred_tool="get_my_coupons_tool",
             forbidden_tools=("issue_coupon_tool",),
             metadata={"separate_owned_and_downloadable": True, "do_not_require_size_first": True},
+        )
+    if frame.intent == "product_coupon_discount_amount":
+        return ToolPlan(
+            allowed_tools=("search_product_tool", "get_final_price_tool", "get_my_coupons_tool"),
+            preferred_tool="get_final_price_tool",
+            required_slots=("goods_no",),
+            forbidden_tools=("get_product_description_tool", "issue_coupon_tool"),
+            metadata={"preserve_price_goal_after_product_resolution": True},
         )
     return ToolPlan(
         allowed_tools=("get_my_coupons_tool", "get_product_promotions_tool"),
@@ -211,6 +235,19 @@ def decide_price_response(frame: IntentFrame) -> ResponseDecision:
             forbidden_behaviors=("require_size_first", "mix_owned_and_downloadable_coupons", "promise_coupon_application"),
             assistant_guidance="특정 상품/패턴 쿠폰 문의는 규격 요구보다 쿠폰 적용 대상, 보유 여부, 다운 가능 여부를 분리해 안내한다.",
         )
+    if frame.intent == "product_coupon_discount_amount":
+        return _decision(
+            response_shape_key="product_coupon_discount_amount",
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            required_slots=("goods_no",),
+            forbidden_behaviors=(
+                "use_product_description_as_final",
+                "answer_without_price_tool",
+                "invent_discount",
+            ),
+            assistant_guidance="상품 resolve는 중간 단계로만 사용하고, 최종 응답은 가격/쿠폰 할인금액 계산 결과로 안내한다.",
+        )
     return _decision(
         response_shape_key="price_coupon_summary",
         response_shape=ResponseShape.SUMMARY,
@@ -229,6 +266,7 @@ def _normalize_product_name(value: str) -> str:
         "다이나프로 hpx": "Dynapro HPX",
         "ventus air s": "Ventus air S",
         "벤투스 air s": "Ventus air S",
+        "벤투스 에어 s": "Ventus air S",
         "ventus s2 as": "Ventus S2 AS",
         "벤투스 s2 as": "Ventus S2 AS",
     }
