@@ -20931,6 +20931,204 @@ def _promote_single_turn_purchase_contract_from_search_product(
     return promoted_slots, transaction_frame, transaction_tool_plan, transaction_response_decision
 
 
+async def _advance_stock_flow_after_search_product_result(
+    *,
+    user_text: str,
+    tool_result: Mapping[str, Any] | None,
+    merged_slots: ConversationSlots | None,
+    routing_result: Any | None,
+    turn_contract: TurnContract | None,
+    context_state: str,
+    resume_source: str,
+) -> dict[str, Any] | None:
+    """Advance a current stock flow by one step after product resolution.
+
+    This keeps the flow-controller model explicit: the search tool confirms
+    goods_no, then the current contract may advance to the next allowed tool.
+    It must not start order/cart execution from stored context.
+    """
+
+    promoted_stock_inventory = _promote_single_turn_stock_inventory_from_search_product(
+        user_text=user_text,
+        tool_result=tool_result,
+        merged_slots=merged_slots,
+        routing_result=routing_result,
+        turn_contract=turn_contract,
+    )
+    if promoted_stock_inventory is None:
+        return None
+
+    (
+        promoted_slots,
+        promoted_frame,
+        promoted_tool_plan,
+        promoted_response_decision,
+    ) = promoted_stock_inventory
+    advanced_contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=promoted_frame,
+        tool_plan=promoted_tool_plan,
+        response_decision=promoted_response_decision,
+        routing_result=routing_result,
+        merged_slots=promoted_slots,
+        action_mode="stock_check",
+        context_state=context_state,
+        resume_source=resume_source,
+        router_waited=bool(getattr(turn_contract, "router_waited", False)) if turn_contract else False,
+        router_source=str(getattr(turn_contract, "router_source", "unknown") or "unknown")
+        if turn_contract
+        else "unknown",
+        contract_source=str(getattr(turn_contract, "contract_source", "router_fallback") or "router_fallback")
+        if turn_contract
+        else "router_fallback",
+        speculative_used_for_contract=bool(getattr(turn_contract, "speculative_used_for_contract", False))
+        if turn_contract
+        else False,
+    )
+    current_transaction_response_decision.set(promoted_response_decision)
+    current_transaction_tool_plan.set(promoted_tool_plan)
+    logger.info(
+        "[FLOW_ADVANCE] search_product_tool advanced stock flow intent=%s stock_check_mode=%s preferred_tool=%s",
+        promoted_frame.intent,
+        promoted_frame.known_slots.get("stock_check_mode"),
+        promoted_tool_plan.preferred_tool,
+    )
+
+    contract_required_tool = await _recover_contract_required_store_flow_tool(
+        turn_contract=advanced_contract,
+        user_text=user_text,
+        merged_slots=promoted_slots,
+        blocked_fast_path_source="advance_current_flow_after_tool_result:search_product_tool",
+    )
+    return {
+        "slots": promoted_slots,
+        "frame": promoted_frame,
+        "tool_plan": promoted_tool_plan,
+        "response_decision": promoted_response_decision,
+        "turn_contract": advanced_contract,
+        "contract_required_tool": contract_required_tool,
+    }
+
+
+def _stock_flow_slots_ready_for_store_lookup(slots: Mapping[str, Any]) -> bool:
+    stock_check_mode = str(slots.get("stock_check_mode") or "").strip()
+    pending_intent = str(slots.get("pending_intent") or "").strip()
+    goal_type = str(slots.get("goal_type") or "").strip()
+    return bool(
+        (stock_check_mode == "inventory_only" or pending_intent == "stock" or goal_type == "store_with_stock")
+        and slots.get("goods_no")
+        and slots.get("tire_size")
+        and (slots.get("ord_qty") or slots.get("quantity"))
+        and (slots.get("region") or slots.get("place_query") or slots.get("shop_name") or slots.get("store_name"))
+        and not slots.get("shop_id")
+    )
+
+
+async def _advance_stock_flow_from_confirmed_state(
+    *,
+    turn_contract: TurnContract | None,
+    user_text: str,
+    merged_slots: ConversationSlots | None,
+    routing_result: Any | None,
+    context_state: str,
+    resume_source: str,
+) -> dict[str, Any] | None:
+    """Advance active stock flow after a prior tool already confirmed product slots."""
+
+    if turn_contract is None:
+        return None
+    allowed_tools = {str(tool) for tool in tuple(turn_contract.allowed_tools or ()) if str(tool).strip()}
+    forbidden_tools = {str(tool) for tool in tuple(turn_contract.forbidden_tools or ()) if str(tool).strip()}
+    if "get_store_list_tool" not in allowed_tools or "get_store_list_tool" in forbidden_tools:
+        return None
+    response_decision = turn_contract.response_decision or {}
+    metadata = response_decision.get("metadata") if isinstance(response_decision, Mapping) else {}
+    response_shape_key = str(metadata.get("response_shape_key") or "") if isinstance(metadata, Mapping) else ""
+    if response_shape_key not in {"missing_stock_search_slots", "stock_inventory_lookup"}:
+        return None
+    known_slots = _contract_read_through_known_slots(
+        turn_contract,
+        merged_slots,
+        allowed_flow_types=frozenset({"stock"}),
+    )
+    if not _stock_flow_slots_ready_for_store_lookup(known_slots):
+        return None
+    promoted_known_slots = {
+        key: value
+        for key, value in {
+            "goods_no": known_slots.get("goods_no"),
+            "tire_size": known_slots.get("tire_size"),
+            "product_name": known_slots.get("product_name")
+            or known_slots.get("tire_model")
+            or known_slots.get("pending_product_name"),
+            "quantity": known_slots.get("ord_qty") or known_slots.get("quantity"),
+            "ord_qty": known_slots.get("ord_qty") or known_slots.get("quantity"),
+            "region": known_slots.get("region") or known_slots.get("place_query"),
+            "place_query": known_slots.get("place_query") or known_slots.get("region"),
+            "shop_name": known_slots.get("shop_name") or known_slots.get("store_name"),
+            "store_name": known_slots.get("shop_name") or known_slots.get("store_name"),
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+            "stock_check_mode": "inventory_only",
+        }.items()
+        if value not in (None, "", [], {})
+    }
+    promoted_frame = IntentFrame(
+        domain=PolicyDomain.TRANSACTION,
+        intent="stock_store_search",
+        sub_intent="inventory_only",
+        known_slots=promoted_known_slots,
+        source="flow_state_advancement",
+    )
+    promoted_tool_plan = plan_transaction_tools(promoted_frame)
+    promoted_response_decision = decide_transaction_response(
+        intent=promoted_frame.intent,
+        user_text=user_text,
+        known_slots=dict(promoted_frame.known_slots),
+    )
+    promoted_contract = TurnContract(
+        domain=PolicyDomain.TRANSACTION.value,
+        intent=promoted_frame.intent,
+        sub_intent=promoted_frame.sub_intent,
+        known_slots=dict(promoted_frame.known_slots),
+        required_slots=tuple(promoted_response_decision.required_slots or ()),
+        blocking_required_slots=(),
+        allowed_tools=tuple(promoted_tool_plan.allowed_tools or ()),
+        forbidden_tools=tuple(promoted_tool_plan.forbidden_tools or ()),
+        response_decision=promoted_response_decision.to_dict(),
+        action_mode="stock_check",
+        context_state=context_state,
+        resume_source=resume_source,
+        router_waited=bool(getattr(turn_contract, "router_waited", False)),
+        router_source=str(getattr(turn_contract, "router_source", "unknown") or "unknown"),
+        contract_source="flow_state_advancement",
+        speculative_used_for_contract=bool(getattr(turn_contract, "speculative_used_for_contract", False)),
+        current_turn_intent=str(getattr(turn_contract, "current_turn_intent", "") or "") or None,
+        code_frame_intent=str(getattr(turn_contract, "code_frame_intent", "") or "") or None,
+        stale_context_used_for="stock_store_search_tool_args",
+    )
+    current_transaction_response_decision.set(promoted_response_decision)
+    current_transaction_tool_plan.set(promoted_tool_plan)
+    logger.info(
+        "[FLOW_ADVANCE] confirmed stock flow advanced from state intent=%s preferred_tool=%s",
+        promoted_frame.intent,
+        promoted_tool_plan.preferred_tool,
+    )
+    contract_required_tool = await _recover_contract_required_store_flow_tool(
+        turn_contract=promoted_contract,
+        user_text=user_text,
+        merged_slots=merged_slots,
+        blocked_fast_path_source="advance_current_flow_from_confirmed_state",
+    )
+    return {
+        "frame": promoted_frame,
+        "tool_plan": promoted_tool_plan,
+        "response_decision": promoted_response_decision,
+        "turn_contract": promoted_contract,
+        "contract_required_tool": contract_required_tool,
+    }
+
+
 def _should_promote_single_turn_stock_preview_after_product_resolution(
     *,
     user_text: str,
@@ -36413,6 +36611,18 @@ class TStationChatServiceV2:
             user_text=user_query,
             merged_slots=pending_slots or initial_slots,
         )
+        if contract_required_store_flow_tool is None:
+            confirmed_stock_flow_advance = await _advance_stock_flow_from_confirmed_state(
+                turn_contract=turn_contract,
+                user_text=user_query,
+                merged_slots=pending_slots or initial_slots,
+                routing_result=routing_result,
+                context_state=stream_context_state,
+                resume_source=stream_resume_source,
+            )
+            if confirmed_stock_flow_advance is not None:
+                turn_contract = confirmed_stock_flow_advance["turn_contract"]
+                contract_required_store_flow_tool = confirmed_stock_flow_advance["contract_required_tool"]
         if contract_required_store_flow_tool is not None:
             _record_code_tool_result(
                 str(contract_required_store_flow_tool["tool_name"]),
@@ -36821,9 +37031,8 @@ class TStationChatServiceV2:
                             logger.info("[TURN_CONTRACT] post-tool update %s", turn_contract.to_dict())
                     turn_tool_slots: dict[str, Any] = {}
                     if tool_name == "search_product_tool" and isinstance(parsed_for_verifier, dict):
-                        data = parsed_for_verifier.get("data")
-                        items = data.get("items") if isinstance(data, dict) else None
-                        if isinstance(items, list) and len(items) == 1 and isinstance(items[0], dict):
+                        items = _search_product_result_items(parsed_for_verifier)
+                        if len(items) == 1 and isinstance(items[0], dict):
                             item = items[0]
                             canonical_item = canonical_context_from_tool_boundary(item)
                             if canonical_item.get("goods_no"):
@@ -36943,66 +37152,22 @@ class TStationChatServiceV2:
                                 tuple(getattr(promoted_tool_plan, "allowed_tools", ()) or ()),
                             )
 
-                        promoted_stock_inventory = (
-                            None
-                            if promoted_purchase is not None
-                            else _promote_single_turn_stock_inventory_from_search_product(
+                        stock_flow_advance = None
+                        if promoted_purchase is None:
+                            stock_flow_advance = await _advance_stock_flow_after_search_product_result(
                                 user_text=user_query,
                                 tool_result=parsed_for_verifier if isinstance(parsed_for_verifier, Mapping) else None,
                                 merged_slots=pending_slots or initial_slots,
                                 routing_result=routing_result,
                                 turn_contract=turn_contract,
-                            )
-                        )
-                        if promoted_stock_inventory is not None:
-                            (
-                                pending_slots,
-                                promoted_frame,
-                                promoted_tool_plan,
-                                promoted_response_decision,
-                            ) = promoted_stock_inventory
-                            turn_contract = build_turn_contract(
-                                user_text=user_query,
-                                intent_frame=promoted_frame,
-                                tool_plan=promoted_tool_plan,
-                                response_decision=promoted_response_decision,
-                                routing_result=routing_result,
-                                merged_slots=pending_slots,
-                                action_mode="stock_check",
                                 context_state=stream_context_state,
                                 resume_source=stream_resume_source,
-                                router_waited=bool(getattr(turn_contract, "router_waited", False))
-                                if turn_contract
-                                else False,
-                                router_source=str(getattr(turn_contract, "router_source", "unknown") or "unknown")
-                                if turn_contract
-                                else "unknown",
-                                contract_source=str(
-                                    getattr(turn_contract, "contract_source", "router_fallback") or "router_fallback"
-                                )
-                                if turn_contract
-                                else "router_fallback",
-                                speculative_used_for_contract=bool(
-                                    getattr(turn_contract, "speculative_used_for_contract", False)
-                                )
-                                if turn_contract
-                                else False,
                             )
-                            current_transaction_response_decision.set(promoted_response_decision)
-                            current_transaction_tool_plan.set(promoted_tool_plan)
-                            logger.info(
-                                "[TURN_CONTRACT] promoted single-turn stock inventory after search_product_tool "
-                                "intent=%s stock_check_mode=%s preferred_tool=%s",
-                                promoted_frame.intent,
-                                promoted_frame.known_slots.get("stock_check_mode"),
-                                promoted_tool_plan.preferred_tool,
-                            )
-                            contract_required_store_flow_tool = await _recover_contract_required_store_flow_tool(
-                                turn_contract=turn_contract,
-                                user_text=user_query,
-                                merged_slots=pending_slots or initial_slots,
-                                blocked_fast_path_source="single_turn_stock_inventory_product_resolution",
-                            )
+
+                        if stock_flow_advance is not None:
+                            pending_slots = stock_flow_advance["slots"]
+                            turn_contract = stock_flow_advance["turn_contract"]
+                            contract_required_store_flow_tool = stock_flow_advance["contract_required_tool"]
                             if contract_required_store_flow_tool is not None:
                                 _record_code_tool_result(
                                     str(contract_required_store_flow_tool["tool_name"]),
@@ -37062,7 +37227,7 @@ class TStationChatServiceV2:
                                 return
 
                         promoted_stock_preview = None
-                        if promoted_purchase is None and promoted_stock_inventory is None:
+                        if promoted_purchase is None and stock_flow_advance is None:
                             promoted_stock_preview = _promote_single_turn_stock_preview_from_search_product(
                                 user_text=user_query,
                                 tool_result=parsed_for_verifier if isinstance(parsed_for_verifier, Mapping) else None,
@@ -38543,6 +38708,93 @@ class TStationChatServiceV2:
                     if blocked_template:
                         metadata["blocked_template"] = blocked_template
 
+                if (
+                    event.get("assistant_response_source") == "code_turn_contract_required_slot_guard"
+                    or (
+                        isinstance(event.get("data"), Mapping)
+                        and isinstance((event.get("data") or {}).get("metadata"), Mapping)
+                        and (event.get("data") or {}).get("metadata", {}).get("direct_source")
+                        == "code_turn_contract_required_slot_guard"
+                    )
+                ):
+                    search_product_result = None
+                    for tool_name, tool_output in structured_sources:
+                        if str(tool_name or "") == "search_product_tool" and isinstance(tool_output, Mapping):
+                            search_product_result = tool_output
+                            break
+                    if search_product_result is not None:
+                        stock_flow_advance = await _advance_stock_flow_after_search_product_result(
+                            user_text=user_query,
+                            tool_result=search_product_result,
+                            merged_slots=pending_slots or initial_slots,
+                            routing_result=routing_result,
+                            turn_contract=turn_contract,
+                            context_state=stream_context_state,
+                            resume_source=stream_resume_source,
+                        )
+                        if (
+                            stock_flow_advance is not None
+                            and stock_flow_advance["contract_required_tool"] is not None
+                        ):
+                            turn_contract = stock_flow_advance["turn_contract"]
+                            contract_required_store_flow_tool = stock_flow_advance["contract_required_tool"]
+                            _record_code_tool_result(
+                                str(contract_required_store_flow_tool["tool_name"]),
+                                dict(contract_required_store_flow_tool["tool_input"]),
+                                dict(contract_required_store_flow_tool["tool_result"]),
+                            )
+                            await _persist_pending_slots_for_direct_return()
+                            yield (
+                                "data: "
+                                + json.dumps(
+                                    {
+                                        "type": "sub-agent",
+                                        "agent": "[TRANSACTION AGENT]",
+                                        "status": "start",
+                                    },
+                                    ensure_ascii=False,
+                                )
+                                + "\n\n"
+                            )
+                            for recovery_event in contract_required_store_flow_tool["events"]:
+                                yield f"data: {json.dumps(recovery_event, ensure_ascii=False)}\n\n"
+                            yield (
+                                "data: "
+                                + json.dumps(
+                                    {
+                                        "type": "sub-agent",
+                                        "agent": "[TRANSACTION AGENT]",
+                                        "status": "done",
+                                    },
+                                    ensure_ascii=False,
+                                )
+                                + "\n\n"
+                            )
+                            recovered_event = contract_required_store_flow_tool["event"]
+                            yield f"data: {json.dumps(recovered_event, ensure_ascii=False)}\n\n"
+                            assistant_response = str(
+                                (recovered_event.get("data") or {}).get("assistantResponse") or ""
+                            )
+                            if assistant_response:
+                                yield (
+                                    "data: "
+                                    + json.dumps(
+                                        {
+                                            "type": "message",
+                                            "content": assistant_response,
+                                            "agent": "[TRANSACTION AGENT]",
+                                        },
+                                        ensure_ascii=False,
+                                    )
+                                    + "\n\n"
+                                )
+                            yield (
+                                f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+                            )
+                            yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+                            yield "data: [DONE]\n\n"
+                            return
+
                 try:
                     template_contract_violated = violates_response_template_contract(
                         validation_event,
@@ -38564,6 +38816,74 @@ class TStationChatServiceV2:
                         list(turn_contract.required_slots) if turn_contract else [],
                         turn_contract.intent if turn_contract else None,
                     )
+                    confirmed_stock_flow_advance = await _advance_stock_flow_from_confirmed_state(
+                        turn_contract=turn_contract,
+                        user_text=user_query,
+                        merged_slots=pending_slots or initial_slots,
+                        routing_result=routing_result,
+                        context_state=stream_context_state,
+                        resume_source=stream_resume_source,
+                    )
+                    if (
+                        confirmed_stock_flow_advance is not None
+                        and confirmed_stock_flow_advance["contract_required_tool"] is not None
+                    ):
+                        turn_contract = confirmed_stock_flow_advance["turn_contract"]
+                        contract_required_store_flow_tool = confirmed_stock_flow_advance["contract_required_tool"]
+                        _record_code_tool_result(
+                            str(contract_required_store_flow_tool["tool_name"]),
+                            dict(contract_required_store_flow_tool["tool_input"]),
+                            dict(contract_required_store_flow_tool["tool_result"]),
+                        )
+                        await _persist_pending_slots_for_direct_return()
+                        yield (
+                            "data: "
+                            + json.dumps(
+                                {
+                                    "type": "sub-agent",
+                                    "agent": "[TRANSACTION AGENT]",
+                                    "status": "start",
+                                },
+                                ensure_ascii=False,
+                            )
+                            + "\n\n"
+                        )
+                        for recovery_event in contract_required_store_flow_tool["events"]:
+                            yield f"data: {json.dumps(recovery_event, ensure_ascii=False)}\n\n"
+                        yield (
+                            "data: "
+                            + json.dumps(
+                                {
+                                    "type": "sub-agent",
+                                    "agent": "[TRANSACTION AGENT]",
+                                    "status": "done",
+                                },
+                                ensure_ascii=False,
+                            )
+                            + "\n\n"
+                        )
+                        recovered_event = contract_required_store_flow_tool["event"]
+                        yield f"data: {json.dumps(recovered_event, ensure_ascii=False)}\n\n"
+                        assistant_response = str((recovered_event.get("data") or {}).get("assistantResponse") or "")
+                        if assistant_response:
+                            yield (
+                                "data: "
+                                + json.dumps(
+                                    {
+                                        "type": "message",
+                                        "content": assistant_response,
+                                        "agent": "[TRANSACTION AGENT]",
+                                    },
+                                    ensure_ascii=False,
+                                )
+                                + "\n\n"
+                            )
+                        yield (
+                            f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+                        )
+                        yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+                        yield "data: [DONE]\n\n"
+                        return
                     event = _build_turn_contract_fallback_event(
                         turn_contract=turn_contract,
                         user_text=user_query,
@@ -38696,6 +39016,81 @@ class TStationChatServiceV2:
             or buffered_data_events
             or any(str(evt.get("content") or "").strip() for evt in original_message_events)
         ):
+            search_product_result = None
+            for tool_name, tool_output in structured_sources:
+                if str(tool_name or "") == "search_product_tool" and isinstance(tool_output, Mapping):
+                    search_product_result = tool_output
+                    break
+            if search_product_result is not None:
+                stock_flow_advance = await _advance_stock_flow_after_search_product_result(
+                    user_text=user_query,
+                    tool_result=search_product_result,
+                    merged_slots=pending_slots or initial_slots,
+                    routing_result=routing_result,
+                    turn_contract=turn_contract,
+                    context_state=stream_context_state,
+                    resume_source=stream_resume_source,
+                )
+                if (
+                    stock_flow_advance is not None
+                    and stock_flow_advance["contract_required_tool"] is not None
+                ):
+                    turn_contract = stock_flow_advance["turn_contract"]
+                    contract_required_store_flow_tool = stock_flow_advance["contract_required_tool"]
+                    _record_code_tool_result(
+                        str(contract_required_store_flow_tool["tool_name"]),
+                        dict(contract_required_store_flow_tool["tool_input"]),
+                        dict(contract_required_store_flow_tool["tool_result"]),
+                    )
+                    await _persist_pending_slots_for_direct_return()
+                    yield (
+                        "data: "
+                        + json.dumps(
+                            {
+                                "type": "sub-agent",
+                                "agent": "[TRANSACTION AGENT]",
+                                "status": "start",
+                            },
+                            ensure_ascii=False,
+                        )
+                        + "\n\n"
+                    )
+                    for recovery_event in contract_required_store_flow_tool["events"]:
+                        yield f"data: {json.dumps(recovery_event, ensure_ascii=False)}\n\n"
+                    yield (
+                        "data: "
+                        + json.dumps(
+                            {
+                                "type": "sub-agent",
+                                "agent": "[TRANSACTION AGENT]",
+                                "status": "done",
+                            },
+                            ensure_ascii=False,
+                        )
+                        + "\n\n"
+                    )
+                    recovered_event = contract_required_store_flow_tool["event"]
+                    yield f"data: {json.dumps(recovered_event, ensure_ascii=False)}\n\n"
+                    assistant_response = str((recovered_event.get("data") or {}).get("assistantResponse") or "")
+                    if assistant_response:
+                        yield (
+                            "data: "
+                            + json.dumps(
+                                {
+                                    "type": "message",
+                                    "content": assistant_response,
+                                    "agent": "[TRANSACTION AGENT]",
+                                },
+                                ensure_ascii=False,
+                            )
+                            + "\n\n"
+                        )
+                    yield (
+                        f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+                    )
+                    yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+                    yield "data: [DONE]\n\n"
+                    return
             no_output_fallback_event = _build_no_visible_output_fallback_event(
                 user_text=user_query,
                 turn_contract=turn_contract,

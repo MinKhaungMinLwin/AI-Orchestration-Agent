@@ -29499,6 +29499,226 @@ def test_contract_required_stock_store_lookup_reads_active_flow_state_slots() ->
     assert effective["region"] == "강남"
 
 
+def test_advance_stock_flow_after_search_product_result_runs_store_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_input: dict[str, Any] = {}
+
+    def _fake_store_list_invoke(tool_input: dict[str, Any]) -> dict[str, Any]:
+        captured_input.update(tool_input)
+        return {
+            "status": "success",
+            "data": {
+                "stores": [
+                    {
+                        "shop_id": "F00002",
+                        "shop_nm": "티스테이션 강남역점",
+                        "addr": "서울 강남구",
+                    }
+                ]
+            },
+        }
+
+    def _fake_try_build_template(tool_data_list: list[dict[str, Any]], assistant_text: str) -> dict[str, Any]:
+        assert tool_data_list[0]["tool"] == "get_store_list_tool"
+        assert tool_data_list[0]["args"] == {"limit": 10, "region_code": "강남"}
+        return {
+            "type": "data",
+            "template": "location",
+            "data": {
+                "assistantResponse": assistant_text,
+                "stores": [{"nameAddress": "티스테이션 강남역점"}],
+                "metadata": [{"shopId": "F00002"}],
+            },
+        }
+
+    async def _fake_to_thread(func: Any, *args: Any, **kwargs: Any) -> Any:
+        return func(*args, **kwargs)
+
+    from services.tstation import template_mapper as template_mapper_module
+    from services.tstation.agents.c_transaction_agent import tools as transaction_tools
+
+    monkeypatch.setattr(
+        transaction_tools,
+        "get_store_list_tool",
+        SimpleNamespace(invoke=_fake_store_list_invoke),
+    )
+    monkeypatch.setattr(chat_module.asyncio, "to_thread", _fake_to_thread)
+    monkeypatch.setattr(template_mapper_module, "try_build_template", _fake_try_build_template)
+
+    contract = TurnContract(
+        domain="discovery",
+        intent="resolve_or_describe_product",
+        sub_intent="stock",
+        known_slots={
+            "tire_size": "245/45R19",
+            "ord_qty": 4,
+            "region": "강남",
+            "stock_check_mode": "inventory_only",
+        },
+        allowed_tools=("get_store_inventory_tool", "get_store_list_tool", "search_product_tool"),
+        forbidden_tools=("transaction_store_preview_tool", "quick_order_tool"),
+        blocking_required_slots=("product",),
+        context_state="active",
+        response_decision={
+            "template": "quickReply",
+            "metadata": {"response_shape_key": "missing_stock_search_slots"},
+        },
+    )
+
+    advancement = asyncio.run(
+        chat_module._advance_stock_flow_after_search_product_result(
+            user_text="벤투스 S2 AS 2454519 4개 강남역 근처 재고 있는 매장 찾아줘",
+            tool_result={
+                "status": "success",
+                "data": [
+                    {
+                        "goods_no": "G000000310126",
+                        "goods_nm": "벤투스 S2 AS H",
+                        "tire_size_1": "245/45R19",
+                    },
+                    {
+                        "goods_no": "G000000310127",
+                        "goods_nm": "벤투스 S2 AS V",
+                        "tire_size_1": "245/45R19",
+                    },
+                ],
+            },
+            merged_slots=ConversationSlots(tire_model="벤투스 S2 AS"),
+            routing_result=SimpleNamespace(
+                execution_plan=["discovery:resolve_or_describe_product", "transaction:stock_store_or_reservation"]
+            ),
+            turn_contract=contract,
+            context_state="active",
+            resume_source="none",
+        )
+    )
+
+    assert advancement is not None
+    assert captured_input == {"limit": 10, "region_code": "강남"}
+    assert advancement["frame"].intent == "stock_store_search"
+    assert advancement["turn_contract"].domain == "transaction"
+    assert advancement["turn_contract"].response_decision["template"] == "location"
+    assert advancement["contract_required_tool"]["tool_name"] == "get_store_list_tool"
+    assert advancement["contract_required_tool"]["event"]["template"] == "location"
+    assert advancement["contract_required_tool"]["event"]["tool_input_source"] == (
+        "turn_contract_required_stock_inventory_store_lookup"
+    )
+    assert advancement["contract_required_tool"]["event"]["blocked_fast_path_source"] == (
+        "advance_current_flow_after_tool_result:search_product_tool"
+    )
+    active_context = advancement["slots"].availability_context["active_flow_context"]
+    assert active_context["flow_type"] == "stock"
+    assert active_context["product"]["goods_no"] == "G000000310126"
+    assert active_context["product"]["ord_qty"] == 4
+
+
+def test_advance_stock_flow_from_confirmed_state_runs_store_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_input: dict[str, Any] = {}
+
+    def _fake_store_list_invoke(tool_input: dict[str, Any]) -> dict[str, Any]:
+        captured_input.update(tool_input)
+        return {
+            "status": "success",
+            "data": {
+                "stores": [
+                    {
+                        "shop_id": "F00002",
+                        "shop_nm": "티스테이션 강남역점",
+                    }
+                ]
+            },
+        }
+
+    def _fake_try_build_template(tool_data_list: list[dict[str, Any]], assistant_text: str) -> dict[str, Any]:
+        assert tool_data_list[0]["tool"] == "get_store_list_tool"
+        assert tool_data_list[0]["args"] == {"limit": 10, "region_code": "강남"}
+        return {
+            "type": "data",
+            "template": "location",
+            "data": {
+                "assistantResponse": assistant_text,
+                "stores": [{"nameAddress": "티스테이션 강남역점"}],
+                "metadata": [{"shopId": "F00002"}],
+            },
+        }
+
+    async def _fake_to_thread(func: Any, *args: Any, **kwargs: Any) -> Any:
+        return func(*args, **kwargs)
+
+    from services.tstation import template_mapper as template_mapper_module
+    from services.tstation.agents.c_transaction_agent import tools as transaction_tools
+
+    monkeypatch.setattr(
+        transaction_tools,
+        "get_store_list_tool",
+        SimpleNamespace(invoke=_fake_store_list_invoke),
+    )
+    monkeypatch.setattr(chat_module.asyncio, "to_thread", _fake_to_thread)
+    monkeypatch.setattr(template_mapper_module, "try_build_template", _fake_try_build_template)
+
+    active_context = {
+        "flow_type": "stock",
+        "status": "active",
+        "flow_step": "product_selected",
+        "product": {
+            "goods_no": "G000000310126",
+            "tire_size": "245/45R19",
+            "ord_qty": 4,
+        },
+        "intent": {
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+            "stock_check_mode": "inventory_only",
+        },
+    }
+    contract = TurnContract(
+        domain="transaction",
+        intent="stock_store_search",
+        known_slots={
+            "pending_intent": "price",
+            "goal_type": "price_inquiry",
+            "region": "강남",
+            "stock_check_mode": "inventory_only",
+        },
+        allowed_tools=("get_store_inventory_tool", "get_store_list_tool", "get_logistics_inventory_tool"),
+        forbidden_tools=("transaction_store_preview_tool", "get_store_schedule_tool", "quick_order_tool"),
+        blocking_required_slots=(),
+        context_state="dormant",
+        response_decision={
+            "template": "quickReply",
+            "metadata": {
+                "response_shape_key": "missing_stock_search_slots",
+                "stock_check_mode": "inventory_only",
+            },
+        },
+    )
+
+    advancement = asyncio.run(
+        chat_module._advance_stock_flow_from_confirmed_state(
+            turn_contract=contract,
+            user_text="벤투스 S2 AS 2454519 4개 강남역 근처 재고 있는 매장 찾아줘",
+            merged_slots=ConversationSlots(availability_context={"active_flow_context": active_context}),
+            routing_result=SimpleNamespace(
+                execution_plan=["discovery:resolve_product", "transaction:continue_purchase"]
+            ),
+            context_state="active",
+            resume_source="none",
+        )
+    )
+
+    assert advancement is not None
+    assert captured_input == {"limit": 10, "region_code": "강남"}
+    assert advancement["frame"].intent == "stock_store_search"
+    assert advancement["contract_required_tool"]["tool_name"] == "get_store_list_tool"
+    assert advancement["contract_required_tool"]["event"]["template"] == "location"
+    assert advancement["contract_required_tool"]["event"]["blocked_fast_path_source"] == (
+        "advance_current_flow_from_confirmed_state"
+    )
+
+
 def test_promote_single_turn_stock_inventory_from_search_product_multi_item_picks_matching_size() -> None:
     """When search_product_tool returns multiple variants, picks first row matching known tire_size."""
     promoted = _promote_single_turn_stock_inventory_from_search_product(
