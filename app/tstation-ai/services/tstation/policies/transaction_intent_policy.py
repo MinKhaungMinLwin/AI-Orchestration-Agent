@@ -726,7 +726,6 @@ def build_transaction_intent_frame(
         is_general_card_cancel_timing_policy_query(text)
         and not _has_owned_order_cancel_status_anchor(text, slots)
     )
-    router_order_cart_status_check = str(slots.get("router_transaction_intent") or "") == "order_cart_status_check"
     router_order_cancel_fee_inquiry = str(slots.get("router_transaction_intent") or "") == "order_cancel_fee_inquiry"
     current_order_cancel_fee_inquiry = bool(
         router_order_cancel_fee_inquiry
@@ -1182,11 +1181,6 @@ def build_transaction_intent_frame(
         intent = "plain_store_info_lookup"
         sub_intent = "store_detail"
         entities["store_name"] = _extract_policy_store_name_candidate(text) or store_name
-    elif router_order_cart_status_check:
-        intent = "order_history_lookup"
-        sub_intent = "lookup"
-        entities["owned_record_target"] = "order"
-        entities["router_contract"] = True
     elif router_alert_contract:
         intent = "price_or_benefit_alert_request"
         sub_intent = "alert_request"

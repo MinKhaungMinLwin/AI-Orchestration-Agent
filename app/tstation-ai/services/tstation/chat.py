@@ -1309,16 +1309,6 @@ def _execution_plan_has_intent(routing_result: MultiAgentDomain | None, intent: 
     return any(normalized_intent in item for item in plan_items)
 
 
-def _primary_transaction_execution_intent(routing_result: MultiAgentDomain | None) -> str:
-    if routing_result is None:
-        return ""
-    for item in (getattr(routing_result, "execution_plan", None) or ()):
-        normalized = str(item or "").strip().lower()
-        if normalized.startswith("transaction:"):
-            return normalized.split(":", 1)[1].strip()
-    return ""
-
-
 def _router_contract_is_order_cancel_fee_inquiry(routing_result: MultiAgentDomain | None) -> bool:
     if routing_result is None:
         return False
@@ -21635,7 +21625,6 @@ def _build_transaction_policy_context(
     if MultiAgentDomain.Domain.TRANSACTION not in domains or not last_user_text:
         return {}, None, None
     try:
-        known_slots = _soft_reset_pending_check_slots_for_router_intent(known_slots)
         known_slots = _enrich_today_install_policy_slots(
             last_user_text=last_user_text,
             known_slots=known_slots,
@@ -21643,13 +21632,12 @@ def _build_transaction_policy_context(
         )
         price_frame = build_price_intent_frame(last_user_text, known_slots=known_slots)
         price_frame = _promote_coupon_applicability_followup_price_frame(price_frame, known_slots)
-        defer_price_fast_path = _should_defer_price_fast_path_to_router_intent(known_slots)
         # coupon_usage_policy / coupon_registration_policy questions are general policy inquiries.
         # Applying price forbidden_behaviors here triggers a code-level fallback and blocks the agent
         # from looking up actual coupon channel data (coupon_channel_type: online/offline/onoff).
         _planner_policy_intent = str(known_slots.get("planner_policy_intent") or "")
         _is_coupon_policy_inquiry = _planner_policy_intent in {"coupon_usage_policy", "coupon_registration_policy"}
-        if not defer_price_fast_path and not _is_coupon_policy_inquiry and (
+        if not _is_coupon_policy_inquiry and (
             price_frame.intent != "price_coupon_summary"
             or price_frame.entities.get("has_coupon_keyword")
             or price_frame.entities.get("has_promotion_keyword")
@@ -21732,33 +21720,6 @@ def _promote_coupon_applicability_followup_price_frame(
             "pending_check_topic": pending_topic,
         },
     )
-
-
-_PENDING_CHECK_FOLLOWUP_ROUTER_INTENTS = frozenset({
-    "coupon_applicability_check",
-})
-
-
-def _soft_reset_pending_check_slots_for_router_intent(known_slots: Mapping[str, Any]) -> dict[str, Any]:
-    router_intent = str(known_slots.get("router_transaction_intent") or "").strip()
-    if not router_intent or router_intent in _PENDING_CHECK_FOLLOWUP_ROUTER_INTENTS:
-        return dict(known_slots)
-    if str(known_slots.get("pending_check_topic") or "").strip() not in _PENDING_CHECK_TOPICS:
-        return dict(known_slots)
-    updated = dict(known_slots)
-    for key in (
-        "pending_check_topic",
-        "pending_check_object_type",
-        "pending_check_object_value",
-        "pending_check_turns_remaining",
-    ):
-        updated.pop(key, None)
-    return updated
-
-
-def _should_defer_price_fast_path_to_router_intent(known_slots: Mapping[str, Any]) -> bool:
-    router_intent = str(known_slots.get("router_transaction_intent") or "").strip()
-    return bool(router_intent) and router_intent not in _PENDING_CHECK_FOLLOWUP_ROUTER_INTENTS
 
 
 _EXPLICIT_PURCHASE_CONTRACT_SIGNAL_RE = re.compile(
@@ -30374,9 +30335,12 @@ class TStationChatServiceV2:
             and str(pending_order_context.get("source") or "") == "tool:transaction_store_preview_tool"
         ):
             transaction_known_slots["source_tool"] = "transaction_store_preview_tool"
-        router_transaction_intent = _primary_transaction_execution_intent(routing_result)
-        if router_transaction_intent:
-            transaction_known_slots["router_transaction_intent"] = router_transaction_intent
+        if _router_contract_is_price_or_benefit_alert(routing_result):
+            transaction_known_slots["router_transaction_intent"] = "price_or_benefit_alert_request"
+        elif _router_contract_is_order_cancel_fee_inquiry(routing_result):
+            transaction_known_slots["router_transaction_intent"] = "order_cancel_fee_inquiry"
+        elif _execution_plan_has_intent(routing_result, "coupon_applicability_check"):
+            transaction_known_slots["router_transaction_intent"] = "coupon_applicability_check"
         router_store_service_slots = _router_store_service_search_slots(routing_result)
         if router_store_service_slots:
             transaction_known_slots.update(router_store_service_slots)
