@@ -20754,11 +20754,18 @@ _EXPLICIT_PURCHASE_CONTRACT_SIGNAL_RE = re.compile(
 )
 
 
-def _single_resolved_search_product_row(tool_result: Mapping[str, Any] | None) -> dict[str, Any] | None:
+def _search_product_result_items(tool_result: Mapping[str, Any] | None) -> list[Any]:
     if not isinstance(tool_result, Mapping):
-        return None
+        return []
     data = tool_result.get("data")
+    if isinstance(data, list):
+        return data
     items = data.get("items") if isinstance(data, Mapping) else None
+    return items if isinstance(items, list) else []
+
+
+def _single_resolved_search_product_row(tool_result: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    items = _search_product_result_items(tool_result)
     if not isinstance(items, list) or len(items) != 1 or not isinstance(items[0], Mapping):
         return None
     canonical = canonical_context_from_tool_boundary(items[0])
@@ -20789,8 +20796,7 @@ def _resolve_stock_search_product_row(
     """
     if not isinstance(tool_result, Mapping):
         return None
-    data = tool_result.get("data")
-    items = data.get("items") if isinstance(data, Mapping) else None
+    items = _search_product_result_items(tool_result)
     if not isinstance(items, list) or not items:
         return None
     if len(items) == 1:

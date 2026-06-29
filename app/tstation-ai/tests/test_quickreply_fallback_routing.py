@@ -53,6 +53,7 @@ from services.tstation.agents.base_agent import (
     _build_registered_vehicle_staggered_tire_event,
     _is_staggered_registered_vehicle,
     _registered_vehicle_slot_values,
+    _should_defer_search_product_fast_path_for_stock_contract,
     _slot_data_for_tool_event,
     _tool_entries_from_previous_agent_facts,
 )
@@ -13451,6 +13452,27 @@ def test_flow_transition_records_quantity_selection_without_executing() -> None:
     assert active_flow_context["intent"]["pending_intent"] == "stock"
     assert active_flow_context["intent"]["goal_type"] == "store_with_stock"
     assert slots.ord_qty is None
+
+
+def test_flow_transition_stock_store_plan_records_quantity_as_stock_flow() -> None:
+    transition = transition_current_flow(
+        user_text="벤투스 S2 AS 2454519 4개 강남역 근처 재고 있는 매장 찾아줘",
+        router_evidence={
+            "domain": "discovery",
+            "intent": "resolve_or_describe_product",
+            "execution_plan": ["discovery:resolve_or_describe_product", "transaction:stock_store_or_reservation"],
+            "source": "llm",
+        },
+        existing_slots=ConversationSlots(tire_size="245/45R19", region="강남"),
+        extracted_slots=ConversationSlots(tire_size="245/45R19", ord_qty=4, region="강남"),
+    )
+
+    assert transition.metadata["selected_quantity_resolved"] is True
+    assert transition.flow_transition["applied"] is True
+    active_flow_context = transition.flow_transition["active_flow_context"]
+    assert active_flow_context["flow_type"] == "stock"
+    assert active_flow_context["flow_step"] == "quantity_selected"
+    assert active_flow_context["quantity"]["ord_qty"] == 4
 
 
 def test_flow_transition_ignores_unanchored_quantity_text() -> None:
@@ -29329,6 +29351,106 @@ def test_promote_single_turn_stock_inventory_reads_contract_slots_without_execut
     assert promoted_frame.known_slots["region"] == "강남"
     assert promoted_tool_plan.preferred_tool == "get_store_list_tool"
     assert decision.metadata["response_shape_key"] == "stock_inventory_lookup"
+
+
+def test_promote_single_turn_stock_inventory_accepts_list_data_search_result_shape() -> None:
+    contract = TurnContract(
+        domain="discovery",
+        intent="resolve_or_describe_product",
+        sub_intent="stock",
+        known_slots={
+            "tire_size": "245/45R19",
+            "ord_qty": 4,
+            "region": "강남",
+            "stock_check_mode": "inventory_only",
+        },
+        allowed_tools=("get_store_inventory_tool", "get_store_list_tool", "search_product_tool"),
+        forbidden_tools=("transaction_store_preview_tool", "quick_order_tool"),
+        blocking_required_slots=(),
+        context_state="active",
+        response_decision={
+            "template": "quickReply",
+            "metadata": {"response_shape_key": "missing_stock_search_slots"},
+        },
+    )
+
+    promoted = _promote_single_turn_stock_inventory_from_search_product(
+        user_text="벤투스 S2 AS 2454519 4개 강남역 근처 재고 있는 매장 찾아줘",
+        tool_result={
+            "status": "success",
+            "data": [
+                {
+                    "goods_no": "G000000310126",
+                    "goods_nm": "벤투스 S2 AS",
+                    "tire_size_1": "245/45R19",
+                }
+            ],
+        },
+        merged_slots=ConversationSlots(tire_model="벤투스 S2 AS"),
+        routing_result=SimpleNamespace(
+            execution_plan=["discovery:resolve_or_describe_product", "transaction:stock_store_or_reservation"]
+        ),
+        turn_contract=contract,
+    )
+
+    assert promoted is not None
+    promoted_slots, promoted_frame, promoted_tool_plan, decision = promoted
+    assert promoted_slots.goods_no == "G000000310126"
+    assert promoted_frame.intent == "stock_store_search"
+    assert promoted_frame.known_slots["ord_qty"] == 4
+    assert promoted_frame.known_slots["region"] == "강남"
+    assert promoted_tool_plan.preferred_tool == "get_store_list_tool"
+    assert decision.metadata["response_shape_key"] == "stock_inventory_lookup"
+
+
+def test_search_product_fast_path_defers_for_contract_required_stock_lookup() -> None:
+    decision = ResponseDecision(
+        response_shape=ResponseShape.CLARIFY,
+        template=TemplateName.QUICK_REPLY,
+        required_slots=(),
+        metadata={"response_shape_key": "missing_stock_search_slots", "stock_check_mode": "inventory_only"},
+    )
+    tool_plan = ToolPlan(
+        allowed_tools=("get_store_inventory_tool", "get_store_list_tool", "search_product_tool"),
+        forbidden_tools=("transaction_store_preview_tool",),
+        required_slots=(),
+        metadata={"response_intent": "stock_store_search"},
+    )
+    decision_token = current_transaction_response_decision.set(decision)
+    plan_token = current_transaction_tool_plan.set(tool_plan)
+    try:
+        assert _should_defer_search_product_fast_path_for_stock_contract(
+            "search_product_tool",
+            {"type": "data", "template": "quickReply", "data": {}},
+        )
+    finally:
+        current_transaction_tool_plan.reset(plan_token)
+        current_transaction_response_decision.reset(decision_token)
+
+
+def test_search_product_fast_path_keeps_plain_product_summary() -> None:
+    decision = ResponseDecision(
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        required_slots=(),
+        metadata={"response_shape_key": "product_search_summary"},
+    )
+    tool_plan = ToolPlan(
+        allowed_tools=("search_product_tool",),
+        forbidden_tools=(),
+        required_slots=(),
+        metadata={"response_intent": "product_search_summary"},
+    )
+    decision_token = current_transaction_response_decision.set(decision)
+    plan_token = current_transaction_tool_plan.set(tool_plan)
+    try:
+        assert not _should_defer_search_product_fast_path_for_stock_contract(
+            "search_product_tool",
+            {"type": "data", "template": "quickReply", "data": {}},
+        )
+    finally:
+        current_transaction_tool_plan.reset(plan_token)
+        current_transaction_response_decision.reset(decision_token)
 
 
 def test_contract_required_stock_store_lookup_reads_active_flow_state_slots() -> None:

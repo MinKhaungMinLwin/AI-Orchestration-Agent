@@ -345,7 +345,12 @@ def _quantity_flow_type(
         return "purchase"
     router_intent = str(router_evidence.get("intent") or "").strip()
     execution_plan = " ".join(str(item) for item in router_evidence.get("execution_plan") or ())
-    if "stock" in router_intent or "store_stock" in execution_plan or "store_inventory" in execution_plan:
+    if (
+        "stock" in router_intent
+        or "stock_store" in execution_plan
+        or "store_stock" in execution_plan
+        or "store_inventory" in execution_plan
+    ):
         return "stock"
     return "purchase"
 
