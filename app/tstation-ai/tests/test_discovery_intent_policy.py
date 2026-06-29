@@ -567,9 +567,26 @@ def test_mileage_attribute_recommendation_remains_attribute_recommendation() -> 
     plan = plan_discovery_tools(frame)
 
     assert frame.intent == "product_recommendation"
-    assert frame.sub_intent == "general_recommendation"
+    assert frame.sub_intent == "condition_recommendation"
+    assert frame.entities["recommendation_scenario"] == "long_distance"
     assert "product_keyword" not in frame.entities
     assert plan.preferred_tool == "get_products_recommendations_tool"
+    assert plan.tool_args_patch["rcmd_type"] == "long_distance"
+    assert plan.metadata["recommendation_expected_tool_args"] == {"rcmd_type": "long_distance"}
+
+
+def test_router_mileage_scenario_uses_long_distance_recommendation_contract() -> None:
+    frame = build_discovery_intent_frame(
+        "우버 운영하고 있는데 마일리지 무조건 긴거 추천",
+        known_slots={"recommendation_scenario": "mileage"},
+    )
+    plan = plan_discovery_tools(frame)
+
+    assert frame.intent == "product_recommendation"
+    assert frame.entities["recommendation_scenario"] == "long_distance"
+    assert plan.preferred_tool == "get_products_recommendations_tool"
+    assert plan.tool_args_patch["rcmd_type"] == "long_distance"
+    assert plan.metadata["recommendation_expected_tool_args"] == {"rcmd_type": "long_distance"}
 
 
 def test_fuel_efficiency_recommendation_uses_recommendation_flow_not_explanation() -> None:

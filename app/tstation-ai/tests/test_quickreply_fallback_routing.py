@@ -22058,6 +22058,36 @@ def test_recommendation_scenario_metadata_flows_into_turn_contract() -> None:
     }
 
 
+def test_router_mileage_recommendation_accepts_long_distance_tool_args() -> None:
+    text = "우버 운영하고 있는데 마일리지 무조건 긴거 추천"
+    frame = build_discovery_intent_frame(text, known_slots={"recommendation_scenario": "mileage"})
+    plan = plan_discovery_tools(frame)
+    contract = build_turn_contract(
+        user_text=text,
+        intent_frame=frame,
+        tool_plan=plan,
+        response_decision=decide_discovery_response(frame),
+    )
+
+    assert contract.known_slots["recommendation_scenario"] == "long_distance"
+    assert contract.known_slots["recommendation_expected_tool_args"] == {"rcmd_type": "long_distance"}
+
+    violations = response_contract_violations(
+        template="quickReply",
+        assistant_response_text="마일리지/수명 기준으로 추천 상품을 안내드릴게요.",
+        called_tools=["get_products_recommendations_tool"],
+        tool_inputs=[
+            {
+                "tool": "get_products_recommendations_tool",
+                "args": {"rcmd_type": "long_distance", "limit": 3, "brand_cd": "HK"},
+            }
+        ],
+        contract=contract,
+    )
+
+    assert not any(violation["type"] == "recommendation_tool_input_drift" for violation in violations)
+
+
 def test_sized_offroad_recommendation_tool_plan_records_expected_tool_args() -> None:
     frame = build_discovery_intent_frame(
         "오프로드용 타이어 추천",
