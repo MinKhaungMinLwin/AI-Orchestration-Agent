@@ -28319,6 +28319,50 @@ def test_coupon_applicability_followup_uses_coupon_plan_when_coupon_word_is_omit
     assert "search_product_tool" not in tool_plan.allowed_tools
 
 
+def test_explicit_router_intent_soft_resets_stale_pending_check_slots() -> None:
+    _patch, response_decision, tool_plan = _build_transaction_policy_context(
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        last_user_text="결제 창 멈춰서 나갔다 왔는데 장바구니 가격이랑 쿠폰 그대로 있어?",
+        known_slots={
+            "router_transaction_intent": "order_cart_status_check",
+            "pending_check_topic": "coupon_applicability",
+            "pending_check_object_type": "product_name",
+            "pending_check_object_value": "벤투스 S2 AS",
+            "goods_no": "G000000309783",
+            "product_name": "벤투스 S2 AS",
+            "tire_size": "225/45R17",
+            "ord_qty": 4,
+            "shop_id": "F03778",
+            "shop_name": "티스테이션 광교신도시점",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+
+    assert response_decision is not None
+    assert response_decision.metadata["response_shape_key"] == "order_history_lookup"
+    assert tool_plan is not None
+    assert tool_plan.preferred_tool == "get_orders_of_user_tool"
+    assert "get_final_price_tool" not in tool_plan.allowed_tools
+    assert "get_coupon_applicable_products_tool" not in tool_plan.allowed_tools
+
+
+def test_order_cart_status_router_intent_overrides_lexical_price_coupon_branch() -> None:
+    frame = build_transaction_intent_frame(
+        "결제 창 멈춰서 나갔다 왔는데 장바구니 가격이랑 쿠폰 그대로 있어?",
+        known_slots={
+            "router_transaction_intent": "order_cart_status_check",
+            "goods_no": "G000000309783",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+
+    assert frame.intent == "order_history_lookup"
+    assert frame.known_slots["owned_record_target"] == "order"
+    assert frame.known_slots["goal_type"] == "owned_record_lookup"
+
+
 def test_coupon_applicability_contract_blocks_product_search_for_owned_coupon_followup() -> None:
     contract = build_turn_contract(
         user_text="키너지 ex 에 쓸수 있는건?",
@@ -28347,6 +28391,42 @@ def test_coupon_applicability_contract_blocks_product_search_for_owned_coupon_fo
     assert "get_coupon_applicable_products_tool" in contract.allowed_tools
     assert "search_product_tool" in contract.forbidden_tools
     assert "get_final_price_tool" in contract.forbidden_tools
+
+
+def test_turn_contract_clears_stale_pending_check_for_new_non_followup_planner_intent() -> None:
+    contract = build_turn_contract(
+        user_text="결제 창 멈춰서 나갔다 왔는데 장바구니 가격이랑 쿠폰 그대로 있어?",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["transaction:order_cart_status_check"],
+            pending_check_topic="none",
+        ),
+        merged_slots=ConversationSlots(
+            pending_check_topic="coupon_applicability",
+            pending_check_object_type="product_name",
+            pending_check_object_value="벤투스 S2 AS",
+            goods_no="G000000309783",
+        ),
+        intent_frame=IntentFrame(domain=PolicyDomain.TRANSACTION, intent="order_history_lookup"),
+        tool_plan=ToolPlan(
+            allowed_tools=("get_orders_of_user_tool",),
+            preferred_tool="get_orders_of_user_tool",
+            tool_args_patch={},
+            forbidden_tools=("get_final_price_tool", "get_coupon_applicable_products_tool"),
+            required_slots=(),
+            metadata={"response_intent": "order_history_lookup"},
+        ),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            metadata={"response_shape_key": "order_history_lookup"},
+        ),
+    )
+
+    assert contract.intent == "order_history_lookup"
+    assert "pending_check_topic" not in contract.known_slots
+    assert "pending_check_object_type" not in contract.known_slots
+    assert "pending_check_object_value" not in contract.known_slots
 
 
 @pytest.mark.parametrize("user_text", ["그거 구매할래", "그거 가격 알려줘", "두 개 다 재고 있어?"])
