@@ -36577,6 +36577,53 @@ class TStationChatServiceV2:
             user_text=user_query,
             merged_slots=pending_slots or initial_slots,
         )
+        async def _contract_required_tool_recovery_sse(
+            recovery: Mapping[str, Any],
+            *,
+            agent_label: str = "[TRANSACTION AGENT]",
+        ) -> list[str]:
+            _record_code_tool_result(
+                str(recovery["tool_name"]),
+                dict(recovery["tool_input"]),
+                dict(recovery["tool_result"]),
+            )
+            await _persist_pending_slots_for_direct_return()
+            chunks = [
+                "data: "
+                + json.dumps(
+                    {"type": "sub-agent", "agent": agent_label, "status": "start"},
+                    ensure_ascii=False,
+                )
+                + "\n\n"
+            ]
+            chunks.extend(f"data: {json.dumps(recovery_event, ensure_ascii=False)}\n\n" for recovery_event in recovery["events"])
+            chunks.append(
+                "data: "
+                + json.dumps(
+                    {"type": "sub-agent", "agent": agent_label, "status": "done"},
+                    ensure_ascii=False,
+                )
+                + "\n\n"
+            )
+            recovered_event = recovery["event"]
+            chunks.append(f"data: {json.dumps(recovered_event, ensure_ascii=False)}\n\n")
+            assistant_response = str((recovered_event.get("data") or {}).get("assistantResponse") or "")
+            if assistant_response:
+                chunks.append(
+                    "data: "
+                    + json.dumps(
+                        {"type": "message", "content": assistant_response, "agent": agent_label},
+                        ensure_ascii=False,
+                    )
+                    + "\n\n"
+                )
+            chunks.append(
+                f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+            )
+            chunks.append(f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n")
+            chunks.append("data: [DONE]\n\n")
+            return chunks
+
         if contract_required_vehicle_recommendation is not None:
             _record_code_tool_result(
                 str(contract_required_vehicle_recommendation["tool_name"]),
@@ -36624,11 +36671,6 @@ class TStationChatServiceV2:
                 turn_contract = confirmed_stock_flow_advance["turn_contract"]
                 contract_required_store_flow_tool = confirmed_stock_flow_advance["contract_required_tool"]
         if contract_required_store_flow_tool is not None:
-            _record_code_tool_result(
-                str(contract_required_store_flow_tool["tool_name"]),
-                dict(contract_required_store_flow_tool["tool_input"]),
-                dict(contract_required_store_flow_tool["tool_result"]),
-            )
             stock_slots, stock_flow = _advance_active_stock_flow_for_schedule_direct_return(
                 pending_slots or initial_slots
             )
@@ -36637,19 +36679,8 @@ class TStationChatServiceV2:
             if stock_flow is not None:
                 vehicle_selection_trace_metadata["active_stock_flow_context_scheduled"] = True
                 vehicle_selection_trace_metadata["active_stock_flow_context_after_schedule"] = stock_flow
-            await _persist_pending_slots_for_direct_return()
-            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
-            for recovery_event in contract_required_store_flow_tool["events"]:
-                yield f"data: {json.dumps(recovery_event, ensure_ascii=False)}\n\n"
-            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
-            schedule_event = contract_required_store_flow_tool["event"]
-            yield f"data: {json.dumps(schedule_event, ensure_ascii=False)}\n\n"
-            assistant_response = str((schedule_event.get("data") or {}).get("assistantResponse") or "")
-            if assistant_response:
-                yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[TRANSACTION AGENT]'}, ensure_ascii=False)}\n\n"
-            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
-            yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
-            yield "data: [DONE]\n\n"
+            for chunk in await _contract_required_tool_recovery_sse(contract_required_store_flow_tool):
+                yield chunk
             return
 
         history_selected_vehicle_prompt_event = current_vehicle_selection_prompt_event.get()
@@ -37169,61 +37200,10 @@ class TStationChatServiceV2:
                             turn_contract = stock_flow_advance["turn_contract"]
                             contract_required_store_flow_tool = stock_flow_advance["contract_required_tool"]
                             if contract_required_store_flow_tool is not None:
-                                _record_code_tool_result(
-                                    str(contract_required_store_flow_tool["tool_name"]),
-                                    dict(contract_required_store_flow_tool["tool_input"]),
-                                    dict(contract_required_store_flow_tool["tool_result"]),
-                                )
-                                await _persist_pending_slots_for_direct_return()
-                                yield (
-                                    "data: "
-                                    + json.dumps(
-                                        {
-                                            "type": "sub-agent",
-                                            "agent": "[TRANSACTION AGENT]",
-                                            "status": "start",
-                                        },
-                                        ensure_ascii=False,
-                                    )
-                                    + "\n\n"
-                                )
-                                for recovery_event in contract_required_store_flow_tool["events"]:
-                                    yield f"data: {json.dumps(recovery_event, ensure_ascii=False)}\n\n"
-                                yield (
-                                    "data: "
-                                    + json.dumps(
-                                        {
-                                            "type": "sub-agent",
-                                            "agent": "[TRANSACTION AGENT]",
-                                            "status": "done",
-                                        },
-                                        ensure_ascii=False,
-                                    )
-                                    + "\n\n"
-                                )
-                                location_event = contract_required_store_flow_tool["event"]
-                                yield f"data: {json.dumps(location_event, ensure_ascii=False)}\n\n"
-                                assistant_response = str(
-                                    (location_event.get("data") or {}).get("assistantResponse") or ""
-                                )
-                                if assistant_response:
-                                    yield (
-                                        "data: "
-                                        + json.dumps(
-                                            {
-                                                "type": "message",
-                                                "content": assistant_response,
-                                                "agent": "[TRANSACTION AGENT]",
-                                            },
-                                            ensure_ascii=False,
-                                        )
-                                        + "\n\n"
-                                    )
-                                yield (
-                                    f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
-                                )
-                                yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
-                                yield "data: [DONE]\n\n"
+                                for chunk in await _contract_required_tool_recovery_sse(
+                                    contract_required_store_flow_tool
+                                ):
+                                    yield chunk
                                 return
 
                         promoted_stock_preview = None
@@ -38708,93 +38688,6 @@ class TStationChatServiceV2:
                     if blocked_template:
                         metadata["blocked_template"] = blocked_template
 
-                if (
-                    event.get("assistant_response_source") == "code_turn_contract_required_slot_guard"
-                    or (
-                        isinstance(event.get("data"), Mapping)
-                        and isinstance((event.get("data") or {}).get("metadata"), Mapping)
-                        and (event.get("data") or {}).get("metadata", {}).get("direct_source")
-                        == "code_turn_contract_required_slot_guard"
-                    )
-                ):
-                    search_product_result = None
-                    for tool_name, tool_output in structured_sources:
-                        if str(tool_name or "") == "search_product_tool" and isinstance(tool_output, Mapping):
-                            search_product_result = tool_output
-                            break
-                    if search_product_result is not None:
-                        stock_flow_advance = await _advance_stock_flow_after_search_product_result(
-                            user_text=user_query,
-                            tool_result=search_product_result,
-                            merged_slots=pending_slots or initial_slots,
-                            routing_result=routing_result,
-                            turn_contract=turn_contract,
-                            context_state=stream_context_state,
-                            resume_source=stream_resume_source,
-                        )
-                        if (
-                            stock_flow_advance is not None
-                            and stock_flow_advance["contract_required_tool"] is not None
-                        ):
-                            turn_contract = stock_flow_advance["turn_contract"]
-                            contract_required_store_flow_tool = stock_flow_advance["contract_required_tool"]
-                            _record_code_tool_result(
-                                str(contract_required_store_flow_tool["tool_name"]),
-                                dict(contract_required_store_flow_tool["tool_input"]),
-                                dict(contract_required_store_flow_tool["tool_result"]),
-                            )
-                            await _persist_pending_slots_for_direct_return()
-                            yield (
-                                "data: "
-                                + json.dumps(
-                                    {
-                                        "type": "sub-agent",
-                                        "agent": "[TRANSACTION AGENT]",
-                                        "status": "start",
-                                    },
-                                    ensure_ascii=False,
-                                )
-                                + "\n\n"
-                            )
-                            for recovery_event in contract_required_store_flow_tool["events"]:
-                                yield f"data: {json.dumps(recovery_event, ensure_ascii=False)}\n\n"
-                            yield (
-                                "data: "
-                                + json.dumps(
-                                    {
-                                        "type": "sub-agent",
-                                        "agent": "[TRANSACTION AGENT]",
-                                        "status": "done",
-                                    },
-                                    ensure_ascii=False,
-                                )
-                                + "\n\n"
-                            )
-                            recovered_event = contract_required_store_flow_tool["event"]
-                            yield f"data: {json.dumps(recovered_event, ensure_ascii=False)}\n\n"
-                            assistant_response = str(
-                                (recovered_event.get("data") or {}).get("assistantResponse") or ""
-                            )
-                            if assistant_response:
-                                yield (
-                                    "data: "
-                                    + json.dumps(
-                                        {
-                                            "type": "message",
-                                            "content": assistant_response,
-                                            "agent": "[TRANSACTION AGENT]",
-                                        },
-                                        ensure_ascii=False,
-                                    )
-                                    + "\n\n"
-                                )
-                            yield (
-                                f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
-                            )
-                            yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
-                            yield "data: [DONE]\n\n"
-                            return
-
                 try:
                     template_contract_violated = violates_response_template_contract(
                         validation_event,
@@ -38816,74 +38709,6 @@ class TStationChatServiceV2:
                         list(turn_contract.required_slots) if turn_contract else [],
                         turn_contract.intent if turn_contract else None,
                     )
-                    confirmed_stock_flow_advance = await _advance_stock_flow_from_confirmed_state(
-                        turn_contract=turn_contract,
-                        user_text=user_query,
-                        merged_slots=pending_slots or initial_slots,
-                        routing_result=routing_result,
-                        context_state=stream_context_state,
-                        resume_source=stream_resume_source,
-                    )
-                    if (
-                        confirmed_stock_flow_advance is not None
-                        and confirmed_stock_flow_advance["contract_required_tool"] is not None
-                    ):
-                        turn_contract = confirmed_stock_flow_advance["turn_contract"]
-                        contract_required_store_flow_tool = confirmed_stock_flow_advance["contract_required_tool"]
-                        _record_code_tool_result(
-                            str(contract_required_store_flow_tool["tool_name"]),
-                            dict(contract_required_store_flow_tool["tool_input"]),
-                            dict(contract_required_store_flow_tool["tool_result"]),
-                        )
-                        await _persist_pending_slots_for_direct_return()
-                        yield (
-                            "data: "
-                            + json.dumps(
-                                {
-                                    "type": "sub-agent",
-                                    "agent": "[TRANSACTION AGENT]",
-                                    "status": "start",
-                                },
-                                ensure_ascii=False,
-                            )
-                            + "\n\n"
-                        )
-                        for recovery_event in contract_required_store_flow_tool["events"]:
-                            yield f"data: {json.dumps(recovery_event, ensure_ascii=False)}\n\n"
-                        yield (
-                            "data: "
-                            + json.dumps(
-                                {
-                                    "type": "sub-agent",
-                                    "agent": "[TRANSACTION AGENT]",
-                                    "status": "done",
-                                },
-                                ensure_ascii=False,
-                            )
-                            + "\n\n"
-                        )
-                        recovered_event = contract_required_store_flow_tool["event"]
-                        yield f"data: {json.dumps(recovered_event, ensure_ascii=False)}\n\n"
-                        assistant_response = str((recovered_event.get("data") or {}).get("assistantResponse") or "")
-                        if assistant_response:
-                            yield (
-                                "data: "
-                                + json.dumps(
-                                    {
-                                        "type": "message",
-                                        "content": assistant_response,
-                                        "agent": "[TRANSACTION AGENT]",
-                                    },
-                                    ensure_ascii=False,
-                                )
-                                + "\n\n"
-                            )
-                        yield (
-                            f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
-                        )
-                        yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
-                        yield "data: [DONE]\n\n"
-                        return
                     event = _build_turn_contract_fallback_event(
                         turn_contract=turn_contract,
                         user_text=user_query,
@@ -39016,81 +38841,6 @@ class TStationChatServiceV2:
             or buffered_data_events
             or any(str(evt.get("content") or "").strip() for evt in original_message_events)
         ):
-            search_product_result = None
-            for tool_name, tool_output in structured_sources:
-                if str(tool_name or "") == "search_product_tool" and isinstance(tool_output, Mapping):
-                    search_product_result = tool_output
-                    break
-            if search_product_result is not None:
-                stock_flow_advance = await _advance_stock_flow_after_search_product_result(
-                    user_text=user_query,
-                    tool_result=search_product_result,
-                    merged_slots=pending_slots or initial_slots,
-                    routing_result=routing_result,
-                    turn_contract=turn_contract,
-                    context_state=stream_context_state,
-                    resume_source=stream_resume_source,
-                )
-                if (
-                    stock_flow_advance is not None
-                    and stock_flow_advance["contract_required_tool"] is not None
-                ):
-                    turn_contract = stock_flow_advance["turn_contract"]
-                    contract_required_store_flow_tool = stock_flow_advance["contract_required_tool"]
-                    _record_code_tool_result(
-                        str(contract_required_store_flow_tool["tool_name"]),
-                        dict(contract_required_store_flow_tool["tool_input"]),
-                        dict(contract_required_store_flow_tool["tool_result"]),
-                    )
-                    await _persist_pending_slots_for_direct_return()
-                    yield (
-                        "data: "
-                        + json.dumps(
-                            {
-                                "type": "sub-agent",
-                                "agent": "[TRANSACTION AGENT]",
-                                "status": "start",
-                            },
-                            ensure_ascii=False,
-                        )
-                        + "\n\n"
-                    )
-                    for recovery_event in contract_required_store_flow_tool["events"]:
-                        yield f"data: {json.dumps(recovery_event, ensure_ascii=False)}\n\n"
-                    yield (
-                        "data: "
-                        + json.dumps(
-                            {
-                                "type": "sub-agent",
-                                "agent": "[TRANSACTION AGENT]",
-                                "status": "done",
-                            },
-                            ensure_ascii=False,
-                        )
-                        + "\n\n"
-                    )
-                    recovered_event = contract_required_store_flow_tool["event"]
-                    yield f"data: {json.dumps(recovered_event, ensure_ascii=False)}\n\n"
-                    assistant_response = str((recovered_event.get("data") or {}).get("assistantResponse") or "")
-                    if assistant_response:
-                        yield (
-                            "data: "
-                            + json.dumps(
-                                {
-                                    "type": "message",
-                                    "content": assistant_response,
-                                    "agent": "[TRANSACTION AGENT]",
-                                },
-                                ensure_ascii=False,
-                            )
-                            + "\n\n"
-                        )
-                    yield (
-                        f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
-                    )
-                    yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
-                    yield "data: [DONE]\n\n"
-                    return
             no_output_fallback_event = _build_no_visible_output_fallback_event(
                 user_text=user_query,
                 turn_contract=turn_contract,
