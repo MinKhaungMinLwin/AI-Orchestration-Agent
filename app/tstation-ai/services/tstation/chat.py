@@ -30220,6 +30220,7 @@ class TStationChatServiceV2:
             purchase_vehicle_patch = purchase_context_vehicle_selection_patch(
                 parent_context=existing_pending_order_context,
                 selected_vehicle_slots=selected_vehicle_slots,
+                current_slots=merged_slots.model_dump(),
             )
             if purchase_vehicle_patch:
                 merged_pending_context, purchase_commit_metadata = _merge_pending_order_context(

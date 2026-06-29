@@ -2148,7 +2148,7 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
             },
         )
 
-    if frame.intent == "quick_order_reservation":
+    if frame.intent in {"quick_order_reservation", "quick_order_reservation_continue"}:
         flow_state = resolve_purchase_order_flow(intent=frame.intent, known_slots=frame.known_slots)
         if flow_state is not None:
             return ToolPlan(
@@ -2158,7 +2158,7 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
                 forbidden_tools=flow_state.forbidden_tools,
                 required_slots=flow_state.required_slots,
                 metadata={
-                    "response_intent": "quick_order_reservation",
+                    "response_intent": frame.intent,
                     "action": action,
                     "flow_id": flow_state.flow_id,
                     "flow_step": flow_state.flow_step,
@@ -2180,7 +2180,7 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
             ),
             forbidden_tools=("store_hours_instead_of_slots", "order_summary_with_null_required_fields"),
             required_slots=action_required_slots,
-            metadata={"response_intent": "quick_order_reservation", "action": action},
+            metadata={"response_intent": frame.intent, "action": action},
         )
 
     if frame.intent == "quick_order_execute":

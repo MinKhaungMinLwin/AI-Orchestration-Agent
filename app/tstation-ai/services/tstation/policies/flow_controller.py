@@ -676,7 +676,7 @@ def resolve_purchase_order_flow(
     intent: str,
     known_slots: Mapping[str, Any] | None = None,
 ) -> FlowState | None:
-    if intent not in {"quick_order_reservation", "quick_order_execute"}:
+    if intent not in {"quick_order_reservation", "quick_order_reservation_continue", "quick_order_execute"}:
         return None
 
     slots = dict(known_slots or {})

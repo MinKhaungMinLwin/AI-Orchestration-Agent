@@ -401,6 +401,7 @@ def flow_progress_tool_candidate(
         else:
             intent_aligned = intent in {
                 "quick_order_reservation",
+                "quick_order_reservation_continue",
                 "store_schedule",
                 "selected_store_schedule",
             }
@@ -1255,6 +1256,7 @@ def purchase_context_vehicle_selection_patch(
     *,
     parent_context: Mapping[str, Any] | None,
     selected_vehicle_slots: Mapping[str, Any] | None,
+    current_slots: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return a purchase-flow delta when a recommendation vehicle pick resolves the missing size."""
 
@@ -1275,6 +1277,7 @@ def purchase_context_vehicle_selection_patch(
         return {}
 
     vehicle_slots = _non_empty_mapping(selected_vehicle_slots)
+    current = _non_empty_mapping(current_slots)
     tire_size = _normalize_vehicle_tire_size(vehicle_slots.get("tire_size"))
     tire_size_front = _normalize_vehicle_tire_size(vehicle_slots.get("tire_size_front"))
     tire_size_rear = _normalize_vehicle_tire_size(vehicle_slots.get("tire_size_rear"))
@@ -1288,9 +1291,21 @@ def purchase_context_vehicle_selection_patch(
         "pending_intent": "order",
         "goal_type": "place_order",
     }
-    for key in ("ord_qty", "shop_id", "shop_name", "region"):
-        if context.get(key) not in _EMPTY_VALUES:
-            patch[key] = context[key]
+    for key in (
+        "goods_no",
+        "product_name",
+        "pending_product_name",
+        "tire_model",
+        "ord_qty",
+        "shop_id",
+        "shop_name",
+        "region",
+    ):
+        value = current.get(key)
+        if value in _EMPTY_VALUES:
+            value = context.get(key)
+        if value not in _EMPTY_VALUES:
+            patch[key] = value
     return patch
 
 

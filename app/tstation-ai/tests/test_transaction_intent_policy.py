@@ -1,6 +1,7 @@
 from dataclasses import replace
 
 from services.tstation.policies.response_decision import TemplateName
+from services.tstation.policies.flow_state import purchase_context_vehicle_selection_patch
 from services.tstation.policies import transaction_intent_policy as policy
 from services.tstation.policies.transaction_intent_policy import (
     build_transaction_intent_frame,
@@ -102,6 +103,57 @@ def test_purchase_flow_with_store_and_no_quantity_resolves_to_ask_quantity() -> 
     assert plan.metadata["flow_step"] == "ask_quantity"
     assert plan.allowed_tools == ()
     assert plan.metadata["flow_slots"]["store_name"] == "한남점"
+
+
+def test_purchase_continuation_after_vehicle_selection_resolves_to_ask_quantity() -> None:
+    frame = replace(
+        build_transaction_intent_frame(
+            "61거1836",
+            known_slots={
+                "goods_no": "G000000312679",
+                "product_name": "Ventus S2 AS",
+                "pending_product_name": "Ventus S2 AS",
+                "tire_model": "Ventus S2 AS",
+                "tire_size": "225/45R17",
+                "car_no": "61거1836",
+                "car_lnc_cd": "W036269",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            },
+        ),
+        intent="quick_order_reservation_continue",
+    )
+    plan = plan_transaction_tools(frame)
+
+    assert plan.metadata["response_intent"] == "quick_order_reservation_continue"
+    assert plan.metadata["flow_id"] == "purchase_order"
+    assert plan.metadata["flow_step"] == "ask_quantity"
+    assert plan.required_slots == ("quantity",)
+    assert plan.allowed_tools == ()
+
+
+def test_purchase_vehicle_selection_patch_promotes_resolved_goods_no() -> None:
+    patch = purchase_context_vehicle_selection_patch(
+        parent_context={
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "pending_product_name": "Ventus S2 AS",
+        },
+        selected_vehicle_slots={
+            "car_no": "61거1836",
+            "tire_size": "225/45R17",
+        },
+        current_slots={
+            "goods_no": "G000000312679",
+            "product_name": "Ventus S2 AS",
+            "tire_model": "Ventus S2 AS",
+        },
+    )
+
+    assert patch["goods_no"] == "G000000312679"
+    assert patch["product_name"] == "Ventus S2 AS"
+    assert patch["tire_model"] == "Ventus S2 AS"
+    assert patch["tire_size"] == "225/45R17"
 
 
 def test_purchase_flow_with_region_resolves_to_show_store_candidates() -> None:
