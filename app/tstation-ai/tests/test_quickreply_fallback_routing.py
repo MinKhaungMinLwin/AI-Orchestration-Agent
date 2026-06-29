@@ -31775,7 +31775,7 @@ def test_direct_faq_policy_tool_payload_builds_transaction_policy_event() -> Non
     assert event["data"]["metadata"]["responseShapeKey"] == "general_cancel_fee_policy_summary"
 
 
-def test_direct_faq_policy_tool_payload_skips_standard_support_policy_event() -> None:
+def test_direct_faq_policy_tool_payload_builds_manufacture_date_policy_event() -> None:
     contract = build_turn_contract(
         user_text="DOT 기준으로 오래된 거 아냐?",
         intent_frame=IntentFrame(domain=PolicyDomain.SUPPORT, intent="tire_manufacture_date_policy"),
@@ -31799,7 +31799,28 @@ def test_direct_faq_policy_tool_payload_skips_standard_support_policy_event() ->
         },
     )
 
-    assert payload is None
+    assert payload is not None
+    tool_input, tool_result, event = payload
+    assert tool_input == {"query": "DOT 기준으로 오래된 거 아냐?", "top_k": 8}
+    assert tool_result["status"] == "success"
+    assert event["source_domain"] == "support"
+    assert event["data"]["metadata"]["responseShapeKey"] == "tire_manufacture_date_policy"
+    assert "제조일자" in str(event["data"]["assistantResponse"])
+
+
+def test_direct_faq_policy_intents_cover_faq_first_contract_intents() -> None:
+    faq_first_contract_intents = {
+        "tire_manufacture_date_policy",
+        "tire_quality_warranty_policy",
+        "assurance_service_policy",
+        "reservation_window_policy",
+        "reservation_policy_guidance",
+        "installation_work_policy",
+        "external_tire_install_policy",
+        "promotion_gift_policy",
+    }
+
+    assert faq_first_contract_intents <= _DIRECT_SUPPORT_FAQ_POLICY_INTENTS
 
 
 def test_direct_faq_policy_tool_payload_skips_signup_support_policy_event() -> None:

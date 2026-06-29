@@ -16151,6 +16151,14 @@ def _build_turn_contract_required_slot_guard_event(
 
 _FAQ_POLICY_FALLBACK_INTENTS = frozenset({
     "tire_condition_photo_policy",
+    "tire_manufacture_date_policy",
+    "tire_quality_warranty_policy",
+    "assurance_service_policy",
+    "reservation_window_policy",
+    "reservation_policy_guidance",
+    "installation_work_policy",
+    "external_tire_install_policy",
+    "promotion_gift_policy",
 })
 _DIRECT_SUPPORT_FAQ_POLICY_INTENTS = _FAQ_POLICY_FALLBACK_INTENTS
 _FAQ_POLICY_FALLBACK_SOURCE_TOOLS = frozenset({"get_faq_tool", "search_faq_rag_tool", "search_faq_hybrid_tool"})
