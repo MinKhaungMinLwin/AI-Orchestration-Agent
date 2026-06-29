@@ -1421,6 +1421,32 @@ def _store_specialty_no_match_quickreply(region: str, *, require_ev_specialty: b
     }
 
 
+def _store_search_no_match_quickreply(region: str) -> dict:
+    region_prefix = f"{region}에서 " if region else ""
+    assistant_response = f"{region_prefix}조건에 맞는 매장을 찾지 못했어요. 다른 지역이나 조건으로 다시 확인해드릴게요."
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "assistant_response_source": "code_mapper",
+        "data": {
+            "assistantResponse": assistant_response,
+            "quickReplies": [
+                _cta_chip(
+                    "다른 지역 입력",
+                    domain="TRANSACTION",
+                    action_id="enter_region",
+                    intent_key="store_search",
+                    metadata={"intentKey": "store_search"},
+                ),
+                {"label": "다른 조건으로 찾기", "domain": "TRANSACTION"},
+                {"label": "처음으로", "domain": "LEADING"},
+            ],
+            "predictedDomains": ["TRANSACTION"],
+            "metadata": {"ctaContext": {"intentKey": "store_search"}},
+        },
+    }
+
+
 def _has_tool_entry(tool_data_list: list[dict], *tool_names: str) -> bool:
     """Return whether a tool ran, including error-status results."""
     return any(e.get("tool", "") in tool_names for e in tool_data_list)
@@ -4617,6 +4643,23 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
                 require_ev_specialty=require_ev_specialty,
                 require_ev_charge=require_ev_charge,
             )
+        requested_region = ""
+        for entry in _find_entries(
+            tool_data_list,
+            "search_stores_tool",
+            "search_stores_complex_tool",
+            "get_store_list_tool",
+            "get_nearby_stores_tool",
+            "transaction_store_preview_tool",
+        ):
+            args = entry.get("args") if isinstance(entry.get("args"), dict) else entry.get("input")
+            if not isinstance(args, dict):
+                continue
+            requested_region = _get_str(args, "place_query") or _get_str(args, "region_code") or _get_str(args, "store_nm")
+            if requested_region:
+                break
+        if requested_region or has_booking_signal or is_list_browsing or has_booking_intent:
+            return _store_search_no_match_quickreply(requested_region)
         return None
     store_limit = _store_result_limit(tool_data_list)
     items, metadata = items[:store_limit], metadata[:store_limit]
@@ -6005,10 +6048,6 @@ def try_build_template(accumulated_tool_data: list[dict], assistant_text: str) -
     runflat_comparison = _map_runflat_price_comparison(accumulated_tool_data, assistant_text)
     if runflat_comparison is not None:
         return runflat_comparison
-
-    ev_suitability_comparison = _map_ev_suitability_comparison(accumulated_tool_data, assistant_text)
-    if ev_suitability_comparison is not None:
-        return ev_suitability_comparison
 
     vehicle_recommendation_no_results = _map_vehicle_recommendation_no_results(accumulated_tool_data, assistant_text)
     if vehicle_recommendation_no_results is not None:

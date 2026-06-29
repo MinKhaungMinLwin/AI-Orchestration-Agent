@@ -13,6 +13,7 @@ from services.tstation.policies.flow_controller import build_purchase_flow_fallb
 from services.tstation.policies.intent_frame import IntentFrame
 from services.tstation.policies.resolved_context import build_resolved_turn_context
 from services.tstation.policies.response_decision import ResponseDecision, ToolPlan
+from services.tstation.policies.support_response_policy import _is_tire_manufacture_date_question
 
 
 _HIGH_RISK_INTENTS = frozenset({
@@ -245,6 +246,13 @@ ROUTER_WINS_INFORMATIONAL_INTENTS = frozenset({
     "tstation_service_complaint",
     "support_faq",
     "policy_notice_or_escalation",
+    "owned_warranty_lookup",
+})
+ROUTER_WINS_EXECUTION_BOUNDARY_INTENTS = frozenset({
+    "stock_store_search",
+    "store_schedule",
+    "open_store_search",
+    "store_service_search",
 })
 _SUPPORT_FAQ_POLICY_TOOL_INTENTS = frozenset({
     "general_cancel_fee_policy",
@@ -254,6 +262,12 @@ _SUPPORT_FAQ_POLICY_TOOL_INTENTS = frozenset({
     "reservation_window_policy",
     "external_tire_install_policy",
     "tire_condition_photo_policy",
+})
+_OWNED_WARRANTY_LOOKUP_INTENTS = frozenset({
+    "owned_warranty_lookup",
+    "my_warranty_lookup",
+    "verify_safe_service_subscription",
+    "safe_service_subscription_lookup",
 })
 _SUPPORT_SAFE_AGENT_TOOLS = (
     "get_faq_tool",
@@ -313,6 +327,20 @@ _ROUTER_WINS_TRANSACTION_FORBIDDEN_TOOLS = frozenset({
     "get_multi_store_schedule_tool",
     "get_store_inventory_tool",
     "get_logistics_inventory_tool",
+    "get_final_price_tool",
+    "compare_discount_tool",
+    "get_orders_of_user_tool",
+    "get_order_status_tool",
+    "get_my_reservations_tool",
+    "get_my_coupons_tool",
+    "get_available_coupons_tool",
+    "get_coupon_applicable_products_tool",
+    "issue_coupon_tool",
+})
+_ROUTER_WINS_ORDER_EXECUTION_FORBIDDEN_TOOLS = frozenset({
+    "quick_order_tool",
+    "save_to_cart_tool",
+    "add_to_cart_tool",
     "get_final_price_tool",
     "compare_discount_tool",
     "get_orders_of_user_tool",
@@ -462,7 +490,15 @@ def build_turn_contract(
     policy_intent = str(getattr(routing_result, "policy_intent", "") or "")
     if planner_intent == "payment_error_troubleshooting" and _is_payment_error_policy_overmatch(user_text):
         planner_intent = None
-    router_wins_intent = _router_wins_information_intent(
+    if _should_normalize_dot_manufacture_date_policy(
+        user_text=user_text,
+        policy_intent=policy_intent,
+        planner_intent=planner_intent,
+    ):
+        policy_intent = "tire_manufacture_date_policy"
+        if planner_intent == "tire_quality_warranty_policy":
+            planner_intent = "tire_manufacture_date_policy"
+    router_wins_intent = _router_wins_current_turn_intent(
         user_text=user_text,
         planner_intent=planner_intent,
         policy_intent=policy_intent,
@@ -477,6 +513,17 @@ def build_turn_contract(
         router_wins_intent = "assurance_service_policy"
     code_domain = _domain_value(intent_frame.domain) if intent_frame is not None else _domain_from_routing(routing_result)
     code_intent = intent_frame.intent if intent_frame is not None else _intent_from_cross_domain(cross_domain_plan)
+    if _should_normalize_dot_manufacture_date_policy(
+        user_text=user_text,
+        policy_intent=policy_intent,
+        planner_intent=planner_intent,
+        code_intent=code_intent,
+    ):
+        policy_intent = "tire_manufacture_date_policy"
+        if planner_intent == "tire_quality_warranty_policy":
+            planner_intent = "tire_manufacture_date_policy"
+        if code_intent == "tire_quality_warranty_policy":
+            code_intent = "tire_manufacture_date_policy"
     domain = planner_domains[0] if planner_domains else code_domain
     intent = planner_intent or code_intent
     if router_wins_intent:
@@ -551,6 +598,19 @@ def build_turn_contract(
             known_slots["stock_check_mode"] = stock_check_mode
     if policy_intent and policy_intent != "none":
         known_slots["policy_intent"] = policy_intent
+    routing_pending_check_topic = str(getattr(routing_result, "pending_check_topic", "") or "").strip()
+    if routing_pending_check_topic and routing_pending_check_topic != "none" and not known_slots.get("pending_check_topic"):
+        known_slots["pending_check_topic"] = routing_pending_check_topic
+    routing_pending_check_object_type = str(getattr(routing_result, "pending_check_object_type", "") or "").strip()
+    if (
+        routing_pending_check_object_type
+        and routing_pending_check_object_type != "none"
+        and not known_slots.get("pending_check_object_type")
+    ):
+        known_slots["pending_check_object_type"] = routing_pending_check_object_type
+    routing_pending_check_object_value = str(getattr(routing_result, "pending_check_object_value", "") or "").strip()
+    if routing_pending_check_object_value and not known_slots.get("pending_check_object_value"):
+        known_slots["pending_check_object_value"] = routing_pending_check_object_value
     response_metadata = response_decision.metadata if response_decision is not None else {}
     if isinstance(response_metadata, Mapping):
         requested_product_attribute = str(response_metadata.get("requested_product_attribute") or "")
@@ -1181,6 +1241,59 @@ def should_guard_required_slots(contract: TurnContract | None) -> bool:
     return str(contract.intent or "") in _HARD_REQUIRED_SLOT_GUARD_INTENTS
 
 
+def align_tool_plan_to_turn_contract(tool_plan: ToolPlan | None, contract: TurnContract | None) -> ToolPlan | None:
+    """Keep router-wins execution ContextVar plans inside the final contract boundary."""
+
+    if tool_plan is None or contract is None or not contract.router_wins_applied:
+        return tool_plan
+    if not _should_align_router_wins_tool_plan(contract):
+        return tool_plan
+    allowed_tools = tuple(contract.allowed_tools or ())
+    forbidden_tools = tuple(contract.forbidden_tools or ())
+    preferred_tool = str(tool_plan.preferred_tool or "")
+    preferred_allowed = bool(
+        preferred_tool
+        and (not allowed_tools or preferred_tool in allowed_tools)
+        and preferred_tool not in forbidden_tools
+    )
+    aligned_preferred_tool = preferred_tool if preferred_allowed else _router_wins_default_preferred_tool(contract)
+    metadata = {
+        **dict(tool_plan.metadata or {}),
+        "tool_plan_aligned_to_turn_contract": True,
+        "turn_contract_intent": contract.intent,
+        "router_wins_applied": True,
+    }
+    return ToolPlan(
+        allowed_tools=allowed_tools,
+        preferred_tool=aligned_preferred_tool,
+        tool_args_patch=dict(tool_plan.tool_args_patch or {}),
+        forbidden_tools=forbidden_tools,
+        required_slots=tuple(contract.required_slots or ()),
+        metadata=metadata,
+    )
+
+
+def _should_align_router_wins_tool_plan(contract: TurnContract) -> bool:
+    intent = str(contract.intent or "")
+    return intent in ROUTER_WINS_EXECUTION_BOUNDARY_INTENTS or intent in _SUPPORT_FAQ_POLICY_TOOL_INTENTS
+
+
+def _router_wins_default_preferred_tool(contract: TurnContract) -> str | None:
+    intent = str(contract.intent or "")
+    preferred_by_intent = {
+        "stock_store_search": "transaction_store_preview_tool",
+        "store_schedule": "get_store_schedule_tool",
+        "open_store_search": "search_stores_complex_tool",
+        "store_service_search": "search_stores_tool",
+    }
+    preferred = preferred_by_intent.get(intent)
+    if preferred and preferred in contract.allowed_tools and preferred not in contract.forbidden_tools:
+        return preferred
+    if intent in _SUPPORT_FAQ_POLICY_TOOL_INTENTS and "search_faq_hybrid_tool" in contract.allowed_tools:
+        return "search_faq_hybrid_tool"
+    return next((tool for tool in contract.allowed_tools if tool not in contract.forbidden_tools), None)
+
+
 def _support_answer_contract_owns_response(*, domain: str, intent: str, action_mode: str) -> bool:
     if str(domain or "") != "support":
         return False
@@ -1188,7 +1301,13 @@ def _support_answer_contract_owns_response(*, domain: str, intent: str, action_m
     normalized_mode = str(action_mode or "").strip()
     if normalized_mode in _SUPPORT_ANSWER_ACTION_MODES:
         return True
-    if normalized_intent in {"human_escalation", "legal_action_guidance_denied", "support_faq", "tstation_service_complaint"}:
+    if normalized_intent in {
+        "human_escalation",
+        "legal_action_guidance_denied",
+        "support_faq",
+        "tstation_service_complaint",
+        "owned_warranty_lookup",
+    }:
         return True
     if normalized_intent.endswith("_policy") or normalized_intent.endswith("_guidance"):
         return True
@@ -1216,8 +1335,8 @@ def _support_guard_message_and_chips(
         )
     if intent == "tstation_service_complaint" or response_shape_key == "support_complaint_guidance":
         return (
-            "이용 중 불편을 겪으셨다면 죄송합니다. 예약 시간에 맞춰 방문하셨더라도 앞 작업 지연, 현장 접수/장착 상황, "
-            "매장 혼잡도에 따라 대기 시간이 발생할 수 있어요. 원하시면 1:1 문의로 접수하실 수 있도록 도와드릴게요.",
+            "이용 중 불편을 겪으셨다면 죄송합니다. 정확한 확인을 위해 1:1 문의로 상세 내용을 남겨 주시면 "
+            "확인후 빠르게 도와드릴게요.",
             quick_replies,
         )
     return (
@@ -3974,6 +4093,8 @@ def _router_wins_information_intent(
     for candidate in candidates:
         if not candidate or candidate == "none" or candidate in _ROUTER_WINS_EXECUTION_EXCLUDED_INTENTS:
             continue
+        if candidate in _OWNED_WARRANTY_LOOKUP_INTENTS:
+            return "owned_warranty_lookup"
         if candidate == "payment_error_troubleshooting" and _is_payment_error_policy_overmatch(user_text):
             continue
         if candidate in ROUTER_WINS_INFORMATIONAL_INTENTS:
@@ -3984,6 +4105,54 @@ def _router_wins_information_intent(
     if complaint_scope == "tstation_service_complaint":
         return "tstation_service_complaint"
     return None
+
+
+def _router_wins_current_turn_intent(
+    *,
+    user_text: str = "",
+    planner_intent: str | None,
+    policy_intent: str,
+    routing_result: Any | None,
+    intent_frame: IntentFrame | None = None,
+    response_decision: ResponseDecision | None = None,
+    action_mode: str = "",
+) -> str | None:
+    informational_intent = _router_wins_information_intent(
+        user_text=user_text,
+        planner_intent=planner_intent,
+        policy_intent=policy_intent,
+        routing_result=routing_result,
+        intent_frame=intent_frame,
+        response_decision=response_decision,
+        action_mode=action_mode,
+    )
+    if informational_intent:
+        return informational_intent
+    candidates = (
+        str(policy_intent or "").strip(),
+        str(planner_intent or "").strip(),
+    )
+    for candidate in candidates:
+        if candidate in ROUTER_WINS_EXECUTION_BOUNDARY_INTENTS:
+            return candidate
+    return None
+
+
+def _should_normalize_dot_manufacture_date_policy(
+    *,
+    user_text: str,
+    policy_intent: str | None = None,
+    planner_intent: str | None = None,
+    code_intent: str | None = None,
+) -> bool:
+    candidates = {
+        str(policy_intent or "").strip(),
+        str(planner_intent or "").strip(),
+        str(code_intent or "").strip(),
+    }
+    if "tire_quality_warranty_policy" not in candidates:
+        return False
+    return _is_tire_manufacture_date_question(user_text)
 
 
 def _is_payment_error_policy_overmatch(user_text: str | None) -> bool:
@@ -4040,10 +4209,88 @@ def _router_wins_domain(intent: str, planner_domains: tuple[str, ...]) -> str:
         return "discovery"
     if intent in ROUTER_WINS_INFORMATIONAL_INTENTS or intent.endswith("_policy") or intent.endswith("_guidance"):
         return "support"
+    if intent in _OWNED_WARRANTY_LOOKUP_INTENTS:
+        return "support"
+    if intent in ROUTER_WINS_EXECUTION_BOUNDARY_INTENTS:
+        return "transaction"
     return planner_domains[0] if planner_domains else "support"
 
 
 def _router_wins_tool_boundary(intent: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    if intent == "stock_store_search":
+        allowed_tools = (
+            "transaction_store_preview_tool",
+            "search_stores_tool",
+            "search_stores_complex_tool",
+            "get_store_list_tool",
+            "get_nearby_stores_tool",
+        )
+        return (
+            allowed_tools,
+            tuple(
+                tool
+                for tool in _ROUTER_WINS_ORDER_EXECUTION_FORBIDDEN_TOOLS
+                | {
+                    "get_store_schedule_tool",
+                    "get_multi_store_schedule_tool",
+                }
+                if tool not in allowed_tools
+            ),
+        )
+    if intent == "store_schedule":
+        return (
+            ("get_store_schedule_tool",),
+            tuple(
+                tool
+                for tool in _ROUTER_WINS_ORDER_EXECUTION_FORBIDDEN_TOOLS
+                | _STORE_SERVICE_SEARCH_TOOLS
+                | {
+                    "transaction_store_preview_tool",
+                    "get_store_inventory_tool",
+                    "get_logistics_inventory_tool",
+                    "get_multi_store_schedule_tool",
+                }
+                if tool != "get_store_schedule_tool"
+            ),
+        )
+    if intent == "store_service_search":
+        allowed_tools = tuple(_STORE_SERVICE_SEARCH_TOOLS)
+        return (
+            allowed_tools,
+            tuple(
+                tool
+                for tool in _ROUTER_WINS_ORDER_EXECUTION_FORBIDDEN_TOOLS
+                | {
+                    "transaction_store_preview_tool",
+                    "get_store_schedule_tool",
+                    "get_multi_store_schedule_tool",
+                    "get_store_inventory_tool",
+                    "get_logistics_inventory_tool",
+                }
+                if tool not in allowed_tools
+            ),
+        )
+    if intent == "open_store_search":
+        allowed_tools = (
+            "search_stores_tool",
+            "search_stores_complex_tool",
+            "get_store_list_tool",
+            "get_nearby_stores_tool",
+            "get_store_schedule_tool",
+        )
+        return (
+            allowed_tools,
+            tuple(
+                tool
+                for tool in _ROUTER_WINS_ORDER_EXECUTION_FORBIDDEN_TOOLS
+                | {
+                    "transaction_store_preview_tool",
+                    "get_store_inventory_tool",
+                    "get_logistics_inventory_tool",
+                }
+                if tool not in allowed_tools
+            ),
+        )
     if intent == "product_size_list_lookup":
         return (
             ("search_product_tool",),
@@ -4081,9 +4328,24 @@ def _router_wins_tool_boundary(intent: str) -> tuple[tuple[str, ...], tuple[str,
                 if tool not in {"search_faq_hybrid_tool", "transfer_to_qna_tool"}
             ),
         )
+    if intent in _OWNED_WARRANTY_LOOKUP_INTENTS:
+        return (
+            ("get_my_warranties_tool",),
+            tuple(
+                tool
+                for tool in _ROUTER_WINS_TRANSACTION_FORBIDDEN_TOOLS
+                | {"search_faq_hybrid_tool", "transfer_to_qna_tool"}
+                if tool != "get_my_warranties_tool"
+            ),
+        )
+    if intent in _SUPPORT_FAQ_POLICY_TOOL_INTENTS:
+        return (
+            _SUPPORT_SAFE_AGENT_TOOLS,
+            tuple(tool for tool in _ROUTER_WINS_TRANSACTION_FORBIDDEN_TOOLS if tool not in _SUPPORT_SAFE_AGENT_TOOLS),
+        )
     return (
-        _SUPPORT_SAFE_AGENT_TOOLS,
-        tuple(tool for tool in _ROUTER_WINS_TRANSACTION_FORBIDDEN_TOOLS if tool not in _SUPPORT_SAFE_AGENT_TOOLS),
+        ("search_faq_hybrid_tool",),
+        tuple(tool for tool in _ROUTER_WINS_TRANSACTION_FORBIDDEN_TOOLS if tool != "search_faq_hybrid_tool"),
     )
 
 
@@ -4094,6 +4356,7 @@ def _router_wins_response_shape_key(intent: str) -> str:
         "product_comparison": "metric_comparison_summary",
         "product_size_list_lookup": "product_size_list_lookup",
         "tstation_service_complaint": "support_complaint_guidance",
+        "owned_warranty_lookup": "owned_warranty_lookup",
     }.get(intent, intent)
 
 
@@ -4106,7 +4369,47 @@ def _response_shape_key(response_decision_payload: Mapping[str, Any] | None) -> 
 
 def _router_wins_response_decision(intent: str) -> dict[str, Any]:
     response_shape_key = _router_wins_response_shape_key(intent)
-    if intent in {"product_detail_lookup", "product_description"}:
+    response_shape = "summary"
+    template = "quickReply"
+    forbidden_behaviors = [
+        "resume_stale_transaction_flow",
+        "start_owned_record_lookup",
+        "normalize_as_purchase_or_schedule",
+    ]
+    if intent == "stock_store_search":
+        response_shape = "location"
+        template = "location"
+        guidance = "현재 턴의 재고/장착 가능 매장 검색만 수행한다. 주문 확정, 장바구니, 예약 실행으로 조기 전환하지 않는다."
+        forbidden_behaviors = [
+            "resume_stale_transaction_flow",
+            "start_quick_order_execution",
+            "emit_preorder_without_user_confirmation",
+            "emit_order_complete_without_quick_order_tool",
+            "emit_datepick_before_store_selection",
+        ]
+    elif intent == "store_schedule":
+        response_shape = "date_pick"
+        template = "datepick"
+        guidance = "현재 턴의 매장 예약 가능 시간 조회만 수행한다. 주문 확정이나 매장 목록 반복으로 전환하지 않는다."
+        forbidden_behaviors = [
+            "resume_stale_transaction_flow",
+            "start_quick_order_execution",
+            "loop_store_preview_instead_of_schedule",
+            "emit_preorder_without_user_confirmation",
+            "emit_order_complete_without_quick_order_tool",
+        ]
+    elif intent in {"open_store_search", "store_service_search"}:
+        response_shape = "location"
+        template = "location"
+        guidance = "현재 턴의 매장 검색 intent 기준으로 매장을 조회한다. 주문/가격/쿠폰/예약 실행 flow로 전환하지 않는다."
+        forbidden_behaviors = [
+            "resume_stale_transaction_flow",
+            "start_quick_order_execution",
+            "start_price_or_coupon_execution",
+            "emit_preorder_without_user_confirmation",
+            "emit_order_complete_without_quick_order_tool",
+        ]
+    elif intent in {"product_detail_lookup", "product_description"}:
         guidance = "현재 턴의 상품 설명 의도에 맞춰 상품 정보/특징을 요약한다. 추천/구매/매장 흐름으로 전환하지 않는다."
     elif intent == "product_comparison":
         guidance = "현재 턴의 비교 대상 상품만 구분해 비교한다. 같은 goods_no 두 번 비교하거나 이전 추천 정책으로 응답하지 않는다."
@@ -4114,17 +4417,23 @@ def _router_wins_response_decision(intent: str) -> dict[str, Any]:
         guidance = "현재 턴의 사이즈 목록 조회 의도에 맞춰 search_product_tool 결과의 규격 목록을 안내한다."
     elif intent == "tstation_service_complaint":
         guidance = "T-Station 범위의 불편 사항으로 응답하고, 이전 구매/예약/매장 문맥이 실행 flow를 재개하지 않게 한다."
+    elif intent in _OWNED_WARRANTY_LOOKUP_INTENTS:
+        guidance = (
+            "사용자가 본인 안심서비스/워런티 가입 여부 확인을 요청한 턴은 get_my_warranties_tool로 보유 워런티를 조회한다. "
+            "이전 불만/정책 문맥만으로 FAQ 안내나 1:1 문의로 전환하지 않는다."
+        )
+        forbidden_behaviors = [
+            "answer_without_owned_warranty_lookup",
+            "normalize_as_service_complaint",
+            "transfer_to_qna_direct_first",
+        ]
     else:
         guidance = "현재 턴의 FAQ/정책 intent 기준으로 안내하고 개인 조회, 구매, 예약 실행 flow로 전환하지 않는다."
     return {
-        "response_shape": "summary",
-        "template": "quickReply",
+        "response_shape": response_shape,
+        "template": template,
         "required_slots": [],
-        "forbidden_behaviors": [
-            "resume_stale_transaction_flow",
-            "start_owned_record_lookup",
-            "normalize_as_purchase_or_schedule",
-        ],
+        "forbidden_behaviors": forbidden_behaviors,
         "assistant_guidance": guidance,
         "metadata": {"response_shape_key": response_shape_key},
     }
@@ -4335,6 +4644,9 @@ def _normalize_plan_intent(value: str) -> str:
         "best_seller": "best_seller_search",
         "sales_rank": "best_seller_search",
         "query_order_data_for_vehicle_with_period": "best_seller_search",
+        "verify_safe_service_subscription": "owned_warranty_lookup",
+        "safe_service_subscription_lookup": "owned_warranty_lookup",
+        "my_warranty_lookup": "owned_warranty_lookup",
         "best_seller_search_by_vehicle": "best_seller_search",
         "vehicle_best_seller_search": "best_seller_search",
         "order_data_for_vehicle": "best_seller_search",

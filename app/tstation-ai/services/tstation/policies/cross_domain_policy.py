@@ -18,6 +18,7 @@ from services.tstation.policies.store_service_gate import (
     extract_valid_store_name,
     has_store_service_availability_signal,
 )
+from services.tstation.policies.support_response_policy import _is_tire_manufacture_date_question
 
 
 _PRODUCT_HINT_RE = re.compile(
@@ -299,6 +300,19 @@ def plan_cross_domain_turn(user_text: str, *, known_slots: dict[str, Any] | None
                     domain=PolicyDomain.SUPPORT,
                     intent="price_policy_faq",
                     reason="지역/매장별 가격 동일 여부는 실제 가격 조회가 아닌 가격 정책 FAQ임",
+                ),
+            ),
+            response_strategy="single_domain_response",
+        )
+
+    if _is_tire_manufacture_date_question(text, include_candidate_terms=True):
+        return CrossDomainPlan(
+            primary_domain=PolicyDomain.SUPPORT,
+            subtasks=(
+                DomainSubtask(
+                    domain=PolicyDomain.SUPPORT,
+                    intent="tire_manufacture_date_policy",
+                    reason="DOT/제조일자/신품 여부 질문은 교환 표현이 있어도 제조일자 정책 안내가 우선임",
                 ),
             ),
             response_strategy="single_domain_response",

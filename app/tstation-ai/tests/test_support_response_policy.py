@@ -144,6 +144,24 @@ def test_reservation_policy_guidance_text_trigger_without_owned_anchor() -> None
     assert "start_owned_reservation_lookup_without_anchor" in decision.forbidden_behaviors
 
 
+def test_reservation_policy_guidance_with_delivery_delay_anchor_uses_schedule_policy() -> None:
+    decision = decide_support_response(
+        intent="reservation_policy_guidance",
+        user_text="배송 지연 문자를 받았는데 예약일 전에 상품이 장착점에 안 오면 어떻게 돼?",
+    )
+    resolution = resolve_support_faq_policy_context(
+        "reservation_policy_guidance",
+        "배송 지연 문자를 받았는데 예약일 전에 상품이 장착점에 안 오면 어떻게 돼?",
+    )
+
+    assert decision.template == TemplateName.QUICK_REPLY
+    assert decision.metadata["response_shape_key"] == "delivery_delay_reservation_schedule_policy"
+    assert resolution == {
+        "policy_group": "reservation_installation_policy",
+        "fact_type": "delivery_delay_reservation_schedule",
+    }
+
+
 def test_reservation_window_policy_text_trigger_blocks_schedule_lookup() -> None:
     decision = decide_support_response(
         intent="support_faq",

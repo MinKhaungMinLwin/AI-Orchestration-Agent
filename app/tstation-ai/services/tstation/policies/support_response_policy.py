@@ -23,6 +23,7 @@ _SUPPORT_FAQ_POLICY_GROUP_INTENTS = frozenset({
     "general_cancel_fee_policy",
     "general_card_cancel_timing_policy",
     "reservation_window_policy",
+    "delivery_delay_reservation_schedule_policy",
     "payment_error_troubleshooting",
     "tire_manufacture_date_policy",
     "tire_quality_warranty_policy",
@@ -87,6 +88,15 @@ _POST_INSTALL_CONCERN_RE = re.compile(
     r"(?:교체|설치|장착|교체하고나서).{0,12}(?:소음|우는\s*소리|진동|이상한\s*소리)|"
     r"타이어\s*(?:소음|우|진동|이상|문제)|"
     r"(?:새\s*|새로운\s*)?타이어.{0,12}(?:소음|우|진동|이상)",
+    re.IGNORECASE,
+)
+_TIRE_MANUFACTURE_DATE_ANCHOR_RE = re.compile(
+    r"DOT|제조\s*일자|제조일자|제조\s*주차|생산\s*주차|신품|최신\s*제조|언제\s*만든|오래된\s*거\s*아냐|"
+    r"타이어마다.{0,12}(?:DOT|제조|생산)|(?:DOT|제조|생산).{0,12}(?:다르|차이)",
+    re.IGNORECASE,
+)
+_TIRE_QUALITY_DAMAGE_ANCHOR_RE = re.compile(
+    r"측면|사이드월|부풀|품질\s*보증|품질보증|제조상\s*과실|보증\s*기준|잔여\s*홈",
     re.IGNORECASE,
 )
 _SUPPORT_FACT_TYPE_TO_BUCKET: dict[tuple[str, str], str] = {
@@ -282,7 +292,7 @@ def _support_faq_candidate_topic(
 
 
 def _support_faq_question_anchor_allowed(intent: str, text: str) -> bool:
-    return bool(re.search(r"카드|환불|승인취소|승인\s*취소|반영|영업일|언제", text, re.IGNORECASE))
+    return bool(re.search(r"카드|환불|승인취소|승인\s*취소|반영|영업일", text, re.IGNORECASE))
 
 
 def _support_faq_split_sentences(text: str) -> list[str]:
@@ -864,6 +874,8 @@ def resolve_support_faq_policy_context(intent: str, user_text: str) -> dict[str,
     text = str(user_text or "")
     if normalized_intent in {"signup_first_purchase_benefit_policy", "signup_coupon_guidance"} and _ASSURANCE_SERVICE_POLICY_ANCHOR_RE.search(text):
         normalized_intent = "assurance_service_policy"
+    if normalized_intent == "tire_quality_warranty_policy" and _is_tire_manufacture_date_question(text):
+        normalized_intent = "tire_manufacture_date_policy"
     if normalized_intent not in _SUPPORT_FAQ_POLICY_GROUP_INTENTS and not _POST_INSTALL_CONCERN_RE.search(text) and not _WRONG_ITEM_RE.search(text):
         return None
 
@@ -877,6 +889,10 @@ def resolve_support_faq_policy_context(intent: str, user_text: str) -> dict[str,
         return {"policy_group": _PAYMENT_REFUND_POLICY, "fact_type": "card_cancel_timing"}
     if normalized_intent == "reservation_window_policy":
         return {"policy_group": _RESERVATION_INSTALLATION_POLICY, "fact_type": "reservation_window"}
+    if normalized_intent in {"delivery_delay_reservation_schedule_policy", "reservation_policy_guidance"} and (
+        _is_delivery_delay_reservation_schedule_question(text)
+    ):
+        return {"policy_group": _RESERVATION_INSTALLATION_POLICY, "fact_type": "delivery_delay_reservation_schedule"}
     if normalized_intent == "external_tire_install_policy":
         return {"policy_group": _RESERVATION_INSTALLATION_POLICY, "fact_type": "external_tire_install"}
     if normalized_intent == "payment_error_troubleshooting" and not _is_payment_error_troubleshooting_query(text):
@@ -968,6 +984,15 @@ def resolve_support_faq_policy_context(intent: str, user_text: str) -> dict[str,
     return None
 
 
+def _is_tire_manufacture_date_question(text: str, *, include_candidate_terms: bool = False) -> bool:
+    value = str(text or "")
+    if _TIRE_QUALITY_DAMAGE_ANCHOR_RE.search(value):
+        return False
+    if _TIRE_MANUFACTURE_DATE_ANCHOR_RE.search(value):
+        return True
+    return bool(include_candidate_terms and _TIRE_MANUFACTURE_DATE_POLICY_RE.search(value))
+
+
 def _support_faq_candidate_matches_fact_type(fact_type: str, candidate: Mapping[str, Any]) -> bool:
     text = _support_faq_candidate_text(candidate)
     if fact_type == "visit_reservation_cancel":
@@ -987,6 +1012,8 @@ def _support_faq_candidate_matches_fact_type(fact_type: str, candidate: Mapping[
             re.search(r"30일|1개월|한\s*달|두\s*달|2\s*달|최대|예약\s*가능\s*기간|사전\s*구매", text, re.IGNORECASE)
             and _RESERVATION_RE.search(text)
         )
+    if fact_type == "delivery_delay_reservation_schedule":
+        return _is_delivery_delay_reservation_schedule_question(text)
     if fact_type == "external_tire_install":
         return bool(
             _EXTERNAL_TIRE_INSTALL_POLICY_RE.search(text)
@@ -1016,7 +1043,7 @@ def _support_faq_candidate_matches_fact_type(fact_type: str, candidate: Mapping[
     if fact_type == "promotion_gift_policy_general":
         return bool(re.search(r"사은품|이벤트|프로모션|선착순", text, re.IGNORECASE))
     if fact_type == "manufacture_date":
-        return bool(_TIRE_MANUFACTURE_DATE_POLICY_RE.search(text))
+        return _is_tire_manufacture_date_question(text, include_candidate_terms=True)
     if fact_type == "photo_condition_check":
         return bool(_TIRE_CONDITION_PHOTO_POLICY_RE.search(text) or re.search(r"사진|마모|손상|더\s*타", text, re.IGNORECASE))
     if fact_type == "wrong_item_or_fitment_issue":
@@ -1177,6 +1204,8 @@ def _support_faq_reply_ctas(policy_group: str, fact_type: str) -> list[dict[str,
             {"label": "마모도 측정 서비스", "url": CTAUrls.TIRE_CHECK, "domain": "TRANSACTION"},
             {"label": "1:1 문의하기", "domain": "SUPPORT"},
         ]
+    if policy_group == _PRODUCT_CONDITION_POLICY and fact_type == "manufacture_date":
+        return [{"label": "1:1 문의하기", "domain": "SUPPORT"}]
     if policy_group == _PURCHASE_ORDER_POLICY:
         return [
             {"label": "주문내역 확인", "domain": "TRANSACTION"},
@@ -1201,6 +1230,12 @@ def _support_faq_reply_ctas(policy_group: str, fact_type: str) -> list[dict[str,
         return [
             {"label": "가까운 매장 찾기", "domain": "TRANSACTION"},
             {"label": "1:1 문의하기", "domain": "SUPPORT"},
+        ]
+    if policy_group == _RESERVATION_INSTALLATION_POLICY and fact_type == "delivery_delay_reservation_schedule":
+        return [
+            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+            {"label": "예약 확인하기", "domain": "TRANSACTION"},
+            {"label": "처음으로", "domain": "LEADING"},
         ]
     if policy_group == _RESERVATION_INSTALLATION_POLICY:
         return [
@@ -1307,6 +1342,12 @@ def _build_support_faq_policy_reply(
             "두 달 뒤처럼 범위를 넘는 예약은 지원되지 않거나 진행이 어려울 수 있어요.\n"
             "실제 일정 확인은 이 범위 안에서만 추가로 진행해 주세요."
         )
+    elif policy_group == _RESERVATION_INSTALLATION_POLICY and fact_type == "delivery_delay_reservation_schedule":
+        response = (
+            "배송 지연 문자를 받았다면 상품 입고나 배송 상태에 따라 장착 예약일 조정이 필요할 수 있어요.\n"
+            "예약일 전에 상품이 장착점에 도착하지 않으면 장착이 어려울 수 있으니, 문자에 안내된 지연 일정이나 주문/예약 상태를 확인해 주세요.\n"
+            "이미 장착 예약일이 가까우면 예약 매장 또는 고객센터/1:1 문의로 일정 변경 가능 여부를 확인하는 것이 안전해요."
+        )
     elif policy_group == _RESERVATION_INSTALLATION_POLICY and fact_type == "store_change":
         allowed_text = "방문 지점 변경 가능 여부는 예약 정책과 현재 예약 상태에 따라 달라질 수 있어요."
         if facts.get("store_change_allowed") == "allowed":
@@ -1325,7 +1366,7 @@ def _build_support_faq_policy_reply(
     elif policy_group == _RESERVATION_INSTALLATION_POLICY and fact_type == "external_tire_install":
         if safe_fallback_used:
             response = (
-                "외부 구매 타이어를 매장에 반입해 장착하는 건은 FAQ만으로 일괄 가능하다고 단정하기 어려워요.\n"
+                "외부 구매 타이어를 매장에 반입해 장착하는 건은 확인된 안내만으로 일괄 가능하다고 단정하기 어려워요.\n"
                 "구매 경로와 매장 운영 기준에 따라 장착 가능 여부나 비용 기준이 달라질 수 있어요.\n"
                 "방문 전에는 해당 매장 운영 기준이나 고객센터 안내를 먼저 확인해 주세요."
             )
@@ -1392,12 +1433,20 @@ def _build_support_faq_policy_reply(
             "실제 적용 전에는 이벤트 상세 조건을 먼저 확인해 주세요."
         )
     elif policy_group == _PRODUCT_CONDITION_POLICY and fact_type == "manufacture_date":
-        freshness_text = facts.get("freshness_window") or "6~12개월 이내"
-        response = (
-            f"제조일자 {freshness_text} 제품은 정상 신품 범주로 안내되는 경우가 있어요.\n"
-            "다만 제조일자만으로 불량이나 교환·환불 가능 여부를 바로 단정할 수는 없어요.\n"
-            "실제 판단 전에는 제품 상태와 구매 이력도 함께 확인해 주세요."
-        )
+        if safe_fallback_used:
+            response = (
+                "정확히 일치하는 제조일자 항목은 찾지 못했지만, 타이어마다 DOT가 다를 수는 있어요.\n"
+                "DOT는 생산 주차와 생산 연도를 나타내며, 같은 장착 건에서도 물류 출고 상황에 따라 생산 주차가 서로 다를 수 있습니다.\n"
+                "다만 DOT가 다르다는 이유만으로 바로 교환 대상이라고 단정하기는 어려워요.\n"
+                "현장 매장 직원에게 제품 상태와 DOT 차이를 확인 요청해 주세요. 정확한 처리 기준 확인이 필요하면 1:1 문의로 접수해 드릴게요."
+            )
+        else:
+            freshness_text = facts.get("freshness_window") or "6~12개월 이내"
+            response = (
+                f"제조일자 {freshness_text} 제품은 정상 신품 범주로 안내되는 경우가 있어요.\n"
+                "다만 제조일자만으로 불량이나 교환·환불 가능 여부를 바로 단정할 수는 없어요.\n"
+                "실제 판단 전에는 제품 상태와 구매 이력도 함께 확인해 주세요."
+            )
     else:
         response = (
             "현재 챗봇에서는 사진이나 파일을 업로드해 확인받을 수 없어요.\n"
@@ -1814,6 +1863,21 @@ _DELIVERY_DELAY_RESERVATION_SCHEDULE_POLICY_RE = re.compile(
     r"자동\s*(?:변경|바뀌|밀리).{0,20}예약|예약\s*(?:일정|시간)?.{0,12}(?:변경되|바뀌|밀리)))",
     re.IGNORECASE,
 )
+_DELIVERY_DELAY_ANCHOR_RE = re.compile(
+    r"배송\s*지연|상품\s*미도착|미도착|입고\s*지연|배송\s*늦|도착하지\s*않|도착\s*전",
+    re.IGNORECASE,
+)
+_RESERVATION_SCHEDULE_IMPACT_RE = re.compile(
+    r"예약(?:일|일정|시간)?|장착\s*예약|장착(?:일|점|매장)|일정\s*(?:변경|조정)|예약일|문자",
+    re.IGNORECASE,
+)
+
+
+def _is_delivery_delay_reservation_schedule_question(text: str) -> bool:
+    return bool(
+        _DELIVERY_DELAY_RESERVATION_SCHEDULE_POLICY_RE.search(text)
+        or (_DELIVERY_DELAY_ANCHOR_RE.search(text) and _RESERVATION_SCHEDULE_IMPACT_RE.search(text))
+    )
 _INSTALLATION_WORK_POLICY_RE = re.compile(
     r"작업\s*중\s*취소|장착비|폐타이어|얼라인먼트.{0,16}(현장\s*결제|추가|따로)|"
     r"추가\s*작업|공임(?:비)?.{0,12}(?:취소|작업\s*시작|탈거|분리|이미\s*장착|장착\s*중)",
@@ -1991,7 +2055,10 @@ def decide_support_response(
             assistant_guidance="챗봇 처리 한계를 인정하고 1:1 문의 또는 공식 고객센터 번호 안내로 연결한다.",
         )
 
-    if intent == "tire_manufacture_date_policy" or _TIRE_MANUFACTURE_DATE_POLICY_RE.search(text):
+    if intent == "tire_manufacture_date_policy" or _is_tire_manufacture_date_question(
+        text,
+        include_candidate_terms=True,
+    ):
         return _decision(
             response_shape_key="tire_manufacture_date_policy",
             response_shape=ResponseShape.SUMMARY,
@@ -2008,7 +2075,7 @@ def decide_support_response(
             ),
         )
 
-    if intent == "delivery_delay_reservation_schedule_policy" or _DELIVERY_DELAY_RESERVATION_SCHEDULE_POLICY_RE.search(text):
+    if intent == "delivery_delay_reservation_schedule_policy" or _is_delivery_delay_reservation_schedule_question(text):
         return _decision(
             response_shape_key="delivery_delay_reservation_schedule_policy",
             response_shape=ResponseShape.SUMMARY,
