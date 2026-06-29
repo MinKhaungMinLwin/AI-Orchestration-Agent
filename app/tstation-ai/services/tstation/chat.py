@@ -884,6 +884,7 @@ class MultiAgentDomain(BaseModel):
         "order_document_guidance",
         "general_card_cancel_timing_policy",
         "delivery_delay_reservation_schedule_policy",
+        "reservation_verification_guidance",
         "reservation_window_policy",
         "external_tire_install_policy",
         "tire_manufacture_date_policy",
@@ -1296,6 +1297,16 @@ def _router_contract_is_price_or_benefit_alert(routing_result: MultiAgentDomain 
         return False
     domains = list(getattr(routing_result, "domains", []) or [])
     return MultiAgentDomain.Domain.TRANSACTION in domains
+
+
+def _execution_plan_has_intent(routing_result: MultiAgentDomain | None, intent: str) -> bool:
+    if routing_result is None:
+        return False
+    normalized_intent = str(intent or "").strip().lower()
+    if not normalized_intent:
+        return False
+    plan_items = tuple(str(item or "").strip().lower() for item in (getattr(routing_result, "execution_plan", None) or ()))
+    return any(normalized_intent in item for item in plan_items)
 
 
 def _router_contract_is_order_cancel_fee_inquiry(routing_result: MultiAgentDomain | None) -> bool:
@@ -2519,6 +2530,7 @@ class _SlimMultiAgentDomain(BaseModel):
         "order_document_guidance",
         "general_card_cancel_timing_policy",
         "delivery_delay_reservation_schedule_policy",
+        "reservation_verification_guidance",
         "reservation_window_policy",
         "external_tire_install_policy",
         "tire_manufacture_date_policy",
@@ -7032,6 +7044,11 @@ def _build_support_faq_policy_event(
             "매장별 지정 예약 일정에 상품이 제때 도착하지 않으면 해피콜 등으로 별도 안내드릴 수 있어요.\n"
             "안내를 받으시면 매장이나 고객센터 안내에 따라 일정을 조정해 주세요."
         ),
+        "reservation_verification_guidance": (
+            "매장에서 예약이 확인되지 않는다고 안내받았다면 먼저 주문/예약 내역에서 예약 상태와 예약 매장을 확인해 주세요.\n"
+            "온라인 내역에서 바로 확인되지 않더라도 방문 시 차량번호나 예약자 정보로 매장 확인을 요청할 수 있어요.\n"
+            "그래도 확인이 어렵다면 1:1 문의나 고객센터로 접수해 주세요."
+        ),
         "reservation_window_policy": (
             "장착 예약일은 최대 30일 이내 또는 구매일로부터 1개월 이내 기준으로 안내돼요.\n"
             "두 달 뒤처럼 범위를 넘는 예약은 지원되지 않거나 진행이 어려울 수 있어요.\n"
@@ -7053,6 +7070,7 @@ def _build_support_faq_policy_event(
         "tire_quality_warranty_policy": required_guidance_by_intent["tire_quality_warranty_policy"],
         "assurance_service_policy": required_guidance_by_intent["assurance_service_policy"],
         "delivery_delay_reservation_schedule_policy": required_guidance_by_intent["delivery_delay_reservation_schedule_policy"],
+        "reservation_verification_guidance": required_guidance_by_intent["reservation_verification_guidance"],
         "reservation_window_policy": required_guidance_by_intent["reservation_window_policy"],
         "external_tire_install_policy": required_guidance_by_intent["external_tire_install_policy"],
         "reservation_policy_guidance": "실제 예약 변경이나 취소 전에는 예약 상세 안내도 함께 확인해 주세요.",
@@ -7069,6 +7087,7 @@ def _build_support_faq_policy_event(
         "tire_quality_warranty_policy": required_guidance_by_intent["tire_quality_warranty_policy"],
         "assurance_service_policy": required_guidance_by_intent["assurance_service_policy"],
         "delivery_delay_reservation_schedule_policy": required_guidance_by_intent["delivery_delay_reservation_schedule_policy"],
+        "reservation_verification_guidance": required_guidance_by_intent["reservation_verification_guidance"],
         "reservation_window_policy": "장착 예약일은 최대 30일 이내로 지정해야 하며, 두 달 뒤 예약은 지원되지 않을 수 있어요.",
         "external_tire_install_policy": "외부 구매 타이어 반입 장착은 구매 경로와 매장 운영 기준에 따라 달라질 수 있어요.",
         "reservation_policy_guidance": "예약 가능 기간, 취소, 변경 조건은 정책 기준으로 먼저 확인해 보는 것이 안전해요.",
@@ -8085,6 +8104,15 @@ def _support_faq_policy_quick_replies(intent: str) -> list[dict[str, Any]]:
             {"label": "1:1 문의하기", "domain": "SUPPORT"},
             {"label": "예약 확인하기", "domain": "TRANSACTION"},
             {"label": "처음으로", "domain": "LEADING"},
+        ],
+        "reservation_verification_guidance": [
+            {
+                "label": "주문/예약 내역 보기",
+                "domain": "TRANSACTION",
+                "cta_action": "open_order_history",
+                "expected_contract_intent": "get_my_reservations",
+            },
+            {"label": "1:1 문의하기", "domain": "SUPPORT"},
         ],
     }
     intent_action_ctas: dict[str, list[dict[str, Any]]] = {
@@ -16768,6 +16796,10 @@ def _build_turn_contract_required_slot_guard_event(
 
 
 _FAQ_POLICY_FALLBACK_INTENTS = frozenset({
+    "coupon_usage_policy",
+    "coupon_registration_policy",
+    "signup_first_purchase_benefit_policy",
+    "reservation_verification_guidance",
     "tire_condition_photo_policy",
     "tire_manufacture_date_policy",
     "tire_quality_warranty_policy",
@@ -21593,6 +21625,7 @@ def _build_transaction_policy_context(
             messages=messages,
         )
         price_frame = build_price_intent_frame(last_user_text, known_slots=known_slots)
+        price_frame = _promote_coupon_applicability_followup_price_frame(price_frame, known_slots)
         # coupon_usage_policy / coupon_registration_policy questions are general policy inquiries.
         # Applying price forbidden_behaviors here triggers a code-level fallback and blocks the agent
         # from looking up actual coupon channel data (coupon_channel_type: online/offline/onoff).
@@ -21645,6 +21678,42 @@ def _build_transaction_policy_context(
     except Exception:
         logger.exception("[POLICY][transaction] Failed to build transaction policy context")
         return {}, None, None
+
+
+def _promote_coupon_applicability_followup_price_frame(
+    frame: IntentFrame,
+    known_slots: Mapping[str, Any],
+) -> IntentFrame:
+    """Promote router-resolved coupon follow-ups even when the current text omits "쿠폰"."""
+    if frame.intent != "price_coupon_summary":
+        return frame
+    pending_topic = str(known_slots.get("pending_check_topic") or "").strip()
+    router_intent = str(known_slots.get("router_transaction_intent") or "").strip()
+    if pending_topic != "coupon_applicability" and router_intent != "coupon_applicability_check":
+        return frame
+    product_name = str(known_slots.get("product_name") or "").strip()
+    if not product_name and str(known_slots.get("pending_check_object_type") or "").strip() == "product_name":
+        product_name = str(known_slots.get("pending_check_object_value") or "").strip()
+    if not product_name and not known_slots.get("goods_no"):
+        return frame
+
+    entities = dict(frame.entities)
+    entities["has_coupon_keyword"] = True
+    if product_name:
+        entities["product_name"] = product_name
+    return replace(
+        frame,
+        intent="product_coupon_eligibility",
+        sub_intent="product_or_pattern_coupon",
+        entities=entities,
+        source="router_coupon_applicability_followup",
+        metadata={
+            **dict(frame.metadata or {}),
+            "promoted_from": frame.intent,
+            "router_intent": router_intent or None,
+            "pending_check_topic": pending_topic,
+        },
+    )
 
 
 _EXPLICIT_PURCHASE_CONTRACT_SIGNAL_RE = re.compile(
@@ -30247,6 +30316,8 @@ class TStationChatServiceV2:
             transaction_known_slots["router_transaction_intent"] = "price_or_benefit_alert_request"
         elif _router_contract_is_order_cancel_fee_inquiry(routing_result):
             transaction_known_slots["router_transaction_intent"] = "order_cancel_fee_inquiry"
+        elif _execution_plan_has_intent(routing_result, "coupon_applicability_check"):
+            transaction_known_slots["router_transaction_intent"] = "coupon_applicability_check"
         router_store_service_slots = _router_store_service_search_slots(routing_result)
         if router_store_service_slots:
             transaction_known_slots.update(router_store_service_slots)

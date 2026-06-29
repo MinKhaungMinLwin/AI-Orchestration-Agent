@@ -248,3 +248,15 @@ def test_seoul_region_followup_is_extracted() -> None:
     slots = ConversationSlots.extract_from_user_text("서울은?")
 
     assert slots.region == "서울"
+
+
+def test_composite_gyeonggi_gwangju_region_is_preserved() -> None:
+    slots = ConversationSlots.extract_from_user_text("다이나프로 HL3 경기도 광주 지역 매장에서 다음 주에 장착 가능?")
+
+    assert slots.region == "경기도 광주"
+
+
+def test_composite_gwangju_metro_region_is_preserved() -> None:
+    slots = ConversationSlots.extract_from_user_text("광주광역시 광산구 매장 있어?")
+
+    assert slots.region == "광주광역시 광산구"

@@ -696,6 +696,15 @@ def build_turn_contract(
     if code_intent == "coupon_registration_policy" or planner_intent == "coupon_registration_policy":
         domain = "support"
         intent = "coupon_registration_policy"
+    if planner_intent == "coupon_applicability_check" or intent == "coupon_applicability_check":
+        domain = "transaction"
+        intent = "product_coupon_eligibility"
+        if (
+            not known_slots.get("product_name")
+            and str(known_slots.get("pending_check_object_type") or "").strip() == "product_name"
+            and known_slots.get("pending_check_object_value")
+        ):
+            known_slots["product_name"] = known_slots.get("pending_check_object_value")
     if _is_discovery_event_content_contract(routing_result, planner_intent, code_intent):
         discovery_event_content_intents = {
             "benefit_event_list_lookup",
@@ -914,6 +923,18 @@ def build_turn_contract(
                 "transfer_to_qna_tool",
             ),
         )
+    if intent == "product_coupon_eligibility":
+        allowed_tools = _merge_tuple(
+            allowed_tools,
+            ("get_my_coupons_tool", "get_product_promotions_tool", "get_coupon_applicable_products_tool"),
+        )
+        forbidden_tools = _merge_tuple(
+            forbidden_tools,
+            ("issue_coupon_tool", "search_product_tool", "get_product_description_tool", "get_final_price_tool"),
+        )
+        if not preferred_tool or preferred_tool in forbidden_tools:
+            preferred_tool = "get_my_coupons_tool"
+            tool_args_patch = {}
     if intent == "partner_member_coupon_policy":
         forbidden_tools = _merge_tuple(
             forbidden_tools,

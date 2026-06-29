@@ -27544,6 +27544,17 @@ def test_delivery_delay_reservation_schedule_policy_augments_faq_query() -> None
     assert "배송 지연 예약 일정 자동 변경 해피콜 상품 미도착 일정 조정" in query
 
 
+def test_reservation_verification_guidance_augments_faq_query() -> None:
+    token = current_support_policy_intent.set("reservation_verification_guidance")
+    try:
+        query = _augment_faq_query_for_policy("매장 방문했는데 예약한 사실이 없대. 어떻게 확인해?")
+    finally:
+        current_support_policy_intent.reset(token)
+
+    assert "매장 방문했는데 예약한 사실이 없대. 어떻게 확인해?" in query
+    assert "예약 확인 매장에서 예약이 없다고 안내 차량번호 예약자 정보 주문 예약 내역 확인" in query
+
+
 def test_reservation_window_policy_augments_faq_query() -> None:
     token = current_support_policy_intent.set("reservation_window_policy")
     try:
@@ -27567,6 +27578,24 @@ def test_support_faq_policy_event_for_delivery_delay_reservation_schedule_uses_p
     assert "배송 지연으로 예약 일정이 자동 변경되지는 않아요." in assistant
     assert "해피콜" in assistant
     assert _labels(event["data"]["quickReplies"]) == ["1:1 문의하기", "예약 확인하기", "처음으로"]
+
+
+def test_support_faq_policy_event_for_reservation_verification_guidance_uses_policy_fallback() -> None:
+    event = _build_support_faq_policy_event(
+        "reservation_verification_guidance",
+        "매장 방문했는데 예약한 사실이 없대. 어떻게 확인해?",
+        tool_result={"status": "success", "data": {"items": []}},
+    )
+
+    assert event is not None
+    assistant = event["data"]["assistantResponse"]
+    assert "주문/예약 내역에서 예약 상태와 예약 매장을 확인" in assistant
+    assert "차량번호나 예약자 정보로 매장 확인을 요청" in assistant
+    assert "1:1 문의나 고객센터로 접수" in assistant
+    quick_replies = event["data"]["quickReplies"]
+    assert _labels(quick_replies) == ["주문/예약 내역 보기", "1:1 문의하기"]
+    assert quick_replies[0]["cta_action"] == "open_order_history"
+    assert quick_replies[0]["expected_contract_intent"] == "get_my_reservations"
 
 
 def test_support_faq_policy_event_for_reservation_guidance_delivery_delay_uses_specific_fallback() -> None:
@@ -27997,6 +28026,8 @@ def _routing_result(
     recommendation_scenario: str = "none",
     complaint_scope: str = "none",
     pending_check_topic: str = "none",
+    pending_check_object_type: str = "none",
+    pending_check_object_value: str = "",
 ) -> MultiAgentDomain:
     return MultiAgentDomain(
         reason="test",
@@ -28009,6 +28040,8 @@ def _routing_result(
         discovery_followup_intent="none",
         carried_discovery_objective="none",
         pending_check_topic=pending_check_topic,
+        pending_check_object_type=pending_check_object_type,
+        pending_check_object_value=pending_check_object_value,
         comparison_followup_intent=comparison_followup_intent,
         comparison_metric=comparison_metric,
         requested_product_attribute=requested_product_attribute,
@@ -28265,6 +28298,55 @@ def test_transaction_policy_context_allows_search_product_for_discovery_first_to
     assert tool_plan.required_slots == ()
     assert tool_plan.metadata["cross_domain_resolution_stage"] == "discovery_first"
     assert tool_plan.metadata["requires_product_resolution"] is True
+
+
+def test_coupon_applicability_followup_uses_coupon_plan_when_coupon_word_is_omitted() -> None:
+    _patch, response_decision, tool_plan = _build_transaction_policy_context(
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        last_user_text="키너지 ex 에 쓸수 있는건?",
+        known_slots={
+            "router_transaction_intent": "coupon_applicability_check",
+            "pending_check_topic": "coupon_applicability",
+            "product_name": "Kinergy EX",
+        },
+    )
+
+    assert response_decision is not None
+    assert response_decision.metadata["response_shape_key"] == "product_coupon_eligibility"
+    assert tool_plan is not None
+    assert tool_plan.preferred_tool == "get_my_coupons_tool"
+    assert "get_coupon_applicable_products_tool" in tool_plan.allowed_tools
+    assert "search_product_tool" not in tool_plan.allowed_tools
+
+
+def test_coupon_applicability_contract_blocks_product_search_for_owned_coupon_followup() -> None:
+    contract = build_turn_contract(
+        user_text="키너지 ex 에 쓸수 있는건?",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["transaction:coupon_applicability_check"],
+            pending_check_topic="coupon_applicability",
+            pending_check_object_type="product_name",
+            pending_check_object_value="키너지 EX",
+            referred_object_type="product",
+        ),
+        merged_slots=ConversationSlots(
+            pending_check_topic="coupon_applicability",
+            pending_check_object_type="product_name",
+            pending_check_object_value="키너지 EX",
+        ),
+        action_mode="info_only",
+        context_state="active",
+    )
+
+    assert contract.domain == "transaction"
+    assert contract.intent == "product_coupon_eligibility"
+    assert contract.known_slots["product_name"] == "키너지 EX"
+    assert contract.preferred_tool == "get_my_coupons_tool"
+    assert "get_my_coupons_tool" in contract.allowed_tools
+    assert "get_coupon_applicable_products_tool" in contract.allowed_tools
+    assert "search_product_tool" in contract.forbidden_tools
+    assert "get_final_price_tool" in contract.forbidden_tools
 
 
 @pytest.mark.parametrize("user_text", ["그거 구매할래", "그거 가격 알려줘", "두 개 다 재고 있어?"])
@@ -36324,6 +36406,10 @@ def test_direct_faq_policy_tool_payload_builds_manufacture_date_policy_event() -
 
 def test_direct_faq_policy_intents_cover_faq_first_contract_intents() -> None:
     faq_first_contract_intents = {
+        "coupon_usage_policy",
+        "coupon_registration_policy",
+        "signup_first_purchase_benefit_policy",
+        "reservation_verification_guidance",
         "tire_manufacture_date_policy",
         "tire_quality_warranty_policy",
         "assurance_service_policy",
@@ -36337,7 +36423,7 @@ def test_direct_faq_policy_intents_cover_faq_first_contract_intents() -> None:
     assert faq_first_contract_intents <= _DIRECT_SUPPORT_FAQ_POLICY_INTENTS
 
 
-def test_direct_faq_policy_tool_payload_skips_signup_support_policy_event() -> None:
+def test_direct_faq_policy_tool_payload_builds_signup_support_policy_event() -> None:
     contract = build_turn_contract(
         user_text="가입하면 받을 수 있는 쿠폰 뭐야?",
         intent_frame=IntentFrame(domain=PolicyDomain.SUPPORT, intent="signup_first_purchase_benefit_policy"),
@@ -36361,7 +36447,96 @@ def test_direct_faq_policy_tool_payload_skips_signup_support_policy_event() -> N
         },
     )
 
-    assert payload is None
+    assert payload is not None
+    tool_input, tool_result, event = payload
+    assert tool_input == {"query": "가입하면 받을 수 있는 쿠폰 뭐야?", "top_k": 8}
+    assert tool_result["status"] == "success"
+    assert event["source_domain"] == "support"
+    assert event["data"]["metadata"]["responseShapeKey"] == "signup_first_purchase_benefit_policy"
+    assert "회원 혜택" in str(event["data"]["assistantResponse"])
+    assert _labels(event["data"]["quickReplies"]) == ["회원 혜택 확인"]
+    assert event["data"]["quickReplies"][0]["url"] == CTAUrls.MEMBERSHIP_BENEFIT
+
+
+def test_direct_faq_policy_tool_payload_builds_coupon_registration_support_policy_event() -> None:
+    contract = build_turn_contract(
+        user_text="쿠폰 선물받았는데 등록 어디서 해?",
+        intent_frame=IntentFrame(domain=PolicyDomain.SUPPORT, intent="coupon_registration_policy"),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            metadata={"response_shape_key": "coupon_registration_policy"},
+        ),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:coupon_registration_policy"],
+            policy_intent="coupon_registration_policy",
+        ),
+    )
+    payload = _build_direct_faq_policy_tool_payload(
+        turn_contract=contract,
+        user_query="쿠폰 선물받았는데 등록 어디서 해?",
+        raw_tool_result={
+            "status": "success",
+            "data": {
+                "items": [
+                    {
+                        "answer": "쿠폰 번호나 코드 등록 위치는 쿠폰 상세 안내와 쿠폰함 경로에서 먼저 확인하시면 됩니다."
+                    }
+                ]
+            },
+        },
+    )
+
+    assert payload is not None
+    tool_input, tool_result, event = payload
+    assert tool_input == {"query": "쿠폰 선물받았는데 등록 어디서 해?", "top_k": 8}
+    assert tool_result["status"] == "success"
+    assert event["source_domain"] == "support"
+    assert event["data"]["metadata"]["responseShapeKey"] == "coupon_registration_policy"
+    assert "쿠폰 번호나 코드 등록 위치" in str(event["data"]["assistantResponse"])
+    assert _labels(event["data"]["quickReplies"]) == ["쿠폰함 바로가기"]
+    assert event["data"]["quickReplies"][0]["url"] == CTAUrls.MY_COUPON_LIST_PC
+
+
+def test_direct_faq_policy_tool_payload_builds_reservation_verification_guidance_event() -> None:
+    contract = build_turn_contract(
+        user_text="매장 방문했는데 예약한 사실이 없대. 어떻게 확인해?",
+        intent_frame=IntentFrame(domain=PolicyDomain.SUPPORT, intent="reservation_verification_guidance"),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            metadata={"response_shape_key": "reservation_verification_guidance"},
+        ),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:reservation_verification_guidance"],
+            policy_intent="reservation_verification_guidance",
+        ),
+    )
+    payload = _build_direct_faq_policy_tool_payload(
+        turn_contract=contract,
+        user_query="매장 방문했는데 예약한 사실이 없대. 어떻게 확인해?",
+        raw_tool_result={
+            "status": "success",
+            "data": {
+                "items": [
+                    {
+                        "answer": "매장에서 예약이 보이지 않더라도 주문/예약 내역 확인 후 차량번호나 예약자 정보로 다시 확인 요청할 수 있습니다."
+                    }
+                ]
+            },
+        },
+    )
+
+    assert payload is not None
+    tool_input, tool_result, event = payload
+    assert tool_input == {"query": "매장 방문했는데 예약한 사실이 없대. 어떻게 확인해?", "top_k": 8}
+    assert tool_result["status"] == "success"
+    assert event["source_domain"] == "support"
+    assert event["data"]["metadata"]["responseShapeKey"] == "reservation_verification_guidance"
+    assert "주문/예약 내역" in str(event["data"]["assistantResponse"])
+    assert _labels(event["data"]["quickReplies"]) == ["주문/예약 내역 보기", "1:1 문의하기"]
 
 
 def test_base_agent_contract_sensitive_tool_guard_replaces_forbidden_lookup_with_faq(
@@ -37100,7 +37275,7 @@ def test_stream_faq_policy_tool_response_emits_faq_tool_for_general_cancel_fee_p
     assert "예약/장착 관련 비용" in message_event["content"]
 
 
-def test_stream_faq_policy_tool_response_skips_direct_signup_policy() -> None:
+def test_stream_faq_policy_tool_response_emits_direct_signup_policy() -> None:
     contract = build_turn_contract(
         user_text="가입하면 받을 수 있는 쿠폰 뭐야?",
         intent_frame=IntentFrame(domain=PolicyDomain.SUPPORT, intent="signup_first_purchase_benefit_policy"),
@@ -37130,7 +37305,38 @@ def test_stream_faq_policy_tool_response_skips_direct_signup_policy() -> None:
         },
     )
 
-    assert payload is None
+    assert payload is not None
+
+    tool_input, tool_result, event = payload
+    events = list(
+        TStationChatServiceV2._stream_faq_policy_tool_response(
+            tool_input,
+            tool_result,
+            event,
+            turn_contract=contract,
+            intent="signup_first_purchase_benefit_policy",
+            source="code_faq_policy_direct",
+        )
+    )
+    assert any(chunk == "data: [DONE]\n\n" for chunk in events)
+
+    parsed_events = []
+    for chunk in events:
+        if not chunk.startswith("data: ") or chunk == "data: [DONE]\n\n":
+            continue
+        parsed_events.append(json.loads(chunk[6:].strip()))
+
+    tool_event = next(event for event in parsed_events if event.get("type") == "tool")
+    data_event = next(event for event in parsed_events if event.get("type") == "data")
+    message_event = next(event for event in parsed_events if event.get("type") == "message")
+
+    assert tool_event["tool"] == "search_faq_hybrid_tool"
+    assert tool_event["source_domain"] == "support"
+    assert data_event["template"] == "quickReply"
+    assert data_event["source_domain"] == "support"
+    assert data_event["data"]["metadata"]["responseShapeKey"] == "signup_first_purchase_benefit_policy"
+    assert "회원 혜택" in data_event["data"]["assistantResponse"]
+    assert "회원 혜택" in message_event["content"]
 
 
 def test_stream_cta_tool_response_falls_back_to_quickreply_when_template_is_forbidden() -> None:
