@@ -408,6 +408,7 @@ from services.tstation.policies.turn_contract import (
     _normalize_plan_intent,
     _planner_best_seller_intent,
     TurnContract,
+    align_tool_plan_to_turn_contract,
     build_required_slot_clarification_event,
     build_response_policy_guard_event,
     build_turn_contract,
@@ -10785,6 +10786,53 @@ def test_router_wins_stock_store_search_preserves_parent_slots_as_tool_arg_evide
     assert "quick_order_tool" in contract.forbidden_tools
 
 
+def test_router_wins_stock_store_search_aligns_stale_quick_order_tool_plan() -> None:
+    routing_result = _routing_result(
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        execution_plan=["transaction:stock_store_search"],
+    )
+    stale_order_plan = ToolPlan(
+        allowed_tools=("quick_order_tool",),
+        preferred_tool="quick_order_tool",
+        forbidden_tools=("transaction_store_preview_tool",),
+        required_slots=("requested_cal_day", "rsv_hour"),
+        metadata={"response_intent": "quick_order_reservation"},
+    )
+    contract = build_turn_contract(
+        user_text="오늘 장착 가능한 매장만 먼저 보여줘",
+        intent_frame=IntentFrame(
+            domain=PolicyDomain.TRANSACTION,
+            intent="quick_order_reservation",
+            known_slots={
+                "pending_intent": "order",
+                "goal_type": "place_order",
+                "goods_no": "G000000310126",
+                "tire_size": "245/45R19",
+                "ord_qty": 4,
+            },
+            missing_slots=("requested_cal_day", "rsv_hour"),
+        ),
+        tool_plan=stale_order_plan,
+        routing_result=routing_result,
+        merged_slots=ConversationSlots(goods_no="G000000310126", tire_size="245/45R19", ord_qty=4),
+        action_mode="stock_check",
+        context_state="resumed",
+    )
+
+    aligned = align_tool_plan_to_turn_contract(stale_order_plan, contract)
+
+    assert contract.router_wins_applied is True
+    assert contract.intent == "stock_store_search"
+    assert aligned is not None
+    assert aligned.preferred_tool == "transaction_store_preview_tool"
+    assert aligned.allowed_tools == contract.allowed_tools
+    assert aligned.forbidden_tools == contract.forbidden_tools
+    assert "quick_order_tool" in aligned.forbidden_tools
+    assert aligned.required_slots == ()
+    assert aligned.metadata["tool_plan_aligned_to_turn_contract"] is True
+    assert aligned.metadata["turn_contract_intent"] == "stock_store_search"
+
+
 def test_router_wins_store_schedule_over_stale_quick_order_reservation_parent() -> None:
     routing_result = _routing_result(
         domains=[MultiAgentDomain.Domain.TRANSACTION],
@@ -10838,6 +10886,60 @@ def test_router_wins_store_schedule_over_stale_quick_order_reservation_parent() 
     assert contract.allowed_tools == ("get_store_schedule_tool",)
     assert "quick_order_tool" in contract.forbidden_tools
     assert "transaction_store_preview_tool" in contract.forbidden_tools
+
+
+def test_router_wins_store_schedule_aligns_preview_loop_tool_plan() -> None:
+    routing_result = _routing_result(
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        execution_plan=["transaction:store_schedule"],
+        referred_object_type="store",
+    )
+    stale_order_plan = ToolPlan(
+        allowed_tools=("transaction_store_preview_tool", "get_store_list_tool"),
+        preferred_tool="transaction_store_preview_tool",
+        forbidden_tools=("get_store_schedule_tool",),
+        metadata={"response_intent": "quick_order_reservation"},
+    )
+    contract = build_turn_contract(
+        user_text="이 매장 예약 가능한 시간 보여줘",
+        intent_frame=IntentFrame(
+            domain=PolicyDomain.TRANSACTION,
+            intent="quick_order_reservation",
+            known_slots={
+                "pending_intent": "order",
+                "goal_type": "place_order",
+                "goods_no": "G000000310126",
+                "tire_size": "245/45R19",
+                "ord_qty": 4,
+                "shop_id": "F00098",
+                "shop_name": "티스테이션 역삼점",
+            },
+            missing_slots=("requested_cal_day", "rsv_hour"),
+        ),
+        tool_plan=stale_order_plan,
+        routing_result=routing_result,
+        merged_slots=ConversationSlots(
+            pending_intent="order",
+            goal_type="place_order",
+            goods_no="G000000310126",
+            tire_size="245/45R19",
+            ord_qty=4,
+            shop_id="F00098",
+            shop_name="티스테이션 역삼점",
+        ),
+        action_mode="schedule_lookup",
+        context_state="resumed",
+    )
+
+    aligned = align_tool_plan_to_turn_contract(stale_order_plan, contract)
+
+    assert contract.router_wins_applied is True
+    assert contract.intent == "store_schedule"
+    assert aligned is not None
+    assert aligned.preferred_tool == "get_store_schedule_tool"
+    assert aligned.allowed_tools == ("get_store_schedule_tool",)
+    assert "transaction_store_preview_tool" in aligned.forbidden_tools
+    assert "quick_order_tool" in aligned.forbidden_tools
 
 
 def test_reservation_policy_turn_keeps_previous_reservation_context_dormant_without_blocking() -> None:

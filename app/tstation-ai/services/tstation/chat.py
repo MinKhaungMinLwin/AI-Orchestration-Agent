@@ -90,6 +90,7 @@ from services.tstation.policies.flow_state import (
 )
 from services.tstation.policies.turn_contract import (
     TurnContract,
+    align_tool_plan_to_turn_contract,
     build_required_slot_clarification_event,
     build_response_policy_guard_event,
     build_turn_contract,
@@ -27829,6 +27830,13 @@ class TStationChatServiceV2:
                     _turn_contract_span.update(output=turn_contract.to_dict())
         except Exception:
             logger.exception("[TURN_CONTRACT] Failed to build turn contract")
+        if turn_contract is not None:
+            aligned_contract_tool_plan = align_tool_plan_to_turn_contract(
+                current_transaction_tool_plan.get(),
+                turn_contract,
+            )
+            if aligned_contract_tool_plan is not None:
+                current_transaction_tool_plan.set(aligned_contract_tool_plan)
         domains = _align_domains_to_turn_contract(
             domains=domains,
             routing_result=routing_result,

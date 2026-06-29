@@ -1201,6 +1201,59 @@ def should_guard_required_slots(contract: TurnContract | None) -> bool:
     return str(contract.intent or "") in _HARD_REQUIRED_SLOT_GUARD_INTENTS
 
 
+def align_tool_plan_to_turn_contract(tool_plan: ToolPlan | None, contract: TurnContract | None) -> ToolPlan | None:
+    """Keep router-wins execution ContextVar plans inside the final contract boundary."""
+
+    if tool_plan is None or contract is None or not contract.router_wins_applied:
+        return tool_plan
+    if not _should_align_router_wins_tool_plan(contract):
+        return tool_plan
+    allowed_tools = tuple(contract.allowed_tools or ())
+    forbidden_tools = tuple(contract.forbidden_tools or ())
+    preferred_tool = str(tool_plan.preferred_tool or "")
+    preferred_allowed = bool(
+        preferred_tool
+        and (not allowed_tools or preferred_tool in allowed_tools)
+        and preferred_tool not in forbidden_tools
+    )
+    aligned_preferred_tool = preferred_tool if preferred_allowed else _router_wins_default_preferred_tool(contract)
+    metadata = {
+        **dict(tool_plan.metadata or {}),
+        "tool_plan_aligned_to_turn_contract": True,
+        "turn_contract_intent": contract.intent,
+        "router_wins_applied": True,
+    }
+    return ToolPlan(
+        allowed_tools=allowed_tools,
+        preferred_tool=aligned_preferred_tool,
+        tool_args_patch=dict(tool_plan.tool_args_patch or {}),
+        forbidden_tools=forbidden_tools,
+        required_slots=tuple(contract.required_slots or ()),
+        metadata=metadata,
+    )
+
+
+def _should_align_router_wins_tool_plan(contract: TurnContract) -> bool:
+    intent = str(contract.intent or "")
+    return intent in ROUTER_WINS_EXECUTION_BOUNDARY_INTENTS or intent in _SUPPORT_FAQ_POLICY_TOOL_INTENTS
+
+
+def _router_wins_default_preferred_tool(contract: TurnContract) -> str | None:
+    intent = str(contract.intent or "")
+    preferred_by_intent = {
+        "stock_store_search": "transaction_store_preview_tool",
+        "store_schedule": "get_store_schedule_tool",
+        "open_store_search": "search_stores_complex_tool",
+        "store_service_search": "search_stores_tool",
+    }
+    preferred = preferred_by_intent.get(intent)
+    if preferred and preferred in contract.allowed_tools and preferred not in contract.forbidden_tools:
+        return preferred
+    if intent in _SUPPORT_FAQ_POLICY_TOOL_INTENTS and "search_faq_hybrid_tool" in contract.allowed_tools:
+        return "search_faq_hybrid_tool"
+    return next((tool for tool in contract.allowed_tools if tool not in contract.forbidden_tools), None)
+
+
 def _support_answer_contract_owns_response(*, domain: str, intent: str, action_mode: str) -> bool:
     if str(domain or "") != "support":
         return False
