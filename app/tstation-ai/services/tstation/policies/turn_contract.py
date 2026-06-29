@@ -247,6 +247,7 @@ ROUTER_WINS_INFORMATIONAL_INTENTS = frozenset({
     "online_store_price_policy",
     "regional_price_policy",
     "legal_action_guidance_denied",
+    "human_escalation",
     "tstation_service_complaint",
     "support_faq",
     "policy_notice_or_escalation",
@@ -1112,6 +1113,18 @@ def build_turn_contract(
                 "법적 절차, 기관, 서류, 단계, 요건은 안내하지 않고 1:1 문의 또는 고객센터 불편 접수만 안내한다."
             ),
             "metadata": {"response_shape_key": "legal_action_guidance_denied"},
+        }
+    if intent == "human_escalation" and response_decision_payload is None:
+        response_decision_payload = {
+            "response_shape": "action_confirm",
+            "template": "qnaComplete",
+            "required_slots": [],
+            "forbidden_behaviors": [
+                "overpromise_live_agent",
+                "hide_official_contact",
+            ],
+            "assistant_guidance": "사용자가 명시적으로 1:1 문의/상담원 연결을 요청했으므로 transfer_to_qna_tool로 문의 접수 링크를 생성한다.",
+            "metadata": {"response_shape_key": "human_escalation"},
         }
     if intent == "order_document_guidance" and response_decision_payload is None:
         response_decision_payload = {
@@ -4431,6 +4444,16 @@ def _router_wins_tool_boundary(intent: str) -> tuple[tuple[str, ...], tuple[str,
                 if tool not in {"search_product_tool", "get_product_description_tool", "get_cheapest_price_tool"}
             ),
         )
+    if intent == "human_escalation":
+        return (
+            ("transfer_to_qna_tool",),
+            tuple(
+                tool
+                for tool in _ROUTER_WINS_TRANSACTION_FORBIDDEN_TOOLS
+                | {"search_faq_hybrid_tool", "search_faq_rag_tool", "get_faq_tool"}
+                if tool != "transfer_to_qna_tool"
+            ),
+        )
     if intent == "tstation_service_complaint":
         return (
             ("search_faq_hybrid_tool", "transfer_to_qna_tool"),
@@ -4529,6 +4552,14 @@ def _router_wins_response_decision(intent: str) -> dict[str, Any]:
         guidance = "현재 턴의 사이즈 목록 조회 의도에 맞춰 search_product_tool 결과의 규격 목록을 안내한다."
     elif intent == "tstation_service_complaint":
         guidance = "T-Station 범위의 불편 사항으로 응답하고, 이전 구매/예약/매장 문맥이 실행 flow를 재개하지 않게 한다."
+    elif intent == "human_escalation":
+        response_shape = "action_confirm"
+        template = "qnaComplete"
+        guidance = "사용자가 명시적으로 1:1 문의/상담원 연결을 요청했으므로 transfer_to_qna_tool로 문의 접수 링크를 생성한다."
+        forbidden_behaviors = [
+            "overpromise_live_agent",
+            "hide_official_contact",
+        ]
     elif intent in _OWNED_WARRANTY_LOOKUP_INTENTS:
         guidance = (
             "사용자가 본인 안심서비스/워런티 가입 여부 확인을 요청한 턴은 get_my_warranties_tool로 보유 워런티를 조회한다. "
@@ -4762,6 +4793,11 @@ def _normalize_plan_intent(value: str) -> str:
         "best_seller_search_by_vehicle": "best_seller_search",
         "vehicle_best_seller_search": "best_seller_search",
         "order_data_for_vehicle": "best_seller_search",
+        "connect_1to1_inquiry": "human_escalation",
+        "connect_1_to_1_inquiry": "human_escalation",
+        "one_to_one_inquiry": "human_escalation",
+        "qna_request": "human_escalation",
+        "connect_human_agent": "human_escalation",
     }
     return aliases.get(normalized, normalized or "unknown")
 

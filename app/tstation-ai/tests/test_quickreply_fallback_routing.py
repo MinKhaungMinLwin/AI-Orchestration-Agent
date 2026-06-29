@@ -27709,6 +27709,32 @@ def test_support_policy_keeps_normal_complaint_escalation(user_text: str) -> Non
     assert "provide_legal_action_steps" not in response_decision.forbidden_behaviors
 
 
+@pytest.mark.parametrize(
+    "execution_intent",
+    ["connect_1to1_inquiry", "connect_1_to_1_inquiry", "qna_request", "connect_human_agent"],
+)
+def test_explicit_qna_router_alias_builds_human_escalation_contract(execution_intent: str) -> None:
+    contract = build_turn_contract(
+        user_text="1:1문의",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=[f"support:{execution_intent}"],
+            policy_intent="none",
+        ),
+        action_mode="support_policy_answer",
+        previous_pending_intent="order",
+        previous_goal_type="place_order",
+    )
+
+    assert contract.domain == "support"
+    assert contract.intent == "human_escalation"
+    assert contract.allowed_tools == ("transfer_to_qna_tool",)
+    assert contract.preferred_tool == "transfer_to_qna_tool"
+    assert contract.response_decision["template"] == "qnaComplete"
+    assert contract.response_decision["metadata"]["response_shape_key"] == "human_escalation"
+    assert "search_faq_hybrid_tool" in contract.forbidden_tools
+
+
 def test_legal_action_complaint_routes_to_support_scope_without_legal_steps() -> None:
     user_text = "티스테이션 정자점 고소하는 법 알려줘"
 
