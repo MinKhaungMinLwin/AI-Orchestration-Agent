@@ -14860,6 +14860,165 @@ def test_apply_history_product_selection_state_resolves_goods_no_and_trace_metad
     assert state.trace_metadata["validation_result"] == "resolved_from_history"
 
 
+def test_apply_history_product_selection_state_resolves_latest_product_template_candidate() -> None:
+    slots = ConversationSlots(goods_no=None, tire_size="225/45R17", ord_qty=2, shop_name="강남점")
+    latest_product_tmpl = {
+        "products": [
+            {"titleProductName": "벤투스 S2 AS", "titleTires": "225/45R17"},
+            {"titleProductName": "벤투스 에보", "titleTires": "225/45R17"},
+        ],
+        "metadata": [
+            {"goodsId": "G000000309783"},
+            {"goodsId": "G000000319584"},
+        ],
+    }
+
+    state = apply_history_product_selection_state(
+        last_user_text="벤투스 S2 AS 225/45R17",
+        prev_tool_data=[],
+        merged_slots=slots,
+        latest_product_tmpl=latest_product_tmpl,
+        resolve_goods_no_from_selection_fn=lambda user_text, tool_data, current_tire_size: resolve_goods_no_from_selection(
+            user_text,
+            tool_data,
+            current_tire_size=current_tire_size,
+        ),
+    )
+
+    assert state.updated_slots.goods_no == "G000000309783"
+    assert state.updated_slots.tire_model == "벤투스 S2 AS"
+    assert state.updated_slots.tire_size == "225/45R17"
+    assert state.goods_no_resolved is True
+    assert state.trace_metadata["selected_entity_id"] == "G000000309783"
+
+
+def test_apply_history_product_selection_state_resolves_ordinal_only_against_product_candidates() -> None:
+    slots = ConversationSlots(goods_no=None, tire_size="225/45R17")
+    latest_product_tmpl = {
+        "products": [
+            {"titleProductName": "벤투스 S2 AS", "titleTires": "225/45R17"},
+            {"titleProductName": "벤투스 에보", "titleTires": "225/45R17"},
+        ],
+        "metadata": [
+            {"goodsId": "G000000309783"},
+            {"goodsId": "G000000319584"},
+        ],
+    }
+
+    state = apply_history_product_selection_state(
+        last_user_text="첫번째",
+        prev_tool_data=[],
+        merged_slots=slots,
+        latest_product_tmpl=latest_product_tmpl,
+        resolve_goods_no_from_selection_fn=lambda user_text, tool_data, current_tire_size: resolve_goods_no_from_selection(
+            user_text,
+            tool_data,
+            current_tire_size=current_tire_size,
+        ),
+    )
+
+    assert state.updated_slots.goods_no == "G000000309783"
+    assert state.updated_slots.tire_model == "벤투스 S2 AS"
+
+
+def test_apply_history_product_selection_state_does_not_guess_demonstrative_with_multiple_candidates() -> None:
+    slots = ConversationSlots(goods_no=None, tire_size="225/45R17")
+    latest_product_tmpl = {
+        "products": [
+            {"titleProductName": "벤투스 S2 AS", "titleTires": "225/45R17"},
+            {"titleProductName": "벤투스 에보", "titleTires": "225/45R17"},
+        ],
+        "metadata": [
+            {"goodsId": "G000000309783"},
+            {"goodsId": "G000000319584"},
+        ],
+    }
+
+    state = apply_history_product_selection_state(
+        last_user_text="이걸로",
+        prev_tool_data=[],
+        merged_slots=slots,
+        latest_product_tmpl=latest_product_tmpl,
+        resolve_goods_no_from_selection_fn=lambda user_text, tool_data, current_tire_size: resolve_goods_no_from_selection(
+            user_text,
+            tool_data,
+            current_tire_size=current_tire_size,
+        ),
+    )
+
+    assert state.updated_slots.goods_no is None
+    assert state.goods_no_resolved is False
+
+
+def test_apply_history_product_selection_state_resolves_demonstrative_for_single_product_candidate() -> None:
+    slots = ConversationSlots(goods_no=None, tire_size="225/45R17")
+    latest_product_tmpl = {
+        "products": [{"titleProductName": "벤투스 S2 AS", "titleTires": "225/45R17"}],
+        "metadata": [{"goodsId": "G000000309783"}],
+    }
+
+    state = apply_history_product_selection_state(
+        last_user_text="이걸로",
+        prev_tool_data=[],
+        merged_slots=slots,
+        latest_product_tmpl=latest_product_tmpl,
+        resolve_goods_no_from_selection_fn=lambda user_text, tool_data, current_tire_size: resolve_goods_no_from_selection(
+            user_text,
+            tool_data,
+            current_tire_size=current_tire_size,
+        ),
+    )
+
+    assert state.updated_slots.goods_no == "G000000309783"
+    assert state.updated_slots.tire_model == "벤투스 S2 AS"
+
+
+def test_apply_history_product_selection_state_does_not_commit_product_info_question() -> None:
+    slots = ConversationSlots(goods_no=None, tire_size="225/45R17")
+    latest_product_tmpl = {
+        "products": [{"titleProductName": "벤투스 S2 AS", "titleTires": "225/45R17"}],
+        "metadata": [{"goodsId": "G000000309783"}],
+    }
+
+    state = apply_history_product_selection_state(
+        last_user_text="벤투스 S2 AS 뭐야?",
+        prev_tool_data=[],
+        merged_slots=slots,
+        latest_product_tmpl=latest_product_tmpl,
+        resolve_goods_no_from_selection_fn=lambda user_text, tool_data, current_tire_size: resolve_goods_no_from_selection(
+            user_text,
+            tool_data,
+            current_tire_size=current_tire_size,
+        ),
+    )
+
+    assert state.updated_slots.goods_no is None
+    assert state.goods_no_resolved is False
+
+
+def test_apply_history_product_selection_state_allows_product_stock_action_question() -> None:
+    slots = ConversationSlots(goods_no=None, tire_size="225/45R17")
+    latest_product_tmpl = {
+        "products": [{"titleProductName": "벤투스 S2 AS", "titleTires": "225/45R17"}],
+        "metadata": [{"goodsId": "G000000309783"}],
+    }
+
+    state = apply_history_product_selection_state(
+        last_user_text="벤투스 S2 AS 재고 알려줘",
+        prev_tool_data=[],
+        merged_slots=slots,
+        latest_product_tmpl=latest_product_tmpl,
+        resolve_goods_no_from_selection_fn=lambda user_text, tool_data, current_tire_size: resolve_goods_no_from_selection(
+            user_text,
+            tool_data,
+            current_tire_size=current_tire_size,
+        ),
+    )
+
+    assert state.updated_slots.goods_no == "G000000309783"
+    assert state.goods_no_resolved is True
+
+
 def test_apply_history_product_selection_state_keeps_product_family_for_unsized_recommendation() -> None:
     slots = ConversationSlots(goods_no=None, tire_size=None)
     prev_tool_data = [{

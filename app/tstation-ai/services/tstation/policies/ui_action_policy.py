@@ -55,6 +55,20 @@ _TIRE_POSITION_FOLLOWUP_ACTION_RE = re.compile(
     r"추천|찾|검색|골라|보여|알려|가격|재고|구매|예약|장착|비교",
     re.IGNORECASE,
 )
+_PRODUCT_DEMONSTRATIVE_SELECTION_LABELS = frozenset({
+    "이걸로",
+    "이거",
+    "이걸로 할게",
+    "이걸로 해줘",
+    "이 상품",
+    "이 상품으로",
+})
+_PRODUCT_SELECTION_INFO_QUERY_RE = re.compile(
+    r"(뭐야|무엇|설명|알려줘|비교|차이|괜찮|어때|후기|리뷰|특징|장점|단점|성능|스펙)"
+)
+_PRODUCT_SELECTION_TRANSACTION_ACTION_RE = re.compile(
+    r"(재고|장착|구매|예약|주문|가격|담아|장바구니|결제)"
+)
 _QUANTITY_LABEL_RE = re.compile(r"^\s*([1-4])\s*(?:개|본)\s*$")
 _CTA_CLARIFICATION_LABEL_RE = re.compile(r"(?:다른\s*)?(?:지역|장소|날짜|일정)\s*(?:입력|찾기|검색|확인)")
 _SIZE_ONLY_RE = re.compile(r"^\s*\d{3}\s*[/\s]?\s*\d{2}\s*(?:R|\s|/)?\s*\d{2}\s*$", re.IGNORECASE)
@@ -1887,7 +1901,10 @@ def apply_history_product_selection_state(
     latest_quickreply_tmpl: Mapping[str, Any] | None = None,
     latest_product_tmpl: Mapping[str, Any] | None = None,
 ) -> HistoryProductSelectionState:
-    if getattr(merged_slots, "goods_no", None) is not None or not prev_tool_data:
+    if getattr(merged_slots, "goods_no", None) is not None:
+        return HistoryProductSelectionState(updated_slots=merged_slots, rewritten_user_text=last_user_text)
+    has_product_template_candidates = bool(resolve_product_row_from_template_selection(last_user_text, latest_product_tmpl))
+    if not prev_tool_data and not has_product_template_candidates:
         return HistoryProductSelectionState(updated_slots=merged_slots, rewritten_user_text=last_user_text)
 
     if _is_unsized_recommendation_source(
@@ -1919,24 +1936,31 @@ def apply_history_product_selection_state(
                 selected_product_name=selected_product_name,
             )
 
-    resolved_goods_no = resolve_goods_no_from_selection_fn(
-        last_user_text,
-        prev_tool_data,
-        getattr(merged_slots, "tire_size", None),
-    )
+    resolved_row = resolve_product_row_from_template_selection(last_user_text, latest_product_tmpl)
+    resolved_goods_no = str(resolved_row.get("goods_no") or "").strip() if isinstance(resolved_row, Mapping) else ""
+    if not resolved_goods_no:
+        resolved_goods_no = str(
+            resolve_goods_no_from_selection_fn(
+                last_user_text,
+                prev_tool_data or [],
+                getattr(merged_slots, "tire_size", None),
+            )
+            or ""
+        ).strip()
+        resolved_row = resolve_product_row_from_selection(
+            last_user_text,
+            prev_tool_data or [],
+            current_tire_size=getattr(merged_slots, "tire_size", None),
+        )
     if not resolved_goods_no:
         return HistoryProductSelectionState(updated_slots=merged_slots, rewritten_user_text=last_user_text)
 
-    resolved_row = resolve_product_row_from_selection(
-        last_user_text,
-        prev_tool_data,
-        current_tire_size=getattr(merged_slots, "tire_size", None),
-    )
     slot_patch: dict[str, Any] = {"goods_no": resolved_goods_no}
     if isinstance(resolved_row, Mapping):
         product_name = str(
             canonical_context_from_tool_boundary(resolved_row).get("product_name")
             or resolved_row.get("goods_nm")
+            or resolved_row.get("tire_model")
             or ""
         ).strip()
         tire_size = normalize_tire_size(
@@ -3464,6 +3488,17 @@ def resolve_vehicle_tire_position_selection(
 
 
 def resolve_goods_no_from_product_template_selection(user_text: str, template_data: Mapping[str, Any] | None) -> str | None:
+    selected = resolve_product_row_from_template_selection(user_text, template_data)
+    if not selected:
+        return None
+    goods_no = str(selected.get("goods_no") or "").strip()
+    return goods_no or None
+
+
+def resolve_product_row_from_template_selection(
+    user_text: str,
+    template_data: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
     if not user_text or not isinstance(template_data, Mapping):
         return None
     data = template_data.get("data") if isinstance(template_data.get("data"), Mapping) else template_data
@@ -3477,21 +3512,65 @@ def resolve_goods_no_from_product_template_selection(user_text: str, template_da
         return None
 
     text = user_text.strip()
+    normalized_text = re.sub(r"\s+", " ", text)
+    if (
+        _PRODUCT_SELECTION_INFO_QUERY_RE.search(normalized_text)
+        and not _PRODUCT_SELECTION_TRANSACTION_ACTION_RE.search(normalized_text)
+    ):
+        return None
+
+    def _row_at(index: int) -> dict[str, Any] | None:
+        if index < 0 or index >= len(products):
+            return None
+        product = products[index]
+        meta = metadata[index]
+        if not isinstance(product, Mapping) or not isinstance(meta, Mapping):
+            return None
+        canonical_product = canonical_context_from_template_boundary(product)
+        canonical_meta = canonical_context_from_template_boundary(meta)
+        goods_no = str(canonical_meta.get("goods_no") or canonical_product.get("goods_no") or "").strip()
+        if not goods_no:
+            return None
+        product_name = str(
+            canonical_product.get("product_name")
+            or canonical_meta.get("product_name")
+            or product.get("titleProductName")
+            or product.get("title")
+            or ""
+        ).strip()
+        tire_size = normalize_tire_size(
+            str(
+                canonical_product.get("tire_size")
+                or canonical_meta.get("tire_size")
+                or product.get("titleTires")
+                or ""
+            )
+        )
+        row = {
+            "goods_no": goods_no,
+            "product_name": product_name,
+            "tire_model": product_name,
+            "tire_size": tire_size,
+            "candidate_index": index + 1,
+            "selection_source": "product_template_candidate",
+        }
+        return {key: value for key, value in row.items() if value not in (None, "", [], {})}
+
     ordinal_idx = _selection_ordinal_index(text, len(metadata))
-    if ordinal_idx is not None and isinstance(metadata[ordinal_idx], Mapping):
-        goods_no = str(canonical_context_from_template_boundary(metadata[ordinal_idx]).get("goods_no") or "").strip()
-        return goods_no or None
+    if ordinal_idx is not None:
+        return _row_at(ordinal_idx)
+    if normalized_text in _PRODUCT_DEMONSTRATIVE_SELECTION_LABELS and len(products) == 1:
+        return _row_at(0)
 
     target_size = normalize_tire_size(text)
     tokens = [t.lower() for t in re.findall(r"[A-Za-z가-힣0-9]+", text) if len(t) >= 2]
-    best_goods_no = ""
+    best_row: dict[str, Any] | None = None
     best_score = 0
     tied = False
-    for product, meta in zip(products, metadata):
+    for index, (product, meta) in enumerate(zip(products, metadata)):
         if not isinstance(product, Mapping) or not isinstance(meta, Mapping):
             continue
         canonical_product = canonical_context_from_template_boundary(product)
-        canonical_meta = canonical_context_from_template_boundary(meta)
         product_size = normalize_tire_size(str(canonical_product.get("tire_size") or ""))
         if target_size and product_size != target_size:
             continue
@@ -3503,15 +3582,14 @@ def resolve_goods_no_from_product_template_selection(user_text: str, template_da
             )
         ).lower()
         score = sum(1 for token in tokens if token in title)
-        goods_no = str(canonical_meta.get("goods_no") or "").strip()
         if score > best_score:
             best_score = score
-            best_goods_no = goods_no
+            best_row = _row_at(index)
             tied = False
         elif score == best_score and score > 0:
             tied = True
-    if best_goods_no and best_score >= 2 and not tied:
-        return best_goods_no
+    if best_row and best_score >= 2 and not tied:
+        return best_row
     return None
 
 
