@@ -30865,6 +30865,42 @@ def test_quick_order_execute_promotes_ready_preorder_confirmation(user_text: str
     assert not should_guard_required_slots(contract)
 
 
+def test_preorder_confirmation_action_mode_stays_purchase_continuation() -> None:
+    routing_result = MultiAgentDomain(
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        reason="preorder_confirmation_execute",
+        execution_plan=["transaction:quick_order_execute"],
+        user_behavior="confirming a ready preorder card to execute quick order",
+        flow="preorder_confirmation_execute",
+        claim_check_type="none",
+        complaint_scope="none",
+        agent_prompt_profile=chat_module.AgentPromptProfile.FULL,
+    )
+    slots = ConversationSlots(
+        goods_no="G000000317682",
+        tire_size="235/55R19",
+        ord_qty=4,
+        shop_id="F00721",
+        shop_name="티스테이션 판교점",
+        requested_cal_day="20260630",
+        rsv_hour="16",
+        pending_intent="order",
+        goal_type="place_order",
+    )
+
+    action_mode = _current_turn_action_mode(
+        user_text="주문 확정",
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        routing_result=routing_result,
+        regex_slots=ConversationSlots(),
+        merged_slots=slots,
+        explicit_override_reason=None,
+        resume_source="none",
+    )
+
+    assert action_mode == "purchase_continuation"
+
+
 def test_quick_order_execute_direct_fast_path_is_blocked_by_support_contract() -> None:
     contract = TurnContract(
         domain="support",

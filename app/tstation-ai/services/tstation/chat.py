@@ -1500,6 +1500,16 @@ def _current_turn_action_mode(
 
     routing_intent = str(getattr(routing_result, "intent", "") or "").strip()
     if (
+        MultiAgentDomain.Domain.TRANSACTION in domains
+        and (
+            routing_intent == "quick_order_execute"
+            or "quick_order_execute" in plan_text
+            or str(getattr(routing_result, "flow", "") or "").strip() == "preorder_confirmation_execute"
+        )
+    ):
+        return "purchase_continuation"
+
+    if (
         routing_intent == "resolve_product_for_purchase_size_selection"
         or "resolve_product_for_purchase_size_selection" in plan_text
     ) and (
