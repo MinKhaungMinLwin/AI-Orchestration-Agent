@@ -2067,10 +2067,15 @@ def _product_search_policy_fallback_response(tool_data_list: list[dict] | None =
                     f"입력하신 {keyword} {size} 상품은 현재 확인되지 않아요.\n"
                     "다른 사이즈나 비슷한 상품으로 다시 찾아드릴 수 있어요."
                 )
+            if keyword:
+                return (
+                    f"입력하신 {keyword} 상품은 현재 검색 결과에서 찾지 못했어요.\n"
+                    "상품명을 다시 확인하거나 다른 키워드로 검색해 주세요."
+                )
     if not _STOCK_OR_INSTALL_REQUEST_RE.search(current_user_text.get() or ""):
         return (
-            "검색된 상품 정보를 기준으로 안내드릴게요.\n"
-            "정확한 상품 목록은 상품명이나 조건을 조금 더 구체적으로 알려주시면 다시 확인해 드릴 수 있어요."
+            "검색 결과에서 상품을 찾지 못했어요.\n"
+            "상품명이나 조건을 조금 더 구체적으로 알려주시면 다시 확인해 드릴게요."
         )
     return (
         "상품은 확인했어요. 장착 가능 여부를 확인하려면 타이어 사이즈와 지역 정보가 필요해요.\n"
@@ -2941,6 +2946,16 @@ def _map_discovery_policy_quickreply(tool_data_list: list[dict], assistant_text:
             rows = raw if isinstance(raw, list) else (raw.get("items") if isinstance(raw, dict) else [])
             if isinstance(rows, list) and any(isinstance(row, dict) for row in rows):
                 return None
+    product_search_explicit_no_result = False
+    if response_shape_key == "product_search_summary":
+        search_entries = _find_entries(tool_data_list, "search_product_tool")
+        product_search_explicit_no_result = bool(search_entries)
+        for entry in search_entries:
+            raw = _unwrap(entry)
+            rows = raw if isinstance(raw, list) else (raw.get("items") if isinstance(raw, dict) else [])
+            if isinstance(rows, list) and any(isinstance(row, dict) for row in rows):
+                product_search_explicit_no_result = False
+                break
     response = sanitize_user_facing_response(assistant_text, "") or decision.assistant_guidance
     if response_shape_key == "product_attribute_summary":
         response = _product_attribute_policy_response(tool_data_list)
@@ -2953,7 +2968,8 @@ def _map_discovery_policy_quickreply(tool_data_list: list[dict], assistant_text:
     if response_shape_key == "restock_inquiry_summary":
         response = _product_restock_policy_response(tool_data_list) or response
     if response_shape_key == "product_search_summary" and (
-        not response
+        product_search_explicit_no_result
+        or not response
         or response == decision.assistant_guidance
         or "카드" in response
         or "선택해 주세요" in response
