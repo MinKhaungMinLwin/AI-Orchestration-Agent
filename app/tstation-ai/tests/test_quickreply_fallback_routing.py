@@ -34873,6 +34873,44 @@ def test_support_faq_policy_event_for_assurance_service_surfaces_core_conditions
     assert event["data"]["quickReplies"][0]["url"] == CTAUrls.WARRANTY_MAIN
 
 
+def test_support_faq_policy_event_for_assurance_product_target_uses_product_check_ctas() -> None:
+    event = _build_support_faq_policy_event(
+        "assurance_service_policy",
+        "안심서비스 가능한 타이어는?",
+        tool_result={
+            "status": "success",
+            "data": {
+                "items": [
+                    {
+                        "answer": (
+                            "안심서비스 대상 타이어는 별도로 지정되어 있으므로 구매 전 대상 여부를 확인해야 합니다."
+                        )
+                    }
+                ]
+            },
+        },
+    )
+
+    assert event is not None
+    response = str(event["data"]["assistantResponse"])
+    quick_replies = event["data"]["quickReplies"]
+    assert "안심서비스" in response
+    assert _labels(quick_replies) == ["차량으로 확인하기", "타이어 사이즈 입력"]
+    assert all(chip["domain"] == "DISCOVERY" for chip in quick_replies)
+    assert "나의 워런티 확인" not in _labels(quick_replies)
+
+
+def test_support_faq_policy_event_for_assurance_compensation_keeps_warranty_cta() -> None:
+    event = _build_support_faq_policy_event(
+        "assurance_service_policy",
+        "안심서비스 보상 조건이 어떻게 돼?",
+    )
+
+    assert event is not None
+    assert _labels(event["data"]["quickReplies"]) == ["나의 워런티 확인"]
+    assert event["data"]["quickReplies"][0]["url"] == CTAUrls.WARRANTY_MAIN
+
+
 def test_support_faq_policy_event_for_tire_quality_warranty_uses_invariant_and_warranty_cta() -> None:
     event = _build_support_faq_policy_event(
         "tire_quality_warranty_policy",

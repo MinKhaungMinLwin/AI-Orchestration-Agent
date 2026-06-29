@@ -76,6 +76,12 @@ _ASSURANCE_SERVICE_POLICY_ANCHOR_RE = re.compile(
     r"안심\s*서비스|안심서비스|안심\s*플러스|안심플러스|디지털\s*워런티|종이\s*보증서|보증서|워런티",
     re.IGNORECASE,
 )
+_ASSURANCE_PRODUCT_ELIGIBILITY_RE = re.compile(
+    r"(?:가능|대상|적용|가입).{0,16}(?:타이어|상품|제품|모델)|"
+    r"(?:타이어|상품|제품|모델).{0,16}(?:가능|대상|적용|가입)|"
+    r"어떤\s*(?:타이어|상품|제품|모델)",
+    re.IGNORECASE,
+)
 _PROMOTION_PARTIAL_CANCEL_RE = re.compile(
     r"부분\s*취소|[0-9]+\s*(?:짝|개)\s*취소|반납|차감|돌려줘야",
     re.IGNORECASE,
@@ -840,6 +846,7 @@ def _build_support_faq_safe_fallback_reply(
     *,
     policy_group: str,
     fact_type: str,
+    user_text: str = "",
     filtered_candidates: list[Mapping[str, Any]],
     excluded_candidates: list[Mapping[str, Any]],
     fallback_reason: str,
@@ -849,6 +856,7 @@ def _build_support_faq_safe_fallback_reply(
         fact_type,
         {},
         safe_fallback_used=True,
+        user_text=user_text,
     )
     return {
         "assistant_response": response,
@@ -1194,8 +1202,19 @@ def _extract_support_faq_policy_facts(
     return _support_faq_strip_card_refund_facts_for_non_anchor(intent=intent, user_text=user_text, facts=facts)
 
 
-def _support_faq_reply_ctas(policy_group: str, fact_type: str) -> list[dict[str, Any]]:
+def _is_assurance_product_eligibility_question(user_text: str) -> bool:
+    return bool(_ASSURANCE_SERVICE_POLICY_ANCHOR_RE.search(user_text or "")) and bool(
+        _ASSURANCE_PRODUCT_ELIGIBILITY_RE.search(user_text or "")
+    )
+
+
+def _support_faq_reply_ctas(policy_group: str, fact_type: str, *, user_text: str = "") -> list[dict[str, Any]]:
     if policy_group == _ASSURANCE_WARRANTY_POLICY:
+        if fact_type == "assurance_coverage_condition" and _is_assurance_product_eligibility_question(user_text):
+            return [
+                {"label": "차량으로 확인하기", "domain": "DISCOVERY"},
+                {"label": "타이어 사이즈 입력", "domain": "DISCOVERY"},
+            ]
         return [{"label": "나의 워런티 확인", "url": CTAUrls.WARRANTY_MAIN, "domain": "SUPPORT"}]
     if policy_group == _BENEFIT_PROMOTION_POLICY:
         return [{"label": "진행 중인 이벤트 보기", "url": CTAUrls.PROMOTION_EVENT_LIST, "domain": "DISCOVERY"}]
@@ -1259,6 +1278,7 @@ def _build_support_faq_policy_reply(
     facts: Mapping[str, Any],
     *,
     safe_fallback_used: bool,
+    user_text: str = "",
 ) -> tuple[str, list[dict[str, Any]]]:
     if policy_group == _RESERVATION_INSTALLATION_POLICY and fact_type == "visit_reservation_cancel":
         if safe_fallback_used:
@@ -1453,7 +1473,7 @@ def _build_support_faq_policy_reply(
             "사진만으로는 타이어 마모 상태, 교체 필요 여부, 주행 안전을 확정할 수 없어요. 사진이나 파일 첨부가 필요한 경우 1:1 문의를 통해 등록해 주세요.\n"
             "실제 마모도, 균열, 편마모, 손상 여부는 마모도 측정 서비스 또는 가까운 티스테이션 매장 점검으로 확인해 주세요."
         )
-    return response, _support_faq_reply_ctas(policy_group, fact_type)
+    return response, _support_faq_reply_ctas(policy_group, fact_type, user_text=user_text)
 
 
 def build_support_faq_source_grounded_reply(
@@ -1584,6 +1604,7 @@ def build_support_faq_evidence_grounded_reply(
         return _build_support_faq_safe_fallback_reply(
             policy_group=policy_group,
             fact_type=fact_type,
+            user_text=user_text,
             filtered_candidates=[],
             excluded_candidates=excluded_candidates,
             fallback_reason="no_filtered_candidates",
@@ -1612,6 +1633,7 @@ def build_support_faq_evidence_grounded_reply(
         return _build_support_faq_safe_fallback_reply(
             policy_group=policy_group,
             fact_type=fact_type,
+            user_text=user_text,
             filtered_candidates=filtered,
             excluded_candidates=excluded_candidates,
             fallback_reason="no_selected_evidence",
@@ -1625,6 +1647,7 @@ def build_support_faq_evidence_grounded_reply(
         return _build_support_faq_safe_fallback_reply(
             policy_group=policy_group,
             fact_type=fact_type,
+            user_text=user_text,
             filtered_candidates=selected_candidates,
             excluded_candidates=excluded_candidates,
             fallback_reason="top_score_below_min",
@@ -1669,6 +1692,7 @@ def build_support_faq_evidence_grounded_reply(
         return _build_support_faq_safe_fallback_reply(
             policy_group=policy_group,
             fact_type=fact_type,
+            user_text=user_text,
             filtered_candidates=selected_candidates,
             excluded_candidates=excluded_candidates,
             fallback_reason=str(failure_reason or "llm_answer_missing"),
@@ -1746,6 +1770,7 @@ def build_support_faq_policy_reply(
         fact_type,
         facts,
         safe_fallback_used=safe_fallback_used,
+        user_text=user_text,
     )
 
     allowed_categories = [
