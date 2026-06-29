@@ -87,6 +87,7 @@ from services.tstation.policies.flow_state import (
     latest_router_evidence,
     recommendation_listcar_flow_delta,
     recommendation_vehicle_selection_patch,
+    selected_store_slots_from_active_flow_context,
     stock_store_candidate_selection_patch,
     stock_store_candidates_flow_delta,
 )
@@ -114,6 +115,7 @@ from services.tstation.policies.cross_domain_policy import (
 )
 from services.tstation.policies.flow_controller import (
     build_purchase_flow_fallback_event,
+    build_selected_store_confirmation_event,
     resolve_purchase_order_flow,
     transition_current_flow,
 )
@@ -16675,10 +16677,10 @@ _FAST_PATH_TRANSACTION_RECOVERY_BLOCKLIST = frozenset({
     "get_multi_store_schedule_tool",
     "get_final_price_tool",
     "get_logistics_inventory_tool",
-    "get_store_inventory_tool",
 })
 _FAST_PATH_TRANSACTION_RECOVERY_ALLOWED_TOOLS = frozenset({
     "get_store_schedule_tool",
+    "get_store_inventory_tool",
     "get_store_list_tool",
 })
 _FAST_PATH_DISCOVERY_RECOVERY_ALLOWED_TOOLS = frozenset({
@@ -16836,7 +16838,46 @@ def _contract_required_recommendation_tool_input(
     return tool_input
 
 
-def _is_contract_required_stock_store_schedule(turn_contract: TurnContract | None) -> bool:
+def _selected_store_slots_from_merged_slots(
+    merged_slots: ConversationSlots | None,
+    *,
+    allowed_flow_types: set[str] | frozenset[str] | None = None,
+) -> dict[str, Any]:
+    availability_context = getattr(merged_slots, "availability_context", None) if merged_slots is not None else None
+    active_flow_context = (
+        availability_context.get("active_flow_context")
+        if isinstance(availability_context, Mapping)
+        and isinstance(availability_context.get("active_flow_context"), Mapping)
+        else {}
+    )
+    return selected_store_slots_from_active_flow_context(
+        active_flow_context,
+        allowed_flow_types=allowed_flow_types,
+    )
+
+
+def _effective_known_slots_with_selected_store(
+    turn_contract: TurnContract,
+    merged_slots: ConversationSlots | None,
+    *,
+    allowed_flow_types: set[str] | frozenset[str] | None = None,
+) -> dict[str, Any]:
+    known_slots = dict(turn_contract.known_slots or {})
+    selected_store_slots = _selected_store_slots_from_merged_slots(
+        merged_slots,
+        allowed_flow_types=allowed_flow_types,
+    )
+    for key, value in selected_store_slots.items():
+        if value not in (None, "", [], {}) and known_slots.get(key) in (None, "", [], {}):
+            known_slots[key] = value
+    return known_slots
+
+
+def _is_contract_required_stock_store_schedule(
+    turn_contract: TurnContract | None,
+    *,
+    merged_slots: ConversationSlots | None = None,
+) -> bool:
     if turn_contract is None:
         return False
     if str(turn_contract.domain or "").strip().lower() != PolicyDomain.TRANSACTION.value:
@@ -16857,7 +16898,11 @@ def _is_contract_required_stock_store_schedule(turn_contract: TurnContract | Non
         return False
     if tuple(turn_contract.blocking_required_slots or ()):
         return False
-    known_slots = turn_contract.known_slots or {}
+    known_slots = _effective_known_slots_with_selected_store(
+        turn_contract,
+        merged_slots,
+        allowed_flow_types=frozenset({"stock", "store_schedule"}),
+    )
     schedule_mode = str(
         known_slots.get("schedule_mode")
         or known_slots.get("inventory_mode")
@@ -16873,10 +16918,18 @@ def _is_contract_required_stock_store_schedule(turn_contract: TurnContract | Non
     )
 
 
-def _contract_required_stock_store_schedule_tool_input(turn_contract: TurnContract) -> dict[str, Any]:
-    if not _is_contract_required_stock_store_schedule(turn_contract):
+def _contract_required_stock_store_schedule_tool_input(
+    turn_contract: TurnContract,
+    *,
+    merged_slots: ConversationSlots | None = None,
+) -> dict[str, Any]:
+    if not _is_contract_required_stock_store_schedule(turn_contract, merged_slots=merged_slots):
         return {}
-    known_slots = turn_contract.known_slots or {}
+    known_slots = _effective_known_slots_with_selected_store(
+        turn_contract,
+        merged_slots,
+        allowed_flow_types=frozenset({"stock", "store_schedule"}),
+    )
     shop_id = str(known_slots.get("shop_id") or "").strip()
     schedule_mode = str(
         known_slots.get("schedule_mode")
@@ -16886,6 +16939,62 @@ def _contract_required_stock_store_schedule_tool_input(turn_contract: TurnContra
     if not shop_id or not schedule_mode:
         return {}
     return {"shop_id": shop_id, "mode": schedule_mode}
+
+
+def _is_contract_required_stock_inventory_selected_store(
+    turn_contract: TurnContract | None,
+    *,
+    merged_slots: ConversationSlots | None = None,
+) -> bool:
+    if turn_contract is None:
+        return False
+    if str(turn_contract.domain or "").strip().lower() != PolicyDomain.TRANSACTION.value:
+        return False
+    if tuple(turn_contract.blocking_required_slots or ()):
+        return False
+    allowed_tools = {str(tool) for tool in tuple(turn_contract.allowed_tools or ()) if str(tool).strip()}
+    forbidden_tools = {str(tool) for tool in tuple(turn_contract.forbidden_tools or ()) if str(tool).strip()}
+    if "get_store_inventory_tool" not in allowed_tools or "get_store_inventory_tool" in forbidden_tools:
+        return False
+    known_slots = _effective_known_slots_with_selected_store(
+        turn_contract,
+        merged_slots,
+        allowed_flow_types=frozenset({"stock"}),
+    )
+    stock_check_mode = str(known_slots.get("stock_check_mode") or "").strip()
+    return bool(
+        stock_check_mode == "inventory_only"
+        and known_slots.get("shop_id")
+        and known_slots.get("goods_no")
+        and (known_slots.get("ord_qty") or known_slots.get("quantity"))
+    )
+
+
+def _contract_required_stock_inventory_selected_store_tool_input(
+    turn_contract: TurnContract,
+    *,
+    merged_slots: ConversationSlots | None = None,
+) -> dict[str, Any]:
+    if not _is_contract_required_stock_inventory_selected_store(turn_contract, merged_slots=merged_slots):
+        return {}
+    known_slots = _effective_known_slots_with_selected_store(
+        turn_contract,
+        merged_slots,
+        allowed_flow_types=frozenset({"stock"}),
+    )
+    goods_no = str(known_slots.get("goods_no") or "").strip()
+    shop_id = str(known_slots.get("shop_id") or "").strip()
+    raw_qty = known_slots.get("ord_qty") or known_slots.get("quantity")
+    try:
+        qty = int(raw_qty)
+    except (TypeError, ValueError):
+        qty = 0
+    if not goods_no or not shop_id or qty <= 0:
+        return {}
+    return {
+        "goods_list": [{"goodsNo": goods_no, "qty": str(qty)}],
+        "shop_id_list": [{"shopId": shop_id}],
+    }
 
 
 def _is_contract_required_stock_inventory_store_lookup(turn_contract: TurnContract | None) -> bool:
@@ -16937,6 +17046,7 @@ def _contract_required_transaction_tool_input(
     *,
     turn_contract: TurnContract,
     preferred_tool: str,
+    merged_slots: ConversationSlots | None = None,
 ) -> tuple[dict[str, Any], str, str] | None:
     if str(turn_contract.domain or "").strip().lower() != PolicyDomain.TRANSACTION.value:
         return None
@@ -16952,9 +17062,21 @@ def _contract_required_transaction_tool_input(
         return None
 
     if preferred_tool == "get_store_schedule_tool":
-        schedule_input = _contract_required_stock_store_schedule_tool_input(turn_contract)
+        schedule_input = _contract_required_stock_store_schedule_tool_input(
+            turn_contract,
+            merged_slots=merged_slots,
+        )
         if schedule_input:
             return schedule_input, "turn_contract_required_stock_store_schedule", "예약 가능 일정 확인 중..."
+        return None
+
+    if preferred_tool == "get_store_inventory_tool":
+        inventory_input = _contract_required_stock_inventory_selected_store_tool_input(
+            turn_contract,
+            merged_slots=merged_slots,
+        )
+        if inventory_input:
+            return inventory_input, "turn_contract_required_stock_inventory_selected_store", "매장 재고 확인 중..."
         return None
 
     if (
@@ -16999,8 +17121,9 @@ async def _recover_contract_required_stock_store_schedule(
     blocked_fast_path_source: str = "contract_required_stock_store_schedule",
 ) -> dict[str, Any] | None:
     if not (
-        _is_contract_required_stock_store_schedule(turn_contract)
+        _is_contract_required_stock_store_schedule(turn_contract, merged_slots=merged_slots)
         or _is_contract_required_stock_inventory_store_lookup(turn_contract)
+        or _is_contract_required_stock_inventory_selected_store(turn_contract, merged_slots=merged_slots)
     ):
         return None
     return await recover_blocked_fast_path_to_contract_tool(
@@ -17342,6 +17465,7 @@ async def recover_blocked_fast_path_to_contract_tool(
         contract_required_tool_input = _contract_required_transaction_tool_input(
             turn_contract=turn_contract,
             preferred_tool=preferred_tool,
+            merged_slots=merged_slots,
         )
         if contract_required_tool_input is None:
             return None
@@ -17385,6 +17509,8 @@ async def recover_blocked_fast_path_to_contract_tool(
             assistant_text = "등록된 차량을 확인했어요."
         elif preferred_tool == "get_store_schedule_tool":
             assistant_text = "예약 가능 일정을 확인했어요."
+        elif preferred_tool == "get_store_inventory_tool":
+            assistant_text = "매장 재고를 확인했어요."
         else:
             assistant_text = "요청하신 정보를 확인했어요."
         mapped_event = try_build_template(
@@ -27840,6 +27966,7 @@ class TStationChatServiceV2:
             and isinstance(merged_slots.availability_context.get("active_flow_context"), Mapping)
             else {}
         )
+        selected_store_confirmation_event: dict[str, Any] | None = None
         if (
             not active_stock_flow_context
             or not isinstance(active_stock_flow_context.get("last_candidates"), list)
@@ -27904,6 +28031,12 @@ class TStationChatServiceV2:
             )
             availability_context["active_flow_context"] = commit_result.state.to_active_flow_context()
             merged_slots.availability_context = availability_context
+            selected_store_confirmation_event = build_selected_store_confirmation_event(
+                selected_store=selected_store_slots_from_active_flow_context(
+                    availability_context["active_flow_context"],
+                    allowed_flow_types=frozenset({"store_search", "store_service_search", "favorite_store"}),
+                )
+            )
             if merged_slots.model_dump() != before_stock_slots:
                 vehicle_selection_trace_metadata.update({
                     "active_stock_flow_resume_applied": True,
@@ -28385,6 +28518,59 @@ class TStationChatServiceV2:
         )
 
         # STREAM MODE
+        if selected_store_confirmation_event is not None:
+            executable_tools = {
+                "quick_order_tool",
+                "save_to_cart_tool",
+                "transaction_store_preview_tool",
+                "get_store_schedule_tool",
+                "get_store_inventory_tool",
+                "get_logistics_inventory_tool",
+                "get_multi_store_schedule_tool",
+                "get_final_price_tool",
+            }
+            allowed_tools = {
+                str(tool)
+                for tool in tuple(getattr(turn_contract, "allowed_tools", ()) or ())
+                if str(tool).strip()
+            }
+            blocking_slots = tuple(getattr(turn_contract, "blocking_required_slots", ()) or ())
+            can_emit_store_confirmation = not blocking_slots and not (allowed_tools & executable_tools)
+            if can_emit_store_confirmation:
+                vehicle_selection_trace_metadata.update({
+                    "selected_store_confirmation_emitted": True,
+                    "selected_store_confirmation_source": "active_flow_context",
+                })
+                await chat_history_svc.save_slots_async(request.session_id, merged_slots, user_id=request.user_id)
+                if request.stream:
+                    _record_direct_return_trace(
+                        parent_span=_parent_span,
+                        trace_id=request.tracing_id,
+                        session_id=request.session_id,
+                        user_id=request.user_id,
+                        user_text=last_user_text,
+                        domains=domains,
+                        event=selected_store_confirmation_event,
+                        turn_contract=turn_contract,
+                        direct_return_reason="selected_store_confirmation",
+                        extra_metadata=vehicle_selection_trace_metadata,
+                    )
+                    return StreamingResponse(
+                        TStationChatServiceV2._stream_policy_guard_response(selected_store_confirmation_event),
+                        media_type="text/event-stream",
+                        headers={
+                            "Cache-Control": "no-cache",
+                            "Connection": "keep-alive",
+                            "X-Accel-Buffering": "no",
+                        },
+                    )
+                event_data = (
+                    selected_store_confirmation_event.get("data")
+                    if isinstance(selected_store_confirmation_event.get("data"), dict)
+                    else {}
+                )
+                return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
+
         complaint_scope = _complaint_scope_for_turn(last_user_text, routing_result)
         complaint_guard_event = _build_complaint_scope_guard_event(complaint_scope)
         if complaint_guard_event is not None:

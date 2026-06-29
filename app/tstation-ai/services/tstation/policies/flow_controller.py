@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import re
 from typing import Any, Mapping
 
+from services.tstation.common.cta_urls import CTAUrls
 from services.tstation.policies.discovery_intent_policy import normalize_tire_size
 from services.tstation.policies.response_decision import TemplateName
 
@@ -945,6 +946,48 @@ def build_purchase_flow_fallback_event(
             "quickReplies": _purchase_fallback_quick_replies(state.flow_step),
             "predictedDomains": ["TRANSACTION", "DISCOVERY"],
             "metadata": metadata,
+        },
+    }
+
+
+def build_selected_store_confirmation_event(
+    *,
+    selected_store: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    selected = {key: value for key, value in dict(selected_store or {}).items() if value not in (None, "", [], {})}
+    shop_id = str(selected.get("shop_id") or "").strip()
+    shop_name = str(selected.get("shop_name") or selected.get("store_name") or "").strip()
+    flow_type = str(selected.get("flow_type") or "").strip()
+    if flow_type not in {"store_search", "store_service_search", "favorite_store"}:
+        return None
+    if not shop_id or not shop_name:
+        return None
+
+    quick_replies: list[dict[str, Any]] = [
+        {
+            "label": "매장 상세 페이지로 이동",
+            "domain": "TRANSACTION",
+            "url": CTAUrls.STORE_DETAIL.replace("<shop_seq>", shop_id),
+        },
+        {"label": "다른 매장 보기", "domain": "TRANSACTION"},
+    ]
+    return {
+        "type": "data",
+        "template": TemplateName.QUICK_REPLY.value,
+        "source_domain": "transaction",
+        "assistant_response_source": "code_selected_store_confirmation",
+        "data": {
+            "assistantResponse": f"{shop_name} 매장으로 선택했어요.",
+            "quickReplies": quick_replies,
+            "predictedDomains": ["TRANSACTION"],
+            "metadata": {
+                "response_shape_key": "selected_store_confirmation",
+                "flowType": flow_type,
+                "flowStep": str(selected.get("flow_step") or "store_selected"),
+                "shopId": shop_id,
+                "shopName": shop_name,
+                "storeSelectionExecution": "none",
+            },
         },
     }
 

@@ -39,6 +39,7 @@ from services.tstation.policies.flow_state import (
     latest_router_evidence,
     recommendation_listcar_flow_delta,
     recommendation_vehicle_selection_patch,
+    selected_store_slots_from_active_flow_context,
     stock_store_candidate_selection_patch,
     stock_store_candidates_flow_delta,
 )
@@ -389,6 +390,7 @@ from services.tstation.policies.delivery_policy_gate import (
 )
 from services.tstation.policies.flow_controller import (
     build_purchase_flow_fallback_event,
+    build_selected_store_confirmation_event,
     resolve_purchase_order_flow,
     transition_current_flow,
 )
@@ -12695,6 +12697,278 @@ def test_get_store_list_schedule_event_stores_schedule_candidate_flow() -> None:
     assert patch["_flow_type"] == "store_schedule"
     assert patch["flow_step"] == "store_selected"
     assert "pending_intent" not in patch
+
+
+def test_selected_store_slots_from_active_flow_context_returns_confirmed_store() -> None:
+    event = {
+        "template": "location",
+        "source_domain": "transaction",
+        "data": {
+            "stores": [{"nameAddress": "티스테이션 강남역점"}],
+            "metadata": [
+                {
+                    "shopId": "F00002",
+                    "shopName": "티스테이션 강남역점",
+                    "sourceTool": "get_store_list_tool",
+                    "goodsNo": "G000000310126",
+                    "tireSize": "245/45R19",
+                    "ordQty": 4,
+                    "region": "강남",
+                    "pendingIntent": "stock",
+                    "goalType": "store_with_stock",
+                    "stockCheckMode": "inventory_only",
+                    "inventoryMode": "inventory_only",
+                }
+            ],
+        },
+    }
+    candidate_context = commit_flow_state(
+        {},
+        stock_store_candidates_flow_delta(event=event),
+        source="location_event:stock_store_candidates",
+        flow_type="stock",
+        flow_step="show_store_candidates",
+    ).state.to_active_flow_context()
+    patch = stock_store_candidate_selection_patch(
+        active_flow_context=candidate_context,
+        user_text="첫번째",
+        selection_hint={},
+    )
+    selected_context = commit_flow_state(
+        candidate_context,
+        {key: value for key, value in patch.items() if not key.startswith("_") and key != "flow_step"},
+        source="location_selection:stock",
+        flow_type="stock",
+        flow_step=str(patch["flow_step"]),
+        status="resumed",
+    ).state.to_active_flow_context()
+
+    selected = selected_store_slots_from_active_flow_context(
+        selected_context,
+        allowed_flow_types=frozenset({"stock"}),
+    )
+
+    assert selected["flow_type"] == "stock"
+    assert selected["flow_step"] == "store_selected"
+    assert selected["shop_id"] == "F00002"
+    assert selected["shop_name"] == "티스테이션 강남역점"
+    assert selected["goods_no"] == "G000000310126"
+    assert selected["tire_size"] == "245/45R19"
+    assert selected["ord_qty"] == 4
+    assert selected["source_tool"] == "get_store_list_tool"
+    assert selected["stock_check_mode"] == "inventory_only"
+
+
+def test_contract_required_schedule_tool_input_uses_selected_store_active_flow() -> None:
+    active_context = {
+        "flow_type": "stock",
+        "status": "resumed",
+        "flow_step": "selected_store_schedule",
+        "store": {"shop_id": "F00071", "shop_name": "티스테이션 분당정자점"},
+        "product": {"goods_no": "G000000310126", "tire_size": "245/45R19", "ord_qty": 2},
+        "intent": {
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+            "schedule_mode": "in_store_logistics_combined",
+        },
+        "last_candidates": [
+            {
+                "type": "store",
+                "shop_id": "F00071",
+                "shop_name": "티스테이션 분당정자점",
+                "source_tool": "transaction_store_preview_tool",
+                "schedule_mode": "in_store_logistics_combined",
+                "inventory_mode": "in_store_logistics_combined",
+            }
+        ],
+    }
+    contract = TurnContract(
+        domain="transaction",
+        intent="stock_store_search_slot_fill_store",
+        known_slots={
+            "goods_no": "G000000310126",
+            "tire_size": "245/45R19",
+            "ord_qty": 2,
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+        },
+        allowed_tools=("get_store_schedule_tool",),
+        forbidden_tools=("transaction_store_preview_tool", "quick_order_tool"),
+        blocking_required_slots=(),
+        context_state="resumed",
+        response_decision={"template": "datepick", "metadata": {"response_shape_key": "reservation_slots"}},
+    )
+    merged_slots = ConversationSlots(availability_context={"active_flow_context": active_context})
+
+    assert chat_module._is_contract_required_stock_store_schedule(contract, merged_slots=merged_slots) is True
+    assert chat_module._contract_required_stock_store_schedule_tool_input(
+        contract,
+        merged_slots=merged_slots,
+    ) == {"shop_id": "F00071", "mode": "in_store_logistics_combined"}
+
+
+def test_contract_required_inventory_tool_input_uses_selected_store_active_flow() -> None:
+    active_context = {
+        "flow_type": "stock",
+        "status": "resumed",
+        "flow_step": "store_selected",
+        "store": {"shop_id": "F00002", "shop_name": "티스테이션 강남역점"},
+        "product": {"goods_no": "G000000310126", "tire_size": "245/45R19", "ord_qty": 4},
+        "intent": {"pending_intent": "stock", "goal_type": "store_with_stock", "stock_check_mode": "inventory_only"},
+        "last_candidates": [
+            {
+                "type": "store",
+                "shop_id": "F00002",
+                "shop_name": "티스테이션 강남역점",
+                "source_tool": "get_store_list_tool",
+                "stock_check_mode": "inventory_only",
+            }
+        ],
+    }
+    contract = TurnContract(
+        domain="transaction",
+        intent="fill_quantity_slot",
+        known_slots={
+            "goods_no": "G000000310126",
+            "tire_size": "245/45R19",
+            "ord_qty": 4,
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+            "stock_check_mode": "inventory_only",
+        },
+        allowed_tools=("get_store_inventory_tool",),
+        forbidden_tools=("transaction_store_preview_tool", "get_store_schedule_tool", "quick_order_tool"),
+        blocking_required_slots=(),
+        context_state="resumed",
+        response_decision={"template": "quickReply", "metadata": {"response_shape_key": "stock_available"}},
+    )
+    merged_slots = ConversationSlots(availability_context={"active_flow_context": active_context})
+
+    assert chat_module._is_contract_required_stock_inventory_selected_store(contract, merged_slots=merged_slots) is True
+    assert chat_module._contract_required_stock_inventory_selected_store_tool_input(
+        contract,
+        merged_slots=merged_slots,
+    ) == {
+        "goods_list": [{"goodsNo": "G000000310126", "qty": "4"}],
+        "shop_id_list": [{"shopId": "F00002"}],
+    }
+
+
+def test_selected_store_confirmation_event_is_generic_store_only() -> None:
+    generic_event = build_selected_store_confirmation_event(
+        selected_store={
+            "flow_type": "store_search",
+            "flow_step": "store_selected",
+            "shop_id": "F10002",
+            "shop_name": "티스테이션 광교신도시점",
+        }
+    )
+
+    assert generic_event is not None
+    assert generic_event["template"] == "quickReply"
+    assert generic_event["assistant_response_source"] == "code_selected_store_confirmation"
+    assert generic_event["data"]["assistantResponse"] == "티스테이션 광교신도시점 매장으로 선택했어요."
+    assert _labels(generic_event["data"]["quickReplies"]) == ["매장 상세 페이지로 이동", "다른 매장 보기"]
+    assert generic_event["data"]["quickReplies"][0]["url"].endswith("/store/locals/F10002")
+    assert generic_event["data"]["metadata"]["storeSelectionExecution"] == "none"
+
+    stock_event = build_selected_store_confirmation_event(
+        selected_store={
+            "flow_type": "stock",
+            "flow_step": "store_selected",
+            "shop_id": "F00002",
+            "shop_name": "티스테이션 강남역점",
+        }
+    )
+
+    assert stock_event is None
+
+
+def test_recover_contract_required_inventory_tool_runs_selected_store_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_input: dict[str, Any] = {}
+
+    def _fake_inventory_invoke(tool_input: dict[str, Any]) -> dict[str, Any]:
+        captured_input.update(tool_input)
+        return {
+            "status": "success",
+            "data": {"inventory": {"todayShopArray": [{"shopId": "F00002"}], "tnaShopArray": []}},
+        }
+
+    def _fake_try_build_template(tool_data_list: list[dict[str, Any]], assistant_text: str) -> dict[str, Any]:
+        assert tool_data_list[0]["tool"] == "get_store_inventory_tool"
+        assert tool_data_list[0]["args"] == {
+            "goods_list": [{"goodsNo": "G000000310126", "qty": "4"}],
+            "shop_id_list": [{"shopId": "F00002"}],
+        }
+        return {
+            "type": "data",
+            "template": "quickReply",
+            "data": {
+                "assistantResponse": assistant_text,
+                "quickReplies": [],
+                "metadata": {"responseShapeKey": "stock_available"},
+            },
+        }
+
+    async def _fake_to_thread(func: Any, *args: Any, **kwargs: Any) -> Any:
+        return func(*args, **kwargs)
+
+    from services.tstation import template_mapper as template_mapper_module
+    from services.tstation.agents.c_transaction_agent import tools as transaction_tools
+
+    monkeypatch.setattr(
+        transaction_tools,
+        "get_store_inventory_tool",
+        SimpleNamespace(invoke=_fake_inventory_invoke),
+    )
+    monkeypatch.setattr(chat_module.asyncio, "to_thread", _fake_to_thread)
+    monkeypatch.setattr(template_mapper_module, "try_build_template", _fake_try_build_template)
+
+    active_context = {
+        "flow_type": "stock",
+        "status": "resumed",
+        "flow_step": "store_selected",
+        "store": {"shop_id": "F00002", "shop_name": "티스테이션 강남역점"},
+        "product": {"goods_no": "G000000310126", "tire_size": "245/45R19", "ord_qty": 4},
+        "intent": {"pending_intent": "stock", "goal_type": "store_with_stock", "stock_check_mode": "inventory_only"},
+    }
+    contract = TurnContract(
+        domain="transaction",
+        intent="fill_quantity_slot",
+        known_slots={
+            "goods_no": "G000000310126",
+            "tire_size": "245/45R19",
+            "ord_qty": 4,
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+            "stock_check_mode": "inventory_only",
+        },
+        allowed_tools=("get_store_inventory_tool",),
+        forbidden_tools=("transaction_store_preview_tool", "get_store_schedule_tool", "quick_order_tool"),
+        blocking_required_slots=(),
+        context_state="resumed",
+        response_decision={"template": "quickReply", "metadata": {"response_shape_key": "stock_available"}},
+    )
+
+    recovery = asyncio.run(
+        chat_module.recover_blocked_fast_path_to_contract_tool(
+            turn_contract=contract,
+            user_text="첫번째",
+            merged_slots=ConversationSlots(availability_context={"active_flow_context": active_context}),
+            blocked_fast_path_source="contract_required_stock_inventory_selected_store",
+        )
+    )
+
+    assert recovery is not None
+    assert recovery["tool_name"] == "get_store_inventory_tool"
+    assert captured_input == {
+        "goods_list": [{"goodsNo": "G000000310126", "qty": "4"}],
+        "shop_id_list": [{"shopId": "F00002"}],
+    }
+    assert recovery["event"]["template"] == "quickReply"
+    assert recovery["event"]["tool_input_source"] == "turn_contract_required_stock_inventory_selected_store"
 
 
 def test_latest_router_evidence_uses_router_plan_without_execution_slots() -> None:

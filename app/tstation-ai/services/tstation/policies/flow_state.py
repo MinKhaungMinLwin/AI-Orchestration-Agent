@@ -696,6 +696,70 @@ def stock_store_candidate_selection_patch(
     return patch
 
 
+def selected_store_slots_from_active_flow_context(
+    active_flow_context: Mapping[str, Any] | None,
+    *,
+    allowed_flow_types: set[str] | frozenset[str] | None = None,
+) -> dict[str, Any]:
+    active_flow = FlowState.from_active_flow_context(active_flow_context)
+    if active_flow.status not in {"active", "resumed"}:
+        return {}
+    if active_flow.flow_step not in {"store_selected", "selected_store_schedule"}:
+        return {}
+    if allowed_flow_types is not None and active_flow.flow_type not in allowed_flow_types:
+        return {}
+    if not active_flow.store.get("shop_id"):
+        return {}
+    selected: dict[str, Any] = {
+        "flow_type": active_flow.flow_type,
+        "flow_step": active_flow.flow_step,
+        **{
+            key: active_flow.store[key]
+            for key in ("shop_id", "shop_name", "region")
+            if active_flow.store.get(key) not in _EMPTY_VALUES
+        },
+    }
+    selected_shop_id = str(selected.get("shop_id") or "").strip()
+    selected_candidate = next(
+        (
+            candidate
+            for candidate in active_flow.candidates
+            if str(candidate.get("shop_id") or "").strip() == selected_shop_id
+        ),
+        {},
+    )
+    if isinstance(selected_candidate, Mapping):
+        for key in (
+            "goods_no",
+            "tire_size",
+            "ord_qty",
+            "source_tool",
+            "schedule_mode",
+            "schedule_tier",
+            "inventory_mode",
+            "stock_check_mode",
+            "pending_intent",
+            "goal_type",
+        ):
+            if selected.get(key) in _EMPTY_VALUES and selected_candidate.get(key) not in _EMPTY_VALUES:
+                selected[key] = selected_candidate[key]
+    for section in (active_flow.product, active_flow.intent):
+        for key in (
+            "goods_no",
+            "tire_size",
+            "ord_qty",
+            "source_tool",
+            "schedule_mode",
+            "inventory_mode",
+            "stock_check_mode",
+            "pending_intent",
+            "goal_type",
+        ):
+            if selected.get(key) in _EMPTY_VALUES and section.get(key) not in _EMPTY_VALUES:
+                selected[key] = section[key]
+    return _non_empty_mapping(selected)
+
+
 def recommendation_listcar_flow_delta(
     *,
     event: Mapping[str, Any] | None,
