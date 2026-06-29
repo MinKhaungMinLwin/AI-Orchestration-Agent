@@ -17616,6 +17616,88 @@ def test_recover_blocked_fast_path_to_contract_tool_does_not_run_transaction_pre
     assert recovery is None
 
 
+def test_recover_blocked_fast_path_to_contract_tool_runs_transaction_required_store_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_input: dict[str, Any] = {}
+
+    def _fake_store_list_invoke(tool_input: dict[str, Any]) -> dict[str, Any]:
+        captured_input.update(tool_input)
+        return {
+            "status": "success",
+            "data": {
+                "stores": [
+                    {
+                        "shop_id": "F00001",
+                        "shop_nm": "티스테이션 강남점",
+                        "addr": "서울 강남구",
+                    }
+                ]
+            },
+        }
+
+    def _fake_try_build_template(tool_data_list: list[dict[str, Any]], assistant_text: str) -> dict[str, Any]:
+        assert tool_data_list[0]["tool"] == "get_store_list_tool"
+        assert assistant_text == "요청하신 정보를 확인했어요."
+        return {
+            "type": "data",
+            "template": "location",
+            "data": {
+                "assistantResponse": "매장을 확인했어요.",
+                "stores": [{"nameAddress": "티스테이션 강남점"}],
+                "metadata": [{"shopId": "F00001"}],
+            },
+        }
+
+    async def _fake_to_thread(func: Any, *args: Any, **kwargs: Any) -> Any:
+        return func(*args, **kwargs)
+
+    from services.tstation import template_mapper as template_mapper_module
+    from services.tstation.agents.c_transaction_agent import tools as transaction_tools
+
+    monkeypatch.setattr(
+        transaction_tools,
+        "get_store_list_tool",
+        SimpleNamespace(invoke=_fake_store_list_invoke),
+    )
+    monkeypatch.setattr(chat_module.asyncio, "to_thread", _fake_to_thread)
+    monkeypatch.setattr(template_mapper_module, "try_build_template", _fake_try_build_template)
+
+    contract = TurnContract(
+        domain="transaction",
+        intent="store_schedule",
+        known_slots={"shop_name": "강남점"},
+        allowed_tools=("get_store_list_tool",),
+        forbidden_tools=("quick_order_tool", "transaction_store_preview_tool"),
+        blocking_required_slots=(),
+        context_state="active",
+        response_decision={
+            "template": "location",
+            "metadata": {
+                "response_shape_key": "unverified_store_schedule_lookup",
+                "tool_args_patch": {"store_nm": "강남점"},
+            },
+        },
+    )
+
+    recovery = asyncio.run(
+        chat_module.recover_blocked_fast_path_to_contract_tool(
+            turn_contract=contract,
+            user_text="강남점 예약 가능해?",
+            merged_slots=ConversationSlots(shop_name="강남점"),
+            blocked_fast_path_source="contract_required_tool_executor",
+        )
+    )
+
+    assert recovery is not None
+    assert recovery["tool_name"] == "get_store_list_tool"
+    assert captured_input == {"store_nm": "강남점"}
+    assert recovery["event"]["template"] == "location"
+    assert recovery["event"]["recovered_tool"] == "get_store_list_tool"
+    assert recovery["event"]["tool_input_source"] == "turn_contract_required_tool_args_patch"
+    assert recovery["event"]["blocked_fast_path_source"] == "contract_required_tool_executor"
+
+
 def test_recover_blocked_fast_path_to_contract_tool_runs_selected_store_schedule_contract(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

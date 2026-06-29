@@ -16632,6 +16632,7 @@ _FAST_PATH_TRANSACTION_RECOVERY_BLOCKLIST = frozenset({
 })
 _FAST_PATH_TRANSACTION_RECOVERY_ALLOWED_TOOLS = frozenset({
     "get_store_schedule_tool",
+    "get_store_list_tool",
 })
 _FAST_PATH_DISCOVERY_RECOVERY_ALLOWED_TOOLS = frozenset({
     "search_product_tool",
@@ -16838,6 +16839,54 @@ def _contract_required_stock_store_schedule_tool_input(turn_contract: TurnContra
     if not shop_id or not schedule_mode:
         return {}
     return {"shop_id": shop_id, "mode": schedule_mode}
+
+
+def _contract_required_transaction_tool_input(
+    *,
+    turn_contract: TurnContract,
+    preferred_tool: str,
+) -> tuple[dict[str, Any], str, str] | None:
+    if str(turn_contract.domain or "").strip().lower() != PolicyDomain.TRANSACTION.value:
+        return None
+    if (
+        not preferred_tool
+        or preferred_tool in _FAST_PATH_TRANSACTION_RECOVERY_BLOCKLIST
+        or preferred_tool not in _FAST_PATH_TRANSACTION_RECOVERY_ALLOWED_TOOLS
+    ):
+        return None
+    if preferred_tool in {str(tool) for tool in tuple(turn_contract.forbidden_tools or ()) if str(tool).strip()}:
+        return None
+
+    if preferred_tool == "get_store_schedule_tool":
+        schedule_input = _contract_required_stock_store_schedule_tool_input(turn_contract)
+        if schedule_input:
+            return schedule_input, "turn_contract_required_stock_store_schedule", "예약 가능 일정 확인 중..."
+        return None
+
+    response_decision = turn_contract.response_decision or {}
+    response_metadata = response_decision.get("metadata") if isinstance(response_decision, Mapping) else {}
+    tool_args_patch = (
+        response_metadata.get("tool_args_patch")
+        if isinstance(response_metadata, Mapping)
+        else None
+    )
+    if not isinstance(tool_args_patch, Mapping):
+        tool_args_patch = turn_contract.known_slots.get("tool_args_patch")
+    if not isinstance(tool_args_patch, Mapping):
+        return None
+
+    tool_input = {
+        str(key): value
+        for key, value in tool_args_patch.items()
+        if value not in (None, "", [], {})
+    }
+    if not tool_input:
+        return None
+    if preferred_tool == "get_store_list_tool":
+        if not (tool_input.get("store_nm") or tool_input.get("shop_name") or tool_input.get("region")):
+            return None
+        return tool_input, "turn_contract_required_tool_args_patch", "매장 정보 확인 중..."
+    return None
 
 
 async def _recover_contract_required_stock_store_schedule(
@@ -17108,18 +17157,15 @@ async def recover_blocked_fast_path_to_contract_tool(
         tool_input_source = "user_text"
         display_name = "FAQ 확인 중..."
     elif domain == PolicyDomain.TRANSACTION.value:
-        contract_required_schedule_input = _contract_required_stock_store_schedule_tool_input(turn_contract)
         if len(allowed_tools) == 1:
             preferred_tool = allowed_tools[0]
-        if preferred_tool not in _FAST_PATH_TRANSACTION_RECOVERY_ALLOWED_TOOLS:
+        contract_required_tool_input = _contract_required_transaction_tool_input(
+            turn_contract=turn_contract,
+            preferred_tool=preferred_tool,
+        )
+        if contract_required_tool_input is None:
             return None
-        if preferred_tool in forbidden_tools:
-            return None
-        if preferred_tool != "get_store_schedule_tool" or not contract_required_schedule_input:
-            return None
-        tool_input = dict(contract_required_schedule_input)
-        tool_input_source = "turn_contract_required_stock_store_schedule"
-        display_name = "예약 가능 일정 확인 중..."
+        tool_input, tool_input_source, display_name = contract_required_tool_input
         source_domain = PolicyDomain.TRANSACTION.value
     else:
         return None
