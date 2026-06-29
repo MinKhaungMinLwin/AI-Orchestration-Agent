@@ -27559,6 +27559,8 @@ class TStationChatServiceV2:
             "context_evidence_keys": flow_transition.metadata.get("context_evidence_keys"),
             "flow_selected_product_resolved": flow_transition.metadata.get("selected_product_resolved"),
             "flow_selected_product": flow_transition.context_evidence.get("selected_product"),
+            "flow_selected_quantity_resolved": flow_transition.metadata.get("selected_quantity_resolved"),
+            "flow_selected_quantity": flow_transition.context_evidence.get("selected_quantity"),
         })
         flow_transition_active_context = flow_transition.flow_transition.get("active_flow_context")
         if isinstance(flow_transition_active_context, Mapping) and flow_transition_active_context:

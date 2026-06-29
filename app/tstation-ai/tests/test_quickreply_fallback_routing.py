@@ -12803,6 +12803,78 @@ def test_flow_transition_records_discovery_selected_product_flow_state_without_e
     assert slots.goal_type is None
 
 
+def test_flow_transition_records_quantity_selection_without_executing() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000310126",
+        tire_size="245/45R19",
+        pending_intent="stock",
+        goal_type="store_with_stock",
+        region="강남",
+        availability_context={
+            "active_flow_context": {
+                "flow_type": "stock",
+                "status": "active",
+                "flow_step": "ask_quantity",
+                "product": {
+                    "goods_no": "G000000310126",
+                    "product_name": "벤투스 S2 AS",
+                    "tire_size": "245/45R19",
+                },
+                "intent": {"pending_intent": "stock", "goal_type": "store_with_stock"},
+            }
+        },
+    )
+
+    transition = transition_current_flow(
+        user_text="4개",
+        router_evidence={
+            "domain": "transaction",
+            "intent": "fill_quantity_slot",
+            "execution_plan": ["transaction:fill_quantity_slot", "transaction:store_stock_check"],
+            "source": "llm",
+        },
+        existing_slots=slots,
+        extracted_slots=ConversationSlots(ord_qty=4),
+        resume_source="router_slot_fill:quantity",
+    )
+
+    assert transition.metadata["selected_quantity_resolved"] is True
+    assert transition.flow_transition["applied"] is True
+    assert transition.flow_transition["reason"] == "selected_quantity_flow_state"
+    assert transition.context_evidence["selected_quantity"] == {
+        "ord_qty": 4,
+        "selection_source": "current_user_text",
+    }
+    active_flow_context = transition.flow_transition["active_flow_context"]
+    assert active_flow_context["flow_type"] == "stock"
+    assert active_flow_context["flow_step"] == "quantity_selected"
+    assert active_flow_context["product"]["goods_no"] == "G000000310126"
+    assert active_flow_context["product"]["tire_size"] == "245/45R19"
+    assert active_flow_context["product"]["ord_qty"] == 4
+    assert active_flow_context["quantity"] == {"ord_qty": 4, "source": "current_user_text"}
+    assert active_flow_context["intent"]["pending_intent"] == "stock"
+    assert active_flow_context["intent"]["goal_type"] == "store_with_stock"
+    assert slots.ord_qty is None
+
+
+def test_flow_transition_ignores_unanchored_quantity_text() -> None:
+    transition = transition_current_flow(
+        user_text="4개",
+        router_evidence={
+            "domain": "leading",
+            "intent": "unclear",
+            "execution_plan": ["leading:clarify"],
+            "source": "llm",
+        },
+        existing_slots=ConversationSlots(),
+        extracted_slots=ConversationSlots(ord_qty=4),
+    )
+
+    assert transition.metadata["selected_quantity_resolved"] is False
+    assert transition.flow_transition["applied"] is False
+    assert "selected_quantity" not in transition.context_evidence
+
+
 @pytest.mark.parametrize(
     ("schedule_mode", "user_text"),
     [
