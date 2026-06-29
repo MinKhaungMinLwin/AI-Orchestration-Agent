@@ -29274,6 +29274,96 @@ def test_promote_single_turn_stock_inventory_from_search_product_runs_region_loo
     assert active_context["product"]["ord_qty"] == 4
 
 
+def test_promote_single_turn_stock_inventory_from_search_product_multi_item_picks_matching_size() -> None:
+    """When search_product_tool returns multiple variants, picks first row matching known tire_size."""
+    promoted = _promote_single_turn_stock_inventory_from_search_product(
+        user_text="벤투스 S2 AS 2454519 4개 강남역 근처 재고 있는 매장 찾아줘",
+        tool_result={
+            "data": {
+                "items": [
+                    {
+                        "goods_no": "G000000310126",
+                        "goods_nm": "벤투스 S2 AS H",
+                        "tire_size_1": "245/45R19",
+                    },
+                    {
+                        "goods_no": "G000000310127",
+                        "goods_nm": "벤투스 S2 AS V",
+                        "tire_size_1": "245/45R19",
+                    },
+                ]
+            }
+        },
+        merged_slots=ConversationSlots(
+            tire_model="벤투스 S2 AS",
+            tire_size="245/45R19",
+            ord_qty=4,
+            region="강남",
+            stock_check_mode="inventory_only",
+        ),
+        routing_result=SimpleNamespace(
+            execution_plan=["discovery:resolve_or_describe_product", "transaction:stock_store_or_reservation"]
+        ),
+    )
+
+    assert promoted is not None
+    promoted_slots, promoted_frame, promoted_tool_plan, decision = promoted
+    assert promoted_slots.goods_no == "G000000310126"
+    assert promoted_frame.intent == "stock_store_search"
+    assert promoted_frame.known_slots["pending_intent"] == "stock"
+    assert promoted_frame.known_slots["goal_type"] == "store_with_stock"
+    assert promoted_frame.known_slots["ord_qty"] == 4
+    assert promoted_frame.known_slots["region"] == "강남"
+    assert promoted_tool_plan.preferred_tool == "get_store_list_tool"
+    assert promoted_tool_plan.metadata["stock_check_mode"] == "inventory_only"
+    assert decision.metadata["response_shape_key"] == "stock_inventory_lookup"
+    active_context = promoted_slots.availability_context["active_flow_context"]
+    assert active_context["flow_type"] == "stock"
+    assert active_context["flow_step"] == "product_selected"
+    assert active_context["product"]["goods_no"] == "G000000310126"
+    assert active_context["product"]["ord_qty"] == 4
+
+
+def test_promote_single_turn_stock_inventory_from_search_product_multi_item_size_mismatch_skipped() -> None:
+    """Items whose tire_size does not match known_tire_size are skipped; uses the first matching row."""
+    promoted = _promote_single_turn_stock_inventory_from_search_product(
+        user_text="벤투스 S2 AS 2454519 4개 강남역 근처 재고 있는 매장 찾아줘",
+        tool_result={
+            "data": {
+                "items": [
+                    {
+                        "goods_no": "G000000310120",
+                        "goods_nm": "벤투스 S2 AS",
+                        "tire_size_1": "235/45R19",
+                    },
+                    {
+                        "goods_no": "G000000310126",
+                        "goods_nm": "벤투스 S2 AS",
+                        "tire_size_1": "245/45R19",
+                    },
+                ]
+            }
+        },
+        merged_slots=ConversationSlots(
+            tire_model="벤투스 S2 AS",
+            tire_size="245/45R19",
+            ord_qty=4,
+            region="강남",
+            stock_check_mode="inventory_only",
+        ),
+        routing_result=SimpleNamespace(
+            execution_plan=["discovery:resolve_or_describe_product", "transaction:stock_store_or_reservation"]
+        ),
+    )
+
+    assert promoted is not None
+    promoted_slots, promoted_frame, promoted_tool_plan, decision = promoted
+    assert promoted_slots.goods_no == "G000000310126"
+    assert promoted_frame.known_slots["tire_size"] == "245/45R19"
+    assert promoted_tool_plan.preferred_tool == "get_store_list_tool"
+    assert decision.metadata["response_shape_key"] == "stock_inventory_lookup"
+
+
 def test_post_tool_purchase_preview_contract_context_promotes_schedule_slots_to_purchase_flow() -> None:
     promoted = _post_tool_purchase_preview_contract_context(
         tool_name="transaction_store_preview_tool",

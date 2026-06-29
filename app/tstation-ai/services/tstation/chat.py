@@ -17582,7 +17582,8 @@ def _promote_single_turn_stock_inventory_from_search_product(
     merged_slots: ConversationSlots | None,
     routing_result: Any | None,
 ) -> tuple[ConversationSlots, IntentFrame, ToolPlan, ResponseDecision] | None:
-    resolved_row = _single_resolved_search_product_row(tool_result)
+    known_tire_size = str(getattr(merged_slots, "tire_size", None) or "").strip() or None
+    resolved_row = _resolve_stock_search_product_row(tool_result, known_tire_size=known_tire_size)
     if resolved_row is None:
         return None
     base_slots = merged_slots.model_copy() if merged_slots is not None else ConversationSlots()
@@ -20635,6 +20636,48 @@ def _single_resolved_search_product_row(tool_result: Mapping[str, Any] | None) -
         ).strip()
         or None,
     }
+
+
+def _resolve_stock_search_product_row(
+    tool_result: Mapping[str, Any] | None,
+    *,
+    known_tire_size: str | None = None,
+) -> dict[str, Any] | None:
+    """Like _single_resolved_search_product_row but accepts multiple-item results.
+
+    When the search returns multiple variants (e.g. different speed ratings for
+    the same model/size), filters by known_tire_size and returns the first
+    matching row. Used only for stock inventory promotion where the user has
+    already confirmed the tire size in their slots.
+    """
+    if not isinstance(tool_result, Mapping):
+        return None
+    data = tool_result.get("data")
+    items = data.get("items") if isinstance(data, Mapping) else None
+    if not isinstance(items, list) or not items:
+        return None
+    if len(items) == 1:
+        return _single_resolved_search_product_row(tool_result)
+    normalized_known = normalize_tire_size(str(known_tire_size or "")) if known_tire_size else None
+    for raw_item in items:
+        if not isinstance(raw_item, Mapping):
+            continue
+        canonical = canonical_context_from_tool_boundary(raw_item)
+        goods_no = str(canonical.get("goods_no") or "").strip()
+        if not goods_no:
+            continue
+        item_tire_size = normalize_tire_size(str(canonical.get("tire_size") or "")) or None
+        if normalized_known and item_tire_size and item_tire_size != normalized_known:
+            continue
+        return {
+            "goods_no": goods_no,
+            "tire_size": item_tire_size or normalized_known,
+            "product_name": str(
+                canonical.get("product_name") or canonical.get("goods_nm") or canonical.get("titleProductName") or ""
+            ).strip()
+            or None,
+        }
+    return None
 
 
 def _should_promote_single_turn_purchase_after_product_resolution(
