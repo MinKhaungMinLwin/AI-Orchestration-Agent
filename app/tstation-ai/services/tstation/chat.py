@@ -16942,6 +16942,36 @@ def _is_sized_recommendation_response_shape_key(response_shape_key: str) -> bool
     )
 
 
+def _is_vehicle_selection_recommendation_contract(turn_contract: TurnContract | None) -> bool:
+    if turn_contract is None:
+        return False
+    if str(turn_contract.domain or "").strip().lower() != PolicyDomain.DISCOVERY.value:
+        return False
+    if str(turn_contract.intent or "").strip() != "product_recommendation":
+        return False
+    if str(getattr(turn_contract, "preferred_tool", "") or "").strip() != "get_products_recommendations_tool":
+        return False
+    allowed_tools = {str(tool) for tool in tuple(turn_contract.allowed_tools or ()) if str(tool).strip()}
+    if "get_products_recommendations_tool" not in allowed_tools:
+        return False
+    contract_seed = turn_contract.contract_seed if isinstance(turn_contract.contract_seed, Mapping) else {}
+    ui_action = contract_seed.get("ui_action") if isinstance(contract_seed.get("ui_action"), Mapping) else {}
+    action_type = str(ui_action.get("action_type") or ui_action.get("cta_action") or "").strip()
+    expected_intent = str(ui_action.get("expected_contract_intent") or "").strip()
+    if action_type not in {"select_vehicle", "select_vehicle_candidate"} and expected_intent != (
+        "vehicle_resolved_recommendation"
+    ):
+        return False
+    tool_args_patch = turn_contract.tool_args_patch if isinstance(turn_contract.tool_args_patch, Mapping) else {}
+    known_slots = turn_contract.known_slots if isinstance(turn_contract.known_slots, Mapping) else {}
+    return bool(
+        tool_args_patch.get("tire_size")
+        or known_slots.get("tire_size")
+        or tool_args_patch.get("car_lnc_cd")
+        or known_slots.get("car_lnc_cd")
+    )
+
+
 def _is_contract_required_vehicle_recommendation(
     turn_contract: TurnContract | None,
     slots: Any | None = None,
@@ -16962,9 +16992,13 @@ def _is_contract_required_vehicle_recommendation(
     contract_sub_intent = str(turn_contract.sub_intent or "").strip()
     is_vehicle_recommendation = contract_sub_intent == "vehicle_based_recommendation_refinement"
     is_sized_recommendation = _is_sized_recommendation_response_shape_key(response_shape_key)
-    if not (is_vehicle_recommendation or is_sized_recommendation):
+    is_vehicle_selection_recommendation = _is_vehicle_selection_recommendation_contract(turn_contract)
+    if not (is_vehicle_recommendation or is_sized_recommendation or is_vehicle_selection_recommendation):
         return False
-    if str(response_decision.get("template") or "").strip().lower() != "product":
+    if (
+        not is_vehicle_selection_recommendation
+        and str(response_decision.get("template") or "").strip().lower() != "product"
+    ):
         return False
     allowed_tools = {str(tool) for tool in tuple(turn_contract.allowed_tools or ()) if str(tool).strip()}
     if "get_products_recommendations_tool" not in allowed_tools:
@@ -17011,10 +17045,11 @@ def _contract_required_recommendation_tool_input(
     contract_sub_intent = str(turn_contract.sub_intent or "").strip()
     is_vehicle_recommendation = contract_sub_intent == "vehicle_based_recommendation_refinement"
     is_sized_recommendation = _is_sized_recommendation_response_shape_key(response_shape_key)
-    if not (is_vehicle_recommendation or is_sized_recommendation):
+    is_vehicle_selection_recommendation = _is_vehicle_selection_recommendation_contract(turn_contract)
+    if not (is_vehicle_recommendation or is_sized_recommendation or is_vehicle_selection_recommendation):
         return {}
     response_template = str(response_decision.get("template") or "").strip().lower()
-    if response_template and response_template != "product":
+    if not is_vehicle_selection_recommendation and response_template and response_template != "product":
         return {}
     allowed_tools = {str(tool) for tool in tuple(turn_contract.allowed_tools or ()) if str(tool).strip()}
     if "get_products_recommendations_tool" not in allowed_tools:
@@ -17044,6 +17079,7 @@ def _contract_required_recommendation_tool_input(
         tool_input.setdefault("rcmd_type", "sound_absorber")
 
     slot_sources = (
+        turn_contract.tool_args_patch if isinstance(turn_contract.tool_args_patch, Mapping) else {},
         known_slots,
         merged_slots.model_dump() if merged_slots is not None else {},
     )
@@ -18189,6 +18225,8 @@ def _contract_required_tool_candidate(
                 tool_input_source = "user_context"
             display_name = "등록 차량 조회 중..."
         elif preferred_tool == "get_products_recommendations_tool":
+            if str(turn_contract.intent or "").strip() != "product_recommendation":
+                return None
             if not tool_input:
                 tool_input = dict(contract_required_recommendation_input)
                 tool_input_source = tool_input_source or "turn_contract_required_recommendation"

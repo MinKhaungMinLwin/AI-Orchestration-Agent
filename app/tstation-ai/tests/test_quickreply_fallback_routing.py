@@ -16114,6 +16114,86 @@ def test_contract_required_vehicle_recommendation_handles_generic_sized_recommen
     }
 
 
+def test_contract_required_vehicle_selection_recommendation_uses_current_turn_contract() -> None:
+    contract = TurnContract(
+        domain="discovery",
+        intent="product_recommendation",
+        sub_intent="general_recommendation",
+        known_slots={
+            "tire_size": "235/55R19",
+            "vehicle_type": "suv",
+            "car_no": "205소4214",
+            "car_lnc_cd": "W049847",
+        },
+        allowed_tools=("get_products_recommendations_tool",),
+        forbidden_tools=(),
+        preferred_tool="get_products_recommendations_tool",
+        tool_args_patch={"tire_size": "235/55R19"},
+        blocking_required_slots=(),
+        context_state="active",
+        response_decision={"template": "quickReply", "metadata": {"response_shape_key": "discovery_summary"}},
+        contract_seed={
+            "ui_action": {
+                "action_type": "select_vehicle",
+                "expected_contract_intent": "vehicle_resolved_recommendation",
+                "slot_patch": {
+                    "tire_size": "235/55R19",
+                    "car_lnc_cd": "W049847",
+                    "vehicle_type": "suv",
+                },
+            },
+        },
+    )
+    slots = ConversationSlots(tire_size="235/55R19", car_lnc_cd="W049847", vehicle_type="suv")
+
+    assert chat_module._is_contract_required_vehicle_recommendation(contract, slots) is True
+
+    candidate = chat_module._contract_required_tool_candidate(
+        turn_contract=contract,
+        user_text="205소4214",
+        merged_slots=slots,
+    )
+
+    assert candidate is not None
+    assert candidate.tool_name == "get_products_recommendations_tool"
+    assert candidate.tool_input == {
+        "tire_size": "235/55R19",
+        "car_lnc_cd": "W049847",
+        "vehicle_type": "suv",
+    }
+    assert candidate.tool_input_source == "turn_contract_required_recommendation"
+
+
+def test_contract_required_vehicle_selection_recommendation_ignores_plain_vehicle_lookup() -> None:
+    contract = TurnContract(
+        domain="discovery",
+        intent="vehicle_lookup",
+        known_slots={"tire_size": "235/55R19", "car_lnc_cd": "W049847"},
+        allowed_tools=("get_products_recommendations_tool",),
+        preferred_tool="get_products_recommendations_tool",
+        tool_args_patch={"tire_size": "235/55R19"},
+        blocking_required_slots=(),
+        context_state="active",
+        response_decision={"template": "quickReply", "metadata": {"response_shape_key": "vehicle_lookup"}},
+        contract_seed={
+            "ui_action": {
+                "action_type": "select_vehicle",
+                "expected_contract_intent": "vehicle_lookup",
+            },
+        },
+    )
+
+    assert chat_module._is_contract_required_vehicle_recommendation(contract, ConversationSlots()) is False
+    assert (
+        chat_module._contract_required_tool_candidate(
+            turn_contract=contract,
+            user_text="205소4214",
+            merged_slots=ConversationSlots(tire_size="235/55R19", car_lnc_cd="W049847"),
+        )
+        is None
+    )
+
+
 def test_complete_active_recommendation_flow_for_direct_return_moves_to_dormant() -> None:
     slots = ConversationSlots(
         availability_context={
