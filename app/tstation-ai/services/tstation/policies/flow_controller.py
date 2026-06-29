@@ -310,14 +310,26 @@ def _selected_product_flow_type(
 ) -> str:
     slot_pending_intent = str(selected_product.get("pending_intent") or "").strip()
     slot_goal_type = str(selected_product.get("goal_type") or "").strip()
+    if slot_pending_intent == "stock" or slot_goal_type == "store_with_stock":
+        return "stock"
     if slot_pending_intent in {"order", "cart"} or slot_goal_type in {"place_order", "add_to_cart"}:
         return "purchase"
     parent_flow_type = str(parent_flow_state.get("flow_type") or "").strip()
-    if parent_flow_type == "purchase":
-        return "purchase"
+    if parent_flow_type in {"purchase", "stock", "booking"}:
+        return parent_flow_type
     current_flow_type = str(current_flow_state.get("flow_type") or "").strip()
     if current_flow_type in {"purchase", "recommendation", "stock", "booking"}:
         return current_flow_type
+    router_intent = str(router_evidence.get("intent") or "").strip()
+    execution_plan = " ".join(str(item or "") for item in (router_evidence.get("execution_plan") or ()))
+    if (
+        router_intent == "stock_store_search"
+        or "stock_store" in execution_plan
+        or "store_stock" in execution_plan
+        or "store_inventory" in execution_plan
+        or "store_schedule_check" in execution_plan
+    ):
+        return "stock"
     router_domain = str(router_evidence.get("domain") or "").strip().lower()
     if router_domain == "transaction":
         return "purchase"

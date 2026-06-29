@@ -1507,16 +1507,27 @@ def _interactive_flow_contract_intent_from_slots(
         if isinstance(availability_context.get("dormant_transaction_context"), Mapping)
         else {}
     )
+    latest_router_evidence = (
+        availability_context.get("latest_router_evidence")
+        if isinstance(availability_context.get("latest_router_evidence"), Mapping)
+        else {}
+    )
+    active_flow_type = str(active_flow_context.get("flow_type") or "").strip()
+    active_flow_intent = active_flow_context.get("intent") if isinstance(active_flow_context.get("intent"), Mapping) else {}
+    active_pending_intent = str(active_flow_intent.get("pending_intent") or "").strip()
+    active_goal_type = str(active_flow_intent.get("goal_type") or "").strip()
+    pending_context_intent = str(pending_order_context.get("pending_intent") or "").strip()
+    pending_context_goal = str(pending_order_context.get("goal_type") or "").strip()
+    router_intent = str(latest_router_evidence.get("intent") or "").strip()
+    router_execution_plan = " ".join(str(item or "") for item in (latest_router_evidence.get("execution_plan") or ()))
 
-    if pending_intent in {"order", "cart"} or goal_type in {"place_order", "add_to_cart"}:
-        return _QUICK_ORDER_RESERVATION_INTENT
-    if str(active_flow_context.get("flow_type") or "").strip() in {"purchase", "cart"}:
-        return _QUICK_ORDER_RESERVATION_INTENT
-    if pending_order_context or dormant_purchase_context:
-        return _QUICK_ORDER_RESERVATION_INTENT
     if availability_intent == "today_install":
         return _STOCK_STORE_SEARCH_INTENT
     if pending_intent == "stock" or goal_type == "store_with_stock":
+        return _STOCK_STORE_SEARCH_INTENT
+    if active_flow_type == "stock" or active_pending_intent == "stock" or active_goal_type == "store_with_stock":
+        return _STOCK_STORE_SEARCH_INTENT
+    if pending_context_intent == "stock" or pending_context_goal == "store_with_stock":
         return _STOCK_STORE_SEARCH_INTENT
     if dormant_stock_context:
         return _STOCK_STORE_SEARCH_INTENT
@@ -1525,6 +1536,25 @@ def _interactive_flow_contract_intent_from_slots(
         or str(dormant_transaction_context.get("goal_type") or "").strip() == "store_with_stock"
     ):
         return _STOCK_STORE_SEARCH_INTENT
+    if (
+        router_intent == "stock_store_search"
+        or "stock_store" in router_execution_plan
+        or "store_stock" in router_execution_plan
+        or "store_inventory" in router_execution_plan
+        or "store_schedule_check" in router_execution_plan
+    ):
+        return _STOCK_STORE_SEARCH_INTENT
+    if pending_intent in {"order", "cart"} or goal_type in {"place_order", "add_to_cart"}:
+        return _QUICK_ORDER_RESERVATION_INTENT
+    if active_flow_type in {"purchase", "cart"} or active_pending_intent in {"order", "cart"} or active_goal_type in {
+        "place_order",
+        "add_to_cart",
+    }:
+        return _QUICK_ORDER_RESERVATION_INTENT
+    if pending_context_intent in {"order", "cart"} or pending_context_goal in {"place_order", "add_to_cart"}:
+        return _QUICK_ORDER_RESERVATION_INTENT
+    if dormant_purchase_context:
+        return _QUICK_ORDER_RESERVATION_INTENT
     if pending_intent == "reservation":
         return _QUICK_ORDER_RESERVATION_INTENT
     return str(fallback_intent or "").strip()

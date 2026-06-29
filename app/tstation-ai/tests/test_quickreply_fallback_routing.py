@@ -13607,6 +13607,65 @@ def test_flow_transition_shell_records_selected_product_without_executing() -> N
     assert slots.goods_no is None
 
 
+def test_flow_transition_shell_records_selected_product_as_stock_from_router_preview() -> None:
+    slots = ConversationSlots(
+        region="경기도 광주",
+        availability_context={
+            "latest_router_evidence": {
+                "domain": "transaction",
+                "intent": "stock_store_search",
+                "execution_plan": ["transaction:store_schedule_check"],
+                "source": "llm",
+            }
+        },
+    )
+    action_context = UIActionContext(
+        action_type="select_product",
+        action_name="select_product",
+        selection_source="previous_product_candidate",
+        contract_intent="stock_store_search",
+        source_intent="stock_store_search",
+        expected_contract_intent="stock_store_search",
+        expected_behavior="slot_fill",
+        entity_type="product",
+        entity_id="G000000309922",
+        entity_label="다이나프로 HL3",
+        slot_patch={
+            "goods_no": "G000000309922",
+            "tire_model": "다이나프로 HL3",
+            "tire_size": "235/50R19",
+            "region": "경기도 광주",
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+            "stock_check_mode": "preview",
+            "payment_amount": 198500,
+            "price_basis": "extra_fvr_sale_prc",
+            "price_source_tool": "selected_product_candidate",
+        },
+    )
+
+    transition = transition_current_flow(
+        user_text="235/50R19",
+        router_evidence={
+            "domain": "transaction",
+            "intent": "stock_store_search",
+            "execution_plan": ["transaction:store_schedule_check"],
+            "source": "llm",
+        },
+        existing_slots=slots,
+        extracted_slots=ConversationSlots(),
+        ui_action=action_context,
+        resume_source="router_slot_fill:product",
+    )
+
+    assert transition.metadata["selected_product_resolved"] is True
+    active_flow_context = transition.flow_transition["active_flow_context"]
+    assert active_flow_context["flow_type"] == "stock"
+    assert active_flow_context["product"]["goods_no"] == "G000000309922"
+    assert active_flow_context["intent"]["pending_intent"] == "stock"
+    assert active_flow_context["intent"]["goal_type"] == "store_with_stock"
+
+
 def test_flow_transition_records_discovery_selected_product_flow_state_without_execution_intent() -> None:
     slots = ConversationSlots(
         tire_size="235/55R19",
@@ -16702,6 +16761,99 @@ def test_apply_history_product_selection_state_uses_pending_order_context_withou
     assert state.action_context.slot_patch["pending_intent"] == "order"
     assert state.action_context.slot_patch["goal_type"] == "place_order"
     assert state.rewritten_user_text == "벤투스 S2 AS 225/45R17 4개 광교신도시점에서 구매"
+
+
+def test_apply_history_product_selection_state_uses_pending_order_context_for_stock_without_flat_intent() -> None:
+    slots = ConversationSlots(
+        goods_no=None,
+        tire_size="235/50R19",
+        region="경기도 광주",
+        availability_context={
+            "pending_order_context": {
+                "region": "경기도 광주",
+                "tire_size": "235/50R19",
+                "pending_intent": "stock",
+                "goal_type": "store_with_stock",
+                "stock_check_mode": "preview",
+            }
+        },
+    )
+    latest_product_tmpl = {
+        "products": [
+            {"titleProductName": "다이나프로 HL3", "titleTires": "235/50R19", "price": 198500},
+        ],
+        "metadata": [
+            {"goodsId": "G000000309922"},
+        ],
+    }
+
+    state = apply_history_product_selection_state(
+        last_user_text="다이나프로 HL3 235/50R19",
+        prev_tool_data=[],
+        merged_slots=slots,
+        latest_product_tmpl=latest_product_tmpl,
+        resolve_goods_no_from_selection_fn=lambda user_text, tool_data, current_tire_size: resolve_goods_no_from_selection(
+            user_text,
+            tool_data,
+            current_tire_size=current_tire_size,
+        ),
+    )
+
+    assert state.goods_no_resolved is True
+    assert state.updated_slots.goods_no == "G000000309922"
+    assert state.updated_slots.pending_intent == "stock"
+    assert state.updated_slots.goal_type == "store_with_stock"
+    assert state.action_context is not None
+    assert state.action_context.expected_contract_intent == "stock_store_search"
+    assert state.action_context.expected_behavior == "slot_fill"
+    assert state.action_context.slot_patch["region"] == "경기도 광주"
+    assert state.action_context.slot_patch["stock_check_mode"] == "preview"
+    assert "다이나프로 HL3 235/50R19" in state.rewritten_user_text
+    assert "경기도 광주" in state.rewritten_user_text
+    assert "재고 확인" in state.rewritten_user_text
+
+
+def test_apply_history_product_selection_state_uses_latest_router_evidence_for_stock_resume() -> None:
+    slots = ConversationSlots(
+        goods_no=None,
+        tire_size="235/50R19",
+        region="경기도 광주",
+        availability_context={
+            "latest_router_evidence": {
+                "domain": "transaction",
+                "intent": "stock_store_search",
+                "execution_plan": ["transaction:store_schedule_check"],
+            }
+        },
+    )
+    latest_product_tmpl = {
+        "products": [
+            {"titleProductName": "다이나프로 HL3", "titleTires": "235/50R19", "price": 198500},
+        ],
+        "metadata": [
+            {"goodsId": "G000000309922"},
+        ],
+    }
+
+    state = apply_history_product_selection_state(
+        last_user_text="다이나프로 HL3 235/50R19",
+        prev_tool_data=[],
+        merged_slots=slots,
+        latest_product_tmpl=latest_product_tmpl,
+        resolve_goods_no_from_selection_fn=lambda user_text, tool_data, current_tire_size: resolve_goods_no_from_selection(
+            user_text,
+            tool_data,
+            current_tire_size=current_tire_size,
+        ),
+    )
+
+    assert state.goods_no_resolved is True
+    assert state.updated_slots.goods_no == "G000000309922"
+    assert state.action_context is not None
+    assert state.action_context.expected_contract_intent == "stock_store_search"
+    assert "다이나프로 HL3 235/50R19" in state.rewritten_user_text
+    assert "경기도 광주" in state.rewritten_user_text
+    assert "재고 확인" in state.rewritten_user_text
 
 
 def test_apply_history_product_selection_state_resolves_ordinal_only_against_product_candidates() -> None:
