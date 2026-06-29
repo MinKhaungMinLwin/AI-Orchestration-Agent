@@ -19779,6 +19779,176 @@ def test_recover_blocked_fast_path_to_contract_tool_runs_current_turn_transactio
     assert metadata["tool_input_source"] == "turn_contract_required_transaction_store_preview"
 
 
+def test_pending_contract_required_tool_detects_transaction_store_preview() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="quick_order_reservation",
+        known_slots={
+            "goods_no": "G000000309783",
+            "product_name": "벤투스 S2 AS",
+            "tire_size": "225/45R17",
+            "ord_qty": 4,
+            "shop_name": "광교신도시점",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        allowed_tools=("transaction_store_preview_tool",),
+        forbidden_tools=("quick_order_tool", "get_final_price_tool", "get_logistics_inventory_tool"),
+        preferred_tool="transaction_store_preview_tool",
+        tool_args_patch={
+            "goods_no": "G000000309783",
+            "product_name": "벤투스 S2 AS",
+            "tire_size": "225/45R17",
+            "ord_qty": 4,
+            "shop_name": "광교신도시점",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        blocking_required_slots=(),
+        context_state="resumed",
+        action_mode="purchase_continuation",
+        resume_source="router_slot_fill:product",
+        response_decision={
+            "template": "location",
+            "metadata": {"response_shape_key": "reservation_store_candidates"},
+        },
+        contract_seed={
+            "ui_action": {
+                "action_type": "select_product",
+                "expected_contract_intent": "quick_order_reservation",
+            },
+            "resume_source": "expected_slot_fill:product",
+        },
+    )
+
+    pending_tool = chat_module._pending_contract_required_tool_for_fast_path(
+        contract,
+        merged_slots=ConversationSlots(
+            goods_no="G000000309783",
+            tire_size="225/45R17",
+            ord_qty=4,
+            shop_name="광교신도시점",
+            pending_intent="order",
+            goal_type="place_order",
+        ),
+    )
+
+    assert pending_tool == "transaction_store_preview_tool"
+
+
+def test_recover_contract_required_tool_dispatches_transaction_store_preview(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_input: dict[str, Any] = {}
+
+    def _fake_preview_invoke(tool_input: dict[str, Any]) -> dict[str, Any]:
+        captured_input.update(tool_input)
+        return {
+            "status": "success",
+            "data": {
+                "stores": [
+                    {
+                        "shop_id": "F10001",
+                        "shop_nm": "광교신도시점",
+                        "available": True,
+                    }
+                ]
+            },
+        }
+
+    def _fake_try_build_template(tool_data_list: list[dict[str, Any]], assistant_text: str) -> dict[str, Any]:
+        assert tool_data_list[0]["tool"] == "transaction_store_preview_tool"
+        return {
+            "type": "data",
+            "template": "location",
+            "data": {
+                "assistantResponse": assistant_text,
+                "stores": [{"nameAddress": "광교신도시점"}],
+                "metadata": [{"shopId": "F10001"}],
+            },
+        }
+
+    async def _fake_to_thread(func: Any, *args: Any, **kwargs: Any) -> Any:
+        return func(*args, **kwargs)
+
+    from services.tstation import template_mapper as template_mapper_module
+    from services.tstation.agents.c_transaction_agent import tools as transaction_tools
+
+    monkeypatch.setattr(
+        transaction_tools,
+        "transaction_store_preview_tool",
+        SimpleNamespace(invoke=_fake_preview_invoke),
+    )
+    monkeypatch.setattr(chat_module.asyncio, "to_thread", _fake_to_thread)
+    monkeypatch.setattr(template_mapper_module, "try_build_template", _fake_try_build_template)
+
+    contract = TurnContract(
+        domain="transaction",
+        intent="quick_order_reservation",
+        known_slots={
+            "goods_no": "G000000309783",
+            "product_name": "벤투스 S2 AS",
+            "tire_size": "225/45R17",
+            "ord_qty": 4,
+            "shop_name": "광교신도시점",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        allowed_tools=("transaction_store_preview_tool",),
+        forbidden_tools=("quick_order_tool", "get_final_price_tool", "get_logistics_inventory_tool"),
+        preferred_tool="transaction_store_preview_tool",
+        tool_args_patch={
+            "goods_no": "G000000309783",
+            "product_name": "벤투스 S2 AS",
+            "tire_size": "225/45R17",
+            "ord_qty": 4,
+            "shop_name": "광교신도시점",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        blocking_required_slots=(),
+        context_state="resumed",
+        action_mode="purchase_continuation",
+        resume_source="router_slot_fill:product",
+        response_decision={
+            "template": "location",
+            "metadata": {"response_shape_key": "reservation_store_candidates"},
+        },
+        contract_seed={
+            "ui_action": {
+                "action_type": "select_product",
+                "expected_contract_intent": "quick_order_reservation",
+            },
+            "resume_source": "expected_slot_fill:product",
+        },
+    )
+
+    recovery = asyncio.run(
+        chat_module._recover_contract_required_tool(
+            turn_contract=contract,
+            user_text="벤투스 S2 AS 225/45R17 4개 광교신도시점에서 구매",
+            merged_slots=ConversationSlots(
+                goods_no="G000000309783",
+                tire_size="225/45R17",
+                ord_qty=4,
+                shop_name="광교신도시점",
+                pending_intent="order",
+                goal_type="place_order",
+            ),
+            blocked_fast_path_source="contract_required_tool_executor",
+        )
+    )
+
+    assert recovery is not None
+    assert recovery["tool_name"] == "transaction_store_preview_tool"
+    assert captured_input["goods_no"] == "G000000309783"
+    assert captured_input["quantity"] == 4
+    assert captured_input["store_name"] == "광교신도시점"
+    metadata = recovery["event"]["data"]["contractMetadata"]
+    assert metadata["blocked_fast_path_source"] == "contract_required_tool_executor"
+    assert metadata["recovered_tool"] == "transaction_store_preview_tool"
+
+
 def test_recover_blocked_fast_path_to_contract_tool_runs_transaction_required_store_lookup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

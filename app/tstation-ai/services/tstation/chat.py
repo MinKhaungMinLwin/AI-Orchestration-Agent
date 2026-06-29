@@ -16945,6 +16945,8 @@ def _pending_contract_required_tool_for_fast_path(
             return "search_stores_tool"
         if "get_store_list_tool" in allowed_tools:
             return "get_store_list_tool"
+    if _is_contract_required_transaction_store_preview(turn_contract, merged_slots=merged_slots):
+        return "transaction_store_preview_tool"
     if _is_contract_required_vehicle_recommendation(turn_contract, merged_slots):
         return "get_products_recommendations_tool"
     return None
@@ -17699,6 +17701,23 @@ async def _recover_contract_required_vehicle_recommendation(
     )
 
 
+async def _recover_contract_required_transaction_store_preview(
+    *,
+    turn_contract: TurnContract | None,
+    user_text: str,
+    merged_slots: ConversationSlots | None,
+    blocked_fast_path_source: str = "contract_required_transaction_store_preview",
+) -> dict[str, Any] | None:
+    if not _is_contract_required_transaction_store_preview(turn_contract, merged_slots=merged_slots):
+        return None
+    return await recover_blocked_fast_path_to_contract_tool(
+        turn_contract=turn_contract,
+        user_text=user_text,
+        merged_slots=merged_slots,
+        blocked_fast_path_source=blocked_fast_path_source,
+    )
+
+
 async def _recover_contract_required_tool(
     *,
     turn_contract: TurnContract | None,
@@ -17716,6 +17735,14 @@ async def _recover_contract_required_tool(
     )
     if store_flow_recovery is not None:
         return store_flow_recovery
+    preview_recovery = await _recover_contract_required_transaction_store_preview(
+        turn_contract=turn_contract,
+        user_text=user_text,
+        merged_slots=merged_slots,
+        blocked_fast_path_source=blocked_fast_path_source,
+    )
+    if preview_recovery is not None:
+        return preview_recovery
     return await _recover_contract_required_vehicle_recommendation(
         turn_contract=turn_contract,
         user_text=user_text,
