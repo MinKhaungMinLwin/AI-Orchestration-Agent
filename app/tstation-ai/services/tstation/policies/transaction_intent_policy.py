@@ -208,7 +208,10 @@ _STORE_SERVICE_SEARCH_RE = re.compile(
     r"(?:어디|찾|검색|알려|보여|있어|있나|가능).{0,20}(?:매장|지점|곳)",
     re.IGNORECASE,
 )
-_TIRE_SERVICE_RE = re.compile(r"타이어.{0,12}(?:교체|장착|서비스|작업)|(?:교체|장착).{0,12}타이어", re.IGNORECASE)
+_TIRE_SERVICE_RE = re.compile(
+    r"타이어.{0,12}(?:교체|장착|서비스|작업|예약)|(?:교체|장착|예약).{0,12}타이어",
+    re.IGNORECASE,
+)
 _ADDON_WITH_RE = re.compile(r"같이|함께|동시|하면서|겸|추가|하고\s*싶", re.IGNORECASE)
 _RESERVATION_CHANGE_RE = re.compile(r"변경|바꿔|옮겨|미뤄|당겨|취소", re.IGNORECASE)
 _NOON_RE = re.compile(r"12\s*시|점심\s*시간", re.IGNORECASE)
@@ -2040,6 +2043,27 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
         )
 
     if frame.intent == "maintenance_addon_with_tire_service":
+        has_store_context = bool(
+            frame.known_slots.get("store_name")
+            or frame.known_slots.get("shop_name")
+            or frame.known_slots.get("shop_id")
+        )
+        if not has_store_context:
+            return ToolPlan(
+                allowed_tools=(),
+                preferred_tool=None,
+                tool_args_patch={},
+                forbidden_tools=(
+                    "get_store_list_tool",
+                    "get_store_detail_tool",
+                    "get_store_schedule_tool",
+                    "transaction_store_preview_tool",
+                    "get_maintenance_dday_tool",
+                    "get_products_recommendations_tool",
+                ),
+                required_slots=(),
+                metadata={"response_intent": "maintenance_addon_with_tire_service", "action": action},
+            )
         return ToolPlan(
             allowed_tools=("get_store_list_tool", "get_store_detail_tool"),
             preferred_tool="get_store_list_tool",
@@ -2345,7 +2369,7 @@ def _action_required_slots(frame: IntentFrame, action: str) -> tuple[str, ...]:
         add("store", not frame.known_slots.get("shop_id"))
         add("booking_datetime", not (frame.known_slots.get("requested_cal_day") and frame.known_slots.get("rsv_hour")))
     elif action == "maintenance_addon_with_tire_service":
-        add("store", not _has_action_store(frame))
+        return ()
     elif action == "store_service_search":
         add("region", not frame.known_slots.get("region"))
     elif action == "unsupported_or_unmapped_store_service_policy":

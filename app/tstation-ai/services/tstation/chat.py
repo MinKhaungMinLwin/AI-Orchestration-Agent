@@ -12556,19 +12556,26 @@ def _maintenance_addon_with_tire_service_event(
     store_name: str | None = None,
 ) -> dict:
     store_label = _maintenance_addon_store_name(store_context, store_name)
-    store_phrase = f"{store_label}은 " if store_label else "해당 매장은 "
     supported = _maintenance_addon_supported_by_context(store_context)
     if supported:
+        store_phrase = f"{store_label}은 " if store_label else "확인된 매장은 "
         assistant_response = (
             f"{store_phrase}경정비 가능 매장으로 확인돼요. 온라인으로 타이어를 주문할 때 "
-            "엔진오일/실내필터 같은 경정비 상품을 함께 담아 주문할 수 있는지 확인하고, "
+            "엔진오일/와이퍼/실내필터 같은 경정비 상품을 함께 담아 주문할 수 있는지 확인하고, "
             "세부 작업 가능 여부는 주문 전후 매장에 한 번 더 확인해 주세요."
+        )
+    elif store_label:
+        store_phrase = f"{store_label}은 "
+        assistant_response = (
+            f"{store_phrase}현재 확인된 매장 정보만으로는 엔진오일·와이퍼·실내필터 같은 경정비 동시 주문 가능 여부가 "
+            "확인되지 않아요. 타이어 장착은 온라인 주문/예약으로 진행하고, 경정비는 방문예약 또는 "
+            "매장 방문 전 전화로 요청 가능 여부를 확인해 주세요."
         )
     else:
         assistant_response = (
-            f"{store_phrase}현재 확인된 매장 정보만으로는 엔진오일·실내필터 같은 경정비 동시 주문 가능 여부가 "
-            "확인되지 않아요. 타이어 장착은 온라인 주문/예약으로 진행하고, 엔진오일·실내필터는 "
-            "방문예약 또는 매장 방문 전 전화로 요청 가능 여부를 확인해 주세요."
+            "타이어 예약 시 엔진오일·와이퍼·실내필터 같은 경정비를 함께 담아 주문할 수 있는지는 "
+            "매장과 상품 조건에 따라 달라요. 타이어 장착은 온라인 주문/예약으로 진행하고, 경정비는 "
+            "방문예약 또는 방문 전 매장 연락으로 가능 여부를 확인해 주세요."
         )
     return {
         "type": "data",
@@ -29214,6 +29221,12 @@ class TStationChatServiceV2:
                 has_coupon_pattern_plan = any(
                     task.intent == "coupon_pattern_applicability" for task in cross_domain_plan.subtasks
                 )
+                has_maintenance_addon_plan = any(
+                    task.intent == "maintenance_addon_with_tire_service"
+                    for task in cross_domain_plan.subtasks
+                )
+            if preserve_router_policy_contract or preserve_router_event_contract or preserve_router_transaction_contract:
+                has_maintenance_addon_plan = False
             logger.debug(
                 "[POLICY][cross-domain] evaluated current=%s planned=%s plan=%s",
                 [domain.value for domain in domains],
@@ -29223,7 +29236,13 @@ class TStationChatServiceV2:
             should_apply_cross_domain_route = (
                 bool(planned_domains)
                 and cross_domain_plan is not None
-                and routing_result is None
+                and (
+                    routing_result is None
+                    or (
+                        has_maintenance_addon_plan
+                        and domains == [MultiAgentDomain.Domain.DISCOVERY]
+                    )
+                )
                 and not router_requires_reference_clarification
                 and (
                     cross_domain_plan.is_cross_domain
@@ -29285,6 +29304,8 @@ class TStationChatServiceV2:
             if should_apply_cross_domain_route:
                 if explicit_override_reason:
                     cross_domain_override_reason = explicit_override_reason
+                elif has_maintenance_addon_plan and domains == [MultiAgentDomain.Domain.DISCOVERY]:
+                    cross_domain_override_reason = "explicit_current_turn_stock_or_booking"
                 elif (
                     routing_result is None
                     or float(getattr(routing_result, "planner_confidence", 0.0) or 0.0) < 0.8

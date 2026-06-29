@@ -378,6 +378,7 @@ from services.tstation.chat import (
     _is_current_location_store_search_confirmation,
     _has_active_transaction_action_context,
     _support_fast_path,
+    AgentPromptProfile,
     MultiAgentDomain,
     StreamingMultiAgentCoordinator,
     TStationChatServiceV2,
@@ -2082,6 +2083,28 @@ def test_support_store_attribute_contract_allows_transaction_store_lookup_overri
         routing_result=routing,
         candidate_override="cross_domain_policy_route",
         override_reason="heuristic_cross_domain_policy_route",
+    )
+
+
+def test_discovery_recommendation_router_allows_explicit_maintenance_addon_policy_override() -> None:
+    routing = MultiAgentDomain(
+        reason="misclassified tire reservation add-on question as recommendation",
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        execution_plan=["discovery"],
+        user_behavior="asking whether maintenance items can be added during tire reservation",
+        flow="discovery recommendation",
+        claim_check_type="none",
+        complaint_scope="none",
+        policy_intent="none",
+        planner_confidence=0.8,
+        needs_clarification=False,
+        agent_prompt_profile=AgentPromptProfile.DISCOVERY_RECOMMENDATION,
+    )
+
+    assert not _should_preserve_router_contract(
+        routing_result=routing,
+        candidate_override="cross_domain_policy_route",
+        override_reason="explicit_current_turn_stock_or_booking",
     )
 
 
@@ -29953,6 +29976,42 @@ def test_tire_service_with_maintenance_addon_uses_transaction_store_service_acti
     assert not should_guard_required_slots(contract)
 
 
+def test_tire_reservation_with_maintenance_addon_without_store_stays_policy_contract() -> None:
+    user_text = "타이어 예약할 때 엔진오일 와이퍼 같이 담을 수 있나요?"
+    frame = build_transaction_intent_frame(user_text, known_slots={})
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text=user_text,
+        known_slots=dict(frame.known_slots),
+    )
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=response_decision,
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.TRANSACTION, MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=[
+                "transaction:maintenance_addon_with_tire_service",
+                "support:maintenance_addon_policy_notice",
+            ],
+        ),
+    )
+
+    assert frame.intent == "maintenance_addon_with_tire_service"
+    assert frame.known_slots["goal_type"] == "store_service_availability"
+    assert tool_plan.allowed_tools == ()
+    assert tool_plan.preferred_tool is None
+    assert tool_plan.required_slots == ()
+    assert "get_products_recommendations_tool" in tool_plan.forbidden_tools
+    assert response_decision.metadata["response_shape_key"] == "maintenance_addon_with_tire_service"
+    assert contract.intent == "maintenance_addon_with_tire_service"
+    assert contract.domain == "transaction"
+    assert contract.allowed_tools == ()
+    assert contract.blocking_required_slots == ()
+
+
 def test_tire_service_with_maintenance_addon_context_does_not_claim_unverified_store_support() -> None:
     user_text = "여주점에서 타이어 교체하면서 엔진오일, 실내필터 같이 교체하고 싶어"
     location_template = {
@@ -30018,6 +30077,35 @@ def test_cross_domain_plan_preserves_maintenance_addon_transaction_action() -> N
         "maintenance_addon_policy_notice",
     ]
     assert plan.response_strategy == "transaction_store_service_check_then_policy_notice"
+
+
+def test_cross_domain_plan_maps_tire_reservation_addon_question_without_store() -> None:
+    plan = plan_cross_domain_turn(
+        "타이어 예약할 때 엔진오일 와이퍼 같이 담을 수 있나요?",
+        known_slots={},
+    )
+
+    assert plan.primary_domain == PolicyDomain.TRANSACTION
+    assert [task.intent for task in plan.subtasks] == [
+        "maintenance_addon_with_tire_service",
+        "maintenance_addon_policy_notice",
+    ]
+    assert plan.subtasks[0].required_slots == ()
+    assert plan.response_strategy == "maintenance_addon_policy_notice_without_store_lookup"
+
+
+def test_maintenance_addon_without_store_event_uses_general_policy_copy() -> None:
+    event = _maintenance_addon_with_tire_service_event(
+        "타이어 예약할 때 엔진오일 와이퍼 같이 담을 수 있나요?",
+        store_context=None,
+    )
+
+    assistant = event["data"]["assistantResponse"]
+    assert "타이어 예약 시" in assistant
+    assert "엔진오일·와이퍼·실내필터" in assistant
+    assert "해당 매장은" not in assistant
+    assert event["data"]["metadata"]["maintenanceAddonAvailable"] is False
+    assert event["data"]["metadata"]["storeName"] == ""
 
 
 def test_generic_engine_oil_maintenance_question_stays_out_of_addon_transaction_action() -> None:
