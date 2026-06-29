@@ -40,8 +40,8 @@ from services.tstation.policies.flow_state import (
     recommendation_listcar_flow_delta,
     recommendation_vehicle_selection_patch,
     selected_store_slots_from_active_flow_context,
-    stock_store_candidate_selection_patch,
-    stock_store_candidates_flow_delta,
+    store_candidate_selection_patch,
+    store_candidates_flow_delta,
 )
 from services.tstation.agents.b_discovery_agent import tools as discovery_tools
 from services.tstation.agents.b_discovery_agent.agent import (
@@ -12425,7 +12425,7 @@ def test_stock_store_location_event_stores_candidate_flow_state() -> None:
         },
     }
 
-    delta = stock_store_candidates_flow_delta(event=event)
+    delta = store_candidates_flow_delta(event=event)
     result = commit_flow_state(
         {},
         delta,
@@ -12482,8 +12482,8 @@ def test_stock_store_location_payload_stores_candidate_flow_state_without_event_
         ],
     }
 
-    delta = stock_store_candidates_flow_delta(event=location_payload)
-    patch = stock_store_candidate_selection_patch(
+    delta = store_candidates_flow_delta(event=location_payload)
+    patch = store_candidate_selection_patch(
         active_flow_context=commit_flow_state(
             {},
             delta,
@@ -12554,7 +12554,7 @@ def test_stock_inventory_store_list_event_stores_and_selects_store_candidate() -
             "quantity": {"ord_qty": 4},
             "intent": {"pending_intent": "stock", "goal_type": "store_with_stock"},
         },
-        stock_store_candidates_flow_delta(event=event),
+        store_candidates_flow_delta(event=event),
         source="location_event:stock_store_candidates",
         flow_type="stock",
         flow_step="show_store_candidates",
@@ -12567,7 +12567,7 @@ def test_stock_inventory_store_list_event_stores_and_selects_store_candidate() -
     assert active_context["last_candidates"][0]["goods_no"] == "G000000310126"
     assert active_context["last_candidates"][0]["ord_qty"] == 4
 
-    patch = stock_store_candidate_selection_patch(
+    patch = store_candidate_selection_patch(
         active_flow_context=active_context,
         user_text="첫번째",
         selection_hint={},
@@ -12622,7 +12622,7 @@ def test_store_location_event_stores_generic_candidates_without_stock_intent(
         },
     }
 
-    delta = stock_store_candidates_flow_delta(event=event)
+    delta = store_candidates_flow_delta(event=event)
     active_context = commit_flow_state(
         {},
         delta,
@@ -12639,7 +12639,7 @@ def test_store_location_event_stores_generic_candidates_without_stock_intent(
     assert "pending_intent" not in active_context["last_candidates"][0]
     assert "goal_type" not in active_context["last_candidates"][0]
 
-    patch = stock_store_candidate_selection_patch(
+    patch = store_candidate_selection_patch(
         active_flow_context=active_context,
         user_text="2번",
         selection_hint={},
@@ -12675,7 +12675,7 @@ def test_get_store_list_schedule_event_stores_schedule_candidate_flow() -> None:
         },
     }
 
-    delta = stock_store_candidates_flow_delta(event=event)
+    delta = store_candidates_flow_delta(event=event)
     active_context = commit_flow_state(
         {},
         delta,
@@ -12687,7 +12687,7 @@ def test_get_store_list_schedule_event_stores_schedule_candidate_flow() -> None:
     assert active_context["flow_type"] == "store_schedule"
     assert "intent" not in active_context
 
-    patch = stock_store_candidate_selection_patch(
+    patch = store_candidate_selection_patch(
         active_flow_context=active_context,
         user_text="역삼",
         selection_hint={},
@@ -12724,12 +12724,12 @@ def test_selected_store_slots_from_active_flow_context_returns_confirmed_store()
     }
     candidate_context = commit_flow_state(
         {},
-        stock_store_candidates_flow_delta(event=event),
+        store_candidates_flow_delta(event=event),
         source="location_event:stock_store_candidates",
         flow_type="stock",
         flow_step="show_store_candidates",
     ).state.to_active_flow_context()
-    patch = stock_store_candidate_selection_patch(
+    patch = store_candidate_selection_patch(
         active_flow_context=candidate_context,
         user_text="첫번째",
         selection_hint={},
@@ -12800,8 +12800,8 @@ def test_contract_required_schedule_tool_input_uses_selected_store_active_flow()
     )
     merged_slots = ConversationSlots(availability_context={"active_flow_context": active_context})
 
-    assert chat_module._is_contract_required_stock_store_schedule(contract, merged_slots=merged_slots) is True
-    assert chat_module._contract_required_stock_store_schedule_tool_input(
+    assert chat_module._is_contract_required_selected_store_schedule(contract, merged_slots=merged_slots) is True
+    assert chat_module._contract_required_selected_store_schedule_tool_input(
         contract,
         merged_slots=merged_slots,
     ) == {"shop_id": "F00071", "mode": "in_store_logistics_combined"}
@@ -13354,7 +13354,7 @@ def test_flow_transition_ignores_unanchored_quantity_text() -> None:
         ("today_only", "티스테이션 역삼점"),
     ],
 )
-def test_stock_store_candidate_selection_patch_restores_schedule_mode(schedule_mode: str, user_text: str) -> None:
+def test_store_candidate_selection_patch_restores_schedule_mode(schedule_mode: str, user_text: str) -> None:
     active_flow_context = {
         "flow_type": "stock",
         "status": "active",
@@ -13380,7 +13380,7 @@ def test_stock_store_candidate_selection_patch_restores_schedule_mode(schedule_m
         ],
     }
 
-    patch = stock_store_candidate_selection_patch(
+    patch = store_candidate_selection_patch(
         active_flow_context=active_flow_context,
         user_text=user_text,
         selection_hint={},
@@ -19039,7 +19039,7 @@ def test_recover_contract_required_stock_inventory_region_lookup_runs_store_list
     }
 
     recovery = asyncio.run(
-        chat_module._recover_contract_required_stock_store_schedule(
+        chat_module._recover_contract_required_store_flow_tool(
             turn_contract=contract,
             user_text="4개",
             merged_slots=ConversationSlots(goods_no="G000000310126", tire_size="245/45R19", ord_qty=4, region="강남"),
@@ -19150,8 +19150,8 @@ def test_recover_blocked_fast_path_to_contract_tool_runs_selected_store_schedule
         },
     )
 
-    assert chat_module._is_contract_required_stock_store_schedule(contract) is True
-    assert chat_module._contract_required_stock_store_schedule_tool_input(contract) == {
+    assert chat_module._is_contract_required_selected_store_schedule(contract) is True
+    assert chat_module._contract_required_selected_store_schedule_tool_input(contract) == {
         "shop_id": "F00071",
         "mode": "in_store_logistics_combined",
     }
@@ -19161,7 +19161,7 @@ def test_recover_blocked_fast_path_to_contract_tool_runs_selected_store_schedule
             turn_contract=contract,
             user_text="티스테이션 분당정자점",
             merged_slots=ConversationSlots(),
-            blocked_fast_path_source="contract_required_stock_store_schedule",
+            blocked_fast_path_source="contract_required_store_flow_tool",
         )
     )
 
@@ -19173,7 +19173,7 @@ def test_recover_blocked_fast_path_to_contract_tool_runs_selected_store_schedule
     assert recovery["event"]["template"] == "datepick"
     metadata = recovery["event"]["data"]["metadata"]
     assert metadata["recovered_tool"] == "get_store_schedule_tool"
-    assert metadata["tool_input_source"] == "turn_contract_required_stock_store_schedule"
+    assert metadata["tool_input_source"] == "turn_contract_required_selected_store_schedule"
 
 
 def test_recover_blocked_fast_path_to_contract_tool_runs_recommendation_refinement_contract(

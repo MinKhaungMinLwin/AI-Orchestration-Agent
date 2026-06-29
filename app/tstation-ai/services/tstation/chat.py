@@ -88,8 +88,8 @@ from services.tstation.policies.flow_state import (
     recommendation_listcar_flow_delta,
     recommendation_vehicle_selection_patch,
     selected_store_slots_from_active_flow_context,
-    stock_store_candidate_selection_patch,
-    stock_store_candidates_flow_delta,
+    store_candidate_selection_patch,
+    store_candidates_flow_delta,
 )
 from services.tstation.policies.turn_contract import (
     TurnContract,
@@ -16873,7 +16873,7 @@ def _effective_known_slots_with_selected_store(
     return known_slots
 
 
-def _is_contract_required_stock_store_schedule(
+def _is_contract_required_selected_store_schedule(
     turn_contract: TurnContract | None,
     *,
     merged_slots: ConversationSlots | None = None,
@@ -16918,12 +16918,12 @@ def _is_contract_required_stock_store_schedule(
     )
 
 
-def _contract_required_stock_store_schedule_tool_input(
+def _contract_required_selected_store_schedule_tool_input(
     turn_contract: TurnContract,
     *,
     merged_slots: ConversationSlots | None = None,
 ) -> dict[str, Any]:
-    if not _is_contract_required_stock_store_schedule(turn_contract, merged_slots=merged_slots):
+    if not _is_contract_required_selected_store_schedule(turn_contract, merged_slots=merged_slots):
         return {}
     known_slots = _effective_known_slots_with_selected_store(
         turn_contract,
@@ -17062,12 +17062,12 @@ def _contract_required_transaction_tool_input(
         return None
 
     if preferred_tool == "get_store_schedule_tool":
-        schedule_input = _contract_required_stock_store_schedule_tool_input(
+        schedule_input = _contract_required_selected_store_schedule_tool_input(
             turn_contract,
             merged_slots=merged_slots,
         )
         if schedule_input:
-            return schedule_input, "turn_contract_required_stock_store_schedule", "예약 가능 일정 확인 중..."
+            return schedule_input, "turn_contract_required_selected_store_schedule", "예약 가능 일정 확인 중..."
         return None
 
     if preferred_tool == "get_store_inventory_tool":
@@ -17113,15 +17113,15 @@ def _contract_required_transaction_tool_input(
     return None
 
 
-async def _recover_contract_required_stock_store_schedule(
+async def _recover_contract_required_store_flow_tool(
     *,
     turn_contract: TurnContract | None,
     user_text: str,
     merged_slots: ConversationSlots | None,
-    blocked_fast_path_source: str = "contract_required_stock_store_schedule",
+    blocked_fast_path_source: str = "contract_required_store_flow_tool",
 ) -> dict[str, Any] | None:
     if not (
-        _is_contract_required_stock_store_schedule(turn_contract, merged_slots=merged_slots)
+        _is_contract_required_selected_store_schedule(turn_contract, merged_slots=merged_slots)
         or _is_contract_required_stock_inventory_store_lookup(turn_contract)
         or _is_contract_required_stock_inventory_selected_store(turn_contract, merged_slots=merged_slots)
     ):
@@ -27986,33 +27986,33 @@ class TStationChatServiceV2:
                 )
             )
             if should_restore_stock_candidates_from_template:
-                stock_store_flow_delta = stock_store_candidates_flow_delta(event=latest_location_tmpl)
-                if stock_store_flow_delta:
-                    stock_store_flow_type = str(stock_store_flow_delta.get("flow_type") or "stock")
+                store_candidate_flow_delta = store_candidates_flow_delta(event=latest_location_tmpl)
+                if store_candidate_flow_delta:
+                    store_candidate_flow_type = str(store_candidate_flow_delta.get("flow_type") or "stock")
                     commit_result = commit_flow_state(
                         {},
-                        stock_store_flow_delta,
-                        source=f"location_template:{stock_store_flow_type}_store_candidates",
-                        flow_type=stock_store_flow_type,
-                        flow_step=str(stock_store_flow_delta.get("flow_step") or "show_store_candidates"),
+                        store_candidate_flow_delta,
+                        source=f"location_template:{store_candidate_flow_type}_store_candidates",
+                        flow_type=store_candidate_flow_type,
+                        flow_step=str(store_candidate_flow_delta.get("flow_step") or "show_store_candidates"),
                     )
                     active_stock_flow_context = commit_result.state.to_active_flow_context()
                     vehicle_selection_trace_metadata["active_stock_flow_restored_from_location_template"] = True
-        stock_store_selection_patch = stock_store_candidate_selection_patch(
+        store_selection_patch = store_candidate_selection_patch(
             active_flow_context=active_stock_flow_context,
             user_text=last_user_text,
             selection_hint=stock_store_selection_hint,
         )
-        if stock_store_selection_patch and not stock_store_selection_patch.get("_stock_store_candidate_ambiguous"):
+        if store_selection_patch and not store_selection_patch.get("_store_candidate_ambiguous"):
             slot_patch = {
                 key: value
-                for key, value in stock_store_selection_patch.items()
+                for key, value in store_selection_patch.items()
                 if key != "flow_step" and not key.startswith("_") and value not in (None, "", [], {})
             }
             before_stock_slots = merged_slots.model_dump()
             merged_slots = merged_slots.apply_runtime_values(
                 slot_patch,
-                source="active_stock_store_candidate_selection",
+                source="active_store_candidate_selection",
             )
             availability_context = (
                 dict(merged_slots.availability_context)
@@ -28020,13 +28020,13 @@ class TStationChatServiceV2:
                 else {}
             )
             active_context = availability_context.get("active_flow_context")
-            stock_store_flow_type = str(stock_store_selection_patch.get("_flow_type") or "stock")
+            store_candidate_flow_type = str(store_selection_patch.get("_flow_type") or "stock")
             commit_result = commit_flow_state(
                 active_context if isinstance(active_context, Mapping) else active_stock_flow_context,
                 slot_patch,
-                source=f"location_selection:{stock_store_flow_type}",
-                flow_type=stock_store_flow_type,
-                flow_step=str(stock_store_selection_patch.get("flow_step") or "selected_store_schedule"),
+                source=f"location_selection:{store_candidate_flow_type}",
+                flow_type=store_candidate_flow_type,
+                flow_step=str(store_selection_patch.get("flow_step") or "selected_store_schedule"),
                 status="resumed",
             )
             availability_context["active_flow_context"] = commit_result.state.to_active_flow_context()
@@ -28045,15 +28045,15 @@ class TStationChatServiceV2:
                     "selected_shop_id": str(slot_patch.get("shop_id") or "").strip() or None,
                     "selected_schedule_mode": str(slot_patch.get("schedule_mode") or "").strip() or None,
                     "location_selection_source_tool": str(slot_patch.get("source_tool") or "").strip() or None,
-                    "location_selection_flow_type": stock_store_flow_type,
-                    "location_selection_contract_action": "stock_check" if stock_store_flow_type == "stock" else "store_select",
+                    "location_selection_flow_type": store_candidate_flow_type,
+                    "location_selection_contract_action": "stock_check" if store_candidate_flow_type == "stock" else "store_select",
                 })
             if resume_source == "none":
-                resume_source = f"location_selection:{stock_store_flow_type}"
+                resume_source = f"location_selection:{store_candidate_flow_type}"
             previous_pending_intent = str(getattr(merged_slots, "pending_intent", None) or "").strip() or None
             previous_goal_type = str(getattr(merged_slots, "goal_type", None) or "").strip() or None
             logger.info("[FLOW_STATE] Resumed stock store flow from selected candidate: %s", slot_patch)
-        elif stock_store_selection_patch.get("_stock_store_candidate_ambiguous"):
+        elif store_selection_patch.get("_store_candidate_ambiguous"):
             vehicle_selection_trace_metadata["active_stock_flow_resume_ambiguous"] = True
         action_mode = _current_turn_action_mode(
             user_text=last_user_text,
@@ -35738,16 +35738,16 @@ class TStationChatServiceV2:
             yield "data: [DONE]\n\n"
             return
 
-        contract_required_stock_store_schedule = await _recover_contract_required_stock_store_schedule(
+        contract_required_store_flow_tool = await _recover_contract_required_store_flow_tool(
             turn_contract=turn_contract,
             user_text=user_query,
             merged_slots=pending_slots or initial_slots,
         )
-        if contract_required_stock_store_schedule is not None:
+        if contract_required_store_flow_tool is not None:
             _record_code_tool_result(
-                str(contract_required_stock_store_schedule["tool_name"]),
-                dict(contract_required_stock_store_schedule["tool_input"]),
-                dict(contract_required_stock_store_schedule["tool_result"]),
+                str(contract_required_store_flow_tool["tool_name"]),
+                dict(contract_required_store_flow_tool["tool_input"]),
+                dict(contract_required_store_flow_tool["tool_result"]),
             )
             stock_slots, stock_flow = _advance_active_stock_flow_for_schedule_direct_return(
                 pending_slots or initial_slots
@@ -35759,10 +35759,10 @@ class TStationChatServiceV2:
                 vehicle_selection_trace_metadata["active_stock_flow_context_after_schedule"] = stock_flow
             await _persist_pending_slots_for_direct_return()
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
-            for recovery_event in contract_required_stock_store_schedule["events"]:
+            for recovery_event in contract_required_store_flow_tool["events"]:
                 yield f"data: {json.dumps(recovery_event, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
-            schedule_event = contract_required_stock_store_schedule["event"]
+            schedule_event = contract_required_store_flow_tool["event"]
             yield f"data: {json.dumps(schedule_event, ensure_ascii=False)}\n\n"
             assistant_response = str((schedule_event.get("data") or {}).get("assistantResponse") or "")
             if assistant_response:
@@ -36905,12 +36905,12 @@ class TStationChatServiceV2:
                                 "[FLOW_STATE] Stored recommendation active flow after listCar: %s",
                                 availability_context["active_flow_context"],
                             )
-                    stock_store_flow_delta = stock_store_candidates_flow_delta(event=event)
+                    store_candidate_flow_delta = store_candidates_flow_delta(event=event)
                     if (
-                        stock_store_flow_delta
+                        store_candidate_flow_delta
                         and str(event.get("source_domain", "")).lower() == MultiAgentDomain.Domain.TRANSACTION.value
                     ):
-                        stock_store_flow_type = str(stock_store_flow_delta.get("flow_type") or "stock")
+                        store_candidate_flow_type = str(store_candidate_flow_delta.get("flow_type") or "stock")
                         availability_context = (
                             dict(base_slots_for_flow.availability_context)
                             if isinstance(getattr(base_slots_for_flow, "availability_context", None), dict)
@@ -36919,10 +36919,10 @@ class TStationChatServiceV2:
                         active_context = availability_context.get("active_flow_context")
                         commit_result = commit_flow_state(
                             active_context if isinstance(active_context, Mapping) else {},
-                            stock_store_flow_delta,
-                            source=f"location_event:{stock_store_flow_type}_store_candidates",
-                            flow_type=stock_store_flow_type,
-                            flow_step=str(stock_store_flow_delta.get("flow_step") or "show_store_candidates"),
+                            store_candidate_flow_delta,
+                            source=f"location_event:{store_candidate_flow_type}_store_candidates",
+                            flow_type=store_candidate_flow_type,
+                            flow_step=str(store_candidate_flow_delta.get("flow_step") or "show_store_candidates"),
                         )
                         availability_context["active_flow_context"] = commit_result.state.to_active_flow_context()
                         updated_slots = base_slots_for_flow.model_copy()
@@ -36932,7 +36932,7 @@ class TStationChatServiceV2:
                             vehicle_selection_trace_metadata.update({
                                 "active_stock_flow_context_stored": True,
                                 "active_stock_flow_context_after": availability_context["active_flow_context"],
-                                "active_store_candidate_flow_type": stock_store_flow_type,
+                                "active_store_candidate_flow_type": store_candidate_flow_type,
                             })
                             logger.info(
                                 "[FLOW_STATE] Stored store candidate active flow after location: %s",

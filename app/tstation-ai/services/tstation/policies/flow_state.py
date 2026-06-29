@@ -556,7 +556,7 @@ def _domain_value(domain: Any) -> str:
     return str(value or "").strip().lower()
 
 
-def stock_store_candidates_flow_delta(
+def store_candidates_flow_delta(
     *,
     event: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
@@ -601,7 +601,7 @@ def stock_store_candidates_flow_delta(
         if not shop_id:
             continue
         store = stores[idx] if idx < len(stores) and isinstance(stores[idx], Mapping) else {}
-        candidate = _stock_store_candidate_from_metadata(store, meta, flow_type=candidate_flow_type)
+        candidate = _store_candidate_from_metadata(store, meta, flow_type=candidate_flow_type)
         if not candidate:
             continue
         candidate["flow_type"] = candidate_flow_type
@@ -638,7 +638,7 @@ def stock_store_candidates_flow_delta(
     }
 
 
-def stock_store_candidate_selection_patch(
+def store_candidate_selection_patch(
     *,
     active_flow_context: Mapping[str, Any] | None,
     user_text: str,
@@ -655,13 +655,13 @@ def stock_store_candidate_selection_patch(
     if not candidates:
         return {}
 
-    selected, ambiguous = _select_stock_store_candidate(
+    selected, ambiguous = _select_store_candidate(
         candidates,
         user_text=user_text,
         selection_hint=_non_empty_mapping(selection_hint),
     )
     if not selected:
-        return {"_stock_store_candidate_ambiguous": True} if ambiguous else {}
+        return {"_store_candidate_ambiguous": True} if ambiguous else {}
 
     patch = {
         key: selected[key]
@@ -935,7 +935,7 @@ def _store_candidate_flow_type(
     return ""
 
 
-def _stock_store_candidate_from_metadata(
+def _store_candidate_from_metadata(
     store: Mapping[str, Any],
     meta: Mapping[str, Any],
     *,
@@ -999,7 +999,7 @@ def _stock_store_candidate_from_metadata(
     return _non_empty_mapping(candidate)
 
 
-def _select_stock_store_candidate(
+def _select_store_candidate(
     candidates: list[Mapping[str, Any]],
     *,
     user_text: str,
