@@ -839,6 +839,37 @@ def _product_entry() -> dict:
     }
 
 
+def _ev_recommendation_entry() -> dict:
+    """Build a recommendation entry matching sized EV tire recommendation traces."""
+    return {
+        "tool": "get_products_recommendations_tool",
+        "args": {"rcmd_type": "tstation", "limit": 3, "brand_cd": "HK", "tire_size": "235/55R19", "vehicle_type": "ev"},
+        "data": {
+            "status": "success",
+            "http_status": 200,
+            "data": {
+                "rcmd_type": "tstation",
+                "total": 1,
+                "items": [
+                    {
+                        "goods_no": "G000000317732",
+                        "goods_nm": "아이온 에보 AS SUV",
+                        "title": "아이온 에보 AS SUV",
+                        "tire_size_1": "235/55R19",
+                        "tire_size_2": "2355519",
+                        "car_knd_nm": "전기차",
+                        "brand_nm": "HANKOOK",
+                        "extra_fvr_sale_prc": 198900,
+                        "sale_prc": 258500,
+                        "image_url": "https://poqa.tstation.com/upload/goods/500/80/2023/1109/IH01A01ko.png",
+                        "rating_avg": 5.0,
+                    }
+                ],
+            },
+        },
+    }
+
+
 def _preview_entry_with_guard(*, args: dict, stores: list[dict]) -> dict:
     """Build a preview entry where schedule is unavailable but store candidates exist."""
     return {
@@ -2300,19 +2331,14 @@ def test_listcar_kept_for_registered_vehicle_tire_size_prompt() -> None:
     assert result["data"]["metadata"][0]["tire_size_fr"] == "2355519"
 
 
-def test_ev_suitability_maps_to_quickreply_for_explanation_turn() -> None:
+def test_ev_suitability_mapper_does_not_override_product_mapping() -> None:
     current_ev_suitability_comparison.set(True)
 
-    result = try_build_template([_product_entry()], "전기차에는 전기차 전용 타이어가 유리합니다.")
+    result = try_build_template([_ev_recommendation_entry()], "235/55R19 전기차 전용 타이어 추천 결과입니다.")
 
     assert result is not None
-    assert result["template"] == "quickReply"
-    assistant_response = result["data"]["assistantResponse"]
-    assert "차량 카테고리만으로는 특정 상품이나 규격을 바로 추천드리기 어렵습니다" in assistant_response
-    assert "보유차량을 확인하거나 차종을 알려주시면" in assistant_response
-    assert result["data"]["quickReplies"][0] == {"label": "보유차량 확인", "domain": "DISCOVERY"}
-    assert "235/35R20" not in assistant_response
-    assert "현재 조회된 상품 기준" not in assistant_response
+    assert result["template"] == "product"
+    assert result["data"]["metadata"][0]["goodsId"] == "G000000317732"
 
 
 def test_force_keyword_routing_sends_owned_vehicle_check_to_discovery() -> None:

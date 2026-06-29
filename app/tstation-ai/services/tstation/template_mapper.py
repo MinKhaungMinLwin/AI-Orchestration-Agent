@@ -6049,10 +6049,6 @@ def try_build_template(accumulated_tool_data: list[dict], assistant_text: str) -
     if runflat_comparison is not None:
         return runflat_comparison
 
-    ev_suitability_comparison = _map_ev_suitability_comparison(accumulated_tool_data, assistant_text)
-    if ev_suitability_comparison is not None:
-        return ev_suitability_comparison
-
     vehicle_recommendation_no_results = _map_vehicle_recommendation_no_results(accumulated_tool_data, assistant_text)
     if vehicle_recommendation_no_results is not None:
         return vehicle_recommendation_no_results
