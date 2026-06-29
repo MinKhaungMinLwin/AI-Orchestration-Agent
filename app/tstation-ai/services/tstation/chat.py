@@ -15545,6 +15545,50 @@ def _build_bare_product_search_tool_input(user_text: str) -> dict | None:
     return tool_input
 
 
+def _product_search_summary_contract_size(
+    *,
+    turn_contract: TurnContract | None,
+    slots: Any | None = None,
+) -> str:
+    if turn_contract is None:
+        return ""
+    response_decision = turn_contract.response_decision or {}
+    response_metadata = response_decision.get("metadata") if isinstance(response_decision, Mapping) else {}
+    response_shape_key = str((response_metadata or {}).get("response_shape_key") or "").strip()
+    if response_shape_key != "product_search_summary":
+        return ""
+    allowed_tools = {str(tool) for tool in tuple(turn_contract.allowed_tools or ()) if str(tool)}
+    if "search_product_tool" not in allowed_tools:
+        return ""
+    known_slots = dict(turn_contract.known_slots or {})
+    tire_size = normalize_tire_size(str(known_slots.get("tire_size") or ""))
+    if not tire_size and slots is not None:
+        tire_size = normalize_tire_size(str(getattr(slots, "tire_size", "") or ""))
+    return tire_size or ""
+
+
+def _apply_product_search_contract_size(
+    tool_input: Mapping[str, Any] | None,
+    *,
+    user_text: str,
+    turn_contract: TurnContract | None,
+    slots: Any | None = None,
+) -> dict[str, Any] | None:
+    if not isinstance(tool_input, Mapping):
+        return None
+    patched = {
+        key: value
+        for key, value in dict(tool_input).items()
+        if value not in (None, "", [], {})
+    }
+    if not patched or patched.get("size") or normalize_tire_size(user_text):
+        return patched
+    tire_size = _product_search_summary_contract_size(turn_contract=turn_contract, slots=slots)
+    if tire_size:
+        patched["size"] = tire_size
+    return patched
+
+
 def _recent_context_product_keyword_for_size_only_search(user_text: str, recent_context: str) -> str | None:
     current_size = normalize_tire_size(user_text)
     if not current_size:
@@ -33542,6 +33586,12 @@ class TStationChatServiceV2:
                 return None
 
             tool_input = _build_bare_product_search_tool_input(user_query) or size_only_tool_input
+            tool_input = _apply_product_search_contract_size(
+                tool_input,
+                user_text=user_query,
+                turn_contract=turn_contract,
+                slots=initial_slots,
+            )
             if tool_input is None:
                 return None
 

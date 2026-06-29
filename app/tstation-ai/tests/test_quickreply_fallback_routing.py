@@ -106,6 +106,7 @@ from services.tstation.chat import (
     _build_transaction_policy_context,
     _build_product_attribute_event_from_search_results,
     _post_tool_purchase_preview_contract_context,
+    _apply_product_search_contract_size,
     _promote_single_turn_purchase_contract_from_search_product,
     _promote_single_turn_stock_inventory_from_search_product,
     _quantity_benefit_continuation_frame_from_pending,
@@ -6110,6 +6111,67 @@ def test_bare_product_search_tool_input_preserves_same_turn_size() -> None:
         "keyword": "벤투스 S2 AS",
         "limit": 10,
         "size": "225/45R17",
+        "brand_cd": "HK",
+    }
+
+
+def test_bare_product_search_tool_input_carries_contract_size_for_product_search_summary() -> None:
+    contract = TurnContract(
+        domain="discovery",
+        intent="unknown",
+        sub_intent="product_name_search",
+        known_slots={"tire_size": "225/45R19"},
+        allowed_tools=("search_product_tool",),
+        forbidden_tools=("get_products_recommendations_tool",),
+        response_decision={
+            "template": "quickReply",
+            "metadata": {"response_shape_key": "product_search_summary"},
+        },
+        action_mode="info_only",
+        context_state="active",
+    )
+
+    base_input = _build_bare_product_search_tool_input("벤투스 s2 as 는?")
+    patched = _apply_product_search_contract_size(
+        base_input,
+        user_text="벤투스 s2 as 는?",
+        turn_contract=contract,
+        slots=ConversationSlots(tire_size="225/45R19"),
+    )
+
+    assert base_input == {"keyword": "벤투스 S2 AS", "limit": 10, "brand_cd": "HK"}
+    assert patched == {
+        "keyword": "벤투스 S2 AS",
+        "limit": 10,
+        "brand_cd": "HK",
+        "size": "225/45R19",
+    }
+
+
+def test_bare_product_search_contract_size_does_not_override_current_turn_size() -> None:
+    contract = TurnContract(
+        domain="discovery",
+        intent="unknown",
+        sub_intent="product_name_search",
+        known_slots={"tire_size": "225/45R19"},
+        allowed_tools=("search_product_tool",),
+        response_decision={
+            "template": "quickReply",
+            "metadata": {"response_shape_key": "product_search_summary"},
+        },
+    )
+
+    patched = _apply_product_search_contract_size(
+        _build_bare_product_search_tool_input("벤투스 s2 as 2454519"),
+        user_text="벤투스 s2 as 2454519",
+        turn_contract=contract,
+        slots=ConversationSlots(tire_size="225/45R19"),
+    )
+
+    assert patched == {
+        "keyword": "벤투스 S2 AS",
+        "limit": 10,
+        "size": "245/45R19",
         "brand_cd": "HK",
     }
 
