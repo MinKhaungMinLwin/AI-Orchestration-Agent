@@ -19363,6 +19363,81 @@ def test_contract_required_tool_candidate_uses_contract_preferred_tool_args() ->
     assert candidate.source_domain == "transaction"
 
 
+def test_contract_required_tool_candidate_uses_active_flow_progress_store_lookup() -> None:
+    active_context = commit_flow_state(
+        {},
+        {
+            "goods_no": "G000000310126",
+            "product_name": "벤투스 S2 AS",
+            "tire_size": "245/45R19",
+            "ord_qty": 4,
+            "place_query": "강남역",
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+            "stock_check_mode": "inventory_only",
+        },
+        source="tool_result:search_product_tool",
+        flow_type="stock",
+        flow_step="product_resolved",
+    ).state.to_active_flow_context()
+    contract = TurnContract(
+        domain="transaction",
+        intent="stock_store_search",
+        known_slots={"goods_no": "G000000310126", "tire_size": "245/45R19", "ord_qty": 4},
+        allowed_tools=("get_store_inventory_tool", "get_store_list_tool", "search_stores_tool"),
+        forbidden_tools=("quick_order_tool", "transaction_store_preview_tool", "get_store_schedule_tool"),
+        blocking_required_slots=(),
+        context_state="active",
+        response_decision={"template": "location", "metadata": {"response_shape_key": "stock_inventory_lookup"}},
+    )
+
+    candidate = chat_module._contract_required_tool_candidate(
+        turn_contract=contract,
+        user_text="강남역 근처",
+        merged_slots=ConversationSlots(availability_context={"active_flow_context": active_context}),
+    )
+
+    assert candidate is not None
+    assert candidate.tool_name == "search_stores_tool"
+    assert candidate.tool_input == {"limit": 10, "place_query": "강남역"}
+    assert candidate.tool_input_source == "flow_state_progress"
+
+
+def test_contract_required_tool_candidate_ignores_misaligned_active_flow_progress() -> None:
+    active_context = commit_flow_state(
+        {},
+        {
+            "goods_no": "G000000310126",
+            "tire_size": "245/45R19",
+            "ord_qty": 4,
+            "place_query": "강남역",
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+            "stock_check_mode": "inventory_only",
+        },
+        source="tool_result:search_product_tool",
+        flow_type="stock",
+        flow_step="product_resolved",
+    ).state.to_active_flow_context()
+    contract = TurnContract(
+        domain="transaction",
+        intent="order_history_lookup",
+        known_slots={},
+        allowed_tools=("search_stores_tool",),
+        forbidden_tools=(),
+        blocking_required_slots=(),
+        context_state="active",
+    )
+
+    candidate = chat_module._contract_required_tool_candidate(
+        turn_contract=contract,
+        user_text="주문 내역",
+        merged_slots=ConversationSlots(availability_context={"active_flow_context": active_context}),
+    )
+
+    assert candidate is None
+
+
 def test_recover_contract_required_stock_inventory_region_lookup_runs_store_list(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

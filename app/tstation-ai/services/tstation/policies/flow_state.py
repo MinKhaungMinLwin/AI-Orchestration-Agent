@@ -315,6 +315,31 @@ def _refresh_flow_progress(state: "FlowState") -> None:
         state.meta.update(progress)
 
 
+def flow_progress_from_active_context(
+    active_flow_context: Mapping[str, Any] | None,
+    *,
+    allowed_flow_types: set[str] | frozenset[str] | None = None,
+) -> dict[str, Any]:
+    state = FlowState.from_active_flow_context(active_flow_context)
+    if state.status not in {"active", "resumed"}:
+        return {}
+    if allowed_flow_types is not None and state.flow_type not in allowed_flow_types:
+        return {}
+    context = state.to_active_flow_context()
+    progress = {
+        key: context[key]
+        for key in _FLOW_PROGRESS_META_FIELDS
+        if context.get(key) not in _EMPTY_VALUES
+    }
+    if not progress:
+        progress = evaluate_flow_progress(state)
+    if not progress:
+        return {}
+    progress["flow_type"] = state.flow_type
+    progress["flow_step"] = state.flow_step
+    return progress
+
+
 @dataclass(slots=True)
 class FlowStateMergeResult:
     state: "FlowState"

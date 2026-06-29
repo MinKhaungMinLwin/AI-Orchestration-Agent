@@ -87,6 +87,7 @@ from services.tstation.policies.flow_state import (
     apply_router_evidence_snapshot,
     commit_flow_state,
     commit_purchase_flow_state,
+    flow_progress_from_active_context,
     is_purchase_flow_context,
     latest_router_evidence,
     purchase_context_vehicle_selection_patch,
@@ -18020,6 +18021,15 @@ def _contract_required_tool_candidate(
 
     known_slots = dict(turn_contract.known_slots or {})
     domain = str(turn_contract.domain or "").strip().lower()
+    progress_candidate = _contract_required_tool_candidate_from_flow_progress(
+        turn_contract=turn_contract,
+        merged_slots=merged_slots,
+        allowed_tools=allowed_tools,
+        forbidden_tools=forbidden_tools,
+        domain=domain,
+    )
+    if progress_candidate is not None:
+        return progress_candidate
     preferred_tool = ""
     tool_input: dict[str, Any] = {}
     tool_input_source = ""
@@ -18189,6 +18199,81 @@ def _contract_required_tool_candidate(
         tool_input_source=tool_input_source or "contract_tool_plan",
         display_name=display_name,
         source_domain=source_domain,
+    )
+
+
+def _contract_required_tool_candidate_from_flow_progress(
+    *,
+    turn_contract: TurnContract,
+    merged_slots: ConversationSlots | None,
+    allowed_tools: tuple[str, ...],
+    forbidden_tools: set[str],
+    domain: str,
+) -> _ContractRequiredToolCandidate | None:
+    if domain != PolicyDomain.TRANSACTION.value:
+        return None
+    availability_context = getattr(merged_slots, "availability_context", None) if merged_slots is not None else None
+    active_flow_context = (
+        availability_context.get("active_flow_context")
+        if isinstance(availability_context, Mapping)
+        and isinstance(availability_context.get("active_flow_context"), Mapping)
+        else {}
+    )
+    progress = flow_progress_from_active_context(
+        active_flow_context,
+        allowed_flow_types=frozenset({"stock", "purchase", "store_schedule"}),
+    )
+    if not progress:
+        return None
+    flow_type = str(progress.get("flow_type") or "").strip()
+    contract_intent = str(turn_contract.intent or "").strip()
+    response_decision = turn_contract.response_decision or {}
+    response_metadata = response_decision.get("metadata") if isinstance(response_decision, Mapping) else {}
+    response_shape_key = str(response_metadata.get("response_shape_key") or "") if isinstance(response_metadata, Mapping) else ""
+    if flow_type == "stock":
+        intent_aligned = (
+            contract_intent in {"stock_store_search", "stock_store_search_slot_fill_store", "fill_quantity_slot"}
+            or response_shape_key == "stock_inventory_lookup"
+        )
+    elif flow_type == "store_schedule":
+        intent_aligned = contract_intent in {"store_schedule", "selected_store_schedule"} or response_shape_key in {
+            "reservation_slots",
+            "unverified_store_schedule_lookup",
+        }
+    else:
+        intent_aligned = contract_intent in {
+            "quick_order_reservation",
+            "store_schedule",
+            "selected_store_schedule",
+        }
+    if not intent_aligned:
+        return None
+    next_tool = str(progress.get("next_tool") or "").strip()
+    if not next_tool or next_tool not in allowed_tools or next_tool in forbidden_tools:
+        return None
+    if next_tool not in {"search_stores_tool", "get_store_list_tool", "get_store_schedule_tool", "get_store_inventory_tool"}:
+        return None
+    if next_tool in _FAST_PATH_TRANSACTION_RECOVERY_BLOCKLIST:
+        return None
+    tool_input = {
+        str(key): value
+        for key, value in dict(progress.get("tool_args_patch") or {}).items()
+        if value not in (None, "", [], {})
+    }
+    if not tool_input:
+        return None
+    display_name_by_tool = {
+        "search_stores_tool": "매장 정보 확인 중...",
+        "get_store_list_tool": "매장 정보 확인 중...",
+        "get_store_schedule_tool": "예약 가능 일정 확인 중...",
+        "get_store_inventory_tool": "매장 재고 확인 중...",
+    }
+    return _ContractRequiredToolCandidate(
+        tool_name=next_tool,
+        tool_input=tool_input,
+        tool_input_source="flow_state_progress",
+        display_name=display_name_by_tool.get(next_tool, "정보 확인 중..."),
+        source_domain=PolicyDomain.TRANSACTION.value,
     )
 
 

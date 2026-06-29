@@ -203,6 +203,30 @@ contract-required recovery는 `TurnContract.preferred_tool/tool_args_patch`를 �
 - `_contract_required_tool_candidate()`가 active flow progress의 `next_tool/tool_args_patch`를 우선 소비하게 한다.
 - progress 기반 경로가 안정화되면 `search_product_tool` 후 stock flow advance, confirmed state advance 같은 보정 helper를 줄인다.
 
+## 2026-06-30 구조 변경 적용: FlowState progress candidate 연결
+
+### 배경
+
+FlowState는 업데이트 후 `next_tool/tool_args_patch`를 저장하지만, 실행 후보 생성기가 이를 읽지 않으면 여전히
+기존 recovery helper와 ContextVar plan에 의존한다. 따라서 저장된 progress를 contract-required candidate의
+우선 evidence로 연결했다.
+
+### 적용 내용
+
+- `flow_state.py`에 `flow_progress_from_active_context()`를 추가했다.
+- `_contract_required_tool_candidate()`가 transaction contract에서 active flow progress를 먼저 확인한다.
+- context 단독 실행을 막기 위해 아래 조건을 모두 요구한다.
+  - active flow type이 `stock`, `purchase`, `store_schedule` 중 하나
+  - contract intent 또는 response shape가 해당 flow와 정렬됨
+  - `next_tool`이 contract `allowed_tools`에 포함되고 `forbidden_tools`에 없음
+  - 1차 대상 tool은 transaction-side tool로 제한
+
+### 남은 방향
+
+- TurnContract build 단계에서 current-turn continuation일 때 progress를 preferred/tool args evidence로 반영한다.
+- product resolve progress(`search_product_tool`)는 discovery-side safe candidate로 별도 연결한다.
+- progress 기반 path가 안정화되면 기존 stock flow advance/recovery special case를 줄인다.
+
 ## 2026-06-29 구조 변경 계획: current-turn execution boundary와 parent flow 분리
 
 ### 배경
