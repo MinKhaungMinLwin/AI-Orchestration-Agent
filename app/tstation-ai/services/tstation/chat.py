@@ -36750,6 +36750,22 @@ class TStationChatServiceV2:
             yield "data: [DONE]\n\n"
             return
 
+        store_service_advisory_resolution = await _resolve_store_service_advisory_with_code()
+        if store_service_advisory_resolution is not None:
+            code_events, advisory_event = store_service_advisory_resolution
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[SUPPORT AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+            for code_event in code_events:
+                yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[SUPPORT AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(advisory_event, ensure_ascii=False)}\n\n"
+            assistant_response = str((advisory_event.get("data") or {}).get("assistantResponse") or "")
+            if assistant_response:
+                yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[SUPPORT AGENT]'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
         night_store_region_resolution = await _resolve_night_store_region_search_with_code()
         if night_store_region_resolution is not None:
             code_events, night_store_event = night_store_region_resolution

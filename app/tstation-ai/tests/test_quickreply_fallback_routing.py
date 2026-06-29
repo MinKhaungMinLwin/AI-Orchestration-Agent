@@ -270,6 +270,7 @@ from services.tstation.chat import (
     _service_duration_advisory_event,
     _store_attribute_inquiry_event,
     _night_store_region_search_event,
+    _store_service_advisory_selected_store_event,
     _store_service_availability_event,
     _build_vehicle_information_event,
     _build_vehicle_size_guidance_event,
@@ -29509,6 +29510,37 @@ def test_store_service_advisory_without_store_asks_scope_not_random_store_search
     assert event["data"]["metadata"]["carried_store_context"] == ""
     assert event["data"]["metadata"]["store_search_suppressed"] is True
     assert _labels(event["data"]["quickReplies"])[0] == "매장명 입력"
+
+
+def test_store_service_advisory_selected_store_does_not_mix_previous_candidates() -> None:
+    event = _store_service_advisory_selected_store_event(
+        "내 차는 스타리안인데 매장에서 타이어 교체 가능? 탑차처럼 큰 차도 해줘?",
+        store_name="티스테이션 분당정자점",
+        service_text="스타리안, 탑차 타이어 교체 가능 여부",
+    )
+    contract = TurnContract(
+        domain="support",
+        intent="store_service_advisory",
+        allowed_tools=(),
+        response_decision={"template": "quickReply", "metadata": {"response_shape_key": "store_service_advisory"}},
+    )
+
+    finalized = _finalize_direct_code_event(
+        event,
+        turn_contract=contract,
+        intent="store_service_advisory",
+        source="code_store_service_advisory_selected_store_guard",
+        required_tools=(),
+        template="quickReply",
+    )
+
+    assert finalized is not None
+    assistant = finalized["data"]["assistantResponse"]
+    assert "티스테이션 분당정자점" in assistant
+    assert "서초점" not in assistant
+    assert "현재 선택된 매장" in assistant
+    assert finalized["assistant_response_source"] == "code_store_service_advisory_selected_store_guard"
+    assert finalized["data"]["metadata"]["selectedStoreOnly"] is True
 
 
 def test_pre_router_store_service_guard_skips_region_search_request_without_store_context() -> None:
