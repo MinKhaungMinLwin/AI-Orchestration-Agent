@@ -8409,6 +8409,48 @@ def _coupon_rows_from_my_coupons(tool_result: dict) -> list[dict]:
     return [row for row in rows or [] if isinstance(row, dict)]
 
 
+def _chunk_coupon_numbers(cpn_nos: list[str], *, batch_size: int = 10) -> list[list[str]]:
+    normalized = [str(cpn_no).strip() for cpn_no in cpn_nos if str(cpn_no).strip()]
+    if batch_size <= 0:
+        return [normalized] if normalized else []
+    return [normalized[index : index + batch_size] for index in range(0, len(normalized), batch_size)]
+
+
+def _merge_coupon_applicable_products_results(results: list[dict]) -> dict:
+    merged_coupons: list[dict] = []
+    merged_deals: list[dict] = []
+    merged_stores: list[dict] = []
+    for result in results:
+        data = _unwrap_tool_data(result)
+        merged_coupons.extend(
+            item for item in data.get("coupons", []) if isinstance(item, dict)
+        )
+        merged_deals.extend(
+            item for item in data.get("deals", []) if isinstance(item, dict)
+        )
+        merged_stores.extend(
+            item for item in data.get("stores", []) if isinstance(item, dict)
+        )
+
+    return {
+        "status": "success",
+        "http_status": 200,
+        "data": {
+            "total_coupons": len(merged_coupons),
+            "total_deals": len(merged_deals),
+            "total_products": (
+                sum(int(group.get("total") or 0) for group in merged_coupons)
+                + sum(int(group.get("total") or 0) for group in merged_deals)
+            ),
+            "total_store_coupons": len(merged_stores),
+            "total_stores": sum(int(group.get("total") or 0) for group in merged_stores),
+            "coupons": merged_coupons,
+            "deals": merged_deals,
+            "stores": merged_stores,
+        },
+    }
+
+
 _OWNED_COUPON_EXPIRY_LOOKUP_RE = re.compile(
     r"(?=.*(?:쿠폰|할인권))(?=.*(?:내|나의|보유|가진|갖고|받은|쿠폰함))"
     r"(?=.*(?:이번\s*달|이달|곧|만료\s*예정|만료(?:되는|인|된)?|유효\s*기간|사용\s*기간))",
@@ -34446,41 +34488,50 @@ class TStationChatServiceV2:
                 return (emitted_events, coupon_box_event) if coupon_box_event is not None else None
 
             followup_tool_name = "get_coupon_applicable_products_tool"
-            followup_input = {"cpn_no": cpn_nos, "deal_no": None}
-            emitted_events.append({
-                "type": "status",
-                "status": "tool_start",
-                "tool": followup_tool_name,
-                "display_name": "쿠폰 적용 상품 확인 중...",
-                "source_domain": "transaction",
-            })
-            try:
-                raw_followup = await asyncio.to_thread(_coupon_applicable_tool.invoke, followup_input)
-                followup_result = _tool_result_dict(raw_followup)
-            except Exception as exc:
-                logger.exception("[PRODUCT_COUPON_RESOLVER] applicable products tool failed")
-                followup_result = {
-                    "status": "error",
-                    "http_status": None,
-                    "message": str(exc),
-                    "data": {},
-                }
-            _record_code_tool_result(followup_tool_name, followup_input, followup_result)
-            emitted_events.append({
-                "type": "agent_flow",
-                "agent": "[Price AF]",
-                "agent_class": "Transaction Agent",
-                "status": followup_result.get("status", "success"),
-                "source_domain": "transaction",
-            })
-            emitted_events.append({
-                "type": "tool",
-                "input": followup_input,
-                "output": json.dumps(followup_result, ensure_ascii=False),
-                "node": "tools",
-                "tool": followup_tool_name,
-                "source_domain": "transaction",
-            })
+            followup_batches = _chunk_coupon_numbers(cpn_nos, batch_size=10)
+            followup_results: list[dict] = []
+            for batch_index, cpn_batch in enumerate(followup_batches):
+                followup_input = {"cpn_no": cpn_batch, "deal_no": None}
+                emitted_events.append({
+                    "type": "status",
+                    "status": "tool_start",
+                    "tool": followup_tool_name,
+                    "display_name": "쿠폰 적용 상품 확인 중..." if batch_index == 0 else "쿠폰 적용 상품 추가 확인 중...",
+                    "source_domain": "transaction",
+                })
+                try:
+                    raw_followup = await asyncio.to_thread(_coupon_applicable_tool.invoke, followup_input)
+                    batch_result = _tool_result_dict(raw_followup)
+                except Exception as exc:
+                    logger.exception("[PRODUCT_COUPON_RESOLVER] applicable products tool failed")
+                    batch_result = {
+                        "status": "error",
+                        "http_status": None,
+                        "message": str(exc),
+                        "data": {},
+                    }
+                _record_code_tool_result(followup_tool_name, followup_input, batch_result)
+                emitted_events.append({
+                    "type": "agent_flow",
+                    "agent": "[Price AF]",
+                    "agent_class": "Transaction Agent",
+                    "status": batch_result.get("status", "success"),
+                    "source_domain": "transaction",
+                })
+                emitted_events.append({
+                    "type": "tool",
+                    "input": followup_input,
+                    "output": json.dumps(batch_result, ensure_ascii=False),
+                    "node": "tools",
+                    "tool": followup_tool_name,
+                    "source_domain": "transaction",
+                })
+                if str(batch_result.get("status") or "") != "success":
+                    followup_result = batch_result
+                    break
+                followup_results.append(batch_result)
+            else:
+                followup_result = _merge_coupon_applicable_products_results(followup_results)
             eligibility_event = _finalize_coupon_code_event(
                 _build_product_coupon_eligibility_event(
                     followup_result,

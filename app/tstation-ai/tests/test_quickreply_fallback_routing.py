@@ -288,7 +288,9 @@ from services.tstation.chat import (
     _coerce_non_selection_listcar_to_quickreply,
     _coerce_unmatched_vehicle_listcar_to_owner_prompt,
     _coerce_vehicle_type_compatibility_listcar_to_quickreply,
+    _chunk_coupon_numbers,
     _coupon_channel_type,
+    _merge_coupon_applicable_products_results,
     _discovery_recovery_chips_for_text,
     _find_coupon_from_owned_coupons,
     _find_single_confident_coupon_from_owned_coupons,
@@ -28831,6 +28833,59 @@ def test_coupon_fast_path_gate_args_keep_price_coupon_followup_open() -> None:
     assert "price_or_coupon_check" in allowed_intents
     assert allowed is True
     assert reason == "contract_matched:code_product_coupon_price_followup"
+
+
+def test_chunk_coupon_numbers_caps_batches_at_ten() -> None:
+    cpn_nos = [f"C{i:02d}" for i in range(1, 13)]
+
+    batches = _chunk_coupon_numbers(cpn_nos, batch_size=10)
+
+    assert batches == [
+        [f"C{i:02d}" for i in range(1, 11)],
+        ["C11", "C12"],
+    ]
+
+
+def test_merge_coupon_applicable_products_results_combines_batches() -> None:
+    merged = _merge_coupon_applicable_products_results(
+        [
+            {
+                "status": "success",
+                "http_status": 200,
+                "data": {
+                    "total_coupons": 1,
+                    "total_deals": 0,
+                    "total_products": 2,
+                    "total_store_coupons": 0,
+                    "total_stores": 0,
+                    "coupons": [{"cpn_no": "C01", "total": 2, "items": [{"ptrn_cd": "P1"}, {"ptrn_cd": "P2"}]}],
+                    "deals": [],
+                    "stores": [],
+                },
+            },
+            {
+                "status": "success",
+                "http_status": 200,
+                "data": {
+                    "total_coupons": 1,
+                    "total_deals": 0,
+                    "total_products": 1,
+                    "total_store_coupons": 1,
+                    "total_stores": 2,
+                    "coupons": [{"cpn_no": "C02", "total": 1, "items": [{"ptrn_cd": "P3"}]}],
+                    "deals": [],
+                    "stores": [{"cpn_no": "C02", "total": 2, "items": [{"shop_id": "S1"}, {"shop_id": "S2"}]}],
+                },
+            },
+        ]
+    )
+
+    assert merged["status"] == "success"
+    assert merged["data"]["total_coupons"] == 2
+    assert merged["data"]["total_products"] == 3
+    assert merged["data"]["total_store_coupons"] == 1
+    assert merged["data"]["total_stores"] == 2
+    assert [group["cpn_no"] for group in merged["data"]["coupons"]] == ["C01", "C02"]
 
 
 def test_turn_contract_clears_stale_pending_check_for_new_non_followup_planner_intent() -> None:
