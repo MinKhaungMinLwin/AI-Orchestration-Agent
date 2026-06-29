@@ -16598,6 +16598,20 @@ _FAST_PATH_DISCOVERY_RECOVERY_ALLOWED_TOOLS = frozenset({
 _FAST_PATH_SUPPORT_RECOVERY_ALLOWED_TOOLS = frozenset({
     "search_faq_hybrid_tool",
 })
+_SIZED_RECOMMENDATION_RESPONSE_SHAPE_KEYS = frozenset({
+    "sized_product_recommendation",
+    "sized_lowest_price_recommendation",
+    "sized_technology_recommendation_cards",
+    "sized_safe_service_recommendation_cards",
+    "vehicle_based_recommendation_refinement",
+})
+
+
+def _is_sized_recommendation_response_shape_key(response_shape_key: str) -> bool:
+    key = str(response_shape_key or "").strip()
+    return key in _SIZED_RECOMMENDATION_RESPONSE_SHAPE_KEYS or (
+        key.startswith("sized_") and "recommendation" in key
+    )
 
 
 def _is_contract_required_vehicle_recommendation(
@@ -16610,9 +16624,18 @@ def _is_contract_required_vehicle_recommendation(
         return False
     if str(turn_contract.intent or "").strip() != "product_recommendation":
         return False
-    if str(turn_contract.sub_intent or "").strip() != "vehicle_based_recommendation_refinement":
-        return False
     response_decision = turn_contract.response_decision or {}
+    response_metadata = response_decision.get("metadata") if isinstance(response_decision, Mapping) else {}
+    response_shape_key = (
+        str(response_metadata.get("response_shape_key") or "")
+        if isinstance(response_metadata, Mapping)
+        else ""
+    )
+    contract_sub_intent = str(turn_contract.sub_intent or "").strip()
+    is_vehicle_recommendation = contract_sub_intent == "vehicle_based_recommendation_refinement"
+    is_sized_recommendation = _is_sized_recommendation_response_shape_key(response_shape_key)
+    if not (is_vehicle_recommendation or is_sized_recommendation):
+        return False
     if str(response_decision.get("template") or "").strip().lower() != "product":
         return False
     allowed_tools = {str(tool) for tool in tuple(turn_contract.allowed_tools or ()) if str(tool).strip()}
@@ -16650,9 +16673,18 @@ def _contract_required_recommendation_tool_input(
         return {}
     if str(turn_contract.intent or "").strip() != "product_recommendation":
         return {}
-    if str(turn_contract.sub_intent or "").strip() != "vehicle_based_recommendation_refinement":
-        return {}
     response_decision = turn_contract.response_decision or {}
+    response_metadata = response_decision.get("metadata") if isinstance(response_decision, Mapping) else {}
+    response_shape_key = (
+        str(response_metadata.get("response_shape_key") or "")
+        if isinstance(response_metadata, Mapping)
+        else ""
+    )
+    contract_sub_intent = str(turn_contract.sub_intent or "").strip()
+    is_vehicle_recommendation = contract_sub_intent == "vehicle_based_recommendation_refinement"
+    is_sized_recommendation = _is_sized_recommendation_response_shape_key(response_shape_key)
+    if not (is_vehicle_recommendation or is_sized_recommendation):
+        return {}
     response_template = str(response_decision.get("template") or "").strip().lower()
     if response_template and response_template != "product":
         return {}
@@ -16672,6 +16704,16 @@ def _contract_required_recommendation_tool_input(
             value = recommendation_context.get(key)
             if value not in (None, "", [], {}):
                 tool_input.setdefault(str(key), value)
+
+    pending_check_topic = str(known_slots.get("pending_check_topic") or "").strip()
+    is_safe_service_recommendation = (
+        response_shape_key == "sized_safe_service_recommendation_cards" or pending_check_topic == "safe_service"
+    )
+    if is_safe_service_recommendation:
+        tool_input.setdefault("rcmd_type", "safe_kids")
+        tool_input.setdefault("brand_cd", known_slots.get("brand_cd") or "HK")
+    elif response_shape_key == "sized_technology_recommendation_cards":
+        tool_input.setdefault("rcmd_type", "sound_absorber")
 
     slot_sources = (
         known_slots,

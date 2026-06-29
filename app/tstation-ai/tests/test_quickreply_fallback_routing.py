@@ -14671,6 +14671,82 @@ def test_contract_required_vehicle_recommendation_detects_only_recommendation_co
     )
 
 
+def test_contract_required_vehicle_recommendation_handles_sized_safe_service_contract() -> None:
+    contract = TurnContract(
+        domain="discovery",
+        intent="product_recommendation",
+        sub_intent="condition_recommendation",
+        known_slots={
+            "tire_size": "235/55R19",
+            "brand_cd": "HK",
+            "car_no": "205소4214",
+            "pending_check_topic": "safe_service",
+        },
+        allowed_tools=("get_products_recommendations_tool",),
+        forbidden_tools=("generic_unsized_recommendation",),
+        blocking_required_slots=(),
+        context_state="resumed",
+        response_decision={
+            "template": "product",
+            "metadata": {"response_shape_key": "sized_safe_service_recommendation_cards"},
+        },
+    )
+    slots = ConversationSlots(
+        tire_size="235/55R19",
+        car_no="205소4214",
+        pending_check_topic="safe_service",
+    )
+
+    assert chat_module._is_contract_required_vehicle_recommendation(contract, slots) is True
+
+    tool_input = chat_module._contract_required_recommendation_tool_input(
+        turn_contract=contract,
+        known_slots=dict(contract.known_slots),
+        merged_slots=slots,
+    )
+
+    assert tool_input == {
+        "rcmd_type": "safe_kids",
+        "brand_cd": "HK",
+        "tire_size": "235/55R19",
+    }
+
+
+def test_contract_required_vehicle_recommendation_handles_generic_sized_recommendation_contract() -> None:
+    contract = TurnContract(
+        domain="discovery",
+        intent="product_recommendation",
+        sub_intent="condition_recommendation",
+        known_slots={
+            "tire_size": "235/55R19",
+            "brand_cd": "HK",
+            "car_no": "205소4214",
+        },
+        allowed_tools=("get_products_recommendations_tool",),
+        forbidden_tools=("generic_unsized_recommendation",),
+        blocking_required_slots=(),
+        context_state="resumed",
+        response_decision={
+            "template": "product",
+            "metadata": {"response_shape_key": "sized_technology_recommendation_cards"},
+        },
+    )
+    slots = ConversationSlots(tire_size="235/55R19", car_no="205소4214")
+
+    assert chat_module._is_contract_required_vehicle_recommendation(contract, slots) is True
+
+    tool_input = chat_module._contract_required_recommendation_tool_input(
+        turn_contract=contract,
+        known_slots=dict(contract.known_slots),
+        merged_slots=slots,
+    )
+
+    assert tool_input == {
+        "rcmd_type": "sound_absorber",
+        "tire_size": "235/55R19",
+    }
+
+
 def test_complete_active_recommendation_flow_for_direct_return_moves_to_dormant() -> None:
     slots = ConversationSlots(
         availability_context={
