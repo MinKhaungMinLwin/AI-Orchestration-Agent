@@ -28716,6 +28716,51 @@ def test_turn_contract_builds_owned_coupon_lookup_contract() -> None:
     assert "get_coupon_applicable_products_tool" in contract.forbidden_tools
 
 
+def test_turn_contract_builds_owned_coupon_lookup_contract_for_coupon_wording_without_product_requirement() -> None:
+    contract = build_turn_contract(
+        user_text="내가 가진 쿠폰",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["transaction:owned_coupon_lookup"],
+        ),
+    )
+
+    assert contract.domain == "transaction"
+    assert contract.intent == "owned_coupon_lookup"
+    assert contract.required_slots == ()
+    assert contract.blocking_required_slots == ()
+    assert contract.preferred_tool == "get_my_coupons_tool"
+    assert "get_my_coupons_tool" in contract.allowed_tools
+    assert "search_product_tool" not in contract.allowed_tools
+
+
+def test_product_coupon_eligibility_contract_removes_forbidden_search_tool_from_allowed_tools() -> None:
+    contract = build_turn_contract(
+        user_text="키너지 ex 에 쓸 수 있는 쿠폰은?",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["transaction:coupon_usage"],
+        ),
+        merged_slots=ConversationSlots(
+            tire_model="키너지 EX",
+            availability_context={
+                "latest_router_evidence": {
+                    "domain": "transaction",
+                    "intent": "product_coupon_eligibility",
+                    "execution_plan": ["transaction:product_coupon_eligibility"],
+                }
+            },
+        ),
+        action_mode="info_only",
+        context_state="active",
+    )
+
+    assert contract.intent == "product_coupon_eligibility"
+    assert "search_product_tool" not in contract.allowed_tools
+    assert "get_final_price_tool" not in contract.allowed_tools
+    assert contract.preferred_tool == "get_my_coupons_tool"
+
+
 def test_turn_contract_clears_stale_pending_check_for_new_non_followup_planner_intent() -> None:
     contract = build_turn_contract(
         user_text="결제 창 멈춰서 나갔다 왔는데 장바구니 가격이랑 쿠폰 그대로 있어?",

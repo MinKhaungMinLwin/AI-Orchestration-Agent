@@ -1005,6 +1005,10 @@ def build_turn_contract(
         if not preferred_tool or preferred_tool in forbidden_tools:
             preferred_tool = "get_my_coupons_tool"
             tool_args_patch = {}
+        required_slots = ()
+        resolvable_required_slots = ()
+        blocking_required_slots = ()
+        blocking_required_slots_source = "owned_coupon_lookup_contract"
     if intent == "partner_member_coupon_policy":
         forbidden_tools = _merge_tuple(
             forbidden_tools,
@@ -1277,6 +1281,8 @@ def build_turn_contract(
         blocking_required_slots_source = "router_wins_information_contract" if router_wins_suppressed_required_slots else "none"
         if _router_wins_response_decision_mismatch(router_wins_intent, response_decision_payload):
             response_decision_payload = _router_wins_response_decision(router_wins_intent)
+
+    allowed_tools = tuple(tool for tool in allowed_tools if tool not in forbidden_tools)
 
     preferred_allowed = bool(
         preferred_tool
