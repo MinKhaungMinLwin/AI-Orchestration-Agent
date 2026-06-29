@@ -544,11 +544,11 @@ class ConversationSlots(BaseModel):
         re.compile(
             # Korean brands (primary user input)
             r"벤투스|키네르기|키너지|옵티모|다이나프로|아이온|라우펜|"
-            r"마일리지\s*(?:플러스\s*)?[23]\b|마일리지\s*플러스|마일리지\s*타이어|"
+            r"마일리지\s*(?:플러스\s*)?[23]\b|마일리지\s*플러스|"
             r"미쉐린|피렐리|브리지스톤|콘티넨탈|굿이어|한국타이어|"
             # English brands
             r"Ventus|Kinergy|Optimo|Dynapro|iON|Laufenn|"
-            r"Mileage\s*(?:Plus\s*)?[23]\b|Mileage\s*Plus|Mileage\s*Tire|"
+            r"Mileage\s*(?:Plus\s*)?[23]\b|Mileage\s*Plus|"
             r"Michelin|Pirelli|Bridgestone|Continental|Goodyear|Hankook|"
             # Bare model names (brand omitted by user)
             r"CrossClimate|크로스클라이밋|크로스클라이메이트|"
@@ -560,12 +560,12 @@ class ConversationSlots(BaseModel):
         ),
     ]
     _MILEAGE_PRODUCT_LIKE_PATTERN: ClassVar[re.Pattern] = re.compile(
-        r"마일리지\s*(?:플러스\s*)?[23]\b|마일리지\s*플러스|마일리지\s*타이어|"
-        r"Mileage\s*(?:Plus\s*)?[23]\b|Mileage\s*Plus|Mileage\s*Tire",
+        r"마일리지\s*(?:플러스\s*)?[23]\b|마일리지\s*플러스|"
+        r"Mileage\s*(?:Plus\s*)?[23]\b|Mileage\s*Plus",
         re.IGNORECASE,
     )
     _MILEAGE_ATTRIBUTE_PATTERN: ClassVar[re.Pattern] = re.compile(
-        r"마일리지\s*(?:좋|높|긴|길|성능|중심|우수|뛰어난)|"
+        r"마일리지\s*(?:타이어|좋|높|긴|길|성능|중심|우수|뛰어난)|"
         r"오래\s*타|수명|마모|내구|장거리|주행거리",
         re.IGNORECASE,
     )
@@ -785,11 +785,11 @@ class ConversationSlots(BaseModel):
         if is_view_only:
             pass
         elif cls.has_mileage_product_search_intent(user_text):
-            # "마일리지" is both a product-name token (마일리지 플러스 2/3)
-            # and a recommendation attribute. Product-like forms should be
-            # searched first; attribute forms such as "마일리지 좋은 타이어" keep
-            # the normal recommendation path below.
+            # "마일리지" alone is a recommendation attribute. Only Plus-anchored
+            # product forms such as "마일리지 플러스 2/3" are searched first.
             slots.goal_candidate = "product_search"
+        elif cls._MILEAGE_ATTRIBUTE_PATTERN.search(user_text):
+            slots.goal_candidate = "product_recommend"
         elif cls.has_recommend_intent(user_text):
             slots.goal_candidate = "product_recommend"
         elif cls.has_store_finder_intent(user_text):

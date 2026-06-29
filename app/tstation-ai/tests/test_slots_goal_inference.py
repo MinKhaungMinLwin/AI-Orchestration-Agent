@@ -52,13 +52,14 @@ def test_product_keyword_with_size_no_qty_stays_product_search() -> None:
 
 
 def test_mileage_product_like_query_goes_to_product_search() -> None:
-    assert _goal_candidate("마일리지 타이어") == "product_search"
-    assert _goal_candidate("마일리지 타이어 추천") == "product_search"
     assert _goal_candidate("마일리지 플러스 2") == "product_search"
     assert _goal_candidate("마일리지 플러스 3 추천해줘") == "product_search"
+    assert _goal_candidate("mileage plus 추천") == "product_search"
 
 
 def test_mileage_attribute_query_stays_recommendation() -> None:
+    assert _goal_candidate("마일리지 타이어") == "product_recommend"
+    assert _goal_candidate("마일리지 타이어 추천") == "product_recommend"
     assert _goal_candidate("마일리지 좋은 타이어 추천") == "product_recommend"
     assert _goal_candidate("수명 긴 타이어 추천") == "product_recommend"
 

@@ -2784,7 +2784,7 @@ Complaint routing rule:
        When the current turn has owned-record anchors such as order number, "내 주문/내 예약", "오늘 예약", "방금 주문", or a resolved order reference, mark it as an owned order/reservation fee inquiry.
        When those anchors are absent, treat it as a general cancellation-fee policy question and do not assume a personal order lookup.
    - "discovery_recommendation": tire recommendation by vehicle, tire size, scenario, discount ranking WITHOUT a specific product name, or continuation from recommendation cards ("추천", "맞는 타이어", "12가3456 타이어", "세일 많이 하는 타이어", "할인율 높은 타이어")
-   - "discovery_search": product search by name/keyword/brand/size (no goods_no), price/stock/discount-price query with product name only (e.g. "벤투스 S2 할인가 얼마야?", "다이나프로 HPX 할인된 가격", "마일리지 타이어", "마일리지 플러스 2"), run-flat vs normal price comparison, best-sellers/sales-rank requests ("많이 팔린/베스트셀러/잘 팔리는/잘 나가는/요즘 제일 인기 있는 거") — goods_no NOT yet known in context
+   - "discovery_search": product search by name/keyword/brand/size (no goods_no), price/stock/discount-price query with product name only (e.g. "벤투스 S2 할인가 얼마야?", "다이나프로 HPX 할인된 가격", "마일리지 플러스 2", "Mileage Plus"), run-flat vs normal price comparison, best-sellers/sales-rank requests ("많이 팔린/베스트셀러/잘 팔리는/잘 나가는/요즘 제일 인기 있는 거") — goods_no NOT yet known in context
    - "discovery_event_content": explicit events/deals/current benefit list requests ("이벤트 혜택 알려줘", "지금 받을 수 있는 혜택 알려줘", "기획전 알려줘", "행사 목록", "이벤트 대상 상품"), product-applicable events, YouTube/video.
      Use execution_plan=["discovery:benefit_event_list_lookup"] for current event/benefit lists and ["discovery:benefit_deal_list"] for deal-only list requests.
      Treat "알려줘/보여줘/뭐 있어?" as information lookup, NOT automatic alert registration.
@@ -2865,7 +2865,8 @@ DOMAIN ROUTING EXAMPLES
 
 DISCOVERY — product search, recommendation, compatibility (no goods_no yet):
 - "buy tires for 12가3456", "쏘나타 타이어 추천", "벤투스 S2 가격/재고/매장" (resolve goods_no first), "런플랫이 얼마나 더 비싸?", "225/45R18 런플랫 가격 차이", "이벤트", "리뷰 영상", "추천 가격 비교해줘"
-- "마일리지 타이어", "마일리지 플러스", "마일리지 플러스 2/3" → discovery_search. These are product/product-family terms. Do not classify them as mileage-attribute recommendations unless the user says "마일리지 좋은", "수명 긴", "오래 타는", "마모 적은" etc.
+- "마일리지 플러스", "마일리지 플러스 2/3", "Mileage Plus" → discovery_search. These are product terms.
+- "마일리지 타이어", "마일리지 좋은 타이어", "수명 긴 타이어", "오래 타는 타이어", "마모 적은 타이어" → discovery_recommendation or neutral attribute explanation depending on phrasing. Do not treat "마일리지 타이어" alone as Mileage Plus product search.
 - "이벤트 혜택 알려줘", "지금 받을 수 있는 혜택 알려줘", "기획전 알려줘" → DISCOVERY, agent_prompt_profile=discovery_event_content, execution_plan=["discovery:benefit_event_list_lookup"] or ["discovery:benefit_deal_list"]. This is current list lookup, not an alert request.
 - 경쟁사 상품 기준 한국타이어 대응 라인업: "미쉐린 크로스클라이밋2에 대응하는 한국타이어 라인업 알려줘", "CC2랑 비슷한 한타 뭐야" → DISCOVERY, agent_prompt_profile=discovery_search, execution_plan=["discovery:competitor_counterpart_guidance"]. LLM should answer with similar candidate guidance only; do not route to vehicle/size recommendation or Transaction.
 - 가격 범위/예산으로 타이어 찾기: "30만원 이하 타이어 추천", "20만원에서 30만원 사이 타이어", "예산 50만원 이상 프리미엄 타이어", "한국타이어 30만원 이하 있어?" — goods_no 없으므로 반드시 DISCOVERY
@@ -3225,8 +3226,8 @@ EXAMPLES (tricky cases):
 - "225/45R18 런플랫은 일반 타이어보다 얼마나 비싸?" → DISCOVERY, agent_prompt_profile=discovery_search
 - "다이나프로 HPX 할인된 가격이 얼마야?" → DISCOVERY, agent_prompt_profile=discovery_search (specific product + discount price = search, NOT recommendation)
 - "벤투스 S2 할인가 얼마야?" → DISCOVERY, agent_prompt_profile=discovery_search (specific product name → search for it, not discount ranking)
-- "마일리지 타이어" / "마일리지 플러스 2" → DISCOVERY, agent_prompt_profile=discovery_search (product/product-family term, NOT mileage recommendation)
-- "마일리지 좋은 타이어 추천" / "수명 긴 타이어" → DISCOVERY, agent_prompt_profile=discovery_recommendation (attribute recommendation)
+- "마일리지 플러스" / "마일리지 플러스 2" / "Mileage Plus" → DISCOVERY, agent_prompt_profile=discovery_search (specific product term)
+- "마일리지 타이어" / "마일리지 좋은 타이어 추천" / "수명 긴 타이어" → DISCOVERY, agent_prompt_profile=discovery_recommendation or neutral attribute explanation (attribute/category, NOT product search)
 - "미쉐린 235/55R19 재고 있어?" → DISCOVERY, agent_prompt_profile=discovery_search
 - "요즘 많이 팔리는 타이어" → DISCOVERY, agent_prompt_profile=discovery_search
 - "제일 최근에 나온 타이어 신제품이 뭐야?" → DISCOVERY, agent_prompt_profile=discovery_search
@@ -3304,7 +3305,7 @@ agent_prompt_profile:
 - transaction_order: order/cart/status/cancellation fee -> transaction_order
 - transaction_store: store/search/schedule/store inventory -> transaction_store
 - transaction_price_stock: goods_no + price/final price/logistics stock -> transaction_price_stock
-- discovery_search: product search by name/keyword/brand/size (no goods_no in context), price/stock/discount-price query with specific product name ("벤투스 S2 할인가 얼마야?", "다이나프로 HPX 할인된 가격", "마일리지 타이어", "마일리지 플러스 2"), run-flat vs normal price comparison, best-sellers/sales-rank requests ("많이 팔린/베스트셀러/잘 팔리는/잘 나가는/요즘 제일 인기 있는 거"), newest products ("최신/신제품/최근 출시")
+- discovery_search: product search by name/keyword/brand/size (no goods_no in context), price/stock/discount-price query with specific product name ("벤투스 S2 할인가 얼마야?", "다이나프로 HPX 할인된 가격", "마일리지 플러스 2", "Mileage Plus"), run-flat vs normal price comparison, best-sellers/sales-rank requests ("많이 팔린/베스트셀러/잘 팔리는/잘 나가는/요즘 제일 인기 있는 거"), newest products ("최신/신제품/최근 출시")
 - discovery_recommendation: tire recommendation by vehicle, tire size, scenario, discount ranking WITHOUT a specific product name, or continuation from recommendation cards ("추천", "내 차에 맞는", "세일 많이 하는 타이어", "할인율 높은 타이어")
 - discovery_event_content: explicit events/deals, event-applicable products, product-applicable events, YouTube/video
 - full: compatibility-only, mixed, ambiguous, or uncertain
@@ -5586,8 +5587,8 @@ _DATEPICK_SELECTION_RE = re.compile(
 _TIRE_PRODUCT_CONTEXT_RE = re.compile(
     r"goods_no|G\d{12}|"
     r"\d{3}\s*/\s*\d{2}\s*R\s*\d{2}|"
-    r"벤투스|키너지|아이온|마일리지|드라이브웨이|다이나프로|라우펜|"
-    r"ventus|kinergy|dynapro|ion\b|mileage",
+    r"벤투스|키너지|아이온|마일리지\s*플러스|드라이브웨이|다이나프로|라우펜|"
+    r"ventus|kinergy|dynapro|ion\b|mileage\s*plus",
     re.IGNORECASE,
 )
 _SHOP_SEQ_RE = re.compile(r'"shop[_\s]*seq"\s*:\s*"([A-Z]?\d{4,})"', re.IGNORECASE)
