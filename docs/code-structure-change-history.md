@@ -146,6 +146,35 @@ ContextVar의 tool plan을 fallback으로 읽는 구조가 남아 있었다.
 - BaseAgent의 contract tool guard와 chat-side recovery가 같은 candidate builder와 allow/deny source를 보게 한다.
 - `preferred_tool/tool_args_patch`가 없는 contract는 정책 layer에서 보강하고, executor에서 policy를 재계산하는 경로를 줄인다.
 
+## 2026-06-30 구조 변경 적용: contract-required executor 2차 2단계
+
+### 배경
+
+contract-required recovery는 `TurnContract.preferred_tool/tool_args_patch`를 우선 소비하게 되었지만, tool 후보 선정과
+실행/template/SSE 조립이 여전히 `recover_blocked_fast_path_to_contract_tool()` 안에 섞여 있었다.
+
+다음 구조 목표는 chat-side recovery와 BaseAgent guard가 같은 "contract-required tool candidate"를 보게 만드는 것이다.
+이를 위해 먼저 후보 선정만 독립 helper로 분리했다.
+
+### 적용 내용
+
+- `_ContractRequiredToolCandidate`를 추가했다.
+- `_contract_required_tool_candidate()`가 다음 값을 만든다.
+  - `tool_name`
+  - `tool_input`
+  - `tool_input_source`
+  - `display_name`
+  - `source_domain`
+- `recover_blocked_fast_path_to_contract_tool()`는 candidate를 받아 실제 tool invoke, template mapping, recovery metadata,
+  SSE event 조립만 담당한다.
+- 기존 narrow guard와 blocklist는 그대로 유지한다.
+
+### 남은 방향
+
+- candidate builder를 BaseAgent `code_contract_tool_guard`에서도 소비하게 한다.
+- candidate builder를 `chat.py` 밖 policy/executor 모듈로 옮길지 결정한다.
+- 실제 tool invoke/template mapping도 contract-required executor 계층으로 분리해 `chat.py`를 orchestration-only에 가깝게 줄인다.
+
 ## 2026-06-29 구조 변경 계획: current-turn execution boundary와 parent flow 분리
 
 ### 배경

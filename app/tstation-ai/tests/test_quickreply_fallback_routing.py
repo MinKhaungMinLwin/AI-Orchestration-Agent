@@ -19191,6 +19191,36 @@ def test_recover_blocked_fast_path_to_contract_tool_runs_transaction_required_st
     assert recovery["event"]["blocked_fast_path_source"] == "contract_required_tool_executor"
 
 
+def test_contract_required_tool_candidate_uses_contract_preferred_tool_args() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="store_schedule",
+        known_slots={"shop_name": "강남점"},
+        allowed_tools=("get_store_list_tool",),
+        preferred_tool="get_store_list_tool",
+        tool_args_patch={"store_nm": "강남점"},
+        forbidden_tools=("quick_order_tool", "transaction_store_preview_tool"),
+        blocking_required_slots=(),
+        context_state="active",
+        response_decision={
+            "template": "location",
+            "metadata": {"response_shape_key": "unverified_store_schedule_lookup"},
+        },
+    )
+
+    candidate = chat_module._contract_required_tool_candidate(
+        turn_contract=contract,
+        user_text="강남점 예약 가능해?",
+        merged_slots=ConversationSlots(shop_name="강남점"),
+    )
+
+    assert candidate is not None
+    assert candidate.tool_name == "get_store_list_tool"
+    assert candidate.tool_input == {"store_nm": "강남점"}
+    assert candidate.tool_input_source == "turn_contract_required_tool_args_patch"
+    assert candidate.source_domain == "transaction"
+
+
 def test_recover_contract_required_stock_inventory_region_lookup_runs_store_list(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

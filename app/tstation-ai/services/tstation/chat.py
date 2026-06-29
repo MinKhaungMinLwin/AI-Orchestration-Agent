@@ -2,7 +2,7 @@ import asyncio
 import concurrent.futures
 import datetime
 from contextvars import ContextVar
-from dataclasses import replace
+from dataclasses import dataclass, replace
 import hashlib
 import json
 import threading
@@ -17996,27 +17996,27 @@ def _annotate_stock_inventory_store_lookup_event(
                 meta.setdefault(key, value)
 
 
-async def recover_blocked_fast_path_to_contract_tool(
+@dataclass(frozen=True)
+class _ContractRequiredToolCandidate:
+    tool_name: str
+    tool_input: dict[str, Any]
+    tool_input_source: str
+    display_name: str
+    source_domain: str
+
+
+def _contract_required_tool_candidate(
     *,
-    turn_contract: TurnContract | None,
+    turn_contract: TurnContract,
     user_text: str,
     merged_slots: ConversationSlots | None,
-    blocked_fast_path_source: str,
     member_no: str | None = None,
-) -> dict[str, Any] | None:
-    if turn_contract is None:
-        return None
-    if tuple(getattr(turn_contract, "blocking_required_slots", ()) or ()):
-        return None
-    if str(getattr(turn_contract, "context_state", "") or "") not in {"active", "resumed"}:
-        return None
-
+) -> _ContractRequiredToolCandidate | None:
     allowed_tools = tuple(str(tool) for tool in (turn_contract.allowed_tools or ()) if str(tool))
     forbidden_tools = {str(tool) for tool in (turn_contract.forbidden_tools or ()) if str(tool)}
     if not allowed_tools:
         return None
 
-    contract_intent = str(turn_contract.intent or "")
     known_slots = dict(turn_contract.known_slots or {})
     domain = str(turn_contract.domain or "").strip().lower()
     preferred_tool = ""
@@ -18026,8 +18026,6 @@ async def recover_blocked_fast_path_to_contract_tool(
     source_domain = domain or "discovery"
 
     if domain == PolicyDomain.DISCOVERY.value:
-        from services.tstation.agents.b_discovery_agent import tools as discovery_tools
-
         contract_required_recommendation_input = _contract_required_recommendation_tool_input(
             turn_contract=turn_contract,
             known_slots=known_slots,
@@ -18182,14 +18180,54 @@ async def recover_blocked_fast_path_to_contract_tool(
 
     if not preferred_tool or not tool_input:
         return None
-
     if preferred_tool in _FAST_PATH_TRANSACTION_RECOVERY_BLOCKLIST:
         return None
+    return _ContractRequiredToolCandidate(
+        tool_name=preferred_tool,
+        tool_input=tool_input,
+        tool_input_source=tool_input_source or "contract_tool_plan",
+        display_name=display_name,
+        source_domain=source_domain,
+    )
+
+
+async def recover_blocked_fast_path_to_contract_tool(
+    *,
+    turn_contract: TurnContract | None,
+    user_text: str,
+    merged_slots: ConversationSlots | None,
+    blocked_fast_path_source: str,
+    member_no: str | None = None,
+) -> dict[str, Any] | None:
+    if turn_contract is None:
+        return None
+    if tuple(getattr(turn_contract, "blocking_required_slots", ()) or ()):
+        return None
+    if str(getattr(turn_contract, "context_state", "") or "") not in {"active", "resumed"}:
+        return None
+
+    contract_intent = str(turn_contract.intent or "")
+    domain = str(turn_contract.domain or "").strip().lower()
+    candidate = _contract_required_tool_candidate(
+        turn_contract=turn_contract,
+        user_text=user_text,
+        merged_slots=merged_slots,
+        member_no=member_no,
+    )
+    if candidate is None:
+        return None
+    preferred_tool = candidate.tool_name
+    tool_input = candidate.tool_input
+    tool_input_source = candidate.tool_input_source
+    display_name = candidate.display_name
+    source_domain = candidate.source_domain
 
     if domain in {PolicyDomain.DISCOVERY.value, PolicyDomain.TRANSACTION.value}:
         from services.tstation.template_mapper import try_build_template
 
         if domain == PolicyDomain.DISCOVERY.value:
+            from services.tstation.agents.b_discovery_agent import tools as discovery_tools
+
             tool = getattr(discovery_tools, preferred_tool, None)
         else:
             from services.tstation.agents.c_transaction_agent import tools as transaction_tools
