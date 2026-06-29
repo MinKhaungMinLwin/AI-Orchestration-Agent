@@ -166,6 +166,7 @@ from services.tstation.chat import (
     _mask_dormant_transaction_action_slots,
     _stage_dormant_transaction_context,
     _stage_pending_order_context,
+    _stage_unsized_purchase_order_context,
     _stage_pending_product_context_from_search,
     _clear_invalid_store_identity_slots,
     _is_invalid_store_slot_value,
@@ -13209,6 +13210,28 @@ def test_build_purchase_size_selection_event_from_search_result_uses_search_rows
     assert metadata["pendingIntent"] == "order"
     assert metadata["goalType"] == "place_order"
     assert metadata["sizes"] == ["225/45R18", "245/45R18"]
+
+
+def test_stage_unsized_purchase_order_context_preserves_order_flow() -> None:
+    slots = ConversationSlots(
+        ord_qty=2,
+        shop_name="판교점",
+    )
+
+    context = _stage_unsized_purchase_order_context(
+        slots,
+        product_name="키너지 EX",
+        source="purchase_size_selection_search",
+    )
+
+    assert context["product_name"] == "키너지 EX"
+    assert context["ord_qty"] == 2
+    assert context["shop_name"] == "판교점"
+    assert context["pending_intent"] == "order"
+    assert context["goal_type"] == "place_order"
+    assert slots.pending_intent == "order"
+    assert slots.goal_type == "place_order"
+    assert slots.availability_context["pending_order_context"]["pending_intent"] == "order"
 
 
 def test_purchase_flow_fallback_event_builds_structured_product_selection_quickreplies() -> None:

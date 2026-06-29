@@ -20953,6 +20953,62 @@ def _stage_pending_order_context(slots: ConversationSlots, *, source: str) -> di
     return merged_pending_context
 
 
+def _stage_unsized_purchase_order_context(
+    slots: ConversationSlots,
+    *,
+    product_name: str | None,
+    source: str,
+) -> dict[str, Any]:
+    """Persist an order flow that is waiting for tire size/product resolution."""
+    normalized_product_name = str(product_name or "").strip()
+    if not normalized_product_name:
+        return {}
+    has_purchase_context = bool(
+        getattr(slots, "ord_qty", None)
+        or getattr(slots, "shop_name", None)
+        or getattr(slots, "region", None)
+        or getattr(slots, "pending_intent", None) == "order"
+        or getattr(slots, "goal_type", None) == "place_order"
+    )
+    if not has_purchase_context:
+        return {}
+
+    slots.tire_model = slots.tire_model or normalized_product_name
+    slots.pending_product_name = slots.pending_product_name or normalized_product_name
+    slots.pending_intent = "order"
+    slots.goal_type = "place_order"
+
+    context = dict(slots.availability_context or {})
+    existing_pending_context = (
+        context.get("pending_order_context")
+        if isinstance(context.get("pending_order_context"), dict)
+        else {}
+    )
+    pending_context = _pending_order_context_values(slots)
+    pending_context["product_name"] = normalized_product_name
+    pending_context["pending_intent"] = "order"
+    pending_context["goal_type"] = "place_order"
+    merged_pending_context, commit_metadata = _merge_pending_order_context(
+        existing_pending_context,
+        pending_context,
+        source=source,
+    )
+    context["pending_order_context"] = merged_pending_context
+    slots.availability_context = context
+    logger.info(
+        "[FLOW_STATE_COMMIT] event=%s committed=%s cleared=%s stale=%s before=%s delta=%s after=%s conflicts=%s",
+        commit_metadata["slot_commit_event"],
+        commit_metadata["committed_fields"],
+        commit_metadata["cleared_fields"],
+        commit_metadata["payment_amount_stale"],
+        commit_metadata["flow_state_before"],
+        commit_metadata["flow_state_delta"],
+        commit_metadata["flow_state_after"],
+        commit_metadata["flow_state_conflicts"],
+    )
+    return merged_pending_context
+
+
 def _current_request_allows_transaction_context_staging(slots: ConversationSlots) -> bool:
     try:
         from services.tstation.template_mapper import current_action_mode
@@ -32557,6 +32613,7 @@ class TStationChatServiceV2:
             return (emitted_events, finalized_event) if finalized_event is not None else None
 
         async def _resolve_bare_product_search_with_code() -> tuple[list[dict], dict] | None:
+            nonlocal pending_slots
             if _router_contract_is_high_confidence_event_content(routing_result):
                 return None
             followup_override = _bare_product_search_followup_override(
@@ -32715,6 +32772,41 @@ class TStationChatServiceV2:
                     allowed_intents=("product_search_summary", "resolve_or_describe_product"),
                 )
                 if finalized_event is not None:
+                    nonlocal_pending_slots = pending_slots
+                    if nonlocal_pending_slots is None:
+                        nonlocal_pending_slots = (
+                            initial_slots.model_copy() if initial_slots is not None else ConversationSlots()
+                        )
+                    staged_values = dict(getattr(turn_contract, "known_slots", {}) or {})
+                    staged_product_name = str(
+                        staged_values.get("product_name")
+                        or staged_values.get("tire_model")
+                        or staged_values.get("pending_product_name")
+                        or tool_input.get("keyword")
+                        or ""
+                    ).strip()
+                    nonlocal_pending_slots = nonlocal_pending_slots.apply_runtime_values(
+                        {
+                            key: value
+                            for key, value in {
+                                "tire_model": staged_product_name,
+                                "pending_product_name": staged_product_name,
+                                "ord_qty": staged_values.get("ord_qty") or staged_values.get("quantity"),
+                                "shop_name": staged_values.get("shop_name") or staged_values.get("store_name"),
+                                "region": staged_values.get("region"),
+                                "pending_intent": "order",
+                                "goal_type": "place_order",
+                            }.items()
+                            if value not in (None, "", [], {})
+                        },
+                        source="purchase_size_selection_context",
+                    )
+                    _stage_unsized_purchase_order_context(
+                        nonlocal_pending_slots,
+                        product_name=staged_product_name,
+                        source="purchase_size_selection_search",
+                    )
+                    pending_slots = nonlocal_pending_slots
                     return emitted_events, finalized_event
 
             if tool_input.get("size"):
