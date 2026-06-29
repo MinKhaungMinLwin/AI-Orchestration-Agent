@@ -404,6 +404,8 @@ class TurnContract:
     drift_resolution: str | None = None
     stale_context_used_for: str | None = None
     response_policy_source: str | None = None
+    contract_seed: Mapping[str, Any] = field(default_factory=dict)
+    context_evidence: Mapping[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -455,6 +457,8 @@ class TurnContract:
             "drift_resolution": self.drift_resolution,
             "stale_context_used_for": self.stale_context_used_for,
             "response_policy_source": self.response_policy_source,
+            "contract_seed": dict(self.contract_seed),
+            "context_evidence": dict(self.context_evidence),
         }
 
 
@@ -478,6 +482,8 @@ def build_turn_contract(
     previous_goal_type: str | None = None,
     resume_anchor_detected: bool = False,
     dormant_context_reason: str | None = None,
+    contract_seed: Mapping[str, Any] | None = None,
+    context_evidence: Mapping[str, Any] | None = None,
 ) -> TurnContract:
     """Combine policy objects into a single contract without changing execution."""
 
@@ -1214,6 +1220,8 @@ def build_turn_contract(
         ),
         stale_context_used_for=_stale_context_usage(router_wins_intent=router_wins_intent, context_state=context_state),
         response_policy_source="router_intent" if router_wins_intent else _response_policy_source(response_decision_payload),
+        contract_seed=dict(contract_seed or {}),
+        context_evidence=dict(context_evidence or {}),
     )
 
 

@@ -16781,6 +16781,7 @@ def _direct_code_fast_path_contract_gate(
     source: str,
     required_tools: tuple[str, ...] = (),
     allowed_intents: tuple[str, ...] = (),
+    merged_slots: ConversationSlots | None = None,
 ) -> tuple[bool, str]:
     if turn_contract is None:
         return False, "missing_turn_contract"
@@ -16814,6 +16815,13 @@ def _direct_code_fast_path_contract_gate(
         missing_allowed = tuple(tool for tool in required_tools if tool not in allowed_tools)
         if missing_allowed:
             return False, f"tool_not_allowed:{','.join(missing_allowed)}"
+    pending_contract_tool = _pending_contract_required_tool_for_fast_path(
+        turn_contract,
+        merged_slots=merged_slots,
+        required_tools=required_tools,
+    )
+    if pending_contract_tool:
+        return False, f"contract_required_tool_pending:{pending_contract_tool}"
     return True, f"contract_matched:{source}"
 
 
@@ -16826,6 +16834,7 @@ def _finalize_direct_code_event(
     required_tools: tuple[str, ...] = (),
     allowed_intents: tuple[str, ...] = (),
     template: str | None = None,
+    merged_slots: ConversationSlots | None = None,
 ) -> dict[str, Any] | None:
     if not isinstance(event, dict):
         return None
@@ -16837,6 +16846,7 @@ def _finalize_direct_code_event(
         source=source,
         required_tools=required_tools,
         allowed_intents=allowed_intents,
+        merged_slots=merged_slots,
     )
     if not allowed:
         logger.info(
@@ -16856,6 +16866,34 @@ def _finalize_direct_code_event(
         required_tools=required_tools,
         emitted_template=actual_template,
     )
+
+
+def _pending_contract_required_tool_for_fast_path(
+    turn_contract: TurnContract | None,
+    *,
+    merged_slots: ConversationSlots | None = None,
+    required_tools: tuple[str, ...] = (),
+) -> str | None:
+    if turn_contract is None or required_tools:
+        return None
+    if _is_contract_required_selected_store_schedule(turn_contract, merged_slots=merged_slots):
+        return "get_store_schedule_tool"
+    if _is_contract_required_stock_inventory_selected_store(turn_contract, merged_slots=merged_slots):
+        return "get_store_inventory_tool"
+    if _is_contract_required_stock_inventory_store_lookup(turn_contract, merged_slots=merged_slots):
+        known_slots = _contract_read_through_known_slots(
+            turn_contract,
+            merged_slots,
+            allowed_flow_types=frozenset({"stock"}),
+        )
+        allowed_tools = {str(tool) for tool in tuple(turn_contract.allowed_tools or ()) if str(tool).strip()}
+        if "search_stores_tool" in allowed_tools and known_slots.get("place_query"):
+            return "search_stores_tool"
+        if "get_store_list_tool" in allowed_tools:
+            return "get_store_list_tool"
+    if _is_contract_required_vehicle_recommendation(turn_contract, merged_slots):
+        return "get_products_recommendations_tool"
+    return None
 
 
 _FAST_PATH_TRANSACTION_RECOVERY_BLOCKLIST = frozenset({
@@ -17456,6 +17494,31 @@ async def _recover_contract_required_vehicle_recommendation(
     if not _is_contract_required_vehicle_recommendation(turn_contract, merged_slots):
         return None
     return await recover_blocked_fast_path_to_contract_tool(
+        turn_contract=turn_contract,
+        user_text=user_text,
+        merged_slots=merged_slots,
+        blocked_fast_path_source=blocked_fast_path_source,
+    )
+
+
+async def _recover_contract_required_tool(
+    *,
+    turn_contract: TurnContract | None,
+    user_text: str,
+    merged_slots: ConversationSlots | None,
+    blocked_fast_path_source: str = "contract_required_tool_executor",
+) -> dict[str, Any] | None:
+    """Run the deterministic tool required by the current TurnContract, if one is known."""
+
+    store_flow_recovery = await _recover_contract_required_store_flow_tool(
+        turn_contract=turn_contract,
+        user_text=user_text,
+        merged_slots=merged_slots,
+        blocked_fast_path_source=blocked_fast_path_source,
+    )
+    if store_flow_recovery is not None:
+        return store_flow_recovery
+    return await _recover_contract_required_vehicle_recommendation(
         turn_contract=turn_contract,
         user_text=user_text,
         merged_slots=merged_slots,
@@ -29194,6 +29257,8 @@ class TStationChatServiceV2:
                     previous_goal_type=previous_goal_type,
                     resume_anchor_detected=resume_source != "none",
                     dormant_context_reason=dormant_context_reason,
+                    contract_seed=flow_transition.contract_seed,
+                    context_evidence=flow_transition.context_evidence,
                 )
             elif MultiAgentDomain.Domain.DISCOVERY in domains:
                 discovery_contract_slots = {
@@ -29251,6 +29316,8 @@ class TStationChatServiceV2:
                     previous_goal_type=previous_goal_type,
                     resume_anchor_detected=resume_source != "none",
                     dormant_context_reason=dormant_context_reason,
+                    contract_seed=flow_transition.contract_seed,
+                    context_evidence=flow_transition.context_evidence,
                 )
             else:
                 turn_contract = build_turn_contract(
@@ -29269,6 +29336,8 @@ class TStationChatServiceV2:
                     previous_goal_type=previous_goal_type,
                     resume_anchor_detected=resume_source != "none",
                     dormant_context_reason=dormant_context_reason,
+                    contract_seed=flow_transition.contract_seed,
+                    context_evidence=flow_transition.context_evidence,
                 )
             if vehicle_ui_action_context is not None:
                 vehicle_selection_trace_metadata["final_contract_intent"] = (
@@ -36580,10 +36649,11 @@ class TStationChatServiceV2:
             yield "data: [DONE]\n\n"
             return
 
-        contract_required_vehicle_recommendation = await _recover_contract_required_vehicle_recommendation(
+        contract_required_tool_recovery = await _recover_contract_required_tool(
             turn_contract=turn_contract,
             user_text=user_query,
             merged_slots=pending_slots or initial_slots,
+            blocked_fast_path_source="contract_required_tool_executor",
         )
         async def _contract_required_tool_recovery_sse(
             recovery: Mapping[str, Any],
@@ -36632,11 +36702,14 @@ class TStationChatServiceV2:
             chunks.append("data: [DONE]\n\n")
             return chunks
 
-        if contract_required_vehicle_recommendation is not None:
+        if (
+            contract_required_tool_recovery is not None
+            and str(contract_required_tool_recovery.get("tool_name") or "") == "get_products_recommendations_tool"
+        ):
             _record_code_tool_result(
-                str(contract_required_vehicle_recommendation["tool_name"]),
-                dict(contract_required_vehicle_recommendation["tool_input"]),
-                dict(contract_required_vehicle_recommendation["tool_result"]),
+                str(contract_required_tool_recovery["tool_name"]),
+                dict(contract_required_tool_recovery["tool_input"]),
+                dict(contract_required_tool_recovery["tool_result"]),
             )
             completed_slots, completed_flow = _complete_active_recommendation_flow_for_direct_return(
                 pending_slots or initial_slots
@@ -36648,10 +36721,10 @@ class TStationChatServiceV2:
                 vehicle_selection_trace_metadata["dormant_recommendation_context"] = completed_flow
             await _persist_pending_slots_for_direct_return()
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
-            for recovery_event in contract_required_vehicle_recommendation["events"]:
+            for recovery_event in contract_required_tool_recovery["events"]:
                 yield f"data: {json.dumps(recovery_event, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
-            product_event = contract_required_vehicle_recommendation["event"]
+            product_event = contract_required_tool_recovery["event"]
             yield f"data: {json.dumps(product_event, ensure_ascii=False)}\n\n"
             assistant_response = str((product_event.get("data") or {}).get("assistantResponse") or "")
             if assistant_response:
@@ -36661,10 +36734,11 @@ class TStationChatServiceV2:
             yield "data: [DONE]\n\n"
             return
 
-        contract_required_store_flow_tool = await _recover_contract_required_store_flow_tool(
-            turn_contract=turn_contract,
-            user_text=user_query,
-            merged_slots=pending_slots or initial_slots,
+        contract_required_store_flow_tool = (
+            contract_required_tool_recovery
+            if contract_required_tool_recovery is not None
+            and str(contract_required_tool_recovery.get("tool_name") or "") != "get_products_recommendations_tool"
+            else None
         )
         if contract_required_store_flow_tool is None:
             confirmed_stock_flow_advance = await _advance_stock_flow_from_confirmed_state(
@@ -36711,6 +36785,7 @@ class TStationChatServiceV2:
                 intent=prompt_intent,
                 source="code_history_selected_vehicle_prompt",
                 allowed_intents=allowed_prompt_intents,
+                merged_slots=pending_slots or initial_slots,
             )
             if history_selected_vehicle_prompt_event is None:
                 recovered_fast_path = await recover_blocked_fast_path_to_contract_tool(

@@ -13271,6 +13271,45 @@ def test_flow_transition_shell_router_observed_does_not_create_execution_intent(
     assert slots.goal_type is None
 
 
+def test_turn_contract_records_contract_seed_and_context_evidence() -> None:
+    routing_result = _routing_result(
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        execution_plan=["transaction:stock_store_search"],
+        policy_intent="none",
+    )
+    contract = build_turn_contract(
+        user_text="재고 있는 매장 찾아줘",
+        intent_frame=IntentFrame(
+            domain=PolicyDomain.TRANSACTION,
+            intent="quick_order_reservation",
+            known_slots={"goods_no": "G000000310126", "tire_size": "245/45R19"},
+        ),
+        tool_plan=ToolPlan(
+            allowed_tools=("quick_order_tool",),
+            preferred_tool="quick_order_tool",
+            metadata={"response_intent": "quick_order_reservation"},
+        ),
+        routing_result=routing_result,
+        contract_seed={
+            "router_evidence": {
+                "domain": "transaction",
+                "intent": "stock_store_search",
+            }
+        },
+        context_evidence={
+            "parent_flow_context": {
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            }
+        },
+    )
+
+    dumped = contract.to_dict()
+    assert dumped["contract_seed"]["router_evidence"]["intent"] == "stock_store_search"
+    assert dumped["context_evidence"]["parent_flow_context"]["pending_intent"] == "order"
+    assert contract.intent == "stock_store_search"
+
+
 def test_flow_transition_shell_records_selected_product_without_executing() -> None:
     slots = ConversationSlots(
         ord_qty=2,
@@ -27554,6 +27593,46 @@ def test_finalize_direct_code_event_uses_actual_template_and_records_metadata() 
     assert finalized["data"]["metadata"]["direct_source"] == "code_store_attribute_inquiry"
     assert finalized["data"]["metadata"]["emitted_template"] == "quickReply"
     assert finalized["data"]["metadata"]["required_tools"] == ["get_store_list_tool"]
+
+
+def test_direct_fast_path_gate_blocks_when_contract_required_tool_pending() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="stock_store_search",
+        known_slots={
+            "goods_no": "G000000310126",
+            "tire_size": "245/45R19",
+            "ord_qty": 4,
+            "region": "강남",
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+            "stock_check_mode": "inventory_only",
+        },
+        allowed_tools=("get_store_inventory_tool", "get_store_list_tool", "get_logistics_inventory_tool"),
+        forbidden_tools=("transaction_store_preview_tool", "get_store_schedule_tool", "quick_order_tool"),
+        blocking_required_slots=(),
+        context_state="active",
+        response_decision={
+            "template": "location",
+            "metadata": {"response_shape_key": "stock_inventory_lookup"},
+        },
+    )
+
+    allowed, reason = _direct_code_fast_path_contract_gate(
+        turn_contract=contract,
+        intent="stock_store_search",
+        template="quickReply",
+        source="code_stock_quickreply_fallback",
+        merged_slots=ConversationSlots(
+            goods_no="G000000310126",
+            tire_size="245/45R19",
+            ord_qty=4,
+            region="강남",
+        ),
+    )
+
+    assert allowed is False
+    assert reason == "contract_required_tool_pending:get_store_list_tool"
 
 
 def test_record_contract_gate_metadata_preserves_selection_metadata_array() -> None:

@@ -72,6 +72,55 @@ preferred tool 기본값을 사용하면 `search_stores_tool` 같은 정상 stor
 - 전체 required tool executor 일반화는 하지 않는다.
 - `chat.py` 대규모 구조 변경 대신 stock/store flow의 직접 ToolPlan 보정만 줄인다.
 
+## 2026-06-29 구조 변경 적용: fast path gate / contract-required executor / seed-evidence 1차
+
+### 배경
+
+FlowState read-through와 stock/store tool boundary 중앙화 이후에도, deterministic fast path가 먼저 final response를
+확정하면 TurnContract가 요구한 tool 실행이 막히는 구조가 남아 있었다.
+
+대표 흐름은 다음과 같다.
+
+```text
+Router/FlowController/TurnContract: current-turn stock/store 또는 sized recommendation 계약 확정
+-> deterministic fast path: context/regex/template evidence로 quickReply/product summary 확정
+-> contract-required tool: 실행되지 않음
+```
+
+이 문제는 router intent 오류가 아니라 실행 우선순위 오류다. 따라서 fast path가 current-turn contract를 우회하지 못하게
+하고, contract-required tool 실행 진입점을 더 명확하게 만드는 쪽이 구조적으로 맞다.
+
+### 적용 내용
+
+1단계는 fast path gate가 read-through state를 보게 한 것이다.
+
+- fast path gate는 `active_flow_context + ConversationSlots + TurnContract.known_slots`를 같은 방식으로 읽는다.
+- selected-store schedule, selected-store stock inventory, stock store lookup, sized recommendation에서 pending
+  contract-required tool이 보이면 final response 확정을 막는다.
+- context/regex evidence만으로 current-turn action이 만들어지는 경로를 좁힌다.
+
+2단계는 contract-required 실행 진입점을 1차로 묶은 것이다.
+
+- `_recover_contract_required_tool()`을 두고 기존 store-flow recovery와 sized recommendation recovery를 순서대로 소비한다.
+- 각 세부 helper의 narrow 조건은 유지한다.
+- quick_order/cart/preOrder/orderComplete 같은 downstream execution boundary는 열지 않는다.
+
+3단계는 seed/evidence split을 TurnContract trace까지 올린 것이다.
+
+- FlowController가 만든 `contract_seed`와 `context_evidence`를 `TurnContract`가 보관한다.
+- `contract_seed`는 router/current-turn/UI action 같은 실행 계약 후보를 담는다.
+- `context_evidence`는 parent flow, 최근 후보군, 선택 상품/수량/매장 같은 slot 보강 evidence를 담는다.
+- 이번 단계는 trace와 contract object 보관까지이며, `build_turn_contract()` 내부 intent 생성 로직의 완전한 타입 분리는
+  후속 migration으로 남긴다.
+
+### 남은 방향
+
+- contract-required executor가 `preferred_tool/tool_args_patch`를 공통으로 소비하도록 더 일반화한다.
+- BaseAgent guard와 `chat.py` recovery가 같은 allow/deny source를 보게 한다.
+- fast path callsite가 모두 `merged_slots` 또는 FlowController transition evidence를 넘기도록 정리한다.
+- `contract_seed`만 intent/action을 만들고 `context_evidence`는 slot 보강에만 쓰는 규칙을 `build_turn_contract()` 입력
+  구조로 강제한다.
+
 ## 2026-06-29 구조 변경 계획: current-turn execution boundary와 parent flow 분리
 
 ### 배경
