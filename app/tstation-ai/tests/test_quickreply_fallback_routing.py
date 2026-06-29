@@ -22217,6 +22217,62 @@ def test_router_mileage_recommendation_accepts_long_distance_tool_args() -> None
     assert not any(violation["type"] == "recommendation_tool_input_drift" for violation in violations)
 
 
+def test_mileage_family_contract_patch_overrides_agent_family_tool_args(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    class _Response:
+        status_code = 200
+        parsed = {"rcmd_type": "long_distance", "total": 0, "items": []}
+
+    def _fake_recommendations(**kwargs):
+        captured.update(kwargs)
+        return _Response()
+
+    text = "패밀리카 승차감 좋고 마일리지 성능 우수한 타이어 추천해"
+    frame = build_discovery_intent_frame(text)
+    plan = plan_discovery_tools(frame)
+    monkeypatch.setattr(discovery_tools, "get_products_recommendations", _fake_recommendations)
+
+    assert plan.tool_args_patch["rcmd_type"] == "long_distance"
+
+    token = discovery_tools.current_discovery_recommendation_tool_patch.set(dict(plan.tool_args_patch))
+    try:
+        result = discovery_tools.get_products_recommendations_tool.func(
+            rcmd_type="family",
+            limit=3,
+            brand_cd="HK",
+        )
+    finally:
+        discovery_tools.current_discovery_recommendation_tool_patch.reset(token)
+
+    assert result["status"] == "success"
+    assert captured["rcmd_type"] == discovery_tools.RcmdType.LONG_DISTANCE
+
+    contract = build_turn_contract(
+        user_text=text,
+        intent_frame=frame,
+        tool_plan=plan,
+        response_decision=decide_discovery_response(frame),
+    )
+    violations = response_contract_violations(
+        template="quickReply",
+        assistant_response_text="마일리지/수명 기준으로 추천 상품을 안내드릴게요.",
+        called_tools=["get_products_recommendations_tool"],
+        tool_inputs=[
+            {
+                "tool": "get_products_recommendations_tool",
+                "args": {"rcmd_type": "family", "limit": 3, "brand_cd": "HK"},
+                "effective_args": {"rcmd_type": "long_distance", "limit": 3, "brand_cd": "HK"},
+            }
+        ],
+        contract=contract,
+    )
+
+    assert not any(violation["type"] == "recommendation_tool_input_drift" for violation in violations)
+
+
 def test_sized_offroad_recommendation_tool_plan_records_expected_tool_args() -> None:
     frame = build_discovery_intent_frame(
         "오프로드용 타이어 추천",

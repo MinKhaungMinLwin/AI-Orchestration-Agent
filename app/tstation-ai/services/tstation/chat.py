@@ -31229,7 +31229,7 @@ class TStationChatServiceV2:
             if not effective.get("tire_size") and not effective.get("car_lnc_cd") and policy_patch.get("tire_size"):
                 effective["tire_size"] = policy_patch["tire_size"]
             for key in ("sort_by", "season_nm", "pfm_nm", "prc_grd", "vehicle_type"):
-                if not effective.get(key) and policy_patch.get(key):
+                if policy_patch.get(key):
                     effective[key] = policy_patch[key]
             return effective
 
