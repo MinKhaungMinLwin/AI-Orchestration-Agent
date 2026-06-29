@@ -19403,6 +19403,82 @@ def test_contract_required_tool_candidate_uses_active_flow_progress_store_lookup
     assert candidate.tool_input_source == "flow_state_progress"
 
 
+def test_contract_required_tool_candidate_uses_active_flow_progress_product_resolution() -> None:
+    active_context = commit_flow_state(
+        {},
+        {
+            "product_name": "벤투스 S2 AS",
+            "tire_size": "245/45R19",
+            "ord_qty": 4,
+            "place_query": "강남역",
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+            "stock_check_mode": "inventory_only",
+        },
+        source="current_user_text",
+        flow_type="stock",
+        flow_step="router_observed",
+    ).state.to_active_flow_context()
+    contract = TurnContract(
+        domain="discovery",
+        intent="product_search",
+        known_slots={"pending_product_name": "벤투스 S2 AS", "tire_size": "245/45R19"},
+        allowed_tools=("search_product_tool",),
+        forbidden_tools=(),
+        blocking_required_slots=(),
+        context_state="active",
+        response_decision={"template": "product", "metadata": {"response_shape_key": "product_search_summary"}},
+    )
+
+    candidate = chat_module._contract_required_tool_candidate(
+        turn_contract=contract,
+        user_text="벤투스 s2 as 2454519 4개 강남역 근처 재고 있는 매장 찾아줘",
+        merged_slots=ConversationSlots(availability_context={"active_flow_context": active_context}),
+    )
+
+    assert candidate is not None
+    assert candidate.tool_name == "search_product_tool"
+    assert candidate.tool_input == {"keyword": "벤투스 S2 AS", "limit": 10, "size": "245/45R19"}
+    assert candidate.tool_input_source == "flow_state_progress"
+    assert candidate.source_domain == "discovery"
+
+
+def test_contract_required_tool_candidate_does_not_run_product_progress_for_transaction_contract() -> None:
+    active_context = commit_flow_state(
+        {},
+        {
+            "product_name": "벤투스 S2 AS",
+            "tire_size": "245/45R19",
+            "ord_qty": 4,
+            "place_query": "강남역",
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+            "stock_check_mode": "inventory_only",
+        },
+        source="current_user_text",
+        flow_type="stock",
+        flow_step="router_observed",
+    ).state.to_active_flow_context()
+    contract = TurnContract(
+        domain="transaction",
+        intent="stock_store_search",
+        known_slots={"tire_size": "245/45R19", "ord_qty": 4},
+        allowed_tools=("search_product_tool", "get_store_list_tool"),
+        forbidden_tools=(),
+        blocking_required_slots=(),
+        context_state="active",
+        response_decision={"template": "location", "metadata": {"response_shape_key": "stock_inventory_lookup"}},
+    )
+
+    candidate = chat_module._contract_required_tool_candidate(
+        turn_contract=contract,
+        user_text="벤투스 s2 as 2454519 4개 강남역 근처 재고 있는 매장 찾아줘",
+        merged_slots=ConversationSlots(availability_context={"active_flow_context": active_context}),
+    )
+
+    assert candidate is None
+
+
 def test_contract_required_tool_candidate_ignores_misaligned_active_flow_progress() -> None:
     active_context = commit_flow_state(
         {},

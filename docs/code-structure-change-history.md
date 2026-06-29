@@ -227,6 +227,34 @@ FlowState는 업데이트 후 `next_tool/tool_args_patch`를 저장하지만, �
 - product resolve progress(`search_product_tool`)는 discovery-side safe candidate로 별도 연결한다.
 - progress 기반 path가 안정화되면 기존 stock flow advance/recovery special case를 줄인다.
 
+## 2026-06-30 구조 변경 적용: product resolve progress discovery candidate 연결
+
+### 배경
+
+FlowState progress candidate 1차는 transaction-side store/inventory/schedule tool만 실행 후보로 소비했다.
+하지만 stock/purchase flow의 첫 단계가 상품 resolve일 때는 `search_product_tool`이 discovery domain tool이므로,
+같은 progress evidence를 transaction executor에서 실행하면 domain/tool module drift 위험이 있다.
+
+따라서 product resolve progress는 discovery contract 안에서만 소비하도록 별도 경계를 뒀다.
+
+### 적용 내용
+
+- active flow progress가 `current_step=resolve_product`, `next_tool=search_product_tool`인 경우를 candidate로 연결했다.
+- 소비 조건은 discovery contract로 제한했다.
+  - flow type: `stock`, `purchase`
+  - contract intent/response shape: product search 또는 missing stock/order slot flow와 정렬
+  - `search_product_tool`이 `allowed_tools`에 있고 `forbidden_tools`에 없음
+  - `tool_args_patch.keyword` 존재
+- transaction contract는 같은 progress를 직접 실행하지 않는다. transaction은 product resolve 결과가 저장된 뒤
+  다음 progress인 store/inventory 단계만 소비한다.
+
+### 남은 방향
+
+- `search_product_tool` 결과 저장 후 progress를 재평가해 store resolve 또는 inventory lookup으로 이어지는 loop를
+  더 중앙화한다.
+- candidate builder와 tool invoke/template mapping을 `chat.py` 밖 executor 계층으로 이동한다.
+- BaseAgent guard도 같은 candidate source를 소비하게 해 chat-side recovery와 agent execution boundary를 맞춘다.
+
 ## 2026-06-29 구조 변경 계획: current-turn execution boundary와 parent flow 분리
 
 ### 배경

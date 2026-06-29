@@ -18210,8 +18210,6 @@ def _contract_required_tool_candidate_from_flow_progress(
     forbidden_tools: set[str],
     domain: str,
 ) -> _ContractRequiredToolCandidate | None:
-    if domain != PolicyDomain.TRANSACTION.value:
-        return None
     availability_context = getattr(merged_slots, "availability_context", None) if merged_slots is not None else None
     active_flow_context = (
         availability_context.get("active_flow_context")
@@ -18230,6 +18228,37 @@ def _contract_required_tool_candidate_from_flow_progress(
     response_decision = turn_contract.response_decision or {}
     response_metadata = response_decision.get("metadata") if isinstance(response_decision, Mapping) else {}
     response_shape_key = str(response_metadata.get("response_shape_key") or "") if isinstance(response_metadata, Mapping) else ""
+    next_tool = str(progress.get("next_tool") or "").strip()
+    if (
+        domain == PolicyDomain.DISCOVERY.value
+        and flow_type in {"stock", "purchase"}
+        and str(progress.get("current_step") or "").strip() == "resolve_product"
+        and next_tool == "search_product_tool"
+    ):
+        if contract_intent not in {"product_search", "resolve_or_describe_product"} and response_shape_key not in {
+            "product_search_summary",
+            "missing_stock_search_slots",
+            "missing_order_slots",
+        }:
+            return None
+        if next_tool not in allowed_tools or next_tool in forbidden_tools:
+            return None
+        tool_input = {
+            str(key): value
+            for key, value in dict(progress.get("tool_args_patch") or {}).items()
+            if value not in (None, "", [], {})
+        }
+        if not tool_input.get("keyword"):
+            return None
+        return _ContractRequiredToolCandidate(
+            tool_name=next_tool,
+            tool_input=tool_input,
+            tool_input_source="flow_state_progress",
+            display_name="상품 검색 중...",
+            source_domain=PolicyDomain.DISCOVERY.value,
+        )
+    if domain != PolicyDomain.TRANSACTION.value:
+        return None
     if flow_type == "stock":
         intent_aligned = (
             contract_intent in {"stock_store_search", "stock_store_search_slot_fill_store", "fill_quantity_slot"}
@@ -18248,7 +18277,6 @@ def _contract_required_tool_candidate_from_flow_progress(
         }
     if not intent_aligned:
         return None
-    next_tool = str(progress.get("next_tool") or "").strip()
     if not next_tool or next_tool not in allowed_tools or next_tool in forbidden_tools:
         return None
     if next_tool not in {"search_stores_tool", "get_store_list_tool", "get_store_schedule_tool", "get_store_inventory_tool"}:
