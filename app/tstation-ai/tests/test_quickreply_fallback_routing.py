@@ -24488,7 +24488,27 @@ def test_support_faq_policy_event_for_delivery_delay_reservation_schedule_uses_p
     assistant = event["data"]["assistantResponse"]
     assert "배송 지연으로 예약 일정이 자동 변경되지는 않아요." in assistant
     assert "해피콜" in assistant
-    assert _labels(event["data"]["quickReplies"]) == ["1:1 문의하기"]
+    assert _labels(event["data"]["quickReplies"]) == ["1:1 문의하기", "예약 확인하기", "처음으로"]
+
+
+def test_support_faq_policy_event_for_reservation_guidance_delivery_delay_uses_specific_fallback() -> None:
+    event = _build_support_faq_policy_event(
+        "reservation_policy_guidance",
+        "배송 지연 문자를 받았는데 예약일 전에 상품이 장착점에 안 오면 어떻게 돼?",
+        tool_result={"status": "success", "data": {"items": []}},
+    )
+
+    assert event is not None
+    assistant = event["data"]["assistantResponse"]
+    metadata = event["data"]["metadata"]
+    assert "상품 입고나 배송 상태에 따라 장착 예약일 조정이 필요할 수 있어요" in assistant
+    assert "상품이 장착점에 도착하지 않으면 장착이 어려울 수" in assistant
+    assert "예약 매장 또는 고객센터/1:1 문의" in assistant
+    assert "현재 문의 기준으로 안내드릴게요" not in assistant
+    assert metadata["responseShapeKey"] == "reservation_policy_guidance"
+    assert metadata["factType"] == "delivery_delay_reservation_schedule"
+    assert metadata["safeFallbackUsed"] is True
+    assert _labels(event["data"]["quickReplies"]) == ["1:1 문의하기", "예약 확인하기", "처음으로"]
 
 
 def test_support_faq_policy_event_for_reservation_window_uses_policy_fallback() -> None:

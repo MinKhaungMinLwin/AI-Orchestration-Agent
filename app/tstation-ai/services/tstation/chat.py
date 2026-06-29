@@ -7877,6 +7877,11 @@ def _support_faq_policy_quick_replies(intent: str) -> list[dict[str, Any]]:
         "coupon_registration_policy": [
             {"label": "쿠폰함 바로가기", "url": CTAUrls.MY_COUPON_LIST_PC, "domain": "TRANSACTION"},
         ],
+        "delivery_delay_reservation_schedule_policy": [
+            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+            {"label": "예약 확인하기", "domain": "TRANSACTION"},
+            {"label": "처음으로", "domain": "LEADING"},
+        ],
     }
     intent_action_ctas: dict[str, list[dict[str, Any]]] = {
         "tire_condition_photo_policy": [
@@ -16200,6 +16205,7 @@ _FAQ_POLICY_FALLBACK_INTENTS = frozenset({
     "tire_manufacture_date_policy",
     "tire_quality_warranty_policy",
     "assurance_service_policy",
+    "delivery_delay_reservation_schedule_policy",
     "reservation_window_policy",
     "reservation_policy_guidance",
     "installation_work_policy",

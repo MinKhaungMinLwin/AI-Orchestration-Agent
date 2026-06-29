@@ -23,6 +23,7 @@ _SUPPORT_FAQ_POLICY_GROUP_INTENTS = frozenset({
     "general_cancel_fee_policy",
     "general_card_cancel_timing_policy",
     "reservation_window_policy",
+    "delivery_delay_reservation_schedule_policy",
     "payment_error_troubleshooting",
     "tire_manufacture_date_policy",
     "tire_quality_warranty_policy",
@@ -888,6 +889,10 @@ def resolve_support_faq_policy_context(intent: str, user_text: str) -> dict[str,
         return {"policy_group": _PAYMENT_REFUND_POLICY, "fact_type": "card_cancel_timing"}
     if normalized_intent == "reservation_window_policy":
         return {"policy_group": _RESERVATION_INSTALLATION_POLICY, "fact_type": "reservation_window"}
+    if normalized_intent in {"delivery_delay_reservation_schedule_policy", "reservation_policy_guidance"} and (
+        _is_delivery_delay_reservation_schedule_question(text)
+    ):
+        return {"policy_group": _RESERVATION_INSTALLATION_POLICY, "fact_type": "delivery_delay_reservation_schedule"}
     if normalized_intent == "external_tire_install_policy":
         return {"policy_group": _RESERVATION_INSTALLATION_POLICY, "fact_type": "external_tire_install"}
     if normalized_intent == "payment_error_troubleshooting" and not _is_payment_error_troubleshooting_query(text):
@@ -1007,6 +1012,8 @@ def _support_faq_candidate_matches_fact_type(fact_type: str, candidate: Mapping[
             re.search(r"30일|1개월|한\s*달|두\s*달|2\s*달|최대|예약\s*가능\s*기간|사전\s*구매", text, re.IGNORECASE)
             and _RESERVATION_RE.search(text)
         )
+    if fact_type == "delivery_delay_reservation_schedule":
+        return _is_delivery_delay_reservation_schedule_question(text)
     if fact_type == "external_tire_install":
         return bool(
             _EXTERNAL_TIRE_INSTALL_POLICY_RE.search(text)
@@ -1224,6 +1231,12 @@ def _support_faq_reply_ctas(policy_group: str, fact_type: str) -> list[dict[str,
             {"label": "가까운 매장 찾기", "domain": "TRANSACTION"},
             {"label": "1:1 문의하기", "domain": "SUPPORT"},
         ]
+    if policy_group == _RESERVATION_INSTALLATION_POLICY and fact_type == "delivery_delay_reservation_schedule":
+        return [
+            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+            {"label": "예약 확인하기", "domain": "TRANSACTION"},
+            {"label": "처음으로", "domain": "LEADING"},
+        ]
     if policy_group == _RESERVATION_INSTALLATION_POLICY:
         return [
             {
@@ -1328,6 +1341,12 @@ def _build_support_faq_policy_reply(
             f"장착 예약일은 보통 {limit_text}로 안내돼요.\n"
             "두 달 뒤처럼 범위를 넘는 예약은 지원되지 않거나 진행이 어려울 수 있어요.\n"
             "실제 일정 확인은 이 범위 안에서만 추가로 진행해 주세요."
+        )
+    elif policy_group == _RESERVATION_INSTALLATION_POLICY and fact_type == "delivery_delay_reservation_schedule":
+        response = (
+            "배송 지연 문자를 받았다면 상품 입고나 배송 상태에 따라 장착 예약일 조정이 필요할 수 있어요.\n"
+            "예약일 전에 상품이 장착점에 도착하지 않으면 장착이 어려울 수 있으니, 문자에 안내된 지연 일정이나 주문/예약 상태를 확인해 주세요.\n"
+            "이미 장착 예약일이 가까우면 예약 매장 또는 고객센터/1:1 문의로 일정 변경 가능 여부를 확인하는 것이 안전해요."
         )
     elif policy_group == _RESERVATION_INSTALLATION_POLICY and fact_type == "store_change":
         allowed_text = "방문 지점 변경 가능 여부는 예약 정책과 현재 예약 상태에 따라 달라질 수 있어요."
@@ -1844,6 +1863,21 @@ _DELIVERY_DELAY_RESERVATION_SCHEDULE_POLICY_RE = re.compile(
     r"자동\s*(?:변경|바뀌|밀리).{0,20}예약|예약\s*(?:일정|시간)?.{0,12}(?:변경되|바뀌|밀리)))",
     re.IGNORECASE,
 )
+_DELIVERY_DELAY_ANCHOR_RE = re.compile(
+    r"배송\s*지연|상품\s*미도착|미도착|입고\s*지연|배송\s*늦|도착하지\s*않|도착\s*전",
+    re.IGNORECASE,
+)
+_RESERVATION_SCHEDULE_IMPACT_RE = re.compile(
+    r"예약(?:일|일정|시간)?|장착\s*예약|장착(?:일|점|매장)|일정\s*(?:변경|조정)|예약일|문자",
+    re.IGNORECASE,
+)
+
+
+def _is_delivery_delay_reservation_schedule_question(text: str) -> bool:
+    return bool(
+        _DELIVERY_DELAY_RESERVATION_SCHEDULE_POLICY_RE.search(text)
+        or (_DELIVERY_DELAY_ANCHOR_RE.search(text) and _RESERVATION_SCHEDULE_IMPACT_RE.search(text))
+    )
 _INSTALLATION_WORK_POLICY_RE = re.compile(
     r"작업\s*중\s*취소|장착비|폐타이어|얼라인먼트.{0,16}(현장\s*결제|추가|따로)|"
     r"추가\s*작업|공임(?:비)?.{0,12}(?:취소|작업\s*시작|탈거|분리|이미\s*장착|장착\s*중)",
@@ -2041,7 +2075,7 @@ def decide_support_response(
             ),
         )
 
-    if intent == "delivery_delay_reservation_schedule_policy" or _DELIVERY_DELAY_RESERVATION_SCHEDULE_POLICY_RE.search(text):
+    if intent == "delivery_delay_reservation_schedule_policy" or _is_delivery_delay_reservation_schedule_question(text):
         return _decision(
             response_shape_key="delivery_delay_reservation_schedule_policy",
             response_shape=ResponseShape.SUMMARY,
