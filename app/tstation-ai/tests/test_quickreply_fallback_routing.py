@@ -28569,6 +28569,31 @@ def test_coupon_applicability_followup_uses_coupon_plan_when_coupon_word_is_omit
     assert "search_product_tool" not in tool_plan.allowed_tools
 
 
+def test_coupon_applicability_followup_uses_latest_router_evidence_when_router_intent_was_broadened() -> None:
+    _patch, response_decision, tool_plan = _build_transaction_policy_context(
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        last_user_text="키너지 ex에 쓸 수 있는 쿠폰이 뭐야?",
+        known_slots={
+            "router_transaction_intent": "coupon_usage",
+            "product_name": "Kinergy EX",
+            "availability_context": {
+                "latest_router_evidence": {
+                    "domain": "transaction",
+                    "intent": "product_coupon_eligibility",
+                    "execution_plan": ["transaction:product_coupon_eligibility"],
+                }
+            },
+        },
+    )
+
+    assert response_decision is not None
+    assert response_decision.metadata["response_shape_key"] == "product_coupon_eligibility"
+    assert tool_plan is not None
+    assert tool_plan.preferred_tool == "get_my_coupons_tool"
+    assert "get_coupon_applicable_products_tool" in tool_plan.allowed_tools
+    assert "search_product_tool" not in tool_plan.allowed_tools
+
+
 def test_explicit_router_intent_soft_resets_stale_pending_check_slots() -> None:
     _patch, response_decision, tool_plan = _build_transaction_policy_context(
         domains=[MultiAgentDomain.Domain.TRANSACTION],
@@ -28641,6 +28666,54 @@ def test_coupon_applicability_contract_blocks_product_search_for_owned_coupon_fo
     assert "get_coupon_applicable_products_tool" in contract.allowed_tools
     assert "search_product_tool" in contract.forbidden_tools
     assert "get_final_price_tool" in contract.forbidden_tools
+
+
+def test_turn_contract_promotes_latest_router_evidence_coupon_eligibility_over_coupon_usage() -> None:
+    contract = build_turn_contract(
+        user_text="키너지 ex에 쓸 수 있는 쿠폰이 뭐야?",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["transaction:coupon_usage"],
+        ),
+        merged_slots=ConversationSlots(
+            tire_model="키너지 EX",
+            availability_context={
+                "latest_router_evidence": {
+                    "domain": "transaction",
+                    "intent": "product_coupon_eligibility",
+                    "execution_plan": ["transaction:product_coupon_eligibility"],
+                }
+            },
+        ),
+        action_mode="info_only",
+        context_state="active",
+    )
+
+    assert contract.domain == "transaction"
+    assert contract.intent == "product_coupon_eligibility"
+    assert contract.known_slots["product_name"] == "키너지 EX"
+    assert contract.preferred_tool == "get_my_coupons_tool"
+    assert "search_product_tool" in contract.forbidden_tools
+    assert "get_final_price_tool" in contract.forbidden_tools
+
+
+def test_turn_contract_builds_owned_coupon_lookup_contract() -> None:
+    contract = build_turn_contract(
+        user_text="내 쿠폰",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["transaction:owned_coupon_lookup"],
+        ),
+    )
+
+    assert contract.domain == "transaction"
+    assert contract.intent == "owned_coupon_lookup"
+    assert contract.required_slots == ()
+    assert contract.blocking_required_slots == ()
+    assert contract.preferred_tool == "get_my_coupons_tool"
+    assert "get_my_coupons_tool" in contract.allowed_tools
+    assert "search_product_tool" in contract.forbidden_tools
+    assert "get_coupon_applicable_products_tool" in contract.forbidden_tools
 
 
 def test_turn_contract_clears_stale_pending_check_for_new_non_followup_planner_intent() -> None:

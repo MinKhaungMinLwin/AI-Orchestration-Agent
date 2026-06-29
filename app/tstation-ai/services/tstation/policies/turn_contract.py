@@ -84,6 +84,18 @@ _DISCOVERY_PRODUCT_SOURCE_TOOLS = frozenset({
 _PENDING_CHECK_FOLLOWUP_PLANNER_INTENTS = frozenset({
     "coupon_applicability_check",
 })
+
+
+def _latest_router_evidence_intent(known_slots: Mapping[str, Any]) -> str:
+    availability_context = (
+        known_slots.get("availability_context") if isinstance(known_slots.get("availability_context"), Mapping) else {}
+    )
+    latest_router_evidence = (
+        availability_context.get("latest_router_evidence")
+        if isinstance(availability_context.get("latest_router_evidence"), Mapping)
+        else {}
+    )
+    return str(latest_router_evidence.get("intent") or "").strip()
 _COMPARISON_RESOLVER_TOOLS = _DISCOVERY_PRODUCT_SOURCE_TOOLS | frozenset({"get_product_description_tool"})
 _HIGH_RISK_TRANSACTION_TOOLS = frozenset({
     "get_final_price_tool",
@@ -640,6 +652,27 @@ def build_turn_contract(
     routing_pending_check_object_value = str(getattr(routing_result, "pending_check_object_value", "") or "").strip()
     if routing_pending_check_object_value and not known_slots.get("pending_check_object_value"):
         known_slots["pending_check_object_value"] = routing_pending_check_object_value
+    latest_router_intent = _latest_router_evidence_intent(known_slots)
+    if planner_intent == "owned_coupon_lookup" or code_intent == "owned_coupon_lookup":
+        domain = "transaction"
+        intent = "owned_coupon_lookup"
+    if latest_router_intent == "product_coupon_eligibility" and intent in {"coupon_usage", "price_or_coupon_check"}:
+        domain = "transaction"
+        intent = "product_coupon_eligibility"
+        if not known_slots.get("product_name"):
+            fallback_product_name = (
+                known_slots.get("tire_model")
+                or known_slots.get("pending_product_name")
+                or known_slots.get("pattern_name")
+            )
+            if fallback_product_name not in (None, "", [], {}):
+                known_slots["product_name"] = fallback_product_name
+        if (
+            not known_slots.get("product_name")
+            and str(known_slots.get("pending_check_object_type") or "").strip() == "product_name"
+            and known_slots.get("pending_check_object_value")
+        ):
+            known_slots["product_name"] = known_slots.get("pending_check_object_value")
     response_metadata = response_decision.metadata if response_decision is not None else {}
     if isinstance(response_metadata, Mapping):
         requested_product_attribute = str(response_metadata.get("requested_product_attribute") or "")
@@ -950,6 +983,24 @@ def build_turn_contract(
         forbidden_tools = _merge_tuple(
             forbidden_tools,
             ("issue_coupon_tool", "search_product_tool", "get_product_description_tool", "get_final_price_tool"),
+        )
+        if not preferred_tool or preferred_tool in forbidden_tools:
+            preferred_tool = "get_my_coupons_tool"
+            tool_args_patch = {}
+    if intent == "owned_coupon_lookup":
+        allowed_tools = _merge_tuple(
+            allowed_tools,
+            ("get_my_coupons_tool",),
+        )
+        forbidden_tools = _merge_tuple(
+            forbidden_tools,
+            (
+                "issue_coupon_tool",
+                "search_product_tool",
+                "get_product_description_tool",
+                "get_coupon_applicable_products_tool",
+                "get_final_price_tool",
+            ),
         )
         if not preferred_tool or preferred_tool in forbidden_tools:
             preferred_tool = "get_my_coupons_tool"

@@ -21649,6 +21649,7 @@ def _build_transaction_policy_context(
         return {}, None, None
     try:
         known_slots = _soft_reset_pending_check_slots_for_router_intent(known_slots)
+        known_slots = _restore_coupon_router_followup_slots(known_slots)
         known_slots = _enrich_today_install_policy_slots(
             last_user_text=last_user_text,
             known_slots=known_slots,
@@ -21766,6 +21767,41 @@ def _soft_reset_pending_check_slots_for_router_intent(known_slots: Mapping[str, 
         "pending_check_turns_remaining",
     ):
         updated.pop(key, None)
+    return updated
+
+
+def _restore_coupon_router_followup_slots(known_slots: Mapping[str, Any]) -> dict[str, Any]:
+    updated = dict(known_slots)
+    availability_context = (
+        updated.get("availability_context") if isinstance(updated.get("availability_context"), Mapping) else {}
+    )
+    latest_router_evidence = (
+        availability_context.get("latest_router_evidence")
+        if isinstance(availability_context.get("latest_router_evidence"), Mapping)
+        else {}
+    )
+    latest_intent = str(latest_router_evidence.get("intent") or "").strip()
+    if latest_intent != "product_coupon_eligibility":
+        return updated
+
+    current_router_intent = str(updated.get("router_transaction_intent") or "").strip()
+    if current_router_intent in {"", "coupon_usage", "price_or_coupon_check"}:
+        updated["router_transaction_intent"] = "coupon_applicability_check"
+    if str(updated.get("pending_check_topic") or "").strip() in {"", "none"}:
+        updated["pending_check_topic"] = "coupon_applicability"
+
+    product_name = str(
+        updated.get("product_name")
+        or updated.get("tire_model")
+        or updated.get("pending_product_name")
+        or updated.get("pending_check_object_value")
+        or ""
+    ).strip()
+    if product_name:
+        if str(updated.get("pending_check_object_type") or "").strip() in {"", "none"}:
+            updated["pending_check_object_type"] = "product_name"
+        if str(updated.get("pending_check_object_value") or "").strip() == "":
+            updated["pending_check_object_value"] = product_name
     return updated
 
 
