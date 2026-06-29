@@ -23521,6 +23521,30 @@ def test_payment_error_troubleshooting_contract_keeps_checkout_screen_error_faq_
     assert "search_faq_rag_tool" in contract.allowed_tools
 
 
+def test_safe_service_subscription_check_keeps_owned_warranty_lookup_over_complaint_scope() -> None:
+    contract = build_turn_contract(
+        user_text="나 안심서비스 가입했던것 같은데, 확인해줘",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:verify_safe_service_subscription"],
+            complaint_scope="tstation_service_complaint",
+            pending_check_topic="safe_service",
+            referred_object_status="missing",
+            needs_clarification=True,
+        ),
+    )
+
+    assert contract.domain == "support"
+    assert contract.intent == "owned_warranty_lookup"
+    assert contract.current_turn_intent == "owned_warranty_lookup"
+    assert contract.allowed_tools == ("get_my_warranties_tool",)
+    assert "search_faq_hybrid_tool" in contract.forbidden_tools
+    assert "transfer_to_qna_tool" in contract.forbidden_tools
+    assert contract.known_slots["pending_check_topic"] == "safe_service"
+    assert contract.response_decision
+    assert contract.response_decision["metadata"]["response_shape_key"] == "owned_warranty_lookup"
+
+
 def test_order_document_guidance_contract_blocks_direct_qna_and_order_lookup_tools() -> None:
     contract = build_turn_contract(
         user_text="회사 제출용 거래명세서 필요한데 이메일로 보내줄 수 있어?",
@@ -24533,8 +24557,12 @@ def test_support_response_policy_guard_uses_user_facing_complaint_copy_not_assis
     response = event["data"]["assistantResponse"]
     metadata = event["data"]["metadata"]
 
-    assert "이용 중 불편을 겪으셨다면 죄송합니다." in response
-    assert "앞 작업 지연, 현장 접수/장착 상황, 매장 혼잡도에 따라 대기 시간이 발생할 수 있어요." in response
+    assert response == (
+        "이용 중 불편을 겪으셨다면 죄송합니다. 정확한 확인을 위해 1:1 문의로 상세 내용을 남겨 주시면 "
+        "확인후 빠르게 도와드릴게요."
+    )
+    assert "예약 시간" not in response
+    assert "매장 혼잡도" not in response
     assert "assistant_guidance" not in response
     assert "실행 flow를 재개하지 않게" not in response
     assert _labels(event["data"]["quickReplies"]) == ["1:1 문의하기", "처음으로"]
@@ -24787,6 +24815,8 @@ def _routing_result(
     continue_flow: bool = False,
     new_intent: bool = True,
     recommendation_scenario: str = "none",
+    complaint_scope: str = "none",
+    pending_check_topic: str = "none",
 ) -> MultiAgentDomain:
     return MultiAgentDomain(
         reason="test",
@@ -24795,9 +24825,10 @@ def _routing_result(
         user_behavior="test",
         flow="test",
         claim_check_type="none",
-        complaint_scope="none",
+        complaint_scope=complaint_scope,
         discovery_followup_intent="none",
         carried_discovery_objective="none",
+        pending_check_topic=pending_check_topic,
         comparison_followup_intent=comparison_followup_intent,
         comparison_metric=comparison_metric,
         requested_product_attribute=requested_product_attribute,
@@ -29420,7 +29451,7 @@ def test_missing_stock_search_slots_quickreply_is_allowed_for_stock_check_action
     assert "forbidden_template" not in violation_types
 
 
-def test_support_complaint_quickreply_is_not_flagged_by_reservation_time_wording() -> None:
+def test_support_complaint_quickreply_is_not_flagged_by_generic_complaint_wording() -> None:
     contract = TurnContract(
         domain="support",
         intent="tstation_service_complaint",
@@ -29435,8 +29466,8 @@ def test_support_complaint_quickreply_is_not_flagged_by_reservation_time_wording
     violations = response_contract_violations(
         template="quickReply",
         assistant_response_text=(
-            "이용 중 불편을 겪으셨다면 죄송합니다. 예약 시간에 맞춰 방문하셨더라도 앞 작업 지연, 현장 접수/장착 상황, "
-            "매장 혼잡도에 따라 대기 시간이 발생할 수 있어요. 원하시면 1:1 문의로 접수하실 수 있도록 도와드릴게요."
+            "이용 중 불편을 겪으셨다면 죄송합니다. 정확한 확인을 위해 1:1 문의로 상세 내용을 남겨 주시면 "
+            "확인후 빠르게 도와드릴게요."
         ),
         assistant_response_source="support_agent",
         response_shape_key="support_complaint_guidance",

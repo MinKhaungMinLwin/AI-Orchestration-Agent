@@ -246,6 +246,7 @@ ROUTER_WINS_INFORMATIONAL_INTENTS = frozenset({
     "tstation_service_complaint",
     "support_faq",
     "policy_notice_or_escalation",
+    "owned_warranty_lookup",
 })
 ROUTER_WINS_EXECUTION_BOUNDARY_INTENTS = frozenset({
     "stock_store_search",
@@ -261,6 +262,12 @@ _SUPPORT_FAQ_POLICY_TOOL_INTENTS = frozenset({
     "reservation_window_policy",
     "external_tire_install_policy",
     "tire_condition_photo_policy",
+})
+_OWNED_WARRANTY_LOOKUP_INTENTS = frozenset({
+    "owned_warranty_lookup",
+    "my_warranty_lookup",
+    "verify_safe_service_subscription",
+    "safe_service_subscription_lookup",
 })
 _SUPPORT_SAFE_AGENT_TOOLS = (
     "get_faq_tool",
@@ -591,6 +598,19 @@ def build_turn_contract(
             known_slots["stock_check_mode"] = stock_check_mode
     if policy_intent and policy_intent != "none":
         known_slots["policy_intent"] = policy_intent
+    routing_pending_check_topic = str(getattr(routing_result, "pending_check_topic", "") or "").strip()
+    if routing_pending_check_topic and routing_pending_check_topic != "none" and not known_slots.get("pending_check_topic"):
+        known_slots["pending_check_topic"] = routing_pending_check_topic
+    routing_pending_check_object_type = str(getattr(routing_result, "pending_check_object_type", "") or "").strip()
+    if (
+        routing_pending_check_object_type
+        and routing_pending_check_object_type != "none"
+        and not known_slots.get("pending_check_object_type")
+    ):
+        known_slots["pending_check_object_type"] = routing_pending_check_object_type
+    routing_pending_check_object_value = str(getattr(routing_result, "pending_check_object_value", "") or "").strip()
+    if routing_pending_check_object_value and not known_slots.get("pending_check_object_value"):
+        known_slots["pending_check_object_value"] = routing_pending_check_object_value
     response_metadata = response_decision.metadata if response_decision is not None else {}
     if isinstance(response_metadata, Mapping):
         requested_product_attribute = str(response_metadata.get("requested_product_attribute") or "")
@@ -1281,7 +1301,13 @@ def _support_answer_contract_owns_response(*, domain: str, intent: str, action_m
     normalized_mode = str(action_mode or "").strip()
     if normalized_mode in _SUPPORT_ANSWER_ACTION_MODES:
         return True
-    if normalized_intent in {"human_escalation", "legal_action_guidance_denied", "support_faq", "tstation_service_complaint"}:
+    if normalized_intent in {
+        "human_escalation",
+        "legal_action_guidance_denied",
+        "support_faq",
+        "tstation_service_complaint",
+        "owned_warranty_lookup",
+    }:
         return True
     if normalized_intent.endswith("_policy") or normalized_intent.endswith("_guidance"):
         return True
@@ -1309,8 +1335,8 @@ def _support_guard_message_and_chips(
         )
     if intent == "tstation_service_complaint" or response_shape_key == "support_complaint_guidance":
         return (
-            "이용 중 불편을 겪으셨다면 죄송합니다. 예약 시간에 맞춰 방문하셨더라도 앞 작업 지연, 현장 접수/장착 상황, "
-            "매장 혼잡도에 따라 대기 시간이 발생할 수 있어요. 원하시면 1:1 문의로 접수하실 수 있도록 도와드릴게요.",
+            "이용 중 불편을 겪으셨다면 죄송합니다. 정확한 확인을 위해 1:1 문의로 상세 내용을 남겨 주시면 "
+            "확인후 빠르게 도와드릴게요.",
             quick_replies,
         )
     return (
@@ -4067,6 +4093,8 @@ def _router_wins_information_intent(
     for candidate in candidates:
         if not candidate or candidate == "none" or candidate in _ROUTER_WINS_EXECUTION_EXCLUDED_INTENTS:
             continue
+        if candidate in _OWNED_WARRANTY_LOOKUP_INTENTS:
+            return "owned_warranty_lookup"
         if candidate == "payment_error_troubleshooting" and _is_payment_error_policy_overmatch(user_text):
             continue
         if candidate in ROUTER_WINS_INFORMATIONAL_INTENTS:
@@ -4180,6 +4208,8 @@ def _router_wins_domain(intent: str, planner_domains: tuple[str, ...]) -> str:
     }:
         return "discovery"
     if intent in ROUTER_WINS_INFORMATIONAL_INTENTS or intent.endswith("_policy") or intent.endswith("_guidance"):
+        return "support"
+    if intent in _OWNED_WARRANTY_LOOKUP_INTENTS:
         return "support"
     if intent in ROUTER_WINS_EXECUTION_BOUNDARY_INTENTS:
         return "transaction"
@@ -4298,6 +4328,16 @@ def _router_wins_tool_boundary(intent: str) -> tuple[tuple[str, ...], tuple[str,
                 if tool not in {"search_faq_hybrid_tool", "transfer_to_qna_tool"}
             ),
         )
+    if intent in _OWNED_WARRANTY_LOOKUP_INTENTS:
+        return (
+            ("get_my_warranties_tool",),
+            tuple(
+                tool
+                for tool in _ROUTER_WINS_TRANSACTION_FORBIDDEN_TOOLS
+                | {"search_faq_hybrid_tool", "transfer_to_qna_tool"}
+                if tool != "get_my_warranties_tool"
+            ),
+        )
     if intent in _SUPPORT_FAQ_POLICY_TOOL_INTENTS:
         return (
             _SUPPORT_SAFE_AGENT_TOOLS,
@@ -4316,6 +4356,7 @@ def _router_wins_response_shape_key(intent: str) -> str:
         "product_comparison": "metric_comparison_summary",
         "product_size_list_lookup": "product_size_list_lookup",
         "tstation_service_complaint": "support_complaint_guidance",
+        "owned_warranty_lookup": "owned_warranty_lookup",
     }.get(intent, intent)
 
 
@@ -4376,6 +4417,16 @@ def _router_wins_response_decision(intent: str) -> dict[str, Any]:
         guidance = "현재 턴의 사이즈 목록 조회 의도에 맞춰 search_product_tool 결과의 규격 목록을 안내한다."
     elif intent == "tstation_service_complaint":
         guidance = "T-Station 범위의 불편 사항으로 응답하고, 이전 구매/예약/매장 문맥이 실행 flow를 재개하지 않게 한다."
+    elif intent in _OWNED_WARRANTY_LOOKUP_INTENTS:
+        guidance = (
+            "사용자가 본인 안심서비스/워런티 가입 여부 확인을 요청한 턴은 get_my_warranties_tool로 보유 워런티를 조회한다. "
+            "이전 불만/정책 문맥만으로 FAQ 안내나 1:1 문의로 전환하지 않는다."
+        )
+        forbidden_behaviors = [
+            "answer_without_owned_warranty_lookup",
+            "normalize_as_service_complaint",
+            "transfer_to_qna_direct_first",
+        ]
     else:
         guidance = "현재 턴의 FAQ/정책 intent 기준으로 안내하고 개인 조회, 구매, 예약 실행 flow로 전환하지 않는다."
     return {
@@ -4593,6 +4644,9 @@ def _normalize_plan_intent(value: str) -> str:
         "best_seller": "best_seller_search",
         "sales_rank": "best_seller_search",
         "query_order_data_for_vehicle_with_period": "best_seller_search",
+        "verify_safe_service_subscription": "owned_warranty_lookup",
+        "safe_service_subscription_lookup": "owned_warranty_lookup",
+        "my_warranty_lookup": "owned_warranty_lookup",
         "best_seller_search_by_vehicle": "best_seller_search",
         "vehicle_best_seller_search": "best_seller_search",
         "order_data_for_vehicle": "best_seller_search",
