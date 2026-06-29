@@ -33,10 +33,19 @@ _RECOMMENDATION_FIELDS = (
     "scope",
     "fitment_source",
 )
-_STORE_FIELDS = ("region", "shop_id", "shop_name")
+_STORE_FIELDS = ("region", "shop_id", "shop_name", "store_name", "place_query")
 _SCHEDULE_FIELDS = ("requested_cal_day", "rsv_hour")
 _PAYMENT_FIELDS = ("payment_amount", "price_basis", "price_source_tool", "payment_amount_stale")
 _INTENT_FIELDS = ("pending_intent", "goal_type", "stock_check_mode", "schedule_mode", "availability_intent")
+_FLOW_PROGRESS_META_FIELDS = (
+    "target_action",
+    "current_step",
+    "missing_slots",
+    "next_tool",
+    "tool_args_patch",
+    "allowed_tools",
+    "progress_source",
+)
 _ACTIVE_FLOW_TYPES = {
     "purchase",
     "recommendation",
@@ -126,6 +135,186 @@ def _is_stock_intent_group(values: Mapping[str, Any]) -> bool:
     )
 
 
+def _first_non_empty(*values: Any) -> Any:
+    for value in values:
+        if value not in _EMPTY_VALUES:
+            return value
+    return None
+
+
+def _flow_quantity(value: Any) -> int | None:
+    try:
+        quantity = int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return quantity if quantity > 0 else None
+
+
+def _store_lookup_tool_and_args(store: Mapping[str, Any]) -> tuple[str | None, dict[str, Any]]:
+    place_query = str(store.get("place_query") or "").strip()
+    region = str(store.get("region") or "").strip()
+    store_name = str(store.get("shop_name") or store.get("store_name") or "").strip()
+    if place_query:
+        return "search_stores_tool", {"limit": 10, "place_query": place_query}
+    if store_name:
+        return "get_store_list_tool", {"limit": 10, "store_nm": store_name}
+    if region:
+        return "get_store_list_tool", {"limit": 10, "region_code": region}
+    return None, {}
+
+
+def evaluate_flow_progress(state: "FlowState") -> dict[str, Any]:
+    """Compute the next missing slot/tool for an active flow without executing it."""
+
+    if state.status not in {"active", "resumed"}:
+        return {}
+    product = _non_empty_mapping(state.product)
+    store = _non_empty_mapping(state.store)
+    intent = _non_empty_mapping(state.intent)
+    flow_type = str(state.flow_type or "").strip()
+    goods_no = str(product.get("goods_no") or "").strip()
+    product_name = str(
+        _first_non_empty(product.get("product_name"), product.get("tire_model"), product.get("pending_product_name"))
+        or ""
+    ).strip()
+    tire_size = str(product.get("tire_size") or "").strip()
+    quantity = _flow_quantity(_first_non_empty(product.get("ord_qty"), product.get("quantity")))
+    shop_id = str(store.get("shop_id") or "").strip()
+    shop_name = str(_first_non_empty(store.get("shop_name"), store.get("store_name")) or "").strip()
+    lookup_tool, lookup_args = _store_lookup_tool_and_args(store)
+
+    if flow_type == "stock":
+        base = {
+            "target_action": "get_store_inventory_tool",
+            "progress_source": "flow_state_evaluator",
+        }
+        if not goods_no:
+            if product_name:
+                args = {"keyword": product_name, "limit": 10}
+                if tire_size:
+                    args["size"] = tire_size
+                return {
+                    **base,
+                    "current_step": "resolve_product",
+                    "missing_slots": ["goods_no"],
+                    "next_tool": "search_product_tool",
+                    "allowed_tools": ["search_product_tool"],
+                    "tool_args_patch": args,
+                }
+            return {**base, "current_step": "ask_product", "missing_slots": ["product"]}
+        if not quantity:
+            return {**base, "current_step": "ask_quantity", "missing_slots": ["ord_qty"]}
+        if not shop_id:
+            if lookup_tool:
+                return {
+                    **base,
+                    "current_step": "resolve_store",
+                    "missing_slots": ["shop_id"],
+                    "next_tool": lookup_tool,
+                    "allowed_tools": ["search_stores_tool", "get_store_list_tool"],
+                    "tool_args_patch": lookup_args,
+                }
+            return {**base, "current_step": "ask_store", "missing_slots": ["shop_id"]}
+        return {
+            **base,
+            "current_step": "check_inventory",
+            "missing_slots": [],
+            "next_tool": "get_store_inventory_tool",
+            "allowed_tools": ["get_store_inventory_tool"],
+            "tool_args_patch": {
+                "goods_list": [{"goodsNo": goods_no, "qty": str(quantity)}],
+                "shop_id_list": [{"shopId": shop_id}],
+            },
+        }
+
+    if flow_type == "purchase":
+        base = {
+            "target_action": "quick_order_tool",
+            "progress_source": "flow_state_evaluator",
+        }
+        if not goods_no:
+            if product_name:
+                args = {"keyword": product_name, "limit": 10}
+                if tire_size:
+                    args["size"] = tire_size
+                return {
+                    **base,
+                    "current_step": "resolve_product",
+                    "missing_slots": ["goods_no"],
+                    "next_tool": "search_product_tool",
+                    "allowed_tools": ["search_product_tool"],
+                    "tool_args_patch": args,
+                }
+            return {**base, "current_step": "ask_product", "missing_slots": ["product"]}
+        if not quantity:
+            return {**base, "current_step": "ask_quantity", "missing_slots": ["ord_qty"]}
+        if not shop_id:
+            if lookup_tool:
+                return {
+                    **base,
+                    "current_step": "resolve_store",
+                    "missing_slots": ["shop_id"],
+                    "next_tool": lookup_tool,
+                    "allowed_tools": ["search_stores_tool", "get_store_list_tool"],
+                    "tool_args_patch": lookup_args,
+                }
+            return {**base, "current_step": "ask_store", "missing_slots": ["shop_id"]}
+        schedule_mode = str(intent.get("schedule_mode") or "general").strip()
+        return {
+            **base,
+            "current_step": "resolve_schedule",
+            "missing_slots": ["booking_datetime"],
+            "next_tool": "get_store_schedule_tool",
+            "allowed_tools": ["get_store_schedule_tool"],
+            "tool_args_patch": {"shop_id": shop_id, "mode": schedule_mode},
+        }
+
+    if flow_type == "store_schedule":
+        base = {
+            "target_action": "get_store_schedule_tool",
+            "progress_source": "flow_state_evaluator",
+        }
+        if not shop_id:
+            if lookup_tool:
+                return {
+                    **base,
+                    "current_step": "resolve_store",
+                    "missing_slots": ["shop_id"],
+                    "next_tool": lookup_tool,
+                    "allowed_tools": ["search_stores_tool", "get_store_list_tool"],
+                    "tool_args_patch": lookup_args,
+                }
+            return {**base, "current_step": "ask_store", "missing_slots": ["shop_id"]}
+        return {
+            **base,
+            "current_step": "show_schedule",
+            "missing_slots": [],
+            "next_tool": "get_store_schedule_tool",
+            "allowed_tools": ["get_store_schedule_tool"],
+            "tool_args_patch": {"shop_id": shop_id, "mode": "general"},
+        }
+
+    if shop_name and flow_type in {"store_search", "store_service_search", "favorite_store"}:
+        return {
+            "target_action": "store_lookup",
+            "current_step": "resolve_store",
+            "missing_slots": ["shop_id"],
+            "next_tool": "get_store_list_tool",
+            "allowed_tools": ["get_store_list_tool"],
+            "tool_args_patch": {"limit": 10, "store_nm": shop_name},
+            "progress_source": "flow_state_evaluator",
+        }
+    return {}
+
+
+def _refresh_flow_progress(state: "FlowState") -> None:
+    for key in _FLOW_PROGRESS_META_FIELDS:
+        state.meta.pop(key, None)
+    progress = evaluate_flow_progress(state)
+    if progress:
+        state.meta.update(progress)
+
+
 @dataclass(slots=True)
 class FlowStateMergeResult:
     state: "FlowState"
@@ -172,7 +361,7 @@ class FlowState:
         state.intent = _section_values(flat, "intent", _INTENT_FIELDS)
         state.meta = {
             key: flat[key]
-            for key in ("source", "updated_at", "awaiting_store_region", "pending_step")
+            for key in ("source", "updated_at", "awaiting_store_region", "pending_step", *_FLOW_PROGRESS_META_FIELDS)
             if flat.get(key) not in _EMPTY_VALUES
         }
         state.candidates = _candidate_values(flat.get("last_candidates"))
@@ -191,7 +380,7 @@ class FlowState:
         state.intent = {key: flat[key] for key in _INTENT_FIELDS if flat.get(key) not in _EMPTY_VALUES}
         state.meta = {
             key: flat[key]
-            for key in ("source", "updated_at", "awaiting_store_region", "pending_step")
+            for key in ("source", "updated_at", "awaiting_store_region", "pending_step", *_FLOW_PROGRESS_META_FIELDS)
             if flat.get(key) not in _EMPTY_VALUES
         }
         return state
@@ -219,7 +408,7 @@ class FlowState:
         state.intent = {key: flat[key] for key in _INTENT_FIELDS if flat.get(key) not in _EMPTY_VALUES}
         state.meta = {
             key: flat[key]
-            for key in ("awaiting_store_region", "pending_step")
+            for key in ("awaiting_store_region", "pending_step", *_FLOW_PROGRESS_META_FIELDS)
             if flat.get(key) not in _EMPTY_VALUES
         }
         state.candidates = _candidate_values(flat.get("last_candidates"))
@@ -250,6 +439,9 @@ class FlowState:
                 context[section_name] = values
         if self.meta.get("source") not in _EMPTY_VALUES:
             context["source"] = self.meta["source"]
+        for key in _FLOW_PROGRESS_META_FIELDS:
+            if self.meta.get(key) not in _EMPTY_VALUES:
+                context[key] = self.meta[key]
         if self.candidates:
             context["last_candidates"] = [dict(candidate) for candidate in self.candidates]
         return _non_empty_mapping(context)
@@ -402,6 +594,7 @@ class FlowState:
         merged.status = (
             delta.status if delta.status in {"active", "dormant", "resumed", "completed"} else merged.status
         )
+        _refresh_flow_progress(merged)
         after = merged.to_active_flow_context()
         return FlowStateMergeResult(
             state=merged,

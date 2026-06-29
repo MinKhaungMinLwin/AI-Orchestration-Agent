@@ -36,6 +36,7 @@ from services.tstation.policies.flow_state import (
     apply_router_evidence_snapshot,
     commit_flow_state,
     commit_purchase_flow_state,
+    evaluate_flow_progress,
     latest_router_evidence,
     purchase_context_vehicle_selection_patch,
     recommendation_listcar_flow_delta,
@@ -12525,6 +12526,87 @@ def test_stock_store_location_event_stores_candidate_flow_state() -> None:
             "flow_type": "stock",
         }
     ]
+
+
+def test_stock_flow_progress_resolves_product_from_active_state() -> None:
+    result = commit_flow_state(
+        {},
+        {
+            "product_name": "벤투스 S2 AS",
+            "tire_size": "245/45R19",
+            "ord_qty": 4,
+            "place_query": "강남역",
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+            "stock_check_mode": "inventory_only",
+        },
+        source="user_text:stock_inventory",
+        flow_type="stock",
+        flow_step="router_observed",
+    )
+    context = result.state.to_active_flow_context()
+
+    assert context["target_action"] == "get_store_inventory_tool"
+    assert context["current_step"] == "resolve_product"
+    assert context["missing_slots"] == ["goods_no"]
+    assert context["next_tool"] == "search_product_tool"
+    assert context["tool_args_patch"] == {
+        "keyword": "벤투스 S2 AS",
+        "limit": 10,
+        "size": "245/45R19",
+    }
+
+
+def test_stock_flow_progress_resolves_store_after_product_confirmed() -> None:
+    result = commit_flow_state(
+        {},
+        {
+            "goods_no": "G000000310126",
+            "product_name": "벤투스 S2 AS",
+            "tire_size": "245/45R19",
+            "ord_qty": 4,
+            "place_query": "강남역",
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+            "stock_check_mode": "inventory_only",
+        },
+        source="tool_result:search_product_tool",
+        flow_type="stock",
+        flow_step="product_resolved",
+    )
+    context = result.state.to_active_flow_context()
+
+    assert context["current_step"] == "resolve_store"
+    assert context["missing_slots"] == ["shop_id"]
+    assert context["next_tool"] == "search_stores_tool"
+    assert context["tool_args_patch"] == {"limit": 10, "place_query": "강남역"}
+
+
+def test_stock_flow_progress_checks_inventory_after_store_selected() -> None:
+    state = FlowState.from_flat_delta(
+        {
+            "goods_no": "G000000310126",
+            "tire_size": "245/45R19",
+            "ord_qty": 4,
+            "shop_id": "F00098",
+            "shop_name": "티스테이션 강남역점",
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+            "stock_check_mode": "inventory_only",
+        },
+        source="location_selection:stock",
+        flow_type="stock",
+        flow_step="store_selected",
+    )
+    progress = evaluate_flow_progress(state)
+
+    assert progress["current_step"] == "check_inventory"
+    assert progress["missing_slots"] == []
+    assert progress["next_tool"] == "get_store_inventory_tool"
+    assert progress["tool_args_patch"] == {
+        "goods_list": [{"goodsNo": "G000000310126", "qty": "4"}],
+        "shop_id_list": [{"shopId": "F00098"}],
+    }
 
 
 def test_stock_store_location_payload_stores_candidate_flow_state_without_event_wrapper() -> None:

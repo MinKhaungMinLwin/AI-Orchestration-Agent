@@ -175,6 +175,34 @@ contract-required recovery는 `TurnContract.preferred_tool/tool_args_patch`를 �
 - candidate builder를 `chat.py` 밖 policy/executor 모듈로 옮길지 결정한다.
 - 실제 tool invoke/template mapping도 contract-required executor 계층으로 분리해 `chat.py`를 orchestration-only에 가깝게 줄인다.
 
+## 2026-06-30 구조 변경 적용: FlowState progress evaluator 1단계
+
+### 배경
+
+완전한 flow loop executor를 한 번에 도입하면 회귀 위험이 크다. 하지만 FlowState가 업데이트될 때마다 현재 flow의
+부족 슬롯과 다음 권장 tool을 계산해 저장하면, 기존 recovery/helper 구조를 크게 바꾸지 않고도 다음 단계 선택을
+중앙화할 수 있다.
+
+### 적용 내용
+
+- `flow_state.py`에 `evaluate_flow_progress()`를 추가했다.
+- `commit_flow_state()`의 active flow merge 이후 progress를 재계산해 active context에 저장한다.
+- 저장되는 값은 다음과 같다.
+  - `target_action`
+  - `current_step`
+  - `missing_slots`
+  - `next_tool`
+  - `tool_args_patch`
+  - `allowed_tools`
+- 1차 graph는 `stock`, `purchase`, `store_schedule`만 다룬다.
+- 이 단계는 tool을 실행하지 않는다. context는 실행 근거가 아니라 TurnContract/candidate가 읽을 evidence다.
+
+### 남은 방향
+
+- TurnContract build가 current-turn continuation일 때만 progress를 allowed/preferred evidence로 읽게 한다.
+- `_contract_required_tool_candidate()`가 active flow progress의 `next_tool/tool_args_patch`를 우선 소비하게 한다.
+- progress 기반 경로가 안정화되면 `search_product_tool` 후 stock flow advance, confirmed state advance 같은 보정 helper를 줄인다.
+
 ## 2026-06-29 구조 변경 계획: current-turn execution boundary와 parent flow 분리
 
 ### 배경
