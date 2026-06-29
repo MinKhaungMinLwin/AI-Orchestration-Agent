@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 from services.tstation.policies.response_decision import TemplateName
 from services.tstation.policies import transaction_intent_policy as policy
 from services.tstation.policies.transaction_intent_policy import (
@@ -731,6 +733,64 @@ def test_tc020_gwanggyo_nearby_store_search_prefers_unified_search() -> None:
     assert plan.tool_args_patch["region_code"] == "광교"
     assert plan.tool_args_patch["place_query"] == "광교"
     assert "transaction_store_preview_tool" in plan.forbidden_tools
+
+
+def test_stock_inventory_nearby_store_lookup_prefers_unified_store_search() -> None:
+    frame = build_transaction_intent_frame(
+        "벤투스 S2 AS 2454519 4개 강남역 근처 재고 있는 매장 찾아줘",
+        known_slots={
+            "goods_no": "G000000310126",
+            "tire_size": "245/45R19",
+            "ord_qty": 4,
+            "region": "강남",
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+            "stock_check_mode": "inventory_only",
+        },
+    )
+    frame = replace(
+        frame,
+        sub_intent="stock",
+        known_slots={**dict(frame.known_slots), "stock_check_mode": "inventory_only"},
+        entities={**dict(frame.entities), "stock_check_mode": "inventory_only"},
+    )
+    plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "stock_store_search"
+    assert frame.entities["nearby"] is True
+    assert "search_stores_tool" in plan.allowed_tools
+    assert "get_store_list_tool" in plan.allowed_tools
+    assert plan.preferred_tool == "search_stores_tool"
+    assert plan.tool_args_patch["place_query"] == "강남"
+    assert "quick_order_tool" not in plan.allowed_tools
+
+
+def test_stock_inventory_region_store_lookup_keeps_store_list_preferred() -> None:
+    frame = build_transaction_intent_frame(
+        "벤투스 S2 AS 2454519 4개 강남 재고 있는 매장 찾아줘",
+        known_slots={
+            "goods_no": "G000000310126",
+            "tire_size": "245/45R19",
+            "ord_qty": 4,
+            "region": "강남",
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+            "stock_check_mode": "inventory_only",
+        },
+    )
+    frame = replace(
+        frame,
+        sub_intent="stock",
+        known_slots={**dict(frame.known_slots), "stock_check_mode": "inventory_only"},
+        entities={**dict(frame.entities), "stock_check_mode": "inventory_only"},
+    )
+    plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "stock_store_search"
+    assert frame.entities["nearby"] is False
+    assert "search_stores_tool" in plan.allowed_tools
+    assert plan.preferred_tool == "get_store_list_tool"
+    assert plan.tool_args_patch["region_code"] == "강남"
 
 
 def test_tc049_store_visit_schedule_for_unverified_store_keeps_store_schedule_intent() -> None:

@@ -29289,7 +29289,7 @@ def test_promote_single_turn_stock_inventory_from_search_product_runs_region_loo
     assert promoted_frame.known_slots["goal_type"] == "store_with_stock"
     assert promoted_frame.known_slots["ord_qty"] == 4
     assert promoted_frame.known_slots["region"] == "강남"
-    assert promoted_tool_plan.preferred_tool == "get_store_list_tool"
+    assert promoted_tool_plan.preferred_tool == "search_stores_tool"
     assert promoted_tool_plan.metadata["stock_check_mode"] == "inventory_only"
     assert decision.metadata["response_shape_key"] == "stock_inventory_lookup"
     active_context = promoted_slots.availability_context["active_flow_context"]
@@ -29349,7 +29349,7 @@ def test_promote_single_turn_stock_inventory_reads_contract_slots_without_execut
     assert promoted_frame.known_slots["tire_size"] == "245/45R19"
     assert promoted_frame.known_slots["ord_qty"] == 4
     assert promoted_frame.known_slots["region"] == "강남"
-    assert promoted_tool_plan.preferred_tool == "get_store_list_tool"
+    assert promoted_tool_plan.preferred_tool == "search_stores_tool"
     assert decision.metadata["response_shape_key"] == "stock_inventory_lookup"
 
 
@@ -29399,7 +29399,7 @@ def test_promote_single_turn_stock_inventory_accepts_list_data_search_result_sha
     assert promoted_frame.intent == "stock_store_search"
     assert promoted_frame.known_slots["ord_qty"] == 4
     assert promoted_frame.known_slots["region"] == "강남"
-    assert promoted_tool_plan.preferred_tool == "get_store_list_tool"
+    assert promoted_tool_plan.preferred_tool == "search_stores_tool"
     assert decision.metadata["response_shape_key"] == "stock_inventory_lookup"
 
 
@@ -29504,7 +29504,7 @@ def test_advance_stock_flow_after_search_product_result_runs_store_lookup(
 ) -> None:
     captured_input: dict[str, Any] = {}
 
-    def _fake_store_list_invoke(tool_input: dict[str, Any]) -> dict[str, Any]:
+    def _fake_search_stores_invoke(tool_input: dict[str, Any]) -> dict[str, Any]:
         captured_input.update(tool_input)
         return {
             "status": "success",
@@ -29520,8 +29520,8 @@ def test_advance_stock_flow_after_search_product_result_runs_store_lookup(
         }
 
     def _fake_try_build_template(tool_data_list: list[dict[str, Any]], assistant_text: str) -> dict[str, Any]:
-        assert tool_data_list[0]["tool"] == "get_store_list_tool"
-        assert tool_data_list[0]["args"] == {"limit": 10, "region_code": "강남"}
+        assert tool_data_list[0]["tool"] == "search_stores_tool"
+        assert tool_data_list[0]["args"] == {"limit": 10, "place_query": "강남"}
         return {
             "type": "data",
             "template": "location",
@@ -29540,8 +29540,8 @@ def test_advance_stock_flow_after_search_product_result_runs_store_lookup(
 
     monkeypatch.setattr(
         transaction_tools,
-        "get_store_list_tool",
-        SimpleNamespace(invoke=_fake_store_list_invoke),
+        "search_stores_tool",
+        SimpleNamespace(invoke=_fake_search_stores_invoke),
     )
     monkeypatch.setattr(chat_module.asyncio, "to_thread", _fake_to_thread)
     monkeypatch.setattr(template_mapper_module, "try_build_template", _fake_try_build_template)
@@ -29556,7 +29556,7 @@ def test_advance_stock_flow_after_search_product_result_runs_store_lookup(
             "region": "강남",
             "stock_check_mode": "inventory_only",
         },
-        allowed_tools=("get_store_inventory_tool", "get_store_list_tool", "search_product_tool"),
+        allowed_tools=("get_store_inventory_tool", "get_store_list_tool", "search_stores_tool", "search_product_tool"),
         forbidden_tools=("transaction_store_preview_tool", "quick_order_tool"),
         blocking_required_slots=("product",),
         context_state="active",
@@ -29595,11 +29595,11 @@ def test_advance_stock_flow_after_search_product_result_runs_store_lookup(
     )
 
     assert advancement is not None
-    assert captured_input == {"limit": 10, "region_code": "강남"}
+    assert captured_input == {"limit": 10, "place_query": "강남"}
     assert advancement["frame"].intent == "stock_store_search"
     assert advancement["turn_contract"].domain == "transaction"
     assert advancement["turn_contract"].response_decision["template"] == "location"
-    assert advancement["contract_required_tool"]["tool_name"] == "get_store_list_tool"
+    assert advancement["contract_required_tool"]["tool_name"] == "search_stores_tool"
     assert advancement["contract_required_tool"]["event"]["template"] == "location"
     assert advancement["contract_required_tool"]["event"]["tool_input_source"] == (
         "turn_contract_required_stock_inventory_store_lookup"
@@ -29759,7 +29759,7 @@ def test_promote_single_turn_stock_inventory_from_search_product_multi_item_pick
     assert promoted_frame.known_slots["goal_type"] == "store_with_stock"
     assert promoted_frame.known_slots["ord_qty"] == 4
     assert promoted_frame.known_slots["region"] == "강남"
-    assert promoted_tool_plan.preferred_tool == "get_store_list_tool"
+    assert promoted_tool_plan.preferred_tool == "search_stores_tool"
     assert promoted_tool_plan.metadata["stock_check_mode"] == "inventory_only"
     assert decision.metadata["response_shape_key"] == "stock_inventory_lookup"
     active_context = promoted_slots.availability_context["active_flow_context"]
@@ -29805,7 +29805,7 @@ def test_promote_single_turn_stock_inventory_from_search_product_multi_item_size
     promoted_slots, promoted_frame, promoted_tool_plan, decision = promoted
     assert promoted_slots.goods_no == "G000000310126"
     assert promoted_frame.known_slots["tire_size"] == "245/45R19"
-    assert promoted_tool_plan.preferred_tool == "get_store_list_tool"
+    assert promoted_tool_plan.preferred_tool == "search_stores_tool"
     assert decision.metadata["response_shape_key"] == "stock_inventory_lookup"
 
 

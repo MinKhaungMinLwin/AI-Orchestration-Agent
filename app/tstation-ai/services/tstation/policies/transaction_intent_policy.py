@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 import datetime
-from typing import Any
+from typing import Any, Mapping
 
 from services.tstation.policies.intent_frame import IntentFrame, PolicyDomain
 from services.tstation.policies.flow_controller import resolve_purchase_order_flow
@@ -90,6 +90,12 @@ _ORDER_HISTORY_REORDER_SOURCE_RE = re.compile(r"주문|구매|장착|교체|산|
 _ORDER_HISTORY_REORDER_ACTION_RE = re.compile(
     r"다시|재구매|같은|동일|또|구매|주문|장착|교체|살래|살게",
     re.IGNORECASE,
+)
+STOCK_INVENTORY_STORE_LOOKUP_ALLOWED_TOOLS = (
+    "get_store_inventory_tool",
+    "search_stores_tool",
+    "get_store_list_tool",
+    "get_logistics_inventory_tool",
 )
 _ORDER_HISTORY_LOOKUP_RE = re.compile(
     r"내\s*주문(?:\s*(?:내역|목록))?\s*(?:보여|조회|확인|알려)|"
@@ -1577,6 +1583,7 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
             "tire_size",
             "quantity",
             "region",
+            "place_query",
             "store_name",
             "requested_cal_day",
             "shop_id",
@@ -1625,17 +1632,18 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
         if frame.entities.get("today_requested"):
             args["today_only"] = True
         if stock_check_mode == "inventory_only" and frame.sub_intent == "stock":
-            preferred_tool = "get_store_list_tool" if frame.known_slots.get("shop_name") and not frame.known_slots.get("shop_id") else "get_store_inventory_tool"
+            boundary = stock_inventory_store_lookup_tool_boundary(frame)
             return ToolPlan(
-                allowed_tools=("get_store_inventory_tool", "get_store_list_tool", "get_logistics_inventory_tool"),
-                preferred_tool=preferred_tool,
-                tool_args_patch=args,
+                allowed_tools=boundary["allowed_tools"],
+                preferred_tool=boundary["preferred_tool"],
+                tool_args_patch={**args, **boundary["tool_args_patch"]},
                 forbidden_tools=("transaction_store_preview_tool", "get_store_schedule_tool", "preorder_with_null_required_fields"),
                 required_slots=action_required_slots,
                 metadata={
                     "response_intent": "stock_store_search",
                     "stock_check_mode": "inventory_only",
                     "action": action,
+                    "tool_boundary": "stock_inventory_store_lookup",
                 },
             )
         return ToolPlan(
@@ -2407,6 +2415,73 @@ def _slot_args(frame: IntentFrame, *keys: str) -> dict[str, Any]:
         if value not in (None, ""):
             args[key] = value
     return args
+
+
+def stock_inventory_store_lookup_tool_boundary(frame: IntentFrame) -> dict[str, Any]:
+    """Return the canonical stock inventory/store lookup tool boundary.
+
+    This is intentionally policy-only. Callers may consume the returned ToolPlan
+    values, but should not re-decide the allowed/preferred tool set in orchestration.
+    """
+
+    known_slots = frame.known_slots or {}
+    entities = frame.entities or {}
+    has_selected_store = bool(known_slots.get("shop_id"))
+    store_name = str(known_slots.get("shop_name") or known_slots.get("store_name") or "").strip()
+    region = str(known_slots.get("region") or "").strip()
+    place_query = str(known_slots.get("place_query") or "").strip()
+    nearby = bool(entities.get("nearby"))
+    if not place_query and nearby and region:
+        place_query = region
+
+    preferred_tool = "get_store_inventory_tool"
+    if not has_selected_store:
+        if place_query and not store_name:
+            preferred_tool = "search_stores_tool"
+        elif store_name or region:
+            preferred_tool = "get_store_list_tool"
+
+    tool_args_patch = stock_inventory_store_lookup_tool_input(
+        known_slots,
+        preferred_tool=preferred_tool,
+        nearby=nearby,
+    )
+    return {
+        "allowed_tools": STOCK_INVENTORY_STORE_LOOKUP_ALLOWED_TOOLS,
+        "preferred_tool": preferred_tool,
+        "tool_args_patch": tool_args_patch,
+    }
+
+
+def stock_inventory_store_lookup_tool_input(
+    known_slots: Mapping[str, Any],
+    *,
+    preferred_tool: str | None,
+    nearby: bool = False,
+) -> dict[str, Any]:
+    """Build canonical tool input for the stock inventory store-resolution step."""
+
+    store_name = str(known_slots.get("shop_name") or known_slots.get("store_name") or "").strip()
+    region = str(known_slots.get("region") or "").strip()
+    place_query = str(known_slots.get("place_query") or "").strip()
+    if not place_query and nearby and region:
+        place_query = region
+
+    preferred = str(preferred_tool or "").strip()
+    tool_input: dict[str, Any] = {"limit": 10}
+    if preferred == "search_stores_tool":
+        if place_query or region:
+            tool_input["place_query"] = place_query or region
+        elif store_name:
+            tool_input["store_nm"] = store_name
+        return tool_input if len(tool_input) > 1 else {}
+    if preferred == "get_store_list_tool":
+        if store_name:
+            tool_input["store_nm"] = store_name
+        if region:
+            tool_input["region_code"] = region
+        return tool_input if len(tool_input) > 1 else {}
+    return {}
 
 
 def _extract_store_name(text: str) -> str | None:

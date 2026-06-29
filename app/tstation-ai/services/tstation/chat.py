@@ -68,7 +68,11 @@ from services.tstation.policies.price_response_policy import (
     decide_price_response,
     plan_price_tools,
 )
-from services.tstation.policies.transaction_intent_policy import build_transaction_intent_frame, plan_transaction_tools
+from services.tstation.policies.transaction_intent_policy import (
+    build_transaction_intent_frame,
+    plan_transaction_tools,
+    stock_inventory_store_lookup_tool_input,
+)
 from services.tstation.policies.transaction_response_policy import decide_transaction_response
 from services.tstation.policies.support_response_policy import (
     build_support_faq_evidence_grounded_reply,
@@ -16865,6 +16869,7 @@ _FAST_PATH_TRANSACTION_RECOVERY_ALLOWED_TOOLS = frozenset({
     "get_store_schedule_tool",
     "get_store_inventory_tool",
     "get_store_list_tool",
+    "search_stores_tool",
 })
 _FAST_PATH_DISCOVERY_RECOVERY_ALLOWED_TOOLS = frozenset({
     "search_product_tool",
@@ -17313,7 +17318,9 @@ def _is_contract_required_stock_inventory_store_lookup(
         return False
     allowed_tools = {str(tool) for tool in tuple(turn_contract.allowed_tools or ()) if str(tool).strip()}
     forbidden_tools = {str(tool) for tool in tuple(turn_contract.forbidden_tools or ()) if str(tool).strip()}
-    if "get_store_list_tool" not in allowed_tools or "get_store_list_tool" in forbidden_tools:
+    if not ({"get_store_list_tool", "search_stores_tool"} & allowed_tools):
+        return False
+    if {"get_store_list_tool", "search_stores_tool"} <= forbidden_tools:
         return False
     return bool(
         known_slots.get("goods_no")
@@ -17328,6 +17335,7 @@ def _contract_required_stock_inventory_store_lookup_tool_input(
     turn_contract: TurnContract,
     *,
     merged_slots: ConversationSlots | None = None,
+    preferred_tool: str | None = None,
 ) -> dict[str, Any]:
     if not _is_contract_required_stock_inventory_store_lookup(turn_contract, merged_slots=merged_slots):
         return {}
@@ -17336,14 +17344,13 @@ def _contract_required_stock_inventory_store_lookup_tool_input(
         merged_slots,
         allowed_flow_types=frozenset({"stock"}),
     )
-    store_name = str(known_slots.get("shop_name") or known_slots.get("store_name") or "").strip()
-    region = str(known_slots.get("region") or known_slots.get("place_query") or "").strip()
-    tool_input: dict[str, Any] = {"limit": 10}
-    if store_name:
-        tool_input["store_nm"] = store_name
-    if region:
-        tool_input["region_code"] = region
-    return tool_input if len(tool_input) > 1 else {}
+    tool = str(preferred_tool or "").strip()
+    allowed_tools = {str(item) for item in tuple(turn_contract.allowed_tools or ()) if str(item).strip()}
+    if not tool or tool not in allowed_tools:
+        tool = "search_stores_tool" if "search_stores_tool" in allowed_tools and known_slots.get("place_query") else ""
+    if not tool or tool not in allowed_tools:
+        tool = "get_store_list_tool" if "get_store_list_tool" in allowed_tools else ""
+    return stock_inventory_store_lookup_tool_input(known_slots, preferred_tool=tool)
 
 
 def _contract_required_transaction_tool_input(
@@ -17383,13 +17390,11 @@ def _contract_required_transaction_tool_input(
             return inventory_input, "turn_contract_required_stock_inventory_selected_store", "매장 재고 확인 중..."
         return None
 
-    if (
-        preferred_tool in {"", "get_store_list_tool"}
-        and "get_store_list_tool" in {str(tool) for tool in tuple(turn_contract.allowed_tools or ())}
-    ):
+    if preferred_tool in {"", "get_store_list_tool", "search_stores_tool"}:
         stock_store_input = _contract_required_stock_inventory_store_lookup_tool_input(
             turn_contract,
             merged_slots=merged_slots,
+            preferred_tool=preferred_tool,
         )
         if stock_store_input:
             return stock_store_input, "turn_contract_required_stock_inventory_store_lookup", "매장 재고 조회 매장 확인 중..."
@@ -17770,7 +17775,7 @@ def _promote_single_turn_stock_inventory_from_search_product(
             "quantity": promotion_slot_state.get("ord_qty") or promotion_slot_state.get("quantity"),
             "ord_qty": promotion_slot_state.get("ord_qty") or promotion_slot_state.get("quantity"),
             "region": promotion_slot_state.get("region") or promotion_slot_state.get("place_query"),
-            "place_query": promotion_slot_state.get("place_query") or promotion_slot_state.get("region"),
+            "place_query": promotion_slot_state.get("place_query"),
             "shop_name": promotion_slot_state.get("shop_name") or promotion_slot_state.get("store_name"),
             "store_name": promotion_slot_state.get("shop_name") or promotion_slot_state.get("store_name"),
             "pending_intent": "stock",
@@ -17788,12 +17793,6 @@ def _promote_single_turn_stock_inventory_from_search_product(
         missing_slots=(),
     )
     transaction_tool_plan = plan_transaction_tools(transaction_frame)
-    if (
-        transaction_tool_plan.preferred_tool == "get_store_inventory_tool"
-        and not known_slots.get("shop_id")
-        and (known_slots.get("region") or known_slots.get("place_query") or known_slots.get("shop_name"))
-    ):
-        transaction_tool_plan = replace(transaction_tool_plan, preferred_tool="get_store_list_tool")
     transaction_response_decision = decide_transaction_response(
         intent=transaction_frame.intent,
         user_text=user_text,
@@ -18078,6 +18077,11 @@ async def recover_blocked_fast_path_to_contract_tool(
     elif domain == PolicyDomain.TRANSACTION.value:
         if len(allowed_tools) == 1:
             preferred_tool = allowed_tools[0]
+        if not preferred_tool:
+            planned_tool_plan = current_transaction_tool_plan.get()
+            planned_preferred_tool = str(getattr(planned_tool_plan, "preferred_tool", None) or "").strip()
+            if planned_preferred_tool in allowed_tools and planned_preferred_tool not in forbidden_tools:
+                preferred_tool = planned_preferred_tool
         contract_required_tool_input = _contract_required_transaction_tool_input(
             turn_contract=turn_contract,
             preferred_tool=preferred_tool,
@@ -18136,7 +18140,10 @@ async def recover_blocked_fast_path_to_contract_tool(
         if not isinstance(mapped_event, dict):
             return None
         mapped_event["source_domain"] = source_domain
-        if preferred_tool == "get_store_list_tool" and tool_input_source == "turn_contract_required_stock_inventory_store_lookup":
+        if (
+            preferred_tool in {"get_store_list_tool", "search_stores_tool"}
+            and tool_input_source == "turn_contract_required_stock_inventory_store_lookup"
+        ):
             _annotate_stock_inventory_store_lookup_event(
                 mapped_event,
                 turn_contract=turn_contract,
@@ -21064,7 +21071,7 @@ async def _advance_stock_flow_from_confirmed_state(
             "quantity": known_slots.get("ord_qty") or known_slots.get("quantity"),
             "ord_qty": known_slots.get("ord_qty") or known_slots.get("quantity"),
             "region": known_slots.get("region") or known_slots.get("place_query"),
-            "place_query": known_slots.get("place_query") or known_slots.get("region"),
+            "place_query": known_slots.get("place_query"),
             "shop_name": known_slots.get("shop_name") or known_slots.get("store_name"),
             "store_name": known_slots.get("shop_name") or known_slots.get("store_name"),
             "pending_intent": "stock",
@@ -21076,7 +21083,8 @@ async def _advance_stock_flow_from_confirmed_state(
     promoted_frame = IntentFrame(
         domain=PolicyDomain.TRANSACTION,
         intent="stock_store_search",
-        sub_intent="inventory_only",
+        sub_intent="stock",
+        entities={"stock_check_mode": "inventory_only"},
         known_slots=promoted_known_slots,
         source="flow_state_advancement",
     )
