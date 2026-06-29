@@ -793,6 +793,38 @@ def test_stock_inventory_region_store_lookup_keeps_store_list_preferred() -> Non
     assert plan.tool_args_patch["region_code"] == "강남"
 
 
+def test_stock_inventory_mode_overrides_non_stock_sub_intent_preview_boundary() -> None:
+    frame = build_transaction_intent_frame(
+        "네, 문정 지역으로 검색",
+        known_slots={
+            "goods_no": "G000000310126",
+            "tire_size": "245/45R19",
+            "ord_qty": 2,
+            "region": "문정",
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+            "stock_check_mode": "inventory_only",
+        },
+    )
+    frame = replace(
+        frame,
+        sub_intent="store_lookup",
+        known_slots={**dict(frame.known_slots), "stock_check_mode": "inventory_only"},
+        entities={**dict(frame.entities), "stock_check_mode": "inventory_only"},
+    )
+    plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "stock_store_search"
+    assert plan.metadata["tool_boundary"] == "stock_inventory_store_lookup"
+    assert plan.metadata["stock_check_mode"] == "inventory_only"
+    assert plan.preferred_tool == "get_store_list_tool"
+    assert "get_store_list_tool" in plan.allowed_tools
+    assert "search_stores_tool" in plan.allowed_tools
+    assert "transaction_store_preview_tool" in plan.forbidden_tools
+    assert "transaction_store_preview_tool" not in plan.allowed_tools
+    assert plan.tool_args_patch["region_code"] == "문정"
+
+
 def test_tc049_store_visit_schedule_for_unverified_store_keeps_store_schedule_intent() -> None:
     frame = build_transaction_intent_frame(
         "강남점에 방문해서 서비스 받고 싶은데, 예약 가능한 시간이 언제야?",

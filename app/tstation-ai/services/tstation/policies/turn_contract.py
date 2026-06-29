@@ -499,6 +499,8 @@ def build_turn_contract(
         _planner_intent(routing_result, cross_domain_plan),
         user_text=user_text,
     )
+    if planner_intent == "unknown":
+        planner_intent = None
     policy_intent = str(getattr(routing_result, "policy_intent", "") or "")
     if planner_intent == "payment_error_troubleshooting" and _is_payment_error_policy_overmatch(user_text):
         planner_intent = None

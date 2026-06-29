@@ -9,7 +9,7 @@ import threading
 import logging
 import re
 import time
-from typing import Annotated, Any, AsyncIterator, ClassVar, Iterator, Literal, Mapping
+from typing import Annotated, Any, AsyncIterator, ClassVar, Iterable, Iterator, Literal, Mapping
 from textwrap import dedent
 
 from pydantic import BaseModel, Field, WithJsonSchema, model_validator
@@ -18083,6 +18083,14 @@ async def _recover_contract_required_tool(
         user_text=user_text,
         merged_slots=merged_slots,
         blocked_fast_path_source=blocked_fast_path_source,
+    )
+
+
+def _has_recoverable_inventory_only_preview_violation(violations: Iterable[Mapping[str, Any]]) -> bool:
+    return any(
+        str(violation.get("type") or "") == "unexpected_preview_tool_for_inventory_only_stock"
+        for violation in violations
+        if isinstance(violation, Mapping)
     )
 
 
@@ -40300,30 +40308,60 @@ class TStationChatServiceV2:
                                 }),
                             )
                             if hard_violations and turn_contract is not None and not _parallel_qc:
-                                fallback_event = _build_faq_policy_source_grounded_fallback_event(
-                                    violations=hard_violations,
-                                    turn_contract=turn_contract,
-                                    structured_sources=structured_sources,
-                                ) or _build_recommendation_contract_fallback_event(
-                                    hard_violations,
-                                    turn_contract,
-                                ) or _build_turn_contract_fallback_event(
-                                    turn_contract=turn_contract,
-                                    user_text=user_query,
-                                    tool_data_list=tool_context_items,
-                                ) or build_response_policy_guard_event(turn_contract)
-                                _record_contract_gate_metadata(
-                                    fallback_event,
-                                    turn_contract=turn_contract,
-                                    gate_result="blocked",
-                                    gate_reason=f"qc_contract_violation:{len(hard_violations)}",
-                                    emitted_template=str(fallback_event.get("template") or ""),
-                                    source=str(
-                                        fallback_event.get("assistant_response_source")
-                                        or "code_turn_contract_qc_guard"
-                                    ),
-                                    blocked_template=str(last_template or ""),
-                                )
+                                qc_contract_recovery = None
+                                if _has_recoverable_inventory_only_preview_violation(hard_violations):
+                                    qc_contract_recovery = await _recover_contract_required_tool(
+                                        turn_contract=turn_contract,
+                                        user_text=user_query,
+                                        merged_slots=pending_slots or initial_slots,
+                                        blocked_fast_path_source="qc_inventory_only_preview_violation_recovery",
+                                    )
+                                if qc_contract_recovery is not None:
+                                    _record_code_tool_result(
+                                        str(qc_contract_recovery["tool_name"]),
+                                        dict(qc_contract_recovery["tool_input"]),
+                                        dict(qc_contract_recovery["tool_result"]),
+                                    )
+                                    fallback_event = qc_contract_recovery["event"]
+                                    recovered_tool = str(qc_contract_recovery.get("tool_name") or "")
+                                    called_tool_names.add(recovered_tool)
+                                    _record_contract_gate_metadata(
+                                        fallback_event,
+                                        turn_contract=turn_contract,
+                                        gate_result="recovered",
+                                        gate_reason="qc_contract_violation_recovered:inventory_only_store_lookup",
+                                        emitted_template=str(fallback_event.get("template") or ""),
+                                        source=str(
+                                            fallback_event.get("assistant_response_source")
+                                            or "code_turn_contract_qc_recovery"
+                                        ),
+                                        blocked_template=str(last_template or ""),
+                                    )
+                                else:
+                                    fallback_event = _build_faq_policy_source_grounded_fallback_event(
+                                        violations=hard_violations,
+                                        turn_contract=turn_contract,
+                                        structured_sources=structured_sources,
+                                    ) or _build_recommendation_contract_fallback_event(
+                                        hard_violations,
+                                        turn_contract,
+                                    ) or _build_turn_contract_fallback_event(
+                                        turn_contract=turn_contract,
+                                        user_text=user_query,
+                                        tool_data_list=tool_context_items,
+                                    ) or build_response_policy_guard_event(turn_contract)
+                                    _record_contract_gate_metadata(
+                                        fallback_event,
+                                        turn_contract=turn_contract,
+                                        gate_result="blocked",
+                                        gate_reason=f"qc_contract_violation:{len(hard_violations)}",
+                                        emitted_template=str(fallback_event.get("template") or ""),
+                                        source=str(
+                                            fallback_event.get("assistant_response_source")
+                                            or "code_turn_contract_qc_guard"
+                                        ),
+                                        blocked_template=str(last_template or ""),
+                                    )
                                 buffered_data_events = [fallback_event]
                                 last_template = "quickReply"
                                 last_template_source = "turn_contract_qc"

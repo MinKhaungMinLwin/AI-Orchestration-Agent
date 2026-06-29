@@ -33655,6 +33655,18 @@ def test_turn_contract_allows_purchase_bound_preview_datepick_even_with_inventor
     ) == []
 
 
+def test_qc_recovery_scope_only_allows_inventory_only_preview_violation() -> None:
+    assert chat_module._has_recoverable_inventory_only_preview_violation(
+        [{"type": "unexpected_preview_tool_for_inventory_only_stock", "severity": "error"}]
+    )
+    assert not chat_module._has_recoverable_inventory_only_preview_violation(
+        [{"type": "quick_order_reservation_progress_without_tool", "severity": "error"}]
+    )
+    assert not chat_module._has_recoverable_inventory_only_preview_violation(
+        [{"type": "forbidden_tool_for_contract", "severity": "error"}]
+    )
+
+
 def test_turn_contract_blocks_general_schedule_datepick_for_preview_stock_contract() -> None:
     contract = build_turn_contract(
         user_text="티스테이션 영등포점",

@@ -1595,6 +1595,25 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
             or frame.known_slots.get("inventory_mode")
             or ""
         ).strip()
+        if stock_check_mode == "inventory_only":
+            boundary = stock_inventory_store_lookup_tool_boundary(frame)
+            return ToolPlan(
+                allowed_tools=boundary["allowed_tools"],
+                preferred_tool=boundary["preferred_tool"],
+                tool_args_patch={**args, **boundary["tool_args_patch"]},
+                forbidden_tools=(
+                    "transaction_store_preview_tool",
+                    "get_store_schedule_tool",
+                    "preorder_with_null_required_fields",
+                ),
+                required_slots=action_required_slots,
+                metadata={
+                    "response_intent": "stock_store_search",
+                    "stock_check_mode": "inventory_only",
+                    "action": action,
+                    "tool_boundary": "stock_inventory_store_lookup",
+                },
+            )
         if (
             frame.known_slots.get("shop_id")
             and selected_store_schedule_mode
@@ -1602,7 +1621,7 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
             and frame.known_slots.get("goods_no")
             and frame.known_slots.get("tire_size")
             and (frame.known_slots.get("ord_qty") or frame.known_slots.get("quantity"))
-            and stock_check_mode in {"", "preview", "inventory_only"}
+            and stock_check_mode in {"", "preview"}
         ):
             return ToolPlan(
                 allowed_tools=("get_store_schedule_tool",),
@@ -1631,21 +1650,6 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
             )
         if frame.entities.get("today_requested"):
             args["today_only"] = True
-        if stock_check_mode == "inventory_only" and frame.sub_intent == "stock":
-            boundary = stock_inventory_store_lookup_tool_boundary(frame)
-            return ToolPlan(
-                allowed_tools=boundary["allowed_tools"],
-                preferred_tool=boundary["preferred_tool"],
-                tool_args_patch={**args, **boundary["tool_args_patch"]},
-                forbidden_tools=("transaction_store_preview_tool", "get_store_schedule_tool", "preorder_with_null_required_fields"),
-                required_slots=action_required_slots,
-                metadata={
-                    "response_intent": "stock_store_search",
-                    "stock_check_mode": "inventory_only",
-                    "action": action,
-                    "tool_boundary": "stock_inventory_store_lookup",
-                },
-            )
         return ToolPlan(
             allowed_tools=("transaction_store_preview_tool", "get_store_inventory_tool", "get_store_list_tool"),
             preferred_tool="transaction_store_preview_tool",
