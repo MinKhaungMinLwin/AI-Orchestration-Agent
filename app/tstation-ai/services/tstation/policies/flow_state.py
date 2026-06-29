@@ -102,6 +102,16 @@ def _normalize_product_aliases(values: dict[str, Any]) -> None:
     values.setdefault("pending_product_name", product_name)
 
 
+def _normalize_vehicle_tire_size(value: Any) -> str:
+    text = str(value or "").strip().upper()
+    if not text:
+        return ""
+    match = re.search(r"(\d{3})\s*/?\s*(\d{2})\s*R?\s*(\d{2})", text)
+    if not match:
+        return text
+    return f"{match.group(1)}/{match.group(2)}R{match.group(3)}"
+
+
 def _is_purchase_intent_group(values: Mapping[str, Any]) -> bool:
     return (
         str(values.get("pending_intent") or "").strip() == "order"
@@ -887,6 +897,49 @@ def recommendation_vehicle_selection_patch(
         for key in ("rcmd_type", "season_nm", "brand_cd", "allow_cross_brand_fill"):
             if source_patch.get(key) not in _EMPTY_VALUES:
                 patch.setdefault(key, source_patch[key])
+    return patch
+
+
+def purchase_context_vehicle_selection_patch(
+    *,
+    parent_context: Mapping[str, Any] | None,
+    selected_vehicle_slots: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Return a purchase-flow delta when a recommendation vehicle pick resolves the missing size."""
+
+    context = _non_empty_mapping(parent_context)
+    if not context:
+        return {}
+    pending_intent = str(context.get("pending_intent") or "").strip()
+    goal_type = str(context.get("goal_type") or "").strip()
+    if pending_intent in {"stock", "reservation"} or goal_type == "store_with_stock":
+        return {}
+
+    has_purchase_marker = pending_intent == "order" or goal_type == "place_order"
+    has_order_shape = bool(
+        context.get("ord_qty")
+        and (context.get("shop_id") or context.get("shop_name") or context.get("region"))
+    )
+    if not (has_purchase_marker or has_order_shape):
+        return {}
+
+    vehicle_slots = _non_empty_mapping(selected_vehicle_slots)
+    tire_size = _normalize_vehicle_tire_size(vehicle_slots.get("tire_size"))
+    tire_size_front = _normalize_vehicle_tire_size(vehicle_slots.get("tire_size_front"))
+    tire_size_rear = _normalize_vehicle_tire_size(vehicle_slots.get("tire_size_rear"))
+    if not tire_size and tire_size_front and tire_size_front == tire_size_rear:
+        tire_size = tire_size_front
+    if not tire_size:
+        return {}
+
+    patch: dict[str, Any] = {
+        "tire_size": tire_size,
+        "pending_intent": "order",
+        "goal_type": "place_order",
+    }
+    for key in ("ord_qty", "shop_id", "shop_name", "region"):
+        if context.get(key) not in _EMPTY_VALUES:
+            patch[key] = context[key]
     return patch
 
 

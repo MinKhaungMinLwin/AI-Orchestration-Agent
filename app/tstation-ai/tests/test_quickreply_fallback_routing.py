@@ -37,6 +37,7 @@ from services.tstation.policies.flow_state import (
     commit_flow_state,
     commit_purchase_flow_state,
     latest_router_evidence,
+    purchase_context_vehicle_selection_patch,
     recommendation_listcar_flow_delta,
     recommendation_vehicle_selection_patch,
     selected_store_slots_from_active_flow_context,
@@ -15822,6 +15823,65 @@ def test_recommendation_active_flow_selection_patch_promotes_refinement() -> Non
     assert patch["brand_cd"] == "HK"
     assert patch["allow_cross_brand_fill"] is False
     assert patch["recommendation_context"]["fitment_source"] == "selected_vehicle"
+
+
+def test_vehicle_selection_merges_size_into_parent_purchase_context() -> None:
+    patch = purchase_context_vehicle_selection_patch(
+        parent_context={
+            "ord_qty": 4,
+            "shop_name": "광교신도시점",
+            "source": "pre_policy_context:product_recommendation",
+            "context_state": "dormant",
+        },
+        selected_vehicle_slots={
+            "car_no": "61거1836",
+            "car_lnc_cd": "W036269",
+            "tire_size": "225/45R17",
+        },
+    )
+
+    assert patch == {
+        "tire_size": "225/45R17",
+        "pending_intent": "order",
+        "goal_type": "place_order",
+        "ord_qty": 4,
+        "shop_name": "광교신도시점",
+    }
+
+    result = commit_purchase_flow_state(
+        {
+            "ord_qty": 4,
+            "shop_name": "광교신도시점",
+            "source": "pre_policy_context:product_recommendation",
+            "context_state": "dormant",
+        },
+        patch,
+        source="active_recommendation_vehicle_selection:parent_purchase",
+    )
+    pending_context = result.state.to_pending_order_context()
+
+    assert pending_context["ord_qty"] == 4
+    assert pending_context["shop_name"] == "광교신도시점"
+    assert pending_context["tire_size"] == "225/45R17"
+    assert pending_context["pending_intent"] == "order"
+    assert pending_context["goal_type"] == "place_order"
+
+
+def test_vehicle_selection_does_not_create_purchase_context_for_plain_recommendation() -> None:
+    assert (
+        purchase_context_vehicle_selection_patch(
+            parent_context={},
+            selected_vehicle_slots={"car_no": "61거1836", "tire_size": "225/45R17"},
+        )
+        == {}
+    )
+    assert (
+        purchase_context_vehicle_selection_patch(
+            parent_context={"ord_qty": 4},
+            selected_vehicle_slots={"car_no": "61거1836", "tire_size": "225/45R17"},
+        )
+        == {}
+    )
 
 
 def test_discovery_policy_context_resumes_recommendation_active_flow_without_router_continue() -> None:

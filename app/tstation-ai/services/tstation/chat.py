@@ -89,6 +89,7 @@ from services.tstation.policies.flow_state import (
     commit_purchase_flow_state,
     is_purchase_flow_context,
     latest_router_evidence,
+    purchase_context_vehicle_selection_patch,
     recommendation_listcar_flow_delta,
     recommendation_vehicle_selection_patch,
     selected_store_slots_from_active_flow_context,
@@ -29137,6 +29138,38 @@ class TStationChatServiceV2:
                 "[FLOW_STATE] Resumed recommendation active flow from vehicle selection: %s",
                 active_flow_resume_patch,
             )
+            availability_context_for_parent_purchase = (
+                dict(merged_slots.availability_context)
+                if isinstance(getattr(merged_slots, "availability_context", None), dict)
+                else {}
+            )
+            existing_pending_order_context = (
+                availability_context_for_parent_purchase.get("pending_order_context")
+                if isinstance(availability_context_for_parent_purchase.get("pending_order_context"), Mapping)
+                else {}
+            )
+            purchase_vehicle_patch = purchase_context_vehicle_selection_patch(
+                parent_context=existing_pending_order_context,
+                selected_vehicle_slots=selected_vehicle_slots,
+            )
+            if purchase_vehicle_patch:
+                merged_pending_context, purchase_commit_metadata = _merge_pending_order_context(
+                    existing_pending_order_context,
+                    purchase_vehicle_patch,
+                    source="active_recommendation_vehicle_selection:parent_purchase",
+                )
+                availability_context_for_parent_purchase["pending_order_context"] = merged_pending_context
+                merged_slots = merged_slots.model_copy()
+                merged_slots.availability_context = availability_context_for_parent_purchase
+                vehicle_selection_trace_metadata.update({
+                    "parent_purchase_context_resumed": True,
+                    "parent_purchase_context_patch_keys": sorted(purchase_vehicle_patch),
+                    "parent_purchase_context_after": merged_pending_context,
+                })
+                logger.info(
+                    "[FLOW_STATE] Merged selected vehicle size into parent purchase context: %s",
+                    purchase_commit_metadata,
+                )
         discovery_tool_patch, discovery_response_decision = _build_discovery_policy_context(
             domains=domains,
             last_user_text=last_user_text,
