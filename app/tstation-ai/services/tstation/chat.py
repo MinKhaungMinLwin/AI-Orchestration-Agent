@@ -18357,7 +18357,9 @@ async def recover_blocked_fast_path_to_contract_tool(
         return None
     if tuple(getattr(turn_contract, "blocking_required_slots", ()) or ()):
         return None
-    if str(getattr(turn_contract, "context_state", "") or "") not in {"active", "resumed"}:
+    context_state = str(getattr(turn_contract, "context_state", "") or "")
+    current_turn_vehicle_recommendation = _is_vehicle_selection_recommendation_contract(turn_contract)
+    if context_state not in {"active", "resumed"} and not current_turn_vehicle_recommendation:
         return None
 
     contract_intent = str(turn_contract.intent or "")

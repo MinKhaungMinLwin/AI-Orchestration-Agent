@@ -16256,6 +16256,111 @@ def test_contract_required_vehicle_selection_recommendation_uses_current_turn_co
     assert candidate.tool_input_source == "turn_contract_required_recommendation"
 
 
+def test_dormant_vehicle_selection_recommendation_recovers_current_turn_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_input: dict[str, Any] = {}
+
+    def _fake_recommend_invoke(tool_input: dict[str, Any]) -> dict[str, Any]:
+        captured_input.update(tool_input)
+        return {
+            "status": "success",
+            "data": {
+                "items": [
+                    {
+                        "goods_no": "G000000000001",
+                        "goods_nm": "벤투스 S2 AS",
+                        "tire_size_1": "225/45R17",
+                    }
+                ]
+            },
+        }
+
+    def _fake_try_build_template(tool_data_list: list[dict[str, Any]], assistant_text: str) -> dict[str, Any]:
+        assert tool_data_list[0]["tool"] == "get_products_recommendations_tool"
+        return {
+            "type": "data",
+            "template": "product",
+            "data": {
+                "assistantResponse": assistant_text,
+                "products": [{"titleProductName": "벤투스 S2 AS", "titleTires": "225/45R17"}],
+                "metadata": [{"goodsId": "G000000000001"}],
+            },
+        }
+
+    async def _fake_to_thread(func: Any, *args: Any, **kwargs: Any) -> Any:
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(
+        discovery_tools,
+        "get_products_recommendations_tool",
+        SimpleNamespace(invoke=_fake_recommend_invoke),
+    )
+    monkeypatch.setattr(chat_module.asyncio, "to_thread", _fake_to_thread)
+    from services.tstation import template_mapper as template_mapper_module
+
+    monkeypatch.setattr(template_mapper_module, "try_build_template", _fake_try_build_template)
+
+    contract = TurnContract(
+        domain="discovery",
+        intent="product_recommendation",
+        sub_intent="general_recommendation",
+        known_slots={
+            "tire_size": "225/45R17",
+            "vehicle_type": "passenger",
+            "car_lnc_cd": "W036269",
+            "shop_name": "광교신도시점",
+            "availability_context": {
+                "pending_order_context": {"ord_qty": 4, "shop_name": "광교신도시점"},
+            },
+        },
+        allowed_tools=("get_products_recommendations_tool",),
+        forbidden_tools=(),
+        preferred_tool="get_products_recommendations_tool",
+        tool_args_patch={"tire_size": "225/45R17"},
+        blocking_required_slots=(),
+        context_state="dormant",
+        response_decision={"template": "quickReply", "metadata": {"response_shape_key": "discovery_summary"}},
+        contract_seed={
+            "ui_action": {
+                "action_type": "select_vehicle",
+                "expected_contract_intent": "vehicle_resolved_recommendation",
+                "slot_patch": {
+                    "tire_size": "225/45R17",
+                    "car_lnc_cd": "W036269",
+                    "vehicle_type": "passenger",
+                },
+            },
+        },
+    )
+
+    recovery = asyncio.run(
+        chat_module.recover_blocked_fast_path_to_contract_tool(
+            turn_contract=contract,
+            user_text="61거1836",
+            merged_slots=ConversationSlots(
+                tire_size="225/45R17",
+                car_lnc_cd="W036269",
+                vehicle_type="passenger",
+            ),
+            blocked_fast_path_source="code_history_selected_vehicle_prompt",
+        )
+    )
+
+    assert recovery is not None
+    assert recovery["tool_name"] == "get_products_recommendations_tool"
+    assert captured_input == {
+        "rcmd_type": "tstation",
+        "tire_size": "225/45R17",
+        "car_lnc_cd": "W036269",
+        "vehicle_type": "passenger",
+    }
+    assert recovery["event"]["template"] == "product"
+    metadata = recovery["event"]["data"]["contractMetadata"]
+    assert metadata["blocked_fast_path_source"] == "code_history_selected_vehicle_prompt"
+    assert metadata["recovered_tool"] == "get_products_recommendations_tool"
+
+
 def test_contract_required_vehicle_selection_recommendation_ignores_plain_vehicle_lookup() -> None:
     contract = TurnContract(
         domain="discovery",
