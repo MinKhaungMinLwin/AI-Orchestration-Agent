@@ -1979,6 +1979,8 @@ def _should_emit_pre_router_store_service_guard(
         return False
     if _STORE_SERVICE_ROUTE_EXCLUSION_RE.search(user_text or ""):
         return False
+    if _NIGHT_STORE_ATTRIBUTE_LOOKUP_RE.search(user_text or ""):
+        return False
     return bool(str(store_context_name or "").strip())
 
 
@@ -11735,6 +11737,20 @@ def _store_attribute_operating_hours_text(row: Mapping[str, Any]) -> str:
     return ", ".join(parts)
 
 
+def _store_time_to_minutes(raw: Any) -> int | None:
+    normalized = _normalize_store_time(str(raw or "").strip())
+    if not normalized:
+        return None
+    match = re.fullmatch(r"(\d{1,2}):(\d{2})", normalized)
+    if not match:
+        return None
+    hour = int(match.group(1))
+    minute = int(match.group(2))
+    if hour > 23 or minute > 59:
+        return None
+    return hour * 60 + minute
+
+
 def _store_attribute_assessment_text(
     *,
     store_label: str,
@@ -11755,6 +11771,30 @@ def _store_attribute_assessment_text(
     attr_type = str(attribute_type or "")
     level = str(verification_level or "")
     codes = _store_attribute_svc_codes(row)
+    night_attribute = _NIGHT_STORE_ATTRIBUTE_LOOKUP_RE.search(attr) or (
+        attr_type == "operating_condition" and _NIGHT_STORE_TIME_ANCHOR_RE.search(attr)
+    )
+    if night_attribute:
+        end_time = _normalize_store_time(str(row.get("shop_biz_end_time") or "").strip())
+        end_minutes = _store_time_to_minutes(end_time)
+        if end_minutes is None:
+            return (
+                f"{store_label}은 조회된 매장 정보에 영업 종료 시간이 없어 야간정비 가능 여부를 판단하기 어려워요.",
+                "not_checked",
+            )
+        if end_minutes > 19 * 60:
+            return (
+                f"{store_label}은 조회된 영업시간 기준으로 {end_time}까지 운영되는걸로 확인됩니다. "
+                "19시 이후까지 운영되어 야간정비 가능성이 있어요. "
+                "다만 실제 정비 접수 가능 여부는 당일 예약/작업 상황에 따라 달라질 수 있어 방문 전 매장 확인을 권장드려요.",
+                "matched",
+            )
+        return (
+            f"{store_label}은 조회된 영업시간 기준으로 {end_time}까지 운영되는걸로 확인됩니다. "
+            "19시 이후 운영 매장으로 보기 어려워요.",
+            "not_matched",
+        )
+
     for pattern, expected_codes, label in _STORE_ATTRIBUTE_SVC_PATTERNS:
         if not pattern.search(attr):
             continue
@@ -11771,15 +11811,6 @@ def _store_attribute_assessment_text(
             f"{store_label}의 {label} 항목은 조회된 매장 서비스 정보에서 확인되지 않아요.{visible} "
             "미노출 서비스나 현장 운영 조건은 다를 수 있으니 방문 전 매장에 직접 확인해 주세요.",
             "not_matched",
-        )
-
-    if re.search(r"야간|퇴근\s*후|저녁|늦게", attr, re.IGNORECASE):
-        hours = _store_attribute_operating_hours_text(row)
-        hours_sentence = f" 조회된 영업시간은 {hours}입니다." if hours else ""
-        return (
-            f"{store_label}의 {attr}는 조회된 매장 정보에 별도 서비스 항목으로 확인되지 않아요.{hours_sentence} "
-            "영업시간 내 접수 가능 여부도 당일 작업 상황에 따라 달라질 수 있으니 방문 전 매장에 직접 확인해 주세요.",
-            "contact_required",
         )
 
     if level == "tool_verifiable" or re.search(r"주소|전화|전화번호|연락처|영업\s*시간|운영\s*시간|휴무|위치", attr, re.IGNORECASE):
@@ -18811,6 +18842,12 @@ _STORE_SERVICE_ROUTE_EXCLUSION_RE = re.compile(
     r"(?:추천|찾아|검색|보여|알려).{0,16}(?:매장|지점|곳)",
     re.IGNORECASE,
 )
+_NIGHT_STORE_ATTRIBUTE_LOOKUP_RE = re.compile(
+    r"(?=.*(?:야간|심야|퇴근\s*후|퇴근후|저녁|늦게))"
+    r"(?=.*(?:정비|작업|서비스|문\s*여|문여|영업\s*하|영업하|운영\s*하|운영하))",
+    re.IGNORECASE,
+)
+_NIGHT_STORE_TIME_ANCHOR_RE = re.compile(r"야간|심야|퇴근\s*후|퇴근후|저녁|늦게", re.IGNORECASE)
 _EV_BLOCKING_TRANSACTION_INTENTS = {"stock", "order", "reservation"}
 _SIZE_ONLY_RE = re.compile(r"^\s*\d{3}\s*[/\s]?\s*\d{2}\s*(?:R|\s|/)?\s*\d{2}\s*$", re.IGNORECASE)
 _VEHICLE_PLATE_ONLY_RE = re.compile(r"^\s*\d{2,3}[가-힣]\d{4}\s*$")

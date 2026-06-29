@@ -143,7 +143,14 @@ _UNVERIFIABLE_STORE_PREFERENCE_RULES: tuple[tuple[re.Pattern[str], str], ...] = 
         "튜닝/부가 서비스 운영 여부",
     ),
     (re.compile(r"리프트|대형\s*리프트|차량용\s*리프트", re.IGNORECASE), "리프트 보유 여부"),
-    (re.compile(r"야간\s*(?:정비|서비스|작업)|야간정비", re.IGNORECASE), "야간정비 운영 여부"),
+    (
+        re.compile(
+            r"(?=.*(?:야간|심야|퇴근\s*후|퇴근후|저녁|늦게))"
+            r"(?=.*(?:정비|작업|서비스|문\s*여|문여|영업\s*하|영업하|운영\s*하|운영하))",
+            re.IGNORECASE,
+        ),
+        "야간정비 운영 여부",
+    ),
     (re.compile(r"질소\s*충전|질소", re.IGNORECASE), "질소 충전 여부"),
     (re.compile(r"대기\s*공간|대기실|라운지|휴게실|대기\s*환경", re.IGNORECASE), "대기 공간"),
     (re.compile(r"워셔액\s*(?:무료|제공|보충)?|워셔액", re.IGNORECASE), "워셔액 무료 제공"),
@@ -169,20 +176,21 @@ _UNVERIFIABLE_STORE_PREFERENCE_RULES: tuple[tuple[re.Pattern[str], str], ...] = 
 _STORE_SERVICE_AVAILABILITY_SIGNAL_RE = re.compile(
     r"보관\s*서비스|타이어\s*보관|윈터\s*타이어\s*보관|겨울\s*타이어\s*보관|"
     r"보관\s*(?:돼|되|가능|되나요|가능해)|질소\s*충전|질소|"
-    r"야간\s*(?:정비|서비스|작업)|야간정비|얼라인먼트.{0,12}(?:잘|무료|가능)",
+    r"(?=.*(?:야간|심야|퇴근\s*후|퇴근후|저녁|늦게))(?=.*(?:정비|작업|서비스|문\s*여|문여|영업\s*하|영업하|운영\s*하|운영하))|"
+    r"얼라인먼트.{0,12}(?:잘|무료|가능)",
     re.IGNORECASE,
 )
 _STORE_NAME_RE = re.compile(r"((?:티스테이션\s*)?[가-힣A-Za-z0-9]+(?:점|매장))")
 _STORE_MENTION_CONTEXT_RE = re.compile(
     r"티스테이션|더타이어샵|매장|지점|장착점|주소|전화|연락처|영업|운영|휴무|"
-    r"예약|재고|입고|장착|교체|작업|확인|구매|주문|질소|보관|야간\s*(?:정비|서비스|작업)|야간정비|"
+    r"예약|재고|입고|장착|교체|작업|확인|구매|주문|질소|보관|야간|심야|퇴근\s*후|퇴근후|저녁|늦게|"
     r"얼라인먼트|휠\s*얼라이먼트|리프트|공휴일|휴일|일요일|토요일|문\s*열",
     re.IGNORECASE,
 )
 _BARE_STORE_NAME_TURN_RE = re.compile(r"^\s*(?:티스테이션\s*)?[가-힣A-Za-z0-9]+(?:점|매장)\s*$", re.IGNORECASE)
 _ATTRIBUTE_QUESTION_RE = re.compile(
     r"가능\s*해|가능한가|가능(?:하|한)|가능(?:\s*[?!.]|$)|돼|되(?:나|나요|니|냐)?|있어|있나|있나요|"
-    r"해\s*줘|해줘|운영\s*해|운영해|잘\s*(?:봐|보|하)",
+    r"해\s*줘|해줘|운영\s*해|운영해|영업\s*하|영업하|문\s*여|문여|잘\s*(?:봐|보|하)",
     re.IGNORECASE,
 )
 _ADJACENT_NON_ATTRIBUTE_RE = re.compile(
@@ -196,7 +204,7 @@ _ADJACENT_NON_ATTRIBUTE_RE = re.compile(
 _ATTRIBUTE_SUFFIX_RE = re.compile(
     r"(?:도|은|는|이|가|을|를)?\s*"
     r"(?:가능\s*해|가능한가|가능(?:하|한)|가능(?:\s*[?!.]|$)|돼|되(?:나|나요|니|냐)?|있어|있나|있나요|"
-    r"해\s*줘|해줘|운영\s*해|운영해|잘\s*(?:봐|보|하)).*$",
+    r"해\s*줘|해줘|운영\s*해|운영해|영업\s*하|영업하|문\s*여|문여|잘\s*(?:봐|보|하)).*$",
     re.IGNORECASE,
 )
 _ATTRIBUTE_STOPWORDS_RE = re.compile(
@@ -212,7 +220,7 @@ _SERVICE_RESERVATION_TAIL_RE = re.compile(
 _TOOL_VERIFIABLE_ATTRIBUTE_RE = re.compile(r"주소|전화|전화번호|연락처|영업\s*시간|운영\s*시간|휴무|위치", re.IGNORECASE)
 _EQUIPMENT_ATTRIBUTE_RE = re.compile(r"리프트|대형\s*리프트|차량용\s*리프트|장비|설비", re.IGNORECASE)
 _OPERATING_CONDITION_ATTRIBUTE_RE = re.compile(
-    r"야간|퇴근\s*후|저녁|늦게|주말|공휴일|휴일|일요일|토요일|운영|영업|문\s*열",
+    r"야간|심야|퇴근\s*후|퇴근후|저녁|늦게|주말|공휴일|휴일|일요일|토요일|운영|영업|문\s*열|문\s*여",
     re.IGNORECASE,
 )
 _SUBJECTIVE_QUALITY_ATTRIBUTE_RE = re.compile(r"잘\s*(?:봐|보|하)|숙련도|실력|정확도|꼼꼼|친절|평가|평점", re.IGNORECASE)
@@ -224,7 +232,7 @@ _WARRANTY_OR_COMPLAINT_CONTEXT_RE = re.compile(
 _STORE_TARGET_ACTION_RE = re.compile(
     r"영업|운영|휴무|문\s*열|주소|위치|전화|연락처|정보|상세|사진|외관|내부|리뷰|후기|"
     r"평점|평가|예약|재고|장착|교체|작업|가능|돼|되나|있어|보관|질소|얼라인먼트|리프트|"
-    r"야간\s*(?:정비|서비스|작업)|야간정비|대기실|대기\s*공간",
+    r"야간|심야|퇴근\s*후|퇴근후|저녁|늦게|문\s*여|문여|대기실|대기\s*공간",
     re.IGNORECASE,
 )
 _STORE_CONTEXT_MARKER_RE = re.compile(

@@ -25255,8 +25255,8 @@ def test_store_attribute_inquiry_with_store_uses_store_info_lookup_contract() ->
     assert "claim_unverified_store_service_available" in response_decision.forbidden_behaviors
     assert event is not None
     assistant = event["data"]["assistantResponse"]
-    assert "야간정비는 조회된 매장 정보에 별도 서비스 항목으로 확인되지 않아요" in assistant
-    assert "조회된 영업시간은 평일 09:00~19:00, 토요일 09:00~16:00입니다" in assistant
+    assert "정자점은 조회된 영업시간 기준으로 19:00까지 운영되는걸로 확인됩니다" in assistant
+    assert "19시 이후 운영 매장으로 보기 어려워요" in assistant
     assert "확인된 매장 정보" in assistant
     assert "매장명: 티스테이션 정자점" in assistant
     assert "전화: 031-123-4567" in assistant
@@ -25265,10 +25265,98 @@ def test_store_attribute_inquiry_with_store_uses_store_info_lookup_contract() ->
     assert "가능합니다" not in assistant
     assert event["assistant_response_source"] == "code_store_attribute_inquiry_with_store_info"
     assert event["data"]["metadata"]["attributeText"] == "야간정비"
-    assert event["data"]["metadata"]["attributeAssessmentStatus"] == "contact_required"
+    assert event["data"]["metadata"]["attributeAssessmentStatus"] == "not_matched"
     assert event["data"]["metadata"]["store_info_lookup"] is True
     assert "datepick" not in json.dumps(event, ensure_ascii=False)
     assert "preOrder" not in json.dumps(event, ensure_ascii=False)
+
+
+@pytest.mark.parametrize(
+    ("end_time", "expected", "status"),
+    [
+        ("2000", "20:00까지 운영되는걸로 확인됩니다", "matched"),
+        ("1900", "19:00까지 운영되는걸로 확인됩니다", "not_matched"),
+        ("1800", "18:00까지 운영되는걸로 확인됩니다", "not_matched"),
+        ("", "영업 종료 시간이 없어 야간정비 가능 여부를 판단하기 어려워요", "not_checked"),
+    ],
+)
+def test_store_attribute_night_maintenance_uses_business_end_time(
+    end_time: str,
+    expected: str,
+    status: str,
+) -> None:
+    event = _store_attribute_inquiry_event(
+        "야간정비도 가능한가요? 티스테이션 정자점",
+        store_name="정자점",
+        attribute_text="야간정비",
+        attribute_type="operating_condition",
+        verification_level="store_contact_required",
+        store_info_entries=[
+            {
+                "tool": "get_store_detail_tool",
+                "data": {
+                    "status": "success",
+                    "data": {
+                        "shop_seq": "F10001",
+                        "shop_nm": "티스테이션 정자점",
+                        "road_addr_base": "경기도 성남시 분당구 정자일로 1",
+                        "tel_no": "0311234567",
+                        "shop_biz_strt_time": "0900",
+                        "shop_biz_end_time": end_time,
+                    },
+                },
+            }
+        ],
+    )
+
+    assert event is not None
+    assistant = event["data"]["assistantResponse"]
+    assert expected in assistant
+    if status == "matched":
+        assert "19시 이후까지 운영되어 야간정비 가능성이 있어요" in assistant
+    if status == "not_matched":
+        assert "19시 이후 운영 매장으로 보기 어려워요" in assistant
+    assert "확인된 매장 정보" in assistant
+    assert "매장명: 티스테이션 정자점" in assistant
+    assert "전화: 031-123-4567" in assistant
+    assert "서비스 항목" not in assistant
+    assert event["data"]["metadata"]["attributeAssessmentStatus"] == status
+    assert event["data"]["metadata"]["store_info_lookup"] is True
+
+
+def test_store_attribute_night_business_hours_survives_action_suffix_stripping() -> None:
+    inquiry = extract_store_attribute_inquiry("티스테이션 정자점 저녁 늦게 문여는지 알려줘")
+    event = _store_attribute_inquiry_event(
+        "티스테이션 정자점 저녁 늦게 문여는지 알려줘",
+        store_name="정자점",
+        attribute_text=inquiry.attribute_text if inquiry is not None else "",
+        attribute_type=inquiry.attribute_type if inquiry is not None else "",
+        verification_level=inquiry.verification_level if inquiry is not None else "",
+        store_info_entries=[
+            {
+                "tool": "get_store_detail_tool",
+                "data": {
+                    "status": "success",
+                    "data": {
+                        "shop_seq": "F10001",
+                        "shop_nm": "티스테이션 정자점",
+                        "shop_biz_strt_time": "0900",
+                        "shop_biz_end_time": "2000",
+                    },
+                },
+            }
+        ],
+    )
+
+    assert inquiry is not None
+    assert inquiry.attribute_type == "operating_condition"
+    assert event is not None
+    assistant = event["data"]["assistantResponse"]
+    assert "20:00까지 운영되는걸로 확인됩니다" in assistant
+    assert "19시 이후까지 운영되어 야간정비 가능성이 있어요" in assistant
+    assert "확인된 매장 정보" in assistant
+    assert "매장명: 티스테이션 정자점" in assistant
+    assert event["data"]["metadata"]["attributeAssessmentStatus"] == "matched"
 
 
 def test_store_attribute_inquiry_preserves_uncataloged_attribute_text() -> None:
@@ -26136,6 +26224,28 @@ def test_pre_router_store_service_guard_keeps_specific_store_attribute_flow() ->
         decision=decision,
         store_context_name="광교신도시점",
     ) is True
+
+
+@pytest.mark.parametrize(
+    "user_text",
+    [
+        "티스테이션 정자점 야간정비 가능해?",
+        "티스테이션 정자점 심야 정비 가능해?",
+        "티스테이션 정자점 퇴근후 작업 가능해?",
+        "티스테이션 정자점 저녁 늦게 문여는지 알려줘",
+        "티스테이션 정자점 늦게까지 영업하는 매장이야?",
+    ],
+)
+def test_pre_router_store_service_guard_skips_night_attribute_lookup(user_text: str) -> None:
+    decision = decide_store_service_gate(user_text=user_text)
+
+    assert decision.intent == "store_attribute_inquiry"
+    assert _should_emit_pre_router_store_service_guard(
+        user_text=user_text,
+        decision=decision,
+        store_context_name="정자점",
+    ) is False
+    assert extract_store_attribute_inquiry(user_text) is not None
 
 
 def test_region_tire_storage_service_search_uses_store_search_contract() -> None:
