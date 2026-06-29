@@ -118,6 +118,7 @@ from services.tstation.chat import (
     _build_multi_product_detail_quickreply_event,
     _build_product_comparison_event,
     _build_product_comparison_event_from_search_results,
+    _product_comparison_search_tire_size,
     _product_compare_target_prompt_event,
     _multi_product_intent_clarification_event,
     _build_product_size_list_event_from_search_results,
@@ -4940,6 +4941,22 @@ def test_explicit_two_product_compare_with_korean_aliases_remains_comparison() -
     )
     assert event is not None
     assert event["assistant_response_source"] == "code_product_compare_resolver"
+
+
+def test_product_comparison_search_ignores_stale_slot_size_without_current_size() -> None:
+    user_text = "키너지 ex랑 옵티모랑 비교해줘"
+    frame = chat_module.build_discovery_intent_frame(user_text)
+    stale_slots = SimpleNamespace(tire_size="235/55R19")
+
+    assert _product_comparison_search_tire_size(user_text, frame, stale_slots) is None
+
+
+def test_product_comparison_search_keeps_current_turn_size() -> None:
+    user_text = "키너지 ex랑 옵티모랑 215/65R15 기준으로 비교해줘"
+    frame = chat_module.build_discovery_intent_frame(user_text)
+    stale_slots = SimpleNamespace(tire_size="235/55R19")
+
+    assert _product_comparison_search_tire_size(user_text, frame, stale_slots) == "215/65R15"
 
 
 def test_overlapping_ion_alias_single_input_stays_single_product() -> None:

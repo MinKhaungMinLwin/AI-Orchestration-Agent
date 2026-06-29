@@ -14830,6 +14830,20 @@ def _build_product_comparison_event_from_search_results(
     return _build_product_comparison_event(user_text, product_rows)
 
 
+def _product_comparison_search_tire_size(user_text: str, frame: Any, slots: Any | None = None) -> str | None:
+    """Use only current-turn size for comparison lookup.
+
+    Product comparison is valid without a tire size. Stale order/recommendation
+    slots may narrow one target out of existence and create false "not found"
+    fallbacks.
+    """
+    _ = slots
+    tire_size = frame.entities.get("tire_size")
+    if isinstance(tire_size, str) and tire_size.strip():
+        return tire_size.strip()
+    return normalize_tire_size(user_text)
+
+
 def _first_product_row_from_search_result(tool_result: dict) -> dict | None:
     data = _unwrap_tool_data(tool_result)
     rows = data.get("items") if isinstance(data, dict) else None
@@ -31585,7 +31599,7 @@ class TStationChatServiceV2:
                 logger.info("[CODE_FAST_PATH_GATE] blocked product_comparison reason=%s", gate_reason)
                 return None
             frame = build_discovery_intent_frame(comparison_query)
-            tire_size = frame.entities.get("tire_size") or getattr(initial_slots, "tire_size", None)
+            tire_size = _product_comparison_search_tire_size(comparison_query, frame, initial_slots)
 
             emitted_events: list[dict] = []
             from services.tstation.agents.b_discovery_agent.tools import (
