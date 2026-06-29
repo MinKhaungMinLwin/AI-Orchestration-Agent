@@ -15081,6 +15081,31 @@ def test_previous_product_candidate_with_transaction_anchor_keeps_transaction_fl
     assert should_force is False
 
 
+def test_previous_product_candidate_with_pending_order_context_keeps_transaction_flow() -> None:
+    should_force = _should_force_previous_product_candidate_description(
+        goods_no_resolved=True,
+        selection_source="previous_product_candidate",
+        user_text="키너지 EX 205/60R16",
+        regex_slots=ConversationSlots.extract_from_user_text("키너지 EX 205/60R16"),
+        slots=ConversationSlots(
+            goods_no="G000000319595",
+            tire_size="205/60R16",
+            availability_context={
+                "pending_order_context": {
+                    "product_name": "키너지 EX",
+                    "ord_qty": 2,
+                    "shop_name": "판교점",
+                    "pending_intent": "order",
+                    "goal_type": "place_order",
+                }
+            },
+        ),
+        resolved_size_stock_continuation=False,
+    )
+
+    assert should_force is False
+
+
 def test_apply_history_location_selection_state_promotes_preview_store_context() -> None:
     slots = ConversationSlots(shop_id=None, order_context=None, pending_intent=None, goal_type=None)
     latest_location_tmpl = {

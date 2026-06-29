@@ -7096,10 +7096,33 @@ def _has_transaction_anchor_for_previous_product_selection(
 def _has_active_transaction_context_for_previous_product_selection(slots: ConversationSlots) -> bool:
     pending_intent = str(getattr(slots, "pending_intent", None) or "").strip()
     goal_type = str(getattr(slots, "goal_type", None) or "").strip()
-    return (
+    if (
         pending_intent in {"order", "stock", "price"}
         or goal_type in {"place_order", "store_with_stock", "price_inquiry", "coupon_discount_amount", "product_coupon_discount_amount"}
-    )
+    ):
+        return True
+
+    availability_context = getattr(slots, "availability_context", None)
+    if not isinstance(availability_context, Mapping):
+        return False
+    for context_key in (
+        "pending_order_context",
+        "dormant_purchase_context",
+        "dormant_stock_context",
+        "dormant_transaction_context",
+    ):
+        context = availability_context.get(context_key)
+        if not isinstance(context, Mapping):
+            continue
+        context_pending_intent = str(context.get("pending_intent") or "").strip()
+        context_goal_type = str(context.get("goal_type") or "").strip()
+        if (
+            context_pending_intent in {"order", "stock", "price"}
+            or context_goal_type
+            in {"place_order", "store_with_stock", "price_inquiry", "coupon_discount_amount", "product_coupon_discount_amount"}
+        ):
+            return True
+    return False
 
 
 def _should_force_previous_product_candidate_description(
