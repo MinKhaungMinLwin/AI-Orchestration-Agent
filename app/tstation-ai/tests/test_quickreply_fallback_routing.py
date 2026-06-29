@@ -16598,6 +16598,58 @@ def test_apply_history_product_selection_state_resolves_latest_product_template_
     assert state.trace_metadata["selected_entity_id"] == "G000000309783"
 
 
+def test_apply_history_product_selection_state_uses_pending_order_context_without_flat_intent() -> None:
+    slots = ConversationSlots(
+        goods_no=None,
+        tire_size="225/45R17",
+        ord_qty=4,
+        shop_name="광교신도시점",
+        availability_context={
+            "pending_order_context": {
+                "ord_qty": 4,
+                "shop_name": "광교신도시점",
+                "tire_size": "225/45R17",
+            }
+        },
+    )
+    latest_product_tmpl = {
+        "products": [
+            {"titleProductName": "벤투스 S2 AS", "titleTires": "225/45R17", "price": 101400},
+            {"titleProductName": "벤투스 에보", "titleTires": "225/45R17", "price": 149200},
+        ],
+        "metadata": [
+            {"goodsId": "G000000309783"},
+            {"goodsId": "G000000320136"},
+        ],
+    }
+
+    state = apply_history_product_selection_state(
+        last_user_text="벤투스 S2 AS 225/45R17",
+        prev_tool_data=[],
+        merged_slots=slots,
+        latest_product_tmpl=latest_product_tmpl,
+        resolve_goods_no_from_selection_fn=lambda user_text, tool_data, current_tire_size: resolve_goods_no_from_selection(
+            user_text,
+            tool_data,
+            current_tire_size=current_tire_size,
+        ),
+    )
+
+    assert state.goods_no_resolved is True
+    assert state.updated_slots.goods_no == "G000000309783"
+    assert state.updated_slots.pending_intent == "order"
+    assert state.updated_slots.goal_type == "place_order"
+    assert state.action_context is not None
+    assert state.action_context.action_type == "select_product"
+    assert state.action_context.expected_contract_intent == "quick_order_reservation"
+    assert state.action_context.expected_behavior == "slot_fill"
+    assert state.action_context.slot_patch["ord_qty"] == 4
+    assert state.action_context.slot_patch["shop_name"] == "광교신도시점"
+    assert state.action_context.slot_patch["pending_intent"] == "order"
+    assert state.action_context.slot_patch["goal_type"] == "place_order"
+    assert state.rewritten_user_text == "벤투스 S2 AS 225/45R17 4개 광교신도시점에서 구매"
+
+
 def test_apply_history_product_selection_state_resolves_ordinal_only_against_product_candidates() -> None:
     slots = ConversationSlots(goods_no=None, tire_size="225/45R17")
     latest_product_tmpl = {

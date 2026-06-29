@@ -1479,12 +1479,51 @@ def _interactive_flow_contract_intent_from_slots(
     pending_intent = str(slot_values.get("pending_intent") or "").strip()
     goal_type = str(slot_values.get("goal_type") or "").strip()
     availability_intent = str(slot_values.get("availability_intent") or "").strip()
+    availability_context = (
+        slot_values.get("availability_context") if isinstance(slot_values.get("availability_context"), Mapping) else {}
+    )
+    active_flow_context = (
+        availability_context.get("active_flow_context")
+        if isinstance(availability_context.get("active_flow_context"), Mapping)
+        else {}
+    )
+    pending_order_context = (
+        availability_context.get("pending_order_context")
+        if isinstance(availability_context.get("pending_order_context"), Mapping)
+        else {}
+    )
+    dormant_purchase_context = (
+        availability_context.get("dormant_purchase_context")
+        if isinstance(availability_context.get("dormant_purchase_context"), Mapping)
+        else {}
+    )
+    dormant_stock_context = (
+        availability_context.get("dormant_stock_context")
+        if isinstance(availability_context.get("dormant_stock_context"), Mapping)
+        else {}
+    )
+    dormant_transaction_context = (
+        availability_context.get("dormant_transaction_context")
+        if isinstance(availability_context.get("dormant_transaction_context"), Mapping)
+        else {}
+    )
 
     if pending_intent in {"order", "cart"} or goal_type in {"place_order", "add_to_cart"}:
+        return _QUICK_ORDER_RESERVATION_INTENT
+    if str(active_flow_context.get("flow_type") or "").strip() in {"purchase", "cart"}:
+        return _QUICK_ORDER_RESERVATION_INTENT
+    if pending_order_context or dormant_purchase_context:
         return _QUICK_ORDER_RESERVATION_INTENT
     if availability_intent == "today_install":
         return _STOCK_STORE_SEARCH_INTENT
     if pending_intent == "stock" or goal_type == "store_with_stock":
+        return _STOCK_STORE_SEARCH_INTENT
+    if dormant_stock_context:
+        return _STOCK_STORE_SEARCH_INTENT
+    if (
+        str(dormant_transaction_context.get("pending_intent") or "").strip() == "stock"
+        or str(dormant_transaction_context.get("goal_type") or "").strip() == "store_with_stock"
+    ):
         return _STOCK_STORE_SEARCH_INTENT
     if pending_intent == "reservation":
         return _QUICK_ORDER_RESERVATION_INTENT
@@ -2209,10 +2248,39 @@ def apply_history_product_selection_state(
             "pending_intent": getattr(merged_slots, "pending_intent", None),
             "goal_type": getattr(merged_slots, "goal_type", None),
             "availability_intent": getattr(merged_slots, "availability_intent", None),
+            "availability_context": getattr(merged_slots, "availability_context", None),
         },
         fallback_intent=None,
     )
     if expected_contract_intent in _TRANSACTION_SLOT_FILL_CONTRACT_INTENTS:
+        availability_context = (
+            getattr(merged_slots, "availability_context", None)
+            if isinstance(getattr(merged_slots, "availability_context", None), Mapping)
+            else {}
+        )
+        pending_order_context = (
+            availability_context.get("pending_order_context")
+            if isinstance(availability_context.get("pending_order_context"), Mapping)
+            else {}
+        )
+        if expected_contract_intent == _QUICK_ORDER_RESERVATION_INTENT and pending_order_context:
+            slot_patch.setdefault("pending_intent", pending_order_context.get("pending_intent") or "order")
+            slot_patch.setdefault("goal_type", pending_order_context.get("goal_type") or "place_order")
+        for field in (
+            "ord_qty",
+            "pending_intent",
+            "goal_type",
+            "availability_intent",
+            "requested_cal_day",
+            "region",
+            "stock_check_mode",
+            "shop_id",
+            "shop_name",
+            "rsv_hour",
+        ):
+            value = pending_order_context.get(field) if isinstance(pending_order_context, Mapping) else None
+            if value not in (None, "", []):
+                slot_patch.setdefault(field, value)
         for field in (
             "ord_qty",
             "pending_intent",
