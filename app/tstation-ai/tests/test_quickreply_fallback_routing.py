@@ -27711,7 +27711,15 @@ def test_support_policy_keeps_normal_complaint_escalation(user_text: str) -> Non
 
 @pytest.mark.parametrize(
     "execution_intent",
-    ["connect_1to1_inquiry", "connect_1_to_1_inquiry", "qna_request", "connect_human_agent"],
+    [
+        "connect_1to1_inquiry",
+        "1to1_inquiry_connect",
+        "connect_1_to_1_inquiry",
+        "one_to_one_inquiry_connect",
+        "qna_request",
+        "qna_connect",
+        "connect_human_agent",
+    ],
 )
 def test_explicit_qna_router_alias_builds_human_escalation_contract(execution_intent: str) -> None:
     contract = build_turn_contract(

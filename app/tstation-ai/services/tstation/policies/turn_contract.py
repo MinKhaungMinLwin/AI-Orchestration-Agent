@@ -4794,9 +4794,12 @@ def _normalize_plan_intent(value: str) -> str:
         "vehicle_best_seller_search": "best_seller_search",
         "order_data_for_vehicle": "best_seller_search",
         "connect_1to1_inquiry": "human_escalation",
+        "1to1_inquiry_connect": "human_escalation",
         "connect_1_to_1_inquiry": "human_escalation",
+        "one_to_one_inquiry_connect": "human_escalation",
         "one_to_one_inquiry": "human_escalation",
         "qna_request": "human_escalation",
+        "qna_connect": "human_escalation",
         "connect_human_agent": "human_escalation",
     }
     return aliases.get(normalized, normalized or "unknown")
