@@ -1994,6 +1994,56 @@ def _restore_store_attribute_lookup_contract(
     return target_domains
 
 
+def _restore_night_store_search_contract(
+    routing_result: MultiAgentDomain | None,
+) -> list[MultiAgentDomain.Domain] | None:
+    if routing_result is None:
+        return None
+    if str(getattr(routing_result, "policy_intent", "") or "") != "store_attribute_inquiry":
+        return None
+    store_name = str(getattr(routing_result, "store_attribute_store_name", "") or "").strip()
+    if store_name:
+        return None
+    attribute_text = str(getattr(routing_result, "store_attribute_text", "") or "").strip()
+    user_behavior = str(getattr(routing_result, "user_behavior", "") or "")
+    flow = str(getattr(routing_result, "flow", "") or "")
+    if not (
+        _NIGHT_STORE_ATTRIBUTE_LOOKUP_RE.search(attribute_text)
+        or _NIGHT_STORE_ATTRIBUTE_LOOKUP_RE.search(user_behavior)
+        or _NIGHT_STORE_ATTRIBUTE_LOOKUP_RE.search(flow)
+    ):
+        return None
+    region = str(getattr(routing_result, "region", "") or "").strip()
+    place_query = str(getattr(routing_result, "place_query", "") or "").strip()
+    if not (region or place_query):
+        return None
+    if bool(getattr(routing_result, "needs_clarification", False)):
+        return None
+
+    domains = list(getattr(routing_result, "domains", []) or [])
+    execution_plan = list(getattr(routing_result, "execution_plan", []) or [])
+    target_domains = [MultiAgentDomain.Domain.TRANSACTION]
+    target_plan = ["transaction:store_service_search"]
+    if domains == target_domains and execution_plan == target_plan:
+        return None
+
+    if not routing_result.original_router_domains:
+        routing_result.original_router_domains = list(domains)
+    if not routing_result.original_router_execution_plan:
+        routing_result.original_router_execution_plan = list(execution_plan)
+    routing_result.domains = target_domains
+    routing_result.execution_plan = target_plan
+    routing_result.policy_intent = "store_service_search"
+    routing_result.service_name = "야간정비"
+    routing_result.service_code = ""
+    routing_result.agent_prompt_profile = AgentPromptProfile.TRANSACTION_STORE
+    routing_result.override_applied = True
+    routing_result.override_reason = "restore_night_store_search_contract"
+    routing_result.override_blocked = False
+    routing_result.blocked_override_reason = "none"
+    return target_domains
+
+
 def _restore_store_service_search_contract(
     routing_result: MultiAgentDomain | None,
 ) -> list[MultiAgentDomain.Domain] | None:
@@ -12145,8 +12195,170 @@ def _store_attribute_inquiry_event(
     }
 
 
+def _store_search_rows_from_result(tool_result: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    raw = _unwrap_tool_data(dict(tool_result or {}))
+    if not isinstance(raw, Mapping):
+        return []
+    stores = raw.get("stores")
+    if not isinstance(stores, list):
+        return []
+    return _dedupe_store_rows([store for store in stores if isinstance(store, dict)])
+
+
+def _store_row_address(row: Mapping[str, Any]) -> str:
+    road_addr = " ".join(
+        part
+        for part in [
+            str(row.get("road_addr_base") or "").strip(),
+            str(row.get("road_addr_dtl") or "").strip(),
+        ]
+        if part
+    ).strip()
+    jibun_addr = " ".join(
+        part
+        for part in [
+            str(row.get("addr_base") or "").strip(),
+            str(row.get("addr_dtl") or "").strip(),
+        ]
+        if part
+    ).strip()
+    return str(row.get("address") or "").strip() or road_addr or jibun_addr
+
+
+def _night_store_region_search_event(
+    *,
+    user_text: str,
+    region_label: str,
+    tool_result: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    rows = _store_search_rows_from_result(tool_result)
+    matched_rows: list[tuple[dict[str, Any], str]] = []
+    not_matched_count = 0
+    unknown_count = 0
+    for row in rows:
+        end_time = _normalize_store_time(str(row.get("shop_biz_end_time") or "").strip())
+        end_minutes = _store_time_to_minutes(end_time)
+        if end_minutes is None:
+            unknown_count += 1
+            continue
+        if end_minutes > 19 * 60:
+            matched_rows.append((row, end_time))
+        else:
+            not_matched_count += 1
+
+    if matched_rows:
+        lines = [f"{region_label}에서 조회된 영업시간 기준 19시 이후까지 운영되는 매장을 확인했어요."]
+        for row, end_time in matched_rows[:5]:
+            shop_nm = str(row.get("shop_nm") or row.get("shopName") or "매장명 확인 필요").strip()
+            address = _store_row_address(row)
+            phone = _format_store_phone(str(row.get("tel_no") or row.get("tel") or "").strip())
+            lines.append(f"\n• {shop_nm}")
+            if address:
+                lines.append(address)
+            if phone:
+                lines.append(f"전화: {phone}")
+            lines.append(f"영업 종료: {end_time}")
+        lines.append("\n다만 실제 야간 정비 접수 가능 여부는 당일 예약·작업 상황에 따라 달라질 수 있어요.")
+        lines.append("방문 전 매장에 직접 확인해 주세요.")
+        quick_replies = [
+            {"label": "다른 지역 검색", "domain": "TRANSACTION"},
+            {"label": "매장 찾기", "domain": "TRANSACTION"},
+            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+        ]
+        status = "matched"
+    else:
+        lines = [
+            f"{region_label}에서 조회된 매장 중 영업 종료 시간이 19시 이후인 매장은 찾지 못했어요.",
+            "18시 또는 19시까지 운영되는 매장은 야간정비 가능 후보로 안내하지 않습니다.",
+        ]
+        if unknown_count:
+            lines.append("일부 매장은 영업 종료 시간이 확인되지 않아 야간정비 가능 여부를 판단하기 어려워요.")
+        lines.append("정확한 운영 여부는 방문 전 매장에 직접 확인해 주세요.")
+        quick_replies = [
+            {"label": "다른 지역 검색", "domain": "TRANSACTION"},
+            {"label": "매장 찾기", "domain": "TRANSACTION"},
+            {"label": "1:1 문의하기", "domain": "SUPPORT"},
+        ]
+        status = "not_matched" if rows else "no_store_results"
+
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
+        "assistant_response_source": "code_night_store_region_search",
+        "data": {
+            "assistantResponse": "\n".join(lines),
+            "quickReplies": quick_replies,
+            "predictedDomains": ["TRANSACTION", "SUPPORT"],
+            "metadata": {
+                "responseShapeKey": "night_store_region_search",
+                "nightStoreSearch": True,
+                "region": region_label,
+                "matchedCount": len(matched_rows),
+                "notMatchedBeforeOrAt19Count": not_matched_count,
+                "unknownEndTimeCount": unknown_count,
+                "candidateCount": len(rows),
+                "assessmentStatus": status,
+                "thresholdMinutes": 19 * 60,
+                "thresholdRule": "shop_biz_end_time > 19:00",
+                "userText": user_text,
+            },
+        },
+    }
+
+
 def _store_service_availability_event(user_text: str, *, store_name: str | None = None) -> dict | None:
     return _store_attribute_inquiry_event(user_text, store_name=store_name)
+
+
+def _store_service_advisory_selected_store_event(
+    user_text: str,
+    *,
+    store_name: str,
+    service_text: str | None = None,
+) -> dict | None:
+    store_label = str(store_name or "").strip()
+    if not store_label:
+        return None
+    service_label = str(service_text or "").strip() or "문의하신 작업"
+    large_vehicle = bool(re.search(r"스타리아|스타리안|탑차|승합|화물|대형|높이|중량|리프트", user_text or "", re.IGNORECASE))
+    if large_vehicle:
+        guidance = (
+            f"{store_label}에서 스타리아/탑차 같은 대형 차량의 타이어 교체가 가능한지는 "
+            "매장 리프트·장비, 차량 높이/중량, 타이어 규격에 따라 달라질 수 있어요."
+        )
+    else:
+        guidance = (
+            f"{store_label}에서 {service_label} 가능 여부는 매장 장비, 예약 현황, 당일 작업 상황에 따라 "
+            "달라질 수 있어요."
+        )
+    assistant_response = (
+        f"{guidance}\n\n"
+        f"현재 선택된 매장은 {store_label}입니다. 이전 매장 후보가 아니라 이 매장 기준으로 방문 전 "
+        "차량명과 타이어 사이즈를 알려 가능 여부를 확인해 주세요."
+    )
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": MultiAgentDomain.Domain.SUPPORT.value,
+        "assistant_response_source": "code_store_service_advisory_selected_store_guard",
+        "data": {
+            "assistantResponse": assistant_response,
+            "quickReplies": [
+                {"label": "매장 찾기", "domain": "TRANSACTION"},
+                {"label": "1:1 문의하기", "domain": "SUPPORT"},
+            ],
+            "predictedDomains": ["SUPPORT", "TRANSACTION"],
+            "metadata": {
+                "responseShapeKey": "store_service_advisory",
+                "store_service_advisory_intent": True,
+                "selectedStoreOnly": True,
+                "carried_store_context": store_label,
+                "serviceText": service_label,
+                "userText": user_text,
+            },
+        },
+    }
 
 
 def _unsupported_or_unmapped_store_service_event(
@@ -29149,6 +29361,17 @@ class TStationChatServiceV2:
         except Exception:
             logger.exception("[POLICY][cross-domain] Failed to normalize route")
 
+        restored_night_store_search_domains = _restore_night_store_search_contract(routing_result)
+        if restored_night_store_search_domains is not None:
+            domains = restored_night_store_search_domains
+            skip_decision = False
+            speculative_classify_future = None
+            logger.info(
+                "[ROUTER_CONTRACT] restored night store search contract: domains=%s plan=%s",
+                [domain.value for domain in domains],
+                list(getattr(routing_result, "execution_plan", []) or []),
+            )
+
         restored_store_attribute_domains = _restore_store_attribute_lookup_contract(routing_result)
         if restored_store_attribute_domains is not None:
             domains = restored_store_attribute_domains
@@ -32302,6 +32525,43 @@ class TStationChatServiceV2:
             )
             return (emitted_events, holiday_event) if holiday_event is not None else None
 
+        async def _resolve_store_service_advisory_with_code() -> tuple[list[dict], dict] | None:
+            router_policy_intent = str(getattr(routing_result, "policy_intent", "") or "")
+            if router_policy_intent != "store_service_advisory":
+                return None
+            store_name = ""
+            candidate_reference = _candidate_reference_to_dict(
+                getattr(routing_result, "candidate_reference", None),
+                compact=True,
+            )
+            if str(candidate_reference.get("type") or "").strip() == "store":
+                store_name = str(candidate_reference.get("label") or "").strip()
+            if not store_name and initial_slots is not None:
+                store_name = str(
+                    getattr(initial_slots, "shop_name", None)
+                    or getattr(initial_slots, "store_name", None)
+                    or ""
+                ).strip()
+            if not store_name:
+                store_name = str(getattr(routing_result, "store_attribute_store_name", "") or "").strip()
+            if not store_name:
+                return None
+            service_text = str(getattr(routing_result, "store_attribute_text", "") or "").strip()
+            event = _store_service_advisory_selected_store_event(
+                user_query,
+                store_name=store_name,
+                service_text=service_text,
+            )
+            finalized = _finalize_direct_code_event(
+                event,
+                turn_contract=turn_contract,
+                intent="store_service_advisory",
+                source="code_store_service_advisory_selected_store_guard",
+                required_tools=(),
+                template="quickReply",
+            )
+            return ([], finalized) if finalized is not None else None
+
         async def _resolve_store_attribute_inquiry_with_code() -> tuple[list[dict], dict] | None:
             router_policy_intent = str(getattr(routing_result, "policy_intent", "") or "")
             router_store_name = str(getattr(routing_result, "store_attribute_store_name", "") or "").strip()
@@ -32569,6 +32829,82 @@ class TStationChatServiceV2:
                 emitted_events,
                 _finalize_store_attribute_event(event),
             ) if event is not None else None
+
+        async def _resolve_night_store_region_search_with_code() -> tuple[list[dict], dict] | None:
+            region = str(getattr(routing_result, "region", "") or "").strip()
+            place_query = str(getattr(routing_result, "place_query", "") or "").strip()
+            service_name = str(getattr(routing_result, "service_name", "") or "").strip()
+            if str(getattr(routing_result, "policy_intent", "") or "") != "store_service_search":
+                return None
+            if service_name != "야간정비":
+                return None
+            if not (region or place_query):
+                return None
+            if not _NIGHT_STORE_ATTRIBUTE_LOOKUP_RE.search(user_query or ""):
+                return None
+            gate_allowed, gate_reason = _direct_code_fast_path_contract_gate(
+                turn_contract=turn_contract,
+                intent="store_service_search",
+                template="quickReply",
+                source="code_night_store_region_search",
+                required_tools=("search_stores_tool",),
+            )
+            if not gate_allowed:
+                logger.info("[CODE_FAST_PATH_GATE] blocked night store search reason=%s", gate_reason)
+                return None
+
+            from services.tstation.agents.c_transaction_agent.tools import search_stores_tool as _search_stores_tool
+
+            search_region = region or place_query
+            tool_input = {
+                "region_code": search_region,
+                "place_query": search_region,
+                "candidate_limit": 30,
+                "limit": 10,
+            }
+            emitted_events: list[dict] = [{
+                "type": "status",
+                "status": "tool_start",
+                "tool": "search_stores_tool",
+                "display_name": "야간 운영 매장 검색 중...",
+                "source_domain": "transaction",
+            }]
+            try:
+                raw_result = await asyncio.to_thread(_search_stores_tool.invoke, tool_input)
+                search_result = _tool_result_dict(raw_result)
+            except Exception as exc:
+                logger.exception("[NIGHT_STORE_SEARCH] search_stores_tool failed")
+                search_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+            _record_code_tool_result("search_stores_tool", tool_input, search_result)
+            emitted_events.append({
+                "type": "agent_flow",
+                "agent": "[Store AF]",
+                "agent_class": "Transaction Agent",
+                "status": search_result.get("status", "success"),
+                "source_domain": "transaction",
+            })
+            emitted_events.append({
+                "type": "tool",
+                "input": tool_input,
+                "output": json.dumps(search_result, ensure_ascii=False),
+                "node": "tools",
+                "tool": "search_stores_tool",
+                "source_domain": "transaction",
+            })
+            event = _night_store_region_search_event(
+                user_text=user_query,
+                region_label=search_region,
+                tool_result=search_result,
+            )
+            finalized = _finalize_direct_code_event(
+                event,
+                turn_contract=turn_contract,
+                intent="store_service_search",
+                source="code_night_store_region_search",
+                required_tools=("search_stores_tool",),
+                template="quickReply",
+            )
+            return (emitted_events, finalized) if finalized is not None else None
 
         async def _resolve_plain_store_info_with_code() -> tuple[list[dict], dict] | None:
             store_name = _extract_plain_store_info_store_name(user_query)
@@ -36407,6 +36743,22 @@ class TStationChatServiceV2:
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps(holiday_event, ensure_ascii=False)}\n\n"
             assistant_response = str((holiday_event.get("data") or {}).get("assistantResponse") or "")
+            if assistant_response:
+                yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[TRANSACTION AGENT]'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
+        night_store_region_resolution = await _resolve_night_store_region_search_with_code()
+        if night_store_region_resolution is not None:
+            code_events, night_store_event = night_store_region_resolution
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+            for code_event in code_events:
+                yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[TRANSACTION AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(night_store_event, ensure_ascii=False)}\n\n"
+            assistant_response = str((night_store_event.get("data") or {}).get("assistantResponse") or "")
             if assistant_response:
                 yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[TRANSACTION AGENT]'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"

@@ -236,6 +236,7 @@ from services.tstation.chat import (
     _promote_completed_speculative_router_contract,
     _restore_blocked_transaction_store_selection_contract,
     _restore_store_attribute_lookup_contract,
+    _restore_night_store_search_contract,
     _pending_store_attribute_selection_event,
     _router_contract_is_high_confidence_comparison,
     _router_contract_is_high_confidence_policy,
@@ -268,6 +269,7 @@ from services.tstation.chat import (
     _maintenance_addon_with_tire_service_event,
     _service_duration_advisory_event,
     _store_attribute_inquiry_event,
+    _night_store_region_search_event,
     _store_service_availability_event,
     _build_vehicle_information_event,
     _build_vehicle_size_guidance_event,
@@ -28648,6 +28650,100 @@ def test_support_only_store_attribute_router_contract_is_restored_to_transaction
     assert routing.override_reason == "restore_store_attribute_lookup_contract"
     assert routing.original_router_domains == [chat_module.MultiAgentDomain.Domain.SUPPORT]
     assert routing.original_router_execution_plan == ["Check store-specific service policy or advise contact"]
+
+
+def test_support_only_regional_night_store_search_restores_transaction_contract() -> None:
+    routing = chat_module.MultiAgentDomain(
+        reason="regional night maintenance classified as support",
+        domains=[chat_module.MultiAgentDomain.Domain.SUPPORT],
+        execution_plan=["support:store_attribute_inquiry"],
+        user_behavior="분당 지역에서 야간정비 가능한 매장을 찾는 문의",
+        flow="user requesting night maintenance-capable stores in Bundang",
+        claim_check_type="none",
+        complaint_scope="none",
+        policy_intent="store_attribute_inquiry",
+        store_attribute_store_name="",
+        store_attribute_text="야간정비 가능한 매장",
+        store_attribute_type="operating_condition",
+        store_attribute_verification_level="store_contact_required",
+        region="분당",
+        referred_object_status="missing",
+        referred_object_type="store",
+        planner_confidence=0.85,
+        needs_clarification=False,
+        agent_prompt_profile=chat_module.AgentPromptProfile.FULL,
+    )
+
+    restored = _restore_night_store_search_contract(routing)
+
+    assert restored == [chat_module.MultiAgentDomain.Domain.TRANSACTION]
+    assert routing.domains == [chat_module.MultiAgentDomain.Domain.TRANSACTION]
+    assert routing.execution_plan == ["transaction:store_service_search"]
+    assert routing.policy_intent == "store_service_search"
+    assert routing.service_name == "야간정비"
+    assert routing.override_reason == "restore_night_store_search_contract"
+    assert routing.original_router_domains == [chat_module.MultiAgentDomain.Domain.SUPPORT]
+
+
+def test_night_store_region_search_filters_business_end_time_after_1900() -> None:
+    event = _night_store_region_search_event(
+        user_text="분당에 야간정비 가능한 매장",
+        region_label="분당",
+        tool_result={
+            "status": "success",
+            "data": {
+                "stores": [
+                    {
+                        "shop_id": "F18",
+                        "shop_nm": "티스테이션 18시점",
+                        "road_addr_base": "경기 성남시 분당구 A",
+                        "tel_no": "0311111111",
+                        "shop_biz_end_time": "1800",
+                    },
+                    {
+                        "shop_id": "F19",
+                        "shop_nm": "티스테이션 19시점",
+                        "road_addr_base": "경기 성남시 분당구 B",
+                        "tel_no": "0312222222",
+                        "shop_biz_end_time": "1900",
+                    },
+                    {
+                        "shop_id": "F1901",
+                        "shop_nm": "티스테이션 19시01분점",
+                        "road_addr_base": "경기 성남시 분당구 C",
+                        "tel_no": "0313333333",
+                        "shop_biz_end_time": "1901",
+                    },
+                    {
+                        "shop_id": "F20",
+                        "shop_nm": "티스테이션 20시점",
+                        "road_addr_base": "경기 성남시 분당구 D",
+                        "tel_no": "0314444444",
+                        "shop_biz_end_time": "20:00",
+                    },
+                    {
+                        "shop_id": "FUNKNOWN",
+                        "shop_nm": "티스테이션 시간미확인점",
+                        "shop_biz_end_time": "",
+                    },
+                ]
+            },
+        },
+    )
+
+    assistant = event["data"]["assistantResponse"]
+    metadata = event["data"]["metadata"]
+    assert "티스테이션 19시01분점" in assistant
+    assert "영업 종료: 19:01" in assistant
+    assert "티스테이션 20시점" in assistant
+    assert "영업 종료: 20:00" in assistant
+    assert "티스테이션 18시점" not in assistant
+    assert "티스테이션 19시점" not in assistant
+    assert "티스테이션 시간미확인점" not in assistant
+    assert metadata["matchedCount"] == 2
+    assert metadata["notMatchedBeforeOrAt19Count"] == 2
+    assert metadata["unknownEndTimeCount"] == 1
+    assert metadata["thresholdRule"] == "shop_biz_end_time > 19:00"
 
 
 def test_blocked_transaction_store_selection_contract_is_restored() -> None:
