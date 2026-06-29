@@ -20068,6 +20068,17 @@ def _should_force_warranty_claim_support_route(policy_plan: Any) -> bool:
     )
 
 
+def _should_force_safe_service_discovery_route(policy_plan: Any) -> bool:
+    return (
+        getattr(getattr(policy_plan, "primary_domain", None), "value", None)
+        == MultiAgentDomain.Domain.DISCOVERY.value
+        and any(
+            getattr(task, "intent", None) == "safe_service_tire_recommendation"
+            for task in getattr(policy_plan, "subtasks", ())
+        )
+    )
+
+
 _VEHICLE_CATEGORY_CONTEXT_RE = re.compile(
     r"전기차|electric|테슬라|모델\s*Y|모델Y|(?<![A-Za-z])EV(?![A-Za-z])|"
     r"SUV|세단|승용차|경차|소형차|중형차|대형차|화물차|트럭|밴|승합차|"
@@ -27546,7 +27557,27 @@ class TStationChatServiceV2:
                     request.session_id,
                 )
 
-            if (
+            if _should_force_safe_service_discovery_route(policy_plan):
+                domains = [MultiAgentDomain.Domain.DISCOVERY]
+                routing_result = MultiAgentDomain(
+                    reason="policy_safe_service_tire_recommendation",
+                    domains=domains,
+                    execution_plan=["discovery:product_recommendation"],
+                    user_behavior="asking for tires eligible for assurance service",
+                    flow=policy_plan.response_strategy,
+                    claim_check_type="none",
+                    complaint_scope="none",
+                    agent_prompt_profile=AgentPromptProfile.DISCOVERY_RECOMMENDATION,
+                    policy_intent="none",
+                    planner_confidence=0.95,
+                )
+                _classify_path = "policy_safe_service_discovery"
+                classify_future = None
+                logger.info(
+                    "[POLICY][route-fast-path] safe-service discovery override: plan=%s",
+                    policy_plan.to_dict(),
+                )
+            elif (
                 _should_force_warranty_claim_support_route(policy_plan)
             ):
                 domains = [MultiAgentDomain.Domain.SUPPORT]

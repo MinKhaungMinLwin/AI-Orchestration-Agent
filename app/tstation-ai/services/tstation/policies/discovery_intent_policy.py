@@ -1416,6 +1416,11 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             args["allow_cross_brand_fill"] = False
     if entities.get("general_tire_preference") == "non_ev":
         args.pop("vehicle_type", None)
+    if "rcmd_type" not in args and not any(
+        args.get(key) not in (None, "", [], {})
+        for key in ("vehicle_type", "season_nm", "pfm_nm", "prc_grd", "sort_by")
+    ):
+        args["rcmd_type"] = "tstation"
     allowed_tools = ("get_products_recommendations_tool",)
     required_slots: tuple[str, ...] = ()
     metadata: dict[str, Any] = {

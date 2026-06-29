@@ -177,7 +177,17 @@ def test_default_tbot_shopping_cta_uses_basic_recommendation_flow() -> None:
     assert frame.sub_intent == "general_recommendation"
     assert frame.entities["default_tire_shopping"] is True
     assert plan.preferred_tool == "get_products_recommendations_tool"
-    assert plan.tool_args_patch == {}
+    assert plan.tool_args_patch == {"rcmd_type": "tstation"}
+
+
+def test_plain_tire_recommendation_uses_general_tstation_recommendation() -> None:
+    frame = build_discovery_intent_frame("타이어 추천")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.intent == "product_recommendation"
+    assert frame.sub_intent == "general_recommendation"
+    assert plan.preferred_tool == "get_products_recommendations_tool"
+    assert plan.tool_args_patch == {"rcmd_type": "tstation"}
 
 
 def test_default_benefit_cta_uses_events_and_deals_not_coupons() -> None:

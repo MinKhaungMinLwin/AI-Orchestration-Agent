@@ -71,7 +71,8 @@ _PATTERN_COUPON_RE = re.compile(
     re.IGNORECASE,
 )
 _SUPPORT_RE = re.compile(
-    r"보증|워런티|warranty|만료|원복|상담원|고객센터|1:1|문의|불만|클레임|공기압|TPMS|티피엠에스|경고등",
+    r"보증|워런티|warranty|안심\s*서비스|안심서비스|안심\s*플러스|안심플러스|"
+    r"만료|원복|상담원|고객센터|1:1|문의|불만|클레임|공기압|TPMS|티피엠에스|경고등",
     re.IGNORECASE,
 )
 _DESCRIPTION_RE = re.compile(r"뭐야|뭔지|설명|차이|장점|왜|등급|연비|소음|마일리지|최신", re.IGNORECASE)
@@ -99,6 +100,16 @@ _WARRANTY_CLAIM_REFERENCE_RE = re.compile(
 _WARRANTY_CLAIM_STRONG_RE = re.compile(
     r"무료\s*교체|무상\s*교환|무상\s*교체|보상\s*해\s*줘|보상해줘|책임\s*져|책임져|"
     r"하자\s*아니|클레임|품질\s*보증|품질보증",
+    re.IGNORECASE,
+)
+_SAFE_SERVICE_RE = re.compile(r"안심\s*(?:서비스|플러스)|안심서비스|안심플러스", re.IGNORECASE)
+_SAFE_SERVICE_RECOMMENDATION_ANCHOR_RE = re.compile(
+    r"추천|가능|대상|적용|되는|돼|되나|타이어|상품|제품|모델|찾|보여|알려",
+    re.IGNORECASE,
+)
+_SAFE_SERVICE_SUPPORT_POLICY_RE = re.compile(
+    r"가입\s*(?:했|여부|상태|확인|방법|기간)|가입했던|보유|내\s*(?:워런티|보증)|나의\s*워런티|"
+    r"만료|보상|조건|기준|분실|종이\s*보증서|디지털\s*워런티|장착비|추가\s*비용",
     re.IGNORECASE,
 )
 
@@ -220,6 +231,16 @@ def is_warranty_claim_signal(user_text: str, *, known_slots: dict[str, Any] | No
     return has_product_hint and score >= 2
 
 
+def is_safe_service_tire_recommendation_request(user_text: str) -> bool:
+    text = user_text or ""
+    return bool(
+        text
+        and _SAFE_SERVICE_RE.search(text)
+        and _SAFE_SERVICE_RECOMMENDATION_ANCHOR_RE.search(text)
+        and not _SAFE_SERVICE_SUPPORT_POLICY_RE.search(text)
+    )
+
+
 def plan_cross_domain_turn(user_text: str, *, known_slots: dict[str, Any] | None = None) -> CrossDomainPlan:
     """Plan ordered domain subtasks for a multi-intent user turn."""
     text = user_text or ""
@@ -287,6 +308,19 @@ def plan_cross_domain_turn(user_text: str, *, known_slots: dict[str, Any] | None
                     domain=PolicyDomain.DISCOVERY,
                     intent="product_comparison",
                     reason="두 개 이상 상품명과 비교/차이 신호가 있어 단일 상품 설명으로 축소하지 않음",
+                ),
+            ),
+            response_strategy="single_domain_response",
+        )
+
+    if is_safe_service_tire_recommendation_request(text):
+        return CrossDomainPlan(
+            primary_domain=PolicyDomain.DISCOVERY,
+            subtasks=(
+                DomainSubtask(
+                    domain=PolicyDomain.DISCOVERY,
+                    intent="safe_service_tire_recommendation",
+                    reason="안심서비스 대상/가능 타이어 문의는 보유 워런티 조회가 아니라 대상 상품 추천/확인 흐름임",
                 ),
             ),
             response_strategy="single_domain_response",

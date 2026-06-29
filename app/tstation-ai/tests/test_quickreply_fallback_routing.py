@@ -364,6 +364,7 @@ from services.tstation.chat import (
     _should_suppress_inherited_recommendation_context_for_product_attribute,
     _should_skip_qc,
     _should_replace_discovery_dead_end_chips,
+    _should_force_safe_service_discovery_route,
     _should_force_warranty_claim_support_route,
     _should_force_best_seller_code_route,
     _should_dispatch_best_seller_contract_tool,
@@ -2181,6 +2182,45 @@ def test_turn_contract_keeps_router_plan_over_cross_domain_plan() -> None:
     assert contract.execution_plan == ("support:signup_first_purchase_benefit_policy",)
     assert contract.contract_source == "router"
     assert contract.speculative_used_for_contract is False
+
+
+def test_safe_service_tire_recommendation_policy_forces_discovery_over_support_router() -> None:
+    plan = plan_cross_domain_turn("안심서비스 가능한 타이어는?", known_slots={})
+    support_routing = _routing_result(
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        execution_plan=["support:assurance_service_policy"],
+        policy_intent="assurance_service_policy",
+    )
+
+    assert _should_force_safe_service_discovery_route(plan) is True
+    assert _should_force_warranty_claim_support_route(plan) is False
+
+    routing = MultiAgentDomain(
+        reason="policy_safe_service_tire_recommendation",
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        execution_plan=["discovery:product_recommendation"],
+        user_behavior="asking for tires eligible for assurance service",
+        flow=plan.response_strategy,
+        claim_check_type="none",
+        complaint_scope="none",
+        agent_prompt_profile="discovery_recommendation",
+        policy_intent="none",
+        planner_confidence=0.95,
+    )
+    contract = build_turn_contract(
+        user_text="안심서비스 가능한 타이어는?",
+        routing_result=routing,
+        cross_domain_plan=plan,
+        router_waited=True,
+        router_source="policy",
+        contract_source="policy_safe_service_discovery",
+        speculative_used_for_contract=False,
+    )
+
+    assert support_routing.policy_intent == "assurance_service_policy"
+    assert contract.domain == "discovery"
+    assert contract.intent == "product_recommendation"
+    assert contract.execution_plan == ("discovery:product_recommendation",)
 
 
 def test_p0_auto_chain_requires_current_turn_transaction_anchor() -> None:
@@ -21730,7 +21770,7 @@ def test_offroad_router_scenario_does_not_override_without_current_anchor() -> N
     plan = plan_discovery_tools(frame)
 
     assert frame.entities.get("recommendation_scenario") is None
-    assert plan.tool_args_patch == {}
+    assert plan.tool_args_patch == {"rcmd_type": "tstation"}
 
 
 def test_offroad_policy_patch_overrides_llm_generated_generic_args(monkeypatch: pytest.MonkeyPatch) -> None:
