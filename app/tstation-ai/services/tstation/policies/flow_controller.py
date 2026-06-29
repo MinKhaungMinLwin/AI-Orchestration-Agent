@@ -511,6 +511,22 @@ def _current_flow_state(active_flow: Mapping[str, Any], router_evidence: Mapping
     }
 
 
+def _current_turn_flow_seed(router_evidence: Mapping[str, Any]) -> dict[str, Any]:
+    router_intent = str(router_evidence.get("intent") or "").strip()
+    router_domain = str(router_evidence.get("domain") or "").strip()
+    if not router_intent and not router_domain:
+        return {}
+    return {
+        key: value
+        for key, value in {
+            "flow_type": router_domain or "current_turn",
+            "flow_step": "router_observed",
+            "intent": router_intent,
+        }.items()
+        if value not in (None, "", [], {})
+    }
+
+
 def _transition_kind(
     current_flow_state: Mapping[str, Any],
     parent_flow_state: Mapping[str, Any],
@@ -582,14 +598,15 @@ def transition_current_flow(
         applied_reason = "selected_product_flow_state"
     elif selected_quantity_flow_context:
         applied_reason = "selected_quantity_flow_state"
+    current_turn_seed = _current_turn_flow_seed(router_snapshot)
     contract_seed = {
         "router_evidence": router_snapshot,
         "ui_action": ui_action_snapshot,
         "resume_source": resume_source if resume_source else "none",
         "current_flow": {
-            key: current_flow_state.get(key)
+            key: current_turn_seed.get(key)
             for key in ("flow_type", "flow_step", "intent", "goal_type")
-            if current_flow_state.get(key) not in (None, "", [], {})
+            if current_turn_seed.get(key) not in (None, "", [], {})
         },
     }
     context_evidence = {

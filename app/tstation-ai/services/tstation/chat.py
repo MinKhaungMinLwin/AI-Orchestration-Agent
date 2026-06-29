@@ -17039,13 +17039,101 @@ def _selected_store_slots_from_merged_slots(
     )
 
 
+def _active_flow_context_from_slots(merged_slots: ConversationSlots | None) -> dict[str, Any]:
+    availability_context = getattr(merged_slots, "availability_context", None) if merged_slots is not None else None
+    active_flow_context = (
+        availability_context.get("active_flow_context")
+        if isinstance(availability_context, Mapping)
+        and isinstance(availability_context.get("active_flow_context"), Mapping)
+        else {}
+    )
+    return dict(active_flow_context) if isinstance(active_flow_context, Mapping) else {}
+
+
+def _active_flow_read_through_slots(
+    merged_slots: ConversationSlots | None,
+    *,
+    allowed_flow_types: set[str] | frozenset[str] | None = None,
+) -> dict[str, Any]:
+    active_flow_context = _active_flow_context_from_slots(merged_slots)
+    if not active_flow_context:
+        return {}
+    flow_type = str(active_flow_context.get("flow_type") or "").strip()
+    if allowed_flow_types is not None and flow_type not in allowed_flow_types:
+        return {}
+
+    values: dict[str, Any] = {}
+    for section_name in ("product", "quantity", "store", "intent"):
+        section = active_flow_context.get(section_name)
+        if isinstance(section, Mapping):
+            values.update({
+                str(key): value
+                for key, value in section.items()
+                if value not in (None, "", [], {})
+            })
+    for key in (
+        "goods_no",
+        "product_name",
+        "tire_model",
+        "pending_product_name",
+        "tire_size",
+        "ord_qty",
+        "quantity",
+        "shop_id",
+        "shop_name",
+        "store_name",
+        "region",
+        "place_query",
+        "pending_intent",
+        "goal_type",
+        "stock_check_mode",
+        "schedule_mode",
+        "inventory_mode",
+        "source_tool",
+        "requested_cal_day",
+        "rsv_hour",
+    ):
+        value = active_flow_context.get(key)
+        if value not in (None, "", [], {}):
+            values.setdefault(key, value)
+    return values
+
+
+def _contract_read_through_known_slots(
+    turn_contract: TurnContract | None,
+    merged_slots: ConversationSlots | None,
+    *,
+    allowed_flow_types: set[str] | frozenset[str] | None = None,
+) -> dict[str, Any]:
+    """Merge stored flow evidence into slot reads without letting it create intent."""
+
+    values = _active_flow_read_through_slots(merged_slots, allowed_flow_types=allowed_flow_types)
+    if merged_slots is not None and hasattr(merged_slots, "model_dump"):
+        values.update({
+            str(key): value
+            for key, value in merged_slots.model_dump().items()
+            if value not in (None, "", [], {}) and key != "availability_context"
+        })
+    if turn_contract is not None:
+        values.update({
+            str(key): value
+            for key, value in dict(turn_contract.known_slots or {}).items()
+            if value not in (None, "", [], {})
+        })
+    return values
+
+
 def _effective_known_slots_with_selected_store(
     turn_contract: TurnContract,
     merged_slots: ConversationSlots | None,
     *,
     allowed_flow_types: set[str] | frozenset[str] | None = None,
 ) -> dict[str, Any]:
-    known_slots = dict(turn_contract.known_slots or {})
+    known_slots = _contract_read_through_known_slots(
+        turn_contract,
+        merged_slots,
+        allowed_flow_types=allowed_flow_types,
+    )
     selected_store_slots = _selected_store_slots_from_merged_slots(
         merged_slots,
         allowed_flow_types=allowed_flow_types,
@@ -17197,14 +17285,22 @@ def _contract_required_stock_inventory_selected_store_tool_input(
     }
 
 
-def _is_contract_required_stock_inventory_store_lookup(turn_contract: TurnContract | None) -> bool:
+def _is_contract_required_stock_inventory_store_lookup(
+    turn_contract: TurnContract | None,
+    *,
+    merged_slots: ConversationSlots | None = None,
+) -> bool:
     if turn_contract is None:
         return False
     if str(turn_contract.domain or "").strip().lower() != PolicyDomain.TRANSACTION.value:
         return False
     if tuple(turn_contract.blocking_required_slots or ()):
         return False
-    known_slots = turn_contract.known_slots or {}
+    known_slots = _contract_read_through_known_slots(
+        turn_contract,
+        merged_slots,
+        allowed_flow_types=frozenset({"stock"}),
+    )
     stock_check_mode = str(known_slots.get("stock_check_mode") or "").strip()
     if stock_check_mode != "inventory_only":
         return False
@@ -17228,10 +17324,18 @@ def _is_contract_required_stock_inventory_store_lookup(turn_contract: TurnContra
     )
 
 
-def _contract_required_stock_inventory_store_lookup_tool_input(turn_contract: TurnContract) -> dict[str, Any]:
-    if not _is_contract_required_stock_inventory_store_lookup(turn_contract):
+def _contract_required_stock_inventory_store_lookup_tool_input(
+    turn_contract: TurnContract,
+    *,
+    merged_slots: ConversationSlots | None = None,
+) -> dict[str, Any]:
+    if not _is_contract_required_stock_inventory_store_lookup(turn_contract, merged_slots=merged_slots):
         return {}
-    known_slots = turn_contract.known_slots or {}
+    known_slots = _contract_read_through_known_slots(
+        turn_contract,
+        merged_slots,
+        allowed_flow_types=frozenset({"stock"}),
+    )
     store_name = str(known_slots.get("shop_name") or known_slots.get("store_name") or "").strip()
     region = str(known_slots.get("region") or known_slots.get("place_query") or "").strip()
     tool_input: dict[str, Any] = {"limit": 10}
@@ -17283,7 +17387,10 @@ def _contract_required_transaction_tool_input(
         preferred_tool in {"", "get_store_list_tool"}
         and "get_store_list_tool" in {str(tool) for tool in tuple(turn_contract.allowed_tools or ())}
     ):
-        stock_store_input = _contract_required_stock_inventory_store_lookup_tool_input(turn_contract)
+        stock_store_input = _contract_required_stock_inventory_store_lookup_tool_input(
+            turn_contract,
+            merged_slots=merged_slots,
+        )
         if stock_store_input:
             return stock_store_input, "turn_contract_required_stock_inventory_store_lookup", "매장 재고 조회 매장 확인 중..."
 
@@ -17322,7 +17429,7 @@ async def _recover_contract_required_store_flow_tool(
 ) -> dict[str, Any] | None:
     if not (
         _is_contract_required_selected_store_schedule(turn_contract, merged_slots=merged_slots)
-        or _is_contract_required_stock_inventory_store_lookup(turn_contract)
+        or _is_contract_required_stock_inventory_store_lookup(turn_contract, merged_slots=merged_slots)
         or _is_contract_required_stock_inventory_selected_store(turn_contract, merged_slots=merged_slots)
     ):
         return None
@@ -17581,12 +17688,40 @@ def _promote_single_turn_stock_inventory_from_search_product(
     tool_result: Mapping[str, Any] | None,
     merged_slots: ConversationSlots | None,
     routing_result: Any | None,
+    turn_contract: TurnContract | None = None,
 ) -> tuple[ConversationSlots, IntentFrame, ToolPlan, ResponseDecision] | None:
-    known_tire_size = str(getattr(merged_slots, "tire_size", None) or "").strip() or None
+    read_through_slots = _contract_read_through_known_slots(
+        turn_contract,
+        merged_slots,
+        allowed_flow_types=frozenset({"stock"}),
+    )
+    known_tire_size = str(read_through_slots.get("tire_size") or getattr(merged_slots, "tire_size", None) or "").strip() or None
     resolved_row = _resolve_stock_search_product_row(tool_result, known_tire_size=known_tire_size)
     if resolved_row is None:
         return None
     base_slots = merged_slots.model_copy() if merged_slots is not None else ConversationSlots()
+    if read_through_slots:
+        base_slots = base_slots.apply_runtime_values(
+            {
+                key: value
+                for key, value in read_through_slots.items()
+                if key
+                in {
+                    "tire_size",
+                    "ord_qty",
+                    "quantity",
+                    "region",
+                    "place_query",
+                    "shop_name",
+                    "store_name",
+                    "pending_intent",
+                    "goal_type",
+                    "stock_check_mode",
+                }
+                and value not in (None, "", [], {})
+            },
+            source="single_turn_stock_inventory_read_through",
+        )
     runtime_values = {
         "goods_no": resolved_row["goods_no"],
         "tire_size": resolved_row.get("tire_size"),
@@ -17664,17 +17799,19 @@ def _promote_single_turn_stock_inventory_from_search_product(
         user_text=user_text,
         known_slots=dict(transaction_frame.known_slots),
     )
+    promotion_contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=transaction_frame,
+        tool_plan=transaction_tool_plan,
+        response_decision=transaction_response_decision,
+        routing_result=routing_result,
+        merged_slots=promoted_slots,
+        action_mode="stock_check",
+        context_state="active",
+    )
     if not _is_contract_required_stock_inventory_store_lookup(
-        build_turn_contract(
-            user_text=user_text,
-            intent_frame=transaction_frame,
-            tool_plan=transaction_tool_plan,
-            response_decision=transaction_response_decision,
-            routing_result=routing_result,
-            merged_slots=promoted_slots,
-            action_mode="stock_check",
-            context_state="active",
-        )
+        promotion_contract,
+        merged_slots=promoted_slots,
     ):
         return None
     promoted_slots = _with_confirmed_tool_flow_state(
@@ -36808,6 +36945,7 @@ class TStationChatServiceV2:
                                 tool_result=parsed_for_verifier if isinstance(parsed_for_verifier, Mapping) else None,
                                 merged_slots=pending_slots or initial_slots,
                                 routing_result=routing_result,
+                                turn_contract=turn_contract,
                             )
                         )
                         if promoted_stock_inventory is not None:

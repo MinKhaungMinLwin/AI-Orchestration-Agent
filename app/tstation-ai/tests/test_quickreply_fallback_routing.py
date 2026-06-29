@@ -13238,7 +13238,10 @@ def test_flow_transition_shell_separates_current_recommendation_from_parent_orde
     assert transition.parent_flow_state["flow_type"] == "purchase"
     assert transition.parent_flow_state["intent"] == "order"
     assert transition.contract_seed["router_evidence"]["intent"] == "vehicle_based_tire_recommendation"
+    assert transition.contract_seed["current_flow"]["intent"] == "vehicle_based_tire_recommendation"
+    assert transition.contract_seed["current_flow"]["flow_step"] == "router_observed"
     assert "parent_flow_context" in transition.context_evidence
+    assert transition.context_evidence["active_flow_context"]["flow_step"] == "select_vehicle"
     assert slots.pending_intent is None
     assert slots.goal_type is None
 
@@ -29272,6 +29275,106 @@ def test_promote_single_turn_stock_inventory_from_search_product_runs_region_loo
     assert active_context["flow_step"] == "product_selected"
     assert active_context["product"]["goods_no"] == "G000000310126"
     assert active_context["product"]["ord_qty"] == 4
+
+
+def test_promote_single_turn_stock_inventory_reads_contract_slots_without_executing_from_context_only() -> None:
+    contract = TurnContract(
+        domain="discovery",
+        intent="resolve_or_describe_product",
+        sub_intent="stock",
+        known_slots={
+            "tire_size": "245/45R19",
+            "ord_qty": 4,
+            "region": "강남",
+            "stock_check_mode": "inventory_only",
+        },
+        allowed_tools=("search_product_tool",),
+        forbidden_tools=("quick_order_tool",),
+        blocking_required_slots=("product",),
+        response_decision={
+            "template": "quickReply",
+            "metadata": {"response_shape_key": "missing_stock_search_slots"},
+        },
+    )
+
+    promoted = _promote_single_turn_stock_inventory_from_search_product(
+        user_text="벤투스 S2 AS 2454519 4개 강남역 근처 재고 있는 매장 찾아줘",
+        tool_result={
+            "data": {
+                "items": [
+                    {
+                        "goods_no": "G000000310126",
+                        "goods_nm": "벤투스 S2 AS",
+                        "tire_size_1": "245/45R19",
+                    }
+                ]
+            }
+        },
+        merged_slots=ConversationSlots(tire_model="벤투스 S2 AS"),
+        routing_result=SimpleNamespace(
+            execution_plan=["discovery:resolve_or_describe_product", "transaction:stock_store_or_reservation"]
+        ),
+        turn_contract=contract,
+    )
+
+    assert promoted is not None
+    promoted_slots, promoted_frame, promoted_tool_plan, decision = promoted
+    assert promoted_slots.goods_no == "G000000310126"
+    assert promoted_slots.ord_qty == 4
+    assert promoted_slots.region == "강남"
+    assert promoted_frame.intent == "stock_store_search"
+    assert promoted_frame.known_slots["goods_no"] == "G000000310126"
+    assert promoted_frame.known_slots["tire_size"] == "245/45R19"
+    assert promoted_frame.known_slots["ord_qty"] == 4
+    assert promoted_frame.known_slots["region"] == "강남"
+    assert promoted_tool_plan.preferred_tool == "get_store_list_tool"
+    assert decision.metadata["response_shape_key"] == "stock_inventory_lookup"
+
+
+def test_contract_required_stock_store_lookup_reads_active_flow_state_slots() -> None:
+    active_context = {
+        "flow_type": "stock",
+        "status": "active",
+        "flow_step": "quantity_selected",
+        "product": {
+            "goods_no": "G000000310126",
+            "tire_size": "245/45R19",
+            "ord_qty": 4,
+        },
+        "intent": {
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+            "stock_check_mode": "inventory_only",
+        },
+    }
+    contract = TurnContract(
+        domain="transaction",
+        intent="stock_store_search",
+        known_slots={"region": "강남"},
+        allowed_tools=("get_store_list_tool", "get_store_inventory_tool"),
+        forbidden_tools=("quick_order_tool", "transaction_store_preview_tool"),
+        blocking_required_slots=(),
+        context_state="active",
+        response_decision={"template": "location", "metadata": {"response_shape_key": "stock_inventory_lookup"}},
+    )
+    merged_slots = ConversationSlots(availability_context={"active_flow_context": active_context})
+
+    assert chat_module._is_contract_required_stock_inventory_store_lookup(contract) is False
+    assert chat_module._is_contract_required_stock_inventory_store_lookup(contract, merged_slots=merged_slots) is True
+    assert chat_module._contract_required_stock_inventory_store_lookup_tool_input(
+        contract,
+        merged_slots=merged_slots,
+    ) == {"limit": 10, "region_code": "강남"}
+
+    effective = chat_module._effective_known_slots_with_selected_store(
+        contract,
+        merged_slots,
+        allowed_flow_types=frozenset({"stock"}),
+    )
+    assert effective["goods_no"] == "G000000310126"
+    assert effective["tire_size"] == "245/45R19"
+    assert effective["ord_qty"] == 4
+    assert effective["region"] == "강남"
 
 
 def test_promote_single_turn_stock_inventory_from_search_product_multi_item_picks_matching_size() -> None:
