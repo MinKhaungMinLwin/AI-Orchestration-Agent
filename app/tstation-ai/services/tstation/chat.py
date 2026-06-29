@@ -27497,6 +27497,8 @@ class TStationChatServiceV2:
             "parent_flow_type": flow_transition.metadata.get("parent_flow_type"),
             "contract_seed_keys": flow_transition.metadata.get("contract_seed_keys"),
             "context_evidence_keys": flow_transition.metadata.get("context_evidence_keys"),
+            "flow_selected_product_resolved": flow_transition.metadata.get("selected_product_resolved"),
+            "flow_selected_product": flow_transition.context_evidence.get("selected_product"),
         })
         router_slot_fill_metadata.update({
             "router_is_slot_fill": bool(getattr(routing_result, "is_slot_fill", False)) if routing_result else False,

@@ -2182,30 +2182,31 @@ def apply_history_product_selection_state(
             if value not in (None, "", []):
                 slot_patch[field] = value
 
-    action_context: UIActionContext | None = None
+    product_label = str(slot_patch.get("tire_model") or slot_patch.get("product_name") or "").strip() or None
+    product_action_intent = expected_contract_intent or "product_description"
+    action_context: UIActionContext | None = resolve_ui_action_context(
+        raw_action={
+            "action_type": "select_product",
+            "cta_action": "select_product",
+            "expected_behavior": "slot_fill" if expected_contract_intent in _TRANSACTION_SLOT_FILL_CONTRACT_INTENTS else "context_evidence",
+            "source_intent": product_action_intent,
+            "expected_contract_intent": product_action_intent,
+            "entity_type": "product",
+            "entity_id": resolved_goods_no,
+            "entity_label": product_label,
+            "slots": slot_patch,
+        },
+        selected_vehicle=None,
+        selection_source="previous_product_candidate",
+        previous_slots={
+            "goods_no": getattr(merged_slots, "goods_no", None),
+            "tire_size": getattr(merged_slots, "tire_size", None),
+            "ord_qty": getattr(merged_slots, "ord_qty", None),
+        },
+    )
     trace_metadata: dict[str, Any] = {}
     rewritten_user_text = last_user_text
     if expected_contract_intent in _TRANSACTION_SLOT_FILL_CONTRACT_INTENTS:
-        action_context = resolve_ui_action_context(
-            raw_action={
-                "action_type": "select_product",
-                "cta_action": "select_product",
-                "expected_behavior": "slot_fill",
-                "source_intent": expected_contract_intent,
-                "expected_contract_intent": expected_contract_intent,
-                "entity_type": "product",
-                "entity_id": resolved_goods_no,
-                "entity_label": str(slot_patch.get("tire_model") or "").strip() or None,
-                "slots": slot_patch,
-            },
-            selected_vehicle=None,
-            selection_source="previous_product_candidate",
-            previous_slots={
-                "goods_no": getattr(merged_slots, "goods_no", None),
-                "tire_size": getattr(merged_slots, "tire_size", None),
-                "ord_qty": getattr(merged_slots, "ord_qty", None),
-            },
-        )
         if action_context is not None:
             trace_metadata.update(dict(action_context.trace_metadata))
             trace_metadata["validation_result"] = "resolved_from_history"
@@ -3084,7 +3085,7 @@ def resolve_product_row_from_selection(
             tied = False
         elif score == best_score and score > 0:
             tied = True
-    if best_item is not None and best_score >= 2 and not tied:
+    if best_item is not None and best_score >= 1 and not tied:
         goods_no = canonical_context_from_tool_boundary(best_item).get("goods_no")
         if goods_no:
             return best_item
@@ -3769,7 +3770,7 @@ def resolve_product_row_from_template_selection(
             tied = False
         elif score == best_score and score > 0:
             tied = True
-    if best_row and best_score >= 2 and not tied:
+    if best_row and best_score >= 1 and not tied:
         return best_row
     return None
 

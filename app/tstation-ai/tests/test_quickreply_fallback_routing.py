@@ -15223,10 +15223,36 @@ def test_apply_history_product_selection_state_resolves_goods_no_and_trace_metad
 
     assert state.updated_slots.goods_no == "G000000309715"
     assert state.goods_no_resolved is True
+    assert state.action_context is not None
+    assert state.action_context.action_type == "select_product"
+    assert state.action_context.expected_contract_intent == "product_description"
+    assert state.action_context.entity_id == "G000000309715"
+    assert state.action_context.entity_label == "다이나프로 HL3"
     assert state.trace_metadata["selected_entity_type"] == "product"
     assert state.trace_metadata["selected_entity_id"] == "G000000309715"
     assert state.trace_metadata["selection_source"] == "previous_product_candidate"
     assert state.trace_metadata["validation_result"] == "resolved_from_history"
+
+    transition = transition_current_flow(
+        user_text="다이나프로 HL3 225/55R18",
+        router_evidence={
+            "domain": "discovery",
+            "intent": "get_product_description_tool",
+            "execution_plan": ["discovery:get_product_description_tool"],
+            "source": "llm",
+        },
+        existing_slots=state.updated_slots,
+        extracted_slots=ConversationSlots(),
+        ui_action=state.action_context,
+    )
+
+    assert transition.metadata["selected_product_resolved"] is True
+    assert transition.context_evidence["selected_product"] == {
+        "goods_no": "G000000309715",
+        "product_name": "다이나프로 HL3",
+        "tire_size": "225/55R18",
+        "selection_source": "previous_product_candidate",
+    }
 
 
 def test_apply_history_product_selection_state_resolves_latest_product_template_candidate() -> None:
@@ -15258,6 +15284,9 @@ def test_apply_history_product_selection_state_resolves_latest_product_template_
     assert state.updated_slots.tire_model == "벤투스 S2 AS"
     assert state.updated_slots.tire_size == "225/45R17"
     assert state.goods_no_resolved is True
+    assert state.action_context is not None
+    assert state.action_context.action_type == "select_product"
+    assert state.action_context.entity_id == "G000000309783"
     assert state.trace_metadata["selected_entity_id"] == "G000000309783"
 
 
@@ -15288,6 +15317,77 @@ def test_apply_history_product_selection_state_resolves_ordinal_only_against_pro
 
     assert state.updated_slots.goods_no == "G000000309783"
     assert state.updated_slots.tire_model == "벤투스 S2 AS"
+    assert state.action_context is not None
+    assert state.action_context.action_type == "select_product"
+    assert state.action_context.entity_id == "G000000309783"
+
+
+def test_apply_history_product_selection_state_resolves_numeric_ordinal_against_product_candidates() -> None:
+    slots = ConversationSlots(goods_no=None, tire_size="235/55R19")
+    latest_product_tmpl = {
+        "products": [
+            {"titleProductName": "다이나프로 HP3", "titleTires": "235/55R19"},
+            {"titleProductName": "다이나프로 HL3", "titleTires": "235/55R19"},
+            {"titleProductName": "아이온 ST AS SUV", "titleTires": "235/55R19"},
+        ],
+        "metadata": [
+            {"goodsId": "G000000320151"},
+            {"goodsId": "G000000309714"},
+            {"goodsId": "G000000318219"},
+        ],
+    }
+
+    state = apply_history_product_selection_state(
+        last_user_text="2번",
+        prev_tool_data=[],
+        merged_slots=slots,
+        latest_product_tmpl=latest_product_tmpl,
+        resolve_goods_no_from_selection_fn=lambda user_text, tool_data, current_tire_size: resolve_goods_no_from_selection(
+            user_text,
+            tool_data,
+            current_tire_size=current_tire_size,
+        ),
+    )
+
+    assert state.updated_slots.goods_no == "G000000309714"
+    assert state.updated_slots.tire_model == "다이나프로 HL3"
+    assert state.action_context is not None
+    assert state.action_context.action_type == "select_product"
+    assert state.action_context.entity_id == "G000000309714"
+
+
+def test_apply_history_product_selection_state_resolves_unique_partial_product_name() -> None:
+    slots = ConversationSlots(goods_no=None, tire_size="235/55R19")
+    latest_product_tmpl = {
+        "products": [
+            {"titleProductName": "다이나프로 HP3", "titleTires": "235/55R19"},
+            {"titleProductName": "다이나프로 HL3", "titleTires": "235/55R19"},
+            {"titleProductName": "아이온 ST AS SUV", "titleTires": "235/55R19"},
+        ],
+        "metadata": [
+            {"goodsId": "G000000320151"},
+            {"goodsId": "G000000309714"},
+            {"goodsId": "G000000318219"},
+        ],
+    }
+
+    state = apply_history_product_selection_state(
+        last_user_text="HL3",
+        prev_tool_data=[],
+        merged_slots=slots,
+        latest_product_tmpl=latest_product_tmpl,
+        resolve_goods_no_from_selection_fn=lambda user_text, tool_data, current_tire_size: resolve_goods_no_from_selection(
+            user_text,
+            tool_data,
+            current_tire_size=current_tire_size,
+        ),
+    )
+
+    assert state.updated_slots.goods_no == "G000000309714"
+    assert state.updated_slots.tire_model == "다이나프로 HL3"
+    assert state.action_context is not None
+    assert state.action_context.action_type == "select_product"
+    assert state.action_context.entity_id == "G000000309714"
 
 
 def test_apply_history_product_selection_state_does_not_guess_demonstrative_with_multiple_candidates() -> None:
