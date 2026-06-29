@@ -22374,6 +22374,74 @@ def _stage_pending_order_context(slots: ConversationSlots, *, source: str) -> di
     return merged_pending_context
 
 
+def _start_active_purchase_flow_for_missing_product(
+    slots: ConversationSlots,
+    *,
+    routing_result: Any | None,
+    action_mode: str,
+    context_state: str,
+    source: str,
+) -> dict[str, Any]:
+    """Start a current-turn purchase flow even when product/goods_no is still missing."""
+
+    router_intent = str(getattr(routing_result, "intent", "") or "").strip()
+    policy_intent = str(getattr(routing_result, "policy_intent", "") or "").strip()
+    response_intent = str(getattr(routing_result, "response_intent", "") or "").strip()
+    intent_values = {router_intent, policy_intent, response_intent, action_mode}
+    if not (intent_values & {"quick_order_reservation", "quick_order_execute", "purchase_continuation"}):
+        return {}
+    if getattr(slots, "goods_no", None) or getattr(slots, "tire_model", None) or getattr(slots, "pending_product_name", None):
+        return {}
+    has_purchase_shape = bool(
+        getattr(slots, "ord_qty", None)
+        or getattr(slots, "shop_id", None)
+        or getattr(slots, "shop_name", None)
+        or getattr(slots, "region", None)
+    )
+    if not has_purchase_shape:
+        return {}
+
+    slots.pending_intent = "order"
+    slots.goal_type = "place_order"
+    context = dict(slots.availability_context or {})
+    pending_context = _pending_order_context_values(slots)
+    pending_context["pending_intent"] = "order"
+    pending_context["goal_type"] = "place_order"
+    pending_context["context_state"] = context_state
+    existing_pending_context = (
+        context.get("pending_order_context")
+        if isinstance(context.get("pending_order_context"), Mapping)
+        else {}
+    )
+    merged_pending_context, pending_commit_metadata = _merge_pending_order_context(
+        existing_pending_context,
+        pending_context,
+        source=source,
+    )
+    context["pending_order_context"] = merged_pending_context
+
+    active_seed = dict(merged_pending_context)
+    active_context = context.get("active_flow_context") if isinstance(context.get("active_flow_context"), Mapping) else {}
+    commit_result = commit_flow_state(
+        active_context,
+        active_seed,
+        source=source,
+        flow_type="purchase",
+        flow_step="ask_product",
+        status="active",
+    )
+    context["active_flow_context"] = commit_result.state.to_active_flow_context()
+    slots.availability_context = context
+    logger.info(
+        "[FLOW_STATE_COMMIT] event=%s committed=%s pending_after=%s active_after=%s",
+        pending_commit_metadata["slot_commit_event"],
+        pending_commit_metadata["committed_fields"],
+        merged_pending_context,
+        context["active_flow_context"],
+    )
+    return context["active_flow_context"]
+
+
 def _stage_unsized_purchase_order_context(
     slots: ConversationSlots,
     *,
@@ -29216,7 +29284,20 @@ class TStationChatServiceV2:
         dormant_context_reason = None
         if context_state == "dormant" and (previous_pending_intent or previous_goal_type):
             dormant_context_reason = f"current_turn_action:{action_mode}"
-        if action_mode in {"purchase_continuation", "stock_check", "booking_continuation"}:
+        started_active_purchase_context = _start_active_purchase_flow_for_missing_product(
+            merged_slots,
+            routing_result=routing_result,
+            action_mode=action_mode,
+            context_state=context_state,
+            source=f"pre_policy_context:{context_state}:purchase_start",
+        )
+        if started_active_purchase_context:
+            vehicle_selection_trace_metadata.update({
+                "active_purchase_flow_started": True,
+                "active_purchase_flow_start_source": f"pre_policy_context:{context_state}:purchase_start",
+                "active_purchase_flow_context_after": started_active_purchase_context,
+            })
+        if started_active_purchase_context or action_mode in {"purchase_continuation", "stock_check", "booking_continuation"}:
             staged_pending_order_context = _stage_pending_order_context(
                 merged_slots,
                 source=f"pre_policy_context:{context_state}",
@@ -29302,12 +29383,31 @@ class TStationChatServiceV2:
                     source="active_recommendation_vehicle_selection:parent_purchase",
                 )
                 availability_context_for_parent_purchase["pending_order_context"] = merged_pending_context
+                existing_active_purchase_context = (
+                    availability_context_for_parent_purchase.get("active_flow_context")
+                    if isinstance(availability_context_for_parent_purchase.get("active_flow_context"), Mapping)
+                    else {}
+                )
+                active_purchase_commit = commit_flow_state(
+                    existing_active_purchase_context,
+                    merged_pending_context,
+                    source="active_recommendation_vehicle_selection:parent_purchase",
+                    flow_type="purchase",
+                    flow_step="vehicle_selected",
+                    status="active",
+                )
+                availability_context_for_parent_purchase["active_flow_context"] = (
+                    active_purchase_commit.state.to_active_flow_context()
+                )
                 merged_slots = merged_slots.model_copy()
                 merged_slots.availability_context = availability_context_for_parent_purchase
                 vehicle_selection_trace_metadata.update({
                     "parent_purchase_context_resumed": True,
                     "parent_purchase_context_patch_keys": sorted(purchase_vehicle_patch),
                     "parent_purchase_context_after": merged_pending_context,
+                    "parent_purchase_active_context_after": availability_context_for_parent_purchase[
+                        "active_flow_context"
+                    ],
                 })
                 logger.info(
                     "[FLOW_STATE] Merged selected vehicle size into parent purchase context: %s",

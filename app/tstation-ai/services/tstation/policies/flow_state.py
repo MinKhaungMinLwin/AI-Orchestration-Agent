@@ -35,7 +35,21 @@ _RECOMMENDATION_FIELDS = (
 )
 _STORE_FIELDS = ("region", "shop_id", "shop_name", "store_name", "place_query")
 _SCHEDULE_FIELDS = ("requested_cal_day", "rsv_hour")
-_PAYMENT_FIELDS = ("payment_amount", "price_basis", "price_source_tool", "payment_amount_stale")
+_PAYMENT_FIELDS = (
+    "payment_amount",
+    "price_basis",
+    "price_source_tool",
+    "payment_amount_stale",
+    "sale_prc",
+    "extra_fvr_sale_prc",
+    "cheapest_final_prc",
+    "final_unit_price",
+    "final_prc",
+    "final_price",
+    "finalPrice",
+    "price",
+    "wage_prc",
+)
 _INTENT_FIELDS = ("pending_intent", "goal_type", "stock_check_mode", "schedule_mode", "availability_intent")
 _FLOW_PROGRESS_META_FIELDS = (
     "target_action",
@@ -663,6 +677,7 @@ class FlowState:
         merged = FlowState.from_active_flow_context(before)
         committed_fields: list[str] = []
         preserved_fields: list[str] = []
+        cleared_fields: list[str] = []
         conflicts: dict[str, dict[str, Any]] = {}
 
         if delta.flow_type and merged.flow_type != delta.flow_type:
@@ -672,6 +687,36 @@ class FlowState:
         elif delta.flow_step:
             merged.flow_step = delta.flow_step
             committed_fields.append("flow_step")
+
+        existing_goods_no = str(merged.product.get("goods_no") or "").strip()
+        incoming_goods_no = str(delta.product.get("goods_no") or "").strip()
+        if existing_goods_no and incoming_goods_no and existing_goods_no != incoming_goods_no:
+            conflicts["goods_no"] = {"existing": existing_goods_no, "incoming": incoming_goods_no}
+            cleared_fields.extend(_clear_section(merged.store))
+            cleared_fields.extend(_clear_section(merged.schedule))
+            cleared_fields.extend(_clear_section(merged.payment))
+
+        existing_shop_id = str(merged.store.get("shop_id") or "").strip()
+        incoming_shop_id = str(delta.store.get("shop_id") or "").strip()
+        if existing_shop_id and incoming_shop_id and existing_shop_id != incoming_shop_id:
+            conflicts["shop_id"] = {"existing": existing_shop_id, "incoming": incoming_shop_id}
+            cleared_fields.extend(_clear_section(merged.schedule))
+            cleared_fields.extend(_clear_section(merged.payment))
+
+        existing_region = str(merged.store.get("region") or "").strip()
+        incoming_region = str(delta.store.get("region") or "").strip()
+        if existing_region and incoming_region and existing_region != incoming_region and not delta.store.get("shop_id"):
+            cleared_fields.extend(_clear_section(merged.schedule))
+            cleared_fields.extend(_clear_section(merged.payment))
+            for field_name in ("shop_id", "shop_name"):
+                if merged.store.pop(field_name, None) not in _EMPTY_VALUES:
+                    cleared_fields.append(field_name)
+
+        if _quantity_changed(merged.product.get("ord_qty"), delta.product.get("ord_qty")):
+            cleared_fields.extend(_clear_section(merged.payment))
+            if delta.payment.get("payment_amount") in _EMPTY_VALUES:
+                merged.payment["payment_amount_stale"] = True
+                committed_fields.append("payment_amount_stale")
 
         for section_name in (
             "product",
@@ -693,6 +738,8 @@ class FlowState:
                 target[key] = value
                 committed_fields.append(key)
 
+        if merged.payment.get("payment_amount") not in _EMPTY_VALUES:
+            merged.payment.pop("payment_amount_stale", None)
         if delta.candidates:
             merged.candidates = [dict(candidate) for candidate in delta.candidates]
             committed_fields.append("last_candidates")
@@ -710,13 +757,16 @@ class FlowState:
                 "slot_commit_event": source,
                 "committed_fields": sorted(dict.fromkeys(committed_fields)),
                 "preserved_fields": sorted(dict.fromkeys(preserved_fields)),
-                "cleared_fields": [],
+                "cleared_fields": sorted(dict.fromkeys(cleared_fields)),
                 "flow_state_before": before,
                 "flow_state_delta": delta.to_active_flow_context(),
                 "flow_state_after": after,
                 "flow_state_commit_source": source,
                 "flow_state_conflicts": conflicts,
-                "payment_amount_stale": False,
+                "payment_amount_stale": bool(
+                    merged.payment.get("payment_amount_stale")
+                    and merged.payment.get("payment_amount") in _EMPTY_VALUES
+                ),
             },
         )
 
@@ -756,7 +806,7 @@ def commit_flow_state(
     existing_state = FlowState.from_active_flow_context(existing_context)
     delta_state = FlowState.from_flat_delta(delta, source=source, flow_type=flow_type, flow_step=flow_step)
     delta_state.status = status
-    return existing_state.merge(delta_state, source=source)
+    return existing_state._merge_active(delta_state, source=source)
 
 
 def latest_router_evidence(

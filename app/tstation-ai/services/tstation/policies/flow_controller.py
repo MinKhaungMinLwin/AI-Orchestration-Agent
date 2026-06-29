@@ -395,6 +395,24 @@ def _selected_product_flow_context(
         }.items()
         if value not in (None, "", [], {})
     }
+    payment = {
+        key: value
+        for key, value in {
+            "payment_amount": slot_patch.get("payment_amount"),
+            "price_basis": slot_patch.get("price_basis"),
+            "price_source_tool": slot_patch.get("price_source_tool"),
+            "sale_prc": slot_patch.get("sale_prc"),
+            "extra_fvr_sale_prc": slot_patch.get("extra_fvr_sale_prc"),
+            "cheapest_final_prc": slot_patch.get("cheapest_final_prc"),
+            "final_unit_price": slot_patch.get("final_unit_price"),
+            "final_prc": slot_patch.get("final_prc"),
+            "final_price": slot_patch.get("final_price"),
+            "finalPrice": slot_patch.get("finalPrice"),
+            "price": slot_patch.get("price"),
+            "wage_prc": slot_patch.get("wage_prc"),
+        }.items()
+        if value not in (None, "", [], {})
+    }
     return {
         key: value
         for key, value in {
@@ -403,6 +421,7 @@ def _selected_product_flow_context(
             "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "flow_step": "product_selected",
             "product": product,
+            "payment": payment,
             "intent": intent,
             "source": "flow_controller:select_product",
         }.items()

@@ -94,6 +94,16 @@ _PRODUCT_CONTEXT_NAMES = (
     "dormant_stock_context",
     "dormant_transaction_context",
 )
+_PRODUCT_PRICE_FIELDS = (
+    "cheapest_final_prc",
+    "final_unit_price",
+    "final_prc",
+    "final_price",
+    "finalPrice",
+    "extra_fvr_sale_prc",
+    "price",
+    "sale_prc",
+)
 _QUANTITY_LABEL_RE = re.compile(r"^\s*([1-4])\s*(?:개|본)\s*$")
 _CTA_CLARIFICATION_LABEL_RE = re.compile(r"(?:다른\s*)?(?:지역|장소|날짜|일정)\s*(?:입력|찾기|검색|확인)")
 _SIZE_ONLY_RE = re.compile(r"^\s*\d{3}\s*[/\s]?\s*\d{2}\s*(?:R|\s|/)?\s*\d{2}\s*$", re.IGNORECASE)
@@ -206,6 +216,17 @@ _UI_ACTION_SLOT_KEYS = (
     "pending_product_name",
     "ord_qty",
     "payment_amount",
+    "price_basis",
+    "price_source_tool",
+    "sale_prc",
+    "extra_fvr_sale_prc",
+    "cheapest_final_prc",
+    "final_unit_price",
+    "final_prc",
+    "final_price",
+    "finalPrice",
+    "price",
+    "wage_prc",
     "region",
     "shop_id",
     "shop_name",
@@ -2073,6 +2094,31 @@ def apply_history_vehicle_selection_state(
     )
 
 
+def _selected_product_price_patch(row: Mapping[str, Any]) -> dict[str, Any]:
+    patch: dict[str, Any] = {}
+    for key in (*_PRODUCT_PRICE_FIELDS, "wage_prc"):
+        value = row.get(key)
+        if value in (None, "", [], {}):
+            continue
+        try:
+            parsed_value = int(str(value).replace(",", ""))
+        except (TypeError, ValueError):
+            continue
+        if parsed_value <= 0:
+            continue
+        patch[key] = parsed_value
+
+    for key in _PRODUCT_PRICE_FIELDS:
+        value = patch.get(key)
+        if value in (None, "", 0):
+            continue
+        patch["payment_amount"] = value
+        patch["price_basis"] = key
+        patch["price_source_tool"] = "selected_product_candidate"
+        break
+    return patch
+
+
 def apply_history_product_selection_state(
     *,
     last_user_text: str,
@@ -2156,6 +2202,7 @@ def apply_history_product_selection_state(
             slot_patch["tire_model"] = product_name
         if tire_size:
             slot_patch["tire_size"] = tire_size
+        slot_patch.update(_selected_product_price_patch(resolved_row))
 
     expected_contract_intent = _interactive_flow_contract_intent_from_slots(
         {

@@ -175,6 +175,7 @@ from services.tstation.chat import (
     _mask_dormant_transaction_action_slots,
     _stage_dormant_transaction_context,
     _stage_pending_order_context,
+    _start_active_purchase_flow_for_missing_product,
     _stage_unsized_purchase_order_context,
     _stage_pending_product_context_from_search,
     _clear_invalid_store_identity_slots,
@@ -13424,6 +13425,12 @@ def test_flow_transition_shell_records_selected_product_without_executing() -> N
             "tire_model": "Ventus S2 AS",
             "tire_size": "245/45R19",
             "ord_qty": 2,
+            "sale_prc": 405900,
+            "extra_fvr_sale_prc": 316200,
+            "cheapest_final_prc": 298400,
+            "payment_amount": 298400,
+            "price_basis": "cheapest_final_prc",
+            "price_source_tool": "selected_product_candidate",
             "pending_intent": "order",
             "goal_type": "place_order",
         },
@@ -13460,6 +13467,11 @@ def test_flow_transition_shell_records_selected_product_without_executing() -> N
     assert active_flow_context["product"]["goods_no"] == "G000000310126"
     assert active_flow_context["product"]["product_name"] == "Ventus S2 AS"
     assert active_flow_context["product"]["tire_size"] == "245/45R19"
+    assert active_flow_context["payment"]["payment_amount"] == 298400
+    assert active_flow_context["payment"]["price_basis"] == "cheapest_final_prc"
+    assert active_flow_context["payment"]["sale_prc"] == 405900
+    assert active_flow_context["payment"]["extra_fvr_sale_prc"] == 316200
+    assert active_flow_context["payment"]["cheapest_final_prc"] == 298400
     assert active_flow_context["intent"]["pending_intent"] == "order"
     assert active_flow_context["intent"]["goal_type"] == "place_order"
     assert slots.goods_no is None
@@ -15949,6 +15961,45 @@ def test_vehicle_selection_merges_size_into_parent_purchase_context() -> None:
     assert pending_context["goal_type"] == "place_order"
 
 
+def test_vehicle_selection_updates_active_parent_purchase_context() -> None:
+    parent_context = {
+        "flow_type": "purchase",
+        "status": "active",
+        "ord_qty": 4,
+        "shop_name": "광교신도시점",
+        "pending_intent": "order",
+        "goal_type": "place_order",
+    }
+    patch = purchase_context_vehicle_selection_patch(
+        parent_context=parent_context,
+        selected_vehicle_slots={
+            "car_no": "61거1836",
+            "car_lnc_cd": "W036269",
+            "tire_size": "235/55R19",
+        },
+    )
+
+    result = commit_flow_state(
+        parent_context,
+        patch,
+        source="active_recommendation_vehicle_selection:parent_purchase",
+        flow_type="purchase",
+        flow_step="vehicle_selected",
+        status="active",
+    )
+    active_context = result.state.to_active_flow_context()
+
+    assert active_context["flow_type"] == "purchase"
+    assert active_context["flow_step"] == "vehicle_selected"
+    assert active_context["product"]["tire_size"] == "235/55R19"
+    assert active_context["product"]["ord_qty"] == 4
+    assert active_context["store"]["shop_name"] == "광교신도시점"
+    assert active_context["intent"]["pending_intent"] == "order"
+    assert active_context["intent"]["goal_type"] == "place_order"
+    assert active_context["current_step"] == "ask_product"
+    assert active_context["missing_slots"] == ["product"]
+
+
 def test_vehicle_selection_does_not_create_purchase_context_for_plain_recommendation() -> None:
     assert (
         purchase_context_vehicle_selection_patch(
@@ -16267,7 +16318,14 @@ def test_apply_history_product_selection_state_resolves_goods_no_and_trace_metad
     prev_tool_data = [{
         "tool": "search_product_tool",
         "data": [
-            {"goods_no": "G000000309715", "goods_nm": "다이나프로 HL3", "tire_size_1": "225/55R18"},
+            {
+                "goods_no": "G000000309715",
+                "goods_nm": "다이나프로 HL3",
+                "tire_size_1": "225/55R18",
+                "sale_prc": 405900,
+                "extra_fvr_sale_prc": 316200,
+                "cheapest_final_prc": 298400,
+            },
             {"goods_no": "G000000309716", "goods_nm": "벤투스 S2 AS", "tire_size_1": "225/55R18"},
         ],
     }]
@@ -16290,6 +16348,11 @@ def test_apply_history_product_selection_state_resolves_goods_no_and_trace_metad
     assert state.action_context.expected_contract_intent == "product_description"
     assert state.action_context.entity_id == "G000000309715"
     assert state.action_context.entity_label == "다이나프로 HL3"
+    assert state.action_context.slot_patch["payment_amount"] == 298400
+    assert state.action_context.slot_patch["price_basis"] == "cheapest_final_prc"
+    assert state.action_context.slot_patch["sale_prc"] == 405900
+    assert state.action_context.slot_patch["extra_fvr_sale_prc"] == 316200
+    assert state.action_context.slot_patch["cheapest_final_prc"] == 298400
     assert state.trace_metadata["selected_entity_type"] == "product"
     assert state.trace_metadata["selected_entity_id"] == "G000000309715"
     assert state.trace_metadata["selection_source"] == "previous_product_candidate"
@@ -16315,6 +16378,8 @@ def test_apply_history_product_selection_state_resolves_goods_no_and_trace_metad
         "tire_size": "225/55R18",
         "selection_source": "previous_product_candidate",
     }
+    assert transition.flow_transition["active_flow_context"]["payment"]["payment_amount"] == 298400
+    assert transition.flow_transition["active_flow_context"]["payment"]["price_basis"] == "cheapest_final_prc"
 
 
 def test_apply_history_product_selection_state_resolves_latest_product_template_candidate() -> None:
@@ -24872,6 +24937,35 @@ def test_purchase_flow_state_region_delta_preserves_product_context() -> None:
     assert result.metadata["preserved_fields"]
 
 
+def test_missing_product_purchase_request_starts_active_purchase_flow() -> None:
+    slots = ConversationSlots(ord_qty=4, shop_name="광교신도시점")
+
+    active_context = _start_active_purchase_flow_for_missing_product(
+        slots,
+        routing_result=SimpleNamespace(
+            intent="quick_order_reservation",
+            policy_intent="quick_order_reservation",
+            response_intent="quick_order_reservation",
+        ),
+        action_mode="info_only",
+        context_state="active",
+        source="pre_policy_context:active:purchase_start",
+    )
+
+    assert active_context["flow_type"] == "purchase"
+    assert active_context["flow_step"] == "ask_product"
+    assert active_context["product"]["ord_qty"] == 4
+    assert active_context["store"]["shop_name"] == "광교신도시점"
+    assert active_context["intent"]["pending_intent"] == "order"
+    assert active_context["intent"]["goal_type"] == "place_order"
+    assert active_context["current_step"] == "ask_product"
+    assert active_context["missing_slots"] == ["product"]
+    assert slots.pending_intent == "order"
+    assert slots.goal_type == "place_order"
+    assert slots.availability_context["pending_order_context"]["ord_qty"] == 4
+    assert slots.availability_context["active_flow_context"]["flow_type"] == "purchase"
+
+
 def test_purchase_flow_state_product_change_clears_store_schedule_payment() -> None:
     result = commit_purchase_flow_state(
         {
@@ -24908,6 +25002,48 @@ def test_purchase_flow_state_product_change_clears_store_schedule_payment() -> N
     assert "price_basis" not in context
     assert "goods_no" in result.metadata["flow_state_conflicts"]
     assert "shop_id" in result.metadata["cleared_fields"]
+
+
+def test_active_purchase_flow_product_change_clears_store_schedule_payment() -> None:
+    result = commit_flow_state(
+        {
+            "flow_type": "purchase",
+            "status": "active",
+            "flow_step": "show_schedule",
+            "product": {
+                "goods_no": "OLD",
+                "product_name": "이전 상품",
+                "tire_size": "245/45R19",
+                "ord_qty": 2,
+            },
+            "store": {"region": "분당", "shop_id": "S1", "shop_name": "티스테이션 분당정자점"},
+            "schedule": {"requested_cal_day": "2026-07-01", "rsv_hour": "16:00"},
+            "payment": {"payment_amount": 308200, "price_basis": "cheapest_final_prc"},
+            "intent": {"pending_intent": "order", "goal_type": "place_order"},
+        },
+        {
+            "goods_no": "NEW",
+            "product_name": "새 상품",
+            "tire_size": "245/45R19",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        source="active_product_change",
+        flow_type="purchase",
+        flow_step="product_selected",
+        status="active",
+    )
+
+    context = result.state.to_active_flow_context()
+    assert context["flow_step"] == "product_selected"
+    assert context["product"]["goods_no"] == "NEW"
+    assert context["product"]["product_name"] == "새 상품"
+    assert "store" not in context
+    assert "schedule" not in context
+    assert "payment" not in context
+    assert "goods_no" in result.metadata["flow_state_conflicts"]
+    assert "shop_id" in result.metadata["cleared_fields"]
+    assert "payment_amount" in result.metadata["cleared_fields"]
 
 
 def test_purchase_flow_state_quantity_change_marks_payment_stale() -> None:
