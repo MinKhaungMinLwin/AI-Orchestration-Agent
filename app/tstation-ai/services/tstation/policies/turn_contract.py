@@ -246,6 +246,12 @@ ROUTER_WINS_INFORMATIONAL_INTENTS = frozenset({
     "support_faq",
     "policy_notice_or_escalation",
 })
+ROUTER_WINS_EXECUTION_BOUNDARY_INTENTS = frozenset({
+    "stock_store_search",
+    "store_schedule",
+    "open_store_search",
+    "store_service_search",
+})
 _SUPPORT_FAQ_POLICY_TOOL_INTENTS = frozenset({
     "general_cancel_fee_policy",
     "general_card_cancel_timing_policy",
@@ -313,6 +319,20 @@ _ROUTER_WINS_TRANSACTION_FORBIDDEN_TOOLS = frozenset({
     "get_multi_store_schedule_tool",
     "get_store_inventory_tool",
     "get_logistics_inventory_tool",
+    "get_final_price_tool",
+    "compare_discount_tool",
+    "get_orders_of_user_tool",
+    "get_order_status_tool",
+    "get_my_reservations_tool",
+    "get_my_coupons_tool",
+    "get_available_coupons_tool",
+    "get_coupon_applicable_products_tool",
+    "issue_coupon_tool",
+})
+_ROUTER_WINS_ORDER_EXECUTION_FORBIDDEN_TOOLS = frozenset({
+    "quick_order_tool",
+    "save_to_cart_tool",
+    "add_to_cart_tool",
     "get_final_price_tool",
     "compare_discount_tool",
     "get_orders_of_user_tool",
@@ -462,7 +482,7 @@ def build_turn_contract(
     policy_intent = str(getattr(routing_result, "policy_intent", "") or "")
     if planner_intent == "payment_error_troubleshooting" and _is_payment_error_policy_overmatch(user_text):
         planner_intent = None
-    router_wins_intent = _router_wins_information_intent(
+    router_wins_intent = _router_wins_current_turn_intent(
         user_text=user_text,
         planner_intent=planner_intent,
         policy_intent=policy_intent,
@@ -3986,6 +4006,37 @@ def _router_wins_information_intent(
     return None
 
 
+def _router_wins_current_turn_intent(
+    *,
+    user_text: str = "",
+    planner_intent: str | None,
+    policy_intent: str,
+    routing_result: Any | None,
+    intent_frame: IntentFrame | None = None,
+    response_decision: ResponseDecision | None = None,
+    action_mode: str = "",
+) -> str | None:
+    informational_intent = _router_wins_information_intent(
+        user_text=user_text,
+        planner_intent=planner_intent,
+        policy_intent=policy_intent,
+        routing_result=routing_result,
+        intent_frame=intent_frame,
+        response_decision=response_decision,
+        action_mode=action_mode,
+    )
+    if informational_intent:
+        return informational_intent
+    candidates = (
+        str(policy_intent or "").strip(),
+        str(planner_intent or "").strip(),
+    )
+    for candidate in candidates:
+        if candidate in ROUTER_WINS_EXECUTION_BOUNDARY_INTENTS:
+            return candidate
+    return None
+
+
 def _is_payment_error_policy_overmatch(user_text: str | None) -> bool:
     text = str(user_text or "")
     return (
@@ -4040,10 +4091,86 @@ def _router_wins_domain(intent: str, planner_domains: tuple[str, ...]) -> str:
         return "discovery"
     if intent in ROUTER_WINS_INFORMATIONAL_INTENTS or intent.endswith("_policy") or intent.endswith("_guidance"):
         return "support"
+    if intent in ROUTER_WINS_EXECUTION_BOUNDARY_INTENTS:
+        return "transaction"
     return planner_domains[0] if planner_domains else "support"
 
 
 def _router_wins_tool_boundary(intent: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    if intent == "stock_store_search":
+        allowed_tools = (
+            "transaction_store_preview_tool",
+            "search_stores_tool",
+            "search_stores_complex_tool",
+            "get_store_list_tool",
+            "get_nearby_stores_tool",
+        )
+        return (
+            allowed_tools,
+            tuple(
+                tool
+                for tool in _ROUTER_WINS_ORDER_EXECUTION_FORBIDDEN_TOOLS
+                | {
+                    "get_store_schedule_tool",
+                    "get_multi_store_schedule_tool",
+                }
+                if tool not in allowed_tools
+            ),
+        )
+    if intent == "store_schedule":
+        return (
+            ("get_store_schedule_tool",),
+            tuple(
+                tool
+                for tool in _ROUTER_WINS_ORDER_EXECUTION_FORBIDDEN_TOOLS
+                | _STORE_SERVICE_SEARCH_TOOLS
+                | {
+                    "transaction_store_preview_tool",
+                    "get_store_inventory_tool",
+                    "get_logistics_inventory_tool",
+                    "get_multi_store_schedule_tool",
+                }
+                if tool != "get_store_schedule_tool"
+            ),
+        )
+    if intent == "store_service_search":
+        allowed_tools = tuple(_STORE_SERVICE_SEARCH_TOOLS)
+        return (
+            allowed_tools,
+            tuple(
+                tool
+                for tool in _ROUTER_WINS_ORDER_EXECUTION_FORBIDDEN_TOOLS
+                | {
+                    "transaction_store_preview_tool",
+                    "get_store_schedule_tool",
+                    "get_multi_store_schedule_tool",
+                    "get_store_inventory_tool",
+                    "get_logistics_inventory_tool",
+                }
+                if tool not in allowed_tools
+            ),
+        )
+    if intent == "open_store_search":
+        allowed_tools = (
+            "search_stores_tool",
+            "search_stores_complex_tool",
+            "get_store_list_tool",
+            "get_nearby_stores_tool",
+            "get_store_schedule_tool",
+        )
+        return (
+            allowed_tools,
+            tuple(
+                tool
+                for tool in _ROUTER_WINS_ORDER_EXECUTION_FORBIDDEN_TOOLS
+                | {
+                    "transaction_store_preview_tool",
+                    "get_store_inventory_tool",
+                    "get_logistics_inventory_tool",
+                }
+                if tool not in allowed_tools
+            ),
+        )
     if intent == "product_size_list_lookup":
         return (
             ("search_product_tool",),
@@ -4082,8 +4209,8 @@ def _router_wins_tool_boundary(intent: str) -> tuple[tuple[str, ...], tuple[str,
             ),
         )
     return (
-        _SUPPORT_SAFE_AGENT_TOOLS,
-        tuple(tool for tool in _ROUTER_WINS_TRANSACTION_FORBIDDEN_TOOLS if tool not in _SUPPORT_SAFE_AGENT_TOOLS),
+        ("search_faq_hybrid_tool",),
+        tuple(tool for tool in _ROUTER_WINS_TRANSACTION_FORBIDDEN_TOOLS if tool != "search_faq_hybrid_tool"),
     )
 
 
@@ -4106,7 +4233,47 @@ def _response_shape_key(response_decision_payload: Mapping[str, Any] | None) -> 
 
 def _router_wins_response_decision(intent: str) -> dict[str, Any]:
     response_shape_key = _router_wins_response_shape_key(intent)
-    if intent in {"product_detail_lookup", "product_description"}:
+    response_shape = "summary"
+    template = "quickReply"
+    forbidden_behaviors = [
+        "resume_stale_transaction_flow",
+        "start_owned_record_lookup",
+        "normalize_as_purchase_or_schedule",
+    ]
+    if intent == "stock_store_search":
+        response_shape = "location"
+        template = "location"
+        guidance = "현재 턴의 재고/장착 가능 매장 검색만 수행한다. 주문 확정, 장바구니, 예약 실행으로 조기 전환하지 않는다."
+        forbidden_behaviors = [
+            "resume_stale_transaction_flow",
+            "start_quick_order_execution",
+            "emit_preorder_without_user_confirmation",
+            "emit_order_complete_without_quick_order_tool",
+            "emit_datepick_before_store_selection",
+        ]
+    elif intent == "store_schedule":
+        response_shape = "date_pick"
+        template = "datepick"
+        guidance = "현재 턴의 매장 예약 가능 시간 조회만 수행한다. 주문 확정이나 매장 목록 반복으로 전환하지 않는다."
+        forbidden_behaviors = [
+            "resume_stale_transaction_flow",
+            "start_quick_order_execution",
+            "loop_store_preview_instead_of_schedule",
+            "emit_preorder_without_user_confirmation",
+            "emit_order_complete_without_quick_order_tool",
+        ]
+    elif intent in {"open_store_search", "store_service_search"}:
+        response_shape = "location"
+        template = "location"
+        guidance = "현재 턴의 매장 검색 intent 기준으로 매장을 조회한다. 주문/가격/쿠폰/예약 실행 flow로 전환하지 않는다."
+        forbidden_behaviors = [
+            "resume_stale_transaction_flow",
+            "start_quick_order_execution",
+            "start_price_or_coupon_execution",
+            "emit_preorder_without_user_confirmation",
+            "emit_order_complete_without_quick_order_tool",
+        ]
+    elif intent in {"product_detail_lookup", "product_description"}:
         guidance = "현재 턴의 상품 설명 의도에 맞춰 상품 정보/특징을 요약한다. 추천/구매/매장 흐름으로 전환하지 않는다."
     elif intent == "product_comparison":
         guidance = "현재 턴의 비교 대상 상품만 구분해 비교한다. 같은 goods_no 두 번 비교하거나 이전 추천 정책으로 응답하지 않는다."
@@ -4117,14 +4284,10 @@ def _router_wins_response_decision(intent: str) -> dict[str, Any]:
     else:
         guidance = "현재 턴의 FAQ/정책 intent 기준으로 안내하고 개인 조회, 구매, 예약 실행 flow로 전환하지 않는다."
     return {
-        "response_shape": "summary",
-        "template": "quickReply",
+        "response_shape": response_shape,
+        "template": template,
         "required_slots": [],
-        "forbidden_behaviors": [
-            "resume_stale_transaction_flow",
-            "start_owned_record_lookup",
-            "normalize_as_purchase_or_schedule",
-        ],
+        "forbidden_behaviors": forbidden_behaviors,
         "assistant_guidance": guidance,
         "metadata": {"response_shape_key": response_shape_key},
     }
