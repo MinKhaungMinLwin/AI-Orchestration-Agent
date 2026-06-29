@@ -366,6 +366,8 @@ class TurnContract:
     resolvable_required_slots: tuple[str, ...] = ()
     allowed_tools: tuple[str, ...] = ()
     forbidden_tools: tuple[str, ...] = ()
+    preferred_tool: str | None = None
+    tool_args_patch: Mapping[str, Any] = field(default_factory=dict)
     response_decision: Mapping[str, Any] | None = None
     risk_level: str = "low"
     fallback_reason: str | None = None
@@ -419,6 +421,8 @@ class TurnContract:
             "allowed_tools": list(self.allowed_tools),
             "forbidden_tools": list(self.forbidden_tools),
             "blocked_tools": list(self.forbidden_tools),
+            "preferred_tool": self.preferred_tool,
+            "tool_args_patch": dict(self.tool_args_patch),
             "response_decision": dict(self.response_decision or {}),
             "risk_level": self.risk_level,
             "fallback_reason": self.fallback_reason,
@@ -712,6 +716,12 @@ def build_turn_contract(
         domain = _router_wins_domain(router_wins_intent, planner_domains)
         intent = router_wins_intent
     action_required_slots = tool_plan.required_slots if tool_plan is not None else ()
+    preferred_tool = str(tool_plan.preferred_tool or "").strip() if tool_plan is not None else ""
+    tool_args_patch = {
+        str(key): value
+        for key, value in dict(tool_plan.tool_args_patch if tool_plan is not None else {}).items()
+        if value not in (None, "", [], {})
+    }
     fallback_required_slots = (
         intent_frame.missing_slots
         if tool_plan is None and intent_frame is not None
@@ -1161,6 +1171,25 @@ def build_turn_contract(
         if _router_wins_response_decision_mismatch(router_wins_intent, response_decision_payload):
             response_decision_payload = _router_wins_response_decision(router_wins_intent)
 
+    preferred_allowed = bool(
+        preferred_tool
+        and (not allowed_tools or preferred_tool in allowed_tools)
+        and preferred_tool not in forbidden_tools
+    )
+    if not preferred_allowed:
+        original_preferred_tool = preferred_tool
+        preferred_tool = (
+            _default_preferred_tool_for_boundary(
+                intent=intent,
+                allowed_tools=allowed_tools,
+                forbidden_tools=forbidden_tools,
+            ) or ""
+            if router_wins_intent or len(allowed_tools) == 1 or intent in _SUPPORT_FAQ_POLICY_TOOL_INTENTS
+            else ""
+        )
+        if preferred_tool != original_preferred_tool:
+            tool_args_patch = {}
+
     return TurnContract(
         domain=domain,
         intent=intent,
@@ -1171,6 +1200,8 @@ def build_turn_contract(
         resolvable_required_slots=resolvable_required_slots,
         allowed_tools=allowed_tools,
         forbidden_tools=forbidden_tools,
+        preferred_tool=preferred_tool or None,
+        tool_args_patch=tool_args_patch,
         response_decision=response_decision_payload,
         risk_level=risk_level,
         fallback_reason=fallback_reason,
@@ -1287,7 +1318,20 @@ def _should_align_router_wins_tool_plan(contract: TurnContract) -> bool:
 
 
 def _router_wins_default_preferred_tool(contract: TurnContract) -> str | None:
-    intent = str(contract.intent or "")
+    return _default_preferred_tool_for_boundary(
+        intent=str(contract.intent or ""),
+        allowed_tools=tuple(contract.allowed_tools or ()),
+        forbidden_tools=tuple(contract.forbidden_tools or ()),
+    )
+
+
+def _default_preferred_tool_for_boundary(
+    *,
+    intent: str,
+    allowed_tools: tuple[str, ...],
+    forbidden_tools: tuple[str, ...],
+) -> str | None:
+    intent = str(intent or "")
     preferred_by_intent = {
         "stock_store_search": "transaction_store_preview_tool",
         "store_schedule": "get_store_schedule_tool",
@@ -1295,11 +1339,11 @@ def _router_wins_default_preferred_tool(contract: TurnContract) -> str | None:
         "store_service_search": "search_stores_tool",
     }
     preferred = preferred_by_intent.get(intent)
-    if preferred and preferred in contract.allowed_tools and preferred not in contract.forbidden_tools:
+    if preferred and preferred in allowed_tools and preferred not in forbidden_tools:
         return preferred
-    if intent in _SUPPORT_FAQ_POLICY_TOOL_INTENTS and "search_faq_hybrid_tool" in contract.allowed_tools:
+    if intent in _SUPPORT_FAQ_POLICY_TOOL_INTENTS and "search_faq_hybrid_tool" in allowed_tools:
         return "search_faq_hybrid_tool"
-    return next((tool for tool in contract.allowed_tools if tool not in contract.forbidden_tools), None)
+    return next((tool for tool in allowed_tools if tool not in forbidden_tools), None)
 
 
 def _support_answer_contract_owns_response(*, domain: str, intent: str, action_mode: str) -> bool:

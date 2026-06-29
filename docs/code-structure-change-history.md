@@ -121,6 +121,31 @@ Router/FlowController/TurnContract: current-turn stock/store 또는 sized recomm
 - `contract_seed`만 intent/action을 만들고 `context_evidence`는 slot 보강에만 쓰는 규칙을 `build_turn_contract()` 입력
   구조로 강제한다.
 
+## 2026-06-29 구조 변경 적용: contract-required executor 2차 1단계
+
+### 배경
+
+이전 단계에서 contract-required recovery 진입점은 생겼지만, executor가 여전히 domain policy를 다시 계산하거나
+ContextVar의 tool plan을 fallback으로 읽는 구조가 남아 있었다.
+
+구조적으로는 `ToolPlan`이 만든 실행 boundary가 `TurnContract`에 저장되고, executor는 최종 contract object만 보고
+실행 후보를 고르는 방향이 맞다. 그래야 tool boundary를 생성하는 곳과 실행하는 곳이 달라져 생기는 drift를 줄일 수 있다.
+
+### 적용 내용
+
+- `TurnContract`가 `preferred_tool`과 `tool_args_patch`를 보관한다.
+- `build_turn_contract()`는 최종 `allowed_tools/forbidden_tools` 재정렬 뒤 preferred가 contract 밖이면 제거하거나
+  current-turn intent의 기본 preferred로 맞춘다.
+- stale preferred가 바뀌면 stale `tool_args_patch`도 비운다.
+- recovery executor는 discovery/support/transaction branch에서 contract preferred/tool args를 먼저 소비한다.
+- 기존 blocklist와 narrow execution guard는 유지한다.
+
+### 남은 방향
+
+- domain별 branch 안에 남아 있는 candidate 생성 로직을 공통 candidate builder로 추출한다.
+- BaseAgent의 contract tool guard와 chat-side recovery가 같은 candidate builder와 allow/deny source를 보게 한다.
+- `preferred_tool/tool_args_patch`가 없는 contract는 정책 layer에서 보강하고, executor에서 policy를 재계산하는 경로를 줄인다.
+
 ## 2026-06-29 구조 변경 계획: current-turn execution boundary와 parent flow 분리
 
 ### 배경

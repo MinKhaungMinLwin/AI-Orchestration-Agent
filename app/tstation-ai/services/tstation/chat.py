@@ -17445,6 +17445,8 @@ def _contract_required_transaction_tool_input(
         else None
     )
     if not isinstance(tool_args_patch, Mapping):
+        tool_args_patch = getattr(turn_contract, "tool_args_patch", None)
+    if not isinstance(tool_args_patch, Mapping):
         tool_args_patch = turn_contract.known_slots.get("tool_args_patch")
     if not isinstance(tool_args_patch, Mapping):
         return None
@@ -18031,6 +18033,18 @@ async def recover_blocked_fast_path_to_contract_tool(
             known_slots=known_slots,
             merged_slots=merged_slots,
         )
+        contract_preferred_tool = str(getattr(turn_contract, "preferred_tool", None) or "").strip()
+        if contract_preferred_tool and contract_preferred_tool in allowed_tools:
+            preferred_tool = contract_preferred_tool
+            tool_input = {
+                key: value
+                for key, value in dict(getattr(turn_contract, "tool_args_patch", {}) or {}).items()
+                if value not in (None, "", [], {})
+            }
+            tool_input_source = "turn_contract_tool_args_patch" if tool_input else "turn_contract_preferred_tool"
+            if preferred_tool == "get_products_recommendations_tool" and contract_required_recommendation_input:
+                tool_input = dict(contract_required_recommendation_input)
+                tool_input_source = "turn_contract_required_recommendation"
         discovery_known_slots = {
             key: value
             for key, value in {
@@ -18046,21 +18060,22 @@ async def recover_blocked_fast_path_to_contract_tool(
             }.items()
             if value not in (None, "")
         }
-        frame = build_discovery_intent_frame(user_text, known_slots=discovery_known_slots)
-        tool_plan = plan_discovery_tools(frame)
-        planned_preferred_tool = str(getattr(tool_plan, "preferred_tool", None) or "")
-        if planned_preferred_tool and planned_preferred_tool in allowed_tools:
-            preferred_tool = planned_preferred_tool
-            tool_input = {
-                key: value
-                for key, value in dict(getattr(tool_plan, "tool_args_patch", {}) or {}).items()
-                if value not in (None, "", [], {})
-            }
-            tool_input_source = "discovery_tool_plan"
-            if preferred_tool == "get_products_recommendations_tool" and contract_required_recommendation_input:
-                tool_input = dict(contract_required_recommendation_input)
-                tool_input_source = "turn_contract_required_recommendation"
-        elif len(allowed_tools) == 1:
+        if not preferred_tool:
+            frame = build_discovery_intent_frame(user_text, known_slots=discovery_known_slots)
+            tool_plan = plan_discovery_tools(frame)
+            planned_preferred_tool = str(getattr(tool_plan, "preferred_tool", None) or "")
+            if planned_preferred_tool and planned_preferred_tool in allowed_tools:
+                preferred_tool = planned_preferred_tool
+                tool_input = {
+                    key: value
+                    for key, value in dict(getattr(tool_plan, "tool_args_patch", {}) or {}).items()
+                    if value not in (None, "", [], {})
+                }
+                tool_input_source = "discovery_tool_plan"
+                if preferred_tool == "get_products_recommendations_tool" and contract_required_recommendation_input:
+                    tool_input = dict(contract_required_recommendation_input)
+                    tool_input_source = "turn_contract_required_recommendation"
+        if not preferred_tool and len(allowed_tools) == 1:
             preferred_tool = allowed_tools[0]
             if preferred_tool == "get_products_recommendations_tool" and contract_required_recommendation_input:
                 tool_input = dict(contract_required_recommendation_input)
@@ -18126,7 +18141,10 @@ async def recover_blocked_fast_path_to_contract_tool(
                 return None
             display_name = "추천 상품 확인 중..."
     elif domain == PolicyDomain.SUPPORT.value:
-        if len(allowed_tools) == 1:
+        contract_preferred_tool = str(getattr(turn_contract, "preferred_tool", None) or "").strip()
+        if contract_preferred_tool and contract_preferred_tool in allowed_tools:
+            preferred_tool = contract_preferred_tool
+        elif len(allowed_tools) == 1:
             preferred_tool = allowed_tools[0]
         if preferred_tool != "search_faq_hybrid_tool":
             return None
@@ -18138,7 +18156,10 @@ async def recover_blocked_fast_path_to_contract_tool(
         tool_input_source = "user_text"
         display_name = "FAQ 확인 중..."
     elif domain == PolicyDomain.TRANSACTION.value:
-        if len(allowed_tools) == 1:
+        contract_preferred_tool = str(getattr(turn_contract, "preferred_tool", None) or "").strip()
+        if contract_preferred_tool and contract_preferred_tool in allowed_tools and contract_preferred_tool not in forbidden_tools:
+            preferred_tool = contract_preferred_tool
+        elif len(allowed_tools) == 1:
             preferred_tool = allowed_tools[0]
         if not preferred_tool:
             planned_tool_plan = current_transaction_tool_plan.get()

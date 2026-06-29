@@ -13308,6 +13308,8 @@ def test_turn_contract_records_contract_seed_and_context_evidence() -> None:
     assert dumped["contract_seed"]["router_evidence"]["intent"] == "stock_store_search"
     assert dumped["context_evidence"]["parent_flow_context"]["pending_intent"] == "order"
     assert contract.intent == "stock_store_search"
+    assert dumped["preferred_tool"] == "transaction_store_preview_tool"
+    assert dumped["tool_args_patch"] == {}
 
 
 def test_flow_transition_shell_records_selected_product_without_executing() -> None:
@@ -19158,6 +19160,8 @@ def test_recover_blocked_fast_path_to_contract_tool_runs_transaction_required_st
         intent="store_schedule",
         known_slots={"shop_name": "강남점"},
         allowed_tools=("get_store_list_tool",),
+        preferred_tool="get_store_list_tool",
+        tool_args_patch={"store_nm": "강남점"},
         forbidden_tools=("quick_order_tool", "transaction_store_preview_tool"),
         blocking_required_slots=(),
         context_state="active",
@@ -19165,7 +19169,6 @@ def test_recover_blocked_fast_path_to_contract_tool_runs_transaction_required_st
             "template": "location",
             "metadata": {
                 "response_shape_key": "unverified_store_schedule_lookup",
-                "tool_args_patch": {"store_nm": "강남점"},
             },
         },
     )
