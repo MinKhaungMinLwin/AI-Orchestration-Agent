@@ -17146,6 +17146,47 @@ def _build_faq_policy_source_grounded_fallback_event(
     }
 
 
+_CURRENT_LOCATION_REGION_LABELS = frozenset({"내 주변", "내주변", "현재 위치", "현재위치", "내 위치", "근처", "주변"})
+
+
+def _build_missing_current_location_store_fallback_event(
+    turn_contract: TurnContract | None,
+) -> dict[str, Any] | None:
+    if turn_contract is None or str(turn_contract.action_mode or "") != "purchase_continuation":
+        return None
+    known_slots = dict(turn_contract.known_slots or {})
+    region = re.sub(r"\s+", " ", str(known_slots.get("region") or "").strip())
+    if region not in _CURRENT_LOCATION_REGION_LABELS:
+        return None
+    user_xpos = known_slots.get("user_xpos") if known_slots.get("user_xpos") not in ("", None) else known_slots.get("xpos")
+    user_ypos = known_slots.get("user_ypos") if known_slots.get("user_ypos") not in ("", None) else known_slots.get("ypos")
+    if user_xpos not in ("", None) and user_ypos not in ("", None):
+        return None
+    if str(known_slots.get("pending_intent") or "") != "order" and str(known_slots.get("goal_type") or "") != "place_order":
+        return None
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "transaction",
+        "assistant_response_source": "code_missing_current_location_store_fallback",
+        "data": {
+            "assistantResponse": "위치정보를 가져올 수 없습니다. 검색하실 지역명을 입력해 주세요.",
+            "quickReplies": [
+                {"label": "서울", "domain": "TRANSACTION"},
+                {"label": "강남", "domain": "TRANSACTION"},
+                {"label": "송파", "domain": "TRANSACTION"},
+            ],
+            "predictedDomains": ["TRANSACTION"],
+            "metadata": {
+                "response_shape_key": "missing_current_location_store_region",
+                "pendingIntent": str(known_slots.get("pending_intent") or ""),
+                "goalType": str(known_slots.get("goal_type") or ""),
+                "region": region,
+            },
+        },
+    }
+
+
 def _build_turn_contract_fallback_event(
     *,
     turn_contract: TurnContract | None,
@@ -17158,6 +17199,9 @@ def _build_turn_contract_fallback_event(
         if should_guard_required_slots(turn_contract):
             return build_required_slot_clarification_event(turn_contract)
         return build_response_policy_guard_event(turn_contract)
+    current_location_event = _build_missing_current_location_store_fallback_event(turn_contract)
+    if current_location_event is not None:
+        return current_location_event
     from services.tstation.policies.flow_controller import build_purchase_flow_fallback_event
 
     flow_event = build_purchase_flow_fallback_event(

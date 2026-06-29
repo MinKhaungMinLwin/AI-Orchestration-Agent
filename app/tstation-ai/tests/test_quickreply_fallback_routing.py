@@ -14484,6 +14484,45 @@ def test_turn_contract_fallback_event_uses_resolved_product_and_quantity_to_ask_
     assert event["data"]["metadata"]["ordQty"] == 2
 
 
+def test_turn_contract_fallback_event_prompts_for_region_when_current_location_is_unavailable() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="quick_order_reservation_slot_fill_region",
+        sub_intent="nearby",
+        known_slots={
+            "goods_no": "G000000333132",
+            "tire_model": "벤투스 S1 에보 Z AS",
+            "pending_product_name": "벤투스 S1 에보 Z AS",
+            "tire_size": "245/35R20",
+            "region": "내 주변",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        required_slots=(),
+        blocking_required_slots=(),
+        resolvable_required_slots=(),
+        allowed_tools=("search_stores_tool", "get_store_list_tool", "get_nearby_stores_tool"),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            metadata={"response_shape_key": "transaction_fallback"},
+        ).to_dict(),
+        action_mode="purchase_continuation",
+        context_state="resumed",
+    )
+
+    event = _build_turn_contract_fallback_event(
+        turn_contract=contract,
+        user_text="내 주변 매장 찾기",
+    )
+
+    assert event is not None
+    assert event["assistant_response_source"] == "code_missing_current_location_store_fallback"
+    assert event["data"]["assistantResponse"] == "위치정보를 가져올 수 없습니다. 검색하실 지역명을 입력해 주세요."
+    assert _labels(event["data"]["quickReplies"]) == ["서울", "강남", "송파"]
+    assert event["data"]["metadata"]["response_shape_key"] == "missing_current_location_store_region"
+
+
 def test_purchase_flow_fallback_event_recomputes_to_ask_store_after_single_product_resolution() -> None:
     event = build_purchase_flow_fallback_event(
         intent="quick_order_reservation",
