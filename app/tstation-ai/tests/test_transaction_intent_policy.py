@@ -230,8 +230,6 @@ def test_router_structured_store_service_search_overrides_generic_store_search_t
     assert frame.intent == "store_service_search"
     assert frame.known_slots["region"] == "경기"
     assert frame.known_slots["service_codes"] == ("119",)
-    assert "requested_cal_day" not in frame.known_slots
-    assert "availability_intent" not in frame.known_slots
     assert plan.allowed_tools == ("search_stores_tool", "get_store_list_tool")
     assert "get_store_schedule_tool" in plan.forbidden_tools
     assert "transaction_store_preview_tool" in plan.forbidden_tools

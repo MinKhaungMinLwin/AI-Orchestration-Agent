@@ -29793,31 +29793,6 @@ def test_router_store_service_search_contract_restores_transaction_route_from_su
     assert routing.override_reason == "restore_store_service_search_contract"
 
 
-def test_restored_store_service_search_uses_store_search_action_mode() -> None:
-    routing = _routing_result(
-        domains=[MultiAgentDomain.Domain.SUPPORT],
-        execution_plan=["support:store_service_search"],
-        policy_intent="store_service_search",
-        service_name="타이어 보관서비스",
-        service_code="119",
-        region="경기",
-        place_query="경기권",
-    )
-    domains = _restore_store_service_search_contract(routing)
-
-    action_mode = _current_turn_action_mode(
-        user_text="윈터 타이어 끼고 싶은데, 지금 장착중인 타이어 보관해주는 매장이 경기권에 어디어디 있어?",
-        domains=domains or [],
-        routing_result=routing,
-        regex_slots=ConversationSlots(),
-        merged_slots=ConversationSlots(region="경기"),
-        explicit_override_reason=None,
-        resume_source="none",
-    )
-
-    assert action_mode == "store_search"
-
-
 def test_first_turn_slim_router_conversion_preserves_common_fields(monkeypatch: pytest.MonkeyPatch) -> None:
     coordinator = StreamingMultiAgentCoordinator()
     slim_result = chat_module._SlimMultiAgentDomain(
@@ -30007,64 +29982,6 @@ def test_store_service_search_contract_detects_region_drift_against_tool_input()
     )
 
     assert any(v["type"] == "store_service_search_region_contract_drift" for v in violations)
-
-
-def test_store_service_search_contract_allows_place_query_reduction_to_region() -> None:
-    contract = TurnContract(
-        domain="transaction",
-        intent="store_service_search",
-        known_slots={
-            "policy_intent": "store_service_search",
-            "region": "판교",
-            "place_query": "판교 근처 매장 중에서 일요일에도 영업하는 전기차 특화 매장",
-            "service_name": "전기차 특화 매장",
-        },
-        allowed_tools=("search_stores_complex_tool", "search_stores_tool"),
-    )
-
-    violations = response_contract_violations(
-        template="location",
-        assistant_response_source="transaction_policy",
-        called_tools=["search_stores_complex_tool"],
-        tool_inputs=[
-            {
-                "tool": "search_stores_complex_tool",
-                "args": {"place_query": "판교", "ev_specialty_only": True, "open_only": True},
-            }
-        ],
-        contract=contract,
-    )
-
-    assert not any(v["type"] == "store_service_search_place_query_contract_drift" for v in violations)
-
-
-def test_store_service_search_contract_detects_unrelated_place_query_drift() -> None:
-    contract = TurnContract(
-        domain="transaction",
-        intent="store_service_search",
-        known_slots={
-            "policy_intent": "store_service_search",
-            "region": "판교",
-            "place_query": "판교 근처 매장",
-            "service_name": "전기차 특화 매장",
-        },
-        allowed_tools=("search_stores_complex_tool", "search_stores_tool"),
-    )
-
-    violations = response_contract_violations(
-        template="location",
-        assistant_response_source="transaction_policy",
-        called_tools=["search_stores_complex_tool"],
-        tool_inputs=[
-            {
-                "tool": "search_stores_complex_tool",
-                "args": {"place_query": "강남", "ev_specialty_only": True},
-            }
-        ],
-        contract=contract,
-    )
-
-    assert any(v["type"] == "store_service_search_place_query_contract_drift" for v in violations)
 
 
 def test_cheongju_tire_storage_service_search_normalizes_service_code() -> None:

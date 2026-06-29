@@ -21,15 +21,7 @@ from services.tstation.policies.store_service_gate import (
 
 _SIZE_COMPACT_RE = re.compile(r"\b(\d{3})\s*/?\s*(\d)(\d)(?:\3)?\s*R?\s*(\d{2})\b", re.IGNORECASE)
 _QUANTITY_RE = re.compile(r"(\d+)\s*(?:개|본|짝)")
-_TODAY_RE = re.compile(r"오늘|당일|바로|당장", re.IGNORECASE)
-_NOW_SERVICE_REQUEST_RE = re.compile(
-    r"지금.{0,12}(?:장착|서비스|예약|방문|가능)|(?:장착|서비스|예약|방문).{0,12}지금",
-    re.IGNORECASE,
-)
-_CURRENTLY_MOUNTED_TIRE_RE = re.compile(
-    r"(?:지금|현재)?\s*장착\s*중(?:인)?\s*타이어|(?:지금|현재)?\s*끼고\s*있는\s*타이어",
-    re.IGNORECASE,
-)
+_TODAY_RE = re.compile(r"오늘|당일|지금|바로|당장", re.IGNORECASE)
 _RELATIVE_RESERVATION_DATE_RE = re.compile(r"내일|모레", re.IGNORECASE)
 _EXPLICIT_MD_DATE_RE = re.compile(r"(?:(20\d{2})\s*년\s*)?(\d{1,2})\s*월\s*(\d{1,2})\s*일")
 _BOOKING_DATETIME_SELECTION_RE = re.compile(
@@ -413,17 +405,14 @@ def _kst_today() -> datetime.date:
 
 def extract_requested_cal_day(text: str, *, today: datetime.date | None = None) -> str | None:
     base = today or _kst_today()
-    value = text or ""
-    if _TODAY_RE.search(value) or (
-        _NOW_SERVICE_REQUEST_RE.search(value) and not _CURRENTLY_MOUNTED_TIRE_RE.search(value)
-    ):
+    if _TODAY_RE.search(text or ""):
         return base.strftime("%Y%m%d")
-    match = _RELATIVE_RESERVATION_DATE_RE.search(value)
+    match = _RELATIVE_RESERVATION_DATE_RE.search(text or "")
     if match:
         token = match.group(0)
         offset = 1 if token == "내일" else 2
         return (base + datetime.timedelta(days=offset)).strftime("%Y%m%d")
-    explicit = _EXPLICIT_MD_DATE_RE.search(value)
+    explicit = _EXPLICIT_MD_DATE_RE.search(text or "")
     if explicit:
         year = int(explicit.group(1) or base.year)
         month = int(explicit.group(2))
@@ -749,11 +738,7 @@ def build_transaction_intent_frame(
     current_payment_method_change = bool(_PAYMENT_METHOD_CHANGE_RE.search(text))
     current_payment_account_info = bool(_PAYMENT_ACCOUNT_INFO_RE.search(text))
     current_store_arrival_visit_guidance = bool(_STORE_ARRIVAL_NOTIFICATION_VISIT_RE.search(text))
-    current_today_request = bool(
-        _TODAY_RE.search(text)
-        or (_NOW_SERVICE_REQUEST_RE.search(text) and not _CURRENTLY_MOUNTED_TIRE_RE.search(text))
-    )
-    current_stock = bool(_STOCK_RE.search(text) or current_today_request)
+    current_stock = bool(_STOCK_RE.search(text) or _TODAY_RE.search(text))
     current_price = bool(_PRICE_OR_COUPON_RE.search(text))
     router_alert_contract = str(slots.get("router_transaction_intent") or "") == "price_or_benefit_alert_request"
     current_maintenance_history_access_policy = bool(_MAINTENANCE_HISTORY_ACCESS_POLICY_RE.search(text))
@@ -959,7 +944,7 @@ def build_transaction_intent_frame(
     quantity = _normalized_quantity(slots, text)
     result_limit = extract_result_limit(text) or slots.get("limit")
     requested_cal_day = extract_requested_cal_day(text)
-    today_requested = current_today_request
+    today_requested = bool(_TODAY_RE.search(text))
     explicit_preview_request = bool(
         requested_cal_day
         or today_requested
@@ -1037,7 +1022,7 @@ def build_transaction_intent_frame(
             and not _has_confirmed_store_context(slots)
         )
     )
-    today_requested = current_today_request
+    today_requested = bool(_TODAY_RE.search(text))
     stored_quantity = quantity or slots.get("ord_qty") or slots.get("quantity")
     selected_store_schedule_ready = bool(
         has_product
