@@ -16888,6 +16888,51 @@ def _contract_required_stock_store_schedule_tool_input(turn_contract: TurnContra
     return {"shop_id": shop_id, "mode": schedule_mode}
 
 
+def _is_contract_required_stock_inventory_store_lookup(turn_contract: TurnContract | None) -> bool:
+    if turn_contract is None:
+        return False
+    if str(turn_contract.domain or "").strip().lower() != PolicyDomain.TRANSACTION.value:
+        return False
+    if tuple(turn_contract.blocking_required_slots or ()):
+        return False
+    known_slots = turn_contract.known_slots or {}
+    stock_check_mode = str(known_slots.get("stock_check_mode") or "").strip()
+    if stock_check_mode != "inventory_only":
+        return False
+    response_decision = turn_contract.response_decision or {}
+    if str(response_decision.get("template") or "").strip() != "location":
+        return False
+    metadata = response_decision.get("metadata")
+    response_shape_key = str(metadata.get("response_shape_key") or "") if isinstance(metadata, Mapping) else ""
+    if response_shape_key != "stock_inventory_lookup":
+        return False
+    allowed_tools = {str(tool) for tool in tuple(turn_contract.allowed_tools or ()) if str(tool).strip()}
+    forbidden_tools = {str(tool) for tool in tuple(turn_contract.forbidden_tools or ()) if str(tool).strip()}
+    if "get_store_list_tool" not in allowed_tools or "get_store_list_tool" in forbidden_tools:
+        return False
+    return bool(
+        known_slots.get("goods_no")
+        and known_slots.get("tire_size")
+        and (known_slots.get("ord_qty") or known_slots.get("quantity"))
+        and (known_slots.get("region") or known_slots.get("place_query") or known_slots.get("shop_name"))
+        and not known_slots.get("shop_id")
+    )
+
+
+def _contract_required_stock_inventory_store_lookup_tool_input(turn_contract: TurnContract) -> dict[str, Any]:
+    if not _is_contract_required_stock_inventory_store_lookup(turn_contract):
+        return {}
+    known_slots = turn_contract.known_slots or {}
+    store_name = str(known_slots.get("shop_name") or known_slots.get("store_name") or "").strip()
+    region = str(known_slots.get("region") or known_slots.get("place_query") or "").strip()
+    tool_input: dict[str, Any] = {"limit": 10}
+    if store_name:
+        tool_input["store_nm"] = store_name
+    if region:
+        tool_input["region_code"] = region
+    return tool_input if len(tool_input) > 1 else {}
+
+
 def _contract_required_transaction_tool_input(
     *,
     turn_contract: TurnContract,
@@ -16896,9 +16941,11 @@ def _contract_required_transaction_tool_input(
     if str(turn_contract.domain or "").strip().lower() != PolicyDomain.TRANSACTION.value:
         return None
     if (
-        not preferred_tool
-        or preferred_tool in _FAST_PATH_TRANSACTION_RECOVERY_BLOCKLIST
-        or preferred_tool not in _FAST_PATH_TRANSACTION_RECOVERY_ALLOWED_TOOLS
+        preferred_tool
+        and (
+            preferred_tool in _FAST_PATH_TRANSACTION_RECOVERY_BLOCKLIST
+            or preferred_tool not in _FAST_PATH_TRANSACTION_RECOVERY_ALLOWED_TOOLS
+        )
     ):
         return None
     if preferred_tool in {str(tool) for tool in tuple(turn_contract.forbidden_tools or ()) if str(tool).strip()}:
@@ -16909,6 +16956,14 @@ def _contract_required_transaction_tool_input(
         if schedule_input:
             return schedule_input, "turn_contract_required_stock_store_schedule", "예약 가능 일정 확인 중..."
         return None
+
+    if (
+        preferred_tool in {"", "get_store_list_tool"}
+        and "get_store_list_tool" in {str(tool) for tool in tuple(turn_contract.allowed_tools or ())}
+    ):
+        stock_store_input = _contract_required_stock_inventory_store_lookup_tool_input(turn_contract)
+        if stock_store_input:
+            return stock_store_input, "turn_contract_required_stock_inventory_store_lookup", "매장 재고 조회 매장 확인 중..."
 
     response_decision = turn_contract.response_decision or {}
     response_metadata = response_decision.get("metadata") if isinstance(response_decision, Mapping) else {}
@@ -16943,7 +16998,10 @@ async def _recover_contract_required_stock_store_schedule(
     merged_slots: ConversationSlots | None,
     blocked_fast_path_source: str = "contract_required_stock_store_schedule",
 ) -> dict[str, Any] | None:
-    if not _is_contract_required_stock_store_schedule(turn_contract):
+    if not (
+        _is_contract_required_stock_store_schedule(turn_contract)
+        or _is_contract_required_stock_inventory_store_lookup(turn_contract)
+    ):
         return None
     return await recover_blocked_fast_path_to_contract_tool(
         turn_contract=turn_contract,
@@ -17213,6 +17271,8 @@ async def recover_blocked_fast_path_to_contract_tool(
         if contract_required_tool_input is None:
             return None
         tool_input, tool_input_source, display_name = contract_required_tool_input
+        if not preferred_tool and tool_input_source == "turn_contract_required_stock_inventory_store_lookup":
+            preferred_tool = "get_store_list_tool"
         source_domain = PolicyDomain.TRANSACTION.value
     else:
         return None

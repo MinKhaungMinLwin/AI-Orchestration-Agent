@@ -18419,6 +18419,101 @@ def test_recover_blocked_fast_path_to_contract_tool_runs_transaction_required_st
     assert recovery["event"]["blocked_fast_path_source"] == "contract_required_tool_executor"
 
 
+def test_recover_contract_required_stock_inventory_region_lookup_runs_store_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_input: dict[str, Any] = {}
+
+    def _fake_store_list_invoke(tool_input: dict[str, Any]) -> dict[str, Any]:
+        captured_input.update(tool_input)
+        return {
+            "status": "success",
+            "data": {
+                "stores": [
+                    {
+                        "shop_id": "F00002",
+                        "shop_nm": "티스테이션 강남역점",
+                        "addr": "서울 강남구",
+                    }
+                ]
+            },
+        }
+
+    def _fake_try_build_template(tool_data_list: list[dict[str, Any]], assistant_text: str) -> dict[str, Any]:
+        assert tool_data_list[0]["tool"] == "get_store_list_tool"
+        assert tool_data_list[0]["args"] == {"limit": 10, "region_code": "강남"}
+        return {
+            "type": "data",
+            "template": "location",
+            "data": {
+                "assistantResponse": assistant_text,
+                "stores": [{"nameAddress": "티스테이션 강남역점"}],
+                "metadata": [{"shopId": "F00002"}],
+            },
+        }
+
+    async def _fake_to_thread(func: Any, *args: Any, **kwargs: Any) -> Any:
+        return func(*args, **kwargs)
+
+    from services.tstation import template_mapper as template_mapper_module
+    from services.tstation.agents.c_transaction_agent import tools as transaction_tools
+
+    monkeypatch.setattr(
+        transaction_tools,
+        "get_store_list_tool",
+        SimpleNamespace(invoke=_fake_store_list_invoke),
+    )
+    monkeypatch.setattr(chat_module.asyncio, "to_thread", _fake_to_thread)
+    monkeypatch.setattr(template_mapper_module, "try_build_template", _fake_try_build_template)
+
+    contract = TurnContract(
+        domain="transaction",
+        intent="fill_quantity_slot",
+        known_slots={
+            "goods_no": "G000000310126",
+            "tire_size": "245/45R19",
+            "ord_qty": 4,
+            "region": "강남",
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+            "stock_check_mode": "inventory_only",
+        },
+        allowed_tools=("get_store_inventory_tool", "get_store_list_tool", "get_logistics_inventory_tool"),
+        forbidden_tools=("transaction_store_preview_tool", "get_store_schedule_tool", "quick_order_tool"),
+        blocking_required_slots=(),
+        context_state="active",
+        response_decision={
+            "template": "location",
+            "metadata": {
+                "response_shape_key": "stock_inventory_lookup",
+                "stock_check_mode": "inventory_only",
+            },
+        },
+    )
+
+    assert chat_module._is_contract_required_stock_inventory_store_lookup(contract) is True
+    assert chat_module._contract_required_stock_inventory_store_lookup_tool_input(contract) == {
+        "limit": 10,
+        "region_code": "강남",
+    }
+
+    recovery = asyncio.run(
+        chat_module._recover_contract_required_stock_store_schedule(
+            turn_contract=contract,
+            user_text="4개",
+            merged_slots=ConversationSlots(goods_no="G000000310126", tire_size="245/45R19", ord_qty=4, region="강남"),
+            blocked_fast_path_source="contract_required_stock_inventory_store_lookup",
+        )
+    )
+
+    assert recovery is not None
+    assert recovery["tool_name"] == "get_store_list_tool"
+    assert captured_input == {"limit": 10, "region_code": "강남"}
+    assert recovery["event"]["template"] == "location"
+    assert recovery["event"]["recovered_tool"] == "get_store_list_tool"
+    assert recovery["event"]["tool_input_source"] == "turn_contract_required_stock_inventory_store_lookup"
+
+
 def test_recover_blocked_fast_path_to_contract_tool_runs_selected_store_schedule_contract(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
