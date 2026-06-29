@@ -81,6 +81,9 @@ _DISCOVERY_PRODUCT_SOURCE_TOOLS = frozenset({
     "get_best_selling_products_tool",
     "get_newest_products_tool",
 })
+_PENDING_CHECK_FOLLOWUP_PLANNER_INTENTS = frozenset({
+    "coupon_applicability_check",
+})
 _COMPARISON_RESOLVER_TOOLS = _DISCOVERY_PRODUCT_SOURCE_TOOLS | frozenset({"get_product_description_tool"})
 _HIGH_RISK_TRANSACTION_TOOLS = frozenset({
     "get_final_price_tool",
@@ -613,6 +616,16 @@ def build_turn_contract(
     if policy_intent and policy_intent != "none":
         known_slots["policy_intent"] = policy_intent
     routing_pending_check_topic = str(getattr(routing_result, "pending_check_topic", "") or "").strip()
+    if (
+        planner_intent
+        and planner_intent not in _PENDING_CHECK_FOLLOWUP_PLANNER_INTENTS
+        and routing_pending_check_topic in {"", "none"}
+        and str(known_slots.get("pending_check_topic") or "").strip()
+    ):
+        known_slots.pop("pending_check_topic", None)
+        known_slots.pop("pending_check_object_type", None)
+        known_slots.pop("pending_check_object_value", None)
+        known_slots.pop("pending_check_turns_remaining", None)
     if routing_pending_check_topic and routing_pending_check_topic != "none" and not known_slots.get("pending_check_topic"):
         known_slots["pending_check_topic"] = routing_pending_check_topic
     routing_pending_check_object_type = str(getattr(routing_result, "pending_check_object_type", "") or "").strip()
@@ -696,6 +709,10 @@ def build_turn_contract(
     if code_intent == "coupon_registration_policy" or planner_intent == "coupon_registration_policy":
         domain = "support"
         intent = "coupon_registration_policy"
+    if planner_intent == "order_cart_status_check":
+        domain = "transaction"
+        intent = "order_history_lookup"
+        known_slots["owned_record_target"] = "order"
     if planner_intent == "coupon_applicability_check" or intent == "coupon_applicability_check":
         domain = "transaction"
         intent = "product_coupon_eligibility"
