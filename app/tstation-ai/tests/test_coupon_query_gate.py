@@ -56,6 +56,30 @@ def test_coupon_gate_accepts_product_coupon_eligibility() -> None:
     assert decision.coupon_hint == "쿠폰"
 
 
+def test_coupon_gate_routes_product_name_usable_coupon_before_usage_policy() -> None:
+    for user_text in (
+        "키너지 ex에 쓸 수 있는 쿠폰은?",
+        "키너지 EX에 사용 가능한 쿠폰 있어?",
+        "벤투스 S2 AS에 적용 가능한 쿠폰 알려줘",
+    ):
+        decision = decide_coupon_query_gate(
+            user_text=user_text,
+            model=_FakeGateModel(
+                CouponQueryGateDecision(
+                    intent=CouponQueryIntent.COUPON_USAGE_POLICY,
+                    confidence=0.92,
+                    product_name=None,
+                    coupon_hint="쿠폰",
+                    reason="Incorrect generic usage policy route.",
+                )
+            ),
+        )
+
+        assert decision.intent == CouponQueryIntent.PRODUCT_COUPON_ELIGIBILITY
+        assert decision.product_name is None
+        assert decision.coupon_hint == "쿠폰"
+
+
 def test_coupon_gate_accepts_coupon_applicable_products() -> None:
     decision = decide_coupon_query_gate(
         user_text="16% 할인쿠폰 적용 가능 상품 알려줘",
