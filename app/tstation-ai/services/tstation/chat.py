@@ -80,9 +80,11 @@ from services.tstation.policies.resolved_context import (
     canonical_context_from_tool_boundary,
 )
 from services.tstation.policies.flow_state import (
+    apply_router_evidence_snapshot,
     commit_flow_state,
     commit_purchase_flow_state,
     is_purchase_flow_context,
+    latest_router_evidence,
     recommendation_listcar_flow_delta,
     recommendation_vehicle_selection_patch,
     stock_store_candidate_selection_patch,
@@ -23947,6 +23949,7 @@ class TStationChatServiceV2:
         vehicle_ui_action_context: UIActionContext | None = None
         region_store_input_resolution = RegionStoreInputContextResolution()
         validated_ui_action_router_skip_metadata: dict[str, Any] = {}
+        latest_router_evidence_snapshot: dict[str, Any] = {}
         vehicle_selection_trace_metadata: dict[str, Any] = {
             "ui_action_detected": False,
             "ui_action_type": None,
@@ -26345,6 +26348,11 @@ class TStationChatServiceV2:
         elif routing_result is not None:
             router_source_for_contract = "llm"
             contract_source_for_turn = "router"
+        latest_router_evidence_snapshot = latest_router_evidence(
+            routing_result,
+            domains=domains,
+            source=router_source_for_contract if router_source_for_contract != "unknown" else "llm_router",
+        )
         _t_classify = time.perf_counter()
 
         domains, routing_result, default_benefit_router_override_applied = _apply_default_benefit_router_override(
@@ -27408,6 +27416,19 @@ class TStationChatServiceV2:
                 "[ROUTER_CONTRACT] restored blocked transaction store_selection contract: domains=%s plan=%s",
                 [domain.value for domain in domains],
                 list(getattr(routing_result, "execution_plan", []) or []),
+            )
+
+        merged_slots, latest_router_evidence_metadata = apply_router_evidence_snapshot(
+            merged_slots,
+            latest_router_evidence_snapshot,
+            source=str(latest_router_evidence_snapshot.get("source") or "llm_router"),
+        )
+        if latest_router_evidence_metadata:
+            vehicle_selection_trace_metadata.update(latest_router_evidence_metadata)
+            await chat_history_svc.save_slots_async(request.session_id, merged_slots, user_id=request.user_id)
+            logger.info(
+                "[FLOW_STATE] Stored latest router evidence: %s",
+                latest_router_evidence_metadata.get("latest_router_evidence_after"),
             )
 
         # Publish the active goal_type to the request-scoped ContextVar consumed

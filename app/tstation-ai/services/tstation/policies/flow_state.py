@@ -402,6 +402,114 @@ def commit_flow_state(
     return existing_state.merge(delta_state, source=source)
 
 
+def latest_router_evidence(
+    routing_result: Any | None,
+    *,
+    domains: tuple[Any, ...] | list[Any] | None = None,
+    source: str = "llm_router",
+) -> dict[str, Any]:
+    if routing_result is None:
+        return {}
+    execution_plan = tuple(
+        str(item or "").strip()
+        for item in tuple(getattr(routing_result, "execution_plan", ()) or ())
+        if str(item or "").strip()
+    )
+    router_intent = _router_current_turn_intent(routing_result, execution_plan)
+    router_domain = _router_current_turn_domain(routing_result, domains, execution_plan)
+    if not router_intent and not router_domain:
+        return {}
+    confidence = getattr(routing_result, "planner_confidence", None)
+    evidence: dict[str, Any] = {
+        "domain": router_domain,
+        "intent": router_intent,
+        "policy_intent": str(getattr(routing_result, "policy_intent", "") or "").strip(),
+        "execution_plan": list(execution_plan),
+        "flow": str(getattr(routing_result, "flow", "") or "").strip(),
+        "source": source,
+        "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+    if confidence not in _EMPTY_VALUES:
+        evidence["confidence"] = confidence
+    return _non_empty_mapping(evidence)
+
+
+def apply_latest_router_evidence(
+    slots: Any,
+    routing_result: Any | None,
+    *,
+    domains: tuple[Any, ...] | list[Any] | None = None,
+    source: str = "llm_router",
+) -> tuple[Any, dict[str, Any]]:
+    evidence = latest_router_evidence(routing_result, domains=domains, source=source)
+    return apply_router_evidence_snapshot(slots, evidence, source=source)
+
+
+def apply_router_evidence_snapshot(
+    slots: Any,
+    evidence: Mapping[str, Any] | None,
+    *,
+    source: str = "llm_router",
+) -> tuple[Any, dict[str, Any]]:
+    evidence = _non_empty_mapping(evidence)
+    if not evidence:
+        return slots, {}
+    availability_context = (
+        dict(slots.availability_context)
+        if isinstance(getattr(slots, "availability_context", None), Mapping)
+        else {}
+    )
+    previous_evidence = availability_context.get("latest_router_evidence")
+    availability_context["latest_router_evidence"] = evidence
+    if hasattr(slots, "availability_context"):
+        slots.availability_context = availability_context
+    return slots, {
+        "latest_router_evidence_saved": True,
+        "latest_router_evidence_source": source,
+        "latest_router_evidence_before": (
+            dict(previous_evidence) if isinstance(previous_evidence, Mapping) else {}
+        ),
+        "latest_router_evidence_after": evidence,
+    }
+
+
+def _router_current_turn_intent(routing_result: Any, execution_plan: tuple[str, ...]) -> str:
+    for attr in ("intent", "slot_fill_intent", "policy_intent"):
+        value = str(getattr(routing_result, attr, "") or "").strip()
+        if value and value != "none":
+            return value
+    for item in execution_plan:
+        if ":" in item:
+            intent = item.split(":", 1)[1].strip()
+            if intent:
+                return intent
+    return ""
+
+
+def _router_current_turn_domain(
+    routing_result: Any,
+    domains: tuple[Any, ...] | list[Any] | None,
+    execution_plan: tuple[str, ...],
+) -> str:
+    for domain in tuple(domains or ()):
+        value = _domain_value(domain)
+        if value:
+            return value
+    for domain in tuple(getattr(routing_result, "domains", ()) or ()):
+        value = _domain_value(domain)
+        if value:
+            return value
+    for item in execution_plan:
+        if ":" in item:
+            return item.split(":", 1)[0].strip()
+    return ""
+
+
+def _domain_value(domain: Any) -> str:
+    value = getattr(domain, "value", domain)
+    return str(value or "").strip().lower()
+
+
 def stock_store_candidates_flow_delta(
     *,
     event: Mapping[str, Any] | None,

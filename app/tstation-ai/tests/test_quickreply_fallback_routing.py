@@ -32,8 +32,11 @@ from services.tstation.template_mapper import _safe_service_unsized_policy_respo
 from services.tstation.template_mapper import _product_search_policy_response
 from services.tstation.policies.flow_state import (
     FlowState,
+    apply_latest_router_evidence,
+    apply_router_evidence_snapshot,
     commit_flow_state,
     commit_purchase_flow_state,
+    latest_router_evidence,
     recommendation_listcar_flow_delta,
     recommendation_vehicle_selection_patch,
     stock_store_candidate_selection_patch,
@@ -12493,6 +12496,105 @@ def test_stock_store_location_payload_stores_candidate_flow_state_without_event_
     assert patch["ord_qty"] == 2
     assert patch["pending_intent"] == "stock"
     assert patch["goal_type"] == "store_with_stock"
+
+
+def test_latest_router_evidence_uses_router_plan_without_execution_slots() -> None:
+    routing_result = SimpleNamespace(
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        execution_plan=["transaction:stock_store_search"],
+        intent="stock_store_search",
+        policy_intent="none",
+        flow="stock search",
+        planner_confidence=0.91,
+    )
+
+    evidence = latest_router_evidence(
+        routing_result,
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        source="llm_router",
+    )
+
+    assert evidence["domain"] == "transaction"
+    assert evidence["intent"] == "stock_store_search"
+    assert evidence["execution_plan"] == ["transaction:stock_store_search"]
+    assert evidence["source"] == "llm_router"
+    assert evidence["confidence"] == 0.91
+    assert "pending_intent" not in evidence
+    assert "goal_type" not in evidence
+
+
+def test_apply_latest_router_evidence_overwrites_without_changing_flow_or_execution_intent() -> None:
+    slots = ConversationSlots(
+        pending_intent="order",
+        goal_type="place_order",
+        availability_context={
+            "latest_router_evidence": {
+                "domain": "discovery",
+                "intent": "product_recommendation",
+                "execution_plan": ["discovery:product_recommendation"],
+            },
+            "active_flow_context": {
+                "flow_type": "purchase",
+                "status": "active",
+                "intent": {"pending_intent": "order", "goal_type": "place_order"},
+            },
+        },
+    )
+    routing_result = SimpleNamespace(
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        execution_plan=["support:tire_manufacture_date_policy"],
+        policy_intent="tire_manufacture_date_policy",
+        flow="support policy",
+        planner_confidence=0.88,
+    )
+
+    updated, metadata = apply_latest_router_evidence(
+        slots,
+        routing_result,
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        source="llm_router",
+    )
+
+    assert metadata["latest_router_evidence_saved"] is True
+    assert updated.pending_intent == "order"
+    assert updated.goal_type == "place_order"
+    assert updated.availability_context["active_flow_context"]["flow_type"] == "purchase"
+    evidence = updated.availability_context["latest_router_evidence"]
+    assert evidence["domain"] == "support"
+    assert evidence["intent"] == "tire_manufacture_date_policy"
+    assert evidence["execution_plan"] == ["support:tire_manufacture_date_policy"]
+    assert metadata["latest_router_evidence_before"]["intent"] == "product_recommendation"
+
+
+def test_apply_router_evidence_snapshot_keeps_pre_override_router_intent() -> None:
+    slots = ConversationSlots()
+    original_router_evidence = {
+        "domain": "discovery",
+        "intent": "product_recommendation",
+        "execution_plan": ["discovery:product_recommendation"],
+        "source": "llm",
+    }
+    final_routing_after_policy_override = SimpleNamespace(
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        execution_plan=["transaction:quick_order_reservation"],
+        intent="quick_order_reservation",
+    )
+
+    updated, _ = apply_router_evidence_snapshot(
+        slots,
+        original_router_evidence,
+        source="llm",
+    )
+    final_evidence = latest_router_evidence(
+        final_routing_after_policy_override,
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        source="router_final",
+    )
+
+    assert updated.availability_context["latest_router_evidence"]["intent"] == "product_recommendation"
+    assert final_evidence["intent"] == "quick_order_reservation"
+    assert updated.pending_intent is None
+    assert updated.goal_type is None
 
 
 @pytest.mark.parametrize(
