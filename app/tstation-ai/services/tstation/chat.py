@@ -27485,7 +27485,7 @@ class TStationChatServiceV2:
             router_evidence=latest_router_evidence_snapshot,
             existing_slots=merged_slots,
             extracted_slots=regex_slots,
-            ui_action=raw_ui_action if isinstance(raw_ui_action, Mapping) else None,
+            ui_action=vehicle_ui_action_context or (raw_ui_action if isinstance(raw_ui_action, Mapping) else None),
             resume_source=resume_source,
         )
         vehicle_selection_trace_metadata.update({

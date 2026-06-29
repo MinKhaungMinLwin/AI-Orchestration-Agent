@@ -12674,6 +12674,67 @@ def test_flow_transition_shell_router_observed_does_not_create_execution_intent(
     assert slots.goal_type is None
 
 
+def test_flow_transition_shell_records_selected_product_without_executing() -> None:
+    slots = ConversationSlots(
+        ord_qty=2,
+        pending_intent="order",
+        goal_type="place_order",
+        availability_context={
+            "pending_order_context": {
+                "ord_qty": 2,
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            }
+        },
+    )
+    action_context = UIActionContext(
+        action_type="select_product",
+        action_name="select_product",
+        selection_source="previous_product_candidate",
+        contract_intent="quick_order_reservation",
+        source_intent="quick_order_reservation",
+        expected_contract_intent="quick_order_reservation",
+        expected_behavior="slot_fill",
+        entity_type="product",
+        entity_id="G000000310126",
+        entity_label="Ventus S2 AS",
+        slot_patch={
+            "goods_no": "G000000310126",
+            "tire_model": "Ventus S2 AS",
+            "tire_size": "245/45R19",
+            "ord_qty": 2,
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+
+    transition = transition_current_flow(
+        user_text="첫번째",
+        router_evidence={
+            "domain": "transaction",
+            "intent": "quick_order_reservation",
+            "execution_plan": ["transaction:quick_order_reservation:slot_fill:product"],
+            "source": "llm",
+        },
+        existing_slots=slots,
+        extracted_slots=ConversationSlots(),
+        ui_action=action_context,
+        resume_source="router_slot_fill:product",
+    )
+
+    assert transition.metadata["selected_product_resolved"] is True
+    assert transition.flow_transition["applied"] is False
+    assert transition.contract_seed["ui_action"]["action_type"] == "select_product"
+    assert transition.contract_seed["ui_action"]["slot_patch"]["goods_no"] == "G000000310126"
+    assert transition.context_evidence["selected_product"] == {
+        "goods_no": "G000000310126",
+        "product_name": "Ventus S2 AS",
+        "tire_size": "245/45R19",
+        "selection_source": "previous_product_candidate",
+    }
+    assert slots.goods_no is None
+
+
 @pytest.mark.parametrize(
     ("schedule_mode", "user_text"),
     [

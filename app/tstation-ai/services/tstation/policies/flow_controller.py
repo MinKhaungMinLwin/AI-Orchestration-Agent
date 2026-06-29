@@ -192,15 +192,59 @@ def _compact_slot_snapshot(slots: Any | Mapping[str, Any] | None) -> dict[str, A
     return snapshot
 
 
-def _ui_action_snapshot(ui_action: Mapping[str, Any] | None) -> dict[str, Any]:
-    if not isinstance(ui_action, Mapping):
+def _ui_action_snapshot(ui_action: Any | Mapping[str, Any] | None) -> dict[str, Any]:
+    if ui_action is None:
         return {}
     snapshot: dict[str, Any] = {}
-    for key in ("action_type", "cta_action", "expected_contract_intent", "entity_type", "entity_id", "entity_label"):
-        value = ui_action.get(key)
+    for key in (
+        "action_type",
+        "cta_action",
+        "selection_source",
+        "expected_contract_intent",
+        "entity_type",
+        "entity_id",
+        "entity_label",
+    ):
+        value = ui_action.get(key) if isinstance(ui_action, Mapping) else getattr(ui_action, key, None)
         if value not in (None, "", [], {}):
             snapshot[key] = value
+    if snapshot.get("action_type") and "cta_action" not in snapshot:
+        snapshot["cta_action"] = snapshot["action_type"]
+    slots = _ui_action_slot_patch(ui_action)
+    if slots:
+        snapshot["slot_patch"] = slots
     return snapshot
+
+
+def _ui_action_slot_patch(ui_action: Any | Mapping[str, Any] | None) -> dict[str, Any]:
+    if ui_action is None:
+        return {}
+    raw_slots = None
+    if isinstance(ui_action, Mapping):
+        raw_slots = ui_action.get("slot_patch")
+        if not isinstance(raw_slots, Mapping):
+            raw_slots = ui_action.get("slots")
+    else:
+        raw_slots = getattr(ui_action, "slot_patch", None) or getattr(ui_action, "slots", None)
+    return _non_empty_mapping(raw_slots) if isinstance(raw_slots, Mapping) else {}
+
+
+def _selected_product_from_ui_action(ui_action_snapshot: Mapping[str, Any]) -> dict[str, Any]:
+    if str(ui_action_snapshot.get("action_type") or "").strip() != "select_product":
+        return {}
+    slot_patch = ui_action_snapshot.get("slot_patch") if isinstance(ui_action_snapshot.get("slot_patch"), Mapping) else {}
+    return {
+        key: value
+        for key, value in {
+            "goods_no": ui_action_snapshot.get("entity_id") or slot_patch.get("goods_no"),
+            "product_name": ui_action_snapshot.get("entity_label")
+            or slot_patch.get("product_name")
+            or slot_patch.get("tire_model"),
+            "tire_size": slot_patch.get("tire_size"),
+            "selection_source": ui_action_snapshot.get("selection_source"),
+        }.items()
+        if value not in (None, "", [], {})
+    }
 
 
 def _flow_state_summary(context: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -287,6 +331,7 @@ def transition_current_flow(
     extracted_snapshot = _compact_slot_snapshot(extracted_slots)
     existing_snapshot = _compact_slot_snapshot(existing_slots)
     ui_action_snapshot = _ui_action_snapshot(ui_action)
+    selected_product = _selected_product_from_ui_action(ui_action_snapshot)
 
     current_flow_state = _current_flow_state(active_flow, router_snapshot)
     parent_flow_state = _flow_state_summary(parent_flow)
@@ -306,6 +351,7 @@ def transition_current_flow(
         "parent_flow_context": parent_flow,
         "existing_slots": existing_snapshot,
         "extracted_slots": extracted_snapshot,
+        "selected_product": selected_product,
     }
     context_evidence = {key: value for key, value in context_evidence.items() if value not in (None, "", [], {})}
     metadata = {
@@ -318,6 +364,7 @@ def transition_current_flow(
         "contract_seed_keys": sorted(contract_seed),
         "context_evidence_keys": sorted(context_evidence),
         "router_intent": str(router_snapshot.get("intent") or "none"),
+        "selected_product_resolved": bool(selected_product),
         "user_text_present": bool(str(user_text or "").strip()),
     }
     return FlowTransition(
