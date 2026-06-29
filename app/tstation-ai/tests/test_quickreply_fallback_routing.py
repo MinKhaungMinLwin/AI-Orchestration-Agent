@@ -263,6 +263,7 @@ from services.tstation.chat import (
     _coupon_target_product_name_for_query,
     _split_product_size_quantity_from_text,
     _clear_order_continuation_slots_after_direct_delivery_policy,
+    _coupon_fast_path_contract_gate_args,
     _delivery_policy_guard_event,
     _direct_tire_delivery_guard_event,
     _maintenance_addon_store_context_from_location_template,
@@ -28759,6 +28760,77 @@ def test_product_coupon_eligibility_contract_removes_forbidden_search_tool_from_
     assert "search_product_tool" not in contract.allowed_tools
     assert "get_final_price_tool" not in contract.allowed_tools
     assert contract.preferred_tool == "get_my_coupons_tool"
+
+
+def test_coupon_fast_path_gate_args_match_product_coupon_contract() -> None:
+    contract = build_turn_contract(
+        user_text="키너지 ex 에 쓸 수 있는 쿠폰은?",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["transaction:coupon_usage"],
+        ),
+        merged_slots=ConversationSlots(
+            tire_model="키너지 EX",
+            availability_context={
+                "latest_router_evidence": {
+                    "domain": "transaction",
+                    "intent": "product_coupon_eligibility",
+                    "execution_plan": ["transaction:product_coupon_eligibility"],
+                }
+            },
+        ),
+        action_mode="info_only",
+        context_state="active",
+    )
+
+    intent, allowed_intents = _coupon_fast_path_contract_gate_args(
+        source="code_product_coupon_eligibility",
+        turn_contract=contract,
+    )
+    allowed, reason = _direct_code_fast_path_contract_gate(
+        turn_contract=contract,
+        intent=intent,
+        template="quickReply",
+        source="code_product_coupon_eligibility",
+        required_tools=("get_my_coupons_tool", "get_coupon_applicable_products_tool"),
+        allowed_intents=allowed_intents,
+    )
+
+    assert intent == "product_coupon_eligibility"
+    assert "price_or_coupon_check" in allowed_intents
+    assert allowed is True
+    assert reason == "contract_matched:code_product_coupon_eligibility"
+
+
+def test_coupon_fast_path_gate_args_keep_price_coupon_followup_open() -> None:
+    contract = _transaction_turn_contract(
+        "쿠폰 적용하면 얼마야?",
+        {
+            "tire_model": "키너지 EX",
+            "pending_check_topic": "coupon_price",
+            "pending_check_object_type": "product_name",
+            "pending_check_object_value": "키너지 EX",
+        },
+    )
+
+    intent, allowed_intents = _coupon_fast_path_contract_gate_args(
+        source="code_product_coupon_price_followup",
+        turn_contract=contract,
+    )
+    allowed, reason = _direct_code_fast_path_contract_gate(
+        turn_contract=contract,
+        intent=intent,
+        template="quickReply",
+        source="code_product_coupon_price_followup",
+        required_tools=("get_my_coupons_tool", "get_coupon_applicable_products_tool"),
+        allowed_intents=allowed_intents,
+    )
+
+    assert contract.intent == "price_or_coupon_check"
+    assert intent == "product_coupon_eligibility"
+    assert "price_or_coupon_check" in allowed_intents
+    assert allowed is True
+    assert reason == "contract_matched:code_product_coupon_price_followup"
 
 
 def test_turn_contract_clears_stale_pending_check_for_new_non_followup_planner_intent() -> None:

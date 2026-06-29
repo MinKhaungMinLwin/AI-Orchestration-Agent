@@ -17223,6 +17223,46 @@ def _direct_code_fast_path_contract_gate(
     return True, f"contract_matched:{source}"
 
 
+_COUPON_FAST_PATH_OWNED_SOURCES = frozenset(
+    {
+        "code_owned_coupon_lookup",
+        "code_owned_coupon_expiry_lookup",
+    }
+)
+_COUPON_FAST_PATH_PRODUCT_SOURCES = frozenset(
+    {
+        "code_product_coupon_followup",
+        "code_product_coupon_price_followup",
+        "code_product_coupon_eligibility",
+        "code_coupon_best_discount",
+        "code_coupon_applicable_products",
+        "code_coupon_resolver",
+    }
+)
+
+
+def _coupon_fast_path_contract_gate_args(
+    *,
+    source: str,
+    turn_contract: TurnContract | None,
+) -> tuple[str, tuple[str, ...]]:
+    intent = "price_or_coupon_check"
+    if source in _COUPON_FAST_PATH_OWNED_SOURCES:
+        intent = "owned_coupon_lookup"
+    elif source in _COUPON_FAST_PATH_PRODUCT_SOURCES:
+        intent = "product_coupon_eligibility"
+
+    allowed_intents: list[str] = ["price_or_coupon_check"]
+    if intent != "price_or_coupon_check":
+        allowed_intents.append(intent)
+
+    contract_intent = str(getattr(turn_contract, "intent", "") or "")
+    if contract_intent in {"price_or_coupon_check", "owned_coupon_lookup", "product_coupon_eligibility"}:
+        allowed_intents.append(contract_intent)
+
+    return intent, tuple(dict.fromkeys(allowed_intents))
+
+
 def _finalize_direct_code_event(
     event: dict[str, Any] | None,
     *,
@@ -31867,12 +31907,17 @@ class TStationChatServiceV2:
             source: str,
             required_tools: tuple[str, ...],
         ) -> tuple[bool, str]:
+            contract_intent, allowed_intents = _coupon_fast_path_contract_gate_args(
+                source=source,
+                turn_contract=turn_contract,
+            )
             return _direct_code_fast_path_contract_gate(
                 turn_contract=turn_contract,
-                intent="price_or_coupon_check",
+                intent=contract_intent,
                 template=template,
                 source=source,
                 required_tools=required_tools,
+                allowed_intents=allowed_intents,
             )
 
         def _finalize_coupon_code_event(
@@ -31881,12 +31926,17 @@ class TStationChatServiceV2:
             source: str,
             required_tools: tuple[str, ...],
         ) -> dict[str, Any] | None:
+            contract_intent, allowed_intents = _coupon_fast_path_contract_gate_args(
+                source=source,
+                turn_contract=turn_contract,
+            )
             finalized_event = _finalize_direct_code_event(
                 event,
                 turn_contract=turn_contract,
-                intent="price_or_coupon_check",
+                intent=contract_intent,
                 source=source,
                 required_tools=required_tools,
+                allowed_intents=allowed_intents,
             )
             if finalized_event is not None:
                 return finalized_event
@@ -36897,9 +36947,7 @@ class TStationChatServiceV2:
         restored_coupon_product_target = _recent_product_coupon_followup_target_for_turn()
         coupon_gate_reason = ""
         if _is_owned_coupon_expiry_lookup_query(user_query):
-            gate_allowed, coupon_gate_reason = _direct_code_fast_path_contract_gate(
-                turn_contract=turn_contract,
-                intent="price_or_coupon_check",
+            gate_allowed, coupon_gate_reason = _coupon_code_fast_path_gate(
                 template="quickReply",
                 source="code_owned_coupon_expiry_lookup",
                 required_tools=("get_my_coupons_tool",),
@@ -36909,9 +36957,7 @@ class TStationChatServiceV2:
             else:
                 logger.info("[CODE_FAST_PATH_GATE] blocked owned_coupon_expiry reason=%s", coupon_gate_reason)
         elif restored_coupon_product_target:
-            gate_allowed, coupon_gate_reason = _direct_code_fast_path_contract_gate(
-                turn_contract=turn_contract,
-                intent="price_or_coupon_check",
+            gate_allowed, coupon_gate_reason = _coupon_code_fast_path_gate(
                 template="quickReply",
                 source="code_product_coupon_followup",
                 required_tools=("get_my_coupons_tool", "get_coupon_applicable_products_tool"),
@@ -36923,9 +36969,7 @@ class TStationChatServiceV2:
             else:
                 logger.info("[CODE_FAST_PATH_GATE] blocked product_coupon_followup reason=%s", coupon_gate_reason)
         elif _recent_product_coupon_price_target(user_query, recent_user_context_text):
-            gate_allowed, coupon_gate_reason = _direct_code_fast_path_contract_gate(
-                turn_contract=turn_contract,
-                intent="price_or_coupon_check",
+            gate_allowed, coupon_gate_reason = _coupon_code_fast_path_gate(
                 template="quickReply",
                 source="code_product_coupon_price_followup",
                 required_tools=("get_my_coupons_tool", "get_coupon_applicable_products_tool"),
@@ -36936,9 +36980,7 @@ class TStationChatServiceV2:
                 logger.info("[CODE_FAST_PATH_GATE] blocked product_coupon_price_followup reason=%s", coupon_gate_reason)
         elif coupon_decision is not None and coupon_decision.is_actionable:
             if coupon_decision.intent == CouponQueryIntent.OWNED_COUPON_LOOKUP:
-                gate_allowed, coupon_gate_reason = _direct_code_fast_path_contract_gate(
-                    turn_contract=turn_contract,
-                    intent="price_or_coupon_check",
+                gate_allowed, coupon_gate_reason = _coupon_code_fast_path_gate(
                     template="voucher",
                     source="code_owned_coupon_lookup",
                     required_tools=("get_my_coupons_tool",),
@@ -36948,9 +36990,7 @@ class TStationChatServiceV2:
                 else:
                     logger.info("[CODE_FAST_PATH_GATE] blocked owned_coupon_lookup reason=%s", coupon_gate_reason)
             elif coupon_decision.intent == CouponQueryIntent.PRODUCT_COUPON_ELIGIBILITY:
-                gate_allowed, coupon_gate_reason = _direct_code_fast_path_contract_gate(
-                    turn_contract=turn_contract,
-                    intent="price_or_coupon_check",
+                gate_allowed, coupon_gate_reason = _coupon_code_fast_path_gate(
                     template="quickReply",
                     source="code_product_coupon_eligibility",
                     required_tools=("get_my_coupons_tool", "get_coupon_applicable_products_tool"),
@@ -36963,9 +37003,7 @@ class TStationChatServiceV2:
                 else:
                     logger.info("[CODE_FAST_PATH_GATE] blocked product_coupon_eligibility reason=%s", coupon_gate_reason)
             elif coupon_decision.intent == CouponQueryIntent.BEST_DISCOUNT:
-                gate_allowed, coupon_gate_reason = _direct_code_fast_path_contract_gate(
-                    turn_contract=turn_contract,
-                    intent="price_or_coupon_check",
+                gate_allowed, coupon_gate_reason = _coupon_code_fast_path_gate(
                     template="quickReply",
                     source="code_coupon_best_discount",
                     required_tools=("get_my_coupons_tool", "get_coupon_applicable_products_tool"),
@@ -36985,9 +37023,7 @@ class TStationChatServiceV2:
                 slots=initial_slots,
                 recent_context=recent_user_context_text,
             ):
-                gate_allowed, coupon_gate_reason = _direct_code_fast_path_contract_gate(
-                    turn_contract=turn_contract,
-                    intent="price_or_coupon_check",
+                gate_allowed, coupon_gate_reason = _coupon_code_fast_path_gate(
                     template="quickReply",
                     source="code_coupon_applicable_products",
                     required_tools=("get_my_coupons_tool", "get_coupon_applicable_products_tool"),
@@ -37004,10 +37040,8 @@ class TStationChatServiceV2:
                 for tool in ("get_my_coupons_tool", "get_coupon_applicable_products_tool")
                 if tool in called_tool_names
             )
-            coupon_event = _finalize_direct_code_event(
+            coupon_event = _finalize_coupon_code_event(
                 coupon_event,
-                turn_contract=turn_contract,
-                intent="price_or_coupon_check",
                 source="code_coupon_resolver",
                 required_tools=coupon_required_tools,
             )
