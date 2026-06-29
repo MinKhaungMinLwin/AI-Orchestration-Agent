@@ -148,6 +148,43 @@ def test_store_validation_quickreply_carries_confirmation_metadata() -> None:
     ]
 
 
+def test_store_search_with_no_candidates_returns_store_search_quickreply() -> None:
+    event = try_build_template(
+        [
+            {
+                "tool": "search_stores_complex_tool",
+                "args": {"region_code": "분당", "cal_days": ["20260705"], "open_only": True},
+                "data": {
+                    "status": "success",
+                    "http_status": 200,
+                    "data": {
+                        "stores": [],
+                        "search": {
+                            "source": "complex",
+                            "requested_limit": 10,
+                            "filters": {"cal_days": ["20260705"], "open_only": True},
+                            "candidate_count": 0,
+                            "returned_count": 0,
+                        },
+                    },
+                },
+            }
+        ],
+        "분당에 일요일에 문여는 매장 있어?",
+    )
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    assert "분당에서" in event["data"]["assistantResponse"]
+    assert "찾지 못했어요" in event["data"]["assistantResponse"]
+    assert [chip["label"] for chip in event["data"]["quickReplies"]] == [
+        "다른 지역 입력",
+        "다른 조건으로 찾기",
+        "처음으로",
+    ]
+    assert event["data"]["metadata"]["ctaContext"]["intentKey"] == "store_search"
+
+
 def test_voucher_keeps_coupon_list_link_for_general_owned_coupon_lookup() -> None:
     current_user_text.set("내 쿠폰 보여줘")
 
