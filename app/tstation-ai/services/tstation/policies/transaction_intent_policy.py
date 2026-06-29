@@ -98,10 +98,10 @@ STOCK_INVENTORY_STORE_LOOKUP_ALLOWED_TOOLS = (
     "get_logistics_inventory_tool",
 )
 _ORDER_HISTORY_LOOKUP_RE = re.compile(
-    r"내\s*주문(?:\s*(?:내역|목록))?\s*(?:보여|조회|확인|알려)|"
-    r"주문\s*(?:내역|목록)\s*(?:보여|조회|확인|알려)|"
-    r"최근\s*주문(?:\s*내역)?\s*(?:보여|조회|확인|알려)|"
-    r"내가\s*주문한\s*거\s*(?:보여|조회|확인|알려)",
+    r"내\s*주문(?:\s*(?:내역|목록))?\s*(?:좀|쫌|한번|한\s*번)?\s*(?:보여|조회|확인|알려)|"
+    r"주문\s*(?:내역|목록)\s*(?:좀|쫌|한번|한\s*번)?\s*(?:보여|조회|확인|알려)|"
+    r"최근\s*주문(?:\s*내역)?\s*(?:좀|쫌|한번|한\s*번)?\s*(?:보여|조회|확인|알려)|"
+    r"내가\s*주문한\s*거\s*(?:좀|쫌|한번|한\s*번)?\s*(?:보여|조회|확인|알려)",
     re.IGNORECASE,
 )
 _ORDER_HISTORY_PAGE_NAVIGATION_RE = re.compile(

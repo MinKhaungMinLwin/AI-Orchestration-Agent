@@ -10142,6 +10142,34 @@ def test_order_history_force_routes_to_transaction_order() -> None:
     assert result.agent_prompt_profile == "transaction_order"
 
 
+def test_order_history_force_routes_with_specific_lookup_plan() -> None:
+    result = StreamingMultiAgentCoordinator._force_keyword_routing("주문내역좀 알려주라")
+
+    assert result is not None
+    assert result.domains == [MultiAgentDomain.Domain.TRANSACTION]
+    assert result.execution_plan == ["transaction:order_history_lookup"]
+    assert result.agent_prompt_profile == "transaction_order"
+
+
+def test_order_history_lookup_overrides_stale_store_finder_context() -> None:
+    frame = build_transaction_intent_frame(
+        "주문내역좀 알려주라",
+        known_slots={
+            "region": "광주",
+            "requested_cal_day": "20260630",
+            "goal_type": "store_finder",
+        },
+    )
+    tool_plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "order_history_lookup"
+    assert frame.known_slots["goal_type"] == "owned_record_lookup"
+    assert frame.known_slots["owned_record_target"] == "order"
+    assert tool_plan.allowed_tools == ("get_orders_of_user_tool",)
+    assert tool_plan.preferred_tool == "get_orders_of_user_tool"
+    assert "search_stores_tool" not in tool_plan.allowed_tools
+
+
 def test_action_mode_keeps_order_history_as_owned_record_lookup_with_stale_order_context() -> None:
     slots = ConversationSlots(
         goods_no="G000000309780",

@@ -1534,6 +1534,18 @@ def _current_turn_action_mode(
         return "owned_record_lookup"
 
     routing_intent = str(getattr(routing_result, "intent", "") or "").strip()
+    owned_record_plan_tokens = (
+        "history",
+        "status_lookup",
+        "reservation_status",
+        "order_status",
+        "order_history",
+        "owned",
+        "maintenance_history",
+        "cancel_status",
+    )
+    if MultiAgentDomain.Domain.TRANSACTION in domains and any(token in plan_text for token in owned_record_plan_tokens):
+        return "owned_record_lookup"
     if (
         MultiAgentDomain.Domain.TRANSACTION in domains
         and (
@@ -1601,19 +1613,7 @@ def _current_turn_action_mode(
         if "recommend" in plan_text or "recommendation" in plan_text:
             return "product_recommendation"
     if MultiAgentDomain.Domain.TRANSACTION in domains:
-        if any(
-            token in plan_text
-            for token in (
-                "history",
-                "status_lookup",
-                "reservation_status",
-                "order_status",
-                "order_history",
-                "owned",
-                "maintenance_history",
-                "cancel_status",
-            )
-        ):
+        if any(token in plan_text for token in owned_record_plan_tokens):
             return "owned_record_lookup"
         if any(
             token in plan_text
@@ -3771,6 +3771,17 @@ class StreamingMultiAgentCoordinator:
             )
 
         if cls._is_transaction_order_current_turn_query(text):
+            if cls._TRANSACTION_ORDER_HISTORY_RE.search(text) and not _is_order_history_reorder_query(text):
+                return MultiAgentDomain(
+                    reason="regex routing matched current-turn order history lookup intent",
+                    domains=[MultiAgentDomain.Domain.TRANSACTION],
+                    execution_plan=["transaction:order_history_lookup"],
+                    user_behavior="asking for owned order records",
+                    agent_prompt_profile=AgentPromptProfile.TRANSACTION_ORDER,
+                    claim_check_type="none",
+                    complaint_scope="none",
+                    flow="order_history_lookup intent gate — bypassed LLM router",
+                )
             return MultiAgentDomain(
                 reason="regex routing matched current-turn transaction order-management intent",
                 domains=[MultiAgentDomain.Domain.TRANSACTION],
