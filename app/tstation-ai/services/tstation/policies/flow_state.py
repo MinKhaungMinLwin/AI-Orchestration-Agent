@@ -1577,8 +1577,12 @@ def store_candidates_flow_delta(
         for key in ("goods_no", "product_name", "tire_model", "pending_product_name", "tire_size", "ord_qty", "region"):
             if known_slots.get(key) in _EMPTY_VALUES and candidate.get(key) not in _EMPTY_VALUES:
                 known_slots[key] = candidate[key]
-        if candidate_flow_type == "stock":
-            for key in ("pending_intent", "goal_type", "stock_check_mode"):
+        if candidate_flow_type in {"stock", "purchase"}:
+            intent_keys = ("pending_intent", "goal_type", "stock_check_mode") if candidate_flow_type == "stock" else (
+                "pending_intent",
+                "goal_type",
+            )
+            for key in intent_keys:
                 if known_slots.get(key) in _EMPTY_VALUES and candidate.get(key) not in _EMPTY_VALUES:
                     known_slots[key] = candidate[key]
     if not candidates:
@@ -1611,7 +1615,14 @@ def store_candidate_selection_patch(
     selection_hint: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     active_flow = FlowState.from_active_flow_context(active_flow_context)
-    if active_flow.flow_type not in {"stock", "store_search", "store_schedule", "store_service_search", "favorite_store"}:
+    if active_flow.flow_type not in {
+        "purchase",
+        "stock",
+        "store_search",
+        "store_schedule",
+        "store_service_search",
+        "favorite_store",
+    }:
         return {}
     if active_flow.flow_step != "show_store_candidates":
         return {}
@@ -1646,6 +1657,8 @@ def store_candidate_selection_patch(
             "ord_qty",
             "region",
             "payment_amount",
+            "pending_intent",
+            "goal_type",
             "stock_check_mode",
         )
         if selected.get(key) not in _EMPTY_VALUES
@@ -1996,9 +2009,10 @@ def _store_candidate_flow_type(
     contract_intent = str(event_contract_intent or "").strip()
     response_shape = str(event_response_shape or "").strip()
 
+    if pending_intent in {"order", "cart"} or goal_type in {"place_order", "add_to_cart"}:
+        return "purchase"
     if (
-        source_tool == "transaction_store_preview_tool"
-        or pending_intent == "stock"
+        pending_intent == "stock"
         or goal_type == "store_with_stock"
         or stock_check_mode == "inventory_only"
         or inventory_mode == "inventory_only"
@@ -2062,7 +2076,7 @@ def _store_candidate_from_metadata(
         "source_tool": source_tool or "transaction_store_preview_tool",
         "region": str(meta.get("region") or "").strip(),
     }
-    if flow_type == "stock":
+    if flow_type in {"stock", "purchase"}:
         product_name = str(
             meta.get("productName")
             or meta.get("product_name")
@@ -2076,10 +2090,19 @@ def _store_candidate_from_metadata(
             "tire_model": product_name,
             "pending_product_name": product_name,
             "tire_size": str(meta.get("tireSize") or meta.get("tire_size") or "").strip(),
-            "pending_intent": str(meta.get("pendingIntent") or meta.get("pending_intent") or "stock").strip(),
-            "goal_type": str(meta.get("goalType") or meta.get("goal_type") or "store_with_stock").strip(),
-            "stock_check_mode": stock_check_mode,
+            "pending_intent": str(
+                meta.get("pendingIntent")
+                or meta.get("pending_intent")
+                or ("stock" if flow_type == "stock" else "order")
+            ).strip(),
+            "goal_type": str(
+                meta.get("goalType")
+                or meta.get("goal_type")
+                or ("store_with_stock" if flow_type == "stock" else "place_order")
+            ).strip(),
         })
+        if flow_type == "stock":
+            candidate["stock_check_mode"] = stock_check_mode
         raw_qty = meta.get("ordQty") if meta.get("ordQty") not in _EMPTY_VALUES else meta.get("ord_qty")
         try:
             qty = int(raw_qty)

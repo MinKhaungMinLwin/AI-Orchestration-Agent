@@ -16,6 +16,127 @@
 
 개별 버그 수정 이력은 `FIX_LOG.md`에 기록한다. 이 문서는 특정 정책 변경 목록이 아니라 **구조 변경의 배경과 방향**을 다룬다.
 
+## 2026-07-01 구조 변경 적용 현황: current-turn intent / FlowState 기반 multi-flow 안정화
+
+### 배경
+
+최근 안정화 작업의 핵심 방향은 다음 한 문장으로 정리된다.
+
+```text
+현재 턴 intent를 먼저 고정하고, 그 intent에 맞는 tool/template/action만 실행한다.
+```
+
+기존에는 구매/주문 진행 중 다른 질문이 들어왔을 때, 이전 `goods_no`, `tire_size`, `ord_qty`, `shop_id`,
+`pending_intent`, `goal_type` 같은 context가 현재 턴 action을 시작하는 원인으로 쓰일 수 있었다.
+
+그 결과 다음 계열의 문제가 반복됐다.
+
+- 구매 중 상품 추천/재검색 질문이 다시 구매 continuation으로 해석됨
+- 구매 중 FAQ/정책 질문이 예약/주문 실행 flow로 새어 나감
+- 매장 탐색, 경정비 가능 여부, 예약 조회/변경/취소가 `quick_order_reservation`이나 `datepick/preOrder`로 drift
+- 카드/매장 후보 선택 후 flow type이 `purchase`가 아니라 `stock` 등으로 잘못 복원
+- 정상 tool/template 결과가 stale context 또는 QC/guard 보정 경로에서 generic fallback으로 후퇴
+
+### 구조 원칙
+
+현재 구조는 `chat.py`에 케이스별 예외를 계속 쌓지 않고, policy/flow 계층에서 현재 턴의 실행 경계를 고정하는 방향으로 이동했다.
+
+책임 분리는 다음과 같다.
+
+- `chat.py`
+  - orchestration, SSE emit, policy helper 호출
+  - FlowController 결과를 직접 overwrite하지 않고 `commit_flow_state()` 경로로 저장
+- `flow_controller.py`
+  - 현재 턴 router evidence, UI action, extracted slot을 보고 active flow 후보 생성
+  - context는 evidence로만 보존하고, current-turn flow가 바뀌면 새 active flow를 만든다
+- `flow_state.py`
+  - active/dormant/resumed flow 상태 저장
+  - flow type 전환 시 기존 active context를 `dormant_flows[]`로 내림
+  - flow identity, dormant pruning, explicit resume anchor 기준 관리
+- `transaction_intent_policy.py` / `transaction_response_policy.py` / `turn_contract.py`
+  - intent별 allowed/forbidden tools, preferred tool, required slots, response shape 고정
+- `template_mapper.py`
+  - contract/response decision에 맞는 FE template 선택
+  - 단일 후보나 stale context가 더 강한 template 계약을 임의로 덮지 못하게 guard
+
+### 완료된 구조 변경 범위
+
+2026-06-30부터 2026-07-01까지 다음 vertical slice가 적용됐다.
+
+- `FlowState dormant flow` 기반 확장
+  - `active_flow_context`에 `dormant_flows[]`, `flow_events[]`를 추가했다.
+  - current-turn flow type이 바뀌면 이전 active flow를 dormant로 보존한다.
+  - dormant flow는 명시적 resume anchor가 있을 때만 active로 승격하는 방향으로 정리했다.
+- `store_search` 전환
+  - 구매 중 차량/수입차/BMW 정비 경험 매장 추천 같은 질문은 `store_search` active flow로 전환한다.
+  - 기존 purchase context는 dormant로 내려간다.
+- `recommendation/discovery` 전환
+  - 구매 중 상품 추천, 조건 기반 추천, 상품 검색/재검색 intent는 `recommendation` flow로 전환한다.
+  - 이전 purchase slot은 실행 근거가 아니라 참고 context로만 남긴다.
+- `support/FAQ` 전환
+  - 정책/FAQ intent는 구매 context보다 우선한다.
+  - support flow는 답변 flow로 저장하고 product/store/purchase action context를 만들지 않는다.
+- `service_maintenance` / `reservation_management` 분리
+  - 경정비/부가서비스 일반 안내, 특정 매장 서비스 검증, 기존 예약 조회/변경/취소를 구매 예약 생성 flow와 분리했다.
+  - `service_action_boundary`, `reservation_management_action`, `owned_record_target` 같은 boundary 필드를 FlowState에 보존한다.
+- support/store attribute boundary 보정
+  - support 정책성 intent가 reservation management flow로 잘못 승격되지 않게 했다.
+  - 매장 속성 문의는 store verification 경계로 분리하고, generic support/review 흐름을 hijack하지 않게 정리했다.
+- purchase flow 보존 보정
+  - 단일 매장 후보가 있어도 `reservation_store_candidates/show_store_candidates` 계약이면 바로 `datepick`으로 넘기지 않는다.
+  - 상품/가격 fact가 `preOrder` 생성 시점까지 남도록 search product row 가격 필드를 보존한다.
+  - 구매 매장 후보가 stock flow로 잘못 복원되지 않도록 purchase/store candidate flow type을 보존하는 보정이 진행 중이다.
+
+관련 커밋 흐름은 다음 순서다.
+
+```text
+c0f22833 Extend flow state dormant flow management
+d1c3b1f2 Map vehicle experience store search tools
+89d82d90 Connect store search flow state transitions
+e2f976c1 Connect discovery and support flow transitions
+acb1c42b Separate service and reservation action boundaries
+9eee9d24 Connect service reservation flow state
+866fb8b4 Fix support and store attribute flow boundaries
+1ffb21be Preserve store selection and price facts
+73b7a77e Preserve store selection and price facts
+```
+
+현재 로컬에는 추가로 `flow_state.py`와 `test_quickreply_fallback_routing.py`에
+purchase store candidate가 stock flow로 복원되지 않게 하는 미커밋 보정이 남아 있다.
+
+### 현재 상태
+
+기본 동작 기준으로는 다음 흐름이 구조적으로 방어된다.
+
+- 구매 중 추천/검색으로 전환
+- 구매 중 FAQ/정책 질문으로 전환
+- 구매 중 매장 탐색으로 전환
+- 구매 중 경정비/부가서비스 질문으로 전환
+- 구매 중 기존 예약 조회/변경/취소 질문으로 전환
+- 단일 매장 후보가 있어도 contract가 store candidate 선택을 요구하면 location card 유지
+
+즉, 이전처럼 stale purchase context가 모든 후속 턴을 구매 continuation으로 끌고 가는 문제는 상당 부분 줄었다.
+
+다만 아직 “완료”가 아니라 “통합 안정화 단계”다. 특히 다음 영역은 계속 관리해야 한다.
+
+- 여러 dormant flow가 쌓였을 때 resume anchor 기준
+- CTA/카드/퀵리플라이 선택을 label text가 아니라 UI action/slot-fill 전이로 처리하는 일관성
+- 실제 dev trace에서 router evidence가 테스트 fixture와 다르게 들어오는 경우
+- QC/contract guard가 정상 tool/template 결과를 fallback으로 바꾸는 과보정
+
+### 남은 방향
+
+다음 구조 작업은 새 flow를 더 늘리는 것보다, 이미 만든 flow들의 우선순위와 재개 규칙을 고정하는 데 집중한다.
+
+1. `cross-flow precedence`를 명시한다.
+   예: support policy > reservation management > service maintenance > store search > recommendation > purchase/stock continuation.
+2. `dormant resume policy`를 마무리한다.
+   명시적 resume anchor가 없으면 dormant flow를 자동 복원하지 않는다.
+3. `CTA/UI action flow`를 중앙화한다.
+   버튼/카드/퀵리플라이 클릭은 label-only text로 재해석하지 않고 `ui_action_policy.py`와 `flow_controller.py`에서 상태 전이로 처리한다.
+4. 통합 회귀 시나리오를 고정한다.
+   구매 중 추천, 구매 중 FAQ, 구매 중 매장탐색, 구매 중 경정비, 구매 중 예약변경/취소, 다시 구매 재개를 하나의 세트로 검증한다.
+
 ## 2026-06-30 구조 변경 계획/적용: purchase flow-step template/action 중앙화
 
 ### 배경
