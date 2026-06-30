@@ -21,6 +21,7 @@ class SlotFillDecision:
     filled_slot: str = "none"
     precheck: Mapping[str, Any] = field(default_factory=dict)
     flow_state_reconciliation: Mapping[str, Any] = field(default_factory=dict)
+    routing_override: Mapping[str, Any] = field(default_factory=dict)
     trace_metadata: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -71,6 +72,10 @@ def resolve_pre_router_slot_fill(
             reconciliation_slot_patch,
             source="flow_state_after_slot_patch",
         )
+    routing_override = _routing_override(
+        router_context=router_context,
+        flow_state_reconciliation=flow_state_reconciliation,
+    )
 
     trace_metadata: dict[str, Any] = {
         "expected_slot_fill_precheck": precheck,
@@ -79,6 +84,8 @@ def resolve_pre_router_slot_fill(
     }
     if flow_state_reconciliation:
         trace_metadata["flow_state_reconciliation"] = flow_state_reconciliation
+    if routing_override:
+        trace_metadata["routing_override"] = routing_override
 
     return SlotFillDecision(
         slots=resolved_slots,
@@ -87,8 +94,29 @@ def resolve_pre_router_slot_fill(
         filled_slot=str(precheck.get("filled_slot") or "none"),
         precheck=precheck,
         flow_state_reconciliation=flow_state_reconciliation,
+        routing_override=routing_override,
         trace_metadata=trace_metadata,
     )
+
+
+def _routing_override(
+    *,
+    router_context: Mapping[str, Any],
+    flow_state_reconciliation: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Return the executable flow override owned by the slot-fill controller."""
+    if flow_state_reconciliation:
+        intent = str(flow_state_reconciliation.get("intent") or "").strip()
+        if intent in {"quick_order_reservation", "stock_store_search", "store_schedule"}:
+            return {
+                "intent": intent,
+                "source": str(flow_state_reconciliation.get("source") or "flow_state_reconciliation"),
+            }
+
+    intent = str(router_context.get("current_flow") or "").strip()
+    if intent in {"quick_order_reservation", "stock_store_search", "store_schedule"}:
+        return {"intent": intent, "source": "router_slot_fill_context"}
+    return {}
 
 
 def _flow_state_reconciliation(
