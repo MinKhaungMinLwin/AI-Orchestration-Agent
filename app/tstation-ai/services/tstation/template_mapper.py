@@ -3461,7 +3461,11 @@ def _prefer_transaction_product_clarify(tool_data_list: list[dict]) -> bool:
     decision = current_transaction_response_decision.get()
     if decision is None:
         return False
-    if str(decision.metadata.get("clarify_template") or "") != "product":
+    is_product_flow_decision = (
+        decision.template == TemplateName.PRODUCT
+        and str(decision.metadata.get("flow_step") or "") == "resolve_product"
+    )
+    if not is_product_flow_decision and str(decision.metadata.get("clarify_template") or "") != "product":
         return False
     for entry in _find_entries(tool_data_list, "search_product_tool"):
         raw = _unwrap(entry)

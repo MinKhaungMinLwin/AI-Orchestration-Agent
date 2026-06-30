@@ -3626,12 +3626,11 @@ def test_transaction_product_clarify_prefers_product_card_over_discovery_quickre
     )
     current_transaction_response_decision.set(
         ResponseDecision(
-            response_shape=ResponseShape.CLARIFY,
-            template=TemplateName.QUICK_REPLY,
+            response_shape=ResponseShape.CARD,
+            template=TemplateName.PRODUCT,
             metadata={
                 "response_shape_key": "missing_order_slots",
                 "flow_step": "resolve_product",
-                "clarify_template": "product",
             },
         )
     )

@@ -16,6 +16,93 @@
 
 개별 버그 수정 이력은 `FIX_LOG.md`에 기록한다. 이 문서는 특정 정책 변경 목록이 아니라 **구조 변경의 배경과 방향**을 다룬다.
 
+## 2026-06-30 구조 변경 계획/적용: purchase flow-step template/action 중앙화
+
+### 배경
+
+구매/주문 continuation 오류는 특정 문장 하나를 잘못 해석한 문제가 아니라, fallback과 template/action을 결정하는 책임이
+여러 계층에 흩어져 있는 구조 문제로 반복됐다.
+
+현재 관련 결정 지점은 대략 다음처럼 분산되어 있다.
+
+```text
+transaction_response_policy.py
+-> TurnContract / current transaction response decision
+-> template_mapper.py
+-> BaseAgent code_contract_tool_guard fallback
+-> chat.py contract-required recovery path
+```
+
+이 구조에서는 같은 purchase/order 상태라도 진입 경로에 따라 `product`, `location`, `datepick`, `preOrder`,
+`quickReply`가 서로 덮을 수 있다. 예를 들어 `flow_step=resolve_product`이고 상품 후보가 존재하는데도,
+다른 계층이 `response_decision.template=quickReply`만 보고 최종 출력을 quickReply로 확정하면 상품 카드 선택 UI가
+노출되지 않는다.
+
+`code_contract_tool_guard` 자체는 문제의 본체가 아니다. guard는 agent가 현재 `TurnContract` 밖 tool 호출이나 응답을
+시도할 때 막는 실행층 안전장치다. 구조적 문제는 guard fallback, template mapper, chat-side recovery가 같은
+flow-step template/action policy를 소비하지 않는다는 점이다.
+
+### 구조 원칙
+
+purchase/order flow에서는 `flow_step` 또는 `current_step`이 canonical template/action을 결정해야 한다.
+
+목표 mapping은 다음과 같다.
+
+```text
+resolve_product -> product
+resolve_store / show_store_candidates -> location
+show_schedule -> datepick
+build_preorder / ready_to_order -> preOrder
+blocked / 후보 없음 / 슬롯 부족 / 실행 불가 -> quickReply
+```
+
+`quickReply`는 카드 후보가 없거나 실행이 contract상 차단된 경우의 최후 fallback으로만 사용한다. 카드 후보가 있고
+flow step이 더 강한 template을 요구하면 generic quickReply가 이를 덮지 못해야 한다.
+
+### 현재 코드 기준 완료된 1차 범위
+
+현재 코드에는 `resolve_product -> product` vertical slice가 1차 적용되어 있다.
+
+- `transaction_response_policy.py`
+  - `quick_order_reservation` / `quick_order_execute`에서 `resolve_purchase_order_flow()` 결과가
+    `flow_step=resolve_product`이고 상품명 기반 resolve가 가능한 상태면 `ResponseDecision.template=PRODUCT`,
+    `ResponseShape.CARD`를 반환한다.
+  - 상품명 자체가 없어 실제 상품 후보를 만들 수 없는 `resolve_product` 상태는 `QUICK_REPLY` fallback으로 유지한다.
+  - 하위 호환을 위해 response metadata의 `clarify_template=product` 신호도 함께 유지한다.
+- `template_mapper.py`
+  - `_prefer_transaction_product_clarify()`가 canonical `ResponseDecision.template=PRODUCT` + `flow_step=resolve_product`
+    또는 기존 `clarify_template=product` metadata와 `search_product_tool` 후보 존재 여부를 함께 확인한다.
+  - 해당 조건에서는 discovery policy quickReply가 product card를 덮지 못하게 하고, product card의 `assistantResponse`를
+    `주문을 진행하려면 먼저 상품을 선택해 주세요.`로 고정한다.
+- 테스트
+  - `test_purchase_response_with_product_family_only_prefers_product_card_clarify`
+  - `test_purchase_response_without_product_name_keeps_quickreply_fallback`
+  - `test_transaction_product_clarify_prefers_product_card_over_discovery_quickreply`
+
+이 완료 범위는 `resolve_product -> product`만 다룬다. 아직 contract-required executor와
+`BaseAgent code_contract_tool_guard` fallback은 같은 policy를 직접 소비하지 않으며, `location`, `datepick`, `preOrder`
+단계도 별도 확장이 필요하다.
+
+### 남은 방향
+
+다음 단계는 현재 적용된 `resolve_product -> product` decision을 모든 실행/guard 소비처가 같은 source로 읽게 하는 것이다.
+
+- `resolve_product`에 적용된 canonical template/action decision을 contract-required executor와
+  `BaseAgent code_contract_tool_guard` fallback도 소비하게 한다.
+- `template_mapper.py`, contract-required executor, `BaseAgent code_contract_tool_guard` fallback이 같은 policy decision을
+  소비하게 한다.
+- `chat.py`에는 새 케이스별 fallback/template 분기를 추가하지 않는다.
+
+2단계는 나머지 purchase/order step을 한 단계씩 연결하는 것이다.
+
+- `resolve_store` / `show_store_candidates` → `location`
+- `show_schedule` → `datepick`
+- `build_preorder` / `ready_to_order` → `preOrder`
+- 후보 없음 / blocked execution / missing slot → `quickReply`
+
+각 단계는 policy test, mapper test, negative fallback test를 함께 추가한다. 기능 변경과 candidate/executor pure move
+refactor는 같은 커밋에 섞지 않는다.
+
 ## 2026-06-29 구조 변경 계획: Tool boundary 중앙화 1차
 
 ### 배경
