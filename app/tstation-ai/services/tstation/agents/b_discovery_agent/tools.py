@@ -77,7 +77,20 @@ def _apply_recommendation_policy_patch(
     prc_grd: str | None,
     vehicle_type: str | None,
     car_lnc_cd: str | None,
-) -> tuple[RcmdType, str, str | None, str | None, str | None, str | None, str | None, str | None]:
+    min_price: int | None,
+    max_price: int | None,
+) -> tuple[
+    RcmdType,
+    str,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    int | None,
+    int | None,
+]:
     """Apply deterministic Discovery policy arguments to recommendation calls.
 
     This is intentionally conservative: only Discovery policy keys produced
@@ -85,7 +98,7 @@ def _apply_recommendation_policy_patch(
     over an explicit vehicle/size argument.
     """
     if not patch:
-        return rcmd_type, brand_cd, tire_size, sort_by, season_nm, pfm_nm, prc_grd, vehicle_type
+        return rcmd_type, brand_cd, tire_size, sort_by, season_nm, pfm_nm, prc_grd, vehicle_type, min_price, max_price
 
     suppress_vehicle_type_filter = bool(patch.get("suppress_vehicle_type_filter"))
     suppress_season_filter = bool(patch.get("suppress_season_filter"))
@@ -107,11 +120,15 @@ def _apply_recommendation_policy_patch(
         prc_grd = str(patch["prc_grd"])
     if patch.get("vehicle_type"):
         vehicle_type = str(patch["vehicle_type"])
+    if patch.get("min_price") is not None:
+        min_price = int(patch["min_price"])
+    if patch.get("max_price") is not None:
+        max_price = int(patch["max_price"])
     if suppress_season_filter:
         season_nm = None
     if suppress_vehicle_type_filter:
         vehicle_type = None
-    return rcmd_type, brand_cd, tire_size, sort_by, season_nm, pfm_nm, prc_grd, vehicle_type
+    return rcmd_type, brand_cd, tire_size, sort_by, season_nm, pfm_nm, prc_grd, vehicle_type, min_price, max_price
 
 
 _WINTER_RECOMMENDATION_FALLBACKS: tuple[tuple[RcmdType, str, str], ...] = (
@@ -1164,8 +1181,10 @@ def get_products_recommendations_tool(
             "pfm_nm": pfm_nm,
             "prc_grd": prc_grd,
             "vehicle_type": vehicle_type,
+            "min_price": min_price,
+            "max_price": max_price,
         }
-        rcmd_type, brand_cd, tire_size, sort_by, season_nm, pfm_nm, prc_grd, vehicle_type = (
+        rcmd_type, brand_cd, tire_size, sort_by, season_nm, pfm_nm, prc_grd, vehicle_type, min_price, max_price = (
             _apply_recommendation_policy_patch(
                 patch=policy_patch,
                 rcmd_type=rcmd_type,
@@ -1177,6 +1196,8 @@ def get_products_recommendations_tool(
                 prc_grd=prc_grd,
                 vehicle_type=vehicle_type,
                 car_lnc_cd=car_lnc_cd,
+                min_price=min_price,
+                max_price=max_price,
             )
         )
         logger.info(

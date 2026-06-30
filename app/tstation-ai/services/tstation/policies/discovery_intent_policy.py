@@ -42,8 +42,53 @@ def _recommendation_expected_tool_args(args: Mapping[str, Any]) -> dict[str, Any
         "pfm_nm",
         "prc_grd",
         "sort_by",
+        "min_price",
+        "max_price",
     )
     return {key: args[key] for key in tracked_keys if args.get(key) not in (None, "")}
+
+
+def _normalize_vehicle_anchor(value: str | None) -> str:
+    return re.sub(r"[^0-9A-Za-z가-힣]+", "", str(value or "")).lower()
+
+
+def _named_my_vehicle_anchor(text: str) -> str | None:
+    for match in _MY_NAMED_VEHICLE_RE.finditer(text or ""):
+        raw = re.sub(r"\s+", " ", match.group("model") or "").strip(" ._-")
+        normalized = _normalize_vehicle_anchor(raw)
+        if len(normalized) < 2 or normalized in _MY_NAMED_VEHICLE_STOPWORDS:
+            continue
+        return raw
+    return None
+
+
+def _price_range_from_text(text: str) -> dict[str, int]:
+    normalized = re.sub(r"\s+", "", text or "")
+    if not normalized:
+        return {}
+    match = re.search(r"(?P<low>\d{1,3})만원(?:대|선)", normalized)
+    if match:
+        low = int(match.group("low")) * 10_000
+        return {"min_price": low, "max_price": low + 99_999}
+    match = re.search(r"(?P<low>\d{1,3})만원(?:부터|이상)[~\-]?(?P<high>\d{1,3})?만원?(?:까지|이하)?", normalized)
+    if match:
+        result = {"min_price": int(match.group("low")) * 10_000}
+        if match.group("high"):
+            result["max_price"] = int(match.group("high")) * 10_000
+        return result
+    match = re.search(r"(?P<low>\d{1,3})만원[~\-](?P<high>\d{1,3})만원", normalized)
+    if match:
+        return {
+            "min_price": int(match.group("low")) * 10_000,
+            "max_price": int(match.group("high")) * 10_000,
+        }
+    match = re.search(r"(?P<price>\d{1,3})만원(?:이하|까지|안쪽|미만)", normalized)
+    if match:
+        return {"max_price": int(match.group("price")) * 10_000}
+    match = re.search(r"(?P<price>\d{1,3})만원(?:이상|부터)", normalized)
+    if match:
+        return {"min_price": int(match.group("price")) * 10_000}
+    return {}
 
 
 def _is_general_tire_recommendation_request(text: str) -> bool:
@@ -90,6 +135,28 @@ _MY_VEHICLE_RECOMMENDATION_RE = re.compile(
     r"(?:적합|맞는|맞춰|기준).{0,24}(?:내\s*차|내차|내\s*차량|내차량|등록\s*차량|등록차)",
     re.IGNORECASE,
 )
+_MY_NAMED_VEHICLE_RE = re.compile(
+    r"(?:내\s*차|내차|내\s*차량|내차량|내)\s*"
+    r"(?:중(?:에|에서)?\s*)?"
+    r"(?P<model>[0-9A-Za-z가-힣][0-9A-Za-z가-힣\s._-]{1,24}?)(?="
+    r"\s*(?:기준|에|에는|으로|로|타이어|상품|추천|맞|적합|$)"
+    r")",
+    re.IGNORECASE,
+)
+_MY_NAMED_VEHICLE_STOPWORDS = frozenset({
+    "내",
+    "내차",
+    "차",
+    "차량",
+    "기준",
+    "타이어",
+    "상품",
+    "추천",
+    "등록차",
+    "등록차량",
+    "중",
+    "중에",
+})
 _GENERAL_TIRE_PREFERENCE_RE = re.compile(
     r"일반\s*타이어|일반타이어|승용차?\s*용\s*타이어|승용\s*타이어",
     re.IGNORECASE,
@@ -785,6 +852,9 @@ def build_discovery_intent_frame(
         entities["discovery_followup_action"] = discovery_followup_action
     elif _MY_VEHICLE_RECOMMENDATION_RE.search(text) and (_RECOMMEND_RE.search(text) or _COMPARE_RE.search(text)):
         entities["discovery_followup_action"] = "vehicle_resolved_recommendation"
+        named_vehicle_anchor = _named_my_vehicle_anchor(text)
+        if named_vehicle_anchor:
+            entities["named_registered_vehicle_anchor"] = named_vehicle_anchor
     if _VEHICLE_SIZE_LOOKUP_RE.search(text):
         entities["vehicle_information_request"] = "tire_size_lookup"
     scenario = recommendation_scenario_from_text(
@@ -858,6 +928,10 @@ def build_discovery_intent_frame(
         entities["value_focus"] = True
     if _SIMILAR_PRICE_RE.search(text):
         entities["price_goal"] = "similar_range"
+    price_range = _price_range_from_text(text)
+    if price_range:
+        entities["price_range"] = price_range
+        entities.update(price_range)
     if is_external_price_comparison_request(text, known_slots=slots):
         entities["external_price_comparison"] = True
     best_seller_period = best_seller_period_from_text(text)
@@ -1412,6 +1486,9 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             args["tire_size"] = entities["tire_size"]
     if entities.get("price_goal") == "lowest":
         args["sort_by"] = "price_asc"
+    for key in ("min_price", "max_price"):
+        if entities.get(key) is not None:
+            args[key] = entities[key]
     if entities.get("brand_cd"):
         args["brand_cd"] = entities["brand_cd"]
         if frame.intent == "product_recommendation":
@@ -1456,6 +1533,15 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             "response_intent": "vehicle_resolved_recommendation",
             "flow_step": "select_vehicle",
         }
+        if entities.get("named_registered_vehicle_anchor"):
+            metadata["named_registered_vehicle_anchor"] = entities["named_registered_vehicle_anchor"]
+            metadata["flow_step"] = "resolve_named_vehicle"
+            return ToolPlan(
+                allowed_tools=("get_my_cars_tool", "get_products_recommendations_tool"),
+                preferred_tool="get_my_cars_tool",
+                tool_args_patch=args,
+                metadata=metadata,
+            )
         return ToolPlan(
             allowed_tools=("get_my_cars_tool",),
             preferred_tool="get_my_cars_tool",

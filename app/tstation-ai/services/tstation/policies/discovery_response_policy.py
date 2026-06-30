@@ -328,6 +328,22 @@ def decide_discovery_response(frame: IntentFrame) -> ResponseDecision:
 
     if frame.intent == "product_recommendation" and not tire_size:
         if entities.get("discovery_followup_action") == "vehicle_resolved_recommendation":
+            if entities.get("named_registered_vehicle_anchor"):
+                return ResponseDecision(
+                    response_shape=ResponseShape.CARD,
+                    template=TemplateName.PRODUCT,
+                    required_slots=("tire_size",),
+                    forbidden_behaviors=("drop_recommendation_scenario",),
+                    assistant_guidance=(
+                        "등록 차량 중 현재 턴에 명시된 차량명을 먼저 해소한 뒤, 해당 규격으로 현재 추천 조건을 유지해 상품을 추천한다. "
+                        "매칭 차량이 없거나 복수 매칭이면 차량 선택을 요청한다."
+                    ),
+                    metadata=_metadata(
+                        frame,
+                        response_shape_key="vehicle_resolved_recommendation",
+                        flow_step="resolve_named_vehicle",
+                    ),
+                )
             return ResponseDecision(
                 response_shape=ResponseShape.LIST,
                 template=TemplateName.LIST_CAR,

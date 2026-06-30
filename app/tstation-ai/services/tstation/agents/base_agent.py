@@ -350,6 +350,8 @@ def _recommendation_type_from_vehicle_text(user_text: str) -> str:
         return "discount"
     if re.search(r"가성비|저렴|싼|최저", text, re.IGNORECASE):
         return "value"
+    if re.search(r"장거리|마일리지|수명|오래\s*(?:타|가)|내구|마모\s*(?:강|적|덜)", text, re.IGNORECASE):
+        return "long_distance"
     if re.search(r"가족|패밀리|승차감|컴포트", text, re.IGNORECASE):
         return "family"
     if re.search(r"전기차|EV|ev|아이온|iON", text, re.IGNORECASE):
@@ -382,6 +384,27 @@ def _recommendation_season_from_vehicle_text(user_text: str) -> str | None:
     return None
 
 
+def _recommendation_price_range_from_vehicle_text(user_text: str) -> dict[str, int]:
+    text = re.sub(r"\s+", "", user_text or "")
+    match = re.search(r"(?P<low>\d{1,3})만원(?:대|선)", text)
+    if match:
+        low = int(match.group("low")) * 10_000
+        return {"min_price": low, "max_price": low + 99_999}
+    match = re.search(r"(?P<low>\d{1,3})만원[~\-](?P<high>\d{1,3})만원", text)
+    if match:
+        return {
+            "min_price": int(match.group("low")) * 10_000,
+            "max_price": int(match.group("high")) * 10_000,
+        }
+    match = re.search(r"(?P<price>\d{1,3})만원(?:이하|까지|안쪽|미만)", text)
+    if match:
+        return {"max_price": int(match.group("price")) * 10_000}
+    match = re.search(r"(?P<price>\d{1,3})만원(?:이상|부터)", text)
+    if match:
+        return {"min_price": int(match.group("price")) * 10_000}
+    return {}
+
+
 def _owner_lookup_vehicle_recommendation_args(owner_tool_result: Any, messages: list[dict]) -> dict | None:
     if not isinstance(owner_tool_result, dict) or owner_tool_result.get("status") != "success":
         return None
@@ -402,6 +425,7 @@ def _owner_lookup_vehicle_recommendation_args(owner_tool_result: Any, messages: 
     season_nm = _recommendation_season_from_vehicle_text(latest_user_text)
     if season_nm:
         args["season_nm"] = season_nm
+    args.update(_recommendation_price_range_from_vehicle_text(latest_user_text))
     if car_lnc_cd:
         args["car_lnc_cd"] = car_lnc_cd
     else:
