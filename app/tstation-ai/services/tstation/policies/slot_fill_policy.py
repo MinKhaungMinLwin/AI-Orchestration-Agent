@@ -14,6 +14,32 @@ from services.tstation.policies.ui_action_policy import (
 _SUPPORT_OR_POLICY_ANCHOR_RE = r"보증|워런티|무상|품질|불량|환불|취소|쿠폰|사은품|문의|상담|클레임|고소|소송"
 
 
+def _mapping_value(values: Mapping[str, Any] | None, key: str) -> Any:
+    return values.get(key) if isinstance(values, Mapping) else None
+
+
+def _has_order_or_reservation_context(values: Mapping[str, Any] | None) -> bool:
+    return bool(
+        _mapping_value(values, "pending_intent") in {"order", "reservation", "cart"}
+        or _mapping_value(values, "goal_type") in {"place_order", "add_to_cart"}
+    )
+
+
+def _has_parent_order_or_reservation_context(*, merged_slots: ConversationSlots, router_context: Mapping[str, Any]) -> bool:
+    known_slots = router_context.get("known_slots")
+    if _has_order_or_reservation_context(known_slots if isinstance(known_slots, Mapping) else None):
+        return True
+
+    availability_context = getattr(merged_slots, "availability_context", None)
+    if not isinstance(availability_context, Mapping):
+        return False
+    for key in ("pending_order_context", "dormant_purchase_context"):
+        context = availability_context.get(key)
+        if isinstance(context, Mapping) and _has_order_or_reservation_context(context):
+            return True
+    return False
+
+
 def filled_slot_from_slot_patch(slot_patch: Mapping[str, Any]) -> str:
     """Derive filled_slot metadata from the actual slot patch keys."""
     keys = {str(key) for key, value in dict(slot_patch or {}).items() if value not in (None, "", [], {})}
@@ -66,6 +92,11 @@ def expected_slot_fill_precheck(
         or _reservation_hour_from_text(text)
     )
     has_current_schedule_signal = bool(current_requested_cal_day or current_rsv_hour)
+    schedule_should_resume_purchase = bool(
+        has_current_schedule_signal
+        and current_flow == "stock_store_search"
+        and _has_parent_order_or_reservation_context(merged_slots=merged_slots, router_context=router_context)
+    )
 
     if current_flow == "quick_order_reservation" and has_purchase_anchor:
         slot_patch.update({"pending_intent": "order", "goal_type": "place_order"})
@@ -143,6 +174,10 @@ def expected_slot_fill_precheck(
     if current_flow == "quick_order_reservation":
         slot_patch.setdefault("pending_intent", "order")
         slot_patch.setdefault("goal_type", "place_order")
+    elif schedule_should_resume_purchase:
+        current_flow = "quick_order_reservation"
+        slot_patch["pending_intent"] = "order"
+        slot_patch["goal_type"] = "place_order"
     elif current_flow == "stock_store_search":
         slot_patch.setdefault("pending_intent", "stock")
         slot_patch.setdefault("goal_type", "store_with_stock")
