@@ -9,6 +9,7 @@ from typing import Any, Mapping
 _EMPTY_VALUES = (None, "", [], {})
 
 _PRODUCT_FIELDS = ("goods_no", "product_name", "tire_model", "pending_product_name", "tire_size", "ord_qty")
+_PRODUCT_RESOLUTION_FIELDS = ("goods_no", "product_name", "tire_model", "pending_product_name", "tire_size")
 _VEHICLE_FIELDS = (
     "selection_required",
     "named_registered_vehicle_anchor",
@@ -127,6 +128,139 @@ def _normalize_product_aliases(values: dict[str, Any]) -> None:
     values.setdefault("product_name", product_name)
     values.setdefault("tire_model", product_name)
     values.setdefault("pending_product_name", product_name)
+
+
+def _normalized_product_identity(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    return re.sub(r"[\s\-_()]+", "", text)
+
+
+def _product_identity(values: Mapping[str, Any]) -> str:
+    return str(
+        _first_non_empty(values.get("product_name"), values.get("tire_model"), values.get("pending_product_name"))
+        or ""
+    ).strip()
+
+
+def _product_identity_changed(existing: Mapping[str, Any], incoming: Mapping[str, Any]) -> bool:
+    if incoming.get("goods_no") not in _EMPTY_VALUES:
+        return False
+    existing_identity = _normalized_product_identity(_product_identity(existing))
+    incoming_identity = _normalized_product_identity(_product_identity(incoming))
+    return bool(existing.get("goods_no") and existing_identity and incoming_identity and existing_identity != incoming_identity)
+
+
+def _normalized_scalar(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _field_changed(existing: Mapping[str, Any], incoming: Mapping[str, Any], field_name: str) -> bool:
+    if incoming.get(field_name) in _EMPTY_VALUES:
+        return False
+    existing_value = _normalized_scalar(existing.get(field_name))
+    incoming_value = _normalized_scalar(incoming.get(field_name))
+    return bool(existing_value and incoming_value and existing_value != incoming_value)
+
+
+def _product_resolution_change(
+    existing: Mapping[str, Any],
+    incoming: Mapping[str, Any],
+) -> tuple[str, dict[str, Any], bool] | None:
+    existing_goods_no = str(existing.get("goods_no") or "").strip()
+    incoming_goods_no = str(incoming.get("goods_no") or "").strip()
+    if existing_goods_no and incoming_goods_no and existing_goods_no != incoming_goods_no:
+        return "goods_no", {"existing": existing_goods_no, "incoming": incoming_goods_no}, False
+    if _product_identity_changed(existing, incoming):
+        return (
+            "product_identity",
+            {
+                "existing": _product_identity(existing),
+                "incoming": _product_identity(incoming),
+                "existing_goods_no": existing_goods_no,
+            },
+            True,
+        )
+    return None
+
+
+def _tire_size_changed(existing: Mapping[str, Any], incoming: Mapping[str, Any]) -> bool:
+    if incoming.get("tire_size") in _EMPTY_VALUES:
+        return False
+    existing_size = _normalize_vehicle_tire_size(existing.get("tire_size"))
+    incoming_size = _normalize_vehicle_tire_size(incoming.get("tire_size"))
+    return bool(existing_size and incoming_size and existing_size != incoming_size)
+
+
+def _vehicle_identity(values: Mapping[str, Any]) -> tuple[str, str] | None:
+    for field_name in ("mbr_car_reg_seq", "car_no", "car_lnc_cd", "requested_vehicle_name", "named_registered_vehicle_anchor"):
+        value = _normalized_scalar(values.get(field_name))
+        if value:
+            return field_name, value
+    return None
+
+
+def _vehicle_changed(existing: Mapping[str, Any], incoming: Mapping[str, Any]) -> tuple[dict[str, Any], bool] | None:
+    existing_identity = _vehicle_identity(existing)
+    incoming_identity = _vehicle_identity(incoming)
+    if not existing_identity or not incoming_identity:
+        return None
+    existing_field, existing_value = existing_identity
+    incoming_field, incoming_value = incoming_identity
+    if existing_field == incoming_field and existing_value == incoming_value:
+        return None
+    return (
+        {
+            "existing": existing_value,
+            "incoming": incoming_value,
+            "existing_field": existing_field,
+            "incoming_field": incoming_field,
+        },
+        existing_value != incoming_value,
+    )
+
+
+def _schedule_changed(existing: Mapping[str, Any], incoming: Mapping[str, Any]) -> bool:
+    return _field_changed(existing, incoming, "requested_cal_day") or _field_changed(existing, incoming, "rsv_hour")
+
+
+def _clear_product_dependent_context(
+    state: "FlowState",
+    cleared_fields: list[str],
+    *,
+    clear_goods_no: bool,
+    clear_product_resolution: bool = False,
+) -> None:
+    product_fields = _PRODUCT_RESOLUTION_FIELDS if clear_product_resolution else ("goods_no",)
+    if clear_goods_no:
+        for field_name in product_fields:
+            if state.product.pop(field_name, None) not in _EMPTY_VALUES:
+                cleared_fields.append(field_name)
+    cleared_fields.extend(_clear_section(state.store))
+    cleared_fields.extend(_clear_section(state.schedule))
+    cleared_fields.extend(_clear_section(state.payment))
+    if state.candidates:
+        state.candidates = []
+        cleared_fields.append("last_candidates")
+
+
+def _clear_recommendation_context(state: "FlowState", cleared_fields: list[str]) -> None:
+    cleared_fields.extend(_clear_section(state.recommendation))
+
+
+def _clear_payment_context(state: "FlowState", cleared_fields: list[str]) -> None:
+    cleared_fields.extend(_clear_section(state.payment))
+
+
+def _cleared_context_fields(state: "FlowState") -> list[str]:
+    cleared: list[str] = []
+    for section_name in ("product", "vehicle", "recommendation", "store", "schedule", "payment", "intent", "meta"):
+        section = getattr(state, section_name)
+        cleared.extend(f"{section_name}.{key}" for key, value in section.items() if value not in _EMPTY_VALUES)
+    if state.candidates:
+        cleared.append("last_candidates")
+    return cleared
 
 
 def _normalize_vehicle_tire_size(value: Any) -> str:
@@ -594,15 +728,21 @@ class FlowState:
         preserved_fields: list[str] = []
         cleared_fields: list[str] = []
         conflicts: dict[str, dict[str, Any]] = {}
+        existing_product = dict(merged.product)
+        existing_schedule = dict(merged.schedule)
 
-        existing_goods_no = str(merged.product.get("goods_no") or "").strip()
-        incoming_goods_no = str(delta.product.get("goods_no") or "").strip()
-        product_changed = bool(existing_goods_no and incoming_goods_no and existing_goods_no != incoming_goods_no)
-        if product_changed:
-            conflicts["goods_no"] = {"existing": existing_goods_no, "incoming": incoming_goods_no}
-            cleared_fields.extend(_clear_section(merged.store))
-            cleared_fields.extend(_clear_section(merged.schedule))
-            cleared_fields.extend(_clear_section(merged.payment))
+        product_change = _product_resolution_change(existing_product, delta.product)
+        if product_change:
+            conflict_key, conflict_values, clear_goods_no = product_change
+            conflicts[conflict_key] = conflict_values
+            _clear_product_dependent_context(merged, cleared_fields, clear_goods_no=clear_goods_no)
+
+        if _tire_size_changed(existing_product, delta.product):
+            conflicts["tire_size"] = {
+                "existing": _normalize_vehicle_tire_size(existing_product.get("tire_size")),
+                "incoming": _normalize_vehicle_tire_size(delta.product.get("tire_size")),
+            }
+            _clear_product_dependent_context(merged, cleared_fields, clear_goods_no=True)
 
         existing_shop_id = str(merged.store.get("shop_id") or "").strip()
         incoming_shop_id = str(delta.store.get("shop_id") or "").strip()
@@ -619,6 +759,15 @@ class FlowState:
             for field_name in ("shop_id", "shop_name"):
                 if merged.store.pop(field_name, None) not in _EMPTY_VALUES:
                     cleared_fields.append(field_name)
+
+        if _schedule_changed(existing_schedule, delta.schedule) and delta.payment.get("payment_amount") in _EMPTY_VALUES:
+            conflicts["schedule"] = {
+                "existing": _non_empty_mapping(existing_schedule),
+                "incoming": _non_empty_mapping(delta.schedule),
+            }
+            _clear_payment_context(merged, cleared_fields)
+            merged.payment["payment_amount_stale"] = True
+            committed_fields.append("payment_amount_stale")
 
         qty_changed = _quantity_changed(merged.product.get("ord_qty"), delta.product.get("ord_qty"))
         if qty_changed and delta.payment.get("payment_amount") in _EMPTY_VALUES:
@@ -684,22 +833,47 @@ class FlowState:
         preserved_fields: list[str] = []
         cleared_fields: list[str] = []
         conflicts: dict[str, dict[str, Any]] = {}
+        existing_product = dict(merged.product)
+        existing_vehicle = dict(merged.vehicle)
+        existing_schedule = dict(merged.schedule)
 
         if delta.flow_type and merged.flow_type != delta.flow_type:
             conflicts["flow_type"] = {"existing": merged.flow_type, "incoming": delta.flow_type}
+            cleared_fields.extend(_cleared_context_fields(merged))
             merged = FlowState(flow_type=delta.flow_type, status=delta.status, flow_step=delta.flow_step)
             committed_fields.append("flow_type")
+            existing_product = {}
+            existing_vehicle = {}
+            existing_schedule = {}
         elif delta.flow_step:
             merged.flow_step = delta.flow_step
             committed_fields.append("flow_step")
 
-        existing_goods_no = str(merged.product.get("goods_no") or "").strip()
-        incoming_goods_no = str(delta.product.get("goods_no") or "").strip()
-        if existing_goods_no and incoming_goods_no and existing_goods_no != incoming_goods_no:
-            conflicts["goods_no"] = {"existing": existing_goods_no, "incoming": incoming_goods_no}
-            cleared_fields.extend(_clear_section(merged.store))
-            cleared_fields.extend(_clear_section(merged.schedule))
-            cleared_fields.extend(_clear_section(merged.payment))
+        vehicle_change = _vehicle_changed(existing_vehicle, delta.vehicle)
+        if vehicle_change:
+            conflict_values, changed = vehicle_change
+            if changed:
+                conflicts["vehicle"] = conflict_values
+                _clear_recommendation_context(merged, cleared_fields)
+                _clear_product_dependent_context(
+                    merged,
+                    cleared_fields,
+                    clear_goods_no=True,
+                    clear_product_resolution=True,
+                )
+
+        product_change = _product_resolution_change(existing_product, delta.product)
+        if product_change:
+            conflict_key, conflict_values, clear_goods_no = product_change
+            conflicts[conflict_key] = conflict_values
+            _clear_product_dependent_context(merged, cleared_fields, clear_goods_no=clear_goods_no)
+
+        if _tire_size_changed(existing_product, delta.product):
+            conflicts["tire_size"] = {
+                "existing": _normalize_vehicle_tire_size(existing_product.get("tire_size")),
+                "incoming": _normalize_vehicle_tire_size(delta.product.get("tire_size")),
+            }
+            _clear_product_dependent_context(merged, cleared_fields, clear_goods_no=True)
 
         existing_shop_id = str(merged.store.get("shop_id") or "").strip()
         incoming_shop_id = str(delta.store.get("shop_id") or "").strip()
@@ -716,6 +890,15 @@ class FlowState:
             for field_name in ("shop_id", "shop_name"):
                 if merged.store.pop(field_name, None) not in _EMPTY_VALUES:
                     cleared_fields.append(field_name)
+
+        if _schedule_changed(existing_schedule, delta.schedule) and delta.payment.get("payment_amount") in _EMPTY_VALUES:
+            conflicts["schedule"] = {
+                "existing": _non_empty_mapping(existing_schedule),
+                "incoming": _non_empty_mapping(delta.schedule),
+            }
+            _clear_payment_context(merged, cleared_fields)
+            merged.payment["payment_amount_stale"] = True
+            committed_fields.append("payment_amount_stale")
 
         if _quantity_changed(merged.product.get("ord_qty"), delta.product.get("ord_qty")):
             cleared_fields.extend(_clear_section(merged.payment))
