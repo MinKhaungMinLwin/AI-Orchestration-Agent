@@ -22281,6 +22281,14 @@ def _flow_state_from_purchase_stock_sources(
             "stock_check_mode",
             "price_basis",
             "price_source_tool",
+            "cheapest_final_prc",
+            "final_unit_price",
+            "final_prc",
+            "final_price",
+            "finalPrice",
+            "extra_fvr_sale_prc",
+            "sale_prc",
+            "price",
         ):
             value = source_context.get(key)
             if value not in (None, "", [], {}) and flow_state_before.get(key) in (None, "", [], {}):
@@ -22341,27 +22349,28 @@ def _flow_state_from_purchase_stock_sources(
                 matched_row = row
                 break
             canonical_row = canonical_context_from_tool_boundary(matched_row or rows[0])
-            for key in ("goods_no", "product_name", "tire_size"):
-                value = canonical_row.get(key)
+            for key in (
+                "goods_no",
+                "product_name",
+                "tire_size",
+                "cheapest_final_prc",
+                "final_unit_price",
+                "final_prc",
+                "final_price",
+                "finalPrice",
+                "extra_fvr_sale_prc",
+                "sale_prc",
+                "price",
+            ):
+                value = canonical_row.get(key) if key in {"goods_no", "product_name", "tire_size"} else (
+                    matched_row or rows[0]
+                ).get(key)
                 if value not in (None, "", [], {}) and tool_values.get(key) in (None, "", [], {}):
                     tool_values[key] = value
-            qty_value = (
-                current_values.get("ord_qty")
-                or flow_state_before.get("ord_qty")
-                or tool_values.get("ord_qty")
-                or (current_slot_delta or {}).get("ord_qty")
-            )
             unit_price, price_basis = _preview_price_unit_and_basis(matched_row or rows[0])
-            try:
-                qty_int = int(qty_value or 0)
-            except (TypeError, ValueError):
-                qty_int = 0
-            if unit_price is not None and price_basis and qty_int > 0:
-                tool_values.setdefault("payment_amount", int(unit_price * qty_int))
+            if unit_price is not None and price_basis:
                 tool_values.setdefault("price_basis", price_basis)
                 tool_values.setdefault("price_source_tool", "search_product_tool")
-                tool_values.setdefault("payment_amount_source", "search_product_tool.row")
-                tool_values.setdefault("payment_amount_missing_reason", None)
             continue
 
         price_data = parsed_data.get("data", parsed_data) if isinstance(parsed_data, Mapping) else parsed_data
@@ -22418,8 +22427,30 @@ def _flow_state_from_purchase_stock_sources(
                     break
                 price_data = matched_candidate or preview_candidates[0]
                 canonical_candidate = canonical_context_from_tool_boundary(price_data)
-                for key in ("goods_no", "product_name", "tire_size", "shop_id", "shop_name", "requested_cal_day"):
-                    value = canonical_candidate.get(key)
+                for key in (
+                    "goods_no",
+                    "product_name",
+                    "tire_size",
+                    "shop_id",
+                    "shop_name",
+                    "requested_cal_day",
+                    "cheapest_final_prc",
+                    "final_unit_price",
+                    "final_prc",
+                    "final_price",
+                    "finalPrice",
+                    "extra_fvr_sale_prc",
+                    "sale_prc",
+                    "price",
+                ):
+                    value = canonical_candidate.get(key) if key in {
+                        "goods_no",
+                        "product_name",
+                        "tire_size",
+                        "shop_id",
+                        "shop_name",
+                        "requested_cal_day",
+                    } else price_data.get(key)
                     if value not in (None, "", [], {}) and tool_values.get(key) in (None, "", [], {}):
                         tool_values[key] = value
                 product_name = (
@@ -22504,6 +22535,14 @@ def _flow_state_from_purchase_stock_sources(
         "stock_check_mode",
         "price_basis",
         "price_source_tool",
+        "cheapest_final_prc",
+        "final_unit_price",
+        "final_prc",
+        "final_price",
+        "finalPrice",
+        "extra_fvr_sale_prc",
+        "sale_prc",
+        "price",
     )
     for field in fields:
         current_value = merged.get(field)
