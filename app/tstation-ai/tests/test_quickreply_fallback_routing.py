@@ -17437,6 +17437,47 @@ def test_apply_history_product_selection_state_uses_pending_order_context_withou
     assert state.rewritten_user_text == "벤투스 S2 AS 225/45R17 4개 광교신도시점에서 구매"
 
 
+def test_product_selection_from_pending_order_context_builds_purchase_slot_fill_context() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000309783",
+        tire_size="225/45R17",
+        tire_model="벤투스 S2 AS",
+        ord_qty=4,
+        shop_name="광교신도시점",
+        pending_intent="order",
+        goal_type="place_order",
+        availability_context={
+            "pending_order_context": {
+                "ord_qty": 4,
+                "shop_name": "광교신도시점",
+                "tire_size": "225/45R17",
+            }
+        },
+    )
+    context = _router_slot_fill_context_payload_for_test(
+        slots=slots,
+        user_text="벤투스 S2 AS 225/45R17 4개 광교신도시점에서 구매",
+        latest_product_tmpl=None,
+        latest_location_tmpl=None,
+        latest_datepick_tmpl=None,
+    )
+
+    decision = resolve_pre_router_slot_fill(
+        user_text="벤투스 S2 AS 225/45R17 4개 광교신도시점에서 구매",
+        regex_slots=ConversationSlots.extract_from_user_text("벤투스 S2 AS 225/45R17 4개 광교신도시점에서 구매"),
+        merged_slots=slots,
+        router_context=context,
+    )
+
+    assert context["current_flow"] == "quick_order_reservation"
+    assert context["flow_step"] == "resolve_store"
+    assert decision.precheck["matched"] is True
+    assert decision.precheck["filled_slot"] == "store"
+    assert decision.routing_override["intent"] == "quick_order_reservation"
+    assert decision.slots.pending_intent == "order"
+    assert decision.slots.goal_type == "place_order"
+
+
 def test_apply_history_product_selection_state_uses_pending_order_context_for_stock_without_flat_intent() -> None:
     slots = ConversationSlots(
         goods_no=None,
