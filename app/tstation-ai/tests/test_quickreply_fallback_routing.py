@@ -33560,6 +33560,36 @@ def test_ready_preorder_card_without_quick_order_tool_is_allowed_under_slot_fill
     assert violations == []
 
 
+def test_response_policy_guard_emits_preorder_when_build_preorder_slots_are_ready() -> None:
+    contract = _transaction_turn_contract(
+        "2026년 6월 23일 (화)\n17:00",
+        {
+            "goods_no": "G000000317682",
+            "tire_model": "다이나프로 HPX",
+            "tire_size": "235/55R19",
+            "ord_qty": 2,
+            "shop_id": "F00721",
+            "shop_name": "티스테이션 판교점",
+            "requested_cal_day": "20260623",
+            "rsv_hour": "17",
+            "payment_amount": 314400,
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+
+    event = build_response_policy_guard_event(contract)
+
+    assert contract.response_decision["metadata"]["response_shape_key"] == "reservation_confirmation_ready"
+    assert contract.flow_step == "build_preorder"
+    assert event["template"] == "preOrder"
+    assert event["assistant_response_source"] == "code_reservation_confirmation_ready"
+    assert event["contract_gate_reason"] == "response_policy_guard"
+    assert event["data"]["orderInfo"]["product"] == "다이나프로 HPX 235/55R19"
+    assert event["data"]["orderInfo"]["storeName"] == "티스테이션 판교점"
+    assert event["data"]["orderInfo"]["bookingDateTime"] == "2026년 6월 23일 (화) 17:00"
+
+
 def test_turn_contract_promotes_router_comparison_signal_into_product_comparison() -> None:
     contract = build_turn_contract(
         user_text="키너지 ex랑 옵티모랑 비교해줘",

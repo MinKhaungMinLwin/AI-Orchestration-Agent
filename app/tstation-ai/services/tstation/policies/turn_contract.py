@@ -11,6 +11,7 @@ from services.tstation.policies.cross_domain_policy import CrossDomainPlan
 from services.tstation.policies.discovery_intent_policy import extract_best_seller_vehicle_query, is_best_seller_request
 from services.tstation.policies.flow_controller import build_purchase_flow_fallback_event
 from services.tstation.policies.intent_frame import IntentFrame
+from services.tstation.policies.preorder_event_builder import build_preorder_event
 from services.tstation.policies.resolved_context import build_resolved_turn_context
 from services.tstation.policies.response_decision import ResponseDecision, ToolPlan
 from services.tstation.policies.support_response_policy import _is_tire_manufacture_date_question
@@ -1571,6 +1572,9 @@ def build_response_policy_guard_event(contract: TurnContract) -> dict[str, Any]:
     )
     if purchase_flow_event is not None:
         return _annotate_contract_guard_event(purchase_flow_event, contract, reason="response_policy_guard")
+    preorder_event = build_preorder_event(contract, contract.known_slots)
+    if preorder_event is not None:
+        return _annotate_contract_guard_event(preorder_event, contract, reason="response_policy_guard")
     unknown_store_service_event = _build_unknown_store_service_guard_event(contract)
     if unknown_store_service_event is not None:
         return _annotate_contract_guard_event(unknown_store_service_event, contract, reason="response_policy_guard")

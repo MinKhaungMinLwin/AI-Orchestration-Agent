@@ -156,6 +156,7 @@ from services.tstation.policies.delivery_policy_gate import (
     decide_delivery_policy_gate,
 )
 from services.tstation.policies.intent_frame import IntentFrame, PolicyDomain
+from services.tstation.policies.preorder_event_builder import build_preorder_event
 from services.tstation.policies.pickup_service_gate import decide_pickup_service_gate
 from services.tstation.policies.ui_action_policy import (
     UIActionContext,
@@ -7888,10 +7889,16 @@ def _standardize_preorder_metadata(event_data: dict, slot_state: Any | None) -> 
 def _build_direct_preorder_event_from_slots(
     slot_state: Any | None,
     *,
+    turn_contract: TurnContract | None = None,
     latest_datepick_tmpl: Mapping[str, Any] | None = None,
     latest_preorder_tmpl: Mapping[str, Any] | None = None,
     prev_tool_data: list[dict] | None = None,
 ) -> dict[str, Any] | None:
+    if turn_contract is not None:
+        event = build_preorder_event(turn_contract, slot_state)
+        if event is not None:
+            return event
+
     slot_values = slot_state.model_dump() if hasattr(slot_state, "model_dump") else dict(slot_state or {})
     availability_context = (
         slot_values.get("availability_context")
@@ -29425,6 +29432,7 @@ class TStationChatServiceV2:
             ):
                 direct_preorder_event = _build_direct_preorder_event_from_slots(
                     merged_slots,
+                    turn_contract=turn_contract,
                     latest_datepick_tmpl=latest_datepick_tmpl,
                     latest_preorder_tmpl=latest_preorder_tmpl,
                     prev_tool_data=prev_tool_data,
