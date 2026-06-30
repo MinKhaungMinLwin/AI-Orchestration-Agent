@@ -881,7 +881,11 @@ def build_discovery_intent_frame(
         }
     if len(products) >= 2:
         entities["multi_product_names"] = True
-        if re.search(r"각각|둘\s*다|둘\s*모두|상품\s*정보|설명|알려", text, re.IGNORECASE):
+        if re.search(
+            r"각각|둘\s*다|둘\s*모두|상품\s*정보|설명|알려|(?:상품\s*)?(?:추천|검색|찾아|보여)",
+            text,
+            re.IGNORECASE,
+        ):
             entities["multi_product_detail_request"] = True
     if brand_cd:
         entities["brand_cd"] = brand_cd
@@ -1343,11 +1347,17 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             args["size"] = entities["tire_size"]
         if entities.get("brand_cd"):
             args["brand_cd"] = entities["brand_cd"]
+        is_multi_product_search = len(product_names) >= 2 and bool(entities.get("multi_product_detail_request"))
         return ToolPlan(
-            allowed_tools=("search_product_tool",),
+            allowed_tools=(
+                ("search_product_tool", "get_product_description_tool")
+                if is_multi_product_search
+                else ("search_product_tool",)
+            ),
             preferred_tool="search_product_tool",
             tool_args_patch=args,
             forbidden_tools=("get_products_recommendations_tool",),
+            metadata={"response_intent": "multi_product_detail"} if is_multi_product_search else {},
         )
     if frame.sub_intent == "product_attribute_lookup":
         args = {"keyword": (entities.get("product_names") or ("",))[0]}
@@ -1414,13 +1424,18 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             args["size"] = entities["tire_size"]
         if entities.get("brand_cd"):
             args["brand_cd"] = entities["brand_cd"]
+        is_multi_product_search = len(product_names) >= 2
         return ToolPlan(
-            allowed_tools=("search_product_tool",),
+            allowed_tools=(
+                ("search_product_tool", "get_product_description_tool")
+                if is_multi_product_search
+                else ("search_product_tool",)
+            ),
             preferred_tool="search_product_tool",
             tool_args_patch=args,
             forbidden_tools=("get_products_recommendations_tool",),
             metadata={
-                "response_intent": frame.sub_intent or "product_search",
+                "response_intent": "multi_product_detail" if is_multi_product_search else frame.sub_intent or "product_search",
                 **({"product_family_names": product_families} if product_families else {}),
             },
         )

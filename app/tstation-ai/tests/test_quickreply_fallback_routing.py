@@ -154,6 +154,7 @@ from services.tstation.chat import (
     _comparison_query_with_recent_context,
     _recent_product_set_size_availability_context,
     _should_clarify_ambiguous_multi_product_query,
+    _is_multi_product_card_search_request,
     _multi_product_detail_continuation_names,
     _multi_product_compare_continuation_query,
     _recent_multi_product_clarification_names,
@@ -5475,6 +5476,34 @@ def test_multi_product_detail_request_keeps_search_plan_available() -> None:
     assert "get_products_recommendations_tool" in plan.forbidden_tools
     assert plan.tool_args_patch == {}
     assert plan.metadata["response_intent"] == "multi_product_detail"
+
+
+def test_multi_product_search_request_runs_each_product_without_clarification() -> None:
+    user_text = "키너지 ex랑 라우펜 s fit as 상품 추천해줘"
+    messages = [{"role": "user", "content": user_text}]
+    frame = build_discovery_intent_frame(user_text)
+    plan = plan_discovery_tools(frame)
+
+    assert frame.intent == "product_search"
+    assert frame.sub_intent == "product_name_search"
+    assert frame.entities["product_names"] == ("Kinergy EX", "S FIT AS")
+    assert _should_clarify_ambiguous_multi_product_query(user_text, messages) is False
+    assert _is_multi_product_card_search_request(user_text) is True
+    assert _multi_product_detail_continuation_names(user_text, messages) == ("Kinergy EX", "S FIT AS")
+    assert plan.allowed_tools == ("search_product_tool", "get_product_description_tool")
+    assert plan.preferred_tool == "search_product_tool"
+    assert plan.metadata["response_intent"] == "multi_product_detail"
+    assert "get_products_recommendations_tool" in plan.forbidden_tools
+
+
+def test_multi_product_detail_explanation_request_does_not_use_card_search_path() -> None:
+    user_text = "키너지 ex랑 라우펜 s fit as 각각 설명해줘"
+
+    assert _is_multi_product_card_search_request(user_text) is False
+    assert _multi_product_detail_continuation_names(user_text, [{"role": "user", "content": user_text}]) == (
+        "Kinergy EX",
+        "S FIT AS",
+    )
 
 
 def test_discovery_followup_intent_promotes_recent_product_set_size_availability() -> None:

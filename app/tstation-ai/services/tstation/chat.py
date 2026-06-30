@@ -14226,6 +14226,8 @@ def _should_clarify_ambiguous_multi_product_query(
         return False
     if _PRODUCT_DESCRIPTION_COMPARE_FOLLOWUP_RE.search(user_text):
         return False
+    if _is_multi_product_detail_continuation(user_text):
+        return False
     if re.search(r"각각|둘\s*다|둘\s*모두|상품\s*정보|설명|알려", user_text or "", re.IGNORECASE):
         return False
     return True
@@ -14311,11 +14313,22 @@ def _is_multi_product_detail_continuation(user_text: str) -> bool:
         re.search(
             r"각각\s*(?:찾아|검색|설명|알려|보기)|각각|둘\s*다|둘\s*모두|"
             r"(?:두\s*상품|두\s*제품|두\s*개|이\s*두\s*개).*(?:정보|보여|찾아|검색|설명|알려)|"
-            r"(?:정보|보여|찾아|검색|설명|알려).*(?:두\s*상품|두\s*제품|두\s*개|이\s*두\s*개)",
+            r"(?:정보|보여|찾아|검색|설명|알려).*(?:두\s*상품|두\s*제품|두\s*개|이\s*두\s*개)|"
+            r"(?:상품\s*)?(?:추천|검색|찾아|보여)",
             user_text or "",
             re.IGNORECASE,
         )
     )
+
+
+def _is_multi_product_card_search_request(user_text: str) -> bool:
+    if _product_comparison_names(user_text):
+        return False
+    if len(_product_names_in_text(user_text)) < 2:
+        return False
+    if re.search(r"설명|정보|알려|비교|차이|각각", user_text or "", re.IGNORECASE):
+        return False
+    return bool(re.search(r"(?:상품\s*)?(?:추천|검색|찾아|보여)", user_text or "", re.IGNORECASE))
 
 
 def _is_multi_product_compare_continuation(user_text: str) -> bool:
@@ -14329,6 +14342,9 @@ def _multi_product_detail_continuation_names(
 ) -> tuple[str, ...]:
     if not _is_multi_product_detail_continuation(user_text):
         return ()
+    current_names = _product_names_in_text(user_text)
+    if len(current_names) >= 2 and not _product_comparison_names(user_text):
+        return current_names[:2]
     names = _recent_multi_product_clarification_names(messages, latest_quickreply_tmpl)
     if len(names) >= 2:
         return names
@@ -34852,7 +34868,7 @@ class TStationChatServiceV2:
                 template="quickReply",
                 source="code_multi_product_detail",
                 required_tools=("search_product_tool", "get_product_description_tool"),
-                allowed_intents=("multi_product_detail",),
+                allowed_intents=("multi_product_detail", "product_search_summary", "neutral_product_description"),
             )
             if not gate_allowed:
                 logger.info("[CODE_FAST_PATH_GATE] blocked multi_product_detail reason=%s", gate_reason)
@@ -34973,11 +34989,97 @@ class TStationChatServiceV2:
                 intent="product_description",
                 source="code_multi_product_detail",
                 required_tools=("search_product_tool", "get_product_description_tool"),
-                allowed_intents=("multi_product_detail",),
+                allowed_intents=("multi_product_detail", "product_search_summary", "neutral_product_description"),
             )
             return (emitted_events, detail_event) if detail_event is not None else None
 
+        async def _resolve_multi_product_search_cards_with_code(
+            product_names: tuple[str, ...],
+        ) -> tuple[list[dict], dict] | None:
+            if len(product_names) < 2:
+                return None
+            gate_allowed, gate_reason = _direct_code_fast_path_contract_gate(
+                turn_contract=turn_contract,
+                intent="product_search",
+                template="product",
+                source="code_multi_product_search",
+                required_tools=("search_product_tool",),
+                allowed_intents=("multi_product_detail", "product_search_summary", "neutral_product_description"),
+            )
+            if not gate_allowed:
+                logger.info("[CODE_FAST_PATH_GATE] blocked multi_product_search reason=%s", gate_reason)
+                return None
+
+            from services.tstation.agents.b_discovery_agent.tools import search_product_tool as _search_product_tool
+            from services.tstation.template_mapper import try_build_template
+
+            frame = build_discovery_intent_frame(user_query)
+            tire_size = frame.entities.get("tire_size") or getattr(initial_slots, "tire_size", None)
+            tire_size = normalize_tire_size(str(tire_size or ""))
+            emitted_events: list[dict] = []
+            tool_entries: list[dict] = []
+            for product_name in product_names[:2]:
+                preferred_keyword = _preferred_product_search_keyword(product_name)
+                tool_input = {"keyword": preferred_keyword, "limit": 10}
+                if tire_size:
+                    tool_input["size"] = tire_size
+                emitted_events.append({
+                    "type": "status",
+                    "status": "tool_start",
+                    "tool": "search_product_tool",
+                    "display_name": "상품 검색 중...",
+                    "source_domain": "discovery",
+                })
+                try:
+                    raw_search = await asyncio.to_thread(_search_product_tool.invoke, tool_input)
+                    search_result = _tool_result_dict(raw_search)
+                except Exception as exc:
+                    logger.exception("[MULTI_PRODUCT_SEARCH] search_product_tool failed for %s", product_name)
+                    search_result = {
+                        "status": "error",
+                        "http_status": None,
+                        "message": str(exc),
+                        "data": {},
+                    }
+                _record_code_tool_result("search_product_tool", tool_input, search_result)
+                tool_entries.append({"tool": "search_product_tool", "args": tool_input, "data": search_result})
+                emitted_events.append({
+                    "type": "agent_flow",
+                    "agent": "[Product Compatibility AF]",
+                    "agent_class": "Discovery Agent",
+                    "status": search_result.get("status", "success"),
+                    "source_domain": "discovery",
+                })
+                emitted_events.append({
+                    "type": "tool",
+                    "input": tool_input,
+                    "output": json.dumps(search_result, ensure_ascii=False),
+                    "node": "tools",
+                    "tool": "search_product_tool",
+                    "source_domain": "discovery",
+                })
+
+            mapped_event = try_build_template(
+                tool_entries,
+                "요청하신 상품 검색 결과입니다. 원하시는 상품을 선택해 주세요.",
+            )
+            if mapped_event is None or mapped_event.get("template") != "product":
+                return None
+            mapped_event["source_domain"] = MultiAgentDomain.Domain.DISCOVERY.value
+            mapped_event["assistant_response_source"] = "code_multi_product_search"
+            finalized_event = _finalize_direct_code_event(
+                mapped_event,
+                turn_contract=turn_contract,
+                intent="product_search",
+                source="code_multi_product_search",
+                required_tools=("search_product_tool",),
+                allowed_intents=("multi_product_detail", "product_search_summary", "neutral_product_description"),
+            )
+            return (emitted_events, finalized_event) if finalized_event is not None else None
+
         async def _resolve_previous_product_candidate_description_with_code() -> tuple[list[dict], dict] | None:
+            if len(_product_names_in_text(user_query)) >= 2:
+                return None
             if str((vehicle_selection_trace_metadata or {}).get("selection_source") or "") != "previous_product_candidate":
                 return None
             if turn_contract is None or str(turn_contract.intent or "") != "product_description":
@@ -36793,6 +36895,28 @@ class TStationChatServiceV2:
                 yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
                 yield f"data: {json.dumps(size_list_event, ensure_ascii=False)}\n\n"
                 assistant_response = str((size_list_event.get("data") or {}).get("assistantResponse") or "")
+                if assistant_response:
+                    yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[DISCOVERY AGENT]'}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+                yield "data: [DONE]\n\n"
+                return
+
+        multi_product_card_names = (
+            _multi_product_detail_continuation_names(user_query, messages, latest_quickreply_tmpl)
+            if _is_multi_product_card_search_request(user_query)
+            else ()
+        )
+        if len(multi_product_card_names) >= 2:
+            multi_product_search_resolution = await _resolve_multi_product_search_cards_with_code(multi_product_card_names)
+            if multi_product_search_resolution is not None:
+                code_events, product_event = multi_product_search_resolution
+                yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+                for code_event in code_events:
+                    yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+                yield f"data: {json.dumps(product_event, ensure_ascii=False)}\n\n"
+                assistant_response = str((product_event.get("data") or {}).get("assistantResponse") or "")
                 if assistant_response:
                     yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[DISCOVERY AGENT]'}, ensure_ascii=False)}\n\n"
                 yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
