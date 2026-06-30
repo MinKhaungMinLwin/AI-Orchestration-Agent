@@ -205,6 +205,13 @@ _MAINTENANCE_HISTORY_ACCESS_POLICY_RE = re.compile(
     r"(?:조회\s*가능|확인\s*가능|볼\s*수|볼수|매장(?:에서)?\s*(?:조회|확인))",
     re.IGNORECASE,
 )
+_VEHICLE_EXPERIENCE_STORE_SEARCH_RE = re.compile(
+    r"(?=.*(?:매장|지점|곳|티스테이션|더타이어샵))"
+    r"(?=.*(?:추천|찾|알려|보여|어디|가능|많은|많이|잘\s*하는))"
+    r"(?=.*(?:BMW|비엠|벤츠|Mercedes|아우디|Audi|폭스바겐|Volkswagen|수입차|외제차|"
+    r"\d+\s*시리즈|정비\s*경험|정비경험|작업\s*경험|작업경험|서비스\s*경험|서비스경험))",
+    re.IGNORECASE,
+)
 _MAINTENANCE_HISTORY_SERVICE_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("휠얼라인먼트", (r"휠\s*얼라인먼트", r"얼라인먼트")),
     ("오일필터", (r"오일\s*필터", r"오일필터")),
@@ -803,6 +810,11 @@ def build_transaction_intent_frame(
     current_maintenance_history_lookup = bool(
         _MAINTENANCE_HISTORY_LOOKUP_RE.search(text) and not current_maintenance_history_access_policy
     )
+    current_vehicle_experience_store_search = bool(
+        str(slots.get("router_transaction_intent") or slots.get("policy_intent") or "").strip()
+        == "store_recommendation_by_vehicle_experience"
+        or _VEHICLE_EXPERIENCE_STORE_SEARCH_RE.search(text)
+    )
     current_order_history_lookup = _is_order_history_lookup_turn(text)
     current_plain_store_info_lookup = bool(
         not current_store_is_context
@@ -1287,6 +1299,12 @@ def build_transaction_intent_frame(
         policy_store_name = _extract_policy_store_name_candidate(text) or store_name
         if policy_store_name:
             entities["store_name"] = policy_store_name
+    elif current_vehicle_experience_store_search:
+        intent = "store_recommendation_by_vehicle_experience"
+        sub_intent = "store_search"
+        entities["vehicle_experience_store_search"] = True
+        entities["store_search_condition"] = "vehicle_experience"
+        entities["requested_vehicle_experience"] = _vehicle_experience_store_search_condition(text, slots)
     elif current_store_service_availability and not (current_stock or current_price or current_purchase):
         intent = "store_service_advisory"
         sub_intent = "store_service_advisory"
@@ -1472,6 +1490,14 @@ def build_transaction_intent_frame(
         known["service_type"] = "store_service_search"
         known["service_name"] = entities.get("service_name")
         known["service_codes"] = tuple(entities.get("service_codes") or ())
+    if intent == "store_recommendation_by_vehicle_experience":
+        known["pending_intent"] = "store_recommendation_by_vehicle_experience"
+        known["goal_type"] = "store_search"
+        known["store_search_condition"] = "vehicle_experience"
+        known["requested_vehicle_experience"] = entities.get("requested_vehicle_experience")
+        if region:
+            known["region"] = region
+            known["place_query"] = known.get("place_query") or region
     if intent == "unsupported_or_unmapped_store_service_policy":
         known["goal_type"] = "unsupported_or_unmapped_store_service_policy"
         known["service_type"] = "unsupported_or_unmapped_store_service_policy"
@@ -1803,6 +1829,40 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
                 "action": action,
                 "service_name": frame.known_slots.get("service_name") or frame.entities.get("service_name"),
                 "service_codes": service_codes,
+            },
+        )
+
+    if frame.intent == "store_recommendation_by_vehicle_experience":
+        args = _slot_args(frame, "region", "limit", "requested_vehicle_experience")
+        if frame.known_slots.get("region"):
+            args["region_code"] = frame.known_slots["region"]
+            args["place_query"] = frame.known_slots.get("place_query") or frame.known_slots["region"]
+        condition = str(
+            frame.known_slots.get("requested_vehicle_experience")
+            or frame.entities.get("requested_vehicle_experience")
+            or ""
+        ).strip()
+        if condition:
+            args["keyword"] = condition
+        return ToolPlan(
+            allowed_tools=("search_stores_complex_tool", "search_stores_tool", "get_store_list_tool"),
+            preferred_tool="search_stores_complex_tool",
+            tool_args_patch=args,
+            forbidden_tools=(
+                "quick_order_tool",
+                "get_store_schedule_tool",
+                "transaction_store_preview_tool",
+                "get_store_inventory_tool",
+                "get_logistics_inventory_tool",
+                "get_multi_store_schedule_tool",
+            ),
+            required_slots=action_required_slots,
+            metadata={
+                "response_intent": "store_recommendation_by_vehicle_experience",
+                "action": action,
+                "tool_boundary": "store_search",
+                "store_search_condition": "vehicle_experience",
+                "requested_vehicle_experience": condition,
             },
         )
 
@@ -2334,6 +2394,8 @@ def _transaction_action(frame: IntentFrame) -> str:
         return "open_store_filter"
     if frame.intent == "store_service_search":
         return "store_service_search"
+    if frame.intent == "store_recommendation_by_vehicle_experience":
+        return "vehicle_experience_store_search"
     if frame.intent == "unsupported_or_unmapped_store_service_policy":
         return "unsupported_or_unmapped_store_service_policy"
     if frame.intent == "store_service_advisory":
@@ -2444,6 +2506,8 @@ def _action_required_slots(frame: IntentFrame, action: str) -> tuple[str, ...]:
         return ()
     elif action == "store_service_search":
         add("region", not frame.known_slots.get("region"))
+    elif action == "vehicle_experience_store_search":
+        add("region", not frame.known_slots.get("region"))
     elif action == "unsupported_or_unmapped_store_service_policy":
         return ()
     elif action == "store_service_availability":
@@ -2500,7 +2564,7 @@ def _missing_slots_for_intent(
     elif intent in ("store_schedule", "store_search", "open_store_search"):
         if not has_location:
             missing.append("store")
-    elif intent == "store_service_search":
+    elif intent in {"store_service_search", "store_recommendation_by_vehicle_experience"}:
         if not has_location:
             missing.append("region")
     elif intent == "unsupported_or_unmapped_store_service_policy":
@@ -2515,6 +2579,18 @@ def _slot_args(frame: IntentFrame, *keys: str) -> dict[str, Any]:
         if value not in (None, ""):
             args[key] = value
     return args
+
+
+def _vehicle_experience_store_search_condition(text: str, slots: Mapping[str, Any]) -> str:
+    """Preserve the current-turn vehicle/service condition without turning it into a purchase slot."""
+
+    requested = str(slots.get("requested_vehicle_experience") or "").strip()
+    if requested:
+        return requested
+    compact = " ".join(str(text or "").split())
+    if not compact:
+        return "vehicle_experience"
+    return compact[:120]
 
 
 def stock_inventory_store_lookup_tool_boundary(frame: IntentFrame) -> dict[str, Any]:

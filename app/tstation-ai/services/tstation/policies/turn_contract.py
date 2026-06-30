@@ -271,6 +271,7 @@ ROUTER_WINS_EXECUTION_BOUNDARY_INTENTS = frozenset({
     "store_schedule",
     "open_store_search",
     "store_service_search",
+    "store_recommendation_by_vehicle_experience",
 })
 _SUPPORT_FAQ_POLICY_TOOL_INTENTS = frozenset({
     "general_cancel_fee_policy",
@@ -1451,6 +1452,7 @@ def _default_preferred_tool_for_boundary(
         "store_schedule": "get_store_schedule_tool",
         "open_store_search": "search_stores_complex_tool",
         "store_service_search": "search_stores_tool",
+        "store_recommendation_by_vehicle_experience": "search_stores_complex_tool",
     }
     preferred = preferred_by_intent.get(intent)
     if preferred and preferred in allowed_tools and preferred not in forbidden_tools:
@@ -4462,6 +4464,28 @@ def _router_wins_tool_boundary(intent: str) -> tuple[tuple[str, ...], tuple[str,
                 if tool not in allowed_tools
             ),
         )
+    if intent == "store_recommendation_by_vehicle_experience":
+        allowed_tools = (
+            "search_stores_complex_tool",
+            "search_stores_tool",
+            "get_store_list_tool",
+            "get_nearby_stores_tool",
+        )
+        return (
+            allowed_tools,
+            tuple(
+                tool
+                for tool in _ROUTER_WINS_ORDER_EXECUTION_FORBIDDEN_TOOLS
+                | {
+                    "transaction_store_preview_tool",
+                    "get_store_schedule_tool",
+                    "get_multi_store_schedule_tool",
+                    "get_store_inventory_tool",
+                    "get_logistics_inventory_tool",
+                }
+                if tool not in allowed_tools
+            ),
+        )
     if intent == "open_store_search":
         allowed_tools = (
             "search_stores_tool",
@@ -4600,7 +4624,7 @@ def _router_wins_response_decision(intent: str) -> dict[str, Any]:
             "emit_preorder_without_user_confirmation",
             "emit_order_complete_without_quick_order_tool",
         ]
-    elif intent in {"open_store_search", "store_service_search"}:
+    elif intent in {"open_store_search", "store_service_search", "store_recommendation_by_vehicle_experience"}:
         response_shape = "location"
         template = "location"
         guidance = "현재 턴의 매장 검색 intent 기준으로 매장을 조회한다. 주문/가격/쿠폰/예약 실행 flow로 전환하지 않는다."
@@ -5396,7 +5420,7 @@ def _clarification_text(required_slots: tuple[str, ...]) -> str:
         return "확인할 타이어 사이즈를 알려주세요."
     if "quantity" in required_slots:
         return "몇 개 기준으로 확인해드릴까요?"
-    if "store" in required_slots or "location" in required_slots:
+    if "store" in required_slots or "location" in required_slots or "region" in required_slots:
         return "어느 지역이나 매장 기준으로 확인해드릴까요?"
     return "확인에 필요한 정보를 조금만 더 알려주세요."
 
@@ -5415,6 +5439,7 @@ def _missing_slot_summary_text(required_slots: tuple[str, ...]) -> str:
         "ord_qty": "수량",
         "store": "매장",
         "location": "지역/매장",
+        "region": "지역",
         "booking_datetime": "예약 날짜/시간",
         "schedule": "예약 날짜/시간",
     }
@@ -5435,7 +5460,7 @@ def _clarification_chips(required_slots: tuple[str, ...]) -> list[dict[str, str]
         chips.append({"label": "사이즈 입력", "domain": "DISCOVERY"})
     if "quantity" in required_slots:
         chips.append({"label": "수량 선택", "domain": "TRANSACTION"})
-    if "store" in required_slots or "location" in required_slots:
+    if "store" in required_slots or "location" in required_slots or "region" in required_slots:
         chips.append({"label": "지역/매장 입력", "domain": "TRANSACTION"})
     chips.extend([
         {"label": "상품 추천", "domain": "DISCOVERY"},

@@ -51,6 +51,8 @@ def decide_transaction_response(
         return _decide_open_store_search()
     if intent == "store_service_search":
         return _decide_store_service_search(slots=slots)
+    if intent == "store_recommendation_by_vehicle_experience":
+        return _decide_vehicle_experience_store_search(slots=slots)
     if intent == "unsupported_or_unmapped_store_service_policy":
         return _decide_unsupported_or_unmapped_store_service_policy(slots=slots)
     if intent == "store_service_advisory":
@@ -314,6 +316,44 @@ def _decide_store_service_search(*, slots: dict[str, Any]) -> ResponseDecision:
         metadata={
             "service_name": slots.get("service_name"),
             "service_codes": tuple(slots.get("service_codes") or ()),
+        },
+    )
+
+
+def _decide_vehicle_experience_store_search(*, slots: dict[str, Any]) -> ResponseDecision:
+    if not slots.get("region"):
+        return _decision(
+            response_shape_key="missing_vehicle_experience_store_search_region",
+            response_shape=ResponseShape.CLARIFY,
+            template=TemplateName.QUICK_REPLY,
+            required_slots=("region",),
+            forbidden_behaviors=(
+                "random_vehicle_experience_store_search_without_region",
+                "quick_order_for_vehicle_experience_store_search",
+                "schedule_tool_for_vehicle_experience_store_search",
+            ),
+            assistant_guidance="차량/정비 경험 조건의 매장 추천은 지역이 필요하므로 지역만 짧게 요청한다.",
+            metadata={
+                "store_search_condition": "vehicle_experience",
+                "requested_vehicle_experience": slots.get("requested_vehicle_experience"),
+            },
+        )
+    return _decision(
+        response_shape_key="store_recommendation_by_vehicle_experience",
+        response_shape=ResponseShape.LOCATION,
+        template=TemplateName.LOCATION,
+        forbidden_behaviors=(
+            "quick_order_for_vehicle_experience_store_search",
+            "schedule_tool_for_vehicle_experience_store_search",
+            "preorder_for_vehicle_experience_store_search",
+        ),
+        assistant_guidance=(
+            "차량/수입차/정비 경험 조건의 매장 추천은 purchase/reservation 실행이 아니라 조건부 매장 검색이다. "
+            "기존 구매 슬롯은 참고 정보로만 두고, 지역 기반 매장 검색 결과를 location 카드로 안내한다."
+        ),
+        metadata={
+            "store_search_condition": "vehicle_experience",
+            "requested_vehicle_experience": slots.get("requested_vehicle_experience"),
         },
     )
 
