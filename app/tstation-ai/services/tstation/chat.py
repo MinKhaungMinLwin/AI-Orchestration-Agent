@@ -21493,6 +21493,8 @@ def _is_fresh_product_transaction_request(text: str, pending_intent: str | None)
     """Return True when the current turn names a tire product and asks for a transactional action."""
     if not text or pending_intent not in {"price", "stock", "order"}:
         return False
+    if _is_order_history_lookup_query(text):
+        return False
     return bool(
         ConversationSlots.has_product_keyword(text)
         or _has_sized_product_name_hint(text)
