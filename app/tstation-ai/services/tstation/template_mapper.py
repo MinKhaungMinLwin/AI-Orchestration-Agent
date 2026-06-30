@@ -1821,6 +1821,19 @@ def _normalize_row_tire_size(value: object) -> str:
     return raw
 
 
+def _row_available_sizes(row: Mapping[str, Any]) -> list[str]:
+    raw_sizes = row.get("available_sizes")
+    if not isinstance(raw_sizes, list):
+        return []
+
+    sizes: list[str] = []
+    for raw_size in raw_sizes:
+        size = _normalize_row_tire_size(raw_size)
+        if size and size not in sizes:
+            sizes.append(size)
+    return sizes
+
+
 def _row_tire_sizes(row: dict) -> list[str]:
     sizes: list[str] = []
     for key in ("tire_size_1", "tire_size_2"):
@@ -1853,6 +1866,17 @@ def _confirmed_sizes_for_rows(rows: list[dict]) -> list[str]:
             if size not in sizes:
                 sizes.append(size)
     return sorted(sizes, key=_tire_size_sort_key)
+
+
+def _format_row_size_list(sizes: list[str], *, max_visible: int = 3) -> str:
+    sizes = sorted((size for size in sizes if size), key=_tire_size_sort_key)
+    if not sizes:
+        return ""
+    visible = ", ".join(sizes[:max_visible])
+    remaining = len(sizes) - max_visible
+    if remaining > 0:
+        return f"{visible} 외 {remaining}개"
+    return visible
 
 
 def _format_confirmed_size_list(rows: list[dict], *, max_visible: int = 3) -> str:
@@ -1912,7 +1936,12 @@ def _map_product_search_size_summary(tool_data_list: list[dict]) -> dict | None:
 
     lines = ["검색된 상품은 현재 아래 사이즈로 확인돼요."]
     for name, rows in list(grouped.items())[:5]:
-        size_list = _format_confirmed_size_list(rows, max_visible=12)
+        available_sizes: list[str] = []
+        for row in rows:
+            for size in _row_available_sizes(row):
+                if size not in available_sizes:
+                    available_sizes.append(size)
+        size_list = _format_row_size_list(available_sizes, max_visible=12)
         if size_list:
             lines.append(f"- {name}: {size_list}")
     if len(lines) == 1:
@@ -2666,6 +2695,36 @@ def _product_result_context_message(tool_data_list: list[dict], item_count: int)
     return _TEMPLATE_DEFAULTS.get("product", "").format(n=item_count)
 
 
+def _unsized_search_size_context_message(tool_data_list: list[dict]) -> str:
+    for entry in reversed(_find_entries(tool_data_list, "search_product_tool")):
+        if _has_size_arg(entry):
+            continue
+        raw = _unwrap(entry)
+        rows = raw if isinstance(raw, list) else (raw.get("items") if isinstance(raw, dict) else [])
+        if not isinstance(rows, list):
+            continue
+
+        lines: list[str] = []
+        seen_names: set[str] = set()
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            name = _get_str(row, "goods_nm", "title")
+            if not name or name in seen_names:
+                continue
+            size_list = _format_row_size_list(_row_available_sizes(row), max_visible=4)
+            if not size_list:
+                continue
+            lines.append(f"- {name}: {size_list}")
+            seen_names.add(name)
+            if len(lines) >= 3:
+                break
+
+        if lines:
+            return "\n".join(["확인된 대표 사이즈는 아래와 같아요.", *lines])
+    return ""
+
+
 def _recommendation_condition_label(*, rcmd_type: str, season: str) -> str:
     normalized_rcmd_type = (rcmd_type or "").strip().lower()
     if season and normalized_rcmd_type not in _RCMD_TYPES_WITHOUT_SEASON_FILTER:
@@ -3325,6 +3384,10 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
     elif response_source == "default" or _GENERIC_PRODUCT_RESPONSE_RE.search(short):
         short = _product_result_context_message(tool_data_list, len(items))
         response_source = "code_mapper"
+
+    unsized_search_size_message = _unsized_search_size_context_message(tool_data_list)
+    if unsized_search_size_message and unsized_search_size_message not in short:
+        short = f"{short.rstrip()}\n\n{unsized_search_size_message}" if short else unsized_search_size_message
 
     # 회원 보유 쿠폰 적용된 상품이 1건 이상이면 결정적으로 안내 문구 추가.
     # _summarize_with_source 의 첫 문장 컷팅 뒤에 붙여서 truncation 회피.

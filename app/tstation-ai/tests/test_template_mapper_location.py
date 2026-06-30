@@ -24,6 +24,8 @@ from services.tstation.template_mapper import (
     current_discovery_response_decision,
     _product_search_policy_fallback_response,
     _product_result_context_message,
+    _map_product,
+    _map_product_search_size_summary,
     _map_datepick,
     _map_location,
     current_ev_suitability_comparison,
@@ -612,6 +614,73 @@ def test_product_result_context_message_uses_only_current_turn_for_best_seller_c
         current_user_text.reset(token)
 
     assert message == "이번 주 베스트셀러는 다이나프로 HPX예요. 인기 상품 2개를 안내드립니다."
+
+
+def test_map_product_appends_available_sizes_for_unsized_search() -> None:
+    event = _map_product(
+        [
+            _search_product_entry(
+                keyword="아이온",
+                size=None,
+                items=[
+                    {
+                        "goods_no": "G1",
+                        "goods_nm": "아이온 에보",
+                        "tire_size_1": "235/35R20",
+                        "available_sizes": ["235/35R20", "265/35R21", "305/30R21"],
+                        "sale_prc": 210000,
+                    },
+                    {
+                        "goods_no": "G2",
+                        "goods_nm": "아이온 에보 AS SUV",
+                        "tire_size_1": "235/50R20",
+                        "available_sizes": ["235/50R20", "255/45R20", "265/45R20", "255/40R21"],
+                        "sale_prc": 235000,
+                    },
+                ],
+            )
+        ],
+        "",
+    )
+
+    assert event is not None
+    assert event["template"] == "product"
+    assert event["data"]["assistantResponse"] == (
+        "아이온 검색 결과 2개입니다. 원하시는 상품을 선택해 주세요.\n\n"
+        "확인된 대표 사이즈는 아래와 같아요.\n"
+        "- 아이온 에보: 235/35R20, 265/35R21, 305/30R21\n"
+        "- 아이온 에보 AS SUV: 235/50R20, 255/40R21, 255/45R20, 265/45R20"
+    )
+
+
+def test_product_search_size_summary_uses_available_sizes() -> None:
+    token = current_user_text.set("아이온 에보 사이즈 알려줘")
+    try:
+        event = _map_product_search_size_summary(
+            [
+                _search_product_entry(
+                    keyword="아이온 에보",
+                    size=None,
+                    items=[
+                        {
+                            "goods_no": "G1",
+                            "goods_nm": "아이온 에보",
+                            "available_sizes": ["305/30R21", "235/35R20", "265/35R21"],
+                        }
+                    ],
+                )
+            ]
+        )
+    finally:
+        current_user_text.reset(token)
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    assert event["data"]["assistantResponse"] == (
+        "검색된 상품은 현재 아래 사이즈로 확인돼요.\n"
+        "- 아이온 에보: 235/35R20, 265/35R21, 305/30R21\n\n"
+        "차량에 장착 가능한지는 차량번호나 현재 타이어 규격 기준으로 다시 확인해 주세요."
+    )
 
 
 def test_product_search_policy_fallback_does_not_ask_for_size_when_keyword_and_size_were_already_provided() -> None:
