@@ -455,6 +455,17 @@ class ConversationSlots(BaseModel):
         # consistent with the user's intent. Mid-word matches are still
         # blocked by the leading lookbehind ("이강남씨" → no match).
     )
+    _COMPOSITE_REGION_PATTERN: ClassVar[re.Pattern] = re.compile(
+        r"(?<![가-힣A-Za-z0-9])"
+        r"(?P<region>"
+        r"(?:서울|서울특별시|부산|부산광역시|대구|대구광역시|인천|인천광역시|광주|광주광역시|"
+        r"대전|대전광역시|울산|울산광역시|세종|세종특별자치시|경기|경기도|강원|강원도|강원특별자치도|"
+        r"충북|충청북도|충남|충청남도|전북|전북특별자치도|전라북도|전남|전라남도|경북|경상북도|"
+        r"경남|경상남도|제주|제주도|제주특별자치도)"
+        r"\s*[가-힣]{2,12}(?:시|군|구)?"
+        r")"
+        r"(?=\s*(?:지역|근처|부근|일대|매장|지점|점|에서|으?로|은|는|에|쪽|\?|$))"
+    )
 
     # Phrases that look transactional ("주문") but are actually view-only inquiries
     # (order history, coupon, video review). Detected here so goal_type stays None
@@ -544,11 +555,11 @@ class ConversationSlots(BaseModel):
         re.compile(
             # Korean brands (primary user input)
             r"벤투스|키네르기|키너지|옵티모|다이나프로|아이온|라우펜|"
-            r"마일리지\s*(?:플러스\s*)?[23]\b|마일리지\s*플러스|마일리지\s*타이어|"
+            r"마일리지\s*(?:플러스\s*)?[23]\b|마일리지\s*플러스|"
             r"미쉐린|피렐리|브리지스톤|콘티넨탈|굿이어|한국타이어|"
             # English brands
             r"Ventus|Kinergy|Optimo|Dynapro|iON|Laufenn|"
-            r"Mileage\s*(?:Plus\s*)?[23]\b|Mileage\s*Plus|Mileage\s*Tire|"
+            r"Mileage\s*(?:Plus\s*)?[23]\b|Mileage\s*Plus|"
             r"Michelin|Pirelli|Bridgestone|Continental|Goodyear|Hankook|"
             # Bare model names (brand omitted by user)
             r"CrossClimate|크로스클라이밋|크로스클라이메이트|"
@@ -560,12 +571,12 @@ class ConversationSlots(BaseModel):
         ),
     ]
     _MILEAGE_PRODUCT_LIKE_PATTERN: ClassVar[re.Pattern] = re.compile(
-        r"마일리지\s*(?:플러스\s*)?[23]\b|마일리지\s*플러스|마일리지\s*타이어|"
-        r"Mileage\s*(?:Plus\s*)?[23]\b|Mileage\s*Plus|Mileage\s*Tire",
+        r"마일리지\s*(?:플러스\s*)?[23]\b|마일리지\s*플러스|"
+        r"Mileage\s*(?:Plus\s*)?[23]\b|Mileage\s*Plus",
         re.IGNORECASE,
     )
     _MILEAGE_ATTRIBUTE_PATTERN: ClassVar[re.Pattern] = re.compile(
-        r"마일리지\s*(?:좋|높|긴|길|성능|중심|우수|뛰어난)|"
+        r"마일리지\s*(?:타이어|좋|높|긴|길|성능|중심|우수|뛰어난)|"
         r"오래\s*타|수명|마모|내구|장거리|주행거리",
         re.IGNORECASE,
     )
@@ -785,11 +796,11 @@ class ConversationSlots(BaseModel):
         if is_view_only:
             pass
         elif cls.has_mileage_product_search_intent(user_text):
-            # "마일리지" is both a product-name token (마일리지 플러스 2/3)
-            # and a recommendation attribute. Product-like forms should be
-            # searched first; attribute forms such as "마일리지 좋은 타이어" keep
-            # the normal recommendation path below.
+            # "마일리지" alone is a recommendation attribute. Only Plus-anchored
+            # product forms such as "마일리지 플러스 2/3" are searched first.
             slots.goal_candidate = "product_search"
+        elif cls._MILEAGE_ATTRIBUTE_PATTERN.search(user_text):
+            slots.goal_candidate = "product_recommend"
         elif cls.has_recommend_intent(user_text):
             slots.goal_candidate = "product_recommend"
         elif cls.has_store_finder_intent(user_text):
@@ -832,9 +843,13 @@ class ConversationSlots(BaseModel):
             )
         )
         if should_extract_region:
-            region_match = cls._REGION_PATTERN.search(user_text)
-            if region_match:
-                slots.region = region_match.group("region")
+            composite_region_match = cls._COMPOSITE_REGION_PATTERN.search(user_text)
+            if composite_region_match:
+                slots.region = re.sub(r"\s+", " ", composite_region_match.group("region")).strip()
+            else:
+                region_match = cls._REGION_PATTERN.search(user_text)
+                if region_match:
+                    slots.region = region_match.group("region")
 
         # Free-form preference capture — only when the turn IS store-related
         # AND carries criteria hints. Skips bland turns like "근처 매장 알려줘"

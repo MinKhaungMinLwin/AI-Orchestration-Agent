@@ -82,7 +82,7 @@ RECOMMENDATION_SCENARIO_CATALOG: dict[str, RecommendationScenario] = {
     ),
     "long_distance": RecommendationScenario(
         key="long_distance",
-        expressions=_patterns(r"장거리|long\s*distance"),
+        expressions=_patterns(r"장거리|long\s*distance|마일리지|수명|오래\s*(?:타|가)|내구|마모\s*(?:강|적|덜)"),
         tool_args_patch={"rcmd_type": "long_distance"},
         response_label="장거리",
     ),
@@ -184,6 +184,12 @@ _SCENARIO_MATCH_PRIORITY: tuple[str, ...] = (
     "suv",
 )
 
+_SCENARIO_ALIASES: dict[str, str] = {
+    "mileage": "long_distance",
+    "life_span": "long_distance",
+    "lifespan": "long_distance",
+}
+
 
 def recommendation_scenario_from_text(text: str, router_scenario: str | None = None) -> RecommendationScenario | None:
     """Return a supported catalog scenario only when the current turn has a matching anchor."""
@@ -191,6 +197,7 @@ def recommendation_scenario_from_text(text: str, router_scenario: str | None = N
     normalized_router_scenario = str(router_scenario or "").strip().lower()
     if normalized_router_scenario in {"", "none", "unknown_scenario"}:
         normalized_router_scenario = ""
+    normalized_router_scenario = _SCENARIO_ALIASES.get(normalized_router_scenario, normalized_router_scenario)
     if normalized_router_scenario in RECOMMENDATION_SCENARIO_CATALOG:
         scenario = RECOMMENDATION_SCENARIO_CATALOG[normalized_router_scenario]
         if any(pattern.search(text or "") for pattern in scenario.expressions):

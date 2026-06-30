@@ -24,6 +24,8 @@ from services.tstation.template_mapper import (
     current_discovery_response_decision,
     _product_search_policy_fallback_response,
     _product_result_context_message,
+    _map_product,
+    _map_product_search_size_summary,
     _map_datepick,
     _map_location,
     current_ev_suitability_comparison,
@@ -614,6 +616,73 @@ def test_product_result_context_message_uses_only_current_turn_for_best_seller_c
     assert message == "이번 주 베스트셀러는 다이나프로 HPX예요. 인기 상품 2개를 안내드립니다."
 
 
+def test_map_product_appends_available_sizes_for_unsized_search() -> None:
+    event = _map_product(
+        [
+            _search_product_entry(
+                keyword="아이온",
+                size=None,
+                items=[
+                    {
+                        "goods_no": "G1",
+                        "goods_nm": "아이온 에보",
+                        "tire_size_1": "235/35R20",
+                        "available_sizes": ["235/35R20", "265/35R21", "305/30R21"],
+                        "sale_prc": 210000,
+                    },
+                    {
+                        "goods_no": "G2",
+                        "goods_nm": "아이온 에보 AS SUV",
+                        "tire_size_1": "235/50R20",
+                        "available_sizes": ["235/50R20", "255/45R20", "265/45R20", "255/40R21"],
+                        "sale_prc": 235000,
+                    },
+                ],
+            )
+        ],
+        "",
+    )
+
+    assert event is not None
+    assert event["template"] == "product"
+    assert event["data"]["assistantResponse"] == (
+        "아이온 검색 결과 2개입니다. 원하시는 상품을 선택해 주세요.\n\n"
+        "확인된 대표 사이즈는 아래와 같아요.\n"
+        "- 아이온 에보: 235/35R20, 265/35R21, 305/30R21\n"
+        "- 아이온 에보 AS SUV: 235/50R20, 255/40R21, 255/45R20, 265/45R20"
+    )
+
+
+def test_product_search_size_summary_uses_available_sizes() -> None:
+    token = current_user_text.set("아이온 에보 사이즈 알려줘")
+    try:
+        event = _map_product_search_size_summary(
+            [
+                _search_product_entry(
+                    keyword="아이온 에보",
+                    size=None,
+                    items=[
+                        {
+                            "goods_no": "G1",
+                            "goods_nm": "아이온 에보",
+                            "available_sizes": ["305/30R21", "235/35R20", "265/35R21"],
+                        }
+                    ],
+                )
+            ]
+        )
+    finally:
+        current_user_text.reset(token)
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    assert event["data"]["assistantResponse"] == (
+        "검색된 상품은 현재 아래 사이즈로 확인돼요.\n"
+        "- 아이온 에보: 235/35R20, 265/35R21, 305/30R21\n\n"
+        "차량에 장착 가능한지는 차량번호나 현재 타이어 규격 기준으로 다시 확인해 주세요."
+    )
+
+
 def test_product_search_policy_fallback_does_not_ask_for_size_when_keyword_and_size_were_already_provided() -> None:
     token = current_user_text.set("지금 kinergy EX 2055516 사이즈 주문하면 동광주 매장에 도착하는 날짜가 언제야?")
     try:
@@ -834,6 +903,37 @@ def _product_entry() -> dict:
                         "sale_prc": 533500,
                     }
                 ]
+            },
+        },
+    }
+
+
+def _ev_recommendation_entry() -> dict:
+    """Build a recommendation entry matching sized EV tire recommendation traces."""
+    return {
+        "tool": "get_products_recommendations_tool",
+        "args": {"rcmd_type": "tstation", "limit": 3, "brand_cd": "HK", "tire_size": "235/55R19", "vehicle_type": "ev"},
+        "data": {
+            "status": "success",
+            "http_status": 200,
+            "data": {
+                "rcmd_type": "tstation",
+                "total": 1,
+                "items": [
+                    {
+                        "goods_no": "G000000317732",
+                        "goods_nm": "아이온 에보 AS SUV",
+                        "title": "아이온 에보 AS SUV",
+                        "tire_size_1": "235/55R19",
+                        "tire_size_2": "2355519",
+                        "car_knd_nm": "전기차",
+                        "brand_nm": "HANKOOK",
+                        "extra_fvr_sale_prc": 198900,
+                        "sale_prc": 258500,
+                        "image_url": "https://poqa.tstation.com/upload/goods/500/80/2023/1109/IH01A01ko.png",
+                        "rating_avg": 5.0,
+                    }
+                ],
             },
         },
     }
@@ -1519,6 +1619,38 @@ def test_bare_s_fit_search_without_size_maps_to_pattern_summary_not_product_card
     assert "products" not in result["data"]
 
 
+def test_unsized_product_search_summary_uses_available_sizes_in_quickreply() -> None:
+    text = "아이온 상품 보기"
+    current_user_text.set(text)
+    current_discovery_response_decision.set(decide_discovery_response(build_discovery_intent_frame(text)))
+
+    result = try_build_template(
+        [
+            _search_product_entry(
+                keyword="아이온",
+                size=None,
+                items=[
+                    {
+                        "goods_no": "G1",
+                        "goods_nm": "아이온 에보 AS",
+                        "available_sizes": ["235/35R20", "235/40R19", "245/35R21", "245/45R19"],
+                        "car_knd_nm": "전기차",
+                        "season_nm": "사계절",
+                        "goods_pfm_nm": "SPORT",
+                    },
+                ],
+            )
+        ],
+        "아이온 검색 결과입니다. 원하시는 상품을 선택해 주세요.",
+    )
+
+    assert result is not None
+    assert result["template"] == "quickReply"
+    assistant_response = result["data"]["assistantResponse"]
+    assert "아이온 에보 AS:" in assistant_response
+    assert "사이즈: 235/35R20, 235/40R19, 245/35R21, 245/45R19" in assistant_response
+
+
 def test_product_search_with_size_acknowledges_input_size_without_size_prompt() -> None:
     text = "벤투스 S2 AS 225/45R17"
     current_user_text.set(text)
@@ -1642,6 +1774,24 @@ def test_discovery_policy_product_search_summary_does_not_reference_missing_card
     assert "마일리지 플러스3:" in assistant_response
     assert "카드" not in assistant_response
     assert "차량에 맞는 규격은 차량번호나 현재 타이어 사이즈를 알려주시면" in assistant_response
+    assert result["assistant_response_source"] == "discovery_policy"
+
+
+def test_discovery_policy_empty_product_search_says_not_found() -> None:
+    current_user_text.set("벤투스 노블 1 구매하고 싶어")
+    decision = decide_discovery_response(build_discovery_intent_frame("벤투스 노블 1 구매하고 싶어"))
+    current_discovery_response_decision.set(decision)
+
+    result = try_build_template(
+        [_search_product_entry(keyword="Ventus", size=None, items=[])],
+        "검색된 상품 정보를 기준으로 안내드릴게요.",
+    )
+
+    assert result is not None
+    assert result["template"] == "quickReply"
+    assistant_response = result["data"]["assistantResponse"]
+    assert "Ventus 상품은 현재 검색 결과에서 찾지 못했어요." in assistant_response
+    assert "검색된 상품 정보를 기준" not in assistant_response
     assert result["assistant_response_source"] == "discovery_policy"
 
 
@@ -2300,19 +2450,14 @@ def test_listcar_kept_for_registered_vehicle_tire_size_prompt() -> None:
     assert result["data"]["metadata"][0]["tire_size_fr"] == "2355519"
 
 
-def test_ev_suitability_maps_to_quickreply_for_explanation_turn() -> None:
+def test_ev_suitability_mapper_does_not_override_product_mapping() -> None:
     current_ev_suitability_comparison.set(True)
 
-    result = try_build_template([_product_entry()], "전기차에는 전기차 전용 타이어가 유리합니다.")
+    result = try_build_template([_ev_recommendation_entry()], "235/55R19 전기차 전용 타이어 추천 결과입니다.")
 
     assert result is not None
-    assert result["template"] == "quickReply"
-    assistant_response = result["data"]["assistantResponse"]
-    assert "차량 카테고리만으로는 특정 상품이나 규격을 바로 추천드리기 어렵습니다" in assistant_response
-    assert "보유차량을 확인하거나 차종을 알려주시면" in assistant_response
-    assert result["data"]["quickReplies"][0] == {"label": "보유차량 확인", "domain": "DISCOVERY"}
-    assert "235/35R20" not in assistant_response
-    assert "현재 조회된 상품 기준" not in assistant_response
+    assert result["template"] == "product"
+    assert result["data"]["metadata"][0]["goodsId"] == "G000000317732"
 
 
 def test_force_keyword_routing_sends_owned_vehicle_check_to_discovery() -> None:

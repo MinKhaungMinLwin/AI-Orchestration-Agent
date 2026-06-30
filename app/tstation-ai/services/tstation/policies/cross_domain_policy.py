@@ -18,6 +18,7 @@ from services.tstation.policies.store_service_gate import (
     extract_valid_store_name,
     has_store_service_availability_signal,
 )
+from services.tstation.policies.support_response_policy import _is_tire_manufacture_date_question
 
 
 _PRODUCT_HINT_RE = re.compile(
@@ -37,7 +38,10 @@ _RESERVATION_STORE_INFO_RE = re.compile(
     re.IGNORECASE,
 )
 _MAINTENANCE_ADDON_SERVICE_RE = re.compile(r"엔진\s*오일|실내\s*필터|필터|와이퍼|배터리|경정비", re.IGNORECASE)
-_TIRE_SERVICE_RE = re.compile(r"타이어.{0,12}(?:교체|장착|서비스|작업)|(?:교체|장착).{0,12}타이어", re.IGNORECASE)
+_TIRE_SERVICE_RE = re.compile(
+    r"타이어.{0,12}(?:교체|장착|서비스|작업|예약)|(?:교체|장착|예약).{0,12}타이어",
+    re.IGNORECASE,
+)
 _ADDON_WITH_RE = re.compile(r"같이|함께|동시|하면서|겸|추가|하고\s*싶", re.IGNORECASE)
 _PURCHASE_RE = re.compile(r"구매|주문|결제|살래|살게|사고\s*싶|사려고", re.IGNORECASE)
 _STORE_SEARCH_RE = re.compile(r"매장|지점|티스테이션|더타이어샵|근처|주변|찾아|알려|보여", re.IGNORECASE)
@@ -70,7 +74,8 @@ _PATTERN_COUPON_RE = re.compile(
     re.IGNORECASE,
 )
 _SUPPORT_RE = re.compile(
-    r"보증|워런티|warranty|만료|원복|상담원|고객센터|1:1|문의|불만|클레임|공기압|TPMS|티피엠에스|경고등",
+    r"보증|워런티|warranty|안심\s*서비스|안심서비스|안심\s*플러스|안심플러스|"
+    r"만료|원복|상담원|고객센터|1:1|문의|불만|클레임|공기압|TPMS|티피엠에스|경고등",
     re.IGNORECASE,
 )
 _DESCRIPTION_RE = re.compile(r"뭐야|뭔지|설명|차이|장점|왜|등급|연비|소음|마일리지|최신", re.IGNORECASE)
@@ -100,14 +105,14 @@ _WARRANTY_CLAIM_STRONG_RE = re.compile(
     r"하자\s*아니|클레임|품질\s*보증|품질보증",
     re.IGNORECASE,
 )
-_TIRE_MANUFACTURE_DATE_POLICY_RE = re.compile(
-    r"제조\s*일자|제조일자|제조\s*주차|DOT|최신\s*제조|언제\s*만든|오래된\s*거\s*아냐|"
-    r"신상품\s*맞|신품|생산\s*(?:일자|주차|시점)|타이어마다.{0,12}DOT|DOT.{0,12}(?:다르|달라)",
+_SAFE_SERVICE_RE = re.compile(r"안심\s*(?:서비스|플러스)|안심서비스|안심플러스", re.IGNORECASE)
+_SAFE_SERVICE_RECOMMENDATION_ANCHOR_RE = re.compile(
+    r"추천|가능|대상|적용|되는|돼|되나|타이어|상품|제품|모델|찾|보여|알려",
     re.IGNORECASE,
 )
-_TIRE_QUALITY_WARRANTY_POLICY_RE = re.compile(
-    r"측면.{0,12}부풀|사이드월.{0,12}부풀|품질\s*보증|품질보증|무상\s*(?:A/?S|as|교환)|"
-    r"제조상\s*과실|보증\s*기준|불량.{0,12}(?:무상|교환|보상)",
+_SAFE_SERVICE_SUPPORT_POLICY_RE = re.compile(
+    r"가입\s*(?:했|여부|상태|확인|방법|기간)|가입했던|보유|내\s*(?:워런티|보증)|나의\s*워런티|"
+    r"만료|보상|조건|기준|분실|종이\s*보증서|디지털\s*워런티|장착비|추가\s*비용",
     re.IGNORECASE,
 )
 
@@ -229,6 +234,16 @@ def is_warranty_claim_signal(user_text: str, *, known_slots: dict[str, Any] | No
     return has_product_hint and score >= 2
 
 
+def is_safe_service_tire_recommendation_request(user_text: str) -> bool:
+    text = user_text or ""
+    return bool(
+        text
+        and _SAFE_SERVICE_RE.search(text)
+        and _SAFE_SERVICE_RECOMMENDATION_ANCHOR_RE.search(text)
+        and not _SAFE_SERVICE_SUPPORT_POLICY_RE.search(text)
+    )
+
+
 def plan_cross_domain_turn(user_text: str, *, known_slots: dict[str, Any] | None = None) -> CrossDomainPlan:
     """Plan ordered domain subtasks for a multi-intent user turn."""
     text = user_text or ""
@@ -273,7 +288,6 @@ def plan_cross_domain_turn(user_text: str, *, known_slots: dict[str, Any] | None
         _TIRE_SERVICE_RE.search(text)
         and _MAINTENANCE_ADDON_SERVICE_RE.search(text)
         and _ADDON_WITH_RE.search(text)
-        and has_current_store
     )
     has_warranty_claim_signal = is_warranty_claim_signal(text, known_slots=slots)
     comparison_context = slots.get("comparison_context") if isinstance(slots.get("comparison_context"), dict) else {}
@@ -301,6 +315,19 @@ def plan_cross_domain_turn(user_text: str, *, known_slots: dict[str, Any] | None
             response_strategy="single_domain_response",
         )
 
+    if is_safe_service_tire_recommendation_request(text):
+        return CrossDomainPlan(
+            primary_domain=PolicyDomain.DISCOVERY,
+            subtasks=(
+                DomainSubtask(
+                    domain=PolicyDomain.DISCOVERY,
+                    intent="safe_service_tire_recommendation",
+                    reason="안심서비스 대상/가능 타이어 문의는 보유 워런티 조회가 아니라 대상 상품 추천/확인 흐름임",
+                ),
+            ),
+            response_strategy="single_domain_response",
+        )
+
     if needs_regional_price_policy:
         return CrossDomainPlan(
             primary_domain=PolicyDomain.SUPPORT,
@@ -314,7 +341,7 @@ def plan_cross_domain_turn(user_text: str, *, known_slots: dict[str, Any] | None
             response_strategy="single_domain_response",
         )
 
-    if _TIRE_MANUFACTURE_DATE_POLICY_RE.search(text) and not _TIRE_QUALITY_WARRANTY_POLICY_RE.search(text):
+    if _is_tire_manufacture_date_question(text, include_candidate_terms=True):
         return CrossDomainPlan(
             primary_domain=PolicyDomain.SUPPORT,
             subtasks=(
@@ -424,22 +451,31 @@ def plan_cross_domain_turn(user_text: str, *, known_slots: dict[str, Any] | None
         )
 
     if needs_maintenance_addon_with_tire:
+        has_store_context = bool(slots.get("store_name") or slots.get("shop_id") or has_current_store)
         return CrossDomainPlan(
             primary_domain=PolicyDomain.TRANSACTION,
             subtasks=(
                 DomainSubtask(
                     domain=PolicyDomain.TRANSACTION,
                     intent="maintenance_addon_with_tire_service",
-                    reason="특정 매장에서 타이어 교체와 경정비 동시 요청은 매장 서비스 가능 여부 확인이 필요한 거래성 안내임",
-                    required_slots=() if (slots.get("store_name") or slots.get("shop_id") or has_current_store) else ("store",),
+                    reason=(
+                        "타이어 예약/교체와 경정비 동시 요청은 추천이 아니라 동시 주문/요청 가능 여부 안내 contract임"
+                    ),
+                    required_slots=(),
                 ),
                 DomainSubtask(
                     domain=PolicyDomain.SUPPORT,
                     intent="maintenance_addon_policy_notice",
-                    reason="경정비 동시 주문 가능 여부는 정책성 안내 문구가 보조로 필요함",
+                    reason=(
+                        "경정비 동시 주문 가능 여부는 매장 확인 여부와 관계없이 정책성 안내 문구가 보조로 필요함"
+                    ),
                 ),
             ),
-            response_strategy="transaction_store_service_check_then_policy_notice",
+            response_strategy=(
+                "transaction_store_service_check_then_policy_notice"
+                if has_store_context
+                else "maintenance_addon_policy_notice_without_store_lookup"
+            ),
         )
 
     if needs_reservation_store_info:

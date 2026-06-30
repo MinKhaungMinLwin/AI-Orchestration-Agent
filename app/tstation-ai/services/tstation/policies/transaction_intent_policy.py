@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 import datetime
-from typing import Any
+from typing import Any, Mapping
 
 from services.tstation.policies.intent_frame import IntentFrame, PolicyDomain
 from services.tstation.policies.flow_controller import resolve_purchase_order_flow
@@ -21,7 +21,15 @@ from services.tstation.policies.store_service_gate import (
 
 _SIZE_COMPACT_RE = re.compile(r"\b(\d{3})\s*/?\s*(\d)(\d)(?:\3)?\s*R?\s*(\d{2})\b", re.IGNORECASE)
 _QUANTITY_RE = re.compile(r"(\d+)\s*(?:개|본|짝)")
-_TODAY_RE = re.compile(r"오늘|당일|지금|바로|당장", re.IGNORECASE)
+_TODAY_RE = re.compile(r"오늘|당일|바로|당장", re.IGNORECASE)
+_NOW_SERVICE_REQUEST_RE = re.compile(
+    r"지금.{0,12}(?:장착|서비스|예약|방문|가능)|(?:장착|서비스|예약|방문).{0,12}지금",
+    re.IGNORECASE,
+)
+_CURRENTLY_MOUNTED_TIRE_RE = re.compile(
+    r"(?:지금|현재)?\s*장착\s*중(?:인)?\s*타이어|(?:지금|현재)?\s*끼고\s*있는\s*타이어",
+    re.IGNORECASE,
+)
 _RELATIVE_RESERVATION_DATE_RE = re.compile(r"내일|모레", re.IGNORECASE)
 _EXPLICIT_MD_DATE_RE = re.compile(r"(?:(20\d{2})\s*년\s*)?(\d{1,2})\s*월\s*(\d{1,2})\s*일")
 _BOOKING_DATETIME_SELECTION_RE = re.compile(
@@ -91,11 +99,17 @@ _ORDER_HISTORY_REORDER_ACTION_RE = re.compile(
     r"다시|재구매|같은|동일|또|구매|주문|장착|교체|살래|살게",
     re.IGNORECASE,
 )
+STOCK_INVENTORY_STORE_LOOKUP_ALLOWED_TOOLS = (
+    "get_store_inventory_tool",
+    "search_stores_tool",
+    "get_store_list_tool",
+    "get_logistics_inventory_tool",
+)
 _ORDER_HISTORY_LOOKUP_RE = re.compile(
-    r"내\s*주문(?:\s*(?:내역|목록))?\s*(?:보여|조회|확인|알려)|"
-    r"주문\s*(?:내역|목록)\s*(?:보여|조회|확인|알려)|"
-    r"최근\s*주문(?:\s*내역)?\s*(?:보여|조회|확인|알려)|"
-    r"내가\s*주문한\s*거\s*(?:보여|조회|확인|알려)",
+    r"내\s*주문(?:\s*(?:내역|목록))?\s*(?:좀|쫌|한번|한\s*번)?\s*(?:보여|조회|확인|알려)|"
+    r"주문\s*(?:내역|목록)\s*(?:좀|쫌|한번|한\s*번)?\s*(?:보여|조회|확인|알려)|"
+    r"최근\s*주문(?:\s*내역)?\s*(?:좀|쫌|한번|한\s*번)?\s*(?:보여|조회|확인|알려)|"
+    r"내가\s*주문한\s*거\s*(?:좀|쫌|한번|한\s*번)?\s*(?:보여|조회|확인|알려)",
     re.IGNORECASE,
 )
 _ORDER_HISTORY_PAGE_NAVIGATION_RE = re.compile(
@@ -202,7 +216,10 @@ _STORE_SERVICE_SEARCH_RE = re.compile(
     r"(?:어디|찾|검색|알려|보여|있어|있나|가능).{0,20}(?:매장|지점|곳)",
     re.IGNORECASE,
 )
-_TIRE_SERVICE_RE = re.compile(r"타이어.{0,12}(?:교체|장착|서비스|작업)|(?:교체|장착).{0,12}타이어", re.IGNORECASE)
+_TIRE_SERVICE_RE = re.compile(
+    r"타이어.{0,12}(?:교체|장착|서비스|작업|예약)|(?:교체|장착|예약).{0,12}타이어",
+    re.IGNORECASE,
+)
 _ADDON_WITH_RE = re.compile(r"같이|함께|동시|하면서|겸|추가|하고\s*싶", re.IGNORECASE)
 _RESERVATION_CHANGE_RE = re.compile(r"변경|바꿔|옮겨|미뤄|당겨|취소", re.IGNORECASE)
 _NOON_RE = re.compile(r"12\s*시|점심\s*시간", re.IGNORECASE)
@@ -396,14 +413,17 @@ def _kst_today() -> datetime.date:
 
 def extract_requested_cal_day(text: str, *, today: datetime.date | None = None) -> str | None:
     base = today or _kst_today()
-    if _TODAY_RE.search(text or ""):
+    value = text or ""
+    if _TODAY_RE.search(value) or (
+        _NOW_SERVICE_REQUEST_RE.search(value) and not _CURRENTLY_MOUNTED_TIRE_RE.search(value)
+    ):
         return base.strftime("%Y%m%d")
-    match = _RELATIVE_RESERVATION_DATE_RE.search(text or "")
+    match = _RELATIVE_RESERVATION_DATE_RE.search(value)
     if match:
         token = match.group(0)
         offset = 1 if token == "내일" else 2
         return (base + datetime.timedelta(days=offset)).strftime("%Y%m%d")
-    explicit = _EXPLICIT_MD_DATE_RE.search(text or "")
+    explicit = _EXPLICIT_MD_DATE_RE.search(value)
     if explicit:
         year = int(explicit.group(1) or base.year)
         month = int(explicit.group(2))
@@ -706,6 +726,7 @@ def build_transaction_intent_frame(
         is_general_card_cancel_timing_policy_query(text)
         and not _has_owned_order_cancel_status_anchor(text, slots)
     )
+    router_order_cart_status_check = str(slots.get("router_transaction_intent") or "") == "order_cart_status_check"
     router_order_cancel_fee_inquiry = str(slots.get("router_transaction_intent") or "") == "order_cancel_fee_inquiry"
     current_order_cancel_fee_inquiry = bool(
         router_order_cancel_fee_inquiry
@@ -729,7 +750,11 @@ def build_transaction_intent_frame(
     current_payment_method_change = bool(_PAYMENT_METHOD_CHANGE_RE.search(text))
     current_payment_account_info = bool(_PAYMENT_ACCOUNT_INFO_RE.search(text))
     current_store_arrival_visit_guidance = bool(_STORE_ARRIVAL_NOTIFICATION_VISIT_RE.search(text))
-    current_stock = bool(_STOCK_RE.search(text) or _TODAY_RE.search(text))
+    current_today_request = bool(
+        _TODAY_RE.search(text)
+        or (_NOW_SERVICE_REQUEST_RE.search(text) and not _CURRENTLY_MOUNTED_TIRE_RE.search(text))
+    )
+    current_stock = bool(_STOCK_RE.search(text) or current_today_request)
     current_price = bool(_PRICE_OR_COUPON_RE.search(text))
     router_alert_contract = str(slots.get("router_transaction_intent") or "") == "price_or_benefit_alert_request"
     current_maintenance_history_access_policy = bool(_MAINTENANCE_HISTORY_ACCESS_POLICY_RE.search(text))
@@ -935,7 +960,7 @@ def build_transaction_intent_frame(
     quantity = _normalized_quantity(slots, text)
     result_limit = extract_result_limit(text) or slots.get("limit")
     requested_cal_day = extract_requested_cal_day(text)
-    today_requested = bool(_TODAY_RE.search(text))
+    today_requested = current_today_request
     explicit_preview_request = bool(
         requested_cal_day
         or today_requested
@@ -1013,7 +1038,7 @@ def build_transaction_intent_frame(
             and not _has_confirmed_store_context(slots)
         )
     )
-    today_requested = bool(_TODAY_RE.search(text))
+    today_requested = current_today_request
     stored_quantity = quantity or slots.get("ord_qty") or slots.get("quantity")
     selected_store_schedule_ready = bool(
         has_product
@@ -1157,6 +1182,11 @@ def build_transaction_intent_frame(
         intent = "plain_store_info_lookup"
         sub_intent = "store_detail"
         entities["store_name"] = _extract_policy_store_name_candidate(text) or store_name
+    elif router_order_cart_status_check:
+        intent = "order_history_lookup"
+        sub_intent = "lookup"
+        entities["owned_record_target"] = "order"
+        entities["router_contract"] = True
     elif router_alert_contract:
         intent = "price_or_benefit_alert_request"
         sub_intent = "alert_request"
@@ -1577,6 +1607,7 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
             "tire_size",
             "quantity",
             "region",
+            "place_query",
             "store_name",
             "requested_cal_day",
             "shop_id",
@@ -1588,6 +1619,25 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
             or frame.known_slots.get("inventory_mode")
             or ""
         ).strip()
+        if stock_check_mode == "inventory_only":
+            boundary = stock_inventory_store_lookup_tool_boundary(frame)
+            return ToolPlan(
+                allowed_tools=boundary["allowed_tools"],
+                preferred_tool=boundary["preferred_tool"],
+                tool_args_patch={**args, **boundary["tool_args_patch"]},
+                forbidden_tools=(
+                    "transaction_store_preview_tool",
+                    "get_store_schedule_tool",
+                    "preorder_with_null_required_fields",
+                ),
+                required_slots=action_required_slots,
+                metadata={
+                    "response_intent": "stock_store_search",
+                    "stock_check_mode": "inventory_only",
+                    "action": action,
+                    "tool_boundary": "stock_inventory_store_lookup",
+                },
+            )
         if (
             frame.known_slots.get("shop_id")
             and selected_store_schedule_mode
@@ -1595,7 +1645,7 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
             and frame.known_slots.get("goods_no")
             and frame.known_slots.get("tire_size")
             and (frame.known_slots.get("ord_qty") or frame.known_slots.get("quantity"))
-            and stock_check_mode in {"", "preview", "inventory_only"}
+            and stock_check_mode in {"", "preview"}
         ):
             return ToolPlan(
                 allowed_tools=("get_store_schedule_tool",),
@@ -1624,20 +1674,6 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
             )
         if frame.entities.get("today_requested"):
             args["today_only"] = True
-        if stock_check_mode == "inventory_only" and frame.sub_intent == "stock":
-            preferred_tool = "get_store_list_tool" if frame.known_slots.get("shop_name") and not frame.known_slots.get("shop_id") else "get_store_inventory_tool"
-            return ToolPlan(
-                allowed_tools=("get_store_inventory_tool", "get_store_list_tool", "get_logistics_inventory_tool"),
-                preferred_tool=preferred_tool,
-                tool_args_patch=args,
-                forbidden_tools=("transaction_store_preview_tool", "get_store_schedule_tool", "preorder_with_null_required_fields"),
-                required_slots=action_required_slots,
-                metadata={
-                    "response_intent": "stock_store_search",
-                    "stock_check_mode": "inventory_only",
-                    "action": action,
-                },
-            )
         return ToolPlan(
             allowed_tools=("transaction_store_preview_tool", "get_store_inventory_tool", "get_store_list_tool"),
             preferred_tool="transaction_store_preview_tool",
@@ -2028,6 +2064,27 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
         )
 
     if frame.intent == "maintenance_addon_with_tire_service":
+        has_store_context = bool(
+            frame.known_slots.get("store_name")
+            or frame.known_slots.get("shop_name")
+            or frame.known_slots.get("shop_id")
+        )
+        if not has_store_context:
+            return ToolPlan(
+                allowed_tools=(),
+                preferred_tool=None,
+                tool_args_patch={},
+                forbidden_tools=(
+                    "get_store_list_tool",
+                    "get_store_detail_tool",
+                    "get_store_schedule_tool",
+                    "transaction_store_preview_tool",
+                    "get_maintenance_dday_tool",
+                    "get_products_recommendations_tool",
+                ),
+                required_slots=(),
+                metadata={"response_intent": "maintenance_addon_with_tire_service", "action": action},
+            )
         return ToolPlan(
             allowed_tools=("get_store_list_tool", "get_store_detail_tool"),
             preferred_tool="get_store_list_tool",
@@ -2091,7 +2148,7 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
             },
         )
 
-    if frame.intent == "quick_order_reservation":
+    if frame.intent in {"quick_order_reservation", "quick_order_reservation_continue"}:
         flow_state = resolve_purchase_order_flow(intent=frame.intent, known_slots=frame.known_slots)
         if flow_state is not None:
             return ToolPlan(
@@ -2101,7 +2158,7 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
                 forbidden_tools=flow_state.forbidden_tools,
                 required_slots=flow_state.required_slots,
                 metadata={
-                    "response_intent": "quick_order_reservation",
+                    "response_intent": frame.intent,
                     "action": action,
                     "flow_id": flow_state.flow_id,
                     "flow_step": flow_state.flow_step,
@@ -2123,7 +2180,7 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
             ),
             forbidden_tools=("store_hours_instead_of_slots", "order_summary_with_null_required_fields"),
             required_slots=action_required_slots,
-            metadata={"response_intent": "quick_order_reservation", "action": action},
+            metadata={"response_intent": frame.intent, "action": action},
         )
 
     if frame.intent == "quick_order_execute":
@@ -2333,7 +2390,7 @@ def _action_required_slots(frame: IntentFrame, action: str) -> tuple[str, ...]:
         add("store", not frame.known_slots.get("shop_id"))
         add("booking_datetime", not (frame.known_slots.get("requested_cal_day") and frame.known_slots.get("rsv_hour")))
     elif action == "maintenance_addon_with_tire_service":
-        add("store", not _has_action_store(frame))
+        return ()
     elif action == "store_service_search":
         add("region", not frame.known_slots.get("region"))
     elif action == "unsupported_or_unmapped_store_service_policy":
@@ -2407,6 +2464,73 @@ def _slot_args(frame: IntentFrame, *keys: str) -> dict[str, Any]:
         if value not in (None, ""):
             args[key] = value
     return args
+
+
+def stock_inventory_store_lookup_tool_boundary(frame: IntentFrame) -> dict[str, Any]:
+    """Return the canonical stock inventory/store lookup tool boundary.
+
+    This is intentionally policy-only. Callers may consume the returned ToolPlan
+    values, but should not re-decide the allowed/preferred tool set in orchestration.
+    """
+
+    known_slots = frame.known_slots or {}
+    entities = frame.entities or {}
+    has_selected_store = bool(known_slots.get("shop_id"))
+    store_name = str(known_slots.get("shop_name") or known_slots.get("store_name") or "").strip()
+    region = str(known_slots.get("region") or "").strip()
+    place_query = str(known_slots.get("place_query") or "").strip()
+    nearby = bool(entities.get("nearby"))
+    if not place_query and nearby and region:
+        place_query = region
+
+    preferred_tool = "get_store_inventory_tool"
+    if not has_selected_store:
+        if place_query and not store_name:
+            preferred_tool = "search_stores_tool"
+        elif store_name or region:
+            preferred_tool = "get_store_list_tool"
+
+    tool_args_patch = stock_inventory_store_lookup_tool_input(
+        known_slots,
+        preferred_tool=preferred_tool,
+        nearby=nearby,
+    )
+    return {
+        "allowed_tools": STOCK_INVENTORY_STORE_LOOKUP_ALLOWED_TOOLS,
+        "preferred_tool": preferred_tool,
+        "tool_args_patch": tool_args_patch,
+    }
+
+
+def stock_inventory_store_lookup_tool_input(
+    known_slots: Mapping[str, Any],
+    *,
+    preferred_tool: str | None,
+    nearby: bool = False,
+) -> dict[str, Any]:
+    """Build canonical tool input for the stock inventory store-resolution step."""
+
+    store_name = str(known_slots.get("shop_name") or known_slots.get("store_name") or "").strip()
+    region = str(known_slots.get("region") or "").strip()
+    place_query = str(known_slots.get("place_query") or "").strip()
+    if not place_query and nearby and region:
+        place_query = region
+
+    preferred = str(preferred_tool or "").strip()
+    tool_input: dict[str, Any] = {"limit": 10}
+    if preferred == "search_stores_tool":
+        if place_query or region:
+            tool_input["place_query"] = place_query or region
+        elif store_name:
+            tool_input["store_nm"] = store_name
+        return tool_input if len(tool_input) > 1 else {}
+    if preferred == "get_store_list_tool":
+        if store_name:
+            tool_input["store_nm"] = store_name
+        if region:
+            tool_input["region_code"] = region
+        return tool_input if len(tool_input) > 1 else {}
+    return {}
 
 
 def _extract_store_name(text: str) -> str | None:

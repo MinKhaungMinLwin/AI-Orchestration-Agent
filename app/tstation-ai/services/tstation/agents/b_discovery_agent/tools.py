@@ -97,15 +97,15 @@ def _apply_recommendation_policy_patch(
         brand_cd = str(patch["brand_cd"])
     if not tire_size and not car_lnc_cd and patch.get("tire_size"):
         tire_size = str(patch["tire_size"])
-    if not sort_by and patch.get("sort_by"):
+    if patch.get("sort_by"):
         sort_by = str(patch["sort_by"])
-    if not season_nm and patch.get("season_nm"):
+    if patch.get("season_nm"):
         season_nm = str(patch["season_nm"])
-    if not pfm_nm and patch.get("pfm_nm"):
+    if patch.get("pfm_nm"):
         pfm_nm = str(patch["pfm_nm"])
-    if not prc_grd and patch.get("prc_grd"):
+    if patch.get("prc_grd"):
         prc_grd = str(patch["prc_grd"])
-    if not vehicle_type and patch.get("vehicle_type"):
+    if patch.get("vehicle_type"):
         vehicle_type = str(patch["vehicle_type"])
     if suppress_season_filter:
         season_nm = None
@@ -188,6 +188,8 @@ _TRIM_KEEP_FIELDS: frozenset[str] = frozenset({
     "sys_reg_dtime",
     # Tire size — used by the agent to differentiate same-name SKUs in card titles
     "tire_size_1", "tire_size_2",
+    # Unsized search_product responses may carry grouped representative sizes.
+    "available_sizes",
     # Visual / pricing
     "image_url", "price", "sale_prc", "extra_fvr_sale_prc", "extra_fvr_sale_per",
     # Scoring used for sort priority and rcmd_type matching

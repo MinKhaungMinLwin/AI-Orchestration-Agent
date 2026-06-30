@@ -110,8 +110,11 @@ _OE_REPLACEMENT_TYPE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("oe", re.compile(r"(?:\bOE\b|순정|출고\s*타이어|출고용|출고때|출고 시)", re.IGNORECASE)),
     ("re", re.compile(r"(?:\bRE\b|교체용|replacement)", re.IGNORECASE)),
 )
-_MILEAGE_ATTRIBUTE_RE = re.compile(r"오래\s*(?:타|탈)|수명|내구|마일리지\s*(?:좋|높|긴)|long", re.IGNORECASE)
-_MILEAGE_PRODUCT_RE = re.compile(r"마일리지\s*(?:타이어|플러스|plus|\d)", re.IGNORECASE)
+_MILEAGE_ATTRIBUTE_RE = re.compile(
+    r"오래\s*(?:타|탈)|수명|내구|마일리지\s*(?:타이어|좋|높|긴)|long",
+    re.IGNORECASE,
+)
+_MILEAGE_PRODUCT_RE = re.compile(r"마일리지\s*(?:플러스|plus|\d)|mileage\s*plus", re.IGNORECASE)
 _LATEST_RE = re.compile(r"최신|신상|신제품|최근(?:에)?\s*(?:출시|나온)|새로\s*나온|등록일", re.IGNORECASE)
 _CONCEPT_RE = re.compile(r"뭐야|무슨\s*뜻|의미|차이|설명", re.IGNORECASE)
 _BUY_RE = re.compile(r"구매|살래|주문|장바구니|결제", re.IGNORECASE)
@@ -265,7 +268,6 @@ _PRODUCT_ALIASES: tuple[tuple[str, str, str], ...] = (
     ("마일리지 플러스3", "Mileage Plus 3", "HK"),
     ("마일리지 플러스", "Mileage Plus", "HK"),
     ("mileage plus", "Mileage Plus", "HK"),
-    ("마일리지 타이어", "Mileage Plus", "HK"),
     ("s fit as", "S FIT AS", "LF"),
     ("s fit", "S FIT", "LF"),
     ("에스핏", "S FIT", "LF"),
@@ -1002,6 +1004,11 @@ def build_discovery_intent_frame(
         else:
             sub_intent = "product_family_search" if product_families else "product_name_search"
         entities["product_keyword"] = (product_families or products)[0]
+    elif _OCCUPATION_RE.search(text) and _MILEAGE_ATTRIBUTE_RE.search(text):
+        intent = "product_description"
+        sub_intent = "mileage_bias_guardrail"
+        entities["compare_metric"] = "mileage"
+        entities["guardrail"] = "occupation_neutral"
     elif _GRADE_COMPARE_RE.search(text) and len(products) >= 2:
         intent = "product_comparison"
         sub_intent = "grade_compare"
@@ -1021,11 +1028,6 @@ def build_discovery_intent_frame(
     elif len(products) >= 2 and _COMPARE_RE.search(text):
         intent = "product_comparison"
         sub_intent = "general_compare"
-    elif _OCCUPATION_RE.search(text) and _MILEAGE_ATTRIBUTE_RE.search(text):
-        intent = "product_description"
-        sub_intent = "mileage_bias_guardrail"
-        entities["compare_metric"] = "mileage"
-        entities["guardrail"] = "occupation_neutral"
     elif concept and _SOUND_ABSORBER_RE.search(text) and entities["purchase_intent"]:
         intent = "product_recommendation"
         sub_intent = "technology_explain_then_recommend"
@@ -1416,6 +1418,11 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             args["allow_cross_brand_fill"] = False
     if entities.get("general_tire_preference") == "non_ev":
         args.pop("vehicle_type", None)
+    if "rcmd_type" not in args and not any(
+        args.get(key) not in (None, "", [], {})
+        for key in ("vehicle_type", "season_nm", "pfm_nm", "prc_grd", "sort_by")
+    ):
+        args["rcmd_type"] = "tstation"
     allowed_tools = ("get_products_recommendations_tool",)
     required_slots: tuple[str, ...] = ()
     metadata: dict[str, Any] = {

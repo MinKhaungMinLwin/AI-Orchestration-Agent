@@ -19,6 +19,7 @@ class ProductSearchItem:
         goods_nm (str): 상품명
         tire_size_1 (None | str | Unset): 타이어 사이즈 (TIRE_SIZE_1)
         tire_size_2 (None | str | Unset): 타이어 사이즈 (TIRE_SIZE_2)
+        available_sizes (list[str] | Unset): 같은 상품명(goods_nm) 기준으로 현재 검색 시점에 확인된 규격 목록
         score (int | Unset): 검색 관련도 점수 Default: 0.
         match_type (str | Unset): 매칭 유형 (exact/prefix/partial/alias) Default: 'none'.
         smrt_pay_yn (None | str | Unset): 스마트페이 가능 여부 Y/N (활성 PR_ITEM_PRC_INFO.SMRT_PAY_PRC > 0 기준)
@@ -74,6 +75,7 @@ class ProductSearchItem:
     goods_nm: str
     tire_size_1: None | str | Unset = UNSET
     tire_size_2: None | str | Unset = UNSET
+    available_sizes: list[str] | Unset = UNSET
     score: int | Unset = 0
     match_type: str | Unset = "none"
     smrt_pay_yn: None | str | Unset = UNSET
@@ -138,6 +140,10 @@ class ProductSearchItem:
             tire_size_2 = UNSET
         else:
             tire_size_2 = self.tire_size_2
+
+        available_sizes: list[str] | Unset = UNSET
+        if not isinstance(self.available_sizes, Unset):
+            available_sizes = self.available_sizes
 
         score = self.score
 
@@ -419,6 +425,8 @@ class ProductSearchItem:
             field_dict["tire_size_1"] = tire_size_1
         if tire_size_2 is not UNSET:
             field_dict["tire_size_2"] = tire_size_2
+        if available_sizes is not UNSET:
+            field_dict["available_sizes"] = available_sizes
         if score is not UNSET:
             field_dict["score"] = score
         if match_type is not UNSET:
@@ -538,6 +546,8 @@ class ProductSearchItem:
             return cast(None | str | Unset, data)
 
         tire_size_2 = _parse_tire_size_2(d.pop("tire_size_2", UNSET))
+
+        available_sizes = cast(list[str], d.pop("available_sizes", UNSET))
 
         score = d.pop("score", UNSET)
 
@@ -944,6 +954,7 @@ class ProductSearchItem:
             goods_nm=goods_nm,
             tire_size_1=tire_size_1,
             tire_size_2=tire_size_2,
+            available_sizes=available_sizes,
             score=score,
             match_type=match_type,
             smrt_pay_yn=smrt_pay_yn,

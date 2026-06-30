@@ -89,7 +89,7 @@ _RCMD_CTX_FIELDS: set[str] = _RCMD_BASE_FIELDS | {"tot_scr", "t_comfort", "t_sil
 
 # Search product base — CTX adds extra_fvr_sale_prc for follow-up price questions.
 _SEARCH_PRODUCT_BASE_FIELDS: set[str] = {
-    "goods_no", "goods_nm", "tire_size_1",
+    "goods_no", "goods_nm", "tire_size_1", "available_sizes",
     # EU 소음 라벨 (정숙성 점수와 별개)
     "label_pnwave", "label_pnwave_nm", "label_pndb",
     # 가격 등급 (프리미엄+/프리미엄/스탠다드/이코노미) — 사용자 등급 질문 답변용

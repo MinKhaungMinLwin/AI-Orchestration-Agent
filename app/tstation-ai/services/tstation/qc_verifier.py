@@ -123,9 +123,10 @@ _PRICE_FIELDS: frozenset[str] = frozenset({
 
 _GOODS_NO_FIELDS: frozenset[str] = frozenset({"goods_no", "goodsNo"})
 _SHOP_ID_FIELDS: frozenset[str] = frozenset({"shop_id", "shopId"})
-# tire_size_1 is the canonical field in source_filter.py; tire_size is a legacy
-# alias still seen in some tool outputs.
-_TIRE_SIZE_FIELDS: frozenset[str] = frozenset({"tire_size_1", "tire_size", "tireSize"})
+# tire_size_1 is the canonical scalar field in source_filter.py; tire_size is a
+# legacy alias still seen in some tool outputs. available_sizes is a list field
+# used by unsized search_product responses.
+_TIRE_SIZE_FIELDS: frozenset[str] = frozenset({"tire_size_1", "tire_size", "tireSize", "available_sizes"})
 _PRODUCT_ROW_TOOLS: frozenset[str] = frozenset({
     "search_product_tool",
     "get_products_recommendations_tool",
@@ -162,9 +163,15 @@ def _walk(obj: Any, found: set, fields: frozenset[str], coerce):
     if isinstance(obj, dict):
         for key, value in obj.items():
             if key in fields:
-                coerced = coerce(value)
-                if coerced is not None:
-                    found.add(coerced)
+                if isinstance(value, list):
+                    for item in value:
+                        coerced = coerce(item)
+                        if coerced is not None:
+                            found.add(coerced)
+                else:
+                    coerced = coerce(value)
+                    if coerced is not None:
+                        found.add(coerced)
             else:
                 _walk(value, found, fields, coerce)
     elif isinstance(obj, list):

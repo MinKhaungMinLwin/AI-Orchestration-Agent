@@ -302,6 +302,27 @@ def test_tire_size_check_skipped_when_source_empty() -> None:
     assert verify_draft(draft, src) == []
 
 
+def test_available_sizes_list_counts_as_valid_tire_size_source() -> None:
+    src = [
+        (
+            "search_product_tool",
+            {
+                "data": {
+                    "items": [
+                        {
+                            "goods_no": "G000000317729",
+                            "goods_nm": "아이온 에보 AS",
+                            "available_sizes": ["235/35R20", "235/40R19", "245/35R21"],
+                        }
+                    ]
+                }
+            },
+        )
+    ]
+    draft = "사이즈: 235/35R20, 235/40R19, 245/35R21"
+    assert verify_draft(draft, src) == []
+
+
 # --------------------------------------------------------------------------- #
 #  Edge cases
 # --------------------------------------------------------------------------- #

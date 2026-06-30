@@ -8922,6 +8922,14 @@
             "title": "Tire Size 2",
             "description": "타이어 사이즈 (TIRE_SIZE_2)"
           },
+          "available_sizes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Available Sizes",
+            "description": "같은 상품명(goods_nm) 기준으로 현재 검색 시점에 확인된 규격 목록"
+          },
           "score": {
             "type": "integer",
             "title": "Score",

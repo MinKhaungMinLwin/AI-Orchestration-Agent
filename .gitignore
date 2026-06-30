@@ -34,6 +34,8 @@ temp/*
 # App
 app/tstation-ai/static/public/*
 app/tstation-ai/api/router_local.py
+scripts/local_chat.sh
+scripts/start_local_ai.sh
 playground
 bin
 # Claude

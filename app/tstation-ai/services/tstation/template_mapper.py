@@ -1821,6 +1821,19 @@ def _normalize_row_tire_size(value: object) -> str:
     return raw
 
 
+def _row_available_sizes(row: Mapping[str, Any]) -> list[str]:
+    raw_sizes = row.get("available_sizes")
+    if not isinstance(raw_sizes, list):
+        return []
+
+    sizes: list[str] = []
+    for raw_size in raw_sizes:
+        size = _normalize_row_tire_size(raw_size)
+        if size and size not in sizes:
+            sizes.append(size)
+    return sizes
+
+
 def _row_tire_sizes(row: dict) -> list[str]:
     sizes: list[str] = []
     for key in ("tire_size_1", "tire_size_2"):
@@ -1853,6 +1866,17 @@ def _confirmed_sizes_for_rows(rows: list[dict]) -> list[str]:
             if size not in sizes:
                 sizes.append(size)
     return sorted(sizes, key=_tire_size_sort_key)
+
+
+def _format_row_size_list(sizes: list[str], *, max_visible: int = 3) -> str:
+    sizes = sorted((size for size in sizes if size), key=_tire_size_sort_key)
+    if not sizes:
+        return ""
+    visible = ", ".join(sizes[:max_visible])
+    remaining = len(sizes) - max_visible
+    if remaining > 0:
+        return f"{visible} 외 {remaining}개"
+    return visible
 
 
 def _format_confirmed_size_list(rows: list[dict], *, max_visible: int = 3) -> str:
@@ -1912,7 +1936,12 @@ def _map_product_search_size_summary(tool_data_list: list[dict]) -> dict | None:
 
     lines = ["검색된 상품은 현재 아래 사이즈로 확인돼요."]
     for name, rows in list(grouped.items())[:5]:
-        size_list = _format_confirmed_size_list(rows, max_visible=12)
+        available_sizes: list[str] = []
+        for row in rows:
+            for size in _row_available_sizes(row):
+                if size not in available_sizes:
+                    available_sizes.append(size)
+        size_list = _format_row_size_list(available_sizes, max_visible=12)
         if size_list:
             lines.append(f"- {name}: {size_list}")
     if len(lines) == 1:
@@ -1994,10 +2023,17 @@ def _product_search_policy_response(tool_data_list: list[dict]) -> str:
             if not name:
                 continue
             bucket = grouped.setdefault(name, {"row": row, "sizes": []})
-            size = _get_str(row, "tire_size_1", "tire_size_2")
             sizes = bucket["sizes"]
-            if size and isinstance(sizes, list) and size not in sizes:
-                sizes.append(size)
+            if not isinstance(sizes, list):
+                continue
+            row_sizes = (
+                _row_tire_sizes(row)
+                if requested_size
+                else (_row_available_sizes(row) or _row_tire_sizes(row))
+            )
+            for size in row_sizes:
+                if size not in sizes:
+                    sizes.append(size)
 
     if not grouped:
         return ""
@@ -2023,7 +2059,7 @@ def _product_search_policy_response(tool_data_list: list[dict]) -> str:
             if requested_size:
                 lines.append(f"  입력하신 규격으로는 {', '.join(str(size) for size in sizes[:3])}가 확인돼요.")
             else:
-                lines.append(f"  대표로 확인되는 규격은 {', '.join(str(size) for size in sizes[:3])}예요.")
+                lines.append(f"  대표로 확인되는 규격은 {', '.join(str(size) for size in sizes[:4])}예요.")
         if detail_line:
             lines.append(f"  {detail_line}")
         lines.append("")
@@ -2067,10 +2103,15 @@ def _product_search_policy_fallback_response(tool_data_list: list[dict] | None =
                     f"입력하신 {keyword} {size} 상품은 현재 확인되지 않아요.\n"
                     "다른 사이즈나 비슷한 상품으로 다시 찾아드릴 수 있어요."
                 )
+            if keyword:
+                return (
+                    f"입력하신 {keyword} 상품은 현재 검색 결과에서 찾지 못했어요.\n"
+                    "상품명을 다시 확인하거나 다른 키워드로 검색해 주세요."
+                )
     if not _STOCK_OR_INSTALL_REQUEST_RE.search(current_user_text.get() or ""):
         return (
-            "검색된 상품 정보를 기준으로 안내드릴게요.\n"
-            "정확한 상품 목록은 상품명이나 조건을 조금 더 구체적으로 알려주시면 다시 확인해 드릴 수 있어요."
+            "검색 결과에서 상품을 찾지 못했어요.\n"
+            "상품명이나 조건을 조금 더 구체적으로 알려주시면 다시 확인해 드릴게요."
         )
     return (
         "상품은 확인했어요. 장착 가능 여부를 확인하려면 타이어 사이즈와 지역 정보가 필요해요.\n"
@@ -2661,6 +2702,36 @@ def _product_result_context_message(tool_data_list: list[dict], item_count: int)
     return _TEMPLATE_DEFAULTS.get("product", "").format(n=item_count)
 
 
+def _unsized_search_size_context_message(tool_data_list: list[dict]) -> str:
+    for entry in reversed(_find_entries(tool_data_list, "search_product_tool")):
+        if _has_size_arg(entry):
+            continue
+        raw = _unwrap(entry)
+        rows = raw if isinstance(raw, list) else (raw.get("items") if isinstance(raw, dict) else [])
+        if not isinstance(rows, list):
+            continue
+
+        lines: list[str] = []
+        seen_names: set[str] = set()
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            name = _get_str(row, "goods_nm", "title")
+            if not name or name in seen_names:
+                continue
+            size_list = _format_row_size_list(_row_available_sizes(row), max_visible=4)
+            if not size_list:
+                continue
+            lines.append(f"- {name}: {size_list}")
+            seen_names.add(name)
+            if len(lines) >= 3:
+                break
+
+        if lines:
+            return "\n".join(["확인된 대표 사이즈는 아래와 같아요.", *lines])
+    return ""
+
+
 def _recommendation_condition_label(*, rcmd_type: str, season: str) -> str:
     normalized_rcmd_type = (rcmd_type or "").strip().lower()
     if season and normalized_rcmd_type not in _RCMD_TYPES_WITHOUT_SEASON_FILTER:
@@ -2941,6 +3012,16 @@ def _map_discovery_policy_quickreply(tool_data_list: list[dict], assistant_text:
             rows = raw if isinstance(raw, list) else (raw.get("items") if isinstance(raw, dict) else [])
             if isinstance(rows, list) and any(isinstance(row, dict) for row in rows):
                 return None
+    product_search_explicit_no_result = False
+    if response_shape_key == "product_search_summary":
+        search_entries = _find_entries(tool_data_list, "search_product_tool")
+        product_search_explicit_no_result = bool(search_entries)
+        for entry in search_entries:
+            raw = _unwrap(entry)
+            rows = raw if isinstance(raw, list) else (raw.get("items") if isinstance(raw, dict) else [])
+            if isinstance(rows, list) and any(isinstance(row, dict) for row in rows):
+                product_search_explicit_no_result = False
+                break
     response = sanitize_user_facing_response(assistant_text, "") or decision.assistant_guidance
     if response_shape_key == "product_attribute_summary":
         response = _product_attribute_policy_response(tool_data_list)
@@ -2953,7 +3034,8 @@ def _map_discovery_policy_quickreply(tool_data_list: list[dict], assistant_text:
     if response_shape_key == "restock_inquiry_summary":
         response = _product_restock_policy_response(tool_data_list) or response
     if response_shape_key == "product_search_summary" and (
-        not response
+        product_search_explicit_no_result
+        or not response
         or response == decision.assistant_guidance
         or "카드" in response
         or "선택해 주세요" in response
@@ -3063,7 +3145,7 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
     if _has_current_turn_transaction_action("purchase_continuation", "stock_check") and _is_product_transaction_missing_size_turn():
         return None
 
-    rows_by_name: dict[str, list[dict]] = {}
+    rows_by_name: dict[str, dict[str, object]] = {}
     found_product_tool = False
     for entry in _find_entries(
         tool_data_list,
@@ -3083,16 +3165,37 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
                 continue
             name = _get_str(row, "goods_nm", "big_goods_nm", "ptrn_d_nm", "title")
             if name:
-                rows_by_name.setdefault(name, []).append(row)
+                bucket = rows_by_name.setdefault(name, {"rows": [], "tool": entry.get("tool")})
+                bucket_rows = bucket.get("rows")
+                if isinstance(bucket_rows, list):
+                    bucket_rows.append(row)
     if not found_product_tool or not rows_by_name:
         return None
 
     skip_size_missing_notice = is_neutral_product_description or is_popular_unsized_request
     lines = [] if skip_size_missing_notice else ["사이즈가 아직 확인되지 않아 타이어 기준으로 안내드릴게요."]
     include_confirmed_sizes = not _current_turn_has_explicit_tire_size()
-    for name, rows in list(rows_by_name.items())[:5]:
+    for name, payload in list(rows_by_name.items())[:5]:
+        rows = payload.get("rows") if isinstance(payload, dict) else None
+        if not isinstance(rows, list) or not rows:
+            continue
         row = rows[0]
-        size_line = _confirmed_multi_size_line(rows) if include_confirmed_sizes else ""
+        source_tool = str(payload.get("tool") or "") if isinstance(payload, dict) else ""
+        size_line = ""
+        if include_confirmed_sizes:
+            if source_tool == "search_product_tool":
+                available_sizes: list[str] = []
+                for candidate in rows:
+                    if not isinstance(candidate, dict):
+                        continue
+                    for size in _row_available_sizes(candidate):
+                        if size not in available_sizes:
+                            available_sizes.append(size)
+                formatted_sizes = _format_row_size_list(available_sizes, max_visible=4)
+                if formatted_sizes and len(available_sizes) >= 2:
+                    size_line = f"사이즈: {formatted_sizes}"
+            if not size_line:
+                size_line = _confirmed_multi_size_line(rows)
         if is_neutral_product_description:
             detail_line = _tire_summary_detail_line(row)
             lines.extend([
@@ -3309,6 +3412,10 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
     elif response_source == "default" or _GENERIC_PRODUCT_RESPONSE_RE.search(short):
         short = _product_result_context_message(tool_data_list, len(items))
         response_source = "code_mapper"
+
+    unsized_search_size_message = _unsized_search_size_context_message(tool_data_list)
+    if unsized_search_size_message and unsized_search_size_message not in short:
+        short = f"{short.rstrip()}\n\n{unsized_search_size_message}" if short else unsized_search_size_message
 
     # 회원 보유 쿠폰 적용된 상품이 1건 이상이면 결정적으로 안내 문구 추가.
     # _summarize_with_source 의 첫 문장 컷팅 뒤에 붙여서 truncation 회피.
@@ -6048,10 +6155,6 @@ def try_build_template(accumulated_tool_data: list[dict], assistant_text: str) -
     runflat_comparison = _map_runflat_price_comparison(accumulated_tool_data, assistant_text)
     if runflat_comparison is not None:
         return runflat_comparison
-
-    ev_suitability_comparison = _map_ev_suitability_comparison(accumulated_tool_data, assistant_text)
-    if ev_suitability_comparison is not None:
-        return ev_suitability_comparison
 
     vehicle_recommendation_no_results = _map_vehicle_recommendation_no_results(accumulated_tool_data, assistant_text)
     if vehicle_recommendation_no_results is not None:
