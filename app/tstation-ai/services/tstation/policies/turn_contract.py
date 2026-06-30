@@ -185,6 +185,11 @@ _BEST_SELLER_SIZE_CLARIFICATION_RE = re.compile(
     r"(정확한\s*사이즈|사이즈\s*(?:정보|직접\s*입력)|연식/트림에\s*따라|연식/트림|차량번호|내\s*차량)",
     re.IGNORECASE,
 )
+_OE_PART_NUMBER_REQUEST_RE = re.compile(
+    r"(?:\bOE\b|순정|출고\s*타이어|출고용|출고때|출고 시).{0,40}(?:품번|부품\s*번호|파트\s*넘버|part\s*number)|"
+    r"(?:품번|부품\s*번호|파트\s*넘버|part\s*number).{0,40}(?:\bOE\b|순정|출고\s*타이어|출고용|출고때|출고 시)",
+    re.IGNORECASE,
+)
 _BEST_SELLER_DISALLOWED_CTA_LABELS = frozenset({
     "사이즈 직접 입력",
     "내 차량 보기",
@@ -195,8 +200,10 @@ _BEST_SELLER_DISALLOWED_CTA_LABELS = frozenset({
 _REFERENCE_GUARD_EXEMPT_INTENTS = frozenset({
     "best_seller_search",
     "favorite_store_lookup",
+    "oe_part_number_unavailable",
     "oe_re_concept_explanation",
     "product_recommendation",
+    "tire_recommendation",
     "service_duration_advisory",
     "maintenance_addon_with_tire_service",
     "store_service_availability",
@@ -229,6 +236,7 @@ _REFERENCE_GUARD_EXEMPT_DISCOVERY_PLAN_TOKENS = frozenset({
     "best_seller_list_by_vehicle_and_size_and_period",
     "query_order_data_for_vehicle_with_period",
     "vehicle_best_seller_search",
+    "oe_part_number_unavailable",
 })
 ROUTER_WINS_INFORMATIONAL_INTENTS = frozenset({
     "product_detail_lookup",
@@ -5116,6 +5124,8 @@ def _should_apply_reference_guard(
     intent: str,
     routing_result: Any | None,
 ) -> bool:
+    if _OE_PART_NUMBER_REQUEST_RE.search(user_text or ""):
+        return False
     if _reference_guard_exempt_intent(intent):
         return False
     if _reference_guard_exempt_routing_result(routing_result):

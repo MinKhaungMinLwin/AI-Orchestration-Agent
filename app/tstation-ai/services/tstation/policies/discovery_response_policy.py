@@ -217,6 +217,26 @@ def decide_discovery_response(frame: IntentFrame) -> ResponseDecision:
             metadata=_metadata(frame, response_shape_key="oe_re_concept_explanation"),
         )
 
+    if frame.sub_intent == "oe_part_number_unavailable":
+        return ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            required_slots=(),
+            forbidden_behaviors=(
+                "ask_product_before_answering_oe_part_number_limit",
+                "invent_oe_part_number",
+                "claim_vehicle_oe_part_number_lookup_available",
+                "resume_stale_transaction_flow",
+            ),
+            assistant_guidance=(
+                "OE 품번은 같은 차종도 연식, 트림, 휠 인치, 출고 시점의 장착 브랜드에 따라 달라질 수 있다고 안내한다. "
+                "현재 보유한 상품/차량 데이터만으로는 차량별 OE 품번을 확정 조회할 수 없다고 명확히 말한다. "
+                "필요하면 차량 등록 정보나 현재 장착 타이어의 사이즈/브랜드 기준으로 교체용 상품 안내를 제안하되, "
+                "상품명/규격을 먼저 요구하는 답변으로 끝내지 않는다."
+            ),
+            metadata=_metadata(frame, response_shape_key="oe_part_number_unavailable"),
+        )
+
     if frame.sub_intent == "oe_re_product_filter":
         return ResponseDecision(
             response_shape=ResponseShape.SUMMARY,
