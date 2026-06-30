@@ -12916,6 +12916,50 @@ def test_stock_store_location_payload_stores_candidate_flow_state_without_event_
     assert patch["goal_type"] == "store_with_stock"
 
 
+def test_stock_store_candidate_preserves_canonical_product_name() -> None:
+    location_payload = {
+        "stores": [{"nameAddress": "티스테이션 광주경안점"}],
+        "metadata": [
+            {
+                "shopId": "F08526",
+                "shopName": "티스테이션 광주경안점",
+                "sourceTool": "transaction_store_preview_tool",
+                "scheduleMode": "logistics_only",
+                "inventoryMode": "logistics_only",
+                "goodsNo": "G000000317666",
+                "goodsNm": "다이나프로 HPX",
+                "tireSize": "215/55R18",
+                "ordQty": 4,
+                "region": "경기도 광주",
+                "pendingIntent": "stock",
+                "goalType": "store_with_stock",
+            }
+        ],
+    }
+
+    delta = store_candidates_flow_delta(event=location_payload)
+    assert delta["product_name"] == "다이나프로 HPX"
+    assert delta["tire_model"] == "다이나프로 HPX"
+    assert delta["pending_product_name"] == "다이나프로 HPX"
+
+    active_context = commit_flow_state(
+        {},
+        delta,
+        source="location_template:stock_store_candidates",
+        flow_type="stock",
+        flow_step="show_store_candidates",
+    ).state.to_active_flow_context()
+    patch = store_candidate_selection_patch(
+        active_flow_context=active_context,
+        user_text="티스테이션 광주경안점",
+        selection_hint={},
+    )
+
+    assert patch["product_name"] == "다이나프로 HPX"
+    assert patch["tire_model"] == "다이나프로 HPX"
+    assert patch["pending_product_name"] == "다이나프로 HPX"
+
+
 def test_stock_inventory_store_list_event_stores_and_selects_store_candidate() -> None:
     event = {
         "template": "location",
@@ -13931,6 +13975,90 @@ def test_flow_transition_stock_store_plan_records_quantity_as_stock_flow() -> No
     assert active_flow_context["flow_type"] == "stock"
     assert active_flow_context["flow_step"] == "quantity_selected"
     assert active_flow_context["quantity"]["ord_qty"] == 4
+
+
+def test_flow_transition_records_store_slot_fill_as_stock_inventory_next_action() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000317666",
+        tire_model="다이나프로 HPX",
+        pending_product_name="다이나프로 HPX",
+        tire_size="215/55R18",
+        ord_qty=4,
+        shop_id="F08526",
+        shop_name="티스테이션 광주경안점",
+        region="경기도 광주",
+        pending_intent="stock",
+        goal_type="store_with_stock",
+        availability_context={
+            "active_flow_context": {
+                "flow_type": "stock",
+                "status": "active",
+                "flow_step": "show_store_candidates",
+                "product": {
+                    "goods_no": "G000000317666",
+                    "product_name": "다이나프로 HPX",
+                    "tire_model": "다이나프로 HPX",
+                    "pending_product_name": "다이나프로 HPX",
+                    "tire_size": "215/55R18",
+                    "ord_qty": 4,
+                },
+                "store": {"region": "경기도 광주"},
+                "intent": {
+                    "pending_intent": "stock",
+                    "goal_type": "store_with_stock",
+                    "stock_check_mode": "preview",
+                },
+                "last_candidates": [
+                    {
+                        "type": "store",
+                        "shop_id": "F08526",
+                        "shop_name": "티스테이션 광주경안점",
+                        "label": "티스테이션 광주경안점",
+                        "goods_no": "G000000317666",
+                        "product_name": "다이나프로 HPX",
+                        "tire_model": "다이나프로 HPX",
+                        "pending_product_name": "다이나프로 HPX",
+                        "tire_size": "215/55R18",
+                        "ord_qty": 4,
+                        "pending_intent": "stock",
+                        "goal_type": "store_with_stock",
+                        "stock_check_mode": "preview",
+                    }
+                ],
+            }
+        },
+    )
+
+    transition = transition_current_flow(
+        user_text="티스테이션 광주경안점",
+        router_evidence={
+            "domain": "transaction",
+            "intent": "quick_order_reservation",
+            "execution_plan": [
+                "transaction:quick_order_reservation_resolve_store",
+                "transaction:quick_order_reservation_finalize",
+            ],
+            "source": "llm",
+        },
+        existing_slots=slots,
+        extracted_slots=ConversationSlots(shop_name="티스테이션 광주경안점"),
+        resume_source="expected_slot_fill:store",
+    )
+
+    assert transition.metadata["selected_store_resolved"] is True
+    assert transition.flow_transition["applied"] is True
+    assert transition.flow_transition["reason"] == "selected_store_flow_state"
+    active_flow_context = transition.flow_transition["active_flow_context"]
+    assert active_flow_context["flow_type"] == "stock"
+    assert active_flow_context["flow_step"] == "store_selected"
+    assert active_flow_context["current_step"] == "check_inventory"
+    assert active_flow_context["missing_slots"] == []
+    assert active_flow_context["next_tool"] == "get_store_inventory_tool"
+    assert active_flow_context["allowed_tools"] == ["get_store_inventory_tool"]
+    assert active_flow_context["tool_args_patch"] == {
+        "goods_list": [{"goodsNo": "G000000317666", "qty": "4"}],
+        "shop_id_list": [{"shopId": "F08526"}],
+    }
 
 
 def test_flow_transition_ignores_unanchored_quantity_text() -> None:
@@ -33588,6 +33716,46 @@ def test_response_policy_guard_emits_preorder_when_build_preorder_slots_are_read
     assert event["data"]["orderInfo"]["product"] == "다이나프로 HPX 235/55R19"
     assert event["data"]["orderInfo"]["storeName"] == "티스테이션 판교점"
     assert event["data"]["orderInfo"]["bookingDateTime"] == "2026년 6월 23일 (화) 17:00"
+
+
+def test_response_policy_guard_preorder_uses_nested_product_payment_context() -> None:
+    contract = _transaction_turn_contract(
+        "2026년 7월 2일 (목)\n15:00",
+        {
+            "goods_no": "G000000317676",
+            "tire_size": "215/55R18",
+            "ord_qty": 4,
+            "shop_id": "F00721",
+            "shop_name": "티스테이션 판교점",
+            "requested_cal_day": "20260702",
+            "rsv_hour": "15",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "availability_context": {
+                "pending_order_context": {
+                    "goods_no": "G000000317676",
+                    "product_name": "다이나프로 HPX",
+                    "tire_size": "215/55R18",
+                    "ord_qty": 4,
+                    "payment_amount": 558400,
+                    "price_basis": "extra_fvr_sale_prc",
+                    "price_source_tool": "search_product_tool",
+                    "pending_intent": "order",
+                    "goal_type": "place_order",
+                }
+            },
+        },
+    )
+
+    event = build_response_policy_guard_event(contract)
+
+    assert event["template"] == "preOrder"
+    assert event["assistant_response_source"] == "code_reservation_confirmation_ready"
+    assert event["data"]["orderInfo"]["product"] == "다이나프로 HPX 215/55R18"
+    assert event["data"]["orderInfo"]["paymentAmount"] == 558400
+    assert event["data"]["metadata"]["priceBasis"] == "extra_fvr_sale_prc"
+    assert event["data"]["metadata"]["priceSourceTool"] == "search_product_tool"
+    assert event["data"]["metadata"]["missingPreorderContext"] == []
 
 
 def test_turn_contract_promotes_router_comparison_signal_into_product_comparison() -> None:

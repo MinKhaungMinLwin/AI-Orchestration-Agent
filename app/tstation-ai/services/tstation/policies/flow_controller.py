@@ -301,6 +301,68 @@ def _selected_quantity_from_slots(
     return {"ord_qty": ord_qty, "selection_source": "current_user_text"}
 
 
+def _selected_store_from_slots(
+    *,
+    extracted_snapshot: Mapping[str, Any],
+    existing_snapshot: Mapping[str, Any],
+    active_flow: Mapping[str, Any],
+    router_evidence: Mapping[str, Any],
+    resume_source: str,
+) -> dict[str, Any]:
+    resume = str(resume_source or "").strip()
+    router_filled_slot = str(router_evidence.get("filled_slot") or "").strip()
+    if "store" not in resume and router_filled_slot != "store":
+        return {}
+    shop_id = existing_snapshot.get("shop_id") or extracted_snapshot.get("shop_id")
+    shop_name = existing_snapshot.get("shop_name") or extracted_snapshot.get("shop_name")
+    if shop_id in (None, "", [], {}) and shop_name in (None, "", [], {}):
+        return {}
+    selected: dict[str, Any] = {
+        key: value
+        for key, value in {
+            "shop_id": shop_id,
+            "shop_name": shop_name,
+            "region": existing_snapshot.get("region") or extracted_snapshot.get("region"),
+            "selection_source": resume or "slot_fill:store",
+        }.items()
+        if value not in (None, "", [], {})
+    }
+    candidates = active_flow.get("last_candidates") if isinstance(active_flow.get("last_candidates"), list) else []
+    selected_shop_id = str(selected.get("shop_id") or "").strip()
+    selected_shop_name = str(selected.get("shop_name") or "").strip()
+    for candidate in candidates:
+        if not isinstance(candidate, Mapping):
+            continue
+        candidate_shop_id = str(candidate.get("shop_id") or "").strip()
+        candidate_shop_name = str(candidate.get("shop_name") or candidate.get("label") or "").strip()
+        if (
+            selected_shop_id
+            and candidate_shop_id == selected_shop_id
+            or selected_shop_name
+            and candidate_shop_name
+            and selected_shop_name in candidate_shop_name
+        ):
+            for key in (
+                "goods_no",
+                "product_name",
+                "tire_model",
+                "pending_product_name",
+                "tire_size",
+                "ord_qty",
+                "source_tool",
+                "schedule_mode",
+                "schedule_tier",
+                "inventory_mode",
+                "stock_check_mode",
+                "pending_intent",
+                "goal_type",
+            ):
+                if selected.get(key) in (None, "", [], {}) and candidate.get(key) not in (None, "", [], {}):
+                    selected[key] = candidate[key]
+            break
+    return selected
+
+
 def _selected_product_flow_type(
     *,
     current_flow_state: Mapping[str, Any],
@@ -365,6 +427,36 @@ def _quantity_flow_type(
     ):
         return "stock"
     return "purchase"
+
+
+def _selected_store_flow_type(
+    *,
+    active_flow: Mapping[str, Any],
+    parent_flow_state: Mapping[str, Any],
+    router_evidence: Mapping[str, Any],
+    existing_snapshot: Mapping[str, Any],
+    selected_store: Mapping[str, Any],
+) -> str:
+    for values in (selected_store, existing_snapshot):
+        pending_intent = str(values.get("pending_intent") or "").strip()
+        goal_type = str(values.get("goal_type") or "").strip()
+        if pending_intent == "stock" or goal_type == "store_with_stock":
+            return "stock"
+    active_flow_type = str(active_flow.get("flow_type") or "").strip()
+    if active_flow_type == "stock":
+        return "stock"
+    if str(active_flow.get("target_action") or "").strip() == "get_store_inventory_tool":
+        return "stock"
+    router_intent = str(router_evidence.get("intent") or "").strip()
+    execution_plan = " ".join(str(item or "") for item in (router_evidence.get("execution_plan") or ()))
+    if "stock" in router_intent or "stock_store" in execution_plan or "store_inventory" in execution_plan:
+        return "stock"
+    parent_flow_type = str(parent_flow_state.get("flow_type") or "").strip()
+    if parent_flow_type == "stock":
+        return "stock"
+    if parent_flow_type in {"purchase", "booking"}:
+        return parent_flow_type
+    return active_flow_type if active_flow_type in {"purchase", "booking", "store_schedule"} else "purchase"
 
 
 def _selected_product_flow_context(
@@ -499,6 +591,99 @@ def _selected_quantity_flow_context(
     return {key: value for key, value in flow_context.items() if value not in (None, "", [], {})}
 
 
+def _selected_store_flow_context(
+    *,
+    active_flow: Mapping[str, Any],
+    parent_flow_state: Mapping[str, Any],
+    router_evidence: Mapping[str, Any],
+    existing_snapshot: Mapping[str, Any],
+    selected_store: Mapping[str, Any],
+) -> dict[str, Any]:
+    if not selected_store:
+        return {}
+    flow_context = dict(active_flow) if isinstance(active_flow, Mapping) else {}
+    flow_type = _selected_store_flow_type(
+        active_flow=active_flow,
+        parent_flow_state=parent_flow_state,
+        router_evidence=router_evidence,
+        existing_snapshot=existing_snapshot,
+        selected_store=selected_store,
+    )
+    product = dict(flow_context.get("product")) if isinstance(flow_context.get("product"), Mapping) else {}
+    product_name = (
+        selected_store.get("product_name")
+        or selected_store.get("tire_model")
+        or selected_store.get("pending_product_name")
+        or existing_snapshot.get("product_name")
+        or existing_snapshot.get("tire_model")
+        or existing_snapshot.get("pending_product_name")
+    )
+    for key, value in {
+        "goods_no": selected_store.get("goods_no") or existing_snapshot.get("goods_no"),
+        "product_name": product_name,
+        "tire_model": product_name,
+        "pending_product_name": product_name,
+        "tire_size": selected_store.get("tire_size") or existing_snapshot.get("tire_size"),
+        "ord_qty": selected_store.get("ord_qty") or existing_snapshot.get("ord_qty"),
+    }.items():
+        if value not in (None, "", [], {}):
+            product[key] = value
+
+    store = dict(flow_context.get("store")) if isinstance(flow_context.get("store"), Mapping) else {}
+    for key, value in {
+        "shop_id": selected_store.get("shop_id") or existing_snapshot.get("shop_id"),
+        "shop_name": selected_store.get("shop_name") or existing_snapshot.get("shop_name"),
+        "region": selected_store.get("region") or existing_snapshot.get("region"),
+    }.items():
+        if value not in (None, "", [], {}):
+            store[key] = value
+
+    intent = dict(flow_context.get("intent")) if isinstance(flow_context.get("intent"), Mapping) else {}
+    for key, value in {
+        "pending_intent": selected_store.get("pending_intent")
+        or ("stock" if flow_type == "stock" else existing_snapshot.get("pending_intent")),
+        "goal_type": selected_store.get("goal_type")
+        or ("store_with_stock" if flow_type == "stock" else existing_snapshot.get("goal_type")),
+        "stock_check_mode": selected_store.get("stock_check_mode") or existing_snapshot.get("stock_check_mode"),
+        "schedule_mode": selected_store.get("schedule_mode") or existing_snapshot.get("schedule_mode"),
+    }.items():
+        if value not in (None, "", [], {}):
+            intent[key] = value
+
+    flow_context.update({
+        "flow_type": flow_type,
+        "status": "resumed",
+        "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "flow_step": "store_selected",
+        "source": selected_store.get("selection_source") or "flow_controller:select_store",
+    })
+    if product:
+        flow_context["product"] = product
+    if store:
+        flow_context["store"] = store
+    if intent:
+        flow_context["intent"] = intent
+
+    if flow_type == "stock" and product.get("goods_no") and product.get("ord_qty") and store.get("shop_id"):
+        flow_context.update({
+            "target_action": "get_store_inventory_tool",
+            "current_step": "check_inventory",
+            "missing_slots": [],
+            "next_tool": "get_store_inventory_tool",
+            "allowed_tools": ["get_store_inventory_tool"],
+            "tool_args_patch": {
+                "goods_list": [{"goodsNo": product["goods_no"], "qty": str(product["ord_qty"])}],
+                "shop_id_list": [{"shopId": store["shop_id"]}],
+            },
+            "progress_source": "flow_controller:store_slot_fill",
+        })
+    return {
+        key: value
+        for key, value in flow_context.items()
+        if value not in (None, "", {}) and (key == "missing_slots" or value != [])
+    }
+
+
 def _flow_state_summary(context: Mapping[str, Any] | None) -> dict[str, Any]:
     if not isinstance(context, Mapping) or not context:
         return {}
@@ -601,6 +786,13 @@ def transition_current_flow(
     ui_action_snapshot = _ui_action_snapshot(ui_action)
     selected_product = _selected_product_from_ui_action(ui_action_snapshot)
     selected_quantity = _selected_quantity_from_ui_action(ui_action_snapshot)
+    selected_store = _selected_store_from_slots(
+        extracted_snapshot=extracted_snapshot,
+        existing_snapshot=existing_snapshot,
+        active_flow=active_flow,
+        router_evidence=router_snapshot,
+        resume_source=resume_source,
+    )
 
     current_flow_state = _current_flow_state(active_flow, router_snapshot)
     parent_flow_state = _flow_state_summary(parent_flow)
@@ -628,12 +820,21 @@ def transition_current_flow(
         existing_snapshot=existing_snapshot,
         selected_quantity=selected_quantity,
     )
-    active_flow_context = selected_product_flow_context or selected_quantity_flow_context
+    selected_store_flow_context = _selected_store_flow_context(
+        active_flow=active_flow,
+        parent_flow_state=parent_flow_state,
+        router_evidence=router_snapshot,
+        existing_snapshot=existing_snapshot,
+        selected_store=selected_store,
+    )
+    active_flow_context = selected_product_flow_context or selected_quantity_flow_context or selected_store_flow_context
     applied_reason = "metadata_only_shell"
     if selected_product_flow_context:
         applied_reason = "selected_product_flow_state"
     elif selected_quantity_flow_context:
         applied_reason = "selected_quantity_flow_state"
+    elif selected_store_flow_context:
+        applied_reason = "selected_store_flow_state"
     current_turn_seed = _current_turn_flow_seed(router_snapshot)
     contract_seed = {
         "router_evidence": router_snapshot,
@@ -652,6 +853,7 @@ def transition_current_flow(
         "extracted_slots": extracted_snapshot,
         "selected_product": selected_product,
         "selected_quantity": selected_quantity,
+        "selected_store": selected_store,
     }
     context_evidence = {key: value for key, value in context_evidence.items() if value not in (None, "", [], {})}
     metadata = {
@@ -666,6 +868,7 @@ def transition_current_flow(
         "router_intent": str(router_snapshot.get("intent") or "none"),
         "selected_product_resolved": bool(selected_product),
         "selected_quantity_resolved": bool(selected_quantity),
+        "selected_store_resolved": bool(selected_store),
         "user_text_present": bool(str(user_text or "").strip()),
     }
     return FlowTransition(
