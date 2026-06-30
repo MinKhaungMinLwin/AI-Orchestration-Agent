@@ -5180,6 +5180,16 @@ def _map_datepick_from_preview(tool_data_list: list[dict], assistant_text: str) 
     """
     if _is_other_store_request():
         return None
+    transaction_decision = current_transaction_response_decision.get()
+    decision_metadata = transaction_decision.metadata if transaction_decision is not None else {}
+    response_shape_key = str(decision_metadata.get("response_shape_key") or "").strip()
+    flow_step = str(decision_metadata.get("flow_step") or "").strip()
+    if (
+        transaction_decision is not None
+        and transaction_decision.template == TemplateName.LOCATION
+        and (response_shape_key == "reservation_store_candidates" or flow_step == "show_store_candidates")
+    ):
+        return None
     if current_action_mode.get() != "unspecified" and not _has_current_turn_transaction_action():
         return None
 
