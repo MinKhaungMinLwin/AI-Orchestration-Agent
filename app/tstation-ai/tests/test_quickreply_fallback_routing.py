@@ -10965,6 +10965,33 @@ def test_router_wins_size_list_keeps_informational_intent_over_stale_recommendat
     assert payload["stale_context_used_for"] == "known_slots_only"
 
 
+def test_tire_recommendation_ignores_missing_product_reference_guard() -> None:
+    routing_result = SimpleNamespace(
+        domains=[MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION],
+        execution_plan=["discovery:tire_recommendation", "transaction:store_reservation"],
+        intent="tire_recommendation",
+        policy_intent="none",
+        referred_object_status="missing",
+        referred_object_type="product",
+        needs_clarification=True,
+        planner_confidence=0.95,
+        agent_prompt_profile="discovery_recommendation",
+    )
+
+    contract = build_turn_contract(
+        user_text="타이어 추천",
+        routing_result=routing_result,
+        merged_slots=ConversationSlots(ord_qty=4, shop_name="광교신도시점"),
+        action_mode="product_recommendation",
+        context_state="active",
+    )
+
+    assert contract.intent == "tire_recommendation"
+    assert contract.domain == "discovery"
+    assert contract.blocking_required_slots == ()
+    assert contract.blocking_required_slots_source == "none"
+
+
 def test_router_wins_delivery_policy_blocks_store_schedule_code_frame() -> None:
     routing_result = _routing_result(
         domains=[MultiAgentDomain.Domain.SUPPORT],
