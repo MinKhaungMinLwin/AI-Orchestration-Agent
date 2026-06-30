@@ -105,6 +105,22 @@ def test_purchase_flow_with_store_and_no_quantity_resolves_to_ask_quantity() -> 
     assert plan.metadata["flow_slots"]["store_name"] == "한남점"
 
 
+def test_explicit_order_payload_with_labeled_store_and_schedule_stays_in_purchase_flow() -> None:
+    user_text = "타이어 사이즈 2454519 / 차종 그랜저 / 수량: 4개 / 상품: 벤투스 air S(흡음재없는거) / 장착점: 티스테이션 분당정자점 / 장착일: 7월 4일 11시 / 이 정보대로 주문서 만들어 줘"
+    frame = build_transaction_intent_frame(user_text, known_slots={})
+    plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "quick_order_reservation"
+    assert frame.sub_intent == "reservation"
+    assert frame.known_slots["shop_name"] == "분당정자점"
+    assert frame.known_slots["store_name"] == "분당정자점"
+    assert frame.known_slots["product_name"] == "Ventus air S"
+    assert frame.known_slots["ord_qty"] == 4
+    assert plan.metadata["response_intent"] == "quick_order_reservation"
+    assert "get_store_list_tool" not in plan.allowed_tools
+    assert "get_store_detail_tool" not in plan.allowed_tools
+
+
 def test_purchase_continuation_after_vehicle_selection_resolves_to_ask_quantity() -> None:
     frame = replace(
         build_transaction_intent_frame(

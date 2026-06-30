@@ -270,10 +270,13 @@ def extract_valid_store_name(text: str) -> str | None:
     value = text or ""
     if not has_valid_store_mention_context(value):
         return None
-    match = _STORE_NAME_RE.search(value)
-    if not match:
-        return None
-    return match.group(1)
+    for match in _STORE_NAME_RE.finditer(value):
+        candidate = re.sub(r"\s+", " ", match.group(1)).strip()
+        normalized = _normalize_store_name(candidate)
+        if normalized in {"장착점", "지점"}:
+            continue
+        return candidate
+    return None
 
 
 def classify_store_name_role(text: str, *, store_name: str | None = None) -> StoreNameRoleDecision:
