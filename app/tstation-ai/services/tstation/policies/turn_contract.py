@@ -1647,11 +1647,7 @@ def build_response_policy_guard_event(contract: TurnContract) -> dict[str, Any]:
                 ]
             elif not (known_slots.get("ord_qty") or known_slots.get("quantity")):
                 message = "구매를 진행하려면 수량이 필요해요. 구매할 타이어 수량을 알려주세요."
-                quick_replies = [
-                    {"label": "2개", "domain": "TRANSACTION"},
-                    {"label": "4개", "domain": "TRANSACTION"},
-                    {"label": "상품 다시 찾기", "domain": "DISCOVERY"},
-                ]
+                quick_replies = _quantity_selection_quick_replies()
             elif not (
                 known_slots.get("shop_id")
                 or known_slots.get("shop_name")
@@ -1966,6 +1962,15 @@ def _has_product_size_quantity(known_slots: Mapping[str, Any]) -> bool:
     return _has_product_and_size(known_slots) and bool(known_slots.get("ord_qty") or known_slots.get("quantity"))
 
 
+def _quantity_selection_quick_replies() -> list[dict[str, str]]:
+    return [
+        {"label": "1개", "domain": "TRANSACTION"},
+        {"label": "2개", "domain": "TRANSACTION"},
+        {"label": "3개", "domain": "TRANSACTION"},
+        {"label": "4개", "domain": "TRANSACTION"},
+    ]
+
+
 def _build_missing_store_action_prompt_event(
     contract: TurnContract,
     known_slots: Mapping[str, Any],
@@ -2014,12 +2019,7 @@ def _build_missing_quantity_action_prompt_event(
     return _missing_slot_quickreply_event(
         contract,
         message=message,
-        quick_replies=[
-            {"label": "1개", "domain": "TRANSACTION"},
-            {"label": "2개", "domain": "TRANSACTION"},
-            {"label": "3개", "domain": "TRANSACTION"},
-            {"label": "4개", "domain": "TRANSACTION"},
-        ],
+        quick_replies=_quantity_selection_quick_replies(),
         missing_slot="quantity",
     )
 
