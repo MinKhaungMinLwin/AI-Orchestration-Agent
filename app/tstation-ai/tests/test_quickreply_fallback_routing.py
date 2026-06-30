@@ -21364,6 +21364,96 @@ def test_contract_required_tool_candidate_builds_card_installment_lookup_input()
     assert candidate.source_domain == "support"
 
 
+def test_pending_contract_required_tool_detects_card_installment_lookup() -> None:
+    contract = TurnContract(
+        domain="support",
+        intent="card_installment_lookup",
+        known_slots={"policy_intent": "coupon_usage_policy"},
+        allowed_tools=("get_card_installments_tool",),
+        preferred_tool="get_card_installments_tool",
+        forbidden_tools=("search_faq_hybrid_tool",),
+        blocking_required_slots=(),
+        context_state="active",
+        response_decision={
+            "template": "quickReply",
+            "metadata": {"response_shape_key": "card_installment_lookup"},
+        },
+    )
+
+    pending_tool = chat_module._pending_contract_required_tool_for_fast_path(
+        contract,
+        merged_slots=ConversationSlots(),
+    )
+
+    assert pending_tool == "get_card_installments_tool"
+
+
+def test_recover_blocked_fast_path_to_contract_tool_runs_card_installment_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_input: dict[str, Any] = {}
+
+    def _fake_card_installments_invoke(tool_input: dict[str, Any]) -> dict[str, Any]:
+        captured_input.update(tool_input)
+        return {
+            "status": "success",
+            "data": {
+                "cards": [
+                    {"iscm_nm": "삼성카드", "months": [2, 3, 6], "payment_type": "일반"},
+                    {"iscm_nm": "현대카드", "months": [2, 3], "payment_type": "일반"},
+                ]
+            },
+        }
+
+    async def _fake_to_thread(func: Any, *args: Any, **kwargs: Any) -> Any:
+        return func(*args, **kwargs)
+
+    from services.tstation.agents.e_support_agent import tools as support_tools
+
+    monkeypatch.setattr(
+        support_tools,
+        "get_card_installments_tool",
+        SimpleNamespace(invoke=_fake_card_installments_invoke),
+    )
+    monkeypatch.setattr(chat_module.asyncio, "to_thread", _fake_to_thread)
+
+    contract = TurnContract(
+        domain="support",
+        intent="card_installment_lookup",
+        known_slots={"policy_intent": "coupon_usage_policy"},
+        allowed_tools=("get_card_installments_tool",),
+        preferred_tool="get_card_installments_tool",
+        forbidden_tools=("search_faq_hybrid_tool",),
+        blocking_required_slots=(),
+        context_state="active",
+        response_decision={
+            "template": "quickReply",
+            "metadata": {"response_shape_key": "card_installment_lookup"},
+        },
+    )
+
+    recovery = asyncio.run(
+        chat_module.recover_blocked_fast_path_to_contract_tool(
+            turn_contract=contract,
+            user_text="삼성카드 무이자 몇개월 돼?",
+            merged_slots=ConversationSlots(),
+            blocked_fast_path_source="code_faq_policy_direct",
+        )
+    )
+
+    assert recovery is not None
+    assert recovery["tool_name"] == "get_card_installments_tool"
+    assert captured_input == {"payment_type": "일반"}
+    assert recovery["event"]["template"] == "quickReply"
+    assert recovery["event"]["assistant_response_source"] == "contract_tool_recovery_after_fast_path_block"
+    assert "**삼성카드**" in recovery["event"]["data"]["assistantResponse"]
+    assert "2/3/6개월" in recovery["event"]["data"]["assistantResponse"]
+    metadata = recovery["event"]["data"]["metadata"]
+    assert metadata["blocked_fast_path_source"] == "code_faq_policy_direct"
+    assert metadata["recovered_tool"] == "get_card_installments_tool"
+    assert metadata["tool_input_source"] == "user_text"
+
+
 def test_contract_required_tool_candidate_uses_owned_reservation_lookup_contract() -> None:
     contract = TurnContract(
         domain="transaction",

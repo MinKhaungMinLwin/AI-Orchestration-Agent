@@ -17490,6 +17490,13 @@ def _pending_contract_required_tool_for_fast_path(
         return "transaction_store_preview_tool"
     if _is_contract_required_vehicle_recommendation(turn_contract, merged_slots):
         return "get_products_recommendations_tool"
+    candidate = _contract_required_tool_candidate(
+        turn_contract=turn_contract,
+        user_text="",
+        merged_slots=merged_slots,
+    )
+    if candidate is not None:
+        return candidate.tool_name
     return None
 
 
@@ -29649,6 +29656,64 @@ class TStationChatServiceV2:
             event_data = photo_policy_event.get("data") if isinstance(photo_policy_event.get("data"), dict) else {}
             return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
 
+        if (
+            turn_contract
+            and str(turn_contract.intent or "") == "card_installment_lookup"
+            and str(turn_contract.preferred_tool or "") == "get_card_installments_tool"
+        ):
+            card_installment_recovery = await recover_blocked_fast_path_to_contract_tool(
+                turn_contract=turn_contract,
+                user_text=last_user_text,
+                merged_slots=merged_slots,
+                blocked_fast_path_source="code_faq_policy_direct",
+            )
+            if card_installment_recovery is not None:
+                card_installment_event = card_installment_recovery["event"]
+                if request.stream:
+                    _record_direct_return_trace(
+                        parent_span=_parent_span,
+                        trace_id=request.tracing_id,
+                        session_id=request.session_id,
+                        user_id=request.user_id,
+                        user_text=last_user_text,
+                        domains=domains,
+                        event=card_installment_event,
+                        turn_contract=turn_contract,
+                        direct_return_reason="contract_required_card_installment_tool",
+                        extra_metadata=vehicle_selection_trace_metadata,
+                    )
+                    return StreamingResponse(
+                        TStationChatServiceV2._stream_contract_required_tool_response(
+                            card_installment_recovery,
+                            agent_label="[SUPPORT AGENT]",
+                        ),
+                        media_type="text/event-stream",
+                        headers={
+                            "Cache-Control": "no-cache",
+                            "Connection": "keep-alive",
+                            "X-Accel-Buffering": "no",
+                        },
+                    )
+                event_data = (
+                    card_installment_event.get("data")
+                    if isinstance(card_installment_event.get("data"), dict)
+                    else {}
+                )
+                return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
+            guard_event = build_response_policy_guard_event(turn_contract)
+            if request.stream:
+                return StreamingResponse(
+                    TStationChatServiceV2._stream_policy_guard_response(guard_event),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
+            event_data = guard_event.get("data") if isinstance(guard_event.get("data"), dict) else {}
+            return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
+
         if turn_contract and turn_contract.intent in _DIRECT_SUPPORT_FAQ_POLICY_INTENTS:
             from services.tstation.agents.e_support_agent.tools import search_faq_hybrid_tool as _search_faq_hybrid_tool
 
@@ -30013,6 +30078,23 @@ class TStationChatServiceV2:
         )
         normalize_ui_action_metadata(data_event)
         yield f"data: {json.dumps(data_event, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+        yield "data: [DONE]\n\n"
+
+    @staticmethod
+    def _stream_contract_required_tool_response(recovery: Mapping[str, Any], *, agent_label: str = "[SUPPORT AGENT]"):
+        event = recovery["event"]
+        normalize_ui_action_metadata(event)
+        event_data = event.get("data") if isinstance(event.get("data"), dict) else {}
+        msg = str(event_data.get("assistantResponse") or "")
+        yield f"data: {json.dumps({'type': 'sub-agent', 'agent': agent_label, 'status': 'start'}, ensure_ascii=False)}\n\n"
+        for recovery_event in recovery["events"]:
+            yield f"data: {json.dumps(recovery_event, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps({'type': 'sub-agent', 'agent': agent_label, 'status': 'done'}, ensure_ascii=False)}\n\n"
+        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        if msg:
+            yield f"data: {json.dumps({'type': 'message', 'content': msg, 'agent': agent_label}, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
