@@ -756,6 +756,9 @@ def build_turn_contract(
     if code_intent == "coupon_usage_policy" or planner_intent == "coupon_usage_policy":
         domain = "support"
         intent = "coupon_usage_policy"
+    if code_intent == "coupon_stacking_policy" or planner_intent in {"coupon_stacking_policy", "stacking"}:
+        domain = "support"
+        intent = "coupon_stacking_policy"
     if code_intent == "coupon_registration_policy" or planner_intent == "coupon_registration_policy":
         domain = "support"
         intent = "coupon_registration_policy"
@@ -1043,6 +1046,44 @@ def build_turn_contract(
                 "get_final_price_tool",
             ),
         )
+    if intent == "coupon_stacking_policy":
+        allowed_tools = _merge_tuple(
+            allowed_tools,
+            ("get_my_coupons_tool", "check_coupon_stacking_tool"),
+        )
+        forbidden_tools = _merge_tuple(
+            tuple(tool for tool in forbidden_tools if tool not in {"get_my_coupons_tool", "check_coupon_stacking_tool"}),
+            (
+                "issue_coupon_tool",
+                "search_product_tool",
+                "get_product_description_tool",
+                "get_coupon_applicable_products_tool",
+                "get_final_price_tool",
+                "search_faq_hybrid_tool",
+            ),
+        )
+        if not preferred_tool or preferred_tool in forbidden_tools:
+            preferred_tool = "get_my_coupons_tool"
+            tool_args_patch = {}
+        required_slots = ()
+        resolvable_required_slots = ()
+        blocking_required_slots = ()
+        blocking_required_slots_source = "coupon_stacking_policy_contract"
+        response_decision_payload = {
+            "response_shape": "clarify",
+            "template": "quickReply",
+            "required_slots": [],
+            "forbidden_behaviors": [
+                "generic_faq_answer",
+                "infer_stacking_without_tool",
+                "start_product_coupon_applicability_lookup",
+            ],
+            "assistant_guidance": (
+                "쿠폰 중복 사용 가능 여부는 일반 FAQ로 답하지 말고, 보유 쿠폰 목록에서 사용자가 말한 쿠폰을 "
+                "특정한 뒤 check_coupon_stacking_tool 판정값으로만 안내한다. 쿠폰이 특정되지 않으면 비교할 쿠폰을 되묻는다."
+            ),
+            "metadata": {"response_shape_key": "coupon_stacking_policy"},
+        }
     if intent == "coupon_registration_policy":
         forbidden_tools = _merge_tuple(
             forbidden_tools,
@@ -4599,6 +4640,24 @@ def _router_wins_tool_boundary(intent: str) -> tuple[tuple[str, ...], tuple[str,
             _SUPPORT_SAFE_AGENT_TOOLS,
             tuple(tool for tool in _ROUTER_WINS_TRANSACTION_FORBIDDEN_TOOLS if tool not in _SUPPORT_SAFE_AGENT_TOOLS),
         )
+    if intent == "coupon_stacking_policy":
+        allowed_tools = ("get_my_coupons_tool", "check_coupon_stacking_tool")
+        return (
+            allowed_tools,
+            tuple(
+                tool
+                for tool in _ROUTER_WINS_TRANSACTION_FORBIDDEN_TOOLS
+                | {
+                    "issue_coupon_tool",
+                    "search_product_tool",
+                    "get_product_description_tool",
+                    "get_coupon_applicable_products_tool",
+                    "get_final_price_tool",
+                    "search_faq_hybrid_tool",
+                }
+                if tool not in allowed_tools
+            ),
+        )
     return (
         ("search_faq_hybrid_tool",),
         tuple(tool for tool in _ROUTER_WINS_TRANSACTION_FORBIDDEN_TOOLS if tool != "search_faq_hybrid_tool"),
@@ -4691,6 +4750,17 @@ def _router_wins_response_decision(intent: str) -> dict[str, Any]:
             "answer_without_owned_warranty_lookup",
             "normalize_as_service_complaint",
             "transfer_to_qna_direct_first",
+        ]
+    elif intent == "coupon_stacking_policy":
+        response_shape = "clarify"
+        guidance = (
+            "쿠폰 중복 사용 가능 여부는 일반 FAQ로 답하지 말고, 보유 쿠폰 목록에서 사용자가 말한 쿠폰을 "
+            "특정한 뒤 check_coupon_stacking_tool 판정값으로만 안내한다. 쿠폰이 특정되지 않으면 비교할 쿠폰을 되묻는다."
+        )
+        forbidden_behaviors = [
+            "generic_faq_answer",
+            "infer_stacking_without_tool",
+            "start_product_coupon_applicability_lookup",
         ]
     else:
         guidance = "현재 턴의 FAQ/정책 intent 기준으로 안내하고 개인 조회, 구매, 예약 실행 flow로 전환하지 않는다."

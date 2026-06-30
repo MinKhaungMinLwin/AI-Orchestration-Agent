@@ -1621,6 +1621,13 @@ def test_coupon_gate_routes_usage_policy_queries_to_support(user_text: str) -> N
     assert decision.is_actionable is False
 
 
+def test_coupon_gate_routes_stacking_query_to_stacking_policy() -> None:
+    decision = decide_coupon_query_gate(user_text="5% 쿠폰이랑 30% 할인쿠폰 중복으로 사용 가능?")
+
+    assert decision.intent == CouponQueryIntent.STACKING
+    assert decision.is_actionable is False
+
+
 @pytest.mark.parametrize(
     "user_text",
     [
@@ -28423,6 +28430,29 @@ def test_coupon_usage_policy_contract_blocks_coupon_lookup_and_price_tools() -> 
     assert "get_my_coupons_tool" in contract.forbidden_tools
     assert "get_coupon_applicable_products_tool" in contract.forbidden_tools
     assert "get_final_price_tool" in contract.forbidden_tools
+
+
+def test_coupon_stacking_policy_contract_allows_stacking_tools_not_generic_faq() -> None:
+    contract = build_turn_contract(
+        user_text="5% 쿠폰이랑 30% 할인쿠폰 중복으로 사용 가능?",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:coupon_stacking_policy"],
+            policy_intent="coupon_stacking_policy",
+        ),
+    )
+
+    assert contract.domain == "support"
+    assert contract.intent == "coupon_stacking_policy"
+    assert contract.required_slots == ()
+    assert contract.blocking_required_slots == ()
+    assert contract.preferred_tool == "get_my_coupons_tool"
+    assert "get_my_coupons_tool" in contract.allowed_tools
+    assert "check_coupon_stacking_tool" in contract.allowed_tools
+    assert "search_faq_hybrid_tool" in contract.forbidden_tools
+    assert "get_coupon_applicable_products_tool" in contract.forbidden_tools
+    assert contract.response_decision["metadata"]["response_shape_key"] == "coupon_stacking_policy"
+    assert "generic_faq_answer" in contract.response_decision["forbidden_behaviors"]
 
 
 def test_coupon_usage_support_policy_does_not_route_to_partner_or_owned_coupon_flow() -> None:
