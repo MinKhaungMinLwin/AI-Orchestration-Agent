@@ -5601,6 +5601,36 @@ def test_oe_concept_query_does_not_create_missing_reference_guard() -> None:
     assert contract.known_slots["oe_replacement_type"] == "oe"
 
 
+def test_oe_part_number_query_answers_unavailable_without_product_clarification() -> None:
+    user_text = "기아 쏘렌토 hev 순정 출고 타이어(oe) 품번이 뭐야?"
+    frame = build_discovery_intent_frame(user_text)
+    decision = decide_discovery_response(frame)
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=frame,
+        tool_plan=plan_discovery_tools(frame),
+        response_decision=decision,
+        routing_result=SimpleNamespace(
+            domains=[MultiAgentDomain.Domain.DISCOVERY],
+            execution_plan=["discovery:vehicle_compatibility_check"],
+            referred_object_status="missing",
+            referred_object_type="product",
+            needs_clarification=True,
+            planner_confidence=0.95,
+        ),
+    )
+
+    assert frame.intent == "product_description"
+    assert frame.sub_intent == "oe_part_number_unavailable"
+    assert decision.metadata["response_shape_key"] == "oe_part_number_unavailable"
+    assert "연식, 트림, 휠 인치" in decision.assistant_guidance
+    assert "확정 조회할 수 없" in decision.assistant_guidance
+    assert contract.blocking_required_slots == ()
+    assert contract.blocking_required_slots_source == "none"
+    assert "ask_product_before_answering_oe_part_number_limit" in decision.forbidden_behaviors
+    assert "get_products_recommendations_tool" in contract.forbidden_tools
+
+
 def test_discovery_policy_context_preserves_oe_query_over_recent_size_followup_router_hint() -> None:
     routing_result = MultiAgentDomain(
         reason="test",

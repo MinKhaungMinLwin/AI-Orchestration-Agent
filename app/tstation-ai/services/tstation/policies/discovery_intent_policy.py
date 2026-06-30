@@ -177,6 +177,11 @@ _OE_REPLACEMENT_TYPE_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("oe", re.compile(r"(?:\bOE\b|순정|출고\s*타이어|출고용|출고때|출고 시)", re.IGNORECASE)),
     ("re", re.compile(r"(?:\bRE\b|교체용|replacement)", re.IGNORECASE)),
 )
+_OE_PART_NUMBER_REQUEST_RE = re.compile(
+    r"(?:\bOE\b|순정|출고\s*타이어|출고용|출고때|출고 시).{0,40}(?:품번|부품\s*번호|파트\s*넘버|part\s*number)|"
+    r"(?:품번|부품\s*번호|파트\s*넘버|part\s*number).{0,40}(?:\bOE\b|순정|출고\s*타이어|출고용|출고때|출고 시)",
+    re.IGNORECASE,
+)
 _MILEAGE_ATTRIBUTE_RE = re.compile(
     r"오래\s*(?:타|탈)|수명|내구|마일리지\s*(?:타이어|좋|높|긴)|long",
     re.IGNORECASE,
@@ -938,6 +943,8 @@ def build_discovery_intent_frame(
         entities.update(price_range)
     if is_external_price_comparison_request(text, known_slots=slots):
         entities["external_price_comparison"] = True
+    if _OE_PART_NUMBER_REQUEST_RE.search(text):
+        entities["oe_part_number_request"] = True
     best_seller_period = best_seller_period_from_text(text)
     if best_seller_period:
         entities["best_seller_period"] = best_seller_period
@@ -974,6 +981,12 @@ def build_discovery_intent_frame(
     elif entities.get("vehicle_information_request") == "tire_size_lookup":
         intent = "product_description"
         sub_intent = "vehicle_information"
+    elif (
+        oe_replacement_type == "oe"
+        and entities.get("oe_part_number_request")
+    ):
+        intent = "product_description"
+        sub_intent = "oe_part_number_unavailable"
     elif (
         oe_replacement_type
         and (
