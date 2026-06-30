@@ -38319,6 +38319,26 @@ def test_unknown_store_service_policy_guard_uses_dedicated_quickreply_for_generi
     assert "직접 문의해 주세요" in event["data"]["assistantResponse"]
 
 
+def test_response_policy_generic_fallback_names_missing_information() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="quick_order_reservation",
+        required_slots=("booking_datetime",),
+        response_decision={
+            "forbidden_behaviors": ["unmapped_policy_violation"],
+            "required_slots": ["booking_datetime"],
+            "metadata": {"missing_slots": ["booking_datetime"]},
+        },
+        action_mode="booking_continuation",
+    )
+
+    event = build_response_policy_guard_event(contract)
+
+    assert event["assistant_response_source"] == "code_turn_contract_response_policy_guard"
+    assert "부족한 정보는 예약 날짜/시간입니다" in event["data"]["assistantResponse"]
+    assert event["data"]["metadata"]["missingSlots"] == ["booking_datetime"]
+
+
 def test_unknown_store_service_policy_contract_blocks_datepick_and_schedule_style_reply() -> None:
     contract = build_turn_contract(
         user_text="튜닝도 해줘?",
