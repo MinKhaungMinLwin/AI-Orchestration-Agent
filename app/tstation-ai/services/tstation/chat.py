@@ -916,6 +916,7 @@ class MultiAgentDomain(BaseModel):
         "tire_condition_photo_policy",
         "coupon_usage_policy",
         "coupon_registration_policy",
+        "coupon_stacking_policy",
         "signup_first_purchase_benefit_policy",
         "signup_coupon_guidance",
         "partner_member_coupon_policy",
@@ -1165,6 +1166,7 @@ _CURRENT_TURN_SUPPORT_POLICY_ACTION_INTENTS = frozenset({
     "tire_condition_photo_policy",
     "coupon_usage_policy",
     "coupon_registration_policy",
+    "coupon_stacking_policy",
     "signup_first_purchase_benefit_policy",
     "signup_coupon_guidance",
     "partner_member_coupon_policy",
@@ -2578,6 +2580,7 @@ class _SlimMultiAgentDomain(BaseModel):
         "tire_condition_photo_policy",
         "coupon_usage_policy",
         "coupon_registration_policy",
+        "coupon_stacking_policy",
         "signup_first_purchase_benefit_policy",
         "signup_coupon_guidance",
         "partner_member_coupon_policy",
@@ -2847,6 +2850,7 @@ Complaint routing rule:
    - "signup_first_purchase_benefit_policy": 회원가입/신규회원/첫구매 혜택·쿠폰·서비스 안내. FAQ/RAG 정책 설명이며 내 쿠폰 조회/직접 발급이 아님.
    - "coupon_usage_policy": 쿠폰 온라인/오프라인 사용처, 현장 결제 가능 여부, 온라인 주문 없이 매장 사용 가능 여부 같은 일반 쿠폰 사용 정책 안내.
    - "coupon_registration_policy": 쿠폰 번호 등록/입력/사용 방법/쿠폰함 등록 경로 같은 일반 쿠폰 등록 정책 안내.
+   - "coupon_stacking_policy": 사용자가 두 개 이상의 쿠폰/할인쿠폰을 같이 쓸 수 있는지 묻는 중복 적용 확인. 일반 FAQ가 아니라 쿠폰 조건 확인 흐름.
    - "signup_coupon_guidance": 회원가입 전용/신규회원/웰컴 쿠폰 문의. 보유 쿠폰 조회가 아니라 가입 혜택/진행 중 혜택 안내.
    - "partner_member_coupon_policy": 제휴회원/제휴사/복지몰/임직원 전용 쿠폰·혜택 접근 조건 안내. 보유 쿠폰 조회가 아니라 제휴 전용 접속 경로/권한/기간 정책 안내.
    - "legal_action_guidance_denied": 티스테이션 매장/서비스/예약/장착/응대 불편과 함께 고소/소송/법적 대응/내용증명/분쟁조정/신고 방법을 묻는 경우. 법적 절차는 안내하지 않고 공식 CS 접수만 안내.
@@ -3139,6 +3143,7 @@ Critical first-turn routing:
   or signup_coupon_guidance.
 - "제휴회원/복지몰/임직원 전용 쿠폰" -> SUPPORT, policy_intent=partner_member_coupon_policy.
 - Coupon use/channel/registration/how-to policy -> SUPPORT, policy_intent=coupon_usage_policy or coupon_registration_policy.
+- Coupon stacking/check ("5% 쿠폰이랑 30% 할인쿠폰 중복 가능?", "쿠폰 두 개 같이 써도 돼?") -> SUPPORT, policy_intent=coupon_stacking_policy; do not answer as generic FAQ.
 - Two or more discount means stacking ("쿠폰+딜", "기획전+쿠폰", "중복 가능") -> SUPPORT.
 - Tire manufacture date/DOT/newness -> SUPPORT, policy_intent=tire_manufacture_date_policy.
 - Sidewall bulge/quality warranty/free A/S -> SUPPORT, policy_intent=tire_quality_warranty_policy.
@@ -3205,6 +3210,7 @@ Also set `policy_intent`:
 - signup/new-member/first-purchase benefit explanation ("회원가입하면 첫구매 혜택은 뭐가 있어?", "신규회원 혜택 알려줘", "가입하면 받을 수 있는 쿠폰 뭐야?") → SUPPORT, policy_intent=`signup_first_purchase_benefit_policy`; this is FAQ/RAG policy guidance, not owned coupon lookup or coupon issuance.
 - coupon usage policy ("다운받은 쿠폰 현장 결제할 때도 쓸 수 있어?", "온라인 주문 없이 매장에서 쿠폰 적용돼?", "티스테이션닷컴 쿠폰 오프라인 결제 가능해?") → SUPPORT, policy_intent=`coupon_usage_policy`; this is general coupon usage/channel guidance, not partner-member coupon policy, not owned coupon lookup, and not product applicability lookup.
 - coupon registration policy ("쿠폰 번호 어디에 등록해?", "쿠폰 코드 입력은 어디서 해?", "쿠폰 등록 방법 알려줘") → SUPPORT, policy_intent=`coupon_registration_policy`; this is coupon registration/how-to guidance, not owned coupon lookup and not partner-member coupon policy.
+- coupon stacking policy ("5% 쿠폰이랑 30% 할인쿠폰 중복 가능?", "쿠폰 두 개 같이 써도 돼?") → SUPPORT, policy_intent=`coupon_stacking_policy`; this must allow coupon condition/stacking tools and must not be handled as generic coupon FAQ.
 - signup/new-member/welcome coupon guidance ("회원가입 전용 쿠폰 있어?", "신규회원 쿠폰 있어?", "가입하면 쿠폰 줘?", "웰컴 쿠폰 있나요?") → SUPPORT, policy_intent=`signup_coupon_guidance`; this is signup coupon guidance, not partner-member coupon policy and not owned coupon lookup.
 - partner-member-only coupon guidance ("제휴회원에게만 제공되는 쿠폰 보여줘", "제휴사 회원 전용 쿠폰 있어?", "복지몰 쿠폰 보여줘", "임직원 전용 쿠폰 안내해줘") → SUPPORT, policy_intent=`partner_member_coupon_policy`; this is access/policy guidance, not owned coupon lookup, coupon issuance, or coupon box listing.
 - T-Station store/service complaint mixed with legal action request (고소/소송/법적 대응/내용증명/분쟁조정/신고 방법) → SUPPORT, policy_intent=`legal_action_guidance_denied`; do not explain legal steps, institutions, documents, or procedures.
@@ -20510,10 +20516,15 @@ def _build_transaction_policy_context(
         price_frame = _promote_coupon_applicability_followup_price_frame(price_frame, known_slots)
         defer_price_fast_path = _should_defer_price_fast_path_to_router_intent(known_slots)
         # coupon_usage_policy / coupon_registration_policy questions are general policy inquiries.
+        # coupon_stacking_policy has a support-owned condition check tool path, not the price fast-path.
         # Applying price forbidden_behaviors here triggers a code-level fallback and blocks the agent
         # from looking up actual coupon channel data (coupon_channel_type: online/offline/onoff).
         _planner_policy_intent = str(known_slots.get("planner_policy_intent") or "")
-        _is_coupon_policy_inquiry = _planner_policy_intent in {"coupon_usage_policy", "coupon_registration_policy"}
+        _is_coupon_policy_inquiry = _planner_policy_intent in {
+            "coupon_usage_policy",
+            "coupon_registration_policy",
+            "coupon_stacking_policy",
+        }
         if not defer_price_fast_path and not _is_coupon_policy_inquiry and (
             price_frame.intent != "price_coupon_summary"
             or price_frame.entities.get("has_coupon_keyword")
@@ -26888,7 +26899,11 @@ class TStationChatServiceV2:
             if (
                 coupon_gate_support_route
             ):
-                coupon_policy_intent = route_coupon_gate_decision.intent.value
+                coupon_policy_intent = (
+                    "coupon_stacking_policy"
+                    if route_coupon_gate_decision.intent == CouponQueryIntent.STACKING
+                    else route_coupon_gate_decision.intent.value
+                )
                 domains = [MultiAgentDomain.Domain.SUPPORT]
                 routing_result = MultiAgentDomain(
                     reason=f"coupon_query_gate:{coupon_policy_intent}",
@@ -26904,6 +26919,7 @@ class TStationChatServiceV2:
                         if coupon_policy_intent in {
                             "coupon_usage_policy",
                             "coupon_registration_policy",
+                            "coupon_stacking_policy",
                             "partner_member_coupon_policy",
                             "signup_coupon_guidance",
                         }
