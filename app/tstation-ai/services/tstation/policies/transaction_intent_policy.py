@@ -93,6 +93,11 @@ _STORE_RESERVATION_ACTION_RE = re.compile(
     r"\d{1,2}\s*시\s*로\s*(?:변경|바꿔)",
     re.IGNORECASE,
 )
+_EXPLICIT_ORDER_EXECUTION_RE = re.compile(
+    r"주문\s*서\s*만들|주문서\s*만들|주문\s*해\s*줘|주문해줘|주문\s*하기|"
+    r"이\s*정보대로\s*(?:주문|진행)|이대로\s*(?:주문|진행)|예약\s*해\s*줘|예약해줘",
+    re.IGNORECASE,
+)
 _ORDER_HISTORY_REORDER_PREVIOUS_RE = re.compile(r"지난(?:번)?|이전|전에|예전|마지막|과거", re.IGNORECASE)
 _ORDER_HISTORY_REORDER_SOURCE_RE = re.compile(r"주문|구매|장착|교체|산|샀", re.IGNORECASE)
 _ORDER_HISTORY_REORDER_ACTION_RE = re.compile(
@@ -525,6 +530,28 @@ def _extract_policy_store_name_candidate(text: str) -> str | None:
     return re.sub(r"^티스테이션\s+", "", re.sub(r"\s+", " ", match.group(1)).strip(), flags=re.IGNORECASE)
 
 
+def _is_explicit_order_execution_request(text: str, slots: dict[str, Any]) -> bool:
+    value = text or ""
+    if not _EXPLICIT_ORDER_EXECUTION_RE.search(value):
+        return False
+    store_name = _extract_store_name(value) or str(slots.get("shop_name") or slots.get("store_name") or "").strip()
+    has_product = bool(
+        _PRODUCT_HINT_RE.search(value)
+        or slots.get("goods_no")
+        or slots.get("product_name")
+        or slots.get("tire_model")
+        or slots.get("pattern_name")
+    )
+    has_quantity = bool(_QUANTITY_RE.search(value) or slots.get("quantity") or slots.get("ord_qty"))
+    has_schedule = bool(
+        _EXPLICIT_MD_DATE_RE.search(value)
+        or _BOOKING_DATETIME_SELECTION_RE.search(value)
+        or slots.get("requested_cal_day")
+        or slots.get("rsv_hour")
+    )
+    return bool(has_product and has_quantity and store_name and has_schedule)
+
+
 def _is_plain_store_info_lookup(text: str) -> bool:
     if not _PLAIN_STORE_INFO_RE.search(text or ""):
         return False
@@ -762,7 +789,11 @@ def build_transaction_intent_frame(
         _MAINTENANCE_HISTORY_LOOKUP_RE.search(text) and not current_maintenance_history_access_policy
     )
     current_order_history_lookup = _is_order_history_lookup_turn(text)
-    current_plain_store_info_lookup = bool(not current_store_is_context and _is_plain_store_info_lookup(text))
+    current_plain_store_info_lookup = bool(
+        not current_store_is_context
+        and _is_plain_store_info_lookup(text)
+        and not _is_explicit_order_execution_request(text, slots)
+    )
     current_store_holiday_lookup = bool(not current_store_is_context and _is_store_holiday_lookup(text))
     current_order_history_reorder = _is_order_history_reorder_turn(text)
     current_purchase = bool(_PURCHASE_RE.search(text))
