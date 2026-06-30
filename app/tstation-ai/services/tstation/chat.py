@@ -73,7 +73,10 @@ from services.tstation.policies.transaction_intent_policy import (
     plan_transaction_tools,
 )
 from services.tstation.policies.transaction_response_policy import decide_transaction_response
-from services.tstation.policies.slot_fill_controller import resolve_pre_router_slot_fill
+from services.tstation.policies.slot_fill_controller import (
+    build_router_slot_fill_context,
+    resolve_pre_router_slot_fill,
+)
 from services.tstation.policies.support_response_policy import (
     build_support_faq_evidence_grounded_reply,
     is_post_install_quality_claim,
@@ -24530,34 +24533,14 @@ class TStationChatServiceV2:
         latest_location_tmpl: Mapping[str, Any] | None,
         latest_datepick_tmpl: Mapping[str, Any] | None,
     ) -> dict[str, Any]:
-        current_flow = TStationChatServiceV2._router_slot_fill_current_flow(slots, user_text=user_text)
-        known_slots = TStationChatServiceV2._router_slot_fill_known_slots(slots)
-        flow_step = TStationChatServiceV2._router_slot_fill_flow_step(current_flow, known_slots)
-        if current_flow == "quick_order_reservation":
-            flow_state = resolve_purchase_order_flow(intent="quick_order_reservation", known_slots=known_slots)
-            missing_slots = [
-                TStationChatServiceV2._normalize_router_missing_slot(slot)
-                for slot in (flow_state.missing_slots if flow_state is not None else ())
-            ]
-        else:
-            missing_slots = TStationChatServiceV2._router_slot_fill_missing_slots(current_flow, known_slots)
-        last_requested_slot = str(getattr(slots, "pending_required_slot", None) or "").strip()
-        if last_requested_slot == "booking_datetime":
-            last_requested_slot = "schedule"
-        if not last_requested_slot and missing_slots:
-            last_requested_slot = missing_slots[0]
-        last_candidates: list[dict[str, Any]] = []
-        last_candidates.extend(TStationChatServiceV2._router_slot_fill_product_candidates(latest_product_tmpl))
-        last_candidates.extend(TStationChatServiceV2._router_slot_fill_store_candidates(latest_location_tmpl))
-        last_candidates.extend(TStationChatServiceV2._router_slot_fill_schedule_candidates(latest_datepick_tmpl))
-        return {
-            "current_flow": current_flow,
-            "flow_step": flow_step,
-            "known_slots": known_slots,
-            "missing_slots": missing_slots,
-            "last_requested_slot": last_requested_slot or "none",
-            "last_candidates": [row for row in last_candidates if row.get("label")],
-        }
+        return build_router_slot_fill_context(
+            slots=slots,
+            user_text=user_text,
+            latest_product_tmpl=latest_product_tmpl,
+            latest_location_tmpl=latest_location_tmpl,
+            latest_datepick_tmpl=latest_datepick_tmpl,
+            has_purchase_anchor=_resume_source_from_current_turn(user_text) != "none",
+        )
 
     @staticmethod
     def _expected_slot_fill_precheck(
