@@ -107,6 +107,16 @@ _STOCK_STORE_INTENTS = {
     "stock_store_search",
     "store_inventory_check",
 }
+_FLOW_EVENT_TYPES = {
+    "activate",
+    "deactivate",
+    "resume",
+    "ambiguous_resume",
+    "prune",
+    "upsert_dormant",
+}
+_DEFAULT_MAX_DORMANT_FLOWS = 5
+_DEFAULT_DORMANT_TTL_SECONDS = 60 * 60 * 24
 _STORE_SELECTION_CHIPS = {"이 매장 선택", "이 매장으로", "이곳 선택"}
 _SELECTION_ORDINALS: tuple[tuple[tuple[str, ...], int], ...] = (
     (("첫번째", "첫째", "첫 번", "첫번", "1번째", "1번", "1.", "1)"), 0),
@@ -143,7 +153,7 @@ def _normalized_product_identity(value: Any) -> str:
     text = str(value or "").strip().lower()
     if not text:
         return ""
-    return re.sub(r"[\s\-_()]+", "", text)
+    return re.sub(r"[\s\-_/()]+", "", text)
 
 
 def _product_identity(values: Mapping[str, Any]) -> str:
@@ -322,6 +332,249 @@ def _store_lookup_tool_and_args(store: Mapping[str, Any]) -> tuple[str | None, d
     if region:
         return "get_store_list_tool", {"limit": 10, "region_code": region}
     return None, {}
+
+
+def flow_identity_for_context(context: Mapping[str, Any] | None) -> str:
+    values = _non_empty_mapping(context)
+    flow_type = str(values.get("flow_type") or "").strip()
+    if flow_type not in _ACTIVE_FLOW_TYPES:
+        return ""
+
+    product = _section_values(values, "product", _PRODUCT_FIELDS)
+    _normalize_product_aliases(product)
+    vehicle = _section_values(values, "vehicle", _VEHICLE_FIELDS)
+    recommendation = _section_values(values, "recommendation", _RECOMMENDATION_FIELDS)
+    store = _section_values(values, "store", _STORE_FIELDS)
+    intent = _section_values(values, "intent", _INTENT_FIELDS)
+
+    if flow_type in {"purchase", "stock", "booking"}:
+        product_key = str(product.get("goods_no") or _product_identity(product) or "").strip()
+        tire_size = _normalize_vehicle_tire_size(product.get("tire_size"))
+        parts = [flow_type, product_key, tire_size]
+    elif flow_type in {"store_search", "store_schedule", "store_service_search", "favorite_store"}:
+        store_key = str(
+            _first_non_empty(store.get("shop_id"), store.get("shop_name"), store.get("store_name"), store.get("region"), store.get("place_query"))
+            or ""
+        ).strip()
+        parts = [flow_type, store_key]
+    elif flow_type == "recommendation":
+        vehicle_identity = _vehicle_identity(vehicle)
+        vehicle_key = vehicle_identity[1] if vehicle_identity else ""
+        scenario = str(
+            _first_non_empty(
+                recommendation.get("recommendation_scenario"),
+                recommendation.get("scenario"),
+                recommendation.get("rcmd_type"),
+                intent.get("goal_type"),
+            )
+            or ""
+        ).strip()
+        tire_size = _normalize_vehicle_tire_size(product.get("tire_size") or vehicle.get("tire_size"))
+        parts = [flow_type, scenario, vehicle_key, tire_size]
+    else:
+        parts = [flow_type]
+
+    normalized = [_normalized_product_identity(part) for part in parts if str(part or "").strip()]
+    if len(normalized) <= 1:
+        return flow_type
+    return ":".join(normalized)
+
+
+def _flow_updated_at(context: Mapping[str, Any]) -> str:
+    updated_at = str(context.get("updated_at") or "").strip()
+    return updated_at or datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _flow_context_without_history(context: Mapping[str, Any] | None) -> dict[str, Any]:
+    values = _non_empty_mapping(context)
+    values.pop("dormant_flows", None)
+    values.pop("flow_events", None)
+    return values
+
+
+def _parse_flow_time(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _dormant_flow_values(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    dormant_flows: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            continue
+        dormant = DormantFlow.from_mapping(item)
+        if dormant is None:
+            continue
+        dormant_flows.append(dormant.to_dict())
+    return dormant_flows
+
+
+def _flow_event_values(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    events: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            continue
+        event = FlowEvent.from_mapping(item)
+        if event is not None:
+            events.append(event.to_dict())
+    return events
+
+
+def _new_flow_event(
+    event_type: str,
+    *,
+    source: str,
+    flow_identity: str = "",
+    details: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    return FlowEvent(
+        event_type=event_type,
+        source=source,
+        flow_identity=flow_identity,
+        details=_non_empty_mapping(details),
+    ).to_dict()
+
+
+def upsert_dormant_flow(
+    dormant_flows: list[Mapping[str, Any]] | None,
+    flow_context: Mapping[str, Any] | None,
+    *,
+    max_flows: int = _DEFAULT_MAX_DORMANT_FLOWS,
+    ttl_seconds: int = _DEFAULT_DORMANT_TTL_SECONDS,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    context = _non_empty_mapping(flow_context)
+    if not context:
+        return prune_dormant_flows(dormant_flows, max_flows=max_flows, ttl_seconds=ttl_seconds, now=now)
+    context["status"] = "dormant"
+    context["updated_at"] = _flow_updated_at(context)
+    identity = flow_identity_for_context(context)
+    if not identity:
+        return prune_dormant_flows(dormant_flows, max_flows=max_flows, ttl_seconds=ttl_seconds, now=now)
+
+    existing = _dormant_flow_values(list(dormant_flows or []))
+    upserted = DormantFlow(flow_identity=identity, context=context, updated_at=context["updated_at"]).to_dict()
+    replaced = False
+    merged: list[dict[str, Any]] = []
+    for dormant in existing:
+        if str(dormant.get("flow_identity") or "") == identity:
+            merged.append(upserted)
+            replaced = True
+        else:
+            merged.append(dormant)
+    if not replaced:
+        merged.append(upserted)
+    return prune_dormant_flows(merged, max_flows=max_flows, ttl_seconds=ttl_seconds, now=now)
+
+
+def prune_dormant_flows(
+    dormant_flows: list[Mapping[str, Any]] | None,
+    *,
+    max_flows: int = _DEFAULT_MAX_DORMANT_FLOWS,
+    ttl_seconds: int = _DEFAULT_DORMANT_TTL_SECONDS,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    current_time = now or datetime.now(timezone.utc)
+    max_count = max(0, int(max_flows))
+    ttl = max(0, int(ttl_seconds))
+    kept: list[dict[str, Any]] = []
+    for dormant in _dormant_flow_values(list(dormant_flows or [])):
+        updated_at = _parse_flow_time(dormant.get("updated_at"))
+        if ttl and updated_at and (current_time - updated_at).total_seconds() > ttl:
+            continue
+        kept.append(dormant)
+    kept.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
+    return kept[:max_count] if max_count else []
+
+
+def resume_dormant_flow(
+    active_flow_context: Mapping[str, Any] | None,
+    dormant_flows: list[Mapping[str, Any]] | None,
+    *,
+    resume_anchor: Mapping[str, Any] | None,
+    source: str,
+) -> DormantFlowResumeResult:
+    anchor = _non_empty_mapping(resume_anchor)
+    if not anchor:
+        return DormantFlowResumeResult(status="not_found", dormant_flows=_dormant_flow_values(list(dormant_flows or [])))
+    target_identity = flow_identity_for_context(anchor)
+    target_flow_type = str(anchor.get("flow_type") or "").strip()
+    normalized_product = _normalized_product_identity(
+        _first_non_empty(anchor.get("goods_no"), anchor.get("product_name"), anchor.get("tire_model"), anchor.get("pending_product_name"))
+    )
+    normalized_store = _normalized_product_identity(
+        _first_non_empty(anchor.get("shop_id"), anchor.get("shop_name"), anchor.get("store_name"), anchor.get("region"), anchor.get("place_query"))
+    )
+
+    matches: list[dict[str, Any]] = []
+    for dormant in _dormant_flow_values(list(dormant_flows or [])):
+        context = _non_empty_mapping(dormant.get("context"))
+        if target_identity and target_identity != target_flow_type and dormant.get("flow_identity") == target_identity:
+            matches.append(dormant)
+            continue
+        if target_flow_type and context.get("flow_type") != target_flow_type:
+            continue
+        if target_flow_type and not normalized_product and not normalized_store:
+            matches.append(dormant)
+            continue
+        if normalized_product:
+            product = _section_values(context, "product", _PRODUCT_FIELDS)
+            candidate_product = _normalized_product_identity(
+                _first_non_empty(product.get("goods_no"), product.get("product_name"), product.get("tire_model"), product.get("pending_product_name"))
+            )
+            if candidate_product == normalized_product:
+                matches.append(dormant)
+                continue
+        if normalized_store:
+            store = _section_values(context, "store", _STORE_FIELDS)
+            candidate_store = _normalized_product_identity(
+                _first_non_empty(store.get("shop_id"), store.get("shop_name"), store.get("store_name"), store.get("region"), store.get("place_query"))
+            )
+            if candidate_store == normalized_store:
+                matches.append(dormant)
+
+    if not matches:
+        return DormantFlowResumeResult(status="not_found", dormant_flows=_dormant_flow_values(list(dormant_flows or [])))
+    if len(matches) > 1:
+        return DormantFlowResumeResult(
+            status="ambiguous",
+            dormant_flows=_dormant_flow_values(list(dormant_flows or [])),
+            candidates=matches,
+            metadata={"flow_event": _new_flow_event("ambiguous_resume", source=source, details={"candidate_count": len(matches)})},
+        )
+
+    resumed = dict(matches[0])
+    resumed_identity = str(resumed.get("flow_identity") or "").strip()
+    resumed_context = _non_empty_mapping(resumed.get("context"))
+    resumed_context["status"] = "resumed"
+    resumed_context["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    remaining = [
+        dormant
+        for dormant in _dormant_flow_values(list(dormant_flows or []))
+        if str(dormant.get("flow_identity") or "") != resumed_identity
+    ]
+    current_active = _non_empty_mapping(active_flow_context)
+    if current_active:
+        remaining = upsert_dormant_flow(remaining, current_active)
+    remaining = prune_dormant_flows(remaining)
+    event = _new_flow_event("resume", source=source, flow_identity=resumed_identity)
+    resumed_context["dormant_flows"] = remaining
+    resumed_context["flow_events"] = [event, *_flow_event_values(resumed_context.get("flow_events"))]
+    return DormantFlowResumeResult(
+        status="resumed",
+        active_flow_context=resumed_context,
+        dormant_flows=remaining,
+        metadata={"flow_event": event, "resumed_flow_identity": resumed_identity},
+    )
 
 
 def evaluate_flow_progress(state: "FlowState") -> dict[str, Any]:
@@ -592,6 +845,84 @@ class FlowStateMergeResult:
 
 
 @dataclass(slots=True)
+class FlowEvent:
+    event_type: str
+    source: str
+    flow_identity: str = ""
+    details: dict[str, Any] = field(default_factory=dict)
+    created_at: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        event_type = self.event_type if self.event_type in _FLOW_EVENT_TYPES else "activate"
+        return _non_empty_mapping({
+            "event_type": event_type,
+            "source": self.source,
+            "flow_identity": self.flow_identity,
+            "details": _non_empty_mapping(self.details),
+            "created_at": self.created_at or datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        })
+
+    @classmethod
+    def from_mapping(cls, values: Mapping[str, Any] | None) -> "FlowEvent | None":
+        event = _non_empty_mapping(values)
+        event_type = str(event.get("event_type") or "").strip()
+        if event_type not in _FLOW_EVENT_TYPES:
+            return None
+        return cls(
+            event_type=event_type,
+            source=str(event.get("source") or "").strip(),
+            flow_identity=str(event.get("flow_identity") or "").strip(),
+            details=_non_empty_mapping(event.get("details")),
+            created_at=str(event.get("created_at") or "").strip(),
+        )
+
+
+@dataclass(slots=True)
+class DormantFlow:
+    flow_identity: str
+    context: dict[str, Any]
+    updated_at: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        context = _non_empty_mapping(self.context)
+        flow_identity = self.flow_identity or flow_identity_for_context(context)
+        updated_at = self.updated_at or str(context.get("updated_at") or "")
+        return _non_empty_mapping({
+            "flow_identity": flow_identity,
+            "updated_at": updated_at or datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "context": context,
+        })
+
+    @classmethod
+    def from_mapping(cls, values: Mapping[str, Any] | None) -> "DormantFlow | None":
+        data = _non_empty_mapping(values)
+        if not data:
+            return None
+        raw_context = data.get("context") if isinstance(data.get("context"), Mapping) else data
+        context = _non_empty_mapping(raw_context)
+        if not context:
+            return None
+        flow_type = str(context.get("flow_type") or "").strip()
+        if flow_type not in _ACTIVE_FLOW_TYPES:
+            return None
+        context["status"] = "dormant"
+        identity = str(data.get("flow_identity") or flow_identity_for_context(context)).strip()
+        if not identity:
+            return None
+        updated_at = str(data.get("updated_at") or context.get("updated_at") or "").strip()
+        return cls(flow_identity=identity, context=context, updated_at=updated_at)
+
+
+@dataclass(slots=True)
+class DormantFlowResumeResult:
+    status: str
+    active_flow_context: dict[str, Any] = field(default_factory=dict)
+    dormant_flows: list[dict[str, Any]] = field(default_factory=list)
+    candidates: list[dict[str, Any]] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
 class FlowState:
     flow_type: str
     status: str = "active"
@@ -605,6 +936,8 @@ class FlowState:
     intent: dict[str, Any] = field(default_factory=dict)
     meta: dict[str, Any] = field(default_factory=dict)
     candidates: list[dict[str, Any]] = field(default_factory=list)
+    dormant_flows: list[dict[str, Any]] = field(default_factory=list)
+    flow_events: list[dict[str, Any]] = field(default_factory=list)
 
     @classmethod
     def purchase(cls, status: str = "active") -> "FlowState":
@@ -635,6 +968,8 @@ class FlowState:
             if flat.get(key) not in _EMPTY_VALUES
         }
         state.candidates = _candidate_values(flat.get("last_candidates"))
+        state.dormant_flows = _dormant_flow_values(flat.get("dormant_flows"))
+        state.flow_events = _flow_event_values(flat.get("flow_events"))
         return state
 
     @classmethod
@@ -653,6 +988,8 @@ class FlowState:
             for key in ("source", "updated_at", "awaiting_store_region", "pending_step", *_FLOW_PROGRESS_META_FIELDS)
             if flat.get(key) not in _EMPTY_VALUES
         }
+        state.dormant_flows = _dormant_flow_values(flat.get("dormant_flows"))
+        state.flow_events = _flow_event_values(flat.get("flow_events"))
         return state
 
     @classmethod
@@ -682,6 +1019,8 @@ class FlowState:
             if flat.get(key) not in _EMPTY_VALUES
         }
         state.candidates = _candidate_values(flat.get("last_candidates"))
+        state.dormant_flows = _dormant_flow_values(flat.get("dormant_flows"))
+        state.flow_events = _flow_event_values(flat.get("flow_events"))
         state.meta["source"] = source
         return state
 
@@ -714,6 +1053,10 @@ class FlowState:
                 context[key] = self.meta[key]
         if self.candidates:
             context["last_candidates"] = [dict(candidate) for candidate in self.candidates]
+        if self.dormant_flows:
+            context["dormant_flows"] = [dict(dormant) for dormant in self.dormant_flows]
+        if self.flow_events:
+            context["flow_events"] = [dict(event) for event in self.flow_events]
         return _non_empty_mapping(context)
 
     def to_pending_order_context(self) -> dict[str, Any]:
@@ -848,9 +1191,26 @@ class FlowState:
 
         if delta.flow_type and merged.flow_type != delta.flow_type:
             conflicts["flow_type"] = {"existing": merged.flow_type, "incoming": delta.flow_type}
-            cleared_fields.extend(_cleared_context_fields(merged))
+            previous_identity = flow_identity_for_context(before)
+            dormant_flows = upsert_dormant_flow(
+                merged.dormant_flows,
+                _flow_context_without_history(before),
+            )
+            flow_events = [
+                _new_flow_event(
+                    "deactivate",
+                    source=source,
+                    flow_identity=previous_identity,
+                    details={"incoming_flow_type": delta.flow_type},
+                ),
+                *_flow_event_values(merged.flow_events),
+            ]
             merged = FlowState(flow_type=delta.flow_type, status=delta.status, flow_step=delta.flow_step)
+            merged.dormant_flows = dormant_flows
+            merged.flow_events = flow_events
             committed_fields.append("flow_type")
+            if previous_identity:
+                committed_fields.append("dormant_flows")
             existing_product = {}
             existing_vehicle = {}
             existing_schedule = {}
@@ -940,6 +1300,12 @@ class FlowState:
         if delta.candidates:
             merged.candidates = [dict(candidate) for candidate in delta.candidates]
             committed_fields.append("last_candidates")
+        if delta.dormant_flows:
+            merged.dormant_flows = prune_dormant_flows([*merged.dormant_flows, *delta.dormant_flows])
+            committed_fields.append("dormant_flows")
+        if delta.flow_events:
+            merged.flow_events = [*delta.flow_events, *merged.flow_events]
+            committed_fields.append("flow_events")
         merged.meta.update(_non_empty_mapping(delta.meta))
         merged.meta["source"] = source
         merged.meta["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
