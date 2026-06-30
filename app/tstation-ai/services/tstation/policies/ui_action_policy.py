@@ -69,6 +69,14 @@ _PRODUCT_SELECTION_INFO_QUERY_RE = re.compile(
 _PRODUCT_SELECTION_TRANSACTION_ACTION_RE = re.compile(
     r"(재고|장착|구매|예약|주문|가격|담아|장바구니|결제)"
 )
+_ORDER_HISTORY_LOOKUP_INPUT_RE = re.compile(
+    r"^"
+    r"(?:내\s*)?주문(?:\s*(?:내역|목록))?\s*(?:좀|쫌|한번|한\s*번)?\s*(?:보여|조회|확인|알려)?(?:줘|주세요)?|"
+    r"최근\s*주문(?:\s*내역)?\s*(?:좀|쫌|한번|한\s*번)?\s*(?:보여|조회|확인|알려)?(?:줘|주세요)?|"
+    r"내가\s*주문한\s*거\s*(?:좀|쫌|한번|한\s*번)?\s*(?:보여|조회|확인|알려)?(?:줘|주세요)?"
+    r"$",
+    re.IGNORECASE,
+)
 _PRODUCT_NAME_HINT_STOP_RE = re.compile(
     r"타이어|상품|제품|사이즈|규격|구매하고|구매|주문|결제|장착|장바구니|담|사려고|사려|사고|살래|"
     r"싶은데|싶|원해|주세요|해줘|할게|하고|가능|가격|재고|추천|찾|검색|\d+\s*개|는|은|\?",
@@ -5157,6 +5165,8 @@ def _region_store_input_values(
     block_region_text: bool = False,
 ) -> dict[str, Any]:
     text = str(user_text or "").strip()
+    if _ORDER_HISTORY_LOOKUP_INPUT_RE.search(text):
+        return {}
     parsed = ConversationSlots.extract_from_user_text(text)
     values: dict[str, Any] = {}
     label_match = _STORE_VIEW_LABEL_RE.fullmatch(text)
