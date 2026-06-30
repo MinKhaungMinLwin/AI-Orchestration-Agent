@@ -73,6 +73,7 @@ from services.tstation.policies.transaction_intent_policy import (
     plan_transaction_tools,
 )
 from services.tstation.policies.transaction_response_policy import decide_transaction_response
+from services.tstation.policies.slot_fill_policy import expected_slot_fill_precheck
 from services.tstation.policies.support_response_policy import (
     build_support_faq_evidence_grounded_reply,
     is_post_install_quality_claim,
@@ -24994,117 +24995,14 @@ class TStationChatServiceV2:
         router_context: Mapping[str, Any],
         region_store_input_resolution: RegionStoreInputContextResolution | None = None,
     ) -> dict[str, Any]:
-        current_flow = str(router_context.get("current_flow") or "none")
-        if current_flow not in {"quick_order_reservation", "stock_store_search", "store_schedule"}:
-            return {"matched": False, "reason": "no_active_flow"}
-        text = user_text or ""
-        if re.search(
-            r"보증|워런티|무상|품질|불량|환불|취소|쿠폰|사은품|문의|상담|클레임|고소|소송",
-            text,
-            re.IGNORECASE,
-        ):
-            return {"matched": False, "reason": "support_or_policy_anchor"}
-
-        missing_slots = {
-            str(slot or "").strip()
-            for slot in (router_context.get("missing_slots") or [])
-            if str(slot or "").strip()
-        }
-        last_requested_slot = str(router_context.get("last_requested_slot") or "none").strip()
-        slot_patch: dict[str, Any] = {}
-        filled_slot = "none"
-
-        if current_flow == "quick_order_reservation" and _resume_source_from_current_turn(text) != "none":
-            filled_slot = "purchase_anchor"
-            slot_patch.update({"pending_intent": "order", "goal_type": "place_order"})
-        elif "quantity" in missing_slots and getattr(regex_slots, "ord_qty", None) is not None:
-            filled_slot = "quantity"
-            slot_patch["ord_qty"] = regex_slots.ord_qty
-        elif (
-            region_store_input_resolution is not None
-            and region_store_input_resolution.resolved
-            and (
-                last_requested_slot in {"region", "store"}
-                or "region" in missing_slots
-                or "store" in missing_slots
-                or str(router_context.get("flow_step") or "") in {"show_store_candidates", "resolve_store"}
-            )
-        ):
-            filled_slot = (
-                "store"
-                if region_store_input_resolution.resume_source.endswith(":store")
-                or region_store_input_resolution.slots_to_promote.get("shop_id")
-                else "region"
-            )
-            slot_patch.update(dict(region_store_input_resolution.slots_to_promote or {}))
-        elif (
-            str(router_context.get("flow_step") or "") in {"show_store_candidates", "resolve_store"}
-            and current_flow in {"quick_order_reservation", "stock_store_search"}
-            and getattr(merged_slots, "goods_no", None)
-            and getattr(merged_slots, "ord_qty", None)
-            and (
-                getattr(merged_slots, "region", None)
-                or getattr(merged_slots, "shop_id", None)
-                or getattr(merged_slots, "shop_name", None)
-            )
-        ):
-            filled_slot = "store" if getattr(merged_slots, "shop_id", None) or getattr(merged_slots, "shop_name", None) else "region"
-            for key in (
-                "product_name",
-                "tire_model",
-                "pending_product_name",
-                "goods_no",
-                "tire_size",
-                "ord_qty",
-                "payment_amount",
-                "region",
-                "shop_id",
-                "shop_name",
-                "pending_intent",
-                "goal_type",
-                "availability_intent",
-                "requested_cal_day",
-                "stock_check_mode",
-            ):
-                value = getattr(merged_slots, key, None)
-                if value not in (None, "", [], {}):
-                    slot_patch[key] = value
-            if slot_patch.get("product_name") in (None, "", [], {}):
-                derived_product_name = slot_patch.get("tire_model") or slot_patch.get("pending_product_name")
-                if derived_product_name not in (None, "", [], {}):
-                    slot_patch["product_name"] = derived_product_name
-        elif (
-            ("schedule" in missing_slots or last_requested_slot == "schedule")
-            and getattr(merged_slots, "requested_cal_day", None)
-            and getattr(merged_slots, "rsv_hour", None)
-        ):
-            filled_slot = "schedule"
-            slot_patch.update({
-                "requested_cal_day": merged_slots.requested_cal_day,
-                "rsv_hour": merged_slots.rsv_hour,
-            })
-
-        if filled_slot == "none":
-            return {"matched": False, "reason": "input_does_not_fill_expected_slot"}
-
-        if current_flow == "quick_order_reservation":
-            slot_patch.setdefault("pending_intent", "order")
-            slot_patch.setdefault("goal_type", "place_order")
-        elif current_flow == "stock_store_search":
-            slot_patch.setdefault("pending_intent", "stock")
-            slot_patch.setdefault("goal_type", "store_with_stock")
-        elif current_flow == "store_schedule":
-            slot_patch.setdefault("pending_intent", "reservation")
-
-        return {
-            "matched": True,
-            "current_flow": current_flow,
-            "filled_slot": filled_slot,
-            "slot_patch": {key: value for key, value in slot_patch.items() if value not in (None, "", [], {})},
-            "resume_source": f"expected_slot_fill:{filled_slot}",
-            "flow_step_before": router_context.get("flow_step"),
-            "missing_slots": list(router_context.get("missing_slots") or []),
-        }
+        return expected_slot_fill_precheck(
+            user_text=user_text,
+            regex_slots=regex_slots,
+            merged_slots=merged_slots,
+            router_context=router_context,
+            region_store_input_resolution=region_store_input_resolution,
+            has_purchase_anchor=_resume_source_from_current_turn(user_text) != "none",
+        )
 
     @staticmethod
     def _inject_router_slot_fill_context(
