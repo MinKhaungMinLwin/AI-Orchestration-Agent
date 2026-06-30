@@ -3096,8 +3096,9 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
             rows = raw if isinstance(raw, list) else (raw.get("items") if isinstance(raw, dict) else [])
             if isinstance(rows, list) and any(isinstance(row, dict) for row in rows):
                 return None
+    prefer_transaction_product_clarify = _prefer_transaction_product_clarify(tool_data_list)
     discovery_policy_quickreply = _map_discovery_policy_quickreply(tool_data_list, assistant_text)
-    if discovery_policy_quickreply:
+    if discovery_policy_quickreply and not prefer_transaction_product_clarify:
         return discovery_policy_quickreply
     product_search_size_summary = _map_product_search_size_summary(tool_data_list)
     if product_search_size_summary:
@@ -3243,6 +3244,7 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
 
 
 def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None:
+    prefer_transaction_product_clarify = _prefer_transaction_product_clarify(tool_data_list)
     # Build goods_no → 회원 결제가 lookup from any get_final_price_tool calls in
     # this turn. Discovery's Flow B/C invokes get_final_price_tool in parallel
     # for each search result; pairing by `input.goods_no` is the only robust
@@ -3395,7 +3397,10 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
     # a product card should advance the flow (qty → shop → tool call), so the
     # FE must route to /chat instead of /append.
     short, response_source = _summarize_with_source(assistant_text, "product", len(items))
-    if (
+    if prefer_transaction_product_clarify:
+        short = "주문을 진행하려면 먼저 상품을 선택해 주세요."
+        response_source = "code_product_transaction_clarify"
+    elif (
         _has_current_turn_transaction_action("purchase_continuation", "stock_check")
         and _is_product_transaction_missing_size_turn()
         and not _find_entries(tool_data_list, "get_best_selling_products_tool")
@@ -3450,6 +3455,20 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
         },
         "assistant_response_source": response_source,
     }
+
+
+def _prefer_transaction_product_clarify(tool_data_list: list[dict]) -> bool:
+    decision = current_transaction_response_decision.get()
+    if decision is None:
+        return False
+    if str(decision.metadata.get("clarify_template") or "") != "product":
+        return False
+    for entry in _find_entries(tool_data_list, "search_product_tool"):
+        raw = _unwrap(entry)
+        rows = raw if isinstance(raw, list) else (raw.get("items") if isinstance(raw, dict) else [])
+        if isinstance(rows, list) and any(isinstance(row, dict) for row in rows):
+            return True
+    return False
 
 
 def inject_product_tags_and_sanitize(

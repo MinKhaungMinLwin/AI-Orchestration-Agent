@@ -885,6 +885,13 @@ def _decide_inventory_availability(
 def _decide_quick_order_reservation(*, slots: dict[str, Any]) -> ResponseDecision:
     flow_state = resolve_purchase_order_flow(intent="quick_order_reservation", known_slots=slots)
     if flow_state is not None:
+        metadata = {
+            "missing_slots": tuple(flow_state.missing_slots),
+            "flow_id": flow_state.flow_id,
+            "flow_step": flow_state.flow_step,
+        }
+        if flow_state.flow_step == "resolve_product":
+            metadata["clarify_template"] = "product"
         return _decision(
             response_shape_key=flow_state.response_shape_key,
             response_shape=_response_shape_from_template(flow_state.template),
@@ -892,11 +899,7 @@ def _decide_quick_order_reservation(*, slots: dict[str, Any]) -> ResponseDecisio
             required_slots=flow_state.missing_slots,
             forbidden_behaviors=tuple(flow_state.forbidden_tools),
             assistant_guidance=_purchase_flow_guidance(flow_state.flow_step),
-            metadata={
-                "missing_slots": tuple(flow_state.missing_slots),
-                "flow_id": flow_state.flow_id,
-                "flow_step": flow_state.flow_step,
-            },
+            metadata=metadata,
         )
     missing: list[str] = []
     if not (slots.get("goods_no") or slots.get("tire_size")):
@@ -960,6 +963,13 @@ def _decide_quick_order_reservation(*, slots: dict[str, Any]) -> ResponseDecisio
 def _decide_quick_order_execute(*, slots: dict[str, Any]) -> ResponseDecision:
     flow_state = resolve_purchase_order_flow(intent="quick_order_execute", known_slots=slots)
     if flow_state is not None:
+        metadata = {
+            "missing_slots": tuple(flow_state.missing_slots),
+            "flow_id": flow_state.flow_id,
+            "flow_step": flow_state.flow_step,
+        }
+        if flow_state.flow_step == "resolve_product":
+            metadata["clarify_template"] = "product"
         return _decision(
             response_shape_key=flow_state.response_shape_key,
             response_shape=_response_shape_from_template(flow_state.template),
@@ -967,11 +977,7 @@ def _decide_quick_order_execute(*, slots: dict[str, Any]) -> ResponseDecision:
             required_slots=flow_state.missing_slots,
             forbidden_behaviors=tuple(flow_state.forbidden_tools),
             assistant_guidance=_purchase_flow_guidance(flow_state.flow_step),
-            metadata={
-                "missing_slots": tuple(flow_state.missing_slots),
-                "flow_id": flow_state.flow_id,
-                "flow_step": flow_state.flow_step,
-            },
+            metadata=metadata,
         )
     missing: list[str] = []
     if not slots.get("goods_no"):
