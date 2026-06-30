@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import re
 from typing import Any, Mapping
 
 from schemas.tstation.slots import ConversationSlots
@@ -55,6 +56,7 @@ _FAST_PATH_DISCOVERY_RECOVERY_ALLOWED_TOOLS = frozenset({
     "get_my_cars_tool",
 })
 _DIRECT_SUPPORT_FAQ_POLICY_INTENTS = frozenset({
+    "card_installment_lookup",
     "coupon_usage_policy",
     "coupon_registration_policy",
     "signup_first_purchase_benefit_policy",
@@ -117,6 +119,37 @@ def _is_active_order_flow_slots(slots: Any | None) -> bool:
     if slots is None:
         return False
     return getattr(slots, "pending_intent", None) == "order" or getattr(slots, "goal_type", None) == "place_order"
+
+
+def _card_installment_payment_type_from_text(text: str) -> str:
+    normalized = str(text or "")
+    if re.search(r"(?:일반.{0,12}스마트\s*페이|스마트\s*페이.{0,12}일반|둘\s*다|둘다|모두|전체|비교)", normalized, re.IGNORECASE):
+        return "전체"
+    if re.search(r"스마트\s*페이|smart\s*pay|smartpay", normalized, re.IGNORECASE) and re.search(
+        r"현대카드|신한카드|삼성카드|국민카드|롯데카드|하나카드|농협카드|우리카드|비씨카드|BC카드|현대|신한|삼성|국민|롯데|하나|농협|우리|비씨|BC",
+        normalized,
+        re.IGNORECASE,
+    ):
+        return "전체"
+    if re.search(r"스마트\s*페이|smart\s*pay|smartpay", normalized, re.IGNORECASE):
+        return "스마트페이"
+    return "일반"
+
+
+def _card_installment_amount_from_text(text: str) -> int | None:
+    manwon_match = re.search(r"(\d{1,4}(?:\.\d+)?)\s*만\s*원", str(text or ""), re.IGNORECASE)
+    if manwon_match is not None:
+        try:
+            return int(float(manwon_match.group(1)) * 10000)
+        except (TypeError, ValueError):
+            return None
+    won_match = re.search(r"(\d{1,3}(?:,\d{3})+|\d{4,9})\s*원", str(text or ""), re.IGNORECASE)
+    if won_match is not None:
+        try:
+            return int(str(won_match.group(1)).replace(",", ""))
+        except (TypeError, ValueError):
+            return None
+    return None
 
 
 def _is_vehicle_selection_recommendation_contract(turn_contract: TurnContract | None) -> bool:
@@ -873,15 +906,23 @@ def _contract_required_tool_candidate(
             preferred_tool = contract_preferred_tool
         elif len(allowed_tools) == 1:
             preferred_tool = allowed_tools[0]
-        if preferred_tool != "search_faq_hybrid_tool":
-            return None
         if preferred_tool in forbidden_tools:
             return None
         if str(turn_contract.intent or "") not in _DIRECT_SUPPORT_FAQ_POLICY_INTENTS:
             return None
-        tool_input = {"query": user_text, "top_k": 8}
-        tool_input_source = "user_text"
-        display_name = "FAQ 확인 중..."
+        if preferred_tool == "search_faq_hybrid_tool":
+            tool_input = {"query": user_text, "top_k": 8}
+            tool_input_source = "user_text"
+            display_name = "FAQ 확인 중..."
+        elif preferred_tool == "get_card_installments_tool":
+            tool_input = {"payment_type": _card_installment_payment_type_from_text(user_text)}
+            tgt_amt = _card_installment_amount_from_text(user_text)
+            if tgt_amt is not None:
+                tool_input["tgt_amt"] = tgt_amt
+            tool_input_source = "user_text"
+            display_name = "무이자 할부 카드 조회 중..."
+        else:
+            return None
     elif domain == PolicyDomain.TRANSACTION.value:
         contract_preferred_tool = str(getattr(turn_contract, "preferred_tool", None) or "").strip()
         if contract_preferred_tool and contract_preferred_tool in allowed_tools and contract_preferred_tool not in forbidden_tools:

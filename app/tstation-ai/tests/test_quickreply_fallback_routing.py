@@ -21243,6 +21243,35 @@ def test_contract_required_tool_candidate_uses_contract_preferred_tool_args() ->
     assert candidate.source_domain == "transaction"
 
 
+def test_contract_required_tool_candidate_builds_card_installment_lookup_input() -> None:
+    contract = TurnContract(
+        domain="support",
+        intent="card_installment_lookup",
+        known_slots={"policy_intent": "payment_error_troubleshooting"},
+        allowed_tools=("get_card_installments_tool",),
+        preferred_tool="get_card_installments_tool",
+        forbidden_tools=("search_faq_hybrid_tool",),
+        blocking_required_slots=(),
+        context_state="active",
+        response_decision={
+            "template": "quickReply",
+            "metadata": {"response_shape_key": "card_installment_lookup"},
+        },
+    )
+
+    candidate = chat_module._contract_required_tool_candidate(
+        turn_contract=contract,
+        user_text="30만원 결제면 현대카드랑 스마트페이 무이자 몇개월 돼?",
+        merged_slots=ConversationSlots(),
+    )
+
+    assert candidate is not None
+    assert candidate.tool_name == "get_card_installments_tool"
+    assert candidate.tool_input == {"payment_type": "전체", "tgt_amt": 300000}
+    assert candidate.tool_input_source == "user_text"
+    assert candidate.source_domain == "support"
+
+
 def test_contract_required_tool_candidate_uses_owned_reservation_lookup_contract() -> None:
     contract = TurnContract(
         domain="transaction",
@@ -27813,6 +27842,8 @@ def test_payment_error_troubleshooting_contract_does_not_override_card_installme
 
     assert contract.domain == "support"
     assert contract.intent == "card_installment_lookup"
+    assert contract.allowed_tools == ("get_card_installments_tool",)
+    assert contract.preferred_tool == "get_card_installments_tool"
     assert "search_faq_hybrid_tool" not in contract.allowed_tools
     assert contract.known_slots["policy_intent"] == "payment_error_troubleshooting"
 
@@ -37339,6 +37370,74 @@ def test_support_faq_policy_context_resolves_external_tire_install() -> None:
         "policy_group": "reservation_installation_policy",
         "fact_type": "external_tire_install",
     }
+
+
+def test_support_faq_policy_reply_builds_card_installment_card_answer() -> None:
+    reply = build_support_faq_policy_reply(
+        intent="card_installment_lookup",
+        user_text="현대카드 무이자 할부 몇개월까지 돼?",
+        tool_result={
+            "status": "success",
+            "data": {
+                "cards": [
+                    {"iscm_nm": "현대카드", "months": [2, 3, 6], "payment_type": "일반"},
+                    {"iscm_nm": "현대카드", "months": [12, 24], "payment_type": "스마트페이"},
+                    {"iscm_nm": "신한카드", "months": [2, 3], "payment_type": "일반"},
+                ]
+            },
+        },
+    )
+
+    assert reply is not None
+    assert "**현대카드**" in reply["assistant_response"]
+    assert "2/3/6개월" in reply["assistant_response"]
+    assert "12/24개월" not in reply["assistant_response"]
+    assert [chip["label"] for chip in reply["quick_replies"]] == ["타이어 추천", "구매하기"]
+    assert reply["metadata"]["paymentType"] == "일반"
+
+
+def test_support_faq_policy_reply_builds_card_installment_month_answer() -> None:
+    reply = build_support_faq_policy_reply(
+        intent="card_installment_lookup",
+        user_text="12개월 무이자 어떤 카드 돼?",
+        tool_result={
+            "status": "success",
+            "data": {
+                "cards": [
+                    {"iscm_nm": "현대카드", "months": [2, 3, 6], "payment_type": "일반"},
+                    {"iscm_nm": "신한카드", "months": [12], "payment_type": "일반"},
+                    {"iscm_nm": "삼성카드", "months": [12, 24], "payment_type": "일반"},
+                ]
+            },
+        },
+    )
+
+    assert reply is not None
+    assert "**12개월 무이자**" in reply["assistant_response"]
+    assert "- 삼성카드" in reply["assistant_response"]
+    assert "- 신한카드" in reply["assistant_response"]
+
+
+def test_support_faq_policy_event_builds_card_installment_sections_for_all_payment_types() -> None:
+    event = _build_support_faq_policy_event(
+        "card_installment_lookup",
+        "일반 무이자랑 스마트페이 둘 다 알려줘",
+        tool_result={
+            "status": "success",
+            "data": {
+                "cards": [
+                    {"iscm_nm": "현대카드", "months": [2, 3, 6], "payment_type": "일반"},
+                    {"iscm_nm": "현대카드", "months": [12, 24], "payment_type": "스마트페이"},
+                ]
+            },
+        },
+    )
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    assert "**일반 카드 무이자 기준**" in event["data"]["assistantResponse"]
+    assert "**스마트페이 기준**" in event["data"]["assistantResponse"]
+    assert event["data"]["metadata"]["paymentType"] == "전체"
 
 
 def test_support_faq_policy_reply_filters_wrong_categories_for_visit_cancel() -> None:

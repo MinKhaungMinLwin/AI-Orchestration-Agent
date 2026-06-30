@@ -239,6 +239,7 @@ _REFERENCE_GUARD_EXEMPT_DISCOVERY_PLAN_TOKENS = frozenset({
     "oe_part_number_unavailable",
 })
 ROUTER_WINS_INFORMATIONAL_INTENTS = frozenset({
+    "card_installment_lookup",
     "product_detail_lookup",
     "product_description",
     "product_comparison",
@@ -283,6 +284,7 @@ ROUTER_WINS_EXECUTION_BOUNDARY_INTENTS = frozenset({
     "store_recommendation_by_vehicle_experience",
 })
 _SUPPORT_FAQ_POLICY_TOOL_INTENTS = frozenset({
+    "card_installment_lookup",
     "general_cancel_fee_policy",
     "general_card_cancel_timing_policy",
     "payment_error_troubleshooting",
@@ -567,6 +569,17 @@ def build_turn_contract(
             planner_intent = "tire_manufacture_date_policy"
         if code_intent == "tire_quality_warranty_policy":
             code_intent = "tire_manufacture_date_policy"
+    if _should_force_card_installment_lookup_intent(
+        user_text=user_text,
+        planner_intent=planner_intent,
+        policy_intent=policy_intent,
+        code_intent=code_intent,
+        domain=code_domain,
+        planner_domains=planner_domains,
+    ):
+        code_domain = "support"
+        code_intent = "card_installment_lookup"
+        router_wins_intent = "card_installment_lookup"
     domain = planner_domains[0] if planner_domains else code_domain
     intent = planner_intent or code_intent
     if router_wins_intent:
@@ -750,6 +763,9 @@ def build_turn_contract(
     if code_intent == "delivery_delay_reservation_schedule_policy" or planner_intent == "delivery_delay_reservation_schedule_policy":
         domain = "support"
         intent = "delivery_delay_reservation_schedule_policy"
+    if code_intent == "card_installment_lookup" or planner_intent == "card_installment_lookup":
+        domain = "support"
+        intent = "card_installment_lookup"
     if code_intent == "general_card_cancel_timing_policy" or planner_intent == "general_card_cancel_timing_policy":
         domain = "support"
         intent = "general_card_cancel_timing_policy"
@@ -1046,6 +1062,24 @@ def build_turn_contract(
                 "get_final_price_tool",
             ),
         )
+    if intent == "card_installment_lookup":
+        allowed_tools = ("get_card_installments_tool",)
+        forbidden_tools = _merge_tuple(
+            tuple(tool for tool in forbidden_tools if tool != "get_card_installments_tool"),
+            (
+                "search_faq_hybrid_tool",
+                "search_faq_rag_tool",
+                "get_faq_tool",
+                "transfer_to_qna_tool",
+                "search_product_tool",
+                "get_final_price_tool",
+            ),
+        )
+        preferred_tool = "get_card_installments_tool"
+        required_slots = ()
+        resolvable_required_slots = ()
+        blocking_required_slots = ()
+        blocking_required_slots_source = "card_installment_lookup_contract"
     if intent == "coupon_stacking_policy":
         allowed_tools = _merge_tuple(
             allowed_tools,
@@ -1511,6 +1545,8 @@ def _default_preferred_tool_for_boundary(
     preferred = preferred_by_intent.get(intent)
     if preferred and preferred in allowed_tools and preferred not in forbidden_tools:
         return preferred
+    if intent == "card_installment_lookup" and "get_card_installments_tool" in allowed_tools:
+        return "get_card_installments_tool"
     if intent in _SUPPORT_FAQ_POLICY_TOOL_INTENTS and "search_faq_hybrid_tool" in allowed_tools:
         return "search_faq_hybrid_tool"
     return next((tool for tool in allowed_tools if tool not in forbidden_tools), None)
@@ -1524,6 +1560,7 @@ def _support_answer_contract_owns_response(*, domain: str, intent: str, action_m
     if normalized_mode in _SUPPORT_ANSWER_ACTION_MODES:
         return True
     if normalized_intent in {
+        "card_installment_lookup",
         "human_escalation",
         "legal_action_guidance_denied",
         "support_faq",
@@ -4412,6 +4449,32 @@ def _is_payment_error_policy_overmatch(user_text: str | None) -> bool:
     )
 
 
+def _should_force_card_installment_lookup_intent(
+    *,
+    user_text: str,
+    planner_intent: str | None,
+    policy_intent: str | None,
+    code_intent: str | None,
+    domain: str | None,
+    planner_domains: tuple[str, ...],
+) -> bool:
+    text = str(user_text or "")
+    if _CARD_INSTALLMENT_LOOKUP_RE.search(text) is None:
+        return False
+    if _PAYMENT_TROUBLESHOOTING_RE.search(text) is not None:
+        return False
+    candidates = {
+        str(planner_intent or "").strip(),
+        str(policy_intent or "").strip(),
+        str(code_intent or "").strip(),
+        str(domain or "").strip(),
+        *(str(item or "").strip() for item in planner_domains),
+    }
+    if "card_installment_lookup" in candidates:
+        return True
+    return "support" in candidates or "payment_error_troubleshooting" in candidates
+
+
 def _comparison_router_wins_intent(
     *,
     routing_result: Any | None,
@@ -4635,6 +4698,17 @@ def _router_wins_tool_boundary(intent: str) -> tuple[tuple[str, ...], tuple[str,
                 if tool != "get_my_warranties_tool"
             ),
         )
+    if intent == "card_installment_lookup":
+        allowed_tools = ("get_card_installments_tool",)
+        return (
+            allowed_tools,
+            tuple(
+                tool
+                for tool in _ROUTER_WINS_TRANSACTION_FORBIDDEN_TOOLS
+                | {"search_faq_hybrid_tool", "transfer_to_qna_tool"}
+                if tool not in allowed_tools
+            ),
+        )
     if intent in _SUPPORT_FAQ_POLICY_TOOL_INTENTS:
         return (
             _SUPPORT_SAFE_AGENT_TOOLS,
@@ -4750,6 +4824,16 @@ def _router_wins_response_decision(intent: str) -> dict[str, Any]:
             "answer_without_owned_warranty_lookup",
             "normalize_as_service_complaint",
             "transfer_to_qna_direct_first",
+        ]
+    elif intent == "card_installment_lookup":
+        guidance = (
+            "카드사별 무이자 할부 문의는 search_faq_hybrid_tool이 아니라 get_card_installments_tool로만 처리한다. "
+            "카드사/개월수/스마트페이 여부에 맞춰 결과를 필터링하고, 일반 카드 무이자와 스마트페이 개월수는 합산하지 않는다."
+        )
+        forbidden_behaviors = [
+            "route_to_payment_error_troubleshooting",
+            "generic_faq_answer",
+            "merge_general_and_smartpay_installments",
         ]
     elif intent == "coupon_stacking_policy":
         response_shape = "clarify"
