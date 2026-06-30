@@ -128,6 +128,11 @@ _RESERVATION_MANAGEMENT_FLOW_INTENTS = frozenset({
     "reservation_window_policy",
     "delivery_delay_reservation_schedule_policy",
 })
+_RESERVATION_POLICY_ONLY_FLOW_INTENTS = frozenset({
+    "general_cancel_fee_policy",
+    "reservation_window_policy",
+    "delivery_delay_reservation_schedule_policy",
+})
 _DISCOVERY_FLOW_INTENTS = frozenset({
     "product_search",
     "product_recommendation",
@@ -1079,6 +1084,12 @@ def _router_plan_has_intent(router_evidence: Mapping[str, Any], *intents: str) -
     return any(any(intent in item for intent in intents) for item in execution_plan)
 
 
+def _router_has_support_anchor(router_evidence: Mapping[str, Any]) -> bool:
+    router_domain = str(router_evidence.get("domain") or "").strip()
+    execution_plan = _router_execution_plan(router_evidence)
+    return router_domain == "support" or any(item.startswith("support:") for item in execution_plan)
+
+
 def _current_turn_service_maintenance_intent(router_evidence: Mapping[str, Any]) -> str:
     router_intent = str(router_evidence.get("intent") or "").strip()
     if router_intent in _SERVICE_MAINTENANCE_FLOW_INTENTS:
@@ -1158,10 +1169,14 @@ def _current_turn_service_maintenance_flow_context(
 
 def _current_turn_reservation_management_intent(router_evidence: Mapping[str, Any]) -> str:
     router_intent = str(router_evidence.get("intent") or "").strip()
+    if router_intent in _RESERVATION_POLICY_ONLY_FLOW_INTENTS and _router_has_support_anchor(router_evidence):
+        return ""
     if router_intent in _RESERVATION_MANAGEMENT_FLOW_INTENTS:
         return router_intent
     for intent in _RESERVATION_MANAGEMENT_FLOW_INTENTS:
         if _router_plan_has_intent(router_evidence, intent):
+            if intent in _RESERVATION_POLICY_ONLY_FLOW_INTENTS and _router_has_support_anchor(router_evidence):
+                return ""
             return intent
     return ""
 
@@ -1335,8 +1350,8 @@ def transition_current_flow(
         or selected_quantity_flow_context
         or selected_store_flow_context
         or current_turn_service_maintenance_flow_context
-        or current_turn_reservation_management_flow_context
         or current_turn_support_flow_context
+        or current_turn_reservation_management_flow_context
         or current_turn_store_search_flow_context
         or current_turn_discovery_flow_context
     )
@@ -1349,10 +1364,10 @@ def transition_current_flow(
         applied_reason = "selected_store_flow_state"
     elif current_turn_service_maintenance_flow_context:
         applied_reason = "current_turn_service_maintenance_flow_state"
-    elif current_turn_reservation_management_flow_context:
-        applied_reason = "current_turn_reservation_management_flow_state"
     elif current_turn_support_flow_context:
         applied_reason = "current_turn_support_flow_state"
+    elif current_turn_reservation_management_flow_context:
+        applied_reason = "current_turn_reservation_management_flow_state"
     elif current_turn_store_search_flow_context:
         applied_reason = "current_turn_store_search_flow_state"
     elif current_turn_discovery_flow_context:
