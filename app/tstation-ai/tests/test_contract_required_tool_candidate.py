@@ -1,4 +1,7 @@
-from services.tstation.policies.contract_required_tool_candidate import _contract_required_tool_candidate
+from services.tstation.policies.contract_required_tool_candidate import (
+    _contract_required_tool_candidate,
+    _is_contract_required_selected_store_schedule,
+)
 from services.tstation.policies.turn_contract import TurnContract
 
 
@@ -131,3 +134,34 @@ def test_purchase_store_preview_candidate_uses_contract_patch() -> None:
     assert candidate.tool_input["region"] == "분당"
     assert candidate.tool_input["include_price"] is True
     assert candidate.tool_input["quantity"] == 4
+
+
+def test_selected_store_schedule_requires_datepick_contract_boundary() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="selected_store_schedule",
+        allowed_tools=("get_store_schedule_tool",),
+        response_decision={
+            "template": "location",
+            "metadata": {"response_shape_key": "reservation_store_candidates"},
+        },
+        context_state="active",
+    )
+
+    assert _is_contract_required_selected_store_schedule(contract, merged_slots=None) is False
+
+
+def test_selected_store_schedule_rejects_forbidden_schedule_tool() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="selected_store_schedule",
+        allowed_tools=("get_store_schedule_tool",),
+        forbidden_tools=("get_store_schedule_tool",),
+        response_decision={
+            "template": "datepick",
+            "metadata": {"response_shape_key": "reservation_slots"},
+        },
+        context_state="active",
+    )
+
+    assert _is_contract_required_selected_store_schedule(contract, merged_slots=None) is False
