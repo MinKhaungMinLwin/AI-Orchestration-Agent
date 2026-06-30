@@ -1694,7 +1694,8 @@ def build_purchase_flow_fallback_event(
     tool_data_list: list[dict] | None = None,
     blocked_tool: str | None = None,
 ) -> dict[str, Any] | None:
-    state = flow_state or resolve_purchase_order_flow(intent=intent or "", known_slots=known_slots)
+    normalized_intent = _purchase_flow_intent(intent=intent or "", known_slots=known_slots)
+    state = flow_state or resolve_purchase_order_flow(intent=normalized_intent, known_slots=known_slots)
     if state is None:
         return None
 
@@ -1702,7 +1703,7 @@ def build_purchase_flow_fallback_event(
     resolved_product = _resolved_purchase_product(slots=slots, tool_data_list=tool_data_list)
     merged_slots = {**slots, **resolved_product}
     if resolved_product:
-        resumed_state = resolve_purchase_order_flow(intent=intent or "", known_slots=merged_slots)
+        resumed_state = resolve_purchase_order_flow(intent=normalized_intent, known_slots=merged_slots)
         if resumed_state is not None:
             state = resumed_state
     metadata = {
@@ -1751,6 +1752,18 @@ def build_purchase_flow_fallback_event(
             "metadata": metadata,
         },
     }
+
+
+def _purchase_flow_intent(*, intent: str, known_slots: Mapping[str, Any] | None) -> str:
+    normalized = str(intent or "").strip()
+    if normalized in {"quick_order_reservation", "quick_order_reservation_continue", "quick_order_execute"}:
+        return normalized
+    slots = dict(known_slots or {})
+    pending_intent = str(slots.get("pending_intent") or slots.get("pendingIntent") or "").strip()
+    goal_type = str(slots.get("goal_type") or slots.get("goalType") or "").strip()
+    if pending_intent in {"order", "cart"} or goal_type in {"place_order", "add_to_cart"}:
+        return "quick_order_reservation"
+    return normalized
 
 
 def build_selected_store_confirmation_event(
@@ -1999,6 +2012,15 @@ def _purchase_product_resolution_event(
             },
         }
 
+    product_card_event = _purchase_product_card_selection_event(
+        rows=matched_rows,
+        slots=slots,
+        metadata=metadata,
+        product_label=product_label,
+    )
+    if product_card_event is not None:
+        return product_card_event
+
     candidate_quick_replies = _purchase_product_candidate_quick_replies(
         rows=matched_rows,
         slots=slots,
@@ -2041,6 +2063,146 @@ def _purchase_product_resolution_event(
             "metadata": {**metadata, "candidateCount": len(matched_rows), "sizes": sizes},
         },
     }
+
+
+def _purchase_product_card_selection_event(
+    *,
+    rows: list[dict[str, Any]],
+    slots: Mapping[str, Any],
+    metadata: Mapping[str, Any],
+    product_label: str,
+) -> dict[str, Any] | None:
+    if len(rows) <= 1:
+        return None
+    if not normalize_tire_size(str(slots.get("tire_size") or "")):
+        return None
+
+    products: list[dict[str, Any]] = []
+    product_metadata: list[dict[str, Any]] = []
+    context = _purchase_context_metadata(slots)
+    seen_goods_no: set[str] = set()
+    for row in rows[:10]:
+        goods_no = str(row.get("goods_no") or "").strip()
+        if goods_no and goods_no in seen_goods_no:
+            continue
+        goods_nm = str(row.get("goods_nm") or product_label or "").strip()
+        tire_size = normalize_tire_size(str(row.get("tire_size_1") or row.get("tire_size") or slots.get("tire_size") or ""))
+        price = _row_display_price(row)
+        original_price = _row_int(row, "sale_prc")
+        discount_amount = original_price - price if original_price and price and original_price > price else None
+        discount_rate = round(discount_amount / original_price * 100, 1) if original_price and discount_amount else None
+        products.append({
+            "imageUrl": str(row.get("image_url") or ""),
+            "title": f"{goods_nm} {tire_size}".strip() if tire_size else goods_nm,
+            "tires": "",
+            "titleProductName": goods_nm,
+            "titleTires": tire_size,
+            "brandName": str(row.get("brand_nm") or "HANKOOK").strip() or "HANKOOK",
+            "oeBadgeYn": str(row.get("oe_badge_yn") or ""),
+            "oeMaker": str(row.get("t_oe_maker_1") or ""),
+            "smrtPayYn": str(row.get("smrt_pay_yn") or ""),
+            "comfort": "",
+            "price": price,
+            "originalPrice": original_price,
+            "discountRate": discount_rate,
+            "discountAmount": discount_amount,
+            "rate": float(_row_number(row, "rate", "rating_avg", default=0.0)),
+            "totalQuantity": int(_row_number(row, "totalQuantity", "total_qty", default=0)),
+            "tags": _purchase_product_tags(row),
+            "description": "",
+        })
+        product_metadata.append({
+            "goodsId": goods_no,
+            "goodsNo": goods_no,
+            "productName": goods_nm,
+            "tireSize": tire_size,
+            **context,
+        })
+        if goods_no:
+            seen_goods_no.add(goods_no)
+
+    if not products:
+        return None
+    return {
+        "type": "data",
+        "template": "product",
+        "source_domain": "discovery",
+        "assistant_response_source": "code_purchase_flow_product_selection",
+        "called_tools": ["search_product_tool"],
+        "data": {
+            "assistantResponse": f"{product_label} 조건으로 확인되는 상품이 여러 개예요. 원하시는 상품을 선택해 주세요.",
+            "products": products,
+            "metadata": product_metadata,
+            "isBookingFlow": True,
+            "flowMetadata": {**dict(metadata), "candidateCount": len(rows)},
+        },
+    }
+
+
+def _purchase_context_metadata(slots: Mapping[str, Any]) -> dict[str, Any]:
+    context: dict[str, Any] = {
+        "pendingIntent": str(slots.get("pending_intent") or "order"),
+        "goalType": str(slots.get("goal_type") or "place_order"),
+        "flowId": _PURCHASE_FLOW_ID,
+        "flowStep": "resolve_product",
+    }
+    for source_key, target_key in (
+        ("ord_qty", "ordQty"),
+        ("quantity", "ordQty"),
+        ("shop_id", "shopId"),
+        ("shop_name", "shopName"),
+        ("store_name", "storeName"),
+        ("requested_cal_day", "requestedCalDay"),
+        ("rsv_hour", "rsvHour"),
+    ):
+        value = slots.get(source_key)
+        if value not in (None, "", [], {}) and target_key not in context:
+            context[target_key] = value
+    return context
+
+
+def _row_display_price(row: Mapping[str, Any]) -> int | None:
+    for key in ("cheapest_final_prc", "final_unit_price", "final_prc", "extra_fvr_sale_prc", "price", "sale_prc"):
+        value = _row_int(row, key)
+        if value:
+            return value
+    return None
+
+
+def _row_int(row: Mapping[str, Any], key: str) -> int | None:
+    value = row.get(key)
+    if value in (None, ""):
+        return None
+    try:
+        return int(float(str(value).replace(",", "").strip()))
+    except (TypeError, ValueError):
+        return None
+
+
+def _row_number(row: Mapping[str, Any], *keys: str, default: float = 0.0) -> float:
+    for key in keys:
+        value = row.get(key)
+        if value in (None, ""):
+            continue
+        try:
+            return float(str(value).replace(",", "").strip())
+        except (TypeError, ValueError):
+            continue
+    return default
+
+
+def _purchase_product_tags(row: Mapping[str, Any]) -> list[dict[str, Any]]:
+    tags: list[dict[str, Any]] = []
+    prc_grd = str(row.get("prc_grd_nm") or "").strip()
+    if prc_grd:
+        tags.append({"text": prc_grd, "primary": True})
+    detail = str(row.get("goods_dtl_pfm_nm") or "").strip()
+    absorber = str(row.get("sound_absorber_yn") or "").strip().upper()
+    if detail:
+        tags.append({"text": detail, "primary": False})
+    elif absorber == "Y":
+        tags.append({"text": "흡음재", "primary": False})
+    return tags[:3]
 
 
 def _purchase_product_candidate_quick_replies(
