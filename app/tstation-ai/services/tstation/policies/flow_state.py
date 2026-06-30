@@ -65,6 +65,9 @@ _INTENT_FIELDS = (
     "availability_intent",
     "store_search_condition",
     "requested_vehicle_experience",
+    "support_topic",
+    "faq_topic",
+    "policy_topic",
 )
 _FLOW_PROGRESS_META_FIELDS = (
     "target_action",
@@ -84,6 +87,7 @@ _ACTIVE_FLOW_TYPES = {
     "store_schedule",
     "store_service_search",
     "favorite_store",
+    "support",
 }
 _STORE_CANDIDATE_SOURCE_TOOLS = {
     "transaction_store_preview_tool",
@@ -379,6 +383,12 @@ def flow_identity_for_context(context: Mapping[str, Any] | None) -> str:
         ).strip()
         tire_size = _normalize_vehicle_tire_size(product.get("tire_size") or vehicle.get("tire_size"))
         parts = [flow_type, scenario, vehicle_key, tire_size]
+    elif flow_type == "support":
+        policy_key = str(
+            _first_non_empty(intent.get("pending_intent"), intent.get("policy_topic"), intent.get("faq_topic"), intent.get("goal_type"))
+            or ""
+        ).strip()
+        parts = [flow_type, policy_key]
     else:
         parts = [flow_type]
 

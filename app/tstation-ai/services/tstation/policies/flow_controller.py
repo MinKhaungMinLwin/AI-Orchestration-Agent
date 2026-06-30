@@ -109,6 +109,73 @@ _STORE_SEARCH_FLOW_INTENTS = frozenset({
     "store_service_search",
     "store_recommendation_by_vehicle_experience",
 })
+_DISCOVERY_FLOW_INTENTS = frozenset({
+    "product_search",
+    "product_recommendation",
+    "general_recommendation",
+    "condition_recommendation",
+    "similar_price_recommendation",
+    "vehicle_based_recommendation_refinement",
+    "vehicle_based_tire_recommendation",
+    "vehicle_resolved_recommendation",
+    "best_seller_search",
+    "vehicle_best_seller_search",
+    "resolve_or_describe_product",
+})
+_DISCOVERY_EXECUTION_PLAN_TOKENS = frozenset({
+    "product_search",
+    "product_recommendation",
+    "general_recommendation",
+    "condition_recommendation",
+    "similar_price_recommendation",
+    "vehicle_based_recommendation_refinement",
+    "vehicle_based_tire_recommendation",
+    "vehicle_resolved_recommendation",
+    "best_seller_search",
+    "get_best_selling_tires_for_vehicle",
+    "get_best_selling_product_for_vehicle",
+    "get_best_selling_products_for_vehicle",
+    "get_best_selling_products_for_vehicle_timeframe",
+    "get_products_recommendations_tool",
+    "search_product_tool",
+})
+_SUPPORT_FLOW_INTENTS = frozenset({
+    "support_faq",
+    "coupon_usage_policy",
+    "coupon_registration_policy",
+    "coupon_stacking_policy",
+    "signup_first_purchase_benefit_policy",
+    "signup_coupon_guidance",
+    "partner_member_coupon_policy",
+    "general_cancel_fee_policy",
+    "general_card_cancel_timing_policy",
+    "reservation_policy_guidance",
+    "reservation_window_policy",
+    "installation_work_policy",
+    "external_tire_install_policy",
+    "promotion_gift_policy",
+    "tire_condition_photo_policy",
+    "tire_manufacture_date_policy",
+    "tire_quality_warranty_policy",
+    "assurance_service_policy",
+    "maintenance_history_access_policy",
+    "order_document_guidance",
+    "payment_error_troubleshooting",
+    "shipping_fee_policy",
+    "online_store_price_policy",
+    "regional_price_policy",
+    "legal_action_guidance_denied",
+    "human_escalation",
+    "tstation_service_complaint",
+    "policy_notice_or_escalation",
+})
+_SUPPORT_EXECUTION_PLAN_TOKENS = frozenset({
+    "support_faq",
+    "search_faq_hybrid_tool",
+    "search_faq_rag_tool",
+    "get_faq_tool",
+    *_SUPPORT_FLOW_INTENTS,
+})
 
 
 def _normalized_region_text(value: Any) -> str:
@@ -193,6 +260,14 @@ def _compact_slot_snapshot(slots: Any | Mapping[str, Any] | None) -> dict[str, A
         "place_query",
         "store_search_condition",
         "requested_vehicle_experience",
+        "recommendation_scenario",
+        "scenario",
+        "rcmd_type",
+        "season_nm",
+        "brand_cd",
+        "support_topic",
+        "faq_topic",
+        "policy_topic",
         "pending_intent",
         "goal_type",
         "requested_cal_day",
@@ -841,6 +916,139 @@ def _current_turn_store_search_flow_context(
     }
 
 
+def _current_turn_discovery_intent(router_evidence: Mapping[str, Any]) -> str:
+    router_intent = str(router_evidence.get("intent") or "").strip()
+    router_domain = str(router_evidence.get("domain") or "").strip()
+    execution_plan = _router_execution_plan(router_evidence)
+    plan_tokens = {item.split(":", 1)[-1].strip() for item in execution_plan}
+    if router_domain == "discovery" and router_intent in _DISCOVERY_FLOW_INTENTS:
+        return router_intent
+    if router_intent in _DISCOVERY_FLOW_INTENTS and any(item.startswith("discovery:") for item in execution_plan):
+        return router_intent
+    for token in plan_tokens:
+        if token in _DISCOVERY_EXECUTION_PLAN_TOKENS:
+            return token
+    return ""
+
+
+def _current_turn_discovery_flow_context(
+    *,
+    router_evidence: Mapping[str, Any],
+    existing_snapshot: Mapping[str, Any],
+    extracted_snapshot: Mapping[str, Any],
+) -> dict[str, Any]:
+    intent = _current_turn_discovery_intent(router_evidence)
+    if not intent:
+        return {}
+
+    scenario = str(
+        extracted_snapshot.get("recommendation_scenario")
+        or existing_snapshot.get("recommendation_scenario")
+        or extracted_snapshot.get("scenario")
+        or existing_snapshot.get("scenario")
+        or router_evidence.get("recommendation_scenario")
+        or ""
+    ).strip()
+    recommendation = {
+        key: value
+        for key, value in {
+            "scenario": scenario,
+            "recommendation_scenario": scenario,
+            "rcmd_type": extracted_snapshot.get("rcmd_type") or existing_snapshot.get("rcmd_type"),
+            "season_nm": extracted_snapshot.get("season_nm") or existing_snapshot.get("season_nm"),
+            "brand_cd": extracted_snapshot.get("brand_cd") or existing_snapshot.get("brand_cd"),
+            "source_text": router_evidence.get("source_text"),
+        }.items()
+        if value not in (None, "", [], {})
+    }
+    product = {
+        key: value
+        for key, value in {
+            "product_name": extracted_snapshot.get("product_name") or existing_snapshot.get("product_name"),
+            "tire_model": extracted_snapshot.get("tire_model") or existing_snapshot.get("tire_model"),
+            "pending_product_name": extracted_snapshot.get("pending_product_name")
+            or existing_snapshot.get("pending_product_name"),
+            "tire_size": extracted_snapshot.get("tire_size") or existing_snapshot.get("tire_size"),
+        }.items()
+        if value not in (None, "", [], {})
+    }
+    vehicle = {
+        key: value
+        for key, value in {
+            "car_no": extracted_snapshot.get("car_no") or existing_snapshot.get("car_no"),
+            "requested_vehicle_name": extracted_snapshot.get("requested_vehicle_name")
+            or existing_snapshot.get("requested_vehicle_name"),
+            "tire_size": extracted_snapshot.get("tire_size") or existing_snapshot.get("tire_size"),
+        }.items()
+        if value not in (None, "", [], {})
+    }
+    flow_step = "recommend"
+    if intent in {"vehicle_based_recommendation_refinement", "vehicle_based_tire_recommendation", "vehicle_resolved_recommendation"}:
+        flow_step = "select_vehicle"
+    if intent in {"product_search", "resolve_or_describe_product"}:
+        flow_step = "search_product"
+
+    return {
+        key: value
+        for key, value in {
+            "flow_type": "recommendation",
+            "status": "active",
+            "flow_step": flow_step,
+            "product": product,
+            "vehicle": vehicle,
+            "recommendation": recommendation,
+            "intent": {
+                "pending_intent": intent,
+                "goal_type": "recommend_tire" if "recommend" in intent or "best_selling" in intent else "product_search",
+            },
+            "source": "flow_controller:current_turn_discovery",
+        }.items()
+        if value not in (None, "", [], {})
+    }
+
+
+def _current_turn_support_intent(router_evidence: Mapping[str, Any]) -> str:
+    router_intent = str(router_evidence.get("intent") or "").strip()
+    router_domain = str(router_evidence.get("domain") or "").strip()
+    execution_plan = _router_execution_plan(router_evidence)
+    plan_tokens = {item.split(":", 1)[-1].strip() for item in execution_plan}
+    if router_domain == "support" and (router_intent in _SUPPORT_FLOW_INTENTS or router_intent):
+        return router_intent or "support_faq"
+    if router_intent in _SUPPORT_FLOW_INTENTS and any(item.startswith("support:") for item in execution_plan):
+        return router_intent
+    for token in plan_tokens:
+        if token in _SUPPORT_EXECUTION_PLAN_TOKENS:
+            return token if token in _SUPPORT_FLOW_INTENTS else router_intent or "support_faq"
+    return ""
+
+
+def _current_turn_support_flow_context(*, router_evidence: Mapping[str, Any]) -> dict[str, Any]:
+    intent = _current_turn_support_intent(router_evidence)
+    if not intent:
+        return {}
+    return {
+        key: value
+        for key, value in {
+            "flow_type": "support",
+            "status": "active",
+            "flow_step": "answer_faq",
+            "intent": {
+                key: value
+                for key, value in {
+                    "pending_intent": intent,
+                    "goal_type": "support_faq",
+                    "support_topic": router_evidence.get("support_topic"),
+                    "faq_topic": router_evidence.get("faq_topic"),
+                    "policy_topic": router_evidence.get("policy_topic") or intent,
+                }.items()
+                if value not in (None, "", [], {})
+            },
+            "source": "flow_controller:current_turn_support",
+        }.items()
+        if value not in (None, "", [], {})
+    }
+
+
 def _transition_kind(
     current_flow_state: Mapping[str, Any],
     parent_flow_state: Mapping[str, Any],
@@ -925,11 +1133,19 @@ def transition_current_flow(
         existing_snapshot=existing_snapshot,
         extracted_snapshot=extracted_snapshot,
     )
+    current_turn_discovery_flow_context = _current_turn_discovery_flow_context(
+        router_evidence=router_snapshot,
+        existing_snapshot=existing_snapshot,
+        extracted_snapshot=extracted_snapshot,
+    )
+    current_turn_support_flow_context = _current_turn_support_flow_context(router_evidence=router_snapshot)
     active_flow_context = (
         selected_product_flow_context
         or selected_quantity_flow_context
         or selected_store_flow_context
+        or current_turn_support_flow_context
         or current_turn_store_search_flow_context
+        or current_turn_discovery_flow_context
     )
     applied_reason = "metadata_only_shell"
     if selected_product_flow_context:
@@ -938,8 +1154,12 @@ def transition_current_flow(
         applied_reason = "selected_quantity_flow_state"
     elif selected_store_flow_context:
         applied_reason = "selected_store_flow_state"
+    elif current_turn_support_flow_context:
+        applied_reason = "current_turn_support_flow_state"
     elif current_turn_store_search_flow_context:
         applied_reason = "current_turn_store_search_flow_state"
+    elif current_turn_discovery_flow_context:
+        applied_reason = "current_turn_discovery_flow_state"
     current_turn_seed = _current_turn_flow_seed(router_snapshot)
     contract_seed = {
         "router_evidence": router_snapshot,
@@ -960,6 +1180,8 @@ def transition_current_flow(
         "selected_quantity": selected_quantity,
         "selected_store": selected_store,
         "current_turn_store_search_flow": current_turn_store_search_flow_context,
+        "current_turn_discovery_flow": current_turn_discovery_flow_context,
+        "current_turn_support_flow": current_turn_support_flow_context,
     }
     context_evidence = {key: value for key, value in context_evidence.items() if value not in (None, "", [], {})}
     metadata = {
@@ -976,6 +1198,8 @@ def transition_current_flow(
         "selected_quantity_resolved": bool(selected_quantity),
         "selected_store_resolved": bool(selected_store),
         "current_turn_store_search_resolved": bool(current_turn_store_search_flow_context),
+        "current_turn_discovery_resolved": bool(current_turn_discovery_flow_context),
+        "current_turn_support_resolved": bool(current_turn_support_flow_context),
         "user_text_present": bool(str(user_text or "").strip()),
     }
     return FlowTransition(

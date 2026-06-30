@@ -13586,24 +13586,24 @@ def test_apply_router_evidence_snapshot_keeps_pre_override_router_intent() -> No
     assert updated.goal_type is None
 
 
-def test_flow_transition_shell_separates_current_recommendation_from_parent_order_context() -> None:
+def test_flow_transition_discovery_recommendation_switches_active_purchase_to_recommendation() -> None:
     slots = ConversationSlots(
         ord_qty=4,
         shop_name="광교신도시점",
         tire_size="235/55R19",
         availability_context={
             "active_flow_context": {
-                "flow_type": "recommendation",
+                "flow_type": "purchase",
                 "status": "active",
-                "flow_step": "select_vehicle",
-                "intent": {"pending_intent": "product_recommendation", "goal_type": "recommend_tire"},
-            },
-            "pending_order_context": {
-                "ord_qty": 4,
-                "shop_name": "광교신도시점",
-                "tire_size": "235/55R19",
-                "pending_intent": "order",
-                "goal_type": "place_order",
+                "flow_step": "resolve_store",
+                "product": {
+                    "goods_no": "G000000310126",
+                    "product_name": "벤투스 S2 AS",
+                    "tire_size": "235/55R19",
+                    "ord_qty": 4,
+                },
+                "store": {"shop_name": "광교신도시점"},
+                "intent": {"pending_intent": "order", "goal_type": "place_order"},
             },
         },
     )
@@ -13623,19 +13623,123 @@ def test_flow_transition_shell_separates_current_recommendation_from_parent_orde
     )
 
     assert transition.metadata["flow_transition_shell"] is True
-    assert transition.metadata["flow_transition_applied"] is False
-    assert transition.metadata["transition_kind"] == "current_flow_with_parent_context"
-    assert transition.current_flow_state["flow_type"] == "recommendation"
-    assert transition.current_flow_state["flow_step"] == "select_vehicle"
-    assert transition.parent_flow_state["flow_type"] == "purchase"
-    assert transition.parent_flow_state["intent"] == "order"
+    assert transition.metadata["flow_transition_applied"] is True
+    assert transition.flow_transition["reason"] == "current_turn_discovery_flow_state"
+    assert transition.metadata["current_turn_discovery_resolved"] is True
     assert transition.contract_seed["router_evidence"]["intent"] == "vehicle_based_tire_recommendation"
     assert transition.contract_seed["current_flow"]["intent"] == "vehicle_based_tire_recommendation"
     assert transition.contract_seed["current_flow"]["flow_step"] == "router_observed"
-    assert "parent_flow_context" in transition.context_evidence
-    assert transition.context_evidence["active_flow_context"]["flow_step"] == "select_vehicle"
+    active_flow_context = transition.flow_transition["active_flow_context"]
+    assert active_flow_context["flow_type"] == "recommendation"
+    assert active_flow_context["intent"]["pending_intent"] == "vehicle_based_tire_recommendation"
+    assert active_flow_context["intent"]["goal_type"] == "recommend_tire"
+
+    committed = commit_flow_state(
+        slots.availability_context["active_flow_context"],
+        active_flow_context,
+        source=active_flow_context["source"],
+        flow_type=active_flow_context["flow_type"],
+        flow_step=active_flow_context["flow_step"],
+        status=active_flow_context["status"],
+    ).state.to_active_flow_context()
+    assert committed["flow_type"] == "recommendation"
+    assert committed["dormant_flows"][0]["context"]["flow_type"] == "purchase"
+    assert committed["dormant_flows"][0]["context"]["product"]["goods_no"] == "G000000310126"
     assert slots.pending_intent is None
     assert slots.goal_type is None
+
+
+def test_flow_transition_support_coupon_faq_switches_active_purchase_to_support() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000310126",
+        tire_size="245/45R19",
+        ord_qty=2,
+        pending_intent="order",
+        goal_type="place_order",
+        availability_context={
+            "active_flow_context": {
+                "flow_type": "purchase",
+                "status": "active",
+                "flow_step": "ask_schedule",
+                "product": {
+                    "goods_no": "G000000310126",
+                    "product_name": "벤투스 S2 AS",
+                    "tire_size": "245/45R19",
+                    "ord_qty": 2,
+                },
+                "intent": {"pending_intent": "order", "goal_type": "place_order"},
+            }
+        },
+    )
+
+    transition = transition_current_flow(
+        user_text="쿠폰 등록 어디서 해?",
+        router_evidence={
+            "domain": "support",
+            "intent": "coupon_registration_policy",
+            "execution_plan": ["support:coupon_registration_policy"],
+            "source": "llm",
+        },
+        existing_slots=slots,
+        extracted_slots=ConversationSlots(),
+    )
+
+    assert transition.flow_transition["applied"] is True
+    assert transition.flow_transition["reason"] == "current_turn_support_flow_state"
+    assert transition.metadata["current_turn_support_resolved"] is True
+    active_flow_context = transition.flow_transition["active_flow_context"]
+    assert active_flow_context["flow_type"] == "support"
+    assert active_flow_context["flow_step"] == "answer_faq"
+    assert active_flow_context["intent"]["pending_intent"] == "coupon_registration_policy"
+    assert active_flow_context["intent"]["goal_type"] == "support_faq"
+
+    committed = commit_flow_state(
+        slots.availability_context["active_flow_context"],
+        active_flow_context,
+        source=active_flow_context["source"],
+        flow_type=active_flow_context["flow_type"],
+        flow_step=active_flow_context["flow_step"],
+        status=active_flow_context["status"],
+    ).state.to_active_flow_context()
+    assert committed["flow_type"] == "support"
+    assert committed["intent"]["policy_topic"] == "coupon_registration_policy"
+    assert committed["dormant_flows"][0]["context"]["flow_type"] == "purchase"
+    assert committed["dormant_flows"][0]["context"]["product"]["goods_no"] == "G000000310126"
+
+
+def test_flow_transition_support_refund_policy_does_not_resume_purchase_action() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000310126",
+        tire_size="245/45R19",
+        ord_qty=2,
+        availability_context={
+            "active_flow_context": {
+                "flow_type": "purchase",
+                "status": "active",
+                "flow_step": "ask_schedule",
+                "product": {"goods_no": "G000000310126", "tire_size": "245/45R19", "ord_qty": 2},
+                "intent": {"pending_intent": "order", "goal_type": "place_order"},
+            }
+        },
+    )
+
+    transition = transition_current_flow(
+        user_text="환불 규정 알려줘",
+        router_evidence={
+            "domain": "support",
+            "intent": "general_cancel_fee_policy",
+            "execution_plan": ["support:general_cancel_fee_policy"],
+            "source": "llm",
+        },
+        existing_slots=slots,
+        extracted_slots=ConversationSlots(),
+    )
+
+    active_flow_context = transition.flow_transition["active_flow_context"]
+    assert active_flow_context["flow_type"] == "support"
+    assert active_flow_context["intent"]["pending_intent"] == "general_cancel_fee_policy"
+    assert "product" not in active_flow_context
+    assert "store" not in active_flow_context
 
 
 def test_flow_transition_shell_router_observed_does_not_create_execution_intent() -> None:
