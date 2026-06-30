@@ -15225,12 +15225,14 @@ def test_stage_unsized_purchase_order_context_preserves_order_flow() -> None:
     assert slots.availability_context["pending_order_context"]["pending_intent"] == "order"
 
 
-def test_purchase_flow_fallback_event_builds_structured_product_selection_quickreplies() -> None:
+def test_purchase_flow_fallback_event_shows_product_cards_for_same_size_multiple_skus() -> None:
     event = build_purchase_flow_fallback_event(
         intent="quick_order_reservation",
         known_slots={
             "tire_size": "245/45R19",
-            "ord_qty": 2,
+            "ord_qty": 4,
+            "shop_name": "티스테이션 분당정자점",
+            "requested_cal_day": "20260704",
             "pending_intent": "order",
             "goal_type": "place_order",
             "product_name": "벤투스 에어S",
@@ -15245,13 +15247,17 @@ def test_purchase_flow_fallback_event_builds_structured_product_selection_quickr
                             "goods_no": "G000000319584",
                             "goods_nm": "벤투스 에어S",
                             "tire_size_1": "245/45R19",
-                            "sale_prc": 242100,
+                            "sale_prc": 300000,
+                            "extra_fvr_sale_prc": 261500,
+                            "goods_dtl_pfm_nm": "흡음재",
                         },
                         {
                             "goods_no": "G000000319585",
                             "goods_nm": "벤투스 에어S",
                             "tire_size_1": "245/45R19",
-                            "sale_prc": 255100,
+                            "sale_prc": 300000,
+                            "extra_fvr_sale_prc": 242100,
+                            "goods_dtl_pfm_nm": "컴포트",
                         },
                     ]
                 },
@@ -15261,22 +15267,92 @@ def test_purchase_flow_fallback_event_builds_structured_product_selection_quickr
     )
 
     assert event is not None
-    assert event["assistant_response_source"] == "code_purchase_flow_resolution_clarification"
-    chips = event["data"]["quickReplies"]
-    assert chips[0]["label"] == "벤투스 에어S 245/45R19 242,100원"
-    assert chips[0]["cta_action"] == "select_product"
-    assert chips[0]["expected_behavior"] == "slot_fill"
-    assert chips[0]["expected_contract_intent"] == "quick_order_reservation"
-    assert chips[0]["fills_slot"] == "product"
-    assert chips[0]["metadata"]["goodsNo"] == "G000000319584"
-    assert "ordQty" not in chips[0]["metadata"]
-    assert "pendingIntent" not in chips[0]["metadata"]
-    assert "goalType" not in chips[0]["metadata"]
-    assert chips[0]["metadata"]["slots"] == {
-        "goods_no": "G000000319584",
-        "tire_size": "245/45R19",
-        "tire_model": "벤투스 에어S",
-    }
+    assert event["template"] == "product"
+    assert event["assistant_response_source"] == "code_purchase_flow_product_selection"
+    assert event["data"]["assistantResponse"] == "벤투스 에어S 조건으로 확인되는 상품이 여러 개예요. 원하시는 상품을 선택해 주세요."
+    assert event["data"]["isBookingFlow"] is True
+    products = event["data"]["products"]
+    assert [product["title"] for product in products] == ["벤투스 에어S 245/45R19", "벤투스 에어S 245/45R19"]
+    assert [product["price"] for product in products] == [261500, 242100]
+    metadata = event["data"]["metadata"]
+    assert metadata[0]["goodsId"] == "G000000319584"
+    assert metadata[0]["ordQty"] == 4
+    assert metadata[0]["shopName"] == "티스테이션 분당정자점"
+    assert metadata[0]["requestedCalDay"] == "20260704"
+    assert metadata[0]["pendingIntent"] == "order"
+    assert metadata[0]["goalType"] == "place_order"
+    assert event["data"]["flowMetadata"]["candidateCount"] == 2
+
+
+def test_turn_contract_fallback_event_shows_product_cards_for_same_size_multiple_skus() -> None:
+    contract = TurnContract(
+        domain="discovery",
+        intent="resolve_or_describe_product",
+        sub_intent="reservation",
+        known_slots={
+            "tire_size": "245/45R19",
+            "ord_qty": 4,
+            "shop_name": "티스테이션 분당정자점",
+            "requested_cal_day": "20260704",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "product_name": "Ventus air S",
+        },
+        required_slots=(),
+        blocking_required_slots=(),
+        resolvable_required_slots=(),
+        allowed_tools=("search_product_tool",),
+        forbidden_tools=("get_final_price_tool", "quick_order_tool"),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.CARD,
+            template=TemplateName.PRODUCT,
+            forbidden_behaviors=("get_final_price_tool", "quick_order_tool"),
+            metadata={"response_shape_key": "missing_order_slots", "flow_id": "purchase_order", "flow_step": "resolve_product"},
+        ).to_dict(),
+        action_mode="purchase_continuation",
+        context_state="active",
+        execution_plan=("discovery:resolve_product", "transaction:continue_purchase"),
+    )
+
+    event = _build_turn_contract_fallback_event(
+        turn_contract=contract,
+        user_text=(
+            "타이어 사이즈 2454519 / 차종 그랜저 / 수량: 4개 / 상품: 벤투스 air S(흡음재없는거) / "
+            "장착점: 티스테이션 분당정자점 / 장착일: 7월 4일 11시 / 이 정보대로 주문해줘"
+        ),
+        tool_data_list=[
+            {
+                "tool": "search_product_tool",
+                "input": {"keyword": "벤투스 에어S", "size": "245/45R19", "brand_cd": "HK"},
+                "data": {
+                    "items": [
+                        {
+                            "goods_no": "G000000319584",
+                            "goods_nm": "벤투스 에어S",
+                            "tire_size_1": "245/45R19",
+                            "extra_fvr_sale_prc": 261500,
+                            "goods_dtl_pfm_nm": "흡음재",
+                        },
+                        {
+                            "goods_no": "G000000319622",
+                            "goods_nm": "벤투스 에어S",
+                            "tire_size_1": "245/45R19",
+                            "extra_fvr_sale_prc": 242100,
+                            "goods_dtl_pfm_nm": "컴포트",
+                        },
+                    ]
+                },
+            }
+        ],
+    )
+
+    assert event is not None
+    assert event["template"] == "product"
+    assert event["assistant_response_source"] == "code_purchase_flow_product_selection"
+    assert event["called_tools"] == ["search_product_tool"]
+    assert [product["price"] for product in event["data"]["products"]] == [261500, 242100]
+    assert event["data"]["metadata"][1]["goodsId"] == "G000000319622"
+    assert event["data"]["metadata"][1]["ordQty"] == 4
 
 
 def test_tool_entries_from_previous_agent_facts_parses_search_product_rows() -> None:
