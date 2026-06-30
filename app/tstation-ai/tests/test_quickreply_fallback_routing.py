@@ -422,6 +422,7 @@ from services.tstation.policies import schedule_tool_gate
 from services.tstation.policies import support_response_policy as support_response_policy_module
 from services.tstation.policies.transaction_intent_policy import build_transaction_intent_frame, plan_transaction_tools
 from services.tstation.policies.transaction_response_policy import decide_transaction_response
+from services.tstation.policies.slot_fill_controller import resolve_pre_router_slot_fill
 from services.tstation.policies.support_response_policy import (
     build_support_faq_evidence_grounded_reply,
     build_support_faq_source_grounded_reply,
@@ -19515,7 +19516,7 @@ def test_expected_slot_fill_precheck_prefers_current_schedule_over_stale_store_s
     assert precheck["resume_source"] == "expected_slot_fill:schedule"
 
 
-def test_expected_slot_fill_precheck_promotes_stock_schedule_to_parent_purchase() -> None:
+def test_slot_fill_controller_promotes_stock_schedule_to_parent_purchase_flow() -> None:
     slots = ConversationSlots(
         goods_no="G000000320151",
         tire_model="다이나프로 HP3",
@@ -19550,7 +19551,7 @@ def test_expected_slot_fill_precheck_promotes_stock_schedule_to_parent_purchase(
         latest_datepick_tmpl=None,
     )
 
-    precheck = TStationChatServiceV2._expected_slot_fill_precheck(
+    decision = resolve_pre_router_slot_fill(
         user_text="2026년 7월 8일 (수)\n16:00",
         regex_slots=ConversationSlots.extract_from_user_text("2026년 7월 8일 (수)\n16:00"),
         merged_slots=slots,
@@ -19558,16 +19559,21 @@ def test_expected_slot_fill_precheck_promotes_stock_schedule_to_parent_purchase(
     )
 
     assert context["current_flow"] == "stock_store_search"
+    precheck = decision.precheck
     assert precheck["matched"] is True
-    assert precheck["current_flow"] == "quick_order_reservation"
+    assert precheck["current_flow"] == "stock_store_search"
     assert precheck["filled_slot"] == "schedule"
     assert precheck["slot_patch"] == {
         "requested_cal_day": "20260708",
         "rsv_hour": "16",
-        "pending_intent": "order",
-        "goal_type": "place_order",
+        "pending_intent": "stock",
+        "goal_type": "store_with_stock",
     }
     assert precheck["resume_source"] == "expected_slot_fill:schedule"
+    assert decision.flow_state_reconciliation["intent"] == "quick_order_reservation"
+    assert decision.flow_state_reconciliation["flow_step"] == "build_preorder"
+    assert decision.slots.pending_intent == "order"
+    assert decision.slots.goal_type == "place_order"
 
 
 def test_expected_slot_fill_precheck_promotes_purchase_anchor_before_router() -> None:
