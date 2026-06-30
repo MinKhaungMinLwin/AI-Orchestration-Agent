@@ -993,3 +993,50 @@ def test_tc233_complete_order_request_prefers_schedule_preview_not_store_hours()
     assert "store_hours_instead_of_slots" in plan.forbidden_tools
     assert decision.template == TemplateName.DATE_PICK
     assert "store_hours_instead_of_slots" in decision.forbidden_behaviors
+
+
+def test_datepick_selection_from_stock_preview_parent_order_builds_preorder() -> None:
+    """A logistics-preview stock context can still complete the parent purchase flow."""
+    frame = build_transaction_intent_frame(
+        "2026년 7월 8일 (수)\n15:00",
+        known_slots={
+            "product_name": "다이나프로 HP3",
+            "goods_no": "G000000320151",
+            "tire_size": "235/55R19",
+            "ord_qty": 4,
+            "quantity": 4,
+            "shop_id": "F00262",
+            "shop_name": "티스테이션 동탄신도시점",
+            "store_name": "티스테이션 동탄신도시점",
+            "region": "동탄",
+            "requested_cal_day": "20260708",
+            "rsv_hour": "15",
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+            "stock_check_mode": "preview",
+            "schedule_mode": "logistics_only",
+            "inventory_mode": "logistics_only",
+            "source_tool": "transaction_store_preview_tool",
+            "availability_context": {
+                "pending_order_context": {
+                    "pending_intent": "order",
+                    "goal_type": "place_order",
+                },
+            },
+        },
+    )
+    plan = plan_transaction_tools(frame)
+    decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text="2026년 7월 8일 (수)\n15:00",
+        known_slots=dict(frame.known_slots),
+    )
+
+    assert frame.intent == "quick_order_reservation"
+    assert frame.known_slots["pending_intent"] == "order"
+    assert frame.known_slots["goal_type"] == "place_order"
+    assert frame.missing_slots == ()
+    assert plan.preferred_tool is None
+    assert plan.metadata["flow_step"] == "build_preorder"
+    assert "get_store_schedule_tool" in plan.forbidden_tools
+    assert decision.template == TemplateName.PRE_ORDER

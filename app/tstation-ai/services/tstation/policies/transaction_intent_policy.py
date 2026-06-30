@@ -480,6 +480,21 @@ def _is_order_or_reservation_context(slots: dict[str, Any]) -> bool:
     )
 
 
+def _has_parent_order_or_reservation_context(slots: dict[str, Any]) -> bool:
+    availability_context = slots.get("availability_context")
+    if not isinstance(availability_context, Mapping):
+        return False
+    for key in ("pending_order_context", "dormant_purchase_context"):
+        context = availability_context.get(key)
+        if not isinstance(context, Mapping):
+            continue
+        if context.get("pending_intent") in {"order", "reservation", "cart"}:
+            return True
+        if context.get("goal_type") in {"place_order", "add_to_cart"}:
+            return True
+    return False
+
+
 def _is_preview_location_store_selection_turn(
     text: str,
     slots: dict[str, Any],
@@ -1103,7 +1118,7 @@ def build_transaction_intent_frame(
         _BOOKING_DATETIME_SELECTION_RE.search(text)
         and has_product
         and _has_confirmed_store_context(slots)
-        and _is_order_or_reservation_context(slots)
+        and (_is_order_or_reservation_context(slots) or _has_parent_order_or_reservation_context(slots))
         and slots.get("requested_cal_day")
         and slots.get("rsv_hour")
     )
@@ -1299,13 +1314,17 @@ def build_transaction_intent_frame(
         intent = "maintenance_addon_with_tire_service"
         sub_intent = "store_service_availability"
         entities["service_type"] = "maintenance_addon"
+    elif preorder_confirmation:
+        intent = "quick_order_execute"
+        sub_intent = "confirm"
+    elif selected_schedule_followup:
+        intent = "quick_order_reservation"
+        sub_intent = "reservation"
+        entities["stock_check_mode"] = "preview"
     elif preserve_pending_today_install:
         intent = "stock_store_search"
         sub_intent = "today_install"
         entities["stock_check_mode"] = "preview"
-    elif preorder_confirmation:
-        intent = "quick_order_execute"
-        sub_intent = "confirm"
     elif quantity_slot_fill_purchase_continuation:
         intent = "quick_order_reservation"
         sub_intent = "cart" if slots.get("pending_intent") == "cart" or slots.get("goal_type") == "add_to_cart" else "reservation"
@@ -1339,9 +1358,6 @@ def build_transaction_intent_frame(
     elif _PRICE_OR_COUPON_RE.search(text):
         intent = "price_or_coupon_check"
         sub_intent = "coupon" if "쿠폰" in text else "price"
-    elif selected_schedule_followup:
-        intent = "quick_order_reservation"
-        sub_intent = "reservation"
     elif (
         _is_order_or_reservation_context(slots)
         and goods_no
@@ -1560,6 +1576,9 @@ def build_transaction_intent_frame(
         if quantity:
             known["quantity"] = quantity
             known["ord_qty"] = quantity
+    if intent == "quick_order_reservation" and selected_schedule_followup:
+        known["pending_intent"] = "order"
+        known["goal_type"] = "place_order"
     if plain_store_search and not current_has_product and not preserve_transaction_product_context:
         for key in (
             "goods_no",
@@ -1676,6 +1695,7 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
             and frame.known_slots.get("goods_no")
             and frame.known_slots.get("tire_size")
             and (frame.known_slots.get("ord_qty") or frame.known_slots.get("quantity"))
+            and not (frame.known_slots.get("requested_cal_day") and frame.known_slots.get("rsv_hour"))
             and stock_check_mode in {"", "preview"}
         ):
             return ToolPlan(
