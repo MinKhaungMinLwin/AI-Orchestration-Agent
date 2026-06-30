@@ -209,6 +209,15 @@ def _router_slot_fill_current_flow(
                 return "quick_order_reservation"
             if context.get("pending_intent") == "stock" or context.get("goal_type") == "store_with_stock":
                 return "stock_store_search"
+            has_purchase_shape = bool(
+                context.get("ord_qty")
+                or context.get("quantity")
+                or context.get("shop_id")
+                or context.get("shop_name")
+                or context.get("region")
+            )
+            if key == "pending_order_context" and has_purchase_shape:
+                return "quick_order_reservation"
         for key in ("dormant_stock_context", "dormant_transaction_context"):
             context = availability_context.get(key)
             if isinstance(context, Mapping) and (

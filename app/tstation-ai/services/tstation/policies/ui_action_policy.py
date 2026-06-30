@@ -1520,6 +1520,17 @@ def _interactive_flow_contract_intent_from_slots(
     pending_context_goal = str(pending_order_context.get("goal_type") or "").strip()
     router_intent = str(latest_router_evidence.get("intent") or "").strip()
     router_execution_plan = " ".join(str(item or "") for item in (latest_router_evidence.get("execution_plan") or ()))
+    pending_context_has_purchase_shape = bool(
+        pending_order_context
+        and not (pending_context_intent == "stock" or pending_context_goal == "store_with_stock")
+        and (
+            pending_order_context.get("ord_qty")
+            or pending_order_context.get("quantity")
+            or pending_order_context.get("shop_id")
+            or pending_order_context.get("shop_name")
+            or pending_order_context.get("region")
+        )
+    )
 
     if availability_intent == "today_install":
         return _STOCK_STORE_SEARCH_INTENT
@@ -1552,6 +1563,8 @@ def _interactive_flow_contract_intent_from_slots(
     }:
         return _QUICK_ORDER_RESERVATION_INTENT
     if pending_context_intent in {"order", "cart"} or pending_context_goal in {"place_order", "add_to_cart"}:
+        return _QUICK_ORDER_RESERVATION_INTENT
+    if pending_context_has_purchase_shape:
         return _QUICK_ORDER_RESERVATION_INTENT
     if dormant_purchase_context:
         return _QUICK_ORDER_RESERVATION_INTENT
