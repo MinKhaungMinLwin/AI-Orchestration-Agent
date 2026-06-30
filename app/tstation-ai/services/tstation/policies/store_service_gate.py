@@ -180,7 +180,7 @@ _STORE_SERVICE_AVAILABILITY_SIGNAL_RE = re.compile(
     r"얼라인먼트.{0,12}(?:잘|무료|가능)",
     re.IGNORECASE,
 )
-_STORE_NAME_RE = re.compile(r"((?:티스테이션\s*)?[가-힣A-Za-z0-9]+(?:점|매장))")
+_STORE_NAME_RE = re.compile(r"((?:티스테이션\s*)?(?:[가-힣A-Za-z0-9]+\s+)?[가-힣A-Za-z0-9]+(?:점|매장))")
 _STORE_MENTION_CONTEXT_RE = re.compile(
     r"티스테이션|더타이어샵|매장|지점|장착점|주소|전화|연락처|영업|운영|휴무|"
     r"예약|재고|입고|장착|교체|작업|확인|구매|주문|질소|보관|야간|심야|퇴근\s*후|퇴근후|저녁|늦게|"
@@ -190,7 +190,8 @@ _STORE_MENTION_CONTEXT_RE = re.compile(
 _BARE_STORE_NAME_TURN_RE = re.compile(r"^\s*(?:티스테이션\s*)?[가-힣A-Za-z0-9]+(?:점|매장)\s*$", re.IGNORECASE)
 _ATTRIBUTE_QUESTION_RE = re.compile(
     r"가능\s*해|가능한가|가능(?:하|한)|가능(?:\s*[?!.]|$)|돼|되(?:나|나요|니|냐)?|있어|있나|있나요|"
-    r"해\s*줘|해줘|운영\s*해|운영해|영업\s*하|영업하|문\s*여|문여|잘\s*(?:봐|보|하)",
+    r"해\s*줘|해줘|운영\s*해|운영해|영업\s*하|영업하|문\s*여|문여|잘\s*(?:봐|보|하)|"
+    r"예약(?:은|은요|은\s*어디서|은\s*어떻게)?|어디서\s*해|어떻게\s*해",
     re.IGNORECASE,
 )
 _TRANSACTION_ACTION_REQUEST_RE = re.compile(
@@ -270,10 +271,23 @@ def extract_valid_store_name(text: str) -> str | None:
     value = text or ""
     if not has_valid_store_mention_context(value):
         return None
-    match = _STORE_NAME_RE.search(value)
-    if not match:
-        return None
-    return match.group(1)
+    for match in _STORE_NAME_RE.finditer(value):
+        candidate = re.sub(r"\s+", " ", match.group(1)).strip()
+        normalized = _normalize_store_name(candidate)
+        if normalized in {"장착점", "지점"}:
+            continue
+        return candidate
+    return None
+
+
+def _store_name_after_attribute_question(text: str, store_name: str) -> bool:
+    if not store_name:
+        return False
+    match = re.search(rf"(?:티스테이션\s*)?{re.escape(store_name)}", text or "", re.IGNORECASE)
+    if match is None or match.start() <= 0:
+        return False
+    prefix = (text or "")[: match.start()]
+    return bool(_ATTRIBUTE_QUESTION_RE.search(prefix) or unverifiable_store_preference_labels(prefix))
 
 
 def classify_store_name_role(text: str, *, store_name: str | None = None) -> StoreNameRoleDecision:
@@ -330,6 +344,8 @@ def extract_store_attribute_inquiry(
         extracted_store_name = extract_valid_store_name(value)
         if extracted_store_name:
             store_label = _normalize_store_name(extracted_store_name)
+            if _store_name_after_attribute_question(value, store_label):
+                return None
     if not store_label:
         return None
     labels = unverifiable_store_preference_labels(value)
@@ -353,12 +369,16 @@ def extract_store_attribute_inquiry(
     working = re.sub(r"^(?:에서|에|도|은|는|이|가|을|를|혹시)\s*", "", working).strip()
     working = re.sub(r"\s+", " ", working).strip(" ?!.")
     attribute_text = working or (labels[0] if labels else "")
+    if labels and labels[0].endswith("서비스 운영 여부"):
+        attribute_text = labels[0]
     if not attribute_text:
         return None
 
     attr_type: STORE_ATTRIBUTE_TYPE = "unknown"
     verification_level: STORE_ATTRIBUTE_VERIFICATION_LEVEL = "store_contact_required"
-    if _TOOL_VERIFIABLE_ATTRIBUTE_RE.search(attribute_text):
+    if labels and labels[0].endswith("서비스 운영 여부"):
+        attr_type = "service"
+    elif _TOOL_VERIFIABLE_ATTRIBUTE_RE.search(attribute_text):
         attr_type = "operating_condition"
         verification_level = "tool_verifiable"
     elif _EQUIPMENT_ATTRIBUTE_RE.search(attribute_text):

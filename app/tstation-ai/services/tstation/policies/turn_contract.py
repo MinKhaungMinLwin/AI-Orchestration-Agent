@@ -11,6 +11,7 @@ from services.tstation.policies.cross_domain_policy import CrossDomainPlan
 from services.tstation.policies.discovery_intent_policy import extract_best_seller_vehicle_query, is_best_seller_request
 from services.tstation.policies.flow_controller import build_purchase_flow_fallback_event
 from services.tstation.policies.intent_frame import IntentFrame
+from services.tstation.policies.preorder_event_builder import build_preorder_event
 from services.tstation.policies.resolved_context import build_resolved_turn_context
 from services.tstation.policies.response_decision import ResponseDecision, ToolPlan
 from services.tstation.policies.support_response_policy import _is_tire_manufacture_date_question
@@ -184,6 +185,11 @@ _BEST_SELLER_SIZE_CLARIFICATION_RE = re.compile(
     r"(정확한\s*사이즈|사이즈\s*(?:정보|직접\s*입력)|연식/트림에\s*따라|연식/트림|차량번호|내\s*차량)",
     re.IGNORECASE,
 )
+_OE_PART_NUMBER_REQUEST_RE = re.compile(
+    r"(?:\bOE\b|순정|출고\s*타이어|출고용|출고때|출고 시).{0,40}(?:품번|부품\s*번호|파트\s*넘버|part\s*number)|"
+    r"(?:품번|부품\s*번호|파트\s*넘버|part\s*number).{0,40}(?:\bOE\b|순정|출고\s*타이어|출고용|출고때|출고 시)",
+    re.IGNORECASE,
+)
 _BEST_SELLER_DISALLOWED_CTA_LABELS = frozenset({
     "사이즈 직접 입력",
     "내 차량 보기",
@@ -194,8 +200,10 @@ _BEST_SELLER_DISALLOWED_CTA_LABELS = frozenset({
 _REFERENCE_GUARD_EXEMPT_INTENTS = frozenset({
     "best_seller_search",
     "favorite_store_lookup",
+    "oe_part_number_unavailable",
     "oe_re_concept_explanation",
     "product_recommendation",
+    "tire_recommendation",
     "service_duration_advisory",
     "maintenance_addon_with_tire_service",
     "store_service_availability",
@@ -228,12 +236,15 @@ _REFERENCE_GUARD_EXEMPT_DISCOVERY_PLAN_TOKENS = frozenset({
     "best_seller_list_by_vehicle_and_size_and_period",
     "query_order_data_for_vehicle_with_period",
     "vehicle_best_seller_search",
+    "oe_part_number_unavailable",
 })
 ROUTER_WINS_INFORMATIONAL_INTENTS = frozenset({
+    "card_installment_lookup",
     "product_detail_lookup",
     "product_description",
     "product_comparison",
     "product_size_list_lookup",
+    "competitor_counterpart_guidance",
     "compatibility_advisory",
     "delivery_delay_reservation_schedule_policy",
     "coupon_usage_policy",
@@ -270,8 +281,10 @@ ROUTER_WINS_EXECUTION_BOUNDARY_INTENTS = frozenset({
     "store_schedule",
     "open_store_search",
     "store_service_search",
+    "store_recommendation_by_vehicle_experience",
 })
 _SUPPORT_FAQ_POLICY_TOOL_INTENTS = frozenset({
+    "card_installment_lookup",
     "general_cancel_fee_policy",
     "general_card_cancel_timing_policy",
     "payment_error_troubleshooting",
@@ -333,6 +346,7 @@ _ROUTER_WINS_EXECUTION_EXCLUDED_INTENTS = frozenset({
     "selected_store_schedule",
     "reservation_store_info_lookup",
     "reservation_status_lookup",
+    "reservation_change_request",
     "order_cancel_status_lookup",
     "owned_order_cancel_fee_inquiry",
     "owned_coupon_lookup",
@@ -555,6 +569,17 @@ def build_turn_contract(
             planner_intent = "tire_manufacture_date_policy"
         if code_intent == "tire_quality_warranty_policy":
             code_intent = "tire_manufacture_date_policy"
+    if _should_force_card_installment_lookup_intent(
+        user_text=user_text,
+        planner_intent=planner_intent,
+        policy_intent=policy_intent,
+        code_intent=code_intent,
+        domain=code_domain,
+        planner_domains=planner_domains,
+    ):
+        code_domain = "support"
+        code_intent = "card_installment_lookup"
+        router_wins_intent = "card_installment_lookup"
     domain = planner_domains[0] if planner_domains else code_domain
     intent = planner_intent or code_intent
     if router_wins_intent:
@@ -720,6 +745,9 @@ def build_turn_contract(
     if code_intent == "reservation_status_lookup":
         domain = "transaction"
         intent = "reservation_status_lookup"
+    if code_intent == "reservation_change_request":
+        domain = "transaction"
+        intent = "reservation_change_request"
     if code_intent == "order_arrival_status_lookup":
         domain = "transaction"
         intent = "order_arrival_status_lookup"
@@ -735,12 +763,18 @@ def build_turn_contract(
     if code_intent == "delivery_delay_reservation_schedule_policy" or planner_intent == "delivery_delay_reservation_schedule_policy":
         domain = "support"
         intent = "delivery_delay_reservation_schedule_policy"
+    if code_intent == "card_installment_lookup" or planner_intent == "card_installment_lookup":
+        domain = "support"
+        intent = "card_installment_lookup"
     if code_intent == "general_card_cancel_timing_policy" or planner_intent == "general_card_cancel_timing_policy":
         domain = "support"
         intent = "general_card_cancel_timing_policy"
     if code_intent == "coupon_usage_policy" or planner_intent == "coupon_usage_policy":
         domain = "support"
         intent = "coupon_usage_policy"
+    if code_intent == "coupon_stacking_policy" or planner_intent in {"coupon_stacking_policy", "stacking"}:
+        domain = "support"
+        intent = "coupon_stacking_policy"
     if code_intent == "coupon_registration_policy" or planner_intent == "coupon_registration_policy":
         domain = "support"
         intent = "coupon_registration_policy"
@@ -1028,6 +1062,62 @@ def build_turn_contract(
                 "get_final_price_tool",
             ),
         )
+    if intent == "card_installment_lookup":
+        allowed_tools = ("get_card_installments_tool",)
+        forbidden_tools = _merge_tuple(
+            tuple(tool for tool in forbidden_tools if tool != "get_card_installments_tool"),
+            (
+                "search_faq_hybrid_tool",
+                "search_faq_rag_tool",
+                "get_faq_tool",
+                "transfer_to_qna_tool",
+                "search_product_tool",
+                "get_final_price_tool",
+            ),
+        )
+        preferred_tool = "get_card_installments_tool"
+        required_slots = ()
+        resolvable_required_slots = ()
+        blocking_required_slots = ()
+        blocking_required_slots_source = "card_installment_lookup_contract"
+    if intent == "coupon_stacking_policy":
+        allowed_tools = _merge_tuple(
+            allowed_tools,
+            ("get_my_coupons_tool", "check_coupon_stacking_tool"),
+        )
+        forbidden_tools = _merge_tuple(
+            tuple(tool for tool in forbidden_tools if tool not in {"get_my_coupons_tool", "check_coupon_stacking_tool"}),
+            (
+                "issue_coupon_tool",
+                "search_product_tool",
+                "get_product_description_tool",
+                "get_coupon_applicable_products_tool",
+                "get_final_price_tool",
+                "search_faq_hybrid_tool",
+            ),
+        )
+        if not preferred_tool or preferred_tool in forbidden_tools:
+            preferred_tool = "get_my_coupons_tool"
+            tool_args_patch = {}
+        required_slots = ()
+        resolvable_required_slots = ()
+        blocking_required_slots = ()
+        blocking_required_slots_source = "coupon_stacking_policy_contract"
+        response_decision_payload = {
+            "response_shape": "clarify",
+            "template": "quickReply",
+            "required_slots": [],
+            "forbidden_behaviors": [
+                "generic_faq_answer",
+                "infer_stacking_without_tool",
+                "start_product_coupon_applicability_lookup",
+            ],
+            "assistant_guidance": (
+                "쿠폰 중복 사용 가능 여부는 일반 FAQ로 답하지 말고, 보유 쿠폰 목록에서 사용자가 말한 쿠폰을 "
+                "특정한 뒤 check_coupon_stacking_tool 판정값으로만 안내한다. 쿠폰이 특정되지 않으면 비교할 쿠폰을 되묻는다."
+            ),
+            "metadata": {"response_shape_key": "coupon_stacking_policy"},
+        }
     if intent == "coupon_registration_policy":
         forbidden_tools = _merge_tuple(
             forbidden_tools,
@@ -1450,10 +1540,13 @@ def _default_preferred_tool_for_boundary(
         "store_schedule": "get_store_schedule_tool",
         "open_store_search": "search_stores_complex_tool",
         "store_service_search": "search_stores_tool",
+        "store_recommendation_by_vehicle_experience": "search_stores_complex_tool",
     }
     preferred = preferred_by_intent.get(intent)
     if preferred and preferred in allowed_tools and preferred not in forbidden_tools:
         return preferred
+    if intent == "card_installment_lookup" and "get_card_installments_tool" in allowed_tools:
+        return "get_card_installments_tool"
     if intent in _SUPPORT_FAQ_POLICY_TOOL_INTENTS and "search_faq_hybrid_tool" in allowed_tools:
         return "search_faq_hybrid_tool"
     return next((tool for tool in allowed_tools if tool not in forbidden_tools), None)
@@ -1467,6 +1560,7 @@ def _support_answer_contract_owns_response(*, domain: str, intent: str, action_m
     if normalized_mode in _SUPPORT_ANSWER_ACTION_MODES:
         return True
     if normalized_intent in {
+        "card_installment_lookup",
         "human_escalation",
         "legal_action_guidance_denied",
         "support_faq",
@@ -1571,6 +1665,9 @@ def build_response_policy_guard_event(contract: TurnContract) -> dict[str, Any]:
     )
     if purchase_flow_event is not None:
         return _annotate_contract_guard_event(purchase_flow_event, contract, reason="response_policy_guard")
+    preorder_event = build_preorder_event(contract, contract.known_slots)
+    if preorder_event is not None:
+        return _annotate_contract_guard_event(preorder_event, contract, reason="response_policy_guard")
     unknown_store_service_event = _build_unknown_store_service_guard_event(contract)
     if unknown_store_service_event is not None:
         return _annotate_contract_guard_event(unknown_store_service_event, contract, reason="response_policy_guard")
@@ -1647,11 +1744,7 @@ def build_response_policy_guard_event(contract: TurnContract) -> dict[str, Any]:
                 ]
             elif not (known_slots.get("ord_qty") or known_slots.get("quantity")):
                 message = "구매를 진행하려면 수량이 필요해요. 구매할 타이어 수량을 알려주세요."
-                quick_replies = [
-                    {"label": "2개", "domain": "TRANSACTION"},
-                    {"label": "4개", "domain": "TRANSACTION"},
-                    {"label": "상품 다시 찾기", "domain": "DISCOVERY"},
-                ]
+                quick_replies = _quantity_selection_quick_replies()
             elif not (
                 known_slots.get("shop_id")
                 or known_slots.get("shop_name")
@@ -1753,8 +1846,13 @@ def build_response_policy_guard_event(contract: TurnContract) -> dict[str, Any]:
             {"label": "다른 매장 찾기", "domain": "TRANSACTION"},
         ]
     else:
-        message = "현재 확인된 정보만으로 바로 진행하기 어려워요. 필요한 정보를 먼저 확인한 뒤 이어서 도와드릴게요."
-        quick_replies = _clarification_chips(contract.required_slots or ("product",))
+        missing_slots = _missing_slots_for_action_prompt(contract) or ("product",)
+        missing_summary = _missing_slot_summary_text(missing_slots)
+        message = (
+            "현재 확인된 정보만으로 바로 진행하기 어려워요. "
+            f"부족한 정보는 {missing_summary}입니다. 필요한 정보를 먼저 확인한 뒤 이어서 도와드릴게요."
+        )
+        quick_replies = _clarification_chips(missing_slots)
 
     return _annotate_contract_guard_event({
         "type": "data",
@@ -1768,6 +1866,7 @@ def build_response_policy_guard_event(contract: TurnContract) -> dict[str, Any]:
             "metadata": {
                 "turnContract": contract.to_dict(),
                 "forbiddenBehaviors": sorted(forbidden_set),
+                "missingSlots": list(_missing_slots_for_action_prompt(contract)),
             },
         },
     }, contract, reason="response_policy_guard")
@@ -1960,6 +2059,15 @@ def _has_product_size_quantity(known_slots: Mapping[str, Any]) -> bool:
     return _has_product_and_size(known_slots) and bool(known_slots.get("ord_qty") or known_slots.get("quantity"))
 
 
+def _quantity_selection_quick_replies() -> list[dict[str, str]]:
+    return [
+        {"label": "1개", "domain": "TRANSACTION"},
+        {"label": "2개", "domain": "TRANSACTION"},
+        {"label": "3개", "domain": "TRANSACTION"},
+        {"label": "4개", "domain": "TRANSACTION"},
+    ]
+
+
 def _build_missing_store_action_prompt_event(
     contract: TurnContract,
     known_slots: Mapping[str, Any],
@@ -2008,12 +2116,7 @@ def _build_missing_quantity_action_prompt_event(
     return _missing_slot_quickreply_event(
         contract,
         message=message,
-        quick_replies=[
-            {"label": "1개", "domain": "TRANSACTION"},
-            {"label": "2개", "domain": "TRANSACTION"},
-            {"label": "3개", "domain": "TRANSACTION"},
-            {"label": "4개", "domain": "TRANSACTION"},
-        ],
+        quick_replies=_quantity_selection_quick_replies(),
         missing_slot="quantity",
     )
 
@@ -4346,6 +4449,32 @@ def _is_payment_error_policy_overmatch(user_text: str | None) -> bool:
     )
 
 
+def _should_force_card_installment_lookup_intent(
+    *,
+    user_text: str,
+    planner_intent: str | None,
+    policy_intent: str | None,
+    code_intent: str | None,
+    domain: str | None,
+    planner_domains: tuple[str, ...],
+) -> bool:
+    text = str(user_text or "")
+    if _CARD_INSTALLMENT_LOOKUP_RE.search(text) is None:
+        return False
+    if _PAYMENT_TROUBLESHOOTING_RE.search(text) is not None:
+        return False
+    candidates = {
+        str(planner_intent or "").strip(),
+        str(policy_intent or "").strip(),
+        str(code_intent or "").strip(),
+        str(domain or "").strip(),
+        *(str(item or "").strip() for item in planner_domains),
+    }
+    if "card_installment_lookup" in candidates:
+        return True
+    return "support" in candidates or "payment_error_troubleshooting" in candidates
+
+
 def _comparison_router_wins_intent(
     *,
     routing_result: Any | None,
@@ -4387,6 +4516,7 @@ def _router_wins_domain(intent: str, planner_domains: tuple[str, ...]) -> str:
         "product_description",
         "product_comparison",
         "product_size_list_lookup",
+        "competitor_counterpart_guidance",
     }:
         return "discovery"
     if intent in ROUTER_WINS_INFORMATIONAL_INTENTS or intent.endswith("_policy") or intent.endswith("_guidance"):
@@ -4452,6 +4582,28 @@ def _router_wins_tool_boundary(intent: str) -> tuple[tuple[str, ...], tuple[str,
                 if tool not in allowed_tools
             ),
         )
+    if intent == "store_recommendation_by_vehicle_experience":
+        allowed_tools = (
+            "search_stores_complex_tool",
+            "search_stores_tool",
+            "get_store_list_tool",
+            "get_nearby_stores_tool",
+        )
+        return (
+            allowed_tools,
+            tuple(
+                tool
+                for tool in _ROUTER_WINS_ORDER_EXECUTION_FORBIDDEN_TOOLS
+                | {
+                    "transaction_store_preview_tool",
+                    "get_store_schedule_tool",
+                    "get_multi_store_schedule_tool",
+                    "get_store_inventory_tool",
+                    "get_logistics_inventory_tool",
+                }
+                if tool not in allowed_tools
+            ),
+        )
     if intent == "open_store_search":
         allowed_tools = (
             "search_stores_tool",
@@ -4501,6 +4653,22 @@ def _router_wins_tool_boundary(intent: str) -> tuple[tuple[str, ...], tuple[str,
                 if tool not in {"search_product_tool", "get_product_description_tool", "get_cheapest_price_tool"}
             ),
         )
+    if intent == "competitor_counterpart_guidance":
+        return (
+            (),
+            tuple(
+                tool
+                for tool in _ROUTER_WINS_TRANSACTION_FORBIDDEN_TOOLS
+                | {
+                    "search_faq_hybrid_tool",
+                    "search_faq_rag_tool",
+                    "get_faq_tool",
+                    "search_product_tool",
+                    "get_product_description_tool",
+                    "get_products_recommendations_tool",
+                }
+            ),
+        )
     if intent == "human_escalation":
         return (
             ("transfer_to_qna_tool",),
@@ -4530,10 +4698,39 @@ def _router_wins_tool_boundary(intent: str) -> tuple[tuple[str, ...], tuple[str,
                 if tool != "get_my_warranties_tool"
             ),
         )
+    if intent == "card_installment_lookup":
+        allowed_tools = ("get_card_installments_tool",)
+        return (
+            allowed_tools,
+            tuple(
+                tool
+                for tool in _ROUTER_WINS_TRANSACTION_FORBIDDEN_TOOLS
+                | {"search_faq_hybrid_tool", "transfer_to_qna_tool"}
+                if tool not in allowed_tools
+            ),
+        )
     if intent in _SUPPORT_FAQ_POLICY_TOOL_INTENTS:
         return (
             _SUPPORT_SAFE_AGENT_TOOLS,
             tuple(tool for tool in _ROUTER_WINS_TRANSACTION_FORBIDDEN_TOOLS if tool not in _SUPPORT_SAFE_AGENT_TOOLS),
+        )
+    if intent == "coupon_stacking_policy":
+        allowed_tools = ("get_my_coupons_tool", "check_coupon_stacking_tool")
+        return (
+            allowed_tools,
+            tuple(
+                tool
+                for tool in _ROUTER_WINS_TRANSACTION_FORBIDDEN_TOOLS
+                | {
+                    "issue_coupon_tool",
+                    "search_product_tool",
+                    "get_product_description_tool",
+                    "get_coupon_applicable_products_tool",
+                    "get_final_price_tool",
+                    "search_faq_hybrid_tool",
+                }
+                if tool not in allowed_tools
+            ),
         )
     return (
         ("search_faq_hybrid_tool",),
@@ -4547,6 +4744,7 @@ def _router_wins_response_shape_key(intent: str) -> str:
         "product_description": "neutral_product_description",
         "product_comparison": "metric_comparison_summary",
         "product_size_list_lookup": "product_size_list_lookup",
+        "competitor_counterpart_guidance": "competitor_counterpart_guidance",
         "tstation_service_complaint": "support_complaint_guidance",
         "owned_warranty_lookup": "owned_warranty_lookup",
     }.get(intent, intent)
@@ -4590,7 +4788,7 @@ def _router_wins_response_decision(intent: str) -> dict[str, Any]:
             "emit_preorder_without_user_confirmation",
             "emit_order_complete_without_quick_order_tool",
         ]
-    elif intent in {"open_store_search", "store_service_search"}:
+    elif intent in {"open_store_search", "store_service_search", "store_recommendation_by_vehicle_experience"}:
         response_shape = "location"
         template = "location"
         guidance = "현재 턴의 매장 검색 intent 기준으로 매장을 조회한다. 주문/가격/쿠폰/예약 실행 flow로 전환하지 않는다."
@@ -4626,6 +4824,27 @@ def _router_wins_response_decision(intent: str) -> dict[str, Any]:
             "answer_without_owned_warranty_lookup",
             "normalize_as_service_complaint",
             "transfer_to_qna_direct_first",
+        ]
+    elif intent == "card_installment_lookup":
+        guidance = (
+            "카드사별 무이자 할부 문의는 search_faq_hybrid_tool이 아니라 get_card_installments_tool로만 처리한다. "
+            "카드사/개월수/스마트페이 여부에 맞춰 결과를 필터링하고, 일반 카드 무이자와 스마트페이 개월수는 합산하지 않는다."
+        )
+        forbidden_behaviors = [
+            "route_to_payment_error_troubleshooting",
+            "generic_faq_answer",
+            "merge_general_and_smartpay_installments",
+        ]
+    elif intent == "coupon_stacking_policy":
+        response_shape = "clarify"
+        guidance = (
+            "쿠폰 중복 사용 가능 여부는 일반 FAQ로 답하지 말고, 보유 쿠폰 목록에서 사용자가 말한 쿠폰을 "
+            "특정한 뒤 check_coupon_stacking_tool 판정값으로만 안내한다. 쿠폰이 특정되지 않으면 비교할 쿠폰을 되묻는다."
+        )
+        forbidden_behaviors = [
+            "generic_faq_answer",
+            "infer_stacking_without_tool",
+            "start_product_coupon_applicability_lookup",
         ]
     else:
         guidance = "현재 턴의 FAQ/정책 intent 기준으로 안내하고 개인 조회, 구매, 예약 실행 flow로 전환하지 않는다."
@@ -5078,6 +5297,8 @@ def _should_apply_reference_guard(
     intent: str,
     routing_result: Any | None,
 ) -> bool:
+    if _OE_PART_NUMBER_REQUEST_RE.search(user_text or ""):
+        return False
     if _reference_guard_exempt_intent(intent):
         return False
     if _reference_guard_exempt_routing_result(routing_result):
@@ -5386,9 +5607,34 @@ def _clarification_text(required_slots: tuple[str, ...]) -> str:
         return "확인할 타이어 사이즈를 알려주세요."
     if "quantity" in required_slots:
         return "몇 개 기준으로 확인해드릴까요?"
-    if "store" in required_slots or "location" in required_slots:
+    if "store" in required_slots or "location" in required_slots or "region" in required_slots:
         return "어느 지역이나 매장 기준으로 확인해드릴까요?"
     return "확인에 필요한 정보를 조금만 더 알려주세요."
+
+
+def _missing_slot_summary_text(required_slots: tuple[str, ...]) -> str:
+    labels: list[str] = []
+    label_by_slot = {
+        "product": "상품",
+        "goods_no": "상품",
+        "product_name": "상품명",
+        "product_set": "상품 선택",
+        "order": "주문/예약",
+        "tire_size": "타이어 규격",
+        "size": "타이어 규격",
+        "quantity": "수량",
+        "ord_qty": "수량",
+        "store": "매장",
+        "location": "지역/매장",
+        "region": "지역",
+        "booking_datetime": "예약 날짜/시간",
+        "schedule": "예약 날짜/시간",
+    }
+    for slot in required_slots:
+        label = label_by_slot.get(str(slot), str(slot))
+        if label and label not in labels:
+            labels.append(label)
+    return ", ".join(labels) if labels else "추가 확인 정보"
 
 
 def _clarification_chips(required_slots: tuple[str, ...]) -> list[dict[str, str]]:
@@ -5401,7 +5647,7 @@ def _clarification_chips(required_slots: tuple[str, ...]) -> list[dict[str, str]
         chips.append({"label": "사이즈 입력", "domain": "DISCOVERY"})
     if "quantity" in required_slots:
         chips.append({"label": "수량 선택", "domain": "TRANSACTION"})
-    if "store" in required_slots or "location" in required_slots:
+    if "store" in required_slots or "location" in required_slots or "region" in required_slots:
         chips.append({"label": "지역/매장 입력", "domain": "TRANSACTION"})
     chips.extend([
         {"label": "상품 추천", "domain": "DISCOVERY"},

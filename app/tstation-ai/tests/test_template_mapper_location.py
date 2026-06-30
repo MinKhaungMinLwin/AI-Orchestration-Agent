@@ -24,6 +24,8 @@ from services.tstation.template_mapper import (
     current_discovery_response_decision,
     _product_search_policy_fallback_response,
     _product_result_context_message,
+    _map_product,
+    _map_product_search_size_summary,
     _map_datepick,
     _map_location,
     current_ev_suitability_comparison,
@@ -612,6 +614,73 @@ def test_product_result_context_message_uses_only_current_turn_for_best_seller_c
         current_user_text.reset(token)
 
     assert message == "이번 주 베스트셀러는 다이나프로 HPX예요. 인기 상품 2개를 안내드립니다."
+
+
+def test_map_product_appends_available_sizes_for_unsized_search() -> None:
+    event = _map_product(
+        [
+            _search_product_entry(
+                keyword="아이온",
+                size=None,
+                items=[
+                    {
+                        "goods_no": "G1",
+                        "goods_nm": "아이온 에보",
+                        "tire_size_1": "235/35R20",
+                        "available_sizes": ["235/35R20", "265/35R21", "305/30R21"],
+                        "sale_prc": 210000,
+                    },
+                    {
+                        "goods_no": "G2",
+                        "goods_nm": "아이온 에보 AS SUV",
+                        "tire_size_1": "235/50R20",
+                        "available_sizes": ["235/50R20", "255/45R20", "265/45R20", "255/40R21"],
+                        "sale_prc": 235000,
+                    },
+                ],
+            )
+        ],
+        "",
+    )
+
+    assert event is not None
+    assert event["template"] == "product"
+    assert event["data"]["assistantResponse"] == (
+        "아이온 검색 결과 2개입니다. 원하시는 상품을 선택해 주세요.\n\n"
+        "확인된 대표 사이즈는 아래와 같아요.\n"
+        "- 아이온 에보: 235/35R20, 265/35R21, 305/30R21\n"
+        "- 아이온 에보 AS SUV: 235/50R20, 255/40R21, 255/45R20, 265/45R20"
+    )
+
+
+def test_product_search_size_summary_uses_available_sizes() -> None:
+    token = current_user_text.set("아이온 에보 사이즈 알려줘")
+    try:
+        event = _map_product_search_size_summary(
+            [
+                _search_product_entry(
+                    keyword="아이온 에보",
+                    size=None,
+                    items=[
+                        {
+                            "goods_no": "G1",
+                            "goods_nm": "아이온 에보",
+                            "available_sizes": ["305/30R21", "235/35R20", "265/35R21"],
+                        }
+                    ],
+                )
+            ]
+        )
+    finally:
+        current_user_text.reset(token)
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    assert event["data"]["assistantResponse"] == (
+        "검색된 상품은 현재 아래 사이즈로 확인돼요.\n"
+        "- 아이온 에보: 235/35R20, 265/35R21, 305/30R21\n\n"
+        "차량에 장착 가능한지는 차량번호나 현재 타이어 규격 기준으로 다시 확인해 주세요."
+    )
 
 
 def test_product_search_policy_fallback_does_not_ask_for_size_when_keyword_and_size_were_already_provided() -> None:
@@ -1548,6 +1617,38 @@ def test_bare_s_fit_search_without_size_maps_to_pattern_summary_not_product_card
     assert "젖은 노면과 회전저항 등급은 각각 3등급, 3등급으로 확인돼요." in assistant_response
     assert "차량에 맞는 규격은 차량번호나 현재 타이어 사이즈를 알려주시면" in assistant_response
     assert "products" not in result["data"]
+
+
+def test_unsized_product_search_summary_uses_available_sizes_in_quickreply() -> None:
+    text = "아이온 상품 보기"
+    current_user_text.set(text)
+    current_discovery_response_decision.set(decide_discovery_response(build_discovery_intent_frame(text)))
+
+    result = try_build_template(
+        [
+            _search_product_entry(
+                keyword="아이온",
+                size=None,
+                items=[
+                    {
+                        "goods_no": "G1",
+                        "goods_nm": "아이온 에보 AS",
+                        "available_sizes": ["235/35R20", "235/40R19", "245/35R21", "245/45R19"],
+                        "car_knd_nm": "전기차",
+                        "season_nm": "사계절",
+                        "goods_pfm_nm": "SPORT",
+                    },
+                ],
+            )
+        ],
+        "아이온 검색 결과입니다. 원하시는 상품을 선택해 주세요.",
+    )
+
+    assert result is not None
+    assert result["template"] == "quickReply"
+    assistant_response = result["data"]["assistantResponse"]
+    assert "아이온 에보 AS:" in assistant_response
+    assert "사이즈: 235/35R20, 235/40R19, 245/35R21, 245/45R19" in assistant_response
 
 
 def test_product_search_with_size_acknowledges_input_size_without_size_prompt() -> None:
@@ -3510,6 +3611,69 @@ def test_nearby_store_tool_forces_code_mapper_over_llm_quickreply() -> None:
     assert result is not None
     assert result["template"] == "location"
     assert result["data"]["isBookingFlow"] is True
+
+
+def test_transaction_product_clarify_prefers_product_card_over_discovery_quickreply() -> None:
+    current_pending_intent.set("order")
+    current_goal_type.set("place_order")
+    current_user_text.set("벤투스 에어S 245/45R19 4개 분당정자점에서 주문할래")
+    current_discovery_response_decision.set(
+        ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            metadata={"response_shape_key": "product_search_summary"},
+        )
+    )
+    current_transaction_response_decision.set(
+        ResponseDecision(
+            response_shape=ResponseShape.CARD,
+            template=TemplateName.PRODUCT,
+            metadata={
+                "response_shape_key": "missing_order_slots",
+                "flow_step": "resolve_product",
+            },
+        )
+    )
+
+    result = _map_product(
+        [
+            {
+                "tool": "search_product_tool",
+                "args": {"keyword": "벤투스 에어S", "size": "245/45R19"},
+                "data": [
+                    {
+                        "goods_no": "G000000319584",
+                        "goods_nm": "벤투스 에어S",
+                        "tire_size_1": "245/45R19",
+                        "brand_nm": "HANKOOK",
+                        "prc_grd_nm": "프리미엄",
+                        "goods_pfm_nm": "COMFORT",
+                        "sound_absorber_yn": "Y",
+                        "extra_fvr_sale_prc": 261500,
+                        "sale_prc": 300000,
+                    },
+                    {
+                        "goods_no": "G000000319622",
+                        "goods_nm": "벤투스 에어S",
+                        "tire_size_1": "245/45R19",
+                        "brand_nm": "HANKOOK",
+                        "prc_grd_nm": "프리미엄",
+                        "goods_pfm_nm": "COMFORT",
+                        "sound_absorber_yn": "N",
+                        "extra_fvr_sale_prc": 242100,
+                        "sale_prc": 280000,
+                    },
+                ],
+            }
+        ],
+        "원하시는 상품을 선택해 주세요.",
+    )
+
+    assert result is not None
+    assert result["template"] == "product"
+    assert result["data"]["assistantResponse"] == "주문을 진행하려면 먼저 상품을 선택해 주세요."
+    assert result["data"]["isBookingFlow"] is True
+    assert len(result["data"]["products"]) == 2
 
 
 def test_preview_location_tna_stock_uses_today_install_copy() -> None:

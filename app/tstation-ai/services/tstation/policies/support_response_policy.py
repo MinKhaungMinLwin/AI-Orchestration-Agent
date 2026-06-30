@@ -20,6 +20,7 @@ _BENEFIT_PROMOTION_POLICY = "benefit_promotion_policy"
 _PRODUCT_CONDITION_POLICY = "product_condition_policy"
 _PURCHASE_ORDER_POLICY = "purchase_order_policy"
 _SUPPORT_FAQ_POLICY_GROUP_INTENTS = frozenset({
+    "card_installment_lookup",
     "general_cancel_fee_policy",
     "general_card_cancel_timing_policy",
     "reservation_window_policy",
@@ -71,6 +72,25 @@ _PAYMENT_METHOD_OR_COUPON_POLICY_RE = re.compile(
     r"쿠폰|포인트|제휴\s*혜택|제휴카드|카드사\s*혜택|카드\s*혜택|복원|원복|다시\s*돌아",
     re.IGNORECASE,
 )
+_CARD_INSTALLMENT_CARD_NAME_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("현대카드", ("현대카드", "현대")),
+    ("신한카드", ("신한카드", "신한")),
+    ("삼성카드", ("삼성카드", "삼성")),
+    ("국민카드", ("국민카드", "kb국민", "kb", "국민")),
+    ("롯데카드", ("롯데카드", "롯데")),
+    ("하나카드", ("하나카드", "하나")),
+    ("농협카드", ("농협카드", "nh농협", "nh", "농협")),
+    ("우리카드", ("우리카드", "우리")),
+    ("비씨카드", ("비씨카드", "bc카드", "bc")),
+)
+_CARD_INSTALLMENT_BOTH_PAYMENT_TYPES_RE = re.compile(
+    r"(?:일반.{0,12}스마트\s*페이|스마트\s*페이.{0,12}일반|둘\s*다|둘다|모두|전체|비교)",
+    re.IGNORECASE,
+)
+_CARD_INSTALLMENT_SMARTPAY_RE = re.compile(r"스마트\s*페이|smart\s*pay|smartpay", re.IGNORECASE)
+_CARD_INSTALLMENT_AMOUNT_MANWON_RE = re.compile(r"(\d{1,4}(?:\.\d+)?)\s*만\s*원", re.IGNORECASE)
+_CARD_INSTALLMENT_AMOUNT_WON_RE = re.compile(r"(\d{1,3}(?:,\d{3})+|\d{4,9})\s*원", re.IGNORECASE)
+_CARD_INSTALLMENT_MONTH_RE = re.compile(r"([0-9]{1,2})\s*개?월", re.IGNORECASE)
 _ASSURANCE_DOCUMENT_LOST_RE = re.compile(r"보증서.{0,12}(분실|잃어버|없어)|종이\s*보증서", re.IGNORECASE)
 _ASSURANCE_SERVICE_POLICY_ANCHOR_RE = re.compile(
     r"안심\s*서비스|안심서비스|안심\s*플러스|안심플러스|디지털\s*워런티|종이\s*보증서|보증서|워런티",
@@ -239,6 +259,178 @@ def _support_faq_candidates(tool_result: Mapping[str, Any] | None) -> list[Mappi
 
 def _is_card_installment_lookup_query(text: str) -> bool:
     return bool(_CARD_INSTALLMENT_LOOKUP_RE.search(str(text or "")))
+
+
+def _card_installment_payment_type_from_text(text: str) -> str:
+    normalized = str(text or "")
+    if _CARD_INSTALLMENT_BOTH_PAYMENT_TYPES_RE.search(normalized):
+        return "전체"
+    if _CARD_INSTALLMENT_SMARTPAY_RE.search(normalized) and _card_installment_card_name_from_text(normalized):
+        return "전체"
+    if _CARD_INSTALLMENT_SMARTPAY_RE.search(normalized):
+        return "스마트페이"
+    return "일반"
+
+
+def _card_installment_card_name_from_text(text: str) -> str | None:
+    lowered = str(text or "").lower().replace(" ", "")
+    for canonical_name, aliases in _CARD_INSTALLMENT_CARD_NAME_PATTERNS:
+        for alias in aliases:
+            if alias.lower().replace(" ", "") in lowered:
+                return canonical_name
+    return None
+
+
+def _card_installment_month_from_text(text: str) -> int | None:
+    match = _CARD_INSTALLMENT_MONTH_RE.search(str(text or ""))
+    if match is None:
+        return None
+    try:
+        return int(match.group(1))
+    except (TypeError, ValueError):
+        return None
+
+
+def _card_installment_amount_from_text(text: str) -> int | None:
+    manwon_match = _CARD_INSTALLMENT_AMOUNT_MANWON_RE.search(str(text or ""))
+    if manwon_match is not None:
+        try:
+            return int(float(manwon_match.group(1)) * 10000)
+        except (TypeError, ValueError):
+            return None
+    won_match = _CARD_INSTALLMENT_AMOUNT_WON_RE.search(str(text or ""))
+    if won_match is not None:
+        try:
+            return int(str(won_match.group(1)).replace(",", ""))
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _card_installment_cards(tool_result: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    data = tool_result.get("data") if isinstance(tool_result, Mapping) else None
+    cards = data.get("cards") if isinstance(data, Mapping) else None
+    return [card for card in cards if isinstance(card, dict)] if isinstance(cards, list) else []
+
+
+def _card_installment_group_lines(cards: list[dict[str, Any]]) -> list[str]:
+    grouped: dict[str, set[int]] = {}
+    for card in cards:
+        card_name = str(card.get("iscm_nm") or "").strip()
+        if not card_name:
+            continue
+        months = grouped.setdefault(card_name, set())
+        raw_months = card.get("months")
+        if isinstance(raw_months, list):
+            for value in raw_months:
+                try:
+                    months.add(int(value))
+                except (TypeError, ValueError):
+                    continue
+    lines: list[str] = []
+    for card_name in sorted(grouped):
+        month_values = sorted(grouped[card_name])
+        if not month_values:
+            continue
+        lines.append(f"- {card_name}: {'/'.join(str(month) for month in month_values)}개월")
+    return lines
+
+
+def build_card_installment_lookup_reply(
+    *,
+    intent: str,
+    user_text: str,
+    tool_result: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    if str(intent or "").strip() != "card_installment_lookup":
+        return None
+
+    payment_type = _card_installment_payment_type_from_text(user_text)
+    requested_card_name = _card_installment_card_name_from_text(user_text)
+    requested_month = _card_installment_month_from_text(user_text)
+    requested_amount = _card_installment_amount_from_text(user_text)
+    cards = _card_installment_cards(tool_result)
+    if payment_type != "전체":
+        cards = [card for card in cards if str(card.get("payment_type") or "일반").strip() == payment_type]
+
+    quick_replies = [
+        {"label": "타이어 추천", "domain": "DISCOVERY"},
+        {"label": "구매하기", "domain": "TRANSACTION"},
+    ]
+    metadata = {
+        "paymentType": payment_type,
+        "requestedCardName": requested_card_name,
+        "requestedMonth": requested_month,
+        "requestedAmount": requested_amount,
+        "cardCount": len(cards),
+        "toolGrounded": True,
+    }
+
+    if requested_card_name:
+        matched_cards = [card for card in cards if requested_card_name in str(card.get("iscm_nm") or "").strip()]
+        month_values = sorted(
+            {
+                int(month)
+                for card in matched_cards
+                for month in list(card.get("months") or [])
+                if isinstance(month, int) or str(month).isdigit()
+            }
+        )
+        if month_values:
+            response = (
+                f"**{requested_card_name}** 은 다음 개월수로 무이자 할부 가능해요.\n\n"
+                f"- {'/'.join(str(month) for month in month_values)}개월"
+            )
+        else:
+            response = f"현재 진행 중인 **{requested_card_name}** 무이자 할부 정보는 확인되지 않아요."
+        return {"assistant_response": response, "quick_replies": quick_replies, "metadata": metadata}
+
+    if requested_month is not None:
+        matched_names = sorted(
+            {
+                str(card.get("iscm_nm") or "").strip()
+                for card in cards
+                if str(card.get("iscm_nm") or "").strip() and requested_month in list(card.get("months") or [])
+            }
+        )
+        if matched_names:
+            response = (
+                f"**{requested_month}개월 무이자** 가 가능한 카드는 다음과 같아요.\n\n"
+                + "\n".join(f"- {name}" for name in matched_names)
+            )
+        else:
+            response = f"현재 진행 중인 **{requested_month}개월 무이자** 가능 카드는 확인되지 않아요."
+        return {"assistant_response": response, "quick_replies": quick_replies, "metadata": metadata}
+
+    if payment_type == "전체":
+        general_lines = _card_installment_group_lines(
+            [card for card in cards if str(card.get("payment_type") or "").strip() == "일반"]
+        )
+        smartpay_lines = _card_installment_group_lines(
+            [card for card in cards if str(card.get("payment_type") or "").strip() == "스마트페이"]
+        )
+        sections: list[str] = []
+        if general_lines:
+            sections.append("**일반 카드 무이자 기준**\n" + "\n".join(general_lines))
+        if smartpay_lines:
+            sections.append("**스마트페이 기준**\n" + "\n".join(smartpay_lines))
+        response = "\n\n".join(sections) if sections else "현재 진행 중인 무이자 할부 정보는 확인되지 않아요."
+        return {"assistant_response": response, "quick_replies": quick_replies, "metadata": metadata}
+
+    lines = _card_installment_group_lines(cards)
+    if payment_type == "스마트페이":
+        response = (
+            "**스마트페이 기준 무이자 할부 가능 카드**는 다음과 같아요.\n\n" + "\n".join(lines)
+            if lines
+            else "현재 진행 중인 스마트페이 무이자 할부 정보는 확인되지 않아요."
+        )
+    else:
+        response = (
+            "**무이자 할부 가능 카드**는 다음과 같아요.\n\n" + "\n".join(lines)
+            if lines
+            else "현재 진행 중인 무이자 할부 정보는 확인되지 않아요."
+        )
+    return {"assistant_response": response, "quick_replies": quick_replies, "metadata": metadata}
 
 
 def _is_payment_error_troubleshooting_query(text: str) -> bool:
@@ -895,6 +1087,8 @@ def _build_support_faq_safe_fallback_reply(
 def resolve_support_faq_policy_context(intent: str, user_text: str) -> dict[str, Any] | None:
     normalized_intent = str(intent or "").strip()
     text = str(user_text or "")
+    if normalized_intent == "card_installment_lookup":
+        return {"policy_group": _PAYMENT_REFUND_POLICY, "fact_type": "card_installment_lookup"}
     if normalized_intent in {"signup_first_purchase_benefit_policy", "signup_coupon_guidance"} and _ASSURANCE_SERVICE_POLICY_ANCHOR_RE.search(text):
         normalized_intent = "assurance_service_policy"
     if normalized_intent == "tire_quality_warranty_policy" and _is_tire_manufacture_date_question(text):
@@ -1585,6 +1779,13 @@ def build_support_faq_evidence_grounded_reply(
     user_text: str,
     tool_result: Mapping[str, Any] | None,
 ) -> dict[str, Any] | None:
+    card_installment_reply = build_card_installment_lookup_reply(
+        intent=intent,
+        user_text=user_text,
+        tool_result=tool_result,
+    )
+    if card_installment_reply is not None:
+        return card_installment_reply
     if intent not in _SUPPORT_FAQ_LLM_GROUNDED_ALLOWLIST:
         return None
     resolution = resolve_support_faq_policy_context(intent, user_text)
@@ -1754,6 +1955,13 @@ def build_support_faq_policy_reply(
     user_text: str,
     tool_result: Mapping[str, Any] | None,
 ) -> dict[str, Any] | None:
+    card_installment_reply = build_card_installment_lookup_reply(
+        intent=intent,
+        user_text=user_text,
+        tool_result=tool_result,
+    )
+    if card_installment_reply is not None:
+        return card_installment_reply
     resolution = resolve_support_faq_policy_context(intent, user_text)
     if not resolution:
         return None
@@ -2441,6 +2649,23 @@ def decide_support_response(
             assistant_guidance=(
                 "결제 오류/결제창/결제 진행 불가 문의는 FAQ hybrid 검색을 먼저 수행하고, FAQ 근거로 시도 가능한 해결 방법을 안내한다. "
                 "1:1 문의는 해결 방법 안내 후에도 문제가 지속될 때 fallback CTA로만 제공한다."
+            ),
+        )
+
+    if intent == "card_installment_lookup" or _is_card_installment_lookup_query(text):
+        return _decision(
+            response_shape_key="card_installment_lookup",
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=(
+                "route_to_payment_error_troubleshooting",
+                "route_to_generic_faq_search",
+                "merge_general_and_smartpay_installments",
+            ),
+            assistant_guidance=(
+                "카드사별 무이자 할부 가능 여부/개월수 문의는 FAQ 일반 정책이 아니라 get_card_installments_tool로 처리한다. "
+                "사용자가 카드사를 말하면 해당 카드만, 개월수를 말하면 해당 개월수 가능 카드만, 일반 질문이면 카드사별 가능 개월수를 안내한다. "
+                "스마트페이를 명시했을 때만 스마트페이 row 를 사용하고, 일반 카드 무이자와 스마트페이 개월수는 절대 합산하지 않는다."
             ),
         )
 

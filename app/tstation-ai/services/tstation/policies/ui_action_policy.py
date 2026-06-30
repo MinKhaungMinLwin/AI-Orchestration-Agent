@@ -69,6 +69,14 @@ _PRODUCT_SELECTION_INFO_QUERY_RE = re.compile(
 _PRODUCT_SELECTION_TRANSACTION_ACTION_RE = re.compile(
     r"(재고|장착|구매|예약|주문|가격|담아|장바구니|결제)"
 )
+_ORDER_HISTORY_LOOKUP_INPUT_RE = re.compile(
+    r"^"
+    r"(?:내\s*)?주문(?:\s*(?:내역|목록))?\s*(?:좀|쫌|한번|한\s*번)?\s*(?:보여|조회|확인|알려)?(?:줘|주세요)?|"
+    r"최근\s*주문(?:\s*내역)?\s*(?:좀|쫌|한번|한\s*번)?\s*(?:보여|조회|확인|알려)?(?:줘|주세요)?|"
+    r"내가\s*주문한\s*거\s*(?:좀|쫌|한번|한\s*번)?\s*(?:보여|조회|확인|알려)?(?:줘|주세요)?"
+    r"$",
+    re.IGNORECASE,
+)
 _PRODUCT_NAME_HINT_STOP_RE = re.compile(
     r"타이어|상품|제품|사이즈|규격|구매하고|구매|주문|결제|장착|장바구니|담|사려고|사려|사고|살래|"
     r"싶은데|싶|원해|주세요|해줘|할게|하고|가능|가격|재고|추천|찾|검색|\d+\s*개|는|은|\?",
@@ -218,6 +226,7 @@ _UI_ACTION_SLOT_KEYS = (
     "payment_amount",
     "price_basis",
     "price_source_tool",
+    "payment_amount_source",
     "sale_prc",
     "extra_fvr_sale_prc",
     "cheapest_final_prc",
@@ -1520,6 +1529,17 @@ def _interactive_flow_contract_intent_from_slots(
     pending_context_goal = str(pending_order_context.get("goal_type") or "").strip()
     router_intent = str(latest_router_evidence.get("intent") or "").strip()
     router_execution_plan = " ".join(str(item or "") for item in (latest_router_evidence.get("execution_plan") or ()))
+    pending_context_has_purchase_shape = bool(
+        pending_order_context
+        and not (pending_context_intent == "stock" or pending_context_goal == "store_with_stock")
+        and (
+            pending_order_context.get("ord_qty")
+            or pending_order_context.get("quantity")
+            or pending_order_context.get("shop_id")
+            or pending_order_context.get("shop_name")
+            or pending_order_context.get("region")
+        )
+    )
 
     if availability_intent == "today_install":
         return _STOCK_STORE_SEARCH_INTENT
@@ -1552,6 +1572,8 @@ def _interactive_flow_contract_intent_from_slots(
     }:
         return _QUICK_ORDER_RESERVATION_INTENT
     if pending_context_intent in {"order", "cart"} or pending_context_goal in {"place_order", "add_to_cart"}:
+        return _QUICK_ORDER_RESERVATION_INTENT
+    if pending_context_has_purchase_shape:
         return _QUICK_ORDER_RESERVATION_INTENT
     if dormant_purchase_context:
         return _QUICK_ORDER_RESERVATION_INTENT
@@ -2184,6 +2206,7 @@ def _selected_product_price_patch(row: Mapping[str, Any]) -> dict[str, Any]:
         patch["payment_amount"] = value
         patch["price_basis"] = key
         patch["price_source_tool"] = "selected_product_candidate"
+        patch["payment_amount_source"] = "selected_product_candidate_unit_price"
         break
     return patch
 
@@ -3881,6 +3904,11 @@ def resolve_product_row_from_template_selection(
             "candidate_index": index + 1,
             "selection_source": "product_template_candidate",
         }
+        for source in (product, meta):
+            for key in (*_PRODUCT_PRICE_FIELDS, "wage_prc"):
+                value = source.get(key)
+                if value not in (None, "", [], {}) and row.get(key) in (None, "", [], {}):
+                    row[key] = value
         return {key: value for key, value in row.items() if value not in (None, "", [], {})}
 
     ordinal_idx = _selection_ordinal_index(text, len(metadata))
@@ -5137,6 +5165,8 @@ def _region_store_input_values(
     block_region_text: bool = False,
 ) -> dict[str, Any]:
     text = str(user_text or "").strip()
+    if _ORDER_HISTORY_LOOKUP_INPUT_RE.search(text):
+        return {}
     parsed = ConversationSlots.extract_from_user_text(text)
     values: dict[str, Any] = {}
     label_match = _STORE_VIEW_LABEL_RE.fullmatch(text)

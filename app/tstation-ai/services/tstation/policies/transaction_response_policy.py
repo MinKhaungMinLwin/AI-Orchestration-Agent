@@ -51,6 +51,8 @@ def decide_transaction_response(
         return _decide_open_store_search()
     if intent == "store_service_search":
         return _decide_store_service_search(slots=slots)
+    if intent == "store_recommendation_by_vehicle_experience":
+        return _decide_vehicle_experience_store_search(slots=slots)
     if intent == "unsupported_or_unmapped_store_service_policy":
         return _decide_unsupported_or_unmapped_store_service_policy(slots=slots)
     if intent == "store_service_advisory":
@@ -71,6 +73,8 @@ def decide_transaction_response(
         return _decide_reservation_store_info_lookup()
     if intent == "reservation_status_lookup":
         return _decide_reservation_status_lookup()
+    if intent == "reservation_change_request":
+        return _decide_reservation_change_request()
     if intent == "delivery_delay_reservation_schedule_policy":
         return _decide_delivery_delay_reservation_schedule_policy()
     if intent == "reservation_window_policy":
@@ -318,6 +322,44 @@ def _decide_store_service_search(*, slots: dict[str, Any]) -> ResponseDecision:
     )
 
 
+def _decide_vehicle_experience_store_search(*, slots: dict[str, Any]) -> ResponseDecision:
+    if not slots.get("region"):
+        return _decision(
+            response_shape_key="missing_vehicle_experience_store_search_region",
+            response_shape=ResponseShape.CLARIFY,
+            template=TemplateName.QUICK_REPLY,
+            required_slots=("region",),
+            forbidden_behaviors=(
+                "random_vehicle_experience_store_search_without_region",
+                "quick_order_for_vehicle_experience_store_search",
+                "schedule_tool_for_vehicle_experience_store_search",
+            ),
+            assistant_guidance="차량/정비 경험 조건의 매장 추천은 지역이 필요하므로 지역만 짧게 요청한다.",
+            metadata={
+                "store_search_condition": "vehicle_experience",
+                "requested_vehicle_experience": slots.get("requested_vehicle_experience"),
+            },
+        )
+    return _decision(
+        response_shape_key="store_recommendation_by_vehicle_experience",
+        response_shape=ResponseShape.LOCATION,
+        template=TemplateName.LOCATION,
+        forbidden_behaviors=(
+            "quick_order_for_vehicle_experience_store_search",
+            "schedule_tool_for_vehicle_experience_store_search",
+            "preorder_for_vehicle_experience_store_search",
+        ),
+        assistant_guidance=(
+            "차량/수입차/정비 경험 조건의 매장 추천은 purchase/reservation 실행이 아니라 조건부 매장 검색이다. "
+            "기존 구매 슬롯은 참고 정보로만 두고, 지역 기반 매장 검색 결과를 location 카드로 안내한다."
+        ),
+        metadata={
+            "store_search_condition": "vehicle_experience",
+            "requested_vehicle_experience": slots.get("requested_vehicle_experience"),
+        },
+    )
+
+
 def _decide_store_service_advisory() -> ResponseDecision:
     return _decision(
         response_shape_key="store_service_advisory",
@@ -424,6 +466,26 @@ def _decide_reservation_status_lookup() -> ResponseDecision:
             "stale 상품/매장 슬롯으로 상품 검색이나 예약 가능 시간 조회로 돌리지 말고, "
             "get_my_reservations_tool 또는 주문/예약 source를 확인한 뒤 확인된 예약만 안내한다."
         ),
+    )
+
+
+def _decide_reservation_change_request() -> ResponseDecision:
+    return _decision(
+        response_shape_key="reservation_change_request_guidance",
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        forbidden_behaviors=(
+            "start_new_reservation_flow",
+            "call_store_schedule_for_existing_reservation_change",
+            "promise_reservation_change_processing",
+            "emit_datepick_for_existing_reservation_change",
+            "emit_preorder_for_existing_reservation_change",
+        ),
+        assistant_guidance=(
+            "기존 예약 시간/일정 변경 요청은 새 예약 생성이 아니다. 챗봇이 직접 예약을 변경했다고 말하지 말고, "
+            "예약/주문 내역 CTA 또는 고객센터/1:1 문의 안내로 제한한다."
+        ),
+        metadata={"reservation_management_action": "change_request"},
     )
 
 
@@ -756,6 +818,7 @@ def _decide_maintenance_addon_with_tire_service() -> ResponseDecision:
             "svc_codes 121/122 또는 All My T/경정비 신호가 확인되면 온라인 타이어 주문 시 경정비 함께 주문 가능성을 안내하고, "
             "확인되지 않으면 타이어 장착은 온라인 주문/예약으로 진행하되 경정비는 방문예약 또는 매장 사전 연락으로 확인하도록 안내한다."
         ),
+        metadata={"service_action_boundary": "service_booking_support"},
     )
 
 
@@ -775,6 +838,7 @@ def _decide_store_attribute_inquiry() -> ResponseDecision:
             "특정 매장의 서비스/장비/운영 조건/주관 품질 가능 여부는 source 없이 단정하지 않는다. "
             "매장명이 있으면 기본 매장정보를 함께 안내해 사용자가 직접 확인하도록 하고, 매장명이 없으면 매장명을 요청한다."
         ),
+        metadata={"service_action_boundary": "store_verification"},
     )
 
 
@@ -885,18 +949,22 @@ def _decide_inventory_availability(
 def _decide_quick_order_reservation(*, slots: dict[str, Any]) -> ResponseDecision:
     flow_state = resolve_purchase_order_flow(intent="quick_order_reservation", known_slots=slots)
     if flow_state is not None:
+        metadata = {
+            "missing_slots": tuple(flow_state.missing_slots),
+            "flow_id": flow_state.flow_id,
+            "flow_step": flow_state.flow_step,
+        }
+        template = _purchase_flow_template(flow_state.flow_step, flow_state.template, flow_state.missing_slots)
+        if template == TemplateName.PRODUCT:
+            metadata["clarify_template"] = "product"
         return _decision(
             response_shape_key=flow_state.response_shape_key,
-            response_shape=_response_shape_from_template(flow_state.template),
-            template=flow_state.template,
+            response_shape=_response_shape_from_template(template),
+            template=template,
             required_slots=flow_state.missing_slots,
             forbidden_behaviors=tuple(flow_state.forbidden_tools),
             assistant_guidance=_purchase_flow_guidance(flow_state.flow_step),
-            metadata={
-                "missing_slots": tuple(flow_state.missing_slots),
-                "flow_id": flow_state.flow_id,
-                "flow_step": flow_state.flow_step,
-            },
+            metadata=metadata,
         )
     missing: list[str] = []
     if not (slots.get("goods_no") or slots.get("tire_size")):
@@ -960,18 +1028,22 @@ def _decide_quick_order_reservation(*, slots: dict[str, Any]) -> ResponseDecisio
 def _decide_quick_order_execute(*, slots: dict[str, Any]) -> ResponseDecision:
     flow_state = resolve_purchase_order_flow(intent="quick_order_execute", known_slots=slots)
     if flow_state is not None:
+        metadata = {
+            "missing_slots": tuple(flow_state.missing_slots),
+            "flow_id": flow_state.flow_id,
+            "flow_step": flow_state.flow_step,
+        }
+        template = _purchase_flow_template(flow_state.flow_step, flow_state.template, flow_state.missing_slots)
+        if template == TemplateName.PRODUCT:
+            metadata["clarify_template"] = "product"
         return _decision(
             response_shape_key=flow_state.response_shape_key,
-            response_shape=_response_shape_from_template(flow_state.template),
-            template=flow_state.template,
+            response_shape=_response_shape_from_template(template),
+            template=template,
             required_slots=flow_state.missing_slots,
             forbidden_behaviors=tuple(flow_state.forbidden_tools),
             assistant_guidance=_purchase_flow_guidance(flow_state.flow_step),
-            metadata={
-                "missing_slots": tuple(flow_state.missing_slots),
-                "flow_id": flow_state.flow_id,
-                "flow_step": flow_state.flow_step,
-            },
+            metadata=metadata,
         )
     missing: list[str] = []
     if not slots.get("goods_no"):
@@ -1023,6 +1095,8 @@ def _decision(
 
 
 def _response_shape_from_template(template: TemplateName) -> ResponseShape:
+    if template == TemplateName.PRODUCT:
+        return ResponseShape.CARD
     if template == TemplateName.LOCATION:
         return ResponseShape.LOCATION
     if template == TemplateName.DATE_PICK:
@@ -1030,6 +1104,16 @@ def _response_shape_from_template(template: TemplateName) -> ResponseShape:
     if template in {TemplateName.PRE_ORDER, TemplateName.ORDER_COMPLETE}:
         return ResponseShape.ACTION_CONFIRM
     return ResponseShape.CLARIFY
+
+
+def _purchase_flow_template(
+    flow_step: str,
+    default_template: TemplateName,
+    missing_slots: tuple[str, ...],
+) -> TemplateName:
+    if flow_step == "resolve_product" and "product" not in missing_slots:
+        return TemplateName.PRODUCT
+    return default_template
 
 
 def _purchase_flow_guidance(flow_step: str) -> str:
