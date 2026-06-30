@@ -3613,6 +3613,70 @@ def test_nearby_store_tool_forces_code_mapper_over_llm_quickreply() -> None:
     assert result["data"]["isBookingFlow"] is True
 
 
+def test_transaction_product_clarify_prefers_product_card_over_discovery_quickreply() -> None:
+    current_pending_intent.set("order")
+    current_goal_type.set("place_order")
+    current_user_text.set("벤투스 에어S 245/45R19 4개 분당정자점에서 주문할래")
+    current_discovery_response_decision.set(
+        ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            metadata={"response_shape_key": "product_search_summary"},
+        )
+    )
+    current_transaction_response_decision.set(
+        ResponseDecision(
+            response_shape=ResponseShape.CLARIFY,
+            template=TemplateName.QUICK_REPLY,
+            metadata={
+                "response_shape_key": "missing_order_slots",
+                "flow_step": "resolve_product",
+                "clarify_template": "product",
+            },
+        )
+    )
+
+    result = _map_product(
+        [
+            {
+                "tool": "search_product_tool",
+                "args": {"keyword": "벤투스 에어S", "size": "245/45R19"},
+                "data": [
+                    {
+                        "goods_no": "G000000319584",
+                        "goods_nm": "벤투스 에어S",
+                        "tire_size_1": "245/45R19",
+                        "brand_nm": "HANKOOK",
+                        "prc_grd_nm": "프리미엄",
+                        "goods_pfm_nm": "COMFORT",
+                        "sound_absorber_yn": "Y",
+                        "extra_fvr_sale_prc": 261500,
+                        "sale_prc": 300000,
+                    },
+                    {
+                        "goods_no": "G000000319622",
+                        "goods_nm": "벤투스 에어S",
+                        "tire_size_1": "245/45R19",
+                        "brand_nm": "HANKOOK",
+                        "prc_grd_nm": "프리미엄",
+                        "goods_pfm_nm": "COMFORT",
+                        "sound_absorber_yn": "N",
+                        "extra_fvr_sale_prc": 242100,
+                        "sale_prc": 280000,
+                    },
+                ],
+            }
+        ],
+        "원하시는 상품을 선택해 주세요.",
+    )
+
+    assert result is not None
+    assert result["template"] == "product"
+    assert result["data"]["assistantResponse"] == "주문을 진행하려면 먼저 상품을 선택해 주세요."
+    assert result["data"]["isBookingFlow"] is True
+    assert len(result["data"]["products"]) == 2
+
+
 def test_preview_location_tna_stock_uses_today_install_copy() -> None:
     """TNA-only preview stock should still be phrased as today-installable."""
     current_pending_intent.set("stock")

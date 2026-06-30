@@ -45,6 +45,25 @@ def test_purchase_response_with_quantity_and_no_store_asks_store() -> None:
     assert "get_logistics_inventory_tool" in decision.forbidden_behaviors
 
 
+def test_purchase_response_with_product_family_only_prefers_product_card_clarify() -> None:
+    decision = decide_transaction_response(
+        intent="quick_order_reservation",
+        user_text="벤투스 에어S 245/45R19 4개 분당정자점에서 주문할래",
+        known_slots={
+            "product_name": "벤투스 에어S",
+            "tire_size": "245/45R19",
+            "ord_qty": 4,
+            "store_name": "분당정자점",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+
+    assert decision.template == TemplateName.QUICK_REPLY
+    assert decision.metadata["flow_step"] == "resolve_product"
+    assert decision.metadata["clarify_template"] == "product"
+
+
 def test_purchase_response_with_store_and_no_quantity_asks_quantity() -> None:
     decision = decide_transaction_response(
         intent="quick_order_reservation",
