@@ -890,12 +890,13 @@ def _decide_quick_order_reservation(*, slots: dict[str, Any]) -> ResponseDecisio
             "flow_id": flow_state.flow_id,
             "flow_step": flow_state.flow_step,
         }
-        if flow_state.flow_step == "resolve_product":
+        template = _purchase_flow_template(flow_state.flow_step, flow_state.template, flow_state.missing_slots)
+        if template == TemplateName.PRODUCT:
             metadata["clarify_template"] = "product"
         return _decision(
             response_shape_key=flow_state.response_shape_key,
-            response_shape=_response_shape_from_template(flow_state.template),
-            template=flow_state.template,
+            response_shape=_response_shape_from_template(template),
+            template=template,
             required_slots=flow_state.missing_slots,
             forbidden_behaviors=tuple(flow_state.forbidden_tools),
             assistant_guidance=_purchase_flow_guidance(flow_state.flow_step),
@@ -968,12 +969,13 @@ def _decide_quick_order_execute(*, slots: dict[str, Any]) -> ResponseDecision:
             "flow_id": flow_state.flow_id,
             "flow_step": flow_state.flow_step,
         }
-        if flow_state.flow_step == "resolve_product":
+        template = _purchase_flow_template(flow_state.flow_step, flow_state.template, flow_state.missing_slots)
+        if template == TemplateName.PRODUCT:
             metadata["clarify_template"] = "product"
         return _decision(
             response_shape_key=flow_state.response_shape_key,
-            response_shape=_response_shape_from_template(flow_state.template),
-            template=flow_state.template,
+            response_shape=_response_shape_from_template(template),
+            template=template,
             required_slots=flow_state.missing_slots,
             forbidden_behaviors=tuple(flow_state.forbidden_tools),
             assistant_guidance=_purchase_flow_guidance(flow_state.flow_step),
@@ -1029,6 +1031,8 @@ def _decision(
 
 
 def _response_shape_from_template(template: TemplateName) -> ResponseShape:
+    if template == TemplateName.PRODUCT:
+        return ResponseShape.CARD
     if template == TemplateName.LOCATION:
         return ResponseShape.LOCATION
     if template == TemplateName.DATE_PICK:
@@ -1036,6 +1040,16 @@ def _response_shape_from_template(template: TemplateName) -> ResponseShape:
     if template in {TemplateName.PRE_ORDER, TemplateName.ORDER_COMPLETE}:
         return ResponseShape.ACTION_CONFIRM
     return ResponseShape.CLARIFY
+
+
+def _purchase_flow_template(
+    flow_step: str,
+    default_template: TemplateName,
+    missing_slots: tuple[str, ...],
+) -> TemplateName:
+    if flow_step == "resolve_product" and "product" not in missing_slots:
+        return TemplateName.PRODUCT
+    return default_template
 
 
 def _purchase_flow_guidance(flow_step: str) -> str:

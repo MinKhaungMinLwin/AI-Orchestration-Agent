@@ -59,9 +59,30 @@ def test_purchase_response_with_product_family_only_prefers_product_card_clarify
         },
     )
 
-    assert decision.template == TemplateName.QUICK_REPLY
+    assert decision.template == TemplateName.PRODUCT
+    assert decision.response_shape == ResponseShape.CARD
     assert decision.metadata["flow_step"] == "resolve_product"
     assert decision.metadata["clarify_template"] == "product"
+
+
+def test_purchase_response_without_product_name_keeps_quickreply_fallback() -> None:
+    decision = decide_transaction_response(
+        intent="quick_order_reservation",
+        user_text="245/45R19 4개 분당정자점에서 주문할래",
+        known_slots={
+            "tire_size": "245/45R19",
+            "ord_qty": 4,
+            "store_name": "분당정자점",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+
+    assert decision.template == TemplateName.QUICK_REPLY
+    assert decision.response_shape == ResponseShape.CLARIFY
+    assert decision.metadata["flow_step"] == "resolve_product"
+    assert decision.metadata["missing_slots"] == ("product",)
+    assert "clarify_template" not in decision.metadata
 
 
 def test_purchase_response_with_store_and_no_quantity_asks_quantity() -> None:
@@ -248,8 +269,9 @@ def test_tc231_missing_size_does_not_build_null_order_summary() -> None:
     assert decision.response_shape == ResponseShape.CLARIFY
     assert decision.metadata["response_shape_key"] == "missing_order_slots"
     assert decision.metadata["missing_slots"] == ("tire_size",)
-    assert decision.required_slots == ()
-    assert "order_summary_with_null_required_fields" in decision.forbidden_behaviors
+    assert decision.required_slots == ("tire_size",)
+    assert "quick_order_tool" in decision.forbidden_behaviors
+    assert "get_store_schedule_tool" in decision.forbidden_behaviors
 
 
 def test_reservation_request_requires_quantity_when_product_size_store_are_known() -> None:
@@ -269,7 +291,7 @@ def test_reservation_request_requires_quantity_when_product_size_store_are_known
     assert decision.response_shape == ResponseShape.CLARIFY
     assert decision.metadata["response_shape_key"] == "missing_order_slots"
     assert decision.metadata["missing_slots"] == ("quantity",)
-    assert decision.required_slots == ()
+    assert decision.required_slots == ("quantity",)
 
 
 def test_tc233_complete_product_quantity_store_request_shows_reservation_slots() -> None:
@@ -289,5 +311,6 @@ def test_tc233_complete_product_quantity_store_request_shows_reservation_slots()
     assert decision.template == TemplateName.DATE_PICK
     assert decision.response_shape == ResponseShape.DATE_PICK
     assert decision.metadata["response_shape_key"] == "reservation_slots"
-    assert decision.required_slots == ()
-    assert "store_hours_instead_of_slots" in decision.forbidden_behaviors
+    assert decision.required_slots == ("booking_datetime",)
+    assert "quick_order_tool" in decision.forbidden_behaviors
+    assert "get_final_price_tool" in decision.forbidden_behaviors
