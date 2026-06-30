@@ -20407,6 +20407,34 @@ def test_region_input_context_resolution_marks_expected_region_slot_fill() -> No
     assert resolution.slots_to_promote["region"] == "분당"
 
 
+def test_region_input_context_resolution_rejects_order_history_queries() -> None:
+    resolution = resolve_region_or_store_input_context(
+        user_text="내 주문목록",
+        ui_action=None,
+        chip_context=None,
+        latest_quickreply_tmpl={
+            "template": "quickReply",
+            "data": {
+                "assistantResponse": "구매를 진행할 매장을 확인할 지역명을 입력해 주세요.",
+                "quickReplies": [{"label": "분당", "domain": "TRANSACTION"}],
+            },
+        },
+        latest_location_tmpl=None,
+        messages=[],
+        merged_slots=ConversationSlots(
+            goods_no="G000000319584",
+            tire_size="245/45R19",
+            ord_qty=2,
+            pending_intent="stock",
+            goal_type="store_with_stock",
+            stock_check_mode="preview",
+        ),
+    )
+
+    assert resolution.resolved is False
+    assert resolution.resume_source == "none"
+
+
 def test_direct_quantity_input_keeps_purchase_flow_and_moves_to_ask_store() -> None:
     frame = build_transaction_intent_frame(
         "2개",
