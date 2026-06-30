@@ -28733,16 +28733,12 @@ class TStationChatServiceV2:
             else {}
         )
         if expected_slot_fill_precheck.get("matched") and not _router_contract_is_high_confidence_policy(routing_result):
-            flow_state_reconciliation = (
-                router_slot_fill_metadata.get("flow_state_reconciliation")
-                if isinstance(router_slot_fill_metadata.get("flow_state_reconciliation"), Mapping)
+            routing_override = (
+                router_slot_fill_metadata.get("routing_override")
+                if isinstance(router_slot_fill_metadata.get("routing_override"), Mapping)
                 else {}
             )
-            expected_flow = str(
-                flow_state_reconciliation.get("intent")
-                or expected_slot_fill_precheck.get("current_flow")
-                or ""
-            ).strip()
+            expected_flow = str(routing_override.get("intent") or "").strip()
             if expected_flow in {"quick_order_reservation", "stock_store_search"}:
                 original_domains = [domain.value for domain in (domains or [])]
                 original_intent = str(getattr(routing_result, "intent", "none") or "none") if routing_result else "none"
@@ -28783,11 +28779,7 @@ class TStationChatServiceV2:
                     "router_slot_fill_validated": True,
                     "router_slot_patch": dict(expected_slot_fill_precheck.get("slot_patch") or {}),
                     "slot_patch": dict(expected_slot_fill_precheck.get("slot_patch") or {}),
-                    "contract_correction_source": (
-                        "flow_state_reconciliation"
-                        if flow_state_reconciliation
-                        else "expected_slot_fill_precheck"
-                    ),
+                    "contract_correction_source": str(routing_override.get("source") or "slot_fill_controller"),
                 })
         previous_pending_intent = str(getattr(merged_slots, "pending_intent", None) or "").strip() or None
         previous_goal_type = str(getattr(merged_slots, "goal_type", None) or "").strip() or None
@@ -28829,11 +28821,16 @@ class TStationChatServiceV2:
                 if isinstance(router_slot_fill_metadata.get("expected_slot_fill_precheck"), Mapping)
                 else {}
             )
+            routing_override = (
+                router_slot_fill_metadata.get("routing_override")
+                if isinstance(router_slot_fill_metadata.get("routing_override"), Mapping)
+                else {}
+            )
             should_restore_stock_candidates_from_template = bool(
                 raw_ui_action
                 or (
                     expected_slot_fill_precheck.get("matched")
-                    and str(expected_slot_fill_precheck.get("current_flow") or "") == "stock_store_search"
+                    and str(routing_override.get("intent") or "") == "stock_store_search"
                     and str(expected_slot_fill_precheck.get("filled_slot") or "") == "store"
                 )
             )

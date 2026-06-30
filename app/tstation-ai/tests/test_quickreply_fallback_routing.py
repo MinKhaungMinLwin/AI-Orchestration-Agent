@@ -19568,6 +19568,8 @@ def test_slot_fill_controller_promotes_stock_schedule_to_parent_purchase_flow() 
     assert precheck["resume_source"] == "expected_slot_fill:schedule"
     assert decision.flow_state_reconciliation["intent"] == "quick_order_reservation"
     assert decision.flow_state_reconciliation["flow_step"] == "build_preorder"
+    assert decision.routing_override["intent"] == "quick_order_reservation"
+    assert decision.routing_override["source"] == "flow_state_after_slot_patch"
     assert decision.slots.pending_intent == "order"
     assert decision.slots.goal_type == "place_order"
 
