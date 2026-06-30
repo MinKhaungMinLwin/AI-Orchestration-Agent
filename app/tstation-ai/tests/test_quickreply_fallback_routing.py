@@ -35340,6 +35340,59 @@ def test_preview_single_store_still_renders_location_for_store_candidate_contrac
     assert event["data"]["isBookingFlow"] is True
 
 
+def test_order_preview_store_candidate_does_not_resume_as_stock_flow() -> None:
+    location_payload = {
+        "stores": [{"nameAddress": "티스테이션 판교점"}],
+        "metadata": [
+            {
+                "shopId": "F00721",
+                "shopName": "티스테이션 판교점",
+                "sourceTool": "transaction_store_preview_tool",
+                "stockCheckMode": "preview",
+                "scheduleMode": "in_store_logistics_combined",
+                "scheduleTier": "in_store_logistics_combined",
+                "inventoryMode": "in_store_logistics_combined",
+                "goodsNo": "G000000317682",
+                "goodsNm": "다이나프로 HPX",
+                "tireSize": "235/55R19",
+                "ordQty": 2,
+                "region": "분당",
+                "pendingIntent": "order",
+                "goalType": "place_order",
+            }
+        ],
+        "contractMetadata": {
+            "contract_intent": "quick_order_reservation_slot_fill_region",
+            "response_shape_key": "reservation_store_candidates",
+        },
+    }
+
+    delta = store_candidates_flow_delta(event=location_payload)
+    active_context = commit_flow_state(
+        {},
+        delta,
+        source="location_template:purchase_store_candidates",
+        flow_type=str(delta.get("flow_type") or "purchase"),
+        flow_step=str(delta.get("flow_step") or "show_store_candidates"),
+    ).state.to_active_flow_context()
+    patch = store_candidate_selection_patch(
+        active_flow_context=active_context,
+        user_text="티스테이션 판교점",
+        selection_hint={},
+    )
+
+    assert delta["flow_type"] == "purchase"
+    assert active_context["flow_type"] == "purchase"
+    assert active_context["intent"]["pending_intent"] == "order"
+    assert active_context["intent"]["goal_type"] == "place_order"
+    assert active_context["last_candidates"][0]["flow_type"] == "purchase"
+    assert patch["_flow_type"] == "purchase"
+    assert patch["flow_step"] == "store_selected"
+    assert patch["pending_intent"] == "order"
+    assert patch["goal_type"] == "place_order"
+    assert "stock_check_mode" not in patch
+
+
 def test_turn_contract_reports_missing_inventory_tool_for_pure_stock_contract() -> None:
     contract = build_turn_contract(
         user_text="4개",
