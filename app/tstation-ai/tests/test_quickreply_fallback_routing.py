@@ -19388,8 +19388,8 @@ def test_expected_slot_fill_precheck_accepts_direct_quantity_for_active_stock() 
     assert precheck["matched"] is True
     assert precheck["filled_slot"] == "quantity"
     assert precheck["slot_patch"]["ord_qty"] == 4
-    assert precheck["slot_patch"]["pending_intent"] == "stock"
-    assert precheck["slot_patch"]["goal_type"] == "store_with_stock"
+    assert "pending_intent" not in precheck["slot_patch"]
+    assert "goal_type" not in precheck["slot_patch"]
     assert precheck["resume_source"] == "expected_slot_fill:quantity"
 
 
@@ -19430,8 +19430,8 @@ def test_expected_slot_fill_precheck_accepts_executable_store_candidate_step() -
     assert precheck["slot_patch"]["tire_model"] == "벤투스 S2 AS"
     assert precheck["slot_patch"]["pending_product_name"] == "벤투스 S2 AS"
     assert precheck["slot_patch"]["payment_amount"] == 308200
-    assert precheck["slot_patch"]["pending_intent"] == "order"
-    assert precheck["slot_patch"]["goal_type"] == "place_order"
+    assert "pending_intent" not in precheck["slot_patch"]
+    assert "goal_type" not in precheck["slot_patch"]
     assert precheck["resume_source"] == "expected_slot_fill:region"
 
 
@@ -19461,7 +19461,7 @@ def test_expected_slot_fill_precheck_accepts_schedule_for_store_schedule_flow() 
     assert precheck["filled_slot"] == "schedule"
     assert precheck["slot_patch"]["requested_cal_day"] == "20260627"
     assert precheck["slot_patch"]["rsv_hour"] == "14"
-    assert precheck["slot_patch"]["pending_intent"] == "reservation"
+    assert "pending_intent" not in precheck["slot_patch"]
     assert precheck["resume_source"] == "expected_slot_fill:schedule"
 
 
@@ -19510,8 +19510,6 @@ def test_expected_slot_fill_precheck_prefers_current_schedule_over_stale_store_s
     assert precheck["slot_patch"] == {
         "requested_cal_day": "20260708",
         "rsv_hour": "16",
-        "pending_intent": "stock",
-        "goal_type": "store_with_stock",
     }
     assert precheck["resume_source"] == "expected_slot_fill:schedule"
 
@@ -19566,8 +19564,6 @@ def test_slot_fill_controller_promotes_stock_schedule_to_parent_purchase_flow() 
     assert precheck["slot_patch"] == {
         "requested_cal_day": "20260708",
         "rsv_hour": "16",
-        "pending_intent": "stock",
-        "goal_type": "store_with_stock",
     }
     assert precheck["resume_source"] == "expected_slot_fill:schedule"
     assert decision.flow_state_reconciliation["intent"] == "quick_order_reservation"
@@ -19576,7 +19572,7 @@ def test_slot_fill_controller_promotes_stock_schedule_to_parent_purchase_flow() 
     assert decision.slots.goal_type == "place_order"
 
 
-def test_expected_slot_fill_precheck_promotes_purchase_anchor_before_router() -> None:
+def test_expected_slot_fill_precheck_does_not_write_intent_for_purchase_anchor() -> None:
     slots = ConversationSlots(goods_no="G000000319584", tire_size="245/45R19")
     context = TStationChatServiceV2._router_slot_fill_context_payload(
         slots=slots,
@@ -19595,10 +19591,7 @@ def test_expected_slot_fill_precheck_promotes_purchase_anchor_before_router() ->
 
     assert context["current_flow"] == "quick_order_reservation"
     assert context["flow_step"] == "ask_quantity"
-    assert precheck["matched"] is True
-    assert precheck["filled_slot"] == "purchase_anchor"
-    assert precheck["slot_patch"]["pending_intent"] == "order"
-    assert precheck["slot_patch"]["goal_type"] == "place_order"
+    assert precheck == {"matched": False, "reason": "input_does_not_fill_expected_slot"}
 
 
 def test_expected_slot_fill_precheck_accepts_direct_quantity_for_active_purchase() -> None:
