@@ -377,9 +377,14 @@ async def recover_blocked_fast_path_to_contract_tool(
                 tool_input=tool_input,
             )
     else:
-        from services.tstation.agents.e_support_agent.tools import search_faq_hybrid_tool as _search_faq_hybrid_tool
+        if preferred_tool == "search_faq_hybrid_tool":
+            from services.tstation.agents.e_support_agent.tools import search_faq_hybrid_tool as _support_tool
+        elif preferred_tool == "get_card_installments_tool":
+            from services.tstation.agents.e_support_agent.tools import get_card_installments_tool as _support_tool
+        else:
+            return None
 
-        raw_result = await asyncio.to_thread(_search_faq_hybrid_tool.invoke, tool_input)
+        raw_result = await asyncio.to_thread(_support_tool.invoke, tool_input)
         tool_result = raw_result if isinstance(raw_result, dict) else {"status": "success", "data": raw_result}
         from services.tstation.chat import (
             _build_general_cancel_fee_policy_event,

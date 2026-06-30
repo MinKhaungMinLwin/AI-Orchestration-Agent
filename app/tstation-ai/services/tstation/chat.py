@@ -16947,6 +16947,7 @@ def _build_turn_contract_required_slot_guard_event(
 
 
 _FAQ_POLICY_FALLBACK_INTENTS = frozenset({
+    "card_installment_lookup",
     "coupon_usage_policy",
     "coupon_registration_policy",
     "signup_first_purchase_benefit_policy",

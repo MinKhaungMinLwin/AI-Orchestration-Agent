@@ -2287,19 +2287,6 @@ class BaseAgent(ABC):
                 flow_event["assistant_response_source"] = "code_contract_tool_guard"
                 return [*self._code_template_events(flow_event, response_streamer, answering_emitted)]
 
-        if preferred_tool != "search_faq_hybrid_tool":
-            return self._blocked_contract_tool_guard_events(
-                tool_name=tool_name,
-                contract_intent=contract_intent,
-                allowed_tools=allowed_tools,
-                forbidden_tools=forbidden_tools,
-                required_slots=required_slots,
-                response_decision=decision,
-                block_reason=block_reason,
-                response_streamer=response_streamer,
-                answering_emitted=answering_emitted,
-            )
-
         user_query = _latest_user_text(messages or [])
         logger.info(
             "[%s] Contract tool guard blocked tool=%s replacement=%s intent=%s reason=%s",
@@ -2311,7 +2298,39 @@ class BaseAgent(ABC):
         )
 
         try:
-            from services.tstation.agents.e_support_agent.tools import search_faq_hybrid_tool as _search_faq_hybrid_tool
+            if preferred_tool == "search_faq_hybrid_tool":
+                from services.tstation.agents.e_support_agent.tools import search_faq_hybrid_tool as _support_tool
+                tool_input = {"query": user_query, "top_k": 8}
+            elif preferred_tool == "get_card_installments_tool":
+                from services.tstation.agents.e_support_agent.tools import get_card_installments_tool as _support_tool
+                decision_tool_args = {}
+                if isinstance(decision, dict):
+                    decision_tool_args = dict(decision.get("tool_args_patch") or {})
+                else:
+                    decision_tool_args = dict(getattr(decision, "tool_args_patch", None) or {})
+                tool_input = decision_tool_args
+                if not tool_input:
+                    from services.tstation.policies.contract_required_tool_candidate import (
+                        _card_installment_amount_from_text,
+                        _card_installment_payment_type_from_text,
+                    )
+
+                    tool_input = {"payment_type": _card_installment_payment_type_from_text(user_query)}
+                    tgt_amt = _card_installment_amount_from_text(user_query)
+                    if tgt_amt is not None:
+                        tool_input["tgt_amt"] = tgt_amt
+            else:
+                return self._blocked_contract_tool_guard_events(
+                    tool_name=tool_name,
+                    contract_intent=contract_intent,
+                    allowed_tools=allowed_tools,
+                    forbidden_tools=forbidden_tools,
+                    required_slots=required_slots,
+                    response_decision=decision,
+                    block_reason=block_reason,
+                    response_streamer=response_streamer,
+                    answering_emitted=answering_emitted,
+                )
             from services.tstation.chat import (
                 _DIRECT_SUPPORT_FAQ_POLICY_INTENTS,
                 _build_general_cancel_fee_policy_event,
@@ -2321,9 +2340,8 @@ class BaseAgent(ABC):
         except Exception:
             return None
 
-        tool_input = {"query": user_query, "top_k": 8}
         try:
-            raw_tool_result = _search_faq_hybrid_tool.invoke(tool_input)
+            raw_tool_result = _support_tool.invoke(tool_input)
         except Exception as exc:
             logger.exception("[%s] Replacement FAQ tool failed intent=%s", self.name, contract_intent)
             raw_tool_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
