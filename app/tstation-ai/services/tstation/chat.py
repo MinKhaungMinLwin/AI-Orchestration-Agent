@@ -33695,6 +33695,7 @@ class TStationChatServiceV2:
             goods_no: str,
             tire_size: str | None = None,
             product_name: str | None = None,
+            price_source: Mapping[str, Any] | None = None,
             pending_intent: str | None = None,
             goal_type: str | None = None,
         ) -> None:
@@ -33717,6 +33718,26 @@ class TStationChatServiceV2:
             if normalized_product_name:
                 values["tire_model"] = normalized_product_name
                 values["pending_product_name"] = normalized_product_name
+            price_facts: dict[str, Any] = {}
+            if isinstance(price_source, Mapping):
+                for key in (
+                    "cheapest_final_prc",
+                    "final_unit_price",
+                    "final_prc",
+                    "final_price",
+                    "finalPrice",
+                    "extra_fvr_sale_prc",
+                    "sale_prc",
+                    "price",
+                ):
+                    value = price_source.get(key)
+                    if value not in (None, "", [], {}) and price_facts.get(key) in (None, "", [], {}):
+                        price_facts[key] = value
+                _, price_basis = _preview_price_unit_and_basis(price_source)
+                if price_basis:
+                    price_facts["price_basis"] = price_basis
+                    price_facts["price_source_tool"] = "search_product_tool"
+            values.update(price_facts)
             if pending_intent:
                 values["pending_intent"] = pending_intent
             if goal_type:
@@ -33735,6 +33756,7 @@ class TStationChatServiceV2:
                 pending_order_context["tire_size"] = normalized_tire_size
             if normalized_product_name:
                 pending_order_context["product_name"] = normalized_product_name
+            pending_order_context.update(price_facts)
             if pending_intent:
                 pending_order_context["pending_intent"] = pending_intent
             if goal_type:
@@ -34259,6 +34281,7 @@ class TStationChatServiceV2:
                         goods_no=goods_no,
                         tire_size=str(tool_input.get("size") or ""),
                         product_name=preferred_keyword,
+                        price_source=row,
                         pending_intent="stock" if is_store_availability_size_followup else None,
                         goal_type="store_with_stock" if is_store_availability_size_followup else None,
                     )

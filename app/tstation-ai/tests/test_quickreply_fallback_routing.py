@@ -8361,6 +8361,60 @@ def test_product_card_mapper_uses_display_final_price_priority() -> None:
     assert product["discountRate"] == 29.2
 
 
+def test_purchase_readthrough_preserves_search_product_price_facts() -> None:
+    slots = ConversationSlots(
+        goods_no="G1",
+        tire_size="225/55R17",
+        ord_qty=2,
+        pending_intent="order",
+        goal_type="place_order",
+        availability_context={
+            "pending_order_context": {
+                "goods_no": "G1",
+                "tire_size": "225/55R17",
+                "ord_qty": 2,
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            }
+        },
+    )
+
+    updated, metadata = _apply_purchase_stock_canonical_readthrough(
+        slots=slots,
+        user_text="분당",
+        prev_tool_data=[
+            {
+                "tool": "search_product_tool",
+                "data": {
+                    "status": "success",
+                    "data": {
+                        "items": [
+                            {
+                                "goods_no": "G1",
+                                "goods_nm": "벤투스 에어S",
+                                "tire_size_1": "225/55R17",
+                                "sale_prc": 120000,
+                                "extra_fvr_sale_prc": 100000,
+                                "cheapest_final_prc": 85000,
+                            }
+                        ]
+                    },
+                },
+            }
+        ],
+        current_slot_delta={"region": "분당"},
+    )
+
+    pending_context = updated.availability_context["pending_order_context"]
+    assert pending_context["product_name"] == "벤투스 에어S"
+    assert pending_context["sale_prc"] == 120000
+    assert pending_context["extra_fvr_sale_prc"] == 100000
+    assert pending_context["cheapest_final_prc"] == 85000
+    assert pending_context["price_basis"] == "cheapest_final_prc"
+    assert pending_context["price_source_tool"] == "search_product_tool"
+    assert metadata["canonical_sources"]["cheapest_final_prc"] == "tool"
+
+
 def test_compare_discount_mapper_uses_final_unit_price_without_cheapest_final_price() -> None:
     event = try_build_template(
         [
@@ -35192,6 +35246,63 @@ def test_quick_order_reservation_with_region_runs_store_candidate_step_instead_o
     assert tool_plan.preferred_tool == "transaction_store_preview_tool"
     assert decision.template == TemplateName.LOCATION
     assert decision.metadata["response_shape_key"] == "reservation_store_candidates"
+
+
+def test_preview_single_store_still_renders_location_for_store_candidate_contract() -> None:
+    decision = ResponseDecision(
+        response_shape=ResponseShape.LOCATION,
+        template=TemplateName.LOCATION,
+        metadata={"response_shape_key": "reservation_store_candidates", "flow_step": "show_store_candidates"},
+    )
+    token = current_transaction_response_decision.set(decision)
+    try:
+        event = try_build_template(
+            [
+                {
+                    "tool": "transaction_store_preview_tool",
+                    "args": {
+                        "goods_no": "G1",
+                        "ord_qty": 2,
+                        "region_code": "분당",
+                        "include_price": True,
+                    },
+                    "data": {
+                        "status": "success",
+                        "data": {
+                            "stores": [
+                                {
+                                    "shop_id": "S1",
+                                    "shop_nm": "티스테이션 분당점",
+                                    "road_addr_base": "경기도 성남시 분당구",
+                                    "is_installable": True,
+                                }
+                            ],
+                            "schedule": {
+                                "tier": "store",
+                                "stores": [
+                                    {
+                                        "shop_id": "S1",
+                                        "shop_nm": "티스테이션 분당점",
+                                        "slots": [
+                                            {"cal_day": "20260701", "tm": "1600"},
+                                        ],
+                                    }
+                                ],
+                            },
+                        },
+                    },
+                }
+            ],
+            "분당에서 주문 가능한 매장입니다.",
+        )
+    finally:
+        current_transaction_response_decision.reset(token)
+
+    assert event is not None
+    assert event["template"] == "location"
+    assert len(event["data"]["stores"]) == 1
+    assert event["data"]["metadata"][0]["shopId"] == "S1"
+    assert event["data"]["isBookingFlow"] is True
 
 
 def test_turn_contract_reports_missing_inventory_tool_for_pure_stock_contract() -> None:
