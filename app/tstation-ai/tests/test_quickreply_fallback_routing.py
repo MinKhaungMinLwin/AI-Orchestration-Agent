@@ -19464,6 +19464,57 @@ def test_expected_slot_fill_precheck_accepts_schedule_for_store_schedule_flow() 
     assert precheck["resume_source"] == "expected_slot_fill:schedule"
 
 
+def test_expected_slot_fill_precheck_prefers_current_schedule_over_stale_store_state() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000320151",
+        tire_model="다이나프로 HP3",
+        pending_product_name="다이나프로 HP3",
+        tire_size="235/55R19",
+        ord_qty=4,
+        shop_id="F00262",
+        shop_name="티스테이션 동탄신도시점",
+        region="동탄",
+        requested_cal_day="20260708",
+        rsv_hour="16",
+        pending_intent="stock",
+        goal_type="store_with_stock",
+        stock_check_mode="preview",
+    )
+    context = TStationChatServiceV2._router_slot_fill_context_payload(
+        slots=slots,
+        user_text="2026년 7월 8일 (수)\n16:00",
+        latest_product_tmpl=None,
+        latest_location_tmpl={
+            "template": "location",
+            "data": {
+                "items": [
+                    {"shop_id": "F00003", "shop_nm": "티스테이션 동탄석우점"},
+                    {"shop_id": "F00052", "shop_nm": "티스테이션 동탄점"},
+                    {"shop_id": "F00262", "shop_nm": "티스테이션 동탄신도시점"},
+                ]
+            },
+        },
+        latest_datepick_tmpl=None,
+    )
+
+    precheck = TStationChatServiceV2._expected_slot_fill_precheck(
+        user_text="2026년 7월 8일 (수)\n16:00",
+        regex_slots=ConversationSlots.extract_from_user_text("2026년 7월 8일 (수)\n16:00"),
+        merged_slots=slots,
+        router_context=context,
+    )
+
+    assert precheck["matched"] is True
+    assert precheck["filled_slot"] == "schedule"
+    assert precheck["slot_patch"] == {
+        "requested_cal_day": "20260708",
+        "rsv_hour": "16",
+        "pending_intent": "stock",
+        "goal_type": "store_with_stock",
+    }
+    assert precheck["resume_source"] == "expected_slot_fill:schedule"
+
+
 def test_expected_slot_fill_precheck_promotes_purchase_anchor_before_router() -> None:
     slots = ConversationSlots(goods_no="G000000319584", tire_size="245/45R19")
     context = TStationChatServiceV2._router_slot_fill_context_payload(
