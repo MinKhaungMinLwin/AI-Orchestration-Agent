@@ -27,7 +27,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install openai==1.52.2
+        run: pip install requests
 
       - name: Fetch PR patch
         env:
@@ -48,71 +48,85 @@ jobs:
           UPSTAGE_API_KEY: ${{ secrets.UPSTAGE_API_KEY }}
         run: |
           python <<'PY'
+          import json
           import os
           from pathlib import Path
-
-          from openai import OpenAI
+          
+          import requests
 
           diff_text = Path("pr_patch.txt").read_text()
           truncated_diff = diff_text[:120000]
 
-          client = OpenAI(
-              api_key=os.environ["UPSTAGE_API_KEY"],
-              base_url="https://api.upstage.ai/v1",
+          prompt = "\n".join(
+              [
+                  "You are reviewing a GitHub pull request for a production codebase.",
+                  "",
+                  "Review the diff and leave only high-signal findings.",
+                  "",
+                  "Focus on:",
+                  "- bugs or behavior regressions",
+                  "- unsafe assumptions or missing guards",
+                  "- missing validation or error handling",
+                  "- missing or weak tests",
+                  "",
+                  "Output rules:",
+                  "- Write in Korean.",
+                  "- Use concise markdown.",
+                  "- If there are no meaningful findings, say that explicitly.",
+                  "- Do not praise the code.",
+                  "- Do not list trivial style nits.",
+                  "",
+                  "Format:",
+                  "## Findings",
+                  "- ...",
+                  "",
+                  "## Risk",
+                  "- ...",
+                  "",
+                  "## Suggested Tests",
+                  "- ...",
+                  "",
+                  f'Repository: {os.environ["GITHUB_REPOSITORY"]}',
+                  f'PR: #{os.environ["PR_NUMBER"]} {os.environ["PR_TITLE"]}',
+                  f'Author: {os.environ["PR_AUTHOR"]}',
+                  f'URL: {os.environ["PR_URL"]}',
+                  "",
+                  "Diff:",
+                  truncated_diff,
+              ]
           )
 
-          prompt = f"""You are reviewing a GitHub pull request for a production codebase.
-
-Review the diff and leave only high-signal findings.
-
-Focus on:
-- bugs or behavior regressions
-- unsafe assumptions or missing guards
-- missing validation or error handling
-- missing or weak tests
-
-Output rules:
-- Write in Korean.
-- Use concise markdown.
-- If there are no meaningful findings, say that explicitly.
-- Do not praise the code.
-- Do not list trivial style nits.
-
-Format:
-## Findings
-- ...
-
-## Risk
-- ...
-
-## Suggested Tests
-- ...
-
-Repository: {os.environ["GITHUB_REPOSITORY"]}
-PR: #{os.environ["PR_NUMBER"]} {os.environ["PR_TITLE"]}
-Author: {os.environ["PR_AUTHOR"]}
-URL: {os.environ["PR_URL"]}
-
-Diff:
-{truncated_diff}
-"""
-
-          response = client.chat.completions.create(
-              model="solar-pro3",
-              messages=[
-                  {"role": "system", "content": "You are a strict senior code reviewer."},
-                  {"role": "user", "content": prompt},
-              ],
-              stream=False,
-              temperature=0.1,
+          response = requests.post(
+              "https://api.upstage.ai/v1/chat/completions",
+              headers={
+                  "Authorization": f'Bearer {os.environ["UPSTAGE_API_KEY"]}',
+                  "Content-Type": "application/json",
+              },
+              json={
+                  "model": "solar-pro3",
+                  "messages": [
+                      {"role": "system", "content": "You are a strict senior code reviewer."},
+                      {"role": "user", "content": prompt},
+                  ],
+                  "temperature": 0.1,
+                  "stream": False,
+              },
+              timeout=120,
           )
+          response.raise_for_status()
+          payload = response.json()
 
-          review = response.choices[0].message.content or "## Findings\n- 리뷰 결과가 비어 있습니다."
+          review = (
+              payload.get("choices", [{}])[0]
+              .get("message", {})
+              .get("content")
+              or "## Findings\n- 리뷰 결과가 비어 있습니다."
+          )
           body = "\n".join(
               [
                   "## Upstage Automated Review",
                   "",
-                  f"_Model: {response.model}_",
+                  f'_Model: {payload.get("model", "solar-pro3")}_',
                   "",
                   review,
               ]
@@ -123,5 +137,6 @@ Diff:
       - name: Comment on PR
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: gh pr comment "$PR_NUMBER" --body-file review.md
+        run: gh pr comment "$PR_NUMBER" --repo "$GH_REPO" --body-file review.md
