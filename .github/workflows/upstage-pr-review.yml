@@ -63,39 +63,39 @@ jobs:
 
           prompt = f"""You are reviewing a GitHub pull request for a production codebase.
 
-Review the diff and leave only high-signal findings.
+          Review the diff and leave only high-signal findings.
 
-Focus on:
-- bugs or behavior regressions
-- unsafe assumptions or missing guards
-- missing validation or error handling
-- missing or weak tests
+          Focus on:
+          - bugs or behavior regressions
+          - unsafe assumptions or missing guards
+          - missing validation or error handling
+          - missing or weak tests
 
-Output rules:
-- Write in Korean.
-- Use concise markdown.
-- If there are no meaningful findings, say that explicitly.
-- Do not praise the code.
-- Do not list trivial style nits.
+          Output rules:
+          - Write in Korean.
+          - Use concise markdown.
+          - If there are no meaningful findings, say that explicitly.
+          - Do not praise the code.
+          - Do not list trivial style nits.
 
-Format:
-## Findings
-- ...
+          Format:
+          ## Findings
+          - ...
 
-## Risk
-- ...
+          ## Risk
+          - ...
 
-## Suggested Tests
-- ...
+          ## Suggested Tests
+          - ...
 
-Repository: {os.environ["GITHUB_REPOSITORY"]}
-PR: #{os.environ["PR_NUMBER"]} {os.environ["PR_TITLE"]}
-Author: {os.environ["PR_AUTHOR"]}
-URL: {os.environ["PR_URL"]}
+          Repository: {os.environ["GITHUB_REPOSITORY"]}
+          PR: #{os.environ["PR_NUMBER"]} {os.environ["PR_TITLE"]}
+          Author: {os.environ["PR_AUTHOR"]}
+          URL: {os.environ["PR_URL"]}
 
-Diff:
-{truncated_diff}
-"""
+          Diff:
+          {truncated_diff}
+          """
 
           response = client.chat.completions.create(
               model="solar-pro3",
