@@ -1,0 +1,127 @@
+name: Upstage PR Review
+
+on:
+  pull_request:
+    branches:
+      - dev
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  review:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install openai==1.52.2
+
+      - name: Fetch PR patch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          gh api repos/$REPO/pulls/$PR_NUMBER/files --paginate \
+            --jq '.[] | "FILE: \(.filename)\nSTATUS: \(.status)\nPATCH:\n\(.patch // "binary or too large")\n---"' > pr_patch.txt
+
+      - name: Generate review with Upstage
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          UPSTAGE_API_KEY: ${{ secrets.UPSTAGE_API_KEY }}
+        run: |
+          python <<'PY'
+          import os
+          from pathlib import Path
+
+          from openai import OpenAI
+
+          diff_text = Path("pr_patch.txt").read_text()
+          truncated_diff = diff_text[:120000]
+
+          client = OpenAI(
+              api_key=os.environ["UPSTAGE_API_KEY"],
+              base_url="https://api.upstage.ai/v1",
+          )
+
+          prompt = f"""You are reviewing a GitHub pull request for a production codebase.
+
+Review the diff and leave only high-signal findings.
+
+Focus on:
+- bugs or behavior regressions
+- unsafe assumptions or missing guards
+- missing validation or error handling
+- missing or weak tests
+
+Output rules:
+- Write in Korean.
+- Use concise markdown.
+- If there are no meaningful findings, say that explicitly.
+- Do not praise the code.
+- Do not list trivial style nits.
+
+Format:
+## Findings
+- ...
+
+## Risk
+- ...
+
+## Suggested Tests
+- ...
+
+Repository: {os.environ["GITHUB_REPOSITORY"]}
+PR: #{os.environ["PR_NUMBER"]} {os.environ["PR_TITLE"]}
+Author: {os.environ["PR_AUTHOR"]}
+URL: {os.environ["PR_URL"]}
+
+Diff:
+{truncated_diff}
+"""
+
+          response = client.chat.completions.create(
+              model="solar-pro3",
+              messages=[
+                  {"role": "system", "content": "You are a strict senior code reviewer."},
+                  {"role": "user", "content": prompt},
+              ],
+              stream=False,
+              temperature=0.1,
+          )
+
+          review = response.choices[0].message.content or "## Findings\n- 리뷰 결과가 비어 있습니다."
+          body = "\n".join(
+              [
+                  "## Upstage Automated Review",
+                  "",
+                  f"_Model: {response.model}_",
+                  "",
+                  review,
+              ]
+          )
+          Path("review.md").write_text(body)
+          PY
+
+      - name: Comment on PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh pr comment "$PR_NUMBER" --body-file review.md
