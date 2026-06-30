@@ -393,6 +393,18 @@ def _is_contract_required_selected_store_schedule(
         "selected_store_schedule",
     }:
         return False
+    response_decision = turn_contract.response_decision or {}
+    if str(response_decision.get("template") or "").strip() != "datepick":
+        return False
+    metadata = response_decision.get("metadata")
+    response_shape_key = str(metadata.get("response_shape_key") or "") if isinstance(metadata, Mapping) else ""
+    if response_shape_key and response_shape_key != "reservation_slots":
+        return False
+    allowed_tools = {str(tool) for tool in tuple(turn_contract.allowed_tools or ()) if str(tool).strip()}
+    if "get_store_schedule_tool" not in allowed_tools:
+        return False
+    if "get_store_schedule_tool" in {str(tool) for tool in tuple(turn_contract.forbidden_tools or ()) if str(tool).strip()}:
+        return False
     if tuple(turn_contract.blocking_required_slots or ()):
         return False
     selected_store_slots = _selected_store_slots_from_merged_slots(

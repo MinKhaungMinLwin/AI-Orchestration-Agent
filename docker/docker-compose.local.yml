@@ -60,23 +60,17 @@ services:
     depends_on:
       local-postgres:
         condition: service_healthy
-      langfuse-redis:
-        condition: service_healthy
     environment:
       DATABASE_URL: postgresql://tstation:tstation@local-postgres:5432/langfuse
       DIRECT_URL: postgresql://tstation:tstation@local-postgres:5432/langfuse
-      REDIS_CONNECTION_STRING: redis://:${LANGFUSE_REDIS_PASSWORD:-langfuseredis}@langfuse-redis:6379/0
 
   langfuse-server:
     depends_on:
       local-postgres:
         condition: service_healthy
-      langfuse-redis:
-        condition: service_healthy
     environment:
       DATABASE_URL: postgresql://tstation:tstation@local-postgres:5432/langfuse
       DIRECT_URL: postgresql://tstation:tstation@local-postgres:5432/langfuse
-      REDIS_CONNECTION_STRING: redis://:${LANGFUSE_REDIS_PASSWORD:-langfuseredis}@langfuse-redis:6379/0
 
   langfuse-redis:
     image: redis:7-alpine
@@ -89,6 +83,20 @@ services:
     restart: unless-stopped
     networks:
       - internal-net
+
+  langfuse-worker:
+    depends_on:
+      langfuse-redis:
+        condition: service_healthy
+    environment:
+      REDIS_CONNECTION_STRING: redis://:${LANGFUSE_REDIS_PASSWORD:-langfuseredis}@langfuse-redis:6379/0
+
+  langfuse-server:
+    depends_on:
+      langfuse-redis:
+        condition: service_healthy
+    environment:
+      REDIS_CONNECTION_STRING: redis://:${LANGFUSE_REDIS_PASSWORD:-langfuseredis}@langfuse-redis:6379/0
 
   qdrant:
     ports:
