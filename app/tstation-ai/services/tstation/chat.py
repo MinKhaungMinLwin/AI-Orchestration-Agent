@@ -73,7 +73,7 @@ from services.tstation.policies.transaction_intent_policy import (
     plan_transaction_tools,
 )
 from services.tstation.policies.transaction_response_policy import decide_transaction_response
-from services.tstation.policies.slot_fill_policy import expected_slot_fill_precheck
+from services.tstation.policies.slot_fill_controller import resolve_pre_router_slot_fill
 from services.tstation.policies.support_response_policy import (
     build_support_faq_evidence_grounded_reply,
     is_post_install_quality_claim,
@@ -24578,14 +24578,14 @@ class TStationChatServiceV2:
         router_context: Mapping[str, Any],
         region_store_input_resolution: RegionStoreInputContextResolution | None = None,
     ) -> dict[str, Any]:
-        return expected_slot_fill_precheck(
+        return dict(resolve_pre_router_slot_fill(
             user_text=user_text,
             regex_slots=regex_slots,
             merged_slots=merged_slots,
             router_context=router_context,
             region_store_input_resolution=region_store_input_resolution,
             has_purchase_anchor=_resume_source_from_current_turn(user_text) != "none",
-        )
+        ).precheck)
 
     @staticmethod
     def _inject_router_slot_fill_context(
@@ -25743,36 +25743,30 @@ class TStationChatServiceV2:
                 latest_location_tmpl=latest_location_tmpl,
                 latest_datepick_tmpl=latest_datepick_tmpl,
             )
-            expected_slot_fill_precheck = TStationChatServiceV2._expected_slot_fill_precheck(
+            slot_fill_decision = resolve_pre_router_slot_fill(
                 user_text=last_user_text,
                 regex_slots=regex_slots,
                 merged_slots=merged_slots,
                 router_context=router_slot_fill_context_payload,
                 region_store_input_resolution=region_store_input_resolution,
+                has_purchase_anchor=_resume_source_from_current_turn(last_user_text) != "none",
             )
-            if expected_slot_fill_precheck.get("matched"):
-                precheck_slot_patch = dict(expected_slot_fill_precheck.get("slot_patch") or {})
-                if precheck_slot_patch:
-                    merged_slots = merged_slots.apply_runtime_values(
-                        precheck_slot_patch,
-                        source="expected_slot_fill_precheck",
-                    )
-                    router_slot_fill_context_payload = TStationChatServiceV2._router_slot_fill_context_payload(
-                        slots=merged_slots,
-                        user_text=last_user_text,
-                        latest_product_tmpl=latest_product_tmpl,
-                        latest_location_tmpl=latest_location_tmpl,
-                        latest_datepick_tmpl=latest_datepick_tmpl,
-                    )
-                router_slot_fill_metadata.update({
-                    "expected_slot_fill_precheck": expected_slot_fill_precheck,
-                    "slot_patch": precheck_slot_patch,
-                    "filled_slot": str(expected_slot_fill_precheck.get("filled_slot") or "none"),
-                })
+            expected_slot_fill_precheck = dict(slot_fill_decision.precheck or {})
+            if slot_fill_decision.matched:
+                merged_slots = slot_fill_decision.slots
+                precheck_slot_patch = dict(slot_fill_decision.slot_patch or {})
+                router_slot_fill_context_payload = TStationChatServiceV2._router_slot_fill_context_payload(
+                    slots=merged_slots,
+                    user_text=last_user_text,
+                    latest_product_tmpl=latest_product_tmpl,
+                    latest_location_tmpl=latest_location_tmpl,
+                    latest_datepick_tmpl=latest_datepick_tmpl,
+                )
+                router_slot_fill_metadata.update(dict(slot_fill_decision.trace_metadata or {}))
                 logger.info(
                     "[EXPECTED_SLOT_FILL] pre-router match flow=%s slot=%s patch=%s",
                     expected_slot_fill_precheck.get("current_flow"),
-                    expected_slot_fill_precheck.get("filled_slot"),
+                    slot_fill_decision.filled_slot,
                     precheck_slot_patch,
                 )
             else:
@@ -28739,7 +28733,16 @@ class TStationChatServiceV2:
             else {}
         )
         if expected_slot_fill_precheck.get("matched") and not _router_contract_is_high_confidence_policy(routing_result):
-            expected_flow = str(expected_slot_fill_precheck.get("current_flow") or "").strip()
+            flow_state_reconciliation = (
+                router_slot_fill_metadata.get("flow_state_reconciliation")
+                if isinstance(router_slot_fill_metadata.get("flow_state_reconciliation"), Mapping)
+                else {}
+            )
+            expected_flow = str(
+                flow_state_reconciliation.get("intent")
+                or expected_slot_fill_precheck.get("current_flow")
+                or ""
+            ).strip()
             if expected_flow in {"quick_order_reservation", "stock_store_search"}:
                 original_domains = [domain.value for domain in (domains or [])]
                 original_intent = str(getattr(routing_result, "intent", "none") or "none") if routing_result else "none"
@@ -28780,6 +28783,11 @@ class TStationChatServiceV2:
                     "router_slot_fill_validated": True,
                     "router_slot_patch": dict(expected_slot_fill_precheck.get("slot_patch") or {}),
                     "slot_patch": dict(expected_slot_fill_precheck.get("slot_patch") or {}),
+                    "contract_correction_source": (
+                        "flow_state_reconciliation"
+                        if flow_state_reconciliation
+                        else "expected_slot_fill_precheck"
+                    ),
                 })
         previous_pending_intent = str(getattr(merged_slots, "pending_intent", None) or "").strip() or None
         previous_goal_type = str(getattr(merged_slots, "goal_type", None) or "").strip() or None
