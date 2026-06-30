@@ -1395,6 +1395,8 @@ def _explicit_current_turn_override_reason(
     regex_slots: ConversationSlots,
     explicit_store_purchase_chain_request: bool,
 ) -> str | None:
+    if _is_order_history_lookup_query(user_text):
+        return None
     if explicit_store_purchase_chain_request:
         return "explicit_current_turn_purchase"
     if re.search(r"가격|얼마|최종가|할인가|쿠폰", user_text or "", re.IGNORECASE) and (
@@ -7495,10 +7497,10 @@ def _is_order_history_lookup_query(user_text: str | None) -> bool:
         return False
     return bool(
         re.search(
-            r"내\s*주문(?:\s*(?:내역|목록))?\s*(?:보여|조회|확인|알려)|"
-            r"주문\s*(?:내역|목록)\s*(?:보여|조회|확인|알려)|"
-            r"최근\s*주문(?:\s*내역)?\s*(?:보여|조회|확인|알려)|"
-            r"내가\s*주문한\s*거\s*(?:보여|조회|확인|알려)",
+            r"내\s*주문(?:\s*(?:내역|목록))?\s*(?:좀|쫌|한번|한\s*번)?\s*(?:보여|조회|확인|알려)?(?:줘|주세요)?$|"
+            r"주문\s*(?:내역|목록)\s*(?:좀|쫌|한번|한\s*번)?\s*(?:보여|조회|확인|알려)?(?:줘|주세요)?$|"
+            r"최근\s*주문(?:\s*내역)?\s*(?:좀|쫌|한번|한\s*번)?\s*(?:보여|조회|확인|알려)?(?:줘|주세요)?$|"
+            r"내가\s*주문한\s*거\s*(?:좀|쫌|한번|한\s*번)?\s*(?:보여|조회|확인|알려)?(?:줘|주세요)?$",
             text,
             re.IGNORECASE,
         )

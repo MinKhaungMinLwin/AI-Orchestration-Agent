@@ -190,6 +190,7 @@ from services.tstation.chat import (
     _build_order_cancel_status_event,
     _build_order_history_lookup_event,
     _build_order_history_reorder_event,
+    _explicit_current_turn_override_reason,
     _payment_method_order_selection_event,
     _order_cancel_status_selection_event,
     _select_cancel_or_refund_order_rows,
@@ -10368,6 +10369,25 @@ def test_order_history_lookup_overrides_stale_store_finder_context() -> None:
     assert tool_plan.allowed_tools == ("get_orders_of_user_tool",)
     assert tool_plan.preferred_tool == "get_orders_of_user_tool"
     assert "search_stores_tool" not in tool_plan.allowed_tools
+
+
+@pytest.mark.parametrize(
+    "user_text",
+    [
+        "내 주문목록",
+        "최근 주문내역 보여줘",
+    ],
+)
+def test_order_history_lookup_queries_do_not_trigger_current_turn_purchase_override(user_text: str) -> None:
+    assert _is_order_history_lookup_query(user_text)
+    assert (
+        _explicit_current_turn_override_reason(
+            user_text=user_text,
+            regex_slots=ConversationSlots(),
+            explicit_store_purchase_chain_request=False,
+        )
+        is None
+    )
 
 
 def test_action_mode_keeps_order_history_as_owned_record_lookup_with_stale_order_context() -> None:
