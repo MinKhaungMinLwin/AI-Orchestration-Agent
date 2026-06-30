@@ -243,6 +243,7 @@ ROUTER_WINS_INFORMATIONAL_INTENTS = frozenset({
     "product_description",
     "product_comparison",
     "product_size_list_lookup",
+    "competitor_counterpart_guidance",
     "compatibility_advisory",
     "delivery_delay_reservation_schedule_policy",
     "coupon_usage_policy",
@@ -4411,6 +4412,7 @@ def _router_wins_domain(intent: str, planner_domains: tuple[str, ...]) -> str:
         "product_description",
         "product_comparison",
         "product_size_list_lookup",
+        "competitor_counterpart_guidance",
     }:
         return "discovery"
     if intent in ROUTER_WINS_INFORMATIONAL_INTENTS or intent.endswith("_policy") or intent.endswith("_guidance"):
@@ -4547,6 +4549,22 @@ def _router_wins_tool_boundary(intent: str) -> tuple[tuple[str, ...], tuple[str,
                 if tool not in {"search_product_tool", "get_product_description_tool", "get_cheapest_price_tool"}
             ),
         )
+    if intent == "competitor_counterpart_guidance":
+        return (
+            (),
+            tuple(
+                tool
+                for tool in _ROUTER_WINS_TRANSACTION_FORBIDDEN_TOOLS
+                | {
+                    "search_faq_hybrid_tool",
+                    "search_faq_rag_tool",
+                    "get_faq_tool",
+                    "search_product_tool",
+                    "get_product_description_tool",
+                    "get_products_recommendations_tool",
+                }
+            ),
+        )
     if intent == "human_escalation":
         return (
             ("transfer_to_qna_tool",),
@@ -4593,6 +4611,7 @@ def _router_wins_response_shape_key(intent: str) -> str:
         "product_description": "neutral_product_description",
         "product_comparison": "metric_comparison_summary",
         "product_size_list_lookup": "product_size_list_lookup",
+        "competitor_counterpart_guidance": "competitor_counterpart_guidance",
         "tstation_service_complaint": "support_complaint_guidance",
         "owned_warranty_lookup": "owned_warranty_lookup",
     }.get(intent, intent)

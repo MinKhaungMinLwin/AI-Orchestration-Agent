@@ -10992,6 +10992,60 @@ def test_tire_recommendation_ignores_missing_product_reference_guard() -> None:
     assert contract.blocking_required_slots_source == "none"
 
 
+def test_competitor_counterpart_guidance_keeps_discovery_information_contract() -> None:
+    routing_result = SimpleNamespace(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        execution_plan=["discovery:competitor_counterpart_guidance"],
+        intent="competitor_counterpart_guidance",
+        policy_intent="none",
+        referred_object_status="missing",
+        referred_object_type="product",
+        needs_clarification=True,
+        planner_confidence=0.95,
+        agent_prompt_profile="discovery_search",
+    )
+    stale_frame = IntentFrame(
+        domain=PolicyDomain.DISCOVERY,
+        intent="product_recommendation",
+        sub_intent="general_recommendation",
+        known_slots={
+            "brand_cd": "HK",
+            "shop_name": "광교신도시점",
+        },
+    )
+    stale_tool_plan = ToolPlan(
+        allowed_tools=("get_products_recommendations_tool",),
+        preferred_tool="get_products_recommendations_tool",
+        metadata={"response_intent": "catalog_recommendation"},
+    )
+    stale_response = ResponseDecision(
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        metadata={"response_shape_key": "unsized_recommendation_summary"},
+    )
+
+    contract = build_turn_contract(
+        user_text="금호 마제스티X랑 같은 급으로 한국타이어 추천해줘.",
+        intent_frame=stale_frame,
+        tool_plan=stale_tool_plan,
+        response_decision=stale_response,
+        routing_result=routing_result,
+        merged_slots=ConversationSlots(ord_qty=4, shop_name="광교신도시점"),
+        action_mode="info_only",
+        context_state="dormant",
+    )
+
+    assert contract.domain == "discovery"
+    assert contract.intent == "competitor_counterpart_guidance"
+    assert contract.blocking_required_slots == ()
+    assert contract.blocking_required_slots_source == "none"
+    assert contract.allowed_tools == ()
+    assert contract.preferred_tool is None
+    assert "search_faq_hybrid_tool" in contract.forbidden_tools
+    assert "get_products_recommendations_tool" in contract.forbidden_tools
+    assert contract.response_decision["metadata"]["response_shape_key"] == "competitor_counterpart_guidance"
+
+
 def test_router_wins_delivery_policy_blocks_store_schedule_code_frame() -> None:
     routing_result = _routing_result(
         domains=[MultiAgentDomain.Domain.SUPPORT],
