@@ -1753,8 +1753,13 @@ def build_response_policy_guard_event(contract: TurnContract) -> dict[str, Any]:
             {"label": "다른 매장 찾기", "domain": "TRANSACTION"},
         ]
     else:
-        message = "현재 확인된 정보만으로 바로 진행하기 어려워요. 필요한 정보를 먼저 확인한 뒤 이어서 도와드릴게요."
-        quick_replies = _clarification_chips(contract.required_slots or ("product",))
+        missing_slots = _missing_slots_for_action_prompt(contract) or ("product",)
+        missing_summary = _missing_slot_summary_text(missing_slots)
+        message = (
+            "현재 확인된 정보만으로 바로 진행하기 어려워요. "
+            f"부족한 정보는 {missing_summary}입니다. 필요한 정보를 먼저 확인한 뒤 이어서 도와드릴게요."
+        )
+        quick_replies = _clarification_chips(missing_slots)
 
     return _annotate_contract_guard_event({
         "type": "data",
@@ -1768,6 +1773,7 @@ def build_response_policy_guard_event(contract: TurnContract) -> dict[str, Any]:
             "metadata": {
                 "turnContract": contract.to_dict(),
                 "forbiddenBehaviors": sorted(forbidden_set),
+                "missingSlots": list(_missing_slots_for_action_prompt(contract)),
             },
         },
     }, contract, reason="response_policy_guard")
@@ -5389,6 +5395,30 @@ def _clarification_text(required_slots: tuple[str, ...]) -> str:
     if "store" in required_slots or "location" in required_slots:
         return "어느 지역이나 매장 기준으로 확인해드릴까요?"
     return "확인에 필요한 정보를 조금만 더 알려주세요."
+
+
+def _missing_slot_summary_text(required_slots: tuple[str, ...]) -> str:
+    labels: list[str] = []
+    label_by_slot = {
+        "product": "상품",
+        "goods_no": "상품",
+        "product_name": "상품명",
+        "product_set": "상품 선택",
+        "order": "주문/예약",
+        "tire_size": "타이어 규격",
+        "size": "타이어 규격",
+        "quantity": "수량",
+        "ord_qty": "수량",
+        "store": "매장",
+        "location": "지역/매장",
+        "booking_datetime": "예약 날짜/시간",
+        "schedule": "예약 날짜/시간",
+    }
+    for slot in required_slots:
+        label = label_by_slot.get(str(slot), str(slot))
+        if label and label not in labels:
+            labels.append(label)
+    return ", ".join(labels) if labels else "추가 확인 정보"
 
 
 def _clarification_chips(required_slots: tuple[str, ...]) -> list[dict[str, str]]:
