@@ -59,6 +59,7 @@ from services.tstation.agents.base_agent import (
     _slot_data_for_tool_event,
     _tool_entries_from_previous_agent_facts,
 )
+from services.tstation.agents.router import AgentDomain
 from services.tstation.agents.c_transaction_agent.agent import TRANSACTION_ORDER_SYSTEM_PROMPT_TEMPLATE
 from services.tstation.agents.e_support_agent.agent import SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
 from services.tstation.agents.e_support_agent.tools import (
@@ -10178,6 +10179,14 @@ def test_order_history_force_routes_with_specific_lookup_plan() -> None:
     assert result.domains == [MultiAgentDomain.Domain.TRANSACTION]
     assert result.execution_plan == ["transaction:order_history_lookup"]
     assert result.agent_prompt_profile == "transaction_order"
+
+
+def test_router_prompt_marks_explicit_order_payload_with_store_and_schedule_as_transaction() -> None:
+    prompt = AgentDomain.prompt_router()
+
+    assert "주문서 만들어 줘" in prompt
+    assert "장착점 티스테이션 분당정자점으로 7월 4일 11시에 이대로 주문해줘" in prompt
+    assert "classify as TRANSACTION, not DISCOVERY" in prompt
 
 
 def test_order_history_lookup_overrides_stale_store_finder_context() -> None:
