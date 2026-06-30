@@ -335,6 +335,7 @@ _ROUTER_WINS_EXECUTION_EXCLUDED_INTENTS = frozenset({
     "selected_store_schedule",
     "reservation_store_info_lookup",
     "reservation_status_lookup",
+    "reservation_change_request",
     "order_cancel_status_lookup",
     "owned_order_cancel_fee_inquiry",
     "owned_coupon_lookup",
@@ -722,6 +723,9 @@ def build_turn_contract(
     if code_intent == "reservation_status_lookup":
         domain = "transaction"
         intent = "reservation_status_lookup"
+    if code_intent == "reservation_change_request":
+        domain = "transaction"
+        intent = "reservation_change_request"
     if code_intent == "order_arrival_status_lookup":
         domain = "transaction"
         intent = "order_arrival_status_lookup"

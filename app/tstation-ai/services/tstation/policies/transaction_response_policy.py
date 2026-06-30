@@ -73,6 +73,8 @@ def decide_transaction_response(
         return _decide_reservation_store_info_lookup()
     if intent == "reservation_status_lookup":
         return _decide_reservation_status_lookup()
+    if intent == "reservation_change_request":
+        return _decide_reservation_change_request()
     if intent == "delivery_delay_reservation_schedule_policy":
         return _decide_delivery_delay_reservation_schedule_policy()
     if intent == "reservation_window_policy":
@@ -467,6 +469,26 @@ def _decide_reservation_status_lookup() -> ResponseDecision:
     )
 
 
+def _decide_reservation_change_request() -> ResponseDecision:
+    return _decision(
+        response_shape_key="reservation_change_request_guidance",
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        forbidden_behaviors=(
+            "start_new_reservation_flow",
+            "call_store_schedule_for_existing_reservation_change",
+            "promise_reservation_change_processing",
+            "emit_datepick_for_existing_reservation_change",
+            "emit_preorder_for_existing_reservation_change",
+        ),
+        assistant_guidance=(
+            "기존 예약 시간/일정 변경 요청은 새 예약 생성이 아니다. 챗봇이 직접 예약을 변경했다고 말하지 말고, "
+            "예약/주문 내역 CTA 또는 고객센터/1:1 문의 안내로 제한한다."
+        ),
+        metadata={"reservation_management_action": "change_request"},
+    )
+
+
 def _decide_delivery_delay_reservation_schedule_policy() -> ResponseDecision:
     return _decision(
         response_shape_key="delivery_delay_reservation_schedule_policy",
@@ -796,6 +818,7 @@ def _decide_maintenance_addon_with_tire_service() -> ResponseDecision:
             "svc_codes 121/122 또는 All My T/경정비 신호가 확인되면 온라인 타이어 주문 시 경정비 함께 주문 가능성을 안내하고, "
             "확인되지 않으면 타이어 장착은 온라인 주문/예약으로 진행하되 경정비는 방문예약 또는 매장 사전 연락으로 확인하도록 안내한다."
         ),
+        metadata={"service_action_boundary": "service_booking_support"},
     )
 
 
@@ -815,6 +838,7 @@ def _decide_store_attribute_inquiry() -> ResponseDecision:
             "특정 매장의 서비스/장비/운영 조건/주관 품질 가능 여부는 source 없이 단정하지 않는다. "
             "매장명이 있으면 기본 매장정보를 함께 안내해 사용자가 직접 확인하도록 하고, 매장명이 없으면 매장명을 요청한다."
         ),
+        metadata={"service_action_boundary": "store_verification"},
     )
 
 

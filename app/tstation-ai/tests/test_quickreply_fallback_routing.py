@@ -31396,15 +31396,18 @@ def test_tire_reservation_with_maintenance_addon_without_store_stays_policy_cont
     )
 
     assert frame.intent == "maintenance_addon_with_tire_service"
-    assert frame.known_slots["goal_type"] == "store_service_availability"
-    assert tool_plan.allowed_tools == ()
-    assert tool_plan.preferred_tool is None
+    assert frame.known_slots["goal_type"] == "service_booking_support"
+    assert frame.known_slots["service_action_boundary"] == "service_booking_support"
+    assert tool_plan.allowed_tools == ("search_faq_hybrid_tool",)
+    assert tool_plan.preferred_tool == "search_faq_hybrid_tool"
     assert tool_plan.required_slots == ()
+    assert "get_store_list_tool" in tool_plan.forbidden_tools
     assert "get_products_recommendations_tool" in tool_plan.forbidden_tools
     assert response_decision.metadata["response_shape_key"] == "maintenance_addon_with_tire_service"
+    assert response_decision.metadata["service_action_boundary"] == "service_booking_support"
     assert contract.intent == "maintenance_addon_with_tire_service"
     assert contract.domain == "transaction"
-    assert contract.allowed_tools == ()
+    assert contract.allowed_tools == ("search_faq_hybrid_tool",)
     assert contract.blocking_required_slots == ()
 
 
@@ -31518,30 +31521,36 @@ def test_plain_tire_store_schedule_flow_is_not_maintenance_addon() -> None:
     assert tool_plan.preferred_tool == "get_store_schedule_tool"
 
 
-def test_reservation_time_change_still_requires_order_context() -> None:
+def test_reservation_time_change_uses_management_boundary_not_new_schedule() -> None:
     user_text = "예약한 시간 바꿔줘"
     frame = build_transaction_intent_frame(user_text, known_slots={})
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text=user_text,
+        known_slots=dict(frame.known_slots),
+    )
     contract = build_turn_contract(
         user_text=user_text,
         intent_frame=frame,
-        tool_plan=plan_transaction_tools(frame),
-        response_decision=decide_transaction_response(
-            intent=frame.intent,
-            user_text=user_text,
-            known_slots=dict(frame.known_slots),
-        ),
+        tool_plan=tool_plan,
+        response_decision=response_decision,
         routing_result=_routing_result(
             domains=[MultiAgentDomain.Domain.TRANSACTION],
-            execution_plan=["transaction:store_schedule"],
-            referred_object_status="missing",
-            referred_object_type="order",
-            needs_clarification=True,
+            execution_plan=["transaction:reservation_change_request"],
         ),
     )
 
-    assert frame.intent == "store_schedule"
-    assert "order" in contract.blocking_required_slots
-    assert should_guard_required_slots(contract)
+    assert frame.intent == "reservation_change_request"
+    assert frame.known_slots["reservation_management_action"] == "change_request"
+    assert tool_plan.allowed_tools == ()
+    assert "get_store_schedule_tool" in tool_plan.forbidden_tools
+    assert "quick_order_tool" in tool_plan.forbidden_tools
+    assert response_decision.metadata["response_shape_key"] == "reservation_change_request_guidance"
+    assert "start_new_reservation_flow" in response_decision.forbidden_behaviors
+    assert contract.intent == "reservation_change_request"
+    assert contract.blocking_required_slots == ()
+    assert not should_guard_required_slots(contract)
 
 
 def test_store_schedule_question_still_allows_datepick_flow() -> None:
@@ -31557,6 +31566,146 @@ def test_store_schedule_question_still_allows_datepick_flow() -> None:
     assert frame.intent == "store_schedule"
     assert tool_plan.preferred_tool == "get_store_schedule_tool"
     assert response_decision.template == TemplateName.DATE_PICK
+
+
+def test_service_booking_support_uses_faq_boundary_even_with_stale_purchase_slots() -> None:
+    user_text = "타이어 예약할 때 엔진오일 같이 가능?"
+    frame = build_transaction_intent_frame(
+        user_text,
+        known_slots={
+            "goods_no": "G000000309780",
+            "tire_size": "245/45R18",
+            "ord_qty": 4,
+            "shop_id": "F00001",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+    tool_plan = plan_transaction_tools(frame)
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=decide_transaction_response(
+            intent=frame.intent,
+            user_text=user_text,
+            known_slots=dict(frame.known_slots),
+        ),
+    )
+
+    assert frame.intent == "maintenance_addon_with_tire_service"
+    assert frame.known_slots["service_action_boundary"] == "service_booking_support"
+    assert tool_plan.allowed_tools == ("search_faq_hybrid_tool",)
+    assert "get_store_list_tool" in tool_plan.forbidden_tools
+    assert "get_store_schedule_tool" in tool_plan.forbidden_tools
+    assert "transaction_store_preview_tool" in tool_plan.forbidden_tools
+    assert contract.allowed_tools == ("search_faq_hybrid_tool",)
+    assert contract.intent != "quick_order_reservation"
+
+
+def test_store_verification_service_question_uses_store_tools_only() -> None:
+    user_text = "분당점 얼라인먼트 가능해?"
+    frame = build_transaction_intent_frame(
+        user_text,
+        known_slots={
+            "goods_no": "G000000309780",
+            "tire_size": "245/45R18",
+            "ord_qty": 4,
+            "shop_id": "F00001",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+    tool_plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "store_attribute_inquiry"
+    assert frame.known_slots["service_action_boundary"] == "store_verification"
+    assert frame.known_slots["store_name"] == "분당점"
+    assert tool_plan.allowed_tools == ("get_store_list_tool", "get_store_detail_tool")
+    assert tool_plan.preferred_tool == "get_store_list_tool"
+    assert "get_store_schedule_tool" in tool_plan.forbidden_tools
+    assert "transaction_store_preview_tool" in tool_plan.forbidden_tools
+    assert "quick_order_tool" not in tool_plan.allowed_tools
+
+
+def test_reservation_change_request_with_purchase_context_does_not_emit_new_reservation() -> None:
+    user_text = "내 예약 시간 바꾸고 싶어"
+    frame = build_transaction_intent_frame(
+        user_text,
+        known_slots={
+            "goods_no": "G000000309780",
+            "tire_size": "245/45R18",
+            "ord_qty": 4,
+            "shop_id": "F00001",
+            "requested_cal_day": "20260701",
+            "rsv_hour": "10",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text=user_text,
+        known_slots=dict(frame.known_slots),
+    )
+
+    assert frame.intent == "reservation_change_request"
+    assert frame.known_slots["reservation_management_action"] == "change_request"
+    assert tool_plan.allowed_tools == ()
+    assert "get_store_schedule_tool" in tool_plan.forbidden_tools
+    assert "quick_order_tool" in tool_plan.forbidden_tools
+    assert response_decision.metadata["response_shape_key"] == "reservation_change_request_guidance"
+    assert "emit_datepick_for_existing_reservation_change" in response_decision.forbidden_behaviors
+
+
+def test_reservation_cancel_request_blocks_execution_and_new_reservation_tools() -> None:
+    user_text = "예약 취소해줘"
+    frame = build_transaction_intent_frame(
+        user_text,
+        known_slots={
+            "goods_no": "G000000309780",
+            "tire_size": "245/45R18",
+            "ord_qty": 4,
+            "shop_id": "F00001",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+    tool_plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "order_cancel_request"
+    assert frame.known_slots["reservation_management_action"] == "cancel_request"
+    assert tool_plan.allowed_tools == ()
+    assert "quick_order_tool" in tool_plan.forbidden_tools
+    assert "get_store_schedule_tool" in tool_plan.forbidden_tools
+    assert "transaction_store_preview_tool" in tool_plan.forbidden_tools
+    assert "get_my_reservations_tool" in tool_plan.forbidden_tools
+
+
+def test_flow_transition_records_service_maintenance_and_reservation_management_contexts() -> None:
+    service_transition = transition_current_flow(
+        user_text="분당점 얼라인먼트 가능해?",
+        router_evidence={"intent": "store_attribute_inquiry", "execution_plan": ["transaction:store_attribute_inquiry"]},
+        existing_slots={"store_name": "분당점", "service_action_boundary": "store_verification"},
+    )
+    reservation_transition = transition_current_flow(
+        user_text="내 예약 시간 바꾸고 싶어",
+        router_evidence={
+            "intent": "reservation_change_request",
+            "execution_plan": ["transaction:reservation_change_request"],
+        },
+        existing_slots={"reservation_management_action": "change_request", "owned_record_target": "reservation"},
+    )
+
+    service_flow = service_transition.flow_transition["active_flow_context"]
+    reservation_flow = reservation_transition.flow_transition["active_flow_context"]
+    assert service_flow["flow_type"] == "service_maintenance"
+    assert service_flow["intent"]["service_action_boundary"] == "store_verification"
+    assert service_flow["next_tool"] == "get_store_list_tool"
+    assert reservation_flow["flow_type"] == "reservation_management"
+    assert reservation_flow["intent"]["reservation_management_action"] == "change_request"
+    assert reservation_flow["allowed_tools"] == []
 
 
 def test_region_open_store_filter_does_not_become_visit_advisory() -> None:
