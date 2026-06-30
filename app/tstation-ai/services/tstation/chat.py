@@ -94,6 +94,7 @@ from services.tstation.policies.flow_state import (
     latest_router_evidence,
     purchase_context_vehicle_selection_patch,
     recommendation_listcar_flow_delta,
+    recommendation_named_vehicle_flow_delta,
     recommendation_vehicle_selection_patch,
     selected_store_slots_from_active_flow_context,
     store_candidate_selection_patch,
@@ -30453,6 +30454,74 @@ class TStationChatServiceV2:
             pending_check_object_type=merged_slots.pending_check_object_type,
             pending_check_object_value=merged_slots.pending_check_object_value,
         )
+        discovery_response_metadata = (
+            getattr(discovery_response_decision, "metadata", None)
+            if discovery_response_decision is not None
+            else None
+        )
+        if isinstance(discovery_response_metadata, Mapping):
+            named_vehicle_flow_delta = recommendation_named_vehicle_flow_delta(
+                recommendation_context={
+                    "recommendation_scenario": discovery_response_metadata.get("recommendation_scenario"),
+                    "tool_args_patch": discovery_tool_patch,
+                    "expected_tool_args": {
+                        key: value
+                        for key, value in dict(discovery_tool_patch or {}).items()
+                        if key
+                        in {
+                            "rcmd_type",
+                            "vehicle_type",
+                            "season_nm",
+                            "tire_size",
+                            "car_lnc_cd",
+                            "brand_cd",
+                            "allow_cross_brand_fill",
+                            "pfm_nm",
+                            "prc_grd",
+                            "sort_by",
+                            "min_price",
+                            "max_price",
+                        }
+                    },
+                    "source_text": last_user_text,
+                },
+                named_vehicle_anchor=str(discovery_response_metadata.get("named_registered_vehicle_anchor") or ""),
+                source_text=last_user_text,
+            )
+            if named_vehicle_flow_delta:
+                availability_context_for_named_vehicle = (
+                    dict(merged_slots.availability_context)
+                    if isinstance(getattr(merged_slots, "availability_context", None), dict)
+                    else {}
+                )
+                current_named_vehicle_flow = (
+                    availability_context_for_named_vehicle.get("active_flow_context")
+                    if isinstance(availability_context_for_named_vehicle.get("active_flow_context"), Mapping)
+                    else {}
+                )
+                named_vehicle_commit = commit_flow_state(
+                    current_named_vehicle_flow,
+                    named_vehicle_flow_delta,
+                    source="current_turn:named_vehicle_recommendation",
+                    flow_type="recommendation",
+                    flow_step="resolve_named_vehicle",
+                    status="active",
+                )
+                availability_context_for_named_vehicle["active_flow_context"] = (
+                    named_vehicle_commit.state.to_active_flow_context()
+                )
+                merged_slots = merged_slots.model_copy()
+                merged_slots.availability_context = availability_context_for_named_vehicle
+                vehicle_selection_trace_metadata.update({
+                    "named_vehicle_recommendation_flow_stored": True,
+                    "named_vehicle_recommendation_flow_after": availability_context_for_named_vehicle[
+                        "active_flow_context"
+                    ],
+                })
+                logger.info(
+                    "[FLOW_STATE] Stored named vehicle recommendation flow: %s",
+                    availability_context_for_named_vehicle["active_flow_context"],
+                )
         current_discovery_recommendation_tool_patch.set(discovery_tool_patch)
         current_discovery_search_tool_patch.set(discovery_tool_patch)
         current_discovery_response_decision.set(discovery_response_decision)
@@ -32069,7 +32138,7 @@ class TStationChatServiceV2:
                 effective["brand_cd"] = policy_patch["brand_cd"]
             if not effective.get("tire_size") and not effective.get("car_lnc_cd") and policy_patch.get("tire_size"):
                 effective["tire_size"] = policy_patch["tire_size"]
-            for key in ("sort_by", "season_nm", "pfm_nm", "prc_grd", "vehicle_type"):
+            for key in ("sort_by", "season_nm", "pfm_nm", "prc_grd", "vehicle_type", "min_price", "max_price"):
                 if policy_patch.get(key):
                     effective[key] = policy_patch[key]
             return effective

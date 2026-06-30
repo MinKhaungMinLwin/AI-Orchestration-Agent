@@ -11,6 +11,8 @@ _EMPTY_VALUES = (None, "", [], {})
 _PRODUCT_FIELDS = ("goods_no", "product_name", "tire_model", "pending_product_name", "tire_size", "ord_qty")
 _VEHICLE_FIELDS = (
     "selection_required",
+    "named_registered_vehicle_anchor",
+    "requested_vehicle_name",
     "car_no",
     "car_lnc_cd",
     "mbr_car_reg_seq",
@@ -27,6 +29,8 @@ _RECOMMENDATION_FIELDS = (
     "season_nm",
     "brand_cd",
     "allow_cross_brand_fill",
+    "min_price",
+    "max_price",
     "tool_args_patch",
     "expected_tool_args",
     "source_text",
@@ -1195,6 +1199,60 @@ def recommendation_listcar_flow_delta(
         "pending_intent": "product_recommendation",
         "goal_type": "recommend_tire",
         "selection_required": True,
+        **recommendation,
+    }
+
+
+def recommendation_named_vehicle_flow_delta(
+    *,
+    recommendation_context: Mapping[str, Any] | None,
+    named_vehicle_anchor: str | None,
+    source_text: str | None = None,
+) -> dict[str, Any]:
+    anchor = str(named_vehicle_anchor or "").strip()
+    if not anchor:
+        return {}
+    normalized_context = _recommendation_context_dict(recommendation_context)
+    tool_args_patch = _non_empty_mapping(normalized_context.get("tool_args_patch"))
+    expected_tool_args = _non_empty_mapping(normalized_context.get("expected_tool_args"))
+    if not tool_args_patch and not expected_tool_args:
+        return {}
+    scenario = str(
+        normalized_context.get("recommendation_scenario")
+        or normalized_context.get("scenario")
+        or ""
+    ).strip()
+    recommendation = {
+        key: value
+        for key, value in {
+            "scenario": scenario or None,
+            "recommendation_scenario": scenario or None,
+            "tool_args_patch": tool_args_patch or None,
+            "expected_tool_args": expected_tool_args or None,
+            "rcmd_type": tool_args_patch.get("rcmd_type") or expected_tool_args.get("rcmd_type"),
+            "season_nm": tool_args_patch.get("season_nm") or expected_tool_args.get("season_nm"),
+            "brand_cd": tool_args_patch.get("brand_cd") or expected_tool_args.get("brand_cd"),
+            "min_price": tool_args_patch.get("min_price") or expected_tool_args.get("min_price"),
+            "max_price": tool_args_patch.get("max_price") or expected_tool_args.get("max_price"),
+            "source_text": normalized_context.get("source_text") or source_text,
+            "fitment_source": "named_registered_vehicle",
+        }.items()
+        if value not in _EMPTY_VALUES
+    }
+    return {
+        "flow_type": "recommendation",
+        "status": "active",
+        "flow_step": "resolve_named_vehicle",
+        "pending_intent": "product_recommendation",
+        "goal_type": "recommend_tire",
+        "selection_required": False,
+        "named_registered_vehicle_anchor": anchor,
+        "requested_vehicle_name": anchor,
+        "missing_slots": ("tire_size",),
+        "next_tool": "get_my_cars_tool",
+        "target_action": "recommend_products",
+        "allowed_tools": ("get_my_cars_tool", "get_products_recommendations_tool"),
+        "progress_source": "recommendation_named_vehicle_flow",
         **recommendation,
     }
 

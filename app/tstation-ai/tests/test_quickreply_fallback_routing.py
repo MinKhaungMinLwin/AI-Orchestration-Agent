@@ -40,6 +40,7 @@ from services.tstation.policies.flow_state import (
     latest_router_evidence,
     purchase_context_vehicle_selection_patch,
     recommendation_listcar_flow_delta,
+    recommendation_named_vehicle_flow_delta,
     recommendation_vehicle_selection_patch,
     selected_store_slots_from_active_flow_context,
     store_candidate_selection_patch,
@@ -12002,6 +12003,57 @@ def test_vehicle_auto_select_matches_unique_owned_model_from_listcar() -> None:
 
     assert selected is not None
     assert selected["meta"]["carNo"] == "205소4214"
+
+
+def test_named_owned_vehicle_recommendation_allows_same_turn_recommendation_contract() -> None:
+    user_text = "내차 중에 제타 기준으로 패밀리카 승차감 좋고 마일리지 성능 우수한 타이어 20만원대로 추천해"
+    frame = build_discovery_intent_frame(user_text)
+    tool_plan = plan_discovery_tools(frame)
+    decision = decide_discovery_response(frame)
+
+    assert frame.intent == "product_recommendation"
+    assert frame.sub_intent == "vehicle_resolved_recommendation"
+    assert frame.entities["named_registered_vehicle_anchor"] == "제타"
+    assert tool_plan.allowed_tools == ("get_my_cars_tool", "get_products_recommendations_tool")
+    assert tool_plan.preferred_tool == "get_my_cars_tool"
+    assert tool_plan.tool_args_patch["rcmd_type"] == "long_distance"
+    assert tool_plan.tool_args_patch["min_price"] == 200_000
+    assert tool_plan.tool_args_patch["max_price"] == 299_999
+    assert tool_plan.metadata["recommendation_expected_tool_args"]["rcmd_type"] == "long_distance"
+    assert tool_plan.metadata["recommendation_expected_tool_args"]["min_price"] == 200_000
+    assert tool_plan.metadata["recommendation_expected_tool_args"]["max_price"] == 299_999
+    assert "get_products_recommendations_tool" not in tool_plan.forbidden_tools
+    assert decision.template == TemplateName.PRODUCT
+    assert decision.metadata["flow_step"] == "resolve_named_vehicle"
+
+
+def test_named_owned_vehicle_recommendation_stores_flow_state_until_size_is_resolved() -> None:
+    user_text = "내차 중에 제타 기준으로 패밀리카 승차감 좋고 마일리지 성능 우수한 타이어 20만원대로 추천해"
+    frame = build_discovery_intent_frame(user_text)
+    tool_plan = plan_discovery_tools(frame)
+
+    delta = recommendation_named_vehicle_flow_delta(
+        recommendation_context={
+            "recommendation_scenario": frame.entities["recommendation_scenario"],
+            "tool_args_patch": tool_plan.tool_args_patch,
+            "expected_tool_args": tool_plan.metadata["recommendation_expected_tool_args"],
+            "source_text": user_text,
+        },
+        named_vehicle_anchor=frame.entities["named_registered_vehicle_anchor"],
+        source_text=user_text,
+    )
+
+    assert delta["flow_type"] == "recommendation"
+    assert delta["flow_step"] == "resolve_named_vehicle"
+    assert delta["pending_intent"] == "product_recommendation"
+    assert delta["named_registered_vehicle_anchor"] == "제타"
+    assert delta["missing_slots"] == ("tire_size",)
+    assert delta["next_tool"] == "get_my_cars_tool"
+    assert delta["target_action"] == "recommend_products"
+    assert delta["allowed_tools"] == ("get_my_cars_tool", "get_products_recommendations_tool")
+    assert delta["rcmd_type"] == "long_distance"
+    assert delta["min_price"] == 200_000
+    assert delta["max_price"] == 299_999
 
 
 def test_vehicle_selection_slot_values_include_vehicle_identifiers() -> None:

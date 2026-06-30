@@ -505,6 +505,39 @@ def test_registered_vehicle_recommendation_resolves_possessive_korean_model_alia
     assert row["car_lnc_cd"] == "W036270"
 
 
+def test_registered_vehicle_recommendation_args_keep_mileage_priority_over_family():
+    tool_result = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "car_no": "29조3344",
+                    "car_lnc_cd": "W036270",
+                    "car_nm": "뉴 제타(6세대) 2.0 TDI A/T",
+                    "car_model_det": "제타(6세대) (2011 - 2016)",
+                    "tire_size_fr": "2254517",
+                }
+            ]
+        },
+    }
+
+    args = _owner_lookup_vehicle_recommendation_args(
+        tool_result,
+        [
+            {
+                "role": "user",
+                "content": "내차 중에 제타 기준으로 패밀리카 승차감 좋고 마일리지 성능 우수한 타이어 20만원대로 추천",
+            }
+        ],
+    )
+
+    assert args is not None
+    assert args["rcmd_type"] == "long_distance"
+    assert args["min_price"] == 200_000
+    assert args["max_price"] == 299_999
+    assert args["car_lnc_cd"] == "W036270"
+
+
 def test_registered_vehicle_recommendation_does_not_resolve_generic_model_mention():
     tool_result = {
         "status": "success",
