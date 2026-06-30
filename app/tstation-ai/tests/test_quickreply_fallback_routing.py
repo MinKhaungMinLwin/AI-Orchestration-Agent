@@ -18054,7 +18054,10 @@ def test_location_booking_flow_metadata_overrides_store_search_contract_with_pur
     assert metadata["expected_contract_intent"] == "quick_order_reservation"
     assert metadata["ui_action"]["source_intent"] == "quick_order_reservation"
     assert metadata["ui_action"]["expected_contract_intent"] == "quick_order_reservation"
-    assert metadata["slots"] == {"shop_id": "F00721", "shop_name": "티스테이션 판교점"}
+    assert metadata["slots"]["shop_id"] == "F00721"
+    assert metadata["slots"]["shop_name"] == "티스테이션 판교점"
+    assert metadata["slots"]["goods_no"] == "G000000319451"
+    assert metadata["slots"]["ord_qty"] == 4
 
     prepared = prepare_ui_action_state(
         ui_action=metadata["ui_action"],
@@ -39323,6 +39326,187 @@ def test_maintenance_history_access_policy_does_not_call_history_tool(user_text:
     assert "get_maintenance_history_tool" in contract.forbidden_tools
     assert contract.allowed_tools == ()
     assert contract.blocking_required_slots == ()
+
+
+def test_vehicle_experience_store_search_uses_region_store_search_tool_boundary() -> None:
+    user_text = "bmw 5시리즈 정비 경험 많은 매장으로 추천해줘"
+    frame = build_transaction_intent_frame(
+        user_text,
+        known_slots={"region": "분당"},
+    )
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text=user_text,
+        known_slots=dict(frame.known_slots),
+    )
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=response_decision,
+    )
+
+    assert frame.intent == "store_recommendation_by_vehicle_experience"
+    assert frame.known_slots["region"] == "분당"
+    assert frame.known_slots["store_search_condition"] == "vehicle_experience"
+    assert "bmw 5시리즈 정비 경험" in frame.known_slots["requested_vehicle_experience"].casefold()
+    assert tool_plan.allowed_tools
+    assert tool_plan.preferred_tool == "search_stores_complex_tool"
+    assert "search_stores_complex_tool" in tool_plan.allowed_tools
+    assert "quick_order_tool" in tool_plan.forbidden_tools
+    assert "get_store_schedule_tool" in tool_plan.forbidden_tools
+    assert "transaction_store_preview_tool" in tool_plan.forbidden_tools
+    assert contract.intent == "store_recommendation_by_vehicle_experience"
+    assert contract.preferred_tool == "search_stores_complex_tool"
+    assert "search_stores_complex_tool" in contract.allowed_tools
+    assert "quick_order_tool" in contract.forbidden_tools
+    assert contract.blocking_required_slots == ()
+
+
+def test_vehicle_experience_store_search_without_region_asks_for_region() -> None:
+    user_text = "bmw 5시리즈 정비 경험 많은 매장으로 추천해줘"
+    frame = build_transaction_intent_frame(user_text, known_slots={})
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text=user_text,
+        known_slots=dict(frame.known_slots),
+    )
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=response_decision,
+    )
+    event = build_required_slot_clarification_event(contract)
+
+    assert frame.intent == "store_recommendation_by_vehicle_experience"
+    assert tool_plan.required_slots == ("region",)
+    assert response_decision.required_slots == ("region",)
+    assert contract.blocking_required_slots == ("region",)
+    assert contract.preferred_tool == "search_stores_complex_tool"
+    assert event["template"] == "quickReply"
+    assert "지역" in event["data"]["assistantResponse"]
+
+
+def test_vehicle_experience_store_search_keeps_purchase_slots_as_supporting_evidence() -> None:
+    user_text = "수입차 정비 경험 많은 매장 분당에서 추천해줘"
+    frame = build_transaction_intent_frame(
+        user_text,
+        known_slots={
+            "goods_no": "G000000309780",
+            "tire_size": "245/45R18",
+            "ord_qty": 4,
+            "shop_id": "F00001",
+            "requested_cal_day": "20260701",
+            "rsv_hour": "10",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+    tool_plan = plan_transaction_tools(frame)
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=decide_transaction_response(
+            intent=frame.intent,
+            user_text=user_text,
+            known_slots=dict(frame.known_slots),
+        ),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["transaction:store_recommendation_by_vehicle_experience"],
+        ),
+    )
+
+    assert frame.intent == "store_recommendation_by_vehicle_experience"
+    assert frame.known_slots["goods_no"] == "G000000309780"
+    assert frame.known_slots["ord_qty"] == 4
+    assert frame.known_slots["shop_id"] == "F00001"
+    assert contract.intent == "store_recommendation_by_vehicle_experience"
+    assert contract.action_mode != "booking_continuation"
+    assert "search_stores_complex_tool" in contract.allowed_tools
+    assert "quick_order_tool" in contract.forbidden_tools
+    assert "get_store_schedule_tool" in contract.forbidden_tools
+    assert "transaction_store_preview_tool" in contract.forbidden_tools
+
+
+def test_router_wins_vehicle_experience_store_search_aligns_stale_purchase_tool_plan() -> None:
+    user_text = "bmw 5시리즈 정비 경험 많은 매장으로 추천해줘"
+    stale_purchase_plan = ToolPlan(
+        allowed_tools=("quick_order_tool", "get_store_schedule_tool"),
+        preferred_tool="quick_order_tool",
+        forbidden_tools=("search_stores_complex_tool",),
+        required_slots=("requested_cal_day",),
+        metadata={"response_intent": "quick_order_reservation"},
+    )
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=IntentFrame(
+            domain=PolicyDomain.TRANSACTION,
+            intent="quick_order_reservation",
+            known_slots={
+                "region": "분당",
+                "goods_no": "G000000309780",
+                "tire_size": "245/45R18",
+                "ord_qty": 4,
+                "shop_id": "F00001",
+            },
+        ),
+        tool_plan=stale_purchase_plan,
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.DATE_PICK,
+            template=TemplateName.DATE_PICK,
+        ),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["transaction:store_recommendation_by_vehicle_experience"],
+        ),
+    )
+
+    assert contract.intent == "store_recommendation_by_vehicle_experience"
+    assert contract.blocking_required_slots == ()
+    assert contract.preferred_tool == "search_stores_complex_tool"
+    assert "search_stores_complex_tool" in contract.allowed_tools
+    assert "quick_order_tool" in contract.forbidden_tools
+    assert "get_store_schedule_tool" in contract.forbidden_tools
+    assert "transaction_store_preview_tool" in contract.forbidden_tools
+    assert contract.response_decision["template"] == "location"
+
+
+def test_general_preorder_flow_keeps_purchase_boundary_after_vehicle_store_search_mapping() -> None:
+    user_text = "이대로 주문해줘"
+    frame = build_transaction_intent_frame(
+        user_text,
+        known_slots={
+            "goods_no": "G000000309780",
+            "tire_size": "245/45R18",
+            "ord_qty": 4,
+            "shop_id": "F00001",
+            "shop_name": "티스테이션 분당점",
+            "requested_cal_day": "20260701",
+            "rsv_hour": "10",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+    tool_plan = plan_transaction_tools(frame)
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=decide_transaction_response(
+            intent=frame.intent,
+            user_text=user_text,
+            known_slots=dict(frame.known_slots),
+        ),
+    )
+
+    assert frame.intent in {"quick_order_reservation", "quick_order_execute"}
+    assert "search_stores_complex_tool" not in contract.allowed_tools
+    assert contract.intent in {"quick_order_reservation", "quick_order_execute"}
 
 
 def test_maintenance_history_access_policy_event_has_service_history_cta() -> None:
