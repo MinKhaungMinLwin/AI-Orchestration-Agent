@@ -3,6 +3,50 @@ from __future__ import annotations
 from services.tstation.policies.flow_state import commit_flow_state, commit_purchase_flow_state
 
 
+def test_pending_purchase_drops_action_label_residue_product_identity() -> None:
+    result = commit_purchase_flow_state(
+        {
+            "tire_size": "225/45R17",
+            "ord_qty": 4,
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        {"product_name": "하기", "tire_model": "하기", "pending_product_name": "하기", "region": "분당"},
+        source="cta_label_residue",
+    )
+
+    context = result.state.to_pending_order_context()
+    assert "product_name" not in context
+    assert "tire_model" not in context
+    assert "pending_product_name" not in context
+    assert context["tire_size"] == "225/45R17"
+    assert context["ord_qty"] == 4
+    assert context["region"] == "분당"
+
+
+def test_active_purchase_drops_action_label_residue_product_identity() -> None:
+    result = commit_flow_state(
+        {
+            "flow_type": "purchase",
+            "status": "active",
+            "flow_step": "ask_quantity",
+            "product": {"tire_size": "225/45R17"},
+            "intent": {"pending_intent": "order", "goal_type": "place_order"},
+        },
+        {"product_name": "구매하기", "ord_qty": 4},
+        source="cta_label_residue",
+        flow_type="purchase",
+        status="active",
+    )
+
+    context = result.state.to_active_flow_context()
+    assert "product_name" not in context["product"]
+    assert "tire_model" not in context["product"]
+    assert "pending_product_name" not in context["product"]
+    assert context["product"]["tire_size"] == "225/45R17"
+    assert context["product"]["ord_qty"] == 4
+
+
 def test_pending_purchase_new_product_identity_clears_stale_resolution() -> None:
     result = commit_purchase_flow_state(
         {

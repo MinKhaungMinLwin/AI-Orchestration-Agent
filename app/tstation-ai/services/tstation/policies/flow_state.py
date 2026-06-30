@@ -105,6 +105,17 @@ _STOCK_STORE_INTENTS = {
     "stock_store_search",
     "store_inventory_check",
 }
+_INVALID_PRODUCT_IDENTITY_VALUES = {
+    "하기",
+    "구매하기",
+    "주문하기",
+    "예약하기",
+    "진행하기",
+    "담기",
+    "장바구니담기",
+    "선택하기",
+    "확인하기",
+}
 _STORE_SELECTION_CHIPS = {"이 매장 선택", "이 매장으로", "이곳 선택"}
 _SELECTION_ORDINALS: tuple[tuple[tuple[str, ...], int], ...] = (
     (("첫번째", "첫째", "첫 번", "첫번", "1번째", "1번", "1.", "1)"), 0),
@@ -121,7 +132,19 @@ def _non_empty_mapping(values: Mapping[str, Any] | None) -> dict[str, Any]:
     return {key: value for key, value in dict(values or {}).items() if value not in _EMPTY_VALUES}
 
 
+def _is_invalid_product_identity_value(value: Any) -> bool:
+    normalized = re.sub(r"\s+", "", str(value or "").strip())
+    return normalized in _INVALID_PRODUCT_IDENTITY_VALUES
+
+
+def _sanitize_product_identity_values(values: dict[str, Any]) -> None:
+    for field_name in ("product_name", "tire_model", "pending_product_name"):
+        if _is_invalid_product_identity_value(values.get(field_name)):
+            values.pop(field_name, None)
+
+
 def _normalize_product_aliases(values: dict[str, Any]) -> None:
+    _sanitize_product_identity_values(values)
     product_name = values.get("product_name") or values.get("tire_model") or values.get("pending_product_name")
     if product_name in _EMPTY_VALUES:
         return
