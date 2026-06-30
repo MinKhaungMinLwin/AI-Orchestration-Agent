@@ -1166,7 +1166,7 @@ def store_candidates_flow_delta(
         candidates.append(candidate)
         if not flow_type:
             flow_type = candidate_flow_type
-        for key in ("goods_no", "tire_size", "ord_qty", "region"):
+        for key in ("goods_no", "product_name", "tire_model", "pending_product_name", "tire_size", "ord_qty", "region"):
             if known_slots.get(key) in _EMPTY_VALUES and candidate.get(key) not in _EMPTY_VALUES:
                 known_slots[key] = candidate[key]
         if candidate_flow_type == "stock":
@@ -1230,6 +1230,9 @@ def store_candidate_selection_patch(
             "schedule_tier",
             "inventory_mode",
             "source_tool",
+            "product_name",
+            "tire_model",
+            "pending_product_name",
             "goods_no",
             "tire_size",
             "ord_qty",
@@ -1289,6 +1292,9 @@ def selected_store_slots_from_active_flow_context(
     if isinstance(selected_candidate, Mapping):
         for key in (
             "goods_no",
+            "product_name",
+            "tire_model",
+            "pending_product_name",
             "tire_size",
             "ord_qty",
             "source_tool",
@@ -1304,6 +1310,9 @@ def selected_store_slots_from_active_flow_context(
     for section in (active_flow.product, active_flow.intent):
         for key in (
             "goods_no",
+            "product_name",
+            "tire_model",
+            "pending_product_name",
             "tire_size",
             "ord_qty",
             "source_tool",
@@ -1646,8 +1655,18 @@ def _store_candidate_from_metadata(
         "region": str(meta.get("region") or "").strip(),
     }
     if flow_type == "stock":
+        product_name = str(
+            meta.get("productName")
+            or meta.get("product_name")
+            or meta.get("goodsNm")
+            or meta.get("goods_nm")
+            or ""
+        ).strip()
         candidate.update({
             "goods_no": str(meta.get("goodsNo") or meta.get("goods_no") or "").strip(),
+            "product_name": product_name,
+            "tire_model": product_name,
+            "pending_product_name": product_name,
             "tire_size": str(meta.get("tireSize") or meta.get("tire_size") or "").strip(),
             "pending_intent": str(meta.get("pendingIntent") or meta.get("pending_intent") or "stock").strip(),
             "goal_type": str(meta.get("goalType") or meta.get("goal_type") or "store_with_stock").strip(),
