@@ -70,7 +70,7 @@ jobs:
                   "- missing or weak tests",
                   "",
                   "Output rules:",
-                  "- Write in Korean.",
+                  "- Write in English.",
                   "- Use concise markdown.",
                   "- If there are no meaningful findings, say that explicitly.",
                   "- Do not praise the code.",
@@ -120,7 +120,7 @@ jobs:
               payload.get("choices", [{}])[0]
               .get("message", {})
               .get("content")
-              or "## Findings\n- 리뷰 결과가 비어 있습니다."
+              or "## Findings\n- Review output was empty."
           )
           body = "\n".join(
               [
