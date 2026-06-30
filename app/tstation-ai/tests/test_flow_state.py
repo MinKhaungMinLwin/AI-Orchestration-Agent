@@ -343,6 +343,40 @@ def test_active_purchase_to_nested_store_search_preserves_search_intent() -> Non
     assert context["dormant_flows"][0]["context"]["product"]["goods_no"] == "GOLD"
 
 
+def test_active_purchase_to_support_faq_preserves_support_intent() -> None:
+    result = commit_flow_state(
+        {
+            "flow_type": "purchase",
+            "status": "active",
+            "flow_step": "ask_schedule",
+            "product": {"goods_no": "GOLD", "product_name": "벤투스 S2 AS", "tire_size": "245/45R19", "ord_qty": 2},
+            "intent": {"pending_intent": "order", "goal_type": "place_order"},
+        },
+        {
+            "flow_type": "support",
+            "status": "active",
+            "flow_step": "answer_faq",
+            "intent": {
+                "pending_intent": "coupon_registration_policy",
+                "goal_type": "support_faq",
+                "policy_topic": "coupon_registration_policy",
+            },
+        },
+        source="flow_controller:current_turn_support",
+        flow_type="support",
+        flow_step="answer_faq",
+        status="active",
+    )
+
+    context = result.state.to_active_flow_context()
+    assert context["flow_type"] == "support"
+    assert context["flow_step"] == "answer_faq"
+    assert context["intent"]["pending_intent"] == "coupon_registration_policy"
+    assert context["intent"]["policy_topic"] == "coupon_registration_policy"
+    assert context["dormant_flows"][0]["context"]["flow_type"] == "purchase"
+    assert context["dormant_flows"][0]["context"]["product"]["goods_no"] == "GOLD"
+
+
 def test_dormant_purchase_resumes_only_with_explicit_anchor() -> None:
     dormant_flows = upsert_dormant_flow(
         [],
