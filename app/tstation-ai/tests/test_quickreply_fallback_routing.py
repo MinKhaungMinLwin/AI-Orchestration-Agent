@@ -32424,6 +32424,41 @@ def test_promote_single_turn_purchase_contract_from_search_product_keeps_store_n
     assert "search_product_tool" not in promoted_tool_plan.allowed_tools
 
 
+def test_promote_single_turn_purchase_contract_strips_quantity_from_store_name() -> None:
+    promoted = _promote_single_turn_purchase_contract_from_search_product(
+        user_text="벤투스 s2 as 2454519 2개 한남점 구매",
+        tool_result={
+            "data": {
+                "items": [
+                    {
+                        "goods_no": "G000000310126",
+                        "goods_nm": "벤투스 S2 AS",
+                        "tire_size_1": "245/45R19",
+                    }
+                ]
+            }
+        },
+        merged_slots=ConversationSlots(
+            tire_model="벤투스 S2 AS",
+            tire_size="245/45R19",
+            ord_qty=2,
+            shop_name="한남점",
+            store_name="2개 한남점",
+            pending_intent="order",
+            goal_type="place_order",
+        ),
+        routing_result=SimpleNamespace(execution_plan=["discovery:resolve_product", "transaction:continue_purchase"]),
+    )
+
+    assert promoted is not None
+    _promoted_slots, promoted_frame, promoted_tool_plan, _decision = promoted
+    assert promoted_frame.known_slots["shop_name"] == "한남점"
+    assert promoted_frame.known_slots["store_name"] == "한남점"
+    assert promoted_tool_plan.tool_args_patch["store_name"] == "한남점"
+    assert promoted_tool_plan.metadata["flow_slots"]["store_name"] == "한남점"
+    assert "2개 한남점" not in promoted_tool_plan.tool_args_patch.values()
+
+
 def test_promote_single_turn_purchase_contract_from_search_product_keeps_region_preview() -> None:
     promoted = _promote_single_turn_purchase_contract_from_search_product(
         user_text="벤투스 s2 as 2454519 2개 분당에서 구매할래",
