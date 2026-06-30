@@ -1,6 +1,14 @@
 from __future__ import annotations
 
-from services.tstation.policies.flow_state import commit_flow_state, commit_purchase_flow_state
+from datetime import datetime, timezone
+
+from services.tstation.policies.flow_state import (
+    commit_flow_state,
+    commit_purchase_flow_state,
+    prune_dormant_flows,
+    resume_dormant_flow,
+    upsert_dormant_flow,
+)
 
 
 def test_pending_purchase_drops_action_label_residue_product_identity() -> None:
@@ -260,7 +268,7 @@ def test_active_purchase_schedule_change_marks_payment_stale() -> None:
     assert "payment_amount" in result.metadata["cleared_fields"]
 
 
-def test_active_flow_type_transition_drops_previous_flow_context() -> None:
+def test_active_purchase_to_store_search_pushes_purchase_to_dormant() -> None:
     result = commit_flow_state(
         {
             "flow_type": "purchase",
@@ -271,24 +279,173 @@ def test_active_flow_type_transition_drops_previous_flow_context() -> None:
             "payment": {"payment_amount": 308200},
             "intent": {"pending_intent": "order", "goal_type": "place_order"},
         },
-        {"rcmd_type": "comfort", "pending_intent": "product_recommendation", "goal_type": "recommend_tire"},
+        {"region": "분당"},
         source="flow_type_changed",
-        flow_type="recommendation",
-        flow_step="select_vehicle",
+        flow_type="store_search",
+        flow_step="resolve_store",
         status="active",
     )
 
     context = result.state.to_active_flow_context()
-    assert context["flow_type"] == "recommendation"
-    assert context["flow_step"] == "select_vehicle"
-    assert context["recommendation"]["rcmd_type"] == "comfort"
-    assert context["intent"]["pending_intent"] == "product_recommendation"
+    assert context["flow_type"] == "store_search"
+    assert context["flow_step"] == "resolve_store"
+    assert context["store"]["region"] == "분당"
     assert "product" not in context
-    assert "store" not in context
     assert "payment" not in context
+    dormant = context["dormant_flows"]
+    assert len(dormant) == 1
+    assert dormant[0]["flow_identity"] == "purchase:gold:24545r19"
+    assert dormant[0]["context"]["flow_type"] == "purchase"
+    assert dormant[0]["context"]["status"] == "dormant"
+    assert dormant[0]["context"]["product"]["goods_no"] == "GOLD"
+    assert dormant[0]["context"]["store"]["shop_id"] == "S1"
     assert result.metadata["flow_state_conflicts"]["flow_type"] == {
         "existing": "purchase",
-        "incoming": "recommendation",
+        "incoming": "store_search",
     }
-    assert "product.goods_no" in result.metadata["cleared_fields"]
-    assert "store.shop_id" in result.metadata["cleared_fields"]
+    assert "dormant_flows" in result.metadata["committed_fields"]
+
+
+def test_dormant_purchase_resumes_only_with_explicit_anchor() -> None:
+    dormant_flows = upsert_dormant_flow(
+        [],
+        {
+            "flow_type": "purchase",
+            "status": "active",
+            "flow_step": "resolve_store",
+            "product": {"goods_no": "GOLD", "product_name": "벤투스 S2 AS", "tire_size": "245/45R19", "ord_qty": 2},
+            "intent": {"pending_intent": "order", "goal_type": "place_order"},
+        },
+    )
+
+    no_anchor = resume_dormant_flow(
+        {"flow_type": "store_search", "status": "active"},
+        dormant_flows,
+        resume_anchor={},
+        source="resume_without_anchor",
+    )
+    assert no_anchor.status == "not_found"
+
+    resumed = resume_dormant_flow(
+        {"flow_type": "store_search", "status": "active", "store": {"region": "분당"}},
+        dormant_flows,
+        resume_anchor={"flow_type": "purchase", "goods_no": "GOLD", "tire_size": "245/45R19"},
+        source="explicit_purchase_resume",
+    )
+    assert resumed.status == "resumed"
+    assert resumed.active_flow_context["flow_type"] == "purchase"
+    assert resumed.active_flow_context["status"] == "resumed"
+    assert resumed.active_flow_context["product"]["goods_no"] == "GOLD"
+    assert resumed.dormant_flows[0]["context"]["flow_type"] == "store_search"
+
+
+def test_same_product_size_purchase_dormant_upserts_instead_of_duplicating() -> None:
+    first = upsert_dormant_flow(
+        [],
+        {
+            "flow_type": "purchase",
+            "status": "active",
+            "flow_step": "ask_quantity",
+            "product": {"goods_no": "GOLD", "product_name": "벤투스 S2 AS", "tire_size": "245/45R19"},
+            "updated_at": "2026-06-30T01:00:00+00:00",
+        },
+    )
+    second = upsert_dormant_flow(
+        first,
+        {
+            "flow_type": "purchase",
+            "status": "active",
+            "flow_step": "resolve_store",
+            "product": {"goods_no": "GOLD", "product_name": "벤투스 S2 AS", "tire_size": "245/45R19", "ord_qty": 4},
+            "updated_at": "2026-06-30T02:00:00+00:00",
+        },
+    )
+
+    assert len(second) == 1
+    assert second[0]["flow_identity"] == "purchase:gold:24545r19"
+    assert second[0]["context"]["flow_step"] == "resolve_store"
+    assert second[0]["context"]["product"]["ord_qty"] == 4
+
+
+def test_different_dormant_flow_types_are_preserved_together() -> None:
+    dormant = upsert_dormant_flow(
+        [],
+        {
+            "flow_type": "purchase",
+            "product": {"goods_no": "GOLD", "tire_size": "245/45R19"},
+            "updated_at": "2026-06-30T01:00:00+00:00",
+        },
+    )
+    dormant = upsert_dormant_flow(
+        dormant,
+        {
+            "flow_type": "recommendation",
+            "recommendation": {"scenario": "comfort"},
+            "vehicle": {"car_no": "12가3456"},
+            "updated_at": "2026-06-30T02:00:00+00:00",
+        },
+    )
+    dormant = upsert_dormant_flow(
+        dormant,
+        {
+            "flow_type": "store_search",
+            "store": {"region": "분당"},
+            "updated_at": "2026-06-30T03:00:00+00:00",
+        },
+    )
+
+    assert {item["context"]["flow_type"] for item in dormant} == {"purchase", "recommendation", "store_search"}
+
+
+def test_dormant_resume_returns_ambiguous_when_multiple_candidates_match_anchor() -> None:
+    dormant = upsert_dormant_flow(
+        [],
+        {
+            "flow_type": "purchase",
+            "product": {"goods_no": "GOLD", "product_name": "벤투스 S2 AS", "tire_size": "245/45R19"},
+        },
+    )
+    dormant = upsert_dormant_flow(
+        dormant,
+        {
+            "flow_type": "purchase",
+            "product": {"goods_no": "SILVER", "product_name": "키너지", "tire_size": "225/55R17"},
+        },
+    )
+
+    result = resume_dormant_flow(
+        {"flow_type": "store_search", "status": "active"},
+        dormant,
+        resume_anchor={"flow_type": "purchase"},
+        source="ambiguous_purchase_resume",
+    )
+
+    assert result.status == "ambiguous"
+    assert len(result.candidates) == 2
+    assert not result.active_flow_context
+
+
+def test_dormant_flows_prune_by_ttl_and_max_count() -> None:
+    now = datetime(2026, 6, 30, 3, 0, tzinfo=timezone.utc)
+    dormant = [
+        {
+            "flow_identity": "purchase:g1:24545r19",
+            "updated_at": "2026-06-30T00:00:00+00:00",
+            "context": {"flow_type": "purchase", "product": {"goods_no": "G1", "tire_size": "245/45R19"}},
+        },
+        {
+            "flow_identity": "purchase:g2:24545r19",
+            "updated_at": "2026-06-30T02:00:00+00:00",
+            "context": {"flow_type": "purchase", "product": {"goods_no": "G2", "tire_size": "245/45R19"}},
+        },
+        {
+            "flow_identity": "purchase:g3:24545r19",
+            "updated_at": "2026-06-30T02:30:00+00:00",
+            "context": {"flow_type": "purchase", "product": {"goods_no": "G3", "tire_size": "245/45R19"}},
+        },
+    ]
+
+    pruned = prune_dormant_flows(dormant, max_flows=1, ttl_seconds=60 * 60 * 2, now=now)
+
+    assert len(pruned) == 1
+    assert pruned[0]["flow_identity"] == "purchase:g3:24545r19"
