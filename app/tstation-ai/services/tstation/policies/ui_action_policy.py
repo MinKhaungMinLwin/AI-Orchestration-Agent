@@ -218,6 +218,7 @@ _UI_ACTION_SLOT_KEYS = (
     "payment_amount",
     "price_basis",
     "price_source_tool",
+    "payment_amount_source",
     "sale_prc",
     "extra_fvr_sale_prc",
     "cheapest_final_prc",
@@ -2197,6 +2198,7 @@ def _selected_product_price_patch(row: Mapping[str, Any]) -> dict[str, Any]:
         patch["payment_amount"] = value
         patch["price_basis"] = key
         patch["price_source_tool"] = "selected_product_candidate"
+        patch["payment_amount_source"] = "selected_product_candidate_unit_price"
         break
     return patch
 
@@ -3894,6 +3896,11 @@ def resolve_product_row_from_template_selection(
             "candidate_index": index + 1,
             "selection_source": "product_template_candidate",
         }
+        for source in (product, meta):
+            for key in (*_PRODUCT_PRICE_FIELDS, "wage_prc"):
+                value = source.get(key)
+                if value not in (None, "", [], {}) and row.get(key) in (None, "", [], {}):
+                    row[key] = value
         return {key: value for key, value in row.items() if value not in (None, "", [], {})}
 
     ordinal_idx = _selection_ordinal_index(text, len(metadata))

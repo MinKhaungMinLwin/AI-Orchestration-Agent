@@ -411,6 +411,7 @@ from services.tstation.policies.flow_controller import (
     resolve_purchase_order_flow,
     transition_current_flow,
 )
+from services.tstation.policies.preorder_event_builder import build_preorder_event
 from services.tstation.policies.intent_frame import IntentFrame, PolicyDomain
 from services.tstation.policies.resolved_context import (
     build_resolved_turn_context,
@@ -17517,7 +17518,33 @@ def test_apply_history_product_selection_state_uses_pending_order_context_withou
     assert state.action_context.slot_patch["shop_name"] == "광교신도시점"
     assert state.action_context.slot_patch["pending_intent"] == "order"
     assert state.action_context.slot_patch["goal_type"] == "place_order"
+    assert state.action_context.slot_patch["payment_amount"] == 101400
+    assert state.action_context.slot_patch["price_basis"] == "price"
+    assert state.action_context.slot_patch["price_source_tool"] == "selected_product_candidate"
+    assert state.action_context.slot_patch["payment_amount_source"] == "selected_product_candidate_unit_price"
     assert state.rewritten_user_text == "벤투스 S2 AS 225/45R17 4개 광교신도시점에서 구매"
+
+    preorder_event = build_preorder_event(
+        SimpleNamespace(
+            domain="transaction",
+            response_decision={"template": "preOrder", "metadata": {"response_shape_key": "reservation_confirmation_ready"}},
+            flow_step="build_preorder",
+            action_mode="purchase_continuation",
+            intent="quick_order_reservation",
+        ),
+        {
+            **state.action_context.slot_patch,
+            "shop_id": "F03778",
+            "shop_name": "티스테이션 광교신도시점",
+            "requested_cal_day": "20260701",
+            "rsv_hour": "15",
+        },
+    )
+
+    assert preorder_event is not None
+    assert preorder_event["data"]["orderInfo"]["paymentAmount"] == 405600
+    assert preorder_event["data"]["metadata"]["priceBasis"] == "price"
+    assert preorder_event["data"]["metadata"]["paymentAmountSource"] == "selected_product_candidate_unit_price"
 
 
 def test_product_selection_from_pending_order_context_builds_purchase_slot_fill_context() -> None:

@@ -197,11 +197,21 @@ def _payment_amount(slots: Mapping[str, Any]) -> tuple[int | None, str | None, s
     for context in _context_candidates(slots):
         direct_amount = _int_or_none(context.get("payment_amount") or context.get("paymentAmount"))
         if direct_amount is not None:
+            payment_amount_source = _str_or_none(
+                context.get("payment_amount_source") or context.get("paymentAmountSource")
+            )
+            if payment_amount_source == "selected_product_candidate_unit_price" and quantity > 0:
+                return (
+                    direct_amount * quantity,
+                    _str_or_none(context.get("price_basis") or context.get("priceBasis")),
+                    _str_or_none(context.get("price_source_tool") or context.get("priceSourceTool")),
+                    payment_amount_source,
+                )
             return (
                 direct_amount,
                 _str_or_none(context.get("price_basis") or context.get("priceBasis")),
                 _str_or_none(context.get("price_source_tool") or context.get("priceSourceTool")),
-                _str_or_none(context.get("payment_amount_source") or context.get("paymentAmountSource")),
+                payment_amount_source,
             )
         unit_price, price_basis = _unit_price_and_basis(context)
         if unit_price is not None and quantity > 0:
