@@ -160,6 +160,12 @@ _RESERVATION_AUTO_CHANGE_POLICY_RE = re.compile(
     r"예약\s*(?:일정|시간)?\s*(?:도\s*)?(?:변경되|바뀌|밀리)",
     re.IGNORECASE,
 )
+_RESERVATION_CHANGE_REQUEST_RE = re.compile(
+    r"(?:내\s*)?예약.{0,24}(?:시간|일정|날짜)?.{0,24}(?:변경|바꾸|바꿔|옮겨|미뤄|당겨)|"
+    r"(?:시간|일정|날짜).{0,16}(?:변경|바꾸|바꿔|옮겨|미뤄|당겨).{0,16}예약|"
+    r"예약.{0,12}(?:변경하고\s*싶|바꾸고\s*싶|옮기고\s*싶)",
+    re.IGNORECASE,
+)
 _STORE_ARRIVAL_NOTIFICATION_VISIT_RE = re.compile(
     r"(?:타이어|상품|주문|물건)?\s*"
     r"(?:매장|장착점|지점)?\s*(?:에\s*)?"
@@ -767,6 +773,11 @@ def build_transaction_intent_frame(
         and not current_reservation_window_policy
         and not current_delivery_delay_reservation_schedule_policy
     )
+    current_reservation_change_request = bool(
+        _RESERVATION_CHANGE_REQUEST_RE.search(text)
+        and not current_reservation_window_policy
+        and not current_delivery_delay_reservation_schedule_policy
+    )
     current_order_cancel_status_signal = bool(_ORDER_CANCEL_STATUS_LOOKUP_RE.search(text))
     current_owned_order_cancel_status_lookup = bool(
         current_order_cancel_status_signal and _has_owned_order_cancel_status_anchor(text, slots)
@@ -1257,6 +1268,11 @@ def build_transaction_intent_frame(
         intent = "reservation_store_info_lookup"
         sub_intent = "reservation_store_reference"
         entities["reservation_store_reference"] = True
+    elif current_reservation_change_request:
+        intent = "reservation_change_request"
+        sub_intent = "change_request"
+        entities["reservation_management_action"] = "change_request"
+        entities["owned_record_target"] = "reservation"
     elif current_reservation_status_lookup:
         intent = "reservation_status_lookup"
         sub_intent = "owned_record_status"
@@ -1475,10 +1491,15 @@ def build_transaction_intent_frame(
         known["availability_intent"] = "today_install"
     if intent == "maintenance_addon_with_tire_service":
         known["pending_intent"] = "maintenance_addon_with_tire_service"
-        known["goal_type"] = "store_service_availability"
+        known["service_action_boundary"] = "store_verification" if action_store_name else "service_booking_support"
+        known["goal_type"] = known["service_action_boundary"]
         known["service_type"] = "maintenance_addon"
+        if action_store_name:
+            known["store_name"] = action_store_name
+            known["shop_name"] = action_store_name
     if intent == "store_attribute_inquiry":
         known["goal_type"] = "store_attribute_inquiry"
+        known["service_action_boundary"] = "store_verification"
         known["service_type"] = "store_attribute_inquiry"
         known["attribute_text"] = entities.get("attribute_text") or slots.get("attribute_text")
         known["attribute_type"] = entities.get("attribute_type") or slots.get("attribute_type") or "unknown"
@@ -1487,6 +1508,7 @@ def build_transaction_intent_frame(
         )
     if intent == "store_service_search":
         known["goal_type"] = "store_service_search"
+        known["service_action_boundary"] = "store_verification"
         known["service_type"] = "store_service_search"
         known["service_name"] = entities.get("service_name")
         known["service_codes"] = tuple(entities.get("service_codes") or ())
@@ -1507,6 +1529,7 @@ def build_transaction_intent_frame(
             known["store_name"] = entities.get("store_name")
     if intent == "store_service_advisory":
         known["goal_type"] = "store_service_advisory"
+        known["service_action_boundary"] = "policy_answer"
         known["service_type"] = "store_service_advisory"
         known["attribute_text"] = entities.get("attribute_text") or slots.get("attribute_text")
         if entities.get("service_name"):
@@ -1523,6 +1546,12 @@ def build_transaction_intent_frame(
         known["pending_intent"] = "reservation_status_lookup"
         known["goal_type"] = "owned_record_lookup"
         known["owned_record_target"] = "reservation"
+        known["reservation_management_action"] = "lookup"
+    if intent == "reservation_change_request":
+        known["pending_intent"] = "reservation_change_request"
+        known["goal_type"] = "reservation_management"
+        known["owned_record_target"] = "reservation"
+        known["reservation_management_action"] = "change_request"
     if intent == "order_arrival_status_lookup":
         known["pending_intent"] = "order_arrival_status_lookup"
         known["goal_type"] = "store_arrival_visit_guidance"
@@ -1561,7 +1590,12 @@ def build_transaction_intent_frame(
         known["general_cancel_fee_policy"] = True
     if intent == "order_cancel_request":
         known["pending_intent"] = "order_cancel_request"
-        known["goal_type"] = "order_cancel_request"
+        if "예약" in text:
+            known["goal_type"] = "reservation_management"
+            known["reservation_management_action"] = "cancel_request"
+            known["owned_record_target"] = "reservation"
+        else:
+            known["goal_type"] = "order_cancel_request"
         known["order_cancel_request"] = True
         if entities.get("order_no"):
             known["order_no"] = entities["order_no"]
@@ -1929,6 +1963,29 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
             metadata={"response_intent": "reservation_status_lookup", "action": action},
         )
 
+    if frame.intent == "reservation_change_request":
+        return ToolPlan(
+            allowed_tools=(),
+            preferred_tool=None,
+            tool_args_patch={},
+            forbidden_tools=(
+                "quick_order_tool",
+                "get_store_schedule_tool",
+                "get_multi_store_schedule_tool",
+                "transaction_store_preview_tool",
+                "get_store_inventory_tool",
+                "get_logistics_inventory_tool",
+                "search_stores_tool",
+                "get_store_list_tool",
+            ),
+            required_slots=(),
+            metadata={
+                "response_intent": "reservation_change_request",
+                "action": action,
+                "reservation_management_action": "change_request",
+            },
+        )
+
     if frame.intent == "order_arrival_status_lookup":
         return ToolPlan(
             allowed_tools=("get_orders_of_user_tool", "get_order_status_tool"),
@@ -2059,6 +2116,36 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
             metadata={"response_intent": "general_cancel_fee_policy", "action": action},
         )
 
+    if frame.intent == "order_cancel_request":
+        return ToolPlan(
+            allowed_tools=(),
+            preferred_tool=None,
+            tool_args_patch={},
+            forbidden_tools=(
+                "quick_order_tool",
+                "get_store_schedule_tool",
+                "get_multi_store_schedule_tool",
+                "transaction_store_preview_tool",
+                "get_store_inventory_tool",
+                "get_logistics_inventory_tool",
+                "get_orders_of_user_tool",
+                "get_order_status_tool",
+                "get_my_reservations_tool",
+                "direct_cancel_processing_tool",
+                "get_order_cancel_tool",
+            ),
+            required_slots=(),
+            metadata={
+                "response_intent": "order_cancel_request",
+                "action": action,
+                **(
+                    {"reservation_management_action": "cancel_request"}
+                    if frame.known_slots.get("reservation_management_action") == "cancel_request"
+                    else {}
+                ),
+            },
+        )
+
     if frame.intent in {"payment_method_change_request", "payment_account_info_lookup"}:
         return ToolPlan(
             allowed_tools=("get_orders_of_user_tool", "get_order_status_tool"),
@@ -2175,15 +2262,11 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
         )
 
     if frame.intent == "maintenance_addon_with_tire_service":
-        has_store_context = bool(
-            frame.known_slots.get("store_name")
-            or frame.known_slots.get("shop_name")
-            or frame.known_slots.get("shop_id")
-        )
-        if not has_store_context:
+        service_boundary = str(frame.known_slots.get("service_action_boundary") or "").strip()
+        if service_boundary != "store_verification":
             return ToolPlan(
-                allowed_tools=(),
-                preferred_tool=None,
+                allowed_tools=("search_faq_hybrid_tool",),
+                preferred_tool="search_faq_hybrid_tool",
                 tool_args_patch={},
                 forbidden_tools=(
                     "get_store_list_tool",
@@ -2194,7 +2277,11 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
                     "get_products_recommendations_tool",
                 ),
                 required_slots=(),
-                metadata={"response_intent": "maintenance_addon_with_tire_service", "action": action},
+                metadata={
+                    "response_intent": "maintenance_addon_with_tire_service",
+                    "action": action,
+                    "service_action_boundary": service_boundary or "service_booking_support",
+                },
             )
         return ToolPlan(
             allowed_tools=("get_store_list_tool", "get_store_detail_tool"),
@@ -2206,7 +2293,11 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
                 "get_maintenance_dday_tool",
             ),
             required_slots=action_required_slots,
-            metadata={"response_intent": "maintenance_addon_with_tire_service", "action": action},
+            metadata={
+                "response_intent": "maintenance_addon_with_tire_service",
+                "action": action,
+                "service_action_boundary": "store_verification",
+            },
         )
 
     if frame.intent in {"store_attribute_inquiry", "store_service_availability"}:
@@ -2412,6 +2503,8 @@ def _transaction_action(frame: IntentFrame) -> str:
         return "reservation_store_info_lookup"
     if frame.intent == "reservation_status_lookup":
         return "reservation_status_lookup"
+    if frame.intent == "reservation_change_request":
+        return "reservation_change_request"
     if frame.intent == "order_arrival_status_lookup":
         return "order_arrival_status_lookup"
     if frame.intent == "delivery_delay_reservation_schedule_policy":

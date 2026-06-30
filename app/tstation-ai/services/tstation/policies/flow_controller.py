@@ -106,8 +106,27 @@ _INVALID_REGION_LABELS = frozenset({
 _STORE_SEARCH_FLOW_INTENTS = frozenset({
     "store_search",
     "open_store_search",
-    "store_service_search",
     "store_recommendation_by_vehicle_experience",
+})
+_SERVICE_MAINTENANCE_FLOW_INTENTS = frozenset({
+    "maintenance_addon_with_tire_service",
+    "service_duration_advisory",
+    "store_attribute_inquiry",
+    "store_service_advisory",
+    "store_service_availability",
+    "store_service_search",
+    "unsupported_or_unmapped_store_service_policy",
+})
+_RESERVATION_MANAGEMENT_FLOW_INTENTS = frozenset({
+    "reservation_store_info_lookup",
+    "reservation_status_lookup",
+    "reservation_change_request",
+    "order_cancel_request",
+    "order_cancel_status_lookup",
+    "owned_order_cancel_fee_inquiry",
+    "general_cancel_fee_policy",
+    "reservation_window_policy",
+    "delivery_delay_reservation_schedule_policy",
 })
 _DISCOVERY_FLOW_INTENTS = frozenset({
     "product_search",
@@ -256,10 +275,16 @@ def _compact_slot_snapshot(slots: Any | Mapping[str, Any] | None) -> dict[str, A
         "ord_qty",
         "shop_id",
         "shop_name",
+        "store_name",
         "region",
         "place_query",
         "store_search_condition",
         "requested_vehicle_experience",
+        "service_action_boundary",
+        "service_name",
+        "service_type",
+        "reservation_management_action",
+        "owned_record_target",
         "recommendation_scenario",
         "scenario",
         "rcmd_type",
@@ -1049,6 +1074,162 @@ def _current_turn_support_flow_context(*, router_evidence: Mapping[str, Any]) ->
     }
 
 
+def _router_plan_has_intent(router_evidence: Mapping[str, Any], *intents: str) -> bool:
+    execution_plan = _router_execution_plan(router_evidence)
+    return any(any(intent in item for intent in intents) for item in execution_plan)
+
+
+def _current_turn_service_maintenance_intent(router_evidence: Mapping[str, Any]) -> str:
+    router_intent = str(router_evidence.get("intent") or "").strip()
+    if router_intent in _SERVICE_MAINTENANCE_FLOW_INTENTS:
+        return router_intent
+    for intent in _SERVICE_MAINTENANCE_FLOW_INTENTS:
+        if _router_plan_has_intent(router_evidence, intent):
+            return intent
+    return ""
+
+
+def _current_turn_service_maintenance_flow_context(
+    *,
+    router_evidence: Mapping[str, Any],
+    existing_snapshot: Mapping[str, Any],
+    extracted_snapshot: Mapping[str, Any],
+) -> dict[str, Any]:
+    intent = _current_turn_service_maintenance_intent(router_evidence)
+    if not intent:
+        return {}
+
+    boundary = str(
+        extracted_snapshot.get("service_action_boundary")
+        or existing_snapshot.get("service_action_boundary")
+        or router_evidence.get("service_action_boundary")
+        or ""
+    ).strip()
+    if not boundary:
+        if intent in {"store_attribute_inquiry", "store_service_availability", "store_service_search"}:
+            boundary = "store_verification"
+        elif intent == "maintenance_addon_with_tire_service":
+            boundary = "service_booking_support"
+        else:
+            boundary = "policy_answer"
+    shop_id = str(extracted_snapshot.get("shop_id") or existing_snapshot.get("shop_id") or "").strip()
+    shop_name = str(extracted_snapshot.get("shop_name") or existing_snapshot.get("shop_name") or "").strip()
+    store_name = str(extracted_snapshot.get("store_name") or existing_snapshot.get("store_name") or "").strip()
+    service_name = str(extracted_snapshot.get("service_name") or existing_snapshot.get("service_name") or "").strip()
+    service_type = str(extracted_snapshot.get("service_type") or existing_snapshot.get("service_type") or "").strip()
+    current_step = "verify_store_service" if boundary == "store_verification" else "answer_policy"
+    allowed_tools = ["get_store_list_tool", "get_store_detail_tool"] if boundary == "store_verification" else ["search_faq_hybrid_tool"]
+    preferred_tool = "get_store_list_tool" if boundary == "store_verification" else "search_faq_hybrid_tool"
+    return {
+        key: value
+        for key, value in {
+            "flow_type": "service_maintenance",
+            "status": "active",
+            "flow_step": current_step,
+            "store": {
+                key: value
+                for key, value in {
+                    "shop_id": shop_id,
+                    "shop_name": shop_name,
+                    "store_name": store_name,
+                }.items()
+                if value not in (None, "", [], {})
+            },
+            "intent": {
+                key: value
+                for key, value in {
+                    "pending_intent": intent,
+                    "goal_type": boundary,
+                    "service_action_boundary": boundary,
+                    "service_name": service_name,
+                    "service_type": service_type,
+                }.items()
+                if value not in (None, "", [], {})
+            },
+            "target_action": boundary,
+            "next_tool": preferred_tool,
+            "allowed_tools": allowed_tools,
+            "preferred_tool": preferred_tool,
+            "source": "flow_controller:service_maintenance",
+        }.items()
+        if value not in (None, "", [], {}) and (key == "allowed_tools" or value != [])
+    }
+
+
+def _current_turn_reservation_management_intent(router_evidence: Mapping[str, Any]) -> str:
+    router_intent = str(router_evidence.get("intent") or "").strip()
+    if router_intent in _RESERVATION_MANAGEMENT_FLOW_INTENTS:
+        return router_intent
+    for intent in _RESERVATION_MANAGEMENT_FLOW_INTENTS:
+        if _router_plan_has_intent(router_evidence, intent):
+            return intent
+    return ""
+
+
+def _reservation_management_action_for_intent(intent: str, slots: Mapping[str, Any]) -> str:
+    explicit = str(slots.get("reservation_management_action") or "").strip()
+    if explicit:
+        return explicit
+    if intent in {"reservation_status_lookup", "reservation_store_info_lookup", "order_cancel_status_lookup"}:
+        return "lookup"
+    if intent == "reservation_change_request":
+        return "change_request"
+    if intent == "order_cancel_request":
+        return "cancel_request"
+    if intent in {"general_cancel_fee_policy", "reservation_window_policy", "delivery_delay_reservation_schedule_policy"}:
+        return "policy_answer"
+    return "lookup"
+
+
+def _current_turn_reservation_management_flow_context(
+    *,
+    router_evidence: Mapping[str, Any],
+    existing_snapshot: Mapping[str, Any],
+    extracted_snapshot: Mapping[str, Any],
+) -> dict[str, Any]:
+    intent = _current_turn_reservation_management_intent(router_evidence)
+    if not intent:
+        return {}
+    slots = {**existing_snapshot, **extracted_snapshot}
+    action = _reservation_management_action_for_intent(intent, slots)
+    if action == "lookup":
+        allowed_tools = ["get_my_reservations_tool", "get_orders_of_user_tool", "get_order_status_tool"]
+        preferred_tool = "get_my_reservations_tool"
+        step = "lookup_owned_record"
+    elif action == "policy_answer":
+        allowed_tools = ["search_faq_hybrid_tool"]
+        preferred_tool = "search_faq_hybrid_tool"
+        step = "answer_policy"
+    else:
+        allowed_tools = []
+        preferred_tool = ""
+        step = "guide_user_action"
+    return {
+        key: value
+        for key, value in {
+            "flow_type": "reservation_management",
+            "status": "active",
+            "flow_step": step,
+            "intent": {
+                key: value
+                for key, value in {
+                    "pending_intent": intent,
+                    "goal_type": "reservation_management",
+                    "reservation_management_action": action,
+                    "owned_record_target": slots.get("owned_record_target") or "reservation",
+                }.items()
+                if value not in (None, "", [], {})
+            },
+            "target_action": action,
+            "next_tool": preferred_tool,
+            "allowed_tools": allowed_tools,
+            "preferred_tool": preferred_tool,
+            "source": "flow_controller:reservation_management",
+        }.items()
+        if value not in (None, "", {}) and (key == "allowed_tools" or value != [])
+    }
+
+
 def _transition_kind(
     current_flow_state: Mapping[str, Any],
     parent_flow_state: Mapping[str, Any],
@@ -1133,6 +1314,16 @@ def transition_current_flow(
         existing_snapshot=existing_snapshot,
         extracted_snapshot=extracted_snapshot,
     )
+    current_turn_service_maintenance_flow_context = _current_turn_service_maintenance_flow_context(
+        router_evidence=router_snapshot,
+        existing_snapshot=existing_snapshot,
+        extracted_snapshot=extracted_snapshot,
+    )
+    current_turn_reservation_management_flow_context = _current_turn_reservation_management_flow_context(
+        router_evidence=router_snapshot,
+        existing_snapshot=existing_snapshot,
+        extracted_snapshot=extracted_snapshot,
+    )
     current_turn_discovery_flow_context = _current_turn_discovery_flow_context(
         router_evidence=router_snapshot,
         existing_snapshot=existing_snapshot,
@@ -1143,6 +1334,8 @@ def transition_current_flow(
         selected_product_flow_context
         or selected_quantity_flow_context
         or selected_store_flow_context
+        or current_turn_service_maintenance_flow_context
+        or current_turn_reservation_management_flow_context
         or current_turn_support_flow_context
         or current_turn_store_search_flow_context
         or current_turn_discovery_flow_context
@@ -1154,6 +1347,10 @@ def transition_current_flow(
         applied_reason = "selected_quantity_flow_state"
     elif selected_store_flow_context:
         applied_reason = "selected_store_flow_state"
+    elif current_turn_service_maintenance_flow_context:
+        applied_reason = "current_turn_service_maintenance_flow_state"
+    elif current_turn_reservation_management_flow_context:
+        applied_reason = "current_turn_reservation_management_flow_state"
     elif current_turn_support_flow_context:
         applied_reason = "current_turn_support_flow_state"
     elif current_turn_store_search_flow_context:
@@ -1179,6 +1376,8 @@ def transition_current_flow(
         "selected_product": selected_product,
         "selected_quantity": selected_quantity,
         "selected_store": selected_store,
+        "current_turn_service_maintenance_flow": current_turn_service_maintenance_flow_context,
+        "current_turn_reservation_management_flow": current_turn_reservation_management_flow_context,
         "current_turn_store_search_flow": current_turn_store_search_flow_context,
         "current_turn_discovery_flow": current_turn_discovery_flow_context,
         "current_turn_support_flow": current_turn_support_flow_context,
@@ -1197,6 +1396,8 @@ def transition_current_flow(
         "selected_product_resolved": bool(selected_product),
         "selected_quantity_resolved": bool(selected_quantity),
         "selected_store_resolved": bool(selected_store),
+        "current_turn_service_maintenance_resolved": bool(current_turn_service_maintenance_flow_context),
+        "current_turn_reservation_management_resolved": bool(current_turn_reservation_management_flow_context),
         "current_turn_store_search_resolved": bool(current_turn_store_search_flow_context),
         "current_turn_discovery_resolved": bool(current_turn_discovery_flow_context),
         "current_turn_support_resolved": bool(current_turn_support_flow_context),
