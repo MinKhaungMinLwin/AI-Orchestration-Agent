@@ -1047,8 +1047,9 @@ def _current_turn_support_intent(router_evidence: Mapping[str, Any], *, user_tex
     router_domain = str(router_evidence.get("domain") or "").strip()
     execution_plan = _router_execution_plan(router_evidence)
     plan_tokens = {item.split(":", 1)[-1].strip() for item in execution_plan}
-    if _CARD_INSTALLMENT_SUPPORT_CURRENT_TURN_RE.search(str(user_text or "")):
-        return "card_installment_lookup"
+    normalized_override = _normalize_current_turn_support_intent(user_text=user_text)
+    if normalized_override:
+        return normalized_override
     if router_domain == "support" and (router_intent in _SUPPORT_FLOW_INTENTS or router_intent):
         return router_intent or "support_faq"
     if router_intent in _SUPPORT_FLOW_INTENTS and any(item.startswith("support:") for item in execution_plan):
@@ -1056,6 +1057,13 @@ def _current_turn_support_intent(router_evidence: Mapping[str, Any], *, user_tex
     for token in plan_tokens:
         if token in _SUPPORT_EXECUTION_PLAN_TOKENS:
             return token if token in _SUPPORT_FLOW_INTENTS else router_intent or "support_faq"
+    return ""
+
+
+def _normalize_current_turn_support_intent(*, user_text: str) -> str:
+    text = str(user_text or "")
+    if _CARD_INSTALLMENT_SUPPORT_CURRENT_TURN_RE.search(text):
+        return "card_installment_lookup"
     return ""
 
 
