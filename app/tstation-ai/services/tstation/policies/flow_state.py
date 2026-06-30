@@ -68,12 +68,18 @@ _INTENT_FIELDS = (
     "support_topic",
     "faq_topic",
     "policy_topic",
+    "service_action_boundary",
+    "service_name",
+    "service_type",
+    "reservation_management_action",
+    "owned_record_target",
 )
 _FLOW_PROGRESS_META_FIELDS = (
     "target_action",
     "current_step",
     "missing_slots",
     "next_tool",
+    "preferred_tool",
     "tool_args_patch",
     "allowed_tools",
     "progress_source",
@@ -88,6 +94,8 @@ _ACTIVE_FLOW_TYPES = {
     "store_service_search",
     "favorite_store",
     "support",
+    "service_maintenance",
+    "reservation_management",
 }
 _STORE_CANDIDATE_SOURCE_TOOLS = {
     "transaction_store_preview_tool",
@@ -362,6 +370,8 @@ def flow_identity_for_context(context: Mapping[str, Any] | None) -> str:
     if flow_type in {"purchase", "stock", "booking"}:
         product_key = str(product.get("goods_no") or _product_identity(product) or "").strip()
         tire_size = _normalize_vehicle_tire_size(product.get("tire_size"))
+        if not product_key and not tire_size:
+            return ""
         parts = [flow_type, product_key, tire_size]
     elif flow_type in {"store_search", "store_schedule", "store_service_search", "favorite_store"}:
         store_key = str(
@@ -389,6 +399,21 @@ def flow_identity_for_context(context: Mapping[str, Any] | None) -> str:
             or ""
         ).strip()
         parts = [flow_type, policy_key]
+    elif flow_type == "service_maintenance":
+        service_key = str(
+            _first_non_empty(intent.get("service_name"), intent.get("service_type"), intent.get("pending_intent"))
+            or ""
+        ).strip()
+        boundary = str(_first_non_empty(intent.get("service_action_boundary"), intent.get("goal_type")) or "").strip()
+        store_key = str(
+            _first_non_empty(store.get("shop_id"), store.get("shop_name"), store.get("store_name"), store.get("region"))
+            or ""
+        ).strip()
+        parts = [flow_type, boundary, service_key, store_key]
+    elif flow_type == "reservation_management":
+        action = str(_first_non_empty(intent.get("reservation_management_action"), intent.get("pending_intent")) or "").strip()
+        target = str(_first_non_empty(intent.get("owned_record_target"), intent.get("goal_type")) or "").strip()
+        parts = [flow_type, action, target]
     else:
         parts = [flow_type]
 
@@ -740,11 +765,12 @@ def evaluate_flow_progress(state: "FlowState") -> dict[str, Any]:
 
 
 def _refresh_flow_progress(state: "FlowState") -> None:
+    progress = evaluate_flow_progress(state)
+    if not progress:
+        return
     for key in _FLOW_PROGRESS_META_FIELDS:
         state.meta.pop(key, None)
-    progress = evaluate_flow_progress(state)
-    if progress:
-        state.meta.update(progress)
+    state.meta.update(progress)
 
 
 def flow_progress_from_active_context(

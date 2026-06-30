@@ -377,6 +377,108 @@ def test_active_purchase_to_support_faq_preserves_support_intent() -> None:
     assert context["dormant_flows"][0]["context"]["product"]["goods_no"] == "GOLD"
 
 
+def test_active_purchase_to_service_maintenance_preserves_action_boundary() -> None:
+    result = commit_flow_state(
+        {
+            "flow_type": "purchase",
+            "status": "active",
+            "flow_step": "ask_schedule",
+            "product": {"goods_no": "GOLD", "product_name": "벤투스 S2 AS", "tire_size": "245/45R19", "ord_qty": 2},
+            "store": {"shop_id": "S1", "shop_name": "티스테이션 분당정자점"},
+            "intent": {"pending_intent": "order", "goal_type": "place_order"},
+        },
+        {
+            "flow_type": "service_maintenance",
+            "status": "active",
+            "flow_step": "verify_store_service",
+            "store": {"shop_id": "S1", "shop_name": "티스테이션 분당정자점"},
+            "intent": {
+                "pending_intent": "store_attribute_inquiry",
+                "goal_type": "store_verification",
+                "service_action_boundary": "store_verification",
+                "service_name": "얼라인먼트",
+                "service_type": "wheel_alignment",
+            },
+            "target_action": "store_verification",
+            "next_tool": "get_store_list_tool",
+            "preferred_tool": "get_store_list_tool",
+            "allowed_tools": ["get_store_list_tool", "get_store_detail_tool"],
+        },
+        source="flow_controller:service_maintenance",
+        flow_type="service_maintenance",
+        flow_step="verify_store_service",
+        status="active",
+    )
+
+    context = result.state.to_active_flow_context()
+    assert context["flow_type"] == "service_maintenance"
+    assert context["flow_step"] == "verify_store_service"
+    assert context["intent"]["service_action_boundary"] == "store_verification"
+    assert context["intent"]["service_name"] == "얼라인먼트"
+    assert context["intent"]["service_type"] == "wheel_alignment"
+    assert context["target_action"] == "store_verification"
+    assert context["preferred_tool"] == "get_store_list_tool"
+    assert context["allowed_tools"] == ["get_store_list_tool", "get_store_detail_tool"]
+    assert context["dormant_flows"][0]["context"]["flow_type"] == "purchase"
+    assert context["dormant_flows"][0]["context"]["product"]["goods_no"] == "GOLD"
+
+
+def test_service_maintenance_to_reservation_management_preserves_boundaries_separately() -> None:
+    service = commit_flow_state(
+        {},
+        {
+            "flow_type": "service_maintenance",
+            "status": "active",
+            "flow_step": "answer_policy",
+            "intent": {
+                "pending_intent": "maintenance_addon_with_tire_service",
+                "goal_type": "service_booking_support",
+                "service_action_boundary": "service_booking_support",
+                "service_name": "엔진오일",
+            },
+            "target_action": "service_booking_support",
+            "next_tool": "search_faq_hybrid_tool",
+            "preferred_tool": "search_faq_hybrid_tool",
+            "allowed_tools": ["search_faq_hybrid_tool"],
+        },
+        source="flow_controller:service_maintenance",
+        flow_type="service_maintenance",
+        flow_step="answer_policy",
+        status="active",
+    )
+
+    result = commit_flow_state(
+        service.state.to_active_flow_context(),
+        {
+            "flow_type": "reservation_management",
+            "status": "active",
+            "flow_step": "guide_user_action",
+            "intent": {
+                "pending_intent": "reservation_change_request",
+                "goal_type": "reservation_management",
+                "reservation_management_action": "change_request",
+                "owned_record_target": "reservation",
+            },
+            "target_action": "change_request",
+            "allowed_tools": [],
+        },
+        source="flow_controller:reservation_management",
+        flow_type="reservation_management",
+        flow_step="guide_user_action",
+        status="active",
+    )
+
+    context = result.state.to_active_flow_context()
+    assert context["flow_type"] == "reservation_management"
+    assert context["flow_step"] == "guide_user_action"
+    assert context["intent"]["reservation_management_action"] == "change_request"
+    assert context["intent"]["owned_record_target"] == "reservation"
+    assert context["target_action"] == "change_request"
+    assert context["dormant_flows"][0]["context"]["flow_type"] == "service_maintenance"
+    assert context["dormant_flows"][0]["context"]["intent"]["service_action_boundary"] == "service_booking_support"
+    assert context["dormant_flows"][0]["flow_identity"] == "servicemaintenance:servicebookingsupport:엔진오일"
+
+
 def test_dormant_purchase_resumes_only_with_explicit_anchor() -> None:
     dormant_flows = upsert_dormant_flow(
         [],
