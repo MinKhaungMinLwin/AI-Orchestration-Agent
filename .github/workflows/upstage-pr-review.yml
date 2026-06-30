@@ -61,41 +61,44 @@ jobs:
               base_url="https://api.upstage.ai/v1",
           )
 
-          prompt = f"""You are reviewing a GitHub pull request for a production codebase.
-
-Review the diff and leave only high-signal findings.
-
-Focus on:
-- bugs or behavior regressions
-- unsafe assumptions or missing guards
-- missing validation or error handling
-- missing or weak tests
-
-Output rules:
-- Write in Korean.
-- Use concise markdown.
-- If there are no meaningful findings, say that explicitly.
-- Do not praise the code.
-- Do not list trivial style nits.
-
-Format:
-## Findings
-- ...
-
-## Risk
-- ...
-
-## Suggested Tests
-- ...
-
-Repository: {os.environ["GITHUB_REPOSITORY"]}
-PR: #{os.environ["PR_NUMBER"]} {os.environ["PR_TITLE"]}
-Author: {os.environ["PR_AUTHOR"]}
-URL: {os.environ["PR_URL"]}
-
-Diff:
-{truncated_diff}
-"""
+          prompt = "\n".join(
+              [
+                  "You are reviewing a GitHub pull request for a production codebase.",
+                  "",
+                  "Review the diff and leave only high-signal findings.",
+                  "",
+                  "Focus on:",
+                  "- bugs or behavior regressions",
+                  "- unsafe assumptions or missing guards",
+                  "- missing validation or error handling",
+                  "- missing or weak tests",
+                  "",
+                  "Output rules:",
+                  "- Write in Korean.",
+                  "- Use concise markdown.",
+                  "- If there are no meaningful findings, say that explicitly.",
+                  "- Do not praise the code.",
+                  "- Do not list trivial style nits.",
+                  "",
+                  "Format:",
+                  "## Findings",
+                  "- ...",
+                  "",
+                  "## Risk",
+                  "- ...",
+                  "",
+                  "## Suggested Tests",
+                  "- ...",
+                  "",
+                  f'Repository: {os.environ["GITHUB_REPOSITORY"]}',
+                  f'PR: #{os.environ["PR_NUMBER"]} {os.environ["PR_TITLE"]}',
+                  f'Author: {os.environ["PR_AUTHOR"]}',
+                  f'URL: {os.environ["PR_URL"]}',
+                  "",
+                  "Diff:",
+                  truncated_diff,
+              ]
+          )
 
           response = client.chat.completions.create(
               model="solar-pro3",
