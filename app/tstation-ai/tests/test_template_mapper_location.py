@@ -1619,6 +1619,38 @@ def test_bare_s_fit_search_without_size_maps_to_pattern_summary_not_product_card
     assert "products" not in result["data"]
 
 
+def test_unsized_product_search_summary_uses_available_sizes_in_quickreply() -> None:
+    text = "아이온 상품 보기"
+    current_user_text.set(text)
+    current_discovery_response_decision.set(decide_discovery_response(build_discovery_intent_frame(text)))
+
+    result = try_build_template(
+        [
+            _search_product_entry(
+                keyword="아이온",
+                size=None,
+                items=[
+                    {
+                        "goods_no": "G1",
+                        "goods_nm": "아이온 에보 AS",
+                        "available_sizes": ["235/35R20", "235/40R19", "245/35R21", "245/45R19"],
+                        "car_knd_nm": "전기차",
+                        "season_nm": "사계절",
+                        "goods_pfm_nm": "SPORT",
+                    },
+                ],
+            )
+        ],
+        "아이온 검색 결과입니다. 원하시는 상품을 선택해 주세요.",
+    )
+
+    assert result is not None
+    assert result["template"] == "quickReply"
+    assistant_response = result["data"]["assistantResponse"]
+    assert "아이온 에보 AS:" in assistant_response
+    assert "사이즈: 235/35R20, 235/40R19, 245/35R21, 245/45R19" in assistant_response
+
+
 def test_product_search_with_size_acknowledges_input_size_without_size_prompt() -> None:
     text = "벤투스 S2 AS 225/45R17"
     current_user_text.set(text)

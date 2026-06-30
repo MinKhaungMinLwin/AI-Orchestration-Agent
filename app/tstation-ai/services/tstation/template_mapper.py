@@ -2023,10 +2023,17 @@ def _product_search_policy_response(tool_data_list: list[dict]) -> str:
             if not name:
                 continue
             bucket = grouped.setdefault(name, {"row": row, "sizes": []})
-            size = _get_str(row, "tire_size_1", "tire_size_2")
             sizes = bucket["sizes"]
-            if size and isinstance(sizes, list) and size not in sizes:
-                sizes.append(size)
+            if not isinstance(sizes, list):
+                continue
+            row_sizes = (
+                _row_tire_sizes(row)
+                if requested_size
+                else (_row_available_sizes(row) or _row_tire_sizes(row))
+            )
+            for size in row_sizes:
+                if size not in sizes:
+                    sizes.append(size)
 
     if not grouped:
         return ""
@@ -2052,7 +2059,7 @@ def _product_search_policy_response(tool_data_list: list[dict]) -> str:
             if requested_size:
                 lines.append(f"  입력하신 규격으로는 {', '.join(str(size) for size in sizes[:3])}가 확인돼요.")
             else:
-                lines.append(f"  대표로 확인되는 규격은 {', '.join(str(size) for size in sizes[:3])}예요.")
+                lines.append(f"  대표로 확인되는 규격은 {', '.join(str(size) for size in sizes[:4])}예요.")
         if detail_line:
             lines.append(f"  {detail_line}")
         lines.append("")
@@ -3138,7 +3145,7 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
     if _has_current_turn_transaction_action("purchase_continuation", "stock_check") and _is_product_transaction_missing_size_turn():
         return None
 
-    rows_by_name: dict[str, list[dict]] = {}
+    rows_by_name: dict[str, dict[str, object]] = {}
     found_product_tool = False
     for entry in _find_entries(
         tool_data_list,
@@ -3158,16 +3165,37 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
                 continue
             name = _get_str(row, "goods_nm", "big_goods_nm", "ptrn_d_nm", "title")
             if name:
-                rows_by_name.setdefault(name, []).append(row)
+                bucket = rows_by_name.setdefault(name, {"rows": [], "tool": entry.get("tool")})
+                bucket_rows = bucket.get("rows")
+                if isinstance(bucket_rows, list):
+                    bucket_rows.append(row)
     if not found_product_tool or not rows_by_name:
         return None
 
     skip_size_missing_notice = is_neutral_product_description or is_popular_unsized_request
     lines = [] if skip_size_missing_notice else ["사이즈가 아직 확인되지 않아 타이어 기준으로 안내드릴게요."]
     include_confirmed_sizes = not _current_turn_has_explicit_tire_size()
-    for name, rows in list(rows_by_name.items())[:5]:
+    for name, payload in list(rows_by_name.items())[:5]:
+        rows = payload.get("rows") if isinstance(payload, dict) else None
+        if not isinstance(rows, list) or not rows:
+            continue
         row = rows[0]
-        size_line = _confirmed_multi_size_line(rows) if include_confirmed_sizes else ""
+        source_tool = str(payload.get("tool") or "") if isinstance(payload, dict) else ""
+        size_line = ""
+        if include_confirmed_sizes:
+            if source_tool == "search_product_tool":
+                available_sizes: list[str] = []
+                for candidate in rows:
+                    if not isinstance(candidate, dict):
+                        continue
+                    for size in _row_available_sizes(candidate):
+                        if size not in available_sizes:
+                            available_sizes.append(size)
+                formatted_sizes = _format_row_size_list(available_sizes, max_visible=4)
+                if formatted_sizes and len(available_sizes) >= 2:
+                    size_line = f"사이즈: {formatted_sizes}"
+            if not size_line:
+                size_line = _confirmed_multi_size_line(rows)
         if is_neutral_product_description:
             detail_line = _tire_summary_detail_line(row)
             lines.extend([
