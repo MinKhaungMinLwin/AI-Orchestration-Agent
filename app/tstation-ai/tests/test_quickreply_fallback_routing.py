@@ -19515,6 +19515,61 @@ def test_expected_slot_fill_precheck_prefers_current_schedule_over_stale_store_s
     assert precheck["resume_source"] == "expected_slot_fill:schedule"
 
 
+def test_expected_slot_fill_precheck_promotes_stock_schedule_to_parent_purchase() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000320151",
+        tire_model="다이나프로 HP3",
+        pending_product_name="다이나프로 HP3",
+        tire_size="235/55R19",
+        ord_qty=4,
+        shop_id="F00262",
+        shop_name="티스테이션 동탄신도시점",
+        region="동탄",
+        requested_cal_day="20260708",
+        rsv_hour="16",
+        pending_intent="stock",
+        goal_type="store_with_stock",
+        stock_check_mode="preview",
+        availability_context={
+            "pending_order_context": {
+                "goods_no": "G000000320151",
+                "tire_size": "235/55R19",
+                "ord_qty": 4,
+                "shop_id": "F00262",
+                "shop_name": "티스테이션 동탄신도시점",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            },
+        },
+    )
+    context = TStationChatServiceV2._router_slot_fill_context_payload(
+        slots=slots,
+        user_text="2026년 7월 8일 (수)\n16:00",
+        latest_product_tmpl=None,
+        latest_location_tmpl=None,
+        latest_datepick_tmpl=None,
+    )
+
+    precheck = TStationChatServiceV2._expected_slot_fill_precheck(
+        user_text="2026년 7월 8일 (수)\n16:00",
+        regex_slots=ConversationSlots.extract_from_user_text("2026년 7월 8일 (수)\n16:00"),
+        merged_slots=slots,
+        router_context=context,
+    )
+
+    assert context["current_flow"] == "stock_store_search"
+    assert precheck["matched"] is True
+    assert precheck["current_flow"] == "quick_order_reservation"
+    assert precheck["filled_slot"] == "schedule"
+    assert precheck["slot_patch"] == {
+        "requested_cal_day": "20260708",
+        "rsv_hour": "16",
+        "pending_intent": "order",
+        "goal_type": "place_order",
+    }
+    assert precheck["resume_source"] == "expected_slot_fill:schedule"
+
+
 def test_expected_slot_fill_precheck_promotes_purchase_anchor_before_router() -> None:
     slots = ConversationSlots(goods_no="G000000319584", tire_size="245/45R19")
     context = TStationChatServiceV2._router_slot_fill_context_payload(
