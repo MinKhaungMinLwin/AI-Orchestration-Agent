@@ -373,6 +373,100 @@ _ROUTER_WINS_ORDER_EXECUTION_FORBIDDEN_TOOLS = frozenset({
 
 
 @dataclass(frozen=True)
+class IntentSpec:
+    """Canonical intent entry: alias patterns + router-wins eligibility.
+
+    Consolidates what was previously scattered across _normalize_plan_intent's
+    literal aliases dict, ROUTER_WINS_INFORMATIONAL_INTENTS, and the implicit
+    coupon-intent exclusion (coupon-execution intents had no router-wins path,
+    letting intents like product_detail_lookup silently override an active
+    coupon-eligibility turn). alias_patterns match against the lowercased raw
+    planner string. Not yet wired into _normalize_plan_intent or the
+    router-wins resolution path - see Phase A steps 2-6.
+    """
+
+    canonical: str
+    alias_patterns: tuple[re.Pattern[str], ...] = ()
+    router_wins: bool = False
+
+
+def _alias(*patterns: str) -> tuple[re.Pattern[str], ...]:
+    return tuple(re.compile(pattern, re.IGNORECASE) for pattern in patterns)
+
+
+_ALIAS_SPECS: tuple[IntentSpec, ...] = (
+    IntentSpec("resolve_or_describe_product", _alias(r"^resolve_product$", r"^discovery_search$")),
+    IntentSpec("quick_order_reservation", _alias(r"^continue_purchase$")),
+    IntentSpec("quick_order_execute", _alias(r"^quick_order_confirmed$")),
+    IntentSpec(
+        "product_comparison",
+        _alias(r"^product_compare_tool$", r"^metric_comparison_summary$", r"^grade_comparison_summary$"),
+    ),
+    IntentSpec("price_or_coupon_check", _alias(r"^transaction_price_stock$")),
+    IntentSpec(
+        "product_promotion_lookup",
+        _alias(r"^promotion_lookup$", r"^promotions_lookup$", r"^product_promotion$", r"^product_promotions$"),
+    ),
+    IntentSpec(
+        "product_coupon_lookup",
+        _alias(r"^product_coupon$", r"^product_coupons$", r"^coupon_lookup$"),
+        router_wins=True,
+    ),
+    IntentSpec("product_deal_lookup", _alias(r"^deal_lookup$", r"^product_deal$")),
+    IntentSpec(
+        "product_event_lookup",
+        _alias(r"^event_lookup$", r"^product_event$", r"^discovery_event_content$"),
+    ),
+    IntentSpec(
+        "best_seller_search",
+        _alias(
+            r"^get_best_selling_tires_for_vehicle$",
+            r"^get_best_selling_product_for_vehicle$",
+            r"^get_best_selling_products_for_vehicle_timeframe$",
+            r"^get_best_selling_products_for_vehicle$",
+            r"^best_seller_list_by_vehicle_and_size_and_period$",
+            r"^get_best_selling_tire_by_model_and_size$",
+            r"^get_best_selling_products_tool$",
+            r"^best_seller$",
+            r"^sales_rank$",
+            r"^query_order_data_for_vehicle_with_period$",
+            r"^best_seller_search_by_vehicle$",
+            r"^vehicle_best_seller_search$",
+            r"^order_data_for_vehicle$",
+        ),
+    ),
+    IntentSpec(
+        "owned_warranty_lookup",
+        _alias(r"^verify_safe_service_subscription$", r"^safe_service_subscription_lookup$", r"^my_warranty_lookup$"),
+    ),
+    IntentSpec(
+        "human_escalation",
+        _alias(r"1.?to.?1", r"one.?to.?one", r"qna.?(?:request|connect)", r"connect.?human.?agent"),
+    ),
+)
+# Coupon-execution intents previously had no router_wins path - see IntentSpec docstring.
+_COUPON_EXECUTION_ROUTER_WINS_INTENTS: tuple[str, ...] = (
+    "product_coupon_eligibility",
+    "coupon_applicable_products",
+    "owned_coupon_lookup",
+)
+
+
+def _build_intent_registry() -> dict[str, IntentSpec]:
+    registry: dict[str, IntentSpec] = {name: IntentSpec(name, router_wins=True) for name in ROUTER_WINS_INFORMATIONAL_INTENTS}
+    for name in _COUPON_EXECUTION_ROUTER_WINS_INTENTS:
+        registry[name] = IntentSpec(name, router_wins=True)
+    for spec in _ALIAS_SPECS:
+        existing = registry.get(spec.canonical)
+        router_wins = spec.router_wins or bool(existing and existing.router_wins)
+        registry[spec.canonical] = IntentSpec(spec.canonical, spec.alias_patterns, router_wins)
+    return registry
+
+
+_INTENT_REGISTRY: dict[str, IntentSpec] = _build_intent_registry()
+
+
+@dataclass(frozen=True)
 class TurnContract:
     """Stable policy snapshot for one user turn."""
 
