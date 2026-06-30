@@ -425,6 +425,30 @@ def extract_result_limit(text: str) -> int | None:
     return None
 
 
+def _normalize_store_slot_value(value: Any) -> str:
+    text = re.sub(r"^(?:티스테이션|더타이어샵)\s*", "", str(value or "").strip(), flags=re.IGNORECASE)
+    return re.sub(r"[\s\-_/()]+", "", text).casefold()
+
+
+def _store_candidate_or_canonical(candidate: str | None, slots: Mapping[str, Any]) -> str | None:
+    """Use regex store extraction as a candidate; do not let it overwrite a cleaner canonical slot."""
+
+    candidate_text = str(candidate or "").strip()
+    canonical_text = str(slots.get("shop_name") or slots.get("store_name") or "").strip()
+    if not candidate_text or not canonical_text:
+        return candidate_text or None
+
+    candidate_key = _normalize_store_slot_value(candidate_text)
+    canonical_key = _normalize_store_slot_value(canonical_text)
+    if not candidate_key or not canonical_key or candidate_key == canonical_key:
+        return candidate_text
+    if candidate_key.endswith(canonical_key):
+        prefix = candidate_key[: -len(canonical_key)]
+        if re.search(r"\d+(?:개|본|짝)?|(?:개|본|짝)$", prefix):
+            return canonical_text
+    return candidate_text
+
+
 def _kst_today() -> datetime.date:
     return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9))).date()
 
@@ -738,7 +762,7 @@ def build_transaction_intent_frame(
     text = last_user_text or ""
     slots = dict(known_slots or {})
     explicit_tire_size = normalize_tire_size(text)
-    current_store_name = _extract_store_name(text)
+    current_store_name = _store_candidate_or_canonical(_extract_store_name(text), slots)
     raw_current_region = _extract_region(text)
     current_product_name = _extract_product_name(text)
     current_has_product = bool(current_product_name or _PRODUCT_HINT_RE.search(text))
@@ -2668,7 +2692,10 @@ def _missing_slots_for_intent(
 def _slot_args(frame: IntentFrame, *keys: str) -> dict[str, Any]:
     args: dict[str, Any] = {}
     for key in keys:
-        value = frame.known_slots.get(key)
+        if key == "store_name":
+            value = frame.known_slots.get("shop_name") or frame.known_slots.get("store_name")
+        else:
+            value = frame.known_slots.get(key)
         if value not in (None, ""):
             args[key] = value
     return args
