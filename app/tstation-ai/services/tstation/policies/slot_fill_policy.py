@@ -27,8 +27,6 @@ def filled_slot_from_slot_patch(slot_patch: Mapping[str, Any]) -> str:
         return "quantity"
     if "goods_no" in keys or "product_name" in keys or "pending_product_name" in keys or "tire_model" in keys:
         return "product"
-    if "pending_intent" in keys or "goal_type" in keys:
-        return "purchase_anchor"
     return "none"
 
 
@@ -68,7 +66,7 @@ def expected_slot_fill_precheck(
     has_current_schedule_signal = bool(current_requested_cal_day or current_rsv_hour)
 
     if current_flow == "quick_order_reservation" and has_purchase_anchor:
-        slot_patch.update({"pending_intent": "order", "goal_type": "place_order"})
+        pass
     elif "quantity" in missing_slots and getattr(regex_slots, "ord_qty", None) is not None:
         slot_patch["ord_qty"] = regex_slots.ord_qty
     elif (
@@ -114,8 +112,6 @@ def expected_slot_fill_precheck(
             "region",
             "shop_id",
             "shop_name",
-            "pending_intent",
-            "goal_type",
             "availability_intent",
             "stock_check_mode",
         ):
@@ -139,15 +135,6 @@ def expected_slot_fill_precheck(
     filled_slot = filled_slot_from_slot_patch(slot_patch)
     if filled_slot == "none":
         return {"matched": False, "reason": "input_does_not_fill_expected_slot"}
-
-    if current_flow == "quick_order_reservation":
-        slot_patch.setdefault("pending_intent", "order")
-        slot_patch.setdefault("goal_type", "place_order")
-    elif current_flow == "stock_store_search":
-        slot_patch.setdefault("pending_intent", "stock")
-        slot_patch.setdefault("goal_type", "store_with_stock")
-    elif current_flow == "store_schedule":
-        slot_patch.setdefault("pending_intent", "reservation")
 
     return {
         "matched": True,
