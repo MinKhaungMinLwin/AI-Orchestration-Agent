@@ -15718,6 +15718,48 @@ def _has_sized_product_name_hint(user_text: str) -> bool:
     return sum(len(tok) for tok in tokens) >= 2
 
 
+def _strip_korean_case_particle(token: str) -> str:
+    value = str(token or "").strip()
+    for suffix in ("으로", "에서", "부터", "까지", "에게", "한테", "로", "은", "는", "이", "가", "을", "를", "에", "도"):
+        if len(value) > len(suffix) + 1 and value.endswith(suffix):
+            return value[: -len(suffix)]
+    return value
+
+
+def _transaction_product_name_candidate_from_text(user_text: str) -> str:
+    """Extract a current-turn product-name candidate from a transactional utterance.
+
+    This is intentionally weaker than product resolution: it only decides that
+    carried product identity is stale. The actual goods_no still must be
+    resolved through product search/tool results.
+    """
+    text = str(user_text or "").strip()
+    if not text:
+        return ""
+    if not _SIZED_PRODUCT_TRANSACTION_HINT_STOP_RE.search(text):
+        return ""
+    cleaned = _SIZED_PRODUCT_SEARCH_SIZE_RE.sub(" ", text)
+    cleaned = _PRODUCT_QUERY_QUANTITY_RE.sub(" ", cleaned)
+    cleaned = _SIZED_PRODUCT_TRANSACTION_HINT_STOP_RE.sub(" ", cleaned)
+    tokens = [
+        _strip_korean_case_particle(token)
+        for token in re.findall(r"[0-9A-Za-z가-힣*+.-]+", cleaned)
+        if token
+    ]
+    meaningful_tokens = [
+        token
+        for token in tokens
+        if token
+        and token not in _SIZED_PRODUCT_KEYWORD_STOPWORDS
+        and not token.isdigit()
+        and len(token) >= 2
+    ]
+    if not meaningful_tokens:
+        return ""
+    candidate = " ".join(meaningful_tokens)
+    return re.sub(r"\s+", " ", candidate).strip(" ,./")
+
+
 def _is_bare_product_name_search_query(user_text: str) -> bool:
     text = str(user_text or "").strip()
     if not text:
@@ -21839,7 +21881,11 @@ def _is_fresh_product_transaction_request(text: str, pending_intent: str | None)
     """Return True when the current turn names a tire product and asks for a transactional action."""
     if not text or pending_intent not in {"price", "stock", "order"}:
         return False
-    return ConversationSlots.has_product_keyword(text) or _has_sized_product_name_hint(text)
+    return bool(
+        ConversationSlots.has_product_keyword(text)
+        or _has_sized_product_name_hint(text)
+        or _transaction_product_name_candidate_from_text(text)
+    )
 
 
 def _is_explicit_store_purchase_chain_request(text: str) -> bool:
@@ -22088,6 +22134,8 @@ def _clear_stale_product_identity_for_fresh_transaction(
         current_keyword = str(parsed_coupon_target.get("product_name") or "").strip()
     if not current_keyword:
         current_keyword = _fallback_sized_product_keyword(text)
+    if not current_keyword:
+        current_keyword = _transaction_product_name_candidate_from_text(text)
     current_keyword = _SIZED_PRODUCT_TRANSACTION_HINT_STOP_RE.sub(" ", current_keyword)
     current_keyword = re.sub(r"\s+", " ", current_keyword).strip(" ,./")
     if (
@@ -22108,6 +22156,21 @@ def _clear_stale_product_identity_for_fresh_transaction(
         slots.goods_no = None
         slots.payment_amount = None
         return True
+    if current_keyword:
+        changed = any(
+            existing
+            and not _is_strong_product_name_match(current_keyword, existing)
+            for existing in (slots.tire_model, slots.pending_product_name)
+        )
+        if slots.goods_no is None and slots.payment_amount is None and not changed:
+            return False
+        slots.goods_no = None
+        slots.payment_amount = None
+        slots.tire_model = current_keyword
+        slots.pending_product_name = current_keyword
+        slots.price_facts = None
+        slots.coupon_facts = None
+        return True
     if slots.goods_no is None and slots.tire_model is None and slots.payment_amount is None:
         return False
     slots.goods_no = None
@@ -22126,6 +22189,8 @@ def _fresh_transaction_product_keyword(text: str, pending_intent: str | None) ->
         current_keyword = str(parsed_coupon_target.get("product_name") or "").strip()
     else:
         current_keyword = _fallback_sized_product_keyword(text)
+    if not current_keyword:
+        current_keyword = _transaction_product_name_candidate_from_text(text)
     if not current_keyword:
         frame = build_discovery_intent_frame(text)
         product_names = tuple(frame.entities.get("product_names") or ())

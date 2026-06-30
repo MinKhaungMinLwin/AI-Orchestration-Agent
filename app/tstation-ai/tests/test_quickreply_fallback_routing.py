@@ -15213,9 +15213,56 @@ def test_fresh_sized_product_order_clears_stale_comparison_product() -> None:
     assert _is_fresh_product_transaction_request(text, "order") is True
     assert _clear_stale_product_identity_for_fresh_transaction(slots, text, "order") is True
     assert slots.goods_no is None
-    assert slots.tire_model is None
+    assert slots.tire_model == "이글 투어링"
+    assert slots.pending_product_name == "이글 투어링"
     assert slots.payment_amount is None
     assert slots.tire_size == "245/45R18"
+
+
+def test_fresh_product_name_only_order_clears_stale_product_identity() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000320151",
+        tire_model="다이나프로 HP3",
+        pending_product_name="다이나프로 HP3",
+        tire_size="215/70R16",
+        ord_qty=2,
+        payment_amount=556000,
+        pending_intent="order",
+        goal_type="place_order",
+    )
+
+    text = "웨더플렉스 주문할게"
+
+    assert _is_fresh_product_transaction_request(text, "order") is True
+    assert _clear_stale_product_identity_for_fresh_transaction(slots, text, "order") is True
+    assert slots.goods_no is None
+    assert slots.tire_model == "웨더플렉스"
+    assert slots.pending_product_name == "웨더플렉스"
+    assert slots.payment_amount is None
+    assert slots.tire_size == "215/70R16"
+    assert slots.ord_qty == 2
+
+
+def test_fresh_product_name_size_quantity_order_clears_stale_product_identity() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000320151",
+        tire_model="다이나프로 HP3",
+        pending_product_name="다이나프로 HP3",
+        tire_size="235/55R19",
+        ord_qty=4,
+        payment_amount=556000,
+        pending_intent="order",
+        goal_type="place_order",
+    )
+
+    text = "웨더플렉스 2157016으로 2개 주문할게"
+
+    assert _is_fresh_product_transaction_request(text, "order") is True
+    assert _clear_stale_product_identity_for_fresh_transaction(slots, text, "order") is True
+    assert slots.goods_no is None
+    assert slots.tire_model == "웨더플렉스"
+    assert slots.pending_product_name == "웨더플렉스"
+    assert slots.payment_amount is None
 
 
 def test_size_only_order_does_not_clear_stale_product_identity() -> None:
