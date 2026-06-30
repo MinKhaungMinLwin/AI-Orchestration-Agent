@@ -13662,6 +13662,64 @@ def test_flow_transition_shell_router_observed_does_not_create_execution_intent(
     assert slots.goal_type is None
 
 
+def test_flow_transition_store_search_request_switches_active_purchase_to_store_search() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000310126",
+        tire_size="245/45R19",
+        ord_qty=2,
+        pending_intent="order",
+        goal_type="place_order",
+        availability_context={
+            "active_flow_context": {
+                "flow_type": "purchase",
+                "status": "active",
+                "flow_step": "ask_schedule",
+                "product": {
+                    "goods_no": "G000000310126",
+                    "product_name": "벤투스 S2 AS",
+                    "tire_size": "245/45R19",
+                    "ord_qty": 2,
+                },
+                "intent": {"pending_intent": "order", "goal_type": "place_order"},
+            }
+        },
+    )
+
+    transition = transition_current_flow(
+        user_text="BMW 정비 경험 많은 매장 찾아줘",
+        router_evidence={
+            "domain": "transaction",
+            "intent": "quick_order_reservation",
+            "execution_plan": ["transaction:store_recommendation_by_vehicle_experience"],
+            "source": "llm",
+        },
+        existing_slots=slots,
+        extracted_slots=ConversationSlots(),
+    )
+
+    assert transition.flow_transition["applied"] is True
+    assert transition.flow_transition["reason"] == "current_turn_store_search_flow_state"
+    assert transition.metadata["current_turn_store_search_resolved"] is True
+    active_flow_context = transition.flow_transition["active_flow_context"]
+    assert active_flow_context["flow_type"] == "store_search"
+    assert active_flow_context["flow_step"] == "ask_region"
+    assert active_flow_context["intent"]["pending_intent"] == "store_recommendation_by_vehicle_experience"
+    assert active_flow_context["intent"]["goal_type"] == "store_search"
+    assert active_flow_context["intent"]["store_search_condition"] == "vehicle_experience"
+
+    committed = commit_flow_state(
+        slots.availability_context["active_flow_context"],
+        active_flow_context,
+        source=active_flow_context["source"],
+        flow_type=active_flow_context["flow_type"],
+        flow_step=active_flow_context["flow_step"],
+        status=active_flow_context["status"],
+    ).state.to_active_flow_context()
+    assert committed["flow_type"] == "store_search"
+    assert committed["dormant_flows"][0]["context"]["flow_type"] == "purchase"
+    assert committed["dormant_flows"][0]["context"]["product"]["goods_no"] == "G000000310126"
+
+
 def test_turn_contract_records_contract_seed_and_context_evidence() -> None:
     routing_result = _routing_result(
         domains=[MultiAgentDomain.Domain.TRANSACTION],

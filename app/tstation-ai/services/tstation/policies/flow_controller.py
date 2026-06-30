@@ -103,6 +103,12 @@ _INVALID_REGION_LABELS = frozenset({
     "예",
     "ㅇㅇ",
 })
+_STORE_SEARCH_FLOW_INTENTS = frozenset({
+    "store_search",
+    "open_store_search",
+    "store_service_search",
+    "store_recommendation_by_vehicle_experience",
+})
 
 
 def _normalized_region_text(value: Any) -> str:
@@ -184,6 +190,9 @@ def _compact_slot_snapshot(slots: Any | Mapping[str, Any] | None) -> dict[str, A
         "shop_id",
         "shop_name",
         "region",
+        "place_query",
+        "store_search_condition",
+        "requested_vehicle_experience",
         "pending_intent",
         "goal_type",
         "requested_cal_day",
@@ -748,6 +757,90 @@ def _current_turn_flow_seed(router_evidence: Mapping[str, Any]) -> dict[str, Any
     }
 
 
+def _router_execution_plan(router_evidence: Mapping[str, Any]) -> tuple[str, ...]:
+    raw_plan = router_evidence.get("execution_plan")
+    if not isinstance(raw_plan, (list, tuple)):
+        return ()
+    return tuple(str(item or "").strip() for item in raw_plan if str(item or "").strip())
+
+
+def _current_turn_store_search_intent(router_evidence: Mapping[str, Any]) -> str:
+    router_intent = str(router_evidence.get("intent") or "").strip()
+    execution_plan = _router_execution_plan(router_evidence)
+    if any("store_recommendation_by_vehicle_experience" in item for item in execution_plan):
+        return "store_recommendation_by_vehicle_experience"
+    if router_intent in _STORE_SEARCH_FLOW_INTENTS:
+        return router_intent
+    if any(item.endswith(":store_search") or item == "store_search" for item in execution_plan):
+        return "store_search"
+    return ""
+
+
+def _current_turn_store_search_flow_context(
+    *,
+    router_evidence: Mapping[str, Any],
+    existing_snapshot: Mapping[str, Any],
+    extracted_snapshot: Mapping[str, Any],
+) -> dict[str, Any]:
+    intent = _current_turn_store_search_intent(router_evidence)
+    if not intent:
+        return {}
+
+    region = _normalized_region_text(extracted_snapshot.get("region") or existing_snapshot.get("region"))
+    place_query = str(extracted_snapshot.get("place_query") or existing_snapshot.get("place_query") or "").strip()
+    shop_id = str(extracted_snapshot.get("shop_id") or existing_snapshot.get("shop_id") or "").strip()
+    shop_name = str(extracted_snapshot.get("shop_name") or existing_snapshot.get("shop_name") or "").strip()
+    store: dict[str, Any] = {
+        key: value
+        for key, value in {
+            "region": region if region and not _is_invalid_region_text(region) else "",
+            "place_query": place_query,
+            "shop_id": shop_id,
+            "shop_name": shop_name,
+        }.items()
+        if value not in (None, "", [], {})
+    }
+    if store.get("region") and not store.get("place_query"):
+        store["place_query"] = store["region"]
+
+    condition = str(
+        extracted_snapshot.get("requested_vehicle_experience")
+        or existing_snapshot.get("requested_vehicle_experience")
+        or router_evidence.get("requested_vehicle_experience")
+        or ""
+    ).strip()
+    search_condition = str(
+        extracted_snapshot.get("store_search_condition")
+        or existing_snapshot.get("store_search_condition")
+        or router_evidence.get("store_search_condition")
+        or ""
+    ).strip()
+    if intent == "store_recommendation_by_vehicle_experience":
+        search_condition = search_condition or "vehicle_experience"
+
+    return {
+        key: value
+        for key, value in {
+            "flow_type": "store_search",
+            "status": "active",
+            "flow_step": "search_ready" if store else "ask_region",
+            "store": store,
+            "intent": {
+                key: value
+                for key, value in {
+                    "pending_intent": intent,
+                    "goal_type": "store_search",
+                    "store_search_condition": search_condition,
+                    "requested_vehicle_experience": condition,
+                }.items()
+                if value not in (None, "", [], {})
+            },
+            "source": "flow_controller:current_turn_store_search",
+        }.items()
+        if value not in (None, "", [], {})
+    }
+
+
 def _transition_kind(
     current_flow_state: Mapping[str, Any],
     parent_flow_state: Mapping[str, Any],
@@ -827,7 +920,17 @@ def transition_current_flow(
         existing_snapshot=existing_snapshot,
         selected_store=selected_store,
     )
-    active_flow_context = selected_product_flow_context or selected_quantity_flow_context or selected_store_flow_context
+    current_turn_store_search_flow_context = _current_turn_store_search_flow_context(
+        router_evidence=router_snapshot,
+        existing_snapshot=existing_snapshot,
+        extracted_snapshot=extracted_snapshot,
+    )
+    active_flow_context = (
+        selected_product_flow_context
+        or selected_quantity_flow_context
+        or selected_store_flow_context
+        or current_turn_store_search_flow_context
+    )
     applied_reason = "metadata_only_shell"
     if selected_product_flow_context:
         applied_reason = "selected_product_flow_state"
@@ -835,6 +938,8 @@ def transition_current_flow(
         applied_reason = "selected_quantity_flow_state"
     elif selected_store_flow_context:
         applied_reason = "selected_store_flow_state"
+    elif current_turn_store_search_flow_context:
+        applied_reason = "current_turn_store_search_flow_state"
     current_turn_seed = _current_turn_flow_seed(router_snapshot)
     contract_seed = {
         "router_evidence": router_snapshot,
@@ -854,6 +959,7 @@ def transition_current_flow(
         "selected_product": selected_product,
         "selected_quantity": selected_quantity,
         "selected_store": selected_store,
+        "current_turn_store_search_flow": current_turn_store_search_flow_context,
     }
     context_evidence = {key: value for key, value in context_evidence.items() if value not in (None, "", [], {})}
     metadata = {
@@ -869,6 +975,7 @@ def transition_current_flow(
         "selected_product_resolved": bool(selected_product),
         "selected_quantity_resolved": bool(selected_quantity),
         "selected_store_resolved": bool(selected_store),
+        "current_turn_store_search_resolved": bool(current_turn_store_search_flow_context),
         "user_text_present": bool(str(user_text or "").strip()),
     }
     return FlowTransition(

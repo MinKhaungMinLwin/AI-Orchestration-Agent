@@ -306,6 +306,43 @@ def test_active_purchase_to_store_search_pushes_purchase_to_dormant() -> None:
     assert "dormant_flows" in result.metadata["committed_fields"]
 
 
+def test_active_purchase_to_nested_store_search_preserves_search_intent() -> None:
+    result = commit_flow_state(
+        {
+            "flow_type": "purchase",
+            "status": "active",
+            "flow_step": "ask_schedule",
+            "product": {"goods_no": "GOLD", "product_name": "벤투스 S2 AS", "tire_size": "245/45R19", "ord_qty": 2},
+            "intent": {"pending_intent": "order", "goal_type": "place_order"},
+        },
+        {
+            "flow_type": "store_search",
+            "status": "active",
+            "flow_step": "ask_region",
+            "store": {"place_query": "분당"},
+            "intent": {
+                "pending_intent": "store_recommendation_by_vehicle_experience",
+                "goal_type": "store_search",
+                "store_search_condition": "vehicle_experience",
+                "requested_vehicle_experience": "BMW 정비 경험",
+            },
+        },
+        source="flow_controller:current_turn_store_search",
+        flow_type="store_search",
+        flow_step="ask_region",
+        status="active",
+    )
+
+    context = result.state.to_active_flow_context()
+    assert context["flow_type"] == "store_search"
+    assert context["store"]["place_query"] == "분당"
+    assert context["intent"]["pending_intent"] == "store_recommendation_by_vehicle_experience"
+    assert context["intent"]["store_search_condition"] == "vehicle_experience"
+    assert context["intent"]["requested_vehicle_experience"] == "BMW 정비 경험"
+    assert context["dormant_flows"][0]["context"]["flow_type"] == "purchase"
+    assert context["dormant_flows"][0]["context"]["product"]["goods_no"] == "GOLD"
+
+
 def test_dormant_purchase_resumes_only_with_explicit_anchor() -> None:
     dormant_flows = upsert_dormant_flow(
         [],
