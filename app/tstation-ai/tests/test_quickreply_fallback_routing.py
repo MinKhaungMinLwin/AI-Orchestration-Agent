@@ -13900,6 +13900,43 @@ def test_flow_transition_support_coupon_faq_switches_active_purchase_to_support(
     assert committed["dormant_flows"][0]["context"]["product"]["goods_no"] == "G000000310126"
 
 
+def test_flow_transition_support_card_installment_switches_coupon_context_to_card_installment_lookup() -> None:
+    slots = ConversationSlots(
+        availability_context={
+            "active_flow_context": {
+                "flow_type": "support",
+                "status": "active",
+                "flow_step": "answer_faq",
+                "intent": {
+                    "pending_intent": "coupon_usage_policy",
+                    "goal_type": "support_faq",
+                    "policy_topic": "coupon_usage_policy",
+                },
+            }
+        },
+    )
+
+    transition = transition_current_flow(
+        user_text="현대카드 무이자 몇개월돼?",
+        router_evidence={
+            "domain": "support",
+            "intent": "coupon_usage_policy",
+            "policy_intent": "coupon_usage_policy",
+            "execution_plan": ["support:coupon_usage_policy"],
+            "source": "llm",
+        },
+        existing_slots=slots,
+        extracted_slots=ConversationSlots(),
+    )
+
+    assert transition.flow_transition["applied"] is True
+    assert transition.flow_transition["reason"] == "current_turn_support_flow_state"
+    active_flow_context = transition.flow_transition["active_flow_context"]
+    assert active_flow_context["intent"]["pending_intent"] == "card_installment_lookup"
+    assert active_flow_context["intent"]["goal_type"] == "support_faq"
+    assert active_flow_context["intent"]["policy_topic"] == "card_installment_lookup"
+
+
 def test_flow_transition_support_refund_policy_does_not_resume_purchase_action() -> None:
     slots = ConversationSlots(
         goods_no="G000000310126",
