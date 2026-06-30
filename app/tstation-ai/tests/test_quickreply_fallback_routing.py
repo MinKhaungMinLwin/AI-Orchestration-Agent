@@ -13937,6 +13937,27 @@ def test_flow_transition_support_card_installment_switches_coupon_context_to_car
     assert active_flow_context["intent"]["policy_topic"] == "card_installment_lookup"
 
 
+def test_flow_transition_support_card_installment_overrides_wrong_support_router_intent() -> None:
+    transition = transition_current_flow(
+        user_text="삼성카드 무이자 몇개월 돼?",
+        router_evidence={
+            "domain": "support",
+            "intent": "promotion_gift_policy",
+            "policy_intent": "promotion_gift_policy",
+            "execution_plan": ["support:policy_explanation"],
+            "source": "llm",
+        },
+        existing_slots=ConversationSlots(),
+        extracted_slots=ConversationSlots(),
+    )
+
+    assert transition.flow_transition["applied"] is True
+    assert transition.flow_transition["reason"] == "current_turn_support_flow_state"
+    assert transition.metadata["current_turn_support_resolved"] is True
+    assert transition.flow_transition["active_flow_context"]["intent"]["pending_intent"] == "card_installment_lookup"
+    assert transition.flow_transition["active_flow_context"]["intent"]["policy_topic"] == "card_installment_lookup"
+
+
 def test_flow_transition_support_refund_policy_does_not_resume_purchase_action() -> None:
     slots = ConversationSlots(
         goods_no="G000000310126",
