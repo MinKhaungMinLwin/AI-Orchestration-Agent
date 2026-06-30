@@ -18,7 +18,7 @@ from dataclasses import replace
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Mapping
 
 import pytest
 
@@ -422,7 +422,10 @@ from services.tstation.policies import schedule_tool_gate
 from services.tstation.policies import support_response_policy as support_response_policy_module
 from services.tstation.policies.transaction_intent_policy import build_transaction_intent_frame, plan_transaction_tools
 from services.tstation.policies.transaction_response_policy import decide_transaction_response
-from services.tstation.policies.slot_fill_controller import resolve_pre_router_slot_fill
+from services.tstation.policies.slot_fill_controller import (
+    build_router_slot_fill_context,
+    resolve_pre_router_slot_fill,
+)
 from services.tstation.policies.support_response_policy import (
     build_support_faq_evidence_grounded_reply,
     build_support_faq_source_grounded_reply,
@@ -585,6 +588,42 @@ def _reset_action_mode_context():
 
 def _labels(chips: list[dict]) -> list[str]:
     return [c["label"] for c in chips]
+
+
+def _router_slot_fill_context_payload_for_test(
+    *,
+    slots: ConversationSlots | None,
+    user_text: str = "",
+    latest_product_tmpl: Mapping[str, Any] | None,
+    latest_location_tmpl: Mapping[str, Any] | None,
+    latest_datepick_tmpl: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    return build_router_slot_fill_context(
+        slots=slots,
+        user_text=user_text,
+        latest_product_tmpl=latest_product_tmpl,
+        latest_location_tmpl=latest_location_tmpl,
+        latest_datepick_tmpl=latest_datepick_tmpl,
+        has_purchase_anchor=_resume_source_from_current_turn(user_text) != "none",
+    )
+
+
+def _expected_slot_fill_precheck_for_test(
+    *,
+    user_text: str,
+    regex_slots: ConversationSlots,
+    merged_slots: ConversationSlots,
+    router_context: Mapping[str, Any],
+    region_store_input_resolution: Any | None = None,
+) -> dict[str, Any]:
+    return dict(resolve_pre_router_slot_fill(
+        user_text=user_text,
+        regex_slots=regex_slots,
+        merged_slots=merged_slots,
+        router_context=router_context,
+        region_store_input_resolution=region_store_input_resolution,
+        has_purchase_anchor=_resume_source_from_current_turn(user_text) != "none",
+    ).precheck)
 
 
 def test_chip_context_preserves_action_contract_fields() -> None:
@@ -19229,7 +19268,7 @@ def test_router_schema_failure_fallback_routes_tire_recommendation_to_discovery(
 
 
 def test_router_slot_fill_context_payload_summarizes_purchase_state_and_candidates() -> None:
-    payload = TStationChatServiceV2._router_slot_fill_context_payload(
+    payload = _router_slot_fill_context_payload_for_test(
         slots=ConversationSlots(
             tire_model="벤투스 에어S",
             ord_qty=2,
@@ -19270,7 +19309,7 @@ def test_router_slot_fill_context_payload_summarizes_purchase_state_and_candidat
 
 
 def test_router_slot_fill_context_payload_restores_dormant_purchase_snapshot() -> None:
-    payload = TStationChatServiceV2._router_slot_fill_context_payload(
+    payload = _router_slot_fill_context_payload_for_test(
         slots=ConversationSlots(
             availability_context={
                 "dormant_purchase_context": {
@@ -19299,7 +19338,7 @@ def test_router_slot_fill_context_payload_restores_dormant_purchase_snapshot() -
 
 
 def test_router_slot_fill_context_payload_restores_store_schedule_snapshot() -> None:
-    payload = TStationChatServiceV2._router_slot_fill_context_payload(
+    payload = _router_slot_fill_context_payload_for_test(
         slots=ConversationSlots(
             pending_intent="reservation",
             shop_id="F00405",
@@ -19319,7 +19358,7 @@ def test_router_slot_fill_context_payload_restores_store_schedule_snapshot() -> 
 
 
 def test_router_slot_fill_context_payload_restores_stock_snapshot() -> None:
-    payload = TStationChatServiceV2._router_slot_fill_context_payload(
+    payload = _router_slot_fill_context_payload_for_test(
         slots=ConversationSlots(
             goods_no="G000000309715",
             tire_size="225/55R18",
@@ -19343,8 +19382,8 @@ def test_router_slot_fill_context_payload_restores_stock_snapshot() -> None:
 
 
 def test_router_slot_fill_current_flow_uses_pending_order_context_for_stock_resume() -> None:
-    flow = TStationChatServiceV2._router_slot_fill_current_flow(
-        ConversationSlots(
+    payload = _router_slot_fill_context_payload_for_test(
+        slots=ConversationSlots(
             availability_context={
                 "pending_order_context": {
                     "pending_intent": "stock",
@@ -19355,9 +19394,12 @@ def test_router_slot_fill_current_flow_uses_pending_order_context_for_stock_resu
             }
         ),
         user_text="235/50R19",
+        latest_product_tmpl=None,
+        latest_location_tmpl=None,
+        latest_datepick_tmpl=None,
     )
 
-    assert flow == "stock_store_search"
+    assert payload["current_flow"] == "stock_store_search"
 
 
 def test_expected_slot_fill_precheck_accepts_direct_quantity_for_active_stock() -> None:
@@ -19369,7 +19411,7 @@ def test_expected_slot_fill_precheck_accepts_direct_quantity_for_active_stock() 
         pending_intent="stock",
         goal_type="store_with_stock",
     )
-    context = TStationChatServiceV2._router_slot_fill_context_payload(
+    context = _router_slot_fill_context_payload_for_test(
         slots=slots,
         user_text="4개",
         latest_product_tmpl=None,
@@ -19377,7 +19419,7 @@ def test_expected_slot_fill_precheck_accepts_direct_quantity_for_active_stock() 
         latest_datepick_tmpl=None,
     )
 
-    precheck = TStationChatServiceV2._expected_slot_fill_precheck(
+    precheck = _expected_slot_fill_precheck_for_test(
         user_text="4개",
         regex_slots=ConversationSlots.extract_from_user_text("4개"),
         merged_slots=slots.merge(ConversationSlots.extract_from_user_text("4개")),
@@ -19405,7 +19447,7 @@ def test_expected_slot_fill_precheck_accepts_executable_store_candidate_step() -
         pending_intent="order",
         goal_type="place_order",
     )
-    context = TStationChatServiceV2._router_slot_fill_context_payload(
+    context = _router_slot_fill_context_payload_for_test(
         slots=slots,
         user_text="분당",
         latest_product_tmpl=None,
@@ -19413,7 +19455,7 @@ def test_expected_slot_fill_precheck_accepts_executable_store_candidate_step() -
         latest_datepick_tmpl=None,
     )
 
-    precheck = TStationChatServiceV2._expected_slot_fill_precheck(
+    precheck = _expected_slot_fill_precheck_for_test(
         user_text="분당",
         regex_slots=ConversationSlots.extract_from_user_text("분당"),
         merged_slots=slots,
@@ -19441,7 +19483,7 @@ def test_expected_slot_fill_precheck_accepts_schedule_for_store_schedule_flow() 
         shop_id="F00405",
         shop_name="티스테이션 경포점",
     )
-    context = TStationChatServiceV2._router_slot_fill_context_payload(
+    context = _router_slot_fill_context_payload_for_test(
         slots=slots,
         user_text="2026년 6월 27일 14:00",
         latest_product_tmpl=None,
@@ -19449,7 +19491,7 @@ def test_expected_slot_fill_precheck_accepts_schedule_for_store_schedule_flow() 
         latest_datepick_tmpl=None,
     )
 
-    precheck = TStationChatServiceV2._expected_slot_fill_precheck(
+    precheck = _expected_slot_fill_precheck_for_test(
         user_text="2026년 6월 27일 14:00",
         regex_slots=ConversationSlots(),
         merged_slots=slots.merge(ConversationSlots(requested_cal_day="20260627", rsv_hour="14")),
@@ -19481,7 +19523,7 @@ def test_expected_slot_fill_precheck_prefers_current_schedule_over_stale_store_s
         goal_type="store_with_stock",
         stock_check_mode="preview",
     )
-    context = TStationChatServiceV2._router_slot_fill_context_payload(
+    context = _router_slot_fill_context_payload_for_test(
         slots=slots,
         user_text="2026년 7월 8일 (수)\n16:00",
         latest_product_tmpl=None,
@@ -19498,7 +19540,7 @@ def test_expected_slot_fill_precheck_prefers_current_schedule_over_stale_store_s
         latest_datepick_tmpl=None,
     )
 
-    precheck = TStationChatServiceV2._expected_slot_fill_precheck(
+    precheck = _expected_slot_fill_precheck_for_test(
         user_text="2026년 7월 8일 (수)\n16:00",
         regex_slots=ConversationSlots.extract_from_user_text("2026년 7월 8일 (수)\n16:00"),
         merged_slots=slots,
@@ -19541,7 +19583,7 @@ def test_slot_fill_controller_promotes_stock_schedule_to_parent_purchase_flow() 
             },
         },
     )
-    context = TStationChatServiceV2._router_slot_fill_context_payload(
+    context = _router_slot_fill_context_payload_for_test(
         slots=slots,
         user_text="2026년 7월 8일 (수)\n16:00",
         latest_product_tmpl=None,
@@ -19576,7 +19618,7 @@ def test_slot_fill_controller_promotes_stock_schedule_to_parent_purchase_flow() 
 
 def test_expected_slot_fill_precheck_does_not_write_intent_for_purchase_anchor() -> None:
     slots = ConversationSlots(goods_no="G000000319584", tire_size="245/45R19")
-    context = TStationChatServiceV2._router_slot_fill_context_payload(
+    context = _router_slot_fill_context_payload_for_test(
         slots=slots,
         user_text="구매할래",
         latest_product_tmpl=None,
@@ -19584,7 +19626,7 @@ def test_expected_slot_fill_precheck_does_not_write_intent_for_purchase_anchor()
         latest_datepick_tmpl=None,
     )
 
-    precheck = TStationChatServiceV2._expected_slot_fill_precheck(
+    precheck = _expected_slot_fill_precheck_for_test(
         user_text="구매할래",
         regex_slots=ConversationSlots.extract_from_user_text("구매할래"),
         merged_slots=slots,
@@ -19603,7 +19645,7 @@ def test_expected_slot_fill_precheck_accepts_direct_quantity_for_active_purchase
         pending_intent="order",
         goal_type="place_order",
     )
-    context = TStationChatServiceV2._router_slot_fill_context_payload(
+    context = _router_slot_fill_context_payload_for_test(
         slots=slots,
         user_text="4개",
         latest_product_tmpl=None,
@@ -19611,7 +19653,7 @@ def test_expected_slot_fill_precheck_accepts_direct_quantity_for_active_purchase
         latest_datepick_tmpl=None,
     )
 
-    precheck = TStationChatServiceV2._expected_slot_fill_precheck(
+    precheck = _expected_slot_fill_precheck_for_test(
         user_text="4개",
         regex_slots=ConversationSlots.extract_from_user_text("4개"),
         merged_slots=slots.merge(ConversationSlots.extract_from_user_text("4개")),
@@ -19632,7 +19674,7 @@ def test_expected_slot_fill_precheck_rejects_support_policy_anchor() -> None:
         pending_intent="order",
         goal_type="place_order",
     )
-    context = TStationChatServiceV2._router_slot_fill_context_payload(
+    context = _router_slot_fill_context_payload_for_test(
         slots=slots,
         user_text="작년에 산 타이어 보증 돼?",
         latest_product_tmpl=None,
@@ -19640,7 +19682,7 @@ def test_expected_slot_fill_precheck_rejects_support_policy_anchor() -> None:
         latest_datepick_tmpl=None,
     )
 
-    precheck = TStationChatServiceV2._expected_slot_fill_precheck(
+    precheck = _expected_slot_fill_precheck_for_test(
         user_text="작년에 산 타이어 보증 돼?",
         regex_slots=ConversationSlots.extract_from_user_text("작년에 산 타이어 보증 돼?"),
         merged_slots=slots,

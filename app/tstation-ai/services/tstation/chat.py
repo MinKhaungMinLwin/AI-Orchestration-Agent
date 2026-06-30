@@ -126,7 +126,6 @@ from services.tstation.policies.cross_domain_policy import (
 from services.tstation.policies.flow_controller import (
     build_purchase_flow_fallback_event,
     build_selected_store_confirmation_event,
-    resolve_purchase_order_flow,
     transition_current_flow,
 )
 from services.tstation.policies.coupon_query_gate import (
@@ -24296,271 +24295,6 @@ class TStationChatServiceV2:
         return selected
 
     @staticmethod
-    def _router_slot_fill_current_flow(slots: ConversationSlots | None, user_text: str = "") -> str:
-        if slots is None:
-            return "none"
-        pending_intent = str(getattr(slots, "pending_intent", "") or "").strip()
-        goal_type = str(getattr(slots, "goal_type", "") or "").strip()
-        if pending_intent == "order" or goal_type == "place_order":
-            return "quick_order_reservation"
-        if pending_intent == "stock" or goal_type == "store_with_stock":
-            return "stock_store_search"
-        if pending_intent == "reservation" or goal_type == "store_schedule":
-            return "store_schedule"
-        text = user_text or ""
-        has_product_anchor = bool(
-            getattr(slots, "goods_no", None)
-            or (
-                getattr(slots, "tire_size", None)
-                and (getattr(slots, "tire_model", None) or getattr(slots, "pending_product_name", None))
-            )
-        )
-        if has_product_anchor and _resume_source_from_current_turn(text) != "none":
-            return "quick_order_reservation"
-        if (
-            has_product_anchor
-            and re.search(r"재고|오늘\s*장착|당일\s*장착|장착\s*가능|가능\s*매장", text, re.IGNORECASE)
-        ):
-            return "stock_store_search"
-        availability_context = getattr(slots, "availability_context", None)
-        if isinstance(availability_context, Mapping):
-            for key in ("pending_order_context", "dormant_purchase_context"):
-                context = availability_context.get(key)
-                if not isinstance(context, Mapping):
-                    continue
-                if context.get("pending_intent") == "order" or context.get("goal_type") == "place_order":
-                    return "quick_order_reservation"
-                if context.get("pending_intent") == "stock" or context.get("goal_type") == "store_with_stock":
-                    return "stock_store_search"
-            for key in ("dormant_stock_context", "dormant_transaction_context"):
-                context = availability_context.get(key)
-                if isinstance(context, Mapping) and (
-                    context.get("pending_intent") == "stock" or context.get("goal_type") == "store_with_stock"
-                ):
-                    return "stock_store_search"
-        return "none"
-
-    @staticmethod
-    def _router_slot_fill_known_slots(slots: ConversationSlots | None) -> dict[str, Any]:
-        if slots is None:
-            return {}
-        values = {
-            "product_name": getattr(slots, "tire_model", None) or getattr(slots, "pending_product_name", None),
-            "goods_no": getattr(slots, "goods_no", None),
-            "tire_size": getattr(slots, "tire_size", None),
-            "ord_qty": getattr(slots, "ord_qty", None),
-            "payment_amount": getattr(slots, "payment_amount", None),
-            "region": getattr(slots, "region", None),
-            "shop_id": getattr(slots, "shop_id", None),
-            "shop_name": getattr(slots, "shop_name", None),
-            "requested_cal_day": getattr(slots, "requested_cal_day", None),
-            "rsv_hour": getattr(slots, "rsv_hour", None),
-        }
-        availability_context = getattr(slots, "availability_context", None)
-        if isinstance(availability_context, Mapping):
-            for context_key in (
-                "pending_order_context",
-                "dormant_purchase_context",
-                "dormant_stock_context",
-                "dormant_transaction_context",
-            ):
-                context = availability_context.get(context_key)
-                if not isinstance(context, Mapping):
-                    continue
-                for key in (
-                    "product_name",
-                    "goods_no",
-                    "tire_size",
-                    "ord_qty",
-                    "payment_amount",
-                    "region",
-                    "shop_id",
-                    "shop_name",
-                    "requested_cal_day",
-                    "rsv_hour",
-                    "pending_intent",
-                    "goal_type",
-                ):
-                    if values.get(key) in (None, "", [], {}) and context.get(key) not in (None, "", [], {}):
-                        values[key] = context.get(key)
-        return {key: value for key, value in values.items() if value not in (None, "", [], {})}
-
-    @staticmethod
-    def _router_slot_fill_flow_step(current_flow: str, known_slots: Mapping[str, Any]) -> str:
-        if current_flow == "quick_order_reservation":
-            state = resolve_purchase_order_flow(intent="quick_order_reservation", known_slots=known_slots)
-            return state.flow_step if state is not None else "none"
-        if current_flow == "stock_store_search":
-            missing = TStationChatServiceV2._router_slot_fill_missing_slots(current_flow, known_slots)
-            if missing:
-                return f"ask_{missing[0]}"
-            if known_slots.get("region") or known_slots.get("shop_id") or known_slots.get("shop_name"):
-                return "show_store_candidates"
-            return "stock_check"
-        if current_flow == "store_schedule":
-            missing = TStationChatServiceV2._router_slot_fill_missing_slots(current_flow, known_slots)
-            if missing:
-                return f"ask_{missing[0]}"
-            return "show_schedule"
-        return "none"
-
-    @staticmethod
-    def _normalize_router_missing_slot(slot: str) -> str:
-        return "schedule" if slot == "booking_datetime" else slot
-
-    @staticmethod
-    def _router_slot_fill_missing_slots(current_flow: str, known_slots: Mapping[str, Any]) -> list[str]:
-        if current_flow == "none":
-            return []
-        missing: list[str] = []
-        if current_flow == "store_schedule":
-            if not (known_slots.get("shop_id") or known_slots.get("shop_name")):
-                missing.append("store")
-            elif not (known_slots.get("requested_cal_day") and known_slots.get("rsv_hour")):
-                missing.append("schedule")
-            return missing
-        if not known_slots.get("goods_no") and not known_slots.get("product_name"):
-            missing.append("product")
-        elif known_slots.get("product_name") and not known_slots.get("goods_no"):
-            missing.append("product")
-        if current_flow == "quick_order_reservation":
-            if known_slots.get("goods_no") and not known_slots.get("ord_qty"):
-                missing.append("quantity")
-            if known_slots.get("goods_no") and known_slots.get("ord_qty") and not (
-                known_slots.get("region") or known_slots.get("shop_id") or known_slots.get("shop_name")
-            ):
-                missing.append("store")
-            if known_slots.get("shop_id") and not (
-                known_slots.get("requested_cal_day") and known_slots.get("rsv_hour")
-            ):
-                missing.append("schedule")
-        elif current_flow == "stock_store_search":
-            if known_slots.get("goods_no") and not known_slots.get("ord_qty"):
-                missing.append("quantity")
-            if known_slots.get("goods_no") and known_slots.get("ord_qty") and not (
-                known_slots.get("region") or known_slots.get("shop_id") or known_slots.get("shop_name")
-            ):
-                missing.append("region")
-        return missing
-
-    @staticmethod
-    def _router_slot_fill_product_candidates(template_data: Mapping[str, Any] | None) -> list[dict[str, Any]]:
-        if not isinstance(template_data, Mapping):
-            return []
-        data = template_data.get("data") if isinstance(template_data.get("data"), Mapping) else template_data
-        products = data.get("products") if isinstance(data, Mapping) else None
-        metadata = data.get("metadata") if isinstance(data, Mapping) else None
-        if not isinstance(products, list):
-            return []
-        rows: list[dict[str, Any]] = []
-        metadata_list = metadata if isinstance(metadata, list) else []
-        for idx, product in enumerate(products[:5]):
-            if not isinstance(product, Mapping):
-                continue
-            meta = metadata_list[idx] if idx < len(metadata_list) and isinstance(metadata_list[idx], Mapping) else {}
-            canonical = canonical_context_from_template_boundary({**dict(product), **dict(meta)})
-            label_parts = [
-                str(canonical.get("product_name") or product.get("titleProductName") or product.get("title") or ""),
-                str(canonical.get("tire_size") or product.get("titleTires") or ""),
-            ]
-            price = product.get("price") or product.get("finalPrice") or meta.get("price")
-            if price not in (None, "", 0):
-                try:
-                    label_parts.append(f"{int(str(price).replace(',', '')):,}원")
-                except (TypeError, ValueError):
-                    label_parts.append(str(price))
-            label = " ".join(part.strip() for part in label_parts if part and str(part).strip())
-            rows.append({
-                "type": "product",
-                "label": label,
-                "stable_id_summary": str(canonical.get("goods_no") or meta.get("entity_id") or "")[:24],
-            })
-        return rows
-
-    @staticmethod
-    def _router_slot_fill_store_candidates(template_data: Mapping[str, Any] | None) -> list[dict[str, Any]]:
-        if not isinstance(template_data, Mapping):
-            return []
-        data = template_data.get("data") if isinstance(template_data.get("data"), Mapping) else template_data
-        stores = data.get("stores") if isinstance(data, Mapping) else None
-        metadata = data.get("metadata") if isinstance(data, Mapping) else None
-        if not isinstance(stores, list):
-            return []
-        metadata_list = metadata if isinstance(metadata, list) else []
-        rows: list[dict[str, Any]] = []
-        for idx, store in enumerate(stores[:5]):
-            if not isinstance(store, Mapping):
-                continue
-            meta = metadata_list[idx] if idx < len(metadata_list) and isinstance(metadata_list[idx], Mapping) else {}
-            canonical = canonical_context_from_template_boundary({**dict(store), **dict(meta)})
-            label = str(
-                canonical.get("shop_name")
-                or store.get("nameAddress")
-                or store.get("name")
-                or store.get("title")
-                or ""
-            ).strip()
-            rows.append({
-                "type": "store",
-                "label": label,
-                "stable_id_summary": str(canonical.get("shop_id") or "")[:24],
-            })
-        return rows
-
-    @staticmethod
-    def _router_slot_fill_schedule_candidates(template_data: Mapping[str, Any] | None) -> list[dict[str, Any]]:
-        if not isinstance(template_data, Mapping):
-            return []
-        data = template_data.get("data") if isinstance(template_data.get("data"), Mapping) else template_data
-        quick_replies = data.get("quickReplies") if isinstance(data, Mapping) else None
-        if not isinstance(quick_replies, list):
-            return []
-        rows: list[dict[str, Any]] = []
-        for chip in quick_replies[:8]:
-            if not isinstance(chip, Mapping):
-                continue
-            label = str(chip.get("label") or chip.get("text") or chip.get("title") or "").strip()
-            if label:
-                rows.append({"type": "schedule", "label": label, "stable_id_summary": ""})
-        return rows
-
-    @staticmethod
-    def _router_slot_fill_context_payload(
-        *,
-        slots: ConversationSlots | None,
-        user_text: str = "",
-        latest_product_tmpl: Mapping[str, Any] | None,
-        latest_location_tmpl: Mapping[str, Any] | None,
-        latest_datepick_tmpl: Mapping[str, Any] | None,
-    ) -> dict[str, Any]:
-        return build_router_slot_fill_context(
-            slots=slots,
-            user_text=user_text,
-            latest_product_tmpl=latest_product_tmpl,
-            latest_location_tmpl=latest_location_tmpl,
-            latest_datepick_tmpl=latest_datepick_tmpl,
-            has_purchase_anchor=_resume_source_from_current_turn(user_text) != "none",
-        )
-
-    @staticmethod
-    def _expected_slot_fill_precheck(
-        *,
-        user_text: str,
-        regex_slots: ConversationSlots,
-        merged_slots: ConversationSlots,
-        router_context: Mapping[str, Any],
-        region_store_input_resolution: RegionStoreInputContextResolution | None = None,
-    ) -> dict[str, Any]:
-        return dict(resolve_pre_router_slot_fill(
-            user_text=user_text,
-            regex_slots=regex_slots,
-            merged_slots=merged_slots,
-            router_context=router_context,
-            region_store_input_resolution=region_store_input_resolution,
-            has_purchase_anchor=_resume_source_from_current_turn(user_text) != "none",
-        ).precheck)
-
-    @staticmethod
     def _inject_router_slot_fill_context(
         messages: list[dict],
         context_payload: Mapping[str, Any],
@@ -25709,12 +25443,13 @@ class TStationChatServiceV2:
                     dict(region_store_input_resolution.slots_to_promote),
                 )
 
-            router_slot_fill_context_payload = TStationChatServiceV2._router_slot_fill_context_payload(
+            router_slot_fill_context_payload = build_router_slot_fill_context(
                 slots=merged_slots,
                 user_text=last_user_text,
                 latest_product_tmpl=latest_product_tmpl,
                 latest_location_tmpl=latest_location_tmpl,
                 latest_datepick_tmpl=latest_datepick_tmpl,
+                has_purchase_anchor=_resume_source_from_current_turn(last_user_text) != "none",
             )
             slot_fill_decision = resolve_pre_router_slot_fill(
                 user_text=last_user_text,
@@ -25728,12 +25463,13 @@ class TStationChatServiceV2:
             if slot_fill_decision.matched:
                 merged_slots = slot_fill_decision.slots
                 precheck_slot_patch = dict(slot_fill_decision.slot_patch or {})
-                router_slot_fill_context_payload = TStationChatServiceV2._router_slot_fill_context_payload(
+                router_slot_fill_context_payload = build_router_slot_fill_context(
                     slots=merged_slots,
                     user_text=last_user_text,
                     latest_product_tmpl=latest_product_tmpl,
                     latest_location_tmpl=latest_location_tmpl,
                     latest_datepick_tmpl=latest_datepick_tmpl,
+                    has_purchase_anchor=_resume_source_from_current_turn(last_user_text) != "none",
                 )
                 router_slot_fill_metadata.update(dict(slot_fill_decision.trace_metadata or {}))
                 logger.info(
@@ -25771,12 +25507,13 @@ class TStationChatServiceV2:
                     canonical_readthrough_metadata.get("canonical_sources"),
                 )
             vehicle_selection_trace_metadata.update(canonical_readthrough_metadata)
-            router_slot_fill_context_payload = TStationChatServiceV2._router_slot_fill_context_payload(
+            router_slot_fill_context_payload = build_router_slot_fill_context(
                 slots=merged_slots,
                 user_text=last_user_text,
                 latest_product_tmpl=latest_product_tmpl,
                 latest_location_tmpl=latest_location_tmpl,
                 latest_datepick_tmpl=latest_datepick_tmpl,
+                has_purchase_anchor=_resume_source_from_current_turn(last_user_text) != "none",
             )
             classifier_messages = TStationChatServiceV2._inject_router_slot_fill_context(
                 classifier_messages,
