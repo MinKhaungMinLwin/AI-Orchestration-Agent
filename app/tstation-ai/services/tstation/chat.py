@@ -22355,6 +22355,23 @@ def _flow_state_from_purchase_stock_sources(
                 value = canonical_row.get(key)
                 if value not in (None, "", [], {}) and tool_values.get(key) in (None, "", [], {}):
                     tool_values[key] = value
+            qty_value = (
+                current_values.get("ord_qty")
+                or flow_state_before.get("ord_qty")
+                or tool_values.get("ord_qty")
+                or (current_slot_delta or {}).get("ord_qty")
+            )
+            unit_price, price_basis = _preview_price_unit_and_basis(matched_row or rows[0])
+            try:
+                qty_int = int(qty_value or 0)
+            except (TypeError, ValueError):
+                qty_int = 0
+            if unit_price is not None and price_basis and qty_int > 0:
+                tool_values.setdefault("payment_amount", int(unit_price * qty_int))
+                tool_values.setdefault("price_basis", price_basis)
+                tool_values.setdefault("price_source_tool", "search_product_tool")
+                tool_values.setdefault("payment_amount_source", "search_product_tool.row")
+                tool_values.setdefault("payment_amount_missing_reason", None)
             continue
 
         price_data = parsed_data.get("data", parsed_data) if isinstance(parsed_data, Mapping) else parsed_data

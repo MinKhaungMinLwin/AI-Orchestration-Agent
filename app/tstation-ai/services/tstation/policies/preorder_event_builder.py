@@ -35,7 +35,7 @@ def can_emit_preorder(contract: Any | None, slots: Mapping[str, Any] | Any | Non
         and response_template in {"", "preOrder"}
         and (action_mode == "purchase_continuation" or intent.startswith("quick_order_reservation"))
     )
-    return bool(contract_ready and _has_ready_preorder_slots(slot_values))
+    return bool(contract_ready and _has_ready_preorder_slots(slot_values) and _product_name(slot_values) and _payment_amount(slot_values)[0] is not None)
 
 
 def build_preorder_event(
@@ -64,7 +64,7 @@ def build_preorder_event(
     product_name = _product_name(slot_values)
     product_label = f"{product_name} {tire_size}".strip() if product_name else tire_size
     booking_datetime = _booking_datetime(requested_cal_day, rsv_hour)
-    payment_amount = _int_or_none(slot_values.get("payment_amount"))
+    payment_amount, price_basis, price_source_tool, payment_amount_source = _payment_amount(slot_values)
     car_info = _car_info(slot_values)
 
     event = {
@@ -98,9 +98,9 @@ def build_preorder_event(
                 "paymentAmount": payment_amount,
                 "productName": product_name or None,
                 "tireSize": tire_size,
-                "priceBasis": _str_or_none(slot_values.get("price_basis")),
-                "priceSourceTool": _str_or_none(slot_values.get("price_source_tool")),
-                "paymentAmountSource": _str_or_none(slot_values.get("payment_amount_source")),
+                "priceBasis": price_basis,
+                "priceSourceTool": price_source_tool,
+                "paymentAmountSource": payment_amount_source,
                 "paymentAmountMissingReason": None if payment_amount is not None else "missing_payment_amount",
                 "carNo": _str_or_none(slot_values.get("car_no")),
                 "carLncCd": _str_or_none(slot_values.get("car_lnc_cd")),
@@ -166,18 +166,97 @@ def _has_ready_preorder_slots(slots: Mapping[str, Any]) -> bool:
 
 
 def _product_name(slots: Mapping[str, Any]) -> str:
+    for context in _context_candidates(slots):
+        product_name = (
+            str(context.get("tire_model") or "").strip()
+            or str(context.get("product_name") or "").strip()
+            or str(context.get("pending_product_name") or "").strip()
+            or str(context.get("goods_nm") or "").strip()
+            or str(context.get("goodsNm") or "").strip()
+        )
+        if product_name:
+            return product_name
+    return ""
+
+
+def _payment_amount(slots: Mapping[str, Any]) -> tuple[int | None, str | None, str | None, str | None]:
+    quantity = _quantity(slots)
+    for context in _context_candidates(slots):
+        direct_amount = _int_or_none(context.get("payment_amount") or context.get("paymentAmount"))
+        if direct_amount is not None:
+            return (
+                direct_amount,
+                _str_or_none(context.get("price_basis") or context.get("priceBasis")),
+                _str_or_none(context.get("price_source_tool") or context.get("priceSourceTool")),
+                _str_or_none(context.get("payment_amount_source") or context.get("paymentAmountSource")),
+            )
+        unit_price, price_basis = _unit_price_and_basis(context)
+        if unit_price is not None and quantity > 0:
+            return (
+                unit_price * quantity,
+                price_basis,
+                _str_or_none(context.get("price_source_tool") or context.get("priceSourceTool")) or "context_price",
+                _str_or_none(context.get("payment_amount_source") or context.get("paymentAmountSource"))
+                or "context_unit_price",
+            )
+    return None, None, None, None
+
+
+def _quantity(slots: Mapping[str, Any]) -> int:
+    try:
+        return int(slots.get("ord_qty") or slots.get("quantity") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _unit_price_and_basis(values: Mapping[str, Any]) -> tuple[int | None, str | None]:
+    for key in (
+        "cheapest_final_prc",
+        "final_unit_price",
+        "final_prc",
+        "final_price",
+        "finalPrice",
+        "extra_fvr_sale_prc",
+        "sale_prc",
+        "price",
+    ):
+        price = _int_or_none(values.get(key))
+        if price is not None:
+            return price, key
+    return None, None
+
+
+def _context_candidates(slots: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    contexts: list[Mapping[str, Any]] = [slots]
     availability_context = slots.get("availability_context") if isinstance(slots.get("availability_context"), Mapping) else {}
-    pending_order_context = (
-        availability_context.get("pending_order_context")
-        if isinstance(availability_context.get("pending_order_context"), Mapping)
-        else {}
-    )
-    return (
-        str(slots.get("tire_model") or "").strip()
-        or str(slots.get("product_name") or "").strip()
-        or str(slots.get("pending_product_name") or "").strip()
-        or str(pending_order_context.get("product_name") or "").strip()
-    )
+    _append_availability_contexts(contexts, availability_context)
+    return contexts
+
+
+def _append_availability_contexts(contexts: list[Mapping[str, Any]], availability_context: Mapping[str, Any]) -> None:
+    for key in (
+        "pending_order_context",
+        "dormant_purchase_context",
+        "dormant_stock_context",
+        "dormant_transaction_context",
+    ):
+        value = availability_context.get(key)
+        if isinstance(value, Mapping):
+            contexts.append(value)
+    active_flow = availability_context.get("active_flow_context")
+    if isinstance(active_flow, Mapping):
+        contexts.append(active_flow)
+        for key in ("product", "payment", "intent", "store", "quantity"):
+            value = active_flow.get(key)
+            if isinstance(value, Mapping):
+                contexts.append(value)
+    for nested_key in ("dormant_store_finder_context", "dormant_purchase_finder_context"):
+        nested = availability_context.get(nested_key)
+        if not isinstance(nested, Mapping):
+            continue
+        nested_availability = nested.get("availability_context")
+        if isinstance(nested_availability, Mapping):
+            _append_availability_contexts(contexts, nested_availability)
 
 
 def _booking_datetime(requested_cal_day: str, rsv_hour: str) -> str | None:
