@@ -15818,6 +15818,12 @@ def test_fresh_sized_product_order_clears_stale_comparison_product() -> None:
     assert slots.tire_size == "245/45R18"
 
 
+@pytest.mark.parametrize("text", ["내 주문목록", "최근 주문내역 보여줘"])
+def test_order_history_lookup_does_not_trigger_fresh_product_transaction_request(text: str) -> None:
+    assert _is_order_history_lookup_query(text)
+    assert _is_fresh_product_transaction_request(text, "order") is False
+
+
 def test_fresh_product_name_only_order_clears_stale_product_identity() -> None:
     slots = ConversationSlots(
         goods_no="G000000320151",
