@@ -108,6 +108,9 @@ class AgentDomain(BaseModel):
         - Find "All My T" stores (e.g., "all my T", "All My T", "올마이티", "allMyT")
         - Check store inventory (which stores have this tire)
         - "Buy", "purchase", "order", "checkout" WITH goods_no already known
+        - Explicit order-execution requests with already provided order payload slots, even if goods_no is not resolved yet
+          (e.g., product + quantity + store/installation shop + reservation date/time + "주문해줘", "주문서 만들어줘",
+          "이 정보대로 진행해줘", "예약해줘")
         - Track existing order (provide order number)
         - "장바구니에 담아줘", "장바구니 저장" (cart save)
         - Book store visit/reservation with specific date/time
@@ -123,6 +126,8 @@ class AgentDomain(BaseModel):
         - "All My T 매장 찾아줘"
         - "올마이티 매장 검색"
         - "{{goods_no}} 4개 주문할게" (e.g., "G012345678901" - goods_no KNOWN → TRANSACTION)
+        - "타이어 사이즈 2454519 / 상품: 벤투스 air S / 수량: 4개 / 매장: 티스테이션 분당정자점 / 장착일: 7월 4일 11시 / 이 정보대로 주문서 만들어 줘"
+        - "장착점 티스테이션 분당정자점으로 7월 4일 11시에 이대로 주문해줘"
         - "Book installation at 2pm"
         - "Track my order 12345"
         - "장바구니에 담아줘"
@@ -175,6 +180,10 @@ class AgentDomain(BaseModel):
         - "내 차 정비 일정 / 정비 D-day / 교체 시기 / 점검 만기" → SUPPORT (data-backed, registered vehicle 7-item D-day matrix)
         - "방문 예약 시간 알려줘 / 매장 예약 조회" → TRANSACTION (store visit slot booking)
         - "find stores" → TRANSACTION
+        - If the current turn includes product/quantity/store(or 장착점/매장)/date-time slots plus an explicit execution verb
+          such as "주문", "주문서 만들어", "진행해줘", or "예약해줘", classify as TRANSACTION, not DISCOVERY.
+        - Do NOT classify a turn as DISCOVERY/store detail when the user is asking to execute an order or reservation
+          using already provided slots.
 
         Korean vehicle numbers follow patterns: {{vehicle_number}} (e.g., "12가3456", "123가1234")
         """)
