@@ -8250,6 +8250,8 @@ def _is_ready_preorder_fast_path_contract_match(
         and action_mode == "purchase_continuation"
     ):
         return _has_ready_preorder_summary_slots(turn_contract.known_slots or {})
+    if response_shape_key not in {"reservation_confirmation_ready", "stock_store_candidates"}:
+        return False
     return bool(
         action_mode == "purchase_continuation"
         and _has_ready_preorder_summary_slots(turn_contract.known_slots or {})
