@@ -28390,7 +28390,30 @@ class TStationChatServiceV2:
                 else {}
             )
             previous_active_context = availability_context.get("active_flow_context")
-            availability_context["active_flow_context"] = dict(flow_transition_active_context)
+            if isinstance(previous_active_context, Mapping) and previous_active_context:
+                flow_transition_source = str(
+                    flow_transition_active_context.get("source")
+                    or flow_transition.flow_transition.get("reason")
+                    or "flow_controller:transition"
+                )
+                flow_transition_flow_type = str(flow_transition_active_context.get("flow_type") or "").strip()
+                flow_transition_flow_step = str(flow_transition_active_context.get("flow_step") or "").strip()
+                commit_result = commit_flow_state(
+                    previous_active_context,
+                    flow_transition_active_context,
+                    source=flow_transition_source,
+                    flow_type=flow_transition_flow_type or "purchase",
+                    flow_step=flow_transition_flow_step or None,
+                    status=str(flow_transition_active_context.get("status") or "active"),
+                )
+                committed_active_context = commit_result.state.to_active_flow_context()
+                vehicle_selection_trace_metadata.update({
+                    "flow_transition_commit_metadata": commit_result.metadata,
+                    "flow_transition_commit_source": flow_transition_source,
+                })
+            else:
+                committed_active_context = dict(flow_transition_active_context)
+            availability_context["active_flow_context"] = committed_active_context
             merged_slots = merged_slots.model_copy()
             merged_slots.availability_context = availability_context
             vehicle_selection_trace_metadata.update({
@@ -28398,9 +28421,9 @@ class TStationChatServiceV2:
                 "flow_transition_active_context_before": (
                     dict(previous_active_context) if isinstance(previous_active_context, Mapping) else {}
                 ),
-                "flow_transition_active_context_after": dict(flow_transition_active_context),
+                "flow_transition_active_context_after": dict(committed_active_context),
             })
-            logger.info("[FLOW_STATE] Applied FlowController transition: %s", flow_transition_active_context)
+            logger.info("[FLOW_STATE] Applied FlowController transition: %s", committed_active_context)
         router_slot_fill_metadata.update({
             "router_is_slot_fill": bool(getattr(routing_result, "is_slot_fill", False)) if routing_result else False,
             "router_filled_slot": str(getattr(routing_result, "filled_slot", "none") or "none")

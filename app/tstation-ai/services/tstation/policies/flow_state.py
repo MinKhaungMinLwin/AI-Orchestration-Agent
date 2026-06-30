@@ -57,7 +57,15 @@ _PAYMENT_FIELDS = (
     "price",
     "wage_prc",
 )
-_INTENT_FIELDS = ("pending_intent", "goal_type", "stock_check_mode", "schedule_mode", "availability_intent")
+_INTENT_FIELDS = (
+    "pending_intent",
+    "goal_type",
+    "stock_check_mode",
+    "schedule_mode",
+    "availability_intent",
+    "store_search_condition",
+    "requested_vehicle_experience",
+)
 _FLOW_PROGRESS_META_FIELDS = (
     "target_action",
     "current_step",
@@ -1003,16 +1011,14 @@ class FlowState:
     ) -> "FlowState":
         flat = _non_empty_mapping(values)
         state = cls(flow_type=flow_type if flow_type in _ACTIVE_FLOW_TYPES else "purchase", flow_step=flow_step)
-        state.product = {key: flat[key] for key in _PRODUCT_FIELDS if flat.get(key) not in _EMPTY_VALUES}
+        state.product = _section_values(flat, "product", _PRODUCT_FIELDS)
         _normalize_product_aliases(state.product)
-        state.vehicle = {key: flat[key] for key in _VEHICLE_FIELDS if flat.get(key) not in _EMPTY_VALUES}
-        state.recommendation = {
-            key: flat[key] for key in _RECOMMENDATION_FIELDS if flat.get(key) not in _EMPTY_VALUES
-        }
-        state.store = {key: flat[key] for key in _STORE_FIELDS if flat.get(key) not in _EMPTY_VALUES}
-        state.schedule = {key: flat[key] for key in _SCHEDULE_FIELDS if flat.get(key) not in _EMPTY_VALUES}
-        state.payment = {key: flat[key] for key in _PAYMENT_FIELDS if flat.get(key) not in _EMPTY_VALUES}
-        state.intent = {key: flat[key] for key in _INTENT_FIELDS if flat.get(key) not in _EMPTY_VALUES}
+        state.vehicle = _section_values(flat, "vehicle", _VEHICLE_FIELDS)
+        state.recommendation = _section_values(flat, "recommendation", _RECOMMENDATION_FIELDS)
+        state.store = _section_values(flat, "store", _STORE_FIELDS)
+        state.schedule = _section_values(flat, "schedule", _SCHEDULE_FIELDS)
+        state.payment = _section_values(flat, "payment", _PAYMENT_FIELDS)
+        state.intent = _section_values(flat, "intent", _INTENT_FIELDS)
         state.meta = {
             key: flat[key]
             for key in ("awaiting_store_region", "pending_step", *_FLOW_PROGRESS_META_FIELDS)
