@@ -35306,6 +35306,41 @@ def test_discovery_first_leg_order_guard_does_not_ask_size_when_product_size_con
     assert "다른 날짜 확인" in _labels(fallback_event["data"]["quickReplies"])
 
 
+def test_discovery_first_leg_order_guard_uses_full_quantity_chips() -> None:
+    contract = TurnContract(
+        domain="discovery",
+        intent="resolve_or_describe_product",
+        sub_intent="product_name_search",
+        known_slots={
+            "goods_no": "G000000309783",
+            "tire_size": "225/45R17",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        required_slots=(),
+        blocking_required_slots=(),
+        resolvable_required_slots=(),
+        allowed_tools=("search_product_tool",),
+        forbidden_tools=("get_products_recommendations_tool",),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            forbidden_behaviors=("answer_from_previous_recommendation",),
+            metadata={"response_shape_key": "product_search_summary"},
+        ).to_dict(),
+        risk_level="medium",
+        fallback_reason="response_policy_forbidden_behaviors",
+        planner_intent="resolve_or_describe_product",
+        planner_domains=("discovery",),
+        execution_plan=("discovery:resolve_product", "transaction:stock_store_or_reservation"),
+    )
+
+    fallback_event = build_response_policy_guard_event(contract)
+
+    assert "수량이 필요해요" in fallback_event["data"]["assistantResponse"]
+    assert _labels(fallback_event["data"]["quickReplies"]) == ["1개", "2개", "3개", "4개"]
+
+
 def test_turn_contract_qc_reports_discovery_first_leg_violation() -> None:
     contract = build_turn_contract(
         user_text="키너지 재고 있어?",
