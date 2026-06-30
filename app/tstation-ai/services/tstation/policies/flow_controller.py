@@ -200,6 +200,11 @@ _SUPPORT_EXECUTION_PLAN_TOKENS = frozenset({
     "get_faq_tool",
     *_SUPPORT_FLOW_INTENTS,
 })
+_CARD_INSTALLMENT_SUPPORT_CURRENT_TURN_RE = re.compile(
+    r"무이자|할부|몇\s*개?월|[0-9]{1,2}\s*개?월|개월수|카드사별|현대카드|신한카드|삼성카드|국민카드|"
+    r"롯데카드|하나카드|농협카드|우리카드|비씨카드|BC카드|스마트\s*페이|smart\s*pay|smartpay",
+    re.IGNORECASE,
+)
 
 
 def _normalized_region_text(value: Any) -> str:
@@ -1037,11 +1042,13 @@ def _current_turn_discovery_flow_context(
     }
 
 
-def _current_turn_support_intent(router_evidence: Mapping[str, Any]) -> str:
+def _current_turn_support_intent(router_evidence: Mapping[str, Any], *, user_text: str = "") -> str:
     router_intent = str(router_evidence.get("intent") or "").strip()
     router_domain = str(router_evidence.get("domain") or "").strip()
     execution_plan = _router_execution_plan(router_evidence)
     plan_tokens = {item.split(":", 1)[-1].strip() for item in execution_plan}
+    if _CARD_INSTALLMENT_SUPPORT_CURRENT_TURN_RE.search(str(user_text or "")):
+        return "card_installment_lookup"
     if router_domain == "support" and (router_intent in _SUPPORT_FLOW_INTENTS or router_intent):
         return router_intent or "support_faq"
     if router_intent in _SUPPORT_FLOW_INTENTS and any(item.startswith("support:") for item in execution_plan):
@@ -1052,8 +1059,8 @@ def _current_turn_support_intent(router_evidence: Mapping[str, Any]) -> str:
     return ""
 
 
-def _current_turn_support_flow_context(*, router_evidence: Mapping[str, Any]) -> dict[str, Any]:
-    intent = _current_turn_support_intent(router_evidence)
+def _current_turn_support_flow_context(*, router_evidence: Mapping[str, Any], user_text: str = "") -> dict[str, Any]:
+    intent = _current_turn_support_intent(router_evidence, user_text=user_text)
     if not intent:
         return {}
     return {
@@ -1344,7 +1351,7 @@ def transition_current_flow(
         existing_snapshot=existing_snapshot,
         extracted_snapshot=extracted_snapshot,
     )
-    current_turn_support_flow_context = _current_turn_support_flow_context(router_evidence=router_snapshot)
+    current_turn_support_flow_context = _current_turn_support_flow_context(router_evidence=router_snapshot, user_text=user_text)
     active_flow_context = (
         selected_product_flow_context
         or selected_quantity_flow_context
