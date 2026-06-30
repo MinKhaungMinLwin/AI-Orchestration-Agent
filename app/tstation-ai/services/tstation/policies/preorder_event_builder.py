@@ -35,7 +35,12 @@ def can_emit_preorder(contract: Any | None, slots: Mapping[str, Any] | Any | Non
         and response_template in {"", "preOrder"}
         and (action_mode == "purchase_continuation" or intent.startswith("quick_order_reservation"))
     )
-    return bool(contract_ready and _has_ready_preorder_slots(slot_values) and _product_name(slot_values) and _payment_amount(slot_values)[0] is not None)
+    return bool(
+        contract_ready
+        and _has_ready_preorder_slots(slot_values)
+        and _product_name(slot_values)
+        and _payment_amount(slot_values)[0] is not None
+    )
 
 
 def build_preorder_event(
@@ -138,6 +143,14 @@ def _slot_values(slots: Mapping[str, Any] | Any | None) -> dict[str, Any]:
             "price_basis",
             "price_source_tool",
             "payment_amount_source",
+            "cheapest_final_prc",
+            "final_unit_price",
+            "final_prc",
+            "final_price",
+            "finalPrice",
+            "extra_fvr_sale_prc",
+            "sale_prc",
+            "price",
             "car_no",
             "car_nm",
             "car_name",

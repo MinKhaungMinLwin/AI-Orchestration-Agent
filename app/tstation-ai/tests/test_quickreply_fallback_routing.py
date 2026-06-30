@@ -33718,7 +33718,7 @@ def test_response_policy_guard_emits_preorder_when_build_preorder_slots_are_read
     assert event["data"]["orderInfo"]["bookingDateTime"] == "2026년 6월 23일 (화) 17:00"
 
 
-def test_response_policy_guard_preorder_uses_nested_product_payment_context() -> None:
+def test_response_policy_guard_preorder_computes_amount_from_original_price_fields() -> None:
     contract = _transaction_turn_contract(
         "2026년 7월 2일 (목)\n15:00",
         {
@@ -33737,8 +33737,7 @@ def test_response_policy_guard_preorder_uses_nested_product_payment_context() ->
                     "product_name": "다이나프로 HPX",
                     "tire_size": "215/55R18",
                     "ord_qty": 4,
-                    "payment_amount": 558400,
-                    "price_basis": "extra_fvr_sale_prc",
+                    "extra_fvr_sale_prc": 139600,
                     "price_source_tool": "search_product_tool",
                     "pending_intent": "order",
                     "goal_type": "place_order",
@@ -33755,6 +33754,7 @@ def test_response_policy_guard_preorder_uses_nested_product_payment_context() ->
     assert event["data"]["orderInfo"]["paymentAmount"] == 558400
     assert event["data"]["metadata"]["priceBasis"] == "extra_fvr_sale_prc"
     assert event["data"]["metadata"]["priceSourceTool"] == "search_product_tool"
+    assert event["data"]["metadata"]["paymentAmountSource"] == "context_unit_price"
     assert event["data"]["metadata"]["missingPreorderContext"] == []
 
 
