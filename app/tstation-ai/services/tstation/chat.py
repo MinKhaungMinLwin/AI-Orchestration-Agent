@@ -4525,6 +4525,8 @@ class StreamingMultiAgentCoordinator:
             elif isinstance(data, dict) and "stores" in data:
                 stores = data["stores"]
                 data = stores[0] if isinstance(stores, list) and len(stores) == 1 else None
+            elif isinstance(data, list):
+                data = data[0] if len(data) == 1 and isinstance(data[0], dict) else None
 
             if isinstance(data, dict):
                 canonical_tool_data = canonical_context_from_tool_boundary(data)
@@ -4533,13 +4535,29 @@ class StreamingMultiAgentCoordinator:
                     if val:
                         tool_slots[field] = val
                 if tool_name == "search_product_tool" and tool_slots.get("goods_no"):
-                    tire_size = canonical_tool_data.get("tire_size")
+                    tire_size = (
+                        canonical_tool_data.get("tire_size")
+                        or data.get("tire_size")
+                        or data.get("tire_size_1")
+                        or data.get("tireSize")
+                        or data.get("titleTires")
+                    )
                     if tire_size:
                         tool_slots["tire_size"] = tire_size
-                    product_name = canonical_tool_data.get("product_name")
+                    product_name = (
+                        canonical_tool_data.get("product_name")
+                        or data.get("goods_nm")
+                        or data.get("goodsNm")
+                        or data.get("product_name")
+                        or data.get("productName")
+                        or data.get("titleProductName")
+                    )
                     if product_name:
                         tool_slots["tire_model"] = str(product_name).strip()
                         tool_slots["pending_product_name"] = str(product_name).strip()
+                    for key, value in _search_product_price_context(data).items():
+                        if key in {"price_basis", "price_source_tool"} and value not in (None, "", [], {}):
+                            tool_slots[key] = value
 
         if tool_name == "search_product_tool" and tool_succeeded:
             staged_context = _stage_pending_product_context_from_search(
@@ -20741,18 +20759,36 @@ def _single_resolved_search_product_row(tool_result: Mapping[str, Any] | None) -
     items = _search_product_result_items(tool_result)
     if not isinstance(items, list) or len(items) != 1 or not isinstance(items[0], Mapping):
         return None
-    canonical = canonical_context_from_tool_boundary(items[0])
-    goods_no = str(canonical.get("goods_no") or "").strip()
+    raw_item = items[0]
+    canonical = canonical_context_from_tool_boundary(raw_item)
+    goods_no = str(canonical.get("goods_no") or raw_item.get("goods_no") or raw_item.get("goodsNo") or "").strip()
     if not goods_no:
         return None
+    tire_size = normalize_tire_size(
+        str(
+            canonical.get("tire_size")
+            or raw_item.get("tire_size")
+            or raw_item.get("tire_size_1")
+            or raw_item.get("tireSize")
+            or raw_item.get("titleTires")
+            or ""
+        )
+    )
+    product_name = str(
+        canonical.get("product_name")
+        or raw_item.get("goods_nm")
+        or raw_item.get("goodsNm")
+        or raw_item.get("product_name")
+        or raw_item.get("productName")
+        or raw_item.get("titleProductName")
+        or raw_item.get("title")
+        or ""
+    ).strip()
     return {
         "goods_no": goods_no,
-        "tire_size": normalize_tire_size(str(canonical.get("tire_size") or "")) or None,
-        "product_name": str(
-            canonical.get("product_name") or canonical.get("goods_nm") or canonical.get("titleProductName") or ""
-        ).strip()
-        or None,
-        **_search_product_price_context(items[0]),
+        "tire_size": tire_size or None,
+        "product_name": product_name or None,
+        **_search_product_price_context(raw_item),
     }
 
 
@@ -22318,6 +22354,9 @@ def _flow_state_from_purchase_stock_sources(
     }
     availability_context = getattr(slots, "availability_context", None)
     pending_context = availability_context.get("pending_order_context") if isinstance(availability_context, Mapping) else None
+    active_flow_context = (
+        availability_context.get("active_flow_context") if isinstance(availability_context, Mapping) else None
+    )
     dormant_purchase_context = (
         availability_context.get("dormant_purchase_context") if isinstance(availability_context, Mapping) else None
     )
@@ -22330,6 +22369,7 @@ def _flow_state_from_purchase_stock_sources(
     flow_state_before: dict[str, Any] = {}
     for source_context in (
         pending_context if isinstance(pending_context, Mapping) else None,
+        active_flow_context if isinstance(active_flow_context, Mapping) else None,
         dormant_purchase_context if isinstance(dormant_purchase_context, Mapping) else None,
         dormant_stock_context if isinstance(dormant_stock_context, Mapping) else None,
         dormant_transaction_context if isinstance(dormant_transaction_context, Mapping) else None,
@@ -22365,6 +22405,42 @@ def _flow_state_from_purchase_stock_sources(
             "price",
         ):
             value = source_context.get(key)
+            if value in (None, "", [], {}) and key in {
+                "product_name",
+                "tire_model",
+                "pending_product_name",
+                "goods_no",
+                "tire_size",
+                "ord_qty",
+            }:
+                product_context = source_context.get("product")
+                if isinstance(product_context, Mapping):
+                    value = product_context.get(key)
+            if value in (None, "", [], {}) and key in {
+                "payment_amount",
+                "price_basis",
+                "price_source_tool",
+                "cheapest_final_prc",
+                "final_unit_price",
+                "final_prc",
+                "final_price",
+                "finalPrice",
+                "extra_fvr_sale_prc",
+                "sale_prc",
+                "price",
+            }:
+                payment_context = source_context.get("payment")
+                if isinstance(payment_context, Mapping):
+                    value = payment_context.get(key)
+            if value in (None, "", [], {}) and key in {
+                "pending_intent",
+                "goal_type",
+                "availability_intent",
+                "stock_check_mode",
+            }:
+                intent_context = source_context.get("intent")
+                if isinstance(intent_context, Mapping):
+                    value = intent_context.get(key)
             if value not in (None, "", [], {}) and flow_state_before.get(key) in (None, "", [], {}):
                 flow_state_before[key] = value
 
@@ -22698,6 +22774,7 @@ def _apply_purchase_stock_canonical_readthrough(
             isinstance(availability_context.get(key), Mapping)
             for key in (
                 "pending_order_context",
+                "active_flow_context",
                 "dormant_purchase_context",
                 "dormant_stock_context",
                 "dormant_transaction_context",
@@ -22765,6 +22842,14 @@ def _apply_purchase_stock_canonical_readthrough(
             "payment_amount",
             "price_basis",
             "price_source_tool",
+            "cheapest_final_prc",
+            "final_unit_price",
+            "final_prc",
+            "final_price",
+            "finalPrice",
+            "extra_fvr_sale_prc",
+            "sale_prc",
+            "price",
             "pending_intent",
             "goal_type",
             "availability_intent",
@@ -22857,6 +22942,24 @@ def _finalize_purchase_stock_slots_for_persistence(
             and isinstance(updated_slots.availability_context.get("pending_order_context"), Mapping)
             else {}
         )
+        if refreshed_context:
+            refreshed_context = dict(refreshed_context)
+            for key in (
+                "cheapest_final_prc",
+                "final_unit_price",
+                "final_prc",
+                "final_price",
+                "finalPrice",
+                "extra_fvr_sale_prc",
+                "sale_prc",
+                "price",
+            ):
+                value = canonical_values.get("merged", {}).get(key)
+                if value not in (None, "", [], {}) and refreshed_context.get(key) in (None, "", [], {}):
+                    refreshed_context[key] = value
+            updated_context = dict(updated_slots.availability_context or {})
+            updated_context["pending_order_context"] = refreshed_context
+            updated_slots.availability_context = updated_context
         metadata.update({
             "final_persist_rehydrated": True,
             "final_persist_flow_state_after": dict(refreshed_context or {}),
