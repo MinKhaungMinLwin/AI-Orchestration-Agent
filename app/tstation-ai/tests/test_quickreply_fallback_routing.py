@@ -19078,7 +19078,8 @@ def test_datepick_metadata_carries_schedule_selection_ui_action() -> None:
     assert metadata["expected_behavior"] == "slot_fill"
     assert metadata["ui_action"]["entity_type"] == "schedule"
     assert metadata["ui_action"]["fills_slot"] == "requested_cal_day,rsv_hour"
-    assert metadata["slots"] == {}
+    assert metadata["slots"]["shop_id"] == "A0001"
+    assert metadata["slots"]["shop_name"] == "티스테이션 동탄석우점"
     assert metadata["ui_action"]["entity_id"] == "A0001"
 
 
@@ -19880,6 +19881,46 @@ def test_select_schedule_purchase_flow_overrides_stock_metadata_with_existing_pu
     assert updated_context.slot_patch["rsv_hour"] == "16:00"
     assert updated_context.trace_metadata["intent_overrode_ui_metadata"] is True
     assert updated_context.trace_metadata["schedule_action_flow_type"] == "purchase"
+
+
+def test_select_schedule_ui_action_updates_store_name_with_shop_id() -> None:
+    action_context = resolve_ui_action_context(
+        raw_action={
+            "action_type": "select_schedule",
+            "source_intent": "quick_order_reservation",
+            "expected_contract_intent": "quick_order_reservation",
+            "entity_type": "schedule",
+            "entity_id": "F00721",
+            "entity_label": "티스테이션 판교점",
+            "slots": {
+                "requested_cal_day": "20260702",
+                "rsv_hour": "16",
+                "shop_name": "강남점",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            },
+        },
+        selected_vehicle=None,
+        selection_source="ui_action",
+    )
+
+    updated_context = _with_existing_transaction_slot_fill_state(
+        action_context,
+        ConversationSlots(
+            goods_no="G000000309780",
+            tire_size="205/55R16",
+            ord_qty=4,
+            shop_id="OLD01",
+            shop_name="강남점",
+            pending_intent="order",
+            goal_type="place_order",
+        ),
+    )
+
+    assert updated_context.slot_patch["shop_id"] == "F00721"
+    assert updated_context.slot_patch["shop_name"] == "티스테이션 판교점"
+    assert updated_context.slot_patch["store_name"] == "티스테이션 판교점"
+    assert updated_context.trace_metadata["selected_slots"]["shop_name"] == "티스테이션 판교점"
 
 
 def test_select_schedule_stock_flow_keeps_stock_metadata() -> None:
