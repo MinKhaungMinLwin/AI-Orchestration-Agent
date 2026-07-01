@@ -2305,9 +2305,8 @@ def test_product_attribute_no_results_keeps_known_product_and_vehicle_size_conte
     assert result is not None
     assert result["template"] == "quickReply"
     assistant_response = result["data"]["assistantResponse"]
-    assert "225/50R18" in assistant_response
-    assert "옵티모" in assistant_response
-    assert "상품명을 알려주시면" not in assistant_response
+    assert "**옵티모** 225/50R18로 검색된 상품이 없습니다." in assistant_response
+    assert "정확한 상품명이나 규격을 알려주세요." in assistant_response
 
 
 def test_product_attribute_no_results_without_size_mentions_known_product() -> None:
@@ -2323,8 +2322,25 @@ def test_product_attribute_no_results_without_size_mentions_known_product() -> N
     assert result is not None
     assert result["template"] == "quickReply"
     assistant_response = result["data"]["assistantResponse"]
-    assert "옵티모" in assistant_response
-    assert "상품명을 알려주시면" not in assistant_response
+    assert "**옵티모**로 검색된 상품이 없습니다." in assistant_response
+    assert "정확한 상품명이나 규격을 알려주세요." in assistant_response
+
+
+def test_product_search_no_results_uses_search_phrase_when_keyword_and_size_are_present() -> None:
+    text = "ventus evo SUV 구매할래"
+    current_user_text.set(text)
+    current_discovery_response_decision.set(decide_discovery_response(build_discovery_intent_frame(text)))
+
+    result = try_build_template(
+        [_empty_product_attribute_search_entry(keyword="벤투스 evo SUV", size="225/50R17")],
+        "",
+    )
+
+    assert result is not None
+    assert result["template"] == "quickReply"
+    assistant_response = result["data"]["assistantResponse"]
+    assert "**벤투스 evo SUV** 225/50R17로 검색된 상품이 없습니다." in assistant_response
+    assert "정확한 상품명이나 규격을 알려주세요." in assistant_response
 
 
 def test_similar_price_recommendation_with_items_prefers_product_cards() -> None:

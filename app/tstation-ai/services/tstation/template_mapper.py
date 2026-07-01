@@ -2407,11 +2407,11 @@ def _product_attribute_no_results_response(tool_data_list: list[dict]) -> str:
         size = _format_tire_size_for_user(args.get("size"))
         if keyword and size:
             return (
-                f"고객님 차량 규격 **{size}** 기준으로는 **{keyword}** 상품이 확인되지 않아요.\n\n"
-                "다른 차량을 선택하시거나, 같은 상품의 다른 규격을 확인해 드릴게요."
+                f"**{keyword}** {size}로 검색된 상품이 없습니다.\n\n"
+                "정확한 상품명이나 규격을 알려주세요."
             )
         if keyword:
-            return f"**{keyword}** 상품의 요청하신 상세 정보를 찾지 못했어요. 정확한 상품명이나 규격을 알려주세요."
+            return f"**{keyword}**로 검색된 상품이 없습니다.\n\n정확한 상품명이나 규격을 알려주세요."
     return ""
 
 
