@@ -148,6 +148,22 @@ def test_vehicle_best_seller_query_populates_vehicle_query() -> None:
     assert plan.tool_args_patch == {"limit": 5, "months": 3, "vehicle_query": "그랜저"}
 
 
+def test_vehicle_best_seller_query_without_object_noun_or_recency_word() -> None:
+    for text in (
+        "그랜저 인기 많은거 알려줘",
+        "그랜저 잘 팔리는거 뭐야",
+        "K7 잘 나가는거",
+        "그랜저 인기 제품 알려줘",
+    ):
+        assert is_best_seller_request(text)
+        frame = build_discovery_intent_frame(text)
+        plan = plan_discovery_tools(frame)
+
+        assert frame.sub_intent == "best_seller_search"
+        assert plan.preferred_tool == "get_best_selling_products_tool"
+        assert frame.entities["vehicle_query"] in ("그랜저", "K7")
+
+
 def test_general_ev_recommendation_still_uses_recommendation_engine() -> None:
     frame = build_discovery_intent_frame("전기차용 타이어 추천해줘")
     plan = plan_discovery_tools(frame)
