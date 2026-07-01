@@ -12287,6 +12287,18 @@ def test_event_and_deal_list_queries_do_not_force_discovery_keyword_route(user_t
     assert StreamingMultiAgentCoordinator._force_keyword_routing(user_text) is None
 
 
+@pytest.mark.parametrize(
+    "user_text",
+    [
+        "내가 등록해둔 차 중에 gv70에 맞는 타이어 추천",
+        "내가 등록한 차 중에 제타 사이즈가 뭐야",
+        "내차중에 gv70 에 맞는 타이어 추천",
+    ],
+)
+def test_registered_vehicle_model_queries_do_not_force_keyword_route(user_text: str) -> None:
+    assert StreamingMultiAgentCoordinator._force_keyword_routing(user_text) is None
+
+
 def test_generic_application_question_does_not_force_route_to_pickup_support() -> None:
     result = StreamingMultiAgentCoordinator._force_keyword_routing("신청 방법 안내해줘")
 
