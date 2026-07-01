@@ -52,14 +52,23 @@ def _normalize_vehicle_anchor(value: str | None) -> str:
     return re.sub(r"[^0-9A-Za-z가-힣]+", "", str(value or "")).lower()
 
 
-def _named_my_vehicle_anchor(text: str) -> str | None:
-    for match in _MY_NAMED_VEHICLE_RE.finditer(text or ""):
+def _named_vehicle_anchor_from_pattern(text: str | None, pattern: re.Pattern[str]) -> str | None:
+    for match in pattern.finditer(text or ""):
         raw = re.sub(r"\s+", " ", match.group("model") or "").strip(" ._-")
         normalized = _normalize_vehicle_anchor(raw)
         if len(normalized) < 2 or normalized in _MY_NAMED_VEHICLE_STOPWORDS:
             continue
         return raw
     return None
+
+
+def _named_my_vehicle_anchor(text: str) -> str | None:
+    registered_anchor = _named_vehicle_anchor_from_pattern(text, _REGISTERED_NAMED_VEHICLE_RE)
+    if registered_anchor:
+        return registered_anchor
+    if has_registered_vehicle_ownership_signal(text):
+        return None
+    return _named_vehicle_anchor_from_pattern(text, _MY_NAMED_VEHICLE_RE)
 
 
 def _price_range_from_text(text: str) -> dict[str, int]:
@@ -99,6 +108,19 @@ def _is_general_tire_recommendation_request(text: str) -> bool:
     )
 
 
+def has_registered_vehicle_ownership_signal(text: str | None) -> bool:
+    return bool(_REGISTERED_VEHICLE_OWNERSHIP_RE.search(text or ""))
+
+
+def has_registered_vehicle_size_lookup_signal(text: str | None) -> bool:
+    value = text or ""
+    if _VEHICLE_SIZE_LOOKUP_RE.search(value):
+        return True
+    if not has_registered_vehicle_ownership_signal(value):
+        return False
+    return bool(re.search(r"타이어\s*사이즈|타이어\s*규격|규격|사이즈", value, re.IGNORECASE))
+
+
 _SIZE_COMPACT_RE = re.compile(r"\b(\d{3})\s*/?\s*(\d)(\d)(?:\3)?\s*R?\s*(\d{2})\b", re.IGNORECASE)
 _SUMMER_RE = re.compile(r"여름|썸머|summer", re.IGNORECASE)
 _WINTER_RE = re.compile(r"윈터|겨울|스노우|snow|winter", re.IGNORECASE)
@@ -135,6 +157,21 @@ _MY_VEHICLE_RECOMMENDATION_RE = re.compile(
     r"(?:적합|맞는|맞춰|기준).{0,24}(?:내\s*차|내차|내\s*차량|내차량|등록\s*차량|등록차)",
     re.IGNORECASE,
 )
+_REGISTERED_VEHICLE_OWNERSHIP_RE = re.compile(
+    r"내(?:가)?\s*(?:등록(?:한|해\s*둔|해둔|된)?|보유(?:한)?)\s*(?:차|차량)|"
+    r"내\s*등록\s*(?:차|차량)|"
+    r"등록(?:한|해\s*둔|해둔|된)?\s*내\s*(?:차|차량)",
+    re.IGNORECASE,
+)
+_REGISTERED_NAMED_VEHICLE_RE = re.compile(
+    r"(?:내(?:가)?\s*(?:등록(?:한|해\s*둔|해둔|된)?|보유(?:한)?)\s*(?:차|차량)|"
+    r"내\s*등록\s*(?:차|차량)|등록(?:한|해\s*둔|해둔|된)?\s*내\s*(?:차|차량)|등록\s*차량|등록차)"
+    r"\s*(?:목록\s*)?중(?:에|에서)?\s*"
+    r"(?P<model>[0-9A-Za-z가-힣][0-9A-Za-z가-힣\s._-]{1,24}?)(?="
+    r"\s*(?:기준|에|에는|으로|로|타이어|상품|추천|맞|적합|사이즈|규격|$)"
+    r")",
+    re.IGNORECASE,
+)
 _MY_NAMED_VEHICLE_RE = re.compile(
     r"(?:내\s*차|내차|내\s*차량|내차량|내)\s*"
     r"(?:중(?:에|에서)?\s*)?"
@@ -154,6 +191,8 @@ _MY_NAMED_VEHICLE_STOPWORDS = frozenset({
     "추천",
     "등록차",
     "등록차량",
+    "등록한차",
+    "등록한차량",
     "중",
     "중에",
 })
@@ -860,8 +899,11 @@ def build_discovery_intent_frame(
         named_vehicle_anchor = _named_my_vehicle_anchor(text)
         if named_vehicle_anchor:
             entities["named_registered_vehicle_anchor"] = named_vehicle_anchor
-    if _VEHICLE_SIZE_LOOKUP_RE.search(text):
+    if has_registered_vehicle_size_lookup_signal(text):
         entities["vehicle_information_request"] = "tire_size_lookup"
+        named_vehicle_anchor = _named_my_vehicle_anchor(text)
+        if named_vehicle_anchor:
+            entities["named_registered_vehicle_anchor"] = named_vehicle_anchor
     scenario = recommendation_scenario_from_text(
         text,
         router_recommendation_scenario or context_recommendation_scenario,

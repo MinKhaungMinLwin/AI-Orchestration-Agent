@@ -4,6 +4,7 @@ from services.tstation.policies.discovery_intent_policy import (
     build_discovery_intent_frame,
     extract_best_seller_vehicle_query,
     extract_quantity_options,
+    has_registered_vehicle_ownership_signal,
     is_best_seller_request,
     is_default_benefit_request,
     is_default_tire_shopping_request,
@@ -155,6 +156,28 @@ def test_general_ev_recommendation_still_uses_recommendation_engine() -> None:
     assert frame.sub_intent == "condition_recommendation"
     assert plan.preferred_tool == "get_products_recommendations_tool"
     assert plan.tool_args_patch == {"vehicle_type": "ev"}
+
+
+def test_registered_vehicle_size_lookup_variants_use_vehicle_information_contract() -> None:
+    cases = (
+        ("내가 등록한 차 중에 제타 사이즈가 뭐야", "제타"),
+        ("내 등록 차 중 제타 규격 알려줘", "제타"),
+        ("내가 등록해둔 차량 타이어 사이즈 보여줘", None),
+    )
+    for text, expected_vehicle_anchor in cases:
+        frame = build_discovery_intent_frame(text)
+        plan = plan_discovery_tools(frame)
+
+        assert has_registered_vehicle_ownership_signal(text)
+        assert frame.intent == "product_description"
+        assert frame.sub_intent == "vehicle_information"
+        assert frame.entities["vehicle_information_request"] == "tire_size_lookup"
+        if expected_vehicle_anchor:
+            assert frame.entities["named_registered_vehicle_anchor"] == expected_vehicle_anchor
+        else:
+            assert "named_registered_vehicle_anchor" not in frame.entities
+        assert plan.allowed_tools == ("get_my_cars_tool",)
+        assert plan.preferred_tool == "get_my_cars_tool"
 
 
 def test_ev_low_noise_recommendation_keeps_ev_axis() -> None:
