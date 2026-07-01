@@ -68,6 +68,152 @@ _PAYMENT_UNIT_PRICE_FIELDS = (
     "sale_prc",
     "price",
 )
+_DEPENDENCY_FIELD_BLOCKS: dict[str, frozenset[str]] = {
+    "product_changed": frozenset({
+        "goods_no",
+        "shop_id",
+        "shop_name",
+        "store_name",
+        "requested_cal_day",
+        "rsv_hour",
+        "payment_amount",
+        "payment_amount_source",
+        "price_basis",
+        "price_source_tool",
+        "payment_amount_stale",
+        "sale_prc",
+        "extra_fvr_sale_prc",
+        "cheapest_final_prc",
+        "final_unit_price",
+        "final_prc",
+        "final_price",
+        "finalPrice",
+        "price",
+        "wage_prc",
+    }),
+    "tire_size_changed": frozenset({
+        "goods_no",
+        "shop_id",
+        "shop_name",
+        "store_name",
+        "requested_cal_day",
+        "rsv_hour",
+        "payment_amount",
+        "payment_amount_source",
+        "price_basis",
+        "price_source_tool",
+        "payment_amount_stale",
+        "sale_prc",
+        "extra_fvr_sale_prc",
+        "cheapest_final_prc",
+        "final_unit_price",
+        "final_prc",
+        "final_price",
+        "finalPrice",
+        "price",
+        "wage_prc",
+    }),
+    "quantity_changed": frozenset({
+        "requested_cal_day",
+        "rsv_hour",
+        "payment_amount",
+        "payment_amount_source",
+        "price_basis",
+        "price_source_tool",
+        "payment_amount_stale",
+        "sale_prc",
+        "extra_fvr_sale_prc",
+        "cheapest_final_prc",
+        "final_unit_price",
+        "final_prc",
+        "final_price",
+        "finalPrice",
+        "price",
+        "wage_prc",
+    }),
+    "store_changed": frozenset({
+        "shop_id",
+        "shop_name",
+        "store_name",
+        "requested_cal_day",
+        "rsv_hour",
+        "payment_amount",
+        "payment_amount_source",
+        "price_basis",
+        "price_source_tool",
+        "payment_amount_stale",
+    }),
+    "region_changed": frozenset({
+        "shop_id",
+        "shop_name",
+        "store_name",
+        "requested_cal_day",
+        "rsv_hour",
+        "payment_amount",
+        "payment_amount_source",
+        "price_basis",
+        "price_source_tool",
+        "payment_amount_stale",
+    }),
+    "schedule_changed": frozenset({
+        "payment_amount",
+        "payment_amount_source",
+        "payment_amount_stale",
+    }),
+    "vehicle_changed": frozenset({
+        "goods_no",
+        "product_name",
+        "tire_model",
+        "pending_product_name",
+        "tire_size",
+        "shop_id",
+        "shop_name",
+        "store_name",
+        "requested_cal_day",
+        "rsv_hour",
+        "payment_amount",
+        "payment_amount_source",
+        "price_basis",
+        "price_source_tool",
+        "payment_amount_stale",
+        "sale_prc",
+        "extra_fvr_sale_prc",
+        "cheapest_final_prc",
+        "final_unit_price",
+        "final_prc",
+        "final_price",
+        "finalPrice",
+        "price",
+        "wage_prc",
+    }),
+    "product_size_no_result": frozenset({
+        "goods_no",
+        "tire_size",
+        "shop_id",
+        "shop_name",
+        "store_name",
+        "requested_cal_day",
+        "rsv_hour",
+        "payment_amount",
+        "payment_amount_source",
+        "price_basis",
+        "price_source_tool",
+        "payment_amount_stale",
+        "sale_prc",
+        "extra_fvr_sale_prc",
+        "cheapest_final_prc",
+        "final_unit_price",
+        "final_prc",
+        "final_price",
+        "finalPrice",
+        "price",
+        "wage_prc",
+    }),
+}
+_DEPENDENCY_EVENT_KEYS = (
+    "flow_state_dependency_event",
+    "flow_state_dependency_events",
+)
 _INTENT_FIELDS = (
     "sub_flow_type",
     "pending_intent",
@@ -412,6 +558,36 @@ def _first_non_empty(*values: Any) -> Any:
         if value not in _EMPTY_VALUES:
             return value
     return None
+
+
+def flow_state_dependency_events(context: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    values = _non_empty_mapping(context)
+    events: list[dict[str, Any]] = []
+    for key in _DEPENDENCY_EVENT_KEYS:
+        raw = values.get(key)
+        if isinstance(raw, Mapping):
+            event = _non_empty_mapping(raw)
+            if event:
+                events.append(event)
+        elif isinstance(raw, list):
+            for item in raw:
+                if isinstance(item, Mapping):
+                    event = _non_empty_mapping(item)
+                    if event:
+                        events.append(event)
+    return events
+
+
+def flow_state_dependency_blocked_fields(context: Mapping[str, Any] | None) -> set[str]:
+    blocked: set[str] = set()
+    for event in flow_state_dependency_events(context):
+        event_name = str(event.get("event") or event.get("type") or "").strip()
+        blocked.update(_DEPENDENCY_FIELD_BLOCKS.get(event_name, frozenset()))
+        for field_name in event.get("blocked_fields") or ():
+            field = str(field_name or "").strip()
+            if field:
+                blocked.add(field)
+    return blocked
 
 
 def _flow_quantity(value: Any) -> int | None:

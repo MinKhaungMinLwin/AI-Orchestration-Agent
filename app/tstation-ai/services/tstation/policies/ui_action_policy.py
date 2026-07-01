@@ -20,7 +20,7 @@ from services.tstation.policies.transaction_response_policy import decide_transa
 from services.tstation.policies.turn_contract import build_turn_contract
 from services.tstation.policies.discovery_intent_policy import build_discovery_intent_frame, normalize_tire_size
 from services.tstation.policies.cta_registry import cta_trace_metadata, normalize_quickreply_ctas
-from services.tstation.policies.flow_state import effective_flow_type
+from services.tstation.policies.flow_state import effective_flow_type, upsert_dormant_flow
 from services.tstation.policies.resolved_context import (
     canonical_context_from_slots,
     canonical_context_from_template_boundary,
@@ -86,7 +86,11 @@ _PRODUCT_NAME_HINT_STOP_RE = re.compile(
 _COMPACT_TIRE_SIZE_RE = re.compile(r"\b\d{3}\s*[/ ]?\s*\d{2}\s*(?:R|\s|/)?\s*\d{2}\b", re.IGNORECASE)
 _PRODUCT_DEPENDENT_EXECUTION_FIELDS = frozenset({
     "goods_no",
+    "shop_id",
+    "shop_name",
+    "store_name",
     "payment_amount",
+    "payment_amount_source",
     "price_basis",
     "price_source_tool",
     "payment_amount_stale",
@@ -99,6 +103,7 @@ _PRODUCT_DEPENDENT_EXECUTION_FIELDS = frozenset({
 })
 _PRODUCT_CONTEXT_NAMES = (
     "pending_order_context",
+    "active_flow_context",
     "dormant_purchase_context",
     "dormant_stock_context",
     "dormant_transaction_context",
@@ -776,7 +781,18 @@ def replace_current_turn_product_context(
         },
         source="current_turn_product_replacement",
     )
-    for slot_name in ("requested_cal_day", "rsv_hour"):
+    for slot_name in (
+        "goods_no",
+        "shop_id",
+        "shop_name",
+        "store_name",
+        "requested_cal_day",
+        "rsv_hour",
+        "payment_amount",
+        "payment_amount_source",
+        "price_basis",
+        "price_source_tool",
+    ):
         if hasattr(updated, slot_name):
             setattr(updated, slot_name, None)
     if hasattr(updated, "comparison_context"):
@@ -791,22 +807,58 @@ def replace_current_turn_product_context(
         if isinstance(getattr(updated, "availability_context", None), Mapping)
         else {}
     )
+    dependency_event = {
+        "event": "product_changed",
+        "previous_product_name": existing_product,
+        "replacement_product_name": current_product,
+        "blocked_fields": sorted(_PRODUCT_DEPENDENT_EXECUTION_FIELDS),
+        "preserved_fields": ["tire_size", "ord_qty", "region", "place_query"],
+    }
     cleared_context_fields: dict[str, list[str]] = {}
     for context_name in _PRODUCT_CONTEXT_NAMES:
         raw_context = availability_context.get(context_name)
         if not isinstance(raw_context, Mapping):
             continue
         context_values = dict(raw_context)
+        availability_context["dormant_flows"] = upsert_dormant_flow(
+            availability_context.get("dormant_flows") if isinstance(availability_context.get("dormant_flows"), list) else [],
+            {
+                **context_values,
+                "status": "dormant",
+                "dormant_reason": "product_changed",
+                "replacement_product_name": current_product,
+            },
+        )
         cleared: list[str] = []
         for slot_name in _PRODUCT_DEPENDENT_EXECUTION_FIELDS:
             if context_values.pop(slot_name, None) not in (None, "", [], {}):
                 cleared.append(slot_name)
+        for section_name in ("store", "schedule", "payment"):
+            section = context_values.get(section_name)
+            if not isinstance(section, Mapping):
+                continue
+            section_values = dict(section)
+            for slot_name in tuple(section_values):
+                if section_values.pop(slot_name, None) not in (None, "", [], {}):
+                    cleared.append(f"{section_name}.{slot_name}")
+            context_values[section_name] = section_values
+        product_section = context_values.get("product")
+        if isinstance(product_section, Mapping):
+            product_values = dict(product_section)
+            if product_values.pop("goods_no", None) not in (None, "", [], {}):
+                cleared.append("product.goods_no")
+            product_values["product_name"] = current_product
+            product_values["tire_model"] = current_product
+            product_values["pending_product_name"] = current_product
+            context_values["product"] = product_values
         context_values["product_name"] = current_product
         context_values["tire_model"] = current_product
         context_values["pending_product_name"] = current_product
+        context_values["flow_state_dependency_event"] = dependency_event
         availability_context[context_name] = context_values
         if cleared:
             cleared_context_fields[context_name] = sorted(cleared)
+    availability_context["flow_state_dependency_event"] = dependency_event
     if availability_context and hasattr(updated, "availability_context"):
         updated.availability_context = availability_context
 

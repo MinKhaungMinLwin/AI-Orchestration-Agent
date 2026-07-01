@@ -97,6 +97,8 @@ from services.tstation.policies.flow_state import (
     apply_router_evidence_snapshot,
     commit_flow_state,
     commit_purchase_flow_state,
+    flow_state_dependency_blocked_fields,
+    flow_state_dependency_events,
     is_purchase_flow_context,
     purchase_context_vehicle_selection_patch,
     recommendation_listcar_flow_delta,
@@ -22308,6 +22310,12 @@ def _flow_state_from_purchase_stock_sources(
     prev_tool_data: list[dict] | None = None,
     current_slot_delta: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    def _flow_product_identity_key(value: object) -> str:
+        text = str(value or "").strip().lower()
+        if not text:
+            return ""
+        return re.sub(r"[\s\-_/()]+", "", text)
+
     current_values = {
         "product_name": getattr(slots, "tire_model", None)
         or getattr(slots, "product_name", None)
@@ -22329,6 +22337,16 @@ def _flow_state_from_purchase_stock_sources(
         "stock_check_mode": getattr(slots, "stock_check_mode", None),
     }
     availability_context = getattr(slots, "availability_context", None)
+    dependency_events = flow_state_dependency_events(availability_context if isinstance(availability_context, Mapping) else {})
+    dependency_blocked_fields = flow_state_dependency_blocked_fields(
+        availability_context if isinstance(availability_context, Mapping) else {}
+    )
+    dependency_event_names = {
+        str(event.get("event") or event.get("type") or "").strip()
+        for event in dependency_events
+        if str(event.get("event") or event.get("type") or "").strip()
+    }
+    product_changed_dependency = "product_changed" in dependency_event_names
     pending_context = availability_context.get("pending_order_context") if isinstance(availability_context, Mapping) else None
     active_flow_context = (
         availability_context.get("active_flow_context") if isinstance(availability_context, Mapping) else None
@@ -22380,6 +22398,8 @@ def _flow_state_from_purchase_stock_sources(
             "sale_prc",
             "price",
         ):
+            if key in dependency_blocked_fields:
+                continue
             value = source_context.get(key)
             if value in (None, "", [], {}) and key in {
                 "product_name",
@@ -22431,18 +22451,24 @@ def _flow_state_from_purchase_stock_sources(
             continue
         canonical = canonical_context_from_template_boundary(template_values_source)
         for key, value in canonical.items():
+            if key in dependency_blocked_fields:
+                continue
             if value not in (None, "", [], {}) and template_values.get(key) in (None, "", [], {}):
                 template_values[key] = value
 
     if isinstance(latest_datepick_tmpl, Mapping):
         datepick_values = datepick_slot_values_from_data(latest_datepick_tmpl) or {}
         for key in ("requested_cal_day", "rsv_hour", "shop_id", "shop_name", "goods_no", "product_name", "payment_amount"):
+            if key in dependency_blocked_fields:
+                continue
             value = datepick_values.get(key)
             if value not in (None, "", [], {}) and template_values.get(key) in (None, "", [], {}):
                 template_values[key] = value
     if isinstance(latest_preorder_tmpl, Mapping):
         preorder_values = preorder_slot_values_from_data(latest_preorder_tmpl) or {}
         for key in ("requested_cal_day", "rsv_hour", "shop_id", "shop_name", "goods_no", "product_name", "payment_amount"):
+            if key in dependency_blocked_fields:
+                continue
             value = preorder_values.get(key)
             if value not in (None, "", [], {}) and template_values.get(key) in (None, "", [], {}):
                 template_values[key] = value
@@ -22464,16 +22490,35 @@ def _flow_state_from_purchase_stock_sources(
             current_tire_size = normalize_tire_size(
                 str(current_values.get("tire_size") or flow_state_before.get("tire_size") or "")
             )
+            current_product_identity = _flow_product_identity_key(
+                str(
+                    current_values.get("product_name")
+                    or current_values.get("tire_model")
+                    or current_values.get("pending_product_name")
+                    or ""
+                )
+            )
             for row in rows:
                 canonical_row = canonical_context_from_tool_boundary(row)
                 row_goods_no = str(canonical_row.get("goods_no") or "").strip()
                 row_tire_size = normalize_tire_size(str(canonical_row.get("tire_size") or ""))
+                row_product_identity = _flow_product_identity_key(str(canonical_row.get("product_name") or ""))
+                if product_changed_dependency and current_product_identity and row_product_identity:
+                    if row_product_identity != current_product_identity and not _is_strong_product_name_match(
+                        current_values.get("product_name")
+                        or current_values.get("tire_model")
+                        or current_values.get("pending_product_name"),
+                        canonical_row.get("product_name"),
+                    ):
+                        continue
                 if current_goods_no and row_goods_no != current_goods_no:
                     continue
                 if current_tire_size and row_tire_size and row_tire_size != current_tire_size:
                     continue
                 matched_row = row
                 break
+            if product_changed_dependency and matched_row is None:
+                continue
             canonical_row = canonical_context_from_tool_boundary(matched_row or rows[0])
             for key in (
                 "goods_no",
@@ -22499,6 +22544,8 @@ def _flow_state_from_purchase_stock_sources(
 
         price_data = parsed_data.get("data", parsed_data) if isinstance(parsed_data, Mapping) else parsed_data
         preview_payload = price_data if tool_name == "transaction_store_preview_tool" and isinstance(price_data, Mapping) else None
+        if product_changed_dependency and not str(current_values.get("goods_no") or "").strip():
+            continue
         if tool_name == "transaction_store_preview_tool" and isinstance(price_data, Mapping):
             preview_candidates: list[Mapping[str, Any]] = []
             stores = price_data.get("stores")
@@ -22567,6 +22614,8 @@ def _flow_state_from_purchase_stock_sources(
                     "sale_prc",
                     "price",
                 ):
+                    if key in dependency_blocked_fields:
+                        continue
                     value = canonical_candidate.get(key) if key in {
                         "goods_no",
                         "product_name",
@@ -22620,7 +22669,11 @@ def _flow_state_from_purchase_stock_sources(
                     if preview_payment_details.get(key) not in (None, "", [], {})
                 }
             if preview_payment:
-                tool_values.update(preview_payment)
+                tool_values.update({
+                    key: value
+                    for key, value in preview_payment.items()
+                    if key not in dependency_blocked_fields
+                })
                 tool_values["payment_amount_source"] = preview_payment_details.get("payment_amount_source")
                 tool_values["payment_amount_missing_reason"] = preview_payment_details.get("payment_amount_missing_reason")
             elif preview_payment_details.get("payment_amount_missing_reason"):
@@ -22790,10 +22843,15 @@ def _apply_purchase_stock_canonical_readthrough(
     updated_slots = slots.apply_runtime_values(slot_patch, source="purchase_stock_canonical_readthrough", fill_only=True)
     context = dict(getattr(updated_slots, "availability_context", None) or {})
     pending_context = dict(context.get("pending_order_context") or {})
+    dependency_blocked_fields = flow_state_dependency_blocked_fields(context)
+    if dependency_blocked_fields:
+        pending_context = {
+            key: value for key, value in pending_context.items() if key not in dependency_blocked_fields
+        }
     merged_candidate = {
         key: value
         for key, value in canonical_values["merged"].items()
-        if value not in (None, "", [], {})
+        if value not in (None, "", [], {}) and key not in dependency_blocked_fields
     }
     if is_purchase_flow_context(pending_context, merged_candidate):
         commit_result = commit_purchase_flow_state(

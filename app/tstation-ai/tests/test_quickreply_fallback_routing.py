@@ -16383,7 +16383,7 @@ def test_runtime_product_or_size_change_invalidates_goods_no() -> None:
     assert changed_rear.goods_no is None
 
 
-def test_current_turn_product_replacement_clears_product_dependent_context_but_keeps_size_qty_store() -> None:
+def test_current_turn_product_replacement_clears_product_dependent_context_but_keeps_size_qty() -> None:
     slots = ConversationSlots(
         goods_no="G-KINERGY",
         pending_product_name="Kinergy EX",
@@ -16422,7 +16422,7 @@ def test_current_turn_product_replacement_clears_product_dependent_context_but_k
     assert updated.tire_model == "Ventus S2 AS"
     assert updated.tire_size == "225/45R19"
     assert updated.ord_qty == 2
-    assert updated.shop_name == "판교점"
+    assert updated.shop_name is None
     assert updated.goods_no is None
     assert updated.payment_amount is None
     assert updated.requested_cal_day is None
@@ -16433,11 +16433,125 @@ def test_current_turn_product_replacement_clears_product_dependent_context_but_k
     assert pending_context["pending_product_name"] == "Ventus S2 AS"
     assert pending_context["tire_size"] == "225/45R19"
     assert pending_context["ord_qty"] == 2
-    assert pending_context["shop_name"] == "판교점"
+    assert "shop_name" not in pending_context
     assert "goods_no" not in pending_context
     assert "payment_amount" not in pending_context
     assert "requested_cal_day" not in pending_context
     assert "rsv_hour" not in pending_context
+    assert updated.availability_context["flow_state_dependency_event"]["event"] == "product_changed"
+    assert updated.availability_context["dormant_flows"]
+
+
+def test_product_change_dependency_blocks_stale_goods_store_schedule_readthrough() -> None:
+    slots = ConversationSlots(
+        tire_model="Dynapro HPX",
+        pending_product_name="Dynapro HPX",
+        tire_size="245/45R19",
+        ord_qty=2,
+        region="분당",
+        pending_intent="order",
+        goal_type="place_order",
+        availability_context={
+            "flow_state_dependency_event": {
+                "event": "product_changed",
+                "previous_product_name": "벤투스 S2 AS",
+                "replacement_product_name": "Dynapro HPX",
+            },
+            "pending_order_context": {
+                "goods_no": "G000000310126",
+                "product_name": "Dynapro HPX",
+                "tire_model": "Dynapro HPX",
+                "pending_product_name": "Dynapro HPX",
+                "tire_size": "245/45R19",
+                "ord_qty": 2,
+                "region": "분당",
+                "shop_id": "F00071",
+                "shop_name": "티스테이션 분당정자점",
+                "sale_prc": 231700,
+                "extra_fvr_sale_prc": 180500,
+                "price_basis": "extra_fvr_sale_prc",
+                "price_source_tool": "search_product_tool",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            },
+            "active_flow_context": {
+                "flow_type": "commerce",
+                "status": "active",
+                "flow_step": "product_selected",
+                "product": {
+                    "goods_no": "G000000310126",
+                    "product_name": "벤투스 S2 AS",
+                    "tire_model": "벤투스 S2 AS",
+                    "pending_product_name": "벤투스 S2 AS",
+                    "tire_size": "245/45R19",
+                    "ord_qty": 2,
+                },
+                "store": {
+                    "shop_id": "F00071",
+                    "shop_name": "티스테이션 분당정자점",
+                    "region": "분당",
+                },
+                "payment": {
+                    "sale_prc": 231700,
+                    "extra_fvr_sale_prc": 180500,
+                    "price_basis": "extra_fvr_sale_prc",
+                    "price_source_tool": "search_product_tool",
+                },
+                "intent": {"pending_intent": "order", "goal_type": "place_order"},
+            },
+        },
+    )
+    latest_datepick = {
+        "template": "datepick",
+        "data": {
+            "metadata": {
+                "goodsNo": "G000000310126",
+                "shopId": "F00071",
+                "shopName": "티스테이션 분당정자점",
+            }
+        },
+    }
+
+    updated, metadata = _apply_purchase_stock_canonical_readthrough(
+        slots=slots,
+        user_text="다이나프로 hpx 로 바꿀래",
+        latest_datepick_tmpl=latest_datepick,
+        prev_tool_data=[
+            {
+                "tool": "search_product_tool",
+                "data": {
+                    "status": "success",
+                    "data": {
+                        "items": [
+                            {
+                                "goods_no": "G000000310126",
+                                "goods_nm": "벤투스 S2 AS",
+                                "tire_size_1": "245/45R19",
+                                "extra_fvr_sale_prc": 180500,
+                            }
+                        ]
+                    },
+                },
+            }
+        ],
+        current_slot_delta={"product_name": "Dynapro HPX"},
+    )
+
+    assert metadata["flow_state_read_applied"] is True
+    assert updated.goods_no is None
+    assert updated.shop_id is None
+    assert updated.shop_name is None
+    assert updated.tire_model == "Dynapro HPX"
+    assert updated.tire_size == "245/45R19"
+    assert updated.ord_qty == 2
+    assert "goods_no" not in metadata["flow_state_after"]
+    assert "shop_id" not in metadata["flow_state_after"]
+    assert "extra_fvr_sale_prc" not in metadata["flow_state_after"]
+    pending_context = updated.availability_context["pending_order_context"]
+    assert "goods_no" not in pending_context
+    assert "shop_id" not in pending_context
+    assert pending_context["pending_product_name"] == "Dynapro HPX"
+    assert pending_context["tire_size"] == "245/45R19"
 
 
 def test_current_turn_same_product_does_not_clear_existing_goods_no() -> None:
