@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import asyncio
 
-from services.tstation.executors.contract_required_tool_executor import _recover_contract_required_tool
+from services.tstation.executors.contract_required_tool_executor import (
+    _recover_contract_required_tool,
+    contract_required_tool_start_event,
+)
 from services.tstation.policies.contract_direct_executor import evaluate_contract_direct_path
 from services.tstation.policies.turn_contract import TurnContract
 
@@ -196,6 +199,35 @@ def test_registered_vehicle_direct_executor_runs_car_lookup_then_recommendation(
     assert calls[1][1]["vehicle_type"] == "passenger"
     assert calls[1][1]["rcmd_type"] == "low_vibration"
     assert recovery["event"]["template"] == "product"
+
+
+def test_contract_direct_executor_previews_tool_start_status_before_recovery() -> None:
+    contract = TurnContract(
+        domain="discovery",
+        intent="product_recommendation",
+        sub_intent="vehicle_resolved_recommendation",
+        known_slots={"named_registered_vehicle_anchor": "제타"},
+        allowed_tools=("get_my_cars_tool", "get_products_recommendations_tool"),
+        preferred_tool="get_my_cars_tool",
+        tool_args_patch={"rcmd_type": "low_vibration"},
+        response_decision={"template": "product", "metadata": {"response_shape_key": "vehicle_resolved_recommendation"}},
+    )
+
+    event = contract_required_tool_start_event(
+        turn_contract=contract,
+        user_text="내가 등록해놓은 제타에 맞는 정숙성 좋은 타이어 추천해줘",
+        merged_slots=None,
+        blocked_fast_path_source="contract_direct_executor:registered_vehicle_recommendation",
+        member_no="M123",
+    )
+
+    assert event == {
+        "type": "status",
+        "status": "tool_start",
+        "tool": "get_my_cars_tool",
+        "display_name": "등록 차량 조회 중...",
+        "source_domain": "discovery",
+    }
 
 
 def test_registered_vehicle_direct_executor_falls_back_to_general_recommendation_when_no_match(monkeypatch) -> None:
