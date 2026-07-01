@@ -844,10 +844,16 @@ def _slot_data_for_tool_event(tool_name: str, tool_result: Any) -> dict | None:
     goods_no = item.get("goods_no")
     if not goods_no:
         return None
-    slot_item = {"goods_no": goods_no}
+    slot_item: dict[str, Any] = {"goods_no": goods_no}
     tire_size = item.get("tire_size") or item.get("tire_size_1") or item.get("tireSize")
     if tire_size:
         slot_item["tire_size_1"] = tire_size
+    goods_nm = item.get("goods_nm") or item.get("goodsNm") or item.get("titleProductName")
+    if goods_nm:
+        slot_item["goods_nm"] = goods_nm
+    for price_key in ("extra_fvr_sale_prc", "sale_prc", "final_prc", "final_price", "wage_prc"):
+        if item.get(price_key) not in (None, "", 0):
+            slot_item[price_key] = item[price_key]
     return {"status": tool_result.get("status", "success"), "data": {"items": [slot_item]}}
 
 

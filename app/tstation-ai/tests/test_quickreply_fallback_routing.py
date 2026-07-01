@@ -2995,6 +2995,24 @@ def test_vehicle_selection_slot_values_normalize_ev_model_to_vehicle_type() -> N
     assert slot_values["vehicle_type"] == "ev"
 
 
+def test_vehicle_selection_slot_values_normalize_sedan_token_to_passenger() -> None:
+    slot_values = _vehicle_selection_slot_values({
+        "car": {
+            "licensePlate": "56모2162",
+            "info": "BMW 3시리즈 그란 투리스모(6세대)",
+        },
+        "meta": {
+            "carNo": "56모2162",
+            "tireSize": "225/50R17",
+            "carNm": "3-series(F30) 320d A/T",
+            "carType": "sedan",
+        },
+    })
+
+    assert slot_values["car_type"] == "sedan"
+    assert slot_values["vehicle_type"] == "passenger"
+
+
 def test_vehicle_selection_slot_values_preserve_staggered_front_rear_without_default_selected_size() -> None:
     slot_values = _vehicle_selection_slot_values({
         "car": {
@@ -6236,7 +6254,16 @@ def test_search_product_tool_slot_data_preserves_goods_no_for_chained_transactio
 
     assert slot_data == {
         "status": "success",
-        "data": {"items": [{"goods_no": "G000000309783", "tire_size_1": "225/45R17"}]},
+        "data": {
+            "items": [
+                {
+                    "goods_no": "G000000309783",
+                    "tire_size_1": "225/45R17",
+                    "goods_nm": "벤투스 S2 AS",
+                    "sale_prc": 150000,
+                }
+            ]
+        },
     }
     changed = StreamingMultiAgentCoordinator._apply_tool_derived_slots(
         slots,
@@ -6249,6 +6276,49 @@ def test_search_product_tool_slot_data_preserves_goods_no_for_chained_transactio
     assert slots.goods_no == "G000000309783"
     assert slots.tire_size == "225/45R17"
     assert slots.pending_intent == "stock"
+
+
+def test_search_product_tool_slot_data_writes_product_name_and_price_to_active_flow_context() -> None:
+    """goods_nm and price fields in slot_data must propagate into active_flow_context.product/payment."""
+    tool_result = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "goods_no": "G000000310126",
+                    "goods_nm": "벤투스 S2 AS",
+                    "tire_size_1": "245/45R19",
+                    "sale_prc": 231700,
+                    "extra_fvr_sale_prc": 180500,
+                }
+            ]
+        },
+    }
+
+    slot_data = _slot_data_for_tool_event("search_product_tool", tool_result)
+    assert slot_data is not None
+    item = slot_data["data"]["items"][0]
+    assert item["goods_nm"] == "벤투스 S2 AS"
+    assert item["sale_prc"] == 231700
+    assert item["extra_fvr_sale_prc"] == 180500
+
+    slots = ConversationSlots(pending_intent="order")
+    StreamingMultiAgentCoordinator._apply_tool_derived_slots(
+        slots,
+        "search_product_tool",
+        slot_data,
+        {"keyword": "벤투스 S2 AS", "size": "245/45R19"},
+    )
+
+    assert slots.pending_product_name == "벤투스 S2 AS" or slots.tire_model == "벤투스 S2 AS"
+
+    active_flow = (slots.availability_context or {}).get("active_flow_context", {})
+    assert active_flow.get("product", {}).get("product_name") == "벤투스 S2 AS", (
+        "product_name must be persisted in active_flow_context.product so preOrder can read it"
+    )
+    assert active_flow.get("payment", {}).get("extra_fvr_sale_prc") == 180500 or active_flow.get("payment", {}).get(
+        "sale_prc"
+    ) == 231700, "price fields must be persisted in active_flow_context.payment"
 
 
 def test_pii_guardrail_detects_delete_request_and_streams_visible_fallback() -> None:
@@ -14046,7 +14116,8 @@ def test_flow_transition_discovery_recommendation_switches_active_purchase_to_re
     assert transition.contract_seed["current_flow"]["intent"] == "vehicle_based_tire_recommendation"
     assert transition.contract_seed["current_flow"]["flow_step"] == "router_observed"
     active_flow_context = transition.flow_transition["active_flow_context"]
-    assert active_flow_context["flow_type"] == "recommendation"
+    assert active_flow_context["flow_type"] == "commerce"
+    assert active_flow_context["intent"]["sub_flow_type"] == "recommendation"
     assert active_flow_context["intent"]["pending_intent"] == "vehicle_based_tire_recommendation"
     assert active_flow_context["intent"]["goal_type"] == "recommend_tire"
 
@@ -14058,9 +14129,9 @@ def test_flow_transition_discovery_recommendation_switches_active_purchase_to_re
         flow_step=active_flow_context["flow_step"],
         status=active_flow_context["status"],
     ).state.to_active_flow_context()
-    assert committed["flow_type"] == "recommendation"
-    assert committed["dormant_flows"][0]["context"]["flow_type"] == "purchase"
-    assert committed["dormant_flows"][0]["context"]["product"]["goods_no"] == "G000000310126"
+    assert committed["flow_type"] == "commerce"
+    assert committed["intent"]["sub_flow_type"] == "recommendation"
+    assert "dormant_flows" not in committed
     assert slots.pending_intent is None
     assert slots.goal_type is None
 
@@ -14119,7 +14190,8 @@ def test_flow_transition_support_coupon_faq_switches_active_purchase_to_support(
     ).state.to_active_flow_context()
     assert committed["flow_type"] == "support"
     assert committed["intent"]["policy_topic"] == "coupon_registration_policy"
-    assert committed["dormant_flows"][0]["context"]["flow_type"] == "purchase"
+    assert committed["dormant_flows"][0]["context"]["flow_type"] == "commerce"
+    assert committed["dormant_flows"][0]["context"]["intent"]["sub_flow_type"] == "purchase"
     assert committed["dormant_flows"][0]["context"]["product"]["goods_no"] == "G000000310126"
 
 
@@ -14279,7 +14351,8 @@ def test_flow_transition_store_search_request_switches_active_purchase_to_store_
     assert transition.flow_transition["reason"] == "current_turn_store_search_flow_state"
     assert transition.metadata["current_turn_store_search_resolved"] is True
     active_flow_context = transition.flow_transition["active_flow_context"]
-    assert active_flow_context["flow_type"] == "store_search"
+    assert active_flow_context["flow_type"] == "commerce"
+    assert active_flow_context["intent"]["sub_flow_type"] == "store_search"
     assert active_flow_context["flow_step"] == "ask_region"
     assert active_flow_context["intent"]["pending_intent"] == "store_recommendation_by_vehicle_experience"
     assert active_flow_context["intent"]["goal_type"] == "store_search"
@@ -14293,9 +14366,9 @@ def test_flow_transition_store_search_request_switches_active_purchase_to_store_
         flow_step=active_flow_context["flow_step"],
         status=active_flow_context["status"],
     ).state.to_active_flow_context()
-    assert committed["flow_type"] == "store_search"
-    assert committed["dormant_flows"][0]["context"]["flow_type"] == "purchase"
-    assert committed["dormant_flows"][0]["context"]["product"]["goods_no"] == "G000000310126"
+    assert committed["flow_type"] == "commerce"
+    assert committed["intent"]["sub_flow_type"] == "store_search"
+    assert "dormant_flows" not in committed
 
 
 def test_turn_contract_records_contract_seed_and_context_evidence() -> None:
@@ -14474,7 +14547,8 @@ def test_flow_transition_shell_records_selected_product_as_stock_from_router_pre
 
     assert transition.metadata["selected_product_resolved"] is True
     active_flow_context = transition.flow_transition["active_flow_context"]
-    assert active_flow_context["flow_type"] == "stock"
+    assert active_flow_context["flow_type"] == "commerce"
+    assert active_flow_context["intent"]["sub_flow_type"] == "stock"
     assert active_flow_context["product"]["goods_no"] == "G000000309922"
     assert active_flow_context["intent"]["pending_intent"] == "stock"
     assert active_flow_context["intent"]["goal_type"] == "store_with_stock"
@@ -14525,7 +14599,8 @@ def test_flow_transition_records_discovery_selected_product_flow_state_without_e
 
     active_flow_context = transition.flow_transition["active_flow_context"]
     assert transition.flow_transition["applied"] is True
-    assert active_flow_context["flow_type"] == "recommendation"
+    assert active_flow_context["flow_type"] == "commerce"
+    assert active_flow_context["intent"]["sub_flow_type"] == "recommendation"
     assert active_flow_context["flow_step"] == "product_selected"
     assert active_flow_context["product"] == {
         "goods_no": "G000000309714",
@@ -14534,7 +14609,8 @@ def test_flow_transition_records_discovery_selected_product_flow_state_without_e
         "pending_product_name": "다이나프로 HL3",
         "tire_size": "235/55R19",
     }
-    assert "intent" not in active_flow_context
+    assert active_flow_context.get("intent", {}).get("pending_intent") is None
+    assert active_flow_context.get("intent", {}).get("goal_type") is None
     assert slots.pending_intent is None
     assert slots.goal_type is None
 
@@ -14582,7 +14658,8 @@ def test_flow_transition_records_quantity_selection_without_executing() -> None:
         "selection_source": "current_user_text",
     }
     active_flow_context = transition.flow_transition["active_flow_context"]
-    assert active_flow_context["flow_type"] == "stock"
+    assert active_flow_context["flow_type"] == "commerce"
+    assert active_flow_context["intent"]["sub_flow_type"] == "stock"
     assert active_flow_context["flow_step"] == "quantity_selected"
     assert active_flow_context["product"]["goods_no"] == "G000000310126"
     assert active_flow_context["product"]["tire_size"] == "245/45R19"
@@ -14648,7 +14725,8 @@ def test_flow_transition_stock_store_plan_records_quantity_as_stock_flow() -> No
     assert transition.metadata["selected_quantity_resolved"] is True
     assert transition.flow_transition["applied"] is True
     active_flow_context = transition.flow_transition["active_flow_context"]
-    assert active_flow_context["flow_type"] == "stock"
+    assert active_flow_context["flow_type"] == "commerce"
+    assert active_flow_context["intent"]["sub_flow_type"] == "stock"
     assert active_flow_context["flow_step"] == "quantity_selected"
     assert active_flow_context["quantity"]["ord_qty"] == 4
 
@@ -14725,7 +14803,8 @@ def test_flow_transition_records_store_slot_fill_as_stock_inventory_next_action(
     assert transition.flow_transition["applied"] is True
     assert transition.flow_transition["reason"] == "selected_store_flow_state"
     active_flow_context = transition.flow_transition["active_flow_context"]
-    assert active_flow_context["flow_type"] == "stock"
+    assert active_flow_context["flow_type"] == "commerce"
+    assert active_flow_context["intent"]["sub_flow_type"] == "stock"
     assert active_flow_context["flow_step"] == "store_selected"
     assert active_flow_context["current_step"] == "check_inventory"
     assert active_flow_context["missing_slots"] == []
@@ -32788,7 +32867,8 @@ def test_flow_transition_records_service_maintenance_and_reservation_management_
 
     service_flow = service_transition.flow_transition["active_flow_context"]
     reservation_flow = reservation_transition.flow_transition["active_flow_context"]
-    assert service_flow["flow_type"] == "service_maintenance"
+    assert service_flow["flow_type"] == "commerce"
+    assert service_flow["intent"]["sub_flow_type"] == "service_maintenance"
     assert service_flow["intent"]["service_action_boundary"] == "store_verification"
     assert service_flow["next_tool"] == "get_store_list_tool"
     assert reservation_flow["flow_type"] == "reservation_management"

@@ -19,16 +19,20 @@ class UserVehicleLookupResponse:
         car_model_det (None | str | Unset): 차량 상세 모델명
         car_nm (None | str | Unset): 차량명
         car_maker (None | str | Unset): 차량 제조사
+        car_type (None | str | Unset): 차량 타입 정규화값 (sedan/suv/ev/sports/truck_van)
         tire_size_fr (None | str | Unset): 전륜 타이어 사이즈
         tire_size_re (None | str | Unset): 후륜 타이어 사이즈
+        valid_sizes (list[str] | Unset): 유효한 타이어 사이즈 후보 목록 (중복 제거, DB 조회 순서 유지)
     """
 
     car_model: None | str | Unset = UNSET
     car_model_det: None | str | Unset = UNSET
     car_nm: None | str | Unset = UNSET
     car_maker: None | str | Unset = UNSET
+    car_type: None | str | Unset = UNSET
     tire_size_fr: None | str | Unset = UNSET
     tire_size_re: None | str | Unset = UNSET
+    valid_sizes: list[str] | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -56,6 +60,12 @@ class UserVehicleLookupResponse:
         else:
             car_maker = self.car_maker
 
+        car_type: None | str | Unset
+        if isinstance(self.car_type, Unset):
+            car_type = UNSET
+        else:
+            car_type = self.car_type
+
         tire_size_fr: None | str | Unset
         if isinstance(self.tire_size_fr, Unset):
             tire_size_fr = UNSET
@@ -68,6 +78,10 @@ class UserVehicleLookupResponse:
         else:
             tire_size_re = self.tire_size_re
 
+        valid_sizes: list[str] | Unset = UNSET
+        if not isinstance(self.valid_sizes, Unset):
+            valid_sizes = self.valid_sizes
+
         field_dict: dict[str, Any] = {}
         field_dict.update(self.additional_properties)
         field_dict.update({})
@@ -79,10 +93,14 @@ class UserVehicleLookupResponse:
             field_dict["car_nm"] = car_nm
         if car_maker is not UNSET:
             field_dict["car_maker"] = car_maker
+        if car_type is not UNSET:
+            field_dict["car_type"] = car_type
         if tire_size_fr is not UNSET:
             field_dict["tire_size_fr"] = tire_size_fr
         if tire_size_re is not UNSET:
             field_dict["tire_size_re"] = tire_size_re
+        if valid_sizes is not UNSET:
+            field_dict["valid_sizes"] = valid_sizes
 
         return field_dict
 
@@ -126,6 +144,15 @@ class UserVehicleLookupResponse:
 
         car_maker = _parse_car_maker(d.pop("car_maker", UNSET))
 
+        def _parse_car_type(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        car_type = _parse_car_type(d.pop("car_type", UNSET))
+
         def _parse_tire_size_fr(data: object) -> None | str | Unset:
             if data is None:
                 return data
@@ -144,13 +171,17 @@ class UserVehicleLookupResponse:
 
         tire_size_re = _parse_tire_size_re(d.pop("tire_size_re", UNSET))
 
+        valid_sizes = cast(list[str], d.pop("valid_sizes", UNSET))
+
         user_vehicle_lookup_response = cls(
             car_model=car_model,
             car_model_det=car_model_det,
             car_nm=car_nm,
             car_maker=car_maker,
+            car_type=car_type,
             tire_size_fr=tire_size_fr,
             tire_size_re=tire_size_re,
+            valid_sizes=valid_sizes,
         )
 
         user_vehicle_lookup_response.additional_properties = d

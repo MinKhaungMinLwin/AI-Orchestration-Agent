@@ -806,7 +806,6 @@ def _preview_location_metadata(
     if ord_qty_int and ord_qty_int > 0 and transaction_metadata_allowed:
         metadata["ordQty"] = ord_qty_int
         metadata["ord_qty"] = ord_qty_int
-        metadata["ord_qty"] = ord_qty_int
     tire_size = _get_str(args, "tire_size") or _get_str(raw, "tire_size", "tireSize")
     if tire_size:
         metadata["tireSize"] = tire_size
@@ -3617,6 +3616,7 @@ def _map_list_car(tool_data_list: list[dict], assistant_text: str) -> dict | Non
         return None
     items, metadata = [], []
     source_intent, expected_contract_intent = _listcar_selection_contract_intent()
+    from services.tstation.policies.ui_action_policy import normalize_vehicle_type_from_car_type
     all_rows: list[dict] = []
     for entry in _find_entries(tool_data_list, "get_my_cars_tool", "get_user_vehicles_tool"):
         raw = _unwrap(entry)
@@ -3637,6 +3637,14 @@ def _map_list_car(tool_data_list: list[dict], assistant_text: str) -> dict | Non
             car_nm = _get_str(row, "car_model_det", "car_nm")
             car_maker = _get_str(row, "car_maker")
             car_info = f"{car_maker} {car_nm}" if car_maker and car_nm else (car_nm or car_maker)
+            normalized_vehicle_type = (
+                _get_str(row, "vehicle_type", "vehicleType")
+                or normalize_vehicle_type_from_car_type(
+                    _get_str(row, "car_type", "carType"),
+                    fallback_text=" ".join(part for part in (car_info, _get_str(row, "car_nm"), _get_str(row, "car_model_det")) if part),
+                )
+                or None
+            )
             items.append({
                 "licensePlate": _get_str(row, "car_no"),
                 "info": car_info,
@@ -3672,8 +3680,8 @@ def _map_list_car(tool_data_list: list[dict], assistant_text: str) -> dict | Non
                 "tire_size_fr": _get_str(row, "tire_size_fr") or None,
                 "tireSizeRe": _get_str(row, "tire_size_re") or None,
                 "tire_size_re": _get_str(row, "tire_size_re") or None,
-                "vehicleType": _get_str(row, "car_type").lower() or None,
-                "vehicle_type": _get_str(row, "car_type").lower() or None,
+                "vehicleType": normalized_vehicle_type,
+                "vehicle_type": normalized_vehicle_type,
                 "ctaAction": "select_vehicle_candidate",
                 "cta_action": "select_vehicle_candidate",
                 "sourceIntent": source_intent,
