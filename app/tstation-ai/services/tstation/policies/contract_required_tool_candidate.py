@@ -56,6 +56,12 @@ _FAST_PATH_DISCOVERY_RECOVERY_ALLOWED_TOOLS = frozenset({
     "get_best_selling_products_tool",
     "get_my_cars_tool",
 })
+_FLOW_PROGRESS_TRANSACTION_TOOLS = frozenset({
+    "search_stores_tool",
+    "get_store_list_tool",
+    "get_store_schedule_tool",
+    "get_store_inventory_tool",
+})
 _DIRECT_SUPPORT_FAQ_POLICY_INTENTS = frozenset({
     "card_installment_lookup",
     "coupon_usage_policy",
@@ -991,23 +997,47 @@ def _contract_required_tool_candidate_from_flow_progress(
     response_decision = turn_contract.response_decision or {}
     response_metadata = response_decision.get("metadata") if isinstance(response_decision, Mapping) else {}
     response_shape_key = str(response_metadata.get("response_shape_key") or "") if isinstance(response_metadata, Mapping) else ""
+    next_tool = str(progress.get("next_tool") or "").strip()
+    progress_allowed_tools = tuple(
+        str(tool)
+        for tool in tuple(progress.get("allowed_tools") or ())
+        if str(tool).strip()
+    )
+    candidate_allowed_tools = progress_allowed_tools or allowed_tools
+    candidate_domain = domain
+    candidate_intent = contract_intent
+    candidate_shape = response_shape_key
+    flow_type = str(progress.get("sub_flow_type") or progress.get("flow_type") or "").strip()
+    if next_tool in _FLOW_PROGRESS_TRANSACTION_TOOLS:
+        candidate_domain = PolicyDomain.TRANSACTION.value
+        if domain != PolicyDomain.TRANSACTION.value:
+            if flow_type == "stock":
+                candidate_intent = "stock_store_search"
+                candidate_shape = candidate_shape or "stock_inventory_lookup"
+            elif flow_type == "store_schedule":
+                candidate_intent = "store_schedule"
+                candidate_shape = candidate_shape or "reservation_slots"
+            elif flow_type == "purchase":
+                candidate_intent = "quick_order_reservation"
+                candidate_shape = candidate_shape or "reservation_store_candidates"
     candidate = flow_progress_tool_candidate(
         progress,
-        domain=domain,
-        contract_intent=contract_intent,
-        response_shape_key=response_shape_key,
-        allowed_tools=allowed_tools,
+        domain=candidate_domain,
+        contract_intent=candidate_intent,
+        response_shape_key=candidate_shape,
+        allowed_tools=candidate_allowed_tools,
         forbidden_tools=forbidden_tools,
     )
     if not candidate:
         return None
     next_tool = str(candidate.get("tool_name") or "").strip()
-    if domain == PolicyDomain.TRANSACTION.value and next_tool in _FAST_PATH_TRANSACTION_RECOVERY_BLOCKLIST:
+    source_domain = str(candidate.get("source_domain") or candidate_domain or domain)
+    if source_domain == PolicyDomain.TRANSACTION.value and next_tool in _FAST_PATH_TRANSACTION_RECOVERY_BLOCKLIST:
         return None
     return _ContractRequiredToolCandidate(
         tool_name=next_tool,
         tool_input=dict(candidate.get("tool_input") or {}),
         tool_input_source=str(candidate.get("tool_input_source") or "flow_state_progress"),
         display_name=str(candidate.get("display_name") or "정보 확인 중..."),
-        source_domain=str(candidate.get("source_domain") or domain),
+        source_domain=source_domain,
     )

@@ -273,6 +273,33 @@ async def _recover_contract_required_owned_record_lookup(
     )
 
 
+async def _recover_contract_required_flow_progress_tool(
+    *,
+    turn_contract: TurnContract | None,
+    user_text: str,
+    merged_slots: ConversationSlots | None,
+    blocked_fast_path_source: str = "contract_required_flow_progress_tool",
+    member_no: str | None = None,
+) -> dict[str, Any] | None:
+    if turn_contract is None:
+        return None
+    candidate = _contract_required_tool_candidate(
+        turn_contract=turn_contract,
+        user_text=user_text,
+        merged_slots=merged_slots,
+        member_no=member_no,
+    )
+    if candidate is None or candidate.tool_input_source != "flow_state_progress":
+        return None
+    return await recover_blocked_fast_path_to_contract_tool(
+        turn_contract=turn_contract,
+        user_text=user_text,
+        merged_slots=merged_slots,
+        blocked_fast_path_source=blocked_fast_path_source,
+        member_no=member_no,
+    )
+
+
 async def _recover_contract_required_tool(
     *,
     turn_contract: TurnContract | None,
@@ -310,6 +337,15 @@ async def _recover_contract_required_tool(
     )
     if owned_record_recovery is not None:
         return owned_record_recovery
+    flow_progress_recovery = await _recover_contract_required_flow_progress_tool(
+        turn_contract=turn_contract,
+        user_text=user_text,
+        merged_slots=merged_slots,
+        blocked_fast_path_source=blocked_fast_path_source,
+        member_no=member_no,
+    )
+    if flow_progress_recovery is not None:
+        return flow_progress_recovery
     return await _recover_contract_required_vehicle_recommendation(
         turn_contract=turn_contract,
         user_text=user_text,
@@ -527,11 +563,16 @@ async def recover_blocked_fast_path_to_contract_tool(
     tool_input_source = candidate.tool_input_source
     display_name = candidate.display_name
     source_domain = candidate.source_domain
+    execution_domain = source_domain if source_domain in {PolicyDomain.DISCOVERY.value, PolicyDomain.TRANSACTION.value} else domain
+    chained_tool_name = ""
+    chained_tool_input: dict[str, Any] = {}
+    chained_tool_result: dict[str, Any] = {}
+    chained_recovery_reason = ""
 
-    if domain in {PolicyDomain.DISCOVERY.value, PolicyDomain.TRANSACTION.value}:
+    if execution_domain in {PolicyDomain.DISCOVERY.value, PolicyDomain.TRANSACTION.value}:
         from services.tstation.template_mapper import try_build_template
 
-        if domain == PolicyDomain.DISCOVERY.value:
+        if execution_domain == PolicyDomain.DISCOVERY.value:
             from services.tstation.agents.b_discovery_agent import tools as discovery_tools
 
             tool = getattr(discovery_tools, preferred_tool, None)
@@ -568,10 +609,6 @@ async def recover_blocked_fast_path_to_contract_tool(
                 if isinstance(fallback_items, list) and fallback_items:
                     tool_input = fallback_input
                     tool_result = fallback_tool_result
-        chained_tool_name = ""
-        chained_tool_input: dict[str, Any] = {}
-        chained_tool_result: dict[str, Any] = {}
-        chained_recovery_reason = ""
         if preferred_tool == "get_my_cars_tool":
             chained_recommendation = await _maybe_run_registered_vehicle_recommendation(
                 turn_contract=turn_contract,
