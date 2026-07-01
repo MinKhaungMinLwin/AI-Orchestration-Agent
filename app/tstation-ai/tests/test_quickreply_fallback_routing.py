@@ -11654,6 +11654,120 @@ def test_router_wins_stock_store_search_aligns_stale_quick_order_tool_plan() -> 
     assert aligned.metadata["turn_contract_intent"] == "stock_store_search"
 
 
+def test_router_wins_store_search_over_stale_quick_order_schedule_frame() -> None:
+    routing_result = _routing_result(
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        execution_plan=["transaction:store_search"],
+        place_query="고양시청 근처",
+        referred_object_type="store",
+    )
+    stale_order_frame = IntentFrame(
+        domain=PolicyDomain.TRANSACTION,
+        intent="quick_order_reservation",
+        sub_intent="reservation",
+        known_slots={
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "goods_no": "G000000310126",
+            "product_name": "벤투스 S2 AS",
+            "tire_size": "245/45R19",
+            "ord_qty": 4,
+            "shop_id": "F00721",
+            "shop_name": "티스테이션 판교점",
+            "region": "강남",
+            "place_query": "고양시청 근처",
+        },
+        missing_slots=("booking_datetime",),
+    )
+    stale_order_plan = ToolPlan(
+        allowed_tools=("get_store_schedule_tool", "get_multi_store_schedule_tool"),
+        preferred_tool="get_store_schedule_tool",
+        required_slots=("booking_datetime",),
+        metadata={"response_intent": "quick_order_reservation", "flow_step": "show_schedule"},
+    )
+    stale_order_response = ResponseDecision(
+        response_shape=ResponseShape.DATE_PICK,
+        template=TemplateName.DATE_PICK,
+        required_slots=("booking_datetime",),
+        metadata={"response_shape_key": "reservation_slots", "flow_step": "show_schedule"},
+    )
+
+    contract = build_turn_contract(
+        user_text="고양시청 근처에는?",
+        intent_frame=stale_order_frame,
+        tool_plan=stale_order_plan,
+        response_decision=stale_order_response,
+        routing_result=routing_result,
+        merged_slots=ConversationSlots(
+            pending_intent="order",
+            goal_type="place_order",
+            goods_no="G000000310126",
+            product_name="벤투스 S2 AS",
+            tire_size="245/45R19",
+            ord_qty=4,
+            shop_id="F00721",
+            shop_name="티스테이션 판교점",
+            region="강남",
+            place_query="고양시청 근처",
+        ),
+        action_mode="purchase_continuation",
+        context_state="resumed",
+        previous_pending_intent="order",
+        previous_goal_type="place_order",
+    )
+    aligned = align_tool_plan_to_turn_contract(stale_order_plan, contract)
+    payload = contract.to_dict()
+
+    assert contract.intent == "store_search"
+    assert contract.router_wins_applied is True
+    assert contract.required_slots == ()
+    assert contract.blocking_required_slots == ()
+    assert "transaction_store_preview_tool" in contract.allowed_tools
+    assert "get_store_list_tool" in contract.allowed_tools
+    assert "get_store_schedule_tool" in contract.forbidden_tools
+    assert "quick_order_tool" in contract.forbidden_tools
+    assert payload["drift_resolution"] == "router_intent:store_search_kept_over_code_frame:quick_order_reservation"
+    assert payload["response_decision"]["template"] == "location"
+    assert payload["response_decision"]["metadata"]["response_shape_key"] == "store_search"
+    assert aligned is not None
+    assert aligned.preferred_tool == "transaction_store_preview_tool"
+    assert aligned.allowed_tools == contract.allowed_tools
+
+
+def test_router_wins_plain_store_search_defaults_to_store_list_tool() -> None:
+    routing_result = _routing_result(
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        execution_plan=["transaction:store_search"],
+        place_query="고양시청 근처",
+        referred_object_type="store",
+    )
+    tool_plan = ToolPlan(
+        allowed_tools=("get_store_schedule_tool",),
+        preferred_tool="get_store_schedule_tool",
+        metadata={"response_intent": "store_schedule"},
+    )
+
+    contract = build_turn_contract(
+        user_text="고양시청 근처 매장 보여줘",
+        intent_frame=IntentFrame(
+            domain=PolicyDomain.TRANSACTION,
+            intent="store_schedule",
+            known_slots={"place_query": "고양시청 근처"},
+        ),
+        tool_plan=tool_plan,
+        routing_result=routing_result,
+        merged_slots=ConversationSlots(place_query="고양시청 근처"),
+        action_mode="store_search",
+        context_state="active",
+    )
+    aligned = align_tool_plan_to_turn_contract(tool_plan, contract)
+
+    assert contract.intent == "store_search"
+    assert "transaction_store_preview_tool" in contract.allowed_tools
+    assert aligned is not None
+    assert aligned.preferred_tool == "get_store_list_tool"
+
+
 def test_router_wins_store_schedule_over_stale_quick_order_reservation_parent() -> None:
     routing_result = _routing_result(
         domains=[MultiAgentDomain.Domain.TRANSACTION],

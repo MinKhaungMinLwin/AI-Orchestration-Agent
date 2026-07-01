@@ -322,6 +322,7 @@ ROUTER_WINS_INFORMATIONAL_INTENTS = frozenset({
 })
 ROUTER_WINS_EXECUTION_BOUNDARY_INTENTS = frozenset({
     "stock_store_search",
+    "store_search",
     "store_schedule",
     "open_store_search",
     "store_service_search",
@@ -1612,6 +1613,19 @@ def _should_align_router_wins_tool_plan(contract: TurnContract) -> bool:
 
 
 def _router_wins_default_preferred_tool(contract: TurnContract) -> str | None:
+    if str(contract.intent or "") == "store_search":
+        quantity = contract.known_slots.get("ord_qty") or contract.known_slots.get("quantity")
+        has_purchase_slots = bool(
+            contract.known_slots.get("goods_no")
+            and quantity not in (None, "", 0, "0")
+            and (
+                contract.known_slots.get("region")
+                or contract.known_slots.get("place_query")
+                or contract.known_slots.get("place")
+            )
+        )
+        if has_purchase_slots and "transaction_store_preview_tool" in tuple(contract.allowed_tools or ()):
+            return "transaction_store_preview_tool"
     return _default_preferred_tool_for_boundary(
         intent=str(contract.intent or ""),
         allowed_tools=tuple(contract.allowed_tools or ()),
@@ -1628,6 +1642,7 @@ def _default_preferred_tool_for_boundary(
     intent = str(intent or "")
     preferred_by_intent = {
         "stock_store_search": "transaction_store_preview_tool",
+        "store_search": "get_store_list_tool",
         "store_schedule": "get_store_schedule_tool",
         "open_store_search": "search_stores_complex_tool",
         "store_service_search": "search_stores_tool",
@@ -4649,6 +4664,28 @@ def _router_wins_tool_boundary(intent: str) -> tuple[tuple[str, ...], tuple[str,
                 if tool not in allowed_tools
             ),
         )
+    if intent == "store_search":
+        allowed_tools = (
+            "transaction_store_preview_tool",
+            "get_store_list_tool",
+            "search_stores_tool",
+            "search_stores_complex_tool",
+            "get_nearby_stores_tool",
+        )
+        return (
+            allowed_tools,
+            tuple(
+                tool
+                for tool in _ROUTER_WINS_ORDER_EXECUTION_FORBIDDEN_TOOLS
+                | {
+                    "get_store_schedule_tool",
+                    "get_multi_store_schedule_tool",
+                    "get_store_inventory_tool",
+                    "get_logistics_inventory_tool",
+                }
+                if tool not in allowed_tools
+            ),
+        )
     if intent == "store_schedule":
         return (
             ("get_store_schedule_tool",),
@@ -4888,7 +4925,7 @@ def _router_wins_response_decision(intent: str) -> dict[str, Any]:
             "emit_preorder_without_user_confirmation",
             "emit_order_complete_without_quick_order_tool",
         ]
-    elif intent in {"open_store_search", "store_service_search", "store_recommendation_by_vehicle_experience"}:
+    elif intent in {"store_search", "open_store_search", "store_service_search", "store_recommendation_by_vehicle_experience"}:
         response_shape = "location"
         template = "location"
         guidance = "현재 턴의 매장 검색 intent 기준으로 매장을 조회한다. 주문/가격/쿠폰/예약 실행 flow로 전환하지 않는다."
