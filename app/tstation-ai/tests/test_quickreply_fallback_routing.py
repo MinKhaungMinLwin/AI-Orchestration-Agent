@@ -25000,6 +25000,59 @@ def test_vehicle_tire_size_lookup_contract_allows_registered_vehicle_list_tool()
     assert decision.metadata["response_shape_key"] == "vehicle_information"
 
 
+def test_registered_vehicle_size_lookup_blocks_coupon_registration_router_drift() -> None:
+    user_text = "내가 등록한 차 중에 제타 사이즈가 뭐야"
+    frame = build_discovery_intent_frame(user_text)
+    tool_plan = plan_discovery_tools(frame)
+    decision = decide_discovery_response(frame)
+    routing_result = _routing_result(
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        execution_plan=["support:coupon_registration_policy"],
+        policy_intent="coupon_registration_policy",
+    )
+
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=decision,
+        routing_result=routing_result,
+        action_mode="info_only",
+        context_state="active",
+    )
+
+    assert frame.sub_intent == "vehicle_information"
+    assert contract.domain == "discovery"
+    assert contract.intent == "product_description"
+    assert contract.sub_intent == "vehicle_information"
+    assert contract.allowed_tools == ("get_my_cars_tool",)
+    assert contract.preferred_tool == "get_my_cars_tool"
+    assert contract.router_wins_applied is False
+    assert contract.known_slots.get("policy_intent") in (None, "none")
+
+
+def test_coupon_registration_policy_still_wins_with_coupon_anchor() -> None:
+    user_text = "쿠폰 번호 어디에 등록해?"
+    frame = build_discovery_intent_frame(user_text)
+    routing_result = _routing_result(
+        domains=[MultiAgentDomain.Domain.SUPPORT],
+        execution_plan=["support:coupon_registration_policy"],
+        policy_intent="coupon_registration_policy",
+    )
+
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=frame,
+        routing_result=routing_result,
+        action_mode="info_only",
+        context_state="active",
+    )
+
+    assert contract.domain == "support"
+    assert contract.intent == "coupon_registration_policy"
+    assert contract.router_wins_applied is True
+
+
 def test_vehicle_based_recommendation_refinement_preserves_previous_low_vibration_filter() -> None:
     patch = _vehicle_based_recommendation_refinement_patch(
         "내 차량 기준으로",

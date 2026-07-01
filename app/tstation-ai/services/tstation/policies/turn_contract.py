@@ -8,7 +8,11 @@ from typing import Any, Mapping
 
 from services.tstation.common.cta_urls import CTAUrls
 from services.tstation.policies.cross_domain_policy import CrossDomainPlan
-from services.tstation.policies.discovery_intent_policy import extract_best_seller_vehicle_query, is_best_seller_request
+from services.tstation.policies.discovery_intent_policy import (
+    extract_best_seller_vehicle_query,
+    has_registered_vehicle_ownership_signal,
+    is_best_seller_request,
+)
 from services.tstation.policies.flow_controller import build_purchase_flow_fallback_event
 from services.tstation.policies.intent_frame import IntentFrame
 from services.tstation.policies.preorder_event_builder import build_preorder_event
@@ -140,6 +144,7 @@ _WARNING_CONTRACT_VIOLATION_TYPES = frozenset({
     "recommendation_approximation_disclosure_missing",
 })
 _PRICE_OR_COUPON_RE = re.compile(r"가격|얼마|할인가|쿠폰|할인|혜택", re.IGNORECASE)
+_COUPON_ANCHOR_RE = re.compile(r"쿠폰", re.IGNORECASE)
 _REFERENCE_PURCHASE_RE = re.compile(r"(?:그거|그\s*상품|이거|이\s*상품).{0,20}(구매|주문|결제|살래|살게|사고)", re.IGNORECASE)
 _DISCOVERY_NO_RESULT_RE = re.compile(r"찾을\s*수\s*없|확인되지\s*않|검색되지\s*않|없어요", re.IGNORECASE)
 _ORDER_PROGRESS_ONLY_RE = re.compile(
@@ -558,6 +563,17 @@ def build_turn_contract(
         router_wins_intent = "assurance_service_policy"
     code_domain = _domain_value(intent_frame.domain) if intent_frame is not None else _domain_from_routing(routing_result)
     code_intent = intent_frame.intent if intent_frame is not None else _intent_from_cross_domain(cross_domain_plan)
+    keep_registered_vehicle_contract = _should_keep_registered_vehicle_information_contract(
+        user_text=user_text,
+        intent_frame=intent_frame,
+        code_intent=code_intent,
+    )
+    if keep_registered_vehicle_contract and policy_intent == "coupon_registration_policy":
+        policy_intent = "none"
+    if keep_registered_vehicle_contract and planner_intent == "coupon_registration_policy":
+        planner_intent = None
+    if keep_registered_vehicle_contract and router_wins_intent == "coupon_registration_policy":
+        router_wins_intent = None
     if _should_normalize_dot_manufacture_date_policy(
         user_text=user_text,
         policy_intent=policy_intent,
@@ -582,7 +598,10 @@ def build_turn_contract(
         router_wins_intent = "card_installment_lookup"
     domain = planner_domains[0] if planner_domains else code_domain
     intent = planner_intent or code_intent
-    if router_wins_intent:
+    if keep_registered_vehicle_contract:
+        domain = code_domain
+        intent = code_intent
+    elif router_wins_intent:
         domain = _router_wins_domain(router_wins_intent, planner_domains)
         intent = router_wins_intent
     elif _should_lock_code_intent_contract(code_intent):
@@ -5342,6 +5361,25 @@ def _should_lock_code_intent_contract(intent: str) -> bool:
     if not normalized:
         return False
     return _reference_guard_exempt_intent(normalized)
+
+
+def _should_keep_registered_vehicle_information_contract(
+    *,
+    user_text: str,
+    intent_frame: IntentFrame | None,
+    code_intent: str,
+) -> bool:
+    if intent_frame is None:
+        return False
+    if _domain_value(intent_frame.domain) != "discovery":
+        return False
+    if str(code_intent or "").strip() != "product_description":
+        return False
+    if str(intent_frame.sub_intent or "").strip() != "vehicle_information":
+        return False
+    if _COUPON_ANCHOR_RE.search(user_text or ""):
+        return False
+    return has_registered_vehicle_ownership_signal(user_text)
 
 
 def _slot_for_referred_object_type(object_type: str) -> str:
