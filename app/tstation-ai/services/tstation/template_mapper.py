@@ -1796,6 +1796,63 @@ def _tire_summary_detail_line(row: dict) -> str:
     return " ".join(clauses)
 
 
+def _strip_tire_summary_sentence_suffix(text: str) -> str:
+    text = str(text or "").strip()
+    for suffix in ("입니다.", "이에요.", "예요.", "입니다", "이에요", "예요"):
+        if text.endswith(suffix):
+            return text[: -len(suffix)].strip()
+    return text.rstrip(".").strip()
+
+
+def _tire_summary_review_line(row: dict) -> str:
+    review_count = _get_num(row, "review_count", default=0.0)
+    rating_avg = _get_num(row, "rating_avg", "rate", default=0.0)
+    if review_count > 0 and rating_avg > 0:
+        rating_text = int(rating_avg) if float(rating_avg).is_integer() else f"{rating_avg:g}"
+        return f"리뷰: {int(review_count)}건, 평균 {rating_text}점"
+    if review_count > 0:
+        return f"리뷰: {int(review_count)}건"
+    if rating_avg > 0:
+        rating_text = int(rating_avg) if float(rating_avg).is_integer() else f"{rating_avg:g}"
+        return f"리뷰: 평균 {rating_text}점"
+    return ""
+
+
+def _tire_summary_grade_line(row: dict) -> str:
+    wet = _get_str(row, "wet")
+    rr = _get_str(row, "rr")
+    if wet and rr:
+        return f"등급: 젖은 노면 {wet}등급, 회전저항 {rr}등급"
+    if wet:
+        return f"등급: 젖은 노면 {wet}등급"
+    if rr:
+        return f"등급: 회전저항 {rr}등급"
+    return ""
+
+
+def _neutral_product_description_block(name: str, row: dict, size_line: str) -> list[str]:
+    feature = _strip_tire_summary_sentence_suffix(_tire_summary_second_line(row))
+    usp = _strip_tire_summary_sentence_suffix(_tire_summary_usp_line(row))
+    if usp and usp != feature:
+        feature = f"{feature}. {usp}" if feature else usp
+
+    lines = [
+        f"[{name}]",
+        f"  유형: {_strip_tire_summary_sentence_suffix(_tire_summary_first_line(row))}",
+    ]
+    if feature:
+        lines.append(f"  특징: {feature}")
+    grade_line = _tire_summary_grade_line(row)
+    if grade_line:
+        lines.append(f"  {grade_line}")
+    review_line = _tire_summary_review_line(row)
+    if review_line:
+        lines.append(f"  {review_line}")
+    if size_line:
+        lines.append(f"  {size_line}")
+    return lines
+
+
 _PRODUCT_SEARCH_SIZE_INTENT_RE = re.compile(r"사이즈|규격|호환\s*사이즈|몇\s*인치|몇인치", re.IGNORECASE)
 _FULL_SIZE_LIST_REQUEST_RE = re.compile(
     r"모든|전체|전부|사이즈\s*다|규격\s*다|다\s*(?:알려|보여|조회|확인)",
@@ -3319,16 +3376,9 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
             if not size_line:
                 size_line = _confirmed_multi_size_line(rows)
         if is_neutral_product_description:
-            detail_line = _tire_summary_detail_line(row)
-            lines.extend([
-                "",
-                f"{name}: {_tire_summary_first_line(row)}",
-                _tire_summary_second_line(row),
-            ])
-            if detail_line:
-                lines.append(detail_line)
-            if size_line:
-                lines.append(size_line)
+            if lines:
+                lines.append("")
+            lines.extend(_neutral_product_description_block(name, row, size_line))
         else:
             detail_line = _tire_summary_detail_line(row)
             lines.extend([
@@ -3340,9 +3390,9 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
                 lines.append(f"  {detail_line}")
             if size_line:
                 lines.append(f"  {size_line}")
-    if skip_size_missing_notice:
+    if skip_size_missing_notice and not is_neutral_product_description:
         lines = [line for line in lines if line]
-    elif not is_popular_unsized_request:
+    elif not skip_size_missing_notice and not is_popular_unsized_request:
         lines.extend([
             "",
             "정확한 장착 가능 여부와 가격은 차량 모델 또는 타이어 사이즈를 확인한 뒤 안내드릴 수 있어요.",

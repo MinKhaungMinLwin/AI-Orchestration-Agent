@@ -1589,11 +1589,11 @@ def test_product_description_without_size_omits_unrequested_size_missing_notice(
     assistant_response = result["data"]["assistantResponse"]
     assert "사이즈가 아직 확인되지 않아" not in assistant_response
     assert "정확한 장착 가능 여부와 가격" not in assistant_response
-    assert "키너지 EX:" in assistant_response
-    assert "승용차용 사계절" in assistant_response
-    assert "사이즈: 165/60R14, 185/65R14" in assistant_response
-    assert "저소음 라벨이 적용돼 정숙성과 승차감을 중요하게 보는 주행에 잘 맞아요." in assistant_response
-    assert "젖은 노면과 회전저항 등급은 각각 3등급, 3등급으로 확인돼요." in assistant_response
+    assert "[키너지 EX]" in assistant_response
+    assert "  유형: 승용차용 사계절 컴포트 타이어" in assistant_response
+    assert "  특징: 정숙성과 승차감 중심의 타이어. 저소음 라벨이 적용돼 정숙성과 승차감을 중요하게 보는 주행에 잘 맞아요" in assistant_response
+    assert "  등급: 젖은 노면 3등급, 회전저항 3등급" in assistant_response
+    assert "  사이즈: 165/60R14, 185/65R14" in assistant_response
     assert "패턴의" not in assistant_response
     assert "출시 2013년 4월" not in assistant_response
     assert "원산지 한국" not in assistant_response
@@ -1642,11 +1642,12 @@ def test_multi_product_description_search_entries_keep_all_products() -> None:
     assert result is not None
     assert result["template"] == "quickReply"
     assistant_response = result["data"]["assistantResponse"]
-    assert "키너지 EX:" in assistant_response
-    assert "벤투스 S2 AS:" in assistant_response
-    assert assistant_response.index("키너지 EX:") < assistant_response.index("벤투스 S2 AS:")
-    assert "사이즈: 165/60R14, 185/65R14" in assistant_response
-    assert "사이즈: 205/55R16, 225/45R17" in assistant_response
+    assert "[키너지 EX]" in assistant_response
+    assert "[벤투스 S2 AS]" in assistant_response
+    assert assistant_response.index("[키너지 EX]") < assistant_response.index("[벤투스 S2 AS]")
+    assert "\n\n[벤투스 S2 AS]" in assistant_response
+    assert "  사이즈: 165/60R14, 185/65R14" in assistant_response
+    assert "  사이즈: 205/55R16, 225/45R17" in assistant_response
     assert "사이즈가 아직 확인되지 않아" not in assistant_response
 
 
