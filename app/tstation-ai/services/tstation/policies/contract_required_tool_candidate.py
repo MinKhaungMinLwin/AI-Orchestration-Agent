@@ -886,12 +886,11 @@ def _contract_required_tool_candidate(
                 tool_input_source = "user_text"
             display_name = "인기 상품 조회 중..."
         elif preferred_tool == "get_my_cars_tool":
-            if not tool_input:
-                member_no_value = str(member_no or "").strip()
-                if not member_no_value:
-                    return None
-                tool_input = {"mbr_no": member_no_value}
-                tool_input_source = "user_context"
+            member_no_value = str(member_no or "").strip()
+            if not member_no_value:
+                return None
+            tool_input = {"mbr_no": member_no_value}
+            tool_input_source = "user_context"
             display_name = "등록 차량 조회 중..."
         elif preferred_tool == "get_products_recommendations_tool":
             if str(turn_contract.intent or "").strip() != "product_recommendation":

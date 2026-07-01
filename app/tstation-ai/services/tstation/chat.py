@@ -148,6 +148,7 @@ from services.tstation.policies.contract_required_tool_candidate import (
     _is_contract_required_transaction_store_preview,
     _is_contract_required_vehicle_recommendation,
 )
+from services.tstation.policies.contract_direct_executor import evaluate_contract_direct_path
 from services.tstation.executors.contract_required_tool_executor import (
     _best_selling_general_fallback_input,
     _contract_annotation_metadata,
@@ -37031,12 +37032,50 @@ class TStationChatServiceV2:
             yield "data: [DONE]\n\n"
             return
 
-        contract_required_tool_recovery = await _recover_contract_required_tool(
-            turn_contract=turn_contract,
-            user_text=user_query,
-            merged_slots=pending_slots or initial_slots,
-            blocked_fast_path_source="contract_required_tool_executor",
+        stream_availability_context = (
+            getattr(initial_slots, "availability_context", None)
+            if initial_slots is not None
+            else {}
         )
+        stream_router_evidence = (
+            stream_availability_context.get("latest_router_evidence")
+            if isinstance(stream_availability_context, Mapping)
+            and isinstance(stream_availability_context.get("latest_router_evidence"), Mapping)
+            else {}
+        )
+        direct_path_decision = evaluate_contract_direct_path(
+            turn_contract=turn_contract,
+            router_evidence=stream_router_evidence,
+            user_text=user_query,
+        )
+        vehicle_selection_trace_metadata.update(direct_path_decision.metadata())
+        contract_required_tool_recovery = None
+        if direct_path_decision.eligible:
+            contract_required_tool_recovery = await _recover_contract_required_tool(
+                turn_contract=turn_contract,
+                user_text=user_query,
+                merged_slots=pending_slots or initial_slots,
+                blocked_fast_path_source=f"contract_direct_executor:{direct_path_decision.reason}",
+                member_no=user_id,
+            )
+            if contract_required_tool_recovery is None:
+                vehicle_selection_trace_metadata.update({
+                    "direct_path_eligible": False,
+                    "domain_agent_llm_skipped": False,
+                    "fallback_reason": "no_deterministic_template",
+                })
+            else:
+                recovered_event = contract_required_tool_recovery.get("event")
+                vehicle_selection_trace_metadata.update({
+                    "domain_agent_llm_skipped": True,
+                    "direct_tool": str(contract_required_tool_recovery.get("tool_name") or ""),
+                    "direct_template": (
+                        str(recovered_event.get("template") or "")
+                        if isinstance(recovered_event, Mapping)
+                        else direct_path_decision.template
+                    ),
+                    "fallback_reason": None,
+                })
         async def _contract_required_tool_recovery_sse(
             recovery: Mapping[str, Any],
             *,

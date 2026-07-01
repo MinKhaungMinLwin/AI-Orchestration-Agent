@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 from typing import Any, Mapping
 
 from schemas.tstation.slots import ConversationSlots
@@ -15,6 +16,7 @@ from services.tstation.policies.contract_required_tool_candidate import (
     _is_contract_required_vehicle_recommendation,
     _is_vehicle_selection_recommendation_contract,
 )
+from services.tstation.policies.discovery_intent_policy import normalize_tire_size
 from services.tstation.policies.intent_frame import PolicyDomain
 from services.tstation.policies.resolved_context import (
     canonical_context_from_template_boundary,
@@ -189,6 +191,7 @@ async def _recover_contract_required_store_flow_tool(
     user_text: str,
     merged_slots: ConversationSlots | None,
     blocked_fast_path_source: str = "contract_required_store_flow_tool",
+    member_no: str | None = None,
 ) -> dict[str, Any] | None:
     if not (
         _is_contract_required_selected_store_schedule(turn_contract, merged_slots=merged_slots)
@@ -201,6 +204,7 @@ async def _recover_contract_required_store_flow_tool(
         user_text=user_text,
         merged_slots=merged_slots,
         blocked_fast_path_source=blocked_fast_path_source,
+        member_no=member_no,
     )
 
 
@@ -210,14 +214,17 @@ async def _recover_contract_required_vehicle_recommendation(
     user_text: str,
     merged_slots: ConversationSlots | None,
     blocked_fast_path_source: str = "contract_required_vehicle_recommendation",
+    member_no: str | None = None,
 ) -> dict[str, Any] | None:
-    if not _is_contract_required_vehicle_recommendation(turn_contract, merged_slots):
+    current_turn_direct_path = str(blocked_fast_path_source or "").startswith("contract_direct_executor:")
+    if not current_turn_direct_path and not _is_contract_required_vehicle_recommendation(turn_contract, merged_slots):
         return None
     return await recover_blocked_fast_path_to_contract_tool(
         turn_contract=turn_contract,
         user_text=user_text,
         merged_slots=merged_slots,
         blocked_fast_path_source=blocked_fast_path_source,
+        member_no=member_no,
     )
 
 
@@ -227,6 +234,7 @@ async def _recover_contract_required_transaction_store_preview(
     user_text: str,
     merged_slots: ConversationSlots | None,
     blocked_fast_path_source: str = "contract_required_transaction_store_preview",
+    member_no: str | None = None,
 ) -> dict[str, Any] | None:
     if not _is_contract_required_transaction_store_preview(turn_contract, merged_slots=merged_slots):
         return None
@@ -235,6 +243,7 @@ async def _recover_contract_required_transaction_store_preview(
         user_text=user_text,
         merged_slots=merged_slots,
         blocked_fast_path_source=blocked_fast_path_source,
+        member_no=member_no,
     )
 
 
@@ -244,6 +253,7 @@ async def _recover_contract_required_owned_record_lookup(
     user_text: str,
     merged_slots: ConversationSlots | None,
     blocked_fast_path_source: str = "contract_required_owned_record_lookup",
+    member_no: str | None = None,
 ) -> dict[str, Any] | None:
     if turn_contract is None:
         return None
@@ -259,6 +269,7 @@ async def _recover_contract_required_owned_record_lookup(
         user_text=user_text,
         merged_slots=merged_slots,
         blocked_fast_path_source=blocked_fast_path_source,
+        member_no=member_no,
     )
 
 
@@ -268,6 +279,7 @@ async def _recover_contract_required_tool(
     user_text: str,
     merged_slots: ConversationSlots | None,
     blocked_fast_path_source: str = "contract_required_tool_executor",
+    member_no: str | None = None,
 ) -> dict[str, Any] | None:
     """Run the deterministic tool required by the current TurnContract, if one is known."""
 
@@ -276,6 +288,7 @@ async def _recover_contract_required_tool(
         user_text=user_text,
         merged_slots=merged_slots,
         blocked_fast_path_source=blocked_fast_path_source,
+        member_no=member_no,
     )
     if store_flow_recovery is not None:
         return store_flow_recovery
@@ -284,6 +297,7 @@ async def _recover_contract_required_tool(
         user_text=user_text,
         merged_slots=merged_slots,
         blocked_fast_path_source=blocked_fast_path_source,
+        member_no=member_no,
     )
     if preview_recovery is not None:
         return preview_recovery
@@ -292,6 +306,7 @@ async def _recover_contract_required_tool(
         user_text=user_text,
         merged_slots=merged_slots,
         blocked_fast_path_source=blocked_fast_path_source,
+        member_no=member_no,
     )
     if owned_record_recovery is not None:
         return owned_record_recovery
@@ -300,7 +315,119 @@ async def _recover_contract_required_tool(
         user_text=user_text,
         merged_slots=merged_slots,
         blocked_fast_path_source=blocked_fast_path_source,
+        member_no=member_no,
     )
+
+
+def _tool_rows(tool_result: Mapping[str, Any]) -> list[dict[str, Any]]:
+    data = tool_result.get("data") if isinstance(tool_result, Mapping) else None
+    if isinstance(data, Mapping):
+        raw_rows = data.get("items") or data.get("rows") or data.get("cars") or data.get("stores") or []
+        if isinstance(raw_rows, list):
+            return [dict(row) for row in raw_rows if isinstance(row, Mapping)]
+        if raw_rows in (None, "", [], {}):
+            return []
+        return [dict(data)]
+    if isinstance(data, list):
+        return [dict(row) for row in data if isinstance(row, Mapping)]
+    return []
+
+
+def _normalize_match_text(value: Any) -> str:
+    return re.sub(r"[^0-9a-z가-힣]", "", str(value or "").lower())
+
+
+def _registered_vehicle_anchor_matches(row: Mapping[str, Any], anchor: str) -> bool:
+    normalized_anchor = _normalize_match_text(anchor)
+    if not normalized_anchor:
+        return False
+    for key in (
+        "car_mdl_nm",
+        "car_model_nm",
+        "model_nm",
+        "modelName",
+        "car_nm",
+        "carName",
+        "car_no",
+        "carNo",
+        "licensePlate",
+    ):
+        normalized_value = _normalize_match_text(row.get(key))
+        if normalized_value and (normalized_anchor in normalized_value or normalized_value in normalized_anchor):
+            return True
+    return False
+
+
+def _single_registered_vehicle_match(
+    tool_result: Mapping[str, Any],
+    *,
+    anchor: str,
+) -> dict[str, Any] | None:
+    matches = [row for row in _tool_rows(tool_result) if _registered_vehicle_anchor_matches(row, anchor)]
+    if len(matches) != 1:
+        return None
+    return matches[0]
+
+
+def _registered_vehicle_recommendation_input(
+    *,
+    turn_contract: TurnContract,
+    vehicle_row: Mapping[str, Any],
+) -> dict[str, Any]:
+    tool_input = {
+        str(key): value
+        for key, value in dict(getattr(turn_contract, "tool_args_patch", {}) or {}).items()
+        if value not in (None, "", [], {})
+    }
+    front_size = normalize_tire_size(str(vehicle_row.get("tire_size_fr") or vehicle_row.get("tireSizeFr") or ""))
+    rear_size = normalize_tire_size(str(vehicle_row.get("tire_size_re") or vehicle_row.get("tireSizeRr") or ""))
+    if front_size and (not rear_size or front_size == rear_size):
+        tool_input["tire_size"] = front_size
+    car_lnc_cd = str(vehicle_row.get("car_lnc_cd") or vehicle_row.get("carLncCd") or "").strip()
+    if car_lnc_cd:
+        tool_input["car_lnc_cd"] = car_lnc_cd
+    vehicle_type = str(vehicle_row.get("vehicle_type") or vehicle_row.get("vehicleType") or "").strip()
+    if vehicle_type:
+        tool_input["vehicle_type"] = vehicle_type
+    tool_input.setdefault("rcmd_type", "tstation")
+    return {key: value for key, value in tool_input.items() if value not in (None, "", [], {})}
+
+
+async def _maybe_run_registered_vehicle_recommendation(
+    *,
+    turn_contract: TurnContract,
+    car_tool_result: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    known_slots = turn_contract.known_slots or {}
+    anchor = str(known_slots.get("named_registered_vehicle_anchor") or "").strip()
+    if not anchor:
+        return None
+    allowed_tools = {str(tool) for tool in tuple(turn_contract.allowed_tools or ()) if str(tool)}
+    forbidden_tools = {str(tool) for tool in tuple(turn_contract.forbidden_tools or ()) if str(tool)}
+    recommendation_tool = "get_products_recommendations_tool"
+    if recommendation_tool not in allowed_tools or recommendation_tool in forbidden_tools:
+        return None
+    vehicle_row = _single_registered_vehicle_match(car_tool_result, anchor=anchor)
+    if vehicle_row is None:
+        return None
+    recommendation_input = _registered_vehicle_recommendation_input(
+        turn_contract=turn_contract,
+        vehicle_row=vehicle_row,
+    )
+    if not (recommendation_input.get("tire_size") or recommendation_input.get("car_lnc_cd")):
+        return None
+    from services.tstation.agents.b_discovery_agent.tools import get_products_recommendations_tool
+
+    raw_result = await asyncio.to_thread(get_products_recommendations_tool.invoke, recommendation_input)
+    recommendation_result = raw_result if isinstance(raw_result, dict) else qc_verifier.parse_tool_output(raw_result)
+    if not isinstance(recommendation_result, dict):
+        recommendation_result = {
+            "status": "error",
+            "http_status": None,
+            "message": "Invalid tool response",
+            "data": {},
+        }
+    return recommendation_input, recommendation_result
 
 
 async def recover_blocked_fast_path_to_contract_tool(
@@ -317,7 +444,8 @@ async def recover_blocked_fast_path_to_contract_tool(
         return None
     context_state = str(getattr(turn_contract, "context_state", "") or "")
     current_turn_vehicle_recommendation = _is_vehicle_selection_recommendation_contract(turn_contract)
-    if context_state not in {"active", "resumed"} and not current_turn_vehicle_recommendation:
+    current_turn_direct_path = str(blocked_fast_path_source or "").startswith("contract_direct_executor:")
+    if context_state not in {"active", "resumed"} and not current_turn_vehicle_recommendation and not current_turn_direct_path:
         return None
 
     contract_intent = str(turn_contract.intent or "")
@@ -376,6 +504,17 @@ async def recover_blocked_fast_path_to_contract_tool(
                 if isinstance(fallback_items, list) and fallback_items:
                     tool_input = fallback_input
                     tool_result = fallback_tool_result
+        chained_tool_name = ""
+        chained_tool_input: dict[str, Any] = {}
+        chained_tool_result: dict[str, Any] = {}
+        if preferred_tool == "get_my_cars_tool":
+            chained_recommendation = await _maybe_run_registered_vehicle_recommendation(
+                turn_contract=turn_contract,
+                car_tool_result=tool_result,
+            )
+            if chained_recommendation is not None:
+                chained_tool_name = "get_products_recommendations_tool"
+                chained_tool_input, chained_tool_result = chained_recommendation
         if preferred_tool == "search_product_tool":
             assistant_text = f"{str(tool_input.get('keyword') or '상품')} 상품을 확인했어요."
         elif preferred_tool == "get_product_description_tool":
@@ -383,17 +522,21 @@ async def recover_blocked_fast_path_to_contract_tool(
         elif preferred_tool == "get_products_recommendations_tool":
             assistant_text = "추천 상품을 확인했어요."
         elif preferred_tool == "get_my_cars_tool":
-            assistant_text = "등록된 차량을 확인했어요."
+            assistant_text = "추천 상품을 확인했어요." if chained_tool_name else "등록된 차량을 확인했어요."
         elif preferred_tool == "get_store_schedule_tool":
             assistant_text = "예약 가능 일정을 확인했어요."
         elif preferred_tool == "get_store_inventory_tool":
             assistant_text = "매장 재고를 확인했어요."
         else:
             assistant_text = "요청하신 정보를 확인했어요."
-        mapped_event = try_build_template(
-            [{"tool": preferred_tool, "args": tool_input, "data": tool_result}],
-            assistant_text,
-        )
+        tool_data_list = [{"tool": preferred_tool, "args": tool_input, "data": tool_result}]
+        if chained_tool_name:
+            tool_data_list.append({
+                "tool": chained_tool_name,
+                "args": chained_tool_input,
+                "data": chained_tool_result,
+            })
+        mapped_event = try_build_template(tool_data_list, assistant_text)
         from services.tstation.chat import (
             _build_reservation_status_lookup_event,
             _build_reservation_store_info_event,
@@ -452,14 +595,22 @@ async def recover_blocked_fast_path_to_contract_tool(
         mapped_event,
         turn_contract=turn_contract,
         blocked_fast_path_source=blocked_fast_path_source,
-        recovered_tool=preferred_tool,
-        recovery_reason="fast_path_blocked_but_contract_tool_executable",
-        tool_input_source=tool_input_source or "contract_tool_plan",
+        recovered_tool=chained_tool_name or preferred_tool,
+        recovery_reason=(
+            "registered_vehicle_direct_recommendation"
+            if chained_tool_name
+            else "fast_path_blocked_but_contract_tool_executable"
+        ),
+        tool_input_source=(
+            "router_evidence_registered_vehicle_anchor"
+            if chained_tool_name
+            else tool_input_source or "contract_tool_plan"
+        ),
     )
     return {
-        "tool_name": preferred_tool,
-        "tool_input": tool_input,
-        "tool_result": tool_result,
+        "tool_name": chained_tool_name or preferred_tool,
+        "tool_input": chained_tool_input or tool_input,
+        "tool_result": chained_tool_result or tool_result,
         "event": mapped_event,
         "events": [
             {
@@ -484,5 +635,33 @@ async def recover_blocked_fast_path_to_contract_tool(
                 "tool": preferred_tool,
                 "source_domain": source_domain,
             },
+            *(
+                [
+                    {
+                        "type": "status",
+                        "status": "tool_start",
+                        "tool": chained_tool_name,
+                        "display_name": "추천 상품 확인 중...",
+                        "source_domain": source_domain,
+                    },
+                    {
+                        "type": "agent_flow",
+                        "agent": "[CONTRACT RECOVERY AF]",
+                        "agent_class": "Contract Recovery",
+                        "status": chained_tool_result.get("status", "success"),
+                        "source_domain": source_domain,
+                    },
+                    {
+                        "type": "tool",
+                        "input": chained_tool_input,
+                        "output": json.dumps(chained_tool_result, ensure_ascii=False),
+                        "node": "tools",
+                        "tool": chained_tool_name,
+                        "source_domain": source_domain,
+                    },
+                ]
+                if chained_tool_name
+                else []
+            ),
         ],
     }
