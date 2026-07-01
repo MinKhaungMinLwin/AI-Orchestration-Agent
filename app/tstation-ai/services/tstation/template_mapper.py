@@ -6268,6 +6268,9 @@ def try_build_template(accumulated_tool_data: list[dict], assistant_text: str) -
     """
     if not accumulated_tool_data:
         return None
+    called_tools = {str(entry.get("tool") or "") for entry in accumulated_tool_data if isinstance(entry, dict)}
+    if should_bypass_code_mapper_for_llm_info_answer(called_tools):
+        return None
 
     runflat_comparison = _map_runflat_price_comparison(accumulated_tool_data, assistant_text)
     if runflat_comparison is not None:
