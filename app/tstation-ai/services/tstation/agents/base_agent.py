@@ -217,6 +217,11 @@ def _should_skip_support_search_product_fast_path(agent_name: str, tool_name: st
     return tool_name == "search_product_tool" and "support" in str(agent_name or "").lower()
 
 
+def _pending_tool_call_ids(tool_calls_map: dict[str, dict], completed_tool_call_ids: set[str]) -> list[str]:
+    expected_tool_call_ids = {str(tool_call_id) for tool_call_id in tool_calls_map}
+    return sorted(expected_tool_call_ids - completed_tool_call_ids)
+
+
 def _should_defer_search_product_fast_path_for_stock_contract(
     tool_name: str,
     code_event: dict | None,
@@ -1187,6 +1192,7 @@ class BaseAgent(ABC):
         suppress_tokens = prompt_template is not None
         accumulated_text = ""
         accumulated_tool_data: list[dict] = []
+        completed_tool_call_ids: set[str] = set()
         response_streamer = _AssistantResponseStreamer() if suppress_tokens else None
 
         yield {"type": "status", "status": "생각 중..."}
@@ -1362,6 +1368,8 @@ class BaseAgent(ABC):
                             except (json.JSONDecodeError, TypeError):
                                 pass
                             tool_input = tool_calls_map.get(message.tool_call_id, {})
+                            if message.tool_call_id:
+                                completed_tool_call_ids.add(str(message.tool_call_id))
                             tool_started_at = tool_input.get("started_at")
                             tool_latency_ms = (
                                 (time.perf_counter() - tool_started_at) * 1000
@@ -1658,6 +1666,14 @@ class BaseAgent(ABC):
                                         yield event
                                     return
                             if suppress_tokens and message.name in self._FAST_PATH_CODE_MAPPER_TOOLS:
+                                pending_tool_call_ids = _pending_tool_call_ids(tool_calls_map, completed_tool_call_ids)
+                                if pending_tool_call_ids:
+                                    logger.info(
+                                        "[%s] Defer tool fast-path until parallel tool calls finish: pending=%s",
+                                        self.name,
+                                        pending_tool_call_ids,
+                                    )
+                                    continue
                                 if _should_skip_support_search_product_fast_path(self.name, message.name):
                                     logger.info(
                                         "[%s] Skip search_product_tool fast-path for support follow-up",

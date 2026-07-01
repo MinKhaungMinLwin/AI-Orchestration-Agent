@@ -12,6 +12,7 @@ from services.tstation.agents.base_agent import (
     _is_explicit_vehicle_list_request,
     _normalize_qty_quick_replies,
     _owner_lookup_vehicle_recommendation_args,
+    _pending_tool_call_ids,
     _resolve_registered_vehicle_match,
     _should_skip_support_search_product_fast_path,
     _should_defer_listcar_for_possessive_model_mismatch,
@@ -39,6 +40,16 @@ def test_support_agent_skips_search_product_fast_path() -> None:
     assert _should_skip_support_search_product_fast_path("Support Agent", "search_product_tool") is True
     assert _should_skip_support_search_product_fast_path("Discovery Agent", "search_product_tool") is False
     assert _should_skip_support_search_product_fast_path("Support Agent", "get_product_warranties_tool") is False
+
+
+def test_pending_tool_call_ids_waits_for_parallel_sibling_tools() -> None:
+    tool_calls_map = {
+        "call_kinergy": {"name": "search_product_tool"},
+        "call_ventus": {"name": "search_product_tool"},
+    }
+
+    assert _pending_tool_call_ids(tool_calls_map, {"call_kinergy"}) == ["call_ventus"]
+    assert _pending_tool_call_ids(tool_calls_map, {"call_kinergy", "call_ventus"}) == []
 
 
 def test_product_warranty_tool_result_builds_support_quickreply() -> None:

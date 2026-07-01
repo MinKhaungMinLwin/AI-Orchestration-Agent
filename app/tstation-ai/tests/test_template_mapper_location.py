@@ -1600,6 +1600,56 @@ def test_product_description_without_size_omits_unrequested_size_missing_notice(
     assert "- 키너지 EX:" not in assistant_response
 
 
+def test_multi_product_description_search_entries_keep_all_products() -> None:
+    text = "kinergy EX, Ventus S2 AS 설명해줘"
+    current_user_text.set(text)
+    current_discovery_response_decision.set(decide_discovery_response(build_discovery_intent_frame(text)))
+    ventus_s2_as_entry = {
+        "tool": "search_product_tool",
+        "args": {"keyword": "벤투스 S2 AS", "brand_cd": "HK", "limit": 5},
+        "data": {
+            "status": "success",
+            "http_status": 200,
+            "data": {
+                "items": [
+                    {
+                        "goods_nm": "벤투스 S2 AS",
+                        "tire_size_1": "205/55R16",
+                        "rr": "3",
+                        "wet": "3",
+                        "prc_grd_nm": "프리미엄",
+                        "goods_pfm_nm": "COMFORT",
+                        "season_nm": "사계절",
+                        "car_knd_nm": "승용차",
+                    },
+                    {
+                        "goods_nm": "벤투스 S2 AS",
+                        "tire_size_1": "225/45R17",
+                        "rr": "3",
+                        "wet": "3",
+                        "prc_grd_nm": "프리미엄",
+                        "goods_pfm_nm": "COMFORT",
+                        "season_nm": "사계절",
+                        "car_knd_nm": "승용차",
+                    },
+                ]
+            },
+        },
+    }
+
+    result = try_build_template([_kinergy_ex_search_entry(), ventus_s2_as_entry], "상품 설명입니다.")
+
+    assert result is not None
+    assert result["template"] == "quickReply"
+    assistant_response = result["data"]["assistantResponse"]
+    assert "키너지 EX:" in assistant_response
+    assert "벤투스 S2 AS:" in assistant_response
+    assert assistant_response.index("키너지 EX:") < assistant_response.index("벤투스 S2 AS:")
+    assert "사이즈: 165/60R14, 185/65R14" in assistant_response
+    assert "사이즈: 205/55R16, 225/45R17" in assistant_response
+    assert "사이즈가 아직 확인되지 않아" not in assistant_response
+
+
 def test_bare_s_fit_search_without_size_maps_to_pattern_summary_not_product_cards() -> None:
     text = "s fit as"
     current_user_text.set(text)
