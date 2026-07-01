@@ -69,6 +69,7 @@ _PAYMENT_UNIT_PRICE_FIELDS = (
     "price",
 )
 _INTENT_FIELDS = (
+    "sub_flow_type",
     "pending_intent",
     "goal_type",
     "stock_check_mode",
@@ -96,6 +97,7 @@ _FLOW_PROGRESS_META_FIELDS = (
     "progress_source",
 )
 _ACTIVE_FLOW_TYPES = {
+    "commerce",
     "purchase",
     "recommendation",
     "stock",
@@ -108,6 +110,20 @@ _ACTIVE_FLOW_TYPES = {
     "service_maintenance",
     "reservation_management",
 }
+_CANONICAL_FLOW_TYPES = {"commerce", "support", "reservation_management"}
+_COMMERCE_SUB_FLOW_TYPES = {
+    "purchase",
+    "recommendation",
+    "stock",
+    "booking",
+    "store_search",
+    "store_schedule",
+    "store_service_search",
+    "favorite_store",
+    "service_maintenance",
+}
+_COMMERCE_PURCHASE_LIKE_FLOW_TYPES = {"purchase", "stock", "booking"}
+_COMMERCE_STORE_LIKE_FLOW_TYPES = {"store_search", "store_schedule", "store_service_search", "favorite_store"}
 _STORE_CANDIDATE_SOURCE_TOOLS = {
     "transaction_store_preview_tool",
     "get_store_list_tool",
@@ -162,6 +178,60 @@ def _non_empty_mapping(values: Mapping[str, Any] | None) -> dict[str, Any]:
     if not isinstance(values, Mapping):
         return {}
     return {key: value for key, value in dict(values or {}).items() if value not in _EMPTY_VALUES}
+
+
+def canonical_flow_type(flow_type: Any) -> str:
+    value = str(flow_type or "").strip()
+    if value in _COMMERCE_SUB_FLOW_TYPES:
+        return "commerce"
+    if value in {"support", "reservation_management"}:
+        return value
+    if value == "commerce":
+        return "commerce"
+    return ""
+
+
+def commerce_sub_flow_type(flow_type: Any, intent: Mapping[str, Any] | None = None) -> str:
+    values = _non_empty_mapping(intent)
+    sub_flow_type = str(values.get("sub_flow_type") or "").strip()
+    if sub_flow_type in _COMMERCE_SUB_FLOW_TYPES:
+        return sub_flow_type
+    value = str(flow_type or "").strip()
+    return value if value in _COMMERCE_SUB_FLOW_TYPES else ""
+
+
+def effective_flow_type(flow_type: Any, intent: Mapping[str, Any] | None = None) -> str:
+    canonical = canonical_flow_type(flow_type)
+    if canonical == "commerce":
+        return commerce_sub_flow_type(flow_type, intent) or "purchase"
+    return canonical
+
+
+def flow_type_matches_allowed(
+    flow_type: Any,
+    allowed_flow_types: set[str] | frozenset[str] | None,
+    intent: Mapping[str, Any] | None = None,
+) -> bool:
+    if allowed_flow_types is None:
+        return True
+    allowed = {str(value or "").strip() for value in allowed_flow_types if str(value or "").strip()}
+    canonical = canonical_flow_type(flow_type)
+    effective = effective_flow_type(flow_type, intent)
+    if canonical in allowed or effective in allowed:
+        return True
+    return bool(canonical == "commerce" and allowed.intersection(_COMMERCE_SUB_FLOW_TYPES))
+
+
+def _normalize_flow_type_and_intent(flow_type: Any, intent: Mapping[str, Any] | None = None) -> tuple[str, dict[str, Any]]:
+    values = _non_empty_mapping(intent)
+    raw_flow_type = str(flow_type or "").strip()
+    canonical = canonical_flow_type(raw_flow_type) or "commerce"
+    if canonical == "commerce":
+        sub_flow_type = commerce_sub_flow_type(raw_flow_type, values) or "purchase"
+        values["sub_flow_type"] = sub_flow_type
+    else:
+        values.pop("sub_flow_type", None)
+    return canonical, values
 
 
 def _sanitize_product_identity_values(values: dict[str, Any]) -> None:
@@ -367,8 +437,8 @@ def _store_lookup_tool_and_args(store: Mapping[str, Any]) -> tuple[str | None, d
 
 def flow_identity_for_context(context: Mapping[str, Any] | None) -> str:
     values = _non_empty_mapping(context)
-    flow_type = str(values.get("flow_type") or "").strip()
-    if flow_type not in _ACTIVE_FLOW_TYPES:
+    flow_type = canonical_flow_type(values.get("flow_type"))
+    if flow_type not in _CANONICAL_FLOW_TYPES:
         return ""
 
     product = _section_values(values, "product", _PRODUCT_FIELDS)
@@ -377,20 +447,21 @@ def flow_identity_for_context(context: Mapping[str, Any] | None) -> str:
     recommendation = _section_values(values, "recommendation", _RECOMMENDATION_FIELDS)
     store = _section_values(values, "store", _STORE_FIELDS)
     intent = _section_values(values, "intent", _INTENT_FIELDS)
+    sub_flow_type = commerce_sub_flow_type(values.get("flow_type"), intent)
 
-    if flow_type in {"purchase", "stock", "booking"}:
+    if flow_type == "commerce" and sub_flow_type in _COMMERCE_PURCHASE_LIKE_FLOW_TYPES:
         product_key = str(product.get("goods_no") or _product_identity(product) or "").strip()
         tire_size = _normalize_vehicle_tire_size(product.get("tire_size"))
         if not product_key and not tire_size:
             return ""
-        parts = [flow_type, product_key, tire_size]
-    elif flow_type in {"store_search", "store_schedule", "store_service_search", "favorite_store"}:
+        parts = [flow_type, sub_flow_type, product_key, tire_size]
+    elif flow_type == "commerce" and sub_flow_type in _COMMERCE_STORE_LIKE_FLOW_TYPES:
         store_key = str(
             _first_non_empty(store.get("shop_id"), store.get("shop_name"), store.get("store_name"), store.get("region"), store.get("place_query"))
             or ""
         ).strip()
-        parts = [flow_type, store_key]
-    elif flow_type == "recommendation":
+        parts = [flow_type, sub_flow_type, store_key]
+    elif flow_type == "commerce" and sub_flow_type == "recommendation":
         vehicle_identity = _vehicle_identity(vehicle)
         vehicle_key = vehicle_identity[1] if vehicle_identity else ""
         scenario = str(
@@ -403,14 +474,14 @@ def flow_identity_for_context(context: Mapping[str, Any] | None) -> str:
             or ""
         ).strip()
         tire_size = _normalize_vehicle_tire_size(product.get("tire_size") or vehicle.get("tire_size"))
-        parts = [flow_type, scenario, vehicle_key, tire_size]
+        parts = [flow_type, sub_flow_type, scenario, vehicle_key, tire_size]
     elif flow_type == "support":
         policy_key = str(
             _first_non_empty(intent.get("pending_intent"), intent.get("policy_topic"), intent.get("faq_topic"), intent.get("goal_type"))
             or ""
         ).strip()
         parts = [flow_type, policy_key]
-    elif flow_type == "service_maintenance":
+    elif flow_type == "commerce" and sub_flow_type == "service_maintenance":
         service_key = str(
             _first_non_empty(intent.get("service_name"), intent.get("service_type"), intent.get("pending_intent"))
             or ""
@@ -420,7 +491,7 @@ def flow_identity_for_context(context: Mapping[str, Any] | None) -> str:
             _first_non_empty(store.get("shop_id"), store.get("shop_name"), store.get("store_name"), store.get("region"))
             or ""
         ).strip()
-        parts = [flow_type, boundary, service_key, store_key]
+        parts = [flow_type, sub_flow_type, boundary, service_key, store_key]
     elif flow_type == "reservation_management":
         action = str(_first_non_empty(intent.get("reservation_management_action"), intent.get("pending_intent")) or "").strip()
         target = str(_first_non_empty(intent.get("owned_record_target"), intent.get("goal_type")) or "").strip()
@@ -509,6 +580,7 @@ def upsert_dormant_flow(
     context = _non_empty_mapping(flow_context)
     if not context:
         return prune_dormant_flows(dormant_flows, max_flows=max_flows, ttl_seconds=ttl_seconds, now=now)
+    context = FlowState.from_active_flow_context(context).to_active_flow_context()
     context["status"] = "dormant"
     context["updated_at"] = _flow_updated_at(context)
     identity = flow_identity_for_context(context)
@@ -575,7 +647,12 @@ def resume_dormant_flow(
         if target_identity and target_identity != target_flow_type and dormant.get("flow_identity") == target_identity:
             matches.append(dormant)
             continue
-        if target_flow_type and context.get("flow_type") != target_flow_type:
+        context_intent = context.get("intent") if isinstance(context.get("intent"), Mapping) else {}
+        if target_flow_type and not flow_type_matches_allowed(
+            context.get("flow_type"),
+            frozenset({target_flow_type}),
+            context_intent,
+        ):
             continue
         if target_flow_type and not normalized_product and not normalized_store:
             matches.append(dormant)
@@ -639,7 +716,7 @@ def evaluate_flow_progress(state: "FlowState") -> dict[str, Any]:
     product = _non_empty_mapping(state.product)
     store = _non_empty_mapping(state.store)
     intent = _non_empty_mapping(state.intent)
-    flow_type = str(state.flow_type or "").strip()
+    flow_type = effective_flow_type(state.flow_type, intent)
     goods_no = str(product.get("goods_no") or "").strip()
     product_name = str(
         _first_non_empty(product.get("product_name"), product.get("tire_model"), product.get("pending_product_name"))
@@ -792,7 +869,7 @@ def flow_progress_from_active_context(
     state = FlowState.from_active_flow_context(active_flow_context)
     if state.status not in {"active", "resumed"}:
         return {}
-    if allowed_flow_types is not None and state.flow_type not in allowed_flow_types:
+    if not flow_type_matches_allowed(state.flow_type, allowed_flow_types, state.intent):
         return {}
     context = state.to_active_flow_context()
     progress = {
@@ -805,6 +882,7 @@ def flow_progress_from_active_context(
     if not progress:
         return {}
     progress["flow_type"] = state.flow_type
+    progress["sub_flow_type"] = effective_flow_type(state.flow_type, state.intent)
     progress["flow_step"] = state.flow_step
     return progress
 
@@ -823,7 +901,7 @@ def flow_progress_tool_candidate(
     if not isinstance(progress, Mapping) or not progress:
         return {}
     normalized_domain = str(domain or "").strip().lower()
-    flow_type = str(progress.get("flow_type") or "").strip()
+    flow_type = effective_flow_type(progress.get("flow_type"), {"sub_flow_type": progress.get("sub_flow_type")})
     current_step = str(progress.get("current_step") or "").strip()
     next_tool = str(progress.get("next_tool") or "").strip()
     intent = str(contract_intent or "").strip()
@@ -957,9 +1035,9 @@ class DormantFlow:
         context = _non_empty_mapping(raw_context)
         if not context:
             return None
-        flow_type = str(context.get("flow_type") or "").strip()
-        if flow_type not in _ACTIVE_FLOW_TYPES:
+        if canonical_flow_type(context.get("flow_type")) not in _CANONICAL_FLOW_TYPES:
             return None
+        context = FlowState.from_active_flow_context(context).to_active_flow_context()
         context["status"] = "dormant"
         identity = str(data.get("flow_identity") or flow_identity_for_context(context)).strip()
         if not identity:
@@ -996,14 +1074,14 @@ class FlowState:
 
     @classmethod
     def purchase(cls, status: str = "active") -> "FlowState":
-        return cls(flow_type="purchase", status=status)
+        state = cls(flow_type="commerce", status=status)
+        state.intent["sub_flow_type"] = "purchase"
+        return state
 
     @classmethod
     def from_active_flow_context(cls, context: Mapping[str, Any] | None) -> "FlowState":
         flat = _non_empty_mapping(context)
-        flow_type = str(flat.get("flow_type") or "").strip()
-        if flow_type not in _ACTIVE_FLOW_TYPES:
-            flow_type = "purchase"
+        flow_type, normalized_intent = _normalize_flow_type_and_intent(flat.get("flow_type"))
         state = cls(
             flow_type=flow_type,
             status=str(flat.get("status") or "active"),
@@ -1017,6 +1095,8 @@ class FlowState:
         state.schedule = _section_values(flat, "schedule", _SCHEDULE_FIELDS)
         state.payment = _section_values(flat, "payment", _PAYMENT_FIELDS)
         state.intent = _section_values(flat, "intent", _INTENT_FIELDS)
+        state.intent = {**normalized_intent, **state.intent}
+        state.flow_type, state.intent = _normalize_flow_type_and_intent(state.flow_type, state.intent)
         state.meta = {
             key: flat[key]
             for key in ("source", "updated_at", "awaiting_store_region", "pending_step", *_FLOW_PROGRESS_META_FIELDS)
@@ -1057,7 +1137,8 @@ class FlowState:
         flow_step: str | None = None,
     ) -> "FlowState":
         flat = _non_empty_mapping(values)
-        state = cls(flow_type=flow_type if flow_type in _ACTIVE_FLOW_TYPES else "purchase", flow_step=flow_step)
+        normalized_flow_type, normalized_intent = _normalize_flow_type_and_intent(flow_type)
+        state = cls(flow_type=normalized_flow_type, flow_step=flow_step)
         state.product = _section_values(flat, "product", _PRODUCT_FIELDS)
         _normalize_product_aliases(state.product)
         state.vehicle = _section_values(flat, "vehicle", _VEHICLE_FIELDS)
@@ -1066,6 +1147,8 @@ class FlowState:
         state.schedule = _section_values(flat, "schedule", _SCHEDULE_FIELDS)
         state.payment = _section_values(flat, "payment", _PAYMENT_FIELDS)
         state.intent = _section_values(flat, "intent", _INTENT_FIELDS)
+        state.intent = {**normalized_intent, **state.intent}
+        state.flow_type, state.intent = _normalize_flow_type_and_intent(state.flow_type, state.intent)
         state.meta = {
             key: flat[key]
             for key in ("awaiting_store_region", "pending_step", *_FLOW_PROGRESS_META_FIELDS)
@@ -1125,7 +1208,10 @@ class FlowState:
         return _non_empty_mapping(flat)
 
     def merge(self, delta: "FlowState", *, source: str) -> FlowStateMergeResult:
-        if self.flow_type != "purchase" or delta.flow_type != "purchase":
+        if effective_flow_type(self.flow_type, self.intent) != "purchase" or effective_flow_type(
+            delta.flow_type,
+            delta.intent,
+        ) != "purchase":
             return self._merge_active(delta, source=source)
         before = self.to_pending_order_context()
         merged = FlowState.from_pending_order_context(before)
@@ -1404,7 +1490,8 @@ class FlowState:
 def is_purchase_flow_context(*contexts: Mapping[str, Any] | None) -> bool:
     for context in contexts:
         values = _non_empty_mapping(context)
-        if values.get("flow_type") == "purchase":
+        intent = values.get("intent") if isinstance(values.get("intent"), Mapping) else values
+        if effective_flow_type(values.get("flow_type"), intent) == "purchase":
             return True
         if values.get("pending_intent") == "order" or values.get("goal_type") == "place_order":
             return True
@@ -1640,7 +1727,8 @@ def store_candidate_selection_patch(
     selection_hint: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     active_flow = FlowState.from_active_flow_context(active_flow_context)
-    if active_flow.flow_type not in {
+    active_flow_type = effective_flow_type(active_flow.flow_type, active_flow.intent)
+    if active_flow_type not in {
         "purchase",
         "stock",
         "store_search",
@@ -1688,8 +1776,8 @@ def store_candidate_selection_patch(
         )
         if selected.get(key) not in _EMPTY_VALUES
     }
-    patch["_flow_type"] = active_flow.flow_type
-    if active_flow.flow_type == "stock":
+    patch["_flow_type"] = active_flow_type
+    if active_flow_type == "stock":
         patch.update({
             "pending_intent": "stock",
             "goal_type": "store_with_stock",
@@ -1713,12 +1801,13 @@ def selected_store_slots_from_active_flow_context(
         return {}
     if active_flow.flow_step not in {"store_selected", "selected_store_schedule"}:
         return {}
-    if allowed_flow_types is not None and active_flow.flow_type not in allowed_flow_types:
+    active_flow_type = effective_flow_type(active_flow.flow_type, active_flow.intent)
+    if not flow_type_matches_allowed(active_flow.flow_type, allowed_flow_types, active_flow.intent):
         return {}
     if not active_flow.store.get("shop_id"):
         return {}
     selected: dict[str, Any] = {
-        "flow_type": active_flow.flow_type,
+        "flow_type": active_flow_type,
         "flow_step": active_flow.flow_step,
         **{
             key: active_flow.store[key]
@@ -1936,7 +2025,7 @@ def recommendation_vehicle_selection_patch(
     selected_vehicle_slots: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
     active_flow = FlowState.from_active_flow_context(active_flow_context)
-    if active_flow.flow_type != "recommendation" or active_flow.flow_step != "select_vehicle":
+    if effective_flow_type(active_flow.flow_type, active_flow.intent) != "recommendation" or active_flow.flow_step != "select_vehicle":
         return {}
     if active_flow.status not in {"active", "resumed"}:
         return {}

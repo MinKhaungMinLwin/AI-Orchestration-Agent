@@ -14405,7 +14405,8 @@ def test_flow_transition_shell_records_selected_product_without_executing() -> N
         "selection_source": "previous_product_candidate",
     }
     active_flow_context = transition.flow_transition["active_flow_context"]
-    assert active_flow_context["flow_type"] == "purchase"
+    assert active_flow_context["flow_type"] == "commerce"
+    assert active_flow_context["intent"]["sub_flow_type"] == "purchase"
     assert active_flow_context["flow_step"] == "product_selected"
     assert active_flow_context["product"]["goods_no"] == "G000000310126"
     assert active_flow_context["product"]["product_name"] == "Ventus S2 AS"
@@ -14620,7 +14621,8 @@ def test_flow_transition_quantity_selection_preserves_product_name_and_price_fro
     )
 
     active_flow_context = transition.flow_transition["active_flow_context"]
-    assert active_flow_context["flow_type"] == "purchase"
+    assert active_flow_context["flow_type"] == "commerce"
+    assert active_flow_context["intent"]["sub_flow_type"] == "purchase"
     assert active_flow_context["flow_step"] == "quantity_selected"
     assert active_flow_context["product"]["goods_no"] == "G000000310126"
     assert active_flow_context["product"]["product_name"] == "벤투스 S2 AS"
@@ -14769,7 +14771,8 @@ def test_flow_transition_store_selection_preserves_purchase_product_name_and_pay
     )
 
     active_flow_context = transition.flow_transition["active_flow_context"]
-    assert active_flow_context["flow_type"] == "purchase"
+    assert active_flow_context["flow_type"] == "commerce"
+    assert active_flow_context["intent"]["sub_flow_type"] == "purchase"
     assert active_flow_context["flow_step"] == "store_selected"
     assert active_flow_context["product"]["goods_no"] == "G000000310126"
     assert active_flow_context["product"]["product_name"] == "벤투스 S2 AS"

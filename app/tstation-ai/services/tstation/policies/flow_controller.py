@@ -10,6 +10,7 @@ from typing import Any, Mapping
 
 from services.tstation.common.cta_urls import CTAUrls
 from services.tstation.policies.discovery_intent_policy import normalize_tire_size
+from services.tstation.policies.flow_state import canonical_flow_type, commerce_sub_flow_type
 from services.tstation.policies.response_decision import TemplateName
 
 
@@ -251,6 +252,19 @@ def _non_empty_mapping(values: Mapping[str, Any] | None) -> dict[str, Any]:
 def _mapping_value(values: Mapping[str, Any] | None, key: str) -> dict[str, Any]:
     value = values.get(key) if isinstance(values, Mapping) else None
     return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _flow_context_type(flow_type: str) -> tuple[str, str]:
+    canonical = canonical_flow_type(flow_type) or "commerce"
+    return canonical, commerce_sub_flow_type(flow_type, {"sub_flow_type": flow_type}) if canonical == "commerce" else ""
+
+
+def _flow_intent_with_sub_type(flow_type: str, intent: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    values = dict(intent or {})
+    canonical, sub_flow_type = _flow_context_type(flow_type)
+    if canonical == "commerce" and sub_flow_type:
+        values.setdefault("sub_flow_type", sub_flow_type)
+    return values
 
 
 def _availability_context_from_slots(slots: Any | Mapping[str, Any] | None) -> dict[str, Any]:
@@ -574,7 +588,9 @@ def _selected_store_flow_type(
         goal_type = str(values.get("goal_type") or "").strip()
         if pending_intent == "stock" or goal_type == "store_with_stock":
             return "stock"
-    active_flow_type = str(active_flow.get("flow_type") or "").strip()
+    active_flow_type = commerce_sub_flow_type(active_flow.get("flow_type"), _mapping_value(active_flow, "intent")) or str(
+        active_flow.get("flow_type") or ""
+    ).strip()
     if active_flow_type == "stock":
         return "stock"
     if str(active_flow.get("target_action") or "").strip() == "get_store_inventory_tool":
@@ -608,6 +624,7 @@ def _selected_product_flow_context(
         router_evidence=router_evidence,
         selected_product={**dict(slot_patch), **dict(selected_product)},
     )
+    canonical_flow_type_value, _ = _flow_context_type(flow_type)
     product_name = selected_product.get("product_name") or slot_patch.get("product_name") or slot_patch.get("tire_model")
     product = {
         key: value
@@ -652,13 +669,13 @@ def _selected_product_flow_context(
     return {
         key: value
         for key, value in {
-            "flow_type": flow_type,
+            "flow_type": canonical_flow_type_value,
             "status": "active",
             "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "flow_step": "product_selected",
             "product": product,
             "payment": payment,
-            "intent": intent,
+            "intent": _flow_intent_with_sub_type(flow_type, intent),
             "source": "flow_controller:select_product",
         }.items()
         if value not in (None, "", [], {})
@@ -686,6 +703,7 @@ def _selected_quantity_flow_context(
         router_evidence=router_evidence,
         existing_snapshot=existing_snapshot,
     )
+    canonical_flow_type_value, _ = _flow_context_type(flow_type)
     product = dict(flow_context.get("product")) if isinstance(flow_context.get("product"), Mapping) else {}
     for key, value in {
         "goods_no": existing_snapshot.get("goods_no"),
@@ -728,7 +746,7 @@ def _selected_quantity_flow_context(
             intent[key] = value
 
     flow_context.update({
-        "flow_type": flow_type,
+        "flow_type": canonical_flow_type_value,
         "status": "active",
         "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "flow_step": "quantity_selected",
@@ -740,7 +758,9 @@ def _selected_quantity_flow_context(
     if payment:
         flow_context["payment"] = payment
     if intent:
-        flow_context["intent"] = intent
+        flow_context["intent"] = _flow_intent_with_sub_type(flow_type, intent)
+    else:
+        flow_context["intent"] = _flow_intent_with_sub_type(flow_type)
     return {key: value for key, value in flow_context.items() if value not in (None, "", [], {})}
 
 
@@ -762,6 +782,7 @@ def _selected_store_flow_context(
         existing_snapshot=existing_snapshot,
         selected_store=selected_store,
     )
+    canonical_flow_type_value, _ = _flow_context_type(flow_type)
     product = dict(flow_context.get("product")) if isinstance(flow_context.get("product"), Mapping) else {}
     product_name = (
         selected_store.get("product_name")
@@ -823,7 +844,7 @@ def _selected_store_flow_context(
             payment[key] = value
 
     flow_context.update({
-        "flow_type": flow_type,
+        "flow_type": canonical_flow_type_value,
         "status": "resumed",
         "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "flow_step": "store_selected",
@@ -836,7 +857,9 @@ def _selected_store_flow_context(
     if payment:
         flow_context["payment"] = payment
     if intent:
-        flow_context["intent"] = intent
+        flow_context["intent"] = _flow_intent_with_sub_type(flow_type, intent)
+    else:
+        flow_context["intent"] = _flow_intent_with_sub_type(flow_type)
 
     if flow_type == "stock" and product.get("goods_no") and product.get("ord_qty") and store.get("shop_id"):
         flow_context.update({
@@ -863,7 +886,8 @@ def _flow_state_summary(context: Mapping[str, Any] | None) -> dict[str, Any]:
         return {}
     intent = _mapping_value(context, "intent")
     context_key = str(context.get("context_key") or "").strip()
-    flow_type = context.get("flow_type") or _flow_type_from_context_key(context_key)
+    raw_flow_type = context.get("flow_type") or _flow_type_from_context_key(context_key)
+    flow_type = commerce_sub_flow_type(raw_flow_type, intent) or str(raw_flow_type or "").strip()
     return {
         key: value
         for key, value in {
@@ -986,13 +1010,14 @@ def _current_turn_store_search_flow_context(
     return {
         key: value
         for key, value in {
-            "flow_type": "store_search",
+            "flow_type": "commerce",
             "status": "active",
             "flow_step": "search_ready" if store else "ask_region",
             "store": store,
             "intent": {
                 key: value
                 for key, value in {
+                    "sub_flow_type": "store_search",
                     "pending_intent": intent,
                     "goal_type": "store_search",
                     "store_search_condition": search_condition,
@@ -1081,13 +1106,14 @@ def _current_turn_discovery_flow_context(
     return {
         key: value
         for key, value in {
-            "flow_type": "recommendation",
+            "flow_type": "commerce",
             "status": "active",
             "flow_step": flow_step,
             "product": product,
             "vehicle": vehicle,
             "recommendation": recommendation,
             "intent": {
+                "sub_flow_type": "recommendation",
                 "pending_intent": intent,
                 "goal_type": "recommend_tire" if "recommend" in intent or "best_selling" in intent else "product_search",
             },
@@ -1204,7 +1230,7 @@ def _current_turn_service_maintenance_flow_context(
     return {
         key: value
         for key, value in {
-            "flow_type": "service_maintenance",
+            "flow_type": "commerce",
             "status": "active",
             "flow_step": current_step,
             "store": {
@@ -1220,6 +1246,7 @@ def _current_turn_service_maintenance_flow_context(
                 key: value
                 for key, value in {
                     "pending_intent": intent,
+                    "sub_flow_type": "service_maintenance",
                     "goal_type": boundary,
                     "service_action_boundary": boundary,
                     "service_name": service_name,
