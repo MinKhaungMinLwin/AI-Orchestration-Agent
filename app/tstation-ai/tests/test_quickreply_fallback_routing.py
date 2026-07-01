@@ -8492,6 +8492,55 @@ def test_tool_derived_search_product_context_keeps_raw_name_size_and_price_basis
     assert active_context["payment"]["price_source_tool"] == "search_product_tool"
 
 
+def test_single_resolved_search_product_row_accepts_top_level_list_payload() -> None:
+    resolved_row = chat_module._single_resolved_search_product_row(
+        [
+            {
+                "goods_no": "G000000310126",
+                "goods_nm": "벤투스 S2 AS",
+                "tire_size_1": "245/45R19",
+                "extra_fvr_sale_prc": 180500,
+            }
+        ]
+    )
+
+    assert resolved_row is not None
+    assert resolved_row["goods_no"] == "G000000310126"
+    assert resolved_row["product_name"] == "벤투스 S2 AS"
+    assert resolved_row["tire_size"] == "245/45R19"
+    assert resolved_row["price_basis"] == "extra_fvr_sale_prc"
+
+
+def test_promote_single_turn_purchase_from_top_level_list_search_result() -> None:
+    promoted = _promote_single_turn_purchase_contract_from_search_product(
+        user_text="벤투스 s2 as 2454519 구매할래",
+        tool_result=[
+            {
+                "goods_no": "G000000310126",
+                "goods_nm": "벤투스 S2 AS",
+                "tire_size_1": "245/45R19",
+                "extra_fvr_sale_prc": 180500,
+            }
+        ],
+        merged_slots=ConversationSlots(
+            tire_size="245/45R19",
+            ord_qty=4,
+            pending_intent="order",
+            goal_type="place_order",
+        ),
+        routing_result=SimpleNamespace(execution_plan=["discovery:resolve_product", "transaction:continue_purchase"]),
+    )
+
+    assert promoted is not None
+    promoted_slots, promoted_frame, promoted_tool_plan, _ = promoted
+    assert promoted_slots.goods_no == "G000000310126"
+    assert promoted_slots.tire_model == "벤투스 S2 AS"
+    assert promoted_slots.pending_product_name == "벤투스 S2 AS"
+    assert promoted_frame.intent == "quick_order_reservation"
+    assert promoted_tool_plan.tool_args_patch["goods_no"] == "G000000310126"
+    assert promoted_tool_plan.tool_args_patch["ord_qty"] == 4
+
+
 def test_purchase_readthrough_uses_active_flow_context_when_pending_context_is_thin() -> None:
     slots = ConversationSlots(
         goods_no="G000000310126",
