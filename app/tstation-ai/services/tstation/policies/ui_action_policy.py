@@ -539,13 +539,13 @@ def normalize_vehicle_type_from_car_type(raw_car_type: Any, *, fallback_text: st
         return None
 
     normalized = re.sub(r"[\s_\-/]+", "", combined).lower()
-    if re.search(r"전기차|electric|아이오닉|ioniq|electrified|gv70ev|\bev\b", combined, re.IGNORECASE):
+    if re.search(r"전기차|electric|아이오닉|ioniq|electrified|gv70ev|\bev\b|\bev\d\b|tesla|model\s*[3ysx]", combined, re.IGNORECASE):
         return "ev"
     if "스포츠유틸리티" in normalized or "suv" in normalized:
         return "suv"
-    if any(token in normalized for token in ("승용차", "승용", "세단", "sedan", "스포츠카", "passenger")):
+    if any(token in normalized for token in ("승용차", "승용", "세단", "sedan", "스포츠카", "sportscar", "sports", "passenger")):
         return "passenger"
-    if any(token in normalized for token in ("경트럭", "트럭", "truck", "밴", "van", "화물")):
+    if any(token in normalized for token in ("경트럭", "트럭", "truck", "밴", "van", "화물", "truck_van", "truckvan")):
         return "truck_van"
     return None
 

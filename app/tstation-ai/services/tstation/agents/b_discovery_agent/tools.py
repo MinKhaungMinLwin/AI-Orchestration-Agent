@@ -17,6 +17,7 @@ from services.tstation.agents.b_discovery_agent._car_no_audit import (
     detect_car_no_mismatch,
     set_registered_car_nos,
 )
+from services.tstation.policies.ui_action_policy import normalize_vehicle_type_from_car_type
 
 # Product Compatibility
 from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.check_compatibility_api_product_compatible_get import sync_detailed as check_compatibility
@@ -64,6 +65,50 @@ current_discovery_search_tool_patch: contextvars.ContextVar[dict[str, Any]] = co
 )
 
 _RECOMMENDATION_LIMIT_CAP = 10
+
+
+def _attach_vehicle_type_to_vehicle_row(row: dict[str, Any]) -> dict[str, Any]:
+    enriched = dict(row)
+    existing_vehicle_type = str(enriched.get("vehicle_type") or enriched.get("vehicleType") or "").strip()
+    if existing_vehicle_type:
+        return enriched
+
+    fallback_text = " ".join(
+        part
+        for part in (
+            str(enriched.get("car_model_det") or enriched.get("carModelDet") or "").strip(),
+            str(enriched.get("car_nm") or enriched.get("carNm") or "").strip(),
+            str(enriched.get("car_model") or enriched.get("carModel") or "").strip(),
+        )
+        if part
+    )
+    vehicle_type = normalize_vehicle_type_from_car_type(
+        enriched.get("car_type") or enriched.get("carType"),
+        fallback_text=fallback_text,
+    )
+    if vehicle_type:
+        enriched["vehicle_type"] = vehicle_type
+        enriched["vehicleType"] = vehicle_type
+    return enriched
+
+
+def _attach_vehicle_type_to_vehicle_payload(data: Any) -> Any:
+    if isinstance(data, dict):
+        enriched = dict(data)
+        items = enriched.get("items")
+        if isinstance(items, list):
+            enriched["items"] = [
+                _attach_vehicle_type_to_vehicle_row(item) if isinstance(item, dict) else item
+                for item in items
+            ]
+            return enriched
+        return _attach_vehicle_type_to_vehicle_row(enriched)
+    if isinstance(data, list):
+        return [
+            _attach_vehicle_type_to_vehicle_row(item) if isinstance(item, dict) else item
+            for item in data
+        ]
+    return data
 
 def _apply_recommendation_policy_patch(
     *,
@@ -757,7 +802,7 @@ def get_user_vehicles_tool(car_no: str, owner_nm: str):
                 response.content.decode(errors="ignore") or "Failed to get user vehicles"
             )
         # logger.debug("[TOOL][get_user_vehicles_tool] Response: %s", response.parsed)
-        return _success_response(response.status_code, _to_dict(response.parsed))
+        return _success_response(response.status_code, _attach_vehicle_type_to_vehicle_payload(_to_dict(response.parsed)))
     except Exception as e:
         logger.exception("[TOOL][get_user_vehicles_tool] Failed")
         return _error_response(None, str(e), "Failed to get user vehicles")
@@ -777,7 +822,7 @@ def _get_my_cars_cached(mbr_no: str):
                 response.content.decode(errors="ignore") or "Failed to get member cars"
             )
         # logger.debug("[TOOL][get_my_cars_tool] Response: %s", response.parsed)
-        return _success_response(response.status_code, _to_dict(response.parsed))
+        return _success_response(response.status_code, _attach_vehicle_type_to_vehicle_payload(_to_dict(response.parsed)))
     except Exception as e:
         logger.exception("[TOOL][get_my_cars_tool] Failed")
         return _error_response(None, str(e), "Failed to get member cars")

@@ -4363,6 +4363,23 @@ class StreamingMultiAgentCoordinator:
             if input_tire_size:
                 tool_slots["tire_size"] = input_tire_size
 
+        if tool_name == "get_user_vehicles_tool":
+            data = parsed_data.get("data", parsed_data)
+            if isinstance(data, dict):
+                input_tire_size = (
+                    data.get("tire_size_fr")
+                    or data.get("tireSize")
+                    or data.get("tire_size")
+                )
+                if input_tire_size:
+                    tool_slots["tire_size"] = input_tire_size
+                input_car_type = str(data.get("car_type") or data.get("carType") or "").strip()
+                if input_car_type:
+                    tool_slots["car_type"] = input_car_type
+                input_vehicle_type = str(data.get("vehicle_type") or data.get("vehicleType") or "").strip()
+                if input_vehicle_type:
+                    tool_slots["vehicle_type"] = input_vehicle_type
+
         if tool_name == "get_product_description_tool" and tool_input:
             input_goods_no = tool_input.get("goods_no")
             if input_goods_no:
