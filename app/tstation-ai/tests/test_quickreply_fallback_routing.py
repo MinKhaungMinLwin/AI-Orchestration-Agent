@@ -5558,6 +5558,28 @@ def test_multi_product_detail_explanation_request_does_not_use_card_search_path(
     )
 
 
+def test_fresh_turn_naming_two_products_resolves_compare_without_prior_context() -> None:
+    user_text = "kinergy EX, Ventus S2 AS 설명해줘, 비교해줘"
+    messages = [{"role": "user", "content": user_text}]
+
+    assert _should_resolve_compare_target_product_pair(user_text, messages, None, slots=None) is True
+
+
+def test_fresh_turn_naming_two_products_resolves_detail_without_prior_context() -> None:
+    user_text = "kinergy EX, Ventus S2 AS 설명해줘"
+    messages = [{"role": "user", "content": user_text}]
+
+    assert _multi_product_detail_continuation_names(user_text, messages) == ("Kinergy EX", "Ventus S2 AS")
+
+
+def test_unrelated_single_product_explanation_does_not_trigger_multi_product_paths() -> None:
+    user_text = "벤투스 에어S 설명해줘"
+    messages = [{"role": "user", "content": user_text}]
+
+    assert _should_resolve_compare_target_product_pair(user_text, messages, None, slots=None) is False
+    assert _multi_product_detail_continuation_names(user_text, messages) == ()
+
+
 def test_discovery_followup_intent_promotes_recent_product_set_size_availability() -> None:
     frame = build_discovery_intent_frame(
         "2355519 규격 있어?",
