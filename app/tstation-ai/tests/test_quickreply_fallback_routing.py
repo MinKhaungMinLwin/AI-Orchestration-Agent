@@ -14570,6 +14570,44 @@ def test_flow_transition_records_quantity_selection_without_executing() -> None:
     assert slots.ord_qty is None
 
 
+def test_flow_transition_quantity_selection_preserves_product_name_and_price_from_existing_slots() -> None:
+    transition = transition_current_flow(
+        user_text="4개",
+        router_evidence={
+            "domain": "transaction",
+            "intent": "quick_order_reservation",
+            "execution_plan": ["transaction:fill_quantity_slot", "transaction:quick_order_reservation"],
+            "source": "llm",
+        },
+        existing_slots=ConversationSlots(
+            goods_no="G000000310126",
+            tire_model="벤투스 S2 AS",
+            pending_product_name="벤투스 S2 AS",
+            tire_size="245/45R19",
+            payment_amount=722000,
+            payment_amount_source="search_product_tool",
+            price_basis="extra_fvr_sale_prc",
+            price_source_tool="search_product_tool",
+            extra_fvr_sale_prc=180500,
+            sale_prc=231700,
+            pending_intent="order",
+            goal_type="place_order",
+        ),
+        extracted_slots=ConversationSlots(ord_qty=4),
+        resume_source="router_slot_fill:quantity",
+    )
+
+    active_flow_context = transition.flow_transition["active_flow_context"]
+    assert active_flow_context["flow_type"] == "purchase"
+    assert active_flow_context["flow_step"] == "quantity_selected"
+    assert active_flow_context["product"]["goods_no"] == "G000000310126"
+    assert active_flow_context["product"]["product_name"] == "벤투스 S2 AS"
+    assert active_flow_context["product"]["ord_qty"] == 4
+    assert active_flow_context["payment"]["payment_amount"] == 722000
+    assert active_flow_context["payment"]["price_basis"] == "extra_fvr_sale_prc"
+    assert active_flow_context["payment"]["price_source_tool"] == "search_product_tool"
+
+
 def test_flow_transition_stock_store_plan_records_quantity_as_stock_flow() -> None:
     transition = transition_current_flow(
         user_text="벤투스 S2 AS 2454519 4개 강남역 근처 재고 있는 매장 찾아줘",
@@ -14673,6 +14711,52 @@ def test_flow_transition_records_store_slot_fill_as_stock_inventory_next_action(
         "goods_list": [{"goodsNo": "G000000317666", "qty": "4"}],
         "shop_id_list": [{"shopId": "F08526"}],
     }
+
+
+def test_flow_transition_store_selection_preserves_purchase_product_name_and_payment() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000310126",
+        tire_model="벤투스 S2 AS",
+        pending_product_name="벤투스 S2 AS",
+        tire_size="245/45R19",
+        ord_qty=4,
+        payment_amount=722000,
+        payment_amount_source="search_product_tool",
+        price_basis="extra_fvr_sale_prc",
+        price_source_tool="search_product_tool",
+        extra_fvr_sale_prc=180500,
+        sale_prc=231700,
+        pending_intent="order",
+        goal_type="place_order",
+    )
+
+    transition = transition_current_flow(
+        user_text="판교점",
+        router_evidence={
+            "domain": "transaction",
+            "intent": "quick_order_reservation",
+            "execution_plan": [
+                "transaction:quick_order_reservation_resolve_store",
+                "transaction:quick_order_reservation_finalize",
+            ],
+            "source": "llm",
+        },
+        existing_slots=slots,
+        extracted_slots=ConversationSlots(shop_name="티스테이션 판교점", region="분당", shop_id="F00721"),
+        resume_source="expected_slot_fill:store",
+    )
+
+    active_flow_context = transition.flow_transition["active_flow_context"]
+    assert active_flow_context["flow_type"] == "purchase"
+    assert active_flow_context["flow_step"] == "store_selected"
+    assert active_flow_context["product"]["goods_no"] == "G000000310126"
+    assert active_flow_context["product"]["product_name"] == "벤투스 S2 AS"
+    assert active_flow_context["product"]["ord_qty"] == 4
+    assert active_flow_context["store"]["shop_id"] == "F00721"
+    assert active_flow_context["store"]["shop_name"] == "티스테이션 판교점"
+    assert active_flow_context["payment"]["payment_amount"] == 722000
+    assert active_flow_context["payment"]["price_basis"] == "extra_fvr_sale_prc"
+    assert active_flow_context["payment"]["price_source_tool"] == "search_product_tool"
 
 
 def test_flow_transition_ignores_unanchored_quantity_text() -> None:
