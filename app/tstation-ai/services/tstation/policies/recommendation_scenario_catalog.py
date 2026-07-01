@@ -58,7 +58,7 @@ RECOMMENDATION_SCENARIO_CATALOG: dict[str, RecommendationScenario] = {
     ),
     "handling": RecommendationScenario(
         key="handling",
-        expressions=_patterns(r"핸들링|코너링|handling"),
+        expressions=_patterns(r"핸들링|코너링|제동|브레이크|handling|braking"),
         tool_args_patch={"rcmd_type": "performance"},
         response_label="핸들링",
     ),
