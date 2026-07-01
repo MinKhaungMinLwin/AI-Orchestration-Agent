@@ -37069,7 +37069,7 @@ class TStationChatServiceV2:
 
         # Track whether a code-mapper-eligible tool was called — if so, suppress token streaming
         # to avoid the "long text flashes then gets replaced by card" UX issue.
-        from services.tstation.template_mapper import _TOOL_TEMPLATE_MAP, should_bypass_code_mapper_for_llm_info_answer
+        from services.tstation.template_mapper import _TOOL_TEMPLATE_MAP
 
         _SUPPRESS_ON_TOOLS = frozenset(
             tool
@@ -37144,7 +37144,7 @@ class TStationChatServiceV2:
                 _lat_waiting_post_tool_output_since = _lat_now
                 # Suppress tokens when a "list display" tool is called (card will replace text).
                 # Exclude car lookup tools — agent may need to show selection text first.
-                if tool_name in _SUPPRESS_ON_TOOLS and not should_bypass_code_mapper_for_llm_info_answer({tool_name}):
+                if tool_name in _SUPPRESS_ON_TOOLS:
                     _suppress_tokens = True
                 input_data = event.get("input", {})
                 output_data = event.get("output", "")
