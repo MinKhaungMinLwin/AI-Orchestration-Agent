@@ -125,6 +125,8 @@ from services.tstation.chat import (
     _is_quantity_only_stock_followup_text,
     _build_pure_inventory_stock_contract,
     _apply_pure_inventory_datepick_context,
+    _build_single_store_availability_schedule_contract,
+    _single_store_availability_ready,
     _pure_inventory_store_stock_tier,
     _external_price_search_results_from_sources,
     _build_product_description_quickreply_event,
@@ -36437,6 +36439,53 @@ def test_pure_inventory_datepick_context_uses_single_message_and_other_store_cta
     assert replies[0]["metadata"]["currentStoreContext"]["shopId"] == "F07782"
     assert metadata["ctaContext"]["currentStoreContext"]["shopId"] == "F07782"
     assert metadata["ctaContext"]["goodsNo"] == "G000000310126"
+
+
+def test_preview_order_today_install_uses_single_store_availability_schedule_contract() -> None:
+    slots = {
+        "goods_no": "G000000310126",
+        "tire_size": "245/45R19",
+        "ord_qty": 2,
+        "shop_name": "한남점",
+        "availability_intent": "today_install",
+        "requested_cal_day": "20260702",
+        "pending_intent": "order",
+        "goal_type": "place_order",
+        "stock_check_mode": "preview",
+    }
+
+    assert _single_store_availability_ready(slots) is True
+
+    contract = _build_single_store_availability_schedule_contract(
+        base_contract=None,
+        known_slots=slots,
+        shop_id="",
+        stock_check_mode="preview",
+        source="single_store_availability_resolver",
+    )
+
+    assert contract.intent == "stock_store_search"
+    assert contract.sub_intent == "today_install"
+    assert contract.known_slots["stock_check_mode"] == "preview"
+    assert contract.response_decision["template"] == "datepick"
+    assert contract.allowed_tools == (
+        "get_store_list_tool",
+        "get_store_inventory_tool",
+        "get_logistics_inventory_tool",
+        "get_store_schedule_tool",
+    )
+    assert "quick_order_tool" not in contract.forbidden_tools
+
+    allowed, reason = _direct_code_fast_path_contract_gate(
+        turn_contract=contract,
+        intent="stock_store_search",
+        template="datepick",
+        source="code_single_store_availability_schedule",
+        required_tools=("get_store_list_tool", "get_store_inventory_tool", "get_store_schedule_tool"),
+    )
+
+    assert allowed is True
+    assert reason == "contract_matched:code_single_store_availability_schedule"
 
 
 def test_pure_inventory_stock_tier_separates_today_and_tna() -> None:
