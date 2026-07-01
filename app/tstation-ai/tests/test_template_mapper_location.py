@@ -1651,6 +1651,27 @@ def test_multi_product_description_search_entries_keep_all_products() -> None:
     assert "사이즈가 아직 확인되지 않아" not in assistant_response
 
 
+def test_multi_product_description_partial_missing_keeps_found_product_and_missing_notice() -> None:
+    text = "kinergy EX, Ventus S2 AS 설명해줘"
+    current_user_text.set(text)
+    current_discovery_response_decision.set(decide_discovery_response(build_discovery_intent_frame(text)))
+
+    result = try_build_template(
+        [
+            _kinergy_ex_search_entry(),
+            _search_product_entry(keyword="Ventus S2 AS", size=None, items=[]),
+        ],
+        "상품 설명입니다.",
+    )
+
+    assert result is not None
+    assert result["template"] == "quickReply"
+    assistant_response = result["data"]["assistantResponse"]
+    assert "[키너지 EX]" in assistant_response
+    assert "Ventus S2 AS" in assistant_response
+    assert "찾지 못했어요" in assistant_response
+
+
 def test_bare_s_fit_search_without_size_maps_to_pattern_summary_not_product_cards() -> None:
     text = "s fit as"
     current_user_text.set(text)
