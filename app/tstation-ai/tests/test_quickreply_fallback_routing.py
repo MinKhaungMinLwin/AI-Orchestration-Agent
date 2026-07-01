@@ -12382,8 +12382,8 @@ def test_event_benefit_lookup_is_discovery_contract_not_alert_request() -> None:
 
     assert frame.intent == "product_search"
     assert frame.sub_intent == "benefit_event_list_lookup"
-    assert tool_plan.allowed_tools == ("get_events_tool", "get_deals_tool")
-    assert tool_plan.preferred_tool == "get_events_tool"
+    assert tool_plan.allowed_tools == ("get_benefit_event_deal_list_tool",)
+    assert tool_plan.preferred_tool == "get_benefit_event_deal_list_tool"
     assert "get_my_coupons_tool" in tool_plan.forbidden_tools
     assert transaction_frame.intent != "price_or_benefit_alert_request"
     assert transaction_tool_plan.metadata["response_intent"] != "price_or_benefit_alert_request"
@@ -12409,7 +12409,7 @@ def test_default_benefit_direct_code_gate_allows_support_misroute_via_sub_intent
         intent="product_search",
         template="quickReply",
         source="code_default_benefit_event_deal",
-        required_tools=("get_events_tool", "get_deals_tool"),
+        required_tools=("get_benefit_event_deal_list_tool",),
         allowed_intents=("benefit_event_list_lookup",),
     )
 
@@ -12475,7 +12475,7 @@ def test_default_benefit_router_override_beats_support_promotion_policy(user_tex
     assert contract.domain == "discovery"
     assert contract.intent == "benefit_event_list_lookup"
     assert contract.sub_intent == "benefit_event_list_lookup"
-    assert contract.allowed_tools == ("get_events_tool", "get_deals_tool")
+    assert contract.allowed_tools == ("get_benefit_event_deal_list_tool",)
     assert "search_faq_hybrid_tool" not in contract.allowed_tools
 
 
@@ -12505,6 +12505,7 @@ def test_price_or_benefit_alert_requires_router_contract() -> None:
     assert plain_frame.intent != "price_or_benefit_alert_request"
     assert alert_frame.intent == "price_or_benefit_alert_request"
     assert alert_plan.allowed_tools == ()
+    assert "get_benefit_event_deal_list_tool" in alert_plan.forbidden_tools
     assert "get_events_tool" in alert_plan.forbidden_tools
     assert "get_deals_tool" in alert_plan.forbidden_tools
 

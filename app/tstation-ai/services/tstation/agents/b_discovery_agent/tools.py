@@ -1515,6 +1515,39 @@ def get_deals_tool():
 
 
 @tool
+@tool_cache(ttl=600)
+def get_benefit_event_deal_list_tool(lang_cd: str = "ko"):
+    """이벤트/기획전 통합 목록 조회 — generic 혜택/프로모션/기획전/이벤트 질문용."""
+    logger.debug("[TOOL][get_benefit_event_deal_list_tool] Called with: lang_cd=%s", lang_cd)
+
+    try:
+        events_response = get_events(client=get_client(), lang_cd=lang_cd)
+        deals_response = get_deals(client=get_client())
+        if events_response.parsed is None:
+            return _error_response(
+                events_response.status_code,
+                f"HTTP {events_response.status_code}",
+                events_response.content.decode(errors="ignore") or "Failed to get events",
+            )
+        if deals_response.parsed is None:
+            return _error_response(
+                deals_response.status_code,
+                f"HTTP {deals_response.status_code}",
+                deals_response.content.decode(errors="ignore") or "Failed to get deals",
+            )
+        return _success_response(
+            200,
+            {
+                "events": _to_dict(events_response.parsed),
+                "deals": _to_dict(deals_response.parsed),
+            },
+        )
+    except Exception as e:
+        logger.exception("[TOOL][get_benefit_event_deal_list_tool] Failed")
+        return _error_response(None, str(e), "Failed to get benefit event/deal list")
+
+
+@tool
 def compare_discount_tool(goods_no_list: list[str], quantity: int = 1):
     """Compare discount prices across multiple products.
 

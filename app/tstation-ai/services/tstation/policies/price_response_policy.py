@@ -153,7 +153,7 @@ def plan_price_tools(frame: IntentFrame) -> ToolPlan:
             allowed_tools=("get_my_coupons_tool", "get_coupon_applicable_products_tool"),
             preferred_tool="get_my_coupons_tool",
             required_slots=("coupon_identifier",),
-            forbidden_tools=("get_events_tool", "issue_coupon_tool"),
+            forbidden_tools=("get_benefit_event_deal_list_tool", "get_events_tool", "issue_coupon_tool"),
             metadata={"resolve_coupon_before_targets": True},
         )
     if frame.intent == "product_coupon_eligibility":

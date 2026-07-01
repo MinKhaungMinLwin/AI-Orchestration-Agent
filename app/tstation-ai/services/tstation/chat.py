@@ -13043,6 +13043,25 @@ def _build_default_benefit_event(events_result: dict, deals_result: dict) -> dic
     }
 
 
+def _split_benefit_event_deal_result(result: Mapping[str, Any] | None) -> tuple[dict[str, Any], dict[str, Any]]:
+    payload = result if isinstance(result, Mapping) else {}
+    if str(payload.get("status") or "").lower() != "success":
+        error_result = dict(payload) if isinstance(payload, dict) else {"status": "error", "data": {}}
+        return error_result, error_result
+
+    data = payload.get("data")
+    if not isinstance(data, Mapping):
+        empty_success = {"status": "success", "data": {}}
+        return empty_success, empty_success
+
+    events_data = data.get("events")
+    deals_data = data.get("deals")
+    return (
+        {"status": "success", "data": events_data if isinstance(events_data, Mapping) else {}},
+        {"status": "success", "data": deals_data if isinstance(deals_data, Mapping) else {}},
+    )
+
+
 def _price_policy_guard_event(user_text: str) -> dict | None:
     """Return a deterministic price/coupon policy guard event, if one applies."""
     if not user_text:
@@ -30998,82 +31017,61 @@ class TStationChatServiceV2:
                 intent="product_search",
                 template="quickReply",
                 source="code_default_benefit_event_deal",
-                required_tools=("get_events_tool", "get_deals_tool"),
+                required_tools=("get_benefit_event_deal_list_tool",),
                 allowed_intents=("benefit_event_list_lookup",),
             )
             if not gate_allowed:
                 logger.info("[CODE_FAST_PATH_GATE] blocked default_benefit reason=%s", gate_reason)
                 return None
 
-            from services.tstation.agents.b_discovery_agent.tools import get_deals_tool as _deals_tool
-            from services.tstation.agents.b_discovery_agent.tools import get_events_tool as _events_tool
+            from services.tstation.agents.b_discovery_agent.tools import (
+                get_benefit_event_deal_list_tool as _benefit_event_deal_list_tool,
+            )
 
             emitted_events: list[dict] = []
-            events_input = {"lang_cd": "ko"}
-            deals_input: dict[str, Any] = {}
+            tool_input = {"lang_cd": "ko"}
             emitted_events.append({
                 "type": "status",
                 "status": "tool_start",
-                "tool": "get_events_tool",
-                "display_name": "이벤트 조회 중...",
-                "source_domain": "discovery",
-            })
-            emitted_events.append({
-                "type": "status",
-                "status": "tool_start",
-                "tool": "get_deals_tool",
-                "display_name": "기획전 조회 중...",
+                "tool": "get_benefit_event_deal_list_tool",
+                "display_name": "이벤트/기획전 조회 중...",
                 "source_domain": "discovery",
             })
             try:
-                events_raw, deals_raw = await asyncio.gather(
-                    asyncio.to_thread(_events_tool.invoke, events_input),
-                    asyncio.to_thread(_deals_tool.invoke, deals_input),
-                )
-                events_result = _tool_result_dict(events_raw)
-                deals_result = _tool_result_dict(deals_raw)
+                benefit_raw = await asyncio.to_thread(_benefit_event_deal_list_tool.invoke, tool_input)
+                benefit_result = _tool_result_dict(benefit_raw)
             except Exception as exc:
                 logger.exception("[DEFAULT_BENEFIT] event/deal tools failed")
-                events_result = {
+                benefit_result = {
                     "status": "error",
                     "http_status": None,
                     "message": str(exc),
                     "data": {},
                 }
-                deals_result = {
-                    "status": "error",
-                    "http_status": None,
-                    "message": str(exc),
-                    "data": {},
-                }
-
-            for tool_name, tool_input, tool_result in (
-                ("get_events_tool", events_input, events_result),
-                ("get_deals_tool", deals_input, deals_result),
-            ):
-                _record_code_tool_result(tool_name, tool_input, tool_result)
-                emitted_events.append({
-                    "type": "agent_flow",
-                    "agent": "[Product Recommendation AF]",
-                    "agent_class": "Discovery Agent",
-                    "status": tool_result.get("status", "success"),
-                    "source_domain": "discovery",
-                })
-                emitted_events.append({
-                    "type": "tool",
-                    "input": tool_input,
-                    "output": json.dumps(tool_result, ensure_ascii=False),
-                    "node": "tools",
-                    "tool": tool_name,
-                    "source_domain": "discovery",
-                })
+            _record_code_tool_result("get_benefit_event_deal_list_tool", tool_input, benefit_result)
+            emitted_events.append({
+                "type": "agent_flow",
+                "agent": "[Product Recommendation AF]",
+                "agent_class": "Discovery Agent",
+                "status": benefit_result.get("status", "success"),
+                "source_domain": "discovery",
+            })
+            emitted_events.append({
+                "type": "tool",
+                "input": tool_input,
+                "output": json.dumps(benefit_result, ensure_ascii=False),
+                "node": "tools",
+                "tool": "get_benefit_event_deal_list_tool",
+                "source_domain": "discovery",
+            })
+            events_result, deals_result = _split_benefit_event_deal_result(benefit_result)
 
             benefit_event = _finalize_direct_code_event(
                 _build_default_benefit_event(events_result, deals_result),
                 turn_contract=turn_contract,
                 intent="product_search",
                 source="code_default_benefit_event_deal",
-                required_tools=("get_events_tool", "get_deals_tool"),
+                required_tools=("get_benefit_event_deal_list_tool",),
                 allowed_intents=("benefit_event_list_lookup",),
             )
             return (emitted_events, benefit_event) if benefit_event is not None else None

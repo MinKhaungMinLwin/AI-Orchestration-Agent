@@ -7,6 +7,7 @@ from services.tstation.agents.b_discovery_agent.tools import (
     get_my_cars_tool,
     search_car_model_tool,
     search_youtube_video_tool,
+    get_benefit_event_deal_list_tool,
     get_events_tool,
     get_deals_tool,
     get_event_applicable_products_tool,
@@ -155,6 +156,7 @@ Required behavior:
 | get_cheapest_price_tool | User asks the **final benefit price** for one or more *specific* products — "최종 얼마", "쿠폰 다 적용하면 얼마", "혜택가", "최대 할인가", or "각 상품 최저가" (per-product, NOT one cheapest across products). goods_no MUST be confirmed. Quantity = order qty if in order flow, else 1. Cite `cpn_nm` from `applied_coupons` in the reply. |
 | check_compatibility_tool | ONLY if tire_size unknown AND user provides car_no + owner_nm |
 | search_youtube_video_tool | User asks for video reviews — call immediately, no clarification |
+| get_benefit_event_deal_list_tool | Generic current 이벤트/기획전/프로모션/혜택 목록 |
 | get_events_tool | User asks about 이벤트 |
 | get_deals_tool | User asks about 기획전 |
 | get_event_applicable_products_tool | User asks "이벤트 적용 가능한 상품 / 이벤트 대상 상품 / 이 이벤트에서 살 수 있는 상품" — pass evt_no_list (1-10) |
@@ -2512,6 +2514,7 @@ class DiscoverySubAgent(BaseAgent):
         "search_youtube_video_tool": "Product Description",
         "get_events_tool": "Price",
         "get_deals_tool": "Price",
+        "get_benefit_event_deal_list_tool": "Price",
         "get_event_applicable_products_tool": "Price",
         "get_product_applicable_events_tool": "Price",
         "get_coupon_applicable_products_tool": "Price",
@@ -2536,6 +2539,7 @@ class DiscoverySubAgent(BaseAgent):
             search_youtube_video_tool,
             get_events_tool,
             get_deals_tool,
+            get_benefit_event_deal_list_tool,
             get_event_applicable_products_tool,
             get_product_applicable_events_tool,
             get_coupon_applicable_products_tool,
@@ -2576,6 +2580,7 @@ class DiscoverySubAgent(BaseAgent):
                 search_youtube_video_tool,
                 get_events_tool,
                 get_deals_tool,
+                get_benefit_event_deal_list_tool,
                 get_event_applicable_products_tool,
                 get_product_applicable_events_tool,
                 get_coupon_applicable_products_tool,
