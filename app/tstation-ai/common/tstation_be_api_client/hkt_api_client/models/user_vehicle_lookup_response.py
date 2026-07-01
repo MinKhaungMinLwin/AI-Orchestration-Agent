@@ -22,7 +22,8 @@ class UserVehicleLookupResponse:
         car_type (None | str | Unset): 차량 타입 정규화값 (sedan/suv/ev/sports/truck_van)
         tire_size_fr (None | str | Unset): 전륜 타이어 사이즈
         tire_size_re (None | str | Unset): 후륜 타이어 사이즈
-        valid_sizes (list[str] | Unset): 유효한 타이어 사이즈 후보 목록 (중복 제거, DB 조회 순서 유지)
+        available_sizes (list[str] | Unset): 선택 가능한 모든 타이어 사이즈 후보 목록 (중복 제거, DB 조회 순서 유지)
+        valid_sizes (list[str] | Unset): Deprecated: available_sizes와 동일한 사이즈 후보 목록
     """
 
     car_model: None | str | Unset = UNSET
@@ -32,6 +33,7 @@ class UserVehicleLookupResponse:
     car_type: None | str | Unset = UNSET
     tire_size_fr: None | str | Unset = UNSET
     tire_size_re: None | str | Unset = UNSET
+    available_sizes: list[str] | Unset = UNSET
     valid_sizes: list[str] | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -78,6 +80,10 @@ class UserVehicleLookupResponse:
         else:
             tire_size_re = self.tire_size_re
 
+        available_sizes: list[str] | Unset = UNSET
+        if not isinstance(self.available_sizes, Unset):
+            available_sizes = self.available_sizes
+
         valid_sizes: list[str] | Unset = UNSET
         if not isinstance(self.valid_sizes, Unset):
             valid_sizes = self.valid_sizes
@@ -99,6 +105,8 @@ class UserVehicleLookupResponse:
             field_dict["tire_size_fr"] = tire_size_fr
         if tire_size_re is not UNSET:
             field_dict["tire_size_re"] = tire_size_re
+        if available_sizes is not UNSET:
+            field_dict["available_sizes"] = available_sizes
         if valid_sizes is not UNSET:
             field_dict["valid_sizes"] = valid_sizes
 
@@ -171,6 +179,8 @@ class UserVehicleLookupResponse:
 
         tire_size_re = _parse_tire_size_re(d.pop("tire_size_re", UNSET))
 
+        available_sizes = cast(list[str], d.pop("available_sizes", UNSET))
+
         valid_sizes = cast(list[str], d.pop("valid_sizes", UNSET))
 
         user_vehicle_lookup_response = cls(
@@ -181,6 +191,7 @@ class UserVehicleLookupResponse:
             car_type=car_type,
             tire_size_fr=tire_size_fr,
             tire_size_re=tire_size_re,
+            available_sizes=available_sizes,
             valid_sizes=valid_sizes,
         )
 

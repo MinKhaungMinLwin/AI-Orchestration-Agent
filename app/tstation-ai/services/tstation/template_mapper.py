@@ -3752,6 +3752,26 @@ def _listcar_selection_contract_intent() -> tuple[str, str]:
         return "stock_store_search", "stock_store_search"
     return "vehicle_resolved_recommendation", "vehicle_resolved_recommendation"
 
+
+def _vehicle_available_sizes(row: Mapping[str, Any]) -> list[str]:
+    raw_sizes = row.get("available_sizes")
+    if raw_sizes is None:
+        raw_sizes = row.get("availableSizes")
+    if raw_sizes is None:
+        raw_sizes = row.get("valid_sizes")
+    if raw_sizes is None:
+        raw_sizes = row.get("validSizes")
+    if not isinstance(raw_sizes, list):
+        raw_sizes = []
+
+    sizes: list[str] = []
+    for raw_size in [*raw_sizes, row.get("tire_size_fr"), row.get("tire_size_re")]:
+        size = str(raw_size or "").strip()
+        if size and size not in sizes:
+            sizes.append(size)
+    return sizes
+
+
 def _map_list_car(tool_data_list: list[dict], assistant_text: str) -> dict | None:
     # Maintenance D-day flow guard: when get_maintenance_dday_tool ran in the
     # same turn, get_my_cars_tool was used only to map car_no → mbr_car_reg_seq.
@@ -3829,6 +3849,10 @@ def _map_list_car(tool_data_list: list[dict], assistant_text: str) -> dict | Non
                 )
                 or None
             )
+            available_sizes = _vehicle_available_sizes(row)
+            has_multiple_available_sizes = len(available_sizes) > 1
+            metadata_front_size = None if has_multiple_available_sizes else (_get_str(row, "tire_size_fr") or None)
+            metadata_rear_size = None if has_multiple_available_sizes else (_get_str(row, "tire_size_re") or None)
             items.append({
                 "licensePlate": _get_str(row, "car_no"),
                 "info": car_info,
@@ -3860,10 +3884,12 @@ def _map_list_car(tool_data_list: list[dict], assistant_text: str) -> dict | Non
                 # tire_size from the listCar template metadata when the user
                 # later picks a car. Without this, filter_for_context drops
                 # car_no as PII and the resolver has no source to match on.
-                "tireSize": _get_str(row, "tire_size_fr") or None,
-                "tire_size_fr": _get_str(row, "tire_size_fr") or None,
-                "tireSizeRe": _get_str(row, "tire_size_re") or None,
-                "tire_size_re": _get_str(row, "tire_size_re") or None,
+                "tireSize": metadata_front_size,
+                "tire_size_fr": metadata_front_size,
+                "tireSizeRe": metadata_rear_size,
+                "tire_size_re": metadata_rear_size,
+                "availableSizes": available_sizes or None,
+                "available_sizes": available_sizes or None,
                 "vehicleType": normalized_vehicle_type,
                 "vehicle_type": normalized_vehicle_type,
                 "ctaAction": "select_vehicle_candidate",

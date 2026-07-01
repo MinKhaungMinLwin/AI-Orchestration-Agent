@@ -3031,6 +3031,26 @@ def test_vehicle_selection_slot_values_preserve_staggered_front_rear_without_def
     assert "tire_size" not in slot_values
 
 
+def test_vehicle_selection_slot_values_do_not_confirm_size_when_available_sizes_has_multiple_candidates() -> None:
+    slot_values = _vehicle_selection_slot_values({
+        "car": {
+            "licensePlate": "56모2162",
+            "info": "BMW 3시리즈 그란 투리스모(6세대)",
+        },
+        "meta": {
+            "carNo": "56모2162",
+            "tireSize": "225/50R17",
+            "tireSizeRe": "225/50R17",
+            "availableSizes": ["225/50R17", "225/45R18"],
+        },
+    })
+
+    assert "tire_size" not in slot_values
+    assert "tire_size_front" not in slot_values
+    assert "tire_size_rear" not in slot_values
+    assert slot_values["car_no"] == "56모2162"
+
+
 def test_vehicle_selection_atomic_update_preserves_new_front_rear_when_car_changes() -> None:
     from schemas.tstation.slots import ConversationSlots
 
@@ -16640,6 +16660,25 @@ def test_history_vehicle_selection_does_not_auto_resolve_staggered_front_size() 
                 "carNo": "56모2162",
                 "tireSize": "225/50R18",
                 "tireSizeRe": "255/50R18",
+            }],
+        },
+    }
+
+    resolved = resolve_tire_size_from_history_template("56모2162", template)
+
+    assert resolved is None
+
+
+def test_history_vehicle_selection_does_not_auto_resolve_when_available_sizes_has_multiple_candidates() -> None:
+    template = {
+        "template": "listCar",
+        "data": {
+            "listCar": [{"licensePlate": "56모2162", "info": "BMW 3시리즈 그란 투리스모(6세대)"}],
+            "metadata": [{
+                "carNo": "56모2162",
+                "tireSize": "225/50R17",
+                "tireSizeRe": "225/50R17",
+                "availableSizes": ["225/50R17", "225/45R18"],
             }],
         },
     }

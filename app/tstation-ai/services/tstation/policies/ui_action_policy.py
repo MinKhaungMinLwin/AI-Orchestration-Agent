@@ -503,6 +503,16 @@ def store_context_from_mapping(data: Mapping[str, Any] | None) -> dict[str, Any]
 
 
 def normalize_vehicle_tire_size_pair(selected_meta: Mapping[str, Any]) -> tuple[str | None, str | None]:
+    available_sizes = selected_meta.get("available_sizes") or selected_meta.get("availableSizes") or []
+    if isinstance(available_sizes, list):
+        normalized_available_sizes: list[str] = []
+        for raw_size in available_sizes:
+            size = normalize_tire_size(str(raw_size or ""))
+            if size and size not in normalized_available_sizes:
+                normalized_available_sizes.append(size)
+        if len(normalized_available_sizes) > 1:
+            return None, None
+
     front_size = normalize_tire_size(
         str(
             selected_meta.get("tireSize")
@@ -2958,8 +2968,7 @@ def resolve_tire_size_from_history_template(
     selected_meta = selected_vehicle.get("meta")
     if not isinstance(selected_meta, Mapping):
         return None
-    front_size = normalize_tire_size(str(selected_meta.get("tireSize") or selected_meta.get("tire_size") or ""))
-    rear_size = normalize_tire_size(str(selected_meta.get("tireSizeRe") or selected_meta.get("tire_size_re") or ""))
+    front_size, rear_size = normalize_vehicle_tire_size_pair(selected_meta)
     if front_size and rear_size and front_size != rear_size:
         return None
     return front_size or rear_size or None

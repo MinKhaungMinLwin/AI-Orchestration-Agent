@@ -2596,6 +2596,37 @@ def test_listcar_kept_for_registered_vehicle_tire_size_prompt() -> None:
     assert result["data"]["metadata"][0]["tire_size_fr"] == "2355519"
 
 
+def test_listcar_metadata_keeps_available_sizes_without_single_size_when_multiple_vehicle_sizes() -> None:
+    current_user_text.set("56모2162 심지영")
+    entry = {
+        "tool": "get_user_vehicles_tool",
+        "args": {"car_no": "56모2162", "owner_nm": "심지영"},
+        "data": {
+            "status": "success",
+            "http_status": 200,
+            "data": {
+                "car_no": "56모2162",
+                "car_maker": "BMW",
+                "car_nm": "3-series(F30) 320d A/T",
+                "car_model_det": "3시리즈 그란 투리스모(6세대) (2013 - 2021)",
+                "tire_size_fr": "2255017",
+                "tire_size_re": "2255017",
+                "available_sizes": ["2255017", "2254518"],
+            },
+        },
+    }
+
+    result = try_build_template([entry], "차량 정보를 확인했어요. 차량을 선택해 주세요.")
+
+    assert result is not None
+    assert result["template"] == "listCar"
+    metadata = result["data"]["metadata"][0]
+    assert metadata["available_sizes"] == ["2255017", "2254518"]
+    assert metadata["availableSizes"] == ["2255017", "2254518"]
+    assert metadata["tireSize"] is None
+    assert metadata["tire_size_fr"] is None
+
+
 def test_ev_suitability_mapper_does_not_override_product_mapping() -> None:
     current_ev_suitability_comparison.set(True)
 
