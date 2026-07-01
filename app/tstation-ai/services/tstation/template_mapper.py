@@ -1797,6 +1797,10 @@ def _tire_summary_detail_line(row: dict) -> str:
 
 
 _PRODUCT_SEARCH_SIZE_INTENT_RE = re.compile(r"사이즈|규격|호환\s*사이즈|몇\s*인치|몇인치", re.IGNORECASE)
+_FULL_SIZE_LIST_REQUEST_RE = re.compile(
+    r"모든|전체|전부|사이즈\s*다|규격\s*다|다\s*(?:알려|보여|조회|확인)",
+    re.IGNORECASE,
+)
 _POPULAR_UNSIZED_REQUEST_RE = re.compile(
     r"인기|베스트\s*셀러|베스트|잘\s*팔리|많이\s*팔린|많이\s*사는|잘\s*나가",
     re.IGNORECASE,
@@ -1868,10 +1872,12 @@ def _confirmed_sizes_for_rows(rows: list[dict]) -> list[str]:
     return sorted(sizes, key=_tire_size_sort_key)
 
 
-def _format_row_size_list(sizes: list[str], *, max_visible: int = 3) -> str:
+def _format_row_size_list(sizes: list[str], *, max_visible: int | None = 3) -> str:
     sizes = sorted((size for size in sizes if size), key=_tire_size_sort_key)
     if not sizes:
         return ""
+    if max_visible is None:
+        return ", ".join(sizes)
     visible = ", ".join(sizes[:max_visible])
     remaining = len(sizes) - max_visible
     if remaining > 0:
@@ -1903,7 +1909,7 @@ def _confirmed_multi_size_line(rows: list[dict]) -> str:
     return _confirmed_size_line(rows)
 
 
-def _map_product_search_size_summary(tool_data_list: list[dict]) -> dict | None:
+def _map_product_search_size_summary(tool_data_list: list[dict], *, force_contract: bool = False) -> dict | None:
     """Answer size/fitment-size questions from product search results.
 
     Product search results should serve the user's purpose. If the user asks
@@ -1911,7 +1917,7 @@ def _map_product_search_size_summary(tool_data_list: list[dict]) -> dict | None:
     summary is the wrong answer; list the SKU sizes returned by search instead.
     """
     user_text = current_user_text.get()
-    if not _PRODUCT_SEARCH_SIZE_INTENT_RE.search(user_text):
+    if not force_contract and not _PRODUCT_SEARCH_SIZE_INTENT_RE.search(user_text):
         return None
 
     grouped: dict[str, list[dict]] = {}
@@ -1934,6 +1940,7 @@ def _map_product_search_size_summary(tool_data_list: list[dict]) -> dict | None:
     if not found or not grouped:
         return None
 
+    full_size_requested = bool(_FULL_SIZE_LIST_REQUEST_RE.search(user_text))
     lines = ["검색된 상품은 현재 아래 사이즈로 확인돼요."]
     for name, rows in list(grouped.items())[:5]:
         available_sizes: list[str] = []
@@ -1941,7 +1948,7 @@ def _map_product_search_size_summary(tool_data_list: list[dict]) -> dict | None:
             for size in _row_available_sizes(row):
                 if size not in available_sizes:
                     available_sizes.append(size)
-        size_list = _format_row_size_list(available_sizes, max_visible=12)
+        size_list = _format_row_size_list(available_sizes, max_visible=None if full_size_requested else 12)
         if size_list:
             lines.append(f"- {name}: {size_list}")
     if len(lines) == 1:
@@ -3070,6 +3077,120 @@ def _map_discovery_policy_quickreply(tool_data_list: list[dict], assistant_text:
         },
         "assistant_response_source": "discovery_policy",
     }
+
+
+def _current_response_shape_key() -> str:
+    for decision in (current_discovery_response_decision.get(), current_transaction_response_decision.get()):
+        metadata = getattr(decision, "metadata", None) or {}
+        response_shape_key = str(metadata.get("response_shape_key") or "").strip()
+        if response_shape_key:
+            return response_shape_key
+    return ""
+
+
+def _with_contract_renderer_metadata(event: dict, response_shape_key: str) -> dict:
+    data = event.get("data")
+    if not isinstance(data, dict):
+        return event
+    metadata = data.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+    data["metadata"] = {
+        **metadata,
+        "response_shape_key": response_shape_key,
+        "contract_renderer_key": response_shape_key,
+        "contract_renderer_applied": True,
+        "contract_renderer_fallback_reason": None,
+    }
+    event["assistant_response_source"] = event.get("assistant_response_source") or "contract_renderer"
+    return event
+
+
+def _contract_policy_quickreply_event(
+    *,
+    response_shape_key: str,
+    response: str,
+    requested_product_attribute: str = "",
+) -> dict | None:
+    response = sanitize_user_facing_response(response)
+    if not response:
+        return None
+    response = _with_discovery_claim_check_prefix(response)
+    quick_replies = _DISCOVERY_RESTOCK_CHIPS if response_shape_key == "restock_inquiry_summary" else (
+        _DISCOVERY_POLICY_QUICKREPLY_CHIPS
+    )
+    predicted_domains = ["DISCOVERY", "SUPPORT"] if response_shape_key == "restock_inquiry_summary" else ["DISCOVERY"]
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": response,
+            "quickReplies": quick_replies,
+            "predictedDomains": predicted_domains,
+            "metadata": {
+                "response_shape_key": response_shape_key,
+                **({"requested_product_attribute": requested_product_attribute} if requested_product_attribute else {}),
+            },
+        },
+        "assistant_response_source": "contract_renderer",
+    }
+
+
+def _map_contract_product_size_list(tool_data_list: list[dict], assistant_text: str) -> dict | None:
+    del assistant_text
+    return _map_product_search_size_summary(tool_data_list, force_contract=True)
+
+
+def _map_contract_discovery_summary(tool_data_list: list[dict], assistant_text: str) -> dict | None:
+    response_shape_key = _current_response_shape_key()
+    decision = current_discovery_response_decision.get()
+    decision_response_shape_key = str((getattr(decision, "metadata", None) or {}).get("response_shape_key") or "")
+    if decision_response_shape_key != response_shape_key:
+        return None
+
+    requested_product_attribute = str((decision.metadata or {}).get("requested_product_attribute") or "")
+    response = ""
+    if response_shape_key == "product_attribute_summary":
+        response = _product_attribute_policy_response(tool_data_list)
+    elif response_shape_key == "metric_comparison_summary":
+        response = _product_metric_comparison_policy_response(tool_data_list)
+    elif response_shape_key == "technology_explanation_then_unsized_recommendation_summary":
+        response = _technology_unsized_policy_response(tool_data_list)
+    elif response_shape_key == "safe_service_explanation_then_unsized_recommendation_summary":
+        response = _safe_service_unsized_policy_response(tool_data_list)
+    elif response_shape_key == "restock_inquiry_summary":
+        response = _product_restock_policy_response(tool_data_list)
+
+    if not response:
+        response = sanitize_user_facing_response(assistant_text, "") or decision.assistant_guidance
+    return _contract_policy_quickreply_event(
+        response_shape_key=response_shape_key,
+        response=response,
+        requested_product_attribute=requested_product_attribute,
+    )
+
+
+_CONTRACT_RESPONSE_RENDERERS = {
+    "product_size_list_lookup": _map_contract_product_size_list,
+    "product_attribute_summary": _map_contract_discovery_summary,
+    "metric_comparison_summary": _map_contract_discovery_summary,
+    "technology_explanation_then_unsized_recommendation_summary": _map_contract_discovery_summary,
+    "safe_service_explanation_then_unsized_recommendation_summary": _map_contract_discovery_summary,
+    "restock_inquiry_summary": _map_contract_discovery_summary,
+}
+
+
+def _map_contract_response_shape(tool_data_list: list[dict], assistant_text: str) -> dict | None:
+    response_shape_key = _current_response_shape_key()
+    if not response_shape_key:
+        return None
+    renderer = _CONTRACT_RESPONSE_RENDERERS.get(response_shape_key)
+    if renderer is None:
+        return None
+    event = renderer(tool_data_list, assistant_text)
+    if not event:
+        return None
+    return _with_contract_renderer_metadata(event, response_shape_key)
 
 
 def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -> dict | None:
@@ -6217,6 +6338,15 @@ def try_build_template(accumulated_tool_data: list[dict], assistant_text: str) -
     recommendation_no_results = _map_recommendation_no_results(accumulated_tool_data, assistant_text)
     if recommendation_no_results is not None:
         return recommendation_no_results
+
+    contract_response_shape = _map_contract_response_shape(accumulated_tool_data, assistant_text)
+    if contract_response_shape is not None:
+        logger.debug(
+            "[TEMPLATE_MAPPER] Built '%s' template from contract response_shape_key=%s",
+            contract_response_shape.get("template"),
+            (contract_response_shape.get("data") or {}).get("metadata", {}).get("contract_renderer_key"),
+        )
+        return contract_response_shape
 
     unsized_tire_summary = _map_unsized_tire_summary(accumulated_tool_data, assistant_text)
     if unsized_tire_summary is not None:
