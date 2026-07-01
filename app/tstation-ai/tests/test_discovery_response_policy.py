@@ -172,6 +172,16 @@ def test_tc044_unsized_sound_absorber_explains_then_summarizes_without_cards() -
     assert "product_card_without_size" in decision.forbidden_behaviors
 
 
+def test_tc044_unsized_sound_absorber_recommendation_skips_technology_explanation() -> None:
+    decision = decide_discovery_response(build_discovery_intent_frame("흡음재 타이어 추천"))
+
+    assert decision.template == TemplateName.QUICK_REPLY
+    assert decision.response_shape == ResponseShape.SUMMARY
+    assert decision.metadata["response_shape_key"] == "catalog_unsized_recommendation_summary"
+    assert "technology_explanation_then_unsized_recommendation_summary" not in decision.metadata.values()
+    assert "drop_recommendation_scenario" in decision.forbidden_behaviors
+
+
 def test_safe_service_unsized_question_explains_service_before_products() -> None:
     decision = decide_discovery_response(build_discovery_intent_frame("안심서비스 가능한 타이어는?"))
 

@@ -293,14 +293,15 @@ def decide_discovery_response(frame: IntentFrame) -> ResponseDecision:
                 assistant_guidance="DB의 흡음재 적용 태그와 요청 규격을 함께 만족하는 상품만 카드/가격으로 안내한다.",
                 metadata={"response_shape_key": "sized_technology_recommendation_cards"},
             )
-        return ResponseDecision(
-            response_shape=ResponseShape.SUMMARY,
-            template=TemplateName.QUICK_REPLY,
-            required_slots=(),
-            forbidden_behaviors=("drop_sound_absorber_filter", "product_card_without_size", "price_without_size"),
-            assistant_guidance="흡음재 의미를 설명한 뒤 흡음재 적용 상품군을 요약하고 차량/규격 확인으로 유도한다.",
-            metadata={"response_shape_key": "technology_explanation_then_unsized_recommendation_summary"},
-        )
+        if frame.sub_intent == "technology_explain_then_recommend":
+            return ResponseDecision(
+                response_shape=ResponseShape.SUMMARY,
+                template=TemplateName.QUICK_REPLY,
+                required_slots=(),
+                forbidden_behaviors=("drop_sound_absorber_filter", "product_card_without_size", "price_without_size"),
+                assistant_guidance="흡음재 의미를 설명한 뒤 흡음재 적용 상품군을 요약하고 차량/규격 확인으로 유도한다.",
+                metadata={"response_shape_key": "technology_explanation_then_unsized_recommendation_summary"},
+            )
 
     if entities.get("service_program") == "safe_service":
         if tire_size:
