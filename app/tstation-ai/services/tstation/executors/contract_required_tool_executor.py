@@ -319,6 +319,43 @@ async def _recover_contract_required_tool(
     )
 
 
+def contract_required_tool_start_event(
+    *,
+    turn_contract: TurnContract | None,
+    user_text: str,
+    merged_slots: ConversationSlots | None,
+    blocked_fast_path_source: str = "contract_required_tool_executor",
+    member_no: str | None = None,
+) -> dict[str, Any] | None:
+    """Preview the first deterministic contract tool status before the tool blocks."""
+
+    if turn_contract is None:
+        return None
+    if tuple(getattr(turn_contract, "blocking_required_slots", ()) or ()):
+        return None
+    context_state = str(getattr(turn_contract, "context_state", "") or "")
+    current_turn_vehicle_recommendation = _is_vehicle_selection_recommendation_contract(turn_contract)
+    current_turn_direct_path = str(blocked_fast_path_source or "").startswith("contract_direct_executor:")
+    if context_state not in {"active", "resumed"} and not current_turn_vehicle_recommendation and not current_turn_direct_path:
+        return None
+
+    candidate = _contract_required_tool_candidate(
+        turn_contract=turn_contract,
+        user_text=user_text,
+        merged_slots=merged_slots,
+        member_no=member_no,
+    )
+    if candidate is None:
+        return None
+    return {
+        "type": "status",
+        "status": "tool_start",
+        "tool": candidate.tool_name,
+        "display_name": candidate.display_name,
+        "source_domain": candidate.source_domain,
+    }
+
+
 def _tool_rows(tool_result: Mapping[str, Any]) -> list[dict[str, Any]]:
     data = tool_result.get("data") if isinstance(tool_result, Mapping) else None
     if isinstance(data, Mapping):

@@ -1452,6 +1452,12 @@ class BaseAgent(ABC):
                                     from services.tstation.agents.b_discovery_agent.tools import get_user_vehicles_tool
 
                                     owner_tool_name = "get_user_vehicles_tool"
+                                    yield {
+                                        "type": "status",
+                                        "status": "tool_start",
+                                        "tool": owner_tool_name,
+                                        "display_name": TOOL_DISPLAY_NAMES.get(owner_tool_name, "차량 정보 조회 중..."),
+                                    }
                                     owner_started_at = time.perf_counter()
                                     owner_tool_result = get_user_vehicles_tool.func(**owner_lookup_args)
                                     owner_latency_ms = (time.perf_counter() - owner_started_at) * 1000
@@ -1472,12 +1478,6 @@ class BaseAgent(ABC):
                                         ),
                                         latency_ms=owner_latency_ms,
                                     )
-                                    yield {
-                                        "type": "status",
-                                        "status": "tool_start",
-                                        "tool": owner_tool_name,
-                                        "display_name": TOOL_DISPLAY_NAMES.get(owner_tool_name, "차량 정보 조회 중..."),
-                                    }
                                     yield {
                                         "type": "agent_flow",
                                         "agent": f"[{self.TOOL_TO_AF_MAP.get(owner_tool_name, 'Product Compatibility')} AF]",

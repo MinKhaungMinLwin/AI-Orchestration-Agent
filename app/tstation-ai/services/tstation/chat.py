@@ -156,6 +156,7 @@ from services.tstation.executors.contract_required_tool_executor import (
     _recover_contract_required_store_flow_tool,
     _recover_contract_required_tool,
     _recover_contract_required_vehicle_recommendation,  # noqa: F401
+    contract_required_tool_start_event,
     recover_blocked_fast_path_to_contract_tool,
 )
 from services.tstation.policies.delivery_policy_gate import (
@@ -37050,7 +37051,29 @@ class TStationChatServiceV2:
         )
         vehicle_selection_trace_metadata.update(direct_path_decision.metadata())
         contract_required_tool_recovery = None
+        pre_emitted_contract_tool_status: dict[str, Any] | None = None
+
+        def _same_contract_tool_status(left: Mapping[str, Any] | None, right: Mapping[str, Any] | None) -> bool:
+            if not isinstance(left, Mapping) or not isinstance(right, Mapping):
+                return False
+            return (
+                left.get("type") == "status"
+                and right.get("type") == "status"
+                and left.get("status") == "tool_start"
+                and right.get("status") == "tool_start"
+                and str(left.get("tool") or "") == str(right.get("tool") or "")
+            )
+
         if direct_path_decision.eligible:
+            pre_emitted_contract_tool_status = contract_required_tool_start_event(
+                turn_contract=turn_contract,
+                user_text=user_query,
+                merged_slots=pending_slots or initial_slots,
+                blocked_fast_path_source=f"contract_direct_executor:{direct_path_decision.reason}",
+                member_no=user_id,
+            )
+            if pre_emitted_contract_tool_status is not None:
+                yield f"data: {json.dumps(pre_emitted_contract_tool_status, ensure_ascii=False)}\n\n"
             contract_required_tool_recovery = await _recover_contract_required_tool(
                 turn_contract=turn_contract,
                 user_text=user_query,
@@ -37095,7 +37118,11 @@ class TStationChatServiceV2:
                 )
                 + "\n\n"
             ]
-            chunks.extend(f"data: {json.dumps(recovery_event, ensure_ascii=False)}\n\n" for recovery_event in recovery["events"])
+            chunks.extend(
+                f"data: {json.dumps(recovery_event, ensure_ascii=False)}\n\n"
+                for recovery_event in recovery["events"]
+                if not _same_contract_tool_status(recovery_event, pre_emitted_contract_tool_status)
+            )
             chunks.append(
                 "data: "
                 + json.dumps(
@@ -37143,6 +37170,8 @@ class TStationChatServiceV2:
             await _persist_pending_slots_for_direct_return()
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
             for recovery_event in contract_required_tool_recovery["events"]:
+                if _same_contract_tool_status(recovery_event, pre_emitted_contract_tool_status):
+                    continue
                 yield f"data: {json.dumps(recovery_event, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DISCOVERY AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
             product_event = contract_required_tool_recovery["event"]
