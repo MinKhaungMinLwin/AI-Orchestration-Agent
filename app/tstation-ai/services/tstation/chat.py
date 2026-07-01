@@ -20629,7 +20629,7 @@ def _should_promote_single_turn_purchase_after_product_resolution(
 def _promote_single_turn_purchase_contract_from_search_product(
     *,
     user_text: str,
-    tool_result: Mapping[str, Any] | None,
+    tool_result: Any,
     merged_slots: ConversationSlots | None,
     routing_result: Any | None,
 ) -> tuple[ConversationSlots, IntentFrame, ToolPlan, ResponseDecision] | None:
@@ -20716,7 +20716,7 @@ def _promote_single_turn_purchase_contract_from_search_product(
 async def _advance_stock_flow_after_search_product_result(
     *,
     user_text: str,
-    tool_result: Mapping[str, Any] | None,
+    tool_result: Any,
     merged_slots: ConversationSlots | None,
     routing_result: Any | None,
     turn_contract: TurnContract | None,
@@ -20938,7 +20938,7 @@ def _should_promote_single_turn_stock_preview_after_product_resolution(
 def _promote_single_turn_stock_preview_from_search_product(
     *,
     user_text: str,
-    tool_result: Mapping[str, Any] | None,
+    tool_result: Any,
     merged_slots: ConversationSlots | None,
     routing_result: Any | None,
 ) -> tuple[ConversationSlots, IntentFrame, ToolPlan, ResponseDecision] | None:
@@ -37311,7 +37311,7 @@ class TStationChatServiceV2:
                             logger.info("[TURN_CONTRACT] post-tool update %s", turn_contract.to_dict())
                     turn_tool_slots: dict[str, Any] = {}
                     outer_resolved_search_row: dict[str, Any] | None = None
-                    if tool_name == "search_product_tool" and isinstance(parsed_for_verifier, dict):
+                    if tool_name == "search_product_tool" and parsed_for_verifier is not None:
                         items = _search_product_result_items(parsed_for_verifier)
                         if len(items) == 1 and isinstance(items[0], dict):
                             item = items[0]
@@ -37430,7 +37430,7 @@ class TStationChatServiceV2:
                     if tool_name == "search_product_tool":
                         promoted_purchase = _promote_single_turn_purchase_contract_from_search_product(
                             user_text=user_query,
-                            tool_result=parsed_for_verifier if isinstance(parsed_for_verifier, Mapping) else None,
+                            tool_result=parsed_for_verifier,
                             merged_slots=pending_slots or initial_slots,
                             routing_result=routing_result,
                         )
@@ -37492,7 +37492,7 @@ class TStationChatServiceV2:
                         if promoted_purchase is None:
                             stock_flow_advance = await _advance_stock_flow_after_search_product_result(
                                 user_text=user_query,
-                                tool_result=parsed_for_verifier if isinstance(parsed_for_verifier, Mapping) else None,
+                                tool_result=parsed_for_verifier,
                                 merged_slots=pending_slots or initial_slots,
                                 routing_result=routing_result,
                                 turn_contract=turn_contract,
@@ -37515,14 +37515,14 @@ class TStationChatServiceV2:
                         if promoted_purchase is None and stock_flow_advance is None:
                             promoted_stock_preview = _promote_single_turn_stock_preview_from_search_product(
                                 user_text=user_query,
-                                tool_result=parsed_for_verifier if isinstance(parsed_for_verifier, Mapping) else None,
+                                tool_result=parsed_for_verifier,
                                 merged_slots=pending_slots or initial_slots,
                                 routing_result=routing_result,
                             )
                     elif _current_router_preview_seed.get(None) is not None:
                         promoted_stock_preview = _promote_single_turn_stock_preview_from_search_product(
                             user_text=user_query,
-                            tool_result=parsed_for_verifier if isinstance(parsed_for_verifier, Mapping) else None,
+                            tool_result=parsed_for_verifier,
                             merged_slots=pending_slots or initial_slots,
                             routing_result=routing_result,
                         )

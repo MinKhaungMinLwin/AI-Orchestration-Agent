@@ -59,7 +59,9 @@ def util_search_product_price_context(price_data: Mapping[str, Any] | None) -> d
     return values
 
 
-def util_search_product_result_items(tool_result: Mapping[str, Any] | None) -> list[Any]:
+def util_search_product_result_items(tool_result: Any) -> list[Any]:
+    if isinstance(tool_result, list):
+        return tool_result
     if not isinstance(tool_result, Mapping):
         return []
     data = tool_result.get("data")
@@ -70,7 +72,7 @@ def util_search_product_result_items(tool_result: Mapping[str, Any] | None) -> l
 
 
 def util_single_resolved_search_product_row(
-    tool_result: Mapping[str, Any] | None,
+    tool_result: Any,
 ) -> dict[str, Any] | None:
     items = util_search_product_result_items(tool_result)
     if not isinstance(items, list) or len(items) != 1 or not isinstance(items[0], Mapping):
@@ -109,12 +111,10 @@ def util_single_resolved_search_product_row(
 
 
 def util_resolve_stock_search_product_row(
-    tool_result: Mapping[str, Any] | None,
+    tool_result: Any,
     *,
     known_tire_size: str | None = None,
 ) -> dict[str, Any] | None:
-    if not isinstance(tool_result, Mapping):
-        return None
     items = util_search_product_result_items(tool_result)
     if not isinstance(items, list) or not items:
         return None
