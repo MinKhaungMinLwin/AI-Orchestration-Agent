@@ -2025,7 +2025,12 @@ def _apply_default_benefit_router_override(
     domains: list[MultiAgentDomain.Domain],
     routing_result: MultiAgentDomain | None,
 ) -> tuple[list[MultiAgentDomain.Domain], MultiAgentDomain | None, bool]:
-    if not is_default_benefit_request(user_text):
+    execution_plan = [str(item or "").strip().lower() for item in (getattr(routing_result, "execution_plan", None) or ())]
+    router_benefit_list_lookup = any(
+        item in {"discovery:benefit_event_list_lookup", "discovery:benefit_deal_list"}
+        for item in execution_plan
+    )
+    if not is_default_benefit_request(user_text) and not router_benefit_list_lookup:
         return domains, routing_result, False
 
     previous_domains = list(getattr(routing_result, "domains", []) or domains)
@@ -2992,8 +2997,9 @@ Complaint routing rule:
        When those anchors are absent, treat it as a general cancellation-fee policy question and do not assume a personal order lookup.
    - "discovery_recommendation": tire recommendation by vehicle, tire size, scenario, discount ranking WITHOUT a specific product name, or continuation from recommendation cards ("추천", "맞는 타이어", "12가3456 타이어", "세일 많이 하는 타이어", "할인율 높은 타이어")
    - "discovery_search": product search by name/keyword/brand/size (no goods_no), price/stock/discount-price query with product name only (e.g. "벤투스 S2 할인가 얼마야?", "다이나프로 HPX 할인된 가격", "마일리지 플러스 2", "Mileage Plus"), run-flat vs normal price comparison, best-sellers/sales-rank requests ("많이 팔린/베스트셀러/잘 팔리는/잘 나가는/요즘 제일 인기 있는 거") — goods_no NOT yet known in context
-   - "discovery_event_content": explicit events/deals/current benefit list requests ("이벤트 혜택 알려줘", "지금 받을 수 있는 혜택 알려줘", "기획전 알려줘", "행사 목록", "이벤트 대상 상품"), product-applicable events, YouTube/video.
-     Use execution_plan=["discovery:benefit_event_list_lookup"] for current event/benefit lists and ["discovery:benefit_deal_list"] for deal-only list requests.
+   - "discovery_event_content": explicit events/deals/current benefit list requests ("이벤트 혜택 알려줘", "지금 받을 수 있는 혜택 알려줘", "기획전 알려줘", "프로모션 뭐 있어?", "행사 목록", "이벤트 대상 상품"), product-applicable events, YouTube/video.
+     For generic current lists of 이벤트/기획전/프로모션/행사/혜택, always use execution_plan=["discovery:benefit_event_list_lookup"] so events and deals are shown together.
+     Use ["discovery:benefit_deal_list"] only for deal-specific flows such as "기획전 상품", "기획전 적용 상품", or deal-detail follow-ups.
      Treat "알려줘/보여줘/뭐 있어?" as information lookup, NOT automatic alert registration.
    - Competitor product → Hankook lineup orientation ("미쉐린 크로스클라이밋2에 대응하는 한국타이어 라인업 알려줘", "CC2랑 비슷한 한타 뭐야") → DISCOVERY, agent_prompt_profile=discovery_search, execution_plan=["discovery:competitor_counterpart_guidance"]. This is an informational LLM answer: do not force product search, recommendation-by-vehicle, price/stock, or size collection.
    - "full": compatibility-only, mixed, ambiguous, or uncertain cases; ALSO use when: (a) user message matches datepick selection pattern (ONLY a date+time, e.g. "2026년 5월 15일 (금)\n17:00") — preOrder+quick_order flow requires full profile, (b) user confirms a preOrder card shown in a previous turn ("ㅇㅇ", "네", "주문해줘" after preOrder was displayed)
@@ -3074,7 +3080,7 @@ DISCOVERY — product search, recommendation, compatibility (no goods_no yet):
 - "buy tires for 12가3456", "쏘나타 타이어 추천", "벤투스 S2 가격/재고/매장" (resolve goods_no first), "런플랫이 얼마나 더 비싸?", "225/45R18 런플랫 가격 차이", "이벤트", "리뷰 영상", "추천 가격 비교해줘"
 - "마일리지 플러스", "마일리지 플러스 2/3", "Mileage Plus" → discovery_search. These are product terms.
 - "마일리지 타이어", "마일리지 좋은 타이어", "수명 긴 타이어", "오래 타는 타이어", "마모 적은 타이어" → discovery_recommendation or neutral attribute explanation depending on phrasing. Do not treat "마일리지 타이어" alone as Mileage Plus product search.
-- "이벤트 혜택 알려줘", "지금 받을 수 있는 혜택 알려줘", "기획전 알려줘" → DISCOVERY, agent_prompt_profile=discovery_event_content, execution_plan=["discovery:benefit_event_list_lookup"] or ["discovery:benefit_deal_list"]. This is current list lookup, not an alert request.
+- "이벤트 혜택 알려줘", "지금 받을 수 있는 혜택 알려줘", "기획전 알려줘", "지금 프로모션 뭐있어?" → DISCOVERY, agent_prompt_profile=discovery_event_content, execution_plan=["discovery:benefit_event_list_lookup"]. Show events and deals together for these generic current-list requests. This is current list lookup, not an alert request.
 - 경쟁사 상품 기준 한국타이어 대응 라인업: "미쉐린 크로스클라이밋2에 대응하는 한국타이어 라인업 알려줘", "CC2랑 비슷한 한타 뭐야" → DISCOVERY, agent_prompt_profile=discovery_search, execution_plan=["discovery:competitor_counterpart_guidance"]. LLM should answer with similar candidate guidance only; do not route to vehicle/size recommendation or Transaction.
 - 가격 범위/예산으로 타이어 찾기: "30만원 이하 타이어 추천", "20만원에서 30만원 사이 타이어", "예산 50만원 이상 프리미엄 타이어", "한국타이어 30만원 이하 있어?" — goods_no 없으므로 반드시 DISCOVERY
 - 가격 유사성 기반 추천 follow-up: 직전 대화에서 특정 상품의 가격이 표시된 후 그 가격대와 비슷한 다른 타이어를 요청하는 경우 — 이전 도메인이 TRANSACTION(가격 조회)이어도 반드시 DISCOVERY. 사용자 의도는 가격 포지셔닝 기반 새 추천이므로 TRANSACTION이 아님.
@@ -3324,7 +3330,7 @@ Also set `policy_intent`:
 - partner-member-only coupon guidance ("제휴회원에게만 제공되는 쿠폰 보여줘", "제휴사 회원 전용 쿠폰 있어?", "복지몰 쿠폰 보여줘", "임직원 전용 쿠폰 안내해줘") → SUPPORT, policy_intent=`partner_member_coupon_policy`; this is access/policy guidance, not owned coupon lookup, coupon issuance, or coupon box listing.
 - T-Station store/service complaint mixed with legal action request (고소/소송/법적 대응/내용증명/분쟁조정/신고 방법) → SUPPORT, policy_intent=`legal_action_guidance_denied`; do not explain legal steps, institutions, documents, or procedures.
 - OE/RE concept or factory-tire equivalence/replacement turns ("OE랑 RE 차이가 뭐야?", "순정 타이어가 뭐야?", "출고 때 끼워진 거랑 같은 타이어 있어?", "순정이랑 비슷한 교체용 추천해줘", "2454518 사이즈 OE 타이어 있어?") → DISCOVERY, execution_plan=`discovery:oe_re_concept_explanation` for explanation turns or `discovery:oe_re_product_filter` when the current turn includes tire size/product/brand for lookup/filter. This is a fresh current-turn Discovery flow, not a recent product-list follow-up.
-- current event/benefit/deal list lookup ("이벤트 혜택 알려줘", "지금 받을 수 있는 혜택 알려줘", "기획전 알려줘") → DISCOVERY, agent_prompt_profile=`discovery_event_content`, execution_plan=`discovery:benefit_event_list_lookup` or `discovery:benefit_deal_list`
+- current event/benefit/deal list lookup ("이벤트 혜택 알려줘", "지금 받을 수 있는 혜택 알려줘", "기획전 알려줘", "프로모션 뭐 있어?") → DISCOVERY, agent_prompt_profile=`discovery_event_content`, execution_plan=`discovery:benefit_event_list_lookup`
 - automatic price/coupon/event notification request ("가격 내려가면 알려줘", "쿠폰 이벤트 생기면 알림 줘", "문자 줘", "연락 줘") → TRANSACTION, execution_plan=`transaction:price_or_benefit_alert_request`; this is not a current event list lookup.
 - competitor product to Hankook lineup orientation ("미쉐린 크로스클라이밋2에 대응하는 한국타이어 라인업 알려줘", "CC2랑 비슷한 한타 뭐야") → DISCOVERY, agent_prompt_profile=`discovery_search`, execution_plan=`discovery:competitor_counterpart_guidance`; this is an informational answer, not vehicle/size recommendation or Transaction.
 - OE/RE explanation or factory-tire equivalence/replacement turns ("OE랑 RE 차이가 뭐야?", "순정 타이어가 뭐야?", "출고 때 끼워진 거랑 같은 타이어 있어?", "순정이랑 비슷한 교체용 추천해줘", "2454518 사이즈 OE 타이어 있어?") → DISCOVERY. Use `discovery:oe_re_concept_explanation` for concept/explanation turns and `discovery:oe_re_product_filter` when the current turn includes tire size, product, or brand to filter/lookup. Treat this as a fresh current-turn Discovery flow, not as a recent-product-set size follow-up and not as vehicle-information/store/order flow.
@@ -3454,7 +3460,7 @@ EXAMPLES (tricky cases):
 - "미쉐린 235/55R19 재고 있어?" → DISCOVERY, agent_prompt_profile=discovery_search
 - "요즘 많이 팔리는 타이어" → DISCOVERY, agent_prompt_profile=discovery_search
 - "제일 최근에 나온 타이어 신제품이 뭐야?" → DISCOVERY, agent_prompt_profile=discovery_search
-- "진행 중인 이벤트 보여줘" → DISCOVERY, agent_prompt_profile=discovery_event_content
+- "진행 중인 이벤트 보여줘", "진행 중인 기획전 보여줘", "지금 프로모션 뭐있어?" → DISCOVERY, agent_prompt_profile=discovery_event_content
 - "리뷰 영상 찾아줘" → DISCOVERY, agent_prompt_profile=discovery_event_content
 - "판교점에서 벤투스 S2 AS 4개 예약해줘" → DISCOVERY, agent_prompt_profile=full (product name + 예약, no size, no goods_no — need to show size list first)
 - "벤투스 S2 AS 205/55R16 4개 판교점 예약해줘" → [DISCOVERY, TRANSACTION], agent_prompt_profile=full (product name + size → narrows to 1 result)

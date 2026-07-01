@@ -12427,6 +12427,9 @@ def test_default_benefit_direct_code_gate_allows_support_misroute_via_sub_intent
         "현재 받을 수 있는 혜택 알려줘",
         "진행 중인 이벤트",
         "이벤트 혜택 알려줘",
+        "진행 중인 기획전",
+        "진행 중인 프로모션",
+        "지금 프로모션 뭐있어?",
     ],
 )
 def test_default_benefit_router_override_beats_support_promotion_policy(user_text: str) -> None:
