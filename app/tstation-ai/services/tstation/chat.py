@@ -87,12 +87,13 @@ from services.tstation.policies.resolved_context import (
     canonical_context_from_template_boundary,
     canonical_context_from_tool_boundary,
 )
+from services.tstation.policies.router_context import compact_router_messages
+from services.tstation.policies.router_evidence import build_router_evidence, router_entities_for_trace
 from services.tstation.policies.flow_state import (
     apply_router_evidence_snapshot,
     commit_flow_state,
     commit_purchase_flow_state,
     is_purchase_flow_context,
-    latest_router_evidence,
     purchase_context_vehicle_selection_patch,
     recommendation_listcar_flow_delta,
     recommendation_named_vehicle_flow_delta,
@@ -621,6 +622,59 @@ def _candidate_reference_to_dict(value: Any, *, compact: bool = False) -> dict[s
     return {key: item for key, item in normalized.items() if item}
 
 
+class RouterRegisteredVehicleCandidate(BaseModel):
+    mentioned: bool = Field(description="True when the user explicitly refers to an owned/registered vehicle.")
+    anchor: str = Field(description="Vehicle name anchor from the current turn, e.g. 제타. Empty if absent.")
+    reference_text: str = Field(description="Exact phrase that supports this candidate, or empty.")
+    confidence: float = Field(description="Confidence 0.0 to 1.0.")
+
+
+class RouterNamedEntityCandidate(BaseModel):
+    mentioned: bool = Field(description="True when this entity is explicitly mentioned.")
+    name: str = Field(description="Entity name from the current turn, or empty.")
+    type: str = Field(description="Entity subtype when available, e.g. station/region/store/coupon. Empty if unknown.")
+    reference_text: str = Field(description="Exact phrase that supports this candidate, or empty.")
+    confidence: float = Field(description="Confidence 0.0 to 1.0.")
+
+
+class RouterEntityCandidates(BaseModel):
+    registered_vehicle: RouterRegisteredVehicleCandidate = Field(
+        description="Owned/registered vehicle mention and name anchor."
+    )
+    store: RouterNamedEntityCandidate = Field(description="Specific store candidate.")
+    coupon: RouterNamedEntityCandidate = Field(description="Coupon name candidate.")
+    location: RouterNamedEntityCandidate = Field(description="Location/region/station candidate.")
+
+
+def _empty_router_entity_candidates() -> dict[str, Any]:
+    empty_named = {"mentioned": False, "name": "", "type": "", "reference_text": "", "confidence": 0.0}
+    return {
+        "registered_vehicle": {
+            "mentioned": False,
+            "anchor": "",
+            "reference_text": "",
+            "confidence": 0.0,
+        },
+        "store": dict(empty_named),
+        "coupon": dict(empty_named),
+        "location": dict(empty_named),
+    }
+
+
+PrimaryRouterAction = Literal[
+    "none",
+    "recommend",
+    "buy",
+    "lookup",
+    "reserve",
+    "compare",
+    "coupon_use",
+    "coupon_lookup",
+    "store_search",
+    "support_policy",
+]
+
+
 class MultiAgentDomain(BaseModel):
     """Router result that supports multiple domains (multi-intent)."""
 
@@ -717,12 +771,28 @@ class MultiAgentDomain(BaseModel):
                 data["override_blocked"] = False
             if "blocked_override_reason" not in data:
                 data["blocked_override_reason"] = "none"
+            if "primary_action" not in data:
+                data["primary_action"] = "none"
+            if "entity_candidates" not in data:
+                data["entity_candidates"] = _empty_router_entity_candidates()
         return data
 
     reason: str = Field(description="Short English classification reason.")
     domains: list[Domain] = Field(description="List of domains detected in the request, ordered by priority")
     execution_plan: list[str] = Field(
         description="Short ordered plan for the selected domains, without tool names or parameters"
+    )
+    primary_action: PrimaryRouterAction = Field(
+        description=(
+            "Current-turn action candidate only: none, recommend, buy, lookup, reserve, compare, coupon_use, "
+            "coupon_lookup, store_search, or support_policy. This is evidence, not tool execution authority."
+        )
+    )
+    entity_candidates: RouterEntityCandidates = Field(
+        description=(
+            "Structured current-turn entity candidates. Leave empty/low-confidence when uncertain; policy validates "
+            "before using them."
+        )
     )
     user_behavior: str = Field(
         description=(
@@ -2449,6 +2519,10 @@ class _SlimMultiAgentDomain(BaseModel):
                 data["override_blocked"] = False
             if "blocked_override_reason" not in data:
                 data["blocked_override_reason"] = "none"
+            if "primary_action" not in data:
+                data["primary_action"] = "none"
+            if "entity_candidates" not in data:
+                data["entity_candidates"] = _empty_router_entity_candidates()
         return data
 
     reason: str = Field(description="Reason for the classification, using english")
@@ -2457,6 +2531,12 @@ class _SlimMultiAgentDomain(BaseModel):
     )
     execution_plan: list[str] = Field(
         description="Short ordered domain plan; no tool names or parameters."
+    )
+    primary_action: PrimaryRouterAction = Field(
+        description="Current-turn action candidate evidence, not tool execution authority."
+    )
+    entity_candidates: RouterEntityCandidates = Field(
+        description="Structured current-turn entity candidates with confidence."
     )
     claim_check_type: str = Field(
         description=(
@@ -2723,13 +2803,13 @@ def prompt_router_multi() -> str:
     """Classification prompt that detects multi-intent with flow sequences and conversation context."""
     return """
 You are a domain classifier for T-Station AI (Hankook Tire).
-Read the FULL conversation history to classify the current user message.
+Read the current user message and the compact router context to classify the current user message.
 
-Produce 29 outputs:
+Produce these structured outputs:
 1. domains — ONE OR MORE domains based on detected intents (ordered by priority)
 2. reason — why you chose these domains
 3. execution_plan — short ordered plan for the selected domains, without tool names or parameters
-4. user_behavior — what the user is currently doing based on the full conversation (e.g. "selecting car from list shown in previous turn", "providing tire size", "confirming product")
+4. user_behavior — what the user is currently doing based on compact context (e.g. "selecting car from list shown in previous turn", "providing tire size", "confirming product")
 5. flow — one-line summary of the journey so far (e.g. "user requested tires → agent showed 2 cars → user selecting")
 5a. intent — "quick_order_reservation", "stock_store_search", or "none" for slot-fill flow compatibility
 5b. slot_fill_intent — same value as intent when is_slot_fill=true, otherwise "none"
@@ -2739,6 +2819,12 @@ Produce 29 outputs:
 5f. candidate_reference — label/index/type reference only; never invent goods_no/shop_id
 5g. continue_flow — true when the existing current_flow should resume after code validation
 5h. new_intent — false only for a slot-fill continuation; true for support/FAQ/complaint or any fresh request
+5i. primary_action — current-turn action evidence only: recommend, buy, lookup, reserve, compare, coupon_use,
+    coupon_lookup, store_search, support_policy, or none. This never authorizes tool execution by itself.
+5j. entity_candidates — structured current-turn entity evidence:
+    registered_vehicle(anchor/reference_text/confidence), store(name/reference_text/confidence),
+    coupon(name/reference_text/confidence), location(name/type/reference_text/confidence).
+    Prefer values explicitly present in the current user turn. If unsure, leave empty or confidence below 0.5.
 
 If a message named "ROUTER SLOT-FILL CONTEXT" is present, use it as structured state for the previous active flow.
 It may include current_flow, known_slots, missing_slots, last_requested_slot, and last_candidates.
@@ -2915,7 +3001,7 @@ Complaint routing rule:
 16. needs_clarification — true only when referred_object_status is "missing" or "ambiguous" and the current turn cannot safely execute tools
 17. planner_confidence — 0.0 to 1.0 confidence for the chosen domains, execution_plan, and reference judgment
 
-IMPORTANT: user_behavior must reflect the FULL conversation context, not just the current message.
+IMPORTANT: user_behavior must reflect the compact router context, not just the current message.
 If the user is responding to a previous agent question (e.g. selecting a car, confirming a product, providing a car number),
 identify WHAT they are responding to in user_behavior. The agent will pick the actual tool to call based on its own flow rules — do NOT prescribe specific tool names or parameters here.
 
@@ -3123,6 +3209,8 @@ Default slot-fill fields for first turns:
 - intent="none", slot_fill_intent="none", is_slot_fill=false, filled_slot="none",
   slot_fill_source="none", candidate_reference={"label":"","index":"","type":"","action_type":"","source":""}, continue_flow=false, new_intent=true.
 - Only use slot-fill values if an explicit ROUTER SLOT-FILL CONTEXT is present.
+- Fill primary_action and entity_candidates from the current user text only. If uncertain, use primary_action="none"
+  and empty/low-confidence entities. These are evidence only, not tool execution authority.
 
 DOMAINS:
 - LEADING: greeting or unclear request.
@@ -3173,7 +3261,8 @@ Critical first-turn routing:
 - Complaint outside T-Station scope -> LEADING with complaint_scope=out_of_scope_complaint.
 
 Output fields:
-- domains, reason, execution_plan, claim_check_type, complaint_scope, policy_intent, agent_prompt_profile.
+- domains, reason, execution_plan, primary_action, entity_candidates, claim_check_type, complaint_scope,
+  policy_intent, agent_prompt_profile.
 - Set planner_confidence high only when the first-turn intent is explicit.
 - Use agent_prompt_profile: transaction_coupon, transaction_order, transaction_store, transaction_price_stock,
   discovery_search, discovery_recommendation, discovery_event_content, or full.
@@ -3187,6 +3276,7 @@ continue_flow, and new_intent. On a normal first turn with no ROUTER SLOT-FILL C
 intent="none", slot_fill_intent="none", is_slot_fill=false, filled_slot="none", slot_fill_source="none",
 candidate_reference={"label":"","index":"","type":"","action_type":"","source":""}, continue_flow=false, new_intent=true. If explicit router context is present,
 apply the same slot-fill rules from the full router prompt; never invent stable IDs.
+Also output primary_action and entity_candidates from the current user text only. If unsure, keep empty/low-confidence.
 
 DOMAINS:
 - TRANSACTION: store search by location or name (강남/근처/올마이티/All My T); goods_no (G+12 digits) price/stock/order; store visit reservation (specific date/time slot booking); reservation time change (예약 시간 변경/방문 시간 변경/일정 변경/시간 바꿀 수 있어); cart; coupon inquiry (내 쿠폰/쿠폰함/쿠폰 사용 조건/쿠폰 어떻게 써/쿠폰 사용법) [⚠️ NOT SUPPORT]; order history (내 주문내역/주문 조회/내 주문/내가 주문한 거) [⚠️ NOT SUPPORT]; maintenance/service history lookup (정비이력/정비내역/관리받은 내역/서비스 이력) [⚠️ NOT SUPPORT — must query member history]; order cancellation (주문 취소/취소하고 싶어/취소해줘) [⚠️ NOT SUPPORT]; cancellation/return fee inquiry (취소 수수료/취소비용/오늘 취소하면 수수료/예약 취소 비용/택배비/왕복 배송비/반품 비용/반품수수료) [⚠️ NOT SUPPORT — must check order/logistics state].
@@ -3359,6 +3449,11 @@ EXAMPLES (tricky cases):
 - [Prior context: agent showed preOrder card] User says "ㅇㅇ" or "네" or "주문해줘" → TRANSACTION, agent_prompt_profile=full (confirmation after preOrder card — needs quick_order_tool which is only in full profile)
 
 Output: domains (list with ONE OR MORE domains, ordered by execution priority), reason, execution_plan, claim_check_type, complaint_scope, discovery_followup_intent, carried_discovery_objective, pending_check_topic, pending_check_object_type, pending_check_object_value, comparison_followup_intent, comparison_metric, recent_product_set_followup_type, recent_product_set_metric, recent_product_set_direction, recent_product_set_price_basis, requested_product_attribute, policy_intent, store_attribute_store_name, store_attribute_text, store_attribute_type, store_attribute_verification_level, service_name, service_code, region, place_query, recommendation_scenario, referred_object_status, referred_object_type, needs_clarification, planner_confidence, and agent_prompt_profile.
+Also output primary_action and entity_candidates. Examples: "내가 닷컴에 등록해놓은 제타 ... 추천"
+=> primary_action=recommend, entity_candidates.registered_vehicle.anchor="제타"; "티스테이션 판교점 예약 가능해?"
+=> primary_action=reserve, entity_candidates.store.name="판교점"; "생일 쿠폰 쓸 수 있어?"
+=> primary_action=coupon_use, entity_candidates.coupon.name="생일 쿠폰"; "강남역 근처 장착점"
+=> primary_action=store_search, entity_candidates.location.name="강남역", type="station".
 claim_check_type:
 - none: normal product description/search/recommendation
 - verifiable_product_attribute: product data attribute verification such as noise label, wet grade, rolling resistance, price grade, season, or vehicle category
@@ -4068,7 +4163,10 @@ class StreamingMultiAgentCoordinator:
                 system_msg = SystemMessage(content=prompt_router_multi())
                 run_name = "classify_multi_intent"
 
-            all_messages = [system_msg] + list(messages)
+            compact_result = compact_router_messages(list(messages))
+            router_messages = compact_result.messages
+            router_compact_metadata = dict(compact_result.metadata)
+            all_messages = [system_msg] + router_messages
 
             trace_config = build_trace_config(
                 session_id=session_id,
@@ -4078,6 +4176,7 @@ class StreamingMultiAgentCoordinator:
                 tags=["router", run_name],
                 prompt_name="router",
                 run_name=f"💭 {run_name}",
+                extra_metadata=router_compact_metadata,
             )
             raw_result = structured_model.invoke(all_messages, config=trace_config)
 
@@ -4122,7 +4221,15 @@ class StreamingMultiAgentCoordinator:
                 f"plan={result.execution_plan!r}, behavior={result.user_behavior!r}, "
                 f"flow={result.flow!r}, profile={result.agent_prompt_profile!r}"
             )
+            router_compact_metadata.update({
+                "router_primary_action": getattr(result, "primary_action", "none"),
+                "router_entities": router_entities_for_trace(result),
+            })
             domains = result.domains if result.domains else [MultiAgentDomain.Domain.LEADING]
+            try:
+                result.__dict__["router_compact_metadata"] = router_compact_metadata
+            except Exception:
+                pass
             _classify_cache[_cache_key] = (domains, result.model_copy(), time.monotonic() + 60)
             return domains, result
 
@@ -24748,7 +24855,7 @@ class TStationChatServiceV2:
             dropped = len(messages) - _MAX_HISTORY_MESSAGES
             messages = messages[-_MAX_HISTORY_MESSAGES:]
             logger.debug(f"[CHAT_V2] History truncated: dropped {dropped} oldest messages, keeping last {_MAX_HISTORY_MESSAGES}")
-        classifier_messages = TStationChatServiceV2._compact_messages_for_classifier(messages)
+        classifier_messages = list(messages)
 
         # Slot processing: load → extract → classify (with LLM slots) → merge → save → inject
         # Wrapped in try/except so slot failures never block the main chat flow
@@ -24873,7 +24980,7 @@ class TStationChatServiceV2:
             if len(messages) > _MAX_HISTORY_MESSAGES:
                 messages = messages[-_MAX_HISTORY_MESSAGES:]
             messages_chars = TStationChatServiceV2._messages_chars(messages)
-            classifier_messages = TStationChatServiceV2._compact_messages_for_classifier(messages)
+            classifier_messages = list(messages)
             classifier_messages_chars = TStationChatServiceV2._messages_chars(classifier_messages)
             logger.debug("[CONTEXT] messages_count=%d messages_chars=%d", len(messages), messages_chars)
             logger.debug(
@@ -27116,6 +27223,13 @@ class TStationChatServiceV2:
             # without needing to expand the node.
             _domain_label = "+".join(d.value for d in domains) if domains else "?"
             _classify_summary = f"{_classify_path} → {_domain_label}"
+            router_compact_metadata = (
+                getattr(routing_result, "router_compact_metadata", None)
+                if routing_result is not None
+                else None
+            )
+            if not isinstance(router_compact_metadata, Mapping):
+                router_compact_metadata = {}
             logger.info(
                 "[CLASSIFIER_RESULT] path=%s domains=%s profile=%s",
                 _classify_path,
@@ -27136,6 +27250,15 @@ class TStationChatServiceV2:
                     "filled_slot": validated_ui_action_router_skip_metadata.get("filled_slot"),
                     "slot_fill_intent": validated_ui_action_router_skip_metadata.get("slot_fill_intent"),
                     "resume_source": validated_ui_action_router_skip_metadata.get("resume_source"),
+                    "router_compacted": router_compact_metadata.get("router_compacted"),
+                    "router_input_chars_before": router_compact_metadata.get("router_input_chars_before"),
+                    "router_input_chars_after": router_compact_metadata.get("router_input_chars_after"),
+                    "router_message_count_before": router_compact_metadata.get("router_message_count_before"),
+                    "router_message_count_after": router_compact_metadata.get("router_message_count_after"),
+                    "router_primary_action": getattr(routing_result, "primary_action", None)
+                    if routing_result
+                    else None,
+                    "router_entities": router_entities_for_trace(routing_result),
                     "active_flow_snapshot_before_router": vehicle_selection_trace_metadata.get(
                         "active_flow_snapshot_before_router"
                     ),
@@ -27231,7 +27354,7 @@ class TStationChatServiceV2:
         elif routing_result is not None:
             router_source_for_contract = "llm"
             contract_source_for_turn = "router"
-        latest_router_evidence_snapshot = latest_router_evidence(
+        latest_router_evidence_snapshot = build_router_evidence(
             routing_result,
             domains=domains,
             source=router_source_for_contract if router_source_for_contract != "unknown" else "llm_router",
