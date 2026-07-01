@@ -5,6 +5,7 @@ from services.tstation.policies.discovery_intent_policy import (
     extract_best_seller_vehicle_query,
     extract_quantity_options,
     has_registered_vehicle_ownership_signal,
+    has_registered_vehicle_type_query_signal,
     is_best_seller_request,
     is_default_benefit_request,
     is_default_tire_shopping_request,
@@ -148,6 +149,22 @@ def test_vehicle_best_seller_query_populates_vehicle_query() -> None:
     assert plan.tool_args_patch == {"limit": 5, "months": 3, "vehicle_query": "그랜저"}
 
 
+def test_vehicle_best_seller_query_without_object_noun_or_recency_word() -> None:
+    for text in (
+        "그랜저 인기 많은거 알려줘",
+        "그랜저 잘 팔리는거 뭐야",
+        "K7 잘 나가는거",
+        "그랜저 인기 제품 알려줘",
+    ):
+        assert is_best_seller_request(text)
+        frame = build_discovery_intent_frame(text)
+        plan = plan_discovery_tools(frame)
+
+        assert frame.sub_intent == "best_seller_search"
+        assert plan.preferred_tool == "get_best_selling_products_tool"
+        assert frame.entities["vehicle_query"] in ("그랜저", "K7")
+
+
 def test_general_ev_recommendation_still_uses_recommendation_engine() -> None:
     frame = build_discovery_intent_frame("전기차용 타이어 추천해줘")
     plan = plan_discovery_tools(frame)
@@ -178,6 +195,37 @@ def test_registered_vehicle_size_lookup_variants_use_vehicle_information_contrac
             assert "named_registered_vehicle_anchor" not in frame.entities
         assert plan.allowed_tools == ("get_my_cars_tool",)
         assert plan.preferred_tool == "get_my_cars_tool"
+
+
+def test_registered_vehicle_type_query_variants_use_vehicle_information_contract() -> None:
+    texts = (
+        "내 차 뭐야?",
+        "내차 뭐야?",
+        "내가 등록한 차 뭐야?",
+        "내가 등록한 차종이 뭐야?",
+        "내 차종 알려줘",
+        "내가 등록한 차량 알려줘",
+    )
+    for text in texts:
+        frame = build_discovery_intent_frame(text)
+        plan = plan_discovery_tools(frame)
+
+        assert has_registered_vehicle_type_query_signal(text)
+        assert frame.intent == "product_description"
+        assert frame.sub_intent == "vehicle_information"
+        assert frame.entities["vehicle_information_request"] == "vehicle_type_lookup"
+        assert plan.allowed_tools == ("get_my_cars_tool",)
+        assert plan.preferred_tool == "get_my_cars_tool"
+
+
+def test_registered_vehicle_recommendation_request_is_unaffected_by_type_query_signal() -> None:
+    frame = build_discovery_intent_frame("내 차에 맞는 타이어 추천해줘")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.intent == "product_recommendation"
+    assert frame.sub_intent == "vehicle_resolved_recommendation"
+    assert "vehicle_information_request" not in frame.entities
+    assert plan.preferred_tool == "get_my_cars_tool"
 
 
 def test_ev_low_noise_recommendation_keeps_ev_axis() -> None:

@@ -14408,9 +14408,15 @@ def _multi_product_detail_continuation_names(
     messages: list[dict],
     latest_quickreply_tmpl: dict | None = None,
 ) -> tuple[str, ...]:
+    current_names = _product_names_in_text(user_text)
+    if (
+        len(current_names) >= 2
+        and not _product_comparison_names(user_text)
+        and re.search(r"설명|알려|정보", user_text or "", re.IGNORECASE)
+    ):
+        return current_names[:2]
     if not _is_multi_product_detail_continuation(user_text):
         return ()
-    current_names = _product_names_in_text(user_text)
     if len(current_names) >= 2 and not _product_comparison_names(user_text):
         return current_names[:2]
     names = _recent_multi_product_clarification_names(messages, latest_quickreply_tmpl)
@@ -14440,6 +14446,8 @@ def _should_resolve_compare_target_product_pair(
 ) -> bool:
     if _is_product_compare_context_reset_query(user_text):
         return False
+    if len(_product_comparison_names(user_text)) >= 2:
+        return True
     if not _has_recent_compare_target_prompt(messages, latest_quickreply_tmpl):
         comparison_context = _comparison_context_from_slots(slots)
         context_metric = str(comparison_context.get("compare_metric") or "").strip()
