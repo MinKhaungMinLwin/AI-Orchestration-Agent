@@ -115,6 +115,7 @@ from services.tstation.chat import (
     _promote_single_turn_purchase_contract_from_search_product,
     _promote_single_turn_stock_preview_from_search_product,
     _promote_single_turn_stock_inventory_from_search_product,
+    _reservation_hour_from_text,
     _quantity_benefit_continuation_frame_from_pending,
     _final_price_from_row,
     _should_emit_direct_preorder_from_schedule_selection,
@@ -34110,6 +34111,44 @@ def test_post_search_stock_preview_becomes_single_store_availability_ready() -> 
 
     assert allowed is True
     assert reason == "contract_matched:code_post_search_single_store_availability"
+
+
+def test_purchase_product_resolution_preserves_requested_reservation_hour() -> None:
+    assert _reservation_hour_from_text("7월8일 14시에 예약해줘") == "14"
+
+    promoted = _promote_single_turn_purchase_contract_from_search_product(
+        user_text="티스테이션 분당정자점에서 7월8일 14시에 2454519사이즈 벤투스s2 as 4개 예약해줘",
+        tool_result={
+            "data": {
+                "items": [
+                    {
+                        "goods_no": "G000000310126",
+                        "goods_nm": "벤투스 S2 AS",
+                        "tire_size_1": "245/45R19",
+                    }
+                ]
+            }
+        },
+        merged_slots=ConversationSlots(
+            tire_model="벤투스 S2 AS",
+            tire_size="245/45R19",
+            ord_qty=4,
+            shop_name="분당정자점",
+            requested_cal_day="20260708",
+            rsv_hour="14",
+            pending_intent="order",
+            goal_type="place_order",
+        ),
+        routing_result=SimpleNamespace(
+            execution_plan=["discovery:resolve_or_describe_product", "transaction:stock_store_or_reservation"]
+        ),
+    )
+
+    assert promoted is not None
+    promoted_slots, promoted_frame, _tool_plan, _decision = promoted
+    assert promoted_slots.rsv_hour == "14"
+    assert promoted_frame.known_slots["requested_cal_day"] == "20260708"
+    assert promoted_frame.known_slots["rsv_hour"] == "14"
 
 
 def test_promote_single_turn_stock_inventory_from_search_product_runs_region_lookup_contract() -> None:
