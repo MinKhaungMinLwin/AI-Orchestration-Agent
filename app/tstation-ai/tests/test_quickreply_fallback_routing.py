@@ -7484,7 +7484,13 @@ def test_grade_comparison_partial_search_results_defer_to_code_resolver() -> Non
         ],
     )
 
-    assert event is None
+    assert event is not None
+    assert event["assistant_response_source"] == "code_grade_compare_resolver"
+    assistant_response = event["data"]["assistantResponse"]
+    assert "Kinergy EX" in assistant_response
+    assert "Ventus air S" in assistant_response
+    assert "상품은 확인됐지만" in assistant_response
+    assert "비교할 상품명을 다시 알려주시면 정확히 확인해 드릴게요." in assistant_response
 
 
 def test_common_policy_guidance_leak_blocker_rewrites_discovery_guidance() -> None:

@@ -15635,11 +15635,11 @@ def _build_product_comparison_event_from_search_results(
                 preferred_keyword,
                 best_keyword,
                 allow_first_row_fallback=best_score > 0,
-            )
+                )
         product_rows.append((product_name, best_row))
 
     if any(row is None for _, row in product_rows):
-        return None
+        return _build_product_comparison_fallback_event(product_rows)
     if not _resolved_comparison_rows_are_distinct(product_rows):
         return None
 

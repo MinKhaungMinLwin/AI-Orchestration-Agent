@@ -3380,6 +3380,8 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
         return None
 
     rows_by_name: dict[str, dict[str, object]] = {}
+    requested_search_labels: list[str] = []
+    found_search_labels: set[str] = set()
     found_product_tool = False
     for entry in _find_entries(
         tool_data_list,
@@ -3388,12 +3390,18 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
         "get_products_recommendations_tool",
     ):
         found_product_tool = True
+        args = _tool_args(entry)
+        requested_label = _get_str(args, "keyword", "product_name", "name")
+        if requested_label and requested_label not in requested_search_labels:
+            requested_search_labels.append(requested_label)
         if _has_size_arg(entry):
             return None
         raw = _unwrap(entry)
         rows = raw if isinstance(raw, list) else (raw.get("items") if isinstance(raw, dict) else [])
         if not isinstance(rows, list):
             continue
+        if requested_label and any(isinstance(row, dict) for row in rows):
+            found_search_labels.add(requested_label)
         for row in rows:
             if not isinstance(row, dict):
                 continue
@@ -3452,6 +3460,17 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
             "",
             "정확한 장착 가능 여부와 가격은 차량 모델 또는 타이어 사이즈를 확인한 뒤 안내드릴 수 있어요.",
         ])
+
+    missing_search_labels = [
+        label for label in requested_search_labels if label and label not in found_search_labels
+    ]
+    if missing_search_labels:
+        if lines:
+            lines.append("")
+        if len(requested_search_labels) >= 2:
+            lines.append("요청하신 상품 중 일부는 찾지 못했어요.")
+        for label in missing_search_labels[:5]:
+            lines.append(f"- {label}: 상품 정보를 찾지 못했어요.")
 
     return {
         "type": "data",
