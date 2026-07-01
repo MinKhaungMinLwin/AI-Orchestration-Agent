@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from schemas.tstation.slots import ConversationSlots
 from services.tstation.executors.contract_required_tool_executor import (
     _recover_contract_required_tool,
+    continue_active_flow_after_tool,
     contract_required_tool_start_event,
 )
 from services.tstation.policies.contract_direct_executor import evaluate_contract_direct_path
@@ -472,6 +473,133 @@ def test_contract_recovery_blocks_active_flow_next_tool_when_contract_forbids_it
             merged_slots=ConversationSlots(availability_context={"active_flow_context": active_flow_context}),
             blocked_fast_path_source="contract_required_tool_executor",
             member_no="M123",
+        )
+    )
+
+    assert recovery is None
+
+
+def test_continue_active_flow_after_search_product_runs_next_flow_tool(monkeypatch) -> None:
+    from services.tstation import template_mapper
+    from services.tstation.agents.c_transaction_agent import tools as transaction_tools
+    from services.tstation.executors import contract_required_tool_executor as executor
+
+    captured_input: dict = {}
+
+    def fake_store_list_invoke(tool_input: dict):
+        captured_input.update(tool_input)
+        return {
+            "status": "success",
+            "data": {
+                "stores": [
+                    {
+                        "shop_id": "S001",
+                        "shop_nm": "티스테이션 분당정자점",
+                        "addr": "성남시 분당구",
+                    }
+                ]
+            },
+        }
+
+    def fake_template(tool_data_list: list[dict], assistant_text: str):
+        assert [entry["tool"] for entry in tool_data_list] == ["get_store_list_tool"]
+        return {
+            "type": "data",
+            "template": "location",
+            "data": {
+                "assistantResponse": assistant_text,
+                "stores": [{"nameAddress": "티스테이션 분당정자점"}],
+                "metadata": [{"shopId": "S001"}],
+            },
+        }
+
+    async def fake_to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    monkeypatch.setattr(transaction_tools, "get_store_list_tool", SimpleNamespace(invoke=fake_store_list_invoke))
+    monkeypatch.setattr(template_mapper, "try_build_template", fake_template)
+    monkeypatch.setattr(executor.asyncio, "to_thread", fake_to_thread)
+
+    active_flow_context = {
+        "flow_type": "commerce",
+        "status": "active",
+        "flow_step": "product_selected",
+        "product": {
+            "goods_no": "G000000310126",
+            "product_name": "벤투스 S2 AS",
+            "tire_size": "245/45R19",
+            "ord_qty": 4,
+        },
+        "store": {"shop_name": "분당정자점"},
+        "intent": {"sub_flow_type": "purchase", "pending_intent": "order", "goal_type": "place_order"},
+        "current_step": "resolve_store",
+        "missing_slots": ["shop_id"],
+        "next_tool": "get_store_list_tool",
+        "tool_args_patch": {"limit": 10, "store_nm": "분당정자점"},
+        "allowed_tools": ["search_stores_tool", "get_store_list_tool"],
+    }
+    contract = TurnContract(
+        domain="discovery",
+        intent="resolve_product_for_purchase_size_selection",
+        allowed_tools=("transaction_store_preview_tool",),
+        preferred_tool="transaction_store_preview_tool",
+        response_decision={"template": "location", "metadata": {"response_shape_key": "reservation_store_candidates"}},
+        action_mode="purchase_continuation",
+        context_state="active",
+    )
+
+    recovery = asyncio.run(
+        continue_active_flow_after_tool(
+            turn_contract=contract,
+            user_text="티스테이션 분당정자점에서 벤투스s2 as 4개 예약해줘",
+            merged_slots=ConversationSlots(availability_context={"active_flow_context": active_flow_context}),
+            last_tool_name="search_product_tool",
+            blocked_fast_path_source="post_tool_flow_progress:search_product_tool",
+            member_no="M123",
+        )
+    )
+
+    assert recovery is not None
+    assert recovery["tool_name"] == "get_store_list_tool"
+    assert recovery["tool_input"] == {"limit": 10, "store_nm": "분당정자점"}
+    assert captured_input == {"limit": 10, "store_nm": "분당정자점"}
+    assert recovery["event"]["tool_input_source"] == "flow_state_progress"
+
+
+def test_continue_active_flow_after_tool_skips_same_tool(monkeypatch) -> None:
+    from services.tstation.agents.c_transaction_agent import tools as transaction_tools
+
+    def fail_store_list_invoke(tool_input: dict):
+        raise AssertionError(f"same tool should not be repeated: {tool_input}")
+
+    monkeypatch.setattr(transaction_tools, "get_store_list_tool", SimpleNamespace(invoke=fail_store_list_invoke))
+
+    active_flow_context = {
+        "flow_type": "commerce",
+        "status": "active",
+        "flow_step": "product_selected",
+        "intent": {"sub_flow_type": "purchase", "pending_intent": "order", "goal_type": "place_order"},
+        "current_step": "resolve_store",
+        "next_tool": "get_store_list_tool",
+        "tool_args_patch": {"limit": 10, "store_nm": "분당정자점"},
+        "allowed_tools": ["get_store_list_tool"],
+    }
+
+    recovery = asyncio.run(
+        continue_active_flow_after_tool(
+            turn_contract=TurnContract(
+                domain="discovery",
+                intent="resolve_product_for_purchase_size_selection",
+                allowed_tools=("transaction_store_preview_tool",),
+                preferred_tool="transaction_store_preview_tool",
+                response_decision={
+                    "template": "location",
+                    "metadata": {"response_shape_key": "reservation_store_candidates"},
+                },
+            ),
+            user_text="분당정자점에서 예약해줘",
+            merged_slots=ConversationSlots(availability_context={"active_flow_context": active_flow_context}),
+            last_tool_name="get_store_list_tool",
         )
     )
 

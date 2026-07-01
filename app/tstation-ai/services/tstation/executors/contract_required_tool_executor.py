@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import re
 from typing import Any, Mapping
 
@@ -23,6 +24,9 @@ from services.tstation.policies.resolved_context import (
     canonical_context_from_tool_boundary,
 )
 from services.tstation.policies.turn_contract import TurnContract
+
+
+logger = logging.getLogger(__name__)
 
 
 def _enrich_best_selling_result_for_product_cards(tool_result: dict) -> dict:
@@ -291,6 +295,60 @@ async def _recover_contract_required_flow_progress_tool(
     )
     if candidate is None or candidate.tool_input_source != "flow_state_progress":
         return None
+    return await recover_blocked_fast_path_to_contract_tool(
+        turn_contract=turn_contract,
+        user_text=user_text,
+        merged_slots=merged_slots,
+        blocked_fast_path_source=blocked_fast_path_source,
+        member_no=member_no,
+    )
+
+
+async def continue_active_flow_after_tool(
+    *,
+    turn_contract: TurnContract | None,
+    user_text: str,
+    merged_slots: ConversationSlots | None,
+    last_tool_name: str,
+    blocked_fast_path_source: str = "post_tool_flow_progress",
+    member_no: str | None = None,
+) -> dict[str, Any] | None:
+    """Run the next executable active-flow tool after a tool updates slots."""
+
+    candidate = _contract_required_tool_candidate(
+        turn_contract=turn_contract,
+        user_text=user_text,
+        merged_slots=merged_slots,
+        member_no=member_no,
+    )
+    if candidate is None:
+        logger.info(
+            "[FLOW_CONTINUE] skipped after tool=%s reason=no_candidate contract_intent=%s",
+            last_tool_name,
+            getattr(turn_contract, "intent", None) if turn_contract is not None else None,
+        )
+        return None
+    if candidate.tool_input_source != "flow_state_progress":
+        logger.info(
+            "[FLOW_CONTINUE] skipped after tool=%s reason=non_flow_candidate candidate_tool=%s source=%s",
+            last_tool_name,
+            candidate.tool_name,
+            candidate.tool_input_source,
+        )
+        return None
+    if str(candidate.tool_name or "") == str(last_tool_name or ""):
+        logger.info(
+            "[FLOW_CONTINUE] skipped after tool=%s reason=same_tool candidate_tool=%s",
+            last_tool_name,
+            candidate.tool_name,
+        )
+        return None
+    logger.info(
+        "[FLOW_CONTINUE] running after tool=%s next_tool=%s input_source=%s",
+        last_tool_name,
+        candidate.tool_name,
+        candidate.tool_input_source,
+    )
     return await recover_blocked_fast_path_to_contract_tool(
         turn_contract=turn_contract,
         user_text=user_text,
