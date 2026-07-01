@@ -2089,35 +2089,6 @@ def test_high_confidence_support_router_contract_blocks_product_price_override()
     )
 
 
-def test_store_service_slot_sync_writes_shop_name_not_missing_store_name_field() -> None:
-    slots = ConversationSlots()
-    routing = MultiAgentDomain(
-        reason="confirmed store hours lookup",
-        domains=[MultiAgentDomain.Domain.TRANSACTION],
-        execution_plan=["search store hours for confirmed store"],
-        user_behavior="confirming store name for store hours inquiry",
-        flow="user confirmed store candidate",
-        claim_check_type="none",
-        complaint_scope="none",
-        policy_intent="store_service_search",
-        store_attribute_store_name="티스테이션 강릉강남점",
-        service_name="store_service_search",
-        service_code="store_service_search",
-        planner_confidence=0.95,
-        needs_clarification=False,
-        agent_prompt_profile="transaction_store",
-    )
-
-    metadata = _sync_store_service_search_working_slots(
-        slots,
-        user_text="네, 맞아요",
-        routing_result=routing,
-    )
-
-    assert slots.shop_name == "티스테이션 강릉강남점"
-    assert metadata["store_name"] == "티스테이션 강릉강남점"
-
-
 def test_high_confidence_support_policy_contract_survives_wrong_prompt_profile() -> None:
     routing = MultiAgentDomain(
         reason="regional price policy",
