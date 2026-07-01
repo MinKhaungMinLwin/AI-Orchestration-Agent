@@ -1128,6 +1128,15 @@ def _current_turn_support_intent(router_evidence: Mapping[str, Any], *, user_tex
     router_domain = str(router_evidence.get("domain") or "").strip()
     execution_plan = _router_execution_plan(router_evidence)
     plan_tokens = {item.split(":", 1)[-1].strip() for item in execution_plan}
+    has_transaction_anchor = router_domain == "transaction" or any(item.startswith("transaction:") for item in execution_plan)
+    filled_slot = str(router_evidence.get("filled_slot") or "").strip()
+    slot_fill_source = str(router_evidence.get("slot_fill_source") or "").strip()
+    if (
+        has_transaction_anchor
+        and router_intent.startswith("quick_order_reservation")
+        and (filled_slot == "schedule" or slot_fill_source == "previous_datepick")
+    ):
+        return ""
     normalized_override = _normalize_current_turn_support_intent(user_text=user_text)
     if normalized_override:
         return normalized_override

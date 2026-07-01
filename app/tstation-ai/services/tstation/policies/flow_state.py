@@ -240,6 +240,8 @@ _FLOW_PROGRESS_META_FIELDS = (
     "preferred_tool",
     "tool_args_patch",
     "allowed_tools",
+    "next_template",
+    "response_shape_key",
     "progress_source",
 )
 _ACTIVE_FLOW_TYPES = {
@@ -902,6 +904,8 @@ def evaluate_flow_progress(state: "FlowState") -> dict[str, Any]:
     quantity = _flow_quantity(_first_non_empty(product.get("ord_qty"), product.get("quantity")))
     shop_id = str(store.get("shop_id") or "").strip()
     shop_name = str(_first_non_empty(store.get("shop_name"), store.get("store_name")) or "").strip()
+    requested_cal_day = str(state.schedule.get("requested_cal_day") or "").strip()
+    rsv_hour = str(state.schedule.get("rsv_hour") or "").strip()
     lookup_tool, lookup_args = _store_lookup_tool_and_args(store)
 
     if flow_type == "stock":
@@ -980,6 +984,14 @@ def evaluate_flow_progress(state: "FlowState") -> dict[str, Any]:
                     "tool_args_patch": lookup_args,
                 }
             return {**base, "current_step": "ask_store", "missing_slots": ["shop_id"]}
+        if requested_cal_day and rsv_hour:
+            return {
+                **base,
+                "current_step": "build_preorder",
+                "missing_slots": [],
+                "next_template": "preOrder",
+                "response_shape_key": "reservation_confirmation_ready",
+            }
         schedule_mode = str(intent.get("schedule_mode") or "general").strip()
         return {
             **base,

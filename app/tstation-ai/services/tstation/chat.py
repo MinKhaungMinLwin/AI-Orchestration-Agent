@@ -29994,6 +29994,43 @@ class TStationChatServiceV2:
             event_data = direct_preorder_event.get("data") if isinstance(direct_preorder_event.get("data"), dict) else {}
             return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
 
+        ready_preorder_event = build_preorder_event(turn_contract, getattr(turn_contract, "known_slots", None))
+        if ready_preorder_event is not None:
+            guard_event = build_response_policy_guard_event(turn_contract)
+            logger.info(
+                "[DIRECT_PREORDER] emitting reservation_confirmation_ready from complete order slots "
+                "session_id=%s goods_no=%s shop_id=%s requested_cal_day=%s rsv_hour=%s",
+                request.session_id,
+                merged_slots.goods_no,
+                merged_slots.shop_id,
+                merged_slots.requested_cal_day,
+                merged_slots.rsv_hour,
+            )
+            if request.stream:
+                _record_direct_return_trace(
+                    parent_span=_parent_span,
+                    trace_id=request.tracing_id,
+                    session_id=request.session_id,
+                    user_id=request.user_id,
+                    user_text=last_user_text,
+                    domains=domains,
+                    event=guard_event,
+                    turn_contract=turn_contract,
+                    direct_return_reason="direct_preorder_order_slots_ready",
+                    extra_metadata=vehicle_selection_trace_metadata,
+                )
+                return StreamingResponse(
+                    TStationChatServiceV2._stream_policy_guard_response(guard_event),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                        "X-Accel-Buffering": "no",
+                    },
+                )
+            event_data = guard_event.get("data") if isinstance(guard_event.get("data"), dict) else {}
+            return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
+
         if turn_contract and turn_contract.intent == "tire_condition_photo_policy":
             photo_policy_event = _build_support_faq_policy_event(
                 "tire_condition_photo_policy",
