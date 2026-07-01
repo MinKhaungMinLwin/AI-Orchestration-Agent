@@ -2054,15 +2054,6 @@ class BaseAgent(ABC):
         has_force_code_mapper_tool = any(
             e.get("tool") in _FORCE_CODE_MAPPER_TOOLS for e in accumulated_tool_data
         )
-        if has_force_code_mapper_tool:
-            try:
-                from services.tstation.template_mapper import should_bypass_code_mapper_for_llm_info_answer
-
-                called_tool_names = {str(e.get("tool") or "") for e in accumulated_tool_data}
-                if should_bypass_code_mapper_for_llm_info_answer(called_tool_names):
-                    return None
-            except Exception:
-                pass
         # Deterministic guard override: when a tool response carries
         # `instruction_to_agent` (e.g. transaction_store_preview_tool tier=none
         # region/multi-candidate case), the LLM's own template choice may slip

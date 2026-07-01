@@ -35,7 +35,6 @@ from services.tstation.template_mapper import (
     current_transaction_response_decision,
     current_user_text,
     current_user_preferences_text,
-    should_bypass_code_mapper_for_llm_info_answer,
     try_build_template,
 )
 from services.tstation.policies.discovery_intent_policy import build_discovery_intent_frame
@@ -907,78 +906,6 @@ def _product_entry() -> dict:
             },
         },
     }
-
-
-def test_llm_info_answer_experiment_is_off_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("TSTATION_EXPERIMENT_LLM_INFO_ANSWER", raising=False)
-
-    assert should_bypass_code_mapper_for_llm_info_answer({"search_product_tool"}) is False
-
-    code_event = BaseAgent._try_code_template(
-        [_product_entry()],
-        response_streamer=None,
-        accumulated_text="아이온 에보 상품 정보를 확인했어요.",
-    )
-    assert code_event is not None
-    assert code_event["template"] in {"product", "quickReply"}
-
-
-def test_llm_info_answer_experiment_bypasses_product_info_card(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("TSTATION_EXPERIMENT_LLM_INFO_ANSWER", "1")
-    action_token = current_action_mode.set("info_only")
-    decision_token = current_discovery_response_decision.set(
-        ResponseDecision(
-            response_shape=ResponseShape.SUMMARY,
-            template=TemplateName.QUICK_REPLY,
-            required_slots=(),
-            metadata={"response_shape_key": "product_search_summary"},
-        )
-    )
-    try:
-        assert should_bypass_code_mapper_for_llm_info_answer({"search_product_tool"}) is True
-        code_event = BaseAgent._try_code_template(
-            [_product_entry()],
-            response_streamer=None,
-            accumulated_text="아이온 에보 상품 정보를 확인했어요.",
-        )
-    finally:
-        current_discovery_response_decision.reset(decision_token)
-        current_action_mode.reset(action_token)
-
-    assert code_event is None
-
-
-def test_llm_info_answer_experiment_keeps_recommendation_cards(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("TSTATION_EXPERIMENT_LLM_INFO_ANSWER", "1")
-
-    assert should_bypass_code_mapper_for_llm_info_answer({"get_products_recommendations_tool"}) is False
-
-    code_event = BaseAgent._try_code_template(
-        [_ev_recommendation_entry()],
-        response_streamer=None,
-        accumulated_text="추천 상품을 확인했어요.",
-    )
-    assert code_event is not None
-    assert code_event["template"] == "product"
-
-
-def test_llm_info_answer_experiment_keeps_stock_action_product_cards(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("TSTATION_EXPERIMENT_LLM_INFO_ANSWER", "1")
-    action_token = current_action_mode.set("stock_check")
-    goal_token = current_goal_type.set("store_with_stock")
-    try:
-        assert should_bypass_code_mapper_for_llm_info_answer({"search_product_tool"}) is False
-        code_event = BaseAgent._try_code_template(
-            [_product_entry()],
-            response_streamer=None,
-            accumulated_text="재고 확인할 상품을 확인했어요.",
-        )
-    finally:
-        current_goal_type.reset(goal_token)
-        current_action_mode.reset(action_token)
-
-    assert code_event is not None
-    assert code_event["template"] == "product"
 
 
 def _ev_recommendation_entry() -> dict:
