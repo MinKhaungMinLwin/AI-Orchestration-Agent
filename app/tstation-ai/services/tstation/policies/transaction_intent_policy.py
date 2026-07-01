@@ -1115,6 +1115,7 @@ def build_transaction_intent_frame(
     has_product = bool(goods_no or product_name or _PRODUCT_HINT_RE.search(text))
     has_location = bool(
         region
+        or slots.get("place_query")
         or store_name
         or (
             not store_candidate_search
@@ -1154,6 +1155,7 @@ def build_transaction_intent_frame(
     )
     stock_context_has_location = bool(
         current_region
+        or slots.get("place_query")
         or store_name
         or slots.get("region")
         or slots.get("place")
@@ -1855,9 +1857,11 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
 
     if frame.intent == "store_search":
         args = _slot_args(frame, "store_name", "limit")
+        if frame.known_slots.get("place_query"):
+            args["place_query"] = frame.known_slots["place_query"]
         if frame.known_slots.get("region"):
             args["region_code"] = frame.known_slots["region"]
-        if frame.entities.get("nearby") and frame.known_slots.get("region"):
+        if not args.get("place_query") and frame.entities.get("nearby") and frame.known_slots.get("region"):
             args["place_query"] = frame.known_slots["region"]
         return ToolPlan(
             allowed_tools=("search_stores_tool", "get_store_list_tool", "get_nearby_stores_tool"),
@@ -2566,6 +2570,7 @@ def _has_action_location(frame: IntentFrame) -> bool:
     return bool(
         frame.known_slots.get("region")
         or frame.known_slots.get("place")
+        or frame.known_slots.get("place_query")
         or frame.known_slots.get("lat")
         or frame.known_slots.get("lng")
         or frame.known_slots.get("shop_id")

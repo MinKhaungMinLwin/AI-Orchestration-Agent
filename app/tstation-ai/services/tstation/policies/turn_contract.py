@@ -18,6 +18,7 @@ from services.tstation.policies.intent_frame import IntentFrame
 from services.tstation.policies.preorder_event_builder import build_preorder_event
 from services.tstation.policies.resolved_context import build_resolved_turn_context
 from services.tstation.policies.response_decision import ResponseDecision, ToolPlan
+from services.tstation.policies.router_evidence import merge_router_evidence_known_slots
 from services.tstation.policies.support_response_policy import _is_tire_manufacture_date_question
 
 
@@ -613,6 +614,19 @@ def build_turn_contract(
         **(dict(intent_frame.known_slots) if intent_frame is not None else {}),
         **_slots_from_model(merged_slots),
     })
+    availability_context = (
+        known_slots.get("availability_context") if isinstance(known_slots.get("availability_context"), Mapping) else {}
+    )
+    latest_router_evidence = (
+        availability_context.get("latest_router_evidence")
+        if isinstance(availability_context.get("latest_router_evidence"), Mapping)
+        else {}
+    )
+    known_slots = merge_router_evidence_known_slots(
+        known_slots,
+        latest_router_evidence,
+        preserve_existing=False,
+    )
     known_slots = _normalize_quantity_slots(known_slots)
     if intent_frame is not None:
         requested_product_attribute = str(intent_frame.entities.get("requested_product_attribute") or "")

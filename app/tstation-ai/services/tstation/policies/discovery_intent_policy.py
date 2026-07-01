@@ -905,6 +905,11 @@ def build_discovery_intent_frame(
         entities["compare_metric"] = comparison_metric
     if discovery_followup_action == "vehicle_based_recommendation_refinement":
         entities["discovery_followup_action"] = discovery_followup_action
+    elif discovery_followup_action == "vehicle_resolved_recommendation":
+        entities["discovery_followup_action"] = discovery_followup_action
+        named_vehicle_anchor = str(slots.get("named_registered_vehicle_anchor") or "").strip()
+        if named_vehicle_anchor:
+            entities["named_registered_vehicle_anchor"] = named_vehicle_anchor
     elif _MY_VEHICLE_RECOMMENDATION_RE.search(text) and (_RECOMMEND_RE.search(text) or _COMPARE_RE.search(text)):
         entities["discovery_followup_action"] = "vehicle_resolved_recommendation"
         named_vehicle_anchor = _named_my_vehicle_anchor(text)

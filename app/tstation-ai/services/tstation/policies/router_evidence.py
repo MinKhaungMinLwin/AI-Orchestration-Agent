@@ -7,6 +7,7 @@ from typing import Any, Mapping
 
 
 _ENTITY_CONFIDENCE_THRESHOLD = 0.5
+_ROUTER_SLOT_SOURCE = "router_evidence"
 
 
 def build_router_evidence(
@@ -61,6 +62,97 @@ def router_entities_for_trace(routing_result: Any | None) -> dict[str, dict[str,
         }
         trace_entities[entity_name] = _drop_empty(compact)
     return trace_entities
+
+
+def router_evidence_known_slots(evidence: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Flatten RouterEvidence into policy slot names without choosing a tool.
+
+    Confirmed flow state and UI actions should be merged before this helper is
+    applied. Callers can then let router-derived candidates fill only empty
+    policy slots while preserving the source map for trace/debugging.
+    """
+
+    raw = _mapping(evidence)
+    if not raw:
+        return {}
+    entities = _mapping(raw.get("entities"))
+    primary_action = _text(raw.get("primary_action"))
+    slot_sources: dict[str, str] = {}
+    slots: dict[str, Any] = {}
+
+    def put(key: str, value: Any) -> None:
+        if value in (None, "", [], {}):
+            return
+        slots[key] = value
+        slot_sources[key] = _ROUTER_SLOT_SOURCE
+
+    registered_vehicle = _mapping(entities.get("registered_vehicle"))
+    registered_anchor = _text(registered_vehicle.get("anchor") or registered_vehicle.get("name"))
+    if registered_anchor:
+        put("named_registered_vehicle_anchor", registered_anchor)
+        if primary_action in {"recommend", "compare"}:
+            put("discovery_followup_action", "vehicle_resolved_recommendation")
+
+    store = _mapping(entities.get("store"))
+    store_name = _text(store.get("name") or store.get("anchor"))
+    if store_name:
+        put("store_name_candidate", store_name)
+        put("store_name", store_name)
+        put("shop_name", store_name)
+
+    coupon = _mapping(entities.get("coupon"))
+    coupon_name = _text(coupon.get("name") or coupon.get("anchor"))
+    if coupon_name:
+        put("coupon_name_candidate", coupon_name)
+        put("coupon_name", coupon_name)
+
+    location = _mapping(entities.get("location"))
+    location_name = _text(location.get("name") or location.get("anchor"))
+    location_type = _text(location.get("type"))
+    if location_name:
+        put("location_name", location_name)
+        put("place_query", location_name)
+    if location_type:
+        put("location_type", location_type)
+
+    if primary_action and primary_action != "none":
+        put("router_primary_action", primary_action)
+    if slot_sources:
+        slots["slot_sources"] = slot_sources
+    return slots
+
+
+def merge_router_evidence_known_slots(
+    known_slots: Mapping[str, Any] | None,
+    evidence: Mapping[str, Any] | None,
+    *,
+    preserve_existing: bool = True,
+) -> dict[str, Any]:
+    """Merge RouterEvidence slots under the fixed priority order.
+
+    Existing slots represent UI action/confirmed flow state or older confirmed
+    session slots, so router candidates fill gaps by default. Regex candidates
+    should run after this merge and therefore must not overwrite these keys.
+    """
+
+    merged = dict(known_slots or {})
+    router_slots = router_evidence_known_slots(evidence)
+    if not router_slots:
+        return _drop_empty(merged)
+    merged_sources = _mapping(merged.get("slot_sources"))
+    router_sources = _mapping(router_slots.get("slot_sources"))
+    for key, value in router_slots.items():
+        if key == "slot_sources":
+            continue
+        if preserve_existing and merged.get(key) not in (None, "", [], {}):
+            continue
+        merged[key] = value
+        source = router_sources.get(key)
+        if source:
+            merged_sources[key] = source
+    if merged_sources:
+        merged["slot_sources"] = merged_sources
+    return _drop_empty(merged)
 
 
 def _execution_plan(routing_result: Any) -> tuple[str, ...]:
