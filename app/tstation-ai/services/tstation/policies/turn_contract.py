@@ -8,12 +8,17 @@ from typing import Any, Mapping
 
 from services.tstation.common.cta_urls import CTAUrls
 from services.tstation.policies.cross_domain_policy import CrossDomainPlan
-from services.tstation.policies.discovery_intent_policy import extract_best_seller_vehicle_query, is_best_seller_request
+from services.tstation.policies.discovery_intent_policy import (
+    extract_best_seller_vehicle_query,
+    has_registered_vehicle_ownership_signal,
+    is_best_seller_request,
+)
 from services.tstation.policies.flow_controller import build_purchase_flow_fallback_event
 from services.tstation.policies.intent_frame import IntentFrame
 from services.tstation.policies.preorder_event_builder import build_preorder_event
 from services.tstation.policies.resolved_context import build_resolved_turn_context
 from services.tstation.policies.response_decision import ResponseDecision, ToolPlan
+from services.tstation.policies.router_evidence import merge_router_evidence_known_slots
 from services.tstation.policies.support_response_policy import _is_tire_manufacture_date_question
 
 
@@ -121,6 +126,7 @@ _DISCOVERY_EVENT_CONTENT_TOOLS = frozenset({
     "search_product_tool",
     "get_product_applicable_events_tool",
     "get_product_promotions_tool",
+    "get_benefit_event_deal_list_tool",
     "get_events_tool",
     "get_deals_tool",
 })
@@ -140,7 +146,12 @@ _WARNING_CONTRACT_VIOLATION_TYPES = frozenset({
     "recommendation_approximation_disclosure_missing",
 })
 _PRICE_OR_COUPON_RE = re.compile(r"가격|얼마|할인가|쿠폰|할인|혜택", re.IGNORECASE)
+_COUPON_ANCHOR_RE = re.compile(r"쿠폰", re.IGNORECASE)
 _REFERENCE_PURCHASE_RE = re.compile(r"(?:그거|그\s*상품|이거|이\s*상품).{0,20}(구매|주문|결제|살래|살게|사고)", re.IGNORECASE)
+_PURCHASE_PRODUCT_RESOLUTION_INTENTS = frozenset({
+    "product_search",
+    "resolve_product_for_purchase_size_selection",
+})
 _DISCOVERY_NO_RESULT_RE = re.compile(r"찾을\s*수\s*없|확인되지\s*않|검색되지\s*않|없어요", re.IGNORECASE)
 _ORDER_PROGRESS_ONLY_RE = re.compile(
     r"(주문|구매|결제).{0,20}(진행|이어|도와|확정\s*단계|단계로)|"
@@ -185,6 +196,39 @@ _BEST_SELLER_SIZE_CLARIFICATION_RE = re.compile(
     r"(정확한\s*사이즈|사이즈\s*(?:정보|직접\s*입력)|연식/트림에\s*따라|연식/트림|차량번호|내\s*차량)",
     re.IGNORECASE,
 )
+
+
+def _prefer_router_product_keyword_for_purchase_resolution(
+    *,
+    known_slots: dict[str, Any],
+    tool_args_patch: Mapping[str, Any],
+    intent: str,
+    action_mode: str,
+) -> None:
+    keyword = str(tool_args_patch.get("keyword") or "").strip()
+    if not keyword:
+        return
+    pending_intent = str(known_slots.get("pending_intent") or "").strip()
+    goal_type = str(known_slots.get("goal_type") or "").strip()
+    router_action = str(known_slots.get("router_primary_action") or "").strip()
+    if not (
+        intent in _PURCHASE_PRODUCT_RESOLUTION_INTENTS
+        or action_mode == "purchase_continuation"
+        or pending_intent == "order"
+        or goal_type == "place_order"
+        or router_action == "buy"
+    ):
+        return
+    known_slots["pending_product_name"] = keyword
+    known_slots["tire_model"] = keyword
+    slot_sources = known_slots.get("slot_sources")
+    if not isinstance(slot_sources, dict):
+        slot_sources = {}
+    else:
+        slot_sources = dict(slot_sources)
+    slot_sources["pending_product_name"] = "router_evidence"
+    slot_sources["tire_model"] = "router_evidence"
+    known_slots["slot_sources"] = slot_sources
 _OE_PART_NUMBER_REQUEST_RE = re.compile(
     r"(?:\bOE\b|순정|출고\s*타이어|출고용|출고때|출고 시).{0,40}(?:품번|부품\s*번호|파트\s*넘버|part\s*number)|"
     r"(?:품번|부품\s*번호|파트\s*넘버|part\s*number).{0,40}(?:\bOE\b|순정|출고\s*타이어|출고용|출고때|출고 시)",
@@ -278,6 +322,7 @@ ROUTER_WINS_INFORMATIONAL_INTENTS = frozenset({
 })
 ROUTER_WINS_EXECUTION_BOUNDARY_INTENTS = frozenset({
     "stock_store_search",
+    "store_search",
     "store_schedule",
     "open_store_search",
     "store_service_search",
@@ -558,6 +603,17 @@ def build_turn_contract(
         router_wins_intent = "assurance_service_policy"
     code_domain = _domain_value(intent_frame.domain) if intent_frame is not None else _domain_from_routing(routing_result)
     code_intent = intent_frame.intent if intent_frame is not None else _intent_from_cross_domain(cross_domain_plan)
+    keep_registered_vehicle_contract = _should_keep_registered_vehicle_information_contract(
+        user_text=user_text,
+        intent_frame=intent_frame,
+        code_intent=code_intent,
+    )
+    if keep_registered_vehicle_contract and policy_intent == "coupon_registration_policy":
+        policy_intent = "none"
+    if keep_registered_vehicle_contract and planner_intent == "coupon_registration_policy":
+        planner_intent = None
+    if keep_registered_vehicle_contract and router_wins_intent == "coupon_registration_policy":
+        router_wins_intent = None
     if _should_normalize_dot_manufacture_date_policy(
         user_text=user_text,
         policy_intent=policy_intent,
@@ -582,7 +638,10 @@ def build_turn_contract(
         router_wins_intent = "card_installment_lookup"
     domain = planner_domains[0] if planner_domains else code_domain
     intent = planner_intent or code_intent
-    if router_wins_intent:
+    if keep_registered_vehicle_contract:
+        domain = code_domain
+        intent = code_intent
+    elif router_wins_intent:
         domain = _router_wins_domain(router_wins_intent, planner_domains)
         intent = router_wins_intent
     elif _should_lock_code_intent_contract(code_intent):
@@ -594,6 +653,19 @@ def build_turn_contract(
         **(dict(intent_frame.known_slots) if intent_frame is not None else {}),
         **_slots_from_model(merged_slots),
     })
+    availability_context = (
+        known_slots.get("availability_context") if isinstance(known_slots.get("availability_context"), Mapping) else {}
+    )
+    latest_router_evidence = (
+        availability_context.get("latest_router_evidence")
+        if isinstance(availability_context.get("latest_router_evidence"), Mapping)
+        else {}
+    )
+    known_slots = merge_router_evidence_known_slots(
+        known_slots,
+        latest_router_evidence,
+        preserve_existing=False,
+    )
     known_slots = _normalize_quantity_slots(known_slots)
     if intent_frame is not None:
         requested_product_attribute = str(intent_frame.entities.get("requested_product_attribute") or "")
@@ -821,6 +893,12 @@ def build_turn_contract(
         for key, value in dict(tool_plan.tool_args_patch if tool_plan is not None else {}).items()
         if value not in (None, "", [], {})
     }
+    _prefer_router_product_keyword_for_purchase_resolution(
+        known_slots=known_slots,
+        tool_args_patch=tool_args_patch,
+        intent=intent,
+        action_mode=action_mode,
+    )
     fallback_required_slots = (
         intent_frame.missing_slots
         if tool_plan is None and intent_frame is not None
@@ -964,6 +1042,20 @@ def build_turn_contract(
                 "get_final_price_tool",
             ),
         )
+    if intent == "benefit_event_list_lookup":
+        allowed_tools = ("get_benefit_event_deal_list_tool",)
+        forbidden_tools = _merge_tuple(
+            tuple(tool for tool in forbidden_tools if tool != "get_benefit_event_deal_list_tool"),
+            (
+                "get_events_tool",
+                "get_deals_tool",
+                "get_product_promotions_tool",
+                "get_product_applicable_events_tool",
+                "search_product_tool",
+            ),
+        )
+        preferred_tool = "get_benefit_event_deal_list_tool"
+        tool_args_patch = {"lang_cd": "ko"}
     if intent in {
         "product_event_lookup",
         "product_promotion_lookup",
@@ -1521,6 +1613,19 @@ def _should_align_router_wins_tool_plan(contract: TurnContract) -> bool:
 
 
 def _router_wins_default_preferred_tool(contract: TurnContract) -> str | None:
+    if str(contract.intent or "") == "store_search":
+        quantity = contract.known_slots.get("ord_qty") or contract.known_slots.get("quantity")
+        has_purchase_slots = bool(
+            contract.known_slots.get("goods_no")
+            and quantity not in (None, "", 0, "0")
+            and (
+                contract.known_slots.get("region")
+                or contract.known_slots.get("place_query")
+                or contract.known_slots.get("place")
+            )
+        )
+        if has_purchase_slots and "transaction_store_preview_tool" in tuple(contract.allowed_tools or ()):
+            return "transaction_store_preview_tool"
     return _default_preferred_tool_for_boundary(
         intent=str(contract.intent or ""),
         allowed_tools=tuple(contract.allowed_tools or ()),
@@ -1537,6 +1642,7 @@ def _default_preferred_tool_for_boundary(
     intent = str(intent or "")
     preferred_by_intent = {
         "stock_store_search": "transaction_store_preview_tool",
+        "store_search": "get_store_list_tool",
         "store_schedule": "get_store_schedule_tool",
         "open_store_search": "search_stores_complex_tool",
         "store_service_search": "search_stores_tool",
@@ -4499,6 +4605,15 @@ def _comparison_router_wins_intent(
     response_shape_key = str(response_metadata.get("response_shape_key") or "").strip()
     routed_action_mode = str(getattr(routing_result, "action_mode", "") or "").strip()
     current_action_mode = str(action_mode or "").strip()
+    frame_intent = str(getattr(intent_frame, "intent", "") or "").strip()
+    if (
+        frame_entities.get("multi_product_description_request")
+        and frame_intent in {"product_search", "product_description"}
+        and comparison_followup_intent == "generic_compare"
+        and comparison_metric in {"", "none", "detail"}
+        and response_shape_key in {"", "neutral_product_description", "product_search_summary"}
+    ):
+        return None
     if comparison_followup_intent in _COMPARISON_ROUTER_WINS_FOLLOWUP_INTENTS:
         return "product_comparison"
     if comparison_metric and comparison_metric != "none":
@@ -4545,6 +4660,28 @@ def _router_wins_tool_boundary(intent: str) -> tuple[tuple[str, ...], tuple[str,
                 | {
                     "get_store_schedule_tool",
                     "get_multi_store_schedule_tool",
+                }
+                if tool not in allowed_tools
+            ),
+        )
+    if intent == "store_search":
+        allowed_tools = (
+            "transaction_store_preview_tool",
+            "get_store_list_tool",
+            "search_stores_tool",
+            "search_stores_complex_tool",
+            "get_nearby_stores_tool",
+        )
+        return (
+            allowed_tools,
+            tuple(
+                tool
+                for tool in _ROUTER_WINS_ORDER_EXECUTION_FORBIDDEN_TOOLS
+                | {
+                    "get_store_schedule_tool",
+                    "get_multi_store_schedule_tool",
+                    "get_store_inventory_tool",
+                    "get_logistics_inventory_tool",
                 }
                 if tool not in allowed_tools
             ),
@@ -4788,7 +4925,7 @@ def _router_wins_response_decision(intent: str) -> dict[str, Any]:
             "emit_preorder_without_user_confirmation",
             "emit_order_complete_without_quick_order_tool",
         ]
-    elif intent in {"open_store_search", "store_service_search", "store_recommendation_by_vehicle_experience"}:
+    elif intent in {"store_search", "open_store_search", "store_service_search", "store_recommendation_by_vehicle_experience"}:
         response_shape = "location"
         template = "location"
         guidance = "현재 턴의 매장 검색 intent 기준으로 매장을 조회한다. 주문/가격/쿠폰/예약 실행 flow로 전환하지 않는다."
@@ -5342,6 +5479,25 @@ def _should_lock_code_intent_contract(intent: str) -> bool:
     if not normalized:
         return False
     return _reference_guard_exempt_intent(normalized)
+
+
+def _should_keep_registered_vehicle_information_contract(
+    *,
+    user_text: str,
+    intent_frame: IntentFrame | None,
+    code_intent: str,
+) -> bool:
+    if intent_frame is None:
+        return False
+    if _domain_value(intent_frame.domain) != "discovery":
+        return False
+    if str(code_intent or "").strip() != "product_description":
+        return False
+    if str(intent_frame.sub_intent or "").strip() != "vehicle_information":
+        return False
+    if _COUPON_ANCHOR_RE.search(user_text or ""):
+        return False
+    return has_registered_vehicle_ownership_signal(user_text)
 
 
 def _slot_for_referred_object_type(object_type: str) -> str:

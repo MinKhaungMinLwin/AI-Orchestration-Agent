@@ -12,6 +12,7 @@ from services.tstation.agents.base_agent import (
     _is_explicit_vehicle_list_request,
     _normalize_qty_quick_replies,
     _owner_lookup_vehicle_recommendation_args,
+    _pending_tool_call_ids,
     _resolve_registered_vehicle_match,
     _should_skip_support_search_product_fast_path,
     _should_defer_listcar_for_possessive_model_mismatch,
@@ -39,6 +40,16 @@ def test_support_agent_skips_search_product_fast_path() -> None:
     assert _should_skip_support_search_product_fast_path("Support Agent", "search_product_tool") is True
     assert _should_skip_support_search_product_fast_path("Discovery Agent", "search_product_tool") is False
     assert _should_skip_support_search_product_fast_path("Support Agent", "get_product_warranties_tool") is False
+
+
+def test_pending_tool_call_ids_waits_for_parallel_sibling_tools() -> None:
+    tool_calls_map = {
+        "call_kinergy": {"name": "search_product_tool"},
+        "call_ventus": {"name": "search_product_tool"},
+    }
+
+    assert _pending_tool_call_ids(tool_calls_map, {"call_kinergy"}) == ["call_ventus"]
+    assert _pending_tool_call_ids(tool_calls_map, {"call_kinergy", "call_ventus"}) == []
 
 
 def test_product_warranty_tool_result_builds_support_quickreply() -> None:
@@ -111,6 +122,38 @@ def test_owner_lookup_vehicle_event_includes_car_maker_when_present() -> None:
         event["data"]["assistantResponse"]
     )
     assert event["data"]["metadata"]["carMaker"] == "BMW"
+
+
+def test_owner_lookup_vehicle_event_prompts_for_size_choice_when_vehicle_has_multiple_available_sizes() -> None:
+    event = _build_owner_vehicle_lookup_event(
+        "get_user_vehicles_tool",
+        {
+            "status": "success",
+            "data": {
+                "items": [
+                    {
+                        "car_no": "56모2162",
+                        "car_lnc_cd": "W049847",
+                        "car_maker": "BMW",
+                        "car_nm": "3-series(F30) 320d A/T",
+                        "car_model_det": "3-series(F30)",
+                        "tire_size_fr": "225/50R17",
+                        "tire_size_re": "225/50R17",
+                        "available_sizes": ["2255017", "2254518"],
+                    }
+                ]
+            },
+        },
+        [{"role": "user", "content": "56모2162 심지영"}],
+    )
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    assert event["assistant_response_source"] == "code_owner_vehicle_lookup_multi_size_selection"
+    assert "확인된 규격이 여러 개예요" in event["data"]["assistantResponse"]
+    assert [chip["label"] for chip in event["data"]["quickReplies"]] == ["225/50R17", "225/45R18"]
+    assert event["data"]["metadata"]["availableSizes"] == ["225/50R17", "225/45R18"]
+    assert event["data"]["metadata"]["tireSize"] is None
 
 
 def test_owner_lookup_vehicle_event_does_not_intercept_recommendation_request() -> None:

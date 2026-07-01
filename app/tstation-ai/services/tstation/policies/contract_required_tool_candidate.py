@@ -12,6 +12,7 @@ from services.tstation.policies.discovery_intent_policy import (
     plan_discovery_tools,
 )
 from services.tstation.policies.flow_state import (
+    flow_type_matches_allowed,
     flow_progress_from_active_context,
     flow_progress_tool_candidate,
     selected_store_slots_from_active_flow_context,
@@ -54,6 +55,12 @@ _FAST_PATH_DISCOVERY_RECOVERY_ALLOWED_TOOLS = frozenset({
     "get_products_recommendations_tool",
     "get_best_selling_products_tool",
     "get_my_cars_tool",
+})
+_FLOW_PROGRESS_TRANSACTION_TOOLS = frozenset({
+    "search_stores_tool",
+    "get_store_list_tool",
+    "get_store_schedule_tool",
+    "get_store_inventory_tool",
 })
 _DIRECT_SUPPORT_FAQ_POLICY_INTENTS = frozenset({
     "card_installment_lookup",
@@ -337,7 +344,8 @@ def _active_flow_read_through_slots(
     if not active_flow_context:
         return {}
     flow_type = str(active_flow_context.get("flow_type") or "").strip()
-    if allowed_flow_types is not None and flow_type not in allowed_flow_types:
+    intent = active_flow_context.get("intent") if isinstance(active_flow_context.get("intent"), Mapping) else {}
+    if not flow_type_matches_allowed(flow_type, allowed_flow_types, intent):
         return {}
 
     values: dict[str, Any] = {}
@@ -884,12 +892,11 @@ def _contract_required_tool_candidate(
                 tool_input_source = "user_text"
             display_name = "인기 상품 조회 중..."
         elif preferred_tool == "get_my_cars_tool":
-            if not tool_input:
-                member_no_value = str(member_no or "").strip()
-                if not member_no_value:
-                    return None
-                tool_input = {"mbr_no": member_no_value}
-                tool_input_source = "user_context"
+            member_no_value = str(member_no or "").strip()
+            if not member_no_value:
+                return None
+            tool_input = {"mbr_no": member_no_value}
+            tool_input_source = "user_context"
             display_name = "등록 차량 조회 중..."
         elif preferred_tool == "get_products_recommendations_tool":
             if str(turn_contract.intent or "").strip() != "product_recommendation":
@@ -899,6 +906,7 @@ def _contract_required_tool_candidate(
                 tool_input_source = tool_input_source or "turn_contract_required_recommendation"
             if not tool_input:
                 return None
+            tool_input.setdefault("rcmd_type", "tstation")
             display_name = "추천 상품 확인 중..."
     elif domain == PolicyDomain.SUPPORT.value:
         contract_preferred_tool = str(getattr(turn_contract, "preferred_tool", None) or "").strip()
@@ -989,23 +997,47 @@ def _contract_required_tool_candidate_from_flow_progress(
     response_decision = turn_contract.response_decision or {}
     response_metadata = response_decision.get("metadata") if isinstance(response_decision, Mapping) else {}
     response_shape_key = str(response_metadata.get("response_shape_key") or "") if isinstance(response_metadata, Mapping) else ""
+    next_tool = str(progress.get("next_tool") or "").strip()
+    progress_allowed_tools = tuple(
+        str(tool)
+        for tool in tuple(progress.get("allowed_tools") or ())
+        if str(tool).strip()
+    )
+    candidate_allowed_tools = progress_allowed_tools or allowed_tools
+    candidate_domain = domain
+    candidate_intent = contract_intent
+    candidate_shape = response_shape_key
+    flow_type = str(progress.get("sub_flow_type") or progress.get("flow_type") or "").strip()
+    if next_tool in _FLOW_PROGRESS_TRANSACTION_TOOLS:
+        candidate_domain = PolicyDomain.TRANSACTION.value
+        if domain != PolicyDomain.TRANSACTION.value:
+            if flow_type == "stock":
+                candidate_intent = "stock_store_search"
+                candidate_shape = candidate_shape or "stock_inventory_lookup"
+            elif flow_type == "store_schedule":
+                candidate_intent = "store_schedule"
+                candidate_shape = candidate_shape or "reservation_slots"
+            elif flow_type == "purchase":
+                candidate_intent = "quick_order_reservation"
+                candidate_shape = candidate_shape or "reservation_store_candidates"
     candidate = flow_progress_tool_candidate(
         progress,
-        domain=domain,
-        contract_intent=contract_intent,
-        response_shape_key=response_shape_key,
-        allowed_tools=allowed_tools,
+        domain=candidate_domain,
+        contract_intent=candidate_intent,
+        response_shape_key=candidate_shape,
+        allowed_tools=candidate_allowed_tools,
         forbidden_tools=forbidden_tools,
     )
     if not candidate:
         return None
     next_tool = str(candidate.get("tool_name") or "").strip()
-    if domain == PolicyDomain.TRANSACTION.value and next_tool in _FAST_PATH_TRANSACTION_RECOVERY_BLOCKLIST:
+    source_domain = str(candidate.get("source_domain") or candidate_domain or domain)
+    if source_domain == PolicyDomain.TRANSACTION.value and next_tool in _FAST_PATH_TRANSACTION_RECOVERY_BLOCKLIST:
         return None
     return _ContractRequiredToolCandidate(
         tool_name=next_tool,
         tool_input=dict(candidate.get("tool_input") or {}),
         tool_input_source=str(candidate.get("tool_input_source") or "flow_state_progress"),
         display_name=str(candidate.get("display_name") or "정보 확인 중..."),
-        source_domain=str(candidate.get("source_domain") or domain),
+        source_domain=source_domain,
     )

@@ -293,14 +293,15 @@ def decide_discovery_response(frame: IntentFrame) -> ResponseDecision:
                 assistant_guidance="DB의 흡음재 적용 태그와 요청 규격을 함께 만족하는 상품만 카드/가격으로 안내한다.",
                 metadata={"response_shape_key": "sized_technology_recommendation_cards"},
             )
-        return ResponseDecision(
-            response_shape=ResponseShape.SUMMARY,
-            template=TemplateName.QUICK_REPLY,
-            required_slots=(),
-            forbidden_behaviors=("drop_sound_absorber_filter", "product_card_without_size", "price_without_size"),
-            assistant_guidance="흡음재 의미를 설명한 뒤 흡음재 적용 상품군을 요약하고 차량/규격 확인으로 유도한다.",
-            metadata={"response_shape_key": "technology_explanation_then_unsized_recommendation_summary"},
-        )
+        if frame.sub_intent == "technology_explain_then_recommend":
+            return ResponseDecision(
+                response_shape=ResponseShape.SUMMARY,
+                template=TemplateName.QUICK_REPLY,
+                required_slots=(),
+                forbidden_behaviors=("drop_sound_absorber_filter", "product_card_without_size", "price_without_size"),
+                assistant_guidance="흡음재 의미를 설명한 뒤 흡음재 적용 상품군을 요약하고 차량/규격 확인으로 유도한다.",
+                metadata={"response_shape_key": "technology_explanation_then_unsized_recommendation_summary"},
+            )
 
     if entities.get("service_program") == "safe_service":
         if tire_size:
@@ -419,6 +420,38 @@ def decide_discovery_response(frame: IntentFrame) -> ResponseDecision:
         )
 
     if frame.intent == "product_search":
+        if (
+            entities.get("purchase_intent")
+            and not tire_size
+            and frame.sub_intent in {"product_name_search", "product_family_search"}
+        ):
+            return ResponseDecision(
+                response_shape=ResponseShape.CLARIFY,
+                template=TemplateName.QUICK_REPLY,
+                required_slots=("tire_size",),
+                forbidden_behaviors=(
+                    "confirm_goods_no_before_size_selection",
+                    "auto_select_first_available_size",
+                    "product_search_summary_as_final_answer",
+                    "handoff_transaction_without_size",
+                ),
+                assistant_guidance=(
+                    "구매 의도로 상품 후보를 찾았더라도 타이어 규격이 확정되지 않으면 상품 상세 설명으로 끝내지 않는다. "
+                    "검색 결과의 available_sizes를 기준으로 구매할 규격 선택을 요청하고, 규격 선택 전에는 goods_no를 확정하지 않는다."
+                ),
+                metadata=_metadata(frame, response_shape_key="purchase_size_selection"),
+            )
+        if entities.get("multi_product_description_request"):
+            return ResponseDecision(
+                response_shape=ResponseShape.SUMMARY,
+                template=TemplateName.QUICK_REPLY,
+                required_slots=(),
+                forbidden_behaviors=("generic_unsized_summary", "unrequested_size_missing_notice"),
+                assistant_guidance=(
+                    "복수 상품 설명 요청에는 각 상품의 특성만 간결히 나눠 안내하고, 비교/추천/구매 흐름으로 바꾸지 않는다."
+                ),
+                metadata=_metadata(frame, response_shape_key="neutral_product_description"),
+            )
         if frame.sub_intent in {
             "product_event_lookup",
             "product_deal_lookup",

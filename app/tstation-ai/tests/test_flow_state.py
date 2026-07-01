@@ -287,23 +287,14 @@ def test_active_purchase_to_store_search_pushes_purchase_to_dormant() -> None:
     )
 
     context = result.state.to_active_flow_context()
-    assert context["flow_type"] == "store_search"
+    assert context["flow_type"] == "commerce"
+    assert context["intent"]["sub_flow_type"] == "store_search"
     assert context["flow_step"] == "resolve_store"
     assert context["store"]["region"] == "분당"
-    assert "product" not in context
-    assert "payment" not in context
-    dormant = context["dormant_flows"]
-    assert len(dormant) == 1
-    assert dormant[0]["flow_identity"] == "purchase:gold:24545r19"
-    assert dormant[0]["context"]["flow_type"] == "purchase"
-    assert dormant[0]["context"]["status"] == "dormant"
-    assert dormant[0]["context"]["product"]["goods_no"] == "GOLD"
-    assert dormant[0]["context"]["store"]["shop_id"] == "S1"
-    assert result.metadata["flow_state_conflicts"]["flow_type"] == {
-        "existing": "purchase",
-        "incoming": "store_search",
-    }
-    assert "dormant_flows" in result.metadata["committed_fields"]
+    assert context["product"]["goods_no"] == "GOLD"
+    assert context["payment"]["payment_amount"] == 308200
+    assert "flow_type" not in result.metadata["flow_state_conflicts"]
+    assert "dormant_flows" not in result.metadata["committed_fields"]
 
 
 def test_active_purchase_to_nested_store_search_preserves_search_intent() -> None:
@@ -334,13 +325,14 @@ def test_active_purchase_to_nested_store_search_preserves_search_intent() -> Non
     )
 
     context = result.state.to_active_flow_context()
-    assert context["flow_type"] == "store_search"
+    assert context["flow_type"] == "commerce"
+    assert context["intent"]["sub_flow_type"] == "store_search"
     assert context["store"]["place_query"] == "분당"
     assert context["intent"]["pending_intent"] == "store_recommendation_by_vehicle_experience"
     assert context["intent"]["store_search_condition"] == "vehicle_experience"
     assert context["intent"]["requested_vehicle_experience"] == "BMW 정비 경험"
-    assert context["dormant_flows"][0]["context"]["flow_type"] == "purchase"
-    assert context["dormant_flows"][0]["context"]["product"]["goods_no"] == "GOLD"
+    assert context["product"]["goods_no"] == "GOLD"
+    assert "dormant_flows" not in context
 
 
 def test_active_purchase_to_support_faq_preserves_support_intent() -> None:
@@ -373,7 +365,8 @@ def test_active_purchase_to_support_faq_preserves_support_intent() -> None:
     assert context["flow_step"] == "answer_faq"
     assert context["intent"]["pending_intent"] == "coupon_registration_policy"
     assert context["intent"]["policy_topic"] == "coupon_registration_policy"
-    assert context["dormant_flows"][0]["context"]["flow_type"] == "purchase"
+    assert context["dormant_flows"][0]["context"]["flow_type"] == "commerce"
+    assert context["dormant_flows"][0]["context"]["intent"]["sub_flow_type"] == "purchase"
     assert context["dormant_flows"][0]["context"]["product"]["goods_no"] == "GOLD"
 
 
@@ -411,7 +404,8 @@ def test_active_purchase_to_service_maintenance_preserves_action_boundary() -> N
     )
 
     context = result.state.to_active_flow_context()
-    assert context["flow_type"] == "service_maintenance"
+    assert context["flow_type"] == "commerce"
+    assert context["intent"]["sub_flow_type"] == "service_maintenance"
     assert context["flow_step"] == "verify_store_service"
     assert context["intent"]["service_action_boundary"] == "store_verification"
     assert context["intent"]["service_name"] == "얼라인먼트"
@@ -419,8 +413,8 @@ def test_active_purchase_to_service_maintenance_preserves_action_boundary() -> N
     assert context["target_action"] == "store_verification"
     assert context["preferred_tool"] == "get_store_list_tool"
     assert context["allowed_tools"] == ["get_store_list_tool", "get_store_detail_tool"]
-    assert context["dormant_flows"][0]["context"]["flow_type"] == "purchase"
-    assert context["dormant_flows"][0]["context"]["product"]["goods_no"] == "GOLD"
+    assert context["product"]["goods_no"] == "GOLD"
+    assert "dormant_flows" not in context
 
 
 def test_service_maintenance_to_reservation_management_preserves_boundaries_separately() -> None:
@@ -474,9 +468,10 @@ def test_service_maintenance_to_reservation_management_preserves_boundaries_sepa
     assert context["intent"]["reservation_management_action"] == "change_request"
     assert context["intent"]["owned_record_target"] == "reservation"
     assert context["target_action"] == "change_request"
-    assert context["dormant_flows"][0]["context"]["flow_type"] == "service_maintenance"
+    assert context["dormant_flows"][0]["context"]["flow_type"] == "commerce"
+    assert context["dormant_flows"][0]["context"]["intent"]["sub_flow_type"] == "service_maintenance"
     assert context["dormant_flows"][0]["context"]["intent"]["service_action_boundary"] == "service_booking_support"
-    assert context["dormant_flows"][0]["flow_identity"] == "servicemaintenance:servicebookingsupport:엔진오일"
+    assert context["dormant_flows"][0]["flow_identity"] == "commerce:servicemaintenance:servicebookingsupport:엔진오일"
 
 
 def test_dormant_purchase_resumes_only_with_explicit_anchor() -> None:
@@ -506,13 +501,16 @@ def test_dormant_purchase_resumes_only_with_explicit_anchor() -> None:
         source="explicit_purchase_resume",
     )
     assert resumed.status == "resumed"
-    assert resumed.active_flow_context["flow_type"] == "purchase"
+    assert resumed.active_flow_context["flow_type"] == "commerce"
+    assert resumed.active_flow_context["intent"]["sub_flow_type"] == "purchase"
     assert resumed.active_flow_context["status"] == "resumed"
     assert resumed.active_flow_context["product"]["goods_no"] == "GOLD"
-    assert resumed.dormant_flows[0]["context"]["flow_type"] == "store_search"
+    assert resumed.dormant_flows[0]["context"]["flow_type"] == "commerce"
+    assert resumed.dormant_flows[0]["context"]["intent"]["sub_flow_type"] == "store_search"
 
 
 def test_same_product_size_purchase_dormant_upserts_instead_of_duplicating() -> None:
+    now = datetime(2026, 6, 30, 3, 0, tzinfo=timezone.utc)
     first = upsert_dormant_flow(
         [],
         {
@@ -522,6 +520,7 @@ def test_same_product_size_purchase_dormant_upserts_instead_of_duplicating() -> 
             "product": {"goods_no": "GOLD", "product_name": "벤투스 S2 AS", "tire_size": "245/45R19"},
             "updated_at": "2026-06-30T01:00:00+00:00",
         },
+        now=now,
     )
     second = upsert_dormant_flow(
         first,
@@ -532,15 +531,17 @@ def test_same_product_size_purchase_dormant_upserts_instead_of_duplicating() -> 
             "product": {"goods_no": "GOLD", "product_name": "벤투스 S2 AS", "tire_size": "245/45R19", "ord_qty": 4},
             "updated_at": "2026-06-30T02:00:00+00:00",
         },
+        now=now,
     )
 
     assert len(second) == 1
-    assert second[0]["flow_identity"] == "purchase:gold:24545r19"
+    assert second[0]["flow_identity"] == "commerce:purchase:gold:24545r19"
     assert second[0]["context"]["flow_step"] == "resolve_store"
     assert second[0]["context"]["product"]["ord_qty"] == 4
 
 
 def test_different_dormant_flow_types_are_preserved_together() -> None:
+    now = datetime(2026, 6, 30, 4, 0, tzinfo=timezone.utc)
     dormant = upsert_dormant_flow(
         [],
         {
@@ -548,6 +549,7 @@ def test_different_dormant_flow_types_are_preserved_together() -> None:
             "product": {"goods_no": "GOLD", "tire_size": "245/45R19"},
             "updated_at": "2026-06-30T01:00:00+00:00",
         },
+        now=now,
     )
     dormant = upsert_dormant_flow(
         dormant,
@@ -557,6 +559,7 @@ def test_different_dormant_flow_types_are_preserved_together() -> None:
             "vehicle": {"car_no": "12가3456"},
             "updated_at": "2026-06-30T02:00:00+00:00",
         },
+        now=now,
     )
     dormant = upsert_dormant_flow(
         dormant,
@@ -565,9 +568,20 @@ def test_different_dormant_flow_types_are_preserved_together() -> None:
             "store": {"region": "분당"},
             "updated_at": "2026-06-30T03:00:00+00:00",
         },
+        now=now,
     )
 
-    assert {item["context"]["flow_type"] for item in dormant} == {"purchase", "recommendation", "store_search"}
+    assert {item["context"]["flow_type"] for item in dormant} == {"commerce"}
+    assert {item["context"]["intent"]["sub_flow_type"] for item in dormant} == {
+        "purchase",
+        "recommendation",
+        "store_search",
+    }
+    assert {item["flow_identity"].split(":", 2)[1] for item in dormant} == {
+        "purchase",
+        "recommendation",
+        "storesearch",
+    }
 
 
 def test_dormant_resume_returns_ambiguous_when_multiple_candidates_match_anchor() -> None:

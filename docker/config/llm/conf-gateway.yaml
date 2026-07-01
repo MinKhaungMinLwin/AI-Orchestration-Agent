@@ -57,6 +57,12 @@ model_list:
       output_cost_per_token: 0.00003
 
   # ── GPT-5.4 (05/03/2026) ───────────────────────────────────────────────────
+  - model_name: gpt-5.4-mini
+    litellm_params:
+      model: openai/gpt-5.4-mini
+      api_base: https://api.openai.com/v1
+      api_key: "os.environ/OPENAI_API_KEY"
+
   - model_name: gpt-5.4-reasoning-high
     litellm_params:
       model: openai/gpt-5.4
