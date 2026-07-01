@@ -1,3 +1,5 @@
+import pytest
+
 from services.tstation.policies.discovery_intent_policy import (
     best_seller_search_params_from_text,
     best_seller_period_from_text,
@@ -307,18 +309,18 @@ def test_event_list_request_uses_events_and_deals() -> None:
     assert "get_my_coupons_tool" in plan.forbidden_tools
 
 
-def test_deal_list_request_uses_deals_only() -> None:
-    frame = build_discovery_intent_frame("진행 중인 기획전")
+@pytest.mark.parametrize("user_text", ["진행 중인 기획전", "진행 중인 프로모션", "지금 프로모션 뭐있어?"])
+def test_benefit_list_requests_use_events_and_deals_together(user_text: str) -> None:
+    frame = build_discovery_intent_frame(user_text)
     plan = plan_discovery_tools(frame)
 
-    assert is_default_benefit_request("진행 중인 기획전") is False
-    assert is_deal_list_request("진행 중인 기획전") is True
+    assert is_default_benefit_request(user_text) is True
+    assert is_deal_list_request(user_text) is False
     assert frame.intent == "product_search"
-    assert frame.sub_intent == "benefit_deal_list"
-    assert frame.entities["deal_list_only"] is True
-    assert plan.allowed_tools == ("get_deals_tool",)
-    assert plan.preferred_tool == "get_deals_tool"
-    assert "get_events_tool" in plan.forbidden_tools
+    assert frame.sub_intent == "benefit_event_list_lookup"
+    assert frame.entities["default_benefit"] is True
+    assert plan.allowed_tools == ("get_events_tool", "get_deals_tool")
+    assert plan.preferred_tool == "get_events_tool"
     assert "get_my_coupons_tool" in plan.forbidden_tools
 
 
