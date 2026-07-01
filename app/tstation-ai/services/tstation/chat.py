@@ -2259,8 +2259,8 @@ def _sync_store_service_search_working_slots(
     if current_region and previous_region != current_region:
         slots.region = current_region
         metadata["region"] = current_region
-    if current_store_name and str(getattr(slots, "store_name", "") or "").strip() != current_store_name:
-        slots.store_name = current_store_name
+    if current_store_name and str(getattr(slots, "shop_name", "") or "").strip() != current_store_name:
+        slots.shop_name = current_store_name
         metadata["store_name"] = current_store_name
     if previous_preferences and not carry_preferences:
         slots.user_preferences_text = None
@@ -32301,7 +32301,6 @@ class TStationChatServiceV2:
                     initial_slots.shop_name = str(
                         detail_data.get("shop_nm") or store_row.get("shop_nm") or store_name
                     ).strip()
-                    initial_slots.store_name = initial_slots.shop_name
                 if session_id:
                     try:
                         from services.tstation.chat_history_service import get_chat_history_service
