@@ -39813,6 +39813,10 @@ class TStationChatServiceV2:
                             )
                             if hard_violations and turn_contract is not None and not _parallel_qc:
                                 qc_contract_recovery = None
+                                fallback_event = _qc_inventory_availability_recovery_event(
+                                    mapper_tool_items,
+                                    mismatches,
+                                )
                                 if _has_recoverable_inventory_only_preview_violation(hard_violations):
                                     qc_contract_recovery = await _recover_contract_required_tool(
                                         turn_contract=turn_contract,
@@ -39838,6 +39842,19 @@ class TStationChatServiceV2:
                                         source=str(
                                             fallback_event.get("assistant_response_source")
                                             or "code_turn_contract_qc_recovery"
+                                        ),
+                                        blocked_template=str(last_template or ""),
+                                    )
+                                elif fallback_event is not None:
+                                    _record_contract_gate_metadata(
+                                        fallback_event,
+                                        turn_contract=turn_contract,
+                                        gate_result="recovered",
+                                        gate_reason="qc_contract_violation_recovered:tool_backed_inventory_available",
+                                        emitted_template=str(fallback_event.get("template") or ""),
+                                        source=str(
+                                            fallback_event.get("assistant_response_source")
+                                            or "code_qc_inventory_availability_repair"
                                         ),
                                         blocked_template=str(last_template or ""),
                                     )
@@ -39867,7 +39884,7 @@ class TStationChatServiceV2:
                                         blocked_template=str(last_template or ""),
                                     )
                                 buffered_data_events = [fallback_event]
-                                last_template = "quickReply"
+                                last_template = str(fallback_event.get("template") or "quickReply")
                                 last_template_source = "turn_contract_qc"
                                 last_assistant_response_source = str(
                                     fallback_event.get("assistant_response_source")

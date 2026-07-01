@@ -41234,6 +41234,64 @@ def test_inventory_availability_mismatch_recovers_tool_backed_location_event() -
     assert event["data"]["stores"][0]["nameAddress"] == "티스테이션 부산중동점"
 
 
+def test_inventory_availability_mismatch_recovers_tna_only_preview_store() -> None:
+    mismatches = [
+        qc_verifier.Mismatch(field="inventory_availability", value="tool_available_but_draft_unavailable"),
+    ]
+    tool_data = [
+        {
+            "tool": "transaction_store_preview_tool",
+            "args": {
+                "goods_no": "G000000317734",
+                "ord_qty": 2,
+                "region_code": "분당",
+                "include_price": True,
+            },
+            "data": {
+                "status": "success",
+                "data": {
+                    "inventory": {
+                        "todayShopArray": [],
+                        "tnaShopArray": [{"shopId": "F00721"}],
+                    },
+                    "schedule": {
+                        "tier": "tna_only",
+                        "stores": [{
+                            "shop_id": "F00721",
+                            "mode": "tna_only",
+                            "shop_nm": "티스테이션 판교점",
+                            "is_installable": True,
+                            "is_tna_delivery": True,
+                            "slots": [{"cal_day": "20260704", "tm": "09"}],
+                        }],
+                        "candidate_shop_ids": ["F00071", "F00721"],
+                    },
+                    "stores": [{
+                        "shop_id": "F00721",
+                        "shop_nm": "티스테이션 판교점",
+                        "is_installable": True,
+                        "is_tna_delivery": True,
+                        "addr_base": "경기도 성남시 분당구",
+                        "addr_dtl": "판교공원로2길 20, 101호(판교동)",
+                    }],
+                    "candidate_shop_ids": ["F00721"],
+                },
+            },
+        },
+    ]
+
+    event = _qc_inventory_availability_recovery_event(tool_data, mismatches)
+
+    assert event is not None
+    assert event["template"] == "location"
+    assert event["assistant_response_source"] == "code_qc_inventory_availability_repair"
+    assert event["data"]["stores"][0]["nameAddress"] == "티스테이션 판교점"
+    assert event["data"]["metadata"][0]["shopId"] == "F00721"
+    assert event["data"]["metadata"][0]["scheduleTier"] == "tna_only"
+    assert event["data"]["metadata"][0]["inventoryMode"] == "tna_only"
+    assert "확인하지 못" not in event["data"]["assistantResponse"]
+
+
 def test_repair_qc_mismatch_event_updates_assistant_response_without_guard_fallback() -> None:
     event = _repair_qc_mismatch_event(
         {
