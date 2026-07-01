@@ -10574,6 +10574,38 @@ def _pure_inventory_store_stock_tier(inventory_result: dict, *, shop_id: str, re
     return ""
 
 
+def _single_store_availability_ready(slots: Any | None) -> bool:
+    if slots is None:
+        return False
+    canonical_slots = canonical_context_from_slots(slots)
+    slot_values = slots.model_dump() if hasattr(slots, "model_dump") else dict(slots or {})
+
+    def _slot_value(name: str) -> Any:
+        if isinstance(slots, Mapping):
+            return slots.get(name, canonical_slots.get(name))
+        if hasattr(slots, name):
+            return getattr(slots, name, canonical_slots.get(name))
+        return slot_values.get(name, canonical_slots.get(name))
+
+    try:
+        qty = int(_slot_value("ord_qty") or _slot_value("quantity") or 0)
+    except (TypeError, ValueError):
+        qty = 0
+    availability_context = bool(_slot_value("availability_intent") == "today_install" or _slot_value("requested_cal_day"))
+    stock_context = bool(
+        _slot_value("pending_intent") == "stock"
+        or _slot_value("goal_type") == "store_with_stock"
+        or availability_context
+    )
+    return bool(
+        stock_context
+        and _slot_value("goods_no")
+        and _slot_value("tire_size")
+        and qty > 0
+        and (_slot_value("shop_id") or _slot_value("shop_name") or _slot_value("store_name"))
+    )
+
+
 def _logistics_stock_summary(logistics_result: dict) -> dict[str, Any]:
     data = _unwrap_tool_data(logistics_result)
     logistics = data.get("logistics") if isinstance(data, dict) and isinstance(data.get("logistics"), dict) else data
@@ -10613,6 +10645,66 @@ def _pure_inventory_store_label(store_name: str) -> str:
 
 def _pure_inventory_datepick_response(store_name: str) -> str:
     return f"{_pure_inventory_store_label(store_name)}에서 가장 빨리 장착 가능한 날짜입니다. 예약 시간을 선택해 주세요."
+
+
+def _build_single_store_availability_schedule_contract(
+    *,
+    base_contract: TurnContract | None,
+    known_slots: Mapping[str, Any],
+    shop_id: str,
+    stock_check_mode: str,
+    source: str,
+) -> TurnContract:
+    slot_values = {
+        key: value
+        for key, value in dict(known_slots or {}).items()
+        if value not in (None, "", [], {})
+    }
+    slot_values["stock_check_mode"] = stock_check_mode
+    allowed_tools = ["get_store_inventory_tool", "get_logistics_inventory_tool", "get_store_schedule_tool"]
+    if not shop_id:
+        allowed_tools.insert(0, "get_store_list_tool")
+    forbidden_tools: tuple[str, ...] = ("quick_order_tool",) if stock_check_mode == "inventory_only" else ()
+    return TurnContract(
+        domain=PolicyDomain.TRANSACTION.value,
+        intent="stock_store_search",
+        sub_intent="today_install" if slot_values.get("availability_intent") == "today_install" else "stock",
+        known_slots=slot_values,
+        required_slots=(),
+        blocking_required_slots=(),
+        allowed_tools=tuple(allowed_tools),
+        forbidden_tools=forbidden_tools,
+        response_decision={
+            "response_shape": "datepick",
+            "template": "datepick",
+            "required_slots": [],
+            "forbidden_behaviors": (
+                ("preorder_for_pure_inventory_flow",)
+                if stock_check_mode == "inventory_only"
+                else ("datepick_before_store_selection",)
+            ),
+            "assistant_guidance": "단일 매장 장착 가능 여부는 재고 tier 확인 후 가장 빠른 장착 가능 시간을 datepick으로 안내한다.",
+            "metadata": {
+                "response_shape_key": "stock_store_schedule",
+                "stock_check_mode": stock_check_mode,
+            },
+        },
+        action_mode="stock_check",
+        context_state=str(getattr(base_contract, "context_state", "") or "active"),
+        resume_source=source,
+        router_waited=bool(getattr(base_contract, "router_waited", False)) if base_contract else False,
+        router_source=str(getattr(base_contract, "router_source", "unknown") or "unknown") if base_contract else "unknown",
+        contract_source="single_store_availability_schedule",
+        speculative_used_for_contract=bool(getattr(base_contract, "speculative_used_for_contract", False))
+        if base_contract
+        else False,
+        current_turn_intent=str(getattr(base_contract, "current_turn_intent", "") or "") or None
+        if base_contract
+        else None,
+        code_frame_intent=str(getattr(base_contract, "code_frame_intent", "") or "") or None
+        if base_contract
+        else "stock_store_search",
+    )
 
 
 def _apply_pure_inventory_datepick_context(
@@ -36626,7 +36718,7 @@ class TStationChatServiceV2:
 
         async def _resolve_pure_inventory_stock_with_code() -> tuple[list[dict], dict] | None:
             slot_state = pending_slots or initial_slots
-            if not _is_pure_inventory_stock_ready(slot_state):
+            if not _single_store_availability_ready(slot_state):
                 return None
 
             slot_values = (
@@ -36635,16 +36727,33 @@ class TStationChatServiceV2:
                 else dict(slot_state or {})
             )
             frame = build_transaction_intent_frame(user_query, known_slots=slot_values)
-            if frame.intent != "stock_store_search" or frame.sub_intent != "stock":
-                if not _is_quantity_only_stock_followup_text(user_query):
+            allowed_stock_sub_intents = {"stock", "today_install", "reservation"}
+            if frame.intent != "stock_store_search" or frame.sub_intent not in allowed_stock_sub_intents:
+                availability_context = bool(
+                    slot_values.get("availability_intent") == "today_install"
+                    or slot_values.get("requested_cal_day")
+                )
+                if not (_is_quantity_only_stock_followup_text(user_query) or availability_context):
                     return None
                 frame = build_transaction_intent_frame(
                     "재고 있어?",
-                    known_slots=slot_values,
+                    known_slots={
+                        **slot_values,
+                        "pending_intent": "stock",
+                        "goal_type": "store_with_stock",
+                        "stock_check_mode": slot_values.get("stock_check_mode") or "preview",
+                    },
                 )
-                if frame.intent != "stock_store_search" or frame.sub_intent != "stock":
+                if frame.intent != "stock_store_search" or frame.sub_intent not in allowed_stock_sub_intents:
                     return None
-            if str(frame.known_slots.get("stock_check_mode") or "") != "inventory_only":
+            stock_check_mode = str(frame.known_slots.get("stock_check_mode") or "").strip() or "inventory_only"
+            is_today_or_date_availability = bool(
+                frame.known_slots.get("availability_intent") == "today_install"
+                or frame.known_slots.get("requested_cal_day")
+            )
+            if stock_check_mode not in {"inventory_only", "preview"}:
+                return None
+            if stock_check_mode != "inventory_only" and not is_today_or_date_availability:
                 return None
 
             goods_no = str(frame.known_slots.get("goods_no") or "").strip()
@@ -36672,13 +36781,20 @@ class TStationChatServiceV2:
                 return None
             if not (shop_id or store_name):
                 return None
+            resolver_contract = _build_single_store_availability_schedule_contract(
+                base_contract=turn_contract,
+                known_slots=frame.known_slots,
+                shop_id=shop_id,
+                stock_check_mode=stock_check_mode,
+                source="single_store_availability_resolver",
+            )
             pre_required_tools = ("get_store_inventory_tool", "get_store_schedule_tool") if shop_id else (
                 "get_store_list_tool",
                 "get_store_inventory_tool",
                 "get_store_schedule_tool",
             )
             gate_allowed, gate_reason = _direct_code_fast_path_contract_gate(
-                turn_contract=turn_contract,
+                turn_contract=resolver_contract,
                 intent="stock_store_search",
                 template="datepick",
                 source="code_pure_inventory_stock",
@@ -36701,7 +36817,7 @@ class TStationChatServiceV2:
                 )
                 return _finalize_direct_code_event(
                     event,
-                    turn_contract=turn_contract,
+                    turn_contract=resolver_contract,
                     intent="stock_store_search",
                     source="code_pure_inventory_stock",
                     required_tools=required_tools,
