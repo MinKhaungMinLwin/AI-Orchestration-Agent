@@ -1,10 +1,18 @@
 from __future__ import annotations
 
 import base64
+from types import SimpleNamespace
 
-from services.tstation.chat import AgentPromptProfile, MultiAgentDomain
+from services.tstation.policies.discovery_intent_policy import build_discovery_intent_frame, plan_discovery_tools
+from services.tstation.policies.intent_frame import IntentFrame, PolicyDomain
+from services.tstation.policies.response_decision import ToolPlan
 from services.tstation.policies.router_context import compact_router_messages
-from services.tstation.policies.router_evidence import build_router_evidence
+from services.tstation.policies.router_evidence import (
+    build_router_evidence,
+    merge_router_evidence_known_slots,
+)
+from services.tstation.policies.transaction_intent_policy import build_transaction_intent_frame, plan_transaction_tools
+from services.tstation.policies.turn_contract import build_turn_contract
 
 
 def _routing_result(
@@ -13,16 +21,19 @@ def _routing_result(
     entity_candidates: dict,
     requested_product_attribute: str = "none",
     execution_plan: list[str] | None = None,
-) -> MultiAgentDomain:
-    return MultiAgentDomain(
+    domains: list[str] | None = None,
+    policy_intent: str = "none",
+) -> SimpleNamespace:
+    return SimpleNamespace(
         reason="test",
-        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        domains=domains or ["discovery"],
         execution_plan=execution_plan or ["discovery:test"],
         user_behavior="test",
         flow="test",
         claim_check_type="none",
         complaint_scope="none",
         requested_product_attribute=requested_product_attribute,
+        policy_intent=policy_intent,
         primary_action=primary_action,
         entity_candidates={
             **{
@@ -57,7 +68,7 @@ def _routing_result(
             **entity_candidates,
         },
         planner_confidence=0.9,
-        agent_prompt_profile=AgentPromptProfile.DISCOVERY_RECOMMENDATION,
+        agent_prompt_profile="discovery_recommendation",
     )
 
 
@@ -76,7 +87,7 @@ def test_router_evidence_keeps_registered_vehicle_anchor_and_recommend_action() 
         execution_plan=["discovery:vehicle_tire_recommendation"],
     )
 
-    evidence = build_router_evidence(routing, domains=[MultiAgentDomain.Domain.DISCOVERY])
+    evidence = build_router_evidence(routing, domains=["discovery"])
 
     assert evidence["primary_action"] == "recommend"
     assert evidence["entities"]["registered_vehicle"]["anchor"] == "제타"
@@ -125,9 +136,9 @@ def test_router_evidence_keeps_store_coupon_and_location_candidates() -> None:
         execution_plan=["transaction:store_search"],
     )
 
-    store_evidence = build_router_evidence(store_routing, domains=[MultiAgentDomain.Domain.TRANSACTION])
-    coupon_evidence = build_router_evidence(coupon_routing, domains=[MultiAgentDomain.Domain.SUPPORT])
-    location_evidence = build_router_evidence(location_routing, domains=[MultiAgentDomain.Domain.TRANSACTION])
+    store_evidence = build_router_evidence(store_routing, domains=["transaction"])
+    coupon_evidence = build_router_evidence(coupon_routing, domains=["support"])
+    location_evidence = build_router_evidence(location_routing, domains=["transaction"])
 
     assert store_evidence["entities"]["store"]["name"] == "판교점"
     assert store_evidence["primary_action"] == "reserve"
@@ -170,3 +181,194 @@ def test_router_context_compacts_append_description_and_card_payload() -> None:
     assert encoded not in compact_text
     assert "긴 카드 설명" not in compact_text
     assert "강남역 근처 장착점 찾아줘" in compact_text
+
+
+def test_router_registered_vehicle_anchor_reaches_discovery_contract() -> None:
+    routing = _routing_result(
+        primary_action="recommend",
+        requested_product_attribute="noise",
+        entity_candidates={
+            "registered_vehicle": {
+                "mentioned": True,
+                "anchor": "제타",
+                "reference_text": "내가 닷컴에 등록해놓은 제타",
+                "confidence": 0.9,
+            }
+        },
+        execution_plan=["discovery:vehicle_tire_recommendation"],
+    )
+    evidence = build_router_evidence(routing, domains=["discovery"])
+    known_slots = merge_router_evidence_known_slots(
+        {"requested_product_attribute": routing.requested_product_attribute},
+        evidence,
+        preserve_existing=False,
+    )
+
+    frame = build_discovery_intent_frame("그 차에 맞는 정숙성 좋은 타이어 추천해줘", known_slots=known_slots)
+    plan = plan_discovery_tools(frame)
+    contract = build_turn_contract(
+        user_text="그 차에 맞는 정숙성 좋은 타이어 추천해줘",
+        intent_frame=frame,
+        tool_plan=plan,
+        routing_result=routing,
+        merged_slots={"availability_context": {"latest_router_evidence": evidence}},
+    )
+
+    assert frame.entities["named_registered_vehicle_anchor"] == "제타"
+    assert frame.entities["requested_product_attribute"] == "noise"
+    assert plan.allowed_tools == ("get_my_cars_tool", "get_products_recommendations_tool")
+    assert plan.preferred_tool == "get_my_cars_tool"
+    assert contract.known_slots["named_registered_vehicle_anchor"] == "제타"
+    assert contract.known_slots["slot_sources"]["named_registered_vehicle_anchor"] == "router_evidence"
+
+
+def test_router_store_name_reaches_store_schedule_tool_args() -> None:
+    routing = _routing_result(
+        primary_action="book",
+        domains=["transaction"],
+        entity_candidates={
+            "store": {
+                "mentioned": True,
+                "name": "판교점",
+                "reference_text": "티스테이션 판교점",
+                "confidence": 0.9,
+            }
+        },
+        execution_plan=["transaction:store_schedule"],
+    )
+    evidence = build_router_evidence(routing, domains=["transaction"])
+    known_slots = merge_router_evidence_known_slots({}, evidence, preserve_existing=False)
+
+    frame = build_transaction_intent_frame("예약 가능해?", known_slots=known_slots)
+    plan = plan_transaction_tools(frame)
+
+    assert frame.known_slots["store_name_candidate"] == "판교점"
+    assert frame.known_slots["store_name"] == "판교점"
+    assert plan.preferred_tool == "get_store_schedule_tool"
+    assert plan.tool_args_patch["store_name"] == "판교점"
+
+
+def test_router_coupon_name_is_preserved_without_forcing_support_to_transaction() -> None:
+    routing = _routing_result(
+        primary_action="use_coupon",
+        domains=["transaction"],
+        entity_candidates={
+            "coupon": {
+                "mentioned": True,
+                "name": "생일 쿠폰",
+                "reference_text": "생일 쿠폰",
+                "confidence": 0.85,
+            }
+        },
+        execution_plan=["transaction:owned_coupon_lookup"],
+    )
+    evidence = build_router_evidence(routing, domains=["transaction"])
+    known_slots = merge_router_evidence_known_slots({}, evidence, preserve_existing=False)
+    frame = build_transaction_intent_frame("쿠폰 쓸 수 있어?", known_slots=known_slots)
+    plan = plan_transaction_tools(frame)
+
+    assert frame.known_slots["coupon_name_candidate"] == "생일 쿠폰"
+    assert frame.known_slots["coupon_name"] == "생일 쿠폰"
+    assert "get_my_coupons_tool" in plan.allowed_tools
+
+    support_routing = _routing_result(
+        primary_action="ask_policy",
+        domains=["support"],
+        policy_intent="coupon_registration_policy",
+        entity_candidates={
+            "coupon": {
+                "mentioned": True,
+                "name": "생일 쿠폰",
+                "reference_text": "생일 쿠폰 어디서 봐",
+                "confidence": 0.85,
+            }
+        },
+        execution_plan=["support:coupon_registration_policy"],
+    )
+    support_evidence = build_router_evidence(support_routing, domains=["support"])
+    support_contract = build_turn_contract(
+        user_text="생일 쿠폰은 어디서 봐?",
+        intent_frame=IntentFrame(
+            domain=PolicyDomain.SUPPORT,
+            intent="coupon_registration_policy",
+            known_slots={},
+        ),
+        tool_plan=ToolPlan(
+            allowed_tools=("search_faq_hybrid_tool",),
+            preferred_tool="search_faq_hybrid_tool",
+        ),
+        routing_result=support_routing,
+        merged_slots={"availability_context": {"latest_router_evidence": support_evidence}},
+        action_mode="support_policy_answer",
+    )
+
+    assert support_contract.domain == "support"
+    assert support_contract.intent == "coupon_registration_policy"
+    assert support_contract.known_slots["coupon_name_candidate"] == "생일 쿠폰"
+
+
+def test_router_location_reaches_store_search_args_and_regex_does_not_override() -> None:
+    routing = _routing_result(
+        primary_action="search",
+        domains=["transaction"],
+        entity_candidates={
+            "location": {
+                "mentioned": True,
+                "name": "강남역",
+                "type": "station",
+                "reference_text": "강남역 근처",
+                "confidence": 0.9,
+            }
+        },
+        execution_plan=["transaction:store_search"],
+    )
+    evidence = build_router_evidence(routing, domains=["transaction"])
+    known_slots = merge_router_evidence_known_slots(
+        {"location_name": "정규식후보"},
+        evidence,
+        preserve_existing=False,
+    )
+
+    frame = build_transaction_intent_frame("장착점 찾아줘", known_slots=known_slots)
+    plan = plan_transaction_tools(frame)
+
+    assert frame.known_slots["location_name"] == "강남역"
+    assert frame.known_slots["location_type"] == "station"
+    assert plan.preferred_tool in {"search_stores_tool", "search_stores_complex_tool"}
+    assert plan.tool_args_patch["place_query"] == "강남역"
+
+
+def test_router_evidence_regex_fallback_only_fills_empty_entities() -> None:
+    routing = _routing_result(
+        primary_action="search",
+        domains=["transaction"],
+        entity_candidates={
+            "store": {
+                "mentioned": True,
+                "name": "판교점",
+                "reference_text": "티스테이션 판교점",
+                "confidence": 0.9,
+            }
+        },
+        execution_plan=["transaction:store_search"],
+    )
+
+    evidence = build_router_evidence(
+        routing,
+        domains=["transaction"],
+        regex_candidates={"store": {"name": "정규식점", "confidence": 0.4}},
+    )
+    fallback = build_router_evidence(
+        _routing_result(
+            primary_action="search",
+            domains=["transaction"],
+            entity_candidates={},
+            execution_plan=["transaction:store_search"],
+        ),
+        domains=["transaction"],
+        regex_candidates={"store": {"name": "정규식점", "confidence": 0.4}},
+    )
+
+    assert evidence["entities"]["store"]["name"] == "판교점"
+    assert fallback["entities"]["store"]["name"] == "정규식점"
+    assert fallback["entities"]["store"]["source"] == "regex_supplemental"

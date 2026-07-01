@@ -88,7 +88,11 @@ from services.tstation.policies.resolved_context import (
     canonical_context_from_tool_boundary,
 )
 from services.tstation.policies.router_context import compact_router_messages
-from services.tstation.policies.router_evidence import build_router_evidence, router_entities_for_trace
+from services.tstation.policies.router_evidence import (
+    build_router_evidence,
+    merge_router_evidence_known_slots,
+    router_entities_for_trace,
+)
 from services.tstation.policies.flow_state import (
     apply_router_evidence_snapshot,
     commit_flow_state,
@@ -20149,6 +20153,7 @@ def _build_discovery_policy_context(
     active_flow_resume_patch: Mapping[str, Any] | None = None,
     comparison_context: Mapping[str, Any] | None = None,
     routing_result: Any | None = None,
+    router_evidence: Mapping[str, Any] | None = None,
     pending_intent: str | None = None,
     goal_type: str | None = None,
     pending_check_topic: str | None = None,
@@ -20167,6 +20172,11 @@ def _build_discovery_policy_context(
         known_slots = {"tire_size": tire_size} if tire_size else {}
         if vehicle_type:
             known_slots["vehicle_type"] = vehicle_type
+        known_slots = merge_router_evidence_known_slots(
+            known_slots,
+            router_evidence,
+            preserve_existing=False,
+        )
         if recommendation_context:
             normalized_recommendation_context = _recommendation_context_policy_dict(recommendation_context)
             known_slots["recommendation_context"] = normalized_recommendation_context
@@ -28932,6 +28942,11 @@ class TStationChatServiceV2:
         current_user_preferences_text.set(merged_slots.user_preferences_text or "")
         active_flow_resume_patch: dict[str, Any] = {}
         selected_vehicle_slots: dict[str, Any] = {}
+        router_policy_slots = merge_router_evidence_known_slots(
+            {},
+            latest_router_evidence_snapshot,
+            preserve_existing=False,
+        )
         if history_selected_vehicle is not None:
             selected_vehicle_slots = _vehicle_selection_slot_values(history_selected_vehicle)
         availability_context_for_active_flow = (
@@ -29029,6 +29044,7 @@ class TStationChatServiceV2:
             active_flow_resume_patch=active_flow_resume_patch,
             comparison_context=merged_slots.comparison_context,
             routing_result=routing_result,
+            router_evidence=latest_router_evidence_snapshot,
             pending_intent=merged_slots.pending_intent,
             goal_type=merged_slots.goal_type,
             pending_check_topic=merged_slots.pending_check_topic,
@@ -29136,6 +29152,8 @@ class TStationChatServiceV2:
             "schedule_tier": getattr(merged_slots, "schedule_tier", None),
             "inventory_mode": getattr(merged_slots, "inventory_mode", None),
         }
+        if router_policy_slots:
+            transaction_known_slots.update(router_policy_slots)
         _outer_seed = _current_router_preview_seed.get(None)
         if _outer_seed is not None:
             if transaction_known_slots.get("pending_intent") in (None, ""):
@@ -29275,6 +29293,11 @@ class TStationChatServiceV2:
                     "pending_check_object_type": merged_slots.pending_check_object_type,
                     "pending_check_object_value": merged_slots.pending_check_object_value,
                 }
+                discovery_contract_slots = merge_router_evidence_known_slots(
+                    discovery_contract_slots,
+                    latest_router_evidence_snapshot,
+                    preserve_existing=False,
+                )
                 if previous_product_candidate_description_override and merged_slots.goods_no is not None:
                     description_entities: dict[str, Any] = {"product_names": ()}
                     if merged_slots.tire_model:
