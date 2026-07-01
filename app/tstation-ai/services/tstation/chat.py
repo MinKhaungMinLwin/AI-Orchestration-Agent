@@ -3474,7 +3474,9 @@ EXAMPLES (tricky cases):
 
 Output: domains (list with ONE OR MORE domains, ordered by execution priority), reason, execution_plan, claim_check_type, complaint_scope, discovery_followup_intent, carried_discovery_objective, pending_check_topic, pending_check_object_type, pending_check_object_value, comparison_followup_intent, comparison_metric, recent_product_set_followup_type, recent_product_set_metric, recent_product_set_direction, recent_product_set_price_basis, requested_product_attribute, policy_intent, store_attribute_store_name, store_attribute_text, store_attribute_type, store_attribute_verification_level, service_name, service_code, region, place_query, recommendation_scenario, referred_object_status, referred_object_type, needs_clarification, planner_confidence, and agent_prompt_profile.
 Also output primary_action and entity_candidates. Examples: "내가 닷컴에 등록해놓은 제타 ... 추천"
-=> primary_action=recommend, entity_candidates.registered_vehicle.anchor="제타"; "티스테이션 판교점 예약 가능해?"
+=> primary_action=recommend, entity_candidates.registered_vehicle.anchor="제타"; "내가 등록해둔 차 중에 GV70에 맞는 타이어 추천"
+=> primary_action=recommend, entity_candidates.registered_vehicle.anchor="GV70"; "내가 등록한 차 중에 제타 사이즈가 뭐야"
+=> primary_action=lookup, entity_candidates.registered_vehicle.anchor="제타"; "티스테이션 판교점 예약 가능해?"
 => primary_action=reserve, entity_candidates.store.name="판교점"; "생일 쿠폰 쓸 수 있어?"
 => primary_action=coupon_use, entity_candidates.coupon.name="생일 쿠폰"; "강남역 근처 장착점"
 => primary_action=store_search, entity_candidates.location.name="강남역", type="station".
@@ -3734,13 +3736,6 @@ class StreamingMultiAgentCoordinator:
                 "내 차 목록", "내차 목록", "내차목록",
                 "내 차량", "내차량",
                 "보유 차량", "보유차량", "보유차량 확인",
-                "내 등록차", "등록차 보여", "등록차량 보여", "등록차량", "등록차",
-                "내가 등록한 차", "내가 등록한 차량", "내 등록 차", "내 등록 차량",
-                "내가 등록해둔 차", "내가 등록해둔 차량", "등록된 내 차", "등록된 내 차량",
-                "내 차 보여", "내차 보여", "내차보여",
-                "내 차 중", "내 차중", "내차 중", "내차중",
-                "내차 사이즈", "내 차 사이즈", "내차 규격", "내 차 규격",
-                "내차로 다시", "내 차로 다시",
                 "리뷰 영상", "유튜브", "동영상", "영상 보여",
             ],
             MultiAgentDomain.Domain.DISCOVERY,
