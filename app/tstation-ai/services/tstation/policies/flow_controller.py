@@ -283,6 +283,19 @@ def _compact_slot_snapshot(slots: Any | Mapping[str, Any] | None) -> dict[str, A
         "pending_product_name",
         "tire_size",
         "ord_qty",
+        "payment_amount",
+        "payment_amount_source",
+        "price_basis",
+        "price_source_tool",
+        "sale_prc",
+        "extra_fvr_sale_prc",
+        "cheapest_final_prc",
+        "final_unit_price",
+        "final_prc",
+        "final_price",
+        "finalPrice",
+        "price",
+        "wage_prc",
         "shop_id",
         "shop_name",
         "store_name",
@@ -687,6 +700,25 @@ def _selected_quantity_flow_context(
             product[key] = value
     product["ord_qty"] = ord_qty
 
+    payment = dict(flow_context.get("payment")) if isinstance(flow_context.get("payment"), Mapping) else {}
+    for key, value in {
+        "payment_amount": existing_snapshot.get("payment_amount"),
+        "payment_amount_source": existing_snapshot.get("payment_amount_source"),
+        "price_basis": existing_snapshot.get("price_basis"),
+        "price_source_tool": existing_snapshot.get("price_source_tool"),
+        "sale_prc": existing_snapshot.get("sale_prc"),
+        "extra_fvr_sale_prc": existing_snapshot.get("extra_fvr_sale_prc"),
+        "cheapest_final_prc": existing_snapshot.get("cheapest_final_prc"),
+        "final_unit_price": existing_snapshot.get("final_unit_price"),
+        "final_prc": existing_snapshot.get("final_prc"),
+        "final_price": existing_snapshot.get("final_price"),
+        "finalPrice": existing_snapshot.get("finalPrice"),
+        "price": existing_snapshot.get("price"),
+        "wage_prc": existing_snapshot.get("wage_prc"),
+    }.items():
+        if value not in (None, "", [], {}) and payment.get(key) in (None, "", [], {}):
+            payment[key] = value
+
     intent = dict(flow_context.get("intent")) if isinstance(flow_context.get("intent"), Mapping) else {}
     for key, value in {
         "pending_intent": existing_snapshot.get("pending_intent"),
@@ -705,6 +737,8 @@ def _selected_quantity_flow_context(
     })
     if product:
         flow_context["product"] = product
+    if payment:
+        flow_context["payment"] = payment
     if intent:
         flow_context["intent"] = intent
     return {key: value for key, value in flow_context.items() if value not in (None, "", [], {})}
@@ -769,6 +803,25 @@ def _selected_store_flow_context(
         if value not in (None, "", [], {}):
             intent[key] = value
 
+    payment = dict(flow_context.get("payment")) if isinstance(flow_context.get("payment"), Mapping) else {}
+    for key, value in {
+        "payment_amount": selected_store.get("payment_amount") or existing_snapshot.get("payment_amount"),
+        "payment_amount_source": selected_store.get("payment_amount_source") or existing_snapshot.get("payment_amount_source"),
+        "price_basis": selected_store.get("price_basis") or existing_snapshot.get("price_basis"),
+        "price_source_tool": selected_store.get("price_source_tool") or existing_snapshot.get("price_source_tool"),
+        "sale_prc": selected_store.get("sale_prc") or existing_snapshot.get("sale_prc"),
+        "extra_fvr_sale_prc": selected_store.get("extra_fvr_sale_prc") or existing_snapshot.get("extra_fvr_sale_prc"),
+        "cheapest_final_prc": selected_store.get("cheapest_final_prc") or existing_snapshot.get("cheapest_final_prc"),
+        "final_unit_price": selected_store.get("final_unit_price") or existing_snapshot.get("final_unit_price"),
+        "final_prc": selected_store.get("final_prc") or existing_snapshot.get("final_prc"),
+        "final_price": selected_store.get("final_price") or existing_snapshot.get("final_price"),
+        "finalPrice": selected_store.get("finalPrice") or existing_snapshot.get("finalPrice"),
+        "price": selected_store.get("price") or existing_snapshot.get("price"),
+        "wage_prc": selected_store.get("wage_prc") or existing_snapshot.get("wage_prc"),
+    }.items():
+        if value not in (None, "", [], {}):
+            payment[key] = value
+
     flow_context.update({
         "flow_type": flow_type,
         "status": "resumed",
@@ -780,6 +833,8 @@ def _selected_store_flow_context(
         flow_context["product"] = product
     if store:
         flow_context["store"] = store
+    if payment:
+        flow_context["payment"] = payment
     if intent:
         flow_context["intent"] = intent
 

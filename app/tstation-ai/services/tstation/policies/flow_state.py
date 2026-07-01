@@ -44,6 +44,7 @@ _STORE_FIELDS = ("region", "shop_id", "shop_name", "store_name", "place_query")
 _SCHEDULE_FIELDS = ("requested_cal_day", "rsv_hour")
 _PAYMENT_FIELDS = (
     "payment_amount",
+    "payment_amount_source",
     "price_basis",
     "price_source_tool",
     "payment_amount_stale",
@@ -1742,6 +1743,19 @@ def selected_store_slots_from_active_flow_context(
             "pending_product_name",
             "tire_size",
             "ord_qty",
+            "payment_amount",
+            "payment_amount_source",
+            "price_basis",
+            "price_source_tool",
+            "sale_prc",
+            "extra_fvr_sale_prc",
+            "cheapest_final_prc",
+            "final_unit_price",
+            "final_prc",
+            "final_price",
+            "finalPrice",
+            "price",
+            "wage_prc",
             "source_tool",
             "schedule_mode",
             "schedule_tier",
@@ -1752,7 +1766,7 @@ def selected_store_slots_from_active_flow_context(
         ):
             if selected.get(key) in _EMPTY_VALUES and selected_candidate.get(key) not in _EMPTY_VALUES:
                 selected[key] = selected_candidate[key]
-    for section in (active_flow.product, active_flow.intent):
+    for section in (active_flow.product, active_flow.payment, active_flow.intent):
         for key in (
             "goods_no",
             "product_name",
@@ -1760,6 +1774,19 @@ def selected_store_slots_from_active_flow_context(
             "pending_product_name",
             "tire_size",
             "ord_qty",
+            "payment_amount",
+            "payment_amount_source",
+            "price_basis",
+            "price_source_tool",
+            "sale_prc",
+            "extra_fvr_sale_prc",
+            "cheapest_final_prc",
+            "final_unit_price",
+            "final_prc",
+            "final_price",
+            "finalPrice",
+            "price",
+            "wage_prc",
             "source_tool",
             "schedule_mode",
             "inventory_mode",
