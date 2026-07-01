@@ -437,10 +437,36 @@ def _build_vehicle_information_event(selected_vehicle: dict, user_text: str) -> 
 
     selected_car = selected_vehicle.get("car") or {}
     selected_meta = selected_vehicle.get("meta") or {}
+    raw_available_sizes = selected_meta.get("availableSizes") or selected_meta.get("available_sizes") or []
+    available_sizes: list[str] = []
+    if isinstance(raw_available_sizes, list):
+        for raw_size in raw_available_sizes:
+            normalized_size = normalize_tire_size(str(raw_size or ""))
+            if normalized_size and normalized_size not in available_sizes:
+                available_sizes.append(normalized_size)
     front_size = str(selected_meta.get("tireSize") or "").strip()
     rear_size = str(selected_meta.get("tireSizeRe") or "").strip()
     car_info = str(selected_car.get("info") or selected_car.get("description") or "선택하신 차량").strip()
     car_no = str(selected_meta.get("carNo") or selected_car.get("licensePlate") or "").strip()
+
+    if len(available_sizes) >= 2:
+        response = (
+            f"**{car_info} ({car_no})** 차량으로 확인했어요.\n\n"
+            f"확인된 규격이 여러 개예요: {', '.join(f'**{size}**' for size in available_sizes)}\n\n"
+            "어떤 규격 기준으로 추천을 이어갈지 선택해 주세요."
+        )
+        return {
+            "type": "data",
+            "template": "quickReply",
+            "source_domain": "discovery",
+            "assistant_response_source": "code_vehicle_multi_size_selection",
+            "data": {
+                "assistantResponse": response,
+                "quickReplies": [{"label": size, "domain": "DISCOVERY"} for size in available_sizes[:8]],
+                "predictedDomains": ["DISCOVERY"],
+                "metadata": {"availableSizes": available_sizes, "response_shape_key": "vehicle_size_selection"},
+            },
+        }
 
     size_line = ""
     if front_size and rear_size and front_size != rear_size:

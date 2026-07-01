@@ -23884,8 +23884,9 @@ def test_vehicle_information_event_answers_staggered_fitment_question() -> None:
 
     assert event is not None
     assert event["template"] == "quickReply"
-    assert "전륜 **225/50R18**, 후륜 **255/50R18**" in event["data"]["assistantResponse"]
-    assert "한 가지 사이즈만 보면 안 되고" in event["data"]["assistantResponse"]
+    assert "앞 타이어: 225/50R18" in event["data"]["assistantResponse"]
+    assert "뒤 타이어: 255/50R18" in event["data"]["assistantResponse"]
+    assert "무엇을 도와드릴까요?" in event["data"]["assistantResponse"]
 
 
 def test_vehicle_information_event_handles_generic_spec_question() -> None:
@@ -23908,6 +23909,31 @@ def test_vehicle_information_event_handles_generic_spec_question() -> None:
     assert event["template"] == "quickReply"
     assert "현재 확인되는 규격은 전륜 **225/50R18**, 후륜 **255/50R18**예요." in event["data"]["assistantResponse"]
     assert _labels(event["data"]["quickReplies"]) == ["전/후륜 규격 보기", "맞는 타이어 추천", "동일 상품 찾기"]
+
+
+def test_vehicle_information_event_prompts_for_size_choice_when_vehicle_lookup_has_multiple_sizes() -> None:
+    event = _build_vehicle_information_event(
+        {
+            "car": {
+                "licensePlate": "56모2162",
+                "info": "BMW 3시리즈 그란 투리스모(6세대)",
+            },
+            "meta": {
+                "carNo": "56모2162",
+                "tireSize": "225/50R17",
+                "tireSizeRe": "225/50R17",
+                "availableSizes": ["2255017", "2254518"],
+            },
+        },
+        "내 차 규격이 뭐야?",
+    )
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    assert event["assistant_response_source"] == "code_vehicle_multi_size_selection"
+    assert "어떤 규격 기준으로 추천을 이어갈지 선택해 주세요." in event["data"]["assistantResponse"]
+    assert _labels(event["data"]["quickReplies"]) == ["225/50R17", "225/45R18"]
+    assert event["data"]["metadata"]["response_shape_key"] == "vehicle_size_selection"
 
 
 def test_suv_passenger_tire_question_does_not_render_listcar() -> None:
