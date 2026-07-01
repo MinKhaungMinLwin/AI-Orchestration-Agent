@@ -8457,6 +8457,155 @@ def test_purchase_readthrough_preserves_search_product_price_facts() -> None:
     assert metadata["canonical_sources"]["cheapest_final_prc"] == "tool"
 
 
+def test_tool_derived_search_product_context_keeps_raw_name_size_and_price_basis() -> None:
+    slots = ConversationSlots()
+    changed = chat_module.StreamingMultiAgentCoordinator._apply_tool_derived_slots(
+        slots,
+        "search_product_tool",
+        {
+            "status": "success",
+            "data": [
+                {
+                    "goods_no": "G000000310126",
+                    "goods_nm": "벤투스 S2 AS",
+                    "tire_size_1": "245/45R19",
+                    "extra_fvr_sale_prc": 180500,
+                }
+            ],
+        },
+        tool_input={"keyword": "벤투스 s2 as", "size": "2454519"},
+    )
+
+    assert changed is True
+    assert slots.goods_no == "G000000310126"
+    assert slots.tire_size == "245/45R19"
+    assert slots.tire_model == "벤투스 S2 AS"
+    assert slots.pending_product_name == "벤투스 S2 AS"
+    assert slots.price_basis == "extra_fvr_sale_prc"
+    assert slots.price_source_tool == "search_product_tool"
+    active_context = slots.availability_context["active_flow_context"]
+    assert active_context["product"]["goods_no"] == "G000000310126"
+    assert active_context["product"]["product_name"] == "벤투스 S2 AS"
+    assert active_context["product"]["tire_size"] == "245/45R19"
+    assert active_context["payment"]["extra_fvr_sale_prc"] == 180500
+    assert active_context["payment"]["price_basis"] == "extra_fvr_sale_prc"
+    assert active_context["payment"]["price_source_tool"] == "search_product_tool"
+
+
+def test_purchase_readthrough_uses_active_flow_context_when_pending_context_is_thin() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000310126",
+        tire_size="245/45R19",
+        ord_qty=4,
+        availability_context={
+            "pending_order_context": {
+                "goods_no": "G000000310126",
+                "tire_size": "245/45R19",
+                "ord_qty": 4,
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            },
+            "active_flow_context": {
+                "flow_type": "purchase",
+                "flow_step": "quantity_selected",
+                "status": "active",
+                "product": {
+                    "goods_no": "G000000310126",
+                    "product_name": "벤투스 S2 AS",
+                    "tire_model": "벤투스 S2 AS",
+                    "pending_product_name": "벤투스 S2 AS",
+                    "tire_size": "245/45R19",
+                    "ord_qty": 4,
+                },
+                "payment": {
+                    "extra_fvr_sale_prc": 180500,
+                    "price_basis": "extra_fvr_sale_prc",
+                    "price_source_tool": "search_product_tool",
+                },
+                "intent": {
+                    "pending_intent": "order",
+                    "goal_type": "place_order",
+                },
+            },
+        },
+    )
+
+    updated_slots, metadata = _apply_purchase_stock_canonical_readthrough(
+        slots=slots,
+        user_text="분당",
+        prev_tool_data=None,
+        current_slot_delta={"region": "분당"},
+    )
+
+    pending_context = updated_slots.availability_context["pending_order_context"]
+    assert metadata["flow_state_read_applied"] is True
+    assert metadata["flow_state_before"]["product_name"] == "벤투스 S2 AS"
+    assert pending_context["product_name"] == "벤투스 S2 AS"
+    assert pending_context["tire_model"] == "벤투스 S2 AS"
+    assert pending_context["pending_product_name"] == "벤투스 S2 AS"
+    assert pending_context["extra_fvr_sale_prc"] == 180500
+    assert pending_context["price_basis"] == "extra_fvr_sale_prc"
+    assert pending_context["price_source_tool"] == "search_product_tool"
+
+
+def test_final_persist_rehydrates_thin_pending_context_from_active_search_flow() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000310126",
+        tire_size="245/45R19",
+        ord_qty=4,
+        region="분당",
+        pending_intent="order",
+        goal_type="place_order",
+        availability_context={
+            "pending_order_context": {
+                "goods_no": "G000000310126",
+                "tire_size": "245/45R19",
+                "ord_qty": 4,
+                "region": "분당",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            },
+            "active_flow_context": {
+                "flow_type": "purchase",
+                "flow_step": "quantity_selected",
+                "status": "active",
+                "product": {
+                    "goods_no": "G000000310126",
+                    "product_name": "벤투스 S2 AS",
+                    "tire_model": "벤투스 S2 AS",
+                    "pending_product_name": "벤투스 S2 AS",
+                    "tire_size": "245/45R19",
+                    "ord_qty": 4,
+                },
+                "payment": {
+                    "extra_fvr_sale_prc": 180500,
+                    "price_basis": "extra_fvr_sale_prc",
+                    "price_source_tool": "search_product_tool",
+                },
+                "intent": {
+                    "pending_intent": "order",
+                    "goal_type": "place_order",
+                },
+            },
+        },
+    )
+
+    updated_slots, metadata = _finalize_purchase_stock_slots_for_persistence(
+        slots=slots,
+        prev_tool_data=None,
+    )
+
+    pending_context = updated_slots.availability_context["pending_order_context"]
+    assert metadata["final_persist_rehydrated"] is True
+    assert metadata["final_persist_invariant_missing_fields"] == []
+    assert pending_context["product_name"] == "벤투스 S2 AS"
+    assert pending_context["tire_model"] == "벤투스 S2 AS"
+    assert pending_context["pending_product_name"] == "벤투스 S2 AS"
+    assert pending_context["extra_fvr_sale_prc"] == 180500
+    assert pending_context["price_basis"] == "extra_fvr_sale_prc"
+    assert pending_context["price_source_tool"] == "search_product_tool"
+
+
 def test_compare_discount_mapper_uses_final_unit_price_without_cheapest_final_price() -> None:
     event = try_build_template(
         [
