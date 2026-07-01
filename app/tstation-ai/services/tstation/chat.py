@@ -16792,6 +16792,7 @@ def _resolved_transaction_product_from_search_tool(
         "product_name": resolved_product_name,
         "tire_size": tire_size,
         "pending_intent": pending_intent,
+        **_search_product_price_context(matched_rows[0]),
     }
 
 
