@@ -144,6 +144,7 @@ from services.tstation.policies.contract_required_tool_candidate import (
     _is_contract_required_vehicle_recommendation,
 )
 from services.tstation.executors.contract_required_tool_executor import (
+    _best_selling_general_fallback_input,
     _contract_annotation_metadata,
     _enrich_best_selling_result_for_product_cards,
     _recover_contract_required_store_flow_tool,
@@ -18302,6 +18303,20 @@ async def _recover_missing_best_seller_contract_tool_event(
             raw_result if isinstance(raw_result, dict) else qc_verifier.parse_tool_output(raw_result) or {}
         )
         best_selling_result = _enrich_best_selling_result_for_product_cards(best_selling_result)
+        fallback_input = _best_selling_general_fallback_input(tool_input, best_selling_result)
+        if fallback_input is not None:
+            fallback_raw_result = await asyncio.to_thread(_best_selling_tool.invoke, fallback_input)
+            fallback_result = (
+                fallback_raw_result
+                if isinstance(fallback_raw_result, dict)
+                else qc_verifier.parse_tool_output(fallback_raw_result) or {}
+            )
+            fallback_result = _enrich_best_selling_result_for_product_cards(fallback_result)
+            fallback_data = fallback_result.get("data") if isinstance(fallback_result, Mapping) else None
+            fallback_items = fallback_data.get("items") if isinstance(fallback_data, Mapping) else None
+            if isinstance(fallback_items, list) and fallback_items:
+                tool_input = fallback_input
+                best_selling_result = fallback_result
     except Exception as exc:
         logger.exception("[BEST_SELLER] contract recovery failed for input=%s", tool_input)
         best_selling_result = {
@@ -30720,6 +30735,16 @@ class TStationChatServiceV2:
                 raw_result = await asyncio.to_thread(_best_selling_tool.invoke, tool_input)
                 best_selling_result = _tool_result_dict(raw_result)
                 best_selling_result = _enrich_best_selling_result_for_product_cards(best_selling_result)
+                fallback_input = _best_selling_general_fallback_input(tool_input, best_selling_result)
+                if fallback_input is not None:
+                    fallback_raw_result = await asyncio.to_thread(_best_selling_tool.invoke, fallback_input)
+                    fallback_result = _tool_result_dict(fallback_raw_result)
+                    fallback_result = _enrich_best_selling_result_for_product_cards(fallback_result)
+                    fallback_data = fallback_result.get("data") if isinstance(fallback_result, Mapping) else None
+                    fallback_items = fallback_data.get("items") if isinstance(fallback_data, Mapping) else None
+                    if isinstance(fallback_items, list) and fallback_items:
+                        tool_input = fallback_input
+                        best_selling_result = fallback_result
             except Exception as exc:
                 logger.exception("[BEST_SELLER] get_best_selling_products_tool failed for input=%s", tool_input)
                 best_selling_result = {

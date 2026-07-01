@@ -37,6 +37,32 @@ def _enrich_best_selling_result_for_product_cards(tool_result: dict) -> dict:
     return enriched_result
 
 
+def _best_selling_general_fallback_input(
+    tool_input: Mapping[str, Any],
+    tool_result: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Return a general best-seller retry input when a vehicle-scoped lookup has no cards."""
+    original_vehicle_query = str(tool_input.get("vehicle_query") or "").strip()
+    if not original_vehicle_query:
+        return None
+    data = tool_result.get("data") if isinstance(tool_result, Mapping) else None
+    if not isinstance(data, Mapping):
+        return None
+    status = str(data.get("status") or "").strip().lower()
+    if status not in {"resolved_no_order_data", "no_order_data"}:
+        return None
+    items = data.get("items")
+    if isinstance(items, list) and items:
+        return None
+    fallback_input = {
+        str(key): value
+        for key, value in dict(tool_input).items()
+        if key != "vehicle_query" and value not in (None, "", [], {})
+    }
+    fallback_input.setdefault("limit", 5)
+    return fallback_input
+
+
 def _contract_annotation_metadata(event_data: dict[str, Any]) -> dict[str, Any]:
     metadata = event_data.get("metadata")
     if isinstance(metadata, dict):
@@ -329,6 +355,27 @@ async def recover_blocked_fast_path_to_contract_tool(
             tool_result = {"status": "error", "http_status": None, "message": "Invalid tool response", "data": {}}
         if preferred_tool == "get_best_selling_products_tool":
             tool_result = _enrich_best_selling_result_for_product_cards(tool_result)
+            fallback_input = _best_selling_general_fallback_input(tool_input, tool_result)
+            if fallback_input is not None:
+                fallback_raw_result = await asyncio.to_thread(tool.invoke, fallback_input)
+                fallback_tool_result = (
+                    fallback_raw_result
+                    if isinstance(fallback_raw_result, dict)
+                    else qc_verifier.parse_tool_output(fallback_raw_result)
+                )
+                if not isinstance(fallback_tool_result, dict):
+                    fallback_tool_result = {
+                        "status": "error",
+                        "http_status": None,
+                        "message": "Invalid tool response",
+                        "data": {},
+                    }
+                fallback_tool_result = _enrich_best_selling_result_for_product_cards(fallback_tool_result)
+                fallback_data = fallback_tool_result.get("data") if isinstance(fallback_tool_result, Mapping) else None
+                fallback_items = fallback_data.get("items") if isinstance(fallback_data, Mapping) else None
+                if isinstance(fallback_items, list) and fallback_items:
+                    tool_input = fallback_input
+                    tool_result = fallback_tool_result
         if preferred_tool == "search_product_tool":
             assistant_text = f"{str(tool_input.get('keyword') or '상품')} 상품을 확인했어요."
         elif preferred_tool == "get_product_description_tool":

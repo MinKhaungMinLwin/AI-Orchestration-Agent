@@ -37730,6 +37730,80 @@ def test_recover_missing_best_seller_contract_tool_event_runs_tool_and_returns_p
     assert event["assistant_response_source"] == "code_best_seller_contract_recovery"
 
 
+def test_vehicle_best_seller_no_order_data_retries_general_best_sellers() -> None:
+    contract = build_turn_contract(
+        user_text="아반떼에 제일 많이 팔린 타이어가 뭐야?",
+        intent_frame=IntentFrame(
+            domain=PolicyDomain.DISCOVERY,
+            intent="product_search",
+            sub_intent="best_seller_search",
+            entities={"vehicle_query": "아반떼"},
+        ),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.CARD,
+            template=TemplateName.PRODUCT,
+            metadata={"response_shape_key": "best_seller_product_cards"},
+        ),
+        routing_result=_routing_result(domains=[MultiAgentDomain.Domain.DISCOVERY]),
+    )
+    calls: list[dict[str, Any]] = []
+
+    def _fake_invoke(args: dict[str, Any]) -> dict[str, Any]:
+        calls.append(dict(args))
+        if args.get("vehicle_query"):
+            return {
+                "status": "success",
+                "data": {
+                    "status": "resolved_no_order_data",
+                    "vehicle_query": args["vehicle_query"],
+                    "items": [],
+                    "fallback_options": [{"label": "전체 베스트셀러 보기"}],
+                },
+            }
+        return {
+            "status": "success",
+            "data": {
+                "status": "success",
+                "items": [
+                    {
+                        "goods_no": "G0002",
+                        "goods_nm": "키너지 EX",
+                        "tire_size_1": "205/55R16",
+                        "sale_prc": 120000,
+                    }
+                ],
+            },
+        }
+
+    async def _fake_to_thread(func: Any, *args: Any, **kwargs: Any) -> Any:
+        return func(*args, **kwargs)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(
+        discovery_tools,
+        "get_best_selling_products_tool",
+        SimpleNamespace(invoke=_fake_invoke),
+    )
+    monkeypatch.setattr(chat_module.asyncio, "to_thread", _fake_to_thread)
+    try:
+        event = asyncio.run(
+            _recover_missing_best_seller_contract_tool_event(
+                user_text="아반떼에 제일 많이 팔린 타이어가 뭐야?",
+                turn_contract=contract,
+            )
+        )
+    finally:
+        monkeypatch.undo()
+
+    assert calls == [
+        {"limit": 5, "vehicle_query": "아반떼"},
+        {"limit": 5},
+    ]
+    assert event is not None
+    assert event["template"] == "product"
+    assert event["data"]["products"][0]["title"] == "키너지 EX 205/55R16"
+
+
 def test_best_seller_contract_dispatch_runs_without_explicit_period_or_router_bias() -> None:
     contract = build_turn_contract(
         user_text="gv70에 가장 많이 팔린 타이어",
