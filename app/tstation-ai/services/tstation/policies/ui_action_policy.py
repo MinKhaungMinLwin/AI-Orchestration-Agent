@@ -15,8 +15,8 @@ from typing import Any, Awaitable, Callable, Mapping
 
 from schemas.tstation.slots import ConversationSlots
 from services.tstation.policies.intent_frame import IntentFrame, PolicyDomain
-from services.tstation.policies.transaction_intent_policy import build_transaction_intent_frame, plan_transaction_tools
-from services.tstation.policies.transaction_response_policy import decide_transaction_response
+from services.tstation.policies.response_decision import ResponseDecision, ResponseShape, TemplateName, ToolPlan
+from services.tstation.policies.transaction_intent_policy import build_transaction_intent_frame
 from services.tstation.policies.turn_contract import build_turn_contract
 from services.tstation.policies.discovery_intent_policy import build_discovery_intent_frame, normalize_tire_size
 from services.tstation.policies.cta_registry import cta_trace_metadata, normalize_quickreply_ctas
@@ -5219,11 +5219,25 @@ def build_pure_inventory_stock_contract(
         or str(frame.known_slots.get("stock_check_mode") or "") != "inventory_only"
     ):
         return None
-    tool_plan = plan_transaction_tools(frame)
-    response_decision = decide_transaction_response(
-        intent=frame.intent,
-        user_text="재고 있어?" if is_quantity_only_stock_followup_text(user_text) else user_text,
-        known_slots=dict(frame.known_slots),
+    tool_plan = ToolPlan(
+        allowed_tools=("get_store_inventory_tool", "get_logistics_inventory_tool", "get_store_schedule_tool"),
+        preferred_tool="get_store_inventory_tool",
+        forbidden_tools=("quick_order_tool",),
+        tool_args_patch={
+            "goods_no": filtered_known_slots.get("goods_no"),
+            "ord_qty": filtered_known_slots.get("ord_qty") or filtered_known_slots.get("quantity"),
+            "shop_id": filtered_known_slots.get("shop_id"),
+            "shop_name": filtered_known_slots.get("shop_name"),
+            "stock_check_mode": "inventory_only",
+        },
+        metadata={"response_intent": "stock_store_search", "flow_step": "show_schedule"},
+    )
+    response_decision = ResponseDecision(
+        response_shape=ResponseShape.DATE_PICK,
+        template=TemplateName.DATE_PICK,
+        forbidden_behaviors=("preorder_for_pure_inventory_flow",),
+        assistant_guidance="단일 매장 오늘 장착 문의는 재고 tier를 확인한 뒤 가장 빠른 장착 가능 시간을 datepick으로 안내한다.",
+        metadata={"response_shape_key": "stock_store_schedule", "stock_check_mode": "inventory_only"},
     )
     return build_turn_contract(
         user_text=user_text,

@@ -124,6 +124,8 @@ from services.tstation.chat import (
     _is_pure_inventory_stock_ready,
     _is_quantity_only_stock_followup_text,
     _build_pure_inventory_stock_contract,
+    _apply_pure_inventory_datepick_context,
+    _pure_inventory_store_stock_tier,
     _external_price_search_results_from_sources,
     _build_product_description_quickreply_event,
     _build_multi_product_detail_quickreply_event,
@@ -36251,17 +36253,94 @@ def test_pure_inventory_quantity_followup_contract_preserves_inventory_only_tool
     assert contract.known_slots["stock_check_mode"] == "inventory_only"
     assert "get_store_inventory_tool" in contract.allowed_tools
     assert "get_logistics_inventory_tool" in contract.allowed_tools
+    assert "get_store_schedule_tool" in contract.allowed_tools
+    assert contract.response_decision["template"] == "datepick"
 
     allowed, reason = _direct_code_fast_path_contract_gate(
         turn_contract=contract,
         intent="stock_store_search",
-        template="quickReply",
+        template="datepick",
         source="code_pure_inventory_stock_resolver",
-        required_tools=("get_store_inventory_tool", "get_logistics_inventory_tool"),
+        required_tools=("get_store_inventory_tool", "get_store_schedule_tool"),
     )
 
     assert allowed is True
     assert reason == "contract_matched:code_pure_inventory_stock_resolver"
+
+
+def test_pure_inventory_datepick_context_uses_single_message_and_other_store_cta() -> None:
+    mapped_event = try_build_template(
+        [
+            {
+                "tool": "get_store_inventory_tool",
+                "args": {
+                    "goods_list": [{"goodsNo": "G000000310126", "qty": "2"}],
+                    "shop_id_list": [{"shopId": "F07782"}],
+                },
+                "data": {"status": "success", "data": {"todayShopArray": [], "tnaShopArray": [{"shopId": "F07782"}]}},
+            },
+            {
+                "tool": "get_store_schedule_tool",
+                "args": {"shop_id": "F07782", "mode": "tna_only"},
+                "data": {
+                    "status": "success",
+                    "data": {
+                        "shop_id": "F07782",
+                        "shop_nm": "티스테이션 한남점",
+                        "mode": "tna_only",
+                        "is_installable": True,
+                        "slots": [{"cal_day": "20260702", "tm": "0900"}],
+                    },
+                },
+            },
+        ],
+        "한남점에서 가장 빨리 장착 가능한 날짜입니다. 예약 시간을 선택해 주세요.",
+    )
+
+    assert mapped_event is not None
+    event = _apply_pure_inventory_datepick_context(
+        mapped_event,
+        store_name="티스테이션 한남점",
+        store_context={
+            "shopId": "F07782",
+            "shopName": "티스테이션 한남점",
+            "xpos": 127.0,
+            "ypos": 37.0,
+        },
+        ord_qty=2,
+        tire_size="245/45R19",
+        goods_no="G000000310126",
+        stock_check_mode="tna_only",
+    )
+
+    data = event["data"]
+    metadata = data["metadata"]
+    replies = data["quickReplies"]
+    assert event["template"] == "datepick"
+    assert data["assistantResponse"] == "한남점에서 가장 빨리 장착 가능한 날짜입니다. 예약 시간을 선택해 주세요."
+    assert _labels(replies) == ["다른 매장 찾기"]
+    assert replies[0]["actionId"] == "search_other_store"
+    assert replies[0]["metadata"]["currentStoreContext"]["shopId"] == "F07782"
+    assert metadata["ctaContext"]["currentStoreContext"]["shopId"] == "F07782"
+    assert metadata["ctaContext"]["goodsNo"] == "G000000310126"
+
+
+def test_pure_inventory_stock_tier_separates_today_and_tna() -> None:
+    assert _pure_inventory_store_stock_tier(
+        {"status": "success", "data": {"todayShopArray": [{"shopId": "F07782"}], "tnaShopArray": []}},
+        shop_id="F07782",
+        requested_qty=2,
+    ) == "today_only"
+    assert _pure_inventory_store_stock_tier(
+        {"status": "success", "data": {"todayShopArray": [], "tnaShopArray": [{"shopId": "F07782"}]}},
+        shop_id="F07782",
+        requested_qty=2,
+    ) == "tna_only"
+    assert _pure_inventory_store_stock_tier(
+        {"status": "success", "data": {"todayShopArray": [], "tnaShopArray": []}},
+        shop_id="F07782",
+        requested_qty=2,
+    ) == ""
 
 
 def test_pure_inventory_stock_event_mentions_logistics_date_without_emitting_datepick() -> None:
