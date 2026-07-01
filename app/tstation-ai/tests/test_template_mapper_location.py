@@ -2201,6 +2201,23 @@ def test_tc044_unsized_sound_absorber_uses_deterministic_summary_when_results_ex
     ]
 
 
+def test_tc044_unsized_sound_absorber_recommendation_uses_catalog_summary_without_technology_explanation() -> None:
+    text = "흡음재 타이어 추천"
+    current_user_text.set(text)
+    current_discovery_response_decision.set(decide_discovery_response(build_discovery_intent_frame(text)))
+
+    result = try_build_template(
+        [_sound_absorber_recommendation_entry()],
+        "조건에 맞는 추천 상품을 안내드릴게요.",
+    )
+
+    assert result is not None
+    assert result["template"] == "quickReply"
+    assistant_response = result["data"]["assistantResponse"]
+    assert "흡음재는 타이어 내부에 부착해 주행 중 노면 소음을 줄여주는 소재예요." not in assistant_response
+    assert "사이즈가 아직 확인되지 않아 타이어 기준으로 안내드릴게요." in assistant_response
+
+
 def test_safe_service_unsized_question_uses_service_intro_and_product_names() -> None:
     text = "안심서비스 가능한 타이어는?"
     current_user_text.set(text)
