@@ -7946,23 +7946,32 @@ def _build_direct_preorder_event_from_slots(
     if ord_qty <= 0:
         return None
 
-    datepick_slots = datepick_slot_values_from_data(latest_datepick_tmpl) or {}
-    preorder_slots = preorder_slot_values_from_data(latest_preorder_tmpl) or {}
-    template_boundary = (
-        latest_preorder_tmpl.get("data")
-        if isinstance(latest_preorder_tmpl, Mapping) and isinstance(latest_preorder_tmpl.get("data"), Mapping)
-        else latest_datepick_tmpl.get("data")
-        if isinstance(latest_datepick_tmpl, Mapping) and isinstance(latest_datepick_tmpl.get("data"), Mapping)
+    active_flow_context = (
+        availability_context.get("active_flow_context")
+        if isinstance(availability_context.get("active_flow_context"), Mapping)
         else {}
     )
-    boundary_values = canonical_context_from_template_boundary(template_boundary)
+    active_flow_product = (
+        active_flow_context.get("product")
+        if isinstance(active_flow_context.get("product"), Mapping)
+        else {}
+    )
+    active_flow_payment = (
+        active_flow_context.get("payment")
+        if isinstance(active_flow_context.get("payment"), Mapping)
+        else {}
+    )
     product_name = (
         str(slot_values.get("tire_model") or "").strip()
         or str(slot_values.get("product_name") or "").strip()
-        or str(datepick_slots.get("tire_model") or "").strip()
-        or str(preorder_slots.get("tire_model") or "").strip()
+        or str(slot_values.get("pending_product_name") or "").strip()
         or str(pending_order_context.get("product_name") or "").strip()
-        or str(boundary_values.get("product_name") or "").strip()
+        or str(pending_order_context.get("tire_model") or "").strip()
+        or str(active_flow_product.get("product_name") or "").strip()
+        or str(active_flow_product.get("tire_model") or "").strip()
+        or str(active_flow_product.get("goods_nm") or "").strip()
+        or str(active_flow_context.get("product_name") or "").strip()
+        or str(active_flow_context.get("tire_model") or "").strip()
     )
     product_label = f"{product_name} {tire_size}".strip() if product_name else tire_size
 
@@ -7973,19 +7982,24 @@ def _build_direct_preorder_event_from_slots(
     payment_amount_source = None
     if payment_amount in (None, "", 0):
         payment_amount = (
-            datepick_slots.get("payment_amount")
-            or preorder_slots.get("payment_amount")
-            or pending_order_context.get("payment_amount")
+            pending_order_context.get("payment_amount")
+            or active_flow_payment.get("payment_amount")
+            or active_flow_context.get("payment_amount")
         )
         price_basis = (
-            datepick_slots.get("price_basis")
-            or preorder_slots.get("price_basis")
-            or pending_order_context.get("price_basis")
+            pending_order_context.get("price_basis")
+            or active_flow_payment.get("price_basis")
+            or active_flow_context.get("price_basis")
         )
         price_source_tool = (
-            datepick_slots.get("price_source_tool")
-            or preorder_slots.get("price_source_tool")
-            or pending_order_context.get("price_source_tool")
+            pending_order_context.get("price_source_tool")
+            or active_flow_payment.get("price_source_tool")
+            or active_flow_context.get("price_source_tool")
+        )
+        payment_amount_source = (
+            pending_order_context.get("payment_amount_source")
+            or active_flow_payment.get("payment_amount_source")
+            or active_flow_context.get("payment_amount_source")
         )
     if payment_amount in (None, "", 0) and isinstance(pending_order_context, Mapping):
         context_payment_details = _preview_payment_details(
@@ -7998,6 +8012,22 @@ def _build_direct_preorder_event_from_slots(
             price_basis = context_payment_details.get("price_basis")
             price_source_tool = (
                 pending_order_context.get("price_source_tool")
+                or context_payment_details.get("price_source_tool")
+            )
+            payment_amount_source = context_payment_details.get("payment_amount_source")
+            payment_amount_missing_reason = context_payment_details.get("payment_amount_missing_reason")
+    if payment_amount in (None, "", 0) and isinstance(active_flow_payment, Mapping):
+        context_payment_details = _preview_payment_details(
+            active_flow_payment,
+            ord_qty=ord_qty,
+            payment_amount_source="active_flow_context.payment.unit_price",
+        )
+        if context_payment_details.get("payment_amount") not in (None, "", 0):
+            payment_amount = context_payment_details.get("payment_amount")
+            price_basis = context_payment_details.get("price_basis")
+            price_source_tool = (
+                active_flow_payment.get("price_source_tool")
+                or active_flow_context.get("price_source_tool")
                 or context_payment_details.get("price_source_tool")
             )
             payment_amount_source = context_payment_details.get("payment_amount_source")

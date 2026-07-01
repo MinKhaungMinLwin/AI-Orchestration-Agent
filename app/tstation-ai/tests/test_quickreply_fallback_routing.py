@@ -34887,6 +34887,45 @@ def test_direct_preorder_event_recovers_product_and_payment_from_pending_order_c
     assert event["data"]["metadata"]["missingPreorderContext"] == []
 
 
+def test_direct_preorder_event_does_not_recover_product_or_payment_from_template_payload() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000310126",
+        tire_size="245/45R19",
+        ord_qty=2,
+        shop_id="F07782",
+        shop_name="티스테이션 한남점",
+        requested_cal_day="20260623",
+        rsv_hour="17",
+        pending_intent="order",
+        goal_type="place_order",
+    )
+
+    event = _build_direct_preorder_event_from_slots(
+        slots,
+        latest_preorder_tmpl={
+            "data": {
+                "orderInfo": {
+                    "product": "템플릿 상품명 245/45R19",
+                    "paymentAmount": 999999,
+                },
+                "metadata": {
+                    "productName": "템플릿 상품명",
+                    "paymentAmount": 999999,
+                    "priceBasis": "template_amount",
+                    "priceSourceTool": "template_mapper",
+                },
+            }
+        },
+    )
+
+    assert event is not None
+    assert event["data"]["orderInfo"]["product"] == "245/45R19"
+    assert event["data"]["orderInfo"]["paymentAmount"] is None
+    assert event["data"]["metadata"]["productName"] == "245/45R19"
+    assert event["data"]["metadata"]["paymentAmount"] is None
+    assert event["data"]["metadata"]["missingPreorderContext"] == ["product_name", "payment_amount"]
+
+
 def test_direct_preorder_event_recovers_payment_from_latest_preview_tool_result() -> None:
     slots = ConversationSlots(
         goods_no="G000000310126",
