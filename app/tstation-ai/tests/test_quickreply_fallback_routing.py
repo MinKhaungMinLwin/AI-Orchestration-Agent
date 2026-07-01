@@ -113,6 +113,7 @@ from services.tstation.chat import (
     _post_tool_purchase_preview_contract_context,
     _apply_product_search_contract_size,
     _promote_single_turn_purchase_contract_from_search_product,
+    _promote_single_turn_stock_preview_from_search_product,
     _promote_single_turn_stock_inventory_from_search_product,
     _quantity_benefit_continuation_frame_from_pending,
     _final_price_from_row,
@@ -34051,6 +34052,64 @@ def test_promote_single_turn_purchase_contract_from_search_product_clears_invent
     assert "stock_check_mode" not in promoted_slots.model_dump(exclude_none=True)
     assert "stock_check_mode" not in promoted_frame.known_slots
     assert promoted_tool_plan.metadata["flow_step"] == "resolve_store"
+
+
+def test_post_search_stock_preview_becomes_single_store_availability_ready() -> None:
+    promoted = _promote_single_turn_stock_preview_from_search_product(
+        user_text="벤투스 s2 as 2454519 2개 한남점에서 오늘 장착 가능해?",
+        tool_result={
+            "data": {
+                "items": [
+                    {
+                        "goods_no": "G000000310126",
+                        "goods_nm": "벤투스 S2 AS",
+                        "tire_size_1": "245/45R19",
+                    }
+                ]
+            }
+        },
+        merged_slots=ConversationSlots(
+            tire_model="벤투스 S2 AS",
+            tire_size="245/45R19",
+            ord_qty=2,
+            shop_name="한남점",
+            availability_intent="today_install",
+            requested_cal_day="20260702",
+            pending_intent="order",
+            goal_type="place_order",
+            stock_check_mode="preview",
+        ),
+        routing_result=SimpleNamespace(
+            execution_plan=["discovery:resolve_or_describe_product", "transaction:stock_store_or_reservation"]
+        ),
+    )
+
+    assert promoted is not None
+    promoted_slots, promoted_frame, _tool_plan, _decision = promoted
+    assert promoted_slots.goods_no == "G000000310126"
+    assert promoted_frame.known_slots["goods_no"] == "G000000310126"
+    assert promoted_frame.known_slots["shop_name"] == "한남점"
+    assert promoted_frame.known_slots["availability_intent"] == "today_install"
+    assert promoted_frame.known_slots["stock_check_mode"] == "preview"
+    assert _single_store_availability_ready(promoted_slots) is True
+
+    schedule_contract = _build_single_store_availability_schedule_contract(
+        base_contract=None,
+        known_slots=promoted_frame.known_slots,
+        shop_id="",
+        stock_check_mode="preview",
+        source="post_search_product_single_store_availability",
+    )
+    allowed, reason = _direct_code_fast_path_contract_gate(
+        turn_contract=schedule_contract,
+        intent="stock_store_search",
+        template="datepick",
+        source="code_post_search_single_store_availability",
+        required_tools=("get_store_list_tool", "get_store_inventory_tool", "get_store_schedule_tool"),
+    )
+
+    assert allowed is True
+    assert reason == "contract_matched:code_post_search_single_store_availability"
 
 
 def test_promote_single_turn_stock_inventory_from_search_product_runs_region_lookup_contract() -> None:

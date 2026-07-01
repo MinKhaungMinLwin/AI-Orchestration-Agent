@@ -38239,6 +38239,26 @@ class TStationChatServiceV2:
                             promoted_frame.known_slots.get("stock_check_mode"),
                             promoted_tool_plan.preferred_tool,
                         )
+                        if _single_store_availability_ready(pending_slots):
+                            schedule_contract = _build_single_store_availability_schedule_contract(
+                                base_contract=turn_contract,
+                                known_slots=promoted_frame.known_slots,
+                                shop_id=str(promoted_frame.known_slots.get("shop_id") or ""),
+                                stock_check_mode=str(promoted_frame.known_slots.get("stock_check_mode") or "preview"),
+                                source="post_search_product_single_store_availability",
+                            )
+                            logger.info(
+                                "[TURN_CONTRACT] post-search single-store availability resolver "
+                                "stock_check_mode=%s allowed_tools=%s",
+                                schedule_contract.known_slots.get("stock_check_mode"),
+                                tuple(schedule_contract.allowed_tools or ()),
+                            )
+                            async for chunk in TStationChatServiceV2._stream_pure_inventory_stock_response(
+                                pending_slots,
+                                turn_contract=schedule_contract,
+                            ):
+                                yield chunk
+                            return
 
                     coupon_decision = await _get_coupon_gate_decision()
                     if (
