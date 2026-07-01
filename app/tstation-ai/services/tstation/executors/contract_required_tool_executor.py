@@ -363,10 +363,18 @@ def _single_registered_vehicle_match(
     *,
     anchor: str,
 ) -> dict[str, Any] | None:
-    matches = [row for row in _tool_rows(tool_result) if _registered_vehicle_anchor_matches(row, anchor)]
+    matches = _registered_vehicle_matches(tool_result, anchor=anchor)
     if len(matches) != 1:
         return None
     return matches[0]
+
+
+def _registered_vehicle_matches(
+    tool_result: Mapping[str, Any],
+    *,
+    anchor: str,
+) -> list[dict[str, Any]]:
+    return [row for row in _tool_rows(tool_result) if _registered_vehicle_anchor_matches(row, anchor)]
 
 
 def _registered_vehicle_recommendation_input(
@@ -393,11 +401,23 @@ def _registered_vehicle_recommendation_input(
     return {key: value for key, value in tool_input.items() if value not in (None, "", [], {})}
 
 
+def _registered_vehicle_general_recommendation_input(*, turn_contract: TurnContract) -> dict[str, Any] | None:
+    tool_input = {
+        str(key): value
+        for key, value in dict(getattr(turn_contract, "tool_args_patch", {}) or {}).items()
+        if value not in (None, "", [], {})
+    }
+    for key in ("car_lnc_cd", "carLncCd", "vehicle_type", "vehicleType", "vehicle_query"):
+        tool_input.pop(key, None)
+    tool_input.setdefault("rcmd_type", "tstation")
+    return {key: value for key, value in tool_input.items() if value not in (None, "", [], {})}
+
+
 async def _maybe_run_registered_vehicle_recommendation(
     *,
     turn_contract: TurnContract,
     car_tool_result: Mapping[str, Any],
-) -> tuple[dict[str, Any], dict[str, Any]] | None:
+) -> tuple[dict[str, Any], dict[str, Any], str] | None:
     known_slots = turn_contract.known_slots or {}
     anchor = str(known_slots.get("named_registered_vehicle_anchor") or "").strip()
     if not anchor:
@@ -407,15 +427,22 @@ async def _maybe_run_registered_vehicle_recommendation(
     recommendation_tool = "get_products_recommendations_tool"
     if recommendation_tool not in allowed_tools or recommendation_tool in forbidden_tools:
         return None
-    vehicle_row = _single_registered_vehicle_match(car_tool_result, anchor=anchor)
-    if vehicle_row is None:
+    matches = _registered_vehicle_matches(car_tool_result, anchor=anchor)
+    if len(matches) > 1:
         return None
-    recommendation_input = _registered_vehicle_recommendation_input(
-        turn_contract=turn_contract,
-        vehicle_row=vehicle_row,
-    )
-    if not (recommendation_input.get("tire_size") or recommendation_input.get("car_lnc_cd")):
-        return None
+    recovery_reason = "registered_vehicle_direct_recommendation"
+    if len(matches) == 1:
+        recommendation_input = _registered_vehicle_recommendation_input(
+            turn_contract=turn_contract,
+            vehicle_row=matches[0],
+        )
+        if not (recommendation_input.get("tire_size") or recommendation_input.get("car_lnc_cd")):
+            return None
+    else:
+        recommendation_input = _registered_vehicle_general_recommendation_input(turn_contract=turn_contract)
+        if not recommendation_input:
+            return None
+        recovery_reason = "registered_vehicle_no_match_general_recommendation"
     from services.tstation.agents.b_discovery_agent.tools import get_products_recommendations_tool
 
     raw_result = await asyncio.to_thread(get_products_recommendations_tool.invoke, recommendation_input)
@@ -427,7 +454,7 @@ async def _maybe_run_registered_vehicle_recommendation(
             "message": "Invalid tool response",
             "data": {},
         }
-    return recommendation_input, recommendation_result
+    return recommendation_input, recommendation_result, recovery_reason
 
 
 async def recover_blocked_fast_path_to_contract_tool(
@@ -507,6 +534,7 @@ async def recover_blocked_fast_path_to_contract_tool(
         chained_tool_name = ""
         chained_tool_input: dict[str, Any] = {}
         chained_tool_result: dict[str, Any] = {}
+        chained_recovery_reason = ""
         if preferred_tool == "get_my_cars_tool":
             chained_recommendation = await _maybe_run_registered_vehicle_recommendation(
                 turn_contract=turn_contract,
@@ -514,7 +542,7 @@ async def recover_blocked_fast_path_to_contract_tool(
             )
             if chained_recommendation is not None:
                 chained_tool_name = "get_products_recommendations_tool"
-                chained_tool_input, chained_tool_result = chained_recommendation
+                chained_tool_input, chained_tool_result, chained_recovery_reason = chained_recommendation
         if preferred_tool == "search_product_tool":
             assistant_text = f"{str(tool_input.get('keyword') or '상품')} 상품을 확인했어요."
         elif preferred_tool == "get_product_description_tool":
@@ -597,7 +625,7 @@ async def recover_blocked_fast_path_to_contract_tool(
         blocked_fast_path_source=blocked_fast_path_source,
         recovered_tool=chained_tool_name or preferred_tool,
         recovery_reason=(
-            "registered_vehicle_direct_recommendation"
+            chained_recovery_reason
             if chained_tool_name
             else "fast_path_blocked_but_contract_tool_executable"
         ),

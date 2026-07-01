@@ -196,3 +196,80 @@ def test_registered_vehicle_direct_executor_runs_car_lookup_then_recommendation(
     assert calls[1][1]["vehicle_type"] == "passenger"
     assert calls[1][1]["rcmd_type"] == "low_vibration"
     assert recovery["event"]["template"] == "product"
+
+
+def test_registered_vehicle_direct_executor_falls_back_to_general_recommendation_when_no_match(monkeypatch) -> None:
+    from services.tstation.agents.b_discovery_agent import tools as discovery_tools
+    from services.tstation import template_mapper
+    from services.tstation.executors import contract_required_tool_executor as executor
+
+    calls: list[tuple[str, dict]] = []
+
+    def fake_tool_invoke(tool, tool_input: dict):
+        if tool.name == "get_my_cars_tool":
+            calls.append(("get_my_cars_tool", dict(tool_input)))
+            return {
+                "status": "success",
+                "data": {
+                    "items": [
+                        {
+                            "car_mdl_nm": "폭스바겐 제타",
+                            "tire_size_fr": "2254517",
+                            "car_lnc_cd": "W036270",
+                            "vehicle_type": "passenger",
+                        }
+                    ]
+                },
+            }
+        if tool.name == "get_products_recommendations_tool":
+            calls.append(("get_products_recommendations_tool", dict(tool_input)))
+            return {"status": "success", "data": {"items": [{"goods_no": "G2", "goods_nm": "Popular Tire"}]}}
+        raise AssertionError(f"unexpected tool: {tool.name}")
+
+    def fake_template(tool_data_list: list[dict], assistant_text: str):
+        assert [entry["tool"] for entry in tool_data_list] == [
+            "get_my_cars_tool",
+            "get_products_recommendations_tool",
+        ]
+        return {
+            "type": "data",
+            "template": "product",
+            "data": {"assistantResponse": assistant_text, "products": []},
+        }
+
+    async def fake_to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    monkeypatch.setattr(type(discovery_tools.get_my_cars_tool), "invoke", fake_tool_invoke)
+    monkeypatch.setattr(template_mapper, "try_build_template", fake_template)
+    monkeypatch.setattr(executor.asyncio, "to_thread", fake_to_thread)
+
+    contract = TurnContract(
+        domain="discovery",
+        intent="product_recommendation",
+        sub_intent="vehicle_resolved_recommendation",
+        known_slots={"named_registered_vehicle_anchor": "아반떼"},
+        allowed_tools=("get_my_cars_tool", "get_products_recommendations_tool"),
+        preferred_tool="get_my_cars_tool",
+        tool_args_patch={"rcmd_type": "tstation"},
+        response_decision={"template": "product", "metadata": {"response_shape_key": "vehicle_resolved_recommendation"}},
+    )
+
+    recovery = asyncio.run(
+        _recover_contract_required_tool(
+            turn_contract=contract,
+            user_text="아반떼에 제일 인기 있는 타이어가 뭐야",
+            merged_slots=None,
+            blocked_fast_path_source="contract_direct_executor:registered_vehicle_recommendation",
+            member_no="M123",
+        )
+    )
+
+    assert recovery is not None
+    assert recovery["tool_name"] == "get_products_recommendations_tool"
+    assert calls[0] == ("get_my_cars_tool", {"mbr_no": "M123"})
+    assert calls[1] == ("get_products_recommendations_tool", {"rcmd_type": "tstation"})
+    assert "tire_size" not in calls[1][1]
+    assert "car_lnc_cd" not in calls[1][1]
+    assert recovery["event"]["template"] == "product"
+    assert recovery["event"]["recovery_reason"] == "registered_vehicle_no_match_general_recommendation"
