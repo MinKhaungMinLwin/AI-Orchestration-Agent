@@ -7712,6 +7712,31 @@ def _preview_payment_metadata(
     }
 
 
+def _search_product_price_context(price_data: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(price_data, Mapping):
+        return {}
+    values: dict[str, Any] = {}
+    for key in (
+        "cheapest_final_prc",
+        "final_unit_price",
+        "final_prc",
+        "final_price",
+        "finalPrice",
+        "extra_fvr_sale_prc",
+        "sale_prc",
+        "price",
+    ):
+        value = price_data.get(key)
+        if value not in (None, "", [], {}):
+            values[key] = value
+    unit_price, price_basis = _preview_price_unit_and_basis(price_data)
+    if unit_price is not None and price_basis:
+        values.setdefault(price_basis, unit_price)
+        values["price_basis"] = price_basis
+        values["price_source_tool"] = "search_product_tool"
+    return values
+
+
 def _coerce_order_summary_quickreply_to_preorder(
     event: dict,
     slot_state: Any | None,
@@ -7967,6 +7992,21 @@ def _build_direct_preorder_event_from_slots(
             or preorder_slots.get("price_source_tool")
             or pending_order_context.get("price_source_tool")
         )
+    if payment_amount in (None, "", 0) and isinstance(pending_order_context, Mapping):
+        context_payment_details = _preview_payment_details(
+            pending_order_context,
+            ord_qty=ord_qty,
+            payment_amount_source="pending_order_context.unit_price",
+        )
+        if context_payment_details.get("payment_amount") not in (None, "", 0):
+            payment_amount = context_payment_details.get("payment_amount")
+            price_basis = context_payment_details.get("price_basis")
+            price_source_tool = (
+                pending_order_context.get("price_source_tool")
+                or context_payment_details.get("price_source_tool")
+            )
+            payment_amount_source = context_payment_details.get("payment_amount_source")
+            payment_amount_missing_reason = context_payment_details.get("payment_amount_missing_reason")
     if (
         payment_amount in (None, "", 0)
         and goods_no
@@ -17751,6 +17791,7 @@ def _product_flow_values_from_resolved_search(
         "goal_type": goal_type,
         "stock_check_mode": stock_check_mode,
         **store_values,
+        **_search_product_price_context(resolved_row),
     }
     return {key: value for key, value in values.items() if value not in (None, "", [], {})}
 
@@ -20710,6 +20751,7 @@ def _single_resolved_search_product_row(tool_result: Mapping[str, Any] | None) -
             canonical.get("product_name") or canonical.get("goods_nm") or canonical.get("titleProductName") or ""
         ).strip()
         or None,
+        **_search_product_price_context(items[0]),
     }
 
 
@@ -21982,10 +22024,11 @@ def _merge_pending_order_context(
     if qty_changed and incoming.get("payment_amount") in (None, "", [], {}):
         if merged.pop("payment_amount", None) not in (None, "", [], {}):
             cleared_fields.append("payment_amount")
-        if merged.pop("price_basis", None) not in (None, "", [], {}):
-            cleared_fields.append("price_basis")
-        if merged.pop("price_source_tool", None) not in (None, "", [], {}):
-            cleared_fields.append("price_source_tool")
+        if _preview_price_unit_and_basis(merged)[0] is None:
+            if merged.pop("price_basis", None) not in (None, "", [], {}):
+                cleared_fields.append("price_basis")
+            if merged.pop("price_source_tool", None) not in (None, "", [], {}):
+                cleared_fields.append("price_source_tool")
         payment_amount_stale = True
 
     for key, value in incoming.items():
@@ -22397,10 +22440,8 @@ def _flow_state_from_purchase_stock_sources(
                 ).get(key)
                 if value not in (None, "", [], {}) and tool_values.get(key) in (None, "", [], {}):
                     tool_values[key] = value
-            unit_price, price_basis = _preview_price_unit_and_basis(matched_row or rows[0])
-            if unit_price is not None and price_basis:
-                tool_values.setdefault("price_basis", price_basis)
-                tool_values.setdefault("price_source_tool", "search_product_tool")
+            for key, value in _search_product_price_context(matched_row or rows[0]).items():
+                tool_values.setdefault(key, value)
             continue
 
         price_data = parsed_data.get("data", parsed_data) if isinstance(parsed_data, Mapping) else parsed_data
@@ -22931,29 +22972,42 @@ def _stage_pending_product_context_from_search(
     items = payload.get("items") if isinstance(payload, Mapping) else None
     if not isinstance(items, list) or not any(isinstance(item, Mapping) for item in items):
         return {}
+    candidate_rows = [item for item in items if isinstance(item, Mapping)]
+    resolved_row = candidate_rows[0] if len(candidate_rows) == 1 else None
+    canonical_row = canonical_context_from_tool_boundary(resolved_row) if isinstance(resolved_row, Mapping) else {}
+    product_name = str(canonical_row.get("product_name") or keyword).strip()
 
     context = dict(getattr(slots, "availability_context", None) or {})
     pending_context = dict(context.get("pending_order_context") or {})
-    pending_context["product_name"] = keyword
-    pending_context.setdefault("pending_product_name", keyword)
+    pending_context["product_name"] = product_name
+    pending_context.setdefault("pending_product_name", product_name)
+    pending_context.setdefault("tire_model", product_name)
     if getattr(slots, "region", None):
         pending_context["region"] = slots.region
-    if getattr(slots, "tire_size", None):
-        pending_context["tire_size"] = slots.tire_size
-    if getattr(slots, "goods_no", None):
-        pending_context["goods_no"] = slots.goods_no
+    resolved_tire_size = canonical_row.get("tire_size") if isinstance(canonical_row, Mapping) else None
+    if resolved_tire_size or getattr(slots, "tire_size", None):
+        pending_context["tire_size"] = resolved_tire_size or slots.tire_size
+    resolved_goods_no = canonical_row.get("goods_no") if isinstance(canonical_row, Mapping) else None
+    if resolved_goods_no or getattr(slots, "goods_no", None):
+        pending_context["goods_no"] = resolved_goods_no or slots.goods_no
     if getattr(slots, "ord_qty", None):
         pending_context["ord_qty"] = slots.ord_qty
+    if isinstance(resolved_row, Mapping):
+        pending_context.update(_search_product_price_context(resolved_row))
     pending_context.setdefault("pending_intent", pending_intent or "stock")
     pending_context.setdefault("goal_type", goal_type or "store_with_stock")
     pending_context["source"] = source
-    pending_context["candidate_count"] = sum(1 for item in items if isinstance(item, Mapping))
+    pending_context["candidate_count"] = len(candidate_rows)
     context["pending_order_context"] = pending_context
     slots.availability_context = context
     if not getattr(slots, "pending_product_name", None):
-        slots.pending_product_name = keyword
+        slots.pending_product_name = product_name
     if not getattr(slots, "tire_model", None):
-        slots.tire_model = keyword
+        slots.tire_model = product_name
+    if not getattr(slots, "goods_no", None) and resolved_goods_no:
+        slots.goods_no = str(resolved_goods_no)
+    if not getattr(slots, "tire_size", None) and resolved_tire_size:
+        slots.tire_size = str(resolved_tire_size)
     return pending_context
 
 

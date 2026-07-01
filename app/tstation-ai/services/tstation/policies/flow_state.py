@@ -57,6 +57,16 @@ _PAYMENT_FIELDS = (
     "price",
     "wage_prc",
 )
+_PAYMENT_UNIT_PRICE_FIELDS = (
+    "cheapest_final_prc",
+    "final_unit_price",
+    "final_prc",
+    "final_price",
+    "finalPrice",
+    "extra_fvr_sale_prc",
+    "sale_prc",
+    "price",
+)
 _INTENT_FIELDS = (
     "pending_intent",
     "goal_type",
@@ -1165,7 +1175,14 @@ class FlowState:
 
         qty_changed = _quantity_changed(merged.product.get("ord_qty"), delta.product.get("ord_qty"))
         if qty_changed and delta.payment.get("payment_amount") in _EMPTY_VALUES:
-            cleared_fields.extend(_clear_section(merged.payment))
+            if merged.payment.pop("payment_amount", None) not in _EMPTY_VALUES:
+                cleared_fields.append("payment_amount")
+            if not any(merged.payment.get(field) not in _EMPTY_VALUES for field in _PAYMENT_UNIT_PRICE_FIELDS):
+                if merged.payment.pop("price_basis", None) not in _EMPTY_VALUES:
+                    cleared_fields.append("price_basis")
+                if merged.payment.pop("price_source_tool", None) not in _EMPTY_VALUES:
+                    cleared_fields.append("price_source_tool")
+            merged.payment.pop("payment_amount_stale", None)
             merged.payment["payment_amount_stale"] = True
             committed_fields.append("payment_amount_stale")
 
@@ -1312,7 +1329,14 @@ class FlowState:
             committed_fields.append("payment_amount_stale")
 
         if _quantity_changed(merged.product.get("ord_qty"), delta.product.get("ord_qty")):
-            cleared_fields.extend(_clear_section(merged.payment))
+            if merged.payment.pop("payment_amount", None) not in _EMPTY_VALUES:
+                cleared_fields.append("payment_amount")
+            if not any(merged.payment.get(field) not in _EMPTY_VALUES for field in _PAYMENT_UNIT_PRICE_FIELDS):
+                if merged.payment.pop("price_basis", None) not in _EMPTY_VALUES:
+                    cleared_fields.append("price_basis")
+                if merged.payment.pop("price_source_tool", None) not in _EMPTY_VALUES:
+                    cleared_fields.append("price_source_tool")
+            merged.payment.pop("payment_amount_stale", None)
             if delta.payment.get("payment_amount") in _EMPTY_VALUES:
                 merged.payment["payment_amount_stale"] = True
                 committed_fields.append("payment_amount_stale")

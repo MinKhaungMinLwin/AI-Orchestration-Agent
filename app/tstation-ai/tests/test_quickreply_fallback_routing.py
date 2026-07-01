@@ -27175,6 +27175,60 @@ def test_pending_order_context_preserves_resolved_stock_slots() -> None:
     assert slots.availability_context["pending_order_context"]["payment_amount"] == 198000
 
 
+def test_purchase_search_staging_preserves_product_name_and_price_basis_for_preorder() -> None:
+    slots = ConversationSlots(
+        tire_size="245/45R19",
+        pending_intent="order",
+        goal_type="place_order",
+    )
+    parsed_data = {
+        "data": {
+            "items": [
+                {
+                    "goods_no": "G000000310126",
+                    "goods_nm": "벤투스 S2 AS",
+                    "title_tires": "245/45R19",
+                    "extra_fvr_sale_prc": 154100,
+                }
+            ]
+        }
+    }
+
+    staged_context = _stage_pending_product_context_from_search(
+        slots,
+        tool_input={"keyword": "벤투스 s2 as", "size": "245/45R19"},
+        parsed_data=parsed_data,
+        source="tool:search_product_tool",
+    )
+
+    assert staged_context["goods_no"] == "G000000310126"
+    assert staged_context["product_name"] == "벤투스 S2 AS"
+    assert staged_context["tire_model"] == "벤투스 S2 AS"
+    assert staged_context["pending_product_name"] == "벤투스 S2 AS"
+    assert staged_context["tire_size"] == "245/45R19"
+    assert staged_context["extra_fvr_sale_prc"] == 154100
+    assert staged_context["price_basis"] == "extra_fvr_sale_prc"
+    assert staged_context["price_source_tool"] == "search_product_tool"
+
+    slots.ord_qty = 4
+    slots.shop_id = "F00721"
+    slots.shop_name = "티스테이션 판교점"
+    slots.requested_cal_day = "20260703"
+    slots.rsv_hour = "15"
+    restaged_context = _stage_pending_order_context(slots, source="quantity_followup")
+
+    assert restaged_context["product_name"] == "벤투스 S2 AS"
+    assert restaged_context["extra_fvr_sale_prc"] == 154100
+    assert restaged_context["price_basis"] == "extra_fvr_sale_prc"
+    assert restaged_context["price_source_tool"] == "search_product_tool"
+
+    preorder_event = _build_direct_preorder_event_from_slots(slots)
+    assert preorder_event is not None
+    assert preorder_event["data"]["metadata"]["productName"] == "벤투스 S2 AS"
+    assert preorder_event["data"]["metadata"]["paymentAmount"] == 616400
+    assert preorder_event["data"]["metadata"]["priceBasis"] == "extra_fvr_sale_prc"
+
+
 def test_purchase_flow_state_region_delta_preserves_product_context() -> None:
     result = commit_purchase_flow_state(
         {
