@@ -23,6 +23,7 @@ from services.tstation.policies.reservation_template_policy import (
     should_keep_stock_location,
     yyyymmdd_to_korean_date,
 )
+from services.tstation.policies.result_alignment import product_price_alignment_notice
 from services.tstation.policies.response_decision import ResponseDecision, TemplateName, ToolPlan
 from services.tstation.policies.store_service_gate import unverifiable_store_preference_labels
 
@@ -3268,6 +3269,7 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
 
     items, metadata = [], []
     seen_goods_ids: set[str] = set()
+    product_tool_args: list[dict[str, Any]] = []
     best_seller_fallback_event: dict | None = None
     # 회원 보유 쿠폰이 적용된 상품이 1건이라도 있으면 응답 말미에 안내 추가.
     has_cheapest_applied = False
@@ -3279,6 +3281,9 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
         "get_best_selling_products_tool",
     ):
         raw = _unwrap(entry)
+        args = entry.get("args") if isinstance(entry.get("args"), dict) else entry.get("input")
+        if isinstance(args, dict):
+            product_tool_args.append(args)
         if (
             entry.get("tool") == "get_best_selling_products_tool"
             and isinstance(raw, dict)
@@ -3420,6 +3425,14 @@ def _map_product(tool_data_list: list[dict], assistant_text: str) -> dict | None
     unsized_search_size_message = _unsized_search_size_context_message(tool_data_list)
     if unsized_search_size_message and unsized_search_size_message not in short:
         short = f"{short.rstrip()}\n\n{unsized_search_size_message}" if short else unsized_search_size_message
+
+    alignment_notice = product_price_alignment_notice(
+        user_text=_current_user_turn_text(),
+        products=items,
+        tool_args=product_tool_args,
+    )
+    if alignment_notice and alignment_notice not in short:
+        short = f"{alignment_notice}\n\n{short.rstrip()}" if short else alignment_notice
 
     # 회원 보유 쿠폰 적용된 상품이 1건 이상이면 결정적으로 안내 문구 추가.
     # _summarize_with_source 의 첫 문장 컷팅 뒤에 붙여서 truncation 회피.
