@@ -419,6 +419,17 @@ def decide_discovery_response(frame: IntentFrame) -> ResponseDecision:
         )
 
     if frame.intent == "product_search":
+        if entities.get("multi_product_description_request"):
+            return ResponseDecision(
+                response_shape=ResponseShape.SUMMARY,
+                template=TemplateName.QUICK_REPLY,
+                required_slots=(),
+                forbidden_behaviors=("generic_unsized_summary", "unrequested_size_missing_notice"),
+                assistant_guidance=(
+                    "복수 상품 설명 요청에는 각 상품의 특성만 간결히 나눠 안내하고, 비교/추천/구매 흐름으로 바꾸지 않는다."
+                ),
+                metadata=_metadata(frame, response_shape_key="neutral_product_description"),
+            )
         if frame.sub_intent in {
             "product_event_lookup",
             "product_deal_lookup",
