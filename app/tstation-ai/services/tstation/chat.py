@@ -155,6 +155,7 @@ from services.tstation.executors.contract_required_tool_executor import (
     _best_selling_general_fallback_input,
     _contract_annotation_metadata,
     _enrich_best_selling_result_for_product_cards,
+    _recover_contract_required_flow_progress_tool,
     _recover_contract_required_store_flow_tool,
     _recover_contract_required_tool,
     _recover_contract_required_vehicle_recommendation,  # noqa: F401
@@ -38017,6 +38018,9 @@ class TStationChatServiceV2:
                             ):
                                 turn_tool_slots["pending_intent"] = "order"
                                 turn_tool_slots["goal_type"] = "place_order"
+                                rsv_hour = _reservation_hour_from_text(user_query)
+                                if rsv_hour:
+                                    turn_tool_slots["rsv_hour"] = rsv_hour
                     elif (
                         tool_name == "transaction_store_preview_tool"
                         and isinstance(input_data, dict)
@@ -38259,6 +38263,23 @@ class TStationChatServiceV2:
                             ):
                                 yield chunk
                             return
+
+                    post_tool_flow_progress_recovery = await _recover_contract_required_flow_progress_tool(
+                        turn_contract=turn_contract,
+                        user_text=user_query,
+                        merged_slots=pending_slots or initial_slots,
+                        blocked_fast_path_source=f"post_tool_flow_progress:{tool_name}",
+                        member_no=user_id,
+                    )
+                    if (
+                        post_tool_flow_progress_recovery is not None
+                        and str(post_tool_flow_progress_recovery.get("tool_name") or "") != str(tool_name or "")
+                    ):
+                        for chunk in await _contract_required_tool_recovery_sse(
+                            post_tool_flow_progress_recovery
+                        ):
+                            yield chunk
+                        return
 
                     coupon_decision = await _get_coupon_gate_decision()
                     if (
