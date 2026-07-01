@@ -4,6 +4,7 @@ import base64
 from types import SimpleNamespace
 
 from services.tstation.policies.discovery_intent_policy import build_discovery_intent_frame, plan_discovery_tools
+from services.tstation.policies.discovery_response_policy import decide_discovery_response
 from services.tstation.policies.intent_frame import IntentFrame, PolicyDomain
 from services.tstation.policies.response_decision import ToolPlan
 from services.tstation.policies.router_context import compact_router_messages
@@ -246,6 +247,39 @@ def test_router_store_name_reaches_store_schedule_tool_args() -> None:
     assert frame.known_slots["store_name"] == "판교점"
     assert plan.preferred_tool == "get_store_schedule_tool"
     assert plan.tool_args_patch["store_name"] == "판교점"
+
+
+def test_router_generic_compare_does_not_override_multi_product_description_request() -> None:
+    routing = _routing_result(
+        primary_action="lookup",
+        execution_plan=[
+            "identify the two products",
+            "retrieve or summarize their product details",
+            "present a concise comparison-friendly description",
+        ],
+        entity_candidates={},
+        domains=["discovery"],
+    )
+    routing.comparison_followup_intent = "generic_compare"
+    routing.comparison_metric = "detail"
+    evidence = build_router_evidence(routing, domains=["discovery"])
+    frame = build_discovery_intent_frame("kinergy EX, Ventus S2 AS 설명해줘")
+    plan = plan_discovery_tools(frame)
+    response_decision = decide_discovery_response(frame)
+    contract = build_turn_contract(
+        user_text="kinergy EX, Ventus S2 AS 설명해줘",
+        intent_frame=frame,
+        tool_plan=plan,
+        response_decision=response_decision,
+        routing_result=routing,
+        merged_slots={"availability_context": {"latest_router_evidence": evidence}},
+    )
+
+    assert frame.intent == "product_description"
+    assert frame.entities["multi_product_description_request"] is True
+    assert contract.intent != "product_comparison"
+    assert contract.response_decision["metadata"]["response_shape_key"] == "neutral_product_description"
+    assert contract.router_wins_applied is False
 
 
 def test_router_coupon_name_is_preserved_without_forcing_support_to_transaction() -> None:

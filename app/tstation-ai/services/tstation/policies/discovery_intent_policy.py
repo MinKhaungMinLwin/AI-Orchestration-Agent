@@ -132,6 +132,7 @@ _ALL_WEATHER_RE = re.compile(r"올웨더|all\s*weather", re.IGNORECASE)
 _ALL_SEASON_RE = re.compile(r"사계절|올시즌|all\s*season", re.IGNORECASE)
 _PERFORMANCE_RE = re.compile(r"퍼포먼스|고성능|스포츠|performance", re.IGNORECASE)
 _LOWEST_PRICE_RE = re.compile(r"가장\s*저렴|제일\s*저렴|최저가|싼\s*거|저렴한", re.IGNORECASE)
+_MULTI_PRODUCT_DESCRIPTION_RE = re.compile(r"설명|특징|장점|상세|상품\s*정보|정보", re.IGNORECASE)
 _EXTERNAL_PRICE_COMPARE_ANCHOR_RE = re.compile(
     r"다나와|구글|google|네이버(?:\s*쇼핑)?|naver(?:\s*shopping)?|쇼핑\s*검색|쇼핑몰|온라인\s*몰|온라인몰|"
     r"외부\s*(?:몰|사이트|채널)|오픈\s*마켓|오픈마켓|가격\s*비교\s*(?:사이트|앱|플랫폼)?|가격비교|"
@@ -949,6 +950,8 @@ def build_discovery_intent_frame(
         }
     if len(products) >= 2:
         entities["multi_product_names"] = True
+        if _MULTI_PRODUCT_DESCRIPTION_RE.search(text):
+            entities["multi_product_description_request"] = True
         if re.search(
             r"각각|둘\s*다|둘\s*모두|상품\s*정보|설명|알려|(?:상품\s*)?(?:추천|검색|찾아|보여)",
             text,
@@ -1109,7 +1112,11 @@ def build_discovery_intent_frame(
             if comparison_metric == "mileage"
             else "attribute_compare"
         )
-    elif len(products) >= 2 and comparison_followup_intent == "generic_compare":
+    elif (
+        len(products) >= 2
+        and comparison_followup_intent == "generic_compare"
+        and not entities.get("multi_product_description_request")
+    ):
         intent = "product_comparison"
         sub_intent = "general_compare"
         entities.setdefault("compare_metric", "detail")

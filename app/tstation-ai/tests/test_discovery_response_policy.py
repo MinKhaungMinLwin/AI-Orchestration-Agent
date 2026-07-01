@@ -75,6 +75,15 @@ def test_product_description_decision_forbids_unrequested_size_missing_notice() 
     assert "unrequested_size_missing_notice" in decision.forbidden_behaviors
 
 
+def test_multi_product_description_request_prefers_neutral_description_over_compare_summary() -> None:
+    decision = decide_discovery_response(build_discovery_intent_frame("kinergy EX, Ventus S2 AS 설명해줘"))
+
+    assert decision.template == TemplateName.QUICK_REPLY
+    assert decision.metadata["response_shape_key"] == "neutral_product_description"
+    assert "generic_unsized_summary" in decision.forbidden_behaviors
+    assert "unrequested_size_missing_notice" in decision.forbidden_behaviors
+
+
 def test_tc021_mileage_compare_prefers_metric_summary_over_cards() -> None:
     decision = decide_discovery_response(
         build_discovery_intent_frame("ventus air S, dynapro HPX, optimo, 미쉐린 CC2 어떤거 가장 오래 탈 수 있어?")

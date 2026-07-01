@@ -4532,6 +4532,15 @@ def _comparison_router_wins_intent(
     response_shape_key = str(response_metadata.get("response_shape_key") or "").strip()
     routed_action_mode = str(getattr(routing_result, "action_mode", "") or "").strip()
     current_action_mode = str(action_mode or "").strip()
+    frame_intent = str(getattr(intent_frame, "intent", "") or "").strip()
+    if (
+        frame_entities.get("multi_product_description_request")
+        and frame_intent in {"product_search", "product_description"}
+        and comparison_followup_intent == "generic_compare"
+        and comparison_metric in {"", "none", "detail"}
+        and response_shape_key in {"", "neutral_product_description", "product_search_summary"}
+    ):
+        return None
     if comparison_followup_intent in _COMPARISON_ROUTER_WINS_FOLLOWUP_INTENTS:
         return "product_comparison"
     if comparison_metric and comparison_metric != "none":

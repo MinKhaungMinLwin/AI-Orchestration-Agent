@@ -430,6 +430,18 @@ def test_quantity_benefit_comparison_preserves_quantities_and_requires_size() ->
     assert plan.tool_args_patch == {"keyword": "Optimo", "brand_cd": "HK"}
 
 
+def test_multi_product_description_request_does_not_promote_generic_compare_slots() -> None:
+    frame = build_discovery_intent_frame(
+        "kinergy EX, Ventus S2 AS 설명해줘",
+        known_slots={"comparison_followup_intent": "generic_compare", "comparison_metric": "detail"},
+    )
+
+    assert frame.intent == "product_description"
+    assert frame.sub_intent == "product_detail"
+    assert frame.entities["multi_product_description_request"] is True
+    assert frame.entities["multi_product_detail_request"] is True
+
+
 def test_sized_quantity_benefit_comparison_keeps_search_size() -> None:
     frame = build_discovery_intent_frame("옵티모 2155017 2개랑 4개 할인 비교해줘")
     plan = plan_discovery_tools(frame)
