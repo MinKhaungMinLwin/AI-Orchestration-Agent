@@ -16225,6 +16225,8 @@ def test_confirmed_product_slot_values_from_cart_quickreply_metadata_includes_qu
                 "tireSize": "225/45R17",
                 "productName": "벤투스 S2 AS",
                 "quantity": 2,
+                "extra_fvr_sale_prc": 154100,
+                "priceBasis": "extra_fvr_sale_prc",
             },
         },
     }
@@ -16232,6 +16234,9 @@ def test_confirmed_product_slot_values_from_cart_quickreply_metadata_includes_qu
     assert confirmed_product_slot_values_from_event(event) == {
         "goods_no": "G000000309783",
         "ord_qty": 2,
+        "extra_fvr_sale_prc": 154100,
+        "price_basis": "extra_fvr_sale_prc",
+        "price_source_tool": "quickreply_metadata",
         "tire_model": "벤투스 S2 AS",
         "tire_size": "225/45R17",
     }
@@ -22161,7 +22166,13 @@ def test_purchase_cta_recovers_confirmed_product_from_recent_price_tool_input() 
         ],
     )
 
-    assert slots == {"goods_no": "G000000317729", "tire_size": "235/55R19"}
+    assert slots == {
+        "goods_no": "G000000317729",
+        "tire_size": "235/55R19",
+        "cheapest_final_prc": 180000,
+        "price_basis": "cheapest_final_prc",
+        "price_source_tool": "get_final_price_tool",
+    }
 
 
 def test_purchase_cta_does_not_pick_first_product_from_unselected_candidate_list() -> None:
@@ -23180,12 +23191,15 @@ def test_confirmed_product_slot_values_from_single_product_event() -> None:
                     "titleTires": "265/40R21",
                 }
             ],
-            "metadata": [{"goodsId": "G2"}],
+            "metadata": [{"goodsId": "G2", "extra_fvr_sale_prc": 242100}],
         },
     }
 
     assert confirmed_product_slot_values_from_event(event) == {
         "goods_no": "G2",
+        "extra_fvr_sale_prc": 242100,
+        "price_basis": "extra_fvr_sale_prc",
+        "price_source_tool": "product_template",
         "tire_model": "벤투스 S1 에보 Z",
         "tire_size": "265/40R21",
     }

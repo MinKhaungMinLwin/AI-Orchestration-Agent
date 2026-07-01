@@ -112,6 +112,32 @@ _PRODUCT_PRICE_FIELDS = (
     "price",
     "sale_prc",
 )
+
+
+def _product_price_context_from_mapping(values: Mapping[str, Any] | None, *, source: str | None = None) -> dict[str, Any]:
+    if not isinstance(values, Mapping):
+        return {}
+    context: dict[str, Any] = {}
+    for key in _PRODUCT_PRICE_FIELDS:
+        value = values.get(key)
+        if value not in (None, "", [], {}) and context.get(key) in (None, "", [], {}):
+            context[key] = value
+    price_basis = str(values.get("priceBasis") or values.get("price_basis") or "").strip()
+    if not price_basis:
+        for key in _PRODUCT_PRICE_FIELDS:
+            if context.get(key) not in (None, "", [], {}):
+                price_basis = key
+                break
+    if price_basis:
+        context["price_basis"] = price_basis
+    price_source_tool = str(values.get("priceSourceTool") or values.get("price_source_tool") or "").strip()
+    if not price_source_tool and context:
+        price_source_tool = str(source or "").strip()
+    if price_source_tool:
+        context["price_source_tool"] = price_source_tool
+    return context
+
+
 _QUANTITY_LABEL_RE = re.compile(r"^\s*([1-4])\s*(?:개|본)\s*$")
 _CTA_CLARIFICATION_LABEL_RE = re.compile(r"(?:다른\s*)?(?:지역|장소|날짜|일정)\s*(?:입력|찾기|검색|확인)")
 _SIZE_ONLY_RE = re.compile(r"^\s*\d{3}\s*[/\s]?\s*\d{2}\s*(?:R|\s|/)?\s*\d{2}\s*$", re.IGNORECASE)
@@ -3973,6 +3999,7 @@ def confirmed_product_slot_values_from_event(event: Mapping[str, Any] | None) ->
             slot_values["tire_size"] = tire_size
         if tire_model:
             slot_values["tire_model"] = tire_model
+        slot_values.update(_product_price_context_from_mapping(metadata, source="quickreply_metadata"))
         raw_qty = canonical_values.get("ord_qty")
         if raw_qty is not None:
             try:
@@ -4009,6 +4036,9 @@ def confirmed_product_slot_values_from_event(event: Mapping[str, Any] | None) ->
         slot_values["tire_size"] = tire_size
     if tire_model:
         slot_values["tire_model"] = tire_model
+    for price_source in (product, meta):
+        for key, value in _product_price_context_from_mapping(price_source, source="product_template").items():
+            slot_values.setdefault(key, value)
     return slot_values
 
 
@@ -4053,6 +4083,17 @@ def confirmed_product_slot_values_for_purchase_cta(
                 product_name = str(tool_input.get("product_name") or tool_input.get("goods_nm") or "").strip()
                 if product_name:
                     slot_values["tire_model"] = product_name
+                data = entry.get("data")
+                payload = data.get("data") if isinstance(data, Mapping) and isinstance(data.get("data"), Mapping) else data
+                if isinstance(payload, Mapping):
+                    canonical_payload = canonical_context_from_tool_boundary(payload)
+                    payload_tire_size = normalize_tire_size(str(canonical_payload.get("tire_size") or ""))
+                    if payload_tire_size and not slot_values.get("tire_size"):
+                        slot_values["tire_size"] = payload_tire_size
+                    payload_product_name = str(canonical_payload.get("product_name") or "").strip()
+                    if payload_product_name and not slot_values.get("tire_model"):
+                        slot_values["tire_model"] = payload_product_name
+                    slot_values.update(_product_price_context_from_mapping(payload, source="get_final_price_tool"))
                 return slot_values
 
         if tool == "get_product_description_tool":
@@ -4074,6 +4115,7 @@ def confirmed_product_slot_values_for_purchase_cta(
             product_name = str(canonical_payload.get("product_name") or "").strip()
             if product_name:
                 slot_values["tire_model"] = product_name
+            slot_values.update(_product_price_context_from_mapping(payload, source="get_product_description_tool"))
             if slot_values.get("goods_no"):
                 return slot_values
 
@@ -4330,6 +4372,7 @@ def selected_order_context_from_preview_values(preview_values: Mapping[str, Any]
         "payment_amount",
         "price_basis",
         "price_source_tool",
+        *_PRODUCT_PRICE_FIELDS,
     ):
         value = preview_values.get(key_name)
         if value not in (None, "", [], {}):
