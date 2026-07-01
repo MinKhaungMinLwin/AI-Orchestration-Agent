@@ -900,6 +900,7 @@ def _contract_required_tool_candidate(
                 tool_input_source = tool_input_source or "turn_contract_required_recommendation"
             if not tool_input:
                 return None
+            tool_input.setdefault("rcmd_type", "tstation")
             display_name = "추천 상품 확인 중..."
     elif domain == PolicyDomain.SUPPORT.value:
         contract_preferred_tool = str(getattr(turn_contract, "preferred_tool", None) or "").strip()
