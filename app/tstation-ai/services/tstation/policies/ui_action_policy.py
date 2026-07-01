@@ -4600,7 +4600,7 @@ def recommendation_type_for_vehicle_auto_continue(user_text: str) -> str:
         return "wet"
     if re.search(r"정숙|조용|소음|진동", text, re.IGNORECASE):
         return "low_vibration"
-    if re.search(r"퍼포먼스|스포츠|성능", text, re.IGNORECASE):
+    if re.search(r"퍼포먼스|고성능|스포츠|코너링|제동|브레이크|performance", text, re.IGNORECASE):
         return "performance"
     return "tstation"
 

@@ -20422,6 +20422,11 @@ def _build_discovery_policy_context(
             )
         if discovery_tool_plan.preferred_tool == "get_products_recommendations_tool":
             discovery_tool_patch = dict(discovery_tool_plan.tool_args_patch)
+        elif (
+            discovery_frame.sub_intent == "vehicle_resolved_recommendation"
+            and discovery_tool_plan.preferred_tool == "get_my_cars_tool"
+        ):
+            discovery_tool_patch = dict(discovery_tool_plan.tool_args_patch)
         elif discovery_tool_plan.preferred_tool == "search_product_tool" and discovery_tool_plan.tool_args_patch.get(
             "size"
         ):

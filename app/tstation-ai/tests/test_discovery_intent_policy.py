@@ -25,6 +25,26 @@ def test_tc004_unsized_summer_performance_recommendation_keeps_conditions() -> N
     assert plan.tool_args_patch == {"rcmd_type": "performance", "season_nm": "여름"}
 
 
+def test_plain_good_performance_wording_does_not_mean_sports_performance() -> None:
+    frame = build_discovery_intent_frame("성능 좋은 타이어 추천해줘")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.intent == "product_recommendation"
+    assert frame.sub_intent == "general_recommendation"
+    assert "performance" not in frame.entities
+    assert plan.preferred_tool == "get_products_recommendations_tool"
+    assert plan.tool_args_patch == {"rcmd_type": "tstation"}
+
+
+def test_braking_or_cornering_wording_maps_to_performance() -> None:
+    for text in ("코너링 좋은 타이어 추천해줘", "제동능력 좋은 타이어 추천해줘"):
+        frame = build_discovery_intent_frame(text)
+        plan = plan_discovery_tools(frame)
+
+        assert frame.entities["recommendation_scenario"] == "handling"
+        assert plan.tool_args_patch == {"rcmd_type": "performance"}
+
+
 def test_welcome_popular_tire_question_uses_three_month_best_sellers() -> None:
     frame = build_discovery_intent_frame("지금 가장 인기 있는 타이어는?")
     plan = plan_discovery_tools(frame)

@@ -20716,6 +20716,12 @@ def test_vehicle_auto_select_maps_fuel_efficiency_query_to_tstation_context() ->
     assert _recommendation_type_for_vehicle_auto_continue("연비 좋은 타이어 추천") == "fuel_efficiency"
 
 
+def test_vehicle_auto_select_does_not_map_plain_performance_word_to_sports_performance() -> None:
+    assert _recommendation_type_for_vehicle_auto_continue("성능 좋은 타이어 추천") == "tstation"
+    assert _recommendation_type_for_vehicle_auto_continue("코너링 좋은 타이어 추천") == "performance"
+    assert _recommendation_type_for_vehicle_auto_continue("제동능력 좋은 타이어 추천") == "performance"
+
+
 def test_fuel_efficiency_sort_prefers_higher_score_then_lower_rr() -> None:
     items = [
         {"goods_no": "A", "t_fuel_eff_convert": 21.0, "rr": "2"},
@@ -25230,6 +25236,21 @@ def test_vehicle_resolved_all_weather_compare_request_still_prioritizes_product_
     assert tool_plan.allowed_tools == ("get_my_cars_tool",)
     assert decision.template == TemplateName.LIST_CAR
     assert "product_card_without_vehicle_selection" in decision.forbidden_behaviors
+
+
+def test_named_vehicle_comfort_recommendation_preserves_family_tool_patch() -> None:
+    patch, decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        last_user_text="내차중에 제타로 컴포트 성능 좋은 타이어 추천 해줘",
+        context_text="내차중에 제타로 컴포트 성능 좋은 타이어 추천 해줘",
+        tire_size=None,
+    )
+
+    assert patch["rcmd_type"] == "family"
+    assert decision is not None
+    assert decision.metadata["response_shape_key"] == "vehicle_resolved_recommendation"
+    assert decision.metadata["recommendation_scenario"] == "family"
+    assert decision.metadata["applied_rcmd_type"] == "family"
 
 
 def test_unsized_all_weather_recommendation_still_blocks_product_card() -> None:
