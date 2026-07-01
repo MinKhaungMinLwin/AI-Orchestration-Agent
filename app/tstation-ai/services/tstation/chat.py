@@ -10547,6 +10547,33 @@ def _pure_inventory_has_store_stock(inventory_result: dict, *, shop_id: str, req
     return available_qty is not None and available_qty >= max(requested_qty, 1)
 
 
+def _pure_inventory_store_stock_tier(inventory_result: dict, *, shop_id: str, requested_qty: int) -> str:
+    data = _unwrap_tool_data(inventory_result)
+    inventory = data.get("inventory") if isinstance(data, dict) and isinstance(data.get("inventory"), dict) else data
+    if isinstance(inventory, dict):
+        today_ids = {
+            str(canonical_context_from_tool_boundary(row).get("shop_id") or "").strip()
+            for row in _stock_inventory_rows(inventory, "todayShopArray")
+        }
+        if shop_id in today_ids:
+            return "today_only"
+        tna_ids = {
+            str(canonical_context_from_tool_boundary(row).get("shop_id") or "").strip()
+            for row in _stock_inventory_rows(inventory, "tnaShopArray")
+        }
+        if shop_id in tna_ids:
+            return "tna_only"
+    available_qty = None
+    if isinstance(data, dict):
+        for key in ("available_qty", "availableQty", "qty"):
+            if key in data:
+                available_qty = _int_or_zero(data.get(key))
+                break
+    if available_qty is not None and available_qty >= max(requested_qty, 1):
+        return "today_only"
+    return ""
+
+
 def _logistics_stock_summary(logistics_result: dict) -> dict[str, Any]:
     data = _unwrap_tool_data(logistics_result)
     logistics = data.get("logistics") if isinstance(data, dict) and isinstance(data.get("logistics"), dict) else data
@@ -10577,6 +10604,58 @@ def _format_yyyymmdd_korean(value: str) -> str:
     if not re.fullmatch(r"\d{8}", text):
         return str(value or "")
     return f"{text[:4]}년 {int(text[4:6])}월 {int(text[6:8])}일"
+
+
+def _pure_inventory_store_label(store_name: str) -> str:
+    label = re.sub(r"^\s*(?:티스테이션|더타이어샵)\s*", "", str(store_name or "")).strip()
+    return label or store_name or "선택한 매장"
+
+
+def _pure_inventory_datepick_response(store_name: str) -> str:
+    return f"{_pure_inventory_store_label(store_name)}에서 가장 빨리 장착 가능한 날짜입니다. 예약 시간을 선택해 주세요."
+
+
+def _apply_pure_inventory_datepick_context(
+    event: dict[str, Any],
+    *,
+    store_name: str,
+    store_context: Mapping[str, Any] | None,
+    ord_qty: int,
+    tire_size: str,
+    goods_no: str | None,
+    stock_check_mode: str,
+) -> dict[str, Any]:
+    enriched = dict(event)
+    data = dict(enriched.get("data") or {})
+    data["assistantResponse"] = _pure_inventory_datepick_response(store_name)
+    other_store_reply = {
+        "label": "다른 매장 찾기",
+        "domain": "TRANSACTION",
+        "actionId": "search_other_store",
+        "intentKey": "today_install",
+    }
+    quick_replies, metadata = build_pure_inventory_stock_cta_payload(
+        quick_replies=[other_store_reply],
+        store_context=store_context,
+        ord_qty=ord_qty,
+        tire_size=tire_size,
+        goods_no=goods_no,
+        response_shape_key="stock_store_schedule",
+        stock_check_mode=stock_check_mode,
+        reservation_ui_emitted=True,
+        include_pending_stock_context=True,
+    )
+    existing_metadata = data.get("metadata")
+    if isinstance(existing_metadata, Mapping):
+        metadata = {**dict(existing_metadata), **metadata}
+    data["metadata"] = metadata
+    data["quickReplies"] = quick_replies
+    data["predictedDomains"] = ["TRANSACTION"]
+    enriched["data"] = data
+    enriched["template"] = "datepick"
+    enriched["source_domain"] = MultiAgentDomain.Domain.TRANSACTION.value
+    enriched["assistant_response_source"] = "code_pure_inventory_stock_schedule"
+    return enriched
 
 
 def _build_pure_inventory_stock_event(
@@ -30504,7 +30583,9 @@ class TStationChatServiceV2:
             get_logistics_inventory_tool as _get_logistics_inventory_tool,
             get_store_inventory_tool as _get_store_inventory_tool,
             get_store_list_tool as _get_store_list_tool,
+            get_store_schedule_tool as _get_store_schedule_tool,
         )
+        from services.tstation.template_mapper import try_build_template
 
         def _local_tool_result_dict(raw: Any) -> dict:
             if isinstance(raw, dict):
@@ -30624,8 +30705,36 @@ class TStationChatServiceV2:
         yield f"data: {json.dumps({'type': 'agent_flow', 'agent': '[Store/Stock AF]', 'agent_class': 'Transaction Agent', 'status': inventory_result.get('status', 'success'), 'source_domain': 'transaction'}, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps({'type': 'tool', 'input': inventory_input, 'output': json.dumps(inventory_result, ensure_ascii=False), 'node': 'tools', 'tool': 'get_store_inventory_tool', 'source_domain': 'transaction'}, ensure_ascii=False)}\n\n"
 
-        if _pure_inventory_has_store_stock(inventory_result, shop_id=shop_id, requested_qty=ord_qty):
-            event = _build_pure_inventory_store_stock_available_event(
+        stock_tier = _pure_inventory_store_stock_tier(inventory_result, shop_id=shop_id, requested_qty=ord_qty)
+        if stock_tier:
+            schedule_input = {"shop_id": shop_id, "mode": stock_tier}
+            yield f"data: {json.dumps({'type': 'status', 'status': 'tool_start', 'tool': 'get_store_schedule_tool', 'display_name': '매장 스케줄 조회 중...', 'source_domain': 'transaction'}, ensure_ascii=False)}\n\n"
+            try:
+                raw_schedule = await asyncio.to_thread(_get_store_schedule_tool.invoke, schedule_input)
+                schedule_result = _local_tool_result_dict(raw_schedule)
+            except Exception as exc:
+                logger.exception(
+                    "[PURE_INVENTORY_STOCK] get_store_schedule_tool failed shop_id=%s mode=%s",
+                    shop_id,
+                    stock_tier,
+                )
+                schedule_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+            yield f"data: {json.dumps({'type': 'agent_flow', 'agent': '[Schedule AF]', 'agent_class': 'Transaction Agent', 'status': schedule_result.get('status', 'success'), 'source_domain': 'transaction'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'tool', 'input': schedule_input, 'output': json.dumps(schedule_result, ensure_ascii=False), 'node': 'tools', 'tool': 'get_store_schedule_tool', 'source_domain': 'transaction'}, ensure_ascii=False)}\n\n"
+            tool_entries = [
+                {"tool": "get_store_inventory_tool", "args": inventory_input, "data": inventory_result},
+                {"tool": "get_store_schedule_tool", "args": schedule_input, "data": schedule_result},
+            ]
+            mapped_event = try_build_template(tool_entries, _pure_inventory_datepick_response(store_name))
+            event = _apply_pure_inventory_datepick_context(
+                mapped_event,
+                store_name=store_name,
+                store_context=store_context,
+                ord_qty=ord_qty,
+                tire_size=tire_size,
+                goods_no=goods_no,
+                stock_check_mode=stock_tier,
+            ) if mapped_event is not None else _build_pure_inventory_store_stock_available_event(
                 store_name=store_name,
                 tire_size=tire_size,
                 ord_qty=ord_qty,
@@ -30635,7 +30744,7 @@ class TStationChatServiceV2:
             async for chunk in _finish(
                 event,
                 source="code_pure_inventory_stock_resolver",
-                required_tools=("get_store_inventory_tool",),
+                required_tools=("get_store_inventory_tool", "get_store_schedule_tool"),
             ):
                 yield chunk
             return
@@ -30650,6 +30759,41 @@ class TStationChatServiceV2:
             logistics_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
         yield f"data: {json.dumps({'type': 'agent_flow', 'agent': '[Inventory AF]', 'agent_class': 'Transaction Agent', 'status': logistics_result.get('status', 'success'), 'source_domain': 'transaction'}, ensure_ascii=False)}\n\n"
         yield f"data: {json.dumps({'type': 'tool', 'input': logistics_input, 'output': json.dumps(logistics_result, ensure_ascii=False), 'node': 'tools', 'tool': 'get_logistics_inventory_tool', 'source_domain': 'transaction'}, ensure_ascii=False)}\n\n"
+        logistics = _logistics_stock_summary(logistics_result)
+        if int(logistics.get("logistics_qty") or 0) > 0 or str(logistics.get("rsv_sale_yn") or "").upper() == "Y":
+            schedule_input = {"shop_id": shop_id, "mode": "logistics_only"}
+            yield f"data: {json.dumps({'type': 'status', 'status': 'tool_start', 'tool': 'get_store_schedule_tool', 'display_name': '매장 스케줄 조회 중...', 'source_domain': 'transaction'}, ensure_ascii=False)}\n\n"
+            try:
+                raw_schedule = await asyncio.to_thread(_get_store_schedule_tool.invoke, schedule_input)
+                schedule_result = _local_tool_result_dict(raw_schedule)
+            except Exception as exc:
+                logger.exception("[PURE_INVENTORY_STOCK] get_store_schedule_tool failed shop_id=%s mode=logistics_only", shop_id)
+                schedule_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+            yield f"data: {json.dumps({'type': 'agent_flow', 'agent': '[Schedule AF]', 'agent_class': 'Transaction Agent', 'status': schedule_result.get('status', 'success'), 'source_domain': 'transaction'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'tool', 'input': schedule_input, 'output': json.dumps(schedule_result, ensure_ascii=False), 'node': 'tools', 'tool': 'get_store_schedule_tool', 'source_domain': 'transaction'}, ensure_ascii=False)}\n\n"
+            tool_entries = [
+                {"tool": "get_store_inventory_tool", "args": inventory_input, "data": inventory_result},
+                {"tool": "get_logistics_inventory_tool", "args": logistics_input, "data": logistics_result},
+                {"tool": "get_store_schedule_tool", "args": schedule_input, "data": schedule_result},
+            ]
+            mapped_event = try_build_template(tool_entries, _pure_inventory_datepick_response(store_name))
+            if mapped_event is not None:
+                event = _apply_pure_inventory_datepick_context(
+                    mapped_event,
+                    store_name=store_name,
+                    store_context=store_context,
+                    ord_qty=ord_qty,
+                    tire_size=tire_size,
+                    goods_no=goods_no,
+                    stock_check_mode="logistics_only",
+                )
+                async for chunk in _finish(
+                    event,
+                    source="code_pure_inventory_stock_resolver",
+                    required_tools=("get_store_inventory_tool", "get_logistics_inventory_tool", "get_store_schedule_tool"),
+                ):
+                    yield chunk
+                return
         event = _build_pure_inventory_stock_event(
             store_name=store_name,
             tire_size=tire_size,
@@ -36528,14 +36672,15 @@ class TStationChatServiceV2:
                 return None
             if not (shop_id or store_name):
                 return None
-            pre_required_tools = ("get_store_inventory_tool",) if shop_id else (
+            pre_required_tools = ("get_store_inventory_tool", "get_store_schedule_tool") if shop_id else (
                 "get_store_list_tool",
                 "get_store_inventory_tool",
+                "get_store_schedule_tool",
             )
             gate_allowed, gate_reason = _direct_code_fast_path_contract_gate(
                 turn_contract=turn_contract,
                 intent="stock_store_search",
-                template="quickReply",
+                template="datepick",
                 source="code_pure_inventory_stock",
                 required_tools=pre_required_tools,
             )
@@ -36550,6 +36695,7 @@ class TStationChatServiceV2:
                         "get_store_list_tool",
                         "get_store_inventory_tool",
                         "get_logistics_inventory_tool",
+                        "get_store_schedule_tool",
                     )
                     if tool in called_tool_names
                 )
@@ -36565,6 +36711,7 @@ class TStationChatServiceV2:
                 get_logistics_inventory_tool as _get_logistics_inventory_tool,
                 get_store_inventory_tool as _get_store_inventory_tool,
                 get_store_list_tool as _get_store_list_tool,
+                get_store_schedule_tool as _get_store_schedule_tool,
             )
             from services.tstation.template_mapper import try_build_template
 
@@ -36702,6 +36849,11 @@ class TStationChatServiceV2:
                 shop_id=shop_id,
                 requested_qty=ord_qty,
             )
+            stock_tier = _pure_inventory_store_stock_tier(
+                inventory_result,
+                shop_id=shop_id,
+                requested_qty=ord_qty,
+            )
             logistics_result: dict | None = None
             if not store_stock_available:
                 logistics_input = {"goods_no": goods_no}
@@ -36739,6 +36891,65 @@ class TStationChatServiceV2:
                     "args": logistics_input,
                     "data": logistics_result,
                 })
+                logistics = _logistics_stock_summary(logistics_result)
+                if int(logistics.get("logistics_qty") or 0) > 0 or str(logistics.get("rsv_sale_yn") or "").upper() == "Y":
+                    stock_tier = "logistics_only"
+
+            if stock_tier:
+                schedule_input = {"shop_id": shop_id, "mode": stock_tier}
+                emitted_events.append({
+                    "type": "status",
+                    "status": "tool_start",
+                    "tool": "get_store_schedule_tool",
+                    "display_name": "매장 스케줄 조회 중...",
+                    "source_domain": "transaction",
+                })
+                try:
+                    raw_schedule = await asyncio.to_thread(_get_store_schedule_tool.invoke, schedule_input)
+                    schedule_result = _tool_result_dict(raw_schedule)
+                except Exception as exc:
+                    logger.exception(
+                        "[PURE_INVENTORY_STOCK] get_store_schedule_tool failed shop_id=%s mode=%s",
+                        shop_id,
+                        stock_tier,
+                    )
+                    schedule_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+                _record_code_tool_result("get_store_schedule_tool", schedule_input, schedule_result)
+                emitted_events.append({
+                    "type": "agent_flow",
+                    "agent": "[Schedule AF]",
+                    "agent_class": "Transaction Agent",
+                    "status": schedule_result.get("status", "success"),
+                    "source_domain": "transaction",
+                })
+                emitted_events.append({
+                    "type": "tool",
+                    "input": schedule_input,
+                    "output": json.dumps(schedule_result, ensure_ascii=False),
+                    "node": "tools",
+                    "tool": "get_store_schedule_tool",
+                    "source_domain": "transaction",
+                })
+                tool_entries.append({
+                    "tool": "get_store_schedule_tool",
+                    "args": schedule_input,
+                    "data": schedule_result,
+                })
+                mapped_event = try_build_template(tool_entries, _pure_inventory_datepick_response(store_name))
+                if mapped_event is not None and mapped_event.get("template") == "datepick":
+                    datepick_event = _apply_pure_inventory_datepick_context(
+                        mapped_event,
+                        store_name=store_name,
+                        store_context=store_context,
+                        ord_qty=ord_qty,
+                        tire_size=tire_size,
+                        goods_no=goods_no,
+                        stock_check_mode=stock_tier,
+                    )
+                    finalized_event = _finalize_pure_inventory_event(datepick_event)
+                    return (emitted_events, finalized_event) if finalized_event is not None else None
+
+            if not store_stock_available:
                 stock_event = _finalize_pure_inventory_event(
                     _build_pure_inventory_stock_event(
                         store_name=store_name,
