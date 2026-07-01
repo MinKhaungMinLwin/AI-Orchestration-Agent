@@ -181,6 +181,9 @@ from services.tstation.chat import (
     _start_active_purchase_flow_for_missing_product,
     _stage_unsized_purchase_order_context,
     _stage_pending_product_context_from_search,
+    _product_flow_values_from_resolved_search,
+    _flow_type_from_confirmed_tool_slots,
+    _with_confirmed_tool_flow_state,
     _clear_invalid_store_identity_slots,
     _is_invalid_store_slot_value,
     _is_resolved_size_store_availability_transaction_continuation,
@@ -27241,6 +27244,70 @@ def test_purchase_search_staging_preserves_product_name_and_price_basis_for_preo
     assert preorder_event["data"]["metadata"]["productName"] == "벤투스 S2 AS"
     assert preorder_event["data"]["metadata"]["paymentAmount"] == 616400
     assert preorder_event["data"]["metadata"]["priceBasis"] == "extra_fvr_sale_prc"
+
+
+def test_outer_search_product_staging_commits_purchase_flow_with_product_price_context() -> None:
+    slots = ConversationSlots(tire_size="245/45R19")
+    parsed_data = {
+        "data": [
+            {
+                "goods_no": "G000000310126",
+                "goods_nm": "벤투스 S2 AS",
+                "tire_size_1": "245/45R19",
+                "extra_fvr_sale_prc": 180500,
+            }
+        ]
+    }
+    resolved_row = {
+        "goods_no": "G000000310126",
+        "product_name": "벤투스 S2 AS",
+        "tire_size": "245/45R19",
+        "extra_fvr_sale_prc": 180500,
+        "price_basis": "extra_fvr_sale_prc",
+        "price_source_tool": "search_product_tool",
+    }
+
+    updated = slots.apply_runtime_values(
+        {
+            "goods_no": "G000000310126",
+            "tire_size": "245/45R19",
+            "tire_model": "벤투스 S2 AS",
+            "pending_product_name": "벤투스 S2 AS",
+            "price_basis": "extra_fvr_sale_prc",
+            "price_source_tool": "search_product_tool",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        source="outer_tool:search_product_tool",
+    )
+    flow_values = _product_flow_values_from_resolved_search(resolved_row=resolved_row, slots=updated)
+    flow_values["pending_intent"] = "order"
+    flow_values["goal_type"] = "place_order"
+    updated = _with_confirmed_tool_flow_state(
+        updated,
+        values=flow_values,
+        source="outer_tool:search_product_tool",
+        flow_type=_flow_type_from_confirmed_tool_slots(updated, values=flow_values),
+        flow_step="product_selected",
+    )
+    _stage_pending_product_context_from_search(
+        updated,
+        tool_input={"keyword": "벤투스 S2 AS", "size": "245/45R19"},
+        parsed_data=parsed_data,
+        source="outer_tool:search_product_tool",
+    )
+    pending_context = _stage_pending_order_context(updated, source="outer_tool:search_product_tool")
+
+    active_context = updated.availability_context["active_flow_context"]
+    assert active_context["flow_type"] == "purchase"
+    assert active_context["product"]["goods_no"] == "G000000310126"
+    assert active_context["product"]["product_name"] == "벤투스 S2 AS"
+    assert active_context["product"]["tire_size"] == "245/45R19"
+    assert active_context["payment"]["extra_fvr_sale_prc"] == 180500
+    assert active_context["payment"]["price_basis"] == "extra_fvr_sale_prc"
+    assert pending_context["product_name"] == "벤투스 S2 AS"
+    assert pending_context["extra_fvr_sale_prc"] == 180500
+    assert pending_context["price_basis"] == "extra_fvr_sale_prc"
 
 
 def test_purchase_flow_state_region_delta_preserves_product_context() -> None:

@@ -22980,7 +22980,7 @@ def _stage_pending_product_context_from_search(
     if not keyword:
         return {}
     payload = parsed_data.get("data", parsed_data)
-    items = payload.get("items") if isinstance(payload, Mapping) else None
+    items = payload.get("items") if isinstance(payload, Mapping) else payload if isinstance(payload, list) else None
     if not isinstance(items, list) or not any(isinstance(item, Mapping) for item in items):
         return {}
     candidate_rows = [item for item in items if isinstance(item, Mapping)]
@@ -37445,16 +37445,45 @@ class TStationChatServiceV2:
                                 )
                             logger.info("[TURN_CONTRACT] post-tool update %s", turn_contract.to_dict())
                     turn_tool_slots: dict[str, Any] = {}
+                    outer_resolved_search_row: dict[str, Any] | None = None
                     if tool_name == "search_product_tool" and isinstance(parsed_for_verifier, dict):
                         items = _search_product_result_items(parsed_for_verifier)
                         if len(items) == 1 and isinstance(items[0], dict):
                             item = items[0]
                             canonical_item = canonical_context_from_tool_boundary(item)
+                            outer_resolved_search_row = _single_resolved_search_product_row(parsed_for_verifier)
                             if canonical_item.get("goods_no"):
                                 turn_tool_slots["goods_no"] = canonical_item.get("goods_no")
                             tire_size = canonical_item.get("tire_size")
                             if tire_size:
                                 turn_tool_slots["tire_size"] = tire_size
+                            product_name = canonical_item.get("product_name")
+                            if product_name:
+                                turn_tool_slots["tire_model"] = str(product_name).strip()
+                                turn_tool_slots["pending_product_name"] = str(product_name).strip()
+                            price_context = _search_product_price_context(item)
+                            for price_key in ("price_basis", "price_source_tool"):
+                                if price_context.get(price_key) not in (None, "", [], {}):
+                                    turn_tool_slots[price_key] = price_context[price_key]
+                            purchase_resolution_slots = {
+                                key: value
+                                for key, value in {
+                                    **(
+                                        (initial_slots.model_dump() if initial_slots is not None else {})
+                                        if hasattr(initial_slots, "model_dump")
+                                        else {}
+                                    ),
+                                    **turn_tool_slots,
+                                }.items()
+                                if value not in (None, "", [], {})
+                            }
+                            if _should_promote_single_turn_purchase_after_product_resolution(
+                                user_text=user_query,
+                                slots=purchase_resolution_slots,
+                                routing_result=routing_result,
+                            ):
+                                turn_tool_slots["pending_intent"] = "order"
+                                turn_tool_slots["goal_type"] = "place_order"
                     elif (
                         tool_name == "transaction_store_preview_tool"
                         and isinstance(input_data, dict)
@@ -37504,6 +37533,33 @@ class TStationChatServiceV2:
                             source=f"outer_tool:{tool_name}",
                         )
                         if updated_slots.model_dump() != base_slots.model_dump():
+                            if tool_name == "search_product_tool" and outer_resolved_search_row is not None:
+                                flow_values = _product_flow_values_from_resolved_search(
+                                    resolved_row=outer_resolved_search_row,
+                                    slots=updated_slots,
+                                )
+                                if turn_tool_slots.get("pending_intent") == "order":
+                                    flow_values["pending_intent"] = "order"
+                                    flow_values["goal_type"] = "place_order"
+                                if flow_values:
+                                    updated_slots = _with_confirmed_tool_flow_state(
+                                        updated_slots,
+                                        values=flow_values,
+                                        source=f"outer_tool:{tool_name}",
+                                        flow_type=_flow_type_from_confirmed_tool_slots(
+                                            updated_slots,
+                                            values=flow_values,
+                                        ),
+                                        flow_step="product_selected",
+                                    )
+                                if turn_tool_slots.get("pending_intent") == "order":
+                                    _stage_pending_product_context_from_search(
+                                        updated_slots,
+                                        tool_input=input_data if isinstance(input_data, Mapping) else {},
+                                        parsed_data=parsed_for_verifier,
+                                        source=f"outer_tool:{tool_name}",
+                                    )
+                                    _stage_pending_order_context(updated_slots, source=f"outer_tool:{tool_name}")
                             pending_slots = updated_slots
                             logger.info("[SLOTS] staged outer tool slots from %s: %s", tool_name, turn_tool_slots)
                     if tool_name == "search_product_tool":
