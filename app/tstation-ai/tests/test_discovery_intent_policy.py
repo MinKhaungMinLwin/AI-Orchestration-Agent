@@ -230,6 +230,19 @@ def test_registered_vehicle_recommendation_request_is_unaffected_by_type_query_s
     assert plan.preferred_tool == "get_my_cars_tool"
 
 
+def test_registered_vehicle_recommendation_accepts_registered_vehicle_phrasing() -> None:
+    text = "내가 등록한 차중에 gv70 에 맞는 타이어 추천"
+    frame = build_discovery_intent_frame(text)
+    plan = plan_discovery_tools(frame)
+
+    assert has_registered_vehicle_ownership_signal(text)
+    assert frame.intent == "product_recommendation"
+    assert frame.sub_intent == "vehicle_resolved_recommendation"
+    assert frame.entities["named_registered_vehicle_anchor"] == "gv70"
+    assert plan.allowed_tools == ("get_my_cars_tool", "get_products_recommendations_tool")
+    assert plan.preferred_tool == "get_my_cars_tool"
+
+
 def test_ev_low_noise_recommendation_keeps_ev_axis() -> None:
     frame = build_discovery_intent_frame("전기차 타이어 저소음으로 추천해줘")
     plan = plan_discovery_tools(frame)
