@@ -230,6 +230,110 @@ def test_contract_direct_executor_previews_tool_start_status_before_recovery() -
     }
 
 
+def test_contract_direct_recommendation_defaults_rcmd_type_for_patch_only_input(monkeypatch) -> None:
+    from services.tstation import template_mapper
+    from services.tstation.agents.b_discovery_agent import tools as discovery_tools
+    from services.tstation.executors import contract_required_tool_executor as executor
+
+    calls: list[dict] = []
+
+    def fake_tool_invoke(tool, tool_input: dict):
+        assert tool.name == "get_products_recommendations_tool"
+        calls.append(dict(tool_input))
+        return {"status": "success", "data": {"items": [{"goods_no": "G1", "goods_nm": "SUV Tire"}]}}
+
+    def fake_template(tool_data_list: list[dict], assistant_text: str):
+        assert [entry["tool"] for entry in tool_data_list] == ["get_products_recommendations_tool"]
+        assert tool_data_list[0]["args"]["rcmd_type"] == "tstation"
+        return {
+            "type": "data",
+            "template": "product",
+            "data": {"assistantResponse": assistant_text, "products": []},
+        }
+
+    async def fake_to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    monkeypatch.setattr(type(discovery_tools.get_products_recommendations_tool), "invoke", fake_tool_invoke)
+    monkeypatch.setattr(template_mapper, "try_build_template", fake_template)
+    monkeypatch.setattr(executor.asyncio, "to_thread", fake_to_thread)
+
+    contract = TurnContract(
+        domain="discovery",
+        intent="product_recommendation",
+        allowed_tools=("get_products_recommendations_tool",),
+        preferred_tool="get_products_recommendations_tool",
+        tool_args_patch={"vehicle_type": "suv", "tire_size": "245/45R19"},
+        response_decision={"template": "product"},
+    )
+
+    recovery = asyncio.run(
+        _recover_contract_required_tool(
+            turn_contract=contract,
+            user_text="suv 용으로 추천",
+            merged_slots=None,
+            blocked_fast_path_source="contract_direct_executor:product_recommendation",
+            member_no="M123",
+        )
+    )
+
+    assert recovery is not None
+    assert recovery["tool_name"] == "get_products_recommendations_tool"
+    assert calls == [{"vehicle_type": "suv", "tire_size": "245/45R19", "rcmd_type": "tstation"}]
+    assert recovery["tool_input"] == calls[0]
+    assert recovery["event"]["template"] == "product"
+
+
+def test_contract_direct_recommendation_preserves_explicit_rcmd_type(monkeypatch) -> None:
+    from services.tstation import template_mapper
+    from services.tstation.agents.b_discovery_agent import tools as discovery_tools
+    from services.tstation.executors import contract_required_tool_executor as executor
+
+    calls: list[dict] = []
+
+    def fake_tool_invoke(tool, tool_input: dict):
+        assert tool.name == "get_products_recommendations_tool"
+        calls.append(dict(tool_input))
+        return {"status": "success", "data": {"items": [{"goods_no": "G2", "goods_nm": "Quiet Tire"}]}}
+
+    def fake_template(tool_data_list: list[dict], assistant_text: str):
+        assert tool_data_list[0]["args"]["rcmd_type"] == "low_vibration"
+        return {
+            "type": "data",
+            "template": "product",
+            "data": {"assistantResponse": assistant_text, "products": []},
+        }
+
+    async def fake_to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    monkeypatch.setattr(type(discovery_tools.get_products_recommendations_tool), "invoke", fake_tool_invoke)
+    monkeypatch.setattr(template_mapper, "try_build_template", fake_template)
+    monkeypatch.setattr(executor.asyncio, "to_thread", fake_to_thread)
+
+    contract = TurnContract(
+        domain="discovery",
+        intent="product_recommendation",
+        allowed_tools=("get_products_recommendations_tool",),
+        preferred_tool="get_products_recommendations_tool",
+        tool_args_patch={"vehicle_type": "suv", "tire_size": "245/45R19", "rcmd_type": "low_vibration"},
+        response_decision={"template": "product"},
+    )
+
+    recovery = asyncio.run(
+        _recover_contract_required_tool(
+            turn_contract=contract,
+            user_text="suv 용으로 정숙성 좋은 타이어 추천",
+            merged_slots=None,
+            blocked_fast_path_source="contract_direct_executor:product_recommendation",
+            member_no="M123",
+        )
+    )
+
+    assert recovery is not None
+    assert calls == [{"vehicle_type": "suv", "tire_size": "245/45R19", "rcmd_type": "low_vibration"}]
+
+
 def test_registered_vehicle_direct_executor_falls_back_to_general_recommendation_when_no_match(monkeypatch) -> None:
     from services.tstation.agents.b_discovery_agent import tools as discovery_tools
     from services.tstation import template_mapper
