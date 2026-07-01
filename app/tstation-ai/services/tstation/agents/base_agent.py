@@ -462,6 +462,42 @@ def _build_owner_vehicle_lookup_event(tool_name: str, tool_result: Any, messages
 
     row = rows[0]
     vehicle_name = _owner_lookup_vehicle_display_name(row)
+    raw_available_sizes = row.get("available_sizes") or row.get("availableSizes") or []
+    available_sizes: list[str] = []
+    if isinstance(raw_available_sizes, list):
+        for raw_size in raw_available_sizes:
+            normalized_size = normalize_tire_size(str(raw_size or ""))
+            if normalized_size and normalized_size not in available_sizes:
+                available_sizes.append(normalized_size)
+    if len(available_sizes) >= 2:
+        assistant_response = (
+            f"조회되었습니다. {vehicle_name} 차량은 확인했어요.\n\n"
+            f"확인된 규격이 여러 개예요: {', '.join(f'**{size}**' for size in available_sizes)}\n\n"
+            "어떤 규격 기준으로 이어서 도와드릴까요?"
+        )
+        return {
+            "type": "data",
+            "template": "quickReply",
+            "assistant_response_source": "code_owner_vehicle_lookup_multi_size_selection",
+            "data": {
+                "assistantResponse": assistant_response,
+                "quickReplies": [{"label": size, "domain": "DISCOVERY"} for size in available_sizes[:8]],
+                "predictedDomains": ["DISCOVERY"],
+                "metadata": {
+                    "carNo": row.get("car_no"),
+                    "carLncCd": row.get("car_lnc_cd"),
+                    "carMaker": row.get("car_maker"),
+                    "carName": row.get("car_nm"),
+                    "carModelDet": row.get("car_model_det"),
+                    "tireSize": None,
+                    "tireSizeRe": None,
+                    "availableSizes": available_sizes,
+                    "available_sizes": available_sizes,
+                    "responseShapeKey": "vehicle_size_selection",
+                    "response_shape_key": "vehicle_size_selection",
+                },
+            },
+        }
     front_size, rear_size = _registered_vehicle_tire_sizes(row)
     if front_size and rear_size and front_size != rear_size:
         size_text = f"전륜 {front_size}, 후륜 {rear_size}"
