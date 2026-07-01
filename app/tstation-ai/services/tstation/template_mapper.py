@@ -11,6 +11,7 @@ a single tool output.
 import contextvars
 import datetime
 import logging
+import os
 import re
 from typing import Any, Mapping
 
@@ -27,6 +28,89 @@ from services.tstation.policies.response_decision import ResponseDecision, Templ
 from services.tstation.policies.store_service_gate import unverifiable_store_preference_labels
 
 logger = logging.getLogger(__name__)
+
+_LLM_INFO_ANSWER_EXPERIMENT_ENV = "TSTATION_EXPERIMENT_LLM_INFO_ANSWER"
+_LLM_INFO_ANSWER_EXPERIMENT_TOOLS = frozenset(
+    {
+        "search_product_tool",
+        "get_newest_products_tool",
+        "get_best_selling_products_tool",
+        "search_stores_tool",
+        "search_stores_complex_tool",
+        "get_store_list_tool",
+        "get_store_detail_tool",
+    }
+)
+_LLM_INFO_ANSWER_EXPERIMENT_BLOCKED_TOOLS = frozenset(
+    {
+        "get_products_recommendations_tool",
+        "transaction_store_preview_tool",
+        "get_nearby_stores_tool",
+        "get_stores_with_time_filter_tool",
+        "get_store_schedule_tool",
+        "get_store_inventory_tool",
+        "save_to_cart_tool",
+        "quick_order_tool",
+    }
+)
+_LLM_INFO_ANSWER_EXPERIMENT_BLOCKED_ACTION_MODES = frozenset(
+    {
+        "purchase_continuation",
+        "booking_continuation",
+        "stock_check",
+        "reservation_lookup",
+        "owned_record_lookup",
+    }
+)
+_LLM_INFO_ANSWER_EXPERIMENT_BLOCKED_GOALS = frozenset(
+    {
+        "place_order",
+        "store_with_stock",
+        "reservation",
+        "booking",
+        "quick_order",
+    }
+)
+
+
+def llm_info_answer_experiment_enabled() -> bool:
+    value = os.getenv(_LLM_INFO_ANSWER_EXPERIMENT_ENV, "")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def should_bypass_code_mapper_for_llm_info_answer(tool_names: set[str] | frozenset[str]) -> bool:
+    """Feature-flagged escape hatch for testing tool-grounded LLM info answers.
+
+    The experiment only bypasses display-card mappers for information lookup
+    tools. Transactional/recommendation tools stay deterministic so purchase,
+    stock, reservation, and recommendation card flows do not change when the
+    flag is enabled.
+    """
+    if not llm_info_answer_experiment_enabled():
+        return False
+
+    called_tools = {str(tool or "") for tool in tool_names if str(tool or "")}
+    if not called_tools or not called_tools & _LLM_INFO_ANSWER_EXPERIMENT_TOOLS:
+        return False
+    if called_tools & _LLM_INFO_ANSWER_EXPERIMENT_BLOCKED_TOOLS:
+        return False
+
+    action_mode = str(current_action_mode.get() or "unspecified").strip()
+    if action_mode in _LLM_INFO_ANSWER_EXPERIMENT_BLOCKED_ACTION_MODES:
+        return False
+
+    goal_type = str(current_goal_type.get() or "").strip()
+    pending_intent = str(current_pending_intent.get() or "").strip()
+    if goal_type in _LLM_INFO_ANSWER_EXPERIMENT_BLOCKED_GOALS or pending_intent in {"order", "stock", "reservation"}:
+        return False
+
+    decision = current_discovery_response_decision.get() or current_transaction_response_decision.get()
+    metadata = getattr(decision, "metadata", None) or {}
+    response_shape_key = str(metadata.get("response_shape_key") or "").strip()
+    if any(token in response_shape_key for token in ("reservation", "stock", "purchase", "order", "coupon")):
+        return False
+
+    return True
 
 # Per-request goal_type, set by the chat service before agent.stream() runs.
 # Read by _map_location / _map_product to set isBookingFlow when the active
