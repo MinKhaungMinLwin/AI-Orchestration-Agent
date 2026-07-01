@@ -1701,6 +1701,101 @@ def test_unsized_product_search_summary_uses_available_sizes_in_quickreply() -> 
     assert "사이즈: 235/35R20, 235/40R19, 245/35R21, 245/45R19" in assistant_response
 
 
+def test_contract_product_size_list_lookup_renders_all_requested_available_sizes_first() -> None:
+    text = "kinergy EX 모든 사이즈 다 알려줘"
+    sizes = [
+        "155/70R14",
+        "165/60R14",
+        "165/60R15",
+        "165/65R14",
+        "175/50R15",
+        "175/65R14",
+        "185/55R15",
+        "185/65R14",
+        "185/65R15",
+        "195/55R15",
+        "195/60R15",
+        "195/65R15",
+        "205/55R17",
+        "205/60R15",
+        "205/60R16",
+        "205/65R16",
+        "215/45R17",
+        "215/55R17",
+        "215/65R15",
+        "225/45R18",
+        "225/55R17",
+        "225/60R16",
+        "235/40R18",
+        "235/50R18",
+        "245/45R18",
+        "245/45R19W XL",
+        "275/35R19W XL",
+        "275/40R19W XL",
+    ]
+    current_user_text.set(text)
+    current_discovery_response_decision.set(
+        ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            assistant_guidance="현재 턴의 사이즈 목록 조회 의도에 맞춰 search_product_tool 결과의 규격 목록을 안내한다.",
+            metadata={"response_shape_key": "product_size_list_lookup"},
+        )
+    )
+
+    result = try_build_template(
+        [
+            _search_product_entry(
+                keyword="키너지 EX",
+                size=None,
+                items=[
+                    {
+                        "goods_no": "G000000319594",
+                        "goods_nm": "키너지 EX",
+                        "available_sizes": sizes,
+                        "car_knd_nm": "승용차",
+                        "season_nm": "사계절",
+                        "goods_pfm_nm": "COMFORT",
+                    }
+                ],
+            )
+        ],
+        "차량 규격이 아직 확인되지 않아 타이어 기준으로 안내드릴게요.",
+    )
+
+    assert result is not None
+    assert result["template"] == "quickReply"
+    assistant_response = result["data"]["assistantResponse"]
+    for size in sizes:
+        assert size.replace(" ", "") in assistant_response.replace(" ", "")
+    assert "대표로 확인되는 규격" not in assistant_response
+    assert "승용차용 사계절 컴포트 타이어입니다" not in assistant_response
+    assert "외 " not in assistant_response
+    assert result["data"]["metadata"]["contract_renderer_key"] == "product_size_list_lookup"
+
+
+def test_unknown_contract_response_shape_falls_back_to_existing_tool_mapper() -> None:
+    text = "s fit as"
+    current_user_text.set(text)
+    current_discovery_response_decision.set(
+        ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            assistant_guidance="새로운 응답 형태",
+            metadata={"response_shape_key": "unknown_new_shape"},
+        )
+    )
+
+    result = try_build_template([_s_fit_search_entry()], "S FIT AS 검색 결과입니다. 원하시는 상품을 선택해 주세요.")
+
+    assert result is not None
+    assert result["template"] == "quickReply"
+    assistant_response = result["data"]["assistantResponse"]
+    assert "S FIT AS" in assistant_response
+    assert "사이즈" in assistant_response
+    assert result["data"].get("metadata", {}).get("contract_renderer_applied") is None
+
+
 def test_product_search_with_size_acknowledges_input_size_without_size_prompt() -> None:
     text = "벤투스 S2 AS 225/45R17"
     current_user_text.set(text)
