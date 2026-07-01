@@ -12,6 +12,7 @@ from services.tstation.policies.discovery_intent_policy import (
     plan_discovery_tools,
 )
 from services.tstation.policies.flow_state import (
+    flow_type_matches_allowed,
     flow_progress_from_active_context,
     flow_progress_tool_candidate,
     selected_store_slots_from_active_flow_context,
@@ -337,7 +338,8 @@ def _active_flow_read_through_slots(
     if not active_flow_context:
         return {}
     flow_type = str(active_flow_context.get("flow_type") or "").strip()
-    if allowed_flow_types is not None and flow_type not in allowed_flow_types:
+    intent = active_flow_context.get("intent") if isinstance(active_flow_context.get("intent"), Mapping) else {}
+    if not flow_type_matches_allowed(flow_type, allowed_flow_types, intent):
         return {}
 
     values: dict[str, Any] = {}

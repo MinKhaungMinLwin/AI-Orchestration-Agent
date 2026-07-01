@@ -20,6 +20,7 @@ from services.tstation.policies.transaction_response_policy import decide_transa
 from services.tstation.policies.turn_contract import build_turn_contract
 from services.tstation.policies.discovery_intent_policy import build_discovery_intent_frame, normalize_tire_size
 from services.tstation.policies.cta_registry import cta_trace_metadata, normalize_quickreply_ctas
+from services.tstation.policies.flow_state import effective_flow_type
 from services.tstation.policies.resolved_context import (
     canonical_context_from_slots,
     canonical_context_from_template_boundary,
@@ -1547,8 +1548,8 @@ def _interactive_flow_contract_intent_from_slots(
         if isinstance(availability_context.get("latest_router_evidence"), Mapping)
         else {}
     )
-    active_flow_type = str(active_flow_context.get("flow_type") or "").strip()
     active_flow_intent = active_flow_context.get("intent") if isinstance(active_flow_context.get("intent"), Mapping) else {}
+    active_flow_type = effective_flow_type(active_flow_context.get("flow_type"), active_flow_intent)
     active_pending_intent = str(active_flow_intent.get("pending_intent") or "").strip()
     active_goal_type = str(active_flow_intent.get("goal_type") or "").strip()
     pending_context_intent = str(pending_order_context.get("pending_intent") or "").strip()
