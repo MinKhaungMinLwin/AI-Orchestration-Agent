@@ -121,6 +121,10 @@ def has_registered_vehicle_size_lookup_signal(text: str | None) -> bool:
     return bool(re.search(r"타이어\s*사이즈|타이어\s*규격|규격|사이즈", value, re.IGNORECASE))
 
 
+def has_registered_vehicle_type_query_signal(text: str | None) -> bool:
+    return bool(_REGISTERED_VEHICLE_TYPE_QUERY_RE.search(text or ""))
+
+
 _SIZE_COMPACT_RE = re.compile(r"\b(\d{3})\s*/?\s*(\d)(\d)(?:\3)?\s*R?\s*(\d{2})\b", re.IGNORECASE)
 _SUMMER_RE = re.compile(r"여름|썸머|summer", re.IGNORECASE)
 _WINTER_RE = re.compile(r"윈터|겨울|스노우|snow|winter", re.IGNORECASE)
@@ -161,6 +165,13 @@ _REGISTERED_VEHICLE_OWNERSHIP_RE = re.compile(
     r"내(?:가)?\s*(?:등록(?:한|해\s*둔|해둔|된)?|보유(?:한)?)\s*(?:차|차량)|"
     r"내\s*등록\s*(?:차|차량)|"
     r"등록(?:한|해\s*둔|해둔|된)?\s*내\s*(?:차|차량)",
+    re.IGNORECASE,
+)
+_REGISTERED_VEHICLE_TYPE_QUERY_RE = re.compile(
+    r"(?:내(?:가)?\s*(?:등록(?:한|해\s*둔|해둔|된)?|보유(?:한)?)?\s*(?:차종|차량|차)|"
+    r"등록(?:한|해\s*둔|해둔|된)?\s*내\s*(?:차종|차량|차))"
+    r"(?:이|가)?\s*(?:뭐(?:야|니|고|였|지|든지|ㄴ지)?|뭔지|뭔가|"
+    r"무슨\s*(?:차|차종|차량)인지|어떤\s*(?:차|차종|차량)인지|알려\s*(?:줘|줄래|주세요|주라)?)",
     re.IGNORECASE,
 )
 _REGISTERED_NAMED_VEHICLE_RE = re.compile(
@@ -904,6 +915,11 @@ def build_discovery_intent_frame(
         named_vehicle_anchor = _named_my_vehicle_anchor(text)
         if named_vehicle_anchor:
             entities["named_registered_vehicle_anchor"] = named_vehicle_anchor
+    elif has_registered_vehicle_type_query_signal(text):
+        entities["vehicle_information_request"] = "vehicle_type_lookup"
+        named_vehicle_anchor = _named_my_vehicle_anchor(text)
+        if named_vehicle_anchor:
+            entities["named_registered_vehicle_anchor"] = named_vehicle_anchor
     scenario = recommendation_scenario_from_text(
         text,
         router_recommendation_scenario or context_recommendation_scenario,
@@ -1020,7 +1036,7 @@ def build_discovery_intent_frame(
     elif entities.get("discovery_followup_action") == "vehicle_resolved_recommendation":
         intent = "product_recommendation"
         sub_intent = "vehicle_resolved_recommendation"
-    elif entities.get("vehicle_information_request") == "tire_size_lookup":
+    elif entities.get("vehicle_information_request") in ("tire_size_lookup", "vehicle_type_lookup"):
         intent = "product_description"
         sub_intent = "vehicle_information"
     elif (
