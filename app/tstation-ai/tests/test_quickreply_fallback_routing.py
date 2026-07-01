@@ -13521,6 +13521,41 @@ def test_stock_flow_progress_checks_inventory_after_store_selected() -> None:
     }
 
 
+def test_purchase_flow_progress_builds_preorder_when_order_slots_are_complete() -> None:
+    commit_result = commit_flow_state(
+        {},
+        {
+            "goods_no": "G000000315072",
+            "product_name": "키너지 EX",
+            "tire_size": "245/45R19W XL",
+            "ord_qty": 2,
+            "shop_id": "F00721",
+            "shop_name": "티스테이션 판교점",
+            "requested_cal_day": "20260708",
+            "rsv_hour": "16",
+            "payment_amount": 245000,
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        source="slot_fill:schedule",
+        flow_type="purchase",
+        flow_step="store_selected",
+    )
+    state = commit_result.state
+
+    progress = evaluate_flow_progress(state)
+    context = state.to_active_flow_context()
+
+    assert progress["current_step"] == "build_preorder"
+    assert progress["missing_slots"] == []
+    assert progress["next_template"] == "preOrder"
+    assert progress["response_shape_key"] == "reservation_confirmation_ready"
+    assert "next_tool" not in progress
+    assert context["current_step"] == "build_preorder"
+    assert context["next_template"] == "preOrder"
+    assert context["response_shape_key"] == "reservation_confirmation_ready"
+
+
 def test_stock_store_location_payload_stores_candidate_flow_state_without_event_wrapper() -> None:
     location_payload = {
         "stores": [{"nameAddress": "티스테이션 분당정자점"}],
@@ -14413,6 +14448,41 @@ def test_flow_transition_support_card_installment_overrides_wrong_support_router
     assert transition.metadata["current_turn_support_resolved"] is True
     assert transition.flow_transition["active_flow_context"]["intent"]["pending_intent"] == "card_installment_lookup"
     assert transition.flow_transition["active_flow_context"]["intent"]["policy_topic"] == "card_installment_lookup"
+
+
+def test_flow_transition_transaction_schedule_fill_does_not_switch_to_card_installment_support() -> None:
+    transition = transition_current_flow(
+        user_text="2026년 7월 8일 (수)\n16:00",
+        router_evidence={
+            "domain": "transaction",
+            "intent": "quick_order_reservation",
+            "execution_plan": ["transaction:quick_order_reservation:slot_fill:schedule"],
+            "is_slot_fill": True,
+            "filled_slot": "schedule",
+            "slot_fill_source": "previous_datepick",
+            "primary_action": "reserve",
+            "source": "llm",
+        },
+        existing_slots=ConversationSlots(
+            goods_no="G000000315072",
+            tire_model="키너지 EX",
+            pending_product_name="키너지 EX",
+            tire_size="245/45R19W XL",
+            ord_qty=2,
+            payment_amount=245000,
+            shop_id="F00721",
+            shop_name="티스테이션 판교점",
+            requested_cal_day="20260708",
+            rsv_hour="16",
+            pending_intent="order",
+            goal_type="place_order",
+        ),
+        extracted_slots=ConversationSlots(requested_cal_day="20260708", rsv_hour="16"),
+    )
+
+    assert transition.metadata["current_turn_support_resolved"] is False
+    assert transition.context_evidence.get("current_turn_support_flow") is None
+    assert transition.flow_transition["reason"] != "current_turn_support_flow_state"
 
 
 def test_flow_transition_support_refund_policy_does_not_resume_purchase_action() -> None:
