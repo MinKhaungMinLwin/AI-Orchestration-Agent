@@ -126,6 +126,7 @@ _DISCOVERY_EVENT_CONTENT_TOOLS = frozenset({
     "search_product_tool",
     "get_product_applicable_events_tool",
     "get_product_promotions_tool",
+    "get_benefit_event_deal_list_tool",
     "get_events_tool",
     "get_deals_tool",
 })
@@ -1040,6 +1041,20 @@ def build_turn_contract(
                 "get_final_price_tool",
             ),
         )
+    if intent == "benefit_event_list_lookup":
+        allowed_tools = ("get_benefit_event_deal_list_tool",)
+        forbidden_tools = _merge_tuple(
+            tuple(tool for tool in forbidden_tools if tool != "get_benefit_event_deal_list_tool"),
+            (
+                "get_events_tool",
+                "get_deals_tool",
+                "get_product_promotions_tool",
+                "get_product_applicable_events_tool",
+                "search_product_tool",
+            ),
+        )
+        preferred_tool = "get_benefit_event_deal_list_tool"
+        tool_args_patch = {"lang_cd": "ko"}
     if intent in {
         "product_event_lookup",
         "product_promotion_lookup",

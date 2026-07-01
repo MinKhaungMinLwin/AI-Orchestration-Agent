@@ -1349,8 +1349,8 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
         )
     if frame.sub_intent == "benefit_event_list_lookup":
         return ToolPlan(
-            allowed_tools=("get_events_tool", "get_deals_tool"),
-            preferred_tool="get_events_tool",
+            allowed_tools=("get_benefit_event_deal_list_tool",),
+            preferred_tool="get_benefit_event_deal_list_tool",
             tool_args_patch={"lang_cd": "ko"},
             forbidden_tools=("get_my_coupons_tool",),
         )

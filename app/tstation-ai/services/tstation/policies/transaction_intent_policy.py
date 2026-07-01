@@ -2480,6 +2480,7 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
             allowed_tools=(),
             preferred_tool=None,
             forbidden_tools=(
+                "get_benefit_event_deal_list_tool",
                 "get_events_tool",
                 "get_deals_tool",
                 "issue_coupon_tool",

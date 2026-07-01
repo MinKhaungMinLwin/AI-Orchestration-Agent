@@ -291,8 +291,8 @@ def test_default_benefit_cta_uses_events_and_deals_not_coupons() -> None:
     assert frame.intent == "product_search"
     assert frame.sub_intent == "benefit_event_list_lookup"
     assert frame.entities["default_benefit"] is True
-    assert plan.allowed_tools == ("get_events_tool", "get_deals_tool")
-    assert plan.preferred_tool == "get_events_tool"
+    assert plan.allowed_tools == ("get_benefit_event_deal_list_tool",)
+    assert plan.preferred_tool == "get_benefit_event_deal_list_tool"
     assert "get_my_coupons_tool" in plan.forbidden_tools
 
 
@@ -304,8 +304,8 @@ def test_event_list_request_uses_events_and_deals() -> None:
     assert frame.intent == "product_search"
     assert frame.sub_intent == "benefit_event_list_lookup"
     assert frame.entities["default_benefit"] is True
-    assert plan.allowed_tools == ("get_events_tool", "get_deals_tool")
-    assert plan.preferred_tool == "get_events_tool"
+    assert plan.allowed_tools == ("get_benefit_event_deal_list_tool",)
+    assert plan.preferred_tool == "get_benefit_event_deal_list_tool"
     assert "get_my_coupons_tool" in plan.forbidden_tools
 
 
@@ -319,8 +319,8 @@ def test_benefit_list_requests_use_events_and_deals_together(user_text: str) -> 
     assert frame.intent == "product_search"
     assert frame.sub_intent == "benefit_event_list_lookup"
     assert frame.entities["default_benefit"] is True
-    assert plan.allowed_tools == ("get_events_tool", "get_deals_tool")
-    assert plan.preferred_tool == "get_events_tool"
+    assert plan.allowed_tools == ("get_benefit_event_deal_list_tool",)
+    assert plan.preferred_tool == "get_benefit_event_deal_list_tool"
     assert "get_my_coupons_tool" in plan.forbidden_tools
 
 
