@@ -266,6 +266,7 @@ _UI_ACTION_SLOT_KEYS = (
     "region",
     "shop_id",
     "shop_name",
+    "store_name",
     "source_tool",
     "availability_intent",
     "requested_cal_day",
@@ -1317,6 +1318,7 @@ def _ui_action_slot_patch(raw_action: Mapping[str, Any]) -> dict[str, Any]:
         "inventory_mode": ("inventory_mode", "inventoryMode"),
         "shop_id": ("shop_id", "shopId"),
         "shop_name": ("shop_name", "shopName"),
+        "store_name": ("store_name", "storeName"),
         "source_tool": ("source_tool", "sourceTool"),
         "goods_no": ("goods_no", "goodsNo", "goodsId"),
         "tire_size": ("tire_size", "tireSize"),
@@ -1349,6 +1351,21 @@ def _ui_action_slot_patch(raw_action: Mapping[str, Any]) -> dict[str, Any]:
                 continue
             continue
         patch[key] = value
+    action_type = str(normalized.get("action_type") or normalized.get("cta_action") or "").strip()
+    entity_type = str(normalized.get("entity_type") or normalized.get("entityType") or "").strip()
+    entity_id = str(normalized.get("entity_id") or normalized.get("entityId") or "").strip()
+    entity_label = str(
+        normalized.get("entity_label")
+        or normalized.get("entityLabel")
+        or normalized.get("label")
+        or ""
+    ).strip()
+    if action_type in {"select_store", "select_schedule"} or entity_type in {"store", "schedule"}:
+        if entity_id and patch.get("shop_id") in (None, "", []):
+            patch["shop_id"] = entity_id
+        if entity_label and patch.get("shop_id") not in (None, "", []):
+            patch["shop_name"] = entity_label
+            patch["store_name"] = entity_label
     quantity_match = _QUANTITY_LABEL_RE.fullmatch(str(raw_action.get("entity_label") or raw_action.get("dynamic_value") or ""))
     if quantity_match and "ord_qty" not in patch:
         patch["ord_qty"] = int(quantity_match.group(1))
@@ -1720,6 +1737,7 @@ def _with_existing_transaction_slot_fill_state(
         "region",
         "shop_id",
         "shop_name",
+        "store_name",
         "availability_intent",
         "requested_cal_day",
         "rsv_hour",
@@ -1757,6 +1775,7 @@ def _with_existing_transaction_slot_fill_state(
                 "rsv_hour",
                 "shop_id",
                 "shop_name",
+                "store_name",
                 "goods_no",
                 "tire_size",
                 "ord_qty",
@@ -1830,6 +1849,7 @@ def _minimal_ui_action_slot_values(action_type: str, slot_values: Mapping[str, A
         "select_store": (
             "shop_id",
             "shop_name",
+            "store_name",
             "goods_no",
             "tire_size",
             "ord_qty",
@@ -1839,7 +1859,7 @@ def _minimal_ui_action_slot_values(action_type: str, slot_values: Mapping[str, A
             "schedule_tier",
             "inventory_mode",
         ),
-        "select_schedule": ("requested_cal_day", "rsv_hour"),
+        "select_schedule": ("requested_cal_day", "rsv_hour", "shop_id", "shop_name", "store_name"),
     }
     allowed_keys = keys_by_action.get(str(action_type or "").strip())
     if not allowed_keys:
