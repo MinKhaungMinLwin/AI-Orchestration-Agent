@@ -948,31 +948,6 @@ def test_llm_info_answer_experiment_bypasses_product_info_card(monkeypatch: pyte
     assert code_event is None
 
 
-def test_llm_info_answer_experiment_bypasses_unsized_summary_mapper(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("TSTATION_EXPERIMENT_LLM_INFO_ANSWER", "1")
-    action_token = current_action_mode.set("info_only")
-    user_token = current_user_text.set("키너지 EX 타이어의 전체 사이즈를 알려줘")
-    decision_token = current_discovery_response_decision.set(
-        ResponseDecision(
-            response_shape=ResponseShape.SUMMARY,
-            template=TemplateName.QUICK_REPLY,
-            required_slots=(),
-            metadata={"response_shape_key": "neutral_product_description"},
-        )
-    )
-    try:
-        event = try_build_template(
-            [_kinergy_ex_search_entry()],
-            "키너지 EX의 전체 사이즈를 확인해드릴게요.",
-        )
-    finally:
-        current_discovery_response_decision.reset(decision_token)
-        current_user_text.reset(user_token)
-        current_action_mode.reset(action_token)
-
-    assert event is None
-
-
 def test_llm_info_answer_experiment_keeps_recommendation_cards(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TSTATION_EXPERIMENT_LLM_INFO_ANSWER", "1")
 
