@@ -155,10 +155,10 @@ from services.tstation.executors.contract_required_tool_executor import (
     _best_selling_general_fallback_input,
     _contract_annotation_metadata,
     _enrich_best_selling_result_for_product_cards,
-    _recover_contract_required_flow_progress_tool,
     _recover_contract_required_store_flow_tool,
     _recover_contract_required_tool,
     _recover_contract_required_vehicle_recommendation,  # noqa: F401
+    continue_active_flow_after_tool,
     contract_required_tool_start_event,
     recover_blocked_fast_path_to_contract_tool,
 )
@@ -38264,17 +38264,15 @@ class TStationChatServiceV2:
                                 yield chunk
                             return
 
-                    post_tool_flow_progress_recovery = await _recover_contract_required_flow_progress_tool(
+                    post_tool_flow_progress_recovery = await continue_active_flow_after_tool(
                         turn_contract=turn_contract,
                         user_text=user_query,
                         merged_slots=pending_slots or initial_slots,
+                        last_tool_name=str(tool_name or ""),
                         blocked_fast_path_source=f"post_tool_flow_progress:{tool_name}",
                         member_no=user_id,
                     )
-                    if (
-                        post_tool_flow_progress_recovery is not None
-                        and str(post_tool_flow_progress_recovery.get("tool_name") or "") != str(tool_name or "")
-                    ):
+                    if post_tool_flow_progress_recovery is not None:
                         for chunk in await _contract_required_tool_recovery_sse(
                             post_tool_flow_progress_recovery
                         ):
