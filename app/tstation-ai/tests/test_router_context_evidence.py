@@ -282,6 +282,40 @@ def test_router_generic_compare_does_not_override_multi_product_description_requ
     assert contract.router_wins_applied is False
 
 
+def test_purchase_product_resolution_prefers_normalized_tool_keyword_over_polluted_slot() -> None:
+    frame = build_discovery_intent_frame(
+        "아이온 에보 as suv 구매할래",
+        known_slots={
+            "router_primary_action": "buy",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "pending_product_name": "아이온 에보 as suv 할래",
+            "tire_model": "아이온 에보 as suv 할래",
+            "slot_sources": {
+                "pending_product_name": "regex_supplemental",
+                "tire_model": "regex_supplemental",
+            },
+        },
+    )
+    plan = plan_discovery_tools(frame)
+    response_decision = decide_discovery_response(frame)
+    contract = build_turn_contract(
+        user_text="아이온 에보 as suv 구매할래",
+        intent_frame=frame,
+        tool_plan=plan,
+        response_decision=response_decision,
+        action_mode="purchase_continuation",
+        context_state="resumed",
+        resume_source="explicit_user",
+    )
+
+    assert plan.tool_args_patch["keyword"] == "iON evo AS SUV"
+    assert contract.known_slots["pending_product_name"] == "iON evo AS SUV"
+    assert contract.known_slots["tire_model"] == "iON evo AS SUV"
+    assert contract.known_slots["slot_sources"]["pending_product_name"] == "router_evidence"
+    assert contract.known_slots["slot_sources"]["tire_model"] == "router_evidence"
+
+
 def test_router_coupon_name_is_preserved_without_forcing_support_to_transaction() -> None:
     routing = _routing_result(
         primary_action="use_coupon",

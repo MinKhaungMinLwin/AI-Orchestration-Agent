@@ -419,6 +419,27 @@ def decide_discovery_response(frame: IntentFrame) -> ResponseDecision:
         )
 
     if frame.intent == "product_search":
+        if (
+            entities.get("purchase_intent")
+            and not tire_size
+            and frame.sub_intent in {"product_name_search", "product_family_search"}
+        ):
+            return ResponseDecision(
+                response_shape=ResponseShape.CLARIFY,
+                template=TemplateName.QUICK_REPLY,
+                required_slots=("tire_size",),
+                forbidden_behaviors=(
+                    "confirm_goods_no_before_size_selection",
+                    "auto_select_first_available_size",
+                    "product_search_summary_as_final_answer",
+                    "handoff_transaction_without_size",
+                ),
+                assistant_guidance=(
+                    "구매 의도로 상품 후보를 찾았더라도 타이어 규격이 확정되지 않으면 상품 상세 설명으로 끝내지 않는다. "
+                    "검색 결과의 available_sizes를 기준으로 구매할 규격 선택을 요청하고, 규격 선택 전에는 goods_no를 확정하지 않는다."
+                ),
+                metadata=_metadata(frame, response_shape_key="purchase_size_selection"),
+            )
         if entities.get("multi_product_description_request"):
             return ResponseDecision(
                 response_shape=ResponseShape.SUMMARY,

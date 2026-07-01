@@ -147,6 +147,10 @@ _WARNING_CONTRACT_VIOLATION_TYPES = frozenset({
 _PRICE_OR_COUPON_RE = re.compile(r"가격|얼마|할인가|쿠폰|할인|혜택", re.IGNORECASE)
 _COUPON_ANCHOR_RE = re.compile(r"쿠폰", re.IGNORECASE)
 _REFERENCE_PURCHASE_RE = re.compile(r"(?:그거|그\s*상품|이거|이\s*상품).{0,20}(구매|주문|결제|살래|살게|사고)", re.IGNORECASE)
+_PURCHASE_PRODUCT_RESOLUTION_INTENTS = frozenset({
+    "product_search",
+    "resolve_product_for_purchase_size_selection",
+})
 _DISCOVERY_NO_RESULT_RE = re.compile(r"찾을\s*수\s*없|확인되지\s*않|검색되지\s*않|없어요", re.IGNORECASE)
 _ORDER_PROGRESS_ONLY_RE = re.compile(
     r"(주문|구매|결제).{0,20}(진행|이어|도와|확정\s*단계|단계로)|"
@@ -191,6 +195,39 @@ _BEST_SELLER_SIZE_CLARIFICATION_RE = re.compile(
     r"(정확한\s*사이즈|사이즈\s*(?:정보|직접\s*입력)|연식/트림에\s*따라|연식/트림|차량번호|내\s*차량)",
     re.IGNORECASE,
 )
+
+
+def _prefer_router_product_keyword_for_purchase_resolution(
+    *,
+    known_slots: dict[str, Any],
+    tool_args_patch: Mapping[str, Any],
+    intent: str,
+    action_mode: str,
+) -> None:
+    keyword = str(tool_args_patch.get("keyword") or "").strip()
+    if not keyword:
+        return
+    pending_intent = str(known_slots.get("pending_intent") or "").strip()
+    goal_type = str(known_slots.get("goal_type") or "").strip()
+    router_action = str(known_slots.get("router_primary_action") or "").strip()
+    if not (
+        intent in _PURCHASE_PRODUCT_RESOLUTION_INTENTS
+        or action_mode == "purchase_continuation"
+        or pending_intent == "order"
+        or goal_type == "place_order"
+        or router_action == "buy"
+    ):
+        return
+    known_slots["pending_product_name"] = keyword
+    known_slots["tire_model"] = keyword
+    slot_sources = known_slots.get("slot_sources")
+    if not isinstance(slot_sources, dict):
+        slot_sources = {}
+    else:
+        slot_sources = dict(slot_sources)
+    slot_sources["pending_product_name"] = "router_evidence"
+    slot_sources["tire_model"] = "router_evidence"
+    known_slots["slot_sources"] = slot_sources
 _OE_PART_NUMBER_REQUEST_RE = re.compile(
     r"(?:\bOE\b|순정|출고\s*타이어|출고용|출고때|출고 시).{0,40}(?:품번|부품\s*번호|파트\s*넘버|part\s*number)|"
     r"(?:품번|부품\s*번호|파트\s*넘버|part\s*number).{0,40}(?:\bOE\b|순정|출고\s*타이어|출고용|출고때|출고 시)",
@@ -854,6 +891,12 @@ def build_turn_contract(
         for key, value in dict(tool_plan.tool_args_patch if tool_plan is not None else {}).items()
         if value not in (None, "", [], {})
     }
+    _prefer_router_product_keyword_for_purchase_resolution(
+        known_slots=known_slots,
+        tool_args_patch=tool_args_patch,
+        intent=intent,
+        action_mode=action_mode,
+    )
     fallback_required_slots = (
         intent_frame.missing_slots
         if tool_plan is None and intent_frame is not None

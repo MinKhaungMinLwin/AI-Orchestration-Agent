@@ -49,6 +49,17 @@ def test_external_price_comparison_decision_forbids_external_scraping_claims() -
     assert "product_description_answer" in decision.forbidden_behaviors
 
 
+def test_purchase_product_search_without_size_asks_for_size_selection_not_description() -> None:
+    decision = decide_discovery_response(build_discovery_intent_frame("아이온 에보 as suv 구매할래"))
+
+    assert decision.template == TemplateName.QUICK_REPLY
+    assert decision.response_shape == ResponseShape.CLARIFY
+    assert decision.required_slots == ("tire_size",)
+    assert decision.metadata["response_shape_key"] == "purchase_size_selection"
+    assert "confirm_goods_no_before_size_selection" in decision.forbidden_behaviors
+    assert "product_search_summary_as_final_answer" in decision.forbidden_behaviors
+
+
 def test_tc016_winter_concept_decision_forbids_dropping_winter_constraint() -> None:
     decision = decide_discovery_response(build_discovery_intent_frame("윈터 타이어랑 사계절 타이어랑 어떤 의미야?"))
 

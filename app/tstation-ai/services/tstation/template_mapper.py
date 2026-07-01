@@ -3198,6 +3198,60 @@ def _map_contract_product_size_list(tool_data_list: list[dict], assistant_text: 
     return _map_product_search_size_summary(tool_data_list, force_contract=True)
 
 
+def _map_contract_purchase_size_selection(tool_data_list: list[dict], assistant_text: str) -> dict | None:
+    del assistant_text
+    product_name = ""
+    candidate_goods_no = ""
+    available_sizes: list[str] = []
+    search_entries = _find_entries(tool_data_list, "search_product_tool")
+    if not search_entries:
+        return None
+    for entry in search_entries:
+        raw = _unwrap(entry)
+        rows = raw if isinstance(raw, list) else (raw.get("items") if isinstance(raw, dict) else [])
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            if not product_name:
+                product_name = _get_str(row, "goods_nm", "big_goods_nm", "ptrn_d_nm", "title")
+            if not candidate_goods_no:
+                candidate_goods_no = _get_str(row, "goods_no", "goodsNo")
+            for size in _row_available_sizes(row):
+                if size and size not in available_sizes:
+                    available_sizes.append(size)
+    if len(available_sizes) < 2:
+        return None
+    product_label = product_name or "해당 상품"
+    response = (
+        f"{product_label} 구매를 진행하려면 먼저 장착할 타이어 규격을 선택해야 해요.\n"
+        f"현재 선택 가능한 규격은 {', '.join(available_sizes)}입니다."
+    )
+    quick_replies = [{"label": size, "domain": "DISCOVERY"} for size in available_sizes[:8]]
+    quick_replies.append({"label": "사이즈 직접 입력", "domain": "DISCOVERY"})
+    metadata: dict[str, object] = {
+        "response_shape_key": "purchase_size_selection",
+        "productName": product_label,
+        "availableSizes": available_sizes,
+        "pendingIntent": "order",
+        "goalType": "place_order",
+    }
+    if candidate_goods_no:
+        metadata["productCandidateGoodsNo"] = candidate_goods_no
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": response,
+            "quickReplies": quick_replies,
+            "predictedDomains": ["DISCOVERY", "TRANSACTION"],
+            "metadata": metadata,
+        },
+        "assistant_response_source": "contract_renderer",
+    }
+
+
 def _map_contract_discovery_summary(tool_data_list: list[dict], assistant_text: str) -> dict | None:
     response_shape_key = _current_response_shape_key()
     decision = current_discovery_response_decision.get()
@@ -3229,6 +3283,7 @@ def _map_contract_discovery_summary(tool_data_list: list[dict], assistant_text: 
 
 _CONTRACT_RESPONSE_RENDERERS = {
     "product_size_list_lookup": _map_contract_product_size_list,
+    "purchase_size_selection": _map_contract_purchase_size_selection,
     "product_attribute_summary": _map_contract_discovery_summary,
     "metric_comparison_summary": _map_contract_discovery_summary,
     "technology_explanation_then_unsized_recommendation_summary": _map_contract_discovery_summary,

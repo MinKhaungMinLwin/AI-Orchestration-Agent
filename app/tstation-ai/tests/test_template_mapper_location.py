@@ -1702,6 +1702,53 @@ def test_unsized_product_search_summary_uses_available_sizes_in_quickreply() -> 
     assert "사이즈: 235/35R20, 235/40R19, 245/35R21, 245/45R19" in assistant_response
 
 
+def test_purchase_product_search_with_multiple_sizes_prompts_for_size_without_confirming_goods_no() -> None:
+    text = "아이온 에보 as suv 구매할래"
+    current_user_text.set(text)
+    current_pending_intent.set("order")
+    current_goal_type.set("place_order")
+    current_action_mode.set("purchase_continuation")
+    current_discovery_response_decision.set(decide_discovery_response(build_discovery_intent_frame(text)))
+
+    result = try_build_template(
+        [
+            _search_product_entry(
+                keyword="아이온 에보 AS SUV",
+                size=None,
+                items=[
+                    {
+                        "goods_no": "G000000317727",
+                        "goods_nm": "아이온 에보 AS SUV",
+                        "tire_size_1": "255/40R20",
+                        "available_sizes": [
+                            "235/50R20",
+                            "235/55R19",
+                            "255/40R20",
+                            "255/40R21",
+                            "255/45R19",
+                            "255/45R20",
+                            "265/45R20",
+                        ],
+                    },
+                ],
+            )
+        ],
+        "아이온 에보 AS SUV 상품을 확인했어요.",
+    )
+
+    assert result is not None
+    assert result["template"] == "quickReply"
+    assistant_response = result["data"]["assistantResponse"]
+    assert "구매를 진행하려면 먼저 장착할 타이어 규격을 선택해야 해요" in assistant_response
+    assert "235/50R20, 235/55R19" in assistant_response
+    assert "상품 설명" not in assistant_response
+    metadata = result["data"]["metadata"]
+    assert metadata["response_shape_key"] == "purchase_size_selection"
+    assert metadata["productCandidateGoodsNo"] == "G000000317727"
+    assert "goodsNo" not in metadata
+    assert [chip["label"] for chip in result["data"]["quickReplies"][:2]] == ["235/50R20", "235/55R19"]
+
+
 def test_contract_product_size_list_lookup_renders_all_requested_available_sizes_first() -> None:
     text = "kinergy EX 모든 사이즈 다 알려줘"
     sizes = [
