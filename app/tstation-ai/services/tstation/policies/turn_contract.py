@@ -4472,14 +4472,20 @@ def _has_preorder_price_basis(slots: Mapping[str, Any] | None) -> bool:
         "sale_prc",
     ):
         value = slots.get(key)
-        if value in (None, ""):
-            continue
-        try:
-            if int(value) > 0:
-                return True
-        except (TypeError, ValueError):
-            continue
+        if _is_positive_number_like(value):
+            return True
     return False
+
+
+def _is_positive_number_like(value: Any) -> bool:
+    if value in (None, "") or isinstance(value, bool):
+        return False
+    if isinstance(value, int | float):
+        return value > 0
+    text = str(value).strip().replace(",", "")
+    if not re.fullmatch(r"\d+(?:\.\d+)?", text):
+        return False
+    return any(char != "0" for char in text if char.isdigit())
 
 
 def _comparison_metric_row_label(metric: str) -> str:

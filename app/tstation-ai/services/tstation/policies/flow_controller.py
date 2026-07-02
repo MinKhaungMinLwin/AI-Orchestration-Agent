@@ -239,6 +239,36 @@ def location_source_type(known_slots: Mapping[str, Any] | None) -> str:
     return "none"
 
 
+def _has_purchase_price_basis(slots: Mapping[str, Any]) -> bool:
+    for key in (
+        "payment_amount",
+        "paymentAmount",
+        "cheapest_final_prc",
+        "final_unit_price",
+        "final_prc",
+        "final_price",
+        "finalPrice",
+        "price",
+        "extra_fvr_sale_prc",
+        "sale_prc",
+    ):
+        value = slots.get(key)
+        if _is_positive_number_like(value):
+            return True
+    return False
+
+
+def _is_positive_number_like(value: Any) -> bool:
+    if value in (None, "") or isinstance(value, bool):
+        return False
+    if isinstance(value, int | float):
+        return value > 0
+    text = str(value).strip().replace(",", "")
+    if not re.fullmatch(r"\d+(?:\.\d+)?", text):
+        return False
+    return any(char != "0" for char in text if char.isdigit())
+
+
 def has_location_source(known_slots: Mapping[str, Any] | None) -> bool:
     return location_source_type(known_slots) != "none"
 
@@ -1764,6 +1794,29 @@ def resolve_purchase_order_flow(
             preferred_tool="quick_order_tool",
             template=TemplateName.ORDER_COMPLETE,
             response_shape_key="quick_order_execute",
+            action_mode="purchase_continuation",
+            slot_patch=base_patch,
+            metadata=base_metadata,
+        )
+
+    if not _has_purchase_price_basis(slots):
+        return FlowState(
+            flow_id=_PURCHASE_FLOW_ID,
+            flow_step="resolve_price",
+            required_slots=(),
+            missing_slots=(),
+            allowed_tools=("get_final_price_tool",),
+            forbidden_tools=(
+                "get_logistics_inventory_tool",
+                "get_store_inventory_tool",
+                "transaction_store_preview_tool",
+                "get_store_schedule_tool",
+                "get_multi_store_schedule_tool",
+                "quick_order_tool",
+            ),
+            preferred_tool="get_final_price_tool",
+            template=TemplateName.QUICK_REPLY,
+            response_shape_key="reservation_price_lookup",
             action_mode="purchase_continuation",
             slot_patch=base_patch,
             metadata=base_metadata,
