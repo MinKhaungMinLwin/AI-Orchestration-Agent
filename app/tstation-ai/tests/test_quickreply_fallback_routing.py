@@ -18380,6 +18380,49 @@ def test_apply_history_product_selection_state_resolves_goods_no_and_trace_metad
     assert transition.flow_transition["active_flow_context"]["payment"]["price_basis"] == "cheapest_final_prc"
 
 
+def test_apply_history_product_selection_state_clears_stale_goods_no_for_comparison_product_selection() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000312680",
+        tire_size="165/65R14",
+        comparison_context=ComparisonContext(
+            product_names=["웨더플렉스 GT", "키너지 4S2"],
+            compare_metric="detail",
+            response_shape_key="metric_comparison_summary",
+            source="code_product_compare_resolver",
+        ),
+    )
+    prev_tool_data = [{
+        "tool": "search_product_tool",
+        "data": [
+            {
+                "goods_no": "G000000312680",
+                "goods_nm": "키너지 4S2",
+                "tire_size_1": "165/65R14",
+            },
+        ],
+    }]
+
+    state = apply_history_product_selection_state(
+        last_user_text="웨더플렉스 gt",
+        prev_tool_data=prev_tool_data,
+        merged_slots=slots,
+        resolve_goods_no_from_selection_fn=lambda user_text, tool_data, current_tire_size: resolve_goods_no_from_selection(
+            user_text,
+            tool_data,
+            current_tire_size=current_tire_size,
+        ),
+    )
+
+    assert state.updated_slots.goods_no is None
+    assert state.updated_slots.tire_model == "웨더플렉스 GT"
+    assert state.updated_slots.pending_product_name == "웨더플렉스 GT"
+    assert state.updated_slots.comparison_context is None
+    assert state.goods_no_resolved is False
+    assert state.action_context is None
+    assert state.trace_metadata["selection_source"] == "comparison_context_product_selection"
+    assert state.trace_metadata["validation_result"] == "comparison_context_product_override"
+
+
 def test_apply_history_product_selection_state_resolves_latest_product_template_candidate() -> None:
     slots = ConversationSlots(goods_no=None, tire_size="225/45R17", ord_qty=2, shop_name="강남점")
     latest_product_tmpl = {
