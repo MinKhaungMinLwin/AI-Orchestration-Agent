@@ -49,6 +49,37 @@ def test_contract_executor_and_base_agent_import_without_chat_module() -> None:
     assert "from services.tstation.chat import" not in base_agent_source
 
 
+def test_chat_direct_paths_use_policy_response_builders() -> None:
+    chat_source = Path("app/tstation-ai/services/tstation/chat.py").read_text(encoding="utf-8")
+    direct_faq_body = chat_source.split("def _build_direct_faq_policy_event", 1)[1].split(
+        "def _build_direct_faq_policy_tool_payload",
+        1,
+    )[0]
+    reservation_store_body = chat_source.split("async def _resolve_reservation_store_info_with_code", 1)[1].split(
+        "async def _resolve_store_holiday_period_with_code",
+        1,
+    )[0]
+
+    assert "build_general_cancel_fee_policy_event(" in direct_faq_body
+    assert "build_general_card_cancel_timing_policy_event(" in direct_faq_body
+    assert "build_support_faq_policy_event(" in direct_faq_body
+    assert "_build_general_cancel_fee_policy_event(" not in direct_faq_body
+    assert "_build_general_card_cancel_timing_policy_event(" not in direct_faq_body
+    assert "_build_support_faq_policy_event(" not in direct_faq_body
+
+    assert "select_reservation_store_row(" in reservation_store_body
+    assert "build_reservation_store_not_found_event(" in reservation_store_body
+    assert "build_reservation_store_info_event(" in reservation_store_body
+    legacy_reservation_body = (
+        reservation_store_body.replace("select_reservation_store_row(", "")
+        .replace("build_reservation_store_not_found_event(", "")
+        .replace("build_reservation_store_info_event(", "")
+    )
+    assert "_select_reservation_store_row(" not in legacy_reservation_body
+    assert "_reservation_store_not_found_event(" not in legacy_reservation_body
+    assert "_build_reservation_store_info_event(" not in legacy_reservation_body
+
+
 def test_reservation_history_policy_builds_store_info_without_chat_module() -> None:
     result = {
         "status": "success",

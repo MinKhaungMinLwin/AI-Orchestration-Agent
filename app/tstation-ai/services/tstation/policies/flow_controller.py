@@ -11,6 +11,7 @@ from typing import Any, Mapping
 from services.tstation.common.cta_urls import CTAUrls
 from services.tstation.policies.discovery_intent_policy import normalize_tire_size
 from services.tstation.policies.flow_state import canonical_flow_type, commerce_sub_flow_type
+from services.tstation.policies.price_basis_policy import has_price_basis
 from services.tstation.policies.response_decision import TemplateName
 
 
@@ -237,36 +238,6 @@ def location_source_type(known_slots: Mapping[str, Any] | None) -> str:
     if region and not _is_invalid_region_text(region):
         return "region"
     return "none"
-
-
-def _has_purchase_price_basis(slots: Mapping[str, Any]) -> bool:
-    for key in (
-        "payment_amount",
-        "paymentAmount",
-        "cheapest_final_prc",
-        "final_unit_price",
-        "final_prc",
-        "final_price",
-        "finalPrice",
-        "price",
-        "extra_fvr_sale_prc",
-        "sale_prc",
-    ):
-        value = slots.get(key)
-        if _is_positive_number_like(value):
-            return True
-    return False
-
-
-def _is_positive_number_like(value: Any) -> bool:
-    if value in (None, "") or isinstance(value, bool):
-        return False
-    if isinstance(value, int | float):
-        return value > 0
-    text = str(value).strip().replace(",", "")
-    if not re.fullmatch(r"\d+(?:\.\d+)?", text):
-        return False
-    return any(char != "0" for char in text if char.isdigit())
 
 
 def has_location_source(known_slots: Mapping[str, Any] | None) -> bool:
@@ -1799,7 +1770,7 @@ def resolve_purchase_order_flow(
             metadata=base_metadata,
         )
 
-    if not _has_purchase_price_basis(slots):
+    if not has_price_basis(slots):
         return FlowState(
             flow_id=_PURCHASE_FLOW_ID,
             flow_step="resolve_price",

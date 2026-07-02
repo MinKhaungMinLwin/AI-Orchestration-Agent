@@ -77,7 +77,15 @@ from services.tstation.policies.slot_fill_controller import (
     build_router_slot_fill_context,
     resolve_pre_router_slot_fill,
 )
+from services.tstation.policies.reservation_history_policy import (
+    build_reservation_store_info_event,
+    build_reservation_store_not_found_event,
+    select_reservation_store_row,
+)
 from services.tstation.policies.support_response_policy import (
+    build_general_cancel_fee_policy_event,
+    build_general_card_cancel_timing_policy_event,
+    build_support_faq_policy_event,
     build_support_faq_evidence_grounded_reply,
     is_post_install_quality_claim,
 )
@@ -7358,11 +7366,11 @@ def _build_direct_faq_policy_event(
 ) -> dict | None:
     intent = str(turn_contract.intent or "")
     if intent == "general_cancel_fee_policy":
-        event = _build_general_cancel_fee_policy_event(user_query, tool_result=tool_result)
+        event = build_general_cancel_fee_policy_event(user_query, tool_result=tool_result)
     elif intent == "general_card_cancel_timing_policy":
-        event = _build_general_card_cancel_timing_policy_event(user_query, tool_result=tool_result)
+        event = build_general_card_cancel_timing_policy_event(user_query, tool_result=tool_result)
     else:
-        event = _build_support_faq_policy_event(intent, user_query, tool_result=tool_result)
+        event = build_support_faq_policy_event(intent, user_query, tool_result=tool_result)
         if event is None:
             return None
     event["source_domain"] = str(turn_contract.domain or event.get("source_domain") or "").lower()
@@ -30032,7 +30040,7 @@ class TStationChatServiceV2:
             return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
 
         if turn_contract and turn_contract.intent == "tire_condition_photo_policy":
-            photo_policy_event = _build_support_faq_policy_event(
+            photo_policy_event = build_support_faq_policy_event(
                 "tire_condition_photo_policy",
                 last_user_text,
                 tool_result=None,
@@ -31926,10 +31934,10 @@ class TStationChatServiceV2:
                 "source_domain": "transaction",
             })
 
-            reservation_row, match_reason = _select_reservation_store_row(user_query, reservations_result)
+            reservation_row, match_reason = select_reservation_store_row(user_query, reservations_result)
             if reservation_row is None:
                 not_found_event = _finalize_direct_code_event(
-                    _reservation_store_not_found_event(match_reason),
+                    build_reservation_store_not_found_event(match_reason),
                     turn_contract=turn_contract,
                     intent="reservation_store_info_lookup",
                     source="code_reservation_store_info",
@@ -31937,7 +31945,7 @@ class TStationChatServiceV2:
                 )
                 return (emitted_events, not_found_event) if not_found_event is not None else None
             store_event = _finalize_direct_code_event(
-                _build_reservation_store_info_event(reservation_row, match_reason=match_reason),
+                build_reservation_store_info_event(reservation_row, match_reason=match_reason),
                 turn_contract=turn_contract,
                 intent="reservation_store_info_lookup",
                 source="code_reservation_store_info",

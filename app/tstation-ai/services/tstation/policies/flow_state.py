@@ -6,6 +6,7 @@ import re
 from typing import Any, Mapping
 
 from schemas.tstation.slots import is_invalid_product_identity_value
+from services.tstation.policies.price_basis_policy import has_price_basis
 
 
 _EMPTY_VALUES = (None, "", [], {})
@@ -618,24 +619,6 @@ def _flow_quantity(value: Any) -> int | None:
     return quantity if quantity > 0 else None
 
 
-def _has_price_basis(payment: Mapping[str, Any]) -> bool:
-    for key in ("payment_amount", "paymentAmount", *_PAYMENT_UNIT_PRICE_FIELDS):
-        if _is_positive_number_like(payment.get(key)):
-            return True
-    return False
-
-
-def _is_positive_number_like(value: Any) -> bool:
-    if value in (None, "") or isinstance(value, bool):
-        return False
-    if isinstance(value, int | float):
-        return value > 0
-    text = str(value).strip().replace(",", "")
-    if not re.fullmatch(r"\d+(?:\.\d+)?", text):
-        return False
-    return any(char != "0" for char in text if char.isdigit())
-
-
 def _store_lookup_tool_and_args(store: Mapping[str, Any]) -> tuple[str | None, dict[str, Any]]:
     place_query = str(store.get("place_query") or "").strip()
     region = str(store.get("region") or "").strip()
@@ -1021,7 +1004,7 @@ def evaluate_flow_progress(state: "FlowState") -> dict[str, Any]:
                     "tool_args_patch": lookup_args,
                 }
             return {**base, "current_step": "ask_store", "missing_slots": ["shop_id"]}
-        if requested_cal_day and rsv_hour and not _has_price_basis(payment):
+        if requested_cal_day and rsv_hour and not has_price_basis(payment):
             return {
                 **base,
                 "current_step": "resolve_price",

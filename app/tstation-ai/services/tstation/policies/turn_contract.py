@@ -15,6 +15,7 @@ from services.tstation.policies.discovery_intent_policy import (
 )
 from services.tstation.policies.flow_controller import build_purchase_flow_fallback_event
 from services.tstation.policies.intent_frame import IntentFrame
+from services.tstation.policies.price_basis_policy import has_price_basis
 from services.tstation.policies.preorder_event_builder import build_preorder_event
 from services.tstation.policies.resolved_context import build_resolved_turn_context
 from services.tstation.policies.response_decision import ResponseDecision, ToolPlan
@@ -4396,12 +4397,12 @@ def _quick_order_reservation_contract_violation(
         has_quantity = int(quantity or 0) > 0
     except (TypeError, ValueError):
         has_quantity = bool(quantity)
-    has_price_basis = _has_preorder_price_basis(contract.known_slots)
+    has_price = has_price_basis(contract.known_slots)
     if (
         template == "preOrder"
         and str(assistant_response_source or "") == "code_reservation_confirmation_ready"
         and str(response_shape_key or "") == "reservation_confirmation_ready"
-        and not has_price_basis
+        and not has_price
     ):
         return {
             "type": "preorder_without_price_basis",
@@ -4420,7 +4421,7 @@ def _quick_order_reservation_contract_violation(
         and contract.known_slots.get("requested_cal_day")
         and contract.known_slots.get("rsv_hour")
         and has_quantity
-        and has_price_basis
+        and has_price
     )
     if template == "preOrder" and is_ready_preorder_summary:
         return None
@@ -4453,37 +4454,6 @@ def _has_quick_order_execute_slots(slots: Mapping[str, Any] | None) -> bool:
         and slots.get("rsv_hour")
         and has_quantity
     )
-
-
-def _has_preorder_price_basis(slots: Mapping[str, Any] | None) -> bool:
-    if not isinstance(slots, Mapping):
-        return False
-    for key in (
-        "payment_amount",
-        "paymentAmount",
-        "cheapest_final_prc",
-        "final_unit_price",
-        "final_prc",
-        "final_price",
-        "price",
-        "extra_fvr_sale_prc",
-        "sale_prc",
-    ):
-        value = slots.get(key)
-        if _is_positive_number_like(value):
-            return True
-    return False
-
-
-def _is_positive_number_like(value: Any) -> bool:
-    if value in (None, "") or isinstance(value, bool):
-        return False
-    if isinstance(value, int | float):
-        return value > 0
-    text = str(value).strip().replace(",", "")
-    if not re.fullmatch(r"\d+(?:\.\d+)?", text):
-        return False
-    return any(char != "0" for char in text if char.isdigit())
 
 
 def _comparison_metric_row_label(metric: str) -> str:
