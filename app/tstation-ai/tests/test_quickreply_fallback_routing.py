@@ -4861,6 +4861,109 @@ def test_generic_compare_text_is_product_comparison_query() -> None:
     assert _is_product_comparison_query("다이나프로 hpx 랑 윈터 아이셉트 비교해줘") is True
 
 
+def test_weatherflex_gt_and_kinergy_4s2_builds_comparison_event_from_search_results() -> None:
+    event = _build_product_comparison_event_from_search_results(
+        "웨더플렉스 GT, 키너지 4S2 비교해줘",
+        [
+            (
+                "키너지 4S2",
+                {
+                    "items": [
+                        {
+                            "goods_no": "G000000312680",
+                            "goods_nm": "키너지 4S2",
+                            "prc_grd_nm": "스탠다드",
+                            "goods_pfm_nm": "COMFORT",
+                            "goods_dtl_pfm_nm": "컴포트",
+                            "season_nm": "사계절",
+                            "car_knd_nm": "승용차",
+                            "t_rls_yearmon": "2019년 11월",
+                            "sys_reg_dtime": "2020-02-12 13:28:58",
+                            "rating_avg": 4.4,
+                            "review_count": 7,
+                        }
+                    ]
+                },
+            ),
+            (
+                "웨더플렉스 GT",
+                {
+                    "items": [
+                        {
+                            "goods_no": "G000000320362",
+                            "goods_nm": "웨더플렉스 GT",
+                            "prc_grd_nm": "프리미엄",
+                            "goods_pfm_nm": "COMFORT",
+                            "goods_dtl_pfm_nm": "컴포트",
+                            "season_nm": "올웨더",
+                            "car_knd_nm": "승용차",
+                            "t_rls_yearmon": "2025년 7월",
+                            "sys_reg_dtime": "2025-07-08 11:53:17",
+                            "rating_avg": 0,
+                            "review_count": 0,
+                        }
+                    ]
+                },
+            ),
+        ],
+    )
+
+    assert event is not None
+    assert event["assistant_response_source"] == "code_product_compare_resolver"
+    assert event["data"]["metadata"]["response_shape_key"] == "metric_comparison_summary"
+    assert "**키너지 4S2**" in event["data"]["assistantResponse"]
+    assert "**웨더플렉스 GT**" in event["data"]["assistantResponse"]
+    assert "| 항목 | 내용 |" in event["data"]["assistantResponse"]
+
+
+def test_compare_query_uses_router_product_names_from_comparison_context() -> None:
+    event = _build_product_comparison_event_from_search_results(
+        "둘 비교해줘",
+        [
+            (
+                "키너지 4S2",
+                {
+                    "items": [
+                        {
+                            "goods_no": "G000000312680",
+                            "goods_nm": "키너지 4S2",
+                            "prc_grd_nm": "스탠다드",
+                            "goods_pfm_nm": "COMFORT",
+                            "goods_dtl_pfm_nm": "컴포트",
+                            "season_nm": "사계절",
+                            "car_knd_nm": "승용차",
+                        }
+                    ]
+                },
+            ),
+            (
+                "웨더플렉스 GT",
+                {
+                    "items": [
+                        {
+                            "goods_no": "G000000320362",
+                            "goods_nm": "웨더플렉스 GT",
+                            "prc_grd_nm": "프리미엄",
+                            "goods_pfm_nm": "COMFORT",
+                            "goods_dtl_pfm_nm": "컴포트",
+                            "season_nm": "올웨더",
+                            "car_knd_nm": "승용차",
+                        }
+                    ]
+                },
+            ),
+        ],
+        comparison_context={
+            "product_names": ["웨더플렉스 GT", "키너지 4S2"],
+            "compare_metric": "detail",
+        },
+    )
+
+    assert event is not None
+    assert event["assistant_response_source"] == "code_product_compare_resolver"
+    assert event["data"]["metadata"]["productNames"] == ["웨더플렉스 GT", "키너지 4S2"]
+
+
 def test_description_compare_followup_reuses_previous_compare_products() -> None:
     messages = [
         {"role": "user", "content": "다이나프로 hpx 랑 윈터 아이셉트 비교해줘"},

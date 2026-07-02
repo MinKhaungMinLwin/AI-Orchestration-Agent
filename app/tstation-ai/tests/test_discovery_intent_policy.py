@@ -702,6 +702,39 @@ def test_tc026_latest_compare_uses_registration_metric() -> None:
     assert plan.preferred_tool == "search_product_tool"
 
 
+def test_two_product_description_request_stays_description_flow() -> None:
+    frame = build_discovery_intent_frame("키너지 EX, 벤투스 air S 설명해줘")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.intent == "product_description"
+    assert frame.sub_intent == "product_detail"
+    assert frame.entities["multi_product_description_request"] is True
+    assert frame.entities["multi_product_detail_request"] is True
+    assert plan.metadata["response_intent"] == "multi_product_detail"
+    assert "get_products_recommendations_tool" in plan.forbidden_tools
+
+
+def test_two_product_comparison_request_stays_comparison_flow() -> None:
+    frame = build_discovery_intent_frame("키너지 EX랑 벤투스 air S 비교해줘")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.intent == "product_comparison"
+    assert frame.sub_intent == "general_compare"
+    assert "multi_product_description_request" not in frame.entities
+    assert plan.preferred_tool == "search_product_tool"
+    assert "get_products_recommendations_tool" in plan.forbidden_tools
+
+
+def test_weatherflex_gt_and_kinergy_4s2_compare_uses_product_comparison() -> None:
+    frame = build_discovery_intent_frame("웨더플렉스 GT, 키너지 4S2 비교해줘")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.intent == "product_comparison"
+    assert frame.sub_intent == "general_compare"
+    assert frame.entities["product_names"] == ("웨더플렉스 GT", "키너지 4S2")
+    assert plan.preferred_tool == "search_product_tool"
+
+
 def test_tc032_product_fuel_efficiency_compare_uses_attribute_compare() -> None:
     frame = build_discovery_intent_frame("키너지 EX랑 벤투스 air S 연비 기준으로 비교해줘")
     plan = plan_discovery_tools(frame)

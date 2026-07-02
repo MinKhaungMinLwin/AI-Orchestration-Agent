@@ -668,6 +668,9 @@ def build_turn_contract(
     )
     known_slots = _normalize_quantity_slots(known_slots)
     if intent_frame is not None:
+        product_names = tuple(
+            str(name).strip() for name in (intent_frame.entities.get("product_names") or ()) if str(name or "").strip()
+        )[:2]
         requested_product_attribute = str(intent_frame.entities.get("requested_product_attribute") or "")
         compare_metric = str(intent_frame.entities.get("compare_metric") or "")
         comparison_followup_intent = str(intent_frame.entities.get("comparison_followup_intent") or "")
@@ -678,6 +681,18 @@ def build_turn_contract(
         recommendation_context = intent_frame.entities.get("recommendation_context")
         if requested_product_attribute:
             known_slots["requested_product_attribute"] = requested_product_attribute
+        if len(product_names) >= 2:
+            known_slots["product_names"] = list(product_names)
+            comparison_context = known_slots.get("comparison_context")
+            if not isinstance(comparison_context, Mapping):
+                comparison_context = {}
+            comparison_context = dict(comparison_context)
+            comparison_context["product_names"] = list(product_names)
+            if compare_metric:
+                comparison_context["compare_metric"] = compare_metric
+            if comparison_followup_intent:
+                comparison_context["comparison_followup_intent"] = comparison_followup_intent
+            known_slots["comparison_context"] = comparison_context
         if compare_metric:
             known_slots["compare_metric"] = compare_metric
         if comparison_followup_intent:
@@ -772,12 +787,27 @@ def build_turn_contract(
             known_slots["product_name"] = known_slots.get("pending_check_object_value")
     response_metadata = response_decision.metadata if response_decision is not None else {}
     if isinstance(response_metadata, Mapping):
+        product_names = response_metadata.get("productNames") or response_metadata.get("product_names")
         requested_product_attribute = str(response_metadata.get("requested_product_attribute") or "")
         compare_metric = str(response_metadata.get("compare_metric") or "")
         comparison_followup_intent = str(response_metadata.get("comparison_followup_intent") or "")
         oe_replacement_type = str(response_metadata.get("oe_replacement_type") or "")
         stock_check_mode = str(response_metadata.get("stock_check_mode") or "")
         schedule_mode = str(response_metadata.get("schedule_mode") or "").strip()
+        if isinstance(product_names, (list, tuple)):
+            normalized_product_names = [str(name).strip() for name in product_names if str(name or "").strip()][:2]
+            if len(normalized_product_names) >= 2:
+                known_slots["product_names"] = normalized_product_names
+                comparison_context = known_slots.get("comparison_context")
+                if not isinstance(comparison_context, Mapping):
+                    comparison_context = {}
+                comparison_context = dict(comparison_context)
+                comparison_context["product_names"] = normalized_product_names
+                if compare_metric:
+                    comparison_context["compare_metric"] = compare_metric
+                if comparison_followup_intent:
+                    comparison_context["comparison_followup_intent"] = comparison_followup_intent
+                known_slots["comparison_context"] = comparison_context
         if requested_product_attribute and not known_slots.get("requested_product_attribute"):
             known_slots["requested_product_attribute"] = requested_product_attribute
         if compare_metric and not known_slots.get("compare_metric"):

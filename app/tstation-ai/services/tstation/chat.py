@@ -14471,6 +14471,17 @@ def _comparison_context_from_slots(slots: Any | None) -> dict[str, Any]:
     return _comparison_context_dict(value)
 
 
+def _comparison_product_names_from_context(comparison_context: Any | None) -> tuple[str, ...]:
+    normalized_context = _comparison_context_dict(comparison_context)
+    product_names = normalized_context.get("product_names") or normalized_context.get("productNames")
+    if not isinstance(product_names, (list, tuple)):
+        return ()
+    names = tuple(str(name).strip() for name in product_names if str(name or "").strip())[:2]
+    if len(names) < 2:
+        return ()
+    return names
+
+
 def _explicit_compare_metric_from_text(user_text: str) -> str:
     text = user_text or ""
     if _PRODUCT_RELEASE_COMPARE_TEXT_RE.search(text):
@@ -14538,14 +14549,18 @@ def _comparison_context_values_from_event(event: dict | None) -> dict[str, Any]:
     }
 
 
-def _product_comparison_names(user_text: str) -> tuple[str, ...]:
+def _product_comparison_names(user_text: str, comparison_context: Any | None = None) -> tuple[str, ...]:
     frame = build_discovery_intent_frame(user_text)
     product_names = tuple(frame.entities.get("product_names") or ())
+    if len(product_names) < 2:
+        product_names = _comparison_product_names_from_context(comparison_context)
     if len(product_names) < 2:
         return ()
     if frame.sub_intent in {"grade_compare", "mileage_compare", "latest_compare", "attribute_compare", "general_compare"}:
         return product_names
     if frame.intent in {"product_search", "product_description"} and _PRODUCT_COMPARE_TEXT_RE.search(user_text):
+        return product_names
+    if _is_multi_product_compare_continuation(user_text) or _PRODUCT_COMPARE_REASK_RE.search(user_text or ""):
         return product_names
     return ()
 
@@ -14781,7 +14796,7 @@ def _should_resolve_compare_target_product_pair(
 ) -> bool:
     if _is_product_compare_context_reset_query(user_text):
         return False
-    if len(_product_comparison_names(user_text)) >= 2:
+    if len(_product_comparison_names(user_text, _comparison_context_from_slots(slots))) >= 2:
         return True
     if not _has_recent_compare_target_prompt(messages, latest_quickreply_tmpl):
         comparison_context = _comparison_context_from_slots(slots)
@@ -14794,7 +14809,7 @@ def _should_resolve_compare_target_product_pair(
         ):
             return False
     comparison_query = _comparison_query_with_recent_context(user_text, messages, latest_quickreply_tmpl, slots=slots)
-    return len(_product_comparison_names(comparison_query)) >= 2
+    return len(_product_comparison_names(comparison_query, _comparison_context_from_slots(slots))) >= 2
 
 
 def _comparison_query_with_recent_context(
@@ -14803,12 +14818,12 @@ def _comparison_query_with_recent_context(
     latest_quickreply_tmpl: dict | None = None,
     slots: Any | None = None,
 ) -> str:
+    comparison_context = _comparison_context_from_slots(slots)
     if _product_comparison_names(user_text):
         return user_text
     user_text = user_text or ""
     if _is_product_compare_context_reset_query(user_text):
         return user_text
-    comparison_context = _comparison_context_from_slots(slots)
     context_names = tuple(comparison_context.get("product_names") or ())
     context_metric = str(comparison_context.get("compare_metric") or "").strip()
     if context_metric not in _COMPARISON_METRICS:
@@ -15763,8 +15778,9 @@ def _build_product_comparison_event(
 def _build_product_comparison_event_from_search_results(
     user_text: str,
     search_results: list[tuple[str, dict]],
+    comparison_context: Any | None = None,
 ) -> dict | None:
-    product_names = _product_comparison_names(user_text)
+    product_names = _product_comparison_names(user_text, comparison_context)
     if not product_names:
         return None
     if len(product_names) < 2 or not search_results:
@@ -15993,8 +16009,8 @@ def _build_product_attribute_event_from_search_results(
     }
 
 
-def _is_product_comparison_query(user_text: str) -> bool:
-    return len(_product_comparison_names(user_text)) >= 2
+def _is_product_comparison_query(user_text: str, comparison_context: Any | None = None) -> bool:
+    return len(_product_comparison_names(user_text, comparison_context)) >= 2
 
 
 def _should_skip_product_compare_override(user_text: str, called_tool_names: set[str]) -> bool:
@@ -33693,13 +33709,20 @@ class TStationChatServiceV2:
         async def _resolve_product_comparison_with_code(
             comparison_query_override: str | None = None,
         ) -> tuple[list[dict], dict] | None:
+            response_decision = turn_contract.response_decision if turn_contract is not None else None
+            response_metadata = response_decision.metadata if response_decision is not None else {}
+            comparison_context = (
+                response_metadata
+                if isinstance(response_metadata, Mapping)
+                else _comparison_context_from_slots(pending_slots or initial_slots)
+            )
             comparison_query = comparison_query_override or _comparison_query_with_recent_context(
                 user_query,
                 messages,
                 latest_quickreply_tmpl,
                 slots=pending_slots or initial_slots,
             )
-            product_names = _product_comparison_names(comparison_query)
+            product_names = _product_comparison_names(comparison_query, comparison_context)
             if len(product_names) < 2:
                 return None
             gate_allowed, gate_reason = _direct_code_fast_path_contract_gate(
@@ -38730,6 +38753,13 @@ class TStationChatServiceV2:
                         latest_quickreply_tmpl,
                         slots=pending_slots or initial_slots,
                     )
+                    response_decision = turn_contract.response_decision if turn_contract is not None else None
+                    response_metadata = response_decision.metadata if response_decision is not None else {}
+                    comparison_context = (
+                        response_metadata
+                        if isinstance(response_metadata, Mapping)
+                        else _comparison_context_from_slots(pending_slots or initial_slots)
+                    )
                     deterministic_compare_event = (
                         None
                         if (
@@ -38739,10 +38769,11 @@ class TStationChatServiceV2:
                         else _build_product_comparison_event_from_search_results(
                             comparison_query,
                             search_product_tool_results,
+                            comparison_context=comparison_context,
                         )
                     )
                     if (
-                        _is_product_comparison_query(comparison_query)
+                        _is_product_comparison_query(comparison_query, comparison_context)
                         and (
                             event.get("template") == "product"
                             or deterministic_compare_event is None
@@ -39171,16 +39202,24 @@ class TStationChatServiceV2:
                             latest_quickreply_tmpl,
                             slots=pending_slots or initial_slots,
                         )
+                        response_decision = turn_contract.response_decision if turn_contract is not None else None
+                        response_metadata = response_decision.metadata if response_decision is not None else {}
+                        comparison_context = (
+                            response_metadata
+                            if isinstance(response_metadata, Mapping)
+                            else _comparison_context_from_slots(pending_slots or initial_slots)
+                        )
                         deterministic_compare_event = (
                             None
                             if _should_skip_product_compare_override(user_query, called_tool_names)
                             else _build_product_comparison_event_from_search_results(
                                 comparison_query,
                                 search_product_tool_results,
+                                comparison_context=comparison_context,
                             )
                         )
                         if (
-                            _is_product_comparison_query(comparison_query)
+                            _is_product_comparison_query(comparison_query, comparison_context)
                             and (
                                 deterministic_compare_event is None
                                 or _is_product_compare_missing_event(deterministic_compare_event)
