@@ -328,6 +328,24 @@ def _non_empty_mapping(values: Mapping[str, Any] | None) -> dict[str, Any]:
     return {key: value for key, value in dict(values or {}).items() if value not in _EMPTY_VALUES}
 
 
+def _has_active_flow_context_shape(values: Mapping[str, Any]) -> bool:
+    if any(values.get(key) not in _EMPTY_VALUES for key in ("flow_type", "flow_step", "current_step", "target_action")):
+        return True
+    if any(isinstance(values.get(key), Mapping) and values.get(key) for key in (
+        "product",
+        "vehicle",
+        "recommendation",
+        "store",
+        "schedule",
+        "payment",
+        "intent",
+    )):
+        return True
+    if values.get("dormant_flows") or values.get("flow_events"):
+        return True
+    return str(values.get("status") or "").strip() in {"dormant", "resumed", "completed"}
+
+
 def canonical_flow_type(flow_type: Any) -> str:
     value = str(flow_type or "").strip()
     if value in _COMMERCE_SUB_FLOW_TYPES:
@@ -1269,6 +1287,8 @@ class FlowState:
     @classmethod
     def from_active_flow_context(cls, context: Mapping[str, Any] | None) -> "FlowState":
         flat = _non_empty_mapping(context)
+        if flat and not _has_active_flow_context_shape(flat):
+            flat = {}
         flow_type, normalized_intent = _normalize_flow_type_and_intent(flat.get("flow_type"))
         state = cls(
             flow_type=flow_type,
@@ -1523,7 +1543,13 @@ class FlowState:
         existing_vehicle = dict(merged.vehicle)
         existing_schedule = dict(merged.schedule)
 
-        if delta.flow_type and merged.flow_type != delta.flow_type:
+        if delta.flow_type and merged.flow_type != delta.flow_type and _is_empty_implicit_flow_state(merged):
+            merged = FlowState(flow_type=delta.flow_type, status=delta.status, flow_step=delta.flow_step)
+            existing_product = {}
+            existing_vehicle = {}
+            existing_schedule = {}
+            committed_fields.append("flow_type")
+        elif delta.flow_type and merged.flow_type != delta.flow_type:
             conflicts["flow_type"] = {"existing": merged.flow_type, "incoming": delta.flow_type}
             previous_identity = flow_identity_for_context(before)
             dormant_flows = upsert_dormant_flow(
@@ -1673,6 +1699,24 @@ class FlowState:
                 ),
             },
         )
+
+
+def _is_empty_implicit_flow_state(state: FlowState) -> bool:
+    return (
+        state.flow_type == "commerce"
+        and state.status == "active"
+        and state.flow_step is None
+        and not state.product
+        and not state.vehicle
+        and not state.recommendation
+        and not state.store
+        and not state.schedule
+        and not state.payment
+        and state.intent == {"sub_flow_type": "purchase"}
+        and not state.candidates
+        and not state.dormant_flows
+        and not state.flow_events
+    )
 
 
 def is_purchase_flow_context(*contexts: Mapping[str, Any] | None) -> bool:

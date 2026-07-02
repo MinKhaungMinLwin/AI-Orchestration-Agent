@@ -370,6 +370,43 @@ def test_active_purchase_to_support_faq_preserves_support_intent() -> None:
     assert context["dormant_flows"][0]["context"]["product"]["goods_no"] == "GOLD"
 
 
+def test_weak_flat_purchase_metadata_does_not_become_dormant_purchase() -> None:
+    result = commit_flow_state(
+        {
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "product_name": "Ventus S2 AS",
+            "tire_size": "245/45R19",
+            "template_data": {
+                "template": "preOrder",
+                "metadata": {"pendingIntent": "order", "goalType": "place_order"},
+            },
+        },
+        {
+            "flow_type": "support",
+            "status": "active",
+            "flow_step": "answer_faq",
+            "intent": {
+                "pending_intent": "general_cancel_fee_policy",
+                "goal_type": "support_faq",
+                "policy_topic": "general_cancel_fee_policy",
+            },
+        },
+        source="flow_controller:current_turn_support",
+        flow_type="support",
+        flow_step="answer_faq",
+        status="active",
+    )
+
+    context = result.state.to_active_flow_context()
+    assert context["flow_type"] == "support"
+    assert context["intent"]["pending_intent"] == "general_cancel_fee_policy"
+    assert context["intent"]["goal_type"] == "support_faq"
+    assert "dormant_flows" not in context
+    assert "product" not in context
+    assert result.metadata["flow_state_conflicts"] == {}
+
+
 def test_active_purchase_to_service_maintenance_preserves_action_boundary() -> None:
     result = commit_flow_state(
         {

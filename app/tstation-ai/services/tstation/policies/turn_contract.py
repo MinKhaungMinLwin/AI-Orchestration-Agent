@@ -4398,6 +4398,18 @@ def _quick_order_reservation_contract_violation(
         has_quantity = int(quantity or 0) > 0
     except (TypeError, ValueError):
         has_quantity = bool(quantity)
+    has_price_basis = _has_preorder_price_basis(contract.known_slots)
+    if (
+        template == "preOrder"
+        and str(assistant_response_source or "") == "code_reservation_confirmation_ready"
+        and str(response_shape_key or "") == "reservation_confirmation_ready"
+        and not has_price_basis
+    ):
+        return {
+            "type": "preorder_without_price_basis",
+            "assistant_response_source": str(assistant_response_source or ""),
+            "response_shape_key": str(response_shape_key or ""),
+        }
     is_ready_preorder_summary = bool(
         str(assistant_response_source or "") == "code_reservation_confirmation_ready"
         and str(response_shape_key or "") == "reservation_confirmation_ready"
@@ -4410,6 +4422,7 @@ def _quick_order_reservation_contract_violation(
         and contract.known_slots.get("requested_cal_day")
         and contract.known_slots.get("rsv_hour")
         and has_quantity
+        and has_price_basis
     )
     if template == "preOrder" and is_ready_preorder_summary:
         return None
@@ -4442,6 +4455,31 @@ def _has_quick_order_execute_slots(slots: Mapping[str, Any] | None) -> bool:
         and slots.get("rsv_hour")
         and has_quantity
     )
+
+
+def _has_preorder_price_basis(slots: Mapping[str, Any] | None) -> bool:
+    if not isinstance(slots, Mapping):
+        return False
+    for key in (
+        "payment_amount",
+        "paymentAmount",
+        "cheapest_final_prc",
+        "final_unit_price",
+        "final_prc",
+        "final_price",
+        "price",
+        "extra_fvr_sale_prc",
+        "sale_prc",
+    ):
+        value = slots.get(key)
+        if value in (None, ""):
+            continue
+        try:
+            if int(value) > 0:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
 
 
 def _comparison_metric_row_label(metric: str) -> str:
