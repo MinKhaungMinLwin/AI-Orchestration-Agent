@@ -17,6 +17,7 @@ from services.tstation.agents.b_discovery_agent._car_no_audit import (
     detect_car_no_mismatch,
     set_registered_car_nos,
 )
+from services.tstation.policies.ui_action_policy import normalize_vehicle_type_from_car_type
 
 # Product Compatibility
 from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.check_compatibility_api_product_compatible_get import sync_detailed as check_compatibility
@@ -65,6 +66,50 @@ current_discovery_search_tool_patch: contextvars.ContextVar[dict[str, Any]] = co
 
 _RECOMMENDATION_LIMIT_CAP = 10
 
+
+def _attach_vehicle_type_to_vehicle_row(row: dict[str, Any]) -> dict[str, Any]:
+    enriched = dict(row)
+    existing_vehicle_type = str(enriched.get("vehicle_type") or enriched.get("vehicleType") or "").strip()
+    if existing_vehicle_type:
+        return enriched
+
+    fallback_text = " ".join(
+        part
+        for part in (
+            str(enriched.get("car_model_det") or enriched.get("carModelDet") or "").strip(),
+            str(enriched.get("car_nm") or enriched.get("carNm") or "").strip(),
+            str(enriched.get("car_model") or enriched.get("carModel") or "").strip(),
+        )
+        if part
+    )
+    vehicle_type = normalize_vehicle_type_from_car_type(
+        enriched.get("car_type") or enriched.get("carType"),
+        fallback_text=fallback_text,
+    )
+    if vehicle_type:
+        enriched["vehicle_type"] = vehicle_type
+        enriched["vehicleType"] = vehicle_type
+    return enriched
+
+
+def _attach_vehicle_type_to_vehicle_payload(data: Any) -> Any:
+    if isinstance(data, dict):
+        enriched = dict(data)
+        items = enriched.get("items")
+        if isinstance(items, list):
+            enriched["items"] = [
+                _attach_vehicle_type_to_vehicle_row(item) if isinstance(item, dict) else item
+                for item in items
+            ]
+            return enriched
+        return _attach_vehicle_type_to_vehicle_row(enriched)
+    if isinstance(data, list):
+        return [
+            _attach_vehicle_type_to_vehicle_row(item) if isinstance(item, dict) else item
+            for item in data
+        ]
+    return data
+
 def _apply_recommendation_policy_patch(
     *,
     patch: dict[str, Any],
@@ -77,7 +122,20 @@ def _apply_recommendation_policy_patch(
     prc_grd: str | None,
     vehicle_type: str | None,
     car_lnc_cd: str | None,
-) -> tuple[RcmdType, str, str | None, str | None, str | None, str | None, str | None, str | None]:
+    min_price: int | None,
+    max_price: int | None,
+) -> tuple[
+    RcmdType,
+    str,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    int | None,
+    int | None,
+]:
     """Apply deterministic Discovery policy arguments to recommendation calls.
 
     This is intentionally conservative: only Discovery policy keys produced
@@ -85,7 +143,7 @@ def _apply_recommendation_policy_patch(
     over an explicit vehicle/size argument.
     """
     if not patch:
-        return rcmd_type, brand_cd, tire_size, sort_by, season_nm, pfm_nm, prc_grd, vehicle_type
+        return rcmd_type, brand_cd, tire_size, sort_by, season_nm, pfm_nm, prc_grd, vehicle_type, min_price, max_price
 
     suppress_vehicle_type_filter = bool(patch.get("suppress_vehicle_type_filter"))
     suppress_season_filter = bool(patch.get("suppress_season_filter"))
@@ -107,11 +165,15 @@ def _apply_recommendation_policy_patch(
         prc_grd = str(patch["prc_grd"])
     if patch.get("vehicle_type"):
         vehicle_type = str(patch["vehicle_type"])
+    if patch.get("min_price") is not None:
+        min_price = int(patch["min_price"])
+    if patch.get("max_price") is not None:
+        max_price = int(patch["max_price"])
     if suppress_season_filter:
         season_nm = None
     if suppress_vehicle_type_filter:
         vehicle_type = None
-    return rcmd_type, brand_cd, tire_size, sort_by, season_nm, pfm_nm, prc_grd, vehicle_type
+    return rcmd_type, brand_cd, tire_size, sort_by, season_nm, pfm_nm, prc_grd, vehicle_type, min_price, max_price
 
 
 _WINTER_RECOMMENDATION_FALLBACKS: tuple[tuple[RcmdType, str, str], ...] = (
@@ -740,7 +802,7 @@ def get_user_vehicles_tool(car_no: str, owner_nm: str):
                 response.content.decode(errors="ignore") or "Failed to get user vehicles"
             )
         # logger.debug("[TOOL][get_user_vehicles_tool] Response: %s", response.parsed)
-        return _success_response(response.status_code, _to_dict(response.parsed))
+        return _success_response(response.status_code, _attach_vehicle_type_to_vehicle_payload(_to_dict(response.parsed)))
     except Exception as e:
         logger.exception("[TOOL][get_user_vehicles_tool] Failed")
         return _error_response(None, str(e), "Failed to get user vehicles")
@@ -760,7 +822,7 @@ def _get_my_cars_cached(mbr_no: str):
                 response.content.decode(errors="ignore") or "Failed to get member cars"
             )
         # logger.debug("[TOOL][get_my_cars_tool] Response: %s", response.parsed)
-        return _success_response(response.status_code, _to_dict(response.parsed))
+        return _success_response(response.status_code, _attach_vehicle_type_to_vehicle_payload(_to_dict(response.parsed)))
     except Exception as e:
         logger.exception("[TOOL][get_my_cars_tool] Failed")
         return _error_response(None, str(e), "Failed to get member cars")
@@ -1171,8 +1233,10 @@ def get_products_recommendations_tool(
             "pfm_nm": pfm_nm,
             "prc_grd": prc_grd,
             "vehicle_type": vehicle_type,
+            "min_price": min_price,
+            "max_price": max_price,
         }
-        rcmd_type, brand_cd, tire_size, sort_by, season_nm, pfm_nm, prc_grd, vehicle_type = (
+        rcmd_type, brand_cd, tire_size, sort_by, season_nm, pfm_nm, prc_grd, vehicle_type, min_price, max_price = (
             _apply_recommendation_policy_patch(
                 patch=policy_patch,
                 rcmd_type=rcmd_type,
@@ -1184,6 +1248,8 @@ def get_products_recommendations_tool(
                 prc_grd=prc_grd,
                 vehicle_type=vehicle_type,
                 car_lnc_cd=car_lnc_cd,
+                min_price=min_price,
+                max_price=max_price,
             )
         )
         logger.info(
@@ -1480,6 +1546,39 @@ def get_deals_tool():
     except Exception as e:
         logger.exception("[TOOL][get_deals_tool] Failed")
         return _error_response(None, str(e), "Failed to get deals")
+
+
+@tool
+@tool_cache(ttl=600)
+def get_benefit_event_deal_list_tool(lang_cd: str = "ko"):
+    """이벤트/기획전 통합 목록 조회 — generic 혜택/프로모션/기획전/이벤트 질문용."""
+    logger.debug("[TOOL][get_benefit_event_deal_list_tool] Called with: lang_cd=%s", lang_cd)
+
+    try:
+        events_response = get_events(client=get_client(), lang_cd=lang_cd)
+        deals_response = get_deals(client=get_client())
+        if events_response.parsed is None:
+            return _error_response(
+                events_response.status_code,
+                f"HTTP {events_response.status_code}",
+                events_response.content.decode(errors="ignore") or "Failed to get events",
+            )
+        if deals_response.parsed is None:
+            return _error_response(
+                deals_response.status_code,
+                f"HTTP {deals_response.status_code}",
+                deals_response.content.decode(errors="ignore") or "Failed to get deals",
+            )
+        return _success_response(
+            200,
+            {
+                "events": _to_dict(events_response.parsed),
+                "deals": _to_dict(deals_response.parsed),
+            },
+        )
+    except Exception as e:
+        logger.exception("[TOOL][get_benefit_event_deal_list_tool] Failed")
+        return _error_response(None, str(e), "Failed to get benefit event/deal list")
 
 
 @tool

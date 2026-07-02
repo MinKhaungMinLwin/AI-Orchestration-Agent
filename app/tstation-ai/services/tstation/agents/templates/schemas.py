@@ -694,6 +694,8 @@ class CarMeta(BaseModel):
     tire_size_fr: str | None = None
     tireSizeRe: str | None = None
     tire_size_re: str | None = None
+    availableSizes: list[str] | None = None
+    available_sizes: list[str] | None = None
     ctaAction: str | None = None
     cta_action: str | None = None
     sourceIntent: str | None = None

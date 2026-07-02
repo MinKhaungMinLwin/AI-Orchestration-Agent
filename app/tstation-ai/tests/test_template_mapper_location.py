@@ -1589,15 +1589,87 @@ def test_product_description_without_size_omits_unrequested_size_missing_notice(
     assistant_response = result["data"]["assistantResponse"]
     assert "사이즈가 아직 확인되지 않아" not in assistant_response
     assert "정확한 장착 가능 여부와 가격" not in assistant_response
-    assert "키너지 EX:" in assistant_response
-    assert "승용차용 사계절" in assistant_response
-    assert "사이즈: 165/60R14, 185/65R14" in assistant_response
-    assert "저소음 라벨이 적용돼 정숙성과 승차감을 중요하게 보는 주행에 잘 맞아요." in assistant_response
-    assert "젖은 노면과 회전저항 등급은 각각 3등급, 3등급으로 확인돼요." in assistant_response
+    assert "[키너지 EX]" in assistant_response
+    assert "  유형: 승용차용 사계절 컴포트 타이어" in assistant_response
+    assert "  특징: 정숙성과 승차감 중심의 타이어. 저소음 라벨이 적용돼 정숙성과 승차감을 중요하게 보는 주행에 잘 맞아요" in assistant_response
+    assert "  등급: 젖은 노면 3등급, 회전저항 3등급" in assistant_response
+    assert "  사이즈: 165/60R14, 185/65R14" in assistant_response
     assert "패턴의" not in assistant_response
     assert "출시 2013년 4월" not in assistant_response
     assert "원산지 한국" not in assistant_response
     assert "- 키너지 EX:" not in assistant_response
+
+
+def test_multi_product_description_search_entries_keep_all_products() -> None:
+    text = "kinergy EX, Ventus S2 AS 설명해줘"
+    current_user_text.set(text)
+    current_discovery_response_decision.set(decide_discovery_response(build_discovery_intent_frame(text)))
+    ventus_s2_as_entry = {
+        "tool": "search_product_tool",
+        "args": {"keyword": "벤투스 S2 AS", "brand_cd": "HK", "limit": 5},
+        "data": {
+            "status": "success",
+            "http_status": 200,
+            "data": {
+                "items": [
+                    {
+                        "goods_nm": "벤투스 S2 AS",
+                        "tire_size_1": "205/55R16",
+                        "rr": "3",
+                        "wet": "3",
+                        "prc_grd_nm": "프리미엄",
+                        "goods_pfm_nm": "COMFORT",
+                        "season_nm": "사계절",
+                        "car_knd_nm": "승용차",
+                    },
+                    {
+                        "goods_nm": "벤투스 S2 AS",
+                        "tire_size_1": "225/45R17",
+                        "rr": "3",
+                        "wet": "3",
+                        "prc_grd_nm": "프리미엄",
+                        "goods_pfm_nm": "COMFORT",
+                        "season_nm": "사계절",
+                        "car_knd_nm": "승용차",
+                    },
+                ]
+            },
+        },
+    }
+
+    result = try_build_template([_kinergy_ex_search_entry(), ventus_s2_as_entry], "상품 설명입니다.")
+
+    assert result is not None
+    assert result["template"] == "quickReply"
+    assistant_response = result["data"]["assistantResponse"]
+    assert "[키너지 EX]" in assistant_response
+    assert "[벤투스 S2 AS]" in assistant_response
+    assert assistant_response.index("[키너지 EX]") < assistant_response.index("[벤투스 S2 AS]")
+    assert "\n\n[벤투스 S2 AS]" in assistant_response
+    assert "  사이즈: 165/60R14, 185/65R14" in assistant_response
+    assert "  사이즈: 205/55R16, 225/45R17" in assistant_response
+    assert "사이즈가 아직 확인되지 않아" not in assistant_response
+
+
+def test_multi_product_description_partial_missing_keeps_found_product_and_missing_notice() -> None:
+    text = "kinergy EX, Ventus S2 AS 설명해줘"
+    current_user_text.set(text)
+    current_discovery_response_decision.set(decide_discovery_response(build_discovery_intent_frame(text)))
+
+    result = try_build_template(
+        [
+            _kinergy_ex_search_entry(),
+            _search_product_entry(keyword="Ventus S2 AS", size=None, items=[]),
+        ],
+        "상품 설명입니다.",
+    )
+
+    assert result is not None
+    assert result["template"] == "quickReply"
+    assistant_response = result["data"]["assistantResponse"]
+    assert "[키너지 EX]" in assistant_response
+    assert "Ventus S2 AS" in assistant_response
+    assert "찾지 못했어요" in assistant_response
 
 
 def test_bare_s_fit_search_without_size_maps_to_pattern_summary_not_product_cards() -> None:
@@ -1649,6 +1721,148 @@ def test_unsized_product_search_summary_uses_available_sizes_in_quickreply() -> 
     assistant_response = result["data"]["assistantResponse"]
     assert "아이온 에보 AS:" in assistant_response
     assert "사이즈: 235/35R20, 235/40R19, 245/35R21, 245/45R19" in assistant_response
+
+
+def test_purchase_product_search_with_multiple_sizes_prompts_for_size_without_confirming_goods_no() -> None:
+    text = "아이온 에보 as suv 구매할래"
+    current_user_text.set(text)
+    current_pending_intent.set("order")
+    current_goal_type.set("place_order")
+    current_action_mode.set("purchase_continuation")
+    current_discovery_response_decision.set(decide_discovery_response(build_discovery_intent_frame(text)))
+
+    result = try_build_template(
+        [
+            _search_product_entry(
+                keyword="아이온 에보 AS SUV",
+                size=None,
+                items=[
+                    {
+                        "goods_no": "G000000317727",
+                        "goods_nm": "아이온 에보 AS SUV",
+                        "tire_size_1": "255/40R20",
+                        "available_sizes": [
+                            "235/50R20",
+                            "235/55R19",
+                            "255/40R20",
+                            "255/40R21",
+                            "255/45R19",
+                            "255/45R20",
+                            "265/45R20",
+                        ],
+                    },
+                ],
+            )
+        ],
+        "아이온 에보 AS SUV 상품을 확인했어요.",
+    )
+
+    assert result is not None
+    assert result["template"] == "quickReply"
+    assistant_response = result["data"]["assistantResponse"]
+    assert "구매를 진행하려면 먼저 장착할 타이어 규격을 선택해야 해요" in assistant_response
+    assert "235/50R20, 235/55R19" in assistant_response
+    assert "상품 설명" not in assistant_response
+    metadata = result["data"]["metadata"]
+    assert metadata["response_shape_key"] == "purchase_size_selection"
+    assert metadata["productCandidateGoodsNo"] == "G000000317727"
+    assert "goodsNo" not in metadata
+    assert [chip["label"] for chip in result["data"]["quickReplies"][:2]] == ["235/50R20", "235/55R19"]
+
+
+def test_contract_product_size_list_lookup_renders_all_requested_available_sizes_first() -> None:
+    text = "kinergy EX 모든 사이즈 다 알려줘"
+    sizes = [
+        "155/70R14",
+        "165/60R14",
+        "165/60R15",
+        "165/65R14",
+        "175/50R15",
+        "175/65R14",
+        "185/55R15",
+        "185/65R14",
+        "185/65R15",
+        "195/55R15",
+        "195/60R15",
+        "195/65R15",
+        "205/55R17",
+        "205/60R15",
+        "205/60R16",
+        "205/65R16",
+        "215/45R17",
+        "215/55R17",
+        "215/65R15",
+        "225/45R18",
+        "225/55R17",
+        "225/60R16",
+        "235/40R18",
+        "235/50R18",
+        "245/45R18",
+        "245/45R19W XL",
+        "275/35R19W XL",
+        "275/40R19W XL",
+    ]
+    current_user_text.set(text)
+    current_discovery_response_decision.set(
+        ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            assistant_guidance="현재 턴의 사이즈 목록 조회 의도에 맞춰 search_product_tool 결과의 규격 목록을 안내한다.",
+            metadata={"response_shape_key": "product_size_list_lookup"},
+        )
+    )
+
+    result = try_build_template(
+        [
+            _search_product_entry(
+                keyword="키너지 EX",
+                size=None,
+                items=[
+                    {
+                        "goods_no": "G000000319594",
+                        "goods_nm": "키너지 EX",
+                        "available_sizes": sizes,
+                        "car_knd_nm": "승용차",
+                        "season_nm": "사계절",
+                        "goods_pfm_nm": "COMFORT",
+                    }
+                ],
+            )
+        ],
+        "차량 규격이 아직 확인되지 않아 타이어 기준으로 안내드릴게요.",
+    )
+
+    assert result is not None
+    assert result["template"] == "quickReply"
+    assistant_response = result["data"]["assistantResponse"]
+    for size in sizes:
+        assert size.replace(" ", "") in assistant_response.replace(" ", "")
+    assert "대표로 확인되는 규격" not in assistant_response
+    assert "승용차용 사계절 컴포트 타이어입니다" not in assistant_response
+    assert "외 " not in assistant_response
+    assert result["data"]["metadata"]["contract_renderer_key"] == "product_size_list_lookup"
+
+
+def test_unknown_contract_response_shape_falls_back_to_existing_tool_mapper() -> None:
+    text = "s fit as"
+    current_user_text.set(text)
+    current_discovery_response_decision.set(
+        ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            assistant_guidance="새로운 응답 형태",
+            metadata={"response_shape_key": "unknown_new_shape"},
+        )
+    )
+
+    result = try_build_template([_s_fit_search_entry()], "S FIT AS 검색 결과입니다. 원하시는 상품을 선택해 주세요.")
+
+    assert result is not None
+    assert result["template"] == "quickReply"
+    assistant_response = result["data"]["assistantResponse"]
+    assert "S FIT AS" in assistant_response
+    assert "사이즈" in assistant_response
+    assert result["data"].get("metadata", {}).get("contract_renderer_applied") is None
 
 
 def test_product_search_with_size_acknowledges_input_size_without_size_prompt() -> None:
@@ -2008,6 +2222,23 @@ def test_tc044_unsized_sound_absorber_uses_deterministic_summary_when_results_ex
     ]
 
 
+def test_tc044_unsized_sound_absorber_recommendation_uses_catalog_summary_without_technology_explanation() -> None:
+    text = "흡음재 타이어 추천"
+    current_user_text.set(text)
+    current_discovery_response_decision.set(decide_discovery_response(build_discovery_intent_frame(text)))
+
+    result = try_build_template(
+        [_sound_absorber_recommendation_entry()],
+        "조건에 맞는 추천 상품을 안내드릴게요.",
+    )
+
+    assert result is not None
+    assert result["template"] == "quickReply"
+    assistant_response = result["data"]["assistantResponse"]
+    assert "흡음재는 타이어 내부에 부착해 주행 중 노면 소음을 줄여주는 소재예요." not in assistant_response
+    assert "사이즈가 아직 확인되지 않아 타이어 기준으로 안내드릴게요." in assistant_response
+
+
 def test_safe_service_unsized_question_uses_service_intro_and_product_names() -> None:
     text = "안심서비스 가능한 타이어는?"
     current_user_text.set(text)
@@ -2112,9 +2343,8 @@ def test_product_attribute_no_results_keeps_known_product_and_vehicle_size_conte
     assert result is not None
     assert result["template"] == "quickReply"
     assistant_response = result["data"]["assistantResponse"]
-    assert "225/50R18" in assistant_response
-    assert "옵티모" in assistant_response
-    assert "상품명을 알려주시면" not in assistant_response
+    assert "**옵티모** 225/50R18로 검색된 상품이 없습니다." in assistant_response
+    assert "정확한 상품명이나 규격을 알려주세요." in assistant_response
 
 
 def test_product_attribute_no_results_without_size_mentions_known_product() -> None:
@@ -2130,8 +2360,25 @@ def test_product_attribute_no_results_without_size_mentions_known_product() -> N
     assert result is not None
     assert result["template"] == "quickReply"
     assistant_response = result["data"]["assistantResponse"]
-    assert "옵티모" in assistant_response
-    assert "상품명을 알려주시면" not in assistant_response
+    assert "**옵티모**로 검색된 상품이 없습니다." in assistant_response
+    assert "정확한 상품명이나 규격을 알려주세요." in assistant_response
+
+
+def test_product_search_no_results_uses_search_phrase_when_keyword_and_size_are_present() -> None:
+    text = "ventus evo SUV 구매할래"
+    current_user_text.set(text)
+    current_discovery_response_decision.set(decide_discovery_response(build_discovery_intent_frame(text)))
+
+    result = try_build_template(
+        [_empty_product_attribute_search_entry(keyword="벤투스 evo SUV", size="225/50R17")],
+        "",
+    )
+
+    assert result is not None
+    assert result["template"] == "quickReply"
+    assistant_response = result["data"]["assistantResponse"]
+    assert "**벤투스 evo SUV** 225/50R17로 검색된 상품이 없습니다." in assistant_response
+    assert "정확한 상품명이나 규격을 알려주세요." in assistant_response
 
 
 def test_similar_price_recommendation_with_items_prefers_product_cards() -> None:
@@ -2266,8 +2513,11 @@ def test_metric_comparison_policy_ranks_mileage_from_search_results() -> None:
     assert result["template"] == "quickReply"
     assistant_response = result["data"]["assistantResponse"]
     assert "DB 수명/마일리지 지표 기준으로는 다이나프로 HPX" in assistant_response
-    assert "- 다이나프로 HPX: 수명/마일리지 점수 5/5" in assistant_response
-    assert "- 벤투스 에어S: 수명/마일리지 점수 4/5" in assistant_response
+    assert "**벤투스 에어S**" in assistant_response
+    assert "**다이나프로 HPX**" in assistant_response
+    assert "| 항목 | 내용 |" in assistant_response
+    assert "| 마일리지/수명 | 4.0 |" in assistant_response
+    assert "| 마일리지/수명 | 5.0 |" in assistant_response
     assert "사이즈:" not in assistant_response
     assert "상품 카드" not in assistant_response
 
@@ -2281,9 +2531,11 @@ def test_metric_comparison_policy_groups_generic_keyword_results_by_product_name
 
     assert result is not None
     assistant_response = result["data"]["assistantResponse"]
-    assert "- 옵티모 H426: 수명/마일리지 점수 2.5/5" in assistant_response
-    assert "- 옵티모 H108: 수명/마일리지 점수 2.5/5" in assistant_response
-    assert "- 크로스클라이밋 2: 수명/마일리지 정보 확인되지 않음" in assistant_response
+    assert "**옵티모 H426**" in assistant_response
+    assert "**옵티모 H108**" in assistant_response
+    assert "**크로스클라이밋 2**" in assistant_response
+    assert "| 마일리지/수명 | 2.5 |" in assistant_response
+    assert "| 마일리지/수명 | 0 |" in assistant_response
     assert "사이즈:" not in assistant_response
 
 
@@ -2297,8 +2549,9 @@ def test_metric_comparison_policy_ranks_fuel_efficiency_from_rr() -> None:
     assert result is not None
     assistant_response = result["data"]["assistantResponse"]
     assert "회전저항/RR 기준으로는 벤투스 에어S, 키너지 EX이 같은 수준" in assistant_response
-    assert "- 벤투스 에어S: 회전저항/RR 3등급" in assistant_response
-    assert "- 키너지 EX: 회전저항/RR 3등급" in assistant_response
+    assert "**키너지 EX**" in assistant_response
+    assert "**벤투스 에어S**" in assistant_response
+    assert "| 연비/회전저항 | 3 |" in assistant_response
     assert "사이즈:" not in assistant_response
     assert "등급 숫자가 낮을수록" in assistant_response
 
@@ -2322,8 +2575,11 @@ def test_metric_comparison_policy_includes_goods_detail_performance_name() -> No
     assert result["template"] == "quickReply"
     assistant_response = result["data"]["assistantResponse"]
     assert "비교 대상의 특화 사양은 아래처럼 확인돼요." in assistant_response
-    assert "- 벤투스 에어S: 특화 사양 COMFORT / 흡음재" in assistant_response
-    assert "- 다이나프로 HPX: 특화 사양 COMFORT / SUV 마일리지" in assistant_response
+    assert "**벤투스 에어S**" in assistant_response
+    assert "**다이나프로 HPX**" in assistant_response
+    assert "| 항목 | 내용 |" in assistant_response
+    assert "| 특징 | 특화 사양 COMFORT / 흡음재 |" in assistant_response
+    assert "| 특징 | 특화 사양 COMFORT / SUV 마일리지 |" in assistant_response
 
 
 def test_metric_comparison_policy_answers_latest_product_confidently() -> None:
@@ -2336,8 +2592,10 @@ def test_metric_comparison_policy_answers_latest_product_confidently() -> None:
     assert result is not None
     assistant_response = result["data"]["assistantResponse"]
     assert "최신 상품은 다이나프로 HP3입니다." in assistant_response
-    assert "- 다이나프로 HP3: 등록일 2025-01-20, 출시 2025년 2월" in assistant_response
-    assert "- 다이나프로 HPX: 등록일 2022-11-10, 출시 2023년 1월" in assistant_response
+    assert "**다이나프로 HPX**" in assistant_response
+    assert "**다이나프로 HP3**" in assistant_response
+    assert "| 출시 시점 | 2025년 2월 |" in assistant_response
+    assert "| 출시 시점 | 2023년 1월 |" in assistant_response
     assert "사이즈:" not in assistant_response
     assert "보통" not in assistant_response
 
@@ -2448,6 +2706,37 @@ def test_listcar_kept_for_registered_vehicle_tire_size_prompt() -> None:
     assert result["data"]["metadata"][0]["car_nm"] == "GV70 2.5T 가솔린 AWD A/T"
     assert result["data"]["metadata"][0]["car_model_det"] == "GV70 (1세대) (2021 - 2024)"
     assert result["data"]["metadata"][0]["tire_size_fr"] == "2355519"
+
+
+def test_listcar_metadata_keeps_available_sizes_without_single_size_when_multiple_vehicle_sizes() -> None:
+    current_user_text.set("56모2162 심지영")
+    entry = {
+        "tool": "get_user_vehicles_tool",
+        "args": {"car_no": "56모2162", "owner_nm": "심지영"},
+        "data": {
+            "status": "success",
+            "http_status": 200,
+            "data": {
+                "car_no": "56모2162",
+                "car_maker": "BMW",
+                "car_nm": "3-series(F30) 320d A/T",
+                "car_model_det": "3시리즈 그란 투리스모(6세대) (2013 - 2021)",
+                "tire_size_fr": "2255017",
+                "tire_size_re": "2255017",
+                "available_sizes": ["2255017", "2254518"],
+            },
+        },
+    }
+
+    result = try_build_template([entry], "차량 정보를 확인했어요. 차량을 선택해 주세요.")
+
+    assert result is not None
+    assert result["template"] == "listCar"
+    metadata = result["data"]["metadata"][0]
+    assert metadata["available_sizes"] == ["2255017", "2254518"]
+    assert metadata["availableSizes"] == ["2255017", "2254518"]
+    assert metadata["tireSize"] is None
+    assert metadata["tire_size_fr"] is None
 
 
 def test_ev_suitability_mapper_does_not_override_product_mapping() -> None:
@@ -3611,6 +3900,69 @@ def test_nearby_store_tool_forces_code_mapper_over_llm_quickreply() -> None:
     assert result is not None
     assert result["template"] == "location"
     assert result["data"]["isBookingFlow"] is True
+
+
+def test_transaction_product_clarify_prefers_product_card_over_discovery_quickreply() -> None:
+    current_pending_intent.set("order")
+    current_goal_type.set("place_order")
+    current_user_text.set("벤투스 에어S 245/45R19 4개 분당정자점에서 주문할래")
+    current_discovery_response_decision.set(
+        ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            metadata={"response_shape_key": "product_search_summary"},
+        )
+    )
+    current_transaction_response_decision.set(
+        ResponseDecision(
+            response_shape=ResponseShape.CARD,
+            template=TemplateName.PRODUCT,
+            metadata={
+                "response_shape_key": "missing_order_slots",
+                "flow_step": "resolve_product",
+            },
+        )
+    )
+
+    result = _map_product(
+        [
+            {
+                "tool": "search_product_tool",
+                "args": {"keyword": "벤투스 에어S", "size": "245/45R19"},
+                "data": [
+                    {
+                        "goods_no": "G000000319584",
+                        "goods_nm": "벤투스 에어S",
+                        "tire_size_1": "245/45R19",
+                        "brand_nm": "HANKOOK",
+                        "prc_grd_nm": "프리미엄",
+                        "goods_pfm_nm": "COMFORT",
+                        "sound_absorber_yn": "Y",
+                        "extra_fvr_sale_prc": 261500,
+                        "sale_prc": 300000,
+                    },
+                    {
+                        "goods_no": "G000000319622",
+                        "goods_nm": "벤투스 에어S",
+                        "tire_size_1": "245/45R19",
+                        "brand_nm": "HANKOOK",
+                        "prc_grd_nm": "프리미엄",
+                        "goods_pfm_nm": "COMFORT",
+                        "sound_absorber_yn": "N",
+                        "extra_fvr_sale_prc": 242100,
+                        "sale_prc": 280000,
+                    },
+                ],
+            }
+        ],
+        "원하시는 상품을 선택해 주세요.",
+    )
+
+    assert result is not None
+    assert result["template"] == "product"
+    assert result["data"]["assistantResponse"] == "주문을 진행하려면 먼저 상품을 선택해 주세요."
+    assert result["data"]["isBookingFlow"] is True
+    assert len(result["data"]["products"]) == 2
 
 
 def test_preview_location_tna_stock_uses_today_install_copy() -> None:

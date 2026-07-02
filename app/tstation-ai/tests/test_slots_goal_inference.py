@@ -149,6 +149,34 @@ def test_runtime_product_change_keeps_size_quantity_region_but_clears_product_de
     assert updated.region == "분당"
 
 
+def test_merge_drops_action_label_residue_product_identity() -> None:
+    existing = ConversationSlots(goods_no="G000000317682", tire_model="다이나프로 HPX", tire_size="235/55R19")
+
+    updated = existing.merge(ConversationSlots(pending_product_name="하기"))
+
+    assert updated.goods_no == "G000000317682"
+    assert updated.tire_model == "다이나프로 HPX"
+    assert updated.pending_product_name is None
+
+
+def test_constructor_drops_action_label_residue_product_identity() -> None:
+    slots = ConversationSlots(tire_model="하기", pending_product_name="구매하기", tire_size="235/55R19")
+
+    assert slots.tire_model is None
+    assert slots.pending_product_name is None
+    assert slots.tire_size == "235/55R19"
+
+
+def test_runtime_values_drop_action_label_residue_product_identity() -> None:
+    existing = ConversationSlots(goods_no="G000000317682", tire_model="다이나프로 HPX", tire_size="235/55R19")
+
+    updated = existing.apply_runtime_values({"pending_product_name": "구매하기"}, source="ui_action")
+
+    assert updated.goods_no == "G000000317682"
+    assert updated.tire_model == "다이나프로 HPX"
+    assert updated.pending_product_name is None
+
+
 def test_runtime_size_change_requires_product_requery_but_keeps_model_quantity_store() -> None:
     existing = ConversationSlots(
         goods_no="GOLD00000001",

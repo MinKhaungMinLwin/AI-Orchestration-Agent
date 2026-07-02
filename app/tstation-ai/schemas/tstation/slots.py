@@ -5,9 +5,34 @@ import logging
 import re
 from typing import Any, ClassVar, Literal, Mapping, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 logger = logging.getLogger(__name__)
+
+
+PRODUCT_IDENTITY_FIELDS = {"tire_model", "pending_product_name"}
+INVALID_PRODUCT_IDENTITY_VALUES = {
+    "하기",
+    "구매하기",
+    "주문하기",
+    "예약하기",
+    "진행하기",
+    "담기",
+    "장바구니담기",
+    "선택하기",
+    "확인하기",
+}
+
+
+def is_invalid_product_identity_value(value: Any) -> bool:
+    normalized = re.sub(r"\s+", "", str(value or "").strip())
+    return normalized in INVALID_PRODUCT_IDENTITY_VALUES
+
+
+def sanitize_product_identity_value(value: Any) -> Any | None:
+    if is_invalid_product_identity_value(value):
+        return None
+    return value
 
 
 def _normalize_store_name_for_identity_compare(value: Any) -> str:
@@ -179,6 +204,11 @@ class ConversationSlots(BaseModel):
     pending_check_object_type: Optional[PendingCheckObjectType] = None
     pending_check_object_value: Optional[str] = None
     pending_check_turns_remaining: Optional[int] = None
+
+    @field_validator("tire_model", "pending_product_name", mode="before")
+    @classmethod
+    def _drop_invalid_product_identity(cls, value: Any) -> Any | None:
+        return sanitize_product_identity_value(value)
 
     # User/regex merge dependencies. These apply before tool/template recovery
     # and are intentionally stricter than runtime recovery: a user-supplied new
@@ -622,6 +652,10 @@ class ConversationSlots(BaseModel):
         for field, new_val in new_slots.model_dump().items():
             if new_val is None:
                 continue
+            if field in PRODUCT_IDENTITY_FIELDS:
+                new_val = sanitize_product_identity_value(new_val)
+                if new_val is None:
+                    continue
             old_val = getattr(merged, field)
 
             # Value changed -> reset dependent slots. Product identity fields
@@ -658,7 +692,13 @@ class ConversationSlots(BaseModel):
         payload says so, because product switches often reuse size/qty/region.
         """
         del source  # reserved for trace/debug-specific policies if needed
-        incoming = {field: value for field, value in dict(values).items() if value is not None}
+        incoming = {
+            field: sanitized
+            for field, value in dict(values).items()
+            if value is not None
+            for sanitized in [sanitize_product_identity_value(value) if field in PRODUCT_IDENTITY_FIELDS else value]
+            if sanitized is not None
+        }
         updated = self.model_copy()
 
         for field, new_val in incoming.items():
@@ -711,6 +751,10 @@ class ConversationSlots(BaseModel):
         for field, new_val in new_slots.model_dump().items():
             if new_val is None:
                 continue
+            if field in PRODUCT_IDENTITY_FIELDS:
+                new_val = sanitize_product_identity_value(new_val)
+                if new_val is None:
+                    continue
             old_val = getattr(merged, field)
 
             if field in overwrite_fields:

@@ -217,6 +217,11 @@ def _should_skip_support_search_product_fast_path(agent_name: str, tool_name: st
     return tool_name == "search_product_tool" and "support" in str(agent_name or "").lower()
 
 
+def _pending_tool_call_ids(tool_calls_map: dict[str, dict], completed_tool_call_ids: set[str]) -> list[str]:
+    expected_tool_call_ids = {str(tool_call_id) for tool_call_id in tool_calls_map}
+    return sorted(expected_tool_call_ids - completed_tool_call_ids)
+
+
 def _should_defer_search_product_fast_path_for_stock_contract(
     tool_name: str,
     code_event: dict | None,
@@ -350,6 +355,8 @@ def _recommendation_type_from_vehicle_text(user_text: str) -> str:
         return "discount"
     if re.search(r"가성비|저렴|싼|최저", text, re.IGNORECASE):
         return "value"
+    if re.search(r"장거리|마일리지|수명|오래\s*(?:타|가)|내구|마모\s*(?:강|적|덜)", text, re.IGNORECASE):
+        return "long_distance"
     if re.search(r"가족|패밀리|승차감|컴포트", text, re.IGNORECASE):
         return "family"
     if re.search(r"전기차|EV|ev|아이온|iON", text, re.IGNORECASE):
@@ -364,7 +371,7 @@ def _recommendation_type_from_vehicle_text(user_text: str) -> str:
         return "wet"
     if re.search(r"정숙|조용|소음|진동", text, re.IGNORECASE):
         return "low_vibration"
-    if re.search(r"퍼포먼스|스포츠|성능", text, re.IGNORECASE):
+    if re.search(r"퍼포먼스|고성능|스포츠|코너링|제동|브레이크|performance", text, re.IGNORECASE):
         return "performance"
     return "tstation"
 
@@ -380,6 +387,27 @@ def _recommendation_season_from_vehicle_text(user_text: str) -> str | None:
     if re.search(r"여름|썸머", text, re.IGNORECASE):
         return "여름"
     return None
+
+
+def _recommendation_price_range_from_vehicle_text(user_text: str) -> dict[str, int]:
+    text = re.sub(r"\s+", "", user_text or "")
+    match = re.search(r"(?P<low>\d{1,3})만원(?:대|선)", text)
+    if match:
+        low = int(match.group("low")) * 10_000
+        return {"min_price": low, "max_price": low + 99_999}
+    match = re.search(r"(?P<low>\d{1,3})만원[~\-](?P<high>\d{1,3})만원", text)
+    if match:
+        return {
+            "min_price": int(match.group("low")) * 10_000,
+            "max_price": int(match.group("high")) * 10_000,
+        }
+    match = re.search(r"(?P<price>\d{1,3})만원(?:이하|까지|안쪽|미만)", text)
+    if match:
+        return {"max_price": int(match.group("price")) * 10_000}
+    match = re.search(r"(?P<price>\d{1,3})만원(?:이상|부터)", text)
+    if match:
+        return {"min_price": int(match.group("price")) * 10_000}
+    return {}
 
 
 def _owner_lookup_vehicle_recommendation_args(owner_tool_result: Any, messages: list[dict]) -> dict | None:
@@ -402,6 +430,7 @@ def _owner_lookup_vehicle_recommendation_args(owner_tool_result: Any, messages: 
     season_nm = _recommendation_season_from_vehicle_text(latest_user_text)
     if season_nm:
         args["season_nm"] = season_nm
+    args.update(_recommendation_price_range_from_vehicle_text(latest_user_text))
     if car_lnc_cd:
         args["car_lnc_cd"] = car_lnc_cd
     else:
@@ -433,6 +462,42 @@ def _build_owner_vehicle_lookup_event(tool_name: str, tool_result: Any, messages
 
     row = rows[0]
     vehicle_name = _owner_lookup_vehicle_display_name(row)
+    raw_available_sizes = row.get("available_sizes") or row.get("availableSizes") or []
+    available_sizes: list[str] = []
+    if isinstance(raw_available_sizes, list):
+        for raw_size in raw_available_sizes:
+            normalized_size = normalize_tire_size(str(raw_size or ""))
+            if normalized_size and normalized_size not in available_sizes:
+                available_sizes.append(normalized_size)
+    if len(available_sizes) >= 2:
+        assistant_response = (
+            f"조회되었습니다. {vehicle_name} 차량은 확인했어요.\n\n"
+            f"확인된 규격이 여러 개예요: {', '.join(f'**{size}**' for size in available_sizes)}\n\n"
+            "어떤 규격 기준으로 이어서 도와드릴까요?"
+        )
+        return {
+            "type": "data",
+            "template": "quickReply",
+            "assistant_response_source": "code_owner_vehicle_lookup_multi_size_selection",
+            "data": {
+                "assistantResponse": assistant_response,
+                "quickReplies": [{"label": size, "domain": "DISCOVERY"} for size in available_sizes[:8]],
+                "predictedDomains": ["DISCOVERY"],
+                "metadata": {
+                    "carNo": row.get("car_no"),
+                    "carLncCd": row.get("car_lnc_cd"),
+                    "carMaker": row.get("car_maker"),
+                    "carName": row.get("car_nm"),
+                    "carModelDet": row.get("car_model_det"),
+                    "tireSize": None,
+                    "tireSizeRe": None,
+                    "availableSizes": available_sizes,
+                    "available_sizes": available_sizes,
+                    "responseShapeKey": "vehicle_size_selection",
+                    "response_shape_key": "vehicle_size_selection",
+                },
+            },
+        }
     front_size, rear_size = _registered_vehicle_tire_sizes(row)
     if front_size and rear_size and front_size != rear_size:
         size_text = f"전륜 {front_size}, 후륜 {rear_size}"
@@ -820,10 +885,16 @@ def _slot_data_for_tool_event(tool_name: str, tool_result: Any) -> dict | None:
     goods_no = item.get("goods_no")
     if not goods_no:
         return None
-    slot_item = {"goods_no": goods_no}
+    slot_item: dict[str, Any] = {"goods_no": goods_no}
     tire_size = item.get("tire_size") or item.get("tire_size_1") or item.get("tireSize")
     if tire_size:
         slot_item["tire_size_1"] = tire_size
+    goods_nm = item.get("goods_nm") or item.get("goodsNm") or item.get("titleProductName")
+    if goods_nm:
+        slot_item["goods_nm"] = goods_nm
+    for price_key in ("extra_fvr_sale_prc", "sale_prc", "final_prc", "final_price", "wage_prc"):
+        if item.get(price_key) not in (None, "", 0):
+            slot_item[price_key] = item[price_key]
     return {"status": tool_result.get("status", "success"), "data": {"items": [slot_item]}}
 
 
@@ -1056,6 +1127,7 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "get_products_recommendations_tool": "상품 추천 조회 중...",
     "get_events_tool": "이벤트 목록 조회 중...",
     "get_deals_tool": "기획전 목록 조회 중...",
+    "get_benefit_event_deal_list_tool": "이벤트/기획전 조회 중...",
     "get_event_applicable_products_tool": "이벤트 적용 상품 조회 중...",
     "get_product_applicable_events_tool": "상품 적용 이벤트 조회 중...",
     "compare_discount_tool": "할인 가격 비교 중...",
@@ -1157,6 +1229,7 @@ class BaseAgent(ABC):
         suppress_tokens = prompt_template is not None
         accumulated_text = ""
         accumulated_tool_data: list[dict] = []
+        completed_tool_call_ids: set[str] = set()
         response_streamer = _AssistantResponseStreamer() if suppress_tokens else None
 
         yield {"type": "status", "status": "생각 중..."}
@@ -1332,6 +1405,8 @@ class BaseAgent(ABC):
                             except (json.JSONDecodeError, TypeError):
                                 pass
                             tool_input = tool_calls_map.get(message.tool_call_id, {})
+                            if message.tool_call_id:
+                                completed_tool_call_ids.add(str(message.tool_call_id))
                             tool_started_at = tool_input.get("started_at")
                             tool_latency_ms = (
                                 (time.perf_counter() - tool_started_at) * 1000
@@ -1414,6 +1489,12 @@ class BaseAgent(ABC):
                                     from services.tstation.agents.b_discovery_agent.tools import get_user_vehicles_tool
 
                                     owner_tool_name = "get_user_vehicles_tool"
+                                    yield {
+                                        "type": "status",
+                                        "status": "tool_start",
+                                        "tool": owner_tool_name,
+                                        "display_name": TOOL_DISPLAY_NAMES.get(owner_tool_name, "차량 정보 조회 중..."),
+                                    }
                                     owner_started_at = time.perf_counter()
                                     owner_tool_result = get_user_vehicles_tool.func(**owner_lookup_args)
                                     owner_latency_ms = (time.perf_counter() - owner_started_at) * 1000
@@ -1434,12 +1515,6 @@ class BaseAgent(ABC):
                                         ),
                                         latency_ms=owner_latency_ms,
                                     )
-                                    yield {
-                                        "type": "status",
-                                        "status": "tool_start",
-                                        "tool": owner_tool_name,
-                                        "display_name": TOOL_DISPLAY_NAMES.get(owner_tool_name, "차량 정보 조회 중..."),
-                                    }
                                     yield {
                                         "type": "agent_flow",
                                         "agent": f"[{self.TOOL_TO_AF_MAP.get(owner_tool_name, 'Product Compatibility')} AF]",
@@ -1628,6 +1703,14 @@ class BaseAgent(ABC):
                                         yield event
                                     return
                             if suppress_tokens and message.name in self._FAST_PATH_CODE_MAPPER_TOOLS:
+                                pending_tool_call_ids = _pending_tool_call_ids(tool_calls_map, completed_tool_call_ids)
+                                if pending_tool_call_ids:
+                                    logger.info(
+                                        "[%s] Defer tool fast-path until parallel tool calls finish: pending=%s",
+                                        self.name,
+                                        pending_tool_call_ids,
+                                    )
+                                    continue
                                 if _should_skip_support_search_product_fast_path(self.name, message.name):
                                     logger.info(
                                         "[%s] Skip search_product_tool fast-path for support follow-up",
@@ -2263,19 +2346,6 @@ class BaseAgent(ABC):
                 flow_event["assistant_response_source"] = "code_contract_tool_guard"
                 return [*self._code_template_events(flow_event, response_streamer, answering_emitted)]
 
-        if preferred_tool != "search_faq_hybrid_tool":
-            return self._blocked_contract_tool_guard_events(
-                tool_name=tool_name,
-                contract_intent=contract_intent,
-                allowed_tools=allowed_tools,
-                forbidden_tools=forbidden_tools,
-                required_slots=required_slots,
-                response_decision=decision,
-                block_reason=block_reason,
-                response_streamer=response_streamer,
-                answering_emitted=answering_emitted,
-            )
-
         user_query = _latest_user_text(messages or [])
         logger.info(
             "[%s] Contract tool guard blocked tool=%s replacement=%s intent=%s reason=%s",
@@ -2287,7 +2357,39 @@ class BaseAgent(ABC):
         )
 
         try:
-            from services.tstation.agents.e_support_agent.tools import search_faq_hybrid_tool as _search_faq_hybrid_tool
+            if preferred_tool == "search_faq_hybrid_tool":
+                from services.tstation.agents.e_support_agent.tools import search_faq_hybrid_tool as _support_tool
+                tool_input = {"query": user_query, "top_k": 8}
+            elif preferred_tool == "get_card_installments_tool":
+                from services.tstation.agents.e_support_agent.tools import get_card_installments_tool as _support_tool
+                decision_tool_args = {}
+                if isinstance(decision, dict):
+                    decision_tool_args = dict(decision.get("tool_args_patch") or {})
+                else:
+                    decision_tool_args = dict(getattr(decision, "tool_args_patch", None) or {})
+                tool_input = decision_tool_args
+                if not tool_input:
+                    from services.tstation.policies.contract_required_tool_candidate import (
+                        _card_installment_amount_from_text,
+                        _card_installment_payment_type_from_text,
+                    )
+
+                    tool_input = {"payment_type": _card_installment_payment_type_from_text(user_query)}
+                    tgt_amt = _card_installment_amount_from_text(user_query)
+                    if tgt_amt is not None:
+                        tool_input["tgt_amt"] = tgt_amt
+            else:
+                return self._blocked_contract_tool_guard_events(
+                    tool_name=tool_name,
+                    contract_intent=contract_intent,
+                    allowed_tools=allowed_tools,
+                    forbidden_tools=forbidden_tools,
+                    required_slots=required_slots,
+                    response_decision=decision,
+                    block_reason=block_reason,
+                    response_streamer=response_streamer,
+                    answering_emitted=answering_emitted,
+                )
             from services.tstation.chat import (
                 _DIRECT_SUPPORT_FAQ_POLICY_INTENTS,
                 _build_general_cancel_fee_policy_event,
@@ -2297,9 +2399,8 @@ class BaseAgent(ABC):
         except Exception:
             return None
 
-        tool_input = {"query": user_query, "top_k": 8}
         try:
-            raw_tool_result = _search_faq_hybrid_tool.invoke(tool_input)
+            raw_tool_result = _support_tool.invoke(tool_input)
         except Exception as exc:
             logger.exception("[%s] Replacement FAQ tool failed intent=%s", self.name, contract_intent)
             raw_tool_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}

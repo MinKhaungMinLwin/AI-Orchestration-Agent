@@ -10,6 +10,7 @@ from typing import Any, Mapping
 
 from services.tstation.common.cta_urls import CTAUrls
 from services.tstation.policies.discovery_intent_policy import normalize_tire_size
+from services.tstation.policies.flow_state import canonical_flow_type, commerce_sub_flow_type
 from services.tstation.policies.response_decision import TemplateName
 
 
@@ -103,6 +104,108 @@ _INVALID_REGION_LABELS = frozenset({
     "예",
     "ㅇㅇ",
 })
+_STORE_SEARCH_FLOW_INTENTS = frozenset({
+    "store_search",
+    "open_store_search",
+    "store_recommendation_by_vehicle_experience",
+})
+_SERVICE_MAINTENANCE_FLOW_INTENTS = frozenset({
+    "maintenance_addon_with_tire_service",
+    "service_duration_advisory",
+    "store_attribute_inquiry",
+    "store_service_advisory",
+    "store_service_availability",
+    "store_service_search",
+    "unsupported_or_unmapped_store_service_policy",
+})
+_RESERVATION_MANAGEMENT_FLOW_INTENTS = frozenset({
+    "reservation_store_info_lookup",
+    "reservation_status_lookup",
+    "reservation_change_request",
+    "order_cancel_request",
+    "order_cancel_status_lookup",
+    "owned_order_cancel_fee_inquiry",
+    "general_cancel_fee_policy",
+    "reservation_window_policy",
+    "delivery_delay_reservation_schedule_policy",
+})
+_RESERVATION_POLICY_ONLY_FLOW_INTENTS = frozenset({
+    "general_cancel_fee_policy",
+    "reservation_window_policy",
+    "delivery_delay_reservation_schedule_policy",
+})
+_DISCOVERY_FLOW_INTENTS = frozenset({
+    "product_search",
+    "product_recommendation",
+    "general_recommendation",
+    "condition_recommendation",
+    "similar_price_recommendation",
+    "vehicle_based_recommendation_refinement",
+    "vehicle_based_tire_recommendation",
+    "vehicle_resolved_recommendation",
+    "best_seller_search",
+    "vehicle_best_seller_search",
+    "resolve_or_describe_product",
+})
+_DISCOVERY_EXECUTION_PLAN_TOKENS = frozenset({
+    "product_search",
+    "product_recommendation",
+    "general_recommendation",
+    "condition_recommendation",
+    "similar_price_recommendation",
+    "vehicle_based_recommendation_refinement",
+    "vehicle_based_tire_recommendation",
+    "vehicle_resolved_recommendation",
+    "best_seller_search",
+    "get_best_selling_tires_for_vehicle",
+    "get_best_selling_product_for_vehicle",
+    "get_best_selling_products_for_vehicle",
+    "get_best_selling_products_for_vehicle_timeframe",
+    "get_products_recommendations_tool",
+    "search_product_tool",
+})
+_SUPPORT_FLOW_INTENTS = frozenset({
+    "support_faq",
+    "coupon_usage_policy",
+    "coupon_registration_policy",
+    "coupon_stacking_policy",
+    "signup_first_purchase_benefit_policy",
+    "signup_coupon_guidance",
+    "partner_member_coupon_policy",
+    "general_cancel_fee_policy",
+    "general_card_cancel_timing_policy",
+    "reservation_policy_guidance",
+    "reservation_window_policy",
+    "installation_work_policy",
+    "external_tire_install_policy",
+    "promotion_gift_policy",
+    "tire_condition_photo_policy",
+    "tire_manufacture_date_policy",
+    "tire_quality_warranty_policy",
+    "assurance_service_policy",
+    "maintenance_history_access_policy",
+    "order_document_guidance",
+    "payment_error_troubleshooting",
+    "shipping_fee_policy",
+    "online_store_price_policy",
+    "regional_price_policy",
+    "legal_action_guidance_denied",
+    "human_escalation",
+    "tstation_service_complaint",
+    "policy_notice_or_escalation",
+})
+_SUPPORT_EXECUTION_PLAN_TOKENS = frozenset({
+    "support_faq",
+    "search_faq_hybrid_tool",
+    "search_faq_rag_tool",
+    "get_faq_tool",
+    *_SUPPORT_FLOW_INTENTS,
+})
+_CARD_INSTALLMENT_SUPPORT_CURRENT_TURN_RE = re.compile(
+    r"무이자|할부|몇\s*개?월|[0-9]{1,2}\s*개?월|개월수|카드사별|현대카드|신한카드|삼성카드|국민카드|"
+    r"롯데카드|하나카드|농협카드|우리카드|비씨카드|BC카드|스마트\s*페이|smart\s*pay|smartpay",
+    re.IGNORECASE,
+)
 
 
 def _normalized_region_text(value: Any) -> str:
@@ -151,6 +254,19 @@ def _mapping_value(values: Mapping[str, Any] | None, key: str) -> dict[str, Any]
     return dict(value) if isinstance(value, Mapping) else {}
 
 
+def _flow_context_type(flow_type: str) -> tuple[str, str]:
+    canonical = canonical_flow_type(flow_type) or "commerce"
+    return canonical, commerce_sub_flow_type(flow_type, {"sub_flow_type": flow_type}) if canonical == "commerce" else ""
+
+
+def _flow_intent_with_sub_type(flow_type: str, intent: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    values = dict(intent or {})
+    canonical, sub_flow_type = _flow_context_type(flow_type)
+    if canonical == "commerce" and sub_flow_type:
+        values.setdefault("sub_flow_type", sub_flow_type)
+    return values
+
+
 def _availability_context_from_slots(slots: Any | Mapping[str, Any] | None) -> dict[str, Any]:
     if isinstance(slots, Mapping):
         value = slots.get("availability_context")
@@ -181,9 +297,39 @@ def _compact_slot_snapshot(slots: Any | Mapping[str, Any] | None) -> dict[str, A
         "pending_product_name",
         "tire_size",
         "ord_qty",
+        "payment_amount",
+        "payment_amount_source",
+        "price_basis",
+        "price_source_tool",
+        "sale_prc",
+        "extra_fvr_sale_prc",
+        "cheapest_final_prc",
+        "final_unit_price",
+        "final_prc",
+        "final_price",
+        "finalPrice",
+        "price",
+        "wage_prc",
         "shop_id",
         "shop_name",
+        "store_name",
         "region",
+        "place_query",
+        "store_search_condition",
+        "requested_vehicle_experience",
+        "service_action_boundary",
+        "service_name",
+        "service_type",
+        "reservation_management_action",
+        "owned_record_target",
+        "recommendation_scenario",
+        "scenario",
+        "rcmd_type",
+        "season_nm",
+        "brand_cd",
+        "support_topic",
+        "faq_topic",
+        "policy_topic",
         "pending_intent",
         "goal_type",
         "requested_cal_day",
@@ -301,6 +447,68 @@ def _selected_quantity_from_slots(
     return {"ord_qty": ord_qty, "selection_source": "current_user_text"}
 
 
+def _selected_store_from_slots(
+    *,
+    extracted_snapshot: Mapping[str, Any],
+    existing_snapshot: Mapping[str, Any],
+    active_flow: Mapping[str, Any],
+    router_evidence: Mapping[str, Any],
+    resume_source: str,
+) -> dict[str, Any]:
+    resume = str(resume_source or "").strip()
+    router_filled_slot = str(router_evidence.get("filled_slot") or "").strip()
+    if "store" not in resume and router_filled_slot != "store":
+        return {}
+    shop_id = existing_snapshot.get("shop_id") or extracted_snapshot.get("shop_id")
+    shop_name = existing_snapshot.get("shop_name") or extracted_snapshot.get("shop_name")
+    if shop_id in (None, "", [], {}) and shop_name in (None, "", [], {}):
+        return {}
+    selected: dict[str, Any] = {
+        key: value
+        for key, value in {
+            "shop_id": shop_id,
+            "shop_name": shop_name,
+            "region": existing_snapshot.get("region") or extracted_snapshot.get("region"),
+            "selection_source": resume or "slot_fill:store",
+        }.items()
+        if value not in (None, "", [], {})
+    }
+    candidates = active_flow.get("last_candidates") if isinstance(active_flow.get("last_candidates"), list) else []
+    selected_shop_id = str(selected.get("shop_id") or "").strip()
+    selected_shop_name = str(selected.get("shop_name") or "").strip()
+    for candidate in candidates:
+        if not isinstance(candidate, Mapping):
+            continue
+        candidate_shop_id = str(candidate.get("shop_id") or "").strip()
+        candidate_shop_name = str(candidate.get("shop_name") or candidate.get("label") or "").strip()
+        if (
+            selected_shop_id
+            and candidate_shop_id == selected_shop_id
+            or selected_shop_name
+            and candidate_shop_name
+            and selected_shop_name in candidate_shop_name
+        ):
+            for key in (
+                "goods_no",
+                "product_name",
+                "tire_model",
+                "pending_product_name",
+                "tire_size",
+                "ord_qty",
+                "source_tool",
+                "schedule_mode",
+                "schedule_tier",
+                "inventory_mode",
+                "stock_check_mode",
+                "pending_intent",
+                "goal_type",
+            ):
+                if selected.get(key) in (None, "", [], {}) and candidate.get(key) not in (None, "", [], {}):
+                    selected[key] = candidate[key]
+            break
+    return selected
+
+
 def _selected_product_flow_type(
     *,
     current_flow_state: Mapping[str, Any],
@@ -367,6 +575,38 @@ def _quantity_flow_type(
     return "purchase"
 
 
+def _selected_store_flow_type(
+    *,
+    active_flow: Mapping[str, Any],
+    parent_flow_state: Mapping[str, Any],
+    router_evidence: Mapping[str, Any],
+    existing_snapshot: Mapping[str, Any],
+    selected_store: Mapping[str, Any],
+) -> str:
+    for values in (selected_store, existing_snapshot):
+        pending_intent = str(values.get("pending_intent") or "").strip()
+        goal_type = str(values.get("goal_type") or "").strip()
+        if pending_intent == "stock" or goal_type == "store_with_stock":
+            return "stock"
+    active_flow_type = commerce_sub_flow_type(active_flow.get("flow_type"), _mapping_value(active_flow, "intent")) or str(
+        active_flow.get("flow_type") or ""
+    ).strip()
+    if active_flow_type == "stock":
+        return "stock"
+    if str(active_flow.get("target_action") or "").strip() == "get_store_inventory_tool":
+        return "stock"
+    router_intent = str(router_evidence.get("intent") or "").strip()
+    execution_plan = " ".join(str(item or "") for item in (router_evidence.get("execution_plan") or ()))
+    if "stock" in router_intent or "stock_store" in execution_plan or "store_inventory" in execution_plan:
+        return "stock"
+    parent_flow_type = str(parent_flow_state.get("flow_type") or "").strip()
+    if parent_flow_type == "stock":
+        return "stock"
+    if parent_flow_type in {"purchase", "booking"}:
+        return parent_flow_type
+    return active_flow_type if active_flow_type in {"purchase", "booking", "store_schedule"} else "purchase"
+
+
 def _selected_product_flow_context(
     *,
     current_flow_state: Mapping[str, Any],
@@ -384,6 +624,7 @@ def _selected_product_flow_context(
         router_evidence=router_evidence,
         selected_product={**dict(slot_patch), **dict(selected_product)},
     )
+    canonical_flow_type_value, _ = _flow_context_type(flow_type)
     product_name = selected_product.get("product_name") or slot_patch.get("product_name") or slot_patch.get("tire_model")
     product = {
         key: value
@@ -428,13 +669,13 @@ def _selected_product_flow_context(
     return {
         key: value
         for key, value in {
-            "flow_type": flow_type,
+            "flow_type": canonical_flow_type_value,
             "status": "active",
             "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "flow_step": "product_selected",
             "product": product,
             "payment": payment,
-            "intent": intent,
+            "intent": _flow_intent_with_sub_type(flow_type, intent),
             "source": "flow_controller:select_product",
         }.items()
         if value not in (None, "", [], {})
@@ -462,6 +703,7 @@ def _selected_quantity_flow_context(
         router_evidence=router_evidence,
         existing_snapshot=existing_snapshot,
     )
+    canonical_flow_type_value, _ = _flow_context_type(flow_type)
     product = dict(flow_context.get("product")) if isinstance(flow_context.get("product"), Mapping) else {}
     for key, value in {
         "goods_no": existing_snapshot.get("goods_no"),
@@ -476,6 +718,25 @@ def _selected_quantity_flow_context(
             product[key] = value
     product["ord_qty"] = ord_qty
 
+    payment = dict(flow_context.get("payment")) if isinstance(flow_context.get("payment"), Mapping) else {}
+    for key, value in {
+        "payment_amount": existing_snapshot.get("payment_amount"),
+        "payment_amount_source": existing_snapshot.get("payment_amount_source"),
+        "price_basis": existing_snapshot.get("price_basis"),
+        "price_source_tool": existing_snapshot.get("price_source_tool"),
+        "sale_prc": existing_snapshot.get("sale_prc"),
+        "extra_fvr_sale_prc": existing_snapshot.get("extra_fvr_sale_prc"),
+        "cheapest_final_prc": existing_snapshot.get("cheapest_final_prc"),
+        "final_unit_price": existing_snapshot.get("final_unit_price"),
+        "final_prc": existing_snapshot.get("final_prc"),
+        "final_price": existing_snapshot.get("final_price"),
+        "finalPrice": existing_snapshot.get("finalPrice"),
+        "price": existing_snapshot.get("price"),
+        "wage_prc": existing_snapshot.get("wage_prc"),
+    }.items():
+        if value not in (None, "", [], {}) and payment.get(key) in (None, "", [], {}):
+            payment[key] = value
+
     intent = dict(flow_context.get("intent")) if isinstance(flow_context.get("intent"), Mapping) else {}
     for key, value in {
         "pending_intent": existing_snapshot.get("pending_intent"),
@@ -485,7 +746,7 @@ def _selected_quantity_flow_context(
             intent[key] = value
 
     flow_context.update({
-        "flow_type": flow_type,
+        "flow_type": canonical_flow_type_value,
         "status": "active",
         "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "flow_step": "quantity_selected",
@@ -494,9 +755,130 @@ def _selected_quantity_flow_context(
     })
     if product:
         flow_context["product"] = product
+    if payment:
+        flow_context["payment"] = payment
     if intent:
-        flow_context["intent"] = intent
+        flow_context["intent"] = _flow_intent_with_sub_type(flow_type, intent)
+    else:
+        flow_context["intent"] = _flow_intent_with_sub_type(flow_type)
     return {key: value for key, value in flow_context.items() if value not in (None, "", [], {})}
+
+
+def _selected_store_flow_context(
+    *,
+    active_flow: Mapping[str, Any],
+    parent_flow_state: Mapping[str, Any],
+    router_evidence: Mapping[str, Any],
+    existing_snapshot: Mapping[str, Any],
+    selected_store: Mapping[str, Any],
+) -> dict[str, Any]:
+    if not selected_store:
+        return {}
+    flow_context = dict(active_flow) if isinstance(active_flow, Mapping) else {}
+    flow_type = _selected_store_flow_type(
+        active_flow=active_flow,
+        parent_flow_state=parent_flow_state,
+        router_evidence=router_evidence,
+        existing_snapshot=existing_snapshot,
+        selected_store=selected_store,
+    )
+    canonical_flow_type_value, _ = _flow_context_type(flow_type)
+    product = dict(flow_context.get("product")) if isinstance(flow_context.get("product"), Mapping) else {}
+    product_name = (
+        selected_store.get("product_name")
+        or selected_store.get("tire_model")
+        or selected_store.get("pending_product_name")
+        or existing_snapshot.get("product_name")
+        or existing_snapshot.get("tire_model")
+        or existing_snapshot.get("pending_product_name")
+    )
+    for key, value in {
+        "goods_no": selected_store.get("goods_no") or existing_snapshot.get("goods_no"),
+        "product_name": product_name,
+        "tire_model": product_name,
+        "pending_product_name": product_name,
+        "tire_size": selected_store.get("tire_size") or existing_snapshot.get("tire_size"),
+        "ord_qty": selected_store.get("ord_qty") or existing_snapshot.get("ord_qty"),
+    }.items():
+        if value not in (None, "", [], {}):
+            product[key] = value
+
+    store = dict(flow_context.get("store")) if isinstance(flow_context.get("store"), Mapping) else {}
+    for key, value in {
+        "shop_id": selected_store.get("shop_id") or existing_snapshot.get("shop_id"),
+        "shop_name": selected_store.get("shop_name") or existing_snapshot.get("shop_name"),
+        "region": selected_store.get("region") or existing_snapshot.get("region"),
+    }.items():
+        if value not in (None, "", [], {}):
+            store[key] = value
+
+    intent = dict(flow_context.get("intent")) if isinstance(flow_context.get("intent"), Mapping) else {}
+    for key, value in {
+        "pending_intent": selected_store.get("pending_intent")
+        or ("stock" if flow_type == "stock" else existing_snapshot.get("pending_intent")),
+        "goal_type": selected_store.get("goal_type")
+        or ("store_with_stock" if flow_type == "stock" else existing_snapshot.get("goal_type")),
+        "stock_check_mode": selected_store.get("stock_check_mode") or existing_snapshot.get("stock_check_mode"),
+        "schedule_mode": selected_store.get("schedule_mode") or existing_snapshot.get("schedule_mode"),
+    }.items():
+        if value not in (None, "", [], {}):
+            intent[key] = value
+
+    payment = dict(flow_context.get("payment")) if isinstance(flow_context.get("payment"), Mapping) else {}
+    for key, value in {
+        "payment_amount": selected_store.get("payment_amount") or existing_snapshot.get("payment_amount"),
+        "payment_amount_source": selected_store.get("payment_amount_source") or existing_snapshot.get("payment_amount_source"),
+        "price_basis": selected_store.get("price_basis") or existing_snapshot.get("price_basis"),
+        "price_source_tool": selected_store.get("price_source_tool") or existing_snapshot.get("price_source_tool"),
+        "sale_prc": selected_store.get("sale_prc") or existing_snapshot.get("sale_prc"),
+        "extra_fvr_sale_prc": selected_store.get("extra_fvr_sale_prc") or existing_snapshot.get("extra_fvr_sale_prc"),
+        "cheapest_final_prc": selected_store.get("cheapest_final_prc") or existing_snapshot.get("cheapest_final_prc"),
+        "final_unit_price": selected_store.get("final_unit_price") or existing_snapshot.get("final_unit_price"),
+        "final_prc": selected_store.get("final_prc") or existing_snapshot.get("final_prc"),
+        "final_price": selected_store.get("final_price") or existing_snapshot.get("final_price"),
+        "finalPrice": selected_store.get("finalPrice") or existing_snapshot.get("finalPrice"),
+        "price": selected_store.get("price") or existing_snapshot.get("price"),
+        "wage_prc": selected_store.get("wage_prc") or existing_snapshot.get("wage_prc"),
+    }.items():
+        if value not in (None, "", [], {}):
+            payment[key] = value
+
+    flow_context.update({
+        "flow_type": canonical_flow_type_value,
+        "status": "resumed",
+        "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "flow_step": "store_selected",
+        "source": selected_store.get("selection_source") or "flow_controller:select_store",
+    })
+    if product:
+        flow_context["product"] = product
+    if store:
+        flow_context["store"] = store
+    if payment:
+        flow_context["payment"] = payment
+    if intent:
+        flow_context["intent"] = _flow_intent_with_sub_type(flow_type, intent)
+    else:
+        flow_context["intent"] = _flow_intent_with_sub_type(flow_type)
+
+    if flow_type == "stock" and product.get("goods_no") and product.get("ord_qty") and store.get("shop_id"):
+        flow_context.update({
+            "target_action": "get_store_inventory_tool",
+            "current_step": "check_inventory",
+            "missing_slots": [],
+            "next_tool": "get_store_inventory_tool",
+            "allowed_tools": ["get_store_inventory_tool"],
+            "tool_args_patch": {
+                "goods_list": [{"goodsNo": product["goods_no"], "qty": str(product["ord_qty"])}],
+                "shop_id_list": [{"shopId": store["shop_id"]}],
+            },
+            "progress_source": "flow_controller:store_slot_fill",
+        })
+    return {
+        key: value
+        for key, value in flow_context.items()
+        if value not in (None, "", {}) and (key == "missing_slots" or value != [])
+    }
 
 
 def _flow_state_summary(context: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -504,7 +886,8 @@ def _flow_state_summary(context: Mapping[str, Any] | None) -> dict[str, Any]:
         return {}
     intent = _mapping_value(context, "intent")
     context_key = str(context.get("context_key") or "").strip()
-    flow_type = context.get("flow_type") or _flow_type_from_context_key(context_key)
+    raw_flow_type = context.get("flow_type") or _flow_type_from_context_key(context_key)
+    flow_type = commerce_sub_flow_type(raw_flow_type, intent) or str(raw_flow_type or "").strip()
     return {
         key: value
         for key, value in {
@@ -563,6 +946,411 @@ def _current_turn_flow_seed(router_evidence: Mapping[str, Any]) -> dict[str, Any
     }
 
 
+def _router_execution_plan(router_evidence: Mapping[str, Any]) -> tuple[str, ...]:
+    raw_plan = router_evidence.get("execution_plan")
+    if not isinstance(raw_plan, (list, tuple)):
+        return ()
+    return tuple(str(item or "").strip() for item in raw_plan if str(item or "").strip())
+
+
+def _current_turn_store_search_intent(router_evidence: Mapping[str, Any]) -> str:
+    router_intent = str(router_evidence.get("intent") or "").strip()
+    execution_plan = _router_execution_plan(router_evidence)
+    if any("store_recommendation_by_vehicle_experience" in item for item in execution_plan):
+        return "store_recommendation_by_vehicle_experience"
+    if router_intent in _STORE_SEARCH_FLOW_INTENTS:
+        return router_intent
+    if any(item.endswith(":store_search") or item == "store_search" for item in execution_plan):
+        return "store_search"
+    return ""
+
+
+def _current_turn_store_search_flow_context(
+    *,
+    router_evidence: Mapping[str, Any],
+    existing_snapshot: Mapping[str, Any],
+    extracted_snapshot: Mapping[str, Any],
+) -> dict[str, Any]:
+    intent = _current_turn_store_search_intent(router_evidence)
+    if not intent:
+        return {}
+
+    region = _normalized_region_text(extracted_snapshot.get("region") or existing_snapshot.get("region"))
+    place_query = str(extracted_snapshot.get("place_query") or existing_snapshot.get("place_query") or "").strip()
+    shop_id = str(extracted_snapshot.get("shop_id") or existing_snapshot.get("shop_id") or "").strip()
+    shop_name = str(extracted_snapshot.get("shop_name") or existing_snapshot.get("shop_name") or "").strip()
+    store: dict[str, Any] = {
+        key: value
+        for key, value in {
+            "region": region if region and not _is_invalid_region_text(region) else "",
+            "place_query": place_query,
+            "shop_id": shop_id,
+            "shop_name": shop_name,
+        }.items()
+        if value not in (None, "", [], {})
+    }
+    if store.get("region") and not store.get("place_query"):
+        store["place_query"] = store["region"]
+
+    condition = str(
+        extracted_snapshot.get("requested_vehicle_experience")
+        or existing_snapshot.get("requested_vehicle_experience")
+        or router_evidence.get("requested_vehicle_experience")
+        or ""
+    ).strip()
+    search_condition = str(
+        extracted_snapshot.get("store_search_condition")
+        or existing_snapshot.get("store_search_condition")
+        or router_evidence.get("store_search_condition")
+        or ""
+    ).strip()
+    if intent == "store_recommendation_by_vehicle_experience":
+        search_condition = search_condition or "vehicle_experience"
+
+    return {
+        key: value
+        for key, value in {
+            "flow_type": "commerce",
+            "status": "active",
+            "flow_step": "search_ready" if store else "ask_region",
+            "store": store,
+            "intent": {
+                key: value
+                for key, value in {
+                    "sub_flow_type": "store_search",
+                    "pending_intent": intent,
+                    "goal_type": "store_search",
+                    "store_search_condition": search_condition,
+                    "requested_vehicle_experience": condition,
+                }.items()
+                if value not in (None, "", [], {})
+            },
+            "source": "flow_controller:current_turn_store_search",
+        }.items()
+        if value not in (None, "", [], {})
+    }
+
+
+def _current_turn_discovery_intent(router_evidence: Mapping[str, Any]) -> str:
+    router_intent = str(router_evidence.get("intent") or "").strip()
+    router_domain = str(router_evidence.get("domain") or "").strip()
+    execution_plan = _router_execution_plan(router_evidence)
+    plan_tokens = {item.split(":", 1)[-1].strip() for item in execution_plan}
+    if router_domain == "discovery" and router_intent in _DISCOVERY_FLOW_INTENTS:
+        return router_intent
+    if router_intent in _DISCOVERY_FLOW_INTENTS and any(item.startswith("discovery:") for item in execution_plan):
+        return router_intent
+    for token in plan_tokens:
+        if token in _DISCOVERY_EXECUTION_PLAN_TOKENS:
+            return token
+    return ""
+
+
+def _current_turn_discovery_flow_context(
+    *,
+    router_evidence: Mapping[str, Any],
+    existing_snapshot: Mapping[str, Any],
+    extracted_snapshot: Mapping[str, Any],
+) -> dict[str, Any]:
+    intent = _current_turn_discovery_intent(router_evidence)
+    if not intent:
+        return {}
+
+    scenario = str(
+        extracted_snapshot.get("recommendation_scenario")
+        or existing_snapshot.get("recommendation_scenario")
+        or extracted_snapshot.get("scenario")
+        or existing_snapshot.get("scenario")
+        or router_evidence.get("recommendation_scenario")
+        or ""
+    ).strip()
+    recommendation = {
+        key: value
+        for key, value in {
+            "scenario": scenario,
+            "recommendation_scenario": scenario,
+            "rcmd_type": extracted_snapshot.get("rcmd_type") or existing_snapshot.get("rcmd_type"),
+            "season_nm": extracted_snapshot.get("season_nm") or existing_snapshot.get("season_nm"),
+            "brand_cd": extracted_snapshot.get("brand_cd") or existing_snapshot.get("brand_cd"),
+            "source_text": router_evidence.get("source_text"),
+        }.items()
+        if value not in (None, "", [], {})
+    }
+    product = {
+        key: value
+        for key, value in {
+            "product_name": extracted_snapshot.get("product_name") or existing_snapshot.get("product_name"),
+            "tire_model": extracted_snapshot.get("tire_model") or existing_snapshot.get("tire_model"),
+            "pending_product_name": extracted_snapshot.get("pending_product_name")
+            or existing_snapshot.get("pending_product_name"),
+            "tire_size": extracted_snapshot.get("tire_size") or existing_snapshot.get("tire_size"),
+        }.items()
+        if value not in (None, "", [], {})
+    }
+    vehicle = {
+        key: value
+        for key, value in {
+            "car_no": extracted_snapshot.get("car_no") or existing_snapshot.get("car_no"),
+            "requested_vehicle_name": extracted_snapshot.get("requested_vehicle_name")
+            or existing_snapshot.get("requested_vehicle_name"),
+            "tire_size": extracted_snapshot.get("tire_size") or existing_snapshot.get("tire_size"),
+        }.items()
+        if value not in (None, "", [], {})
+    }
+    flow_step = "recommend"
+    if intent in {"vehicle_based_recommendation_refinement", "vehicle_based_tire_recommendation", "vehicle_resolved_recommendation"}:
+        flow_step = "select_vehicle"
+    if intent in {"product_search", "resolve_or_describe_product"}:
+        flow_step = "search_product"
+
+    return {
+        key: value
+        for key, value in {
+            "flow_type": "commerce",
+            "status": "active",
+            "flow_step": flow_step,
+            "product": product,
+            "vehicle": vehicle,
+            "recommendation": recommendation,
+            "intent": {
+                "sub_flow_type": "recommendation",
+                "pending_intent": intent,
+                "goal_type": "recommend_tire" if "recommend" in intent or "best_selling" in intent else "product_search",
+            },
+            "source": "flow_controller:current_turn_discovery",
+        }.items()
+        if value not in (None, "", [], {})
+    }
+
+
+def _current_turn_support_intent(router_evidence: Mapping[str, Any], *, user_text: str = "") -> str:
+    router_intent = str(router_evidence.get("intent") or "").strip()
+    router_domain = str(router_evidence.get("domain") or "").strip()
+    execution_plan = _router_execution_plan(router_evidence)
+    plan_tokens = {item.split(":", 1)[-1].strip() for item in execution_plan}
+    has_transaction_anchor = router_domain == "transaction" or any(item.startswith("transaction:") for item in execution_plan)
+    filled_slot = str(router_evidence.get("filled_slot") or "").strip()
+    slot_fill_source = str(router_evidence.get("slot_fill_source") or "").strip()
+    if (
+        has_transaction_anchor
+        and router_intent.startswith("quick_order_reservation")
+        and (filled_slot == "schedule" or slot_fill_source == "previous_datepick")
+    ):
+        return ""
+    normalized_override = _normalize_current_turn_support_intent(user_text=user_text)
+    if normalized_override:
+        return normalized_override
+    if router_domain == "support" and (router_intent in _SUPPORT_FLOW_INTENTS or router_intent):
+        return router_intent or "support_faq"
+    if router_intent in _SUPPORT_FLOW_INTENTS and any(item.startswith("support:") for item in execution_plan):
+        return router_intent
+    for token in plan_tokens:
+        if token in _SUPPORT_EXECUTION_PLAN_TOKENS:
+            return token if token in _SUPPORT_FLOW_INTENTS else router_intent or "support_faq"
+    return ""
+
+
+def _normalize_current_turn_support_intent(*, user_text: str) -> str:
+    text = str(user_text or "")
+    if _CARD_INSTALLMENT_SUPPORT_CURRENT_TURN_RE.search(text):
+        return "card_installment_lookup"
+    return ""
+
+
+def _current_turn_support_flow_context(*, router_evidence: Mapping[str, Any], user_text: str = "") -> dict[str, Any]:
+    intent = _current_turn_support_intent(router_evidence, user_text=user_text)
+    if not intent:
+        return {}
+    return {
+        key: value
+        for key, value in {
+            "flow_type": "support",
+            "status": "active",
+            "flow_step": "answer_faq",
+            "intent": {
+                key: value
+                for key, value in {
+                    "pending_intent": intent,
+                    "goal_type": "support_faq",
+                    "support_topic": router_evidence.get("support_topic"),
+                    "faq_topic": router_evidence.get("faq_topic"),
+                    "policy_topic": router_evidence.get("policy_topic") or intent,
+                }.items()
+                if value not in (None, "", [], {})
+            },
+            "source": "flow_controller:current_turn_support",
+        }.items()
+        if value not in (None, "", [], {})
+    }
+
+
+def _router_plan_has_intent(router_evidence: Mapping[str, Any], *intents: str) -> bool:
+    execution_plan = _router_execution_plan(router_evidence)
+    return any(any(intent in item for intent in intents) for item in execution_plan)
+
+
+def _router_has_support_anchor(router_evidence: Mapping[str, Any]) -> bool:
+    router_domain = str(router_evidence.get("domain") or "").strip()
+    execution_plan = _router_execution_plan(router_evidence)
+    return router_domain == "support" or any(item.startswith("support:") for item in execution_plan)
+
+
+def _current_turn_service_maintenance_intent(router_evidence: Mapping[str, Any]) -> str:
+    router_intent = str(router_evidence.get("intent") or "").strip()
+    if router_intent in _SERVICE_MAINTENANCE_FLOW_INTENTS:
+        return router_intent
+    for intent in _SERVICE_MAINTENANCE_FLOW_INTENTS:
+        if _router_plan_has_intent(router_evidence, intent):
+            return intent
+    return ""
+
+
+def _current_turn_service_maintenance_flow_context(
+    *,
+    router_evidence: Mapping[str, Any],
+    existing_snapshot: Mapping[str, Any],
+    extracted_snapshot: Mapping[str, Any],
+) -> dict[str, Any]:
+    intent = _current_turn_service_maintenance_intent(router_evidence)
+    if not intent:
+        return {}
+
+    boundary = str(
+        extracted_snapshot.get("service_action_boundary")
+        or existing_snapshot.get("service_action_boundary")
+        or router_evidence.get("service_action_boundary")
+        or ""
+    ).strip()
+    if not boundary:
+        if intent in {"store_attribute_inquiry", "store_service_availability", "store_service_search"}:
+            boundary = "store_verification"
+        elif intent == "maintenance_addon_with_tire_service":
+            boundary = "service_booking_support"
+        else:
+            boundary = "policy_answer"
+    shop_id = str(extracted_snapshot.get("shop_id") or existing_snapshot.get("shop_id") or "").strip()
+    shop_name = str(extracted_snapshot.get("shop_name") or existing_snapshot.get("shop_name") or "").strip()
+    store_name = str(extracted_snapshot.get("store_name") or existing_snapshot.get("store_name") or "").strip()
+    service_name = str(extracted_snapshot.get("service_name") or existing_snapshot.get("service_name") or "").strip()
+    service_type = str(extracted_snapshot.get("service_type") or existing_snapshot.get("service_type") or "").strip()
+    current_step = "verify_store_service" if boundary == "store_verification" else "answer_policy"
+    allowed_tools = ["get_store_list_tool", "get_store_detail_tool"] if boundary == "store_verification" else ["search_faq_hybrid_tool"]
+    preferred_tool = "get_store_list_tool" if boundary == "store_verification" else "search_faq_hybrid_tool"
+    return {
+        key: value
+        for key, value in {
+            "flow_type": "commerce",
+            "status": "active",
+            "flow_step": current_step,
+            "store": {
+                key: value
+                for key, value in {
+                    "shop_id": shop_id,
+                    "shop_name": shop_name,
+                    "store_name": store_name,
+                }.items()
+                if value not in (None, "", [], {})
+            },
+            "intent": {
+                key: value
+                for key, value in {
+                    "pending_intent": intent,
+                    "sub_flow_type": "service_maintenance",
+                    "goal_type": boundary,
+                    "service_action_boundary": boundary,
+                    "service_name": service_name,
+                    "service_type": service_type,
+                }.items()
+                if value not in (None, "", [], {})
+            },
+            "target_action": boundary,
+            "next_tool": preferred_tool,
+            "allowed_tools": allowed_tools,
+            "preferred_tool": preferred_tool,
+            "source": "flow_controller:service_maintenance",
+        }.items()
+        if value not in (None, "", [], {}) and (key == "allowed_tools" or value != [])
+    }
+
+
+def _current_turn_reservation_management_intent(router_evidence: Mapping[str, Any]) -> str:
+    router_intent = str(router_evidence.get("intent") or "").strip()
+    if router_intent in _RESERVATION_POLICY_ONLY_FLOW_INTENTS and _router_has_support_anchor(router_evidence):
+        return ""
+    if router_intent in _RESERVATION_MANAGEMENT_FLOW_INTENTS:
+        return router_intent
+    for intent in _RESERVATION_MANAGEMENT_FLOW_INTENTS:
+        if _router_plan_has_intent(router_evidence, intent):
+            if intent in _RESERVATION_POLICY_ONLY_FLOW_INTENTS and _router_has_support_anchor(router_evidence):
+                return ""
+            return intent
+    return ""
+
+
+def _reservation_management_action_for_intent(intent: str, slots: Mapping[str, Any]) -> str:
+    explicit = str(slots.get("reservation_management_action") or "").strip()
+    if explicit:
+        return explicit
+    if intent in {"reservation_status_lookup", "reservation_store_info_lookup", "order_cancel_status_lookup"}:
+        return "lookup"
+    if intent == "reservation_change_request":
+        return "change_request"
+    if intent == "order_cancel_request":
+        return "cancel_request"
+    if intent in {"general_cancel_fee_policy", "reservation_window_policy", "delivery_delay_reservation_schedule_policy"}:
+        return "policy_answer"
+    return "lookup"
+
+
+def _current_turn_reservation_management_flow_context(
+    *,
+    router_evidence: Mapping[str, Any],
+    existing_snapshot: Mapping[str, Any],
+    extracted_snapshot: Mapping[str, Any],
+) -> dict[str, Any]:
+    intent = _current_turn_reservation_management_intent(router_evidence)
+    if not intent:
+        return {}
+    slots = {**existing_snapshot, **extracted_snapshot}
+    action = _reservation_management_action_for_intent(intent, slots)
+    if action == "lookup":
+        allowed_tools = ["get_my_reservations_tool", "get_orders_of_user_tool", "get_order_status_tool"]
+        preferred_tool = "get_my_reservations_tool"
+        step = "lookup_owned_record"
+    elif action == "policy_answer":
+        allowed_tools = ["search_faq_hybrid_tool"]
+        preferred_tool = "search_faq_hybrid_tool"
+        step = "answer_policy"
+    else:
+        allowed_tools = []
+        preferred_tool = ""
+        step = "guide_user_action"
+    return {
+        key: value
+        for key, value in {
+            "flow_type": "reservation_management",
+            "status": "active",
+            "flow_step": step,
+            "intent": {
+                key: value
+                for key, value in {
+                    "pending_intent": intent,
+                    "goal_type": "reservation_management",
+                    "reservation_management_action": action,
+                    "owned_record_target": slots.get("owned_record_target") or "reservation",
+                }.items()
+                if value not in (None, "", [], {})
+            },
+            "target_action": action,
+            "next_tool": preferred_tool,
+            "allowed_tools": allowed_tools,
+            "preferred_tool": preferred_tool,
+            "source": "flow_controller:reservation_management",
+        }.items()
+        if value not in (None, "", {}) and (key == "allowed_tools" or value != [])
+    }
+
+
 def _transition_kind(
     current_flow_state: Mapping[str, Any],
     parent_flow_state: Mapping[str, Any],
@@ -601,6 +1389,13 @@ def transition_current_flow(
     ui_action_snapshot = _ui_action_snapshot(ui_action)
     selected_product = _selected_product_from_ui_action(ui_action_snapshot)
     selected_quantity = _selected_quantity_from_ui_action(ui_action_snapshot)
+    selected_store = _selected_store_from_slots(
+        extracted_snapshot=extracted_snapshot,
+        existing_snapshot=existing_snapshot,
+        active_flow=active_flow,
+        router_evidence=router_snapshot,
+        resume_source=resume_source,
+    )
 
     current_flow_state = _current_flow_state(active_flow, router_snapshot)
     parent_flow_state = _flow_state_summary(parent_flow)
@@ -628,12 +1423,61 @@ def transition_current_flow(
         existing_snapshot=existing_snapshot,
         selected_quantity=selected_quantity,
     )
-    active_flow_context = selected_product_flow_context or selected_quantity_flow_context
+    selected_store_flow_context = _selected_store_flow_context(
+        active_flow=active_flow,
+        parent_flow_state=parent_flow_state,
+        router_evidence=router_snapshot,
+        existing_snapshot=existing_snapshot,
+        selected_store=selected_store,
+    )
+    current_turn_store_search_flow_context = _current_turn_store_search_flow_context(
+        router_evidence=router_snapshot,
+        existing_snapshot=existing_snapshot,
+        extracted_snapshot=extracted_snapshot,
+    )
+    current_turn_service_maintenance_flow_context = _current_turn_service_maintenance_flow_context(
+        router_evidence=router_snapshot,
+        existing_snapshot=existing_snapshot,
+        extracted_snapshot=extracted_snapshot,
+    )
+    current_turn_reservation_management_flow_context = _current_turn_reservation_management_flow_context(
+        router_evidence=router_snapshot,
+        existing_snapshot=existing_snapshot,
+        extracted_snapshot=extracted_snapshot,
+    )
+    current_turn_discovery_flow_context = _current_turn_discovery_flow_context(
+        router_evidence=router_snapshot,
+        existing_snapshot=existing_snapshot,
+        extracted_snapshot=extracted_snapshot,
+    )
+    current_turn_support_flow_context = _current_turn_support_flow_context(router_evidence=router_snapshot, user_text=user_text)
+    active_flow_context = (
+        selected_product_flow_context
+        or selected_quantity_flow_context
+        or selected_store_flow_context
+        or current_turn_service_maintenance_flow_context
+        or current_turn_support_flow_context
+        or current_turn_reservation_management_flow_context
+        or current_turn_store_search_flow_context
+        or current_turn_discovery_flow_context
+    )
     applied_reason = "metadata_only_shell"
     if selected_product_flow_context:
         applied_reason = "selected_product_flow_state"
     elif selected_quantity_flow_context:
         applied_reason = "selected_quantity_flow_state"
+    elif selected_store_flow_context:
+        applied_reason = "selected_store_flow_state"
+    elif current_turn_service_maintenance_flow_context:
+        applied_reason = "current_turn_service_maintenance_flow_state"
+    elif current_turn_support_flow_context:
+        applied_reason = "current_turn_support_flow_state"
+    elif current_turn_reservation_management_flow_context:
+        applied_reason = "current_turn_reservation_management_flow_state"
+    elif current_turn_store_search_flow_context:
+        applied_reason = "current_turn_store_search_flow_state"
+    elif current_turn_discovery_flow_context:
+        applied_reason = "current_turn_discovery_flow_state"
     current_turn_seed = _current_turn_flow_seed(router_snapshot)
     contract_seed = {
         "router_evidence": router_snapshot,
@@ -652,6 +1496,12 @@ def transition_current_flow(
         "extracted_slots": extracted_snapshot,
         "selected_product": selected_product,
         "selected_quantity": selected_quantity,
+        "selected_store": selected_store,
+        "current_turn_service_maintenance_flow": current_turn_service_maintenance_flow_context,
+        "current_turn_reservation_management_flow": current_turn_reservation_management_flow_context,
+        "current_turn_store_search_flow": current_turn_store_search_flow_context,
+        "current_turn_discovery_flow": current_turn_discovery_flow_context,
+        "current_turn_support_flow": current_turn_support_flow_context,
     }
     context_evidence = {key: value for key, value in context_evidence.items() if value not in (None, "", [], {})}
     metadata = {
@@ -666,6 +1516,12 @@ def transition_current_flow(
         "router_intent": str(router_snapshot.get("intent") or "none"),
         "selected_product_resolved": bool(selected_product),
         "selected_quantity_resolved": bool(selected_quantity),
+        "selected_store_resolved": bool(selected_store),
+        "current_turn_service_maintenance_resolved": bool(current_turn_service_maintenance_flow_context),
+        "current_turn_reservation_management_resolved": bool(current_turn_reservation_management_flow_context),
+        "current_turn_store_search_resolved": bool(current_turn_store_search_flow_context),
+        "current_turn_discovery_resolved": bool(current_turn_discovery_flow_context),
+        "current_turn_support_resolved": bool(current_turn_support_flow_context),
         "user_text_present": bool(str(user_text or "").strip()),
     }
     return FlowTransition(
@@ -944,7 +1800,8 @@ def build_purchase_flow_fallback_event(
     tool_data_list: list[dict] | None = None,
     blocked_tool: str | None = None,
 ) -> dict[str, Any] | None:
-    state = flow_state or resolve_purchase_order_flow(intent=intent or "", known_slots=known_slots)
+    normalized_intent = _purchase_flow_intent(intent=intent or "", known_slots=known_slots)
+    state = flow_state or resolve_purchase_order_flow(intent=normalized_intent, known_slots=known_slots)
     if state is None:
         return None
 
@@ -952,7 +1809,7 @@ def build_purchase_flow_fallback_event(
     resolved_product = _resolved_purchase_product(slots=slots, tool_data_list=tool_data_list)
     merged_slots = {**slots, **resolved_product}
     if resolved_product:
-        resumed_state = resolve_purchase_order_flow(intent=intent or "", known_slots=merged_slots)
+        resumed_state = resolve_purchase_order_flow(intent=normalized_intent, known_slots=merged_slots)
         if resumed_state is not None:
             state = resumed_state
     metadata = {
@@ -1001,6 +1858,18 @@ def build_purchase_flow_fallback_event(
             "metadata": metadata,
         },
     }
+
+
+def _purchase_flow_intent(*, intent: str, known_slots: Mapping[str, Any] | None) -> str:
+    normalized = str(intent or "").strip()
+    if normalized in {"quick_order_reservation", "quick_order_reservation_continue", "quick_order_execute"}:
+        return normalized
+    slots = dict(known_slots or {})
+    pending_intent = str(slots.get("pending_intent") or slots.get("pendingIntent") or "").strip()
+    goal_type = str(slots.get("goal_type") or slots.get("goalType") or "").strip()
+    if pending_intent in {"order", "cart"} or goal_type in {"place_order", "add_to_cart"}:
+        return "quick_order_reservation"
+    return normalized
 
 
 def build_selected_store_confirmation_event(
@@ -1249,6 +2118,15 @@ def _purchase_product_resolution_event(
             },
         }
 
+    product_card_event = _purchase_product_card_selection_event(
+        rows=matched_rows,
+        slots=slots,
+        metadata=metadata,
+        product_label=product_label,
+    )
+    if product_card_event is not None:
+        return product_card_event
+
     candidate_quick_replies = _purchase_product_candidate_quick_replies(
         rows=matched_rows,
         slots=slots,
@@ -1291,6 +2169,146 @@ def _purchase_product_resolution_event(
             "metadata": {**metadata, "candidateCount": len(matched_rows), "sizes": sizes},
         },
     }
+
+
+def _purchase_product_card_selection_event(
+    *,
+    rows: list[dict[str, Any]],
+    slots: Mapping[str, Any],
+    metadata: Mapping[str, Any],
+    product_label: str,
+) -> dict[str, Any] | None:
+    if len(rows) <= 1:
+        return None
+    if not normalize_tire_size(str(slots.get("tire_size") or "")):
+        return None
+
+    products: list[dict[str, Any]] = []
+    product_metadata: list[dict[str, Any]] = []
+    context = _purchase_context_metadata(slots)
+    seen_goods_no: set[str] = set()
+    for row in rows[:10]:
+        goods_no = str(row.get("goods_no") or "").strip()
+        if goods_no and goods_no in seen_goods_no:
+            continue
+        goods_nm = str(row.get("goods_nm") or product_label or "").strip()
+        tire_size = normalize_tire_size(str(row.get("tire_size_1") or row.get("tire_size") or slots.get("tire_size") or ""))
+        price = _row_display_price(row)
+        original_price = _row_int(row, "sale_prc")
+        discount_amount = original_price - price if original_price and price and original_price > price else None
+        discount_rate = round(discount_amount / original_price * 100, 1) if original_price and discount_amount else None
+        products.append({
+            "imageUrl": str(row.get("image_url") or ""),
+            "title": f"{goods_nm} {tire_size}".strip() if tire_size else goods_nm,
+            "tires": "",
+            "titleProductName": goods_nm,
+            "titleTires": tire_size,
+            "brandName": str(row.get("brand_nm") or "HANKOOK").strip() or "HANKOOK",
+            "oeBadgeYn": str(row.get("oe_badge_yn") or ""),
+            "oeMaker": str(row.get("t_oe_maker_1") or ""),
+            "smrtPayYn": str(row.get("smrt_pay_yn") or ""),
+            "comfort": "",
+            "price": price,
+            "originalPrice": original_price,
+            "discountRate": discount_rate,
+            "discountAmount": discount_amount,
+            "rate": float(_row_number(row, "rate", "rating_avg", default=0.0)),
+            "totalQuantity": int(_row_number(row, "totalQuantity", "total_qty", default=0)),
+            "tags": _purchase_product_tags(row),
+            "description": "",
+        })
+        product_metadata.append({
+            "goodsId": goods_no,
+            "goodsNo": goods_no,
+            "productName": goods_nm,
+            "tireSize": tire_size,
+            **context,
+        })
+        if goods_no:
+            seen_goods_no.add(goods_no)
+
+    if not products:
+        return None
+    return {
+        "type": "data",
+        "template": "product",
+        "source_domain": "discovery",
+        "assistant_response_source": "code_purchase_flow_product_selection",
+        "called_tools": ["search_product_tool"],
+        "data": {
+            "assistantResponse": f"{product_label} 조건으로 확인되는 상품이 여러 개예요. 원하시는 상품을 선택해 주세요.",
+            "products": products,
+            "metadata": product_metadata,
+            "isBookingFlow": True,
+            "flowMetadata": {**dict(metadata), "candidateCount": len(rows)},
+        },
+    }
+
+
+def _purchase_context_metadata(slots: Mapping[str, Any]) -> dict[str, Any]:
+    context: dict[str, Any] = {
+        "pendingIntent": str(slots.get("pending_intent") or "order"),
+        "goalType": str(slots.get("goal_type") or "place_order"),
+        "flowId": _PURCHASE_FLOW_ID,
+        "flowStep": "resolve_product",
+    }
+    for source_key, target_key in (
+        ("ord_qty", "ordQty"),
+        ("quantity", "ordQty"),
+        ("shop_id", "shopId"),
+        ("shop_name", "shopName"),
+        ("store_name", "storeName"),
+        ("requested_cal_day", "requestedCalDay"),
+        ("rsv_hour", "rsvHour"),
+    ):
+        value = slots.get(source_key)
+        if value not in (None, "", [], {}) and target_key not in context:
+            context[target_key] = value
+    return context
+
+
+def _row_display_price(row: Mapping[str, Any]) -> int | None:
+    for key in ("cheapest_final_prc", "final_unit_price", "final_prc", "extra_fvr_sale_prc", "price", "sale_prc"):
+        value = _row_int(row, key)
+        if value:
+            return value
+    return None
+
+
+def _row_int(row: Mapping[str, Any], key: str) -> int | None:
+    value = row.get(key)
+    if value in (None, ""):
+        return None
+    try:
+        return int(float(str(value).replace(",", "").strip()))
+    except (TypeError, ValueError):
+        return None
+
+
+def _row_number(row: Mapping[str, Any], *keys: str, default: float = 0.0) -> float:
+    for key in keys:
+        value = row.get(key)
+        if value in (None, ""):
+            continue
+        try:
+            return float(str(value).replace(",", "").strip())
+        except (TypeError, ValueError):
+            continue
+    return default
+
+
+def _purchase_product_tags(row: Mapping[str, Any]) -> list[dict[str, Any]]:
+    tags: list[dict[str, Any]] = []
+    prc_grd = str(row.get("prc_grd_nm") or "").strip()
+    if prc_grd:
+        tags.append({"text": prc_grd, "primary": True})
+    detail = str(row.get("goods_dtl_pfm_nm") or "").strip()
+    absorber = str(row.get("sound_absorber_yn") or "").strip().upper()
+    if detail:
+        tags.append({"text": detail, "primary": False})
+    elif absorber == "Y":
+        tags.append({"text": "흡음재", "primary": False})
+    return tags[:3]
 
 
 def _purchase_product_candidate_quick_replies(

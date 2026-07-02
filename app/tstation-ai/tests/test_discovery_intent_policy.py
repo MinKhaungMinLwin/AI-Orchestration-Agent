@@ -1,9 +1,13 @@
+import pytest
+
 from services.tstation.policies.discovery_intent_policy import (
     best_seller_search_params_from_text,
     best_seller_period_from_text,
     build_discovery_intent_frame,
     extract_best_seller_vehicle_query,
     extract_quantity_options,
+    has_registered_vehicle_ownership_signal,
+    has_registered_vehicle_type_query_signal,
     is_best_seller_request,
     is_default_benefit_request,
     is_default_tire_shopping_request,
@@ -23,6 +27,26 @@ def test_tc004_unsized_summer_performance_recommendation_keeps_conditions() -> N
     assert frame.entities["tire_size"] is None
     assert plan.preferred_tool == "get_products_recommendations_tool"
     assert plan.tool_args_patch == {"rcmd_type": "performance", "season_nm": "여름"}
+
+
+def test_plain_good_performance_wording_does_not_mean_sports_performance() -> None:
+    frame = build_discovery_intent_frame("성능 좋은 타이어 추천해줘")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.intent == "product_recommendation"
+    assert frame.sub_intent == "general_recommendation"
+    assert "performance" not in frame.entities
+    assert plan.preferred_tool == "get_products_recommendations_tool"
+    assert plan.tool_args_patch == {"rcmd_type": "tstation"}
+
+
+def test_braking_or_cornering_wording_maps_to_performance() -> None:
+    for text in ("코너링 좋은 타이어 추천해줘", "제동능력 좋은 타이어 추천해줘"):
+        frame = build_discovery_intent_frame(text)
+        plan = plan_discovery_tools(frame)
+
+        assert frame.entities["recommendation_scenario"] == "handling"
+        assert plan.tool_args_patch == {"rcmd_type": "performance"}
 
 
 def test_welcome_popular_tire_question_uses_three_month_best_sellers() -> None:
@@ -127,6 +151,22 @@ def test_vehicle_best_seller_query_populates_vehicle_query() -> None:
     assert plan.tool_args_patch == {"limit": 5, "months": 3, "vehicle_query": "그랜저"}
 
 
+def test_vehicle_best_seller_query_without_object_noun_or_recency_word() -> None:
+    for text in (
+        "그랜저 인기 많은거 알려줘",
+        "그랜저 잘 팔리는거 뭐야",
+        "K7 잘 나가는거",
+        "그랜저 인기 제품 알려줘",
+    ):
+        assert is_best_seller_request(text)
+        frame = build_discovery_intent_frame(text)
+        plan = plan_discovery_tools(frame)
+
+        assert frame.sub_intent == "best_seller_search"
+        assert plan.preferred_tool == "get_best_selling_products_tool"
+        assert frame.entities["vehicle_query"] in ("그랜저", "K7")
+
+
 def test_general_ev_recommendation_still_uses_recommendation_engine() -> None:
     frame = build_discovery_intent_frame("전기차용 타이어 추천해줘")
     plan = plan_discovery_tools(frame)
@@ -135,6 +175,72 @@ def test_general_ev_recommendation_still_uses_recommendation_engine() -> None:
     assert frame.sub_intent == "condition_recommendation"
     assert plan.preferred_tool == "get_products_recommendations_tool"
     assert plan.tool_args_patch == {"vehicle_type": "ev"}
+
+
+def test_registered_vehicle_size_lookup_variants_use_vehicle_information_contract() -> None:
+    cases = (
+        ("내가 등록한 차 중에 제타 사이즈가 뭐야", "제타"),
+        ("내 등록 차 중 제타 규격 알려줘", "제타"),
+        ("내가 등록해둔 차량 타이어 사이즈 보여줘", None),
+    )
+    for text, expected_vehicle_anchor in cases:
+        frame = build_discovery_intent_frame(text)
+        plan = plan_discovery_tools(frame)
+
+        assert has_registered_vehicle_ownership_signal(text)
+        assert frame.intent == "product_description"
+        assert frame.sub_intent == "vehicle_information"
+        assert frame.entities["vehicle_information_request"] == "tire_size_lookup"
+        if expected_vehicle_anchor:
+            assert frame.entities["named_registered_vehicle_anchor"] == expected_vehicle_anchor
+        else:
+            assert "named_registered_vehicle_anchor" not in frame.entities
+        assert plan.allowed_tools == ("get_my_cars_tool",)
+        assert plan.preferred_tool == "get_my_cars_tool"
+
+
+def test_registered_vehicle_type_query_variants_use_vehicle_information_contract() -> None:
+    texts = (
+        "내 차 뭐야?",
+        "내차 뭐야?",
+        "내가 등록한 차 뭐야?",
+        "내가 등록한 차종이 뭐야?",
+        "내 차종 알려줘",
+        "내가 등록한 차량 알려줘",
+    )
+    for text in texts:
+        frame = build_discovery_intent_frame(text)
+        plan = plan_discovery_tools(frame)
+
+        assert has_registered_vehicle_type_query_signal(text)
+        assert frame.intent == "product_description"
+        assert frame.sub_intent == "vehicle_information"
+        assert frame.entities["vehicle_information_request"] == "vehicle_type_lookup"
+        assert plan.allowed_tools == ("get_my_cars_tool",)
+        assert plan.preferred_tool == "get_my_cars_tool"
+
+
+def test_registered_vehicle_recommendation_request_is_unaffected_by_type_query_signal() -> None:
+    frame = build_discovery_intent_frame("내 차에 맞는 타이어 추천해줘")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.intent == "product_recommendation"
+    assert frame.sub_intent == "vehicle_resolved_recommendation"
+    assert "vehicle_information_request" not in frame.entities
+    assert plan.preferred_tool == "get_my_cars_tool"
+
+
+def test_registered_vehicle_recommendation_accepts_registered_vehicle_phrasing() -> None:
+    text = "내가 등록한 차중에 gv70 에 맞는 타이어 추천"
+    frame = build_discovery_intent_frame(text)
+    plan = plan_discovery_tools(frame)
+
+    assert has_registered_vehicle_ownership_signal(text)
+    assert frame.intent == "product_recommendation"
+    assert frame.sub_intent == "vehicle_resolved_recommendation"
+    assert frame.entities["named_registered_vehicle_anchor"] == "gv70"
+    assert plan.allowed_tools == ("get_my_cars_tool", "get_products_recommendations_tool")
+    assert plan.preferred_tool == "get_my_cars_tool"
 
 
 def test_ev_low_noise_recommendation_keeps_ev_axis() -> None:
@@ -198,8 +304,8 @@ def test_default_benefit_cta_uses_events_and_deals_not_coupons() -> None:
     assert frame.intent == "product_search"
     assert frame.sub_intent == "benefit_event_list_lookup"
     assert frame.entities["default_benefit"] is True
-    assert plan.allowed_tools == ("get_events_tool", "get_deals_tool")
-    assert plan.preferred_tool == "get_events_tool"
+    assert plan.allowed_tools == ("get_benefit_event_deal_list_tool",)
+    assert plan.preferred_tool == "get_benefit_event_deal_list_tool"
     assert "get_my_coupons_tool" in plan.forbidden_tools
 
 
@@ -211,23 +317,23 @@ def test_event_list_request_uses_events_and_deals() -> None:
     assert frame.intent == "product_search"
     assert frame.sub_intent == "benefit_event_list_lookup"
     assert frame.entities["default_benefit"] is True
-    assert plan.allowed_tools == ("get_events_tool", "get_deals_tool")
-    assert plan.preferred_tool == "get_events_tool"
+    assert plan.allowed_tools == ("get_benefit_event_deal_list_tool",)
+    assert plan.preferred_tool == "get_benefit_event_deal_list_tool"
     assert "get_my_coupons_tool" in plan.forbidden_tools
 
 
-def test_deal_list_request_uses_deals_only() -> None:
-    frame = build_discovery_intent_frame("진행 중인 기획전")
+@pytest.mark.parametrize("user_text", ["진행 중인 기획전", "진행 중인 프로모션", "지금 프로모션 뭐있어?"])
+def test_benefit_list_requests_use_events_and_deals_together(user_text: str) -> None:
+    frame = build_discovery_intent_frame(user_text)
     plan = plan_discovery_tools(frame)
 
-    assert is_default_benefit_request("진행 중인 기획전") is False
-    assert is_deal_list_request("진행 중인 기획전") is True
+    assert is_default_benefit_request(user_text) is True
+    assert is_deal_list_request(user_text) is False
     assert frame.intent == "product_search"
-    assert frame.sub_intent == "benefit_deal_list"
-    assert frame.entities["deal_list_only"] is True
-    assert plan.allowed_tools == ("get_deals_tool",)
-    assert plan.preferred_tool == "get_deals_tool"
-    assert "get_events_tool" in plan.forbidden_tools
+    assert frame.sub_intent == "benefit_event_list_lookup"
+    assert frame.entities["default_benefit"] is True
+    assert plan.allowed_tools == ("get_benefit_event_deal_list_tool",)
+    assert plan.preferred_tool == "get_benefit_event_deal_list_tool"
     assert "get_my_coupons_tool" in plan.forbidden_tools
 
 
@@ -339,6 +445,18 @@ def test_quantity_benefit_comparison_preserves_quantities_and_requires_size() ->
     assert plan.tool_args_patch == {"keyword": "Optimo", "brand_cd": "HK"}
 
 
+def test_multi_product_description_request_does_not_promote_generic_compare_slots() -> None:
+    frame = build_discovery_intent_frame(
+        "kinergy EX, Ventus S2 AS 설명해줘",
+        known_slots={"comparison_followup_intent": "generic_compare", "comparison_metric": "detail"},
+    )
+
+    assert frame.intent == "product_description"
+    assert frame.sub_intent == "product_detail"
+    assert frame.entities["multi_product_description_request"] is True
+    assert frame.entities["multi_product_detail_request"] is True
+
+
 def test_sized_quantity_benefit_comparison_keeps_search_size() -> None:
     frame = build_discovery_intent_frame("옵티모 2155017 2개랑 4개 할인 비교해줘")
     plan = plan_discovery_tools(frame)
@@ -414,6 +532,16 @@ def test_tc044_sound_absorber_explain_and_buy_keeps_sound_absorber_recommendatio
     assert frame.intent == "product_recommendation"
     assert frame.sub_intent == "technology_explain_then_recommend"
     assert frame.entities["purchase_intent"] is True
+    assert plan.tool_args_patch == {"rcmd_type": "sound_absorber"}
+
+
+def test_tc044_sound_absorber_recommendation_without_concept_stays_condition_recommendation() -> None:
+    frame = build_discovery_intent_frame("흡음재 타이어 추천")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.intent == "product_recommendation"
+    assert frame.sub_intent == "condition_recommendation"
+    assert frame.entities["recommendation_scenario"] == "sound_absorber"
     assert plan.tool_args_patch == {"rcmd_type": "sound_absorber"}
 
 

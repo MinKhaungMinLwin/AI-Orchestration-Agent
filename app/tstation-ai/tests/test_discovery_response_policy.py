@@ -49,6 +49,17 @@ def test_external_price_comparison_decision_forbids_external_scraping_claims() -
     assert "product_description_answer" in decision.forbidden_behaviors
 
 
+def test_purchase_product_search_without_size_asks_for_size_selection_not_description() -> None:
+    decision = decide_discovery_response(build_discovery_intent_frame("아이온 에보 as suv 구매할래"))
+
+    assert decision.template == TemplateName.QUICK_REPLY
+    assert decision.response_shape == ResponseShape.CLARIFY
+    assert decision.required_slots == ("tire_size",)
+    assert decision.metadata["response_shape_key"] == "purchase_size_selection"
+    assert "confirm_goods_no_before_size_selection" in decision.forbidden_behaviors
+    assert "product_search_summary_as_final_answer" in decision.forbidden_behaviors
+
+
 def test_tc016_winter_concept_decision_forbids_dropping_winter_constraint() -> None:
     decision = decide_discovery_response(build_discovery_intent_frame("윈터 타이어랑 사계절 타이어랑 어떤 의미야?"))
 
@@ -68,6 +79,15 @@ def test_tc017_product_attribute_decision_forbids_generic_summary() -> None:
 
 def test_product_description_decision_forbids_unrequested_size_missing_notice() -> None:
     decision = decide_discovery_response(build_discovery_intent_frame("kinergy ex 설명해줘"))
+
+    assert decision.template == TemplateName.QUICK_REPLY
+    assert decision.metadata["response_shape_key"] == "neutral_product_description"
+    assert "generic_unsized_summary" in decision.forbidden_behaviors
+    assert "unrequested_size_missing_notice" in decision.forbidden_behaviors
+
+
+def test_multi_product_description_request_prefers_neutral_description_over_compare_summary() -> None:
+    decision = decide_discovery_response(build_discovery_intent_frame("kinergy EX, Ventus S2 AS 설명해줘"))
 
     assert decision.template == TemplateName.QUICK_REPLY
     assert decision.metadata["response_shape_key"] == "neutral_product_description"
@@ -150,6 +170,16 @@ def test_tc044_unsized_sound_absorber_explains_then_summarizes_without_cards() -
     assert decision.metadata["response_shape_key"] == "technology_explanation_then_unsized_recommendation_summary"
     assert "drop_sound_absorber_filter" in decision.forbidden_behaviors
     assert "product_card_without_size" in decision.forbidden_behaviors
+
+
+def test_tc044_unsized_sound_absorber_recommendation_skips_technology_explanation() -> None:
+    decision = decide_discovery_response(build_discovery_intent_frame("흡음재 타이어 추천"))
+
+    assert decision.template == TemplateName.QUICK_REPLY
+    assert decision.response_shape == ResponseShape.SUMMARY
+    assert decision.metadata["response_shape_key"] == "catalog_unsized_recommendation_summary"
+    assert "technology_explanation_then_unsized_recommendation_summary" not in decision.metadata.values()
+    assert "drop_recommendation_scenario" in decision.forbidden_behaviors
 
 
 def test_safe_service_unsized_question_explains_service_before_products() -> None:

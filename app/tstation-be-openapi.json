@@ -11735,6 +11735,18 @@
             "title": "Car Maker",
             "description": "차량 제조사"
           },
+          "car_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Car Type",
+            "description": "차량 타입 정규화값 (sedan/suv/ev/sports/truck_van)"
+          },
           "tire_size_fr": {
             "anyOf": [
               {
@@ -11758,6 +11770,22 @@
             ],
             "title": "Tire Size Re",
             "description": "후륜 타이어 사이즈"
+          },
+          "available_sizes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Available Sizes",
+            "description": "선택 가능한 모든 타이어 사이즈 후보 목록 (중복 제거, DB 조회 순서 유지)"
+          },
+          "valid_sizes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Valid Sizes",
+            "description": "Deprecated: available_sizes와 동일한 사이즈 후보 목록"
           }
         },
         "type": "object",

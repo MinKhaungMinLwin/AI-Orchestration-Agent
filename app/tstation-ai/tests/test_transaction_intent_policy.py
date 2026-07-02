@@ -105,6 +105,22 @@ def test_purchase_flow_with_store_and_no_quantity_resolves_to_ask_quantity() -> 
     assert plan.metadata["flow_slots"]["store_name"] == "한남점"
 
 
+def test_explicit_order_payload_with_labeled_store_and_schedule_stays_in_purchase_flow() -> None:
+    user_text = "타이어 사이즈 2454519 / 차종 그랜저 / 수량: 4개 / 상품: 벤투스 air S(흡음재없는거) / 장착점: 티스테이션 분당정자점 / 장착일: 7월 4일 11시 / 이 정보대로 주문서 만들어 줘"
+    frame = build_transaction_intent_frame(user_text, known_slots={})
+    plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "quick_order_reservation"
+    assert frame.sub_intent == "reservation"
+    assert frame.known_slots["shop_name"] == "분당정자점"
+    assert frame.known_slots["store_name"] == "분당정자점"
+    assert frame.known_slots["product_name"] == "Ventus air S"
+    assert frame.known_slots["ord_qty"] == 4
+    assert plan.metadata["response_intent"] == "quick_order_reservation"
+    assert "get_store_list_tool" not in plan.allowed_tools
+    assert "get_store_detail_tool" not in plan.allowed_tools
+
+
 def test_purchase_continuation_after_vehicle_selection_resolves_to_ask_quantity() -> None:
     frame = replace(
         build_transaction_intent_frame(
@@ -977,3 +993,50 @@ def test_tc233_complete_order_request_prefers_schedule_preview_not_store_hours()
     assert "store_hours_instead_of_slots" in plan.forbidden_tools
     assert decision.template == TemplateName.DATE_PICK
     assert "store_hours_instead_of_slots" in decision.forbidden_behaviors
+
+
+def test_datepick_selection_from_stock_preview_parent_order_builds_preorder() -> None:
+    """A logistics-preview stock context can still complete the parent purchase flow."""
+    frame = build_transaction_intent_frame(
+        "2026년 7월 8일 (수)\n15:00",
+        known_slots={
+            "product_name": "다이나프로 HP3",
+            "goods_no": "G000000320151",
+            "tire_size": "235/55R19",
+            "ord_qty": 4,
+            "quantity": 4,
+            "shop_id": "F00262",
+            "shop_name": "티스테이션 동탄신도시점",
+            "store_name": "티스테이션 동탄신도시점",
+            "region": "동탄",
+            "requested_cal_day": "20260708",
+            "rsv_hour": "15",
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+            "stock_check_mode": "preview",
+            "schedule_mode": "logistics_only",
+            "inventory_mode": "logistics_only",
+            "source_tool": "transaction_store_preview_tool",
+            "availability_context": {
+                "pending_order_context": {
+                    "pending_intent": "order",
+                    "goal_type": "place_order",
+                },
+            },
+        },
+    )
+    plan = plan_transaction_tools(frame)
+    decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text="2026년 7월 8일 (수)\n15:00",
+        known_slots=dict(frame.known_slots),
+    )
+
+    assert frame.intent == "quick_order_reservation"
+    assert frame.known_slots["pending_intent"] == "order"
+    assert frame.known_slots["goal_type"] == "place_order"
+    assert frame.missing_slots == ()
+    assert plan.preferred_tool is None
+    assert plan.metadata["flow_step"] == "build_preorder"
+    assert "get_store_schedule_tool" in plan.forbidden_tools
+    assert decision.template == TemplateName.PRE_ORDER
