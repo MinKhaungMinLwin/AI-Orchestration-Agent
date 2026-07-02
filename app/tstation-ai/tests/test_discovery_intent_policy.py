@@ -167,6 +167,42 @@ def test_vehicle_best_seller_query_without_object_noun_or_recency_word() -> None
         assert frame.entities["vehicle_query"] in ("그랜저", "K7")
 
 
+def test_vehicle_best_seller_query_uses_catalog_model_name_before_strip_fallback() -> None:
+    cases = (
+        ("스포티지 차주들이 많이 사는 타이어가 뭐야", "스포티지"),
+        ("소나타 차주들이 많이 사는 타이어가 뭐야", "쏘나타"),
+        ("E클래스 차주들이 많이 사는 타이어 뭐야", "벤츠 E클래스"),
+        ("지바겐 차주들이 많이 산 타이어 뭐야", "벤츠 G클래스"),
+    )
+    for text, expected_vehicle_query in cases:
+        frame = build_discovery_intent_frame(text)
+        plan = plan_discovery_tools(frame)
+
+        assert frame.sub_intent == "best_seller_search", text
+        assert frame.entities["vehicle_query"] == expected_vehicle_query, text
+        assert plan.tool_args_patch["vehicle_query"] == expected_vehicle_query, text
+        assert plan.allowed_tools == ("get_best_selling_products_tool",), text
+        assert plan.forbidden_tools == ("get_products_recommendations_tool",), text
+
+
+def test_vehicle_best_seller_query_preserves_broad_series_and_numeric_fallbacks() -> None:
+    cases = (
+        ("320에 많이 팔린 타이어 뭐야", "320"),
+        ("BMW 320에 많이 팔린 타이어 뭐야", "BMW 320"),
+        ("BMW 3시리즈 320에 많이 팔린 타이어 뭐야", "BMW 3시리즈 320"),
+        ("3시리즈 320에 많이 팔린 타이어 뭐야", "BMW 3시리즈 320"),
+    )
+    for text, expected_vehicle_query in cases:
+        frame = build_discovery_intent_frame(text)
+        plan = plan_discovery_tools(frame)
+
+        assert frame.sub_intent == "best_seller_search", text
+        assert frame.entities["vehicle_query"] == expected_vehicle_query, text
+        assert plan.tool_args_patch["vehicle_query"] == expected_vehicle_query, text
+        assert plan.allowed_tools == ("get_best_selling_products_tool",), text
+        assert plan.forbidden_tools == ("get_products_recommendations_tool",), text
+
+
 def test_general_ev_recommendation_still_uses_recommendation_engine() -> None:
     frame = build_discovery_intent_frame("전기차용 타이어 추천해줘")
     plan = plan_discovery_tools(frame)

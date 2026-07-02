@@ -29,6 +29,8 @@ class VehicleModelMatch(NamedTuple):
     model: str
     category: str  # "ev" | "suv" | "passenger" | "truck_van"
     masked_text: str  # input text with the matched model mentions blanked out
+    matched_text: str
+    vehicle_query: str
 
 
 _LATIN_ALIAS_RE = re.compile(r"^[A-Za-z0-9 .\-]+$")
@@ -140,6 +142,29 @@ _COMPILED: tuple[tuple[str, str, re.Pattern[str]], ...] = tuple(
 )
 
 
+def _vehicle_query_for_match(model: str, matched_text: str, text: str, match_end: int) -> str:
+    matched_text = re.sub(r"\s+", " ", matched_text or "").strip()
+    if not matched_text:
+        return model
+    maker = model.split(" ", 1)[0] if " " in model else ""
+    if "시리즈" in model or "/" in model:
+        query = matched_text
+        trim_match = re.match(
+            r"\s*([A-Za-z]?\d{3}[A-Za-z]?)(?=\s|에|은|는|이|가|도|로|으로|,|\.|\?|!|$)",
+            text[match_end:],
+        )
+        if trim_match and trim_match.group(1).lower() not in query.lower():
+            query = f"{query} {trim_match.group(1)}"
+        if model.startswith("BMW ") and maker and not re.search(
+            rf"(?<![A-Za-z0-9]){re.escape(maker)}(?![A-Za-z0-9])",
+            query,
+            re.IGNORECASE,
+        ):
+            return f"{maker} {query}"
+        return query
+    return model
+
+
 def match_vehicle_model_category(text: str) -> VehicleModelMatch | None:
     """Return the first cataloged vehicle model mentioned in ``text``, or None.
 
@@ -149,6 +174,14 @@ def match_vehicle_model_category(text: str) -> VehicleModelMatch | None:
     if not text:
         return None
     for model, category, pattern in _COMPILED:
-        if pattern.search(text):
-            return VehicleModelMatch(model=model, category=category, masked_text=pattern.sub(" ", text))
+        match = pattern.search(text)
+        if match:
+            matched_text = match.group(0)
+            return VehicleModelMatch(
+                model=model,
+                category=category,
+                masked_text=pattern.sub(" ", text),
+                matched_text=matched_text,
+                vehicle_query=_vehicle_query_for_match(model, matched_text, text, match.end()),
+            )
     return None

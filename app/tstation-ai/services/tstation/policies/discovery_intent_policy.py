@@ -1032,7 +1032,11 @@ def build_discovery_intent_frame(
     if best_seller_period:
         entities["best_seller_period"] = best_seller_period
         entities.update(best_seller_search_params_from_text(text))
-        best_seller_vehicle_query = extract_best_seller_vehicle_query(text)
+        best_seller_vehicle_query = ""
+        if vehicle_model_match is not None:
+            best_seller_vehicle_query = vehicle_model_match.vehicle_query
+        else:
+            best_seller_vehicle_query = extract_best_seller_vehicle_query(text) or ""
         if best_seller_vehicle_query:
             entities["vehicle_query"] = best_seller_vehicle_query
     if is_default_tire_shopping_request(text):
