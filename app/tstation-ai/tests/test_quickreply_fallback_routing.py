@@ -26722,6 +26722,34 @@ def test_duplicated_series_tire_size_typo_normalizes_across_slots_and_discovery_
     assert frame.entities["explicit_tire_size"] == "235/55R19"
 
 
+@pytest.mark.parametrize(
+    ("user_text", "tire_size", "min_price", "max_price"),
+    [
+        ("2454519 30만원대 타이어 추천", "245/45R19", 300_000, 399_999),
+        ("2454518 40만원대 추천", "245/45R18", 400_000, 499_999),
+        ("2355519 사이즈 20만원대 추천해줘", "235/55R19", 200_000, 299_999),
+        ("245/45R19 30만원대 추천", "245/45R19", 300_000, 399_999),
+    ],
+)
+def test_recommendation_price_range_does_not_absorb_tire_size_digits(
+    user_text: str,
+    tire_size: str,
+    min_price: int,
+    max_price: int,
+) -> None:
+    frame = build_discovery_intent_frame(user_text)
+    plan = plan_discovery_tools(frame)
+
+    assert frame.entities["tire_size"] == tire_size
+    assert frame.entities["min_price"] == min_price
+    assert frame.entities["max_price"] == max_price
+    assert plan.tool_args_patch["tire_size"] == tire_size
+    assert plan.tool_args_patch["min_price"] == min_price
+    assert plan.tool_args_patch["max_price"] == max_price
+    assert plan.metadata["recommendation_expected_tool_args"]["min_price"] == min_price
+    assert plan.metadata["recommendation_expected_tool_args"]["max_price"] == max_price
+
+
 def test_brand_recommendation_tool_patch_disables_cross_brand_fill() -> None:
     frame = build_discovery_intent_frame("미쉐린 2355519 사이즈 추천")
     plan = plan_discovery_tools(frame)

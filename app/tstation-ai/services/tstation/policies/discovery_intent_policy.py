@@ -72,30 +72,40 @@ def _named_my_vehicle_anchor(text: str) -> str | None:
     return _named_vehicle_anchor_from_pattern(text, _MY_NAMED_VEHICLE_RE)
 
 
+_TIRE_SIZE_PRICE_PARSE_MASK_RE = re.compile(
+    r"(?<!\d)(\d{3})\s*/?\s*(\d{2})\s*R?\s*(\d{2})(?=\s*\d{1,3}\s*만원|[^\d]|$)",
+    re.IGNORECASE,
+)
+
+
 def _price_range_from_text(text: str) -> dict[str, int]:
-    normalized = re.sub(r"\s+", "", text or "")
+    size_masked_text = _TIRE_SIZE_PRICE_PARSE_MASK_RE.sub(" ", text or "")
+    normalized = re.sub(r"\s+", "", size_masked_text)
     if not normalized:
         return {}
-    match = re.search(r"(?P<low>\d{1,3})만원(?:대|선)", normalized)
+    match = re.search(r"(?<!\d)(?P<low>\d{1,3})만원(?:대|선)", normalized)
     if match:
         low = int(match.group("low")) * 10_000
         return {"min_price": low, "max_price": low + 99_999}
-    match = re.search(r"(?P<low>\d{1,3})만원(?:부터|이상)[~\-]?(?P<high>\d{1,3})?만원?(?:까지|이하)?", normalized)
+    match = re.search(
+        r"(?<!\d)(?P<low>\d{1,3})만원(?:부터|이상)[~\-]?(?P<high>\d{1,3})?만원?(?:까지|이하)?",
+        normalized,
+    )
     if match:
         result = {"min_price": int(match.group("low")) * 10_000}
         if match.group("high"):
             result["max_price"] = int(match.group("high")) * 10_000
         return result
-    match = re.search(r"(?P<low>\d{1,3})만원[~\-](?P<high>\d{1,3})만원", normalized)
+    match = re.search(r"(?<!\d)(?P<low>\d{1,3})만원[~\-](?P<high>\d{1,3})만원", normalized)
     if match:
         return {
             "min_price": int(match.group("low")) * 10_000,
             "max_price": int(match.group("high")) * 10_000,
         }
-    match = re.search(r"(?P<price>\d{1,3})만원(?:이하|까지|안쪽|미만)", normalized)
+    match = re.search(r"(?<!\d)(?P<price>\d{1,3})만원(?:이하|까지|안쪽|미만)", normalized)
     if match:
         return {"max_price": int(match.group("price")) * 10_000}
-    match = re.search(r"(?P<price>\d{1,3})만원(?:이상|부터)", normalized)
+    match = re.search(r"(?<!\d)(?P<price>\d{1,3})만원(?:이상|부터)", normalized)
     if match:
         return {"min_price": int(match.group("price")) * 10_000}
     return {}
