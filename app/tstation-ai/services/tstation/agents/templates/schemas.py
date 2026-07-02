@@ -674,9 +674,34 @@ class CarMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     carNo: str = Field(..., min_length=1)
+    car_no: str | None = None
     carLncCd: str | None = None
+    car_lnc_cd: str | None = None
+    mbrCarRegSeq: str | None = None
+    mbr_car_reg_seq: str | None = None
+    carMaker: str | None = None
+    carModelDet: str | None = None
+    car_model_det: str | None = None
+    carName: str | None = None
+    car_nm: str | None = None
+    carTrim: str | None = None
+    carEngine: str | None = None
+    carType: str | None = None
+    car_type: str | None = None
+    vehicleType: str | None = None
+    vehicle_type: str | None = None
     tireSize: str | None = None
+    tire_size_fr: str | None = None
     tireSizeRe: str | None = None
+    tire_size_re: str | None = None
+    availableSizes: list[str] | None = None
+    available_sizes: list[str] | None = None
+    ctaAction: str | None = None
+    cta_action: str | None = None
+    sourceIntent: str | None = None
+    source_intent: str | None = None
+    expectedContractIntent: str | None = None
+    expected_contract_intent: str | None = None
 
 
 class CarItem(BaseModel):

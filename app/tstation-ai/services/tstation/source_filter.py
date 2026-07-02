@@ -70,7 +70,7 @@ _RCMD_BASE_FIELDS: set[str] = {
     "wet", "t_snow", "t_ice", "t_highspd",
     "t_high_hand_avg", "t_com_sil_avg", "t_com_cvs", "t_milg_cvs",
     "t_wgt_idx", "t_wgt_idx_kg", "t_tray_ware", "t_rlx_isn_yn",
-    "goods_pfm_nm", "season_nm", "car_knd_nm", "prc_grd_nm",
+    "goods_pfm_nm", "goods_dtl_pfm_nm", "sound_absorber_yn", "season_nm", "car_knd_nm", "prc_grd_nm",
     "t_oe_maker_1", "oe_badge_yn",
     "wrt_grte_term", "rating_avg",
     # EU 소음 라벨 (정숙성 점수와 별개)
@@ -89,13 +89,15 @@ _RCMD_CTX_FIELDS: set[str] = _RCMD_BASE_FIELDS | {"tot_scr", "t_comfort", "t_sil
 
 # Search product base — CTX adds extra_fvr_sale_prc for follow-up price questions.
 _SEARCH_PRODUCT_BASE_FIELDS: set[str] = {
-    "goods_no", "goods_nm", "tire_size_1",
+    "goods_no", "goods_nm", "tire_size_1", "available_sizes",
+    "image_url",
     # EU 소음 라벨 (정숙성 점수와 별개)
     "label_pnwave", "label_pnwave_nm", "label_pndb",
     # 가격 등급 (프리미엄+/프리미엄/스탠다드/이코노미) — 사용자 등급 질문 답변용
     "prc_grd_nm",
+    "sale_prc", "rating_avg", "review_count",
     # 퍼포먼스 분류 (COMFORT=정숙/승차감, SPORT=고속/제동성, RUNFLAT) — 답변용
-    "goods_pfm_nm",
+    "goods_pfm_nm", "goods_dtl_pfm_nm", "sound_absorber_yn",
     "t_oe_maker_1", "oe_badge_yn",
     # 신규 BE 확장 필드
     "big_goods_nm", "ptrn_d_nm",
@@ -392,7 +394,7 @@ def filter_for_context(tool_name: str, raw_output: str, tool_input: dict | None 
                 "big_goods_nm", "ptrn_d_nm",
                 "tire_width", "tire_series", "inch",
                 "t_wgt_idx", "t_wgt_idx_kg", "t_wgt_spd", "t_highspd",
-                "season_nm", "car_knd_nm", "goods_pfm_nm",
+                "season_nm", "car_knd_nm", "goods_pfm_nm", "goods_dtl_pfm_nm", "sound_absorber_yn",
                 "t_oe_maker_1", "oe_badge_yn",
                 "brand_nm", "certify_brand_nm", "orpl_nm", "t_rls_yearmon",
                 "rr", "wet", "label_pndb",

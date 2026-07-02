@@ -32,7 +32,8 @@ _DELIVERY_TRIGGER_RE = re.compile(
     r"배송비|추가\s*배송|추가\s*비용|도서산간|제주|서귀포|집으로|집에|자택|택배|"
     r"직접\s*(?:갈아|교체|장착)|자가\s*장착|셀프\s*(?:교체|장착)|"
     r"온라인.{0,12}(?:매장|오프라인)|(?:매장|오프라인).{0,12}온라인|"
-    r"(?:지역|서울|부산|대구|인천|광주|대전|울산).{0,24}(?:가격|판매가|최종가)",
+    r"(?:지역|서울|부산|대구|인천|광주|대전|울산|제주|서귀포).{0,24}(?:가격|판매가|최종가|구매\s*방법|주문\s*방법|구매방법|주문방법)|"
+    r"(?:구매\s*방법|주문\s*방법|구매방법|주문방법).{0,24}(?:지역|서울|부산|대구|인천|광주|대전|울산|제주|서귀포)",
     re.IGNORECASE,
 )
 _DIRECT_HOME_DELIVERY_RE = re.compile(
@@ -52,6 +53,11 @@ _SHIPPING_FEE_REGION_RE = re.compile(
 _ONLINE_STORE_PRICE_RE = re.compile(
     r"(?:온라인|닷컴).{0,18}(?:매장|오프라인).{0,18}(?:가격|동일|같|차이)|"
     r"(?:매장|오프라인).{0,18}(?:온라인|닷컴).{0,18}(?:가격|동일|같|차이)",
+    re.IGNORECASE,
+)
+_REGIONAL_PURCHASE_METHOD_RE = re.compile(
+    r"(?=.*(?:서울|부산|대구|인천|광주|대전|울산|제주(?:도|특별자치도)?|서귀포(?:시)?|도서산간|지역))"
+    r"(?=.*(?:구매\s*방법|주문\s*방법|구매방법|주문방법|어떻게\s*구매|어떻게\s*주문))",
     re.IGNORECASE,
 )
 _REGIONAL_PRICE_POLICY_RE = re.compile(
@@ -131,6 +137,14 @@ def decide_delivery_policy_gate(
             confidence=0.85,
             region_hint=_region_hint(text),
             reason="User asks online versus store price policy.",
+        )
+
+    if _REGIONAL_PURCHASE_METHOD_RE.search(text):
+        return DeliveryPolicyGateDecision(
+            intent=DeliveryPolicyIntent.ONLINE_STORE_PRICE_POLICY,
+            confidence=0.82,
+            region_hint=_region_hint(text),
+            reason="User asks regional purchase method or order flow policy.",
         )
 
     if _REGIONAL_PRICE_POLICY_RE.search(text):

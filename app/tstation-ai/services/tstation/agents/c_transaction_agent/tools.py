@@ -1068,6 +1068,11 @@ def search_stores_tool(
             "requested_limit": final_limit,
             "candidate_limit": candidate_cap,
         }
+        region_place_override_query = (
+            _region_coordinate_search_override(region_code)
+            if region_code and not normalized_store_nm and not place_query and xpos is None and ypos is None
+            else None
+        )
 
         if place_query:
             place_response = search_place(client=get_client(), query=place_query, size=1)
@@ -1088,6 +1093,36 @@ def search_stores_tool(
             search_meta.update({
                 "source": "place",
                 "place_query": place_query,
+                "place": _place_meta(place),
+            })
+        elif region_place_override_query:
+            place_response = search_place(client=get_client(), query=region_place_override_query, size=1)
+            if place_response.parsed is None:
+                return _error_response(
+                    place_response.status_code,
+                    f"HTTP {place_response.status_code}",
+                    place_response.content.decode(errors="ignore") or "Failed to search place",
+                )
+            place_data = _to_dict(place_response.parsed)
+            found_xpos, found_ypos, place = _first_place_coordinates(place_data if isinstance(place_data, dict) else {})
+            if found_xpos is None or found_ypos is None:
+                return _success_response(
+                    place_response.status_code,
+                    {
+                        "stores": [],
+                        "search": {
+                            **search_meta,
+                            "source": "region_place_override",
+                            "region_code": region_code,
+                            "place_query": region_place_override_query,
+                        },
+                    },
+                )
+            xpos, ypos = found_xpos, found_ypos
+            search_meta.update({
+                "source": "region_place_override",
+                "region_code": region_code,
+                "place_query": region_place_override_query,
                 "place": _place_meta(place),
             })
 
@@ -1211,9 +1246,19 @@ def search_stores_tool(
 
         stores = data.get("stores")
         if isinstance(stores, list):
-            sorted_stores = _sort_store_candidates([s for s in stores if isinstance(s, dict)], sort_by)
+            candidate_stores = [s for s in stores if isinstance(s, dict)]
+            if _should_apply_preferred_region_address_filter(
+                region_code=region_code,
+                store_nm=normalized_store_nm,
+                place_query=place_query,
+                xpos=xpos,
+                ypos=ypos,
+                source=search_meta.get("source"),
+            ):
+                candidate_stores = _filter_stores_by_preferred_region_address(region_code, candidate_stores)
+            sorted_stores = _sort_store_candidates(candidate_stores, sort_by)
             data["stores"] = sorted_stores[:final_limit]
-            search_meta["candidate_count"] = len(stores)
+            search_meta["candidate_count"] = len(candidate_stores)
             search_meta["returned_count"] = len(data["stores"])
             data["search"] = search_meta
         return _success_response(source_status, data)
@@ -1727,6 +1772,34 @@ def _shop_id(store: dict) -> str | None:
 _PREFERRED_REGION_ADDRESS_TOKENS = {
     "강남": ("강남구",),
 }
+_REGION_COORDINATE_SEARCH_OVERRIDES = {
+    "강남": "강남역",
+}
+
+
+def _should_apply_preferred_region_address_filter(
+    *,
+    region_code: str | None,
+    store_nm: str | None,
+    place_query: str | None,
+    xpos: float | None,
+    ypos: float | None,
+    source: str | None,
+) -> bool:
+    return bool(
+        region_code
+        and not store_nm
+        and not place_query
+        and xpos is None
+        and ypos is None
+        and str(source or "") == "list"
+    )
+
+
+def _region_coordinate_search_override(region_code: str | None) -> str | None:
+    if not region_code:
+        return None
+    return _REGION_COORDINATE_SEARCH_OVERRIDES.get(region_code.strip())
 
 
 def _filter_stores_by_preferred_region_address(region_code: str | None, stores: list[dict]) -> list[dict]:
@@ -1889,6 +1962,9 @@ def transaction_store_preview_tool(
     store_nm: str | None = None,
     user_xpos: float | None = None,
     user_ypos: float | None = None,
+    radius_km: float | None = None,
+    exclude_shop_ids: List[str] | None = None,
+    stock_check_mode: str | None = None,
     include_price: bool = True,
     svc_codes: List[str] | None = None,
     all_my_t_only: bool = False,
@@ -1911,6 +1987,7 @@ def transaction_store_preview_tool(
             "store_nm": store_nm,
             "user_xpos": user_xpos,
             "user_ypos": user_ypos,
+            "radius_km": radius_km,
             "requested_cal_day": requested_cal_day,
         }
         goods_no, ord_qty, region_code, store_nm, user_xpos, user_ypos = _apply_store_preview_policy_patch(
@@ -1935,14 +2012,15 @@ def transaction_store_preview_tool(
                 "store_nm": store_nm,
                 "user_xpos": user_xpos,
                 "user_ypos": user_ypos,
+                "radius_km": radius_km,
                 "requested_cal_day": requested_cal_day,
             },
         )
 
     logger.debug(
         "[TOOL][transaction_store_preview_tool] Called with: goods_no=%s, ord_qty=%s, region_code=%s, "
-        "store_nm=%s, user_xpos=%s, user_ypos=%s, include_price=%s",
-        goods_no, ord_qty, region_code, store_nm, user_xpos, user_ypos, include_price,
+        "store_nm=%s, user_xpos=%s, user_ypos=%s, radius_km=%s, include_price=%s, stock_check_mode=%s",
+        goods_no, ord_qty, region_code, store_nm, user_xpos, user_ypos, radius_km, include_price, stock_check_mode,
     )
 
     if not goods_no or ord_qty is None or ord_qty < 1:
@@ -1961,13 +2039,14 @@ def transaction_store_preview_tool(
 
     if store_nm:
         store_nm = normalize_brand_name(store_nm)
+    effective_radius_km = float(radius_km or 10.0)
 
     if user_xpos is not None and user_ypos is not None:
         store_response = get_store_list(
             client=get_client(),
             xpos=user_xpos,
             ypos=user_ypos,
-            radius_km=10.0,
+            radius_km=effective_radius_km,
             svc_codes=svc_codes,
             all_my_t_only=all_my_t_only,
             imported_car_only=imported_car_only,
@@ -2022,7 +2101,7 @@ def transaction_store_preview_tool(
                         client=get_client(),
                         xpos=found_xpos,
                         ypos=found_ypos,
-                        radius_km=10.0,
+                        radius_km=effective_radius_km,
                         svc_codes=svc_codes,
                         all_my_t_only=all_my_t_only,
                         imported_car_only=imported_car_only,
@@ -2053,6 +2132,9 @@ def transaction_store_preview_tool(
                     }
     if has_region and not has_store and not has_coords and place_fallback is None:
         stores = _filter_stores_by_preferred_region_address(region_code, stores)
+    excluded_shop_ids = {str(shop_id).strip() for shop_id in (exclude_shop_ids or []) if str(shop_id).strip()}
+    if excluded_shop_ids:
+        stores = [store for store in stores if _shop_id(store) not in excluded_shop_ids]
 
     # store_nm 으로 검색했는데 결과가 0건/exact 분점명 미일치인 경우 결정적 guard 적용.
     # 이게 없으면 LLM 이 silent "No store candidates found" 만 받고 generic 응답을

@@ -77,6 +77,16 @@ def deterministic_schedule_gate_decision(
     if not text:
         return None
 
+    if isinstance(tool_args, dict):
+        mode = str(tool_args.get("mode") or tool_args.get("stock_check_mode") or "").strip().lower()
+        followup_mode = str(tool_args.get("followupMode") or tool_args.get("followup_mode") or "").strip()
+        if mode == "logistics_only" or followup_mode == "logistics_earliest_install_date":
+            return ScheduleToolGateDecision(
+                allow=True,
+                action="allow",
+                reason="Logistics stock follow-up checks pre-order install availability, not existing order status.",
+            )
+
     if (
         isinstance(tool_args, dict)
         and tool_args.get("shop_id")
@@ -126,6 +136,7 @@ def decide_schedule_tool_gate(
     user_text: str,
     tool_args: dict | None = None,
     recent_context: str = "",
+    allowed_by_tool_plan: bool = False,
 ) -> ScheduleToolGateDecision:
     """Decide whether the datepick-producing schedule tool may run."""
     deterministic = deterministic_schedule_gate_decision(
@@ -135,6 +146,12 @@ def decide_schedule_tool_gate(
     )
     if deterministic is not None:
         return deterministic
+    if allowed_by_tool_plan:
+        return ScheduleToolGateDecision(
+            allow=True,
+            action="allow",
+            reason="ToolPlan allows get_store_schedule_tool; schedule gate is advisory for this action.",
+        )
 
     prompt = dedent(f"""
     You are a pre-tool safety gate for a Korean tire-commerce chatbot.

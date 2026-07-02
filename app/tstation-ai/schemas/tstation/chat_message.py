@@ -14,6 +14,13 @@ class ChipContext(BaseModel):
     action_id: Optional[str] = Field(default=None, description="Executable quick reply action identifier.")
     intentKey: Optional[str] = Field(default=None, description="Conversation intent key declared by the chip emitter.")
     intent_key: Optional[str] = Field(default=None, description="Conversation intent key declared by the chip emitter.")
+    cta_id: Optional[str] = Field(default=None, description="Shared CTA registry identifier emitted with the chip.")
+    cta_action: Optional[str] = Field(default=None, description="Shared CTA registry action emitted with the chip.")
+    expected_behavior: Optional[str] = Field(default=None, description="open_url, conversation_action, or dynamic_choice.")
+    source_intent: Optional[str] = Field(default=None, description="Intent that emitted this CTA.")
+    expected_contract_intent: Optional[str] = Field(default=None, description="Next-turn contract intent expected by the CTA.")
+    ui_action: Optional[dict] = Field(default=None, description="Normalized UI action envelope.")
+    slots: Optional[dict] = Field(default=None, description="Current-turn slot patch carried by the UI action.")
     metadata: Optional[dict] = Field(default=None, description="Action-specific metadata emitted with the chip.")
 
     model_config = {"extra": "allow"}
@@ -30,6 +37,8 @@ class ChatMessageRequest(BaseModel):
         default=None,
         description="Set by FE when the user taps a quick reply chip. Allows backend to skip LLM classifier.",
     )
+    ui_action: Optional[dict] = Field(default=None, description="Normalized UI action payload sent by the FE.")
+    slots: Optional[dict] = Field(default=None, description="Current-turn slot patch sent by the FE.")
 
     model_config = {
         "json_schema_extra": {
@@ -47,6 +56,38 @@ class ChatMessageRequest(BaseModel):
             }
         }
     }
+
+
+class QuickOrderActionPayload(BaseModel):
+    """Canonical payload emitted by a preOrder CTA for deterministic quick-order execution."""
+
+    goodsNo: Optional[str] = Field(default=None, description="Canonical goods number.")
+    goodsId: Optional[str] = Field(default=None, description="Legacy goods identifier; mapped to goodsNo.")
+    ordQty: Optional[int] = Field(default=None, description="Order quantity.")
+    shopId: Optional[str] = Field(default=None, description="Store ID.")
+    requestedCalDay: Optional[str] = Field(default=None, description="Reservation day in YYYYMMDD.")
+    rsvHour: Optional[str] = Field(default=None, description="Reservation hour in HH or HH:MM.")
+    carNo: Optional[str] = Field(default=None, description="Vehicle plate number.")
+    carLncCd: Optional[str] = Field(default=None, description="Registered vehicle linkage code.")
+    paymentAmount: Optional[int] = Field(default=None, description="Expected payment amount.")
+    productName: Optional[str] = Field(default=None, description="Product display name.")
+    tireSize: Optional[str] = Field(default=None, description="Tire size.")
+    storeName: Optional[str] = Field(default=None, description="Store display name.")
+    bookingDateTime: Optional[str] = Field(default=None, description="Korean booking date/time label.")
+    mbrCarRegSeq: Optional[str] = Field(default=None, description="Member car registration sequence.")
+
+    model_config = {"extra": "allow"}
+
+
+class QuickOrderActionRequest(BaseModel):
+    """Structured action request for preOrder CTA execution."""
+
+    session_id: str = Field(..., description="Session ID.")
+    message_id: Optional[str] = Field(default=None, description="Client-side action/message id for idempotency.")
+    action: str = Field(default="quick_order_execute", description="Action name.")
+    payload: QuickOrderActionPayload = Field(..., description="Canonical quick-order payload.")
+    stream: bool = Field(default=True, description="Stream mode; action endpoint returns SSE by default.")
+    tracing_id: Optional[str] = Field(default=None, description="Tracing ID for Langfuse/eval.")
 
 
 class ChatMessageResponse(BaseModel):

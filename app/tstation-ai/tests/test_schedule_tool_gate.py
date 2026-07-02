@@ -1,4 +1,4 @@
-from services.tstation.policies.schedule_tool_gate import deterministic_schedule_gate_decision
+from services.tstation.policies.schedule_tool_gate import decide_schedule_tool_gate, deterministic_schedule_gate_decision
 
 
 def test_blocks_arrival_visit_status_question():
@@ -65,3 +65,16 @@ def test_allows_less_busy_reservation_time_request():
     assert decision is not None
     assert decision.allow is True
     assert decision.action == "allow"
+
+
+def test_tool_plan_allow_makes_llm_schedule_gate_advisory():
+    decision = decide_schedule_tool_gate(
+        user_text="주문하기",
+        tool_args={"shop_id": "F00035", "mode": "general"},
+        recent_context="",
+        allowed_by_tool_plan=True,
+    )
+
+    assert decision.allow is True
+    assert decision.action == "allow"
+    assert "ToolPlan allows" in decision.reason

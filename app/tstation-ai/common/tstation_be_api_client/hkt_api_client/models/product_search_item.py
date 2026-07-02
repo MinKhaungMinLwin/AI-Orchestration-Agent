@@ -19,6 +19,7 @@ class ProductSearchItem:
         goods_nm (str): 상품명
         tire_size_1 (None | str | Unset): 타이어 사이즈 (TIRE_SIZE_1)
         tire_size_2 (None | str | Unset): 타이어 사이즈 (TIRE_SIZE_2)
+        available_sizes (list[str] | Unset): 같은 상품명(goods_nm) 기준으로 현재 검색 시점에 확인된 규격 목록
         score (int | Unset): 검색 관련도 점수 Default: 0.
         match_type (str | Unset): 매칭 유형 (exact/prefix/partial/alias) Default: 'none'.
         smrt_pay_yn (None | str | Unset): 스마트페이 가능 여부 Y/N (활성 PR_ITEM_PRC_INFO.SMRT_PAY_PRC > 0 기준)
@@ -30,6 +31,8 @@ class ProductSearchItem:
             으로 정규화) / '스탠다드' / '이코노미'. 표시·답변용 — 검색 정렬/필터 기준 아님
         goods_pfm_nm (None | str | Unset): 퍼포먼스 분류명 (PR_GOODS_BASE.GOODS_PFM_NM). 값 매핑: 'COMFORT'(정숙/승차감) /
             'SPORT'(고속/제동성) / 'RUNFLAT'(런플랫) 등. 표시·답변용 — 검색 정렬/필터 기준 아님
+        goods_dtl_pfm_nm (None | str | Unset): 세부 퍼포먼스 분류명 (PR_GOODS_BASE.GOODS_DTL_PFM_NM)
+        sound_absorber_yn (None | str | Unset): 흡음재 적용 여부 Y/N (GOODS_DTL_PFM_NM LIKE '%흡음%' 기준)
         t_oe_maker_1 (None | str | Unset): OE 메이커 코드/명 (PR_GOODS_BASE.T_OE_MAKER_1)
         oe_badge_yn (None | str | Unset): OE 뱃지 노출 여부. T_OE_MAKER_1 값이 있으면 Y, 없으면 N
         sale_prc (int | None | Unset): 기본 판매가 (PR_ITEM_PRC_INFO.SALE_PRC)
@@ -72,6 +75,7 @@ class ProductSearchItem:
     goods_nm: str
     tire_size_1: None | str | Unset = UNSET
     tire_size_2: None | str | Unset = UNSET
+    available_sizes: list[str] | Unset = UNSET
     score: int | Unset = 0
     match_type: str | Unset = "none"
     smrt_pay_yn: None | str | Unset = UNSET
@@ -81,6 +85,8 @@ class ProductSearchItem:
     label_pndb: None | str | Unset = UNSET
     prc_grd_nm: None | str | Unset = UNSET
     goods_pfm_nm: None | str | Unset = UNSET
+    goods_dtl_pfm_nm: None | str | Unset = UNSET
+    sound_absorber_yn: None | str | Unset = UNSET
     t_oe_maker_1: None | str | Unset = UNSET
     oe_badge_yn: None | str | Unset = UNSET
     sale_prc: int | None | Unset = UNSET
@@ -135,6 +141,10 @@ class ProductSearchItem:
         else:
             tire_size_2 = self.tire_size_2
 
+        available_sizes: list[str] | Unset = UNSET
+        if not isinstance(self.available_sizes, Unset):
+            available_sizes = self.available_sizes
+
         score = self.score
 
         match_type = self.match_type
@@ -180,6 +190,18 @@ class ProductSearchItem:
             goods_pfm_nm = UNSET
         else:
             goods_pfm_nm = self.goods_pfm_nm
+
+        goods_dtl_pfm_nm: None | str | Unset
+        if isinstance(self.goods_dtl_pfm_nm, Unset):
+            goods_dtl_pfm_nm = UNSET
+        else:
+            goods_dtl_pfm_nm = self.goods_dtl_pfm_nm
+
+        sound_absorber_yn: None | str | Unset
+        if isinstance(self.sound_absorber_yn, Unset):
+            sound_absorber_yn = UNSET
+        else:
+            sound_absorber_yn = self.sound_absorber_yn
 
         t_oe_maker_1: None | str | Unset
         if isinstance(self.t_oe_maker_1, Unset):
@@ -403,6 +425,8 @@ class ProductSearchItem:
             field_dict["tire_size_1"] = tire_size_1
         if tire_size_2 is not UNSET:
             field_dict["tire_size_2"] = tire_size_2
+        if available_sizes is not UNSET:
+            field_dict["available_sizes"] = available_sizes
         if score is not UNSET:
             field_dict["score"] = score
         if match_type is not UNSET:
@@ -421,6 +445,10 @@ class ProductSearchItem:
             field_dict["prc_grd_nm"] = prc_grd_nm
         if goods_pfm_nm is not UNSET:
             field_dict["goods_pfm_nm"] = goods_pfm_nm
+        if goods_dtl_pfm_nm is not UNSET:
+            field_dict["goods_dtl_pfm_nm"] = goods_dtl_pfm_nm
+        if sound_absorber_yn is not UNSET:
+            field_dict["sound_absorber_yn"] = sound_absorber_yn
         if t_oe_maker_1 is not UNSET:
             field_dict["t_oe_maker_1"] = t_oe_maker_1
         if oe_badge_yn is not UNSET:
@@ -519,6 +547,8 @@ class ProductSearchItem:
 
         tire_size_2 = _parse_tire_size_2(d.pop("tire_size_2", UNSET))
 
+        available_sizes = cast(list[str], d.pop("available_sizes", UNSET))
+
         score = d.pop("score", UNSET)
 
         match_type = d.pop("match_type", UNSET)
@@ -585,6 +615,24 @@ class ProductSearchItem:
             return cast(None | str | Unset, data)
 
         goods_pfm_nm = _parse_goods_pfm_nm(d.pop("goods_pfm_nm", UNSET))
+
+        def _parse_goods_dtl_pfm_nm(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        goods_dtl_pfm_nm = _parse_goods_dtl_pfm_nm(d.pop("goods_dtl_pfm_nm", UNSET))
+
+        def _parse_sound_absorber_yn(data: object) -> None | str | Unset:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(None | str | Unset, data)
+
+        sound_absorber_yn = _parse_sound_absorber_yn(d.pop("sound_absorber_yn", UNSET))
 
         def _parse_t_oe_maker_1(data: object) -> None | str | Unset:
             if data is None:
@@ -906,6 +954,7 @@ class ProductSearchItem:
             goods_nm=goods_nm,
             tire_size_1=tire_size_1,
             tire_size_2=tire_size_2,
+            available_sizes=available_sizes,
             score=score,
             match_type=match_type,
             smrt_pay_yn=smrt_pay_yn,
@@ -915,6 +964,8 @@ class ProductSearchItem:
             label_pndb=label_pndb,
             prc_grd_nm=prc_grd_nm,
             goods_pfm_nm=goods_pfm_nm,
+            goods_dtl_pfm_nm=goods_dtl_pfm_nm,
+            sound_absorber_yn=sound_absorber_yn,
             t_oe_maker_1=t_oe_maker_1,
             oe_badge_yn=oe_badge_yn,
             sale_prc=sale_prc,

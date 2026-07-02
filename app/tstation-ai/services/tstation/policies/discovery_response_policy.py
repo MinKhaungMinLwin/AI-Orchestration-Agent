@@ -8,15 +8,68 @@ from services.tstation.policies.response_decision import ResponseDecision, Respo
 
 def _metadata(frame: IntentFrame, **values: object) -> dict[str, object]:
     metadata = dict(values)
+    product_names = frame.entities.get("product_names")
+    if isinstance(product_names, (list, tuple)):
+        normalized_product_names = [str(name).strip() for name in product_names if str(name or "").strip()][:2]
+        if len(normalized_product_names) >= 2:
+            metadata["product_names"] = normalized_product_names
     claim_check_type = frame.entities.get("claim_check_type")
     if claim_check_type and claim_check_type != "none":
         metadata["claim_check_type"] = claim_check_type
+    requested_product_attribute = str(frame.entities.get("requested_product_attribute") or "")
+    if requested_product_attribute:
+        metadata["requested_product_attribute"] = requested_product_attribute
+    compare_metric = str(frame.entities.get("compare_metric") or "")
+    if compare_metric:
+        metadata["compare_metric"] = compare_metric
+    comparison_followup_intent = str(frame.entities.get("comparison_followup_intent") or "")
+    if comparison_followup_intent:
+        metadata["comparison_followup_intent"] = comparison_followup_intent
+    recent_product_set_followup_type = str(frame.entities.get("recent_product_set_followup_type") or "")
+    if recent_product_set_followup_type:
+        metadata["recent_product_set_followup_type"] = recent_product_set_followup_type
+    recent_product_set_metric = str(frame.entities.get("recent_product_set_metric") or "")
+    if recent_product_set_metric:
+        metadata["recent_product_set_metric"] = recent_product_set_metric
+    recent_product_set_direction = str(frame.entities.get("recent_product_set_direction") or "")
+    if recent_product_set_direction:
+        metadata["recent_product_set_direction"] = recent_product_set_direction
+    recent_product_set_price_basis = str(frame.entities.get("recent_product_set_price_basis") or "")
+    if recent_product_set_price_basis:
+        metadata["recent_product_set_price_basis"] = recent_product_set_price_basis
+    oe_replacement_type = str(frame.entities.get("oe_replacement_type") or "")
+    if oe_replacement_type:
+        metadata["oe_replacement_type"] = oe_replacement_type
+    for key in (
+        "recommendation_scenario",
+        "recommendation_scenario_label",
+        "applied_rcmd_type",
+        "applied_vehicle_type",
+        "applied_season_nm",
+        "approximation",
+        "approximation_basis",
+    ):
+        value = frame.entities.get(key)
+        if value not in (None, ""):
+            metadata[key] = value
     return metadata
 
 
 def decide_discovery_response(frame: IntentFrame) -> ResponseDecision:
     entities = frame.entities
     tire_size = entities.get("tire_size")
+
+    if frame.sub_intent == "vehicle_information":
+        return ResponseDecision(
+            response_shape=ResponseShape.LIST,
+            template=TemplateName.LIST_CAR,
+            required_slots=(),
+            forbidden_behaviors=("product_card_without_vehicle_selection",),
+            assistant_guidance=(
+                "등록 차량을 먼저 확인하고 사용자가 차량을 선택하면 해당 차량의 타이어 규격을 안내한다."
+            ),
+            metadata={"response_shape_key": "vehicle_information"},
+        )
 
     if frame.sub_intent == "external_price_comparison_request":
         return ResponseDecision(
@@ -55,7 +108,7 @@ def decide_discovery_response(frame: IntentFrame) -> ResponseDecision:
             required_slots=(),
             forbidden_behaviors=("product_card_first_response", "generic_unsized_summary"),
             assistant_guidance="DB의 마일리지/수명 지표로 비교하고 차종 호환과 주행환경에 따라 달라질 수 있음을 밝힌다.",
-            metadata={"response_shape_key": "metric_comparison_summary", "compare_metric": "mileage"},
+            metadata=_metadata(frame, response_shape_key="metric_comparison_summary", compare_metric="mileage"),
         )
 
     if frame.sub_intent == "quantity_benefit_comparison":
@@ -91,15 +144,49 @@ def decide_discovery_response(frame: IntentFrame) -> ResponseDecision:
             },
         )
 
-    if frame.sub_intent in ("attribute_compare", "latest_compare"):
+    if frame.sub_intent == "recent_product_set_ranking":
+        metric = str(entities.get("recent_product_set_metric") or "")
+        price_basis = str(entities.get("recent_product_set_price_basis") or "")
+        criterion = {
+            "price": f"{price_basis or 'cheapest_final_prc'} 기준",
+            "noise": "소음 dB/소음 라벨 기준",
+            "wet": "빗길 성능 등급 기준",
+            "snow": "눈길/빙판 성능 지표 기준",
+            "release": "출시월/등록일 기준",
+            "review": "리뷰 수 기준",
+            "rating": "평점 기준",
+            "grade": "상품 등급 기준",
+            "vehicle_type": "차종 필드 기준",
+            "mileage": "마일리지/수명 지표 기준",
+            "detail": "상품 상세 필드 기준",
+        }.get(metric, "선택한 비교 기준")
+        return ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            required_slots=(),
+            forbidden_behaviors=("recent_product_set_ranking_without_tool_context", "ranking_without_criterion"),
+            assistant_guidance=(
+                "최근 상품 목록 tool context만 기준으로 순위를 판단한다. 답변에는 반드시 기준을 명시한다 "
+                f"({criterion}). 사이즈가 없거나 서로 다른 규격이면 대표 규격 기준이며 실제 차량 규격별 가격/성능은 달라질 수 있음을 밝힌다. "
+                "필드가 없으면 단정하지 말고 확인 어렵다고 답한다."
+            ),
+            metadata=_metadata(frame, response_shape_key="recent_product_set_ranking_summary"),
+        )
+
+    if frame.sub_intent in ("attribute_compare", "latest_compare", "general_compare"):
         compare_metric = str(entities.get("compare_metric") or "detail")
+        response_shape_key = (
+            "grade_comparison_summary"
+            if compare_metric in {"grade", "price_grade"} or frame.sub_intent == "grade_compare"
+            else "metric_comparison_summary"
+        )
         return ResponseDecision(
             response_shape=ResponseShape.SUMMARY,
             template=TemplateName.QUICK_REPLY,
             required_slots=(),
             forbidden_behaviors=("product_card_first_response", "generic_unsized_summary", "comparison_without_db_basis"),
             assistant_guidance="비교 대상 상품을 DB 필드 기준으로 비교하고, 규격별 값 차이가 있을 수 있음을 밝힌다.",
-            metadata={"response_shape_key": "metric_comparison_summary", "compare_metric": compare_metric},
+            metadata=_metadata(frame, response_shape_key=response_shape_key, compare_metric=compare_metric),
         )
 
     if frame.sub_intent == "mileage_bias_guardrail":
@@ -119,7 +206,57 @@ def decide_discovery_response(frame: IntentFrame) -> ResponseDecision:
             required_slots=(),
             forbidden_behaviors=("misrecognize_ventus_air_s", "claim_kinergy_ex_is_premium_above_ventus"),
             assistant_guidance="상품명을 정확히 인식하고 각 상품의 등급/포지션 근거로 비교한다.",
-            metadata={"response_shape_key": "grade_comparison_summary"},
+            metadata=_metadata(frame, response_shape_key="grade_comparison_summary", compare_metric="grade"),
+        )
+
+    if frame.sub_intent == "oe_re_concept_explanation":
+        return ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            required_slots=(),
+            forbidden_behaviors=("generic_unsized_summary", "claim_all_products_are_re"),
+            assistant_guidance=(
+                "OE/RE 개념만 설명하고, 현재 상품 데이터에 직접 확인 가능한 필드가 없으면 "
+                "특정 상품을 OE 또는 RE로 단정하지 않는다."
+            ),
+            metadata=_metadata(frame, response_shape_key="oe_re_concept_explanation"),
+        )
+
+    if frame.sub_intent == "oe_part_number_unavailable":
+        return ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            required_slots=(),
+            forbidden_behaviors=(
+                "ask_product_before_answering_oe_part_number_limit",
+                "invent_oe_part_number",
+                "claim_vehicle_oe_part_number_lookup_available",
+                "resume_stale_transaction_flow",
+            ),
+            assistant_guidance=(
+                "OE 품번은 같은 차종도 연식, 트림, 휠 인치, 출고 시점의 장착 브랜드에 따라 달라질 수 있다고 안내한다. "
+                "현재 보유한 상품/차량 데이터만으로는 차량별 OE 품번을 확정 조회할 수 없다고 명확히 말한다. "
+                "필요하면 차량 등록 정보나 현재 장착 타이어의 사이즈/브랜드 기준으로 교체용 상품 안내를 제안하되, "
+                "상품명/규격을 먼저 요구하는 답변으로 끝내지 않는다."
+            ),
+            metadata=_metadata(frame, response_shape_key="oe_part_number_unavailable"),
+        )
+
+    if frame.sub_intent == "oe_re_product_filter":
+        return ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            required_slots=(),
+            forbidden_behaviors=(
+                "generic_unsized_summary",
+                "claim_all_products_are_re",
+                "invent_oe_re_classification",
+            ),
+            assistant_guidance=(
+                "OE 여부는 oe_badge_yn, t_oe_maker_1, certify_brand_nm 같은 실제 상품 필드로만 설명한다. "
+                "RE 전용 확정 필드가 부족하면 교체용 판매 개념만 설명하고 특정 상품을 RE라고 단정하지 않는다."
+            ),
+            metadata=_metadata(frame, response_shape_key="oe_re_product_filter_summary"),
         )
 
     if frame.sub_intent in ("product_attribute_lookup", "product_attribute_explanation"):
@@ -161,14 +298,15 @@ def decide_discovery_response(frame: IntentFrame) -> ResponseDecision:
                 assistant_guidance="DB의 흡음재 적용 태그와 요청 규격을 함께 만족하는 상품만 카드/가격으로 안내한다.",
                 metadata={"response_shape_key": "sized_technology_recommendation_cards"},
             )
-        return ResponseDecision(
-            response_shape=ResponseShape.SUMMARY,
-            template=TemplateName.QUICK_REPLY,
-            required_slots=(),
-            forbidden_behaviors=("drop_sound_absorber_filter", "product_card_without_size", "price_without_size"),
-            assistant_guidance="흡음재 의미를 설명한 뒤 흡음재 적용 상품군을 요약하고 차량/규격 확인으로 유도한다.",
-            metadata={"response_shape_key": "technology_explanation_then_unsized_recommendation_summary"},
-        )
+        if frame.sub_intent == "technology_explain_then_recommend":
+            return ResponseDecision(
+                response_shape=ResponseShape.SUMMARY,
+                template=TemplateName.QUICK_REPLY,
+                required_slots=(),
+                forbidden_behaviors=("drop_sound_absorber_filter", "product_card_without_size", "price_without_size"),
+                assistant_guidance="흡음재 의미를 설명한 뒤 흡음재 적용 상품군을 요약하고 차량/규격 확인으로 유도한다.",
+                metadata={"response_shape_key": "technology_explanation_then_unsized_recommendation_summary"},
+            )
 
     if entities.get("service_program") == "safe_service":
         if tire_size:
@@ -215,6 +353,68 @@ def decide_discovery_response(frame: IntentFrame) -> ResponseDecision:
         )
 
     if frame.intent == "product_recommendation" and not tire_size:
+        if entities.get("discovery_followup_action") == "vehicle_resolved_recommendation":
+            if entities.get("named_registered_vehicle_anchor"):
+                return ResponseDecision(
+                    response_shape=ResponseShape.CARD,
+                    template=TemplateName.PRODUCT,
+                    required_slots=("tire_size",),
+                    forbidden_behaviors=("drop_recommendation_scenario",),
+                    assistant_guidance=(
+                        "등록 차량 중 현재 턴에 명시된 차량명을 먼저 해소한 뒤, 해당 규격으로 현재 추천 조건을 유지해 상품을 추천한다. "
+                        "매칭 차량이 없거나 복수 매칭이면 차량 선택을 요청한다."
+                    ),
+                    metadata=_metadata(
+                        frame,
+                        response_shape_key="vehicle_resolved_recommendation",
+                        flow_step="resolve_named_vehicle",
+                    ),
+                )
+            return ResponseDecision(
+                response_shape=ResponseShape.LIST,
+                template=TemplateName.LIST_CAR,
+                required_slots=(),
+                forbidden_behaviors=("product_card_without_vehicle_selection",),
+                assistant_guidance=(
+                    "등록 차량 목록을 listCar로 보여주고 사용자가 차량을 직접 선택할 때까지 대기한다. "
+                    "선택 전에는 추천 도구를 실행하지 않는다."
+                ),
+                metadata=_metadata(frame, response_shape_key="vehicle_resolved_recommendation", flow_step="select_vehicle"),
+            )
+        if entities.get("discovery_followup_action") == "vehicle_based_recommendation_refinement":
+            response_shape_key = str(entities.get("discovery_followup_action") or "vehicle_based_recommendation_refinement")
+            return ResponseDecision(
+                response_shape=ResponseShape.CARD,
+                template=TemplateName.PRODUCT,
+                required_slots=("tire_size",),
+                forbidden_behaviors=(
+                    ("drop_previous_recommendation_filter",)
+                    if response_shape_key == "vehicle_based_recommendation_refinement"
+                    else ()
+                ),
+                assistant_guidance=(
+                    "등록 차량 조회로 tire_size를 해소한 뒤 현재 추천 조건을 유지해 상품을 추천한다. "
+                    "차량 조회 실패 또는 등록 차량 없음이면 차량번호나 사이즈 확인 quickReply로 안내한다."
+                ),
+                metadata=_metadata(frame, response_shape_key=response_shape_key),
+            )
+        if entities.get("recommendation_scenario"):
+            return ResponseDecision(
+                response_shape=ResponseShape.SUMMARY,
+                template=TemplateName.QUICK_REPLY,
+                required_slots=(),
+                forbidden_behaviors=(
+                    "product_card_without_size",
+                    "price_without_size",
+                    "drop_recommendation_scenario",
+                    "claim_unsupported_scenario_as_exact",
+                ),
+                assistant_guidance=(
+                    "catalog recommendation scenario와 실제 적용된 tool 조건만 설명한다. "
+                    "approximation=true이면 전용 상품이라고 단정하지 말고 근사 기준을 밝힌다."
+                ),
+                metadata=_metadata(frame, response_shape_key="catalog_unsized_recommendation_summary"),
+            )
         return ResponseDecision(
             response_shape=ResponseShape.SUMMARY,
             template=TemplateName.QUICK_REPLY,
@@ -225,6 +425,64 @@ def decide_discovery_response(frame: IntentFrame) -> ResponseDecision:
         )
 
     if frame.intent == "product_search":
+        if (
+            entities.get("purchase_intent")
+            and not tire_size
+            and frame.sub_intent in {"product_name_search", "product_family_search"}
+        ):
+            return ResponseDecision(
+                response_shape=ResponseShape.CLARIFY,
+                template=TemplateName.QUICK_REPLY,
+                required_slots=("tire_size",),
+                forbidden_behaviors=(
+                    "confirm_goods_no_before_size_selection",
+                    "auto_select_first_available_size",
+                    "product_search_summary_as_final_answer",
+                    "handoff_transaction_without_size",
+                ),
+                assistant_guidance=(
+                    "구매 의도로 상품 후보를 찾았더라도 타이어 규격이 확정되지 않으면 상품 상세 설명으로 끝내지 않는다. "
+                    "검색 결과의 available_sizes를 기준으로 구매할 규격 선택을 요청하고, 규격 선택 전에는 goods_no를 확정하지 않는다."
+                ),
+                metadata=_metadata(frame, response_shape_key="purchase_size_selection"),
+            )
+        if entities.get("multi_product_description_request"):
+            return ResponseDecision(
+                response_shape=ResponseShape.SUMMARY,
+                template=TemplateName.QUICK_REPLY,
+                required_slots=(),
+                forbidden_behaviors=("generic_unsized_summary", "unrequested_size_missing_notice"),
+                assistant_guidance=(
+                    "복수 상품 설명 요청에는 각 상품의 특성만 간결히 나눠 안내하고, 비교/추천/구매 흐름으로 바꾸지 않는다."
+                ),
+                metadata=_metadata(frame, response_shape_key="neutral_product_description"),
+            )
+        if frame.sub_intent in {
+            "product_event_lookup",
+            "product_deal_lookup",
+            "product_coupon_lookup",
+            "product_benefit_lookup",
+        }:
+            return ResponseDecision(
+                response_shape=ResponseShape.SUMMARY,
+                template=TemplateName.QUICK_REPLY,
+                required_slots=(),
+                forbidden_behaviors=(
+                    "product_description_answer",
+                    "ask_size_for_product_benefit_lookup",
+                    "route_product_benefit_to_order_flow",
+                    "datepick_or_preorder_for_product_benefit_lookup",
+                ),
+                assistant_guidance=(
+                    "상품명+행사/이벤트/기획전/쿠폰/혜택 질의는 상품 설명이나 규격 선택으로 끝내지 않는다. "
+                    "사이즈 없이 search_product_tool로 상품을 resolve한 뒤 적용 가능한 이벤트/기획전/쿠폰 tool 결과만 요약한다. "
+                    "가격/주문/예약/장착 가능 여부로 확장하지 않는다."
+                ),
+                metadata={
+                    "response_shape_key": frame.sub_intent,
+                    "goal_type": "product_event_lookup",
+                },
+            )
         if frame.sub_intent == "restock_inquiry":
             return ResponseDecision(
                 response_shape=ResponseShape.SUMMARY,

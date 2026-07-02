@@ -26,6 +26,8 @@ class TStationChatRequest(BaseModel):
 
     # Quick reply chip routing — set when user taps a chip; allows classifier skip
     chip_context: Optional[Dict[str, Any]] = Field(default=None, description="Quick reply chip routing context")
+    ui_action: Optional[Dict[str, Any]] = Field(default=None, description="Normalized UI action payload")
+    slots: Optional[Dict[str, Any]] = Field(default=None, description="Current-turn slot patch from FE")
 
     @field_validator("messages")
     def validate_messages_not_empty(cls, v):

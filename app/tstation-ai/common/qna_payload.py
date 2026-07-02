@@ -11,12 +11,15 @@ from urllib.parse import quote
 
 from Crypto.Cipher import AES
 
+from services.tstation.common.tstation_be_client import get_tstation_origin_host
+
 logger = logging.getLogger(__name__)
 
 AES_KEY: bytes = b"K7mN9pQ2xR4vW8zA"
 
-QnA_WRITE_URL_PC = "https://wwwqa.tstation.com/customer-service/qna.do"
-QnA_WRITE_URL_MOBILE = "https://mqa.tstation.com/customer-service/qna.do"
+QNA_WRITE_PATH = "/customer-service/qna.do"
+QNA_PC_FALLBACK_BASE = "https://www.tstation.com"
+QNA_MOBILE_FALLBACK_BASE = "https://m.tstation.com"
 
 CSL_CLS_SEQ_MAP: dict[str, str] = {
     "상품문의": "10002",
@@ -78,8 +81,20 @@ def make_qna_payload_urls(
         {"pc": "<PC URL>", "mobile": "<mobile URL>"}
     """
     payload = _build_payload(cnsl_clss_seq, inq_tit_nm, ai_summary)
+    base_urls = _qna_base_urls()
 
     return {
-        "pc": f"{QnA_WRITE_URL_PC}?mode=write&payload={payload}",
-        "mobile": f"{QnA_WRITE_URL_MOBILE}?mode=write&payload={payload}",
+        "pc": f"{base_urls['pc']}{QNA_WRITE_PATH}?mode=write&payload={payload}",
+        "mobile": f"{base_urls['mobile']}{QNA_WRITE_PATH}?mode=write&payload={payload}",
+    }
+
+
+def _qna_base_urls() -> dict[str, str]:
+    origin_host = str(get_tstation_origin_host() or "").strip()
+    if origin_host:
+        origin_base = f"https://{origin_host}".rstrip("/")
+        return {"pc": origin_base, "mobile": origin_base}
+    return {
+        "pc": QNA_PC_FALLBACK_BASE,
+        "mobile": QNA_MOBILE_FALLBACK_BASE,
     }

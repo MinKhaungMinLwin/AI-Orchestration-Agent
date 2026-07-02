@@ -9,6 +9,8 @@ import json
 import re
 from typing import Any
 
+from services.tstation.policies.resolved_context import canonical_context_from_tool_boundary
+
 _RESERVATION_TIME_CHIP_RE = re.compile(r"^\s*(?:[01]?\d|2[0-3])\s*시\s*예약\s*$")
 _RESERVATION_OTHER_TIME_LABELS = {"다른 시간 선택", "다른 시간대 선택"}
 _WEEKDAY_KO = ("월", "화", "수", "목", "금", "토", "일")
@@ -79,7 +81,7 @@ def _extract_shop_ids(values: object) -> set[str]:
     shop_ids: set[str] = set()
     for item in values:
         if isinstance(item, dict):
-            sid = item.get("shop_id") or item.get("shopId") or item.get("shop_seq") or item.get("shopSeq")
+            sid = canonical_context_from_tool_boundary(item).get("shop_id")
         else:
             sid = item
         if sid:
@@ -285,7 +287,7 @@ def build_datepick_from_schedule_payload(
     if not isinstance(raw, dict):
         return None
 
-    shop_id = str(raw.get("shop_id") or raw.get("shopId") or "").strip()
+    shop_id = str(canonical_context_from_tool_boundary(raw).get("shop_id") or "").strip()
     slots = raw.get("slots")
     if not shop_id or not isinstance(slots, list):
         return None
