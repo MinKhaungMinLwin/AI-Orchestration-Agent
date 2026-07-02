@@ -1,3 +1,4 @@
+from schemas.tstation.slots import ConversationSlots
 from services.tstation.policies.contract_required_tool_candidate import (
     _contract_required_tool_candidate,
     _is_contract_required_selected_store_schedule,
@@ -134,6 +135,47 @@ def test_purchase_store_preview_candidate_uses_contract_patch() -> None:
     assert candidate.tool_input["region"] == "분당"
     assert candidate.tool_input["include_price"] is True
     assert candidate.tool_input["quantity"] == 4
+
+
+def test_purchase_price_progress_candidate_allows_final_price_tool() -> None:
+    active_flow_context = {
+        "flow_type": "commerce",
+        "status": "active",
+        "flow_step": "show_schedule",
+        "product": {
+            "goods_no": "G000000309780",
+            "product_name": "Ventus S2 AS",
+            "tire_size": "225/45R17",
+            "ord_qty": 4,
+        },
+        "store": {"shop_id": "F00721", "shop_name": "T-Station Pangyo"},
+        "schedule": {"requested_cal_day": "20260705", "rsv_hour": "17"},
+        "intent": {"sub_flow_type": "purchase", "pending_intent": "order", "goal_type": "place_order"},
+    }
+    contract = TurnContract(
+        domain="transaction",
+        intent="quick_order_reservation",
+        allowed_tools=("get_final_price_tool",),
+        forbidden_tools=("quick_order_tool", "get_store_schedule_tool"),
+        preferred_tool="get_final_price_tool",
+        response_decision={
+            "template": "quickReply",
+            "metadata": {"response_shape_key": "reservation_price_lookup"},
+        },
+        action_mode="purchase_continuation",
+        context_state="active",
+    )
+
+    candidate = _contract_required_tool_candidate(
+        turn_contract=contract,
+        user_text="ì´ ì¼ì •ìœ¼ë¡œ ì˜ˆì•½í•´ì¤˜",
+        merged_slots=ConversationSlots(availability_context={"active_flow_context": active_flow_context}),
+    )
+
+    assert candidate is not None
+    assert candidate.tool_name == "get_final_price_tool"
+    assert candidate.tool_input == {"goods_no": "G000000309780"}
+    assert candidate.tool_input_source == "flow_state_progress"
 
 
 def test_selected_store_schedule_requires_datepick_contract_boundary() -> None:

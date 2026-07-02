@@ -618,6 +618,24 @@ def _flow_quantity(value: Any) -> int | None:
     return quantity if quantity > 0 else None
 
 
+def _has_price_basis(payment: Mapping[str, Any]) -> bool:
+    for key in ("payment_amount", "paymentAmount", *_PAYMENT_UNIT_PRICE_FIELDS):
+        if _is_positive_number_like(payment.get(key)):
+            return True
+    return False
+
+
+def _is_positive_number_like(value: Any) -> bool:
+    if value in (None, "") or isinstance(value, bool):
+        return False
+    if isinstance(value, int | float):
+        return value > 0
+    text = str(value).strip().replace(",", "")
+    if not re.fullmatch(r"\d+(?:\.\d+)?", text):
+        return False
+    return any(char != "0" for char in text if char.isdigit())
+
+
 def _store_lookup_tool_and_args(store: Mapping[str, Any]) -> tuple[str | None, dict[str, Any]]:
     place_query = str(store.get("place_query") or "").strip()
     region = str(store.get("region") or "").strip()
@@ -911,6 +929,7 @@ def evaluate_flow_progress(state: "FlowState") -> dict[str, Any]:
         return {}
     product = _non_empty_mapping(state.product)
     store = _non_empty_mapping(state.store)
+    payment = _non_empty_mapping(state.payment)
     intent = _non_empty_mapping(state.intent)
     flow_type = effective_flow_type(state.flow_type, intent)
     goods_no = str(product.get("goods_no") or "").strip()
@@ -1002,6 +1021,16 @@ def evaluate_flow_progress(state: "FlowState") -> dict[str, Any]:
                     "tool_args_patch": lookup_args,
                 }
             return {**base, "current_step": "ask_store", "missing_slots": ["shop_id"]}
+        if requested_cal_day and rsv_hour and not _has_price_basis(payment):
+            return {
+                **base,
+                "current_step": "resolve_price",
+                "missing_slots": [],
+                "next_tool": "get_final_price_tool",
+                "allowed_tools": ["get_final_price_tool"],
+                "tool_args_patch": {"goods_no": goods_no},
+                "response_shape_key": "reservation_price_lookup",
+            }
         if requested_cal_day and rsv_hour:
             return {
                 **base,
@@ -1146,7 +1175,13 @@ def flow_progress_tool_candidate(
             }
         if not intent_aligned:
             return {}
-        if next_tool not in {"search_stores_tool", "get_store_list_tool", "get_store_schedule_tool", "get_store_inventory_tool"}:
+        if next_tool not in {
+            "search_stores_tool",
+            "get_store_list_tool",
+            "get_store_schedule_tool",
+            "get_store_inventory_tool",
+            "get_final_price_tool",
+        }:
             return {}
         display_name = {
             "search_stores_tool": "매장 정보 확인 중...",

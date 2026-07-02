@@ -61,6 +61,7 @@ _FLOW_PROGRESS_TRANSACTION_TOOLS = frozenset({
     "get_store_list_tool",
     "get_store_schedule_tool",
     "get_store_inventory_tool",
+    "get_final_price_tool",
 })
 _DIRECT_SUPPORT_FAQ_POLICY_INTENTS = frozenset({
     "card_installment_lookup",
@@ -1032,7 +1033,11 @@ def _contract_required_tool_candidate_from_flow_progress(
         return None
     next_tool = str(candidate.get("tool_name") or "").strip()
     source_domain = str(candidate.get("source_domain") or candidate_domain or domain)
-    if source_domain == PolicyDomain.TRANSACTION.value and next_tool in _FAST_PATH_TRANSACTION_RECOVERY_BLOCKLIST:
+    if (
+        source_domain == PolicyDomain.TRANSACTION.value
+        and next_tool in _FAST_PATH_TRANSACTION_RECOVERY_BLOCKLIST
+        and next_tool != "get_final_price_tool"
+    ):
         return None
     return _ContractRequiredToolCandidate(
         tool_name=next_tool,
