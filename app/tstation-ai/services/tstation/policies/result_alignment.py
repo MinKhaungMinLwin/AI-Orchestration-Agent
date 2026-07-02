@@ -14,6 +14,12 @@ class PriceRangeRequest:
     label: str = ""
 
 
+_TIRE_SIZE_PRICE_PARSE_MASK_RE = re.compile(
+    r"(?<!\d)(\d{3})\s*/?\s*(\d{2})\s*R?\s*(\d{2})(?=\s*\d{1,3}\s*만원|[^\d]|$)",
+    re.IGNORECASE,
+)
+
+
 def product_price_alignment_notice(
     *,
     user_text: str,
@@ -60,24 +66,28 @@ def _price_range_request(
 
 
 def _price_range_from_text(text: str) -> PriceRangeRequest | None:
-    normalized = re.sub(r"\s+", "", text or "")
+    size_masked_text = _TIRE_SIZE_PRICE_PARSE_MASK_RE.sub(" ", text or "")
+    normalized = re.sub(r"\s+", "", size_masked_text)
     if not normalized:
         return None
 
-    match = re.search(r"(?P<low>\d{1,3})만원(?:대|선)", normalized)
+    match = re.search(r"(?<!\d)(?P<low>\d{1,3})만원(?:대|선)", normalized)
     if match:
         low = int(match.group("low")) * 10_000
         label = f"{match.group('low')}만원대"
         return PriceRangeRequest(min_price=low, max_price=low + 99_999, label=label)
 
-    match = re.search(r"(?P<low>\d{1,3})만원(?:부터|이상)[~\-]?(?P<high>\d{1,3})?만원?(?:까지|이하)?", normalized)
+    match = re.search(
+        r"(?<!\d)(?P<low>\d{1,3})만원(?:부터|이상)[~\-]?(?P<high>\d{1,3})?만원?(?:까지|이하)?",
+        normalized,
+    )
     if match:
         low = int(match.group("low")) * 10_000
         high = int(match.group("high")) * 10_000 if match.group("high") else None
         label = f"{match.group('low')}만원~{match.group('high')}만원" if match.group("high") else f"{match.group('low')}만원 이상"
         return PriceRangeRequest(min_price=low, max_price=high, label=label)
 
-    match = re.search(r"(?P<low>\d{1,3})만원[~\-](?P<high>\d{1,3})만원", normalized)
+    match = re.search(r"(?<!\d)(?P<low>\d{1,3})만원[~\-](?P<high>\d{1,3})만원", normalized)
     if match:
         return PriceRangeRequest(
             min_price=int(match.group("low")) * 10_000,
@@ -85,11 +95,11 @@ def _price_range_from_text(text: str) -> PriceRangeRequest | None:
             label=f"{match.group('low')}만원~{match.group('high')}만원",
         )
 
-    match = re.search(r"(?P<price>\d{1,3})만원(?:이하|까지|안쪽|미만)", normalized)
+    match = re.search(r"(?<!\d)(?P<price>\d{1,3})만원(?:이하|까지|안쪽|미만)", normalized)
     if match:
         return PriceRangeRequest(max_price=int(match.group("price")) * 10_000, label=f"{match.group('price')}만원 이하")
 
-    match = re.search(r"(?P<price>\d{1,3})만원(?:이상|부터)", normalized)
+    match = re.search(r"(?<!\d)(?P<price>\d{1,3})만원(?:이상|부터)", normalized)
     if match:
         return PriceRangeRequest(min_price=int(match.group("price")) * 10_000, label=f"{match.group('price')}만원 이상")
 

@@ -4861,6 +4861,109 @@ def test_generic_compare_text_is_product_comparison_query() -> None:
     assert _is_product_comparison_query("다이나프로 hpx 랑 윈터 아이셉트 비교해줘") is True
 
 
+def test_weatherflex_gt_and_kinergy_4s2_builds_comparison_event_from_search_results() -> None:
+    event = _build_product_comparison_event_from_search_results(
+        "웨더플렉스 GT, 키너지 4S2 비교해줘",
+        [
+            (
+                "키너지 4S2",
+                {
+                    "items": [
+                        {
+                            "goods_no": "G000000312680",
+                            "goods_nm": "키너지 4S2",
+                            "prc_grd_nm": "스탠다드",
+                            "goods_pfm_nm": "COMFORT",
+                            "goods_dtl_pfm_nm": "컴포트",
+                            "season_nm": "사계절",
+                            "car_knd_nm": "승용차",
+                            "t_rls_yearmon": "2019년 11월",
+                            "sys_reg_dtime": "2020-02-12 13:28:58",
+                            "rating_avg": 4.4,
+                            "review_count": 7,
+                        }
+                    ]
+                },
+            ),
+            (
+                "웨더플렉스 GT",
+                {
+                    "items": [
+                        {
+                            "goods_no": "G000000320362",
+                            "goods_nm": "웨더플렉스 GT",
+                            "prc_grd_nm": "프리미엄",
+                            "goods_pfm_nm": "COMFORT",
+                            "goods_dtl_pfm_nm": "컴포트",
+                            "season_nm": "올웨더",
+                            "car_knd_nm": "승용차",
+                            "t_rls_yearmon": "2025년 7월",
+                            "sys_reg_dtime": "2025-07-08 11:53:17",
+                            "rating_avg": 0,
+                            "review_count": 0,
+                        }
+                    ]
+                },
+            ),
+        ],
+    )
+
+    assert event is not None
+    assert event["assistant_response_source"] == "code_product_compare_resolver"
+    assert event["data"]["metadata"]["response_shape_key"] == "metric_comparison_summary"
+    assert "**키너지 4S2**" in event["data"]["assistantResponse"]
+    assert "**웨더플렉스 GT**" in event["data"]["assistantResponse"]
+    assert "| 항목 | 내용 |" in event["data"]["assistantResponse"]
+
+
+def test_compare_query_uses_router_product_names_from_comparison_context() -> None:
+    event = _build_product_comparison_event_from_search_results(
+        "둘 비교해줘",
+        [
+            (
+                "키너지 4S2",
+                {
+                    "items": [
+                        {
+                            "goods_no": "G000000312680",
+                            "goods_nm": "키너지 4S2",
+                            "prc_grd_nm": "스탠다드",
+                            "goods_pfm_nm": "COMFORT",
+                            "goods_dtl_pfm_nm": "컴포트",
+                            "season_nm": "사계절",
+                            "car_knd_nm": "승용차",
+                        }
+                    ]
+                },
+            ),
+            (
+                "웨더플렉스 GT",
+                {
+                    "items": [
+                        {
+                            "goods_no": "G000000320362",
+                            "goods_nm": "웨더플렉스 GT",
+                            "prc_grd_nm": "프리미엄",
+                            "goods_pfm_nm": "COMFORT",
+                            "goods_dtl_pfm_nm": "컴포트",
+                            "season_nm": "올웨더",
+                            "car_knd_nm": "승용차",
+                        }
+                    ]
+                },
+            ),
+        ],
+        comparison_context={
+            "product_names": ["웨더플렉스 GT", "키너지 4S2"],
+            "compare_metric": "detail",
+        },
+    )
+
+    assert event is not None
+    assert event["assistant_response_source"] == "code_product_compare_resolver"
+    assert event["data"]["metadata"]["productNames"] == ["웨더플렉스 GT", "키너지 4S2"]
+
+
 def test_description_compare_followup_reuses_previous_compare_products() -> None:
     messages = [
         {"role": "user", "content": "다이나프로 hpx 랑 윈터 아이셉트 비교해줘"},
@@ -18277,6 +18380,75 @@ def test_apply_history_product_selection_state_resolves_goods_no_and_trace_metad
     assert transition.flow_transition["active_flow_context"]["payment"]["price_basis"] == "cheapest_final_prc"
 
 
+def test_apply_history_product_selection_state_clears_stale_goods_no_for_comparison_product_selection() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000312680",
+        tire_size="165/65R14",
+        comparison_context=ComparisonContext(
+            product_names=["웨더플렉스 GT", "키너지 4S2"],
+            compare_metric="detail",
+            response_shape_key="metric_comparison_summary",
+            source="code_product_compare_resolver",
+        ),
+    )
+
+    prev_tool_data = [{
+        "tool": "search_product_tool",
+        "data": [
+            {
+                "goods_no": "G000000312680",
+                "goods_nm": "키너지 4S2",
+                "tire_size_1": "165/65R14",
+            },
+        ],
+    }]
+
+    state = apply_history_product_selection_state(
+        last_user_text="웨더플렉스 gt",
+        prev_tool_data=prev_tool_data,
+        merged_slots=slots,
+        resolve_goods_no_from_selection_fn=lambda user_text, tool_data, current_tire_size: resolve_goods_no_from_selection(
+            user_text,
+            tool_data,
+            current_tire_size=current_tire_size,
+        ),
+    )
+
+    assert state.updated_slots.goods_no is None
+    assert state.updated_slots.tire_model == "웨더플렉스 GT"
+    assert state.updated_slots.pending_product_name == "웨더플렉스 GT"
+    assert state.updated_slots.comparison_context is None
+    assert state.goods_no_resolved is False
+    assert state.action_context is None
+    assert state.trace_metadata["selection_source"] == "comparison_context_product_selection"
+    assert state.trace_metadata["validation_result"] == "comparison_context_product_override"
+
+
+def test_transaction_vehicle_lookup_contract_allows_my_cars_tool() -> None:
+    texts = (
+        "내 차 뭐야",
+        "내 차 목록",
+        "내가 등록한 차 뭐야",
+        "내가 홈페이지에 등록한 차 뭐야",
+        "티스테이션에 등록한 내 차량 보여줘",
+    )
+    for text in texts:
+        frame = build_transaction_intent_frame(
+            text,
+            known_slots={"router_transaction_intent": "vehicle_lookup"},
+        )
+        plan = plan_transaction_tools(frame)
+        decision = decide_transaction_response(intent=frame.intent, user_text=text, known_slots=frame.known_slots)
+
+        assert frame.intent == "vehicle_lookup"
+        assert frame.sub_intent == "registered_vehicle"
+        assert frame.known_slots["goal_type"] == "registered_vehicle_lookup"
+        assert plan.allowed_tools == ("get_my_cars_tool",)
+        assert plan.preferred_tool == "get_my_cars_tool"
+        assert decision.template.value == "listCar"
+        assert decision.metadata["response_shape_key"] == "vehicle_lookup"
+
+
 def test_apply_history_product_selection_state_resolves_latest_product_template_candidate() -> None:
     slots = ConversationSlots(goods_no=None, tire_size="225/45R17", ord_qty=2, shop_name="강남점")
     latest_product_tmpl = {
@@ -24640,14 +24812,14 @@ def test_offroad_router_scenario_does_not_override_without_current_anchor() -> N
 
 
 def test_offroad_policy_patch_overrides_llm_generated_generic_args(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict = {}
+    calls: list[dict] = []
 
     class _Response:
         status_code = 200
         parsed = {"rcmd_type": "heavy_load", "total": 0, "items": []}
 
     def _fake_recommendations(**kwargs):
-        captured.update(kwargs)
+        calls.append(kwargs)
         return _Response()
 
     frame = build_discovery_intent_frame("험로 주행용 타이어 추천")
@@ -24664,8 +24836,10 @@ def test_offroad_policy_patch_overrides_llm_generated_generic_args(monkeypatch: 
         discovery_tools.current_discovery_recommendation_tool_patch.reset(token)
 
     assert result["status"] == "success"
-    assert captured["rcmd_type"] == discovery_tools.RcmdType.HEAVY_LOAD
-    assert captured["vehicle_type"] == "suv"
+    assert calls[0]["rcmd_type"] == discovery_tools.RcmdType.HEAVY_LOAD
+    assert calls[0]["vehicle_type"] == "suv"
+    # 0 items with a vehicle_type filter triggers one relaxed retry without it.
+    assert calls[-1]["vehicle_type"] is None
 
 
 def test_all_season_and_all_weather_catalog_conditions_stay_distinct() -> None:
@@ -26572,6 +26746,34 @@ def test_duplicated_series_tire_size_typo_normalizes_across_slots_and_discovery_
     assert slots.tire_size == "235/55R19"
     assert frame.entities["tire_size"] == "235/55R19"
     assert frame.entities["explicit_tire_size"] == "235/55R19"
+
+
+@pytest.mark.parametrize(
+    ("user_text", "tire_size", "min_price", "max_price"),
+    [
+        ("2454519 30만원대 타이어 추천", "245/45R19", 300_000, 399_999),
+        ("2454518 40만원대 추천", "245/45R18", 400_000, 499_999),
+        ("2355519 사이즈 20만원대 추천해줘", "235/55R19", 200_000, 299_999),
+        ("245/45R19 30만원대 추천", "245/45R19", 300_000, 399_999),
+    ],
+)
+def test_recommendation_price_range_does_not_absorb_tire_size_digits(
+    user_text: str,
+    tire_size: str,
+    min_price: int,
+    max_price: int,
+) -> None:
+    frame = build_discovery_intent_frame(user_text)
+    plan = plan_discovery_tools(frame)
+
+    assert frame.entities["tire_size"] == tire_size
+    assert frame.entities["min_price"] == min_price
+    assert frame.entities["max_price"] == max_price
+    assert plan.tool_args_patch["tire_size"] == tire_size
+    assert plan.tool_args_patch["min_price"] == min_price
+    assert plan.tool_args_patch["max_price"] == max_price
+    assert plan.metadata["recommendation_expected_tool_args"]["min_price"] == min_price
+    assert plan.metadata["recommendation_expected_tool_args"]["max_price"] == max_price
 
 
 def test_brand_recommendation_tool_patch_disables_cross_brand_fill() -> None:
