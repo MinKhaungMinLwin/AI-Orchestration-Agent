@@ -1,7 +1,7 @@
 
 from services.tstation.agents.base_agent import BaseAgent
 from services.tstation.agents.templates import TransactionAgentOutput
-from services.tstation.agents.b_discovery_agent.tools import search_product_tool
+from services.tstation.agents.b_discovery_agent.tools import get_my_cars_tool, search_product_tool
 from services.tstation.common.cta_urls import expand_url_sentinels
 from services.tstation.agents.e_support_agent.tools import get_card_installments_tool
 from services.tstation.agents.c_transaction_agent.tools import (
@@ -3219,6 +3219,7 @@ class TransactionSubAgent(BaseAgent):
         "get_order_status_tool": "Order / Delivery",
         "get_my_reservations_tool": "Order / Delivery",
         "get_favorite_stores_tool": "Store",
+        "get_my_cars_tool": "Product Compatibility",
         # Flow 1.6 — 결제 컨텍스트에서 카드사별 무이자 할부 조회 (SUPPORT 의 도구
         # cross-agent 재사용). SUPPORT 와 동일 AF 라벨 (FAQ) 유지 — 정보성 응답.
         "get_card_installments_tool": "FAQ",
@@ -3251,6 +3252,7 @@ class TransactionSubAgent(BaseAgent):
             get_order_status_tool,
             get_my_reservations_tool,
             get_favorite_stores_tool,
+            get_my_cars_tool,
             get_card_installments_tool,  # Flow 1.6 cross-agent reuse
         ]
         system_prompt = get_transaction_system_prompt

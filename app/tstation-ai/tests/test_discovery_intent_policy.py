@@ -252,10 +252,14 @@ def test_registered_vehicle_type_query_variants_use_vehicle_information_contract
     texts = (
         "내 차 뭐야?",
         "내차 뭐야?",
+        "내 차 목록",
+        "내 차량 보기",
         "내가 등록한 차 뭐야?",
+        "내가 홈페이지에 등록한 차 뭐야?",
         "내가 등록한 차종이 뭐야?",
         "내 차종 알려줘",
         "내가 등록한 차량 알려줘",
+        "티스테이션에 등록한 내 차량 보여줘",
     )
     for text in texts:
         frame = build_discovery_intent_frame(text)

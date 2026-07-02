@@ -18391,6 +18391,7 @@ def test_apply_history_product_selection_state_clears_stale_goods_no_for_compari
             source="code_product_compare_resolver",
         ),
     )
+
     prev_tool_data = [{
         "tool": "search_product_tool",
         "data": [
@@ -18421,6 +18422,31 @@ def test_apply_history_product_selection_state_clears_stale_goods_no_for_compari
     assert state.action_context is None
     assert state.trace_metadata["selection_source"] == "comparison_context_product_selection"
     assert state.trace_metadata["validation_result"] == "comparison_context_product_override"
+
+
+def test_transaction_vehicle_lookup_contract_allows_my_cars_tool() -> None:
+    texts = (
+        "내 차 뭐야",
+        "내 차 목록",
+        "내가 등록한 차 뭐야",
+        "내가 홈페이지에 등록한 차 뭐야",
+        "티스테이션에 등록한 내 차량 보여줘",
+    )
+    for text in texts:
+        frame = build_transaction_intent_frame(
+            text,
+            known_slots={"router_transaction_intent": "vehicle_lookup"},
+        )
+        plan = plan_transaction_tools(frame)
+        decision = decide_transaction_response(intent=frame.intent, user_text=text, known_slots=frame.known_slots)
+
+        assert frame.intent == "vehicle_lookup"
+        assert frame.sub_intent == "registered_vehicle"
+        assert frame.known_slots["goal_type"] == "registered_vehicle_lookup"
+        assert plan.allowed_tools == ("get_my_cars_tool",)
+        assert plan.preferred_tool == "get_my_cars_tool"
+        assert decision.template.value == "listCar"
+        assert decision.metadata["response_shape_key"] == "vehicle_lookup"
 
 
 def test_apply_history_product_selection_state_resolves_latest_product_template_candidate() -> None:
