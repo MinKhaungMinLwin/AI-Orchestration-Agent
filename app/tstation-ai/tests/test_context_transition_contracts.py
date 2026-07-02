@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from services.tstation.policies.flow_state import commit_flow_state
+from services.tstation.policies.intent_frame import IntentFrame, PolicyDomain
 from services.tstation.policies.response_decision import TemplateName
+from services.tstation.policies.transaction_intent_policy import plan_transaction_tools
 from services.tstation.policies.transaction_response_policy import decide_transaction_response
 from services.tstation.policies.turn_contract import (
     TurnContract,
+    build_turn_contract,
     response_contract_violations,
     violates_response_template_contract,
 )
@@ -317,3 +320,39 @@ def test_store_search_location_booking_flow_requires_booking_context() -> None:
         {"template": "location", "data": {"isBookingFlow": False}},
         contract,
     ) is False
+
+
+def test_open_store_search_forbids_schedule_boundary() -> None:
+    frame = IntentFrame(
+        domain=PolicyDomain.TRANSACTION,
+        intent="open_store_search",
+        sub_intent="open_store_filter",
+        known_slots={"region": "Pangyo", "open_only": True},
+    )
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text="find open stores near Pangyo",
+        known_slots=frame.known_slots,
+    )
+    contract = build_turn_contract(
+        user_text="find open stores near Pangyo",
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=response_decision,
+    )
+
+    assert "search_stores_complex_tool" in tool_plan.allowed_tools
+    assert "get_store_schedule_tool" not in tool_plan.allowed_tools
+    assert "get_store_schedule_tool" in tool_plan.forbidden_tools
+    assert "datepick_for_store_search_flow" in response_decision.forbidden_behaviors
+    assert "search_stores_complex_tool" in contract.allowed_tools
+    assert "get_store_schedule_tool" not in contract.allowed_tools
+    assert "get_store_schedule_tool" in contract.forbidden_tools
+    assert violates_response_template_contract({"template": "datepick"}, contract) is True
+    violations = response_contract_violations(
+        template="location",
+        called_tools=("get_store_schedule_tool",),
+        contract=contract,
+    )
+    assert "forbidden_tool_for_contract" in {violation["type"] for violation in violations}

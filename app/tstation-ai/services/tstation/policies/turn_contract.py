@@ -50,6 +50,7 @@ _REQUIRED_SLOT_BLOCK_TEMPLATES = frozenset({
     "billProduct",
     "billService",
 })
+_STORE_ONLY_FLOW_BLOCK_TEMPLATES = frozenset({"datepick", "preOrder", "orderComplete"})
 _FORBIDDEN_BEHAVIOR_TEMPLATE_BLOCKS = {
     "datepick_for_unavailable_stock": frozenset({"datepick", "preOrder"}),
     "datepick_for_pure_inventory_flow": frozenset({"datepick", "preOrder"}),
@@ -67,6 +68,13 @@ _FORBIDDEN_BEHAVIOR_TEMPLATE_BLOCKS = {
     "assert_success_without_tool_result": frozenset({"datepick", "preOrder", "orderComplete", "billProduct"}),
     "datepick_for_store_visit_advisory": frozenset({"datepick", "preOrder"}),
     "force_store_schedule_for_visit_advisory": frozenset({"datepick", "preOrder"}),
+    "datepick_for_store_search_flow": _STORE_ONLY_FLOW_BLOCK_TEMPLATES,
+    "schedule_tool_for_store_service_search": _STORE_ONLY_FLOW_BLOCK_TEMPLATES,
+    "datepick_for_unknown_store_service": _STORE_ONLY_FLOW_BLOCK_TEMPLATES,
+    "schedule_tool_for_unknown_store_service": _STORE_ONLY_FLOW_BLOCK_TEMPLATES,
+    "schedule_tool_for_vehicle_experience_store_search": _STORE_ONLY_FLOW_BLOCK_TEMPLATES,
+    "quick_order_for_vehicle_experience_store_search": frozenset({"preOrder", "orderComplete"}),
+    "preorder_for_vehicle_experience_store_search": frozenset({"preOrder", "orderComplete"}),
 }
 _DISCOVERY_FIRST_LEG_BLOCK_RESPONSE_SHAPES = frozenset({
     "product_attribute_summary",
@@ -4759,7 +4767,6 @@ def _router_wins_tool_boundary(intent: str) -> tuple[tuple[str, ...], tuple[str,
             "search_stores_complex_tool",
             "get_store_list_tool",
             "get_nearby_stores_tool",
-            "get_store_schedule_tool",
         )
         return (
             allowed_tools,
@@ -4767,6 +4774,8 @@ def _router_wins_tool_boundary(intent: str) -> tuple[tuple[str, ...], tuple[str,
                 tool
                 for tool in _ROUTER_WINS_ORDER_EXECUTION_FORBIDDEN_TOOLS
                 | {
+                    "get_store_schedule_tool",
+                    "get_multi_store_schedule_tool",
                     "transaction_store_preview_tool",
                     "get_store_inventory_tool",
                     "get_logistics_inventory_tool",
@@ -4943,6 +4952,7 @@ def _router_wins_response_decision(intent: str) -> dict[str, Any]:
         guidance = "현재 턴의 매장 검색 intent 기준으로 매장을 조회한다. 주문/가격/쿠폰/예약 실행 flow로 전환하지 않는다."
         forbidden_behaviors = [
             "resume_stale_transaction_flow",
+            "datepick_for_store_search_flow",
             "start_quick_order_execution",
             "start_price_or_coupon_execution",
             "emit_preorder_without_user_confirmation",

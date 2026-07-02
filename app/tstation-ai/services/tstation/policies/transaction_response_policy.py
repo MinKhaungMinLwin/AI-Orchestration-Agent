@@ -25,6 +25,7 @@ _QUICK_ORDER_EXECUTE_FORBIDDEN = (
     "order_complete_without_quick_order_tool",
     "quick_order_with_null_required_fields",
 )
+_STORE_ONLY_FLOW_FORBIDDEN = ("datepick_for_store_search_flow",)
 
 
 def decide_transaction_response(
@@ -282,7 +283,11 @@ def _decide_open_store_search() -> ResponseDecision:
         response_shape_key="open_store_filter",
         response_shape=ResponseShape.LOCATION,
         template=TemplateName.LOCATION,
-        forbidden_behaviors=("unfiltered_store_list_for_open_store_filter", "store_visit_advisory_for_open_store_filter"),
+        forbidden_behaviors=(
+            *_STORE_ONLY_FLOW_FORBIDDEN,
+            "unfiltered_store_list_for_open_store_filter",
+            "store_visit_advisory_for_open_store_filter",
+        ),
         assistant_guidance=(
             "지역 기반 요일/휴일 영업 매장 검색은 방문 혼잡도 상담이 아니다. "
             "지역 후보 매장을 특정 날짜/요일 영업 여부로 필터링하고, 확인된 매장은 location 카드로 안내한다."
@@ -298,7 +303,11 @@ def _decide_store_service_search(*, slots: dict[str, Any]) -> ResponseDecision:
             response_shape=ResponseShape.CLARIFY,
             template=TemplateName.QUICK_REPLY,
             required_slots=("region",),
-            forbidden_behaviors=("random_store_service_search_without_region", "store_service_advisory_for_search"),
+            forbidden_behaviors=(
+                *_STORE_ONLY_FLOW_FORBIDDEN,
+                "random_store_service_search_without_region",
+                "store_service_advisory_for_search",
+            ),
             assistant_guidance="서비스 조건 매장 검색은 지역이 필요하므로 지역만 짧게 요청한다.",
             metadata={"service_name": slots.get("service_name")},
         )
@@ -307,6 +316,7 @@ def _decide_store_service_search(*, slots: dict[str, Any]) -> ResponseDecision:
         response_shape=ResponseShape.LOCATION,
         template=TemplateName.LOCATION,
         forbidden_behaviors=(
+            *_STORE_ONLY_FLOW_FORBIDDEN,
             "store_service_advisory_for_search",
             "schedule_tool_for_store_service_search",
             "claim_service_without_matching_svc_code",
@@ -330,6 +340,7 @@ def _decide_vehicle_experience_store_search(*, slots: dict[str, Any]) -> Respons
             template=TemplateName.QUICK_REPLY,
             required_slots=("region",),
             forbidden_behaviors=(
+                *_STORE_ONLY_FLOW_FORBIDDEN,
                 "random_vehicle_experience_store_search_without_region",
                 "quick_order_for_vehicle_experience_store_search",
                 "schedule_tool_for_vehicle_experience_store_search",
@@ -345,6 +356,7 @@ def _decide_vehicle_experience_store_search(*, slots: dict[str, Any]) -> Respons
         response_shape=ResponseShape.LOCATION,
         template=TemplateName.LOCATION,
         forbidden_behaviors=(
+            *_STORE_ONLY_FLOW_FORBIDDEN,
             "quick_order_for_vehicle_experience_store_search",
             "schedule_tool_for_vehicle_experience_store_search",
             "preorder_for_vehicle_experience_store_search",
@@ -425,7 +437,12 @@ def _decide_favorite_store_lookup() -> ResponseDecision:
         response_shape_key="favorite_store_lookup",
         response_shape=ResponseShape.LOCATION,
         template=TemplateName.LOCATION,
-        forbidden_behaviors=("ask_location_for_favorite_store", "auto_select_single_store", "fallback_to_generic_store_search"),
+        forbidden_behaviors=(
+            *_STORE_ONLY_FLOW_FORBIDDEN,
+            "ask_location_for_favorite_store",
+            "auto_select_single_store",
+            "fallback_to_generic_store_search",
+        ),
         assistant_guidance=(
             "단골매장 조회는 위치를 다시 묻지 말고 get_favorite_stores_tool 결과만 사용한다. "
             "결과가 비면 등록된 단골매장이 없다는 quickReply로 안내하고 일반 매장 검색으로 자동 전환하지 않는다."

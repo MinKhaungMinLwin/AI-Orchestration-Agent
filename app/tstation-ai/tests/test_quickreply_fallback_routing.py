@@ -33347,15 +33347,16 @@ def test_region_open_store_filter_does_not_become_visit_advisory() -> None:
     assert "shop_name" not in frame.known_slots
     assert tool_plan.preferred_tool == "search_stores_complex_tool"
     assert "search_stores_complex_tool" in tool_plan.allowed_tools
-    assert "get_store_schedule_tool" in tool_plan.allowed_tools
-    assert "get_store_schedule_tool" not in tool_plan.forbidden_tools
+    assert "get_store_schedule_tool" not in tool_plan.allowed_tools
+    assert "get_store_schedule_tool" in tool_plan.forbidden_tools
     assert response_decision.template == TemplateName.LOCATION
     assert response_decision.metadata["response_shape_key"] == "open_store_filter"
     assert contract.intent == "open_store_search"
     assert "search_stores_complex_tool" in contract.allowed_tools
-    assert "get_store_schedule_tool" in contract.allowed_tools
-    assert "get_store_schedule_tool" not in contract.forbidden_tools
+    assert "get_store_schedule_tool" not in contract.allowed_tools
+    assert "get_store_schedule_tool" in contract.forbidden_tools
     assert "transaction_store_preview_tool" in contract.forbidden_tools
+    assert violates_response_template_contract({"template": "datepick"}, contract) is True
 
 
 def test_plain_region_store_search_still_uses_store_search() -> None:

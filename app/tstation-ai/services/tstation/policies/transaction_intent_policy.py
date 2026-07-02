@@ -1845,12 +1845,11 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
                 "search_stores_complex_tool",
                 "search_stores_tool",
                 "get_store_list_tool",
-                "get_store_schedule_tool",
                 "get_store_detail_tool",
             ),
             preferred_tool="search_stores_complex_tool",
             tool_args_patch=args,
-            forbidden_tools=("transaction_store_preview_tool",),
+            forbidden_tools=("get_store_schedule_tool", "get_multi_store_schedule_tool", "transaction_store_preview_tool"),
             required_slots=action_required_slots,
             metadata={"response_intent": "open_store_search", "action": action},
         )
