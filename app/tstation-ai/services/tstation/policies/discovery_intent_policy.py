@@ -12,6 +12,7 @@ from services.tstation.policies.recommendation_scenario_catalog import (
     recommendation_scenario_metadata,
 )
 from services.tstation.policies.response_decision import ToolPlan
+from services.tstation.policies.vehicle_category_catalog import match_vehicle_model_category
 
 
 def _recommendation_context_dict(value: Any) -> dict[str, Any]:
@@ -77,7 +78,7 @@ _VALUE_RECOMMENDATION_RE = re.compile(r"가성비|합리적|가격\s*대비|valu
 _NOISE_LABEL_RE = re.compile(r"소음\s*(?:등급|라벨)|저소음\s*등급|소음도|데시벨|dB", re.IGNORECASE)
 _QUIET_RECOMMENDATION_RE = re.compile(r"저소음|정숙|조용|소음|진동", re.IGNORECASE)
 _EV_RECOMMENDATION_RE = re.compile(
-    r"전기차|전기차용|electric|테슬라|모델\s*Y|모델Y|(?<![A-Za-z])EV(?![A-Za-z])",
+    r"전기차|전기차용|electric|일렉트릭|(?<![A-Za-z])EV(?![A-Za-z])",
     re.IGNORECASE,
 )
 _GENERAL_TIRE_RECOMMENDATION_ACTION_RE = re.compile(
@@ -787,8 +788,12 @@ def build_discovery_intent_frame(
         entities["discovery_followup_action"] = "vehicle_resolved_recommendation"
     if _VEHICLE_SIZE_LOOKUP_RE.search(text):
         entities["vehicle_information_request"] = "tire_size_lookup"
+    vehicle_model_match = match_vehicle_model_category(text)
+    # Scenario keywords inside a matched car model name (e.g. "스포츠" in
+    # "렉스턴 스포츠") are not scenario intent — extract from masked text.
+    scenario_text = vehicle_model_match.masked_text if vehicle_model_match is not None else text
     scenario = recommendation_scenario_from_text(
-        text,
+        scenario_text,
         router_recommendation_scenario or context_recommendation_scenario,
     )
     if general_tire_recommendation:
@@ -828,9 +833,9 @@ def build_discovery_intent_frame(
     elif _ALL_SEASON_RE.search(text):
         entities["season"] = "all_season"
 
-    if _PERFORMANCE_RE.search(text):
+    if _PERFORMANCE_RE.search(scenario_text):
         entities["performance"] = "performance"
-    if _QUIET_RECOMMENDATION_RE.search(text):
+    if _QUIET_RECOMMENDATION_RE.search(scenario_text):
         entities["quiet_focus"] = True
     if general_tire_recommendation:
         entities["vehicle_category"] = "passenger"
@@ -844,6 +849,10 @@ def build_discovery_intent_frame(
         entities["vehicle_category"] = "truck_van"
     elif _PASSENGER_RECOMMENDATION_RE.search(text):
         entities["vehicle_category"] = "passenger"
+    elif vehicle_model_match is not None:
+        entities["vehicle_category"] = vehicle_model_match.category
+        entities["vehicle_model_name"] = vehicle_model_match.model
+        entities["vehicle_category_source"] = "model_inference"
     if "noise" in attribute_metrics:
         entities["label_metric"] = "noise"
     if _SOUND_ABSORBER_RE.search(text):

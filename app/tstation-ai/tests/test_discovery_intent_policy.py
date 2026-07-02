@@ -630,3 +630,88 @@ def test_tc216_kinergy_ex_and_ventus_air_s_are_recognized_for_grade_compare() ->
     assert frame.sub_intent == "grade_compare"
     assert frame.entities["compare_metric"] == "grade"
     assert frame.entities["product_names"] == ("Ventus air S", "Kinergy EX")
+
+
+def test_model_name_infers_suv_vehicle_type_for_recommendation() -> None:
+    frame = build_discovery_intent_frame("G바겐 타이어 추천해줘")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.intent == "product_recommendation"
+    assert frame.entities["vehicle_category"] == "suv"
+    assert frame.entities["vehicle_model_name"] == "벤츠 G클래스"
+    assert frame.entities["vehicle_category_source"] == "model_inference"
+    assert plan.preferred_tool == "get_products_recommendations_tool"
+    assert plan.tool_args_patch["vehicle_type"] == "suv"
+    assert plan.tool_args_patch.get("rcmd_type") != "ev"
+
+
+def test_model_name_infers_passenger_vehicle_type_for_recommendation() -> None:
+    for text in ("벤츠 E클래스 타이어 추천해줘", "Mercedes E-Class 타이어 추천해줘", "이클래스 타이어 추천"):
+        frame = build_discovery_intent_frame(text)
+        plan = plan_discovery_tools(frame)
+
+        assert frame.intent == "product_recommendation", text
+        assert frame.entities["vehicle_category"] == "passenger", text
+        assert plan.tool_args_patch["vehicle_type"] == "passenger", text
+
+
+def test_explicit_ev_request_wins_over_model_inference() -> None:
+    frame = build_discovery_intent_frame("G바겐 전기차 타이어 추천해줘")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.entities["vehicle_category"] == "ev"
+    assert plan.tool_args_patch["vehicle_type"] == "ev"
+
+
+def test_ice_ev_dual_model_maps_to_body_type_not_ev() -> None:
+    frame = build_discovery_intent_frame("코나 타이어 추천해줘")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.entities["vehicle_category"] == "suv"
+    assert plan.tool_args_patch["vehicle_type"] == "suv"
+
+
+def test_ev_only_model_maps_to_ev() -> None:
+    frame = build_discovery_intent_frame("모델Y 타이어 추천해줘")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.entities["vehicle_category"] == "ev"
+    assert plan.tool_args_patch["vehicle_type"] == "ev"
+
+
+def test_scenario_keyword_inside_model_name_is_not_scenario_intent() -> None:
+    frame = build_discovery_intent_frame("렉스턴 스포츠 타이어 추천")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.entities["vehicle_category"] == "truck_van"
+    assert frame.entities.get("performance") is None
+    assert plan.tool_args_patch.get("rcmd_type") != "performance"
+    assert plan.tool_args_patch["vehicle_type"] == "truck_van"
+
+
+def test_scenario_keyword_outside_model_name_still_applies() -> None:
+    frame = build_discovery_intent_frame("쏘나타 스포츠 타이어 추천해줘")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.entities["vehicle_category"] == "passenger"
+    assert frame.entities["performance"] == "performance"
+    assert plan.tool_args_patch["rcmd_type"] == "performance"
+    assert plan.tool_args_patch["vehicle_type"] == "passenger"
+
+
+def test_model_scenario_combination_keeps_both_conditions() -> None:
+    frame = build_discovery_intent_frame("G바겐 사계절 타이어 추천해줘")
+    plan = plan_discovery_tools(frame)
+
+    assert plan.tool_args_patch["rcmd_type"] == "all_weather"
+    assert plan.tool_args_patch["season_nm"] == "사계절"
+    assert plan.tool_args_patch["vehicle_type"] == "suv"
+
+
+def test_generic_recommendation_has_no_model_inference() -> None:
+    frame = build_discovery_intent_frame("타이어 추천해줘")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.entities.get("vehicle_category") is None
+    assert frame.entities.get("vehicle_model_name") is None
+    assert "vehicle_type" not in plan.tool_args_patch
