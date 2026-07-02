@@ -2513,8 +2513,11 @@ def test_metric_comparison_policy_ranks_mileage_from_search_results() -> None:
     assert result["template"] == "quickReply"
     assistant_response = result["data"]["assistantResponse"]
     assert "DB 수명/마일리지 지표 기준으로는 다이나프로 HPX" in assistant_response
-    assert "- 다이나프로 HPX: 수명/마일리지 점수 5/5" in assistant_response
-    assert "- 벤투스 에어S: 수명/마일리지 점수 4/5" in assistant_response
+    assert "**벤투스 에어S**" in assistant_response
+    assert "**다이나프로 HPX**" in assistant_response
+    assert "| 항목 | 내용 |" in assistant_response
+    assert "| 마일리지/수명 | 4.0 |" in assistant_response
+    assert "| 마일리지/수명 | 5.0 |" in assistant_response
     assert "사이즈:" not in assistant_response
     assert "상품 카드" not in assistant_response
 
@@ -2528,9 +2531,11 @@ def test_metric_comparison_policy_groups_generic_keyword_results_by_product_name
 
     assert result is not None
     assistant_response = result["data"]["assistantResponse"]
-    assert "- 옵티모 H426: 수명/마일리지 점수 2.5/5" in assistant_response
-    assert "- 옵티모 H108: 수명/마일리지 점수 2.5/5" in assistant_response
-    assert "- 크로스클라이밋 2: 수명/마일리지 정보 확인되지 않음" in assistant_response
+    assert "**옵티모 H426**" in assistant_response
+    assert "**옵티모 H108**" in assistant_response
+    assert "**크로스클라이밋 2**" in assistant_response
+    assert "| 마일리지/수명 | 2.5 |" in assistant_response
+    assert "| 마일리지/수명 | 0 |" in assistant_response
     assert "사이즈:" not in assistant_response
 
 
@@ -2544,8 +2549,9 @@ def test_metric_comparison_policy_ranks_fuel_efficiency_from_rr() -> None:
     assert result is not None
     assistant_response = result["data"]["assistantResponse"]
     assert "회전저항/RR 기준으로는 벤투스 에어S, 키너지 EX이 같은 수준" in assistant_response
-    assert "- 벤투스 에어S: 회전저항/RR 3등급" in assistant_response
-    assert "- 키너지 EX: 회전저항/RR 3등급" in assistant_response
+    assert "**키너지 EX**" in assistant_response
+    assert "**벤투스 에어S**" in assistant_response
+    assert "| 연비/회전저항 | 3 |" in assistant_response
     assert "사이즈:" not in assistant_response
     assert "등급 숫자가 낮을수록" in assistant_response
 
@@ -2569,8 +2575,11 @@ def test_metric_comparison_policy_includes_goods_detail_performance_name() -> No
     assert result["template"] == "quickReply"
     assistant_response = result["data"]["assistantResponse"]
     assert "비교 대상의 특화 사양은 아래처럼 확인돼요." in assistant_response
-    assert "- 벤투스 에어S: 특화 사양 COMFORT / 흡음재" in assistant_response
-    assert "- 다이나프로 HPX: 특화 사양 COMFORT / SUV 마일리지" in assistant_response
+    assert "**벤투스 에어S**" in assistant_response
+    assert "**다이나프로 HPX**" in assistant_response
+    assert "| 항목 | 내용 |" in assistant_response
+    assert "| 특징 | 특화 사양 COMFORT / 흡음재 |" in assistant_response
+    assert "| 특징 | 특화 사양 COMFORT / SUV 마일리지 |" in assistant_response
 
 
 def test_metric_comparison_policy_answers_latest_product_confidently() -> None:
@@ -2583,8 +2592,10 @@ def test_metric_comparison_policy_answers_latest_product_confidently() -> None:
     assert result is not None
     assistant_response = result["data"]["assistantResponse"]
     assert "최신 상품은 다이나프로 HP3입니다." in assistant_response
-    assert "- 다이나프로 HP3: 등록일 2025-01-20, 출시 2025년 2월" in assistant_response
-    assert "- 다이나프로 HPX: 등록일 2022-11-10, 출시 2023년 1월" in assistant_response
+    assert "**다이나프로 HPX**" in assistant_response
+    assert "**다이나프로 HP3**" in assistant_response
+    assert "| 출시 시점 | 2025년 2월 |" in assistant_response
+    assert "| 출시 시점 | 2023년 1월 |" in assistant_response
     assert "사이즈:" not in assistant_response
     assert "보통" not in assistant_response
 
