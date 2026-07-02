@@ -4290,8 +4290,6 @@ def _stock_contract_violation(
     }
     if stock_check_mode == "inventory_only" and _is_purchase_bound_preview_event(event, contract):
         return None
-    if stock_check_mode == "inventory_only" and str(template or "") == "datepick" and "get_store_schedule_tool" in called_tools:
-        return None
     if stock_check_mode == "inventory_only":
         if str(response_shape_key or "") == "transaction_fallback" and not called_tools:
             return {

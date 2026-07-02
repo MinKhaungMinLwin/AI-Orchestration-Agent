@@ -8,6 +8,7 @@ from services.tstation.policies.turn_contract import (
     response_contract_violations,
     violates_response_template_contract,
 )
+from services.tstation.policies.ui_action_policy import build_pure_inventory_stock_contract
 
 
 def _purchase_slots(**overrides: object) -> dict[str, object]:
@@ -187,6 +188,56 @@ def test_stock_pure_inventory_transition_blocks_schedule_and_preorder_templates(
     assert violates_response_template_contract({"template": "preOrder"}, contract) is True
     assert violates_response_template_contract({"template": "orderComplete"}, contract) is True
     assert violates_response_template_contract({"template": "location"}, contract) is False
+
+
+def test_pure_inventory_stock_contract_uses_inventory_boundary_not_datepick() -> None:
+    contract = build_pure_inventory_stock_contract(
+        "4개",
+        {
+            "goods_no": "G000000309783",
+            "tire_size": "225/45R17",
+            "ord_qty": 4,
+            "shop_id": "F00721",
+            "shop_name": "T-Station Pangyo",
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+            "stock_check_mode": "inventory_only",
+        },
+    )
+
+    assert contract is not None
+    assert contract.preferred_tool == "get_store_inventory_tool"
+    assert "get_store_schedule_tool" not in contract.allowed_tools
+    assert "get_store_schedule_tool" in contract.forbidden_tools
+    assert contract.response_decision["template"] == "location"
+    assert contract.response_decision["metadata"]["response_shape_key"] == "stock_inventory_lookup"
+    assert violates_response_template_contract({"template": "datepick"}, contract) is True
+
+
+def test_inventory_only_stock_contract_rejects_schedule_tool_datepick() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="stock_store_search",
+        known_slots={"stock_check_mode": "inventory_only"},
+        allowed_tools=("get_store_schedule_tool",),
+        preferred_tool="get_store_schedule_tool",
+        response_decision={
+            "template": "datepick",
+            "forbidden_behaviors": ("datepick_for_pure_inventory_flow",),
+            "metadata": {"response_shape_key": "reservation_slots", "stock_check_mode": "inventory_only"},
+        },
+        action_mode="stock_check",
+        context_state="active",
+    )
+
+    violations = response_contract_violations(
+        template="datepick",
+        response_shape_key="reservation_slots",
+        called_tools=("get_store_schedule_tool",),
+        contract=contract,
+    )
+
+    assert "forbidden_datepick_for_inventory_only_stock" in {violation["type"] for violation in violations}
 
 
 def test_stock_unavailable_inventory_blocks_schedule_and_preorder_templates() -> None:
