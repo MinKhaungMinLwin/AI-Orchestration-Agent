@@ -33718,7 +33718,11 @@ class TStationChatServiceV2:
             comparison_query_override: str | None = None,
         ) -> tuple[list[dict], dict] | None:
             response_decision = turn_contract.response_decision if turn_contract is not None else None
-            response_metadata = response_decision.metadata if response_decision is not None else {}
+            response_metadata = (
+                response_decision.get("metadata")
+                if isinstance(response_decision, Mapping)
+                else getattr(response_decision, "metadata", None)
+            ) or {}
             comparison_context = (
                 response_metadata
                 if isinstance(response_metadata, Mapping)
@@ -38762,7 +38766,11 @@ class TStationChatServiceV2:
                         slots=pending_slots or initial_slots,
                     )
                     response_decision = turn_contract.response_decision if turn_contract is not None else None
-                    response_metadata = response_decision.metadata if response_decision is not None else {}
+                    response_metadata = (
+                        response_decision.get("metadata")
+                        if isinstance(response_decision, Mapping)
+                        else getattr(response_decision, "metadata", None)
+                    ) or {}
                     comparison_context = (
                         response_metadata
                         if isinstance(response_metadata, Mapping)
@@ -39211,7 +39219,11 @@ class TStationChatServiceV2:
                             slots=pending_slots or initial_slots,
                         )
                         response_decision = turn_contract.response_decision if turn_contract is not None else None
-                        response_metadata = response_decision.metadata if response_decision is not None else {}
+                        response_metadata = (
+                            response_decision.get("metadata")
+                            if isinstance(response_decision, Mapping)
+                            else getattr(response_decision, "metadata", None)
+                        ) or {}
                         comparison_context = (
                             response_metadata
                             if isinstance(response_metadata, Mapping)

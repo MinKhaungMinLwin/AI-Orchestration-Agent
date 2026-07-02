@@ -734,14 +734,31 @@ _BEST_SELLER_VEHICLE_TOKEN_STOPWORDS = {
     "추천해줘", "알려줘", "보여줘", "순위", "판매량", "는", "가", "이", "좀",
 }
 _BEST_SELLER_VEHICLE_TRAILING_PARTICLE_RE = re.compile(r"(?:에서|으로|로|에|은|는|이|가|도|만|과|와)$")
+_GENERAL_BEST_SELLER_SCOPE_RE = re.compile(
+    r"^(?:전체|전부|모든|통합)?\s*(?:베스트\s*셀러|베스트셀러|인기\s*(?:상품|제품|타이어)|잘\s*팔리는\s*타이어)"
+    r"\s*(?:보기|보여줘|알려줘|확인|목록)?$",
+    re.IGNORECASE,
+)
+
+
+def is_general_best_seller_scope_request(text: str) -> bool:
+    text = re.sub(r"\s+", " ", str(text or "")).strip(" ,.?!")
+    if not text or not is_best_seller_request(text):
+        return False
+    return bool(_GENERAL_BEST_SELLER_SCOPE_RE.fullmatch(text))
 
 
 def extract_best_seller_vehicle_query(text: str) -> str | None:
     text = str(text or "").strip()
     if not text or not is_best_seller_request(text):
         return None
+    if is_general_best_seller_scope_request(text):
+        return None
     if _DEMOGRAPHIC_ATTRIBUTE_RE.search(text) and _DEMOGRAPHIC_PREFERENCE_RE.search(text):
         return None
+    vehicle_model_match = match_vehicle_model_category(text)
+    if vehicle_model_match is not None:
+        return vehicle_model_match.vehicle_query
 
     candidate = _BEST_SELLER_VEHICLE_STRIP_RE.sub(" ", text)
     candidate = re.sub(r"\s+", " ", candidate).strip(" ,.")
@@ -1033,7 +1050,9 @@ def build_discovery_intent_frame(
         entities["best_seller_period"] = best_seller_period
         entities.update(best_seller_search_params_from_text(text))
         best_seller_vehicle_query = ""
-        if vehicle_model_match is not None:
+        if is_general_best_seller_scope_request(text):
+            best_seller_vehicle_query = ""
+        elif vehicle_model_match is not None:
             best_seller_vehicle_query = vehicle_model_match.vehicle_query
         else:
             best_seller_vehicle_query = extract_best_seller_vehicle_query(text) or ""

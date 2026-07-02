@@ -13,6 +13,7 @@ from services.tstation.policies.discovery_intent_policy import (
     is_default_tire_shopping_request,
     is_deal_list_request,
     is_external_price_comparison_request,
+    is_general_best_seller_scope_request,
     plan_discovery_tools,
 )
 
@@ -149,6 +150,18 @@ def test_vehicle_best_seller_query_populates_vehicle_query() -> None:
     assert extract_best_seller_vehicle_query("그랜저 최근 3개월 베스트셀러 보여줘") == "그랜저"
     assert frame.entities["vehicle_query"] == "그랜저"
     assert plan.tool_args_patch == {"limit": 5, "months": 3, "vehicle_query": "그랜저"}
+
+
+def test_general_best_seller_scope_does_not_populate_vehicle_query() -> None:
+    for text in ("전체 베스트셀러 보기", "베스트셀러 보기", "인기 타이어 보여줘"):
+        frame = build_discovery_intent_frame(text)
+        plan = plan_discovery_tools(frame)
+
+        assert is_general_best_seller_scope_request(text)
+        assert extract_best_seller_vehicle_query(text) is None
+        assert frame.sub_intent == "best_seller_search"
+        assert "vehicle_query" not in frame.entities
+        assert plan.tool_args_patch == {"limit": 5}
 
 
 def test_vehicle_best_seller_query_without_object_noun_or_recency_word() -> None:
