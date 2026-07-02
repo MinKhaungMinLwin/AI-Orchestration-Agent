@@ -20705,8 +20705,16 @@ def _build_discovery_policy_context(
                     "rcmd_type",
                     "price_goal",
                 ):
-                    if context_frame.entities.get(key) and not merged_entities.get(key):
-                        merged_entities[key] = context_frame.entities[key]
+                    if not context_frame.entities.get(key) or merged_entities.get(key):
+                        continue
+                    if (
+                        key == "vehicle_category"
+                        and context_frame.entities.get("vehicle_category_source") == "model_inference"
+                    ):
+                        # A car model named in a PAST turn must not re-constrain the
+                        # current turn — stale-vehicle skip logic owns that decision.
+                        continue
+                    merged_entities[key] = context_frame.entities[key]
                 if merged_entities != discovery_frame.entities:
                     discovery_frame = replace(discovery_frame, entities=merged_entities)
         if (

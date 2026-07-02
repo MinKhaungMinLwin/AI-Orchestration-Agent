@@ -1132,6 +1132,11 @@ def get_products_recommendations_tool(
             - "truck_van": 경트럭/밴/트럭용
             ⚠️ "전기차 저소음" 같은 복합 의도는 rcmd_type="low_vibration", vehicle_type="ev" 로 전달한다.
             기존 rcmd_type="ev" 는 하위 호환용 단일 전기차 추천일 때만 사용한다.
+            ⚠️ 사용자가 차종명만 말한 경우(미등록 차량, 사이즈 미확보)에도 차종 지식으로 타입을
+            추론해 전달한다: "E클래스" → "passenger", "G바겐" → "suv", "포터" → "truck_van".
+            EV 전용 모델(모델Y, 아이오닉5 등)이 아니면 "ev" 를 추론값으로 쓰지 마라.
+            결과 0건이면 도구가 자동으로 vehicle_type 필터를 풀고 1회 재시도한다
+            (응답의 `recommendation_fallback.assistant_response_hint` 를 답변에 반영).
         min_price (int | None, optional): 최소 가격 필터 (원 단위). Optional.
             예: 200_000 ("20만원 이상")
         max_price (int | None, optional): 최대 가격 필터 (원 단위). Optional.
@@ -1148,6 +1153,8 @@ def get_products_recommendations_tool(
         - "프리미엄 사계절" → rcmd_type="tstation", prc_grd="프리미엄", season_nm="사계절"
         - "전기차 저소음" → rcmd_type="low_vibration", vehicle_type="ev"
         - "SUV 가성비" → rcmd_type="value", vehicle_type="suv"
+        - "G바겐 타이어 추천해줘" (미등록 차종명) → rcmd_type="tstation", vehicle_type="suv" (tire_size 생략)
+        - "E클래스 타이어 추천" (미등록 차종명) → rcmd_type="tstation", vehicle_type="passenger" (tire_size 생략)
 
     Notes:
         - 가격 필터는 BE 응답 후 클라이언트 사이드에서 extra_fvr_sale_prc (할인가) 기준으로 적용.
@@ -1289,14 +1296,15 @@ def get_products_recommendations_tool(
         *,
         call_rcmd_type: RcmdType,
         call_season_nm: str | None,
+        call_vehicle_type: str | None,
     ) -> dict:
         try:
-            vehicle_type_param = VehicleType(str(vehicle_type)) if vehicle_type else None
+            vehicle_type_param = VehicleType(str(call_vehicle_type)) if call_vehicle_type else None
         except ValueError:
             return _error_response(
                 http_status=422,
                 reason="INVALID_VEHICLE_TYPE",
-                message=f"지원하지 않는 vehicle_type: {vehicle_type}",
+                message=f"지원하지 않는 vehicle_type: {call_vehicle_type}",
             )
 
         response = get_products_recommendations(
@@ -1342,54 +1350,80 @@ def get_products_recommendations_tool(
         return _success_response(response.status_code, data)
 
     try:
-        result = _fetch_recommendation_once(call_rcmd_type=rcmd_type, call_season_nm=season_nm)
+        result = _fetch_recommendation_once(
+            call_rcmd_type=rcmd_type,
+            call_season_nm=season_nm,
+            call_vehicle_type=vehicle_type,
+        )
         if result.get("status") != "success":
             return result
 
         data = result.get("data")
         items = data.get("items") if isinstance(data, dict) else None
+        has_empty_items = not has_price_filter and isinstance(items, list) and not items
         should_try_winter_fallback = (
-            not has_price_filter
-            and isinstance(items, list)
-            and not items
+            has_empty_items
             and requested_season_nm == "겨울"
             and requested_rcmd_type in {"snow", "tstation"}
         )
-        if not should_try_winter_fallback:
-            return result
+        if should_try_winter_fallback:
+            for fallback_rcmd_type, fallback_season_nm, fallback_label in _WINTER_RECOMMENDATION_FALLBACKS:
+                fallback_result = _fetch_recommendation_once(
+                    call_rcmd_type=fallback_rcmd_type,
+                    call_season_nm=fallback_season_nm,
+                    call_vehicle_type=vehicle_type,
+                )
+                if fallback_result.get("status") != "success":
+                    continue
 
-        for fallback_rcmd_type, fallback_season_nm, fallback_label in _WINTER_RECOMMENDATION_FALLBACKS:
-            fallback_result = _fetch_recommendation_once(
-                call_rcmd_type=fallback_rcmd_type,
-                call_season_nm=fallback_season_nm,
+                fallback_data = fallback_result.get("data")
+                fallback_items = fallback_data.get("items") if isinstance(fallback_data, dict) else None
+                if not isinstance(fallback_items, list) or not fallback_items:
+                    continue
+
+                fallback_data["recommendation_fallback"] = {
+                    "requested_rcmd_type": requested_rcmd_type,
+                    "requested_season_nm": requested_season_nm,
+                    "applied_rcmd_type": fallback_rcmd_type.value,
+                    "applied_season_nm": fallback_season_nm,
+                    "assistant_response_hint": (
+                        "겨울용 상품은 현재 확인되지 않아 "
+                        f"같은 사이즈의 {fallback_label} 대안을 먼저 추천했습니다."
+                    ),
+                }
+                logger.info(
+                    "[TOOL][get_products_recommendations_tool] Applied winter fallback requested=%s/%s fallback=%s/%s items=%s",
+                    requested_rcmd_type,
+                    requested_season_nm,
+                    fallback_rcmd_type.value,
+                    fallback_season_nm,
+                    len(fallback_items),
+                )
+                return fallback_result
+
+        if has_empty_items and vehicle_type:
+            relaxed_result = _fetch_recommendation_once(
+                call_rcmd_type=rcmd_type,
+                call_season_nm=season_nm,
+                call_vehicle_type=None,
             )
-            if fallback_result.get("status") != "success":
-                continue
-
-            fallback_data = fallback_result.get("data")
-            fallback_items = fallback_data.get("items") if isinstance(fallback_data, dict) else None
-            if not isinstance(fallback_items, list) or not fallback_items:
-                continue
-
-            fallback_data["recommendation_fallback"] = {
-                "requested_rcmd_type": requested_rcmd_type,
-                "requested_season_nm": requested_season_nm,
-                "applied_rcmd_type": fallback_rcmd_type.value,
-                "applied_season_nm": fallback_season_nm,
-                "assistant_response_hint": (
-                    "겨울용 상품은 현재 확인되지 않아 "
-                    f"같은 사이즈의 {fallback_label} 대안을 먼저 추천했습니다."
-                ),
-            }
-            logger.info(
-                "[TOOL][get_products_recommendations_tool] Applied winter fallback requested=%s/%s fallback=%s/%s items=%s",
-                requested_rcmd_type,
-                requested_season_nm,
-                fallback_rcmd_type.value,
-                fallback_season_nm,
-                len(fallback_items),
-            )
-            return fallback_result
+            relaxed_data = relaxed_result.get("data") if relaxed_result.get("status") == "success" else None
+            relaxed_items = relaxed_data.get("items") if isinstance(relaxed_data, dict) else None
+            if isinstance(relaxed_items, list) and relaxed_items:
+                relaxed_data["recommendation_fallback"] = {
+                    "requested_vehicle_type": str(vehicle_type),
+                    "applied_vehicle_type": None,
+                    "assistant_response_hint": (
+                        "요청하신 차량 타입 전용 상품이 확인되지 않아 "
+                        "차량 타입 필터 없이 추천했습니다."
+                    ),
+                }
+                logger.info(
+                    "[TOOL][get_products_recommendations_tool] Relaxed empty vehicle_type filter requested=%s items=%s",
+                    vehicle_type,
+                    len(relaxed_items),
+                )
+                return relaxed_result
 
         return result
     except Exception as e:

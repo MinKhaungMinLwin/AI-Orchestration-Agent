@@ -24743,14 +24743,14 @@ def test_offroad_router_scenario_does_not_override_without_current_anchor() -> N
 
 
 def test_offroad_policy_patch_overrides_llm_generated_generic_args(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict = {}
+    calls: list[dict] = []
 
     class _Response:
         status_code = 200
         parsed = {"rcmd_type": "heavy_load", "total": 0, "items": []}
 
     def _fake_recommendations(**kwargs):
-        captured.update(kwargs)
+        calls.append(kwargs)
         return _Response()
 
     frame = build_discovery_intent_frame("험로 주행용 타이어 추천")
@@ -24767,8 +24767,10 @@ def test_offroad_policy_patch_overrides_llm_generated_generic_args(monkeypatch: 
         discovery_tools.current_discovery_recommendation_tool_patch.reset(token)
 
     assert result["status"] == "success"
-    assert captured["rcmd_type"] == discovery_tools.RcmdType.HEAVY_LOAD
-    assert captured["vehicle_type"] == "suv"
+    assert calls[0]["rcmd_type"] == discovery_tools.RcmdType.HEAVY_LOAD
+    assert calls[0]["vehicle_type"] == "suv"
+    # 0 items with a vehicle_type filter triggers one relaxed retry without it.
+    assert calls[-1]["vehicle_type"] is None
 
 
 def test_all_season_and_all_weather_catalog_conditions_stay_distinct() -> None:
