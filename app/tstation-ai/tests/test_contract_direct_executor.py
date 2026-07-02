@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 from schemas.tstation.slots import ConversationSlots
@@ -11,6 +14,87 @@ from services.tstation.executors.contract_required_tool_executor import (
 )
 from services.tstation.policies.contract_direct_executor import evaluate_contract_direct_path
 from services.tstation.policies.turn_contract import TurnContract
+from services.tstation.policies.reservation_history_policy import (
+    build_reservation_status_lookup_event,
+    build_reservation_store_info_event,
+    build_reservation_store_not_found_event,
+    select_reservation_store_row,
+)
+from services.tstation.policies.support_response_policy import (
+    build_general_cancel_fee_policy_event,
+    build_general_card_cancel_timing_policy_event,
+    build_support_faq_policy_event,
+)
+
+
+def test_contract_executor_and_base_agent_import_without_chat_module() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys;"
+                "import services.tstation.executors.contract_required_tool_executor;"
+                "raise SystemExit(1 if 'services.tstation.chat' in sys.modules else 0)"
+            ),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+
+    base_agent_source = Path("app/tstation-ai/services/tstation/agents/base_agent.py").read_text(encoding="utf-8")
+    assert "from services.tstation.chat import" not in base_agent_source
+
+
+def test_reservation_history_policy_builds_store_info_without_chat_module() -> None:
+    result = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "ord_no": "O123456789",
+                    "shop_nm": "티스테이션 강남점",
+                    "tel_no": "0212345678",
+                    "road_addr_base": "서울 강남구",
+                    "vst_rsv_dtime": "2026-07-04 10:00",
+                }
+            ]
+        },
+    }
+
+    row, reason = select_reservation_store_row("예약한 매장 전화번호 알려줘", result)
+    assert row is not None
+    assert reason == "single_reservation"
+
+    event = build_reservation_store_info_event(row, match_reason=reason)
+    assert event["source_domain"] == "transaction"
+    assert event["data"]["metadata"]["responseShapeKey"] == "reservation_store_info_lookup"
+    assert event["data"]["metadata"]["telNo"] == "02-1234-5678"
+
+
+def test_reservation_history_policy_builds_status_and_not_found_events() -> None:
+    status_event = build_reservation_status_lookup_event({"status": "success", "data": {"items": []}})
+    not_found_event = build_reservation_store_not_found_event("ambiguous")
+
+    assert status_event["data"]["metadata"]["responseShapeKey"] == "reservation_status_lookup"
+    assert status_event["data"]["metadata"]["reservationCount"] == 0
+    assert not_found_event["data"]["metadata"]["matchReason"] == "ambiguous"
+
+
+def test_support_policy_builders_do_not_depend_on_chat_module() -> None:
+    cancel_event = build_general_cancel_fee_policy_event("예약 취소하면 비용 발생해?")
+    card_event = build_general_card_cancel_timing_policy_event("카드 취소 반영 언제 돼?")
+    faq_event = build_support_faq_policy_event("tire_condition_photo_policy", "사진 첨부해서 봐줘")
+
+    assert cancel_event["source_domain"] == "transaction"
+    assert cancel_event["data"]["metadata"]["responseShapeKey"] == "general_cancel_fee_policy_summary"
+    assert card_event["source_domain"] == "support"
+    assert card_event["data"]["metadata"]["responseShapeKey"] == "general_card_cancel_timing_policy"
+    assert faq_event is not None
+    assert faq_event["data"]["metadata"]["responseShapeKey"] == "tire_condition_photo_policy"
 
 
 def _evidence(

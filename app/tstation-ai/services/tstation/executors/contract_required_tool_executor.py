@@ -23,6 +23,17 @@ from services.tstation.policies.resolved_context import (
     canonical_context_from_template_boundary,
     canonical_context_from_tool_boundary,
 )
+from services.tstation.policies.reservation_history_policy import (
+    build_reservation_status_lookup_event,
+    build_reservation_store_info_event,
+    build_reservation_store_not_found_event,
+    select_reservation_store_row,
+)
+from services.tstation.policies.support_response_policy import (
+    build_general_cancel_fee_policy_event,
+    build_general_card_cancel_timing_policy_event,
+    build_support_faq_policy_event,
+)
 from services.tstation.policies.turn_contract import TurnContract
 
 
@@ -697,23 +708,16 @@ async def recover_blocked_fast_path_to_contract_tool(
                 "data": chained_tool_result,
             })
         mapped_event = try_build_template(tool_data_list, assistant_text)
-        from services.tstation.chat import (
-            _build_reservation_status_lookup_event,
-            _build_reservation_store_info_event,
-            _reservation_store_not_found_event,
-            _select_reservation_store_row,
-        )
-
         if not isinstance(mapped_event, dict) and preferred_tool == "get_my_reservations_tool":
             if contract_intent == "reservation_store_info_lookup":
-                reservation_row, match_reason = _select_reservation_store_row(user_text, tool_result)
+                reservation_row, match_reason = select_reservation_store_row(user_text, tool_result)
                 mapped_event = (
-                    _build_reservation_store_info_event(reservation_row, match_reason=match_reason)
+                    build_reservation_store_info_event(reservation_row, match_reason=match_reason)
                     if reservation_row is not None
-                    else _reservation_store_not_found_event(match_reason)
+                    else build_reservation_store_not_found_event(match_reason)
                 )
             else:
-                mapped_event = _build_reservation_status_lookup_event(tool_result)
+                mapped_event = build_reservation_status_lookup_event(tool_result)
         if not isinstance(mapped_event, dict):
             return None
         mapped_event["source_domain"] = source_domain
@@ -736,18 +740,12 @@ async def recover_blocked_fast_path_to_contract_tool(
 
         raw_result = await asyncio.to_thread(_support_tool.invoke, tool_input)
         tool_result = raw_result if isinstance(raw_result, dict) else {"status": "success", "data": raw_result}
-        from services.tstation.chat import (
-            _build_general_cancel_fee_policy_event,
-            _build_general_card_cancel_timing_policy_event,
-            _build_support_faq_policy_event,
-        )
-
         if contract_intent == "general_cancel_fee_policy":
-            mapped_event = _build_general_cancel_fee_policy_event(user_text, tool_result=tool_result)
+            mapped_event = build_general_cancel_fee_policy_event(user_text, tool_result=tool_result)
         elif contract_intent == "general_card_cancel_timing_policy":
-            mapped_event = _build_general_card_cancel_timing_policy_event(user_text, tool_result=tool_result)
+            mapped_event = build_general_card_cancel_timing_policy_event(user_text, tool_result=tool_result)
         else:
-            mapped_event = _build_support_faq_policy_event(contract_intent, user_text, tool_result=tool_result)
+            mapped_event = build_support_faq_policy_event(contract_intent, user_text, tool_result=tool_result)
         if not isinstance(mapped_event, dict):
             return None
 
