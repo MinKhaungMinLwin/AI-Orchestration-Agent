@@ -52,6 +52,8 @@ docker/qdrant_storage/collections/
 /qdrant_storage/
 example/
 /docs/*
+!/docs/flow-transition-tables/
+!/docs/flow-transition-tables/*.md
 /docs/test-questions/
 /docs/inventory-and-reservation-flow.md
 
