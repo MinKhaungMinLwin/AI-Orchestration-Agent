@@ -42,7 +42,7 @@ from common.tstation_be_api_client.hkt_api_client.api.warranty_af_워런티_조�
     sync_detailed as get_product_warranties,
 )
 from common.tstation_be_api_client.hkt_api_client.models import EscalationRequest
-from langchain.tools import tool
+from langchain_core.tools import tool
 from common.tool_cache import tool_cache
 from services.tstation.rag import (
     get_qdrant_service,

@@ -228,6 +228,7 @@ def test_purchase_flow_frame_missing_slots_clears_when_booking_is_ready() -> Non
             "shop_name": "티스테이션 판교점",
             "requested_cal_day": "20260627",
             "rsv_hour": "0900",
+            "payment_amount": 420000,
             "pending_intent": "order",
             "goal_type": "place_order",
         },
@@ -761,11 +762,12 @@ def test_product_store_purchase_without_size_blocks_store_transaction_tools() ->
     assert frame.known_slots["quantity"] == 2
     assert frame.known_slots["store_name"] == "판교점"
     assert frame.missing_slots == ("tire_size",)
-    assert plan.preferred_tool == "transaction_store_preview_tool"
+    assert plan.preferred_tool is None
+    assert "transaction_store_preview_tool" in plan.forbidden_tools
     assert "order_summary_with_null_required_fields" in plan.forbidden_tools
     assert decision.template == TemplateName.QUICK_REPLY
     assert decision.metadata["missing_slots"] == ("tire_size",)
-    assert decision.required_slots == ()
+    assert decision.required_slots == ("tire_size",)
 
 
 def test_plain_store_search_masks_stale_stock_slots() -> None:
@@ -978,6 +980,7 @@ def test_tc233_complete_order_request_prefers_schedule_preview_not_store_hours()
             "quantity": 4,
             "store_name": "티스테이션 오목천점",
             "shop_id": "T01234",
+            "payment_amount": 420000,
         },
     )
     plan = plan_transaction_tools(frame)
@@ -988,8 +991,8 @@ def test_tc233_complete_order_request_prefers_schedule_preview_not_store_hours()
     )
 
     assert frame.intent == "quick_order_reservation"
-    assert frame.missing_slots == ()
-    assert plan.preferred_tool == "transaction_store_preview_tool"
+    assert frame.missing_slots == ("booking_datetime",)
+    assert plan.preferred_tool == "get_store_schedule_tool"
     assert "store_hours_instead_of_slots" in plan.forbidden_tools
     assert decision.template == TemplateName.DATE_PICK
     assert "store_hours_instead_of_slots" in decision.forbidden_behaviors
@@ -1011,6 +1014,7 @@ def test_datepick_selection_from_stock_preview_parent_order_builds_preorder() ->
             "region": "동탄",
             "requested_cal_day": "20260708",
             "rsv_hour": "15",
+            "payment_amount": 420000,
             "pending_intent": "stock",
             "goal_type": "store_with_stock",
             "stock_check_mode": "preview",

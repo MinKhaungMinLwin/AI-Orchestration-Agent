@@ -257,6 +257,7 @@ _STORE_CONTEXT_MARKER_RE = re.compile(
 
 def _normalize_store_name(value: str | None) -> str:
     text = re.sub(r"\s+", " ", str(value or "")).strip()
+    text = re.sub(r"^(?:\d{2,3}\s*/?\s*\d{2}|\d{2,3}\s*R?\s*\d{2})\s+", "", text, flags=re.IGNORECASE)
     return re.sub(r"^(?:티스테이션|더타이어샵)\s*", "", text, flags=re.IGNORECASE).strip()
 
 
@@ -276,7 +277,7 @@ def extract_valid_store_name(text: str) -> str | None:
         normalized = _normalize_store_name(candidate)
         if normalized in {"장착점", "지점"}:
             continue
-        return candidate
+        return normalized
     return None
 
 

@@ -1716,6 +1716,7 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
     if (
         frame.intent in {"stock_store_search", "quick_order_reservation"}
         and "tire_size" in action_required_slots
+        and len(action_required_slots) > 1
         and not frame.known_slots.get("goods_no")
     ):
         return ToolPlan(

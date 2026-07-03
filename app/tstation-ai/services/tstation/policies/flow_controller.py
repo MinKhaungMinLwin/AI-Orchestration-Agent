@@ -82,6 +82,8 @@ _PURCHASE_FORBIDDEN_TOOLS = (
     "get_store_schedule_tool",
     "get_multi_store_schedule_tool",
     "quick_order_tool",
+    "preorder_with_null_required_fields",
+    "order_summary_with_null_required_fields",
 )
 _CART_FORBIDDEN_TOOLS = (
     "get_final_price_tool",
@@ -91,6 +93,8 @@ _CART_FORBIDDEN_TOOLS = (
     "get_store_schedule_tool",
     "get_multi_store_schedule_tool",
     "quick_order_tool",
+    "preorder_with_null_required_fields",
+    "order_summary_with_null_required_fields",
 )
 _INVALID_REGION_LABELS = frozenset({
     "구매하기",
@@ -1738,6 +1742,7 @@ def resolve_purchase_order_flow(
                 "get_logistics_inventory_tool",
                 "get_store_inventory_tool",
                 "quick_order_tool",
+                "store_hours_instead_of_slots",
             ),
             preferred_tool="get_store_schedule_tool",
             template=TemplateName.DATE_PICK,
