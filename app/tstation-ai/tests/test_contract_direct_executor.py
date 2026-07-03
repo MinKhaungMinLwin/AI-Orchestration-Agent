@@ -27,6 +27,17 @@ from services.tstation.policies.support_response_policy import (
 )
 
 
+def _fake_transaction_tools_module(monkeypatch):
+    transaction_tools = SimpleNamespace(
+        get_store_inventory_tool=SimpleNamespace(),
+        get_store_list_tool=SimpleNamespace(),
+        get_my_reservations_tool=SimpleNamespace(),
+        get_store_schedule_tool=SimpleNamespace(),
+    )
+    monkeypatch.setitem(sys.modules, "services.tstation.agents.c_transaction_agent.tools", transaction_tools)
+    return transaction_tools
+
+
 def test_contract_executor_and_base_agent_import_without_chat_module() -> None:
     result = subprocess.run(
         [
@@ -454,9 +465,9 @@ def test_contract_direct_recommendation_preserves_explicit_rcmd_type(monkeypatch
 
 def test_contract_recovery_runs_active_flow_transaction_next_tool_from_discovery_contract(monkeypatch) -> None:
     from services.tstation import template_mapper
-    from services.tstation.agents.c_transaction_agent import tools as transaction_tools
     from services.tstation.executors import contract_required_tool_executor as executor
 
+    transaction_tools = _fake_transaction_tools_module(monkeypatch)
     captured_input: dict = {}
 
     def fake_store_list_invoke(tool_input: dict):
@@ -553,7 +564,7 @@ def test_contract_recovery_runs_active_flow_transaction_next_tool_from_discovery
 
 
 def test_contract_recovery_blocks_active_flow_next_tool_when_contract_forbids_it(monkeypatch) -> None:
-    from services.tstation.agents.c_transaction_agent import tools as transaction_tools
+    transaction_tools = _fake_transaction_tools_module(monkeypatch)
 
     def fail_store_list_invoke(tool_input: dict):
         raise AssertionError(f"forbidden tool should not run: {tool_input}")
@@ -596,9 +607,9 @@ def test_contract_recovery_blocks_active_flow_next_tool_when_contract_forbids_it
 
 def test_continue_active_flow_after_search_product_runs_next_flow_tool(monkeypatch) -> None:
     from services.tstation import template_mapper
-    from services.tstation.agents.c_transaction_agent import tools as transaction_tools
     from services.tstation.executors import contract_required_tool_executor as executor
 
+    transaction_tools = _fake_transaction_tools_module(monkeypatch)
     captured_input: dict = {}
 
     def fake_store_list_invoke(tool_input: dict):
@@ -683,9 +694,9 @@ def test_continue_active_flow_after_search_product_runs_next_flow_tool(monkeypat
 
 def test_continue_stock_flow_after_search_product_runs_inventory_tool(monkeypatch) -> None:
     from services.tstation import template_mapper
-    from services.tstation.agents.c_transaction_agent import tools as transaction_tools
     from services.tstation.executors import contract_required_tool_executor as executor
 
+    transaction_tools = _fake_transaction_tools_module(monkeypatch)
     captured_input: dict = {}
 
     def fake_inventory_invoke(tool_input: dict):
@@ -768,8 +779,9 @@ def test_continue_stock_flow_after_search_product_runs_inventory_tool(monkeypatc
 
 def test_contract_recovery_blocks_mapper_template_that_violates_contract(monkeypatch) -> None:
     from services.tstation import template_mapper
-    from services.tstation.agents.c_transaction_agent import tools as transaction_tools
     from services.tstation.executors import contract_required_tool_executor as executor
+
+    transaction_tools = _fake_transaction_tools_module(monkeypatch)
 
     def fake_inventory_invoke(tool_input: dict):
         return {"status": "success", "data": {"stores": [{"shop_id": "S001", "available_qty": 4}]}}
@@ -827,8 +839,9 @@ def test_contract_recovery_blocks_mapper_template_that_violates_contract(monkeyp
 
 def test_inventory_only_stock_recovery_sanitizes_booking_location(monkeypatch) -> None:
     from services.tstation import template_mapper
-    from services.tstation.agents.c_transaction_agent import tools as transaction_tools
     from services.tstation.executors import contract_required_tool_executor as executor
+
+    transaction_tools = _fake_transaction_tools_module(monkeypatch)
 
     def fake_store_list_invoke(tool_input: dict):
         return {
@@ -892,9 +905,9 @@ def test_inventory_only_stock_recovery_sanitizes_booking_location(monkeypatch) -
     assert recovery["event"]["data"]["contractMetadata"]["isBookingFlowSanitized"] is True
 
 def test_owned_reservation_lookup_recovery_runs_from_dormant_purchase_context(monkeypatch) -> None:
-    from services.tstation.agents.c_transaction_agent import tools as transaction_tools
     from services.tstation.executors import contract_required_tool_executor as executor
 
+    transaction_tools = _fake_transaction_tools_module(monkeypatch)
     captured_input: dict = {}
 
     def fake_reservations_invoke(tool_input: dict):
@@ -946,8 +959,9 @@ def test_owned_reservation_lookup_recovery_runs_from_dormant_purchase_context(mo
 
 def test_store_only_recovery_blocks_mapper_datepick_template(monkeypatch) -> None:
     from services.tstation import template_mapper
-    from services.tstation.agents.c_transaction_agent import tools as transaction_tools
     from services.tstation.executors import contract_required_tool_executor as executor
+
+    transaction_tools = _fake_transaction_tools_module(monkeypatch)
 
     def fake_store_list_invoke(tool_input: dict):
         return {
@@ -992,8 +1006,9 @@ def test_store_only_recovery_blocks_mapper_datepick_template(monkeypatch) -> Non
 
 def test_purchase_schedule_recovery_blocks_mapper_preorder_before_price(monkeypatch) -> None:
     from services.tstation import template_mapper
-    from services.tstation.agents.c_transaction_agent import tools as transaction_tools
     from services.tstation.executors import contract_required_tool_executor as executor
+
+    transaction_tools = _fake_transaction_tools_module(monkeypatch)
 
     def fake_schedule_invoke(tool_input: dict):
         return {
@@ -1053,8 +1068,9 @@ def test_purchase_schedule_recovery_blocks_mapper_preorder_before_price(monkeypa
 
 def test_purchase_schedule_recovery_validates_mapper_with_current_called_tools(monkeypatch) -> None:
     from services.tstation import template_mapper
-    from services.tstation.agents.c_transaction_agent import tools as transaction_tools
     from services.tstation.executors import contract_required_tool_executor as executor
+
+    transaction_tools = _fake_transaction_tools_module(monkeypatch)
 
     def fake_schedule_invoke(tool_input: dict):
         return {
@@ -1161,7 +1177,7 @@ def test_support_recovery_blocks_builder_action_template_that_violates_contract(
     assert recovery is None
 
 def test_continue_active_flow_after_tool_skips_same_tool(monkeypatch) -> None:
-    from services.tstation.agents.c_transaction_agent import tools as transaction_tools
+    transaction_tools = _fake_transaction_tools_module(monkeypatch)
 
     def fail_store_list_invoke(tool_input: dict):
         raise AssertionError(f"same tool should not be repeated: {tool_input}")
