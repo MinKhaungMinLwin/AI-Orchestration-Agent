@@ -1662,6 +1662,42 @@ def test_response_policy_guard_fallback_does_not_persist_stale_preorder_context(
     assert event["data"]["metadata"]["contract_intent"] == "general_cancel_fee_policy"
 
 
+def test_support_policy_guard_owns_response_over_stale_purchase_flow() -> None:
+    contract = TurnContract(
+        domain="support",
+        intent="general_cancel_fee_policy",
+        known_slots={
+            **_purchase_slots(payment_amount=420000, price_basis="cheapest_final_prc"),
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "region": "예약 취소 수수료 있어",
+        },
+        response_decision={
+            "template": "quickReply",
+            "forbidden_behaviors": [
+                "resume_stale_transaction_flow",
+                "start_owned_record_lookup",
+                "normalize_as_purchase_or_schedule",
+            ],
+            "metadata": {"response_shape_key": "general_cancel_fee_policy"},
+        },
+        action_mode="support_policy_answer",
+        context_state="dormant",
+        dormant_context_reason="support_turn",
+    )
+
+    event = build_response_policy_guard_event(contract)
+
+    assert event["template"] == "quickReply"
+    assert event["source_domain"] == "support"
+    assert event["assistant_response_source"] == "code_turn_contract_support_response_guard"
+    assert event["data"]["metadata"]["contract_intent"] == "general_cancel_fee_policy"
+    assert event["data"]["metadata"]["response_shape_key"] == "general_cancel_fee_policy"
+    assert event["data"]["metadata"].get("flowId") is None
+    assert "매장이나 지역" not in event["data"]["assistantResponse"]
+    assert "구매를 진행" not in event["data"]["assistantResponse"]
+
+
 def test_required_slot_clarification_fallback_does_not_persist_stale_order_complete_context() -> None:
     contract = TurnContract(
         domain="transaction",

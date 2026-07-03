@@ -1871,18 +1871,6 @@ def build_response_policy_guard_event(contract: TurnContract) -> dict[str, Any]:
     response_decision = contract.response_decision or {}
     forbidden = response_decision.get("forbidden_behaviors") if isinstance(response_decision, Mapping) else ()
     forbidden_set = {str(item) for item in forbidden} if isinstance(forbidden, list | tuple) else set()
-    purchase_flow_event = build_purchase_flow_fallback_event(
-        intent=str(contract.intent or ""),
-        known_slots=contract.known_slots,
-    )
-    if purchase_flow_event is not None:
-        return _annotate_contract_guard_event(purchase_flow_event, contract, reason="response_policy_guard")
-    preorder_event = build_preorder_event(contract, contract.known_slots)
-    if preorder_event is not None:
-        return _annotate_contract_guard_event(preorder_event, contract, reason="response_policy_guard")
-    unknown_store_service_event = _build_unknown_store_service_guard_event(contract)
-    if unknown_store_service_event is not None:
-        return _annotate_contract_guard_event(unknown_store_service_event, contract, reason="response_policy_guard")
     if _support_answer_contract_owns_response(
         domain=str(contract.domain or ""),
         intent=str(contract.intent or ""),
@@ -1917,6 +1905,18 @@ def build_response_policy_guard_event(contract: TurnContract) -> dict[str, Any]:
                 },
             },
         }, contract, reason="response_policy_guard")
+    purchase_flow_event = build_purchase_flow_fallback_event(
+        intent=str(contract.intent or ""),
+        known_slots=contract.known_slots,
+    )
+    if purchase_flow_event is not None:
+        return _annotate_contract_guard_event(purchase_flow_event, contract, reason="response_policy_guard")
+    preorder_event = build_preorder_event(contract, contract.known_slots)
+    if preorder_event is not None:
+        return _annotate_contract_guard_event(preorder_event, contract, reason="response_policy_guard")
+    unknown_store_service_event = _build_unknown_store_service_guard_event(contract)
+    if unknown_store_service_event is not None:
+        return _annotate_contract_guard_event(unknown_store_service_event, contract, reason="response_policy_guard")
     tool_error_behaviors = {
         "assert_price_without_tool_result",
         "assert_coupon_without_tool_result",
