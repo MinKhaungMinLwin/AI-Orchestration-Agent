@@ -136,7 +136,7 @@ The flow tables must keep tools and FE templates/actions separate:
 
 ## Current Stabilization Checkpoint
 
-Status after steps 1-18E:
+Status after steps 1-19D:
 
 1. The five flow transition tables now separate backend tools from FE templates/actions, next tool, next template/action, and expected persistence.
 2. Purchase, stock, store, support, and reservation/preorder boundaries have focused regression coverage in the existing policy test suites.
@@ -161,6 +161,7 @@ Status after steps 1-18E:
 18. Step 18E keeps mapper priority subordinate to the current contract by annotating direct-executor mapper events with current `called_tools` before validation, and adding coverage for compatible mapper output, forbidden mapper output, and same mapper event/different contract outcomes.
 19. Phase 9 local E2E exposed an active-purchase interrupt gap where support/policy questions could be consumed as purchase slot-fill values. Steps 19A-19B make router-wins informational/policy intents override `expected_slot_fill:*`, dormant the purchase context, and drop interrupted `region`, `store`, and `schedule` slot-fill values before contract validation.
 20. Step 19C adds explicit-resume coverage after support interrupts: resumed purchase contexts keep product, size, and quantity, but stop at the missing store or schedule boundary and block premature `datepick`, `preOrder`, `orderComplete`, and `quick_order_tool` outputs until the required boundary is satisfied.
+21. Step 19D makes code-frame policy intents eligible for router-wins interrupt handling when router `policy_intent` is `none`, preventing general policy questions from being consumed as purchase slot-fill values.
 
 Verified checkpoint command:
 
@@ -175,7 +176,7 @@ uv run pytest `
   -q
 ```
 
-Latest result: `134 passed, 1 warning`.
+Latest result: `135 passed, 1 warning`.
 
 Current next step:
 

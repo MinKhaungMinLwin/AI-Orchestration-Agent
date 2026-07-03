@@ -4379,6 +4379,26 @@ def _datepick_requested_cal_day_from_text(
     return None
 
 
+def _datepick_selected_hour(datepick_data: Mapping[str, Any]) -> str | None:
+    dates = datepick_data.get("dates")
+    selected_idx = datepick_data.get("selectedDate")
+    if not isinstance(dates, list) or not isinstance(selected_idx, int) or not 0 <= selected_idx < len(dates):
+        return None
+    selected = dates[selected_idx]
+    if not isinstance(selected, Mapping):
+        return None
+    available_times = selected.get("availableTimes")
+    if not isinstance(available_times, list) or not available_times:
+        return None
+    first_time = available_times[0]
+    if isinstance(first_time, int):
+        return f"{first_time:02d}"
+    first_time_text = str(first_time or "").strip()
+    if first_time_text.isdigit():
+        return f"{int(first_time_text):02d}"
+    return _reservation_hour_from_text(first_time_text)
+
+
 def datepick_slot_values_from_data(
     template_data: Mapping[str, Any] | None,
     *,
@@ -4436,6 +4456,8 @@ def datepick_slot_values_from_data(
     text = str(user_text or "").strip()
     rsv_hour = _reservation_hour_from_text(text)
     rsv_hour = rsv_hour or str(canonical_values.get("rsv_hour") or "").strip()
+    if not rsv_hour and text:
+        rsv_hour = _datepick_selected_hour(template_data)
     if rsv_hour:
         slot_values["rsv_hour"] = rsv_hour
 

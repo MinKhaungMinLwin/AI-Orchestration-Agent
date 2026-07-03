@@ -1252,6 +1252,7 @@ _CURRENT_TURN_SUPPORT_POLICY_ACTION_INTENTS = frozenset({
     "price_policy_faq",
     "payment_error_troubleshooting",
     "order_document_guidance",
+    "general_cancel_fee_policy",
     "general_card_cancel_timing_policy",
     "delivery_delay_reservation_schedule_policy",
     "reservation_window_policy",

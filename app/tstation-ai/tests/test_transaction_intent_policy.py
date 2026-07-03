@@ -416,6 +416,34 @@ def test_general_cancel_fee_policy_uses_faq_only_contract() -> None:
     assert decision.metadata["response_shape_key"] == "general_cancel_fee_policy_summary"
 
 
+def test_general_cancel_fee_policy_interrupts_active_purchase_without_resuming_order_tools() -> None:
+    user_text = "\uc608\uc57d \ucde8\uc18c \uc218\uc218\ub8cc \uc788\uc5b4?"
+    frame = build_transaction_intent_frame(
+        user_text,
+        known_slots={
+            "goods_no": "G000000312679",
+            "tire_size": "245/45R18",
+            "ord_qty": 2,
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "tire_model": "Ventus S2 AS",
+        },
+    )
+    plan = plan_transaction_tools(frame)
+    decision = decide_transaction_response(intent=frame.intent, user_text=user_text, known_slots=dict(frame.known_slots))
+
+    assert frame.intent == "general_cancel_fee_policy"
+    assert frame.sub_intent == "cancel_fee_policy"
+    assert frame.known_slots["pending_intent"] == "general_cancel_fee_policy"
+    assert plan.allowed_tools == ("search_faq_hybrid_tool",)
+    assert plan.preferred_tool == "search_faq_hybrid_tool"
+    assert "transaction_store_preview_tool" not in plan.allowed_tools
+    assert "get_store_schedule_tool" in plan.forbidden_tools
+    assert "quick_order_tool" in plan.forbidden_tools
+    assert decision.template == TemplateName.QUICK_REPLY
+    assert decision.metadata["response_shape_key"] == "general_cancel_fee_policy_summary"
+
+
 def test_delivery_delay_reservation_schedule_policy_uses_faq_only_contract() -> None:
     user_text = "주문 다 했는데 배송 지연 되면 예약 일정도 자동으로 변경돼?"
     frame = build_transaction_intent_frame(user_text, known_slots={})
