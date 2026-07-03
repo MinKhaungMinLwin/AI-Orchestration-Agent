@@ -2873,6 +2873,8 @@ def response_contract_violations(
         assistant_response_source=assistant_response_source,
         response_shape_key=response_shape_key,
         called_tools=called_tools,
+        tool_inputs=tool_inputs,
+        structured_sources=structured_sources,
         contract=contract,
     )
     if quick_order_violation is not None:
@@ -4352,6 +4354,8 @@ def _quick_order_execute_contract_violation(
     assistant_response_source: str | None,
     response_shape_key: str | None,
     called_tools: list[str] | tuple[str, ...] | None,
+    tool_inputs: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...] | None,
+    structured_sources: list[tuple[str, Mapping[str, Any]]] | tuple[tuple[str, Mapping[str, Any]], ...] | None,
     contract: TurnContract | None,
 ) -> dict[str, Any] | None:
     if contract is None:
@@ -4379,12 +4383,42 @@ def _quick_order_execute_contract_violation(
             "template": str(template or ""),
             "assistant_response_text": str(assistant_response_text or "")[:160],
         }
+    if str(template or "") == "orderComplete" and not _has_successful_quick_order_tool_result(
+        tool_inputs=tool_inputs,
+        structured_sources=structured_sources,
+    ):
+        return {
+            "type": "order_complete_without_successful_quick_order_tool",
+            "assistant_response_source": str(assistant_response_source or ""),
+            "response_shape_key": str(response_shape_key or ""),
+        }
     if str(response_shape_key or "") == "transaction_fallback":
         return {
             "type": "quick_order_execute_fell_back_without_resolution",
             "assistant_response_source": str(assistant_response_source or ""),
         }
     return None
+
+
+def _has_successful_quick_order_tool_result(
+    *,
+    tool_inputs: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...] | None,
+    structured_sources: list[tuple[str, Mapping[str, Any]]] | tuple[tuple[str, Mapping[str, Any]], ...] | None,
+) -> bool:
+    for tool_name, output in tuple(structured_sources or ()):
+        if tool_name == "quick_order_tool" and _is_successful_tool_output(output):
+            return True
+    for tool_input in tuple(tool_inputs or ()):
+        if str(tool_input.get("tool") or "") != "quick_order_tool":
+            continue
+        output = tool_input.get("data") or tool_input.get("output") or tool_input.get("result")
+        if isinstance(output, Mapping) and _is_successful_tool_output(output):
+            return True
+    return False
+
+
+def _is_successful_tool_output(output: Mapping[str, Any]) -> bool:
+    return str(output.get("status") or "").lower() == "success"
 
 
 def _quick_order_reservation_contract_violation(

@@ -1445,6 +1445,7 @@ class FlowState:
         preserved_fields: list[str] = []
         cleared_fields: list[str] = []
         conflicts: dict[str, dict[str, Any]] = {}
+        invalidated_sections: set[str] = set()
         existing_product = dict(merged.product)
         existing_schedule = dict(merged.schedule)
 
@@ -1453,6 +1454,7 @@ class FlowState:
             conflict_key, conflict_values, clear_goods_no = product_change
             conflicts[conflict_key] = conflict_values
             _clear_product_dependent_context(merged, cleared_fields, clear_goods_no=clear_goods_no)
+            invalidated_sections.update(("store", "schedule", "payment"))
 
         if _tire_size_changed(existing_product, delta.product):
             conflicts["tire_size"] = {
@@ -1460,6 +1462,7 @@ class FlowState:
                 "incoming": _normalize_vehicle_tire_size(delta.product.get("tire_size")),
             }
             _clear_product_dependent_context(merged, cleared_fields, clear_goods_no=True)
+            invalidated_sections.update(("store", "schedule", "payment"))
 
         existing_shop_id = str(merged.store.get("shop_id") or "").strip()
         incoming_shop_id = str(delta.store.get("shop_id") or "").strip()
@@ -1467,12 +1470,14 @@ class FlowState:
             conflicts["shop_id"] = {"existing": existing_shop_id, "incoming": incoming_shop_id}
             cleared_fields.extend(_clear_section(merged.schedule))
             cleared_fields.extend(_clear_section(merged.payment))
+            invalidated_sections.update(("schedule", "payment"))
 
         existing_region = str(merged.store.get("region") or "").strip()
         incoming_region = str(delta.store.get("region") or "").strip()
         if existing_region and incoming_region and existing_region != incoming_region and not delta.store.get("shop_id"):
             cleared_fields.extend(_clear_section(merged.schedule))
             cleared_fields.extend(_clear_section(merged.payment))
+            invalidated_sections.update(("schedule", "payment"))
             for field_name in ("shop_id", "shop_name"):
                 if merged.store.pop(field_name, None) not in _EMPTY_VALUES:
                     cleared_fields.append(field_name)
@@ -1483,6 +1488,7 @@ class FlowState:
                 "incoming": _non_empty_mapping(delta.schedule),
             }
             _clear_payment_context(merged, cleared_fields)
+            invalidated_sections.add("payment")
             merged.payment["payment_amount_stale"] = True
             committed_fields.append("payment_amount_stale")
 
@@ -1495,6 +1501,7 @@ class FlowState:
                     cleared_fields.append("price_basis")
                 if merged.payment.pop("price_source_tool", None) not in _EMPTY_VALUES:
                     cleared_fields.append("price_source_tool")
+            invalidated_sections.add("payment")
             merged.payment.pop("payment_amount_stale", None)
             merged.payment["payment_amount_stale"] = True
             committed_fields.append("payment_amount_stale")
@@ -1502,6 +1509,8 @@ class FlowState:
         preserve_purchase_intent = _is_purchase_intent_group(merged.intent) and _is_stock_intent_group(delta.intent)
 
         for section_name in ("product", "store", "schedule", "payment", "intent"):
+            if section_name in invalidated_sections:
+                continue
             target = getattr(merged, section_name)
             incoming = getattr(delta, section_name)
             for key, value in incoming.items():
@@ -1557,6 +1566,7 @@ class FlowState:
         preserved_fields: list[str] = []
         cleared_fields: list[str] = []
         conflicts: dict[str, dict[str, Any]] = {}
+        invalidated_sections: set[str] = set()
         existing_product = dict(merged.product)
         existing_vehicle = dict(merged.vehicle)
         existing_schedule = dict(merged.schedule)
@@ -1608,12 +1618,14 @@ class FlowState:
                     clear_goods_no=True,
                     clear_product_resolution=True,
                 )
+                invalidated_sections.update(("store", "schedule", "payment"))
 
         product_change = _product_resolution_change(existing_product, delta.product)
         if product_change:
             conflict_key, conflict_values, clear_goods_no = product_change
             conflicts[conflict_key] = conflict_values
             _clear_product_dependent_context(merged, cleared_fields, clear_goods_no=clear_goods_no)
+            invalidated_sections.update(("store", "schedule", "payment"))
 
         if _tire_size_changed(existing_product, delta.product):
             conflicts["tire_size"] = {
@@ -1621,6 +1633,7 @@ class FlowState:
                 "incoming": _normalize_vehicle_tire_size(delta.product.get("tire_size")),
             }
             _clear_product_dependent_context(merged, cleared_fields, clear_goods_no=True)
+            invalidated_sections.update(("store", "schedule", "payment"))
 
         existing_shop_id = str(merged.store.get("shop_id") or "").strip()
         incoming_shop_id = str(delta.store.get("shop_id") or "").strip()
@@ -1628,12 +1641,14 @@ class FlowState:
             conflicts["shop_id"] = {"existing": existing_shop_id, "incoming": incoming_shop_id}
             cleared_fields.extend(_clear_section(merged.schedule))
             cleared_fields.extend(_clear_section(merged.payment))
+            invalidated_sections.update(("schedule", "payment"))
 
         existing_region = str(merged.store.get("region") or "").strip()
         incoming_region = str(delta.store.get("region") or "").strip()
         if existing_region and incoming_region and existing_region != incoming_region and not delta.store.get("shop_id"):
             cleared_fields.extend(_clear_section(merged.schedule))
             cleared_fields.extend(_clear_section(merged.payment))
+            invalidated_sections.update(("schedule", "payment"))
             for field_name in ("shop_id", "shop_name"):
                 if merged.store.pop(field_name, None) not in _EMPTY_VALUES:
                     cleared_fields.append(field_name)
@@ -1644,6 +1659,7 @@ class FlowState:
                 "incoming": _non_empty_mapping(delta.schedule),
             }
             _clear_payment_context(merged, cleared_fields)
+            invalidated_sections.add("payment")
             merged.payment["payment_amount_stale"] = True
             committed_fields.append("payment_amount_stale")
 
@@ -1655,6 +1671,7 @@ class FlowState:
                     cleared_fields.append("price_basis")
                 if merged.payment.pop("price_source_tool", None) not in _EMPTY_VALUES:
                     cleared_fields.append("price_source_tool")
+            invalidated_sections.add("payment")
             merged.payment.pop("payment_amount_stale", None)
             if delta.payment.get("payment_amount") in _EMPTY_VALUES:
                 merged.payment["payment_amount_stale"] = True
@@ -1669,6 +1686,8 @@ class FlowState:
             "payment",
             "intent",
         ):
+            if section_name in invalidated_sections:
+                continue
             target = getattr(merged, section_name)
             incoming = getattr(delta, section_name)
             for key, value in incoming.items():

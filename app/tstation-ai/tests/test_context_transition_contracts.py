@@ -60,6 +60,87 @@ def test_purchase_new_product_transition_invalidates_stale_store_schedule_and_pr
     assert context["next_tool"] == "search_product_tool"
 
 
+def test_purchase_store_change_does_not_recommit_stale_schedule_or_price_from_delta() -> None:
+    result = commit_flow_state(
+        {
+            "flow_type": "purchase",
+            "status": "active",
+            "flow_step": "build_preorder",
+            "product": _purchase_slots(),
+            "store": {"shop_id": "F00721", "shop_name": "T-Station Pangyo"},
+            "schedule": {"requested_cal_day": "20260705", "rsv_hour": "17"},
+            "payment": {"payment_amount": 420000, "price_basis": "cheapest_final_prc"},
+            "intent": {"pending_intent": "order", "goal_type": "place_order"},
+        },
+        {
+            "goods_no": "G000000309783",
+            "product_name": "Ventus S2 AS",
+            "tire_size": "225/45R17",
+            "ord_qty": 4,
+            "shop_id": "F00999",
+            "shop_name": "T-Station Gangnam",
+            "requested_cal_day": "20260705",
+            "rsv_hour": "17",
+            "payment_amount": 420000,
+            "price_basis": "cheapest_final_prc",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        source="transition_table:store_change",
+        flow_type="purchase",
+        status="active",
+    )
+
+    context = result.state.to_active_flow_context()
+
+    assert context["store"]["shop_id"] == "F00999"
+    assert context["current_step"] == "resolve_schedule"
+    assert "schedule" not in context
+    assert "payment" not in context
+    assert "shop_id" in result.metadata["flow_state_conflicts"]
+
+
+def test_purchase_product_change_does_not_recommit_stale_store_schedule_or_price_from_delta() -> None:
+    result = commit_flow_state(
+        {
+            "flow_type": "purchase",
+            "status": "active",
+            "flow_step": "build_preorder",
+            "product": _purchase_slots(),
+            "store": {"shop_id": "F00721", "shop_name": "T-Station Pangyo"},
+            "schedule": {"requested_cal_day": "20260705", "rsv_hour": "17"},
+            "payment": {"payment_amount": 420000, "price_basis": "cheapest_final_prc"},
+            "intent": {"pending_intent": "order", "goal_type": "place_order"},
+        },
+        {
+            "goods_no": "G000000999999",
+            "product_name": "Kinergy ST AS",
+            "tire_size": "225/45R17",
+            "ord_qty": 4,
+            "shop_id": "F00721",
+            "shop_name": "T-Station Pangyo",
+            "requested_cal_day": "20260705",
+            "rsv_hour": "17",
+            "payment_amount": 420000,
+            "price_basis": "cheapest_final_prc",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        source="transition_table:product_change",
+        flow_type="purchase",
+        status="active",
+    )
+
+    context = result.state.to_active_flow_context()
+
+    assert context["product"]["goods_no"] == "G000000999999"
+    assert context["current_step"] == "ask_store"
+    assert "store" not in context
+    assert "schedule" not in context
+    assert "payment" not in context
+    assert "goods_no" in result.metadata["flow_state_conflicts"]
+
+
 def test_purchase_preorder_requires_price_basis_before_template_action() -> None:
     contract = TurnContract(
         domain="transaction",
@@ -117,6 +198,7 @@ def test_purchase_order_complete_requires_successful_quick_order_tool_boundary()
         domain="transaction",
         intent="quick_order_execute",
         known_slots=_purchase_slots(payment_amount=420000, price_basis="cheapest_final_prc"),
+        allowed_tools=("quick_order_tool",),
         response_decision={
             "template": "orderComplete",
             "metadata": {"response_shape_key": "quick_order_execute"},
@@ -134,6 +216,58 @@ def test_purchase_order_complete_requires_successful_quick_order_tool_boundary()
     )
 
     assert {violation["type"] for violation in violations} == {"order_complete_without_quick_order_tool"}
+
+
+def test_purchase_order_complete_blocks_failed_quick_order_tool_result() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="quick_order_execute",
+        known_slots=_purchase_slots(payment_amount=420000, price_basis="cheapest_final_prc"),
+        allowed_tools=("quick_order_tool",),
+        response_decision={
+            "template": "orderComplete",
+            "metadata": {"response_shape_key": "quick_order_execute"},
+        },
+        action_mode="purchase_continuation",
+        context_state="active",
+    )
+
+    violations = response_contract_violations(
+        template="orderComplete",
+        assistant_response_source="transaction_agent",
+        response_shape_key="quick_order_execute",
+        called_tools=("quick_order_tool",),
+        structured_sources=(("quick_order_tool", {"status": "error", "data": {}}),),
+        contract=contract,
+    )
+
+    assert "order_complete_without_successful_quick_order_tool" in {violation["type"] for violation in violations}
+
+
+def test_purchase_order_complete_allows_successful_quick_order_tool_result() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="quick_order_execute",
+        known_slots=_purchase_slots(payment_amount=420000, price_basis="cheapest_final_prc"),
+        allowed_tools=("quick_order_tool",),
+        response_decision={
+            "template": "orderComplete",
+            "metadata": {"response_shape_key": "quick_order_execute"},
+        },
+        action_mode="purchase_continuation",
+        context_state="active",
+    )
+
+    violations = response_contract_violations(
+        template="orderComplete",
+        assistant_response_source="transaction_agent",
+        response_shape_key="quick_order_execute",
+        called_tools=("quick_order_tool",),
+        structured_sources=(("quick_order_tool", {"status": "success", "data": {}}),),
+        contract=contract,
+    )
+
+    assert violations == []
 
 
 def test_support_policy_turn_blocks_stale_purchase_templates_and_tools() -> None:
