@@ -821,6 +821,25 @@ def test_plain_store_search_masks_stale_stock_slots() -> None:
     assert "transaction_store_preview_tool" in plan.forbidden_tools
 
 
+def test_plain_store_search_does_not_reuse_unsized_purchase_context() -> None:
+    frame = build_transaction_intent_frame(
+        "\uac15\ub0a8 \ud2f0\uc2a4\ud14c\uc774\uc158 \ub9e4\uc7a5 \ucc3e\uc544\uc918",
+        known_slots={
+            "goods_no": "G000000310126",
+            "product_name": "Ventus S2 AS",
+            "ord_qty": 4,
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+    plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "store_search"
+    assert frame.known_slots["region"] == "\uac15\ub0a8"
+    assert frame.known_slots.get("goods_no") is None
+    assert plan.preferred_tool == "search_stores_tool"
+    assert "transaction_store_preview_tool" in plan.forbidden_tools
+
 def test_tc020_gwanggyo_nearby_store_search_prefers_unified_search() -> None:
     frame = build_transaction_intent_frame("광교 주변 매장 알려줘")
     plan = plan_transaction_tools(frame)

@@ -102,6 +102,30 @@ def test_stock_store_lookup_candidate_uses_contract_boundary() -> None:
     assert candidate.tool_input["region_code"] == "강남"
 
 
+def test_plain_store_search_candidate_uses_contract_tool_args_patch() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="store_search",
+        known_slots={"pending_intent": "order", "goal_type": "store_finder"},
+        allowed_tools=("search_stores_tool", "get_store_list_tool"),
+        forbidden_tools=("transaction_store_preview_tool", "get_store_schedule_tool"),
+        preferred_tool="search_stores_tool",
+        tool_args_patch={"region_code": "Gangnam"},
+        response_decision={"template": "quickReply", "metadata": {"response_shape_key": "transaction_fallback"}},
+        context_state="dormant",
+    )
+
+    candidate = _contract_required_tool_candidate(
+        turn_contract=contract,
+        user_text="find T-Station stores in Gangnam",
+        merged_slots=None,
+    )
+
+    assert candidate is not None
+    assert candidate.tool_name == "search_stores_tool"
+    assert candidate.tool_input_source == "turn_contract_required_store_search"
+    assert candidate.tool_input == {"region_code": "Gangnam"}
+
 def test_purchase_store_preview_candidate_uses_contract_patch() -> None:
     contract = TurnContract(
         domain="transaction",

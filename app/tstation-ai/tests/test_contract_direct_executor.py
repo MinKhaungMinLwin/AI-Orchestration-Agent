@@ -825,6 +825,125 @@ def test_contract_recovery_blocks_mapper_template_that_violates_contract(monkeyp
 
     assert recovery is None
 
+def test_inventory_only_stock_recovery_sanitizes_booking_location(monkeypatch) -> None:
+    from services.tstation import template_mapper
+    from services.tstation.agents.c_transaction_agent import tools as transaction_tools
+    from services.tstation.executors import contract_required_tool_executor as executor
+
+    def fake_store_list_invoke(tool_input: dict):
+        return {
+            "status": "success",
+            "data": {"stores": [{"shop_id": "S001", "shop_nm": "Gangnam Store"}]},
+        }
+
+    def fake_template(tool_data_list: list[dict], assistant_text: str):
+        assert [entry["tool"] for entry in tool_data_list] == ["get_store_list_tool"]
+        return {
+            "type": "data",
+            "template": "location",
+            "data": {
+                "assistantResponse": assistant_text,
+                "stores": [{"nameAddress": "Gangnam Store"}],
+                "metadata": [{"shopId": "S001"}],
+                "isBookingFlow": True,
+            },
+        }
+
+    async def fake_to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    monkeypatch.setattr(transaction_tools, "get_store_list_tool", SimpleNamespace(invoke=fake_store_list_invoke))
+    monkeypatch.setattr(template_mapper, "try_build_template", fake_template)
+    monkeypatch.setattr(executor.asyncio, "to_thread", fake_to_thread)
+
+    recovery = asyncio.run(
+        _recover_contract_required_tool(
+            turn_contract=TurnContract(
+                domain="transaction",
+                intent="stock_store_search",
+                known_slots={
+                    "goods_no": "G000000310126",
+                    "tire_size": "245/45R19",
+                    "ord_qty": 4,
+                    "region": "Gangnam",
+                    "stock_check_mode": "inventory_only",
+                    "pending_intent": "stock",
+                    "goal_type": "store_with_stock",
+                },
+                allowed_tools=("get_store_list_tool", "get_store_inventory_tool"),
+                forbidden_tools=("transaction_store_preview_tool", "get_store_schedule_tool", "quick_order_tool"),
+                preferred_tool="get_store_list_tool",
+                response_decision={
+                    "template": "location",
+                    "metadata": {"response_shape_key": "stock_inventory_lookup", "stock_check_mode": "inventory_only"},
+                },
+                action_mode="stock_check",
+                context_state="active",
+            ),
+            user_text="check inventory in Gangnam",
+            merged_slots=None,
+            blocked_fast_path_source="contract_required_tool_executor",
+        )
+    )
+
+    assert recovery is not None
+    assert recovery["event"]["template"] == "location"
+    assert recovery["event"]["data"]["isBookingFlow"] is False
+    assert recovery["event"]["data"]["contractMetadata"]["isBookingFlowSanitized"] is True
+
+def test_owned_reservation_lookup_recovery_runs_from_dormant_purchase_context(monkeypatch) -> None:
+    from services.tstation.agents.c_transaction_agent import tools as transaction_tools
+    from services.tstation.executors import contract_required_tool_executor as executor
+
+    captured_input: dict = {}
+
+    def fake_reservations_invoke(tool_input: dict):
+        captured_input.update(tool_input)
+        return {"status": "success", "data": {"items": [{"rsv_no": "R001"}]}}
+
+    def fake_reservation_event(tool_result: dict):
+        assert tool_result["status"] == "success"
+        return {
+            "type": "data",
+            "template": "quickReply",
+            "data": {"assistantResponse": "reservation rows", "quickReplies": []},
+        }
+
+    async def fake_to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    monkeypatch.setattr(transaction_tools, "get_my_reservations_tool", SimpleNamespace(invoke=fake_reservations_invoke))
+    monkeypatch.setattr(executor, "build_reservation_status_lookup_event", fake_reservation_event)
+    monkeypatch.setattr(executor.asyncio, "to_thread", fake_to_thread)
+
+    recovery = asyncio.run(
+        _recover_contract_required_tool(
+            turn_contract=TurnContract(
+                domain="transaction",
+                intent="reservation_status_lookup",
+                known_slots={"pending_intent": "order", "goal_type": "place_order"},
+                allowed_tools=("get_my_reservations_tool", "get_orders_of_user_tool", "get_order_status_tool"),
+                forbidden_tools=("quick_order_tool", "transaction_store_preview_tool", "get_store_schedule_tool"),
+                preferred_tool="get_my_reservations_tool",
+                response_decision={
+                    "template": "quickReply",
+                    "metadata": {"response_shape_key": "reservation_status_lookup"},
+                },
+                action_mode="owned_record_lookup",
+                context_state="dormant",
+            ),
+            user_text="show my reservations",
+            merged_slots=None,
+            blocked_fast_path_source="contract_required_tool_executor",
+        )
+    )
+
+    assert recovery is not None
+    assert recovery["tool_name"] == "get_my_reservations_tool"
+    assert captured_input == {"sct_cd": "all"}
+    assert recovery["event"]["template"] == "quickReply"
+    assert recovery["event"]["recovered_tool"] == "get_my_reservations_tool"
+
 def test_store_only_recovery_blocks_mapper_datepick_template(monkeypatch) -> None:
     from services.tstation import template_mapper
     from services.tstation.agents.c_transaction_agent import tools as transaction_tools

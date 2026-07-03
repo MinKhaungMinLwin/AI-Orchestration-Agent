@@ -4685,11 +4685,21 @@ class StreamingMultiAgentCoordinator:
 
             if isinstance(data, dict):
                 canonical_tool_data = canonical_context_from_tool_boundary(data)
+                has_confirmed_search_product_resolution = True
+                confirmed_tire_size = ""
+                if tool_name == "search_product_tool":
+                    confirmed_tire_size = _confirmed_search_product_tire_size(tool_input=tool_input, slots=slots)
+                    has_confirmed_search_product_resolution = _search_product_row_matches_confirmed_size(
+                        data,
+                        confirmed_tire_size,
+                    )
                 for field in fields:
+                    if tool_name == "search_product_tool" and not has_confirmed_search_product_resolution:
+                        continue
                     val = canonical_tool_data.get(field)
                     if val:
                         tool_slots[field] = val
-                if tool_name == "search_product_tool" and tool_slots.get("goods_no"):
+                if tool_name == "search_product_tool":
                     tire_size = (
                         canonical_tool_data.get("tire_size")
                         or data.get("tire_size")
@@ -4697,8 +4707,8 @@ class StreamingMultiAgentCoordinator:
                         or data.get("tireSize")
                         or data.get("titleTires")
                     )
-                    if tire_size:
-                        tool_slots["tire_size"] = tire_size
+                    if has_confirmed_search_product_resolution and tire_size:
+                        tool_slots["tire_size"] = confirmed_tire_size
                     product_name = (
                         canonical_tool_data.get("product_name")
                         or data.get("goods_nm")
@@ -4710,9 +4720,10 @@ class StreamingMultiAgentCoordinator:
                     if product_name:
                         tool_slots["tire_model"] = str(product_name).strip()
                         tool_slots["pending_product_name"] = str(product_name).strip()
-                    for key, value in _search_product_price_context(data).items():
-                        if key in {"price_basis", "price_source_tool"} and value not in (None, "", [], {}):
-                            tool_slots[key] = value
+                    if has_confirmed_search_product_resolution:
+                        for key, value in _search_product_price_context(data).items():
+                            if key in {"price_basis", "price_source_tool"} and value not in (None, "", [], {}):
+                                tool_slots[key] = value
 
         if tool_name == "search_product_tool" and tool_succeeded:
             staged_context = _stage_pending_product_context_from_search(
@@ -4729,7 +4740,11 @@ class StreamingMultiAgentCoordinator:
             updated = slots.apply_runtime_values(tool_slots, source=f"tool:{tool_name}")
             if tool_name == "search_product_tool":
                 resolved_row = _single_resolved_search_product_row(parsed_data)
-                if resolved_row is not None:
+                confirmed_tire_size = _confirmed_search_product_tire_size(tool_input=tool_input, slots=slots)
+                if resolved_row is not None and _search_product_row_matches_confirmed_size(
+                    resolved_row,
+                    confirmed_tire_size,
+                ):
                     flow_values = _product_flow_values_from_resolved_search(
                         resolved_row=resolved_row,
                         slots=updated,
@@ -17701,6 +17716,31 @@ def _build_turn_contract_fallback_event(
     return build_response_policy_guard_event(turn_contract)
 
 
+def _should_recover_owned_record_contract_tool(turn_contract: TurnContract | None) -> bool:
+    if turn_contract is None:
+        return False
+    return bool(
+        str(turn_contract.domain or "") == "transaction"
+        and str(turn_contract.intent or "") in {"reservation_status_lookup", "reservation_store_info_lookup"}
+        and str(turn_contract.preferred_tool or "") == "get_my_reservations_tool"
+        and not tuple(turn_contract.blocking_required_slots or ())
+    )
+
+def _should_recover_executable_store_search_contract_tool(turn_contract: TurnContract | None) -> bool:
+    if turn_contract is None:
+        return False
+    preferred_tool = str(turn_contract.preferred_tool or "").strip()
+    allowed_tools = {str(tool).strip() for tool in tuple(turn_contract.allowed_tools or ()) if str(tool).strip()}
+    forbidden_tools = {str(tool).strip() for tool in tuple(turn_contract.forbidden_tools or ()) if str(tool).strip()}
+    return bool(
+        str(turn_contract.domain or "") == "transaction"
+        and str(turn_contract.intent or "") in {"store_search", "open_store_search"}
+        and preferred_tool in {"search_stores_tool", "get_store_list_tool"}
+        and preferred_tool in allowed_tools
+        and preferred_tool not in forbidden_tools
+        and not tuple(turn_contract.blocking_required_slots or ())
+    )
+
 def _history_selected_vehicle_prompt_contract_args(
     response_shape_key: str | None,
 ) -> tuple[str, tuple[str, ...]]:
@@ -21009,6 +21049,24 @@ def _should_promote_single_turn_purchase_after_product_resolution(
     return any(token in plan_text for token in ("continue_purchase", "quick_order_reservation"))
 
 
+def _confirmed_search_product_tire_size(
+    *,
+    user_text: str | None = None,
+    tool_input: Mapping[str, Any] | None = None,
+    slots: ConversationSlots | None = None,
+) -> str:
+    return (
+        normalize_tire_size(str((tool_input or {}).get("size") or (tool_input or {}).get("tire_size") or ""))
+        or normalize_tire_size(user_text or "")
+        or normalize_tire_size(str(getattr(slots, "tire_size", None) or ""))
+    )
+
+def _search_product_row_matches_confirmed_size(row: Mapping[str, Any] | None, confirmed_tire_size: str) -> bool:
+    if not row or not confirmed_tire_size:
+        return False
+    row_size = normalize_tire_size(str(canonical_context_from_tool_boundary(row).get("tire_size") or ""))
+    return bool(row_size and row_size == confirmed_tire_size)
+
 def _promote_single_turn_purchase_contract_from_search_product(
     *,
     user_text: str,
@@ -21020,9 +21078,12 @@ def _promote_single_turn_purchase_contract_from_search_product(
     if resolved_row is None:
         return None
     base_slots = merged_slots.model_copy() if merged_slots is not None else ConversationSlots()
+    confirmed_tire_size = _confirmed_search_product_tire_size(user_text=user_text, slots=base_slots)
+    if not _search_product_row_matches_confirmed_size(resolved_row, confirmed_tire_size):
+        return None
     runtime_values = {
         "goods_no": resolved_row["goods_no"],
-        "tire_size": resolved_row.get("tire_size"),
+        "tire_size": confirmed_tire_size,
         "tire_model": resolved_row.get("product_name"),
         "pending_product_name": resolved_row.get("product_name"),
     }
@@ -23299,15 +23360,19 @@ def _stage_pending_product_context_from_search(
     pending_context.setdefault("tire_model", product_name)
     if getattr(slots, "region", None):
         pending_context["region"] = slots.region
-    resolved_tire_size = canonical_row.get("tire_size") if isinstance(canonical_row, Mapping) else None
-    if resolved_tire_size or getattr(slots, "tire_size", None):
-        pending_context["tire_size"] = resolved_tire_size or slots.tire_size
+    confirmed_tire_size = _confirmed_search_product_tire_size(tool_input=tool_input, slots=slots)
+    has_confirmed_search_product_resolution = _search_product_row_matches_confirmed_size(
+        resolved_row,
+        confirmed_tire_size,
+    )
+    if has_confirmed_search_product_resolution:
+        pending_context["tire_size"] = confirmed_tire_size
     resolved_goods_no = canonical_row.get("goods_no") if isinstance(canonical_row, Mapping) else None
-    if resolved_goods_no or getattr(slots, "goods_no", None):
-        pending_context["goods_no"] = resolved_goods_no or slots.goods_no
+    if has_confirmed_search_product_resolution and resolved_goods_no:
+        pending_context["goods_no"] = resolved_goods_no
     if getattr(slots, "ord_qty", None):
         pending_context["ord_qty"] = slots.ord_qty
-    if isinstance(resolved_row, Mapping):
+    if has_confirmed_search_product_resolution:
         pending_context.update(_search_product_price_context(resolved_row))
     pending_context.setdefault("pending_intent", pending_intent or "stock")
     pending_context.setdefault("goal_type", goal_type or "store_with_stock")
@@ -23319,10 +23384,10 @@ def _stage_pending_product_context_from_search(
         slots.pending_product_name = product_name
     if not getattr(slots, "tire_model", None):
         slots.tire_model = product_name
-    if not getattr(slots, "goods_no", None) and resolved_goods_no:
+    if has_confirmed_search_product_resolution and not getattr(slots, "goods_no", None) and resolved_goods_no:
         slots.goods_no = str(resolved_goods_no)
-    if not getattr(slots, "tire_size", None) and resolved_tire_size:
-        slots.tire_size = str(resolved_tire_size)
+    if has_confirmed_search_product_resolution and not getattr(slots, "tire_size", None):
+        slots.tire_size = confirmed_tire_size
     return pending_context
 
 
@@ -30040,6 +30105,90 @@ class TStationChatServiceV2:
                 )
             event_data = guard_event.get("data") if isinstance(guard_event.get("data"), dict) else {}
             return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
+
+        if _should_recover_executable_store_search_contract_tool(turn_contract):
+            store_search_recovery = await recover_blocked_fast_path_to_contract_tool(
+                turn_contract=turn_contract,
+                user_text=last_user_text,
+                merged_slots=merged_slots,
+                blocked_fast_path_source="contract_direct_executor:store_search",
+                member_no=request.user_id,
+            )
+            if store_search_recovery is not None:
+                store_search_event = store_search_recovery["event"]
+                if request.stream:
+                    _record_direct_return_trace(
+                        parent_span=_parent_span,
+                        trace_id=request.tracing_id,
+                        session_id=request.session_id,
+                        user_id=request.user_id,
+                        user_text=last_user_text,
+                        domains=domains,
+                        event=store_search_event,
+                        turn_contract=turn_contract,
+                        direct_return_reason="contract_required_store_search_tool",
+                        extra_metadata=vehicle_selection_trace_metadata,
+                    )
+                    return StreamingResponse(
+                        TStationChatServiceV2._stream_contract_required_tool_response(
+                            store_search_recovery,
+                            agent_label="[TRANSACTION AGENT]",
+                        ),
+                        media_type="text/event-stream",
+                        headers={
+                            "Cache-Control": "no-cache",
+                            "Connection": "keep-alive",
+                            "X-Accel-Buffering": "no",
+                        },
+                    )
+                event_data = (
+                    store_search_event.get("data")
+                    if isinstance(store_search_event.get("data"), dict)
+                    else {}
+                )
+                return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
+
+        if _should_recover_owned_record_contract_tool(turn_contract):
+            owned_record_recovery = await _recover_contract_required_tool(
+                turn_contract=turn_contract,
+                user_text=last_user_text,
+                merged_slots=merged_slots,
+                blocked_fast_path_source="code_owned_record_policy_direct",
+                member_no=request.user_id,
+            )
+            if owned_record_recovery is not None:
+                owned_record_event = owned_record_recovery["event"]
+                if request.stream:
+                    _record_direct_return_trace(
+                        parent_span=_parent_span,
+                        trace_id=request.tracing_id,
+                        session_id=request.session_id,
+                        user_id=request.user_id,
+                        user_text=last_user_text,
+                        domains=domains,
+                        event=owned_record_event,
+                        turn_contract=turn_contract,
+                        direct_return_reason="contract_required_owned_record_tool",
+                        extra_metadata=vehicle_selection_trace_metadata,
+                    )
+                    return StreamingResponse(
+                        TStationChatServiceV2._stream_contract_required_tool_response(
+                            owned_record_recovery,
+                            agent_label="[TRANSACTION AGENT]",
+                        ),
+                        media_type="text/event-stream",
+                        headers={
+                            "Cache-Control": "no-cache",
+                            "Connection": "keep-alive",
+                            "X-Accel-Buffering": "no",
+                        },
+                    )
+                event_data = (
+                    owned_record_event.get("data")
+                    if isinstance(owned_record_event.get("data"), dict)
+                    else {}
+                )
+                return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
 
         if turn_contract and turn_contract.intent == "tire_condition_photo_policy":
             photo_policy_event = build_support_faq_policy_event(
@@ -38033,19 +38182,28 @@ class TStationChatServiceV2:
                             item = items[0]
                             canonical_item = canonical_context_from_tool_boundary(item)
                             outer_resolved_search_row = _single_resolved_search_product_row(parsed_for_verifier)
-                            if canonical_item.get("goods_no"):
+                            confirmed_tire_size = _confirmed_search_product_tire_size(
+                                user_text=user_query,
+                                tool_input=input_data if isinstance(input_data, Mapping) else {},
+                                slots=pending_slots or initial_slots,
+                            )
+                            has_confirmed_search_product_resolution = _search_product_row_matches_confirmed_size(
+                                item,
+                                confirmed_tire_size,
+                            )
+                            if has_confirmed_search_product_resolution and canonical_item.get("goods_no"):
                                 turn_tool_slots["goods_no"] = canonical_item.get("goods_no")
-                            tire_size = canonical_item.get("tire_size")
-                            if tire_size:
-                                turn_tool_slots["tire_size"] = tire_size
+                            if has_confirmed_search_product_resolution:
+                                turn_tool_slots["tire_size"] = confirmed_tire_size
                             product_name = canonical_item.get("product_name")
                             if product_name:
                                 turn_tool_slots["tire_model"] = str(product_name).strip()
                                 turn_tool_slots["pending_product_name"] = str(product_name).strip()
-                            price_context = _search_product_price_context(item)
-                            for price_key in ("price_basis", "price_source_tool"):
-                                if price_context.get(price_key) not in (None, "", [], {}):
-                                    turn_tool_slots[price_key] = price_context[price_key]
+                            if has_confirmed_search_product_resolution:
+                                price_context = _search_product_price_context(item)
+                                for price_key in ("price_basis", "price_source_tool"):
+                                    if price_context.get(price_key) not in (None, "", [], {}):
+                                        turn_tool_slots[price_key] = price_context[price_key]
                             purchase_resolution_slots = {
                                 key: value
                                 for key, value in {

@@ -15,6 +15,7 @@ dependencies = [
     "isort>=5.13.2",
     "pandas-stubs~=2.2.3",
     "openapi-python-client==0.28.3",
+    "kiwipiepy-model>=0.23.0",
 ]
 
 [dependency-groups]

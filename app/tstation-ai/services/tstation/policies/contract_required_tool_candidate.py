@@ -758,6 +758,16 @@ def _contract_required_transaction_tool_input(
     tool_input = {str(key): value for key, value in tool_args_patch.items() if value not in (None, "", [], {})}
     if not tool_input:
         return None
+    if preferred_tool == "search_stores_tool":
+        if not (
+            tool_input.get("place_query")
+            or tool_input.get("region_code")
+            or tool_input.get("store_nm")
+            or tool_input.get("shop_name")
+            or tool_input.get("region")
+        ):
+            return None
+        return tool_input, "turn_contract_required_store_search", "매장 검색 중..."
     if preferred_tool == "get_store_list_tool":
         if not (tool_input.get("store_nm") or tool_input.get("shop_name") or tool_input.get("region")):
             return None

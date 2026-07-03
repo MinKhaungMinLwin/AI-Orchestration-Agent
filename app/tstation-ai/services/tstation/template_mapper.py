@@ -4529,6 +4529,16 @@ def _is_plain_store_search_user_text() -> bool:
     return has_store_search and not has_transaction_stock and not has_product
 
 
+def _has_inventory_only_stock_context(tool_data_list: list[dict]) -> bool:
+    for entry in tool_data_list:
+        args = entry.get("args") if isinstance(entry.get("args"), dict) else entry.get("input")
+        raw = _unwrap(entry)
+        metadata = raw.get("metadata") if isinstance(raw, dict) and isinstance(raw.get("metadata"), dict) else {}
+        for source in (args, raw if isinstance(raw, dict) else {}, metadata):
+            if isinstance(source, dict) and str(source.get("stock_check_mode") or source.get("stockCheckMode") or "") == "inventory_only":
+                return True
+    return False
+
 def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | None:
     called_tools = {e.get("tool", "") for e in tool_data_list}
     transaction_decision = current_transaction_response_decision.get()
@@ -4708,6 +4718,7 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     # 서비스 예약 포함) 컨텍스트에서 location 카드가 isBookingFlow=true 로 emit되어
     # FE 매장 클릭이 /chat chain (다음 step datepick) 으로 이어진다.
     plain_store_search_user_text = _is_plain_store_search_user_text()
+    inventory_only_stock_context = _has_inventory_only_stock_context(tool_data_list)
     has_booking_intent = _has_current_turn_transaction_action() and (
         current_pending_intent.get() in ("order", "stock", "reservation") and not plain_store_search_user_text
     )
@@ -5122,7 +5133,7 @@ def _map_location(tool_data_list: list[dict], assistant_text: str) -> dict | Non
     # Pure Flow 4/5 info lookups with no goal still stay False so clicking a
     # card surfaces the rich description without spuriously advancing.
     action_allows_booking_signal = current_action_mode.get() == "unspecified" or _has_current_turn_transaction_action()
-    is_booking_flow = (
+    is_booking_flow = not inventory_only_stock_context and (
         (has_booking_signal and action_allows_booking_signal)
         or (_is_goal_booking_followup() and not plain_store_search_user_text)
         or has_booking_intent

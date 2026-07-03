@@ -493,6 +493,9 @@ def _has_pending_today_install_context(slots: dict[str, Any]) -> bool:
 def _has_confirmed_product_quantity_context(slots: dict[str, Any]) -> bool:
     return bool(slots.get("goods_no") and (slots.get("quantity") or slots.get("ord_qty")))
 
+def _has_purchase_ready_product_quantity_context(slots: dict[str, Any]) -> bool:
+    return bool(_has_confirmed_product_quantity_context(slots) and slots.get("tire_size"))
+
 
 def _normalized_quantity(slots: dict[str, Any], text: str = "") -> int | None:
     value = extract_quantity(text) or slots.get("quantity") or slots.get("ord_qty")
@@ -945,6 +948,11 @@ def build_transaction_intent_frame(
     )
     pending_today_install = _has_pending_today_install_context(slots)
     confirmed_product_quantity_context = _has_confirmed_product_quantity_context(slots)
+    product_quantity_context_ready_for_store_scope = (
+        _has_purchase_ready_product_quantity_context(slots)
+        if _is_order_or_reservation_context(slots)
+        else confirmed_product_quantity_context
+    )
     other_store_today_install_continuation = (
         pending_today_install
         and bool(_OTHER_STORE_RE.search(text))
@@ -985,7 +993,7 @@ def build_transaction_intent_frame(
         )
     )
     store_scope_product_continuation = (
-        confirmed_product_quantity_context
+        product_quantity_context_ready_for_store_scope
         and not (plain_store_search and not _OTHER_STORE_RE.search(text))
         and bool(_STORE_SCOPE_FOLLOWUP_RE.search(text) or (current_region and len(text.strip()) <= 20))
         and not current_store_name

@@ -205,6 +205,23 @@ def _annotate_stock_inventory_store_lookup_event(
             if value not in (None, "", [], {}):
                 meta.setdefault(key, value)
 
+def _sanitize_event_for_turn_contract(event: dict[str, Any], turn_contract: TurnContract) -> dict[str, Any]:
+    if str(turn_contract.intent or "").strip() != "stock_store_search":
+        return event
+    if str((turn_contract.known_slots or {}).get("stock_check_mode") or "").strip() != "inventory_only":
+        return event
+    if str(event.get("template") or "") != "location":
+        return event
+    event_data = event.get("data")
+    if not isinstance(event_data, dict) or event_data.get("isBookingFlow") is not True:
+        return event
+    event_data["isBookingFlow"] = False
+    metadata = _contract_annotation_metadata(event_data)
+    metadata["stockCheckMode"] = "inventory_only"
+    metadata["stock_check_mode"] = "inventory_only"
+    metadata["isBookingFlowSanitized"] = True
+    return event
+
 
 async def _recover_contract_required_store_flow_tool(
     *,
@@ -447,7 +464,17 @@ def contract_required_tool_start_event(
     context_state = str(getattr(turn_contract, "context_state", "") or "")
     current_turn_vehicle_recommendation = _is_vehicle_selection_recommendation_contract(turn_contract)
     current_turn_direct_path = str(blocked_fast_path_source or "").startswith("contract_direct_executor:")
-    if context_state not in {"active", "resumed"} and not current_turn_vehicle_recommendation and not current_turn_direct_path:
+    current_turn_owned_record_lookup = (
+        str(turn_contract.domain or "").strip().lower() == PolicyDomain.TRANSACTION.value
+        and str(turn_contract.intent or "").strip() in _OWNED_RECORD_RECOVERY_INTENTS
+        and str(getattr(turn_contract, "preferred_tool", None) or "").strip() in _OWNED_RECORD_RECOVERY_TOOLS
+    )
+    if (
+        context_state not in {"active", "resumed"}
+        and not current_turn_vehicle_recommendation
+        and not current_turn_direct_path
+        and not current_turn_owned_record_lookup
+    ):
         return None
 
     candidate = _contract_required_tool_candidate(
@@ -620,7 +647,17 @@ async def recover_blocked_fast_path_to_contract_tool(
     context_state = str(getattr(turn_contract, "context_state", "") or "")
     current_turn_vehicle_recommendation = _is_vehicle_selection_recommendation_contract(turn_contract)
     current_turn_direct_path = str(blocked_fast_path_source or "").startswith("contract_direct_executor:")
-    if context_state not in {"active", "resumed"} and not current_turn_vehicle_recommendation and not current_turn_direct_path:
+    current_turn_owned_record_lookup = (
+        str(turn_contract.domain or "").strip().lower() == PolicyDomain.TRANSACTION.value
+        and str(turn_contract.intent or "").strip() in _OWNED_RECORD_RECOVERY_INTENTS
+        and str(getattr(turn_contract, "preferred_tool", None) or "").strip() in _OWNED_RECORD_RECOVERY_TOOLS
+    )
+    if (
+        context_state not in {"active", "resumed"}
+        and not current_turn_vehicle_recommendation
+        and not current_turn_direct_path
+        and not current_turn_owned_record_lookup
+    ):
         return None
 
     contract_intent = str(turn_contract.intent or "")
@@ -726,6 +763,7 @@ async def recover_blocked_fast_path_to_contract_tool(
                 mapped_event = build_reservation_status_lookup_event(tool_result)
         if not isinstance(mapped_event, dict):
             return None
+        mapped_event = _sanitize_event_for_turn_contract(mapped_event, turn_contract)
         mapped_event["source_domain"] = source_domain
         _annotate_called_tools(mapped_event, tool_data_list)
         if (

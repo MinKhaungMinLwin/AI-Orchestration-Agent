@@ -828,6 +828,185 @@ def test_store_search_location_booking_flow_requires_booking_context() -> None:
     ) is False
 
 
+def test_inventory_only_stock_blocks_booking_location_and_schedule_actions() -> None:
+    contract, tool_plan, response_decision = _transaction_policy_contract(
+        intent="stock_store_search",
+        known_slots={
+            "goods_no": "G000000309783",
+            "tire_size": "205/55R16",
+            "ord_qty": 4,
+            "shop_id": "F00721",
+            "shop_name": "T-Station Pangyo",
+            "stock_check_mode": "inventory_only",
+        },
+        tool_result={"available_qty": 4, "today_installable": False, "tna_available": False},
+        action_mode="stock_check",
+    )
+
+    assert tool_plan.preferred_tool == "get_store_inventory_tool"
+    assert response_decision.metadata["stock_check_mode"] == "inventory_only"
+    assert "transaction_store_preview_tool" in contract.forbidden_tools
+    assert "get_store_schedule_tool" in contract.forbidden_tools
+    assert "quick_order_tool" in contract.forbidden_tools
+    assert violates_response_template_contract(
+        {"template": "location", "data": {"isBookingFlow": True}},
+        contract,
+    ) is True
+    assert violates_response_template_contract(
+        {"template": "location", "data": {"isBookingFlow": False}},
+        contract,
+    ) is False
+    assert violates_response_template_contract(
+        {"template": "datepick", "called_tools": ["transaction_store_preview_tool"]},
+        contract,
+    ) is True
+    violations = response_contract_violations(
+        template="quickReply",
+        called_tools=("transaction_store_preview_tool",),
+        contract=contract,
+    )
+    violation_types = {violation["type"] for violation in violations}
+    assert "forbidden_tool_for_contract" in violation_types
+    assert "inventory_only_stock_action_tool_violation" in violation_types
+
+def test_stock_product_resolution_contract_keeps_stock_owner_boundary() -> None:
+    frame = IntentFrame(
+        domain=PolicyDomain.DISCOVERY,
+        intent="resolve_or_describe_product",
+        known_slots={
+            "product_name": "Ventus S2 AS",
+            "tire_size": "205/55R16",
+            "ord_qty": 4,
+            "region": "Gangnam",
+            "stock_check_mode": "inventory_only",
+        },
+    )
+    contract = build_turn_contract(
+        user_text="stock lookup after product resolution",
+        intent_frame=frame,
+        tool_plan=ToolPlan(
+            allowed_tools=("search_product_tool", "get_store_list_tool"),
+            preferred_tool="search_product_tool",
+            metadata={"response_intent": "resolve_or_describe_product", "stock_check_mode": "inventory_only"},
+        ),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.LIST,
+            template=TemplateName.LOCATION,
+            metadata={"response_shape_key": "stock_store_candidates", "stock_check_mode": "inventory_only"},
+        ),
+        action_mode="stock_check",
+    )
+
+    assert contract.domain == "transaction"
+    assert contract.intent == "stock_store_search"
+    assert contract.known_slots["stock_check_mode"] == "inventory_only"
+    assert "transaction_store_preview_tool" in contract.forbidden_tools
+    assert violates_response_template_contract(
+        {"template": "location", "data": {"isBookingFlow": True}},
+        contract,
+    ) is True
+    assert violates_response_template_contract(
+        {"template": "location", "data": {"isBookingFlow": False}},
+        contract,
+    ) is False
+
+def test_reservation_lookup_owns_response_over_stale_purchase_context() -> None:
+    contract = build_turn_contract(
+        user_text="reservation lookup",
+        intent_frame=IntentFrame(
+            domain=PolicyDomain.TRANSACTION,
+            intent="reservation_status_lookup",
+            known_slots={
+                **_purchase_slots(goods_no=None, tire_size=None, shop_id=None),
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            },
+        ),
+        tool_plan=ToolPlan(
+            allowed_tools=("quick_order_tool", "get_my_reservations_tool"),
+            preferred_tool="quick_order_tool",
+            required_slots=("product",),
+            metadata={"response_intent": "quick_order_reservation"},
+        ),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            metadata={"response_shape_key": "reservation_status_lookup"},
+        ),
+    )
+
+    assert contract.intent == "reservation_status_lookup"
+    assert contract.action_mode == "owned_record_lookup"
+    assert contract.blocking_required_slots == ()
+    assert contract.preferred_tool == "get_my_reservations_tool"
+    assert "get_my_reservations_tool" in contract.allowed_tools
+    assert "quick_order_tool" in contract.forbidden_tools
+    assert "search_product_tool" in contract.forbidden_tools
+    assert violates_response_template_contract({"template": "quickReply"}, contract) is False
+    assert violates_response_template_contract({"template": "datepick"}, contract) is True
+
+    guard_event = build_response_policy_guard_event(contract)
+
+    assert guard_event["template"] == "quickReply"
+    assert guard_event["assistant_response_source"] == "code_turn_contract_owned_record_guard"
+    assert guard_event["contract_intent"] == "reservation_status_lookup"
+    assert "상품" not in guard_event["data"]["assistantResponse"]
+
+def test_purchase_region_slot_fill_requires_size_before_store_preview() -> None:
+    contract, tool_plan, response_decision = _purchase_flow_contract(
+        intent="quick_order_reservation",
+        known_slots={
+            "goods_no": "G000000309783",
+            "product_name": "Ventus S2 AS",
+            "ord_qty": 4,
+            "region": "Gangnam",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+
+    assert contract.flow_step == "ask_size"
+    assert contract.blocking_required_slots == ("tire_size",)
+    assert tool_plan.allowed_tools == ()
+    assert "transaction_store_preview_tool" in tool_plan.forbidden_tools
+    assert "get_store_schedule_tool" in tool_plan.forbidden_tools
+    assert response_decision.template == TemplateName.QUICK_REPLY
+    assert violates_response_template_contract(
+        {"template": "location", "called_tools": ["transaction_store_preview_tool"]},
+        contract,
+    ) is True
+    assert violates_response_template_contract({"template": "datepick"}, contract) is True
+
+def test_store_search_contract_does_not_inherit_purchase_preview_boundary() -> None:
+    contract, tool_plan, response_decision = _transaction_policy_contract(
+        intent="store_search",
+        known_slots={
+            "goods_no": "G000000309783",
+            "product_name": "Ventus S2 AS",
+            "ord_qty": 4,
+            "region": "Gangnam",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        action_mode="store_search",
+    )
+
+    assert contract.intent == "store_search"
+    assert contract.action_mode == "store_search"
+    assert "transaction_store_preview_tool" not in contract.allowed_tools
+    assert "transaction_store_preview_tool" in contract.forbidden_tools
+    assert tool_plan.preferred_tool in {"search_stores_tool", "get_store_list_tool"}
+    assert response_decision.template == TemplateName.QUICK_REPLY
+    assert violates_response_template_contract({"template": "datepick"}, contract) is True
+    assert violates_response_template_contract(
+        {"template": "location", "data": {"isBookingFlow": False}},
+        contract,
+    ) is False
+    assert violates_response_template_contract(
+        {"template": "location", "data": {"isBookingFlow": True}},
+        contract,
+    ) is True
+
 def test_open_store_search_forbids_schedule_boundary() -> None:
     frame = IntentFrame(
         domain=PolicyDomain.TRANSACTION,

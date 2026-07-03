@@ -1638,6 +1638,22 @@ def resolve_purchase_order_flow(
             metadata=base_metadata,
         )
 
+    if goods_no and not tire_size:
+        return FlowState(
+            flow_id=_PURCHASE_FLOW_ID,
+            flow_step="ask_size",
+            required_slots=("tire_size",),
+            missing_slots=("tire_size",),
+            allowed_tools=(),
+            forbidden_tools=_PURCHASE_FORBIDDEN_TOOLS,
+            preferred_tool=None,
+            template=TemplateName.QUICK_REPLY,
+            response_shape_key="missing_order_slots",
+            action_mode="purchase_continuation",
+            slot_patch=base_patch,
+            metadata=base_metadata,
+        )
+
     if quantity in (None, "", 0, "0"):
         return FlowState(
             flow_id=_CART_FLOW_ID if is_cart_flow else _PURCHASE_FLOW_ID,

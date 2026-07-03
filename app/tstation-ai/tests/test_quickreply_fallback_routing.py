@@ -12252,6 +12252,95 @@ def test_tool_derived_search_context_does_not_stage_active_order_context_in_info
     assert staged == {}
     assert not (slots.availability_context or {}).get("pending_order_context")
 
+def test_unsized_purchase_search_context_does_not_confirm_candidate_sku_or_size() -> None:
+    slots = ConversationSlots(
+        tire_model="Ventus S2 AS",
+        pending_product_name="Ventus S2 AS",
+        ord_qty=4,
+        pending_intent="order",
+        goal_type="place_order",
+    )
+
+    staged = _stage_pending_product_context_from_search(
+        slots,
+        tool_input={"keyword": "Ventus S2 AS"},
+        parsed_data={
+            "data": {
+                "items": [
+                    {
+                        "goods_no": "G000000309780",
+                        "goods_nm": "Ventus S2 AS",
+                        "tire_size_1": "205/55R16",
+                        "cheapest_final_prc": 120800,
+                    }
+                ]
+            }
+        },
+        source="test_unsized_purchase_search",
+    )
+
+    assert staged["product_name"] == "Ventus S2 AS"
+    assert staged["ord_qty"] == 4
+    assert staged["pending_intent"] == "order"
+    assert staged["goal_type"] == "place_order"
+    assert "goods_no" not in staged
+    assert "tire_size" not in staged
+    assert "price_source_tool" not in staged
+    assert slots.goods_no is None
+    assert slots.tire_size is None
+
+def test_sized_purchase_search_context_confirms_matching_sku_and_size() -> None:
+    slots = ConversationSlots(
+        tire_model="Ventus S2 AS",
+        pending_product_name="Ventus S2 AS",
+        ord_qty=4,
+        pending_intent="order",
+        goal_type="place_order",
+    )
+
+    staged = _stage_pending_product_context_from_search(
+        slots,
+        tool_input={"keyword": "Ventus S2 AS", "size": "205/55R16"},
+        parsed_data={
+            "data": {
+                "items": [
+                    {
+                        "goods_no": "G000000309780",
+                        "goods_nm": "Ventus S2 AS",
+                        "tire_size_1": "205/55R16",
+                        "cheapest_final_prc": 120800,
+                    }
+                ]
+            }
+        },
+        source="test_sized_purchase_search",
+    )
+
+    assert staged["goods_no"] == "G000000309780"
+    assert staged["tire_size"] == "205/55R16"
+    assert slots.goods_no == "G000000309780"
+    assert slots.tire_size == "205/55R16"
+
+def test_unsized_purchase_product_search_does_not_promote_candidate_to_order_contract() -> None:
+    promoted = _promote_single_turn_purchase_contract_from_search_product(
+        user_text="Ventus S2 AS 4 units purchase",
+        tool_result={
+            "data": {
+                "items": [
+                    {
+                        "goods_no": "G000000309780",
+                        "goods_nm": "Ventus S2 AS",
+                        "tire_size_1": "205/55R16",
+                    }
+                ]
+            }
+        },
+        merged_slots=ConversationSlots(ord_qty=4, pending_intent="order", goal_type="place_order"),
+        routing_result=None,
+    )
+
+    assert promoted is None
+
 
 def test_response_contract_flags_purchase_template_when_context_is_dormant() -> None:
     contract = TurnContract(

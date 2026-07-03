@@ -20,6 +20,7 @@ _DIRECT_TEMPLATE_TOOLS = frozenset({
     "get_store_list_tool",
     "get_nearby_stores_tool",
     "get_store_schedule_tool",
+    "get_my_reservations_tool",
 })
 _COMPLEX_EXPLANATION_RE = re.compile(
     r"왜|이유|설명|자세히|장단점|비교|차이|정책|규정|불만|오류|에러|문제|안\s*되|안되|고장|환불|교환|보증",
@@ -164,6 +165,8 @@ def _evaluate_transaction_contract(
         if known_slots.get("shop_id") or (turn_contract.tool_args_patch or {}).get("shop_id"):
             return DirectPathDecision(True, True, "store_schedule", None, tool, "datepick")
         return _fallback("missing_required_slot")
+    if intent in {"reservation_status_lookup", "reservation_store_info_lookup"} and tool == "get_my_reservations_tool":
+        return DirectPathDecision(True, True, "reservation_lookup", None, tool, "quickReply")
     if tool == "get_my_coupons_tool":
         if str((router_evidence or {}).get("domain") or "").strip() == PolicyDomain.SUPPORT.value:
             return _fallback("support_policy_question")
@@ -198,4 +201,5 @@ def _template_for_tool(tool: str) -> str:
         "get_store_list_tool": "location",
         "get_nearby_stores_tool": "location",
         "get_store_schedule_tool": "datepick",
+        "get_my_reservations_tool": "quickReply",
     }.get(tool, "")
