@@ -932,6 +932,115 @@ def test_purchase_schedule_recovery_blocks_mapper_preorder_before_price(monkeypa
 
     assert recovery is None
 
+def test_purchase_schedule_recovery_validates_mapper_with_current_called_tools(monkeypatch) -> None:
+    from services.tstation import template_mapper
+    from services.tstation.agents.c_transaction_agent import tools as transaction_tools
+    from services.tstation.executors import contract_required_tool_executor as executor
+
+    def fake_schedule_invoke(tool_input: dict):
+        return {
+            "status": "success",
+            "data": {"shop_id": "S001", "slots": [{"cal_day": "20260705", "tm": "1700"}]},
+        }
+
+    def fake_template(tool_data_list: list[dict], assistant_text: str):
+        assert [entry["tool"] for entry in tool_data_list] == ["get_store_schedule_tool"]
+        return {"type": "data", "template": "datepick", "data": {"assistantResponse": assistant_text}}
+
+    async def fake_to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    monkeypatch.setattr(transaction_tools, "get_store_schedule_tool", SimpleNamespace(invoke=fake_schedule_invoke))
+    monkeypatch.setattr(template_mapper, "try_build_template", fake_template)
+    monkeypatch.setattr(executor.asyncio, "to_thread", fake_to_thread)
+
+    active_flow_context = {
+        "flow_type": "commerce",
+        "status": "active",
+        "flow_step": "store_selected",
+        "product": {"goods_no": "G000000310126", "tire_size": "245/45R19", "ord_qty": 4},
+        "store": {"shop_id": "S001"},
+        "intent": {"sub_flow_type": "purchase", "pending_intent": "order", "goal_type": "place_order"},
+        "current_step": "resolve_schedule",
+        "missing_slots": ["booking_datetime"],
+        "next_tool": "get_store_schedule_tool",
+        "tool_args_patch": {"shop_id": "S001", "mode": "general"},
+        "allowed_tools": ["get_store_schedule_tool"],
+    }
+
+    recovery = asyncio.run(
+        continue_active_flow_after_tool(
+            turn_contract=TurnContract(
+                domain="transaction",
+                intent="quick_order_reservation",
+                allowed_tools=("get_store_schedule_tool",),
+                forbidden_tools=("quick_order_tool",),
+                preferred_tool="get_store_schedule_tool",
+                response_decision={
+                    "template": "datepick",
+                    "metadata": {"response_shape_key": "reservation_slots"},
+                },
+                action_mode="purchase_continuation",
+                context_state="active",
+                flow_step="show_schedule",
+            ),
+            user_text="book this store",
+            merged_slots=ConversationSlots(availability_context={"active_flow_context": active_flow_context}),
+            last_tool_name="get_store_list_tool",
+            blocked_fast_path_source="post_tool_flow_progress:get_store_list_tool",
+        )
+    )
+
+    assert recovery is not None
+    assert recovery["event"]["template"] == "datepick"
+    assert recovery["event"]["called_tools"] == ["get_store_schedule_tool"]
+    assert recovery["event"]["recovered_tool"] == "get_store_schedule_tool"
+
+def test_support_recovery_blocks_builder_action_template_that_violates_contract(monkeypatch) -> None:
+    from services.tstation.executors import contract_required_tool_executor as executor
+
+    def fake_faq_invoke(tool_input: dict):
+        return {"status": "success", "data": {"items": [{"answer": "policy answer"}]}}
+
+    def fake_support_event(intent: str, user_text: str, tool_result: dict | None = None):
+        assert intent == "tire_quality_warranty_policy"
+        assert user_text == "warranty policy"
+        assert tool_result is not None
+        return {"type": "data", "template": "datepick", "data": {"assistantResponse": "wrong template"}}
+
+    async def fake_to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "services.tstation.agents.e_support_agent.tools",
+        SimpleNamespace(search_faq_hybrid_tool=SimpleNamespace(invoke=fake_faq_invoke)),
+    )
+    monkeypatch.setattr(executor, "build_support_faq_policy_event", fake_support_event)
+    monkeypatch.setattr(executor.asyncio, "to_thread", fake_to_thread)
+
+    recovery = asyncio.run(
+        _recover_contract_required_tool(
+            turn_contract=TurnContract(
+                domain="support",
+                intent="tire_quality_warranty_policy",
+                allowed_tools=("search_faq_hybrid_tool",),
+                preferred_tool="search_faq_hybrid_tool",
+                response_decision={
+                    "template": "quickReply",
+                    "metadata": {"response_shape_key": "tire_quality_warranty_policy"},
+                },
+                action_mode="support_policy_answer",
+                context_state="active",
+            ),
+            user_text="warranty policy",
+            merged_slots=None,
+            blocked_fast_path_source="contract_required_tool_executor",
+        )
+    )
+
+    assert recovery is None
+
 def test_continue_active_flow_after_tool_skips_same_tool(monkeypatch) -> None:
     from services.tstation.agents.c_transaction_agent import tools as transaction_tools
 

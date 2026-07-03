@@ -566,6 +566,38 @@ class TurnContract:
         }
 
 
+_GUARD_EVENT_STALE_CONTEXT_KEYS = frozenset({
+    "template_data",
+    "templateData",
+    "ui_action",
+    "uiAction",
+    "pending_intent",
+    "pendingIntent",
+    "goal_type",
+    "goalType",
+})
+
+def _guard_event_contract_snapshot(contract: TurnContract) -> dict[str, Any]:
+    snapshot = contract.to_dict()
+    for key in ("known_slots", "resolved_context", "contract_seed", "context_evidence"):
+        value = snapshot.get(key)
+        if isinstance(value, Mapping):
+            snapshot[key] = _strip_guard_event_stale_context(value)
+    return snapshot
+
+def _strip_guard_event_stale_context(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            key: _strip_guard_event_stale_context(item)
+            for key, item in value.items()
+            if str(key) not in _GUARD_EVENT_STALE_CONTEXT_KEYS
+        }
+    if isinstance(value, list):
+        return [_strip_guard_event_stale_context(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_strip_guard_event_stale_context(item) for item in value)
+    return value
+
 def build_turn_contract(
     *,
     user_text: str = "",
@@ -1755,7 +1787,7 @@ def build_required_slot_clarification_event(contract: TurnContract) -> dict[str,
             "quickReplies": quick_replies,
             "predictedDomains": ["TRANSACTION", "DISCOVERY"],
             "metadata": {
-                "turnContract": contract.to_dict(),
+                "turnContract": _guard_event_contract_snapshot(contract),
                 "requiredSlots": list(contract.blocking_required_slots),
             },
         },
@@ -1832,7 +1864,7 @@ def build_response_policy_guard_event(contract: TurnContract) -> dict[str, Any]:
                 "quickReplies": quick_replies,
                 "predictedDomains": ["SUPPORT"],
                 "metadata": {
-                    "turnContract": contract.to_dict(),
+                    "turnContract": _guard_event_contract_snapshot(contract),
                     "forbiddenBehaviors": sorted(forbidden_set),
                     "responseShapeKey": response_shape_key or intent,
                     "response_shape_key": response_shape_key or intent,
@@ -2000,7 +2032,7 @@ def build_response_policy_guard_event(contract: TurnContract) -> dict[str, Any]:
             "quickReplies": quick_replies,
             "predictedDomains": ["TRANSACTION", "DISCOVERY"],
             "metadata": {
-                "turnContract": contract.to_dict(),
+                "turnContract": _guard_event_contract_snapshot(contract),
                 "forbiddenBehaviors": sorted(forbidden_set),
                 "missingSlots": list(_missing_slots_for_action_prompt(contract)),
             },
@@ -2336,7 +2368,7 @@ def _missing_slot_quickreply_event(
             "quickReplies": enriched_quick_replies,
             "predictedDomains": ["TRANSACTION", "DISCOVERY"],
             "metadata": {
-                "turnContract": contract.to_dict(),
+                "turnContract": _guard_event_contract_snapshot(contract),
                 "missingSlot": missing_slot,
                 "missingSlots": list(_missing_slots_for_action_prompt(contract)),
                 "pendingOrderContext": pending_order_context,
@@ -2414,6 +2446,8 @@ def violates_response_template_contract(event: Mapping[str, Any], contract: Turn
         return True
     if _action_mode_contract_violation(event=event, contract=contract) is not None:
         return True
+    if _order_complete_template_missing_execution_tool(event=event, contract=contract):
+        return True
     if _flow_step_template_violation(template=template, contract=contract):
         return True
     if _is_discovery_product_template_compatible(event, contract):
@@ -2429,6 +2463,20 @@ def violates_response_template_contract(event: Mapping[str, Any], contract: Turn
         for behavior in _effective_forbidden_behaviors(event, contract, forbidden_behaviors)
     )
 
+
+def _order_complete_template_missing_execution_tool(*, event: Mapping[str, Any], contract: TurnContract) -> bool:
+    if str(event.get("template") or "") != "orderComplete":
+        return False
+    is_execute_contract = str(contract.intent or "") == "quick_order_execute"
+    is_execute_planner_drift = (
+        str(contract.planner_intent or "") == "quick_order_execute"
+        and str(contract.intent or "") == "quick_order_reservation"
+        and _has_quick_order_execute_slots(contract.known_slots)
+    )
+    if not (is_execute_contract or is_execute_planner_drift):
+        return False
+    called_tools = {str(tool) for tool in tuple(event.get("called_tools") or ()) if str(tool).strip()}
+    return "quick_order_tool" not in called_tools
 
 def _flow_step_template_violation(*, template: str, contract: TurnContract) -> bool:
     if not template:

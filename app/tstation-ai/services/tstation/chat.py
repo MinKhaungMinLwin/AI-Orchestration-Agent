@@ -239,6 +239,7 @@ from services.tstation.policies.ui_action_policy import (
     resolve_goods_no_from_recent_product_context,
     resolve_recent_product_search_keyword,
     merged_quickreply_cta_context,
+    finalize_ui_action_metadata_for_contract,
     normalize_ui_action_metadata,
     selected_order_context_from_preview_values as _selected_order_context_from_preview_values,
     preview_action_mode_for_slots,
@@ -40048,7 +40049,7 @@ class TStationChatServiceV2:
             # PARALLEL MODE: yield data events immediately so FE renders without waiting for QC.
             if _parallel_qc:
                 for buffered_evt in buffered_data_events:
-                    normalize_ui_action_metadata(buffered_evt, contract=turn_contract)
+                    finalize_ui_action_metadata_for_contract(buffered_evt, contract=turn_contract)
                     _mark_first_visible()
                     yield f"data: {json.dumps(buffered_evt, ensure_ascii=False)}\n\n"
 
@@ -40403,7 +40404,7 @@ class TStationChatServiceV2:
                 # SEQUENTIAL (default): data events were buffered; yield them as-is now.
                 # Verifier never rewrites the draft, so no patching is needed.
                 for buffered_evt in buffered_data_events:
-                    normalize_ui_action_metadata(buffered_evt, contract=turn_contract)
+                    finalize_ui_action_metadata_for_contract(buffered_evt, contract=turn_contract)
                     _mark_first_visible()
                     yield f"data: {json.dumps(buffered_evt, ensure_ascii=False)}\n\n"
 

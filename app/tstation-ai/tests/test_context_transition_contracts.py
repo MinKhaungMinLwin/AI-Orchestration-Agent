@@ -10,11 +10,13 @@ from services.tstation.policies.transaction_intent_policy import plan_transactio
 from services.tstation.policies.transaction_response_policy import decide_transaction_response
 from services.tstation.policies.turn_contract import (
     TurnContract,
+    build_required_slot_clarification_event,
+    build_response_policy_guard_event,
     build_turn_contract,
     response_contract_violations,
     violates_response_template_contract,
 )
-from services.tstation.policies.ui_action_policy import build_pure_inventory_stock_contract
+from services.tstation.policies.ui_action_policy import build_pure_inventory_stock_contract, finalize_ui_action_metadata_for_contract
 
 
 def _purchase_slots(**overrides: object) -> dict[str, object]:
@@ -288,7 +290,10 @@ def test_purchase_order_complete_requires_successful_quick_order_tool_boundary()
         contract=contract,
     )
 
-    assert {violation["type"] for violation in violations} == {"order_complete_without_quick_order_tool"}
+    assert {violation["type"] for violation in violations} == {
+        "order_complete_without_quick_order_tool",
+        "forbidden_template",
+    }
 
 
 def test_purchase_order_complete_blocks_failed_quick_order_tool_result() -> None:
@@ -1160,3 +1165,313 @@ def test_next_turn_stock_context_moves_to_purchase_only_with_explicit_purchase_i
     assert purchase_resume["product"]["goods_no"] == "G000000309783"
     assert purchase_resume["store"]["shop_id"] == "F00721"
     assert purchase_resume["current_step"] == "resolve_schedule"
+
+
+@pytest.mark.parametrize(
+    ("template", "allowed_event", "allowed_contract", "forbidden_event", "forbidden_contract"),
+    (
+        (
+            "datepick",
+            {"template": "datepick"},
+            TurnContract(
+                domain="transaction",
+                intent="stock_store_search",
+                known_slots={"stock_check_mode": "preview"},
+                response_decision={"template": "datepick", "metadata": {"response_shape_key": "reservation_slots"}},
+                action_mode="stock_check",
+            ),
+            {"template": "datepick"},
+            TurnContract(
+                domain="support",
+                intent="general_cancel_fee_policy",
+                response_decision={"template": "quickReply"},
+                action_mode="support_policy_answer",
+            ),
+        ),
+        (
+            "preOrder",
+            {"template": "preOrder"},
+            TurnContract(
+                domain="transaction",
+                intent="quick_order_reservation",
+                known_slots=_purchase_slots(payment_amount=420000, price_basis="cheapest_final_prc"),
+                response_decision={"template": "preOrder"},
+                action_mode="purchase_continuation",
+                flow_step="build_preorder",
+            ),
+            {"template": "preOrder"},
+            TurnContract(
+                domain="transaction",
+                intent="quick_order_reservation",
+                known_slots=_purchase_slots(),
+                response_decision={"template": "quickReply"},
+                action_mode="purchase_continuation",
+                flow_step="resolve_price",
+            ),
+        ),
+        (
+            "orderComplete",
+            {"template": "orderComplete", "called_tools": ["quick_order_tool"]},
+            TurnContract(
+                domain="transaction",
+                intent="quick_order_execute",
+                known_slots=_purchase_slots(payment_amount=420000, price_basis="cheapest_final_prc"),
+                response_decision={"template": "orderComplete"},
+                action_mode="purchase_continuation",
+                flow_step="execute_order",
+            ),
+            {"template": "orderComplete"},
+            TurnContract(
+                domain="transaction",
+                intent="quick_order_reservation",
+                known_slots=_purchase_slots(payment_amount=420000, price_basis="cheapest_final_prc"),
+                response_decision={"template": "preOrder"},
+                action_mode="purchase_continuation",
+                flow_step="build_preorder",
+            ),
+        ),
+        (
+            "product",
+            {
+                "template": "product",
+                "source_domain": "discovery",
+                "called_tools": ["search_product_tool"],
+                "data": {"products": [{"titleProductName": "Ventus S2 AS", "titleTires": "225/45R17"}]},
+            },
+            TurnContract(
+                domain="discovery",
+                intent="product_search",
+                response_decision={
+                    "template": "product",
+                    "forbidden_behaviors": ["product_card_without_size", "price_without_size"],
+                },
+            ),
+            {"template": "product"},
+            TurnContract(
+                domain="transaction",
+                intent="price_or_coupon_check",
+                response_decision={"template": "quickReply", "forbidden_behaviors": ["price_without_size"]},
+            ),
+        ),
+        (
+            "location",
+            {"template": "location", "data": {"isBookingFlow": False}},
+            TurnContract(
+                domain="transaction",
+                intent="open_store_search",
+                response_decision={"template": "location"},
+                action_mode="store_search",
+            ),
+            {"template": "location", "data": {"isBookingFlow": True}},
+            TurnContract(
+                domain="transaction",
+                intent="open_store_search",
+                response_decision={"template": "location"},
+                action_mode="store_search",
+            ),
+        ),
+        (
+            "voucher",
+            {"template": "voucher"},
+            TurnContract(
+                domain="transaction",
+                intent="owned_coupon_lookup",
+                response_decision={"template": "voucher"},
+                action_mode="owned_record_lookup",
+            ),
+            {"template": "voucher"},
+            TurnContract(
+                domain="transaction",
+                intent="price_or_coupon_check",
+                response_decision={"template": "quickReply", "forbidden_behaviors": ["assert_coupon_without_tool_result"]},
+            ),
+        ),
+    ),
+)
+def test_risky_template_contract_matrix_allows_and_blocks_by_contract_fields(
+    template: str,
+    allowed_event: dict[str, object],
+    allowed_contract: TurnContract,
+    forbidden_event: dict[str, object],
+    forbidden_contract: TurnContract,
+) -> None:
+    assert template
+    assert violates_response_template_contract(allowed_event, allowed_contract) is False
+    assert violates_response_template_contract(forbidden_event, forbidden_contract) is True
+
+
+def test_mapper_priority_event_is_subordinate_to_current_contract() -> None:
+    mapper_event = {
+        "template": "datepick",
+        "assistant_response_source": "code_mapper",
+        "called_tools": ["get_store_schedule_tool"],
+        "data": {"assistantResponse": "Select a date."},
+    }
+    schedule_contract = TurnContract(
+        domain="transaction",
+        intent="quick_order_reservation",
+        known_slots=_purchase_slots(),
+        allowed_tools=("get_store_schedule_tool",),
+        forbidden_tools=("quick_order_tool",),
+        response_decision={"template": "datepick", "metadata": {"response_shape_key": "reservation_slots"}},
+        action_mode="purchase_continuation",
+        flow_step="show_schedule",
+    )
+    support_contract = TurnContract(
+        domain="support",
+        intent="general_cancel_fee_policy",
+        allowed_tools=("search_faq_hybrid_tool",),
+        forbidden_tools=("get_store_schedule_tool", "quick_order_tool"),
+        response_decision={"template": "quickReply", "metadata": {"response_shape_key": "general_cancel_fee_policy"}},
+        action_mode="support_policy_answer",
+    )
+    inventory_only_contract = TurnContract(
+        domain="transaction",
+        intent="stock_store_search",
+        known_slots={
+            "tire_size": "225/45R17",
+            "goods_no": "G000000309783",
+            "ord_qty": 4,
+            "shop_id": "F00721",
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+            "stock_check_mode": "inventory_only",
+        },
+        allowed_tools=("get_store_inventory_tool",),
+        forbidden_tools=("get_store_schedule_tool", "quick_order_tool"),
+        response_decision={
+            "template": "location",
+            "forbidden_behaviors": ("datepick_for_pure_inventory_flow", "preorder_for_pure_inventory_flow"),
+            "metadata": {"response_shape_key": "stock_inventory_lookup"},
+        },
+        action_mode="stock_check",
+    )
+
+    assert violates_response_template_contract(mapper_event, schedule_contract) is False
+    assert violates_response_template_contract(mapper_event, support_contract) is True
+    assert violates_response_template_contract(mapper_event, inventory_only_contract) is True
+
+
+def _assert_guard_event_does_not_carry_stale_template_context(event: dict[str, object]) -> None:
+    assert event["template"] == "quickReply"
+    assert event.get("contract_gate_result") == "blocked"
+
+    data = event["data"]
+    assert isinstance(data, dict)
+    metadata = data["metadata"]
+    assert isinstance(metadata, dict)
+    turn_contract = metadata["turnContract"]
+    assert isinstance(turn_contract, dict)
+    known_slots = turn_contract["known_slots"]
+    assert isinstance(known_slots, dict)
+
+    stale_keys = {"template_data", "ui_action", "pending_intent", "goal_type", "pendingIntent", "goalType"}
+    assert stale_keys.isdisjoint(known_slots)
+
+
+def test_response_policy_guard_fallback_does_not_persist_stale_preorder_context() -> None:
+    contract = TurnContract(
+        domain="support",
+        intent="general_cancel_fee_policy",
+        known_slots={
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "template_data": {
+                "template": "preOrder",
+                "data": {"metadata": {"pendingIntent": "order", "goalType": "place_order"}},
+            },
+            "ui_action": {
+                "action_type": "select_schedule",
+                "expected_contract_intent": "quick_order_reservation",
+            },
+        },
+        response_decision={"template": "quickReply", "forbidden_behaviors": ["personal_order_lookup"]},
+        action_mode="support_policy_answer",
+    )
+
+    event = build_response_policy_guard_event(contract)
+
+    _assert_guard_event_does_not_carry_stale_template_context(event)
+    assert event["source_domain"] == "support"
+    assert event["data"]["metadata"]["contract_intent"] == "general_cancel_fee_policy"
+
+
+def test_required_slot_clarification_fallback_does_not_persist_stale_order_complete_context() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="quick_order_execute",
+        known_slots={
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "template_data": {"template": "orderComplete"},
+            "ui_action": {"action_type": "submit_order"},
+        },
+        required_slots=("order",),
+        blocking_required_slots=("order",),
+        response_decision={"template": "quickReply"},
+        action_mode="purchase_continuation",
+    )
+
+    event = build_required_slot_clarification_event(contract)
+
+    _assert_guard_event_does_not_carry_stale_template_context(event)
+    assert event["source_domain"] == "transaction"
+    assert event["data"]["metadata"]["requiredSlots"] == ["order"]
+
+
+def test_order_complete_template_gate_requires_quick_order_tool_before_final_emit() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="quick_order_execute",
+        known_slots=_purchase_slots(payment_amount=420000, price_basis="cheapest_final_prc"),
+        allowed_tools=("quick_order_tool",),
+        response_decision={"template": "orderComplete", "metadata": {"response_shape_key": "quick_order_execute"}},
+        action_mode="purchase_continuation",
+        flow_step="execute_order",
+    )
+
+    assert violates_response_template_contract({"template": "orderComplete"}, contract) is True
+    assert violates_response_template_contract(
+        {"template": "orderComplete", "called_tools": ["quick_order_tool"]},
+        contract,
+    ) is False
+
+    violations = response_contract_violations(
+        template="orderComplete",
+        response_shape_key="quick_order_execute",
+        called_tools=(),
+        contract=contract,
+    )
+
+    assert "forbidden_template" in {violation["type"] for violation in violations}
+
+
+def test_final_ui_action_metadata_normalizes_and_validates_before_persistence_boundary() -> None:
+    event = {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "discovery",
+        "data": {
+            "assistantResponse": "Select a valid vehicle lookup action.",
+            "quickReplies": [
+                {"label": "4개", "domain": "TRANSACTION"},
+                {"label": "사이즈 직접 입력", "domain": "DISCOVERY", "cta_action": "enter_size"},
+            ],
+            "metadata": {"response_shape_key": "vehicle_tire_size_lookup"},
+        },
+    }
+    contract = TurnContract(
+        domain="discovery",
+        intent="vehicle_tire_size_lookup",
+        response_decision={"template": "quickReply", "metadata": {"response_shape_key": "vehicle_tire_size_lookup"}},
+        action_mode="product_description",
+    )
+
+    changed = finalize_ui_action_metadata_for_contract(event, contract=contract)
+
+    assert changed is True
+    quick_replies = event["data"]["quickReplies"]
+    assert [chip["label"] for chip in quick_replies] == ["사이즈 직접 입력"]
+    assert quick_replies[0]["ui_action"]["action_type"] == "enter_size"
+    assert quick_replies[0]["ui_action"]["expected_contract_intent"] == "vehicle_tire_size_lookup"
+    assert event["data"]["metadata"]["ui_action_validation"] == "vehicle_tire_size_lookup"

@@ -136,7 +136,7 @@ The flow tables must keep tools and FE templates/actions separate:
 
 ## Current Stabilization Checkpoint
 
-Status after steps 1-17D:
+Status after steps 1-18E:
 
 1. The five flow transition tables now separate backend tools from FE templates/actions, next tool, next template/action, and expected persistence.
 2. Purchase, stock, store, support, and reservation/preorder boundaries have focused regression coverage in the existing policy test suites.
@@ -154,6 +154,11 @@ Status after steps 1-17D:
 11. Store-only and purchase schedule recovery paths now have mapper/template compatibility coverage, including blocking `datepick` from store-only results and blocking premature `preOrder` before the purchase schedule/price boundary is complete.
 12. Next-turn persistence assertions now cover stale preorder invalidation, support-policy turns ignoring stale preorder/template metadata, and stock context moving into purchase only when the current turn explicitly resumes purchase.
 13. Step 17D audit found no additional owner-layer gaps exposed by the new transition coverage; focused checkpoint tests and ruff both pass without adding new `chat.py` branches.
+14. Step 18A added a risky-template contract matrix for `datepick`, `preOrder`, `orderComplete`, `product`, `location`, and `voucher`, with one allowed and one forbidden contract-field case for each template.
+15. Step 18B now sanitizes guard-event contract snapshots so blocked-template fallbacks emit safe `quickReply` payloads without carrying stale `template_data`, `ui_action`, `pending_intent`, or `goal_type` context into guard metadata.
+16. Step 18C tightened the hard template gate so `orderComplete` requires the current execution event to include `quick_order_tool`, and added direct executor coverage proving support recovery builders cannot override contract blocks with action templates.
+17. Step 18D centralizes final UI-action handling through `finalize_ui_action_metadata_for_contract()`, so final buffered events are normalized and contract-validated before yield/persistence boundaries.
+18. Step 18E keeps mapper priority subordinate to the current contract by annotating direct-executor mapper events with current `called_tools` before validation, and adding coverage for compatible mapper output, forbidden mapper output, and same mapper event/different contract outcomes.
 
 Verified checkpoint command:
 
@@ -168,15 +173,15 @@ uv run pytest `
   -q
 ```
 
-Latest result: `115 passed, 1 warning`.
+Latest result: `128 passed, 1 warning`.
 
 Current next step:
 
 ```text
-Phase 8: tighten contract and template gates for the remaining risky templates and fallback paths.
+Phase 9: run end-to-end SSE verification for the stabilized purchase, stock, store, support, and reservation boundaries.
 ```
 
-The next work should add more scenario coverage and persistence assertions. Do not add new flow branches in `chat.py` unless a transition-table row proves the owner layer cannot express the behavior.
+If Phase 9 exposes a remaining boundary gap, add the smallest scenario coverage and persistence assertion for that transition row. Do not add new flow branches in `chat.py` unless a transition-table row proves the owner layer cannot express the behavior.
 
 ## Phase 0: Freeze Patch-Level Expansion
 

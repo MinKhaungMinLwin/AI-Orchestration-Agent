@@ -125,6 +125,12 @@ def _annotate_contract_tool_recovery_event(
     return event
 
 
+def _annotate_called_tools(event: dict[str, Any], tool_data_list: list[dict[str, Any]]) -> None:
+    called_tools = [str(entry.get("tool") or "") for entry in tool_data_list if str(entry.get("tool") or "").strip()]
+    if called_tools:
+        event["called_tools"] = called_tools
+
+
 def _annotate_stock_inventory_store_lookup_event(
     event: dict[str, Any],
     *,
@@ -721,6 +727,7 @@ async def recover_blocked_fast_path_to_contract_tool(
         if not isinstance(mapped_event, dict):
             return None
         mapped_event["source_domain"] = source_domain
+        _annotate_called_tools(mapped_event, tool_data_list)
         if (
             preferred_tool in {"get_store_list_tool", "search_stores_tool"}
             and tool_input_source == "turn_contract_required_stock_inventory_store_lookup"

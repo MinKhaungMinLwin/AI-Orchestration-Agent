@@ -2078,6 +2078,17 @@ def validate_ui_actions_for_contract(
     return True
 
 
+def finalize_ui_action_metadata_for_contract(
+    event: dict[str, Any],
+    *,
+    contract: Any | None = None,
+    source_intent: str | None = None,
+    action_context: UIActionContext | None = None,
+) -> bool:
+    normalized = normalize_ui_action_metadata(event, contract=contract, source_intent=source_intent)
+    validated = validate_ui_actions_for_contract(event, contract=contract, action_context=action_context)
+    return normalized or validated
+
 def chip_context_dict(chip_context: Any | None) -> dict[str, Any]:
     if isinstance(chip_context, dict):
         return chip_context
