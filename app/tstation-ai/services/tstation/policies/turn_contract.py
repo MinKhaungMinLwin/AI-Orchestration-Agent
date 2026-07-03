@@ -365,6 +365,19 @@ _SUPPORT_SAFE_AGENT_TOOLS = (
     "get_maintenance_dday_tool",
     "check_coupon_stacking_tool",
 )
+_SUPPORT_POLICY_PURCHASE_FORBIDDEN_TOOLS = frozenset({
+    "quick_order_tool",
+    "save_to_cart_tool",
+    "add_to_cart_tool",
+    "transaction_store_preview_tool",
+    "get_store_schedule_tool",
+    "get_multi_store_schedule_tool",
+    "get_store_inventory_tool",
+    "get_logistics_inventory_tool",
+    "get_final_price_tool",
+    "compare_discount_tool",
+    "search_product_tool",
+})
 _CARD_INSTALLMENT_LOOKUP_RE = re.compile(
     r"무이자|할부|몇\s*개?월|[0-9]{1,2}\s*개?월|개월수|카드사별|현대카드|신한카드|삼성카드|국민카드|"
     r"롯데카드|하나카드|농협카드|우리카드|비씨카드|BC카드|스마트\s*페이|smart\s*pay|smartpay",
@@ -1460,11 +1473,19 @@ def build_turn_contract(
         router_wins_intent
         and (router_wins_preempted_required_slots or required_slots or resolvable_required_slots or blocking_required_slots)
     )
-    if _support_answer_contract_owns_response(domain=domain, intent=intent, action_mode=action_mode):
+    support_answer_contract = _support_answer_contract_owns_response(
+        domain=domain,
+        intent=intent,
+        action_mode=action_mode,
+    )
+    if support_answer_contract:
         required_slots = ()
         resolvable_required_slots = ()
         blocking_required_slots = ()
         blocking_required_slots_source = "support_answer_contract"
+        forbidden_tools = _merge_tuple(forbidden_tools, tuple(_SUPPORT_POLICY_PURCHASE_FORBIDDEN_TOOLS))
+        if action_mode == "unspecified":
+            action_mode = "support_policy_answer"
     if router_wins_intent:
         required_slots = ()
         resolvable_required_slots = ()

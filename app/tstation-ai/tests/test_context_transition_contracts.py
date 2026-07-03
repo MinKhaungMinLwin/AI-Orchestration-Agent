@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from services.tstation.policies.flow_state import commit_flow_state
 from services.tstation.policies.intent_frame import IntentFrame, PolicyDomain
-from services.tstation.policies.response_decision import TemplateName
+from services.tstation.policies.response_decision import ResponseDecision, ResponseShape, TemplateName, ToolPlan
 from services.tstation.policies.transaction_intent_policy import plan_transaction_tools
 from services.tstation.policies.transaction_response_policy import decide_transaction_response
 from services.tstation.policies.turn_contract import (
@@ -296,6 +296,47 @@ def test_support_policy_turn_blocks_stale_purchase_templates_and_tools() -> None
     )
 
     assert "action_mode_tool_violation" in {violation["type"] for violation in violations}
+
+
+def test_support_policy_contract_overrides_stale_purchase_tool_plan() -> None:
+    frame = IntentFrame(
+        domain=PolicyDomain.SUPPORT,
+        intent="general_cancel_fee_policy",
+        known_slots={
+            **_purchase_slots(payment_amount=420000, price_basis="cheapest_final_prc"),
+            "active_parent_flow": "purchase",
+        },
+    )
+    stale_tool_plan = ToolPlan(
+        allowed_tools=("quick_order_tool", "get_store_schedule_tool", "search_faq_hybrid_tool"),
+        preferred_tool="quick_order_tool",
+        forbidden_tools=(),
+        metadata={"response_intent": "quick_order_execute"},
+    )
+    response_decision = ResponseDecision(
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        forbidden_behaviors=("personal_order_lookup", "normalize_as_cancel_request"),
+        metadata={"response_shape_key": "general_cancel_fee_policy_summary"},
+    )
+    contract = build_turn_contract(
+        user_text="cancel fee policy",
+        intent_frame=frame,
+        tool_plan=stale_tool_plan,
+        response_decision=response_decision,
+    )
+
+    assert contract.domain == "support"
+    assert contract.intent == "general_cancel_fee_policy"
+    assert "search_faq_hybrid_tool" in contract.allowed_tools
+    assert "quick_order_tool" not in contract.allowed_tools
+    assert "get_store_schedule_tool" not in contract.allowed_tools
+    assert "quick_order_tool" in contract.forbidden_tools
+    assert "get_store_schedule_tool" in contract.forbidden_tools
+    assert violates_response_template_contract({"template": "preOrder"}, contract) is True
+    assert violates_response_template_contract({"template": "datepick"}, contract) is True
+    assert violates_response_template_contract({"template": "orderComplete"}, contract) is True
+    assert violates_response_template_contract({"template": "quickReply"}, contract) is False
 
 
 def test_stock_pure_inventory_transition_blocks_schedule_and_preorder_templates() -> None:
