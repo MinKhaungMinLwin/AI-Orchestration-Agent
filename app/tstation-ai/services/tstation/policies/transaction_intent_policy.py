@@ -85,6 +85,12 @@ _STORE_HOLIDAY_LOOKUP_RE = re.compile(
     r"문\s*열|영업|운영|쉬나|쉬어",
     re.IGNORECASE,
 )
+_STORE_SELECTION_REFERENCE_RE = re.compile(
+    r"(?:첫|두|세|네|다섯|마지막)\s*(?:번\s*째|번째|번)?\s*매장|"
+    r"\d+\s*(?:번\s*째|번째|번|[.)])\s*매장|"
+    r"이\s*매장|그\s*매장|해당\s*매장",
+    re.IGNORECASE,
+)
 _STORE_NAME_CANDIDATE_RE = re.compile(r"((?:티스테이션\s*)?[가-힣A-Za-z0-9]+(?:점|매장))")
 _STORE_RESERVATION_ACTION_RE = re.compile(
     r"예약\s*(?:가능|시간|일정|변경|바꾸|바꿔|취소|해줘|잡아)|"
@@ -147,7 +153,9 @@ _RESERVATION_WINDOW_POLICY_RE = re.compile(
     r"(?:두\s*달|2\s*달|한\s*달\s*넘|1\s*달\s*넘|30일\s*(?:이후|뒤)|"
     r"최대\s*(?:며칠|몇\s*일|몇\s*주)|언제까지\s*장착\s*예약|예약\s*가능\s*기간|"
     r"장착\s*예약(?:은)?\s*최대\s*(?:며칠|몇\s*일|몇\s*주)|"
-    r"(?:두\s*달|2\s*달).{0,12}예약\s*가능|예약.{0,12}(?:30일|1개월|한\s*달).{0,8}(?:이내|까지))",
+    r"(?:두\s*달|2\s*달).{0,12}예약\s*가능|예약.{0,12}(?:30일|1개월|한\s*달).{0,8}(?:이내|까지)|"
+    r"예약.{0,12}변경.{0,12}(?:언제까지|기한|마감|가능\s*기간)|"
+    r"(?:언제까지|기한|마감).{0,12}예약.{0,12}변경)",
     re.IGNORECASE,
 )
 _DELIVERY_DELAY_RE = re.compile(
@@ -624,13 +632,17 @@ def _is_explicit_order_execution_request(text: str, slots: dict[str, Any]) -> bo
     return bool(has_product and has_quantity and store_name and has_schedule)
 
 
-def _is_plain_store_info_lookup(text: str) -> bool:
+def _has_selected_store_reference(text: str, store_name: str | None) -> bool:
+    return bool(store_name and _STORE_SELECTION_REFERENCE_RE.search(text or ""))
+
+
+def _is_plain_store_info_lookup(text: str, *, selected_store_name: str | None = None) -> bool:
     if not _PLAIN_STORE_INFO_RE.search(text or ""):
         return False
     if _STORE_RESERVATION_ACTION_RE.search(text or ""):
         return False
     store_name = _extract_policy_store_name_candidate(text)
-    if not store_name:
+    if not store_name and not _has_selected_store_reference(text, selected_store_name):
         return False
     if _SERVICE_DURATION_ADVISORY_RE.search(text or ""):
         return False
@@ -641,13 +653,13 @@ def _is_plain_store_info_lookup(text: str) -> bool:
     return True
 
 
-def _is_store_holiday_lookup(text: str) -> bool:
+def _is_store_holiday_lookup(text: str, *, selected_store_name: str | None = None) -> bool:
     value = text or ""
     if not _STORE_HOLIDAY_LOOKUP_RE.search(value):
         return False
     if _STORE_RESERVATION_ACTION_RE.search(value):
         return False
-    return bool(_extract_policy_store_name_candidate(value))
+    return bool(_extract_policy_store_name_candidate(value) or _has_selected_store_reference(value, selected_store_name))
 
 
 def _is_order_history_reorder_turn(text: str) -> bool:
@@ -788,6 +800,8 @@ def build_transaction_intent_frame(
     current_has_product = bool(current_product_name or _PRODUCT_HINT_RE.search(text))
     current_store_name_role = classify_store_name_role(text, store_name=current_store_name)
     current_store_is_context = current_store_name_role.role == "context"
+    selected_store_name = current_store_name or str(slots.get("shop_name") or slots.get("store_name") or "").strip()
+    current_selected_store_reference = _has_selected_store_reference(text, selected_store_name)
     current_region = None if current_store_is_context else raw_current_region
     action_store_name = None if current_store_is_context else current_store_name
     current_store_search = bool(_STORE_SEARCH_RE.search(text))
@@ -875,11 +889,14 @@ def build_transaction_intent_frame(
     )
     current_order_history_lookup = _is_order_history_lookup_turn(text)
     current_plain_store_info_lookup = bool(
-        not current_store_is_context
-        and _is_plain_store_info_lookup(text)
+        (not current_store_is_context or current_selected_store_reference)
+        and _is_plain_store_info_lookup(text, selected_store_name=selected_store_name)
         and not _is_explicit_order_execution_request(text, slots)
     )
-    current_store_holiday_lookup = bool(not current_store_is_context and _is_store_holiday_lookup(text))
+    current_store_holiday_lookup = bool(
+        (not current_store_is_context or current_selected_store_reference)
+        and _is_store_holiday_lookup(text, selected_store_name=selected_store_name)
+    )
     current_order_history_reorder = _is_order_history_reorder_turn(text)
     current_purchase = bool(_PURCHASE_RE.search(text))
     current_cart = bool(_CART_RE.search(text))
@@ -1301,11 +1318,11 @@ def build_transaction_intent_frame(
     elif current_store_holiday_lookup:
         intent = "store_holiday_lookup"
         sub_intent = "store_holiday"
-        entities["store_name"] = _extract_policy_store_name_candidate(text) or store_name
+        entities["store_name"] = _extract_policy_store_name_candidate(text) or selected_store_name or store_name
     elif current_plain_store_info_lookup:
         intent = "plain_store_info_lookup"
         sub_intent = "store_detail"
-        entities["store_name"] = _extract_policy_store_name_candidate(text) or store_name
+        entities["store_name"] = _extract_policy_store_name_candidate(text) or selected_store_name or store_name
     elif router_order_cart_status_check:
         intent = "order_history_lookup"
         sub_intent = "lookup"
@@ -1718,7 +1735,12 @@ def build_transaction_intent_frame(
         known["pending_intent"] = "order"
         known["goal_type"] = "place_order"
         known["stock_check_mode"] = "preview"
-    if plain_store_search and not current_has_product and not preserve_transaction_product_context:
+    if (
+        plain_store_search
+        and intent not in {"plain_store_info_lookup", "store_holiday_lookup"}
+        and not current_has_product
+        and not preserve_transaction_product_context
+    ):
         for key in (
             "goods_no",
             "product_name",
@@ -1739,7 +1761,10 @@ def build_transaction_intent_frame(
             **({"store_name": store_name} if store_name else {}),
             **({"shop_name": store_name} if store_name else {}),
         })
-    if store_candidate_search or region_scope_product_continuation:
+    if (store_candidate_search or region_scope_product_continuation) and intent not in {
+        "plain_store_info_lookup",
+        "store_holiday_lookup",
+    }:
         for key in ("shop_id", "shop_name", "store_name"):
             known.pop(key, None)
     if store_name and "store_exact_match" not in known and store_name in _KNOWN_UNVERIFIED_STORE_NAMES:

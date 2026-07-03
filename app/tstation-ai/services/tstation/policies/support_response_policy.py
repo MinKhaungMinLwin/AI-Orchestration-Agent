@@ -154,7 +154,7 @@ _TIRE_MANUFACTURE_DATE_ANCHOR_RE = re.compile(
     re.IGNORECASE,
 )
 _TIRE_QUALITY_DAMAGE_ANCHOR_RE = re.compile(
-    r"측면|사이드월|부풀|품질\s*보증|품질보증|제조상\s*과실|보증\s*기준|잔여\s*홈",
+    r"측면|사이드월|부풀|품질\s*보증|품질보증|제조상\s*과실|보증\s*(?:기준|기간|조건)|잔여\s*홈",
     re.IGNORECASE,
 )
 _SUPPORT_FACT_TYPE_TO_BUCKET: dict[tuple[str, str], str] = {
@@ -2485,9 +2485,15 @@ _TIRE_MANUFACTURE_DATE_POLICY_RE = re.compile(
 )
 _TIRE_QUALITY_WARRANTY_POLICY_RE = re.compile(
     r"측면.{0,12}부풀|사이드월.{0,12}부풀|품질\s*보증|품질보증|무상\s*(?:A/?S|as|교환)|제조상\s*과실|"
-    r"보증\s*기준|불량.{0,12}(무상|교환|보상)",
+    r"보증\s*(?:기준|기간|조건)|불량.{0,12}(무상|교환|보상)",
     re.IGNORECASE,
 )
+
+
+def is_tire_quality_warranty_policy_text(user_text: str | None) -> bool:
+    return _TIRE_QUALITY_WARRANTY_POLICY_RE.search(str(user_text or "")) is not None
+
+
 _ASSURANCE_SERVICE_POLICY_RE = re.compile(
     r"안심\s*서비스|안심서비스|안심\s*플러스|안심플러스|디지털\s*워런티|종이\s*보증서|"
     r"보증서.{0,12}(분실|잃어버)|가입\s*가능\s*기간|장착비.{0,12}(따로|별도)",
@@ -2632,6 +2638,16 @@ def decide_support_response(
             template=TemplateName.QUICK_REPLY,
             forbidden_behaviors=("promise_coupon_issue", "invent_discount", "show_all_coupons_without_context"),
             assistant_guidance="임의 쿠폰 발급은 불가하다고 안내하고, 받을 수 있는 쿠폰은 쿠폰함에서 확인 가능하다고 안내한다.",
+        )
+
+    if intent == "expired_coupon" or (_COUPON_RE.search(text) and _EXPIRED_COUPON_RE.search(text)):
+        return _decision(
+            response_shape_key="expired_coupon_not_restorable_qna",
+            response_shape=ResponseShape.ACTION_CONFIRM,
+            template=TemplateName.QNA_COMPLETE,
+            forbidden_behaviors=("promise_coupon_restore", "omit_non_restorable_policy"),
+            assistant_guidance="만료된 쿠폰은 원칙적으로 원복/재사용이 어렵다고 먼저 안내한 뒤 1:1 문의 CTA를 연결한다.",
+            metadata={"qna_category_hint": "제공서비스/이벤트/혜택"},
         )
 
     if intent == "coupon_registration_policy" or (_COUPON_RE.search(text) and _COUPON_REGISTRATION_POLICY_RE.search(text)):
@@ -2966,16 +2982,6 @@ def decide_support_response(
             ),
         )
 
-    if intent == "expired_coupon" or (_COUPON_RE.search(text) and _EXPIRED_COUPON_RE.search(text)):
-        return _decision(
-            response_shape_key="expired_coupon_not_restorable_qna",
-            response_shape=ResponseShape.ACTION_CONFIRM,
-            template=TemplateName.QNA_COMPLETE,
-            forbidden_behaviors=("promise_coupon_restore", "omit_non_restorable_policy"),
-            assistant_guidance="만료된 쿠폰은 원칙적으로 원복/재사용이 어렵다고 먼저 안내한 뒤 1:1 문의 CTA를 연결한다.",
-            metadata={"qna_category_hint": "제공서비스/이벤트/혜택"},
-        )
-
     if intent == "nonexistent_benefit" or _NONEXISTENT_BENEFIT_RE.search(text):
         return _decision(
             response_shape_key="unverified_benefit_denied",
@@ -3052,7 +3058,9 @@ def decide_support_response(
             ),
         )
 
-    if intent == "card_installment_lookup" or _is_card_installment_lookup_query(text):
+    if intent == "card_installment_lookup" or (
+        intent != "payment_error_troubleshooting" and _is_card_installment_lookup_query(text)
+    ):
         return _decision(
             response_shape_key="card_installment_lookup",
             response_shape=ResponseShape.SUMMARY,

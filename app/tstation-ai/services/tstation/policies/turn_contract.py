@@ -4073,13 +4073,13 @@ _FAQ_POLICY_SOURCE_RELEVANCE_RE = {
     ),
     "tire_quality_warranty_policy": re.compile(
         r"측면|사이드월|부풀|품질\s*보증|품질보증|무상\s*(?:A/?S|AS|as|교체|수리)|"
-        r"제조상\s*과실|점검|잔여\s*홈|워런티",
+        r"제조상\s*과실|보증\s*(?:기준|기간|조건)|점검|잔여\s*홈|워런티",
         re.IGNORECASE,
     ),
 }
 _FAQ_POLICY_ALLOW_TOKENS = {
     "tire_manufacture_date_policy": ("제조일자", "DOT", "신품", "유통", "숙성", "선입선출", "6개월", "12개월"),
-    "tire_quality_warranty_policy": ("측면", "사이드월", "부풀", "품질보증", "무상", "점검", "워런티"),
+    "tire_quality_warranty_policy": ("측면", "사이드월", "부풀", "품질보증", "보증기간", "무상", "점검", "워런티"),
     "reservation_no_show_fee_policy": ("미방문", "예약시간", "못 갔", "취소", "수수료", "위약금", "환불"),
     "promotion_gift_delivery_policy": ("사은품", "지급", "배송", "수령", "언제"),
 }

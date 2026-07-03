@@ -1740,8 +1740,9 @@ def test_tc189_price_policy_guard_blocks_expired_coupon_restore() -> None:
     event = _price_policy_guard_event("작년에 끝난 블랙세일 쿠폰 못쓰고 만료됨 원복해줘")
 
     assert event is not None
-    assert event["template"] == "quickReply"
+    assert event["template"] == "qnaComplete"
     assert "원복 또는 재사용이 어렵" in event["data"]["assistantResponse"]
+    assert event["data"]["metadata"]["response_shape_key"] == "expired_coupon_not_restorable_qna"
     assert "1:1 문의하기" in _labels(event["data"]["quickReplies"])
 
 

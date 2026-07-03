@@ -146,6 +146,19 @@ def test_post_install_noise_refund_uses_tire_quality_warranty_policy() -> None:
     assert "claim_free_replacement_without_inspection" in decision.forbidden_behaviors
 
 
+def test_warranty_period_text_trigger_uses_tire_quality_warranty_policy() -> None:
+    decision = decide_support_response(
+        intent="support_faq",
+        user_text="티스테이션 보증 기간도 알려줘",
+    )
+
+    assert decision.template == TemplateName.QUICK_REPLY
+    assert decision.response_shape == ResponseShape.SUMMARY
+    assert decision.metadata["response_shape_key"] == "tire_quality_warranty_policy"
+    assert "transfer_to_qna_direct_first" in decision.forbidden_behaviors
+    assert "claim_free_replacement_without_inspection" in decision.forbidden_behaviors
+
+
 def test_reservation_policy_guidance_text_trigger_without_owned_anchor() -> None:
     decision = decide_support_response(
         intent="support_faq",

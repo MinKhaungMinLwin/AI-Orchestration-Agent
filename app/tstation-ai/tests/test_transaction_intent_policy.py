@@ -362,6 +362,30 @@ def test_store_holiday_lookup_uses_store_detail_not_schedule() -> None:
     assert decision.metadata["response_shape_key"] == "store_holiday_lookup"
 
 
+def test_selected_store_hours_followup_uses_store_detail_not_schedule() -> None:
+    user_text = "첫 번째 매장 영업시간 알려줘"
+    frame = build_transaction_intent_frame(
+        user_text,
+        known_slots={
+            "shop_id": "S001",
+            "shop_name": "티스테이션 판교점",
+            "store_name": "티스테이션 판교점",
+            "pending_intent": "store_search",
+            "goal_type": "store_finder",
+        },
+    )
+    plan = plan_transaction_tools(frame)
+    decision = decide_transaction_response(intent=frame.intent, user_text=user_text, known_slots=dict(frame.known_slots))
+
+    assert frame.intent == "store_holiday_lookup"
+    assert frame.known_slots["store_name"] == "티스테이션 판교점"
+    assert plan.allowed_tools == ("get_store_list_tool", "get_store_detail_tool")
+    assert "get_store_schedule_tool" in plan.forbidden_tools
+    assert "transaction_store_preview_tool" in plan.forbidden_tools
+    assert "quick_order_tool" in plan.forbidden_tools
+    assert decision.metadata["response_shape_key"] == "store_holiday_lookup"
+
+
 def test_order_history_reorder_contract_uses_owned_order_tool_only() -> None:
     user_text = "지난번 주문한 타이어 다시 구매할래"
     frame = build_transaction_intent_frame(user_text, known_slots={})
@@ -513,6 +537,30 @@ def test_reservation_window_policy_overrides_stale_store_context() -> None:
     assert plan.allowed_tools == ("search_faq_hybrid_tool",)
     assert "get_store_schedule_tool" in plan.forbidden_tools
     assert plan.required_slots == ()
+
+
+def test_reservation_change_deadline_uses_window_policy_not_owned_lookup() -> None:
+    user_text = "예약 변경은 언제까지 가능해?"
+    frame = build_transaction_intent_frame(
+        user_text,
+        known_slots={
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "shop_name": "티스테이션 판교점",
+        },
+    )
+    plan = plan_transaction_tools(frame)
+    decision = decide_transaction_response(intent=frame.intent, user_text=user_text, known_slots=dict(frame.known_slots))
+
+    assert frame.intent == "reservation_window_policy"
+    assert frame.sub_intent == "reservation_window_policy"
+    assert frame.known_slots["goal_type"] == "support_policy_answer"
+    assert plan.allowed_tools == ("search_faq_hybrid_tool",)
+    assert plan.preferred_tool == "search_faq_hybrid_tool"
+    assert "get_orders_of_user_tool" in plan.forbidden_tools
+    assert "get_my_reservations_tool" in plan.forbidden_tools
+    assert "get_store_schedule_tool" in plan.forbidden_tools
+    assert decision.metadata["response_shape_key"] == "reservation_window_policy"
 
 
 def test_relative_reservation_date_keeps_store_schedule_lookup() -> None:

@@ -88,6 +88,7 @@ from services.tstation.policies.support_response_policy import (
     build_support_faq_policy_event,
     build_support_faq_evidence_grounded_reply,
     is_post_install_quality_claim,
+    is_tire_quality_warranty_policy_text,
 )
 from services.tstation.policies.response_decision import ResponseDecision, ResponseShape, TemplateName, ToolPlan
 from services.tstation.policies.resolved_context import (
@@ -4067,9 +4068,21 @@ class StreamingMultiAgentCoordinator:
                             user_behavior="asking about post-install tire quality concern and refund/compensation",
                             agent_prompt_profile=AgentPromptProfile.FULL,
                             claim_check_type="none",
-                            complaint_scope="tstation_service_complaint",
+                            complaint_scope="none",
                             policy_intent="tire_quality_warranty_policy",
                             flow="post-install quality/refund claim routed to FAQ-first warranty policy",
+                        )
+                    if domain == MultiAgentDomain.Domain.SUPPORT and is_tire_quality_warranty_policy_text(text):
+                        return MultiAgentDomain(
+                            reason=f"hardcoded keyword routing matched '{kw}' with tire warranty policy question",
+                            domains=[MultiAgentDomain.Domain.SUPPORT],
+                            execution_plan=["support:tire_quality_warranty_policy"],
+                            user_behavior="asking about tire warranty policy",
+                            agent_prompt_profile=AgentPromptProfile.FULL,
+                            claim_check_type="none",
+                            complaint_scope="none",
+                            policy_intent="tire_quality_warranty_policy",
+                            flow="tire warranty policy routed to FAQ-first support policy",
                         )
                     return MultiAgentDomain(
                         reason=f"hardcoded keyword routing matched '{kw}'",
@@ -13301,7 +13314,7 @@ def _price_policy_guard_event(user_text: str) -> dict | None:
     if frame.intent == "expired_coupon_or_event":
         return {
             "type": "data",
-            "template": "quickReply",
+            "template": "qnaComplete",
             "source_domain": MultiAgentDomain.Domain.SUPPORT.value,
             "assistant_response_source": "code_price_policy_guard",
             "data": {
@@ -13314,6 +13327,10 @@ def _price_policy_guard_event(user_text: str) -> dict | None:
                     {"label": "내 쿠폰함", "url": CTAUrls.MY_COUPON_LIST_PC, "domain": "TRANSACTION"},
                 ],
                 "predictedDomains": ["SUPPORT", "TRANSACTION"],
+                "metadata": {
+                    "response_shape_key": "expired_coupon_not_restorable_qna",
+                    "qna_category_hint": "제공서비스/이벤트/혜택",
+                },
             },
         }
 
@@ -27503,8 +27520,9 @@ class TStationChatServiceV2:
                     user_behavior="product warranty or claim request must be handled by support",
                     flow=policy_plan.response_strategy,
                     claim_check_type="none",
-                    complaint_scope="tstation_service_complaint",
+                    complaint_scope="none",
                     agent_prompt_profile=AgentPromptProfile.FULL,
+                    policy_intent="tire_quality_warranty_policy",
                 )
                 _classify_path = "policy_warranty_claim"
                 classify_future = None

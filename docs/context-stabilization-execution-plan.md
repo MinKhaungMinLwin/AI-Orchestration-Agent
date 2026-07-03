@@ -136,7 +136,7 @@ The flow tables must keep tools and FE templates/actions separate:
 
 ## Current Stabilization Checkpoint
 
-Status after steps 1-19D:
+Status after steps 1-19G:
 
 1. The five flow transition tables now separate backend tools from FE templates/actions, next tool, next template/action, and expected persistence.
 2. Purchase, stock, store, support, and reservation/preorder boundaries have focused regression coverage in the existing policy test suites.
@@ -162,6 +162,15 @@ Status after steps 1-19D:
 19. Phase 9 local E2E exposed an active-purchase interrupt gap where support/policy questions could be consumed as purchase slot-fill values. Steps 19A-19B make router-wins informational/policy intents override `expected_slot_fill:*`, dormant the purchase context, and drop interrupted `region`, `store`, and `schedule` slot-fill values before contract validation.
 20. Step 19C adds explicit-resume coverage after support interrupts: resumed purchase contexts keep product, size, and quantity, but stop at the missing store or schedule boundary and block premature `datepick`, `preOrder`, `orderComplete`, and `quick_order_tool` outputs until the required boundary is satisfied.
 21. Step 19D makes code-frame policy intents eligible for router-wins interrupt handling when router `policy_intent` is `none`, preventing general policy questions from being consumed as purchase slot-fill values.
+22. Step 19E isolates direct-executor tests from importing the real transaction tool module, so focused checkpoint tests no longer fail before assertions because `litellm` pulls a local `aiohttp.ClientSession` import blocker. The executor behavior remains tested through fake transaction tool modules patched into `sys.modules`.
+23. Step 19F fixes the Phase 9 SSE boundary failures found in store detail follow-up, reservation-change deadline policy, and warranty-period policy:
+    - selected-store references such as "first store business hours" stay in store-detail lookup and do not require product/schedule slots;
+    - reservation-change deadline questions use `reservation_window_policy` and FAQ lookup instead of owned order/reservation lookup;
+    - warranty-period questions during purchase interrupt the purchase context and route to `tire_quality_warranty_policy` instead of complaint escalation.
+24. Step 19G aligns coupon/payment support policy boundaries across policy and runtime guard layers:
+    - expired coupon/event restore requests now return `qnaComplete` with `expired_coupon_not_restorable_qna`;
+    - card installment questions do not get absorbed by `payment_error_troubleshooting`;
+    - real payment-screen errors keep the FAQ-first payment troubleshooting boundary.
 
 Verified checkpoint command:
 
@@ -170,18 +179,31 @@ $env:PYTHONPATH=(Resolve-Path app/tstation-ai).Path
 uv run pytest `
   app/tstation-ai/tests/test_context_transition_contracts.py `
   app/tstation-ai/tests/test_transaction_intent_policy.py `
+  app/tstation-ai/tests/test_support_response_policy.py `
   app/tstation-ai/tests/test_price_basis_policy.py `
   app/tstation-ai/tests/test_contract_required_tool_candidate.py `
   app/tstation-ai/tests/test_contract_direct_executor.py `
+  app/tstation-ai/tests/test_ui_action_datepick_policy.py `
   -q
 ```
 
-Latest result: `135 passed, 1 warning`.
+Latest focused checkpoint result: `185 passed, 1 warning`.
+
+Latest Phase 9 SSE regression subset result after Docker local rebuild: `6/6 passed`.
+
+Verified SSE subset:
+
+- S06 store search -> selected-store business-hours follow-up: PASS
+- S09 reservation-change deadline policy: PASS
+- S16 purchase context -> warranty-period support interrupt: PASS
+- expired coupon/event restore request: PASS
+- card installment lookup: PASS
+- payment-screen error troubleshooting: PASS
 
 Current next step:
 
 ```text
-Phase 9: run end-to-end SSE verification for the stabilized purchase, stock, store, support, and reservation boundaries.
+Phase 9: broaden end-to-end SSE verification from the passing focused subset to the full purchase, stock, store, support, and reservation boundary matrix.
 ```
 
 If Phase 9 exposes a remaining boundary gap, add the smallest scenario coverage and persistence assertion for that transition row. Do not add new flow branches in `chat.py` unless a transition-table row proves the owner layer cannot express the behavior.
