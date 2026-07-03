@@ -159,6 +159,7 @@ Status after steps 1-18E:
 16. Step 18C tightened the hard template gate so `orderComplete` requires the current execution event to include `quick_order_tool`, and added direct executor coverage proving support recovery builders cannot override contract blocks with action templates.
 17. Step 18D centralizes final UI-action handling through `finalize_ui_action_metadata_for_contract()`, so final buffered events are normalized and contract-validated before yield/persistence boundaries.
 18. Step 18E keeps mapper priority subordinate to the current contract by annotating direct-executor mapper events with current `called_tools` before validation, and adding coverage for compatible mapper output, forbidden mapper output, and same mapper event/different contract outcomes.
+19. Phase 9 local E2E exposed an active-purchase interrupt gap where support/policy questions could be consumed as purchase slot-fill values. Steps 19A-19B make router-wins informational/policy intents override `expected_slot_fill:*`, dormant the purchase context, and drop interrupted `region`, `store`, and `schedule` slot-fill values before contract validation.
 
 Verified checkpoint command:
 
@@ -173,7 +174,7 @@ uv run pytest `
   -q
 ```
 
-Latest result: `128 passed, 1 warning`.
+Latest result: `132 passed, 1 warning`.
 
 Current next step:
 

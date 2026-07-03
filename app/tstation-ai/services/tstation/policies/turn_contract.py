@@ -626,6 +626,9 @@ def _drop_interrupted_slot_fill_values(
     if expected_slot == "store":
         for key in ("store_name", "shop_name"):
             sanitized.pop(key, None)
+    if expected_slot == "schedule":
+        for key in ("requested_cal_day", "rsv_hour", "booking_datetime"):
+            sanitized.pop(key, None)
     return sanitized
 
 def build_turn_contract(

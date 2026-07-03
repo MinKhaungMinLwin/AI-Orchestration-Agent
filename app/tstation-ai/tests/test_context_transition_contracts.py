@@ -1024,14 +1024,20 @@ def test_support_turn_dormants_purchase_until_explicit_resume_anchor() -> None:
     assert explicit_resume.active_flow_context["product"]["goods_no"] == "G000000309783"
 
 
-def test_policy_interrupt_overrides_purchase_region_slot_fill_context() -> None:
-    contract = build_turn_contract(
+def _policy_interrupt_contract(
+    *,
+    resume_source: str,
+    known_slot_patch: dict[str, object],
+    tool_args_patch: dict[str, object],
+) -> TurnContract:
+    return build_turn_contract(
         user_text="cancel fee policy",
         intent_frame=IntentFrame(
             domain=PolicyDomain.TRANSACTION,
-            intent="quick_order_reservation_slot_fill_region",
+            intent="quick_order_reservation_slot_fill",
             known_slots={
-                **_purchase_slots(shop_id=None, shop_name=None, region="cancel fee policy"),
+                **_purchase_slots(shop_id=None, shop_name=None, requested_cal_day=None, rsv_hour=None),
+                **known_slot_patch,
                 "active_parent_flow": "purchase",
             },
         ),
@@ -1044,7 +1050,7 @@ def test_policy_interrupt_overrides_purchase_region_slot_fill_context() -> None:
         tool_plan=ToolPlan(
             allowed_tools=("transaction_store_preview_tool", "quick_order_tool"),
             preferred_tool="transaction_store_preview_tool",
-            tool_args_patch={"region": "cancel fee policy"},
+            tool_args_patch=tool_args_patch,
         ),
         response_decision=ResponseDecision(
             response_shape=ResponseShape.LOCATION,
@@ -1053,9 +1059,16 @@ def test_policy_interrupt_overrides_purchase_region_slot_fill_context() -> None:
         ),
         action_mode="purchase_continuation",
         context_state="resumed",
-        resume_source="expected_slot_fill:region",
+        resume_source=resume_source,
         previous_pending_intent="order",
         previous_goal_type="place_order",
+    )
+
+def test_policy_interrupt_overrides_purchase_region_slot_fill_context() -> None:
+    contract = _policy_interrupt_contract(
+        resume_source="expected_slot_fill:region",
+        known_slot_patch={"region": "cancel fee policy"},
+        tool_args_patch={"region": "cancel fee policy"},
     )
 
     assert contract.domain == "support"
@@ -1071,6 +1084,76 @@ def test_policy_interrupt_overrides_purchase_region_slot_fill_context() -> None:
     assert "quick_order_tool" in contract.forbidden_tools
     assert violates_response_template_contract({"template": "location"}, contract) is True
     assert violates_response_template_contract({"template": "quickReply"}, contract) is False
+
+def test_policy_interrupt_overrides_purchase_store_slot_fill_context() -> None:
+    contract = _policy_interrupt_contract(
+        resume_source="expected_slot_fill:store",
+        known_slot_patch={"shop_name": "cancel fee policy", "store_name": "cancel fee policy"},
+        tool_args_patch={"shop_name": "cancel fee policy", "store_name": "cancel fee policy"},
+    )
+
+    assert contract.domain == "support"
+    assert contract.intent == "general_cancel_fee_policy"
+    assert contract.action_mode == "support_policy_answer"
+    assert contract.context_state == "dormant"
+    assert contract.resume_source == "none"
+    assert "shop_name" not in contract.known_slots
+    assert "store_name" not in contract.known_slots
+    assert contract.resolved_context["store"]["shop_name"]["source"] == "missing"
+    assert "transaction_store_preview_tool" not in contract.allowed_tools
+    assert "quick_order_tool" in contract.forbidden_tools
+    assert violates_response_template_contract({"template": "location"}, contract) is True
+    assert violates_response_template_contract({"template": "quickReply"}, contract) is False
+
+def test_policy_interrupt_overrides_purchase_schedule_slot_fill_context() -> None:
+    contract = _policy_interrupt_contract(
+        resume_source="expected_slot_fill:schedule",
+        known_slot_patch={"requested_cal_day": "20260705", "rsv_hour": "17"},
+        tool_args_patch={"requested_cal_day": "20260705", "rsv_hour": "17"},
+    )
+
+    assert contract.domain == "support"
+    assert contract.intent == "general_cancel_fee_policy"
+    assert contract.action_mode == "support_policy_answer"
+    assert contract.context_state == "dormant"
+    assert contract.resume_source == "none"
+    assert "requested_cal_day" not in contract.known_slots
+    assert "rsv_hour" not in contract.known_slots
+    assert contract.resolved_context["booking"]["requested_cal_day"]["source"] == "missing"
+    assert "get_store_schedule_tool" in contract.forbidden_tools
+    assert "quick_order_tool" in contract.forbidden_tools
+    assert violates_response_template_contract({"template": "datepick"}, contract) is True
+    assert violates_response_template_contract({"template": "quickReply"}, contract) is False
+
+def test_policy_interrupt_dormant_purchase_requires_explicit_resume() -> None:
+    active_purchase = commit_flow_state(
+        None,
+        _purchase_slots(shop_id=None, shop_name=None, requested_cal_day=None, rsv_hour=None),
+        source="transition_matrix:purchase_awaiting_store",
+        flow_type="purchase",
+        flow_step="ask_store",
+        status="active",
+    ).state.to_active_flow_context()
+    dormant_flows = upsert_dormant_flow([], active_purchase)
+
+    support_followup = resume_dormant_flow(
+        None,
+        dormant_flows,
+        resume_anchor={"pending_intent": "general_cancel_fee_policy"},
+        source="transition_matrix:support_interrupt_followup",
+    )
+    assert support_followup.status == "not_found"
+
+    explicit_resume = resume_dormant_flow(
+        None,
+        dormant_flows,
+        resume_anchor={"flow_type": "purchase", "goods_no": "G000000309783"},
+        source="transition_matrix:explicit_purchase_resume_after_interrupt",
+    )
+    assert explicit_resume.status == "resumed"
+    assert explicit_resume.active_flow_context["status"] == "resumed"
+    assert explicit_resume.active_flow_context["intent"]["sub_flow_type"] == "purchase"
+    assert explicit_resume.active_flow_context["product"]["goods_no"] == "G000000309783"
 
 def test_next_turn_new_product_clears_persisted_preorder_context() -> None:
     persisted_preorder = commit_flow_state(
