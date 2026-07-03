@@ -21,12 +21,9 @@ from services.tstation.policies.resolved_context import build_resolved_turn_cont
 from services.tstation.policies.response_decision import ResponseDecision, ToolPlan
 from services.tstation.policies.router_evidence import merge_router_evidence_known_slots
 from services.tstation.policies.support_response_policy import (
-    _is_tire_manufacture_date_question,
     build_general_cancel_fee_policy_event,
 )
 from services.tstation.policies.transaction_intent_policy import build_transaction_intent_frame
-
-
 _HIGH_RISK_INTENTS = frozenset({
     "price_or_coupon_check",
     "price_coupon_summary",
@@ -669,16 +666,6 @@ def build_turn_contract(
     if planner_intent == "unknown":
         planner_intent = None
     policy_intent = str(getattr(routing_result, "policy_intent", "") or "")
-    if planner_intent == "payment_error_troubleshooting" and _is_payment_error_policy_overmatch(user_text):
-        planner_intent = None
-    if _should_normalize_dot_manufacture_date_policy(
-        user_text=user_text,
-        policy_intent=policy_intent,
-        planner_intent=planner_intent,
-    ):
-        policy_intent = "tire_manufacture_date_policy"
-        if planner_intent == "tire_quality_warranty_policy":
-            planner_intent = "tire_manufacture_date_policy"
     router_wins_intent = _router_wins_current_turn_intent(
         user_text=user_text,
         planner_intent=planner_intent,
@@ -688,10 +675,6 @@ def build_turn_contract(
         response_decision=response_decision,
         action_mode=action_mode,
     )
-    if router_wins_intent in {"signup_first_purchase_benefit_policy", "signup_coupon_guidance"} and _ASSURANCE_SERVICE_POLICY_ANCHOR_RE.search(
-        user_text or ""
-    ):
-        router_wins_intent = "assurance_service_policy"
     code_domain = _domain_value(intent_frame.domain) if intent_frame is not None else _domain_from_routing(routing_result)
     code_intent = intent_frame.intent if intent_frame is not None else _intent_from_cross_domain(cross_domain_plan)
     transaction_boundary_frame = _transaction_policy_boundary_frame(user_text=user_text, merged_slots=merged_slots)
@@ -712,34 +695,6 @@ def build_turn_contract(
         intent_frame=intent_frame,
         code_intent=code_intent,
     )
-    if keep_registered_vehicle_contract and policy_intent == "coupon_registration_policy":
-        policy_intent = "none"
-    if keep_registered_vehicle_contract and planner_intent == "coupon_registration_policy":
-        planner_intent = None
-    if keep_registered_vehicle_contract and router_wins_intent == "coupon_registration_policy":
-        router_wins_intent = None
-    if _should_normalize_dot_manufacture_date_policy(
-        user_text=user_text,
-        policy_intent=policy_intent,
-        planner_intent=planner_intent,
-        code_intent=code_intent,
-    ):
-        policy_intent = "tire_manufacture_date_policy"
-        if planner_intent == "tire_quality_warranty_policy":
-            planner_intent = "tire_manufacture_date_policy"
-        if code_intent == "tire_quality_warranty_policy":
-            code_intent = "tire_manufacture_date_policy"
-    if _should_force_card_installment_lookup_intent(
-        user_text=user_text,
-        planner_intent=planner_intent,
-        policy_intent=policy_intent,
-        code_intent=code_intent,
-        domain=code_domain,
-        planner_domains=planner_domains,
-    ):
-        code_domain = "support"
-        code_intent = "card_installment_lookup"
-        router_wins_intent = "card_installment_lookup"
     domain = planner_domains[0] if planner_domains else code_domain
     intent = planner_intent or code_intent
     if keep_registered_vehicle_contract:
@@ -960,19 +915,6 @@ def build_turn_contract(
     if code_intent == "coupon_registration_policy" or planner_intent == "coupon_registration_policy":
         domain = "support"
         intent = "coupon_registration_policy"
-    if planner_intent == "order_cart_status_check":
-        domain = "transaction"
-        intent = "order_history_lookup"
-        known_slots["owned_record_target"] = "order"
-    if planner_intent == "coupon_applicability_check" or intent == "coupon_applicability_check":
-        domain = "transaction"
-        intent = "product_coupon_eligibility"
-        if (
-            not known_slots.get("product_name")
-            and str(known_slots.get("pending_check_object_type") or "").strip() == "product_name"
-            and known_slots.get("pending_check_object_value")
-        ):
-            known_slots["product_name"] = known_slots.get("pending_check_object_value")
     if _is_discovery_event_content_contract(routing_result, planner_intent, code_intent):
         discovery_event_content_intents = {
             "benefit_event_list_lookup",
@@ -1148,10 +1090,6 @@ def build_turn_contract(
         policy_intent == "payment_error_troubleshooting" and _is_payment_error_policy_overmatch(user_text)
     )
     support_policy_intent = policy_intent
-    if support_policy_intent in {"signup_first_purchase_benefit_policy", "signup_coupon_guidance"} and _ASSURANCE_SERVICE_POLICY_ANCHOR_RE.search(
-        user_text or ""
-    ):
-        support_policy_intent = "assurance_service_policy"
     if (
         domain == "support"
         and support_policy_intent
@@ -4951,23 +4889,6 @@ def _router_wins_current_turn_intent(
     return None
 
 
-def _should_normalize_dot_manufacture_date_policy(
-    *,
-    user_text: str,
-    policy_intent: str | None = None,
-    planner_intent: str | None = None,
-    code_intent: str | None = None,
-) -> bool:
-    candidates = {
-        str(policy_intent or "").strip(),
-        str(planner_intent or "").strip(),
-        str(code_intent or "").strip(),
-    }
-    if "tire_quality_warranty_policy" not in candidates:
-        return False
-    return _is_tire_manufacture_date_question(user_text)
-
-
 def _is_payment_error_policy_overmatch(user_text: str | None) -> bool:
     text = str(user_text or "")
     return (
@@ -4999,36 +4920,6 @@ def _should_apply_transaction_policy_boundary(
     if candidates & {"product_recommendation", "sized_product_recommendation"}:
         return True
     return str(code_domain or "").strip() in {"", "discovery"} and not any(candidates)
-
-
-def _should_force_card_installment_lookup_intent(
-    *,
-    user_text: str,
-    planner_intent: str | None,
-    policy_intent: str | None,
-    code_intent: str | None,
-    domain: str | None,
-    planner_domains: tuple[str, ...],
-) -> bool:
-    text = str(user_text or "")
-    if _is_tire_manufacture_date_question(text, include_candidate_terms=True):
-        return False
-    if _CARD_INSTALLMENT_LOOKUP_RE.search(text) is None:
-        return False
-    if _PAYMENT_TROUBLESHOOTING_RE.search(text) is not None:
-        return False
-    candidates = {
-        str(planner_intent or "").strip(),
-        str(policy_intent or "").strip(),
-        str(code_intent or "").strip(),
-        str(domain or "").strip(),
-        *(str(item or "").strip() for item in planner_domains),
-    }
-    if "card_installment_lookup" in candidates:
-        return True
-    return "support" in candidates or "payment_error_troubleshooting" in candidates
-
-
 def _comparison_router_wins_intent(
     *,
     routing_result: Any | None,

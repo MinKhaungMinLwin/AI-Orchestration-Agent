@@ -58,6 +58,21 @@ current_support_policy_intent: contextvars.ContextVar[str] = contextvars.Context
     "current_support_policy_intent",
     default="none",
 )
+_FAQ_METADATA_ONLY_POLICY_INTENTS = frozenset({
+    "coupon_registration_policy",
+    "coupon_usage_policy",
+    "signup_coupon_guidance",
+    "signup_first_purchase_benefit_policy",
+    "partner_member_coupon_policy",
+    "tire_manufacture_date_policy",
+    "delivery_delay_reservation_schedule_policy",
+    "tire_quality_warranty_policy",
+    "reservation_window_policy",
+    "external_tire_install_policy",
+    "promotion_gift_policy",
+    "tire_condition_photo_policy",
+    "payment_error_troubleshooting",
+})
 _PAYMENT_ERROR_FAQ_ANCHORS = (
     "결제 오류",
     "결제창 열리지 않음",
@@ -124,6 +139,8 @@ _EXTERNAL_TIRE_INSTALL_POLICY_FAQ_ANCHORS = (
 def _augment_faq_query_for_policy(query: str) -> str:
     text = str(query or "").strip()
     policy_intent = current_support_policy_intent.get()
+    if policy_intent in _FAQ_METADATA_ONLY_POLICY_INTENTS:
+        return text
     if policy_intent == "payment_error_troubleshooting":
         anchors = _PAYMENT_ERROR_FAQ_ANCHORS
     elif policy_intent == "signup_coupon_guidance":

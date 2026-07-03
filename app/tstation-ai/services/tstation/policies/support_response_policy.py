@@ -17,10 +17,16 @@ _RESERVATION_INSTALLATION_POLICY = "reservation_installation_policy"
 _PAYMENT_REFUND_POLICY = "payment_refund_policy"
 _ASSURANCE_WARRANTY_POLICY = "assurance_warranty_policy"
 _BENEFIT_PROMOTION_POLICY = "benefit_promotion_policy"
+_COUPON_POLICY = "coupon_policy"
 _PRODUCT_CONDITION_POLICY = "product_condition_policy"
 _PURCHASE_ORDER_POLICY = "purchase_order_policy"
 _SUPPORT_FAQ_POLICY_GROUP_INTENTS = frozenset({
     "card_installment_lookup",
+    "coupon_usage_policy",
+    "coupon_registration_policy",
+    "signup_coupon_guidance",
+    "signup_first_purchase_benefit_policy",
+    "partner_member_coupon_policy",
     "general_cancel_fee_policy",
     "general_card_cancel_timing_policy",
     "reservation_window_policy",
@@ -40,7 +46,9 @@ DIRECT_SUPPORT_FAQ_POLICY_INTENTS = frozenset({
     "card_installment_lookup",
     "coupon_usage_policy",
     "coupon_registration_policy",
+    "signup_coupon_guidance",
     "signup_first_purchase_benefit_policy",
+    "partner_member_coupon_policy",
     "reservation_verification_guidance",
     "tire_condition_photo_policy",
     "tire_manufacture_date_policy",
@@ -52,6 +60,22 @@ DIRECT_SUPPORT_FAQ_POLICY_INTENTS = frozenset({
     "installation_work_policy",
     "external_tire_install_policy",
     "promotion_gift_policy",
+})
+_SUPPORT_FAQ_METADATA_ONLY_FACT_TYPES = frozenset({
+    "coupon_registration",
+    "coupon_usage",
+    "signup_coupon_guidance",
+    "signup_first_purchase_benefit_policy",
+    "partner_member_coupon_policy",
+    "manufacture_date",
+    "delivery_delay_reservation_schedule",
+    "quality_warranty_condition",
+    "reservation_window",
+    "external_tire_install",
+    "promotion_gift_partial_cancel",
+    "promotion_gift_policy_general",
+    "photo_condition_check",
+    "payment_error_troubleshooting",
 })
 _RESERVATION_RE = re.compile(r"예약|방문|장착(?:\s*예약)?|오후\s*\d+시|당일", re.IGNORECASE)
 _ORDER_RE = re.compile(r"주문|결제|카드|승인|배송|온라인", re.IGNORECASE)
@@ -231,6 +255,7 @@ _ALLOWED_CATEGORY_NAMES_BY_POLICY_GROUP: dict[str, tuple[tuple[str, str], ...]] 
     _RESERVATION_INSTALLATION_POLICY: (("배송/장착", "장착"), ("상품/서비스", "서비스")),
     _PAYMENT_REFUND_POLICY: (("주문/결제", "결제"),),
     _ASSURANCE_WARRANTY_POLICY: (("상품/서비스", "서비스"), ("상품/서비스", "상품")),
+    _COUPON_POLICY: (("혜택/프로모션", "쿠폰"), ("회원", "회원가입")),
     _BENEFIT_PROMOTION_POLICY: (("혜택/프로모션", "프로모션"), ("혜택/프로모션", "쿠폰"), ("회원", "회원가입")),
     _PRODUCT_CONDITION_POLICY: (("상품/서비스", "상품"), ("상품/서비스", "서비스")),
     _PURCHASE_ORDER_POLICY: (("주문/결제", "주문"), ("주문/결제", "결제")),
@@ -239,6 +264,7 @@ _ALLOWED_CATEGORY_CODES_BY_POLICY_GROUP: dict[str, tuple[tuple[str, str], ...]] 
     _RESERVATION_INSTALLATION_POLICY: (("C01", "C0106"), ("C03", "C0302")),
     _PAYMENT_REFUND_POLICY: (("C01", "C0105"),),
     _ASSURANCE_WARRANTY_POLICY: (("C03", "C0302"), ("C03", "C0301")),
+    _COUPON_POLICY: (("C04", "C0402"), ("C05", "C0501")),
     _BENEFIT_PROMOTION_POLICY: (("C04", "C0401"), ("C04", "C0402"), ("C05", "C0501")),
     _PRODUCT_CONDITION_POLICY: (("C03", "C0301"), ("C03", "C0302")),
     _PURCHASE_ORDER_POLICY: (("C01", "C0104"), ("C01", "C0105")),
@@ -272,6 +298,55 @@ def _support_faq_candidates(tool_result: Mapping[str, Any] | None) -> list[Mappi
         if isinstance(items, list):
             return [item for item in items if isinstance(item, Mapping)]
     return []
+
+
+def _support_faq_candidate_metadata(candidate: Mapping[str, Any]) -> Mapping[str, Any]:
+    metadata = candidate.get("metadata")
+    return metadata if isinstance(metadata, Mapping) else {}
+
+
+def _support_faq_metadata_matches(
+    candidate: Mapping[str, Any],
+    *,
+    intent: str | None = None,
+    fact_type: str | None = None,
+) -> bool:
+    metadata = _support_faq_candidate_metadata(candidate)
+    if intent is not None and str(metadata.get("intent") or "").strip() != str(intent or "").strip():
+        return False
+    if fact_type is not None and str(metadata.get("fact_type") or "").strip() != str(fact_type or "").strip():
+        return False
+    return True
+
+
+def _support_faq_top_candidate(tool_result: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
+    candidates = _support_faq_candidates(tool_result)
+    return candidates[0] if candidates else None
+
+
+def _support_faq_metadata_resolution(
+    *,
+    intent: str,
+    tool_result: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    top_candidate = _support_faq_top_candidate(tool_result)
+    if not isinstance(top_candidate, Mapping):
+        return None
+    metadata = _support_faq_candidate_metadata(top_candidate)
+    metadata_intent = str(metadata.get("intent") or "").strip()
+    if metadata_intent != str(intent or "").strip():
+        return None
+    policy_group = str(metadata.get("policy_group") or "").strip()
+    fact_type = str(metadata.get("fact_type") or "").strip()
+    if not policy_group or not fact_type:
+        return None
+    return {
+        "policy_group": policy_group,
+        "fact_type": fact_type,
+        "top_candidate": top_candidate,
+        "metadata_quick_replies": list(metadata.get("quick_replies") or []),
+        "metadata_source": str(metadata.get("source") or ""),
+    }
 
 
 def _is_card_installment_lookup_query(text: str) -> bool:
@@ -1124,6 +1199,16 @@ def resolve_support_faq_policy_context(intent: str, user_text: str) -> dict[str,
 
     if normalized_intent == "general_card_cancel_timing_policy" or is_general_card_cancel_timing_policy_query(text):
         return {"policy_group": _PAYMENT_REFUND_POLICY, "fact_type": "card_cancel_timing"}
+    if normalized_intent == "coupon_registration_policy":
+        return {"policy_group": _COUPON_POLICY, "fact_type": "coupon_registration"}
+    if normalized_intent == "coupon_usage_policy":
+        return {"policy_group": _COUPON_POLICY, "fact_type": "coupon_usage"}
+    if normalized_intent == "signup_coupon_guidance":
+        return {"policy_group": _COUPON_POLICY, "fact_type": "signup_coupon_guidance"}
+    if normalized_intent == "signup_first_purchase_benefit_policy":
+        return {"policy_group": _COUPON_POLICY, "fact_type": "signup_first_purchase_benefit_policy"}
+    if normalized_intent == "partner_member_coupon_policy":
+        return {"policy_group": _COUPON_POLICY, "fact_type": "partner_member_coupon_policy"}
     if normalized_intent == "reservation_window_policy":
         return {"policy_group": _RESERVATION_INSTALLATION_POLICY, "fact_type": "reservation_window"}
     if normalized_intent in {"delivery_delay_reservation_schedule_policy", "reservation_policy_guidance"} and (
@@ -1132,9 +1217,9 @@ def resolve_support_faq_policy_context(intent: str, user_text: str) -> dict[str,
         return {"policy_group": _RESERVATION_INSTALLATION_POLICY, "fact_type": "delivery_delay_reservation_schedule"}
     if normalized_intent == "external_tire_install_policy":
         return {"policy_group": _RESERVATION_INSTALLATION_POLICY, "fact_type": "external_tire_install"}
-    if normalized_intent == "payment_error_troubleshooting" and not _is_payment_error_troubleshooting_query(text):
-        return None
-    if normalized_intent == "payment_error_troubleshooting" or _is_payment_error_troubleshooting_query(text):
+    if normalized_intent == "payment_error_troubleshooting":
+        return {"policy_group": _PAYMENT_REFUND_POLICY, "fact_type": "payment_error_troubleshooting"}
+    if _is_payment_error_troubleshooting_query(text):
         return {"policy_group": _PAYMENT_REFUND_POLICY, "fact_type": "payment_error_troubleshooting"}
     if normalized_intent == "tire_manufacture_date_policy":
         return {"policy_group": _PRODUCT_CONDITION_POLICY, "fact_type": "manufacture_date"}
@@ -1231,6 +1316,12 @@ def _is_tire_manufacture_date_question(text: str, *, include_candidate_terms: bo
 
 
 def _support_faq_candidate_matches_fact_type(fact_type: str, candidate: Mapping[str, Any]) -> bool:
+    metadata = _support_faq_candidate_metadata(candidate)
+    metadata_fact_type = str(metadata.get("fact_type") or "").strip()
+    if metadata_fact_type and metadata_fact_type == fact_type:
+        return True
+    if fact_type in _SUPPORT_FAQ_METADATA_ONLY_FACT_TYPES:
+        return False
     text = _support_faq_candidate_text(candidate)
     if fact_type == "visit_reservation_cancel":
         return bool(_RESERVATION_RE.search(text) and (_CANCEL_RE.search(text) or _FEE_RE.search(text)))
@@ -1289,6 +1380,7 @@ def _support_faq_candidate_matches_fact_type(fact_type: str, candidate: Mapping[
 
 
 def _filter_support_faq_candidates(
+    intent: str,
     policy_group: str,
     fact_type: str,
     tool_result: Mapping[str, Any] | None,
@@ -1305,6 +1397,9 @@ def _filter_support_faq_candidates(
     included: list[Mapping[str, Any]] = []
     excluded: list[Mapping[str, Any]] = []
     for candidate in _support_faq_candidates(tool_result):
+        if _support_faq_metadata_matches(candidate, intent=intent, fact_type=fact_type):
+            included.append(candidate)
+            continue
         lv1, lv2, code1, code2 = _support_faq_candidate_categories(candidate)
         has_category = bool((lv1 and lv2) or (code1 and code2))
         if has_category:
@@ -1428,6 +1523,16 @@ def _extract_support_faq_policy_facts(
     elif policy_group == _PAYMENT_REFUND_POLICY and fact_type == "payment_error_troubleshooting":
         issue_match = re.search(r"결제창|결제\s*화면|장착일\s*선택란|승인\s*실패|결제\s*오류", combined, re.IGNORECASE)
         facts["issue_scope"] = issue_match.group(0) if issue_match else None
+    elif policy_group == _COUPON_POLICY:
+        top_candidate = candidates[0] if candidates else {}
+        metadata = _support_faq_candidate_metadata(top_candidate) if isinstance(top_candidate, Mapping) else {}
+        facts["source_answer"] = _normalize_support_faq_text(
+            top_candidate.get("answer") if isinstance(top_candidate, Mapping) else ""
+        )
+        facts["source_question"] = _normalize_support_faq_text(
+            top_candidate.get("question") if isinstance(top_candidate, Mapping) else ""
+        )
+        facts["metadata_quick_replies"] = list(metadata.get("quick_replies") or [])
     return _support_faq_strip_card_refund_facts_for_non_anchor(intent=intent, user_text=user_text, facts=facts)
 
 
@@ -1438,6 +1543,21 @@ def _is_assurance_product_eligibility_question(user_text: str) -> bool:
 
 
 def _support_faq_reply_ctas(policy_group: str, fact_type: str, *, user_text: str = "") -> list[dict[str, Any]]:
+    if policy_group == _COUPON_POLICY:
+        if fact_type == "coupon_registration":
+            return [{"label": "쿠폰함 바로가기", "url": CTAUrls.MY_COUPON_LIST_PC, "domain": "SUPPORT"}]
+        if fact_type == "coupon_usage":
+            return [
+                {"label": "쿠폰함 바로가기", "url": CTAUrls.MY_COUPON_LIST_PC, "domain": "SUPPORT"},
+                {"label": "쿠폰 조건 확인", "domain": "SUPPORT"},
+            ]
+        if fact_type == "signup_coupon_guidance":
+            return [{"label": "회원 혜택 확인", "url": CTAUrls.MEMBERSHIP_BENEFIT, "domain": "SUPPORT"}]
+        if fact_type == "signup_first_purchase_benefit_policy":
+            return [{"label": "회원 혜택 확인", "url": CTAUrls.MEMBERSHIP_BENEFIT, "domain": "SUPPORT"}]
+        if fact_type == "partner_member_coupon_policy":
+            return [{"label": "회원 혜택 확인", "url": CTAUrls.MEMBERSHIP_BENEFIT, "domain": "SUPPORT"}]
+        return [{"label": "쿠폰함 바로가기", "url": CTAUrls.MY_COUPON_LIST_PC, "domain": "SUPPORT"}]
     if policy_group == _ASSURANCE_WARRANTY_POLICY:
         if fact_type == "assurance_coverage_condition" and _is_assurance_product_eligibility_question(user_text):
             return [
@@ -1651,6 +1771,30 @@ def _build_support_faq_policy_reply(
             "오류 문구, 결제수단, 어느 화면에서 멈췄는지를 확인해야 정확한 안내가 가능해요.\n"
             "같은 문제가 계속되면 1:1 문의나 고객센터로 오류 화면 정보를 함께 남겨 주세요."
         )
+    elif policy_group == _COUPON_POLICY and fact_type in {
+        "coupon_registration",
+        "coupon_usage",
+        "signup_coupon_guidance",
+        "signup_first_purchase_benefit_policy",
+        "partner_member_coupon_policy",
+    }:
+        response = str(facts.get("source_answer") or "").strip()
+        if not response:
+            if fact_type == "coupon_registration":
+                response = (
+                    "쿠폰 번호 등록은 로그인 후 쿠폰함 또는 마이페이지의 쿠폰 등록 화면에서 진행해 주세요.\n"
+                    "등록 후에는 보유 쿠폰 목록에서 확인할 수 있어요."
+                )
+            elif fact_type == "coupon_usage":
+                response = (
+                    "쿠폰 사용처와 적용 방식은 쿠폰마다 다를 수 있어요.\n"
+                    "온라인 전용인지, 매장 사용이 가능한지는 쿠폰 상세 조건을 먼저 확인해 주세요."
+                )
+            else:
+                response = (
+                    "회원 혜택이나 쿠폰 적용 조건은 회원 상태와 진행 중인 혜택에 따라 달라질 수 있어요.\n"
+                    "자세한 내용은 회원 혜택 화면에서 먼저 확인해 주세요."
+                )
     elif policy_group == _ASSURANCE_WARRANTY_POLICY and fact_type == "assurance_coverage_condition":
         response = (
             "안심서비스/안심플러스 보상 조건은 장착 후 1년 이내, 주행거리 16,000km 이내 같은 기본 조건을 먼저 확인해야 해요.\n"
@@ -1722,7 +1866,7 @@ def build_support_faq_source_grounded_reply(
     if not policy_group or not fact_type:
         return None
 
-    filtered, excluded_candidates = _filter_support_faq_candidates(policy_group, fact_type, tool_result)
+    filtered, excluded_candidates = _filter_support_faq_candidates(intent, policy_group, fact_type, tool_result)
     if not filtered:
         return None
 
@@ -1835,7 +1979,7 @@ def build_support_faq_evidence_grounded_reply(
     if not policy_group or not fact_type:
         return None
 
-    filtered, excluded_candidates = _filter_support_faq_candidates(policy_group, fact_type, tool_result)
+    filtered, excluded_candidates = _filter_support_faq_candidates(intent, policy_group, fact_type, tool_result)
     if not filtered:
         return _build_support_faq_safe_fallback_reply(
             policy_group=policy_group,
@@ -2365,7 +2509,7 @@ def build_support_faq_policy_reply(
     )
     if card_installment_reply is not None:
         return card_installment_reply
-    resolution = resolve_support_faq_policy_context(intent, user_text)
+    resolution = _support_faq_metadata_resolution(intent=intent, tool_result=tool_result) or resolve_support_faq_policy_context(intent, user_text)
     if not resolution:
         return None
     if resolution.get("needs_clarification"):
@@ -2388,7 +2532,7 @@ def build_support_faq_policy_reply(
     fact_type = str(resolution.get("fact_type") or "").strip()
     if not policy_group or not fact_type:
         return None
-    filtered, excluded_candidates = _filter_support_faq_candidates(policy_group, fact_type, tool_result)
+    filtered, excluded_candidates = _filter_support_faq_candidates(intent, policy_group, fact_type, tool_result)
     safe_fallback_used = not filtered
     facts = _extract_support_faq_policy_facts(intent, user_text, policy_group, fact_type, filtered)
     response, quick_replies = _build_support_faq_policy_reply(
@@ -2398,6 +2542,9 @@ def build_support_faq_policy_reply(
         safe_fallback_used=safe_fallback_used,
         user_text=user_text,
     )
+    metadata_quick_replies = resolution.get("metadata_quick_replies") if isinstance(resolution, Mapping) else None
+    if isinstance(metadata_quick_replies, list) and metadata_quick_replies:
+        quick_replies = [item for item in metadata_quick_replies if isinstance(item, Mapping)]
 
     allowed_categories = [
         {
