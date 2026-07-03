@@ -1441,6 +1441,31 @@ def _primary_transaction_execution_intent(routing_result: MultiAgentDomain | Non
     return ""
 
 
+_OWNED_RECORD_TRANSACTION_ROUTE_INTENTS = frozenset({
+    "order_arrival_status_lookup",
+    "order_cancel_status_lookup",
+    "order_history_lookup",
+    "reservation_status_lookup",
+    "reservation_store_info_lookup",
+})
+
+
+def _owned_record_transaction_route_intent(user_text: str, merged_slots: Any) -> str:
+    if not user_text:
+        return ""
+    slot_values = merged_slots.model_dump() if hasattr(merged_slots, "model_dump") else {}
+    known_slots = {
+        key: value
+        for key, value in slot_values.items()
+        if value not in (None, "", [], {})
+    }
+    frame = build_transaction_intent_frame(user_text, known_slots=known_slots)
+    intent = str(frame.intent or "").strip()
+    if intent in _OWNED_RECORD_TRANSACTION_ROUTE_INTENTS:
+        return intent
+    return ""
+
+
 def _router_contract_is_order_cancel_fee_inquiry(routing_result: MultiAgentDomain | None) -> bool:
     if routing_result is None:
         return False
@@ -1495,7 +1520,11 @@ def _explicit_current_turn_override_reason(
     regex_slots: ConversationSlots,
     explicit_store_purchase_chain_request: bool,
 ) -> str | None:
-    if _is_order_history_lookup_query(user_text):
+    if (
+        _is_order_history_lookup_query(user_text)
+        or _is_order_arrival_status_query(user_text)
+        or _is_order_cancel_status_lookup_query(user_text)
+    ):
         return None
     if explicit_store_purchase_chain_request:
         return "explicit_current_turn_purchase"
@@ -17719,10 +17748,20 @@ def _build_turn_contract_fallback_event(
 def _should_recover_owned_record_contract_tool(turn_contract: TurnContract | None) -> bool:
     if turn_contract is None:
         return False
+    intent = str(turn_contract.intent or "")
+    preferred_tool = str(turn_contract.preferred_tool or "")
     return bool(
         str(turn_contract.domain or "") == "transaction"
-        and str(turn_contract.intent or "") in {"reservation_status_lookup", "reservation_store_info_lookup"}
-        and str(turn_contract.preferred_tool or "") == "get_my_reservations_tool"
+        and (
+            (
+                intent in {"reservation_status_lookup", "reservation_store_info_lookup"}
+                and preferred_tool == "get_my_reservations_tool"
+            )
+            or (
+                intent in {"order_arrival_status_lookup", "order_cancel_status_lookup", "order_history_lookup"}
+                and preferred_tool in {"get_orders_of_user_tool", "get_order_status_tool"}
+            )
+        )
         and not tuple(turn_contract.blocking_required_slots or ())
     )
 
@@ -17732,14 +17771,41 @@ def _should_recover_executable_store_search_contract_tool(turn_contract: TurnCon
     preferred_tool = str(turn_contract.preferred_tool or "").strip()
     allowed_tools = {str(tool).strip() for tool in tuple(turn_contract.allowed_tools or ()) if str(tool).strip()}
     forbidden_tools = {str(tool).strip() for tool in tuple(turn_contract.forbidden_tools or ()) if str(tool).strip()}
+    known_slots = turn_contract.known_slots or {}
+    tool_args_patch = turn_contract.tool_args_patch if isinstance(turn_contract.tool_args_patch, Mapping) else {}
+    has_store_search_scope = bool(
+        tool_args_patch.get("place_query")
+        or tool_args_patch.get("region_code")
+        or tool_args_patch.get("store_nm")
+        or tool_args_patch.get("shop_name")
+        or tool_args_patch.get("region")
+        or known_slots.get("place_query")
+        or known_slots.get("region")
+        or known_slots.get("store_name")
+        or known_slots.get("shop_name")
+    )
+    stale_stock_store_search = bool(
+        str(turn_contract.intent or "") == "stock_store_search"
+        and preferred_tool in {"search_stores_tool", "get_store_list_tool"}
+        and has_store_search_scope
+        and not known_slots.get("goods_no")
+        and not known_slots.get("tire_size")
+    )
     return bool(
         str(turn_contract.domain or "") == "transaction"
-        and str(turn_contract.intent or "") in {"store_search", "open_store_search"}
+        and (str(turn_contract.intent or "") in {"store_search", "open_store_search"} or stale_stock_store_search)
         and preferred_tool in {"search_stores_tool", "get_store_list_tool"}
         and preferred_tool in allowed_tools
         and preferred_tool not in forbidden_tools
         and not tuple(turn_contract.blocking_required_slots or ())
     )
+
+def _should_recover_transaction_store_preview_contract_tool(
+    turn_contract: TurnContract | None,
+    *,
+    merged_slots: ConversationSlots | None = None,
+) -> bool:
+    return _is_contract_required_transaction_store_preview(turn_contract, merged_slots=merged_slots)
 
 def _history_selected_vehicle_prompt_contract_args(
     response_shape_key: str | None,
@@ -21798,15 +21864,28 @@ def _is_ev_suitability_turn(
     return bool(_VEHICLE_CATEGORY_CONTEXT_RE.search(text) and _VEHICLE_SUITABILITY_RE.search(text))
 
 
+_FOLLOWUP_ONLY_TRANSACTION_REQUEST_RE = re.compile(
+    r"^\s*(?:(?:\uadf8\ub7fc|\uadf8\ub7ec\uba74|\uc774\uac70|\uadf8\uac70|\ud574\ub2f9\s*\uc0c1\ud488|\ubc29\uae08\s*\uc0c1\ud488)\s*)?"
+    r"(?:\uc8fc\ubb38|\uad6c\ub9e4|\uc608\uc57d|\uacb0\uc81c)"
+    r"(?:\s*(?:\ud560\ub798|\ud560\uac8c|\ud560\ub798\uc694|\ud560\uac8c\uc694|\ud558\uace0\s*\uc2f6|\uc9c4\ud589|\ud574\s*\uc918|\ud574\uc918|\ud560\uae4c))?\s*[?.!]?\s*$",
+    re.IGNORECASE,
+)
+
+
 def _is_fresh_product_transaction_request(text: str, pending_intent: str | None) -> bool:
     """Return True when the current turn names a tire product and asks for a transactional action."""
     if not text or pending_intent not in {"price", "stock", "order"}:
         return False
     if _is_order_history_lookup_query(text):
         return False
-    return bool(
+    has_product_hint = bool(
         ConversationSlots.has_product_keyword(text)
         or _has_sized_product_name_hint(text)
+    )
+    if not has_product_hint and _FOLLOWUP_ONLY_TRANSACTION_REQUEST_RE.search(text):
+        return False
+    return bool(
+        has_product_hint
         or _transaction_product_name_candidate_from_text(text)
     )
 
@@ -25934,6 +26013,21 @@ class TStationChatServiceV2:
                 merged_slots.payment_amount = None
                 merged_slots.shop_id = None
                 merged_slots.shop_name = None
+                if isinstance(merged_slots.availability_context, dict):
+                    availability_context = dict(merged_slots.availability_context)
+                    stale_context_keys = (
+                        "pending_order_context",
+                        "dormant_purchase_context",
+                        "dormant_stock_context",
+                        "dormant_transaction_context",
+                        "parent_flow_context",
+                    )
+                    for context_key in stale_context_keys:
+                        availability_context.pop(context_key, None)
+                    active_flow_context = availability_context.get("active_flow_context")
+                    if isinstance(active_flow_context, Mapping) and str(active_flow_context.get("flow_type") or "") == "commerce":
+                        availability_context.pop("active_flow_context", None)
+                    merged_slots.availability_context = availability_context
                 logger.debug(
                     "[SLOTS] Plain store-search turn; cleared stale stock/order context: %s",
                     {k: v for k, v in cleared_values.items() if v not in (None, "")},
@@ -27417,6 +27511,27 @@ class TStationChatServiceV2:
                 logger.info(
                     "[POLICY][route-fast-path] warranty claim/support override: plan=%s",
                     policy_plan.to_dict(),
+                )
+            elif owned_record_route_intent := _owned_record_transaction_route_intent(last_user_text, merged_slots):
+                domains = [MultiAgentDomain.Domain.TRANSACTION]
+                routing_result = MultiAgentDomain(
+                    reason="transaction_owned_record_intent_frame",
+                    domains=domains,
+                    execution_plan=[f"transaction:{owned_record_route_intent}"],
+                    user_behavior="owned record lookup request",
+                    flow="transaction_owned_record_lookup",
+                    claim_check_type="none",
+                    complaint_scope="none",
+                    agent_prompt_profile=AgentPromptProfile.TRANSACTION_ORDER,
+                    policy_intent="none",
+                    planner_confidence=0.95,
+                )
+                policy_preclassified_skip_decision = False
+                _classify_path = "transaction_owned_record_intent_frame"
+                classify_future = None
+                logger.info(
+                    "[POLICY][route-fast-path] transaction owned-record override: intent=%s",
+                    owned_record_route_intent,
                 )
             elif coupon_gate_can_override_route:
                 domains = [MultiAgentDomain.Domain.TRANSACTION]
@@ -29547,6 +29662,24 @@ class TStationChatServiceV2:
             and str(pending_order_context.get("source") or "") == "tool:transaction_store_preview_tool"
         ):
             transaction_known_slots["source_tool"] = "transaction_store_preview_tool"
+        if owned_record_route_intent := _owned_record_transaction_route_intent(last_user_text, merged_slots):
+            domains = [MultiAgentDomain.Domain.TRANSACTION]
+            routing_result = MultiAgentDomain(
+                reason="transaction_owned_record_intent_frame",
+                domains=domains,
+                execution_plan=[f"transaction:{owned_record_route_intent}"],
+                user_behavior="owned record lookup request",
+                flow="transaction_owned_record_lookup",
+                claim_check_type="none",
+                complaint_scope="none",
+                agent_prompt_profile=AgentPromptProfile.TRANSACTION_ORDER,
+                policy_intent="none",
+                planner_confidence=1.0,
+            )
+            logger.info(
+                "[POLICY][contract-normalize] transaction owned-record override: intent=%s",
+                owned_record_route_intent,
+            )
         router_transaction_intent = _primary_transaction_execution_intent(routing_result)
         if router_transaction_intent:
             transaction_known_slots["router_transaction_intent"] = router_transaction_intent
@@ -30105,6 +30238,48 @@ class TStationChatServiceV2:
                 )
             event_data = guard_event.get("data") if isinstance(guard_event.get("data"), dict) else {}
             return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
+
+        if _should_recover_transaction_store_preview_contract_tool(turn_contract, merged_slots=merged_slots):
+            transaction_store_preview_recovery = await _recover_contract_required_tool(
+                turn_contract=turn_contract,
+                user_text=last_user_text,
+                merged_slots=merged_slots,
+                blocked_fast_path_source="code_transaction_store_preview_policy_direct",
+                member_no=request.user_id,
+            )
+            if transaction_store_preview_recovery is not None:
+                transaction_store_preview_event = transaction_store_preview_recovery["event"]
+                if request.stream:
+                    _record_direct_return_trace(
+                        parent_span=_parent_span,
+                        trace_id=request.tracing_id,
+                        session_id=request.session_id,
+                        user_id=request.user_id,
+                        user_text=last_user_text,
+                        domains=domains,
+                        event=transaction_store_preview_event,
+                        turn_contract=turn_contract,
+                        direct_return_reason="contract_required_transaction_store_preview_tool",
+                        extra_metadata=vehicle_selection_trace_metadata,
+                    )
+                    return StreamingResponse(
+                        TStationChatServiceV2._stream_contract_required_tool_response(
+                            transaction_store_preview_recovery,
+                            agent_label="[TRANSACTION AGENT]",
+                        ),
+                        media_type="text/event-stream",
+                        headers={
+                            "Cache-Control": "no-cache",
+                            "Connection": "keep-alive",
+                            "X-Accel-Buffering": "no",
+                        },
+                    )
+                event_data = (
+                    transaction_store_preview_event.get("data")
+                    if isinstance(transaction_store_preview_event.get("data"), dict)
+                    else {}
+                )
+                return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
 
         if _should_recover_executable_store_search_contract_tool(turn_contract):
             store_search_recovery = await recover_blocked_fast_path_to_contract_tool(

@@ -840,6 +840,62 @@ def test_plain_store_search_does_not_reuse_unsized_purchase_context() -> None:
     assert plan.preferred_tool == "search_stores_tool"
     assert "transaction_store_preview_tool" in plan.forbidden_tools
 
+
+def test_order_delivery_status_lookup_owns_order_tool_boundary() -> None:
+    frame = build_transaction_intent_frame("주문 배송 상태 알려줘")
+    plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "order_arrival_status_lookup"
+    assert frame.known_slots["owned_record_target"] == "order"
+    assert plan.preferred_tool == "get_orders_of_user_tool"
+    assert "get_order_status_tool" in plan.allowed_tools
+    assert "get_store_schedule_tool" in plan.forbidden_tools
+
+
+def test_order_delivery_status_lookup_overrides_stale_purchase_context() -> None:
+    frame = build_transaction_intent_frame(
+        "\uc8fc\ubb38 \ubc30\uc1a1 \uc0c1\ud0dc \uc54c\ub824\uc918",
+        known_slots={
+            "goods_no": "G000000309780",
+            "product_name": "Ventus S2 AS",
+            "ord_qty": 4,
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "availability_context": {"pending_order_context": {"goods_no": "G000000309780"}},
+        },
+    )
+    plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "order_arrival_status_lookup"
+    assert frame.known_slots["pending_intent"] == "order_arrival_status_lookup"
+    assert frame.known_slots["goal_type"] == "owned_record_lookup"
+    assert frame.known_slots["owned_record_target"] == "order"
+    assert frame.missing_slots == ()
+    assert plan.preferred_tool == "get_orders_of_user_tool"
+    assert "get_order_status_tool" in plan.allowed_tools
+    assert "transaction_store_preview_tool" in plan.forbidden_tools
+
+
+def test_order_cancel_status_lookup_without_stale_purchase_store_slot() -> None:
+    frame = build_transaction_intent_frame(
+        "취소한 주문 상태 알려줘",
+        known_slots={
+            "goods_no": "G000000310126",
+            "tire_size": "205/55R16",
+            "ord_qty": 4,
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+    plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "order_cancel_status_lookup"
+    assert frame.known_slots["goal_type"] == "order_cancel_status_lookup"
+    assert frame.missing_slots == ()
+    assert plan.preferred_tool == "get_orders_of_user_tool"
+    assert "transaction_store_preview_tool" in plan.forbidden_tools
+
+
 def test_tc020_gwanggyo_nearby_store_search_prefers_unified_search() -> None:
     frame = build_transaction_intent_frame("광교 주변 매장 알려줘")
     plan = plan_transaction_tools(frame)
@@ -1091,3 +1147,30 @@ def test_datepick_selection_from_stock_preview_parent_order_builds_preorder() ->
     assert plan.metadata["flow_step"] == "build_preorder"
     assert "get_store_schedule_tool" in plan.forbidden_tools
     assert decision.template == TemplateName.PRE_ORDER
+
+
+def test_inventory_only_context_purchase_followup_promotes_to_order_preview() -> None:
+    frame = build_transaction_intent_frame(
+        "\uadf8\ub7fc \uc8fc\ubb38\ud560\ub798",
+        known_slots={
+            "goods_no": "G000000309780",
+            "product_name": "\ubca4\ud22c\uc2a4 S2 AS",
+            "tire_size": "205/55R16",
+            "ord_qty": 4,
+            "quantity": 4,
+            "region": "\uac15\ub0a8",
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+            "stock_check_mode": "inventory_only",
+        },
+    )
+    plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "quick_order_reservation"
+    assert frame.known_slots["pending_intent"] == "order"
+    assert frame.known_slots["goal_type"] == "place_order"
+    assert frame.known_slots["stock_check_mode"] == "preview"
+    assert plan.preferred_tool == "transaction_store_preview_tool"
+    assert plan.tool_args_patch["goods_no"] == "G000000309780"
+    assert plan.tool_args_patch["region"] == "\uac15\ub0a8"
+    assert "get_store_list_tool" not in plan.allowed_tools

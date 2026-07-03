@@ -259,7 +259,23 @@ _PAYMENT_ACCOUNT_INFO_RE = re.compile(r"무통장\s*입금\s*기한|가상\s*계
 _ORDER_CANCEL_STATUS_LOOKUP_RE = re.compile(
     r"(?:주문|결제|카드)?\s*취소.{0,18}(?:됐|되었|완료|처리|상태|확인|승인|맞지|맞아|됐어|됐나요|됐는지)|"
     r"(?:취소|캔슬)(?:된\s*거|된거|완료|처리|상태|승인).{0,18}(?:맞|확인|됐|됐어|됐나요|알려)|"
+    r"(?:취소|캔슬)(?:한|된)\s*(?:주문|건).{0,18}(?:상태|확인|조회|알려)|"
+    r"(?:주문|건).{0,18}(?:취소|캔슬).{0,18}(?:상태|확인|조회|알려)|"
     r"카드\s*취소\s*승인|결제\s*취소.{0,18}(?:됐|승인|처리|완료)",
+    re.IGNORECASE,
+)
+_ORDER_DELIVERY_STATUS_LOOKUP_RE = re.compile(
+    r"(?:주문|상품|타이어|구매(?:한)?\s*거).{0,24}"
+    r"(?:배송\s*(?:상태|현황|조회|진행|예정)|도착\s*(?:예정|상태|일)|언제\s*(?:와|오|도착)|출고\s*(?:상태|현황))|"
+    r"(?:배송\s*(?:상태|현황|조회|진행|예정)|도착\s*(?:예정|상태|일)|언제\s*(?:와|오|도착)|출고\s*(?:상태|현황))"
+    r".{0,24}(?:주문|상품|타이어|구매(?:한)?\s*거)",
+    re.IGNORECASE,
+)
+_ORDER_DELIVERY_STATUS_LOOKUP_TEXT_RE = re.compile(
+    r"(?=.*(?:\uc8fc\ubb38|\uc0c1\ud488|\ud0c0\uc774\uc5b4|\uad6c\ub9e4(?:\ud55c)?\s*\uac70|\ubc30\uc1a1|\ub3c4\ucc29|\ucd9c\uace0))"
+    r"(?=.*(?:\ubc30\uc1a1\s*(?:\uc0c1\ud0dc|\ud604\ud669|\uc870\ud68c|\uc9c4\ud589|\uc608\uc815)|"
+    r"\ub3c4\ucc29\s*(?:\uc608\uc815|\uc0c1\ud0dc|\uc77c)|\uc5b8\uc81c\s*(?:\uc640|\uc624|\ub3c4\ucc29)|\ucd9c\uace0\s*(?:\uc0c1\ud0dc|\ud604\ud669)|"
+    r"\ubc30\uc1a1|\ub3c4\ucc29|\ucd9c\uace0))",
     re.IGNORECASE,
 )
 _ORDER_CANCEL_REQUEST_RE = re.compile(
@@ -289,6 +305,7 @@ _OWNED_ORDER_CANCEL_STATUS_ANCHOR_RE = re.compile(
     r"(?:주문|예약)\s*내역|"
     r"(?:오늘|방금|최근)\s*(?:주문|예약)|"
     r"방금\s*취소한\s*(?:주문|거)|"
+    r"(?:취소|캔슬)(?:한|된)\s*(?:주문|건)|"
     r"(?:이|그|해당)\s*(?:주문|예약|건|거)|"
     r"주문번호\s*[A-Z]?\d{4,})",
     re.IGNORECASE,
@@ -837,6 +854,9 @@ def build_transaction_intent_frame(
     current_payment_method_change = bool(_PAYMENT_METHOD_CHANGE_RE.search(text))
     current_payment_account_info = bool(_PAYMENT_ACCOUNT_INFO_RE.search(text))
     current_store_arrival_visit_guidance = bool(_STORE_ARRIVAL_NOTIFICATION_VISIT_RE.search(text))
+    current_order_delivery_status_lookup = bool(
+        _ORDER_DELIVERY_STATUS_LOOKUP_RE.search(text) or _ORDER_DELIVERY_STATUS_LOOKUP_TEXT_RE.search(text)
+    )
     current_today_request = bool(
         _TODAY_RE.search(text)
         or (_NOW_SERVICE_REQUEST_RE.search(text) and not _CURRENTLY_MOUNTED_TIRE_RE.search(text))
@@ -1257,10 +1277,11 @@ def build_transaction_intent_frame(
         intent = "reservation_window_policy"
         sub_intent = "reservation_window_policy"
         entities["reservation_window_policy"] = True
-    elif current_store_arrival_visit_guidance:
+    elif current_store_arrival_visit_guidance or current_order_delivery_status_lookup:
         intent = "order_arrival_status_lookup"
-        sub_intent = "store_arrival_visit_guidance"
-        entities["store_arrival_visit_guidance"] = True
+        sub_intent = "store_arrival_visit_guidance" if current_store_arrival_visit_guidance else "order_delivery_status"
+        entities["store_arrival_visit_guidance"] = current_store_arrival_visit_guidance
+        entities["owned_record_target"] = "order"
     elif current_maintenance_history_access_policy:
         intent = "maintenance_history_access_policy"
         sub_intent = "service_history_policy"
@@ -1445,6 +1466,24 @@ def build_transaction_intent_frame(
         intent = "quick_order_reservation"
         sub_intent = "cart"
     elif (
+        current_purchase
+        and (slots.get("pending_intent") == "stock" or slots.get("goal_type") == "store_with_stock")
+        and goods_no
+        and stored_quantity
+        and (
+            region
+            or slots.get("region")
+            or slots.get("place_query")
+            or slots.get("shop_id")
+            or slots.get("shop_name")
+            or slots.get("store_name")
+        )
+    ):
+        intent = "quick_order_reservation"
+        sub_intent = "reservation"
+        entities["stock_check_mode"] = "preview"
+        entities["stock_to_purchase_continuation"] = True
+    elif (
         (slots.get("pending_intent") == "stock" or slots.get("goal_type") == "store_with_stock")
         and goods_no
         and stored_quantity
@@ -1588,8 +1627,10 @@ def build_transaction_intent_frame(
         known["reservation_management_action"] = "change_request"
     if intent == "order_arrival_status_lookup":
         known["pending_intent"] = "order_arrival_status_lookup"
-        known["goal_type"] = "store_arrival_visit_guidance"
-        known["store_arrival_visit_guidance"] = True
+        known["goal_type"] = "owned_record_lookup"
+        known["owned_record_target"] = "order"
+        if entities.get("store_arrival_visit_guidance"):
+            known["store_arrival_visit_guidance"] = True
     if intent == "delivery_delay_reservation_schedule_policy":
         known["pending_intent"] = "delivery_delay_reservation_schedule_policy"
         known["goal_type"] = "support_policy_answer"
@@ -1673,6 +1714,10 @@ def build_transaction_intent_frame(
     if intent == "quick_order_reservation" and selected_schedule_followup:
         known["pending_intent"] = "order"
         known["goal_type"] = "place_order"
+    if intent == "quick_order_reservation" and entities.get("stock_to_purchase_continuation"):
+        known["pending_intent"] = "order"
+        known["goal_type"] = "place_order"
+        known["stock_check_mode"] = "preview"
     if plain_store_search and not current_has_product and not preserve_transaction_product_context:
         for key in (
             "goods_no",
@@ -2032,6 +2077,8 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
                 "get_store_schedule_tool",
                 "search_stores_tool",
                 "get_store_list_tool",
+                "transaction_store_preview_tool",
+                "quick_order_tool",
             ),
             required_slots=action_required_slots,
             metadata={"response_intent": "order_arrival_status_lookup", "action": action},
@@ -2084,6 +2131,7 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
                 "get_store_schedule_tool",
                 "search_stores_tool",
                 "get_store_list_tool",
+                "transaction_store_preview_tool",
                 "quick_order_tool",
             ),
             required_slots=action_required_slots,
