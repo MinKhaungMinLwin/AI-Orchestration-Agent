@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from services.tstation.policies.flow_controller import resolve_purchase_order_flow
@@ -1021,6 +1023,54 @@ def test_support_turn_dormants_purchase_until_explicit_resume_anchor() -> None:
     assert explicit_resume.active_flow_context["status"] == "resumed"
     assert explicit_resume.active_flow_context["product"]["goods_no"] == "G000000309783"
 
+
+def test_policy_interrupt_overrides_purchase_region_slot_fill_context() -> None:
+    contract = build_turn_contract(
+        user_text="cancel fee policy",
+        intent_frame=IntentFrame(
+            domain=PolicyDomain.TRANSACTION,
+            intent="quick_order_reservation_slot_fill_region",
+            known_slots={
+                **_purchase_slots(shop_id=None, shop_name=None, region="cancel fee policy"),
+                "active_parent_flow": "purchase",
+            },
+        ),
+        routing_result=SimpleNamespace(
+            domains=(PolicyDomain.TRANSACTION,),
+            policy_intent="general_cancel_fee_policy",
+            execution_plan=("transaction:quick_order_reservation_continue",),
+            planner_confidence=0.95,
+        ),
+        tool_plan=ToolPlan(
+            allowed_tools=("transaction_store_preview_tool", "quick_order_tool"),
+            preferred_tool="transaction_store_preview_tool",
+            tool_args_patch={"region": "cancel fee policy"},
+        ),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.LOCATION,
+            template=TemplateName.LOCATION,
+            metadata={"response_shape_key": "reservation_store_candidates"},
+        ),
+        action_mode="purchase_continuation",
+        context_state="resumed",
+        resume_source="expected_slot_fill:region",
+        previous_pending_intent="order",
+        previous_goal_type="place_order",
+    )
+
+    assert contract.domain == "support"
+    assert contract.intent == "general_cancel_fee_policy"
+    assert contract.action_mode == "support_policy_answer"
+    assert contract.context_state == "dormant"
+    assert contract.resume_source == "none"
+    assert contract.dormant_context_reason == "support_turn"
+    assert contract.known_slots["goods_no"] == "G000000309783"
+    assert "region" not in contract.known_slots
+    assert contract.resolved_context["store"]["region"]["source"] == "missing"
+    assert "search_faq_hybrid_tool" in contract.allowed_tools
+    assert "quick_order_tool" in contract.forbidden_tools
+    assert violates_response_template_contract({"template": "location"}, contract) is True
+    assert violates_response_template_contract({"template": "quickReply"}, contract) is False
 
 def test_next_turn_new_product_clears_persisted_preorder_context() -> None:
     persisted_preorder = commit_flow_state(

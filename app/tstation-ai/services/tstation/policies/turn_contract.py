@@ -598,6 +598,36 @@ def _strip_guard_event_stale_context(value: Any) -> Any:
         return tuple(_strip_guard_event_stale_context(item) for item in value)
     return value
 
+def _router_wins_information_interrupts_slot_fill(
+    *,
+    router_wins_intent: str | None,
+    context_state: str,
+    resume_source: str,
+) -> bool:
+    intent = str(router_wins_intent or "").strip()
+    if not intent:
+        return False
+    if str(context_state or "").strip() != "resumed":
+        return False
+    if not str(resume_source or "").strip().startswith("expected_slot_fill:"):
+        return False
+    return intent in ROUTER_WINS_INFORMATIONAL_INTENTS or intent.endswith("_policy") or intent.endswith("_guidance")
+
+def _drop_interrupted_slot_fill_values(
+    values: Mapping[str, Any],
+    *,
+    resume_source: str,
+) -> dict[str, Any]:
+    sanitized = dict(values)
+    expected_slot = str(resume_source or "").partition(":")[2]
+    if expected_slot == "region":
+        for key in ("region", "place_query"):
+            sanitized.pop(key, None)
+    if expected_slot == "store":
+        for key in ("store_name", "shop_name"):
+            sanitized.pop(key, None)
+    return sanitized
+
 def build_turn_contract(
     *,
     user_text: str = "",
@@ -947,6 +977,17 @@ def build_turn_contract(
         for key, value in dict(tool_plan.tool_args_patch if tool_plan is not None else {}).items()
         if value not in (None, "", [], {})
     }
+    if _router_wins_information_interrupts_slot_fill(
+        router_wins_intent=router_wins_intent,
+        context_state=context_state,
+        resume_source=resume_source,
+    ):
+        known_slots = _drop_interrupted_slot_fill_values(known_slots, resume_source=resume_source)
+        tool_args_patch = _drop_interrupted_slot_fill_values(tool_args_patch, resume_source=resume_source)
+        action_mode = "support_policy_answer"
+        context_state = "dormant"
+        resume_source = "none"
+        dormant_context_reason = dormant_context_reason or "support_turn"
     _prefer_router_product_keyword_for_purchase_resolution(
         known_slots=known_slots,
         tool_args_patch=tool_args_patch,
