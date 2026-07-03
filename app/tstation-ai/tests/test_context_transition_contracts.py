@@ -1085,6 +1085,56 @@ def test_policy_interrupt_overrides_purchase_region_slot_fill_context() -> None:
     assert violates_response_template_contract({"template": "location"}, contract) is True
     assert violates_response_template_contract({"template": "quickReply"}, contract) is False
 
+def test_policy_interrupt_uses_code_frame_policy_intent_when_router_policy_is_none() -> None:
+    contract = build_turn_contract(
+        user_text="cancel fee policy",
+        intent_frame=IntentFrame(
+            domain=PolicyDomain.TRANSACTION,
+            intent="general_cancel_fee_policy",
+            sub_intent="cancel_fee_policy",
+            known_slots={
+                **_purchase_slots(shop_id=None, shop_name=None, requested_cal_day=None, rsv_hour=None),
+                "region": "cancel fee policy",
+                "active_parent_flow": "purchase",
+            },
+        ),
+        routing_result=SimpleNamespace(
+            domains=(PolicyDomain.TRANSACTION,),
+            policy_intent="none",
+            execution_plan=("transaction:quick_order_reservation:slot_fill:region",),
+            planner_confidence=1.0,
+        ),
+        tool_plan=ToolPlan(
+            allowed_tools=("transaction_store_preview_tool",),
+            preferred_tool="transaction_store_preview_tool",
+            tool_args_patch={"region": "cancel fee policy"},
+        ),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.LOCATION,
+            template=TemplateName.LOCATION,
+            metadata={"response_shape_key": "reservation_store_candidates"},
+        ),
+        action_mode="purchase_continuation",
+        context_state="resumed",
+        resume_source="expected_slot_fill:region",
+        previous_pending_intent="order",
+        previous_goal_type="place_order",
+    )
+
+    assert contract.domain == "support"
+    assert contract.intent == "general_cancel_fee_policy"
+    assert contract.action_mode == "support_policy_answer"
+    assert contract.context_state == "dormant"
+    assert contract.resume_source == "none"
+    assert contract.router_wins_applied is True
+    assert contract.known_slots["goods_no"] == "G000000309783"
+    assert "region" not in contract.known_slots
+    assert "search_faq_hybrid_tool" in contract.allowed_tools
+    assert "transaction_store_preview_tool" not in contract.allowed_tools
+    assert "quick_order_tool" in contract.forbidden_tools
+    assert violates_response_template_contract({"template": "location"}, contract) is True
+    assert violates_response_template_contract({"template": "quickReply"}, contract) is False
+
 def test_policy_interrupt_overrides_purchase_store_slot_fill_context() -> None:
     contract = _policy_interrupt_contract(
         resume_source="expected_slot_fill:store",

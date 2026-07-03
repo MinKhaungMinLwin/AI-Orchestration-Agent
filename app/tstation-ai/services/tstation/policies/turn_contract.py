@@ -4676,6 +4676,7 @@ def _router_wins_information_intent(
     candidates = (
         str(policy_intent or "").strip(),
         str(planner_intent or "").strip(),
+        str(getattr(intent_frame, "intent", "") or "").strip(),
     )
     for candidate in candidates:
         if not candidate or candidate == "none" or candidate in _ROUTER_WINS_EXECUTION_EXCLUDED_INTENTS:
