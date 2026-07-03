@@ -1155,6 +1155,89 @@ def test_policy_interrupt_dormant_purchase_requires_explicit_resume() -> None:
     assert explicit_resume.active_flow_context["intent"]["sub_flow_type"] == "purchase"
     assert explicit_resume.active_flow_context["product"]["goods_no"] == "G000000309783"
 
+def test_explicit_purchase_resume_after_interrupt_stops_at_missing_store_boundary() -> None:
+    active_purchase = commit_flow_state(
+        None,
+        _purchase_slots(shop_id=None, shop_name=None, requested_cal_day=None, rsv_hour=None),
+        source="transition_matrix:purchase_awaiting_store",
+        flow_type="purchase",
+        flow_step="ask_store",
+        status="active",
+    ).state.to_active_flow_context()
+    dormant_flows = upsert_dormant_flow([], active_purchase)
+
+    explicit_resume = resume_dormant_flow(
+        None,
+        dormant_flows,
+        resume_anchor={"flow_type": "purchase", "goods_no": "G000000309783"},
+        source="transition_matrix:explicit_purchase_resume_after_interrupt",
+    )
+    resumed_product = explicit_resume.active_flow_context["product"]
+    contract, tool_plan, response_decision = _purchase_flow_contract(
+        intent="quick_order_reservation_continue",
+        known_slots={
+            "goods_no": resumed_product["goods_no"],
+            "product_name": resumed_product["product_name"],
+            "tire_size": resumed_product["tire_size"],
+            "ord_qty": resumed_product["ord_qty"],
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+
+    assert explicit_resume.status == "resumed"
+    assert tool_plan.preferred_tool is None
+    assert tool_plan.metadata["flow_step"] == "ask_store"
+    assert response_decision.template == TemplateName.QUICK_REPLY
+    assert "quick_order_tool" in contract.forbidden_tools
+    assert violates_response_template_contract({"template": "quickReply"}, contract) is False
+    assert violates_response_template_contract({"template": "datepick"}, contract) is True
+    assert violates_response_template_contract({"template": "preOrder"}, contract) is True
+    assert violates_response_template_contract({"template": "orderComplete"}, contract) is True
+
+def test_explicit_purchase_resume_after_interrupt_stops_at_missing_schedule_boundary() -> None:
+    active_purchase = commit_flow_state(
+        None,
+        _purchase_slots(requested_cal_day=None, rsv_hour=None),
+        source="transition_matrix:purchase_awaiting_schedule",
+        flow_type="purchase",
+        flow_step="show_schedule",
+        status="active",
+    ).state.to_active_flow_context()
+    dormant_flows = upsert_dormant_flow([], active_purchase)
+
+    explicit_resume = resume_dormant_flow(
+        None,
+        dormant_flows,
+        resume_anchor={"flow_type": "purchase", "goods_no": "G000000309783"},
+        source="transition_matrix:explicit_purchase_resume_after_interrupt",
+    )
+    resumed_product = explicit_resume.active_flow_context["product"]
+    resumed_store = explicit_resume.active_flow_context["store"]
+    contract, tool_plan, response_decision = _purchase_flow_contract(
+        intent="quick_order_reservation_continue",
+        known_slots={
+            "goods_no": resumed_product["goods_no"],
+            "product_name": resumed_product["product_name"],
+            "tire_size": resumed_product["tire_size"],
+            "ord_qty": resumed_product["ord_qty"],
+            "shop_id": resumed_store["shop_id"],
+            "shop_name": resumed_store["shop_name"],
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+
+    assert explicit_resume.status == "resumed"
+    assert tool_plan.preferred_tool == "get_store_schedule_tool"
+    assert tool_plan.metadata["flow_step"] == "show_schedule"
+    assert response_decision.template == TemplateName.DATE_PICK
+    assert "get_store_schedule_tool" in contract.allowed_tools
+    assert "quick_order_tool" in contract.forbidden_tools
+    assert violates_response_template_contract({"template": "datepick"}, contract) is False
+    assert violates_response_template_contract({"template": "preOrder"}, contract) is True
+    assert violates_response_template_contract({"template": "orderComplete"}, contract) is True
+
 def test_next_turn_new_product_clears_persisted_preorder_context() -> None:
     persisted_preorder = commit_flow_state(
         None,

@@ -160,6 +160,7 @@ Status after steps 1-18E:
 17. Step 18D centralizes final UI-action handling through `finalize_ui_action_metadata_for_contract()`, so final buffered events are normalized and contract-validated before yield/persistence boundaries.
 18. Step 18E keeps mapper priority subordinate to the current contract by annotating direct-executor mapper events with current `called_tools` before validation, and adding coverage for compatible mapper output, forbidden mapper output, and same mapper event/different contract outcomes.
 19. Phase 9 local E2E exposed an active-purchase interrupt gap where support/policy questions could be consumed as purchase slot-fill values. Steps 19A-19B make router-wins informational/policy intents override `expected_slot_fill:*`, dormant the purchase context, and drop interrupted `region`, `store`, and `schedule` slot-fill values before contract validation.
+20. Step 19C adds explicit-resume coverage after support interrupts: resumed purchase contexts keep product, size, and quantity, but stop at the missing store or schedule boundary and block premature `datepick`, `preOrder`, `orderComplete`, and `quick_order_tool` outputs until the required boundary is satisfied.
 
 Verified checkpoint command:
 
@@ -174,7 +175,7 @@ uv run pytest `
   -q
 ```
 
-Latest result: `132 passed, 1 warning`.
+Latest result: `134 passed, 1 warning`.
 
 Current next step:
 

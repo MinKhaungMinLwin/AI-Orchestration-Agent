@@ -112,7 +112,7 @@ def decide_transaction_response(
         return _decide_price_or_benefit_alert_request(slots=slots)
     if intent == "inventory_availability":
         return _decide_inventory_availability(slots=slots, tool_result=tool_result or {})
-    if intent == "quick_order_reservation":
+    if intent in {"quick_order_reservation", "quick_order_reservation_continue"}:
         return _decide_quick_order_reservation(slots=slots)
     if intent == "quick_order_execute":
         return _decide_quick_order_execute(slots=slots)
