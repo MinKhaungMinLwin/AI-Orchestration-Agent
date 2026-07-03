@@ -39409,6 +39409,37 @@ def test_support_faq_source_grounded_reply_ignores_unfiltered_competing_candidat
     assert reply["metadata"]["sourceGroundedReplyUsed"] is True
 
 
+def test_installation_work_policy_is_source_grounded() -> None:
+    # installation_work_policy shares its fact_type resolution with reservation_policy_guidance
+    # (work_started_cancel) but was missing from _SUPPORT_FAQ_SOURCE_GROUNDED_ALLOWLIST, so it
+    # always fell straight to the generic hardcoded fallback text regardless of real FAQ evidence.
+    tool_result = {
+        "status": "success",
+        "data": {
+            "items": [
+                {
+                    "question": "작업 중 취소 비용",
+                    "answer": "장착 작업이 이미 진행된 경우에는 공임비 등 작업 범위 기준으로 비용이 발생할 수 있습니다.",
+                    "score": 0.5,
+                    "metadata": {"category_lv1": "배송/장착", "category_lv2": "장착"},
+                }
+            ]
+        },
+    }
+
+    reply = build_support_faq_source_grounded_reply(
+        intent="installation_work_policy",
+        user_text="새 타이어 장착하려고 기존 타이어 다 뺐는데 지금 취소하면 공임비 받아?",
+        tool_result=tool_result,
+    )
+
+    assert reply is not None
+    assert reply["metadata"]["policyGroup"] == "reservation_installation_policy"
+    assert reply["metadata"]["factType"] == "work_started_cancel"
+    assert reply["metadata"]["sourceGroundedReplyUsed"] is True
+    assert "공임비 등 작업 범위 기준으로 비용이 발생할 수 있습니다" in reply["assistant_response"]
+
+
 def test_support_faq_policy_reply_drops_card_refund_fact_without_card_anchor() -> None:
     tool_result = {
         "status": "success",

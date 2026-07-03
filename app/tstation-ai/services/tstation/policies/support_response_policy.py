@@ -155,6 +155,7 @@ _SUPPORT_FAQ_SOURCE_MIN_SCORE_BY_INTENT: dict[str, float] = {
     "reservation_window_policy": 0.18,
     "external_tire_install_policy": 0.18,
     "general_cancel_fee_policy": 0.18,
+    "installation_work_policy": 0.18,
 }
 _SUPPORT_FAQ_SOURCE_SCORE_GAP_BY_INTENT: dict[str, float] = {
     "tire_manufacture_date_policy": 0.04,
@@ -164,6 +165,7 @@ _SUPPORT_FAQ_SOURCE_SCORE_GAP_BY_INTENT: dict[str, float] = {
     "reservation_window_policy": 0.03,
     "external_tire_install_policy": 0.03,
     "general_cancel_fee_policy": 0.03,
+    "installation_work_policy": 0.03,
 }
 _SUPPORT_FAQ_SOURCE_GROUNDED_ALLOWLIST = frozenset({
     "general_cancel_fee_policy",
@@ -173,6 +175,7 @@ _SUPPORT_FAQ_SOURCE_GROUNDED_ALLOWLIST = frozenset({
     "reservation_policy_guidance",
     "tire_manufacture_date_policy",
     "tire_quality_warranty_policy",
+    "installation_work_policy",
 })
 _SUPPORT_FAQ_LLM_GROUNDED_ALLOWLIST = frozenset(_SUPPORT_FAQ_SOURCE_GROUNDED_ALLOWLIST | {
     "assurance_service_policy",
