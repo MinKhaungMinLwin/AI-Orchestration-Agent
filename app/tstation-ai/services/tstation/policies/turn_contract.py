@@ -202,6 +202,15 @@ _LEGAL_ACTION_DENIAL_RE = re.compile(
     r"(?:안내|도움|제공).{0,16}(?:어렵|불가|드릴\s*수\s*없).{0,24}법적\s*(?:절차|조치|대응)",
     re.IGNORECASE,
 )
+_SUPPORT_GUARD_UNCERTAINTY_RE = re.compile(
+    r"정확(?:한)?\s*(?:답변|확인).{0,12}(?:어려|못)|확인하기\s*어려|답변을\s*찾지\s*못|현재\s*정보만으로",
+    re.IGNORECASE,
+)
+_SUPPORT_GUARD_ASSERTIVE_RE = re.compile(
+    r"(?:사용|적용|발급|지급|환불|교환|보상|예약|장착|결제|변경).{0,8}(?:가능|됩니다|돼요)|"
+    r"(?:가능|됩니다|돼요).{0,8}(?:합니다|해요)",
+    re.IGNORECASE,
+)
 _BEST_SELLER_SIZE_CLARIFICATION_RE = re.compile(
     r"(정확한\s*사이즈|사이즈\s*(?:정보|직접\s*입력)|연식/트림에\s*따라|연식/트림|차량번호|내\s*차량)",
     re.IGNORECASE,
@@ -393,6 +402,10 @@ _PAYMENT_TROUBLESHOOTING_RE = re.compile(
 )
 _PAYMENT_METHOD_OR_COUPON_POLICY_RE = re.compile(
     r"쿠폰|포인트|제휴\s*혜택|제휴카드|카드사\s*혜택|카드\s*혜택|복원|원복|다시\s*돌아",
+    re.IGNORECASE,
+)
+_PAYMENT_POINT_OR_SIMPLEPAY_RE = re.compile(
+    r"포인트|네이버\s*페이|네이버페이|카카오\s*페이|카카오페이|간편\s*결제|결제\s*수단|페이\s*결제",
     re.IGNORECASE,
 )
 _COMPARISON_ROUTER_WINS_FOLLOWUP_INTENTS = frozenset({
@@ -690,6 +703,7 @@ def build_turn_contract(
             planner_intent = transaction_boundary_frame.intent
         if policy_intent in {"product_recommendation", "sized_product_recommendation"}:
             policy_intent = transaction_boundary_frame.intent
+    coupon_usage_policy_overmatched = _is_coupon_usage_policy_overmatch(user_text)
     keep_registered_vehicle_contract = _should_keep_registered_vehicle_information_contract(
         user_text=user_text,
         intent_frame=intent_frame,
@@ -813,6 +827,10 @@ def build_turn_contract(
     if planner_intent == "owned_coupon_lookup" or code_intent == "owned_coupon_lookup":
         domain = "transaction"
         intent = "owned_coupon_lookup"
+    if coupon_usage_policy_overmatched and intent == "coupon_usage_policy":
+        domain = "support"
+        fallback_intent = str(code_intent or "").strip()
+        intent = fallback_intent if fallback_intent and fallback_intent != "coupon_usage_policy" else "support_faq"
     if latest_router_intent == "product_coupon_eligibility" and intent in {"coupon_usage", "price_or_coupon_check"}:
         domain = "transaction"
         intent = "product_coupon_eligibility"
@@ -906,7 +924,7 @@ def build_turn_contract(
     if code_intent == "general_card_cancel_timing_policy" or planner_intent == "general_card_cancel_timing_policy":
         domain = "support"
         intent = "general_card_cancel_timing_policy"
-    if code_intent == "coupon_usage_policy" or planner_intent == "coupon_usage_policy":
+    if not coupon_usage_policy_overmatched and (code_intent == "coupon_usage_policy" or planner_intent == "coupon_usage_policy"):
         domain = "support"
         intent = "coupon_usage_policy"
     if code_intent == "coupon_stacking_policy" or planner_intent in {"coupon_stacking_policy", "stacking"}:
@@ -1096,6 +1114,7 @@ def build_turn_contract(
         and support_policy_intent != "none"
         and not payment_error_overmatched_installment
         and not payment_error_without_troubleshooting_anchor
+        and not (support_policy_intent == "coupon_usage_policy" and coupon_usage_policy_overmatched)
     ):
         intent = support_policy_intent
         if support_policy_intent in _SUPPORT_FAQ_POLICY_TOOL_INTENTS:
@@ -1669,7 +1688,10 @@ def build_turn_contract(
         ),
         stale_context_used_for=_stale_context_usage(router_wins_intent=router_wins_intent, context_state=context_state),
         response_policy_source="router_intent" if router_wins_intent else _response_policy_source(response_decision_payload),
-        contract_seed=dict(contract_seed or {}),
+        contract_seed={
+            **dict(contract_seed or {}),
+            **({"user_text": user_text} if str(user_text or "").strip() else {}),
+        },
         context_evidence=dict(context_evidence or {}),
     )
 
@@ -1804,6 +1826,7 @@ def _support_answer_contract_owns_response(*, domain: str, intent: str, action_m
 
 def _support_guard_message_and_chips(
     *,
+    user_text: str = "",
     intent: str,
     response_shape_key: str,
 ) -> tuple[str, list[dict[str, str]]]:
@@ -1827,10 +1850,75 @@ def _support_guard_message_and_chips(
             "확인후 빠르게 도와드릴게요.",
             quick_replies,
         )
+    llm_message = _build_support_guard_llm_message(
+        user_text=user_text,
+        intent=intent,
+        response_shape_key=response_shape_key,
+    )
+    if llm_message:
+        return llm_message, quick_replies
     return (
-        "현재 문의 기준으로 안내드릴게요. 필요하면 1:1 문의로 이어서 도와드릴게요.",
+        "정확한 답변을 찾지 못했어요. 필요하시면 1:1 문의로 도와드릴게요.",
         quick_replies,
     )
+
+
+def _support_guard_prompt(*, user_text: str, intent: str, response_shape_key: str) -> str:
+    normalized = re.sub(r"\s+", " ", str(user_text or "")).strip()
+    return (
+        "당신은 한국어 고객지원 챗봇의 안전한 fallback 작성기입니다.\n"
+        "아래 질문에 대해 정확한 근거 답변을 찾지 못한 상태입니다.\n"
+        "사용자 질문의 주제는 반영하되, 사실이나 정책을 확정해서 말하면 안 됩니다.\n\n"
+        "규칙:\n"
+        "- 한국어 2문장 이내로만 답하세요.\n"
+        "- 첫 문장은 질문 주제를 반영해도 되지만, 현재 정보만으로 정확히 확인하기 어렵다는 뜻을 분명히 말하세요.\n"
+        "- 둘째 문장은 필요하면 1:1 문의로 도와줄 수 있다고 안내하세요.\n"
+        "- 사용 가능/불가, 발급됨, 환불됨, 예약 가능 등 확정 표현을 쓰지 마세요.\n"
+        "- 숫자, 기간, 조건, 정책, 보상, 예외를 새로 만들지 마세요.\n"
+        "- FAQ, RAG, 근거, 정책 검색, 시스템 같은 내부 표현은 쓰지 마세요.\n\n"
+        f"intent={intent}\n"
+        f"response_shape_key={response_shape_key}\n"
+        f"사용자 질문: {normalized}\n\n"
+        "출력은 사용자에게 보여줄 답변 본문만 작성하세요."
+    )
+
+
+def _is_safe_support_guard_message(text: str) -> bool:
+    normalized = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not normalized:
+        return False
+    if len(normalized) > 140:
+        return False
+    if _SUPPORT_GUARD_UNCERTAINTY_RE.search(normalized) is None:
+        return False
+    if "1:1 문의" not in normalized:
+        return False
+    if _SUPPORT_GUARD_ASSERTIVE_RE.search(normalized):
+        return False
+    return True
+
+
+def _build_support_guard_llm_message(
+    *,
+    user_text: str,
+    intent: str,
+    response_shape_key: str,
+) -> str | None:
+    normalized = re.sub(r"\s+", " ", str(user_text or "")).strip()
+    if not normalized:
+        return None
+    try:
+        from langchain_core.messages import HumanMessage
+        from services.tstation.agents.router import DECISION_LLM
+
+        result = DECISION_LLM.invoke(
+            [HumanMessage(content=_support_guard_prompt(user_text=normalized, intent=intent, response_shape_key=response_shape_key))]
+        )
+        content = result.content if hasattr(result, "content") else result
+        message = re.sub(r"\s+", " ", str(content or "")).strip()
+    except Exception:
+        return None
+    return message if _is_safe_support_guard_message(message) else None
 
 
 def build_required_slot_clarification_event(contract: TurnContract) -> dict[str, Any]:
@@ -1957,6 +2045,7 @@ def build_response_policy_guard_event(contract: TurnContract) -> dict[str, Any]:
             if isinstance(metadata, Mapping):
                 response_shape_key = str(metadata.get("response_shape_key") or "")
         message, quick_replies = _support_guard_message_and_chips(
+            user_text=str(contract.contract_seed.get("user_text") or ""),
             intent=intent,
             response_shape_key=response_shape_key,
         )
@@ -4848,6 +4937,8 @@ def _router_wins_information_intent(
             return "owned_warranty_lookup"
         if candidate == "payment_error_troubleshooting" and _is_payment_error_policy_overmatch(user_text):
             continue
+        if candidate == "coupon_usage_policy" and _is_coupon_usage_policy_overmatch(user_text):
+            continue
         if candidate in ROUTER_WINS_INFORMATIONAL_INTENTS:
             return candidate
         if candidate.endswith("_policy") or candidate.endswith("_guidance"):
@@ -4884,6 +4975,8 @@ def _router_wins_current_turn_intent(
         str(planner_intent or "").strip(),
     )
     for candidate in candidates:
+        if candidate == "coupon_usage_policy" and _is_coupon_usage_policy_overmatch(user_text):
+            continue
         if candidate in ROUTER_WINS_EXECUTION_BOUNDARY_INTENTS:
             return candidate
     return None
@@ -4920,6 +5013,11 @@ def _should_apply_transaction_policy_boundary(
     if candidates & {"product_recommendation", "sized_product_recommendation"}:
         return True
     return str(code_domain or "").strip() in {"", "discovery"} and not any(candidates)
+
+
+def _is_coupon_usage_policy_overmatch(user_text: str | None) -> bool:
+    text = str(user_text or "")
+    return "쿠폰" not in text and _PAYMENT_POINT_OR_SIMPLEPAY_RE.search(text) is not None
 def _comparison_router_wins_intent(
     *,
     routing_result: Any | None,

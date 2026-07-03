@@ -113,6 +113,10 @@ _PAYMENT_METHOD_OR_COUPON_POLICY_RE = re.compile(
     r"쿠폰|포인트|제휴\s*혜택|제휴카드|카드사\s*혜택|카드\s*혜택|복원|원복|다시\s*돌아",
     re.IGNORECASE,
 )
+_PAYMENT_POINT_OR_SIMPLEPAY_RE = re.compile(
+    r"포인트|네이버\s*페이|네이버페이|카카오\s*페이|카카오페이|간편\s*결제|결제\s*수단|페이\s*결제",
+    re.IGNORECASE,
+)
 _CARD_INSTALLMENT_CARD_NAME_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("현대카드", ("현대카드", "현대")),
     ("신한카드", ("신한카드", "신한")),
@@ -170,6 +174,11 @@ def is_post_install_quality_concern(user_text: str | None) -> bool:
 def is_post_install_quality_claim(user_text: str | None) -> bool:
     text = str(user_text or "")
     return _POST_INSTALL_CONCERN_RE.search(text) is not None and _POST_INSTALL_CLAIM_ACTION_RE.search(text) is not None
+
+
+def _is_coupon_usage_policy_overmatch(text: str | None) -> bool:
+    normalized = str(text or "")
+    return "쿠폰" not in normalized and _PAYMENT_POINT_OR_SIMPLEPAY_RE.search(normalized) is not None
 
 
 _TIRE_MANUFACTURE_DATE_ANCHOR_RE = re.compile(
@@ -2818,10 +2827,11 @@ def decide_support_response(
             ),
         )
 
-    if intent == "coupon_usage_policy" or (
+    if (intent == "coupon_usage_policy" and not _is_coupon_usage_policy_overmatch(text)) or (
         _COUPON_RE.search(text)
         and _COUPON_USAGE_POLICY_RE.search(text)
         and not _PARTNER_MEMBER_COUPON_POLICY_RE.search(text)
+        and not _is_coupon_usage_policy_overmatch(text)
     ):
         return _decision(
             response_shape_key="coupon_usage_policy",

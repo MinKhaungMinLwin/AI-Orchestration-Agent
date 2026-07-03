@@ -227,6 +227,19 @@ def test_payment_error_troubleshooting_does_not_absorb_card_points_or_coupon_res
     assert coupon_restore.metadata["response_shape_key"] == "support_faq_summary"
 
 
+def test_coupon_usage_policy_does_not_absorb_simplepay_or_point_questions_without_coupon_anchor() -> None:
+    for user_text in (
+        "네이버페이 포인트도 쓸수 있어?",
+        "카카오페이로 결제할 수 있어?",
+    ):
+        decision = decide_support_response(
+            intent="coupon_usage_policy",
+            user_text=user_text,
+        )
+
+        assert decision.metadata["response_shape_key"] == "support_faq_summary"
+
+
 def test_payment_error_troubleshooting_keeps_checkout_screen_error_faq_first() -> None:
     decision = decide_support_response(
         intent="payment_error_troubleshooting",

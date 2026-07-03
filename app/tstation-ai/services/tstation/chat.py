@@ -16945,6 +16945,7 @@ _FAQ_POLICY_FALLBACK_INTENTS = frozenset({
     "card_installment_lookup",
     "coupon_usage_policy",
     "coupon_registration_policy",
+    "signup_coupon_guidance",
     "signup_first_purchase_benefit_policy",
     "reservation_verification_guidance",
     "tire_condition_photo_policy",

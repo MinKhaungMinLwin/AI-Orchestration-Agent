@@ -30019,6 +30019,36 @@ def test_signup_coupon_guidance_contract_blocks_owned_coupon_tools() -> None:
     } in qna_direct
 
 
+def test_support_faq_policy_event_for_signup_coupon_guidance_survives_empty_faq_results() -> None:
+    event = _build_support_faq_policy_event(
+        "signup_coupon_guidance",
+        "회원가입할때 주는 쿠폰이 뭐야",
+        tool_result={"status": "success", "data": {"items": []}},
+    )
+
+    assert event is not None
+    assert event["assistant_response_source"] == "code_signup_coupon_guidance"
+    assert "회원 혜택" in str(event["data"]["assistantResponse"])
+    assert event["data"]["quickReplies"][0]["label"] == "회원 혜택 확인"
+
+
+def test_coupon_usage_policy_contract_does_not_override_point_or_simplepay_questions_without_coupon_anchor() -> None:
+    contract = build_turn_contract(
+        user_text="네이버페이 포인트도 쓸수 있어?",
+        intent_frame=IntentFrame(domain=PolicyDomain.SUPPORT, intent="support_faq"),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:coupon_usage_policy"],
+            policy_intent="coupon_usage_policy",
+        ),
+    )
+
+    assert contract.domain == "support"
+    assert contract.intent == "support_faq"
+    assert contract.known_slots["policy_intent"] == "coupon_usage_policy"
+    assert "search_faq_hybrid_tool" not in contract.allowed_tools
+
+
 def test_signup_coupon_support_policy_guides_benefit_page_not_partner_channel() -> None:
     response_decision = decide_support_response(
         intent="signup_coupon_guidance",
@@ -30348,7 +30378,7 @@ def test_support_response_policy_guard_uses_support_fallback_even_with_stale_pur
     assert "법적 절차나 방법은 안내하기 어렵고" in event["data"]["assistantResponse"]
     assert "수량이 필요해요" not in event["data"]["assistantResponse"]
     assert "장착 매장" not in event["data"]["assistantResponse"]
-    assert "원하시면 1:1 문의로 접수하실 수 있도록 도와드릴게요." in event["data"]["assistantResponse"]
+    assert "1:1 문의나 고객센터로 불편을 접수해 주세요." in event["data"]["assistantResponse"]
     assert _labels(event["data"]["quickReplies"]) == ["1:1 문의하기", "처음으로"]
 
 
@@ -30387,6 +30417,35 @@ def test_support_response_policy_guard_uses_user_facing_complaint_copy_not_assis
     assert metadata["response_shape_key"] == "support_complaint_guidance"
     assert metadata["assistant_response_source"] == "code_turn_contract_support_response_guard"
     assert metadata["contract_intent"] == "tstation_service_complaint"
+
+
+def test_support_response_policy_guard_uses_safe_llm_fallback_for_generic_support_guard(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "services.tstation.policies.turn_contract._build_support_guard_llm_message",
+        lambda **_: "네이버페이 포인트 사용 여부는 현재 정보만으로 정확히 확인하기 어려워요. 필요하시면 1:1 문의로 도와드릴게요.",
+    )
+
+    contract = build_turn_contract(
+        user_text="네이버페이 포인트도 쓸수 있어?",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:support_faq"],
+            policy_intent="none",
+        ),
+        action_mode="support_policy_answer",
+        context_state="dormant",
+    )
+
+    event = build_response_policy_guard_event(contract)
+
+    assert event["assistant_response_source"] == "code_turn_contract_support_response_guard"
+    assert (
+        event["data"]["assistantResponse"]
+        == "네이버페이 포인트 사용 여부는 현재 정보만으로 정확히 확인하기 어려워요. 필요하시면 1:1 문의로 도와드릴게요."
+    )
+    assert _labels(event["data"]["quickReplies"]) == ["1:1 문의하기", "처음으로"]
 
 
 def test_support_prompt_contains_payment_error_faq_first_policy() -> None:
