@@ -34,7 +34,7 @@ from services.tstation.policies.support_response_policy import (
     build_general_card_cancel_timing_policy_event,
     build_support_faq_policy_event,
 )
-from services.tstation.policies.turn_contract import TurnContract
+from services.tstation.policies.turn_contract import TurnContract, violates_response_template_contract
 
 
 logger = logging.getLogger(__name__)
@@ -748,6 +748,9 @@ async def recover_blocked_fast_path_to_contract_tool(
             mapped_event = build_support_faq_policy_event(contract_intent, user_text, tool_result=tool_result)
         if not isinstance(mapped_event, dict):
             return None
+
+    if violates_response_template_contract(mapped_event, turn_contract):
+        return None
 
     mapped_event = _annotate_contract_tool_recovery_event(
         mapped_event,

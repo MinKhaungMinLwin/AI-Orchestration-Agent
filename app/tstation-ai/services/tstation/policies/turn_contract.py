@@ -2414,6 +2414,8 @@ def violates_response_template_contract(event: Mapping[str, Any], contract: Turn
         return True
     if _action_mode_contract_violation(event=event, contract=contract) is not None:
         return True
+    if _flow_step_template_violation(template=template, contract=contract):
+        return True
     if _is_discovery_product_template_compatible(event, contract):
         return False
     if _is_unsupported_discovery_product_template_without_current_source(event, contract):
@@ -2426,6 +2428,29 @@ def violates_response_template_contract(event: Mapping[str, Any], contract: Turn
         template in _FORBIDDEN_BEHAVIOR_TEMPLATE_BLOCKS.get(str(behavior), ())
         for behavior in _effective_forbidden_behaviors(event, contract, forbidden_behaviors)
     )
+
+
+def _flow_step_template_violation(*, template: str, contract: TurnContract) -> bool:
+    if not template:
+        return False
+    intent = str(contract.intent or "")
+    flow_step = str(contract.flow_step or "")
+    if intent in {"quick_order_reservation", "quick_order_reservation_continue"}:
+        if flow_step in {"show_schedule", "resolve_schedule"}:
+            return template in {"preOrder", "orderComplete"}
+        if flow_step == "resolve_price":
+            return template in {"preOrder", "orderComplete"}
+        if flow_step == "build_preorder":
+            return template in {"datepick", "orderComplete"}
+    if intent == "quick_order_execute" and flow_step == "execute_order":
+        return template in {"datepick", "preOrder"}
+    if intent in {
+        "reservation_window_policy",
+        "delivery_delay_reservation_schedule_policy",
+        "general_cancel_fee_policy",
+    }:
+        return template in {"location", "datepick", "preOrder", "orderComplete"}
+    return False
 
 
 def _discovery_product_payload_has_items(event: Mapping[str, Any]) -> bool:

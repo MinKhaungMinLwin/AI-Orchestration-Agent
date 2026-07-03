@@ -681,6 +681,257 @@ def test_continue_active_flow_after_search_product_runs_next_flow_tool(monkeypat
     assert recovery["event"]["tool_input_source"] == "flow_state_progress"
 
 
+def test_continue_stock_flow_after_search_product_runs_inventory_tool(monkeypatch) -> None:
+    from services.tstation import template_mapper
+    from services.tstation.agents.c_transaction_agent import tools as transaction_tools
+    from services.tstation.executors import contract_required_tool_executor as executor
+
+    captured_input: dict = {}
+
+    def fake_inventory_invoke(tool_input: dict):
+        captured_input.update(tool_input)
+        return {
+            "status": "success",
+            "data": {"stores": [{"shop_id": "S001", "available_qty": 4}]},
+        }
+
+    def fake_template(tool_data_list: list[dict], assistant_text: str):
+        assert [entry["tool"] for entry in tool_data_list] == ["get_store_inventory_tool"]
+        return {
+            "type": "data",
+            "template": "location",
+            "data": {
+                "assistantResponse": assistant_text,
+                "stores": [{"nameAddress": "Pangyo Store"}],
+                "metadata": [{"shopId": "S001"}],
+            },
+        }
+
+    async def fake_to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    monkeypatch.setattr(transaction_tools, "get_store_inventory_tool", SimpleNamespace(invoke=fake_inventory_invoke))
+    monkeypatch.setattr(template_mapper, "try_build_template", fake_template)
+    monkeypatch.setattr(executor.asyncio, "to_thread", fake_to_thread)
+
+    active_flow_context = {
+        "flow_type": "commerce",
+        "status": "active",
+        "flow_step": "product_selected",
+        "product": {
+            "goods_no": "G000000310126",
+            "product_name": "Ventus S2 AS",
+            "tire_size": "245/45R19",
+            "ord_qty": 4,
+        },
+        "store": {"shop_id": "S001", "shop_name": "Pangyo Store"},
+        "intent": {"sub_flow_type": "stock", "pending_intent": "stock", "goal_type": "store_with_stock"},
+        "current_step": "check_inventory",
+        "missing_slots": [],
+        "next_tool": "get_store_inventory_tool",
+        "tool_args_patch": {
+            "goods_list": [{"goodsNo": "G000000310126", "qty": "4"}],
+            "shop_id_list": [{"shopId": "S001"}],
+        },
+        "allowed_tools": ["get_store_inventory_tool"],
+    }
+
+    recovery = asyncio.run(
+        continue_active_flow_after_tool(
+            turn_contract=TurnContract(
+                domain="discovery",
+                intent="product_search",
+                allowed_tools=("search_product_tool",),
+                preferred_tool="search_product_tool",
+                response_decision={
+                    "template": "product",
+                    "metadata": {"response_shape_key": "product_search_summary"},
+                },
+                context_state="active",
+            ),
+            user_text="Ventus S2 stock at Pangyo",
+            merged_slots=ConversationSlots(availability_context={"active_flow_context": active_flow_context}),
+            last_tool_name="search_product_tool",
+            blocked_fast_path_source="post_tool_flow_progress:search_product_tool",
+        )
+    )
+
+    assert recovery is not None
+    assert recovery["tool_name"] == "get_store_inventory_tool"
+    assert captured_input == {
+        "goods_list": [{"goodsNo": "G000000310126", "qty": "4"}],
+        "shop_id_list": [{"shopId": "S001"}],
+    }
+    assert recovery["event"]["template"] == "location"
+    assert recovery["event"]["source_domain"] == "transaction"
+    assert recovery["event"]["tool_input_source"] == "flow_state_progress"
+
+def test_contract_recovery_blocks_mapper_template_that_violates_contract(monkeypatch) -> None:
+    from services.tstation import template_mapper
+    from services.tstation.agents.c_transaction_agent import tools as transaction_tools
+    from services.tstation.executors import contract_required_tool_executor as executor
+
+    def fake_inventory_invoke(tool_input: dict):
+        return {"status": "success", "data": {"stores": [{"shop_id": "S001", "available_qty": 4}]}}
+
+    def fake_template(tool_data_list: list[dict], assistant_text: str):
+        assert [entry["tool"] for entry in tool_data_list] == ["get_store_inventory_tool"]
+        return {"type": "data", "template": "preOrder", "data": {"assistantResponse": assistant_text}}
+
+    async def fake_to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    monkeypatch.setattr(transaction_tools, "get_store_inventory_tool", SimpleNamespace(invoke=fake_inventory_invoke))
+    monkeypatch.setattr(template_mapper, "try_build_template", fake_template)
+    monkeypatch.setattr(executor.asyncio, "to_thread", fake_to_thread)
+
+    active_flow_context = {
+        "flow_type": "commerce",
+        "status": "active",
+        "flow_step": "store_selected",
+        "product": {"goods_no": "G000000310126", "tire_size": "245/45R19", "ord_qty": 4},
+        "store": {"shop_id": "S001"},
+        "intent": {"sub_flow_type": "stock", "pending_intent": "stock", "goal_type": "store_with_stock"},
+        "current_step": "check_inventory",
+        "next_tool": "get_store_inventory_tool",
+        "tool_args_patch": {
+            "goods_list": [{"goodsNo": "G000000310126", "qty": "4"}],
+            "shop_id_list": [{"shopId": "S001"}],
+        },
+        "allowed_tools": ["get_store_inventory_tool"],
+    }
+
+    recovery = asyncio.run(
+        continue_active_flow_after_tool(
+            turn_contract=TurnContract(
+                domain="transaction",
+                intent="stock_store_search",
+                allowed_tools=("get_store_inventory_tool",),
+                preferred_tool="get_store_inventory_tool",
+                response_decision={
+                    "template": "location",
+                    "forbidden_behaviors": ("preorder_for_pure_inventory_flow",),
+                    "metadata": {"response_shape_key": "stock_inventory_lookup"},
+                },
+                action_mode="stock_check",
+                context_state="active",
+            ),
+            user_text="check stock",
+            merged_slots=ConversationSlots(availability_context={"active_flow_context": active_flow_context}),
+            last_tool_name="search_product_tool",
+            blocked_fast_path_source="post_tool_flow_progress:search_product_tool",
+        )
+    )
+
+    assert recovery is None
+
+def test_store_only_recovery_blocks_mapper_datepick_template(monkeypatch) -> None:
+    from services.tstation import template_mapper
+    from services.tstation.agents.c_transaction_agent import tools as transaction_tools
+    from services.tstation.executors import contract_required_tool_executor as executor
+
+    def fake_store_list_invoke(tool_input: dict):
+        return {
+            "status": "success",
+            "data": {"stores": [{"shop_id": "S001", "shop_nm": "Pangyo Store"}]},
+        }
+
+    def fake_template(tool_data_list: list[dict], assistant_text: str):
+        assert [entry["tool"] for entry in tool_data_list] == ["get_store_list_tool"]
+        return {"type": "data", "template": "datepick", "data": {"assistantResponse": assistant_text}}
+
+    async def fake_to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    monkeypatch.setattr(transaction_tools, "get_store_list_tool", SimpleNamespace(invoke=fake_store_list_invoke))
+    monkeypatch.setattr(template_mapper, "try_build_template", fake_template)
+    monkeypatch.setattr(executor.asyncio, "to_thread", fake_to_thread)
+
+    recovery = asyncio.run(
+        _recover_contract_required_tool(
+            turn_contract=TurnContract(
+                domain="transaction",
+                intent="store_search",
+                allowed_tools=("get_store_list_tool",),
+                preferred_tool="get_store_list_tool",
+                tool_args_patch={"limit": 10, "region": "Pangyo"},
+                response_decision={
+                    "template": "location",
+                    "forbidden_behaviors": ("datepick_for_store_search_flow",),
+                    "metadata": {"response_shape_key": "store_search_results"},
+                },
+                action_mode="store_search",
+                context_state="active",
+            ),
+            user_text="find stores near Pangyo",
+            merged_slots=None,
+            blocked_fast_path_source="contract_required_tool_executor",
+        )
+    )
+
+    assert recovery is None
+
+def test_purchase_schedule_recovery_blocks_mapper_preorder_before_price(monkeypatch) -> None:
+    from services.tstation import template_mapper
+    from services.tstation.agents.c_transaction_agent import tools as transaction_tools
+    from services.tstation.executors import contract_required_tool_executor as executor
+
+    def fake_schedule_invoke(tool_input: dict):
+        return {
+            "status": "success",
+            "data": {"shop_id": "S001", "slots": [{"cal_day": "20260705", "tm": "1700"}]},
+        }
+
+    def fake_template(tool_data_list: list[dict], assistant_text: str):
+        assert [entry["tool"] for entry in tool_data_list] == ["get_store_schedule_tool"]
+        return {"type": "data", "template": "preOrder", "data": {"assistantResponse": assistant_text}}
+
+    async def fake_to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    monkeypatch.setattr(transaction_tools, "get_store_schedule_tool", SimpleNamespace(invoke=fake_schedule_invoke))
+    monkeypatch.setattr(template_mapper, "try_build_template", fake_template)
+    monkeypatch.setattr(executor.asyncio, "to_thread", fake_to_thread)
+
+    active_flow_context = {
+        "flow_type": "commerce",
+        "status": "active",
+        "flow_step": "store_selected",
+        "product": {"goods_no": "G000000310126", "tire_size": "245/45R19", "ord_qty": 4},
+        "store": {"shop_id": "S001"},
+        "intent": {"sub_flow_type": "purchase", "pending_intent": "order", "goal_type": "place_order"},
+        "current_step": "resolve_schedule",
+        "missing_slots": ["booking_datetime"],
+        "next_tool": "get_store_schedule_tool",
+        "tool_args_patch": {"shop_id": "S001", "mode": "general"},
+        "allowed_tools": ["get_store_schedule_tool"],
+    }
+
+    recovery = asyncio.run(
+        continue_active_flow_after_tool(
+            turn_contract=TurnContract(
+                domain="transaction",
+                intent="quick_order_reservation",
+                allowed_tools=("get_store_schedule_tool",),
+                forbidden_tools=("quick_order_tool",),
+                preferred_tool="get_store_schedule_tool",
+                response_decision={
+                    "template": "datepick",
+                    "metadata": {"response_shape_key": "reservation_slots"},
+                },
+                action_mode="purchase_continuation",
+                context_state="active",
+                flow_step="show_schedule",
+            ),
+            user_text="book this store",
+            merged_slots=ConversationSlots(availability_context={"active_flow_context": active_flow_context}),
+            last_tool_name="get_store_list_tool",
+            blocked_fast_path_source="post_tool_flow_progress:get_store_list_tool",
+        )
+    )
+
+    assert recovery is None
+
 def test_continue_active_flow_after_tool_skips_same_tool(monkeypatch) -> None:
     from services.tstation.agents.c_transaction_agent import tools as transaction_tools
 

@@ -134,6 +134,50 @@ The flow tables must keep tools and FE templates/actions separate:
 - Tools: `search_product_tool`, `get_store_list_tool`, `get_store_schedule_tool`, `quick_order_tool`, and other backend/tool calls.
 - Templates/actions: `quickReply`, `product`, `location`, `datepick`, `preOrder`, `orderComplete`, `qnaComplete`, and UI action metadata such as `location.isBookingFlow=true`.
 
+## Current Stabilization Checkpoint
+
+Status after steps 1-17D:
+
+1. The five flow transition tables now separate backend tools from FE templates/actions, next tool, next template/action, and expected persistence.
+2. Purchase, stock, store, support, and reservation/preorder boundaries have focused regression coverage in the existing policy test suites.
+3. Purchase flow now treats price as a required preOrder boundary:
+   - `datepick` slot-fill may continue only to price resolution when price basis is missing.
+   - `preOrder` is allowed only when product, tire size, quantity, store, schedule, and price basis are active and compatible.
+   - `orderComplete` is still allowed only after successful order execution, not from stale preorder context.
+4. Stale product/store/schedule/payment context invalidation has been tightened in `flow_state.py` and purchase flow resolution.
+5. Flow continuation is centralized through `flow_controller.py`, `contract_required_tool_candidate.py`, and direct executor paths instead of one-off orchestration branches.
+6. Support-policy turns during purchase/stock/store context now keep transaction tools dormant unless the user explicitly resumes commerce.
+7. Direct executor regression tests can run without the previous `langgraph.runtime.ExecutionInfo` import blocker by importing tool decorators from `langchain_core.tools`.
+8. Purchase and reservation/preorder transition rows now have a compact matrix test for schedule request, schedule slot-fill, preOrder readiness, order execution, and reservation-policy drift.
+9. Stock, store, and support transition rows now have matrix coverage for inventory-only, preview schedule, unavailable inventory, store-only booking-action blocking, support policy dormant parent contexts, and explicit purchase resume.
+10. Stock post-tool continuation now has direct executor coverage proving product resolution can continue to inventory lookup, and mapper output is contract-checked before recovery emission.
+11. Store-only and purchase schedule recovery paths now have mapper/template compatibility coverage, including blocking `datepick` from store-only results and blocking premature `preOrder` before the purchase schedule/price boundary is complete.
+12. Next-turn persistence assertions now cover stale preorder invalidation, support-policy turns ignoring stale preorder/template metadata, and stock context moving into purchase only when the current turn explicitly resumes purchase.
+13. Step 17D audit found no additional owner-layer gaps exposed by the new transition coverage; focused checkpoint tests and ruff both pass without adding new `chat.py` branches.
+
+Verified checkpoint command:
+
+```powershell
+$env:PYTHONPATH=(Resolve-Path app/tstation-ai).Path
+uv run pytest `
+  app/tstation-ai/tests/test_context_transition_contracts.py `
+  app/tstation-ai/tests/test_transaction_intent_policy.py `
+  app/tstation-ai/tests/test_price_basis_policy.py `
+  app/tstation-ai/tests/test_contract_required_tool_candidate.py `
+  app/tstation-ai/tests/test_contract_direct_executor.py `
+  -q
+```
+
+Latest result: `115 passed, 1 warning`.
+
+Current next step:
+
+```text
+Phase 8: tighten contract and template gates for the remaining risky templates and fallback paths.
+```
+
+The next work should add more scenario coverage and persistence assertions. Do not add new flow branches in `chat.py` unless a transition-table row proves the owner layer cannot express the behavior.
+
 ## Phase 0: Freeze Patch-Level Expansion
 
 Goal: stop making the architecture harder to stabilize.
