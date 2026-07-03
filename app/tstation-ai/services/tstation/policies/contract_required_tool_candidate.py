@@ -78,6 +78,7 @@ _DIRECT_SUPPORT_FAQ_POLICY_INTENTS = frozenset({
     "installation_work_policy",
     "external_tire_install_policy",
     "promotion_gift_policy",
+    "promotion_gift_delivery_policy",
 })
 _SIZED_RECOMMENDATION_RESPONSE_SHAPE_KEYS = frozenset({
     "sized_product_recommendation",

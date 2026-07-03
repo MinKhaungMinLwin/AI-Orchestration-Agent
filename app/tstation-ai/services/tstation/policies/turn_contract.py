@@ -303,6 +303,7 @@ ROUTER_WINS_INFORMATIONAL_INTENTS = frozenset({
     "installation_work_policy",
     "external_tire_install_policy",
     "promotion_gift_policy",
+    "promotion_gift_delivery_policy",
     "tire_condition_photo_policy",
     "tire_manufacture_date_policy",
     "tire_quality_warranty_policy",
@@ -1449,6 +1450,7 @@ def build_turn_contract(
         "reservation_policy_guidance",
         "installation_work_policy",
         "promotion_gift_policy",
+        "promotion_gift_delivery_policy",
         "tire_condition_photo_policy",
         "coupon_usage_policy",
         "coupon_registration_policy",
@@ -3739,6 +3741,7 @@ _FAQ_FIRST_SUPPORT_POLICY_INTENTS = {
     "installation_work_policy",
     "external_tire_install_policy",
     "promotion_gift_policy",
+    "promotion_gift_delivery_policy",
 }
 
 _FAQ_SOURCE_TOOLS = frozenset({"get_faq_tool", "search_faq_rag_tool", "search_faq_hybrid_tool"})
@@ -3937,6 +3940,7 @@ def _faq_source_supports_assertion(intent: str, assistant_text: str, faq_text: s
         "installation_work_policy": ("공임", "장착", "얼라인먼트", "폐타이어", "현장"),
         "external_tire_install_policy": ("외부", "반입", "공임", "장착", "온라인몰", "지정 장착점"),
         "promotion_gift_policy": ("사은품", "프로모션", "이벤트", "반납", "차감"),
+        "promotion_gift_delivery_policy": ("사은품", "지급", "배송", "수령", "언제"),
     }.get(intent, ())
     if not topic_tokens:
         return True

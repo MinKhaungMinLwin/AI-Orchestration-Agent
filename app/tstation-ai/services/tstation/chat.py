@@ -1003,6 +1003,7 @@ class MultiAgentDomain(BaseModel):
         "reservation_policy_guidance",
         "installation_work_policy",
         "promotion_gift_policy",
+        "promotion_gift_delivery_policy",
         "tire_condition_photo_policy",
         "coupon_usage_policy",
         "coupon_registration_policy",
@@ -2684,6 +2685,7 @@ class _SlimMultiAgentDomain(BaseModel):
         "reservation_policy_guidance",
         "installation_work_policy",
         "promotion_gift_policy",
+        "promotion_gift_delivery_policy",
         "tire_condition_photo_policy",
         "coupon_usage_policy",
         "coupon_registration_policy",
@@ -2958,7 +2960,8 @@ Complaint routing rule:
    - "reservation_window_policy": 장착 예약 가능 기간 제한 안내. 두 달 뒤 같은 범위 밖 질문은 슬롯 조회가 아니라 정책 안내가 우선.
    - "installation_work_policy": 작업 시작 후 취소, 장착 중 취소, 탈거 후 공임비처럼 작업 진행 상태가 핵심인 정책 안내. 매장별 가능 여부 단정 금지.
    - "external_tire_install_policy": 외부 구매/반입 타이어 장착 정책 안내. 온라인몰 지정 장착점 발송 기준, 직접 반입 장착 제한, 매장별 운영 차이만 안내.
-   - "promotion_gift_policy": 사은품, 선착순, 프로모션 조건 미달, 반납/차감 가능성 안내. 실시간 지급 여부 확정 금지.
+   - "promotion_gift_policy": 부분/일부 취소로 사은품 지급 기준 수량 미달, 반납/차감 가능성 안내. 실시간 지급 여부 확정 금지.
+   - "promotion_gift_delivery_policy": 사은품을 언제/어떻게 받는지, 지급·발송 시기 문의. 취소/반납/차감 언급이 없는 수령 시점 질문은 이쪽으로 분류하고, promotion_gift_policy로 분류하지 않는다.
    - "tire_condition_photo_policy": 사진만으로 타이어 상태/주행 안전 판정 불가 안내. 매장 점검/마모도 측정/1:1 문의는 보조.
    - "signup_first_purchase_benefit_policy": 회원가입/신규회원/첫구매 혜택·쿠폰·서비스 안내. FAQ/RAG 정책 설명이며 내 쿠폰 조회/직접 발급이 아님.
    - "coupon_usage_policy": 쿠폰 온라인/오프라인 사용처, 현장 결제 가능 여부, 온라인 주문 없이 매장 사용 가능 여부 같은 일반 쿠폰 사용 정책 안내.
@@ -3323,6 +3326,7 @@ Also set `policy_intent`:
 - installation/work-start cancel policy ("작업 시작했는데 취소하면 공임비 있어?", "탈거 후 취소하면 비용 들어?") → SUPPORT, policy_intent=`installation_work_policy`; this is work-start cancellation guidance, not store-specific confirmation.
 - external tire carry-in/install policy ("인터넷에서 산 타이어 가져가서 장착 가능해?", "공임만 받고 장착해줘?", "외부 구매 타이어 반입 가능해?") → SUPPORT, policy_intent=`external_tire_install_policy`; explain source-grounded policy and do not turn it into work-start cancel guidance.
 - promotion/gift policy ("4짝 사고 사은품 받았는데 2짝 취소하면?", "선착순 끝났으면?", "사은품 반납해야 해?") → SUPPORT, policy_intent=`promotion_gift_policy`; explain policy/condition first, not direct compensation.
+- promotion/gift delivery timing ("사은품 신청한거 언제줘?", "사은품 언제 보내주나요?", "이벤트 사은품 언제 받아요?") → SUPPORT, policy_intent=`promotion_gift_delivery_policy`; this is a delivery-timing question, not a cancellation/return policy question. Do not answer with partial-cancellation/반납/차감 guidance.
 - tire condition photo policy ("사진 보낼 테니까 더 타도 되는지 봐줘", "마모 사진 보고 괜찮은지 알려줘") → SUPPORT, policy_intent=`tire_condition_photo_policy`; explain that chatbot cannot determine safety from photos alone and guide inspection first.
 - tire storage service how-to/history/policy ("타이어 보관서비스 어떻게 이용해?", "맡긴 타이어 어디서 확인해?", "보관 중 분실되면 어떻게 돼?", "보관 기간 지나면?") → SUPPORT, policy_intent=`tire_storage_service`; this is usage/history/policy guidance, not store search.
 - signup/new-member/first-purchase benefit explanation ("회원가입하면 첫구매 혜택은 뭐가 있어?", "신규회원 혜택 알려줘", "가입하면 받을 수 있는 쿠폰 뭐야?") → SUPPORT, policy_intent=`signup_first_purchase_benefit_policy`; this is FAQ/RAG policy guidance, not owned coupon lookup or coupon issuance.
@@ -7261,6 +7265,11 @@ def _build_support_faq_policy_event(
             "기준 미달 시에는 사은품 반납이 필요할 수 있고, 반납이 어렵거나 조건에 따라 사은품 상당 금액을 차감한 뒤 환불될 수 있어요.\n"
             "최종 적용은 이벤트 상세 조건과 실제 주문/취소 처리 기준에 따라 달라져요."
         ),
+        "promotion_gift_delivery_policy": (
+            "사은품 지급/발송 시기는 이벤트별 지급 기준과 실제 주문 처리 절차에 따라 달라질 수 있어요.\n"
+            "정확한 지급 일정은 주문 내역이나 이벤트 상세 안내에서 먼저 확인해 주세요.\n"
+            "확인이 어렵다면 1:1 문의로 접수해 주시면 안내받을 수 있어요."
+        ),
         "coupon_usage_policy": (
             "쿠폰은 쿠폰별 사용처와 유의사항에 따라 온라인 전용인지, 매장 사용이 가능한지 달라질 수 있어요.\n"
             "티스테이션닷컴에서 받은 쿠폰은 쿠폰 상세나 유의사항에서 사용처를 먼저 확인해 주세요.\n"
@@ -7307,6 +7316,7 @@ def _build_support_faq_policy_event(
         "reservation_policy_guidance": "실제 예약 변경이나 취소 전에는 예약 상세 안내도 함께 확인해 주세요.",
         "installation_work_policy": "추가 작업비나 현장 결제 여부는 정책과 작업 범위에 따라 달라질 수 있어요.",
         "promotion_gift_policy": required_guidance_by_intent["promotion_gift_policy"],
+        "promotion_gift_delivery_policy": required_guidance_by_intent["promotion_gift_delivery_policy"],
         "coupon_usage_policy": required_guidance_by_intent["coupon_usage_policy"],
         "coupon_registration_policy": required_guidance_by_intent["coupon_registration_policy"],
         "tire_condition_photo_policy": required_guidance_by_intent["tire_condition_photo_policy"],
@@ -7324,6 +7334,7 @@ def _build_support_faq_policy_event(
         "reservation_policy_guidance": "예약 가능 기간, 취소, 변경 조건은 정책 기준으로 먼저 확인해 보는 것이 안전해요.",
         "installation_work_policy": "공임, 장착비, 추가 작업 비용은 작업 범위와 정책에 따라 달라질 수 있어요.",
         "promotion_gift_policy": required_guidance_by_intent["promotion_gift_policy"],
+        "promotion_gift_delivery_policy": required_guidance_by_intent["promotion_gift_delivery_policy"],
         "coupon_usage_policy": required_guidance_by_intent["coupon_usage_policy"],
         "coupon_registration_policy": required_guidance_by_intent["coupon_registration_policy"],
         "tire_condition_photo_policy": required_guidance_by_intent["tire_condition_photo_policy"],
@@ -8334,6 +8345,10 @@ def _support_faq_policy_quick_replies(intent: str) -> list[dict[str, Any]]:
         ],
         "promotion_gift_policy": [
             {"label": "진행 중인 이벤트 보기", "url": CTAUrls.PROMOTION_EVENT_LIST, "domain": "DISCOVERY"},
+        ],
+        "promotion_gift_delivery_policy": [
+            {"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"},
+            {"label": "1:1 문의하기", "domain": "SUPPORT"},
         ],
         "coupon_usage_policy": [
             {"label": "쿠폰함 바로가기", "url": CTAUrls.MY_COUPON_LIST_PC, "domain": "TRANSACTION"},
@@ -17369,6 +17384,7 @@ _FAQ_POLICY_FALLBACK_INTENTS = frozenset({
     "installation_work_policy",
     "external_tire_install_policy",
     "promotion_gift_policy",
+    "promotion_gift_delivery_policy",
 })
 _DIRECT_SUPPORT_FAQ_POLICY_INTENTS = _FAQ_POLICY_FALLBACK_INTENTS
 _FAQ_POLICY_FALLBACK_SOURCE_TOOLS = frozenset({"get_faq_tool", "search_faq_rag_tool", "search_faq_hybrid_tool"})

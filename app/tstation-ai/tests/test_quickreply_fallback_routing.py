@@ -30018,6 +30018,35 @@ def test_promotion_gift_policy_contract_requires_partial_cancel_guidance_and_blo
     assert hard_contract_violations(good) == []
 
 
+def test_promotion_gift_delivery_policy_contract_is_distinct_from_partial_cancel_policy() -> None:
+    contract = build_turn_contract(
+        user_text="사은품 신청한거 언제줘?",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:promotion_gift_delivery_policy"],
+            policy_intent="promotion_gift_delivery_policy",
+        ),
+    )
+
+    assert contract.domain == "support"
+    assert contract.intent == "promotion_gift_delivery_policy"
+    assert "search_faq_hybrid_tool" in contract.allowed_tools
+    assert "get_final_price_tool" in contract.forbidden_tools
+
+    # A pure delivery-timing answer must not be flagged by the partial-cancel
+    # invariant, since that check is scoped to the literal "promotion_gift_policy" intent.
+    violations = response_contract_violations(
+        template="quickReply",
+        called_tools=["search_faq_hybrid_tool"],
+        assistant_response_text="사은품은 주문 처리 완료 후 순차적으로 발송돼요.",
+        contract=contract,
+    )
+    assert not any(
+        v.get("type") == "promotion_gift_policy_missing_partial_cancel_guidance" for v in violations
+    )
+    assert hard_contract_violations(violations) == []
+
+
 def test_signup_coupon_guidance_contract_blocks_owned_coupon_tools() -> None:
     contract = build_turn_contract(
         user_text="회원가입 전용 쿠폰이 있어?",
@@ -39047,6 +39076,23 @@ def test_support_faq_policy_event_for_promotion_gift_appends_partial_cancel_inva
     assert not response.endswith("...")
     assert _labels(event["data"]["quickReplies"]) == ["진행 중인 이벤트 보기"]
     assert event["data"]["quickReplies"][0]["url"] == CTAUrls.PROMOTION_EVENT_LIST
+
+
+def test_support_faq_policy_event_for_promotion_gift_delivery_does_not_use_partial_cancel_text() -> None:
+    event = _build_support_faq_policy_event(
+        "promotion_gift_delivery_policy",
+        "사은품 신청한거 언제줘?",
+        tool_result=None,
+    )
+
+    assert event is not None
+    response = str(event["data"]["assistantResponse"])
+    assert "부분 취소" not in response
+    assert "반납" not in response
+    assert "차감" not in response
+    assert "사은품 지급/발송 시기는 이벤트별 지급 기준과 실제 주문 처리 절차에 따라 달라질 수 있어요." in response
+    assert _labels(event["data"]["quickReplies"]) == ["주문 내역 보기", "1:1 문의하기"]
+    assert event["data"]["quickReplies"][0]["url"] == CTAUrls.ORDER_HISTORY
 
 
 def test_support_faq_policy_event_for_coupon_usage_does_not_append_partner_or_raw_faq() -> None:

@@ -179,6 +179,7 @@ _SUPPORT_FLOW_INTENTS = frozenset({
     "installation_work_policy",
     "external_tire_install_policy",
     "promotion_gift_policy",
+    "promotion_gift_delivery_policy",
     "tire_condition_photo_policy",
     "tire_manufacture_date_policy",
     "tire_quality_warranty_policy",
