@@ -1054,6 +1054,16 @@ def build_discovery_intent_frame(
     if _SIMILAR_PRICE_RE.search(text):
         entities["price_goal"] = "similar_range"
     price_range = _price_range_from_text(text)
+    if not price_range:
+        allow_inherited_price_range = slots.get("allow_inherited_price_range", True)
+        if allow_inherited_price_range:
+            inherited_price_range = {
+                key: (slots.get(key) if slots.get(key) is not None else recommendation_context.get(key))
+                for key in ("min_price", "max_price")
+            }
+            price_range = {
+                key: value for key, value in inherited_price_range.items() if value is not None
+            }
     if price_range:
         entities["price_range"] = price_range
         entities.update(price_range)
