@@ -779,11 +779,27 @@ _BEST_SELLER_VEHICLE_TOKEN_STOPWORDS = {
     "추천해줘", "알려줘", "보여줘", "순위", "판매량", "는", "가", "이", "좀",
 }
 _BEST_SELLER_VEHICLE_TRAILING_PARTICLE_RE = re.compile(r"(?:에서|으로|로|에|은|는|이|가|도|만|과|와)$")
+_BEST_SELLER_VEHICLE_PUNCT_RE = re.compile(r"^[\W_]+$", re.UNICODE)
 _GENERAL_BEST_SELLER_SCOPE_RE = re.compile(
     r"^(?:전체|전부|모든|통합)?\s*(?:베스트\s*셀러|베스트셀러|인기\s*(?:상품|제품|타이어)|잘\s*팔리는\s*타이어)"
     r"\s*(?:보기|보여줘|알려줘|확인|목록)?$",
     re.IGNORECASE,
 )
+
+
+def _clean_best_seller_vehicle_token(token: str) -> str:
+    cleaned = re.sub(r"^[^\w가-힣]+|[^\w가-힣]+$", "", str(token or ""), flags=re.UNICODE)
+    return _BEST_SELLER_VEHICLE_TRAILING_PARTICLE_RE.sub("", cleaned).strip()
+
+
+def _is_valid_best_seller_vehicle_query(value: str | None) -> bool:
+    normalized = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not normalized or _BEST_SELLER_VEHICLE_PUNCT_RE.fullmatch(normalized):
+        return False
+    anchor = _normalize_vehicle_anchor(normalized)
+    if len(anchor) < 2:
+        return False
+    return anchor not in _BEST_SELLER_VEHICLE_TOKEN_STOPWORDS
 
 
 def is_general_best_seller_scope_request(text: str) -> bool:
@@ -806,7 +822,7 @@ def extract_best_seller_vehicle_query(text: str) -> str | None:
         return vehicle_model_match.vehicle_query
 
     candidate = _BEST_SELLER_VEHICLE_STRIP_RE.sub(" ", text)
-    candidate = re.sub(r"\s+", " ", candidate).strip(" ,.")
+    candidate = re.sub(r"\s+", " ", candidate).strip(" ,.\"'“”‘’")
     if not candidate or _BEST_SELLER_NON_VEHICLE_ONLY_RE.fullmatch(candidate):
         return None
     if normalize_tire_size(candidate):
@@ -814,19 +830,18 @@ def extract_best_seller_vehicle_query(text: str) -> str | None:
     if re.fullmatch(r"(?:남성|여성|\d{2}대|\d{2}대\s*(?:남성|여성)?)", candidate):
         return None
     tokens = [
-        token for token in re.split(r"\s+", candidate)
-        if token and token not in _BEST_SELLER_VEHICLE_TOKEN_STOPWORDS
+        _clean_best_seller_vehicle_token(token) for token in re.split(r"\s+", candidate)
     ]
     tokens = [
         token
         for token in tokens
-        if len(token) >= 2 or re.search(r"[A-Za-z0-9]", token)
+        if token and token not in _BEST_SELLER_VEHICLE_TOKEN_STOPWORDS and _is_valid_best_seller_vehicle_query(token)
     ]
     if not tokens:
         return None
     cleaned_candidate = " ".join(tokens).strip()
     cleaned_candidate = _BEST_SELLER_VEHICLE_TRAILING_PARTICLE_RE.sub("", cleaned_candidate).strip()
-    if not cleaned_candidate or cleaned_candidate in _BEST_SELLER_VEHICLE_TOKEN_STOPWORDS:
+    if not _is_valid_best_seller_vehicle_query(cleaned_candidate):
         return None
     return cleaned_candidate
 
