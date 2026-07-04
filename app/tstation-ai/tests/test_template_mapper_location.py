@@ -2629,8 +2629,9 @@ def test_metric_comparison_policy_includes_goods_detail_performance_name() -> No
     assert "**벤투스 에어S**" in assistant_response
     assert "**다이나프로 HPX**" in assistant_response
     assert "| 항목 | 내용 |" in assistant_response
-    assert "| 특징 | 특화 사양 COMFORT / 흡음재 |" in assistant_response
-    assert "| 특징 | 특화 사양 COMFORT / SUV 마일리지 |" in assistant_response
+    assert "| 특징 | COMFORT / 흡음재 |" in assistant_response
+    assert "| 특징 | COMFORT / SUV 마일리지 |" in assistant_response
+    assert "특화 사양 COMFORT" not in assistant_response
 
 
 def test_metric_comparison_policy_answers_latest_product_confidently() -> None:

@@ -696,6 +696,7 @@ async def recover_blocked_fast_path_to_contract_tool(
             return None
         fanout_tool_data_list: list[dict[str, Any]] = []
         if preferred_tool == "search_product_summary_tool" and isinstance(tool_input.get("keywords"), list):
+            fanout_items: list[Any] = []
             for keyword in [str(value).strip() for value in tool_input.get("keywords", []) if str(value).strip()][:5]:
                 per_tool_input = {
                     key: value
@@ -717,11 +718,21 @@ async def recover_blocked_fast_path_to_contract_tool(
                     "args": per_tool_input,
                     "data": per_tool_result,
                 })
-            tool_result = (
-                fanout_tool_data_list[0]["data"]
-                if fanout_tool_data_list
-                else {"status": "error", "http_status": None, "message": "No product keywords", "data": {}}
-            )
+                per_data = per_tool_result.get("data") if isinstance(per_tool_result, Mapping) else None
+                per_items = per_data.get("items") if isinstance(per_data, Mapping) else None
+                if isinstance(per_items, list):
+                    fanout_items.extend(per_items)
+            tool_result = {
+                "status": "success" if fanout_tool_data_list else "error",
+                "http_status": 200 if fanout_tool_data_list else None,
+                "data": {"items": fanout_items},
+                "fanout_count": len(fanout_tool_data_list),
+            } if fanout_tool_data_list else {
+                "status": "error",
+                "http_status": None,
+                "message": "No product keywords",
+                "data": {},
+            }
         else:
             raw_result = await asyncio.to_thread(tool.invoke, tool_input)
             tool_result = raw_result if isinstance(raw_result, dict) else qc_verifier.parse_tool_output(raw_result)

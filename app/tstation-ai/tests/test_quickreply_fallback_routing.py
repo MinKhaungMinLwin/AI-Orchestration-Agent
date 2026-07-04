@@ -24,6 +24,7 @@ import pytest
 
 from common.qna_payload import make_qna_payload_urls
 from services.tstation import chat as chat_module, qc_verifier
+from services.tstation import template_mapper as template_mapper_module
 from services.tstation.common.cta_urls import CTAUrls
 from services.tstation.common.pii_guardrail import check_pii
 from services.tstation.common.tstation_be_client import set_tstation_origin_host
@@ -31283,7 +31284,15 @@ def test_product_description_router_boundary_forbids_sku_search_for_unsized_summ
     assert "search_product_tool" in contract.forbidden_tools
 
 
-def test_product_summary_comparison_mapper_restores_table_response() -> None:
+def test_product_summary_comparison_mapper_restores_table_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        template_mapper_module,
+        "_comparison_review_summaries_for_grouped",
+        lambda grouped: {
+            "키너지 EX": "저소음과 안정적인 승차감 만족 의견이 확인돼요",
+            "벤투스 S2 AS": "정숙성과 부드러운 승차감 만족 의견이 많아요",
+        },
+    )
     decision = ResponseDecision(
         response_shape=ResponseShape.SUMMARY,
         template=TemplateName.QUICK_REPLY,
@@ -31311,8 +31320,22 @@ def test_product_summary_comparison_mapper_restores_table_response() -> None:
                                     "prc_grd_nm": "스탠다드",
                                     "goods_pfm_nm": "COMFORT",
                                     "goods_dtl_pfm_nm": "컴포트",
+                                    "available_sizes": [
+                                        "155/70R14",
+                                        "165/60R14",
+                                        "165/60R15",
+                                        "165/65R14",
+                                        "175/50R15",
+                                        "175/65R14",
+                                    ],
                                     "rating_avg": 4.2,
                                     "review_count": 43,
+                                    "reviews": [
+                                        {
+                                            "gdas_score": 5,
+                                            "gdas_cont": "저소음이라 출퇴근길에 편하고 승차감이 안정적입니다.",
+                                        }
+                                    ],
                                 }
                             ]
                         },
@@ -31331,8 +31354,26 @@ def test_product_summary_comparison_mapper_restores_table_response() -> None:
                                     "prc_grd_nm": "프리미엄",
                                     "goods_pfm_nm": "COMFORT",
                                     "goods_dtl_pfm_nm": "흡음재",
+                                    "available_sizes": [
+                                        "205/45R17",
+                                        "205/50R17",
+                                        "205/55R16",
+                                        "205/60R16",
+                                        "205/65R16",
+                                        "215/45R17",
+                                    ],
                                     "rating_avg": 4.5,
                                     "review_count": 68,
+                                    "reviews": [
+                                        {
+                                            "gdas_score": 5,
+                                            "gdas_cont": "고속 주행에서도 조용하고 승차감이 부드러워 만족합니다.",
+                                        },
+                                        {
+                                            "gdas_score": 4.5,
+                                            "gdas_cont": "흡음재 때문인지 소음이 줄어든 느낌입니다.",
+                                        },
+                                    ],
                                 }
                             ]
                         },
@@ -31354,6 +31395,11 @@ def test_product_summary_comparison_mapper_restores_table_response() -> None:
     assert "**벤투스 S2 AS**" in response
     assert "| 항목 | 내용 |" in response
     assert "| 상품 등급 | 프리미엄 |" in response
+    assert "| 특징 | COMFORT / 흡음재 |" in response
+    assert "특화 사양 COMFORT" not in response
+    assert "| 리뷰 | 정숙성과 부드러운 승차감 만족 의견이 많아요 |" in response
+    assert "| 평점 | 4.5점 |" in response
+    assert "| 사이즈 | 205/45R17, 205/50R17, 205/55R16, 205/60R16, 205/65R16 외 1개 |" in response
 
 
 @pytest.mark.parametrize("user_text", ["그거 구매할래", "이 상품 주문할게", "그거 결제하고 싶어"])

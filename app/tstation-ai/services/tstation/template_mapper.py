@@ -10,6 +10,7 @@ a single tool output.
 """
 import contextvars
 import datetime
+import json
 import logging
 import re
 from typing import Any, Mapping
@@ -2595,7 +2596,14 @@ def _comparison_metric_table_rows(metric: str) -> tuple[tuple[str, str], ...]:
         return (("빗길 성능", "wet"), ("상품 등급", "product_grade"), ("리뷰", "review"))
     if metric == "car_type":
         return (("차종", "car_type"), ("상품 등급", "product_grade"), ("특징", "feature"))
-    return (("특징", "feature"), ("상품 등급", "product_grade"), ("주요 성능", "performance"), ("리뷰", "review"))
+    return (
+        ("특징", "feature"),
+        ("상품 등급", "product_grade"),
+        ("주요 성능", "performance"),
+        ("리뷰", "review"),
+        ("평점", "rating"),
+        ("사이즈", "available_sizes"),
+    )
 
 
 def _comparison_feature_summary(row: dict) -> str:
@@ -2618,7 +2626,7 @@ def _comparison_feature_summary(row: dict) -> str:
     return " ".join(parts) if parts else "상세 특징 정보는 추가 확인이 필요해요"
 
 
-def _comparison_metric_row_value(metric: str, row: dict, key: str) -> str:
+def _comparison_metric_row_value(metric: str, row: dict, key: str, *, review_summary: str = "") -> str:
     if key == "product_grade":
         return _get_str(row, "prc_grd_nm") or "미확인"
     if key == "feature":
@@ -2626,12 +2634,26 @@ def _comparison_metric_row_value(metric: str, row: dict, key: str) -> str:
             values = _unique_nonempty(
                 [" / ".join(filter(None, [_get_str(row, "goods_pfm_nm"), _get_str(row, "goods_dtl_pfm_nm")]))]
             )
-            return f"특화 사양 {values[0]}" if values else "특화 사양 확인되지 않음"
+            return values[0] if values else "확인되지 않음"
         return _comparison_feature_summary(row)
     if key == "performance":
         return _tire_summary_performance_line(row) or "확인 가능한 주요 성능 정보가 부족해요"
     if key == "review":
-        return _tire_summary_review_line(row) or "리뷰 정보 확인되지 않음"
+        if review_summary:
+            return review_summary
+        review_count = int(_get_num(row, "review_count", default=0) or 0)
+        if _comparison_review_texts(row):
+            return "리뷰 원문은 확인됐지만 요약 생성이 일시적으로 어려워요"
+        return f"리뷰 원문 미제공, 리뷰 {review_count}건" if review_count > 0 else "리뷰 정보 확인되지 않음"
+    if key == "rating":
+        rating_avg = _get_num(row, "rating_avg", "rate", default=0.0)
+        if rating_avg > 0:
+            rating_text = int(rating_avg) if float(rating_avg).is_integer() else f"{rating_avg:g}"
+            return f"{rating_text}점"
+        return "평점 정보 확인되지 않음"
+    if key == "available_sizes":
+        size_list = _format_row_size_list(_row_available_sizes(row), max_visible=5)
+        return size_list or "사이즈 정보 확인되지 않음"
     if key == "release":
         return _get_str(row, "t_rls_yearmon", "sys_reg_dtime") or "미확인"
     if key == "mileage":
@@ -2646,6 +2668,69 @@ def _comparison_metric_row_value(metric: str, row: dict, key: str) -> str:
     if key == "car_type":
         return _get_str(row, "car_knd_nm", "car_type") or "미확인"
     return "미확인"
+
+
+def _comparison_review_texts(row: dict) -> list[dict[str, Any]]:
+    reviews = row.get("reviews")
+    if not isinstance(reviews, list):
+        return []
+    review_texts: list[dict[str, Any]] = []
+    for review in reviews:
+        if not isinstance(review, dict):
+            continue
+        text = _get_str(review, "gdas_cont", "content")
+        text = re.sub(r"<[^>]+>", " ", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        if not text:
+            continue
+        score = _get_num(review, "gdas_score", "score", default=0.0)
+        review_texts.append({"score": score if score > 0 else None, "content": text[:180]})
+        if len(review_texts) >= 5:
+            break
+    return review_texts
+
+
+def _comparison_review_summary_prompt(payload: dict[str, list[dict[str, Any]]]) -> str:
+    return (
+        "아래 타이어 상품별 리뷰를 근거로, 상품별 리뷰 경향을 한국어 한 문장으로 요약하세요.\n"
+        "규칙:\n"
+        "- JSON object만 반환하세요. key는 상품명, value는 요약 문자열입니다.\n"
+        "- 리뷰 원문에 없는 성능/품질/비교 우위를 만들지 마세요.\n"
+        "- 리뷰를 그대로 나열하지 말고 공통 의견 중심으로 정리하세요.\n"
+        "- 각 value는 45자 이내로 작성하세요.\n"
+        "- 확인된 리뷰가 부족하면 '리뷰 경향을 판단할 정보가 부족해요'라고 쓰세요.\n\n"
+        f"리뷰 데이터:\n{json.dumps(payload, ensure_ascii=False)}"
+    )
+
+
+def _comparison_review_summaries_for_grouped(grouped: dict[str, list[dict]]) -> dict[str, str]:
+    payload: dict[str, list[dict[str, Any]]] = {}
+    for name, rows in list(grouped.items())[:6]:
+        if not rows:
+            continue
+        review_texts = _comparison_review_texts(rows[0])
+        if review_texts:
+            payload[name] = review_texts
+    if not payload:
+        return {}
+    try:
+        from langchain_core.messages import HumanMessage
+        from services.tstation.agents.router import DECISION_LLM
+
+        result = DECISION_LLM.invoke([HumanMessage(content=_comparison_review_summary_prompt(payload))])
+        content = result.content if hasattr(result, "content") else result
+        parsed = json.loads(str(content or "").strip())
+    except Exception:
+        logger.exception("[TEMPLATE_MAPPER] Failed to summarize product comparison reviews")
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    summaries: dict[str, str] = {}
+    for name in payload:
+        summary = re.sub(r"\s+", " ", str(parsed.get(name) or "")).strip()
+        if summary:
+            summaries[name] = summary[:80]
+    return summaries
 
 
 def _comparison_metric_best_line(metric: str, best_name: str, best_score: float | None, tied_best: list[str]) -> str:
@@ -2700,11 +2785,15 @@ def _comparison_metric_note(metric: str) -> str:
 
 def _comparison_metric_blocks(metric: str, grouped: dict[str, list[dict]]) -> list[str]:
     lines = ["상품 정보를 상품별 표로 비교해드릴게요."]
+    needs_review_summary = any(key == "review" for _, key in _comparison_metric_table_rows(metric))
+    review_summaries = _comparison_review_summaries_for_grouped(grouped) if needs_review_summary else {}
     for name, rows in list(grouped.items())[:6]:
         row = rows[0]
         lines.extend(["", f"**{name}**", "", "| 항목 | 내용 |", "|---|---|"])
         for label, key in _comparison_metric_table_rows(metric):
-            lines.append(f"| {label} | {_comparison_metric_row_value(metric, row, key)} |")
+            lines.append(
+                f"| {label} | {_comparison_metric_row_value(metric, row, key, review_summary=review_summaries.get(name, ''))} |"
+            )
     return lines
 
 

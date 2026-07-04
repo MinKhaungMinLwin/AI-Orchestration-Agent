@@ -9957,6 +9957,14 @@
             "title": "Pc Prod Tech Desc",
             "description": "기술력"
           },
+          "reviews": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewItem"
+            },
+            "type": "array",
+            "title": "Reviews",
+            "description": "패턴 기준 평점 높은 대표 리뷰 최대 5개"
+          },
           "warranty": {
             "$ref": "#/components/schemas/ProductSearchSummaryWarranty",
             "description": "상품군 기준 워런티 정보"

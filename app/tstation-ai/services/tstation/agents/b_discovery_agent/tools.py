@@ -271,7 +271,7 @@ _TRIM_KEEP_FIELDS: frozenset[str] = frozenset({
     # EU 소음 라벨 (정숙성 점수 t_silence/t_com_sil_avg 와 별개. 표시용)
     "label_pnwave", "label_pnwave_nm", "label_pndb",
     # Rating / review (used for cards and sort_by="rating_desc"/"review_desc")
-    "rating_avg", "rate", "review_count",
+    "rating_avg", "rate", "review_count", "reviews",
     # 상품 등록 일시 — used to identify newest product among same-keyword results
     "sys_reg_dtime",
     # 신규 BE 확장 필드 — 사용자 질문 답변용 (사이즈/하중/브랜드/원산지/출시/성능/라벨/공임·보증)
