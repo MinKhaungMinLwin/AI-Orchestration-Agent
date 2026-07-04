@@ -16,6 +16,13 @@ Classification:
 | Coupon policy redirects (`P0e`, `P0f`, specific coupon usage) | Rewrites transaction/support/coupon routes to force canonical coupon policy or transaction coupon flow. | Hard safety for coupon issuance and policy text; heuristic for specific coupon usage prioritization. | Keep coupon issuance and hard policy guards. Require override metadata when changing domains. |
 | Cross-domain normalization (`plan_cross_domain_turn`) | Computes deterministic multi-domain plan and may replace router domains/execution plan. | Mixed: slot/tool contract for product-first resolution, heuristic routing override for broad domain changes, hard safety for support/policy guards. | Skip heuristic plan for high-confidence router contracts, including transaction store/order/stock. Allow when router is low confidence, needs clarification, or hard guard applies. |
 | Turn contract fallback/guard events | Replaces unsafe output when required slots or response policy would be violated. | Hard safety / slot-tool contract. | Keep. Turn contract is the final safety verifier, not primary semantic router. |
+| Legacy private response-builder symbols | Older tests and compatibility paths may still reference private `_build_*_event` symbols in `chat.py`, but direct runtime paths should call owner-layer builders from policy modules. Support FAQ/policy and reservation-history builders are now thin wrappers around their owner-layer policy modules. | Compatibility surface, not new policy ownership. | Quarantine only. Do not add new response builders in `chat.py`; when safe, replace legacy bodies with thin wrappers around policy builders while preserving import compatibility. |
+
+## reservation_history_policy.py
+
+| Area | Current behavior | Classification | Safety-only direction |
+| --- | --- | --- | --- |
+| Reservation history response builders | Owns reservation-store row selection plus reservation-store-info, not-found, and status lookup data events. Legacy `chat.py` private symbols delegate here for compatibility. | Slot/tool contract / response ownership. | Keep reservation-history response construction in this owner layer. Do not reintroduce duplicated reservation row parsing or response construction in `chat.py`. |
 
 ## cross_domain_policy.py
 
@@ -66,6 +73,13 @@ Classification:
 | Allowed/forbidden tool validation | Flags forbidden or unexpected tools. | Hard safety / slot-tool contract. | Keep. |
 | Planner/code drift tracking | Records drift between router and deterministic frame. | Observability. | Keep and prefer router contract unless safety guard applies. |
 | Intent corrections for hard policies | Forces maintenance history access, event content, quick order execute with ready slots, etc. | Hard safety / slot-tool contract. | Keep only where explicitly safety-bound. |
+| Cancel-fee transaction boundary | Rebuilds a current-turn transaction frame only for `general_cancel_fee_policy` / `owned_order_cancel_fee_inquiry` when router/code drift would otherwise keep a discovery product-recommendation contract or no contract. Clears stale product required slots and uses FAQ policy tools. | Hard safety / slot-tool contract. | Keep because it prevents general cancel-fee policy questions from being consumed as product recommendation missing-slot turns. Do not expand beyond cancel-fee policy rows without a transition-table row and regression test. |
+
+## flow_controller.py
+
+| Area | Current behavior | Classification | Safety-only direction |
+| --- | --- | --- | --- |
+| Current-turn support policy normalization | Normalizes generic support turns into owner-layer support policy intents such as `payment_error_troubleshooting`, `tire_manufacture_date_policy`, and `card_installment_lookup` by calling support policy matchers instead of maintaining local card/installment regexes. | Hard safety / slot-tool contract. | Keep as a current-turn support boundary. Add new support policy normalization only through support policy matchers plus transition-table coverage; do not reintroduce duplicated flow-controller regexes. |
 
 ## Current Preservation Rule
 

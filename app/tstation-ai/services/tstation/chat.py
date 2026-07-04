@@ -78,6 +78,7 @@ from services.tstation.policies.slot_fill_controller import (
     resolve_pre_router_slot_fill,
 )
 from services.tstation.policies.reservation_history_policy import (
+    build_reservation_status_lookup_event,
     build_reservation_store_info_event,
     build_reservation_store_not_found_event,
     select_reservation_store_row,
@@ -86,7 +87,6 @@ from services.tstation.policies.support_response_policy import (
     build_general_cancel_fee_policy_event,
     build_general_card_cancel_timing_policy_event,
     build_support_faq_policy_event,
-    build_support_faq_evidence_grounded_reply,
     is_post_install_quality_claim,
     is_tire_quality_warranty_policy_text,
 )
@@ -7147,126 +7147,12 @@ def _compact_policy_source_summary(
     return first_sentence if len(first_sentence) <= max_len else ""
 
 
-_POLICY_SOURCE_APPEND_ALLOWLIST = frozenset({
-    "tire_manufacture_date_policy",
-})
-
-
-def _policy_source_summary_for_response(intent: str, source_summary: str) -> str:
-    if intent not in _POLICY_SOURCE_APPEND_ALLOWLIST:
-        return ""
-    return _compact_policy_source_summary(source_summary, max_len=120)
-
-
 def _build_general_cancel_fee_policy_event(user_query: str, *, tool_result: dict | None = None) -> dict:
-    bucket_reply = build_support_faq_evidence_grounded_reply(
-        intent="general_cancel_fee_policy",
-        user_text=user_query,
-        tool_result=tool_result,
-    )
-    if bucket_reply is not None:
-        return {
-            "type": "data",
-            "template": "quickReply",
-            "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
-            "assistant_response_source": "code_general_cancel_fee_policy",
-            "data": {
-                "assistantResponse": str(bucket_reply["assistant_response"]),
-                "quickReplies": list(bucket_reply.get("quick_replies") or []),
-                "predictedDomains": ["TRANSACTION", "SUPPORT"],
-                "metadata": {
-                    "responseShapeKey": "general_cancel_fee_policy_summary",
-                    "generalCancelFeePolicy": True,
-                    "faqSourceSummaryUsed": bool(_faq_policy_source_summary_text(tool_result)),
-                    "faqSourceSummaryAppended": False,
-                    "userText": user_query,
-                    **dict(bucket_reply.get("metadata") or {}),
-                },
-            },
-        }
-    source_summary = _faq_policy_source_summary_text(tool_result)
-    assistant_response = (
-        "취소나 예약 변경 시 비용 발생 여부는 주문/예약 유형과 진행 상태에 따라 달라질 수 있어요.\n\n"
-        "실제 취소 전에는 주문내역의 안내 문구와 조건을 함께 확인해 주세요."
-    )
-    return {
-        "type": "data",
-        "template": "quickReply",
-        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
-        "assistant_response_source": "code_general_cancel_fee_policy",
-        "data": {
-            "assistantResponse": assistant_response,
-            "quickReplies": [
-                {"label": "주문내역 확인", "domain": "TRANSACTION"},
-                {"label": "1:1 문의하기", "domain": "SUPPORT"},
-                {"label": "처음으로", "domain": "LEADING"},
-            ],
-            "predictedDomains": ["TRANSACTION", "SUPPORT"],
-            "metadata": {
-                "responseShapeKey": "general_cancel_fee_policy_summary",
-                "generalCancelFeePolicy": True,
-                "faqSourceSummaryUsed": bool(source_summary),
-                "faqSourceSummaryAppended": False,
-                "userText": user_query,
-            },
-        },
-    }
+    return build_general_cancel_fee_policy_event(user_query, tool_result=tool_result)
 
 
 def _build_general_card_cancel_timing_policy_event(user_query: str, *, tool_result: dict | None = None) -> dict:
-    bucket_reply = build_support_faq_evidence_grounded_reply(
-        intent="general_card_cancel_timing_policy",
-        user_text=user_query,
-        tool_result=tool_result,
-    )
-    if bucket_reply is not None:
-        return {
-            "type": "data",
-            "template": "quickReply",
-            "source_domain": MultiAgentDomain.Domain.SUPPORT.value,
-            "assistant_response_source": "code_general_card_cancel_timing_policy",
-            "data": {
-                "assistantResponse": str(bucket_reply["assistant_response"]),
-                "quickReplies": list(bucket_reply.get("quick_replies") or []),
-                "predictedDomains": ["SUPPORT", "TRANSACTION"],
-                "metadata": {
-                    "responseShapeKey": "general_card_cancel_timing_policy",
-                    "generalCardCancelTimingPolicy": True,
-                    "faqSourceSummaryUsed": bool(_faq_policy_source_summary_text(tool_result)),
-                    "faqSourceSummaryAppended": False,
-                    "userText": user_query,
-                    **dict(bucket_reply.get("metadata") or {}),
-                },
-            },
-        }
-    source_summary = _faq_policy_source_summary_text(tool_result)
-    assistant_response = (
-        "취소 완료 후 카드 승인취소나 환불 반영 시점은 카드사와 결제수단에 따라 달라질 수 있어요.\n\n"
-        "보통은 영업일 기준으로 며칠 정도 소요될 수 있고, 카드 승인내역이나 결제수단별 반영 시점에 따라 실제 표시 시점이 달라질 수 있어요.\n\n"
-        "정확한 반영 여부는 카드사 승인내역이나 주문내역에서 함께 확인해 주세요."
-    )
-    return {
-        "type": "data",
-        "template": "quickReply",
-        "source_domain": MultiAgentDomain.Domain.SUPPORT.value,
-        "assistant_response_source": "code_general_card_cancel_timing_policy",
-        "data": {
-            "assistantResponse": assistant_response,
-            "quickReplies": [
-                {"label": "주문내역 확인", "domain": "TRANSACTION"},
-                {"label": "1:1 문의하기", "domain": "SUPPORT"},
-                {"label": "처음으로", "domain": "LEADING"},
-            ],
-            "predictedDomains": ["SUPPORT", "TRANSACTION"],
-            "metadata": {
-                "responseShapeKey": "general_card_cancel_timing_policy",
-                "generalCardCancelTimingPolicy": True,
-                "faqSourceSummaryUsed": bool(source_summary),
-                "faqSourceSummaryAppended": False,
-                "userText": user_query,
-            },
-        },
-    }
+    return build_general_card_cancel_timing_policy_event(user_query, tool_result=tool_result)
 
 
 def _build_support_faq_policy_event(
@@ -7275,146 +7161,7 @@ def _build_support_faq_policy_event(
     *,
     tool_result: dict | None = None,
 ) -> dict | None:
-    if intent not in _DIRECT_SUPPORT_FAQ_POLICY_INTENTS:
-        return None
-    bucket_reply = build_support_faq_evidence_grounded_reply(
-        intent=intent,
-        user_text=user_query,
-        tool_result=tool_result,
-    )
-    if bucket_reply is not None:
-        return {
-            "type": "data",
-            "template": "quickReply",
-            "source_domain": MultiAgentDomain.Domain.SUPPORT.value,
-            "assistant_response_source": f"code_{intent}",
-            "data": {
-                "assistantResponse": str(bucket_reply["assistant_response"]),
-                "quickReplies": list(bucket_reply.get("quick_replies") or _support_faq_policy_quick_replies(intent)),
-                "predictedDomains": ["SUPPORT"],
-                "metadata": {
-                    "responseShapeKey": intent,
-                    "faqSourceSummaryUsed": bool(_faq_policy_source_summary_text(tool_result, intent=intent)),
-                    "faqSourceSummaryAppended": False,
-                    "userText": user_query,
-                    **dict(bucket_reply.get("metadata") or {}),
-                },
-            },
-        }
-    source_summary = _faq_policy_source_summary_text(tool_result, intent=intent)
-    required_guidance_by_intent = {
-        "tire_quality_warranty_policy": (
-            "사이드월 부풀음은 안전 관련 손상일 수 있어서 먼저 점검이 필요해요.\n"
-            "무상 수리나 교체 여부는 현장 점검 결과와 구매·장착 이력, 보증 또는 워런티 적용 여부에 따라 결정돼요.\n"
-            "워런티 서비스 적용 대상이면 상태 확인 후 안내받을 수 있어요."
-        ),
-        "assurance_service_policy": (
-            "안심서비스/안심플러스 보상은 장착 후 1년 이내, 주행거리 16,000km 이내 조건에서 확인돼요.\n"
-            "안심서비스는 2개 이상, 안심플러스는 4개 구매 기준과 대상 상품·약관에 따라 적용 범위가 달라질 수 있어요.\n"
-            "보상 신청 후 교체 장착 시 장착비는 별도 부담이 필요할 수 있어요."
-        ),
-        "promotion_gift_policy": (
-            "부분 취소로 이벤트나 프로모션 지급 기준 수량에 미달할 수 있어요.\n"
-            "기준 미달 시에는 사은품 반납이 필요할 수 있고, 반납이 어렵거나 조건에 따라 사은품 상당 금액을 차감한 뒤 환불될 수 있어요.\n"
-            "최종 적용은 이벤트 상세 조건과 실제 주문/취소 처리 기준에 따라 달라져요."
-        ),
-        "coupon_usage_policy": (
-            "쿠폰은 쿠폰별 사용처와 유의사항에 따라 온라인 전용인지, 매장 사용이 가능한지 달라질 수 있어요.\n"
-            "티스테이션닷컴에서 받은 쿠폰은 쿠폰 상세나 유의사항에서 사용처를 먼저 확인해 주세요.\n"
-            "온라인 주문 전용 쿠폰이면 현장 결제에는 적용되지 않을 수 있고, 매장에서 결제 중이라면 매장 직원에게 사용 가능 여부를 함께 확인해 주세요."
-        ),
-        "coupon_registration_policy": (
-            "쿠폰 번호나 코드 등록 위치는 쿠폰 안내 경로와 쿠폰함 정책에 따라 달라질 수 있어요.\n"
-            "쿠폰 등록/입력 위치와 사용 방법은 쿠폰 상세 안내와 쿠폰함 경로를 먼저 확인해 주세요."
-        ),
-        "delivery_delay_reservation_schedule_policy": (
-            "배송 지연으로 예약 일정이 자동 변경되지는 않아요.\n"
-            "매장별 지정 예약 일정에 상품이 제때 도착하지 않으면 해피콜 등으로 별도 안내드릴 수 있어요.\n"
-            "안내를 받으시면 매장이나 고객센터 안내에 따라 일정을 조정해 주세요."
-        ),
-        "reservation_verification_guidance": (
-            "매장에서 예약이 확인되지 않는다고 안내받았다면 먼저 주문/예약 내역에서 예약 상태와 예약 매장을 확인해 주세요.\n"
-            "온라인 내역에서 바로 확인되지 않더라도 방문 시 차량번호나 예약자 정보로 매장 확인을 요청할 수 있어요.\n"
-            "그래도 확인이 어렵다면 1:1 문의나 고객센터로 접수해 주세요."
-        ),
-        "reservation_window_policy": (
-            "장착 예약일은 최대 30일 이내 또는 구매일로부터 1개월 이내 기준으로 안내돼요.\n"
-            "두 달 뒤처럼 범위를 넘는 예약은 지원되지 않거나 진행이 어려울 수 있어요.\n"
-            "실제 일정 확인은 이 범위 안에서만 추가로 진행해 주세요."
-        ),
-        "external_tire_install_policy": (
-            "외부 구매 타이어 반입 장착은 구매 경로와 매장 운영 기준에 따라 달라질 수 있어요.\n"
-            "온라인몰 주문은 지정 장착점 발송/장착 기준으로 안내되고, 직접 반입 장착은 제한되거나 지원되지 않을 수 있어요.\n"
-            "오프라인 매장 구매 후 장착이나 장착비 기준은 방문 전 매장 운영 기준을 함께 확인해 주세요."
-        ),
-        "tire_condition_photo_policy": (
-            "현재 챗봇에서는 사진이나 파일을 업로드해 확인받을 수 없어요.\n"
-            "사진이나 파일 첨부가 필요한 경우 1:1 문의를 통해 등록해 주세요.\n"
-            "실제 마모도, 균열, 편마모, 손상 여부는 마모도 측정 서비스 또는 가까운 티스테이션 매장 점검으로 확인해 주세요."
-        ),
-    }
-    followup_by_intent = {
-        "tire_manufacture_date_policy": "제조일자만으로 교환이나 환불을 단정하지 말고, 필요하면 제품 상태와 구매 이력도 함께 확인해 주세요.",
-        "tire_quality_warranty_policy": required_guidance_by_intent["tire_quality_warranty_policy"],
-        "assurance_service_policy": required_guidance_by_intent["assurance_service_policy"],
-        "delivery_delay_reservation_schedule_policy": required_guidance_by_intent["delivery_delay_reservation_schedule_policy"],
-        "reservation_verification_guidance": required_guidance_by_intent["reservation_verification_guidance"],
-        "reservation_window_policy": required_guidance_by_intent["reservation_window_policy"],
-        "external_tire_install_policy": required_guidance_by_intent["external_tire_install_policy"],
-        "reservation_policy_guidance": "실제 예약 변경이나 취소 전에는 예약 상세 안내도 함께 확인해 주세요.",
-        "installation_work_policy": "추가 작업비나 현장 결제 여부는 정책과 작업 범위에 따라 달라질 수 있어요.",
-        "promotion_gift_policy": required_guidance_by_intent["promotion_gift_policy"],
-        "coupon_usage_policy": required_guidance_by_intent["coupon_usage_policy"],
-        "coupon_registration_policy": required_guidance_by_intent["coupon_registration_policy"],
-        "tire_condition_photo_policy": required_guidance_by_intent["tire_condition_photo_policy"],
-        "signup_first_purchase_benefit_policy": "실제 회원 상태와 쿠폰 노출 여부는 계정별로 다를 수 있으니, 회원 혜택 페이지나 쿠폰함에서도 함께 확인해 주세요.",
-        "signup_coupon_guidance": "실제 발급 가능 여부와 노출 상태는 회원 상태와 마케팅 동의 여부에 따라 달라질 수 있어요.",
-    }
-    fallback_by_intent = {
-        "tire_manufacture_date_policy": "타이어 제조일자와 신품 기준은 정책에 따라 안내되고, 제조일자만으로 불량이나 교환 가능 여부를 바로 단정할 수는 없어요.",
-        "tire_quality_warranty_policy": required_guidance_by_intent["tire_quality_warranty_policy"],
-        "assurance_service_policy": required_guidance_by_intent["assurance_service_policy"],
-        "delivery_delay_reservation_schedule_policy": required_guidance_by_intent["delivery_delay_reservation_schedule_policy"],
-        "reservation_verification_guidance": required_guidance_by_intent["reservation_verification_guidance"],
-        "reservation_window_policy": "장착 예약일은 최대 30일 이내로 지정해야 하며, 두 달 뒤 예약은 지원되지 않을 수 있어요.",
-        "external_tire_install_policy": "외부 구매 타이어 반입 장착은 구매 경로와 매장 운영 기준에 따라 달라질 수 있어요.",
-        "reservation_policy_guidance": "예약 가능 기간, 취소, 변경 조건은 정책 기준으로 먼저 확인해 보는 것이 안전해요.",
-        "installation_work_policy": "공임, 장착비, 추가 작업 비용은 작업 범위와 정책에 따라 달라질 수 있어요.",
-        "promotion_gift_policy": required_guidance_by_intent["promotion_gift_policy"],
-        "coupon_usage_policy": required_guidance_by_intent["coupon_usage_policy"],
-        "coupon_registration_policy": required_guidance_by_intent["coupon_registration_policy"],
-        "tire_condition_photo_policy": required_guidance_by_intent["tire_condition_photo_policy"],
-        "signup_first_purchase_benefit_policy": "회원가입과 신규회원 혜택은 회원 상태, 마케팅 동의 여부, 진행 중 정책에 따라 달라질 수 있어요.",
-        "signup_coupon_guidance": "신규회원과 가입 쿠폰 혜택은 회원 상태와 진행 중 정책에 따라 달라질 수 있어요.",
-    }
-    quick_replies = _support_faq_policy_quick_replies(intent)
-    response_source_summary = _policy_source_summary_for_response(intent, source_summary)
-    if response_source_summary:
-        assistant_response = f"{response_source_summary}\n\n{followup_by_intent[intent]}"
-    else:
-        assistant_response = fallback_by_intent[intent]
-    if intent != "tire_condition_photo_policy" and _should_lead_with_upload_capability_notice(user_query):
-        assistant_response = (
-            "현재 챗봇에서는 사진이나 파일을 업로드해 확인받을 수 없어요.\n\n"
-            f"{assistant_response}"
-        )
-    return {
-        "type": "data",
-        "template": "quickReply",
-        "source_domain": MultiAgentDomain.Domain.SUPPORT.value,
-        "assistant_response_source": f"code_{intent}",
-        "data": {
-            "assistantResponse": assistant_response,
-            "quickReplies": quick_replies,
-            "predictedDomains": ["SUPPORT"],
-            "metadata": {
-                "responseShapeKey": intent,
-                "faqSourceSummaryUsed": bool(source_summary),
-                "faqSourceSummaryAppended": bool(response_source_summary),
-                "userText": user_query,
-            },
-        },
-    }
+    return build_support_faq_policy_event(intent, user_query, tool_result=tool_result)
 
 
 def _build_direct_faq_policy_event(
@@ -8373,57 +8120,6 @@ def _build_direct_preorder_event_from_slots(
         event["data"]["metadata"]["missingPreorderContext"] = missing_preorder_context
     _standardize_preorder_metadata(event["data"], slot_state)
     return event
-
-
-def _support_faq_policy_quick_replies(intent: str) -> list[dict[str, Any]]:
-    intent_url_ctas: dict[str, list[dict[str, Any]]] = {
-        "assurance_service_policy": [
-            {"label": "나의 워런티 확인", "url": CTAUrls.WARRANTY_MAIN, "domain": "SUPPORT"},
-        ],
-        "tire_quality_warranty_policy": [
-            {"label": "나의 워런티 확인", "url": CTAUrls.WARRANTY_MAIN, "domain": "SUPPORT"},
-        ],
-        "signup_first_purchase_benefit_policy": [
-            {"label": "회원 혜택 확인", "url": CTAUrls.MEMBERSHIP_BENEFIT, "domain": "SUPPORT"},
-        ],
-        "signup_coupon_guidance": [
-            {"label": "회원 혜택 확인", "url": CTAUrls.MEMBERSHIP_BENEFIT, "domain": "SUPPORT"},
-        ],
-        "promotion_gift_policy": [
-            {"label": "진행 중인 이벤트 보기", "url": CTAUrls.PROMOTION_EVENT_LIST, "domain": "DISCOVERY"},
-        ],
-        "coupon_usage_policy": [
-            {"label": "쿠폰함 바로가기", "url": CTAUrls.MY_COUPON_LIST_PC, "domain": "TRANSACTION"},
-        ],
-        "coupon_registration_policy": [
-            {"label": "쿠폰함 바로가기", "url": CTAUrls.MY_COUPON_LIST_PC, "domain": "TRANSACTION"},
-        ],
-        "delivery_delay_reservation_schedule_policy": [
-            {"label": "1:1 문의하기", "domain": "SUPPORT"},
-            {"label": "예약 확인하기", "domain": "TRANSACTION"},
-            {"label": "처음으로", "domain": "LEADING"},
-        ],
-        "reservation_verification_guidance": [
-            {
-                "label": "주문/예약 내역 보기",
-                "domain": "TRANSACTION",
-                "cta_action": "open_order_history",
-                "expected_contract_intent": "get_my_reservations",
-            },
-            {"label": "1:1 문의하기", "domain": "SUPPORT"},
-        ],
-    }
-    intent_action_ctas: dict[str, list[dict[str, Any]]] = {
-        "tire_condition_photo_policy": [
-            {"label": "마모도 측정 서비스", "url": CTAUrls.TIRE_CHECK, "domain": "TRANSACTION"},
-        ],
-    }
-    quick_replies = list(intent_url_ctas.get(intent) or intent_action_ctas.get(intent) or [])
-    if intent == "tire_condition_photo_policy":
-        quick_replies.append({"label": "1:1 문의하기", "domain": "SUPPORT"})
-    elif not quick_replies:
-        quick_replies.append({"label": "1:1 문의하기", "domain": "SUPPORT"})
-    return quick_replies
 
 
 def _should_emit_direct_preorder_from_schedule_selection(
@@ -10405,173 +10101,20 @@ def _is_reservation_store_info_lookup_query(user_text: str | None) -> bool:
     return bool(_RESERVATION_STORE_REF_RE.search(text) and _RESERVATION_STORE_INFO_RE.search(text))
 
 
-def _reservation_rows_from_result(tool_result: dict) -> list[dict]:
-    data = _unwrap_tool_data(tool_result)
-    rows = data.get("reservations") if isinstance(data, dict) else None
-    if not isinstance(rows, list):
-        rows = data.get("items") if isinstance(data, dict) else None
-    return [row for row in rows or [] if isinstance(row, dict)]
-
-
-def _reservation_row_value(row: dict, *keys: str) -> str:
-    for key in keys:
-        value = row.get(key)
-        if value in (None, "") and isinstance(row.get("detail"), dict):
-            value = row["detail"].get(key)
-        text = str(value or "").strip()
-        if text:
-            return text
-    return ""
-
-
-def _reservation_sort_key(row: dict) -> str:
-    return _reservation_row_value(row, "vst_rsv_dtime", "rsv_dtime", "sys_reg_dtime", "ord_dtime")
-
-
 def _select_reservation_store_row(user_text: str, reservations_result: dict) -> tuple[dict | None, str]:
-    rows = sorted(_reservation_rows_from_result(reservations_result), key=_reservation_sort_key, reverse=True)
-    if not rows:
-        return None, "no_reservation"
-    direct_order = _ORDER_DIRECT_NO_RE.search(user_text or "")
-    if direct_order:
-        ord_no = direct_order.group(0).upper()
-        matches = [row for row in rows if _reservation_row_value(row, "ord_no", "ordNo").upper() == ord_no]
-        if matches:
-            return matches[0], "order_number"
-        return None, "order_number_not_found"
-    if len(rows) == 1:
-        return rows[0], "single_reservation"
-    return None, "ambiguous"
+    return select_reservation_store_row(user_text, reservations_result)
 
 
 def _reservation_store_not_found_event(reason: str) -> dict:
-    if reason == "ambiguous":
-        response = "예약 내역이 여러 건 있어요. 어느 예약 건의 매장인지 선택해 주세요."
-        quick_replies = [
-            {"label": "내 예약 조회", "domain": "TRANSACTION"},
-            {"label": "주문번호로 확인", "domain": "TRANSACTION"},
-        ]
-    else:
-        response = "예약 내역을 먼저 확인해야 해요. 주문번호나 예약번호가 있으면 알려주세요."
-        quick_replies = [
-            {"label": "내 예약 조회", "domain": "TRANSACTION"},
-            {"label": "내 주문 조회", "domain": "TRANSACTION"},
-        ]
-    return {
-        "type": "data",
-        "template": "quickReply",
-        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
-        "assistant_response_source": "code_reservation_store_info_lookup",
-        "data": {
-            "assistantResponse": response,
-            "quickReplies": quick_replies,
-            "predictedDomains": ["TRANSACTION"],
-            "metadata": {
-                "responseShapeKey": "reservation_store_info_lookup",
-                "reservationStoreSource": "reservation_history",
-                "matchReason": reason,
-            },
-        },
-    }
+    return build_reservation_store_not_found_event(reason)
 
 
 def _build_reservation_store_info_event(reservation_row: dict, *, match_reason: str) -> dict:
-    shop_nm = _reservation_row_value(reservation_row, "shop_nm", "shopName", "store_name", "storeName")
-    tel_no = _format_store_phone(_reservation_row_value(reservation_row, "tel_no", "tel", "phone", "shop_tel_no"))
-    address = " ".join(
-        part
-        for part in (
-            _reservation_row_value(reservation_row, "road_addr_base", "addr_base", "address"),
-            _reservation_row_value(reservation_row, "road_addr_dtl", "addr_dtl"),
-        )
-        if part
-    ).strip()
-    rsv_dtime = _reservation_row_value(reservation_row, "vst_rsv_dtime", "rsv_dtime")
-    rsv_label = _reservation_row_value(reservation_row, "shop_rsv_sct_label", "reservationType") or "예약"
-    ord_no = _reservation_row_value(reservation_row, "ord_no", "ordNo")
-
-    lines = ["예약 내역 기준으로 매장 정보를 확인했어요."]
-    if rsv_label:
-        lines.append(f"- 예약 유형: {rsv_label}")
-    if ord_no:
-        lines.append(f"- 주문번호: {ord_no}")
-    if shop_nm:
-        lines.append(f"- 예약하신 매장: {shop_nm}")
-    if tel_no:
-        lines.append(f"- 전화번호: {tel_no}")
-    else:
-        lines.append("- 전화번호: 예약 내역에서 확인되지 않아요.")
-    if address:
-        lines.append(f"- 주소: {address}")
-    if rsv_dtime:
-        lines.append(f"- 예약 일시: {rsv_dtime}")
-
-    return {
-        "type": "data",
-        "template": "quickReply",
-        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
-        "assistant_response_source": "code_reservation_store_info_lookup",
-        "data": {
-            "assistantResponse": "\n".join(lines),
-            "quickReplies": [
-                {"label": "내 예약 조회", "domain": "TRANSACTION"},
-                {"label": "내 주문 조회", "domain": "TRANSACTION"},
-            ],
-            "predictedDomains": ["TRANSACTION"],
-            "metadata": {
-                "responseShapeKey": "reservation_store_info_lookup",
-                "reservationStoreSource": "reservation_history",
-                "matchReason": match_reason,
-                "shopName": shop_nm,
-                "telNo": tel_no,
-                "ordNo": ord_no,
-            },
-        },
-    }
+    return build_reservation_store_info_event(reservation_row, match_reason=match_reason)
 
 
 def _build_reservation_status_lookup_event(reservations_result: dict) -> dict:
-    rows = sorted(_reservation_rows_from_result(reservations_result), key=_reservation_sort_key, reverse=True)
-    metadata = {
-        "responseShapeKey": "reservation_status_lookup",
-        "reservationStatusSource": "reservation_history",
-        "reservationCount": len(rows),
-    }
-    if not rows:
-        response = "예약 내역을 확인했지만 현재 예약된 매장 방문은 찾지 못했어요."
-        quick_replies = [
-            {"label": "매장 찾기", "domain": "TRANSACTION"},
-            {"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"},
-        ]
-    else:
-        lines = ["예약 내역을 확인했어요."]
-        for idx, row in enumerate(rows[:3], start=1):
-            shop_nm = _reservation_row_value(row, "shop_nm", "shopName", "store_name", "storeName") or "매장명 확인 필요"
-            rsv_dtime = _reservation_row_value(row, "vst_rsv_dtime", "rsv_dtime") or "예약 일시 확인 필요"
-            status = _reservation_row_value(row, "shop_vst_rsv_sts_label", "status_nm", "status") or "상태 확인 필요"
-            rsv_label = _reservation_row_value(row, "shop_rsv_sct_label", "reservationType")
-            label_part = f" / {rsv_label}" if rsv_label else ""
-            lines.append(f"{idx}. {shop_nm} / {rsv_dtime} / {status}{label_part}")
-        if len(rows) > 3:
-            lines.append(f"외 {len(rows) - 3}건은 예약 내역에서 확인해 주세요.")
-        response = "\n".join(lines)
-        quick_replies = [
-            {"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"},
-            {"label": "다른 예약 확인", "domain": "TRANSACTION"},
-        ]
-
-    return {
-        "type": "data",
-        "template": "quickReply",
-        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
-        "assistant_response_source": "code_reservation_status_lookup",
-        "data": {
-            "assistantResponse": response,
-            "quickReplies": quick_replies,
-            "predictedDomains": ["TRANSACTION"],
-            "metadata": metadata,
-        },
-    }
+    return build_reservation_status_lookup_event(reservations_result)
 
 
 def _stock_inventory_rows(raw_inventory: object, key: str) -> list[dict]:

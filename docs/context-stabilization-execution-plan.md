@@ -136,7 +136,7 @@ The flow tables must keep tools and FE templates/actions separate:
 
 ## Current Stabilization Checkpoint
 
-Status after steps 1-19H:
+Status after steps 1-20B:
 
 1. The five flow transition tables now separate backend tools from FE templates/actions, next tool, next template/action, and expected persistence.
 2. Purchase, stock, store, support, and reservation/preorder boundaries have focused regression coverage in the existing policy test suites.
@@ -175,6 +175,16 @@ Status after steps 1-19H:
     - general cancel-fee questions such as "주문 취소하면 수수료 있어?" are promoted out of product-recommendation drift into `general_cancel_fee_policy` and no longer ask for a missing product;
     - tire manufacture-date questions that mention `6개월` stay in `tire_manufacture_date_policy` and do not call `get_card_installments_tool`;
     - checkout/payment-screen errors such as KakaoPay white-screen stalls promote generic support FAQ turns to `payment_error_troubleshooting` and preserve contract metadata in SSE output.
+26. Step 20A completes the first Phase 10 cleanup/guardrail checkpoint:
+    - `docs/router-override-inventory.md` now documents the remaining cancel-fee transaction-boundary override and current-turn support policy normalization override;
+    - `test_phase10_policy_surface_guardrails.py` protects against exact-case hardcoding in production policy/orchestration code;
+    - the guardrail also prevents reintroducing a local card-installment regex in `flow_controller.py`, keeping support policy matchers as the owner layer.
+    - legacy support-policy response-builder symbols in `chat.py` are reduced to thin compatibility wrappers around owner-layer policy builders, removing duplicated policy response construction from orchestration code.
+27. Step 20B continues Phase 10 cleanup with reservation-history response ownership:
+    - reservation-store row selection, not-found, store-info, and status lookup response construction remain owned by `reservation_history_policy.py`;
+    - legacy reservation private symbols in `chat.py` are thin compatibility wrappers around owner-layer policy functions;
+    - duplicated reservation row parsing and response construction were removed from orchestration code;
+    - `test_phase10_policy_surface_guardrails.py` now protects the reservation wrapper boundary.
 
 Verified checkpoint command:
 
@@ -191,7 +201,7 @@ uv run pytest `
   -q
 ```
 
-Latest focused checkpoint result: `190 passed, 1 warning`.
+Latest focused checkpoint result: `194 passed, 1 warning`.
 
 Latest Phase 9 SSE regression subset result after Docker local rebuild: `9/9 passed` across the previously verified subset plus the three failed-case reruns.
 
@@ -210,10 +220,10 @@ Verified SSE subset:
 Current next step:
 
 ```text
-Phase 10: cleanup and guardrails after the Phase 9 SSE stabilization checkpoint.
+Phase 10 continuation: audit the remaining legacy `chat.py` response builders and migrate the next low-risk duplicated group to owner-layer wrappers when covered by tests.
 ```
 
-Phase 10 should remove or consolidate any now-redundant guard code exposed by the completed Phase 9 fixes, then add guardrail tests that protect the owner-layer boundaries without adding new flow branches in `chat.py`.
+Do not remove legacy `chat.py` private symbols that are still imported by older tests or compatibility paths unless the replacement owner-layer builder is already covered and the import surface can remain stable through a thin wrapper.
 
 ## Phase 0: Freeze Patch-Level Expansion
 
