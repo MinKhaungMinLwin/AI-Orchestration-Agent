@@ -31408,6 +31408,11 @@ def test_product_summary_comparison_mapper_restores_table_response(monkeypatch: 
                                             "gdas_cont": "저소음이라 출퇴근길에 편하고 승차감이 안정적입니다.",
                                         }
                                     ],
+                                    "warranty": {
+                                        "free_guarantee_yn": "N",
+                                        "t_rlx_isn_yn": "N",
+                                        "warranties": [{"wrt_nm": "품질보증"}],
+                                    },
                                 }
                             ]
                         },
@@ -31446,6 +31451,14 @@ def test_product_summary_comparison_mapper_restores_table_response(monkeypatch: 
                                             "gdas_cont": "흡음재 때문인지 소음이 줄어든 느낌입니다.",
                                         },
                                     ],
+                                    "warranty": {
+                                        "free_guarantee_yn": "Y",
+                                        "t_rlx_isn_yn": "Y",
+                                        "warranties": [
+                                            {"wrt_nm": "품질보증"},
+                                            {"wrt_nm": "안심서비스"},
+                                        ],
+                                    },
                                 }
                             ]
                         },
@@ -31471,6 +31484,7 @@ def test_product_summary_comparison_mapper_restores_table_response(monkeypatch: 
     assert "특화 사양" not in response
     assert "| 리뷰 | 정숙성과 부드러운 승차감 만족 의견이 많아요 |" in response
     assert "| 평점 | 4.5점 |" in response
+    assert "| 워런티 | 품질보증, 안심서비스, 무상교환보증, 안심보험 |" in response
     assert "| 주요 사이즈 | 205/45R17, 205/50R17, 205/55R16, 205/60R16, 205/65R16 외 1개 |" in response
 
 

@@ -2602,6 +2602,7 @@ def _comparison_metric_table_rows(metric: str) -> tuple[tuple[str, str], ...]:
         ("주요 성능", "performance"),
         ("리뷰", "review"),
         ("평점", "rating"),
+        ("워런티", "warranty"),
         ("주요 사이즈", "available_sizes"),
     )
 
@@ -2651,6 +2652,8 @@ def _comparison_metric_row_value(metric: str, row: dict, key: str, *, review_sum
             rating_text = int(rating_avg) if float(rating_avg).is_integer() else f"{rating_avg:g}"
             return f"{rating_text}점"
         return "평점 정보 확인되지 않음"
+    if key == "warranty":
+        return _comparison_warranty_summary(row)
     if key == "available_sizes":
         size_list = _format_row_size_list(_row_available_sizes(row), max_visible=5)
         return size_list or "사이즈 정보 확인되지 않음"
@@ -2668,6 +2671,29 @@ def _comparison_metric_row_value(metric: str, row: dict, key: str, *, review_sum
     if key == "car_type":
         return _get_str(row, "car_knd_nm", "car_type") or "미확인"
     return "미확인"
+
+
+def _comparison_warranty_summary(row: dict) -> str:
+    warranty = row.get("warranty")
+    if not isinstance(warranty, Mapping):
+        return "워런티 정보 확인되지 않음"
+
+    labels: list[str] = []
+    warranties = warranty.get("warranties")
+    if isinstance(warranties, list):
+        for item in warranties:
+            if not isinstance(item, Mapping):
+                continue
+            name = _get_str(item, "wrt_nm", "name")
+            if name and name not in labels:
+                labels.append(name)
+
+    if _get_str(warranty, "free_guarantee_yn").upper() == "Y" and "무상교환보증" not in labels:
+        labels.append("무상교환보증")
+    if _get_str(warranty, "t_rlx_isn_yn").upper() == "Y" and "안심보험" not in labels:
+        labels.append("안심보험")
+
+    return ", ".join(labels) if labels else "워런티 정보 확인되지 않음"
 
 
 def _comparison_review_texts(row: dict) -> list[dict[str, Any]]:
