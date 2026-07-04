@@ -2335,7 +2335,17 @@ def recommendation_vehicle_selection_patch(
     }
     if scenario:
         patch["recommendation_scenario"] = scenario
-    for key in ("tire_size", "car_lnc_cd", "vehicle_type", "car_type", "mbr_car_reg_seq", "car_no"):
+    for key in (
+        "tire_size",
+        "car_lnc_cd",
+        "vehicle_type",
+        "car_type",
+        "mbr_car_reg_seq",
+        "car_no",
+        "car_model",
+        "car_nm",
+        "car_name",
+    ):
         if vehicle_slots.get(key) not in _EMPTY_VALUES:
             patch[key] = vehicle_slots[key]
     for source_patch in (expected_tool_args, tool_args_patch, recommendation_context):
@@ -2395,6 +2405,25 @@ def purchase_context_vehicle_selection_patch(
         "region",
     ):
         value = current.get(key)
+        if value in _EMPTY_VALUES:
+            value = context.get(key)
+        if value not in _EMPTY_VALUES:
+            patch[key] = value
+    for key in (
+        "car_no",
+        "car_lnc_cd",
+        "mbr_car_reg_seq",
+        "car_model",
+        "car_nm",
+        "car_name",
+        "tire_size_front",
+        "tire_size_rear",
+        "vehicle_type",
+        "car_type",
+    ):
+        value = vehicle_slots.get(key)
+        if value in _EMPTY_VALUES:
+            value = current.get(key)
         if value in _EMPTY_VALUES:
             value = context.get(key)
         if value not in _EMPTY_VALUES:
