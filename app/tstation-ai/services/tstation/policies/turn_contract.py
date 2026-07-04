@@ -1809,6 +1809,19 @@ def build_turn_contract(
         if _router_wins_response_decision_mismatch(router_wins_intent, response_decision_payload):
             response_decision_payload = _router_wins_response_decision(router_wins_intent)
 
+    # D-day lookup is vehicle-scoped: until a registered vehicle is identified the turn
+    # is a selection-waiting turn, and the contract must say so — this keeps off-context
+    # entry chips blocked while the bot asks "which car?". Applied after the support/
+    # router-wins resets above because vehicle identity is a hard tool-data requirement
+    # for get_maintenance_dday_tool, not a clarification preference.
+    if intent == "maintenance_timing_guidance" and not any(
+        str(known_slots.get(key) or "").strip()
+        for key in ("mbr_car_reg_seq", "car_lnc_cd", "car_no")
+    ):
+        required_slots = _merge_tuple(required_slots, ("mbr_car_reg_seq",))
+        blocking_required_slots = _merge_tuple(blocking_required_slots, ("mbr_car_reg_seq",))
+        blocking_required_slots_source = "maintenance_vehicle_selection"
+
     allowed_tools = tuple(tool for tool in allowed_tools if tool not in forbidden_tools)
 
     preferred_allowed = bool(
