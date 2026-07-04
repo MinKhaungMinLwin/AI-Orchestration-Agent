@@ -14,6 +14,7 @@ _MIN_ROUTER_CONFIDENCE = 0.7
 _DIRECT_TEMPLATE_TOOLS = frozenset({
     "get_my_cars_tool",
     "get_products_recommendations_tool",
+    "search_product_summary_tool",
     "get_my_coupons_tool",
     "search_stores_tool",
     "search_stores_complex_tool",
@@ -30,6 +31,7 @@ _DIRECT_PRIMARY_ACTIONS = frozenset({
     "recommend",
     "search",
     "lookup",
+    "compare",
     "book",
     "reserve",
     "coupon_lookup",
@@ -77,8 +79,10 @@ def evaluate_contract_direct_path(
         return _fallback("unclear_primary_action")
     if _COMPLEX_EXPLANATION_RE.search(user_text or ""):
         if "비교" in str(user_text or ""):
-            return _fallback("comparison_requires_llm")
-        return _fallback("complex_explanation_request")
+            if str(getattr(turn_contract, "intent", "") or "") != "product_comparison":
+                return _fallback("comparison_requires_llm")
+        else:
+            return _fallback("complex_explanation_request")
     if tuple(getattr(turn_contract, "blocking_required_slots", ()) or ()):
         return _fallback("missing_required_slot")
     preferred_tool = str(getattr(turn_contract, "preferred_tool", "") or "").strip()
@@ -125,7 +129,10 @@ def _evaluate_discovery_contract(
     template: str,
     known_slots: Mapping[str, Any],
 ) -> DirectPathDecision:
-    if str(turn_contract.intent or "") != "product_recommendation":
+    intent = str(turn_contract.intent or "")
+    if intent == "product_comparison" and tool == "search_product_summary_tool":
+        return DirectPathDecision(True, True, "product_comparison_summary", None, tool, "quickReply")
+    if intent != "product_recommendation":
         return _fallback("no_deterministic_template")
     if tool == "get_my_cars_tool":
         registered_vehicle = _entity(router_evidence, "registered_vehicle")

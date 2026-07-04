@@ -117,6 +117,38 @@ def test_forbidden_tool_cta_is_removed_and_quickreplies_may_be_empty() -> None:
     assert "tool_forbidden:transfer_to_qna_tool" == event["data"]["metadata"]["cta_validation"][0]["reason"]
 
 
+def test_product_description_purchase_cta_is_next_turn_action_even_when_purchase_tools_forbidden() -> None:
+    contract = TurnContract(
+        domain="discovery",
+        intent="product_description",
+        sub_intent="product_name_search",
+        forbidden_tools=("transaction_store_preview_tool", "quick_order_tool"),
+        known_slots={"goods_no": "G000000320152", "tire_size": "245/45R19", "product_name": "다이나프로 HP3"},
+    )
+    event = {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "discovery",
+        "data": {
+            "assistantResponse": "상품 정보를 확인했어요.",
+            "quickReplies": [{"label": "구매하기", "domain": "TRANSACTION"}],
+            "metadata": {
+                "goods_no": "G000000320152",
+                "tire_size": "245/45R19",
+                "product_name": "다이나프로 HP3",
+            },
+        },
+    }
+
+    normalize_quickreply_ctas(event, contract=contract)
+
+    chip = event["data"]["quickReplies"][0]
+    assert chip["label"] == "구매하기"
+    assert chip["cta_id"] == "purchase.start"
+    assert chip["metadata"]["expected_contract_intent"] == "quick_order_reservation"
+    assert event["data"]["metadata"]["cta_validation"][0]["result"] == "allowed"
+
+
 def test_unregistered_label_only_chip_is_dropped() -> None:
     event = {
         "type": "data",

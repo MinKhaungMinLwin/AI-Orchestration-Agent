@@ -1118,6 +1118,7 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     # Discovery
     "check_compatibility_tool": "차량-타이어 호환 확인 중...",
     "search_product_tool": "상품 검색 중...",
+    "search_product_summary_tool": "상품 정보 확인 중...",
     "get_user_vehicles_tool": "차량 정보 조회 중...",
     "get_my_cars_tool": "내 차량 조회 중...",
     "search_car_model_tool": "차량 모델 검색 중...",
@@ -1175,6 +1176,7 @@ class BaseAgent(ABC):
         "get_stores_with_time_filter_tool",
         "search_stores_complex_tool",
         "search_product_tool",
+        "search_product_summary_tool",
         "get_products_recommendations_tool",
         "get_newest_products_tool",
         "get_best_selling_products_tool",
@@ -2106,6 +2108,7 @@ class BaseAgent(ABC):
             # quickReply 만 emit 하고 product 카드를 건너뛰는 회귀 차단.
             # items 0 (검색 0건) 케이스는 mapper 가 None 반환 → LLM prose fallback.
             "search_product_tool",
+            "search_product_summary_tool",
             "get_products_recommendations_tool",
             "get_newest_products_tool",
             "get_best_selling_products_tool",
@@ -2163,6 +2166,7 @@ class BaseAgent(ABC):
             "get_stores_with_time_filter_tool": {"location", "quickReply"},
             "search_stores_complex_tool": {"location", "quickReply"},
             "search_product_tool": {"product", "quickReply"},
+            "search_product_summary_tool": {"quickReply"},
             "get_products_recommendations_tool": {"product", "quickReply"},
             "get_newest_products_tool": {"product", "quickReply"},
             "get_best_selling_products_tool": {"product", "quickReply"},
@@ -2498,9 +2502,15 @@ class BaseAgent(ABC):
         response_streamer: "_AssistantResponseStreamer | None",
         answering_emitted: bool,
     ) -> list[dict] | None:
+        required_slot_set = {str(slot) for slot in required_slots if str(slot)}
+        schedule_slot_collection = preferred_tool == "get_store_schedule_tool" and required_slot_set <= {
+            "booking_datetime",
+            "requested_cal_day",
+            "rsv_hour",
+        }
         if (
             not preferred_tool
-            or required_slots
+            or (required_slots and not schedule_slot_collection)
             or preferred_tool in forbidden_tools
             or (allowed_tools and preferred_tool not in allowed_tools)
         ):
@@ -2521,6 +2531,29 @@ class BaseAgent(ABC):
             for key, value in dict(getattr(tool_plan, "tool_args_patch", {}) or {}).items()
             if value not in (None, "", [], {})
         }
+        if preferred_tool == "get_store_schedule_tool":
+            flow_slots = metadata.get("flow_slots") if isinstance(metadata.get("flow_slots"), dict) else {}
+            shop_id = tool_input.get("shop_id") or flow_slots.get("shop_id")
+            mode = (
+                tool_input.get("mode")
+                or tool_input.get("schedule_mode")
+                or tool_input.get("inventory_mode")
+                or flow_slots.get("schedule_mode")
+                or flow_slots.get("inventory_mode")
+            )
+            has_order_context = bool(
+                tool_input.get("goods_no")
+                or flow_slots.get("goods_no")
+                or tool_input.get("ord_qty")
+                or flow_slots.get("ord_qty")
+            )
+            if shop_id and not mode:
+                mode = "in_store_logistics_combined" if has_order_context else "general"
+            tool_input = {
+                key: value
+                for key, value in {"shop_id": shop_id, "mode": mode}.items()
+                if value not in (None, "", [], {})
+            }
         if not tool_input:
             return None
 

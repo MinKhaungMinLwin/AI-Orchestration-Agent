@@ -111,6 +111,11 @@ def _price_range_from_text(text: str) -> dict[str, int]:
     return {}
 
 
+def price_range_from_text(text: str) -> dict[str, int]:
+    """Public alias: parse min_price/max_price from user text (원 units)."""
+    return _price_range_from_text(text)
+
+
 def _is_general_tire_recommendation_request(text: str) -> bool:
     text = text or ""
     return (
@@ -317,6 +322,15 @@ _DEFAULT_BENEFIT_RE = re.compile(
 )
 _DEAL_LIST_RE = re.compile(
     r"기획전\s*(?:상품|적용\s*상품|대상\s*상품|에서\s*살\s*수\s*있는\s*상품)",
+    re.IGNORECASE,
+)
+_EVENT_APPLICABLE_PRODUCTS_RE = re.compile(
+    r"(?:이벤트|행사|프로모션|기획전).{0,20}(?:적용|대상|가능|살\s*수\s*있는).{0,8}(?:상품|타이어|제품)|"
+    r"(?:적용|대상|가능).{0,8}(?:상품|타이어|제품).{0,20}(?:이벤트|행사|프로모션|기획전)",
+    re.IGNORECASE,
+)
+_EVENT_APPLICABLE_PRODUCTS_EXCLUDE_RE = re.compile(
+    r"쿠폰|할인권|매장|지점|혜택|기간|언제|조건|상세|내용",
     re.IGNORECASE,
 )
 _PRODUCT_EVENT_LOOKUP_RE = re.compile(r"행사|이벤트|프로모션", re.IGNORECASE)
@@ -1036,6 +1050,8 @@ def build_discovery_intent_frame(
     elif _PASSENGER_RECOMMENDATION_RE.search(text):
         entities["vehicle_category"] = "passenger"
     elif vehicle_model_match is not None:
+        # Weak, current-turn-only signal: a car model name inferred to a category.
+        # Explicit category keywords above win; this must not bind later turns.
         entities["vehicle_category"] = vehicle_model_match.category
         entities["vehicle_model_name"] = vehicle_model_match.model
         entities["vehicle_category_source"] = "model_inference"
@@ -1080,6 +1096,8 @@ def build_discovery_intent_frame(
         entities["default_benefit"] = True
     elif is_deal_list_request(text):
         entities["deal_list_only"] = True
+    if _EVENT_APPLICABLE_PRODUCTS_RE.search(text) and not _EVENT_APPLICABLE_PRODUCTS_EXCLUDE_RE.search(text):
+        entities["event_applicable_products_lookup"] = True
     if products and _PRODUCT_BENEFIT_LOOKUP_RE.search(text) and not _BENEFIT_STACKING_RE.search(text):
         if _PRODUCT_EVENT_LOOKUP_RE.search(text):
             entities["product_benefit_lookup_type"] = "event"
@@ -1179,6 +1197,9 @@ def build_discovery_intent_frame(
     elif entities.get("external_price_comparison"):
         intent = "product_search"
         sub_intent = "external_price_comparison_request"
+    elif entities.get("event_applicable_products_lookup"):
+        intent = "product_search"
+        sub_intent = "event_applicable_products_lookup"
     elif entities.get("product_benefit_lookup_type") == "event":
         intent = "product_search"
         sub_intent = "product_event_lookup"
@@ -1339,6 +1360,7 @@ def build_discovery_intent_frame(
 
 def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
     entities = frame.entities
+    tire_size = entities.get("tire_size")
     if frame.sub_intent == "vehicle_information":
         return ToolPlan(
             allowed_tools=("get_my_cars_tool",),
@@ -1416,6 +1438,28 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             tool_args_patch={},
             forbidden_tools=("get_events_tool", "get_my_coupons_tool"),
         )
+    if frame.sub_intent == "event_applicable_products_lookup":
+        return ToolPlan(
+            allowed_tools=("get_events_tool", "get_event_applicable_products_tool"),
+            preferred_tool="get_events_tool",
+            tool_args_patch={"lang_cd": "ko"},
+            forbidden_tools=(
+                "search_product_tool",
+                "search_product_summary_tool",
+                "get_products_recommendations_tool",
+                "get_product_description_tool",
+                "get_deals_tool",
+                "get_product_promotions_tool",
+                "get_product_applicable_events_tool",
+                "quick_order_tool",
+                "transaction_store_preview_tool",
+                "get_store_schedule_tool",
+            ),
+            metadata={
+                "response_intent": "event_applicable_products_lookup",
+                "goal_type": "event_applicable_products_lookup",
+            },
+        )
     if frame.sub_intent in {
         "product_event_lookup",
         "product_deal_lookup",
@@ -1430,6 +1474,32 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             args["brand_cd"] = entities["brand_cd"]
         if entities.get("tire_size"):
             args["size"] = entities["tire_size"]
+        if frame.sub_intent in {"product_event_lookup", "product_deal_lookup"}:
+            args.pop("size", None)
+            return ToolPlan(
+                allowed_tools=(
+                    "search_product_summary_tool",
+                    "get_product_applicable_events_tool",
+                ),
+                preferred_tool="search_product_summary_tool",
+                tool_args_patch=args,
+                forbidden_tools=(
+                    "search_product_tool",
+                    "get_products_recommendations_tool",
+                    "get_product_description_tool",
+                    "get_product_promotions_tool",
+                    "get_events_tool",
+                    "get_deals_tool",
+                    "quick_order_tool",
+                    "transaction_store_preview_tool",
+                    "get_store_schedule_tool",
+                ),
+                metadata={
+                    "response_intent": frame.sub_intent,
+                    "goal_type": "product_event_lookup",
+                    "benefit_lookup_type": entities.get("product_benefit_lookup_type"),
+                },
+            )
         return ToolPlan(
             allowed_tools=(
                 "search_product_tool",
@@ -1502,6 +1572,14 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
         args = {"keyword": (entities.get("product_names") or ("",))[0]}
         if entities.get("brand_cd"):
             args["brand_cd"] = entities["brand_cd"]
+        if not tire_size:
+            return ToolPlan(
+                allowed_tools=("search_product_summary_tool",),
+                preferred_tool="search_product_summary_tool",
+                tool_args_patch=args,
+                forbidden_tools=("get_products_recommendations_tool", "generic_unsized_recommendation"),
+            )
+        args["size"] = tire_size
         return ToolPlan(
             allowed_tools=("search_product_tool",),
             preferred_tool="search_product_tool",
@@ -1518,6 +1596,23 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
         )
     if frame.intent == "product_description":
         product_names = entities.get("product_names") or ()
+        args = {"keyword": (product_names or ("",))[0]}
+        if entities.get("brand_cd"):
+            args["brand_cd"] = entities["brand_cd"]
+        if not tire_size:
+            if len(product_names) >= 2:
+                return ToolPlan(
+                    allowed_tools=("search_product_summary_tool",),
+                    preferred_tool="search_product_summary_tool",
+                    forbidden_tools=("get_products_recommendations_tool", "search_product_tool"),
+                    metadata={"response_intent": "multi_product_detail"},
+                )
+            return ToolPlan(
+                allowed_tools=("search_product_summary_tool",),
+                preferred_tool="search_product_summary_tool",
+                tool_args_patch=args,
+                forbidden_tools=("get_products_recommendations_tool", "search_product_tool"),
+            )
         if len(product_names) >= 2:
             return ToolPlan(
                 allowed_tools=("search_product_tool",),
@@ -1525,9 +1620,7 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
                 forbidden_tools=("get_products_recommendations_tool",),
                 metadata={"response_intent": "multi_product_detail"},
             )
-        args = {"keyword": (product_names or ("",))[0]}
-        if entities.get("brand_cd"):
-            args["brand_cd"] = entities["brand_cd"]
+        args["size"] = tire_size
         return ToolPlan(
             allowed_tools=("search_product_tool", "get_product_description_tool"),
             preferred_tool="search_product_tool",
@@ -1544,6 +1637,33 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
                 args["size"] = entities["tire_size"]
             if entities.get("brand_cd"):
                 args["brand_cd"] = entities["brand_cd"]
+            return ToolPlan(
+                allowed_tools=("search_product_tool", "get_product_description_tool", "get_cheapest_price_tool"),
+                preferred_tool="search_product_tool",
+                tool_args_patch=args,
+                forbidden_tools=("get_products_recommendations_tool", "product_card_first_response"),
+            )
+        product_names = entities.get("product_names") or ()
+        if not tire_size and product_names:
+            is_multi_product_summary = len(product_names) >= 2
+            summary_args = (
+                {"keywords": list(product_names[:5]), "limit": 5}
+                if is_multi_product_summary
+                else {"keyword": product_names[0]}
+            )
+            if entities.get("brand_cd"):
+                summary_args["brand_cd"] = entities["brand_cd"]
+            return ToolPlan(
+                allowed_tools=("search_product_summary_tool", "get_product_description_tool"),
+                preferred_tool="search_product_summary_tool",
+                tool_args_patch=summary_args,
+                forbidden_tools=(
+                    "get_products_recommendations_tool",
+                    "product_card_first_response",
+                    "search_product_tool",
+                ),
+                metadata={"response_intent": "multi_product_detail"} if is_multi_product_summary else {},
+            )
         return ToolPlan(
             allowed_tools=("search_product_tool", "get_product_description_tool", "get_cheapest_price_tool"),
             preferred_tool="search_product_tool",
@@ -1643,6 +1763,18 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
     for key in ("min_price", "max_price"):
         if entities.get(key) is not None:
             args[key] = entities[key]
+    # 현재 turn 에 가격 조건이 없으면 진행 중인 recommendation context 의
+    # 가격대를 상속한다 (scenario fallback 과 동일한 continuity 규칙).
+    if args.get("min_price") is None and args.get("max_price") is None:
+        context_for_price = entities.get("recommendation_context") or {}
+        for source_key in ("tool_args_patch", "expected_tool_args"):
+            source = context_for_price.get(source_key)
+            if not isinstance(source, Mapping):
+                continue
+            for key in ("min_price", "max_price"):
+                value = source.get(key)
+                if value is not None and args.get(key) is None:
+                    args[key] = value
     if entities.get("brand_cd"):
         args["brand_cd"] = entities["brand_cd"]
         if frame.intent == "product_recommendation":

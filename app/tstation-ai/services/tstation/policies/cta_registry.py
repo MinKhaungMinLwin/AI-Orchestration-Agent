@@ -451,7 +451,20 @@ def _validate_definition(
         )
     if contract is not None:
         forbidden_tools = set(str(tool) for tool in getattr(contract, "forbidden_tools", ()) or ())
-        blocked_tools = [tool for tool in definition.allowed_tools if tool in forbidden_tools]
+        current_intents = {
+            str(getattr(contract, "intent", "") or "").strip(),
+            str(getattr(contract, "sub_intent", "") or "").strip(),
+        }
+        next_turn_purchase_from_product_description = (
+            definition.cta_id == "purchase.start"
+            and definition.expected_contract_intent == "quick_order_reservation"
+            and bool(current_intents & {"product_description", "product_detail_lookup", "product_name_search"})
+        )
+        blocked_tools = [
+            tool
+            for tool in definition.allowed_tools
+            if tool in forbidden_tools and not next_turn_purchase_from_product_description
+        ]
         if blocked_tools:
             return CTAValidationResult(
                 "blocked",

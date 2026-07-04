@@ -534,6 +534,20 @@ def _has_purchase_ready_product_quantity_context(slots: dict[str, Any]) -> bool:
     return bool(_has_confirmed_product_quantity_context(slots) and slots.get("tire_size"))
 
 
+def _has_comparison_product_scope(slots: Mapping[str, Any]) -> bool:
+    comparison_context = slots.get("comparison_context")
+    if not isinstance(comparison_context, Mapping):
+        return False
+    product_candidates = comparison_context.get("product_candidates") or comparison_context.get("candidates")
+    if isinstance(product_candidates, list):
+        scoped_candidates = [candidate for candidate in product_candidates if isinstance(candidate, Mapping)]
+        return len(scoped_candidates) >= 2
+    product_names = comparison_context.get("product_names") or comparison_context.get("productNames")
+    if not isinstance(product_names, (list, tuple)):
+        return False
+    return len([name for name in product_names if str(name or "").strip()]) >= 2
+
+
 def _normalized_quantity(slots: dict[str, Any], text: str = "") -> int | None:
     value = extract_quantity(text) or slots.get("quantity") or slots.get("ord_qty")
     try:
@@ -1173,7 +1187,7 @@ def build_transaction_intent_frame(
     )
     region = current_region or slots.get("region") or slots.get("place")
 
-    has_product = bool(goods_no or product_name or _PRODUCT_HINT_RE.search(text))
+    has_product = bool(goods_no or product_name or _PRODUCT_HINT_RE.search(text) or _has_comparison_product_scope(slots))
     has_location = bool(
         region
         or slots.get("place_query")

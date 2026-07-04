@@ -123,6 +123,7 @@ class ComparisonContext(BaseModel):
     """Typed comparison-only context preserved after deterministic compare answers."""
 
     product_names: list[str] = Field(default_factory=list)
+    product_candidates: list[dict[str, Any]] = Field(default_factory=list)
     compare_metric: Optional[str] = None
     response_shape_key: Optional[str] = None
     comparison_followup_intent: Optional[str] = None
@@ -138,6 +139,13 @@ class ComparisonContext(BaseModel):
         product_names = data.get("product_names") or data.get("productNames")
         if isinstance(product_names, (tuple, list)):
             data["product_names"] = [str(name).strip() for name in product_names if str(name or "").strip()][:2]
+        product_candidates = data.get("product_candidates") or data.get("candidates")
+        if isinstance(product_candidates, (tuple, list)):
+            data["product_candidates"] = [
+                {key: item for key, item in dict(candidate).items() if item not in (None, "")}
+                for candidate in product_candidates
+                if isinstance(candidate, Mapping)
+            ][:4]
         return cls(**{key: item for key, item in data.items() if key in cls.model_fields})
 
     def to_policy_dict(self) -> dict[str, Any]:

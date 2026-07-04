@@ -1417,6 +1417,95 @@
         }
       }
     },
+    "/api/product/search-summary": {
+      "get": {
+        "tags": [
+          "Product Compatibility AF - 차량 및 상품 호환 검증"
+        ],
+        "summary": "사이즈 미지정 상품군 검색",
+        "description": "제품명 키워드로 특정 사이즈 SKU(goods_no)를 확정하지 않고 PTRN_CD + GOODS_NM 상품군 단위로 검색합니다. 상품 정보, 가격대, 판매 가능 사이즈, 리뷰 평점, 적용 가능 워런티를 함께 반환합니다.",
+        "operationId": "search_product_summary_api_product_search_summary_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "keyword",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "검색할 제품명 키워드 (예: '키너지 EX', 'Ventus S2 AS')",
+              "title": "Keyword"
+            },
+            "description": "검색할 제품명 키워드 (예: '키너지 EX', 'Ventus S2 AS')"
+          },
+          {
+            "name": "brand_cd",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "브랜드 코드 (HK=한국타이어, LF=라우펜, MC=미쉐린, PI=피렐리, BS=브리지스톤, CT=콘티넨탈, GY=굿이어)",
+              "title": "Brand Cd"
+            },
+            "description": "브랜드 코드 (HK=한국타이어, LF=라우펜, MC=미쉐린, PI=피렐리, BS=브리지스톤, CT=콘티넨탈, GY=굿이어)"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 20,
+              "minimum": 1,
+              "description": "반환할 최대 상품군 수. 기본 5개",
+              "default": 5,
+              "title": "Limit"
+            },
+            "description": "반환할 최대 상품군 수. 기본 5개"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProductSearchSummaryResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/product/search": {
       "get": {
         "tags": [
@@ -1744,7 +1833,7 @@
           "Product Recommendation AF - 상품 추천"
         ],
         "summary": "상품 추천",
-        "description": "추천 타입(rcmd_type)에 따라 상위 N개 상품을 반환합니다.\n\n**기존 타입 (전용 SQL)**\n- **tstation**: 티스테이션 추천 (`TOT_SCR (if FST_DISP_YN='Y' then TOT_SCR = TOT_SCR*10)` 높은 순, `PR_GOODS_RCMD_SUM`)\n- **discount**: 최고 할인율 (`EXTRA_FVR_SALE_PER` 높은 순, `PR_GOODS_DSCNT_PRC_INFO`)\n- **value**: 가성비 Good (할인가 20만 원 이하, 수명·연비 높은 순, `PR_GOODS_DSCNT_PRC_INFO` + `PR_GOODS_RCMD_SUM`)\n- **fuel_efficiency**: 연비 중심 (`T_FUEL_EFF_CONVERT` 높은 순, 동점 시 숫자형 `RR` 낮은 순)\n\n**신규 타입 (베이스 템플릿 + 설정 기반, `entr_yn=y` 시 제휴사 가격 자동 적용)**\n- **wet**: 빗길 성능 (`WET` 높은 순)\n- **snow**: 눈길/빙판 (`T_SNOW`, `T_ICE` 높은 순)\n- **high_speed**: 고속 주행 (`T_HIGHSPD` 높은 순)\n- **handling**: 핸들링 (`T_HIGH_HAND_AVG` 높은 순)\n- **low_vibration**: 진동 적은 (`T_COM_SIL_AVG`, `T_COM_CVS` 높은 순)\n- **performance**: 퍼포먼스 (`GOODS_PFM_NM='SPORT'` + `T_HIGH_HAND_AVG` 높은 순)\n- **commute**: 출퇴근 (`SEASON_NM='사계절'` + `T_MILG_CVS` 높은 순)\n- **long_distance**: 장거리 (`T_COM_SIL_AVG`/`T_COM_CVS`/`T_MILG_CVS` 높은 순)\n- **urban**: 도심 주행 (`SEASON_NM='사계절'` + `GOODS_PFM_NM='COMFORT'`)\n- **family**: 가족용 (`GOODS_PFM_NM IN ('COMFORT','RUNFLAT')`)\n- **ev**: 전기차용 (`CAR_KND_NM='전기차'`)\n- **heavy_load**: 짐 많이 (`T_WGT_IDX`, `T_WGT_IDX_KG` 높은 순)\n- **weekend**: 주말 (`SEASON_NM='사계절'` + `PRC_GRD_NM='스탠다드'`, `T_TRAY_WARE` 높은 순)\n- **safe_kids**: 아이 안전 (`T_RLX_ISN_YN='O'` + 정숙·하중 높은 순)\n- **all_weather**: 눈길/비 전천후 (`WET`/`T_SNOW`/`T_ICE` 높은 순)\n- **warranty**: 워런티 가능 (`ET_DGTL_WRT_APLY_INFO.WRT_TGT_YN='Y'`, `WRT_GRTE_TERM` 긴 순)\n- **summer**: 여름용 (`SEASON_NM='여름'`, `WET`/`T_HIGH_HAND_AVG` 높은 순)\n- **sound_absorber**: 흡음재 적용 (`GOODS_DTL_PFM_NM LIKE '%흡음%'` — '흡음재'/'흡음제'/복합 모두 포함, 정숙성 점수 정렬)\n\n**가격 등급 필터 (옵션, tstation + 동적 rcmd_type 에만 적용)**\n- `prc_grd`: `PR_GOODS_BASE.PRC_GRD_NM` 매칭. 값 '프리미엄'/'스탠다드'/'이코노미'. '프리미엄' 입력 시 LIKE '프리미엄%' 로 raw '프리미엄' + '프리미엄+' 둘 다 매칭.\n\n**가격 필터 (모든 rcmd_type 공통, 옵션)**\n- `min_price`/`max_price`: SQL WHERE 절에서 `NVL(EXTRA_FVR_SALE_PRC, SALE_PRC)` (할인가 우선) 기준 범위 필터. 지정 시 가격 범위 내에서 rcmd_type 의 정렬 기준 (TOT_SCR, EXTRA_FVR_SALE_PER 등) 상위 N 개 반환.\n\n**차량 타입 필터 (모든 rcmd_type 공통, 옵션)**\n- `vehicle_type`: `CAR_KND_NM` 기준 직교 필터. 값: passenger/suv/ev/truck_van. passenger는 '승용차'/'SEDAN'/'스포츠카', suv는 'SUV', ev는 '전기차', truck_van은 '경트럭&밴'/'경트럭'/'카고트럭'/'덤프트럭'을 매칭.",
+        "description": "추천 타입(rcmd_type)에 따라 상위 N개 상품을 반환합니다.\n\n**기존 타입 (전용 SQL)**\n- **tstation**: 티스테이션 추천 (`TOT_SCR (if FST_DISP_YN='Y' then TOT_SCR = TOT_SCR*10)` 높은 순, `PR_GOODS_RCMD_SUM`)\n- **discount**: 최고 할인율 (`EXTRA_FVR_SALE_PER` 높은 순, `PR_GOODS_DSCNT_PRC_INFO`)\n- **value**: 가성비 Good (할인가 20만 원 이하, 수명·연비 높은 순, `PR_GOODS_DSCNT_PRC_INFO` + `PR_GOODS_RCMD_SUM`)\n- **fuel_efficiency**: 연비 중심 (`T_FUEL_EFF_CONVERT` 높은 순, 동점 시 숫자형 `RR` 낮은 순)\n\n**신규 타입 (베이스 템플릿 + 설정 기반, `entr_yn=y` 시 제휴사 가격 자동 적용)**\n- **wet**: 빗길 성능 (`WET` 높은 순)\n- **snow**: 눈길/빙판 (`T_SNOW`, `T_ICE` 높은 순)\n- **high_speed**: 고속 주행 (`T_HIGHSPD` 높은 순)\n- **handling**: 핸들링 (`T_HIGH_HAND_AVG` 높은 순)\n- **low_vibration**: 진동 적은 (`T_COM_SIL_AVG`, `T_COM_CVS` 높은 순)\n- **performance**: 퍼포먼스 (`GOODS_PFM_NM='SPORT'` + `T_HIGH_HAND_AVG` 높은 순)\n- **commute**: 출퇴근 (`SEASON_NM='사계절'` + `T_MILG_CVS` 높은 순)\n- **long_distance**: 장거리 (`T_COM_SIL_AVG`/`T_COM_CVS`/`T_MILG_CVS` 높은 순)\n- **urban**: 도심 주행 (`SEASON_NM='사계절'` + `GOODS_PFM_NM='COMFORT'`)\n- **family**: 가족용 (`GOODS_PFM_NM IN ('COMFORT','RUNFLAT')`)\n- **ev**: 전기차용 (`CAR_KND_NM='전기차'`)\n- **heavy_load**: 짐 많이 (`T_WGT_IDX`, `T_WGT_IDX_KG` 높은 순)\n- **weekend**: 주말 (`SEASON_NM='사계절'` + `PRC_GRD_NM='스탠다드'`, `T_TRAY_WARE` 높은 순)\n- **safe_kids**: 아이 안전 (`T_RLX_ISN_YN='O'` + 정숙·하중 높은 순)\n- **all_weather**: 눈길/비 전천후 (`WET`/`T_SNOW`/`T_ICE` 높은 순)\n- **warranty**: 워런티 가능 (`ET_DGTL_WRT_APLY_INFO.WRT_TGT_YN='Y'`, `WRT_GRTE_TERM` 긴 순)\n- **summer**: 여름용 (`SEASON_NM='여름'`, `WET`/`T_HIGH_HAND_AVG` 높은 순)\n- **sound_absorber**: 흡음재 적용 (`GOODS_DTL_PFM_NM LIKE '%흡음%'` — '흡음재'/'흡음제'/복합 모두 포함, 정숙성 점수 정렬)\n\n**가격 등급 필터 (옵션, tstation + 동적 rcmd_type 에만 적용)**\n- `prc_grd`: `PR_GOODS_BASE.PRC_GRD_NM` 매칭. 값 '프리미엄'/'스탠다드'/'이코노미'. '프리미엄' 입력 시 LIKE '프리미엄%' 로 raw '프리미엄' + '프리미엄+' 둘 다 매칭.\n\n**가격 필터 (모든 rcmd_type 공통, 옵션)**\n- `min_price`/`max_price`: SQL WHERE 절에서 `NVL(EXTRA_FVR_SALE_PRC, SALE_PRC)` (할인가 우선) 기준 범위 필터. `max_price` (목표 가격) 만 지정되면 예산대 요청으로 보고 0~max 범위에서 가격 내림차순 상위 N 개를 반환하며 브랜드 필터(HK 등)가 해제되어 모든 브랜드를 포함합니다.\n\n**차량 타입 필터 (모든 rcmd_type 공통, 옵션)**\n- `vehicle_type`: `CAR_KND_NM` 기준 직교 필터. 값: passenger/suv/ev/truck_van. passenger는 '승용차'/'SEDAN'/'스포츠카', suv는 'SUV', ev는 '전기차', truck_van은 '경트럭&밴'/'경트럭'/'카고트럭'/'덤프트럭'을 매칭.",
         "operationId": "get_recommendations_api_product_recommend_get",
         "security": [
           {
@@ -2529,7 +2618,7 @@
           "Event/Deal AF - 이벤트 및 기획전 조회"
         ],
         "summary": "상품 적용 가능 이벤트 조회",
-        "description": "특정 상품(goods_no)에 적용 가능한 진행 중 이벤트 목록을 반환합니다. CC_EVT_APLY_INFO 의 50(상품 단위) / 80(패턴 단위) 매핑을 모두 검사하며, 전시 기간(SYSDATE BETWEEN) + DISP_YN='Y' + EVT_PRGS_STAT_CD='10' 조건을 만족하는 이벤트만 포함합니다. 결과는 EVT_STRT_DTIME 내림차순 정렬.",
+        "description": "특정 상품 패턴(ptrn_cd)에 적용 가능한 진행 중 이벤트 목록을 반환합니다. CC_EVT_APLY_INFO 의 50(상품 단위) / 80(패턴 단위) 매핑을 모두 검사하며, 전시 기간(SYSDATE BETWEEN) + DISP_YN='Y' + EVT_PRGS_STAT_CD='10' 조건을 만족하는 이벤트만 포함합니다. 결과는 EVT_STRT_DTIME 내림차순 정렬.",
         "operationId": "get_product_applicable_events_api_events_applicable_events_get",
         "security": [
           {
@@ -2538,15 +2627,15 @@
         ],
         "parameters": [
           {
-            "name": "goods_no",
+            "name": "ptrn_cd",
             "in": "query",
             "required": true,
             "schema": {
               "type": "string",
-              "description": "상품 번호 (예: G000000317693)",
-              "title": "Goods No"
+              "description": "상품 패턴 코드 (예: K127)",
+              "title": "Ptrn Cd"
             },
-            "description": "상품 번호 (예: G000000317693)"
+            "description": "상품 패턴 코드 (예: K127)"
           },
           {
             "name": "lang_cd",
@@ -8208,11 +8297,6 @@
       },
       "ProductApplicableEventsResponse": {
         "properties": {
-          "goods_no": {
-            "type": "string",
-            "title": "Goods No",
-            "description": "상품 번호"
-          },
           "total": {
             "type": "integer",
             "title": "Total",
@@ -8224,12 +8308,17 @@
             },
             "type": "array",
             "title": "Items",
-            "description": "해당 상품에 적용 가능한 진행 중 이벤트 목록 (EVT_STRT_DTIME DESC)"
+            "description": "해당 상품 패턴에 적용 가능한 진행 중 이벤트 목록 (EVT_STRT_DTIME DESC)"
+          },
+          "ptrn_cd": {
+            "type": "string",
+            "title": "Ptrn Cd",
+            "description": "상품 패턴 코드"
           }
         },
         "type": "object",
         "required": [
-          "goods_no",
+          "ptrn_cd",
           "total"
         ],
         "title": "ProductApplicableEventsResponse"
@@ -9493,6 +9582,480 @@
           "items"
         ],
         "title": "ProductSearchResponse"
+      },
+      "ProductSearchSummaryItem": {
+        "properties": {
+          "ptrn_cd": {
+            "type": "string",
+            "title": "Ptrn Cd",
+            "description": "상품 패턴 코드. 상품군 식별자이며 특정 사이즈 SKU(goods_no)가 아님"
+          },
+          "goods_nm": {
+            "type": "string",
+            "title": "Goods Nm",
+            "description": "상품명"
+          },
+          "big_goods_nm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Big Goods Nm",
+            "description": "대상품명 (BIG_GOODS_NM)"
+          },
+          "ptrn_d_nm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ptrn D Nm",
+            "description": "직관적 명칭 (PTRN_D_NM)"
+          },
+          "available_sizes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Available Sizes",
+            "description": "해당 상품군에서 판매 가능한 타이어 규격 목록"
+          },
+          "goods_no_count": {
+            "type": "integer",
+            "title": "Goods No Count",
+            "description": "해당 상품군에 포함된 활성 SKU 수",
+            "default": 0
+          },
+          "score": {
+            "type": "integer",
+            "title": "Score",
+            "description": "검색 관련도 점수",
+            "default": 0
+          },
+          "match_type": {
+            "type": "string",
+            "title": "Match Type",
+            "description": "매칭 유형 (exact/prefix/partial/alias)",
+            "default": "none"
+          },
+          "image_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Image Url",
+            "description": "대표 이미지 URL"
+          },
+          "rating_avg": {
+            "type": "number",
+            "title": "Rating Avg",
+            "description": "패턴 기준 리뷰 평균 별점",
+            "default": 0
+          },
+          "review_count": {
+            "type": "integer",
+            "title": "Review Count",
+            "description": "패턴 기준 리뷰 수",
+            "default": 0
+          },
+          "min_sale_prc": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Sale Prc",
+            "description": "활성 SKU 중 최저 판매가"
+          },
+          "max_sale_prc": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Sale Prc",
+            "description": "활성 SKU 중 최고 판매가"
+          },
+          "min_extra_fvr_sale_prc": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Extra Fvr Sale Prc",
+            "description": "활성 SKU 중 최저 최대혜택가"
+          },
+          "max_extra_fvr_sale_prc": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Extra Fvr Sale Prc",
+            "description": "활성 SKU 중 최고 최대혜택가"
+          },
+          "max_extra_fvr_sale_per": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Extra Fvr Sale Per",
+            "description": "활성 SKU 중 최대 혜택 할인율"
+          },
+          "smrt_pay_yn": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Smrt Pay Yn",
+            "description": "스마트페이 가능 SKU 포함 여부 Y/N"
+          },
+          "prc_grd_nm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prc Grd Nm",
+            "description": "가격 등급명"
+          },
+          "goods_pfm_nm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Goods Pfm Nm",
+            "description": "퍼포먼스 분류명"
+          },
+          "goods_dtl_pfm_nm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Goods Dtl Pfm Nm",
+            "description": "세부 퍼포먼스 분류명"
+          },
+          "sound_absorber_yn": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sound Absorber Yn",
+            "description": "흡음재 적용 여부 Y/N"
+          },
+          "season_nm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Season Nm",
+            "description": "계절 속성"
+          },
+          "car_knd_nm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Car Knd Nm",
+            "description": "차종 속성"
+          },
+          "brand_nm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Brand Nm",
+            "description": "브랜드명"
+          },
+          "certify_brand_nm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Certify Brand Nm",
+            "description": "공식인증 브랜드명"
+          },
+          "orpl_nm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Orpl Nm",
+            "description": "원산지명"
+          },
+          "t_rls_yearmon": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "T Rls Yearmon",
+            "description": "출시년월"
+          },
+          "rr": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rr",
+            "description": "회전저항 등급"
+          },
+          "wet": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wet",
+            "description": "젖은노면 제동 등급"
+          },
+          "label_pnwave": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label Pnwave",
+            "description": "EU 소음 라벨 등급 코드"
+          },
+          "label_pnwave_nm": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label Pnwave Nm",
+            "description": "EU 소음 라벨 등급명"
+          },
+          "label_pndb": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label Pndb",
+            "description": "EU 소음 데시벨 라벨 값"
+          },
+          "slogan": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slogan",
+            "description": "슬로건"
+          },
+          "pc_prod_remark_desc": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pc Prod Remark Desc",
+            "description": "특장점"
+          },
+          "pc_prod_tech_desc": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pc Prod Tech Desc",
+            "description": "기술력"
+          },
+          "reviews": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewItem"
+            },
+            "type": "array",
+            "title": "Reviews",
+            "description": "패턴 기준 평점 높은 대표 리뷰 최대 5개"
+          },
+          "warranty": {
+            "$ref": "#/components/schemas/ProductSearchSummaryWarranty",
+            "description": "상품군 기준 워런티 정보"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ptrn_cd",
+          "goods_nm"
+        ],
+        "title": "ProductSearchSummaryItem"
+      },
+      "ProductSearchSummaryResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ProductSearchSummaryItem"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "title": "ProductSearchSummaryResponse"
+      },
+      "ProductSearchSummaryWarranty": {
+        "properties": {
+          "free_guarantee_yn": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Free Guarantee Yn",
+            "description": "무상교환보증 여부 Y/N (FREE_GUARANTEE_YN)"
+          },
+          "t_rlx_isn_yn": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "T Rlx Isn Yn",
+            "description": "안심보험 여부 Y/N (T_RLX_ISN_YN)"
+          },
+          "warranties": {
+            "items": {
+              "$ref": "#/components/schemas/ProductSearchSummaryWarrantyItem"
+            },
+            "type": "array",
+            "title": "Warranties",
+            "description": "ET_DGTL_WRT_APLY_INFO 기준 WRT_TGT_YN='Y' 인 적용 가능 워런티 목록"
+          }
+        },
+        "type": "object",
+        "title": "ProductSearchSummaryWarranty"
+      },
+      "ProductSearchSummaryWarrantyItem": {
+        "properties": {
+          "wrt_tp_cd": {
+            "type": "string",
+            "title": "Wrt Tp Cd",
+            "description": "워런티 타입 코드. '10'=품질보증 / '20'=안심서비스 / '30'=30일 해피보증 / '40'=코드절상 무상교환"
+          },
+          "wrt_nm": {
+            "type": "string",
+            "title": "Wrt Nm",
+            "description": "워런티 한글명. '품질보증' / '안심서비스' / '안심플러스' / '30일 해피보증' / '코드절상 무상교환'"
+          },
+          "is_plus": {
+            "type": "boolean",
+            "title": "Is Plus",
+            "description": "안심플러스 분리 행 여부",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "wrt_tp_cd",
+          "wrt_nm"
+        ],
+        "title": "ProductSearchSummaryWarrantyItem"
       },
       "ProductWarrantiesResponse": {
         "properties": {

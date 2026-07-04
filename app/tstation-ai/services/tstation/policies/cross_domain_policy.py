@@ -61,6 +61,15 @@ _EXECUTABLE_PRICE_COUPON_RE = re.compile(
 )
 _PRODUCT_BENEFIT_LOOKUP_RE = re.compile(r"행사|이벤트|프로모션|기획전|딜|deal|쿠폰|할인권|혜택", re.IGNORECASE)
 _BENEFIT_STACKING_RE = re.compile(r"중복|같이|함께|동시|둘\s*다|다\s*돼|같이\s*돼", re.IGNORECASE)
+_EVENT_APPLICABLE_PRODUCTS_RE = re.compile(
+    r"(?:이벤트|행사|프로모션|기획전).{0,20}(?:적용|대상|가능|살\s*수\s*있는).{0,8}(?:상품|타이어|제품)|"
+    r"(?:적용|대상|가능).{0,8}(?:상품|타이어|제품).{0,20}(?:이벤트|행사|프로모션|기획전)",
+    re.IGNORECASE,
+)
+_EVENT_APPLICABLE_PRODUCTS_EXCLUDE_RE = re.compile(
+    r"쿠폰|할인권|매장|지점|혜택|기간|언제|조건|상세|내용",
+    re.IGNORECASE,
+)
 _REGIONAL_PRICE_POLICY_RE = re.compile(
     r"(?=.*(?:가격|판매가|최종가))"
     r"(?=.*(?:똑같|같(?:아|은|나요|을까)?|동일|다르|차이|왜))"
@@ -267,6 +276,10 @@ def plan_cross_domain_turn(user_text: str, *, known_slots: dict[str, Any] | None
         and not needs_pattern_coupon_lookup
         and not needs_executable_price_coupon
     )
+    needs_event_applicable_products_lookup = bool(
+        _EVENT_APPLICABLE_PRODUCTS_RE.search(text)
+        and not _EVENT_APPLICABLE_PRODUCTS_EXCLUDE_RE.search(text)
+    )
     needs_regional_price_policy = bool(_REGIONAL_PRICE_POLICY_RE.search(text))
     carried_store_name = str(slots.get("store_name") or slots.get("shop_name") or "").strip()
     current_store_name = extract_valid_store_name(text)
@@ -431,6 +444,20 @@ def plan_cross_domain_turn(user_text: str, *, known_slots: dict[str, Any] | None
                     domain=PolicyDomain.SUPPORT,
                     intent="policy_notice_or_escalation",
                     reason="정책 안내 또는 1:1 문의 연결이 필요함",
+                ),
+            ),
+            response_strategy="single_domain_response",
+        )
+
+    if needs_event_applicable_products_lookup and not needs_stock_or_booking:
+        return CrossDomainPlan(
+            primary_domain=PolicyDomain.DISCOVERY,
+            subtasks=(
+                DomainSubtask(
+                    domain=PolicyDomain.DISCOVERY,
+                    intent="event_applicable_products_lookup",
+                    reason="이벤트/행사 적용 상품 질의는 이벤트 목록이 아니라 적용 상품 조회 contract임",
+                    required_slots=(),
                 ),
             ),
             response_strategy="single_domain_response",

@@ -12,8 +12,9 @@ from services.tstation.policies.discovery_intent_policy import (
     extract_best_seller_vehicle_query,
     has_registered_vehicle_ownership_signal,
     is_best_seller_request,
+    normalize_tire_size,
 )
-from services.tstation.policies.flow_controller import build_purchase_flow_fallback_event
+from services.tstation.policies.flow_controller import build_purchase_flow_fallback_event, resolve_purchase_order_flow
 from services.tstation.policies.intent_frame import IntentFrame
 from services.tstation.policies.price_basis_policy import has_price_basis
 from services.tstation.policies.preorder_event_builder import build_preorder_event
@@ -92,6 +93,7 @@ _DISCOVERY_FIRST_LEG_BLOCK_SOURCES = frozenset({
     "discovery_policy",
 })
 _DISCOVERY_PRODUCT_SOURCE_TOOLS = frozenset({
+    "search_product_summary_tool",
     "search_product_tool",
     "get_products_recommendations_tool",
     "get_best_selling_products_tool",
@@ -99,6 +101,17 @@ _DISCOVERY_PRODUCT_SOURCE_TOOLS = frozenset({
 })
 _PENDING_CHECK_FOLLOWUP_PLANNER_INTENTS = frozenset({
     "coupon_applicability_check",
+})
+_MAINTENANCE_TIMING_CONTRACT_INTENTS = frozenset({
+    "maintenance_timing_guidance",
+    "maintenance_timing_check",
+    "maintenance_dday_lookup",
+    "maintenance_schedule_guidance",
+    "maintenance_cycle_guidance",
+    "maintenance_schedule_or_cycle_guidance",
+    "maintenance_schedule_cycle_guidance",
+    "vehicle_maintenance_timing_check",
+    "vehicle_maintenance_dday",
 })
 
 
@@ -112,6 +125,56 @@ def _latest_router_evidence_intent(known_slots: Mapping[str, Any]) -> str:
         else {}
     )
     return str(latest_router_evidence.get("intent") or "").strip()
+
+
+def _normalize_maintenance_timing_intent(value: str | None) -> str:
+    normalized = _normalize_plan_intent(str(value or ""))
+    return "maintenance_timing_guidance" if normalized in _MAINTENANCE_TIMING_CONTRACT_INTENTS else normalized
+
+
+def _contract_seed_router_evidence_intent(contract_seed: Mapping[str, Any] | None) -> str:
+    if not isinstance(contract_seed, Mapping):
+        return ""
+    router_evidence = contract_seed.get("router_evidence")
+    if isinstance(router_evidence, Mapping):
+        return str(router_evidence.get("intent") or "").strip()
+    return ""
+
+
+def _contract_seed_ui_action_intent(contract_seed: Mapping[str, Any] | None) -> str:
+    if not isinstance(contract_seed, Mapping):
+        return ""
+    ui_action = contract_seed.get("ui_action")
+    if not isinstance(ui_action, Mapping):
+        return ""
+    return str(
+        ui_action.get("expected_contract_intent")
+        or ui_action.get("expectedContractIntent")
+        or ui_action.get("source_intent")
+        or ui_action.get("sourceIntent")
+        or ""
+    ).strip()
+
+
+def _should_canonicalize_maintenance_timing_contract(
+    *,
+    planner_intent: str | None,
+    policy_intent: str | None,
+    code_intent: str | None,
+    response_shape_key: str | None = None,
+    latest_router_intent: str | None = None,
+    contract_seed: Mapping[str, Any] | None = None,
+) -> bool:
+    intent_candidates = {
+        _normalize_maintenance_timing_intent(planner_intent),
+        _normalize_maintenance_timing_intent(policy_intent),
+        _normalize_maintenance_timing_intent(code_intent),
+        _normalize_maintenance_timing_intent(response_shape_key),
+        _normalize_maintenance_timing_intent(latest_router_intent),
+        _normalize_maintenance_timing_intent(_contract_seed_router_evidence_intent(contract_seed)),
+        _normalize_maintenance_timing_intent(_contract_seed_ui_action_intent(contract_seed)),
+    }
+    return "maintenance_timing_guidance" in intent_candidates
 _COMPARISON_RESOLVER_TOOLS = _DISCOVERY_PRODUCT_SOURCE_TOOLS | frozenset({"get_product_description_tool"})
 _HIGH_RISK_TRANSACTION_TOOLS = frozenset({
     "get_final_price_tool",
@@ -133,8 +196,10 @@ _STORE_SERVICE_SEARCH_TOOLS = frozenset({
     "get_nearby_stores_tool",
 })
 _DISCOVERY_EVENT_CONTENT_TOOLS = frozenset({
+    "search_product_summary_tool",
     "search_product_tool",
     "get_product_applicable_events_tool",
+    "get_event_applicable_products_tool",
     "get_product_promotions_tool",
     "get_benefit_event_deal_list_tool",
     "get_events_tool",
@@ -645,6 +710,20 @@ def _drop_interrupted_slot_fill_values(
             sanitized.pop(key, None)
     return sanitized
 
+def _has_comparison_product_scope(known_slots: Mapping[str, Any]) -> bool:
+    comparison_context = known_slots.get("comparison_context")
+    if hasattr(comparison_context, "model_dump"):
+        comparison_context = comparison_context.model_dump(exclude_none=True)
+    if not isinstance(comparison_context, Mapping):
+        return False
+    product_names = comparison_context.get("product_names") or comparison_context.get("productNames")
+    if isinstance(product_names, (list, tuple)):
+        return len([name for name in product_names if str(name or "").strip()]) >= 2
+    product_candidates = comparison_context.get("product_candidates") or comparison_context.get("candidates")
+    if isinstance(product_candidates, list):
+        return len([candidate for candidate in product_candidates if isinstance(candidate, Mapping)]) >= 2
+    return False
+
 def build_turn_contract(
     *,
     user_text: str = "",
@@ -688,6 +767,8 @@ def build_turn_contract(
         response_decision=response_decision,
         action_mode=action_mode,
     )
+    if _normalize_maintenance_timing_intent(router_wins_intent) == "maintenance_timing_guidance":
+        router_wins_intent = "maintenance_timing_guidance"
     code_domain = _domain_value(intent_frame.domain) if intent_frame is not None else _domain_from_routing(routing_result)
     code_intent = intent_frame.intent if intent_frame is not None else _intent_from_cross_domain(cross_domain_plan)
     transaction_boundary_frame = _transaction_policy_boundary_frame(user_text=user_text, merged_slots=merged_slots)
@@ -839,6 +920,26 @@ def build_turn_contract(
     if routing_pending_check_object_value and not known_slots.get("pending_check_object_value"):
         known_slots["pending_check_object_value"] = routing_pending_check_object_value
     latest_router_intent = _latest_router_evidence_intent(known_slots)
+    if _should_canonicalize_maintenance_timing_contract(
+        planner_intent=planner_intent,
+        policy_intent=policy_intent,
+        code_intent=code_intent,
+        latest_router_intent=latest_router_intent,
+        contract_seed=contract_seed,
+    ):
+        domain = "support"
+        intent = "maintenance_timing_guidance"
+        planner_intent = (
+            "maintenance_timing_guidance"
+            if _normalize_maintenance_timing_intent(planner_intent) == "maintenance_timing_guidance"
+            else planner_intent
+        )
+        policy_intent = (
+            "maintenance_timing_guidance"
+            if _normalize_maintenance_timing_intent(policy_intent) == "maintenance_timing_guidance"
+            else policy_intent
+        )
+        known_slots["policy_intent"] = "maintenance_timing_guidance"
     if planner_intent == "owned_coupon_lookup" or code_intent == "owned_coupon_lookup":
         domain = "transaction"
         intent = "owned_coupon_lookup"
@@ -942,6 +1043,16 @@ def build_turn_contract(
     if code_intent == "maintenance_history_access_policy" or planner_intent == "maintenance_history_access_policy":
         domain = "support"
         intent = "maintenance_history_access_policy"
+    if _should_canonicalize_maintenance_timing_contract(
+        planner_intent=planner_intent,
+        policy_intent=policy_intent,
+        code_intent=code_intent,
+        response_shape_key=response_shape_key,
+        latest_router_intent=latest_router_intent,
+        contract_seed=contract_seed,
+    ):
+        domain = "support"
+        intent = "maintenance_timing_guidance"
     if code_intent == "order_document_guidance" or planner_intent == "order_document_guidance":
         domain = "support"
         intent = "order_document_guidance"
@@ -967,6 +1078,7 @@ def build_turn_contract(
         discovery_event_content_intents = {
             "benefit_event_list_lookup",
             "benefit_deal_list",
+            "event_applicable_products_lookup",
             "product_event_lookup",
             "product_promotion_lookup",
             "product_coupon_lookup",
@@ -986,6 +1098,9 @@ def build_turn_contract(
     if router_wins_intent:
         domain = _router_wins_domain(router_wins_intent, planner_domains)
         intent = router_wins_intent
+    if _normalize_maintenance_timing_intent(intent) == "maintenance_timing_guidance":
+        domain = "support"
+        intent = "maintenance_timing_guidance"
     intent = _current_turn_stock_owner_intent(intent, known_slots)
     if intent == "stock_store_search":
         domain = "transaction"
@@ -1195,6 +1310,7 @@ def build_turn_contract(
         preferred_tool = "get_benefit_event_deal_list_tool"
         tool_args_patch = {"lang_cd": "ko"}
     if intent in {
+        "event_applicable_products_lookup",
         "product_event_lookup",
         "product_promotion_lookup",
         "product_coupon_lookup",
@@ -1209,8 +1325,10 @@ def build_turn_contract(
             ("get_products_recommendations_tool", "search_product_tool", "get_orders_of_user_tool"),
         )
     if intent == "maintenance_timing_guidance":
-        allowed_tools = _merge_tuple(allowed_tools, ("get_maintenance_dday_tool",))
-        forbidden_tools = tuple(tool for tool in forbidden_tools if tool != "get_maintenance_dday_tool")
+        allowed_tools = _merge_tuple(allowed_tools, ("get_my_cars_tool", "get_maintenance_dday_tool"))
+        forbidden_tools = tuple(
+            tool for tool in forbidden_tools if tool not in {"get_my_cars_tool", "get_maintenance_dday_tool"}
+        )
         preferred_tool = "get_maintenance_dday_tool"
     if intent == "maintenance_history_access_policy":
         allowed_tools = ()
@@ -1444,6 +1562,39 @@ def build_turn_contract(
             ),
         )
 
+    comparison_purchase_flow_state = None
+    if (
+        action_mode == "purchase_continuation"
+        and intent in {
+            "product_recommendation",
+            "sized_product_recommendation",
+            "product_search",
+            "resolve_or_describe_product",
+            "resolve_product_for_purchase_size_selection",
+        }
+        and _has_comparison_product_scope(known_slots)
+        and not known_slots.get("goods_no")
+    ):
+        comparison_purchase_flow_state = resolve_purchase_order_flow(
+            intent="quick_order_reservation",
+            known_slots=known_slots,
+        )
+    if comparison_purchase_flow_state is not None:
+        domain = "transaction"
+        intent = "quick_order_reservation"
+        sub_intent = None
+        required_slots = comparison_purchase_flow_state.required_slots
+        resolvable_required_slots = ()
+        blocking_required_slots = ()
+        blocking_required_slots_source = "none"
+        allowed_tools = comparison_purchase_flow_state.allowed_tools
+        forbidden_tools = comparison_purchase_flow_state.forbidden_tools
+        preferred_tool = comparison_purchase_flow_state.preferred_tool or ""
+        tool_args_patch = dict(comparison_purchase_flow_state.slot_patch)
+        flow_id = comparison_purchase_flow_state.flow_id
+        flow_step = comparison_purchase_flow_state.flow_step
+        known_slots.update(dict(comparison_purchase_flow_state.slot_patch))
+
     drift = _contract_drift(
         code_domain=code_domain,
         code_intent=code_intent,
@@ -1474,6 +1625,19 @@ def build_turn_contract(
     ).to_dict()
 
     response_decision_payload = response_decision.to_dict() if response_decision is not None else None
+    if comparison_purchase_flow_state is not None:
+        response_decision_payload = {
+            "response_shape": "clarify",
+            "template": comparison_purchase_flow_state.template.value,
+            "required_slots": list(comparison_purchase_flow_state.required_slots),
+            "forbidden_behaviors": ["broad_product_recommendation", "unscoped_product_search"],
+            "assistant_guidance": "비교한 상품 후보 안에서 구매할 상품 선택만 요청한다.",
+            "metadata": {
+                "response_shape_key": comparison_purchase_flow_state.response_shape_key,
+                "flow_id": comparison_purchase_flow_state.flow_id,
+                "flow_step": comparison_purchase_flow_state.flow_step,
+            },
+        }
     if selected_store_schedule_continuation and _selected_store_schedule_response_decision_mismatch(
         response_decision_payload
     ):
@@ -2669,6 +2833,8 @@ def _pending_order_context_from_slots(known_slots: Mapping[str, Any]) -> dict[st
 def _order_product_label(known_slots: Mapping[str, Any]) -> str:
     product_name = _product_name(known_slots)
     tire_size = _slot_text(known_slots, "tire_size")
+    if product_name and tire_size and normalize_tire_size(product_name) == normalize_tire_size(tire_size):
+        return product_name
     if product_name and tire_size:
         return f"{product_name} {tire_size}"
     return product_name or tire_size
@@ -5259,20 +5425,27 @@ def _router_wins_tool_boundary(intent: str) -> tuple[tuple[str, ...], tuple[str,
         )
     if intent in {"product_detail_lookup", "product_description"}:
         return (
-            ("search_product_tool", "get_product_description_tool"),
+            ("search_product_summary_tool", "get_product_description_tool"),
             tuple(
                 tool
-                for tool in _ROUTER_WINS_TRANSACTION_FORBIDDEN_TOOLS | {"get_products_recommendations_tool"}
-                if tool not in {"search_product_tool", "get_product_description_tool"}
+                for tool in _ROUTER_WINS_TRANSACTION_FORBIDDEN_TOOLS
+                | {"get_products_recommendations_tool", "search_product_tool"}
+                if tool not in {"search_product_summary_tool", "get_product_description_tool"}
             ),
         )
     if intent == "product_comparison":
         return (
-            ("search_product_tool", "get_product_description_tool", "get_cheapest_price_tool"),
+            ("search_product_summary_tool", "get_product_description_tool", "get_cheapest_price_tool"),
             tuple(
                 tool
-                for tool in _ROUTER_WINS_TRANSACTION_FORBIDDEN_TOOLS | {"get_products_recommendations_tool"}
-                if tool not in {"search_product_tool", "get_product_description_tool", "get_cheapest_price_tool"}
+                for tool in _ROUTER_WINS_TRANSACTION_FORBIDDEN_TOOLS
+                | {"get_products_recommendations_tool", "search_product_tool"}
+                if tool
+                not in {
+                    "search_product_summary_tool",
+                    "get_product_description_tool",
+                    "get_cheapest_price_tool",
+                }
             ),
         )
     if intent == "competitor_counterpart_guidance":
@@ -5650,6 +5823,9 @@ def _planner_intent(routing_result: Any | None, plan: CrossDomainPlan | None) ->
         if ":" in token:
             _, intent = token.split(":", 1)
             return _normalize_plan_intent(intent)
+        normalized_text = re.sub(r"[^a-zA-Z0-9가-힣]+", " ", token.lower()).strip()
+        if "maintenance timing" in normalized_text or "maintenance d day" in normalized_text:
+            return "maintenance_timing_guidance"
     return None
 
 
@@ -5673,6 +5849,10 @@ def _normalize_plan_intent(value: str) -> str:
         "coupon_lookup": "product_coupon_lookup",
         "deal_lookup": "product_deal_lookup",
         "product_deal": "product_deal_lookup",
+        "event_applicable_products": "event_applicable_products_lookup",
+        "event_applicable_products_lookup": "event_applicable_products_lookup",
+        "applicable_event_products": "event_applicable_products_lookup",
+        "event_product_lookup": "event_applicable_products_lookup",
         "event_lookup": "product_event_lookup",
         "product_event": "product_event_lookup",
         "discovery_event_content": "product_event_lookup",
@@ -5722,6 +5902,7 @@ def _is_discovery_event_content_contract(
     event_intents = {
         "benefit_event_list_lookup",
         "benefit_deal_list",
+        "event_applicable_products_lookup",
         "product_event_lookup",
         "product_promotion_lookup",
         "product_coupon_lookup",
@@ -5738,6 +5919,7 @@ def _is_discovery_event_content_contract(
         for token in (
             "benefit_event_list_lookup",
             "benefit_deal_list",
+            "event_applicable_products_lookup",
             "product_event_lookup",
             "product_promotion_lookup",
             "product_coupon_lookup",
