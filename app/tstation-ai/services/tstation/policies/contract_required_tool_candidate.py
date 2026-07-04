@@ -884,7 +884,11 @@ def _contract_required_tool_candidate(
         if preferred_tool in {"search_product_summary_tool", "search_product_tool"}:
             product_names = extract_product_names(user_text)
             if preferred_tool == "search_product_summary_tool" and len(product_names) >= 2 and not tool_input:
-                return None
+                tool_input = {"keywords": list(product_names[:5]), "limit": 5}
+                brand_cd = str(known_slots.get("brand_cd") or "").strip()
+                if brand_cd:
+                    tool_input["brand_cd"] = brand_cd
+                tool_input_source = "current_turn_product_names"
             preferred_keyword = str(
                 known_slots.get("pending_product_name")
                 or known_slots.get("tire_model")

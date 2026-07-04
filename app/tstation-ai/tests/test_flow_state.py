@@ -9,8 +9,187 @@ from services.tstation.policies.flow_state import (
     FlowState,
     prune_dormant_flows,
     resume_dormant_flow,
+    selected_store_slots_from_active_flow_context,
+    store_candidate_selection_patch,
+    store_candidates_flow_delta,
     upsert_dormant_flow,
 )
+from schemas.tstation.slots import ConversationSlots
+from services.tstation.policies.flow_controller import resolve_purchase_order_flow, transition_current_flow
+
+
+def test_purchase_preview_store_selection_progresses_to_schedule_without_relisting() -> None:
+    location_event = {
+        "template": "location",
+        "data": {
+            "isBookingFlow": True,
+            "contractMetadata": {"response_shape_key": "reservation_store_candidates"},
+            "stores": [{"name": "T-Station Hannam", "nameAddress": "T-Station Hannam"}],
+            "metadata": [
+                {
+                    "sourceTool": "transaction_store_preview_tool",
+                    "shopId": "F00777",
+                    "shopName": "T-Station Hannam",
+                    "goodsNo": "G000000309783",
+                    "productName": "Ventus S2 AS",
+                    "tireSize": "245/45R19",
+                    "ordQty": 2,
+                }
+            ],
+        },
+    }
+
+    candidate_delta = store_candidates_flow_delta(event=location_event)
+
+    assert candidate_delta["flow_type"] == "purchase"
+    assert candidate_delta["pending_intent"] == "order"
+    assert candidate_delta["goal_type"] == "place_order"
+
+    selected_patch = store_candidate_selection_patch(
+        active_flow_context=candidate_delta,
+        user_text="T-Station Hannam",
+    )
+
+    assert selected_patch["_flow_type"] == "purchase"
+    assert selected_patch["flow_step"] == "store_selected"
+    assert selected_patch["shop_id"] == "F00777"
+    assert selected_patch["goods_no"] == "G000000309783"
+    assert selected_patch["tire_size"] == "245/45R19"
+    assert selected_patch["ord_qty"] == 2
+    assert selected_patch["pending_intent"] == "order"
+    assert selected_patch["goal_type"] == "place_order"
+
+    selected_slots = selected_store_slots_from_active_flow_context(
+        commit_flow_state(
+            candidate_delta,
+            {key: value for key, value in selected_patch.items() if not key.startswith("_")},
+            source="location_selection:purchase",
+            flow_type="purchase",
+            flow_step="store_selected",
+            status="resumed",
+        ).state.to_active_flow_context(),
+        allowed_flow_types=frozenset({"purchase"}),
+    )
+    next_state = resolve_purchase_order_flow(intent="quick_order_reservation", known_slots=selected_slots)
+
+    assert next_state is not None
+    assert next_state.flow_step == "show_schedule"
+    assert next_state.preferred_tool == "get_store_schedule_tool"
+    assert next_state.allowed_tools == ("get_store_schedule_tool", "get_multi_store_schedule_tool")
+
+
+def test_purchase_store_ui_action_preserves_product_and_quantity_for_schedule() -> None:
+    transition = transition_current_flow(
+        user_text="T-Station Hannam",
+        router_evidence={
+            "domain": "transaction",
+            "intent": "quick_order_reservation",
+            "execution_plan": ["transaction:quick_order_reservation:slot_fill:store"],
+            "is_slot_fill": True,
+            "filled_slot": "store",
+        },
+        existing_slots=ConversationSlots(
+            availability_context={
+                "active_flow_context": {
+                    "flow_type": "purchase",
+                    "status": "active",
+                    "flow_step": "quantity_selected",
+                    "product": {
+                        "goods_no": "G000000309783",
+                        "product_name": "Ventus S2 AS",
+                        "tire_size": "245/45R19",
+                        "ord_qty": 2,
+                    },
+                    "intent": {"pending_intent": "order", "goal_type": "place_order"},
+                }
+            }
+        ),
+        extracted_slots=ConversationSlots(),
+        ui_action={
+            "action_type": "select_store",
+            "selection_source": "location_template",
+            "entity_id": "F00777",
+            "entity_label": "T-Station Hannam",
+            "slots": {"shopId": "F00777", "shopName": "T-Station Hannam"},
+        },
+        resume_source="validated_ui_action_slot_fill:store",
+    )
+
+    assert transition.metadata["selected_store_resolved"] is True
+    assert transition.flow_transition["reason"] == "selected_store_flow_state"
+    active_context = transition.flow_transition["active_flow_context"]
+    assert active_context["flow_step"] == "store_selected"
+    assert active_context["product"]["goods_no"] == "G000000309783"
+    assert active_context["product"]["ord_qty"] == 2
+    assert active_context["store"]["shop_id"] == "F00777"
+
+    selected_slots = selected_store_slots_from_active_flow_context(
+        active_context,
+        allowed_flow_types=frozenset({"purchase"}),
+    )
+    next_state = resolve_purchase_order_flow(intent="quick_order_reservation", known_slots=selected_slots)
+
+    assert next_state is not None
+    assert next_state.flow_step == "show_schedule"
+    assert "store" not in next_state.missing_slots
+
+
+def test_purchase_store_ui_action_accepts_template_slot_aliases_without_entity_metadata() -> None:
+    transition = transition_current_flow(
+        user_text="선택",
+        router_evidence={
+            "domain": "transaction",
+            "intent": "quick_order_reservation",
+            "execution_plan": ["transaction:quick_order_reservation:slot_fill:store"],
+            "is_slot_fill": True,
+            "filled_slot": "store",
+        },
+        existing_slots=ConversationSlots(
+            availability_context={
+                "active_flow_context": {
+                    "flow_type": "purchase",
+                    "status": "active",
+                    "flow_step": "quantity_selected",
+                    "product": {
+                        "goods_no": "G000000309783",
+                        "product_name": "Ventus S2 AS",
+                        "tire_size": "245/45R19",
+                        "ord_qty": 2,
+                    },
+                    "intent": {"pending_intent": "order", "goal_type": "place_order"},
+                }
+            }
+        ),
+        extracted_slots=ConversationSlots(),
+        ui_action={
+            "action_type": "select_store",
+            "selection_source": "location_template",
+            "slots": {
+                "shopId": "F00777",
+                "shopName": "T-Station Hannam",
+                "goodsNo": "G000000309783",
+                "ordQty": 2,
+            },
+        },
+        resume_source="validated_ui_action_slot_fill:store",
+    )
+
+    assert transition.metadata["selected_store_resolved"] is True
+    active_context = transition.flow_transition["active_flow_context"]
+    assert active_context["flow_step"] == "store_selected"
+    assert active_context["product"]["goods_no"] == "G000000309783"
+    assert active_context["product"]["ord_qty"] == 2
+    assert active_context["store"]["shop_id"] == "F00777"
+
+    selected_slots = selected_store_slots_from_active_flow_context(
+        active_context,
+        allowed_flow_types=frozenset({"purchase"}),
+    )
+    next_state = resolve_purchase_order_flow(intent="quick_order_reservation", known_slots=selected_slots)
+
+    assert next_state is not None
+    assert next_state.flow_step == "show_schedule"
+    assert "store" not in next_state.missing_slots
 
 
 def test_pending_purchase_drops_action_label_residue_product_identity() -> None:

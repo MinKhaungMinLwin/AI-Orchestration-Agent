@@ -59,6 +59,7 @@ from services.tstation.policies.discovery_intent_policy import (
     plan_discovery_tools,
 )
 from services.tstation.policies.discovery_response_policy import decide_discovery_response
+from services.tstation.policies.vehicle_category_catalog import match_vehicle_model_category
 from services.tstation.policies.recommendation_scenario_catalog import (
     recommendation_scenario_from_text,
     recommendation_scenario_metadata,
@@ -199,6 +200,8 @@ from services.tstation.policies.coupon_query_gate import (
 )
 from services.tstation.policies.contract_required_tool_candidate import (
     _contract_read_through_known_slots,
+    _contract_required_selected_store_schedule_tool_input,  # noqa: F401
+    _contract_required_stock_inventory_selected_store_tool_input,  # noqa: F401
     _contract_required_tool_candidate,  # noqa: F401
     _is_contract_required_selected_store_schedule,
     _is_contract_required_stock_inventory_selected_store,
@@ -12605,8 +12608,6 @@ def _comparison_query_metric_phrase(compare_metric: str) -> str:
 def _comparison_context_values_from_event(event: dict | None) -> dict[str, Any]:
     if not isinstance(event, dict):
         return {}
-    if str(event.get("assistant_response_source") or "") != "code_product_compare_resolver":
-        return {}
     data = event.get("data")
     if not isinstance(data, dict):
         return {}
@@ -12615,6 +12616,15 @@ def _comparison_context_values_from_event(event: dict | None) -> dict[str, Any]:
         return {}
     response_shape_key = str(metadata.get("response_shape_key") or "").strip()
     if response_shape_key not in {"metric_comparison_summary", "grade_comparison_summary"}:
+        return {}
+    assistant_response_source = str(event.get("assistant_response_source") or "")
+    contract_intent = str(
+        metadata.get("actual_contract_intent")
+        or metadata.get("contract_intent")
+        or event.get("contract_intent")
+        or ""
+    ).strip()
+    if assistant_response_source not in {"code_product_compare_resolver", "code_mapper"} and contract_intent != "product_comparison":
         return {}
     compare_metric = str(metadata.get("compareMetric") or metadata.get("compare_metric") or "detail").strip()
     if compare_metric not in _COMPARISON_METRICS:
@@ -12625,9 +12635,30 @@ def _comparison_context_values_from_event(event: dict | None) -> dict[str, Any]:
     names = [str(name).strip() for name in product_names if str(name or "").strip()][:2]
     if len(names) < 2:
         return {}
+    resolved_products = metadata.get("resolvedProducts") or metadata.get("resolved_products")
+    product_candidates: list[dict[str, Any]] = []
+    if isinstance(resolved_products, (list, tuple)):
+        for product in resolved_products[:4]:
+            if not isinstance(product, Mapping):
+                continue
+            product_name = str(product.get("productName") or product.get("product_name") or "").strip()
+            goods_no = str(product.get("goodsNo") or product.get("goods_no") or "").strip()
+            tire_size = normalize_tire_size(str(product.get("tireSize") or product.get("tire_size") or ""))
+            candidate = {
+                key: value
+                for key, value in {
+                    "product_name": product_name,
+                    "goods_no": goods_no,
+                    "tire_size": tire_size,
+                }.items()
+                if value
+            }
+            if candidate:
+                product_candidates.append(candidate)
     return {
         "comparison_context": {
             "product_names": names,
+            **({"product_candidates": product_candidates} if len(product_candidates) >= 2 else {}),
             "compare_metric": compare_metric,
             "response_shape_key": response_shape_key,
             "comparison_followup_intent": str(metadata.get("comparison_followup_intent") or "none"),
@@ -13661,11 +13692,13 @@ def _build_product_comparison_event(
             "requestedName": requested_product_names[0] or left_name,
             "goodsNo": str(left_row.get("goods_no") or "").strip(),
             "productName": left_name,
+            "tireSize": normalize_tire_size(str(left_row.get("tire_size_1") or left_row.get("tire_size") or "")),
         },
         {
             "requestedName": requested_product_names[1] or right_name,
             "goodsNo": str(right_row.get("goods_no") or "").strip(),
             "productName": right_name,
+            "tireSize": normalize_tire_size(str(right_row.get("tire_size_1") or right_row.get("tire_size") or "")),
         },
     ]
 
@@ -14138,7 +14171,23 @@ _BARE_PRODUCT_SEARCH_BLOCK_RE = re.compile(
 _BARE_PRODUCT_SEARCH_ALLOW_RE = re.compile(r"\b(search|find|show)\b|검색|찾아|보여|알려", re.IGNORECASE)
 _SIZED_PRODUCT_SEARCH_SIZE_RE = re.compile(r"\b\d{3}\s*/?\s*\d{2}\s*R?\s*\d{2}\b", re.IGNORECASE)
 _PRODUCT_QUERY_QUANTITY_RE = re.compile(r"\b(\d{1,2})\s*(?:개|본|짝)\b")
-_SIZED_PRODUCT_KEYWORD_STOPWORDS = {"타이어", "상품", "제품", "검색", "찾아", "찾기", "보여", "알려", "추천"}
+_SIZED_PRODUCT_KEYWORD_STOPWORDS = {
+    "타이어",
+    "상품",
+    "제품",
+    "검색",
+    "찾아",
+    "찾기",
+    "보여",
+    "알려",
+    "추천",
+    "하기",
+    "진행",
+}
+_TRANSACTION_CTA_LABEL_ONLY_RE = re.compile(
+    r"^\s*(?:구매\s*하기|주문\s*하기|결제\s*하기|바로\s*구매|바로\s*주문)\s*$",
+    re.IGNORECASE,
+)
 _FOLLOWUP_PRODUCT_REFERENCE_RE = re.compile(
     r"두\s*개\s*다|두개다|둘\s*다|둘다|둘\s*모두|세\s*개\s*다|세개다|셋\s*다|셋다|셋\s*모두|"
     r"두\s*상품|세\s*상품|위\s*상품들?|이\s*상품들?|각각",
@@ -14214,6 +14263,8 @@ def _has_sized_product_name_hint(user_text: str) -> bool:
     slot clearing we need the opposite: detect that the current order turn names
     a new product even when it also says "구매".
     """
+    if _TRANSACTION_CTA_LABEL_ONLY_RE.fullmatch(str(user_text or "").strip()):
+        return False
     keyword = _fallback_sized_product_keyword(user_text)
     if not keyword:
         return False
@@ -14242,6 +14293,8 @@ def _transaction_product_name_candidate_from_text(user_text: str) -> str:
     """
     text = str(user_text or "").strip()
     if not text:
+        return ""
+    if _TRANSACTION_CTA_LABEL_ONLY_RE.fullmatch(text):
         return ""
     if not _SIZED_PRODUCT_TRANSACTION_HINT_STOP_RE.search(text):
         return ""
@@ -18893,8 +18946,8 @@ def _build_discovery_policy_context(
                         key == "vehicle_category"
                         and context_frame.entities.get("vehicle_category_source") == "model_inference"
                     ):
-                        # A car model named in a PAST turn must not re-constrain the
-                        # current turn — stale-vehicle skip logic owns that decision.
+                        # A car model named in a past turn must not re-constrain the
+                        # current turn; stale-vehicle skip logic owns that decision.
                         continue
                     merged_entities[key] = context_frame.entities[key]
                 if merged_entities != discovery_frame.entities:
@@ -21860,8 +21913,13 @@ def _infer_followup_recommendation_context(messages: list[dict], last_user_text:
     # For vehicle-card picks this also avoids inferring from listCar text.
     user_blob = "\n".join(content for role, content in ordered_messages if role == "user")
     user_matches = _find_context_matches(user_blob)
+    # A car model named by the user in a prior turn (e.g. "팰리세이드 추천") carries a
+    # vehicle_type even when no explicit category keyword matched. Reuse the catalog
+    # owner layer so the size-only follow-up keeps that filter — do NOT add a new
+    # regex here.
+    model_match = match_vehicle_model_category(user_blob)
     matches = user_matches
-    if not matches:
+    if not matches and model_match is None:
         return None
 
     labels: list[str] = []
@@ -21874,6 +21932,12 @@ def _infer_followup_recommendation_context(messages: list[dict], last_user_text:
             rcmd_type = candidate_rcmd_type
         if vehicle_type is None and candidate_vehicle_type:
             vehicle_type = candidate_vehicle_type
+    if model_match is not None:
+        model_label = f"{model_match.model} 차량용"
+        if model_label not in labels:
+            labels.append(model_label)
+        if vehicle_type is None:
+            vehicle_type = model_match.category
 
     lines = [
         "## 후속 추천 조건",
@@ -38488,6 +38552,7 @@ class TStationChatServiceV2:
                 if _augment_recent_product_set_ranking_metadata(event, user_query):
                     logger.info("[RECENT_PRODUCT_SET] augmented ranking response metadata")
                 # Buffer data event — yield after QC so assistantResponse is always verified
+                _stage_comparison_context_slots(event)
                 buffered_data_events.append(event)
                 continue
 
@@ -39263,4 +39328,3 @@ class TStationChatServiceV2:
 
         yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
-

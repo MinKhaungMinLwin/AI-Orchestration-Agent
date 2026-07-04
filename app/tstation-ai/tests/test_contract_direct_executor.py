@@ -215,6 +215,27 @@ def test_direct_path_blocks_complex_comparison_and_forbidden_tool() -> None:
     assert conflict.fallback_reason == "contract_tool_conflict"
 
 
+def test_direct_path_allows_product_comparison_summary_contract() -> None:
+    contract = TurnContract(
+        domain="discovery",
+        intent="product_comparison",
+        allowed_tools=("search_product_summary_tool", "get_product_description_tool"),
+        forbidden_tools=("search_product_tool",),
+        preferred_tool="search_product_summary_tool",
+        response_decision={"template": "quickReply", "metadata": {"response_shape_key": "metric_comparison_summary"}},
+    )
+
+    decision = evaluate_contract_direct_path(
+        turn_contract=contract,
+        router_evidence=_evidence(primary_action="compare"),
+        user_text="kinergy EX, Ventus S2 AS 비교해줘",
+    )
+
+    assert decision.eligible is True
+    assert decision.tool == "search_product_summary_tool"
+    assert decision.template == "quickReply"
+
+
 def test_direct_path_allows_location_store_search_and_coupon_lookup() -> None:
     location_contract = TurnContract(
         domain="transaction",

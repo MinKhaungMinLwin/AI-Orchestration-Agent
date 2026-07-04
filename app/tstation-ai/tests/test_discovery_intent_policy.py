@@ -577,7 +577,7 @@ def test_unsized_product_comparison_uses_product_summary_tool() -> None:
     assert frame.entities["product_names"] == ("Kinergy EX", "Ventus S2 AS")
     assert frame.entities["tire_size"] is None
     assert plan.preferred_tool == "search_product_summary_tool"
-    assert plan.tool_args_patch == {}
+    assert plan.tool_args_patch == {"keywords": ["Kinergy EX", "Ventus S2 AS"], "limit": 5, "brand_cd": "HK"}
     assert "search_product_tool" in plan.forbidden_tools
 
 
@@ -590,7 +590,11 @@ def test_tc021_product_mileage_compare_uses_metric_not_card_first() -> None:
     assert frame.entities["compare_metric"] == "mileage"
     assert frame.entities["product_names"] == ("Ventus air S", "Dynapro HPX", "Optimo", "Michelin CC2")
     assert plan.preferred_tool == "search_product_summary_tool"
-    assert plan.tool_args_patch == {}
+    assert plan.tool_args_patch == {
+        "keywords": ["Ventus air S", "Dynapro HPX", "Optimo", "Michelin CC2"],
+        "limit": 5,
+        "brand_cd": "MC",
+    }
     assert "search_product_tool" in plan.forbidden_tools
 
 
@@ -780,7 +784,7 @@ def test_tc026_latest_compare_uses_registration_metric() -> None:
     assert frame.entities["compare_metric"] == "release"
     assert frame.entities["product_names"] == ("Dynapro HPX", "Dynapro HP3")
     assert plan.preferred_tool == "search_product_summary_tool"
-    assert plan.tool_args_patch == {}
+    assert plan.tool_args_patch == {"keywords": ["Dynapro HPX", "Dynapro HP3"], "limit": 5, "brand_cd": "HK"}
     assert "search_product_tool" in plan.forbidden_tools
 
 
@@ -878,6 +882,18 @@ def test_tc216_kinergy_ex_and_ventus_air_s_are_recognized_for_grade_compare() ->
     assert frame.entities["product_names"] == ("Ventus air S", "Kinergy EX")
 
 
+def test_car_model_name_infers_vehicle_category_suv() -> None:
+    frame = build_discovery_intent_frame("팰리세이드 타이어 추천해줘")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.intent == "product_recommendation"
+    assert frame.entities["vehicle_category"] == "suv"
+    assert frame.entities["vehicle_model_name"] == "팰리세이드"
+    assert frame.entities["vehicle_category_source"] == "model_inference"
+    assert plan.preferred_tool == "get_products_recommendations_tool"
+    assert plan.tool_args_patch.get("vehicle_type") == "suv"
+
+
 def test_model_name_infers_suv_vehicle_type_for_recommendation() -> None:
     frame = build_discovery_intent_frame("G바겐 타이어 추천해줘")
     plan = plan_discovery_tools(frame)
@@ -889,6 +905,23 @@ def test_model_name_infers_suv_vehicle_type_for_recommendation() -> None:
     assert plan.preferred_tool == "get_products_recommendations_tool"
     assert plan.tool_args_patch["vehicle_type"] == "suv"
     assert plan.tool_args_patch.get("rcmd_type") != "ev"
+
+
+def test_explicit_category_keyword_wins_over_model_inference() -> None:
+    frame = build_discovery_intent_frame("SUV 타이어 추천")
+
+    assert frame.entities["vehicle_category"] == "suv"
+    # keyword-driven category is explicit, so no model_inference source marker
+    assert "vehicle_category_source" not in frame.entities
+
+
+def test_car_model_plus_scenario_keeps_both() -> None:
+    frame = build_discovery_intent_frame("팰리세이드 조용한 타이어 추천")
+
+    assert frame.entities["vehicle_category"] == "suv"
+    assert frame.entities["vehicle_category_source"] == "model_inference"
+    # "조용한" sits outside the model name, so quiet scenario still fires
+    assert frame.entities.get("quiet_focus") is True
 
 
 def test_model_name_infers_passenger_vehicle_type_for_recommendation() -> None:
@@ -930,9 +963,26 @@ def test_scenario_keyword_inside_model_name_is_not_scenario_intent() -> None:
     plan = plan_discovery_tools(frame)
 
     assert frame.entities["vehicle_category"] == "truck_van"
-    assert frame.entities.get("performance") is None
+    # "스포츠" belongs to the model name (렉스턴 스포츠) — not a performance intent
+    assert "performance" not in frame.entities
     assert plan.tool_args_patch.get("rcmd_type") != "performance"
     assert plan.tool_args_patch["vehicle_type"] == "truck_van"
+
+
+def test_ev_only_model_routes_through_catalog() -> None:
+    frame = build_discovery_intent_frame("모델Y 타이어 추천")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.entities["vehicle_category"] == "ev"
+    assert frame.entities["vehicle_category_source"] == "model_inference"
+    assert plan.tool_args_patch.get("vehicle_type") == "ev"
+
+
+def test_ev_keyword_still_maps_to_ev_without_model_inference() -> None:
+    frame = build_discovery_intent_frame("전기차 타이어 추천")
+
+    assert frame.entities["vehicle_category"] == "ev"
+    assert "vehicle_category_source" not in frame.entities
 
 
 def test_scenario_keyword_outside_model_name_still_applies() -> None:
