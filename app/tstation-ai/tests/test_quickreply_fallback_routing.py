@@ -35930,8 +35930,9 @@ def test_recommendation_product_pick_defaults_to_product_description_contract() 
             known_slots={},
         )
     )
-    assert detail_plan.allowed_tools == ("search_product_tool", "get_product_description_tool")
-    assert detail_plan.preferred_tool == "search_product_tool"
+    assert detail_plan.allowed_tools == ("search_product_summary_tool",)
+    assert detail_plan.preferred_tool == "search_product_summary_tool"
+    assert "search_product_tool" in detail_plan.forbidden_tools
 
 
 def test_recommendation_turn_contract_ignores_missing_product_reference_guard() -> None:
@@ -37000,7 +37001,7 @@ def test_compare_quickreply_contract_gate_accepts_metric_summary_alias() -> None
         intent="product_comparison",
         template="quickReply",
         source="code_product_comparison",
-        required_tools=("search_product_tool", "get_product_description_tool"),
+        required_tools=("search_product_summary_tool", "get_product_description_tool"),
         allowed_intents=("product_compare_tool", "metric_comparison_summary", "grade_comparison_summary"),
     )
 

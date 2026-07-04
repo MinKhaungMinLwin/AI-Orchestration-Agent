@@ -32415,20 +32415,17 @@ class TStationChatServiceV2:
                 intent="product_comparison",
                 template="quickReply",
                 source="code_product_comparison",
-                required_tools=("search_product_tool", "get_product_description_tool"),
+                required_tools=("search_product_summary_tool",),
                 allowed_intents=("product_compare_tool", "metric_comparison_summary", "grade_comparison_summary"),
             )
             if not gate_allowed:
                 logger.info("[CODE_FAST_PATH_GATE] blocked product_comparison reason=%s", gate_reason)
                 return None
-            frame = build_discovery_intent_frame(comparison_query)
-            tire_size = _product_comparison_search_tire_size(comparison_query, frame, initial_slots)
 
             emitted_events: list[dict] = []
             from services.tstation.agents.b_discovery_agent.tools import (
-                get_product_description_tool as _get_product_description_tool,
+                search_product_summary_tool as _search_product_summary_tool,
             )
-            from services.tstation.agents.b_discovery_agent.tools import search_product_tool as _search_product_tool
 
             product_rows: list[tuple[str, dict | None]] = []
             for product_name in product_names[:2]:
@@ -32438,27 +32435,25 @@ class TStationChatServiceV2:
                 matched_keyword = ""
                 for idx, keyword_candidate in enumerate(keyword_candidates):
                     tool_input = {"keyword": keyword_candidate, "limit": 10}
-                    if tire_size:
-                        tool_input["size"] = tire_size
                     emitted_events.append({
                         "type": "status",
                         "status": "tool_start",
-                        "tool": "search_product_tool",
+                        "tool": "search_product_summary_tool",
                         "display_name": "상품 검색 중...",
                         "source_domain": "discovery",
                     })
                     try:
-                        raw_result = await asyncio.to_thread(_search_product_tool.invoke, tool_input)
+                        raw_result = await asyncio.to_thread(_search_product_summary_tool.invoke, tool_input)
                         search_result = _tool_result_dict(raw_result)
                     except Exception as exc:
-                        logger.exception("[GRADE_COMPARE] search_product_tool failed for %s", product_name)
+                        logger.exception("[GRADE_COMPARE] search_product_summary_tool failed for %s", product_name)
                         search_result = {
                             "status": "error",
                             "http_status": None,
                             "message": str(exc),
                             "data": {},
                         }
-                    _record_code_tool_result("search_product_tool", tool_input, search_result)
+                    _record_code_tool_result("search_product_summary_tool", tool_input, search_result)
                     emitted_events.append({
                         "type": "agent_flow",
                         "agent": "[Product Compatibility AF]",
@@ -32471,7 +32466,7 @@ class TStationChatServiceV2:
                         "input": tool_input,
                         "output": json.dumps(search_result, ensure_ascii=False),
                         "node": "tools",
-                        "tool": "search_product_tool",
+                        "tool": "search_product_summary_tool",
                         "source_domain": "discovery",
                     })
                     row = _pick_product_row_from_search_result(
@@ -32484,46 +32479,7 @@ class TStationChatServiceV2:
                     if row is not None:
                         matched_keyword = keyword_candidate
                         break
-                if row and row.get("goods_no"):
-                    detail_input = {"goods_no": row["goods_no"]}
-                    emitted_events.append({
-                        "type": "status",
-                        "status": "tool_start",
-                        "tool": "get_product_description_tool",
-                        "display_name": "상품 상세 정보 조회 중...",
-                        "source_domain": "discovery",
-                    })
-                    try:
-                        raw_detail = await asyncio.to_thread(_get_product_description_tool.invoke, detail_input)
-                        detail_result = _tool_result_dict(raw_detail)
-                    except Exception as exc:
-                        logger.exception("[PRODUCT_COMPARE] get_product_description_tool failed for %s", row["goods_no"])
-                        detail_result = {
-                            "status": "error",
-                            "http_status": None,
-                            "message": str(exc),
-                            "data": {},
-                        }
-                    _record_code_tool_result("get_product_description_tool", detail_input, detail_result)
-                    emitted_events.append({
-                        "type": "agent_flow",
-                        "agent": "[Product Description AF]",
-                        "agent_class": "Discovery Agent",
-                        "status": detail_result.get("status", "success"),
-                        "source_domain": "discovery",
-                    })
-                    emitted_events.append({
-                        "type": "tool",
-                        "input": detail_input,
-                        "output": json.dumps(detail_result, ensure_ascii=False),
-                        "node": "tools",
-                        "tool": "get_product_description_tool",
-                        "source_domain": "discovery",
-                    })
-                    detail_data = _unwrap_tool_data(detail_result)
-                    if isinstance(detail_data, dict) and detail_data:
-                        row = {**row, **detail_data}
-                elif search_result is not None:
+                if row is None and search_result is not None:
                     logger.info(
                         "[PRODUCT_COMPARE] unresolved comparison target after keyword fallbacks: %s candidates=%s matched_keyword=%s",
                         product_name,
@@ -32542,7 +32498,7 @@ class TStationChatServiceV2:
                 turn_contract=turn_contract,
                 intent="product_comparison",
                 source="code_product_comparison",
-                required_tools=("search_product_tool", "get_product_description_tool"),
+                required_tools=("search_product_summary_tool",),
                 allowed_intents=("product_compare_tool", "metric_comparison_summary", "grade_comparison_summary"),
             )
             return (emitted_events, finalized_event) if finalized_event is not None else None
