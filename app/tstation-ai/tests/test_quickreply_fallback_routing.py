@@ -304,6 +304,7 @@ from services.tstation.chat import (
     _build_recommendation_contract_fallback_event,
     _annotate_direct_code_fast_path_event,
     _direct_code_fast_path_contract_gate,
+    _is_quick_order_execute_contract_ready,
     _finalize_coerced_template_event,
     _finalize_direct_code_event,
     _choose_quickreply_fallback,
@@ -27960,6 +27961,38 @@ def test_order_snapshot_commit_can_make_redis_slots_sufficient_without_preorder_
     assert frame.missing_slots == ()
 
 
+def test_english_order_cta_confirms_ready_preorder() -> None:
+    latest_preorder = {
+        "template": "preOrder",
+        "data": {
+            "isReadyToOrder": True,
+            "orderInfo": {
+                "product": "Ventus S2 AS 215/55R17",
+                "quantity": 4,
+                "storeName": "T-Station Pangyo Branch",
+                "bookingDateTime": "July 7, 2026 (Tue) 16:00",
+                "paymentAmount": 125400,
+            },
+            "metadata": {"goodsId": "G000000310119", "storeId": "F00721"},
+        },
+    }
+    known_slots = {
+        "goods_no": "G000000310119",
+        "tire_size": "215/55R17",
+        "ord_qty": 4,
+        "shop_id": "F00721",
+        "requested_cal_day": "20260707",
+        "rsv_hour": "16",
+        "pending_intent": "order",
+        "goal_type": "place_order",
+    }
+
+    frame = build_transaction_intent_frame("Order", known_slots=known_slots)
+
+    assert _is_preorder_confirmation_reply("Order", latest_preorder) is True
+    assert frame.intent == "quick_order_execute"
+    assert frame.missing_slots == ()
+
 def test_non_self_vehicle_plate_owner_lookup_stages_plate_only_until_owner_name() -> None:
     assert _non_self_vehicle_plate_owner_lookup_plate("내차말고 29조3344") == "29조3344"
     assert _non_self_vehicle_plate_owner_lookup_plate("내차말고 29조3344 홍길동") is None
@@ -37019,6 +37052,58 @@ def test_turn_contract_promotes_planner_quick_order_execute_over_code_reservatio
     assert {"field": "intent", "code_frame": "quick_order_reservation", "planner": "quick_order_execute"} in [
         dict(item) for item in contract.contract_drift
     ]
+
+@pytest.mark.parametrize("planner_intent", ["order_confirm_execution", "order_create", "order_place"])
+def test_turn_contract_promotes_order_confirmation_aliases_to_quick_order_execute(planner_intent: str) -> None:
+    frame = IntentFrame(
+        domain=PolicyDomain.TRANSACTION,
+        intent="quick_order_execute",
+        sub_intent="confirm",
+        known_slots={
+            "goods_no": "G000000317682",
+            "tire_size": "235/55R19",
+            "ord_qty": 2,
+            "shop_id": "F00721",
+            "shop_name": "T-Station Pangyo Branch",
+            "requested_cal_day": "20260623",
+            "rsv_hour": "17",
+            "payment_amount": 314400,
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text="Order",
+        known_slots=dict(frame.known_slots),
+    )
+    routing_result = MultiAgentDomain(
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        reason="ready preorder confirmation",
+        execution_plan=[f"transaction:{planner_intent}"],
+        user_behavior="confirms a ready preOrder card",
+        flow="preorder_confirmation_execute",
+        claim_check_type="none",
+        complaint_scope="none",
+        planner_confidence=0.95,
+        agent_prompt_profile="full",
+    )
+
+    contract = build_turn_contract(
+        user_text="Order",
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=response_decision,
+        routing_result=routing_result,
+    )
+
+    assert contract.intent == "quick_order_execute"
+    assert contract.action_mode == "purchase_continuation"
+    assert contract.response_decision["metadata"]["response_shape_key"] == "quick_order_execute"
+    assert "quick_order_tool" in contract.allowed_tools
+    assert "quick_order_tool" not in contract.forbidden_tools
+    assert _is_quick_order_execute_contract_ready(contract) is True
 
 
 def test_quick_order_execute_blocks_tool_when_required_slots_missing() -> None:

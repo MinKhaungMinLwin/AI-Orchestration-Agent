@@ -46,6 +46,12 @@ _HIGH_RISK_DOMAINS = frozenset({"transaction"})
 _HARD_REQUIRED_SLOT_GUARD_INTENTS = frozenset({
     "quick_order_execute",
 })
+_QUICK_ORDER_EXECUTE_PLANNER_INTENTS = frozenset({
+    "quick_order_execute",
+    "order_confirm_execution",
+    "order_create",
+    "order_place",
+})
 _REQUIRED_SLOT_BLOCK_TEMPLATES = frozenset({
     "datepick",
     "preOrder",
@@ -1112,7 +1118,7 @@ def build_turn_contract(
                 else "product_event_lookup"
             )
         known_slots["goal_type"] = intent
-    if planner_intent == "quick_order_execute" and _has_quick_order_execute_slots(known_slots):
+    if planner_intent in _QUICK_ORDER_EXECUTE_PLANNER_INTENTS and _has_quick_order_execute_slots(known_slots):
         intent = "quick_order_execute"
     if code_intent == "order_cancel_status_lookup":
         intent = "order_cancel_status_lookup"
@@ -1125,6 +1131,8 @@ def build_turn_contract(
     intent = _current_turn_stock_owner_intent(intent, known_slots)
     if intent == "stock_store_search":
         domain = "transaction"
+    if intent == "quick_order_execute":
+        action_mode = "purchase_continuation"
     action_required_slots = tool_plan.required_slots if tool_plan is not None else ()
     preferred_tool = str(tool_plan.preferred_tool or "").strip() if tool_plan is not None else ""
     tool_args_patch = {
@@ -1222,7 +1230,7 @@ def build_turn_contract(
             tuple(tool for tool in forbidden_tools if tool not in router_allowed_tools),
             router_forbidden_tools,
         )
-    if planner_intent == "quick_order_execute" and _has_quick_order_execute_slots(known_slots):
+    if planner_intent in _QUICK_ORDER_EXECUTE_PLANNER_INTENTS and _has_quick_order_execute_slots(known_slots):
         allowed_tools = _merge_tuple(allowed_tools, ("quick_order_tool",))
         forbidden_tools = tuple(tool for tool in forbidden_tools if tool != "quick_order_tool")
     if selected_store_schedule_continuation:
