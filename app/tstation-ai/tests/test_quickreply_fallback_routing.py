@@ -2574,6 +2574,21 @@ def test_router_prompt_mentions_oe_re_as_fresh_discovery_flow() -> None:
     assert "2454518 사이즈 OE 타이어 있어?" in multi_prompt
 
 
+def test_router_prompt_uses_recent_interaction_summary_as_reference_only() -> None:
+    multi_prompt = prompt_router_multi()
+    # The directive that turns injected context into behavior must exist.
+    assert "recent_interaction_summary" in multi_prompt
+    assert "REFERENCE-ONLY" in multi_prompt
+    assert "never authorizes tool execution" in multi_prompt
+    # Guardrails: only elliptical follow-ups, never override a clear request or slot-fill.
+    assert "elliptical / ambiguous follow-up" in multi_prompt
+    assert "Do NOT apply it when the current message is already a clear standalone request" in multi_prompt
+    assert "Do NOT let it override ROUTER SLOT-FILL CONTEXT" in multi_prompt
+    # The concrete coupon -> promotion continuation example is anchored for the small model.
+    assert "1월 키너지 EX 특가 프로모션은?" in multi_prompt
+    assert "applicable-products lookup" in multi_prompt
+
+
 def test_competitor_counterpart_guidance_does_not_hijack_plain_competitor_search() -> None:
     frame = build_discovery_intent_frame("미쉐린 크로스클라이밋2 검색해줘")
     plan = plan_discovery_tools(frame)

@@ -2983,6 +2983,23 @@ Rules:
 - If the current user asks a new support/FAQ/policy/complaint question, set is_slot_fill=false, continue_flow=false,
   new_intent=true and route by the current intent even if current_flow exists.
 
+If the compact router context includes "recent_interaction_summary", use it as REFERENCE-ONLY evidence to
+understand the current message. It summarizes the PREVIOUS answered turn (last_task, last_subject,
+last_result_type, last_user_goal). It is language-understanding context only; it never authorizes tool execution.
+Rules:
+- Use it ONLY when the current message is an elliptical / ambiguous follow-up: it just names a new subject
+  ("<X>는?", "그럼 <X>는?", "<X>도?") or omits the target verb, so it cannot be classified on its own.
+  Then interpret the current message as CONTINUING last_task with the new subject, and set
+  domains/execution_plan to match last_task (not the surface keywords of the new subject).
+- Do NOT apply it when the current message is already a clear standalone request (e.g. "타이어 추천해줘",
+  "매장 찾아줘", a new support/FAQ/policy/complaint question). In that case ignore recent_interaction_summary.
+- Do NOT let it override ROUTER SLOT-FILL CONTEXT: if the current message is a valid slot-fill for the active
+  current_flow, prefer the slot-fill rules above; only use recent_interaction_summary when no valid slot-fill applies.
+- Example: last_task="applicable_products_lookup", last_subject="쿠폰 뱃지 테스트", then current
+  "1월 키너지 EX 특가 프로모션은?" => the user wants the products this promotion applies to (continue
+  applicable-products lookup for benefit "1월 키너지 EX 특가 프로모션"), NOT a generic event list. Fill
+  entity_candidates.benefit.name="1월 키너지 EX 특가 프로모션".
+
 6. claim_check_type — for product-related claim verification:
    - "none": normal product description/search/recommendation, e.g. "벤투스 에어S 설명해줘"
    - "verifiable_product_attribute": asks whether a product data attribute is true/available, e.g. "벤투스 에어S 최저소음 라벨 맞아?"
