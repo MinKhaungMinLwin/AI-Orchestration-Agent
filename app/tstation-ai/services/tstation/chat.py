@@ -31930,8 +31930,6 @@ class TStationChatServiceV2:
         async def _resolve_maintenance_timing_dday_with_code() -> tuple[list[dict], dict] | None:
             if str(getattr(turn_contract, "intent", "") or "") != "maintenance_timing_guidance":
                 return None
-            if _requested_maintenance_focus(user_query) is None:
-                return None
             known_slots = getattr(turn_contract, "known_slots", {}) if turn_contract is not None else {}
             selected_seq = ""
             if isinstance(known_slots, Mapping):
@@ -31942,6 +31940,8 @@ class TStationChatServiceV2:
                     or known_slots.get("mbrCarUnifNo")
                     or ""
                 ).strip()
+            if _requested_maintenance_focus(user_query) is None and not selected_seq:
+                return None
             tool_name = "get_maintenance_dday_tool"
             gate_allowed, gate_reason = _direct_code_fast_path_contract_gate(
                 turn_contract=turn_contract,
@@ -35394,7 +35394,7 @@ class TStationChatServiceV2:
             )
             return (emitted_events, finalized_event) if finalized_event is not None else None
 
-        async def _auto_continue_selected_vehicle(
+        async def _auto_continue_selected_vPlehicle(
             listcar_event: dict,
         ) -> tuple[list[dict], dict | None]:
             nonlocal pending_slots
