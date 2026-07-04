@@ -18016,7 +18016,8 @@ def test_recommendation_listcar_flow_delta_stores_active_recommendation_flow() -
     )
     active_flow = commit_result.state.to_active_flow_context()
 
-    assert active_flow["flow_type"] == "recommendation"
+    assert active_flow["flow_type"] == "commerce"
+    assert active_flow["intent"]["sub_flow_type"] == "recommendation"
     assert active_flow["flow_step"] == "select_vehicle"
     assert active_flow["intent"]["pending_intent"] == "product_recommendation"
     assert active_flow["intent"]["goal_type"] == "recommend_tire"
@@ -18138,7 +18139,8 @@ def test_vehicle_selection_updates_active_parent_purchase_context() -> None:
     )
     active_context = result.state.to_active_flow_context()
 
-    assert active_context["flow_type"] == "purchase"
+    assert active_context["flow_type"] == "commerce"
+    assert active_context["intent"]["sub_flow_type"] == "purchase"
     assert active_context["flow_step"] == "vehicle_selected"
     assert active_context["product"]["tire_size"] == "235/55R19"
     assert active_context["product"]["ord_qty"] == 4
@@ -28808,7 +28810,8 @@ def test_outer_search_product_staging_commits_purchase_flow_with_product_price_c
     pending_context = _stage_pending_order_context(updated, source="outer_tool:search_product_tool")
 
     active_context = updated.availability_context["active_flow_context"]
-    assert active_context["flow_type"] == "purchase"
+    assert active_context["flow_type"] == "commerce"
+    assert active_context["intent"]["sub_flow_type"] == "purchase"
     assert active_context["product"]["goods_no"] == "G000000310126"
     assert active_context["product"]["product_name"] == "벤투스 S2 AS"
     assert active_context["product"]["tire_size"] == "245/45R19"
