@@ -18947,6 +18947,20 @@ def _build_discovery_policy_context(
             discovery_tool_patch = {"size": discovery_tool_plan.tool_args_patch["size"]}
         else:
             discovery_tool_patch = {}
+        if (
+            discovery_tool_patch.get("rcmd_type") == "tstation"
+            and not discovery_frame.entities.get("general_tire_preference")
+            and not any(
+                discovery_tool_patch.get(key) not in (None, "", [], {})
+                for key in ("vehicle_type", "season_nm", "pfm_nm", "prc_grd", "sort_by")
+            )
+        ):
+            # `plan_discovery_tools` defaults rcmd_type to "tstation" only when the
+            # current turn carried no scenario signal at all. Drop that null default
+            # here so an active/resumed recommendation flow (below) or the absence of
+            # any scenario can determine the real patch, instead of it winning by
+            # `setdefault` never getting a chance to fire.
+            discovery_tool_patch.pop("rcmd_type", None)
         if vehicle_refinement_patch:
             for key, value in vehicle_refinement_patch.items():
                 if value not in (None, ""):
