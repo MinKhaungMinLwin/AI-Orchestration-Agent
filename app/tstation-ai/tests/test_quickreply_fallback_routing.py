@@ -189,8 +189,12 @@ from services.tstation.chat import (
     _mask_dormant_transaction_action_slots,
     _stage_dormant_transaction_context,
     _stage_pending_order_context,
+    _stage_purchase_flow_context_from_policy_plan,
     _start_active_purchase_flow_for_missing_product,
     _stage_unsized_purchase_order_context,
+    _pending_purchase_store_slot_fill_context,
+    _restore_pending_purchase_store_slot_fill_contract,
+    _apply_pending_purchase_store_slot_fill_context_to_known_slots,
     _stage_pending_product_context_from_search,
     _product_flow_values_from_resolved_search,
     _flow_type_from_confirmed_tool_slots,
@@ -6343,6 +6347,70 @@ def test_explicit_store_info_turn_clears_previous_map_store_context() -> None:
     assert slots.requested_cal_day is None
     assert slots.goal_type is None
 
+
+def test_pending_purchase_store_slot_fill_context_blocks_plain_store_cleanup() -> None:
+    slots = ConversationSlots(
+        shop_name="Pangyo Branch",
+        pending_product_name="Ventus S2 AS",
+        price_basis="price",
+        price_source_tool="selected_product_candidate",
+        availability_context={
+            "pending_order_context": {
+                "goods_no": "G000000310119",
+                "product_name": "Ventus S2 AS",
+                "tire_size": "215/55R17",
+                "ord_qty": 4,
+                "pending_intent": "order",
+                "goal_type": "place_order",
+                "awaiting_store_region": True,
+                "pending_step": "store_region_selection",
+            }
+        },
+    )
+
+    pending_context = _pending_purchase_store_slot_fill_context(slots, "T-Station Pangyo Branch")
+    routing_result = SimpleNamespace(intent="store_search", execution_plan=["transaction:store_search"])
+    restored = _restore_pending_purchase_store_slot_fill_contract(
+        routing_result,
+        {"intent": "store_search", "execution_plan": ["transaction:store_search"]},
+        pending_context,
+    )
+
+    assert pending_context["goods_no"] == "G000000310119"
+    assert pending_context["ord_qty"] == 4
+    assert routing_result.intent == "quick_order_reservation"
+    assert restored["intent"] == "quick_order_reservation"
+    assert restored["execution_plan"] == ["transaction:quick_order_reservation"]
+
+def test_pending_purchase_store_slot_fill_context_overrides_router_store_finder_slots() -> None:
+    pending_context = {
+        "goods_no": "G000000310119",
+        "product_name": "Ventus S2 AS",
+        "tire_size": "215/55R17",
+        "ord_qty": 4,
+        "pending_intent": "order",
+        "goal_type": "place_order",
+        "awaiting_store_region": True,
+        "pending_step": "store_region_selection",
+    }
+    router_store_slots = {
+        "goal_type": "store_finder",
+        "stock_check_mode": "inventory_only",
+        "router_transaction_intent": "store_selection",
+    }
+
+    known_slots = _apply_pending_purchase_store_slot_fill_context_to_known_slots(
+        router_store_slots,
+        pending_context,
+        "T-Station Pangyo Branch",
+    )
+    frame = build_transaction_intent_frame("T-Station Pangyo Branch", known_slots=known_slots)
+    tool_plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "quick_order_reservation"
+    assert frame.known_slots["goal_type"] == "place_order"
+    assert frame.known_slots["stock_check_mode"] == "preview"
+    assert tool_plan.preferred_tool == "transaction_store_preview_tool"
 
 def test_explicit_store_purchase_chain_is_not_treated_as_plain_store_info_cleanup() -> None:
     regex_slots = ConversationSlots.extract_from_user_text("판교점에서 벤투스 S2 AS 4개 구매하고 싶어")
@@ -18154,10 +18222,12 @@ def test_vehicle_selection_updates_active_parent_purchase_context() -> None:
 
 
 
-def test_vehicle_selection_parent_purchase_active_context_promotes_top_level_slots() -> None:
+def test_vehicle_selection_parent_purchase_context_stays_pending_during_recommendation() -> None:
     base_slots = ConversationSlots(
-        pending_intent="product_recommendation",
-        goal_type="recommend_tire",
+        tire_size="235/55R19",
+        car_no="61ê±°1836",
+        car_lnc_cd="W036269",
+        recommendation_context={"recommendation_scenario": "low_vibration"},
         availability_context={
             "pending_order_context": {
                 "ord_qty": 4,
@@ -18166,13 +18236,14 @@ def test_vehicle_selection_parent_purchase_active_context_promotes_top_level_slo
                 "goal_type": "place_order",
             },
             "active_flow_context": {
-                "flow_type": "purchase",
+                "flow_type": "recommendation",
                 "status": "active",
-                "flow_step": "ask_product",
+                "flow_step": "select_vehicle",
                 "intent": {
-                    "pending_intent": "order",
-                    "goal_type": "place_order",
+                    "pending_intent": "product_recommendation",
+                    "goal_type": "recommend_tire",
                 },
+                "recommendation": {"recommendation_scenario": "low_vibration"},
             },
         },
     )
@@ -18186,32 +18257,24 @@ def test_vehicle_selection_parent_purchase_active_context_promotes_top_level_slo
         current_slots=base_slots.model_dump(),
     )
 
-    committed_active_context = commit_flow_state(
-        base_slots.availability_context["active_flow_context"],
-        {
-            **base_slots.availability_context["pending_order_context"],
-            **patch,
-        },
+    pending_context, _metadata = chat_module._merge_pending_order_context(
+        base_slots.availability_context["pending_order_context"],
+        patch,
         source="active_recommendation_vehicle_selection:parent_purchase",
-        flow_type="purchase",
-        flow_step="vehicle_selected",
-        status="active",
-    ).state.to_active_flow_context()
-
-    promoted_slots = base_slots.apply_runtime_values(
-        _slot_runtime_values_from_active_flow_context(committed_active_context),
-        source="active_recommendation_vehicle_selection_parent_purchase_promotion",
     )
-    promoted_slots.availability_context = {
+    updated_slots = base_slots.model_copy()
+    updated_slots.availability_context = {
         **dict(base_slots.availability_context or {}),
-        "active_flow_context": committed_active_context,
+        "pending_order_context": pending_context,
     }
 
-    assert promoted_slots.pending_intent == "order"
-    assert promoted_slots.goal_type == "place_order"
-    assert promoted_slots.tire_size == "235/55R19"
-    assert promoted_slots.ord_qty == 4
-    assert promoted_slots.shop_name == "광교신도시점"
+    assert updated_slots.availability_context["pending_order_context"]["pending_intent"] == "order"
+    assert updated_slots.availability_context["pending_order_context"]["goal_type"] == "place_order"
+    assert updated_slots.availability_context["pending_order_context"]["tire_size"] == "235/55R19"
+    assert updated_slots.availability_context["pending_order_context"]["ord_qty"] == 4
+    assert updated_slots.availability_context["active_flow_context"]["flow_type"] == "recommendation"
+    assert updated_slots.pending_intent is None
+    assert updated_slots.goal_type is None
 
 
 def test_vehicle_selection_does_not_create_purchase_context_for_plain_recommendation() -> None:
@@ -18277,6 +18340,47 @@ def test_discovery_policy_context_resumes_recommendation_active_flow_without_rou
     assert patch["season_nm"] == "올웨더"
     assert patch["brand_cd"] == "HK"
     assert patch["allow_cross_brand_fill"] is False
+
+def test_discovery_policy_context_resumes_recommendation_active_flow_from_transaction_route() -> None:
+    active_flow_patch = recommendation_vehicle_selection_patch(
+        active_flow_context={
+            "flow_type": "recommendation",
+            "status": "active",
+            "flow_step": "select_vehicle",
+            "recommendation": {
+                "recommendation_scenario": "low_vibration",
+                "tool_args_patch": {"rcmd_type": "low_vibration"},
+            },
+        },
+        selected_vehicle_slots={
+            "car_no": "61ê±°1836",
+            "car_lnc_cd": "W036269",
+            "tire_size": "225/45R17",
+        },
+    )
+
+    patch, decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        last_user_text="61ê±°1836",
+        context_text="61ê±°1836",
+        tire_size="225/45R17",
+        recommendation_context=active_flow_patch["recommendation_context"],
+        active_flow_resume_patch=active_flow_patch,
+        routing_result=SimpleNamespace(
+            continue_flow=True,
+            execution_plan=["continue quick order reservation flow with the provided vehicle context"],
+            recommendation_scenario="none",
+        ),
+        pending_intent="product_recommendation",
+        goal_type="recommend_tire",
+    )
+
+    assert decision is not None
+    assert decision.template.value == "product"
+    assert decision.metadata["response_shape_key"] == "vehicle_based_recommendation_refinement"
+    assert patch["tire_size"] == "225/45R17"
+    assert patch["car_lnc_cd"] == "W036269"
+    assert patch["rcmd_type"] == "low_vibration"
 
 
 def test_contract_required_vehicle_recommendation_detects_only_recommendation_contract() -> None:
@@ -22047,6 +22151,70 @@ def test_direct_quantity_input_keeps_purchase_flow_and_moves_to_ask_store() -> N
     assert "store" in response.metadata["missing_slots"]
     assert contract.context_state == "resumed"
 
+
+def test_quantity_turn_stages_purchase_context_for_next_store_input() -> None:
+    frame = build_transaction_intent_frame(
+        "4개",
+        known_slots={
+            "goods_no": "G000000310119",
+            "tire_size": "215/55R17",
+            "product_name": "Ventus S2 AS",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "price_basis": "price",
+            "price_source_tool": "selected_product_candidate",
+            "payment_amount": 125400,
+        },
+    )
+    tool_plan = plan_transaction_tools(frame)
+    slots = ConversationSlots(
+        goods_no="G000000310119",
+        tire_size="215/55R17",
+        tire_model="Ventus S2 AS",
+        pending_product_name="Ventus S2 AS",
+        pending_intent="order",
+        goal_type="place_order",
+        price_basis="price",
+        price_source_tool="selected_product_candidate",
+        payment_amount=125400,
+    )
+
+    staged = _stage_purchase_flow_context_from_policy_plan(
+        slots,
+        tool_plan,
+        source="transaction_policy_context",
+    )
+    pending_context = staged.availability_context["pending_order_context"]
+    router_context = _router_slot_fill_context_payload_for_test(
+        slots=staged,
+        user_text="T-Station Pangyo Branch",
+        latest_product_tmpl=None,
+        latest_location_tmpl=None,
+        latest_datepick_tmpl=None,
+    )
+    store_frame = build_transaction_intent_frame(
+        "T-Station Pangyo Branch",
+        known_slots={
+            **router_context["known_slots"],
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "stock_check_mode": "preview",
+        },
+    )
+    store_tool_plan = plan_transaction_tools(store_frame)
+
+    assert tool_plan.metadata["flow_step"] == "ask_store"
+    assert pending_context["goods_no"] == "G000000310119"
+    assert pending_context["tire_size"] == "215/55R17"
+    assert pending_context["ord_qty"] == 4
+    assert pending_context["pending_intent"] == "order"
+    assert pending_context["goal_type"] == "place_order"
+    assert pending_context["awaiting_store_region"] is True
+    assert router_context["current_flow"] == "quick_order_reservation"
+    assert router_context["flow_step"] == "ask_store"
+    assert store_frame.intent == "quick_order_reservation"
+    assert store_frame.known_slots["place_query"] == "T-Station Pangyo Branch"
+    assert store_tool_plan.preferred_tool == "transaction_store_preview_tool"
 
 def test_direct_date_time_input_after_datepick_keeps_purchase_flow_and_builds_preorder() -> None:
     datepick = {
