@@ -19036,6 +19036,37 @@ def test_preorder_event_multiplies_selected_product_unit_price_by_quantity_witho
     assert preorder_event["data"]["metadata"]["paymentAmount"] == 468000
     assert preorder_event["data"]["metadata"]["paymentAmountSource"] == "selected_product_candidate_unit_price"
 
+def test_preorder_event_uses_selected_vehicle_name_from_pending_context() -> None:
+    preorder_event = build_preorder_event(
+        SimpleNamespace(
+            domain="transaction",
+            response_decision={"template": "preOrder", "metadata": {"response_shape_key": "reservation_confirmation_ready"}},
+            flow_step="build_preorder",
+            action_mode="purchase_continuation",
+            intent="quick_order_reservation",
+        ),
+        {
+            "goods_no": "G000000310119",
+            "tire_model": "Ventus S2 AS",
+            "tire_size": "225/45R17",
+            "ord_qty": 4,
+            "shop_id": "F00721",
+            "shop_name": "T-Station Pangyo Branch",
+            "requested_cal_day": "20260707",
+            "rsv_hour": "16",
+            "payment_amount": 118800,
+            "availability_context": {
+                "pending_order_context": {
+                    "car_model": "Sorento",
+                    "car_no": "29조3344",
+                }
+            },
+        },
+    )
+
+    assert preorder_event is not None
+    assert preorder_event["data"]["orderInfo"]["carInfo"] == "Sorento (29조3344)"
+
 def test_preorder_event_does_not_multiply_preview_total_amount_again() -> None:
     preorder_event = build_preorder_event(
         SimpleNamespace(
@@ -29339,6 +29370,33 @@ def test_purchase_flow_state_region_delta_preserves_product_context() -> None:
     assert context["pending_product_name"] == "벤투스 S2 AS"
     assert context["region"] == "분당"
     assert result.metadata["preserved_fields"]
+
+
+def test_purchase_flow_state_pending_context_preserves_vehicle_label() -> None:
+    result = commit_purchase_flow_state(
+        {
+            "goods_no": "G000000310119",
+            "product_name": "Ventus S2 AS",
+            "tire_size": "225/45R17",
+            "ord_qty": 4,
+            "car_model": "Sorento",
+            "car_no": "29조3344",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        {
+            "shop_id": "F00721",
+            "shop_name": "T-Station Pangyo Branch",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        source="store_followup",
+    )
+
+    context = result.state.to_pending_order_context()
+    assert context["car_model"] == "Sorento"
+    assert context["car_no"] == "29조3344"
+    assert context["shop_id"] == "F00721"
 
 
 def test_missing_product_purchase_request_starts_active_purchase_flow() -> None:

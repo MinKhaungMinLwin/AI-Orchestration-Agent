@@ -121,9 +121,9 @@ def _slot_values(slots: Mapping[str, Any] | Any | None) -> dict[str, Any]:
     if slots is None:
         return {}
     if hasattr(slots, "model_dump"):
-        return dict(slots.model_dump(exclude_none=True))
+        return _with_context_vehicle_values(dict(slots.model_dump(exclude_none=True)))
     if isinstance(slots, Mapping):
-        return dict(slots)
+        return _with_context_vehicle_values(dict(slots))
     return {
         key: value
         for key in (
@@ -160,6 +160,28 @@ def _slot_values(slots: Mapping[str, Any] | Any | None) -> dict[str, Any]:
         )
         if (value := getattr(slots, key, None)) not in (None, "", [], {})
     }
+def _with_context_vehicle_values(values: dict[str, Any]) -> dict[str, Any]:
+    if values.get("car_no") and (values.get("car_model") or values.get("car_nm") or values.get("car_name")):
+        return values
+    availability_context = values.get("availability_context") if isinstance(values.get("availability_context"), Mapping) else {}
+    context_candidates: list[Mapping[str, Any]] = []
+    for key in ("pending_order_context", "dormant_purchase_context", "dormant_transaction_context"):
+        context = availability_context.get(key)
+        if isinstance(context, Mapping):
+            context_candidates.append(context)
+    active_flow_context = availability_context.get("active_flow_context")
+    if isinstance(active_flow_context, Mapping):
+        context_candidates.append(active_flow_context)
+        vehicle_context = active_flow_context.get("vehicle")
+        if isinstance(vehicle_context, Mapping):
+            context_candidates.append(vehicle_context)
+
+    for context in context_candidates:
+        for key in ("car_no", "car_lnc_cd", "car_model", "car_nm", "car_name"):
+            value = context.get(key)
+            if values.get(key) in (None, "", [], {}) and value not in (None, "", [], {}):
+                values[key] = value
+    return values
 
 
 def _has_ready_preorder_slots(slots: Mapping[str, Any]) -> bool:

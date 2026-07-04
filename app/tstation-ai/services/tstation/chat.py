@@ -7547,6 +7547,11 @@ def _build_direct_preorder_event_from_slots(
         if isinstance(active_flow_context.get("payment"), Mapping)
         else {}
     )
+    active_flow_vehicle = (
+        active_flow_context.get("vehicle")
+        if isinstance(active_flow_context.get("vehicle"), Mapping)
+        else {}
+    )
     product_name = (
         str(slot_values.get("tire_model") or "").strip()
         or str(slot_values.get("product_name") or "").strip()
@@ -7708,11 +7713,26 @@ def _build_direct_preorder_event_from_slots(
         )
         booking_datetime = str(latest_order_info.get("bookingDateTime") or "").strip()
 
-    car_no = str(slot_values.get("car_no") or "").strip()
+    car_no = str(
+        slot_values.get("car_no")
+        or pending_order_context.get("car_no")
+        or active_flow_vehicle.get("car_no")
+        or active_flow_context.get("car_no")
+        or ""
+    ).strip()
     car_name = str(
         slot_values.get("car_nm")
         or slot_values.get("car_name")
         or slot_values.get("car_model")
+        or pending_order_context.get("car_nm")
+        or pending_order_context.get("car_name")
+        or pending_order_context.get("car_model")
+        or active_flow_vehicle.get("car_nm")
+        or active_flow_vehicle.get("car_name")
+        or active_flow_vehicle.get("car_model")
+        or active_flow_context.get("car_nm")
+        or active_flow_context.get("car_name")
+        or active_flow_context.get("car_model")
         or ""
     ).strip()
     car_info = None
@@ -20723,6 +20743,9 @@ def _pending_order_context_values(slots: ConversationSlots) -> dict[str, Any]:
         "region",
         "shop_id",
         "shop_name",
+        "car_model",
+        "car_no",
+        "car_lnc_cd",
         "payment_amount",
         "price_basis",
         "price_source_tool",
@@ -21178,6 +21201,9 @@ def _flow_state_from_purchase_stock_sources(
         "region": getattr(slots, "region", None),
         "shop_id": getattr(slots, "shop_id", None),
         "shop_name": getattr(slots, "shop_name", None),
+        "car_model": getattr(slots, "car_model", None),
+        "car_no": getattr(slots, "car_no", None),
+        "car_lnc_cd": getattr(slots, "car_lnc_cd", None),
         "requested_cal_day": getattr(slots, "requested_cal_day", None),
         "rsv_hour": getattr(slots, "rsv_hour", None),
         "payment_amount": getattr(slots, "payment_amount", None),
@@ -21230,6 +21256,9 @@ def _flow_state_from_purchase_stock_sources(
             "region",
             "shop_id",
             "shop_name",
+            "car_model",
+            "car_no",
+            "car_lnc_cd",
             "requested_cal_day",
             "rsv_hour",
             "payment_amount",
@@ -21262,6 +21291,10 @@ def _flow_state_from_purchase_stock_sources(
                 product_context = source_context.get("product")
                 if isinstance(product_context, Mapping):
                     value = product_context.get(key)
+            if value in (None, "", [], {}) and key in {"car_model", "car_no", "car_lnc_cd"}:
+                vehicle_context = source_context.get("vehicle")
+                if isinstance(vehicle_context, Mapping):
+                    value = vehicle_context.get(key)
             if value in (None, "", [], {}) and key in {
                 "payment_amount",
                 "price_basis",
@@ -21553,6 +21586,9 @@ def _flow_state_from_purchase_stock_sources(
         "region",
         "shop_id",
         "shop_name",
+        "car_model",
+        "car_no",
+        "car_lnc_cd",
         "requested_cal_day",
         "rsv_hour",
         "payment_amount",
@@ -21721,6 +21757,9 @@ def _apply_purchase_stock_canonical_readthrough(
             "region",
             "shop_id",
             "shop_name",
+            "car_model",
+            "car_no",
+            "car_lnc_cd",
             "requested_cal_day",
             "rsv_hour",
             "payment_amount",

@@ -17,6 +17,9 @@ _VEHICLE_FIELDS = (
     "selection_required",
     "named_registered_vehicle_anchor",
     "requested_vehicle_name",
+    "car_model",
+    "car_nm",
+    "car_name",
     "car_no",
     "car_lnc_cd",
     "mbr_car_reg_seq",
@@ -1340,6 +1343,7 @@ class FlowState:
         state.flow_step = str(flat.get("flow_step") or flat.get("pending_step") or "") or None
         state.product = {key: flat[key] for key in _PRODUCT_FIELDS if flat.get(key) not in _EMPTY_VALUES}
         _normalize_product_aliases(state.product)
+        state.vehicle = {key: flat[key] for key in _VEHICLE_FIELDS if flat.get(key) not in _EMPTY_VALUES}
         state.store = {key: flat[key] for key in _STORE_FIELDS if flat.get(key) not in _EMPTY_VALUES}
         state.schedule = {key: flat[key] for key in _SCHEDULE_FIELDS if flat.get(key) not in _EMPTY_VALUES}
         state.payment = {key: flat[key] for key in _PAYMENT_FIELDS if flat.get(key) not in _EMPTY_VALUES}
@@ -1423,7 +1427,7 @@ class FlowState:
 
     def to_pending_order_context(self) -> dict[str, Any]:
         flat: dict[str, Any] = {}
-        for section in (self.product, self.store, self.schedule, self.payment, self.intent, self.meta):
+        for section in (self.product, self.vehicle, self.store, self.schedule, self.payment, self.intent, self.meta):
             flat.update(_non_empty_mapping(section))
         flat["source"] = str(self.meta.get("source") or flat.get("source") or "")
         flat["status"] = self.status
@@ -1508,7 +1512,7 @@ class FlowState:
 
         preserve_purchase_intent = _is_purchase_intent_group(merged.intent) and _is_stock_intent_group(delta.intent)
 
-        for section_name in ("product", "store", "schedule", "payment", "intent"):
+        for section_name in ("product", "vehicle", "store", "schedule", "payment", "intent"):
             if section_name in invalidated_sections:
                 continue
             target = getattr(merged, section_name)
