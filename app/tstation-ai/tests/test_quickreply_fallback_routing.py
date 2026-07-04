@@ -42314,6 +42314,62 @@ def test_maintenance_timing_guidance_contract_allows_dday_tool(user_text: str) -
     assert "get_store_schedule_tool" in contract.forbidden_tools
 
 
+def _maintenance_timing_contract(merged_slots=None):
+    response_decision = ResponseDecision(
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        metadata={"response_shape_key": "maintenance_timing_guidance"},
+    )
+    return build_turn_contract(
+        user_text="내차 정비 일정이 언제지?",
+        merged_slots=merged_slots,
+        response_decision=response_decision,
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:maintenance_timing_guidance"],
+            policy_intent="none",
+        ),
+    )
+
+
+def test_maintenance_timing_guidance_without_vehicle_blocks_entry_chips() -> None:
+    # "내차 정비 일정이 언제지?" with no identified vehicle: the bot asks which car.
+    # The contract must mark the turn as vehicle-selection-waiting so the CTA gate
+    # drops off-context entry chips (매장 찾기 / 타이어 추천) on that turn.
+    from services.tstation.policies.cta_registry import normalize_quickreply_ctas
+
+    contract = _maintenance_timing_contract()
+
+    assert contract.intent == "maintenance_timing_guidance"
+    assert "mbr_car_reg_seq" in contract.blocking_required_slots
+
+    event = {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "support",
+        "data": {
+            "assistantResponse": "어느 차량의 정비 일정을 확인해 드릴까요? 😊",
+            "quickReplies": [
+                {"label": "매장 찾기", "domain": "TRANSACTION"},
+                {"label": "타이어 추천", "domain": "DISCOVERY"},
+            ],
+        },
+    }
+    normalize_quickreply_ctas(event, contract=contract)
+    assert event["data"]["quickReplies"] == []
+    reasons = {item["reason"] for item in event["data"]["metadata"]["cta_validation"]}
+    assert reasons == {"blocked_during_slot_fill"}
+
+
+def test_maintenance_timing_guidance_with_known_vehicle_keeps_contract_unblocked() -> None:
+    contract = _maintenance_timing_contract(
+        merged_slots=ConversationSlots(mbr_car_reg_seq="12345"),
+    )
+
+    assert contract.intent == "maintenance_timing_guidance"
+    assert "mbr_car_reg_seq" not in contract.blocking_required_slots
+
+
 @pytest.mark.parametrize(
     "user_text",
     [

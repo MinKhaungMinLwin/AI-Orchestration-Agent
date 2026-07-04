@@ -25,6 +25,10 @@ class CTADefinition:
     forbidden_templates: tuple[str, ...] = ()
     required_context: tuple[str, ...] = ()
     fallback_behavior: str | None = None
+    # Entry/navigation CTAs are off-context while the contract is waiting on a
+    # required slot (e.g. vehicle selection) — the only valid chips on such a
+    # turn are the pending answer itself (dynamic value chips) or none.
+    blocked_during_slot_fill: bool = False
 
 
 @dataclass(frozen=True)
@@ -160,6 +164,7 @@ _CONVERSATION_CTA_DEFINITIONS: tuple[CTADefinition, ...] = (
         label="타이어 추천",
         domain="DISCOVERY",
         cta_action="start_tire_recommendation",
+        blocked_during_slot_fill=True,
         expected_behavior="conversation_action",
         expected_contract_intent="product_recommendation",
         allowed_tools=("get_products_recommendations_tool",),
@@ -170,6 +175,7 @@ _CONVERSATION_CTA_DEFINITIONS: tuple[CTADefinition, ...] = (
         label="타이어 추천 받기",
         domain="DISCOVERY",
         cta_action="start_tire_recommendation",
+        blocked_during_slot_fill=True,
         expected_behavior="conversation_action",
         expected_contract_intent="product_recommendation",
         allowed_tools=("get_products_recommendations_tool",),
@@ -180,6 +186,7 @@ _CONVERSATION_CTA_DEFINITIONS: tuple[CTADefinition, ...] = (
         label="다른 추천 받기",
         domain="DISCOVERY",
         cta_action="start_tire_recommendation",
+        blocked_during_slot_fill=True,
         expected_behavior="conversation_action",
         expected_contract_intent="product_recommendation",
         allowed_tools=("get_products_recommendations_tool",),
@@ -190,6 +197,7 @@ _CONVERSATION_CTA_DEFINITIONS: tuple[CTADefinition, ...] = (
         label="상품 검색",
         domain="DISCOVERY",
         cta_action="start_product_search",
+        blocked_during_slot_fill=True,
         expected_behavior="conversation_action",
         expected_contract_intent="product_search",
         allowed_tools=("search_product_tool",),
@@ -210,6 +218,7 @@ _CONVERSATION_CTA_DEFINITIONS: tuple[CTADefinition, ...] = (
         label="매장 찾기",
         domain="TRANSACTION",
         cta_action="start_store_search",
+        blocked_during_slot_fill=True,
         expected_behavior="conversation_action",
         expected_contract_intent="store_search",
         allowed_tools=("search_stores_tool", "get_store_list_tool", "get_nearby_stores_tool"),
@@ -415,6 +424,18 @@ def _validate_definition(
         return CTAValidationResult("blocked", "conversation_cta_missing_expected_contract", definition.cta_id)
     if current_template in definition.forbidden_templates:
         return CTAValidationResult("blocked", f"template_forbidden:{current_template}", definition.cta_id)
+    if definition.blocked_during_slot_fill and contract is not None:
+        blocking_slots = tuple(getattr(contract, "blocking_required_slots", ()) or ())
+        contract_intent = str(getattr(contract, "intent", "") or "")
+        if blocking_slots or contract_intent == "vehicle_lookup":
+            return CTAValidationResult(
+                "blocked",
+                "blocked_during_slot_fill",
+                definition.cta_id,
+                definition.cta_action,
+                definition.expected_behavior,
+                definition.expected_contract_intent or "",
+            )
     missing_context = [
         key for key in definition.required_context
         if _context_value(context, key) in (None, "")
