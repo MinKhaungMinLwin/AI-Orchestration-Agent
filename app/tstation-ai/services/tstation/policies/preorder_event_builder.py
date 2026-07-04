@@ -200,17 +200,22 @@ def _payment_amount(slots: Mapping[str, Any]) -> tuple[int | None, str | None, s
             payment_amount_source = _str_or_none(
                 context.get("payment_amount_source") or context.get("paymentAmountSource")
             )
-            if payment_amount_source == "selected_product_candidate_unit_price" and quantity > 0:
+            price_basis = _str_or_none(context.get("price_basis") or context.get("priceBasis"))
+            price_source_tool = _str_or_none(context.get("price_source_tool") or context.get("priceSourceTool"))
+            if _is_unit_payment_amount_source(
+                payment_amount_source=payment_amount_source,
+                price_source_tool=price_source_tool,
+            ) and quantity > 0:
                 return (
                     direct_amount * quantity,
-                    _str_or_none(context.get("price_basis") or context.get("priceBasis")),
-                    _str_or_none(context.get("price_source_tool") or context.get("priceSourceTool")),
-                    payment_amount_source,
+                    price_basis,
+                    price_source_tool,
+                    payment_amount_source or "selected_product_candidate_unit_price",
                 )
             return (
                 direct_amount,
-                _str_or_none(context.get("price_basis") or context.get("priceBasis")),
-                _str_or_none(context.get("price_source_tool") or context.get("priceSourceTool")),
+                price_basis,
+                price_source_tool,
                 payment_amount_source,
             )
         unit_price, price_basis = _unit_price_and_basis(context)
@@ -223,6 +228,16 @@ def _payment_amount(slots: Mapping[str, Any]) -> tuple[int | None, str | None, s
                 or "context_unit_price",
             )
     return None, None, None, None
+
+def _is_unit_payment_amount_source(*, payment_amount_source: str | None, price_source_tool: str | None) -> bool:
+    if payment_amount_source in {
+        "selected_product_candidate_unit_price",
+        "context_unit_price",
+        "pending_order_context.unit_price",
+        "active_flow_context.payment.unit_price",
+    }:
+        return True
+    return price_source_tool in {"selected_product_candidate", "product_template", "quickreply_metadata"}
 
 
 def _quantity(slots: Mapping[str, Any]) -> int:
