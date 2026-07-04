@@ -199,6 +199,7 @@ _DISCOVERY_EVENT_CONTENT_TOOLS = frozenset({
     "search_product_summary_tool",
     "search_product_tool",
     "get_product_applicable_events_tool",
+    "search_benefit_applicable_products_tool",
     "get_event_applicable_products_tool",
     "get_product_promotions_tool",
     "get_benefit_event_deal_list_tool",
@@ -1318,6 +1319,24 @@ def build_turn_contract(
     }:
         allowed_tools = _merge_tuple(allowed_tools, tuple(_DISCOVERY_EVENT_CONTENT_TOOLS))
         forbidden_tools = _merge_tuple(forbidden_tools, tuple(_DISCOVERY_EVENT_CONTENT_FORBIDDEN_TOOLS))
+        if intent == "event_applicable_products_lookup":
+            allowed_tools = ("search_benefit_applicable_products_tool",)
+            forbidden_tools = _merge_tuple(
+                forbidden_tools,
+                (
+                    "get_events_tool",
+                    "get_deals_tool",
+                    "get_event_applicable_products_tool",
+                    "get_coupon_applicable_products_tool",
+                    "get_my_coupons_tool",
+                    "search_product_tool",
+                    "search_product_summary_tool",
+                ),
+            )
+            preferred_tool = "search_benefit_applicable_products_tool"
+            query = str(known_slots.get("benefit_applicable_products_query") or "").strip()
+            if query:
+                tool_args_patch = {"query": query, "lang_cd": "ko"}
     if intent == "maintenance_history_lookup":
         allowed_tools = _merge_tuple(allowed_tools, ("get_maintenance_history_tool",))
         forbidden_tools = _merge_tuple(

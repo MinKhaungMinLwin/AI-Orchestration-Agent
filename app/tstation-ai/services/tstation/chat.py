@@ -714,6 +714,19 @@ class RouterEntityCandidates(BaseModel):
     )
     store: RouterNamedEntityCandidate = Field(description="Specific store candidate.")
     coupon: RouterNamedEntityCandidate = Field(description="Coupon name candidate.")
+    benefit: RouterNamedEntityCandidate = Field(
+        default_factory=lambda: RouterNamedEntityCandidate(
+            mentioned=False,
+            name="",
+            type="",
+            reference_text="",
+            confidence=0.0,
+        ),
+        description=(
+            "Benefit/campaign query candidate for coupon/event/deal/promotion -> applicable products lookup. "
+            "name should be the searchable benefit name/query, e.g. 반짝블랙딜, 한국타이어 페스타, 30% 할인."
+        ),
+    )
     location: RouterNamedEntityCandidate = Field(description="Location/region/station candidate.")
 
 
@@ -728,6 +741,7 @@ def _empty_router_entity_candidates() -> dict[str, Any]:
         },
         "store": dict(empty_named),
         "coupon": dict(empty_named),
+        "benefit": dict(empty_named),
         "location": dict(empty_named),
     }
 
@@ -2949,8 +2963,14 @@ Produce these structured outputs:
     coupon_lookup, store_search, support_policy, or none. This never authorizes tool execution by itself.
 5j. entity_candidates — structured current-turn entity evidence:
     registered_vehicle(anchor/reference_text/confidence), store(name/reference_text/confidence),
-    coupon(name/reference_text/confidence), location(name/type/reference_text/confidence).
+    coupon(name/reference_text/confidence), benefit(name/type/reference_text/confidence),
+    location(name/type/reference_text/confidence).
     Prefer values explicitly present in the current user turn. If unsure, leave empty or confidence below 0.5.
+    For coupon/event/deal/promotion/benefit -> applicable products questions, fill
+    entity_candidates.benefit.name with the searchable benefit query only:
+    "반짝블랙딜에 적용 가능한 상품" => benefit.name="반짝블랙딜", type="deal";
+    "한국타이어 페스타 이벤트에 적용되는 상품" => benefit.name="한국타이어 페스타", type="event";
+    "30% 할인 쿠폰 적용 가능 상품" => benefit.name="30% 할인", type="coupon".
 
 If a message named "ROUTER SLOT-FILL CONTEXT" is present, use it as structured state for the previous active flow.
 It may include current_flow, known_slots, missing_slots, last_requested_slot, and last_candidates.
@@ -3371,6 +3391,11 @@ Critical first-turn routing:
   or signup_coupon_guidance.
 - "제휴회원/복지몰/임직원 전용 쿠폰" -> SUPPORT, policy_intent=partner_member_coupon_policy.
 - Coupon use/channel/registration/how-to policy -> SUPPORT, policy_intent=coupon_usage_policy or coupon_registration_policy.
+- Coupon/event/deal/promotion/benefit applicable products -> DISCOVERY or TRANSACTION according to domain rules,
+  and fill entity_candidates.benefit.name with only the searchable benefit query:
+  "반짝블랙딜에 적용 가능한 상품" => benefit.name="반짝블랙딜", type="deal";
+  "한국타이어 페스타 이벤트에 적용되는 상품" => benefit.name="한국타이어 페스타", type="event";
+  "30% 할인 쿠폰 적용 가능 상품" => benefit.name="30% 할인", type="coupon".
 - Coupon stacking/check ("5% 쿠폰이랑 30% 할인쿠폰 중복 가능?", "쿠폰 두 개 같이 써도 돼?") -> SUPPORT, policy_intent=coupon_stacking_policy; do not answer as generic FAQ.
 - Two or more discount means stacking ("쿠폰+딜", "기획전+쿠폰", "중복 가능") -> SUPPORT.
 - Tire manufacture date/DOT/newness -> SUPPORT, policy_intent=tire_manufacture_date_policy.
@@ -3593,6 +3618,7 @@ Also output primary_action and entity_candidates. Examples: "내가 닷컴에 �
 => primary_action=reserve, entity_candidates.store.name="판교점"; "생일 쿠폰 쓸 수 있어?"
 => primary_action=coupon_use, entity_candidates.coupon.name="생일 쿠폰"; "강남역 근처 장착점"
 => primary_action=store_search, entity_candidates.location.name="강남역", type="station".
+=> primary_action=lookup, entity_candidates.benefit.name="반짝블랙딜", type="deal"; "반짝블랙딜에 적용 가능한 상품이 뭐야".
 claim_check_type:
 - none: normal product description/search/recommendation
 - verifiable_product_attribute: product data attribute verification such as noise label, wet grade, rolling resistance, price grade, season, or vehicle category
@@ -16238,6 +16264,7 @@ _FAST_PATH_DISCOVERY_RECOVERY_ALLOWED_TOOLS = frozenset({
     "get_products_recommendations_tool",
     "get_best_selling_products_tool",
     "get_my_cars_tool",
+    "search_benefit_applicable_products_tool",
 })
 _FAST_PATH_SUPPORT_RECOVERY_ALLOWED_TOOLS = frozenset({
     "search_faq_hybrid_tool",

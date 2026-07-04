@@ -1129,6 +1129,7 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "get_events_tool": "이벤트 목록 조회 중...",
     "get_deals_tool": "기획전 목록 조회 중...",
     "get_benefit_event_deal_list_tool": "이벤트/기획전 조회 중...",
+    "search_benefit_applicable_products_tool": "혜택 적용 상품 조회 중...",
     "get_event_applicable_products_tool": "이벤트 적용 상품 조회 중...",
     "get_product_applicable_events_tool": "상품 적용 이벤트 조회 중...",
     "compare_discount_tool": "할인 가격 비교 중...",

@@ -58,6 +58,13 @@ def _routing_result(
                     "reference_text": "",
                     "confidence": 0.0,
                 },
+                "benefit": {
+                    "mentioned": False,
+                    "name": "",
+                    "type": "",
+                    "reference_text": "",
+                    "confidence": 0.0,
+                },
                 "location": {
                     "mentioned": False,
                     "name": "",
@@ -147,6 +154,32 @@ def test_router_evidence_keeps_store_coupon_and_location_candidates() -> None:
     assert coupon_evidence["primary_action"] == "coupon_use"
     assert location_evidence["entities"]["location"]["name"] == "강남역"
     assert location_evidence["entities"]["location"]["type"] == "station"
+
+
+def test_router_benefit_entity_fills_applicable_products_query_slot() -> None:
+    routing = _routing_result(
+        primary_action="lookup",
+        entity_candidates={
+            "benefit": {
+                "mentioned": True,
+                "name": "반짝블랙딜",
+                "type": "deal",
+                "reference_text": "반짝블랙딜에 적용 가능한 상품",
+                "confidence": 0.91,
+            }
+        },
+        execution_plan=["discovery:event_applicable_products_lookup"],
+    )
+
+    evidence = build_router_evidence(routing, domains=["discovery"])
+    known_slots = merge_router_evidence_known_slots({}, evidence, preserve_existing=False)
+    frame = build_discovery_intent_frame("반짝블랙딜에 적용 가능한 상품이 뭐야", known_slots=known_slots)
+    plan = plan_discovery_tools(frame)
+
+    assert evidence["entities"]["benefit"]["name"] == "반짝블랙딜"
+    assert known_slots["benefit_applicable_products_query"] == "반짝블랙딜"
+    assert plan.preferred_tool == "search_benefit_applicable_products_tool"
+    assert plan.tool_args_patch == {"query": "반짝블랙딜", "lang_cd": "ko"}
 
 
 def test_router_context_compacts_append_description_and_card_payload() -> None:

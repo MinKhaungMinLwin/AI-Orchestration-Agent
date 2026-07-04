@@ -1,7 +1,11 @@
 
 from services.tstation.agents.base_agent import BaseAgent
 from services.tstation.agents.templates import TransactionAgentOutput
-from services.tstation.agents.b_discovery_agent.tools import get_my_cars_tool, search_product_tool
+from services.tstation.agents.b_discovery_agent.tools import (
+    get_my_cars_tool,
+    search_benefit_applicable_products_tool,
+    search_product_tool,
+)
 from services.tstation.common.cta_urls import expand_url_sentinels
 from services.tstation.agents.e_support_agent.tools import get_card_installments_tool
 from services.tstation.agents.c_transaction_agent.tools import (
@@ -46,7 +50,7 @@ Always respond in Korean.
       ]
   절대 발급 도구를 호출하려 시도하지 말 것.
 - 조회 도구(`get_my_coupons_tool`, `get_product_promotions_tool`,
-  `get_coupon_applicable_products_tool`) 는 정상 동작 — 쿠폰/기획전 정보 안내는
+  `search_benefit_applicable_products_tool`, `get_coupon_applicable_products_tool`) 는 정상 동작 — 쿠폰/기획전 정보 안내는
   계속 제공한다. "쿠폰 받기"/"발급"/"다운로드" 라벨의 CTA chip 은 답변에 노출하지
   않는다 (단, 위 GLOBAL 안내 케이스의 "쿠폰함 바로가기" 는 예외).
 
@@ -2577,17 +2581,13 @@ Handle ONLY coupon and promotion requests.
 - 🚫 (OFF 2026-05-15 / 안내 갱신 2026-05-19) User wants to download/issue a coupon -> issue_coupon_tool 호출 금지. quickReply 로 위 GLOBAL 룰 (line 33-) 의 응답/quickReplies 그대로 emit ("고객님, 현재 채팅에서는 쿠폰을 직접 발급해 드릴 수 없어요. 쿠폰 받기는 쿠폰함에서 확인하고 진행하실 수 있습니다." + 쿠폰함 바로가기/내 쿠폰 조회 chip).
 - PRIORITY — 쿠폰 이름/할인율로 적용 상품 조회 ("30% 할인 쿠폰 적용 가능 상품", "임직원 쿠폰 쓸 수 있는 상품", "드라이브 행사 고객 한정 적용 가능 상품" 등, cpn_no 미확보):
   이 규칙은 아래의 "쿠폰 적용 상품/매장 조회" 일반 규칙보다 우선한다.
-  Step 1. `get_my_coupons_tool` 호출 → 보유 쿠폰 목록 확인
-  Step 2. 사용자가 언급한 할인율(예: "30%") 또는 쿠폰명 키워드로 매칭
-    - "드라이브 행사 고객 한정" 같은 부분 쿠폰명도 `items[].cpn_nm` substring 으로 매칭한다.
-  Step 3a. 매칭 쿠폰 있음 → `get_coupon_applicable_products_tool(cpn_no=[<매칭된 cpn_no>])` 호출 → 적용 상품/매장 안내
-  Step 3b. 매칭 쿠폰 없음 → quickReply "고객님 보유 쿠폰에서 해당 쿠폰을 찾지 못했어요. 쿠폰함에서 쿠폰명을 확인해 주세요." + quickReplies `[{"label":"쿠폰함 바로가기","domain":"TRANSACTION","url":"__URL_MY_COUPON_LIST_PC__"},{"label":"내 쿠폰 조회","domain":"TRANSACTION"}]`
-  ⚠️ cpn_no 를 모른다고 되묻거나 "범위 아님" 응답 금지 — 항상 Step 1부터 시작. 특히 사용자가 쿠폰명 일부를 말한 경우에도 절대 쿠폰번호를 요구하지 말고 `get_my_coupons_tool` 로 찾아라. `get_my_coupons_tool` 에도 없으면 쿠폰번호를 요구하지 말고 쿠폰함 CTA 로 안내한다.
+  `search_benefit_applicable_products_tool(query=<사용자가 언급한 할인율/쿠폰명/혜택명>, lang_cd="ko")` 를 직접 호출한다.
+  ❌ `get_my_coupons_tool` 로 보유 쿠폰을 먼저 특정하지 말 것. ❌ `get_coupon_applicable_products_tool(cpn_no=...)` 로 체인하지 말 것.
 - 쿠폰 적용 상품/매장 조회 ("이 쿠폰 어디 쓸 수 있어?", "이 쿠폰으로 살 수 있는 타이어", "이 쿠폰 어느 매장에서 써?") -> call
   `get_coupon_applicable_products_tool(cpn_no=[...])`. 답변엔 쿠폰 정보만.
   - 단, 사용자 발화에 쿠폰명/할인율 키워드가 있고 cpn_no 만 모르는 경우에는 위 PRIORITY 규칙을 따른다. 절대 쿠폰번호를 요구하지 않는다.
 - 기획전 적용 상품 조회 ("기획전 상품", "기획전에 어떤 상품 있어?") -> call
-  `get_coupon_applicable_products_tool(deal_no=[...])`. 답변엔 기획전 정보만.
+  `search_benefit_applicable_products_tool(query=<기획전명>, lang_cd="ko")`. 답변엔 기획전 정보만.
     - 직전 turn 또는 컨텍스트에서 확보된 cpn_no / deal_no 만 전달한다. 단, 쿠폰명/할인율이 발화에 있으면 cpn_no 를 모른다고 되묻지 말고 위 PRIORITY 규칙으로 `get_my_coupons_tool` 부터 호출한다.
     - cpn_no, deal_no 둘 다 list[str]. 각 최대 10개.
     - 둘 다 비어 있으면 호출 금지 — 기획전 의도는 어떤 기획전인지 되묻는다. 쿠폰 의도는 쿠폰번호를 요구하지 말고 `get_my_coupons_tool` 조회 또는 쿠폰함 CTA 로 처리한다.
@@ -3176,6 +3176,7 @@ class TransactionSubAgent(BaseAgent):
         "get_final_price_tool": "Price",
         "get_my_coupons_tool": "Price",
         "get_product_promotions_tool": "Price",
+        "search_benefit_applicable_products_tool": "Price",
         "get_coupon_applicable_products_tool": "Price",
         # "issue_coupon_tool": "Price",  # OFF 2026-05-15
         "search_product_tool": "Product Recommendation",
@@ -3210,6 +3211,7 @@ class TransactionSubAgent(BaseAgent):
             get_final_price_tool,
             get_my_coupons_tool,
             # issue_coupon_tool,  # OFF (2026-05-15)
+            search_benefit_applicable_products_tool,
             get_coupon_applicable_products_tool,
             get_product_promotions_tool,
             get_logistics_inventory_tool,
@@ -3240,6 +3242,7 @@ class TransactionSubAgent(BaseAgent):
             tools = [
                 get_my_coupons_tool,
                 # issue_coupon_tool,  # OFF (2026-05-15)
+                search_benefit_applicable_products_tool,
                 get_coupon_applicable_products_tool,
                 get_product_promotions_tool,
                 search_product_tool,

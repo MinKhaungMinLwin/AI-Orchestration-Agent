@@ -46,6 +46,7 @@ from common.tstation_be_api_client.hkt_api_client.api.event_deal_af_이벤트_�
 from common.tstation_be_api_client.hkt_api_client.api.event_deal_af_이벤트_및_기획전_조회.get_deals_api_events_deals_get import sync_detailed as get_deals
 from common.tstation_be_api_client.hkt_api_client.api.event_deal_af_이벤트_및_기획전_조회.get_event_applicable_products_multi_api_events_applicable_products_get import sync_detailed as get_event_applicable_products
 from common.tstation_be_api_client.hkt_api_client.api.event_deal_af_이벤트_및_기획전_조회.get_product_applicable_events_api_events_applicable_events_get import sync_detailed as get_product_applicable_events
+from common.tstation_be_api_client.hkt_api_client.api.benefit_af_혜택_통합_조회.search_benefit_applicable_products_api_benefits_applicable_products_search_get import sync_detailed as search_benefit_applicable_products
 
 # Price
 from common.tstation_be_api_client.hkt_api_client.api.price_af_가격_및_할인_조회.get_discount_compare_api_prices_discount_compare_get import sync_detailed as get_discount_compare
@@ -204,6 +205,7 @@ DOMAIN_TOOL_MAP = {
         "get_deals",
         "get_event_applicable_products",
         "get_product_applicable_events",
+        "search_benefit_applicable_products",
     },
     "transaction": {
         # Price
@@ -1549,6 +1551,48 @@ def get_events_tool(lang_cd: str = "ko"):
     except Exception as e:
         logger.exception("[TOOL][get_events_tool] Failed")
         return _error_response(None, str(e), "Failed to get events")
+
+
+@tool
+@tool_cache(ttl=600)
+def search_benefit_applicable_products_tool(query: str, lang_cd: str = "ko"):
+    """쿠폰/이벤트/기획전 통합 적용 상품 검색.
+
+    Use when user asks "패밀리 쿠폰 적용 가능한 상품", "반짝블랙딜 대상 상품",
+    "한국타이어 페스타에서 살 수 있는 상품" 등 혜택명/쿠폰명/이벤트명/기획전명을
+    기준으로 적용 가능한 대표 상품/매장을 찾을 때 사용. 차량/규격 기반 상품 검색은 포함하지 않음.
+
+    Args:
+        query (str): 혜택명/쿠폰명/이벤트명/기획전명 검색어. 예: "패밀리", "30% 할인", "반짝블랙딜".
+        lang_cd (str): 언어 코드. Default 'ko'.
+
+    Example: {"query": "패밀리", "lang_cd": "ko"}
+    """
+    normalized_query = re.sub(r"\s+", " ", str(query or "")).strip()
+    logger.debug(
+        "[TOOL][search_benefit_applicable_products_tool] Called with: query=%s, lang_cd=%s",
+        normalized_query, lang_cd,
+    )
+
+    if not normalized_query:
+        return _error_response(None, "query is empty", "검색어는 최소 1자 이상 필요합니다.")
+
+    try:
+        response = search_benefit_applicable_products(
+            client=get_client(),
+            query=normalized_query,
+            lang_cd=lang_cd or "ko",
+        )
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to search benefit applicable products",
+            )
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][search_benefit_applicable_products_tool] Failed")
+        return _error_response(None, str(e), "Failed to search benefit applicable products")
 
 
 @tool

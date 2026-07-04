@@ -31507,16 +31507,19 @@ def test_product_benefit_lookup_stays_discovery_event_content(user_text: str, su
 
 
 @pytest.mark.parametrize(
-    "user_text",
+    ("user_text", "benefit_query"),
     [
-        "한국타이어 페스타 이벤트에 적용되는 상품 있어?",
-        "기획전 대상 타이어 보여줘",
-        "반짝블랙딜에 적용 가능한 상품이 뭐야",
-        "프로모션으로 살 수 있는 제품 알려줘",
+        ("한국타이어 페스타 이벤트에 적용되는 상품 있어?", "한국타이어 페스타"),
+        ("기획전 대상 타이어 보여줘", "기획전"),
+        ("반짝블랙딜에 적용 가능한 상품이 뭐야", "반짝블랙딜"),
+        ("프로모션으로 살 수 있는 제품 알려줘", "프로모션"),
     ],
 )
-def test_event_applicable_products_lookup_uses_event_product_contract(user_text: str) -> None:
-    frame = build_discovery_intent_frame(user_text)
+def test_event_applicable_products_lookup_uses_event_product_contract(user_text: str, benefit_query: str) -> None:
+    frame = build_discovery_intent_frame(
+        user_text,
+        known_slots={"benefit_applicable_products_query": benefit_query},
+    )
     tool_plan = plan_discovery_tools(frame)
     response_decision = decide_discovery_response(frame)
     cross_domain_plan = plan_cross_domain_turn(user_text, known_slots={})
@@ -31524,10 +31527,64 @@ def test_event_applicable_products_lookup_uses_event_product_contract(user_text:
     assert cross_domain_plan.primary_domain == PolicyDomain.DISCOVERY
     assert [task.intent for task in cross_domain_plan.subtasks] == ["event_applicable_products_lookup"]
     assert frame.sub_intent == "event_applicable_products_lookup"
-    assert tool_plan.preferred_tool == "get_events_tool"
-    assert "get_event_applicable_products_tool" in tool_plan.allowed_tools
+    assert tool_plan.preferred_tool == "search_benefit_applicable_products_tool"
+    assert tool_plan.allowed_tools == ("search_benefit_applicable_products_tool",)
+    assert tool_plan.tool_args_patch["query"] == benefit_query
+    assert "get_events_tool" in tool_plan.forbidden_tools
+    assert "get_event_applicable_products_tool" in tool_plan.forbidden_tools
+    assert "get_coupon_applicable_products_tool" in tool_plan.forbidden_tools
     assert "search_product_tool" in tool_plan.forbidden_tools
     assert response_decision.metadata["response_shape_key"] == "event_applicable_products_lookup"
+
+
+def test_benefit_applicable_products_template_maps_unified_response() -> None:
+    event = try_build_template(
+        [
+            {
+                "tool": "search_benefit_applicable_products_tool",
+                "args": {"query": "패밀리", "lang_cd": "ko"},
+                "data": {
+                    "status": "success",
+                    "data": {
+                        "query": "패밀리",
+                        "total_matches": 2,
+                        "total_products": 2,
+                        "total_stores": 1,
+                        "matches": [
+                            {
+                                "source_type": "coupon",
+                                "source_id": "C0001",
+                                "source_name": "패밀리 30% 상품 쿠폰",
+                                "total_products": 1,
+                                "products": [{"ptrn_cd": "H462", "goods_nm": "벤투스 S2 AS"}],
+                                "total_stores": 1,
+                                "stores": [{"shop_id": "S001", "shop_nm": "티스테이션 방배점"}],
+                            },
+                            {
+                                "source_type": "deal",
+                                "source_id": "D0001",
+                                "source_name": "패밀리 기획전",
+                                "total_products": 1,
+                                "products": [{"ptrn_cd": "H308", "goods_nm": "키너지 EX"}],
+                                "total_stores": 0,
+                                "stores": [],
+                            },
+                        ],
+                    },
+                },
+            }
+        ],
+        "",
+    )
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    response = event["data"]["assistantResponse"]
+    assert "패밀리 30% 상품 쿠폰" in response
+    assert "벤투스 S2 AS" in response
+    assert "티스테이션 방배점" in response
+    assert "패밀리 기획전" in response
+    assert event["data"]["metadata"]["response_shape_key"] == "benefit_applicable_products_lookup"
 
 
 @pytest.mark.parametrize(
@@ -43626,7 +43683,7 @@ def test_maintenance_timing_keyword_route_uses_canonical_execution_plan() -> Non
     assert routing.execution_plan == ["support:maintenance_timing_guidance"]
 
 
-    def _maintenance_timing_contract(merged_slots=None):
+def _maintenance_timing_contract(merged_slots=None):
     response_decision = ResponseDecision(
         response_shape=ResponseShape.SUMMARY,
         template=TemplateName.QUICK_REPLY,

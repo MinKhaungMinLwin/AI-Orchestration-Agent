@@ -338,6 +338,11 @@ _PRODUCT_DEAL_LOOKUP_RE = re.compile(r"기획전|딜|deal", re.IGNORECASE)
 _PRODUCT_COUPON_LOOKUP_RE = re.compile(r"쿠폰|할인권", re.IGNORECASE)
 _PRODUCT_BENEFIT_LOOKUP_RE = re.compile(r"행사|이벤트|프로모션|기획전|딜|deal|쿠폰|할인권|혜택", re.IGNORECASE)
 _BENEFIT_STACKING_RE = re.compile(r"중복|같이|함께|동시|둘\s*다|다\s*돼|같이\s*돼", re.IGNORECASE)
+
+
+def extract_benefit_applicable_products_query(text: str | None) -> str:
+    """Fallback only. The LLM router should provide benefit_applicable_products_query."""
+    return re.sub(r"\s+", " ", str(text or "")).strip()
 _BEST_SELLER_DAY_RE = re.compile(r"오늘|금일|하루", re.IGNORECASE)
 _BEST_SELLER_WEEK_RE = re.compile(r"이번\s*주|금주|이번주|주간", re.IGNORECASE)
 _BEST_SELLER_MONTH_RE = re.compile(r"이번\s*달|이달|월별|월간", re.IGNORECASE)
@@ -1108,6 +1113,10 @@ def build_discovery_intent_frame(
         entities["deal_list_only"] = True
     if _EVENT_APPLICABLE_PRODUCTS_RE.search(text) and not _EVENT_APPLICABLE_PRODUCTS_EXCLUDE_RE.search(text):
         entities["event_applicable_products_lookup"] = True
+        entities["benefit_applicable_products_query"] = (
+            str(slots.get("benefit_applicable_products_query") or "").strip()
+            or extract_benefit_applicable_products_query(text)
+        )
     if (products or product_families) and _PRODUCT_BENEFIT_LOOKUP_RE.search(text) and not _BENEFIT_STACKING_RE.search(text):
         if _PRODUCT_EVENT_LOOKUP_RE.search(text):
             entities["product_benefit_lookup_type"] = "event"
@@ -1449,16 +1458,21 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             forbidden_tools=("get_events_tool", "get_my_coupons_tool"),
         )
     if frame.sub_intent == "event_applicable_products_lookup":
+        query = str(entities.get("benefit_applicable_products_query") or "").strip()
         return ToolPlan(
-            allowed_tools=("get_events_tool", "get_event_applicable_products_tool"),
-            preferred_tool="get_events_tool",
-            tool_args_patch={"lang_cd": "ko"},
+            allowed_tools=("search_benefit_applicable_products_tool",),
+            preferred_tool="search_benefit_applicable_products_tool",
+            tool_args_patch={"query": query, "lang_cd": "ko"},
             forbidden_tools=(
                 "search_product_tool",
                 "search_product_summary_tool",
                 "get_products_recommendations_tool",
                 "get_product_description_tool",
+                "get_events_tool",
+                "get_event_applicable_products_tool",
                 "get_deals_tool",
+                "get_coupon_applicable_products_tool",
+                "get_my_coupons_tool",
                 "get_product_promotions_tool",
                 "get_product_applicable_events_tool",
                 "quick_order_tool",
@@ -1468,6 +1482,7 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             metadata={
                 "response_intent": "event_applicable_products_lookup",
                 "goal_type": "event_applicable_products_lookup",
+                "benefit_applicable_products_query": query,
             },
         )
     if frame.sub_intent in {

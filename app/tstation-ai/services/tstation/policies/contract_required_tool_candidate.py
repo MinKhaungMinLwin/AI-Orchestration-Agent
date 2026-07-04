@@ -6,6 +6,7 @@ from schemas.tstation.slots import ConversationSlots
 from services.tstation.policies.discovery_intent_policy import (
     best_seller_search_params_from_text,
     build_discovery_intent_frame,
+    extract_benefit_applicable_products_query,
     extract_best_seller_vehicle_query,
     extract_product_names,
     normalize_tire_size,
@@ -64,6 +65,7 @@ _FAST_PATH_DISCOVERY_RECOVERY_ALLOWED_TOOLS = frozenset({
     "get_my_cars_tool",
     "get_events_tool",
     "get_product_applicable_events_tool",
+    "search_benefit_applicable_products_tool",
     "get_event_applicable_products_tool",
 })
 _FLOW_PROGRESS_TRANSACTION_TOOLS = frozenset({
@@ -957,6 +959,23 @@ def _contract_required_tool_candidate(
             if not tool_input:
                 return None
             display_name = "이벤트 적용 상품 조회 중..."
+        elif preferred_tool == "search_benefit_applicable_products_tool":
+            if not tool_input:
+                query = (
+                    str(known_slots.get("benefit_applicable_products_query") or "").strip()
+                    or extract_benefit_applicable_products_query(user_text)
+                )
+                if query:
+                    tool_input = {"query": query, "lang_cd": "ko"}
+                    tool_input_source = (
+                        "router_evidence"
+                        if str(known_slots.get("benefit_applicable_products_query") or "").strip()
+                        else "user_text"
+                    )
+            if not tool_input or not str(tool_input.get("query") or "").strip():
+                return None
+            tool_input.setdefault("lang_cd", "ko")
+            display_name = "혜택 적용 상품 조회 중..."
         elif preferred_tool == "get_products_recommendations_tool":
             if str(turn_contract.intent or "").strip() != "product_recommendation":
                 return None

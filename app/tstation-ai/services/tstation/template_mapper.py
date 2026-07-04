@@ -3776,6 +3776,80 @@ def _map_event_applicable_products(tool_data_list: list[dict], assistant_text: s
     }
 
 
+def _map_benefit_applicable_products(tool_data_list: list[dict], assistant_text: str) -> dict | None:
+    del assistant_text
+    entries = _find_entries(tool_data_list, "search_benefit_applicable_products_tool")
+    if not entries:
+        return None
+    raw = _unwrap(entries[-1])
+    if not isinstance(raw, dict):
+        return None
+    query = _get_str(raw, "query", default="요청하신 혜택")
+    matches = raw.get("matches")
+    if not isinstance(matches, list) or not matches:
+        response = f"'{query}'에 매칭되는 쿠폰/이벤트/기획전 적용 상품은 확인되지 않아요."
+    else:
+        source_labels = {"coupon": "쿠폰", "event": "이벤트", "deal": "기획전"}
+        lines = [f"'{query}'에 매칭되는 적용 상품/매장이에요."]
+        for match in matches[:6]:
+            if not isinstance(match, Mapping):
+                continue
+            item = dict(match)
+            source_type = _get_str(item, "source_type")
+            source_label = source_labels.get(source_type.lower(), "혜택")
+            source_name = _get_str(item, "source_name", default=source_label)
+            lines.extend(["", f"**{source_name}** ({source_label})"])
+
+            products = item.get("products")
+            product_names: list[str] = []
+            if isinstance(products, list):
+                for product in products:
+                    if not isinstance(product, Mapping):
+                        continue
+                    name = _get_str(dict(product), "goods_nm", "goods_name", "big_goods_nm")
+                    if name and name not in product_names:
+                        product_names.append(name)
+            if product_names:
+                lines.append("적용 상품:")
+                lines.extend(f"- {name}" for name in product_names[:5])
+                total_products = item.get("total_products")
+                if isinstance(total_products, int) and total_products > len(product_names[:5]):
+                    lines.append(f"- 외 {total_products - len(product_names[:5])}개")
+            else:
+                lines.append("- 적용 상품 확인되지 않음")
+
+            stores = item.get("stores")
+            store_names: list[str] = []
+            if isinstance(stores, list):
+                for store in stores:
+                    if not isinstance(store, Mapping):
+                        continue
+                    name = _get_str(dict(store), "shop_nm", "shop_name")
+                    if name and name not in store_names:
+                        store_names.append(name)
+            if store_names:
+                lines.append("적용 매장:")
+                lines.extend(f"- {name}" for name in store_names[:5])
+                total_stores = item.get("total_stores")
+                if isinstance(total_stores, int) and total_stores > len(store_names[:5]):
+                    lines.append(f"- 외 {total_stores - len(store_names[:5])}개")
+        response = "\n".join(lines)
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": response,
+            "quickReplies": [
+                {"label": "진행 중인 이벤트 보기", "url": CTAUrls.PROMOTION_EVENT_LIST, "domain": "DISCOVERY"},
+                {"label": "처음으로", "domain": "LEADING"},
+            ],
+            "predictedDomains": ["DISCOVERY"],
+            "metadata": {"response_shape_key": "benefit_applicable_products_lookup"},
+        },
+        "assistant_response_source": "code_benefit_applicable_products",
+    }
+
+
 def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -> dict | None:
     """Summarize tire patterns as text when no vehicle/size is confirmed.
 
@@ -6965,6 +7039,7 @@ _MAPPERS: dict[str, Any] = {
     "compare_discount_tool": _map_cheapest_product,
     "get_cheapest_price_tool": _map_cheapest_product,
     "get_product_applicable_events_tool": _map_product_applicable_events,
+    "search_benefit_applicable_products_tool": _map_benefit_applicable_products,
     "get_event_applicable_products_tool": _map_event_applicable_products,
     # "get_events_tool": _map_event,  # FE에 event 렌더러 없음
     "search_youtube_video_tool": _map_preview_youtube,
@@ -7048,6 +7123,7 @@ def try_build_template(accumulated_tool_data: list[dict], assistant_text: str) -
         ("get_store_detail_tool", _map_datepick),
         ("transaction_store_preview_tool", _map_datepick),
         ("get_product_applicable_events_tool", _map_product_applicable_events),
+        ("search_benefit_applicable_products_tool", _map_benefit_applicable_products),
         ("get_event_applicable_products_tool", _map_event_applicable_products),
         ("search_product_summary_tool", _map_product),
         ("search_product_tool", _map_product),
