@@ -39601,6 +39601,7 @@ def test_support_faq_policy_event_prefers_faq_source_summary_when_available() ->
                 {
                     "question": "제조일자 기준",
                     "answer": "타이어 제조일자는 DOT로 확인할 수 있으며, 일반적으로 6~12개월 이내 제품은 정상 신품 범주로 안내합니다.",
+                    "metadata": {"fact_type": "manufacture_date"},
                     "source": "FAQ Hybrid",
                 }
             ]
@@ -39698,14 +39699,14 @@ def test_support_faq_policy_event_drops_source_summary_when_cross_topic_scores_a
                     "question": "제조일자 기준",
                     "answer": "타이어 제조일자는 DOT로 확인할 수 있으며 일반적으로 6~12개월 이내 제품은 정상 신품 범주로 안내합니다.",
                     "score": 0.24,
-                    "metadata": {"category": "manufacture"},
+                    "metadata": {"fact_type": "manufacture_date"},
                     "source": "FAQ Hybrid",
                 },
                 {
                     "question": "DOT 보증 확인",
                     "answer": "DOT 기준 제조 시점과 워런티 확인이 함께 필요할 수 있습니다.",
                     "score": 0.22,
-                    "metadata": {"category": "warranty"},
+                    "metadata": {"fact_type": "manufacture_date"},
                     "source": "FAQ Hybrid",
                 },
             ]
@@ -42050,9 +42051,9 @@ def test_stream_faq_policy_tool_response_emits_faq_tool_for_general_cancel_fee_p
     assert data_event["template"] == "quickReply"
     assert data_event["source_domain"] == "support"
     assert data_event["data"]["metadata"]["responseShapeKey"] == "general_cancel_fee_policy_summary"
-    assert "예약/장착 관련 비용" in data_event["data"]["assistantResponse"]
-    assert "주문/예약 내역" in data_event["data"]["assistantResponse"]
-    assert "예약/장착 관련 비용" in message_event["content"]
+    assert "별도의 취소 수수료는 없고" in data_event["data"]["assistantResponse"]
+    assert "주문/예약 내역" in data_event["data"]["quickReplies"][0]["label"]
+    assert "별도의 취소 수수료는 없고" in message_event["content"]
 
 
 def test_stream_faq_policy_tool_response_emits_direct_signup_policy() -> None:
