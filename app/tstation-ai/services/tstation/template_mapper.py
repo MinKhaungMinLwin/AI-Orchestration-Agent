@@ -1820,6 +1820,20 @@ def _tire_summary_review_line(row: dict) -> str:
     return ""
 
 
+def _tire_summary_price_range_line(row: dict) -> str:
+    min_price = int(_get_num(row, "min_sale_prc", "min_extra_fvr_sale_prc", default=0) or 0)
+    max_price = int(_get_num(row, "max_sale_prc", "max_extra_fvr_sale_prc", default=0) or 0)
+    if min_price > 0 and max_price > 0:
+        if min_price == max_price:
+            return f"가격대: {min_price:,}원"
+        return f"가격대: {min_price:,}~{max_price:,}원"
+    if min_price > 0:
+        return f"가격대: {min_price:,}원부터"
+    if max_price > 0:
+        return f"가격대: 최대 {max_price:,}원"
+    return ""
+
+
 def _tire_summary_grade_line(row: dict) -> str:
     wet = _get_str(row, "wet")
     rr = _get_str(row, "rr")
@@ -1850,6 +1864,9 @@ def _neutral_product_description_block(name: str, row: dict, size_line: str) -> 
     review_line = _tire_summary_review_line(row)
     if review_line:
         lines.append(f"  {review_line}")
+    price_line = _tire_summary_price_range_line(row)
+    if price_line:
+        lines.append(f"  {price_line}")
     if size_line:
         lines.append(f"  {size_line}")
     return lines
@@ -3533,6 +3550,14 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
                 formatted_sizes = _format_row_size_list(available_sizes, max_visible=4)
                 if formatted_sizes and len(available_sizes) >= 2:
                     size_line = f"사이즈: {formatted_sizes}"
+            elif source_tool == "search_product_summary_tool":
+                available_sizes = []
+                for size in _row_available_sizes(row):
+                    if size not in available_sizes:
+                        available_sizes.append(size)
+                formatted_sizes = _format_row_size_list(available_sizes, max_visible=4)
+                if formatted_sizes:
+                    size_line = f"지원 가능 사이즈 일부: {formatted_sizes}"
             if not size_line:
                 size_line = _confirmed_multi_size_line(rows)
         if is_neutral_product_description:
@@ -6550,6 +6575,7 @@ def _summarize_with_source(full_text: str, template: str, item_count: int) -> tu
 # ── Mapper registry ─────────────────────────────────────────────────────────────
 
 _MAPPERS: dict[str, Any] = {
+    "search_product_summary_tool": _map_product,
     "search_product_tool": _map_product,
     "get_newest_products_tool": _map_product,
     "get_products_recommendations_tool": _map_product,

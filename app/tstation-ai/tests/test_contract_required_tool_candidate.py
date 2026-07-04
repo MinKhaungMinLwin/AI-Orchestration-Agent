@@ -49,7 +49,7 @@ def test_unsized_product_summary_candidate_uses_summary_tool_without_size() -> N
     assert candidate.tool_input == {"keyword": "Ventus S2 AS", "brand_cd": "HK", "limit": 5}
 
 
-def test_multi_product_summary_candidate_does_not_force_first_product() -> None:
+def test_multi_product_summary_candidate_uses_keyword_fanout_input() -> None:
     contract = TurnContract(
         domain="discovery",
         intent="product_comparison",
@@ -64,7 +64,10 @@ def test_multi_product_summary_candidate_does_not_force_first_product() -> None:
         merged_slots=None,
     )
 
-    assert candidate is None
+    assert candidate is not None
+    assert candidate.tool_name == "search_product_summary_tool"
+    assert candidate.tool_input == {"keywords": ["Kinergy EX", "Ventus S2 AS"], "limit": 5}
+    assert candidate.tool_input_source == "current_turn_product_names"
 
 
 def test_forbidden_tool_suppresses_candidate_creation() -> None:

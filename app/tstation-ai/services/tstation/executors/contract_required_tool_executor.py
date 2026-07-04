@@ -694,10 +694,39 @@ async def recover_blocked_fast_path_to_contract_tool(
             tool = getattr(transaction_tools, preferred_tool, None)
         if tool is None or not hasattr(tool, "invoke"):
             return None
-        raw_result = await asyncio.to_thread(tool.invoke, tool_input)
-        tool_result = raw_result if isinstance(raw_result, dict) else qc_verifier.parse_tool_output(raw_result)
-        if not isinstance(tool_result, dict):
-            tool_result = {"status": "error", "http_status": None, "message": "Invalid tool response", "data": {}}
+        fanout_tool_data_list: list[dict[str, Any]] = []
+        if preferred_tool == "search_product_summary_tool" and isinstance(tool_input.get("keywords"), list):
+            for keyword in [str(value).strip() for value in tool_input.get("keywords", []) if str(value).strip()][:5]:
+                per_tool_input = {
+                    key: value
+                    for key, value in tool_input.items()
+                    if key != "keywords" and value not in (None, "", [], {})
+                }
+                per_tool_input["keyword"] = keyword
+                raw_result = await asyncio.to_thread(tool.invoke, per_tool_input)
+                per_tool_result = raw_result if isinstance(raw_result, dict) else qc_verifier.parse_tool_output(raw_result)
+                if not isinstance(per_tool_result, dict):
+                    per_tool_result = {
+                        "status": "error",
+                        "http_status": None,
+                        "message": "Invalid tool response",
+                        "data": {},
+                    }
+                fanout_tool_data_list.append({
+                    "tool": preferred_tool,
+                    "args": per_tool_input,
+                    "data": per_tool_result,
+                })
+            tool_result = (
+                fanout_tool_data_list[0]["data"]
+                if fanout_tool_data_list
+                else {"status": "error", "http_status": None, "message": "No product keywords", "data": {}}
+            )
+        else:
+            raw_result = await asyncio.to_thread(tool.invoke, tool_input)
+            tool_result = raw_result if isinstance(raw_result, dict) else qc_verifier.parse_tool_output(raw_result)
+            if not isinstance(tool_result, dict):
+                tool_result = {"status": "error", "http_status": None, "message": "Invalid tool response", "data": {}}
         if preferred_tool == "get_best_selling_products_tool":
             tool_result = _enrich_best_selling_result_for_product_cards(tool_result)
             fallback_input = _best_selling_general_fallback_input(tool_input, tool_result)
@@ -745,7 +774,7 @@ async def recover_blocked_fast_path_to_contract_tool(
             assistant_text = "매장 재고를 확인했어요."
         else:
             assistant_text = "요청하신 정보를 확인했어요."
-        tool_data_list = [{"tool": preferred_tool, "args": tool_input, "data": tool_result}]
+        tool_data_list = fanout_tool_data_list or [{"tool": preferred_tool, "args": tool_input, "data": tool_result}]
         if chained_tool_name:
             tool_data_list.append({
                 "tool": chained_tool_name,
