@@ -5851,9 +5851,15 @@ def resolve_region_or_store_input_context(
                 return RegionStoreInputContextResolution()
             pending_step = str(availability_context.get("pending_step") or "").strip()
             awaiting_store_region = bool(availability_context.get("awaiting_store_region"))
-            if pending_step != "store_region_selection" and not awaiting_store_region:
+            active_flow_context = availability_context.get("active_flow_context")
+            active_flow_awaits_store = bool(
+                isinstance(active_flow_context, Mapping)
+                and str(active_flow_context.get("flow_step") or "").strip() in {"ask_store", "show_store_candidates"}
+                and _flatten_active_flow_transaction_context(active_flow_context)
+            )
+            if pending_step != "store_region_selection" and not awaiting_store_region and not active_flow_awaits_store:
                 return RegionStoreInputContextResolution()
-            resolution_source = "pending_step"
+            resolution_source = "active_flow_context" if active_flow_awaits_store else "pending_step"
         if resolution_source is None:
             resolution_source = prompt_source
 
