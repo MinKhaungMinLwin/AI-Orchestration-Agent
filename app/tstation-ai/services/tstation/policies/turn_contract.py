@@ -100,6 +100,14 @@ _DISCOVERY_PRODUCT_SOURCE_TOOLS = frozenset({
 _PENDING_CHECK_FOLLOWUP_PLANNER_INTENTS = frozenset({
     "coupon_applicability_check",
 })
+_MAINTENANCE_TIMING_CONTRACT_INTENTS = frozenset({
+    "maintenance_timing_guidance",
+    "maintenance_schedule_guidance",
+    "maintenance_cycle_guidance",
+    "maintenance_schedule_or_cycle_guidance",
+    "maintenance_schedule_cycle_guidance",
+    "vehicle_maintenance_dday",
+})
 
 
 def _latest_router_evidence_intent(known_slots: Mapping[str, Any]) -> str:
@@ -112,6 +120,40 @@ def _latest_router_evidence_intent(known_slots: Mapping[str, Any]) -> str:
         else {}
     )
     return str(latest_router_evidence.get("intent") or "").strip()
+
+
+def _normalize_maintenance_timing_intent(value: str | None) -> str:
+    normalized = _normalize_plan_intent(str(value or ""))
+    return "maintenance_timing_guidance" if normalized in _MAINTENANCE_TIMING_CONTRACT_INTENTS else normalized
+
+
+def _contract_seed_router_evidence_intent(contract_seed: Mapping[str, Any] | None) -> str:
+    if not isinstance(contract_seed, Mapping):
+        return ""
+    router_evidence = contract_seed.get("router_evidence")
+    if isinstance(router_evidence, Mapping):
+        return str(router_evidence.get("intent") or "").strip()
+    return ""
+
+
+def _should_canonicalize_maintenance_timing_contract(
+    *,
+    planner_intent: str | None,
+    policy_intent: str | None,
+    code_intent: str | None,
+    response_shape_key: str | None = None,
+    latest_router_intent: str | None = None,
+    contract_seed: Mapping[str, Any] | None = None,
+) -> bool:
+    intent_candidates = {
+        _normalize_maintenance_timing_intent(planner_intent),
+        _normalize_maintenance_timing_intent(policy_intent),
+        _normalize_maintenance_timing_intent(code_intent),
+        _normalize_maintenance_timing_intent(response_shape_key),
+        _normalize_maintenance_timing_intent(latest_router_intent),
+        _normalize_maintenance_timing_intent(_contract_seed_router_evidence_intent(contract_seed)),
+    }
+    return "maintenance_timing_guidance" in intent_candidates
 _COMPARISON_RESOLVER_TOOLS = _DISCOVERY_PRODUCT_SOURCE_TOOLS | frozenset({"get_product_description_tool"})
 _HIGH_RISK_TRANSACTION_TOOLS = frozenset({
     "get_final_price_tool",
@@ -688,6 +730,8 @@ def build_turn_contract(
         response_decision=response_decision,
         action_mode=action_mode,
     )
+    if _normalize_maintenance_timing_intent(router_wins_intent) == "maintenance_timing_guidance":
+        router_wins_intent = "maintenance_timing_guidance"
     code_domain = _domain_value(intent_frame.domain) if intent_frame is not None else _domain_from_routing(routing_result)
     code_intent = intent_frame.intent if intent_frame is not None else _intent_from_cross_domain(cross_domain_plan)
     transaction_boundary_frame = _transaction_policy_boundary_frame(user_text=user_text, merged_slots=merged_slots)
@@ -839,6 +883,26 @@ def build_turn_contract(
     if routing_pending_check_object_value and not known_slots.get("pending_check_object_value"):
         known_slots["pending_check_object_value"] = routing_pending_check_object_value
     latest_router_intent = _latest_router_evidence_intent(known_slots)
+    if _should_canonicalize_maintenance_timing_contract(
+        planner_intent=planner_intent,
+        policy_intent=policy_intent,
+        code_intent=code_intent,
+        latest_router_intent=latest_router_intent,
+        contract_seed=contract_seed,
+    ):
+        domain = "support"
+        intent = "maintenance_timing_guidance"
+        planner_intent = (
+            "maintenance_timing_guidance"
+            if _normalize_maintenance_timing_intent(planner_intent) == "maintenance_timing_guidance"
+            else planner_intent
+        )
+        policy_intent = (
+            "maintenance_timing_guidance"
+            if _normalize_maintenance_timing_intent(policy_intent) == "maintenance_timing_guidance"
+            else policy_intent
+        )
+        known_slots["policy_intent"] = "maintenance_timing_guidance"
     if planner_intent == "owned_coupon_lookup" or code_intent == "owned_coupon_lookup":
         domain = "transaction"
         intent = "owned_coupon_lookup"
@@ -942,6 +1006,16 @@ def build_turn_contract(
     if code_intent == "maintenance_history_access_policy" or planner_intent == "maintenance_history_access_policy":
         domain = "support"
         intent = "maintenance_history_access_policy"
+    if _should_canonicalize_maintenance_timing_contract(
+        planner_intent=planner_intent,
+        policy_intent=policy_intent,
+        code_intent=code_intent,
+        response_shape_key=response_shape_key,
+        latest_router_intent=latest_router_intent,
+        contract_seed=contract_seed,
+    ):
+        domain = "support"
+        intent = "maintenance_timing_guidance"
     if code_intent == "order_document_guidance" or planner_intent == "order_document_guidance":
         domain = "support"
         intent = "order_document_guidance"
@@ -986,6 +1060,9 @@ def build_turn_contract(
     if router_wins_intent:
         domain = _router_wins_domain(router_wins_intent, planner_domains)
         intent = router_wins_intent
+    if _normalize_maintenance_timing_intent(intent) == "maintenance_timing_guidance":
+        domain = "support"
+        intent = "maintenance_timing_guidance"
     intent = _current_turn_stock_owner_intent(intent, known_slots)
     if intent == "stock_store_search":
         domain = "transaction"
@@ -1209,8 +1286,10 @@ def build_turn_contract(
             ("get_products_recommendations_tool", "search_product_tool", "get_orders_of_user_tool"),
         )
     if intent == "maintenance_timing_guidance":
-        allowed_tools = _merge_tuple(allowed_tools, ("get_maintenance_dday_tool",))
-        forbidden_tools = tuple(tool for tool in forbidden_tools if tool != "get_maintenance_dday_tool")
+        allowed_tools = _merge_tuple(allowed_tools, ("get_my_cars_tool", "get_maintenance_dday_tool"))
+        forbidden_tools = tuple(
+            tool for tool in forbidden_tools if tool not in {"get_my_cars_tool", "get_maintenance_dday_tool"}
+        )
         preferred_tool = "get_maintenance_dday_tool"
     if intent == "maintenance_history_access_policy":
         allowed_tools = ()

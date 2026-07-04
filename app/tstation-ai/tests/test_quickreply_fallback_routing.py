@@ -42308,10 +42308,49 @@ def test_maintenance_timing_guidance_contract_allows_dday_tool(user_text: str) -
     )
 
     assert contract.intent == "maintenance_timing_guidance"
+    assert "get_my_cars_tool" in contract.allowed_tools
     assert "get_maintenance_dday_tool" in contract.allowed_tools
+    assert "get_my_cars_tool" not in contract.forbidden_tools
     assert "get_maintenance_dday_tool" not in contract.forbidden_tools
     assert contract.preferred_tool == "get_maintenance_dday_tool"
     assert "get_store_schedule_tool" in contract.forbidden_tools
+
+
+def test_maintenance_timing_router_alias_is_canonical_contract_intent() -> None:
+    contract = build_turn_contract(
+        user_text="내차 정기점검 일정이 언제야?",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:maintenance_schedule_or_cycle_guidance"],
+            policy_intent="none",
+        ),
+    )
+
+    assert contract.intent == "maintenance_timing_guidance"
+    assert contract.domain == "support"
+    assert "get_my_cars_tool" in contract.allowed_tools
+    assert "get_maintenance_dday_tool" in contract.allowed_tools
+    assert contract.preferred_tool == "get_maintenance_dday_tool"
+
+
+def test_maintenance_timing_vehicle_selection_uses_latest_router_evidence_contract() -> None:
+    contract = build_turn_contract(
+        user_text="14다5499",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:single_domain"],
+            policy_intent="none",
+        ),
+        contract_seed={
+            "ui_action": {"action_type": "select_vehicle"},
+            "router_evidence": {"intent": "maintenance_schedule_or_cycle_guidance"},
+        },
+    )
+
+    assert contract.intent == "maintenance_timing_guidance"
+    assert contract.domain == "support"
+    assert "get_maintenance_dday_tool" in contract.allowed_tools
+    assert contract.preferred_tool == "get_maintenance_dday_tool"
 
 
 @pytest.mark.parametrize(

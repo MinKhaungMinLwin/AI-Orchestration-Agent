@@ -206,6 +206,7 @@ _FORCED_LISTCAR_RESPONSE_SHAPE_KEYS = frozenset({
     "vehicle_information",
     "vehicle_based_recommendation_refinement",
     "vehicle_resolved_recommendation",
+    "maintenance_timing_guidance",
 })
 _EXPLICIT_VEHICLE_LIST_REQUEST_LABELS = frozenset({
     "내 차로 확인",

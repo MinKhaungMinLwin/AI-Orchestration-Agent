@@ -31806,6 +31806,89 @@ class TStationChatServiceV2:
             )
             return (emitted_events, history_event) if history_event is not None else None
 
+        async def _resolve_maintenance_timing_vehicle_list_with_code() -> tuple[list[dict], dict] | None:
+            if str(getattr(turn_contract, "intent", "") or "") != "maintenance_timing_guidance":
+                return None
+            known_slots = getattr(turn_contract, "known_slots", {}) if turn_contract is not None else {}
+            if isinstance(known_slots, Mapping) and (
+                known_slots.get("mbr_car_reg_seq")
+                or known_slots.get("mbrCarRegSeq")
+                or known_slots.get("mbr_car_unif_no")
+                or known_slots.get("mbrCarUnifNo")
+            ):
+                return None
+            gate_allowed, gate_reason = _direct_code_fast_path_contract_gate(
+                turn_contract=turn_contract,
+                intent="maintenance_timing_guidance",
+                template="listCar",
+                source="code_maintenance_timing_vehicle_list",
+                required_tools=("get_my_cars_tool",),
+            )
+            if not gate_allowed:
+                logger.info("[CODE_FAST_PATH_GATE] blocked maintenance_timing_vehicle_list reason=%s", gate_reason)
+                return None
+
+            from services.tstation.agents.b_discovery_agent.tools import get_my_cars_tool as _get_my_cars_tool
+            from services.tstation.template_mapper import try_build_template
+
+            emitted_events: list[dict] = []
+            tool_input = {"mbr_no": user_id}
+            emitted_events.append({
+                "type": "status",
+                "status": "tool_start",
+                "tool": "get_my_cars_tool",
+                "display_name": "내 차량 조회 중...",
+                "source_domain": "support",
+            })
+            try:
+                raw_cars = await asyncio.to_thread(_get_my_cars_tool.invoke, tool_input)
+                cars_result = _tool_result_dict(raw_cars)
+            except Exception as exc:
+                logger.exception("[MAINTENANCE_TIMING] get_my_cars_tool failed")
+                cars_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+            _record_code_tool_result("get_my_cars_tool", tool_input, cars_result)
+            emitted_events.append({
+                "type": "agent_flow",
+                "agent": "[FAQ AF]",
+                "agent_class": "Support Agent",
+                "status": cars_result.get("status", "success"),
+                "source_domain": "support",
+            })
+            emitted_events.append({
+                "type": "tool",
+                "input": tool_input,
+                "output": json.dumps(cars_result, ensure_ascii=False),
+                "node": "tools",
+                "tool": "get_my_cars_tool",
+                "source_domain": "support",
+            })
+
+            assistant_text = "등록된 차량을 확인했어요. 정비 일정을 확인할 차량을 선택해 주세요."
+            mapped_event = try_build_template(
+                [{"tool": "get_my_cars_tool", "args": tool_input, "data": cars_result}],
+                assistant_text,
+            )
+            if not isinstance(mapped_event, dict):
+                return None
+            mapped_event["source_domain"] = MultiAgentDomain.Domain.SUPPORT.value
+            mapped_event["assistant_response_source"] = "code_maintenance_timing_vehicle_list"
+            event_data = mapped_event.get("data")
+            if isinstance(event_data, dict):
+                for meta in event_data.get("metadata") or []:
+                    if isinstance(meta, dict):
+                        meta["sourceIntent"] = "maintenance_timing_guidance"
+                        meta["source_intent"] = "maintenance_timing_guidance"
+                        meta["expectedContractIntent"] = "maintenance_timing_guidance"
+                        meta["expected_contract_intent"] = "maintenance_timing_guidance"
+            list_event = _finalize_direct_code_event(
+                mapped_event,
+                turn_contract=turn_contract,
+                intent="maintenance_timing_guidance",
+                source="code_maintenance_timing_vehicle_list",
+                required_tools=("get_my_cars_tool",),
+            )
+            return (emitted_events, list_event) if list_event is not None else None
+
         async def _resolve_reservation_store_info_with_code() -> tuple[list[dict], dict] | None:
             if not _is_reservation_store_info_lookup_query(user_query):
                 return None
@@ -35354,7 +35437,7 @@ class TStationChatServiceV2:
                 tool_input = {"mbr_car_reg_seq": selected_meta.get("mbrCarRegSeq") or None}
                 gate_allowed, gate_reason = _direct_code_fast_path_contract_gate(
                     turn_contract=turn_contract,
-                    intent="maintenance_history_lookup",
+                    intent="maintenance_timing_guidance",
                     template="quickReply",
                     source="code_vehicle_maintenance_dday",
                     required_tools=(tool_name,),
@@ -35405,7 +35488,7 @@ class TStationChatServiceV2:
                 maintenance_event = _finalize_direct_code_event(
                     _build_maintenance_dday_event(tool_result, selected, user_query),
                     turn_contract=turn_contract,
-                    intent="maintenance_history_lookup",
+                    intent="maintenance_timing_guidance",
                     source="code_vehicle_maintenance_dday",
                     required_tools=(tool_name,),
                     allowed_intents=(
@@ -36118,6 +36201,22 @@ class TStationChatServiceV2:
             assistant_response = str((reorder_event.get("data") or {}).get("assistantResponse") or "")
             if assistant_response:
                 yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[TRANSACTION AGENT]'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
+        maintenance_timing_vehicle_list_resolution = await _resolve_maintenance_timing_vehicle_list_with_code()
+        if maintenance_timing_vehicle_list_resolution is not None:
+            code_events, vehicle_list_event = maintenance_timing_vehicle_list_resolution
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[SUPPORT AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+            for code_event in code_events:
+                yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[SUPPORT AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(vehicle_list_event, ensure_ascii=False)}\n\n"
+            assistant_response = str((vehicle_list_event.get("data") or {}).get("assistantResponse") or "")
+            if assistant_response:
+                yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[SUPPORT AGENT]'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
             yield "data: [DONE]\n\n"
