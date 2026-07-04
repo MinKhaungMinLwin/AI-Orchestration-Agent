@@ -42333,6 +42333,45 @@ def test_maintenance_timing_router_alias_is_canonical_contract_intent() -> None:
     assert contract.preferred_tool == "get_maintenance_dday_tool"
 
 
+def test_maintenance_timing_router_descriptive_plan_is_canonical_contract_intent() -> None:
+    contract = build_turn_contract(
+        user_text="내차 정기점검 일정이 언제야?",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["explain maintenance timing guidance and how to check the schedule"],
+            policy_intent="none",
+        ),
+    )
+
+    assert contract.intent == "maintenance_timing_guidance"
+    assert contract.domain == "support"
+    assert "get_my_cars_tool" in contract.allowed_tools
+    assert "get_maintenance_dday_tool" in contract.allowed_tools
+
+
+def test_maintenance_timing_vehicle_check_alias_is_canonical_contract_intent() -> None:
+    contract = build_turn_contract(
+        user_text="61거1836",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:vehicle_maintenance_timing_check"],
+            policy_intent="none",
+        ),
+        contract_seed={
+            "ui_action": {
+                "action_type": "select_vehicle",
+                "expected_contract_intent": "maintenance_timing_guidance",
+            },
+            "router_evidence": {"intent": "vehicle_maintenance_timing_check"},
+        },
+    )
+
+    assert contract.intent == "maintenance_timing_guidance"
+    assert contract.domain == "support"
+    assert "get_maintenance_dday_tool" in contract.allowed_tools
+    assert contract.preferred_tool == "get_maintenance_dday_tool"
+
+
 def test_maintenance_timing_vehicle_selection_uses_latest_router_evidence_contract() -> None:
     contract = build_turn_contract(
         user_text="14다5499",
@@ -42351,6 +42390,14 @@ def test_maintenance_timing_vehicle_selection_uses_latest_router_evidence_contra
     assert contract.domain == "support"
     assert "get_maintenance_dday_tool" in contract.allowed_tools
     assert contract.preferred_tool == "get_maintenance_dday_tool"
+
+
+def test_maintenance_timing_keyword_route_uses_canonical_execution_plan() -> None:
+    routing = StreamingMultiAgentCoordinator._force_keyword_routing("엔진오일 교환은 언제해야돼?")
+
+    assert routing is not None
+    assert routing.domains == [MultiAgentDomain.Domain.SUPPORT]
+    assert routing.execution_plan == ["support:maintenance_timing_guidance"]
 
 
 @pytest.mark.parametrize(

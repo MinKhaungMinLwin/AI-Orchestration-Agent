@@ -102,10 +102,13 @@ _PENDING_CHECK_FOLLOWUP_PLANNER_INTENTS = frozenset({
 })
 _MAINTENANCE_TIMING_CONTRACT_INTENTS = frozenset({
     "maintenance_timing_guidance",
+    "maintenance_timing_check",
+    "maintenance_dday_lookup",
     "maintenance_schedule_guidance",
     "maintenance_cycle_guidance",
     "maintenance_schedule_or_cycle_guidance",
     "maintenance_schedule_cycle_guidance",
+    "vehicle_maintenance_timing_check",
     "vehicle_maintenance_dday",
 })
 
@@ -136,6 +139,21 @@ def _contract_seed_router_evidence_intent(contract_seed: Mapping[str, Any] | Non
     return ""
 
 
+def _contract_seed_ui_action_intent(contract_seed: Mapping[str, Any] | None) -> str:
+    if not isinstance(contract_seed, Mapping):
+        return ""
+    ui_action = contract_seed.get("ui_action")
+    if not isinstance(ui_action, Mapping):
+        return ""
+    return str(
+        ui_action.get("expected_contract_intent")
+        or ui_action.get("expectedContractIntent")
+        or ui_action.get("source_intent")
+        or ui_action.get("sourceIntent")
+        or ""
+    ).strip()
+
+
 def _should_canonicalize_maintenance_timing_contract(
     *,
     planner_intent: str | None,
@@ -152,6 +170,7 @@ def _should_canonicalize_maintenance_timing_contract(
         _normalize_maintenance_timing_intent(response_shape_key),
         _normalize_maintenance_timing_intent(latest_router_intent),
         _normalize_maintenance_timing_intent(_contract_seed_router_evidence_intent(contract_seed)),
+        _normalize_maintenance_timing_intent(_contract_seed_ui_action_intent(contract_seed)),
     }
     return "maintenance_timing_guidance" in intent_candidates
 _COMPARISON_RESOLVER_TOOLS = _DISCOVERY_PRODUCT_SOURCE_TOOLS | frozenset({"get_product_description_tool"})
@@ -5716,6 +5735,9 @@ def _planner_intent(routing_result: Any | None, plan: CrossDomainPlan | None) ->
         if ":" in token:
             _, intent = token.split(":", 1)
             return _normalize_plan_intent(intent)
+        normalized_text = re.sub(r"[^a-zA-Z0-9가-힣]+", " ", token.lower()).strip()
+        if "maintenance timing" in normalized_text or "maintenance d day" in normalized_text:
+            return "maintenance_timing_guidance"
     return None
 
 

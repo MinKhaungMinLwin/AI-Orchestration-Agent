@@ -4094,6 +4094,17 @@ class StreamingMultiAgentCoordinator:
                             policy_intent="tire_quality_warranty_policy",
                             flow="tire warranty policy routed to FAQ-first support policy",
                         )
+                    if domain == MultiAgentDomain.Domain.SUPPORT and _MAINTENANCE_DDAY_TEXT_RE.search(text):
+                        return MultiAgentDomain(
+                            reason=f"hardcoded keyword routing matched '{kw}' with maintenance timing question",
+                            domains=[MultiAgentDomain.Domain.SUPPORT],
+                            execution_plan=["support:maintenance_timing_guidance"],
+                            user_behavior="asking for registered-vehicle maintenance D-day or item replacement timing",
+                            agent_prompt_profile=AgentPromptProfile.FULL,
+                            claim_check_type="none",
+                            complaint_scope="none",
+                            flow="maintenance timing routed to registered-vehicle D-day contract",
+                        )
                     return MultiAgentDomain(
                         reason=f"hardcoded keyword routing matched '{kw}'",
                         domains=[domain],
@@ -6839,6 +6850,33 @@ def _build_maintenance_dday_event(tool_result: dict, selected_vehicle: dict, use
     if not car_rows:
         response = "선택하신 차량의 정비 일정을 확인하지 못했어요. 정비이력 페이지에서 다시 확인해 주세요."
     else:
+        focus = _requested_maintenance_focus(user_query)
+        if focus is not None and not selected_seq:
+            focus_lines: list[str] = []
+            for car_row in car_rows:
+                name = str(car_row.get("car_nm") or selected_car.get("info") or "등록 차량").strip()
+                focus_response = _build_maintenance_focus_response(name, car_row.get("items") or [], user_query)
+                if focus_response:
+                    focus_lines.append(focus_response)
+            if focus_lines:
+                response = "\n\n".join(focus_lines[:3])
+                if len(focus_lines) > 3:
+                    response += "\n\n나머지 차량은 정비 알림 화면에서 함께 확인할 수 있어요."
+                return {
+                    "type": "data",
+                    "template": "quickReply",
+                    "source_domain": MultiAgentDomain.Domain.SUPPORT.value,
+                    "assistant_response_source": "code_vehicle_auto_select",
+                    "data": {
+                        "assistantResponse": response,
+                        "quickReplies": [
+                            {"label": "all my T 점검", "url": CTAUrls.MEMBERSHIP_DASHBOARD, "domain": "SUPPORT"},
+                            {"label": "매장 예약", "domain": "TRANSACTION"},
+                            {"label": "타이어 추천 받기", "domain": "DISCOVERY"},
+                        ],
+                        "predictedDomains": ["SUPPORT", "TRANSACTION", "DISCOVERY"],
+                    },
+                }
         lines: list[str] = []
         for car_row in car_rows:
             name = str(car_row.get("car_nm") or selected_car.get("info") or "선택하신 차량").strip()
@@ -31889,6 +31927,77 @@ class TStationChatServiceV2:
             )
             return (emitted_events, list_event) if list_event is not None else None
 
+        async def _resolve_maintenance_timing_dday_with_code() -> tuple[list[dict], dict] | None:
+            if str(getattr(turn_contract, "intent", "") or "") != "maintenance_timing_guidance":
+                return None
+            if _requested_maintenance_focus(user_query) is None:
+                return None
+            known_slots = getattr(turn_contract, "known_slots", {}) if turn_contract is not None else {}
+            selected_seq = ""
+            if isinstance(known_slots, Mapping):
+                selected_seq = str(
+                    known_slots.get("mbr_car_reg_seq")
+                    or known_slots.get("mbrCarRegSeq")
+                    or known_slots.get("mbr_car_unif_no")
+                    or known_slots.get("mbrCarUnifNo")
+                    or ""
+                ).strip()
+            tool_name = "get_maintenance_dday_tool"
+            gate_allowed, gate_reason = _direct_code_fast_path_contract_gate(
+                turn_contract=turn_contract,
+                intent="maintenance_timing_guidance",
+                template="quickReply",
+                source="code_maintenance_timing_dday",
+                required_tools=(tool_name,),
+            )
+            if not gate_allowed:
+                logger.info("[CODE_FAST_PATH_GATE] blocked maintenance_timing_dday reason=%s", gate_reason)
+                return None
+
+            from services.tstation.agents.e_support_agent.tools import (
+                get_maintenance_dday_tool as _maintenance_dday_tool,
+            )
+
+            tool_input = {"mbr_car_reg_seq": selected_seq or None}
+            emitted_events: list[dict] = [{
+                "type": "status",
+                "status": "tool_start",
+                "tool": tool_name,
+                "display_name": "정비 일정 조회 중...",
+                "source_domain": "support",
+            }]
+            try:
+                raw_result = await asyncio.to_thread(_maintenance_dday_tool.invoke, tool_input)
+                tool_result = _tool_result_dict(raw_result)
+            except Exception as exc:
+                logger.exception("[MAINTENANCE_TIMING] D-day tool failed")
+                tool_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+            _record_code_tool_result(tool_name, tool_input, tool_result)
+            emitted_events.append({
+                "type": "agent_flow",
+                "agent": "[FAQ AF]",
+                "agent_class": "Support Agent",
+                "status": tool_result.get("status", "success"),
+                "source_domain": "support",
+            })
+            emitted_events.append({
+                "type": "tool",
+                "input": tool_input,
+                "output": json.dumps(tool_result, ensure_ascii=False),
+                "node": "tools",
+                "tool": tool_name,
+                "source_domain": "support",
+            })
+            selected_vehicle: dict[str, Any] = {"meta": {"mbrCarRegSeq": selected_seq}} if selected_seq else {}
+            dday_event = _finalize_direct_code_event(
+                _build_maintenance_dday_event(tool_result, selected_vehicle, user_query),
+                turn_contract=turn_contract,
+                intent="maintenance_timing_guidance",
+                source="code_maintenance_timing_dday",
+                required_tools=(tool_name,),
+            )
+            return (emitted_events, dday_event) if dday_event is not None else None
+
         async def _resolve_reservation_store_info_with_code() -> tuple[list[dict], dict] | None:
             if not _is_reservation_store_info_lookup_query(user_query):
                 return None
@@ -36201,6 +36310,22 @@ class TStationChatServiceV2:
             assistant_response = str((reorder_event.get("data") or {}).get("assistantResponse") or "")
             if assistant_response:
                 yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[TRANSACTION AGENT]'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
+        maintenance_timing_dday_resolution = await _resolve_maintenance_timing_dday_with_code()
+        if maintenance_timing_dday_resolution is not None:
+            code_events, dday_event = maintenance_timing_dday_resolution
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[SUPPORT AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+            for code_event in code_events:
+                yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[SUPPORT AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(dday_event, ensure_ascii=False)}\n\n"
+            assistant_response = str((dday_event.get("data") or {}).get("assistantResponse") or "")
+            if assistant_response:
+                yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[SUPPORT AGENT]'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
             yield "data: [DONE]\n\n"
