@@ -1,27 +1,24 @@
-"""Deterministic car-model-name → vehicle-category inference catalog.
+"""Deterministic car-model-name -> vehicle-category inference catalog.
 
 First-pass mapping for text-based vehicle recommendations ("G바겐 타이어 추천해줘"):
 when the user names a car model without an explicit category keyword
-(SUV/전기차/세단/트럭 — those win upstream in ``discovery_intent_policy``), infer the
+(SUV/전기차/세단/트럭 -- those win upstream in ``discovery_intent_policy``), infer the
 recommendation ``vehicle_type`` filter ("ev" | "suv" | "passenger" | "truck_van")
 from the model name.
 
-Design rules (each is a paid-for lesson — do not drop):
-
+Design rules:
 1. EV-only rule: only dedicated-EV models map to "ev". Models sold as both ICE and
-   EV variants (코나, 니로, G80, GV70 …) map to their BODY type, so EV-specific
-   products are recommended only on an explicit EV request. Mapping a dual-fuel or
-   ICE model to "ev" is a regression bug (ICE car recommended EV-only tires).
-2. Entry order matters: the FIRST matching entry wins, so a longer/more specific
-   name must precede its prefix (렉스턴 스포츠 → truck_van BEFORE 렉스턴 → suv).
-3. ``masked_text`` blanks the matched model mentions so scenario-keyword extraction
-   can ignore words that are part of the model name (스포츠 in 렉스턴 스포츠).
-4. Alias matching: Latin/alphanumeric aliases match with non-alphanumeric
-   boundaries and flexible space/hyphen ("E-Class" ≡ "E Class" ≡ "EClass"; "X5"
-   does NOT match inside "EX5"). Korean aliases match as substrings because
-   particles attach directly (팰리세이드에, 팰리세이드는).
-5. Curated, not exhaustive (~70 common KR + import models). Unlisted models fall
-   back to the Discovery agent's own model knowledge (CAR MODEL DISPLAY flow).
+   EV variants (코나, 니로, G80, GV70, etc.) map to their body type, so EV-specific
+   products are recommended only on an explicit EV request.
+2. Entry order matters: the first matching entry wins, so longer/more specific
+   names must precede prefixes (렉스턴 스포츠 before 렉스턴).
+3. ``masked_text`` blanks matched model mentions so scenario extraction ignores
+   words that belong to the model name (스포츠 in 렉스턴 스포츠).
+4. Latin/alphanumeric aliases use non-alphanumeric boundaries and flexible
+   space/hyphen matching. Korean aliases match as substrings because particles
+   attach directly.
+5. Curated, not exhaustive. Unlisted models fall back to the Discovery agent's
+   own model knowledge in the CAR MODEL DISPLAY flow.
 """
 
 from __future__ import annotations
@@ -31,23 +28,18 @@ from typing import NamedTuple
 
 
 class VehicleModelMatch(NamedTuple):
-    model: str  # canonical display name, e.g. "팰리세이드", "벤츠 G클래스"
+    model: str
     category: str  # "ev" | "suv" | "passenger" | "truck_van"
-    masked_text: str  # input with the matched model mentions blanked out
+    masked_text: str
+    matched_text: str
+    vehicle_query: str
 
 
 _LATIN_ALIAS_RE = re.compile(r"^[A-Za-z0-9 .\-]+$")
 
 
 def _alias_pattern(alias: str) -> str:
-    """Compile a single alias into a regex fragment.
-
-    - Aliases starting with ``(?`` are treated as raw regex (e.g. a negative
-      lookbehind guard) and passed through unchanged.
-    - Latin/alphanumeric aliases get non-alphanumeric boundaries so trims like
-      "EX5" do not match "X5", plus flexible space/hyphen between tokens.
-    - Korean aliases match as substrings (particles attach directly).
-    """
+    """Compile one alias into a regex fragment."""
     if alias.startswith("(?"):
         return alias
     body = r"[\s\-]*".join(re.escape(token) for token in re.split(r"[ \-]", alias) if token)
@@ -150,15 +142,42 @@ _COMPILED: tuple[tuple[str, str, re.Pattern[str]], ...] = tuple(
 )
 
 
-def match_vehicle_model_category(text: str) -> VehicleModelMatch | None:
-    """Return the first cataloged vehicle model mentioned in ``text``, or None.
+def _vehicle_query_for_match(model: str, matched_text: str, text: str, match_end: int) -> str:
+    matched_text = re.sub(r"\s+", " ", matched_text or "").strip()
+    if not matched_text:
+        return model
+    maker = model.split(" ", 1)[0] if " " in model else ""
+    if "시리즈" in model or "/" in model:
+        query = matched_text
+        trim_match = re.match(
+            r"\s*([A-Za-z]?\d{3}[A-Za-z]?)(?=\s|에|은|는|이|가|도|로|으로|,|\.|\?|!|$)",
+            text[match_end:],
+        )
+        if trim_match and trim_match.group(1).lower() not in query.lower():
+            query = f"{query} {trim_match.group(1)}"
+        if model.startswith("BMW ") and maker and not re.search(
+            rf"(?<![A-Za-z0-9]){re.escape(maker)}(?![A-Za-z0-9])",
+            query,
+            re.IGNORECASE,
+        ):
+            return f"{maker} {query}"
+        return query
+    return model
 
-    ``masked_text`` blanks the model mentions so scenario-keyword extraction can
-    ignore words that are part of the model name (e.g. "스포츠" in "렉스턴 스포츠").
-    """
+
+def match_vehicle_model_category(text: str) -> VehicleModelMatch | None:
+    """Return the first cataloged vehicle model mentioned in ``text``, or None."""
     if not text:
         return None
     for model, category, pattern in _COMPILED:
-        if pattern.search(text):
-            return VehicleModelMatch(model=model, category=category, masked_text=pattern.sub(" ", text))
+        match = pattern.search(text)
+        if match:
+            matched_text = match.group(0)
+            return VehicleModelMatch(
+                model=model,
+                category=category,
+                masked_text=pattern.sub(" ", text),
+                matched_text=matched_text,
+                vehicle_query=_vehicle_query_for_match(model, matched_text, text, match.end()),
+            )
     return None

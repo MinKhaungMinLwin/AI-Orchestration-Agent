@@ -729,7 +729,9 @@ async def recover_blocked_fast_path_to_contract_tool(
             if chained_recommendation is not None:
                 chained_tool_name = "get_products_recommendations_tool"
                 chained_tool_input, chained_tool_result, chained_recovery_reason = chained_recommendation
-        if preferred_tool == "search_product_tool":
+        if preferred_tool == "search_product_summary_tool":
+            assistant_text = f"{str(tool_input.get('keyword') or '상품')} 상품 정보를 확인했어요."
+        elif preferred_tool == "search_product_tool":
             assistant_text = f"{str(tool_input.get('keyword') or '상품')} 상품을 확인했어요."
         elif preferred_tool == "get_product_description_tool":
             assistant_text = "상품 상세 정보를 확인했어요."

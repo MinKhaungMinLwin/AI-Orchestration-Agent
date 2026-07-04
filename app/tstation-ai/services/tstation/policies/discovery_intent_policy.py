@@ -72,30 +72,40 @@ def _named_my_vehicle_anchor(text: str) -> str | None:
     return _named_vehicle_anchor_from_pattern(text, _MY_NAMED_VEHICLE_RE)
 
 
+_TIRE_SIZE_PRICE_PARSE_MASK_RE = re.compile(
+    r"(?<!\d)(\d{3})\s*/?\s*(\d{2})\s*R?\s*(\d{2})(?=\s*\d{1,3}\s*만원|[^\d]|$)",
+    re.IGNORECASE,
+)
+
+
 def _price_range_from_text(text: str) -> dict[str, int]:
-    normalized = re.sub(r"\s+", "", text or "")
+    size_masked_text = _TIRE_SIZE_PRICE_PARSE_MASK_RE.sub(" ", text or "")
+    normalized = re.sub(r"\s+", "", size_masked_text)
     if not normalized:
         return {}
-    match = re.search(r"(?P<low>\d{1,3})만원(?:대|선)", normalized)
+    match = re.search(r"(?<!\d)(?P<low>\d{1,3})만원(?:대|선)", normalized)
     if match:
         low = int(match.group("low")) * 10_000
         return {"min_price": low, "max_price": low + 99_999}
-    match = re.search(r"(?P<low>\d{1,3})만원(?:부터|이상)[~\-]?(?P<high>\d{1,3})?만원?(?:까지|이하)?", normalized)
+    match = re.search(
+        r"(?<!\d)(?P<low>\d{1,3})만원(?:부터|이상)[~\-]?(?P<high>\d{1,3})?만원?(?:까지|이하)?",
+        normalized,
+    )
     if match:
         result = {"min_price": int(match.group("low")) * 10_000}
         if match.group("high"):
             result["max_price"] = int(match.group("high")) * 10_000
         return result
-    match = re.search(r"(?P<low>\d{1,3})만원[~\-](?P<high>\d{1,3})만원", normalized)
+    match = re.search(r"(?<!\d)(?P<low>\d{1,3})만원[~\-](?P<high>\d{1,3})만원", normalized)
     if match:
         return {
             "min_price": int(match.group("low")) * 10_000,
             "max_price": int(match.group("high")) * 10_000,
         }
-    match = re.search(r"(?P<price>\d{1,3})만원(?:이하|까지|안쪽|미만)", normalized)
+    match = re.search(r"(?<!\d)(?P<price>\d{1,3})만원(?:이하|까지|안쪽|미만)", normalized)
     if match:
         return {"max_price": int(match.group("price")) * 10_000}
-    match = re.search(r"(?P<price>\d{1,3})만원(?:이상|부터)", normalized)
+    match = re.search(r"(?<!\d)(?P<price>\d{1,3})만원(?:이상|부터)", normalized)
     if match:
         return {"min_price": int(match.group("price")) * 10_000}
     return {}
@@ -166,20 +176,26 @@ _MY_VEHICLE_RECOMMENDATION_RE = re.compile(
     re.IGNORECASE,
 )
 _REGISTERED_VEHICLE_OWNERSHIP_RE = re.compile(
-    r"내(?:가)?\s*(?:등록(?:한|해\s*둔|해둔|된)?|보유(?:한)?)\s*(?:차|차량)|"
+    r"내(?:가)?\s*(?:(?:홈페이지|사이트|티스테이션|계정)에?\s*)?"
+    r"(?:등록(?:한|해\s*둔|해둔|된)?|보유(?:한)?)\s*(?:차|차량)|"
     r"내\s*등록\s*(?:차|차량)|"
-    r"등록(?:한|해\s*둔|해둔|된)?\s*내\s*(?:차|차량)",
+    r"등록(?:한|해\s*둔|해둔|된)?\s*내\s*(?:차|차량)|"
+    r"(?:홈페이지|사이트|티스테이션|계정)에?\s*등록(?:한|해\s*둔|해둔|된)?\s*내\s*(?:차|차량)",
     re.IGNORECASE,
 )
 _REGISTERED_VEHICLE_TYPE_QUERY_RE = re.compile(
-    r"(?:내(?:가)?\s*(?:등록(?:한|해\s*둔|해둔|된)?|보유(?:한)?)?\s*(?:차종|차량|차)|"
-    r"등록(?:한|해\s*둔|해둔|된)?\s*내\s*(?:차종|차량|차))"
-    r"(?:이|가)?\s*(?:뭐(?:야|니|고|였|지|든지|ㄴ지)?|뭔지|뭔가|"
+    r"(?:내(?:가)?\s*(?:(?:홈페이지|사이트|티스테이션|계정)에?\s*)?"
+    r"(?:등록(?:한|해\s*둔|해둔|된)?|보유(?:한)?)?\s*(?:차종|차량|차)|"
+    r"등록(?:한|해\s*둔|해둔|된)?\s*내\s*(?:차종|차량|차)|"
+    r"(?:홈페이지|사이트|티스테이션|계정)에?\s*등록(?:한|해\s*둔|해둔|된)?\s*내\s*(?:차종|차량|차))"
+    r"(?:이|가)?\s*(?:목록|리스트|보기|보여\s*(?:줘|주세요)?|확인|조회|"
+    r"뭐(?:야|니|고|였|지|든지|ㄴ지)?|뭔지|뭔가|"
     r"무슨\s*(?:차|차종|차량)인지|어떤\s*(?:차|차종|차량)인지|알려\s*(?:줘|줄래|주세요|주라)?)",
     re.IGNORECASE,
 )
 _REGISTERED_NAMED_VEHICLE_RE = re.compile(
-    r"(?:내(?:가)?\s*(?:등록(?:한|해\s*둔|해둔|된)?|보유(?:한)?)\s*(?:차|차량)|"
+    r"(?:내(?:가)?\s*(?:(?:홈페이지|사이트|티스테이션|계정)에?\s*)?"
+    r"(?:등록(?:한|해\s*둔|해둔|된)?|보유(?:한)?)\s*(?:차|차량)|"
     r"내\s*등록\s*(?:차|차량)|등록(?:한|해\s*둔|해둔|된)?\s*내\s*(?:차|차량)|등록\s*차량|등록차)"
     r"\s*(?:목록\s*)?중(?:에|에서)?\s*"
     r"(?P<model>[0-9A-Za-z가-힣][0-9A-Za-z가-힣\s._-]{1,24}?)(?="
@@ -374,8 +390,13 @@ _PRODUCT_ALIASES: tuple[tuple[str, str, str], ...] = (
     ("다이나프로 hp3", "Dynapro HP3", "HK"),
     ("kinergy ex", "Kinergy EX", "HK"),
     ("키너지 ex", "Kinergy EX", "HK"),
+    ("kinergy 4s2", "키너지 4S2", "HK"),
+    ("키너지 4s2", "키너지 4S2", "HK"),
+    ("키너지4s2", "키너지 4S2", "HK"),
     ("kinergy st as", "Kinergy ST AS", "HK"),
     ("키너지 st as", "Kinergy ST AS", "HK"),
+    ("weatherflex gt", "웨더플렉스 GT", "HK"),
+    ("웨더플렉스 gt", "웨더플렉스 GT", "HK"),
     ("ion evo as", "iON evo AS", "HK"),
     ("아이온 evo as", "iON evo AS", "HK"),
     ("아이온 에보 as", "iON evo AS", "HK"),
@@ -729,14 +750,31 @@ _BEST_SELLER_VEHICLE_TOKEN_STOPWORDS = {
     "추천해줘", "알려줘", "보여줘", "순위", "판매량", "는", "가", "이", "좀",
 }
 _BEST_SELLER_VEHICLE_TRAILING_PARTICLE_RE = re.compile(r"(?:에서|으로|로|에|은|는|이|가|도|만|과|와)$")
+_GENERAL_BEST_SELLER_SCOPE_RE = re.compile(
+    r"^(?:전체|전부|모든|통합)?\s*(?:베스트\s*셀러|베스트셀러|인기\s*(?:상품|제품|타이어)|잘\s*팔리는\s*타이어)"
+    r"\s*(?:보기|보여줘|알려줘|확인|목록)?$",
+    re.IGNORECASE,
+)
+
+
+def is_general_best_seller_scope_request(text: str) -> bool:
+    text = re.sub(r"\s+", " ", str(text or "")).strip(" ,.?!")
+    if not text or not is_best_seller_request(text):
+        return False
+    return bool(_GENERAL_BEST_SELLER_SCOPE_RE.fullmatch(text))
 
 
 def extract_best_seller_vehicle_query(text: str) -> str | None:
     text = str(text or "").strip()
     if not text or not is_best_seller_request(text):
         return None
+    if is_general_best_seller_scope_request(text):
+        return None
     if _DEMOGRAPHIC_ATTRIBUTE_RE.search(text) and _DEMOGRAPHIC_PREFERENCE_RE.search(text):
         return None
+    vehicle_model_match = match_vehicle_model_category(text)
+    if vehicle_model_match is not None:
+        return vehicle_model_match.vehicle_query
 
     candidate = _BEST_SELLER_VEHICLE_STRIP_RE.sub(" ", text)
     candidate = re.sub(r"\s+", " ", candidate).strip(" ,.")
@@ -1029,7 +1067,13 @@ def build_discovery_intent_frame(
     if best_seller_period:
         entities["best_seller_period"] = best_seller_period
         entities.update(best_seller_search_params_from_text(text))
-        best_seller_vehicle_query = extract_best_seller_vehicle_query(text)
+        best_seller_vehicle_query = ""
+        if is_general_best_seller_scope_request(text):
+            best_seller_vehicle_query = ""
+        elif vehicle_model_match is not None:
+            best_seller_vehicle_query = vehicle_model_match.vehicle_query
+        else:
+            best_seller_vehicle_query = extract_best_seller_vehicle_query(text) or ""
         if best_seller_vehicle_query:
             entities["vehicle_query"] = best_seller_vehicle_query
     if is_default_tire_shopping_request(text):
@@ -1297,6 +1341,7 @@ def build_discovery_intent_frame(
 
 def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
     entities = frame.entities
+    tire_size = entities.get("tire_size")
     if frame.sub_intent == "vehicle_information":
         return ToolPlan(
             allowed_tools=("get_my_cars_tool",),
@@ -1460,6 +1505,14 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
         args = {"keyword": (entities.get("product_names") or ("",))[0]}
         if entities.get("brand_cd"):
             args["brand_cd"] = entities["brand_cd"]
+        if not tire_size:
+            return ToolPlan(
+                allowed_tools=("search_product_summary_tool",),
+                preferred_tool="search_product_summary_tool",
+                tool_args_patch=args,
+                forbidden_tools=("get_products_recommendations_tool", "generic_unsized_recommendation"),
+            )
+        args["size"] = tire_size
         return ToolPlan(
             allowed_tools=("search_product_tool",),
             preferred_tool="search_product_tool",
@@ -1476,6 +1529,23 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
         )
     if frame.intent == "product_description":
         product_names = entities.get("product_names") or ()
+        args = {"keyword": (product_names or ("",))[0]}
+        if entities.get("brand_cd"):
+            args["brand_cd"] = entities["brand_cd"]
+        if not tire_size:
+            if len(product_names) >= 2:
+                return ToolPlan(
+                    allowed_tools=("search_product_summary_tool",),
+                    preferred_tool="search_product_summary_tool",
+                    forbidden_tools=("get_products_recommendations_tool", "search_product_tool"),
+                    metadata={"response_intent": "multi_product_detail"},
+                )
+            return ToolPlan(
+                allowed_tools=("search_product_summary_tool",),
+                preferred_tool="search_product_summary_tool",
+                tool_args_patch=args,
+                forbidden_tools=("get_products_recommendations_tool", "search_product_tool"),
+            )
         if len(product_names) >= 2:
             return ToolPlan(
                 allowed_tools=("search_product_tool",),
@@ -1483,9 +1553,7 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
                 forbidden_tools=("get_products_recommendations_tool",),
                 metadata={"response_intent": "multi_product_detail"},
             )
-        args = {"keyword": (product_names or ("",))[0]}
-        if entities.get("brand_cd"):
-            args["brand_cd"] = entities["brand_cd"]
+        args["size"] = tire_size
         return ToolPlan(
             allowed_tools=("search_product_tool", "get_product_description_tool"),
             preferred_tool="search_product_tool",
@@ -1502,6 +1570,29 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
                 args["size"] = entities["tire_size"]
             if entities.get("brand_cd"):
                 args["brand_cd"] = entities["brand_cd"]
+            return ToolPlan(
+                allowed_tools=("search_product_tool", "get_product_description_tool", "get_cheapest_price_tool"),
+                preferred_tool="search_product_tool",
+                tool_args_patch=args,
+                forbidden_tools=("get_products_recommendations_tool", "product_card_first_response"),
+            )
+        product_names = entities.get("product_names") or ()
+        if not tire_size and product_names:
+            summary_args = {"keyword": product_names[0]}
+            if entities.get("brand_cd"):
+                summary_args["brand_cd"] = entities["brand_cd"]
+            is_multi_product_summary = len(product_names) >= 2
+            return ToolPlan(
+                allowed_tools=("search_product_summary_tool", "get_product_description_tool"),
+                preferred_tool="search_product_summary_tool",
+                tool_args_patch={} if is_multi_product_summary else summary_args,
+                forbidden_tools=(
+                    "get_products_recommendations_tool",
+                    "product_card_first_response",
+                    "search_product_tool",
+                ),
+                metadata={"response_intent": "multi_product_detail"} if is_multi_product_summary else {},
+            )
         return ToolPlan(
             allowed_tools=("search_product_tool", "get_product_description_tool", "get_cheapest_price_tool"),
             preferred_tool="search_product_tool",

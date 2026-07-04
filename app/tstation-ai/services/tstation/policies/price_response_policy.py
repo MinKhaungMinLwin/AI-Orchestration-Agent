@@ -257,6 +257,158 @@ def decide_price_response(frame: IntentFrame) -> ResponseDecision:
     )
 
 
+_COUPON_PRICE_AMOUNT_QUERY_RE = re.compile(
+    r"할인\s*받|할인\s*금액|할인액|얼마\s*(?:할인|빠지|깎)|최종\s*(?:혜택가|금액|가격)|"
+    r"쿠폰\s*적용\s*(?:하면|시).*얼마|얼마야|얼마\s*나와",
+    re.IGNORECASE,
+)
+_COUPON_WORD_RE = re.compile(r"쿠폰|할인권|혜택", re.IGNORECASE)
+
+def is_product_coupon_price_amount_query(user_text: str | None) -> bool:
+    text = str(user_text or "")
+    return bool(_COUPON_WORD_RE.search(text) and _COUPON_PRICE_AMOUNT_QUERY_RE.search(text))
+
+def price_row_from_final_price_result(price_result: dict) -> dict | None:
+    data = _unwrap_tool_data(price_result)
+    if not isinstance(data, dict) or not data:
+        return None
+    rows = data.get("items")
+    if isinstance(rows, list) and rows and isinstance(rows[0], dict):
+        return rows[0]
+    if any(key in data for key in ("sale_prc", "cheapest_final_prc", "extra_fvr_sale_prc")):
+        return data
+    return None
+
+def build_product_coupon_price_amount_event(
+    price_result: dict,
+    *,
+    product_name: str,
+    tire_size: str,
+    quantity: int,
+) -> dict | None:
+    row = price_row_from_final_price_result(price_result)
+    if row is None:
+        return None
+
+    sale_unit = _to_int(row.get("sale_prc"))
+    final_unit = _final_price_from_row(row)
+    unit_discount = _to_int(row.get("cheapest_total_discount"))
+    if sale_unit is not None and final_unit is not None:
+        unit_discount = max(0, sale_unit - final_unit)
+    if sale_unit is None or final_unit is None:
+        return None
+
+    quantity = max(1, int(quantity or 1))
+    base_total = sale_unit * quantity
+    final_total = final_unit * quantity
+    discount_total = (unit_discount or 0) * quantity
+
+    coupons = row.get("cheapest_applied_coupons") or row.get("applied_coupons")
+    coupon_names: list[str] = []
+    if isinstance(coupons, list):
+        for coupon in coupons:
+            if not isinstance(coupon, dict):
+                continue
+            coupon_name = str(coupon.get("cpn_nm") or "").strip()
+            if coupon_name and coupon_name not in coupon_names:
+                coupon_names.append(coupon_name)
+
+    lines = [
+        f"{product_name} {tire_size} {quantity}개 기준으로 보유 쿠폰 적용 혜택가를 확인했어요.",
+        "",
+        f"- 정가 합계: {_format_krw(base_total)}",
+        f"- 쿠폰 적용 할인액: {_format_krw(discount_total) or '0원'}",
+        f"- 최종 혜택가: {_format_krw(final_total)}",
+    ]
+    if coupon_names:
+        lines.append(f"- 적용 기준 쿠폰: {', '.join(coupon_names[:3])}")
+
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "transaction",
+        "assistant_response_source": "code_product_coupon_price_resolver",
+        "data": {
+            "assistantResponse": "\n".join(lines),
+            "quickReplies": [
+                {"label": "장바구니 담기", "domain": "TRANSACTION"},
+                {"label": "구매하기", "domain": "TRANSACTION"},
+                {"label": "내 쿠폰 조회", "domain": "TRANSACTION"},
+            ],
+            "predictedDomains": ["TRANSACTION"],
+        },
+    }
+
+def build_product_coupon_price_no_product_event(
+    product_name: str,
+    tire_size: str,
+    *,
+    quantity: int | None = None,
+) -> dict:
+    product_label = str(product_name or "해당 상품").strip() or "해당 상품"
+    size_label = str(tire_size or "해당 사이즈").strip() or "해당 사이즈"
+    metadata: dict[str, Any] = {
+        "pendingIntent": "price",
+        "goalType": "coupon_discount_amount",
+        "productName": product_label,
+        "tireSize": size_label,
+    }
+    if quantity:
+        metadata["ordQty"] = int(quantity)
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "discovery",
+        "assistant_response_source": "code_product_coupon_price_no_product",
+        "data": {
+            "assistantResponse": (
+                f"{product_label} {size_label} 규격 상품을 찾을 수 없어 쿠폰 적용 금액을 계산할 수 없어요.\n\n"
+                "다른 사이즈를 입력하거나 해당 상품의 다른 규격을 확인해 주세요."
+            ),
+            "quickReplies": [
+                {"label": "다른 사이즈 확인", "domain": "DISCOVERY"},
+                {"label": "사이즈 없이 검색", "domain": "DISCOVERY"},
+                {"label": "타이어 추천 받기", "domain": "DISCOVERY"},
+            ],
+            "predictedDomains": ["DISCOVERY"],
+            "metadata": metadata,
+        },
+    }
+
+def _unwrap_tool_data(payload: Any) -> dict:
+    if not isinstance(payload, dict):
+        return {}
+    data = payload.get("data")
+    if isinstance(data, dict):
+        nested = data.get("data")
+        return nested if isinstance(nested, dict) else data
+    return payload
+
+def _to_int(value: Any) -> int | None:
+    text = str(value or "").replace(",", "").strip()
+    if not text or not re.fullmatch(r"[-+]?\d+(?:\.\d+)?", text):
+        return None
+    return int(float(text))
+
+def _final_price_from_row(row: dict) -> int | None:
+    for key in (
+        "cheapest_final_prc",
+        "final_unit_price",
+        "final_prc",
+        "final_price",
+        "finalPrice",
+        "extra_fvr_sale_prc",
+        "sale_prc",
+    ):
+        value = _to_int(row.get(key))
+        if value:
+            return value
+    return None
+
+def _format_krw(value: Any) -> str:
+    amount = _to_int(value)
+    return f"{amount:,}원" if amount is not None else ""
+
 def _normalize_product_name(value: str) -> str:
     normalized = re.sub(r"\s+", " ", value.strip())
     aliases = {

@@ -128,6 +128,7 @@ _SHOP_ID_FIELDS: frozenset[str] = frozenset({"shop_id", "shopId"})
 # used by unsized search_product responses.
 _TIRE_SIZE_FIELDS: frozenset[str] = frozenset({"tire_size_1", "tire_size", "tireSize", "available_sizes"})
 _PRODUCT_ROW_TOOLS: frozenset[str] = frozenset({
+    "search_product_summary_tool",
     "search_product_tool",
     "get_products_recommendations_tool",
     "get_best_selling_products_tool",

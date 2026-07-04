@@ -89,13 +89,15 @@ _RCMD_CTX_FIELDS: set[str] = _RCMD_BASE_FIELDS | {"tot_scr", "t_comfort", "t_sil
 
 # Search product base — CTX adds extra_fvr_sale_prc for follow-up price questions.
 _SEARCH_PRODUCT_BASE_FIELDS: set[str] = {
-    "goods_no", "goods_nm", "tire_size_1", "available_sizes",
+    "goods_no", "ptrn_cd", "goods_nm", "tire_size_1", "available_sizes",
     "image_url",
     # EU 소음 라벨 (정숙성 점수와 별개)
     "label_pnwave", "label_pnwave_nm", "label_pndb",
     # 가격 등급 (프리미엄+/프리미엄/스탠다드/이코노미) — 사용자 등급 질문 답변용
     "prc_grd_nm",
     "sale_prc", "rating_avg", "review_count",
+    "goods_no_count", "min_sale_prc", "max_sale_prc",
+    "min_extra_fvr_sale_prc", "max_extra_fvr_sale_prc", "max_extra_fvr_sale_per", "smrt_pay_yn",
     # 퍼포먼스 분류 (COMFORT=정숙/승차감, SPORT=고속/제동성, RUNFLAT) — 답변용
     "goods_pfm_nm", "goods_dtl_pfm_nm", "sound_absorber_yn",
     "t_oe_maker_1", "oe_badge_yn",
@@ -108,7 +110,8 @@ _SEARCH_PRODUCT_BASE_FIELDS: set[str] = {
     "t_comfort", "t_silence", "t_high_perform", "t_handling",
     "t_life_span", "t_snow", "t_ice", "t_dryroad_brk",
     "rr", "wet",
-    "wage_prc", "wage_today_prc", "free_guarantee_yn", "t_rlx_isn_yn",
+    "wage_prc", "wage_today_prc", "free_guarantee_yn", "t_rlx_isn_yn", "warranty",
+    "slogan", "pc_prod_remark_desc", "pc_prod_tech_desc",
 }
 _SEARCH_PRODUCT_CTX_FIELDS: set[str] = _SEARCH_PRODUCT_BASE_FIELDS | {"extra_fvr_sale_prc"}
 
@@ -137,6 +140,10 @@ _LIST_TOOL_RULES: dict[str, dict[str, Any]] = {
         "keep": _RCMD_QC_FIELDS,
     },
     "search_product_tool": {
+        "list_key": "items",
+        "keep": _SEARCH_PRODUCT_BASE_FIELDS,
+    },
+    "search_product_summary_tool": {
         "list_key": "items",
         "keep": _SEARCH_PRODUCT_BASE_FIELDS,
     },
@@ -224,6 +231,10 @@ _CONTEXT_LIST_RULES: dict[str, dict[str, Any]] = {
         "keep": _RCMD_CTX_FIELDS,
     },
     "search_product_tool": {
+        "list_key": "items",
+        "keep": _SEARCH_PRODUCT_CTX_FIELDS,
+    },
+    "search_product_summary_tool": {
         "list_key": "items",
         "keep": _SEARCH_PRODUCT_CTX_FIELDS,
     },

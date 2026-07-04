@@ -110,6 +110,18 @@ _ORDER_HISTORY_REORDER_ACTION_RE = re.compile(
     r"다시|재구매|같은|동일|또|구매|주문|장착|교체|살래|살게",
     re.IGNORECASE,
 )
+_REGISTERED_VEHICLE_LOOKUP_RE = re.compile(
+    r"^(?:내\s*차|내차|내\s*차량|내차량|"
+    r"내(?:가)?\s*(?:(?:홈페이지|사이트|티스테이션|계정)에?\s*)?"
+    r"(?:등록(?:한|해\s*둔|해둔|된)?|보유(?:한)?)\s*(?:차|차량)|"
+    r"(?:홈페이지|사이트|티스테이션|계정)에?\s*등록(?:한|해\s*둔|해둔|된)?\s*내\s*(?:차|차량)|"
+    r"등록\s*(?:차량|차)|보유\s*(?:차량|차))"
+    r"\s*(?:목록|리스트|보기|보여\s*(?:줘|주세요)?|확인|조회|"
+    r"뭐(?:야|니|고|였|지|든지|ㄴ지)?|뭔지|뭔가|"
+    r"무슨\s*(?:차|차종|차량)인지|어떤\s*(?:차|차종|차량)인지|"
+    r"알려\s*(?:줘|줄래|주세요|주라)?)?\s*[?.!~]*$",
+    re.IGNORECASE,
+)
 STOCK_INVENTORY_STORE_LOOKUP_ALLOWED_TOOLS = (
     "get_store_inventory_tool",
     "search_stores_tool",
@@ -522,6 +534,20 @@ def _has_purchase_ready_product_quantity_context(slots: dict[str, Any]) -> bool:
     return bool(_has_confirmed_product_quantity_context(slots) and slots.get("tire_size"))
 
 
+def _has_comparison_product_scope(slots: Mapping[str, Any]) -> bool:
+    comparison_context = slots.get("comparison_context")
+    if not isinstance(comparison_context, Mapping):
+        return False
+    product_candidates = comparison_context.get("product_candidates") or comparison_context.get("candidates")
+    if isinstance(product_candidates, list):
+        scoped_candidates = [candidate for candidate in product_candidates if isinstance(candidate, Mapping)]
+        return len(scoped_candidates) >= 2
+    product_names = comparison_context.get("product_names") or comparison_context.get("productNames")
+    if not isinstance(product_names, (list, tuple)):
+        return False
+    return len([name for name in product_names if str(name or "").strip()]) >= 2
+
+
 def _normalized_quantity(slots: dict[str, Any], text: str = "") -> int | None:
     value = extract_quantity(text) or slots.get("quantity") or slots.get("ord_qty")
     try:
@@ -888,6 +914,10 @@ def build_transaction_intent_frame(
         or _VEHICLE_EXPERIENCE_STORE_SEARCH_RE.search(text)
     )
     current_order_history_lookup = _is_order_history_lookup_turn(text)
+    current_registered_vehicle_lookup = bool(
+        str(slots.get("router_transaction_intent") or "").strip() == "vehicle_lookup"
+        or _REGISTERED_VEHICLE_LOOKUP_RE.search(text)
+    )
     current_plain_store_info_lookup = bool(
         (not current_store_is_context or current_selected_store_reference)
         and _is_plain_store_info_lookup(text, selected_store_name=selected_store_name)
@@ -1157,7 +1187,7 @@ def build_transaction_intent_frame(
     )
     region = current_region or slots.get("region") or slots.get("place")
 
-    has_product = bool(goods_no or product_name or _PRODUCT_HINT_RE.search(text))
+    has_product = bool(goods_no or product_name or _PRODUCT_HINT_RE.search(text) or _has_comparison_product_scope(slots))
     has_location = bool(
         region
         or slots.get("place_query")
@@ -1315,6 +1345,10 @@ def build_transaction_intent_frame(
         intent = "order_history_reorder"
         sub_intent = "reorder_from_owned_history"
         entities["owned_record_target"] = "order"
+    elif current_registered_vehicle_lookup:
+        intent = "vehicle_lookup"
+        sub_intent = "registered_vehicle"
+        entities["owned_record_target"] = "vehicle"
     elif current_store_holiday_lookup:
         intent = "store_holiday_lookup"
         sub_intent = "store_holiday"
@@ -1715,6 +1749,10 @@ def build_transaction_intent_frame(
         known["pending_intent"] = "order_history_reorder"
         known["goal_type"] = "order_history_reorder"
         known["owned_record_target"] = "order"
+    if intent == "vehicle_lookup":
+        known["pending_intent"] = "vehicle_lookup"
+        known["goal_type"] = "registered_vehicle_lookup"
+        known["owned_record_target"] = "vehicle"
     if intent in {"plain_store_info_lookup", "store_holiday_lookup"}:
         known["pending_intent"] = intent
         known["goal_type"] = intent
@@ -1791,6 +1829,13 @@ def plan_transaction_tools(frame: IntentFrame) -> ToolPlan:
     """Return the preferred Transaction tool family for the intent frame."""
     action = _transaction_action(frame)
     action_required_slots = _action_required_slots(frame, action)
+    if frame.intent == "vehicle_lookup":
+        return ToolPlan(
+            allowed_tools=("get_my_cars_tool",),
+            preferred_tool="get_my_cars_tool",
+            tool_args_patch={},
+            metadata={"response_intent": "vehicle_lookup", "template": "listCar"},
+        )
     if (
         frame.intent in {"stock_store_search", "quick_order_reservation"}
         and "tire_size" in action_required_slots

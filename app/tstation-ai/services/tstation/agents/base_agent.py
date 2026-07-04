@@ -515,7 +515,6 @@ def _build_owner_vehicle_lookup_event(tool_name: str, tool_result: Any, messages
         "data": {
             "assistantResponse": assistant_response,
             "quickReplies": [
-                {"label": "다시 검색", "domain": "DISCOVERY"},
                 {"label": "타이어 추천", "domain": "DISCOVERY"},
                 {"label": "구매하기", "domain": "TRANSACTION"},
             ],
@@ -913,8 +912,9 @@ _VALIDATION_FALLBACK_MESSAGE = (
     "죄송합니다, 답변을 정리하던 중 일시적인 문제가 발생했어요.\n\n"
     "잠시 후 다시 시도해 주시거나 아래 버튼으로 다른 도움을 받아보세요."
 )
+# "다시 시도" 류 label-only chip 은 실행 계약이 없어 CTA 게이트에서 제거되므로
+# 등록된 escalation CTA 만 남긴다.
 _VALIDATION_FALLBACK_QUICK_REPLIES = [
-    {"label": "다시 시도", "domain": "LEADING"},
     {"label": "상담사 연결", "domain": "SUPPORT"},
 ]
 
@@ -1118,6 +1118,7 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     # Discovery
     "check_compatibility_tool": "차량-타이어 호환 확인 중...",
     "search_product_tool": "상품 검색 중...",
+    "search_product_summary_tool": "상품 정보 확인 중...",
     "get_user_vehicles_tool": "차량 정보 조회 중...",
     "get_my_cars_tool": "내 차량 조회 중...",
     "search_car_model_tool": "차량 모델 검색 중...",
@@ -1175,6 +1176,7 @@ class BaseAgent(ABC):
         "get_stores_with_time_filter_tool",
         "search_stores_complex_tool",
         "search_product_tool",
+        "search_product_summary_tool",
         "get_products_recommendations_tool",
         "get_newest_products_tool",
         "get_best_selling_products_tool",
@@ -2163,6 +2165,7 @@ class BaseAgent(ABC):
             "get_stores_with_time_filter_tool": {"location", "quickReply"},
             "search_stores_complex_tool": {"location", "quickReply"},
             "search_product_tool": {"product", "quickReply"},
+            "search_product_summary_tool": {"quickReply"},
             "get_products_recommendations_tool": {"product", "quickReply"},
             "get_newest_products_tool": {"product", "quickReply"},
             "get_best_selling_products_tool": {"product", "quickReply"},

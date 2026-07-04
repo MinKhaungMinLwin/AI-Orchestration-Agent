@@ -144,6 +144,7 @@ from services.tstation.chat import (
     _build_recent_product_size_availability_event_from_rows,
     _build_recent_product_size_availability_missing_context_event,
     _build_no_visible_output_fallback_event,
+    _slot_runtime_values_from_active_flow_context,
     _build_turn_contract_fallback_event,
     _build_turn_contract_required_slot_guard_event,
     _build_transaction_unresolved_product_resolution_event,
@@ -959,7 +960,7 @@ def test_transaction_cta_sanitizer_blocks_order_history_during_missing_purchase_
     )
 
     assert changed is True
-    assert _labels(event_data["quickReplies"]) == ["조건 다시 입력"]
+    assert event_data["quickReplies"] == []
     assert event_data["metadata"]["blocked_ctas"][0]["reason"].startswith("order_history_forbidden:")
 
 
@@ -4860,6 +4861,109 @@ def test_product_comparison_feature_fallback_omits_pattern_group() -> None:
 
 def test_generic_compare_text_is_product_comparison_query() -> None:
     assert _is_product_comparison_query("다이나프로 hpx 랑 윈터 아이셉트 비교해줘") is True
+
+
+def test_weatherflex_gt_and_kinergy_4s2_builds_comparison_event_from_search_results() -> None:
+    event = _build_product_comparison_event_from_search_results(
+        "웨더플렉스 GT, 키너지 4S2 비교해줘",
+        [
+            (
+                "키너지 4S2",
+                {
+                    "items": [
+                        {
+                            "goods_no": "G000000312680",
+                            "goods_nm": "키너지 4S2",
+                            "prc_grd_nm": "스탠다드",
+                            "goods_pfm_nm": "COMFORT",
+                            "goods_dtl_pfm_nm": "컴포트",
+                            "season_nm": "사계절",
+                            "car_knd_nm": "승용차",
+                            "t_rls_yearmon": "2019년 11월",
+                            "sys_reg_dtime": "2020-02-12 13:28:58",
+                            "rating_avg": 4.4,
+                            "review_count": 7,
+                        }
+                    ]
+                },
+            ),
+            (
+                "웨더플렉스 GT",
+                {
+                    "items": [
+                        {
+                            "goods_no": "G000000320362",
+                            "goods_nm": "웨더플렉스 GT",
+                            "prc_grd_nm": "프리미엄",
+                            "goods_pfm_nm": "COMFORT",
+                            "goods_dtl_pfm_nm": "컴포트",
+                            "season_nm": "올웨더",
+                            "car_knd_nm": "승용차",
+                            "t_rls_yearmon": "2025년 7월",
+                            "sys_reg_dtime": "2025-07-08 11:53:17",
+                            "rating_avg": 0,
+                            "review_count": 0,
+                        }
+                    ]
+                },
+            ),
+        ],
+    )
+
+    assert event is not None
+    assert event["assistant_response_source"] == "code_product_compare_resolver"
+    assert event["data"]["metadata"]["response_shape_key"] == "metric_comparison_summary"
+    assert "**키너지 4S2**" in event["data"]["assistantResponse"]
+    assert "**웨더플렉스 GT**" in event["data"]["assistantResponse"]
+    assert "| 항목 | 내용 |" in event["data"]["assistantResponse"]
+
+
+def test_compare_query_uses_router_product_names_from_comparison_context() -> None:
+    event = _build_product_comparison_event_from_search_results(
+        "둘 비교해줘",
+        [
+            (
+                "키너지 4S2",
+                {
+                    "items": [
+                        {
+                            "goods_no": "G000000312680",
+                            "goods_nm": "키너지 4S2",
+                            "prc_grd_nm": "스탠다드",
+                            "goods_pfm_nm": "COMFORT",
+                            "goods_dtl_pfm_nm": "컴포트",
+                            "season_nm": "사계절",
+                            "car_knd_nm": "승용차",
+                        }
+                    ]
+                },
+            ),
+            (
+                "웨더플렉스 GT",
+                {
+                    "items": [
+                        {
+                            "goods_no": "G000000320362",
+                            "goods_nm": "웨더플렉스 GT",
+                            "prc_grd_nm": "프리미엄",
+                            "goods_pfm_nm": "COMFORT",
+                            "goods_dtl_pfm_nm": "컴포트",
+                            "season_nm": "올웨더",
+                            "car_knd_nm": "승용차",
+                        }
+                    ]
+                },
+            ),
+        ],
+        comparison_context={
+            "product_names": ["웨더플렉스 GT", "키너지 4S2"],
+            "compare_metric": "detail",
+        },
+    )
+
+    assert event is not None
+    assert event["assistant_response_source"] == "code_product_compare_resolver"
+    assert event["data"]["metadata"]["productNames"] == ["웨더플렉스 GT", "키너지 4S2"]
 
 
 def test_description_compare_followup_reuses_previous_compare_products() -> None:
@@ -14816,6 +14920,95 @@ def test_flow_transition_shell_records_selected_product_without_executing() -> N
     assert slots.goods_no is None
 
 
+def test_selected_product_active_flow_context_promotes_runtime_slots() -> None:
+    base_slots = ConversationSlots(
+        ord_qty=2,
+        pending_intent="order",
+        goal_type="place_order",
+        availability_context={
+            "pending_order_context": {
+                "ord_qty": 2,
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            },
+            "active_flow_context": {
+                "flow_type": "purchase",
+                "flow_step": "ask_product",
+                "status": "active",
+                "intent": {
+                    "pending_intent": "order",
+                    "goal_type": "place_order",
+                },
+            },
+        },
+    )
+    transition = transition_current_flow(
+        user_text="첫번째",
+        router_evidence={
+            "domain": "transaction",
+            "intent": "quick_order_reservation",
+            "execution_plan": ["transaction:quick_order_reservation:slot_fill:product"],
+            "source": "llm",
+        },
+        existing_slots=base_slots,
+        extracted_slots=ConversationSlots(),
+        ui_action=UIActionContext(
+            action_type="select_product",
+            action_name="select_product",
+            selection_source="previous_product_candidate",
+            contract_intent="quick_order_reservation",
+            source_intent="quick_order_reservation",
+            expected_contract_intent="quick_order_reservation",
+            expected_behavior="slot_fill",
+            entity_type="product",
+            entity_id="G000000310126",
+            entity_label="Ventus S2 AS",
+            slot_patch={
+                "goods_no": "G000000310126",
+                "tire_model": "Ventus S2 AS",
+                "tire_size": "245/45R19",
+                "ord_qty": 2,
+                "payment_amount": 298400,
+                "price_basis": "cheapest_final_prc",
+                "price_source_tool": "selected_product_candidate",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            },
+        ),
+        resume_source="router_slot_fill:product",
+    )
+    active_flow_context = transition.flow_transition["active_flow_context"]
+    committed_active_context = commit_flow_state(
+        base_slots.availability_context["active_flow_context"],
+        active_flow_context,
+        source=active_flow_context["source"],
+        flow_type=active_flow_context["flow_type"],
+        flow_step=active_flow_context["flow_step"],
+        status=active_flow_context["status"],
+    ).state.to_active_flow_context()
+
+    promoted_slots = base_slots.apply_runtime_values(
+        _slot_runtime_values_from_active_flow_context(committed_active_context),
+        source="flow_transition_active_context_promotion",
+    )
+    promoted_slots.availability_context = {
+        **dict(base_slots.availability_context or {}),
+        "active_flow_context": committed_active_context,
+    }
+
+    assert promoted_slots.goods_no == "G000000310126"
+    assert promoted_slots.tire_size == "245/45R19"
+    assert promoted_slots.tire_model == "Ventus S2 AS"
+    assert promoted_slots.pending_product_name == "Ventus S2 AS"
+    assert promoted_slots.ord_qty == 2
+    assert promoted_slots.payment_amount == 298400
+    assert promoted_slots.price_basis == "cheapest_final_prc"
+    assert promoted_slots.price_source_tool == "selected_product_candidate"
+    assert promoted_slots.pending_intent == "order"
+    assert promoted_slots.goal_type == "place_order"
+    assert promoted_slots.availability_context["active_flow_context"]["product"]["goods_no"] == "G000000310126"
+
+
 def test_flow_transition_shell_records_selected_product_as_stock_from_router_preview() -> None:
     slots = ConversationSlots(
         region="경기도 광주",
@@ -18367,6 +18560,75 @@ def test_apply_history_product_selection_state_resolves_goods_no_and_trace_metad
     assert transition.flow_transition["active_flow_context"]["payment"]["price_basis"] == "cheapest_final_prc"
 
 
+def test_apply_history_product_selection_state_clears_stale_goods_no_for_comparison_product_selection() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000312680",
+        tire_size="165/65R14",
+        comparison_context=ComparisonContext(
+            product_names=["웨더플렉스 GT", "키너지 4S2"],
+            compare_metric="detail",
+            response_shape_key="metric_comparison_summary",
+            source="code_product_compare_resolver",
+        ),
+    )
+
+    prev_tool_data = [{
+        "tool": "search_product_tool",
+        "data": [
+            {
+                "goods_no": "G000000312680",
+                "goods_nm": "키너지 4S2",
+                "tire_size_1": "165/65R14",
+            },
+        ],
+    }]
+
+    state = apply_history_product_selection_state(
+        last_user_text="웨더플렉스 gt",
+        prev_tool_data=prev_tool_data,
+        merged_slots=slots,
+        resolve_goods_no_from_selection_fn=lambda user_text, tool_data, current_tire_size: resolve_goods_no_from_selection(
+            user_text,
+            tool_data,
+            current_tire_size=current_tire_size,
+        ),
+    )
+
+    assert state.updated_slots.goods_no is None
+    assert state.updated_slots.tire_model == "웨더플렉스 GT"
+    assert state.updated_slots.pending_product_name == "웨더플렉스 GT"
+    assert state.updated_slots.comparison_context is None
+    assert state.goods_no_resolved is False
+    assert state.action_context is None
+    assert state.trace_metadata["selection_source"] == "comparison_context_product_selection"
+    assert state.trace_metadata["validation_result"] == "comparison_context_product_override"
+
+
+def test_transaction_vehicle_lookup_contract_allows_my_cars_tool() -> None:
+    texts = (
+        "내 차 뭐야",
+        "내 차 목록",
+        "내가 등록한 차 뭐야",
+        "내가 홈페이지에 등록한 차 뭐야",
+        "티스테이션에 등록한 내 차량 보여줘",
+    )
+    for text in texts:
+        frame = build_transaction_intent_frame(
+            text,
+            known_slots={"router_transaction_intent": "vehicle_lookup"},
+        )
+        plan = plan_transaction_tools(frame)
+        decision = decide_transaction_response(intent=frame.intent, user_text=text, known_slots=frame.known_slots)
+
+        assert frame.intent == "vehicle_lookup"
+        assert frame.sub_intent == "registered_vehicle"
+        assert frame.known_slots["goal_type"] == "registered_vehicle_lookup"
+        assert plan.allowed_tools == ("get_my_cars_tool",)
+        assert plan.preferred_tool == "get_my_cars_tool"
+        assert decision.template.value == "listCar"
+        assert decision.metadata["response_shape_key"] == "vehicle_lookup"
+
+
 def test_apply_history_product_selection_state_resolves_latest_product_template_candidate() -> None:
     slots = ConversationSlots(goods_no=None, tire_size="225/45R17", ord_qty=2, shop_name="강남점")
     latest_product_tmpl = {
@@ -21304,6 +21566,115 @@ def test_resolve_goods_no_from_selection_uses_price_when_same_size_candidates_ar
 
     assert goods_no == "G000000319584"
 
+
+def test_resolve_goods_no_from_selection_uses_sound_absorber_attribute_when_same_size_is_ambiguous() -> None:
+    goods_no = resolve_goods_no_from_selection(
+        "Ventus Air S 245/45R19 \ud761\uc74c\uc7ac \uc801\uc6a9 \uc0c1\ud488\uc73c\ub85c \ubcfc\uac8c\uc694",
+        [
+            {
+                "tool": "get_products_recommendations_tool",
+                "data": {
+                    "status": "success",
+                    "data": {
+                        "items": [
+                            {
+                                "goods_no": "G000000310126",
+                                "goods_nm": "\ubca4\ud22c\uc2a4 S2 AS",
+                                "tire_size_1": "245/45R19",
+                                "sound_absorber_yn": "N",
+                                "goods_dtl_pfm_nm": "\ucef4\ud3ec\ud2b8",
+                            },
+                            {
+                                "goods_no": "G000000319584",
+                                "goods_nm": "\ubca4\ud22c\uc2a4 \uc5d0\uc5b4S",
+                                "tire_size_1": "245/45R19",
+                                "sound_absorber_yn": "Y",
+                                "goods_dtl_pfm_nm": "\ud761\uc74c\uc7ac",
+                            },
+                            {
+                                "goods_no": "G000000319622",
+                                "goods_nm": "\ubca4\ud22c\uc2a4 \uc5d0\uc5b4S",
+                                "tire_size_1": "245/45R19",
+                                "sound_absorber_yn": "N",
+                                "goods_dtl_pfm_nm": "\ucef4\ud3ec\ud2b8",
+                            },
+                        ]
+                    },
+                },
+            }
+        ],
+        current_tire_size="245/45R19",
+    )
+
+    assert goods_no == "G000000319584"
+
+def test_resolve_goods_no_from_selection_uses_non_absorber_attribute_when_same_product_size_is_ambiguous() -> None:
+    goods_no = resolve_goods_no_from_selection(
+        "\ubca4\ud22c\uc2a4 air S(\ud761\uc74c\uc7ac\uc5c6\ub294\uac70)",
+        [
+            {
+                "tool": "search_product_tool",
+                "data": {
+                    "items": [
+                        {
+                            "goods_no": "G000000319584",
+                            "goods_nm": "\ubca4\ud22c\uc2a4 \uc5d0\uc5b4S",
+                            "tire_size_1": "245/45R19",
+                            "sound_absorber_yn": "Y",
+                            "goods_dtl_pfm_nm": "\ud761\uc74c\uc7ac",
+                        },
+                        {
+                            "goods_no": "G000000319622",
+                            "goods_nm": "\ubca4\ud22c\uc2a4 \uc5d0\uc5b4S",
+                            "tire_size_1": "245/45R19",
+                            "sound_absorber_yn": "N",
+                            "goods_dtl_pfm_nm": "\ucef4\ud3ec\ud2b8",
+                        },
+                    ]
+                },
+            }
+        ],
+        current_tire_size="245/45R19",
+    )
+
+    assert goods_no == "G000000319622"
+
+def test_resolve_goods_no_from_product_template_selection_uses_sound_absorber_tag() -> None:
+    goods_no = resolve_goods_no_from_product_template_selection(
+        "Ventus Air S 245/45R19 \ud761\uc74c\uc7ac \uc801\uc6a9 \uc0c1\ud488\uc73c\ub85c \ubcfc\uac8c\uc694",
+        {
+            "template": "product",
+            "data": {
+                "products": [
+                    {
+                        "title": "\ubca4\ud22c\uc2a4 S2 AS 245/45R19",
+                        "titleProductName": "\ubca4\ud22c\uc2a4 S2 AS",
+                        "titleTires": "245/45R19",
+                        "tags": [{"text": "\uc815\uc219/\uc2b9\ucc28\uac10"}],
+                    },
+                    {
+                        "title": "\ubca4\ud22c\uc2a4 \uc5d0\uc5b4S 245/45R19",
+                        "titleProductName": "\ubca4\ud22c\uc2a4 \uc5d0\uc5b4S",
+                        "titleTires": "245/45R19",
+                        "tags": [{"text": "\uc815\uc219/\uc2b9\ucc28\uac10"}, {"text": "\ud761\uc74c\uc7ac"}],
+                    },
+                    {
+                        "title": "\ubca4\ud22c\uc2a4 \uc5d0\uc5b4S 245/45R19",
+                        "titleProductName": "\ubca4\ud22c\uc2a4 \uc5d0\uc5b4S",
+                        "titleTires": "245/45R19",
+                        "tags": [{"text": "\uc815\uc219/\uc2b9\ucc28\uac10"}],
+                    },
+                ],
+                "metadata": [
+                    {"goodsId": "G000000310126"},
+                    {"goodsId": "G000000319584"},
+                    {"goodsId": "G000000319622"},
+                ],
+            },
+        },
+    )
+
+    assert goods_no == "G000000319584"
 
 def test_region_followup_in_purchase_context_keeps_quick_order_reservation() -> None:
     frame = build_transaction_intent_frame(
@@ -24730,14 +25101,14 @@ def test_offroad_router_scenario_does_not_override_without_current_anchor() -> N
 
 
 def test_offroad_policy_patch_overrides_llm_generated_generic_args(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict = {}
+    calls: list[dict] = []
 
     class _Response:
         status_code = 200
         parsed = {"rcmd_type": "heavy_load", "total": 0, "items": []}
 
     def _fake_recommendations(**kwargs):
-        captured.update(kwargs)
+        calls.append(kwargs)
         return _Response()
 
     frame = build_discovery_intent_frame("험로 주행용 타이어 추천")
@@ -24754,8 +25125,10 @@ def test_offroad_policy_patch_overrides_llm_generated_generic_args(monkeypatch: 
         discovery_tools.current_discovery_recommendation_tool_patch.reset(token)
 
     assert result["status"] == "success"
-    assert captured["rcmd_type"] == discovery_tools.RcmdType.HEAVY_LOAD
-    assert captured["vehicle_type"] == "suv"
+    assert calls[0]["rcmd_type"] == discovery_tools.RcmdType.HEAVY_LOAD
+    assert calls[0]["vehicle_type"] == "suv"
+    # 0 items with a vehicle_type filter triggers one relaxed retry without it.
+    assert calls[-1]["vehicle_type"] is None
 
 
 def test_all_season_and_all_weather_catalog_conditions_stay_distinct() -> None:
@@ -26734,6 +27107,34 @@ def test_duplicated_series_tire_size_typo_normalizes_across_slots_and_discovery_
     assert slots.tire_size == "235/55R19"
     assert frame.entities["tire_size"] == "235/55R19"
     assert frame.entities["explicit_tire_size"] == "235/55R19"
+
+
+@pytest.mark.parametrize(
+    ("user_text", "tire_size", "min_price", "max_price"),
+    [
+        ("2454519 30만원대 타이어 추천", "245/45R19", 300_000, 399_999),
+        ("2454518 40만원대 추천", "245/45R18", 400_000, 499_999),
+        ("2355519 사이즈 20만원대 추천해줘", "235/55R19", 200_000, 299_999),
+        ("245/45R19 30만원대 추천", "245/45R19", 300_000, 399_999),
+    ],
+)
+def test_recommendation_price_range_does_not_absorb_tire_size_digits(
+    user_text: str,
+    tire_size: str,
+    min_price: int,
+    max_price: int,
+) -> None:
+    frame = build_discovery_intent_frame(user_text)
+    plan = plan_discovery_tools(frame)
+
+    assert frame.entities["tire_size"] == tire_size
+    assert frame.entities["min_price"] == min_price
+    assert frame.entities["max_price"] == max_price
+    assert plan.tool_args_patch["tire_size"] == tire_size
+    assert plan.tool_args_patch["min_price"] == min_price
+    assert plan.tool_args_patch["max_price"] == max_price
+    assert plan.metadata["recommendation_expected_tool_args"]["min_price"] == min_price
+    assert plan.metadata["recommendation_expected_tool_args"]["max_price"] == max_price
 
 
 def test_brand_recommendation_tool_patch_disables_cross_brand_fill() -> None:
@@ -30603,7 +31004,8 @@ def test_turn_contract_preserves_product_event_lookup_tools_and_blocks_transacti
     assert contract.domain == "discovery"
     assert contract.intent == "product_event_lookup"
     assert contract.known_slots["goal_type"] == "product_event_lookup"
-    assert "search_product_tool" in contract.allowed_tools
+    assert "search_product_summary_tool" in contract.allowed_tools
+    assert "search_product_tool" in contract.forbidden_tools
     assert "get_product_applicable_events_tool" in contract.allowed_tools
     assert "get_product_promotions_tool" in contract.allowed_tools
     assert "quick_order_tool" in contract.forbidden_tools
@@ -30919,7 +31321,7 @@ def test_product_comparison_tool_contract_allows_description_lookup_for_table_ba
         assistant_response_source="code_product_compare_resolver",
         compare_metric="detail",
         response_shape_key="metric_comparison_summary",
-        called_tools=["search_product_tool", "get_product_description_tool"],
+        called_tools=["search_product_summary_tool", "get_product_description_tool"],
         source_domain="discovery",
         contract=contract,
     )
@@ -31007,7 +31409,8 @@ def test_turn_contract_keeps_discovery_resolution_open_before_today_install_miss
     )
 
     assert contract.intent == "resolve_or_describe_product"
-    assert "search_product_tool" in contract.allowed_tools
+    assert "search_product_summary_tool" in contract.allowed_tools
+    assert "search_product_tool" in contract.forbidden_tools
     assert "transaction_store_preview_tool" in contract.allowed_tools
     assert contract.required_slots == ()
     assert contract.blocking_required_slots == ()
@@ -36142,7 +36545,8 @@ def test_turn_contract_promotes_router_comparison_signal_into_product_comparison
     assert contract.intent == "product_comparison"
     assert contract.known_slots["comparison_followup_intent"] == "generic_compare"
     assert contract.known_slots["compare_metric"] == "detail"
-    assert "search_product_tool" in contract.allowed_tools
+    assert "search_product_summary_tool" in contract.allowed_tools
+    assert "search_product_tool" in contract.forbidden_tools
     assert "get_product_description_tool" in contract.allowed_tools
 
 
@@ -42149,6 +42553,125 @@ def test_maintenance_history_lookup_contract_uses_history_tool(user_text: str, r
     assert contract.intent == "maintenance_history_lookup"
     assert "get_maintenance_history_tool" in contract.allowed_tools
     assert contract.blocking_required_slots == ()
+
+
+@pytest.mark.parametrize(
+    "user_text",
+    [
+        "내차 정기점검 언제인지 알수 있어?",
+        "내차 엔진오일 교체 언제해야돼?",
+        "얼라인먼트 점검 언제야?",
+        "all my T 무상점검 언제야?",
+        "와이퍼 교체 시기 알려줘",
+    ],
+)
+def test_maintenance_timing_guidance_contract_allows_dday_tool(user_text: str) -> None:
+    response_decision = ResponseDecision(
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        metadata={"response_shape_key": "maintenance_timing_guidance"},
+    )
+    contract = build_turn_contract(
+        user_text=user_text,
+        response_decision=response_decision,
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:maintenance_timing_guidance"],
+            policy_intent="none",
+        ),
+    )
+
+    assert contract.intent == "maintenance_timing_guidance"
+    assert "get_my_cars_tool" in contract.allowed_tools
+    assert "get_maintenance_dday_tool" in contract.allowed_tools
+    assert "get_my_cars_tool" not in contract.forbidden_tools
+    assert "get_maintenance_dday_tool" not in contract.forbidden_tools
+    assert contract.preferred_tool == "get_maintenance_dday_tool"
+    assert "get_store_schedule_tool" in contract.forbidden_tools
+
+
+def test_maintenance_timing_router_alias_is_canonical_contract_intent() -> None:
+    contract = build_turn_contract(
+        user_text="내차 정기점검 일정이 언제야?",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:maintenance_schedule_or_cycle_guidance"],
+            policy_intent="none",
+        ),
+    )
+
+    assert contract.intent == "maintenance_timing_guidance"
+    assert contract.domain == "support"
+    assert "get_my_cars_tool" in contract.allowed_tools
+    assert "get_maintenance_dday_tool" in contract.allowed_tools
+    assert contract.preferred_tool == "get_maintenance_dday_tool"
+
+
+def test_maintenance_timing_router_descriptive_plan_is_canonical_contract_intent() -> None:
+    contract = build_turn_contract(
+        user_text="내차 정기점검 일정이 언제야?",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["explain maintenance timing guidance and how to check the schedule"],
+            policy_intent="none",
+        ),
+    )
+
+    assert contract.intent == "maintenance_timing_guidance"
+    assert contract.domain == "support"
+    assert "get_my_cars_tool" in contract.allowed_tools
+    assert "get_maintenance_dday_tool" in contract.allowed_tools
+
+
+def test_maintenance_timing_vehicle_check_alias_is_canonical_contract_intent() -> None:
+    contract = build_turn_contract(
+        user_text="61거1836",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:vehicle_maintenance_timing_check"],
+            policy_intent="none",
+        ),
+        contract_seed={
+            "ui_action": {
+                "action_type": "select_vehicle",
+                "expected_contract_intent": "maintenance_timing_guidance",
+            },
+            "router_evidence": {"intent": "vehicle_maintenance_timing_check"},
+        },
+    )
+
+    assert contract.intent == "maintenance_timing_guidance"
+    assert contract.domain == "support"
+    assert "get_maintenance_dday_tool" in contract.allowed_tools
+    assert contract.preferred_tool == "get_maintenance_dday_tool"
+
+
+def test_maintenance_timing_vehicle_selection_uses_latest_router_evidence_contract() -> None:
+    contract = build_turn_contract(
+        user_text="14다5499",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:single_domain"],
+            policy_intent="none",
+        ),
+        contract_seed={
+            "ui_action": {"action_type": "select_vehicle"},
+            "router_evidence": {"intent": "maintenance_schedule_or_cycle_guidance"},
+        },
+    )
+
+    assert contract.intent == "maintenance_timing_guidance"
+    assert contract.domain == "support"
+    assert "get_maintenance_dday_tool" in contract.allowed_tools
+    assert contract.preferred_tool == "get_maintenance_dday_tool"
+
+
+def test_maintenance_timing_keyword_route_uses_canonical_execution_plan() -> None:
+    routing = StreamingMultiAgentCoordinator._force_keyword_routing("엔진오일 교환은 언제해야돼?")
+
+    assert routing is not None
+    assert routing.domains == [MultiAgentDomain.Domain.SUPPORT]
+    assert routing.execution_plan == ["support:maintenance_timing_guidance"]
 
 
 @pytest.mark.parametrize(

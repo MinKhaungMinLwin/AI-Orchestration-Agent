@@ -8,6 +8,11 @@ from services.tstation.policies.response_decision import ResponseDecision, Respo
 
 def _metadata(frame: IntentFrame, **values: object) -> dict[str, object]:
     metadata = dict(values)
+    product_names = frame.entities.get("product_names")
+    if isinstance(product_names, (list, tuple)):
+        normalized_product_names = [str(name).strip() for name in product_names if str(name or "").strip()][:2]
+        if len(normalized_product_names) >= 2:
+            metadata["product_names"] = normalized_product_names
     claim_check_type = frame.entities.get("claim_check_type")
     if claim_check_type and claim_check_type != "none":
         metadata["claim_check_type"] = claim_check_type
