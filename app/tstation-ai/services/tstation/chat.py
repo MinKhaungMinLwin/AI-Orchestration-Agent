@@ -35317,6 +35317,7 @@ class TStationChatServiceV2:
                         "maintenance_tip",
                         "support_policy_answer",
                         "vehicle_maintenance_dday",
+                        "maintenance_timing_guidance",
                     ),
                 )
                 if not gate_allowed:
@@ -35366,6 +35367,7 @@ class TStationChatServiceV2:
                         "maintenance_tip",
                         "support_policy_answer",
                         "vehicle_maintenance_dday",
+                        "maintenance_timing_guidance",
                     ),
                 )
                 return (emitted_events, maintenance_event) if maintenance_event is not None else (emitted_events, None)

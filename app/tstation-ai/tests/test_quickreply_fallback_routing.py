@@ -42082,6 +42082,39 @@ def test_maintenance_history_lookup_contract_uses_history_tool(user_text: str, r
 @pytest.mark.parametrize(
     "user_text",
     [
+        "내차 정기점검 언제인지 알수 있어?",
+        "내차 엔진오일 교체 언제해야돼?",
+        "얼라인먼트 점검 언제야?",
+        "all my T 무상점검 언제야?",
+        "와이퍼 교체 시기 알려줘",
+    ],
+)
+def test_maintenance_timing_guidance_contract_allows_dday_tool(user_text: str) -> None:
+    response_decision = ResponseDecision(
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        metadata={"response_shape_key": "maintenance_timing_guidance"},
+    )
+    contract = build_turn_contract(
+        user_text=user_text,
+        response_decision=response_decision,
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:maintenance_timing_guidance"],
+            policy_intent="none",
+        ),
+    )
+
+    assert contract.intent == "maintenance_timing_guidance"
+    assert "get_maintenance_dday_tool" in contract.allowed_tools
+    assert "get_maintenance_dday_tool" not in contract.forbidden_tools
+    assert contract.preferred_tool == "get_maintenance_dday_tool"
+    assert "get_store_schedule_tool" in contract.forbidden_tools
+
+
+@pytest.mark.parametrize(
+    "user_text",
+    [
         "내가 최근에 부산에서 여수로 이사를 했는데, 아무 티스테이션 매장 가서도 내 차 정비 이력 조회 가능할까?",
         "다른 지역 매장에서도 내 차 정비내역 볼 수 있어?",
     ],

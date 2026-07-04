@@ -1178,6 +1178,10 @@ def build_turn_contract(
             forbidden_tools,
             ("get_products_recommendations_tool", "search_product_tool", "get_orders_of_user_tool"),
         )
+    if intent == "maintenance_timing_guidance":
+        allowed_tools = _merge_tuple(allowed_tools, ("get_maintenance_dday_tool",))
+        forbidden_tools = tuple(tool for tool in forbidden_tools if tool != "get_maintenance_dday_tool")
+        preferred_tool = "get_maintenance_dday_tool"
     if intent == "maintenance_history_access_policy":
         allowed_tools = ()
         forbidden_tools = _merge_tuple(
