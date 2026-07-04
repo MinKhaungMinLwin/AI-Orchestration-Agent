@@ -105,7 +105,7 @@ _PAYMENT_ERROR_RE = re.compile(
     re.IGNORECASE,
 )
 _CARD_INSTALLMENT_LOOKUP_RE = re.compile(
-    r"무이자|할부|몇\s*개?월|[0-9]{1,2}\s*개?월|개월수|카드사별|현대카드|신한카드|삼성카드|국민카드|"
+    r"무이자|할부|몇\s*개월|[0-9]{1,2}\s*개월|개월수|카드사별|현대카드|신한카드|삼성카드|국민카드|"
     r"롯데카드|하나카드|농협카드|우리카드|비씨카드|BC카드|스마트\s*페이|smart\s*pay|smartpay",
     re.IGNORECASE,
 )
@@ -135,7 +135,7 @@ _CARD_INSTALLMENT_BOTH_PAYMENT_TYPES_RE = re.compile(
 _CARD_INSTALLMENT_SMARTPAY_RE = re.compile(r"스마트\s*페이|smart\s*pay|smartpay", re.IGNORECASE)
 _CARD_INSTALLMENT_AMOUNT_MANWON_RE = re.compile(r"(\d{1,4}(?:\.\d+)?)\s*만\s*원", re.IGNORECASE)
 _CARD_INSTALLMENT_AMOUNT_WON_RE = re.compile(r"(\d{1,3}(?:,\d{3})+|\d{4,9})\s*원", re.IGNORECASE)
-_CARD_INSTALLMENT_MONTH_RE = re.compile(r"([0-9]{1,2})\s*개?월", re.IGNORECASE)
+_CARD_INSTALLMENT_MONTH_RE = re.compile(r"([0-9]{1,2})\s*개월", re.IGNORECASE)
 _ASSURANCE_DOCUMENT_LOST_RE = re.compile(r"보증서.{0,12}(분실|잃어버|없어)|종이\s*보증서", re.IGNORECASE)
 _ASSURANCE_SERVICE_POLICY_ANCHOR_RE = re.compile(
     r"안심\s*서비스|안심서비스|안심\s*플러스|안심플러스|디지털\s*워런티|종이\s*보증서|보증서|워런티",

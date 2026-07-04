@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from services.tstation.policies.discovery_intent_policy import extract_benefit_applicable_products_query
 from services.tstation.policies.intent_frame import IntentFrame, PolicyDomain
 from services.tstation.policies.response_decision import ResponseDecision, ResponseShape, TemplateName, ToolPlan
 
@@ -42,6 +43,7 @@ def build_price_intent_frame(
     text = user_text or ""
     slots = known_slots or {}
     entities: dict[str, Any] = {
+        "raw_text": text,
         "has_coupon_keyword": bool(_COUPON_RE.search(text)),
         "has_promotion_keyword": bool(_PROMOTION_RE.search(text)),
     }
@@ -149,12 +151,22 @@ def plan_price_tools(frame: IntentFrame) -> ToolPlan:
             metadata={"requires_stacking_check": True},
         )
     if frame.intent == "coupon_applicable_products":
+        query = (
+            str(frame.known_slots.get("benefit_applicable_products_query") or "").strip()
+            or extract_benefit_applicable_products_query(str(frame.entities.get("raw_text") or ""))
+        )
         return ToolPlan(
-            allowed_tools=("get_my_coupons_tool", "get_coupon_applicable_products_tool"),
-            preferred_tool="get_my_coupons_tool",
-            required_slots=("coupon_identifier",),
-            forbidden_tools=("get_benefit_event_deal_list_tool", "get_events_tool", "issue_coupon_tool"),
-            metadata={"resolve_coupon_before_targets": True},
+            allowed_tools=("search_benefit_applicable_products_tool",),
+            preferred_tool="search_benefit_applicable_products_tool",
+            tool_args_patch={"query": query, "lang_cd": "ko"},
+            forbidden_tools=(
+                "get_benefit_event_deal_list_tool",
+                "get_events_tool",
+                "get_my_coupons_tool",
+                "get_coupon_applicable_products_tool",
+                "issue_coupon_tool",
+            ),
+            metadata={"resolve_benefit_targets_by_query": True, "benefit_applicable_products_query": query},
         )
     if frame.intent == "product_coupon_eligibility":
         return ToolPlan(
@@ -219,12 +231,12 @@ def decide_price_response(frame: IntentFrame) -> ResponseDecision:
         )
     if frame.intent == "coupon_applicable_products":
         return _decision(
-            response_shape_key="coupon_applicable_products_by_owned_coupon",
-            response_shape=ResponseShape.CLARIFY,
+            response_shape_key="benefit_applicable_products_lookup",
+            response_shape=ResponseShape.SUMMARY,
             template=TemplateName.QUICK_REPLY,
-            required_slots=("coupon_identifier",),
+            required_slots=(),
             forbidden_behaviors=("treat_discount_rate_as_event", "list_all_events", "promise_coupon_application"),
-            assistant_guidance="보유 쿠폰 중 해당 할인율 쿠폰을 먼저 특정하고, 그 쿠폰의 대상 상품 조건을 확인한다.",
+            assistant_guidance="쿠폰/이벤트/기획전 통합 적용 상품 검색 결과만 근거로 대상 상품/매장을 요약한다.",
         )
     if frame.intent == "product_coupon_eligibility":
         return _decision(

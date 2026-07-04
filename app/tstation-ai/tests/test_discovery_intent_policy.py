@@ -100,6 +100,9 @@ def test_unspecified_current_popularity_wording_uses_best_sellers() -> None:
         "요즘 젤 잘 팔리는거 알려줘",
         "요즘 제일 인기 있는 거",
         "요즘 잘 팔리는 타이어",
+        '요즘 제일 잘 팔리는 타이어 보여줘."',
+        '요즘 가장 인기 있는 타이어는?."',
+        '인기 타이어 추천."',
     ):
         frame = build_discovery_intent_frame(text)
         plan = plan_discovery_tools(frame)
@@ -108,6 +111,7 @@ def test_unspecified_current_popularity_wording_uses_best_sellers() -> None:
         assert frame.intent == "product_search"
         assert frame.sub_intent == "best_seller_search"
         assert frame.entities["best_seller_period"] == "3months"
+        assert frame.entities.get("vehicle_query") is None
         assert plan.allowed_tools == ("get_best_selling_products_tool",)
         assert plan.tool_args_patch == {"limit": 5}
 

@@ -13,6 +13,11 @@ import re
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from services.tstation.policies.conversation_context_policy import (
+    RECENT_INTERACTION_CONTEXT_MARKER,
+    parse_recent_interaction_router_message,
+)
+
 
 _CURRENT_TIME_RE = re.compile(r"\n+\[current_time:[^\]]+\]\s*$")
 _PREVIOUS_SELECTION_MARKER = "[이전 선택된 상품 데이터]"
@@ -36,6 +41,7 @@ def compact_router_messages(
     original = [dict(message) for message in messages]
     current_user = _current_user_message(original)
     slot_fill_context = _router_slot_fill_context(original)
+    recent_interaction_summary = _recent_interaction_summary(original)
     recent_messages = _recent_dialogue_summaries(
         original,
         current_user_content=str(current_user.get("content") or ""),
@@ -48,6 +54,7 @@ def compact_router_messages(
         "confirmed_slots": _compact_confirmed_slots(slot_fill_context),
         "missing_slots": _compact_missing_slots(slot_fill_context),
         "recent_candidates": _compact_recent_candidates(slot_fill_context, max_candidates=max_candidates),
+        "recent_interaction_summary": recent_interaction_summary,
         "recent_dialogue": recent_messages,
     }
     compact_context = _drop_empty(compact_context)
@@ -131,6 +138,15 @@ def _router_slot_fill_context(messages: list[dict[str, Any]]) -> dict[str, Any]:
         except Exception:
             return {}
         return dict(parsed) if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _recent_interaction_summary(messages: list[dict[str, Any]]) -> dict[str, Any]:
+    for message in reversed(messages):
+        content = str(message.get("content") or "")
+        if RECENT_INTERACTION_CONTEXT_MARKER not in content:
+            continue
+        return parse_recent_interaction_router_message(content)
     return {}
 
 
@@ -227,6 +243,8 @@ def _recent_dialogue_summaries(
         if role not in {"user", "assistant"} or _is_user_context_message(message):
             continue
         content = str(message.get("content") or "")
+        if RECENT_INTERACTION_CONTEXT_MARKER in content:
+            continue
         if role == "user" and content == current_user_content:
             continue
         summary: dict[str, Any] = {"role": role}

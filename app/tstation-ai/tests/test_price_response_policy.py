@@ -80,16 +80,24 @@ def test_tc098_max_benefit_product_query_uses_product_coupon_policy() -> None:
     assert "promise_coupon_application" in decision.forbidden_behaviors
 
 
-def test_tc101_discount_rate_coupon_targets_start_from_owned_coupon_not_events() -> None:
-    frame = build_price_intent_frame("30% 할인 쿠폰 적용 가능 상품 뭐뭐 있어?")
+def test_tc101_discount_rate_coupon_targets_use_unified_benefit_search() -> None:
+    frame = build_price_intent_frame(
+        "30% 할인 쿠폰 적용 가능 상품 뭐뭐 있어?",
+        known_slots={"benefit_applicable_products_query": "30% 할인"},
+    )
     plan = plan_price_tools(frame)
     decision = decide_price_response(frame)
 
     assert frame.intent == "coupon_applicable_products"
     assert frame.entities["discount_rate"] == 30
-    assert plan.allowed_tools == ("get_my_coupons_tool", "get_coupon_applicable_products_tool")
+    assert plan.allowed_tools == ("search_benefit_applicable_products_tool",)
+    assert plan.preferred_tool == "search_benefit_applicable_products_tool"
+    assert plan.tool_args_patch == {"query": "30% 할인", "lang_cd": "ko"}
+    assert "get_my_coupons_tool" in plan.forbidden_tools
+    assert "get_coupon_applicable_products_tool" in plan.forbidden_tools
     assert "get_events_tool" in plan.forbidden_tools
-    assert decision.required_slots == ("coupon_identifier",)
+    assert decision.required_slots == ()
+    assert decision.metadata["response_shape_key"] == "benefit_applicable_products_lookup"
     assert "treat_discount_rate_as_event" in decision.forbidden_behaviors
 
 

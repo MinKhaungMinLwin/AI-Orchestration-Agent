@@ -3259,6 +3259,18 @@ def resolve_store_selection_from_history_template(
     if has_selection_anchor and len(exact_matches) == 1:
         store, meta = exact_matches[0]
         return {"store": dict(store), "meta": dict(meta)}
+    if not has_selection_anchor and len(exact_matches) == 1:
+        store, meta = exact_matches[0]
+        canonical_meta = canonical_context_from_template_boundary(meta)
+        source_tool = str(meta.get("sourceTool") or meta.get("source_tool") or "").strip()
+        pending_intent = str(
+            canonical_meta.get("pending_intent") or meta.get("pendingIntent") or meta.get("pending_intent") or ""
+        ).strip()
+        goal_type = str(canonical_meta.get("goal_type") or meta.get("goalType") or meta.get("goal_type") or "").strip()
+        if source_tool == "transaction_store_preview_tool" and (
+            pending_intent == "order" or goal_type == "place_order"
+        ):
+            return {"store": dict(store), "meta": dict(meta)}
 
     tokens = [t for t in re.findall(r"[A-Za-z가-힣]+", text) if len(t) >= 2]
     if has_selection_anchor and tokens:

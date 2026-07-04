@@ -16,6 +16,7 @@ _DIRECT_TEMPLATE_TOOLS = frozenset({
     "get_products_recommendations_tool",
     "search_product_summary_tool",
     "get_my_coupons_tool",
+    "search_benefit_applicable_products_tool",
     "search_stores_tool",
     "search_stores_complex_tool",
     "get_store_list_tool",
@@ -72,7 +73,10 @@ def evaluate_contract_direct_path(
     domain = str(turn_contract.domain or "").strip().lower()
     if domain not in {PolicyDomain.DISCOVERY.value, PolicyDomain.TRANSACTION.value}:
         return _fallback("support_policy_question")
-    if _router_confidence(router_evidence) < _MIN_ROUTER_CONFIDENCE:
+    if (
+        _router_confidence(router_evidence) < _MIN_ROUTER_CONFIDENCE
+        and not _is_deterministic_benefit_applicable_products_contract(turn_contract)
+    ):
         return _fallback("low_router_confidence")
     primary_action = str((router_evidence or {}).get("primary_action") or "").strip()
     if primary_action not in _DIRECT_PRIMARY_ACTIONS:
@@ -174,6 +178,15 @@ def _evaluate_transaction_contract(
         return _fallback("missing_required_slot")
     if intent in {"reservation_status_lookup", "reservation_store_info_lookup"} and tool == "get_my_reservations_tool":
         return DirectPathDecision(True, True, "reservation_lookup", None, tool, "quickReply")
+    if intent == "coupon_applicable_products" and tool == "search_benefit_applicable_products_tool":
+        query = str(
+            (turn_contract.tool_args_patch or {}).get("query")
+            or known_slots.get("benefit_applicable_products_query")
+            or ""
+        ).strip()
+        if query:
+            return DirectPathDecision(True, True, "benefit_applicable_products_lookup", None, tool, "quickReply")
+        return _fallback("missing_required_slot")
     if tool == "get_my_coupons_tool":
         if str((router_evidence or {}).get("domain") or "").strip() == PolicyDomain.SUPPORT.value:
             return _fallback("support_policy_question")
@@ -198,11 +211,21 @@ def _entity(router_evidence: Mapping[str, Any], name: str) -> dict[str, Any]:
     return dict(entity) if isinstance(entity, Mapping) else {}
 
 
+def _is_deterministic_benefit_applicable_products_contract(turn_contract: TurnContract) -> bool:
+    return (
+        str(turn_contract.domain or "").strip().lower() == PolicyDomain.TRANSACTION.value
+        and str(turn_contract.intent or "").strip() == "coupon_applicable_products"
+        and str(getattr(turn_contract, "preferred_tool", "") or "").strip() == "search_benefit_applicable_products_tool"
+        and "search_benefit_applicable_products_tool" in set(turn_contract.allowed_tools or ())
+    )
+
+
 def _template_for_tool(tool: str) -> str:
     return {
         "get_my_cars_tool": "listCar",
         "get_products_recommendations_tool": "product",
         "get_my_coupons_tool": "voucher",
+        "search_benefit_applicable_products_tool": "quickReply",
         "search_stores_tool": "location",
         "search_stores_complex_tool": "location",
         "get_store_list_tool": "location",

@@ -338,6 +338,21 @@ _PRODUCT_DEAL_LOOKUP_RE = re.compile(r"기획전|딜|deal", re.IGNORECASE)
 _PRODUCT_COUPON_LOOKUP_RE = re.compile(r"쿠폰|할인권", re.IGNORECASE)
 _PRODUCT_BENEFIT_LOOKUP_RE = re.compile(r"행사|이벤트|프로모션|기획전|딜|deal|쿠폰|할인권|혜택", re.IGNORECASE)
 _BENEFIT_STACKING_RE = re.compile(r"중복|같이|함께|동시|둘\s*다|다\s*돼|같이\s*돼", re.IGNORECASE)
+
+
+def extract_benefit_applicable_products_query(text: str | None) -> str:
+    """Fallback only. The LLM router should provide benefit_applicable_products_query."""
+    normalized = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not normalized:
+        return ""
+    query = re.sub(
+        r"(?:에|에서)?\s*(?:적용|대상|가능|쓸\s*수|사용\s*가능|살\s*수\s*있는).*$",
+        "",
+        normalized,
+        flags=re.IGNORECASE,
+    ).strip()
+    query = re.sub(r"(?:상품|타이어|제품)(?:은|는|이|가|을|를)?\s*(?:뭐|무엇|어떤).*$", "", query).strip()
+    return query or normalized
 _BEST_SELLER_DAY_RE = re.compile(r"오늘|금일|하루", re.IGNORECASE)
 _BEST_SELLER_WEEK_RE = re.compile(r"이번\s*주|금주|이번주|주간", re.IGNORECASE)
 _BEST_SELLER_MONTH_RE = re.compile(r"이번\s*달|이달|월별|월간", re.IGNORECASE)
@@ -764,11 +779,27 @@ _BEST_SELLER_VEHICLE_TOKEN_STOPWORDS = {
     "추천해줘", "알려줘", "보여줘", "순위", "판매량", "는", "가", "이", "좀",
 }
 _BEST_SELLER_VEHICLE_TRAILING_PARTICLE_RE = re.compile(r"(?:에서|으로|로|에|은|는|이|가|도|만|과|와)$")
+_BEST_SELLER_VEHICLE_PUNCT_RE = re.compile(r"^[\W_]+$", re.UNICODE)
 _GENERAL_BEST_SELLER_SCOPE_RE = re.compile(
     r"^(?:전체|전부|모든|통합)?\s*(?:베스트\s*셀러|베스트셀러|인기\s*(?:상품|제품|타이어)|잘\s*팔리는\s*타이어)"
     r"\s*(?:보기|보여줘|알려줘|확인|목록)?$",
     re.IGNORECASE,
 )
+
+
+def _clean_best_seller_vehicle_token(token: str) -> str:
+    cleaned = re.sub(r"^[^\w가-힣]+|[^\w가-힣]+$", "", str(token or ""), flags=re.UNICODE)
+    return _BEST_SELLER_VEHICLE_TRAILING_PARTICLE_RE.sub("", cleaned).strip()
+
+
+def _is_valid_best_seller_vehicle_query(value: str | None) -> bool:
+    normalized = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not normalized or _BEST_SELLER_VEHICLE_PUNCT_RE.fullmatch(normalized):
+        return False
+    anchor = _normalize_vehicle_anchor(normalized)
+    if len(anchor) < 2:
+        return False
+    return anchor not in _BEST_SELLER_VEHICLE_TOKEN_STOPWORDS
 
 
 def is_general_best_seller_scope_request(text: str) -> bool:
@@ -791,7 +822,7 @@ def extract_best_seller_vehicle_query(text: str) -> str | None:
         return vehicle_model_match.vehicle_query
 
     candidate = _BEST_SELLER_VEHICLE_STRIP_RE.sub(" ", text)
-    candidate = re.sub(r"\s+", " ", candidate).strip(" ,.")
+    candidate = re.sub(r"\s+", " ", candidate).strip(" ,.\"'“”‘’")
     if not candidate or _BEST_SELLER_NON_VEHICLE_ONLY_RE.fullmatch(candidate):
         return None
     if normalize_tire_size(candidate):
@@ -799,19 +830,18 @@ def extract_best_seller_vehicle_query(text: str) -> str | None:
     if re.fullmatch(r"(?:남성|여성|\d{2}대|\d{2}대\s*(?:남성|여성)?)", candidate):
         return None
     tokens = [
-        token for token in re.split(r"\s+", candidate)
-        if token and token not in _BEST_SELLER_VEHICLE_TOKEN_STOPWORDS
+        _clean_best_seller_vehicle_token(token) for token in re.split(r"\s+", candidate)
     ]
     tokens = [
         token
         for token in tokens
-        if len(token) >= 2 or re.search(r"[A-Za-z0-9]", token)
+        if token and token not in _BEST_SELLER_VEHICLE_TOKEN_STOPWORDS and _is_valid_best_seller_vehicle_query(token)
     ]
     if not tokens:
         return None
     cleaned_candidate = " ".join(tokens).strip()
     cleaned_candidate = _BEST_SELLER_VEHICLE_TRAILING_PARTICLE_RE.sub("", cleaned_candidate).strip()
-    if not cleaned_candidate or cleaned_candidate in _BEST_SELLER_VEHICLE_TOKEN_STOPWORDS:
+    if not _is_valid_best_seller_vehicle_query(cleaned_candidate):
         return None
     return cleaned_candidate
 
@@ -1108,6 +1138,10 @@ def build_discovery_intent_frame(
         entities["deal_list_only"] = True
     if _EVENT_APPLICABLE_PRODUCTS_RE.search(text) and not _EVENT_APPLICABLE_PRODUCTS_EXCLUDE_RE.search(text):
         entities["event_applicable_products_lookup"] = True
+        entities["benefit_applicable_products_query"] = (
+            str(slots.get("benefit_applicable_products_query") or "").strip()
+            or extract_benefit_applicable_products_query(text)
+        )
     if (products or product_families) and _PRODUCT_BENEFIT_LOOKUP_RE.search(text) and not _BENEFIT_STACKING_RE.search(text):
         if _PRODUCT_EVENT_LOOKUP_RE.search(text):
             entities["product_benefit_lookup_type"] = "event"
@@ -1449,16 +1483,21 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             forbidden_tools=("get_events_tool", "get_my_coupons_tool"),
         )
     if frame.sub_intent == "event_applicable_products_lookup":
+        query = str(entities.get("benefit_applicable_products_query") or "").strip()
         return ToolPlan(
-            allowed_tools=("get_events_tool", "get_event_applicable_products_tool"),
-            preferred_tool="get_events_tool",
-            tool_args_patch={"lang_cd": "ko"},
+            allowed_tools=("search_benefit_applicable_products_tool",),
+            preferred_tool="search_benefit_applicable_products_tool",
+            tool_args_patch={"query": query, "lang_cd": "ko"},
             forbidden_tools=(
                 "search_product_tool",
                 "search_product_summary_tool",
                 "get_products_recommendations_tool",
                 "get_product_description_tool",
+                "get_events_tool",
+                "get_event_applicable_products_tool",
                 "get_deals_tool",
+                "get_coupon_applicable_products_tool",
+                "get_my_coupons_tool",
                 "get_product_promotions_tool",
                 "get_product_applicable_events_tool",
                 "quick_order_tool",
@@ -1468,6 +1507,7 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             metadata={
                 "response_intent": "event_applicable_products_lookup",
                 "goal_type": "event_applicable_products_lookup",
+                "benefit_applicable_products_query": query,
             },
         )
     if frame.sub_intent in {
@@ -1787,6 +1827,20 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             for key in ("min_price", "max_price"):
                 value = source.get(key)
                 if value is not None and args.get(key) is None:
+                    args[key] = value
+    context_for_recommendation = entities.get("recommendation_context") or {}
+    if isinstance(context_for_recommendation, Mapping):
+        for source_key in ("tool_args_patch", "expected_tool_args"):
+            source = context_for_recommendation.get(source_key)
+            if not isinstance(source, Mapping):
+                continue
+            for key in ("rcmd_type", "vehicle_type", "season_nm", "pfm_nm", "prc_grd", "sort_by"):
+                value = source.get(key)
+                if value in (None, "", [], {}):
+                    continue
+                if key == "rcmd_type" and args.get(key) == "tstation" and not entities.get("general_tire_preference"):
+                    args[key] = value
+                elif args.get(key) in (None, "", [], {}):
                     args[key] = value
     if entities.get("brand_cd"):
         args["brand_cd"] = entities["brand_cd"]

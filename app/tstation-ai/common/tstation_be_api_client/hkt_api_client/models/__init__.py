@@ -3,6 +3,10 @@
 from .applied_coupon_item import AppliedCouponItem
 from .available_coupon_item import AvailableCouponItem
 from .available_coupon_response import AvailableCouponResponse
+from .benefit_applicable_product_item import BenefitApplicableProductItem
+from .benefit_applicable_products_match import BenefitApplicableProductsMatch
+from .benefit_applicable_products_search_response import BenefitApplicableProductsSearchResponse
+from .benefit_applicable_store_item import BenefitApplicableStoreItem
 from .best_seller_fallback_option import BestSellerFallbackOption
 from .best_seller_item import BestSellerItem
 from .best_seller_period import BestSellerPeriod
@@ -133,6 +137,10 @@ __all__ = (
     "AppliedCouponItem",
     "AvailableCouponItem",
     "AvailableCouponResponse",
+    "BenefitApplicableProductItem",
+    "BenefitApplicableProductsMatch",
+    "BenefitApplicableProductsSearchResponse",
+    "BenefitApplicableStoreItem",
     "BestSellerFallbackOption",
     "BestSellerItem",
     "BestSellerPeriod",

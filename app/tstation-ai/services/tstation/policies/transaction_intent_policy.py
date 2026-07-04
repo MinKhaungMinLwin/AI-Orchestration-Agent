@@ -531,7 +531,14 @@ def _has_confirmed_product_quantity_context(slots: dict[str, Any]) -> bool:
     return bool(slots.get("goods_no") and (slots.get("quantity") or slots.get("ord_qty")))
 
 def _has_purchase_ready_product_quantity_context(slots: dict[str, Any]) -> bool:
-    return bool(_has_confirmed_product_quantity_context(slots) and slots.get("tire_size"))
+    product_reference = (
+        slots.get("goods_no")
+        or slots.get("product_name")
+        or slots.get("tire_model")
+        or slots.get("pending_product_name")
+        or slots.get("pattern_name")
+    )
+    return bool(product_reference and slots.get("tire_size") and (slots.get("quantity") or slots.get("ord_qty")))
 
 
 def _has_comparison_product_scope(slots: Mapping[str, Any]) -> bool:
@@ -739,6 +746,9 @@ def _requested_maintenance_history_item(text: str) -> str | None:
 
 
 def _is_preorder_confirmation_text(text: str) -> bool:
+    normalized = str(text or "").strip().lower()
+    if normalized in {"order", "place order", "confirm order"}:
+        return True
     return bool(_QUICK_ORDER_CONFIRM_RE.match(text or ""))
 
 
@@ -1020,6 +1030,31 @@ def build_transaction_intent_frame(
         if _is_order_or_reservation_context(slots)
         else confirmed_product_quantity_context
     )
+    purchase_store_slot_fill_text = bool(
+        _is_order_or_reservation_context(slots)
+        and _has_purchase_ready_product_quantity_context(slots)
+        and not slots.get("shop_id")
+        and text.strip()
+        and not current_product_name
+        and not explicit_tire_size
+        and not extract_quantity(text)
+        and not current_price
+        and not current_stock
+        and not current_cart
+        and not current_favorite_store_lookup
+        and not current_reservation_store_info_lookup
+        and not current_reservation_status_lookup
+        and not current_reservation_change_request
+        and not current_order_history_lookup
+        and not current_registered_vehicle_lookup
+        and not current_store_holiday_lookup
+        and not current_store_attribute_inquiry
+        and not current_store_service_search
+        and not current_store_service_availability
+        and not _is_plain_store_info_lookup(text, selected_store_name=selected_store_name)
+    )
+    if purchase_store_slot_fill_text:
+        plain_store_search = False
     other_store_today_install_continuation = (
         pending_today_install
         and bool(_OTHER_STORE_RE.search(text))
@@ -1349,6 +1384,12 @@ def build_transaction_intent_frame(
         intent = "vehicle_lookup"
         sub_intent = "registered_vehicle"
         entities["owned_record_target"] = "vehicle"
+    elif purchase_store_slot_fill_text:
+        intent = "quick_order_reservation"
+        sub_intent = "reservation"
+        entities["stock_check_mode"] = "preview"
+        entities["place_query"] = text.strip()
+        entities["store_slot_fill_text"] = True
     elif current_store_holiday_lookup:
         intent = "store_holiday_lookup"
         sub_intent = "store_holiday"
@@ -1769,6 +1810,11 @@ def build_transaction_intent_frame(
     if intent == "quick_order_reservation" and selected_schedule_followup:
         known["pending_intent"] = "order"
         known["goal_type"] = "place_order"
+    if intent == "quick_order_reservation" and entities.get("store_slot_fill_text"):
+        known["pending_intent"] = "order"
+        known["goal_type"] = "place_order"
+        known["stock_check_mode"] = "preview"
+        known["place_query"] = entities.get("place_query")
     if intent == "quick_order_reservation" and entities.get("stock_to_purchase_continuation"):
         known["pending_intent"] = "order"
         known["goal_type"] = "place_order"

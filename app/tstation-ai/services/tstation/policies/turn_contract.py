@@ -10,6 +10,7 @@ from services.tstation.common.cta_urls import CTAUrls
 from services.tstation.policies.cross_domain_policy import CrossDomainPlan
 from services.tstation.policies.discovery_intent_policy import (
     extract_best_seller_vehicle_query,
+    extract_benefit_applicable_products_query,
     has_registered_vehicle_ownership_signal,
     is_best_seller_request,
     normalize_tire_size,
@@ -44,6 +45,12 @@ _HIGH_RISK_INTENTS = frozenset({
 _HIGH_RISK_DOMAINS = frozenset({"transaction"})
 _HARD_REQUIRED_SLOT_GUARD_INTENTS = frozenset({
     "quick_order_execute",
+})
+_QUICK_ORDER_EXECUTE_PLANNER_INTENTS = frozenset({
+    "quick_order_execute",
+    "order_confirm_execution",
+    "order_create",
+    "order_place",
 })
 _REQUIRED_SLOT_BLOCK_TEMPLATES = frozenset({
     "datepick",
@@ -199,6 +206,7 @@ _DISCOVERY_EVENT_CONTENT_TOOLS = frozenset({
     "search_product_summary_tool",
     "search_product_tool",
     "get_product_applicable_events_tool",
+    "search_benefit_applicable_products_tool",
     "get_event_applicable_products_tool",
     "get_product_promotions_tool",
     "get_benefit_event_deal_list_tool",
@@ -964,6 +972,9 @@ def build_turn_contract(
             and known_slots.get("pending_check_object_value")
         ):
             known_slots["product_name"] = known_slots.get("pending_check_object_value")
+    if latest_router_intent == "coupon_applicable_products" or planner_intent == "coupon_applicable_products":
+        domain = "transaction"
+        intent = "coupon_applicable_products"
     response_metadata = response_decision.metadata if response_decision is not None else {}
     response_shape_key = str(response_metadata.get("response_shape_key") or "").strip() if isinstance(response_metadata, Mapping) else ""
     if domain == "support" and intent == "support_faq" and response_shape_key in _SUPPORT_FAQ_POLICY_TOOL_INTENTS:
@@ -1084,14 +1095,30 @@ def build_turn_contract(
             "product_coupon_lookup",
             "product_deal_lookup",
         }
+        # Code frame relation lookups (2-step: resolve product/event -> applicable)
+        # are high-precision current-turn evidence. A generic router benefit-list
+        # classification must not override them, otherwise a product-anchored event
+        # query ("<상품> 이벤트 있어?") collapses into get_benefit_event_deal_list_tool.
+        relation_lookup_intents = {
+            "product_event_lookup",
+            "product_deal_lookup",
+            "event_applicable_products_lookup",
+        }
+        generic_list_intents = {"benefit_event_list_lookup", "benefit_deal_list"}
+        frame_relation_intent = sub_intent if sub_intent in relation_lookup_intents else ""
         domain = "discovery"
-        intent = (
-            planner_intent if planner_intent in discovery_event_content_intents
-            else code_intent if code_intent in discovery_event_content_intents
-            else "product_event_lookup"
-        )
+        if frame_relation_intent and (
+            planner_intent in generic_list_intents or planner_intent in {None, "unknown"}
+        ):
+            intent = frame_relation_intent
+        else:
+            intent = (
+                planner_intent if planner_intent in discovery_event_content_intents
+                else code_intent if code_intent in discovery_event_content_intents
+                else "product_event_lookup"
+            )
         known_slots["goal_type"] = intent
-    if planner_intent == "quick_order_execute" and _has_quick_order_execute_slots(known_slots):
+    if planner_intent in _QUICK_ORDER_EXECUTE_PLANNER_INTENTS and _has_quick_order_execute_slots(known_slots):
         intent = "quick_order_execute"
     if code_intent == "order_cancel_status_lookup":
         intent = "order_cancel_status_lookup"
@@ -1104,6 +1131,8 @@ def build_turn_contract(
     intent = _current_turn_stock_owner_intent(intent, known_slots)
     if intent == "stock_store_search":
         domain = "transaction"
+    if intent == "quick_order_execute":
+        action_mode = "purchase_continuation"
     action_required_slots = tool_plan.required_slots if tool_plan is not None else ()
     preferred_tool = str(tool_plan.preferred_tool or "").strip() if tool_plan is not None else ""
     tool_args_patch = {
@@ -1201,7 +1230,7 @@ def build_turn_contract(
             tuple(tool for tool in forbidden_tools if tool not in router_allowed_tools),
             router_forbidden_tools,
         )
-    if planner_intent == "quick_order_execute" and _has_quick_order_execute_slots(known_slots):
+    if planner_intent in _QUICK_ORDER_EXECUTE_PLANNER_INTENTS and _has_quick_order_execute_slots(known_slots):
         allowed_tools = _merge_tuple(allowed_tools, ("quick_order_tool",))
         forbidden_tools = tuple(tool for tool in forbidden_tools if tool != "quick_order_tool")
     if selected_store_schedule_continuation:
@@ -1318,6 +1347,24 @@ def build_turn_contract(
     }:
         allowed_tools = _merge_tuple(allowed_tools, tuple(_DISCOVERY_EVENT_CONTENT_TOOLS))
         forbidden_tools = _merge_tuple(forbidden_tools, tuple(_DISCOVERY_EVENT_CONTENT_FORBIDDEN_TOOLS))
+        if intent == "event_applicable_products_lookup":
+            allowed_tools = ("search_benefit_applicable_products_tool",)
+            forbidden_tools = _merge_tuple(
+                forbidden_tools,
+                (
+                    "get_events_tool",
+                    "get_deals_tool",
+                    "get_event_applicable_products_tool",
+                    "get_coupon_applicable_products_tool",
+                    "get_my_coupons_tool",
+                    "search_product_tool",
+                    "search_product_summary_tool",
+                ),
+            )
+            preferred_tool = "search_benefit_applicable_products_tool"
+            query = str(known_slots.get("benefit_applicable_products_query") or "").strip()
+            if query:
+                tool_args_patch = {"query": query, "lang_cd": "ko"}
     if intent == "maintenance_history_lookup":
         allowed_tools = _merge_tuple(allowed_tools, ("get_maintenance_history_tool",))
         forbidden_tools = _merge_tuple(
@@ -1373,6 +1420,31 @@ def build_turn_contract(
         if not preferred_tool or preferred_tool in forbidden_tools:
             preferred_tool = "get_my_coupons_tool"
             tool_args_patch = {}
+    if intent == "coupon_applicable_products":
+        query = (
+            str(known_slots.get("benefit_applicable_products_query") or "").strip()
+            or extract_benefit_applicable_products_query(user_text)
+            or user_text.strip()
+        )
+        allowed_tools = ("search_benefit_applicable_products_tool",)
+        forbidden_tools = _merge_tuple(
+            forbidden_tools,
+            (
+                "get_my_coupons_tool",
+                "get_coupon_applicable_products_tool",
+                "get_events_tool",
+                "get_deals_tool",
+                "get_benefit_event_deal_list_tool",
+                "issue_coupon_tool",
+                "search_product_tool",
+                "get_final_price_tool",
+            ),
+        )
+        preferred_tool = "search_benefit_applicable_products_tool"
+        tool_args_patch = {"query": query, "lang_cd": "ko"}
+        required_slots = ()
+        blocking_required_slots = ()
+        resolvable_required_slots = ()
     if intent == "owned_coupon_lookup":
         allowed_tools = _merge_tuple(
             allowed_tools,
@@ -1808,6 +1880,19 @@ def build_turn_contract(
         blocking_required_slots_source = "router_wins_information_contract" if router_wins_suppressed_required_slots else "none"
         if _router_wins_response_decision_mismatch(router_wins_intent, response_decision_payload):
             response_decision_payload = _router_wins_response_decision(router_wins_intent)
+
+    # D-day lookup is vehicle-scoped: until a registered vehicle is identified the turn
+    # is a selection-waiting turn, and the contract must say so — this keeps off-context
+    # entry chips blocked while the bot asks "which car?". Applied after the support/
+    # router-wins resets above because vehicle identity is a hard tool-data requirement
+    # for get_maintenance_dday_tool, not a clarification preference.
+    if intent == "maintenance_timing_guidance" and not any(
+        str(known_slots.get(key) or "").strip()
+        for key in ("mbr_car_reg_seq", "car_lnc_cd", "car_no")
+    ):
+        required_slots = _merge_tuple(required_slots, ("mbr_car_reg_seq",))
+        blocking_required_slots = _merge_tuple(blocking_required_slots, ("mbr_car_reg_seq",))
+        blocking_required_slots_source = "maintenance_vehicle_selection"
 
     allowed_tools = tuple(tool for tool in allowed_tools if tool not in forbidden_tools)
 
@@ -3915,6 +4000,19 @@ def _recommendation_tool_input_drift_violation(
         expected_args["tire_size"] = contract.known_slots.get("tire_size")
     if actual_uses_vehicle_fitment:
         expected_args.pop("tire_size", None)
+    response_decision = contract.response_decision if contract is not None else {}
+    response_metadata = response_decision.get("metadata") if isinstance(response_decision, Mapping) else {}
+    response_shape_key = str(response_metadata.get("response_shape_key") or "") if isinstance(response_metadata, Mapping) else ""
+    is_unsized_catalog_recommendation = (
+        response_shape_key == "catalog_unsized_recommendation_summary"
+        and not expected_args.get("tire_size")
+        and not actual_args.get("tire_size")
+        and not actual_args.get("car_lnc_cd")
+    )
+    if is_unsized_catalog_recommendation:
+        # For unsized catalog recommendations, the Discovery agent's scenario
+        # choice is the source of truth; contract keeps structural constraints.
+        expected_args.pop("rcmd_type", None)
     expected_args = {
         key: expected_args[key]
         for key in ("rcmd_type", "vehicle_type", "season_nm", "tire_size")

@@ -13,6 +13,7 @@ from services.tstation.agents.b_discovery_agent.tools import (
     get_deals_tool,
     get_event_applicable_products_tool,
     get_product_applicable_events_tool,
+    search_benefit_applicable_products_tool,
     search_car_model_groups_tool,
     get_car_trims_tool,
     get_newest_products_tool,
@@ -162,6 +163,7 @@ Required behavior:
 | get_benefit_event_deal_list_tool | Generic current 이벤트/기획전/프로모션/혜택 목록 |
 | get_events_tool | User asks about 이벤트 |
 | get_deals_tool | User asks about 기획전 |
+| search_benefit_applicable_products_tool | User asks "쿠폰/이벤트/기획전/혜택 적용 가능한 상품 / 대상 상품 / 살 수 있는 상품" — pass query from the named benefit |
 | get_event_applicable_products_tool | User asks "이벤트/기획전/프로모션 적용 가능한 상품 / 대상 상품 / 이 이벤트에서 살 수 있는 상품" — pass evt_no_list (1-10) |
 | get_product_applicable_events_tool | User asks "이 상품에 적용 가능한 이벤트/기획전/프로모션 / 이 타이어 사면 어떤 행사 / 이 상품에 어떤 이벤트가 적용돼?" — pass ptrn_cd |
 
@@ -883,12 +885,9 @@ Action:
 - 이벤트 / 이벤트 목록 / 진행 중인 이벤트 / 행사 → call BOTH `get_events_tool(lang_cd="ko")` AND `get_deals_tool()` IN PARALLEL in the same tool-use turn (no clarifying question)
 - 기획전 / 기획전 목록 / 기획전 내용 → call `get_deals_tool()` IMMEDIATELY (no clarifying question)
 - 이벤트 + 기획전 함께 언급 ("이벤트랑 기획전", "이벤트/기획전 다 보여줘") → call BOTH `get_events_tool` AND `get_deals_tool` IN PARALLEL in the same tool-use turn
-- 이벤트/기획전/프로모션 적용 가능 상품 / 이벤트 적용 상품 / 이벤트 대상 상품 / "이 이벤트에 어떤 상품이 적용돼?" / "이벤트로 살 수 있는 상품" / "이벤트 적용 상품 보여줘" / "기획전 상품 보여줘" →
-  ✅ DEFAULT (no specific evt_no in user's message AND no prior turn focused on a single specific event): auto-aggregate ALL active event-content:
-    Step 1: call `get_events_tool(lang_cd="ko")` (or reuse prior turn's events list if it's the immediately preceding turn — DO NOT re-render the events list as quickReply; intermediate data only).
-    Step 2: IMMEDIATELY call `get_event_applicable_products_tool(evt_no_list=[<EVERY evt_no from step 1>][:10])`.
-    ❌ FORBIDDEN: asking the user "어떤 이벤트?" / showing the events list with one-button-per-event for the user to pick. The whole point is to aggregate across every active event — Flow F.0 rule 2 then renders the products grouped by event name.
-  ✅ EXCEPTION (user has explicitly named a single event — e.g. "한국타이어 페스타 적용 상품", or prior turn was a single-event narrowing flow F.1): call `get_event_applicable_products_tool(evt_no_list=[<that one evt_no>])` with just that event.
+- 쿠폰/이벤트/기획전/프로모션/혜택 적용 가능 상품 / 대상 상품 / "이 이벤트에 어떤 상품이 적용돼?" / "이 쿠폰으로 살 수 있는 상품" / "기획전 상품 보여줘" →
+  call `search_benefit_applicable_products_tool(query=<사용자가 말한 혜택명/쿠폰명/이벤트명/기획전명>, lang_cd="ko")` directly.
+  ❌ Do NOT call `get_events_tool`, `get_deals_tool`, `get_my_coupons_tool`, `get_event_applicable_products_tool`, or `get_coupon_applicable_products_tool` first for this benefit-name → product lookup.
 - "이 상품에 적용 가능한 이벤트/기획전/프로모션" / "이 타이어 사면 어떤 행사" / "이 상품에 어떤 이벤트가 적용돼?" / "<상품명> 이벤트 알려줘" → call `get_product_applicable_events_tool(ptrn_cd=..., lang_cd="ko")` with the ptrn_cd from prior conversation. ptrn_cd 가 없으면 **사이즈 없이** `search_product_summary_tool(keyword=<상품명>)` 호출 후 `items[0].ptrn_cd` 사용. ❌ `search_product_tool`로 goods_no/SKU를 확정하지 말 것. ❌ 사이즈를 사용자에게 묻지 말 것.
 - "이 상품에 적용 가능한 쿠폰" / "이 상품 할인쿠폰" / "이 상품 쿠폰 적용받고 싶어" / "이 상품에 어떤 쿠폰 적용돼?" / "<상품명> 할인쿠폰" / "<상품명> 쿠폰" → call `get_product_promotions_tool(goods_no=...)`. 응답에는 **쿠폰** 정보만 사용 (deal/기획전 정보 노출 X). goods_no 가 없으면 **사이즈 없이** `search_product_tool(keyword=<상품명>, size=None)` 호출 후 `items[0].goods_no` 사용. ❌ 사이즈를 사용자에게 묻지 말 것. 🚫 "쿠폰 받기" CTA 노출 금지 — 발급 기능 OFF (2026-05-15).
 - 영상 / 리뷰 영상 / 유튜브 / 동영상 → call `search_youtube_video_tool(query)` IMMEDIATELY
@@ -900,8 +899,7 @@ Action:
 - YouTube: call search_youtube_video_tool(query) immediately (Hankook + Tstation channels only)
 - Events: event-list requests call both event and deal tools; render via the Both rule below. Only event-specific period/product flows use event-only output.
   get_events_tool(lang_cd="ko") → render `quickReply` with `assistantResponse` containing a bullet list:
-  ⚠️ EXCEPTION — "이벤트 적용 상품" 2-step flow only: after get_events_tool returns, do NOT render the events list as quickReply. Skip directly to calling `get_event_applicable_products_tool(evt_no_list=[all evt_nos])`. The events list is intermediate data only.
-  ⚠️ EXCEPTION — "기획전 상품" 2-step flow only: after get_deals_tool returns, do NOT render the deals list as quickReply. Skip directly to calling `get_coupon_applicable_products_tool(deal_no=[all deal_nos])`. The deals list is intermediate data only.
+  ⚠️ EXCEPTION — benefit applicable products flow: do NOT render events/deals/coupons as an intermediate list. Use `search_benefit_applicable_products_tool` directly.
   ```
   **이벤트**
 
@@ -2513,6 +2511,7 @@ class DiscoverySubAgent(BaseAgent):
         "get_events_tool": "Price",
         "get_deals_tool": "Price",
         "get_benefit_event_deal_list_tool": "Price",
+        "search_benefit_applicable_products_tool": "Price",
         "get_event_applicable_products_tool": "Price",
         "get_product_applicable_events_tool": "Price",
         "get_coupon_applicable_products_tool": "Price",
@@ -2539,6 +2538,7 @@ class DiscoverySubAgent(BaseAgent):
             get_events_tool,
             get_deals_tool,
             get_benefit_event_deal_list_tool,
+            search_benefit_applicable_products_tool,
             get_event_applicable_products_tool,
             get_product_applicable_events_tool,
             get_coupon_applicable_products_tool,
@@ -2582,6 +2582,7 @@ class DiscoverySubAgent(BaseAgent):
                 get_events_tool,
                 get_deals_tool,
                 get_benefit_event_deal_list_tool,
+                search_benefit_applicable_products_tool,
                 get_event_applicable_products_tool,
                 get_product_applicable_events_tool,
                 get_coupon_applicable_products_tool,

@@ -6,6 +6,7 @@ from schemas.tstation.slots import ConversationSlots
 from services.tstation.policies.discovery_intent_policy import (
     best_seller_search_params_from_text,
     build_discovery_intent_frame,
+    extract_benefit_applicable_products_query,
     extract_best_seller_vehicle_query,
     extract_product_names,
     normalize_tire_size,
@@ -64,6 +65,7 @@ _FAST_PATH_DISCOVERY_RECOVERY_ALLOWED_TOOLS = frozenset({
     "get_my_cars_tool",
     "get_events_tool",
     "get_product_applicable_events_tool",
+    "search_benefit_applicable_products_tool",
     "get_event_applicable_products_tool",
 })
 _FLOW_PROGRESS_TRANSACTION_TOOLS = frozenset({
@@ -703,6 +705,54 @@ def _contract_required_transaction_store_preview_tool_input(
     return tool_input
 
 
+def _contract_required_schedule_final_price_tool_input(
+    turn_contract: TurnContract,
+    *,
+    merged_slots: ConversationSlots | None = None,
+) -> dict[str, Any] | None:
+    if str(turn_contract.domain or "").strip().lower() != PolicyDomain.TRANSACTION.value:
+        return None
+    intent = str(turn_contract.intent or "").strip()
+    if intent not in {"quick_order_reservation", "quick_order_reservation_slot_fill_schedule"}:
+        return None
+    if str(getattr(turn_contract, "action_mode", "") or "").strip() != "purchase_continuation":
+        return None
+    response_decision = turn_contract.response_decision or {}
+    response_metadata = response_decision.get("metadata") if isinstance(response_decision, Mapping) else {}
+    if not isinstance(response_metadata, Mapping):
+        response_metadata = {}
+    response_shape_key = str(response_metadata.get("response_shape_key") or "") if isinstance(response_metadata, Mapping) else ""
+    flow_step = str(getattr(turn_contract, "flow_step", "") or response_metadata.get("flow_step") or "").strip()
+    if response_shape_key != "reservation_price_lookup" or flow_step != "resolve_price":
+        return None
+
+    known_slots = dict(turn_contract.known_slots or {})
+    tool_args_patch = (
+        dict(turn_contract.tool_args_patch)
+        if isinstance(getattr(turn_contract, "tool_args_patch", None), Mapping)
+        else {}
+    )
+    goods_no = str(
+        tool_args_patch.get("goods_no")
+        or known_slots.get("goods_no")
+        or getattr(merged_slots, "goods_no", None)
+        or ""
+    ).strip()
+    quantity = known_slots.get("ord_qty") or known_slots.get("quantity") or getattr(merged_slots, "ord_qty", None)
+    shop_id = str(known_slots.get("shop_id") or getattr(merged_slots, "shop_id", None) or "").strip()
+    requested_cal_day = str(
+        known_slots.get("requested_cal_day") or getattr(merged_slots, "requested_cal_day", None) or ""
+    ).strip()
+    rsv_hour = str(known_slots.get("rsv_hour") or getattr(merged_slots, "rsv_hour", None) or "").strip()
+    try:
+        has_quantity = int(quantity or 0) > 0
+    except (TypeError, ValueError):
+        has_quantity = bool(quantity)
+    if not (goods_no and has_quantity and shop_id and requested_cal_day and rsv_hour):
+        return None
+    return {"goods_no": goods_no}
+
+
 def _contract_required_transaction_tool_input(
     *,
     turn_contract: TurnContract,
@@ -736,6 +786,34 @@ def _contract_required_transaction_tool_input(
             if not tool_input.get("query_no"):
                 return None
             return tool_input, "turn_contract_required_owned_record_lookup", "주문 현황 조회 중..."
+        return None
+    if preferred_tool == "search_benefit_applicable_products_tool":
+        if str(turn_contract.intent or "").strip() != "coupon_applicable_products":
+            return None
+        tool_args_patch = (
+            dict(turn_contract.tool_args_patch)
+            if isinstance(getattr(turn_contract, "tool_args_patch", None), Mapping)
+            else {}
+        )
+        query = str(
+            tool_args_patch.get("query")
+            or (turn_contract.known_slots or {}).get("benefit_applicable_products_query")
+            or ""
+        ).strip()
+        if not query:
+            return None
+        return (
+            {"query": query, "lang_cd": str(tool_args_patch.get("lang_cd") or "ko")},
+            "turn_contract_benefit_applicable_products_query",
+            "혜택 적용 상품 조회 중...",
+        )
+    if preferred_tool == "get_final_price_tool":
+        final_price_input = _contract_required_schedule_final_price_tool_input(
+            turn_contract,
+            merged_slots=merged_slots,
+        )
+        if final_price_input:
+            return final_price_input, "turn_contract_schedule_final_price", "최종 가격 확인 중..."
         return None
     if preferred_tool and (
         preferred_tool in _FAST_PATH_TRANSACTION_RECOVERY_BLOCKLIST
@@ -957,6 +1035,23 @@ def _contract_required_tool_candidate(
             if not tool_input:
                 return None
             display_name = "이벤트 적용 상품 조회 중..."
+        elif preferred_tool == "search_benefit_applicable_products_tool":
+            if not tool_input:
+                query = (
+                    str(known_slots.get("benefit_applicable_products_query") or "").strip()
+                    or extract_benefit_applicable_products_query(user_text)
+                )
+                if query:
+                    tool_input = {"query": query, "lang_cd": "ko"}
+                    tool_input_source = (
+                        "router_evidence"
+                        if str(known_slots.get("benefit_applicable_products_query") or "").strip()
+                        else "user_text"
+                    )
+            if not tool_input or not str(tool_input.get("query") or "").strip():
+                return None
+            tool_input.setdefault("lang_cd", "ko")
+            display_name = "혜택 적용 상품 조회 중..."
         elif preferred_tool == "get_products_recommendations_tool":
             if str(turn_contract.intent or "").strip() != "product_recommendation":
                 return None
@@ -1011,7 +1106,11 @@ def _contract_required_tool_candidate(
         tool_input, tool_input_source, display_name = contract_required_tool_input
         if not preferred_tool and tool_input_source == "turn_contract_required_stock_inventory_store_lookup":
             preferred_tool = "get_store_list_tool"
-        source_domain = PolicyDomain.TRANSACTION.value
+        source_domain = (
+            PolicyDomain.DISCOVERY.value
+            if preferred_tool == "search_benefit_applicable_products_tool"
+            else PolicyDomain.TRANSACTION.value
+        )
     else:
         return None
 
@@ -1022,6 +1121,10 @@ def _contract_required_tool_candidate(
     if preferred_tool in _FAST_PATH_TRANSACTION_RECOVERY_BLOCKLIST and not (
         preferred_tool == "transaction_store_preview_tool"
         and _is_contract_required_transaction_store_preview(turn_contract, merged_slots=merged_slots)
+        or (
+            preferred_tool == "get_final_price_tool"
+            and tool_input_source == "turn_contract_schedule_final_price"
+        )
     ):
         return None
     return _ContractRequiredToolCandidate(

@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import replace
 import json
 import logging
 import re
@@ -19,6 +20,7 @@ from services.tstation.policies.contract_required_tool_candidate import (
 )
 from services.tstation.policies.discovery_intent_policy import normalize_tire_size
 from services.tstation.policies.intent_frame import PolicyDomain
+from services.tstation.policies.preorder_event_builder import build_preorder_event
 from services.tstation.policies.resolved_context import (
     canonical_context_from_template_boundary,
     canonical_context_from_tool_boundary,
@@ -428,6 +430,33 @@ async def continue_active_flow_after_tool(
     )
 
 
+async def _recover_contract_required_schedule_final_price(
+    *,
+    turn_contract: TurnContract | None,
+    user_text: str,
+    merged_slots: ConversationSlots | None,
+    blocked_fast_path_source: str = "contract_required_schedule_final_price",
+    member_no: str | None = None,
+) -> dict[str, Any] | None:
+    if turn_contract is None:
+        return None
+    candidate = _contract_required_tool_candidate(
+        turn_contract=turn_contract,
+        user_text=user_text,
+        merged_slots=merged_slots,
+        member_no=member_no,
+    )
+    if candidate is None or candidate.tool_input_source != "turn_contract_schedule_final_price":
+        return None
+    return await recover_blocked_fast_path_to_contract_tool(
+        turn_contract=turn_contract,
+        user_text=user_text,
+        merged_slots=merged_slots,
+        blocked_fast_path_source=blocked_fast_path_source,
+        member_no=member_no,
+    )
+
+
 async def _recover_contract_required_tool(
     *,
     turn_contract: TurnContract | None,
@@ -465,6 +494,15 @@ async def _recover_contract_required_tool(
     )
     if owned_record_recovery is not None:
         return owned_record_recovery
+    schedule_final_price_recovery = await _recover_contract_required_schedule_final_price(
+        turn_contract=turn_contract,
+        user_text=user_text,
+        merged_slots=merged_slots,
+        blocked_fast_path_source=blocked_fast_path_source,
+        member_no=member_no,
+    )
+    if schedule_final_price_recovery is not None:
+        return schedule_final_price_recovery
     flow_progress_recovery = await _recover_contract_required_flow_progress_tool(
         turn_contract=turn_contract,
         user_text=user_text,
@@ -623,6 +661,78 @@ def _registered_vehicle_general_recommendation_input(*, turn_contract: TurnContr
     tool_input.setdefault("rcmd_type", "tstation")
     return {key: value for key, value in tool_input.items() if value not in (None, "", [], {})}
 
+
+_FINAL_PRICE_PRIORITY_FIELDS = (
+    "cheapest_final_prc",
+    "final_unit_price",
+    "final_prc",
+    "extra_fvr_sale_prc",
+    "price",
+    "sale_prc",
+)
+
+def _positive_int(value: Any) -> int | None:
+    if value in (None, "", []) or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, float):
+        return int(value) if value > 0 else None
+    text = str(value).strip().replace(",", "")
+    if not re.fullmatch(r"\d+(?:\.0+)?", text):
+        return None
+    parsed = int(float(text))
+    return parsed if parsed > 0 else None
+
+def _final_price_payment_fields(tool_result: Mapping[str, Any], quantity: int) -> dict[str, Any]:
+    data = tool_result.get("data") if isinstance(tool_result, Mapping) else None
+    if not isinstance(data, Mapping) or quantity <= 0:
+        return {}
+    unit_price = None
+    price_basis = None
+    for field in _FINAL_PRICE_PRIORITY_FIELDS:
+        candidate = _positive_int(data.get(field))
+        if candidate is not None:
+            unit_price = candidate
+            price_basis = field
+            break
+    if unit_price is None or price_basis is None:
+        return {}
+    wage = _positive_int(data.get("wage_prc") or data.get("wage_today_prc")) or 0
+    return {
+        price_basis: unit_price,
+        "wage_prc": wage,
+        "payment_amount": (unit_price + wage) * quantity,
+        "price_basis": price_basis,
+        "price_source_tool": "get_final_price_tool",
+        "payment_amount_source": "get_final_price_tool",
+    }
+
+def _preorder_event_from_final_price_recovery(
+    turn_contract: TurnContract,
+    tool_result: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    known_slots = dict(turn_contract.known_slots or {})
+    quantity = _positive_int(known_slots.get("ord_qty") or known_slots.get("quantity")) or 0
+    payment_fields = _final_price_payment_fields(tool_result, quantity)
+    if not payment_fields:
+        return None
+    updated_slots = {**known_slots, **payment_fields}
+    response_decision = dict(turn_contract.response_decision or {})
+    response_metadata = dict(response_decision.get("metadata") or {})
+    response_metadata["response_shape_key"] = "reservation_confirmation_ready"
+    response_metadata["flow_step"] = "build_preorder"
+    response_decision["template"] = "preOrder"
+    response_decision["metadata"] = response_metadata
+    ready_contract = replace(
+        turn_contract,
+        known_slots=updated_slots,
+        response_decision=response_decision,
+        allowed_tools=(),
+        preferred_tool=None,
+        flow_step="build_preorder",
+    )
+    return build_preorder_event(ready_contract, updated_slots)
 
 async def _maybe_run_registered_vehicle_recommendation(
     *,
@@ -846,6 +956,51 @@ async def recover_blocked_fast_path_to_contract_tool(
                             "message": "Invalid tool response",
                             "data": {},
                         }
+        if preferred_tool == "get_final_price_tool":
+            preorder_event = _preorder_event_from_final_price_recovery(turn_contract, tool_result)
+            if preorder_event is not None:
+                mapped_event = preorder_event
+                tool_data_list = [{"tool": preferred_tool, "args": tool_input, "data": tool_result}]
+                mapped_event["source_domain"] = source_domain
+                _annotate_called_tools(mapped_event, tool_data_list)
+                mapped_event = _annotate_contract_tool_recovery_event(
+                    mapped_event,
+                    turn_contract=turn_contract,
+                    blocked_fast_path_source=blocked_fast_path_source,
+                    recovered_tool=preferred_tool,
+                    recovery_reason="final_price_resolved_before_preorder",
+                    tool_input_source=tool_input_source or "contract_tool_plan",
+                )
+                return {
+                    "tool_name": preferred_tool,
+                    "tool_input": tool_input,
+                    "tool_result": tool_result,
+                    "event": mapped_event,
+                    "events": [
+                        {
+                            "type": "status",
+                            "status": "tool_start",
+                            "tool": preferred_tool,
+                            "display_name": display_name,
+                            "source_domain": source_domain,
+                        },
+                        {
+                            "type": "agent_flow",
+                            "agent": "[CONTRACT RECOVERY AF]",
+                            "agent_class": "Contract Recovery",
+                            "status": tool_result.get("status", "success"),
+                            "source_domain": source_domain,
+                        },
+                        {
+                            "type": "tool",
+                            "input": tool_input,
+                            "output": json.dumps(tool_result, ensure_ascii=False),
+                            "node": "tools",
+                            "tool": preferred_tool,
+                            "source_domain": source_domain,
+                        },
+                    ],
+                }
         if preferred_tool == "search_product_summary_tool":
             assistant_text = f"{str(tool_input.get('keyword') or '상품')} 상품 정보를 확인했어요."
         elif preferred_tool == "search_product_tool":
