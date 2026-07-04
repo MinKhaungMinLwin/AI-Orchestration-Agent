@@ -20,7 +20,11 @@ from services.tstation.policies.preorder_event_builder import build_preorder_eve
 from services.tstation.policies.resolved_context import build_resolved_turn_context
 from services.tstation.policies.response_decision import ResponseDecision, ToolPlan
 from services.tstation.policies.router_evidence import merge_router_evidence_known_slots
-from services.tstation.policies.support_response_policy import _is_tire_manufacture_date_question
+from services.tstation.policies.support_response_policy import (
+    _is_tire_manufacture_date_question,
+    build_general_cancel_fee_policy_event,
+)
+from services.tstation.policies.transaction_intent_policy import build_transaction_intent_frame
 
 
 _HIGH_RISK_INTENTS = frozenset({
@@ -690,6 +694,19 @@ def build_turn_contract(
         router_wins_intent = "assurance_service_policy"
     code_domain = _domain_value(intent_frame.domain) if intent_frame is not None else _domain_from_routing(routing_result)
     code_intent = intent_frame.intent if intent_frame is not None else _intent_from_cross_domain(cross_domain_plan)
+    transaction_boundary_frame = _transaction_policy_boundary_frame(user_text=user_text, merged_slots=merged_slots)
+    if transaction_boundary_frame is not None and _should_apply_transaction_policy_boundary(
+        planner_intent=planner_intent,
+        policy_intent=policy_intent,
+        code_intent=code_intent,
+        code_domain=code_domain,
+    ):
+        code_domain = _domain_value(transaction_boundary_frame.domain)
+        code_intent = transaction_boundary_frame.intent
+        if planner_intent in {None, "product_recommendation", "sized_product_recommendation"}:
+            planner_intent = transaction_boundary_frame.intent
+        if policy_intent in {"product_recommendation", "sized_product_recommendation"}:
+            policy_intent = transaction_boundary_frame.intent
     keep_registered_vehicle_contract = _should_keep_registered_vehicle_information_contract(
         user_text=user_text,
         intent_frame=intent_frame,
@@ -738,6 +755,7 @@ def build_turn_contract(
     best_seller_anchor = is_best_seller_request(user_text, include_demographic_preference=False)
     known_slots = _compact_slots({
         **(dict(intent_frame.known_slots) if intent_frame is not None else {}),
+        **(dict(transaction_boundary_frame.known_slots) if transaction_boundary_frame is not None else {}),
         **_slots_from_model(merged_slots),
     })
     availability_context = (
@@ -858,6 +876,11 @@ def build_turn_contract(
         ):
             known_slots["product_name"] = known_slots.get("pending_check_object_value")
     response_metadata = response_decision.metadata if response_decision is not None else {}
+    response_shape_key = str(response_metadata.get("response_shape_key") or "").strip() if isinstance(response_metadata, Mapping) else ""
+    if domain == "support" and intent == "support_faq" and response_shape_key in _SUPPORT_FAQ_POLICY_TOOL_INTENTS:
+        intent = response_shape_key
+        policy_intent = response_shape_key
+        known_slots["policy_intent"] = response_shape_key
     if isinstance(response_metadata, Mapping):
         requested_product_attribute = str(response_metadata.get("requested_product_attribute") or "")
         compare_metric = str(response_metadata.get("compare_metric") or "")
@@ -1579,6 +1602,32 @@ def build_turn_contract(
         router_wins_intent
         and (router_wins_preempted_required_slots or required_slots or resolvable_required_slots or blocking_required_slots)
     )
+    final_support_policy_intent = str(known_slots.get("policy_intent") or "").strip()
+    if domain == "support" and intent == "support_faq" and final_support_policy_intent in _SUPPORT_FAQ_POLICY_TOOL_INTENTS:
+        intent = final_support_policy_intent
+        allowed_tools = _merge_tuple(allowed_tools, _SUPPORT_SAFE_AGENT_TOOLS)
+        forbidden_tools = _merge_tuple(
+            forbidden_tools,
+            ("search_product_tool", "get_final_price_tool", "transfer_to_qna_tool"),
+        )
+    if intent in {"general_cancel_fee_policy", "owned_order_cancel_fee_inquiry"} and not allowed_tools:
+        allowed_tools = ("search_faq_hybrid_tool",)
+        forbidden_tools = _merge_tuple(
+            forbidden_tools,
+            tuple(tool for tool in _ROUTER_WINS_TRANSACTION_FORBIDDEN_TOOLS if tool != "search_faq_hybrid_tool"),
+        )
+    if intent in {"general_cancel_fee_policy", "owned_order_cancel_fee_inquiry"}:
+        required_slots = ()
+        resolvable_required_slots = ()
+        blocking_required_slots = ()
+        blocking_required_slots_source = "transaction_policy_boundary"
+        if _response_shape_key(response_decision_payload) not in {
+            "general_cancel_fee_policy",
+            "general_cancel_fee_policy_summary",
+            "owned_order_cancel_fee_inquiry",
+            "owned_order_cancel_fee_inquiry_summary",
+        }:
+            response_decision_payload = _router_wins_response_decision(intent)
     support_answer_contract = _support_answer_contract_owns_response(
         domain=domain,
         intent=intent,
@@ -1948,6 +1997,16 @@ def build_response_policy_guard_event(contract: TurnContract) -> dict[str, Any]:
     response_decision = contract.response_decision or {}
     forbidden = response_decision.get("forbidden_behaviors") if isinstance(response_decision, Mapping) else ()
     forbidden_set = {str(item) for item in forbidden} if isinstance(forbidden, list | tuple) else set()
+    if str(contract.domain or "") == "transaction" and str(contract.intent or "") == "general_cancel_fee_policy":
+        user_query = str(contract.known_slots.get("region") or contract.known_slots.get("user_query") or "")
+        event = build_general_cancel_fee_policy_event(user_query)
+        event["assistant_response_source"] = "code_turn_contract_general_cancel_fee_policy_guard"
+        data = event.get("data")
+        if isinstance(data, dict):
+            metadata = data.get("metadata")
+            if isinstance(metadata, dict):
+                metadata["assistant_response_source"] = "code_turn_contract_general_cancel_fee_policy_guard"
+        return _annotate_contract_guard_event(event, contract, reason="response_policy_guard")
     if _support_answer_contract_owns_response(
         domain=str(contract.domain or ""),
         intent=str(contract.intent or ""),
@@ -4918,6 +4977,30 @@ def _is_payment_error_policy_overmatch(user_text: str | None) -> bool:
     )
 
 
+def _transaction_policy_boundary_frame(*, user_text: str, merged_slots: Any | None) -> IntentFrame | None:
+    frame = build_transaction_intent_frame(user_text, known_slots=_slots_from_model(merged_slots))
+    if frame.intent in {"general_cancel_fee_policy", "owned_order_cancel_fee_inquiry"}:
+        return frame
+    return None
+
+
+def _should_apply_transaction_policy_boundary(
+    *,
+    planner_intent: str | None,
+    policy_intent: str,
+    code_intent: str | None,
+    code_domain: str | None,
+) -> bool:
+    candidates = {
+        str(planner_intent or "").strip(),
+        str(policy_intent or "").strip(),
+        str(code_intent or "").strip(),
+    }
+    if candidates & {"product_recommendation", "sized_product_recommendation"}:
+        return True
+    return str(code_domain or "").strip() in {"", "discovery"} and not any(candidates)
+
+
 def _should_force_card_installment_lookup_intent(
     *,
     user_text: str,
@@ -4928,6 +5011,8 @@ def _should_force_card_installment_lookup_intent(
     planner_domains: tuple[str, ...],
 ) -> bool:
     text = str(user_text or "")
+    if _is_tire_manufacture_date_question(text, include_candidate_terms=True):
+        return False
     if _CARD_INSTALLMENT_LOOKUP_RE.search(text) is None:
         return False
     if _PAYMENT_TROUBLESHOOTING_RE.search(text) is not None:

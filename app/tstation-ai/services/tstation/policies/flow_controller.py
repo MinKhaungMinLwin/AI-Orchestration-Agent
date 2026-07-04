@@ -13,6 +13,11 @@ from services.tstation.policies.discovery_intent_policy import normalize_tire_si
 from services.tstation.policies.flow_state import canonical_flow_type, commerce_sub_flow_type
 from services.tstation.policies.price_basis_policy import has_price_basis
 from services.tstation.policies.response_decision import TemplateName
+from services.tstation.policies.support_response_policy import (
+    _is_card_installment_lookup_query,
+    _is_payment_error_troubleshooting_query,
+    _is_tire_manufacture_date_question,
+)
 
 
 current_purchase_flow_state: ContextVar[dict[str, Any] | None] = ContextVar("current_purchase_flow_state", default=None)
@@ -206,13 +211,6 @@ _SUPPORT_EXECUTION_PLAN_TOKENS = frozenset({
     "get_faq_tool",
     *_SUPPORT_FLOW_INTENTS,
 })
-_CARD_INSTALLMENT_SUPPORT_CURRENT_TURN_RE = re.compile(
-    r"무이자|할부|몇\s*개?월|[0-9]{1,2}\s*개?월|개월수|카드사별|현대카드|신한카드|삼성카드|국민카드|"
-    r"롯데카드|하나카드|농협카드|우리카드|비씨카드|BC카드|스마트\s*페이|smart\s*pay|smartpay",
-    re.IGNORECASE,
-)
-
-
 def _normalized_region_text(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip())
 
@@ -1157,7 +1155,11 @@ def _current_turn_support_intent(router_evidence: Mapping[str, Any], *, user_tex
 
 def _normalize_current_turn_support_intent(*, user_text: str) -> str:
     text = str(user_text or "")
-    if _CARD_INSTALLMENT_SUPPORT_CURRENT_TURN_RE.search(text):
+    if _is_tire_manufacture_date_question(text, include_candidate_terms=True):
+        return "tire_manufacture_date_policy"
+    if _is_payment_error_troubleshooting_query(text):
+        return "payment_error_troubleshooting"
+    if _is_card_installment_lookup_query(text):
         return "card_installment_lookup"
     return ""
 

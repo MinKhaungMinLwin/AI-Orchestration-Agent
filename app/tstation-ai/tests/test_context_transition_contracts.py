@@ -4,12 +4,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from services.tstation.policies.flow_controller import resolve_purchase_order_flow
+from services.tstation.policies.flow_controller import resolve_purchase_order_flow, transition_current_flow
 from services.tstation.policies.flow_state import commit_flow_state, resume_dormant_flow, upsert_dormant_flow
 from services.tstation.policies.intent_frame import IntentFrame, PolicyDomain
 from services.tstation.policies.response_decision import ResponseDecision, ResponseShape, TemplateName, ToolPlan
 from services.tstation.policies.transaction_intent_policy import plan_transaction_tools
 from services.tstation.policies.transaction_response_policy import decide_transaction_response
+from services.tstation.policies.support_response_policy import decide_support_response
 from services.tstation.policies.turn_contract import (
     TurnContract,
     build_required_slot_clarification_event,
@@ -1875,6 +1876,72 @@ def test_support_policy_guard_owns_response_over_stale_purchase_flow() -> None:
     assert event["data"]["metadata"].get("flowId") is None
     assert "매장이나 지역" not in event["data"]["assistantResponse"]
     assert "구매를 진행" not in event["data"]["assistantResponse"]
+
+
+def test_turn_contract_promotes_cancel_fee_text_over_product_recommendation_drift() -> None:
+    user_text = "주문 취소하면 수수료 있어?"
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=IntentFrame(
+            domain=PolicyDomain.DISCOVERY,
+            intent="product_recommendation",
+            missing_slots=("product",),
+        ),
+        response_decision=ResponseDecision(
+            template=TemplateName.QUICK_REPLY,
+            response_shape=ResponseShape.SUMMARY,
+            required_slots=("product",),
+            metadata={"response_shape_key": "product_recommendation"},
+        ),
+    )
+
+    assert contract.domain == "transaction"
+    assert contract.intent == "general_cancel_fee_policy"
+    assert contract.known_slots["pending_intent"] == "general_cancel_fee_policy"
+    assert contract.required_slots == ()
+    assert "search_faq_hybrid_tool" in contract.allowed_tools
+    assert contract.response_decision["metadata"]["response_shape_key"] == "general_cancel_fee_policy"
+
+    event = build_response_policy_guard_event(contract)
+    assert event["assistant_response_source"] == "code_turn_contract_general_cancel_fee_policy_guard"
+    assert event["data"]["metadata"]["contract_intent"] == "general_cancel_fee_policy"
+    assert "상품" not in event["data"]["assistantResponse"]
+
+
+def test_current_turn_support_flow_keeps_manufacture_date_month_question_out_of_card_installment() -> None:
+    user_text = "타이어 제조일자가 6개월 전이면 새 상품 맞아?"
+    flow_transition = transition_current_flow(user_text=user_text, router_evidence={})
+    response_decision = decide_support_response(intent="support_faq", user_text=user_text)
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=IntentFrame(domain=PolicyDomain.SUPPORT, intent="support_faq"),
+        response_decision=response_decision,
+        contract_seed=flow_transition.contract_seed,
+        context_evidence=flow_transition.context_evidence,
+    )
+
+    active_intent = flow_transition.flow_transition["active_flow_context"]["intent"]
+    assert active_intent["pending_intent"] == "tire_manufacture_date_policy"
+    assert contract.intent == "tire_manufacture_date_policy"
+    assert contract.preferred_tool != "get_card_installments_tool"
+
+
+def test_current_turn_support_flow_promotes_payment_error_text_to_contract_intent() -> None:
+    user_text = "카카오페이 결제 누르면 화면이 하얗게 멈춰"
+    flow_transition = transition_current_flow(user_text=user_text, router_evidence={})
+    response_decision = decide_support_response(intent="support_faq", user_text=user_text)
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=IntentFrame(domain=PolicyDomain.SUPPORT, intent="support_faq"),
+        response_decision=response_decision,
+        contract_seed=flow_transition.contract_seed,
+        context_evidence=flow_transition.context_evidence,
+    )
+
+    active_intent = flow_transition.flow_transition["active_flow_context"]["intent"]
+    assert active_intent["pending_intent"] == "payment_error_troubleshooting"
+    assert contract.intent == "payment_error_troubleshooting"
+    assert "get_faq_tool" in contract.allowed_tools
 
 
 def test_required_slot_clarification_fallback_does_not_persist_stale_order_complete_context() -> None:

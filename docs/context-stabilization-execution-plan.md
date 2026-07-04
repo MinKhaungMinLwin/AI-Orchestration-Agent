@@ -136,7 +136,7 @@ The flow tables must keep tools and FE templates/actions separate:
 
 ## Current Stabilization Checkpoint
 
-Status after steps 1-19G:
+Status after steps 1-19H:
 
 1. The five flow transition tables now separate backend tools from FE templates/actions, next tool, next template/action, and expected persistence.
 2. Purchase, stock, store, support, and reservation/preorder boundaries have focused regression coverage in the existing policy test suites.
@@ -171,6 +171,10 @@ Status after steps 1-19G:
     - expired coupon/event restore requests now return `qnaComplete` with `expired_coupon_not_restorable_qna`;
     - card installment questions do not get absorbed by `payment_error_troubleshooting`;
     - real payment-screen errors keep the FAQ-first payment troubleshooting boundary.
+25. Step 19H fixes the remaining Phase 9 SSE failed-case regressions across support/transaction policy boundaries:
+    - general cancel-fee questions such as "주문 취소하면 수수료 있어?" are promoted out of product-recommendation drift into `general_cancel_fee_policy` and no longer ask for a missing product;
+    - tire manufacture-date questions that mention `6개월` stay in `tire_manufacture_date_policy` and do not call `get_card_installments_tool`;
+    - checkout/payment-screen errors such as KakaoPay white-screen stalls promote generic support FAQ turns to `payment_error_troubleshooting` and preserve contract metadata in SSE output.
 
 Verified checkpoint command:
 
@@ -187,9 +191,9 @@ uv run pytest `
   -q
 ```
 
-Latest focused checkpoint result: `185 passed, 1 warning`.
+Latest focused checkpoint result: `190 passed, 1 warning`.
 
-Latest Phase 9 SSE regression subset result after Docker local rebuild: `6/6 passed`.
+Latest Phase 9 SSE regression subset result after Docker local rebuild: `9/9 passed` across the previously verified subset plus the three failed-case reruns.
 
 Verified SSE subset:
 
@@ -199,14 +203,17 @@ Verified SSE subset:
 - expired coupon/event restore request: PASS
 - card installment lookup: PASS
 - payment-screen error troubleshooting: PASS
+- SUP01 general cancel-fee policy: PASS
+- SUP03 tire manufacture-date policy: PASS
+- C03 payment error troubleshooting: PASS
 
 Current next step:
 
 ```text
-Phase 9: broaden end-to-end SSE verification from the passing focused subset to the full purchase, stock, store, support, and reservation boundary matrix.
+Phase 10: cleanup and guardrails after the Phase 9 SSE stabilization checkpoint.
 ```
 
-If Phase 9 exposes a remaining boundary gap, add the smallest scenario coverage and persistence assertion for that transition row. Do not add new flow branches in `chat.py` unless a transition-table row proves the owner layer cannot express the behavior.
+Phase 10 should remove or consolidate any now-redundant guard code exposed by the completed Phase 9 fixes, then add guardrail tests that protect the owner-layer boundaries without adding new flow branches in `chat.py`.
 
 ## Phase 0: Freeze Patch-Level Expansion
 

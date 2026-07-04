@@ -1,5 +1,9 @@
 from services.tstation.policies.response_decision import ResponseShape, TemplateName
-from services.tstation.policies.support_response_policy import decide_support_response, resolve_support_faq_policy_context
+from services.tstation.policies.support_response_policy import (
+    _is_card_installment_lookup_query,
+    decide_support_response,
+    resolve_support_faq_policy_context,
+)
 
 
 def test_tc186_extreme_coupon_issue_is_denied_with_coupon_box_guidance() -> None:
@@ -231,6 +235,25 @@ def test_payment_error_troubleshooting_keeps_checkout_screen_error_faq_first() -
 
     assert decision.metadata["response_shape_key"] == "payment_error_troubleshooting"
     assert "qna_without_faq_solution" in decision.forbidden_behaviors
+
+
+def test_payment_error_troubleshooting_text_trigger_keeps_checkout_screen_error_faq_first() -> None:
+    decision = decide_support_response(
+        intent="support_faq",
+        user_text="카카오페이 결제 누르면 화면이 하얗게 멈춰",
+    )
+
+    assert decision.metadata["response_shape_key"] == "payment_error_troubleshooting"
+    assert "qna_without_faq_solution" in decision.forbidden_behaviors
+
+
+def test_tire_manufacture_date_month_question_does_not_route_to_card_installment() -> None:
+    user_text = "타이어 제조일자가 6개월 전이면 새 상품 맞아?"
+
+    decision = decide_support_response(intent="support_faq", user_text=user_text)
+
+    assert decision.metadata["response_shape_key"] == "tire_manufacture_date_policy"
+    assert _is_card_installment_lookup_query(user_text) is False
 
 
 def test_external_tire_install_policy_text_trigger_blocks_work_started_cancel_drift() -> None:

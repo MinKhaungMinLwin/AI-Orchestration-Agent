@@ -275,7 +275,10 @@ def _support_faq_candidates(tool_result: Mapping[str, Any] | None) -> list[Mappi
 
 
 def _is_card_installment_lookup_query(text: str) -> bool:
-    return bool(_CARD_INSTALLMENT_LOOKUP_RE.search(str(text or "")))
+    value = str(text or "")
+    if _is_tire_manufacture_date_question(value, include_candidate_terms=True):
+        return False
+    return bool(_CARD_INSTALLMENT_LOOKUP_RE.search(value))
 
 
 def _card_installment_payment_type_from_text(text: str) -> str:
@@ -3043,7 +3046,7 @@ def decide_support_response(
             ),
         )
 
-    if intent == "payment_error_troubleshooting" and _is_payment_error_troubleshooting_query(text):
+    if (intent == "payment_error_troubleshooting" or _is_payment_error_troubleshooting_query(text)) and _is_payment_error_troubleshooting_query(text):
         return _decision(
             response_shape_key="payment_error_troubleshooting",
             response_shape=ResponseShape.SUMMARY,
