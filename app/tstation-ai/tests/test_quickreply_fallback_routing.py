@@ -6412,6 +6412,24 @@ def test_pending_purchase_store_slot_fill_context_overrides_router_store_finder_
     assert frame.known_slots["stock_check_mode"] == "preview"
     assert tool_plan.preferred_tool == "transaction_store_preview_tool"
 
+def test_pending_purchase_store_slot_fill_context_ignores_quantity_only_turn() -> None:
+    slots = ConversationSlots(
+        availability_context={
+            "pending_order_context": {
+                "goods_no": "G000000310119",
+                "product_name": "Ventus S2 AS",
+                "tire_size": "215/55R17",
+                "ord_qty": 4,
+                "pending_intent": "order",
+                "goal_type": "place_order",
+                "awaiting_store_region": True,
+                "pending_step": "store_region_selection",
+            }
+        },
+    )
+
+    assert _pending_purchase_store_slot_fill_context(slots, "4개") == {}
+
 def test_explicit_store_purchase_chain_is_not_treated_as_plain_store_info_cleanup() -> None:
     regex_slots = ConversationSlots.extract_from_user_text("판교점에서 벤투스 S2 AS 4개 구매하고 싶어")
 

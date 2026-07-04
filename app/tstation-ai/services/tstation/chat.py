@@ -20391,6 +20391,13 @@ def _pending_purchase_store_slot_fill_context(
     pending_context = availability_context.get("pending_order_context")
     if not isinstance(pending_context, Mapping):
         return {}
+    extracted_slots = ConversationSlots.extract_from_user_text(user_text)
+    if (
+        getattr(extracted_slots, "ord_qty", None) not in (None, "", [], {})
+        and getattr(extracted_slots, "shop_name", None) in (None, "", [], {})
+        and getattr(extracted_slots, "region", None) in (None, "", [], {})
+    ):
+        return {}
     if _extract_plain_store_info_store_name(user_text):
         return {}
     pending_intent = str(pending_context.get("pending_intent") or "").strip()
@@ -24468,7 +24475,10 @@ class TStationChatServiceV2:
                     merged_slots.ord_qty,
                     stock_store_candidate_excluded_shop_id,
                 )
-            elif _is_plain_store_search_reset_allowed(last_user_text, regex_slots, merged_slots):
+            elif (
+                _is_plain_store_search_reset_allowed(last_user_text, regex_slots, merged_slots)
+                and not pending_purchase_store_slot_fill_context
+            ):
                 cleared_values = {
                     "pending_intent": merged_slots.pending_intent,
                     "goods_no": merged_slots.goods_no,
