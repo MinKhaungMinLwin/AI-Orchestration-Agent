@@ -15,6 +15,7 @@ from services.tstation.policies.discovery_intent_policy import (
     is_external_price_comparison_request,
     is_general_best_seller_scope_request,
     plan_discovery_tools,
+    price_range_from_text,
 )
 
 
@@ -1011,3 +1012,48 @@ def test_generic_recommendation_has_no_model_inference() -> None:
     assert frame.entities.get("vehicle_category") is None
     assert frame.entities.get("vehicle_model_name") is None
     assert "vehicle_type" not in plan.tool_args_patch
+
+
+def test_price_range_from_text_parses_and_masks_size() -> None:
+    # T7: 가격대 파싱은 성공하고, size 토큰은 false-positive 로 잡지 않는다.
+    assert price_range_from_text("빗길에 좋은 20만원대 타이어 추천해줘") == {
+        "min_price": 200000,
+        "max_price": 299999,
+    }
+    assert price_range_from_text("2454519") == {}
+
+
+def test_recommendation_follow_up_inherits_persisted_price_range() -> None:
+    # T3: 진행 중인 recommendation context 의 가격대를 현재 turn 이 가격을 재언급하지
+    # 않을 때 상속한다 (size 후속 turn 에서 예산이 유실되던 버그 회귀 방지).
+    recommendation_context = {
+        "scenario": "wet",
+        "recommendation_scenario": "wet",
+        "tool_args_patch": {"rcmd_type": "wet", "min_price": 200000, "max_price": 299999},
+    }
+    frame = build_discovery_intent_frame(
+        "245/45R19로 추천해줘",
+        known_slots={"recommendation_context": recommendation_context},
+    )
+    plan = plan_discovery_tools(frame)
+
+    assert plan.tool_args_patch.get("min_price") == 200000
+    assert plan.tool_args_patch.get("max_price") == 299999
+
+
+def test_recommendation_follow_up_current_turn_price_replaces_carried_range() -> None:
+    # T4: 현재 turn 이 새 가격을 명시하면 이전 range 를 완전히 대체한다
+    # (예전 min 과 새 max 를 섞지 않는다).
+    recommendation_context = {
+        "scenario": "wet",
+        "recommendation_scenario": "wet",
+        "tool_args_patch": {"rcmd_type": "wet", "min_price": 200000, "max_price": 299999},
+    }
+    frame = build_discovery_intent_frame(
+        "30만원 이하로 추천해줘",
+        known_slots={"recommendation_context": recommendation_context},
+    )
+    plan = plan_discovery_tools(frame)
+
+    assert plan.tool_args_patch.get("max_price") == 300000
+    assert plan.tool_args_patch.get("min_price") is None
