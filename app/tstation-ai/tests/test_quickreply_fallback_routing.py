@@ -20841,6 +20841,37 @@ def test_transaction_intent_frame_prefers_quick_order_reservation_for_selected_s
     assert frame.sub_intent == "reservation"
 
 
+def test_purchase_store_text_slot_fill_continues_to_store_preview_not_store_detail() -> None:
+    frame = build_transaction_intent_frame(
+        "T-Station Pangyo Branch",
+        known_slots={
+            "goods_no": "G000000310119",
+            "product_name": "Ventus S2 AS",
+            "tire_size": "215/55R17",
+            "ord_qty": 4,
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "stock_check_mode": "preview",
+        },
+    )
+    tool_plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "quick_order_reservation"
+    assert frame.sub_intent == "reservation"
+    assert frame.known_slots["goods_no"] == "G000000310119"
+    assert frame.known_slots["product_name"] == "Ventus S2 AS"
+    assert frame.known_slots["tire_size"] == "215/55R17"
+    assert frame.known_slots["ord_qty"] == 4
+    assert frame.known_slots["pending_intent"] == "order"
+    assert frame.known_slots["goal_type"] == "place_order"
+    assert frame.known_slots["stock_check_mode"] == "preview"
+    assert frame.known_slots["place_query"] == "T-Station Pangyo Branch"
+    assert "shop_id" not in frame.known_slots
+    assert tool_plan.preferred_tool == "transaction_store_preview_tool"
+    assert tool_plan.allowed_tools == ("transaction_store_preview_tool",)
+    assert "get_store_detail_tool" not in tool_plan.allowed_tools
+
+
 def test_history_product_selection_state_promotes_purchase_slot_fill_and_rewrites_text() -> None:
     merged_slots = ConversationSlots(
         ord_qty=2,
