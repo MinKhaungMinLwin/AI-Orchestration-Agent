@@ -31079,7 +31079,7 @@ def test_support_prompt_contains_legal_action_hard_stop() -> None:
     [
         ("ventus air S 지금 행사 함?", "product_event_lookup", "get_product_applicable_events_tool"),
         ("벤투스 에어S 쿠폰 있어?", "product_coupon_lookup", "get_product_promotions_tool"),
-        ("벤투스 에어S 기획전 적용돼?", "product_deal_lookup", "get_product_promotions_tool"),
+        ("벤투스 에어S 기획전 적용돼?", "product_deal_lookup", "get_product_applicable_events_tool"),
     ],
 )
 def test_product_benefit_lookup_stays_discovery_event_content(user_text: str, sub_intent: str, allowed_tool: str) -> None:
@@ -31092,13 +31092,54 @@ def test_product_benefit_lookup_stays_discovery_event_content(user_text: str, su
     assert [task.intent for task in cross_domain_plan.subtasks] == ["product_event_lookup"]
     assert frame.intent == "product_search"
     assert frame.sub_intent == sub_intent
-    assert tool_plan.preferred_tool == "search_product_tool"
-    assert "search_product_tool" in tool_plan.allowed_tools
+    expected_resolver = "search_product_tool" if sub_intent == "product_coupon_lookup" else "search_product_summary_tool"
+    assert tool_plan.preferred_tool == expected_resolver
+    assert expected_resolver in tool_plan.allowed_tools
     assert allowed_tool in tool_plan.allowed_tools
     assert "get_product_description_tool" in tool_plan.forbidden_tools
     assert "transaction_store_preview_tool" in tool_plan.forbidden_tools
     assert response_decision.metadata["response_shape_key"] == sub_intent
     assert "ask_size_for_product_benefit_lookup" in response_decision.forbidden_behaviors
+
+
+@pytest.mark.parametrize(
+    "user_text",
+    [
+        "한국타이어 페스타 이벤트에 적용되는 상품 있어?",
+        "기획전 대상 타이어 보여줘",
+        "프로모션으로 살 수 있는 제품 알려줘",
+    ],
+)
+def test_event_applicable_products_lookup_uses_event_product_contract(user_text: str) -> None:
+    frame = build_discovery_intent_frame(user_text)
+    tool_plan = plan_discovery_tools(frame)
+    response_decision = decide_discovery_response(frame)
+    cross_domain_plan = plan_cross_domain_turn(user_text, known_slots={})
+
+    assert cross_domain_plan.primary_domain == PolicyDomain.DISCOVERY
+    assert [task.intent for task in cross_domain_plan.subtasks] == ["event_applicable_products_lookup"]
+    assert frame.sub_intent == "event_applicable_products_lookup"
+    assert tool_plan.preferred_tool == "get_events_tool"
+    assert "get_event_applicable_products_tool" in tool_plan.allowed_tools
+    assert "search_product_tool" in tool_plan.forbidden_tools
+    assert response_decision.metadata["response_shape_key"] == "event_applicable_products_lookup"
+
+
+@pytest.mark.parametrize(
+    "user_text",
+    [
+        "이벤트 적용 쿠폰 있어?",
+        "이벤트 기간 언제야?",
+        "프로모션 대상 매장 있어?",
+        "이벤트 조건 알려줘",
+    ],
+)
+def test_event_applicable_products_lookup_does_not_capture_other_event_targets(user_text: str) -> None:
+    frame = build_discovery_intent_frame(user_text)
+    cross_domain_plan = plan_cross_domain_turn(user_text, known_slots={})
+
+    assert frame.sub_intent != "event_applicable_products_lookup"
+    assert [task.intent for task in cross_domain_plan.subtasks] != ["event_applicable_products_lookup"]
 
 
 def test_router_discovery_event_content_blocks_product_price_override() -> None:
@@ -31135,7 +31176,7 @@ def test_turn_contract_preserves_product_event_lookup_tools_and_blocks_transacti
     assert "search_product_summary_tool" in contract.allowed_tools
     assert "search_product_tool" in contract.forbidden_tools
     assert "get_product_applicable_events_tool" in contract.allowed_tools
-    assert "get_product_promotions_tool" in contract.allowed_tools
+    assert "get_product_promotions_tool" in contract.forbidden_tools
     assert "quick_order_tool" in contract.forbidden_tools
     assert "transaction_store_preview_tool" in contract.forbidden_tools
     assert "get_store_schedule_tool" in contract.forbidden_tools

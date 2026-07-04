@@ -62,6 +62,9 @@ _FAST_PATH_DISCOVERY_RECOVERY_ALLOWED_TOOLS = frozenset({
     "get_products_recommendations_tool",
     "get_best_selling_products_tool",
     "get_my_cars_tool",
+    "get_events_tool",
+    "get_product_applicable_events_tool",
+    "get_event_applicable_products_tool",
 })
 _FLOW_PROGRESS_TRANSACTION_TOOLS = frozenset({
     "search_stores_tool",
@@ -938,6 +941,22 @@ def _contract_required_tool_candidate(
             tool_input = {"mbr_no": member_no_value}
             tool_input_source = "user_context"
             display_name = "등록 차량 조회 중..."
+        elif preferred_tool == "get_events_tool":
+            tool_input.setdefault("lang_cd", "ko")
+            tool_input_source = tool_input_source or "contract_tool_plan"
+            display_name = "이벤트/기획전 조회 중..."
+        elif preferred_tool == "get_product_applicable_events_tool":
+            ptrn_cd = str(known_slots.get("ptrn_cd") or "").strip()
+            if ptrn_cd:
+                tool_input = {"ptrn_cd": ptrn_cd, "lang_cd": "ko"}
+                tool_input_source = "known_slots"
+            if not tool_input:
+                return None
+            display_name = "상품 적용 이벤트 조회 중..."
+        elif preferred_tool == "get_event_applicable_products_tool":
+            if not tool_input:
+                return None
+            display_name = "이벤트 적용 상품 조회 중..."
         elif preferred_tool == "get_products_recommendations_tool":
             if str(turn_contract.intent or "").strip() != "product_recommendation":
                 return None

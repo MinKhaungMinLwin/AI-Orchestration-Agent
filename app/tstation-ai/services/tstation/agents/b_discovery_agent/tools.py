@@ -1588,7 +1588,7 @@ def get_event_applicable_products_tool(evt_no_list: list[str]):
 
 @tool
 @tool_cache(ttl=600)
-def get_product_applicable_events_tool(goods_no: str, lang_cd: str = "ko"):
+def get_product_applicable_events_tool(ptrn_cd: str, lang_cd: str = "ko"):
     """상품 적용 가능 이벤트 조회 — 특정 상품에 적용 가능한 진행 중 이벤트 목록.
 
     Use when user asks "이 상품에 어떤 이벤트가 적용돼?", "이 상품에 적용 가능한 이벤트 알려줘",
@@ -1596,18 +1596,18 @@ def get_product_applicable_events_tool(goods_no: str, lang_cd: str = "ko"):
     이벤트만 반환되며 50(상품 매핑) / 80(패턴 매핑) 양쪽 모두 포함.
 
     Args:
-        goods_no (str): 상품 번호 (예: 'G000000317693').
+        ptrn_cd (str): 상품 패턴 코드 (예: 'H462').
         lang_cd (str): 이벤트명 언어 코드. Default 'ko'.
 
-    Example: {"goods_no": "G000000317693", "lang_cd": "ko"}
+    Example: {"ptrn_cd": "H462", "lang_cd": "ko"}
     """
     logger.debug(
-        "[TOOL][get_product_applicable_events_tool] Called with: goods_no=%s, lang_cd=%s",
-        goods_no, lang_cd,
+        "[TOOL][get_product_applicable_events_tool] Called with: ptrn_cd=%s, lang_cd=%s",
+        ptrn_cd, lang_cd,
     )
 
     try:
-        response = get_product_applicable_events(client=get_client(), goods_no=goods_no, lang_cd=lang_cd)
+        response = get_product_applicable_events(client=get_client(), ptrn_cd=ptrn_cd, lang_cd=lang_cd)
         if response.parsed is None:
             return _error_response(
                 response.status_code,

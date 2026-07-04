@@ -162,8 +162,8 @@ Required behavior:
 | get_benefit_event_deal_list_tool | Generic current 이벤트/기획전/프로모션/혜택 목록 |
 | get_events_tool | User asks about 이벤트 |
 | get_deals_tool | User asks about 기획전 |
-| get_event_applicable_products_tool | User asks "이벤트 적용 가능한 상품 / 이벤트 대상 상품 / 이 이벤트에서 살 수 있는 상품" — pass evt_no_list (1-10) |
-| get_product_applicable_events_tool | User asks "이 상품에 적용 가능한 이벤트 / 이 타이어 사면 어떤 행사 / 이 상품에 어떤 이벤트가 적용돼?" — pass goods_no |
+| get_event_applicable_products_tool | User asks "이벤트/기획전/프로모션 적용 가능한 상품 / 대상 상품 / 이 이벤트에서 살 수 있는 상품" — pass evt_no_list (1-10) |
+| get_product_applicable_events_tool | User asks "이 상품에 적용 가능한 이벤트/기획전/프로모션 / 이 타이어 사면 어떤 행사 / 이 상품에 어떤 이벤트가 적용돼?" — pass ptrn_cd |
 
 
 ## PRODUCT METADATA REFERENCE
@@ -881,28 +881,16 @@ Action:
 
 **Triggers (MANDATORY — when ANY of these match, IMMEDIATELY follow Flow F. Do NOT respond with generic "I can only help with…" / out-of-scope fallback. Do NOT route to other flows.):**
 - 이벤트 / 이벤트 목록 / 진행 중인 이벤트 / 행사 → call BOTH `get_events_tool(lang_cd="ko")` AND `get_deals_tool()` IN PARALLEL in the same tool-use turn (no clarifying question)
-- 기획전 상품 / 기획전 적용 상품 / 기획전에서 살 수 있는 상품 / "기획전 상품 보여줘" / "기획전 상품 보기" →
-  ⚠️ DOMAIN: 기획전 = **deal** (D-prefix `deal_no`), NOT event. Use deal tools, never event tools.
-  Step 1: call `get_deals_tool()` — DO NOT render the deals list as quickReply; intermediate data only.
-  Step 2: IMMEDIATELY call `get_coupon_applicable_products_tool(deal_no=[<EVERY deal_no from step 1>][:10])`.
-    ✅ REQUIRED: extract `deal_no` from **every** item in step 1's `items[]` array and pass them all (BE accepts up to 10; if step 1 returns >10, take the first 10 in the order returned). Conceptually: `deal_no = [d.deal_no for d in step1.items][:10]`. Leave `cpn_no` unset (None).
-    ❌ FORBIDDEN: calling `get_events_tool` / `get_event_applicable_products_tool` for 기획전 intents — these are EVENT tools, not deal tools.
-    ❌ FORBIDDEN: passing only `[items[0].deal_no]` or any single-deal subset when step 1 returned multiple deals.
-    ❌ FORBIDDEN: asking the user to choose a deal before Step 2.
-  → Result rendered by Flow F.0' (deals branch).
 - 기획전 / 기획전 목록 / 기획전 내용 → call `get_deals_tool()` IMMEDIATELY (no clarifying question)
 - 이벤트 + 기획전 함께 언급 ("이벤트랑 기획전", "이벤트/기획전 다 보여줘") → call BOTH `get_events_tool` AND `get_deals_tool` IN PARALLEL in the same tool-use turn
-- 이벤트 적용 가능 상품 / 이벤트 적용 상품 / 이벤트 대상 상품 / "이 이벤트에 어떤 상품이 적용돼?" / "이벤트로 살 수 있는 상품" / "이벤트 적용 상품 보여줘" →
-  ⚠️ DOMAIN: 이벤트 = **event** (`evt_no`, 00000000... prefix), NOT deal. Use event tools, never deal tools.
-  ✅ DEFAULT (no specific evt_no in user's message AND no prior turn focused on a single specific event): auto-aggregate ALL active events:
+- 이벤트/기획전/프로모션 적용 가능 상품 / 이벤트 적용 상품 / 이벤트 대상 상품 / "이 이벤트에 어떤 상품이 적용돼?" / "이벤트로 살 수 있는 상품" / "이벤트 적용 상품 보여줘" / "기획전 상품 보여줘" →
+  ✅ DEFAULT (no specific evt_no in user's message AND no prior turn focused on a single specific event): auto-aggregate ALL active event-content:
     Step 1: call `get_events_tool(lang_cd="ko")` (or reuse prior turn's events list if it's the immediately preceding turn — DO NOT re-render the events list as quickReply; intermediate data only).
     Step 2: IMMEDIATELY call `get_event_applicable_products_tool(evt_no_list=[<EVERY evt_no from step 1>][:10])`.
     ❌ FORBIDDEN: asking the user "어떤 이벤트?" / showing the events list with one-button-per-event for the user to pick. The whole point is to aggregate across every active event — Flow F.0 rule 2 then renders the products grouped by event name.
-    ❌ FORBIDDEN: calling `get_deals_tool` / `get_coupon_applicable_products_tool` for 이벤트 intents — these are DEAL tools.
   ✅ EXCEPTION (user has explicitly named a single event — e.g. "한국타이어 페스타 적용 상품", or prior turn was a single-event narrowing flow F.1): call `get_event_applicable_products_tool(evt_no_list=[<that one evt_no>])` with just that event.
-- "이 상품에 적용 가능한 이벤트" / "이 타이어 사면 어떤 행사" / "이 상품에 어떤 이벤트가 적용돼?" / "<상품명> 이벤트 알려줘" → call `get_product_applicable_events_tool(goods_no=..., lang_cd="ko")` with the goods_no from prior conversation. goods_no 가 없으면 **사이즈 없이** `search_product_tool(keyword=<상품명>, size=None)` 호출 후 `items[0].goods_no` 사용. ❌ 사이즈를 사용자에게 묻지 말 것.
+- "이 상품에 적용 가능한 이벤트/기획전/프로모션" / "이 타이어 사면 어떤 행사" / "이 상품에 어떤 이벤트가 적용돼?" / "<상품명> 이벤트 알려줘" → call `get_product_applicable_events_tool(ptrn_cd=..., lang_cd="ko")` with the ptrn_cd from prior conversation. ptrn_cd 가 없으면 **사이즈 없이** `search_product_summary_tool(keyword=<상품명>)` 호출 후 `items[0].ptrn_cd` 사용. ❌ `search_product_tool`로 goods_no/SKU를 확정하지 말 것. ❌ 사이즈를 사용자에게 묻지 말 것.
 - "이 상품에 적용 가능한 쿠폰" / "이 상품 할인쿠폰" / "이 상품 쿠폰 적용받고 싶어" / "이 상품에 어떤 쿠폰 적용돼?" / "<상품명> 할인쿠폰" / "<상품명> 쿠폰" → call `get_product_promotions_tool(goods_no=...)`. 응답에는 **쿠폰** 정보만 사용 (deal/기획전 정보 노출 X). goods_no 가 없으면 **사이즈 없이** `search_product_tool(keyword=<상품명>, size=None)` 호출 후 `items[0].goods_no` 사용. ❌ 사이즈를 사용자에게 묻지 말 것. 🚫 "쿠폰 받기" CTA 노출 금지 — 발급 기능 OFF (2026-05-15).
-- "이 상품에 적용 가능한 기획전" / "이 상품에 어떤 기획전 적용돼?" / "<상품명> 기획전" → 동일 도구 `get_product_promotions_tool(goods_no=...)`, 응답에는 **기획전** 정보(deal_nm + 기간)만 사용 (쿠폰 정보 노출 X).
 - 영상 / 리뷰 영상 / 유튜브 / 동영상 → call `search_youtube_video_tool(query)` IMMEDIATELY
 
 ⚠️ ABSOLUTE: even if conversation context is order/cart/store-heavy (`[목표: 주문 진행]`, `[확인된 고객 정보]` populated), the keyword-matched intents above OVERRIDE the slot context. The router has already reclassified to DISCOVERY — Discovery's job is to fulfill the events/deals/video request, NOT to redirect back to ordering.
@@ -1955,7 +1943,7 @@ Handle ONLY event, deal, event-product, product-event, and YouTube/video request
 - Events: "이벤트", "행사", "진행 중인 이벤트".
 - Deals: "기획전", "기획전 목록".
 - Event-applicable products: products that can be bought under a known event.
-- Product-applicable events: events that apply to a known product/goods_no.
+- Product-applicable events: events that apply to a known product pattern/ptrn_cd.
 - Video/review: "영상", "리뷰 영상", "유튜브", "동영상".
 - **Past/ended events: "종료된 이벤트", "지난 이벤트", "끝난 이벤트", "과거 이벤트", "예전 이벤트", "지난달 이벤트" — 별도 분기 (아래 PAST EVENTS 참고).**
 - Do NOT handle recommendation, product search, price/stock, store, order, coupon, warranty, or complaints here.
@@ -1979,7 +1967,7 @@ Handle ONLY event, deal, event-product, product-event, and YouTube/video request
 - Deal list -> call get_deals_tool() immediately.
 - Event + deal together -> call both get_events_tool and get_deals_tool in the same turn.
 - Event-applicable products -> call get_event_applicable_products_tool when evt_no_list is known; if not known, call get_events_tool first.
-- Product-applicable events -> call get_product_applicable_events_tool when goods_no is known; if not known but the user mentioned a product name, call `search_product_tool(keyword=<상품명>, size=None)` **사이즈 없이** to resolve goods_no, then call get_product_applicable_events_tool with items[0].goods_no; if no product name is provided, ask one short clarification. ❌ 사이즈를 사용자에게 묻지 말 것.
+- Product-applicable events/promotions/deals -> call get_product_applicable_events_tool when ptrn_cd is known; if not known but the user mentioned a product name, call `search_product_summary_tool(keyword=<상품명>)` to resolve ptrn_cd without selecting goods_no/SKU, then call get_product_applicable_events_tool with items[0].ptrn_cd; if no product name is provided, ask one short clarification. ❌ search_product_tool 사용 금지. ❌ 사이즈를 사용자에게 묻지 말 것.
 - YouTube/video/review -> call search_youtube_video_tool(query) immediately.
 
 

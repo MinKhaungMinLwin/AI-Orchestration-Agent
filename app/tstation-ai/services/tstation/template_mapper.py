@@ -3623,6 +3623,117 @@ def _map_contract_response_shape(tool_data_list: list[dict], assistant_text: str
     return _with_contract_renderer_metadata(event, response_shape_key)
 
 
+def _simple_date_label(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    match = re.search(r"(\d{4})[-./]?(\d{2})[-./]?(\d{2})", text)
+    if not match:
+        return text[:10]
+    return f"{match.group(1)}-{match.group(2)}-{match.group(3)}"
+
+
+def _event_period(row: Mapping[str, Any]) -> str:
+    start = _simple_date_label(row.get("evt_strt_dtime") or row.get("evt_start_dtime") or row.get("startDate"))
+    end = _simple_date_label(row.get("evt_end_dtime") or row.get("evt_end_date") or row.get("endDate"))
+    if start and end:
+        return f"{start} ~ {end}"
+    return start or end
+
+
+def _map_product_applicable_events(tool_data_list: list[dict], assistant_text: str) -> dict | None:
+    del assistant_text
+    entries = _find_entries(tool_data_list, "get_product_applicable_events_tool")
+    if not entries:
+        return None
+    raw = _unwrap(entries[-1])
+    if not isinstance(raw, dict):
+        return None
+    items = raw.get("items")
+    if not isinstance(items, list) or not items:
+        response = "현재 이 상품에 적용 가능한 이벤트/기획전/프로모션은 확인되지 않아요."
+    else:
+        lines = ["이 상품에 적용 가능한 이벤트/기획전/프로모션이에요."]
+        for row in items[:5]:
+            if not isinstance(row, Mapping):
+                continue
+            name = _get_str(dict(row), "evt_nm", "event_nm", "title", default="이벤트")
+            period = _event_period(row)
+            lines.append(f"- {name}" + (f" ({period})" if period else ""))
+        if len(items) > 5:
+            lines.append(f"- 외 {len(items) - 5}개")
+        response = "\n".join(lines)
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": response,
+            "quickReplies": [
+                {"label": "진행 중인 이벤트 보기", "url": CTAUrls.PROMOTION_EVENT_LIST, "domain": "DISCOVERY"},
+                {"label": "처음으로", "domain": "LEADING"},
+            ],
+            "predictedDomains": ["DISCOVERY"],
+            "metadata": {
+                "response_shape_key": "product_event_lookup",
+                "ptrn_cd": _get_str(raw, "ptrn_cd"),
+            },
+        },
+        "assistant_response_source": "code_product_applicable_events",
+    }
+
+
+def _map_event_applicable_products(tool_data_list: list[dict], assistant_text: str) -> dict | None:
+    del assistant_text
+    entries = _find_entries(tool_data_list, "get_event_applicable_products_tool")
+    if not entries:
+        return None
+    raw = _unwrap(entries[-1])
+    if not isinstance(raw, dict):
+        return None
+    events = raw.get("events")
+    if not isinstance(events, list) or not events:
+        response = "현재 해당 이벤트/기획전/프로모션에 적용 가능한 상품은 확인되지 않아요."
+    else:
+        lines = ["현재 이벤트/기획전/프로모션 적용 상품이에요."]
+        for event in events[:6]:
+            if not isinstance(event, Mapping):
+                continue
+            event_dict = dict(event)
+            event_name = _get_str(event_dict, "evt_nm", "event_nm", "deal_nm", "title", default="이벤트")
+            rows = event.get("items")
+            if not isinstance(rows, list):
+                rows = []
+            names: list[str] = []
+            for row in rows:
+                if not isinstance(row, Mapping):
+                    continue
+                name = _get_str(dict(row), "goods_nm", "big_goods_nm", "title")
+                if name and name not in names:
+                    names.append(name)
+            lines.extend(["", f"**{event_name}**"])
+            if not names:
+                lines.append("- 적용 상품 확인되지 않음")
+                continue
+            lines.extend(f"- {name}" for name in names[:5])
+            if len(names) > 5:
+                lines.append(f"- 외 {len(names) - 5}개")
+        response = "\n".join(lines)
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": response,
+            "quickReplies": [
+                {"label": "진행 중인 이벤트 보기", "url": CTAUrls.PROMOTION_EVENT_LIST, "domain": "DISCOVERY"},
+                {"label": "처음으로", "domain": "LEADING"},
+            ],
+            "predictedDomains": ["DISCOVERY"],
+            "metadata": {"response_shape_key": "event_applicable_products_lookup"},
+        },
+        "assistant_response_source": "code_event_applicable_products",
+    }
+
+
 def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -> dict | None:
     """Summarize tire patterns as text when no vehicle/size is confirmed.
 
@@ -6811,6 +6922,8 @@ _MAPPERS: dict[str, Any] = {
     "transfer_to_qna_tool": _map_qna_complete,
     "compare_discount_tool": _map_cheapest_product,
     "get_cheapest_price_tool": _map_cheapest_product,
+    "get_product_applicable_events_tool": _map_product_applicable_events,
+    "get_event_applicable_products_tool": _map_event_applicable_products,
     # "get_events_tool": _map_event,  # FE에 event 렌더러 없음
     "search_youtube_video_tool": _map_preview_youtube,
     "search_stores_tool": _map_location,
@@ -6892,6 +7005,9 @@ def try_build_template(accumulated_tool_data: list[dict], assistant_text: str) -
         # render a store card instead of the intended time-slot picker.
         ("get_store_detail_tool", _map_datepick),
         ("transaction_store_preview_tool", _map_datepick),
+        ("get_product_applicable_events_tool", _map_product_applicable_events),
+        ("get_event_applicable_products_tool", _map_event_applicable_products),
+        ("search_product_summary_tool", _map_product),
         ("search_product_tool", _map_product),
         ("get_newest_products_tool", _map_product),
         ("get_products_recommendations_tool", _map_product),
