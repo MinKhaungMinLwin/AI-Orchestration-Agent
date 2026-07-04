@@ -965,6 +965,9 @@ def build_turn_contract(
             and known_slots.get("pending_check_object_value")
         ):
             known_slots["product_name"] = known_slots.get("pending_check_object_value")
+    if latest_router_intent == "coupon_applicable_products" or planner_intent == "coupon_applicable_products":
+        domain = "transaction"
+        intent = "coupon_applicable_products"
     response_metadata = response_decision.metadata if response_decision is not None else {}
     response_shape_key = str(response_metadata.get("response_shape_key") or "").strip() if isinstance(response_metadata, Mapping) else ""
     if domain == "support" and intent == "support_faq" and response_shape_key in _SUPPORT_FAQ_POLICY_TOOL_INTENTS:
@@ -1392,6 +1395,27 @@ def build_turn_contract(
         if not preferred_tool or preferred_tool in forbidden_tools:
             preferred_tool = "get_my_coupons_tool"
             tool_args_patch = {}
+    if intent == "coupon_applicable_products":
+        query = str(known_slots.get("benefit_applicable_products_query") or "").strip() or user_text.strip()
+        allowed_tools = ("search_benefit_applicable_products_tool",)
+        forbidden_tools = _merge_tuple(
+            forbidden_tools,
+            (
+                "get_my_coupons_tool",
+                "get_coupon_applicable_products_tool",
+                "get_events_tool",
+                "get_deals_tool",
+                "get_benefit_event_deal_list_tool",
+                "issue_coupon_tool",
+                "search_product_tool",
+                "get_final_price_tool",
+            ),
+        )
+        preferred_tool = "search_benefit_applicable_products_tool"
+        tool_args_patch = {"query": query, "lang_cd": "ko"}
+        required_slots = ()
+        blocking_required_slots = ()
+        resolvable_required_slots = ()
     if intent == "owned_coupon_lookup":
         allowed_tools = _merge_tuple(
             allowed_tools,

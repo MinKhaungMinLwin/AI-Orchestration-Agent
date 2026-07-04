@@ -30186,6 +30186,31 @@ def test_coupon_applicability_check_planner_intent_is_not_remapped_to_product_co
     assert contract.intent == "coupon_applicability_check"
 
 
+def test_router_coupon_applicable_products_uses_unified_benefit_tool_without_product_slot() -> None:
+    user_text = "한국타이어 21% 상품 할인쿠폰에 적용 가능한 상품은 뭐야"
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=IntentFrame(domain=PolicyDomain.TRANSACTION, intent="price_or_coupon_check"),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["transaction:coupon_applicable_products"],
+        ),
+        merged_slots={"benefit_applicable_products_query": "한국타이어 21% 상품 할인쿠폰"},
+        action_mode="info_only",
+        context_state="active",
+    )
+
+    assert contract.domain == "transaction"
+    assert contract.intent == "coupon_applicable_products"
+    assert contract.required_slots == ()
+    assert contract.blocking_required_slots == ()
+    assert contract.allowed_tools == ("search_benefit_applicable_products_tool",)
+    assert contract.preferred_tool == "search_benefit_applicable_products_tool"
+    assert contract.tool_args_patch == {"query": "한국타이어 21% 상품 할인쿠폰", "lang_cd": "ko"}
+    assert "get_coupon_applicable_products_tool" in contract.forbidden_tools
+    assert "get_my_coupons_tool" in contract.forbidden_tools
+
+
 def test_payment_error_troubleshooting_contract_keeps_checkout_screen_error_faq_first() -> None:
     contract = build_turn_contract(
         user_text="카카오페이 결제 누르면 화면이 하얗게 멈춰",
