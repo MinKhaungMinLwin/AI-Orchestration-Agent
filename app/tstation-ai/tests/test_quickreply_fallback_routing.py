@@ -34265,6 +34265,56 @@ def test_region_input_resumes_dormant_purchase_store_selection_flow() -> None:
     assert action_mode == "purchase_continuation"
 
 
+def test_region_input_resumes_active_purchase_store_selection_flow() -> None:
+    merged_slots = ConversationSlots(
+        availability_context={
+            "active_flow_context": {
+                "flow_type": "commerce",
+                "status": "active",
+                "flow_step": "ask_store",
+                "product": {
+                    "goods_no": "G000000317735",
+                    "product_name": "Ventus S2 AS",
+                    "tire_model": "Ventus S2 AS",
+                    "pending_product_name": "Ventus S2 AS",
+                    "tire_size": "205/45R17",
+                },
+                "quantity": {"ord_qty": 4},
+                "payment": {"payment_amount": 616400},
+                "intent": {"sub_flow_type": "purchase", "pending_intent": "order", "goal_type": "place_order"},
+                "source": "flow_state_progress",
+            },
+        }
+    )
+
+    resolution = resolve_region_or_store_input_context(
+        user_text="Gangnam",
+        ui_action=None,
+        chip_context=None,
+        latest_quickreply_tmpl=None,
+        latest_location_tmpl=None,
+        messages=[],
+        merged_slots=merged_slots,
+    )
+
+    assert resolution.resolved is True
+    assert resolution.flow_type == "purchase_region_selection"
+    assert resolution.action_mode == "purchase_continuation"
+    assert resolution.resume_source == "expected_slot_fill:region"
+    assert resolution.slots_to_promote["goods_no"] == "G000000317735"
+    assert resolution.slots_to_promote["product_name"] == "Ventus S2 AS"
+    assert resolution.slots_to_promote["tire_size"] == "205/45R17"
+    assert resolution.slots_to_promote["ord_qty"] == 4
+    assert resolution.slots_to_promote["region"] == "Gangnam"
+    assert resolution.expected_contract_intent == "quick_order_reservation"
+
+    updated_slots = apply_region_or_store_input_context_resolution(merged_slots, resolution)
+    assert updated_slots.pending_intent == "order"
+    assert updated_slots.goal_type == "place_order"
+    assert updated_slots.region == "Gangnam"
+    assert updated_slots.ord_qty == 4
+    assert updated_slots.goods_no == "G000000317735"
+
 def test_region_input_resumes_dormant_stock_flow_for_today_install_prompt() -> None:
     latest_quickreply_tmpl = {
         "template": "quickReply",
