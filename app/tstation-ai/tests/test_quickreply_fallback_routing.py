@@ -18171,6 +18171,7 @@ def test_vehicle_selection_merges_size_into_parent_purchase_context() -> None:
         selected_vehicle_slots={
             "car_no": "61거1836",
             "car_lnc_cd": "W036269",
+            "car_model": "Volkswagen Jetta",
             "tire_size": "225/45R17",
         },
     )
@@ -18181,6 +18182,9 @@ def test_vehicle_selection_merges_size_into_parent_purchase_context() -> None:
         "goal_type": "place_order",
         "ord_qty": 4,
         "shop_name": "광교신도시점",
+        "car_no": "61거1836",
+        "car_lnc_cd": "W036269",
+        "car_model": "Volkswagen Jetta",
     }
 
     result = commit_purchase_flow_state(
@@ -18198,6 +18202,8 @@ def test_vehicle_selection_merges_size_into_parent_purchase_context() -> None:
     assert pending_context["ord_qty"] == 4
     assert pending_context["shop_name"] == "광교신도시점"
     assert pending_context["tire_size"] == "225/45R17"
+    assert pending_context["car_no"] == "61거1836"
+    assert pending_context["car_model"] == "Volkswagen Jetta"
     assert pending_context["pending_intent"] == "order"
     assert pending_context["goal_type"] == "place_order"
 
@@ -18216,6 +18222,7 @@ def test_vehicle_selection_updates_active_parent_purchase_context() -> None:
         selected_vehicle_slots={
             "car_no": "61거1836",
             "car_lnc_cd": "W036269",
+            "car_model": "Volkswagen Jetta",
             "tire_size": "235/55R19",
         },
     )
@@ -18230,10 +18237,12 @@ def test_vehicle_selection_updates_active_parent_purchase_context() -> None:
     )
     active_context = result.state.to_active_flow_context()
 
-    assert active_context["flow_type"] == "purchase"
+    assert active_context["flow_type"] == "commerce"
     assert active_context["flow_step"] == "vehicle_selected"
     assert active_context["product"]["tire_size"] == "235/55R19"
     assert active_context["product"]["ord_qty"] == 4
+    assert active_context["vehicle"]["car_no"] == "61거1836"
+    assert active_context["vehicle"]["car_model"] == "Volkswagen Jetta"
     assert active_context["store"]["shop_name"] == "광교신도시점"
     assert active_context["intent"]["pending_intent"] == "order"
     assert active_context["intent"]["goal_type"] == "place_order"
