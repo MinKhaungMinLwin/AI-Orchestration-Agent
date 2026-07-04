@@ -325,8 +325,8 @@ _DEAL_LIST_RE = re.compile(
     re.IGNORECASE,
 )
 _EVENT_APPLICABLE_PRODUCTS_RE = re.compile(
-    r"(?:이벤트|행사|프로모션|기획전).{0,20}(?:적용|대상|가능|살\s*수\s*있는).{0,8}(?:상품|타이어|제품)|"
-    r"(?:적용|대상|가능).{0,8}(?:상품|타이어|제품).{0,20}(?:이벤트|행사|프로모션|기획전)",
+    r"(?:이벤트|행사|프로모션|기획전|딜|deal).{0,20}(?:적용|대상|가능|살\s*수\s*있는).{0,8}(?:상품|타이어|제품)|"
+    r"(?:적용|대상|가능).{0,8}(?:상품|타이어|제품).{0,20}(?:이벤트|행사|프로모션|기획전|딜|deal)",
     re.IGNORECASE,
 )
 _EVENT_APPLICABLE_PRODUCTS_EXCLUDE_RE = re.compile(
@@ -1098,7 +1098,7 @@ def build_discovery_intent_frame(
         entities["deal_list_only"] = True
     if _EVENT_APPLICABLE_PRODUCTS_RE.search(text) and not _EVENT_APPLICABLE_PRODUCTS_EXCLUDE_RE.search(text):
         entities["event_applicable_products_lookup"] = True
-    if products and _PRODUCT_BENEFIT_LOOKUP_RE.search(text) and not _BENEFIT_STACKING_RE.search(text):
+    if (products or product_families) and _PRODUCT_BENEFIT_LOOKUP_RE.search(text) and not _BENEFIT_STACKING_RE.search(text):
         if _PRODUCT_EVENT_LOOKUP_RE.search(text):
             entities["product_benefit_lookup_type"] = "event"
         elif _PRODUCT_DEAL_LOOKUP_RE.search(text):
@@ -1467,9 +1467,12 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
         "product_benefit_lookup",
     }:
         product_names = entities.get("product_names") or ()
+        product_families = entities.get("product_family_names") or ()
         args: dict[str, Any] = {}
         if product_names:
             args["keyword"] = product_names[0]
+        elif product_families:
+            args["keyword"] = product_families[0]
         if entities.get("brand_cd"):
             args["brand_cd"] = entities["brand_cd"]
         if entities.get("tire_size"):

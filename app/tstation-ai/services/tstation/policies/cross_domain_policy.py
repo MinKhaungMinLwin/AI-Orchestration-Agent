@@ -62,8 +62,8 @@ _EXECUTABLE_PRICE_COUPON_RE = re.compile(
 _PRODUCT_BENEFIT_LOOKUP_RE = re.compile(r"행사|이벤트|프로모션|기획전|딜|deal|쿠폰|할인권|혜택", re.IGNORECASE)
 _BENEFIT_STACKING_RE = re.compile(r"중복|같이|함께|동시|둘\s*다|다\s*돼|같이\s*돼", re.IGNORECASE)
 _EVENT_APPLICABLE_PRODUCTS_RE = re.compile(
-    r"(?:이벤트|행사|프로모션|기획전).{0,20}(?:적용|대상|가능|살\s*수\s*있는).{0,8}(?:상품|타이어|제품)|"
-    r"(?:적용|대상|가능).{0,8}(?:상품|타이어|제품).{0,20}(?:이벤트|행사|프로모션|기획전)",
+    r"(?:이벤트|행사|프로모션|기획전|딜|deal).{0,20}(?:적용|대상|가능|살\s*수\s*있는).{0,8}(?:상품|타이어|제품)|"
+    r"(?:적용|대상|가능).{0,8}(?:상품|타이어|제품).{0,20}(?:이벤트|행사|프로모션|기획전|딜|deal)",
     re.IGNORECASE,
 )
 _EVENT_APPLICABLE_PRODUCTS_EXCLUDE_RE = re.compile(

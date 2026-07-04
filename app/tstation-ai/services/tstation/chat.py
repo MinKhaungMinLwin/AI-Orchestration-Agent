@@ -2122,6 +2122,24 @@ def _apply_default_benefit_router_override(
     routing_result: MultiAgentDomain | None,
 ) -> tuple[list[MultiAgentDomain.Domain], MultiAgentDomain | None, bool]:
     execution_plan = [str(item or "").strip().lower() for item in (getattr(routing_result, "execution_plan", None) or ())]
+    relation_plan_lookup = any(
+        item
+        in {
+            "discovery:product_event_lookup",
+            "discovery:product_deal_lookup",
+            "discovery:event_applicable_products_lookup",
+        }
+        for item in execution_plan
+    )
+    if relation_plan_lookup:
+        return domains, routing_result, False
+    discovery_frame = build_discovery_intent_frame(user_text)
+    if discovery_frame.sub_intent in {
+        "product_event_lookup",
+        "product_deal_lookup",
+        "event_applicable_products_lookup",
+    }:
+        return domains, routing_result, False
     router_benefit_list_lookup = any(
         item in {"discovery:benefit_event_list_lookup", "discovery:benefit_deal_list"}
         for item in execution_plan

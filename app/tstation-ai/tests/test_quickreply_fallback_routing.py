@@ -31061,6 +31061,47 @@ def test_support_prompt_contains_upload_capability_notice_for_photo_policy() -> 
     assert "업로드 확인이 불가능" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
 
 
+@pytest.mark.parametrize(
+    ("user_text", "sub_intent"),
+    [
+        ("키너지에 적용되는 이벤트 있어?", "product_event_lookup"),
+        ("반짝블랙딜에 적용 가능한 상품이 뭐야", "event_applicable_products_lookup"),
+    ],
+)
+def test_default_benefit_router_override_preserves_applicability_relation_contract(
+    user_text: str,
+    sub_intent: str,
+) -> None:
+    routing_result = MultiAgentDomain(
+        reason="router proposed broad event list",
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        execution_plan=["discovery:benefit_event_list_lookup"],
+        user_behavior="event list lookup",
+        flow="event list lookup",
+        claim_check_type="none",
+        complaint_scope="none",
+        policy_intent="none",
+        agent_prompt_profile=chat_module.AgentPromptProfile.DISCOVERY_EVENT_CONTENT,
+        planner_confidence=0.91,
+    )
+
+    domains, preserved_routing, applied = _apply_default_benefit_router_override(
+        user_text=user_text,
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        routing_result=routing_result,
+    )
+
+    frame = build_discovery_intent_frame(user_text)
+    tool_plan = plan_discovery_tools(frame)
+
+    assert applied is False
+    assert domains == [MultiAgentDomain.Domain.DISCOVERY]
+    assert preserved_routing is routing_result
+    assert frame.sub_intent == sub_intent
+    assert tool_plan.preferred_tool in {"search_product_summary_tool", "get_events_tool"}
+    assert "get_benefit_event_deal_list_tool" not in tool_plan.allowed_tools
+
+
 def test_support_prompt_contains_fixed_safety_policy_only() -> None:
     assert "고정 응답 safety policy" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
     assert "tire_condition_photo_policy" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
@@ -31077,6 +31118,7 @@ def test_support_prompt_contains_legal_action_hard_stop() -> None:
 @pytest.mark.parametrize(
     ("user_text", "sub_intent", "allowed_tool"),
     [
+        ("키너지에 적용되는 이벤트 있어?", "product_event_lookup", "get_product_applicable_events_tool"),
         ("ventus air S 지금 행사 함?", "product_event_lookup", "get_product_applicable_events_tool"),
         ("벤투스 에어S 쿠폰 있어?", "product_coupon_lookup", "get_product_promotions_tool"),
         ("벤투스 에어S 기획전 적용돼?", "product_deal_lookup", "get_product_applicable_events_tool"),
@@ -31107,6 +31149,7 @@ def test_product_benefit_lookup_stays_discovery_event_content(user_text: str, su
     [
         "한국타이어 페스타 이벤트에 적용되는 상품 있어?",
         "기획전 대상 타이어 보여줘",
+        "반짝블랙딜에 적용 가능한 상품이 뭐야",
         "프로모션으로 살 수 있는 제품 알려줘",
     ],
 )
