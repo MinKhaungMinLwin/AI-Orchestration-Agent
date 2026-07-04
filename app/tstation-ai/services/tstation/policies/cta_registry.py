@@ -120,38 +120,90 @@ _URL_CTA_DEFINITIONS: tuple[CTADefinition, ...] = (
         allowed_tools=("transfer_to_qna_tool",),
         fallback_behavior="ask_escalation_confirmation",
     ),
+    CTADefinition(
+        cta_id="support.qna.open",
+        label="상담사 연결",
+        domain="SUPPORT",
+        cta_action="open_qna",
+        expected_behavior="conversation_action",
+        expected_contract_intent="human_escalation",
+        allowed_tools=("transfer_to_qna_tool",),
+        fallback_behavior="ask_escalation_confirmation",
+    ),
+)
+
+_OWNED_VEHICLE_SELECT_LABELS: tuple[str, ...] = (
+    "내 차량으로 확인",
+    "내 차량 보기",
+    "보유차량 중 선택",
+    "내 차로 찾기",
+    "내 차 검색",
+    "내차검색",
 )
 
 _CONVERSATION_CTA_DEFINITIONS: tuple[CTADefinition, ...] = (
+    *(
+        CTADefinition(
+            cta_id="owned_vehicle.select",
+            label=label,
+            domain="DISCOVERY",
+            cta_action="select_owned_vehicle",
+            expected_behavior="conversation_action",
+            expected_contract_intent="vehicle_lookup",
+            allowed_tools=("get_my_cars_tool", "get_user_vehicles_tool"),
+            fallback_behavior="ask_vehicle_or_size_again",
+        )
+        for label in _OWNED_VEHICLE_SELECT_LABELS
+    ),
     CTADefinition(
-        cta_id="owned_vehicle.select",
-        label="내 차량으로 확인",
+        cta_id="discovery.recommendation.start",
+        label="타이어 추천",
         domain="DISCOVERY",
-        cta_action="select_owned_vehicle",
+        cta_action="start_tire_recommendation",
         expected_behavior="conversation_action",
-        expected_contract_intent="vehicle_lookup",
-        allowed_tools=("get_my_cars_tool", "get_user_vehicles_tool"),
+        expected_contract_intent="product_recommendation",
+        allowed_tools=("get_products_recommendations_tool",),
         fallback_behavior="ask_vehicle_or_size_again",
     ),
     CTADefinition(
-        cta_id="owned_vehicle.select",
-        label="내 차량 보기",
+        cta_id="discovery.recommendation.start",
+        label="타이어 추천 받기",
         domain="DISCOVERY",
-        cta_action="select_owned_vehicle",
+        cta_action="start_tire_recommendation",
         expected_behavior="conversation_action",
-        expected_contract_intent="vehicle_lookup",
-        allowed_tools=("get_my_cars_tool", "get_user_vehicles_tool"),
+        expected_contract_intent="product_recommendation",
+        allowed_tools=("get_products_recommendations_tool",),
         fallback_behavior="ask_vehicle_or_size_again",
     ),
     CTADefinition(
-        cta_id="owned_vehicle.select",
-        label="보유차량 중 선택",
+        cta_id="discovery.recommendation.start",
+        label="다른 추천 받기",
         domain="DISCOVERY",
-        cta_action="select_owned_vehicle",
+        cta_action="start_tire_recommendation",
         expected_behavior="conversation_action",
-        expected_contract_intent="vehicle_lookup",
-        allowed_tools=("get_my_cars_tool", "get_user_vehicles_tool"),
+        expected_contract_intent="product_recommendation",
+        allowed_tools=("get_products_recommendations_tool",),
         fallback_behavior="ask_vehicle_or_size_again",
+    ),
+    CTADefinition(
+        cta_id="discovery.product_search.start",
+        label="상품 검색",
+        domain="DISCOVERY",
+        cta_action="start_product_search",
+        expected_behavior="conversation_action",
+        expected_contract_intent="product_search",
+        allowed_tools=("search_product_tool",),
+        fallback_behavior="ask_product_keyword",
+    ),
+    CTADefinition(
+        cta_id="order.reservation.lookup",
+        label="내 예약 조회",
+        domain="TRANSACTION",
+        cta_action="lookup_my_orders",
+        expected_behavior="conversation_action",
+        expected_contract_intent="order_history_lookup",
+        allowed_tools=("get_orders_of_user_tool",),
+        fallback_behavior="ask_order_identifier",
     ),
     CTADefinition(
         cta_id="store.search.start",
@@ -166,6 +218,16 @@ _CONVERSATION_CTA_DEFINITIONS: tuple[CTADefinition, ...] = (
     CTADefinition(
         cta_id="store.search.other",
         label="다른 매장 찾기",
+        domain="TRANSACTION",
+        cta_action="search_other_store",
+        expected_behavior="conversation_action",
+        expected_contract_intent="stock_store_search",
+        allowed_tools=("search_stores_tool", "get_store_list_tool", "transaction_store_preview_tool"),
+        fallback_behavior="ask_region_again",
+    ),
+    CTADefinition(
+        cta_id="store.search.other",
+        label="다른 매장 보기",
         domain="TRANSACTION",
         cta_action="search_other_store",
         expected_behavior="conversation_action",
@@ -192,6 +254,26 @@ _CONVERSATION_CTA_DEFINITIONS: tuple[CTADefinition, ...] = (
         expected_contract_intent="quick_order_reservation",
         allowed_tools=("transaction_store_preview_tool", "quick_order_tool"),
         fallback_behavior="ask_missing_purchase_slots",
+    ),
+    CTADefinition(
+        cta_id="purchase.start",
+        label="주문하기",
+        domain="TRANSACTION",
+        cta_action="start_purchase",
+        expected_behavior="conversation_action",
+        expected_contract_intent="quick_order_reservation",
+        allowed_tools=("transaction_store_preview_tool", "quick_order_tool"),
+        fallback_behavior="ask_missing_purchase_slots",
+    ),
+    CTADefinition(
+        cta_id="cart.add",
+        label="장바구니에 담기",
+        domain="TRANSACTION",
+        cta_action="add_to_cart",
+        expected_behavior="conversation_action",
+        expected_contract_intent="quick_order_reservation",
+        allowed_tools=("save_to_cart_tool",),
+        fallback_behavior="ask_missing_cart_slots",
     ),
     CTADefinition(
         cta_id="cart.add",
@@ -231,6 +313,7 @@ _DEFINITIONS_BY_LABEL: dict[str, CTADefinition] = {
 _DYNAMIC_SIZE_RE = re.compile(r"^\s*\d{3}\s*/\s*\d{2}\s*R\s*\d{2}\s*$", re.IGNORECASE)
 _DYNAMIC_QTY_RE = re.compile(r"^\s*[1-4]\s*(?:개|본)\s*$")
 _DYNAMIC_ORDER_RE = re.compile(r"(?:주문|예약)?\s*[0-9]{4,}\s*(?:번|건)?")
+_DYNAMIC_CAR_NO_RE = re.compile(r"^\s*\d{2,3}[가-힣]\s*\d{4}\s*$")
 
 
 def _url_path(url: str | None) -> str:
@@ -278,6 +361,8 @@ def _dynamic_definition_for_chip(chip: Mapping[str, Any]) -> CTADefinition | Non
         cta_type = "dynamic_quantity"
     elif _DYNAMIC_ORDER_RE.fullmatch(label):
         cta_type = "dynamic_order_candidate"
+    elif _DYNAMIC_CAR_NO_RE.fullmatch(label):
+        cta_type = "dynamic_vehicle_candidate"
     elif str(chip.get("domain") or "").upper() == "TRANSACTION" and label.endswith(("점", "센터")):
         cta_type = "dynamic_store_candidate"
     else:
@@ -365,33 +450,15 @@ def _validate_definition(
     )
 
 
-def _safe_fallback_chip(source_domain: str) -> dict[str, Any]:
-    domain = str(source_domain or "").upper()
-    if domain == "SUPPORT":
-        return {
-            "label": "문의 내용 다시 입력",
-            "domain": "SUPPORT",
-            "metadata": {
-                "cta_id": "safe_fallback.ask_again",
-                "cta_action": "ask_again",
-                "expected_behavior": "conversation_action",
-                "expected_contract_intent": "",
-                "cta_validation_result": "fallback",
-                "cta_validation_reason": "all_ctas_blocked",
-            },
-        }
-    return {
-        "label": "조건 다시 입력",
-        "domain": domain if domain in {"DISCOVERY", "TRANSACTION"} else "LEADING",
-        "metadata": {
-            "cta_id": "safe_fallback.ask_again",
-            "cta_action": "ask_again",
-            "expected_behavior": "conversation_action",
-            "expected_contract_intent": "",
-            "cta_validation_result": "fallback",
-            "cta_validation_reason": "all_ctas_blocked",
-        },
-    }
+_PREANNOTATED_ACTION_KEYS: tuple[str, ...] = ("actionId", "action_id", "intentKey", "intent_key", "cta_action")
+
+
+def _has_preannotated_action(chip: Mapping[str, Any]) -> bool:
+    metadata = chip.get("metadata") if isinstance(chip.get("metadata"), Mapping) else {}
+    return any(
+        str(chip.get(key) or "").strip() or str(metadata.get(key) or "").strip()
+        for key in _PREANNOTATED_ACTION_KEYS
+    )
 
 
 def normalize_quickreply_ctas(
@@ -400,7 +467,13 @@ def normalize_quickreply_ctas(
     contract: Any | None = None,
     source_intent: str | None = None,
 ) -> bool:
-    """Attach CTA action contracts to quickReply chips and drop invalid CTAs."""
+    """Attach CTA action contracts to quickReply chips and drop non-executable chips.
+
+    A chip survives only when it resolves to a validated registry/dynamic CTA,
+    carries a direct URL, or is pre-annotated with action metadata by a code
+    builder. Label-only chips with no executable action are dropped; an empty
+    quickReplies list is a valid outcome.
+    """
 
     if not isinstance(event, dict) or event.get("template") != "quickReply":
         return False
@@ -412,7 +485,6 @@ def normalize_quickreply_ctas(
         return False
     current_template = str(event.get("template") or "")
     current_intent = str(source_intent or getattr(contract, "intent", "") or "")
-    source_domain = str(event.get("source_domain") or getattr(contract, "domain", "") or "").upper()
     event_metadata = data.get("metadata") if isinstance(data.get("metadata"), Mapping) else {}
 
     changed = False
@@ -420,12 +492,30 @@ def normalize_quickreply_ctas(
     audit: list[dict[str, Any]] = []
     for raw_chip in chips:
         if not isinstance(raw_chip, dict):
-            normalized.append(raw_chip)
+            changed = True
             continue
         chip = dict(raw_chip)
         definition = _definition_for_chip(chip) or _dynamic_definition_for_chip(chip)
         if definition is None:
-            normalized.append(chip)
+            if str(chip.get("url") or "").strip():
+                keep_reason = "unregistered_url_action"
+            elif _has_preannotated_action(chip):
+                keep_reason = "preannotated_action_metadata"
+            else:
+                keep_reason = None
+            audit.append({
+                "label": chip.get("label"),
+                "cta_id": "",
+                "cta_action": str(chip.get("cta_action") or "").strip(),
+                "expected_behavior": "open_url" if keep_reason == "unregistered_url_action" else "",
+                "expected_contract_intent": "",
+                "result": "allowed" if keep_reason else "dropped",
+                "reason": keep_reason or "no_executable_action",
+            })
+            if keep_reason:
+                normalized.append(chip)
+            else:
+                changed = True
             continue
         if not chip.get("domain") and definition.domain:
             chip["domain"] = definition.domain
@@ -471,10 +561,6 @@ def normalize_quickreply_ctas(
             chip["expected_contract_intent"] = definition.expected_contract_intent
         normalized.append(chip)
         changed = changed or chip != raw_chip
-
-    if chips and not normalized:
-        normalized = [_safe_fallback_chip(source_domain)]
-        changed = True
 
     if changed:
         data["quickReplies"] = normalized

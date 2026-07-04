@@ -959,7 +959,7 @@ def test_transaction_cta_sanitizer_blocks_order_history_during_missing_purchase_
     )
 
     assert changed is True
-    assert _labels(event_data["quickReplies"]) == ["조건 다시 입력"]
+    assert event_data["quickReplies"] == []
     assert event_data["metadata"]["blocked_ctas"][0]["reason"].startswith("order_history_forbidden:")
 
 

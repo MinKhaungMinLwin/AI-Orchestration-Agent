@@ -380,6 +380,63 @@ with chat_container:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
+def _queue_quick_reply_chip(chip: dict) -> None:
+    """Chip click → queue an actionable message; the payload is sent as chip_context/ui_action."""
+    st.session_state["pending_chip"] = chip
+
+
+def _chip_request_fields(chip: dict) -> tuple[dict, dict]:
+    """Build the chat request `chip_context` and `ui_action` payloads from an emitted chip."""
+    metadata = chip.get("metadata") if isinstance(chip.get("metadata"), dict) else {}
+    chip_context = {
+        "domain": chip.get("domain"),
+        "actionId": chip.get("actionId") or chip.get("action_id"),
+        "intentKey": chip.get("intentKey") or chip.get("intent_key"),
+        "cta_id": chip.get("cta_id") or metadata.get("cta_id"),
+        "cta_action": chip.get("cta_action") or metadata.get("cta_action"),
+        "expected_behavior": chip.get("expected_behavior") or metadata.get("expected_behavior"),
+        "source_intent": metadata.get("source_intent"),
+        "expected_contract_intent": (
+            chip.get("expected_contract_intent") or metadata.get("expected_contract_intent")
+        ),
+        "slots": metadata.get("slots"),
+        "metadata": metadata,
+    }
+    chip_context = {k: v for k, v in chip_context.items() if v not in (None, "", {}, [])}
+    action_type = chip_context.get("cta_action") or chip_context.get("actionId")
+    ui_action = {
+        "action_type": action_type,
+        "label": chip.get("label"),
+        "entity_label": chip.get("label"),
+        "intentKey": chip_context.get("intentKey"),
+        "expected_behavior": chip_context.get("expected_behavior"),
+        "expected_contract_intent": chip_context.get("expected_contract_intent"),
+        "slots": metadata.get("slots"),
+        "metadata": metadata,
+    }
+    ui_action = {k: v for k, v in ui_action.items() if v not in (None, "", {}, [])}
+    return chip_context, ui_action
+
+
+chips_container = st.container()
+
+with chips_container:
+    quick_reply_chips = st.session_state.get("last_quick_replies") or []
+    if quick_reply_chips and access_token:
+        cols = st.columns(min(len(quick_reply_chips), 4))
+        for idx, chip in enumerate(quick_reply_chips[:4]):
+            label = str(chip.get("label") or "")
+            with cols[idx % len(cols)]:
+                if chip.get("url"):
+                    st.link_button(label, str(chip["url"]))
+                else:
+                    st.button(
+                        label,
+                        key=f"quick_reply_chip_{idx}",
+                        on_click=_queue_quick_reply_chip,
+                        args=(chip,),
+                    )
+
 input_container = st.container()
 
 with input_container:
@@ -391,7 +448,22 @@ with input_container:
     else:
         prompt = st.chat_input(placeholder="Your question....")
 
+pending_chip = st.session_state.pop("pending_chip", None)
+chip_context_payload = None
+ui_action_payload = None
 if prompt:
+    outgoing_message = prompt
+elif pending_chip:
+    outgoing_message = str(pending_chip.get("label") or "")
+    chip_context_payload, ui_action_payload = _chip_request_fields(pending_chip)
+else:
+    outgoing_message = None
+
+if outgoing_message:
+    prompt = outgoing_message
+    # A new turn starts: the previous turn's chips are no longer valid actions.
+    st.session_state["last_quick_replies"] = []
+
     # Get current session ID
     current_session_id = st.session_state.get("current_session_id")
 
@@ -415,7 +487,9 @@ if prompt:
                         session_id=current_session_id,
                         stream=True,
                         access_token=access_token,
-                        user_info={"location": {"xpos": st.session_state.xpos_input, "ypos": st.session_state.ypos_input}}
+                        user_info={"location": {"xpos": st.session_state.xpos_input, "ypos": st.session_state.ypos_input}},
+                        chip_context=chip_context_payload,
+                        ui_action=ui_action_payload,
                     )
 
                     for chunk in response_generator:
@@ -447,7 +521,13 @@ if prompt:
                             message_placeholder.markdown(full_response)
                         elif chunk.get("type") == "data":
                             status_placeholder.empty()
-                            render_template_expander(chunk.get("template", ""), chunk.get("data", {}))
+                            data_payload = chunk.get("data", {}) or {}
+                            if chunk.get("template") == "quickReply" and isinstance(data_payload, dict):
+                                st.session_state["last_quick_replies"] = [
+                                    chip for chip in (data_payload.get("quickReplies") or [])
+                                    if isinstance(chip, dict) and chip.get("label")
+                                ]
+                            render_template_expander(chunk.get("template", ""), data_payload)
 
                     message_placeholder.markdown(full_response)
                     status_placeholder.empty()
@@ -486,7 +566,9 @@ if prompt:
                         session_id=current_session_id,
                         stream=stream_mode,
                         access_token=access_token,
-                        user_info={"location": {"xpos": st.session_state.xpos_input, "ypos": st.session_state.ypos_input}}
+                        user_info={"location": {"xpos": st.session_state.xpos_input, "ypos": st.session_state.ypos_input}},
+                        chip_context=chip_context_payload,
+                        ui_action=ui_action_payload,
                     )
                 st.markdown(bot_reply)
 
