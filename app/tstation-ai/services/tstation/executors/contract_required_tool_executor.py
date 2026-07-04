@@ -476,13 +476,24 @@ async def _recover_contract_required_tool(
     )
     if flow_progress_recovery is not None:
         return flow_progress_recovery
-    return await _recover_contract_required_vehicle_recommendation(
+    vehicle_recovery = await _recover_contract_required_vehicle_recommendation(
         turn_contract=turn_contract,
         user_text=user_text,
         merged_slots=merged_slots,
         blocked_fast_path_source=blocked_fast_path_source,
         member_no=member_no,
     )
+    if vehicle_recovery is not None:
+        return vehicle_recovery
+    if str(blocked_fast_path_source or "").startswith("contract_direct_executor:"):
+        return await recover_blocked_fast_path_to_contract_tool(
+            turn_contract=turn_contract,
+            user_text=user_text,
+            merged_slots=merged_slots,
+            blocked_fast_path_source=blocked_fast_path_source,
+            member_no=member_no,
+        )
+    return None
 
 
 def contract_required_tool_start_event(

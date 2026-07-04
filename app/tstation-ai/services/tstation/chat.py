@@ -2997,7 +2997,8 @@ Rules:
   current_flow, prefer the slot-fill rules above; only use recent_interaction_summary when no valid slot-fill applies.
 - Example: last_task="applicable_products_lookup", last_subject="쿠폰 뱃지 테스트", then current
   "1월 키너지 EX 특가 프로모션은?" => the user wants the products this promotion applies to (continue
-  applicable-products lookup for benefit "1월 키너지 EX 특가 프로모션"), NOT a generic event list. Fill
+  applicable-products lookup for benefit "1월 키너지 EX 특가 프로모션"), NOT a generic event list.
+  Set execution_plan=["discovery:event_applicable_products_lookup"] and fill
   entity_candidates.benefit.name="1월 키너지 EX 특가 프로모션".
 
 6. claim_check_type — for product-related claim verification:

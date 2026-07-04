@@ -136,6 +136,15 @@ def _evaluate_discovery_contract(
     intent = str(turn_contract.intent or "")
     if intent == "product_comparison" and tool == "search_product_summary_tool":
         return DirectPathDecision(True, True, "product_comparison_summary", None, tool, "quickReply")
+    if intent == "event_applicable_products_lookup" and tool == "search_benefit_applicable_products_tool":
+        query = str(
+            (turn_contract.tool_args_patch or {}).get("query")
+            or known_slots.get("benefit_applicable_products_query")
+            or ""
+        ).strip()
+        if query:
+            return DirectPathDecision(True, True, "event_applicable_products_lookup", None, tool, "quickReply")
+        return _fallback("missing_required_slot")
     if intent != "product_recommendation":
         return _fallback("no_deterministic_template")
     if tool == "get_my_cars_tool":
@@ -212,11 +221,22 @@ def _entity(router_evidence: Mapping[str, Any], name: str) -> dict[str, Any]:
 
 
 def _is_deterministic_benefit_applicable_products_contract(turn_contract: TurnContract) -> bool:
+    domain = str(turn_contract.domain or "").strip().lower()
+    intent = str(turn_contract.intent or "").strip()
+    preferred_tool = str(getattr(turn_contract, "preferred_tool", "") or "").strip()
+    allowed_tools = set(turn_contract.allowed_tools or ())
+    if preferred_tool != "search_benefit_applicable_products_tool" or preferred_tool not in allowed_tools:
+        return False
+    if domain == PolicyDomain.DISCOVERY.value and intent == "event_applicable_products_lookup":
+        query = str(
+            (turn_contract.tool_args_patch or {}).get("query")
+            or (turn_contract.known_slots or {}).get("benefit_applicable_products_query")
+            or ""
+        ).strip()
+        return bool(query)
     return (
-        str(turn_contract.domain or "").strip().lower() == PolicyDomain.TRANSACTION.value
-        and str(turn_contract.intent or "").strip() == "coupon_applicable_products"
-        and str(getattr(turn_contract, "preferred_tool", "") or "").strip() == "search_benefit_applicable_products_tool"
-        and "search_benefit_applicable_products_tool" in set(turn_contract.allowed_tools or ())
+        domain == PolicyDomain.TRANSACTION.value
+        and intent == "coupon_applicable_products"
     )
 
 
