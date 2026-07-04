@@ -19424,8 +19424,8 @@ def test_resolve_store_selection_from_history_template_requires_selection_anchor
                     "goodsNo": "G000000309715",
                     "tireSize": "225/55R18",
                     "ordQty": 4,
-                    "pendingIntent": "order",
-                    "goalType": "place_order",
+                    "pendingIntent": "stock",
+                    "goalType": "store_with_stock",
                     "scheduleMode": "general",
                 }
             ],
@@ -19435,6 +19435,58 @@ def test_resolve_store_selection_from_history_template_requires_selection_anchor
     selection = resolve_store_selection_from_history_template("티스테이션 분당정자점", latest_location)
 
     assert selection is None
+
+
+def test_plain_store_name_from_purchase_preview_recovers_schedule_continuation() -> None:
+    latest_location = {
+        "template": "location",
+        "data": {
+            "stores": [{"nameAddress": "티스테이션 판교점"}],
+            "metadata": [
+                {
+                    "shopId": "F00721",
+                    "shopName": "티스테이션 판교점",
+                    "sourceTool": "transaction_store_preview_tool",
+                    "goodsNo": "G000000310119",
+                    "productName": "벤투스 S2 AS",
+                    "tireSize": "215/55R17",
+                    "ordQty": 4,
+                    "pendingIntent": "order",
+                    "goalType": "place_order",
+                    "stockCheckMode": "preview",
+                    "scheduleMode": "general",
+                }
+            ],
+        },
+    }
+
+    state = apply_history_location_selection_state(
+        last_user_text="티스테이션 판교점",
+        latest_location_tmpl=latest_location,
+        merged_slots=ConversationSlots(
+            goods_no="G000000310119",
+            product_name="벤투스 S2 AS",
+            tire_size="215/55R17",
+            ord_qty=4,
+            pending_intent="order",
+            goal_type="place_order",
+        ),
+        resolve_store_selection_from_history_template_fn=resolve_store_selection_from_history_template,
+        preview_location_slot_values_from_selection_fn=preview_location_slot_values_from_selection,
+        selected_order_context_from_preview_values_fn=lambda values: dict(values),
+    )
+    frame = build_transaction_intent_frame("티스테이션 판교점", known_slots=state.updated_slots.model_dump())
+    tool_plan = plan_transaction_tools(frame)
+
+    assert state.resolved_shop_id == "F00721"
+    assert state.resume_source == "expected_slot_fill:store"
+    assert state.flow_type == "purchase_location_selection"
+    assert frame.intent == "quick_order_reservation"
+    assert frame.known_slots["shop_id"] == "F00721"
+    assert frame.known_slots["source_tool"] == "transaction_store_preview_tool"
+    assert frame.missing_slots == ("booking_datetime",)
+    assert tool_plan.preferred_tool == "get_store_schedule_tool"
+    assert "transaction_store_preview_tool" not in tool_plan.allowed_tools
 
 
 def test_resolve_store_selection_from_history_template_matches_anchored_store_name_input() -> None:
