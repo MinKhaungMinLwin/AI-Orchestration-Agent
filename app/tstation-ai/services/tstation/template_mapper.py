@@ -1945,13 +1945,21 @@ def _comparison_summary_metadata(
 
     product_names: list[str] = []
     resolved_products: list[dict[str, Any]] = []
+    used_names: set[str] = set()
     for requested_label in requested_search_labels[:4]:
         matching_name = next(
-            (name for name in rows_by_name if _normalize_search_label(name) == _normalize_search_label(requested_label)),
+            (
+                name
+                for name in rows_by_name
+                if name not in used_names and _normalize_search_label(name) == _normalize_search_label(requested_label)
+            ),
             None,
         )
         if matching_name is None:
+            matching_name = next((name for name in rows_by_name if name not in used_names), None)
+        if matching_name is None:
             continue
+        used_names.add(matching_name)
         payload = rows_by_name.get(matching_name)
         rows = payload.get("rows") if isinstance(payload, Mapping) else None
         row = rows[0] if isinstance(rows, list) and rows and isinstance(rows[0], dict) else {}
@@ -3485,6 +3493,7 @@ def _contract_policy_quickreply_event(
     response_shape_key: str,
     response: str,
     requested_product_attribute: str = "",
+    metadata_patch: Mapping[str, Any] | None = None,
 ) -> dict | None:
     response = sanitize_user_facing_response(response)
     if not response:
@@ -3503,6 +3512,7 @@ def _contract_policy_quickreply_event(
             "predictedDomains": predicted_domains,
             "metadata": {
                 "response_shape_key": response_shape_key,
+                **dict(metadata_patch or {}),
                 **({"requested_product_attribute": requested_product_attribute} if requested_product_attribute else {}),
             },
         },
@@ -3591,10 +3601,42 @@ def _map_contract_discovery_summary(tool_data_list: list[dict], assistant_text: 
 
     if not response:
         response = sanitize_user_facing_response(assistant_text, "") or decision.assistant_guidance
+    metadata_patch: dict[str, Any] = {}
+    if response_shape_key in {"metric_comparison_summary", "grade_comparison_summary"}:
+        rows_by_name: dict[str, dict[str, object]] = {}
+        requested_search_labels: list[str] = []
+        for entry in _find_entries(tool_data_list, "search_product_summary_tool", "search_product_tool"):
+            args = _tool_args(entry)
+            labels = args.get("keywords") if isinstance(args.get("keywords"), list) else None
+            if labels is None:
+                labels = [_get_str(args, "keyword", "product_name", "name")]
+            for label in labels:
+                requested_label = str(label or "").strip()
+                if requested_label and requested_label not in requested_search_labels:
+                    requested_search_labels.append(requested_label)
+            raw = _unwrap(entry)
+            rows = raw if isinstance(raw, list) else (raw.get("items") if isinstance(raw, dict) else [])
+            if not isinstance(rows, list):
+                continue
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                name = _get_str(row, "goods_nm", "big_goods_nm", "ptrn_d_nm", "title")
+                if not name:
+                    continue
+                bucket = rows_by_name.setdefault(name, {"rows": [], "tool": entry.get("tool")})
+                bucket_rows = bucket.get("rows")
+                if isinstance(bucket_rows, list):
+                    bucket_rows.append(row)
+        metadata_patch = _comparison_summary_metadata(
+            requested_search_labels=requested_search_labels,
+            rows_by_name=rows_by_name,
+        )
     return _contract_policy_quickreply_event(
         response_shape_key=response_shape_key,
         response=response,
         requested_product_attribute=requested_product_attribute,
+        metadata_patch=metadata_patch,
     )
 
 

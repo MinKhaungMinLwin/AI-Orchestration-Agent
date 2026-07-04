@@ -36212,6 +36212,8 @@ class TStationChatServiceV2:
                 dict(recovery["tool_input"]),
                 dict(recovery["tool_result"]),
             )
+            recovered_event = recovery["event"]
+            _stage_comparison_context_slots(recovered_event)
             await _persist_pending_slots_for_direct_return()
             chunks = [
                 "data: "
@@ -36234,7 +36236,6 @@ class TStationChatServiceV2:
                 )
                 + "\n\n"
             )
-            recovered_event = recovery["event"]
             chunks.append(f"data: {json.dumps(recovered_event, ensure_ascii=False)}\n\n")
             assistant_response = str((recovered_event.get("data") or {}).get("assistantResponse") or "")
             if assistant_response:

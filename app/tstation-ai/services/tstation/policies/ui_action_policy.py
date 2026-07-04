@@ -5688,6 +5688,11 @@ def _transaction_context_candidates(slots: Any) -> list[tuple[str, dict[str, Any
     availability_context = raw_slots.get("availability_context", getattr(slots, "availability_context", None))
     if not isinstance(availability_context, Mapping):
         return candidates
+    active_flow_context = availability_context.get("active_flow_context")
+    if isinstance(active_flow_context, Mapping):
+        normalized = _flatten_active_flow_transaction_context(active_flow_context)
+        if normalized.get("goods_no") and normalized.get("tire_size"):
+            candidates.append(("active_flow_context", normalized))
     for key in (
         "pending_order_context",
         "dormant_purchase_context",
@@ -5702,6 +5707,43 @@ def _transaction_context_candidates(slots: Any) -> list[tuple[str, dict[str, Any
             candidates.append((key, normalized))
     return candidates
 
+
+def _flatten_active_flow_transaction_context(context: Mapping[str, Any]) -> dict[str, Any]:
+    intent = context.get("intent") if isinstance(context.get("intent"), Mapping) else {}
+    if not (_is_purchase_context(context) or _is_purchase_context(intent)):
+        return {}
+
+    fields = (
+        "product_name",
+        "tire_model",
+        "pending_product_name",
+        "goods_no",
+        "tire_size",
+        "ord_qty",
+        "payment_amount",
+        "region",
+        "shop_id",
+        "shop_name",
+        "pending_intent",
+        "goal_type",
+        "availability_intent",
+        "requested_cal_day",
+        "stock_check_mode",
+    )
+    flattened: dict[str, Any] = {}
+    for source in (
+        context,
+        intent,
+        context.get("product") if isinstance(context.get("product"), Mapping) else {},
+        context.get("quantity") if isinstance(context.get("quantity"), Mapping) else {},
+        context.get("store") if isinstance(context.get("store"), Mapping) else {},
+        context.get("schedule") if isinstance(context.get("schedule"), Mapping) else {},
+        context.get("payment") if isinstance(context.get("payment"), Mapping) else {},
+    ):
+        flattened.update({key: value for key in fields if (value := source.get(key)) not in (None, "", [], {})})
+    if flattened.get("product_name") in (None, "", [], {}):
+        flattened["product_name"] = flattened.get("tire_model") or flattened.get("pending_product_name")
+    return flattened
 
 def _classify_region_store_flow(
     context: Mapping[str, Any],

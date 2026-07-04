@@ -6,6 +6,7 @@ from services.tstation.policies.flow_controller import (
 )
 from services.tstation.policies.discovery_intent_policy import build_discovery_intent_frame, plan_discovery_tools
 from services.tstation.policies.transaction_intent_policy import build_transaction_intent_frame, plan_transaction_tools
+from services.tstation.template_mapper import _comparison_summary_metadata
 
 
 def _comparison_slots() -> dict:
@@ -39,6 +40,24 @@ def test_purchase_after_comparison_requires_scoped_product_selection() -> None:
     assert "search_product_tool" in state.forbidden_tools
     assert state.response_shape_key == "comparison_purchase_product_selection"
 
+
+def test_router_order_create_after_comparison_uses_purchase_boundary() -> None:
+    state = resolve_purchase_order_flow(intent="order_create", known_slots=_comparison_slots())
+    order_creation_state = resolve_purchase_order_flow(intent="order_creation", known_slots=_comparison_slots())
+
+    assert state is not None
+    assert state.flow_step == "select_compared_product"
+    assert state.response_shape_key == "comparison_purchase_product_selection"
+    assert order_creation_state is not None
+    assert order_creation_state.flow_step == "select_compared_product"
+
+    event = build_purchase_flow_fallback_event(intent="order_create", known_slots=_comparison_slots())
+    assert event is not None
+    assert event["assistant_response_source"] == "code_purchase_comparison_boundary"
+    assert [reply["label"] for reply in event["data"]["quickReplies"]] == [
+        "Dynapro HPX 235/55R19",
+        "Dynapro HP3 235/55R19",
+    ]
 
 def test_purchase_after_comparison_uses_explicit_compared_candidate() -> None:
     slots = {**_comparison_slots(), "tire_model": "Dynapro HPX"}
@@ -138,4 +157,20 @@ def test_code_mapper_comparison_event_persists_resolved_candidates() -> None:
     assert values["comparison_context"]["product_candidates"] == [
         {"product_name": "Dynapro HPX", "goods_no": "G-CMP-1", "tire_size": "235/55R19"},
         {"product_name": "Dynapro HP3", "goods_no": "G-CMP-2", "tire_size": "235/55R19"},
+    ]
+
+def test_comparison_metadata_keeps_scope_when_requested_labels_are_canonical() -> None:
+    metadata = _comparison_summary_metadata(
+        requested_search_labels=["Ventus S2 AS", "Ventus air S"],
+        rows_by_name={
+            "벤투스 S2 AS": {"rows": [{"goods_no": "G-V-S2", "goods_nm": "벤투스 S2 AS", "tire_size_1": "2454519"}]},
+            "벤투스 에어S": {"rows": [{"goods_no": "G-V-AIR", "goods_nm": "벤투스 에어S", "tire_size_1": "2454519"}]},
+        },
+    )
+
+    assert metadata["productNames"] == ["벤투스 S2 AS", "벤투스 에어S"]
+    assert metadata["requestedProductNames"] == ["Ventus S2 AS", "Ventus air S"]
+    assert metadata["resolvedProducts"] == [
+        {"requestedName": "Ventus S2 AS", "goodsNo": "G-V-S2", "productName": "벤투스 S2 AS", "tireSize": "245/45R19"},
+        {"requestedName": "Ventus air S", "goodsNo": "G-V-AIR", "productName": "벤투스 에어S", "tireSize": "245/45R19"},
     ]
