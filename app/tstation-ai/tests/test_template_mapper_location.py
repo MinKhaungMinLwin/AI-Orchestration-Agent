@@ -1651,6 +1651,57 @@ def test_multi_product_description_search_entries_keep_all_products() -> None:
     assert "사이즈가 아직 확인되지 않아" not in assistant_response
 
 
+def test_summary_product_description_includes_sizes_price_rating_and_reviews() -> None:
+    text = "Ventus S2 AS 설명해줘"
+    current_user_text.set(text)
+    current_discovery_response_decision.set(decide_discovery_response(build_discovery_intent_frame(text)))
+
+    result = try_build_template(
+        [
+            {
+                "tool": "search_product_summary_tool",
+                "args": {"keyword": "벤투스 S2 AS", "brand_cd": "HK", "limit": 5},
+                "data": {
+                    "status": "success",
+                    "http_status": 200,
+                    "data": {
+                        "items": [
+                            {
+                                "goods_nm": "벤투스 S2 AS",
+                                "available_sizes": [
+                                    "205/45R17",
+                                    "205/50R17",
+                                    "205/55R16",
+                                    "205/60R16",
+                                    "205/65R16",
+                                ],
+                                "rating_avg": 4.5,
+                                "review_count": 68,
+                                "min_sale_prc": 139600,
+                                "max_sale_prc": 405900,
+                                "prc_grd_nm": "프리미엄",
+                                "goods_pfm_nm": "COMFORT",
+                                "goods_dtl_pfm_nm": "흡음재",
+                                "season_nm": "사계절",
+                                "car_knd_nm": "승용차",
+                            }
+                        ]
+                    },
+                },
+            }
+        ],
+        "상품 설명입니다.",
+    )
+
+    assert result is not None
+    assert result["template"] == "quickReply"
+    assistant_response = result["data"]["assistantResponse"]
+    assert "[벤투스 S2 AS]" in assistant_response
+    assert "리뷰: 68건, 평균 4.5점" in assistant_response
+    assert "가격대: 139,600~405,900원" in assistant_response
+    assert "지원 가능 사이즈 일부: 205/45R17, 205/50R17, 205/55R16, 205/60R16 외 1개" in assistant_response
+
+
 def test_multi_product_description_partial_missing_keeps_found_product_and_missing_notice() -> None:
     text = "kinergy EX, Ventus S2 AS 설명해줘"
     current_user_text.set(text)
@@ -1881,6 +1932,7 @@ def test_product_search_with_size_acknowledges_input_size_without_size_prompt() 
                     "data": {
                         "items": [
                             {
+                                "goods_no": "G000000320152",
                                 "goods_nm": "벤투스 S2 AS",
                                 "tire_size_1": "225/45R17",
                                 "season_nm": "사계절",
@@ -1909,6 +1961,9 @@ def test_product_search_with_size_acknowledges_input_size_without_size_prompt() 
         "구매하기",
     ]
     assert result["data"]["predictedDomains"] == ["TRANSACTION"]
+    assert result["data"]["metadata"]["goods_no"] == "G000000320152"
+    assert result["data"]["metadata"]["tire_size"] == "225/45R17"
+    assert result["data"]["metadata"]["product_name"] == "벤투스 S2 AS"
 
 
 def test_product_search_with_size_and_install_intent_does_not_ask_size_again() -> None:
@@ -2574,12 +2629,13 @@ def test_metric_comparison_policy_includes_goods_detail_performance_name() -> No
     assert result is not None
     assert result["template"] == "quickReply"
     assistant_response = result["data"]["assistantResponse"]
-    assert "비교 대상의 특화 사양은 아래처럼 확인돼요." in assistant_response
+    assert "비교 대상의 특징은 아래처럼 확인돼요." in assistant_response
     assert "**벤투스 에어S**" in assistant_response
     assert "**다이나프로 HPX**" in assistant_response
     assert "| 항목 | 내용 |" in assistant_response
-    assert "| 특징 | 특화 사양 COMFORT / 흡음재 |" in assistant_response
-    assert "| 특징 | 특화 사양 COMFORT / SUV 마일리지 |" in assistant_response
+    assert "| 특징 | COMFORT / 흡음재 |" in assistant_response
+    assert "| 특징 | COMFORT / SUV 마일리지 |" in assistant_response
+    assert "특화 사양" not in assistant_response
 
 
 def test_metric_comparison_policy_answers_latest_product_confidently() -> None:

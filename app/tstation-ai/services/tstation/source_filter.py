@@ -95,7 +95,7 @@ _SEARCH_PRODUCT_BASE_FIELDS: set[str] = {
     "label_pnwave", "label_pnwave_nm", "label_pndb",
     # 가격 등급 (프리미엄+/프리미엄/스탠다드/이코노미) — 사용자 등급 질문 답변용
     "prc_grd_nm",
-    "sale_prc", "rating_avg", "review_count",
+    "sale_prc", "rating_avg", "review_count", "reviews",
     "goods_no_count", "min_sale_prc", "max_sale_prc",
     "min_extra_fvr_sale_prc", "max_extra_fvr_sale_prc", "max_extra_fvr_sale_per", "smrt_pay_yn",
     # 퍼포먼스 분류 (COMFORT=정숙/승차감, SPORT=고속/제동성, RUNFLAT) — 답변용

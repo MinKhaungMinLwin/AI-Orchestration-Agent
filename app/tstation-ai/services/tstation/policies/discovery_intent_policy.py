@@ -1036,6 +1036,8 @@ def build_discovery_intent_frame(
     elif _PASSENGER_RECOMMENDATION_RE.search(text):
         entities["vehicle_category"] = "passenger"
     elif vehicle_model_match is not None:
+        # Weak, current-turn-only signal: a car model name inferred to a category.
+        # Explicit category keywords above win; this must not bind later turns.
         entities["vehicle_category"] = vehicle_model_match.category
         entities["vehicle_model_name"] = vehicle_model_match.model
         entities["vehicle_category_source"] = "model_inference"
@@ -1586,14 +1588,18 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
             )
         product_names = entities.get("product_names") or ()
         if not tire_size and product_names:
-            summary_args = {"keyword": product_names[0]}
+            is_multi_product_summary = len(product_names) >= 2
+            summary_args = (
+                {"keywords": list(product_names[:5]), "limit": 5}
+                if is_multi_product_summary
+                else {"keyword": product_names[0]}
+            )
             if entities.get("brand_cd"):
                 summary_args["brand_cd"] = entities["brand_cd"]
-            is_multi_product_summary = len(product_names) >= 2
             return ToolPlan(
                 allowed_tools=("search_product_summary_tool", "get_product_description_tool"),
                 preferred_tool="search_product_summary_tool",
-                tool_args_patch={} if is_multi_product_summary else summary_args,
+                tool_args_patch=summary_args,
                 forbidden_tools=(
                     "get_products_recommendations_tool",
                     "product_card_first_response",

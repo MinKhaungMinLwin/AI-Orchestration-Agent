@@ -13,6 +13,7 @@ from services.tstation.policies.discovery_intent_policy import normalize_tire_si
 from services.tstation.policies.flow_state import canonical_flow_type, commerce_sub_flow_type
 from services.tstation.policies.price_basis_policy import has_price_basis
 from services.tstation.policies.response_decision import TemplateName
+from services.tstation.policies.resolved_context import canonical_context_from_template_boundary
 from services.tstation.policies.support_response_policy import (
     _is_card_installment_lookup_query,
     _is_payment_error_troubleshooting_query,
@@ -441,7 +442,10 @@ def _ui_action_slot_patch(ui_action: Any | Mapping[str, Any] | None) -> dict[str
             raw_slots = ui_action.get("slots")
     else:
         raw_slots = getattr(ui_action, "slot_patch", None) or getattr(ui_action, "slots", None)
-    return _non_empty_mapping(raw_slots) if isinstance(raw_slots, Mapping) else {}
+    if not isinstance(raw_slots, Mapping):
+        return {}
+    slots = _non_empty_mapping(raw_slots)
+    return {**slots, **canonical_context_from_template_boundary(slots)}
 
 
 def _selected_product_from_ui_action(ui_action_snapshot: Mapping[str, Any]) -> dict[str, Any]:
@@ -477,6 +481,49 @@ def _selected_quantity_from_ui_action(ui_action_snapshot: Mapping[str, Any]) -> 
         "ord_qty": ord_qty,
         "selection_source": ui_action_snapshot.get("selection_source") or "ui_action",
     }
+
+
+def _selected_store_from_ui_action(ui_action_snapshot: Mapping[str, Any]) -> dict[str, Any]:
+    if str(ui_action_snapshot.get("action_type") or "").strip() != "select_store":
+        return {}
+    slot_patch = ui_action_snapshot.get("slot_patch") if isinstance(ui_action_snapshot.get("slot_patch"), Mapping) else {}
+    shop_id = slot_patch.get("shop_id") or ui_action_snapshot.get("entity_id")
+    shop_name = slot_patch.get("shop_name") or slot_patch.get("store_name") or ui_action_snapshot.get("entity_label")
+    if shop_id in (None, "", [], {}) and shop_name in (None, "", [], {}):
+        return {}
+    selected = {
+        key: value
+        for key, value in {
+            "shop_id": shop_id,
+            "shop_name": shop_name,
+            "store_name": slot_patch.get("store_name") or shop_name,
+            "region": slot_patch.get("region"),
+            "selection_source": ui_action_snapshot.get("selection_source") or "ui_action",
+        }.items()
+        if value not in (None, "", [], {})
+    }
+    for key in (
+        "goods_no",
+        "product_name",
+        "tire_model",
+        "pending_product_name",
+        "tire_size",
+        "ord_qty",
+        "source_tool",
+        "schedule_mode",
+        "schedule_tier",
+        "inventory_mode",
+        "stock_check_mode",
+        "pending_intent",
+        "goal_type",
+        "payment_amount",
+        "payment_amount_source",
+        "price_basis",
+        "price_source_tool",
+    ):
+        if selected.get(key) in (None, "", [], {}) and slot_patch.get(key) not in (None, "", [], {}):
+            selected[key] = slot_patch[key]
+    return selected
 
 
 def _selected_quantity_from_slots(
@@ -1457,7 +1504,7 @@ def transition_current_flow(
     ui_action_snapshot = _ui_action_snapshot(ui_action)
     selected_product = _selected_product_from_ui_action(ui_action_snapshot)
     selected_quantity = _selected_quantity_from_ui_action(ui_action_snapshot)
-    selected_store = _selected_store_from_slots(
+    selected_store = _selected_store_from_ui_action(ui_action_snapshot) or _selected_store_from_slots(
         extracted_snapshot=extracted_snapshot,
         existing_snapshot=existing_snapshot,
         active_flow=active_flow,
@@ -2604,6 +2651,8 @@ def _purchase_size_candidates(rows: list[dict]) -> list[str]:
 def _purchase_product_label(slots: Mapping[str, Any]) -> str:
     product_name = str(slots.get("product_name") or slots.get("tire_model") or slots.get("pending_product_name") or "").strip()
     tire_size = normalize_tire_size(str(slots.get("tire_size") or ""))
+    if product_name and tire_size and normalize_tire_size(product_name) == tire_size:
+        return product_name
     return " ".join(part for part in (product_name, tire_size) if part)
 
 
@@ -2635,9 +2684,15 @@ def _purchase_fallback_quick_replies(flow_step: str) -> list[dict[str, str]]:
             {"label": "단골매장 보기", "domain": "TRANSACTION"},
         ]
     if flow_step == "ask_quantity":
+        # 수량 질문 chip 은 항상 canonical ["1개","2개","3개","4개"] 이어야 한다.
+        # (schemas._REQUIRED_QTY_CHIPS / base_agent._CANONICAL_QTY_CHIPS /
+        #  turn_contract._quantity_selection_quick_replies 와 동일한 rule.
+        #  이 fallback event 는 raw dict 로 emit 되어 QuickReplyTemplate
+        #  validator 를 거치지 않으므로 여기서 직접 canonical 을 보장한다.)
         return [
+            {"label": "1개", "domain": "TRANSACTION"},
             {"label": "2개", "domain": "TRANSACTION"},
+            {"label": "3개", "domain": "TRANSACTION"},
             {"label": "4개", "domain": "TRANSACTION"},
-            {"label": "수량 직접 입력", "domain": "TRANSACTION"},
         ]
     return []

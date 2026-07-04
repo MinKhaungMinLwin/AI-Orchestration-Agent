@@ -1219,5 +1219,3 @@ def build_product_coupon_eligibility_event(
         target_product_name=target_product_name,
         target_brand=target_brand,
     )
-
-

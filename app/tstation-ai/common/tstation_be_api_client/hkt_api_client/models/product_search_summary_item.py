@@ -10,6 +10,7 @@ from ..types import UNSET, Unset
 
 if TYPE_CHECKING:
     from ..models.product_search_summary_warranty import ProductSearchSummaryWarranty
+    from ..models.review_item import ReviewItem
 
 
 T = TypeVar("T", bound="ProductSearchSummaryItem")
@@ -54,6 +55,7 @@ class ProductSearchSummaryItem:
         slogan (None | str | Unset): 슬로건
         pc_prod_remark_desc (None | str | Unset): 특장점
         pc_prod_tech_desc (None | str | Unset): 기술력
+        reviews (list[ReviewItem] | Unset): 패턴 기준 평점 높은 대표 리뷰 최대 5개
         warranty (ProductSearchSummaryWarranty | Unset):
     """
 
@@ -92,6 +94,7 @@ class ProductSearchSummaryItem:
     slogan: None | str | Unset = UNSET
     pc_prod_remark_desc: None | str | Unset = UNSET
     pc_prod_tech_desc: None | str | Unset = UNSET
+    reviews: list[ReviewItem] | Unset = UNSET
     warranty: ProductSearchSummaryWarranty | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
@@ -276,6 +279,13 @@ class ProductSearchSummaryItem:
         else:
             pc_prod_tech_desc = self.pc_prod_tech_desc
 
+        reviews: list[dict[str, Any]] | Unset = UNSET
+        if not isinstance(self.reviews, Unset):
+            reviews = []
+            for reviews_item_data in self.reviews:
+                reviews_item = reviews_item_data.to_dict()
+                reviews.append(reviews_item)
+
         warranty: dict[str, Any] | Unset = UNSET
         if not isinstance(self.warranty, Unset):
             warranty = self.warranty.to_dict()
@@ -354,6 +364,8 @@ class ProductSearchSummaryItem:
             field_dict["pc_prod_remark_desc"] = pc_prod_remark_desc
         if pc_prod_tech_desc is not UNSET:
             field_dict["pc_prod_tech_desc"] = pc_prod_tech_desc
+        if reviews is not UNSET:
+            field_dict["reviews"] = reviews
         if warranty is not UNSET:
             field_dict["warranty"] = warranty
 
@@ -362,6 +374,7 @@ class ProductSearchSummaryItem:
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         from ..models.product_search_summary_warranty import ProductSearchSummaryWarranty
+        from ..models.review_item import ReviewItem
 
         d = dict(src_dict)
         ptrn_cd = d.pop("ptrn_cd")
@@ -623,6 +636,15 @@ class ProductSearchSummaryItem:
 
         pc_prod_tech_desc = _parse_pc_prod_tech_desc(d.pop("pc_prod_tech_desc", UNSET))
 
+        _reviews = d.pop("reviews", UNSET)
+        reviews: list[ReviewItem] | Unset = UNSET
+        if _reviews is not UNSET:
+            reviews = []
+            for reviews_item_data in _reviews:
+                reviews_item = ReviewItem.from_dict(reviews_item_data)
+
+                reviews.append(reviews_item)
+
         _warranty = d.pop("warranty", UNSET)
         warranty: ProductSearchSummaryWarranty | Unset
         if isinstance(_warranty, Unset):
@@ -666,6 +688,7 @@ class ProductSearchSummaryItem:
             slogan=slogan,
             pc_prod_remark_desc=pc_prod_remark_desc,
             pc_prod_tech_desc=pc_prod_tech_desc,
+            reviews=reviews,
             warranty=warranty,
         )
 
