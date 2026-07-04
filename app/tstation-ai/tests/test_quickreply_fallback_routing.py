@@ -14380,7 +14380,7 @@ def test_recover_contract_required_inventory_tool_runs_selected_store_contract(
         "shop_id_list": [{"shopId": "F00002"}],
     }
     assert recovery["event"]["template"] == "quickReply"
-    assert recovery["event"]["tool_input_source"] == "turn_contract_required_stock_inventory_selected_store"
+    assert recovery["event"]["tool_input_source"] == "flow_state_progress"
 
 
 def test_latest_router_evidence_uses_router_plan_without_execution_slots() -> None:
@@ -41802,6 +41802,101 @@ def test_base_agent_purchase_flow_tool_guard_replaces_forbidden_tool_with_schedu
     metadata = data_event["data"]["metadata"]
     assert metadata["contract_tool_blocked"] is True
     assert metadata["blocked_tool"] == "get_final_price_tool"
+    assert metadata["replacement_tool"] == "get_store_schedule_tool"
+
+
+def test_base_agent_purchase_flow_tool_guard_replaces_inventory_drift_with_schedule_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _DummyAgent(BaseAgent):
+        OUTPUT_TEMPLATE = None
+        TOOL_TO_AF_MAP: dict[str, str] = {}
+
+        def __init__(self) -> None:
+            self.name = "Transaction Agent"
+
+    from services.tstation.agents.c_transaction_agent import tools as transaction_tools
+
+    monkeypatch.setattr(
+        transaction_tools,
+        "get_store_schedule_tool",
+        SimpleNamespace(
+            invoke=lambda payload: {
+                "status": "success",
+                "data": {
+                    "shop_id": payload["shop_id"],
+                    "shop_nm": "T-Station Hannam",
+                    "mode": payload["mode"],
+                    "is_installable": True,
+                    "slots": [
+                        {"cal_day": "20260627", "tm": "0900"},
+                        {"cal_day": "20260627", "tm": "1000"},
+                    ],
+                },
+            }
+        ),
+    )
+
+    response_decision = ResponseDecision(
+        response_shape=ResponseShape.DATE_PICK,
+        template=TemplateName.DATE_PICK,
+        required_slots=("booking_datetime",),
+        metadata={
+            "response_shape_key": "reservation_slots",
+            "flow_id": "purchase_order",
+            "flow_step": "show_schedule",
+        },
+    )
+    tool_plan = ToolPlan(
+        allowed_tools=("get_store_schedule_tool", "get_multi_store_schedule_tool"),
+        preferred_tool="get_store_schedule_tool",
+        forbidden_tools=(
+            "get_final_price_tool",
+            "get_logistics_inventory_tool",
+            "get_store_inventory_tool",
+            "quick_order_tool",
+        ),
+        required_slots=("booking_datetime",),
+        tool_args_patch={"shop_id": "F00777"},
+        metadata={
+            "response_intent": "quick_order_reservation",
+            "flow_id": "purchase_order",
+            "flow_step": "show_schedule",
+            "flow_slots": {
+                "goods_no": "G000000309783",
+                "tire_size": "245/45R19",
+                "ord_qty": 2,
+                "shop_id": "F00777",
+                "shop_name": "T-Station Hannam",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            },
+        },
+    )
+    decision_token = current_transaction_response_decision.set(response_decision)
+    tool_plan_token = current_transaction_tool_plan.set(tool_plan)
+    try:
+        agent = _DummyAgent()
+        events = agent._contract_sensitive_tool_guard_events(
+            "get_store_inventory_tool",
+            [{"role": "user", "content": "continue purchase with selected store"}],
+            config=None,
+            response_streamer=None,
+            answering_emitted=False,
+        )
+    finally:
+        current_transaction_response_decision.reset(decision_token)
+        current_transaction_tool_plan.reset(tool_plan_token)
+
+    assert events is not None
+    tool_event = next(event for event in events if event.get("type") == "tool")
+    assert tool_event["tool"] == "get_store_schedule_tool"
+    assert tool_event["input"] == {"shop_id": "F00777", "mode": "in_store_logistics_combined"}
+    data_event = next(event for event in events if event.get("type") == "data")
+    assert data_event["template"] == "datepick"
+    metadata = data_event["data"]["metadata"]
+    assert metadata["contract_tool_blocked"] is True
+    assert metadata["blocked_tool"] == "get_store_inventory_tool"
     assert metadata["replacement_tool"] == "get_store_schedule_tool"
 
 
