@@ -55,12 +55,12 @@ def summarize_tool(name: str, result: Any) -> str:
     Falls back to ``status=<value>`` for tools without a dedicated summary —
     which is still more useful in the trace tree than the raw JSON preview.
     """
-    if name in ("search_product_tool", "get_products_recommendations_tool"):
+    if name in ("search_product_summary_tool", "search_product_tool", "get_products_recommendations_tool"):
         items = _items(result)
         if not items:
             return "0 hits"
         first = items[0] if isinstance(items[0], dict) else {}
-        head = first.get("goodsNo") or first.get("goods_no") or first.get("name", "")
+        head = first.get("goodsNo") or first.get("goods_no") or first.get("goods_nm") or first.get("name", "")
         return f"{len(items)} hits → {head}" if head else f"{len(items)} hits"
 
     if name == "get_final_price_tool":

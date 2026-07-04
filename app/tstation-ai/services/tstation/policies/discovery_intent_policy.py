@@ -1349,6 +1349,7 @@ def build_discovery_intent_frame(
 
 def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
     entities = frame.entities
+    tire_size = entities.get("tire_size")
     if frame.sub_intent == "vehicle_information":
         return ToolPlan(
             allowed_tools=("get_my_cars_tool",),
@@ -1512,6 +1513,14 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
         args = {"keyword": (entities.get("product_names") or ("",))[0]}
         if entities.get("brand_cd"):
             args["brand_cd"] = entities["brand_cd"]
+        if not tire_size:
+            return ToolPlan(
+                allowed_tools=("search_product_summary_tool",),
+                preferred_tool="search_product_summary_tool",
+                tool_args_patch=args,
+                forbidden_tools=("get_products_recommendations_tool", "generic_unsized_recommendation"),
+            )
+        args["size"] = tire_size
         return ToolPlan(
             allowed_tools=("search_product_tool",),
             preferred_tool="search_product_tool",
@@ -1528,6 +1537,23 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
         )
     if frame.intent == "product_description":
         product_names = entities.get("product_names") or ()
+        args = {"keyword": (product_names or ("",))[0]}
+        if entities.get("brand_cd"):
+            args["brand_cd"] = entities["brand_cd"]
+        if not tire_size:
+            if len(product_names) >= 2:
+                return ToolPlan(
+                    allowed_tools=("search_product_summary_tool",),
+                    preferred_tool="search_product_summary_tool",
+                    forbidden_tools=("get_products_recommendations_tool", "search_product_tool"),
+                    metadata={"response_intent": "multi_product_detail"},
+                )
+            return ToolPlan(
+                allowed_tools=("search_product_summary_tool",),
+                preferred_tool="search_product_summary_tool",
+                tool_args_patch=args,
+                forbidden_tools=("get_products_recommendations_tool", "search_product_tool"),
+            )
         if len(product_names) >= 2:
             return ToolPlan(
                 allowed_tools=("search_product_tool",),
@@ -1535,9 +1561,7 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
                 forbidden_tools=("get_products_recommendations_tool",),
                 metadata={"response_intent": "multi_product_detail"},
             )
-        args = {"keyword": (product_names or ("",))[0]}
-        if entities.get("brand_cd"):
-            args["brand_cd"] = entities["brand_cd"]
+        args["size"] = tire_size
         return ToolPlan(
             allowed_tools=("search_product_tool", "get_product_description_tool"),
             preferred_tool="search_product_tool",
@@ -1554,6 +1578,29 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
                 args["size"] = entities["tire_size"]
             if entities.get("brand_cd"):
                 args["brand_cd"] = entities["brand_cd"]
+            return ToolPlan(
+                allowed_tools=("search_product_tool", "get_product_description_tool", "get_cheapest_price_tool"),
+                preferred_tool="search_product_tool",
+                tool_args_patch=args,
+                forbidden_tools=("get_products_recommendations_tool", "product_card_first_response"),
+            )
+        product_names = entities.get("product_names") or ()
+        if not tire_size and product_names:
+            summary_args = {"keyword": product_names[0]}
+            if entities.get("brand_cd"):
+                summary_args["brand_cd"] = entities["brand_cd"]
+            is_multi_product_summary = len(product_names) >= 2
+            return ToolPlan(
+                allowed_tools=("search_product_summary_tool", "get_product_description_tool"),
+                preferred_tool="search_product_summary_tool",
+                tool_args_patch={} if is_multi_product_summary else summary_args,
+                forbidden_tools=(
+                    "get_products_recommendations_tool",
+                    "product_card_first_response",
+                    "search_product_tool",
+                ),
+                metadata={"response_intent": "multi_product_detail"} if is_multi_product_summary else {},
+            )
         return ToolPlan(
             allowed_tools=("search_product_tool", "get_product_description_tool", "get_cheapest_price_tool"),
             preferred_tool="search_product_tool",

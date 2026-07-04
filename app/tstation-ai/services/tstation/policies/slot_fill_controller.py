@@ -11,8 +11,35 @@ from typing import Any, Mapping
 
 from schemas.tstation.slots import ConversationSlots
 from services.tstation.policies.flow_controller import resolve_purchase_order_flow
+from services.tstation.policies.price_basis_policy import PRICE_BASIS_FIELDS
 from services.tstation.policies.resolved_context import canonical_context_from_template_boundary
 from services.tstation.policies.slot_fill_policy import expected_slot_fill_precheck
+
+_PURCHASE_RECONCILIATION_SLOT_FIELDS = (
+    "goods_no",
+    "tire_size",
+    "tire_model",
+    "product_name",
+    "pending_product_name",
+    "ord_qty",
+    "quantity",
+    "shop_id",
+    "shop_name",
+    "store_name",
+    "region",
+    "requested_cal_day",
+    "rsv_hour",
+    "payment_amount",
+    "price_basis",
+    "price_source_tool",
+    "payment_amount_source",
+    "source_tool",
+    "stock_check_mode",
+    "schedule_mode",
+    "schedule_tier",
+    "inventory_mode",
+    *PRICE_BASIS_FIELDS,
+)
 
 
 @dataclass(frozen=True)
@@ -440,11 +467,18 @@ def _flow_state_reconciliation(
             parent_purchase_context = context
             break
 
+    active_flow_context = (
+        availability_context.get("active_flow_context")
+        if isinstance(availability_context, Mapping) and isinstance(availability_context.get("active_flow_context"), Mapping)
+        else {}
+    )
+    active_purchase_context = _active_purchase_context(active_flow_context)
+
     top_level_purchase_context = bool(
         getattr(merged_slots, "pending_intent", None) in {"order", "reservation", "cart"}
         or getattr(merged_slots, "goal_type", None) in {"place_order", "add_to_cart"}
     )
-    if not parent_purchase_context and not top_level_purchase_context:
+    if not parent_purchase_context and not active_purchase_context and not top_level_purchase_context:
         return {}
 
     purchase_slots: dict[str, Any] = {}
@@ -454,21 +488,9 @@ def _flow_state_reconciliation(
             for key, value in dict(parent_purchase_context).items()
             if value not in (None, "", [], {})
         })
-    for key in (
-        "goods_no",
-        "tire_size",
-        "ord_qty",
-        "quantity",
-        "shop_id",
-        "shop_name",
-        "store_name",
-        "region",
-        "payment_amount",
-        "price_basis",
-        "price_source_tool",
-        "requested_cal_day",
-        "rsv_hour",
-    ):
+    if active_purchase_context:
+        purchase_slots.update(active_purchase_context)
+    for key in _PURCHASE_RECONCILIATION_SLOT_FIELDS:
         value = getattr(merged_slots, key, None)
         if value not in (None, "", [], {}):
             purchase_slots[key] = value
@@ -503,11 +525,44 @@ def _flow_state_reconciliation(
         "missing_slots": list(flow_state.missing_slots),
         "preferred_tool": flow_state.preferred_tool,
         "allowed_tools": list(flow_state.allowed_tools),
-        "slot_patch": {
-            "pending_intent": purchase_slots["pending_intent"],
-            "goal_type": purchase_slots["goal_type"],
-        },
+        "slot_patch": _purchase_reconciliation_slot_patch(purchase_slots),
         "source": "flow_state_after_slot_patch",
         "filled_slot": filled_slot,
         "user_text": user_text,
     }
+
+def _active_purchase_context(active_flow_context: Mapping[str, Any]) -> dict[str, Any]:
+    intent = active_flow_context.get("intent") if isinstance(active_flow_context.get("intent"), Mapping) else {}
+    flow_type = str(active_flow_context.get("flow_type") or "").strip()
+    pending_intent = str(intent.get("pending_intent") or active_flow_context.get("pending_intent") or "").strip()
+    goal_type = str(intent.get("goal_type") or active_flow_context.get("goal_type") or "").strip()
+    if flow_type not in {"purchase", "cart"} and pending_intent not in {"order", "cart"} and goal_type not in {
+        "place_order",
+        "add_to_cart",
+    }:
+        return {}
+
+    values: dict[str, Any] = {}
+    for source in (
+        active_flow_context,
+        intent,
+        active_flow_context.get("product") if isinstance(active_flow_context.get("product"), Mapping) else {},
+        active_flow_context.get("quantity") if isinstance(active_flow_context.get("quantity"), Mapping) else {},
+        active_flow_context.get("store") if isinstance(active_flow_context.get("store"), Mapping) else {},
+        active_flow_context.get("schedule") if isinstance(active_flow_context.get("schedule"), Mapping) else {},
+        active_flow_context.get("payment") if isinstance(active_flow_context.get("payment"), Mapping) else {},
+    ):
+        values.update(_purchase_reconciliation_slot_patch(source))
+    return values
+
+def _purchase_reconciliation_slot_patch(slots: Mapping[str, Any]) -> dict[str, Any]:
+    patch = {
+        key: value
+        for key in _PURCHASE_RECONCILIATION_SLOT_FIELDS
+        if (value := slots.get(key)) not in (None, "", [], {})
+    }
+    pending_intent = str(slots.get("pending_intent") or "").strip()
+    goal_type = str(slots.get("goal_type") or "").strip()
+    patch["pending_intent"] = "cart" if pending_intent == "cart" else "order"
+    patch["goal_type"] = "add_to_cart" if goal_type == "add_to_cart" else "place_order"
+    return patch

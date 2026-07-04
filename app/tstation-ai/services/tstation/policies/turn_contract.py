@@ -13,7 +13,7 @@ from services.tstation.policies.discovery_intent_policy import (
     has_registered_vehicle_ownership_signal,
     is_best_seller_request,
 )
-from services.tstation.policies.flow_controller import build_purchase_flow_fallback_event
+from services.tstation.policies.flow_controller import build_purchase_flow_fallback_event, resolve_purchase_order_flow
 from services.tstation.policies.intent_frame import IntentFrame
 from services.tstation.policies.price_basis_policy import has_price_basis
 from services.tstation.policies.preorder_event_builder import build_preorder_event
@@ -92,6 +92,7 @@ _DISCOVERY_FIRST_LEG_BLOCK_SOURCES = frozenset({
     "discovery_policy",
 })
 _DISCOVERY_PRODUCT_SOURCE_TOOLS = frozenset({
+    "search_product_summary_tool",
     "search_product_tool",
     "get_products_recommendations_tool",
     "get_best_selling_products_tool",
@@ -705,6 +706,20 @@ def _drop_interrupted_slot_fill_values(
         for key in ("requested_cal_day", "rsv_hour", "booking_datetime"):
             sanitized.pop(key, None)
     return sanitized
+
+def _has_comparison_product_scope(known_slots: Mapping[str, Any]) -> bool:
+    comparison_context = known_slots.get("comparison_context")
+    if hasattr(comparison_context, "model_dump"):
+        comparison_context = comparison_context.model_dump(exclude_none=True)
+    if not isinstance(comparison_context, Mapping):
+        return False
+    product_names = comparison_context.get("product_names") or comparison_context.get("productNames")
+    if isinstance(product_names, (list, tuple)):
+        return len([name for name in product_names if str(name or "").strip()]) >= 2
+    product_candidates = comparison_context.get("product_candidates") or comparison_context.get("candidates")
+    if isinstance(product_candidates, list):
+        return len([candidate for candidate in product_candidates if isinstance(candidate, Mapping)]) >= 2
+    return False
 
 def build_turn_contract(
     *,
@@ -1542,6 +1557,39 @@ def build_turn_contract(
             ),
         )
 
+    comparison_purchase_flow_state = None
+    if (
+        action_mode == "purchase_continuation"
+        and intent in {
+            "product_recommendation",
+            "sized_product_recommendation",
+            "product_search",
+            "resolve_or_describe_product",
+            "resolve_product_for_purchase_size_selection",
+        }
+        and _has_comparison_product_scope(known_slots)
+        and not known_slots.get("goods_no")
+    ):
+        comparison_purchase_flow_state = resolve_purchase_order_flow(
+            intent="quick_order_reservation",
+            known_slots=known_slots,
+        )
+    if comparison_purchase_flow_state is not None:
+        domain = "transaction"
+        intent = "quick_order_reservation"
+        sub_intent = None
+        required_slots = comparison_purchase_flow_state.required_slots
+        resolvable_required_slots = ()
+        blocking_required_slots = ()
+        blocking_required_slots_source = "none"
+        allowed_tools = comparison_purchase_flow_state.allowed_tools
+        forbidden_tools = comparison_purchase_flow_state.forbidden_tools
+        preferred_tool = comparison_purchase_flow_state.preferred_tool or ""
+        tool_args_patch = dict(comparison_purchase_flow_state.slot_patch)
+        flow_id = comparison_purchase_flow_state.flow_id
+        flow_step = comparison_purchase_flow_state.flow_step
+        known_slots.update(dict(comparison_purchase_flow_state.slot_patch))
+
     drift = _contract_drift(
         code_domain=code_domain,
         code_intent=code_intent,
@@ -1572,6 +1620,19 @@ def build_turn_contract(
     ).to_dict()
 
     response_decision_payload = response_decision.to_dict() if response_decision is not None else None
+    if comparison_purchase_flow_state is not None:
+        response_decision_payload = {
+            "response_shape": "clarify",
+            "template": comparison_purchase_flow_state.template.value,
+            "required_slots": list(comparison_purchase_flow_state.required_slots),
+            "forbidden_behaviors": ["broad_product_recommendation", "unscoped_product_search"],
+            "assistant_guidance": "비교한 상품 후보 안에서 구매할 상품 선택만 요청한다.",
+            "metadata": {
+                "response_shape_key": comparison_purchase_flow_state.response_shape_key,
+                "flow_id": comparison_purchase_flow_state.flow_id,
+                "flow_step": comparison_purchase_flow_state.flow_step,
+            },
+        }
     if selected_store_schedule_continuation and _selected_store_schedule_response_decision_mismatch(
         response_decision_payload
     ):
@@ -5344,20 +5405,27 @@ def _router_wins_tool_boundary(intent: str) -> tuple[tuple[str, ...], tuple[str,
         )
     if intent in {"product_detail_lookup", "product_description"}:
         return (
-            ("search_product_tool", "get_product_description_tool"),
+            ("search_product_summary_tool", "get_product_description_tool"),
             tuple(
                 tool
-                for tool in _ROUTER_WINS_TRANSACTION_FORBIDDEN_TOOLS | {"get_products_recommendations_tool"}
-                if tool not in {"search_product_tool", "get_product_description_tool"}
+                for tool in _ROUTER_WINS_TRANSACTION_FORBIDDEN_TOOLS
+                | {"get_products_recommendations_tool", "search_product_tool"}
+                if tool not in {"search_product_summary_tool", "get_product_description_tool"}
             ),
         )
     if intent == "product_comparison":
         return (
-            ("search_product_tool", "get_product_description_tool", "get_cheapest_price_tool"),
+            ("search_product_summary_tool", "get_product_description_tool", "get_cheapest_price_tool"),
             tuple(
                 tool
-                for tool in _ROUTER_WINS_TRANSACTION_FORBIDDEN_TOOLS | {"get_products_recommendations_tool"}
-                if tool not in {"search_product_tool", "get_product_description_tool", "get_cheapest_price_tool"}
+                for tool in _ROUTER_WINS_TRANSACTION_FORBIDDEN_TOOLS
+                | {"get_products_recommendations_tool", "search_product_tool"}
+                if tool
+                not in {
+                    "search_product_summary_tool",
+                    "get_product_description_tool",
+                    "get_cheapest_price_tool",
+                }
             ),
         )
     if intent == "competitor_counterpart_guidance":

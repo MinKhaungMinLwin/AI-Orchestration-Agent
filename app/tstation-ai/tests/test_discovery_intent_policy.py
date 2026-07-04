@@ -444,7 +444,7 @@ def test_tc016_winter_concept_then_recommendation_preserves_winter_condition() -
     assert plan.tool_args_patch == {"rcmd_type": "snow", "season_nm": "겨울"}
 
 
-def test_tc017_product_noise_label_lookup_uses_product_search() -> None:
+def test_tc017_product_noise_label_lookup_uses_product_summary_search() -> None:
     frame = build_discovery_intent_frame("키너지 EX 소음등급은 어떤거고?")
     plan = plan_discovery_tools(frame)
 
@@ -453,7 +453,7 @@ def test_tc017_product_noise_label_lookup_uses_product_search() -> None:
     assert frame.entities["label_metric"] == "noise"
     assert frame.entities["attribute_metrics"] == ("noise",)
     assert frame.entities["product_names"] == ("Kinergy EX",)
-    assert plan.preferred_tool == "search_product_tool"
+    assert plan.preferred_tool == "search_product_summary_tool"
     assert plan.tool_args_patch == {"keyword": "Kinergy EX", "brand_cd": "HK"}
     assert "get_products_recommendations_tool" in plan.forbidden_tools
 
@@ -553,8 +553,32 @@ def test_product_attribute_lookup_supports_non_noise_fields() -> None:
     assert frame.intent == "product_description"
     assert frame.sub_intent == "product_attribute_lookup"
     assert frame.entities["attribute_metrics"] == ("fuel_efficiency", "origin")
-    assert plan.preferred_tool == "search_product_tool"
+    assert plan.preferred_tool == "search_product_summary_tool"
     assert plan.tool_args_patch == {"keyword": "Kinergy EX", "brand_cd": "HK"}
+
+
+def test_unsized_product_description_uses_product_summary_tool() -> None:
+    frame = build_discovery_intent_frame("벤투스 S2 AS 설명해줘")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.intent == "product_description"
+    assert frame.entities["product_names"] == ("Ventus S2 AS",)
+    assert frame.entities["tire_size"] is None
+    assert plan.preferred_tool == "search_product_summary_tool"
+    assert plan.tool_args_patch == {"keyword": "Ventus S2 AS", "brand_cd": "HK"}
+    assert "search_product_tool" in plan.forbidden_tools
+
+
+def test_unsized_product_comparison_uses_product_summary_tool() -> None:
+    frame = build_discovery_intent_frame("키너지 EX랑 벤투스 S2 AS 비교해줘")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.intent == "product_comparison"
+    assert frame.entities["product_names"] == ("Kinergy EX", "Ventus S2 AS")
+    assert frame.entities["tire_size"] is None
+    assert plan.preferred_tool == "search_product_summary_tool"
+    assert plan.tool_args_patch == {}
+    assert "search_product_tool" in plan.forbidden_tools
 
 
 def test_tc021_product_mileage_compare_uses_metric_not_card_first() -> None:
@@ -565,7 +589,9 @@ def test_tc021_product_mileage_compare_uses_metric_not_card_first() -> None:
     assert frame.sub_intent == "mileage_compare"
     assert frame.entities["compare_metric"] == "mileage"
     assert frame.entities["product_names"] == ("Ventus air S", "Dynapro HPX", "Optimo", "Michelin CC2")
-    assert plan.preferred_tool == "search_product_tool"
+    assert plan.preferred_tool == "search_product_summary_tool"
+    assert plan.tool_args_patch == {}
+    assert "search_product_tool" in plan.forbidden_tools
 
 
 def test_tc037_sound_absorber_with_size_maps_to_technology_filter() -> None:
@@ -682,8 +708,9 @@ def test_brand_hint_is_preserved_for_vehicle_recommendation() -> None:
 
     assert frame.intent == "product_recommendation"
     assert frame.entities["brand_cd"] == "MC"
-    assert plan.preferred_tool == "get_products_recommendations_tool"
+    assert plan.preferred_tool == "get_my_cars_tool"
     assert plan.tool_args_patch["brand_cd"] == "MC"
+    assert plan.metadata["recommendation_expected_tool_args"]["brand_cd"] == "MC"
 
 
 def test_multi_brand_recommendation_extracts_brand_codes_and_variants() -> None:
@@ -752,7 +779,9 @@ def test_tc026_latest_compare_uses_registration_metric() -> None:
     assert frame.sub_intent == "latest_compare"
     assert frame.entities["compare_metric"] == "release"
     assert frame.entities["product_names"] == ("Dynapro HPX", "Dynapro HP3")
-    assert plan.preferred_tool == "search_product_tool"
+    assert plan.preferred_tool == "search_product_summary_tool"
+    assert plan.tool_args_patch == {}
+    assert "search_product_tool" in plan.forbidden_tools
 
 
 def test_two_product_description_request_stays_description_flow() -> None:
@@ -774,8 +803,9 @@ def test_two_product_comparison_request_stays_comparison_flow() -> None:
     assert frame.intent == "product_comparison"
     assert frame.sub_intent == "general_compare"
     assert "multi_product_description_request" not in frame.entities
-    assert plan.preferred_tool == "search_product_tool"
+    assert plan.preferred_tool == "search_product_summary_tool"
     assert "get_products_recommendations_tool" in plan.forbidden_tools
+    assert "search_product_tool" in plan.forbidden_tools
 
 
 def test_weatherflex_gt_and_kinergy_4s2_compare_uses_product_comparison() -> None:
@@ -785,7 +815,8 @@ def test_weatherflex_gt_and_kinergy_4s2_compare_uses_product_comparison() -> Non
     assert frame.intent == "product_comparison"
     assert frame.sub_intent == "general_compare"
     assert frame.entities["product_names"] == ("웨더플렉스 GT", "키너지 4S2")
-    assert plan.preferred_tool == "search_product_tool"
+    assert plan.preferred_tool == "search_product_summary_tool"
+    assert "search_product_tool" in plan.forbidden_tools
 
 
 def test_tc032_product_fuel_efficiency_compare_uses_attribute_compare() -> None:
@@ -796,7 +827,8 @@ def test_tc032_product_fuel_efficiency_compare_uses_attribute_compare() -> None:
     assert frame.sub_intent == "attribute_compare"
     assert frame.entities["compare_metric"] == "fuel_efficiency"
     assert frame.entities["attribute_metrics"] == ("fuel_efficiency",)
-    assert plan.preferred_tool == "search_product_tool"
+    assert plan.preferred_tool == "search_product_summary_tool"
+    assert "search_product_tool" in plan.forbidden_tools
 
 
 def test_mileage_attribute_recommendation_remains_attribute_recommendation() -> None:
