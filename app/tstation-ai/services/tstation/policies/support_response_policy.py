@@ -148,6 +148,374 @@ def is_post_install_quality_claim(user_text: str | None) -> bool:
     return _POST_INSTALL_CONCERN_RE.search(text) is not None and _POST_INSTALL_CLAIM_ACTION_RE.search(text) is not None
 
 
+def _unwrap_tool_data(payload: Any) -> dict:
+    if not isinstance(payload, dict):
+        return {}
+    data = payload.get("data")
+    if isinstance(data, dict) and isinstance(data.get("data"), dict):
+        return data["data"]
+    if isinstance(data, dict):
+        return data
+    return payload
+
+
+def _format_maintenance_dday_item(item: dict) -> str:
+    kind = str(item.get("kind_nm") or "").strip()
+    exp_dt = str(item.get("exp_dt") or "").strip()
+    dday = item.get("dday")
+    status = str(item.get("status") or "").strip()
+    if status == "expired":
+        dday_text = f"D+{abs(int(dday or 0))}, 만기 경과"
+        prefix = "🔴 "
+    elif status == "upcoming":
+        dday_text = f"D-{abs(int(dday or 0))}, 만기 임박"
+        prefix = "🟡 "
+    else:
+        dday_text = f"D-{abs(int(dday or 0))}" if dday is not None else ""
+        prefix = ""
+    suffix = f" ({dday_text})" if dday_text else ""
+    return f"{prefix}{kind}: {exp_dt}{suffix}".strip()
+
+
+def requested_maintenance_focus(user_query: str) -> tuple[str, tuple[str, ...], str] | None:
+    text = str(user_query or "")
+    focus_rules = [
+        ("타이어 교체", (r"타이어",), "교체"),
+        ("엔진오일 교체", (r"엔진오일",), "교체"),
+        ("실내필터 교체", (r"실내필터|에어컨\s*필터|캐빈\s*필터",), "교체"),
+        ("와이퍼 교체", (r"와이퍼",), "교체"),
+        ("배터리 교체", (r"배터리",), "교체"),
+        ("얼라인먼트 점검", (r"얼라인먼트",), "점검"),
+        ("all my T 점검", (r"all\s*my\s*T|무상점검",), "점검"),
+    ]
+    for label, patterns, action in focus_rules:
+        if any(re.search(pattern, text, re.IGNORECASE) for pattern in patterns):
+            return label, patterns, action
+    return None
+
+
+def _build_maintenance_focus_response(car_name: str, items: list[dict], user_query: str) -> str | None:
+    focus = requested_maintenance_focus(user_query)
+    if focus is None:
+        return None
+
+    label, patterns, action = focus
+    matched_item = next(
+        (
+            item
+            for item in items
+            if isinstance(item, dict)
+            and any(re.search(pattern, str(item.get("kind_nm") or ""), re.IGNORECASE) for pattern in patterns)
+            and str(item.get("exp_dt") or "").strip()
+        ),
+        None,
+    )
+    if matched_item is None:
+        return None
+
+    exp_dt = str(matched_item.get("exp_dt") or "").strip()
+    return (
+        f"{car_name}의 {label} 일정은 지난 교체일 기준 {exp_dt}에 {action}하는 것을 권장 드려요. "
+        "정확한 진단은 매장에서 받아 보실 수 있어요 😊"
+    )
+
+
+def build_maintenance_dday_event(tool_result: dict, selected_vehicle: dict, user_query: str) -> dict:
+    data = tool_result.get("data") if isinstance(tool_result, dict) else {}
+    if isinstance(data, dict) and isinstance(data.get("data"), dict):
+        data = data["data"]
+    cars = data.get("cars") if isinstance(data, dict) else []
+    car_rows = [row for row in cars or [] if isinstance(row, dict)]
+    selected_meta = selected_vehicle.get("meta") or {}
+    selected_car = selected_vehicle.get("car") or {}
+    selected_seq = str(selected_meta.get("mbrCarRegSeq") or "")
+    if selected_seq:
+        filtered = [row for row in car_rows if str(row.get("mbr_car_reg_seq") or "") == selected_seq]
+        if filtered:
+            car_rows = filtered
+    if not car_rows:
+        response = "선택하신 차량의 정비 일정을 확인하지 못했어요. 정비이력 페이지에서 다시 확인해 주세요."
+    else:
+        lines: list[str] = []
+        for car_row in car_rows:
+            name = str(car_row.get("car_nm") or selected_car.get("info") or "선택하신 차량").strip()
+            focus_response = _build_maintenance_focus_response(name, car_row.get("items") or [], user_query)
+            if focus_response:
+                response = focus_response
+                break
+            lines.append(name)
+            for item in (car_row.get("items") or [])[:7]:
+                if isinstance(item, dict):
+                    lines.append(_format_maintenance_dday_item(item))
+            lines.append("")
+        else:
+            lines.append("정비 시기는 차량 등록일·운행 환경에 따라 차이가 있을 수 있어요. 정확한 진단은 매장에서 받아 보실 수 있어요 😊")
+            response = "\n".join(lines).strip()
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "support",
+        "assistant_response_source": "code_vehicle_auto_select",
+        "data": {
+            "assistantResponse": response,
+            "quickReplies": [
+                {"label": "all my T 점검", "url": CTAUrls.MEMBERSHIP_DASHBOARD, "domain": "SUPPORT"},
+                {"label": "매장 예약", "domain": "TRANSACTION"},
+                {"label": "타이어 추천 받기", "domain": "DISCOVERY"},
+            ],
+            "predictedDomains": ["SUPPORT", "TRANSACTION", "DISCOVERY"],
+        },
+    }
+
+
+def is_maintenance_history_lookup_query(user_text: str | None) -> bool:
+    text = user_text or ""
+    return bool(_MAINTENANCE_HISTORY_LOOKUP_RE.search(text) and not is_maintenance_history_access_policy_query(text))
+
+
+def is_maintenance_history_access_policy_query(user_text: str | None) -> bool:
+    return bool(_MAINTENANCE_HISTORY_ACCESS_POLICY_RE.search(user_text or ""))
+
+
+def _requested_maintenance_history_item(user_text: str | None) -> tuple[str, tuple[str, ...]] | None:
+    text = user_text or ""
+    for label, patterns in _MAINTENANCE_HISTORY_SERVICE_RULES:
+        if any(re.search(pattern, text, re.IGNORECASE) for pattern in patterns):
+            return label, patterns
+    return None
+
+
+def _maintenance_history_items(tool_result: dict) -> list[dict]:
+    data = _unwrap_tool_data(tool_result)
+    raw_items = data.get("items") or data.get("histories") or data.get("maintenance_history") or []
+    if isinstance(raw_items, dict):
+        raw_items = raw_items.get("items") or raw_items.get("list") or []
+    if not isinstance(raw_items, list):
+        return []
+    return [item for item in raw_items if isinstance(item, dict)]
+
+
+def _maintenance_history_text(item: dict) -> str:
+    values = [
+        item.get("car_svc_info"),
+        item.get("item_nm"),
+        item.get("svc_nm"),
+        item.get("service_nm"),
+        item.get("svc_tp"),
+        item.get("goods_nm"),
+    ]
+    return " ".join(str(value or "") for value in values)
+
+
+def _maintenance_history_matches_item(item: dict, patterns: tuple[str, ...]) -> bool:
+    haystack = _maintenance_history_text(item)
+    return any(re.search(pattern, haystack, re.IGNORECASE) for pattern in patterns)
+
+
+def _maintenance_history_field(item: dict, *keys: str) -> str:
+    for key in keys:
+        value = str(item.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _format_maintenance_history_row(item: dict) -> str:
+    date = _maintenance_history_field(item, "car_svc_dt", "svc_dt", "service_dt", "ord_dt", "date")
+    shop = _maintenance_history_field(item, "shop_nm", "store_nm", "shop_name")
+    service = _maintenance_history_field(item, "car_svc_info", "item_nm", "svc_nm", "service_nm", "svc_tp")
+    qty = _maintenance_history_field(item, "car_svc_qty", "qty", "quantity")
+    parts = [part for part in (date, shop, service) if part]
+    if qty:
+        parts.append(f"{qty}개")
+    return " / ".join(parts) if parts else "정비 이력 항목"
+
+
+def build_maintenance_history_event(tool_result: dict, user_query: str) -> dict:
+    items = _maintenance_history_items(tool_result)
+    focus = _requested_maintenance_history_item(user_query)
+    rows = items
+    if focus is not None:
+        _label, patterns = focus
+        matched_rows = [item for item in items if _maintenance_history_matches_item(item, patterns)]
+        rows = matched_rows
+
+    if tool_result.get("status") == "error":
+        assistant_response = "정비이력 조회 중 오류가 발생했어요. 잠시 후 다시 시도하거나 정비이력 페이지에서 확인해 주세요."
+    elif not items:
+        assistant_response = "최근 5년 내 확인되는 정비이력이 없어요.\n\n자세한 내용은 정비이력 페이지에서 확인할 수 있어요."
+    elif focus is not None and not rows:
+        label = focus[0]
+        assistant_response = (
+            f"최근 정비이력에서 {label} 항목은 확인되지 않아요.\n\n"
+            "전체 정비이력은 정비이력 페이지에서 직접 확인할 수 있어요."
+        )
+    elif focus is not None:
+        label = focus[0]
+        top = rows[0]
+        assistant_response = (
+            f"최근 {label} 이력은 다음과 같이 확인돼요.\n"
+            f"• {_format_maintenance_history_row(top)}\n\n"
+            "자세한 내용은 정비이력 페이지에서 확인할 수 있어요."
+        )
+    else:
+        lines = ["최근 정비이력은 다음과 같이 확인돼요."]
+        lines.extend(f"• {_format_maintenance_history_row(item)}" for item in rows[:5])
+        lines.append("")
+        lines.append("자세한 내용은 정비이력 페이지에서 확인할 수 있어요.")
+        assistant_response = "\n".join(lines).strip()
+
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "transaction",
+        "assistant_response_source": "code_maintenance_history_lookup",
+        "data": {
+            "assistantResponse": assistant_response,
+            "quickReplies": [
+                {"label": "정비이력보기", "url": CTAUrls.STORE_SERVICE_HISTORY, "domain": "SUPPORT"},
+                {"label": "내 주문 조회", "domain": "TRANSACTION"},
+                {"label": "다른 정비 문의", "domain": "SUPPORT"},
+            ],
+            "predictedDomains": ["TRANSACTION", "SUPPORT"],
+            "metadata": {
+                "responseShapeKey": "maintenance_history_lookup",
+                "requestedServiceItem": focus[0] if focus else None,
+            },
+        },
+    }
+
+
+def build_maintenance_history_access_policy_event(user_query: str) -> dict:
+    assistant_response = (
+        "티스테이션 매장에서는 고객/차량 정보 기준으로 정비·서비스 이력 확인이 가능할 수 있어요.\n\n"
+        "다른 지역 매장에 방문하더라도 차량번호나 예약자 정보로 확인을 요청해 주세요. "
+        "다만 매장 시스템 권한이나 이력 종류에 따라 확인 범위가 달라질 수 있어요.\n\n"
+        "상세 이력은 마이페이지 > 매장서비스 내역에서도 확인할 수 있어요."
+    )
+    if re.search(r"아무\s*(?:티스테이션\s*)?(?:매장|지점)|다른\s*(?:지역|매장|지점)|이사", user_query, re.IGNORECASE):
+        assistant_response = (
+            "이사 후 다른 지역 티스테이션 매장에 방문해도 고객/차량 정보 기준으로 정비·서비스 이력 확인을 요청할 수 있어요.\n\n"
+            "방문 시 차량번호나 예약자 정보를 알려주시면 매장에서 확인을 도와드릴 수 있고, "
+            "시스템 권한이나 이력 종류에 따라 확인 범위는 달라질 수 있어요.\n\n"
+            "상세 이력은 마이페이지 > 매장서비스 내역에서도 확인할 수 있어요."
+        )
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "support",
+        "assistant_response_source": "code_maintenance_history_access_policy",
+        "data": {
+            "assistantResponse": assistant_response,
+            "quickReplies": [
+                {"label": "매장서비스 내역", "url": CTAUrls.STORE_SERVICE_HISTORY, "domain": "SUPPORT"},
+                {"label": "가까운 매장 찾기", "domain": "TRANSACTION"},
+                {"label": "정비이력 조회", "domain": "TRANSACTION"},
+            ],
+            "predictedDomains": ["SUPPORT", "TRANSACTION"],
+            "metadata": {
+                "responseShapeKey": "maintenance_history_access_policy",
+                "maintenanceHistoryAccessPolicy": True,
+            },
+        },
+    }
+
+def build_partner_member_coupon_policy_event(user_query: str) -> dict:
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "support",
+        "assistant_response_source": "code_partner_member_coupon_policy",
+        "data": {
+            "assistantResponse": (
+                "제휴회원 전용 쿠폰은 일반 쿠폰함 조회와는 다른 경로로 운영될 수 있어요.\n\n"
+                "보통은 제휴사 전용 URL 또는 복지몰/임직원몰 같은 제휴 전용 경로로 접속해야 확인 가능하고, "
+                "제휴 기간과 제휴사별 제공 쿠폰·사용 조건도 달라질 수 있어요."
+            ),
+            "quickReplies": [
+                {"label": "쿠폰함 확인", "domain": "TRANSACTION"},
+                {"label": "1:1 문의하기", "domain": "SUPPORT"},
+                {"label": "진행 중 혜택 보기", "domain": "DISCOVERY"},
+            ],
+            "predictedDomains": ["SUPPORT", "TRANSACTION", "DISCOVERY"],
+            "metadata": {
+                "responseShapeKey": "partner_member_coupon_policy",
+                "partnerMemberCouponPolicy": True,
+                "userText": user_query,
+            },
+        },
+    }
+
+def build_signup_member_coupon_guidance_event(user_query: str, *, response_shape_key: str) -> dict:
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "support",
+        "assistant_response_source": f"code_{response_shape_key}",
+        "data": {
+            "assistantResponse": (
+                "확인된 정책 기준으로 all my T 회원이고 마케팅 수신 동의를 하면 5% 할인 쿠폰 발급이 가능해요.\n\n"
+                "첫구매 여부가 핵심 조건인 쿠폰으로 바로 안내되지는 않아요.\n\n"
+                "다만 고객님의 실제 회원 상태, 마케팅 수신 동의 상태, 쿠폰 발급 여부는 챗봇에서 직접 확정할 수 없어서 "
+                "조건 충족 시 발급 가능으로만 안내드리고 있어요."
+            ),
+            "quickReplies": [
+                {"label": "회원 혜택 확인", "url": CTAUrls.MEMBERSHIP_BENEFIT, "domain": "SUPPORT"},
+            ],
+            "predictedDomains": ["SUPPORT"],
+            "metadata": {
+                "responseShapeKey": response_shape_key,
+                "signupMemberCouponGuidance": True,
+                "userText": user_query,
+            },
+        },
+    }
+
+def build_signup_coupon_guidance_event(user_query: str) -> dict:
+    return build_signup_member_coupon_guidance_event(user_query, response_shape_key="signup_coupon_guidance")
+
+def build_signup_first_purchase_benefit_event(user_query: str) -> dict:
+    return build_signup_member_coupon_guidance_event(
+        user_query,
+        response_shape_key="signup_first_purchase_benefit_policy",
+    )
+
+def build_order_document_guidance_event(user_query: str) -> dict:
+    order_no_match = _ORDER_NO_FOR_DOCUMENT_CTA_RE.search(user_query or "")
+    order_no = ""
+    if order_no_match:
+        order_no = str(order_no_match.group("named") or order_no_match.group("bare") or "").strip()
+
+    primary_chip = (
+        {"label": "주문 상세 확인", "url": CTAUrls.ORDER_HISTORY_DETAIL.replace("<ord_no>", order_no), "domain": "TRANSACTION"}
+        if order_no
+        else {"label": "주문 내역 확인", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"}
+    )
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "support",
+        "assistant_response_source": "code_order_document_guidance",
+        "data": {
+            "assistantResponse": (
+                "챗봇에서 거래명세서나 증빙서류를 이메일로 직접 발송해 드리기는 어려워요.\n\n"
+                "회사 제출용 거래명세서나 영수증이 필요하시면 주문 내역에서 해당 주문의 증빙/거래명세서 정보를 먼저 확인해 주세요.\n\n"
+                "별도 양식이나 이메일 발송 요청이 더 필요하면 1:1 문의로 접수해 주세요."
+            ),
+            "quickReplies": [
+                primary_chip,
+                {"label": "1:1 문의하기", "domain": "SUPPORT"},
+            ],
+            "predictedDomains": ["SUPPORT", "TRANSACTION"],
+            "metadata": {
+                "responseShapeKey": "order_document_guidance",
+                "orderDocumentGuidance": True,
+                "userText": user_query,
+                "ordNo": order_no,
+            },
+        },
+    }
+
 _TIRE_MANUFACTURE_DATE_ANCHOR_RE = re.compile(
     r"DOT|제조\s*일자|제조일자|제조\s*주차|생산\s*주차|신품|최신\s*제조|언제\s*만든|오래된\s*거\s*아냐|"
     r"타이어마다.{0,12}(?:DOT|제조|생산)|(?:DOT|제조|생산).{0,12}(?:다르|차이)",
@@ -2481,6 +2849,41 @@ _ORDER_DOCUMENT_GUIDANCE_RE = re.compile(
     r"거래\s*명세서|거래명세서|영수증|구매\s*증빙|증빙\s*서류|제출용\s*서류|"
     r"세금\s*계산서|이메일.{0,24}(?:보내|발송)|(?:보내|발송).{0,24}이메일",
     re.IGNORECASE,
+)
+_ORDER_NO_FOR_DOCUMENT_CTA_RE = re.compile(
+    r"(?:주문\s*번호|주문번호)\s*[:：]?\s*(?P<named>[A-Z]?\d{8,})|\b(?P<bare>O\d{8,})\b",
+    re.IGNORECASE,
+)
+_MAINTENANCE_HISTORY_LOOKUP_RE = re.compile(
+    r"정비\s*이력|정비이력|정비\s*내역|정비내역|관리받은\s*(?:내역|거)|관리\s*받은\s*(?:내역|거)|"
+    r"서비스\s*(?:이력|내역)|받은\s*(?:서비스|정비)|"
+    r"(?:마지막|최근|전에|예전에).{0,24}"
+    r"(?:휠\s*얼라인먼트|얼라인먼트|오일\s*필터|오일필터|엔진\s*오일|엔진오일|배터리|와이퍼|실내\s*필터|"
+    r"타이어\s*(?:교체|장착)|경정비).{0,24}(?:언제|받|교체|갈|했|한\s*적)|"
+    r"(?:휠\s*얼라인먼트|얼라인먼트|오일\s*필터|오일필터|엔진\s*오일|엔진오일|배터리|와이퍼|실내\s*필터|"
+    r"타이어\s*(?:교체|장착)|경정비).{0,24}(?:받은|교체한|갈았|했던|한)\s*(?:날|날짜|때|적|게)?"
+    r".{0,16}(?:언제|있)",
+    re.IGNORECASE,
+)
+_MAINTENANCE_HISTORY_ACCESS_POLICY_RE = re.compile(
+    r"(?:(?:정비|서비스|관리)\s*(?:이력|내역)|정비이력|정비내역|관리받은\s*(?:내역|거)|"
+    r"관리\s*받은\s*(?:내역|거)|내\s*차\s*(?:이력|내역)).{0,60}"
+    r"(?:조회\s*가능|확인\s*가능|볼\s*수|볼수|조회할\s*수|확인할\s*수|매장(?:에서)?\s*(?:조회|확인)|"
+    r"아무\s*(?:티스테이션\s*)?(?:매장|지점)|다른\s*(?:지역|매장|지점)|이사|타\s*지역)|"
+    r"(?:부산|여수|서울|제주|광주|대전|대구|울산|인천|경기|분당|판교|한남|모란).{0,40}"
+    r"(?:(?:정비|서비스|관리)\s*(?:이력|내역)|정비이력|정비내역).{0,40}"
+    r"(?:조회\s*가능|확인\s*가능|볼\s*수|볼수|매장(?:에서)?\s*(?:조회|확인))",
+    re.IGNORECASE,
+)
+_MAINTENANCE_HISTORY_SERVICE_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("휠얼라인먼트", (r"휠\s*얼라인먼트", r"얼라인먼트")),
+    ("오일필터", (r"오일\s*필터", r"오일필터")),
+    ("엔진오일", (r"엔진\s*오일", r"엔진오일")),
+    ("배터리", (r"배터리",)),
+    ("와이퍼", (r"와이퍼",)),
+    ("실내필터", (r"실내\s*필터", r"에어컨\s*필터", r"캐빈\s*필터")),
+    ("타이어 교체", (r"타이어\s*(?:교체|장착)",)),
+    ("경정비", (r"경정비",)),
 )
 _TIRE_MANUFACTURE_DATE_POLICY_RE = re.compile(
     r"제조\s*일자|제조일자|제조\s*주차|DOT|최신\s*제조|언제\s*만든|오래된\s*거\s*아냐|신상품\s*맞",
