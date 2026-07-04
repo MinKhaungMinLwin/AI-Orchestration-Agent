@@ -25732,25 +25732,31 @@ def test_router_mileage_recommendation_accepts_long_distance_tool_args() -> None
     assert not any(violation["type"] == "recommendation_tool_input_drift" for violation in violations)
 
 
-def test_mileage_family_contract_patch_overrides_agent_family_tool_args(
+def test_mileage_family_recommendation_preserves_agent_family_tool_args(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, Any] = {}
 
     class _Response:
         status_code = 200
-        parsed = {"rcmd_type": "long_distance", "total": 0, "items": []}
+        parsed = {
+            "rcmd_type": "family",
+            "total": 1,
+            "items": [{"goods_no": "G000000000001", "goods_nm": "테스트 타이어", "sale_prc": 250000}],
+        }
 
     def _fake_recommendations(**kwargs):
         captured.update(kwargs)
         return _Response()
 
-    text = "패밀리카 승차감 좋고 마일리지 성능 우수한 타이어 추천해"
+    text = "패밀리카 승차감 좋고 마일리지 성능 우수한 타이어 20만원대로 추천해"
     frame = build_discovery_intent_frame(text)
     plan = plan_discovery_tools(frame)
     monkeypatch.setattr(discovery_tools, "get_products_recommendations", _fake_recommendations)
 
     assert plan.tool_args_patch["rcmd_type"] == "long_distance"
+    assert plan.tool_args_patch["min_price"] == 200000
+    assert plan.tool_args_patch["max_price"] == 299999
 
     token = discovery_tools.current_discovery_recommendation_tool_patch.set(dict(plan.tool_args_patch))
     try:
@@ -25763,7 +25769,9 @@ def test_mileage_family_contract_patch_overrides_agent_family_tool_args(
         discovery_tools.current_discovery_recommendation_tool_patch.reset(token)
 
     assert result["status"] == "success"
-    assert captured["rcmd_type"] == discovery_tools.RcmdType.LONG_DISTANCE
+    assert captured["rcmd_type"] == discovery_tools.RcmdType.FAMILY
+    assert captured["min_price"] == 200000
+    assert captured["max_price"] == 299999
 
     contract = build_turn_contract(
         user_text=text,
@@ -25779,7 +25787,13 @@ def test_mileage_family_contract_patch_overrides_agent_family_tool_args(
             {
                 "tool": "get_products_recommendations_tool",
                 "args": {"rcmd_type": "family", "limit": 3, "brand_cd": "HK"},
-                "effective_args": {"rcmd_type": "long_distance", "limit": 3, "brand_cd": "HK"},
+                "effective_args": {
+                    "rcmd_type": "family",
+                    "limit": 3,
+                    "brand_cd": "HK",
+                    "min_price": 200000,
+                    "max_price": 299999,
+                },
             }
         ],
         contract=contract,
