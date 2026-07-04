@@ -242,16 +242,6 @@ def _sanitize_transaction_cta_contracts(
             continue
         seen_labels.add(label)
         normalized.append(chip)
-    if chips and not normalized and blocked_ctas:
-        normalized = [{
-            "label": "조건 다시 입력",
-            "domain": str(source_domain or "LEADING").upper(),
-            "metadata": {
-                "cta_validation_result": "fallback",
-                "cta_validation_reason": "all_ctas_blocked",
-            },
-        }]
-        changed = True
     if normalized != chips:
         event_data["quickReplies"] = normalized
         changed = True

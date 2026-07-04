@@ -12,6 +12,7 @@ from services.tstation.policies.recommendation_scenario_catalog import (
     recommendation_scenario_metadata,
 )
 from services.tstation.policies.response_decision import ToolPlan
+from services.tstation.policies.vehicle_category_catalog import match_vehicle_model_category
 
 
 def _recommendation_context_dict(value: Any) -> dict[str, Any]:
@@ -71,30 +72,40 @@ def _named_my_vehicle_anchor(text: str) -> str | None:
     return _named_vehicle_anchor_from_pattern(text, _MY_NAMED_VEHICLE_RE)
 
 
+_TIRE_SIZE_PRICE_PARSE_MASK_RE = re.compile(
+    r"(?<!\d)(\d{3})\s*/?\s*(\d{2})\s*R?\s*(\d{2})(?=\s*\d{1,3}\s*만원|[^\d]|$)",
+    re.IGNORECASE,
+)
+
+
 def _price_range_from_text(text: str) -> dict[str, int]:
-    normalized = re.sub(r"\s+", "", text or "")
+    size_masked_text = _TIRE_SIZE_PRICE_PARSE_MASK_RE.sub(" ", text or "")
+    normalized = re.sub(r"\s+", "", size_masked_text)
     if not normalized:
         return {}
-    match = re.search(r"(?P<low>\d{1,3})만원(?:대|선)", normalized)
+    match = re.search(r"(?<!\d)(?P<low>\d{1,3})만원(?:대|선)", normalized)
     if match:
         low = int(match.group("low")) * 10_000
         return {"min_price": low, "max_price": low + 99_999}
-    match = re.search(r"(?P<low>\d{1,3})만원(?:부터|이상)[~\-]?(?P<high>\d{1,3})?만원?(?:까지|이하)?", normalized)
+    match = re.search(
+        r"(?<!\d)(?P<low>\d{1,3})만원(?:부터|이상)[~\-]?(?P<high>\d{1,3})?만원?(?:까지|이하)?",
+        normalized,
+    )
     if match:
         result = {"min_price": int(match.group("low")) * 10_000}
         if match.group("high"):
             result["max_price"] = int(match.group("high")) * 10_000
         return result
-    match = re.search(r"(?P<low>\d{1,3})만원[~\-](?P<high>\d{1,3})만원", normalized)
+    match = re.search(r"(?<!\d)(?P<low>\d{1,3})만원[~\-](?P<high>\d{1,3})만원", normalized)
     if match:
         return {
             "min_price": int(match.group("low")) * 10_000,
             "max_price": int(match.group("high")) * 10_000,
         }
-    match = re.search(r"(?P<price>\d{1,3})만원(?:이하|까지|안쪽|미만)", normalized)
+    match = re.search(r"(?<!\d)(?P<price>\d{1,3})만원(?:이하|까지|안쪽|미만)", normalized)
     if match:
         return {"max_price": int(match.group("price")) * 10_000}
-    match = re.search(r"(?P<price>\d{1,3})만원(?:이상|부터)", normalized)
+    match = re.search(r"(?<!\d)(?P<price>\d{1,3})만원(?:이상|부터)", normalized)
     if match:
         return {"min_price": int(match.group("price")) * 10_000}
     return {}
@@ -149,7 +160,7 @@ _VALUE_RECOMMENDATION_RE = re.compile(r"가성비|합리적|가격\s*대비|valu
 _NOISE_LABEL_RE = re.compile(r"소음\s*(?:등급|라벨)|저소음\s*등급|소음도|데시벨|dB", re.IGNORECASE)
 _QUIET_RECOMMENDATION_RE = re.compile(r"저소음|정숙|조용|소음|진동", re.IGNORECASE)
 _EV_RECOMMENDATION_RE = re.compile(
-    r"전기차|전기차용|electric|테슬라|모델\s*Y|모델Y|(?<![A-Za-z])EV(?![A-Za-z])",
+    r"전기차|전기차용|electric|일렉트릭|(?<![A-Za-z])EV(?![A-Za-z])",
     re.IGNORECASE,
 )
 _GENERAL_TIRE_RECOMMENDATION_ACTION_RE = re.compile(
@@ -165,20 +176,26 @@ _MY_VEHICLE_RECOMMENDATION_RE = re.compile(
     re.IGNORECASE,
 )
 _REGISTERED_VEHICLE_OWNERSHIP_RE = re.compile(
-    r"내(?:가)?\s*(?:등록(?:한|해\s*둔|해둔|된)?|보유(?:한)?)\s*(?:차|차량)|"
+    r"내(?:가)?\s*(?:(?:홈페이지|사이트|티스테이션|계정)에?\s*)?"
+    r"(?:등록(?:한|해\s*둔|해둔|된)?|보유(?:한)?)\s*(?:차|차량)|"
     r"내\s*등록\s*(?:차|차량)|"
-    r"등록(?:한|해\s*둔|해둔|된)?\s*내\s*(?:차|차량)",
+    r"등록(?:한|해\s*둔|해둔|된)?\s*내\s*(?:차|차량)|"
+    r"(?:홈페이지|사이트|티스테이션|계정)에?\s*등록(?:한|해\s*둔|해둔|된)?\s*내\s*(?:차|차량)",
     re.IGNORECASE,
 )
 _REGISTERED_VEHICLE_TYPE_QUERY_RE = re.compile(
-    r"(?:내(?:가)?\s*(?:등록(?:한|해\s*둔|해둔|된)?|보유(?:한)?)?\s*(?:차종|차량|차)|"
-    r"등록(?:한|해\s*둔|해둔|된)?\s*내\s*(?:차종|차량|차))"
-    r"(?:이|가)?\s*(?:뭐(?:야|니|고|였|지|든지|ㄴ지)?|뭔지|뭔가|"
+    r"(?:내(?:가)?\s*(?:(?:홈페이지|사이트|티스테이션|계정)에?\s*)?"
+    r"(?:등록(?:한|해\s*둔|해둔|된)?|보유(?:한)?)?\s*(?:차종|차량|차)|"
+    r"등록(?:한|해\s*둔|해둔|된)?\s*내\s*(?:차종|차량|차)|"
+    r"(?:홈페이지|사이트|티스테이션|계정)에?\s*등록(?:한|해\s*둔|해둔|된)?\s*내\s*(?:차종|차량|차))"
+    r"(?:이|가)?\s*(?:목록|리스트|보기|보여\s*(?:줘|주세요)?|확인|조회|"
+    r"뭐(?:야|니|고|였|지|든지|ㄴ지)?|뭔지|뭔가|"
     r"무슨\s*(?:차|차종|차량)인지|어떤\s*(?:차|차종|차량)인지|알려\s*(?:줘|줄래|주세요|주라)?)",
     re.IGNORECASE,
 )
 _REGISTERED_NAMED_VEHICLE_RE = re.compile(
-    r"(?:내(?:가)?\s*(?:등록(?:한|해\s*둔|해둔|된)?|보유(?:한)?)\s*(?:차|차량)|"
+    r"(?:내(?:가)?\s*(?:(?:홈페이지|사이트|티스테이션|계정)에?\s*)?"
+    r"(?:등록(?:한|해\s*둔|해둔|된)?|보유(?:한)?)\s*(?:차|차량)|"
     r"내\s*등록\s*(?:차|차량)|등록(?:한|해\s*둔|해둔|된)?\s*내\s*(?:차|차량)|등록\s*차량|등록차)"
     r"\s*(?:목록\s*)?중(?:에|에서)?\s*"
     r"(?P<model>[0-9A-Za-z가-힣][0-9A-Za-z가-힣\s._-]{1,24}?)(?="
@@ -373,8 +390,13 @@ _PRODUCT_ALIASES: tuple[tuple[str, str, str], ...] = (
     ("다이나프로 hp3", "Dynapro HP3", "HK"),
     ("kinergy ex", "Kinergy EX", "HK"),
     ("키너지 ex", "Kinergy EX", "HK"),
+    ("kinergy 4s2", "키너지 4S2", "HK"),
+    ("키너지 4s2", "키너지 4S2", "HK"),
+    ("키너지4s2", "키너지 4S2", "HK"),
     ("kinergy st as", "Kinergy ST AS", "HK"),
     ("키너지 st as", "Kinergy ST AS", "HK"),
+    ("weatherflex gt", "웨더플렉스 GT", "HK"),
+    ("웨더플렉스 gt", "웨더플렉스 GT", "HK"),
     ("ion evo as", "iON evo AS", "HK"),
     ("아이온 evo as", "iON evo AS", "HK"),
     ("아이온 에보 as", "iON evo AS", "HK"),
@@ -728,14 +750,31 @@ _BEST_SELLER_VEHICLE_TOKEN_STOPWORDS = {
     "추천해줘", "알려줘", "보여줘", "순위", "판매량", "는", "가", "이", "좀",
 }
 _BEST_SELLER_VEHICLE_TRAILING_PARTICLE_RE = re.compile(r"(?:에서|으로|로|에|은|는|이|가|도|만|과|와)$")
+_GENERAL_BEST_SELLER_SCOPE_RE = re.compile(
+    r"^(?:전체|전부|모든|통합)?\s*(?:베스트\s*셀러|베스트셀러|인기\s*(?:상품|제품|타이어)|잘\s*팔리는\s*타이어)"
+    r"\s*(?:보기|보여줘|알려줘|확인|목록)?$",
+    re.IGNORECASE,
+)
+
+
+def is_general_best_seller_scope_request(text: str) -> bool:
+    text = re.sub(r"\s+", " ", str(text or "")).strip(" ,.?!")
+    if not text or not is_best_seller_request(text):
+        return False
+    return bool(_GENERAL_BEST_SELLER_SCOPE_RE.fullmatch(text))
 
 
 def extract_best_seller_vehicle_query(text: str) -> str | None:
     text = str(text or "").strip()
     if not text or not is_best_seller_request(text):
         return None
+    if is_general_best_seller_scope_request(text):
+        return None
     if _DEMOGRAPHIC_ATTRIBUTE_RE.search(text) and _DEMOGRAPHIC_PREFERENCE_RE.search(text):
         return None
+    vehicle_model_match = match_vehicle_model_category(text)
+    if vehicle_model_match is not None:
+        return vehicle_model_match.vehicle_query
 
     candidate = _BEST_SELLER_VEHICLE_STRIP_RE.sub(" ", text)
     candidate = re.sub(r"\s+", " ", candidate).strip(" ,.")
@@ -929,8 +968,12 @@ def build_discovery_intent_frame(
         named_vehicle_anchor = _named_my_vehicle_anchor(text)
         if named_vehicle_anchor:
             entities["named_registered_vehicle_anchor"] = named_vehicle_anchor
+    vehicle_model_match = match_vehicle_model_category(text)
+    # Scenario keywords inside a matched car model name (e.g. "스포츠" in
+    # "렉스턴 스포츠") are not scenario intent — extract from masked text.
+    scenario_text = vehicle_model_match.masked_text if vehicle_model_match is not None else text
     scenario = recommendation_scenario_from_text(
-        text,
+        scenario_text,
         router_recommendation_scenario or context_recommendation_scenario,
     )
     if general_tire_recommendation:
@@ -976,9 +1019,9 @@ def build_discovery_intent_frame(
     elif _ALL_SEASON_RE.search(text):
         entities["season"] = "all_season"
 
-    if _PERFORMANCE_RE.search(text):
+    if _PERFORMANCE_RE.search(scenario_text):
         entities["performance"] = "performance"
-    if _QUIET_RECOMMENDATION_RE.search(text):
+    if _QUIET_RECOMMENDATION_RE.search(scenario_text):
         entities["quiet_focus"] = True
     if general_tire_recommendation:
         entities["vehicle_category"] = "passenger"
@@ -992,6 +1035,10 @@ def build_discovery_intent_frame(
         entities["vehicle_category"] = "truck_van"
     elif _PASSENGER_RECOMMENDATION_RE.search(text):
         entities["vehicle_category"] = "passenger"
+    elif vehicle_model_match is not None:
+        entities["vehicle_category"] = vehicle_model_match.category
+        entities["vehicle_model_name"] = vehicle_model_match.model
+        entities["vehicle_category_source"] = "model_inference"
     if "noise" in attribute_metrics:
         entities["label_metric"] = "noise"
     if _SOUND_ABSORBER_RE.search(text):
@@ -1018,7 +1065,13 @@ def build_discovery_intent_frame(
     if best_seller_period:
         entities["best_seller_period"] = best_seller_period
         entities.update(best_seller_search_params_from_text(text))
-        best_seller_vehicle_query = extract_best_seller_vehicle_query(text)
+        best_seller_vehicle_query = ""
+        if is_general_best_seller_scope_request(text):
+            best_seller_vehicle_query = ""
+        elif vehicle_model_match is not None:
+            best_seller_vehicle_query = vehicle_model_match.vehicle_query
+        else:
+            best_seller_vehicle_query = extract_best_seller_vehicle_query(text) or ""
         if best_seller_vehicle_query:
             entities["vehicle_query"] = best_seller_vehicle_query
     if is_default_tire_shopping_request(text):

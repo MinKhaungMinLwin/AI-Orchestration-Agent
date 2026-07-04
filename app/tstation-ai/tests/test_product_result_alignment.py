@@ -28,6 +28,35 @@ def test_product_price_alignment_notice_omits_notice_when_any_product_matches_ra
     assert notice == ""
 
 
+def test_product_price_alignment_notice_does_not_absorb_tire_size_digits() -> None:
+    notice = product_price_alignment_notice(
+        user_text="2454519 30만원대 타이어 추천",
+        products=[
+            {"title": "A", "price": 171000},
+        ],
+        tool_args=[
+            {"tire_size": "245/45R19", "min_price": 300000, "max_price": 399999},
+        ],
+    )
+
+    assert notice == "요청하신 30만원대 상품은 현재 결과에 없어서, 확인 가능한 더 낮은 가격대 상품을 보여드릴게요."
+    assert "930만원대" not in notice
+
+
+def test_product_price_alignment_notice_omits_notice_for_matching_tire_size_budget_result() -> None:
+    notice = product_price_alignment_notice(
+        user_text="2454519 30만원대 타이어 추천",
+        products=[
+            {"title": "A", "price": 318000},
+        ],
+        tool_args=[
+            {"tire_size": "245/45R19", "min_price": 300000, "max_price": 399999},
+        ],
+    )
+
+    assert notice == ""
+
+
 def test_product_template_response_compares_requested_price_range_with_result_prices() -> None:
     token = current_user_text.set("컴포트한 타이어로 2355519 사이즈 개당 30만원대 추천해주라. 돈이 별로 없네.")
     try:

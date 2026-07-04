@@ -35,6 +35,8 @@ def send_chat_message(
     stream: bool = False,
     access_token: str | None = None,
     user_info: dict | None = None,
+    chip_context: dict | None = None,
+    ui_action: dict | None = None,
 ) -> Union[str, Generator[dict, None, None]]:
     """
     Send chat message using new API (content only, no messages array).
@@ -45,6 +47,8 @@ def send_chat_message(
         stream: If True, returns streaming generator; if False, returns complete response
         access_token: JWT access token (passed in Authorization header)
         user_info: Additional user info from UI (e.g., location)
+        chip_context: Quick-reply chip routing metadata when the user tapped a chip
+        ui_action: Normalized UI action payload when the user tapped a chip
 
     Returns:
         str: Complete response when stream=False
@@ -64,6 +68,10 @@ def send_chat_message(
     }
     if user_info:
         payload["user_info"] = user_info
+    if chip_context:
+        payload["chip_context"] = chip_context
+    if ui_action:
+        payload["ui_action"] = ui_action
 
     if stream:
         return _handle_stream_response(payload, session_id, access_token)
