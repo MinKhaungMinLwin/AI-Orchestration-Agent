@@ -23,7 +23,26 @@ PRICE_BASIS_FIELDS = (
 def has_price_basis(slots: Mapping[str, Any] | None) -> bool:
     if not isinstance(slots, Mapping):
         return False
-    return any(is_positive_number_like(slots.get(field)) for field in PRICE_BASIS_FIELDS)
+    return any(any(is_positive_number_like(context.get(field)) for field in PRICE_BASIS_FIELDS) for context in _price_contexts(slots))
+
+def _price_contexts(slots: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
+    contexts: list[Mapping[str, Any]] = [slots]
+    availability_context = slots.get("availability_context")
+    if isinstance(availability_context, Mapping):
+        for key in (
+            "pending_order_context",
+            "active_flow_context",
+            "dormant_purchase_context",
+            "dormant_stock_context",
+            "dormant_transaction_context",
+        ):
+            value = availability_context.get(key)
+            if isinstance(value, Mapping):
+                contexts.append(value)
+                payment = value.get("payment")
+                if isinstance(payment, Mapping):
+                    contexts.append(payment)
+    return tuple(contexts)
 
 
 def is_positive_number_like(value: Any) -> bool:

@@ -7779,6 +7779,63 @@ def _should_emit_direct_preorder_from_schedule_selection(
     )
 
 
+def _should_attempt_direct_preorder_from_schedule_ui_action(
+    ui_action_context: Any | None,
+    router_skip_metadata: Mapping[str, Any] | None = None,
+) -> bool:
+    if ui_action_context is None:
+        return False
+    if str(getattr(ui_action_context, "action_type", "") or "") != "select_schedule":
+        return False
+    return True
+
+def _is_schedule_selection_text(user_text: str | None) -> bool:
+    text = str(user_text or "").strip()
+    return bool(
+        text
+        and _DATEPICK_SELECTION_RE.match(text)
+        and _cal_day_from_korean_date_text(text)
+        and _reservation_hour_from_text(text)
+    )
+
+def _schedule_selection_values_from_text(user_text: str | None) -> dict[str, str]:
+    requested_cal_day = _cal_day_from_korean_date_text(user_text)
+    rsv_hour = _reservation_hour_from_text(user_text)
+    values: dict[str, str] = {}
+    if requested_cal_day:
+        values["requested_cal_day"] = requested_cal_day
+    if rsv_hour:
+        values["rsv_hour"] = rsv_hour
+    return values
+
+def _should_recover_final_price_for_schedule_selection(
+    turn_contract: TurnContract | None,
+    *,
+    user_text: str | None,
+    ui_action_context: Any | None,
+) -> bool:
+    if turn_contract is None:
+        return False
+    response_decision = turn_contract.response_decision or {}
+    response_metadata = response_decision.get("metadata") if isinstance(response_decision, Mapping) else {}
+    response_shape_key = str((response_metadata or {}).get("response_shape_key") or "")
+    flow_step = str(getattr(turn_contract, "flow_step", "") or (response_metadata or {}).get("flow_step") or "")
+    contract_intent = str(turn_contract.intent or "")
+    schedule_selected = _should_attempt_direct_preorder_from_schedule_ui_action(ui_action_context) or _is_schedule_selection_text(user_text)
+    return bool(
+        schedule_selected
+        and str(turn_contract.domain or "") == "transaction"
+        and str(turn_contract.action_mode or "") == "purchase_continuation"
+        and (
+            contract_intent == "quick_order_reservation"
+            or contract_intent.startswith("quick_order_reservation_slot_fill_")
+        )
+        and str(getattr(turn_contract, "preferred_tool", "") or "") == "get_final_price_tool"
+        and response_shape_key == "reservation_price_lookup"
+        and flow_step == "resolve_price"
+        and _has_ready_preorder_summary_slots(turn_contract.known_slots or {})
+    )
+
 def _has_ready_preorder_summary_slots(slots: Mapping[str, Any] | None) -> bool:
     if not isinstance(slots, Mapping):
         return False
@@ -7822,6 +7879,20 @@ def _is_ready_preorder_fast_path_contract_match(
         and action_mode == "purchase_continuation"
     ):
         return _has_ready_preorder_summary_slots(turn_contract.known_slots or {})
+    contract_intent = str(turn_contract.intent or "")
+    if (
+        action_mode == "purchase_continuation"
+        and response_shape_key == "stock_store_candidates"
+        and (
+            contract_intent == "quick_order_reservation"
+            or contract_intent.startswith("quick_order_reservation_slot_fill_")
+        )
+        and _has_ready_preorder_summary_slots(turn_contract.known_slots or {})
+    ):
+        return bool(
+            str((turn_contract.known_slots or {}).get("pending_intent") or "") == "order"
+            or str((turn_contract.known_slots or {}).get("goal_type") or "") == "place_order"
+        )
     if response_shape_key not in {"reservation_confirmation_ready", "stock_store_candidates"}:
         return False
     return bool(
@@ -23890,6 +23961,22 @@ class TStationChatServiceV2:
                 datepick_template_for_recovery,
                 user_text=last_user_text,
             )
+            current_schedule_values = _schedule_selection_values_from_text(last_user_text)
+            if (
+                current_schedule_values
+                and _is_active_order_flow_slots(merged_slots)
+                and any(getattr(merged_slots, field, None) != value for field, value in current_schedule_values.items())
+            ):
+                merged_slots = _apply_order_snapshot_slots(
+                    merged_slots,
+                    current_schedule_values,
+                    source="current_schedule_selection",
+                    fill_only=False,
+                )
+                logger.info(
+                    "[SLOTS] Applied current-turn schedule selection values: %s",
+                    current_schedule_values,
+                )
             if (
                 last_user_text
                 and _DATEPICK_SELECTION_RE.match(last_user_text)
@@ -27656,10 +27743,12 @@ class TStationChatServiceV2:
                     flow_step="vehicle_selected",
                     status="active",
                 )
-                availability_context_for_parent_purchase["active_flow_context"] = (
-                    active_purchase_commit.state.to_active_flow_context()
+                committed_active_purchase_context = active_purchase_commit.state.to_active_flow_context()
+                availability_context_for_parent_purchase["active_flow_context"] = committed_active_purchase_context
+                merged_slots = merged_slots.apply_runtime_values(
+                    _slot_runtime_values_from_active_flow_context(committed_active_purchase_context),
+                    source="active_recommendation_vehicle_selection_parent_purchase_promotion",
                 )
-                merged_slots = merged_slots.model_copy()
                 merged_slots.availability_context = availability_context_for_parent_purchase
                 vehicle_selection_trace_metadata.update({
                     "parent_purchase_context_resumed": True,
@@ -28329,15 +28418,55 @@ class TStationChatServiceV2:
                         "X-Accel-Buffering": "no",
                     },
                 )
-                event_data = order_document_event.get("data") if isinstance(order_document_event.get("data"), dict) else {}
+            event_data = order_document_event.get("data") if isinstance(order_document_event.get("data"), dict) else {}
             return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
+
+        if _should_recover_final_price_for_schedule_selection(
+            turn_contract,
+            user_text=last_user_text,
+            ui_action_context=vehicle_ui_action_context,
+        ):
+            final_price_recovery = await _recover_contract_required_tool(
+                turn_contract=turn_contract,
+                user_text=last_user_text,
+                merged_slots=merged_slots,
+                blocked_fast_path_source="schedule_selection_final_price_before_preorder",
+                member_no=request.user_id,
+            )
+            if final_price_recovery is not None:
+                final_price_event = final_price_recovery["event"]
+                if request.stream:
+                    _record_direct_return_trace(
+                        parent_span=_parent_span,
+                        trace_id=request.tracing_id,
+                        session_id=request.session_id,
+                        user_id=request.user_id,
+                        user_text=last_user_text,
+                        domains=domains,
+                        event=final_price_event,
+                        turn_contract=turn_contract,
+                        direct_return_reason="schedule_selection_final_price_before_preorder",
+                        extra_metadata=vehicle_selection_trace_metadata,
+                    )
+                    return StreamingResponse(
+                        TStationChatServiceV2._stream_contract_required_tool_response(final_price_recovery),
+                        media_type="text/event-stream",
+                        headers={
+                            "Cache-Control": "no-cache",
+                            "Connection": "keep-alive",
+                            "X-Accel-Buffering": "no",
+                        },
+                    )
+                event_data = final_price_event.get("data") if isinstance(final_price_event.get("data"), dict) else {}
+                return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
 
         direct_preorder_event: dict[str, Any] | None = None
         if (
             turn_contract is not None
-            and vehicle_ui_action_context is not None
-            and str(vehicle_ui_action_context.action_type or "") == "select_schedule"
-            and bool(validated_ui_action_router_skip_metadata)
+            and _should_attempt_direct_preorder_from_schedule_ui_action(
+                vehicle_ui_action_context,
+                validated_ui_action_router_skip_metadata,
+            )
         ):
             if _should_emit_direct_preorder_from_schedule_selection(
                 turn_contract,
