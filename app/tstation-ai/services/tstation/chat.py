@@ -199,6 +199,10 @@ from services.tstation.policies.coupon_query_gate import (
     decide_coupon_query_gate,
     should_consider_coupon_gate,
 )
+from services.tstation.policies.conversation_context_policy import (
+    build_recent_interaction_summary,
+    insert_recent_interaction_router_message,
+)
 from services.tstation.policies.contract_required_tool_candidate import (
     _contract_read_through_known_slots,
     _contract_required_recommendation_tool_input,  # noqa: F401
@@ -23876,6 +23880,14 @@ class TStationChatServiceV2:
                 messages = messages[-_MAX_HISTORY_MESSAGES:]
             messages_chars = TStationChatServiceV2._messages_chars(messages)
             classifier_messages = list(messages)
+            recent_interaction_summary = build_recent_interaction_summary(
+                latest_quickreply_tmpl=latest_quickreply_tmpl,
+                recent_template_msgs=recent_template_msgs,
+            )
+            classifier_messages = insert_recent_interaction_router_message(
+                classifier_messages,
+                recent_interaction_summary,
+            )
             classifier_messages_chars = TStationChatServiceV2._messages_chars(classifier_messages)
             logger.debug("[CONTEXT] messages_count=%d messages_chars=%d", len(messages), messages_chars)
             logger.debug(
@@ -23885,6 +23897,13 @@ class TStationChatServiceV2:
                 len(messages),
                 messages_chars,
             )
+            if recent_interaction_summary:
+                vehicle_selection_trace_metadata.update({
+                    "recent_interaction_summary_injected": True,
+                    "recent_interaction_last_task": recent_interaction_summary.get("last_task"),
+                    "recent_interaction_last_result_type": recent_interaction_summary.get("last_result_type"),
+                    "recent_interaction_reference_only": recent_interaction_summary.get("reference_only"),
+                })
             logger.debug(f"[CHAT_V2] Messages: {json.dumps(messages, ensure_ascii=False, separators=(',', ':'))}")
 
             if chip_selected_vehicle is not None:

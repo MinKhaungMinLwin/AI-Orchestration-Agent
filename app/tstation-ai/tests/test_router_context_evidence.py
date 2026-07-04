@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import base64
+import json
 from types import SimpleNamespace
 
+from services.tstation.policies.conversation_context_policy import (
+    build_recent_interaction_summary,
+    insert_recent_interaction_router_message,
+)
 from services.tstation.policies.discovery_intent_policy import build_discovery_intent_frame, plan_discovery_tools
 from services.tstation.policies.discovery_response_policy import decide_discovery_response
 from services.tstation.policies.intent_frame import IntentFrame, PolicyDomain
@@ -215,6 +220,44 @@ def test_router_context_compacts_append_description_and_card_payload() -> None:
     assert encoded not in compact_text
     assert "긴 카드 설명" not in compact_text
     assert "강남역 근처 장착점 찾아줘" in compact_text
+
+
+def test_router_context_includes_recent_interaction_summary_as_reference_only() -> None:
+    latest_quickreply = {
+        "template": "quickReply",
+        "assistant_response_source": "code_coupon_resolver",
+        "data": {
+            "assistantResponse": "‘쿠폰 뱃지 테스트’ 적용 가능 상품은 9개예요.\n- 키너지 EX",
+            "quickReplies": [{"label": "구매하기", "domain": "TRANSACTION"}],
+            "predictedDomains": ["TRANSACTION"],
+        },
+    }
+    summary = build_recent_interaction_summary(latest_quickreply_tmpl=latest_quickreply)
+    messages = insert_recent_interaction_router_message(
+        [
+            {"role": "user", "content": "쿠폰 뱃지 테스트에 적용 가능한 상품은 뭐야?"},
+            {
+                "role": "assistant",
+                "content": "‘쿠폰 뱃지 테스트’ 적용 가능 상품은 9개예요.",
+                "template_data": latest_quickreply,
+            },
+            {"role": "user", "content": "1월 키너지EX 특가전은?"},
+        ],
+        summary,
+    )
+
+    result = compact_router_messages(messages)
+    compact_message = next(
+        message for message in result.messages if str(message.get("content") or "").startswith("ROUTER COMPACT CONTEXT:")
+    )
+    compact_payload = json.loads(str(compact_message["content"]).split("\n", 1)[1])
+    recent_summary = compact_payload["recent_interaction_summary"]
+
+    assert recent_summary["reference_only"] is True
+    assert recent_summary["do_not_execute_from_context"] is True
+    assert recent_summary["last_task"] == "applicable_products_lookup"
+    assert recent_summary["last_subject"] == "쿠폰 뱃지 테스트"
+    assert recent_summary["last_result_type"] == "applicable_products"
 
 
 def test_router_registered_vehicle_anchor_reaches_discovery_contract() -> None:
