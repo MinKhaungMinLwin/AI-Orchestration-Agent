@@ -515,7 +515,6 @@ def _build_owner_vehicle_lookup_event(tool_name: str, tool_result: Any, messages
         "data": {
             "assistantResponse": assistant_response,
             "quickReplies": [
-                {"label": "다시 검색", "domain": "DISCOVERY"},
                 {"label": "타이어 추천", "domain": "DISCOVERY"},
                 {"label": "구매하기", "domain": "TRANSACTION"},
             ],
@@ -913,8 +912,9 @@ _VALIDATION_FALLBACK_MESSAGE = (
     "죄송합니다, 답변을 정리하던 중 일시적인 문제가 발생했어요.\n\n"
     "잠시 후 다시 시도해 주시거나 아래 버튼으로 다른 도움을 받아보세요."
 )
+# "다시 시도" 류 label-only chip 은 실행 계약이 없어 CTA 게이트에서 제거되므로
+# 등록된 escalation CTA 만 남긴다.
 _VALIDATION_FALLBACK_QUICK_REPLIES = [
-    {"label": "다시 시도", "domain": "LEADING"},
     {"label": "상담사 연결", "domain": "SUPPORT"},
 ]
 

@@ -13,11 +13,11 @@ import os
 import tempfile
 import time
 import uuid
-from pathlib import Path
 
 from celery_app import celery_app, redis as task_redis
+from faq_dataset import PRIMARY_FAQ_FILE, apply_local_overlay
 
-_DATA_FILE = Path(__file__).parent.parent / "data" / "faq_data.json"
+_DATA_FILE = PRIMARY_FAQ_FILE
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +123,10 @@ def _run_ingestion(documents: list[dict], collection_name: str) -> dict:
         port=settings.QDRANT_PORT,
         api_key=settings.QDRANT_API_KEY or None,
     )
+
+    # Keep the local overlay indexed even when the primary FAQ data is refreshed
+    # via API sync or periodic fetch.
+    documents = apply_local_overlay(documents)
 
     # Normalise to unified schema — resolves representative_question/question,
     # representative_answer/answer, and fills in missing metadata fields.
@@ -238,7 +242,8 @@ def _run_incremental_sync(
 
     qdrant_svc.ensure_payload_text_index(live_collection, "question")
 
-    # Normalize documents
+    # Keep the local overlay indexed even when the fetched base FAQ set changes.
+    documents = apply_local_overlay(documents)
     documents = [DocumentProcessor._normalize_document(doc, idx) for idx, doc in enumerate(documents)]
 
     # Build incoming map: point_id → entry

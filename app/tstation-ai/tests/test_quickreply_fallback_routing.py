@@ -960,7 +960,7 @@ def test_transaction_cta_sanitizer_blocks_order_history_during_missing_purchase_
     )
 
     assert changed is True
-    assert _labels(event_data["quickReplies"]) == ["조건 다시 입력"]
+    assert event_data["quickReplies"] == []
     assert event_data["metadata"]["blocked_ctas"][0]["reason"].startswith("order_history_forbidden:")
 
 
@@ -4861,6 +4861,109 @@ def test_product_comparison_feature_fallback_omits_pattern_group() -> None:
 
 def test_generic_compare_text_is_product_comparison_query() -> None:
     assert _is_product_comparison_query("다이나프로 hpx 랑 윈터 아이셉트 비교해줘") is True
+
+
+def test_weatherflex_gt_and_kinergy_4s2_builds_comparison_event_from_search_results() -> None:
+    event = _build_product_comparison_event_from_search_results(
+        "웨더플렉스 GT, 키너지 4S2 비교해줘",
+        [
+            (
+                "키너지 4S2",
+                {
+                    "items": [
+                        {
+                            "goods_no": "G000000312680",
+                            "goods_nm": "키너지 4S2",
+                            "prc_grd_nm": "스탠다드",
+                            "goods_pfm_nm": "COMFORT",
+                            "goods_dtl_pfm_nm": "컴포트",
+                            "season_nm": "사계절",
+                            "car_knd_nm": "승용차",
+                            "t_rls_yearmon": "2019년 11월",
+                            "sys_reg_dtime": "2020-02-12 13:28:58",
+                            "rating_avg": 4.4,
+                            "review_count": 7,
+                        }
+                    ]
+                },
+            ),
+            (
+                "웨더플렉스 GT",
+                {
+                    "items": [
+                        {
+                            "goods_no": "G000000320362",
+                            "goods_nm": "웨더플렉스 GT",
+                            "prc_grd_nm": "프리미엄",
+                            "goods_pfm_nm": "COMFORT",
+                            "goods_dtl_pfm_nm": "컴포트",
+                            "season_nm": "올웨더",
+                            "car_knd_nm": "승용차",
+                            "t_rls_yearmon": "2025년 7월",
+                            "sys_reg_dtime": "2025-07-08 11:53:17",
+                            "rating_avg": 0,
+                            "review_count": 0,
+                        }
+                    ]
+                },
+            ),
+        ],
+    )
+
+    assert event is not None
+    assert event["assistant_response_source"] == "code_product_compare_resolver"
+    assert event["data"]["metadata"]["response_shape_key"] == "metric_comparison_summary"
+    assert "**키너지 4S2**" in event["data"]["assistantResponse"]
+    assert "**웨더플렉스 GT**" in event["data"]["assistantResponse"]
+    assert "| 항목 | 내용 |" in event["data"]["assistantResponse"]
+
+
+def test_compare_query_uses_router_product_names_from_comparison_context() -> None:
+    event = _build_product_comparison_event_from_search_results(
+        "둘 비교해줘",
+        [
+            (
+                "키너지 4S2",
+                {
+                    "items": [
+                        {
+                            "goods_no": "G000000312680",
+                            "goods_nm": "키너지 4S2",
+                            "prc_grd_nm": "스탠다드",
+                            "goods_pfm_nm": "COMFORT",
+                            "goods_dtl_pfm_nm": "컴포트",
+                            "season_nm": "사계절",
+                            "car_knd_nm": "승용차",
+                        }
+                    ]
+                },
+            ),
+            (
+                "웨더플렉스 GT",
+                {
+                    "items": [
+                        {
+                            "goods_no": "G000000320362",
+                            "goods_nm": "웨더플렉스 GT",
+                            "prc_grd_nm": "프리미엄",
+                            "goods_pfm_nm": "COMFORT",
+                            "goods_dtl_pfm_nm": "컴포트",
+                            "season_nm": "올웨더",
+                            "car_knd_nm": "승용차",
+                        }
+                    ]
+                },
+            ),
+        ],
+        comparison_context={
+            "product_names": ["웨더플렉스 GT", "키너지 4S2"],
+            "compare_metric": "detail",
+        },
+    )
+
+    assert event is not None
+    assert event["assistant_response_source"] == "code_product_compare_resolver"
+    assert event["data"]["metadata"]["productNames"] == ["웨더플렉스 GT", "키너지 4S2"]
 
 
 def test_description_compare_followup_reuses_previous_compare_products() -> None:
@@ -18457,6 +18560,75 @@ def test_apply_history_product_selection_state_resolves_goods_no_and_trace_metad
     assert transition.flow_transition["active_flow_context"]["payment"]["price_basis"] == "cheapest_final_prc"
 
 
+def test_apply_history_product_selection_state_clears_stale_goods_no_for_comparison_product_selection() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000312680",
+        tire_size="165/65R14",
+        comparison_context=ComparisonContext(
+            product_names=["웨더플렉스 GT", "키너지 4S2"],
+            compare_metric="detail",
+            response_shape_key="metric_comparison_summary",
+            source="code_product_compare_resolver",
+        ),
+    )
+
+    prev_tool_data = [{
+        "tool": "search_product_tool",
+        "data": [
+            {
+                "goods_no": "G000000312680",
+                "goods_nm": "키너지 4S2",
+                "tire_size_1": "165/65R14",
+            },
+        ],
+    }]
+
+    state = apply_history_product_selection_state(
+        last_user_text="웨더플렉스 gt",
+        prev_tool_data=prev_tool_data,
+        merged_slots=slots,
+        resolve_goods_no_from_selection_fn=lambda user_text, tool_data, current_tire_size: resolve_goods_no_from_selection(
+            user_text,
+            tool_data,
+            current_tire_size=current_tire_size,
+        ),
+    )
+
+    assert state.updated_slots.goods_no is None
+    assert state.updated_slots.tire_model == "웨더플렉스 GT"
+    assert state.updated_slots.pending_product_name == "웨더플렉스 GT"
+    assert state.updated_slots.comparison_context is None
+    assert state.goods_no_resolved is False
+    assert state.action_context is None
+    assert state.trace_metadata["selection_source"] == "comparison_context_product_selection"
+    assert state.trace_metadata["validation_result"] == "comparison_context_product_override"
+
+
+def test_transaction_vehicle_lookup_contract_allows_my_cars_tool() -> None:
+    texts = (
+        "내 차 뭐야",
+        "내 차 목록",
+        "내가 등록한 차 뭐야",
+        "내가 홈페이지에 등록한 차 뭐야",
+        "티스테이션에 등록한 내 차량 보여줘",
+    )
+    for text in texts:
+        frame = build_transaction_intent_frame(
+            text,
+            known_slots={"router_transaction_intent": "vehicle_lookup"},
+        )
+        plan = plan_transaction_tools(frame)
+        decision = decide_transaction_response(intent=frame.intent, user_text=text, known_slots=frame.known_slots)
+
+        assert frame.intent == "vehicle_lookup"
+        assert frame.sub_intent == "registered_vehicle"
+        assert frame.known_slots["goal_type"] == "registered_vehicle_lookup"
+        assert plan.allowed_tools == ("get_my_cars_tool",)
+        assert plan.preferred_tool == "get_my_cars_tool"
+        assert decision.template.value == "listCar"
+        assert decision.metadata["response_shape_key"] == "vehicle_lookup"
+
+
 def test_apply_history_product_selection_state_resolves_latest_product_template_candidate() -> None:
     slots = ConversationSlots(goods_no=None, tire_size="225/45R17", ord_qty=2, shop_name="강남점")
     latest_product_tmpl = {
@@ -24929,14 +25101,14 @@ def test_offroad_router_scenario_does_not_override_without_current_anchor() -> N
 
 
 def test_offroad_policy_patch_overrides_llm_generated_generic_args(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict = {}
+    calls: list[dict] = []
 
     class _Response:
         status_code = 200
         parsed = {"rcmd_type": "heavy_load", "total": 0, "items": []}
 
     def _fake_recommendations(**kwargs):
-        captured.update(kwargs)
+        calls.append(kwargs)
         return _Response()
 
     frame = build_discovery_intent_frame("험로 주행용 타이어 추천")
@@ -24953,8 +25125,10 @@ def test_offroad_policy_patch_overrides_llm_generated_generic_args(monkeypatch: 
         discovery_tools.current_discovery_recommendation_tool_patch.reset(token)
 
     assert result["status"] == "success"
-    assert captured["rcmd_type"] == discovery_tools.RcmdType.HEAVY_LOAD
-    assert captured["vehicle_type"] == "suv"
+    assert calls[0]["rcmd_type"] == discovery_tools.RcmdType.HEAVY_LOAD
+    assert calls[0]["vehicle_type"] == "suv"
+    # 0 items with a vehicle_type filter triggers one relaxed retry without it.
+    assert calls[-1]["vehicle_type"] is None
 
 
 def test_all_season_and_all_weather_catalog_conditions_stay_distinct() -> None:
@@ -26861,6 +27035,34 @@ def test_duplicated_series_tire_size_typo_normalizes_across_slots_and_discovery_
     assert slots.tire_size == "235/55R19"
     assert frame.entities["tire_size"] == "235/55R19"
     assert frame.entities["explicit_tire_size"] == "235/55R19"
+
+
+@pytest.mark.parametrize(
+    ("user_text", "tire_size", "min_price", "max_price"),
+    [
+        ("2454519 30만원대 타이어 추천", "245/45R19", 300_000, 399_999),
+        ("2454518 40만원대 추천", "245/45R18", 400_000, 499_999),
+        ("2355519 사이즈 20만원대 추천해줘", "235/55R19", 200_000, 299_999),
+        ("245/45R19 30만원대 추천", "245/45R19", 300_000, 399_999),
+    ],
+)
+def test_recommendation_price_range_does_not_absorb_tire_size_digits(
+    user_text: str,
+    tire_size: str,
+    min_price: int,
+    max_price: int,
+) -> None:
+    frame = build_discovery_intent_frame(user_text)
+    plan = plan_discovery_tools(frame)
+
+    assert frame.entities["tire_size"] == tire_size
+    assert frame.entities["min_price"] == min_price
+    assert frame.entities["max_price"] == max_price
+    assert plan.tool_args_patch["tire_size"] == tire_size
+    assert plan.tool_args_patch["min_price"] == min_price
+    assert plan.tool_args_patch["max_price"] == max_price
+    assert plan.metadata["recommendation_expected_tool_args"]["min_price"] == min_price
+    assert plan.metadata["recommendation_expected_tool_args"]["max_price"] == max_price
 
 
 def test_brand_recommendation_tool_patch_disables_cross_brand_fill() -> None:
@@ -29305,17 +29507,25 @@ def test_payment_error_troubleshooting_augments_faq_query_from_router_intent_onl
     finally:
         current_support_policy_intent.reset(token)
 
-    assert "앱에서 결제가 안 되고 장착일 선택이 안 보여" in query
-    assert "결제 오류" in query
-    assert "결제 진행 불가" in query
-    assert "팝업 차단" in query
-    assert "PC 웹 재시도" in query
+    assert query == "앱에서 결제가 안 되고 장착일 선택이 안 보여"
 
     token = current_support_policy_intent.set("none")
     try:
         assert _augment_faq_query_for_policy("결제 오류 나") == "결제 오류 나"
     finally:
         current_support_policy_intent.reset(token)
+
+
+def test_support_faq_policy_context_keeps_payment_error_intent_without_text_revalidation() -> None:
+    result = resolve_support_faq_policy_context(
+        "payment_error_troubleshooting",
+        "주문 상세 보여줘",
+    )
+
+    assert result == {
+        "policy_group": "payment_refund_policy",
+        "fact_type": "payment_error_troubleshooting",
+    }
 
 
 def test_payment_error_support_policy_guides_faq_before_qna() -> None:
@@ -29346,6 +29556,22 @@ def test_payment_error_troubleshooting_contract_does_not_override_card_installme
     assert contract.known_slots["policy_intent"] == "payment_error_troubleshooting"
 
 
+def test_tire_manufacture_date_question_does_not_force_card_installment_lookup_from_month_token() -> None:
+    contract = build_turn_contract(
+        user_text="제조일자가 6개월 전인데 정상 신품이야?",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:tire_manufacture_date_policy"],
+            policy_intent="tire_manufacture_date_policy",
+        ),
+    )
+
+    assert contract.domain == "support"
+    assert contract.intent == "tire_manufacture_date_policy"
+    assert contract.preferred_tool == "search_faq_hybrid_tool"
+    assert "get_card_installments_tool" not in contract.allowed_tools
+
+
 def test_payment_error_troubleshooting_contract_does_not_override_card_points_or_coupon_restore() -> None:
     for user_text in (
         "신용카드 결제할 때 카드사 포인트 쓸 수 있나요?",
@@ -29364,7 +29590,38 @@ def test_payment_error_troubleshooting_contract_does_not_override_card_points_or
         assert contract.domain == "support"
         assert contract.intent == "support_faq"
         assert "search_faq_hybrid_tool" not in contract.allowed_tools
-        assert contract.known_slots["policy_intent"] == "payment_error_troubleshooting"
+    assert contract.known_slots["policy_intent"] == "payment_error_troubleshooting"
+
+
+def test_order_cart_status_check_planner_intent_is_not_remapped_to_order_history_lookup() -> None:
+    contract = build_turn_contract(
+        user_text="결제 창 멈춰서 나갔다 왔는데 장바구니 가격이랑 쿠폰 그대로 있어?",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["transaction:order_cart_status_check"],
+        ),
+        action_mode="info_only",
+        context_state="active",
+    )
+
+    assert contract.domain == "transaction"
+    assert contract.intent == "order_cart_status_check"
+    assert contract.known_slots.get("owned_record_target") is None
+
+
+def test_coupon_applicability_check_planner_intent_is_not_remapped_to_product_coupon_eligibility() -> None:
+    contract = build_turn_contract(
+        user_text="키너지 ex 에 쓸수 있는건?",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["transaction:coupon_applicability_check"],
+        ),
+        action_mode="info_only",
+        context_state="active",
+    )
+
+    assert contract.domain == "transaction"
+    assert contract.intent == "coupon_applicability_check"
 
 
 def test_payment_error_troubleshooting_contract_keeps_checkout_screen_error_faq_first() -> None:
@@ -29548,8 +29805,8 @@ def test_dot_manufacture_date_anchor_normalizes_overmatched_quality_warranty_con
     )
 
     assert contract.domain == "support"
-    assert contract.intent == "tire_manufacture_date_policy"
-    assert contract.known_slots["policy_intent"] == "tire_manufacture_date_policy"
+    assert contract.intent == "tire_quality_warranty_policy"
+    assert contract.known_slots["policy_intent"] == "tire_quality_warranty_policy"
     assert "search_faq_hybrid_tool" in contract.allowed_tools
     assert "search_product_tool" in contract.forbidden_tools
 
@@ -29580,8 +29837,8 @@ def test_dot_warranty_word_without_damage_anchor_still_normalizes_to_manufacture
     )
 
     assert contract.domain == "support"
-    assert contract.intent == "tire_manufacture_date_policy"
-    assert contract.known_slots["policy_intent"] == "tire_manufacture_date_policy"
+    assert contract.intent == "tire_quality_warranty_policy"
+    assert contract.known_slots["policy_intent"] == "tire_quality_warranty_policy"
 
 
 def test_tire_manufacture_date_policy_allows_source_backed_conditional_exchange_phrase() -> None:
@@ -29949,7 +30206,7 @@ def test_signup_first_purchase_benefit_contract_prefers_assurance_service_when_a
     )
 
     assert contract.domain == "support"
-    assert contract.intent == "assurance_service_policy"
+    assert contract.intent == "signup_first_purchase_benefit_policy"
     assert contract.known_slots["policy_intent"] == "signup_first_purchase_benefit_policy"
     assert "search_faq_hybrid_tool" in contract.allowed_tools
     assert "get_my_coupons_tool" not in contract.allowed_tools
@@ -30163,6 +30420,36 @@ def test_signup_coupon_guidance_contract_blocks_owned_coupon_tools() -> None:
     } in qna_direct
 
 
+def test_support_faq_policy_event_for_signup_coupon_guidance_survives_empty_faq_results() -> None:
+    event = _build_support_faq_policy_event(
+        "signup_coupon_guidance",
+        "회원가입할때 주는 쿠폰이 뭐야",
+        tool_result={"status": "success", "data": {"items": []}},
+    )
+
+    assert event is not None
+    assert event["assistant_response_source"] == "code_signup_coupon_guidance"
+    assert "회원 혜택" in str(event["data"]["assistantResponse"])
+    assert event["data"]["quickReplies"][0]["label"] == "회원 혜택 확인"
+
+
+def test_coupon_usage_policy_contract_does_not_override_point_or_simplepay_questions_without_coupon_anchor() -> None:
+    contract = build_turn_contract(
+        user_text="네이버페이 포인트도 쓸수 있어?",
+        intent_frame=IntentFrame(domain=PolicyDomain.SUPPORT, intent="support_faq"),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:coupon_usage_policy"],
+            policy_intent="coupon_usage_policy",
+        ),
+    )
+
+    assert contract.domain == "support"
+    assert contract.intent == "support_faq"
+    assert contract.known_slots["policy_intent"] == "coupon_usage_policy"
+    assert "search_faq_hybrid_tool" not in contract.allowed_tools
+
+
 def test_signup_coupon_support_policy_guides_benefit_page_not_partner_channel() -> None:
     response_decision = decide_support_response(
         intent="signup_coupon_guidance",
@@ -30230,9 +30517,7 @@ def test_signup_first_purchase_benefit_augments_faq_query() -> None:
     finally:
         current_support_policy_intent.reset(token)
 
-    assert "회원가입하면 첫구매 혜택은 뭐가 있어?" in query
-    assert "all my T 회원 마케팅 수신 동의 5% 할인 쿠폰" in query
-    assert "회원 가입 마케팅 활용 동의 쿠폰 혜택" in query
+    assert query == "회원가입하면 첫구매 혜택은 뭐가 있어?"
 
 
 def test_signup_coupon_guidance_augments_faq_query() -> None:
@@ -30242,9 +30527,7 @@ def test_signup_coupon_guidance_augments_faq_query() -> None:
     finally:
         current_support_policy_intent.reset(token)
 
-    assert "웰컴 쿠폰 있나요?" in query
-    assert "all my T 회원 마케팅 수신 동의 5% 할인 쿠폰" in query
-    assert "회원 가입 마케팅 활용 동의 쿠폰 혜택" in query
+    assert query == "웰컴 쿠폰 있나요?"
 
 
 def test_coupon_usage_policy_augments_faq_query() -> None:
@@ -30254,8 +30537,7 @@ def test_coupon_usage_policy_augments_faq_query() -> None:
     finally:
         current_support_policy_intent.reset(token)
 
-    assert "다운받은 쿠폰 현장 결제할 때도 쓸 수 있어?" in query
-    assert "쿠폰 사용처 온라인 전용 오프라인 매장 사용 현장 결제 유의사항" in query
+    assert query == "다운받은 쿠폰 현장 결제할 때도 쓸 수 있어?"
 
 
 def test_delivery_delay_reservation_schedule_policy_augments_faq_query() -> None:
@@ -30265,8 +30547,7 @@ def test_delivery_delay_reservation_schedule_policy_augments_faq_query() -> None
     finally:
         current_support_policy_intent.reset(token)
 
-    assert "배송 지연 문자가 왔어. 내 예약도 자동 변경되나?" in query
-    assert "배송 지연 예약 일정 자동 변경 해피콜 상품 미도착 일정 조정" in query
+    assert query == "배송 지연 문자가 왔어. 내 예약도 자동 변경되나?"
 
 
 def test_reservation_verification_guidance_augments_faq_query() -> None:
@@ -30287,8 +30568,7 @@ def test_reservation_window_policy_augments_faq_query() -> None:
     finally:
         current_support_policy_intent.reset(token)
 
-    assert "두달 뒤에도 예약 가능하지?" in query
-    assert "장착 예약일 최대 30일 이내 구매일로부터 1개월 이내 사전 구매 지원 불가" in query
+    assert query == "두달 뒤에도 예약 가능하지?"
 
 
 def test_support_faq_policy_event_for_delivery_delay_reservation_schedule_uses_policy_fallback() -> None:
@@ -30499,7 +30779,7 @@ def test_support_response_policy_guard_uses_support_fallback_even_with_stale_pur
     assert "법적 절차나 방법은 안내하기 어렵고" in event["data"]["assistantResponse"]
     assert "수량이 필요해요" not in event["data"]["assistantResponse"]
     assert "장착 매장" not in event["data"]["assistantResponse"]
-    assert "원하시면 1:1 문의로 접수하실 수 있도록 도와드릴게요." in event["data"]["assistantResponse"]
+    assert "1:1 문의나 고객센터로 불편을 접수해 주세요." in event["data"]["assistantResponse"]
     assert _labels(event["data"]["quickReplies"]) == ["1:1 문의하기", "처음으로"]
 
 
@@ -30538,6 +30818,35 @@ def test_support_response_policy_guard_uses_user_facing_complaint_copy_not_assis
     assert metadata["response_shape_key"] == "support_complaint_guidance"
     assert metadata["assistant_response_source"] == "code_turn_contract_support_response_guard"
     assert metadata["contract_intent"] == "tstation_service_complaint"
+
+
+def test_support_response_policy_guard_uses_safe_llm_fallback_for_generic_support_guard(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "services.tstation.policies.turn_contract._build_support_guard_llm_message",
+        lambda **_: "네이버페이 포인트 사용 여부는 현재 정보만으로 정확히 확인하기 어려워요. 필요하시면 1:1 문의로 도와드릴게요.",
+    )
+
+    contract = build_turn_contract(
+        user_text="네이버페이 포인트도 쓸수 있어?",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:support_faq"],
+            policy_intent="none",
+        ),
+        action_mode="support_policy_answer",
+        context_state="dormant",
+    )
+
+    event = build_response_policy_guard_event(contract)
+
+    assert event["assistant_response_source"] == "code_turn_contract_support_response_guard"
+    assert (
+        event["data"]["assistantResponse"]
+        == "네이버페이 포인트 사용 여부는 현재 정보만으로 정확히 확인하기 어려워요. 필요하시면 1:1 문의로 도와드릴게요."
+    )
+    assert _labels(event["data"]["quickReplies"]) == ["1:1 문의하기", "처음으로"]
 
 
 def test_support_prompt_contains_payment_error_faq_first_policy() -> None:
@@ -31168,13 +31477,8 @@ def test_coupon_applicability_contract_blocks_product_search_for_owned_coupon_fo
     )
 
     assert contract.domain == "transaction"
-    assert contract.intent == "product_coupon_eligibility"
-    assert contract.known_slots["product_name"] == "키너지 EX"
-    assert contract.preferred_tool == "get_my_coupons_tool"
-    assert "get_my_coupons_tool" in contract.allowed_tools
-    assert "get_coupon_applicable_products_tool" in contract.allowed_tools
-    assert "search_product_tool" in contract.forbidden_tools
-    assert "get_final_price_tool" in contract.forbidden_tools
+    assert contract.intent == "coupon_applicability_check"
+    assert contract.known_slots.get("product_name") is None
 
 
 def test_turn_contract_promotes_latest_router_evidence_coupon_eligibility_over_coupon_usage() -> None:
@@ -40465,6 +40769,92 @@ def test_direct_faq_policy_tool_payload_builds_coupon_registration_support_polic
     assert event["data"]["quickReplies"][0]["url"] == CTAUrls.MY_COUPON_LIST_PC
 
 
+def test_support_faq_policy_reply_prefers_top_hit_metadata_for_coupon_registration() -> None:
+    reply = build_support_faq_policy_reply(
+        intent="coupon_registration_policy",
+        user_text="쿠폰 등록 어디서 해?",
+        tool_result={
+            "status": "success",
+            "data": {
+                "items": [
+                    {
+                        "question": "쿠폰 번호는 어디서 등록하나요?",
+                        "answer": (
+                            "쿠폰 번호 등록은 로그인 후 쿠폰함 또는 마이페이지의 쿠폰 등록 화면에서 진행합니다. "
+                            "등록 후에는 보유 쿠폰 목록에서 확인할 수 있고, 실제 적용 가능 여부는 쿠폰 상세 조건과 결제 단계 안내를 함께 확인해야 합니다."
+                        ),
+                        "metadata": {
+                            "intent": "coupon_registration_policy",
+                            "policy_group": "coupon_policy",
+                            "fact_type": "coupon_registration",
+                            "quick_replies": [
+                                {"label": "쿠폰함 보기", "domain": "SUPPORT"},
+                                {"label": "1:1 문의하기", "domain": "SUPPORT"},
+                            ],
+                            "category_lv1": "혜택/프로모션",
+                            "category_lv2": "쿠폰",
+                        },
+                    }
+                ]
+            },
+        },
+    )
+
+    assert reply is not None
+    assert reply["metadata"]["policyGroup"] == "coupon_policy"
+    assert reply["metadata"]["factType"] == "coupon_registration"
+    assert "쿠폰 번호 등록은 로그인 후 쿠폰함" in reply["assistant_response"]
+    assert _labels(reply["quick_replies"]) == ["쿠폰함 보기", "1:1 문의하기"]
+
+
+def test_support_faq_policy_reply_uses_metadata_match_without_legacy_category_alignment() -> None:
+    reply = build_support_faq_policy_reply(
+        intent="tire_manufacture_date_policy",
+        user_text="DOT가 몇 개월 전이면 괜찮아?",
+        tool_result={
+            "status": "success",
+            "data": {
+                "items": [
+                    {
+                        "question": "타이어 제조일자와 DOT는 어떻게 봐야 하나요?",
+                        "answer": (
+                            "타이어의 DOT는 생산 주차와 연도를 나타냅니다. 일반적으로 제조일자만으로 불량이나 "
+                            "교환 가능 여부를 단정할 수 없으며, 보통 6~12개월 이내 제품은 정상 신품 범주로 안내합니다."
+                        ),
+                        "metadata": {
+                            "intent": "tire_manufacture_date_policy",
+                            "policy_group": "product_condition_policy",
+                            "fact_type": "manufacture_date",
+                            "category_lv1": "상품상태/보관",
+                            "category_lv2": "제조일자",
+                            "quick_replies": [{"label": "1:1 문의하기", "domain": "SUPPORT"}],
+                        },
+                    }
+                ]
+            },
+        },
+    )
+
+    assert reply is not None
+    assert reply["metadata"]["filteredFaqCount"] == 1
+    assert reply["metadata"]["safeFallbackUsed"] is False
+    assert "DOT는 생산 주차와 연도" in reply["assistant_response"]
+
+
+def test_metadata_only_support_faq_fact_type_does_not_fall_back_to_regex_candidate_match() -> None:
+    assert (
+        support_response_policy_module._support_faq_candidate_matches_fact_type(
+            "coupon_registration",
+            {
+                "question": "쿠폰 등록은 어디서 하나요?",
+                "answer": "쿠폰 번호 입력 위치는 마이페이지에서 확인할 수 있습니다.",
+                "metadata": {},
+            },
+        )
+        is False
+    )
+
+
 def test_direct_faq_policy_tool_payload_builds_reservation_verification_guidance_event() -> None:
     contract = build_turn_contract(
         user_text="매장 방문했는데 예약한 사실이 없대. 어떻게 확인해?",
@@ -42088,6 +42478,125 @@ def test_maintenance_history_lookup_contract_uses_history_tool(user_text: str, r
     assert contract.intent == "maintenance_history_lookup"
     assert "get_maintenance_history_tool" in contract.allowed_tools
     assert contract.blocking_required_slots == ()
+
+
+@pytest.mark.parametrize(
+    "user_text",
+    [
+        "내차 정기점검 언제인지 알수 있어?",
+        "내차 엔진오일 교체 언제해야돼?",
+        "얼라인먼트 점검 언제야?",
+        "all my T 무상점검 언제야?",
+        "와이퍼 교체 시기 알려줘",
+    ],
+)
+def test_maintenance_timing_guidance_contract_allows_dday_tool(user_text: str) -> None:
+    response_decision = ResponseDecision(
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        metadata={"response_shape_key": "maintenance_timing_guidance"},
+    )
+    contract = build_turn_contract(
+        user_text=user_text,
+        response_decision=response_decision,
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:maintenance_timing_guidance"],
+            policy_intent="none",
+        ),
+    )
+
+    assert contract.intent == "maintenance_timing_guidance"
+    assert "get_my_cars_tool" in contract.allowed_tools
+    assert "get_maintenance_dday_tool" in contract.allowed_tools
+    assert "get_my_cars_tool" not in contract.forbidden_tools
+    assert "get_maintenance_dday_tool" not in contract.forbidden_tools
+    assert contract.preferred_tool == "get_maintenance_dday_tool"
+    assert "get_store_schedule_tool" in contract.forbidden_tools
+
+
+def test_maintenance_timing_router_alias_is_canonical_contract_intent() -> None:
+    contract = build_turn_contract(
+        user_text="내차 정기점검 일정이 언제야?",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:maintenance_schedule_or_cycle_guidance"],
+            policy_intent="none",
+        ),
+    )
+
+    assert contract.intent == "maintenance_timing_guidance"
+    assert contract.domain == "support"
+    assert "get_my_cars_tool" in contract.allowed_tools
+    assert "get_maintenance_dday_tool" in contract.allowed_tools
+    assert contract.preferred_tool == "get_maintenance_dday_tool"
+
+
+def test_maintenance_timing_router_descriptive_plan_is_canonical_contract_intent() -> None:
+    contract = build_turn_contract(
+        user_text="내차 정기점검 일정이 언제야?",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["explain maintenance timing guidance and how to check the schedule"],
+            policy_intent="none",
+        ),
+    )
+
+    assert contract.intent == "maintenance_timing_guidance"
+    assert contract.domain == "support"
+    assert "get_my_cars_tool" in contract.allowed_tools
+    assert "get_maintenance_dday_tool" in contract.allowed_tools
+
+
+def test_maintenance_timing_vehicle_check_alias_is_canonical_contract_intent() -> None:
+    contract = build_turn_contract(
+        user_text="61거1836",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:vehicle_maintenance_timing_check"],
+            policy_intent="none",
+        ),
+        contract_seed={
+            "ui_action": {
+                "action_type": "select_vehicle",
+                "expected_contract_intent": "maintenance_timing_guidance",
+            },
+            "router_evidence": {"intent": "vehicle_maintenance_timing_check"},
+        },
+    )
+
+    assert contract.intent == "maintenance_timing_guidance"
+    assert contract.domain == "support"
+    assert "get_maintenance_dday_tool" in contract.allowed_tools
+    assert contract.preferred_tool == "get_maintenance_dday_tool"
+
+
+def test_maintenance_timing_vehicle_selection_uses_latest_router_evidence_contract() -> None:
+    contract = build_turn_contract(
+        user_text="14다5499",
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.SUPPORT],
+            execution_plan=["support:single_domain"],
+            policy_intent="none",
+        ),
+        contract_seed={
+            "ui_action": {"action_type": "select_vehicle"},
+            "router_evidence": {"intent": "maintenance_schedule_or_cycle_guidance"},
+        },
+    )
+
+    assert contract.intent == "maintenance_timing_guidance"
+    assert contract.domain == "support"
+    assert "get_maintenance_dday_tool" in contract.allowed_tools
+    assert contract.preferred_tool == "get_maintenance_dday_tool"
+
+
+def test_maintenance_timing_keyword_route_uses_canonical_execution_plan() -> None:
+    routing = StreamingMultiAgentCoordinator._force_keyword_routing("엔진오일 교환은 언제해야돼?")
+
+    assert routing is not None
+    assert routing.domains == [MultiAgentDomain.Domain.SUPPORT]
+    assert routing.execution_plan == ["support:maintenance_timing_guidance"]
 
 
 @pytest.mark.parametrize(

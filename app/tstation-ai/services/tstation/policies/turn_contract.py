@@ -21,12 +21,9 @@ from services.tstation.policies.resolved_context import build_resolved_turn_cont
 from services.tstation.policies.response_decision import ResponseDecision, ToolPlan
 from services.tstation.policies.router_evidence import merge_router_evidence_known_slots
 from services.tstation.policies.support_response_policy import (
-    _is_tire_manufacture_date_question,
     build_general_cancel_fee_policy_event,
 )
 from services.tstation.policies.transaction_intent_policy import build_transaction_intent_frame
-
-
 _HIGH_RISK_INTENTS = frozenset({
     "price_or_coupon_check",
     "price_coupon_summary",
@@ -103,6 +100,17 @@ _DISCOVERY_PRODUCT_SOURCE_TOOLS = frozenset({
 _PENDING_CHECK_FOLLOWUP_PLANNER_INTENTS = frozenset({
     "coupon_applicability_check",
 })
+_MAINTENANCE_TIMING_CONTRACT_INTENTS = frozenset({
+    "maintenance_timing_guidance",
+    "maintenance_timing_check",
+    "maintenance_dday_lookup",
+    "maintenance_schedule_guidance",
+    "maintenance_cycle_guidance",
+    "maintenance_schedule_or_cycle_guidance",
+    "maintenance_schedule_cycle_guidance",
+    "vehicle_maintenance_timing_check",
+    "vehicle_maintenance_dday",
+})
 
 
 def _latest_router_evidence_intent(known_slots: Mapping[str, Any]) -> str:
@@ -115,6 +123,56 @@ def _latest_router_evidence_intent(known_slots: Mapping[str, Any]) -> str:
         else {}
     )
     return str(latest_router_evidence.get("intent") or "").strip()
+
+
+def _normalize_maintenance_timing_intent(value: str | None) -> str:
+    normalized = _normalize_plan_intent(str(value or ""))
+    return "maintenance_timing_guidance" if normalized in _MAINTENANCE_TIMING_CONTRACT_INTENTS else normalized
+
+
+def _contract_seed_router_evidence_intent(contract_seed: Mapping[str, Any] | None) -> str:
+    if not isinstance(contract_seed, Mapping):
+        return ""
+    router_evidence = contract_seed.get("router_evidence")
+    if isinstance(router_evidence, Mapping):
+        return str(router_evidence.get("intent") or "").strip()
+    return ""
+
+
+def _contract_seed_ui_action_intent(contract_seed: Mapping[str, Any] | None) -> str:
+    if not isinstance(contract_seed, Mapping):
+        return ""
+    ui_action = contract_seed.get("ui_action")
+    if not isinstance(ui_action, Mapping):
+        return ""
+    return str(
+        ui_action.get("expected_contract_intent")
+        or ui_action.get("expectedContractIntent")
+        or ui_action.get("source_intent")
+        or ui_action.get("sourceIntent")
+        or ""
+    ).strip()
+
+
+def _should_canonicalize_maintenance_timing_contract(
+    *,
+    planner_intent: str | None,
+    policy_intent: str | None,
+    code_intent: str | None,
+    response_shape_key: str | None = None,
+    latest_router_intent: str | None = None,
+    contract_seed: Mapping[str, Any] | None = None,
+) -> bool:
+    intent_candidates = {
+        _normalize_maintenance_timing_intent(planner_intent),
+        _normalize_maintenance_timing_intent(policy_intent),
+        _normalize_maintenance_timing_intent(code_intent),
+        _normalize_maintenance_timing_intent(response_shape_key),
+        _normalize_maintenance_timing_intent(latest_router_intent),
+        _normalize_maintenance_timing_intent(_contract_seed_router_evidence_intent(contract_seed)),
+        _normalize_maintenance_timing_intent(_contract_seed_ui_action_intent(contract_seed)),
+    }
+    return "maintenance_timing_guidance" in intent_candidates
 _COMPARISON_RESOLVER_TOOLS = _DISCOVERY_PRODUCT_SOURCE_TOOLS | frozenset({"get_product_description_tool"})
 _HIGH_RISK_TRANSACTION_TOOLS = frozenset({
     "get_final_price_tool",
@@ -203,6 +261,15 @@ _LEGAL_ACTION_PROCEDURE_RE = re.compile(
 _LEGAL_ACTION_DENIAL_RE = re.compile(
     r"법적\s*(?:절차|조치|대응).{0,24}(?:안내|도움|제공).{0,16}(?:어렵|불가|드릴\s*수\s*없)|"
     r"(?:안내|도움|제공).{0,16}(?:어렵|불가|드릴\s*수\s*없).{0,24}법적\s*(?:절차|조치|대응)",
+    re.IGNORECASE,
+)
+_SUPPORT_GUARD_UNCERTAINTY_RE = re.compile(
+    r"정확(?:한)?\s*(?:답변|확인).{0,12}(?:어려|못)|확인하기\s*어려|답변을\s*찾지\s*못|현재\s*정보만으로",
+    re.IGNORECASE,
+)
+_SUPPORT_GUARD_ASSERTIVE_RE = re.compile(
+    r"(?:사용|적용|발급|지급|환불|교환|보상|예약|장착|결제|변경).{0,8}(?:가능|됩니다|돼요)|"
+    r"(?:가능|됩니다|돼요).{0,8}(?:합니다|해요)",
     re.IGNORECASE,
 )
 _BEST_SELLER_SIZE_CLARIFICATION_RE = re.compile(
@@ -396,6 +463,10 @@ _PAYMENT_TROUBLESHOOTING_RE = re.compile(
 )
 _PAYMENT_METHOD_OR_COUPON_POLICY_RE = re.compile(
     r"쿠폰|포인트|제휴\s*혜택|제휴카드|카드사\s*혜택|카드\s*혜택|복원|원복|다시\s*돌아",
+    re.IGNORECASE,
+)
+_PAYMENT_POINT_OR_SIMPLEPAY_RE = re.compile(
+    r"포인트|네이버\s*페이|네이버페이|카카오\s*페이|카카오페이|간편\s*결제|결제\s*수단|페이\s*결제",
     re.IGNORECASE,
 )
 _COMPARISON_ROUTER_WINS_FOLLOWUP_INTENTS = frozenset({
@@ -683,16 +754,6 @@ def build_turn_contract(
     if planner_intent == "unknown":
         planner_intent = None
     policy_intent = str(getattr(routing_result, "policy_intent", "") or "")
-    if planner_intent == "payment_error_troubleshooting" and _is_payment_error_policy_overmatch(user_text):
-        planner_intent = None
-    if _should_normalize_dot_manufacture_date_policy(
-        user_text=user_text,
-        policy_intent=policy_intent,
-        planner_intent=planner_intent,
-    ):
-        policy_intent = "tire_manufacture_date_policy"
-        if planner_intent == "tire_quality_warranty_policy":
-            planner_intent = "tire_manufacture_date_policy"
     router_wins_intent = _router_wins_current_turn_intent(
         user_text=user_text,
         planner_intent=planner_intent,
@@ -702,10 +763,8 @@ def build_turn_contract(
         response_decision=response_decision,
         action_mode=action_mode,
     )
-    if router_wins_intent in {"signup_first_purchase_benefit_policy", "signup_coupon_guidance"} and _ASSURANCE_SERVICE_POLICY_ANCHOR_RE.search(
-        user_text or ""
-    ):
-        router_wins_intent = "assurance_service_policy"
+    if _normalize_maintenance_timing_intent(router_wins_intent) == "maintenance_timing_guidance":
+        router_wins_intent = "maintenance_timing_guidance"
     code_domain = _domain_value(intent_frame.domain) if intent_frame is not None else _domain_from_routing(routing_result)
     code_intent = intent_frame.intent if intent_frame is not None else _intent_from_cross_domain(cross_domain_plan)
     transaction_boundary_frame = _transaction_policy_boundary_frame(user_text=user_text, merged_slots=merged_slots)
@@ -721,39 +780,12 @@ def build_turn_contract(
             planner_intent = transaction_boundary_frame.intent
         if policy_intent in {"product_recommendation", "sized_product_recommendation"}:
             policy_intent = transaction_boundary_frame.intent
+    coupon_usage_policy_overmatched = _is_coupon_usage_policy_overmatch(user_text)
     keep_registered_vehicle_contract = _should_keep_registered_vehicle_information_contract(
         user_text=user_text,
         intent_frame=intent_frame,
         code_intent=code_intent,
     )
-    if keep_registered_vehicle_contract and policy_intent == "coupon_registration_policy":
-        policy_intent = "none"
-    if keep_registered_vehicle_contract and planner_intent == "coupon_registration_policy":
-        planner_intent = None
-    if keep_registered_vehicle_contract and router_wins_intent == "coupon_registration_policy":
-        router_wins_intent = None
-    if _should_normalize_dot_manufacture_date_policy(
-        user_text=user_text,
-        policy_intent=policy_intent,
-        planner_intent=planner_intent,
-        code_intent=code_intent,
-    ):
-        policy_intent = "tire_manufacture_date_policy"
-        if planner_intent == "tire_quality_warranty_policy":
-            planner_intent = "tire_manufacture_date_policy"
-        if code_intent == "tire_quality_warranty_policy":
-            code_intent = "tire_manufacture_date_policy"
-    if _should_force_card_installment_lookup_intent(
-        user_text=user_text,
-        planner_intent=planner_intent,
-        policy_intent=policy_intent,
-        code_intent=code_intent,
-        domain=code_domain,
-        planner_domains=planner_domains,
-    ):
-        code_domain = "support"
-        code_intent = "card_installment_lookup"
-        router_wins_intent = "card_installment_lookup"
     domain = planner_domains[0] if planner_domains else code_domain
     intent = planner_intent or code_intent
     if keep_registered_vehicle_contract:
@@ -787,6 +819,9 @@ def build_turn_contract(
     )
     known_slots = _normalize_quantity_slots(known_slots)
     if intent_frame is not None:
+        product_names = tuple(
+            str(name).strip() for name in (intent_frame.entities.get("product_names") or ()) if str(name or "").strip()
+        )[:2]
         requested_product_attribute = str(intent_frame.entities.get("requested_product_attribute") or "")
         compare_metric = str(intent_frame.entities.get("compare_metric") or "")
         comparison_followup_intent = str(intent_frame.entities.get("comparison_followup_intent") or "")
@@ -797,6 +832,18 @@ def build_turn_contract(
         recommendation_context = intent_frame.entities.get("recommendation_context")
         if requested_product_attribute:
             known_slots["requested_product_attribute"] = requested_product_attribute
+        if len(product_names) >= 2:
+            known_slots["product_names"] = list(product_names)
+            comparison_context = known_slots.get("comparison_context")
+            if not isinstance(comparison_context, Mapping):
+                comparison_context = {}
+            comparison_context = dict(comparison_context)
+            comparison_context["product_names"] = list(product_names)
+            if compare_metric:
+                comparison_context["compare_metric"] = compare_metric
+            if comparison_followup_intent:
+                comparison_context["comparison_followup_intent"] = comparison_followup_intent
+            known_slots["comparison_context"] = comparison_context
         if compare_metric:
             known_slots["compare_metric"] = compare_metric
         if comparison_followup_intent:
@@ -869,9 +916,33 @@ def build_turn_contract(
     if routing_pending_check_object_value and not known_slots.get("pending_check_object_value"):
         known_slots["pending_check_object_value"] = routing_pending_check_object_value
     latest_router_intent = _latest_router_evidence_intent(known_slots)
+    if _should_canonicalize_maintenance_timing_contract(
+        planner_intent=planner_intent,
+        policy_intent=policy_intent,
+        code_intent=code_intent,
+        latest_router_intent=latest_router_intent,
+        contract_seed=contract_seed,
+    ):
+        domain = "support"
+        intent = "maintenance_timing_guidance"
+        planner_intent = (
+            "maintenance_timing_guidance"
+            if _normalize_maintenance_timing_intent(planner_intent) == "maintenance_timing_guidance"
+            else planner_intent
+        )
+        policy_intent = (
+            "maintenance_timing_guidance"
+            if _normalize_maintenance_timing_intent(policy_intent) == "maintenance_timing_guidance"
+            else policy_intent
+        )
+        known_slots["policy_intent"] = "maintenance_timing_guidance"
     if planner_intent == "owned_coupon_lookup" or code_intent == "owned_coupon_lookup":
         domain = "transaction"
         intent = "owned_coupon_lookup"
+    if coupon_usage_policy_overmatched and intent == "coupon_usage_policy":
+        domain = "support"
+        fallback_intent = str(code_intent or "").strip()
+        intent = fallback_intent if fallback_intent and fallback_intent != "coupon_usage_policy" else "support_faq"
     if latest_router_intent == "product_coupon_eligibility" and intent in {"coupon_usage", "price_or_coupon_check"}:
         domain = "transaction"
         intent = "product_coupon_eligibility"
@@ -896,12 +967,27 @@ def build_turn_contract(
         policy_intent = response_shape_key
         known_slots["policy_intent"] = response_shape_key
     if isinstance(response_metadata, Mapping):
+        product_names = response_metadata.get("productNames") or response_metadata.get("product_names")
         requested_product_attribute = str(response_metadata.get("requested_product_attribute") or "")
         compare_metric = str(response_metadata.get("compare_metric") or "")
         comparison_followup_intent = str(response_metadata.get("comparison_followup_intent") or "")
         oe_replacement_type = str(response_metadata.get("oe_replacement_type") or "")
         stock_check_mode = str(response_metadata.get("stock_check_mode") or "")
         schedule_mode = str(response_metadata.get("schedule_mode") or "").strip()
+        if isinstance(product_names, (list, tuple)):
+            normalized_product_names = [str(name).strip() for name in product_names if str(name or "").strip()][:2]
+            if len(normalized_product_names) >= 2:
+                known_slots["product_names"] = normalized_product_names
+                comparison_context = known_slots.get("comparison_context")
+                if not isinstance(comparison_context, Mapping):
+                    comparison_context = {}
+                comparison_context = dict(comparison_context)
+                comparison_context["product_names"] = normalized_product_names
+                if compare_metric:
+                    comparison_context["compare_metric"] = compare_metric
+                if comparison_followup_intent:
+                    comparison_context["comparison_followup_intent"] = comparison_followup_intent
+                known_slots["comparison_context"] = comparison_context
         if requested_product_attribute and not known_slots.get("requested_product_attribute"):
             known_slots["requested_product_attribute"] = requested_product_attribute
         if compare_metric and not known_slots.get("compare_metric"):
@@ -953,6 +1039,16 @@ def build_turn_contract(
     if code_intent == "maintenance_history_access_policy" or planner_intent == "maintenance_history_access_policy":
         domain = "support"
         intent = "maintenance_history_access_policy"
+    if _should_canonicalize_maintenance_timing_contract(
+        planner_intent=planner_intent,
+        policy_intent=policy_intent,
+        code_intent=code_intent,
+        response_shape_key=response_shape_key,
+        latest_router_intent=latest_router_intent,
+        contract_seed=contract_seed,
+    ):
+        domain = "support"
+        intent = "maintenance_timing_guidance"
     if code_intent == "order_document_guidance" or planner_intent == "order_document_guidance":
         domain = "support"
         intent = "order_document_guidance"
@@ -965,7 +1061,7 @@ def build_turn_contract(
     if code_intent == "general_card_cancel_timing_policy" or planner_intent == "general_card_cancel_timing_policy":
         domain = "support"
         intent = "general_card_cancel_timing_policy"
-    if code_intent == "coupon_usage_policy" or planner_intent == "coupon_usage_policy":
+    if not coupon_usage_policy_overmatched and (code_intent == "coupon_usage_policy" or planner_intent == "coupon_usage_policy"):
         domain = "support"
         intent = "coupon_usage_policy"
     if code_intent == "coupon_stacking_policy" or planner_intent in {"coupon_stacking_policy", "stacking"}:
@@ -974,19 +1070,6 @@ def build_turn_contract(
     if code_intent == "coupon_registration_policy" or planner_intent == "coupon_registration_policy":
         domain = "support"
         intent = "coupon_registration_policy"
-    if planner_intent == "order_cart_status_check":
-        domain = "transaction"
-        intent = "order_history_lookup"
-        known_slots["owned_record_target"] = "order"
-    if planner_intent == "coupon_applicability_check" or intent == "coupon_applicability_check":
-        domain = "transaction"
-        intent = "product_coupon_eligibility"
-        if (
-            not known_slots.get("product_name")
-            and str(known_slots.get("pending_check_object_type") or "").strip() == "product_name"
-            and known_slots.get("pending_check_object_value")
-        ):
-            known_slots["product_name"] = known_slots.get("pending_check_object_value")
     if _is_discovery_event_content_contract(routing_result, planner_intent, code_intent):
         discovery_event_content_intents = {
             "benefit_event_list_lookup",
@@ -1010,6 +1093,9 @@ def build_turn_contract(
     if router_wins_intent:
         domain = _router_wins_domain(router_wins_intent, planner_domains)
         intent = router_wins_intent
+    if _normalize_maintenance_timing_intent(intent) == "maintenance_timing_guidance":
+        domain = "support"
+        intent = "maintenance_timing_guidance"
     intent = _current_turn_stock_owner_intent(intent, known_slots)
     if intent == "stock_store_search":
         domain = "transaction"
@@ -1162,16 +1248,13 @@ def build_turn_contract(
         policy_intent == "payment_error_troubleshooting" and _is_payment_error_policy_overmatch(user_text)
     )
     support_policy_intent = policy_intent
-    if support_policy_intent in {"signup_first_purchase_benefit_policy", "signup_coupon_guidance"} and _ASSURANCE_SERVICE_POLICY_ANCHOR_RE.search(
-        user_text or ""
-    ):
-        support_policy_intent = "assurance_service_policy"
     if (
         domain == "support"
         and support_policy_intent
         and support_policy_intent != "none"
         and not payment_error_overmatched_installment
         and not payment_error_without_troubleshooting_anchor
+        and not (support_policy_intent == "coupon_usage_policy" and coupon_usage_policy_overmatched)
     ):
         intent = support_policy_intent
         if support_policy_intent in _SUPPORT_FAQ_POLICY_TOOL_INTENTS:
@@ -1235,6 +1318,12 @@ def build_turn_contract(
             forbidden_tools,
             ("get_products_recommendations_tool", "search_product_tool", "get_orders_of_user_tool"),
         )
+    if intent == "maintenance_timing_guidance":
+        allowed_tools = _merge_tuple(allowed_tools, ("get_my_cars_tool", "get_maintenance_dday_tool"))
+        forbidden_tools = tuple(
+            tool for tool in forbidden_tools if tool not in {"get_my_cars_tool", "get_maintenance_dday_tool"}
+        )
+        preferred_tool = "get_maintenance_dday_tool"
     if intent == "maintenance_history_access_policy":
         allowed_tools = ()
         forbidden_tools = _merge_tuple(
@@ -1791,7 +1880,10 @@ def build_turn_contract(
         ),
         stale_context_used_for=_stale_context_usage(router_wins_intent=router_wins_intent, context_state=context_state),
         response_policy_source="router_intent" if router_wins_intent else _response_policy_source(response_decision_payload),
-        contract_seed=dict(contract_seed or {}),
+        contract_seed={
+            **dict(contract_seed or {}),
+            **({"user_text": user_text} if str(user_text or "").strip() else {}),
+        },
         context_evidence=dict(context_evidence or {}),
     )
 
@@ -1926,6 +2018,7 @@ def _support_answer_contract_owns_response(*, domain: str, intent: str, action_m
 
 def _support_guard_message_and_chips(
     *,
+    user_text: str = "",
     intent: str,
     response_shape_key: str,
 ) -> tuple[str, list[dict[str, str]]]:
@@ -1949,10 +2042,75 @@ def _support_guard_message_and_chips(
             "확인후 빠르게 도와드릴게요.",
             quick_replies,
         )
+    llm_message = _build_support_guard_llm_message(
+        user_text=user_text,
+        intent=intent,
+        response_shape_key=response_shape_key,
+    )
+    if llm_message:
+        return llm_message, quick_replies
     return (
-        "현재 문의 기준으로 안내드릴게요. 필요하면 1:1 문의로 이어서 도와드릴게요.",
+        "정확한 답변을 찾지 못했어요. 필요하시면 1:1 문의로 도와드릴게요.",
         quick_replies,
     )
+
+
+def _support_guard_prompt(*, user_text: str, intent: str, response_shape_key: str) -> str:
+    normalized = re.sub(r"\s+", " ", str(user_text or "")).strip()
+    return (
+        "당신은 한국어 고객지원 챗봇의 안전한 fallback 작성기입니다.\n"
+        "아래 질문에 대해 정확한 근거 답변을 찾지 못한 상태입니다.\n"
+        "사용자 질문의 주제는 반영하되, 사실이나 정책을 확정해서 말하면 안 됩니다.\n\n"
+        "규칙:\n"
+        "- 한국어 2문장 이내로만 답하세요.\n"
+        "- 첫 문장은 질문 주제를 반영해도 되지만, 현재 정보만으로 정확히 확인하기 어렵다는 뜻을 분명히 말하세요.\n"
+        "- 둘째 문장은 필요하면 1:1 문의로 도와줄 수 있다고 안내하세요.\n"
+        "- 사용 가능/불가, 발급됨, 환불됨, 예약 가능 등 확정 표현을 쓰지 마세요.\n"
+        "- 숫자, 기간, 조건, 정책, 보상, 예외를 새로 만들지 마세요.\n"
+        "- FAQ, RAG, 근거, 정책 검색, 시스템 같은 내부 표현은 쓰지 마세요.\n\n"
+        f"intent={intent}\n"
+        f"response_shape_key={response_shape_key}\n"
+        f"사용자 질문: {normalized}\n\n"
+        "출력은 사용자에게 보여줄 답변 본문만 작성하세요."
+    )
+
+
+def _is_safe_support_guard_message(text: str) -> bool:
+    normalized = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not normalized:
+        return False
+    if len(normalized) > 140:
+        return False
+    if _SUPPORT_GUARD_UNCERTAINTY_RE.search(normalized) is None:
+        return False
+    if "1:1 문의" not in normalized:
+        return False
+    if _SUPPORT_GUARD_ASSERTIVE_RE.search(normalized):
+        return False
+    return True
+
+
+def _build_support_guard_llm_message(
+    *,
+    user_text: str,
+    intent: str,
+    response_shape_key: str,
+) -> str | None:
+    normalized = re.sub(r"\s+", " ", str(user_text or "")).strip()
+    if not normalized:
+        return None
+    try:
+        from langchain_core.messages import HumanMessage
+        from services.tstation.agents.router import DECISION_LLM
+
+        result = DECISION_LLM.invoke(
+            [HumanMessage(content=_support_guard_prompt(user_text=normalized, intent=intent, response_shape_key=response_shape_key))]
+        )
+        content = result.content if hasattr(result, "content") else result
+        message = re.sub(r"\s+", " ", str(content or "")).strip()
+    except Exception:
+        return None
+    return message if _is_safe_support_guard_message(message) else None
 
 
 def build_required_slot_clarification_event(contract: TurnContract) -> dict[str, Any]:
@@ -2079,6 +2237,7 @@ def build_response_policy_guard_event(contract: TurnContract) -> dict[str, Any]:
             if isinstance(metadata, Mapping):
                 response_shape_key = str(metadata.get("response_shape_key") or "")
         message, quick_replies = _support_guard_message_and_chips(
+            user_text=str(contract.contract_seed.get("user_text") or ""),
             intent=intent,
             response_shape_key=response_shape_key,
         )
@@ -4970,6 +5129,8 @@ def _router_wins_information_intent(
             return "owned_warranty_lookup"
         if candidate == "payment_error_troubleshooting" and _is_payment_error_policy_overmatch(user_text):
             continue
+        if candidate == "coupon_usage_policy" and _is_coupon_usage_policy_overmatch(user_text):
+            continue
         if candidate in ROUTER_WINS_INFORMATIONAL_INTENTS:
             return candidate
         if candidate.endswith("_policy") or candidate.endswith("_guidance"):
@@ -5006,26 +5167,11 @@ def _router_wins_current_turn_intent(
         str(planner_intent or "").strip(),
     )
     for candidate in candidates:
+        if candidate == "coupon_usage_policy" and _is_coupon_usage_policy_overmatch(user_text):
+            continue
         if candidate in ROUTER_WINS_EXECUTION_BOUNDARY_INTENTS:
             return candidate
     return None
-
-
-def _should_normalize_dot_manufacture_date_policy(
-    *,
-    user_text: str,
-    policy_intent: str | None = None,
-    planner_intent: str | None = None,
-    code_intent: str | None = None,
-) -> bool:
-    candidates = {
-        str(policy_intent or "").strip(),
-        str(planner_intent or "").strip(),
-        str(code_intent or "").strip(),
-    }
-    if "tire_quality_warranty_policy" not in candidates:
-        return False
-    return _is_tire_manufacture_date_question(user_text)
 
 
 def _is_payment_error_policy_overmatch(user_text: str | None) -> bool:
@@ -5061,34 +5207,9 @@ def _should_apply_transaction_policy_boundary(
     return str(code_domain or "").strip() in {"", "discovery"} and not any(candidates)
 
 
-def _should_force_card_installment_lookup_intent(
-    *,
-    user_text: str,
-    planner_intent: str | None,
-    policy_intent: str | None,
-    code_intent: str | None,
-    domain: str | None,
-    planner_domains: tuple[str, ...],
-) -> bool:
+def _is_coupon_usage_policy_overmatch(user_text: str | None) -> bool:
     text = str(user_text or "")
-    if _is_tire_manufacture_date_question(text, include_candidate_terms=True):
-        return False
-    if _CARD_INSTALLMENT_LOOKUP_RE.search(text) is None:
-        return False
-    if _PAYMENT_TROUBLESHOOTING_RE.search(text) is not None:
-        return False
-    candidates = {
-        str(planner_intent or "").strip(),
-        str(policy_intent or "").strip(),
-        str(code_intent or "").strip(),
-        str(domain or "").strip(),
-        *(str(item or "").strip() for item in planner_domains),
-    }
-    if "card_installment_lookup" in candidates:
-        return True
-    return "support" in candidates or "payment_error_troubleshooting" in candidates
-
-
+    return "쿠폰" not in text and _PAYMENT_POINT_OR_SIMPLEPAY_RE.search(text) is not None
 def _comparison_router_wins_intent(
     *,
     routing_result: Any | None,
@@ -5674,6 +5795,9 @@ def _planner_intent(routing_result: Any | None, plan: CrossDomainPlan | None) ->
         if ":" in token:
             _, intent = token.split(":", 1)
             return _normalize_plan_intent(intent)
+        normalized_text = re.sub(r"[^a-zA-Z0-9가-힣]+", " ", token.lower()).strip()
+        if "maintenance timing" in normalized_text or "maintenance d day" in normalized_text:
+            return "maintenance_timing_guidance"
     return None
 
 

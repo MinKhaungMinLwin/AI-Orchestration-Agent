@@ -206,6 +206,7 @@ _FORCED_LISTCAR_RESPONSE_SHAPE_KEYS = frozenset({
     "vehicle_information",
     "vehicle_based_recommendation_refinement",
     "vehicle_resolved_recommendation",
+    "maintenance_timing_guidance",
 })
 _EXPLICIT_VEHICLE_LIST_REQUEST_LABELS = frozenset({
     "내 차로 확인",
@@ -2561,17 +2562,139 @@ def _best_metric_for_rows(rows: list[dict], metric: str) -> tuple[float | None, 
     return None, "비교 가능한 상세 정보가 확인되지 않음"
 
 
+def _comparison_metric_table_rows(metric: str) -> tuple[tuple[str, str], ...]:
+    if metric == "release":
+        return (("출시 시점", "release"), ("상품 등급", "product_grade"), ("특징", "feature"))
+    if metric == "grade":
+        return (("상품 등급", "product_grade"), ("특징", "feature"), ("리뷰", "review"))
+    if metric == "mileage":
+        return (("마일리지/수명", "mileage"), ("상품 등급", "product_grade"), ("리뷰", "review"))
+    if metric == "noise":
+        return (("정숙성", "noise"), ("상품 등급", "product_grade"), ("리뷰", "review"))
+    if metric == "fuel_efficiency":
+        return (("연비/회전저항", "fuel_efficiency"), ("상품 등급", "product_grade"), ("리뷰", "review"))
+    if metric == "wet":
+        return (("빗길 성능", "wet"), ("상품 등급", "product_grade"), ("리뷰", "review"))
+    if metric == "car_type":
+        return (("차종", "car_type"), ("상품 등급", "product_grade"), ("특징", "feature"))
+    return (("특징", "feature"), ("상품 등급", "product_grade"), ("주요 성능", "performance"), ("리뷰", "review"))
+
+
+def _comparison_feature_summary(row: dict) -> str:
+    for key in ("slogan", "pc_prod_tech_desc", "pc_prod_remark_desc"):
+        summary = re.sub(r"<[^>]+>", " ", str(row.get(key) or ""))
+        summary = re.sub(r"\s+", " ", summary).strip()
+        if summary:
+            return summary[:120]
+
+    parts: list[str] = []
+    season = _get_str(row, "season_nm")
+    car_kind = _get_str(row, "car_knd_nm")
+    performance = _GOODS_PFM_SUMMARY_LABELS.get(_get_str(row, "goods_pfm_nm").upper())
+    if car_kind:
+        parts.append(f"{car_kind}용")
+    if season:
+        parts.append(season)
+    if performance and performance not in parts:
+        parts.append(performance)
+    return " ".join(parts) if parts else "상세 특징 정보는 추가 확인이 필요해요"
+
+
+def _comparison_metric_row_value(metric: str, row: dict, key: str) -> str:
+    if key == "product_grade":
+        return _get_str(row, "prc_grd_nm") or "미확인"
+    if key == "feature":
+        if metric == "detail":
+            values = _unique_nonempty(
+                [" / ".join(filter(None, [_get_str(row, "goods_pfm_nm"), _get_str(row, "goods_dtl_pfm_nm")]))]
+            )
+            return f"특화 사양 {values[0]}" if values else "특화 사양 확인되지 않음"
+        return _comparison_feature_summary(row)
+    if key == "performance":
+        return _tire_summary_performance_line(row) or "확인 가능한 주요 성능 정보가 부족해요"
+    if key == "review":
+        return _tire_summary_review_line(row) or "리뷰 정보 확인되지 않음"
+    if key == "release":
+        return _get_str(row, "t_rls_yearmon", "sys_reg_dtime") or "미확인"
+    if key == "mileage":
+        return _get_str(row, "t_life_span", "t_milg_cvs") or "미확인"
+    if key == "noise":
+        noise_label, _ = _format_noise_label([row])
+        return noise_label
+    if key == "fuel_efficiency":
+        return _get_str(row, "t_fuel_eff_convert", "rr") or "미확인"
+    if key == "wet":
+        return _get_str(row, "wet") or "미확인"
+    if key == "car_type":
+        return _get_str(row, "car_knd_nm", "car_type") or "미확인"
+    return "미확인"
+
+
+def _comparison_metric_best_line(metric: str, best_name: str, best_score: float | None, tied_best: list[str]) -> str:
+    if metric == "release":
+        if best_score is not None:
+            return f"최신 상품은 {best_name}입니다."
+        return "비교 대상의 최신 여부를 판단할 등록일/출시 정보가 충분하지 않아요."
+    if metric == "fuel_efficiency":
+        if best_score is not None:
+            if len(tied_best) > 1:
+                return f"회전저항/RR 기준으로는 {', '.join(tied_best[:3])}이 같은 수준으로 확인돼요."
+            return f"회전저항/RR 기준으로는 {best_name}이 연비 효율에 가장 유리한 편입니다."
+        return "비교 대상의 회전저항/RR 정보가 충분하지 않아요."
+    if metric == "wet":
+        if best_score is not None:
+            return f"젖은노면 제동 등급 기준으로는 {best_name}이 가장 유리한 편입니다."
+        return "비교 대상의 젖은노면 제동 정보가 충분하지 않아요."
+    if metric == "mileage":
+        if best_score is not None:
+            return f"DB 수명/마일리지 지표 기준으로는 {best_name}이 가장 높게 확인돼요."
+        return "비교 대상의 수명/마일리지 지표가 충분하지 않아요."
+    if metric == "grade":
+        if best_score is not None:
+            if len(tied_best) > 1:
+                return f"상품 등급 기준으로는 {', '.join(tied_best[:3])}이 같은 수준으로 확인돼요."
+            return f"상품 등급 기준으로는 {best_name}이 가장 높게 확인돼요."
+        return "비교 대상의 상품 등급이 충분하지 않아요."
+    if metric == "car_type":
+        return f"차종 기준으로는 {best_name}이 확인돼요."
+    if metric == "noise":
+        return f"정숙성 기준으로는 {best_name}이 확인돼요."
+    if metric == "detail":
+        return "비교 대상의 특화 사양은 아래처럼 확인돼요."
+    return "비교 결과를 상품별 표로 정리했어요."
+
+
+def _comparison_metric_note(metric: str) -> str:
+    if metric == "fuel_efficiency":
+        return "회전저항/RR은 등급 숫자가 낮을수록 연비 효율에 유리한 편입니다."
+    if metric == "release":
+        return "최신 여부는 DB의 상품 등록일을 우선 기준으로 비교했습니다."
+    if metric == "wet":
+        return "젖은노면 제동 등급은 규격별로 표시가 다를 수 있어요."
+    if metric == "grade":
+        return "상품 등급은 DB의 현재 노출 기준을 따랐습니다."
+    if metric == "mileage":
+        return "마일리지와 수명은 규격, 차종 호환, 주행환경에 따라 체감이 달라질 수 있어요."
+    if metric == "detail":
+        return "표시된 특화 사양은 규격과 차종에 따라 달라질 수 있어요."
+    return "표시된 사양은 규격에 따라 달라질 수 있어요."
+
+
+def _comparison_metric_blocks(metric: str, grouped: dict[str, list[dict]]) -> list[str]:
+    lines = ["상품 정보를 상품별 표로 비교해드릴게요."]
+    for name, rows in list(grouped.items())[:6]:
+        row = rows[0]
+        lines.extend(["", f"**{name}**", "", "| 항목 | 내용 |", "|---|---|"])
+        for label, key in _comparison_metric_table_rows(metric):
+            lines.append(f"| {label} | {_comparison_metric_row_value(metric, row, key)} |")
+    return lines
+
+
 def _product_metric_comparison_policy_response(tool_data_list: list[dict]) -> str:
     metric = _comparison_metric_from_decision()
     grouped = _collect_product_comparison_rows(tool_data_list)
     if not grouped:
         return ""
-    if metric == "detail":
-        lines = ["비교 대상의 특화 사양은 아래처럼 확인돼요."]
-        for name, rows in list(grouped.items())[:6]:
-            detail, _ = _format_product_attribute("detail", rows)
-            lines.append(f"- {name}: {detail or '특화 사양 확인되지 않음'}")
-        return "\n".join(lines)
 
     ranked: list[tuple[str, float | None, str]] = []
     for name, rows in grouped.items():
@@ -2589,43 +2712,11 @@ def _product_metric_comparison_policy_response(tool_data_list: list[dict]) -> st
         for name, score, _ in ranked
         if best_score is not None and score is not None and abs(float(score) - float(best_score)) < 0.0001
     ]
-    lines: list[str] = []
-    if metric == "release":
-        if best_score is not None:
-            lines.append(f"최신 상품은 {best_name}입니다.")
-        else:
-            lines.append("비교 대상의 최신 여부를 판단할 등록일/출시 정보가 충분하지 않아요.")
-    elif metric == "fuel_efficiency":
-        if best_score is not None:
-            if len(tied_best) > 1:
-                lines.append(f"회전저항/RR 기준으로는 {', '.join(tied_best[:3])}이 같은 수준으로 확인돼요.")
-            else:
-                lines.append(f"회전저항/RR 기준으로는 {best_name}이 연비 효율에 가장 유리한 편입니다.")
-        else:
-            lines.append("비교 대상의 회전저항/RR 정보가 충분하지 않아요.")
-    elif metric == "wet":
-        if best_score is not None:
-            lines.append(f"젖은노면 제동 등급 기준으로는 {best_name}이 가장 유리한 편입니다.")
-        else:
-            lines.append("비교 대상의 젖은노면 제동 정보가 충분하지 않아요.")
-    else:
-        if best_score is not None:
-            lines.append(f"DB 수명/마일리지 지표 기준으로는 {best_name}이 가장 높게 확인돼요.")
-        else:
-            lines.append("비교 대상의 수명/마일리지 지표가 충분하지 않아요.")
-
-    for name, _, display in ranked[:6]:
-        lines.append(f"- {name}: {display}")
+    lines: list[str] = [_comparison_metric_best_line(metric, best_name, best_score, tied_best)]
+    lines.extend(_comparison_metric_blocks(metric, grouped))
 
     lines.append("")
-    if metric == "fuel_efficiency":
-        lines.append("회전저항/RR은 등급 숫자가 낮을수록 연비 효율에 유리한 편입니다.")
-    elif metric == "release":
-        lines.append("최신 여부는 DB의 상품 등록일을 우선 기준으로 비교했습니다.")
-    elif metric == "wet":
-        lines.append("젖은노면 제동 등급은 규격별로 표시가 다를 수 있어요.")
-    else:
-        lines.append("마일리지와 수명은 규격, 차종 호환, 주행환경에 따라 체감이 달라질 수 있어요.")
+    lines.append(_comparison_metric_note(metric))
     return "\n".join(lines)
 
 
@@ -3093,7 +3184,7 @@ def _map_discovery_policy_quickreply(tool_data_list: list[dict], assistant_text:
         response = _technology_unsized_policy_response(tool_data_list) or response
     if response_shape_key == "safe_service_explanation_then_unsized_recommendation_summary":
         response = _safe_service_unsized_policy_response(tool_data_list) or response
-    if response_shape_key == "metric_comparison_summary":
+    if response_shape_key in {"metric_comparison_summary", "grade_comparison_summary"}:
         response = _product_metric_comparison_policy_response(tool_data_list) or response
     if response_shape_key == "restock_inquiry_summary":
         response = _product_restock_policy_response(tool_data_list) or response
@@ -3263,7 +3354,7 @@ def _map_contract_discovery_summary(tool_data_list: list[dict], assistant_text: 
     response = ""
     if response_shape_key == "product_attribute_summary":
         response = _product_attribute_policy_response(tool_data_list)
-    elif response_shape_key == "metric_comparison_summary":
+    elif response_shape_key in {"metric_comparison_summary", "grade_comparison_summary"}:
         response = _product_metric_comparison_policy_response(tool_data_list)
     elif response_shape_key == "technology_explanation_then_unsized_recommendation_summary":
         response = _technology_unsized_policy_response(tool_data_list)
@@ -3286,6 +3377,7 @@ _CONTRACT_RESPONSE_RENDERERS = {
     "purchase_size_selection": _map_contract_purchase_size_selection,
     "product_attribute_summary": _map_contract_discovery_summary,
     "metric_comparison_summary": _map_contract_discovery_summary,
+    "grade_comparison_summary": _map_contract_discovery_summary,
     "technology_explanation_then_unsized_recommendation_summary": _map_contract_discovery_summary,
     "safe_service_explanation_then_unsized_recommendation_summary": _map_contract_discovery_summary,
     "restock_inquiry_summary": _map_contract_discovery_summary,

@@ -104,6 +104,13 @@ def decide_transaction_response(
         return _decide_maintenance_history_access_policy()
     if intent == "order_history_reorder":
         return _decide_order_history_reorder()
+    if intent == "vehicle_lookup":
+        return _decision(
+            response_shape_key="vehicle_lookup",
+            response_shape=ResponseShape.LIST,
+            template=TemplateName.LIST_CAR,
+            assistant_guidance="등록 차량 목록을 listCar로 보여주고 사용자가 차량을 직접 선택할 때까지 대기한다.",
+        )
     if intent == "plain_store_info_lookup":
         return _decide_plain_store_info_lookup()
     if intent == "store_holiday_lookup":

@@ -3293,6 +3293,14 @@ just resolves goods_no inside Discovery. Stay in DISCOVERY for tire picks.
 다른 거 alone, no other anchors), do NOT classify as continuation — route to
 LEADING per AMBIGUOUS RE-TRIGGER rule above.
 
+⚠️ VAGUE NEXT-STEP FOLLOW-UP → stays in TRANSACTION (continuation), NOT LEADING:
+A message like "이제 뭐해야돼?", "다음엔 뭐해야돼?", "뭐 하면 돼?", "어떻게 해야 돼?" has
+no domain keyword by itself, but if the immediately preceding conversation involved an
+order/reservation (주문, 배송, 예약, 매장 방문) → this is a continuation asking "what's my
+next step for that order", NOT an unclear/greeting message. Classify TRANSACTION,
+agent_prompt_profile=transaction_order. Do NOT route to LEADING just because the current
+message itself lacks a keyword — check the recent context first.
+
 Korean vehicle numbers follow patterns: {{vehicle_number}} (e.g., "12가3456", "123가1234")
 """
 
@@ -3435,6 +3443,7 @@ RULES:
 - Product name + explicit same-turn order/store request + size, no goods_no → [DISCOVERY, TRANSACTION]
 - Product name + 예약/주문 + NO size, no goods_no → DISCOVERY only (must show list so user picks size)
 - Vehicle number (e.g. 12가3456) + tire request → DISCOVERY
+- Vehicle number ALONE, with no other text at all (e.g. just "12가3456") → DISCOVERY, agent_prompt_profile=discovery_recommendation. In this chatbot there is no other plausible intent for a bare plate number — treat it the same as "12가3456 타이어 추천". Do NOT route to LEADING for lack of an explicit tire keyword.
 - 추천/맞는 타이어/어떤 타이어 → DISCOVERY
 - 가격 범위/예산으로 타이어 찾기 (X만원 이하/이상/사이 타이어 등, goods_no 없음) → DISCOVERY
 - 런플랫 가격 차이/추가 비용/일반 타이어 대비 비교 → DISCOVERY, agent_prompt_profile=discovery_search
@@ -3528,6 +3537,7 @@ EXAMPLES (tricky cases):
 - [Prior turn: "흡음재 들어간 타이어 알려줘" → agent asked for car/size] "벤투스 에어S" → DISCOVERY, discovery_followup_intent=product_objective_followup, carried_discovery_objective=sound_absorber
 - [Prior turn: "안심서비스 가능한 타이어는?" → agent asked for car/size] "dynapro hp3 설명해줘" → DISCOVERY, discovery_followup_intent=none (explicit description intent overrides the carried objective)
 - "12가3456 타이어 추천" → DISCOVERY, agent_prompt_profile=discovery_recommendation
+- "12가3456" (bare vehicle number, no other text) → DISCOVERY, agent_prompt_profile=discovery_recommendation (same handling as "12가3456 타이어 추천" — no tire keyword needed)
 - "30만원 이하 타이어 추천해줘" → DISCOVERY, agent_prompt_profile=discovery_recommendation (price range recommendation)
 - "지금 세일 많이 하는 타이어 위주로 보여줘" → DISCOVERY, agent_prompt_profile=discovery_recommendation (discounted tire ranking, NOT events/deals)
 - "할인율 높은 타이어 보여줘" → DISCOVERY, agent_prompt_profile=discovery_recommendation (highest discount applied)
@@ -4132,6 +4142,17 @@ class StreamingMultiAgentCoordinator:
                             complaint_scope="none",
                             policy_intent="tire_quality_warranty_policy",
                             flow="tire warranty policy routed to FAQ-first support policy",
+                        )
+                    if domain == MultiAgentDomain.Domain.SUPPORT and _MAINTENANCE_DDAY_TEXT_RE.search(text):
+                        return MultiAgentDomain(
+                            reason=f"hardcoded keyword routing matched '{kw}' with maintenance timing question",
+                            domains=[MultiAgentDomain.Domain.SUPPORT],
+                            execution_plan=["support:maintenance_timing_guidance"],
+                            user_behavior="asking for registered-vehicle maintenance D-day or item replacement timing",
+                            agent_prompt_profile=AgentPromptProfile.FULL,
+                            claim_check_type="none",
+                            complaint_scope="none",
+                            flow="maintenance timing routed to registered-vehicle D-day contract",
                         )
                     return MultiAgentDomain(
                         reason=f"hardcoded keyword routing matched '{kw}'",
@@ -6668,6 +6689,7 @@ def _requested_maintenance_focus(user_query: str) -> tuple[str, tuple[str, ...],
 
 def _build_maintenance_dday_event(tool_result: dict, selected_vehicle: dict, user_query: str) -> dict:
     return build_maintenance_dday_event(tool_result, selected_vehicle, user_query)
+
 
 
 def _build_maintenance_history_event(tool_result: dict, user_query: str) -> dict:
@@ -12536,6 +12558,17 @@ def _comparison_context_from_slots(slots: Any | None) -> dict[str, Any]:
     return _comparison_context_dict(value)
 
 
+def _comparison_product_names_from_context(comparison_context: Any | None) -> tuple[str, ...]:
+    normalized_context = _comparison_context_dict(comparison_context)
+    product_names = normalized_context.get("product_names") or normalized_context.get("productNames")
+    if not isinstance(product_names, (list, tuple)):
+        return ()
+    names = tuple(str(name).strip() for name in product_names if str(name or "").strip())[:2]
+    if len(names) < 2:
+        return ()
+    return names
+
+
 def _explicit_compare_metric_from_text(user_text: str) -> str:
     text = user_text or ""
     if _PRODUCT_RELEASE_COMPARE_TEXT_RE.search(text):
@@ -12603,14 +12636,18 @@ def _comparison_context_values_from_event(event: dict | None) -> dict[str, Any]:
     }
 
 
-def _product_comparison_names(user_text: str) -> tuple[str, ...]:
+def _product_comparison_names(user_text: str, comparison_context: Any | None = None) -> tuple[str, ...]:
     frame = build_discovery_intent_frame(user_text)
     product_names = tuple(frame.entities.get("product_names") or ())
+    if len(product_names) < 2:
+        product_names = _comparison_product_names_from_context(comparison_context)
     if len(product_names) < 2:
         return ()
     if frame.sub_intent in {"grade_compare", "mileage_compare", "latest_compare", "attribute_compare", "general_compare"}:
         return product_names
     if frame.intent in {"product_search", "product_description"} and _PRODUCT_COMPARE_TEXT_RE.search(user_text):
+        return product_names
+    if _is_multi_product_compare_continuation(user_text) or _PRODUCT_COMPARE_REASK_RE.search(user_text or ""):
         return product_names
     return ()
 
@@ -12846,7 +12883,7 @@ def _should_resolve_compare_target_product_pair(
 ) -> bool:
     if _is_product_compare_context_reset_query(user_text):
         return False
-    if len(_product_comparison_names(user_text)) >= 2:
+    if len(_product_comparison_names(user_text, _comparison_context_from_slots(slots))) >= 2:
         return True
     if not _has_recent_compare_target_prompt(messages, latest_quickreply_tmpl):
         comparison_context = _comparison_context_from_slots(slots)
@@ -12859,7 +12896,7 @@ def _should_resolve_compare_target_product_pair(
         ):
             return False
     comparison_query = _comparison_query_with_recent_context(user_text, messages, latest_quickreply_tmpl, slots=slots)
-    return len(_product_comparison_names(comparison_query)) >= 2
+    return len(_product_comparison_names(comparison_query, _comparison_context_from_slots(slots))) >= 2
 
 
 def _comparison_query_with_recent_context(
@@ -12868,12 +12905,12 @@ def _comparison_query_with_recent_context(
     latest_quickreply_tmpl: dict | None = None,
     slots: Any | None = None,
 ) -> str:
+    comparison_context = _comparison_context_from_slots(slots)
     if _product_comparison_names(user_text):
         return user_text
     user_text = user_text or ""
     if _is_product_compare_context_reset_query(user_text):
         return user_text
-    comparison_context = _comparison_context_from_slots(slots)
     context_names = tuple(comparison_context.get("product_names") or ())
     context_metric = str(comparison_context.get("compare_metric") or "").strip()
     if context_metric not in _COMPARISON_METRICS:
@@ -13828,8 +13865,9 @@ def _build_product_comparison_event(
 def _build_product_comparison_event_from_search_results(
     user_text: str,
     search_results: list[tuple[str, dict]],
+    comparison_context: Any | None = None,
 ) -> dict | None:
-    product_names = _product_comparison_names(user_text)
+    product_names = _product_comparison_names(user_text, comparison_context)
     if not product_names:
         return None
     if len(product_names) < 2 or not search_results:
@@ -14058,8 +14096,8 @@ def _build_product_attribute_event_from_search_results(
     }
 
 
-def _is_product_comparison_query(user_text: str) -> bool:
-    return len(_product_comparison_names(user_text)) >= 2
+def _is_product_comparison_query(user_text: str, comparison_context: Any | None = None) -> bool:
+    return len(_product_comparison_names(user_text, comparison_context)) >= 2
 
 
 def _should_skip_product_compare_override(user_text: str, called_tool_names: set[str]) -> bool:
@@ -15406,6 +15444,7 @@ _FAQ_POLICY_FALLBACK_INTENTS = frozenset({
     "card_installment_lookup",
     "coupon_usage_policy",
     "coupon_registration_policy",
+    "signup_coupon_guidance",
     "signup_first_purchase_benefit_policy",
     "reservation_verification_guidance",
     "tire_condition_photo_policy",
@@ -18848,8 +18887,16 @@ def _build_discovery_policy_context(
                     "rcmd_type",
                     "price_goal",
                 ):
-                    if context_frame.entities.get(key) and not merged_entities.get(key):
-                        merged_entities[key] = context_frame.entities[key]
+                    if not context_frame.entities.get(key) or merged_entities.get(key):
+                        continue
+                    if (
+                        key == "vehicle_category"
+                        and context_frame.entities.get("vehicle_category_source") == "model_inference"
+                    ):
+                        # A car model named in a PAST turn must not re-constrain the
+                        # current turn — stale-vehicle skip logic owns that decision.
+                        continue
+                    merged_entities[key] = context_frame.entities[key]
                 if merged_entities != discovery_frame.entities:
                     discovery_frame = replace(discovery_frame, entities=merged_entities)
         if (
@@ -30267,6 +30314,160 @@ class TStationChatServiceV2:
             )
             return (emitted_events, history_event) if history_event is not None else None
 
+        async def _resolve_maintenance_timing_vehicle_list_with_code() -> tuple[list[dict], dict] | None:
+            if str(getattr(turn_contract, "intent", "") or "") != "maintenance_timing_guidance":
+                return None
+            known_slots = getattr(turn_contract, "known_slots", {}) if turn_contract is not None else {}
+            if isinstance(known_slots, Mapping) and (
+                known_slots.get("mbr_car_reg_seq")
+                or known_slots.get("mbrCarRegSeq")
+                or known_slots.get("mbr_car_unif_no")
+                or known_slots.get("mbrCarUnifNo")
+            ):
+                return None
+            gate_allowed, gate_reason = _direct_code_fast_path_contract_gate(
+                turn_contract=turn_contract,
+                intent="maintenance_timing_guidance",
+                template="listCar",
+                source="code_maintenance_timing_vehicle_list",
+                required_tools=("get_my_cars_tool",),
+            )
+            if not gate_allowed:
+                logger.info("[CODE_FAST_PATH_GATE] blocked maintenance_timing_vehicle_list reason=%s", gate_reason)
+                return None
+
+            from services.tstation.agents.b_discovery_agent.tools import get_my_cars_tool as _get_my_cars_tool
+            from services.tstation.template_mapper import try_build_template
+
+            emitted_events: list[dict] = []
+            tool_input = {"mbr_no": user_id}
+            emitted_events.append({
+                "type": "status",
+                "status": "tool_start",
+                "tool": "get_my_cars_tool",
+                "display_name": "내 차량 조회 중...",
+                "source_domain": "support",
+            })
+            try:
+                raw_cars = await asyncio.to_thread(_get_my_cars_tool.invoke, tool_input)
+                cars_result = _tool_result_dict(raw_cars)
+            except Exception as exc:
+                logger.exception("[MAINTENANCE_TIMING] get_my_cars_tool failed")
+                cars_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+            _record_code_tool_result("get_my_cars_tool", tool_input, cars_result)
+            emitted_events.append({
+                "type": "agent_flow",
+                "agent": "[FAQ AF]",
+                "agent_class": "Support Agent",
+                "status": cars_result.get("status", "success"),
+                "source_domain": "support",
+            })
+            emitted_events.append({
+                "type": "tool",
+                "input": tool_input,
+                "output": json.dumps(cars_result, ensure_ascii=False),
+                "node": "tools",
+                "tool": "get_my_cars_tool",
+                "source_domain": "support",
+            })
+
+            assistant_text = "등록된 차량을 확인했어요. 정비 일정을 확인할 차량을 선택해 주세요."
+            mapped_event = try_build_template(
+                [{"tool": "get_my_cars_tool", "args": tool_input, "data": cars_result}],
+                assistant_text,
+            )
+            if not isinstance(mapped_event, dict):
+                return None
+            mapped_event["source_domain"] = MultiAgentDomain.Domain.SUPPORT.value
+            mapped_event["assistant_response_source"] = "code_maintenance_timing_vehicle_list"
+            event_data = mapped_event.get("data")
+            if isinstance(event_data, dict):
+                for meta in event_data.get("metadata") or []:
+                    if isinstance(meta, dict):
+                        meta["sourceIntent"] = "maintenance_timing_guidance"
+                        meta["source_intent"] = "maintenance_timing_guidance"
+                        meta["expectedContractIntent"] = "maintenance_timing_guidance"
+                        meta["expected_contract_intent"] = "maintenance_timing_guidance"
+            list_event = _finalize_direct_code_event(
+                mapped_event,
+                turn_contract=turn_contract,
+                intent="maintenance_timing_guidance",
+                source="code_maintenance_timing_vehicle_list",
+                required_tools=("get_my_cars_tool",),
+            )
+            return (emitted_events, list_event) if list_event is not None else None
+
+        async def _resolve_maintenance_timing_dday_with_code() -> tuple[list[dict], dict] | None:
+            if str(getattr(turn_contract, "intent", "") or "") != "maintenance_timing_guidance":
+                return None
+            if _requested_maintenance_focus(user_query) is None:
+                return None
+            known_slots = getattr(turn_contract, "known_slots", {}) if turn_contract is not None else {}
+            selected_seq = ""
+            if isinstance(known_slots, Mapping):
+                selected_seq = str(
+                    known_slots.get("mbr_car_reg_seq")
+                    or known_slots.get("mbrCarRegSeq")
+                    or known_slots.get("mbr_car_unif_no")
+                    or known_slots.get("mbrCarUnifNo")
+                    or ""
+                ).strip()
+            tool_name = "get_maintenance_dday_tool"
+            gate_allowed, gate_reason = _direct_code_fast_path_contract_gate(
+                turn_contract=turn_contract,
+                intent="maintenance_timing_guidance",
+                template="quickReply",
+                source="code_maintenance_timing_dday",
+                required_tools=(tool_name,),
+            )
+            if not gate_allowed:
+                logger.info("[CODE_FAST_PATH_GATE] blocked maintenance_timing_dday reason=%s", gate_reason)
+                return None
+
+            from services.tstation.agents.e_support_agent.tools import (
+                get_maintenance_dday_tool as _maintenance_dday_tool,
+            )
+
+            tool_input = {"mbr_car_reg_seq": selected_seq or None}
+            emitted_events: list[dict] = [{
+                "type": "status",
+                "status": "tool_start",
+                "tool": tool_name,
+                "display_name": "정비 일정 조회 중...",
+                "source_domain": "support",
+            }]
+            try:
+                raw_result = await asyncio.to_thread(_maintenance_dday_tool.invoke, tool_input)
+                tool_result = _tool_result_dict(raw_result)
+            except Exception as exc:
+                logger.exception("[MAINTENANCE_TIMING] D-day tool failed")
+                tool_result = {"status": "error", "http_status": None, "message": str(exc), "data": {}}
+            _record_code_tool_result(tool_name, tool_input, tool_result)
+            emitted_events.append({
+                "type": "agent_flow",
+                "agent": "[FAQ AF]",
+                "agent_class": "Support Agent",
+                "status": tool_result.get("status", "success"),
+                "source_domain": "support",
+            })
+            emitted_events.append({
+                "type": "tool",
+                "input": tool_input,
+                "output": json.dumps(tool_result, ensure_ascii=False),
+                "node": "tools",
+                "tool": tool_name,
+                "source_domain": "support",
+            })
+            selected_vehicle: dict[str, Any] = {"meta": {"mbrCarRegSeq": selected_seq}} if selected_seq else {}
+            dday_event = _finalize_direct_code_event(
+                _build_maintenance_dday_event(tool_result, selected_vehicle, user_query),
+                turn_contract=turn_contract,
+                intent="maintenance_timing_guidance",
+                source="code_maintenance_timing_dday",
+                required_tools=(tool_name,),
+            )
+            return (emitted_events, dday_event) if dday_event is not None else None
+
         async def _resolve_reservation_store_info_with_code() -> tuple[list[dict], dict] | None:
             if not _is_reservation_store_info_lookup_query(user_query):
                 return None
@@ -32074,13 +32275,24 @@ class TStationChatServiceV2:
         async def _resolve_product_comparison_with_code(
             comparison_query_override: str | None = None,
         ) -> tuple[list[dict], dict] | None:
+            response_decision = turn_contract.response_decision if turn_contract is not None else None
+            response_metadata = (
+                response_decision.get("metadata")
+                if isinstance(response_decision, Mapping)
+                else getattr(response_decision, "metadata", None)
+            ) or {}
+            comparison_context = (
+                response_metadata
+                if isinstance(response_metadata, Mapping)
+                else _comparison_context_from_slots(pending_slots or initial_slots)
+            )
             comparison_query = comparison_query_override or _comparison_query_with_recent_context(
                 user_query,
                 messages,
                 latest_quickreply_tmpl,
                 slots=pending_slots or initial_slots,
             )
-            product_names = _product_comparison_names(comparison_query)
+            product_names = _product_comparison_names(comparison_query, comparison_context)
             if len(product_names) < 2:
                 return None
             gate_allowed, gate_reason = _direct_code_fast_path_contract_gate(
@@ -33804,7 +34016,7 @@ class TStationChatServiceV2:
                 tool_input = {"mbr_car_reg_seq": selected_meta.get("mbrCarRegSeq") or None}
                 gate_allowed, gate_reason = _direct_code_fast_path_contract_gate(
                     turn_contract=turn_contract,
-                    intent="maintenance_history_lookup",
+                    intent="maintenance_timing_guidance",
                     template="quickReply",
                     source="code_vehicle_maintenance_dday",
                     required_tools=(tool_name,),
@@ -33812,6 +34024,7 @@ class TStationChatServiceV2:
                         "maintenance_tip",
                         "support_policy_answer",
                         "vehicle_maintenance_dday",
+                        "maintenance_timing_guidance",
                     ),
                 )
                 if not gate_allowed:
@@ -33854,13 +34067,14 @@ class TStationChatServiceV2:
                 maintenance_event = _finalize_direct_code_event(
                     _build_maintenance_dday_event(tool_result, selected, user_query),
                     turn_contract=turn_contract,
-                    intent="maintenance_history_lookup",
+                    intent="maintenance_timing_guidance",
                     source="code_vehicle_maintenance_dday",
                     required_tools=(tool_name,),
                     allowed_intents=(
                         "maintenance_tip",
                         "support_policy_answer",
                         "vehicle_maintenance_dday",
+                        "maintenance_timing_guidance",
                     ),
                 )
                 return (emitted_events, maintenance_event) if maintenance_event is not None else (emitted_events, None)
@@ -34566,6 +34780,38 @@ class TStationChatServiceV2:
             assistant_response = str((reorder_event.get("data") or {}).get("assistantResponse") or "")
             if assistant_response:
                 yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[TRANSACTION AGENT]'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
+        maintenance_timing_dday_resolution = await _resolve_maintenance_timing_dday_with_code()
+        if maintenance_timing_dday_resolution is not None:
+            code_events, dday_event = maintenance_timing_dday_resolution
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[SUPPORT AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+            for code_event in code_events:
+                yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[SUPPORT AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(dday_event, ensure_ascii=False)}\n\n"
+            assistant_response = str((dday_event.get("data") or {}).get("assistantResponse") or "")
+            if assistant_response:
+                yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[SUPPORT AGENT]'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
+        maintenance_timing_vehicle_list_resolution = await _resolve_maintenance_timing_vehicle_list_with_code()
+        if maintenance_timing_vehicle_list_resolution is not None:
+            code_events, vehicle_list_event = maintenance_timing_vehicle_list_resolution
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[SUPPORT AGENT]', 'status': 'start'}, ensure_ascii=False)}\n\n"
+            for code_event in code_events:
+                yield f"data: {json.dumps(code_event, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[SUPPORT AGENT]', 'status': 'done'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps(vehicle_list_event, ensure_ascii=False)}\n\n"
+            assistant_response = str((vehicle_list_event.get("data") or {}).get("assistantResponse") or "")
+            if assistant_response:
+                yield f"data: {json.dumps({'type': 'message', 'content': assistant_response, 'agent': '[SUPPORT AGENT]'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'sub-agent', 'agent': '[DONE]', 'status': 'success'}, ensure_ascii=False)}\n\n"
             yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
             yield "data: [DONE]\n\n"
@@ -37120,6 +37366,17 @@ class TStationChatServiceV2:
                         latest_quickreply_tmpl,
                         slots=pending_slots or initial_slots,
                     )
+                    response_decision = turn_contract.response_decision if turn_contract is not None else None
+                    response_metadata = (
+                        response_decision.get("metadata")
+                        if isinstance(response_decision, Mapping)
+                        else getattr(response_decision, "metadata", None)
+                    ) or {}
+                    comparison_context = (
+                        response_metadata
+                        if isinstance(response_metadata, Mapping)
+                        else _comparison_context_from_slots(pending_slots or initial_slots)
+                    )
                     deterministic_compare_event = (
                         None
                         if (
@@ -37129,10 +37386,11 @@ class TStationChatServiceV2:
                         else _build_product_comparison_event_from_search_results(
                             comparison_query,
                             search_product_tool_results,
+                            comparison_context=comparison_context,
                         )
                     )
                     if (
-                        _is_product_comparison_query(comparison_query)
+                        _is_product_comparison_query(comparison_query, comparison_context)
                         and (
                             event.get("template") == "product"
                             or deterministic_compare_event is None
@@ -37561,16 +37819,28 @@ class TStationChatServiceV2:
                             latest_quickreply_tmpl,
                             slots=pending_slots or initial_slots,
                         )
+                        response_decision = turn_contract.response_decision if turn_contract is not None else None
+                        response_metadata = (
+                            response_decision.get("metadata")
+                            if isinstance(response_decision, Mapping)
+                            else getattr(response_decision, "metadata", None)
+                        ) or {}
+                        comparison_context = (
+                            response_metadata
+                            if isinstance(response_metadata, Mapping)
+                            else _comparison_context_from_slots(pending_slots or initial_slots)
+                        )
                         deterministic_compare_event = (
                             None
                             if _should_skip_product_compare_override(user_query, called_tool_names)
                             else _build_product_comparison_event_from_search_results(
                                 comparison_query,
                                 search_product_tool_results,
+                                comparison_context=comparison_context,
                             )
                         )
                         if (
-                            _is_product_comparison_query(comparison_query)
+                            _is_product_comparison_query(comparison_query, comparison_context)
                             and (
                                 deterministic_compare_event is None
                                 or _is_product_compare_missing_event(deterministic_compare_event)

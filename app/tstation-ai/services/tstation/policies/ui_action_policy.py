@@ -13,7 +13,7 @@ import re
 from dataclasses import dataclass, field, replace
 from typing import Any, Awaitable, Callable, Mapping
 
-from schemas.tstation.slots import ConversationSlots
+from schemas.tstation.slots import ComparisonContext, ConversationSlots
 from services.tstation.policies.intent_frame import IntentFrame, PolicyDomain
 from services.tstation.policies.price_basis_policy import PRICE_BASIS_FIELDS
 from services.tstation.policies.response_decision import ResponseDecision, ResponseShape, TemplateName, ToolPlan
@@ -742,6 +742,29 @@ def current_turn_single_product_name(user_text: str, regex_slots: Any | None = N
         current_product = _COMPACT_TIRE_SIZE_RE.sub(" ", str(user_text or ""))
     current_product = _PRODUCT_NAME_HINT_STOP_RE.sub(" ", current_product)
     return re.sub(r"\s+", " ", current_product).strip(" ,./")
+
+
+def _is_comparison_context_product_selection_override(
+    slots: Any,
+    user_text: str,
+    regex_slots: Any | None = None,
+) -> bool:
+    if getattr(slots, "goods_no", None) in (None, ""):
+        return False
+    current_product = current_turn_single_product_name(user_text, regex_slots)
+    if not current_product:
+        return False
+    comparison_context = ComparisonContext.from_mapping(getattr(slots, "comparison_context", None))
+    if comparison_context is None or len(comparison_context.product_names) < 2:
+        return False
+    if not any(_is_same_product_identity(current_product, product_name) for product_name in comparison_context.product_names):
+        return False
+    existing_product = str(
+        getattr(slots, "tire_model", None)
+        or getattr(slots, "pending_product_name", None)
+        or ""
+    ).strip()
+    return not existing_product or not _is_same_product_identity(current_product, existing_product)
 
 
 def replace_current_turn_product_context(
@@ -2448,6 +2471,19 @@ def apply_history_product_selection_state(
     latest_quickreply_tmpl: Mapping[str, Any] | None = None,
     latest_product_tmpl: Mapping[str, Any] | None = None,
 ) -> HistoryProductSelectionState:
+    comparison_override = _is_comparison_context_product_selection_override(merged_slots, last_user_text)
+    if comparison_override:
+        replaced_slots, replacement_metadata = replace_current_turn_product_context(merged_slots, last_user_text)
+        if replacement_metadata:
+            return HistoryProductSelectionState(
+                updated_slots=replaced_slots,
+                rewritten_user_text=last_user_text,
+                trace_metadata={
+                    **dict(replacement_metadata),
+                    "selection_source": "comparison_context_product_selection",
+                    "validation_result": "comparison_context_product_override",
+                },
+            )
     if getattr(merged_slots, "goods_no", None) is not None:
         return HistoryProductSelectionState(updated_slots=merged_slots, rewritten_user_text=last_user_text)
     has_product_template_candidates = bool(resolve_product_row_from_template_selection(last_user_text, latest_product_tmpl))

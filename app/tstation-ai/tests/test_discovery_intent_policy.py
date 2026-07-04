@@ -13,6 +13,7 @@ from services.tstation.policies.discovery_intent_policy import (
     is_default_tire_shopping_request,
     is_deal_list_request,
     is_external_price_comparison_request,
+    is_general_best_seller_scope_request,
     plan_discovery_tools,
 )
 
@@ -151,6 +152,18 @@ def test_vehicle_best_seller_query_populates_vehicle_query() -> None:
     assert plan.tool_args_patch == {"limit": 5, "months": 3, "vehicle_query": "그랜저"}
 
 
+def test_general_best_seller_scope_does_not_populate_vehicle_query() -> None:
+    for text in ("전체 베스트셀러 보기", "베스트셀러 보기", "인기 타이어 보여줘"):
+        frame = build_discovery_intent_frame(text)
+        plan = plan_discovery_tools(frame)
+
+        assert is_general_best_seller_scope_request(text)
+        assert extract_best_seller_vehicle_query(text) is None
+        assert frame.sub_intent == "best_seller_search"
+        assert "vehicle_query" not in frame.entities
+        assert plan.tool_args_patch == {"limit": 5}
+
+
 def test_vehicle_best_seller_query_without_object_noun_or_recency_word() -> None:
     for text in (
         "그랜저 인기 많은거 알려줘",
@@ -165,6 +178,42 @@ def test_vehicle_best_seller_query_without_object_noun_or_recency_word() -> None
         assert frame.sub_intent == "best_seller_search"
         assert plan.preferred_tool == "get_best_selling_products_tool"
         assert frame.entities["vehicle_query"] in ("그랜저", "K7")
+
+
+def test_vehicle_best_seller_query_uses_catalog_model_name_before_strip_fallback() -> None:
+    cases = (
+        ("스포티지 차주들이 많이 사는 타이어가 뭐야", "스포티지"),
+        ("소나타 차주들이 많이 사는 타이어가 뭐야", "쏘나타"),
+        ("E클래스 차주들이 많이 사는 타이어 뭐야", "벤츠 E클래스"),
+        ("지바겐 차주들이 많이 산 타이어 뭐야", "벤츠 G클래스"),
+    )
+    for text, expected_vehicle_query in cases:
+        frame = build_discovery_intent_frame(text)
+        plan = plan_discovery_tools(frame)
+
+        assert frame.sub_intent == "best_seller_search", text
+        assert frame.entities["vehicle_query"] == expected_vehicle_query, text
+        assert plan.tool_args_patch["vehicle_query"] == expected_vehicle_query, text
+        assert plan.allowed_tools == ("get_best_selling_products_tool",), text
+        assert plan.forbidden_tools == ("get_products_recommendations_tool",), text
+
+
+def test_vehicle_best_seller_query_preserves_broad_series_and_numeric_fallbacks() -> None:
+    cases = (
+        ("320에 많이 팔린 타이어 뭐야", "320"),
+        ("BMW 320에 많이 팔린 타이어 뭐야", "BMW 320"),
+        ("BMW 3시리즈 320에 많이 팔린 타이어 뭐야", "BMW 3시리즈 320"),
+        ("3시리즈 320에 많이 팔린 타이어 뭐야", "BMW 3시리즈 320"),
+    )
+    for text, expected_vehicle_query in cases:
+        frame = build_discovery_intent_frame(text)
+        plan = plan_discovery_tools(frame)
+
+        assert frame.sub_intent == "best_seller_search", text
+        assert frame.entities["vehicle_query"] == expected_vehicle_query, text
+        assert plan.tool_args_patch["vehicle_query"] == expected_vehicle_query, text
+        assert plan.allowed_tools == ("get_best_selling_products_tool",), text
+        assert plan.forbidden_tools == ("get_products_recommendations_tool",), text
 
 
 def test_general_ev_recommendation_still_uses_recommendation_engine() -> None:
@@ -203,10 +252,14 @@ def test_registered_vehicle_type_query_variants_use_vehicle_information_contract
     texts = (
         "내 차 뭐야?",
         "내차 뭐야?",
+        "내 차 목록",
+        "내 차량 보기",
         "내가 등록한 차 뭐야?",
+        "내가 홈페이지에 등록한 차 뭐야?",
         "내가 등록한 차종이 뭐야?",
         "내 차종 알려줘",
         "내가 등록한 차량 알려줘",
+        "티스테이션에 등록한 내 차량 보여줘",
     )
     for text in texts:
         frame = build_discovery_intent_frame(text)
@@ -702,6 +755,39 @@ def test_tc026_latest_compare_uses_registration_metric() -> None:
     assert plan.preferred_tool == "search_product_tool"
 
 
+def test_two_product_description_request_stays_description_flow() -> None:
+    frame = build_discovery_intent_frame("키너지 EX, 벤투스 air S 설명해줘")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.intent == "product_description"
+    assert frame.sub_intent == "product_detail"
+    assert frame.entities["multi_product_description_request"] is True
+    assert frame.entities["multi_product_detail_request"] is True
+    assert plan.metadata["response_intent"] == "multi_product_detail"
+    assert "get_products_recommendations_tool" in plan.forbidden_tools
+
+
+def test_two_product_comparison_request_stays_comparison_flow() -> None:
+    frame = build_discovery_intent_frame("키너지 EX랑 벤투스 air S 비교해줘")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.intent == "product_comparison"
+    assert frame.sub_intent == "general_compare"
+    assert "multi_product_description_request" not in frame.entities
+    assert plan.preferred_tool == "search_product_tool"
+    assert "get_products_recommendations_tool" in plan.forbidden_tools
+
+
+def test_weatherflex_gt_and_kinergy_4s2_compare_uses_product_comparison() -> None:
+    frame = build_discovery_intent_frame("웨더플렉스 GT, 키너지 4S2 비교해줘")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.intent == "product_comparison"
+    assert frame.sub_intent == "general_compare"
+    assert frame.entities["product_names"] == ("웨더플렉스 GT", "키너지 4S2")
+    assert plan.preferred_tool == "search_product_tool"
+
+
 def test_tc032_product_fuel_efficiency_compare_uses_attribute_compare() -> None:
     frame = build_discovery_intent_frame("키너지 EX랑 벤투스 air S 연비 기준으로 비교해줘")
     plan = plan_discovery_tools(frame)
@@ -758,3 +844,88 @@ def test_tc216_kinergy_ex_and_ventus_air_s_are_recognized_for_grade_compare() ->
     assert frame.sub_intent == "grade_compare"
     assert frame.entities["compare_metric"] == "grade"
     assert frame.entities["product_names"] == ("Ventus air S", "Kinergy EX")
+
+
+def test_model_name_infers_suv_vehicle_type_for_recommendation() -> None:
+    frame = build_discovery_intent_frame("G바겐 타이어 추천해줘")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.intent == "product_recommendation"
+    assert frame.entities["vehicle_category"] == "suv"
+    assert frame.entities["vehicle_model_name"] == "벤츠 G클래스"
+    assert frame.entities["vehicle_category_source"] == "model_inference"
+    assert plan.preferred_tool == "get_products_recommendations_tool"
+    assert plan.tool_args_patch["vehicle_type"] == "suv"
+    assert plan.tool_args_patch.get("rcmd_type") != "ev"
+
+
+def test_model_name_infers_passenger_vehicle_type_for_recommendation() -> None:
+    for text in ("벤츠 E클래스 타이어 추천해줘", "Mercedes E-Class 타이어 추천해줘", "이클래스 타이어 추천"):
+        frame = build_discovery_intent_frame(text)
+        plan = plan_discovery_tools(frame)
+
+        assert frame.intent == "product_recommendation", text
+        assert frame.entities["vehicle_category"] == "passenger", text
+        assert plan.tool_args_patch["vehicle_type"] == "passenger", text
+
+
+def test_explicit_ev_request_wins_over_model_inference() -> None:
+    frame = build_discovery_intent_frame("G바겐 전기차 타이어 추천해줘")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.entities["vehicle_category"] == "ev"
+    assert plan.tool_args_patch["vehicle_type"] == "ev"
+
+
+def test_ice_ev_dual_model_maps_to_body_type_not_ev() -> None:
+    frame = build_discovery_intent_frame("코나 타이어 추천해줘")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.entities["vehicle_category"] == "suv"
+    assert plan.tool_args_patch["vehicle_type"] == "suv"
+
+
+def test_ev_only_model_maps_to_ev() -> None:
+    frame = build_discovery_intent_frame("모델Y 타이어 추천해줘")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.entities["vehicle_category"] == "ev"
+    assert plan.tool_args_patch["vehicle_type"] == "ev"
+
+
+def test_scenario_keyword_inside_model_name_is_not_scenario_intent() -> None:
+    frame = build_discovery_intent_frame("렉스턴 스포츠 타이어 추천")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.entities["vehicle_category"] == "truck_van"
+    assert frame.entities.get("performance") is None
+    assert plan.tool_args_patch.get("rcmd_type") != "performance"
+    assert plan.tool_args_patch["vehicle_type"] == "truck_van"
+
+
+def test_scenario_keyword_outside_model_name_still_applies() -> None:
+    frame = build_discovery_intent_frame("쏘나타 스포츠 타이어 추천해줘")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.entities["vehicle_category"] == "passenger"
+    assert frame.entities["performance"] == "performance"
+    assert plan.tool_args_patch["rcmd_type"] == "performance"
+    assert plan.tool_args_patch["vehicle_type"] == "passenger"
+
+
+def test_model_scenario_combination_keeps_both_conditions() -> None:
+    frame = build_discovery_intent_frame("G바겐 사계절 타이어 추천해줘")
+    plan = plan_discovery_tools(frame)
+
+    assert plan.tool_args_patch["rcmd_type"] == "all_weather"
+    assert plan.tool_args_patch["season_nm"] == "사계절"
+    assert plan.tool_args_patch["vehicle_type"] == "suv"
+
+
+def test_generic_recommendation_has_no_model_inference() -> None:
+    frame = build_discovery_intent_frame("타이어 추천해줘")
+    plan = plan_discovery_tools(frame)
+
+    assert frame.entities.get("vehicle_category") is None
+    assert frame.entities.get("vehicle_model_name") is None
+    assert "vehicle_type" not in plan.tool_args_patch
