@@ -199,6 +199,7 @@ from services.tstation.policies.coupon_query_gate import (
 )
 from services.tstation.policies.contract_required_tool_candidate import (
     _contract_read_through_known_slots,
+    _contract_required_recommendation_tool_input,  # noqa: F401
     _contract_required_tool_candidate,  # noqa: F401
     _is_contract_required_selected_store_schedule,
     _is_contract_required_stock_inventory_selected_store,
@@ -7228,8 +7229,10 @@ def _preview_payment_details(
         return {"payment_amount_missing_reason": "quantity_missing"}
     if quantity <= 0:
         return {"payment_amount_missing_reason": "quantity_missing"}
+    wage_prc = _to_int(price_data.get("wage_prc")) if isinstance(price_data, Mapping) else None
+    unit_price_with_wage = unit_price + (wage_prc or 0)
     return {
-        "payment_amount": int(unit_price * quantity),
+        "payment_amount": int(unit_price_with_wage * quantity),
         "price_basis": price_basis,
         "price_source_tool": "transaction_store_preview_tool",
         "payment_amount_source": payment_amount_source,
