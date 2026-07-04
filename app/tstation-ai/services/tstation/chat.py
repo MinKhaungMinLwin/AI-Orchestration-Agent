@@ -1706,6 +1706,8 @@ def _current_turn_action_mode(
 ) -> str:
     plan_text = " ".join(str(item or "").lower() for item in (getattr(routing_result, "execution_plan", None) or ()))
     policy_intent = str(getattr(routing_result, "policy_intent", "") or "").strip()
+    if explicit_override_reason == "explicit_current_turn_purchase" and _has_comparison_product_scope(merged_slots):
+        return "purchase_continuation"
     if (
         MultiAgentDomain.Domain.TRANSACTION in domains
         and policy_intent in {"store_service_search", "unsupported_or_unmapped_store_service_policy"}
@@ -6952,6 +6954,25 @@ def _is_order_quantity_prompt_continuation_text(user_text: str | None) -> bool:
 
 def _is_quantityless_cart_or_order_cta(user_text: str | None) -> bool:
     return bool(_QUANTITYLESS_CART_ORDER_CTA_RE.search(str(user_text or "")))
+
+
+def _has_comparison_product_scope(slots: ConversationSlots) -> bool:
+    comparison_context = getattr(slots, "comparison_context", None)
+    if comparison_context is None:
+        return False
+    if hasattr(comparison_context, "model_dump"):
+        context = comparison_context.model_dump(exclude_none=True)
+    elif isinstance(comparison_context, Mapping):
+        context = dict(comparison_context)
+    else:
+        return False
+    product_names = context.get("product_names") or context.get("productNames")
+    if isinstance(product_names, (list, tuple)):
+        return len([name for name in product_names if str(name or "").strip()]) >= 2
+    product_candidates = context.get("product_candidates") or context.get("candidates")
+    if isinstance(product_candidates, list):
+        return len([candidate for candidate in product_candidates if isinstance(candidate, Mapping)]) >= 2
+    return False
 
 
 def _is_add_to_cart_cta_context(cta_context: Mapping[str, Any] | None, user_text: str | None = None) -> bool:
@@ -16128,6 +16149,38 @@ def _flow_type_from_confirmed_tool_slots(
     if pending_intent == "order" or goal_type == "place_order":
         return "purchase"
     return "store_search"
+
+
+def _slot_runtime_values_from_active_flow_context(active_flow_context: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(active_flow_context, Mapping) or not active_flow_context:
+        return {}
+
+    product = active_flow_context.get("product") if isinstance(active_flow_context.get("product"), Mapping) else {}
+    store = active_flow_context.get("store") if isinstance(active_flow_context.get("store"), Mapping) else {}
+    intent = active_flow_context.get("intent") if isinstance(active_flow_context.get("intent"), Mapping) else {}
+    quantity = active_flow_context.get("quantity") if isinstance(active_flow_context.get("quantity"), Mapping) else {}
+    payment = active_flow_context.get("payment") if isinstance(active_flow_context.get("payment"), Mapping) else {}
+
+    runtime_values = {
+        "goods_no": product.get("goods_no"),
+        "tire_size": product.get("tire_size"),
+        "tire_model": product.get("product_name") or product.get("tire_model"),
+        "pending_product_name": product.get("product_name") or product.get("tire_model"),
+        "ord_qty": product.get("ord_qty") if product.get("ord_qty") not in (None, "", 0, "0") else quantity.get("ord_qty"),
+        "shop_id": store.get("shop_id"),
+        "shop_name": store.get("shop_name") or store.get("store_name"),
+        "region": store.get("region") or active_flow_context.get("region"),
+        "pending_intent": intent.get("pending_intent"),
+        "goal_type": intent.get("goal_type"),
+        "payment_amount": payment.get("payment_amount"),
+        "price_basis": payment.get("price_basis"),
+        "price_source_tool": payment.get("price_source_tool"),
+    }
+    return {
+        key: value
+        for key, value in runtime_values.items()
+        if value not in (None, "", [], {})
+    }
 
 
 def _with_confirmed_tool_flow_state(
@@ -27015,7 +27068,10 @@ class TStationChatServiceV2:
             else:
                 committed_active_context = dict(flow_transition_active_context)
             availability_context["active_flow_context"] = committed_active_context
-            merged_slots = merged_slots.model_copy()
+            merged_slots = merged_slots.apply_runtime_values(
+                _slot_runtime_values_from_active_flow_context(committed_active_context),
+                source="flow_transition_active_context_promotion",
+            )
             merged_slots.availability_context = availability_context
             vehicle_selection_trace_metadata.update({
                 "flow_transition_active_context_stored": True,

@@ -3409,9 +3409,11 @@ def resolve_product_row_from_selection(
         if isinstance(data, list):
             items = [it for it in data if isinstance(it, dict) and not it.get("_truncated")]
             break
-        if isinstance(data, Mapping) and isinstance(data.get("items"), list):
-            items = [it for it in data["items"] if isinstance(it, dict)]
-            break
+        if isinstance(data, Mapping):
+            payload = data.get("data") if isinstance(data.get("data"), Mapping) else data
+            if isinstance(payload.get("items"), list):
+                items = [it for it in payload["items"] if isinstance(it, dict)]
+                break
     if not items:
         return None
 
@@ -3437,6 +3439,20 @@ def resolve_product_row_from_selection(
         goods_no = canonical_context_from_tool_boundary(same_size[0]).get("goods_no")
         if goods_no:
             return same_size[0]
+
+    sound_absorber_preference = _sound_absorber_preference_from_text(text)
+    if sound_absorber_preference is not None:
+        preference_matches = [
+            item
+            for item in same_size
+            if _product_row_sound_absorber_state(item) is sound_absorber_preference
+        ]
+        if len(preference_matches) == 1:
+            goods_no = canonical_context_from_tool_boundary(preference_matches[0]).get("goods_no")
+            if goods_no:
+                return preference_matches[0]
+        if preference_matches:
+            same_size = preference_matches
 
     price_values = {
         int(value.replace(",", ""))
@@ -3486,6 +3502,45 @@ def resolve_product_row_from_selection(
             return best_item
     return None
 
+
+def _sound_absorber_preference_from_text(text: str) -> bool | None:
+    compact = re.sub(r"\s+", "", str(text or "").casefold())
+    if not compact:
+        return None
+    negative_markers = (
+        "흡음재없",
+        "흡음재미적용",
+        "흡음재아닌",
+        "흡음재제외",
+        "withoutsound",
+        "nonabsorb",
+        "nofoam",
+        "regular",
+        "normal",
+    )
+    if any(marker in compact for marker in negative_markers):
+        return False
+    positive_markers = (
+        "흡음재",
+        "soundabsor",
+        "sound-absor",
+        "foam",
+    )
+    if any(marker in compact for marker in positive_markers):
+        return True
+    return None
+
+def _product_row_sound_absorber_state(item: Mapping[str, Any]) -> bool | None:
+    absorber_yn = str(item.get("sound_absorber_yn") or "").strip().upper()
+    if absorber_yn == "Y":
+        return True
+    if absorber_yn == "N":
+        return False
+
+    detail = str(item.get("goods_dtl_pfm_nm") or item.get("goodsDetailPerformanceName") or "").casefold()
+    if "흡음재" in detail or ("sound" in detail and "absor" in detail):
+        return True
+    return None
 
 def resolve_goods_no_from_selection(
     user_text: str,
@@ -4136,6 +4191,14 @@ def resolve_product_row_from_template_selection(
                 value = source.get(key)
                 if value not in (None, "", [], {}) and row.get(key) in (None, "", [], {}):
                     row[key] = value
+        tags = product.get("tags")
+        if isinstance(tags, list):
+            tag_text = " ".join(
+                str(tag.get("text") or "") for tag in tags if isinstance(tag, Mapping)
+            ).strip()
+            if tag_text:
+                row["goods_dtl_pfm_nm"] = tag_text
+                row["sound_absorber_yn"] = "Y" if "흡음재" in tag_text else "N"
         return {key: value for key, value in row.items() if value not in (None, "", [], {})}
 
     ordinal_idx = _selection_ordinal_index(text, len(metadata))
@@ -4146,6 +4209,22 @@ def resolve_product_row_from_template_selection(
 
     target_size = normalize_tire_size(text)
     tokens = [t.lower() for t in re.findall(r"[A-Za-z가-힣0-9]+", text) if len(t) >= 2]
+    sound_absorber_preference = _sound_absorber_preference_from_text(text)
+    if sound_absorber_preference is not None:
+        preference_matches: list[dict[str, Any]] = []
+        for index, (product, meta) in enumerate(zip(products, metadata)):
+            if not isinstance(product, Mapping) or not isinstance(meta, Mapping):
+                continue
+            row = _row_at(index)
+            if not row:
+                continue
+            if target_size and normalize_tire_size(str(row.get("tire_size") or "")) != target_size:
+                continue
+            if _product_row_sound_absorber_state(row) is sound_absorber_preference:
+                preference_matches.append(row)
+        if len(preference_matches) == 1:
+            return preference_matches[0]
+
     best_row: dict[str, Any] | None = None
     best_score = 0
     tied = False

@@ -144,6 +144,7 @@ from services.tstation.chat import (
     _build_recent_product_size_availability_event_from_rows,
     _build_recent_product_size_availability_missing_context_event,
     _build_no_visible_output_fallback_event,
+    _slot_runtime_values_from_active_flow_context,
     _build_turn_contract_fallback_event,
     _build_turn_contract_required_slot_guard_event,
     _build_transaction_unresolved_product_resolution_event,
@@ -14816,6 +14817,95 @@ def test_flow_transition_shell_records_selected_product_without_executing() -> N
     assert slots.goods_no is None
 
 
+def test_selected_product_active_flow_context_promotes_runtime_slots() -> None:
+    base_slots = ConversationSlots(
+        ord_qty=2,
+        pending_intent="order",
+        goal_type="place_order",
+        availability_context={
+            "pending_order_context": {
+                "ord_qty": 2,
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            },
+            "active_flow_context": {
+                "flow_type": "purchase",
+                "flow_step": "ask_product",
+                "status": "active",
+                "intent": {
+                    "pending_intent": "order",
+                    "goal_type": "place_order",
+                },
+            },
+        },
+    )
+    transition = transition_current_flow(
+        user_text="첫번째",
+        router_evidence={
+            "domain": "transaction",
+            "intent": "quick_order_reservation",
+            "execution_plan": ["transaction:quick_order_reservation:slot_fill:product"],
+            "source": "llm",
+        },
+        existing_slots=base_slots,
+        extracted_slots=ConversationSlots(),
+        ui_action=UIActionContext(
+            action_type="select_product",
+            action_name="select_product",
+            selection_source="previous_product_candidate",
+            contract_intent="quick_order_reservation",
+            source_intent="quick_order_reservation",
+            expected_contract_intent="quick_order_reservation",
+            expected_behavior="slot_fill",
+            entity_type="product",
+            entity_id="G000000310126",
+            entity_label="Ventus S2 AS",
+            slot_patch={
+                "goods_no": "G000000310126",
+                "tire_model": "Ventus S2 AS",
+                "tire_size": "245/45R19",
+                "ord_qty": 2,
+                "payment_amount": 298400,
+                "price_basis": "cheapest_final_prc",
+                "price_source_tool": "selected_product_candidate",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            },
+        ),
+        resume_source="router_slot_fill:product",
+    )
+    active_flow_context = transition.flow_transition["active_flow_context"]
+    committed_active_context = commit_flow_state(
+        base_slots.availability_context["active_flow_context"],
+        active_flow_context,
+        source=active_flow_context["source"],
+        flow_type=active_flow_context["flow_type"],
+        flow_step=active_flow_context["flow_step"],
+        status=active_flow_context["status"],
+    ).state.to_active_flow_context()
+
+    promoted_slots = base_slots.apply_runtime_values(
+        _slot_runtime_values_from_active_flow_context(committed_active_context),
+        source="flow_transition_active_context_promotion",
+    )
+    promoted_slots.availability_context = {
+        **dict(base_slots.availability_context or {}),
+        "active_flow_context": committed_active_context,
+    }
+
+    assert promoted_slots.goods_no == "G000000310126"
+    assert promoted_slots.tire_size == "245/45R19"
+    assert promoted_slots.tire_model == "Ventus S2 AS"
+    assert promoted_slots.pending_product_name == "Ventus S2 AS"
+    assert promoted_slots.ord_qty == 2
+    assert promoted_slots.payment_amount == 298400
+    assert promoted_slots.price_basis == "cheapest_final_prc"
+    assert promoted_slots.price_source_tool == "selected_product_candidate"
+    assert promoted_slots.pending_intent == "order"
+    assert promoted_slots.goal_type == "place_order"
+    assert promoted_slots.availability_context["active_flow_context"]["product"]["goods_no"] == "G000000310126"
+
+
 def test_flow_transition_shell_records_selected_product_as_stock_from_router_preview() -> None:
     slots = ConversationSlots(
         region="경기도 광주",
@@ -21304,6 +21394,115 @@ def test_resolve_goods_no_from_selection_uses_price_when_same_size_candidates_ar
 
     assert goods_no == "G000000319584"
 
+
+def test_resolve_goods_no_from_selection_uses_sound_absorber_attribute_when_same_size_is_ambiguous() -> None:
+    goods_no = resolve_goods_no_from_selection(
+        "Ventus Air S 245/45R19 \ud761\uc74c\uc7ac \uc801\uc6a9 \uc0c1\ud488\uc73c\ub85c \ubcfc\uac8c\uc694",
+        [
+            {
+                "tool": "get_products_recommendations_tool",
+                "data": {
+                    "status": "success",
+                    "data": {
+                        "items": [
+                            {
+                                "goods_no": "G000000310126",
+                                "goods_nm": "\ubca4\ud22c\uc2a4 S2 AS",
+                                "tire_size_1": "245/45R19",
+                                "sound_absorber_yn": "N",
+                                "goods_dtl_pfm_nm": "\ucef4\ud3ec\ud2b8",
+                            },
+                            {
+                                "goods_no": "G000000319584",
+                                "goods_nm": "\ubca4\ud22c\uc2a4 \uc5d0\uc5b4S",
+                                "tire_size_1": "245/45R19",
+                                "sound_absorber_yn": "Y",
+                                "goods_dtl_pfm_nm": "\ud761\uc74c\uc7ac",
+                            },
+                            {
+                                "goods_no": "G000000319622",
+                                "goods_nm": "\ubca4\ud22c\uc2a4 \uc5d0\uc5b4S",
+                                "tire_size_1": "245/45R19",
+                                "sound_absorber_yn": "N",
+                                "goods_dtl_pfm_nm": "\ucef4\ud3ec\ud2b8",
+                            },
+                        ]
+                    },
+                },
+            }
+        ],
+        current_tire_size="245/45R19",
+    )
+
+    assert goods_no == "G000000319584"
+
+def test_resolve_goods_no_from_selection_uses_non_absorber_attribute_when_same_product_size_is_ambiguous() -> None:
+    goods_no = resolve_goods_no_from_selection(
+        "\ubca4\ud22c\uc2a4 air S(\ud761\uc74c\uc7ac\uc5c6\ub294\uac70)",
+        [
+            {
+                "tool": "search_product_tool",
+                "data": {
+                    "items": [
+                        {
+                            "goods_no": "G000000319584",
+                            "goods_nm": "\ubca4\ud22c\uc2a4 \uc5d0\uc5b4S",
+                            "tire_size_1": "245/45R19",
+                            "sound_absorber_yn": "Y",
+                            "goods_dtl_pfm_nm": "\ud761\uc74c\uc7ac",
+                        },
+                        {
+                            "goods_no": "G000000319622",
+                            "goods_nm": "\ubca4\ud22c\uc2a4 \uc5d0\uc5b4S",
+                            "tire_size_1": "245/45R19",
+                            "sound_absorber_yn": "N",
+                            "goods_dtl_pfm_nm": "\ucef4\ud3ec\ud2b8",
+                        },
+                    ]
+                },
+            }
+        ],
+        current_tire_size="245/45R19",
+    )
+
+    assert goods_no == "G000000319622"
+
+def test_resolve_goods_no_from_product_template_selection_uses_sound_absorber_tag() -> None:
+    goods_no = resolve_goods_no_from_product_template_selection(
+        "Ventus Air S 245/45R19 \ud761\uc74c\uc7ac \uc801\uc6a9 \uc0c1\ud488\uc73c\ub85c \ubcfc\uac8c\uc694",
+        {
+            "template": "product",
+            "data": {
+                "products": [
+                    {
+                        "title": "\ubca4\ud22c\uc2a4 S2 AS 245/45R19",
+                        "titleProductName": "\ubca4\ud22c\uc2a4 S2 AS",
+                        "titleTires": "245/45R19",
+                        "tags": [{"text": "\uc815\uc219/\uc2b9\ucc28\uac10"}],
+                    },
+                    {
+                        "title": "\ubca4\ud22c\uc2a4 \uc5d0\uc5b4S 245/45R19",
+                        "titleProductName": "\ubca4\ud22c\uc2a4 \uc5d0\uc5b4S",
+                        "titleTires": "245/45R19",
+                        "tags": [{"text": "\uc815\uc219/\uc2b9\ucc28\uac10"}, {"text": "\ud761\uc74c\uc7ac"}],
+                    },
+                    {
+                        "title": "\ubca4\ud22c\uc2a4 \uc5d0\uc5b4S 245/45R19",
+                        "titleProductName": "\ubca4\ud22c\uc2a4 \uc5d0\uc5b4S",
+                        "titleTires": "245/45R19",
+                        "tags": [{"text": "\uc815\uc219/\uc2b9\ucc28\uac10"}],
+                    },
+                ],
+                "metadata": [
+                    {"goodsId": "G000000310126"},
+                    {"goodsId": "G000000319584"},
+                    {"goodsId": "G000000319622"},
+                ],
+            },
+        },
+    )
+
+    assert goods_no == "G000000319584"
 
 def test_region_followup_in_purchase_context_keeps_quick_order_reservation() -> None:
     frame = build_transaction_intent_frame(
