@@ -6867,7 +6867,10 @@ def _is_ready_preorder_template(template_data: dict | None) -> bool:
 def _is_preorder_confirmation_reply(user_text: str | None, latest_preorder_tmpl: dict | None) -> bool:
     if not _is_ready_preorder_template(latest_preorder_tmpl):
         return False
-    return bool(_PREORDER_CONFIRMATION_RE.match(str(user_text or "").strip()))
+    text = str(user_text or "").strip()
+    if text.lower() in {"order", "place order", "confirm order"}:
+        return True
+    return bool(_PREORDER_CONFIRMATION_RE.match(text))
 
 
 def _should_prompt_order_quantity_before_store(
@@ -8217,6 +8220,23 @@ def _is_store_holiday_period_info_query(user_text: str | None) -> bool:
     if _STORE_HOLIDAY_RESERVATION_RE.search(text) and not _STORE_SCHEDULE_TIME_RE.search(text):
         return True
     return False
+
+def _is_quick_order_execute_contract_ready(turn_contract: TurnContract | None) -> bool:
+    if turn_contract is None:
+        return False
+    if str(turn_contract.domain or "") != "transaction":
+        return False
+    response_decision = turn_contract.response_decision or {}
+    response_metadata = response_decision.get("metadata") if isinstance(response_decision, Mapping) else {}
+    response_shape_key = str((response_metadata or {}).get("response_shape_key") or "")
+    return bool(
+        str(turn_contract.intent or "") == "quick_order_execute"
+        and str(getattr(turn_contract, "flow_step", "") or "") == "execute_order"
+        and response_shape_key == "quick_order_execute"
+        and "quick_order_tool" in {str(tool) for tool in turn_contract.allowed_tools}
+        and "quick_order_tool" not in {str(tool) for tool in turn_contract.forbidden_tools}
+        and _has_ready_preorder_summary_slots(turn_contract.known_slots or {})
+    )
 
 
 def _extract_store_holiday_store_name(user_text: str | None) -> str | None:
@@ -16059,7 +16079,7 @@ def _direct_code_fast_path_contract_gate(
         source=source,
         required_tools=required_tools,
     ):
-        if violates_response_template_contract({"template": template}, turn_contract):
+        if violates_response_template_contract({"template": template, "called_tools": required_tools}, turn_contract):
             return False, f"template_forbidden:{template}"
         return True, f"contract_matched:{source}"
     contract_intent = str(turn_contract.intent or "")
@@ -16070,7 +16090,7 @@ def _direct_code_fast_path_contract_gate(
     acceptable_intents = {intent, *allowed_intents}
     if not ({contract_intent, contract_sub_intent, response_shape_key} & acceptable_intents):
         return False, f"intent_mismatch:{contract_intent or 'none'}"
-    if violates_response_template_contract({"template": template}, turn_contract):
+    if violates_response_template_contract({"template": template, "called_tools": required_tools}, turn_contract):
         return False, f"template_forbidden:{template}"
     forbidden_tools = set(str(tool) for tool in turn_contract.forbidden_tools)
     blocked_tools = tuple(tool for tool in required_tools if tool in forbidden_tools)
@@ -35583,7 +35603,10 @@ class TStationChatServiceV2:
             return
 
         async def _resolve_quick_order_execute_with_code() -> tuple[list[dict], dict] | None:
-            if not _is_preorder_confirmation_reply(user_query, latest_preorder_tmpl):
+            if not (
+                _is_preorder_confirmation_reply(user_query, latest_preorder_tmpl)
+                or _is_quick_order_execute_contract_ready(turn_contract)
+            ):
                 return None
             success_gate_allowed, success_gate_reason = _direct_code_fast_path_contract_gate(
                 turn_contract=turn_contract,

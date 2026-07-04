@@ -746,6 +746,9 @@ def _requested_maintenance_history_item(text: str) -> str | None:
 
 
 def _is_preorder_confirmation_text(text: str) -> bool:
+    normalized = str(text or "").strip().lower()
+    if normalized in {"order", "place order", "confirm order"}:
+        return True
     return bool(_QUICK_ORDER_CONFIRM_RE.match(text or ""))
 
 
