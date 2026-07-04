@@ -119,7 +119,10 @@ from services.tstation.chat import (
     _reservation_hour_from_text,
     _quantity_benefit_continuation_frame_from_pending,
     _final_price_from_row,
+    _should_attempt_direct_preorder_from_schedule_ui_action,
     _should_emit_direct_preorder_from_schedule_selection,
+    _schedule_selection_values_from_text,
+    _should_recover_final_price_for_schedule_selection,
     _build_bare_product_search_tool_input,
     _build_external_price_comparison_event_from_search_results,
     _build_size_only_product_search_tool_input,
@@ -417,6 +420,7 @@ from services.tstation.policies.delivery_policy_gate import (
     DeliveryPolicyIntent,
     decide_delivery_policy_gate,
 )
+from services.tstation.executors.contract_required_tool_executor import _preorder_event_from_final_price_recovery
 from services.tstation.policies.flow_controller import (
     _purchase_fallback_quick_replies,
     build_purchase_flow_fallback_event,
@@ -18147,6 +18151,67 @@ def test_vehicle_selection_updates_active_parent_purchase_context() -> None:
     assert active_context["intent"]["goal_type"] == "place_order"
     assert active_context["current_step"] == "ask_product"
     assert active_context["missing_slots"] == ["product"]
+
+
+
+def test_vehicle_selection_parent_purchase_active_context_promotes_top_level_slots() -> None:
+    base_slots = ConversationSlots(
+        pending_intent="product_recommendation",
+        goal_type="recommend_tire",
+        availability_context={
+            "pending_order_context": {
+                "ord_qty": 4,
+                "shop_name": "광교신도시점",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            },
+            "active_flow_context": {
+                "flow_type": "purchase",
+                "status": "active",
+                "flow_step": "ask_product",
+                "intent": {
+                    "pending_intent": "order",
+                    "goal_type": "place_order",
+                },
+            },
+        },
+    )
+    patch = purchase_context_vehicle_selection_patch(
+        parent_context=base_slots.availability_context["pending_order_context"],
+        selected_vehicle_slots={
+            "car_no": "61거1836",
+            "car_lnc_cd": "W036269",
+            "tire_size": "235/55R19",
+        },
+        current_slots=base_slots.model_dump(),
+    )
+
+    committed_active_context = commit_flow_state(
+        base_slots.availability_context["active_flow_context"],
+        {
+            **base_slots.availability_context["pending_order_context"],
+            **patch,
+        },
+        source="active_recommendation_vehicle_selection:parent_purchase",
+        flow_type="purchase",
+        flow_step="vehicle_selected",
+        status="active",
+    ).state.to_active_flow_context()
+
+    promoted_slots = base_slots.apply_runtime_values(
+        _slot_runtime_values_from_active_flow_context(committed_active_context),
+        source="active_recommendation_vehicle_selection_parent_purchase_promotion",
+    )
+    promoted_slots.availability_context = {
+        **dict(base_slots.availability_context or {}),
+        "active_flow_context": committed_active_context,
+    }
+
+    assert promoted_slots.pending_intent == "order"
+    assert promoted_slots.goal_type == "place_order"
+    assert promoted_slots.tire_size == "235/55R19"
+    assert promoted_slots.ord_qty == 4
+    assert promoted_slots.shop_name == "광교신도시점"
 
 
 def test_vehicle_selection_does_not_create_purchase_context_for_plain_recommendation() -> None:
@@ -37017,6 +37082,7 @@ def test_direct_preorder_condition_accepts_schedule_slot_fill_intent() -> None:
             "shop_name": "판교점",
             "requested_cal_day": "20260630",
             "rsv_hour": "17",
+            "payment_amount": 308200,
             "pending_intent": "order",
             "goal_type": "place_order",
         },
@@ -37110,6 +37176,60 @@ def test_direct_preorder_condition_allows_purchase_schedule_structural_fallback(
     assert allowed is True
     assert reason == "contract_matched:code_reservation_confirmation_ready"
 
+
+def test_direct_preorder_schedule_ui_action_attempt_does_not_require_router_skip_metadata() -> None:
+    schedule_context = SimpleNamespace(action_type="select_schedule")
+    store_context = SimpleNamespace(action_type="select_store")
+
+    assert _should_attempt_direct_preorder_from_schedule_ui_action(schedule_context, {}) is True
+    assert _should_attempt_direct_preorder_from_schedule_ui_action(store_context, {}) is False
+    assert _should_attempt_direct_preorder_from_schedule_ui_action(None, {}) is False
+
+def test_schedule_selection_text_values_override_previous_schedule_context() -> None:
+    assert _schedule_selection_values_from_text("2026년 7월 7일 (화)\n15:00") == {
+        "requested_cal_day": "20260707",
+        "rsv_hour": "15",
+    }
+
+def test_schedule_selection_price_lookup_recovers_final_price_before_preorder() -> None:
+    contract = _transaction_turn_contract(
+        "2026년 7월 7일 (화)\n15:00",
+        {
+            "goods_no": "G000000310119",
+            "tire_model": "벤투스 S2 AS",
+            "tire_size": "215/55R17",
+            "ord_qty": 4,
+            "shop_id": "F00721",
+            "shop_name": "티스테이션 판교점",
+            "requested_cal_day": "20260707",
+            "rsv_hour": "15",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+    contract = replace(
+        contract,
+        intent="quick_order_reservation_slot_fill_schedule",
+        action_mode="purchase_continuation",
+    )
+
+    assert contract.response_decision["metadata"]["response_shape_key"] == "reservation_price_lookup"
+    assert _should_recover_final_price_for_schedule_selection(
+        contract,
+        user_text="2026년 7월 7일 (화)\n15:00",
+        ui_action_context=None,
+    ) is True
+
+    event = _preorder_event_from_final_price_recovery(
+        contract,
+        {"status": "success", "data": {"cheapest_final_prc": 120000, "wage_prc": 10000}},
+    )
+
+    assert event is not None
+    assert event["template"] == "preOrder"
+    assert event["data"]["orderInfo"]["paymentAmount"] == 520000
+    assert event["data"]["metadata"]["priceBasis"] == "cheapest_final_prc"
+    assert event["data"]["metadata"]["priceSourceTool"] == "get_final_price_tool"
 
 def test_direct_preorder_gate_blocks_when_response_shape_key_differs() -> None:
     contract = _transaction_turn_contract(
