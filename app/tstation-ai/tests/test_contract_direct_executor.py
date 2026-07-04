@@ -13,6 +13,7 @@ from services.tstation.executors.contract_required_tool_executor import (
     contract_required_tool_start_event,
 )
 from services.tstation.policies.contract_direct_executor import evaluate_contract_direct_path
+from services.tstation.policies.contract_required_tool_candidate import _contract_required_tool_candidate
 from services.tstation.policies.turn_contract import TurnContract
 from services.tstation.policies.reservation_history_policy import (
     build_reservation_status_lookup_event,
@@ -257,6 +258,29 @@ def test_direct_path_allows_coupon_applicable_products_with_low_router_confidenc
     assert decision.reason == "benefit_applicable_products_lookup"
     assert decision.tool == "search_benefit_applicable_products_tool"
     assert decision.template == "quickReply"
+
+
+def test_coupon_applicable_products_required_tool_uses_discovery_source_domain() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="coupon_applicable_products",
+        allowed_tools=("search_benefit_applicable_products_tool",),
+        forbidden_tools=("get_my_coupons_tool", "get_coupon_applicable_products_tool"),
+        preferred_tool="search_benefit_applicable_products_tool",
+        tool_args_patch={"query": "쿠폰 뱃지 테스트", "lang_cd": "ko"},
+    )
+
+    candidate = _contract_required_tool_candidate(
+        turn_contract=contract,
+        user_text="쿠폰 뱃지 테스트에 적용 가능한 상품은 뭐야?",
+        merged_slots=None,
+        member_no="M200012890",
+    )
+
+    assert candidate is not None
+    assert candidate.tool_name == "search_benefit_applicable_products_tool"
+    assert candidate.tool_input == {"query": "쿠폰 뱃지 테스트", "lang_cd": "ko"}
+    assert candidate.source_domain == "discovery"
 
 
 def test_direct_path_allows_location_store_search_and_coupon_lookup() -> None:

@@ -739,6 +739,26 @@ def _contract_required_transaction_tool_input(
                 return None
             return tool_input, "turn_contract_required_owned_record_lookup", "주문 현황 조회 중..."
         return None
+    if preferred_tool == "search_benefit_applicable_products_tool":
+        if str(turn_contract.intent or "").strip() != "coupon_applicable_products":
+            return None
+        tool_args_patch = (
+            dict(turn_contract.tool_args_patch)
+            if isinstance(getattr(turn_contract, "tool_args_patch", None), Mapping)
+            else {}
+        )
+        query = str(
+            tool_args_patch.get("query")
+            or (turn_contract.known_slots or {}).get("benefit_applicable_products_query")
+            or ""
+        ).strip()
+        if not query:
+            return None
+        return (
+            {"query": query, "lang_cd": str(tool_args_patch.get("lang_cd") or "ko")},
+            "turn_contract_benefit_applicable_products_query",
+            "혜택 적용 상품 조회 중...",
+        )
     if preferred_tool and (
         preferred_tool in _FAST_PATH_TRANSACTION_RECOVERY_BLOCKLIST
         or preferred_tool not in _FAST_PATH_TRANSACTION_RECOVERY_ALLOWED_TOOLS
@@ -1030,7 +1050,11 @@ def _contract_required_tool_candidate(
         tool_input, tool_input_source, display_name = contract_required_tool_input
         if not preferred_tool and tool_input_source == "turn_contract_required_stock_inventory_store_lookup":
             preferred_tool = "get_store_list_tool"
-        source_domain = PolicyDomain.TRANSACTION.value
+        source_domain = (
+            PolicyDomain.DISCOVERY.value
+            if preferred_tool == "search_benefit_applicable_products_tool"
+            else PolicyDomain.TRANSACTION.value
+        )
     else:
         return None
 
