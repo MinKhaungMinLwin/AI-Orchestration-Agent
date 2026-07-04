@@ -268,6 +268,80 @@ def test_dynamic_size_chip_is_typed_without_fixed_label_registry() -> None:
     assert chip["metadata"]["dynamic_value"] == "225/45R17"
 
 
+def test_entry_ctas_blocked_while_contract_waits_on_required_slot() -> None:
+    # Maintenance D-day flow: bot asked "which car?" — the contract is waiting on
+    # vehicle selection, so navigation/entry chips are off-context and must drop.
+    contract = TurnContract(
+        domain="support",
+        intent="maintenance_timing_guidance",
+        blocking_required_slots=("mbr_car_reg_seq",),
+    )
+    event = {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "support",
+        "data": {
+            "assistantResponse": "어느 차량의 정비 일정을 확인해 드릴까요?",
+            "quickReplies": [
+                {"label": "매장 찾기", "domain": "TRANSACTION"},
+                {"label": "타이어 추천", "domain": "DISCOVERY"},
+                {"label": "12가3456", "domain": "DISCOVERY"},
+            ],
+        },
+    }
+
+    normalize_quickreply_ctas(event, contract=contract)
+    chips = event["data"]["quickReplies"]
+
+    # Only the plate-number chip (the pending answer itself) survives.
+    assert [chip["label"] for chip in chips] == ["12가3456"]
+    audit = event["data"]["metadata"]["cta_validation"]
+    blocked = {item["label"]: item["reason"] for item in audit if item["result"] == "blocked"}
+    assert blocked == {"매장 찾기": "blocked_during_slot_fill", "타이어 추천": "blocked_during_slot_fill"}
+
+
+def test_entry_ctas_blocked_for_vehicle_lookup_intent() -> None:
+    contract = TurnContract(domain="discovery", intent="vehicle_lookup")
+    event = {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "discovery",
+        "data": {
+            "assistantResponse": "추천 기준으로 사용할 차량을 선택해 주세요.",
+            "quickReplies": [{"label": "상품 검색", "domain": "DISCOVERY"}],
+        },
+    }
+
+    normalize_quickreply_ctas(event, contract=contract)
+
+    assert event["data"]["quickReplies"] == []
+    assert event["data"]["metadata"]["cta_validation"][0]["reason"] == "blocked_during_slot_fill"
+
+
+def test_entry_ctas_still_allowed_without_pending_slot_fill() -> None:
+    # Same chips, normal contract (greeting-style turn, nothing blocking) → must pass,
+    # so the slot-fill rule cannot silently remove entry buttons elsewhere.
+    contract = TurnContract(domain="leading", intent="greeting")
+    event = {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "leading",
+        "data": {
+            "assistantResponse": "무엇을 도와드릴까요?",
+            "quickReplies": [
+                {"label": "매장 찾기", "domain": "TRANSACTION"},
+                {"label": "타이어 추천", "domain": "DISCOVERY"},
+            ],
+        },
+    }
+
+    normalize_quickreply_ctas(event, contract=contract)
+    chips = event["data"]["quickReplies"]
+
+    assert [chip["label"] for chip in chips] == ["매장 찾기", "타이어 추천"]
+    assert all(chip["cta_id"] for chip in chips)
+
+
 def test_dynamic_vehicle_candidate_chip_is_typed_by_plate_pattern() -> None:
     event = {
         "type": "data",

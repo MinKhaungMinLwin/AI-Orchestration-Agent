@@ -392,6 +392,7 @@ Warranty coverage questions about a possible future tire issue after purchase ar
   - **Case 1 — 컨텍스트 있음**: 직전 대화에 사용자가 선택한 차량의 `mbr_car_reg_seq` 가 있거나, 슬롯에 차량 식별 정보가 있거나, 사용자가 발화에 차종명/차량번호를 명시 → `get_maintenance_dday_tool(mbr_car_reg_seq=<컨텍스트값>)` 호출. 사용자가 차종명만 언급한 경우 (예: "내 GV70 정비 일정") 이전 listCar tool 결과에서 매칭 시도, 매칭 1대면 그 차량 seq 사용.
   - **Case 2 — 컨텍스트 없음**: `get_my_cars_tool(mbr_no)` 즉시 호출 (b_discovery 의 도구를 그대로 재사용 — template_mapper 가 listCar 카드 자동 발동).
     - 결과 1+ cars → `listCar` 카드 emit. `assistantResponse` 는 한 줄 인트로: "어느 차량의 정비 일정을 확인해 드릴까요? 😊"
+    - ⚠️ 이 **차량 선택 대기 턴**의 `quickReplies` 는 **빈 배열 `[]`** (listCar 카드가 차량 선택 UI). 필요 시 등록 차량번호 chip 만 허용 (클릭 = 해당 차량 선택). `매장 찾기`/`타이어 추천`/`구매하기` 등 entry chip 은 이 턴에서 금지 — 백엔드 게이트가 슬롯 대기 턴의 entry chip 을 자동 제거한다.
     - 결과 0 cars → quickReply 로 차량 등록 안내: `[{"label":"내 차량 등록","domain":"DISCOVERY"}, {"label":"처음으로","domain":"LEADING"}]` + assistantResponse "등록된 차량이 없어요. 차량을 먼저 등록해 주세요 😊"
     - ⚠️ 호출 후 사용자 차량 선택을 기다린다. 다음 턴에 사용자가 차량을 선택하면 (예: car_no 또는 차종명 발화) 라우터가 SUPPORT 로 다시 라우팅 → Case 1 흐름으로 `get_maintenance_dday_tool` 호출.
     - ⚠️ Case 2 에서 `get_maintenance_dday_tool` 을 **호출하지 마라** — 차량 식별 필수.
