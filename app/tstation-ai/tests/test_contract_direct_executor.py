@@ -1025,6 +1025,71 @@ def test_owned_reservation_lookup_recovery_runs_from_dormant_purchase_context(mo
     assert recovery["event"]["template"] == "quickReply"
     assert recovery["event"]["recovered_tool"] == "get_my_reservations_tool"
 
+
+def test_schedule_final_price_recovery_runs_before_preorder(monkeypatch) -> None:
+    from services.tstation.executors import contract_required_tool_executor as executor
+
+    transaction_tools = _fake_transaction_tools_module(monkeypatch)
+    captured_input: dict = {}
+
+    def fake_final_price_invoke(tool_input: dict):
+        captured_input.update(tool_input)
+        return {"status": "success", "data": {"extra_fvr_sale_prc": 180500, "wage_prc": 0}}
+
+    async def fake_to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    monkeypatch.setattr(
+        transaction_tools,
+        "get_final_price_tool",
+        SimpleNamespace(invoke=fake_final_price_invoke),
+        raising=False,
+    )
+    monkeypatch.setattr(executor.asyncio, "to_thread", fake_to_thread)
+
+    recovery = asyncio.run(
+        _recover_contract_required_tool(
+            turn_contract=TurnContract(
+                domain="transaction",
+                intent="quick_order_reservation_slot_fill_schedule",
+                known_slots={
+                    "goods_no": "G000000310126",
+                    "product_name": "벤투스 S2 AS",
+                    "tire_size": "245/45R19",
+                    "ord_qty": 2,
+                    "shop_id": "F00071",
+                    "shop_name": "티스테이션 분당정자점",
+                    "requested_cal_day": "20260705",
+                    "rsv_hour": "16",
+                    "pending_intent": "order",
+                    "goal_type": "place_order",
+                },
+                allowed_tools=("get_final_price_tool",),
+                forbidden_tools=("quick_order_tool", "get_store_schedule_tool"),
+                preferred_tool="get_final_price_tool",
+                tool_args_patch={"goods_no": "G000000310126"},
+                response_decision={
+                    "template": "quickReply",
+                    "metadata": {"response_shape_key": "reservation_price_lookup", "flow_step": "resolve_price"},
+                },
+                action_mode="purchase_continuation",
+                context_state="resumed",
+                flow_step="resolve_price",
+            ),
+            user_text="2026년 7월 5일 (일)\n16:00",
+            merged_slots=ConversationSlots(),
+            blocked_fast_path_source="schedule_selection_final_price_before_preorder",
+        )
+    )
+
+    assert recovery is not None
+    assert recovery["tool_name"] == "get_final_price_tool"
+    assert captured_input == {"goods_no": "G000000310126"}
+    assert recovery["event"]["template"] == "preOrder"
+    assert recovery["event"]["data"]["orderInfo"]["paymentAmount"] == 361000
+    assert recovery["event"]["data"]["metadata"]["priceSourceTool"] == "get_final_price_tool"
+
+
 def test_store_only_recovery_blocks_mapper_datepick_template(monkeypatch) -> None:
     from services.tstation import template_mapper
     from services.tstation.executors import contract_required_tool_executor as executor

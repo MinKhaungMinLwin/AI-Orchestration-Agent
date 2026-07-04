@@ -430,6 +430,33 @@ async def continue_active_flow_after_tool(
     )
 
 
+async def _recover_contract_required_schedule_final_price(
+    *,
+    turn_contract: TurnContract | None,
+    user_text: str,
+    merged_slots: ConversationSlots | None,
+    blocked_fast_path_source: str = "contract_required_schedule_final_price",
+    member_no: str | None = None,
+) -> dict[str, Any] | None:
+    if turn_contract is None:
+        return None
+    candidate = _contract_required_tool_candidate(
+        turn_contract=turn_contract,
+        user_text=user_text,
+        merged_slots=merged_slots,
+        member_no=member_no,
+    )
+    if candidate is None or candidate.tool_input_source != "turn_contract_schedule_final_price":
+        return None
+    return await recover_blocked_fast_path_to_contract_tool(
+        turn_contract=turn_contract,
+        user_text=user_text,
+        merged_slots=merged_slots,
+        blocked_fast_path_source=blocked_fast_path_source,
+        member_no=member_no,
+    )
+
+
 async def _recover_contract_required_tool(
     *,
     turn_contract: TurnContract | None,
@@ -467,6 +494,15 @@ async def _recover_contract_required_tool(
     )
     if owned_record_recovery is not None:
         return owned_record_recovery
+    schedule_final_price_recovery = await _recover_contract_required_schedule_final_price(
+        turn_contract=turn_contract,
+        user_text=user_text,
+        merged_slots=merged_slots,
+        blocked_fast_path_source=blocked_fast_path_source,
+        member_no=member_no,
+    )
+    if schedule_final_price_recovery is not None:
+        return schedule_final_price_recovery
     flow_progress_recovery = await _recover_contract_required_flow_progress_tool(
         turn_contract=turn_contract,
         user_text=user_text,
