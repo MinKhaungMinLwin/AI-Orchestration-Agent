@@ -185,6 +185,36 @@ Status after steps 1-20B:
     - legacy reservation private symbols in `chat.py` are thin compatibility wrappers around owner-layer policy functions;
     - duplicated reservation row parsing and response construction were removed from orchestration code;
     - `test_phase10_policy_surface_guardrails.py` now protects the reservation wrapper boundary.
+28. Step 20C continues Phase 10 cleanup with support coupon/history response ownership:
+    - maintenance-history access, partner-member coupon, signup coupon, and first-purchase benefit response construction now live in `support_response_policy.py`;
+    - legacy private symbols in `chat.py` remain as thin compatibility wrappers around owner-layer policy functions;
+    - duplicated support coupon/history response construction was removed from orchestration code;
+    - `test_phase10_policy_surface_guardrails.py` now protects the support coupon/history wrapper boundary.
+29. Step 20D continues Phase 10 cleanup with order-document guidance response ownership:
+    - order-document guidance response construction now lives in `support_response_policy.py`;
+    - legacy `_build_order_document_guidance_event` in `chat.py` remains as a thin compatibility wrapper;
+    - duplicated order-history/detail CTA construction was removed from orchestration code;
+    - support policy tests cover both generic order-history CTA and order-number detail CTA behavior.
+30. Step 20E continues Phase 10 cleanup with maintenance response ownership:
+    - maintenance D-day, maintenance-history lookup, and maintenance-history access-policy response construction now live in `support_response_policy.py`;
+    - legacy maintenance private symbols in `chat.py` remain as thin compatibility wrappers or direct owner aliases;
+    - duplicated maintenance row parsing, matcher regexes, and response construction were removed from orchestration code;
+    - support policy tests cover requested maintenance focus, D-day summary, filtered history lookup, and no-match history fallback behavior.
+31. Step 20F continues Phase 10 cleanup with leading guard response ownership:
+    - privacy-contact request and complaint-scope guard response construction now live in `leading_response_policy.py`;
+    - legacy leading guard private symbols in `chat.py` remain as thin compatibility wrappers;
+    - duplicated privacy/contact and complaint-scope regexes and quickReply payload construction were removed from orchestration code;
+    - leading policy tests cover private-contact blocking, official-store contact allowance, out-of-scope complaint guard, unclear complaint clarification, router scope override, and in-scope T-Station complaint pass-through.
+32. Step 20G continues Phase 10 cleanup with product coupon price response ownership:
+    - product coupon price amount query detection and price/no-product response construction now live in `price_response_policy.py`;
+    - legacy product coupon price private symbols in `chat.py` remain as thin compatibility wrappers;
+    - duplicated product coupon price response construction was removed from orchestration code;
+    - price policy tests cover quantity discount totals, missing-product context persistence, and owner-level query detection.
+33. Step 20H continues Phase 10 cleanup with owned-coupon response ownership:
+    - owned-coupon expiry, best-discount, coupon matching, channel policy, applicability, and product eligibility response construction now live in `coupon_response_policy.py`;
+    - legacy owned-coupon private symbols in `chat.py` remain as thin compatibility wrappers;
+    - duplicated coupon match helpers and response builders were removed from orchestration code;
+    - coupon policy tests cover owner-level matching, expiry filtering, best-discount summary, channel policy, applicability, eligibility, and batch merge behavior.
 
 Verified checkpoint command:
 

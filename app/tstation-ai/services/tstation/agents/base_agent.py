@@ -1118,6 +1118,7 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     # Discovery
     "check_compatibility_tool": "차량-타이어 호환 확인 중...",
     "search_product_tool": "상품 검색 중...",
+    "search_product_summary_tool": "상품 정보 확인 중...",
     "get_user_vehicles_tool": "차량 정보 조회 중...",
     "get_my_cars_tool": "내 차량 조회 중...",
     "search_car_model_tool": "차량 모델 검색 중...",
@@ -1175,6 +1176,7 @@ class BaseAgent(ABC):
         "get_stores_with_time_filter_tool",
         "search_stores_complex_tool",
         "search_product_tool",
+        "search_product_summary_tool",
         "get_products_recommendations_tool",
         "get_newest_products_tool",
         "get_best_selling_products_tool",
@@ -2106,6 +2108,7 @@ class BaseAgent(ABC):
             # quickReply 만 emit 하고 product 카드를 건너뛰는 회귀 차단.
             # items 0 (검색 0건) 케이스는 mapper 가 None 반환 → LLM prose fallback.
             "search_product_tool",
+            "search_product_summary_tool",
             "get_products_recommendations_tool",
             "get_newest_products_tool",
             "get_best_selling_products_tool",
@@ -2163,6 +2166,7 @@ class BaseAgent(ABC):
             "get_stores_with_time_filter_tool": {"location", "quickReply"},
             "search_stores_complex_tool": {"location", "quickReply"},
             "search_product_tool": {"product", "quickReply"},
+            "search_product_summary_tool": {"quickReply"},
             "get_products_recommendations_tool": {"product", "quickReply"},
             "get_newest_products_tool": {"product", "quickReply"},
             "get_best_selling_products_tool": {"product", "quickReply"},

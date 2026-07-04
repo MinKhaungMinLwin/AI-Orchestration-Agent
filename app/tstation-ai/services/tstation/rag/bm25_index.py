@@ -1,17 +1,31 @@
 """In-memory BM25 index for FAQ hybrid search. Lazy-builds; auto-refreshes hourly."""
 
 import logging
+import shutil
+import tempfile
 import threading
 import time
+from pathlib import Path
 from typing import Optional
 
+import kiwipiepy_model
 from kiwipiepy import Kiwi
 
 logger = logging.getLogger(__name__)
 
 _TTL: float = 3600.0  # rebuild every hour; FAQ sync is weekly
 _RRF_K: int = 60
-_kiwi = Kiwi()
+
+def _kiwi_model_path() -> str | None:
+    model_path = Path(kiwipiepy_model.get_model_path())
+    if str(model_path).isascii():
+        return None
+
+    cache_path = Path(tempfile.gettempdir()) / f"kiwipiepy_model_{kiwipiepy_model.__version__}"
+    shutil.copytree(model_path, cache_path, dirs_exist_ok=True)
+    return str(cache_path)
+
+_kiwi = Kiwi(model_path=_kiwi_model_path())
 
 
 class Bm25FaqIndex:

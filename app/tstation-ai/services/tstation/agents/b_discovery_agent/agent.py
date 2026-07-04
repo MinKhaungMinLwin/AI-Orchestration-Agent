@@ -3,6 +3,7 @@ from services.tstation.agents.templates import DiscoveryAgentOutput
 from services.tstation.agents.b_discovery_agent.tools import (
     check_compatibility_tool,
     search_product_tool,
+    search_product_summary_tool,
     get_user_vehicles_tool,
     get_my_cars_tool,
     search_car_model_tool,
@@ -113,9 +114,11 @@ Required behavior:
 
 
 ## ACT-FIRST POLICY (절대 컨펌 묻지 말 것)
-사용자 메시지에 **상품명/모델명**이 등장하면 (사이즈 함께든 단독이든, 의도 동사 유무 무관) — 또는 시스템이 `[목표: 상품 검색]` 을 주입한 경우 — 어떤 의도(가격/재고/주문/예약/매장/도착일/배송/비교/최신상품/추천 등)이든 **즉시 search_product_tool 을 호출**한다. 답변에 상품 정보가 필요하면 사용자에게 묻지 말고 바로 검색해서 답변한다. 컨펌·확인을 묻는 quickReply 를 먼저 띄우지 말 것.
+사용자 메시지에 **상품명/모델명**이 등장하면 (사이즈 함께든 단독이든, 의도 동사 유무 무관) — 또는 시스템이 `[목표: 상품 검색]` 을 주입한 경우 — 답변에 상품 정보가 필요하면 사용자에게 묻지 말고 바로 검색해서 답변한다. 컨펌·확인을 묻는 quickReply 를 먼저 띄우지 말 것.
 
-⚠️ **사이즈 없어도 즉시 검색** — 상품명만 있고 사이즈가 없으면 `search_product_tool(keyword=..., size=None)` 으로 호출한다. 사이즈를 먼저 물어보거나, 사이즈가 없다는 이유로 컨펌을 구하는 것은 안티패턴이다. 여러 사이즈가 검색되면 shortlist 를 보여주고 사용자가 선택하게 한다.
+⚠️ **사이즈 없는 설명/비교는 상품군 summary 검색** — 상품명만 있고 사이즈가 없으며 현재 턴이 설명/특징/등급/워런티/상품 비교라면 `search_product_summary_tool(keyword=...)` 를 호출한다. 이 tool은 goods_no를 확정하지 않는다.
+
+⚠️ **SKU가 필요한 거래 흐름은 기존 상품 검색** — 가격/재고/주문/예약/매장/도착일/배송/장바구니처럼 concrete SKU가 필요한 흐름에서는 상품명만 있어도 `search_product_tool(keyword=..., size=None)` 을 호출해 사이즈 shortlist 또는 후속 선택으로 이어간다.
 
 ❌ ANTI-PATTERN (절대 금지):
 - "상품을 검색한 뒤 ~ 확인해 드릴게요 😊" + quickReplies=["상품 검색하기", ...]
@@ -1484,6 +1487,7 @@ Rules:
    - The tool returned ZERO items (empty search result → guide to alternatives)
    - `get_my_cars_tool` / `get_user_vehicles_tool` returned **0 cars** (Case 3: 3-path guidance `quickReply`). 1대 이상 반환된 경우는 PROSE MODE의 listCar로 처리.
    - `get_product_description_tool` follow-up
+   - `search_product_summary_tool` follow-up or comparison summary
    - `check_compatibility_tool`, `search_car_model_tool`, `search_car_model_groups_tool`, `get_car_trims_tool`, `get_events_tool`, `get_deals_tool`
    - Anything that needs a `quickReply`
 
@@ -2512,6 +2516,7 @@ class DiscoverySubAgent(BaseAgent):
         "search_car_model_groups_tool": "Product Compatibility",
         "get_car_trims_tool": "Product Compatibility",
         "search_product_tool": "Product Recommendation",
+        "search_product_summary_tool": "Product Description",
         "get_products_recommendations_tool": "Product Recommendation",
         "get_newest_products_tool": "Product Recommendation",
         "get_best_selling_products_tool": "Product Recommendation",
@@ -2533,6 +2538,7 @@ class DiscoverySubAgent(BaseAgent):
         tools = [
             check_compatibility_tool,
             search_product_tool,
+            search_product_summary_tool,
             get_user_vehicles_tool,
             get_my_cars_tool,
             search_car_model_tool,
@@ -2559,6 +2565,7 @@ class DiscoverySubAgent(BaseAgent):
         if profile == "discovery_search":
             tools = [
                 search_product_tool,
+                search_product_summary_tool,
                 get_products_recommendations_tool,
                 get_newest_products_tool,
                 get_product_description_tool,
@@ -2577,6 +2584,7 @@ class DiscoverySubAgent(BaseAgent):
                 get_product_description_tool,
                 get_product_promotions_tool,
                 search_product_tool,
+                search_product_summary_tool,
             ]
             system_prompt = get_discovery_recommendation_system_prompt
             name = "Discovery Agent (Recommendation)"
