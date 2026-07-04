@@ -1084,12 +1084,28 @@ def build_turn_contract(
             "product_coupon_lookup",
             "product_deal_lookup",
         }
+        # Code frame relation lookups (2-step: resolve product/event -> applicable)
+        # are high-precision current-turn evidence. A generic router benefit-list
+        # classification must not override them, otherwise a product-anchored event
+        # query ("<상품> 이벤트 있어?") collapses into get_benefit_event_deal_list_tool.
+        relation_lookup_intents = {
+            "product_event_lookup",
+            "product_deal_lookup",
+            "event_applicable_products_lookup",
+        }
+        generic_list_intents = {"benefit_event_list_lookup", "benefit_deal_list"}
+        frame_relation_intent = sub_intent if sub_intent in relation_lookup_intents else ""
         domain = "discovery"
-        intent = (
-            planner_intent if planner_intent in discovery_event_content_intents
-            else code_intent if code_intent in discovery_event_content_intents
-            else "product_event_lookup"
-        )
+        if frame_relation_intent and (
+            planner_intent in generic_list_intents or planner_intent in {None, "unknown"}
+        ):
+            intent = frame_relation_intent
+        else:
+            intent = (
+                planner_intent if planner_intent in discovery_event_content_intents
+                else code_intent if code_intent in discovery_event_content_intents
+                else "product_event_lookup"
+            )
         known_slots["goal_type"] = intent
     if planner_intent == "quick_order_execute" and _has_quick_order_execute_slots(known_slots):
         intent = "quick_order_execute"
