@@ -1828,6 +1828,20 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
                 value = source.get(key)
                 if value is not None and args.get(key) is None:
                     args[key] = value
+    context_for_recommendation = entities.get("recommendation_context") or {}
+    if isinstance(context_for_recommendation, Mapping):
+        for source_key in ("tool_args_patch", "expected_tool_args"):
+            source = context_for_recommendation.get(source_key)
+            if not isinstance(source, Mapping):
+                continue
+            for key in ("rcmd_type", "vehicle_type", "season_nm", "pfm_nm", "prc_grd", "sort_by"):
+                value = source.get(key)
+                if value in (None, "", [], {}):
+                    continue
+                if key == "rcmd_type" and args.get(key) == "tstation" and not entities.get("general_tire_preference"):
+                    args[key] = value
+                elif args.get(key) in (None, "", [], {}):
+                    args[key] = value
     if entities.get("brand_cd"):
         args["brand_cd"] = entities["brand_cd"]
         if frame.intent == "product_recommendation":

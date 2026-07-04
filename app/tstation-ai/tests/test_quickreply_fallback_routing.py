@@ -223,6 +223,7 @@ from services.tstation.chat import (
     _apply_vehicle_selection_slot_values,
     _vehicle_selection_slot_values,
     _vehicle_based_recommendation_refinement_patch,
+    _recent_size_followup_recommendation_context,
     _vehicle_type_compatibility_guard_event,
     _preferred_product_search_keyword,
     _infer_multi_variant_recommendation_constraints,
@@ -19006,6 +19007,64 @@ def test_apply_history_product_selection_state_uses_pending_order_context_withou
     assert preorder_event["data"]["metadata"]["paymentAmountSource"] == "selected_product_candidate_unit_price"
 
 
+def test_preorder_event_multiplies_selected_product_unit_price_by_quantity_without_source() -> None:
+    preorder_event = build_preorder_event(
+        SimpleNamespace(
+            domain="transaction",
+            response_decision={"template": "preOrder", "metadata": {"response_shape_key": "reservation_confirmation_ready"}},
+            flow_step="build_preorder",
+            action_mode="purchase_continuation",
+            intent="quick_order_reservation",
+        ),
+        {
+            "goods_no": "G000000309855",
+            "tire_model": "Kinergy 4S2",
+            "tire_size": "245/45R18",
+            "ord_qty": 4,
+            "shop_id": "F03778",
+            "shop_name": "T-Station Deok-i Branch",
+            "requested_cal_day": "20260710",
+            "rsv_hour": "15",
+            "payment_amount": 117000,
+            "price_basis": "price",
+            "price_source_tool": "selected_product_candidate",
+        },
+    )
+
+    assert preorder_event is not None
+    assert preorder_event["data"]["orderInfo"]["paymentAmount"] == 468000
+    assert preorder_event["data"]["metadata"]["paymentAmount"] == 468000
+    assert preorder_event["data"]["metadata"]["paymentAmountSource"] == "selected_product_candidate_unit_price"
+
+def test_preorder_event_does_not_multiply_preview_total_amount_again() -> None:
+    preorder_event = build_preorder_event(
+        SimpleNamespace(
+            domain="transaction",
+            response_decision={"template": "preOrder", "metadata": {"response_shape_key": "reservation_confirmation_ready"}},
+            flow_step="build_preorder",
+            action_mode="purchase_continuation",
+            intent="quick_order_reservation",
+        ),
+        {
+            "goods_no": "G000000310126",
+            "tire_model": "Ventus S2 AS",
+            "tire_size": "245/45R19",
+            "ord_qty": 2,
+            "shop_id": "F00721",
+            "shop_name": "T-Station Pangyo Branch",
+            "requested_cal_day": "20260707",
+            "rsv_hour": "16",
+            "payment_amount": 308200,
+            "price_basis": "cheapest_final_prc",
+            "price_source_tool": "transaction_store_preview_tool",
+            "payment_amount_source": "preview_tool.store_candidate",
+        },
+    )
+
+    assert preorder_event is not None
+    assert preorder_event["data"]["orderInfo"]["paymentAmount"] == 308200
+    assert preorder_event["data"]["metadata"]["paymentAmountSource"] == "preview_tool.store_candidate"
+
 def test_product_selection_from_pending_order_context_builds_purchase_slot_fill_context() -> None:
     slots = ConversationSlots(
         goods_no="G000000309783",
@@ -27524,6 +27583,49 @@ def test_fresh_recommendation_without_price_has_no_price_keys() -> None:
     assert "min_price" not in patch
     assert "max_price" not in patch
 
+
+def test_size_followup_recovers_prior_recommendation_price_range_from_history() -> None:
+    messages = [
+        {"role": "user", "content": "\ube57\uae38\uc5d0 \uc88b\uc740 20\ub9cc\uc6d0\ub300 \ud0c0\uc774\uc5b4 \ucd94\ucc9c\ud574\uc918"},
+        {"role": "assistant", "content": "\ud0c0\uc774\uc5b4 \uaddc\uaca9\uc744 \uc785\ub825\ud574 \uc8fc\uc138\uc694."},
+        {"role": "user", "content": "2454519"},
+    ]
+
+    context = _recent_size_followup_recommendation_context(messages, "2454519")
+
+    assert context["recommendation_scenario"] == "wet"
+    assert context["tool_args_patch"] == {
+        "rcmd_type": "wet",
+        "min_price": 200000,
+        "max_price": 299999,
+    }
+
+def test_discovery_policy_context_keeps_price_range_for_size_followup_from_history() -> None:
+    messages = [
+        {"role": "user", "content": "\ube57\uae38\uc5d0 \uc88b\uc740 20\ub9cc\uc6d0\ub300 \ud0c0\uc774\uc5b4 \ucd94\ucc9c\ud574\uc918"},
+        {"role": "assistant", "content": "\ud0c0\uc774\uc5b4 \uaddc\uaca9\uc744 \uc785\ub825\ud574 \uc8fc\uc138\uc694."},
+        {"role": "user", "content": "2454519"},
+    ]
+
+    patch, decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        last_user_text="2454519",
+        context_text="\n".join(message["content"] for message in messages),
+        messages=messages,
+        tire_size="245/45R19",
+        routing_result=SimpleNamespace(
+            execution_plan=["discovery:get_products_recommendations_tool"],
+            recommendation_scenario="none",
+        ),
+        pending_intent="get_products_recommendations_tool",
+        goal_type="recommend_tire",
+    )
+
+    assert decision is not None
+    assert patch["tire_size"] == "245/45R19"
+    assert patch["rcmd_type"] == "wet"
+    assert patch["min_price"] == 200000
+    assert patch["max_price"] == 299999
 
 def test_offroad_recommendation_preserves_common_size_and_contextualizes_scenario() -> None:
     slots = ConversationSlots(

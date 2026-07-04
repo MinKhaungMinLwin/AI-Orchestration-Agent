@@ -7301,10 +7301,22 @@ def _preview_payment_metadata(
     )
     return {
         key: details[key]
-        for key in ("payment_amount", "price_basis", "price_source_tool")
+        for key in ("payment_amount", "price_basis", "price_source_tool", "payment_amount_source")
         if details.get(key) not in (None, "", [], {})
     }
 
+
+def _is_unit_preorder_payment_amount_source(*, payment_amount_source: Any, price_source_tool: Any) -> bool:
+    source = str(payment_amount_source or "").strip()
+    tool = str(price_source_tool or "").strip()
+    if source in {
+        "selected_product_candidate_unit_price",
+        "context_unit_price",
+        "pending_order_context.unit_price",
+        "active_flow_context.payment.unit_price",
+    }:
+        return True
+    return tool in {"selected_product_candidate", "product_template", "quickreply_metadata"}
 
 def _coerce_order_summary_quickreply_to_preorder(
     event: dict,
@@ -7553,7 +7565,7 @@ def _build_direct_preorder_event_from_slots(
     price_basis = slot_values.get("price_basis")
     price_source_tool = slot_values.get("price_source_tool")
     payment_amount_missing_reason = None
-    payment_amount_source = None
+    payment_amount_source = slot_values.get("payment_amount_source") or slot_values.get("paymentAmountSource")
     if payment_amount in (None, "", 0):
         payment_amount = (
             pending_order_context.get("payment_amount")
@@ -7664,6 +7676,15 @@ def _build_direct_preorder_event_from_slots(
                 break
     if payment_amount in (None, "", 0):
         payment_amount_missing_reason = payment_amount_missing_reason or "missing_payment_amount"
+    elif _is_unit_preorder_payment_amount_source(
+        payment_amount_source=payment_amount_source,
+        price_source_tool=price_source_tool,
+    ):
+        try:
+            payment_amount = int(payment_amount) * ord_qty
+            payment_amount_source = payment_amount_source or "selected_product_candidate_unit_price"
+        except (TypeError, ValueError):
+            payment_amount_missing_reason = payment_amount_missing_reason or "invalid_payment_amount"
     try:
         normalized_payment_amount = int(payment_amount) if payment_amount not in (None, "", []) else None
     except (TypeError, ValueError):
@@ -18776,6 +18797,20 @@ def _build_discovery_policy_context(
             ).strip()
             if scenario:
                 known_slots["recommendation_scenario"] = scenario
+        if "recommendation_context" not in known_slots:
+            recovered_recommendation_context = _recent_size_followup_recommendation_context(
+                messages,
+                last_user_text,
+            )
+            if recovered_recommendation_context:
+                known_slots["recommendation_context"] = recovered_recommendation_context
+                scenario = str(
+                    recovered_recommendation_context.get("recommendation_scenario")
+                    or recovered_recommendation_context.get("scenario")
+                    or ""
+                ).strip()
+                if scenario:
+                    known_slots["recommendation_scenario"] = scenario
         if active_flow_patch:
             known_slots["discovery_followup_action"] = "vehicle_based_recommendation_refinement"
             active_recommendation_context = _recommendation_context_policy_dict(
@@ -19134,6 +19169,19 @@ def _build_discovery_policy_context(
             discovery_tool_patch = {"size": discovery_tool_plan.tool_args_patch["size"]}
         else:
             discovery_tool_patch = {}
+        known_recommendation_context = known_slots.get("recommendation_context")
+        if isinstance(known_recommendation_context, Mapping):
+            for source_key in ("expected_tool_args", "tool_args_patch"):
+                source_patch = known_recommendation_context.get(source_key)
+                if not isinstance(source_patch, Mapping):
+                    continue
+                for key, value in source_patch.items():
+                    if value not in (None, "", [], {}):
+                        normalized_key = str(key)
+                        if normalized_key == "rcmd_type" and discovery_tool_patch.get(normalized_key) == "tstation":
+                            discovery_tool_patch[normalized_key] = value
+                        else:
+                            discovery_tool_patch.setdefault(normalized_key, value)
         if (
             discovery_tool_patch.get("rcmd_type") == "tstation"
             and not discovery_frame.entities.get("general_tire_preference")
@@ -22304,6 +22352,69 @@ def _infer_followup_recommendation_context(messages: list[dict], last_user_text:
         lines.append(f"- 차량 타입 조건은 rcmd_type 과 별도로 vehicle_type='{vehicle_type}' 로 함께 전달하세요.")
     lines.append("- 이 규격 입력을 새 일반 추천으로 초기화하지 마세요.")
     return "\n".join(lines)
+
+
+def _recent_size_followup_recommendation_context(messages: list[dict] | None, last_user_text: str) -> dict[str, Any]:
+    if not messages or not _SIZE_ONLY_RE.match(str(last_user_text or "")):
+        return {}
+
+    current_seen = False
+    current_size = normalize_tire_size(last_user_text)
+    for message in reversed(messages):
+        if str(message.get("role") or "") != "user":
+            continue
+        content = str(message.get("content") or "").strip()
+        if not content:
+            continue
+        if not current_seen and content.endswith(str(last_user_text or "").strip()):
+            current_seen = True
+            continue
+        if normalize_tire_size(content) == current_size and _SIZE_ONLY_RE.match(content):
+            continue
+
+        frame = build_discovery_intent_frame(content)
+        if frame.intent != "product_recommendation":
+            continue
+        plan = plan_discovery_tools(frame)
+        if plan.preferred_tool != "get_products_recommendations_tool":
+            continue
+        tool_args_patch = {
+            key: value
+            for key, value in dict(plan.tool_args_patch or {}).items()
+            if value not in (None, "", [], {})
+        }
+        expected_tool_args = {
+            key: value
+            for key, value in dict((plan.metadata or {}).get("recommendation_expected_tool_args") or {}).items()
+            if value not in (None, "", [], {})
+        }
+        if not tool_args_patch and not expected_tool_args:
+            continue
+
+        context: dict[str, Any] = {"source_text": content}
+        scenario = str(
+            frame.entities.get("recommendation_scenario")
+            or frame.entities.get("scenario")
+            or ""
+        ).strip()
+        if scenario:
+            context["scenario"] = scenario
+            context["recommendation_scenario"] = scenario
+        for key in (
+            "applied_rcmd_type",
+            "applied_vehicle_type",
+            "applied_season_nm",
+            "approximation",
+            "approximation_basis",
+        ):
+            if frame.entities.get(key) not in (None, "", [], {}):
+                context[key] = frame.entities[key]
+        if tool_args_patch:
+            context["tool_args_patch"] = tool_args_patch
+        if expected_tool_args:
+            context["expected_tool_args"] = expected_tool_args
+        return _recommendation_context_policy_dict(context)
+    return {}
 
 
 def _infer_multi_variant_recommendation_constraints(
