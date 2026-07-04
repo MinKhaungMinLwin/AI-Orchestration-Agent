@@ -30932,7 +30932,8 @@ def test_turn_contract_preserves_product_event_lookup_tools_and_blocks_transacti
     assert contract.domain == "discovery"
     assert contract.intent == "product_event_lookup"
     assert contract.known_slots["goal_type"] == "product_event_lookup"
-    assert "search_product_tool" in contract.allowed_tools
+    assert "search_product_summary_tool" in contract.allowed_tools
+    assert "search_product_tool" in contract.forbidden_tools
     assert "get_product_applicable_events_tool" in contract.allowed_tools
     assert "get_product_promotions_tool" in contract.allowed_tools
     assert "quick_order_tool" in contract.forbidden_tools
@@ -31248,7 +31249,7 @@ def test_product_comparison_tool_contract_allows_description_lookup_for_table_ba
         assistant_response_source="code_product_compare_resolver",
         compare_metric="detail",
         response_shape_key="metric_comparison_summary",
-        called_tools=["search_product_tool", "get_product_description_tool"],
+        called_tools=["search_product_summary_tool", "get_product_description_tool"],
         source_domain="discovery",
         contract=contract,
     )
@@ -31336,7 +31337,8 @@ def test_turn_contract_keeps_discovery_resolution_open_before_today_install_miss
     )
 
     assert contract.intent == "resolve_or_describe_product"
-    assert "search_product_tool" in contract.allowed_tools
+    assert "search_product_summary_tool" in contract.allowed_tools
+    assert "search_product_tool" in contract.forbidden_tools
     assert "transaction_store_preview_tool" in contract.allowed_tools
     assert contract.required_slots == ()
     assert contract.blocking_required_slots == ()
@@ -36471,7 +36473,8 @@ def test_turn_contract_promotes_router_comparison_signal_into_product_comparison
     assert contract.intent == "product_comparison"
     assert contract.known_slots["comparison_followup_intent"] == "generic_compare"
     assert contract.known_slots["compare_metric"] == "detail"
-    assert "search_product_tool" in contract.allowed_tools
+    assert "search_product_summary_tool" in contract.allowed_tools
+    assert "search_product_tool" in contract.forbidden_tools
     assert "get_product_description_tool" in contract.allowed_tools
 
 

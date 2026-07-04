@@ -416,6 +416,8 @@ def _compact_html_text(value: Any, *, max_chars: int = 600) -> str | None:
 
 def _slim_product_summary_item(item: dict) -> dict:
     slim = _slim_product_item(item)
+    for key in ("goods_no", "tire_size_1", "tire_size_2"):
+        slim.pop(key, None)
     for key in ("pc_prod_remark_desc", "pc_prod_tech_desc"):
         compacted = _compact_html_text(slim.get(key))
         if compacted:

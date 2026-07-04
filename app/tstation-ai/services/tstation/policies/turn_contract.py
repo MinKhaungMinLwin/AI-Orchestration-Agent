@@ -5414,14 +5414,14 @@ def _router_wins_tool_boundary(intent: str) -> tuple[tuple[str, ...], tuple[str,
         )
     if intent == "product_comparison":
         return (
-            ("search_product_summary_tool", "search_product_tool", "get_product_description_tool", "get_cheapest_price_tool"),
+            ("search_product_summary_tool", "get_product_description_tool", "get_cheapest_price_tool"),
             tuple(
                 tool
-                for tool in _ROUTER_WINS_TRANSACTION_FORBIDDEN_TOOLS | {"get_products_recommendations_tool"}
+                for tool in _ROUTER_WINS_TRANSACTION_FORBIDDEN_TOOLS
+                | {"get_products_recommendations_tool", "search_product_tool"}
                 if tool
                 not in {
                     "search_product_summary_tool",
-                    "search_product_tool",
                     "get_product_description_tool",
                     "get_cheapest_price_tool",
                 }
