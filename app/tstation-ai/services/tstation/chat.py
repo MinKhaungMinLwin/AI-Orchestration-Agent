@@ -715,13 +715,6 @@ class RouterEntityCandidates(BaseModel):
     store: RouterNamedEntityCandidate = Field(description="Specific store candidate.")
     coupon: RouterNamedEntityCandidate = Field(description="Coupon name candidate.")
     benefit: RouterNamedEntityCandidate = Field(
-        default_factory=lambda: RouterNamedEntityCandidate(
-            mentioned=False,
-            name="",
-            type="",
-            reference_text="",
-            confidence=0.0,
-        ),
         description=(
             "Benefit/campaign query candidate for coupon/event/deal/promotion -> applicable products lookup. "
             "name should be the searchable benefit name/query, e.g. 반짝블랙딜, 한국타이어 페스타, 30% 할인."
