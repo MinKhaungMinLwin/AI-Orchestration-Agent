@@ -1219,11 +1219,11 @@ def get_products_recommendations_tool(
             - "truck_van": 경트럭/밴/트럭용
             ⚠️ "전기차 저소음" 같은 복합 의도는 rcmd_type="low_vibration", vehicle_type="ev" 로 전달한다.
             기존 rcmd_type="ev" 는 하위 호환용 단일 전기차 추천일 때만 사용한다.
-            ⚠️ 사용자가 차종명만 말한 경우(미등록 차량, 사이즈 미확보)에도 차종 지식으로 타입을
-            추론해 전달한다: "E클래스" → "passenger", "G바겐" → "suv", "포터" → "truck_van".
-            EV 전용 모델(모델Y, 아이오닉5 등)이 아니면 "ev" 를 추론값으로 쓰지 마라.
-            결과 0건이면 도구가 자동으로 vehicle_type 필터를 풀고 1회 재시도한다
-            (응답의 `recommendation_fallback.assistant_response_hint` 를 답변에 반영).
+            ⚠️ 사용자가 차종명만 말한 경우(미등록 차량, 사이즈 미확보)에도 차종 지식으로 타입을 추론해
+            전달한다: "E클래스" → "passenger", "G바겐" → "suv", "포터" → "truck_van". EV 전용 모델
+            (모델Y, 아이오닉5 등)이 아니면 "ev" 를 추론값으로 쓰지 마라(코나·니로·G80 등 겸용 모델은 차체
+            타입 기준). 이때 tire_size 는 전달하지 않는다. 결과 0건이면 도구가 자동으로 vehicle_type
+            필터를 풀고 1회 재시도한다(응답의 `recommendation_fallback.assistant_response_hint` 반영).
         min_price (int | None, optional): 최소 가격 필터 (원 단위). Optional.
             예: 200_000 ("20만원 이상")
         max_price (int | None, optional): 최대 가격 필터 (원 단위). Optional.
@@ -1447,6 +1447,8 @@ def get_products_recommendations_tool(
 
         data = result.get("data")
         items = data.get("items") if isinstance(data, dict) else None
+        # Empty for a reason other than the price filter (price-empty has its own
+        # no_results messaging and must not be masked by a relaxed retry).
         has_empty_items = not has_price_filter and isinstance(items, list) and not items
         should_try_winter_fallback = (
             has_empty_items
@@ -1454,6 +1456,7 @@ def get_products_recommendations_tool(
             and requested_rcmd_type in {"snow", "tstation"}
         )
         if should_try_winter_fallback:
+            # Winter fallback runs first and KEEPS the vehicle_type filter.
             for fallback_rcmd_type, fallback_season_nm, fallback_label in _WINTER_RECOMMENDATION_FALLBACKS:
                 fallback_result = _fetch_recommendation_once(
                     call_rcmd_type=fallback_rcmd_type,
@@ -1488,6 +1491,9 @@ def get_products_recommendations_tool(
                 )
                 return fallback_result
 
+        # vehicle_type relax runs after winter fallback: an unregistered car-model
+        # inference may over-constrain (sparse CAR_KND_NM data). Retry once without
+        # the filter so the user still sees products.
         if has_empty_items and vehicle_type:
             relaxed_result = _fetch_recommendation_once(
                 call_rcmd_type=rcmd_type,

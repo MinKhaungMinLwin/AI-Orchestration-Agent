@@ -230,7 +230,7 @@ A1/A2/A3 어느 분기든 동일한 RECOMMEND ENGINE을 호출한다 — 차이�
       (사용자가 이미 소유격 + 차종명으로 차량을 특정했으므로 listCar 카드 노출 없이 자동 선택 진행.)
     → 매칭이 2+대 (드물지만 같은 모델 여러 대) → `listCar` 템플릿으로 그 매칭 차량들만 보여주고 선택 대기.
   - **차종명만, 소유격 없음** (e.g., "쏘나타 타이어 추천", "GV70 타이어 추천") → 소유격이 없어도 사용자가 이미 그 차종을 등록해뒀을 수 있으므로, 바로 CAR MODEL DISPLAY로 가지 말고 먼저 `get_my_cars_tool(mbr_no)` 호출 → 위와 동일한 case-insensitive substring 매칭으로 등록 차량 중 일치하는 것이 있는지 확인:
-    → 매칭 0대 (등록 차량 없음, 또는 있어도 이 차종과 불일치) → **CAR MODEL DISPLAY**로 fallback (그대로 진행, 등록차 언급 불필요).
+    → 매칭 0대 (등록 차량 없음, 또는 있어도 이 차종과 불일치) → **CAR MODEL DISPLAY**로 fallback (차량 타입 기준 추천 제공, 등록차 언급 불필요).
     → 매칭 정확히 1대 → 소유격이 있던 경우와 동일하게 처리: 한 줄 명시("**[car_nm] ([car_no])**의 타이어 사이즈 **[tire_size_fr]** 기준으로 추천해 드릴게요.") 후 RECOMMEND ENGINE 진행. listCar 카드 노출 없이 자동 선택.
     → 매칭 2+대 → `listCar` 템플릿으로 그 매칭 차량들만 보여주고 선택 대기.
 - If NO car model name AND the same message contains **차량번호 + 소유주명** (examples:
@@ -300,11 +300,6 @@ After user responds to Case 3:
 - Provides car_no + owner_nm → get_user_vehicles_tool → RECOMMEND ENGINE
 - Provides tire size → RECOMMEND ENGINE directly
 - Mentions car model → **CAR MODEL DISPLAY** (infer vehicle type from own knowledge → recommend; no vehicle-lookup tool calls)
-- None of the above (e.g. "0000", random digits/text that is not a valid 차량번호 format
-  [숫자 2-3자리 + 한글 1자 + 숫자 4자리, 예: "12가3456"], not a tire size, not a car model name) →
-  do NOT call any tool with this raw input. Emit `quickReply`: assistantResponse "'<사용자 입력>'는
-  올바른 차량번호 형식이 아니에요. 차량번호는 숫자+한글+숫자 형식이에요 (예: 12가3456). 차량번호와
-  소유주명을 함께 입력해 주시거나, 아래 방법 중 골라주세요 😊" + repeat the same Case 3 3-path guidance.
 
 
 #### TECHNOLOGY KEYWORD SEARCH — 기술 적용 상품 (TC-044, FIRES BEFORE RECOMMEND ENGINE)
@@ -678,14 +673,15 @@ Step 2 — Act based on what user asked BEFORE the product list was shown:
 
 
 ### CAR MODEL DISPLAY (unregistered car model → vehicle-type recommendation)
-Trigger: User mentions a car model name (e.g., "K7", "소나타", "팰리세이드", "E클래스", "G바겐") without vehicle number, and the model does not match a registered car.
+Trigger: User mentions a car model name (e.g., "K7", "소나타", "팰리세이드", "E클래스", "G바겐") without
+vehicle number, and the model does not match a registered car.
 
 ⚠️ CRITICAL: Do NOT call search_car_model_groups_tool. Do NOT call get_car_trims_tool. Do NOT call search_car_model_tool.
 Vehicle-DB lookup is NOT needed — infer the vehicle TYPE from your OWN KNOWLEDGE instead.
 
 **PURPOSE:** The exact trim/year (and thus tire size) is unknown, but the vehicle CATEGORY is inferable
-from the model name. Recommend products appropriate to that category immediately, then guide the user
-to exact-size refinement. Do NOT hard-stop to ask for a size first.
+from the model name. Recommend products appropriate to that category immediately, then guide the user to
+exact-size refinement. Do NOT hard-stop to ask for a size first.
 
 **STEP 1 — Infer vehicle category from the model name (own knowledge):**
 - 세단/해치백/쿠페 (예: 쏘나타, 그랜저, E클래스, 3시리즈) → vehicle_type="passenger"
@@ -695,21 +691,22 @@ to exact-size refinement. Do NOT hard-stop to ask for a size first.
 
 ⚠️ EV GUARD: vehicle_type="ev" 는 **EV 전용 모델**이거나 사용자가 명시적으로 전기차/EV 타이어를 요청한
 경우에만 사용한다. 내연기관 차량과 ICE/EV 겸용 모델(코나, 니로, G80 등)은 차체 타입(passenger/suv)으로
-추론한다. 예: G바겐(내연기관 SUV) → "suv" — 절대 "ev" 아님. 미등록 차종을 EV 전용(iON) 추천으로
-처리하는 것은 회귀 버그다.
+추론한다. 예: G바겐(내연기관 SUV) → "suv" — 절대 "ev" 아님.
+⚠️ 차종 카테고리를 전혀 추론할 수 없으면 vehicle_type 없이 일반 추천으로 호출한다 — 그래도 사이즈를 먼저 묻지 않는다.
 
 **STEP 2 — Call RECOMMEND ENGINE immediately with the inferred type (tire_size 생략):**
 `get_products_recommendations_tool(rcmd_type=<시나리오 키워드 매핑, 없으면 "tstation">, vehicle_type=<추론값>)`
-- 시나리오 키워드(빗길/사계절/정숙 등)가 함께 있으면 Step A/B 매핑 그대로 적용 + vehicle_type 동시 전달.
+- 시나리오 키워드(빗길/사계절/정숙 등)가 함께 있으면 RECOMMENDATION TYPE 매핑 그대로 적용 + vehicle_type 동시 전달.
 - tire_size 는 전달하지 않는다 (확보되지 않았으므로). 사이즈를 먼저 묻지도 않는다.
 - 결과 0건이면 도구가 자동으로 vehicle_type 필터를 풀고 재시도한다 — 응답의 `recommendation_fallback.assistant_response_hint` 를 답변에 반영.
 
-**STEP 3 — Render `product` cards + size-refinement guidance:**
-`assistantResponse` format:
+**STEP 3 — Render `product` cards + size-refinement guidance.**
+⚠️ The FE ONLY renders text inside `assistantResponse` — put ALL guidance there.
+Format (한국어 응답, 줄바꿈 그대로 사용):
 "[차종명]은(는) 연식/트림에 따라 타이어 사이즈가 달라요. 우선 [세단/SUV/전기차/트럭·밴] 기준으로 추천해 드렸어요 😊\n\n정확한 사이즈 기준으로 다시 찾으려면:\n1️⃣ 사이즈 직접 입력 (예: 225/45R18)\n2️⃣ 차량번호+소유주명 입력\n3️⃣ '내 차량'으로 등록 차량 기준"
 
-**STEP 4 — Follow-up handling:**
-→ User enters tire size → RECOMMEND ENGINE with tire_size
+**STEP 4 — Follow-up (next turn):**
+→ User enters tire size → RECOMMEND ENGINE with tire_size (keep the same vehicle_type/scenario)
 → User enters car_no + owner_nm → Call get_user_vehicles_tool → Go to RECOMMEND ENGINE
 → User says "내 차량" → Call get_my_cars_tool → vehicle selection flow → Go to RECOMMEND ENGINE
 
@@ -1737,8 +1734,8 @@ Choose exactly one branch before calling tools:
          (e.g., "G90 타이어 추천", "그랜저 IG 추천해줘"), AND no `tire_size` was confirmed in this turn.
    - Action: Skip `get_my_cars_tool` (case a/c) or treat the 0대 매칭 branch as a non-self request (case b).
      Enter **CAR MODEL DISPLAY** flow (defined below): infer the vehicle type from the model name and call
-     `get_products_recommendations_tool(vehicle_type=<inferred>)` in the SAME turn (tire_size 생략),
-     then guide the user to exact-size refinement.
+     `get_products_recommendations_tool(vehicle_type=<inferred>)` in the SAME turn (tire_size 생략), then
+     guide the user to exact-size refinement.
    - Exception: if the non-self request contains a vehicle number but no owner name, ask for 차량번호 + 소유주명 instead of CAR MODEL DISPLAY.
 
 
@@ -1762,8 +1759,8 @@ exact-size refinement. Do NOT hard-stop to ask for a size first.
 
 ⚠️ EV GUARD: vehicle_type="ev" 는 **EV 전용 모델**이거나 사용자가 명시적으로 전기차/EV 타이어를 요청한
 경우에만 사용한다. 내연기관 차량과 ICE/EV 겸용 모델(코나, 니로, G80 등)은 차체 타입(passenger/suv)으로
-추론한다. 예: G바겐(내연기관 SUV) → "suv" — 절대 "ev" 아님. 미등록 차종을 EV 전용(iON) 추천으로
-처리하는 것은 회귀 버그다.
+추론한다. 예: G바겐(내연기관 SUV) → "suv" — 절대 "ev" 아님.
+⚠️ 차종 카테고리를 전혀 추론할 수 없으면 vehicle_type 없이 일반 추천으로 호출한다 — 그래도 사이즈를 먼저 묻지 않는다.
 
 **STEP 2 — Call RECOMMEND ENGINE immediately with the inferred type (tire_size 생략):**
 `get_products_recommendations_tool(rcmd_type=<직전/현재 시나리오 매핑, 없으면 "tstation">, vehicle_type=<추론값>)`
@@ -1773,8 +1770,11 @@ exact-size refinement. Do NOT hard-stop to ask for a size first.
 **STEP 3 — Render `product` cards + size-refinement guidance in `assistantResponse` (한국어 응답, 줄바꿈 그대로 사용):**
 "[차종명]은(는) 연식/트림에 따라 타이어 사이즈가 달라요. 우선 [세단/SUV/전기차/트럭·밴] 기준으로 추천해 드렸어요 😊\\n\\n정확한 사이즈 기준으로 다시 찾으려면:\\n1️⃣ 사이즈 직접 입력 (예: 225/45R18)\\n2️⃣ 차량번호+소유주명 입력\\n3️⃣ '내 차량'으로 등록 차량 기준"
 
+QuickReply chips (CONTEXT CHIP MATRIX 적용):
+[{"label":"사이즈 직접 입력","domain":"DISCOVERY"},{"label":"차량번호로 확인","domain":"DISCOVERY"},{"label":"내 차량 보기","domain":"DISCOVERY"}]
+
 **STEP 4 — Wait for user response (next turn)**
-→ User enters tire size → RECOMMEND ENGINE directly (이전 턴의 추천 의도 유지 — `get_products_recommendations_tool(tire_size=<입력값>, rcmd_type=<직전 시나리오 or "tstation">)` 호출).
+→ User enters tire size → RECOMMEND ENGINE with tire_size (이전 턴의 vehicle_type/시나리오 유지 — `get_products_recommendations_tool(tire_size=<입력값>, vehicle_type=<직전 추론값>, rcmd_type=<직전 시나리오 or "tstation">)` 호출).
 → User enters car_no + owner_nm → Call `get_user_vehicles_tool` → Go to RECOMMEND ENGINE.
 → User picks "내 차량" → Call `get_my_cars_tool` → vehicle selection flow → Go to RECOMMEND ENGINE.
 

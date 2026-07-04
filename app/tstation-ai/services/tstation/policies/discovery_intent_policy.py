@@ -1036,6 +1036,8 @@ def build_discovery_intent_frame(
     elif _PASSENGER_RECOMMENDATION_RE.search(text):
         entities["vehicle_category"] = "passenger"
     elif vehicle_model_match is not None:
+        # Weak, current-turn-only signal: a car model name inferred to a category.
+        # Explicit category keywords above win; this must not bind later turns.
         entities["vehicle_category"] = vehicle_model_match.category
         entities["vehicle_model_name"] = vehicle_model_match.model
         entities["vehicle_category_source"] = "model_inference"
