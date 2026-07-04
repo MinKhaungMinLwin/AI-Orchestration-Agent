@@ -2278,7 +2278,7 @@ def _comparison_group_name(entry: dict, row: dict) -> str:
 
 def _collect_product_comparison_rows(tool_data_list: list[dict]) -> dict[str, list[dict]]:
     grouped: dict[str, list[dict]] = {}
-    for entry in _find_entries(tool_data_list, "search_product_tool"):
+    for entry in _find_entries(tool_data_list, "search_product_summary_tool", "search_product_tool"):
         raw = _unwrap(entry)
         rows = raw if isinstance(raw, list) else (raw.get("items") if isinstance(raw, dict) else [])
         if not isinstance(rows, list):

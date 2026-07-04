@@ -2108,6 +2108,7 @@ class BaseAgent(ABC):
             # quickReply 만 emit 하고 product 카드를 건너뛰는 회귀 차단.
             # items 0 (검색 0건) 케이스는 mapper 가 None 반환 → LLM prose fallback.
             "search_product_tool",
+            "search_product_summary_tool",
             "get_products_recommendations_tool",
             "get_newest_products_tool",
             "get_best_selling_products_tool",

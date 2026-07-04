@@ -31257,6 +31257,105 @@ def test_product_comparison_tool_contract_allows_description_lookup_for_table_ba
     assert violations == []
 
 
+def test_product_description_router_boundary_forbids_sku_search_for_unsized_summary() -> None:
+    text = "kinergy EX, Ventus S2 AS 설명해줘"
+    frame = build_discovery_intent_frame(text)
+    tool_plan = plan_discovery_tools(frame)
+    response_decision = decide_discovery_response(frame)
+    contract = build_turn_contract(
+        user_text=text,
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=response_decision,
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY],
+            execution_plan=["discovery:product_description"],
+            referred_object_type="product_set",
+        ),
+        action_mode="product_description",
+    )
+
+    assert frame.intent == "product_description"
+    assert tool_plan.preferred_tool == "search_product_summary_tool"
+    assert contract.intent == "product_description"
+    assert contract.preferred_tool == "search_product_summary_tool"
+    assert "search_product_summary_tool" in contract.allowed_tools
+    assert "search_product_tool" in contract.forbidden_tools
+
+
+def test_product_summary_comparison_mapper_restores_table_response() -> None:
+    decision = ResponseDecision(
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        metadata={
+            "response_shape_key": "metric_comparison_summary",
+            "comparison_followup_intent": "generic_compare",
+            "compare_metric": "detail",
+        },
+    )
+    decision_token = current_discovery_response_decision.set(decision)
+    text_token = current_user_text.set("kinergy EX, Ventus S2 AS 비교해줘")
+    try:
+        event = try_build_template(
+            [
+                {
+                    "tool": "search_product_summary_tool",
+                    "args": {"keyword": "키너지 EX"},
+                    "data": {
+                        "status": "success",
+                        "data": {
+                            "items": [
+                                {
+                                    "ptrn_cd": "H308",
+                                    "goods_nm": "키너지 EX",
+                                    "prc_grd_nm": "스탠다드",
+                                    "goods_pfm_nm": "COMFORT",
+                                    "goods_dtl_pfm_nm": "컴포트",
+                                    "rating_avg": 4.2,
+                                    "review_count": 43,
+                                }
+                            ]
+                        },
+                    },
+                },
+                {
+                    "tool": "search_product_summary_tool",
+                    "args": {"keyword": "벤투스 S2 AS"},
+                    "data": {
+                        "status": "success",
+                        "data": {
+                            "items": [
+                                {
+                                    "ptrn_cd": "H462",
+                                    "goods_nm": "벤투스 S2 AS",
+                                    "prc_grd_nm": "프리미엄",
+                                    "goods_pfm_nm": "COMFORT",
+                                    "goods_dtl_pfm_nm": "흡음재",
+                                    "rating_avg": 4.5,
+                                    "review_count": 68,
+                                }
+                            ]
+                        },
+                    },
+                },
+            ],
+            "고객님, 두 제품 모두 한국타이어 상품이에요.",
+        )
+    finally:
+        current_discovery_response_decision.reset(decision_token)
+        current_user_text.reset(text_token)
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    assert event["assistant_response_source"] in {"contract_renderer", "discovery_policy"}
+    response = event["data"]["assistantResponse"]
+    assert "상품 정보를 상품별 표로 비교해드릴게요." in response
+    assert "**키너지 EX**" in response
+    assert "**벤투스 S2 AS**" in response
+    assert "| 항목 | 내용 |" in response
+    assert "| 상품 등급 | 프리미엄 |" in response
+
+
 @pytest.mark.parametrize("user_text", ["그거 구매할래", "이 상품 주문할게", "그거 결제하고 싶어"])
 def test_turn_contract_guards_unclear_purchase_reference_followup(user_text: str) -> None:
     contract = _transaction_turn_contract(user_text)
