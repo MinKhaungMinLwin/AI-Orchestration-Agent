@@ -31396,10 +31396,10 @@ def test_product_summary_comparison_mapper_restores_table_response(monkeypatch: 
     assert "| 항목 | 내용 |" in response
     assert "| 상품 등급 | 프리미엄 |" in response
     assert "| 특징 | COMFORT / 흡음재 |" in response
-    assert "특화 사양 COMFORT" not in response
+    assert "특화 사양" not in response
     assert "| 리뷰 | 정숙성과 부드러운 승차감 만족 의견이 많아요 |" in response
     assert "| 평점 | 4.5점 |" in response
-    assert "| 사이즈 | 205/45R17, 205/50R17, 205/55R16, 205/60R16, 205/65R16 외 1개 |" in response
+    assert "| 주요 사이즈 | 205/45R17, 205/50R17, 205/55R16, 205/60R16, 205/65R16 외 1개 |" in response
 
 
 @pytest.mark.parametrize("user_text", ["그거 구매할래", "이 상품 주문할게", "그거 결제하고 싶어"])

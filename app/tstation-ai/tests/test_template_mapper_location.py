@@ -2625,13 +2625,13 @@ def test_metric_comparison_policy_includes_goods_detail_performance_name() -> No
     assert result is not None
     assert result["template"] == "quickReply"
     assistant_response = result["data"]["assistantResponse"]
-    assert "비교 대상의 특화 사양은 아래처럼 확인돼요." in assistant_response
+    assert "비교 대상의 특징은 아래처럼 확인돼요." in assistant_response
     assert "**벤투스 에어S**" in assistant_response
     assert "**다이나프로 HPX**" in assistant_response
     assert "| 항목 | 내용 |" in assistant_response
     assert "| 특징 | COMFORT / 흡음재 |" in assistant_response
     assert "| 특징 | COMFORT / SUV 마일리지 |" in assistant_response
-    assert "특화 사양 COMFORT" not in assistant_response
+    assert "특화 사양" not in assistant_response
 
 
 def test_metric_comparison_policy_answers_latest_product_confidently() -> None:

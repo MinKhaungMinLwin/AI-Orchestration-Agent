@@ -2388,7 +2388,7 @@ def _format_product_attribute(metric: str, rows: list[dict]) -> tuple[str, bool]
             " / ".join(filter(None, [_get_str(row, "goods_pfm_nm"), _get_str(row, "goods_dtl_pfm_nm")]))
             for row in rows
         ])
-        return (f"특화 사양 {', '.join(values[:3])}" if values else "특화 사양 확인되지 않음", False)
+        return (f"특징 {', '.join(values[:3])}" if values else "특징 확인되지 않음", False)
     return "", False
 
 
@@ -2602,7 +2602,7 @@ def _comparison_metric_table_rows(metric: str) -> tuple[tuple[str, str], ...]:
         ("주요 성능", "performance"),
         ("리뷰", "review"),
         ("평점", "rating"),
-        ("사이즈", "available_sizes"),
+        ("주요 사이즈", "available_sizes"),
     )
 
 
@@ -2763,7 +2763,7 @@ def _comparison_metric_best_line(metric: str, best_name: str, best_score: float 
     if metric == "noise":
         return f"정숙성 기준으로는 {best_name}이 확인돼요."
     if metric == "detail":
-        return "비교 대상의 특화 사양은 아래처럼 확인돼요."
+        return "비교 대상의 특징은 아래처럼 확인돼요."
     return "비교 결과를 상품별 표로 정리했어요."
 
 
@@ -2779,7 +2779,7 @@ def _comparison_metric_note(metric: str) -> str:
     if metric == "mileage":
         return "마일리지와 수명은 규격, 차종 호환, 주행환경에 따라 체감이 달라질 수 있어요."
     if metric == "detail":
-        return "표시된 특화 사양은 규격과 차종에 따라 달라질 수 있어요."
+        return "표시된 특징은 규격과 차종에 따라 달라질 수 있어요."
     return "표시된 사양은 규격에 따라 달라질 수 있어요."
 
 
