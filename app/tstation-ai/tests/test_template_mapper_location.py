@@ -1932,6 +1932,7 @@ def test_product_search_with_size_acknowledges_input_size_without_size_prompt() 
                     "data": {
                         "items": [
                             {
+                                "goods_no": "G000000320152",
                                 "goods_nm": "벤투스 S2 AS",
                                 "tire_size_1": "225/45R17",
                                 "season_nm": "사계절",
@@ -1960,6 +1961,9 @@ def test_product_search_with_size_acknowledges_input_size_without_size_prompt() 
         "구매하기",
     ]
     assert result["data"]["predictedDomains"] == ["TRANSACTION"]
+    assert result["data"]["metadata"]["goods_no"] == "G000000320152"
+    assert result["data"]["metadata"]["tire_size"] == "225/45R17"
+    assert result["data"]["metadata"]["product_name"] == "벤투스 S2 AS"
 
 
 def test_product_search_with_size_and_install_intent_does_not_ask_size_again() -> None:

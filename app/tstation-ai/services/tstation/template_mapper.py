@@ -2149,7 +2149,7 @@ def _product_search_policy_response(tool_data_list: list[dict]) -> str:
         lines.append("")
     if requested_size:
         lines.extend([
-            "원하시면 가격이나 재고도 이어서 확인해 드릴 수 있어요.",
+            "원하시면 가격, 재고, 구매를 이어서 확인할 수 있어요.",
         ])
     else:
         lines.extend([
@@ -2166,6 +2166,48 @@ def _product_search_policy_requested_size(tool_data_list: list[dict]) -> str:
         if requested_size:
             return requested_size
     return ""
+
+
+def _single_sized_product_context(tool_data_list: list[dict]) -> dict[str, Any]:
+    """Return purchase CTA context only when a sized product row is unambiguous."""
+    candidates: list[dict[str, Any]] = []
+    for entry in _find_entries(tool_data_list, "search_product_tool", "get_product_description_tool"):
+        args = _tool_args(entry)
+        raw = _unwrap(entry)
+        rows = raw if isinstance(raw, list) else (raw.get("items") if isinstance(raw, dict) else [raw])
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            goods_no = _get_str(row, "goods_no", "goodsNo") or _get_str(args, "goods_no", "goodsNo")
+            product_name = _get_str(row, "goods_nm", "goodsNm", "productName", "title")
+            tire_size = (
+                _get_str(row, "tire_size_1", "tire_size", "tireSize", "titleTires")
+                or _get_str(args, "size", "tire_size", "tireSize")
+            )
+            if not product_name or not tire_size:
+                continue
+            candidates.append({
+                "goods_no": goods_no,
+                "goodsNo": goods_no,
+                "product_name": product_name,
+                "productName": product_name,
+                "tire_model": product_name,
+                "tire_size": tire_size,
+                "tireSize": tire_size,
+            })
+    distinct = {
+        (
+            str(candidate.get("goods_no") or ""),
+            str(candidate.get("product_name") or ""),
+            str(candidate.get("tire_size") or ""),
+        )
+        for candidate in candidates
+    }
+    if len(distinct) != 1:
+        return {}
+    return {key: value for key, value in candidates[0].items() if value not in (None, "", [], {})}
 
 
 def _product_search_policy_fallback_response(tool_data_list: list[dict] | None = None) -> str:
@@ -3335,6 +3377,7 @@ def _map_discovery_policy_quickreply(tool_data_list: list[dict], assistant_text:
     if not response:
         return None
     response = _with_discovery_claim_check_prefix(response)
+    product_context = _single_sized_product_context(tool_data_list)
     if response_shape_key == "product_search_summary" and _product_search_policy_requested_size(tool_data_list):
         quick_replies = _DISCOVERY_SIZED_PRODUCT_CHIPS
         predicted_domains = ["TRANSACTION"]
@@ -3353,6 +3396,7 @@ def _map_discovery_policy_quickreply(tool_data_list: list[dict], assistant_text:
             "predictedDomains": predicted_domains,
             "metadata": {
                 "response_shape_key": response_shape_key,
+                **product_context,
                 **({"requested_product_attribute": requested_product_attribute} if requested_product_attribute else {}),
             },
         },
@@ -3709,17 +3753,26 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
         for label in missing_search_labels[:5]:
             lines.append(f"- {label}: 상품 정보를 찾지 못했어요.")
 
+    product_context = _single_sized_product_context(tool_data_list)
+    quick_replies = (
+        _DISCOVERY_SIZED_PRODUCT_CHIPS
+        if is_neutral_product_description and product_context
+        else [
+            {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
+            {"label": "차량번호로 확인", "domain": "DISCOVERY"},
+            {"label": "내 차량 보기", "domain": "DISCOVERY"},
+        ]
+    )
+    predicted_domains = ["TRANSACTION"] if is_neutral_product_description and product_context else ["DISCOVERY"]
+
     return {
         "type": "data",
         "template": "quickReply",
         "data": {
             "assistantResponse": _with_discovery_claim_check_prefix("\n".join(lines)),
-            "quickReplies": [
-                {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
-                {"label": "차량번호로 확인", "domain": "DISCOVERY"},
-                {"label": "내 차량 보기", "domain": "DISCOVERY"},
-            ],
-            "predictedDomains": ["DISCOVERY"],
+            "quickReplies": quick_replies,
+            "predictedDomains": predicted_domains,
+            **({"metadata": product_context} if product_context else {}),
         },
         "assistant_response_source": "code_mapper",
     }
