@@ -2614,7 +2614,11 @@ def _should_lead_with_upload_capability_notice(user_text: str | None) -> bool:
 
 
 def build_general_cancel_fee_policy_event(user_query: str, *, tool_result: dict | None = None) -> dict:
-    bucket_reply = build_support_faq_evidence_grounded_reply(
+    bucket_reply = build_support_faq_source_grounded_reply(
+        intent="general_cancel_fee_policy",
+        user_text=user_query,
+        tool_result=tool_result,
+    ) or build_support_faq_evidence_grounded_reply(
         intent="general_cancel_fee_policy",
         user_text=user_query,
         tool_result=tool_result,
@@ -2669,7 +2673,11 @@ def build_general_cancel_fee_policy_event(user_query: str, *, tool_result: dict 
 
 
 def build_general_card_cancel_timing_policy_event(user_query: str, *, tool_result: dict | None = None) -> dict:
-    bucket_reply = build_support_faq_evidence_grounded_reply(
+    bucket_reply = build_support_faq_source_grounded_reply(
+        intent="general_card_cancel_timing_policy",
+        user_text=user_query,
+        tool_result=tool_result,
+    ) or build_support_faq_evidence_grounded_reply(
         intent="general_card_cancel_timing_policy",
         user_text=user_query,
         tool_result=tool_result,
@@ -2732,7 +2740,11 @@ def build_support_faq_policy_event(
 ) -> dict | None:
     if intent not in DIRECT_SUPPORT_FAQ_POLICY_INTENTS:
         return None
-    bucket_reply = build_support_faq_evidence_grounded_reply(
+    bucket_reply = build_support_faq_source_grounded_reply(
+        intent=intent,
+        user_text=user_query,
+        tool_result=tool_result,
+    ) or build_support_faq_evidence_grounded_reply(
         intent=intent,
         user_text=user_query,
         tool_result=tool_result,
@@ -2749,7 +2761,10 @@ def build_support_faq_policy_event(
                 "predictedDomains": ["SUPPORT"],
                 "metadata": {
                     "responseShapeKey": intent,
-                    "faqSourceSummaryUsed": bool(_faq_policy_source_summary_text(tool_result, intent=intent)),
+                    "faqSourceSummaryUsed": any(
+                        (bucket_reply.get("metadata") or {}).get(key)
+                        for key in ("sourceGroundedReplyUsed", "evidenceGroundedReplyUsed", "faqLlmGroundedReplyUsed")
+                    ),
                     "faqSourceSummaryAppended": False,
                     "userText": user_query,
                     **dict(bucket_reply.get("metadata") or {}),

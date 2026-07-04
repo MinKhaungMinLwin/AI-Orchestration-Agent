@@ -37,6 +37,7 @@ _VEHICLE_SELECTION_CONTRACT_INTENTS = frozenset({
     _VEHICLE_TIRE_SIZE_LOOKUP_INTENT,
     "vehicle_resolved_recommendation",
     "vehicle_based_recommendation_refinement",
+    "maintenance_timing_guidance",
 })
 _STOCK_STORE_SEARCH_INTENT = "stock_store_search"
 _QUICK_ORDER_RESERVATION_INTENT = "quick_order_reservation"

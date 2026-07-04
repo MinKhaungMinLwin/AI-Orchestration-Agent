@@ -201,6 +201,7 @@ from services.tstation.policies.coupon_query_gate import (
 )
 from services.tstation.policies.contract_required_tool_candidate import (
     _contract_read_through_known_slots,
+    _contract_required_recommendation_tool_input,  # noqa: F401
     _contract_required_selected_store_schedule_tool_input,  # noqa: F401
     _contract_required_stock_inventory_selected_store_tool_input,  # noqa: F401
     _contract_required_tool_candidate,  # noqa: F401
@@ -7250,8 +7251,10 @@ def _preview_payment_details(
         return {"payment_amount_missing_reason": "quantity_missing"}
     if quantity <= 0:
         return {"payment_amount_missing_reason": "quantity_missing"}
+    wage_prc = _to_int(price_data.get("wage_prc")) if isinstance(price_data, Mapping) else None
+    unit_price_with_wage = unit_price + (wage_prc or 0)
     return {
-        "payment_amount": int(unit_price * quantity),
+        "payment_amount": int(unit_price_with_wage * quantity),
         "price_basis": price_basis,
         "price_source_tool": "transaction_store_preview_tool",
         "payment_amount_source": payment_amount_source,
@@ -19016,6 +19019,20 @@ def _build_discovery_policy_context(
             discovery_tool_patch = {"size": discovery_tool_plan.tool_args_patch["size"]}
         else:
             discovery_tool_patch = {}
+        if (
+            discovery_tool_patch.get("rcmd_type") == "tstation"
+            and not discovery_frame.entities.get("general_tire_preference")
+            and not any(
+                discovery_tool_patch.get(key) not in (None, "", [], {})
+                for key in ("vehicle_type", "season_nm", "pfm_nm", "prc_grd", "sort_by")
+            )
+        ):
+            # `plan_discovery_tools` defaults rcmd_type to "tstation" only when the
+            # current turn carried no scenario signal at all. Drop that null default
+            # here so an active/resumed recommendation flow (below) or the absence of
+            # any scenario can determine the real patch, instead of it winning by
+            # `setdefault` never getting a chance to fire.
+            discovery_tool_patch.pop("rcmd_type", None)
         if vehicle_refinement_patch:
             for key, value in vehicle_refinement_patch.items():
                 if value not in (None, ""):
@@ -30490,8 +30507,6 @@ class TStationChatServiceV2:
         async def _resolve_maintenance_timing_dday_with_code() -> tuple[list[dict], dict] | None:
             if str(getattr(turn_contract, "intent", "") or "") != "maintenance_timing_guidance":
                 return None
-            if _requested_maintenance_focus(user_query) is None:
-                return None
             known_slots = getattr(turn_contract, "known_slots", {}) if turn_contract is not None else {}
             selected_seq = ""
             if isinstance(known_slots, Mapping):
@@ -30502,6 +30517,8 @@ class TStationChatServiceV2:
                     or known_slots.get("mbrCarUnifNo")
                     or ""
                 ).strip()
+            if _requested_maintenance_focus(user_query) is None and not selected_seq:
+                return None
             tool_name = "get_maintenance_dday_tool"
             gate_allowed, gate_reason = _direct_code_fast_path_contract_gate(
                 turn_contract=turn_contract,
@@ -33954,7 +33971,7 @@ class TStationChatServiceV2:
             )
             return (emitted_events, finalized_event) if finalized_event is not None else None
 
-        async def _auto_continue_selected_vehicle(
+        async def _auto_continue_selected_vPlehicle(
             listcar_event: dict,
         ) -> tuple[list[dict], dict | None]:
             nonlocal pending_slots
