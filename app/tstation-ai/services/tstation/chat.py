@@ -17220,7 +17220,16 @@ _NON_SELECTION_HISTORY_SOURCES = frozenset({
 def _selection_history_template_data(template_data: dict[str, Any] | None) -> dict[str, Any] | None:
     if not isinstance(template_data, dict):
         return None
-    if str(template_data.get("template") or "").strip() == "quickReply":
+    assistant_response_source = str(template_data.get("assistant_response_source") or "").strip()
+    if (
+        str(template_data.get("template") or "").strip() == "quickReply"
+        and assistant_response_source != "code_product_compare_resolver"
+    ):
+        # quickReply is the generic template for plain FAQ/policy chatter, which must
+        # not be mistaken for prior product-selection history. The product-comparison
+        # resolver also renders as quickReply (see metric_comparison_summary /
+        # grade_comparison_summary in discovery_response_policy.py) and is the one
+        # quickReply source that legitimately carries recoverable selection context.
         return None
     data = template_data.get("data")
     metadata = data.get("metadata") if isinstance(data, dict) else None
@@ -17231,7 +17240,6 @@ def _selection_history_template_data(template_data: dict[str, Any] | None) -> di
     ).strip()
     if gate_result == "blocked":
         return None
-    assistant_response_source = str(template_data.get("assistant_response_source") or "").strip()
     if assistant_response_source in _NON_SELECTION_HISTORY_SOURCES:
         return None
     return template_data
