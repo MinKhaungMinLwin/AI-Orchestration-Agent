@@ -92,6 +92,10 @@ from .product_desc_response import ProductDescResponse
 from .product_image import ProductImage
 from .product_search_item import ProductSearchItem
 from .product_search_response import ProductSearchResponse
+from .product_search_summary_item import ProductSearchSummaryItem
+from .product_search_summary_response import ProductSearchSummaryResponse
+from .product_search_summary_warranty import ProductSearchSummaryWarranty
+from .product_search_summary_warranty_item import ProductSearchSummaryWarrantyItem
 from .product_warranties_response import ProductWarrantiesResponse
 from .product_warranty_item import ProductWarrantyItem
 from .rcmd_goods_item import RcmdGoodsItem
@@ -214,6 +218,10 @@ __all__ = (
     "ProductImage",
     "ProductSearchItem",
     "ProductSearchResponse",
+    "ProductSearchSummaryItem",
+    "ProductSearchSummaryResponse",
+    "ProductSearchSummaryWarranty",
+    "ProductSearchSummaryWarrantyItem",
     "ProductWarrantiesResponse",
     "ProductWarrantyItem",
     "RcmdGoodsItem",

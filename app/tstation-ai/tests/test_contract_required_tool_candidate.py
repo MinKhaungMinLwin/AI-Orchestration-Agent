@@ -28,6 +28,45 @@ def test_discovery_candidate_preserves_preferred_tool_and_args_patch() -> None:
     assert candidate.tool_input_source == "turn_contract_tool_args_patch"
 
 
+def test_unsized_product_summary_candidate_uses_summary_tool_without_size() -> None:
+    contract = TurnContract(
+        domain="discovery",
+        intent="product_description",
+        allowed_tools=("search_product_summary_tool",),
+        preferred_tool="search_product_summary_tool",
+        tool_args_patch={"keyword": "Ventus S2 AS", "brand_cd": "HK"},
+        context_state="active",
+    )
+
+    candidate = _contract_required_tool_candidate(
+        turn_contract=contract,
+        user_text="벤투스 S2 AS 설명해줘",
+        merged_slots=None,
+    )
+
+    assert candidate is not None
+    assert candidate.tool_name == "search_product_summary_tool"
+    assert candidate.tool_input == {"keyword": "Ventus S2 AS", "brand_cd": "HK", "limit": 5}
+
+
+def test_multi_product_summary_candidate_does_not_force_first_product() -> None:
+    contract = TurnContract(
+        domain="discovery",
+        intent="product_comparison",
+        allowed_tools=("search_product_summary_tool", "get_product_description_tool"),
+        preferred_tool="search_product_summary_tool",
+        context_state="active",
+    )
+
+    candidate = _contract_required_tool_candidate(
+        turn_contract=contract,
+        user_text="키너지 EX랑 벤투스 S2 AS 비교해줘",
+        merged_slots=None,
+    )
+
+    assert candidate is None
+
+
 def test_forbidden_tool_suppresses_candidate_creation() -> None:
     contract = TurnContract(
         domain="discovery",

@@ -1,5 +1,6 @@
 import logging
 import contextvars
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
@@ -22,6 +23,7 @@ from services.tstation.policies.ui_action_policy import normalize_vehicle_type_f
 # Product Compatibility
 from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.check_compatibility_api_product_compatible_get import sync_detailed as check_compatibility
 from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.search_product_api_product_search_get import sync_detailed as search_product
+from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.search_product_summary_api_product_search_summary_get import sync_detailed as search_product_summary
 from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.get_user_vehicles_api_user_vehicles_get import sync_detailed as get_user_vehicles
 from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.search_car_model_api_vehicle_search_get import sync_detailed as search_car_model
 from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.search_car_model_groups_api_vehicle_models_get import sync_detailed as search_car_model_groups
@@ -245,7 +247,7 @@ DOMAIN_TOOL_MAP = {
 # still reachable via get_product_description_tool when the user explicitly asks.
 _TRIM_KEEP_FIELDS: frozenset[str] = frozenset({
     # Identity
-    "goods_no", "goods_nm", "title",
+    "goods_no", "ptrn_cd", "goods_nm", "title",
     # Product recency
     "sys_reg_dtime",
     # Tire size — used by the agent to differentiate same-name SKUs in card titles
@@ -254,6 +256,7 @@ _TRIM_KEEP_FIELDS: frozenset[str] = frozenset({
     "available_sizes",
     # Visual / pricing
     "image_url", "price", "sale_prc", "extra_fvr_sale_prc", "extra_fvr_sale_per",
+    "min_sale_prc", "max_sale_prc", "min_extra_fvr_sale_prc", "max_extra_fvr_sale_prc", "max_extra_fvr_sale_per",
     # Scoring used for sort priority and rcmd_type matching
     "tot_scr",
     "t_comfort", "t_silence", "t_life_span", "t_fuel_eff_convert",
@@ -285,6 +288,8 @@ _TRIM_KEEP_FIELDS: frozenset[str] = frozenset({
     # LLM 이 "쿠폰 적용하면 OO원" / "최저 OO원" 인용할 때 사용. null 인 회원이면
     # 자동으로 dict 에서 빠짐 (BE 응답에 null 값으로 들어와도 sale_prc 만 인용).
     "cheapest_final_prc", "cheapest_total_discount", "cheapest_applied_coupons",
+    # Size-less product summary endpoint fields.
+    "goods_no_count", "smrt_pay_yn", "warranty", "slogan", "pc_prod_remark_desc", "pc_prod_tech_desc",
 })
 
 
@@ -399,6 +404,25 @@ def _slim_product_item(item: dict) -> dict:
     fields in _TRIM_KEEP_FIELDS.
     """
     return {k: v for k, v in item.items() if k in _TRIM_KEEP_FIELDS}
+
+
+def _compact_html_text(value: Any, *, max_chars: int = 600) -> str | None:
+    text = re.sub(r"<[^>]+>", " ", str(value or ""))
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text:
+        return None
+    return text[:max_chars].rstrip()
+
+
+def _slim_product_summary_item(item: dict) -> dict:
+    slim = _slim_product_item(item)
+    for key in ("pc_prod_remark_desc", "pc_prod_tech_desc"):
+        compacted = _compact_html_text(slim.get(key))
+        if compacted:
+            slim[key] = compacted
+        else:
+            slim.pop(key, None)
+    return slim
 
 
 # brand_cd 가 이미 브랜드 필터링을 수행하는데 keyword 에도 한글 브랜드명을
@@ -769,6 +793,67 @@ def search_product_tool(
     except Exception as e:
         logger.exception("[TOOL][search_product_tool] Failed")
         return _error_response(None, str(e), "Failed to search products")
+
+
+@tool
+@tool_cache(ttl=600)
+def search_product_summary_tool(
+    keyword: str | None = None,
+    limit: int = 5,
+    brand_cd: str | None = None,
+):
+    """
+    사이즈 미지정 상품군 검색.
+
+    When to use:
+    - User asks for product explanation, grade/features, warranty, available sizes, or product-to-product comparison
+      by product name only.
+    - User did NOT provide a tire size and the current turn does NOT need a concrete SKU for purchase/stock/order.
+
+    When NOT to use:
+    - User provided tire size.
+    - Purchase, stock, reservation, cart, final price, coupon issuance, or any flow that requires goods_no/SKU.
+      Use search_product_tool in those flows.
+
+    Args:
+        keyword (str | None): 상품명/모델명 키워드.
+        limit (int): 반환할 최대 상품군 수. 기본 5.
+        brand_cd (str | None): 브랜드 코드. 미지정 시 전체 브랜드 검색.
+
+    Returns:
+        dict: {"status": "success", "data": {"items": [...]}}. Items are pattern-level and intentionally do not
+        contain goods_no.
+    """
+    normalized_keyword = _strip_brand_only_keyword(keyword)
+    normalized_brand_cd = str(brand_cd).strip().upper() if brand_cd else None
+    brand_arg = normalized_brand_cd if normalized_brand_cd else UNSET
+    logger.debug(
+        "[TOOL][search_product_summary_tool] Called with: keyword=%s, limit=%s, brand_cd=%s",
+        normalized_keyword,
+        limit,
+        normalized_brand_cd,
+    )
+
+    try:
+        response = search_product_summary(
+            client=get_client(),
+            keyword=normalized_keyword,
+            limit=min(max(int(limit or 5), 1), 20),
+            brand_cd=brand_arg,
+        )
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to search product summaries",
+            )
+        data = _to_dict(response.parsed)
+        if isinstance(data, dict) and isinstance(data.get("items"), list):
+            data["items"] = [_slim_product_summary_item(item) for item in data["items"] if isinstance(item, dict)]
+        return _success_response(response.status_code, data)
+    except Exception as e:
+        logger.exception("[TOOL][search_product_summary_tool] Failed")
+        return _error_response(None, str(e), "Failed to search product summaries")
 
 
 @tool

@@ -56,6 +56,7 @@ _TRANSACTION_STORE_PREVIEW_RECOVERY_INTENTS = frozenset({
     "stock_store_search",
 })
 _FAST_PATH_DISCOVERY_RECOVERY_ALLOWED_TOOLS = frozenset({
+    "search_product_summary_tool",
     "search_product_tool",
     "get_product_description_tool",
     "get_products_recommendations_tool",
@@ -880,7 +881,10 @@ def _contract_required_tool_candidate(
         if preferred_tool in forbidden_tools or preferred_tool in _FAST_PATH_TRANSACTION_RECOVERY_BLOCKLIST:
             return None
 
-        if preferred_tool == "search_product_tool":
+        if preferred_tool in {"search_product_summary_tool", "search_product_tool"}:
+            product_names = extract_product_names(user_text)
+            if preferred_tool == "search_product_summary_tool" and len(product_names) >= 2 and not tool_input:
+                return None
             preferred_keyword = str(
                 known_slots.get("pending_product_name")
                 or known_slots.get("tire_model")
@@ -893,7 +897,6 @@ def _contract_required_tool_candidate(
             if not tool_input:
                 keyword = preferred_keyword
                 if not keyword:
-                    product_names = extract_product_names(user_text)
                     keyword = str(product_names[0] if product_names else "").strip()
                 if not keyword:
                     return None
@@ -905,7 +908,12 @@ def _contract_required_tool_candidate(
                 if tire_size:
                     tool_input["size"] = tire_size
                 tool_input_source = tool_input_source or "known_slots"
-            display_name = "상품 검색 중..."
+            if preferred_tool == "search_product_summary_tool":
+                tool_input.pop("size", None)
+                tool_input.setdefault("limit", 5)
+                display_name = "상품 정보 확인 중..."
+            else:
+                display_name = "상품 검색 중..."
         elif preferred_tool == "get_product_description_tool":
             if not tool_input:
                 goods_no = str(known_slots.get("goods_no") or getattr(merged_slots, "goods_no", None) or "").strip()

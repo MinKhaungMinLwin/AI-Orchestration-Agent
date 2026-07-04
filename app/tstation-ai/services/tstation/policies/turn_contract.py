@@ -92,6 +92,7 @@ _DISCOVERY_FIRST_LEG_BLOCK_SOURCES = frozenset({
     "discovery_policy",
 })
 _DISCOVERY_PRODUCT_SOURCE_TOOLS = frozenset({
+    "search_product_summary_tool",
     "search_product_tool",
     "get_products_recommendations_tool",
     "get_best_selling_products_tool",
@@ -5404,20 +5405,26 @@ def _router_wins_tool_boundary(intent: str) -> tuple[tuple[str, ...], tuple[str,
         )
     if intent in {"product_detail_lookup", "product_description"}:
         return (
-            ("search_product_tool", "get_product_description_tool"),
+            ("search_product_summary_tool", "search_product_tool", "get_product_description_tool"),
             tuple(
                 tool
                 for tool in _ROUTER_WINS_TRANSACTION_FORBIDDEN_TOOLS | {"get_products_recommendations_tool"}
-                if tool not in {"search_product_tool", "get_product_description_tool"}
+                if tool not in {"search_product_summary_tool", "search_product_tool", "get_product_description_tool"}
             ),
         )
     if intent == "product_comparison":
         return (
-            ("search_product_tool", "get_product_description_tool", "get_cheapest_price_tool"),
+            ("search_product_summary_tool", "search_product_tool", "get_product_description_tool", "get_cheapest_price_tool"),
             tuple(
                 tool
                 for tool in _ROUTER_WINS_TRANSACTION_FORBIDDEN_TOOLS | {"get_products_recommendations_tool"}
-                if tool not in {"search_product_tool", "get_product_description_tool", "get_cheapest_price_tool"}
+                if tool
+                not in {
+                    "search_product_summary_tool",
+                    "search_product_tool",
+                    "get_product_description_tool",
+                    "get_cheapest_price_tool",
+                }
             ),
         )
     if intent == "competitor_counterpart_guidance":

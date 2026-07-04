@@ -511,6 +511,7 @@ _TOOL_TEMPLATE_MAP: dict[str, str] = {
 }
 
 _DISCOVERY_POLICY_SOURCE_TOOLS = frozenset({
+    "search_product_summary_tool",
     "search_product_tool",
     "get_newest_products_tool",
     "get_products_recommendations_tool",
@@ -1980,7 +1981,7 @@ def _map_product_search_size_summary(tool_data_list: list[dict], *, force_contra
 
     grouped: dict[str, list[dict]] = {}
     found = False
-    for entry in _find_entries(tool_data_list, "search_product_tool"):
+    for entry in _find_entries(tool_data_list, "search_product_summary_tool", "search_product_tool"):
         if _has_size_arg(entry):
             continue
         raw = _unwrap(entry)
@@ -2073,7 +2074,7 @@ def _product_search_policy_response(tool_data_list: list[dict]) -> str:
 
     requested_size = ""
     grouped: dict[str, dict[str, object]] = {}
-    for entry in _find_entries(tool_data_list, "search_product_tool"):
+    for entry in _find_entries(tool_data_list, "search_product_summary_tool", "search_product_tool"):
         args = _tool_args(entry)
         if not requested_size:
             requested_size = _get_str(args, "size", "tire_size")
@@ -3413,6 +3414,7 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
     if response_shape_key == "similar_price_range_recommendation":
         for entry in _find_entries(
             tool_data_list,
+            "search_product_summary_tool",
             "search_product_tool",
             "get_newest_products_tool",
             "get_products_recommendations_tool",
@@ -3428,7 +3430,9 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
     product_search_size_summary = _map_product_search_size_summary(tool_data_list)
     if product_search_size_summary:
         return product_search_size_summary
-    if _explicit_requested_product_attribute_metrics() and _find_entries(tool_data_list, "search_product_tool"):
+    if _explicit_requested_product_attribute_metrics() and _find_entries(
+        tool_data_list, "search_product_summary_tool", "search_product_tool"
+    ):
         response = _product_attribute_policy_response(tool_data_list)
         response = sanitize_user_facing_response(response)
         if response:
@@ -3477,6 +3481,7 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
     found_product_tool = False
     for entry in _find_entries(
         tool_data_list,
+        "search_product_summary_tool",
         "search_product_tool",
         "get_newest_products_tool",
         "get_products_recommendations_tool",
