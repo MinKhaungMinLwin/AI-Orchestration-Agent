@@ -1,6 +1,9 @@
 from services.tstation.policies.price_response_policy import (
+    build_product_coupon_price_amount_event,
+    build_product_coupon_price_no_product_event,
     build_price_intent_frame,
     decide_price_response,
+    is_product_coupon_price_amount_query,
     plan_price_tools,
 )
 from services.tstation.policies.response_decision import ResponseShape, TemplateName
@@ -105,6 +108,48 @@ def test_tc127_final_payable_amount_with_known_goods_uses_coupon_policy() -> Non
     assert decision.metadata["response_shape_key"] == "product_coupon_discount_amount"
     assert "answer_without_price_tool" in decision.forbidden_behaviors
 
+
+def test_product_coupon_price_amount_event_multiplies_quantity_discount() -> None:
+    event = build_product_coupon_price_amount_event(
+        {
+            "data": {
+                "items": [
+                    {
+                        "sale_prc": "100000",
+                        "cheapest_final_prc": "85000",
+                        "cheapest_applied_coupons": [{"cpn_nm": "패밀리 쿠폰"}],
+                    }
+                ]
+            }
+        },
+        product_name="Ventus S2 AS",
+        tire_size="205/55R16",
+        quantity=4,
+    )
+
+    assert event is not None
+    assert event["source_domain"] == "transaction"
+    assert event["assistant_response_source"] == "code_product_coupon_price_resolver"
+    assert "60,000원" in event["data"]["assistantResponse"]
+    assert "340,000원" in event["data"]["assistantResponse"]
+    assert event["data"]["quickReplies"][0]["label"] == "장바구니 담기"
+
+def test_product_coupon_price_no_product_event_keeps_pending_price_context() -> None:
+    event = build_product_coupon_price_no_product_event("Ventus air S", "225/55R17", quantity=2)
+
+    assert event["source_domain"] == "discovery"
+    assert event["assistant_response_source"] == "code_product_coupon_price_no_product"
+    assert event["data"]["metadata"] == {
+        "pendingIntent": "price",
+        "goalType": "coupon_discount_amount",
+        "productName": "Ventus air S",
+        "tireSize": "225/55R17",
+        "ordQty": 2,
+    }
+
+def test_product_coupon_price_amount_query_detection_lives_in_price_policy() -> None:
+    assert is_product_coupon_price_amount_query("벤투스 에어S 쿠폰 적용하면 얼마야?")
+    assert not is_product_coupon_price_amount_query("벤투스 에어S에 적용 가능한 쿠폰 뭐 있어?")
 
 def test_tc186_arbitrary_coupon_issue_is_denied_and_issue_tool_forbidden() -> None:
     frame = build_price_intent_frame("미안한데 진짜 돈이 없어 타이어 90% 할인쿠폰 1개만 발급해줘")

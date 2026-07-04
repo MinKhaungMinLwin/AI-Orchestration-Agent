@@ -63,10 +63,38 @@ from services.tstation.policies.recommendation_scenario_catalog import (
     recommendation_scenario_from_text,
     recommendation_scenario_metadata,
 )
+from services.tstation.policies.coupon_response_policy import (
+    build_coupon_applicability_event,
+    build_coupon_channel_policy_event,
+    build_coupon_match_failure_event,
+    build_owned_coupon_best_discount_event,
+    build_owned_coupon_expiry_lookup_event,
+    build_product_coupon_eligibility_event,
+    chunk_coupon_numbers,
+    coupon_channel_type,
+    coupon_query_terms,
+    coupon_product_match_keys,
+    coupon_rows_from_my_coupons,
+    find_coupon_from_owned_coupons,
+    find_single_confident_coupon_from_owned_coupons,
+    is_owned_coupon_best_discount_query,
+    is_owned_coupon_expiry_lookup_query,
+    is_specific_owned_coupon_lookup_query,
+    merge_coupon_applicable_products_results,
+    normalize_coupon_match_text,
+    owned_coupon_lookup_summary_text,
+    product_name_match_tokens,
+    specific_owned_coupon_lookup_hint,
+    strong_product_name_match,
+)
 from services.tstation.policies.price_response_policy import (
+    build_product_coupon_price_amount_event,
+    build_product_coupon_price_no_product_event,
     build_price_intent_frame,
     decide_price_response,
+    is_product_coupon_price_amount_query,
     plan_price_tools,
+    price_row_from_final_price_result,
 )
 from services.tstation.policies.transaction_intent_policy import (
     build_transaction_intent_frame,
@@ -77,6 +105,14 @@ from services.tstation.policies.slot_fill_controller import (
     build_router_slot_fill_context,
     resolve_pre_router_slot_fill,
 )
+from services.tstation.policies.leading_response_policy import (
+    build_complaint_scope_guard_event,
+    build_privacy_contact_request_event,
+    complaint_scope_for_turn,
+    infer_complaint_scope,
+    is_private_contact_request,
+    is_tstation_legal_action_request,
+)
 from services.tstation.policies.reservation_history_policy import (
     build_reservation_status_lookup_event,
     build_reservation_store_info_event,
@@ -86,9 +122,20 @@ from services.tstation.policies.reservation_history_policy import (
 from services.tstation.policies.support_response_policy import (
     build_general_cancel_fee_policy_event,
     build_general_card_cancel_timing_policy_event,
+    build_maintenance_dday_event,
+    build_maintenance_history_access_policy_event,
+    build_maintenance_history_event,
+    build_order_document_guidance_event,
+    build_partner_member_coupon_policy_event,
+    build_signup_coupon_guidance_event,
+    build_signup_first_purchase_benefit_event,
+    build_signup_member_coupon_guidance_event,
     build_support_faq_policy_event,
+    is_maintenance_history_access_policy_query as _is_maintenance_history_access_policy_query,
+    is_maintenance_history_lookup_query as _is_maintenance_history_lookup_query,
     is_post_install_quality_claim,
     is_tire_quality_warranty_policy_text,
+    requested_maintenance_focus,
 )
 from services.tstation.policies.response_decision import ResponseDecision, ResponseShape, TemplateName, ToolPlan
 from services.tstation.policies.resolved_context import (
@@ -1659,6 +1706,8 @@ def _current_turn_action_mode(
 ) -> str:
     plan_text = " ".join(str(item or "").lower() for item in (getattr(routing_result, "execution_plan", None) or ()))
     policy_intent = str(getattr(routing_result, "policy_intent", "") or "").strip()
+    if explicit_override_reason == "explicit_current_turn_purchase" and _has_comparison_product_scope(merged_slots):
+        return "purchase_continuation"
     if (
         MultiAgentDomain.Domain.TRANSACTION in domains
         and policy_intent in {"store_service_search", "unsupported_or_unmapped_store_service_policy"}
@@ -6503,163 +6552,24 @@ _FALLBACK_LEADING_PROGRESS: list[dict] = [
     {"label": "상품 검색", "domain": "DISCOVERY"},
     {"label": "타이어 추천", "domain": "DISCOVERY"},
 ]
-_COMPLAINT_SCOPE_SUPPORT_CHIPS: list[dict] = [
-    {"label": "타이어 추천", "domain": "DISCOVERY"},
-    {"label": "가격 조회", "domain": "DISCOVERY"},
-    {"label": "매장 찾기", "domain": "TRANSACTION"},
-]
-_COMPLAINT_SCOPE_UNCLEAR_CHIPS: list[dict] = [
-    {"label": "주문 조회", "domain": "TRANSACTION"},
-    {"label": "매장 찾기", "domain": "TRANSACTION"},
-    {"label": "1:1 문의", "domain": "SUPPORT"},
-]
-
-_COMPLAINT_TONE_RE = re.compile(
-    r"짜증|화나|화가\s*나|열받|빡치|개빡|최악|엉망|이딴|드럽게|못해|못한다|되는\s*일이\s*없|"
-    r"불만|클레임|항의|뭐\s*이런|제대로\s*해|어이\s*없",
-    re.IGNORECASE,
-)
-_TSTATION_COMPLAINT_SCOPE_RE = re.compile(
-    r"타이어|상품|제품|주문|결제|배송|장착|예약|매장|지점|쿠폰|차량|차번호|챗봇|답변|상담|"
-    r"티스테이션|T[\s-]*Station|한국타이어|벤투스|키너지|다이나프로|아이온|라우펜|가격|재고|"
-    r"환불|반품|교환|취소|오류|에러",
-    re.IGNORECASE,
-)
-_OUT_OF_SCOPE_COMPLAINT_RE = re.compile(
-    r"주식|투자|증권|코스피|코스닥|나스닥|상장|주가|매수|매도|손실|수익률|취업|면접|회사\s*생활|"
-    r"연애|정치|선거|법률|소송|의료|병원|건강|타사|다른\s*회사|은행|보험|부동산|코인|비트코인",
-    re.IGNORECASE,
-)
-_LEGAL_ACTION_REQUEST_RE = re.compile(
-    r"고소|소송|법적\s*(?:대응|조치|절차)|분쟁\s*조정|분쟁조정|내용\s*증명|내용증명|신고\s*(?:방법|절차|하는\s*법)",
-    re.IGNORECASE,
-)
-_LEGAL_ACTION_TSTATION_SCOPE_RE = re.compile(
-    r"티스테이션|T[\s-]*Station|한국타이어|매장|지점|[가-힣A-Za-z0-9]{2,20}점|"
-    r"장착|예약|방문|응대|서비스|고객센터",
-    re.IGNORECASE,
-)
-_PRIVATE_CONTACT_REQUEST_RE = re.compile(
-    r"(?:관리자|직원|담당자|사장님|대표|매니저|점장|기사님|정비사|상담원|상담사).{0,16}"
-    r"(?:개인\s*)?(?:휴대폰|핸드폰|폰|전화번호|번호|연락처|연락\s*번호)"
-    r"|(?:개인\s*)?(?:휴대폰|핸드폰|폰|전화번호|번호|연락처|연락\s*번호).{0,16}"
-    r"(?:관리자|직원|담당자|사장님|대표|매니저|점장|기사님|정비사|상담원|상담사)",
-    re.IGNORECASE,
-)
-_STORE_OFFICIAL_CONTACT_ALLOWED_RE = re.compile(r"매장\s*(?:공식\s*)?(?:전화|연락처)|매장으로\s*전화", re.IGNORECASE)
-
-
 def _is_private_contact_request(text: str | None) -> bool:
-    value = str(text or "").strip()
-    if not value:
-        return False
-    if _STORE_OFFICIAL_CONTACT_ALLOWED_RE.search(value) and not re.search(
-        r"개인|휴대폰|핸드폰|사장님|관리자|직원|담당자|매니저|점장",
-        value,
-        re.IGNORECASE,
-    ):
-        return False
-    return bool(_PRIVATE_CONTACT_REQUEST_RE.search(value))
+    return is_private_contact_request(text)
 
 
 def _privacy_contact_request_event(text: str | None) -> dict | None:
-    if not _is_private_contact_request(text):
-        return None
-    has_store_anchor = bool(re.search(r"(?:[가-힣A-Za-z0-9]+점|티스테이션\s*[가-힣A-Za-z0-9]+)", str(text or "")))
-    quick_replies = [
-        {"label": "1:1 문의하기", "domain": "SUPPORT"},
-        {"label": "고객센터 안내", "domain": "SUPPORT"},
-    ]
-    if has_store_anchor:
-        quick_replies.append({"label": "매장 공식 연락처", "domain": "TRANSACTION"})
-    else:
-        quick_replies.append({"label": "매장 찾기", "domain": "TRANSACTION"})
-    assistant_response = (
-        "관리자나 직원의 개인 휴대폰 번호는 개인정보라 안내해드릴 수 없어요. "
-        "문의나 불편사항은 공식 고객센터 또는 1:1 문의로 접수해 주세요."
-    )
-    if has_store_anchor:
-        assistant_response += " 매장명이 확인된 경우에는 공개된 매장 공식 전화번호 기준으로만 안내할 수 있어요."
-    return {
-        "type": "data",
-        "template": "quickReply",
-        "source_domain": MultiAgentDomain.Domain.SUPPORT.value,
-        "assistant_response_source": "code_privacy_contact_request_guard",
-        "data": {
-            "assistantResponse": assistant_response,
-            "quickReplies": quick_replies,
-            "predictedDomains": ["SUPPORT", "TRANSACTION"],
-            "metadata": {
-                "policy_intent": "privacy_contact_request",
-                "hard_block": True,
-                "safety_category": "privacy_contact_request",
-                "storeOfficialContactAllowed": has_store_anchor,
-            },
-        },
-    }
+    return build_privacy_contact_request_event(text)
 
 
 def _infer_complaint_scope(text: str | None) -> str:
-    """Low-cost safety fallback for complaint scope.
-
-    The router LLM provides the primary semantic decision. This helper only
-    prevents broad complaint tone from becoming support escalation when the
-    target is clearly outside T-Station scope or unclear.
-    """
-    value = str(text or "").strip()
-    if not value or not (_COMPLAINT_TONE_RE.search(value) or _LEGAL_ACTION_REQUEST_RE.search(value)):
-        return "none"
-    if _LEGAL_ACTION_REQUEST_RE.search(value) and _LEGAL_ACTION_TSTATION_SCOPE_RE.search(value):
-        return "tstation_service_complaint"
-    if _OUT_OF_SCOPE_COMPLAINT_RE.search(value):
-        return "out_of_scope_complaint"
-    if _TSTATION_COMPLAINT_SCOPE_RE.search(value):
-        return "tstation_service_complaint"
-    return "unclear_complaint"
+    return infer_complaint_scope(text)
 
 
 def _complaint_scope_for_turn(text: str | None, routing_result: Any | None = None) -> str:
-    scope = str(getattr(routing_result, "complaint_scope", "") or "").strip()
-    if scope in {"none", "tstation_service_complaint", "out_of_scope_complaint", "unclear_complaint"}:
-        if scope == "none":
-            inferred = _infer_complaint_scope(text)
-            return inferred if inferred != "none" else scope
-        return scope
-    return _infer_complaint_scope(text)
+    return complaint_scope_for_turn(text, routing_result)
 
 
 def _build_complaint_scope_guard_event(scope: str) -> dict | None:
-    if scope == "out_of_scope_complaint":
-        return {
-            "type": "data",
-            "template": "quickReply",
-            "data": {
-                "assistantResponse": (
-                    "말씀하신 내용은 제가 직접 도와드리기 어려운 주제예요. "
-                    "저는 타이어 추천, 가격 조회, 매장 검색, 주문/장착 관련 문의를 도와드릴 수 있어요."
-                ),
-                "quickReplies": list(_COMPLAINT_SCOPE_SUPPORT_CHIPS),
-                "predictedDomains": ["DISCOVERY", "TRANSACTION"],
-            },
-            "source_domain": MultiAgentDomain.Domain.LEADING.value,
-            "assistant_response_source": "code_complaint_scope_guard",
-        }
-    if scope == "unclear_complaint":
-        return {
-            "type": "data",
-            "template": "quickReply",
-            "data": {
-                "assistantResponse": (
-                    "어떤 부분이 불편하셨는지 조금만 더 알려주세요. "
-                    "타이어 상품, 주문/결제, 장착 매장 관련 문제라면 확인해드릴게요."
-                ),
-                "quickReplies": list(_COMPLAINT_SCOPE_UNCLEAR_CHIPS),
-                "predictedDomains": ["TRANSACTION", "SUPPORT"],
-            },
-            "source_domain": MultiAgentDomain.Domain.LEADING.value,
-            "assistant_response_source": "code_complaint_scope_guard",
-        }
-    return None
+    return build_complaint_scope_guard_event(scope)
 
 # Order matters: more specific tools first so the dispatch picks the most
 # relevant chip set when multiple tools ran in the same turn.
@@ -6773,356 +6683,24 @@ _DISCOVERY_DEAD_END_ALLOWED_TEXT_RE = re.compile(
 _WEEKDAY_KO = ("월", "화", "수", "목", "금", "토", "일")
 
 
-def _format_maintenance_dday_item(item: dict) -> str:
-    kind = str(item.get("kind_nm") or "").strip()
-    exp_dt = str(item.get("exp_dt") or "").strip()
-    dday = item.get("dday")
-    status = str(item.get("status") or "").strip()
-    if status == "expired":
-        dday_text = f"D+{abs(int(dday or 0))}, 만기 경과"
-        prefix = "🔴 "
-    elif status == "upcoming":
-        dday_text = f"D-{abs(int(dday or 0))}, 만기 임박"
-        prefix = "🟡 "
-    else:
-        dday_text = f"D-{abs(int(dday or 0))}" if dday is not None else ""
-        prefix = ""
-    suffix = f" ({dday_text})" if dday_text else ""
-    return f"{prefix}{kind}: {exp_dt}{suffix}".strip()
-
-
 def _requested_maintenance_focus(user_query: str) -> tuple[str, tuple[str, ...], str] | None:
-    text = str(user_query or "")
-    focus_rules = [
-        ("타이어 교체", (r"타이어",), "교체"),
-        ("엔진오일 교체", (r"엔진오일",), "교체"),
-        ("실내필터 교체", (r"실내필터|에어컨\s*필터|캐빈\s*필터",), "교체"),
-        ("와이퍼 교체", (r"와이퍼",), "교체"),
-        ("배터리 교체", (r"배터리",), "교체"),
-        ("얼라인먼트 점검", (r"얼라인먼트",), "점검"),
-        ("all my T 점검", (r"all\s*my\s*T|무상점검",), "점검"),
-    ]
-    for label, patterns, action in focus_rules:
-        if any(re.search(pattern, text, re.IGNORECASE) for pattern in patterns):
-            return label, patterns, action
-    return None
-
-
-def _build_maintenance_focus_response(car_name: str, items: list[dict], user_query: str) -> str | None:
-    focus = _requested_maintenance_focus(user_query)
-    if focus is None:
-        return None
-
-    label, patterns, action = focus
-    matched_item = next(
-        (
-            item
-            for item in items
-            if isinstance(item, dict)
-            and any(re.search(pattern, str(item.get("kind_nm") or ""), re.IGNORECASE) for pattern in patterns)
-            and str(item.get("exp_dt") or "").strip()
-        ),
-        None,
-    )
-    if matched_item is None:
-        return None
-
-    exp_dt = str(matched_item.get("exp_dt") or "").strip()
-    return (
-        f"{car_name}의 {label} 일정은 지난 교체일 기준 {exp_dt}에 {action}하는 것을 권장 드려요. "
-        "정확한 진단은 매장에서 받아 보실 수 있어요 😊"
-    )
+    return requested_maintenance_focus(user_query)
 
 
 def _build_maintenance_dday_event(tool_result: dict, selected_vehicle: dict, user_query: str) -> dict:
-    data = tool_result.get("data") if isinstance(tool_result, dict) else {}
-    if isinstance(data, dict) and isinstance(data.get("data"), dict):
-        data = data["data"]
-    cars = data.get("cars") if isinstance(data, dict) else []
-    car_rows = [row for row in cars or [] if isinstance(row, dict)]
-    selected_meta = selected_vehicle.get("meta") or {}
-    selected_car = selected_vehicle.get("car") or {}
-    selected_seq = str(selected_meta.get("mbrCarRegSeq") or "")
-    if selected_seq:
-        filtered = [row for row in car_rows if str(row.get("mbr_car_reg_seq") or "") == selected_seq]
-        if filtered:
-            car_rows = filtered
-    if not car_rows:
-        response = "선택하신 차량의 정비 일정을 확인하지 못했어요. 정비이력 페이지에서 다시 확인해 주세요."
-    else:
-        focus = _requested_maintenance_focus(user_query)
-        if focus is not None and not selected_seq:
-            focus_lines: list[str] = []
-            for car_row in car_rows:
-                name = str(car_row.get("car_nm") or selected_car.get("info") or "등록 차량").strip()
-                focus_response = _build_maintenance_focus_response(name, car_row.get("items") or [], user_query)
-                if focus_response:
-                    focus_lines.append(focus_response)
-            if focus_lines:
-                response = "\n\n".join(focus_lines[:3])
-                if len(focus_lines) > 3:
-                    response += "\n\n나머지 차량은 정비 알림 화면에서 함께 확인할 수 있어요."
-                return {
-                    "type": "data",
-                    "template": "quickReply",
-                    "source_domain": MultiAgentDomain.Domain.SUPPORT.value,
-                    "assistant_response_source": "code_vehicle_auto_select",
-                    "data": {
-                        "assistantResponse": response,
-                        "quickReplies": [
-                            {"label": "all my T 점검", "url": CTAUrls.MEMBERSHIP_DASHBOARD, "domain": "SUPPORT"},
-                            {"label": "매장 예약", "domain": "TRANSACTION"},
-                            {"label": "타이어 추천 받기", "domain": "DISCOVERY"},
-                        ],
-                        "predictedDomains": ["SUPPORT", "TRANSACTION", "DISCOVERY"],
-                    },
-                }
-        lines: list[str] = []
-        for car_row in car_rows:
-            name = str(car_row.get("car_nm") or selected_car.get("info") or "선택하신 차량").strip()
-            focus_response = _build_maintenance_focus_response(name, car_row.get("items") or [], user_query)
-            if focus_response:
-                response = focus_response
-                break
-            lines.append(name)
-            for item in (car_row.get("items") or [])[:7]:
-                if isinstance(item, dict):
-                    lines.append(_format_maintenance_dday_item(item))
-            lines.append("")
-        else:
-            lines.append("정비 시기는 차량 등록일·운행 환경에 따라 차이가 있을 수 있어요. 정확한 진단은 매장에서 받아 보실 수 있어요 😊")
-            response = "\n".join(lines).strip()
-    return {
-        "type": "data",
-        "template": "quickReply",
-        "source_domain": MultiAgentDomain.Domain.SUPPORT.value,
-        "assistant_response_source": "code_vehicle_auto_select",
-        "data": {
-            "assistantResponse": response,
-            "quickReplies": [
-                {"label": "all my T 점검", "url": CTAUrls.MEMBERSHIP_DASHBOARD, "domain": "SUPPORT"},
-                {"label": "매장 예약", "domain": "TRANSACTION"},
-                {"label": "타이어 추천 받기", "domain": "DISCOVERY"},
-            ],
-            "predictedDomains": ["SUPPORT", "TRANSACTION", "DISCOVERY"],
-        },
-    }
+    return build_maintenance_dday_event(tool_result, selected_vehicle, user_query)
 
-
-_MAINTENANCE_HISTORY_LOOKUP_RE = re.compile(
-    r"정비\s*이력|정비이력|정비\s*내역|정비내역|관리받은\s*(?:내역|거)|관리\s*받은\s*(?:내역|거)|"
-    r"서비스\s*(?:이력|내역)|받은\s*(?:서비스|정비)|"
-    r"(?:마지막|최근|전에|예전에).{0,24}"
-    r"(?:휠\s*얼라인먼트|얼라인먼트|오일\s*필터|오일필터|엔진\s*오일|엔진오일|배터리|와이퍼|실내\s*필터|"
-    r"타이어\s*(?:교체|장착)|경정비).{0,24}(?:언제|받|교체|갈|했|한\s*적)|"
-    r"(?:휠\s*얼라인먼트|얼라인먼트|오일\s*필터|오일필터|엔진\s*오일|엔진오일|배터리|와이퍼|실내\s*필터|"
-    r"타이어\s*(?:교체|장착)|경정비).{0,24}(?:받은|교체한|갈았|했던|한)\s*(?:날|날짜|때|적|게)?"
-    r".{0,16}(?:언제|있)",
-    re.IGNORECASE,
-)
-_MAINTENANCE_HISTORY_ACCESS_POLICY_RE = re.compile(
-    r"(?:(?:정비|서비스|관리)\s*(?:이력|내역)|정비이력|정비내역|관리받은\s*(?:내역|거)|"
-    r"관리\s*받은\s*(?:내역|거)|내\s*차\s*(?:이력|내역)).{0,60}"
-    r"(?:조회\s*가능|확인\s*가능|볼\s*수|볼수|조회할\s*수|확인할\s*수|매장(?:에서)?\s*(?:조회|확인)|"
-    r"아무\s*(?:티스테이션\s*)?(?:매장|지점)|다른\s*(?:지역|매장|지점)|이사|타\s*지역)|"
-    r"(?:부산|여수|서울|제주|광주|대전|대구|울산|인천|경기|분당|판교|한남|모란).{0,40}"
-    r"(?:(?:정비|서비스|관리)\s*(?:이력|내역)|정비이력|정비내역).{0,40}"
-    r"(?:조회\s*가능|확인\s*가능|볼\s*수|볼수|매장(?:에서)?\s*(?:조회|확인))",
-    re.IGNORECASE,
-)
-_MAINTENANCE_HISTORY_SERVICE_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("휠얼라인먼트", (r"휠\s*얼라인먼트", r"얼라인먼트")),
-    ("오일필터", (r"오일\s*필터", r"오일필터")),
-    ("엔진오일", (r"엔진\s*오일", r"엔진오일")),
-    ("배터리", (r"배터리",)),
-    ("와이퍼", (r"와이퍼",)),
-    ("실내필터", (r"실내\s*필터", r"에어컨\s*필터", r"캐빈\s*필터")),
-    ("타이어 교체", (r"타이어\s*(?:교체|장착)",)),
-    ("경정비", (r"경정비",)),
-)
-
-
-def _is_maintenance_history_lookup_query(user_text: str | None) -> bool:
-    text = user_text or ""
-    return bool(_MAINTENANCE_HISTORY_LOOKUP_RE.search(text) and not _is_maintenance_history_access_policy_query(text))
-
-
-def _is_maintenance_history_access_policy_query(user_text: str | None) -> bool:
-    return bool(_MAINTENANCE_HISTORY_ACCESS_POLICY_RE.search(user_text or ""))
-
-
-def _requested_maintenance_history_item(user_text: str | None) -> tuple[str, tuple[str, ...]] | None:
-    text = user_text or ""
-    for label, patterns in _MAINTENANCE_HISTORY_SERVICE_RULES:
-        if any(re.search(pattern, text, re.IGNORECASE) for pattern in patterns):
-            return label, patterns
-    return None
-
-
-def _maintenance_history_items(tool_result: dict) -> list[dict]:
-    data = _unwrap_tool_data(tool_result)
-    raw_items = data.get("items") or data.get("histories") or data.get("maintenance_history") or []
-    if isinstance(raw_items, dict):
-        raw_items = raw_items.get("items") or raw_items.get("list") or []
-    if not isinstance(raw_items, list):
-        return []
-    return [item for item in raw_items if isinstance(item, dict)]
-
-
-def _maintenance_history_text(item: dict) -> str:
-    values = [
-        item.get("car_svc_info"),
-        item.get("item_nm"),
-        item.get("svc_nm"),
-        item.get("service_nm"),
-        item.get("svc_tp"),
-        item.get("goods_nm"),
-    ]
-    return " ".join(str(value or "") for value in values)
-
-
-def _maintenance_history_matches_item(item: dict, patterns: tuple[str, ...]) -> bool:
-    haystack = _maintenance_history_text(item)
-    return any(re.search(pattern, haystack, re.IGNORECASE) for pattern in patterns)
-
-
-def _maintenance_history_field(item: dict, *keys: str) -> str:
-    for key in keys:
-        value = str(item.get(key) or "").strip()
-        if value:
-            return value
-    return ""
-
-
-def _format_maintenance_history_row(item: dict) -> str:
-    date = _maintenance_history_field(item, "car_svc_dt", "svc_dt", "service_dt", "ord_dt", "date")
-    shop = _maintenance_history_field(item, "shop_nm", "store_nm", "shop_name")
-    service = _maintenance_history_field(item, "car_svc_info", "item_nm", "svc_nm", "service_nm", "svc_tp")
-    qty = _maintenance_history_field(item, "car_svc_qty", "qty", "quantity")
-    parts = [part for part in (date, shop, service) if part]
-    if qty:
-        parts.append(f"{qty}개")
-    return " / ".join(parts) if parts else "정비 이력 항목"
 
 
 def _build_maintenance_history_event(tool_result: dict, user_query: str) -> dict:
-    items = _maintenance_history_items(tool_result)
-    focus = _requested_maintenance_history_item(user_query)
-    rows = items
-    if focus is not None:
-        _label, patterns = focus
-        matched_rows = [item for item in items if _maintenance_history_matches_item(item, patterns)]
-        rows = matched_rows
-
-    if tool_result.get("status") == "error":
-        assistant_response = (
-            "정비이력 조회 중 오류가 발생했어요. 잠시 후 다시 시도하거나 정비이력 페이지에서 확인해 주세요."
-        )
-    elif not items:
-        assistant_response = "최근 5년 내 확인되는 정비이력이 없어요.\n\n자세한 내용은 정비이력 페이지에서 확인할 수 있어요."
-    elif focus is not None and not rows:
-        label = focus[0]
-        assistant_response = (
-            f"최근 정비이력에서 {label} 항목은 확인되지 않아요.\n\n"
-            "전체 정비이력은 정비이력 페이지에서 직접 확인할 수 있어요."
-        )
-    elif focus is not None:
-        label = focus[0]
-        top = rows[0]
-        assistant_response = (
-            f"최근 {label} 이력은 다음과 같이 확인돼요.\n"
-            f"• {_format_maintenance_history_row(top)}\n\n"
-            "자세한 내용은 정비이력 페이지에서 확인할 수 있어요."
-        )
-    else:
-        lines = ["최근 정비이력은 다음과 같이 확인돼요."]
-        lines.extend(f"• {_format_maintenance_history_row(item)}" for item in rows[:5])
-        lines.append("")
-        lines.append("자세한 내용은 정비이력 페이지에서 확인할 수 있어요.")
-        assistant_response = "\n".join(lines).strip()
-
-    return {
-        "type": "data",
-        "template": "quickReply",
-        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
-        "assistant_response_source": "code_maintenance_history_lookup",
-        "data": {
-            "assistantResponse": assistant_response,
-            "quickReplies": [
-                {"label": "정비이력보기", "url": CTAUrls.STORE_SERVICE_HISTORY, "domain": "SUPPORT"},
-                {"label": "내 주문 조회", "domain": "TRANSACTION"},
-                {"label": "다른 정비 문의", "domain": "SUPPORT"},
-            ],
-            "predictedDomains": ["TRANSACTION", "SUPPORT"],
-            "metadata": {
-                "responseShapeKey": "maintenance_history_lookup",
-                "requestedServiceItem": focus[0] if focus else None,
-            },
-        },
-    }
+    return build_maintenance_history_event(tool_result, user_query)
 
 
 def _build_maintenance_history_access_policy_event(user_query: str) -> dict:
-    assistant_response = (
-        "티스테이션 매장에서는 고객/차량 정보 기준으로 정비·서비스 이력 확인이 가능할 수 있어요.\n\n"
-        "다른 지역 매장에 방문하더라도 차량번호나 예약자 정보로 확인을 요청해 주세요. "
-        "다만 매장 시스템 권한이나 이력 종류에 따라 확인 범위가 달라질 수 있어요.\n\n"
-        "상세 이력은 마이페이지 > 매장서비스 내역에서도 확인할 수 있어요."
-    )
-    if re.search(r"아무\s*(?:티스테이션\s*)?(?:매장|지점)|다른\s*(?:지역|매장|지점)|이사", user_query, re.IGNORECASE):
-        assistant_response = (
-            "이사 후 다른 지역 티스테이션 매장에 방문해도 고객/차량 정보 기준으로 정비·서비스 이력 확인을 요청할 수 있어요.\n\n"
-            "방문 시 차량번호나 예약자 정보를 알려주시면 매장에서 확인을 도와드릴 수 있고, "
-            "시스템 권한이나 이력 종류에 따라 확인 범위는 달라질 수 있어요.\n\n"
-            "상세 이력은 마이페이지 > 매장서비스 내역에서도 확인할 수 있어요."
-        )
-    return {
-        "type": "data",
-        "template": "quickReply",
-        "source_domain": MultiAgentDomain.Domain.SUPPORT.value,
-        "assistant_response_source": "code_maintenance_history_access_policy",
-        "data": {
-            "assistantResponse": assistant_response,
-            "quickReplies": [
-                {"label": "매장서비스 내역", "url": CTAUrls.STORE_SERVICE_HISTORY, "domain": "SUPPORT"},
-                {"label": "가까운 매장 찾기", "domain": "TRANSACTION"},
-                {"label": "정비이력 조회", "domain": "TRANSACTION"},
-            ],
-            "predictedDomains": ["SUPPORT", "TRANSACTION"],
-            "metadata": {
-                "responseShapeKey": "maintenance_history_access_policy",
-                "maintenanceHistoryAccessPolicy": True,
-            },
-        },
-    }
-
+    return build_maintenance_history_access_policy_event(user_query)
 
 def _build_partner_member_coupon_policy_event(user_query: str) -> dict:
-    return {
-        "type": "data",
-        "template": "quickReply",
-        "source_domain": MultiAgentDomain.Domain.SUPPORT.value,
-        "assistant_response_source": "code_partner_member_coupon_policy",
-        "data": {
-            "assistantResponse": (
-                "제휴회원 전용 쿠폰은 일반 쿠폰함 조회와는 다른 경로로 운영될 수 있어요.\n\n"
-                "보통은 제휴사 전용 URL 또는 복지몰/임직원몰 같은 제휴 전용 경로로 접속해야 확인 가능하고, "
-                "제휴 기간과 제휴사별 제공 쿠폰·사용 조건도 달라질 수 있어요."
-            ),
-            "quickReplies": [
-                {"label": "쿠폰함 확인", "domain": "TRANSACTION"},
-                {"label": "1:1 문의하기", "domain": "SUPPORT"},
-                {"label": "진행 중 혜택 보기", "domain": "DISCOVERY"},
-            ],
-            "predictedDomains": ["SUPPORT", "TRANSACTION", "DISCOVERY"],
-            "metadata": {
-                "responseShapeKey": "partner_member_coupon_policy",
-                "partnerMemberCouponPolicy": True,
-                "userText": user_query,
-            },
-        },
-    }
-
+    return build_partner_member_coupon_policy_event(user_query)
 
 def _coupon_usage_summary_is_relevant(summary: str) -> bool:
     normalized = re.sub(r"\s+", " ", str(summary or "")).strip()
@@ -7140,41 +6718,13 @@ def _coupon_usage_summary_is_relevant(summary: str) -> bool:
 
 
 def _build_signup_member_coupon_guidance_event(user_query: str, *, response_shape_key: str) -> dict:
-    return {
-        "type": "data",
-        "template": "quickReply",
-        "source_domain": MultiAgentDomain.Domain.SUPPORT.value,
-        "assistant_response_source": f"code_{response_shape_key}",
-        "data": {
-            "assistantResponse": (
-                "확인된 정책 기준으로 all my T 회원이고 마케팅 수신 동의를 하면 5% 할인 쿠폰 발급이 가능해요.\n\n"
-                "첫구매 여부가 핵심 조건인 쿠폰으로 바로 안내되지는 않아요.\n\n"
-                "다만 고객님의 실제 회원 상태, 마케팅 수신 동의 상태, 쿠폰 발급 여부는 챗봇에서 직접 확정할 수 없어서 "
-                "조건 충족 시 발급 가능으로만 안내드리고 있어요."
-            ),
-            "quickReplies": [
-                {"label": "회원 혜택 확인", "url": CTAUrls.MEMBERSHIP_BENEFIT, "domain": "SUPPORT"},
-            ],
-            "predictedDomains": ["SUPPORT"],
-            "metadata": {
-                "responseShapeKey": response_shape_key,
-                "signupMemberCouponGuidance": True,
-                "userText": user_query,
-            },
-        },
-    }
-
+    return build_signup_member_coupon_guidance_event(user_query, response_shape_key=response_shape_key)
 
 def _build_signup_coupon_guidance_event(user_query: str) -> dict:
-    return _build_signup_member_coupon_guidance_event(user_query, response_shape_key="signup_coupon_guidance")
-
+    return build_signup_coupon_guidance_event(user_query)
 
 def _build_signup_first_purchase_benefit_event(user_query: str) -> dict:
-    return _build_signup_member_coupon_guidance_event(
-        user_query,
-        response_shape_key="signup_first_purchase_benefit_policy",
-    )
-
+    return build_signup_first_purchase_benefit_event(user_query)
 
 def _compact_policy_source_summary(
     source_summary: str,
@@ -7258,40 +6808,7 @@ def _build_direct_faq_policy_tool_payload(
 
 
 def _build_order_document_guidance_event(user_query: str) -> dict:
-    order_no_match = _ORDER_NO_FOR_DESTINATION_CTA_RE.search(user_query or "")
-    order_no = ""
-    if order_no_match:
-        order_no = str(order_no_match.group("named") or order_no_match.group("bare") or "").strip()
-
-    primary_chip = (
-        {"label": "주문 상세 확인", "url": CTAUrls.ORDER_HISTORY_DETAIL.replace("<ord_no>", order_no), "domain": "TRANSACTION"}
-        if order_no
-        else {"label": "주문 내역 확인", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"}
-    )
-    return {
-        "type": "data",
-        "template": "quickReply",
-        "source_domain": MultiAgentDomain.Domain.SUPPORT.value,
-        "assistant_response_source": "code_order_document_guidance",
-        "data": {
-            "assistantResponse": (
-                "챗봇에서 거래명세서나 증빙서류를 이메일로 직접 발송해 드리기는 어려워요.\n\n"
-                "회사 제출용 거래명세서나 영수증이 필요하시면 주문 내역에서 해당 주문의 증빙/거래명세서 정보를 먼저 확인해 주세요.\n\n"
-                "별도 양식이나 이메일 발송 요청이 더 필요하면 1:1 문의로 접수해 주세요."
-            ),
-            "quickReplies": [
-                primary_chip,
-                {"label": "1:1 문의하기", "domain": "SUPPORT"},
-            ],
-            "predictedDomains": ["SUPPORT", "TRANSACTION"],
-            "metadata": {
-                "responseShapeKey": "order_document_guidance",
-                "orderDocumentGuidance": True,
-                "userText": user_query,
-                "ordNo": order_no,
-            },
-        },
-    }
+    return build_order_document_guidance_event(user_query)
 
 
 _QUANTITYLESS_CART_ORDER_CTA_RE = re.compile(
@@ -7459,6 +6976,25 @@ def _is_order_quantity_prompt_continuation_text(user_text: str | None) -> bool:
 
 def _is_quantityless_cart_or_order_cta(user_text: str | None) -> bool:
     return bool(_QUANTITYLESS_CART_ORDER_CTA_RE.search(str(user_text or "")))
+
+
+def _has_comparison_product_scope(slots: ConversationSlots) -> bool:
+    comparison_context = getattr(slots, "comparison_context", None)
+    if comparison_context is None:
+        return False
+    if hasattr(comparison_context, "model_dump"):
+        context = comparison_context.model_dump(exclude_none=True)
+    elif isinstance(comparison_context, Mapping):
+        context = dict(comparison_context)
+    else:
+        return False
+    product_names = context.get("product_names") or context.get("productNames")
+    if isinstance(product_names, (list, tuple)):
+        return len([name for name in product_names if str(name or "").strip()]) >= 2
+    product_candidates = context.get("product_candidates") or context.get("candidates")
+    if isinstance(product_candidates, list):
+        return len([candidate for candidate in product_candidates if isinstance(candidate, Mapping)]) >= 2
+    return False
 
 
 def _is_add_to_cart_cta_context(cta_context: Mapping[str, Any] | None, user_text: str | None = None) -> bool:
@@ -8336,660 +7872,61 @@ def _unwrap_tool_data(payload: Any) -> dict:
 
 
 def _normalize_coupon_match_text(value: object) -> str:
-    return re.sub(r"[^0-9a-zA-Z가-힣]+", "", str(value or "")).lower()
-
-
-def _strip_coupon_match_token_suffix(token: str) -> str:
-    for suffix in _COUPON_MATCH_TOKEN_SUFFIXES:
-        if token.endswith(suffix) and len(token) - len(suffix) >= 2:
-            return token[: -len(suffix)]
-    return token
-
-
-_PRODUCT_MATCH_ALIAS_GROUPS = (
-    {"kinergyex", "키너지ex"},
-    {"dynaprohpx", "다이나프로hpx"},
-    {"dynaprohp3", "다이나프로hp3"},
-    {"ventusairs", "벤투스airs", "벤투스에어s"},
-    {"ventuss2", "벤투스s2"},
-    {"ventuss2as", "벤투스s2as"},
-    {"ventuss1evozas", "벤투스s1evozas", "벤투스s1에보zas"},
-    {"ventuss1evoz", "벤투스s1evoz", "벤투스s1에보z"},
-    {"sfitas", "에스핏as"},
-    {"sfit", "에스핏"},
-    {"ionevoassuv", "아이온에보assuv"},
-    {"ionevoas", "아이온에보as"},
-    {"ionevo", "아이온에보"},
-    {"mileageplus3", "마일리지플러스3"},
-    {"mileageplus2", "마일리지플러스2"},
-    {"mileageplus", "마일리지플러스"},
-)
-
+    return normalize_coupon_match_text(value)
 
 def _coupon_product_match_keys(value: object) -> set[str]:
-    normalized = _normalize_coupon_match_text(value)
-    if not normalized:
-        return set()
-    keys = {normalized}
-    for group in _PRODUCT_MATCH_ALIAS_GROUPS:
-        if normalized in group:
-            keys.update(group)
-            break
-    return keys
-
+    return coupon_product_match_keys(value)
 
 def _product_name_match_tokens(value: object) -> set[str]:
-    tokens: set[str] = set()
-    for raw in re.findall(r"[0-9A-Za-z가-힣]+", str(value or "")):
-        token = _normalize_coupon_match_text(raw)
-        if len(token) < 2:
-            continue
-        tokens.add(token)
-    return tokens
-
+    return product_name_match_tokens(value)
 
 def _is_strong_product_name_match(target_name: object, row_name: object) -> bool:
-    target_norm = _normalize_coupon_match_text(target_name)
-    row_norm = _normalize_coupon_match_text(row_name)
-    if not target_norm or not row_norm:
-        return False
-
-    if _coupon_product_match_keys(target_name) & _coupon_product_match_keys(row_name):
-        return True
-
-    if min(len(target_norm), len(row_norm)) >= 5 and (target_norm in row_norm or row_norm in target_norm):
-        return True
-
-    target_tokens = _product_name_match_tokens(target_name)
-    row_tokens = _product_name_match_tokens(row_name)
-    return len(target_tokens & row_tokens) >= 2
-
+    return strong_product_name_match(target_name, row_name)
 
 def _coupon_query_terms(user_text: str) -> list[str]:
-    terms: list[str] = []
-    for raw in re.findall(r"[0-9a-zA-Z가-힣]+", user_text):
-        normalized = _normalize_coupon_match_text(raw)
-        normalized = _strip_coupon_match_token_suffix(normalized)
-        if len(normalized) < 2 or normalized in _COUPON_MATCH_STOPWORDS:
-            continue
-        terms.append(normalized)
-    return terms
-
+    return coupon_query_terms(user_text)
 
 def _coupon_rows_from_my_coupons(tool_result: dict) -> list[dict]:
-    data = _unwrap_tool_data(tool_result)
-    rows = data.get("coupons")
-    if rows is None:
-        rows = data.get("items")
-    return [row for row in rows or [] if isinstance(row, dict)]
-
+    return coupon_rows_from_my_coupons(tool_result)
 
 def _chunk_coupon_numbers(cpn_nos: list[str], *, batch_size: int = 10) -> list[list[str]]:
-    normalized = [str(cpn_no).strip() for cpn_no in cpn_nos if str(cpn_no).strip()]
-    if batch_size <= 0:
-        return [normalized] if normalized else []
-    return [normalized[index : index + batch_size] for index in range(0, len(normalized), batch_size)]
-
+    return chunk_coupon_numbers(cpn_nos, batch_size=batch_size)
 
 def _merge_coupon_applicable_products_results(results: list[dict]) -> dict:
-    merged_coupons: list[dict] = []
-    merged_deals: list[dict] = []
-    merged_stores: list[dict] = []
-    for result in results:
-        data = _unwrap_tool_data(result)
-        merged_coupons.extend(
-            item for item in data.get("coupons", []) if isinstance(item, dict)
-        )
-        merged_deals.extend(
-            item for item in data.get("deals", []) if isinstance(item, dict)
-        )
-        merged_stores.extend(
-            item for item in data.get("stores", []) if isinstance(item, dict)
-        )
-
-    return {
-        "status": "success",
-        "http_status": 200,
-        "data": {
-            "total_coupons": len(merged_coupons),
-            "total_deals": len(merged_deals),
-            "total_products": (
-                sum(int(group.get("total") or 0) for group in merged_coupons)
-                + sum(int(group.get("total") or 0) for group in merged_deals)
-            ),
-            "total_store_coupons": len(merged_stores),
-            "total_stores": sum(int(group.get("total") or 0) for group in merged_stores),
-            "coupons": merged_coupons,
-            "deals": merged_deals,
-            "stores": merged_stores,
-        },
-    }
-
-
-_OWNED_COUPON_EXPIRY_LOOKUP_RE = re.compile(
-    r"(?=.*(?:쿠폰|할인권))(?=.*(?:내|나의|보유|가진|갖고|받은|쿠폰함))"
-    r"(?=.*(?:이번\s*달|이달|곧|만료\s*예정|만료(?:되는|인|된)?|유효\s*기간|사용\s*기간))",
-    re.IGNORECASE,
-)
-_COUPON_RESTORE_INTENT_RE = re.compile(
-    r"원복|복구|재사용|다시\s*(?:쓰|쓸|사용)|되살|살려|부활|연장|못\s*쓰.*(?:해줘|할\s*수)",
-    re.IGNORECASE,
-)
-
+    return merge_coupon_applicable_products_results(results)
 
 def _is_owned_coupon_expiry_lookup_query(user_text: str) -> bool:
-    text = user_text or ""
-    if _COUPON_RESTORE_INTENT_RE.search(text):
-        return False
-    return bool(_OWNED_COUPON_EXPIRY_LOOKUP_RE.search(text))
-
-
-def _owned_coupon_expiry_scope(user_text: str) -> str:
-    text = user_text or ""
-    if re.search(r"이번\s*달|이달", text):
-        return "this_month"
-    if re.search(r"이미|지난|만료\s*된", text):
-        return "expired"
-    if re.search(r"곧|만료\s*예정", text):
-        return "soon"
-    return "expiring"
-
-
-def _coupon_end_date(row: dict) -> datetime.date | None:
-    raw = str(
-        row.get("use_end_dtime")
-        or row.get("use_end_date")
-        or row.get("end_dtime")
-        or row.get("end_date")
-        or row.get("valid_end_date")
-        or ""
-    ).strip()
-    if not raw:
-        return None
-    compact = re.search(r"(20\d{2})(\d{2})(\d{2})", raw)
-    if compact:
-        year, month, day = (int(part) for part in compact.groups())
-    else:
-        match = re.search(r"(20\d{2})\D+(\d{1,2})\D+(\d{1,2})", raw)
-        if not match:
-            return None
-        year, month, day = (int(part) for part in match.groups())
-    try:
-        return datetime.date(year, month, day)
-    except ValueError:
-        return None
-
-
-def _coupon_expiry_matches_scope(end_date: datetime.date, scope: str, today: datetime.date) -> bool:
-    if scope == "this_month":
-        return end_date >= today and end_date.year == today.year and end_date.month == today.month
-    if scope == "soon":
-        return today <= end_date <= today + datetime.timedelta(days=30)
-    if scope == "expired":
-        return end_date < today
-    return end_date >= today
-
-
-def _format_coupon_discount_text(row: dict) -> str:
-    value = _coupon_numeric_value(row)
-    if value is None:
-        return ""
-    if _looks_like_percent_coupon(row):
-        return f"{value:g}% 할인"
-    return f"{int(value):,}원 할인"
-
+    return is_owned_coupon_expiry_lookup_query(user_text)
 
 def _build_owned_coupon_expiry_lookup_event(user_text: str, tool_result: dict) -> dict:
-    rows = _coupon_rows_from_my_coupons(tool_result)
-    today = datetime.date.today()
-    scope = _owned_coupon_expiry_scope(user_text)
-    matched: list[tuple[datetime.date, dict]] = []
-    for row in rows:
-        end_date = _coupon_end_date(row)
-        if end_date and _coupon_expiry_matches_scope(end_date, scope, today):
-            matched.append((end_date, row))
-    matched.sort(key=lambda item: item[0])
-
-    scope_label = {
-        "this_month": "이번 달 안에 만료되는",
-        "soon": "곧 만료되는",
-        "expired": "이미 만료된",
-        "expiring": "만료 예정인",
-    }[scope]
-    if matched:
-        lines = [f"보유 쿠폰 중 {scope_label} 쿠폰은 {len(matched)}개예요."]
-        for end_date, row in matched[:10]:
-            name = str(row.get("cpn_nm") or row.get("disp_nm") or row.get("cpn_d_nm") or "쿠폰").strip()
-            discount = _format_coupon_discount_text(row)
-            suffix = f" - {discount}" if discount else ""
-            lines.append(f"- {name}{suffix} / 만료일 {end_date.isoformat()}")
-        if len(matched) > 10:
-            lines.append(f"외 {len(matched) - 10}개는 쿠폰함에서 확인해 주세요.")
-        assistant_response = "\n".join(lines)
-    else:
-        assistant_response = f"현재 보유 쿠폰 중 {scope_label} 쿠폰은 없어요."
-
-    return {
-        "type": "data",
-        "template": "quickReply",
-        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
-        "assistant_response_source": "code_owned_coupon_expiry_lookup",
-        "data": {
-            "assistantResponse": assistant_response,
-            "quickReplies": [
-                {"label": "내 쿠폰함", "url": CTAUrls.MY_COUPON_LIST_PC, "domain": "TRANSACTION"},
-                {"label": "구매하기", "domain": "TRANSACTION"},
-            ],
-            "predictedDomains": ["TRANSACTION"],
-        },
-    }
-
+    return build_owned_coupon_expiry_lookup_event(user_text, tool_result)
 
 def _is_owned_coupon_best_discount_query(user_text: str) -> bool:
-    if _COUPON_ISSUE_INTENT_RE.search(user_text or ""):
-        return False
-    if _is_product_coupon_eligibility_query(user_text or ""):
-        return False
-    return bool(_OWNED_COUPON_BEST_DISCOUNT_RE.search(user_text or ""))
-
+    return is_owned_coupon_best_discount_query(user_text)
 
 def _is_specific_owned_coupon_lookup_query(user_text: str) -> bool:
-    hint = _specific_owned_coupon_lookup_hint(user_text)
-    return bool(hint)
-
+    return is_specific_owned_coupon_lookup_query(user_text)
 
 def _specific_owned_coupon_lookup_hint(user_text: str) -> str | None:
-    text = user_text or ""
-    if not re.search(r"쿠폰|할인권", text, re.IGNORECASE):
-        return None
-    if _COUPON_ISSUE_INTENT_RE.search(text):
-        return None
-    if (
-        _is_strong_coupon_applicability_query(text)
-        or _is_product_coupon_eligibility_query(text)
-        or _is_owned_coupon_best_discount_query(text)
-    ):
-        return None
-    if re.search(r"적용|사용|쓸\s*수|살\s*수|상품|가장\s*싸|제일\s*싸|최대\s*혜택|혜택", text):
-        return None
-    if not re.search(r"있|보유|가지|갖|확인", text):
-        return None
-
-    raw_terms = re.findall(r"[0-9a-zA-Z가-힣]+", text)
-    terms: list[str] = []
-    extra_stopwords = {
-        "쿠폰",
-        "할인쿠폰",
-        "할인권",
-        "혹시",
-        "내",
-        "제",
-        "나의",
-        "제가",
-        "내가",
-        "나",
-        "보유",
-        "보유중",
-        "가지고",
-        "갖고",
-        "있는지",
-        "있어",
-        "있나요",
-        "있니",
-        "있냐",
-        "있을까",
-        "확인",
-        "좀",
-        "알려줘",
-    }
-    for raw in raw_terms:
-        normalized = _normalize_coupon_match_text(raw)
-        for suffix in (
-            "보유중이야",
-            "보유중인가",
-            "보유중인지",
-            "보유중",
-            "보유한가",
-            "보유인지",
-            "있나요",
-            "있는지",
-            "있을까",
-            "있어",
-            "있니",
-            "있냐",
-            "확인해줘",
-            "확인",
-        ):
-            if normalized.endswith(suffix):
-                normalized = normalized[: -len(suffix)]
-        if not normalized or normalized in extra_stopwords:
-            continue
-        for suffix in ("할인쿠폰", "쿠폰", "할인권"):
-            if normalized.endswith(suffix):
-                normalized = normalized[: -len(suffix)]
-        if len(normalized) >= 2 and normalized not in extra_stopwords:
-            terms.append(normalized)
-    if not terms:
-        return None
-    return " ".join(terms[:3])
-
+    return specific_owned_coupon_lookup_hint(user_text)
 
 def _owned_coupon_lookup_summary_text(user_text: str, tool_result: dict) -> str | None:
-    hint = _specific_owned_coupon_lookup_hint(user_text)
-    if not hint:
-        return None
-    matched_coupon = _find_coupon_from_owned_coupons(f"{hint} 쿠폰", tool_result)
-    if matched_coupon:
-        coupon_name = str(
-            matched_coupon.get("cpn_nm") or matched_coupon.get("disp_nm") or matched_coupon.get("cpn_d_nm") or hint
-        ).strip()
-        return f"‘{coupon_name}’ 관련 쿠폰을 보유 중이에요.\n아래에서 현재 보유 쿠폰 목록도 함께 확인해 주세요."
-    return f"현재 보유 쿠폰에서 ‘{hint}’ 관련 쿠폰은 확인되지 않아요.\n아래에서 현재 보유 쿠폰 목록을 확인해 주세요."
-
-
-def _coupon_numeric_value(row: dict) -> float | None:
-    try:
-        value = float(row.get("rt_amt_val"))
-    except (TypeError, ValueError):
-        return None
-    return value if value > 0 else None
-
-
-def _looks_like_percent_coupon(row: dict) -> bool:
-    value = _coupon_numeric_value(row)
-    if value is None or value > 100:
-        return False
-    coupon_name = str(row.get("cpn_nm") or row.get("disp_nm") or row.get("cpn_d_nm") or "")
-    return "%" in coupon_name or "퍼센트" in coupon_name or "할인율" in coupon_name
-
-
-def _format_coupon_limit_text(row: dict) -> str:
-    parts: list[str] = []
-    try:
-        min_purchase = int(float(row.get("min_pur_amt") or 0))
-    except (TypeError, ValueError):
-        min_purchase = 0
-    try:
-        max_discount = int(float(row.get("max_dscnt_amt") or 0))
-    except (TypeError, ValueError):
-        max_discount = 0
-    if min_purchase > 0:
-        parts.append(f"최소 구매금액 {min_purchase:,}원")
-    if max_discount > 0:
-        parts.append(f"최대 할인 {max_discount:,}원")
-    end_time = str(row.get("use_end_dtime") or "").strip()
-    if end_time:
-        parts.append(f"유효기간 {end_time}")
-    return ", ".join(parts)
-
+    return owned_coupon_lookup_summary_text(user_text, tool_result)
 
 def _build_owned_coupon_best_discount_event(tool_result: dict) -> dict:
-    rows = [row for row in _coupon_rows_from_my_coupons(tool_result) if str(row.get("mbr_use_yn") or "N") != "Y"]
-    percent_rows = [row for row in rows if _looks_like_percent_coupon(row)]
-    amount_rows = [row for row in rows if (_coupon_numeric_value(row) or 0) > 100]
-    best_percent = max(percent_rows, key=lambda row: _coupon_numeric_value(row) or 0, default=None)
-    best_amount = max(amount_rows, key=lambda row: _coupon_numeric_value(row) or 0, default=None)
-
-    lines: list[str] = []
-    if best_percent:
-        name = str(best_percent.get("cpn_nm") or best_percent.get("disp_nm") or "해당 쿠폰")
-        value = _coupon_numeric_value(best_percent) or 0
-        lines.append(f"보유 쿠폰 중 할인율 기준으로는 ‘{name}’이 가장 커요. ({value:g}% 할인)")
-        limit_text = _format_coupon_limit_text(best_percent)
-        if limit_text:
-            lines.append(f"- 조건: {limit_text}")
-    if best_amount:
-        name = str(best_amount.get("cpn_nm") or best_amount.get("disp_nm") or "해당 쿠폰")
-        value = int(_coupon_numeric_value(best_amount) or 0)
-        lines.append(f"정액 할인 기준으로는 ‘{name}’이 가장 커요. ({value:,}원 할인)")
-        limit_text = _format_coupon_limit_text(best_amount)
-        if limit_text:
-            lines.append(f"- 조건: {limit_text}")
-    if not lines:
-        lines.append("현재 보유 쿠폰에서 할인 금액이나 할인율 정보를 확인하지 못했어요.")
-    lines.append("실제 최종 할인액은 상품 가격, 적용 대상, 중복 가능 여부에 따라 달라질 수 있어요.")
-
-    return {
-        "type": "data",
-        "template": "quickReply",
-        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
-        "assistant_response_source": "code_owned_coupon_best_discount",
-        "data": {
-            "assistantResponse": "\n".join(lines),
-            "quickReplies": [
-                {"label": "내 쿠폰 조회", "domain": "TRANSACTION"},
-                {"label": "상품별 쿠폰 확인", "domain": "TRANSACTION"},
-            ],
-            "predictedDomains": ["TRANSACTION"],
-        },
-    }
-
+    return build_owned_coupon_best_discount_event(tool_result)
 
 def _find_coupon_from_owned_coupons(user_text: str, tool_result: dict) -> dict | None:
-    rows = _coupon_rows_from_my_coupons(tool_result)
-    if not rows:
-        return None
-
-    direct_ids = {item.upper() for item in _COUPON_DIRECT_ID_RE.findall(user_text)}
-    if direct_ids:
-        for row in rows:
-            cpn_no = str(row.get("cpn_no") or "").upper()
-            if cpn_no in direct_ids:
-                return row
-
-    query_norm = _normalize_coupon_match_text(user_text)
-    terms = _coupon_query_terms(user_text)
-    discount_match = _COUPON_DISCOUNT_RATE_RE.search(user_text)
-    requested_rate = float(discount_match.group(1)) if discount_match else None
-
-    best_row: dict | None = None
-    best_score = 0.0
-    for row in rows:
-        coupon_name = str(row.get("cpn_nm") or row.get("disp_nm") or row.get("cpn_d_nm") or "")
-        name_norm = _normalize_coupon_match_text(coupon_name)
-        if not name_norm:
-            continue
-
-        score = 0.0
-        if name_norm and name_norm in query_norm:
-            score += 100.0
-        meaningful_query = "".join(terms)
-        if meaningful_query and meaningful_query in name_norm:
-            score += 80.0
-
-        matched_terms = [term for term in terms if term in name_norm]
-        score += len(matched_terms) * 10.0
-        if terms and len(matched_terms) == len(terms):
-            score += 20.0
-
-        if requested_rate is not None:
-            try:
-                coupon_rate = float(row.get("rt_amt_val"))
-            except (TypeError, ValueError):
-                coupon_rate = None
-            if coupon_rate is not None and abs(coupon_rate - requested_rate) < 0.001:
-                score += 25.0
-
-        if score > best_score:
-            best_score = score
-            best_row = row
-
-    if best_score >= 20.0:
-        return best_row
-    if re.search(r"쿠폰|할인권|혜택", user_text or "", re.IGNORECASE) and best_score >= 10.0:
-        return best_row
-    return None
-
-
-def _coupon_match_candidates_from_owned_coupons(user_text: str, tool_result: dict) -> list[tuple[dict, float]]:
-    rows = _coupon_rows_from_my_coupons(tool_result)
-    if not rows:
-        return []
-
-    direct_ids = {item.upper() for item in _COUPON_DIRECT_ID_RE.findall(user_text)}
-    if direct_ids:
-        return [
-            (row, 200.0)
-            for row in rows
-            if str(row.get("cpn_no") or "").upper() in direct_ids
-        ]
-
-    query_norm = _normalize_coupon_match_text(user_text)
-    terms = _coupon_query_terms(user_text)
-    meaningful_query = "".join(terms)
-    discount_match = _COUPON_DISCOUNT_RATE_RE.search(user_text)
-    requested_rate = float(discount_match.group(1)) if discount_match else None
-
-    scored: list[tuple[dict, float]] = []
-    for row in rows:
-        coupon_name = str(row.get("cpn_nm") or row.get("disp_nm") or row.get("cpn_d_nm") or "")
-        name_norm = _normalize_coupon_match_text(coupon_name)
-        if not name_norm:
-            continue
-
-        score = 0.0
-        if name_norm and name_norm in query_norm:
-            score += 100.0
-        if meaningful_query and meaningful_query in name_norm:
-            score += 80.0
-
-        matched_terms = [term for term in terms if term in name_norm]
-        score += len(matched_terms) * 10.0
-        if terms and len(matched_terms) == len(terms):
-            score += 20.0
-
-        if requested_rate is not None:
-            try:
-                coupon_rate = float(row.get("rt_amt_val"))
-            except (TypeError, ValueError):
-                coupon_rate = None
-            if coupon_rate is not None and abs(coupon_rate - requested_rate) < 0.001:
-                score += 25.0
-
-        if score >= 10.0:
-            scored.append((row, score))
-
-    return sorted(scored, key=lambda item: item[1], reverse=True)
-
+    return find_coupon_from_owned_coupons(user_text, tool_result)
 
 def _find_single_confident_coupon_from_owned_coupons(user_text: str, tool_result: dict) -> tuple[dict | None, list[dict]]:
-    candidates = _coupon_match_candidates_from_owned_coupons(user_text, tool_result)
-    if not candidates:
-        return None, []
-
-    terms = _coupon_query_terms(user_text)
-    if terms:
-        term_complete_matches: list[dict] = []
-        for row, _score in candidates:
-            coupon_name = str(row.get("cpn_nm") or row.get("disp_nm") or row.get("cpn_d_nm") or "")
-            name_norm = _normalize_coupon_match_text(coupon_name)
-            if name_norm and all(term in name_norm for term in terms):
-                term_complete_matches.append(row)
-        if len(term_complete_matches) > 1:
-            return None, term_complete_matches[:3]
-
-    top_name_norm = _normalize_coupon_match_text(_coupon_name(candidates[0][0], ""))
-    prefix_like_matches = [
-        row
-        for row, score in candidates
-        if score >= 10.0
-        and top_name_norm
-        and (
-            top_name_norm in _normalize_coupon_match_text(_coupon_name(row, ""))
-            or _normalize_coupon_match_text(_coupon_name(row, "")) in top_name_norm
-        )
-    ]
-    if len(prefix_like_matches) > 1:
-        return None, prefix_like_matches[:3]
-
-    top_score = candidates[0][1]
-    high_confidence = [row for row, score in candidates if score >= max(20.0, top_score - 5.0)]
-    if len(high_confidence) == 1 and top_score >= 20.0:
-        return high_confidence[0], []
-    return None, high_confidence[:3]
-
-
-def _coupon_name(row: dict, fallback: str = "해당 쿠폰") -> str:
-    return str(row.get("cpn_nm") or row.get("disp_nm") or row.get("cpn_d_nm") or fallback).strip() or fallback
-
-
-def _coupon_mapping_flag(value: object) -> bool:
-    if isinstance(value, bool):
-        return value
-    text = str(value or "").strip().lower()
-    return text in {"1", "true", "t", "y", "yes", "o"}
-
+    return find_single_confident_coupon_from_owned_coupons(user_text, tool_result)
 
 def _coupon_channel_type(row: dict) -> str:
-    channel_type = str(row.get("coupon_channel_type") or "").strip().lower()
-    if channel_type:
-        return channel_type
-
-    if _coupon_mapping_flag(row.get("has_partner_mapping")):
-        return "partner_only"
-
-    cpn_onoff_cd = str(row.get("cpn_onoff_cd") or "").strip()
-    if cpn_onoff_cd == "10":
-        return "online"
-    if cpn_onoff_cd == "20":
-        return "onoff"
-    if cpn_onoff_cd == "30":
-        if _coupon_mapping_flag(row.get("has_store_mapping")):
-            return "store_only"
-        return "offline"
-    return ""
-
-
-def _coupon_store_names_from_applicable_result(tool_result: dict | None, *, limit: int = 3) -> list[str]:
-    data = _unwrap_tool_data(tool_result or {})
-    if not isinstance(data, dict):
-        return []
-    names: list[str] = []
-    for group in data.get("stores") or []:
-        if not isinstance(group, dict):
-            continue
-        items = group.get("items")
-        if not isinstance(items, list):
-            continue
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            name = str(item.get("shop_nm") or item.get("shop_name") or "").strip()
-            if name and name not in names:
-                names.append(name)
-            if len(names) >= limit:
-                return names
-    return names
-
+    return coupon_channel_type(row)
 
 def _build_coupon_match_failure_event(user_text: str, candidate_rows: list[dict] | None = None) -> dict:
-    candidate_rows = candidate_rows or []
-    if candidate_rows:
-        names = [_coupon_name(row) for row in candidate_rows[:3]]
-        assistant_response = (
-            "보유 쿠폰에서 비슷한 쿠폰명이 여러 개 확인돼요. 정확한 쿠폰을 선택해 주세요.\n"
-            + "\n".join(f"- {name}" for name in names)
-        )
-        quick_replies = [{"label": name[:18], "domain": "TRANSACTION"} for name in names[:3]]
-        quick_replies.append({"label": "내 쿠폰 조회", "domain": "TRANSACTION"})
-    else:
-        hint = _specific_owned_coupon_lookup_hint(user_text)
-        target = f"‘{hint}’ " if hint else ""
-        assistant_response = f"보유 쿠폰에서 {target}정확한 쿠폰명을 찾지 못했어요. 쿠폰함에서 쿠폰명을 확인해 주세요."
-        quick_replies = [dict(chip) for chip in _COUPON_BOX_CHIPS]
-
-    return {
-        "type": "data",
-        "template": "quickReply",
-        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
-        "assistant_response_source": "code_coupon_match_guard",
-        "data": {
-            "assistantResponse": assistant_response,
-            "quickReplies": quick_replies,
-            "predictedDomains": ["TRANSACTION"],
-        },
-    }
-
+    return build_coupon_match_failure_event(user_text, candidate_rows)
 
 def _build_coupon_channel_policy_event(
     coupon_row: dict,
@@ -8997,72 +7934,11 @@ def _build_coupon_channel_policy_event(
     applicable_result: dict | None = None,
     target_product_name: str | None = None,
 ) -> dict | None:
-    channel_type = _coupon_channel_type(coupon_row)
-    if channel_type not in {"online", "onoff", "store_only", "offline", "partner_only"}:
-        return None
-
-    coupon_name = _coupon_name(coupon_row)
-    lines: list[str] = []
-    quick_replies: list[dict]
-    predicted_domains = ["TRANSACTION"]
-
-    if channel_type == "online":
-        lines.append(f"‘{coupon_name}’은 온라인에서 사용 가능한 쿠폰이에요.")
-        if target_product_name:
-            lines.append("상품/브랜드/패턴 제한은 이어서 적용 대상 기준으로 확인할게요.")
-        quick_replies = [
-            {"label": "상품 가격 확인", "domain": "TRANSACTION"},
-            {"label": "내 쿠폰 조회", "domain": "TRANSACTION"},
-        ]
-    elif channel_type == "onoff":
-        lines.append(f"‘{coupon_name}’은 온라인/오프라인 모두 사용 가능한 쿠폰이에요.")
-        lines.append("다만 상품, 브랜드, 패턴 제한은 쿠폰 적용 조건을 별도로 확인해야 해요.")
-        quick_replies = [
-            {"label": "상품 가격 확인", "domain": "TRANSACTION"},
-            {"label": "내 쿠폰 조회", "domain": "TRANSACTION"},
-        ]
-    elif channel_type == "store_only":
-        lines.append(f"‘{coupon_name}’은 매장 전용 쿠폰입니다.")
-        lines.append("지정 매장에서 사용할 수 있고, 온라인 상품 가격에는 반영되지 않습니다.")
-        store_names = _coupon_store_names_from_applicable_result(applicable_result)
-        if store_names:
-            lines.append(f"적용 가능 매장은 {', '.join(store_names)}입니다.")
-        else:
-            lines.append("적용 가능 매장은 쿠폰 적용 매장 조회에서 확인해 주세요.")
-        quick_replies = [
-            {"label": "적용 매장 보기", "domain": "TRANSACTION"},
-            {"label": "내 쿠폰 조회", "domain": "TRANSACTION"},
-            {"label": "매장 찾기", "domain": "TRANSACTION"},
-        ]
-    elif channel_type == "offline":
-        lines.append(f"‘{coupon_name}’은 오프라인 전용 쿠폰이에요.")
-        lines.append("온라인 상품 가격에는 반영되지 않습니다. 매장 사용 조건은 쿠폰함 또는 매장에서 확인해 주세요.")
-        quick_replies = [
-            {"label": "내 쿠폰 조회", "domain": "TRANSACTION"},
-            {"label": "매장 찾기", "domain": "TRANSACTION"},
-        ]
-    else:
-        lines.append(f"‘{coupon_name}’은 제휴 조건이 필요한 쿠폰이에요.")
-        lines.append("일반 회원은 사용이 제한될 수 있어 제휴 조건을 먼저 확인해야 합니다.")
-        quick_replies = [
-            {"label": "내 쿠폰 조회", "domain": "TRANSACTION"},
-            {"label": "1:1 문의하기", "domain": "SUPPORT"},
-        ]
-        predicted_domains = ["TRANSACTION", "SUPPORT"]
-
-    return {
-        "type": "data",
-        "template": "quickReply",
-        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
-        "assistant_response_source": "code_coupon_channel_policy",
-        "data": {
-            "assistantResponse": "\n".join(lines),
-            "quickReplies": quick_replies,
-            "predictedDomains": predicted_domains,
-        },
-    }
-
-
+    return build_coupon_channel_policy_event(
+        coupon_row,
+        applicable_result=applicable_result,
+        target_product_name=target_product_name,
+    )
 def _is_specific_coupon_usage_query(user_text: str | None) -> bool:
     text = str(user_text or "")
     if not text or _COUPON_ISSUE_INTENT_RE.search(text):
@@ -12955,128 +11831,12 @@ def _build_coupon_applicability_event(
     target_product_name: str | None = None,
     target_brand: dict | None = None,
 ) -> dict:
-    data = _unwrap_tool_data(tool_result)
-    coupon_name = str(coupon_row.get("cpn_nm") or "해당 쿠폰")
-    products: list[dict] = []
-    stores: list[dict] = []
-
-    for group in data.get("coupons") or []:
-        if isinstance(group, dict) and isinstance(group.get("items"), list):
-            products.extend(item for item in group["items"] if isinstance(item, dict))
-    for group in data.get("stores") or []:
-        if isinstance(group, dict) and isinstance(group.get("items"), list):
-            stores.extend(item for item in group["items"] if isinstance(item, dict))
-
-    total_products = int(data.get("total_products") or len(products))
-    total_stores = int(data.get("total_stores") or len(stores))
-
-    lines: list[str] = []
-    if target_brand:
-        target_brand_cd = str(target_brand.get("brand_cd") or "").strip().upper()
-        target_brand_label = str(target_brand.get("label") or _brand_label_for_code(target_brand_cd)).strip()
-        matched_products: list[str] = []
-        for item in products:
-            row_brand_cd = str(item.get("brand_cd") or item.get("brandCode") or "").strip().upper()
-            row_brand_nm = str(item.get("brand_nm") or item.get("brand_name") or item.get("brandName") or "").strip()
-            row_goods_nm = str(canonical_context_from_tool_boundary(item).get("product_name") or "").strip()
-            if not row_goods_nm:
-                continue
-            if (
-                (target_brand_cd and row_brand_cd == target_brand_cd)
-                or (target_brand_label and target_brand_label.casefold() in row_brand_nm.casefold())
-                or (target_brand_label and target_brand_label.casefold() in row_goods_nm.casefold())
-            ):
-                matched_products.append(row_goods_nm)
-        if matched_products:
-            lines.append(f"‘{coupon_name}’은 {target_brand_label} 상품에도 적용 가능해요.")
-            lines.append("확인된 대표 상품은 " + ", ".join(matched_products[:5]) + "입니다.")
-        else:
-            lines.append(f"적용 가능 상품 목록에서 {target_brand_label} 상품은 확인되지 않았어요.")
-            lines.append("쿠폰함에서 상세 적용 조건을 확인해 주세요.")
-        quick_replies = [
-            {"label": "쿠폰함 바로가기", "url": CTAUrls.MY_COUPON_LIST_PC, "domain": "TRANSACTION"},
-            {"label": "내 쿠폰 조회", "domain": "TRANSACTION"},
-            {"label": "적용 상품 다시 확인", "domain": "TRANSACTION"},
-        ]
-        return {
-            "type": "data",
-            "template": "quickReply",
-            "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
-            "assistant_response_source": "code_coupon_resolver",
-            "data": {
-                "assistantResponse": "\n".join(lines),
-                "quickReplies": quick_replies,
-                "predictedDomains": ["TRANSACTION"],
-            },
-        }
-
-    target_keys = _coupon_product_match_keys(target_product_name)
-    if target_keys:
-        product_names = [
-            str(canonical_context_from_tool_boundary(item).get("product_name") or "").strip()
-            for item in products
-            if str(canonical_context_from_tool_boundary(item).get("product_name") or "").strip()
-        ]
-        matched_product_names = [
-            name for name in product_names
-            if bool(target_keys & _coupon_product_match_keys(name))
-        ]
-        target_display_name = matched_product_names[0] if matched_product_names else str(target_product_name or "해당 상품")
-        if matched_product_names:
-            lines.append(
-                f"보유 쿠폰에서 ‘{coupon_name}’을 확인했고, 이 쿠폰은 {target_display_name} 패턴에 적용 가능해요."
-            )
-            lines.append(
-                f"{target_display_name}를 주문하시겠어요? 주문하시려면 타이어 사이즈를 입력하거나 "
-                "보유차량 중에서 선택해 맞는 모델을 찾을게요."
-            )
-        elif products:
-            lines.append(
-                f"보유 쿠폰에서 ‘{coupon_name}’을 확인했지만, 적용 가능 상품 목록에서 {target_display_name} 패턴은 확인되지 않았어요."
-            )
-            lines.append("쿠폰함의 적용 조건을 다시 확인해 주세요.")
-    elif products:
-        lines.append(f"‘{coupon_name}’ 적용 가능 상품은 {total_products}개예요.")
-        for item in products[:5]:
-            goods_nm = str(canonical_context_from_tool_boundary(item).get("product_name") or "").strip()
-            if goods_nm:
-                lines.append(f"- {goods_nm}")
-        if total_products > 5:
-            lines.append(f"외 {total_products - 5}개 상품이 더 있어요.")
-    if stores:
-        store_names = [
-            str(item.get("shop_nm") or "").strip()
-            for item in stores[:5]
-            if str(item.get("shop_nm") or "").strip()
-        ]
-        if store_names:
-            lines.append(f"사용 가능 매장은 {', '.join(store_names)}예요.")
-            if total_stores > 5:
-                lines.append(f"외 {total_stores - 5}개 매장이 더 있어요.")
-
-    quick_replies = [
-        {"label": "보유차량 중 선택", "domain": "DISCOVERY"},
-        {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
-        {"label": "내 쿠폰 조회", "domain": "TRANSACTION"},
-    ]
-    predicted_domains = ["DISCOVERY", "TRANSACTION"]
-    if not lines:
-        lines.append("해당 쿠폰의 적용 정보를 찾을 수 없어요. 쿠폰함에서 적용 대상을 확인해 주세요.")
-        quick_replies = [dict(chip) for chip in _COUPON_BOX_CHIPS]
-        predicted_domains = ["TRANSACTION"]
-
-    return {
-        "type": "data",
-        "template": "quickReply",
-        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
-        "assistant_response_source": "code_coupon_resolver",
-        "data": {
-            "assistantResponse": "\n".join(lines),
-            "quickReplies": quick_replies,
-            "predictedDomains": predicted_domains,
-        },
-    }
-
+    return build_coupon_applicability_event(
+        tool_result,
+        coupon_row,
+        target_product_name=target_product_name,
+        target_brand=target_brand,
+    )
 
 def _build_product_coupon_eligibility_event(
     tool_result: dict,
@@ -13085,135 +11845,20 @@ def _build_product_coupon_eligibility_event(
     target_product_name: str,
     target_brand: dict | None = None,
 ) -> dict:
-    data = _unwrap_tool_data(tool_result)
-    target_display_name = str(target_product_name or "해당 상품").strip() or "해당 상품"
-    if target_brand:
-        target_brand_cd = str(target_brand.get("brand_cd") or "").strip().upper()
-        target_brand_label = str(target_brand.get("label") or _brand_label_for_code(target_brand_cd)).strip()
-        target_display_name = target_brand_label or target_display_name
-        target_keys = set()
-    else:
-        target_keys = _coupon_product_match_keys(target_display_name)
-    coupon_name_by_no = {
-        str(row.get("cpn_no") or "").strip(): str(row.get("cpn_nm") or row.get("disp_nm") or "해당 쿠폰").strip()
-        for row in coupon_rows
-        if str(row.get("cpn_no") or "").strip()
-    }
-    applicable_coupon_names: list[str] = []
-    matched_product_name = ""
-
-    for group in data.get("coupons") or []:
-        if not isinstance(group, dict):
-            continue
-        cpn_no = str(group.get("cpn_no") or "").strip()
-        coupon_name = coupon_name_by_no.get(cpn_no) or cpn_no or "해당 쿠폰"
-        items = group.get("items")
-        if not isinstance(items, list):
-            continue
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            goods_nm = str(canonical_context_from_tool_boundary(item).get("product_name") or "").strip()
-            if not goods_nm:
-                continue
-            if target_brand:
-                row_brand_cd = str(item.get("brand_cd") or item.get("brandCode") or "").strip().upper()
-                row_brand_nm = str(item.get("brand_nm") or item.get("brand_name") or item.get("brandName") or "").strip()
-                matched_target = (
-                    (target_brand_cd and row_brand_cd == target_brand_cd)
-                    or (target_brand_label and target_brand_label.casefold() in row_brand_nm.casefold())
-                    or (target_brand_label and target_brand_label.casefold() in goods_nm.casefold())
-                )
-            else:
-                matched_target = bool(
-                    target_keys and (
-                        target_keys & _coupon_product_match_keys(goods_nm)
-                        or any(
-                            target and row_term and (target in row_term or row_term in target)
-                            for target in target_keys
-                            for row_term in _coupon_product_match_keys(goods_nm)
-                        )
-                    )
-                )
-            if matched_target:
-                if coupon_name not in applicable_coupon_names:
-                    applicable_coupon_names.append(coupon_name)
-                matched_product_name = matched_product_name or goods_nm
-                break
-
-    if applicable_coupon_names:
-        if target_brand:
-            lines = [
-                f"보유 쿠폰 기준으로 {target_display_name} 상품에도 적용 가능한 쿠폰을 확인했어요.",
-                *[f"- {name}" for name in applicable_coupon_names[:5]],
-            ]
-        else:
-            product_label = matched_product_name or target_display_name
-            lines = [
-                f"보유 쿠폰 기준으로 {product_label} 패턴에 적용 가능한 쿠폰을 확인했어요.",
-                *[f"- {name}" for name in applicable_coupon_names[:5]],
-            ]
-        if len(applicable_coupon_names) > 5:
-            lines.append(f"외 {len(applicable_coupon_names) - 5}개 쿠폰이 더 있어요.")
-        if not target_brand:
-            lines.append("정확한 최종 혜택가는 차량이나 타이어 사이즈를 선택한 뒤 확인할 수 있어요.")
-    else:
-        if target_brand:
-            lines = [
-                f"보유 쿠폰 기준 적용 가능 상품 목록에서 {target_display_name} 상품은 확인되지 않았어요.",
-                "쿠폰함에서 상세 적용 조건을 확인해 주세요.",
-            ]
-        else:
-            lines = [
-                f"보유 쿠폰 중 {target_display_name} 패턴에 바로 적용 가능한 쿠폰은 확인되지 않았어요.",
-                "쿠폰함의 적용 조건이나 진행 중인 이벤트를 다시 확인해 주세요.",
-            ]
-    quick_replies = (
-        [
-            {"label": "쿠폰함 바로가기", "url": CTAUrls.MY_COUPON_LIST_PC, "domain": "TRANSACTION"},
-            {"label": "내 쿠폰 조회", "domain": "TRANSACTION"},
-            {"label": "적용 상품 다시 확인", "domain": "TRANSACTION"},
-        ]
-        if target_brand
-        else [
-            {"label": "보유차량 중 선택", "domain": "DISCOVERY"},
-            {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
-            {"label": "내 쿠폰 조회", "domain": "TRANSACTION"},
-        ]
+    return build_product_coupon_eligibility_event(
+        tool_result,
+        coupon_rows,
+        target_product_name=target_product_name,
+        target_brand=target_brand,
     )
-    predicted_domains = ["TRANSACTION"] if target_brand else ["DISCOVERY", "TRANSACTION"]
-
-    return {
-        "type": "data",
-        "template": "quickReply",
-        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
-        "assistant_response_source": "code_product_coupon_resolver",
-        "data": {
-            "assistantResponse": "\n".join(lines),
-            "quickReplies": quick_replies,
-            "predictedDomains": predicted_domains,
-        },
-    }
-
-
-_COUPON_PRICE_AMOUNT_QUERY_RE = re.compile(
-    r"할인\s*받|할인\s*금액|할인액|얼마\s*(?:할인|빠지|깎)|최종\s*(?:혜택가|금액|가격)|"
-    r"쿠폰\s*적용\s*(?:하면|시).*얼마|얼마야|얼마\s*나와",
-    re.IGNORECASE,
-)
 _COUPON_WORD_RE = re.compile(r"쿠폰|할인권|혜택", re.IGNORECASE)
-
-
-def _is_product_coupon_price_amount_query(user_text: str | None) -> bool:
-    text = str(user_text or "")
-    return bool(_COUPON_WORD_RE.search(text) and _COUPON_PRICE_AMOUNT_QUERY_RE.search(text))
-
-
 _COUPON_DISCOUNT_AMOUNT_GOAL_TYPES = frozenset({
     "coupon_discount_amount",
     "product_coupon_discount_amount",
 })
 
+def _is_product_coupon_price_amount_query(user_text: str | None) -> bool:
+    return is_product_coupon_price_amount_query(user_text)
 
 def _is_coupon_discount_amount_context(slots: Any | None) -> bool:
     if slots is None:
@@ -13226,22 +11871,11 @@ def _is_coupon_discount_amount_context(slots: Any | None) -> bool:
         goal_type = str(getattr(slots, "goal_type", None) or "").strip()
     return pending_intent == "price" and goal_type in _COUPON_DISCOUNT_AMOUNT_GOAL_TYPES
 
-
 def _is_coupon_discount_amount_size_list_followup(user_text: str | None, slots: Any | None) -> bool:
     return _is_coupon_discount_amount_context(slots) and _is_product_size_list_intent(str(user_text or ""))
 
-
 def _price_row_from_final_price_result(price_result: dict) -> dict | None:
-    data = _unwrap_tool_data(price_result)
-    if not isinstance(data, dict) or not data:
-        return None
-    rows = data.get("items")
-    if isinstance(rows, list) and rows and isinstance(rows[0], dict):
-        return rows[0]
-    if any(key in data for key in ("sale_prc", "cheapest_final_prc", "extra_fvr_sale_prc")):
-        return data
-    return None
-
+    return price_row_from_final_price_result(price_result)
 
 def _build_product_coupon_price_amount_event(
     price_result: dict,
@@ -13250,59 +11884,12 @@ def _build_product_coupon_price_amount_event(
     tire_size: str,
     quantity: int,
 ) -> dict | None:
-    row = _price_row_from_final_price_result(price_result)
-    if row is None:
-        return None
-
-    sale_unit = _to_int(row.get("sale_prc"))
-    final_unit = _final_price_from_row(row)
-    unit_discount = _to_int(row.get("cheapest_total_discount"))
-    if sale_unit is not None and final_unit is not None:
-        unit_discount = max(0, sale_unit - final_unit)
-    if sale_unit is None or final_unit is None:
-        return None
-
-    quantity = max(1, int(quantity or 1))
-    base_total = sale_unit * quantity
-    final_total = final_unit * quantity
-    discount_total = (unit_discount or 0) * quantity
-
-    coupons = row.get("cheapest_applied_coupons") or row.get("applied_coupons")
-    coupon_names: list[str] = []
-    if isinstance(coupons, list):
-        for coupon in coupons:
-            if not isinstance(coupon, dict):
-                continue
-            coupon_name = str(coupon.get("cpn_nm") or "").strip()
-            if coupon_name and coupon_name not in coupon_names:
-                coupon_names.append(coupon_name)
-
-    lines = [
-        f"{product_name} {tire_size} {quantity}개 기준으로 보유 쿠폰 적용 혜택가를 확인했어요.",
-        "",
-        f"- 정가 합계: {_format_krw(base_total)}",
-        f"- 쿠폰 적용 할인액: {_format_krw(discount_total) or '0원'}",
-        f"- 최종 혜택가: {_format_krw(final_total)}",
-    ]
-    if coupon_names:
-        lines.append(f"- 적용 기준 쿠폰: {', '.join(coupon_names[:3])}")
-
-    return {
-        "type": "data",
-        "template": "quickReply",
-        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
-        "assistant_response_source": "code_product_coupon_price_resolver",
-        "data": {
-            "assistantResponse": "\n".join(lines),
-            "quickReplies": [
-                {"label": "장바구니 담기", "domain": "TRANSACTION"},
-                {"label": "구매하기", "domain": "TRANSACTION"},
-                {"label": "내 쿠폰 조회", "domain": "TRANSACTION"},
-            ],
-            "predictedDomains": ["TRANSACTION"],
-        },
-    }
-
+    return build_product_coupon_price_amount_event(
+        price_result,
+        product_name=product_name,
+        tire_size=tire_size,
+        quantity=quantity,
+    )
 
 def _build_product_coupon_price_no_product_event(
     product_name: str,
@@ -13310,159 +11897,7 @@ def _build_product_coupon_price_no_product_event(
     *,
     quantity: int | None = None,
 ) -> dict:
-    product_label = str(product_name or "해당 상품").strip() or "해당 상품"
-    size_label = str(tire_size or "해당 사이즈").strip() or "해당 사이즈"
-    metadata: dict[str, Any] = {
-        "pendingIntent": "price",
-        "goalType": "coupon_discount_amount",
-        "productName": product_label,
-        "tireSize": size_label,
-    }
-    if quantity:
-        metadata["ordQty"] = int(quantity)
-    return {
-        "type": "data",
-        "template": "quickReply",
-        "source_domain": MultiAgentDomain.Domain.DISCOVERY.value,
-        "assistant_response_source": "code_product_coupon_price_no_product",
-        "data": {
-            "assistantResponse": (
-                f"{product_label} {size_label} 규격 상품을 찾을 수 없어 쿠폰 적용 금액을 계산할 수 없어요.\n\n"
-                "다른 사이즈를 입력하거나 해당 상품의 다른 규격을 확인해 주세요."
-            ),
-            "quickReplies": [
-                {"label": "다른 사이즈 확인", "domain": "DISCOVERY"},
-                {"label": "사이즈 없이 검색", "domain": "DISCOVERY"},
-                {"label": "타이어 추천 받기", "domain": "DISCOVERY"},
-            ],
-            "predictedDomains": ["DISCOVERY"],
-            "metadata": metadata,
-        },
-    }
-
-
-_COUPON_PRICE_AMOUNT_QUERY_RE = re.compile(
-    r"할인\s*받|할인\s*금액|할인액|얼마\s*(?:할인|빠지|깎)|최종\s*(?:혜택가|금액|가격)|"
-    r"쿠폰\s*적용\s*(?:하면|시).*얼마|얼마야|얼마\s*나와",
-    re.IGNORECASE,
-)
-_COUPON_WORD_RE = re.compile(r"쿠폰|할인권|혜택", re.IGNORECASE)
-
-
-def _is_product_coupon_price_amount_query(user_text: str | None) -> bool:
-    text = str(user_text or "")
-    return bool(_COUPON_WORD_RE.search(text) and _COUPON_PRICE_AMOUNT_QUERY_RE.search(text))
-
-
-def _price_row_from_final_price_result(price_result: dict) -> dict | None:
-    data = _unwrap_tool_data(price_result)
-    if not isinstance(data, dict) or not data:
-        return None
-    rows = data.get("items")
-    if isinstance(rows, list) and rows and isinstance(rows[0], dict):
-        return rows[0]
-    if any(key in data for key in ("sale_prc", "cheapest_final_prc", "extra_fvr_sale_prc")):
-        return data
-    return None
-
-
-def _build_product_coupon_price_amount_event(
-    price_result: dict,
-    *,
-    product_name: str,
-    tire_size: str,
-    quantity: int,
-) -> dict | None:
-    row = _price_row_from_final_price_result(price_result)
-    if row is None:
-        return None
-
-    sale_unit = _to_int(row.get("sale_prc"))
-    final_unit = _final_price_from_row(row)
-    unit_discount = _to_int(row.get("cheapest_total_discount"))
-    if sale_unit is not None and final_unit is not None:
-        unit_discount = max(0, sale_unit - final_unit)
-    if sale_unit is None or final_unit is None:
-        return None
-
-    quantity = max(1, int(quantity or 1))
-    base_total = sale_unit * quantity
-    final_total = final_unit * quantity
-    discount_total = (unit_discount or 0) * quantity
-
-    coupons = row.get("cheapest_applied_coupons") or row.get("applied_coupons")
-    coupon_names: list[str] = []
-    if isinstance(coupons, list):
-        for coupon in coupons:
-            if not isinstance(coupon, dict):
-                continue
-            coupon_name = str(coupon.get("cpn_nm") or "").strip()
-            if coupon_name and coupon_name not in coupon_names:
-                coupon_names.append(coupon_name)
-
-    lines = [
-        f"{product_name} {tire_size} {quantity}개 기준으로 보유 쿠폰 적용 혜택가를 확인했어요.",
-        "",
-        f"- 정가 합계: {_format_krw(base_total)}",
-        f"- 쿠폰 적용 할인액: {_format_krw(discount_total) or '0원'}",
-        f"- 최종 혜택가: {_format_krw(final_total)}",
-    ]
-    if coupon_names:
-        lines.append(f"- 적용 기준 쿠폰: {', '.join(coupon_names[:3])}")
-
-    return {
-        "type": "data",
-        "template": "quickReply",
-        "source_domain": MultiAgentDomain.Domain.TRANSACTION.value,
-        "assistant_response_source": "code_product_coupon_price_resolver",
-        "data": {
-            "assistantResponse": "\n".join(lines),
-            "quickReplies": [
-                {"label": "장바구니 담기", "domain": "TRANSACTION"},
-                {"label": "구매하기", "domain": "TRANSACTION"},
-                {"label": "내 쿠폰 조회", "domain": "TRANSACTION"},
-            ],
-            "predictedDomains": ["TRANSACTION"],
-        },
-    }
-
-
-def _build_product_coupon_price_no_product_event(
-    product_name: str,
-    tire_size: str,
-    *,
-    quantity: int | None = None,
-) -> dict:
-    product_label = str(product_name or "해당 상품").strip() or "해당 상품"
-    size_label = str(tire_size or "해당 사이즈").strip() or "해당 사이즈"
-    metadata: dict[str, Any] = {
-        "pendingIntent": "price",
-        "goalType": "coupon_discount_amount",
-        "productName": product_label,
-        "tireSize": size_label,
-    }
-    if quantity:
-        metadata["ordQty"] = int(quantity)
-    return {
-        "type": "data",
-        "template": "quickReply",
-        "source_domain": MultiAgentDomain.Domain.DISCOVERY.value,
-        "assistant_response_source": "code_product_coupon_price_no_product",
-        "data": {
-            "assistantResponse": (
-                f"{product_label} {size_label} 규격 상품을 찾을 수 없어 쿠폰 적용 금액을 계산할 수 없어요.\n\n"
-                "다른 사이즈를 입력하거나 해당 상품의 다른 규격을 확인해 주세요."
-            ),
-            "quickReplies": [
-                {"label": "다른 사이즈 확인", "domain": "DISCOVERY"},
-                {"label": "사이즈 없이 검색", "domain": "DISCOVERY"},
-                {"label": "타이어 추천 받기", "domain": "DISCOVERY"},
-            ],
-            "predictedDomains": ["DISCOVERY"],
-            "metadata": metadata,
-        },
-    }
-
+    return build_product_coupon_price_no_product_event(product_name, tire_size, quantity=quantity)
 
 def _coupon_target_product_name_for_query(user_text: str) -> str | None:
     frame = build_price_intent_frame(user_text)
@@ -17755,6 +16190,38 @@ def _flow_type_from_confirmed_tool_slots(
     return "store_search"
 
 
+def _slot_runtime_values_from_active_flow_context(active_flow_context: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(active_flow_context, Mapping) or not active_flow_context:
+        return {}
+
+    product = active_flow_context.get("product") if isinstance(active_flow_context.get("product"), Mapping) else {}
+    store = active_flow_context.get("store") if isinstance(active_flow_context.get("store"), Mapping) else {}
+    intent = active_flow_context.get("intent") if isinstance(active_flow_context.get("intent"), Mapping) else {}
+    quantity = active_flow_context.get("quantity") if isinstance(active_flow_context.get("quantity"), Mapping) else {}
+    payment = active_flow_context.get("payment") if isinstance(active_flow_context.get("payment"), Mapping) else {}
+
+    runtime_values = {
+        "goods_no": product.get("goods_no"),
+        "tire_size": product.get("tire_size"),
+        "tire_model": product.get("product_name") or product.get("tire_model"),
+        "pending_product_name": product.get("product_name") or product.get("tire_model"),
+        "ord_qty": product.get("ord_qty") if product.get("ord_qty") not in (None, "", 0, "0") else quantity.get("ord_qty"),
+        "shop_id": store.get("shop_id"),
+        "shop_name": store.get("shop_name") or store.get("store_name"),
+        "region": store.get("region") or active_flow_context.get("region"),
+        "pending_intent": intent.get("pending_intent"),
+        "goal_type": intent.get("goal_type"),
+        "payment_amount": payment.get("payment_amount"),
+        "price_basis": payment.get("price_basis"),
+        "price_source_tool": payment.get("price_source_tool"),
+    }
+    return {
+        key: value
+        for key, value in runtime_values.items()
+        if value not in (None, "", [], {})
+    }
+
+
 def _with_confirmed_tool_flow_state(
     slots: ConversationSlots,
     *,
@@ -19542,7 +18009,7 @@ def _support_fast_path(text: str) -> "list[MultiAgentDomain.Domain] | None":
     if is_warranty_claim_signal(text):
         logger.debug("[SUPPORT_FAST_PATH] warranty claim signal → SUPPORT: %r", text[:80])
         return [MultiAgentDomain.Domain.SUPPORT]
-    if _LEGAL_ACTION_REQUEST_RE.search(text) and _LEGAL_ACTION_TSTATION_SCOPE_RE.search(text):
+    if is_tstation_legal_action_request(text):
         logger.debug("[SUPPORT_FAST_PATH] legal action complaint guard → SUPPORT: %r", text[:80])
         return [MultiAgentDomain.Domain.SUPPORT]
     if _SUPPORT_FAST_RE.search(text):
@@ -28648,7 +27115,10 @@ class TStationChatServiceV2:
             else:
                 committed_active_context = dict(flow_transition_active_context)
             availability_context["active_flow_context"] = committed_active_context
-            merged_slots = merged_slots.model_copy()
+            merged_slots = merged_slots.apply_runtime_values(
+                _slot_runtime_values_from_active_flow_context(committed_active_context),
+                source="flow_transition_active_context_promotion",
+            )
             merged_slots.availability_context = availability_context
             vehicle_selection_trace_metadata.update({
                 "flow_transition_active_context_stored": True,
@@ -40793,3 +39263,4 @@ class TStationChatServiceV2:
 
         yield f"data: {json.dumps({'type': 'DONE'}, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"
+
