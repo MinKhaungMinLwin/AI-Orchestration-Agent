@@ -347,6 +347,87 @@ def test_purchase_price_progress_candidate_allows_final_price_tool() -> None:
     assert candidate.tool_input_source == "flow_state_progress"
 
 
+def test_schedule_slot_fill_price_lookup_candidate_uses_contract_slots() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="quick_order_reservation_slot_fill_schedule",
+        known_slots={
+            "goods_no": "G000000310126",
+            "product_name": "벤투스 S2 AS",
+            "tire_size": "245/45R19",
+            "ord_qty": 2,
+            "shop_id": "F00071",
+            "shop_name": "티스테이션 분당정자점",
+            "requested_cal_day": "20260705",
+            "rsv_hour": "15",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        allowed_tools=("get_final_price_tool",),
+        forbidden_tools=("quick_order_tool", "get_store_schedule_tool"),
+        preferred_tool="get_final_price_tool",
+        tool_args_patch={"goods_no": "G000000310126"},
+        response_decision={
+            "template": "quickReply",
+            "metadata": {"response_shape_key": "reservation_price_lookup", "flow_step": "resolve_price"},
+        },
+        action_mode="purchase_continuation",
+        context_state="resumed",
+        flow_step="resolve_price",
+    )
+
+    candidate = _contract_required_tool_candidate(
+        turn_contract=contract,
+        user_text="2026년 7월 5일 (일)\n15:00",
+        merged_slots=ConversationSlots(
+            availability_context={
+                "active_flow_context": {
+                    "flow_type": "support",
+                    "status": "active",
+                    "flow_step": "answer_faq",
+                    "intent": {"pending_intent": "card_installment_lookup", "goal_type": "support_faq"},
+                }
+            }
+        ),
+    )
+
+    assert candidate is not None
+    assert candidate.tool_name == "get_final_price_tool"
+    assert candidate.tool_input == {"goods_no": "G000000310126"}
+    assert candidate.tool_input_source == "turn_contract_schedule_final_price"
+
+
+def test_schedule_slot_fill_price_lookup_candidate_requires_ready_order_slots() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="quick_order_reservation_slot_fill_schedule",
+        known_slots={
+            "goods_no": "G000000310126",
+            "ord_qty": 2,
+            "shop_id": "F00071",
+            "requested_cal_day": "20260705",
+        },
+        allowed_tools=("get_final_price_tool",),
+        preferred_tool="get_final_price_tool",
+        tool_args_patch={"goods_no": "G000000310126"},
+        response_decision={
+            "template": "quickReply",
+            "metadata": {"response_shape_key": "reservation_price_lookup", "flow_step": "resolve_price"},
+        },
+        action_mode="purchase_continuation",
+        context_state="resumed",
+        flow_step="resolve_price",
+    )
+
+    candidate = _contract_required_tool_candidate(
+        turn_contract=contract,
+        user_text="2026년 7월 5일 (일)\n15:00",
+        merged_slots=ConversationSlots(),
+    )
+
+    assert candidate is None
+
+
 def test_selected_store_schedule_requires_datepick_contract_boundary() -> None:
     contract = TurnContract(
         domain="transaction",

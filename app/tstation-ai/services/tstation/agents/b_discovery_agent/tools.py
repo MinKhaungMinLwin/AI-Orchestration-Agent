@@ -151,9 +151,6 @@ def _apply_recommendation_policy_patch(
     suppress_vehicle_type_filter = bool(patch.get("suppress_vehicle_type_filter"))
     suppress_season_filter = bool(patch.get("suppress_season_filter"))
 
-    patched_rcmd_type = patch.get("rcmd_type")
-    if patched_rcmd_type:
-        rcmd_type = patched_rcmd_type if isinstance(patched_rcmd_type, RcmdType) else RcmdType(str(patched_rcmd_type))
     if patch.get("brand_cd"):
         brand_cd = str(patch["brand_cd"])
     if not tire_size and not car_lnc_cd and patch.get("tire_size"):

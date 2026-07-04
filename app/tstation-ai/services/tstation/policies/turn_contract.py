@@ -4000,6 +4000,19 @@ def _recommendation_tool_input_drift_violation(
         expected_args["tire_size"] = contract.known_slots.get("tire_size")
     if actual_uses_vehicle_fitment:
         expected_args.pop("tire_size", None)
+    response_decision = contract.response_decision if contract is not None else {}
+    response_metadata = response_decision.get("metadata") if isinstance(response_decision, Mapping) else {}
+    response_shape_key = str(response_metadata.get("response_shape_key") or "") if isinstance(response_metadata, Mapping) else ""
+    is_unsized_catalog_recommendation = (
+        response_shape_key == "catalog_unsized_recommendation_summary"
+        and not expected_args.get("tire_size")
+        and not actual_args.get("tire_size")
+        and not actual_args.get("car_lnc_cd")
+    )
+    if is_unsized_catalog_recommendation:
+        # For unsized catalog recommendations, the Discovery agent's scenario
+        # choice is the source of truth; contract keeps structural constraints.
+        expected_args.pop("rcmd_type", None)
     expected_args = {
         key: expected_args[key]
         for key in ("rcmd_type", "vehicle_type", "season_nm", "tire_size")

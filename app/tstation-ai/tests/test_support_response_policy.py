@@ -359,6 +359,13 @@ def test_tire_manufacture_date_month_question_does_not_route_to_card_installment
     assert _is_card_installment_lookup_query(user_text) is False
 
 
+def test_calendar_month_date_does_not_route_to_card_installment() -> None:
+    assert _is_card_installment_lookup_query("2026년 7월 5일 (일)\n15:00") is False
+    assert _is_card_installment_lookup_query("7월 5일 15시에 예약할게") is False
+    assert _is_card_installment_lookup_query("7개월 무이자 가능해?") is True
+    assert _is_card_installment_lookup_query("몇개월 할부 돼?") is True
+
+
 def test_external_tire_install_policy_text_trigger_blocks_work_started_cancel_drift() -> None:
     decision = decide_support_response(
         intent="support_faq",
