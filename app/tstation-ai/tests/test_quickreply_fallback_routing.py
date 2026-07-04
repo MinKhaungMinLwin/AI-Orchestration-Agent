@@ -28513,7 +28513,7 @@ def test_purchase_search_staging_preserves_product_name_and_price_basis_for_preo
                 {
                     "goods_no": "G000000310126",
                     "goods_nm": "벤투스 S2 AS",
-                    "title_tires": "245/45R19",
+                    "tire_size_1": "245/45R19",
                     "extra_fvr_sale_prc": 154100,
                 }
             ]
