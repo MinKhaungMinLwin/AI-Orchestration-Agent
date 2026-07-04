@@ -26326,6 +26326,78 @@ def test_followup_size_input_ignores_plain_size_without_prior_scenario() -> None
     assert _infer_followup_recommendation_context(messages, "2355519") is None
 
 
+def test_followup_size_input_keeps_vehicle_type_from_prior_model_name() -> None:
+    # Step 5b: turn 1 names only a car model (no explicit category keyword). The
+    # size-only follow-up must still carry the inferred vehicle_type.
+    messages = [
+        {"role": "user", "content": "팰리세이드 타이어 추천해줘"},
+        {
+            "role": "assistant",
+            "content": "팰리세이드는 트림에 따라 사이즈가 달라요. 우선 SUV 기준으로 추천해 드렸어요.",
+        },
+        {"role": "user", "content": "235/60R18"},
+    ]
+
+    context = _infer_followup_recommendation_context(messages, "235/60R18")
+
+    assert context is not None
+    assert "vehicle_type='suv'" in context
+    assert "규격만 제공한 후속 입력" in context
+
+
+def test_followup_size_input_keeps_ev_from_keyword_without_model() -> None:
+    # Keyword-driven vehicle_type still works (no catalog model match involved).
+    messages = [
+        {"role": "user", "content": "전기차 타이어 추천해줘"},
+        {"role": "assistant", "content": "전기차용 타이어를 추천해 드렸어요."},
+        {"role": "user", "content": "235/55R19"},
+    ]
+
+    context = _infer_followup_recommendation_context(messages, "235/55R19")
+
+    assert context is not None
+    assert "vehicle_type='ev'" in context
+
+
+def test_followup_size_input_ignores_model_without_recommendation_bridge() -> None:
+    # Gate is unchanged: a car model without a recommendation-context bridge must
+    # not generate a follow-up block just because the catalog can classify it.
+    messages = [
+        {"role": "user", "content": "팰리세이드 좋아?"},
+        {"role": "user", "content": "235/60R18"},
+    ]
+
+    assert _infer_followup_recommendation_context(messages, "235/60R18") is None
+
+
+def test_prior_model_name_vehicle_category_not_carried_into_new_generic_recommendation() -> None:
+    # Step 5a: a model named in a PRIOR turn is weak (model_inference) context and
+    # must not re-constrain a new generic recommendation turn.
+    routing_result = MultiAgentDomain(
+        reason="test",
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        execution_plan=["discovery:size_for_recommendation_continuation"],
+        user_behavior="new generic recommendation after a prior model-name recommendation",
+        flow="model-name recommendation -> new generic recommendation",
+        claim_check_type="none",
+        complaint_scope="none",
+        discovery_followup_intent="none",
+        agent_prompt_profile="discovery_recommendation",
+    )
+
+    tool_patch, response_decision = _build_discovery_policy_context(
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        last_user_text="가성비 타이어 추천해줘",
+        context_text="팰리세이드 타이어 추천해줘\n가성비 타이어 추천해줘",
+        tire_size=None,
+        routing_result=routing_result,
+    )
+
+    assert tool_patch.get("vehicle_type") is None
+    assert tool_patch.get("rcmd_type") == "value"
+    assert response_decision is not None
+
+
 @pytest.mark.parametrize("text", ["내차말고 GV70", "내차말구 GV70", "내차말로 ev70", "내 차 아닌 모델Y"])
 def test_non_self_car_negation_handles_common_typos(text: str) -> None:
     assert _NON_SELF_CAR_RE.search(text)

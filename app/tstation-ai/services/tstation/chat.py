@@ -59,6 +59,7 @@ from services.tstation.policies.discovery_intent_policy import (
     plan_discovery_tools,
 )
 from services.tstation.policies.discovery_response_policy import decide_discovery_response
+from services.tstation.policies.vehicle_category_catalog import match_vehicle_model_category
 from services.tstation.policies.recommendation_scenario_catalog import (
     recommendation_scenario_from_text,
     recommendation_scenario_metadata,
@@ -20356,8 +20357,16 @@ def _build_discovery_policy_context(
                     "rcmd_type",
                     "price_goal",
                 ):
-                    if context_frame.entities.get(key) and not merged_entities.get(key):
-                        merged_entities[key] = context_frame.entities[key]
+                    if not context_frame.entities.get(key) or merged_entities.get(key):
+                        continue
+                    if (
+                        key == "vehicle_category"
+                        and context_frame.entities.get("vehicle_category_source") == "model_inference"
+                    ):
+                        # A car model named in a PRIOR turn is weak context — it must not
+                        # re-constrain the current turn (stale-vehicle skip owns that call).
+                        continue
+                    merged_entities[key] = context_frame.entities[key]
                 if merged_entities != discovery_frame.entities:
                     discovery_frame = replace(discovery_frame, entities=merged_entities)
         if (
@@ -23321,8 +23330,13 @@ def _infer_followup_recommendation_context(messages: list[dict], last_user_text:
     # For vehicle-card picks this also avoids inferring from listCar text.
     user_blob = "\n".join(content for role, content in ordered_messages if role == "user")
     user_matches = _find_context_matches(user_blob)
+    # A car model named by the user in a prior turn (e.g. "팰리세이드 추천") carries a
+    # vehicle_type even when no explicit category keyword matched. Reuse the catalog
+    # owner layer so the size-only follow-up keeps that filter — do NOT add a new
+    # regex here.
+    model_match = match_vehicle_model_category(user_blob)
     matches = user_matches
-    if not matches:
+    if not matches and model_match is None:
         return None
 
     labels: list[str] = []
@@ -23335,6 +23349,12 @@ def _infer_followup_recommendation_context(messages: list[dict], last_user_text:
             rcmd_type = candidate_rcmd_type
         if vehicle_type is None and candidate_vehicle_type:
             vehicle_type = candidate_vehicle_type
+    if model_match is not None:
+        model_label = f"{model_match.model} 차량용"
+        if model_label not in labels:
+            labels.append(model_label)
+        if vehicle_type is None:
+            vehicle_type = model_match.category
 
     lines = [
         "## 후속 추천 조건",
