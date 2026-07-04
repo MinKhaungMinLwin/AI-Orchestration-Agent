@@ -10,6 +10,7 @@ from services.tstation.common.cta_urls import CTAUrls
 from services.tstation.policies.cross_domain_policy import CrossDomainPlan
 from services.tstation.policies.discovery_intent_policy import (
     extract_best_seller_vehicle_query,
+    extract_benefit_applicable_products_query,
     has_registered_vehicle_ownership_signal,
     is_best_seller_request,
     normalize_tire_size,
@@ -1396,7 +1397,11 @@ def build_turn_contract(
             preferred_tool = "get_my_coupons_tool"
             tool_args_patch = {}
     if intent == "coupon_applicable_products":
-        query = str(known_slots.get("benefit_applicable_products_query") or "").strip() or user_text.strip()
+        query = (
+            str(known_slots.get("benefit_applicable_products_query") or "").strip()
+            or extract_benefit_applicable_products_query(user_text)
+            or user_text.strip()
+        )
         allowed_tools = ("search_benefit_applicable_products_tool",)
         forbidden_tools = _merge_tuple(
             forbidden_tools,

@@ -342,7 +342,17 @@ _BENEFIT_STACKING_RE = re.compile(r"중복|같이|함께|동시|둘\s*다|다\s*
 
 def extract_benefit_applicable_products_query(text: str | None) -> str:
     """Fallback only. The LLM router should provide benefit_applicable_products_query."""
-    return re.sub(r"\s+", " ", str(text or "")).strip()
+    normalized = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not normalized:
+        return ""
+    query = re.sub(
+        r"(?:에|에서)?\s*(?:적용|대상|가능|쓸\s*수|사용\s*가능|살\s*수\s*있는).*$",
+        "",
+        normalized,
+        flags=re.IGNORECASE,
+    ).strip()
+    query = re.sub(r"(?:상품|타이어|제품)(?:은|는|이|가|을|를)?\s*(?:뭐|무엇|어떤).*$", "", query).strip()
+    return query or normalized
 _BEST_SELLER_DAY_RE = re.compile(r"오늘|금일|하루", re.IGNORECASE)
 _BEST_SELLER_WEEK_RE = re.compile(r"이번\s*주|금주|이번주|주간", re.IGNORECASE)
 _BEST_SELLER_MONTH_RE = re.compile(r"이번\s*달|이달|월별|월간", re.IGNORECASE)

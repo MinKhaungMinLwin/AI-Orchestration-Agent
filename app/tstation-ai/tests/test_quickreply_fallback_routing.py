@@ -30211,6 +30211,24 @@ def test_router_coupon_applicable_products_uses_unified_benefit_tool_without_pro
     assert "get_my_coupons_tool" in contract.forbidden_tools
 
 
+def test_coupon_applicable_products_extracts_query_from_first_turn_text_without_router_slot() -> None:
+    user_text = "쿠폰 뱃지 테스트에 적용 가능한 상품은 뭐야?"
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=IntentFrame(domain=PolicyDomain.TRANSACTION, intent="price_or_coupon_check"),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["transaction:coupon_applicable_products"],
+        ),
+        action_mode="info_only",
+        context_state="active",
+    )
+
+    assert contract.intent == "coupon_applicable_products"
+    assert contract.tool_args_patch == {"query": "쿠폰 뱃지 테스트", "lang_cd": "ko"}
+    assert contract.allowed_tools == ("search_benefit_applicable_products_tool",)
+
+
 def test_payment_error_troubleshooting_contract_keeps_checkout_screen_error_faq_first() -> None:
     contract = build_turn_contract(
         user_text="카카오페이 결제 누르면 화면이 하얗게 멈춰",

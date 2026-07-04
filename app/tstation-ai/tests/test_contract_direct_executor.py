@@ -236,6 +236,29 @@ def test_direct_path_allows_product_comparison_summary_contract() -> None:
     assert decision.template == "quickReply"
 
 
+def test_direct_path_allows_coupon_applicable_products_with_low_router_confidence() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="coupon_applicable_products",
+        allowed_tools=("search_benefit_applicable_products_tool",),
+        forbidden_tools=("get_my_coupons_tool", "get_coupon_applicable_products_tool"),
+        preferred_tool="search_benefit_applicable_products_tool",
+        tool_args_patch={"query": "쿠폰 뱃지 테스트", "lang_cd": "ko"},
+        response_decision={"template": "quickReply"},
+    )
+
+    decision = evaluate_contract_direct_path(
+        turn_contract=contract,
+        router_evidence=_evidence(primary_action="coupon_lookup", confidence=0.0, domain="transaction"),
+        user_text="쿠폰 뱃지 테스트에 적용 가능한 상품은 뭐야?",
+    )
+
+    assert decision.eligible is True
+    assert decision.reason == "benefit_applicable_products_lookup"
+    assert decision.tool == "search_benefit_applicable_products_tool"
+    assert decision.template == "quickReply"
+
+
 def test_direct_path_allows_location_store_search_and_coupon_lookup() -> None:
     location_contract = TurnContract(
         domain="transaction",
