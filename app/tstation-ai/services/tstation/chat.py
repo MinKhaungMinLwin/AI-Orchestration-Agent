@@ -57,6 +57,7 @@ from services.tstation.policies.discovery_intent_policy import (
     is_external_price_comparison_request,
     normalize_tire_size,
     plan_discovery_tools,
+    price_range_from_text,
 )
 from services.tstation.policies.discovery_response_policy import decide_discovery_response
 from services.tstation.policies.vehicle_category_catalog import match_vehicle_model_category
@@ -2121,6 +2122,24 @@ def _apply_default_benefit_router_override(
     routing_result: MultiAgentDomain | None,
 ) -> tuple[list[MultiAgentDomain.Domain], MultiAgentDomain | None, bool]:
     execution_plan = [str(item or "").strip().lower() for item in (getattr(routing_result, "execution_plan", None) or ())]
+    relation_plan_lookup = any(
+        item
+        in {
+            "discovery:product_event_lookup",
+            "discovery:product_deal_lookup",
+            "discovery:event_applicable_products_lookup",
+        }
+        for item in execution_plan
+    )
+    if relation_plan_lookup:
+        return domains, routing_result, False
+    discovery_frame = build_discovery_intent_frame(user_text)
+    if discovery_frame.sub_intent in {
+        "product_event_lookup",
+        "product_deal_lookup",
+        "event_applicable_products_lookup",
+    }:
+        return domains, routing_result, False
     router_benefit_list_lookup = any(
         item in {"discovery:benefit_event_list_lookup", "discovery:benefit_deal_list"}
         for item in execution_plan
@@ -14171,7 +14190,23 @@ _BARE_PRODUCT_SEARCH_BLOCK_RE = re.compile(
 _BARE_PRODUCT_SEARCH_ALLOW_RE = re.compile(r"\b(search|find|show)\b|검색|찾아|보여|알려", re.IGNORECASE)
 _SIZED_PRODUCT_SEARCH_SIZE_RE = re.compile(r"\b\d{3}\s*/?\s*\d{2}\s*R?\s*\d{2}\b", re.IGNORECASE)
 _PRODUCT_QUERY_QUANTITY_RE = re.compile(r"\b(\d{1,2})\s*(?:개|본|짝)\b")
-_SIZED_PRODUCT_KEYWORD_STOPWORDS = {"타이어", "상품", "제품", "검색", "찾아", "찾기", "보여", "알려", "추천"}
+_SIZED_PRODUCT_KEYWORD_STOPWORDS = {
+    "타이어",
+    "상품",
+    "제품",
+    "검색",
+    "찾아",
+    "찾기",
+    "보여",
+    "알려",
+    "추천",
+    "하기",
+    "진행",
+}
+_TRANSACTION_CTA_LABEL_ONLY_RE = re.compile(
+    r"^\s*(?:구매\s*하기|주문\s*하기|결제\s*하기|바로\s*구매|바로\s*주문)\s*$",
+    re.IGNORECASE,
+)
 _FOLLOWUP_PRODUCT_REFERENCE_RE = re.compile(
     r"두\s*개\s*다|두개다|둘\s*다|둘다|둘\s*모두|세\s*개\s*다|세개다|셋\s*다|셋다|셋\s*모두|"
     r"두\s*상품|세\s*상품|위\s*상품들?|이\s*상품들?|각각",
@@ -14247,6 +14282,8 @@ def _has_sized_product_name_hint(user_text: str) -> bool:
     slot clearing we need the opposite: detect that the current order turn names
     a new product even when it also says "구매".
     """
+    if _TRANSACTION_CTA_LABEL_ONLY_RE.fullmatch(str(user_text or "").strip()):
+        return False
     keyword = _fallback_sized_product_keyword(user_text)
     if not keyword:
         return False
@@ -14275,6 +14312,8 @@ def _transaction_product_name_candidate_from_text(user_text: str) -> str:
     """
     text = str(user_text or "").strip()
     if not text:
+        return ""
+    if _TRANSACTION_CTA_LABEL_ONLY_RE.fullmatch(text):
         return ""
     if not _SIZED_PRODUCT_TRANSACTION_HINT_STOP_RE.search(text):
         return ""
@@ -21755,6 +21794,13 @@ def _clear_stale_product_slots_for_new_recommendation(
         recommendation_context["tool_args_patch"] = dict(scenario.tool_args_patch)
     elif current_turn_tire_size:
         recommendation_context["scope"] = "same_fitment"
+    # 가격대 조건은 시나리오와 함께 구조화해 보존한다 — size 후속 turn 재실행 시
+    # tool_args_patch 전체가 재생되므로 min/max_price 도 함께 복원된다.
+    price_range = price_range_from_text(text)
+    if price_range:
+        tool_args_patch = dict(recommendation_context.get("tool_args_patch") or {})
+        tool_args_patch.update(price_range)
+        recommendation_context["tool_args_patch"] = tool_args_patch
     if tire_size_resolved_from_vehicle_selection:
         recommendation_context["fitment_source"] = "vehicle_selection"
 

@@ -12,6 +12,7 @@ from services.tstation.policies.discovery_intent_policy import (
     extract_best_seller_vehicle_query,
     has_registered_vehicle_ownership_signal,
     is_best_seller_request,
+    normalize_tire_size,
 )
 from services.tstation.policies.flow_controller import build_purchase_flow_fallback_event, resolve_purchase_order_flow
 from services.tstation.policies.intent_frame import IntentFrame
@@ -195,8 +196,10 @@ _STORE_SERVICE_SEARCH_TOOLS = frozenset({
     "get_nearby_stores_tool",
 })
 _DISCOVERY_EVENT_CONTENT_TOOLS = frozenset({
+    "search_product_summary_tool",
     "search_product_tool",
     "get_product_applicable_events_tool",
+    "get_event_applicable_products_tool",
     "get_product_promotions_tool",
     "get_benefit_event_deal_list_tool",
     "get_events_tool",
@@ -1075,6 +1078,7 @@ def build_turn_contract(
         discovery_event_content_intents = {
             "benefit_event_list_lookup",
             "benefit_deal_list",
+            "event_applicable_products_lookup",
             "product_event_lookup",
             "product_promotion_lookup",
             "product_coupon_lookup",
@@ -1306,6 +1310,7 @@ def build_turn_contract(
         preferred_tool = "get_benefit_event_deal_list_tool"
         tool_args_patch = {"lang_cd": "ko"}
     if intent in {
+        "event_applicable_products_lookup",
         "product_event_lookup",
         "product_promotion_lookup",
         "product_coupon_lookup",
@@ -2820,6 +2825,8 @@ def _pending_order_context_from_slots(known_slots: Mapping[str, Any]) -> dict[st
 def _order_product_label(known_slots: Mapping[str, Any]) -> str:
     product_name = _product_name(known_slots)
     tire_size = _slot_text(known_slots, "tire_size")
+    if product_name and tire_size and normalize_tire_size(product_name) == normalize_tire_size(tire_size):
+        return product_name
     if product_name and tire_size:
         return f"{product_name} {tire_size}"
     return product_name or tire_size
@@ -5834,6 +5841,10 @@ def _normalize_plan_intent(value: str) -> str:
         "coupon_lookup": "product_coupon_lookup",
         "deal_lookup": "product_deal_lookup",
         "product_deal": "product_deal_lookup",
+        "event_applicable_products": "event_applicable_products_lookup",
+        "event_applicable_products_lookup": "event_applicable_products_lookup",
+        "applicable_event_products": "event_applicable_products_lookup",
+        "event_product_lookup": "event_applicable_products_lookup",
         "event_lookup": "product_event_lookup",
         "product_event": "product_event_lookup",
         "discovery_event_content": "product_event_lookup",
@@ -5883,6 +5894,7 @@ def _is_discovery_event_content_contract(
     event_intents = {
         "benefit_event_list_lookup",
         "benefit_deal_list",
+        "event_applicable_products_lookup",
         "product_event_lookup",
         "product_promotion_lookup",
         "product_coupon_lookup",
@@ -5899,6 +5911,7 @@ def _is_discovery_event_content_contract(
         for token in (
             "benefit_event_list_lookup",
             "benefit_deal_list",
+            "event_applicable_products_lookup",
             "product_event_lookup",
             "product_promotion_lookup",
             "product_coupon_lookup",

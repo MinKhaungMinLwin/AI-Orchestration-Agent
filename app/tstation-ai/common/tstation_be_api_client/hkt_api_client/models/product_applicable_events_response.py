@@ -19,20 +19,20 @@ T = TypeVar("T", bound="ProductApplicableEventsResponse")
 class ProductApplicableEventsResponse:
     """
     Attributes:
-        goods_no (str): 상품 번호
         total (int): 적용 가능한 진행 중 이벤트 수
-        items (list[ProductApplicableEventItem] | Unset): 해당 상품에 적용 가능한 진행 중 이벤트 목록 (EVT_STRT_DTIME DESC)
+        ptrn_cd (str): 상품 패턴 코드
+        items (list[ProductApplicableEventItem] | Unset): 해당 상품 패턴에 적용 가능한 진행 중 이벤트 목록 (EVT_STRT_DTIME DESC)
     """
 
-    goods_no: str
     total: int
+    ptrn_cd: str
     items: list[ProductApplicableEventItem] | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        goods_no = self.goods_no
-
         total = self.total
+
+        ptrn_cd = self.ptrn_cd
 
         items: list[dict[str, Any]] | Unset = UNSET
         if not isinstance(self.items, Unset):
@@ -45,8 +45,8 @@ class ProductApplicableEventsResponse:
         field_dict.update(self.additional_properties)
         field_dict.update(
             {
-                "goods_no": goods_no,
                 "total": total,
+                "ptrn_cd": ptrn_cd,
             }
         )
         if items is not UNSET:
@@ -59,9 +59,9 @@ class ProductApplicableEventsResponse:
         from ..models.product_applicable_event_item import ProductApplicableEventItem
 
         d = dict(src_dict)
-        goods_no = d.pop("goods_no")
-
         total = d.pop("total")
+
+        ptrn_cd = d.pop("ptrn_cd")
 
         _items = d.pop("items", UNSET)
         items: list[ProductApplicableEventItem] | Unset = UNSET
@@ -73,8 +73,8 @@ class ProductApplicableEventsResponse:
                 items.append(items_item)
 
         product_applicable_events_response = cls(
-            goods_no=goods_no,
             total=total,
+            ptrn_cd=ptrn_cd,
             items=items,
         )
 

@@ -80,6 +80,42 @@ def _best_selling_general_fallback_input(
     return fallback_input
 
 
+def _tool_success_data(tool_result: Mapping[str, Any]) -> Mapping[str, Any]:
+    if str(tool_result.get("status") or "").lower() != "success":
+        return {}
+    data = tool_result.get("data")
+    return data if isinstance(data, Mapping) else {}
+
+
+def _first_summary_ptrn_cd(tool_result: Mapping[str, Any]) -> str:
+    data = _tool_success_data(tool_result)
+    items = data.get("items")
+    if not isinstance(items, list):
+        return ""
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        ptrn_cd = str(item.get("ptrn_cd") or "").strip()
+        if ptrn_cd:
+            return ptrn_cd
+    return ""
+
+
+def _event_numbers_from_result(tool_result: Mapping[str, Any]) -> list[str]:
+    data = _tool_success_data(tool_result)
+    rows = data.get("items") or data.get("events")
+    if not isinstance(rows, list):
+        return []
+    result: list[str] = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        evt_no = str(row.get("evt_no") or row.get("event_no") or "").strip()
+        if evt_no and evt_no not in result:
+            result.append(evt_no)
+    return result[:10]
+
+
 def _contract_annotation_metadata(event_data: dict[str, Any]) -> dict[str, Any]:
     metadata = event_data.get("metadata")
     if isinstance(metadata, dict):
@@ -769,6 +805,47 @@ async def recover_blocked_fast_path_to_contract_tool(
             if chained_recommendation is not None:
                 chained_tool_name = "get_products_recommendations_tool"
                 chained_tool_input, chained_tool_result, chained_recovery_reason = chained_recommendation
+        if (
+            preferred_tool == "search_product_summary_tool"
+            and contract_intent in {"product_event_lookup", "product_deal_lookup"}
+        ):
+            ptrn_cd = _first_summary_ptrn_cd(tool_result)
+            if ptrn_cd:
+                chained_tool_name = "get_product_applicable_events_tool"
+                chained_tool_input = {"ptrn_cd": ptrn_cd, "lang_cd": "ko"}
+                chained_recovery_reason = "product_summary_ptrn_cd_to_applicable_events"
+                chained_tool = getattr(discovery_tools, chained_tool_name, None)
+                if chained_tool is not None and hasattr(chained_tool, "invoke"):
+                    raw_chained = await asyncio.to_thread(chained_tool.invoke, chained_tool_input)
+                    chained_tool_result = (
+                        raw_chained if isinstance(raw_chained, dict) else qc_verifier.parse_tool_output(raw_chained)
+                    )
+                    if not isinstance(chained_tool_result, dict):
+                        chained_tool_result = {
+                            "status": "error",
+                            "http_status": None,
+                            "message": "Invalid tool response",
+                            "data": {},
+                        }
+        if preferred_tool == "get_events_tool" and contract_intent == "event_applicable_products_lookup":
+            evt_no_list = _event_numbers_from_result(tool_result)
+            if evt_no_list:
+                chained_tool_name = "get_event_applicable_products_tool"
+                chained_tool_input = {"evt_no_list": evt_no_list}
+                chained_recovery_reason = "event_list_to_applicable_products"
+                chained_tool = getattr(discovery_tools, chained_tool_name, None)
+                if chained_tool is not None and hasattr(chained_tool, "invoke"):
+                    raw_chained = await asyncio.to_thread(chained_tool.invoke, chained_tool_input)
+                    chained_tool_result = (
+                        raw_chained if isinstance(raw_chained, dict) else qc_verifier.parse_tool_output(raw_chained)
+                    )
+                    if not isinstance(chained_tool_result, dict):
+                        chained_tool_result = {
+                            "status": "error",
+                            "http_status": None,
+                            "message": "Invalid tool response",
+                            "data": {},
+                        }
         if preferred_tool == "search_product_summary_tool":
             assistant_text = f"{str(tool_input.get('keyword') or '상품')} 상품 정보를 확인했어요."
         elif preferred_tool == "search_product_tool":

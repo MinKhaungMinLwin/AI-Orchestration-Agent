@@ -418,6 +418,7 @@ from services.tstation.policies.delivery_policy_gate import (
     decide_delivery_policy_gate,
 )
 from services.tstation.policies.flow_controller import (
+    _purchase_fallback_quick_replies,
     build_purchase_flow_fallback_event,
     build_selected_store_confirmation_event,
     resolve_purchase_order_flow,
@@ -13112,6 +13113,23 @@ def test_order_quantity_prompt_for_staggered_vehicle_offers_only_one_or_two() ->
     assert _labels(event["data"]["quickReplies"]) == ["1개", "2개"]
 
 
+def test_order_quantity_prompt_does_not_duplicate_size_in_product_label() -> None:
+    slots = SimpleNamespace(
+        goods_no="G000000319584",
+        tire_model="벤투스 에어S 245/45R19",
+        pending_product_name="벤투스 에어S 245/45R19",
+        tire_size="245/45R19",
+        pending_intent="order",
+        goal_type="place_order",
+    )
+
+    event = build_order_quantity_prompt_event(slots)
+
+    assistant = event["data"]["assistantResponse"]
+    assert "타이어 **245/45R19** 기준으로 몇 개 구매하실까요?" in assistant
+    assert "벤투스 에어S 245/45R19 245/45R19" not in assistant
+
+
 def test_order_quantity_prompt_precedes_store_when_region_entered_without_quantity() -> None:
     slots = SimpleNamespace(
         goods_no="G000000309855",
@@ -16134,6 +16152,45 @@ def test_purchase_flow_fallback_event_recomputes_to_ask_store_after_single_produ
     assert event["data"]["metadata"]["goodsNo"] == "G000000319584"
 
 
+def test_purchase_flow_fallback_event_ask_quantity_uses_canonical_qty_chips() -> None:
+    # 수량 질문 fallback 은 항상 canonical ["1개","2개","3개","4개"] chip 을 노출해야 한다.
+    # (과거 ["2개","4개","수량 직접 입력"] 이 노출되던 버그 회귀 방지.)
+    event = build_purchase_flow_fallback_event(
+        intent="quick_order_reservation",
+        known_slots={
+            "goods_no": "G000000319584",
+            "product_name": "다이나프로 HL3",
+            "tire_size": "225/55R18",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    assert event["data"]["metadata"]["flowStep"] == "ask_quantity"
+    assert _labels(event["data"]["quickReplies"]) == ["1개", "2개", "3개", "4개"]
+    assert all(chip["domain"] == "TRANSACTION" for chip in event["data"]["quickReplies"])
+    assert "수량 직접 입력" not in _labels(event["data"]["quickReplies"])
+    assert "수량" in event["data"]["assistantResponse"]
+
+
+def test_canonical_qty_chip_labels_slot_fill_as_quantity() -> None:
+    # 새로 노출된 chip("1개"/"3개") tap 시 다음 turn 에서 ord_qty 로 정확히 파싱되어야 한다.
+    assert ConversationSlots.extract_from_user_text("1개").ord_qty == 1
+    assert ConversationSlots.extract_from_user_text("3개").ord_qty == 3
+
+
+def test_purchase_fallback_quick_replies_ask_store_and_unknown_step_unchanged() -> None:
+    # ask_store branch 및 미지의 step 은 이번 변경의 영향을 받지 않아야 한다 (anti-collateral).
+    assert _labels(_purchase_fallback_quick_replies("ask_store")) == [
+        "내 주변 매장 찾기",
+        "지역/매장 입력",
+        "단골매장 보기",
+    ]
+    assert _purchase_fallback_quick_replies("unknown_step") == []
+
+
 def test_purchase_flow_fallback_event_clarifies_size_when_product_resolution_has_multiple_sizes() -> None:
     event = build_purchase_flow_fallback_event(
         intent="quick_order_reservation",
@@ -16785,6 +16842,24 @@ def test_fresh_sized_product_order_clears_stale_comparison_product() -> None:
 def test_order_history_lookup_does_not_trigger_fresh_product_transaction_request(text: str) -> None:
     assert _is_order_history_lookup_query(text)
     assert _is_fresh_product_transaction_request(text, "order") is False
+
+
+@pytest.mark.parametrize("text", ["구매하기", "주문하기", "결제하기", "바로 구매", "바로 주문"])
+def test_cta_label_only_purchase_text_does_not_replace_product_identity(text: str) -> None:
+    slots = ConversationSlots(
+        goods_no="G000000319584",
+        tire_model="벤투스 에어S 245/45R19",
+        pending_product_name="벤투스 에어S 245/45R19",
+        tire_size="245/45R19",
+        pending_intent="order",
+        goal_type="place_order",
+    )
+
+    assert _is_fresh_product_transaction_request(text, "order") is False
+    assert _clear_stale_product_identity_for_fresh_transaction(slots, text, "order") is False
+    assert slots.goods_no == "G000000319584"
+    assert slots.tire_model == "벤투스 에어S 245/45R19"
+    assert slots.pending_product_name == "벤투스 에어S 245/45R19"
 
 
 def test_fresh_product_name_only_order_clears_stale_product_identity() -> None:
@@ -27035,6 +27110,58 @@ def test_fresh_recommendation_turn_preserves_confirmed_sized_context() -> None:
     assert slots.payment_amount is None
 
 
+def test_fresh_recommendation_persists_price_range_with_scenario() -> None:
+    # T1: 시나리오 + 가격대 요청은 recommendation_context.tool_args_patch 에 함께 보존되어야
+    # size 후속 turn 에서 예산이 유실되지 않는다.
+    slots = ConversationSlots(goods_no="G000000309855")
+
+    _clear_stale_product_slots_for_new_recommendation(
+        slots,
+        user_text="빗길에 좋은 20만원대 타이어 추천해줘",
+        regex_slots=ConversationSlots(),
+    )
+
+    assert isinstance(slots.recommendation_context, RecommendationContext)
+    assert slots.recommendation_context.tool_args_patch == {
+        "rcmd_type": "wet",
+        "min_price": 200000,
+        "max_price": 299999,
+    }
+
+
+def test_fresh_recommendation_persists_price_range_without_scenario() -> None:
+    # T2: 시나리오 없이 순수 가격대 추천도 tool_args_patch 에 가격이 보존되어야 한다.
+    slots = ConversationSlots(goods_no="G000000309855")
+
+    _clear_stale_product_slots_for_new_recommendation(
+        slots,
+        user_text="20만원대 타이어 추천해줘",
+        regex_slots=ConversationSlots(),
+    )
+
+    assert isinstance(slots.recommendation_context, RecommendationContext)
+    assert slots.recommendation_context.tool_args_patch == {
+        "min_price": 200000,
+        "max_price": 299999,
+    }
+
+
+def test_fresh_recommendation_without_price_has_no_price_keys() -> None:
+    # T6: 가격이 없는 새 추천 turn 은 이전 가격을 남기지 않는다 (stale leakage 방지).
+    slots = ConversationSlots(goods_no="G000000309855")
+
+    _clear_stale_product_slots_for_new_recommendation(
+        slots,
+        user_text="겨울 타이어 추천해줘",
+        regex_slots=ConversationSlots(),
+    )
+
+    assert isinstance(slots.recommendation_context, RecommendationContext)
+    patch = slots.recommendation_context.tool_args_patch or {}
+    assert "min_price" not in patch
+    assert "max_price" not in patch
+
+
 def test_offroad_recommendation_preserves_common_size_and_contextualizes_scenario() -> None:
     slots = ConversationSlots(
         goods_no="G000000317682",
@@ -30934,6 +31061,47 @@ def test_support_prompt_contains_upload_capability_notice_for_photo_policy() -> 
     assert "업로드 확인이 불가능" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
 
 
+@pytest.mark.parametrize(
+    ("user_text", "sub_intent"),
+    [
+        ("키너지에 적용되는 이벤트 있어?", "product_event_lookup"),
+        ("반짝블랙딜에 적용 가능한 상품이 뭐야", "event_applicable_products_lookup"),
+    ],
+)
+def test_default_benefit_router_override_preserves_applicability_relation_contract(
+    user_text: str,
+    sub_intent: str,
+) -> None:
+    routing_result = MultiAgentDomain(
+        reason="router proposed broad event list",
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        execution_plan=["discovery:benefit_event_list_lookup"],
+        user_behavior="event list lookup",
+        flow="event list lookup",
+        claim_check_type="none",
+        complaint_scope="none",
+        policy_intent="none",
+        agent_prompt_profile=chat_module.AgentPromptProfile.DISCOVERY_EVENT_CONTENT,
+        planner_confidence=0.91,
+    )
+
+    domains, preserved_routing, applied = _apply_default_benefit_router_override(
+        user_text=user_text,
+        domains=[MultiAgentDomain.Domain.DISCOVERY],
+        routing_result=routing_result,
+    )
+
+    frame = build_discovery_intent_frame(user_text)
+    tool_plan = plan_discovery_tools(frame)
+
+    assert applied is False
+    assert domains == [MultiAgentDomain.Domain.DISCOVERY]
+    assert preserved_routing is routing_result
+    assert frame.sub_intent == sub_intent
+    assert tool_plan.preferred_tool in {"search_product_summary_tool", "get_events_tool"}
+    assert "get_benefit_event_deal_list_tool" not in tool_plan.allowed_tools
+
+
 def test_support_prompt_contains_fixed_safety_policy_only() -> None:
     assert "고정 응답 safety policy" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
     assert "tire_condition_photo_policy" in SUPPORT_AGENT_SYSTEM_PROMPT_TEMPLATE
@@ -30950,9 +31118,10 @@ def test_support_prompt_contains_legal_action_hard_stop() -> None:
 @pytest.mark.parametrize(
     ("user_text", "sub_intent", "allowed_tool"),
     [
+        ("키너지에 적용되는 이벤트 있어?", "product_event_lookup", "get_product_applicable_events_tool"),
         ("ventus air S 지금 행사 함?", "product_event_lookup", "get_product_applicable_events_tool"),
         ("벤투스 에어S 쿠폰 있어?", "product_coupon_lookup", "get_product_promotions_tool"),
-        ("벤투스 에어S 기획전 적용돼?", "product_deal_lookup", "get_product_promotions_tool"),
+        ("벤투스 에어S 기획전 적용돼?", "product_deal_lookup", "get_product_applicable_events_tool"),
     ],
 )
 def test_product_benefit_lookup_stays_discovery_event_content(user_text: str, sub_intent: str, allowed_tool: str) -> None:
@@ -30965,13 +31134,55 @@ def test_product_benefit_lookup_stays_discovery_event_content(user_text: str, su
     assert [task.intent for task in cross_domain_plan.subtasks] == ["product_event_lookup"]
     assert frame.intent == "product_search"
     assert frame.sub_intent == sub_intent
-    assert tool_plan.preferred_tool == "search_product_tool"
-    assert "search_product_tool" in tool_plan.allowed_tools
+    expected_resolver = "search_product_tool" if sub_intent == "product_coupon_lookup" else "search_product_summary_tool"
+    assert tool_plan.preferred_tool == expected_resolver
+    assert expected_resolver in tool_plan.allowed_tools
     assert allowed_tool in tool_plan.allowed_tools
     assert "get_product_description_tool" in tool_plan.forbidden_tools
     assert "transaction_store_preview_tool" in tool_plan.forbidden_tools
     assert response_decision.metadata["response_shape_key"] == sub_intent
     assert "ask_size_for_product_benefit_lookup" in response_decision.forbidden_behaviors
+
+
+@pytest.mark.parametrize(
+    "user_text",
+    [
+        "한국타이어 페스타 이벤트에 적용되는 상품 있어?",
+        "기획전 대상 타이어 보여줘",
+        "반짝블랙딜에 적용 가능한 상품이 뭐야",
+        "프로모션으로 살 수 있는 제품 알려줘",
+    ],
+)
+def test_event_applicable_products_lookup_uses_event_product_contract(user_text: str) -> None:
+    frame = build_discovery_intent_frame(user_text)
+    tool_plan = plan_discovery_tools(frame)
+    response_decision = decide_discovery_response(frame)
+    cross_domain_plan = plan_cross_domain_turn(user_text, known_slots={})
+
+    assert cross_domain_plan.primary_domain == PolicyDomain.DISCOVERY
+    assert [task.intent for task in cross_domain_plan.subtasks] == ["event_applicable_products_lookup"]
+    assert frame.sub_intent == "event_applicable_products_lookup"
+    assert tool_plan.preferred_tool == "get_events_tool"
+    assert "get_event_applicable_products_tool" in tool_plan.allowed_tools
+    assert "search_product_tool" in tool_plan.forbidden_tools
+    assert response_decision.metadata["response_shape_key"] == "event_applicable_products_lookup"
+
+
+@pytest.mark.parametrize(
+    "user_text",
+    [
+        "이벤트 적용 쿠폰 있어?",
+        "이벤트 기간 언제야?",
+        "프로모션 대상 매장 있어?",
+        "이벤트 조건 알려줘",
+    ],
+)
+def test_event_applicable_products_lookup_does_not_capture_other_event_targets(user_text: str) -> None:
+    frame = build_discovery_intent_frame(user_text)
+    cross_domain_plan = plan_cross_domain_turn(user_text, known_slots={})
+
+    assert frame.sub_intent != "event_applicable_products_lookup"
+    assert [task.intent for task in cross_domain_plan.subtasks] != ["event_applicable_products_lookup"]
 
 
 def test_router_discovery_event_content_blocks_product_price_override() -> None:
@@ -31008,7 +31219,7 @@ def test_turn_contract_preserves_product_event_lookup_tools_and_blocks_transacti
     assert "search_product_summary_tool" in contract.allowed_tools
     assert "search_product_tool" in contract.forbidden_tools
     assert "get_product_applicable_events_tool" in contract.allowed_tools
-    assert "get_product_promotions_tool" in contract.allowed_tools
+    assert "get_product_promotions_tool" in contract.forbidden_tools
     assert "quick_order_tool" in contract.forbidden_tools
     assert "transaction_store_preview_tool" in contract.forbidden_tools
     assert "get_store_schedule_tool" in contract.forbidden_tools
@@ -37049,6 +37260,26 @@ def test_turn_contract_missing_quantity_prompt_before_store_prompt() -> None:
     assert "수량이 필요해요" in event["data"]["assistantResponse"]
     assert _labels(event["data"]["quickReplies"]) == ["1개", "2개", "3개", "4개"]
     assert event["data"]["metadata"]["missingSlot"] == "quantity"
+
+
+def test_turn_contract_missing_quantity_prompt_does_not_duplicate_size_in_product_label() -> None:
+    contract = _transaction_turn_contract(
+        "구매하기",
+        {
+            "goods_no": "G000000319584",
+            "tire_model": "벤투스 에어S 245/45R19",
+            "pending_product_name": "벤투스 에어S 245/45R19",
+            "tire_size": "245/45R19",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+
+    event = build_response_policy_guard_event(contract)
+    assistant = event["data"]["assistantResponse"]
+
+    assert "벤투스 에어S 245/45R19 구매를 진행하려면 수량이 필요해요." in assistant
+    assert "벤투스 에어S 245/45R19 245/45R19" not in assistant
 
 
 def test_turn_contract_missing_tire_size_prompt_before_product_prompt() -> None:
