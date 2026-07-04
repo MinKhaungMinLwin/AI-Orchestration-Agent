@@ -13113,6 +13113,23 @@ def test_order_quantity_prompt_for_staggered_vehicle_offers_only_one_or_two() ->
     assert _labels(event["data"]["quickReplies"]) == ["1개", "2개"]
 
 
+def test_order_quantity_prompt_does_not_duplicate_size_in_product_label() -> None:
+    slots = SimpleNamespace(
+        goods_no="G000000319584",
+        tire_model="벤투스 에어S 245/45R19",
+        pending_product_name="벤투스 에어S 245/45R19",
+        tire_size="245/45R19",
+        pending_intent="order",
+        goal_type="place_order",
+    )
+
+    event = build_order_quantity_prompt_event(slots)
+
+    assistant = event["data"]["assistantResponse"]
+    assert "타이어 **245/45R19** 기준으로 몇 개 구매하실까요?" in assistant
+    assert "벤투스 에어S 245/45R19 245/45R19" not in assistant
+
+
 def test_order_quantity_prompt_precedes_store_when_region_entered_without_quantity() -> None:
     slots = SimpleNamespace(
         goods_no="G000000309855",
@@ -37057,6 +37074,26 @@ def test_turn_contract_missing_quantity_prompt_before_store_prompt() -> None:
     assert "수량이 필요해요" in event["data"]["assistantResponse"]
     assert _labels(event["data"]["quickReplies"]) == ["1개", "2개", "3개", "4개"]
     assert event["data"]["metadata"]["missingSlot"] == "quantity"
+
+
+def test_turn_contract_missing_quantity_prompt_does_not_duplicate_size_in_product_label() -> None:
+    contract = _transaction_turn_contract(
+        "구매하기",
+        {
+            "goods_no": "G000000319584",
+            "tire_model": "벤투스 에어S 245/45R19",
+            "pending_product_name": "벤투스 에어S 245/45R19",
+            "tire_size": "245/45R19",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+
+    event = build_response_policy_guard_event(contract)
+    assistant = event["data"]["assistantResponse"]
+
+    assert "벤투스 에어S 245/45R19 구매를 진행하려면 수량이 필요해요." in assistant
+    assert "벤투스 에어S 245/45R19 245/45R19" not in assistant
 
 
 def test_turn_contract_missing_tire_size_prompt_before_product_prompt() -> None:

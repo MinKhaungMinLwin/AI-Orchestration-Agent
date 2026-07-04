@@ -2604,6 +2604,8 @@ def _purchase_size_candidates(rows: list[dict]) -> list[str]:
 def _purchase_product_label(slots: Mapping[str, Any]) -> str:
     product_name = str(slots.get("product_name") or slots.get("tire_model") or slots.get("pending_product_name") or "").strip()
     tire_size = normalize_tire_size(str(slots.get("tire_size") or ""))
+    if product_name and tire_size and normalize_tire_size(product_name) == tire_size:
+        return product_name
     return " ".join(part for part in (product_name, tire_size) if part)
 
 
