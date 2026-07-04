@@ -1571,6 +1571,11 @@ def build_turn_contract(
             "product_search",
             "resolve_or_describe_product",
             "resolve_product_for_purchase_size_selection",
+            "order_create",
+            "order_creation",
+            "order_process",
+            "order_create_or_cart_add",
+            "cart_add",
         }
         and _has_comparison_product_scope(known_slots)
         and not known_slots.get("goods_no")

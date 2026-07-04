@@ -1659,6 +1659,7 @@ def resolve_purchase_order_flow(
     intent: str,
     known_slots: Mapping[str, Any] | None = None,
 ) -> FlowState | None:
+    intent = _purchase_flow_intent(intent=intent, known_slots=known_slots)
     if intent not in {"quick_order_reservation", "quick_order_reservation_continue", "quick_order_execute"}:
         return None
 
@@ -2131,6 +2132,8 @@ def _purchase_flow_intent(*, intent: str, known_slots: Mapping[str, Any] | None)
     normalized = str(intent or "").strip()
     if normalized in {"quick_order_reservation", "quick_order_reservation_continue", "quick_order_execute"}:
         return normalized
+    if normalized in {"order_create", "order_creation", "order_process", "order_create_or_cart_add", "cart_add"}:
+        return "quick_order_reservation"
     slots = dict(known_slots or {})
     pending_intent = str(slots.get("pending_intent") or slots.get("pendingIntent") or "").strip()
     goal_type = str(slots.get("goal_type") or slots.get("goalType") or "").strip()
