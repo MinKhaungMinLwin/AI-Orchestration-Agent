@@ -1621,7 +1621,7 @@ def test_coupon_howto_gate_stays_support_not_actionable_transaction(user_text: s
 
 def test_coupon_howto_gate_ignores_previous_product_recommendation_context() -> None:
     decision = decide_coupon_query_gate(
-        user_text="쿠폰 선물받았는데 등록 어디서 해?",
+        user_text="쿠폰 선물받았는데 어떻게 받아?",
         recent_context="직전 추천 상품: 다이나프로 HPX 265/50R20",
     )
 
