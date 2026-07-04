@@ -20,6 +20,37 @@ from services.tstation.policies.turn_contract import (
     violates_response_template_contract,
 )
 from services.tstation.policies.ui_action_policy import build_pure_inventory_stock_contract, finalize_ui_action_metadata_for_contract
+from services.tstation.policies.cross_domain_policy import plan_cross_domain_turn
+from services.tstation.policies.discovery_intent_policy import build_discovery_intent_frame, plan_discovery_tools
+from services.tstation.policies.discovery_response_policy import decide_discovery_response
+
+
+def _event_content_routing(execution_plan: list[str]) -> SimpleNamespace:
+    return SimpleNamespace(
+        domains=["DISCOVERY"],
+        execution_plan=execution_plan,
+        planner_confidence=0.9,
+        reason="",
+        user_behavior="",
+        flow="",
+        policy_intent="none",
+        claim_check_type="none",
+        complaint_scope="none",
+        agent_prompt_profile=SimpleNamespace(value="discovery_event_content"),
+    )
+
+
+def _discovery_event_contract(user_text: str, execution_plan: list[str]) -> TurnContract:
+    frame = build_discovery_intent_frame(user_text)
+    return build_turn_contract(
+        user_text=user_text,
+        intent_frame=frame,
+        tool_plan=plan_discovery_tools(frame),
+        response_decision=decide_discovery_response(frame),
+        cross_domain_plan=plan_cross_domain_turn(user_text),
+        routing_result=_event_content_routing(execution_plan),
+        context_state="active",
+    )
 
 
 def _purchase_slots(**overrides: object) -> dict[str, object]:
@@ -2023,3 +2054,54 @@ def test_final_ui_action_metadata_normalizes_and_validates_before_persistence_bo
     assert quick_replies[0]["ui_action"]["action_type"] == "enter_size"
     assert quick_replies[0]["ui_action"]["expected_contract_intent"] == "vehicle_tire_size_lookup"
     assert event["data"]["metadata"]["ui_action_validation"] == "vehicle_tire_size_lookup"
+
+
+@pytest.mark.parametrize(
+    "execution_plan",
+    (
+        ["discovery:benefit_event_list_lookup"],
+        ["discovery:product_event_lookup"],
+        ["discovery:discovery_event_content"],
+    ),
+)
+def test_product_anchored_event_lookup_resolves_relation_contract(execution_plan: list[str]) -> None:
+    # Direction X (product -> event): even when the router collapses the query into a
+    # generic benefit-list plan, the high-precision code frame relation sub_intent must
+    # win so the turn resolves product -> ptrn_cd -> applicable events, not a generic list.
+    contract = _discovery_event_contract("키너지에 적용되는 이벤트 있어?", execution_plan)
+
+    assert contract.intent == "product_event_lookup"
+    assert contract.preferred_tool == "search_product_summary_tool"
+    assert "get_product_applicable_events_tool" in contract.allowed_tools
+
+
+def test_product_anchored_deal_lookup_resolves_relation_contract() -> None:
+    contract = _discovery_event_contract("키너지 기획전 적용돼?", ["discovery:benefit_event_list_lookup"])
+
+    assert contract.intent == "product_deal_lookup"
+    assert contract.preferred_tool == "search_product_summary_tool"
+
+
+@pytest.mark.parametrize(
+    "execution_plan",
+    (
+        ["discovery:benefit_event_list_lookup"],
+        ["discovery:event_applicable_products_lookup"],
+    ),
+)
+def test_event_anchored_product_lookup_stays_relation_contract(execution_plan: list[str]) -> None:
+    # Direction Y (event -> product) must not regress: the relation contract stays even
+    # under a generic benefit-list router plan.
+    contract = _discovery_event_contract("반짝블랙딜에 적용 가능한 상품이 뭐야", execution_plan)
+
+    assert contract.intent == "event_applicable_products_lookup"
+    assert contract.preferred_tool == "get_events_tool"
+
+
+def test_generic_event_list_stays_benefit_list_contract() -> None:
+    # A genuine generic list request (no product/event anchor) must keep the benefit-list
+    # contract and must not be promoted into a relation lookup.
+    contract = _discovery_event_contract("지금 이벤트 뭐 있어?", ["discovery:benefit_event_list_lookup"])
+
+    assert contract.intent == "benefit_event_list_lookup"
+    assert contract.preferred_tool == "get_benefit_event_deal_list_tool"
