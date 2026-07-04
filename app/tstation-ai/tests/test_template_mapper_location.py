@@ -3832,6 +3832,30 @@ def test_stock_inventory_filters_location_to_available_shops() -> None:
     assert result["data"]["stores"][0]["todayInstall"] is True
 
 
+def test_inventory_only_stock_location_does_not_emit_booking_flow() -> None:
+    current_action_mode.set("stock_check")
+    current_pending_intent.set("stock")
+    current_goal_type.set("store_with_stock")
+    stores = [
+        {**_stub_store("F001", "T-Station In Stock"), "is_all_my_t": True},
+        _stub_store("F002", "T-Station Sold Out"),
+    ]
+
+    result = try_build_template(
+        [
+            _store_list_entry(
+                args={"region_code": "Seocho", "stock_check_mode": "inventory_only"},
+                stores=stores,
+            ),
+            _inventory_entry(today_ids=["F001"]),
+        ],
+        "Stores with inventory were found.",
+    )
+
+    assert result is not None
+    assert result["template"] == "location"
+    assert result["data"]["isBookingFlow"] is False
+
 def test_missing_store_order_policy_renders_nearby_store_candidates() -> None:
     """A purchase flow with nearby candidates should show store cards, not ask for product details again."""
     current_pending_intent.set("order")

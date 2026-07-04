@@ -51,7 +51,7 @@ backup/*
 docker/qdrant_storage/collections/
 /qdrant_storage/
 example/
-/docs/*
+# /docs/*
 !/docs/flow-transition-tables/
 !/docs/flow-transition-tables/*.md
 /docs/test-questions/

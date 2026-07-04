@@ -10,7 +10,7 @@ from services.tstation.common.tstation_be_client import (
     _success_response,
     _to_dict,
 )
-from langchain.tools import tool
+from langchain_core.tools import tool
 from common.tool_cache import tool_cache
 
 from services.tstation.agents.b_discovery_agent._car_no_audit import (

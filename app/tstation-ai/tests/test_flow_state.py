@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from services.tstation.policies.flow_state import (
     commit_flow_state,
     commit_purchase_flow_state,
+    evaluate_flow_progress,
+    FlowState,
     prune_dormant_flows,
     resume_dormant_flow,
     upsert_dormant_flow,
@@ -268,6 +270,55 @@ def test_active_purchase_schedule_change_marks_payment_stale() -> None:
     assert "payment_amount" in result.metadata["cleared_fields"]
 
 
+def test_purchase_progress_requires_price_after_schedule_before_preorder() -> None:
+    progress = evaluate_flow_progress(
+        FlowState(
+            flow_type="purchase",
+            status="active",
+            flow_step="show_schedule",
+            product={
+                "goods_no": "GSAME",
+                "product_name": "ë²¤íˆ¬ìŠ¤ S2 AS",
+                "tire_size": "245/45R19",
+                "ord_qty": 2,
+            },
+            store={"shop_id": "S1", "shop_name": "í‹°ìŠ¤í…Œì´ì…˜ ë¶„ë‹¹ì •ìžì "},
+            schedule={"requested_cal_day": "2026-07-01", "rsv_hour": "16:00"},
+            intent={"pending_intent": "order", "goal_type": "place_order"},
+        )
+    )
+
+    assert progress["current_step"] == "resolve_price"
+    assert progress["next_tool"] == "get_final_price_tool"
+    assert progress["allowed_tools"] == ["get_final_price_tool"]
+    assert progress["tool_args_patch"] == {"goods_no": "GSAME"}
+    assert "next_template" not in progress
+
+
+def test_purchase_progress_can_build_preorder_after_price_basis() -> None:
+    progress = evaluate_flow_progress(
+        FlowState(
+            flow_type="purchase",
+            status="active",
+            flow_step="show_schedule",
+            product={
+                "goods_no": "GSAME",
+                "product_name": "ë²¤íˆ¬ìŠ¤ S2 AS",
+                "tire_size": "245/45R19",
+                "ord_qty": 2,
+            },
+            store={"shop_id": "S1", "shop_name": "í‹°ìŠ¤í…Œì´ì…˜ ë¶„ë‹¹ì •ìžì "},
+            schedule={"requested_cal_day": "2026-07-01", "rsv_hour": "16:00"},
+            payment={"payment_amount": 308200, "price_basis": "cheapest_final_prc"},
+            intent={"pending_intent": "order", "goal_type": "place_order"},
+        )
+    )
+
+    assert progress["current_step"] == "build_preorder"
+    assert progress["next_template"] == "preOrder"
+    assert "next_tool" not in progress
+
+
 def test_active_purchase_to_store_search_pushes_purchase_to_dormant() -> None:
     result = commit_flow_state(
         {
@@ -368,6 +419,43 @@ def test_active_purchase_to_support_faq_preserves_support_intent() -> None:
     assert context["dormant_flows"][0]["context"]["flow_type"] == "commerce"
     assert context["dormant_flows"][0]["context"]["intent"]["sub_flow_type"] == "purchase"
     assert context["dormant_flows"][0]["context"]["product"]["goods_no"] == "GOLD"
+
+
+def test_weak_flat_purchase_metadata_does_not_become_dormant_purchase() -> None:
+    result = commit_flow_state(
+        {
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "product_name": "Ventus S2 AS",
+            "tire_size": "245/45R19",
+            "template_data": {
+                "template": "preOrder",
+                "metadata": {"pendingIntent": "order", "goalType": "place_order"},
+            },
+        },
+        {
+            "flow_type": "support",
+            "status": "active",
+            "flow_step": "answer_faq",
+            "intent": {
+                "pending_intent": "general_cancel_fee_policy",
+                "goal_type": "support_faq",
+                "policy_topic": "general_cancel_fee_policy",
+            },
+        },
+        source="flow_controller:current_turn_support",
+        flow_type="support",
+        flow_step="answer_faq",
+        status="active",
+    )
+
+    context = result.state.to_active_flow_context()
+    assert context["flow_type"] == "support"
+    assert context["intent"]["pending_intent"] == "general_cancel_fee_policy"
+    assert context["intent"]["goal_type"] == "support_faq"
+    assert "dormant_flows" not in context
+    assert "product" not in context
+    assert result.metadata["flow_state_conflicts"] == {}
 
 
 def test_active_purchase_to_service_maintenance_preserves_action_boundary() -> None:

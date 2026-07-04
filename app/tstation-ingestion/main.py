@@ -1,10 +1,10 @@
-import json
 import os
 import logging
 from pathlib import Path
 
 # Load env
 from dotenv import load_dotenv
+from faq_dataset import load_combined_faq_documents
 
 project_root = Path(__file__).parent.parent.parent
 env_file = project_root / ".env"
@@ -24,10 +24,7 @@ def load_documents():
     """Load and normalise FAQ data from the local data file."""
     from rag.document_processor import DocumentProcessor
 
-    data_path = BASE_DIR / "data" / "faq_data.json"
-    with open(data_path, "r", encoding="utf-8") as f:
-        raw_docs = json.load(f)
-
+    raw_docs = load_combined_faq_documents()
     documents = [DocumentProcessor._normalize_document(doc, idx) for idx, doc in enumerate(raw_docs)]
     logger.info(f"Loaded {len(documents)} documents")
     return documents
@@ -174,7 +171,7 @@ def main():
         )
         return
 
-    logger.info("Collection is empty — running bootstrap from faq_data.json")
+    logger.info("Collection is empty — running bootstrap from faq_data.json + local_faq.json")
 
     # 1. Load data
     documents = load_documents()

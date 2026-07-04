@@ -36,13 +36,19 @@ _FAST_PATH_TRANSACTION_RECOVERY_ALLOWED_TOOLS = frozenset({
     "get_store_list_tool",
     "search_stores_tool",
     "get_my_reservations_tool",
+    "get_orders_of_user_tool",
+    "get_order_status_tool",
 })
 _OWNED_RECORD_RECOVERY_TOOLS = frozenset({
     "get_my_reservations_tool",
+    "get_orders_of_user_tool",
+    "get_order_status_tool",
 })
 _OWNED_RECORD_RECOVERY_INTENTS = frozenset({
     "reservation_status_lookup",
     "reservation_store_info_lookup",
+    "order_cancel_status_lookup",
+    "order_arrival_status_lookup",
 })
 _TRANSACTION_STORE_PREVIEW_RECOVERY_INTENTS = frozenset({
     "quick_order_reservation",
@@ -61,6 +67,7 @@ _FLOW_PROGRESS_TRANSACTION_TOOLS = frozenset({
     "get_store_list_tool",
     "get_store_schedule_tool",
     "get_store_inventory_tool",
+    "get_final_price_tool",
 })
 _DIRECT_SUPPORT_FAQ_POLICY_INTENTS = frozenset({
     "card_installment_lookup",
@@ -684,6 +691,11 @@ def _contract_required_transaction_store_preview_tool_input(
         tool_input["quantity"] = tool_input["ord_qty"]
     if tool_input.get("store_name") in (None, "", [], {}) and tool_input.get("shop_name") not in (None, "", [], {}):
         tool_input["store_name"] = tool_input["shop_name"]
+    if tool_input.get("pending_intent") == "order" or tool_input.get("goal_type") == "place_order":
+        tool_input["pending_intent"] = "order"
+        tool_input["goal_type"] = "place_order"
+        tool_input["sub_flow_type"] = "purchase"
+        tool_input["stock_check_mode"] = "preview"
     return tool_input
 
 
@@ -714,6 +726,12 @@ def _contract_required_transaction_tool_input(
         if preferred_tool == "get_my_reservations_tool":
             tool_input.setdefault("sct_cd", "all")
             return tool_input, "turn_contract_required_owned_record_lookup", "예약 내역 조회 중..."
+        if preferred_tool == "get_orders_of_user_tool":
+            return tool_input, "turn_contract_required_owned_record_lookup", "주문 내역 조회 중..."
+        if preferred_tool == "get_order_status_tool":
+            if not tool_input.get("query_no"):
+                return None
+            return tool_input, "turn_contract_required_owned_record_lookup", "주문 현황 조회 중..."
         return None
     if preferred_tool and (
         preferred_tool in _FAST_PATH_TRANSACTION_RECOVERY_BLOCKLIST
@@ -757,6 +775,16 @@ def _contract_required_transaction_tool_input(
     tool_input = {str(key): value for key, value in tool_args_patch.items() if value not in (None, "", [], {})}
     if not tool_input:
         return None
+    if preferred_tool == "search_stores_tool":
+        if not (
+            tool_input.get("place_query")
+            or tool_input.get("region_code")
+            or tool_input.get("store_nm")
+            or tool_input.get("shop_name")
+            or tool_input.get("region")
+        ):
+            return None
+        return tool_input, "turn_contract_required_store_search", "매장 검색 중..."
     if preferred_tool == "get_store_list_tool":
         if not (tool_input.get("store_nm") or tool_input.get("shop_name") or tool_input.get("region")):
             return None
@@ -956,7 +984,9 @@ def _contract_required_tool_candidate(
     else:
         return None
 
-    if not preferred_tool or not tool_input:
+    if not preferred_tool:
+        return None
+    if not tool_input and preferred_tool not in {"get_orders_of_user_tool", "get_my_reservations_tool"}:
         return None
     if preferred_tool in _FAST_PATH_TRANSACTION_RECOVERY_BLOCKLIST and not (
         preferred_tool == "transaction_store_preview_tool"
@@ -1032,7 +1062,11 @@ def _contract_required_tool_candidate_from_flow_progress(
         return None
     next_tool = str(candidate.get("tool_name") or "").strip()
     source_domain = str(candidate.get("source_domain") or candidate_domain or domain)
-    if source_domain == PolicyDomain.TRANSACTION.value and next_tool in _FAST_PATH_TRANSACTION_RECOVERY_BLOCKLIST:
+    if (
+        source_domain == PolicyDomain.TRANSACTION.value
+        and next_tool in _FAST_PATH_TRANSACTION_RECOVERY_BLOCKLIST
+        and next_tool != "get_final_price_tool"
+    ):
         return None
     return _ContractRequiredToolCandidate(
         tool_name=next_tool,

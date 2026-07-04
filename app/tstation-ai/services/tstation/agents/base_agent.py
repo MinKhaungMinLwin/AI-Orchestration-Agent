@@ -2390,11 +2390,11 @@ class BaseAgent(ABC):
                     response_streamer=response_streamer,
                     answering_emitted=answering_emitted,
                 )
-            from services.tstation.chat import (
-                _DIRECT_SUPPORT_FAQ_POLICY_INTENTS,
-                _build_general_cancel_fee_policy_event,
-                _build_general_card_cancel_timing_policy_event,
-                _build_support_faq_policy_event,
+            from services.tstation.policies.support_response_policy import (
+                DIRECT_SUPPORT_FAQ_POLICY_INTENTS,
+                build_general_cancel_fee_policy_event,
+                build_general_card_cancel_timing_policy_event,
+                build_support_faq_policy_event,
             )
         except Exception:
             return None
@@ -2416,11 +2416,11 @@ class BaseAgent(ABC):
         )
 
         if contract_intent == "general_cancel_fee_policy":
-            code_event = _build_general_cancel_fee_policy_event(user_query, tool_result=tool_result)
+            code_event = build_general_cancel_fee_policy_event(user_query, tool_result=tool_result)
         elif contract_intent == "general_card_cancel_timing_policy":
-            code_event = _build_general_card_cancel_timing_policy_event(user_query, tool_result=tool_result)
-        elif contract_intent in _DIRECT_SUPPORT_FAQ_POLICY_INTENTS:
-            code_event = _build_support_faq_policy_event(
+            code_event = build_general_card_cancel_timing_policy_event(user_query, tool_result=tool_result)
+        elif contract_intent in DIRECT_SUPPORT_FAQ_POLICY_INTENTS:
+            code_event = build_support_faq_policy_event(
                 contract_intent,
                 user_query,
                 tool_result=tool_result,

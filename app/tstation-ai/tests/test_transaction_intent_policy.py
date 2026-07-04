@@ -228,6 +228,7 @@ def test_purchase_flow_frame_missing_slots_clears_when_booking_is_ready() -> Non
             "shop_name": "티스테이션 판교점",
             "requested_cal_day": "20260627",
             "rsv_hour": "0900",
+            "payment_amount": 420000,
             "pending_intent": "order",
             "goal_type": "place_order",
         },
@@ -361,6 +362,30 @@ def test_store_holiday_lookup_uses_store_detail_not_schedule() -> None:
     assert decision.metadata["response_shape_key"] == "store_holiday_lookup"
 
 
+def test_selected_store_hours_followup_uses_store_detail_not_schedule() -> None:
+    user_text = "첫 번째 매장 영업시간 알려줘"
+    frame = build_transaction_intent_frame(
+        user_text,
+        known_slots={
+            "shop_id": "S001",
+            "shop_name": "티스테이션 판교점",
+            "store_name": "티스테이션 판교점",
+            "pending_intent": "store_search",
+            "goal_type": "store_finder",
+        },
+    )
+    plan = plan_transaction_tools(frame)
+    decision = decide_transaction_response(intent=frame.intent, user_text=user_text, known_slots=dict(frame.known_slots))
+
+    assert frame.intent == "store_holiday_lookup"
+    assert frame.known_slots["store_name"] == "티스테이션 판교점"
+    assert plan.allowed_tools == ("get_store_list_tool", "get_store_detail_tool")
+    assert "get_store_schedule_tool" in plan.forbidden_tools
+    assert "transaction_store_preview_tool" in plan.forbidden_tools
+    assert "quick_order_tool" in plan.forbidden_tools
+    assert decision.metadata["response_shape_key"] == "store_holiday_lookup"
+
+
 def test_order_history_reorder_contract_uses_owned_order_tool_only() -> None:
     user_text = "지난번 주문한 타이어 다시 구매할래"
     frame = build_transaction_intent_frame(user_text, known_slots={})
@@ -412,6 +437,34 @@ def test_general_cancel_fee_policy_uses_faq_only_contract() -> None:
     assert "get_my_reservations_tool" in plan.forbidden_tools
     assert "get_orders_of_user_tool" in plan.forbidden_tools
     assert "get_order_status_tool" in plan.forbidden_tools
+    assert decision.metadata["response_shape_key"] == "general_cancel_fee_policy_summary"
+
+
+def test_general_cancel_fee_policy_interrupts_active_purchase_without_resuming_order_tools() -> None:
+    user_text = "\uc608\uc57d \ucde8\uc18c \uc218\uc218\ub8cc \uc788\uc5b4?"
+    frame = build_transaction_intent_frame(
+        user_text,
+        known_slots={
+            "goods_no": "G000000312679",
+            "tire_size": "245/45R18",
+            "ord_qty": 2,
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "tire_model": "Ventus S2 AS",
+        },
+    )
+    plan = plan_transaction_tools(frame)
+    decision = decide_transaction_response(intent=frame.intent, user_text=user_text, known_slots=dict(frame.known_slots))
+
+    assert frame.intent == "general_cancel_fee_policy"
+    assert frame.sub_intent == "cancel_fee_policy"
+    assert frame.known_slots["pending_intent"] == "general_cancel_fee_policy"
+    assert plan.allowed_tools == ("search_faq_hybrid_tool",)
+    assert plan.preferred_tool == "search_faq_hybrid_tool"
+    assert "transaction_store_preview_tool" not in plan.allowed_tools
+    assert "get_store_schedule_tool" in plan.forbidden_tools
+    assert "quick_order_tool" in plan.forbidden_tools
+    assert decision.template == TemplateName.QUICK_REPLY
     assert decision.metadata["response_shape_key"] == "general_cancel_fee_policy_summary"
 
 
@@ -484,6 +537,30 @@ def test_reservation_window_policy_overrides_stale_store_context() -> None:
     assert plan.allowed_tools == ("search_faq_hybrid_tool",)
     assert "get_store_schedule_tool" in plan.forbidden_tools
     assert plan.required_slots == ()
+
+
+def test_reservation_change_deadline_uses_window_policy_not_owned_lookup() -> None:
+    user_text = "예약 변경은 언제까지 가능해?"
+    frame = build_transaction_intent_frame(
+        user_text,
+        known_slots={
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "shop_name": "티스테이션 판교점",
+        },
+    )
+    plan = plan_transaction_tools(frame)
+    decision = decide_transaction_response(intent=frame.intent, user_text=user_text, known_slots=dict(frame.known_slots))
+
+    assert frame.intent == "reservation_window_policy"
+    assert frame.sub_intent == "reservation_window_policy"
+    assert frame.known_slots["goal_type"] == "support_policy_answer"
+    assert plan.allowed_tools == ("search_faq_hybrid_tool",)
+    assert plan.preferred_tool == "search_faq_hybrid_tool"
+    assert "get_orders_of_user_tool" in plan.forbidden_tools
+    assert "get_my_reservations_tool" in plan.forbidden_tools
+    assert "get_store_schedule_tool" in plan.forbidden_tools
+    assert decision.metadata["response_shape_key"] == "reservation_window_policy"
 
 
 def test_relative_reservation_date_keeps_store_schedule_lookup() -> None:
@@ -761,11 +838,12 @@ def test_product_store_purchase_without_size_blocks_store_transaction_tools() ->
     assert frame.known_slots["quantity"] == 2
     assert frame.known_slots["store_name"] == "판교점"
     assert frame.missing_slots == ("tire_size",)
-    assert plan.preferred_tool == "transaction_store_preview_tool"
+    assert plan.preferred_tool is None
+    assert "transaction_store_preview_tool" in plan.forbidden_tools
     assert "order_summary_with_null_required_fields" in plan.forbidden_tools
     assert decision.template == TemplateName.QUICK_REPLY
     assert decision.metadata["missing_slots"] == ("tire_size",)
-    assert decision.required_slots == ()
+    assert decision.required_slots == ("tire_size",)
 
 
 def test_plain_store_search_masks_stale_stock_slots() -> None:
@@ -788,6 +866,81 @@ def test_plain_store_search_masks_stale_stock_slots() -> None:
     assert frame.known_slots.get("store_name") is None
     assert frame.known_slots["region"] == "판교"
     assert plan.preferred_tool == "search_stores_tool"
+    assert "transaction_store_preview_tool" in plan.forbidden_tools
+
+
+def test_plain_store_search_does_not_reuse_unsized_purchase_context() -> None:
+    frame = build_transaction_intent_frame(
+        "\uac15\ub0a8 \ud2f0\uc2a4\ud14c\uc774\uc158 \ub9e4\uc7a5 \ucc3e\uc544\uc918",
+        known_slots={
+            "goods_no": "G000000310126",
+            "product_name": "Ventus S2 AS",
+            "ord_qty": 4,
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+    plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "store_search"
+    assert frame.known_slots["region"] == "\uac15\ub0a8"
+    assert frame.known_slots.get("goods_no") is None
+    assert plan.preferred_tool == "search_stores_tool"
+    assert "transaction_store_preview_tool" in plan.forbidden_tools
+
+
+def test_order_delivery_status_lookup_owns_order_tool_boundary() -> None:
+    frame = build_transaction_intent_frame("주문 배송 상태 알려줘")
+    plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "order_arrival_status_lookup"
+    assert frame.known_slots["owned_record_target"] == "order"
+    assert plan.preferred_tool == "get_orders_of_user_tool"
+    assert "get_order_status_tool" in plan.allowed_tools
+    assert "get_store_schedule_tool" in plan.forbidden_tools
+
+
+def test_order_delivery_status_lookup_overrides_stale_purchase_context() -> None:
+    frame = build_transaction_intent_frame(
+        "\uc8fc\ubb38 \ubc30\uc1a1 \uc0c1\ud0dc \uc54c\ub824\uc918",
+        known_slots={
+            "goods_no": "G000000309780",
+            "product_name": "Ventus S2 AS",
+            "ord_qty": 4,
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "availability_context": {"pending_order_context": {"goods_no": "G000000309780"}},
+        },
+    )
+    plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "order_arrival_status_lookup"
+    assert frame.known_slots["pending_intent"] == "order_arrival_status_lookup"
+    assert frame.known_slots["goal_type"] == "owned_record_lookup"
+    assert frame.known_slots["owned_record_target"] == "order"
+    assert frame.missing_slots == ()
+    assert plan.preferred_tool == "get_orders_of_user_tool"
+    assert "get_order_status_tool" in plan.allowed_tools
+    assert "transaction_store_preview_tool" in plan.forbidden_tools
+
+
+def test_order_cancel_status_lookup_without_stale_purchase_store_slot() -> None:
+    frame = build_transaction_intent_frame(
+        "취소한 주문 상태 알려줘",
+        known_slots={
+            "goods_no": "G000000310126",
+            "tire_size": "205/55R16",
+            "ord_qty": 4,
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+    plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "order_cancel_status_lookup"
+    assert frame.known_slots["goal_type"] == "order_cancel_status_lookup"
+    assert frame.missing_slots == ()
+    assert plan.preferred_tool == "get_orders_of_user_tool"
     assert "transaction_store_preview_tool" in plan.forbidden_tools
 
 
@@ -978,6 +1131,7 @@ def test_tc233_complete_order_request_prefers_schedule_preview_not_store_hours()
             "quantity": 4,
             "store_name": "티스테이션 오목천점",
             "shop_id": "T01234",
+            "payment_amount": 420000,
         },
     )
     plan = plan_transaction_tools(frame)
@@ -988,8 +1142,8 @@ def test_tc233_complete_order_request_prefers_schedule_preview_not_store_hours()
     )
 
     assert frame.intent == "quick_order_reservation"
-    assert frame.missing_slots == ()
-    assert plan.preferred_tool == "transaction_store_preview_tool"
+    assert frame.missing_slots == ("booking_datetime",)
+    assert plan.preferred_tool == "get_store_schedule_tool"
     assert "store_hours_instead_of_slots" in plan.forbidden_tools
     assert decision.template == TemplateName.DATE_PICK
     assert "store_hours_instead_of_slots" in decision.forbidden_behaviors
@@ -1011,6 +1165,7 @@ def test_datepick_selection_from_stock_preview_parent_order_builds_preorder() ->
             "region": "동탄",
             "requested_cal_day": "20260708",
             "rsv_hour": "15",
+            "payment_amount": 420000,
             "pending_intent": "stock",
             "goal_type": "store_with_stock",
             "stock_check_mode": "preview",
@@ -1040,3 +1195,30 @@ def test_datepick_selection_from_stock_preview_parent_order_builds_preorder() ->
     assert plan.metadata["flow_step"] == "build_preorder"
     assert "get_store_schedule_tool" in plan.forbidden_tools
     assert decision.template == TemplateName.PRE_ORDER
+
+
+def test_inventory_only_context_purchase_followup_promotes_to_order_preview() -> None:
+    frame = build_transaction_intent_frame(
+        "\uadf8\ub7fc \uc8fc\ubb38\ud560\ub798",
+        known_slots={
+            "goods_no": "G000000309780",
+            "product_name": "\ubca4\ud22c\uc2a4 S2 AS",
+            "tire_size": "205/55R16",
+            "ord_qty": 4,
+            "quantity": 4,
+            "region": "\uac15\ub0a8",
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+            "stock_check_mode": "inventory_only",
+        },
+    )
+    plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "quick_order_reservation"
+    assert frame.known_slots["pending_intent"] == "order"
+    assert frame.known_slots["goal_type"] == "place_order"
+    assert frame.known_slots["stock_check_mode"] == "preview"
+    assert plan.preferred_tool == "transaction_store_preview_tool"
+    assert plan.tool_args_patch["goods_no"] == "G000000309780"
+    assert plan.tool_args_patch["region"] == "\uac15\ub0a8"
+    assert "get_store_list_tool" not in plan.allowed_tools

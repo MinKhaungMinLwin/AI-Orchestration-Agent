@@ -2101,6 +2101,17 @@ def validate_ui_actions_for_contract(
     return True
 
 
+def finalize_ui_action_metadata_for_contract(
+    event: dict[str, Any],
+    *,
+    contract: Any | None = None,
+    source_intent: str | None = None,
+    action_context: UIActionContext | None = None,
+) -> bool:
+    normalized = normalize_ui_action_metadata(event, contract=contract, source_intent=source_intent)
+    validated = validate_ui_actions_for_contract(event, contract=contract, action_context=action_context)
+    return normalized or validated
+
 def chip_context_dict(chip_context: Any | None) -> dict[str, Any]:
     if isinstance(chip_context, dict):
         return chip_context
@@ -4404,6 +4415,26 @@ def _datepick_requested_cal_day_from_text(
     return None
 
 
+def _datepick_selected_hour(datepick_data: Mapping[str, Any]) -> str | None:
+    dates = datepick_data.get("dates")
+    selected_idx = datepick_data.get("selectedDate")
+    if not isinstance(dates, list) or not isinstance(selected_idx, int) or not 0 <= selected_idx < len(dates):
+        return None
+    selected = dates[selected_idx]
+    if not isinstance(selected, Mapping):
+        return None
+    available_times = selected.get("availableTimes")
+    if not isinstance(available_times, list) or not available_times:
+        return None
+    first_time = available_times[0]
+    if isinstance(first_time, int):
+        return f"{first_time:02d}"
+    first_time_text = str(first_time or "").strip()
+    if first_time_text.isdigit():
+        return f"{int(first_time_text):02d}"
+    return _reservation_hour_from_text(first_time_text)
+
+
 def datepick_slot_values_from_data(
     template_data: Mapping[str, Any] | None,
     *,
@@ -4461,6 +4492,8 @@ def datepick_slot_values_from_data(
     text = str(user_text or "").strip()
     rsv_hour = _reservation_hour_from_text(text)
     rsv_hour = rsv_hour or str(canonical_values.get("rsv_hour") or "").strip()
+    if not rsv_hour and text:
+        rsv_hour = _datepick_selected_hour(template_data)
     if rsv_hour:
         slot_values["rsv_hour"] = rsv_hour
 
@@ -5256,9 +5289,9 @@ def build_pure_inventory_stock_contract(
     ):
         return None
     tool_plan = ToolPlan(
-        allowed_tools=("get_store_inventory_tool", "get_logistics_inventory_tool", "get_store_schedule_tool"),
+        allowed_tools=("get_store_inventory_tool", "get_logistics_inventory_tool"),
         preferred_tool="get_store_inventory_tool",
-        forbidden_tools=("quick_order_tool",),
+        forbidden_tools=("get_store_schedule_tool", "quick_order_tool"),
         tool_args_patch={
             "goods_no": filtered_known_slots.get("goods_no"),
             "ord_qty": filtered_known_slots.get("ord_qty") or filtered_known_slots.get("quantity"),
@@ -5266,14 +5299,14 @@ def build_pure_inventory_stock_contract(
             "shop_name": filtered_known_slots.get("shop_name"),
             "stock_check_mode": "inventory_only",
         },
-        metadata={"response_intent": "stock_store_search", "flow_step": "show_schedule"},
+        metadata={"response_intent": "stock_store_search", "flow_step": "check_inventory"},
     )
     response_decision = ResponseDecision(
-        response_shape=ResponseShape.DATE_PICK,
-        template=TemplateName.DATE_PICK,
-        forbidden_behaviors=("preorder_for_pure_inventory_flow",),
-        assistant_guidance="단일 매장 오늘 장착 문의는 재고 tier를 확인한 뒤 가장 빠른 장착 가능 시간을 datepick으로 안내한다.",
-        metadata={"response_shape_key": "stock_store_schedule", "stock_check_mode": "inventory_only"},
+        response_shape=ResponseShape.LOCATION,
+        template=TemplateName.LOCATION,
+        forbidden_behaviors=("datepick_for_pure_inventory_flow", "preorder_for_pure_inventory_flow"),
+        assistant_guidance="단일 매장 재고 문의는 재고 확인 결과만 안내하고 예약 일정으로 확장하지 않는다.",
+        metadata={"response_shape_key": "stock_inventory_lookup", "stock_check_mode": "inventory_only"},
     )
     return build_turn_contract(
         user_text=user_text,
