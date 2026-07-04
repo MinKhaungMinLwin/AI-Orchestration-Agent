@@ -2502,9 +2502,15 @@ class BaseAgent(ABC):
         response_streamer: "_AssistantResponseStreamer | None",
         answering_emitted: bool,
     ) -> list[dict] | None:
+        required_slot_set = {str(slot) for slot in required_slots if str(slot)}
+        schedule_slot_collection = preferred_tool == "get_store_schedule_tool" and required_slot_set <= {
+            "booking_datetime",
+            "requested_cal_day",
+            "rsv_hour",
+        }
         if (
             not preferred_tool
-            or required_slots
+            or (required_slots and not schedule_slot_collection)
             or preferred_tool in forbidden_tools
             or (allowed_tools and preferred_tool not in allowed_tools)
         ):
@@ -2525,6 +2531,29 @@ class BaseAgent(ABC):
             for key, value in dict(getattr(tool_plan, "tool_args_patch", {}) or {}).items()
             if value not in (None, "", [], {})
         }
+        if preferred_tool == "get_store_schedule_tool":
+            flow_slots = metadata.get("flow_slots") if isinstance(metadata.get("flow_slots"), dict) else {}
+            shop_id = tool_input.get("shop_id") or flow_slots.get("shop_id")
+            mode = (
+                tool_input.get("mode")
+                or tool_input.get("schedule_mode")
+                or tool_input.get("inventory_mode")
+                or flow_slots.get("schedule_mode")
+                or flow_slots.get("inventory_mode")
+            )
+            has_order_context = bool(
+                tool_input.get("goods_no")
+                or flow_slots.get("goods_no")
+                or tool_input.get("ord_qty")
+                or flow_slots.get("ord_qty")
+            )
+            if shop_id and not mode:
+                mode = "in_store_logistics_combined" if has_order_context else "general"
+            tool_input = {
+                key: value
+                for key, value in {"shop_id": shop_id, "mode": mode}.items()
+                if value not in (None, "", [], {})
+            }
         if not tool_input:
             return None
 

@@ -2415,6 +2415,7 @@ def _store_candidate_flow_type(
     goal_type = str(meta.get("goalType") or meta.get("goal_type") or "").strip()
     stock_check_mode = str(meta.get("stockCheckMode") or meta.get("stock_check_mode") or "").strip()
     inventory_mode = str(meta.get("inventoryMode") or meta.get("inventory_mode") or "").strip()
+    raw_qty = meta.get("ordQty") if meta.get("ordQty") not in _EMPTY_VALUES else meta.get("ord_qty")
     contract_intent = str(event_contract_intent or "").strip()
     response_shape = str(event_response_shape or "").strip()
 
@@ -2429,6 +2430,16 @@ def _store_candidate_flow_type(
         or response_shape in _STOCK_STORE_RESPONSE_SHAPES
     ):
         return "stock"
+    if (
+        source_tool == "transaction_store_preview_tool"
+        and raw_qty not in _EMPTY_VALUES
+        and raw_qty not in (0, "0")
+        and any(
+            meta.get(key) not in _EMPTY_VALUES
+            for key in ("goodsNo", "goods_no", "productName", "product_name", "tireSize", "tire_size")
+        )
+    ):
+        return "purchase"
     if source_tool == "get_favorite_stores_tool" or contract_intent == "favorite_store_lookup":
         return "favorite_store"
     if contract_intent in {"store_schedule", "selected_store_schedule"} or response_shape in _STORE_SCHEDULE_RESPONSE_SHAPES:

@@ -1932,6 +1932,55 @@ def _row_tire_sizes(row: dict) -> list[str]:
                 sizes.append(size)
     return sizes
 
+def _normalize_search_label(value: object) -> str:
+    return re.sub(r"[^0-9A-Za-z가-힣]+", "", str(value or "").casefold())
+
+def _comparison_summary_metadata(
+    *,
+    requested_search_labels: list[str],
+    rows_by_name: Mapping[str, Mapping[str, object]],
+) -> dict[str, Any]:
+    if len(requested_search_labels) < 2:
+        return {}
+
+    product_names: list[str] = []
+    resolved_products: list[dict[str, Any]] = []
+    for requested_label in requested_search_labels[:4]:
+        matching_name = next(
+            (name for name in rows_by_name if _normalize_search_label(name) == _normalize_search_label(requested_label)),
+            None,
+        )
+        if matching_name is None:
+            continue
+        payload = rows_by_name.get(matching_name)
+        rows = payload.get("rows") if isinstance(payload, Mapping) else None
+        row = rows[0] if isinstance(rows, list) and rows and isinstance(rows[0], dict) else {}
+        product_name = matching_name or requested_label
+        product_names.append(product_name)
+        sizes = _row_tire_sizes(row) or _row_available_sizes(row)
+        resolved_products.append({
+            key: value
+            for key, value in {
+                "requestedName": requested_label,
+                "goodsNo": _get_str(row, "goods_no", "goodsNo"),
+                "productName": product_name,
+                "tireSize": sizes[0] if sizes else "",
+            }.items()
+            if value
+        })
+
+    if len(product_names) < 2:
+        return {}
+    return {
+        "response_shape_key": "metric_comparison_summary",
+        "productNames": product_names[:2],
+        "requestedProductNames": requested_search_labels[:2],
+        "resolvedProducts": resolved_products[:2],
+        "compareMetric": "detail",
+        "compare_metric": "detail",
+        "comparison_followup_intent": "none",
+    }
+
 
 def _tire_size_sort_key(size: str) -> tuple[int, int, int, str]:
     match = re.search(r"(\d{3})/(\d{2})R(\d{2})", size)
@@ -3754,6 +3803,10 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
             lines.append(f"- {label}: 상품 정보를 찾지 못했어요.")
 
     product_context = _single_sized_product_context(tool_data_list)
+    comparison_metadata = _comparison_summary_metadata(
+        requested_search_labels=requested_search_labels,
+        rows_by_name=rows_by_name,
+    )
     quick_replies = (
         _DISCOVERY_SIZED_PRODUCT_CHIPS
         if is_neutral_product_description and product_context
@@ -3772,7 +3825,11 @@ def _map_unsized_tire_summary(tool_data_list: list[dict], assistant_text: str) -
             "assistantResponse": _with_discovery_claim_check_prefix("\n".join(lines)),
             "quickReplies": quick_replies,
             "predictedDomains": predicted_domains,
-            **({"metadata": product_context} if product_context else {}),
+            **(
+                {"metadata": {**comparison_metadata, **product_context}}
+                if product_context or comparison_metadata
+                else {}
+            ),
         },
         "assistant_response_source": "code_mapper",
     }

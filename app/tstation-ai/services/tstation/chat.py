@@ -200,6 +200,8 @@ from services.tstation.policies.coupon_query_gate import (
 )
 from services.tstation.policies.contract_required_tool_candidate import (
     _contract_read_through_known_slots,
+    _contract_required_selected_store_schedule_tool_input,  # noqa: F401
+    _contract_required_stock_inventory_selected_store_tool_input,  # noqa: F401
     _contract_required_tool_candidate,  # noqa: F401
     _is_contract_required_selected_store_schedule,
     _is_contract_required_stock_inventory_selected_store,
@@ -12606,8 +12608,6 @@ def _comparison_query_metric_phrase(compare_metric: str) -> str:
 def _comparison_context_values_from_event(event: dict | None) -> dict[str, Any]:
     if not isinstance(event, dict):
         return {}
-    if str(event.get("assistant_response_source") or "") != "code_product_compare_resolver":
-        return {}
     data = event.get("data")
     if not isinstance(data, dict):
         return {}
@@ -12616,6 +12616,15 @@ def _comparison_context_values_from_event(event: dict | None) -> dict[str, Any]:
         return {}
     response_shape_key = str(metadata.get("response_shape_key") or "").strip()
     if response_shape_key not in {"metric_comparison_summary", "grade_comparison_summary"}:
+        return {}
+    assistant_response_source = str(event.get("assistant_response_source") or "")
+    contract_intent = str(
+        metadata.get("actual_contract_intent")
+        or metadata.get("contract_intent")
+        or event.get("contract_intent")
+        or ""
+    ).strip()
+    if assistant_response_source not in {"code_product_compare_resolver", "code_mapper"} and contract_intent != "product_comparison":
         return {}
     compare_metric = str(metadata.get("compareMetric") or metadata.get("compare_metric") or "detail").strip()
     if compare_metric not in _COMPARISON_METRICS:
@@ -12626,9 +12635,30 @@ def _comparison_context_values_from_event(event: dict | None) -> dict[str, Any]:
     names = [str(name).strip() for name in product_names if str(name or "").strip()][:2]
     if len(names) < 2:
         return {}
+    resolved_products = metadata.get("resolvedProducts") or metadata.get("resolved_products")
+    product_candidates: list[dict[str, Any]] = []
+    if isinstance(resolved_products, (list, tuple)):
+        for product in resolved_products[:4]:
+            if not isinstance(product, Mapping):
+                continue
+            product_name = str(product.get("productName") or product.get("product_name") or "").strip()
+            goods_no = str(product.get("goodsNo") or product.get("goods_no") or "").strip()
+            tire_size = normalize_tire_size(str(product.get("tireSize") or product.get("tire_size") or ""))
+            candidate = {
+                key: value
+                for key, value in {
+                    "product_name": product_name,
+                    "goods_no": goods_no,
+                    "tire_size": tire_size,
+                }.items()
+                if value
+            }
+            if candidate:
+                product_candidates.append(candidate)
     return {
         "comparison_context": {
             "product_names": names,
+            **({"product_candidates": product_candidates} if len(product_candidates) >= 2 else {}),
             "compare_metric": compare_metric,
             "response_shape_key": response_shape_key,
             "comparison_followup_intent": str(metadata.get("comparison_followup_intent") or "none"),
@@ -13662,11 +13692,13 @@ def _build_product_comparison_event(
             "requestedName": requested_product_names[0] or left_name,
             "goodsNo": str(left_row.get("goods_no") or "").strip(),
             "productName": left_name,
+            "tireSize": normalize_tire_size(str(left_row.get("tire_size_1") or left_row.get("tire_size") or "")),
         },
         {
             "requestedName": requested_product_names[1] or right_name,
             "goodsNo": str(right_row.get("goods_no") or "").strip(),
             "productName": right_name,
+            "tireSize": normalize_tire_size(str(right_row.get("tire_size_1") or right_row.get("tire_size") or "")),
         },
     ]
 
@@ -38500,6 +38532,7 @@ class TStationChatServiceV2:
                 if _augment_recent_product_set_ranking_metadata(event, user_query):
                     logger.info("[RECENT_PRODUCT_SET] augmented ranking response metadata")
                 # Buffer data event — yield after QC so assistantResponse is always verified
+                _stage_comparison_context_slots(event)
                 buffered_data_events.append(event)
                 continue
 

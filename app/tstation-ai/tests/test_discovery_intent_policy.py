@@ -577,7 +577,7 @@ def test_unsized_product_comparison_uses_product_summary_tool() -> None:
     assert frame.entities["product_names"] == ("Kinergy EX", "Ventus S2 AS")
     assert frame.entities["tire_size"] is None
     assert plan.preferred_tool == "search_product_summary_tool"
-    assert plan.tool_args_patch == {}
+    assert plan.tool_args_patch == {"keywords": ["Kinergy EX", "Ventus S2 AS"], "limit": 5, "brand_cd": "HK"}
     assert "search_product_tool" in plan.forbidden_tools
 
 
@@ -590,7 +590,11 @@ def test_tc021_product_mileage_compare_uses_metric_not_card_first() -> None:
     assert frame.entities["compare_metric"] == "mileage"
     assert frame.entities["product_names"] == ("Ventus air S", "Dynapro HPX", "Optimo", "Michelin CC2")
     assert plan.preferred_tool == "search_product_summary_tool"
-    assert plan.tool_args_patch == {}
+    assert plan.tool_args_patch == {
+        "keywords": ["Ventus air S", "Dynapro HPX", "Optimo", "Michelin CC2"],
+        "limit": 5,
+        "brand_cd": "MC",
+    }
     assert "search_product_tool" in plan.forbidden_tools
 
 
@@ -780,7 +784,7 @@ def test_tc026_latest_compare_uses_registration_metric() -> None:
     assert frame.entities["compare_metric"] == "release"
     assert frame.entities["product_names"] == ("Dynapro HPX", "Dynapro HP3")
     assert plan.preferred_tool == "search_product_summary_tool"
-    assert plan.tool_args_patch == {}
+    assert plan.tool_args_patch == {"keywords": ["Dynapro HPX", "Dynapro HP3"], "limit": 5, "brand_cd": "HK"}
     assert "search_product_tool" in plan.forbidden_tools
 
 
