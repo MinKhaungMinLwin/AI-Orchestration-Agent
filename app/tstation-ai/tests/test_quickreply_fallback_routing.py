@@ -16787,6 +16787,24 @@ def test_order_history_lookup_does_not_trigger_fresh_product_transaction_request
     assert _is_fresh_product_transaction_request(text, "order") is False
 
 
+@pytest.mark.parametrize("text", ["구매하기", "주문하기", "결제하기", "바로 구매", "바로 주문"])
+def test_cta_label_only_purchase_text_does_not_replace_product_identity(text: str) -> None:
+    slots = ConversationSlots(
+        goods_no="G000000319584",
+        tire_model="벤투스 에어S 245/45R19",
+        pending_product_name="벤투스 에어S 245/45R19",
+        tire_size="245/45R19",
+        pending_intent="order",
+        goal_type="place_order",
+    )
+
+    assert _is_fresh_product_transaction_request(text, "order") is False
+    assert _clear_stale_product_identity_for_fresh_transaction(slots, text, "order") is False
+    assert slots.goods_no == "G000000319584"
+    assert slots.tire_model == "벤투스 에어S 245/45R19"
+    assert slots.pending_product_name == "벤투스 에어S 245/45R19"
+
+
 def test_fresh_product_name_only_order_clears_stale_product_identity() -> None:
     slots = ConversationSlots(
         goods_no="G000000320151",

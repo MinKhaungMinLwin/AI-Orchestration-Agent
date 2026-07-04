@@ -14139,7 +14139,23 @@ _BARE_PRODUCT_SEARCH_BLOCK_RE = re.compile(
 _BARE_PRODUCT_SEARCH_ALLOW_RE = re.compile(r"\b(search|find|show)\b|검색|찾아|보여|알려", re.IGNORECASE)
 _SIZED_PRODUCT_SEARCH_SIZE_RE = re.compile(r"\b\d{3}\s*/?\s*\d{2}\s*R?\s*\d{2}\b", re.IGNORECASE)
 _PRODUCT_QUERY_QUANTITY_RE = re.compile(r"\b(\d{1,2})\s*(?:개|본|짝)\b")
-_SIZED_PRODUCT_KEYWORD_STOPWORDS = {"타이어", "상품", "제품", "검색", "찾아", "찾기", "보여", "알려", "추천"}
+_SIZED_PRODUCT_KEYWORD_STOPWORDS = {
+    "타이어",
+    "상품",
+    "제품",
+    "검색",
+    "찾아",
+    "찾기",
+    "보여",
+    "알려",
+    "추천",
+    "하기",
+    "진행",
+}
+_TRANSACTION_CTA_LABEL_ONLY_RE = re.compile(
+    r"^\s*(?:구매\s*하기|주문\s*하기|결제\s*하기|바로\s*구매|바로\s*주문)\s*$",
+    re.IGNORECASE,
+)
 _FOLLOWUP_PRODUCT_REFERENCE_RE = re.compile(
     r"두\s*개\s*다|두개다|둘\s*다|둘다|둘\s*모두|세\s*개\s*다|세개다|셋\s*다|셋다|셋\s*모두|"
     r"두\s*상품|세\s*상품|위\s*상품들?|이\s*상품들?|각각",
@@ -14215,6 +14231,8 @@ def _has_sized_product_name_hint(user_text: str) -> bool:
     slot clearing we need the opposite: detect that the current order turn names
     a new product even when it also says "구매".
     """
+    if _TRANSACTION_CTA_LABEL_ONLY_RE.fullmatch(str(user_text or "").strip()):
+        return False
     keyword = _fallback_sized_product_keyword(user_text)
     if not keyword:
         return False
@@ -14243,6 +14261,8 @@ def _transaction_product_name_candidate_from_text(user_text: str) -> str:
     """
     text = str(user_text or "").strip()
     if not text:
+        return ""
+    if _TRANSACTION_CTA_LABEL_ONLY_RE.fullmatch(text):
         return ""
     if not _SIZED_PRODUCT_TRANSACTION_HINT_STOP_RE.search(text):
         return ""
