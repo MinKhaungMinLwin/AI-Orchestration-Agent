@@ -418,6 +418,7 @@ from services.tstation.policies.delivery_policy_gate import (
     decide_delivery_policy_gate,
 )
 from services.tstation.policies.flow_controller import (
+    _purchase_fallback_quick_replies,
     build_purchase_flow_fallback_event,
     build_selected_store_confirmation_event,
     resolve_purchase_order_flow,
@@ -16132,6 +16133,45 @@ def test_purchase_flow_fallback_event_recomputes_to_ask_store_after_single_produ
     assert "245/45R19 2개 구매를 진행할 매장이나 지역을 알려주세요." in event["data"]["assistantResponse"]
     assert event["data"]["metadata"]["flowStep"] == "ask_store"
     assert event["data"]["metadata"]["goodsNo"] == "G000000319584"
+
+
+def test_purchase_flow_fallback_event_ask_quantity_uses_canonical_qty_chips() -> None:
+    # 수량 질문 fallback 은 항상 canonical ["1개","2개","3개","4개"] chip 을 노출해야 한다.
+    # (과거 ["2개","4개","수량 직접 입력"] 이 노출되던 버그 회귀 방지.)
+    event = build_purchase_flow_fallback_event(
+        intent="quick_order_reservation",
+        known_slots={
+            "goods_no": "G000000319584",
+            "product_name": "다이나프로 HL3",
+            "tire_size": "225/55R18",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+
+    assert event is not None
+    assert event["template"] == "quickReply"
+    assert event["data"]["metadata"]["flowStep"] == "ask_quantity"
+    assert _labels(event["data"]["quickReplies"]) == ["1개", "2개", "3개", "4개"]
+    assert all(chip["domain"] == "TRANSACTION" for chip in event["data"]["quickReplies"])
+    assert "수량 직접 입력" not in _labels(event["data"]["quickReplies"])
+    assert "수량" in event["data"]["assistantResponse"]
+
+
+def test_canonical_qty_chip_labels_slot_fill_as_quantity() -> None:
+    # 새로 노출된 chip("1개"/"3개") tap 시 다음 turn 에서 ord_qty 로 정확히 파싱되어야 한다.
+    assert ConversationSlots.extract_from_user_text("1개").ord_qty == 1
+    assert ConversationSlots.extract_from_user_text("3개").ord_qty == 3
+
+
+def test_purchase_fallback_quick_replies_ask_store_and_unknown_step_unchanged() -> None:
+    # ask_store branch 및 미지의 step 은 이번 변경의 영향을 받지 않아야 한다 (anti-collateral).
+    assert _labels(_purchase_fallback_quick_replies("ask_store")) == [
+        "내 주변 매장 찾기",
+        "지역/매장 입력",
+        "단골매장 보기",
+    ]
+    assert _purchase_fallback_quick_replies("unknown_step") == []
 
 
 def test_purchase_flow_fallback_event_clarifies_size_when_product_resolution_has_multiple_sizes() -> None:
