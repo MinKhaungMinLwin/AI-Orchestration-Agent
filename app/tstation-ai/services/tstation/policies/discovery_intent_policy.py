@@ -111,6 +111,11 @@ def _price_range_from_text(text: str) -> dict[str, int]:
     return {}
 
 
+def price_range_from_text(text: str) -> dict[str, int]:
+    """Public alias: parse min_price/max_price from user text (원 units)."""
+    return _price_range_from_text(text)
+
+
 def _is_general_tire_recommendation_request(text: str) -> bool:
     text = text or ""
     return (
@@ -1692,6 +1697,18 @@ def plan_discovery_tools(frame: IntentFrame) -> ToolPlan:
     for key in ("min_price", "max_price"):
         if entities.get(key) is not None:
             args[key] = entities[key]
+    # 현재 turn 에 가격 조건이 없으면 진행 중인 recommendation context 의
+    # 가격대를 상속한다 (scenario fallback 과 동일한 continuity 규칙).
+    if args.get("min_price") is None and args.get("max_price") is None:
+        context_for_price = entities.get("recommendation_context") or {}
+        for source_key in ("tool_args_patch", "expected_tool_args"):
+            source = context_for_price.get(source_key)
+            if not isinstance(source, Mapping):
+                continue
+            for key in ("min_price", "max_price"):
+                value = source.get(key)
+                if value is not None and args.get(key) is None:
+                    args[key] = value
     if entities.get("brand_cd"):
         args["brand_cd"] = entities["brand_cd"]
         if frame.intent == "product_recommendation":

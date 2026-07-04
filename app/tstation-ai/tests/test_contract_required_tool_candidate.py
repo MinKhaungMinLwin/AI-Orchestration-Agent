@@ -6,6 +6,41 @@ from services.tstation.policies.contract_required_tool_candidate import (
 from services.tstation.policies.turn_contract import TurnContract
 
 
+def test_sized_recommendation_candidate_carries_persisted_price_range() -> None:
+    # T5: size 후속 turn(Path B). recommendation_context.tool_args_patch 에 보존된
+    # 가격대가 tool_input 으로 그대로 전달되어야 한다 (scenario 와 함께).
+    recommendation_context = {
+        "scenario": "wet",
+        "recommendation_scenario": "wet",
+        "tool_args_patch": {"rcmd_type": "wet", "min_price": 200000, "max_price": 299999},
+    }
+    contract = TurnContract(
+        domain="discovery",
+        intent="product_recommendation",
+        sub_intent="vehicle_based_recommendation_refinement",
+        allowed_tools=("get_products_recommendations_tool",),
+        response_decision={
+            "template": "product",
+            "metadata": {"response_shape_key": "sized_scenario_recommendation_cards"},
+        },
+        known_slots={"tire_size": "245/45R19", "recommendation_context": recommendation_context},
+        context_state="active",
+    )
+
+    candidate = _contract_required_tool_candidate(
+        turn_contract=contract,
+        user_text="245/45R19로 추천해줘",
+        merged_slots=None,
+    )
+
+    assert candidate is not None
+    assert candidate.tool_name == "get_products_recommendations_tool"
+    assert candidate.tool_input.get("min_price") == 200000
+    assert candidate.tool_input.get("max_price") == 299999
+    assert candidate.tool_input.get("rcmd_type") == "wet"
+    assert candidate.tool_input.get("tire_size") == "245/45R19"
+
+
 def test_discovery_candidate_preserves_preferred_tool_and_args_patch() -> None:
     contract = TurnContract(
         domain="discovery",

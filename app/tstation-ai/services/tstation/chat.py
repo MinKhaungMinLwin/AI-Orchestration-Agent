@@ -57,6 +57,7 @@ from services.tstation.policies.discovery_intent_policy import (
     is_external_price_comparison_request,
     normalize_tire_size,
     plan_discovery_tools,
+    price_range_from_text,
 )
 from services.tstation.policies.discovery_response_policy import decide_discovery_response
 from services.tstation.policies.vehicle_category_catalog import match_vehicle_model_category
@@ -21743,6 +21744,13 @@ def _clear_stale_product_slots_for_new_recommendation(
         recommendation_context["tool_args_patch"] = dict(scenario.tool_args_patch)
     elif current_turn_tire_size:
         recommendation_context["scope"] = "same_fitment"
+    # 가격대 조건은 시나리오와 함께 구조화해 보존한다 — size 후속 turn 재실행 시
+    # tool_args_patch 전체가 재생되므로 min/max_price 도 함께 복원된다.
+    price_range = price_range_from_text(text)
+    if price_range:
+        tool_args_patch = dict(recommendation_context.get("tool_args_patch") or {})
+        tool_args_patch.update(price_range)
+        recommendation_context["tool_args_patch"] = tool_args_patch
     if tire_size_resolved_from_vehicle_selection:
         recommendation_context["fitment_source"] = "vehicle_selection"
 

@@ -27110,6 +27110,58 @@ def test_fresh_recommendation_turn_preserves_confirmed_sized_context() -> None:
     assert slots.payment_amount is None
 
 
+def test_fresh_recommendation_persists_price_range_with_scenario() -> None:
+    # T1: 시나리오 + 가격대 요청은 recommendation_context.tool_args_patch 에 함께 보존되어야
+    # size 후속 turn 에서 예산이 유실되지 않는다.
+    slots = ConversationSlots(goods_no="G000000309855")
+
+    _clear_stale_product_slots_for_new_recommendation(
+        slots,
+        user_text="빗길에 좋은 20만원대 타이어 추천해줘",
+        regex_slots=ConversationSlots(),
+    )
+
+    assert isinstance(slots.recommendation_context, RecommendationContext)
+    assert slots.recommendation_context.tool_args_patch == {
+        "rcmd_type": "wet",
+        "min_price": 200000,
+        "max_price": 299999,
+    }
+
+
+def test_fresh_recommendation_persists_price_range_without_scenario() -> None:
+    # T2: 시나리오 없이 순수 가격대 추천도 tool_args_patch 에 가격이 보존되어야 한다.
+    slots = ConversationSlots(goods_no="G000000309855")
+
+    _clear_stale_product_slots_for_new_recommendation(
+        slots,
+        user_text="20만원대 타이어 추천해줘",
+        regex_slots=ConversationSlots(),
+    )
+
+    assert isinstance(slots.recommendation_context, RecommendationContext)
+    assert slots.recommendation_context.tool_args_patch == {
+        "min_price": 200000,
+        "max_price": 299999,
+    }
+
+
+def test_fresh_recommendation_without_price_has_no_price_keys() -> None:
+    # T6: 가격이 없는 새 추천 turn 은 이전 가격을 남기지 않는다 (stale leakage 방지).
+    slots = ConversationSlots(goods_no="G000000309855")
+
+    _clear_stale_product_slots_for_new_recommendation(
+        slots,
+        user_text="겨울 타이어 추천해줘",
+        regex_slots=ConversationSlots(),
+    )
+
+    assert isinstance(slots.recommendation_context, RecommendationContext)
+    patch = slots.recommendation_context.tool_args_patch or {}
+    assert "min_price" not in patch
+    assert "max_price" not in patch
+
+
 def test_offroad_recommendation_preserves_common_size_and_contextualizes_scenario() -> None:
     slots = ConversationSlots(
         goods_no="G000000317682",
