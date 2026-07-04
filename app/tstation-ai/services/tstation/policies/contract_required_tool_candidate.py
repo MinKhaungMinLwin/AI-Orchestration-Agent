@@ -705,6 +705,54 @@ def _contract_required_transaction_store_preview_tool_input(
     return tool_input
 
 
+def _contract_required_schedule_final_price_tool_input(
+    turn_contract: TurnContract,
+    *,
+    merged_slots: ConversationSlots | None = None,
+) -> dict[str, Any] | None:
+    if str(turn_contract.domain or "").strip().lower() != PolicyDomain.TRANSACTION.value:
+        return None
+    intent = str(turn_contract.intent or "").strip()
+    if intent not in {"quick_order_reservation", "quick_order_reservation_slot_fill_schedule"}:
+        return None
+    if str(getattr(turn_contract, "action_mode", "") or "").strip() != "purchase_continuation":
+        return None
+    response_decision = turn_contract.response_decision or {}
+    response_metadata = response_decision.get("metadata") if isinstance(response_decision, Mapping) else {}
+    if not isinstance(response_metadata, Mapping):
+        response_metadata = {}
+    response_shape_key = str(response_metadata.get("response_shape_key") or "") if isinstance(response_metadata, Mapping) else ""
+    flow_step = str(getattr(turn_contract, "flow_step", "") or response_metadata.get("flow_step") or "").strip()
+    if response_shape_key != "reservation_price_lookup" or flow_step != "resolve_price":
+        return None
+
+    known_slots = dict(turn_contract.known_slots or {})
+    tool_args_patch = (
+        dict(turn_contract.tool_args_patch)
+        if isinstance(getattr(turn_contract, "tool_args_patch", None), Mapping)
+        else {}
+    )
+    goods_no = str(
+        tool_args_patch.get("goods_no")
+        or known_slots.get("goods_no")
+        or getattr(merged_slots, "goods_no", None)
+        or ""
+    ).strip()
+    quantity = known_slots.get("ord_qty") or known_slots.get("quantity") or getattr(merged_slots, "ord_qty", None)
+    shop_id = str(known_slots.get("shop_id") or getattr(merged_slots, "shop_id", None) or "").strip()
+    requested_cal_day = str(
+        known_slots.get("requested_cal_day") or getattr(merged_slots, "requested_cal_day", None) or ""
+    ).strip()
+    rsv_hour = str(known_slots.get("rsv_hour") or getattr(merged_slots, "rsv_hour", None) or "").strip()
+    try:
+        has_quantity = int(quantity or 0) > 0
+    except (TypeError, ValueError):
+        has_quantity = bool(quantity)
+    if not (goods_no and has_quantity and shop_id and requested_cal_day and rsv_hour):
+        return None
+    return {"goods_no": goods_no}
+
+
 def _contract_required_transaction_tool_input(
     *,
     turn_contract: TurnContract,
@@ -759,6 +807,14 @@ def _contract_required_transaction_tool_input(
             "turn_contract_benefit_applicable_products_query",
             "혜택 적용 상품 조회 중...",
         )
+    if preferred_tool == "get_final_price_tool":
+        final_price_input = _contract_required_schedule_final_price_tool_input(
+            turn_contract,
+            merged_slots=merged_slots,
+        )
+        if final_price_input:
+            return final_price_input, "turn_contract_schedule_final_price", "최종 가격 확인 중..."
+        return None
     if preferred_tool and (
         preferred_tool in _FAST_PATH_TRANSACTION_RECOVERY_BLOCKLIST
         or preferred_tool not in _FAST_PATH_TRANSACTION_RECOVERY_ALLOWED_TOOLS
@@ -1065,6 +1121,10 @@ def _contract_required_tool_candidate(
     if preferred_tool in _FAST_PATH_TRANSACTION_RECOVERY_BLOCKLIST and not (
         preferred_tool == "transaction_store_preview_tool"
         and _is_contract_required_transaction_store_preview(turn_contract, merged_slots=merged_slots)
+        or (
+            preferred_tool == "get_final_price_tool"
+            and tool_input_source == "turn_contract_schedule_final_price"
+        )
     ):
         return None
     return _ContractRequiredToolCandidate(
