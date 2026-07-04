@@ -531,7 +531,14 @@ def _has_confirmed_product_quantity_context(slots: dict[str, Any]) -> bool:
     return bool(slots.get("goods_no") and (slots.get("quantity") or slots.get("ord_qty")))
 
 def _has_purchase_ready_product_quantity_context(slots: dict[str, Any]) -> bool:
-    return bool(_has_confirmed_product_quantity_context(slots) and slots.get("tire_size"))
+    product_reference = (
+        slots.get("goods_no")
+        or slots.get("product_name")
+        or slots.get("tire_model")
+        or slots.get("pending_product_name")
+        or slots.get("pattern_name")
+    )
+    return bool(product_reference and slots.get("tire_size") and (slots.get("quantity") or slots.get("ord_qty")))
 
 
 def _has_comparison_product_scope(slots: Mapping[str, Any]) -> bool:

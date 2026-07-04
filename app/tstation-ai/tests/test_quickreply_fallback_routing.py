@@ -20872,6 +20872,34 @@ def test_purchase_store_text_slot_fill_continues_to_store_preview_not_store_deta
     assert "get_store_detail_tool" not in tool_plan.allowed_tools
 
 
+def test_purchase_store_text_slot_fill_preserves_product_context_without_goods_no() -> None:
+    frame = build_transaction_intent_frame(
+        "티스테이션 판교점",
+        known_slots={
+            "product_name": "벤투스 S2 AS",
+            "tire_size": "215/55R17",
+            "ord_qty": 4,
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "stock_check_mode": "preview",
+        },
+    )
+    tool_plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "quick_order_reservation"
+    assert frame.sub_intent == "reservation"
+    assert frame.known_slots["product_name"] == "벤투스 S2 AS"
+    assert frame.known_slots["tire_size"] == "215/55R17"
+    assert frame.known_slots["ord_qty"] == 4
+    assert frame.known_slots["pending_intent"] == "order"
+    assert frame.known_slots["goal_type"] == "place_order"
+    assert frame.known_slots["place_query"] == "티스테이션 판교점"
+    assert "product" not in frame.missing_slots
+    assert tool_plan.preferred_tool == "search_product_tool"
+    assert tool_plan.allowed_tools == ("search_product_tool",)
+    assert "get_store_detail_tool" not in tool_plan.allowed_tools
+
+
 def test_history_product_selection_state_promotes_purchase_slot_fill_and_rewrites_text() -> None:
     merged_slots = ConversationSlots(
         ord_qty=2,
