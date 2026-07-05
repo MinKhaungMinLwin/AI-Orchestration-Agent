@@ -445,7 +445,11 @@ class ConversationSlots(BaseModel):
             r"매장|샵|지점|티스테이션|더타이어샵|올마이T|올마이티|"
             r"가까운\s*곳|근처(?:에)?\s*(?:매장|샵|지점)|"
             r"내\s*주변(?:에)?(?:\s*매장|\s*샵|\s*지점)?|"
-            r"어디.*(?:매장|샵|지점)|(?:매장|샵|지점).*어디"
+            r"어디.*(?:매장|샵|지점)|(?:매장|샵|지점).*어디|"
+            # "근처에 있어?" style existence/proximity questions without the word
+            # "매장" itself (e.g. "<지역> 근처에 있어?"). The store context is
+            # implied by the ongoing store/region-fill flow, not restated here.
+            r"근처(?:에)?\s*있(?:어|나요?|을까요?)"
         ),
     ]
 
