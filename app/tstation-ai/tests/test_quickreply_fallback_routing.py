@@ -15926,6 +15926,113 @@ def test_flow_transition_records_discovery_selected_product_flow_state_without_e
     assert slots.goal_type is None
 
 
+def test_turn_contract_keeps_product_description_ui_selection_over_purchase_router() -> None:
+    routing = _routing_result(
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        execution_plan=[
+            "continue quick order reservation flow",
+            "ask for quantity and proceed when provided",
+        ],
+    )
+    contract = build_turn_contract(
+        user_text="벤투스 S2 AS 225/45R17",
+        intent_frame=IntentFrame(
+            domain=PolicyDomain.TRANSACTION,
+            intent="stock_store_search",
+            known_slots={
+                "goods_no": "G000000309783",
+                "product_name": "Ventus S2 AS",
+                "tire_model": "벤투스 S2 AS",
+                "pending_product_name": "벤투스 S2 AS",
+                "tire_size": "225/45R17",
+                "availability_context": {
+                    "pending_order_context": {
+                        "goods_no": "G000000309783",
+                        "product_name": "벤투스 S2 AS",
+                        "tire_model": "벤투스 S2 AS",
+                        "pending_product_name": "벤투스 S2 AS",
+                        "tire_size": "225/45R17",
+                    },
+                    "active_flow_context": {
+                        "flow_type": "commerce",
+                        "status": "active",
+                        "flow_step": "product_selected",
+                        "product": {
+                            "goods_no": "G000000309783",
+                            "product_name": "벤투스 S2 AS",
+                            "tire_model": "벤투스 S2 AS",
+                            "pending_product_name": "벤투스 S2 AS",
+                            "tire_size": "225/45R17",
+                        },
+                        "intent": {"sub_flow_type": "purchase"},
+                        "source": "flow_controller:select_product",
+                    },
+                },
+            },
+        ),
+        tool_plan=ToolPlan(
+            allowed_tools=(
+                "search_product_tool",
+                "get_store_list_tool",
+                "search_stores_tool",
+                "get_store_inventory_tool",
+                "get_logistics_inventory_tool",
+            ),
+            forbidden_tools=(
+                "transaction_store_preview_tool",
+                "get_store_schedule_tool",
+                "quick_order_tool",
+            ),
+        ),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.CLARIFY,
+            template=TemplateName.QUICK_REPLY,
+            metadata={"response_shape_key": "transaction_fallback"},
+        ),
+        routing_result=routing,
+        action_mode="booking_continuation",
+        context_state="active",
+        contract_seed={
+            "ui_action": {
+                "action_type": "select_product",
+                "selection_source": "ui_action",
+                "expected_contract_intent": "product_description",
+                "entity_type": "product",
+                "entity_id": "G000000309783",
+                "entity_label": "벤투스 S2 AS 225/45R17",
+                "cta_action": "select_product",
+                "slot_patch": {
+                    "goods_no": "G000000309783",
+                    "tire_size": "225/45R17",
+                    "tire_model": "벤투스 S2 AS",
+                    "product_name": "벤투스 S2 AS",
+                    "pending_product_name": "벤투스 S2 AS",
+                },
+            },
+            "user_text": "벤투스 S2 AS 225/45R17",
+        },
+        context_evidence={
+            "selected_product": {
+                "goods_no": "G000000309783",
+                "product_name": "벤투스 S2 AS",
+                "tire_size": "225/45R17",
+                "selection_source": "ui_action",
+            }
+        },
+    )
+
+    assert contract.domain == "discovery"
+    assert contract.intent == "product_description"
+    assert contract.action_mode == "booking_continuation"
+    assert "get_product_description_tool" in contract.allowed_tools
+    assert "search_product_summary_tool" in contract.allowed_tools
+    assert "transaction_store_preview_tool" in contract.forbidden_tools
+    assert "get_store_inventory_tool" in contract.forbidden_tools
+    assert "get_store_schedule_tool" in contract.forbidden_tools
+    assert "quick_order_tool" in contract.forbidden_tools
+    assert contract.response_decision["metadata"]["response_shape_key"] == "neutral_product_description"
+
+
 def test_flow_transition_records_quantity_selection_without_executing() -> None:
     slots = ConversationSlots(
         goods_no="G000000310126",

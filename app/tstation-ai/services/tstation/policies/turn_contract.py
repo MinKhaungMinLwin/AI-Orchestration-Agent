@@ -804,6 +804,16 @@ def _has_comparison_product_scope(known_slots: Mapping[str, Any]) -> bool:
         return len([candidate for candidate in product_candidates if isinstance(candidate, Mapping)]) >= 2
     return False
 
+def _should_lock_ui_product_description_contract(contract_seed: Mapping[str, Any] | None) -> bool:
+    if not isinstance(contract_seed, Mapping):
+        return False
+    ui_action = contract_seed.get("ui_action")
+    if not isinstance(ui_action, Mapping):
+        return False
+    action_type = str(ui_action.get("action_type") or ui_action.get("cta_action") or "").strip()
+    expected_intent = str(ui_action.get("expected_contract_intent") or "").strip()
+    return action_type == "select_product" and expected_intent == "product_description"
+
 def build_turn_contract(
     *,
     user_text: str = "",
@@ -850,6 +860,8 @@ def build_turn_contract(
     )
     if _normalize_maintenance_timing_intent(router_wins_intent) == "maintenance_timing_guidance":
         router_wins_intent = "maintenance_timing_guidance"
+    if _should_lock_ui_product_description_contract(contract_seed):
+        router_wins_intent = "product_description"
     code_domain = _domain_value(intent_frame.domain) if intent_frame is not None else _domain_from_routing(routing_result)
     code_intent = intent_frame.intent if intent_frame is not None else _intent_from_cross_domain(cross_domain_plan)
     transaction_boundary_frame = _transaction_policy_boundary_frame(user_text=user_text, merged_slots=merged_slots)
