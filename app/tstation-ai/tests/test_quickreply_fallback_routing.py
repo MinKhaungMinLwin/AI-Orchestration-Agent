@@ -29619,6 +29619,73 @@ def test_purchase_flow_state_quantity_change_marks_payment_stale() -> None:
     assert "price_basis" not in context
 
 
+def test_purchase_flow_state_quantity_change_clears_schedule_and_payment() -> None:
+    result = commit_purchase_flow_state(
+        {
+            "goods_no": "G000000310126",
+            "product_name": "Ventus S2 AS",
+            "tire_size": "245/45R19",
+            "ord_qty": 2,
+            "shop_id": "S1",
+            "shop_name": "T-Station Pangyo",
+            "requested_cal_day": "20260701",
+            "rsv_hour": "10",
+            "payment_amount": 308200,
+            "price_basis": "cheapest_final_prc",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        {"ord_qty": 4, "pending_intent": "order", "goal_type": "place_order"},
+        source="quantity_followup",
+    )
+
+    context = result.state.to_pending_order_context()
+    assert context["ord_qty"] == 4
+    assert context["goods_no"] == "G000000310126"
+    assert context["shop_id"] == "S1"
+    assert context["payment_amount_stale"] is True
+    assert "requested_cal_day" not in context
+    assert "rsv_hour" not in context
+    assert "payment_amount" not in context
+    assert "price_basis" not in context
+    assert "requested_cal_day" in result.metadata["cleared_fields"]
+    assert "rsv_hour" in result.metadata["cleared_fields"]
+
+
+def test_active_purchase_flow_state_quantity_change_clears_schedule_and_payment() -> None:
+    result = commit_flow_state(
+        {
+            "flow_type": "purchase",
+            "status": "active",
+            "flow_step": "schedule_selected",
+            "product": {
+                "goods_no": "G000000310126",
+                "product_name": "Ventus S2 AS",
+                "tire_size": "245/45R19",
+                "ord_qty": 2,
+            },
+            "store": {"shop_id": "S1", "shop_name": "T-Station Pangyo"},
+            "schedule": {"requested_cal_day": "20260701", "rsv_hour": "10"},
+            "payment": {"payment_amount": 308200, "price_basis": "cheapest_final_prc"},
+            "intent": {"pending_intent": "order", "goal_type": "place_order"},
+        },
+        {"ord_qty": 4, "pending_intent": "order", "goal_type": "place_order"},
+        source="quantity_followup",
+        flow_type="purchase",
+        status="active",
+    )
+
+    context = result.state.to_active_flow_context()
+    assert context["product"]["ord_qty"] == 4
+    assert context["product"]["goods_no"] == "G000000310126"
+    assert context["store"]["shop_id"] == "S1"
+    assert "schedule" not in context
+    assert context["payment"] == {"payment_amount_stale": True}
+    assert "requested_cal_day" in result.metadata["cleared_fields"]
+    assert "rsv_hour" in result.metadata["cleared_fields"]
+    assert "payment_amount" in result.metadata["cleared_fields"]
+
+
 def test_pending_order_context_preserves_existing_product_and_price_on_region_followup() -> None:
     slots = ConversationSlots(
         goods_no="G000000310126",
