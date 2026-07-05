@@ -7,6 +7,7 @@ import pytest
 from services.tstation.policies.flow_controller import resolve_purchase_order_flow, transition_current_flow
 from services.tstation.policies.flow_state import commit_flow_state, resume_dormant_flow, upsert_dormant_flow
 from services.tstation.policies.intent_frame import IntentFrame, PolicyDomain
+from services.tstation.policies.preorder_event_builder import build_preorder_event
 from services.tstation.policies.response_decision import ResponseDecision, ResponseShape, TemplateName, ToolPlan
 from services.tstation.policies.transaction_intent_policy import plan_transaction_tools
 from services.tstation.policies.transaction_response_policy import decide_transaction_response
@@ -109,6 +110,77 @@ def _purchase_flow_contract(
         response_decision=response_decision,
     )
     return contract, tool_plan, response_decision
+
+
+def test_purchase_discount_question_interrupts_schedule_slot_fill_contract() -> None:
+    user_text = "\ud560\uc778\uc740 \uc5b4\ub5bb\uac8c \uc801\uc6a9\ub41c\uac70\uc57c?"
+    slots = _purchase_slots(payment_amount=1059200, price_basis="payment_amount")
+    frame = IntentFrame(
+        domain=PolicyDomain.TRANSACTION,
+        intent="quick_order_reservation",
+        sub_intent="reservation",
+        known_slots=slots,
+        missing_slots=(),
+    )
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=frame,
+        tool_plan=ToolPlan(
+            allowed_tools=("get_store_schedule_tool",),
+            preferred_tool="get_store_schedule_tool",
+            forbidden_tools=("get_final_price_tool",),
+        ),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.DATE_PICK,
+            template=TemplateName.DATE_PICK,
+            metadata={"response_shape_key": "store_schedule"},
+        ),
+        routing_result=SimpleNamespace(
+            domains=["TRANSACTION"],
+            execution_plan=["transaction:store_schedule"],
+            planner_confidence=0.9,
+            policy_intent="none",
+            reason="",
+            flow="",
+            complaint_scope="none",
+        ),
+        merged_slots=slots,
+        context_state="resumed",
+        resume_source="expected_slot_fill:schedule",
+    )
+
+    assert contract.intent == "price_or_coupon_check"
+    assert contract.preferred_tool == "get_final_price_tool"
+    assert "get_store_schedule_tool" in contract.forbidden_tools
+    assert contract.response_decision["template"] == "quickReply"
+    assert contract.context_state == "dormant"
+    assert contract.resume_source == "none"
+
+
+def test_preorder_event_prefers_resolved_product_identity_over_raw_product_slot() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="quick_order_reservation",
+        response_decision={"template": "preOrder", "metadata": {"response_shape_key": "reservation_confirmation_ready"}},
+        action_mode="purchase_continuation",
+        flow_step="build_preorder",
+    )
+    event = build_preorder_event(
+        contract,
+        _purchase_slots(
+            product_name="Ventus S2 AS want coupon applied",
+            tire_model="Ventus S2 AS",
+            pending_product_name="Ventus S2 AS",
+            tire_size="275/35R20",
+            payment_amount=1059200,
+            price_basis="payment_amount",
+        ),
+    )
+
+    assert event is not None
+    assert event["data"]["metadata"]["productName"] == "Ventus S2 AS"
+    assert event["data"]["orderInfo"]["product"] == "Ventus S2 AS 275/35R20"
+    assert "coupon applied" not in event["data"]["orderInfo"]["product"]
 
 
 def _transaction_policy_contract(
