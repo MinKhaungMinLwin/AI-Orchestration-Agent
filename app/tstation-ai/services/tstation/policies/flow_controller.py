@@ -553,8 +553,24 @@ def _flow_intent_with_sub_type(flow_type: str, intent: Mapping[str, Any] | None 
     values = dict(intent or {})
     canonical, sub_flow_type = _flow_context_type(flow_type)
     if canonical == "commerce" and sub_flow_type:
-        values.setdefault("sub_flow_type", sub_flow_type)
+        values["sub_flow_type"] = sub_flow_type
     return values
+
+
+def _with_flow_state_progress(context: Mapping[str, Any]) -> dict[str, Any]:
+    flow_context = dict(context)
+    progress = evaluate_flow_progress(CanonicalFlowState.from_active_flow_context(flow_context))
+    if not progress:
+        return flow_context
+    current_step = str(progress.get("current_step") or "").strip()
+    if current_step:
+        flow_context["flow_step"] = current_step
+    for key, value in progress.items():
+        if value not in (None, "", [], {}):
+            flow_context[key] = value
+        elif key == "missing_slots":
+            flow_context[key] = []
+    return flow_context
 
 
 def _availability_context_from_slots(slots: Any | Mapping[str, Any] | None) -> dict[str, Any]:
@@ -953,6 +969,23 @@ def _selected_store_from_slots(
                 if selected.get(key) in (None, "", [], {}) and candidate.get(key) not in (None, "", [], {}):
                     selected[key] = candidate[key]
             break
+    for key in (
+        "source_tool",
+        "schedule_mode",
+        "schedule_tier",
+        "inventory_mode",
+        "stock_check_mode",
+        "pending_intent",
+        "goal_type",
+        "price_basis",
+        "price_source_tool",
+    ):
+        if selected.get(key) in (None, "", [], {}):
+            value = extracted_snapshot.get(key)
+            if value in (None, "", [], {}):
+                value = existing_snapshot.get(key)
+            if value not in (None, "", [], {}):
+                selected[key] = value
     return selected
 
 
@@ -1030,7 +1063,21 @@ def _selected_store_flow_type(
     existing_snapshot: Mapping[str, Any],
     selected_store: Mapping[str, Any],
 ) -> str:
-    if str(selected_store.get("source_tool") or "") == "transaction_store_preview_tool":
+    for values in (selected_store, existing_snapshot):
+        if (
+            str(values.get("source_tool") or "") == "transaction_store_preview_tool"
+            or str(values.get("price_source_tool") or "") == "transaction_store_preview_tool"
+        ):
+            return "purchase"
+        pending_intent = str(values.get("pending_intent") or "").strip()
+        goal_type = str(values.get("goal_type") or "").strip()
+        if pending_intent == "order" or goal_type == "place_order":
+            return "purchase"
+    active_payment = active_flow.get("payment") if isinstance(active_flow.get("payment"), Mapping) else {}
+    if (
+        str(active_flow.get("price_source_tool") or "") == "transaction_store_preview_tool"
+        or str(active_payment.get("price_source_tool") or "") == "transaction_store_preview_tool"
+    ):
         return "purchase"
     for values in (selected_store, existing_snapshot):
         pending_intent = str(values.get("pending_intent") or "").strip()
@@ -1339,24 +1386,12 @@ def _selected_store_flow_context(
     else:
         flow_context["intent"] = _flow_intent_with_sub_type(flow_type)
 
-    if flow_type == "stock" and product.get("goods_no") and product.get("ord_qty") and store.get("shop_id"):
-        flow_context.update({
-            "target_action": "get_store_inventory_tool",
-            "current_step": "check_inventory",
-            "missing_slots": [],
-            "next_tool": "get_store_inventory_tool",
-            "allowed_tools": ["get_store_inventory_tool"],
-            "tool_args_patch": {
-                "goods_list": [{"goodsNo": product["goods_no"], "qty": str(product["ord_qty"])}],
-                "shop_id_list": [{"shopId": store["shop_id"]}],
-            },
-            "progress_source": "flow_controller:store_slot_fill",
-        })
-    return {
+    compact_context = {
         key: value
         for key, value in flow_context.items()
         if value not in (None, "", {}) and (key == "missing_slots" or value != [])
     }
+    return _with_flow_state_progress(compact_context)
 
 
 def _matching_active_store_candidate(

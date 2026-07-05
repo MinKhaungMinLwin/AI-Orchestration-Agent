@@ -412,10 +412,11 @@ def test_purchase_store_ui_action_preserves_product_and_quantity_for_schedule() 
     assert transition.metadata["selected_store_resolved"] is True
     assert transition.flow_transition["reason"] == "selected_store_flow_state"
     active_context = transition.flow_transition["active_flow_context"]
-    assert active_context["flow_step"] == "store_selected"
+    assert active_context["flow_step"] == "resolve_schedule"
     assert active_context["product"]["goods_no"] == "G000000309783"
     assert active_context["product"]["ord_qty"] == 2
     assert active_context["store"]["shop_id"] == "F00777"
+    assert active_context["next_tool"] == "get_store_schedule_tool"
 
     selected_slots = selected_store_slots_from_active_flow_context(
         active_context,
@@ -426,6 +427,73 @@ def test_purchase_store_ui_action_preserves_product_and_quantity_for_schedule() 
     assert next_state is not None
     assert next_state.flow_step == "show_schedule"
     assert "store" not in next_state.missing_slots
+
+
+def test_store_selection_transition_uses_flow_state_progress_for_preview_purchase() -> None:
+    transition = transition_current_flow(
+        user_text="티스테이션 판교점",
+        router_evidence={
+            "domain": "transaction",
+            "intent": "stock_store_search",
+            "execution_plan": ["transaction:stock_store_search:slot_fill:store"],
+            "is_slot_fill": True,
+            "filled_slot": "store",
+        },
+        existing_slots=ConversationSlots(
+            goods_no="G000000310254",
+            ord_qty=4,
+            region="판교",
+            pending_intent="order",
+            goal_type="place_order",
+            stock_check_mode="preview",
+            price_basis="cheapest_final_prc",
+            price_source_tool="transaction_store_preview_tool",
+            availability_context={
+                "active_flow_context": {
+                    "flow_type": "commerce",
+                    "status": "active",
+                    "flow_step": "resolve_product",
+                    "product": {"goods_no": "G000000310254", "ord_qty": 4},
+                    "store": {"region": "판교"},
+                    "payment": {
+                        "price_basis": "cheapest_final_prc",
+                        "price_source_tool": "transaction_store_preview_tool",
+                    },
+                    "intent": {
+                        "sub_flow_type": "stock",
+                        "pending_intent": "stock",
+                        "goal_type": "store_with_stock",
+                        "stock_check_mode": "inventory_only",
+                    },
+                }
+            },
+        ),
+        extracted_slots=ConversationSlots(
+            shop_id="F00721",
+            shop_name="티스테이션 판교점",
+            source_tool="transaction_store_preview_tool",
+        ),
+        ui_action={
+            "action_type": "select_store",
+            "selection_source": "ui_action",
+            "slots": {
+                "shop_id": "F00721",
+                "shop_name": "티스테이션 판교점",
+                "source_tool": "transaction_store_preview_tool",
+            },
+        },
+        resume_source="validated_ui_action_slot_fill:store",
+    )
+
+    assert transition.flow_transition["reason"] == "selected_store_flow_state"
+    active_context = transition.flow_transition["active_flow_context"]
+    assert active_context["intent"]["sub_flow_type"] == "purchase"
+    assert active_context["intent"]["pending_intent"] == "order"
+    assert active_context["intent"]["goal_type"] == "place_order"
+    assert active_context["flow_step"] == "select_schedule"
+    assert active_context["next_template"] == "datepick"
+    assert "next_tool" not in active_context
+    assert active_context["progress_source"] == "flow_state_evaluator"
 
 
 def test_transition_current_flow_resumes_dormant_purchase_on_explicit_order_anchor() -> None:
