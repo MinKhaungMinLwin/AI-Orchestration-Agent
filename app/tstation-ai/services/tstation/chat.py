@@ -32757,7 +32757,13 @@ class TStationChatServiceV2:
 
             mapped_event = try_build_template(
                 [{"tool": "get_my_coupons_tool", "args": my_coupons_input, "data": my_coupons_result}],
-                _owned_coupon_lookup_summary_text(user_query, my_coupons_result) or "보유 쿠폰을 확인했어요.",
+                _owned_coupon_lookup_summary_text(
+                    user_query,
+                    my_coupons_result,
+                    coupon_hint=getattr(coupon_decision, "coupon_hint", None),
+                    product_name=getattr(coupon_decision, "product_name", None),
+                )
+                or "보유 쿠폰을 확인했어요.",
             )
             if mapped_event is not None:
                 mapped_event["source_domain"] = MultiAgentDomain.Domain.TRANSACTION.value

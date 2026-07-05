@@ -1463,8 +1463,13 @@ def build_turn_contract(
                 ),
             )
             preferred_tool = "search_benefit_applicable_products_tool"
-            query = str(known_slots.get("benefit_applicable_products_query") or "").strip()
+            query = str(
+                tool_args_patch.get("query")
+                or known_slots.get("benefit_applicable_products_query")
+                or ""
+            ).strip()
             if query:
+                known_slots["benefit_applicable_products_query"] = query
                 tool_args_patch = {"query": query, "lang_cd": "ko"}
     if intent == "maintenance_history_lookup":
         allowed_tools = _merge_tuple(allowed_tools, ("get_maintenance_history_tool",))

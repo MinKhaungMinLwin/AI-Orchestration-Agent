@@ -498,11 +498,19 @@ def _specific_owned_coupon_lookup_hint(user_text: str) -> str | None:
     return " ".join(terms[:3])
 
 
-def _owned_coupon_lookup_summary_text(user_text: str, tool_result: dict) -> str | None:
-    hint = _specific_owned_coupon_lookup_hint(user_text)
+def _owned_coupon_lookup_summary_text(
+    user_text: str,
+    tool_result: dict,
+    *,
+    coupon_hint: str | None = None,
+    product_name: str | None = None,
+) -> str | None:
+    hint = str(coupon_hint or "").strip() or _specific_owned_coupon_lookup_hint(user_text)
+    product = str(product_name or "").strip()
     if not hint:
         return None
-    matched_coupon = _find_coupon_from_owned_coupons(f"{hint} 쿠폰", tool_result)
+    lookup_text = " ".join(part for part in (hint, product, "쿠폰") if part)
+    matched_coupon = _find_coupon_from_owned_coupons(lookup_text, tool_result)
     if matched_coupon:
         coupon_name = str(
             matched_coupon.get("cpn_nm") or matched_coupon.get("disp_nm") or matched_coupon.get("cpn_d_nm") or hint
@@ -1165,8 +1173,19 @@ def is_specific_owned_coupon_lookup_query(user_text: str) -> bool:
 def specific_owned_coupon_lookup_hint(user_text: str) -> str | None:
     return _specific_owned_coupon_lookup_hint(user_text)
 
-def owned_coupon_lookup_summary_text(user_text: str, tool_result: dict) -> str | None:
-    return _owned_coupon_lookup_summary_text(user_text, tool_result)
+def owned_coupon_lookup_summary_text(
+    user_text: str,
+    tool_result: dict,
+    *,
+    coupon_hint: str | None = None,
+    product_name: str | None = None,
+) -> str | None:
+    return _owned_coupon_lookup_summary_text(
+        user_text,
+        tool_result,
+        coupon_hint=coupon_hint,
+        product_name=product_name,
+    )
 
 def build_owned_coupon_best_discount_event(tool_result: dict) -> dict:
     return _build_owned_coupon_best_discount_event(tool_result)

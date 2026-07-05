@@ -353,6 +353,34 @@ def extract_benefit_applicable_products_query(text: str | None) -> str:
     ).strip()
     query = re.sub(r"(?:상품|타이어|제품)(?:은|는|이|가|을|를)?\s*(?:뭐|무엇|어떤).*$", "", query).strip()
     return query
+
+
+_BENEFIT_APPLICABLE_PRODUCTS_FOLLOWUP_STOPWORDS = {
+    "이건",
+    "그건",
+    "저건",
+    "이거",
+    "그거",
+    "저거",
+    "해당",
+    "다른거",
+    "다른",
+    "상품",
+    "타이어",
+    "제품",
+}
+
+
+def _extract_benefit_applicable_products_followup_query(text: str | None) -> str:
+    normalized = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not normalized or len(normalized) > 40:
+        return ""
+    query = re.sub(r"[?.!~。！？]+$", "", normalized).strip()
+    query = re.sub(r"(?:은|는|이|가|도|은요|는요|이라면|이면|라면)\s*$", "", query).strip()
+    normalized_query = re.sub(r"[^0-9a-zA-Z가-힣]+", "", query).lower()
+    if len(normalized_query) < 2 or normalized_query in _BENEFIT_APPLICABLE_PRODUCTS_FOLLOWUP_STOPWORDS:
+        return ""
+    return query
 _BEST_SELLER_DAY_RE = re.compile(r"오늘|금일|하루", re.IGNORECASE)
 _BEST_SELLER_WEEK_RE = re.compile(r"이번\s*주|금주|이번주|주간", re.IGNORECASE)
 _BEST_SELLER_MONTH_RE = re.compile(r"이번\s*달|이달|월별|월간", re.IGNORECASE)
@@ -1136,11 +1164,22 @@ def build_discovery_intent_frame(
         entities["default_benefit"] = True
     elif is_deal_list_request(text):
         entities["deal_list_only"] = True
-    if _EVENT_APPLICABLE_PRODUCTS_RE.search(text) and not _EVENT_APPLICABLE_PRODUCTS_EXCLUDE_RE.search(text):
+    has_event_applicable_products_anchor = (
+        _EVENT_APPLICABLE_PRODUCTS_RE.search(text)
+        and not _EVENT_APPLICABLE_PRODUCTS_EXCLUDE_RE.search(text)
+    )
+    current_benefit_query = extract_benefit_applicable_products_query(text) if has_event_applicable_products_anchor else ""
+    followup_benefit_query = (
+        _extract_benefit_applicable_products_followup_query(text)
+        if str(slots.get("benefit_applicable_products_query") or "").strip()
+        else ""
+    )
+    if has_event_applicable_products_anchor or followup_benefit_query:
         entities["event_applicable_products_lookup"] = True
         entities["benefit_applicable_products_query"] = (
-            str(slots.get("benefit_applicable_products_query") or "").strip()
-            or extract_benefit_applicable_products_query(text)
+            current_benefit_query
+            or followup_benefit_query
+            or str(slots.get("benefit_applicable_products_query") or "").strip()
         )
     if (products or product_families) and _PRODUCT_BENEFIT_LOOKUP_RE.search(text) and not _BENEFIT_STACKING_RE.search(text):
         if _PRODUCT_EVENT_LOOKUP_RE.search(text):

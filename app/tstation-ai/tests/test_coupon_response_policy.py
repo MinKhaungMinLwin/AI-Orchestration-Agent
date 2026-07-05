@@ -14,6 +14,7 @@ from services.tstation.policies.coupon_response_policy import (
     is_owned_coupon_best_discount_query,
     is_owned_coupon_expiry_lookup_query,
     merge_coupon_applicable_products_results,
+    owned_coupon_lookup_summary_text,
     specific_owned_coupon_lookup_hint,
 )
 
@@ -74,6 +75,30 @@ def test_specific_owned_coupon_matching_handles_ambiguous_names() -> None:
     assert matched is None
     assert [row["cpn_no"] for row in ambiguous] == ["C000000001", "C000000002"]
     assert specific_owned_coupon_lookup_hint("혹시 패밀리쿠폰 있어?") == "패밀리"
+
+
+def test_owned_coupon_lookup_uses_gate_coupon_hint_and_product_name() -> None:
+    summary = owned_coupon_lookup_summary_text(
+        "1월 키너지EX 특가전 쿠폰은?",
+        {
+            "status": "success",
+            "data": {
+                "coupons": [
+                    {
+                        "cpn_no": "C001",
+                        "cpn_nm": "[1월 키너지EX 특가전] 한국타이어 30% 할인쿠폰",
+                        "rt_amt_val": 30,
+                    },
+                    {"cpn_no": "C002", "cpn_nm": "DRIVE X 월디페 참여고객 쿠폰", "rt_amt_val": 30},
+                ],
+            },
+        },
+        coupon_hint="1월 특가전 쿠폰",
+        product_name="키너지EX",
+    )
+
+    assert summary is not None
+    assert "‘[1월 키너지EX 특가전] 한국타이어 30% 할인쿠폰’ 관련 쿠폰을 보유 중이에요" in summary
 
 
 def test_coupon_channel_policy_store_only_does_not_offer_price_cta() -> None:

@@ -2386,6 +2386,31 @@ def test_router_followup_applicable_products_tokens_route_to_benefit_products(pl
     assert contract.preferred_tool == "search_benefit_applicable_products_tool"
 
 
+def test_event_applicable_products_followup_replaces_previous_benefit_query() -> None:
+    frame = build_discovery_intent_frame(
+        "B기획전은?",
+        known_slots={"benefit_applicable_products_query": "A기획전"},
+    )
+    tool_plan = plan_discovery_tools(frame)
+    contract = build_turn_contract(
+        user_text="B기획전은?",
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=decide_discovery_response(frame),
+        cross_domain_plan=plan_cross_domain_turn(
+            "B기획전은?",
+            known_slots={"benefit_applicable_products_query": "A기획전"},
+        ),
+        routing_result=_event_content_routing(["discovery:event_applicable_products_lookup"]),
+        context_state="active",
+    )
+
+    assert frame.sub_intent == "event_applicable_products_lookup"
+    assert frame.entities["benefit_applicable_products_query"] == "B기획전"
+    assert tool_plan.tool_args_patch["query"] == "B기획전"
+    assert contract.tool_args_patch["query"] == "B기획전"
+
+
 def test_coupon_applicable_products_intent_not_swallowed_by_benefit_normalization() -> None:
     # Boundary: coupon-specific applicable-products must keep its own intent and must not be
     # collapsed into the benefit/event family by the Task 5 normalization rule.
