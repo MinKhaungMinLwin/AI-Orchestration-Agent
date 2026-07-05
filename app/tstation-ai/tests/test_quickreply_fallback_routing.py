@@ -31873,6 +31873,29 @@ def test_explicit_qna_router_alias_builds_human_escalation_contract(execution_in
     assert "search_faq_hybrid_tool" in contract.forbidden_tools
 
 
+@pytest.mark.parametrize("user_text", ["1:1 문의하기", "1:1 문의", "상담사 연결", "고객 상담 연결"])
+def test_explicit_qna_text_builds_human_escalation_contract_without_router_alias(user_text: str) -> None:
+    contract = build_turn_contract(
+        user_text=user_text,
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.LEADING],
+            execution_plan=["ask_for_clarification"],
+            policy_intent="none",
+        ),
+        action_mode="info_only",
+        previous_pending_intent="order",
+        previous_goal_type="place_order",
+    )
+
+    assert contract.domain == "support"
+    assert contract.intent == "human_escalation"
+    assert contract.allowed_tools == ("transfer_to_qna_tool",)
+    assert contract.preferred_tool == "transfer_to_qna_tool"
+    assert contract.response_decision["template"] == "qnaComplete"
+    assert contract.response_decision["metadata"]["response_shape_key"] == "human_escalation"
+    assert "search_faq_hybrid_tool" in contract.forbidden_tools
+
+
 def test_legal_action_complaint_routes_to_support_scope_without_legal_steps() -> None:
     user_text = "티스테이션 정자점 고소하는 법 알려줘"
 

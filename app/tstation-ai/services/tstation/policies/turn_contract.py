@@ -389,6 +389,12 @@ _REFERENCE_GUARD_EXEMPT_INTENTS = frozenset({
     "store_visit_advisory",
 })
 _SUPPORT_ANSWER_ACTION_MODES = frozenset({"support_policy_answer", "info_only"})
+_EXPLICIT_HUMAN_ESCALATION_TEXT_RE = re.compile(
+    r"(?:1\s*:\s*1|1\s*대\s*1|일\s*대\s*일)\s*(?:문의|상담)(?:\s*(?:하기|연결|접수|신청|하고\s*싶|해\s*줘|해주세요))?"
+    r"|(?:상담(?:원|사)?|사람|직원|고객\s*상담)\s*(?:연결|접수|문의|상담)(?:해\s*줘|해주세요|하고\s*싶)?"
+    r"|(?:문의|상담)\s*(?:접수|연결)(?:해\s*줘|해주세요|하고\s*싶)?",
+    re.IGNORECASE,
+)
 _REFERENCE_GUARD_EXEMPT_DISCOVERY_PLAN_TOKENS = frozenset({
     "general_recommendation",
     "condition_recommendation",
@@ -5268,6 +5274,8 @@ def _router_wins_information_intent(
     response_decision: ResponseDecision | None = None,
     action_mode: str = "",
 ) -> str | None:
+    if _is_explicit_human_escalation_text(user_text):
+        return "human_escalation"
     comparison_intent = _comparison_router_wins_intent(
         routing_result=routing_result,
         intent_frame=intent_frame,
@@ -5298,6 +5306,13 @@ def _router_wins_information_intent(
     if complaint_scope == "tstation_service_complaint":
         return "tstation_service_complaint"
     return None
+
+
+def _is_explicit_human_escalation_text(user_text: str | None) -> bool:
+    text = re.sub(r"\s+", " ", str(user_text or "").strip())
+    if not text:
+        return False
+    return _EXPLICIT_HUMAN_ESCALATION_TEXT_RE.search(text) is not None
 
 
 def _router_wins_current_turn_intent(
