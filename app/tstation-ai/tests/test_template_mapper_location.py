@@ -3164,6 +3164,65 @@ def test_preview_logistics_datepick_without_explicit_today_service_uses_mode_cop
     assert result["data"]["assistantResponse"] == "물류 배송 후 장착 가능한 일정입니다. 예약하려는 날짜와 시간을 선택해 주세요."
 
 
+def test_purchase_store_selection_preview_maps_to_datepick_after_location_decision() -> None:
+    """Store selection in an active purchase flow should advance to schedule selection."""
+    current_action_mode.set("purchase_continuation")
+    current_pending_intent.set("order")
+    current_goal_type.set("place_order")
+    current_user_text.set("티스테이션 대화점")
+    current_transaction_response_decision.set(
+        ResponseDecision(
+            response_shape=ResponseShape.LOCATION,
+            template=TemplateName.LOCATION,
+            metadata={
+                "response_shape_key": "reservation_store_candidates",
+                "flow_step": "show_store_candidates",
+            },
+        )
+    )
+    entry = _preview_entry_with_schedule(
+        args={
+            "goods_no": "G000000318349",
+            "tire_size": "245/45R19",
+            "ord_qty": 2,
+            "shop_name": "대화점",
+            "store_name": "대화점",
+            "store_name_candidate": "티스테이션 대화점",
+            "place_query": "티스테이션 대화점",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "sub_flow_type": "purchase",
+            "stock_check_mode": "preview",
+        },
+        stores=[
+            _stub_store("F09192", "티스테이션 대화점"),
+            _stub_store("F00499", "티스테이션 덕이점"),
+        ],
+        schedule_stores=[{
+            "shop_id": "F09192",
+            "mode": "logistics_only",
+            "shop_nm": "티스테이션 대화점",
+            "is_installable": True,
+            "is_tna_delivery": True,
+            "slots": [
+                {"cal_day": "20260709", "tm": "10"},
+                {"cal_day": "20260709", "tm": "11"},
+                {"cal_day": "20260710", "tm": "13"},
+            ],
+        }],
+    )
+    entry["data"]["data"]["schedule"]["tier"] = "logistics_only"
+
+    result = try_build_template([entry], "물류 배송 후 장착 가능한 매장 2곳입니다. 원하시는 매장을 선택해 주세요.")
+
+    assert result is not None
+    assert result["template"] == "datepick"
+    assert result["assistant_response_source"] == "code_mapper_schedule_mode"
+    assert result["data"]["metadata"]["shopId"] == "F09192"
+    assert result["data"]["metadata"]["shopName"] == "티스테이션 대화점"
+    assert result["data"]["assistantResponse"] == "물류 배송 후 장착 가능한 일정입니다. 예약하려는 날짜와 시간을 선택해 주세요."
+
+
 def test_other_store_request_after_preview_schedule_does_not_emit_datepick() -> None:
     """User asked for alternative stores, not another schedule picker for the same store."""
     current_pending_intent.set("order")

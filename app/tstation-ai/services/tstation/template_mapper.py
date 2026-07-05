@@ -758,6 +758,40 @@ def _preview_schedule_stores_by_shop_id(raw: dict) -> dict[str, dict]:
     return stores_by_shop_id
 
 
+def _is_purchase_store_selection_preview(args: Mapping[str, Any], raw: dict) -> bool:
+    """True when preview output already advances a purchase flow past store selection."""
+    order_flow = (
+        current_pending_intent.get() == "order"
+        or current_goal_type.get() == "place_order"
+        or _get_str(dict(args), "pending_intent") == "order"
+        or _get_str(dict(args), "goal_type") == "place_order"
+        or _get_str(dict(args), "sub_flow_type") == "purchase"
+    )
+    if not order_flow:
+        return False
+    if not (_get_str(dict(args), "goods_no") and args.get("ord_qty")):
+        return False
+    has_store_selection = bool(
+        _get_str(
+            dict(args),
+            "shop_id",
+            "store_nm",
+            "shop_name",
+            "store_name",
+            "store_name_candidate",
+            "place_query",
+        )
+    )
+    if not has_store_selection:
+        return False
+    schedule = raw.get("schedule") if isinstance(raw.get("schedule"), dict) else {}
+    stores = schedule.get("stores") if isinstance(schedule.get("stores"), list) else []
+    if len(stores) != 1 or not isinstance(stores[0], dict):
+        return False
+    slots = stores[0].get("slots")
+    return isinstance(slots, list) and bool(slots)
+
+
 def _preview_location_metadata(
     *,
     entry: dict,
@@ -6061,10 +6095,19 @@ def _map_datepick_from_preview(tool_data_list: list[dict], assistant_text: str) 
     decision_metadata = transaction_decision.metadata if transaction_decision is not None else {}
     response_shape_key = str(decision_metadata.get("response_shape_key") or "").strip()
     flow_step = str(decision_metadata.get("flow_step") or "").strip()
+    has_purchase_store_selection_preview = False
+    for entry in reversed(_find_entries(tool_data_list, "transaction_store_preview_tool")):
+        args = entry.get("args") if isinstance(entry.get("args"), dict) else entry.get("input")
+        args = args if isinstance(args, dict) else {}
+        raw = _unwrap(entry)
+        if isinstance(raw, dict) and _is_purchase_store_selection_preview(args, raw):
+            has_purchase_store_selection_preview = True
+            break
     if (
         transaction_decision is not None
         and transaction_decision.template == TemplateName.LOCATION
         and (response_shape_key == "reservation_store_candidates" or flow_step == "show_store_candidates")
+        and not has_purchase_store_selection_preview
     ):
         return None
     if current_action_mode.get() != "unspecified" and not _has_current_turn_transaction_action():
@@ -6073,11 +6116,17 @@ def _map_datepick_from_preview(tool_data_list: list[dict], assistant_text: str) 
     for entry in reversed(_find_entries(tool_data_list, "transaction_store_preview_tool")):
         args = entry.get("args") if isinstance(entry.get("args"), dict) else entry.get("input")
         args = args if isinstance(args, dict) else {}
+        raw = _unwrap(entry)
+        if not isinstance(raw, dict):
+            continue
         exact_order_preview = bool(
-            _get_str(args, "store_nm")
-            and _get_str(args, "goods_no")
-            and args.get("ord_qty")
-            and args.get("include_price")
+            _is_purchase_store_selection_preview(args, raw)
+            or (
+                _get_str(args, "store_nm")
+                and _get_str(args, "goods_no")
+                and args.get("ord_qty")
+                and args.get("include_price")
+            )
         )
         pending_intent = current_pending_intent.get()
         goal_type = current_goal_type.get()
@@ -6089,9 +6138,6 @@ def _map_datepick_from_preview(tool_data_list: list[dict], assistant_text: str) 
         ):
             return None
 
-        raw = _unwrap(entry)
-        if not isinstance(raw, dict):
-            continue
         event = build_datepick_from_preview_payload(
             raw,
             assistant_text=assistant_text,
