@@ -1021,6 +1021,8 @@ def _selected_store_flow_type(
     existing_snapshot: Mapping[str, Any],
     selected_store: Mapping[str, Any],
 ) -> str:
+    if str(selected_store.get("source_tool") or "") == "transaction_store_preview_tool":
+        return "purchase"
     for values in (selected_store, existing_snapshot):
         pending_intent = str(values.get("pending_intent") or "").strip()
         goal_type = str(values.get("goal_type") or "").strip()
@@ -1225,6 +1227,18 @@ def _selected_store_flow_context(
     if not selected_store:
         return {}
     flow_context = dict(active_flow) if isinstance(active_flow, Mapping) else {}
+    selected_candidate = _matching_active_store_candidate(active_flow, selected_store)
+    if selected_candidate and str(selected_candidate.get("source_tool") or "") == "transaction_store_preview_tool":
+        selected_store = {
+            **dict(selected_store),
+            **{
+                key: value
+                for key, value in selected_candidate.items()
+                if value not in (None, "", [], {})
+            },
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        }
     flow_type = _selected_store_flow_type(
         active_flow=active_flow,
         parent_flow_state=parent_flow_state,
@@ -1270,6 +1284,7 @@ def _selected_store_flow_context(
         or ("store_with_stock" if flow_type == "stock" else existing_snapshot.get("goal_type")),
         "stock_check_mode": selected_store.get("stock_check_mode") or existing_snapshot.get("stock_check_mode"),
         "schedule_mode": selected_store.get("schedule_mode") or existing_snapshot.get("schedule_mode"),
+        "source_tool": selected_store.get("source_tool") or existing_snapshot.get("source_tool"),
     }.items():
         if value not in (None, "", [], {}):
             intent[key] = value
@@ -1329,6 +1344,29 @@ def _selected_store_flow_context(
         for key, value in flow_context.items()
         if value not in (None, "", {}) and (key == "missing_slots" or value != [])
     }
+
+
+def _matching_active_store_candidate(
+    active_flow: Mapping[str, Any],
+    selected_store: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    candidates = active_flow.get("last_candidates") if isinstance(active_flow.get("last_candidates"), list) else []
+    if not candidates:
+        return {}
+    selected_shop_id = str(selected_store.get("shop_id") or "").strip()
+    selected_shop_name = str(
+        selected_store.get("shop_name") or selected_store.get("store_name") or selected_store.get("label") or ""
+    ).strip()
+    for candidate in candidates:
+        if not isinstance(candidate, Mapping):
+            continue
+        candidate_shop_id = str(candidate.get("shop_id") or "").strip()
+        candidate_shop_name = str(candidate.get("shop_name") or candidate.get("label") or "").strip()
+        if selected_shop_id and candidate_shop_id == selected_shop_id:
+            return candidate
+        if selected_shop_name and candidate_shop_name and selected_shop_name in candidate_shop_name:
+            return candidate
+    return {}
 
 
 def _flow_state_summary(context: Mapping[str, Any] | None) -> dict[str, Any]:

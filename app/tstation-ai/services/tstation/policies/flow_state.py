@@ -214,6 +214,7 @@ _INTENT_FIELDS = (
     "goal_type",
     "stock_check_mode",
     "schedule_mode",
+    "source_tool",
     "availability_intent",
     "store_search_condition",
     "requested_vehicle_experience",
@@ -1131,6 +1132,15 @@ def evaluate_flow_progress(state: "FlowState") -> dict[str, Any]:
                 "missing_slots": [],
                 "next_template": "preOrder",
                 "response_shape_key": "reservation_confirmation_ready",
+            }
+        if str(intent.get("source_tool") or "") == "transaction_store_preview_tool":
+            return {
+                **base,
+                "current_step": "select_schedule",
+                "missing_slots": ["booking_datetime"],
+                "next_template": "datepick",
+                "response_shape_key": "reservation_slots",
+                "source_tool": "transaction_store_preview_tool",
             }
         schedule_mode = str(intent.get("schedule_mode") or "general").strip()
         return {
@@ -2298,7 +2308,7 @@ def store_candidate_selection_patch(
         "favorite_store",
     }:
         return {}
-    if active_flow.flow_step != "show_store_candidates":
+    if active_flow.flow_step not in {"show_store_candidates", "resolve_store"}:
         return {}
     if active_flow.status not in {"active", "resumed"}:
         return {}
@@ -2338,6 +2348,11 @@ def store_candidate_selection_patch(
         if selected.get(key) not in _EMPTY_VALUES
     }
     patch["_flow_type"] = active_flow_type
+    if patch.get("source_tool") == "transaction_store_preview_tool":
+        patch.update({
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        })
     if active_flow_type == "stock":
         patch.update({
             "pending_intent": "stock",
@@ -2360,7 +2375,13 @@ def selected_store_slots_from_active_flow_context(
     active_flow = FlowState.from_active_flow_context(active_flow_context)
     if active_flow.status not in {"active", "resumed"}:
         return {}
-    if active_flow.flow_step not in {"store_selected", "selected_store_schedule"}:
+    if active_flow.flow_step not in {
+        "store_selected",
+        "selected_store_schedule",
+        "resolve_schedule",
+        "show_schedule",
+        "select_schedule",
+    }:
         return {}
     active_flow_type = effective_flow_type(active_flow.flow_type, active_flow.intent)
     if not flow_type_matches_allowed(active_flow.flow_type, allowed_flow_types, active_flow.intent):
@@ -2752,6 +2773,16 @@ def _store_candidate_flow_type(
     contract_intent = str(event_contract_intent or "").strip()
     response_shape = str(event_response_shape or "").strip()
 
+    if (
+        source_tool == "transaction_store_preview_tool"
+        and raw_qty not in _EMPTY_VALUES
+        and raw_qty not in (0, "0")
+        and any(
+            meta.get(key) not in _EMPTY_VALUES
+            for key in ("goodsNo", "goods_no", "productName", "product_name", "tireSize", "tire_size")
+        )
+    ):
+        return "purchase"
     if pending_intent in {"order", "cart"} or goal_type in {"place_order", "add_to_cart"}:
         return "purchase"
     if (
@@ -2763,16 +2794,6 @@ def _store_candidate_flow_type(
         or response_shape in _STOCK_STORE_RESPONSE_SHAPES
     ):
         return "stock"
-    if (
-        source_tool == "transaction_store_preview_tool"
-        and raw_qty not in _EMPTY_VALUES
-        and raw_qty not in (0, "0")
-        and any(
-            meta.get(key) not in _EMPTY_VALUES
-            for key in ("goodsNo", "goods_no", "productName", "product_name", "tireSize", "tire_size")
-        )
-    ):
-        return "purchase"
     if source_tool == "get_favorite_stores_tool" or contract_intent == "favorite_store_lookup":
         return "favorite_store"
     if contract_intent in {"store_schedule", "selected_store_schedule"} or response_shape in _STORE_SCHEDULE_RESPONSE_SHAPES:
@@ -2844,12 +2865,14 @@ def _store_candidate_from_metadata(
             "pending_product_name": product_name,
             "tire_size": str(meta.get("tireSize") or meta.get("tire_size") or "").strip(),
             "pending_intent": str(
-                meta.get("pendingIntent")
+                ("order" if source_tool == "transaction_store_preview_tool" and flow_type == "purchase" else "")
+                or meta.get("pendingIntent")
                 or meta.get("pending_intent")
                 or ("stock" if flow_type == "stock" else "order")
             ).strip(),
             "goal_type": str(
-                meta.get("goalType")
+                ("place_order" if source_tool == "transaction_store_preview_tool" and flow_type == "purchase" else "")
+                or meta.get("goalType")
                 or meta.get("goal_type")
                 or ("store_with_stock" if flow_type == "stock" else "place_order")
             ).strip(),

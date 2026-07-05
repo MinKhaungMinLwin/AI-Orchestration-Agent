@@ -14529,8 +14529,8 @@ def test_stock_store_location_payload_stores_candidate_flow_state_without_event_
         active_flow_context=commit_flow_state(
             {},
             delta,
-            source="location_template:stock_store_candidates",
-            flow_type="stock",
+            source="location_template:preview_store_candidates",
+            flow_type=str(delta.get("flow_type") or "purchase"),
             flow_step="show_store_candidates",
         ).state.to_active_flow_context(),
         user_text="티스테이션 분당정자점",
@@ -14543,8 +14543,9 @@ def test_stock_store_location_payload_stores_candidate_flow_state_without_event_
     assert patch["source_tool"] == "transaction_store_preview_tool"
     assert patch["goods_no"] == "G000000310126"
     assert patch["ord_qty"] == 2
-    assert patch["pending_intent"] == "stock"
-    assert patch["goal_type"] == "store_with_stock"
+    assert patch["_flow_type"] == "purchase"
+    assert patch["pending_intent"] == "order"
+    assert patch["goal_type"] == "place_order"
 
 
 def test_stock_store_candidate_preserves_canonical_product_name() -> None:
