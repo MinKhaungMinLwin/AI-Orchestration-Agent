@@ -18636,6 +18636,9 @@ def _pending_check_object_from_text(text: str | None) -> tuple[str | None, str |
         return "store", regex_slots.shop_name
     if regex_slots.car_model and len(text) <= 40:
         return "vehicle", regex_slots.car_model
+    plate_match = _VEHICLE_PLATE_RE.search(text)
+    if plate_match and len(text) <= 20:
+        return "vehicle", plate_match.group(0).strip()
     if _is_bare_product_name_search_query(text):
         tool_input = _build_bare_product_search_tool_input(text)
         keyword = str((tool_input or {}).get("keyword") or text).strip()
@@ -18656,6 +18659,17 @@ def _apply_pending_object_check_slots(slots: ConversationSlots, *, user_text: st
     """Carry a short-lived eligibility topic across object-only follow-up turns."""
     text = str(user_text or "").strip()
     if not text:
+        return slots
+
+    if (
+        text in _GENERIC_DISCOVERY_FALLBACK_LABELS
+        and str(getattr(slots, "pending_check_topic", "") or "").strip() in _PENDING_CHECK_TOPICS
+    ):
+        # A generic clarification-chip click (e.g. "보유차량 중 선택") is a UI
+        # navigation step toward answering the pending check, not a new
+        # intent and not an answer either — it must not consume the limited
+        # follow-up-turn budget or clear the topic before the real answer
+        # (e.g. an actual vehicle pick) arrives on the next turn.
         return slots
 
     explicit_topic = _pending_check_topic_from_text(text)
@@ -19151,6 +19165,17 @@ def _build_discovery_policy_context(
             last_user_text,
             known_slots=known_slots,
         )
+        if discovery_frame.entities.get("discovery_followup_action") == "vehicle_resolved_recommendation":
+            # A resolved vehicle continuing a pending eligibility check (e.g. safe_service)
+            # must inherit that objective directly from the slot, not from re-parsing
+            # context text — the vehicle answer itself (a plate number or a UI selection)
+            # carries no service_program wording of its own to re-derive it from.
+            pending_topic_for_vehicle = str(known_slots.get("pending_check_topic") or "").strip()
+            if pending_topic_for_vehicle in _PENDING_CHECK_TOPIC_ENTITY_PATCH:
+                entities = dict(discovery_frame.entities)
+                for patch_key, patch_value in _PENDING_CHECK_TOPIC_ENTITY_PATCH[pending_topic_for_vehicle].items():
+                    entities.setdefault(patch_key, patch_value)
+                discovery_frame = replace(discovery_frame, entities=entities)
         if active_flow_patch:
             entities = dict(discovery_frame.entities)
             entities["discovery_followup_action"] = "vehicle_based_recommendation_refinement"
