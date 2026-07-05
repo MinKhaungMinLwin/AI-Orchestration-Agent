@@ -204,16 +204,11 @@ def _has_ready_preorder_slots(slots: Mapping[str, Any]) -> bool:
 
 
 def _product_name(slots: Mapping[str, Any]) -> str:
-    for context in _context_candidates(slots):
-        product_name = (
-            str(context.get("tire_model") or "").strip()
-            or str(context.get("product_name") or "").strip()
-            or str(context.get("pending_product_name") or "").strip()
-            or str(context.get("goods_nm") or "").strip()
-            or str(context.get("goodsNm") or "").strip()
-        )
-        if product_name:
-            return product_name
+    for context in _product_context_candidates(slots):
+        for key in ("product_name", "goods_nm", "goodsNm", "tire_model", "pending_product_name"):
+            product_name = str(context.get(key) or "").strip()
+            if product_name:
+                return product_name
     return ""
 
 
@@ -294,6 +289,33 @@ def _context_candidates(slots: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     availability_context = slots.get("availability_context") if isinstance(slots.get("availability_context"), Mapping) else {}
     _append_availability_contexts(contexts, availability_context)
     return contexts
+
+
+def _product_context_candidates(slots: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    contexts: list[Mapping[str, Any]] = []
+    availability_context = slots.get("availability_context") if isinstance(slots.get("availability_context"), Mapping) else {}
+    flow_context = flow_state_values_from_slot_values(
+        {"availability_context": availability_context},
+        source="preorder_product_context_candidates",
+    )
+    _append_product_context(contexts, flow_context)
+    for key in ("pending_order_context", "dormant_purchase_context", "dormant_stock_context", "dormant_transaction_context"):
+        value = availability_context.get(key)
+        if isinstance(value, Mapping):
+            _append_product_context(contexts, value)
+    active_flow = availability_context.get("active_flow_context")
+    if isinstance(active_flow, Mapping):
+        product_context = active_flow.get("product")
+        if isinstance(product_context, Mapping):
+            _append_product_context(contexts, product_context)
+        _append_product_context(contexts, active_flow)
+    _append_product_context(contexts, slots)
+    return contexts
+
+
+def _append_product_context(contexts: list[Mapping[str, Any]], context: Mapping[str, Any]) -> None:
+    if context and context not in contexts:
+        contexts.append(context)
 
 
 def _append_availability_contexts(contexts: list[Mapping[str, Any]], availability_context: Mapping[str, Any]) -> None:
