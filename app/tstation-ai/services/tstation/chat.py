@@ -170,6 +170,7 @@ from services.tstation.policies.flow_state import (
     store_candidates_flow_delta,
 )
 from services.tstation.policies.turn_contract import (
+    _PRICE_OR_COUPON_RESPONSE_INTENTS,
     TurnContract,
     align_tool_plan_to_turn_contract,
     build_required_slot_clarification_event,
@@ -16292,6 +16293,23 @@ def _finalize_direct_code_event(
         required_tools=required_tools,
         emitted_template=actual_template,
     )
+
+
+def _guard_contract_recovery_event(
+    event: dict[str, Any],
+    *,
+    turn_contract: TurnContract | None,
+) -> dict[str, Any]:
+    if turn_contract is None or not violates_response_template_contract(event, turn_contract):
+        return event
+    guard_event = build_response_policy_guard_event(turn_contract)
+    logger.info(
+        "[CONTRACT_REQUIRED_TOOL_RECOVERY] replaced forbidden template=%s contract_intent=%s guard_template=%s",
+        event.get("template"),
+        turn_contract.intent,
+        guard_event.get("template"),
+    )
+    return guard_event
 
 
 def _pending_contract_required_tool_for_fast_path(
@@ -36154,6 +36172,8 @@ class TStationChatServiceV2:
             return
 
         async def _resolve_pure_inventory_stock_with_code() -> tuple[list[dict], dict] | None:
+            if str(turn_contract.intent or "") in _PRICE_OR_COUPON_RESPONSE_INTENTS:
+                return ([], build_response_policy_guard_event(turn_contract))
             slot_state = pending_slots or initial_slots
             if not _single_store_availability_ready(slot_state):
                 return None
@@ -36930,7 +36950,10 @@ class TStationChatServiceV2:
                 dict(recovery["tool_input"]),
                 dict(recovery["tool_result"]),
             )
-            recovered_event = recovery["event"]
+            recovered_event = _guard_contract_recovery_event(
+                recovery["event"],
+                turn_contract=turn_contract,
+            )
             _stage_comparison_context_slots(recovered_event)
             await _persist_pending_slots_for_direct_return()
             chunks = [
@@ -37012,6 +37035,14 @@ class TStationChatServiceV2:
             and str(contract_required_tool_recovery.get("tool_name") or "") != "get_products_recommendations_tool"
             else None
         )
+        if (
+            contract_required_store_flow_tool is None
+            and str(turn_contract.intent or "") in _PRICE_OR_COUPON_RESPONSE_INTENTS
+        ):
+            guard_event = build_response_policy_guard_event(turn_contract)
+            for chunk in TStationChatServiceV2._stream_policy_guard_response(guard_event):
+                yield chunk
+            return
         if contract_required_store_flow_tool is None:
             confirmed_stock_flow_advance = await _advance_stock_flow_from_confirmed_state(
                 turn_contract=turn_contract,

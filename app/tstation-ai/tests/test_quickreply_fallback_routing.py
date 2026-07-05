@@ -309,6 +309,7 @@ from services.tstation.chat import (
     _is_quick_order_execute_contract_ready,
     _finalize_coerced_template_event,
     _finalize_direct_code_event,
+    _guard_contract_recovery_event,
     _choose_quickreply_fallback,
     _coerce_non_selection_listcar_to_quickreply,
     _coerce_unmatched_vehicle_listcar_to_owner_prompt,
@@ -12028,6 +12029,92 @@ def test_router_wins_discount_question_over_stale_quick_order_schedule_frame() -
     assert aligned is not None
     assert aligned.preferred_tool == "get_final_price_tool"
     assert aligned.allowed_tools == contract.allowed_tools
+
+
+def test_price_or_coupon_check_blocks_stale_datepick_template_after_preorder() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="price_or_coupon_check",
+        known_slots={
+            "goods_no": "G000000309856",
+            "product_name": "벤투스 S2 AS",
+            "tire_size": "275/35R20",
+            "ord_qty": 4,
+            "shop_id": "F00721",
+            "shop_name": "티스테이션 판교점",
+            "requested_cal_day": "20260707",
+            "rsv_hour": "09",
+            "payment_amount": 955600,
+        },
+        allowed_tools=("get_final_price_tool", "get_my_coupons_tool", "get_coupon_applicable_products_tool"),
+        preferred_tool="get_final_price_tool",
+        response_decision={
+            "template": "quickReply",
+            "metadata": {"response_shape_key": "price_or_coupon_check"},
+        },
+        action_mode="stock_check",
+        context_state="active",
+    )
+
+    assert violates_response_template_contract({"template": "datepick"}, contract) is True
+
+    event = build_response_policy_guard_event(contract)
+
+    assert event["template"] == "quickReply"
+    assert event["data"]["metadata"]["contract_intent"] == "price_or_coupon_check"
+    assert "955,600원" in event["data"]["assistantResponse"]
+    assert "벤투스 S2 AS" in event["data"]["assistantResponse"]
+
+
+def test_contract_recovery_guard_replaces_stale_datepick_for_price_or_coupon_check() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="price_or_coupon_check",
+        known_slots={
+            "product_name": "벤투스 S2 AS",
+            "payment_amount": 955600,
+        },
+        response_decision={
+            "template": "quickReply",
+            "metadata": {"response_shape_key": "price_or_coupon_check"},
+        },
+    )
+    stale_event = {
+        "type": "data",
+        "template": "datepick",
+        "data": {"assistantResponse": "예약 시간을 선택해 주세요.", "dates": []},
+    }
+
+    guarded = _guard_contract_recovery_event(stale_event, turn_contract=contract)
+
+    assert guarded["template"] == "quickReply"
+    assert guarded["data"]["metadata"]["contract_intent"] == "price_or_coupon_check"
+    assert "955,600원" in guarded["data"]["assistantResponse"]
+
+
+def test_order_discount_explanation_blocks_stale_datepick_template_after_preorder() -> None:
+    for intent in ("order_discount_explanation", "explain_discount_application"):
+        contract = TurnContract(
+            domain="transaction",
+            intent=intent,
+            known_slots={
+                "product_name": "벤투스 S2 AS",
+                "payment_amount": 955600,
+                "ord_qty": 4,
+            },
+            response_decision={
+                "template": "quickReply",
+                "metadata": {"response_shape_key": "transaction_fallback"},
+            },
+        )
+
+        assert violates_response_template_contract({"template": "datepick"}, contract) is True
+
+        event = build_response_policy_guard_event(contract)
+
+        assert event["template"] == "quickReply"
+        assert event["data"]["metadata"]["contract_intent"] == intent
+        assert "955,600원" in event["data"]["assistantResponse"]
 
 
 def test_router_wins_plain_store_search_defaults_to_store_list_tool() -> None:
