@@ -11956,6 +11956,80 @@ def test_router_wins_store_search_over_stale_quick_order_schedule_frame() -> Non
     assert aligned.allowed_tools == contract.allowed_tools
 
 
+def test_router_wins_discount_question_over_stale_quick_order_schedule_frame() -> None:
+    user_text = "\ud560\uc778\uc740 \uc5b4\ub5bb\uac8c \uc801\uc6a9\ub41c\uac70\uc57c?"
+    routing_result = _routing_result(
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        execution_plan=["transaction:price_or_coupon_check"],
+        referred_object_type="product",
+    )
+    stale_order_frame = IntentFrame(
+        domain=PolicyDomain.TRANSACTION,
+        intent="quick_order_reservation",
+        sub_intent="reservation",
+        known_slots={
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "goods_no": "G000000310126",
+            "product_name": "Ventus S2 AS",
+            "tire_size": "245/45R19",
+            "ord_qty": 4,
+            "shop_id": "F00098",
+            "shop_name": "T-Station Yeoksam",
+        },
+        missing_slots=("requested_cal_day", "rsv_hour"),
+    )
+    stale_order_plan = ToolPlan(
+        allowed_tools=("get_store_schedule_tool", "quick_order_tool"),
+        preferred_tool="get_store_schedule_tool",
+        required_slots=("requested_cal_day", "rsv_hour"),
+        metadata={"response_intent": "quick_order_reservation"},
+    )
+    stale_order_response = ResponseDecision(
+        response_shape=ResponseShape.DATE_PICK,
+        template=TemplateName.DATE_PICK,
+        required_slots=("requested_cal_day", "rsv_hour"),
+        metadata={"response_shape_key": "reservation_slots"},
+    )
+
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=stale_order_frame,
+        tool_plan=stale_order_plan,
+        response_decision=stale_order_response,
+        routing_result=routing_result,
+        merged_slots=ConversationSlots(
+            pending_intent="order",
+            goal_type="place_order",
+            goods_no="G000000310126",
+            product_name="Ventus S2 AS",
+            tire_size="245/45R19",
+            ord_qty=4,
+            shop_id="F00098",
+            shop_name="T-Station Yeoksam",
+        ),
+        action_mode="purchase_continuation",
+        context_state="resumed",
+        resume_source="expected_slot_fill:schedule",
+        previous_pending_intent="order",
+        previous_goal_type="place_order",
+    )
+    aligned = align_tool_plan_to_turn_contract(stale_order_plan, contract)
+    payload = contract.to_dict()
+
+    assert contract.intent == "price_or_coupon_check"
+    assert contract.router_wins_applied is True
+    assert contract.blocking_required_slots == ()
+    assert "get_final_price_tool" in contract.allowed_tools
+    assert "get_store_schedule_tool" in contract.forbidden_tools
+    assert "quick_order_tool" in contract.forbidden_tools
+    assert payload["response_decision"]["template"] == "quickReply"
+    assert payload["response_decision"]["metadata"]["response_shape_key"] == "price_or_coupon_check"
+    assert aligned is not None
+    assert aligned.preferred_tool == "get_final_price_tool"
+    assert aligned.allowed_tools == contract.allowed_tools
+
+
 def test_router_wins_plain_store_search_defaults_to_store_list_tool() -> None:
     routing_result = _routing_result(
         domains=[MultiAgentDomain.Domain.TRANSACTION],
@@ -31861,6 +31935,29 @@ def test_explicit_qna_router_alias_builds_human_escalation_contract(execution_in
             policy_intent="none",
         ),
         action_mode="support_policy_answer",
+        previous_pending_intent="order",
+        previous_goal_type="place_order",
+    )
+
+    assert contract.domain == "support"
+    assert contract.intent == "human_escalation"
+    assert contract.allowed_tools == ("transfer_to_qna_tool",)
+    assert contract.preferred_tool == "transfer_to_qna_tool"
+    assert contract.response_decision["template"] == "qnaComplete"
+    assert contract.response_decision["metadata"]["response_shape_key"] == "human_escalation"
+    assert "search_faq_hybrid_tool" in contract.forbidden_tools
+
+
+@pytest.mark.parametrize("user_text", ["1:1 문의하기", "1:1 문의", "상담사 연결", "고객 상담 연결"])
+def test_explicit_qna_text_builds_human_escalation_contract_without_router_alias(user_text: str) -> None:
+    contract = build_turn_contract(
+        user_text=user_text,
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.LEADING],
+            execution_plan=["ask_for_clarification"],
+            policy_intent="none",
+        ),
+        action_mode="info_only",
         previous_pending_intent="order",
         previous_goal_type="place_order",
     )
