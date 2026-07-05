@@ -19,6 +19,7 @@ from services.tstation.policies.flow_state import (
     selected_store_slots_from_active_flow_context,
 )
 from services.tstation.policies.intent_frame import PolicyDomain
+from services.tstation.policies.router_intent_schema import OUT_OF_SCOPE_INTENT, UNCLEAR_INTENT, UNSUPPORTED_INTENT
 from services.tstation.policies.transaction_intent_policy import stock_inventory_store_lookup_tool_input
 from services.tstation.policies.turn_contract import TurnContract
 from services.tstation.template_mapper import current_transaction_tool_plan
@@ -98,6 +99,11 @@ _SIZED_RECOMMENDATION_RESPONSE_SHAPE_KEYS = frozenset({
     "sized_technology_recommendation_cards",
     "sized_safe_service_recommendation_cards",
     "vehicle_based_recommendation_refinement",
+})
+_NO_EXECUTION_INTENTS = frozenset({
+    UNCLEAR_INTENT,
+    OUT_OF_SCOPE_INTENT,
+    UNSUPPORTED_INTENT,
 })
 
 
@@ -975,6 +981,8 @@ def _contract_required_tool_candidate(
     allowed_tools = tuple(str(tool) for tool in (turn_contract.allowed_tools or ()) if str(tool))
     forbidden_tools = {str(tool) for tool in (turn_contract.forbidden_tools or ()) if str(tool)}
     if not allowed_tools:
+        return None
+    if str(turn_contract.intent or "").strip() in _NO_EXECUTION_INTENTS:
         return None
 
     known_slots = dict(turn_contract.known_slots or {})

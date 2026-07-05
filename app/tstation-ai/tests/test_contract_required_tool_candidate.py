@@ -1,3 +1,5 @@
+import pytest
+
 from schemas.tstation.slots import ConversationSlots
 from services.tstation.policies.contract_required_tool_candidate import (
     _contract_required_tool_candidate,
@@ -119,6 +121,26 @@ def test_forbidden_tool_suppresses_candidate_creation() -> None:
     candidate = _contract_required_tool_candidate(
         turn_contract=contract,
         user_text="Kinergy EX",
+        merged_slots=None,
+    )
+
+    assert candidate is None
+
+
+@pytest.mark.parametrize("intent", ["unclear", "out_of_scope", "unsupported"])
+def test_no_execution_intents_suppress_candidate_creation(intent: str) -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent=intent,
+        allowed_tools=("get_final_price_tool",),
+        preferred_tool="get_final_price_tool",
+        tool_args_patch={"goods_no": "G000000309780"},
+        context_state="active",
+    )
+
+    candidate = _contract_required_tool_candidate(
+        turn_contract=contract,
+        user_text="이거 봐줘",
         merged_slots=None,
     )
 
