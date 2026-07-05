@@ -694,6 +694,106 @@ def test_active_purchase_to_support_faq_preserves_support_intent() -> None:
     assert context["dormant_flows"][0]["context"]["product"]["goods_no"] == "GOLD"
 
 
+def test_product_change_updates_dormant_flow_and_clears_execution_context() -> None:
+    dormant_flows = upsert_dormant_flow(
+        [],
+        {
+            "flow_type": "purchase",
+            "status": "active",
+            "product": {
+                "goods_no": "G-OLD-DORMANT",
+                "product_name": "벤투스 S2 AS",
+                "tire_size": "245/45R19",
+                "ord_qty": 2,
+            },
+            "store": {"shop_id": "S1", "shop_name": "티스테이션 분당정자점"},
+            "schedule": {"requested_cal_day": "20260708", "rsv_hour": "16"},
+            "payment": {"payment_amount": 308200, "price_basis": "cheapest_final_prc"},
+            "intent": {"pending_intent": "order", "goal_type": "place_order"},
+        },
+    )
+    result = commit_flow_state(
+        {
+            "flow_type": "purchase",
+            "status": "active",
+            "product": {
+                "goods_no": "G-OLD-ACTIVE",
+                "product_name": "벤투스 S2 AS",
+                "tire_size": "245/45R19",
+                "ord_qty": 2,
+            },
+            "store": {"shop_id": "S1", "shop_name": "티스테이션 분당정자점"},
+            "schedule": {"requested_cal_day": "20260708", "rsv_hour": "16"},
+            "payment": {"payment_amount": 308200, "price_basis": "cheapest_final_prc"},
+            "intent": {"pending_intent": "order", "goal_type": "place_order"},
+            "dormant_flows": dormant_flows,
+        },
+        {
+            "flow_type": "purchase",
+            "status": "active",
+            "product": {"product_name": "다이나프로 HP3", "tire_size": "255/45R19", "ord_qty": 2},
+            "intent": {"pending_intent": "order", "goal_type": "place_order"},
+        },
+        source="test_product_change",
+        flow_type="purchase",
+        status="active",
+    )
+
+    dormant_context = result.state.to_active_flow_context()["dormant_flows"][0]["context"]
+    assert dormant_context["product"]["product_name"] == "다이나프로 HP3"
+    assert dormant_context["product"]["tire_size"] == "255/45R19"
+    assert "goods_no" not in dormant_context["product"]
+    assert "store" not in dormant_context
+    assert "schedule" not in dormant_context
+    assert "payment" not in dormant_context
+    assert "dormant_flows" in result.metadata["committed_fields"]
+    assert result.metadata["dormant_dependency_cleared_fields"]
+
+
+def test_store_change_updates_dormant_flow_and_clears_schedule_payment() -> None:
+    dormant_flows = upsert_dormant_flow(
+        [],
+        {
+            "flow_type": "purchase",
+            "status": "active",
+            "product": {"goods_no": "G-1", "product_name": "벤투스 S2 AS", "tire_size": "245/45R19", "ord_qty": 2},
+            "store": {"shop_id": "S1", "shop_name": "티스테이션 분당정자점"},
+            "schedule": {"requested_cal_day": "20260708", "rsv_hour": "16"},
+            "payment": {"payment_amount": 308200, "price_basis": "cheapest_final_prc"},
+            "intent": {"pending_intent": "order", "goal_type": "place_order"},
+        },
+    )
+    result = commit_flow_state(
+        {
+            "flow_type": "purchase",
+            "status": "active",
+            "product": {"goods_no": "G-1", "product_name": "벤투스 S2 AS", "tire_size": "245/45R19", "ord_qty": 2},
+            "store": {"shop_id": "S1", "shop_name": "티스테이션 분당정자점"},
+            "schedule": {"requested_cal_day": "20260708", "rsv_hour": "16"},
+            "payment": {"payment_amount": 308200, "price_basis": "cheapest_final_prc"},
+            "intent": {"pending_intent": "order", "goal_type": "place_order"},
+            "dormant_flows": dormant_flows,
+        },
+        {
+            "flow_type": "purchase",
+            "status": "active",
+            "product": {"goods_no": "G-1", "product_name": "벤투스 S2 AS", "tire_size": "245/45R19", "ord_qty": 2},
+            "store": {"shop_id": "S2", "shop_name": "티스테이션 정발산점"},
+            "intent": {"pending_intent": "order", "goal_type": "place_order"},
+        },
+        source="test_store_change",
+        flow_type="purchase",
+        status="active",
+    )
+
+    dormant_context = result.state.to_active_flow_context()["dormant_flows"][0]["context"]
+    assert dormant_context["store"]["shop_id"] == "S2"
+    assert dormant_context["store"]["shop_name"] == "티스테이션 정발산점"
+    assert "schedule" not in dormant_context
+    assert "payment" not in dormant_context
+    assert "dormant_flows" in result.metadata["committed_fields"]
+
+
 def test_weak_flat_purchase_metadata_does_not_become_dormant_purchase() -> None:
     result = commit_flow_state(
         {
