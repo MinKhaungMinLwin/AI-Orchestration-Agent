@@ -5,10 +5,376 @@ from datetime import datetime, timezone
 from services.tstation.policies.flow_state import (
     commit_flow_state,
     commit_purchase_flow_state,
+    evaluate_flow_progress,
+    FlowState,
+    flow_state_from_slot_values,
     prune_dormant_flows,
     resume_dormant_flow,
+    flow_state_values_from_slot_values,
+    selected_store_slots_from_active_flow_context,
+    store_candidate_selection_patch,
+    store_candidates_flow_delta,
     upsert_dormant_flow,
 )
+from schemas.tstation.slots import ConversationSlots
+from services.tstation.policies.flow_controller import resolve_purchase_order_flow, transition_current_flow
+
+
+def test_flow_state_values_reads_active_context_before_legacy_pending_context() -> None:
+    values = flow_state_values_from_slot_values(
+        {
+            "availability_context": {
+                "active_flow_context": {
+                    "flow_type": "purchase",
+                    "product": {"goods_no": "G-ACTIVE", "tire_size": "245/45R19", "ord_qty": 2},
+                    "store": {"region": "고양시"},
+                    "intent": {"pending_intent": "order", "goal_type": "place_order"},
+                },
+                "pending_order_context": {
+                    "goods_no": "G-LEGACY",
+                    "tire_size": "225/45R17",
+                    "ord_qty": 4,
+                    "region": "분당",
+                    "pending_intent": "order",
+                    "goal_type": "place_order",
+                },
+            }
+        },
+        source="test",
+    )
+
+    assert values["goods_no"] == "G-ACTIVE"
+    assert values["tire_size"] == "245/45R19"
+    assert values["ord_qty"] == 2
+    assert values["region"] == "고양시"
+    assert values["pending_intent"] == "order"
+
+
+def test_flow_state_values_applies_current_turn_region_over_legacy_context() -> None:
+    values = flow_state_values_from_slot_values(
+        {
+            "region": "고양시",
+            "availability_context": {
+                "pending_order_context": {
+                    "goods_no": "G-LEGACY",
+                    "tire_size": "225/45R17",
+                    "ord_qty": 4,
+                    "region": "분당",
+                    "shop_id": "S1",
+                    "requested_cal_day": "20260710",
+                    "rsv_hour": "15",
+                    "pending_intent": "order",
+                    "goal_type": "place_order",
+                }
+            },
+        },
+        source="test",
+    )
+
+    assert values["region"] == "고양시"
+    assert values["goods_no"] == "G-LEGACY"
+    assert values["ord_qty"] == 4
+    assert "shop_id" not in values
+    assert "requested_cal_day" not in values
+    assert "rsv_hour" not in values
+
+
+def test_flow_state_values_preserves_active_stock_sub_flow_on_current_turn_patch() -> None:
+    slot_values = {
+        "region": "고양시",
+        "availability_context": {
+            "active_flow_context": {
+                "flow_type": "commerce",
+                "flow_step": "ask_store",
+                "product": {"goods_no": "G-STOCK", "tire_size": "245/45R19", "ord_qty": 2},
+                "intent": {
+                    "sub_flow_type": "stock",
+                    "pending_intent": "stock",
+                    "goal_type": "store_with_stock",
+                    "stock_check_mode": "inventory_only",
+                },
+            },
+        },
+    }
+
+    state = flow_state_from_slot_values(slot_values, source="test")
+    values = state.to_pending_order_context()
+    progress = evaluate_flow_progress(state)
+
+    assert values["flow_type"] == "commerce"
+    assert values["sub_flow_type"] == "stock"
+    assert values["pending_intent"] == "stock"
+    assert values["goal_type"] == "store_with_stock"
+    assert values["stock_check_mode"] == "inventory_only"
+    assert values["region"] == "고양시"
+    assert progress["target_action"] == "get_store_inventory_tool"
+    assert progress["next_tool"] == "get_store_list_tool"
+    assert progress["tool_args_patch"] == {"limit": 10, "region_code": "고양시"}
+
+
+def test_purchase_preview_store_selection_progresses_to_schedule_without_relisting() -> None:
+    location_event = {
+        "template": "location",
+        "data": {
+            "isBookingFlow": True,
+            "contractMetadata": {"response_shape_key": "reservation_store_candidates"},
+            "stores": [{"name": "T-Station Hannam", "nameAddress": "T-Station Hannam"}],
+            "metadata": [
+                {
+                    "sourceTool": "transaction_store_preview_tool",
+                    "shopId": "F00777",
+                    "shopName": "T-Station Hannam",
+                    "goodsNo": "G000000309783",
+                    "productName": "Ventus S2 AS",
+                    "tireSize": "245/45R19",
+                    "ordQty": 2,
+                }
+            ],
+        },
+    }
+
+    candidate_delta = store_candidates_flow_delta(event=location_event)
+
+    assert candidate_delta["flow_type"] == "purchase"
+    assert candidate_delta["pending_intent"] == "order"
+    assert candidate_delta["goal_type"] == "place_order"
+
+    selected_patch = store_candidate_selection_patch(
+        active_flow_context=candidate_delta,
+        user_text="T-Station Hannam",
+    )
+
+    assert selected_patch["_flow_type"] == "purchase"
+    assert selected_patch["flow_step"] == "store_selected"
+    assert selected_patch["shop_id"] == "F00777"
+    assert selected_patch["goods_no"] == "G000000309783"
+    assert selected_patch["tire_size"] == "245/45R19"
+    assert selected_patch["ord_qty"] == 2
+    assert selected_patch["pending_intent"] == "order"
+    assert selected_patch["goal_type"] == "place_order"
+
+    selected_slots = selected_store_slots_from_active_flow_context(
+        commit_flow_state(
+            candidate_delta,
+            {key: value for key, value in selected_patch.items() if not key.startswith("_")},
+            source="location_selection:purchase",
+            flow_type="purchase",
+            flow_step="store_selected",
+            status="resumed",
+        ).state.to_active_flow_context(),
+        allowed_flow_types=frozenset({"purchase"}),
+    )
+    next_state = resolve_purchase_order_flow(intent="quick_order_reservation", known_slots=selected_slots)
+
+    assert next_state is not None
+    assert next_state.flow_step == "show_schedule"
+    assert next_state.preferred_tool == "get_store_schedule_tool"
+    assert next_state.allowed_tools == ("get_store_schedule_tool", "get_multi_store_schedule_tool")
+
+
+def test_purchase_store_ui_action_preserves_product_and_quantity_for_schedule() -> None:
+    transition = transition_current_flow(
+        user_text="T-Station Hannam",
+        router_evidence={
+            "domain": "transaction",
+            "intent": "quick_order_reservation",
+            "execution_plan": ["transaction:quick_order_reservation:slot_fill:store"],
+            "is_slot_fill": True,
+            "filled_slot": "store",
+        },
+        existing_slots=ConversationSlots(
+            availability_context={
+                "active_flow_context": {
+                    "flow_type": "purchase",
+                    "status": "active",
+                    "flow_step": "quantity_selected",
+                    "product": {
+                        "goods_no": "G000000309783",
+                        "product_name": "Ventus S2 AS",
+                        "tire_size": "245/45R19",
+                        "ord_qty": 2,
+                    },
+                    "intent": {"pending_intent": "order", "goal_type": "place_order"},
+                }
+            }
+        ),
+        extracted_slots=ConversationSlots(),
+        ui_action={
+            "action_type": "select_store",
+            "selection_source": "location_template",
+            "entity_id": "F00777",
+            "entity_label": "T-Station Hannam",
+            "slots": {"shopId": "F00777", "shopName": "T-Station Hannam"},
+        },
+        resume_source="validated_ui_action_slot_fill:store",
+    )
+
+    assert transition.metadata["selected_store_resolved"] is True
+    assert transition.flow_transition["reason"] == "selected_store_flow_state"
+    active_context = transition.flow_transition["active_flow_context"]
+    assert active_context["flow_step"] == "store_selected"
+    assert active_context["product"]["goods_no"] == "G000000309783"
+    assert active_context["product"]["ord_qty"] == 2
+    assert active_context["store"]["shop_id"] == "F00777"
+
+    selected_slots = selected_store_slots_from_active_flow_context(
+        active_context,
+        allowed_flow_types=frozenset({"purchase"}),
+    )
+    next_state = resolve_purchase_order_flow(intent="quick_order_reservation", known_slots=selected_slots)
+
+    assert next_state is not None
+    assert next_state.flow_step == "show_schedule"
+    assert "store" not in next_state.missing_slots
+
+
+def test_transition_current_flow_resumes_dormant_purchase_on_explicit_order_anchor() -> None:
+    dormant_purchase = commit_flow_state(
+        None,
+        {
+            "goods_no": "G000000320152",
+            "product_name": "Dynapro HP3",
+            "tire_size": "245/45R19",
+            "ord_qty": 2,
+            "shop_id": "F00071",
+            "shop_name": "티스테이션 분당정자점",
+            "requested_cal_day": "20260705",
+            "rsv_hour": "1700",
+            "payment_amount": 288200,
+            "price_basis": "extra_fvr_sale_prc",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        source="test:purchase_ready",
+        flow_type="purchase",
+        flow_step="build_preorder",
+        status="active",
+    ).state.to_active_flow_context()
+    dormant_flows = upsert_dormant_flow([], dormant_purchase)
+
+    transition = transition_current_flow(
+        user_text="주문하기",
+        router_evidence={
+            "domain": "transaction",
+            "intent": "quick_order_reservation",
+            "execution_plan": ["transaction:quick_order_reservation"],
+        },
+        existing_slots=ConversationSlots(
+            goods_no="G000000320152",
+            availability_context={"dormant_flows": dormant_flows},
+        ),
+        extracted_slots=ConversationSlots(),
+        resume_source="explicit_user",
+    )
+
+    assert transition.flow_transition["reason"] == "dormant_flow_resume"
+    assert transition.metadata["dormant_resume_status"] == "resumed"
+    assert transition.metadata["dormant_resume_applied"] is True
+    active_context = transition.flow_transition["active_flow_context"]
+    assert active_context["status"] == "resumed"
+    assert active_context["product"]["goods_no"] == "G000000320152"
+    assert active_context["product"]["tire_size"] == "245/45R19"
+    assert active_context["product"]["ord_qty"] == 2
+    assert active_context["store"]["shop_id"] == "F00071"
+    assert active_context["schedule"]["requested_cal_day"] == "20260705"
+    assert active_context["schedule"]["rsv_hour"] == "1700"
+    assert active_context["payment"]["payment_amount"] == 288200
+
+
+def test_transition_current_flow_keeps_dormant_purchase_dormant_without_resume_anchor() -> None:
+    dormant_purchase = commit_flow_state(
+        None,
+        {
+            "goods_no": "G000000320152",
+            "product_name": "Dynapro HP3",
+            "tire_size": "245/45R19",
+            "ord_qty": 2,
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        source="test:purchase_ready",
+        flow_type="purchase",
+        flow_step="ask_store",
+        status="active",
+    ).state.to_active_flow_context()
+    dormant_flows = upsert_dormant_flow([], dormant_purchase)
+
+    transition = transition_current_flow(
+        user_text="가격이 얼마야?",
+        router_evidence={
+            "domain": "transaction",
+            "intent": "price_lookup",
+            "execution_plan": ["transaction:price_or_coupon_check"],
+        },
+        existing_slots=ConversationSlots(
+            goods_no="G000000320152",
+            availability_context={"dormant_flows": dormant_flows},
+        ),
+        extracted_slots=ConversationSlots(),
+        resume_source="none",
+    )
+
+    assert transition.flow_transition["applied"] is False
+    assert transition.metadata["dormant_resume_status"] == "not_attempted"
+    assert transition.metadata["dormant_resume_applied"] is False
+
+
+def test_purchase_store_ui_action_accepts_template_slot_aliases_without_entity_metadata() -> None:
+    transition = transition_current_flow(
+        user_text="선택",
+        router_evidence={
+            "domain": "transaction",
+            "intent": "quick_order_reservation",
+            "execution_plan": ["transaction:quick_order_reservation:slot_fill:store"],
+            "is_slot_fill": True,
+            "filled_slot": "store",
+        },
+        existing_slots=ConversationSlots(
+            availability_context={
+                "active_flow_context": {
+                    "flow_type": "purchase",
+                    "status": "active",
+                    "flow_step": "quantity_selected",
+                    "product": {
+                        "goods_no": "G000000309783",
+                        "product_name": "Ventus S2 AS",
+                        "tire_size": "245/45R19",
+                        "ord_qty": 2,
+                    },
+                    "intent": {"pending_intent": "order", "goal_type": "place_order"},
+                }
+            }
+        ),
+        extracted_slots=ConversationSlots(),
+        ui_action={
+            "action_type": "select_store",
+            "selection_source": "location_template",
+            "slots": {
+                "shopId": "F00777",
+                "shopName": "T-Station Hannam",
+                "goodsNo": "G000000309783",
+                "ordQty": 2,
+            },
+        },
+        resume_source="validated_ui_action_slot_fill:store",
+    )
+
+    assert transition.metadata["selected_store_resolved"] is True
+    active_context = transition.flow_transition["active_flow_context"]
+    assert active_context["flow_step"] == "store_selected"
+    assert active_context["product"]["goods_no"] == "G000000309783"
+    assert active_context["product"]["ord_qty"] == 2
+    assert active_context["store"]["shop_id"] == "F00777"
+
+    selected_slots = selected_store_slots_from_active_flow_context(
+        active_context,
+        allowed_flow_types=frozenset({"purchase"}),
+    )
+    next_state = resolve_purchase_order_flow(intent="quick_order_reservation", known_slots=selected_slots)
+
+    assert next_state is not None
+    assert next_state.flow_step == "show_schedule"
+    assert "store" not in next_state.missing_slots
 
 
 def test_pending_purchase_drops_action_label_residue_product_identity() -> None:
@@ -268,6 +634,55 @@ def test_active_purchase_schedule_change_marks_payment_stale() -> None:
     assert "payment_amount" in result.metadata["cleared_fields"]
 
 
+def test_purchase_progress_requires_price_after_schedule_before_preorder() -> None:
+    progress = evaluate_flow_progress(
+        FlowState(
+            flow_type="purchase",
+            status="active",
+            flow_step="show_schedule",
+            product={
+                "goods_no": "GSAME",
+                "product_name": "ë²¤íˆ¬ìŠ¤ S2 AS",
+                "tire_size": "245/45R19",
+                "ord_qty": 2,
+            },
+            store={"shop_id": "S1", "shop_name": "í‹°ìŠ¤í…Œì´ì…˜ ë¶„ë‹¹ì •ìžì "},
+            schedule={"requested_cal_day": "2026-07-01", "rsv_hour": "16:00"},
+            intent={"pending_intent": "order", "goal_type": "place_order"},
+        )
+    )
+
+    assert progress["current_step"] == "resolve_price"
+    assert progress["next_tool"] == "get_final_price_tool"
+    assert progress["allowed_tools"] == ["get_final_price_tool"]
+    assert progress["tool_args_patch"] == {"goods_no": "GSAME"}
+    assert "next_template" not in progress
+
+
+def test_purchase_progress_can_build_preorder_after_price_basis() -> None:
+    progress = evaluate_flow_progress(
+        FlowState(
+            flow_type="purchase",
+            status="active",
+            flow_step="show_schedule",
+            product={
+                "goods_no": "GSAME",
+                "product_name": "ë²¤íˆ¬ìŠ¤ S2 AS",
+                "tire_size": "245/45R19",
+                "ord_qty": 2,
+            },
+            store={"shop_id": "S1", "shop_name": "í‹°ìŠ¤í…Œì´ì…˜ ë¶„ë‹¹ì •ìžì "},
+            schedule={"requested_cal_day": "2026-07-01", "rsv_hour": "16:00"},
+            payment={"payment_amount": 308200, "price_basis": "cheapest_final_prc"},
+            intent={"pending_intent": "order", "goal_type": "place_order"},
+        )
+    )
+
+    assert progress["current_step"] == "build_preorder"
+    assert progress["next_template"] == "preOrder"
+    assert "next_tool" not in progress
+
+
 def test_active_purchase_to_store_search_pushes_purchase_to_dormant() -> None:
     result = commit_flow_state(
         {
@@ -368,6 +783,143 @@ def test_active_purchase_to_support_faq_preserves_support_intent() -> None:
     assert context["dormant_flows"][0]["context"]["flow_type"] == "commerce"
     assert context["dormant_flows"][0]["context"]["intent"]["sub_flow_type"] == "purchase"
     assert context["dormant_flows"][0]["context"]["product"]["goods_no"] == "GOLD"
+
+
+def test_product_change_updates_dormant_flow_and_clears_execution_context() -> None:
+    dormant_flows = upsert_dormant_flow(
+        [],
+        {
+            "flow_type": "purchase",
+            "status": "active",
+            "product": {
+                "goods_no": "G-OLD-DORMANT",
+                "product_name": "벤투스 S2 AS",
+                "tire_size": "245/45R19",
+                "ord_qty": 2,
+            },
+            "store": {"shop_id": "S1", "shop_name": "티스테이션 분당정자점"},
+            "schedule": {"requested_cal_day": "20260708", "rsv_hour": "16"},
+            "payment": {"payment_amount": 308200, "price_basis": "cheapest_final_prc"},
+            "intent": {"pending_intent": "order", "goal_type": "place_order"},
+        },
+    )
+    result = commit_flow_state(
+        {
+            "flow_type": "purchase",
+            "status": "active",
+            "product": {
+                "goods_no": "G-OLD-ACTIVE",
+                "product_name": "벤투스 S2 AS",
+                "tire_size": "245/45R19",
+                "ord_qty": 2,
+            },
+            "store": {"shop_id": "S1", "shop_name": "티스테이션 분당정자점"},
+            "schedule": {"requested_cal_day": "20260708", "rsv_hour": "16"},
+            "payment": {"payment_amount": 308200, "price_basis": "cheapest_final_prc"},
+            "intent": {"pending_intent": "order", "goal_type": "place_order"},
+            "dormant_flows": dormant_flows,
+        },
+        {
+            "flow_type": "purchase",
+            "status": "active",
+            "product": {"product_name": "다이나프로 HP3", "tire_size": "255/45R19", "ord_qty": 2},
+            "intent": {"pending_intent": "order", "goal_type": "place_order"},
+        },
+        source="test_product_change",
+        flow_type="purchase",
+        status="active",
+    )
+
+    dormant_context = result.state.to_active_flow_context()["dormant_flows"][0]["context"]
+    assert dormant_context["product"]["product_name"] == "다이나프로 HP3"
+    assert dormant_context["product"]["tire_size"] == "255/45R19"
+    assert "goods_no" not in dormant_context["product"]
+    assert "store" not in dormant_context
+    assert "schedule" not in dormant_context
+    assert "payment" not in dormant_context
+    assert "dormant_flows" in result.metadata["committed_fields"]
+    assert result.metadata["dormant_dependency_cleared_fields"]
+
+
+def test_store_change_updates_dormant_flow_and_clears_schedule_payment() -> None:
+    dormant_flows = upsert_dormant_flow(
+        [],
+        {
+            "flow_type": "purchase",
+            "status": "active",
+            "product": {"goods_no": "G-1", "product_name": "벤투스 S2 AS", "tire_size": "245/45R19", "ord_qty": 2},
+            "store": {"shop_id": "S1", "shop_name": "티스테이션 분당정자점"},
+            "schedule": {"requested_cal_day": "20260708", "rsv_hour": "16"},
+            "payment": {"payment_amount": 308200, "price_basis": "cheapest_final_prc"},
+            "intent": {"pending_intent": "order", "goal_type": "place_order"},
+        },
+    )
+    result = commit_flow_state(
+        {
+            "flow_type": "purchase",
+            "status": "active",
+            "product": {"goods_no": "G-1", "product_name": "벤투스 S2 AS", "tire_size": "245/45R19", "ord_qty": 2},
+            "store": {"shop_id": "S1", "shop_name": "티스테이션 분당정자점"},
+            "schedule": {"requested_cal_day": "20260708", "rsv_hour": "16"},
+            "payment": {"payment_amount": 308200, "price_basis": "cheapest_final_prc"},
+            "intent": {"pending_intent": "order", "goal_type": "place_order"},
+            "dormant_flows": dormant_flows,
+        },
+        {
+            "flow_type": "purchase",
+            "status": "active",
+            "product": {"goods_no": "G-1", "product_name": "벤투스 S2 AS", "tire_size": "245/45R19", "ord_qty": 2},
+            "store": {"shop_id": "S2", "shop_name": "티스테이션 정발산점"},
+            "intent": {"pending_intent": "order", "goal_type": "place_order"},
+        },
+        source="test_store_change",
+        flow_type="purchase",
+        status="active",
+    )
+
+    dormant_context = result.state.to_active_flow_context()["dormant_flows"][0]["context"]
+    assert dormant_context["store"]["shop_id"] == "S2"
+    assert dormant_context["store"]["shop_name"] == "티스테이션 정발산점"
+    assert "schedule" not in dormant_context
+    assert "payment" not in dormant_context
+    assert "dormant_flows" in result.metadata["committed_fields"]
+
+
+def test_weak_flat_purchase_metadata_does_not_become_dormant_purchase() -> None:
+    result = commit_flow_state(
+        {
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "product_name": "Ventus S2 AS",
+            "tire_size": "245/45R19",
+            "template_data": {
+                "template": "preOrder",
+                "metadata": {"pendingIntent": "order", "goalType": "place_order"},
+            },
+        },
+        {
+            "flow_type": "support",
+            "status": "active",
+            "flow_step": "answer_faq",
+            "intent": {
+                "pending_intent": "general_cancel_fee_policy",
+                "goal_type": "support_faq",
+                "policy_topic": "general_cancel_fee_policy",
+            },
+        },
+        source="flow_controller:current_turn_support",
+        flow_type="support",
+        flow_step="answer_faq",
+        status="active",
+    )
+
+    context = result.state.to_active_flow_context()
+    assert context["flow_type"] == "support"
+    assert context["intent"]["pending_intent"] == "general_cancel_fee_policy"
+    assert context["intent"]["goal_type"] == "support_faq"
+    assert "dormant_flows" not in context
+    assert "product" not in context
+    assert result.metadata["flow_state_conflicts"] == {}
 
 
 def test_active_purchase_to_service_maintenance_preserves_action_boundary() -> None:

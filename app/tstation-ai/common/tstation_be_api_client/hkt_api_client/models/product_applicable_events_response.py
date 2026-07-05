@@ -19,18 +19,18 @@ T = TypeVar("T", bound="ProductApplicableEventsResponse")
 class ProductApplicableEventsResponse:
     """
     Attributes:
-        goods_no (str): 상품 번호
+        ptrn_cd (str): 상품 패턴 코드
         total (int): 적용 가능한 진행 중 이벤트 수
-        items (list[ProductApplicableEventItem] | Unset): 해당 상품에 적용 가능한 진행 중 이벤트 목록 (EVT_STRT_DTIME DESC)
+        items (list[ProductApplicableEventItem] | Unset): 해당 상품 패턴에 적용 가능한 진행 중 이벤트 목록 (EVT_STRT_DTIME DESC)
     """
 
-    goods_no: str
+    ptrn_cd: str
     total: int
     items: list[ProductApplicableEventItem] | Unset = UNSET
     additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        goods_no = self.goods_no
+        ptrn_cd = self.ptrn_cd
 
         total = self.total
 
@@ -45,7 +45,7 @@ class ProductApplicableEventsResponse:
         field_dict.update(self.additional_properties)
         field_dict.update(
             {
-                "goods_no": goods_no,
+                "ptrn_cd": ptrn_cd,
                 "total": total,
             }
         )
@@ -59,7 +59,7 @@ class ProductApplicableEventsResponse:
         from ..models.product_applicable_event_item import ProductApplicableEventItem
 
         d = dict(src_dict)
-        goods_no = d.pop("goods_no")
+        ptrn_cd = d.pop("ptrn_cd")
 
         total = d.pop("total")
 
@@ -73,7 +73,7 @@ class ProductApplicableEventsResponse:
                 items.append(items_item)
 
         product_applicable_events_response = cls(
-            goods_no=goods_no,
+            ptrn_cd=ptrn_cd,
             total=total,
             items=items,
         )

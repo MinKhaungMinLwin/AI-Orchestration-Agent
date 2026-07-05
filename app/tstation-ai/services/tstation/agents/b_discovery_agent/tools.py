@@ -1,5 +1,6 @@
 import logging
 import contextvars
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
@@ -10,7 +11,7 @@ from services.tstation.common.tstation_be_client import (
     _success_response,
     _to_dict,
 )
-from langchain.tools import tool
+from langchain_core.tools import tool
 from common.tool_cache import tool_cache
 
 from services.tstation.agents.b_discovery_agent._car_no_audit import (
@@ -22,6 +23,7 @@ from services.tstation.policies.ui_action_policy import normalize_vehicle_type_f
 # Product Compatibility
 from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.check_compatibility_api_product_compatible_get import sync_detailed as check_compatibility
 from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.search_product_api_product_search_get import sync_detailed as search_product
+from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.search_product_summary_api_product_search_summary_get import sync_detailed as search_product_summary
 from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.get_user_vehicles_api_user_vehicles_get import sync_detailed as get_user_vehicles
 from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.search_car_model_api_vehicle_search_get import sync_detailed as search_car_model
 from common.tstation_be_api_client.hkt_api_client.api.product_compatibility_af_차량_및_상품_호환_검증.search_car_model_groups_api_vehicle_models_get import sync_detailed as search_car_model_groups
@@ -44,6 +46,7 @@ from common.tstation_be_api_client.hkt_api_client.api.event_deal_af_이벤트_�
 from common.tstation_be_api_client.hkt_api_client.api.event_deal_af_이벤트_및_기획전_조회.get_deals_api_events_deals_get import sync_detailed as get_deals
 from common.tstation_be_api_client.hkt_api_client.api.event_deal_af_이벤트_및_기획전_조회.get_event_applicable_products_multi_api_events_applicable_products_get import sync_detailed as get_event_applicable_products
 from common.tstation_be_api_client.hkt_api_client.api.event_deal_af_이벤트_및_기획전_조회.get_product_applicable_events_api_events_applicable_events_get import sync_detailed as get_product_applicable_events
+from common.tstation_be_api_client.hkt_api_client.api.benefit_af_혜택_통합_조회.search_benefit_applicable_products_api_benefits_applicable_products_search_get import sync_detailed as search_benefit_applicable_products
 
 # Price
 from common.tstation_be_api_client.hkt_api_client.api.price_af_가격_및_할인_조회.get_discount_compare_api_prices_discount_compare_get import sync_detailed as get_discount_compare
@@ -148,9 +151,6 @@ def _apply_recommendation_policy_patch(
     suppress_vehicle_type_filter = bool(patch.get("suppress_vehicle_type_filter"))
     suppress_season_filter = bool(patch.get("suppress_season_filter"))
 
-    patched_rcmd_type = patch.get("rcmd_type")
-    if patched_rcmd_type:
-        rcmd_type = patched_rcmd_type if isinstance(patched_rcmd_type, RcmdType) else RcmdType(str(patched_rcmd_type))
     if patch.get("brand_cd"):
         brand_cd = str(patch["brand_cd"])
     if not tire_size and not car_lnc_cd and patch.get("tire_size"):
@@ -202,6 +202,7 @@ DOMAIN_TOOL_MAP = {
         "get_deals",
         "get_event_applicable_products",
         "get_product_applicable_events",
+        "search_benefit_applicable_products",
     },
     "transaction": {
         # Price
@@ -245,7 +246,7 @@ DOMAIN_TOOL_MAP = {
 # still reachable via get_product_description_tool when the user explicitly asks.
 _TRIM_KEEP_FIELDS: frozenset[str] = frozenset({
     # Identity
-    "goods_no", "goods_nm", "title",
+    "goods_no", "ptrn_cd", "goods_nm", "title",
     # Product recency
     "sys_reg_dtime",
     # Tire size — used by the agent to differentiate same-name SKUs in card titles
@@ -254,6 +255,7 @@ _TRIM_KEEP_FIELDS: frozenset[str] = frozenset({
     "available_sizes",
     # Visual / pricing
     "image_url", "price", "sale_prc", "extra_fvr_sale_prc", "extra_fvr_sale_per",
+    "min_sale_prc", "max_sale_prc", "min_extra_fvr_sale_prc", "max_extra_fvr_sale_prc", "max_extra_fvr_sale_per",
     # Scoring used for sort priority and rcmd_type matching
     "tot_scr",
     "t_comfort", "t_silence", "t_life_span", "t_fuel_eff_convert",
@@ -268,7 +270,7 @@ _TRIM_KEEP_FIELDS: frozenset[str] = frozenset({
     # EU 소음 라벨 (정숙성 점수 t_silence/t_com_sil_avg 와 별개. 표시용)
     "label_pnwave", "label_pnwave_nm", "label_pndb",
     # Rating / review (used for cards and sort_by="rating_desc"/"review_desc")
-    "rating_avg", "rate", "review_count",
+    "rating_avg", "rate", "review_count", "reviews",
     # 상품 등록 일시 — used to identify newest product among same-keyword results
     "sys_reg_dtime",
     # 신규 BE 확장 필드 — 사용자 질문 답변용 (사이즈/하중/브랜드/원산지/출시/성능/라벨/공임·보증)
@@ -285,6 +287,8 @@ _TRIM_KEEP_FIELDS: frozenset[str] = frozenset({
     # LLM 이 "쿠폰 적용하면 OO원" / "최저 OO원" 인용할 때 사용. null 인 회원이면
     # 자동으로 dict 에서 빠짐 (BE 응답에 null 값으로 들어와도 sale_prc 만 인용).
     "cheapest_final_prc", "cheapest_total_discount", "cheapest_applied_coupons",
+    # Size-less product summary endpoint fields.
+    "goods_no_count", "smrt_pay_yn", "warranty", "slogan", "pc_prod_remark_desc", "pc_prod_tech_desc",
 })
 
 
@@ -399,6 +403,27 @@ def _slim_product_item(item: dict) -> dict:
     fields in _TRIM_KEEP_FIELDS.
     """
     return {k: v for k, v in item.items() if k in _TRIM_KEEP_FIELDS}
+
+
+def _compact_html_text(value: Any, *, max_chars: int = 600) -> str | None:
+    text = re.sub(r"<[^>]+>", " ", str(value or ""))
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text:
+        return None
+    return text[:max_chars].rstrip()
+
+
+def _slim_product_summary_item(item: dict) -> dict:
+    slim = _slim_product_item(item)
+    for key in ("goods_no", "tire_size_1", "tire_size_2"):
+        slim.pop(key, None)
+    for key in ("pc_prod_remark_desc", "pc_prod_tech_desc"):
+        compacted = _compact_html_text(slim.get(key))
+        if compacted:
+            slim[key] = compacted
+        else:
+            slim.pop(key, None)
+    return slim
 
 
 # brand_cd 가 이미 브랜드 필터링을 수행하는데 keyword 에도 한글 브랜드명을
@@ -772,6 +797,67 @@ def search_product_tool(
 
 
 @tool
+@tool_cache(ttl=600)
+def search_product_summary_tool(
+    keyword: str | None = None,
+    limit: int = 5,
+    brand_cd: str | None = None,
+):
+    """
+    사이즈 미지정 상품군 검색.
+
+    When to use:
+    - User asks for product explanation, grade/features, warranty, available sizes, or product-to-product comparison
+      by product name only.
+    - User did NOT provide a tire size and the current turn does NOT need a concrete SKU for purchase/stock/order.
+
+    When NOT to use:
+    - User provided tire size.
+    - Purchase, stock, reservation, cart, final price, coupon issuance, or any flow that requires goods_no/SKU.
+      Use search_product_tool in those flows.
+
+    Args:
+        keyword (str | None): 상품명/모델명 키워드.
+        limit (int): 반환할 최대 상품군 수. 기본 5.
+        brand_cd (str | None): 브랜드 코드. 미지정 시 전체 브랜드 검색.
+
+    Returns:
+        dict: {"status": "success", "data": {"items": [...]}}. Items are pattern-level and intentionally do not
+        contain goods_no.
+    """
+    normalized_keyword = _strip_brand_only_keyword(keyword)
+    normalized_brand_cd = str(brand_cd).strip().upper() if brand_cd else None
+    brand_arg = normalized_brand_cd if normalized_brand_cd else UNSET
+    logger.debug(
+        "[TOOL][search_product_summary_tool] Called with: keyword=%s, limit=%s, brand_cd=%s",
+        normalized_keyword,
+        limit,
+        normalized_brand_cd,
+    )
+
+    try:
+        response = search_product_summary(
+            client=get_client(),
+            keyword=normalized_keyword,
+            limit=min(max(int(limit or 5), 1), 20),
+            brand_cd=brand_arg,
+        )
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to search product summaries",
+            )
+        data = _to_dict(response.parsed)
+        if isinstance(data, dict) and isinstance(data.get("items"), list):
+            data["items"] = [_slim_product_summary_item(item) for item in data["items"] if isinstance(item, dict)]
+        return _success_response(response.status_code, data)
+    except Exception as e:
+        logger.exception("[TOOL][search_product_summary_tool] Failed")
+        return _error_response(None, str(e), "Failed to search product summaries")
+
+
+@tool
 @tool_cache(ttl=3600)
 def get_user_vehicles_tool(car_no: str, owner_nm: str):
     """
@@ -1132,11 +1218,11 @@ def get_products_recommendations_tool(
             - "truck_van": 경트럭/밴/트럭용
             ⚠️ "전기차 저소음" 같은 복합 의도는 rcmd_type="low_vibration", vehicle_type="ev" 로 전달한다.
             기존 rcmd_type="ev" 는 하위 호환용 단일 전기차 추천일 때만 사용한다.
-            ⚠️ 사용자가 차종명만 말한 경우(미등록 차량, 사이즈 미확보)에도 차종 지식으로 타입을
-            추론해 전달한다: "E클래스" → "passenger", "G바겐" → "suv", "포터" → "truck_van".
-            EV 전용 모델(모델Y, 아이오닉5 등)이 아니면 "ev" 를 추론값으로 쓰지 마라.
-            결과 0건이면 도구가 자동으로 vehicle_type 필터를 풀고 1회 재시도한다
-            (응답의 `recommendation_fallback.assistant_response_hint` 를 답변에 반영).
+            ⚠️ 사용자가 차종명만 말한 경우(미등록 차량, 사이즈 미확보)에도 차종 지식으로 타입을 추론해
+            전달한다: "E클래스" → "passenger", "G바겐" → "suv", "포터" → "truck_van". EV 전용 모델
+            (모델Y, 아이오닉5 등)이 아니면 "ev" 를 추론값으로 쓰지 마라(코나·니로·G80 등 겸용 모델은 차체
+            타입 기준). 이때 tire_size 는 전달하지 않는다. 결과 0건이면 도구가 자동으로 vehicle_type
+            필터를 풀고 1회 재시도한다(응답의 `recommendation_fallback.assistant_response_hint` 반영).
         min_price (int | None, optional): 최소 가격 필터 (원 단위). Optional.
             예: 200_000 ("20만원 이상")
         max_price (int | None, optional): 최대 가격 필터 (원 단위). Optional.
@@ -1360,6 +1446,8 @@ def get_products_recommendations_tool(
 
         data = result.get("data")
         items = data.get("items") if isinstance(data, dict) else None
+        # Empty for a reason other than the price filter (price-empty has its own
+        # no_results messaging and must not be masked by a relaxed retry).
         has_empty_items = not has_price_filter and isinstance(items, list) and not items
         should_try_winter_fallback = (
             has_empty_items
@@ -1367,6 +1455,7 @@ def get_products_recommendations_tool(
             and requested_rcmd_type in {"snow", "tstation"}
         )
         if should_try_winter_fallback:
+            # Winter fallback runs first and KEEPS the vehicle_type filter.
             for fallback_rcmd_type, fallback_season_nm, fallback_label in _WINTER_RECOMMENDATION_FALLBACKS:
                 fallback_result = _fetch_recommendation_once(
                     call_rcmd_type=fallback_rcmd_type,
@@ -1401,6 +1490,9 @@ def get_products_recommendations_tool(
                 )
                 return fallback_result
 
+        # vehicle_type relax runs after winter fallback: an unregistered car-model
+        # inference may over-constrain (sparse CAR_KND_NM data). Retry once without
+        # the filter so the user still sees products.
         if has_empty_items and vehicle_type:
             relaxed_result = _fetch_recommendation_once(
                 call_rcmd_type=rcmd_type,
@@ -1460,6 +1552,48 @@ def get_events_tool(lang_cd: str = "ko"):
 
 @tool
 @tool_cache(ttl=600)
+def search_benefit_applicable_products_tool(query: str, lang_cd: str = "ko"):
+    """쿠폰/이벤트/기획전 통합 적용 상품 검색.
+
+    Use when user asks "패밀리 쿠폰 적용 가능한 상품", "반짝블랙딜 대상 상품",
+    "한국타이어 페스타에서 살 수 있는 상품" 등 혜택명/쿠폰명/이벤트명/기획전명을
+    기준으로 적용 가능한 대표 상품/매장을 찾을 때 사용. 차량/규격 기반 상품 검색은 포함하지 않음.
+
+    Args:
+        query (str): 혜택명/쿠폰명/이벤트명/기획전명 검색어. 예: "패밀리", "30% 할인", "반짝블랙딜".
+        lang_cd (str): 언어 코드. Default 'ko'.
+
+    Example: {"query": "패밀리", "lang_cd": "ko"}
+    """
+    normalized_query = re.sub(r"\s+", " ", str(query or "")).strip()
+    logger.debug(
+        "[TOOL][search_benefit_applicable_products_tool] Called with: query=%s, lang_cd=%s",
+        normalized_query, lang_cd,
+    )
+
+    if not normalized_query:
+        return _error_response(None, "query is empty", "검색어는 최소 1자 이상 필요합니다.")
+
+    try:
+        response = search_benefit_applicable_products(
+            client=get_client(),
+            query=normalized_query,
+            lang_cd=lang_cd or "ko",
+        )
+        if response.parsed is None:
+            return _error_response(
+                response.status_code,
+                f"HTTP {response.status_code}",
+                response.content.decode(errors="ignore") or "Failed to search benefit applicable products",
+            )
+        return _success_response(response.status_code, _to_dict(response.parsed))
+    except Exception as e:
+        logger.exception("[TOOL][search_benefit_applicable_products_tool] Failed")
+        return _error_response(None, str(e), "Failed to search benefit applicable products")
+
+
+@tool
+@tool_cache(ttl=600)
 def get_event_applicable_products_tool(evt_no_list: list[str]):
     """이벤트 적용 가능 상품 조회 — 여러 이벤트에 적용 가능한 상품 목록을 이벤트별 그룹핑하여 반환.
 
@@ -1495,7 +1629,7 @@ def get_event_applicable_products_tool(evt_no_list: list[str]):
 
 @tool
 @tool_cache(ttl=600)
-def get_product_applicable_events_tool(goods_no: str, lang_cd: str = "ko"):
+def get_product_applicable_events_tool(ptrn_cd: str, lang_cd: str = "ko"):
     """상품 적용 가능 이벤트 조회 — 특정 상품에 적용 가능한 진행 중 이벤트 목록.
 
     Use when user asks "이 상품에 어떤 이벤트가 적용돼?", "이 상품에 적용 가능한 이벤트 알려줘",
@@ -1503,18 +1637,18 @@ def get_product_applicable_events_tool(goods_no: str, lang_cd: str = "ko"):
     이벤트만 반환되며 50(상품 매핑) / 80(패턴 매핑) 양쪽 모두 포함.
 
     Args:
-        goods_no (str): 상품 번호 (예: 'G000000317693').
+        ptrn_cd (str): 상품 패턴 코드 (예: 'H462').
         lang_cd (str): 이벤트명 언어 코드. Default 'ko'.
 
-    Example: {"goods_no": "G000000317693", "lang_cd": "ko"}
+    Example: {"ptrn_cd": "H462", "lang_cd": "ko"}
     """
     logger.debug(
-        "[TOOL][get_product_applicable_events_tool] Called with: goods_no=%s, lang_cd=%s",
-        goods_no, lang_cd,
+        "[TOOL][get_product_applicable_events_tool] Called with: ptrn_cd=%s, lang_cd=%s",
+        ptrn_cd, lang_cd,
     )
 
     try:
-        response = get_product_applicable_events(client=get_client(), goods_no=goods_no, lang_cd=lang_cd)
+        response = get_product_applicable_events(client=get_client(), ptrn_cd=ptrn_cd, lang_cd=lang_cd)
         if response.parsed is None:
             return _error_response(
                 response.status_code,

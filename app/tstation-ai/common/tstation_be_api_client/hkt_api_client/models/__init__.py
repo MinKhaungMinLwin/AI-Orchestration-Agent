@@ -3,6 +3,10 @@
 from .applied_coupon_item import AppliedCouponItem
 from .available_coupon_item import AvailableCouponItem
 from .available_coupon_response import AvailableCouponResponse
+from .benefit_applicable_product_item import BenefitApplicableProductItem
+from .benefit_applicable_products_match import BenefitApplicableProductsMatch
+from .benefit_applicable_products_search_response import BenefitApplicableProductsSearchResponse
+from .benefit_applicable_store_item import BenefitApplicableStoreItem
 from .best_seller_fallback_option import BestSellerFallbackOption
 from .best_seller_item import BestSellerItem
 from .best_seller_period import BestSellerPeriod
@@ -92,6 +96,10 @@ from .product_desc_response import ProductDescResponse
 from .product_image import ProductImage
 from .product_search_item import ProductSearchItem
 from .product_search_response import ProductSearchResponse
+from .product_search_summary_item import ProductSearchSummaryItem
+from .product_search_summary_response import ProductSearchSummaryResponse
+from .product_search_summary_warranty import ProductSearchSummaryWarranty
+from .product_search_summary_warranty_item import ProductSearchSummaryWarrantyItem
 from .product_warranties_response import ProductWarrantiesResponse
 from .product_warranty_item import ProductWarrantyItem
 from .rcmd_goods_item import RcmdGoodsItem
@@ -129,6 +137,10 @@ __all__ = (
     "AppliedCouponItem",
     "AvailableCouponItem",
     "AvailableCouponResponse",
+    "BenefitApplicableProductItem",
+    "BenefitApplicableProductsMatch",
+    "BenefitApplicableProductsSearchResponse",
+    "BenefitApplicableStoreItem",
     "BestSellerFallbackOption",
     "BestSellerItem",
     "BestSellerPeriod",
@@ -214,6 +226,10 @@ __all__ = (
     "ProductImage",
     "ProductSearchItem",
     "ProductSearchResponse",
+    "ProductSearchSummaryItem",
+    "ProductSearchSummaryResponse",
+    "ProductSearchSummaryWarranty",
+    "ProductSearchSummaryWarrantyItem",
     "ProductWarrantiesResponse",
     "ProductWarrantyItem",
     "RcmdGoodsItem",

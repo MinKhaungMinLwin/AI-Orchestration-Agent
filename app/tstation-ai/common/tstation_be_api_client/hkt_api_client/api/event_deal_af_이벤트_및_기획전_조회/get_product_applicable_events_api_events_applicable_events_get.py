@@ -12,13 +12,13 @@ from ...types import UNSET, Response, Unset
 
 def _get_kwargs(
     *,
-    goods_no: str,
+    ptrn_cd: str,
     lang_cd: str | Unset = "ko",
 ) -> dict[str, Any]:
 
     params: dict[str, Any] = {}
 
-    params["goods_no"] = goods_no
+    params["ptrn_cd"] = ptrn_cd
 
     params["lang_cd"] = lang_cd
 
@@ -66,17 +66,17 @@ def _build_response(
 def sync_detailed(
     *,
     client: AuthenticatedClient,
-    goods_no: str,
+    ptrn_cd: str,
     lang_cd: str | Unset = "ko",
 ) -> Response[HTTPValidationError | ProductApplicableEventsResponse]:
     """상품 적용 가능 이벤트 조회
 
-     특정 상품(goods_no)에 적용 가능한 진행 중 이벤트 목록을 반환합니다. CC_EVT_APLY_INFO 의 50(상품 단위) / 80(패턴 단위) 매핑을 모두 검사하며, 전시
-    기간(SYSDATE BETWEEN) + DISP_YN='Y' + EVT_PRGS_STAT_CD='10' 조건을 만족하는 이벤트만 포함합니다. 결과는 EVT_STRT_DTIME
+     특정 상품 패턴(ptrn_cd)에 적용 가능한 진행 중 이벤트 목록을 반환합니다. CC_EVT_APLY_INFO 의 50(상품 단위) / 80(패턴 단위) 매핑을 모두 검사하며,
+    전시 기간(SYSDATE BETWEEN) + DISP_YN='Y' + EVT_PRGS_STAT_CD='10' 조건을 만족하는 이벤트만 포함합니다. 결과는 EVT_STRT_DTIME
     내림차순 정렬.
 
     Args:
-        goods_no (str): 상품 번호 (예: G000000317693)
+        ptrn_cd (str): 상품 패턴 코드 (예: K127)
         lang_cd (str | Unset): 이벤트명 언어 코드 (기본값: ko) Default: 'ko'.
 
     Raises:
@@ -88,7 +88,7 @@ def sync_detailed(
     """
 
     kwargs = _get_kwargs(
-        goods_no=goods_no,
+        ptrn_cd=ptrn_cd,
         lang_cd=lang_cd,
     )
 
@@ -102,17 +102,17 @@ def sync_detailed(
 def sync(
     *,
     client: AuthenticatedClient,
-    goods_no: str,
+    ptrn_cd: str,
     lang_cd: str | Unset = "ko",
 ) -> HTTPValidationError | ProductApplicableEventsResponse | None:
     """상품 적용 가능 이벤트 조회
 
-     특정 상품(goods_no)에 적용 가능한 진행 중 이벤트 목록을 반환합니다. CC_EVT_APLY_INFO 의 50(상품 단위) / 80(패턴 단위) 매핑을 모두 검사하며, 전시
-    기간(SYSDATE BETWEEN) + DISP_YN='Y' + EVT_PRGS_STAT_CD='10' 조건을 만족하는 이벤트만 포함합니다. 결과는 EVT_STRT_DTIME
+     특정 상품 패턴(ptrn_cd)에 적용 가능한 진행 중 이벤트 목록을 반환합니다. CC_EVT_APLY_INFO 의 50(상품 단위) / 80(패턴 단위) 매핑을 모두 검사하며,
+    전시 기간(SYSDATE BETWEEN) + DISP_YN='Y' + EVT_PRGS_STAT_CD='10' 조건을 만족하는 이벤트만 포함합니다. 결과는 EVT_STRT_DTIME
     내림차순 정렬.
 
     Args:
-        goods_no (str): 상품 번호 (예: G000000317693)
+        ptrn_cd (str): 상품 패턴 코드 (예: K127)
         lang_cd (str | Unset): 이벤트명 언어 코드 (기본값: ko) Default: 'ko'.
 
     Raises:
@@ -125,7 +125,7 @@ def sync(
 
     return sync_detailed(
         client=client,
-        goods_no=goods_no,
+        ptrn_cd=ptrn_cd,
         lang_cd=lang_cd,
     ).parsed
 
@@ -133,17 +133,17 @@ def sync(
 async def asyncio_detailed(
     *,
     client: AuthenticatedClient,
-    goods_no: str,
+    ptrn_cd: str,
     lang_cd: str | Unset = "ko",
 ) -> Response[HTTPValidationError | ProductApplicableEventsResponse]:
     """상품 적용 가능 이벤트 조회
 
-     특정 상품(goods_no)에 적용 가능한 진행 중 이벤트 목록을 반환합니다. CC_EVT_APLY_INFO 의 50(상품 단위) / 80(패턴 단위) 매핑을 모두 검사하며, 전시
-    기간(SYSDATE BETWEEN) + DISP_YN='Y' + EVT_PRGS_STAT_CD='10' 조건을 만족하는 이벤트만 포함합니다. 결과는 EVT_STRT_DTIME
+     특정 상품 패턴(ptrn_cd)에 적용 가능한 진행 중 이벤트 목록을 반환합니다. CC_EVT_APLY_INFO 의 50(상품 단위) / 80(패턴 단위) 매핑을 모두 검사하며,
+    전시 기간(SYSDATE BETWEEN) + DISP_YN='Y' + EVT_PRGS_STAT_CD='10' 조건을 만족하는 이벤트만 포함합니다. 결과는 EVT_STRT_DTIME
     내림차순 정렬.
 
     Args:
-        goods_no (str): 상품 번호 (예: G000000317693)
+        ptrn_cd (str): 상품 패턴 코드 (예: K127)
         lang_cd (str | Unset): 이벤트명 언어 코드 (기본값: ko) Default: 'ko'.
 
     Raises:
@@ -155,7 +155,7 @@ async def asyncio_detailed(
     """
 
     kwargs = _get_kwargs(
-        goods_no=goods_no,
+        ptrn_cd=ptrn_cd,
         lang_cd=lang_cd,
     )
 
@@ -167,17 +167,17 @@ async def asyncio_detailed(
 async def asyncio(
     *,
     client: AuthenticatedClient,
-    goods_no: str,
+    ptrn_cd: str,
     lang_cd: str | Unset = "ko",
 ) -> HTTPValidationError | ProductApplicableEventsResponse | None:
     """상품 적용 가능 이벤트 조회
 
-     특정 상품(goods_no)에 적용 가능한 진행 중 이벤트 목록을 반환합니다. CC_EVT_APLY_INFO 의 50(상품 단위) / 80(패턴 단위) 매핑을 모두 검사하며, 전시
-    기간(SYSDATE BETWEEN) + DISP_YN='Y' + EVT_PRGS_STAT_CD='10' 조건을 만족하는 이벤트만 포함합니다. 결과는 EVT_STRT_DTIME
+     특정 상품 패턴(ptrn_cd)에 적용 가능한 진행 중 이벤트 목록을 반환합니다. CC_EVT_APLY_INFO 의 50(상품 단위) / 80(패턴 단위) 매핑을 모두 검사하며,
+    전시 기간(SYSDATE BETWEEN) + DISP_YN='Y' + EVT_PRGS_STAT_CD='10' 조건을 만족하는 이벤트만 포함합니다. 결과는 EVT_STRT_DTIME
     내림차순 정렬.
 
     Args:
-        goods_no (str): 상품 번호 (예: G000000317693)
+        ptrn_cd (str): 상품 패턴 코드 (예: K127)
         lang_cd (str | Unset): 이벤트명 언어 코드 (기본값: ko) Default: 'ko'.
 
     Raises:
@@ -191,7 +191,7 @@ async def asyncio(
     return (
         await asyncio_detailed(
             client=client,
-            goods_no=goods_no,
+            ptrn_cd=ptrn_cd,
             lang_cd=lang_cd,
         )
     ).parsed

@@ -14,12 +14,15 @@ _MIN_ROUTER_CONFIDENCE = 0.7
 _DIRECT_TEMPLATE_TOOLS = frozenset({
     "get_my_cars_tool",
     "get_products_recommendations_tool",
+    "search_product_summary_tool",
     "get_my_coupons_tool",
+    "search_benefit_applicable_products_tool",
     "search_stores_tool",
     "search_stores_complex_tool",
     "get_store_list_tool",
     "get_nearby_stores_tool",
     "get_store_schedule_tool",
+    "get_my_reservations_tool",
 })
 _COMPLEX_EXPLANATION_RE = re.compile(
     r"왜|이유|설명|자세히|장단점|비교|차이|정책|규정|불만|오류|에러|문제|안\s*되|안되|고장|환불|교환|보증",
@@ -29,6 +32,7 @@ _DIRECT_PRIMARY_ACTIONS = frozenset({
     "recommend",
     "search",
     "lookup",
+    "compare",
     "book",
     "reserve",
     "coupon_lookup",
@@ -69,15 +73,20 @@ def evaluate_contract_direct_path(
     domain = str(turn_contract.domain or "").strip().lower()
     if domain not in {PolicyDomain.DISCOVERY.value, PolicyDomain.TRANSACTION.value}:
         return _fallback("support_policy_question")
-    if _router_confidence(router_evidence) < _MIN_ROUTER_CONFIDENCE:
+    if (
+        _router_confidence(router_evidence) < _MIN_ROUTER_CONFIDENCE
+        and not _is_deterministic_benefit_applicable_products_contract(turn_contract)
+    ):
         return _fallback("low_router_confidence")
     primary_action = str((router_evidence or {}).get("primary_action") or "").strip()
     if primary_action not in _DIRECT_PRIMARY_ACTIONS:
         return _fallback("unclear_primary_action")
     if _COMPLEX_EXPLANATION_RE.search(user_text or ""):
         if "비교" in str(user_text or ""):
-            return _fallback("comparison_requires_llm")
-        return _fallback("complex_explanation_request")
+            if str(getattr(turn_contract, "intent", "") or "") != "product_comparison":
+                return _fallback("comparison_requires_llm")
+        else:
+            return _fallback("complex_explanation_request")
     if tuple(getattr(turn_contract, "blocking_required_slots", ()) or ()):
         return _fallback("missing_required_slot")
     preferred_tool = str(getattr(turn_contract, "preferred_tool", "") or "").strip()
@@ -124,7 +133,19 @@ def _evaluate_discovery_contract(
     template: str,
     known_slots: Mapping[str, Any],
 ) -> DirectPathDecision:
-    if str(turn_contract.intent or "") != "product_recommendation":
+    intent = str(turn_contract.intent or "")
+    if intent == "product_comparison" and tool == "search_product_summary_tool":
+        return DirectPathDecision(True, True, "product_comparison_summary", None, tool, "quickReply")
+    if intent == "event_applicable_products_lookup" and tool == "search_benefit_applicable_products_tool":
+        query = str(
+            (turn_contract.tool_args_patch or {}).get("query")
+            or known_slots.get("benefit_applicable_products_query")
+            or ""
+        ).strip()
+        if query:
+            return DirectPathDecision(True, True, "event_applicable_products_lookup", None, tool, "quickReply")
+        return _fallback("missing_required_slot")
+    if intent != "product_recommendation":
         return _fallback("no_deterministic_template")
     if tool == "get_my_cars_tool":
         registered_vehicle = _entity(router_evidence, "registered_vehicle")
@@ -164,6 +185,17 @@ def _evaluate_transaction_contract(
         if known_slots.get("shop_id") or (turn_contract.tool_args_patch or {}).get("shop_id"):
             return DirectPathDecision(True, True, "store_schedule", None, tool, "datepick")
         return _fallback("missing_required_slot")
+    if intent in {"reservation_status_lookup", "reservation_store_info_lookup"} and tool == "get_my_reservations_tool":
+        return DirectPathDecision(True, True, "reservation_lookup", None, tool, "quickReply")
+    if intent == "coupon_applicable_products" and tool == "search_benefit_applicable_products_tool":
+        query = str(
+            (turn_contract.tool_args_patch or {}).get("query")
+            or known_slots.get("benefit_applicable_products_query")
+            or ""
+        ).strip()
+        if query:
+            return DirectPathDecision(True, True, "benefit_applicable_products_lookup", None, tool, "quickReply")
+        return _fallback("missing_required_slot")
     if tool == "get_my_coupons_tool":
         if str((router_evidence or {}).get("domain") or "").strip() == PolicyDomain.SUPPORT.value:
             return _fallback("support_policy_question")
@@ -188,14 +220,36 @@ def _entity(router_evidence: Mapping[str, Any], name: str) -> dict[str, Any]:
     return dict(entity) if isinstance(entity, Mapping) else {}
 
 
+def _is_deterministic_benefit_applicable_products_contract(turn_contract: TurnContract) -> bool:
+    domain = str(turn_contract.domain or "").strip().lower()
+    intent = str(turn_contract.intent or "").strip()
+    preferred_tool = str(getattr(turn_contract, "preferred_tool", "") or "").strip()
+    allowed_tools = set(turn_contract.allowed_tools or ())
+    if preferred_tool != "search_benefit_applicable_products_tool" or preferred_tool not in allowed_tools:
+        return False
+    if domain == PolicyDomain.DISCOVERY.value and intent == "event_applicable_products_lookup":
+        query = str(
+            (turn_contract.tool_args_patch or {}).get("query")
+            or (turn_contract.known_slots or {}).get("benefit_applicable_products_query")
+            or ""
+        ).strip()
+        return bool(query)
+    return (
+        domain == PolicyDomain.TRANSACTION.value
+        and intent == "coupon_applicable_products"
+    )
+
+
 def _template_for_tool(tool: str) -> str:
     return {
         "get_my_cars_tool": "listCar",
         "get_products_recommendations_tool": "product",
         "get_my_coupons_tool": "voucher",
+        "search_benefit_applicable_products_tool": "quickReply",
         "search_stores_tool": "location",
         "search_stores_complex_tool": "location",
         "get_store_list_tool": "location",
         "get_nearby_stores_tool": "location",
         "get_store_schedule_tool": "datepick",
+        "get_my_reservations_tool": "quickReply",
     }.get(tool, "")

@@ -605,7 +605,10 @@ Rules:
 
 1. Output exactly ONE fenced ```json block. No prose, no greeting, no explanation outside the block.
 2. `assistantResponse` must contain the full natural Korean (or English when user wrote English) answer.
-3. `quickReplies` must contain 2 to 4 short, useful next-step suggestions.
+3. `quickReplies` may contain 0 to 4 chips. A chip is allowed ONLY when clicking it triggers a real
+   executable action (a registered CTA label from the list below). Label-only decorative chips are
+   stripped by the backend CTA gate, so never emit them. An empty `quickReplies: []` is a valid,
+   normal output when no real next action fits.
 4. `predictedDomains` must list the likely domains for the user's next free-text reply, derived from current user intent and your chips. Use only unique values from: "DISCOVERY", "TRANSACTION", "SUPPORT", "LEADING".
 5. Never leave `assistantResponse` empty.
 6. Never return more than one template.
@@ -616,46 +619,41 @@ Rules:
 - `"SUPPORT"` — warranty, returns, FAQ, 1:1 escalation
 - `"LEADING"` — restart / go back to main menu ("처음으로")
 
+Registered action chips (the ONLY labels you may emit — anything else is stripped by the backend gate):
+- {{"label": "상품 검색", "domain": "DISCOVERY"}} — start a product search
+- {{"label": "타이어 추천", "domain": "DISCOVERY"}} — start a tire recommendation flow
+- {{"label": "내 차 검색", "domain": "DISCOVERY"}} — look up the user's registered vehicles (logged-in users)
+- {{"label": "매장 찾기", "domain": "TRANSACTION"}} — start a store search
+- {{"label": "내 예약 조회", "domain": "TRANSACTION"}} — look up the user's own orders/reservations
+- {{"label": "1:1 문의하기", "domain": "SUPPORT"}}  # ONLY when the user explicitly asks for 문의/상담/클레임
+- {{"label": "상담사 연결", "domain": "SUPPORT"}}  # ONLY for a clear complaint / escalation request
+
 Quick reply guidance by case:
-- Greeting: recommendation (DISCOVERY), store search (TRANSACTION), order lookup (TRANSACTION), support (SUPPORT)
-- Self introduction: recommendation (DISCOVERY), store search (TRANSACTION), price lookup (TRANSACTION)
-- Complaint: support connection (SUPPORT), retry (LEADING)
-- Out of scope: tire recommendation (DISCOVERY), price lookup (TRANSACTION)
+- Greeting / self introduction: `[상품 검색, 타이어 추천, 매장 찾기]` (+ `내 예약 조회` when relevant).
+- Complaint: `[상담사 연결]`.
+- Out of scope: `[타이어 추천, 매장 찾기]` or empty.
 - Purchase completion / return visit / satisfaction: MANDATORY — when the user expresses satisfaction,
   mentions a positive past purchase experience, gives thanks, or signals intent to revisit/repurchase
   (trigger keywords: 만족, 잘 구매, 다음에도, 또 이용, 또 구매, 온라인으로 구매, 이용하도록 할게, 다시 이용,
   감사해, 고마워, 잘 받았어, 좋았어), you MUST emit **progress-oriented chips** that invite the user's next
   action — NOT failure/error chips.
   Recommended chip set (in this order): `[{{"label":"상품 검색","domain":"DISCOVERY"}},
-  {{"label":"타이어 추천","domain":"DISCOVERY"}}, {{"label":"처음으로","domain":"LEADING"}}]`.
+  {{"label":"타이어 추천","domain":"DISCOVERY"}}]`.
   - ❌ FORBIDDEN for these messages:
     - `"구매하기"` chip (사용자는 **방금 구매 만족 표현** 한 상태 — 즉시 또 구매하기로 유도하면 어색하고
        상품 컨텍스트도 없어 후속 turn 에서 "상품 정보 확인 안 됨" 에러로 이어짐). 호감 발화 직후엔 발견 단계
        (상품 검색/타이어 추천) 로 보내야 자연스러움.
-    - `"다시 시도"` (사용자는 실패한 게 없음),
     - `"상담사 연결"` (사용자는 만족 상태인데 CS 연결을 권하면 부적절),
-    - `"1:1 문의하기"` 단독, `"처음으로"` 단독, 그리고 어떤 형태의 "실패/오류/재시도" 느낌 chip.
+    - `"1:1 문의하기"`, 그리고 어떤 형태의 "실패/오류/재시도" 느낌 chip.
   - ✅ 이 룰은 사용자 발화에 "지역명"/"매장명"이 포함되어 있어도 동일하게 적용 — 위 권장 chip 셋을 우선.
   - ✅ chip 맨 앞 자리는 반드시 **DISCOVERY 도메인의 발견형 chip**("상품 검색" 또는 "타이어 추천") 으로 시작.
-    "매장 찾기" / "구매하기" / "처음으로" 가 첫 자리에 오면 안 됨.
+    "매장 찾기" / "구매하기" 가 첫 자리에 오면 안 됨.
 
-General rule — fallback/failure-style chips:
-- `"다시 시도"` chip 은 **명확한 에러/실패 케이스에서만** 사용 (예: 도구 호출 실패, 사용자가 명백한 불만/문제 호소).
-  단순 인사·호감 표현·일반 문의에는 절대 emit 금지.
-- `"상담사 연결"` chip 도 마찬가지로 **명백한 불만/escalation 요청 케이스에서만** 사용. 사용자가 만족이나
+General rule — chips are actions, not decoration:
+- A chip must trigger a real next action when clicked. If no registered action fits the current turn,
+  emit `quickReplies: []` — never pad with text-only labels (`다시 시도`, `처음으로`, `가격 조회`, `주문 조회` 등 금지).
+- `"상담사 연결"` chip 은 **명백한 불만/escalation 요청 케이스에서만** 사용. 사용자가 만족이나
   중립적 표현일 때 emit 하면 UX 가 부정적으로 느껴짐.
-- 모든 quickReply 의 디폴트는 **사용자가 다음에 할 수 있는 긍정·진행 액션**(상품 검색, 타이어 추천, 매장 찾기,
-  주문 조회, 가격 조회 등).
-
-Good quick reply examples:
-- {{"label": "상품 검색", "domain": "DISCOVERY"}}
-- {{"label": "타이어 추천", "domain": "DISCOVERY"}}
-- {{"label": "매장 찾기", "domain": "TRANSACTION"}}
-- {{"label": "주문 조회", "domain": "TRANSACTION"}}
-- {{"label": "가격 조회", "domain": "TRANSACTION"}}
-- {{"label": "1:1 문의", "domain": "SUPPORT"}}  # 사용자가 직접 문의 의도 표현 시에만
-- {{"label": "상담사 연결", "domain": "SUPPORT"}}  # 명백한 불만/escalation 시에만
-- {{"label": "처음으로", "domain": "LEADING"}}
 """
 
 

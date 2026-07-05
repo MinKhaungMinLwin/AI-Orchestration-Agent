@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import replace
 import json
 import logging
 import re
@@ -19,11 +20,23 @@ from services.tstation.policies.contract_required_tool_candidate import (
 )
 from services.tstation.policies.discovery_intent_policy import normalize_tire_size
 from services.tstation.policies.intent_frame import PolicyDomain
+from services.tstation.policies.preorder_event_builder import build_preorder_event
 from services.tstation.policies.resolved_context import (
     canonical_context_from_template_boundary,
     canonical_context_from_tool_boundary,
 )
-from services.tstation.policies.turn_contract import TurnContract
+from services.tstation.policies.reservation_history_policy import (
+    build_reservation_status_lookup_event,
+    build_reservation_store_info_event,
+    build_reservation_store_not_found_event,
+    select_reservation_store_row,
+)
+from services.tstation.policies.support_response_policy import (
+    build_general_cancel_fee_policy_event,
+    build_general_card_cancel_timing_policy_event,
+    build_support_faq_policy_event,
+)
+from services.tstation.policies.turn_contract import TurnContract, violates_response_template_contract
 
 
 logger = logging.getLogger(__name__)
@@ -69,6 +82,42 @@ def _best_selling_general_fallback_input(
     return fallback_input
 
 
+def _tool_success_data(tool_result: Mapping[str, Any]) -> Mapping[str, Any]:
+    if str(tool_result.get("status") or "").lower() != "success":
+        return {}
+    data = tool_result.get("data")
+    return data if isinstance(data, Mapping) else {}
+
+
+def _first_summary_ptrn_cd(tool_result: Mapping[str, Any]) -> str:
+    data = _tool_success_data(tool_result)
+    items = data.get("items")
+    if not isinstance(items, list):
+        return ""
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        ptrn_cd = str(item.get("ptrn_cd") or "").strip()
+        if ptrn_cd:
+            return ptrn_cd
+    return ""
+
+
+def _event_numbers_from_result(tool_result: Mapping[str, Any]) -> list[str]:
+    data = _tool_success_data(tool_result)
+    rows = data.get("items") or data.get("events")
+    if not isinstance(rows, list):
+        return []
+    result: list[str] = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        evt_no = str(row.get("evt_no") or row.get("event_no") or "").strip()
+        if evt_no and evt_no not in result:
+            result.append(evt_no)
+    return result[:10]
+
+
 def _contract_annotation_metadata(event_data: dict[str, Any]) -> dict[str, Any]:
     metadata = event_data.get("metadata")
     if isinstance(metadata, dict):
@@ -112,6 +161,12 @@ def _annotate_contract_tool_recovery_event(
         metadata["recovery_reason"] = recovery_reason
         metadata["tool_input_source"] = tool_input_source
     return event
+
+
+def _annotate_called_tools(event: dict[str, Any], tool_data_list: list[dict[str, Any]]) -> None:
+    called_tools = [str(entry.get("tool") or "") for entry in tool_data_list if str(entry.get("tool") or "").strip()]
+    if called_tools:
+        event["called_tools"] = called_tools
 
 
 def _annotate_stock_inventory_store_lookup_event(
@@ -187,6 +242,23 @@ def _annotate_stock_inventory_store_lookup_event(
         for key, value in common.items():
             if value not in (None, "", [], {}):
                 meta.setdefault(key, value)
+
+def _sanitize_event_for_turn_contract(event: dict[str, Any], turn_contract: TurnContract) -> dict[str, Any]:
+    if str(turn_contract.intent or "").strip() != "stock_store_search":
+        return event
+    if str((turn_contract.known_slots or {}).get("stock_check_mode") or "").strip() != "inventory_only":
+        return event
+    if str(event.get("template") or "") != "location":
+        return event
+    event_data = event.get("data")
+    if not isinstance(event_data, dict) or event_data.get("isBookingFlow") is not True:
+        return event
+    event_data["isBookingFlow"] = False
+    metadata = _contract_annotation_metadata(event_data)
+    metadata["stockCheckMode"] = "inventory_only"
+    metadata["stock_check_mode"] = "inventory_only"
+    metadata["isBookingFlowSanitized"] = True
+    return event
 
 
 async def _recover_contract_required_store_flow_tool(
@@ -358,6 +430,33 @@ async def continue_active_flow_after_tool(
     )
 
 
+async def _recover_contract_required_schedule_final_price(
+    *,
+    turn_contract: TurnContract | None,
+    user_text: str,
+    merged_slots: ConversationSlots | None,
+    blocked_fast_path_source: str = "contract_required_schedule_final_price",
+    member_no: str | None = None,
+) -> dict[str, Any] | None:
+    if turn_contract is None:
+        return None
+    candidate = _contract_required_tool_candidate(
+        turn_contract=turn_contract,
+        user_text=user_text,
+        merged_slots=merged_slots,
+        member_no=member_no,
+    )
+    if candidate is None or candidate.tool_input_source != "turn_contract_schedule_final_price":
+        return None
+    return await recover_blocked_fast_path_to_contract_tool(
+        turn_contract=turn_contract,
+        user_text=user_text,
+        merged_slots=merged_slots,
+        blocked_fast_path_source=blocked_fast_path_source,
+        member_no=member_no,
+    )
+
+
 async def _recover_contract_required_tool(
     *,
     turn_contract: TurnContract | None,
@@ -395,6 +494,15 @@ async def _recover_contract_required_tool(
     )
     if owned_record_recovery is not None:
         return owned_record_recovery
+    schedule_final_price_recovery = await _recover_contract_required_schedule_final_price(
+        turn_contract=turn_contract,
+        user_text=user_text,
+        merged_slots=merged_slots,
+        blocked_fast_path_source=blocked_fast_path_source,
+        member_no=member_no,
+    )
+    if schedule_final_price_recovery is not None:
+        return schedule_final_price_recovery
     flow_progress_recovery = await _recover_contract_required_flow_progress_tool(
         turn_contract=turn_contract,
         user_text=user_text,
@@ -404,13 +512,24 @@ async def _recover_contract_required_tool(
     )
     if flow_progress_recovery is not None:
         return flow_progress_recovery
-    return await _recover_contract_required_vehicle_recommendation(
+    vehicle_recovery = await _recover_contract_required_vehicle_recommendation(
         turn_contract=turn_contract,
         user_text=user_text,
         merged_slots=merged_slots,
         blocked_fast_path_source=blocked_fast_path_source,
         member_no=member_no,
     )
+    if vehicle_recovery is not None:
+        return vehicle_recovery
+    if str(blocked_fast_path_source or "").startswith("contract_direct_executor:"):
+        return await recover_blocked_fast_path_to_contract_tool(
+            turn_contract=turn_contract,
+            user_text=user_text,
+            merged_slots=merged_slots,
+            blocked_fast_path_source=blocked_fast_path_source,
+            member_no=member_no,
+        )
+    return None
 
 
 def contract_required_tool_start_event(
@@ -430,7 +549,17 @@ def contract_required_tool_start_event(
     context_state = str(getattr(turn_contract, "context_state", "") or "")
     current_turn_vehicle_recommendation = _is_vehicle_selection_recommendation_contract(turn_contract)
     current_turn_direct_path = str(blocked_fast_path_source or "").startswith("contract_direct_executor:")
-    if context_state not in {"active", "resumed"} and not current_turn_vehicle_recommendation and not current_turn_direct_path:
+    current_turn_owned_record_lookup = (
+        str(turn_contract.domain or "").strip().lower() == PolicyDomain.TRANSACTION.value
+        and str(turn_contract.intent or "").strip() in _OWNED_RECORD_RECOVERY_INTENTS
+        and str(getattr(turn_contract, "preferred_tool", None) or "").strip() in _OWNED_RECORD_RECOVERY_TOOLS
+    )
+    if (
+        context_state not in {"active", "resumed"}
+        and not current_turn_vehicle_recommendation
+        and not current_turn_direct_path
+        and not current_turn_owned_record_lookup
+    ):
         return None
 
     candidate = _contract_required_tool_candidate(
@@ -544,6 +673,78 @@ def _registered_vehicle_general_recommendation_input(*, turn_contract: TurnContr
     return {key: value for key, value in tool_input.items() if value not in (None, "", [], {})}
 
 
+_FINAL_PRICE_PRIORITY_FIELDS = (
+    "cheapest_final_prc",
+    "final_unit_price",
+    "final_prc",
+    "extra_fvr_sale_prc",
+    "price",
+    "sale_prc",
+)
+
+def _positive_int(value: Any) -> int | None:
+    if value in (None, "", []) or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, float):
+        return int(value) if value > 0 else None
+    text = str(value).strip().replace(",", "")
+    if not re.fullmatch(r"\d+(?:\.0+)?", text):
+        return None
+    parsed = int(float(text))
+    return parsed if parsed > 0 else None
+
+def _final_price_payment_fields(tool_result: Mapping[str, Any], quantity: int) -> dict[str, Any]:
+    data = tool_result.get("data") if isinstance(tool_result, Mapping) else None
+    if not isinstance(data, Mapping) or quantity <= 0:
+        return {}
+    unit_price = None
+    price_basis = None
+    for field in _FINAL_PRICE_PRIORITY_FIELDS:
+        candidate = _positive_int(data.get(field))
+        if candidate is not None:
+            unit_price = candidate
+            price_basis = field
+            break
+    if unit_price is None or price_basis is None:
+        return {}
+    wage = _positive_int(data.get("wage_prc") or data.get("wage_today_prc")) or 0
+    return {
+        price_basis: unit_price,
+        "wage_prc": wage,
+        "payment_amount": (unit_price + wage) * quantity,
+        "price_basis": price_basis,
+        "price_source_tool": "get_final_price_tool",
+        "payment_amount_source": "get_final_price_tool",
+    }
+
+def _preorder_event_from_final_price_recovery(
+    turn_contract: TurnContract,
+    tool_result: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    known_slots = dict(turn_contract.known_slots or {})
+    quantity = _positive_int(known_slots.get("ord_qty") or known_slots.get("quantity")) or 0
+    payment_fields = _final_price_payment_fields(tool_result, quantity)
+    if not payment_fields:
+        return None
+    updated_slots = {**known_slots, **payment_fields}
+    response_decision = dict(turn_contract.response_decision or {})
+    response_metadata = dict(response_decision.get("metadata") or {})
+    response_metadata["response_shape_key"] = "reservation_confirmation_ready"
+    response_metadata["flow_step"] = "build_preorder"
+    response_decision["template"] = "preOrder"
+    response_decision["metadata"] = response_metadata
+    ready_contract = replace(
+        turn_contract,
+        known_slots=updated_slots,
+        response_decision=response_decision,
+        allowed_tools=(),
+        preferred_tool=None,
+        flow_step="build_preorder",
+    )
+    return build_preorder_event(ready_contract, updated_slots)
+
 async def _maybe_run_registered_vehicle_recommendation(
     *,
     turn_contract: TurnContract,
@@ -603,7 +804,17 @@ async def recover_blocked_fast_path_to_contract_tool(
     context_state = str(getattr(turn_contract, "context_state", "") or "")
     current_turn_vehicle_recommendation = _is_vehicle_selection_recommendation_contract(turn_contract)
     current_turn_direct_path = str(blocked_fast_path_source or "").startswith("contract_direct_executor:")
-    if context_state not in {"active", "resumed"} and not current_turn_vehicle_recommendation and not current_turn_direct_path:
+    current_turn_owned_record_lookup = (
+        str(turn_contract.domain or "").strip().lower() == PolicyDomain.TRANSACTION.value
+        and str(turn_contract.intent or "").strip() in _OWNED_RECORD_RECOVERY_INTENTS
+        and str(getattr(turn_contract, "preferred_tool", None) or "").strip() in _OWNED_RECORD_RECOVERY_TOOLS
+    )
+    if (
+        context_state not in {"active", "resumed"}
+        and not current_turn_vehicle_recommendation
+        and not current_turn_direct_path
+        and not current_turn_owned_record_lookup
+    ):
         return None
 
     contract_intent = str(turn_contract.intent or "")
@@ -640,10 +851,50 @@ async def recover_blocked_fast_path_to_contract_tool(
             tool = getattr(transaction_tools, preferred_tool, None)
         if tool is None or not hasattr(tool, "invoke"):
             return None
-        raw_result = await asyncio.to_thread(tool.invoke, tool_input)
-        tool_result = raw_result if isinstance(raw_result, dict) else qc_verifier.parse_tool_output(raw_result)
-        if not isinstance(tool_result, dict):
-            tool_result = {"status": "error", "http_status": None, "message": "Invalid tool response", "data": {}}
+        fanout_tool_data_list: list[dict[str, Any]] = []
+        if preferred_tool == "search_product_summary_tool" and isinstance(tool_input.get("keywords"), list):
+            fanout_items: list[Any] = []
+            for keyword in [str(value).strip() for value in tool_input.get("keywords", []) if str(value).strip()][:5]:
+                per_tool_input = {
+                    key: value
+                    for key, value in tool_input.items()
+                    if key != "keywords" and value not in (None, "", [], {})
+                }
+                per_tool_input["keyword"] = keyword
+                raw_result = await asyncio.to_thread(tool.invoke, per_tool_input)
+                per_tool_result = raw_result if isinstance(raw_result, dict) else qc_verifier.parse_tool_output(raw_result)
+                if not isinstance(per_tool_result, dict):
+                    per_tool_result = {
+                        "status": "error",
+                        "http_status": None,
+                        "message": "Invalid tool response",
+                        "data": {},
+                    }
+                fanout_tool_data_list.append({
+                    "tool": preferred_tool,
+                    "args": per_tool_input,
+                    "data": per_tool_result,
+                })
+                per_data = per_tool_result.get("data") if isinstance(per_tool_result, Mapping) else None
+                per_items = per_data.get("items") if isinstance(per_data, Mapping) else None
+                if isinstance(per_items, list):
+                    fanout_items.extend(per_items)
+            tool_result = {
+                "status": "success" if fanout_tool_data_list else "error",
+                "http_status": 200 if fanout_tool_data_list else None,
+                "data": {"items": fanout_items},
+                "fanout_count": len(fanout_tool_data_list),
+            } if fanout_tool_data_list else {
+                "status": "error",
+                "http_status": None,
+                "message": "No product keywords",
+                "data": {},
+            }
+        else:
+            raw_result = await asyncio.to_thread(tool.invoke, tool_input)
+            tool_result = raw_result if isinstance(raw_result, dict) else qc_verifier.parse_tool_output(raw_result)
+            if not isinstance(tool_result, dict):
+                tool_result = {"status": "error", "http_status": None, "message": "Invalid tool response", "data": {}}
         if preferred_tool == "get_best_selling_products_tool":
             tool_result = _enrich_best_selling_result_for_product_cards(tool_result)
             fallback_input = _best_selling_general_fallback_input(tool_input, tool_result)
@@ -675,7 +926,95 @@ async def recover_blocked_fast_path_to_contract_tool(
             if chained_recommendation is not None:
                 chained_tool_name = "get_products_recommendations_tool"
                 chained_tool_input, chained_tool_result, chained_recovery_reason = chained_recommendation
-        if preferred_tool == "search_product_tool":
+        if (
+            preferred_tool == "search_product_summary_tool"
+            and contract_intent in {"product_event_lookup", "product_deal_lookup"}
+        ):
+            ptrn_cd = _first_summary_ptrn_cd(tool_result)
+            if ptrn_cd:
+                chained_tool_name = "get_product_applicable_events_tool"
+                chained_tool_input = {"ptrn_cd": ptrn_cd, "lang_cd": "ko"}
+                chained_recovery_reason = "product_summary_ptrn_cd_to_applicable_events"
+                chained_tool = getattr(discovery_tools, chained_tool_name, None)
+                if chained_tool is not None and hasattr(chained_tool, "invoke"):
+                    raw_chained = await asyncio.to_thread(chained_tool.invoke, chained_tool_input)
+                    chained_tool_result = (
+                        raw_chained if isinstance(raw_chained, dict) else qc_verifier.parse_tool_output(raw_chained)
+                    )
+                    if not isinstance(chained_tool_result, dict):
+                        chained_tool_result = {
+                            "status": "error",
+                            "http_status": None,
+                            "message": "Invalid tool response",
+                            "data": {},
+                        }
+        if preferred_tool == "get_events_tool" and contract_intent == "event_applicable_products_lookup":
+            evt_no_list = _event_numbers_from_result(tool_result)
+            if evt_no_list:
+                chained_tool_name = "get_event_applicable_products_tool"
+                chained_tool_input = {"evt_no_list": evt_no_list}
+                chained_recovery_reason = "event_list_to_applicable_products"
+                chained_tool = getattr(discovery_tools, chained_tool_name, None)
+                if chained_tool is not None and hasattr(chained_tool, "invoke"):
+                    raw_chained = await asyncio.to_thread(chained_tool.invoke, chained_tool_input)
+                    chained_tool_result = (
+                        raw_chained if isinstance(raw_chained, dict) else qc_verifier.parse_tool_output(raw_chained)
+                    )
+                    if not isinstance(chained_tool_result, dict):
+                        chained_tool_result = {
+                            "status": "error",
+                            "http_status": None,
+                            "message": "Invalid tool response",
+                            "data": {},
+                        }
+        if preferred_tool == "get_final_price_tool":
+            preorder_event = _preorder_event_from_final_price_recovery(turn_contract, tool_result)
+            if preorder_event is not None:
+                mapped_event = preorder_event
+                tool_data_list = [{"tool": preferred_tool, "args": tool_input, "data": tool_result}]
+                mapped_event["source_domain"] = source_domain
+                _annotate_called_tools(mapped_event, tool_data_list)
+                mapped_event = _annotate_contract_tool_recovery_event(
+                    mapped_event,
+                    turn_contract=turn_contract,
+                    blocked_fast_path_source=blocked_fast_path_source,
+                    recovered_tool=preferred_tool,
+                    recovery_reason="final_price_resolved_before_preorder",
+                    tool_input_source=tool_input_source or "contract_tool_plan",
+                )
+                return {
+                    "tool_name": preferred_tool,
+                    "tool_input": tool_input,
+                    "tool_result": tool_result,
+                    "event": mapped_event,
+                    "events": [
+                        {
+                            "type": "status",
+                            "status": "tool_start",
+                            "tool": preferred_tool,
+                            "display_name": display_name,
+                            "source_domain": source_domain,
+                        },
+                        {
+                            "type": "agent_flow",
+                            "agent": "[CONTRACT RECOVERY AF]",
+                            "agent_class": "Contract Recovery",
+                            "status": tool_result.get("status", "success"),
+                            "source_domain": source_domain,
+                        },
+                        {
+                            "type": "tool",
+                            "input": tool_input,
+                            "output": json.dumps(tool_result, ensure_ascii=False),
+                            "node": "tools",
+                            "tool": preferred_tool,
+                            "source_domain": source_domain,
+                        },
+                    ],
+                }
+        if preferred_tool == "search_product_summary_tool":
+            assistant_text = f"{str(tool_input.get('keyword') or '상품')} 상품 정보를 확인했어요."
+        elif preferred_tool == "search_product_tool":
             assistant_text = f"{str(tool_input.get('keyword') or '상품')} 상품을 확인했어요."
         elif preferred_tool == "get_product_description_tool":
             assistant_text = "상품 상세 정보를 확인했어요."
@@ -689,7 +1028,7 @@ async def recover_blocked_fast_path_to_contract_tool(
             assistant_text = "매장 재고를 확인했어요."
         else:
             assistant_text = "요청하신 정보를 확인했어요."
-        tool_data_list = [{"tool": preferred_tool, "args": tool_input, "data": tool_result}]
+        tool_data_list = fanout_tool_data_list or [{"tool": preferred_tool, "args": tool_input, "data": tool_result}]
         if chained_tool_name:
             tool_data_list.append({
                 "tool": chained_tool_name,
@@ -697,26 +1036,21 @@ async def recover_blocked_fast_path_to_contract_tool(
                 "data": chained_tool_result,
             })
         mapped_event = try_build_template(tool_data_list, assistant_text)
-        from services.tstation.chat import (
-            _build_reservation_status_lookup_event,
-            _build_reservation_store_info_event,
-            _reservation_store_not_found_event,
-            _select_reservation_store_row,
-        )
-
         if not isinstance(mapped_event, dict) and preferred_tool == "get_my_reservations_tool":
             if contract_intent == "reservation_store_info_lookup":
-                reservation_row, match_reason = _select_reservation_store_row(user_text, tool_result)
+                reservation_row, match_reason = select_reservation_store_row(user_text, tool_result)
                 mapped_event = (
-                    _build_reservation_store_info_event(reservation_row, match_reason=match_reason)
+                    build_reservation_store_info_event(reservation_row, match_reason=match_reason)
                     if reservation_row is not None
-                    else _reservation_store_not_found_event(match_reason)
+                    else build_reservation_store_not_found_event(match_reason)
                 )
             else:
-                mapped_event = _build_reservation_status_lookup_event(tool_result)
+                mapped_event = build_reservation_status_lookup_event(tool_result)
         if not isinstance(mapped_event, dict):
             return None
+        mapped_event = _sanitize_event_for_turn_contract(mapped_event, turn_contract)
         mapped_event["source_domain"] = source_domain
+        _annotate_called_tools(mapped_event, tool_data_list)
         if (
             preferred_tool in {"get_store_list_tool", "search_stores_tool"}
             and tool_input_source == "turn_contract_required_stock_inventory_store_lookup"
@@ -736,20 +1070,17 @@ async def recover_blocked_fast_path_to_contract_tool(
 
         raw_result = await asyncio.to_thread(_support_tool.invoke, tool_input)
         tool_result = raw_result if isinstance(raw_result, dict) else {"status": "success", "data": raw_result}
-        from services.tstation.chat import (
-            _build_general_cancel_fee_policy_event,
-            _build_general_card_cancel_timing_policy_event,
-            _build_support_faq_policy_event,
-        )
-
         if contract_intent == "general_cancel_fee_policy":
-            mapped_event = _build_general_cancel_fee_policy_event(user_text, tool_result=tool_result)
+            mapped_event = build_general_cancel_fee_policy_event(user_text, tool_result=tool_result)
         elif contract_intent == "general_card_cancel_timing_policy":
-            mapped_event = _build_general_card_cancel_timing_policy_event(user_text, tool_result=tool_result)
+            mapped_event = build_general_card_cancel_timing_policy_event(user_text, tool_result=tool_result)
         else:
-            mapped_event = _build_support_faq_policy_event(contract_intent, user_text, tool_result=tool_result)
+            mapped_event = build_support_faq_policy_event(contract_intent, user_text, tool_result=tool_result)
         if not isinstance(mapped_event, dict):
             return None
+
+    if violates_response_template_contract(mapped_event, turn_contract):
+        return None
 
     mapped_event = _annotate_contract_tool_recovery_event(
         mapped_event,

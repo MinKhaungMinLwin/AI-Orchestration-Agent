@@ -458,6 +458,7 @@ def decide_discovery_response(frame: IntentFrame) -> ResponseDecision:
                 metadata=_metadata(frame, response_shape_key="neutral_product_description"),
             )
         if frame.sub_intent in {
+            "event_applicable_products_lookup",
             "product_event_lookup",
             "product_deal_lookup",
             "product_coupon_lookup",
@@ -474,13 +475,13 @@ def decide_discovery_response(frame: IntentFrame) -> ResponseDecision:
                     "datepick_or_preorder_for_product_benefit_lookup",
                 ),
                 assistant_guidance=(
-                    "상품명+행사/이벤트/기획전/쿠폰/혜택 질의는 상품 설명이나 규격 선택으로 끝내지 않는다. "
-                    "사이즈 없이 search_product_tool로 상품을 resolve한 뒤 적용 가능한 이벤트/기획전/쿠폰 tool 결과만 요약한다. "
+                    "행사/이벤트/기획전/프로모션 적용 관계 질의는 상품 설명이나 규격 선택으로 끝내지 않는다. "
+                    "상품 기준 조회는 search_product_summary_tool로 ptrn_cd를 resolve하고, 이벤트 기준 조회는 이벤트 목록에서 evt_no를 resolve한 뒤 적용 관계 tool 결과만 요약한다. "
                     "가격/주문/예약/장착 가능 여부로 확장하지 않는다."
                 ),
                 metadata={
                     "response_shape_key": frame.sub_intent,
-                    "goal_type": "product_event_lookup",
+                    "goal_type": frame.sub_intent,
                 },
             )
         if frame.sub_intent == "restock_inquiry":

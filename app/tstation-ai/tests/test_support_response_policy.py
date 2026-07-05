@@ -1,5 +1,13 @@
 from services.tstation.policies.response_decision import ResponseShape, TemplateName
-from services.tstation.policies.support_response_policy import decide_support_response, resolve_support_faq_policy_context
+from services.tstation.policies.support_response_policy import (
+    _is_card_installment_lookup_query,
+    build_maintenance_dday_event,
+    build_maintenance_history_event,
+    build_order_document_guidance_event,
+    decide_support_response,
+    requested_maintenance_focus,
+    resolve_support_faq_policy_context,
+)
 
 
 def test_tc186_extreme_coupon_issue_is_denied_with_coupon_box_guidance() -> None:
@@ -105,6 +113,92 @@ def test_signup_coupon_guidance_points_to_membership_marketing_coupon_policy() -
     assert "마케팅 수신 동의를 하면 5% 할인 쿠폰 발급이 가능" in decision.assistant_guidance
 
 
+def test_order_document_guidance_event_prefers_order_history_cta() -> None:
+    event = build_order_document_guidance_event("receipt email request")
+    data = event["data"]
+
+    assert event["source_domain"] == "support"
+    assert data["metadata"]["responseShapeKey"] == "order_document_guidance"
+    assert data["metadata"]["ordNo"] == ""
+    assert "<ord_no>" not in data["quickReplies"][0]["url"]
+
+def test_order_document_guidance_event_uses_order_detail_when_order_number_is_present() -> None:
+    event = build_order_document_guidance_event("order O202606220019363 receipt email request")
+    data = event["data"]
+
+    assert data["metadata"]["ordNo"] == "O202606220019363"
+    assert "O202606220019363" in data["quickReplies"][0]["url"]
+
+def test_requested_maintenance_focus_matches_tire_query() -> None:
+    assert requested_maintenance_focus("타이어 교체 시기 알려줘") == ("타이어 교체", (r"타이어",), "교체")
+
+def test_maintenance_dday_event_summarizes_requested_tire_schedule() -> None:
+    event = build_maintenance_dday_event(
+        {
+            "data": {
+                "data": {
+                    "cars": [
+                        {
+                            "mbr_car_reg_seq": "2000002944",
+                            "car_nm": "GV70 2.5T 가솔린 AWD A/T",
+                            "items": [
+                                {"kind_nm": "엔진오일 교체", "exp_dt": "2026-08-01", "dday": 66, "status": "normal"},
+                                {"kind_nm": "타이어 교체", "exp_dt": "2027-10-31", "dday": 522, "status": "normal"},
+                            ],
+                        }
+                    ]
+                }
+            }
+        },
+        {"meta": {"mbrCarRegSeq": "2000002944"}, "car": {"info": "GV70 2.5T 가솔린 AWD A/T"}},
+        "타이어 교체 시기 알려줘",
+    )
+
+    assert event["source_domain"] == "support"
+    assert event["template"] == "quickReply"
+    assert "GV70 2.5T 가솔린 AWD A/T의 타이어 교체 일정" in event["data"]["assistantResponse"]
+    assert "2027-10-31" in event["data"]["assistantResponse"]
+
+def test_maintenance_history_event_filters_requested_service_and_has_cta() -> None:
+    event = build_maintenance_history_event(
+        {
+            "data": {
+                "data": {
+                    "items": [
+                        {
+                            "car_svc_dt": "2026-01-03",
+                            "shop_nm": "티스테이션 강남점",
+                            "car_svc_info": "휠 얼라인먼트",
+                            "car_svc_qty": "1",
+                        },
+                        {
+                            "car_svc_dt": "2026-02-10",
+                            "shop_nm": "티스테이션 서초점",
+                            "car_svc_info": "엔진오일 교체",
+                        },
+                    ]
+                }
+            }
+        },
+        "마지막으로 휠얼라인먼트 서비스 받은게 언제더라?",
+    )
+
+    data = event["data"]
+    assert event["source_domain"] == "transaction"
+    assert event["assistant_response_source"] == "code_maintenance_history_lookup"
+    assert data["metadata"]["requestedServiceItem"] == "휠얼라인먼트"
+    assert "2026-01-03 / 티스테이션 강남점 / 휠 얼라인먼트 / 1개" in data["assistantResponse"]
+    assert data["quickReplies"][0]["url"]
+
+def test_maintenance_history_event_reports_no_matching_requested_service() -> None:
+    event = build_maintenance_history_event(
+        {"data": {"data": {"items": [{"car_svc_dt": "2026-02-10", "car_svc_info": "엔진오일 교체"}]}}},
+        "오일필터 교체한 날이 언제야",
+    )
+
+    assert event["data"]["metadata"]["requestedServiceItem"] == "오일필터"
+    assert "오일필터 항목은 확인되지 않아요" in event["data"]["assistantResponse"]
+
 def test_signup_benefit_intent_with_assurance_anchor_prefers_assurance_service_policy() -> None:
     decision = decide_support_response(
         intent="signup_first_purchase_benefit_policy",
@@ -137,6 +231,19 @@ def test_post_install_noise_refund_uses_tire_quality_warranty_policy() -> None:
     decision = decide_support_response(
         intent="single_domain",
         user_text="타이어 갈고 고속도로 주행 시 노면 소음이 너무 심해졌어. 내 잘못아닌거 같은데, 환불해줘",
+    )
+
+    assert decision.template == TemplateName.QUICK_REPLY
+    assert decision.response_shape == ResponseShape.SUMMARY
+    assert decision.metadata["response_shape_key"] == "tire_quality_warranty_policy"
+    assert "transfer_to_qna_direct_first" in decision.forbidden_behaviors
+    assert "claim_free_replacement_without_inspection" in decision.forbidden_behaviors
+
+
+def test_warranty_period_text_trigger_uses_tire_quality_warranty_policy() -> None:
+    decision = decide_support_response(
+        intent="support_faq",
+        user_text="티스테이션 보증 기간도 알려줘",
     )
 
     assert decision.template == TemplateName.QUICK_REPLY
@@ -210,6 +317,19 @@ def test_payment_error_troubleshooting_does_not_absorb_card_points_or_coupon_res
     assert coupon_restore.metadata["response_shape_key"] == "support_faq_summary"
 
 
+def test_coupon_usage_policy_does_not_absorb_simplepay_or_point_questions_without_coupon_anchor() -> None:
+    for user_text in (
+        "네이버페이 포인트도 쓸수 있어?",
+        "카카오페이로 결제할 수 있어?",
+    ):
+        decision = decide_support_response(
+            intent="coupon_usage_policy",
+            user_text=user_text,
+        )
+
+        assert decision.metadata["response_shape_key"] == "support_faq_summary"
+
+
 def test_payment_error_troubleshooting_keeps_checkout_screen_error_faq_first() -> None:
     decision = decide_support_response(
         intent="payment_error_troubleshooting",
@@ -218,6 +338,32 @@ def test_payment_error_troubleshooting_keeps_checkout_screen_error_faq_first() -
 
     assert decision.metadata["response_shape_key"] == "payment_error_troubleshooting"
     assert "qna_without_faq_solution" in decision.forbidden_behaviors
+
+
+def test_payment_error_troubleshooting_text_trigger_keeps_checkout_screen_error_faq_first() -> None:
+    decision = decide_support_response(
+        intent="support_faq",
+        user_text="카카오페이 결제 누르면 화면이 하얗게 멈춰",
+    )
+
+    assert decision.metadata["response_shape_key"] == "payment_error_troubleshooting"
+    assert "qna_without_faq_solution" in decision.forbidden_behaviors
+
+
+def test_tire_manufacture_date_month_question_does_not_route_to_card_installment() -> None:
+    user_text = "타이어 제조일자가 6개월 전이면 새 상품 맞아?"
+
+    decision = decide_support_response(intent="support_faq", user_text=user_text)
+
+    assert decision.metadata["response_shape_key"] == "tire_manufacture_date_policy"
+    assert _is_card_installment_lookup_query(user_text) is False
+
+
+def test_calendar_month_date_does_not_route_to_card_installment() -> None:
+    assert _is_card_installment_lookup_query("2026년 7월 5일 (일)\n15:00") is False
+    assert _is_card_installment_lookup_query("7월 5일 15시에 예약할게") is False
+    assert _is_card_installment_lookup_query("7개월 무이자 가능해?") is True
+    assert _is_card_installment_lookup_query("몇개월 할부 돼?") is True
 
 
 def test_external_tire_install_policy_text_trigger_blocks_work_started_cancel_drift() -> None:

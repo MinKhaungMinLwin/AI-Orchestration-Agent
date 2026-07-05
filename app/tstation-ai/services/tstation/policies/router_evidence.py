@@ -106,6 +106,15 @@ def router_evidence_known_slots(evidence: Mapping[str, Any] | None) -> dict[str,
         put("coupon_name_candidate", coupon_name)
         put("coupon_name", coupon_name)
 
+    benefit = _mapping(entities.get("benefit"))
+    benefit_name = _text(benefit.get("name") or benefit.get("anchor"))
+    benefit_type = _text(benefit.get("type"))
+    if benefit_name:
+        put("benefit_applicable_products_query", benefit_name)
+        put("benefit_name_candidate", benefit_name)
+    if benefit_type:
+        put("benefit_type_candidate", benefit_type)
+
     location = _mapping(entities.get("location"))
     location_name = _text(location.get("name") or location.get("anchor"))
     location_type = _text(location.get("type"))
@@ -220,7 +229,7 @@ def _router_domain(
 def _normalized_entities(entity_candidates: Any) -> dict[str, dict[str, Any]]:
     raw = _mapping(entity_candidates)
     entities: dict[str, dict[str, Any]] = {}
-    for entity_name in ("registered_vehicle", "store", "coupon", "location"):
+    for entity_name in ("registered_vehicle", "store", "coupon", "benefit", "location"):
         entity = _mapping(raw.get(entity_name))
         if not entity:
             continue
@@ -238,7 +247,7 @@ def _normalized_entities(entity_candidates: Any) -> dict[str, dict[str, Any]]:
         }
         if entity_name == "registered_vehicle" and not normalized["anchor"]:
             normalized["anchor"] = normalized["name"]
-        if entity_name in {"store", "coupon", "location"} and not normalized["name"]:
+        if entity_name in {"store", "coupon", "benefit", "location"} and not normalized["name"]:
             normalized["name"] = normalized["anchor"]
         entities[entity_name] = _drop_empty(normalized)
     return entities

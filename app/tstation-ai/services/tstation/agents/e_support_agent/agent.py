@@ -392,6 +392,7 @@ Warranty coverage questions about a possible future tire issue after purchase ar
   - **Case 1 — 컨텍스트 있음**: 직전 대화에 사용자가 선택한 차량의 `mbr_car_reg_seq` 가 있거나, 슬롯에 차량 식별 정보가 있거나, 사용자가 발화에 차종명/차량번호를 명시 → `get_maintenance_dday_tool(mbr_car_reg_seq=<컨텍스트값>)` 호출. 사용자가 차종명만 언급한 경우 (예: "내 GV70 정비 일정") 이전 listCar tool 결과에서 매칭 시도, 매칭 1대면 그 차량 seq 사용.
   - **Case 2 — 컨텍스트 없음**: `get_my_cars_tool(mbr_no)` 즉시 호출 (b_discovery 의 도구를 그대로 재사용 — template_mapper 가 listCar 카드 자동 발동).
     - 결과 1+ cars → `listCar` 카드 emit. `assistantResponse` 는 한 줄 인트로: "어느 차량의 정비 일정을 확인해 드릴까요? 😊"
+    - ⚠️ 이 **차량 선택 대기 턴**의 `quickReplies` 는 **빈 배열 `[]`** (listCar 카드가 차량 선택 UI). 필요 시 등록 차량번호 chip 만 허용 (클릭 = 해당 차량 선택). `매장 찾기`/`타이어 추천`/`구매하기` 등 entry chip 은 이 턴에서 금지 — 백엔드 게이트가 슬롯 대기 턴의 entry chip 을 자동 제거한다.
     - 결과 0 cars → quickReply 로 차량 등록 안내: `[{"label":"내 차량 등록","domain":"DISCOVERY"}, {"label":"처음으로","domain":"LEADING"}]` + assistantResponse "등록된 차량이 없어요. 차량을 먼저 등록해 주세요 😊"
     - ⚠️ 호출 후 사용자 차량 선택을 기다린다. 다음 턴에 사용자가 차량을 선택하면 (예: car_no 또는 차종명 발화) 라우터가 SUPPORT 로 다시 라우팅 → Case 1 흐름으로 `get_maintenance_dday_tool` 호출.
     - ⚠️ Case 2 에서 `get_maintenance_dday_tool` 을 **호출하지 마라** — 차량 식별 필수.
@@ -595,11 +596,11 @@ Style rules for PROSE MODE:
 
 → Output exactly ONE fenced ```json block as documented below. `assistantResponse` must be a real, substantive Korean answer — never a placeholder, never empty. 1–3 sentences.
 
-⚠️ **QUICKREPLY OUTPUT GUARANTEE (필수)**: `template: "quickReply"` 를 emit 할 때 `data.quickReplies` 는 **절대 빈 배열 `[]` 금지**. chip 선정은 아래 우선순위로 판정:
-1. **개별 룰에 명시된 CTA chip** (워런티/픽업/측정이력/도서산간/Wheel Alignment/리뷰/카드명 혜택/리마인딩 알림/**무이자 할부 카드 안내**/**쿠폰 중복 적용 여부 안내** 등) — 가장 우선.
+⚠️ **QUICKREPLY CHIP POLICY (필수)**: chip 은 클릭 시 **실제 실행 가능한 액션**(등록된 CTA 실행·URL 이동)으로 이어질 때만 emit 한다. 실행 계약이 없는 label-only chip 은 백엔드 CTA 게이트가 자동 제거된다. **`quickReplies: []` 빈 배열은 정상 출력** — 적합한 액션 chip 이 없으면 비워서 emit 하라. chip 선정은 아래 우선순위로 판정:
+1. **개별 룰에 명시된 CTA chip** (워런티/픽업/측정이력/도서산간/Wheel Alignment/리뷰/카드명 혜택/리마인딩 알림/**무이자 할부 카드 안내**/**쿠폰 중복 적용 여부 안내** 등) — label·url 을 룰 그대로 사용. 가장 우선.
 2. **컨텍스트-연계 거래 chip** (아래 별도 단락 — 매장/구매 키워드 매칭 시 `매장 찾기`/`구매하기`).
-3. **INFO FALLBACK** — 위 1·2 어디에도 해당 안 되는 정상 정보성 답변은 `[{"label":"구매하기","domain":"TRANSACTION"},{"label":"매장 찾기","domain":"TRANSACTION"},{"label":"타이어 추천","domain":"DISCOVERY"}]` 중 2–3개를 사용한다.
-4. **DEAD-END FALLBACK** — 실제 상담/사람 개입이 필요한 경우에만 `[{"label":"1:1 문의하기","domain":"SUPPORT"},{"label":"처음으로","domain":"LEADING"}]`.
+3. **DEAD-END FALLBACK** — 실제 상담/사람 개입이 필요한 경우에만 `[{"label":"1:1 문의하기","domain":"SUPPORT"}]`.
+4. 위 1·2·3 어디에도 해당 안 되는 정상 정보성 답변은 **chip 없이 `quickReplies: []`** 로 emit 한다. `구매하기`/`매장 찾기`/`타이어 추천` 을 장식용으로 채우지 마라 — 질문 컨텍스트가 해당 행동과 실제로 연결될 때만 (2번 룰) 사용.
 
 **DEAD-END FALLBACK 허용 조건**:
 - 사용자 의도 명시 (문의/상담/클레임/환불·교환 신청 등)
@@ -608,11 +609,11 @@ Style rules for PROSE MODE:
 - deterministic recovery 이후에도 ambiguity 가 해소되지 않은 경우
 
 **DEAD-END FALLBACK 금지 조건**:
-- 단순 FAQ/정책/상품 정보 안내가 정상적으로 완료된 경우
-- 매장 찾기/구매/추천 같은 다음 행동으로 자연스럽게 이어질 수 있는 경우
-- "더 궁금하시면 말씀해 주세요" 수준의 정보성 마무리인 경우
+- 단순 FAQ/정책/상품 정보 안내가 정상적으로 완료된 경우 (→ `quickReplies: []`)
+- 매장 찾기/구매/추천 같은 다음 행동으로 자연스럽게 이어질 수 있는 경우 (→ 2번 컨텍스트-연계 chip)
+- "더 궁금하시면 말씀해 주세요" 수준의 정보성 마무리인 경우 (→ `quickReplies: []`)
 
-`qnaComplete` / `product` 등 카드형 템플릿은 본 룰 예외.
+`처음으로` 등 label-only chip 은 emit 금지. `qnaComplete` / `product` 등 카드형 템플릿은 본 룰 예외.
 
 **quickReply** — FAQ answers, complaint/no-tool turns, text-only responses:
 - FAQ/RAG: read the `answer` field of the most relevant item(s); synthesize key facts (conditions, timelines, steps) into natural Korean. Do NOT say "FAQ를 확인했어요" or acknowledge the search.

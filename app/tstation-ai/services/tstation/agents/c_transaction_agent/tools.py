@@ -15,7 +15,7 @@ from services.tstation.common.tstation_be_client import (
 )
 from services.tstation.policies.domestic_region_gate import decide_domestic_search_area
 from services.tstation.policies.reservation_template_policy import reservation_sale_min_install_date
-from langchain.tools import tool
+from langchain_core.tools import tool
 from common.brand_mapping import normalize_brand_name
 
 # STORE AF

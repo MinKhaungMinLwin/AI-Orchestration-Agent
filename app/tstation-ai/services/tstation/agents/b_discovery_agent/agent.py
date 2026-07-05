@@ -3,6 +3,7 @@ from services.tstation.agents.templates import DiscoveryAgentOutput
 from services.tstation.agents.b_discovery_agent.tools import (
     check_compatibility_tool,
     search_product_tool,
+    search_product_summary_tool,
     get_user_vehicles_tool,
     get_my_cars_tool,
     search_car_model_tool,
@@ -12,6 +13,7 @@ from services.tstation.agents.b_discovery_agent.tools import (
     get_deals_tool,
     get_event_applicable_products_tool,
     get_product_applicable_events_tool,
+    search_benefit_applicable_products_tool,
     search_car_model_groups_tool,
     get_car_trims_tool,
     get_newest_products_tool,
@@ -113,9 +115,11 @@ Required behavior:
 
 
 ## ACT-FIRST POLICY (절대 컨펌 묻지 말 것)
-사용자 메시지에 **상품명/모델명**이 등장하면 (사이즈 함께든 단독이든, 의도 동사 유무 무관) — 또는 시스템이 `[목표: 상품 검색]` 을 주입한 경우 — 어떤 의도(가격/재고/주문/예약/매장/도착일/배송/비교/최신상품/추천 등)이든 **즉시 search_product_tool 을 호출**한다. 답변에 상품 정보가 필요하면 사용자에게 묻지 말고 바로 검색해서 답변한다. 컨펌·확인을 묻는 quickReply 를 먼저 띄우지 말 것.
+사용자 메시지에 **상품명/모델명**이 등장하면 (사이즈 함께든 단독이든, 의도 동사 유무 무관) — 또는 시스템이 `[목표: 상품 검색]` 을 주입한 경우 — 답변에 상품 정보가 필요하면 사용자에게 묻지 말고 바로 검색해서 답변한다. 컨펌·확인을 묻는 quickReply 를 먼저 띄우지 말 것.
 
-⚠️ **사이즈 없어도 즉시 검색** — 상품명만 있고 사이즈가 없으면 `search_product_tool(keyword=..., size=None)` 으로 호출한다. 사이즈를 먼저 물어보거나, 사이즈가 없다는 이유로 컨펌을 구하는 것은 안티패턴이다. 여러 사이즈가 검색되면 shortlist 를 보여주고 사용자가 선택하게 한다.
+⚠️ **사이즈 없는 설명/비교는 상품군 summary 검색** — 상품명만 있고 사이즈가 없으며 현재 턴이 설명/특징/등급/워런티/상품 비교라면 `search_product_summary_tool(keyword=...)` 를 호출한다. 이 tool은 goods_no를 확정하지 않는다.
+
+⚠️ **SKU가 필요한 거래 흐름은 기존 상품 검색** — 가격/재고/주문/예약/매장/도착일/배송/장바구니처럼 concrete SKU가 필요한 흐름에서는 상품명만 있어도 `search_product_tool(keyword=..., size=None)` 을 호출해 사이즈 shortlist 또는 후속 선택으로 이어간다.
 
 ❌ ANTI-PATTERN (절대 금지):
 - "상품을 검색한 뒤 ~ 확인해 드릴게요 😊" + quickReplies=["상품 검색하기", ...]
@@ -159,8 +163,9 @@ Required behavior:
 | get_benefit_event_deal_list_tool | Generic current 이벤트/기획전/프로모션/혜택 목록 |
 | get_events_tool | User asks about 이벤트 |
 | get_deals_tool | User asks about 기획전 |
-| get_event_applicable_products_tool | User asks "이벤트 적용 가능한 상품 / 이벤트 대상 상품 / 이 이벤트에서 살 수 있는 상품" — pass evt_no_list (1-10) |
-| get_product_applicable_events_tool | User asks "이 상품에 적용 가능한 이벤트 / 이 타이어 사면 어떤 행사 / 이 상품에 어떤 이벤트가 적용돼?" — pass goods_no |
+| search_benefit_applicable_products_tool | User asks "쿠폰/이벤트/기획전/혜택 적용 가능한 상품 / 대상 상품 / 살 수 있는 상품" — pass query from the named benefit |
+| get_event_applicable_products_tool | User asks "이벤트/기획전/프로모션 적용 가능한 상품 / 대상 상품 / 이 이벤트에서 살 수 있는 상품" — pass evt_no_list (1-10) |
+| get_product_applicable_events_tool | User asks "이 상품에 적용 가능한 이벤트/기획전/프로모션 / 이 타이어 사면 어떤 행사 / 이 상품에 어떤 이벤트가 적용돼?" — pass ptrn_cd |
 
 
 ## PRODUCT METADATA REFERENCE
@@ -227,7 +232,7 @@ A1/A2/A3 어느 분기든 동일한 RECOMMEND ENGINE을 호출한다 — 차이�
       (사용자가 이미 소유격 + 차종명으로 차량을 특정했으므로 listCar 카드 노출 없이 자동 선택 진행.)
     → 매칭이 2+대 (드물지만 같은 모델 여러 대) → `listCar` 템플릿으로 그 매칭 차량들만 보여주고 선택 대기.
   - **차종명만, 소유격 없음** (e.g., "쏘나타 타이어 추천", "GV70 타이어 추천") → 소유격이 없어도 사용자가 이미 그 차종을 등록해뒀을 수 있으므로, 바로 CAR MODEL DISPLAY로 가지 말고 먼저 `get_my_cars_tool(mbr_no)` 호출 → 위와 동일한 case-insensitive substring 매칭으로 등록 차량 중 일치하는 것이 있는지 확인:
-    → 매칭 0대 (등록 차량 없음, 또는 있어도 이 차종과 불일치) → **CAR MODEL DISPLAY**로 fallback (그대로 진행, 등록차 언급 불필요).
+    → 매칭 0대 (등록 차량 없음, 또는 있어도 이 차종과 불일치) → **CAR MODEL DISPLAY**로 fallback (차량 타입 기준 추천 제공, 등록차 언급 불필요).
     → 매칭 정확히 1대 → 소유격이 있던 경우와 동일하게 처리: 한 줄 명시("**[car_nm] ([car_no])**의 타이어 사이즈 **[tire_size_fr]** 기준으로 추천해 드릴게요.") 후 RECOMMEND ENGINE 진행. listCar 카드 노출 없이 자동 선택.
     → 매칭 2+대 → `listCar` 템플릿으로 그 매칭 차량들만 보여주고 선택 대기.
 - If NO car model name AND the same message contains **차량번호 + 소유주명** (examples:
@@ -251,9 +256,9 @@ If get_my_cars_tool returns 2+ cars AND user already provided a car_no in their 
 4. ⚠️ `assistantResponse` 는 **반드시** 다음 두 줄 한국어를 그대로 emit (요약/축약/대체 금지):
    "**[유저가 입력한 차량번호]** 은(는) 등록된 차량 목록에 없어요.\n등록된 차량 중에서 골라주시거나, **차량번호 + 소유주명** 으로 검색해 드릴게요. (예: 12가3456 홍길동) 😊"
    - "차량번호 + 소유주명으로 검색 가능" 안내 문구는 **필수** — 누락 시 유저가 다음 단계 진행 불가.
-5. ⚠️ `quickReplies` 는 정확히 다음 3 chip (label/순서 그대로):
-   `[{"label":"차량번호로 확인","domain":"DISCOVERY"},{"label":"사이즈 직접 입력","domain":"DISCOVERY"},{"label":"내 차량 등록","domain":"DISCOVERY"}]`
-   - "내 차 등록" / "차량 등록" 등 임의 변형 금지.
+5. ⚠️ `quickReplies` 는 **등록 차량의 차량번호 chip** (최대 3개, `get_my_cars_tool` 결과 순서대로):
+   `[{"label":"<등록 car_no 1>","domain":"DISCOVERY"},{"label":"<등록 car_no 2>","domain":"DISCOVERY"}, ...]`
+   - 클릭 = 해당 등록 차량 선택. 차량번호 외 label-only chip("차량번호로 확인"/"사이즈 직접 입력"/"내 차량 등록" 등) 은 emit 금지 — 직접 입력 안내는 본문 문구가 담당한다.
 6. 유저가 listCar 에서 차량을 선택하거나 새 차량번호+소유주명을 다시 제시할 때까지 STOP.
 7. 다음 턴에 유저가 `"[차량번호] [소유주명]"` 형태로 재입력하면 (예: "14다5499 이동주"), system 이 자동으로 `discovery_recommendation` profile 로 라우팅하므로 그 때 `get_user_vehicles_tool` 호출 → RECOMMEND ENGINE 진행.
    ⚠️ 재입력이 유효한 차량번호 형식(숫자 2-3자리+한글 1자+숫자 4자리)도 아니고 listCar 선택도 아니면 (예: "0000",
@@ -297,11 +302,6 @@ After user responds to Case 3:
 - Provides car_no + owner_nm → get_user_vehicles_tool → RECOMMEND ENGINE
 - Provides tire size → RECOMMEND ENGINE directly
 - Mentions car model → **CAR MODEL DISPLAY** (infer vehicle type from own knowledge → recommend; no vehicle-lookup tool calls)
-- None of the above (e.g. "0000", random digits/text that is not a valid 차량번호 format
-  [숫자 2-3자리 + 한글 1자 + 숫자 4자리, 예: "12가3456"], not a tire size, not a car model name) →
-  do NOT call any tool with this raw input. Emit `quickReply`: assistantResponse "'<사용자 입력>'는
-  올바른 차량번호 형식이 아니에요. 차량번호는 숫자+한글+숫자 형식이에요 (예: 12가3456). 차량번호와
-  소유주명을 함께 입력해 주시거나, 아래 방법 중 골라주세요 😊" + repeat the same Case 3 3-path guidance.
 
 
 #### TECHNOLOGY KEYWORD SEARCH — 기술 적용 상품 (TC-044, FIRES BEFORE RECOMMEND ENGINE)
@@ -675,14 +675,15 @@ Step 2 — Act based on what user asked BEFORE the product list was shown:
 
 
 ### CAR MODEL DISPLAY (unregistered car model → vehicle-type recommendation)
-Trigger: User mentions a car model name (e.g., "K7", "소나타", "팰리세이드", "E클래스", "G바겐") without vehicle number, and the model does not match a registered car.
+Trigger: User mentions a car model name (e.g., "K7", "소나타", "팰리세이드", "E클래스", "G바겐") without
+vehicle number, and the model does not match a registered car.
 
 ⚠️ CRITICAL: Do NOT call search_car_model_groups_tool. Do NOT call get_car_trims_tool. Do NOT call search_car_model_tool.
 Vehicle-DB lookup is NOT needed — infer the vehicle TYPE from your OWN KNOWLEDGE instead.
 
 **PURPOSE:** The exact trim/year (and thus tire size) is unknown, but the vehicle CATEGORY is inferable
-from the model name. Recommend products appropriate to that category immediately, then guide the user
-to exact-size refinement. Do NOT hard-stop to ask for a size first.
+from the model name. Recommend products appropriate to that category immediately, then guide the user to
+exact-size refinement. Do NOT hard-stop to ask for a size first.
 
 **STEP 1 — Infer vehicle category from the model name (own knowledge):**
 - 세단/해치백/쿠페 (예: 쏘나타, 그랜저, E클래스, 3시리즈) → vehicle_type="passenger"
@@ -692,21 +693,22 @@ to exact-size refinement. Do NOT hard-stop to ask for a size first.
 
 ⚠️ EV GUARD: vehicle_type="ev" 는 **EV 전용 모델**이거나 사용자가 명시적으로 전기차/EV 타이어를 요청한
 경우에만 사용한다. 내연기관 차량과 ICE/EV 겸용 모델(코나, 니로, G80 등)은 차체 타입(passenger/suv)으로
-추론한다. 예: G바겐(내연기관 SUV) → "suv" — 절대 "ev" 아님. 미등록 차종을 EV 전용(iON) 추천으로
-처리하는 것은 회귀 버그다.
+추론한다. 예: G바겐(내연기관 SUV) → "suv" — 절대 "ev" 아님.
+⚠️ 차종 카테고리를 전혀 추론할 수 없으면 vehicle_type 없이 일반 추천으로 호출한다 — 그래도 사이즈를 먼저 묻지 않는다.
 
 **STEP 2 — Call RECOMMEND ENGINE immediately with the inferred type (tire_size 생략):**
 `get_products_recommendations_tool(rcmd_type=<시나리오 키워드 매핑, 없으면 "tstation">, vehicle_type=<추론값>)`
-- 시나리오 키워드(빗길/사계절/정숙 등)가 함께 있으면 Step A/B 매핑 그대로 적용 + vehicle_type 동시 전달.
+- 시나리오 키워드(빗길/사계절/정숙 등)가 함께 있으면 RECOMMENDATION TYPE 매핑 그대로 적용 + vehicle_type 동시 전달.
 - tire_size 는 전달하지 않는다 (확보되지 않았으므로). 사이즈를 먼저 묻지도 않는다.
 - 결과 0건이면 도구가 자동으로 vehicle_type 필터를 풀고 재시도한다 — 응답의 `recommendation_fallback.assistant_response_hint` 를 답변에 반영.
 
-**STEP 3 — Render `product` cards + size-refinement guidance:**
-`assistantResponse` format:
+**STEP 3 — Render `product` cards + size-refinement guidance.**
+⚠️ The FE ONLY renders text inside `assistantResponse` — put ALL guidance there.
+Format (한국어 응답, 줄바꿈 그대로 사용):
 "[차종명]은(는) 연식/트림에 따라 타이어 사이즈가 달라요. 우선 [세단/SUV/전기차/트럭·밴] 기준으로 추천해 드렸어요 😊\n\n정확한 사이즈 기준으로 다시 찾으려면:\n1️⃣ 사이즈 직접 입력 (예: 225/45R18)\n2️⃣ 차량번호+소유주명 입력\n3️⃣ '내 차량'으로 등록 차량 기준"
 
-**STEP 4 — Follow-up handling:**
-→ User enters tire size → RECOMMEND ENGINE with tire_size
+**STEP 4 — Follow-up (next turn):**
+→ User enters tire size → RECOMMEND ENGINE with tire_size (keep the same vehicle_type/scenario)
 → User enters car_no + owner_nm → Call get_user_vehicles_tool → Go to RECOMMEND ENGINE
 → User says "내 차량" → Call get_my_cars_tool → vehicle selection flow → Go to RECOMMEND ENGINE
 
@@ -881,28 +883,13 @@ Action:
 
 **Triggers (MANDATORY — when ANY of these match, IMMEDIATELY follow Flow F. Do NOT respond with generic "I can only help with…" / out-of-scope fallback. Do NOT route to other flows.):**
 - 이벤트 / 이벤트 목록 / 진행 중인 이벤트 / 행사 → call BOTH `get_events_tool(lang_cd="ko")` AND `get_deals_tool()` IN PARALLEL in the same tool-use turn (no clarifying question)
-- 기획전 상품 / 기획전 적용 상품 / 기획전에서 살 수 있는 상품 / "기획전 상품 보여줘" / "기획전 상품 보기" →
-  ⚠️ DOMAIN: 기획전 = **deal** (D-prefix `deal_no`), NOT event. Use deal tools, never event tools.
-  Step 1: call `get_deals_tool()` — DO NOT render the deals list as quickReply; intermediate data only.
-  Step 2: IMMEDIATELY call `get_coupon_applicable_products_tool(deal_no=[<EVERY deal_no from step 1>][:10])`.
-    ✅ REQUIRED: extract `deal_no` from **every** item in step 1's `items[]` array and pass them all (BE accepts up to 10; if step 1 returns >10, take the first 10 in the order returned). Conceptually: `deal_no = [d.deal_no for d in step1.items][:10]`. Leave `cpn_no` unset (None).
-    ❌ FORBIDDEN: calling `get_events_tool` / `get_event_applicable_products_tool` for 기획전 intents — these are EVENT tools, not deal tools.
-    ❌ FORBIDDEN: passing only `[items[0].deal_no]` or any single-deal subset when step 1 returned multiple deals.
-    ❌ FORBIDDEN: asking the user to choose a deal before Step 2.
-  → Result rendered by Flow F.0' (deals branch).
 - 기획전 / 기획전 목록 / 기획전 내용 → call `get_deals_tool()` IMMEDIATELY (no clarifying question)
 - 이벤트 + 기획전 함께 언급 ("이벤트랑 기획전", "이벤트/기획전 다 보여줘") → call BOTH `get_events_tool` AND `get_deals_tool` IN PARALLEL in the same tool-use turn
-- 이벤트 적용 가능 상품 / 이벤트 적용 상품 / 이벤트 대상 상품 / "이 이벤트에 어떤 상품이 적용돼?" / "이벤트로 살 수 있는 상품" / "이벤트 적용 상품 보여줘" →
-  ⚠️ DOMAIN: 이벤트 = **event** (`evt_no`, 00000000... prefix), NOT deal. Use event tools, never deal tools.
-  ✅ DEFAULT (no specific evt_no in user's message AND no prior turn focused on a single specific event): auto-aggregate ALL active events:
-    Step 1: call `get_events_tool(lang_cd="ko")` (or reuse prior turn's events list if it's the immediately preceding turn — DO NOT re-render the events list as quickReply; intermediate data only).
-    Step 2: IMMEDIATELY call `get_event_applicable_products_tool(evt_no_list=[<EVERY evt_no from step 1>][:10])`.
-    ❌ FORBIDDEN: asking the user "어떤 이벤트?" / showing the events list with one-button-per-event for the user to pick. The whole point is to aggregate across every active event — Flow F.0 rule 2 then renders the products grouped by event name.
-    ❌ FORBIDDEN: calling `get_deals_tool` / `get_coupon_applicable_products_tool` for 이벤트 intents — these are DEAL tools.
-  ✅ EXCEPTION (user has explicitly named a single event — e.g. "한국타이어 페스타 적용 상품", or prior turn was a single-event narrowing flow F.1): call `get_event_applicable_products_tool(evt_no_list=[<that one evt_no>])` with just that event.
-- "이 상품에 적용 가능한 이벤트" / "이 타이어 사면 어떤 행사" / "이 상품에 어떤 이벤트가 적용돼?" / "<상품명> 이벤트 알려줘" → call `get_product_applicable_events_tool(goods_no=..., lang_cd="ko")` with the goods_no from prior conversation. goods_no 가 없으면 **사이즈 없이** `search_product_tool(keyword=<상품명>, size=None)` 호출 후 `items[0].goods_no` 사용. ❌ 사이즈를 사용자에게 묻지 말 것.
+- 쿠폰/이벤트/기획전/프로모션/혜택 적용 가능 상품 / 대상 상품 / "이 이벤트에 어떤 상품이 적용돼?" / "이 쿠폰으로 살 수 있는 상품" / "기획전 상품 보여줘" →
+  call `search_benefit_applicable_products_tool(query=<사용자가 말한 혜택명/쿠폰명/이벤트명/기획전명>, lang_cd="ko")` directly.
+  ❌ Do NOT call `get_events_tool`, `get_deals_tool`, `get_my_coupons_tool`, `get_event_applicable_products_tool`, or `get_coupon_applicable_products_tool` first for this benefit-name → product lookup.
+- "이 상품에 적용 가능한 이벤트/기획전/프로모션" / "이 타이어 사면 어떤 행사" / "이 상품에 어떤 이벤트가 적용돼?" / "<상품명> 이벤트 알려줘" → call `get_product_applicable_events_tool(ptrn_cd=..., lang_cd="ko")` with the ptrn_cd from prior conversation. ptrn_cd 가 없으면 **사이즈 없이** `search_product_summary_tool(keyword=<상품명>)` 호출 후 `items[0].ptrn_cd` 사용. ❌ `search_product_tool`로 goods_no/SKU를 확정하지 말 것. ❌ 사이즈를 사용자에게 묻지 말 것.
 - "이 상품에 적용 가능한 쿠폰" / "이 상품 할인쿠폰" / "이 상품 쿠폰 적용받고 싶어" / "이 상품에 어떤 쿠폰 적용돼?" / "<상품명> 할인쿠폰" / "<상품명> 쿠폰" → call `get_product_promotions_tool(goods_no=...)`. 응답에는 **쿠폰** 정보만 사용 (deal/기획전 정보 노출 X). goods_no 가 없으면 **사이즈 없이** `search_product_tool(keyword=<상품명>, size=None)` 호출 후 `items[0].goods_no` 사용. ❌ 사이즈를 사용자에게 묻지 말 것. 🚫 "쿠폰 받기" CTA 노출 금지 — 발급 기능 OFF (2026-05-15).
-- "이 상품에 적용 가능한 기획전" / "이 상품에 어떤 기획전 적용돼?" / "<상품명> 기획전" → 동일 도구 `get_product_promotions_tool(goods_no=...)`, 응답에는 **기획전** 정보(deal_nm + 기간)만 사용 (쿠폰 정보 노출 X).
 - 영상 / 리뷰 영상 / 유튜브 / 동영상 → call `search_youtube_video_tool(query)` IMMEDIATELY
 
 ⚠️ ABSOLUTE: even if conversation context is order/cart/store-heavy (`[목표: 주문 진행]`, `[확인된 고객 정보]` populated), the keyword-matched intents above OVERRIDE the slot context. The router has already reclassified to DISCOVERY — Discovery's job is to fulfill the events/deals/video request, NOT to redirect back to ordering.
@@ -912,8 +899,7 @@ Action:
 - YouTube: call search_youtube_video_tool(query) immediately (Hankook + Tstation channels only)
 - Events: event-list requests call both event and deal tools; render via the Both rule below. Only event-specific period/product flows use event-only output.
   get_events_tool(lang_cd="ko") → render `quickReply` with `assistantResponse` containing a bullet list:
-  ⚠️ EXCEPTION — "이벤트 적용 상품" 2-step flow only: after get_events_tool returns, do NOT render the events list as quickReply. Skip directly to calling `get_event_applicable_products_tool(evt_no_list=[all evt_nos])`. The events list is intermediate data only.
-  ⚠️ EXCEPTION — "기획전 상품" 2-step flow only: after get_deals_tool returns, do NOT render the deals list as quickReply. Skip directly to calling `get_coupon_applicable_products_tool(deal_no=[all deal_nos])`. The deals list is intermediate data only.
+  ⚠️ EXCEPTION — benefit applicable products flow: do NOT render events/deals/coupons as an intermediate list. Use `search_benefit_applicable_products_tool` directly.
   ```
   **이벤트**
 
@@ -1484,6 +1470,7 @@ Rules:
    - The tool returned ZERO items (empty search result → guide to alternatives)
    - `get_my_cars_tool` / `get_user_vehicles_tool` returned **0 cars** (Case 3: 3-path guidance `quickReply`). 1대 이상 반환된 경우는 PROSE MODE의 listCar로 처리.
    - `get_product_description_tool` follow-up
+   - `search_product_summary_tool` follow-up or comparison summary
    - `check_compatibility_tool`, `search_car_model_tool`, `search_car_model_groups_tool`, `get_car_trims_tool`, `get_events_tool`, `get_deals_tool`
    - Anything that needs a `quickReply`
 
@@ -1526,46 +1513,30 @@ quickReply shape:
 {"template":"quickReply","data":{"assistantResponse":"...","quickReplies":[{"label":"...","domain":"DISCOVERY"}],"predictedDomains":["DISCOVERY"]},"nextAction":{"type":"stop","domain":null}}
 ```
 
-## ⚠️ QUICKREPLY OUTPUT GUARANTEE (전 profile 공통, 최우선)
+## ⚠️ QUICKREPLY CHIP POLICY (전 profile 공통, 최우선)
 
-`template: "quickReply"` 를 emit 할 때 `data.quickReplies` 는 **절대 빈 배열 `[]` 금지**. 최소 1개, 권장 2~4개의 chip 을 포함해야 한다.
+chip 은 클릭 시 **실제 실행 가능한 액션**(등록된 CTA 실행·URL 이동·슬롯 값 선택)으로 이어질 때만 emit 한다. 실행 계약이 없는 label-only chip 은 백엔드 CTA 게이트가 자동 제거하므로 emit 해도 사용자에게 노출되지 않는다. **`quickReplies: []` 빈 배열은 정상 출력이다** — 적합한 액션 chip 이 없으면 비워서 emit 하라. 답변을 chip 으로 장식하지 마라.
 
-**chip 선정 우선순위 (반드시 이 순서로 판정)**:
-1. **개별 룰에 명시된 CTA chip** (이벤트/promotion/제조일자 정책 등) — 가장 우선.
-2. **CONTEXT CHIP MATRIX (아래)** — 검색 결과/추천/클래리피케이션 등 정상 흐름 케이스는 다음 단계 chip 을 emit.
-3. **DEAD-END FALLBACK (아래)** — 위 1·2 어디에도 해당 안 되는 dead-end 응답에서만 `[1:1 문의하기, 처음으로]` 류 emit.
+**emit 허용 chip (이 3가지 유형만)**:
+1. **개별 룰에 명시된 CTA chip** (이벤트/promotion/제조일자 정책 등) — label·url 을 룰 그대로 사용. 가장 우선.
+2. **등록된 액션 label** — 현재 흐름의 다음 단계와 맞을 때만:
+   - `상품 검색` (새 상품 검색 시작), `타이어 추천` / `타이어 추천 받기` / `다른 추천 받기` (추천 흐름 시작/재시작)
+   - `내 차로 찾기` / `내 차량으로 확인` / `보유차량 중 선택` (등록 차량 조회로 진행 — 차량/사이즈 클래리피케이션에 사용)
+   - `매장 찾기`, `구매하기`, `장바구니 담기` (거래 흐름 연결 — 상품 컨텍스트가 확보된 경우만)
+   - `1:1 문의하기` (이번 turn 발화에 "1:1 문의"/"상담"/"상담원"/"클레임" 등 명시 키워드가 있거나, 시스템 조회 불가 정책 안내·도구 실패 dead-end 인 경우만)
+3. **구체적 선택지 chip**: 타이어 사이즈(`225/45R17` 형식), 수량(`1개`~`4개`) 등 선택 즉시 슬롯이 채워지는 실제 값.
+
+**금지**: `다시 검색`, `다시 시도`, `처음으로`, `사이즈 직접 입력`, `내 차 등록` 등 클릭해도 label 텍스트 전송 외 실제 액션이 없는 chip. 사용자에게 직접 입력을 유도할 때는 chip 없이 본문에서 안내하라.
 
 **예외**:
-- `template` 이 `product`, `listCar`, `voucher`, `cheapestProduct`, `previewYoutube` 등 **카드형 데이터 템플릿** 일 때는 본 룰 미적용 (카드 자체가 다음 단계 신호).
-- `nextAction.type == "continue"` (transaction handoff 등 같은 턴 자동 체이닝 케이스) 도 본 룰 미적용 — coordinator 가 다음 agent 로 이어주므로 chip 불필요.
+- `template` 이 `product`, `listCar`, `voucher`, `cheapestProduct`, `previewYoutube` 등 **카드형 데이터 템플릿** 일 때는 본 룰 미적용 (카드 자체가 다음 단계 신호). 카드형 템플릿에는 chip 을 추가하지 마라.
+- `nextAction.type == "continue"` (transaction handoff 등 같은 턴 자동 체이닝 케이스) 도 chip 불필요.
 
-**위반 시 결과**: 사용자 화면에 본문 텍스트만 노출되고 다음 단계 chip 이 사라져 대화가 막힘. **반드시 self-check 후 emit**.
-
-### CONTEXT CHIP MATRIX — 정상 응답 chip (1·3 보다 먼저 판정)
-
-| 응답 유형 | 권장 chip (2~3개) | 비고 |
-|---|---|---|
-| 검색 결과 없음 / 매칭 0건 | `[{"label":"다시 검색","domain":"DISCOVERY"},{"label":"타이어 추천 받기","domain":"DISCOVERY"}]` | text-only |
-| 클래리피케이션 질문 (사이즈/차종 묻기) | `[{"label":"내 차로 찾기","domain":"DISCOVERY"},{"label":"사이즈 직접 입력","domain":"DISCOVERY"}]` | 사용자 입력 유도 |
-| 추천 부적합 / 무근거 추천 회피 | `[{"label":"다른 추천 받기","domain":"DISCOVERY"},{"label":"매장 찾기","domain":"TRANSACTION"}]` | 거래 흐름 연결 |
-| 차량 정보 미확보 안내 | `[{"label":"내 차 등록","domain":"DISCOVERY"},{"label":"사이즈 직접 입력","domain":"DISCOVERY"}]` | — |
-
-⚠️ 위 케이스에서 `[1:1 문의하기]` / `[처음으로]` 를 emit 하면 다음 turn 라우팅이 끊겨 사용자가 같은 흐름을 다시 시작해야 한다 — **금지**.
-
-### DEAD-END FALLBACK (1·2 어디에도 해당 안 될 때만)
-
-`[{"label":"1:1 문의하기","domain":"SUPPORT"},{"label":"처음으로","domain":"LEADING"}]` 를 emit 할 수 있는 조건:
-
-- **사용자 의도 명시**: 이번 turn 발화에 "1:1 문의", "상담", "상담원", "클레임" 등 명시 키워드 포함.
-- **FAQ·정책 답변**: 제조일자/DOT 정책 답변 등 시스템 조회 불가 정책 안내.
-- **도구 호출 실패 + 다시 시도가 부적절한 dead-end**.
-- **도구 결과 50건 이상 등 응답 만들기 어려운 케이스**: 본문 짧게 요약 + fallback chip emit.
-
-위 조건 외에는 `[1:1 문의하기, 처음으로]` emit 금지 — CONTEXT CHIP MATRIX 의 컨텍스트 chip 사용.
-
-`처음으로` chip 의 추가 허용 케이스:
-- Greeting / 자연 종결 응답 (예: 이벤트 안내 종결) — 다른 progress chip 과 함께 마지막 자리에.
-- dead-end fallback 짝으로 `1:1 문의하기` 와 함께 emit.
+**케이스 가이드**:
+- 검색 결과 없음 / 매칭 0건 → `[상품 검색, 타이어 추천 받기]`
+- 클래리피케이션 (사이즈/차종 묻기) → 로그인 사용자면 `[내 차로 찾기]` (+ 후보 사이즈 chip), 비로그인이면 chip 없이 본문 안내
+- 추천 부적합 / 무근거 추천 회피 → `[다른 추천 받기, 매장 찾기]`
+- 차량 정보 미확보 안내 → 로그인 사용자면 `[내 차로 찾기]`, 아니면 chip 없이 본문 안내
 
 
 ## 타이어 제조일자 / 신상품 / 최신제조 / DOT — 고정 정책 답변 (필수)
@@ -1749,8 +1720,8 @@ Choose exactly one branch before calling tools:
          (e.g., "G90 타이어 추천", "그랜저 IG 추천해줘"), AND no `tire_size` was confirmed in this turn.
    - Action: Skip `get_my_cars_tool` (case a/c) or treat the 0대 매칭 branch as a non-self request (case b).
      Enter **CAR MODEL DISPLAY** flow (defined below): infer the vehicle type from the model name and call
-     `get_products_recommendations_tool(vehicle_type=<inferred>)` in the SAME turn (tire_size 생략),
-     then guide the user to exact-size refinement.
+     `get_products_recommendations_tool(vehicle_type=<inferred>)` in the SAME turn (tire_size 생략), then
+     guide the user to exact-size refinement.
    - Exception: if the non-self request contains a vehicle number but no owner name, ask for 차량번호 + 소유주명 instead of CAR MODEL DISPLAY.
 
 
@@ -1774,8 +1745,8 @@ exact-size refinement. Do NOT hard-stop to ask for a size first.
 
 ⚠️ EV GUARD: vehicle_type="ev" 는 **EV 전용 모델**이거나 사용자가 명시적으로 전기차/EV 타이어를 요청한
 경우에만 사용한다. 내연기관 차량과 ICE/EV 겸용 모델(코나, 니로, G80 등)은 차체 타입(passenger/suv)으로
-추론한다. 예: G바겐(내연기관 SUV) → "suv" — 절대 "ev" 아님. 미등록 차종을 EV 전용(iON) 추천으로
-처리하는 것은 회귀 버그다.
+추론한다. 예: G바겐(내연기관 SUV) → "suv" — 절대 "ev" 아님.
+⚠️ 차종 카테고리를 전혀 추론할 수 없으면 vehicle_type 없이 일반 추천으로 호출한다 — 그래도 사이즈를 먼저 묻지 않는다.
 
 **STEP 2 — Call RECOMMEND ENGINE immediately with the inferred type (tire_size 생략):**
 `get_products_recommendations_tool(rcmd_type=<직전/현재 시나리오 매핑, 없으면 "tstation">, vehicle_type=<추론값>)`
@@ -1785,8 +1756,11 @@ exact-size refinement. Do NOT hard-stop to ask for a size first.
 **STEP 3 — Render `product` cards + size-refinement guidance in `assistantResponse` (한국어 응답, 줄바꿈 그대로 사용):**
 "[차종명]은(는) 연식/트림에 따라 타이어 사이즈가 달라요. 우선 [세단/SUV/전기차/트럭·밴] 기준으로 추천해 드렸어요 😊\\n\\n정확한 사이즈 기준으로 다시 찾으려면:\\n1️⃣ 사이즈 직접 입력 (예: 225/45R18)\\n2️⃣ 차량번호+소유주명 입력\\n3️⃣ '내 차량'으로 등록 차량 기준"
 
+QuickReply chips (CONTEXT CHIP MATRIX 적용):
+[{"label":"사이즈 직접 입력","domain":"DISCOVERY"},{"label":"차량번호로 확인","domain":"DISCOVERY"},{"label":"내 차량 보기","domain":"DISCOVERY"}]
+
 **STEP 4 — Wait for user response (next turn)**
-→ User enters tire size → RECOMMEND ENGINE directly (이전 턴의 추천 의도 유지 — `get_products_recommendations_tool(tire_size=<입력값>, rcmd_type=<직전 시나리오 or "tstation">)` 호출).
+→ User enters tire size → RECOMMEND ENGINE with tire_size (이전 턴의 vehicle_type/시나리오 유지 — `get_products_recommendations_tool(tire_size=<입력값>, vehicle_type=<직전 추론값>, rcmd_type=<직전 시나리오 or "tstation">)` 호출).
 → User enters car_no + owner_nm → Call `get_user_vehicles_tool` → Go to RECOMMEND ENGINE.
 → User picks "내 차량" → Call `get_my_cars_tool` → vehicle selection flow → Go to RECOMMEND ENGINE.
 
@@ -1967,7 +1941,7 @@ Handle ONLY event, deal, event-product, product-event, and YouTube/video request
 - Events: "이벤트", "행사", "진행 중인 이벤트".
 - Deals: "기획전", "기획전 목록".
 - Event-applicable products: products that can be bought under a known event.
-- Product-applicable events: events that apply to a known product/goods_no.
+- Product-applicable events: events that apply to a known product pattern/ptrn_cd.
 - Video/review: "영상", "리뷰 영상", "유튜브", "동영상".
 - **Past/ended events: "종료된 이벤트", "지난 이벤트", "끝난 이벤트", "과거 이벤트", "예전 이벤트", "지난달 이벤트" — 별도 분기 (아래 PAST EVENTS 참고).**
 - Do NOT handle recommendation, product search, price/stock, store, order, coupon, warranty, or complaints here.
@@ -1991,7 +1965,7 @@ Handle ONLY event, deal, event-product, product-event, and YouTube/video request
 - Deal list -> call get_deals_tool() immediately.
 - Event + deal together -> call both get_events_tool and get_deals_tool in the same turn.
 - Event-applicable products -> call get_event_applicable_products_tool when evt_no_list is known; if not known, call get_events_tool first.
-- Product-applicable events -> call get_product_applicable_events_tool when goods_no is known; if not known but the user mentioned a product name, call `search_product_tool(keyword=<상품명>, size=None)` **사이즈 없이** to resolve goods_no, then call get_product_applicable_events_tool with items[0].goods_no; if no product name is provided, ask one short clarification. ❌ 사이즈를 사용자에게 묻지 말 것.
+- Product-applicable events/promotions/deals -> call get_product_applicable_events_tool when ptrn_cd is known; if not known but the user mentioned a product name, call `search_product_summary_tool(keyword=<상품명>)` to resolve ptrn_cd without selecting goods_no/SKU, then call get_product_applicable_events_tool with items[0].ptrn_cd; if no product name is provided, ask one short clarification. ❌ search_product_tool 사용 금지. ❌ 사이즈를 사용자에게 묻지 말 것.
 - YouTube/video/review -> call search_youtube_video_tool(query) immediately.
 
 
@@ -2528,6 +2502,7 @@ class DiscoverySubAgent(BaseAgent):
         "search_car_model_groups_tool": "Product Compatibility",
         "get_car_trims_tool": "Product Compatibility",
         "search_product_tool": "Product Recommendation",
+        "search_product_summary_tool": "Product Description",
         "get_products_recommendations_tool": "Product Recommendation",
         "get_newest_products_tool": "Product Recommendation",
         "get_best_selling_products_tool": "Product Recommendation",
@@ -2536,6 +2511,7 @@ class DiscoverySubAgent(BaseAgent):
         "get_events_tool": "Price",
         "get_deals_tool": "Price",
         "get_benefit_event_deal_list_tool": "Price",
+        "search_benefit_applicable_products_tool": "Price",
         "get_event_applicable_products_tool": "Price",
         "get_product_applicable_events_tool": "Price",
         "get_coupon_applicable_products_tool": "Price",
@@ -2549,6 +2525,7 @@ class DiscoverySubAgent(BaseAgent):
         tools = [
             check_compatibility_tool,
             search_product_tool,
+            search_product_summary_tool,
             get_user_vehicles_tool,
             get_my_cars_tool,
             search_car_model_tool,
@@ -2561,6 +2538,7 @@ class DiscoverySubAgent(BaseAgent):
             get_events_tool,
             get_deals_tool,
             get_benefit_event_deal_list_tool,
+            search_benefit_applicable_products_tool,
             get_event_applicable_products_tool,
             get_product_applicable_events_tool,
             get_coupon_applicable_products_tool,
@@ -2575,6 +2553,7 @@ class DiscoverySubAgent(BaseAgent):
         if profile == "discovery_search":
             tools = [
                 search_product_tool,
+                search_product_summary_tool,
                 get_products_recommendations_tool,
                 get_newest_products_tool,
                 get_product_description_tool,
@@ -2593,6 +2572,7 @@ class DiscoverySubAgent(BaseAgent):
                 get_product_description_tool,
                 get_product_promotions_tool,
                 search_product_tool,
+                search_product_summary_tool,
             ]
             system_prompt = get_discovery_recommendation_system_prompt
             name = "Discovery Agent (Recommendation)"
@@ -2602,6 +2582,7 @@ class DiscoverySubAgent(BaseAgent):
                 get_events_tool,
                 get_deals_tool,
                 get_benefit_event_deal_list_tool,
+                search_benefit_applicable_products_tool,
                 get_event_applicable_products_tool,
                 get_product_applicable_events_tool,
                 get_coupon_applicable_products_tool,

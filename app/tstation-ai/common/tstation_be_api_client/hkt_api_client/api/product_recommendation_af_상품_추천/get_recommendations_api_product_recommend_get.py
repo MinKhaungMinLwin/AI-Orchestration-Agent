@@ -190,8 +190,9 @@ def sync_detailed(
     '프리미엄' + '프리미엄+' 둘 다 매칭.
 
     **가격 필터 (모든 rcmd_type 공통, 옵션)**
-    - `min_price`/`max_price`: SQL WHERE 절에서 `NVL(EXTRA_FVR_SALE_PRC, SALE_PRC)` (할인가 우선) 기준 범위 필터. 지정 시
-    가격 범위 내에서 rcmd_type 의 정렬 기준 (TOT_SCR, EXTRA_FVR_SALE_PER 등) 상위 N 개 반환.
+    - `min_price`/`max_price`: SQL WHERE 절에서 `NVL(EXTRA_FVR_SALE_PRC, SALE_PRC)` (할인가 우선) 기준 범위 필터.
+    `max_price` (목표 가격) 만 지정되면 예산대 요청으로 보고 0~max 범위에서 가격 내림차순 상위 N 개를 반환하며 브랜드 필터(HK 등)가 해제되어 모든 브랜드를
+    포함합니다.
 
     **차량 타입 필터 (모든 rcmd_type 공통, 옵션)**
     - `vehicle_type`: `CAR_KND_NM` 기준 직교 필터. 값: passenger/suv/ev/truck_van. passenger는
@@ -303,8 +304,9 @@ def sync(
     '프리미엄' + '프리미엄+' 둘 다 매칭.
 
     **가격 필터 (모든 rcmd_type 공통, 옵션)**
-    - `min_price`/`max_price`: SQL WHERE 절에서 `NVL(EXTRA_FVR_SALE_PRC, SALE_PRC)` (할인가 우선) 기준 범위 필터. 지정 시
-    가격 범위 내에서 rcmd_type 의 정렬 기준 (TOT_SCR, EXTRA_FVR_SALE_PER 등) 상위 N 개 반환.
+    - `min_price`/`max_price`: SQL WHERE 절에서 `NVL(EXTRA_FVR_SALE_PRC, SALE_PRC)` (할인가 우선) 기준 범위 필터.
+    `max_price` (목표 가격) 만 지정되면 예산대 요청으로 보고 0~max 범위에서 가격 내림차순 상위 N 개를 반환하며 브랜드 필터(HK 등)가 해제되어 모든 브랜드를
+    포함합니다.
 
     **차량 타입 필터 (모든 rcmd_type 공통, 옵션)**
     - `vehicle_type`: `CAR_KND_NM` 기준 직교 필터. 값: passenger/suv/ev/truck_van. passenger는
@@ -411,8 +413,9 @@ async def asyncio_detailed(
     '프리미엄' + '프리미엄+' 둘 다 매칭.
 
     **가격 필터 (모든 rcmd_type 공통, 옵션)**
-    - `min_price`/`max_price`: SQL WHERE 절에서 `NVL(EXTRA_FVR_SALE_PRC, SALE_PRC)` (할인가 우선) 기준 범위 필터. 지정 시
-    가격 범위 내에서 rcmd_type 의 정렬 기준 (TOT_SCR, EXTRA_FVR_SALE_PER 등) 상위 N 개 반환.
+    - `min_price`/`max_price`: SQL WHERE 절에서 `NVL(EXTRA_FVR_SALE_PRC, SALE_PRC)` (할인가 우선) 기준 범위 필터.
+    `max_price` (목표 가격) 만 지정되면 예산대 요청으로 보고 0~max 범위에서 가격 내림차순 상위 N 개를 반환하며 브랜드 필터(HK 등)가 해제되어 모든 브랜드를
+    포함합니다.
 
     **차량 타입 필터 (모든 rcmd_type 공통, 옵션)**
     - `vehicle_type`: `CAR_KND_NM` 기준 직교 필터. 값: passenger/suv/ev/truck_van. passenger는
@@ -522,8 +525,9 @@ async def asyncio(
     '프리미엄' + '프리미엄+' 둘 다 매칭.
 
     **가격 필터 (모든 rcmd_type 공통, 옵션)**
-    - `min_price`/`max_price`: SQL WHERE 절에서 `NVL(EXTRA_FVR_SALE_PRC, SALE_PRC)` (할인가 우선) 기준 범위 필터. 지정 시
-    가격 범위 내에서 rcmd_type 의 정렬 기준 (TOT_SCR, EXTRA_FVR_SALE_PER 등) 상위 N 개 반환.
+    - `min_price`/`max_price`: SQL WHERE 절에서 `NVL(EXTRA_FVR_SALE_PRC, SALE_PRC)` (할인가 우선) 기준 범위 필터.
+    `max_price` (목표 가격) 만 지정되면 예산대 요청으로 보고 0~max 범위에서 가격 내림차순 상위 N 개를 반환하며 브랜드 필터(HK 등)가 해제되어 모든 브랜드를
+    포함합니다.
 
     **차량 타입 필터 (모든 rcmd_type 공통, 옵션)**
     - `vehicle_type`: `CAR_KND_NM` 기준 직교 필터. 값: passenger/suv/ev/truck_van. passenger는

@@ -515,7 +515,6 @@ def _build_owner_vehicle_lookup_event(tool_name: str, tool_result: Any, messages
         "data": {
             "assistantResponse": assistant_response,
             "quickReplies": [
-                {"label": "다시 검색", "domain": "DISCOVERY"},
                 {"label": "타이어 추천", "domain": "DISCOVERY"},
                 {"label": "구매하기", "domain": "TRANSACTION"},
             ],
@@ -913,8 +912,9 @@ _VALIDATION_FALLBACK_MESSAGE = (
     "죄송합니다, 답변을 정리하던 중 일시적인 문제가 발생했어요.\n\n"
     "잠시 후 다시 시도해 주시거나 아래 버튼으로 다른 도움을 받아보세요."
 )
+# "다시 시도" 류 label-only chip 은 실행 계약이 없어 CTA 게이트에서 제거되므로
+# 등록된 escalation CTA 만 남긴다.
 _VALIDATION_FALLBACK_QUICK_REPLIES = [
-    {"label": "다시 시도", "domain": "LEADING"},
     {"label": "상담사 연결", "domain": "SUPPORT"},
 ]
 
@@ -1118,6 +1118,7 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     # Discovery
     "check_compatibility_tool": "차량-타이어 호환 확인 중...",
     "search_product_tool": "상품 검색 중...",
+    "search_product_summary_tool": "상품 정보 확인 중...",
     "get_user_vehicles_tool": "차량 정보 조회 중...",
     "get_my_cars_tool": "내 차량 조회 중...",
     "search_car_model_tool": "차량 모델 검색 중...",
@@ -1128,6 +1129,7 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "get_events_tool": "이벤트 목록 조회 중...",
     "get_deals_tool": "기획전 목록 조회 중...",
     "get_benefit_event_deal_list_tool": "이벤트/기획전 조회 중...",
+    "search_benefit_applicable_products_tool": "혜택 적용 상품 조회 중...",
     "get_event_applicable_products_tool": "이벤트 적용 상품 조회 중...",
     "get_product_applicable_events_tool": "상품 적용 이벤트 조회 중...",
     "compare_discount_tool": "할인 가격 비교 중...",
@@ -1175,6 +1177,7 @@ class BaseAgent(ABC):
         "get_stores_with_time_filter_tool",
         "search_stores_complex_tool",
         "search_product_tool",
+        "search_product_summary_tool",
         "get_products_recommendations_tool",
         "get_newest_products_tool",
         "get_best_selling_products_tool",
@@ -2106,6 +2109,7 @@ class BaseAgent(ABC):
             # quickReply 만 emit 하고 product 카드를 건너뛰는 회귀 차단.
             # items 0 (검색 0건) 케이스는 mapper 가 None 반환 → LLM prose fallback.
             "search_product_tool",
+            "search_product_summary_tool",
             "get_products_recommendations_tool",
             "get_newest_products_tool",
             "get_best_selling_products_tool",
@@ -2163,6 +2167,7 @@ class BaseAgent(ABC):
             "get_stores_with_time_filter_tool": {"location", "quickReply"},
             "search_stores_complex_tool": {"location", "quickReply"},
             "search_product_tool": {"product", "quickReply"},
+            "search_product_summary_tool": {"quickReply"},
             "get_products_recommendations_tool": {"product", "quickReply"},
             "get_newest_products_tool": {"product", "quickReply"},
             "get_best_selling_products_tool": {"product", "quickReply"},
@@ -2390,11 +2395,11 @@ class BaseAgent(ABC):
                     response_streamer=response_streamer,
                     answering_emitted=answering_emitted,
                 )
-            from services.tstation.chat import (
-                _DIRECT_SUPPORT_FAQ_POLICY_INTENTS,
-                _build_general_cancel_fee_policy_event,
-                _build_general_card_cancel_timing_policy_event,
-                _build_support_faq_policy_event,
+            from services.tstation.policies.support_response_policy import (
+                DIRECT_SUPPORT_FAQ_POLICY_INTENTS,
+                build_general_cancel_fee_policy_event,
+                build_general_card_cancel_timing_policy_event,
+                build_support_faq_policy_event,
             )
         except Exception:
             return None
@@ -2416,11 +2421,11 @@ class BaseAgent(ABC):
         )
 
         if contract_intent == "general_cancel_fee_policy":
-            code_event = _build_general_cancel_fee_policy_event(user_query, tool_result=tool_result)
+            code_event = build_general_cancel_fee_policy_event(user_query, tool_result=tool_result)
         elif contract_intent == "general_card_cancel_timing_policy":
-            code_event = _build_general_card_cancel_timing_policy_event(user_query, tool_result=tool_result)
-        elif contract_intent in _DIRECT_SUPPORT_FAQ_POLICY_INTENTS:
-            code_event = _build_support_faq_policy_event(
+            code_event = build_general_card_cancel_timing_policy_event(user_query, tool_result=tool_result)
+        elif contract_intent in DIRECT_SUPPORT_FAQ_POLICY_INTENTS:
+            code_event = build_support_faq_policy_event(
                 contract_intent,
                 user_query,
                 tool_result=tool_result,
@@ -2498,9 +2503,15 @@ class BaseAgent(ABC):
         response_streamer: "_AssistantResponseStreamer | None",
         answering_emitted: bool,
     ) -> list[dict] | None:
+        required_slot_set = {str(slot) for slot in required_slots if str(slot)}
+        schedule_slot_collection = preferred_tool == "get_store_schedule_tool" and required_slot_set <= {
+            "booking_datetime",
+            "requested_cal_day",
+            "rsv_hour",
+        }
         if (
             not preferred_tool
-            or required_slots
+            or (required_slots and not schedule_slot_collection)
             or preferred_tool in forbidden_tools
             or (allowed_tools and preferred_tool not in allowed_tools)
         ):
@@ -2521,6 +2532,29 @@ class BaseAgent(ABC):
             for key, value in dict(getattr(tool_plan, "tool_args_patch", {}) or {}).items()
             if value not in (None, "", [], {})
         }
+        if preferred_tool == "get_store_schedule_tool":
+            flow_slots = metadata.get("flow_slots") if isinstance(metadata.get("flow_slots"), dict) else {}
+            shop_id = tool_input.get("shop_id") or flow_slots.get("shop_id")
+            mode = (
+                tool_input.get("mode")
+                or tool_input.get("schedule_mode")
+                or tool_input.get("inventory_mode")
+                or flow_slots.get("schedule_mode")
+                or flow_slots.get("inventory_mode")
+            )
+            has_order_context = bool(
+                tool_input.get("goods_no")
+                or flow_slots.get("goods_no")
+                or tool_input.get("ord_qty")
+                or flow_slots.get("ord_qty")
+            )
+            if shop_id and not mode:
+                mode = "in_store_logistics_combined" if has_order_context else "general"
+            tool_input = {
+                key: value
+                for key, value in {"shop_id": shop_id, "mode": mode}.items()
+                if value not in (None, "", [], {})
+            }
         if not tool_input:
             return None
 

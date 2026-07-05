@@ -1,7 +1,11 @@
 
 from services.tstation.agents.base_agent import BaseAgent
 from services.tstation.agents.templates import TransactionAgentOutput
-from services.tstation.agents.b_discovery_agent.tools import get_my_cars_tool, search_product_tool
+from services.tstation.agents.b_discovery_agent.tools import (
+    get_my_cars_tool,
+    search_benefit_applicable_products_tool,
+    search_product_tool,
+)
 from services.tstation.common.cta_urls import expand_url_sentinels
 from services.tstation.agents.e_support_agent.tools import get_card_installments_tool
 from services.tstation.agents.c_transaction_agent.tools import (
@@ -46,7 +50,7 @@ Always respond in Korean.
       ]
   절대 발급 도구를 호출하려 시도하지 말 것.
 - 조회 도구(`get_my_coupons_tool`, `get_product_promotions_tool`,
-  `get_coupon_applicable_products_tool`) 는 정상 동작 — 쿠폰/기획전 정보 안내는
+  `search_benefit_applicable_products_tool`, `get_coupon_applicable_products_tool`) 는 정상 동작 — 쿠폰/기획전 정보 안내는
   계속 제공한다. "쿠폰 받기"/"발급"/"다운로드" 라벨의 CTA chip 은 답변에 노출하지
   않는다 (단, 위 GLOBAL 안내 케이스의 "쿠폰함 바로가기" 는 예외).
 
@@ -97,55 +101,34 @@ For clarifications, no-result, failure, or text-only responses, output exactly o
 {"type":"data","template":"quickReply","data":{"assistantResponse":"<Korean answer>","quickReplies":[<context-appropriate chips>],"predictedDomains":["TRANSACTION"]},"nextAction":{"type":"stop","domain":null}}
 ```
 
-## ⚠️ QUICKREPLY OUTPUT GUARANTEE (전 profile 공통, 최우선)
+## ⚠️ QUICKREPLY CHIP POLICY (전 profile 공통, 최우선)
 
-`template: "quickReply"` 를 emit 할 때 `data.quickReplies` 는 **절대 빈 배열 `[]` 금지**. 최소 1개, 권장 2~4개의 chip 을 포함해야 한다.
+chip 은 클릭 시 **실제 실행 가능한 액션**(등록된 CTA 실행·URL 이동·슬롯 값 선택)으로 이어질 때만 emit 한다. 실행 계약이 없는 label-only chip 은 백엔드 CTA 게이트가 자동 제거하므로 emit 해도 사용자에게 노출되지 않는다. **`quickReplies: []` 빈 배열은 정상 출력이다** — 적합한 액션 chip 이 없으면 비워서 emit 하라. 답변을 chip 으로 장식하지 마라.
 
-**chip 선정 우선순위 (반드시 이 순서로 판정)**:
-1. **개별 룰에 명시된 CTA chip** (워런티/픽업/도서산간/Wheel Alignment 등) — 가장 우선.
-2. **CONTEXT CHIP MATRIX (아래)** — 가격/재고/카트/주문/매장/쿠폰 응답 등 정상 흐름 케이스는 다음 단계 chip 을 emit.
-3. **DEAD-END FALLBACK (아래)** — 위 1·2 어디에도 해당 안 되는 dead-end 응답에서만 `[1:1 문의하기, 처음으로]` 류 emit.
+**emit 허용 chip (이 3가지 유형만)**:
+1. **개별 룰에 명시된 CTA chip** (워런티/픽업/도서산간/Wheel Alignment/URL 안내 등) — label·url 을 룰 그대로 사용. 가장 우선.
+2. **등록된 액션 label** — 현재 흐름의 다음 단계와 맞을 때만:
+   - `주문하기` / `구매하기` (goods_no 확보 + 주문 진행 가능 상태), `장바구니에 담기` / `장바구니 담기`
+   - `매장 찾기` (매장 검색 시작), `다른 매장 보기` / `다른 매장 찾기` (재고 없음 등 대안 매장 탐색), `다른 날짜 확인` (일정 대안 탐색)
+   - `내 예약 조회` (본인 주문/예약 확인 흐름), URL 형 chip: `주문 내역 보기`(+url), `쿠폰함 바로가기`, `내 쿠폰 확인`, `장바구니 확인`, `마모도 측정 서비스`
+   - `상품 검색`, `타이어 추천` (거래 흐름이 끝나고 발견 단계로 되돌아가는 경우)
+   - `1:1 문의하기` (이번 turn 발화에 "1:1 문의"/"상담"/"상담원"/"클레임"/"환불 신청"/"교환 신청" 등 명시 키워드가 있거나, 정책상 챗봇 처리 불가·도구 실패 dead-end 인 경우만)
+3. **구체적 선택지 chip**: 수량(`1개`~`4개`), 타이어 사이즈(`225/45R17` 형식), 매장명 후보(`○○점`/`○○센터`) 등 선택 즉시 슬롯이 채워지는 실제 값.
+
+**금지**: `다시 시도`, `처음으로`, `가격 조회`, `주문 조회` 등 클릭해도 label 텍스트 전송 외 실제 액션이 없는 chip. 도구 실패 시 재시도 유도는 chip 없이 본문에서 안내하라.
+
+**케이스 가이드**:
+- 가격/재고 안내 (goods_no 확보) → `[주문하기, 장바구니에 담기, 매장 찾기]` 중 흐름에 맞는 2~3개
+- 매장 재고 없음 → `[다른 매장 보기]` 첫 자리
+- 쿠폰 조회 결과 (text-only) → `[내 쿠폰 확인]` (URL chip)
+- 주문 내역 조회 (text-only) → `[주문 내역 보기(+__URL_ORDER_HISTORY__)]` — "페이지로 이동" 의도가 명확할 때만
+- 카트/주문 흐름 중간 안내 → 흐름별 명시 chip (Flow 5/6 룰이 본 가이드보다 우선)
 
 **예외**: `template` 이 `product`, `listCar`, `voucher`, `cheapestProduct`, `qnaComplete`, `preOrder`, `orderComplete`, `cartComplete`, `billService`, `billProduct`, `location`, `datepick`, `previewYoutube` 등 **카드형 데이터 템플릿** 일 때는 `quickReplies` 자체가 다른 의미라 본 룰 미적용.
 
-**위반 시 결과**: 사용자 화면에 본문 텍스트만 노출되고 다음 단계 chip 이 사라져 대화가 막힘. **반드시 self-check 후 emit**.
-
-### CONTEXT CHIP MATRIX — 정상 응답 chip (1·3 보다 먼저 판정)
-
-응답이 도구 결과를 정상적으로 안내하는 경우 (dead-end 가 아닌 경우) 아래 표의 컨텍스트 chip 을 우선 emit. `[1:1 문의하기, 처음으로]` fallback 사용 금지.
-
-| 응답 유형 | 권장 chip (2~3개) | 비고 |
-|---|---|---|
-| 가격 안내 (단가/결제 예상가) | `[{"label":"주문하기","domain":"TRANSACTION"},{"label":"장바구니에 담기","domain":"TRANSACTION"},{"label":"매장 찾기","domain":"TRANSACTION"}]` | goods_no 확보된 상태 |
-| 재고 안내 (재고 있음/없음) | `[{"label":"주문하기","domain":"TRANSACTION"},{"label":"다른 매장 보기","domain":"TRANSACTION"}]` | 매장재고 없음 시 `"다른 매장 보기"` 첫 자리 |
-| 가격+재고 동시 안내 | `[{"label":"주문하기","domain":"TRANSACTION"},{"label":"장바구니에 담기","domain":"TRANSACTION"},{"label":"매장 찾기","domain":"TRANSACTION"}]` | — |
-| 매장 검색 결과 (text-only) | `[{"label":"주문하기","domain":"TRANSACTION"},{"label":"다른 매장 보기","domain":"TRANSACTION"}]` | location 카드면 본 룰 미적용 |
-| 쿠폰 조회 결과 (text-only) | `[{"label":"내 쿠폰 조회","domain":"TRANSACTION"},{"label":"상품 검색","domain":"DISCOVERY"}]` | voucher 카드면 본 룰 미적용 |
-| 주문 내역 조회 (text-only) | `get_orders_of_user_tool` 결과 요약 + `[{"label":"주문 내역 보기","url":"__URL_ORDER_HISTORY__","domain":"TRANSACTION"}]` | "페이지로 이동" 의도가 명확할 때만 URL 안내를 우선 |
-| 주문 진행 중 도구 실패 / 재시도 권장 | `[{"label":"다시 시도","domain":"TRANSACTION"},{"label":"매장 찾기","domain":"TRANSACTION"}]` | dead-end 아님 — 컨텍스트 chip |
-| 카트/주문 흐름 진행 중간 안내 | 흐름별 명시 chip (Flow 5/6 룰) | 본 매트릭스보다 흐름별 룰이 우선 |
-
-⚠️ 위 케이스에서 `[1:1 문의하기]` / `[처음으로]` 를 emit 하면 다음 turn 라우팅이 끊겨 사용자가 같은 흐름을 다시 시작해야 한다 — **금지**.
-
-### DEAD-END FALLBACK (1·2 어디에도 해당 안 될 때만)
-
-`[{"label":"1:1 문의하기","domain":"SUPPORT"},{"label":"처음으로","domain":"LEADING"}]` 를 emit 할 수 있는 조건 (모두 명시적):
-
-- **사용자 의도 명시**: 이번 turn 사용자 발화에 "1:1 문의", "상담", "상담원", "클레임", "환불 신청", "교환 신청" 등 명시 키워드 포함.
-- **환불·취소 정책상 불가 안내**: 예) 배송 시작 후 주문 취소 불가 / 서비스 주문 부분 취소 / 본 점포 방문 예약 단순 취소 등 (REORDER FLOW / Flow 6 cancellation 룰 참조).
-- **FAQ·정책 답변 (시스템 조회 불가)**: 예) 제조일자/DOT 정책 답변, 시스템에서 직접 확인 불가한 정책 안내.
-- **도구 호출 실패 + 다시 시도가 부적절한 dead-end**: 일시 실패는 위 매트릭스의 `"다시 시도"` chip 으로 처리. 시스템 정책상 응답 불가일 때만 dead-end fallback.
-- **도구 결과 50건 이상 등 응답 만들기 어려운 케이스**: 본문 짧게 요약 + fallback chip emit.
-
-위 조건 외에는 `[1:1 문의하기, 처음으로]` emit 금지 — CONTEXT CHIP MATRIX 의 컨텍스트 chip 사용.
-
-`처음으로` chip 의 추가 허용 케이스:
-- Greeting / 감사 / 완료 응답 자연 종결 (예: 주문 완료 후 마무리 인사) — 다른 progress chip 과 함께 마지막 자리에.
-- dead-end fallback 짝으로 `1:1 문의하기` 와 함께 emit.
-
 For `quickReply`, `quickReplies` MUST be a list of objects, never strings:
-- CORRECT: `[{"label":"내 쿠폰 조회","domain":"TRANSACTION"}]`
-- WRONG: `["내 쿠폰 조회"]`
+- CORRECT: `[{"label":"내 쿠폰 확인","domain":"TRANSACTION"}]`
+- WRONG: `["내 쿠폰 확인"]`
 
 ## ORDER PAGE URL — quickReply chip `url` 자동 첨부
 사용자에게 주문 내역 페이지 이동을 안내하는 quickReply chip 을 emit 할 때는 항상 `url` 필드를 함께 첨부한다. FE 가 chip 클릭 시 새 탭으로 redirect.
@@ -2598,17 +2581,13 @@ Handle ONLY coupon and promotion requests.
 - 🚫 (OFF 2026-05-15 / 안내 갱신 2026-05-19) User wants to download/issue a coupon -> issue_coupon_tool 호출 금지. quickReply 로 위 GLOBAL 룰 (line 33-) 의 응답/quickReplies 그대로 emit ("고객님, 현재 채팅에서는 쿠폰을 직접 발급해 드릴 수 없어요. 쿠폰 받기는 쿠폰함에서 확인하고 진행하실 수 있습니다." + 쿠폰함 바로가기/내 쿠폰 조회 chip).
 - PRIORITY — 쿠폰 이름/할인율로 적용 상품 조회 ("30% 할인 쿠폰 적용 가능 상품", "임직원 쿠폰 쓸 수 있는 상품", "드라이브 행사 고객 한정 적용 가능 상품" 등, cpn_no 미확보):
   이 규칙은 아래의 "쿠폰 적용 상품/매장 조회" 일반 규칙보다 우선한다.
-  Step 1. `get_my_coupons_tool` 호출 → 보유 쿠폰 목록 확인
-  Step 2. 사용자가 언급한 할인율(예: "30%") 또는 쿠폰명 키워드로 매칭
-    - "드라이브 행사 고객 한정" 같은 부분 쿠폰명도 `items[].cpn_nm` substring 으로 매칭한다.
-  Step 3a. 매칭 쿠폰 있음 → `get_coupon_applicable_products_tool(cpn_no=[<매칭된 cpn_no>])` 호출 → 적용 상품/매장 안내
-  Step 3b. 매칭 쿠폰 없음 → quickReply "고객님 보유 쿠폰에서 해당 쿠폰을 찾지 못했어요. 쿠폰함에서 쿠폰명을 확인해 주세요." + quickReplies `[{"label":"쿠폰함 바로가기","domain":"TRANSACTION","url":"__URL_MY_COUPON_LIST_PC__"},{"label":"내 쿠폰 조회","domain":"TRANSACTION"}]`
-  ⚠️ cpn_no 를 모른다고 되묻거나 "범위 아님" 응답 금지 — 항상 Step 1부터 시작. 특히 사용자가 쿠폰명 일부를 말한 경우에도 절대 쿠폰번호를 요구하지 말고 `get_my_coupons_tool` 로 찾아라. `get_my_coupons_tool` 에도 없으면 쿠폰번호를 요구하지 말고 쿠폰함 CTA 로 안내한다.
+  `search_benefit_applicable_products_tool(query=<사용자가 언급한 할인율/쿠폰명/혜택명>, lang_cd="ko")` 를 직접 호출한다.
+  ❌ `get_my_coupons_tool` 로 보유 쿠폰을 먼저 특정하지 말 것. ❌ `get_coupon_applicable_products_tool(cpn_no=...)` 로 체인하지 말 것.
 - 쿠폰 적용 상품/매장 조회 ("이 쿠폰 어디 쓸 수 있어?", "이 쿠폰으로 살 수 있는 타이어", "이 쿠폰 어느 매장에서 써?") -> call
   `get_coupon_applicable_products_tool(cpn_no=[...])`. 답변엔 쿠폰 정보만.
   - 단, 사용자 발화에 쿠폰명/할인율 키워드가 있고 cpn_no 만 모르는 경우에는 위 PRIORITY 규칙을 따른다. 절대 쿠폰번호를 요구하지 않는다.
 - 기획전 적용 상품 조회 ("기획전 상품", "기획전에 어떤 상품 있어?") -> call
-  `get_coupon_applicable_products_tool(deal_no=[...])`. 답변엔 기획전 정보만.
+  `search_benefit_applicable_products_tool(query=<기획전명>, lang_cd="ko")`. 답변엔 기획전 정보만.
     - 직전 turn 또는 컨텍스트에서 확보된 cpn_no / deal_no 만 전달한다. 단, 쿠폰명/할인율이 발화에 있으면 cpn_no 를 모른다고 되묻지 말고 위 PRIORITY 규칙으로 `get_my_coupons_tool` 부터 호출한다.
     - cpn_no, deal_no 둘 다 list[str]. 각 최대 10개.
     - 둘 다 비어 있으면 호출 금지 — 기획전 의도는 어떤 기획전인지 되묻는다. 쿠폰 의도는 쿠폰번호를 요구하지 말고 `get_my_coupons_tool` 조회 또는 쿠폰함 CTA 로 처리한다.
@@ -3197,6 +3176,7 @@ class TransactionSubAgent(BaseAgent):
         "get_final_price_tool": "Price",
         "get_my_coupons_tool": "Price",
         "get_product_promotions_tool": "Price",
+        "search_benefit_applicable_products_tool": "Price",
         "get_coupon_applicable_products_tool": "Price",
         # "issue_coupon_tool": "Price",  # OFF 2026-05-15
         "search_product_tool": "Product Recommendation",
@@ -3231,6 +3211,7 @@ class TransactionSubAgent(BaseAgent):
             get_final_price_tool,
             get_my_coupons_tool,
             # issue_coupon_tool,  # OFF (2026-05-15)
+            search_benefit_applicable_products_tool,
             get_coupon_applicable_products_tool,
             get_product_promotions_tool,
             get_logistics_inventory_tool,
@@ -3261,6 +3242,7 @@ class TransactionSubAgent(BaseAgent):
             tools = [
                 get_my_coupons_tool,
                 # issue_coupon_tool,  # OFF (2026-05-15)
+                search_benefit_applicable_products_tool,
                 get_coupon_applicable_products_tool,
                 get_product_promotions_tool,
                 search_product_tool,

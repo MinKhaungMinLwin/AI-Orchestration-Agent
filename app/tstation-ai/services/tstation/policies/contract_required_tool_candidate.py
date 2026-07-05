@@ -6,6 +6,7 @@ from schemas.tstation.slots import ConversationSlots
 from services.tstation.policies.discovery_intent_policy import (
     best_seller_search_params_from_text,
     build_discovery_intent_frame,
+    extract_benefit_applicable_products_query,
     extract_best_seller_vehicle_query,
     extract_product_names,
     normalize_tire_size,
@@ -36,13 +37,19 @@ _FAST_PATH_TRANSACTION_RECOVERY_ALLOWED_TOOLS = frozenset({
     "get_store_list_tool",
     "search_stores_tool",
     "get_my_reservations_tool",
+    "get_orders_of_user_tool",
+    "get_order_status_tool",
 })
 _OWNED_RECORD_RECOVERY_TOOLS = frozenset({
     "get_my_reservations_tool",
+    "get_orders_of_user_tool",
+    "get_order_status_tool",
 })
 _OWNED_RECORD_RECOVERY_INTENTS = frozenset({
     "reservation_status_lookup",
     "reservation_store_info_lookup",
+    "order_cancel_status_lookup",
+    "order_arrival_status_lookup",
 })
 _TRANSACTION_STORE_PREVIEW_RECOVERY_INTENTS = frozenset({
     "quick_order_reservation",
@@ -50,17 +57,23 @@ _TRANSACTION_STORE_PREVIEW_RECOVERY_INTENTS = frozenset({
     "stock_store_search",
 })
 _FAST_PATH_DISCOVERY_RECOVERY_ALLOWED_TOOLS = frozenset({
+    "search_product_summary_tool",
     "search_product_tool",
     "get_product_description_tool",
     "get_products_recommendations_tool",
     "get_best_selling_products_tool",
     "get_my_cars_tool",
+    "get_events_tool",
+    "get_product_applicable_events_tool",
+    "search_benefit_applicable_products_tool",
+    "get_event_applicable_products_tool",
 })
 _FLOW_PROGRESS_TRANSACTION_TOOLS = frozenset({
     "search_stores_tool",
     "get_store_list_tool",
     "get_store_schedule_tool",
     "get_store_inventory_tool",
+    "get_final_price_tool",
 })
 _DIRECT_SUPPORT_FAQ_POLICY_INTENTS = frozenset({
     "card_installment_lookup",
@@ -684,7 +697,60 @@ def _contract_required_transaction_store_preview_tool_input(
         tool_input["quantity"] = tool_input["ord_qty"]
     if tool_input.get("store_name") in (None, "", [], {}) and tool_input.get("shop_name") not in (None, "", [], {}):
         tool_input["store_name"] = tool_input["shop_name"]
+    if tool_input.get("pending_intent") == "order" or tool_input.get("goal_type") == "place_order":
+        tool_input["pending_intent"] = "order"
+        tool_input["goal_type"] = "place_order"
+        tool_input["sub_flow_type"] = "purchase"
+        tool_input["stock_check_mode"] = "preview"
     return tool_input
+
+
+def _contract_required_schedule_final_price_tool_input(
+    turn_contract: TurnContract,
+    *,
+    merged_slots: ConversationSlots | None = None,
+) -> dict[str, Any] | None:
+    if str(turn_contract.domain or "").strip().lower() != PolicyDomain.TRANSACTION.value:
+        return None
+    intent = str(turn_contract.intent or "").strip()
+    if intent not in {"quick_order_reservation", "quick_order_reservation_slot_fill_schedule"}:
+        return None
+    if str(getattr(turn_contract, "action_mode", "") or "").strip() != "purchase_continuation":
+        return None
+    response_decision = turn_contract.response_decision or {}
+    response_metadata = response_decision.get("metadata") if isinstance(response_decision, Mapping) else {}
+    if not isinstance(response_metadata, Mapping):
+        response_metadata = {}
+    response_shape_key = str(response_metadata.get("response_shape_key") or "") if isinstance(response_metadata, Mapping) else ""
+    flow_step = str(getattr(turn_contract, "flow_step", "") or response_metadata.get("flow_step") or "").strip()
+    if response_shape_key != "reservation_price_lookup" or flow_step != "resolve_price":
+        return None
+
+    known_slots = dict(turn_contract.known_slots or {})
+    tool_args_patch = (
+        dict(turn_contract.tool_args_patch)
+        if isinstance(getattr(turn_contract, "tool_args_patch", None), Mapping)
+        else {}
+    )
+    goods_no = str(
+        tool_args_patch.get("goods_no")
+        or known_slots.get("goods_no")
+        or getattr(merged_slots, "goods_no", None)
+        or ""
+    ).strip()
+    quantity = known_slots.get("ord_qty") or known_slots.get("quantity") or getattr(merged_slots, "ord_qty", None)
+    shop_id = str(known_slots.get("shop_id") or getattr(merged_slots, "shop_id", None) or "").strip()
+    requested_cal_day = str(
+        known_slots.get("requested_cal_day") or getattr(merged_slots, "requested_cal_day", None) or ""
+    ).strip()
+    rsv_hour = str(known_slots.get("rsv_hour") or getattr(merged_slots, "rsv_hour", None) or "").strip()
+    try:
+        has_quantity = int(quantity or 0) > 0
+    except (TypeError, ValueError):
+        has_quantity = bool(quantity)
+    if not (goods_no and has_quantity and shop_id and requested_cal_day and rsv_hour):
+        return None
+    return {"goods_no": goods_no}
 
 
 def _contract_required_transaction_tool_input(
@@ -714,6 +780,40 @@ def _contract_required_transaction_tool_input(
         if preferred_tool == "get_my_reservations_tool":
             tool_input.setdefault("sct_cd", "all")
             return tool_input, "turn_contract_required_owned_record_lookup", "예약 내역 조회 중..."
+        if preferred_tool == "get_orders_of_user_tool":
+            return tool_input, "turn_contract_required_owned_record_lookup", "주문 내역 조회 중..."
+        if preferred_tool == "get_order_status_tool":
+            if not tool_input.get("query_no"):
+                return None
+            return tool_input, "turn_contract_required_owned_record_lookup", "주문 현황 조회 중..."
+        return None
+    if preferred_tool == "search_benefit_applicable_products_tool":
+        if str(turn_contract.intent or "").strip() != "coupon_applicable_products":
+            return None
+        tool_args_patch = (
+            dict(turn_contract.tool_args_patch)
+            if isinstance(getattr(turn_contract, "tool_args_patch", None), Mapping)
+            else {}
+        )
+        query = str(
+            tool_args_patch.get("query")
+            or (turn_contract.known_slots or {}).get("benefit_applicable_products_query")
+            or ""
+        ).strip()
+        if not query:
+            return None
+        return (
+            {"query": query, "lang_cd": str(tool_args_patch.get("lang_cd") or "ko")},
+            "turn_contract_benefit_applicable_products_query",
+            "혜택 적용 상품 조회 중...",
+        )
+    if preferred_tool == "get_final_price_tool":
+        final_price_input = _contract_required_schedule_final_price_tool_input(
+            turn_contract,
+            merged_slots=merged_slots,
+        )
+        if final_price_input:
+            return final_price_input, "turn_contract_schedule_final_price", "최종 가격 확인 중..."
         return None
     if preferred_tool and (
         preferred_tool in _FAST_PATH_TRANSACTION_RECOVERY_BLOCKLIST
@@ -757,6 +857,16 @@ def _contract_required_transaction_tool_input(
     tool_input = {str(key): value for key, value in tool_args_patch.items() if value not in (None, "", [], {})}
     if not tool_input:
         return None
+    if preferred_tool == "search_stores_tool":
+        if not (
+            tool_input.get("place_query")
+            or tool_input.get("region_code")
+            or tool_input.get("store_nm")
+            or tool_input.get("shop_name")
+            or tool_input.get("region")
+        ):
+            return None
+        return tool_input, "turn_contract_required_store_search", "매장 검색 중..."
     if preferred_tool == "get_store_list_tool":
         if not (tool_input.get("store_nm") or tool_input.get("shop_name") or tool_input.get("region")):
             return None
@@ -852,7 +962,14 @@ def _contract_required_tool_candidate(
         if preferred_tool in forbidden_tools or preferred_tool in _FAST_PATH_TRANSACTION_RECOVERY_BLOCKLIST:
             return None
 
-        if preferred_tool == "search_product_tool":
+        if preferred_tool in {"search_product_summary_tool", "search_product_tool"}:
+            product_names = extract_product_names(user_text)
+            if preferred_tool == "search_product_summary_tool" and len(product_names) >= 2 and not tool_input:
+                tool_input = {"keywords": list(product_names[:5]), "limit": 5}
+                brand_cd = str(known_slots.get("brand_cd") or "").strip()
+                if brand_cd:
+                    tool_input["brand_cd"] = brand_cd
+                tool_input_source = "current_turn_product_names"
             preferred_keyword = str(
                 known_slots.get("pending_product_name")
                 or known_slots.get("tire_model")
@@ -865,7 +982,6 @@ def _contract_required_tool_candidate(
             if not tool_input:
                 keyword = preferred_keyword
                 if not keyword:
-                    product_names = extract_product_names(user_text)
                     keyword = str(product_names[0] if product_names else "").strip()
                 if not keyword:
                     return None
@@ -877,7 +993,12 @@ def _contract_required_tool_candidate(
                 if tire_size:
                     tool_input["size"] = tire_size
                 tool_input_source = tool_input_source or "known_slots"
-            display_name = "상품 검색 중..."
+            if preferred_tool == "search_product_summary_tool":
+                tool_input.pop("size", None)
+                tool_input.setdefault("limit", 5)
+                display_name = "상품 정보 확인 중..."
+            else:
+                display_name = "상품 검색 중..."
         elif preferred_tool == "get_product_description_tool":
             if not tool_input:
                 goods_no = str(known_slots.get("goods_no") or getattr(merged_slots, "goods_no", None) or "").strip()
@@ -898,6 +1019,39 @@ def _contract_required_tool_candidate(
             tool_input = {"mbr_no": member_no_value}
             tool_input_source = "user_context"
             display_name = "등록 차량 조회 중..."
+        elif preferred_tool == "get_events_tool":
+            tool_input.setdefault("lang_cd", "ko")
+            tool_input_source = tool_input_source or "contract_tool_plan"
+            display_name = "이벤트/기획전 조회 중..."
+        elif preferred_tool == "get_product_applicable_events_tool":
+            ptrn_cd = str(known_slots.get("ptrn_cd") or "").strip()
+            if ptrn_cd:
+                tool_input = {"ptrn_cd": ptrn_cd, "lang_cd": "ko"}
+                tool_input_source = "known_slots"
+            if not tool_input:
+                return None
+            display_name = "상품 적용 이벤트 조회 중..."
+        elif preferred_tool == "get_event_applicable_products_tool":
+            if not tool_input:
+                return None
+            display_name = "이벤트 적용 상품 조회 중..."
+        elif preferred_tool == "search_benefit_applicable_products_tool":
+            if not tool_input:
+                query = (
+                    str(known_slots.get("benefit_applicable_products_query") or "").strip()
+                    or extract_benefit_applicable_products_query(user_text)
+                )
+                if query:
+                    tool_input = {"query": query, "lang_cd": "ko"}
+                    tool_input_source = (
+                        "router_evidence"
+                        if str(known_slots.get("benefit_applicable_products_query") or "").strip()
+                        else "user_text"
+                    )
+            if not tool_input or not str(tool_input.get("query") or "").strip():
+                return None
+            tool_input.setdefault("lang_cd", "ko")
+            display_name = "혜택 적용 상품 조회 중..."
         elif preferred_tool == "get_products_recommendations_tool":
             if str(turn_contract.intent or "").strip() != "product_recommendation":
                 return None
@@ -952,15 +1106,25 @@ def _contract_required_tool_candidate(
         tool_input, tool_input_source, display_name = contract_required_tool_input
         if not preferred_tool and tool_input_source == "turn_contract_required_stock_inventory_store_lookup":
             preferred_tool = "get_store_list_tool"
-        source_domain = PolicyDomain.TRANSACTION.value
+        source_domain = (
+            PolicyDomain.DISCOVERY.value
+            if preferred_tool == "search_benefit_applicable_products_tool"
+            else PolicyDomain.TRANSACTION.value
+        )
     else:
         return None
 
-    if not preferred_tool or not tool_input:
+    if not preferred_tool:
+        return None
+    if not tool_input and preferred_tool not in {"get_orders_of_user_tool", "get_my_reservations_tool"}:
         return None
     if preferred_tool in _FAST_PATH_TRANSACTION_RECOVERY_BLOCKLIST and not (
         preferred_tool == "transaction_store_preview_tool"
         and _is_contract_required_transaction_store_preview(turn_contract, merged_slots=merged_slots)
+        or (
+            preferred_tool == "get_final_price_tool"
+            and tool_input_source == "turn_contract_schedule_final_price"
+        )
     ):
         return None
     return _ContractRequiredToolCandidate(
@@ -1032,7 +1196,11 @@ def _contract_required_tool_candidate_from_flow_progress(
         return None
     next_tool = str(candidate.get("tool_name") or "").strip()
     source_domain = str(candidate.get("source_domain") or candidate_domain or domain)
-    if source_domain == PolicyDomain.TRANSACTION.value and next_tool in _FAST_PATH_TRANSACTION_RECOVERY_BLOCKLIST:
+    if (
+        source_domain == PolicyDomain.TRANSACTION.value
+        and next_tool in _FAST_PATH_TRANSACTION_RECOVERY_BLOCKLIST
+        and next_tool != "get_final_price_tool"
+    ):
         return None
     return _ContractRequiredToolCandidate(
         tool_name=next_tool,
