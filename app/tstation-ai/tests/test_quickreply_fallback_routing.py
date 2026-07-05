@@ -785,6 +785,175 @@ def test_prepare_ui_action_state_applies_generic_slot_patch_before_routing() -> 
     assert prepared.rewritten_user_text == "4개"
 
 
+def test_product_ui_action_clears_stale_store_schedule_and_price_before_slot_patch() -> None:
+    slots = ConversationSlots(
+        goods_no="G-OLD",
+        tire_model="Old Product",
+        pending_product_name="Old Product",
+        tire_size="225/45R17",
+        ord_qty=2,
+        region="강남",
+        shop_id="F00098",
+        shop_name="티스테이션 역삼점",
+        requested_cal_day="20260706",
+        rsv_hour="14",
+        payment_amount=320800,
+        price_basis="cheapest_final_prc",
+        price_source_tool="transaction_store_preview_tool",
+        pending_intent="order",
+        goal_type="place_order",
+        availability_context={
+            "pending_order_context": {
+                "goods_no": "G-OLD",
+                "product_name": "Old Product",
+                "tire_size": "225/45R17",
+                "ord_qty": 2,
+                "region": "강남",
+                "shop_id": "F00098",
+                "shop_name": "티스테이션 역삼점",
+                "requested_cal_day": "20260706",
+                "rsv_hour": "14",
+                "payment_amount": 320800,
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            }
+        },
+    )
+
+    prepared = prepare_ui_action_state(
+        ui_action={
+            "action_type": "select_product",
+            "cta_action": "select_product",
+            "source_intent": "quick_order_reservation",
+            "expected_contract_intent": "quick_order_reservation",
+            "entity_type": "product",
+            "entity_id": "G-NEW",
+            "entity_label": "New Product",
+            "slots": {"goods_no": "G-NEW", "tire_model": "New Product", "tire_size": "225/45R17"},
+        },
+        chip_context=None,
+        request_slots=None,
+        latest_listcar_tmpl=None,
+        last_user_text="New Product 225/45R17",
+        existing_slots=slots,
+        generic_slot_apply_fn=lambda base_slots, values: base_slots.apply_runtime_values(values, source="ui_action"),
+        vehicle_slot_apply_fn=_apply_vehicle_selection_slot_values,
+    )
+
+    assert prepared.updated_slots.goods_no == "G-NEW"
+    assert prepared.updated_slots.tire_model == "New Product"
+    assert prepared.updated_slots.ord_qty == 2
+    assert prepared.updated_slots.region == "강남"
+    assert prepared.updated_slots.shop_id is None
+    assert prepared.updated_slots.shop_name is None
+    assert prepared.updated_slots.requested_cal_day is None
+    assert prepared.updated_slots.rsv_hour is None
+    assert prepared.updated_slots.payment_amount is None
+    assert prepared.updated_slots.price_basis is None
+    assert prepared.updated_slots.price_source_tool is None
+    pending_context = prepared.updated_slots.availability_context["pending_order_context"]
+    assert pending_context["product_name"] == "New Product"
+    assert pending_context["tire_size"] == "225/45R17"
+    assert pending_context["ord_qty"] == 2
+    assert pending_context["region"] == "강남"
+    assert "shop_id" not in pending_context
+    assert "requested_cal_day" not in pending_context
+    assert "payment_amount" not in pending_context
+    assert prepared.action_context is not None
+    assert "shop_id" not in prepared.action_context.slot_patch
+    assert "requested_cal_day" not in prepared.action_context.slot_patch
+    assert "payment_amount" not in prepared.action_context.slot_patch
+    assert prepared.trace_metadata["current_turn_product_replaced"] is True
+    assert prepared.trace_metadata["previous_goods_no"] == "G-OLD"
+    assert prepared.trace_metadata["replacement_goods_no"] == "G-NEW"
+
+
+def test_quantity_after_product_change_does_not_restore_stale_preorder_slots() -> None:
+    slots = ConversationSlots(
+        goods_no="G-OLD",
+        tire_model="Old Product",
+        pending_product_name="Old Product",
+        tire_size="225/45R17",
+        ord_qty=2,
+        region="강남",
+        shop_id="F00098",
+        shop_name="티스테이션 역삼점",
+        requested_cal_day="20260706",
+        rsv_hour="14",
+        payment_amount=320800,
+        price_basis="cheapest_final_prc",
+        price_source_tool="transaction_store_preview_tool",
+        pending_intent="order",
+        goal_type="place_order",
+        availability_context={
+            "pending_order_context": {
+                "goods_no": "G-OLD",
+                "product_name": "Old Product",
+                "tire_size": "225/45R17",
+                "ord_qty": 2,
+                "region": "강남",
+                "shop_id": "F00098",
+                "shop_name": "티스테이션 역삼점",
+                "requested_cal_day": "20260706",
+                "rsv_hour": "14",
+                "payment_amount": 320800,
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            }
+        },
+    )
+    selected_product = prepare_ui_action_state(
+        ui_action={
+            "action_type": "select_product",
+            "cta_action": "select_product",
+            "source_intent": "quick_order_reservation",
+            "expected_contract_intent": "quick_order_reservation",
+            "entity_type": "product",
+            "entity_id": "G-NEW",
+            "entity_label": "New Product",
+            "slots": {"goods_no": "G-NEW", "tire_model": "New Product", "tire_size": "225/45R17"},
+        },
+        chip_context=None,
+        request_slots=None,
+        latest_listcar_tmpl=None,
+        last_user_text="New Product 225/45R17",
+        existing_slots=slots,
+        generic_slot_apply_fn=lambda base_slots, values: base_slots.apply_runtime_values(values, source="ui_action"),
+        vehicle_slot_apply_fn=_apply_vehicle_selection_slot_values,
+    )
+
+    transition = transition_current_flow(
+        user_text="2개",
+        router_evidence={
+            "domain": "transaction",
+            "intent": "quick_order_reservation",
+            "execution_plan": ["transaction:quick_order_reservation:slot_fill:quantity"],
+            "source": "llm",
+        },
+        existing_slots=selected_product.updated_slots,
+        extracted_slots=ConversationSlots(ord_qty=2),
+        ui_action={
+            "action_type": "select_quantity",
+            "cta_action": "select_quantity",
+            "selection_source": "ui_action",
+            "expected_contract_intent": "quick_order_reservation",
+            "entity_type": "quantity",
+            "entity_label": "2개",
+            "slot_patch": {"ord_qty": 2},
+        },
+        resume_source="router_slot_fill:quantity",
+    )
+
+    active_flow_context = transition.flow_transition["active_flow_context"]
+    assert active_flow_context["product"]["goods_no"] == "G-NEW"
+    assert active_flow_context["product"]["product_name"] == "New Product"
+    assert active_flow_context["product"]["ord_qty"] == 2
+    assert active_flow_context["store"]["region"] == "강남"
+    assert "shop_id" not in active_flow_context.get("store", {})
+    assert "schedule" not in active_flow_context
+    assert "payment" not in active_flow_context
+
+
 def test_quickreply_cta_action_enter_region_asks_for_region_only() -> None:
     event = build_quickreply_cta_clarification_event(
         "다른 지역 입력",

@@ -1156,6 +1156,16 @@ def _selected_quantity_flow_context(
         if value not in (None, "", [], {}) and payment.get(key) in (None, "", [], {}):
             payment[key] = value
 
+    store = dict(flow_context.get("store")) if isinstance(flow_context.get("store"), Mapping) else {}
+    for key, value in {
+        "region": existing_snapshot.get("region"),
+        "shop_id": existing_snapshot.get("shop_id"),
+        "shop_name": existing_snapshot.get("shop_name"),
+        "store_name": existing_snapshot.get("store_name"),
+    }.items():
+        if value not in (None, "", [], {}) and store.get(key) in (None, "", [], {}):
+            store[key] = value
+
     intent = dict(flow_context.get("intent")) if isinstance(flow_context.get("intent"), Mapping) else {}
     for key, value in {
         "pending_intent": existing_snapshot.get("pending_intent"),
@@ -1176,6 +1186,8 @@ def _selected_quantity_flow_context(
         flow_context["product"] = product
     if payment:
         flow_context["payment"] = payment
+    if store:
+        flow_context["store"] = store
     if intent:
         flow_context["intent"] = _flow_intent_with_sub_type(flow_type, intent)
     else:
