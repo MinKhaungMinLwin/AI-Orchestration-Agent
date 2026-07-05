@@ -57,6 +57,15 @@ class SlotFillDecision:
     trace_metadata: Mapping[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class RouterLocationSlotFillDecision:
+    slots: ConversationSlots
+    matched: bool = False
+    slot_patch: Mapping[str, Any] = field(default_factory=dict)
+    resume_source: str = "none"
+    trace_metadata: Mapping[str, Any] = field(default_factory=dict)
+
+
 def build_router_slot_fill_context(
     *,
     slots: ConversationSlots | None,
@@ -101,6 +110,47 @@ def build_router_slot_fill_context(
         "last_requested_slot": last_requested_slot or "none",
         "last_candidates": [row for row in last_candidates if row.get("label")],
     }
+
+
+def apply_router_location_slot_fill(
+    *,
+    slots: ConversationSlots,
+    routing_result: Any | None,
+    router_context: Mapping[str, Any],
+) -> RouterLocationSlotFillDecision:
+    """Promote high-confidence router location evidence into active transaction slots."""
+    location_patch = _router_location_slot_patch(
+        slots=slots,
+        routing_result=routing_result,
+        router_context=router_context,
+    )
+    if not location_patch:
+        return RouterLocationSlotFillDecision(
+            slots=slots,
+            trace_metadata={"router_location_slot_fill": {"matched": False}},
+        )
+
+    updated_slots = slots.apply_runtime_values(location_patch, source="router_location_slot_fill")
+    availability_context, context_patch_metadata = _apply_region_change_to_transaction_contexts(
+        updated_slots.availability_context,
+        region=str(location_patch["region"]),
+    )
+    updated_slots.availability_context = availability_context
+    trace_metadata = {
+        "router_location_slot_fill": {
+            "matched": True,
+            "slot_patch": dict(location_patch),
+            "resume_source": "router_slot_fill:region",
+            **context_patch_metadata,
+        }
+    }
+    return RouterLocationSlotFillDecision(
+        slots=updated_slots,
+        matched=True,
+        slot_patch=location_patch,
+        resume_source="router_slot_fill:region",
+        trace_metadata=trace_metadata,
+    )
 
 
 def resolve_pre_router_slot_fill(
@@ -195,6 +245,175 @@ def _routing_override(
     if intent in {"quick_order_reservation", "stock_store_search", "store_schedule"}:
         return {"intent": intent, "source": "router_slot_fill_context"}
     return {}
+
+
+def _router_location_slot_patch(
+    *,
+    slots: ConversationSlots,
+    routing_result: Any | None,
+    router_context: Mapping[str, Any],
+) -> dict[str, Any]:
+    if routing_result is None or bool(getattr(routing_result, "needs_clarification", False)):
+        return {}
+    location = _router_named_entity(getattr(routing_result, "entity_candidates", None), "location")
+    location_name = str(location.get("name") or location.get("anchor") or "").strip()
+    if not location_name or not bool(location.get("mentioned")):
+        return {}
+    try:
+        confidence = float(location.get("confidence") or 0.0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    if confidence < 0.7:
+        return {}
+    if not _router_location_can_fill_transaction_region(
+        slots=slots,
+        routing_result=routing_result,
+        router_context=router_context,
+    ):
+        return {}
+    current_region = str(getattr(slots, "region", "") or "").strip()
+    if current_region == location_name:
+        return {}
+    return {"region": location_name}
+
+
+def _router_named_entity(entity_candidates: Any, name: str) -> dict[str, Any]:
+    if entity_candidates is None:
+        return {}
+    if isinstance(entity_candidates, Mapping):
+        candidate = entity_candidates.get(name)
+    else:
+        candidate = getattr(entity_candidates, name, None)
+    if candidate is None:
+        return {}
+    if isinstance(candidate, Mapping):
+        return dict(candidate)
+    if hasattr(candidate, "model_dump"):
+        return dict(candidate.model_dump())
+    values: dict[str, Any] = {}
+    for field_name in ("mentioned", "name", "anchor", "type", "reference_text", "confidence"):
+        value = getattr(candidate, field_name, None)
+        if value not in (None, "", [], {}):
+            values[field_name] = value
+    return values
+
+
+def _router_location_can_fill_transaction_region(
+    *,
+    slots: ConversationSlots,
+    routing_result: Any,
+    router_context: Mapping[str, Any],
+) -> bool:
+    current_flow = str(router_context.get("current_flow") or "").strip()
+    if current_flow in {"quick_order_reservation", "stock_store_search", "store_schedule"}:
+        return True
+    inferred_flow = _router_slot_fill_current_flow(slots)
+    if inferred_flow in {"quick_order_reservation", "stock_store_search", "store_schedule"}:
+        return True
+    primary_action = str(getattr(routing_result, "primary_action", "") or "").strip()
+    planner_intent = str(getattr(routing_result, "intent", "") or "").strip()
+    plan_text = " ".join(str(item or "").lower() for item in (getattr(routing_result, "execution_plan", None) or ()))
+    if primary_action != "store_search" and "store" not in plan_text and planner_intent not in {
+        "quick_order_reservation",
+        "stock_store_search",
+        "store_schedule",
+    }:
+        return False
+    return bool(_has_transaction_context_shape(slots))
+
+
+def _has_transaction_context_shape(slots: ConversationSlots) -> bool:
+    if any(
+        getattr(slots, field_name, None) not in (None, "", [], {})
+        for field_name in ("goods_no", "tire_size", "ord_qty", "pending_intent", "goal_type", "shop_id", "shop_name")
+    ):
+        return True
+    availability_context = getattr(slots, "availability_context", None)
+    if not isinstance(availability_context, Mapping):
+        return False
+    for context_key in (
+        "pending_order_context",
+        "active_flow_context",
+        "dormant_purchase_context",
+        "dormant_stock_context",
+        "dormant_transaction_context",
+    ):
+        context = availability_context.get(context_key)
+        if isinstance(context, Mapping) and any(
+            context.get(field_name) not in (None, "", [], {})
+            for field_name in (
+                "goods_no",
+                "product_name",
+                "ord_qty",
+                "pending_intent",
+                "goal_type",
+                "shop_id",
+                "shop_name",
+            )
+        ):
+            return True
+    return False
+
+
+def _apply_region_change_to_transaction_contexts(
+    availability_context: Mapping[str, Any] | None,
+    *,
+    region: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    context_root = dict(availability_context or {})
+    patched_keys: list[str] = []
+    cleared_keys_by_context: dict[str, list[str]] = {}
+    for context_key in (
+        "pending_order_context",
+        "active_flow_context",
+        "dormant_purchase_context",
+        "dormant_stock_context",
+        "dormant_transaction_context",
+    ):
+        context = context_root.get(context_key)
+        if not isinstance(context, Mapping) or not _context_can_accept_region_patch(context):
+            continue
+        patched = dict(context)
+        patched["region"] = region
+        cleared: list[str] = []
+        for field_name in ("shop_id", "shop_name", "store_name", "requested_cal_day", "rsv_hour", "last_candidates"):
+            if patched.pop(field_name, None) not in (None, "", [], {}):
+                cleared.append(field_name)
+        for field_name in ("store", "schedule", "selected_store", "selected_schedule"):
+            if patched.pop(field_name, None) not in (None, "", [], {}):
+                cleared.append(field_name)
+        if context_key in {"pending_order_context", "active_flow_context"}:
+            patched["pending_step"] = "store_region_selection"
+            if patched.get("flow_type") in {"purchase", "stock"} or context_key == "pending_order_context":
+                patched["flow_step"] = "show_store_candidates"
+        patched["source"] = "router_location_slot_fill"
+        context_root[context_key] = patched
+        patched_keys.append(context_key)
+        if cleared:
+            cleared_keys_by_context[context_key] = cleared
+    return context_root, {
+        "context_patch_keys": patched_keys,
+        "cleared_keys_by_context": cleared_keys_by_context,
+    }
+
+
+def _context_can_accept_region_patch(context: Mapping[str, Any]) -> bool:
+    return any(
+        context.get(field_name) not in (None, "", [], {})
+        for field_name in (
+            "goods_no",
+            "product_name",
+            "tire_model",
+            "pending_product_name",
+            "ord_qty",
+            "quantity",
+            "pending_intent",
+            "goal_type",
+            "region",
+            "shop_id",
+            "shop_name",
+        )
+    )
 
 
 def _router_slot_fill_current_flow(
