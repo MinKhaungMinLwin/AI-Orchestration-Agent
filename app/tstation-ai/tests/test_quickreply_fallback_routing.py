@@ -35910,6 +35910,36 @@ def test_store_service_search_contract_detects_region_drift_against_tool_input()
     assert any(v["type"] == "store_service_search_region_contract_drift" for v in violations)
 
 
+def test_store_service_search_contract_allows_region_area_suffix_reduction() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="store_service_search",
+        known_slots={
+            "policy_intent": "store_service_search",
+            "region": "경기권",
+            "place_query": "경기권",
+            "service_code": "119",
+            "service_codes": ("119",),
+        },
+        allowed_tools=("search_stores_tool", "get_store_list_tool"),
+    )
+
+    violations = response_contract_violations(
+        template="location",
+        assistant_response_source="transaction_policy",
+        called_tools=["search_stores_tool"],
+        tool_inputs=[
+            {
+                "tool": "search_stores_tool",
+                "args": {"region_code": "경기", "place_query": "경기", "svc_codes": ["119"]},
+            }
+        ],
+        contract=contract,
+    )
+
+    assert not any(v["type"] == "store_service_search_region_contract_drift" for v in violations)
+
+
 def test_store_service_search_contract_allows_place_query_reduction_to_region() -> None:
     contract = TurnContract(
         domain="transaction",

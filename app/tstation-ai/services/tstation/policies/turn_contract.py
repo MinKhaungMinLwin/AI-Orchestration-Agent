@@ -4557,10 +4557,25 @@ def _normalize_service_code_values(value: Any) -> set[str]:
     return {str(value).strip()} if str(value).strip() else set()
 
 
+_STORE_SEARCH_REGION_AREA_SUFFIX_RE = re.compile(
+    r"^(서울|경기|인천|부산|대구|광주|대전|울산|세종|강원|충북|충남|전북|전남|경북|경남|제주)권$"
+)
+
+
+def _canonical_store_search_location_value(value: str | None) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    match = _STORE_SEARCH_REGION_AREA_SUFFIX_RE.fullmatch(text)
+    if match:
+        return match.group(1)
+    return text
+
+
 def _store_search_location_values_match(*, expected: str, actual: str, region: str = "") -> bool:
-    expected_value = str(expected or "").strip()
-    actual_value = str(actual or "").strip()
-    region_value = str(region or "").strip()
+    expected_value = _canonical_store_search_location_value(expected)
+    actual_value = _canonical_store_search_location_value(actual)
+    region_value = _canonical_store_search_location_value(region)
     if not expected_value or not actual_value:
         return True
     if expected_value == actual_value:
@@ -4595,7 +4610,12 @@ def _store_service_search_contract_violation(
         actual_service_codes = _normalize_service_code_values(
             args.get("svc_codes") or args.get("service_codes") or args.get("service_code") or args.get("svc_code")
         )
-        if expected_region and actual_region and expected_region != actual_region:
+        if (
+            expected_region
+            and actual_region
+            and _canonical_store_search_location_value(expected_region)
+            != _canonical_store_search_location_value(actual_region)
+        ):
             return {
                 "type": "store_service_search_region_contract_drift",
                 "known_region": expected_region,
