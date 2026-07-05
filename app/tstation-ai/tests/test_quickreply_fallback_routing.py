@@ -22999,6 +22999,25 @@ def test_router_place_slot_patch_prefers_router_location_entity() -> None:
     assert patch == {"region": "분당", "place_query": "분당"}
 
 
+def test_router_place_slot_patch_strips_colloquial_location_suffix() -> None:
+    patch = router_place_slot_patch(
+        {
+            "entities": {
+                "location": {
+                    "mentioned": True,
+                    "name": "강남쪽",
+                    "type": "region",
+                    "reference_text": "강남쪽에는",
+                    "confidence": 0.93,
+                }
+            }
+        },
+        expected_slot="region",
+    )
+
+    assert patch == {"region": "강남", "place_query": "강남"}
+
+
 def test_pre_router_region_slot_fill_does_not_commit_free_text(monkeypatch: pytest.MonkeyPatch) -> None:
     from services.tstation.policies import slot_fill_controller
 
@@ -30054,6 +30073,8 @@ def test_transaction_intent_policy_strips_location_search_suffixes() -> None:
         "고양시청 근처": "고양시청",
         "대화역 인근": "대화역",
         "분당 지역": "분당",
+        "강남쪽": "강남",
+        "강남 쪽": "강남",
     }
     for raw_location, expected_location in cases.items():
         known_slots = {

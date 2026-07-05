@@ -23,7 +23,7 @@ from services.tstation.policies.store_service_gate import (
 
 _SIZE_COMPACT_RE = re.compile(r"\b(\d{3})\s*/?\s*(\d)(\d)(?:\3)?\s*R?\s*(\d{2})\b", re.IGNORECASE)
 _QUANTITY_RE = re.compile(r"(\d+)\s*(?:개|본|짝)")
-_LOCATION_SEARCH_SUFFIX_RE = re.compile(r"\s*(?:근처|인근|지역)\s*$")
+_LOCATION_SEARCH_SUFFIX_RE = re.compile(r"\s*(?:근처|인근|지역|쪽)\s*$")
 _TODAY_RE = re.compile(r"오늘|당일|바로|당장", re.IGNORECASE)
 _NOW_SERVICE_REQUEST_RE = re.compile(
     r"지금.{0,12}(?:장착|서비스|예약|방문|가능)|(?:장착|서비스|예약|방문).{0,12}지금",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import re
 from typing import Any, Mapping
 
 from services.tstation.policies.router_intent_schema import canonical_router_intent
@@ -10,6 +11,7 @@ from services.tstation.policies.router_intent_schema import canonical_router_int
 
 _ENTITY_CONFIDENCE_THRESHOLD = 0.5
 _ROUTER_SLOT_SOURCE = "router_evidence"
+_LOCATION_SEARCH_SUFFIX_RE = re.compile(r"\s*(?:근처|인근|지역|쪽)\s*$")
 
 
 def build_router_evidence(
@@ -123,7 +125,7 @@ def router_evidence_known_slots(evidence: Mapping[str, Any] | None) -> dict[str,
         put("benefit_type_candidate", benefit_type)
 
     location = _mapping(entities.get("location"))
-    location_name = _text(location.get("name") or location.get("anchor"))
+    location_name = _normalize_location_search_query(location.get("name") or location.get("anchor"))
     location_type = _text(location.get("type"))
     if location_name:
         put("location_name", location_name)
@@ -156,7 +158,7 @@ def router_place_slot_patch(
     store = _mapping(entities.get("store"))
     location = _mapping(entities.get("location"))
     store_name = _entity_name_if_confident(store)
-    location_name = _entity_name_if_confident(location)
+    location_name = _normalize_location_search_query(_entity_name_if_confident(location))
     if expected == "store" and store_name:
         return {"shop_name": store_name}
     if expected in {"region", "place"} and location_name:
@@ -210,6 +212,14 @@ def _entity_name_if_confident(entity: Mapping[str, Any] | None) -> str:
     if confidence < _ENTITY_CONFIDENCE_THRESHOLD:
         return ""
     return _text(data.get("name") or data.get("anchor"))
+
+
+def _normalize_location_search_query(value: Any) -> str:
+    text = _text(value)
+    if not text:
+        return ""
+    normalized = _LOCATION_SEARCH_SUFFIX_RE.sub("", text).strip()
+    return normalized or text
 
 
 def _execution_plan(routing_result: Any) -> tuple[str, ...]:
