@@ -20881,6 +20881,61 @@ def _merge_pending_order_context(
     return merged, metadata
 
 
+_SCHEDULE_CONTEXT_FIELDS = frozenset({"requested_cal_day", "rsv_hour"})
+_PAYMENT_CONTEXT_FIELDS = frozenset({
+    "payment_amount",
+    "payment_amount_source",
+    "price_basis",
+    "price_source_tool",
+})
+
+
+def _flat_order_quantity_changed(existing: Any, incoming: Any) -> bool:
+    existing_text = str(existing or "").strip()
+    incoming_text = str(incoming or "").strip()
+    return bool(existing_text and incoming_text and existing_text.isdigit() and incoming_text.isdigit() and existing_text != incoming_text)
+
+
+def _apply_pending_order_commit_invalidations(
+    slots: ConversationSlots,
+    context: dict[str, Any],
+    pending_context: Mapping[str, Any],
+    commit_metadata: Mapping[str, Any],
+) -> None:
+    cleared_fields = {
+        str(field or "")
+        for field in commit_metadata.get("cleared_fields") or ()
+        if str(field or "")
+    }
+    if not cleared_fields:
+        return
+
+    slot_fields = slots.__class__.model_fields
+    for field in cleared_fields & (_SCHEDULE_CONTEXT_FIELDS | _PAYMENT_CONTEXT_FIELDS):
+        if field in slot_fields:
+            setattr(slots, field, None)
+
+    active_context = context.get("active_flow_context")
+    if not isinstance(active_context, Mapping):
+        return
+
+    updated_active = dict(active_context)
+    if cleared_fields & _SCHEDULE_CONTEXT_FIELDS:
+        updated_active.pop("schedule", None)
+    if cleared_fields & _PAYMENT_CONTEXT_FIELDS:
+        if commit_metadata.get("payment_amount_stale"):
+            updated_active["payment"] = {"payment_amount_stale": True}
+        else:
+            updated_active.pop("payment", None)
+
+    pending_qty = pending_context.get("ord_qty")
+    if pending_qty not in (None, "", [], {}):
+        product_context = dict(updated_active.get("product") or {})
+        product_context["ord_qty"] = pending_qty
+        updated_active["product"] = product_context
+    context["active_flow_context"] = updated_active
+
+
 def _stage_pending_order_context(slots: ConversationSlots, *, source: str) -> dict[str, Any]:
     """Persist stock/order product context separately from stale flat slots."""
     _clear_invalid_action_label_region(slots, source=f"{source}:pending_order_context")
@@ -20906,6 +20961,9 @@ def _stage_pending_order_context(slots: ConversationSlots, *, source: str) -> di
     pending_context = _pending_order_context_values(slots)
     if not pending_context:
         return {}
+    if _flat_order_quantity_changed(existing_pending_context.get("ord_qty"), pending_context.get("ord_qty")):
+        for field in _SCHEDULE_CONTEXT_FIELDS | _PAYMENT_CONTEXT_FIELDS:
+            pending_context.pop(field, None)
     pending_context.setdefault("pending_intent", "stock")
     pending_context.setdefault("goal_type", "store_with_stock")
     merged_pending_context, commit_metadata = _merge_pending_order_context(
@@ -20914,6 +20972,7 @@ def _stage_pending_order_context(slots: ConversationSlots, *, source: str) -> di
         source=source,
     )
     context["pending_order_context"] = merged_pending_context
+    _apply_pending_order_commit_invalidations(slots, context, merged_pending_context, commit_metadata)
     if merged_pending_context.get("awaiting_store_region"):
         context["awaiting_store_region"] = True
         context["pending_step"] = "store_region_selection"
