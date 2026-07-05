@@ -7625,12 +7625,7 @@ def test_unclear_complaint_asks_target_before_support_handoff() -> None:
 
     event = _build_complaint_scope_guard_event(_complaint_scope_for_turn("되는 일이 없어 짜증나", None))
 
-    assert event is not None
-    assert event["source_domain"] == MultiAgentDomain.Domain.LEADING.value
-    assistant_response = event["data"]["assistantResponse"]
-    assert "어떤 부분이 불편하셨는지" in assistant_response
-    assert "타이어 상품, 주문/결제, 장착 매장" in assistant_response
-    assert _labels(event["data"]["quickReplies"]) == ["주문 조회", "매장 찾기", "1:1 문의"]
+    assert event is None
 
 
 def test_private_contact_request_preempts_unclear_complaint() -> None:

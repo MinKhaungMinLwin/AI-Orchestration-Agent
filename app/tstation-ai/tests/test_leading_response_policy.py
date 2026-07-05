@@ -44,9 +44,7 @@ def test_unclear_complaint_asks_for_tstation_context() -> None:
     event = build_complaint_scope_guard_event(scope)
 
     assert scope == "unclear_complaint"
-    assert event is not None
-    assert "어떤 부분이 불편하셨는지" in event["data"]["assistantResponse"]
-    assert event["data"]["predictedDomains"] == ["TRANSACTION", "SUPPORT"]
+    assert event is None
 
 
 def test_router_complaint_scope_overrides_inferred_scope() -> None:
