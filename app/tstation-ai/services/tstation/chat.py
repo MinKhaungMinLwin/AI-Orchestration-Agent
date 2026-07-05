@@ -14443,7 +14443,10 @@ _SIZED_PRODUCT_AVAILABILITY_HINT_RE = re.compile(
 )
 _SIZED_PRODUCT_TRANSACTION_HINT_STOP_RE = re.compile(
     r"타이어|상품|제품|사이즈|규격|구매하고|구매|주문|결제|장착|장바구니|담|사려고|사려|사고|살래|"
-    r"싶은데|싶|원해|주세요|해줘|할게|하고|가능|가격|재고|\d+\s*개",
+    r"싶은데|싶|원해|주세요|해줘|할게|하고|가능|가격|재고|\d+\s*개|"
+    # Price-inquiry wording (e.g. "가격이 얼마야?") has no product-identifying value, but survives
+    # as a leftover token once "가격" itself is stripped, and then gets mistaken for a product name.
+    r"얼마(?:예요|에요|인가요|입니까|죠|야|나요)?|알려|확인|궁금",
     re.IGNORECASE,
 )
 _RECENT_PRODUCT_SIZE_AVAILABILITY_RE = re.compile(
