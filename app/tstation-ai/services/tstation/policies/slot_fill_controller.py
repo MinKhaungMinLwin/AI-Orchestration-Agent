@@ -16,6 +16,8 @@ from services.tstation.policies.price_basis_policy import PRICE_BASIS_FIELDS
 from services.tstation.policies.resolved_context import canonical_context_from_template_boundary
 from services.tstation.policies.slot_fill_policy import expected_slot_fill_precheck
 
+_PRE_ROUTER_SLOT_FILL_ENABLED = False
+
 _PURCHASE_RECONCILIATION_SLOT_FIELDS = (
     "goods_no",
     "tire_size",
@@ -164,6 +166,20 @@ def resolve_pre_router_slot_fill(
     has_purchase_anchor: bool = False,
 ) -> SlotFillDecision:
     """Apply slot-fill evidence and reconcile the next flow from merged state."""
+    if not _PRE_ROUTER_SLOT_FILL_ENABLED:
+        precheck = {
+            "matched": False,
+            "reason": "pre_router_slot_fill_disabled",
+            "current_flow": str(router_context.get("current_flow") or "none"),
+            "flow_step_before": router_context.get("flow_step"),
+            "missing_slots": list(router_context.get("missing_slots") or []),
+        }
+        return SlotFillDecision(
+            slots=merged_slots,
+            precheck=precheck,
+            trace_metadata={"expected_slot_fill_precheck": precheck},
+        )
+
     precheck = expected_slot_fill_precheck(
         user_text=user_text,
         regex_slots=regex_slots,

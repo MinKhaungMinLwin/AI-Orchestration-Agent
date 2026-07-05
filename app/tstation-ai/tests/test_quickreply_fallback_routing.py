@@ -450,6 +450,7 @@ from services.tstation.policies.slot_fill_controller import (
     build_router_slot_fill_context,
     resolve_pre_router_slot_fill,
 )
+from services.tstation.policies.slot_fill_policy import expected_slot_fill_precheck
 from services.tstation.policies.support_response_policy import (
     build_support_faq_evidence_grounded_reply,
     build_support_faq_source_grounded_reply,
@@ -640,14 +641,14 @@ def _expected_slot_fill_precheck_for_test(
     router_context: Mapping[str, Any],
     region_store_input_resolution: Any | None = None,
 ) -> dict[str, Any]:
-    return dict(resolve_pre_router_slot_fill(
+    return dict(expected_slot_fill_precheck(
         user_text=user_text,
         regex_slots=regex_slots,
         merged_slots=merged_slots,
         router_context=router_context,
         region_store_input_resolution=region_store_input_resolution,
         has_purchase_anchor=_resume_source_from_current_turn(user_text) != "none",
-    ).precheck)
+    ))
 
 
 def test_chip_context_preserves_action_contract_fields() -> None:
@@ -19220,9 +19221,9 @@ def test_product_selection_from_pending_order_context_builds_purchase_slot_fill_
 
     assert context["current_flow"] == "quick_order_reservation"
     assert context["flow_step"] == "resolve_store"
-    assert decision.precheck["matched"] is True
-    assert decision.precheck["filled_slot"] == "store"
-    assert decision.routing_override["intent"] == "quick_order_reservation"
+    assert decision.precheck["matched"] is False
+    assert decision.precheck["reason"] == "pre_router_slot_fill_disabled"
+    assert decision.routing_override == {}
     assert decision.slots.pending_intent == "order"
     assert decision.slots.goal_type == "place_order"
 
@@ -22000,18 +22001,11 @@ def test_slot_fill_controller_promotes_stock_schedule_to_parent_purchase_flow() 
 
     assert context["current_flow"] == "stock_store_search"
     precheck = decision.precheck
-    assert precheck["matched"] is True
+    assert precheck["matched"] is False
     assert precheck["current_flow"] == "stock_store_search"
-    assert precheck["filled_slot"] == "schedule"
-    assert precheck["slot_patch"] == {
-        "requested_cal_day": "20260708",
-        "rsv_hour": "16",
-    }
-    assert precheck["resume_source"] == "expected_slot_fill:schedule"
-    assert decision.flow_state_reconciliation["intent"] == "quick_order_reservation"
-    assert decision.flow_state_reconciliation["flow_step"] == "build_preorder"
-    assert decision.routing_override["intent"] == "quick_order_reservation"
-    assert decision.routing_override["source"] == "flow_state_after_slot_patch"
+    assert precheck["reason"] == "pre_router_slot_fill_disabled"
+    assert decision.flow_state_reconciliation == {}
+    assert decision.routing_override == {}
     assert decision.slots.pending_intent == "order"
     assert decision.slots.goal_type == "place_order"
 
