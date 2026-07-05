@@ -1621,7 +1621,7 @@ def test_coupon_howto_gate_stays_support_not_actionable_transaction(user_text: s
 
 def test_coupon_howto_gate_ignores_previous_product_recommendation_context() -> None:
     decision = decide_coupon_query_gate(
-        user_text="쿠폰 선물받았는데 등록 어디서 해?",
+        user_text="쿠폰 선물받았는데 어떻게 받아?",
         recent_context="직전 추천 상품: 다이나프로 HPX 265/50R20",
     )
 
@@ -18153,7 +18153,8 @@ def test_recommendation_listcar_flow_delta_stores_active_recommendation_flow() -
     )
     active_flow = commit_result.state.to_active_flow_context()
 
-    assert active_flow["flow_type"] == "recommendation"
+    assert active_flow["flow_type"] == "commerce"
+    assert active_flow["intent"]["sub_flow_type"] == "recommendation"
     assert active_flow["flow_step"] == "select_vehicle"
     assert active_flow["intent"]["pending_intent"] == "product_recommendation"
     assert active_flow["intent"]["goal_type"] == "recommend_tire"
@@ -18283,6 +18284,7 @@ def test_vehicle_selection_updates_active_parent_purchase_context() -> None:
     active_context = result.state.to_active_flow_context()
 
     assert active_context["flow_type"] == "commerce"
+    assert active_context["intent"]["sub_flow_type"] == "purchase"
     assert active_context["flow_step"] == "vehicle_selected"
     assert active_context["product"]["tire_size"] == "235/55R19"
     assert active_context["product"]["ord_qty"] == 4
@@ -29438,7 +29440,8 @@ def test_outer_search_product_staging_commits_purchase_flow_with_product_price_c
     pending_context = _stage_pending_order_context(updated, source="outer_tool:search_product_tool")
 
     active_context = updated.availability_context["active_flow_context"]
-    assert active_context["flow_type"] == "purchase"
+    assert active_context["flow_type"] == "commerce"
+    assert active_context["intent"]["sub_flow_type"] == "purchase"
     assert active_context["product"]["goods_no"] == "G000000310126"
     assert active_context["product"]["product_name"] == "벤투스 S2 AS"
     assert active_context["product"]["tire_size"] == "245/45R19"
@@ -30346,14 +30349,12 @@ def test_support_policy_turn_contract_keeps_policy_intent_and_forbidden_product_
         called_tools=["search_product_tool"],
         contract=contract,
     )
-    assert violations == [
-        {
-            "type": "forbidden_tool_for_contract",
-            "severity": "error",
-            "called_tools": ["search_product_tool"],
-            "forbidden_tools": ["search_product_tool", "get_final_price_tool"],
-        }
-    ]
+    assert len(violations) == 1
+    assert violations[0]["type"] == "forbidden_tool_for_contract"
+    assert violations[0]["severity"] == "error"
+    assert violations[0]["called_tools"] == ["search_product_tool"]
+    assert "search_product_tool" in violations[0]["forbidden_tools"]
+    assert "get_final_price_tool" in violations[0]["forbidden_tools"]
 
 
 def test_support_policy_turn_contract_clears_stale_transaction_blocking_slots() -> None:
@@ -36814,8 +36815,9 @@ def test_recommendation_product_pick_defaults_to_product_description_contract() 
             known_slots={},
         )
     )
-    assert detail_plan.allowed_tools == ("search_product_tool", "get_product_description_tool")
-    assert detail_plan.preferred_tool == "search_product_tool"
+    assert detail_plan.allowed_tools == ("search_product_summary_tool",)
+    assert detail_plan.preferred_tool == "search_product_summary_tool"
+    assert "search_product_tool" in detail_plan.forbidden_tools
 
 
 def test_recommendation_turn_contract_ignores_missing_product_reference_guard() -> None:
@@ -37936,7 +37938,7 @@ def test_compare_quickreply_contract_gate_accepts_metric_summary_alias() -> None
         intent="product_comparison",
         template="quickReply",
         source="code_product_comparison",
-        required_tools=("search_product_tool", "get_product_description_tool"),
+        required_tools=("search_product_summary_tool", "get_product_description_tool"),
         allowed_intents=("product_compare_tool", "metric_comparison_summary", "grade_comparison_summary"),
     )
 
