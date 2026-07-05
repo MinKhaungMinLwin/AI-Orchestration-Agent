@@ -352,7 +352,7 @@ def extract_benefit_applicable_products_query(text: str | None) -> str:
         flags=re.IGNORECASE,
     ).strip()
     query = re.sub(r"(?:상품|타이어|제품)(?:은|는|이|가|을|를)?\s*(?:뭐|무엇|어떤).*$", "", query).strip()
-    return query or normalized
+    return query
 _BEST_SELLER_DAY_RE = re.compile(r"오늘|금일|하루", re.IGNORECASE)
 _BEST_SELLER_WEEK_RE = re.compile(r"이번\s*주|금주|이번주|주간", re.IGNORECASE)
 _BEST_SELLER_MONTH_RE = re.compile(r"이번\s*달|이달|월별|월간", re.IGNORECASE)

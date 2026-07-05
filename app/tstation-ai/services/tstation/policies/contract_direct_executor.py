@@ -7,6 +7,10 @@ import re
 from typing import Any, Mapping
 
 from services.tstation.policies.intent_frame import PolicyDomain
+from services.tstation.policies.tool_arg_schema import (
+    canonicalize_tool_args_patch,
+    should_use_known_slots_for_tool_args,
+)
 from services.tstation.policies.turn_contract import TurnContract
 
 
@@ -169,11 +173,23 @@ def _evaluate_discovery_contract(
     known_slots: Mapping[str, Any],
 ) -> DirectPathDecision:
     intent = str(turn_contract.intent or "")
+    tool_args_patch = canonicalize_tool_args_patch(
+        preferred_tool=tool,
+        known_slots=known_slots,
+        user_text=str((turn_contract.contract_seed or {}).get("user_text") or ""),
+        existing_patch=turn_contract.tool_args_patch or {},
+        use_known_slots=should_use_known_slots_for_tool_args(
+            context_state=turn_contract.context_state,
+            resume_anchor_detected=turn_contract.resume_anchor_detected,
+            resume_source=turn_contract.resume_source,
+            action_mode=turn_contract.action_mode,
+        ),
+    )
     if intent == "product_comparison" and tool == "search_product_summary_tool":
         return DirectPathDecision(True, True, "product_comparison_summary", None, tool, "quickReply")
     if intent == "event_applicable_products_lookup" and tool == "search_benefit_applicable_products_tool":
         query = str(
-            (turn_contract.tool_args_patch or {}).get("query")
+            tool_args_patch.get("query")
             or known_slots.get("benefit_applicable_products_query")
             or ""
         ).strip()
@@ -207,6 +223,18 @@ def _evaluate_transaction_contract(
     known_slots: Mapping[str, Any],
 ) -> DirectPathDecision:
     intent = str(turn_contract.intent or "").strip()
+    tool_args_patch = canonicalize_tool_args_patch(
+        preferred_tool=tool,
+        known_slots=known_slots,
+        user_text=str((turn_contract.contract_seed or {}).get("user_text") or ""),
+        existing_patch=turn_contract.tool_args_patch or {},
+        use_known_slots=should_use_known_slots_for_tool_args(
+            context_state=turn_contract.context_state,
+            resume_anchor_detected=turn_contract.resume_anchor_detected,
+            resume_source=turn_contract.resume_source,
+            action_mode=turn_contract.action_mode,
+        ),
+    )
     if intent in {"store_search", "open_store_search", "store_service_search"} and tool in {
         "search_stores_tool",
         "search_stores_complex_tool",
@@ -247,7 +275,7 @@ def _evaluate_transaction_contract(
             return DirectPathDecision(True, True, "transaction_store_preview", None, tool, "location")
         return _fallback("missing_required_slot")
     if intent == "price_or_coupon_check" and tool == "get_final_price_tool":
-        if known_slots.get("goods_no") or (turn_contract.tool_args_patch or {}).get("goods_no"):
+        if known_slots.get("goods_no") or tool_args_patch.get("goods_no"):
             return DirectPathDecision(True, True, "price_or_coupon_check", None, tool, "quickReply")
         return _fallback("missing_required_slot")
     if intent in {"reservation_status_lookup", "reservation_store_info_lookup"} and tool == "get_my_reservations_tool":
@@ -256,7 +284,7 @@ def _evaluate_transaction_contract(
         return DirectPathDecision(True, True, "order_lookup", None, tool, "quickReply")
     if intent == "coupon_applicable_products" and tool == "search_benefit_applicable_products_tool":
         query = str(
-            (turn_contract.tool_args_patch or {}).get("query")
+            tool_args_patch.get("query")
             or known_slots.get("benefit_applicable_products_query")
             or ""
         ).strip()

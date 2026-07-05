@@ -6,7 +6,6 @@ from schemas.tstation.slots import ConversationSlots
 from services.tstation.policies.discovery_intent_policy import (
     best_seller_search_params_from_text,
     build_discovery_intent_frame,
-    extract_benefit_applicable_products_query,
     extract_best_seller_vehicle_query,
     extract_product_names,
     normalize_tire_size,
@@ -20,6 +19,10 @@ from services.tstation.policies.flow_state import (
 )
 from services.tstation.policies.intent_frame import PolicyDomain
 from services.tstation.policies.router_intent_schema import OUT_OF_SCOPE_INTENT, UNCLEAR_INTENT, UNSUPPORTED_INTENT
+from services.tstation.policies.tool_arg_schema import (
+    canonicalize_tool_args_patch,
+    should_use_known_slots_for_tool_args,
+)
 from services.tstation.policies.transaction_intent_policy import stock_inventory_store_lookup_tool_input
 from services.tstation.policies.turn_contract import TurnContract
 from services.tstation.template_mapper import current_transaction_tool_plan
@@ -887,6 +890,18 @@ def _contract_required_transaction_tool_input(
             if isinstance(getattr(turn_contract, "tool_args_patch", None), Mapping)
             else {}
         )
+        tool_args_patch = canonicalize_tool_args_patch(
+            preferred_tool=preferred_tool,
+            known_slots=turn_contract.known_slots or {},
+            user_text=str((turn_contract.contract_seed or {}).get("user_text") or ""),
+            existing_patch=tool_args_patch,
+            use_known_slots=should_use_known_slots_for_tool_args(
+                context_state=turn_contract.context_state,
+                resume_anchor_detected=turn_contract.resume_anchor_detected,
+                resume_source=turn_contract.resume_source,
+                action_mode=turn_contract.action_mode,
+            ),
+        )
         query = str(
             tool_args_patch.get("query")
             or (turn_contract.known_slots or {}).get("benefit_applicable_products_query")
@@ -1148,18 +1163,24 @@ def _contract_required_tool_candidate(
                 return None
             display_name = "이벤트 적용 상품 조회 중..."
         elif preferred_tool == "search_benefit_applicable_products_tool":
-            if not tool_input:
-                query = (
-                    str(known_slots.get("benefit_applicable_products_query") or "").strip()
-                    or extract_benefit_applicable_products_query(user_text)
+            tool_input = canonicalize_tool_args_patch(
+                preferred_tool=preferred_tool,
+                known_slots=known_slots,
+                user_text=user_text,
+                existing_patch=tool_input,
+                use_known_slots=should_use_known_slots_for_tool_args(
+                    context_state=turn_contract.context_state,
+                    resume_anchor_detected=turn_contract.resume_anchor_detected,
+                    resume_source=turn_contract.resume_source,
+                    action_mode=turn_contract.action_mode,
+                ),
+            )
+            if tool_input.get("query") and not tool_input_source:
+                tool_input_source = (
+                    "router_evidence"
+                    if str(known_slots.get("benefit_applicable_products_query") or "").strip()
+                    else "canonical_slots"
                 )
-                if query:
-                    tool_input = {"query": query, "lang_cd": "ko"}
-                    tool_input_source = (
-                        "router_evidence"
-                        if str(known_slots.get("benefit_applicable_products_query") or "").strip()
-                        else "user_text"
-                    )
             if not tool_input or not str(tool_input.get("query") or "").strip():
                 return None
             tool_input.setdefault("lang_cd", "ko")

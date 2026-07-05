@@ -32883,6 +32883,66 @@ def test_event_applicable_products_lookup_uses_event_product_contract(user_text:
     assert response_decision.metadata["response_shape_key"] == "event_applicable_products_lookup"
 
 
+def test_event_applicable_products_lookup_uses_selected_product_as_query() -> None:
+    frame = IntentFrame(
+        domain=PolicyDomain.DISCOVERY,
+        intent="event_applicable_products_lookup",
+        sub_intent="event_applicable_products_lookup",
+        known_slots={
+            "goods_no": "G000000309630",
+            "tire_size": "225/45R17",
+            "tire_model": "벤투스 V12 에보2",
+            "pending_product_name": "벤투스 V12 에보2",
+        },
+    )
+    contract = build_turn_contract(
+        user_text="이 타이어에 적용 가능한 이벤트 있어?",
+        intent_frame=frame,
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY],
+            execution_plan=["discovery:event_applicable_products_lookup"],
+        ),
+        action_mode="info_only",
+        context_state="dormant",
+        resume_anchor_detected=True,
+    )
+
+    assert contract.intent == "event_applicable_products_lookup"
+    assert contract.preferred_tool == "search_benefit_applicable_products_tool"
+    assert contract.allowed_tools == ("search_benefit_applicable_products_tool",)
+    assert contract.tool_args_patch == {"query": "벤투스 V12 에보2", "lang_cd": "ko"}
+    assert "search_product_tool" in contract.forbidden_tools
+
+
+def test_event_applicable_products_lookup_does_not_use_dormant_product_without_anchor() -> None:
+    frame = IntentFrame(
+        domain=PolicyDomain.DISCOVERY,
+        intent="event_applicable_products_lookup",
+        sub_intent="event_applicable_products_lookup",
+        known_slots={
+            "goods_no": "G000000309630",
+            "tire_size": "225/45R17",
+            "tire_model": "벤투스 V12 에보2",
+            "pending_product_name": "벤투스 V12 에보2",
+        },
+    )
+    contract = build_turn_contract(
+        user_text="적용 가능한 이벤트 있어?",
+        intent_frame=frame,
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY],
+            execution_plan=["discovery:event_applicable_products_lookup"],
+        ),
+        action_mode="info_only",
+        context_state="dormant",
+        resume_anchor_detected=False,
+    )
+
+    assert contract.intent == "event_applicable_products_lookup"
+    assert contract.preferred_tool == "search_benefit_applicable_products_tool"
+    assert contract.tool_args_patch == {"lang_cd": "ko"}
+
+
 def test_benefit_applicable_products_template_maps_unified_response() -> None:
     event = try_build_template(
         [

@@ -27,6 +27,10 @@ from services.tstation.policies.router_intent_schema import canonical_router_int
 from services.tstation.policies.support_response_policy import (
     build_general_cancel_fee_policy_event,
 )
+from services.tstation.policies.tool_arg_schema import (
+    canonicalize_tool_args_patch,
+    should_use_known_slots_for_tool_args,
+)
 from services.tstation.policies.transaction_intent_policy import build_transaction_intent_frame
 _HIGH_RISK_INTENTS = frozenset({
     "price_or_coupon_check",
@@ -2013,6 +2017,19 @@ def build_turn_contract(
         )
         if preferred_tool != original_preferred_tool:
             tool_args_patch = {}
+
+    tool_args_patch = canonicalize_tool_args_patch(
+        preferred_tool=preferred_tool,
+        known_slots=known_slots,
+        user_text=user_text,
+        existing_patch=tool_args_patch,
+        use_known_slots=should_use_known_slots_for_tool_args(
+            context_state=context_state,
+            resume_anchor_detected=resume_anchor_detected,
+            resume_source=resume_source,
+            action_mode=action_mode,
+        ),
+    )
 
     return TurnContract(
         domain=domain,
