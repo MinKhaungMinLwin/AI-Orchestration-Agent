@@ -815,7 +815,8 @@ def build_turn_contract(
     )
     if planner_intent == "unknown":
         planner_intent = None
-    policy_intent = str(getattr(routing_result, "policy_intent", "") or "")
+    raw_policy_intent = str(getattr(routing_result, "policy_intent", "") or "")
+    policy_intent = canonical_router_intent(raw_policy_intent)
     router_wins_intent = _router_wins_current_turn_intent(
         user_text=user_text,
         planner_intent=planner_intent,

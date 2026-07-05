@@ -33583,6 +33583,21 @@ def test_turn_contract_ignores_freeform_execution_plan_as_planner_intent() -> No
     }
 
 
+def test_turn_contract_canonicalizes_price_benefit_router_alias_without_drift() -> None:
+    contract = build_turn_contract(
+        user_text="적용된 할인이 뭐야?",
+        intent_frame=IntentFrame(domain=PolicyDomain.TRANSACTION, intent="price_or_coupon_check"),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["transaction:price_or_benefit_lookup"],
+        ),
+    )
+
+    assert contract.intent == "price_or_coupon_check"
+    assert contract.planner_intent == "price_or_coupon_check"
+    assert not [item for item in contract.contract_drift if item.get("field") == "intent"]
+
+
 def test_turn_contract_does_not_clarify_normal_product_description() -> None:
     contract = _transaction_turn_contract("dynapro hp3 설명해줘")
 
