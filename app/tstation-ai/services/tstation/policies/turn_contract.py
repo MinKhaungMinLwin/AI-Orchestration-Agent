@@ -43,6 +43,11 @@ _HIGH_RISK_INTENTS = frozenset({
     "inventory_availability",
     "recent_product_set_size_availability",
 })
+_PRICE_OR_COUPON_RESPONSE_INTENTS = frozenset({
+    "price_or_coupon_check",
+    "order_discount_explanation",
+    "explain_discount_application",
+})
 _HIGH_RISK_DOMAINS = frozenset({"transaction"})
 _HARD_REQUIRED_SLOT_GUARD_INTENTS = frozenset({
     "quick_order_execute",
@@ -85,6 +90,7 @@ _FORBIDDEN_BEHAVIOR_TEMPLATE_BLOCKS = {
     "schedule_tool_for_vehicle_experience_store_search": _STORE_ONLY_FLOW_BLOCK_TEMPLATES,
     "quick_order_for_vehicle_experience_store_search": frozenset({"preOrder", "orderComplete"}),
     "preorder_for_vehicle_experience_store_search": frozenset({"preOrder", "orderComplete"}),
+    "datepick_for_price_or_coupon_check": frozenset({"location", "datepick", "preOrder", "orderComplete"}),
 }
 _DISCOVERY_FIRST_LEG_BLOCK_RESPONSE_SHAPES = frozenset({
     "product_attribute_summary",
@@ -2348,12 +2354,61 @@ def _build_owned_record_lookup_guard_event(contract: TurnContract) -> dict[str, 
         },
     }
 
+
+def _build_price_or_coupon_guard_event(contract: TurnContract) -> dict[str, Any] | None:
+    intent = str(contract.intent or "")
+    if str(contract.domain or "") != "transaction" or intent not in _PRICE_OR_COUPON_RESPONSE_INTENTS:
+        return None
+    known_slots = contract.known_slots or {}
+    product_name = _product_name(known_slots)
+    payment_amount = known_slots.get("payment_amount") or known_slots.get("paymentAmount")
+    amount_text = None
+    if isinstance(payment_amount, int | float) and payment_amount > 0:
+        amount_text = f"{int(payment_amount):,}원"
+    if product_name and amount_text:
+        message = (
+            f"{product_name} 기준으로 현재 확인된 결제금액은 {amount_text}입니다. "
+            "표시된 혜택가는 적용 가능한 쿠폰과 할인 조건을 반영한 금액이며, 최종 적용 내역은 결제 단계에서 다시 확인할 수 있어요."
+        )
+    elif amount_text:
+        message = (
+            f"현재 확인된 결제금액은 {amount_text}입니다. "
+            "표시된 혜택가는 적용 가능한 쿠폰과 할인 조건을 반영한 금액이며, 최종 적용 내역은 결제 단계에서 다시 확인할 수 있어요."
+        )
+    else:
+        message = (
+            "선택하신 혜택가는 적용 가능한 쿠폰과 할인 조건을 반영한 기준입니다. "
+            "최종 적용 내역은 결제 단계에서 다시 확인할 수 있어요."
+        )
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "transaction",
+        "assistant_response_source": "code_turn_contract_price_or_coupon_guard",
+        "data": {
+            "assistantResponse": message,
+            "quickReplies": [],
+            "predictedDomains": ["TRANSACTION"],
+            "metadata": {
+                "turnContract": _guard_event_contract_snapshot(contract),
+                "responseShapeKey": "price_or_coupon_check",
+                "response_shape_key": "price_or_coupon_check",
+                "assistant_response_source": "code_turn_contract_price_or_coupon_guard",
+                "contract_intent": intent,
+            },
+        },
+    }
+
+
 def build_response_policy_guard_event(contract: TurnContract) -> dict[str, Any]:
     """Build a safe fallback when a template violates response policy, not slots."""
 
     response_decision = contract.response_decision or {}
     forbidden = response_decision.get("forbidden_behaviors") if isinstance(response_decision, Mapping) else ()
     forbidden_set = {str(item) for item in forbidden} if isinstance(forbidden, list | tuple) else set()
+    price_or_coupon_event = _build_price_or_coupon_guard_event(contract)
+    if price_or_coupon_event is not None:
+        return _annotate_contract_guard_event(price_or_coupon_event, contract, reason="response_policy_guard")
     if str(contract.domain or "") == "transaction" and str(contract.intent or "") == "general_cancel_fee_policy":
         user_query = str(contract.known_slots.get("region") or contract.known_slots.get("user_query") or "")
         event = build_general_cancel_fee_policy_event(user_query)
@@ -2994,6 +3049,8 @@ def violates_response_template_contract(event: Mapping[str, Any], contract: Turn
         return True
     if _flow_step_template_violation(template=template, contract=contract):
         return True
+    if _price_or_coupon_template_violation(template=template, contract=contract):
+        return True
     if _is_discovery_product_template_compatible(event, contract):
         return False
     if _is_unsupported_discovery_product_template_without_current_source(event, contract):
@@ -3047,6 +3104,12 @@ def _flow_step_template_violation(*, template: str, contract: TurnContract) -> b
     }:
         return template in {"location", "datepick", "preOrder", "orderComplete"}
     return False
+
+
+def _price_or_coupon_template_violation(*, template: str, contract: TurnContract) -> bool:
+    if str(contract.intent or "") not in _PRICE_OR_COUPON_RESPONSE_INTENTS:
+        return False
+    return template in _FORBIDDEN_BEHAVIOR_TEMPLATE_BLOCKS["datepick_for_price_or_coupon_check"]
 
 
 def _discovery_product_payload_has_items(event: Mapping[str, Any]) -> bool:
