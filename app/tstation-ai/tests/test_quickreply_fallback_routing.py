@@ -41131,6 +41131,105 @@ def test_turn_contract_uses_active_preview_datepick_flow_without_schedule_tool()
     assert contract.response_decision["metadata"]["response_shape_key"] == "reservation_slots"
 
 
+def test_turn_contract_allows_active_purchase_schedule_flow_when_store_selected() -> None:
+    contract = build_turn_contract(
+        user_text="티스테이션 판교점",
+        intent_frame=IntentFrame(
+            domain=PolicyDomain.TRANSACTION,
+            intent="quick_order_reservation_slot_fill_store",
+            known_slots={
+                "goods_no": "G000000309783",
+                "tire_size": "225/45R17",
+                "ord_qty": 4,
+                "shop_id": "F00721",
+                "shop_name": "티스테이션 판교점",
+                "region": "분당",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+                "stock_check_mode": "preview",
+                "source_tool": "transaction_store_preview_tool",
+                "schedule_mode": "in_store_logistics_combined",
+                "price_source_tool": "transaction_store_preview_tool",
+                "availability_context": {
+                    "active_flow_context": {
+                        "flow_type": "commerce",
+                        "status": "resumed",
+                        "flow_step": "select_schedule",
+                        "product": {
+                            "goods_no": "G000000309783",
+                            "tire_size": "225/45R17",
+                            "ord_qty": 4,
+                        },
+                        "store": {
+                            "shop_id": "F00721",
+                            "shop_name": "티스테이션 판교점",
+                            "region": "분당",
+                        },
+                        "payment": {
+                            "price_basis": "cheapest_final_prc",
+                            "price_source_tool": "transaction_store_preview_tool",
+                        },
+                        "intent": {
+                            "sub_flow_type": "purchase",
+                            "pending_intent": "order",
+                            "goal_type": "place_order",
+                            "stock_check_mode": "preview",
+                            "schedule_mode": "in_store_logistics_combined",
+                            "source_tool": "transaction_store_preview_tool",
+                        },
+                        "current_step": "select_schedule",
+                        "missing_slots": ["booking_datetime"],
+                        "next_tool": "get_store_schedule_tool",
+                        "allowed_tools": ["get_store_schedule_tool"],
+                        "tool_args_patch": {"shop_id": "F00721", "mode": "general"},
+                        "next_template": "datepick",
+                        "response_shape_key": "reservation_slots",
+                        "progress_source": "flow_state_evaluator",
+                    }
+                },
+            },
+        ),
+        tool_plan=ToolPlan(
+            allowed_tools=(),
+            forbidden_tools=(
+                "transaction_store_preview_tool",
+                "get_store_schedule_tool",
+                "quick_order_tool",
+            ),
+            metadata={"response_intent": "quick_order_reservation_slot_fill_store"},
+        ),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.DATE_PICK,
+            template=TemplateName.DATE_PICK,
+            metadata={
+                "response_shape_key": "reservation_slots",
+                "stock_check_mode": "preview",
+                "schedule_mode": "in_store_logistics_combined",
+            },
+        ),
+        action_mode="purchase_continuation",
+        context_state="resumed",
+        resume_source="router_slot_fill:store",
+    )
+
+    assert contract.allowed_tools == ("get_store_schedule_tool",)
+    assert "get_store_schedule_tool" not in contract.forbidden_tools
+    assert "transaction_store_preview_tool" in contract.forbidden_tools
+    assert contract.preferred_tool == "get_store_schedule_tool"
+    assert contract.tool_args_patch == {"shop_id": "F00721", "mode": "general"}
+    assert contract.response_decision["template"] == "datepick"
+    assert contract.response_decision["metadata"]["response_shape_key"] == "reservation_slots"
+    assert response_contract_violations(
+        template="datepick",
+        assistant_response_source="code_mapper",
+        response_shape_key="reservation_slots",
+        called_tools=["get_store_schedule_tool"],
+        tool_inputs=[{"tool": "get_store_schedule_tool", "args": {"shop_id": "F00721", "mode": "general"}}],
+        source_domain="transaction",
+        contract=contract,
+    ) == []
+
+
 def test_qc_recovery_scope_only_allows_inventory_only_preview_violation() -> None:
     assert chat_module._has_recoverable_inventory_only_preview_violation(
         [{"type": "unexpected_preview_tool_for_inventory_only_stock", "severity": "error"}]
