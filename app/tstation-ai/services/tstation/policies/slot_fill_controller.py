@@ -217,6 +217,31 @@ def resolve_pre_router_slot_fill(
         for key, value in dict(precheck.get("slot_patch") or {}).items()
         if value not in (None, "", [], {})
     }
+    compatibility = evaluate_flow_compatibility(
+        active_flow=_active_flow_context_from_slots(merged_slots),
+        proposed_slot_patch=slot_patch,
+        router_evidence={
+            "intent": str(router_context.get("current_flow") or ""),
+            "slot_fill_source": "expected_slot_fill_precheck",
+        },
+        user_text=user_text,
+    )
+    if not compatibility.compatible:
+        trace = {
+            "expected_slot_fill_precheck": precheck,
+            "slot_patch": slot_patch,
+            "flow_compatibility": compatibility.to_dict(),
+        }
+        return SlotFillDecision(
+            slots=merged_slots,
+            precheck={
+                **dict(precheck),
+                "matched": False,
+                "reason": "flow_compatibility_blocked",
+                "flow_compatibility": compatibility.to_dict(),
+            },
+            trace_metadata=trace,
+        )
     resolved_slots = (
         merged_slots.apply_runtime_values(slot_patch, source="expected_slot_fill_precheck")
         if slot_patch

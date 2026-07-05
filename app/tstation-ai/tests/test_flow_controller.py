@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from services.tstation.policies.flow_controller import resolve_purchase_order_flow
+from services.tstation.policies.flow_controller import evaluate_flow_compatibility, resolve_purchase_order_flow
 from services.tstation.policies.response_decision import TemplateName
 
 
@@ -127,3 +127,40 @@ def test_purchase_execute_after_preorder_allows_only_quick_order_tool() -> None:
     assert state.template == TemplateName.ORDER_COMPLETE
     assert state.preferred_tool == "quick_order_tool"
     assert state.allowed_tools == ("quick_order_tool",)
+
+
+def test_flow_compatibility_pivots_price_question_instead_of_region_slot_fill() -> None:
+    decision = evaluate_flow_compatibility(
+        active_flow={
+            "flow_type": "commerce",
+            "status": "active",
+            "product": {"goods_no": "G000000309783", "tire_size": "245/45R19", "ord_qty": 4},
+            "intent": {"sub_flow_type": "purchase", "pending_intent": "order", "goal_type": "place_order"},
+            "current_step": "ask_store",
+            "missing_slots": ["shop_id"],
+        },
+        proposed_slot_patch={"region": "분당"},
+        router_evidence={"intent": "price_or_coupon_check", "execution_plan": ["transaction:price_or_coupon_check"]},
+    )
+
+    assert decision.action == "pivot"
+    assert decision.expected_slot == "store"
+    assert decision.proposed_slot == "region"
+
+
+def test_flow_compatibility_allows_region_when_active_flow_expects_store() -> None:
+    decision = evaluate_flow_compatibility(
+        active_flow={
+            "flow_type": "commerce",
+            "status": "active",
+            "product": {"goods_no": "G000000309783", "tire_size": "245/45R19", "ord_qty": 4},
+            "intent": {"sub_flow_type": "purchase", "pending_intent": "order", "goal_type": "place_order"},
+            "current_step": "ask_store",
+            "missing_slots": ["shop_id"],
+        },
+        proposed_slot_patch={"region": "분당"},
+        router_evidence={"intent": "quick_order_reservation", "execution_plan": ["transaction:quick_order_reservation"]},
+    )
+
+    assert decision.compatible is True
+    assert decision.reason == "region_can_resolve_store"

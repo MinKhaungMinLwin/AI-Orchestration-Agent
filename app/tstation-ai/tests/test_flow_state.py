@@ -281,7 +281,7 @@ def test_transition_current_flow_resumes_dormant_purchase_on_explicit_order_anch
     assert active_context["payment"]["payment_amount"] == 288200
 
 
-def test_transition_current_flow_keeps_dormant_purchase_dormant_without_resume_anchor() -> None:
+def test_transition_current_flow_pivots_price_check_without_resuming_dormant_purchase() -> None:
     dormant_purchase = commit_flow_state(
         None,
         {
@@ -314,9 +314,51 @@ def test_transition_current_flow_keeps_dormant_purchase_dormant_without_resume_a
         resume_source="none",
     )
 
-    assert transition.flow_transition["applied"] is False
+    assert transition.flow_transition["applied"] is True
+    active_context = transition.flow_transition["active_flow_context"]
+    assert active_context["intent"]["sub_flow_type"] == "price_check"
     assert transition.metadata["dormant_resume_status"] == "not_attempted"
     assert transition.metadata["dormant_resume_applied"] is False
+
+
+def test_transition_current_flow_resumes_dormant_purchase_from_explicit_anchor() -> None:
+    dormant_purchase = commit_flow_state(
+        None,
+        {
+            "goods_no": "G000000320152",
+            "product_name": "Dynapro HP3",
+            "tire_size": "245/45R19",
+            "ord_qty": 2,
+            "shop_id": "F00123",
+            "shop_name": "티스테이션 분당점",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        source="test:purchase_store_selected",
+        flow_type="purchase",
+        flow_step="show_schedule",
+        status="active",
+    ).state.to_active_flow_context()
+    dormant_flows = upsert_dormant_flow([], dormant_purchase)
+
+    transition = transition_current_flow(
+        user_text="계속 진행해줘",
+        router_evidence={
+            "domain": "transaction",
+            "intent": "quick_order_reservation_continue",
+            "execution_plan": ["transaction:quick_order_reservation_continue"],
+        },
+        existing_slots=ConversationSlots(availability_context={"dormant_flows": dormant_flows}),
+        extracted_slots=ConversationSlots(),
+        resume_source="none",
+    )
+
+    assert transition.metadata["dormant_resume_applied"] is True
+    active_context = transition.flow_transition["active_flow_context"]
+    assert active_context["status"] == "resumed"
+    assert active_context["current_step"] == "resolve_schedule"
+    assert active_context["next_tool"] == "get_store_schedule_tool"
+    assert active_context["missing_slots"] == ["booking_datetime"]
 
 
 def test_purchase_store_ui_action_accepts_template_slot_aliases_without_entity_metadata() -> None:

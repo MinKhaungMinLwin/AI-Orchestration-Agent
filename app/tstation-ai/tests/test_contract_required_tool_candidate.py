@@ -502,6 +502,29 @@ def test_schedule_slot_fill_price_lookup_candidate_requires_ready_order_slots() 
     assert candidate is None
 
 
+def test_price_or_coupon_contract_runs_final_price_for_confirmed_goods() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="price_or_coupon_check",
+        known_slots={"goods_no": "G000000310126", "ord_qty": 2},
+        allowed_tools=("search_product_tool", "get_final_price_tool", "get_my_coupons_tool"),
+        preferred_tool="get_final_price_tool",
+        response_decision={"template": "quickReply", "metadata": {"response_shape_key": "price_coupon_summary"}},
+        context_state="active",
+    )
+
+    candidate = _contract_required_tool_candidate(
+        turn_contract=contract,
+        user_text="적용된 할인이 뭐야?",
+        merged_slots=None,
+    )
+
+    assert candidate is not None
+    assert candidate.tool_name == "get_final_price_tool"
+    assert candidate.tool_input == {"goods_no": "G000000310126"}
+    assert candidate.tool_input_source == "turn_contract_price_or_coupon_check"
+
+
 def test_selected_store_schedule_requires_datepick_contract_boundary() -> None:
     contract = TurnContract(
         domain="transaction",

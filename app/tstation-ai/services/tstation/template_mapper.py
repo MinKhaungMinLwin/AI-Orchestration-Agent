@@ -3753,11 +3753,11 @@ def _map_price_or_coupon_summary(tool_data_list: list[dict], assistant_text: str
     except (TypeError, ValueError):
         quantity = 1
 
-    sale_unit = _get_num(row, "sale_prc", default=None)
+    sale_unit = int(_get_num(row, "sale_prc", default=0)) or None
     final_unit = _display_final_unit_price(row)
     if sale_unit is None or final_unit is None:
         return None
-    discount_unit = _get_num(row, "cheapest_total_discount", default=None)
+    discount_unit = int(_get_num(row, "cheapest_total_discount", default=0)) or None
     if discount_unit is None:
         discount_unit = max(0, int(sale_unit) - int(final_unit))
 
