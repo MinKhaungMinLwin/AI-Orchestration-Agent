@@ -7593,11 +7593,11 @@ def _build_direct_preorder_event_from_slots(
         or str(active_flow_context.get("goods_nm") or "").strip()
         or str(active_flow_context.get("goodsNm") or "").strip()
         or str(active_flow_context.get("tire_model") or "").strip()
-        or str(slot_values.get("product_name") or "").strip()
         or str(slot_values.get("goods_nm") or "").strip()
         or str(slot_values.get("goodsNm") or "").strip()
         or str(slot_values.get("tire_model") or "").strip()
         or str(slot_values.get("pending_product_name") or "").strip()
+        or str(slot_values.get("product_name") or "").strip()
     )
     product_label = f"{product_name} {tire_size}".strip() if product_name else tire_size
 

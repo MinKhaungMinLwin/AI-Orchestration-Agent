@@ -829,6 +829,13 @@ def build_turn_contract(
     code_domain = _domain_value(intent_frame.domain) if intent_frame is not None else _domain_from_routing(routing_result)
     code_intent = intent_frame.intent if intent_frame is not None else _intent_from_cross_domain(cross_domain_plan)
     transaction_boundary_frame = _transaction_policy_boundary_frame(user_text=user_text, merged_slots=merged_slots)
+    if _price_or_coupon_boundary_interrupts_slot_fill(
+        transaction_boundary_frame=transaction_boundary_frame,
+        context_state=context_state,
+        resume_source=resume_source,
+        policy_intent=policy_intent,
+    ):
+        router_wins_intent = "price_or_coupon_check"
     if transaction_boundary_frame is not None and _should_apply_transaction_policy_boundary(
         planner_intent=planner_intent,
         policy_intent=policy_intent,
@@ -5448,7 +5455,35 @@ def _transaction_policy_boundary_frame(*, user_text: str, merged_slots: Any | No
     frame = build_transaction_intent_frame(user_text, known_slots=_slots_from_model(merged_slots))
     if frame.intent in {"general_cancel_fee_policy", "owned_order_cancel_fee_inquiry"}:
         return frame
+    if frame.intent == "price_or_coupon_check" and (
+        frame.known_slots.get("goods_no")
+        or frame.known_slots.get("product_name")
+        or frame.known_slots.get("tire_model")
+        or frame.known_slots.get("pending_product_name")
+    ):
+        return frame
     return None
+
+
+def _price_or_coupon_boundary_interrupts_slot_fill(
+    *,
+    transaction_boundary_frame: IntentFrame | None,
+    context_state: str,
+    resume_source: str,
+    policy_intent: str,
+) -> bool:
+    if transaction_boundary_frame is None or transaction_boundary_frame.intent != "price_or_coupon_check":
+        return False
+    if str(context_state or "").strip() != "resumed":
+        return False
+    if not str(resume_source or "").strip().startswith("expected_slot_fill:"):
+        return False
+    normalized_policy_intent = str(policy_intent or "").strip()
+    return not (
+        normalized_policy_intent in ROUTER_WINS_INFORMATIONAL_INTENTS
+        or normalized_policy_intent.endswith("_policy")
+        or normalized_policy_intent.endswith("_guidance")
+    )
 
 
 def _should_apply_transaction_policy_boundary(
