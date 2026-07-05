@@ -33507,6 +33507,35 @@ def test_discovery_first_leg_product_search_no_result_is_not_contract_tool_viola
     assert not violations
 
 
+def test_stock_store_search_allows_product_resolution_before_quantity_slot_guard() -> None:
+    user_text = "벤투스 S2AS 2454518 당일 장착가능한 판교근처 매장 알려줘"
+    frame = build_transaction_intent_frame(user_text, known_slots={})
+    cross_domain_plan = plan_cross_domain_turn(user_text, known_slots=dict(frame.known_slots))
+
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=frame,
+        tool_plan=plan_transaction_tools(frame),
+        response_decision=decide_transaction_response(
+            intent=frame.intent,
+            user_text=user_text,
+            known_slots=dict(frame.known_slots),
+        ),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["discovery:resolve_or_describe_product", "transaction:stock_store_or_reservation"],
+            agent_prompt_profile="discovery_search",
+        ),
+        cross_domain_plan=cross_domain_plan,
+    )
+
+    assert contract.intent == "stock_store_search"
+    assert contract.known_slots["product_name"] == "Ventus S2"
+    assert contract.known_slots["tire_size"] == "245/45R18"
+    assert "search_product_tool" in contract.allowed_tools
+    assert "quantity" not in contract.blocking_required_slots
+
+
 def test_cross_domain_plan_keeps_two_product_difference_as_discovery_comparison() -> None:
     plan = plan_cross_domain_turn("아이온 에보 as 랑 아이온 에보 as suv 는 무슨 차이야?", known_slots={})
 

@@ -6917,6 +6917,36 @@ def _is_discovery_first_cross_domain_resolution_contract(
     )
 
 
+def _needs_product_resolution_before_transaction(
+    *,
+    intent: str,
+    known_slots: Mapping[str, Any],
+    cross_domain_plan: CrossDomainPlan | None,
+) -> bool:
+    if known_slots.get("goods_no"):
+        return False
+    if intent == "resolve_or_describe_product":
+        return _is_discovery_first_cross_domain_resolution_contract(
+            intent=intent,
+            known_slots=known_slots,
+            cross_domain_plan=cross_domain_plan,
+        )
+    if intent not in {"stock_store_search", "quick_order_reservation"}:
+        return False
+    if not (known_slots.get("product_name") or known_slots.get("tire_model") or known_slots.get("tire_size")):
+        return False
+    if cross_domain_plan is None or not cross_domain_plan.is_cross_domain:
+        return False
+    subtasks = tuple(cross_domain_plan.subtasks or ())
+    if len(subtasks) < 2:
+        return False
+    first_task = subtasks[0]
+    first_domain = str(getattr(first_task.domain, "value", first_task.domain) or "")
+    if first_domain != "discovery" or str(first_task.intent or "") != "resolve_or_describe_product":
+        return False
+    return any(str(getattr(task.domain, "value", task.domain) or "") == "transaction" for task in subtasks[1:])
+
+
 def _strip_downstream_transaction_required_slots_for_discovery_resolution(
     required_slots: tuple[str, ...],
     *,
@@ -6924,7 +6954,7 @@ def _strip_downstream_transaction_required_slots_for_discovery_resolution(
     known_slots: Mapping[str, Any],
     cross_domain_plan: CrossDomainPlan | None,
 ) -> tuple[str, ...]:
-    if not _is_discovery_first_cross_domain_resolution_contract(
+    if not _needs_product_resolution_before_transaction(
         intent=intent,
         known_slots=known_slots,
         cross_domain_plan=cross_domain_plan,
@@ -6942,7 +6972,7 @@ def _augment_allowed_tools_for_discovery_resolution(
 ) -> tuple[str, ...]:
     if intent == "best_seller_search":
         return _merge_tuple(allowed_tools, ("get_best_selling_products_tool",))
-    if not _is_discovery_first_cross_domain_resolution_contract(
+    if not _needs_product_resolution_before_transaction(
         intent=intent,
         known_slots=known_slots,
         cross_domain_plan=cross_domain_plan,
