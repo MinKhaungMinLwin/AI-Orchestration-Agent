@@ -158,6 +158,7 @@ from services.tstation.policies.flow_state import (
     commit_purchase_flow_state,
     flow_state_dependency_blocked_fields,
     flow_state_dependency_events,
+    flow_state_values_from_slot_values,
     is_purchase_flow_context,
     purchase_context_vehicle_selection_patch,
     recommendation_listcar_flow_delta,
@@ -1684,10 +1685,11 @@ def _validated_ui_action_slot_fill_router_skip(
 
 def _has_stored_transaction_context(slots: ConversationSlots) -> bool:
     context = slots.availability_context if isinstance(slots.availability_context, dict) else {}
+    flow_context = flow_state_values_from_slot_values(slots, source="chat_stored_transaction_context")
     return bool(
         slots.pending_intent in {"order", "stock", "reservation", "cart"}
         or slots.goal_type in {"place_order", "store_with_stock", "add_to_cart"}
-        or context.get("pending_order_context")
+        or flow_context
         or context.get("dormant_purchase_context")
         or context.get("dormant_stock_context")
         or context.get("dormant_transaction_context")
@@ -1700,7 +1702,13 @@ def _stored_transaction_intent(slots: ConversationSlots) -> tuple[str, str]:
     if pending_intent or goal_type:
         return pending_intent, goal_type
     context = slots.availability_context if isinstance(slots.availability_context, dict) else {}
-    for key in ("pending_order_context", "dormant_purchase_context", "dormant_stock_context", "dormant_transaction_context"):
+    flow_context = flow_state_values_from_slot_values(slots, source="chat_stored_transaction_intent")
+    if flow_context:
+        pending_intent = str(flow_context.get("pending_intent") or "")
+        goal_type = str(flow_context.get("goal_type") or "")
+        if pending_intent or goal_type:
+            return pending_intent, goal_type
+    for key in ("dormant_purchase_context", "dormant_stock_context", "dormant_transaction_context"):
         stored = context.get(key)
         if not isinstance(stored, dict):
             continue
@@ -7530,10 +7538,9 @@ def _build_direct_preorder_event_from_slots(
         if isinstance(slot_values.get("availability_context"), Mapping)
         else {}
     )
-    pending_order_context = (
-        availability_context.get("pending_order_context")
-        if isinstance(availability_context.get("pending_order_context"), Mapping)
-        else {}
+    pending_order_context = flow_state_values_from_slot_values(
+        {"availability_context": availability_context},
+        source="chat_direct_preorder_event",
     )
     goods_no = str(slot_values.get("goods_no") or "").strip()
     tire_size = normalize_tire_size(slot_values.get("tire_size") or "")
@@ -7615,7 +7622,7 @@ def _build_direct_preorder_event_from_slots(
         context_payment_details = _preview_payment_details(
             pending_order_context,
             ord_qty=ord_qty,
-            payment_amount_source="pending_order_context.unit_price",
+            payment_amount_source="pending_order_context.total_price",
         )
         if context_payment_details.get("payment_amount") not in (None, "", 0):
             payment_amount = context_payment_details.get("payment_amount")
@@ -7630,7 +7637,7 @@ def _build_direct_preorder_event_from_slots(
         context_payment_details = _preview_payment_details(
             active_flow_payment,
             ord_qty=ord_qty,
-            payment_amount_source="active_flow_context.payment.unit_price",
+            payment_amount_source="active_flow_context.payment.total_price",
         )
         if context_payment_details.get("payment_amount") not in (None, "", 0):
             payment_amount = context_payment_details.get("payment_amount")

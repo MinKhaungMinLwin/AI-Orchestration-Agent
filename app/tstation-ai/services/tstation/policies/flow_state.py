@@ -236,6 +236,23 @@ _INTENT_FIELDS = (
     "reservation_management_action",
     "owned_record_target",
 )
+_SLOT_VALUE_FIELDS = tuple(
+    dict.fromkeys(
+        (
+            *_PRODUCT_FIELDS,
+            "quantity",
+            *_VEHICLE_FIELDS,
+            *_STORE_FIELDS,
+            *_SCHEDULE_FIELDS,
+            *_PAYMENT_FIELDS,
+            *_INTENT_FIELDS,
+            "availability_intent",
+            "stock_check_mode",
+            "pending_step",
+            "availability_context",
+        )
+    )
+)
 _FLOW_PROGRESS_META_FIELDS = (
     "target_action",
     "current_step",
@@ -1760,6 +1777,89 @@ def _is_empty_implicit_flow_state(state: FlowState) -> bool:
         and not state.dormant_flows
         and not state.flow_events
     )
+
+
+def flow_state_from_slot_values(slot_values: Mapping[str, Any] | Any | None, *, source: str) -> FlowState:
+    """Build the canonical commerce read view from current slots and legacy contexts."""
+
+    values = _slot_values_mapping(slot_values)
+    availability_context = _availability_context_from_values(values)
+    active_context = _mapping_value(availability_context, "active_flow_context")
+    pending_context = _mapping_value(availability_context, "pending_order_context")
+
+    if active_context:
+        state = FlowState.from_active_flow_context(active_context)
+    elif pending_context:
+        state = FlowState.from_pending_order_context(pending_context)
+    else:
+        flow_type = _flow_type_from_slot_values(values)
+        state = FlowState.from_flat_delta(values, source=source, flow_type=flow_type)
+
+    delta_flow_type = effective_flow_type(state.flow_type, state.intent) or _flow_type_from_slot_values(values)
+    delta = FlowState.from_flat_delta(
+        values,
+        source=source,
+        flow_type=delta_flow_type,
+        flow_step=state.flow_step,
+    )
+    if not _flow_state_has_payload(delta):
+        return state
+    return state.merge(delta, source=source).state
+
+
+def flow_state_values_from_slot_values(slot_values: Mapping[str, Any] | Any | None, *, source: str) -> dict[str, Any]:
+    """Return a flat compatibility view without exposing legacy context reads to callers."""
+
+    state = flow_state_from_slot_values(slot_values, source=source)
+    if not _flow_state_has_payload(state):
+        return {}
+    return state.to_pending_order_context()
+
+
+def _slot_values_mapping(slot_values: Mapping[str, Any] | Any | None) -> dict[str, Any]:
+    if slot_values is None:
+        return {}
+    if isinstance(slot_values, Mapping):
+        return _non_empty_mapping(slot_values)
+    values: dict[str, Any] = {}
+    for key in _SLOT_VALUE_FIELDS:
+        value = getattr(slot_values, key, None)
+        if value not in _EMPTY_VALUES:
+            values[key] = value
+    return values
+
+
+def _availability_context_from_values(values: Mapping[str, Any]) -> dict[str, Any]:
+    availability_context = values.get("availability_context")
+    return _non_empty_mapping(availability_context) if isinstance(availability_context, Mapping) else {}
+
+
+def _mapping_value(values: Mapping[str, Any], key: str) -> dict[str, Any]:
+    value = values.get(key)
+    return _non_empty_mapping(value) if isinstance(value, Mapping) else {}
+
+
+def _flow_type_from_slot_values(values: Mapping[str, Any]) -> str:
+    if values.get("pending_intent") == "stock" or values.get("goal_type") == "store_with_stock":
+        return "stock"
+    return "purchase"
+
+
+def _flow_state_has_payload(state: FlowState) -> bool:
+    if (
+        state.flow_step
+        or state.product
+        or state.vehicle
+        or state.recommendation
+        or state.store
+        or state.schedule
+        or state.payment
+        or state.candidates
+        or state.dormant_flows
+        or state.flow_events
+    ):
+        return True
+    return bool({key: value for key, value in state.intent.items() if key != "sub_flow_type" and value not in _EMPTY_VALUES})
 
 
 def is_purchase_flow_context(*contexts: Mapping[str, Any] | None) -> bool:

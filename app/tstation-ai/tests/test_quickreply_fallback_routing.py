@@ -29324,6 +29324,36 @@ def test_transaction_intent_policy_keeps_order_region_followup_on_preview_scope(
     assert response_decision.metadata["stock_check_mode"] == "preview"
 
 
+def test_transaction_intent_policy_prefers_router_region_over_regex_region() -> None:
+    known_slots = {
+        "goods_no": "G000000317729",
+        "product_name": "다이나프로 HPX",
+        "tire_size": "235/55R19",
+        "ord_qty": 4,
+        "region": "고양시",
+        "place_query": "고양시",
+        "pending_intent": "order",
+        "goal_type": "place_order",
+        "location_name": "고양시",
+        "location_type": "region",
+        "slot_sources": {
+            "location_name": "router_evidence",
+            "place_query": "router_evidence",
+            "location_type": "router_evidence",
+        },
+    }
+
+    frame = build_transaction_intent_frame("분당 말고 고양시 매장", known_slots=known_slots)
+    tool_plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "quick_order_reservation"
+    assert frame.known_slots["region"] == "고양시"
+    assert frame.known_slots["place_query"] == "고양시"
+    assert tool_plan.preferred_tool == "transaction_store_preview_tool"
+    assert tool_plan.tool_args_patch["region"] == "고양시"
+    assert tool_plan.tool_args_patch["place_query"] == "고양시"
+
+
 def test_transaction_intent_policy_keeps_pure_stock_region_query_inventory_only() -> None:
     known_slots = {
         "goods_no": "G000000317729",

@@ -7,8 +7,10 @@ from services.tstation.policies.flow_state import (
     commit_purchase_flow_state,
     evaluate_flow_progress,
     FlowState,
+    flow_state_from_slot_values,
     prune_dormant_flows,
     resume_dormant_flow,
+    flow_state_values_from_slot_values,
     selected_store_slots_from_active_flow_context,
     store_candidate_selection_patch,
     store_candidates_flow_delta,
@@ -16,6 +18,98 @@ from services.tstation.policies.flow_state import (
 )
 from schemas.tstation.slots import ConversationSlots
 from services.tstation.policies.flow_controller import resolve_purchase_order_flow, transition_current_flow
+
+
+def test_flow_state_values_reads_active_context_before_legacy_pending_context() -> None:
+    values = flow_state_values_from_slot_values(
+        {
+            "availability_context": {
+                "active_flow_context": {
+                    "flow_type": "purchase",
+                    "product": {"goods_no": "G-ACTIVE", "tire_size": "245/45R19", "ord_qty": 2},
+                    "store": {"region": "고양시"},
+                    "intent": {"pending_intent": "order", "goal_type": "place_order"},
+                },
+                "pending_order_context": {
+                    "goods_no": "G-LEGACY",
+                    "tire_size": "225/45R17",
+                    "ord_qty": 4,
+                    "region": "분당",
+                    "pending_intent": "order",
+                    "goal_type": "place_order",
+                },
+            }
+        },
+        source="test",
+    )
+
+    assert values["goods_no"] == "G-ACTIVE"
+    assert values["tire_size"] == "245/45R19"
+    assert values["ord_qty"] == 2
+    assert values["region"] == "고양시"
+    assert values["pending_intent"] == "order"
+
+
+def test_flow_state_values_applies_current_turn_region_over_legacy_context() -> None:
+    values = flow_state_values_from_slot_values(
+        {
+            "region": "고양시",
+            "availability_context": {
+                "pending_order_context": {
+                    "goods_no": "G-LEGACY",
+                    "tire_size": "225/45R17",
+                    "ord_qty": 4,
+                    "region": "분당",
+                    "shop_id": "S1",
+                    "requested_cal_day": "20260710",
+                    "rsv_hour": "15",
+                    "pending_intent": "order",
+                    "goal_type": "place_order",
+                }
+            },
+        },
+        source="test",
+    )
+
+    assert values["region"] == "고양시"
+    assert values["goods_no"] == "G-LEGACY"
+    assert values["ord_qty"] == 4
+    assert "shop_id" not in values
+    assert "requested_cal_day" not in values
+    assert "rsv_hour" not in values
+
+
+def test_flow_state_values_preserves_active_stock_sub_flow_on_current_turn_patch() -> None:
+    slot_values = {
+        "region": "고양시",
+        "availability_context": {
+            "active_flow_context": {
+                "flow_type": "commerce",
+                "flow_step": "ask_store",
+                "product": {"goods_no": "G-STOCK", "tire_size": "245/45R19", "ord_qty": 2},
+                "intent": {
+                    "sub_flow_type": "stock",
+                    "pending_intent": "stock",
+                    "goal_type": "store_with_stock",
+                    "stock_check_mode": "inventory_only",
+                },
+            },
+        },
+    }
+
+    state = flow_state_from_slot_values(slot_values, source="test")
+    values = state.to_pending_order_context()
+    progress = evaluate_flow_progress(state)
+
+    assert values["flow_type"] == "commerce"
+    assert values["sub_flow_type"] == "stock"
+    assert values["pending_intent"] == "stock"
+    assert values["goal_type"] == "store_with_stock"
+    assert values["stock_check_mode"] == "inventory_only"
+    assert values["region"] == "고양시"
+    assert progress["target_action"] == "get_store_inventory_tool"
+    assert progress["next_tool"] == "get_store_list_tool"
+    assert progress["tool_args_patch"] == {"limit": 10, "region_code": "고양시"}
 
 
 def test_purchase_preview_store_selection_progresses_to_schedule_without_relisting() -> None:

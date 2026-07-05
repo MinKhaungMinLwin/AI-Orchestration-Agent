@@ -11,6 +11,7 @@ from typing import Any, Mapping
 
 from schemas.tstation.slots import ConversationSlots
 from services.tstation.policies.flow_controller import resolve_purchase_order_flow
+from services.tstation.policies.flow_state import flow_state_values_from_slot_values
 from services.tstation.policies.price_basis_policy import PRICE_BASIS_FIELDS
 from services.tstation.policies.resolved_context import canonical_context_from_template_boundary
 from services.tstation.policies.slot_fill_policy import expected_slot_fill_precheck
@@ -331,8 +332,21 @@ def _has_transaction_context_shape(slots: ConversationSlots) -> bool:
     availability_context = getattr(slots, "availability_context", None)
     if not isinstance(availability_context, Mapping):
         return False
+    flow_context = flow_state_values_from_slot_values(slots, source="slot_fill_transaction_context_shape")
+    if any(
+        flow_context.get(field_name) not in (None, "", [], {})
+        for field_name in (
+            "goods_no",
+            "product_name",
+            "ord_qty",
+            "pending_intent",
+            "goal_type",
+            "shop_id",
+            "shop_name",
+        )
+    ):
+        return True
     for context_key in (
-        "pending_order_context",
         "active_flow_context",
         "dormant_purchase_context",
         "dormant_stock_context",
@@ -471,9 +485,24 @@ def _router_slot_fill_current_flow(
     ):
         return "stock_store_search"
 
+    flow_context = flow_state_values_from_slot_values(slots, source="router_slot_fill_current_flow")
+    if flow_context.get("pending_intent") == "order" or flow_context.get("goal_type") == "place_order":
+        return "quick_order_reservation"
+    if flow_context.get("pending_intent") == "stock" or flow_context.get("goal_type") == "store_with_stock":
+        return "stock_store_search"
+    has_purchase_shape = bool(
+        flow_context.get("ord_qty")
+        or flow_context.get("quantity")
+        or flow_context.get("shop_id")
+        or flow_context.get("shop_name")
+        or flow_context.get("region")
+    )
+    if has_purchase_shape:
+        return "quick_order_reservation"
+
     availability_context = getattr(slots, "availability_context", None)
     if isinstance(availability_context, Mapping):
-        for key in ("pending_order_context", "dormant_purchase_context"):
+        for key in ("dormant_purchase_context",):
             context = availability_context.get(key)
             if not isinstance(context, Mapping):
                 continue
@@ -481,14 +510,14 @@ def _router_slot_fill_current_flow(
                 return "quick_order_reservation"
             if context.get("pending_intent") == "stock" or context.get("goal_type") == "store_with_stock":
                 return "stock_store_search"
-            has_purchase_shape = bool(
+            dormant_has_purchase_shape = bool(
                 context.get("ord_qty")
                 or context.get("quantity")
                 or context.get("shop_id")
                 or context.get("shop_name")
                 or context.get("region")
             )
-            if key == "pending_order_context" and has_purchase_shape:
+            if dormant_has_purchase_shape:
                 return "quick_order_reservation"
         for key in ("dormant_stock_context", "dormant_transaction_context"):
             context = availability_context.get(key)
@@ -514,10 +543,13 @@ def _router_slot_fill_known_slots(slots: ConversationSlots | None) -> dict[str, 
         "requested_cal_day": getattr(slots, "requested_cal_day", None),
         "rsv_hour": getattr(slots, "rsv_hour", None),
     }
+    flow_context = flow_state_values_from_slot_values(slots, source="router_slot_fill_known_slots")
+    for key, value in flow_context.items():
+        if values.get(key) in (None, "", [], {}) and value not in (None, "", [], {}):
+            values[key] = value
     availability_context = getattr(slots, "availability_context", None)
     if isinstance(availability_context, Mapping):
         for context_key in (
-            "pending_order_context",
             "dormant_purchase_context",
             "dormant_stock_context",
             "dormant_transaction_context",
@@ -700,17 +732,16 @@ def _flow_state_reconciliation(
         if isinstance(getattr(merged_slots, "availability_context", None), Mapping)
         else {}
     )
-    parent_purchase_context: Mapping[str, Any] = {}
-    for key in ("pending_order_context", "dormant_purchase_context"):
-        context = availability_context.get(key) if isinstance(availability_context, Mapping) else None
-        if not isinstance(context, Mapping):
-            continue
-        if context.get("pending_intent") in {"order", "reservation", "cart"} or context.get("goal_type") in {
-            "place_order",
-            "add_to_cart",
-        }:
-            parent_purchase_context = context
-            break
+    parent_purchase_context: Mapping[str, Any] = flow_state_values_from_slot_values(
+        merged_slots,
+        source="slot_fill_flow_state_reconciliation",
+    )
+    if not (
+        parent_purchase_context.get("pending_intent") in {"order", "reservation", "cart"}
+        or parent_purchase_context.get("goal_type") in {"place_order", "add_to_cart"}
+    ):
+        dormant_purchase_context = availability_context.get("dormant_purchase_context")
+        parent_purchase_context = dormant_purchase_context if isinstance(dormant_purchase_context, Mapping) else {}
 
     active_flow_context = (
         availability_context.get("active_flow_context")

@@ -21,7 +21,7 @@ from services.tstation.policies.transaction_intent_policy import build_transacti
 from services.tstation.policies.turn_contract import build_turn_contract
 from services.tstation.policies.discovery_intent_policy import build_discovery_intent_frame, normalize_tire_size
 from services.tstation.policies.cta_registry import cta_trace_metadata, normalize_quickreply_ctas
-from services.tstation.policies.flow_state import effective_flow_type, upsert_dormant_flow
+from services.tstation.policies.flow_state import effective_flow_type, flow_state_values_from_slot_values, upsert_dormant_flow
 from services.tstation.policies.resolved_context import (
     canonical_context_from_slots,
     canonical_context_from_template_boundary,
@@ -1627,11 +1627,7 @@ def _interactive_flow_contract_intent_from_slots(
         if isinstance(availability_context.get("active_flow_context"), Mapping)
         else {}
     )
-    pending_order_context = (
-        availability_context.get("pending_order_context")
-        if isinstance(availability_context.get("pending_order_context"), Mapping)
-        else {}
-    )
+    flow_context_values = flow_state_values_from_slot_values(slot_values, source="ui_action_contract_intent")
     dormant_purchase_context = (
         availability_context.get("dormant_purchase_context")
         if isinstance(availability_context.get("dormant_purchase_context"), Mapping)
@@ -1656,19 +1652,19 @@ def _interactive_flow_contract_intent_from_slots(
     active_flow_type = effective_flow_type(active_flow_context.get("flow_type"), active_flow_intent)
     active_pending_intent = str(active_flow_intent.get("pending_intent") or "").strip()
     active_goal_type = str(active_flow_intent.get("goal_type") or "").strip()
-    pending_context_intent = str(pending_order_context.get("pending_intent") or "").strip()
-    pending_context_goal = str(pending_order_context.get("goal_type") or "").strip()
+    pending_context_intent = str(flow_context_values.get("pending_intent") or "").strip()
+    pending_context_goal = str(flow_context_values.get("goal_type") or "").strip()
     router_intent = str(latest_router_evidence.get("intent") or "").strip()
     router_execution_plan = " ".join(str(item or "") for item in (latest_router_evidence.get("execution_plan") or ()))
     pending_context_has_purchase_shape = bool(
-        pending_order_context
+        flow_context_values
         and not (pending_context_intent == "stock" or pending_context_goal == "store_with_stock")
         and (
-            pending_order_context.get("ord_qty")
-            or pending_order_context.get("quantity")
-            or pending_order_context.get("shop_id")
-            or pending_order_context.get("shop_name")
-            or pending_order_context.get("region")
+            flow_context_values.get("ord_qty")
+            or flow_context_values.get("quantity")
+            or flow_context_values.get("shop_id")
+            or flow_context_values.get("shop_name")
+            or flow_context_values.get("region")
         )
     )
 
@@ -1833,11 +1829,14 @@ def _purchase_ui_action_context_patch(existing_slots: Any, slot_patch: Mapping[s
     return merged
 
 
-def _purchase_ui_action_context_candidates(availability_context: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+def _purchase_ui_action_context_candidates(availability_context: Mapping[str, Any]) -> list[Mapping[str, Any]]: 
     candidates: list[Mapping[str, Any]] = []
-    pending_order_context = availability_context.get("pending_order_context")
-    if isinstance(pending_order_context, Mapping) and _is_purchase_context(pending_order_context):
-        candidates.append(pending_order_context)
+    flow_context = flow_state_values_from_slot_values(
+        {"availability_context": availability_context},
+        source="ui_action_purchase_context_candidates",
+    )
+    if flow_context and _is_purchase_context(flow_context):
+        candidates.append(flow_context)
 
     active_flow_context = availability_context.get("active_flow_context")
     if isinstance(active_flow_context, Mapping):
@@ -1893,10 +1892,9 @@ def _existing_purchase_flow_state(slots: Any) -> bool:
     if pending_intent == "order" or goal_type == "place_order":
         return True
     availability_context = _slot_value_from_any(slots, "availability_context")
-    pending_order_context = (
-        availability_context.get("pending_order_context")
-        if isinstance(availability_context, Mapping) and isinstance(availability_context.get("pending_order_context"), Mapping)
-        else {}
+    pending_order_context = flow_state_values_from_slot_values(
+        {"availability_context": availability_context},
+        source="ui_action_existing_purchase_state",
     )
     return (
         str(pending_order_context.get("pending_intent") or "").strip() == "order"
@@ -2571,15 +2569,9 @@ def apply_history_product_selection_state(
         fallback_intent=None,
     )
     if expected_contract_intent in _TRANSACTION_SLOT_FILL_CONTRACT_INTENTS:
-        availability_context = (
-            getattr(merged_slots, "availability_context", None)
-            if isinstance(getattr(merged_slots, "availability_context", None), Mapping)
-            else {}
-        )
-        pending_order_context = (
-            availability_context.get("pending_order_context")
-            if isinstance(availability_context.get("pending_order_context"), Mapping)
-            else {}
+        pending_order_context = flow_state_values_from_slot_values(
+            merged_slots,
+            source="ui_action_transaction_slot_fill",
         )
         if expected_contract_intent == _QUICK_ORDER_RESERVATION_INTENT and pending_order_context:
             slot_patch.setdefault("pending_intent", pending_order_context.get("pending_intent") or "order")

@@ -8,6 +8,7 @@ from typing import Any, Mapping
 
 from services.tstation.policies.intent_frame import IntentFrame, PolicyDomain
 from services.tstation.policies.flow_controller import resolve_purchase_order_flow
+from services.tstation.policies.flow_state import flow_state_values_from_slot_values
 from services.tstation.policies.policy_text_matchers import is_general_card_cancel_timing_policy_query
 from services.tstation.policies.response_decision import ToolPlan
 from services.tstation.policies.store_service_gate import (
@@ -579,17 +580,22 @@ def _is_order_or_reservation_context(slots: dict[str, Any]) -> bool:
 
 
 def _has_parent_order_or_reservation_context(slots: dict[str, Any]) -> bool:
-    availability_context = slots.get("availability_context")
-    if not isinstance(availability_context, Mapping):
+    availability_context = slots.get("availability_context") if isinstance(slots.get("availability_context"), Mapping) else {}
+    context = flow_state_values_from_slot_values(
+        {"availability_context": availability_context},
+        source="transaction_parent_order_context",
+    )
+    if context.get("pending_intent") in {"order", "reservation", "cart"}:
+        return True
+    if context.get("goal_type") in {"place_order", "add_to_cart"}:
+        return True
+    dormant_purchase_context = availability_context.get("dormant_purchase_context")
+    if not isinstance(dormant_purchase_context, Mapping):
         return False
-    for key in ("pending_order_context", "dormant_purchase_context"):
-        context = availability_context.get(key)
-        if not isinstance(context, Mapping):
-            continue
-        if context.get("pending_intent") in {"order", "reservation", "cart"}:
-            return True
-        if context.get("goal_type") in {"place_order", "add_to_cart"}:
-            return True
+    if dormant_purchase_context.get("pending_intent") in {"order", "reservation", "cart"}:
+        return True
+    if dormant_purchase_context.get("goal_type") in {"place_order", "add_to_cart"}:
+        return True
     return False
 
 
@@ -831,7 +837,8 @@ def build_transaction_intent_frame(
     slots = dict(known_slots or {})
     explicit_tire_size = normalize_tire_size(text)
     current_store_name = _store_candidate_or_canonical(_extract_store_name(text), slots)
-    raw_current_region = _extract_region(text)
+    router_current_region = _router_verified_region(slots)
+    raw_current_region = router_current_region or _extract_region(text)
     current_product_name = _extract_product_name(text)
     current_has_product = bool(current_product_name or _PRODUCT_HINT_RE.search(text))
     current_store_name_role = classify_store_name_role(text, store_name=current_store_name)
@@ -1388,7 +1395,7 @@ def build_transaction_intent_frame(
         intent = "quick_order_reservation"
         sub_intent = "reservation"
         entities["stock_check_mode"] = "preview"
-        entities["place_query"] = text.strip()
+        entities["place_query"] = router_current_region or text.strip()
         entities["store_slot_fill_text"] = True
     elif current_store_holiday_lookup:
         intent = "store_holiday_lookup"
@@ -2978,3 +2985,23 @@ def _extract_region(text: str) -> str | None:
     if not match:
         return None
     return match.group(1)
+
+
+def _router_verified_region(slots: Mapping[str, Any]) -> str | None:
+    slot_sources = slots.get("slot_sources")
+    if not isinstance(slot_sources, Mapping):
+        return None
+    has_router_location = any(
+        str(slot_sources.get(field) or "").strip() == "router_evidence"
+        for field in ("location_name", "place_query", "location_type")
+    )
+    if not has_router_location:
+        return None
+    location_type = str(slots.get("location_type") or "").strip()
+    if location_type and location_type != "region":
+        return None
+    for field in ("location_name", "region", "place_query"):
+        value = str(slots.get(field) or "").strip()
+        if value:
+            return value
+    return None
