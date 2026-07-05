@@ -20051,14 +20051,15 @@ def _build_purchase_size_selection_event_from_search_result(
     )
 
 
-def _preview_schedule_store_slot_values(tool_result: Mapping[str, Any] | None) -> dict[str, Any]:
+def _preview_schedule_store_slot_candidates(tool_result: Mapping[str, Any] | None) -> list[dict[str, Any]]:
     if not isinstance(tool_result, Mapping):
-        return {}
+        return []
     data = tool_result.get("data")
     schedule = data.get("schedule") if isinstance(data, Mapping) else None
     stores = schedule.get("stores") if isinstance(schedule, Mapping) else None
     if not isinstance(stores, list):
-        return {}
+        return []
+    candidates: list[dict[str, Any]] = []
     for store in stores:
         if not isinstance(store, Mapping):
             continue
@@ -20073,8 +20074,17 @@ def _preview_schedule_store_slot_values(tool_result: Mapping[str, Any] | None) -
             "shop_name": str(store.get("shop_nm") or store.get("shopName") or "").strip() or None,
             "schedule_mode": str(store.get("mode") or "").strip() or None,
         }
-        return {key: value for key, value in values.items() if value not in (None, "", [], {})}
-    return {}
+        candidates.append({key: value for key, value in values.items() if value not in (None, "", [], {})})
+    return candidates
+
+
+def _preview_schedule_store_slot_values(tool_result: Mapping[str, Any] | None) -> dict[str, Any]:
+    candidates = _preview_schedule_store_slot_candidates(tool_result)
+    return candidates[0] if candidates else {}
+
+
+def _has_explicit_store_hint_for_preview_promotion(slots: Mapping[str, Any]) -> bool:
+    return any(str(slots.get(field) or "").strip() for field in ("shop_id", "shop_name", "store_name"))
 
 
 def _post_tool_purchase_preview_contract_context(
@@ -20088,9 +20098,10 @@ def _post_tool_purchase_preview_contract_context(
     slots = dict(known_slots or {})
     if str(slots.get("pending_intent") or "").strip() != "order" and str(slots.get("goal_type") or "").strip() != "place_order":
         return None
-    schedule_store_slots = _preview_schedule_store_slot_values(tool_result)
-    if not schedule_store_slots:
+    schedule_store_candidates = _preview_schedule_store_slot_candidates(tool_result)
+    if len(schedule_store_candidates) != 1 or not _has_explicit_store_hint_for_preview_promotion(slots):
         return None
+    schedule_store_slots = schedule_store_candidates[0]
     contract_slots = dict(slots)
     contract_slots.update(schedule_store_slots)
     contract_slots.pop("stock_check_mode", None)

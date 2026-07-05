@@ -29683,10 +29683,44 @@ def test_transaction_intent_policy_prefers_router_place_query_over_raw_question_
     tool_plan = plan_transaction_tools(frame)
 
     assert frame.intent == "quick_order_reservation"
-    assert frame.known_slots["place_query"] == "고양시청 근처"
+    assert frame.known_slots["place_query"] == "고양시청"
     assert tool_plan.preferred_tool == "transaction_store_preview_tool"
-    assert tool_plan.tool_args_patch["place_query"] == "고양시청 근처"
+    assert tool_plan.tool_args_patch["place_query"] == "고양시청"
     assert tool_plan.tool_args_patch["place_query"] != "고양시청 근처에는?"
+
+
+def test_transaction_intent_policy_strips_location_search_suffixes() -> None:
+    cases = {
+        "고양시청 근처": "고양시청",
+        "대화역 인근": "대화역",
+        "분당 지역": "분당",
+    }
+    for raw_location, expected_location in cases.items():
+        known_slots = {
+            "goods_no": "G000000310126",
+            "product_name": "벤투스 S2 AS",
+            "tire_size": "245/45R19",
+            "ord_qty": 2,
+            "region": raw_location,
+            "place_query": raw_location,
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "location_name": raw_location,
+            "location_type": "place_query",
+            "router_primary_action": "store_selection",
+            "slot_sources": {
+                "location_name": "router_evidence",
+                "place_query": "router_evidence",
+                "location_type": "router_evidence",
+                "router_primary_action": "router_evidence",
+            },
+        }
+
+        frame = build_transaction_intent_frame(f"{raw_location}에는?", known_slots=known_slots)
+        tool_plan = plan_transaction_tools(frame)
+
+        assert frame.known_slots["place_query"] == expected_location
+        assert tool_plan.tool_args_patch["place_query"] == frame.known_slots["place_query"]
 
 
 def test_transaction_intent_policy_keeps_pure_stock_region_query_inventory_only() -> None:
@@ -37316,6 +37350,72 @@ def test_post_tool_purchase_preview_contract_context_promotes_schedule_slots_to_
     assert promoted["known_slots"]["shop_name"] == "티스테이션 한남점"
     assert promoted["known_slots"]["schedule_mode"] == "in_store_logistics_combined"
     assert "stock_check_mode" not in promoted["known_slots"]
+
+
+def test_post_tool_purchase_preview_contract_context_does_not_promote_multiple_store_candidates() -> None:
+    promoted = _post_tool_purchase_preview_contract_context(
+        tool_name="transaction_store_preview_tool",
+        known_slots={
+            "goods_no": "G000000317677",
+            "tire_size": "215/45R18",
+            "ord_qty": 2,
+            "shop_name": "한남점",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        tool_result={
+            "status": "success",
+            "data": {
+                "schedule": {
+                    "stores": [
+                        {
+                            "shop_id": "F07782",
+                            "shop_nm": "티스테이션 한남점",
+                            "mode": "in_store_logistics_combined",
+                            "slots": [{"cal_day": "20260628", "tm": "09"}],
+                        },
+                        {
+                            "shop_id": "F07783",
+                            "shop_nm": "티스테이션 한남2점",
+                            "mode": "in_store_logistics_combined",
+                            "slots": [{"cal_day": "20260628", "tm": "10"}],
+                        },
+                    ],
+                },
+            },
+        },
+    )
+
+    assert promoted is None
+
+
+def test_post_tool_purchase_preview_contract_context_requires_explicit_store_hint() -> None:
+    promoted = _post_tool_purchase_preview_contract_context(
+        tool_name="transaction_store_preview_tool",
+        known_slots={
+            "goods_no": "G000000317677",
+            "tire_size": "215/45R18",
+            "ord_qty": 2,
+            "region": "한남",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        tool_result={
+            "status": "success",
+            "data": {
+                "schedule": {
+                    "stores": [{
+                        "shop_id": "F07782",
+                        "shop_nm": "티스테이션 한남점",
+                        "mode": "in_store_logistics_combined",
+                        "slots": [{"cal_day": "20260628", "tm": "09"}],
+                    }],
+                },
+            },
+        },
+    )
+
+    assert promoted is None
 
 
 def test_recommendation_product_pick_defaults_to_product_description_contract() -> None:

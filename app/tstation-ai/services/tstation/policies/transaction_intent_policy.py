@@ -23,6 +23,7 @@ from services.tstation.policies.store_service_gate import (
 
 _SIZE_COMPACT_RE = re.compile(r"\b(\d{3})\s*/?\s*(\d)(\d)(?:\3)?\s*R?\s*(\d{2})\b", re.IGNORECASE)
 _QUANTITY_RE = re.compile(r"(\d+)\s*(?:개|본|짝)")
+_LOCATION_SEARCH_SUFFIX_RE = re.compile(r"\s*(?:근처|인근|지역)\s*$")
 _TODAY_RE = re.compile(r"오늘|당일|바로|당장", re.IGNORECASE)
 _NOW_SERVICE_REQUEST_RE = re.compile(
     r"지금.{0,12}(?:장착|서비스|예약|방문|가능)|(?:장착|서비스|예약|방문).{0,12}지금",
@@ -2993,7 +2994,15 @@ def _extract_region(text: str) -> str | None:
     match = _REGION_HINT_RE.search(text or "")
     if not match:
         return None
-    return match.group(1)
+    return _normalize_location_search_query(match.group(1))
+
+
+def _normalize_location_search_query(value: str | None) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    normalized = _LOCATION_SEARCH_SUFFIX_RE.sub("", text).strip()
+    return normalized or text
 
 
 def _router_verified_region(slots: Mapping[str, Any]) -> str | None:
@@ -3012,7 +3021,7 @@ def _router_verified_region(slots: Mapping[str, Any]) -> str | None:
     for field in ("location_name", "region", "place_query"):
         value = str(slots.get(field) or "").strip()
         if value:
-            return value
+            return _normalize_location_search_query(value)
     return None
 
 
@@ -3029,5 +3038,5 @@ def _router_verified_place_query(slots: Mapping[str, Any]) -> str | None:
     for field in ("location_name", "place_query", "region"):
         value = str(slots.get(field) or "").strip()
         if value:
-            return value
+            return _normalize_location_search_query(value)
     return None
