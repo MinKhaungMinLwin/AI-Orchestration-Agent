@@ -6502,7 +6502,8 @@ _COUPON_APPLICABILITY_INTENT_RE = re.compile(
 )
 _SPECIFIC_COUPON_USAGE_QUERY_RE = re.compile(
     r"(?=.*(?:쿠폰|할인권|할인|딜|deal))"
-    r"(?=.*(?:적용\s*가능|적용가능|사용\s*가능|사용가능|쓸\s*수|쓸수|어떻게\s*써|먹어|먹히|어디\s*(?:에)?\s*(?:써|쓸|사용)))",
+    r"(?=.*(?:적용\s*가능|적용가능|사용\s*가능|사용가능|쓸\s*수|쓸수|어떻게\s*써|먹어|먹히"
+    r"|어디\s*(?:에)?\s*(?:써|쓸|사용)|전용|에서만|만\s*(?:돼|가능|사용)))",
     re.IGNORECASE,
 )
 _COUPON_PRODUCT_APPLICABILITY_QUERY_RE = re.compile(
@@ -32380,6 +32381,24 @@ class TStationChatServiceV2:
                 "tool": "get_my_coupons_tool",
                 "source_domain": "transaction",
             })
+
+            if _is_specific_coupon_usage_query(user_query):
+                matched_coupon, _ambiguous_coupons = _find_single_confident_coupon_from_owned_coupons(
+                    user_query,
+                    my_coupons_result,
+                )
+                if matched_coupon is not None:
+                    channel_event = _build_coupon_channel_policy_event(
+                        matched_coupon,
+                        target_product_name=_coupon_target_product_name_for_query(user_query),
+                    )
+                    if channel_event is not None:
+                        finalized_event = _finalize_coupon_code_event(
+                            channel_event,
+                            source="code_owned_coupon_channel_policy",
+                            required_tools=("get_my_coupons_tool",),
+                        )
+                        return (emitted_events, finalized_event) if finalized_event is not None else None
 
             mapped_event = try_build_template(
                 [{"tool": "get_my_coupons_tool", "args": my_coupons_input, "data": my_coupons_result}],
