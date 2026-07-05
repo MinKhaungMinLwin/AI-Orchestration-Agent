@@ -22038,6 +22038,101 @@ def test_expected_slot_fill_precheck_does_not_write_intent_for_purchase_anchor()
     assert precheck == {"matched": False, "reason": "input_does_not_fill_expected_slot"}
 
 
+def test_expected_slot_fill_precheck_rejects_polluted_region_for_purchase_anchor() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000310126",
+        tire_model="벤투스 S2 AS",
+        pending_product_name="벤투스 S2 AS",
+        tire_size="245/45R19",
+        ord_qty=4,
+        payment_amount=308200,
+        region="구매할래",
+        pending_intent="order",
+        goal_type="place_order",
+    )
+    context = _router_slot_fill_context_payload_for_test(
+        slots=slots,
+        user_text="구매할래",
+        latest_product_tmpl=None,
+        latest_location_tmpl=None,
+        latest_datepick_tmpl=None,
+    )
+
+    precheck = _expected_slot_fill_precheck_for_test(
+        user_text="구매할래",
+        regex_slots=ConversationSlots.extract_from_user_text("구매할래"),
+        merged_slots=slots,
+        router_context=context,
+    )
+
+    assert context["current_flow"] == "quick_order_reservation"
+    assert context["flow_step"] == "show_store_candidates"
+    assert precheck == {"matched": False, "reason": "input_does_not_fill_expected_slot"}
+
+
+def test_expected_slot_fill_precheck_rejects_polluted_region_for_non_place_followup() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000310126",
+        tire_model="벤투스 S2 AS",
+        pending_product_name="벤투스 S2 AS",
+        tire_size="245/45R19",
+        ord_qty=4,
+        payment_amount=308200,
+        region="이건어때",
+        pending_intent="order",
+        goal_type="place_order",
+    )
+    context = _router_slot_fill_context_payload_for_test(
+        slots=slots,
+        user_text="이건어때",
+        latest_product_tmpl=None,
+        latest_location_tmpl=None,
+        latest_datepick_tmpl=None,
+    )
+
+    precheck = _expected_slot_fill_precheck_for_test(
+        user_text="이건어때",
+        regex_slots=ConversationSlots.extract_from_user_text("이건어때"),
+        merged_slots=slots,
+        router_context=context,
+    )
+
+    assert context["current_flow"] == "quick_order_reservation"
+    assert context["flow_step"] == "show_store_candidates"
+    assert precheck == {"matched": False, "reason": "input_does_not_fill_expected_slot"}
+
+
+def test_expected_slot_fill_precheck_does_not_invent_region_from_purchase_sentence() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000310126",
+        tire_model="벤투스 S2 AS",
+        pending_product_name="벤투스 S2 AS",
+        tire_size="245/45R19",
+        ord_qty=4,
+        payment_amount=308200,
+        region="고양",
+        pending_intent="order",
+        goal_type="place_order",
+    )
+    context = _router_slot_fill_context_payload_for_test(
+        slots=slots,
+        user_text="고양시에서 구매할래",
+        latest_product_tmpl=None,
+        latest_location_tmpl=None,
+        latest_datepick_tmpl=None,
+    )
+
+    precheck = _expected_slot_fill_precheck_for_test(
+        user_text="고양시에서 구매할래",
+        regex_slots=ConversationSlots.extract_from_user_text("고양시에서 구매할래"),
+        merged_slots=slots,
+        router_context=context,
+    )
+
+    assert context["current_flow"] == "quick_order_reservation"
+    assert precheck == {"matched": False, "reason": "input_does_not_fill_expected_slot"}
+
+
 def test_expected_slot_fill_precheck_accepts_direct_quantity_for_active_purchase() -> None:
     slots = ConversationSlots(
         goods_no="G000000319584",
