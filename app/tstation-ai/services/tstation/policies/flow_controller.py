@@ -21,6 +21,7 @@ from services.tstation.policies.price_basis_policy import has_price_basis
 from services.tstation.policies.reservation_template_policy import build_datepick_from_preview_payload
 from services.tstation.policies.response_decision import TemplateName
 from services.tstation.policies.resolved_context import canonical_context_from_template_boundary
+from services.tstation.policies.router_intent_schema import canonical_router_intent
 from services.tstation.policies.support_response_policy import (
     _is_card_installment_lookup_query,
     _is_payment_error_troubleshooting_query,
@@ -238,7 +239,7 @@ def _flow_compatibility_current_intent(
     ):
         text = str(value or "").strip()
         if text:
-            return text
+            return canonical_router_intent(text) or text
     return "none"
 
 

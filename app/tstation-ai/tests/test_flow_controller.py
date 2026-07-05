@@ -148,6 +148,26 @@ def test_flow_compatibility_pivots_price_question_instead_of_region_slot_fill() 
     assert decision.proposed_slot == "region"
 
 
+def test_flow_compatibility_pivots_price_benefit_alias_instead_of_region_slot_fill() -> None:
+    decision = evaluate_flow_compatibility(
+        active_flow={
+            "flow_type": "commerce",
+            "status": "active",
+            "product": {"goods_no": "G000000309783", "tire_size": "245/45R19", "ord_qty": 4},
+            "intent": {"sub_flow_type": "purchase", "pending_intent": "order", "goal_type": "place_order"},
+            "current_step": "ask_store",
+            "missing_slots": ["shop_id"],
+        },
+        proposed_slot_patch={"region": "분당"},
+        router_evidence={"intent": "price_or_benefit_lookup", "execution_plan": ["transaction:price_or_benefit_lookup"]},
+    )
+
+    assert decision.action == "pivot"
+    assert decision.current_intent == "price_or_coupon_check"
+    assert decision.expected_slot == "store"
+    assert decision.proposed_slot == "region"
+
+
 def test_flow_compatibility_allows_region_when_active_flow_expects_store() -> None:
     decision = evaluate_flow_compatibility(
         active_flow={
