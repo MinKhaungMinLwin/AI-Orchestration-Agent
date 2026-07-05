@@ -28184,6 +28184,8 @@ def test_vehicle_resolved_all_weather_recommendation_contract_allows_product_car
     assert decision.metadata["response_shape_key"] == "vehicle_resolved_recommendation"
     assert decision.template == TemplateName.LIST_CAR
     assert "product_card_without_vehicle_selection" in decision.forbidden_behaviors
+    assert contract.intent == "product_recommendation"
+    assert contract.sub_intent == "vehicle_resolved_recommendation"
     assert contract.required_slots == ()
     assert contract.resolvable_required_slots == ()
     assert contract.blocking_required_slots == ()

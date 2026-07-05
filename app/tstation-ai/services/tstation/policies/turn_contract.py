@@ -1041,7 +1041,8 @@ def build_turn_contract(
         # (e.g. "confirm_registered_vehicle_selection") doesn't match any known handler
         # and would otherwise fall through to a generic transaction_fallback stall.
         domain = "discovery"
-        intent = "vehicle_resolved_recommendation"
+        intent = "product_recommendation"
+        sub_intent = "vehicle_resolved_recommendation"
         known_slots["policy_intent"] = "vehicle_resolved_recommendation"
         known_slots["discovery_followup_action"] = "vehicle_resolved_recommendation"
     if planner_intent == "owned_coupon_lookup" or code_intent == "owned_coupon_lookup":
