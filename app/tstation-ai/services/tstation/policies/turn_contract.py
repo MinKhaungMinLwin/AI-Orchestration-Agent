@@ -3550,23 +3550,21 @@ def _selected_store_schedule_continuation_matches(
 
 
 def _active_selected_store_schedule_flow_matches(known_slots: Mapping[str, Any]) -> bool:
-    availability_context = (
-        known_slots.get("availability_context") if isinstance(known_slots.get("availability_context"), Mapping) else {}
-    )
-    active_flow = availability_context.get("active_flow_context") if isinstance(availability_context, Mapping) else None
-    if not isinstance(active_flow, Mapping):
-        active_flow = known_slots.get("active_flow_context")
+    active_flow, pending_order_context = _active_schedule_flow_contexts(known_slots)
     if not isinstance(active_flow, Mapping):
         return False
     if str(active_flow.get("next_template") or "").strip() != "datepick":
         return False
     if str(active_flow.get("response_shape_key") or "").strip() != "reservation_slots":
         return False
-    if str(active_flow.get("next_tool") or "").strip() != "get_store_schedule_tool":
+    tool_flow = active_flow
+    if str(tool_flow.get("next_tool") or "").strip() != "get_store_schedule_tool":
+        tool_flow = pending_order_context
+    if not isinstance(tool_flow, Mapping) or str(tool_flow.get("next_tool") or "").strip() != "get_store_schedule_tool":
         return False
     allowed_tools = {
         str(tool).strip()
-        for tool in tuple(active_flow.get("allowed_tools") or ())
+        for tool in tuple(tool_flow.get("allowed_tools") or ())
         if str(tool).strip()
     }
     if allowed_tools and "get_store_schedule_tool" not in allowed_tools:
@@ -3577,8 +3575,13 @@ def _active_selected_store_schedule_flow_matches(known_slots: Mapping[str, Any])
     goods_no = str(product.get("goods_no") or known_slots.get("goods_no") or "").strip()
     quantity = product.get("ord_qty") or product.get("quantity") or known_slots.get("ord_qty") or known_slots.get("quantity")
     shop_id = str(store.get("shop_id") or known_slots.get("shop_id") or "").strip()
-    pending_intent = str(intent.get("pending_intent") or known_slots.get("pending_intent") or "").strip()
-    goal_type = str(intent.get("goal_type") or known_slots.get("goal_type") or "").strip()
+    pending_intent = str(
+        intent.get("pending_intent")
+        or tool_flow.get("pending_intent")
+        or known_slots.get("pending_intent")
+        or ""
+    ).strip()
+    goal_type = str(intent.get("goal_type") or tool_flow.get("goal_type") or known_slots.get("goal_type") or "").strip()
     return bool(
         goods_no
         and quantity
@@ -3588,18 +3591,32 @@ def _active_selected_store_schedule_flow_matches(known_slots: Mapping[str, Any])
 
 
 def _active_selected_store_schedule_tool_args_patch(known_slots: Mapping[str, Any]) -> dict[str, Any]:
+    active_flow, pending_order_context = _active_schedule_flow_contexts(known_slots)
+    tool_flow = active_flow
+    if not isinstance(tool_flow, Mapping) or str(tool_flow.get("next_tool") or "").strip() != "get_store_schedule_tool":
+        tool_flow = pending_order_context
+    if not isinstance(tool_flow, Mapping):
+        return {}
+    if str(tool_flow.get("next_tool") or "").strip() != "get_store_schedule_tool":
+        return {}
+    patch = tool_flow.get("tool_args_patch") if isinstance(tool_flow.get("tool_args_patch"), Mapping) else {}
+    return {str(key): value for key, value in dict(patch).items() if value not in (None, "", [], {})}
+
+
+def _active_schedule_flow_contexts(known_slots: Mapping[str, Any]) -> tuple[Mapping[str, Any] | None, Mapping[str, Any] | None]:
     availability_context = (
         known_slots.get("availability_context") if isinstance(known_slots.get("availability_context"), Mapping) else {}
     )
     active_flow = availability_context.get("active_flow_context") if isinstance(availability_context, Mapping) else None
     if not isinstance(active_flow, Mapping):
         active_flow = known_slots.get("active_flow_context")
-    if not isinstance(active_flow, Mapping):
-        return {}
-    if str(active_flow.get("next_tool") or "").strip() != "get_store_schedule_tool":
-        return {}
-    patch = active_flow.get("tool_args_patch") if isinstance(active_flow.get("tool_args_patch"), Mapping) else {}
-    return {str(key): value for key, value in dict(patch).items() if value not in (None, "", [], {})}
+    pending_order_context = (
+        availability_context.get("pending_order_context") if isinstance(availability_context, Mapping) else None
+    )
+    return (
+        active_flow if isinstance(active_flow, Mapping) else None,
+        pending_order_context if isinstance(pending_order_context, Mapping) else None,
+    )
 
 
 def _active_preview_datepick_flow_matches(known_slots: Mapping[str, Any]) -> bool:
@@ -3616,6 +3633,8 @@ def _active_preview_datepick_flow_matches(known_slots: Mapping[str, Any]) -> boo
     if str(active_flow.get("response_shape_key") or "").strip() != "reservation_slots":
         return False
     if str(active_flow.get("next_tool") or "").strip() == "get_store_schedule_tool":
+        return False
+    if _active_selected_store_schedule_tool_args_patch(known_slots):
         return False
     product = active_flow.get("product") if isinstance(active_flow.get("product"), Mapping) else {}
     store = active_flow.get("store") if isinstance(active_flow.get("store"), Mapping) else {}
