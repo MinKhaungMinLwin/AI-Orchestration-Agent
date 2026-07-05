@@ -20087,6 +20087,20 @@ def _has_explicit_store_hint_for_preview_promotion(slots: Mapping[str, Any]) -> 
     return any(str(slots.get(field) or "").strip() for field in ("shop_id", "shop_name", "store_name"))
 
 
+def _has_purchase_order_intent(slots: Mapping[str, Any]) -> bool:
+    return (
+        str(slots.get("pending_intent") or "").strip() == "order"
+        or str(slots.get("goal_type") or "").strip() == "place_order"
+    )
+
+
+def _has_store_search_intent(slots: Mapping[str, Any]) -> bool:
+    return (
+        str(slots.get("pending_intent") or "").strip() == "store_search"
+        or str(slots.get("goal_type") or "").strip() == "store_search"
+    )
+
+
 def _post_tool_purchase_preview_contract_context(
     *,
     tool_name: str,
@@ -20096,19 +20110,38 @@ def _post_tool_purchase_preview_contract_context(
     if tool_name != "transaction_store_preview_tool":
         return None
     slots = dict(known_slots or {})
-    if str(slots.get("pending_intent") or "").strip() != "order" and str(slots.get("goal_type") or "").strip() != "place_order":
+    if not _has_purchase_order_intent(slots):
         return None
     schedule_store_candidates = _preview_schedule_store_slot_candidates(tool_result)
-    if len(schedule_store_candidates) != 1 or not _has_explicit_store_hint_for_preview_promotion(slots):
-        return None
-    schedule_store_slots = schedule_store_candidates[0]
     contract_slots = dict(slots)
-    contract_slots.update(schedule_store_slots)
+    if len(schedule_store_candidates) == 1 and _has_explicit_store_hint_for_preview_promotion(slots):
+        contract_slots.update(schedule_store_candidates[0])
+    else:
+        for field_name in ("shop_id", "shop_name", "store_name", "schedule_mode", "schedule_tier", "inventory_mode"):
+            contract_slots.pop(field_name, None)
     contract_slots.pop("stock_check_mode", None)
     return {
         "intent": "quick_order_reservation",
         "known_slots": contract_slots,
     }
+
+
+def _post_tool_store_search_response_decision() -> ResponseDecision:
+    return ResponseDecision(
+        response_shape=ResponseShape.LOCATION,
+        template=TemplateName.LOCATION,
+        required_slots=(),
+        forbidden_behaviors=(
+            "resume_stale_transaction_flow",
+            "datepick_for_store_search_flow",
+            "start_quick_order_execution",
+            "start_price_or_coupon_execution",
+            "emit_preorder_without_user_confirmation",
+            "emit_order_complete_without_quick_order_tool",
+        ),
+        assistant_guidance="현재 턴의 매장 검색 intent 기준으로 매장 후보를 location 카드로 제시한다.",
+        metadata={"response_shape_key": "store_search"},
+    )
 
 
 def _is_cross_domain_discovery_product_resolution_pending(
@@ -37405,6 +37438,9 @@ class TStationChatServiceV2:
                                         user_text=user_query,
                                         known_slots=policy_slots,
                                     )
+                                elif tool_name == "transaction_store_preview_tool" and _has_store_search_intent(policy_slots):
+                                    post_tool_intent = "store_search"
+                                    post_tool_response_decision = _post_tool_store_search_response_decision()
                                 else:
                                     post_tool_intent = "inventory_availability"
                                     post_tool_response_decision = decide_transaction_response(

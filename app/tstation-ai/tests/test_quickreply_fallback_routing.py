@@ -37352,7 +37352,7 @@ def test_post_tool_purchase_preview_contract_context_promotes_schedule_slots_to_
     assert "stock_check_mode" not in promoted["known_slots"]
 
 
-def test_post_tool_purchase_preview_contract_context_does_not_promote_multiple_store_candidates() -> None:
+def test_post_tool_purchase_preview_contract_context_keeps_purchase_for_multiple_store_candidates() -> None:
     promoted = _post_tool_purchase_preview_contract_context(
         tool_name="transaction_store_preview_tool",
         known_slots={
@@ -37386,10 +37386,15 @@ def test_post_tool_purchase_preview_contract_context_does_not_promote_multiple_s
         },
     )
 
-    assert promoted is None
+    assert promoted is not None
+    assert promoted["intent"] == "quick_order_reservation"
+    assert promoted["known_slots"]["pending_intent"] == "order"
+    assert promoted["known_slots"]["goal_type"] == "place_order"
+    assert "shop_id" not in promoted["known_slots"]
+    assert "shop_name" not in promoted["known_slots"]
 
 
-def test_post_tool_purchase_preview_contract_context_requires_explicit_store_hint() -> None:
+def test_post_tool_purchase_preview_contract_context_keeps_purchase_without_explicit_store_hint() -> None:
     promoted = _post_tool_purchase_preview_contract_context(
         tool_name="transaction_store_preview_tool",
         known_slots={
@@ -37415,7 +37420,10 @@ def test_post_tool_purchase_preview_contract_context_requires_explicit_store_hin
         },
     )
 
-    assert promoted is None
+    assert promoted is not None
+    assert promoted["intent"] == "quick_order_reservation"
+    assert promoted["known_slots"]["region"] == "한남"
+    assert "shop_id" not in promoted["known_slots"]
 
 
 def test_recommendation_product_pick_defaults_to_product_description_contract() -> None:
