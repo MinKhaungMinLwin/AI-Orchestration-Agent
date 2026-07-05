@@ -275,6 +275,7 @@ _COMMERCE_SUB_FLOW_TYPES = {
     "recommendation",
     "stock",
     "booking",
+    "price_check",
     "store_search",
     "store_schedule",
     "store_service_search",
@@ -990,6 +991,10 @@ def resume_dormant_flow(
     resumed_context = _non_empty_mapping(resumed.get("context"))
     resumed_context["status"] = "resumed"
     resumed_context["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    resumed_state = FlowState.from_active_flow_context(resumed_context)
+    _refresh_flow_progress(resumed_state)
+    resumed_context = resumed_state.to_active_flow_context()
+    resumed_context["status"] = "resumed"
     remaining = [
         dormant
         for dormant in _dormant_flow_values(list(dormant_flows or []))
@@ -1701,6 +1706,8 @@ class FlowState:
         existing_schedule = dict(merged.schedule)
         dormant_product_patch: dict[str, Any] = {}
         dormant_store_patch: dict[str, Any] = {}
+        existing_sub_flow_type = effective_flow_type(merged.flow_type, merged.intent)
+        incoming_sub_flow_type = effective_flow_type(delta.flow_type, delta.intent)
 
         if delta.flow_type and merged.flow_type != delta.flow_type and _is_empty_implicit_flow_state(merged):
             merged = FlowState(flow_type=delta.flow_type, status=delta.status, flow_step=delta.flow_step)
@@ -1730,6 +1737,34 @@ class FlowState:
             committed_fields.append("flow_type")
             if previous_identity:
                 committed_fields.append("dormant_flows")
+            existing_product = {}
+            existing_vehicle = {}
+            existing_schedule = {}
+        elif (
+            delta.flow_type
+            and incoming_sub_flow_type == "price_check"
+            and existing_sub_flow_type not in {"", "price_check"}
+            and canonical_flow_type(merged.flow_type) == canonical_flow_type(delta.flow_type)
+        ):
+            conflicts["sub_flow_type"] = {"existing": existing_sub_flow_type, "incoming": incoming_sub_flow_type}
+            previous_identity = flow_identity_for_context(before)
+            dormant_flows = upsert_dormant_flow(
+                merged.dormant_flows,
+                _flow_context_without_history(before),
+            )
+            flow_events = [
+                _new_flow_event(
+                    "deactivate",
+                    source=source,
+                    flow_identity=previous_identity,
+                    details={"incoming_sub_flow_type": incoming_sub_flow_type},
+                ),
+                *_flow_event_values(merged.flow_events),
+            ]
+            merged = FlowState(flow_type=delta.flow_type, status=delta.status, flow_step=delta.flow_step)
+            merged.dormant_flows = dormant_flows
+            merged.flow_events = flow_events
+            committed_fields.extend(["flow_type", "dormant_flows"])
             existing_product = {}
             existing_vehicle = {}
             existing_schedule = {}

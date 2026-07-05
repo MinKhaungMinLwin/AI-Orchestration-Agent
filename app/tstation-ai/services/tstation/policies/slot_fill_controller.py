@@ -18,6 +18,19 @@ from services.tstation.policies.slot_fill_policy import expected_slot_fill_prech
 
 _PRE_ROUTER_SLOT_FILL_ENABLED = False
 
+_SLOT_FILL_INCOMPATIBLE_CURRENT_TURN_INTENTS = frozenset({
+    "price_or_coupon_check",
+    "product_coupon_eligibility",
+    "product_coupon_discount_amount",
+    "coupon_usage_policy",
+    "coupon_registration_policy",
+    "owned_coupon_lookup",
+    "reservation_status_lookup",
+    "reservation_store_info_lookup",
+    "order_cancel_status_lookup",
+    "order_arrival_status_lookup",
+})
+
 _PURCHASE_RECONCILIATION_SLOT_FIELDS = (
     "goods_no",
     "tire_size",
@@ -122,6 +135,16 @@ def apply_router_location_slot_fill(
     router_context: Mapping[str, Any],
 ) -> RouterLocationSlotFillDecision:
     """Promote high-confidence router location evidence into active transaction slots."""
+    if _router_location_slot_fill_incompatible_turn(routing_result):
+        trace = {
+            "router_location_slot_fill": {
+                "matched": False,
+                "reason": "current_turn_intent_incompatible",
+                "intent": str(getattr(routing_result, "intent", "") or ""),
+                "policy_intent": str(getattr(routing_result, "policy_intent", "") or ""),
+            }
+        }
+        return RouterLocationSlotFillDecision(slots=slots, trace_metadata=trace)
     location_patch = _router_location_slot_patch(
         slots=slots,
         routing_result=routing_result,
@@ -337,6 +360,17 @@ def _router_location_can_fill_transaction_region(
     }:
         return False
     return bool(_has_transaction_context_shape(slots))
+
+
+def _router_location_slot_fill_incompatible_turn(routing_result: Any | None) -> bool:
+    if routing_result is None:
+        return False
+    candidates = {
+        str(getattr(routing_result, "intent", "") or "").strip(),
+        str(getattr(routing_result, "policy_intent", "") or "").strip(),
+        str(getattr(routing_result, "sub_intent", "") or "").strip(),
+    }
+    return bool(candidates & _SLOT_FILL_INCOMPATIBLE_CURRENT_TURN_INTENTS)
 
 
 def _has_transaction_context_shape(slots: ConversationSlots) -> bool:

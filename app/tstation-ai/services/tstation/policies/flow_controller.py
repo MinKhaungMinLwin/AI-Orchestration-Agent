@@ -1274,6 +1274,48 @@ def _current_turn_discovery_flow_context(
     }
 
 
+def _current_turn_price_coupon_flow_context(
+    *,
+    router_evidence: Mapping[str, Any],
+    existing_snapshot: Mapping[str, Any],
+) -> dict[str, Any]:
+    router_intent = str(router_evidence.get("intent") or "").strip()
+    policy_intent = str(router_evidence.get("policy_intent") or "").strip()
+    plan = _router_execution_plan(router_evidence)
+    if "price_or_coupon_check" not in {router_intent, policy_intent} and not any(
+        "price_or_coupon_check" in item for item in plan
+    ):
+        return {}
+    product = {
+        key: value
+        for key, value in {
+            "goods_no": existing_snapshot.get("goods_no"),
+            "product_name": existing_snapshot.get("product_name"),
+            "tire_model": existing_snapshot.get("tire_model"),
+            "pending_product_name": existing_snapshot.get("pending_product_name"),
+            "tire_size": existing_snapshot.get("tire_size"),
+            "ord_qty": existing_snapshot.get("ord_qty") or existing_snapshot.get("quantity"),
+        }.items()
+        if value not in (None, "", [], {})
+    }
+    return {
+        key: value
+        for key, value in {
+            "flow_type": "commerce",
+            "status": "active",
+            "flow_step": "summarize_price_coupon",
+            "product": product,
+            "intent": {
+                "sub_flow_type": "price_check",
+                "pending_intent": "price",
+                "goal_type": "price_or_coupon_check",
+            },
+            "source": "flow_controller:current_turn_price_coupon",
+        }.items()
+        if value not in (None, "", [], {})
+    }
+
+
 def _current_turn_support_intent(router_evidence: Mapping[str, Any], *, user_text: str = "") -> str:
     router_intent = str(router_evidence.get("intent") or "").strip()
     router_domain = str(router_evidence.get("domain") or "").strip()
@@ -1624,6 +1666,10 @@ def transition_current_flow(
         existing_snapshot=existing_snapshot,
         extracted_snapshot=extracted_snapshot,
     )
+    current_turn_price_coupon_flow_context = _current_turn_price_coupon_flow_context(
+        router_evidence=router_snapshot,
+        existing_snapshot=existing_snapshot,
+    )
     current_turn_support_flow_context = _current_turn_support_flow_context(router_evidence=router_snapshot, user_text=user_text)
     active_flow_context = (
         selected_product_flow_context
@@ -1634,6 +1680,7 @@ def transition_current_flow(
         or current_turn_reservation_management_flow_context
         or current_turn_store_search_flow_context
         or current_turn_discovery_flow_context
+        or current_turn_price_coupon_flow_context
         or resumed_active_flow_context
     )
     applied_reason = "metadata_only_shell"
@@ -1653,6 +1700,8 @@ def transition_current_flow(
         applied_reason = "current_turn_store_search_flow_state"
     elif current_turn_discovery_flow_context:
         applied_reason = "current_turn_discovery_flow_state"
+    elif current_turn_price_coupon_flow_context:
+        applied_reason = "current_turn_price_coupon_flow_state"
     elif resumed_active_flow_context:
         applied_reason = "dormant_flow_resume"
     current_turn_seed = _current_turn_flow_seed(router_snapshot)
@@ -1678,6 +1727,7 @@ def transition_current_flow(
         "current_turn_reservation_management_flow": current_turn_reservation_management_flow_context,
         "current_turn_store_search_flow": current_turn_store_search_flow_context,
         "current_turn_discovery_flow": current_turn_discovery_flow_context,
+        "current_turn_price_coupon_flow": current_turn_price_coupon_flow_context,
         "current_turn_support_flow": current_turn_support_flow_context,
         "dormant_resume_anchor": dormant_resume_anchor,
     }
@@ -1701,6 +1751,7 @@ def transition_current_flow(
         "current_turn_reservation_management_resolved": bool(current_turn_reservation_management_flow_context),
         "current_turn_store_search_resolved": bool(current_turn_store_search_flow_context),
         "current_turn_discovery_resolved": bool(current_turn_discovery_flow_context),
+        "current_turn_price_coupon_resolved": bool(current_turn_price_coupon_flow_context),
         "current_turn_support_resolved": bool(current_turn_support_flow_context),
         "dormant_resume_status": dormant_resume_result.status if dormant_resume_result is not None else "not_attempted",
         "dormant_resume_applied": bool(

@@ -806,6 +806,39 @@ def _contract_required_schedule_final_price_tool_input(
     return {"goods_no": goods_no}
 
 
+def _contract_required_price_or_coupon_final_price_tool_input(
+    turn_contract: TurnContract,
+    *,
+    merged_slots: ConversationSlots | None = None,
+) -> dict[str, Any] | None:
+    if str(turn_contract.domain or "").strip().lower() != PolicyDomain.TRANSACTION.value:
+        return None
+    if str(turn_contract.intent or "").strip() != "price_or_coupon_check":
+        return None
+    response_decision = turn_contract.response_decision or {}
+    response_metadata = response_decision.get("metadata") if isinstance(response_decision, Mapping) else {}
+    if not isinstance(response_metadata, Mapping):
+        response_metadata = {}
+    response_shape_key = str(response_metadata.get("response_shape_key") or "").strip()
+    if response_shape_key not in {"", "price_coupon_summary", "product_coupon_discount_amount"}:
+        return None
+    known_slots = dict(turn_contract.known_slots or {})
+    tool_args_patch = (
+        dict(turn_contract.tool_args_patch)
+        if isinstance(getattr(turn_contract, "tool_args_patch", None), Mapping)
+        else {}
+    )
+    goods_no = str(
+        tool_args_patch.get("goods_no")
+        or known_slots.get("goods_no")
+        or getattr(merged_slots, "goods_no", None)
+        or ""
+    ).strip()
+    if not goods_no:
+        return None
+    return {"goods_no": goods_no}
+
+
 def _contract_required_transaction_tool_input(
     *,
     turn_contract: TurnContract,
@@ -861,6 +894,12 @@ def _contract_required_transaction_tool_input(
             "혜택 적용 상품 조회 중...",
         )
     if preferred_tool == "get_final_price_tool":
+        price_or_coupon_input = _contract_required_price_or_coupon_final_price_tool_input(
+            turn_contract,
+            merged_slots=merged_slots,
+        )
+        if price_or_coupon_input:
+            return price_or_coupon_input, "turn_contract_price_or_coupon_check", "할인/가격 확인 중..."
         final_price_input = _contract_required_schedule_final_price_tool_input(
             turn_contract,
             merged_slots=merged_slots,
@@ -1176,7 +1215,7 @@ def _contract_required_tool_candidate(
         and _is_contract_required_transaction_store_preview(turn_contract, merged_slots=merged_slots)
         or (
             preferred_tool == "get_final_price_tool"
-            and tool_input_source == "turn_contract_schedule_final_price"
+            and tool_input_source in {"turn_contract_schedule_final_price", "turn_contract_price_or_coupon_check"}
         )
     ):
         return None
