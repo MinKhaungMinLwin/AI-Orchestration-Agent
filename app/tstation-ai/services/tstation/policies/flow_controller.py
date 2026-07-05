@@ -1,4 +1,14 @@
-"""Shared purchase/order flow-step resolution for transaction policy layers."""
+"""Current-turn flow event controller for transaction policy layers.
+
+Scope:
+- Interprets current-turn router evidence, UI actions, and extracted slots into FlowState deltas.
+- Preserves active product/store/schedule/payment context only when compatible with the current turn.
+- Handles pivot/resume/dormant flow wiring before state is merged.
+
+Out of scope:
+- Owning canonical flow progress decisions. Missing slots, next_tool, next_template, and target_action should come from
+  flow_state.evaluate_flow_progress() whenever possible.
+"""
 
 from __future__ import annotations
 

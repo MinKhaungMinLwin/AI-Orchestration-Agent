@@ -1,3 +1,14 @@
+"""Canonical commerce flow state and progress evaluation.
+
+Scope:
+- Owns persisted flow sections: product, vehicle, store, schedule, payment, intent, candidates, and dormant flows.
+- Merges current-turn deltas into FlowState and clears dependent stale state when product/quantity/store/schedule changes.
+- Computes missing slots and the next action/tool/template via evaluate_flow_progress().
+
+Out of scope:
+- Interpreting raw user/UI events. flow_controller.py turns those events into deltas before they are merged here.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
