@@ -10,7 +10,13 @@ from typing import Any, Mapping
 
 from services.tstation.common.cta_urls import CTAUrls
 from services.tstation.policies.discovery_intent_policy import normalize_tire_size
-from services.tstation.policies.flow_state import canonical_flow_type, commerce_sub_flow_type, resume_dormant_flow
+from services.tstation.policies.flow_state import (
+    FlowState as CanonicalFlowState,
+    canonical_flow_type,
+    commerce_sub_flow_type,
+    evaluate_flow_progress,
+    resume_dormant_flow,
+)
 from services.tstation.policies.price_basis_policy import has_price_basis
 from services.tstation.policies.reservation_template_policy import build_datepick_from_preview_payload
 from services.tstation.policies.response_decision import TemplateName
@@ -77,6 +83,202 @@ class FlowTransition:
             "context_evidence": dict(self.context_evidence),
             "metadata": dict(self.metadata),
         }
+
+
+@dataclass(frozen=True)
+class FlowCompatibilityDecision:
+    action: str
+    reason: str
+    expected_slot: str = "none"
+    proposed_slot: str = "none"
+    current_intent: str = "none"
+    active_flow_type: str = "none"
+
+    @property
+    def compatible(self) -> bool:
+        return self.action == "continue"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "action": self.action,
+            "reason": self.reason,
+            "expected_slot": self.expected_slot,
+            "proposed_slot": self.proposed_slot,
+            "current_intent": self.current_intent,
+            "active_flow_type": self.active_flow_type,
+            "compatible": self.compatible,
+        }
+
+
+_INFORMATIONAL_PIVOT_INTENTS = frozenset({
+    "price_or_coupon_check",
+    "product_coupon_eligibility",
+    "product_coupon_discount_amount",
+    "coupon_usage_policy",
+    "coupon_registration_policy",
+    "owned_coupon_lookup",
+    "reservation_status_lookup",
+    "reservation_store_info_lookup",
+    "order_cancel_status_lookup",
+    "order_arrival_status_lookup",
+})
+_FLOW_SLOT_COMPATIBLE_INTENTS = frozenset({
+    "quick_order_reservation",
+    "quick_order_reservation_continue",
+    "quick_order_reservation_slot_fill_schedule",
+    "quick_order_execute",
+    "stock_store_search",
+    "store_inventory_check",
+    "store_search",
+    "open_store_search",
+    "store_schedule",
+    "selected_store_schedule",
+})
+_EXPECTED_SLOT_ALIASES = {
+    "shop_id": "store",
+    "booking_datetime": "schedule",
+    "ord_qty": "quantity",
+    "quantity": "quantity",
+    "goods_no": "product",
+    "product_name": "product",
+    "tire_size": "tire_size",
+}
+
+
+def evaluate_flow_compatibility(
+    *,
+    active_flow: Mapping[str, Any] | None,
+    turn_contract: Any | None = None,
+    proposed_slot_patch: Mapping[str, Any] | None = None,
+    router_evidence: Mapping[str, Any] | None = None,
+    user_text: str = "",
+) -> FlowCompatibilityDecision:
+    """Authorize current-turn slot promotion against the active FlowState."""
+    del user_text
+    active_state = CanonicalFlowState.from_active_flow_context(active_flow)
+    progress = evaluate_flow_progress(active_state)
+    active_flow_type = commerce_sub_flow_type(active_state.flow_type, active_state.intent) or active_state.flow_type or "none"
+    proposed_slot = _flow_compatibility_proposed_slot(proposed_slot_patch)
+    expected_slot = _flow_compatibility_expected_slot(progress)
+    current_intent = _flow_compatibility_current_intent(turn_contract=turn_contract, router_evidence=router_evidence)
+    if active_state.status not in {"active", "resumed"} or not active_flow_type:
+        return FlowCompatibilityDecision(
+            action="continue",
+            reason="no_active_flow",
+            expected_slot=expected_slot,
+            proposed_slot=proposed_slot,
+            current_intent=current_intent,
+            active_flow_type=active_flow_type,
+        )
+    if current_intent in _INFORMATIONAL_PIVOT_INTENTS:
+        return FlowCompatibilityDecision(
+            action="pivot",
+            reason="current_turn_informational_intent",
+            expected_slot=expected_slot,
+            proposed_slot=proposed_slot,
+            current_intent=current_intent,
+            active_flow_type=active_flow_type,
+        )
+    if proposed_slot == "none":
+        return FlowCompatibilityDecision(
+            action="continue",
+            reason="no_slot_patch",
+            expected_slot=expected_slot,
+            proposed_slot=proposed_slot,
+            current_intent=current_intent,
+            active_flow_type=active_flow_type,
+        )
+    if current_intent and current_intent not in _FLOW_SLOT_COMPATIBLE_INTENTS:
+        return FlowCompatibilityDecision(
+            action="reject_patch",
+            reason="current_turn_intent_not_slot_fill_compatible",
+            expected_slot=expected_slot,
+            proposed_slot=proposed_slot,
+            current_intent=current_intent,
+            active_flow_type=active_flow_type,
+        )
+    if expected_slot in {"none", proposed_slot}:
+        return FlowCompatibilityDecision(
+            action="continue",
+            reason="expected_slot_matches",
+            expected_slot=expected_slot,
+            proposed_slot=proposed_slot,
+            current_intent=current_intent,
+            active_flow_type=active_flow_type,
+        )
+    if expected_slot == "store" and proposed_slot == "region":
+        return FlowCompatibilityDecision(
+            action="continue",
+            reason="region_can_resolve_store",
+            expected_slot=expected_slot,
+            proposed_slot=proposed_slot,
+            current_intent=current_intent,
+            active_flow_type=active_flow_type,
+        )
+    return FlowCompatibilityDecision(
+        action="reject_patch",
+        reason="slot_patch_does_not_match_expected_slot",
+        expected_slot=expected_slot,
+        proposed_slot=proposed_slot,
+        current_intent=current_intent,
+        active_flow_type=active_flow_type,
+    )
+
+
+def _flow_compatibility_current_intent(
+    *,
+    turn_contract: Any | None,
+    router_evidence: Mapping[str, Any] | None,
+) -> str:
+    for value in (
+        getattr(turn_contract, "intent", None),
+        (router_evidence or {}).get("intent") if isinstance(router_evidence, Mapping) else None,
+        (router_evidence or {}).get("policy_intent") if isinstance(router_evidence, Mapping) else None,
+        (router_evidence or {}).get("sub_intent") if isinstance(router_evidence, Mapping) else None,
+    ):
+        text = str(value or "").strip()
+        if text:
+            return text
+    return "none"
+
+
+def _flow_compatibility_expected_slot(progress: Mapping[str, Any]) -> str:
+    missing_slots = [str(slot or "").strip() for slot in progress.get("missing_slots") or () if str(slot or "").strip()]
+    for slot in missing_slots:
+        normalized = _EXPECTED_SLOT_ALIASES.get(slot, slot)
+        if normalized:
+            return normalized
+    current_step = str(progress.get("current_step") or "").strip()
+    if current_step in {"resolve_store", "ask_store"}:
+        return "store"
+    if current_step in {"resolve_schedule", "show_schedule"}:
+        return "schedule"
+    if current_step == "ask_quantity":
+        return "quantity"
+    if current_step in {"resolve_product", "ask_product"}:
+        return "product"
+    return "none"
+
+
+def _flow_compatibility_proposed_slot(proposed_slot_patch: Mapping[str, Any] | None) -> str:
+    patch = {
+        str(key): value
+        for key, value in dict(proposed_slot_patch or {}).items()
+        if value not in (None, "", [], {})
+    }
+    if {"requested_cal_day", "rsv_hour"} <= set(patch):
+        return "schedule"
+    if any(key in patch for key in ("shop_id", "shop_name", "store_name")):
+        return "store"
+    if "region" in patch or "place_query" in patch:
+        return "region"
+    if "ord_qty" in patch or "quantity" in patch:
+        return "quantity"
+    if any(key in patch for key in ("goods_no", "product_name", "pending_product_name", "tire_model")):
+        return "product"
+    if "tire_size" in patch:
+        return "tire_size"
+    return "none"
 
 
 _PURCHASE_FLOW_ID = "purchase_order"

@@ -10,26 +10,13 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 from schemas.tstation.slots import ConversationSlots
-from services.tstation.policies.flow_controller import resolve_purchase_order_flow
+from services.tstation.policies.flow_controller import evaluate_flow_compatibility, resolve_purchase_order_flow
 from services.tstation.policies.flow_state import flow_state_values_from_slot_values
 from services.tstation.policies.price_basis_policy import PRICE_BASIS_FIELDS
 from services.tstation.policies.resolved_context import canonical_context_from_template_boundary
 from services.tstation.policies.slot_fill_policy import expected_slot_fill_precheck
 
 _PRE_ROUTER_SLOT_FILL_ENABLED = False
-
-_SLOT_FILL_INCOMPATIBLE_CURRENT_TURN_INTENTS = frozenset({
-    "price_or_coupon_check",
-    "product_coupon_eligibility",
-    "product_coupon_discount_amount",
-    "coupon_usage_policy",
-    "coupon_registration_policy",
-    "owned_coupon_lookup",
-    "reservation_status_lookup",
-    "reservation_store_info_lookup",
-    "order_cancel_status_lookup",
-    "order_arrival_status_lookup",
-})
 
 _PURCHASE_RECONCILIATION_SLOT_FIELDS = (
     "goods_no",
@@ -135,16 +122,6 @@ def apply_router_location_slot_fill(
     router_context: Mapping[str, Any],
 ) -> RouterLocationSlotFillDecision:
     """Promote high-confidence router location evidence into active transaction slots."""
-    if _router_location_slot_fill_incompatible_turn(routing_result):
-        trace = {
-            "router_location_slot_fill": {
-                "matched": False,
-                "reason": "current_turn_intent_incompatible",
-                "intent": str(getattr(routing_result, "intent", "") or ""),
-                "policy_intent": str(getattr(routing_result, "policy_intent", "") or ""),
-            }
-        }
-        return RouterLocationSlotFillDecision(slots=slots, trace_metadata=trace)
     location_patch = _router_location_slot_patch(
         slots=slots,
         routing_result=routing_result,
@@ -154,6 +131,23 @@ def apply_router_location_slot_fill(
         return RouterLocationSlotFillDecision(
             slots=slots,
             trace_metadata={"router_location_slot_fill": {"matched": False}},
+        )
+    compatibility = evaluate_flow_compatibility(
+        active_flow=_active_flow_context_from_slots(slots),
+        proposed_slot_patch=location_patch,
+        router_evidence=_routing_result_snapshot(routing_result),
+    )
+    if not compatibility.compatible:
+        return RouterLocationSlotFillDecision(
+            slots=slots,
+            trace_metadata={
+                "router_location_slot_fill": {
+                    "matched": False,
+                    "reason": "flow_compatibility_blocked",
+                    "slot_patch": dict(location_patch),
+                    "compatibility": compatibility.to_dict(),
+                }
+            },
         )
 
     updated_slots = slots.apply_runtime_values(location_patch, source="router_location_slot_fill")
@@ -362,15 +356,25 @@ def _router_location_can_fill_transaction_region(
     return bool(_has_transaction_context_shape(slots))
 
 
-def _router_location_slot_fill_incompatible_turn(routing_result: Any | None) -> bool:
+def _active_flow_context_from_slots(slots: ConversationSlots) -> dict[str, Any]:
+    availability_context = getattr(slots, "availability_context", None)
+    if isinstance(availability_context, Mapping) and isinstance(availability_context.get("active_flow_context"), Mapping):
+        return dict(availability_context["active_flow_context"])
+    return {}
+
+
+def _routing_result_snapshot(routing_result: Any | None) -> dict[str, Any]:
     if routing_result is None:
-        return False
-    candidates = {
-        str(getattr(routing_result, "intent", "") or "").strip(),
-        str(getattr(routing_result, "policy_intent", "") or "").strip(),
-        str(getattr(routing_result, "sub_intent", "") or "").strip(),
+        return {}
+    if isinstance(routing_result, Mapping):
+        return dict(routing_result)
+    if hasattr(routing_result, "model_dump"):
+        return dict(routing_result.model_dump(exclude_none=True))
+    return {
+        key: value
+        for key in ("intent", "policy_intent", "sub_intent", "domain", "execution_plan")
+        if (value := getattr(routing_result, key, None)) not in (None, "", [], {})
     }
-    return bool(candidates & _SLOT_FILL_INCOMPATIBLE_CURRENT_TURN_INTENTS)
 
 
 def _has_transaction_context_shape(slots: ConversationSlots) -> bool:
