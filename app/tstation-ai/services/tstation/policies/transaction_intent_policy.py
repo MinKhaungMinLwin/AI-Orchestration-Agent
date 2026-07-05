@@ -7,6 +7,7 @@ import datetime
 from typing import Any, Mapping
 
 from services.tstation.policies.intent_frame import IntentFrame, PolicyDomain
+from services.tstation.policies.discovery_intent_policy import extract_product_names
 from services.tstation.policies.flow_controller import resolve_purchase_order_flow
 from services.tstation.policies.flow_state import flow_state_values_from_slot_values
 from services.tstation.policies.policy_text_matchers import is_general_card_cancel_timing_policy_query
@@ -1543,6 +1544,10 @@ def build_transaction_intent_frame(
         intent = "stock_store_search"
         sub_intent = "reservation"
         entities["stock_check_mode"] = "preview"
+    elif current_purchase and has_product and tire_size and stored_quantity:
+        intent = "quick_order_reservation"
+        sub_intent = "cart" if current_cart else "reservation"
+        entities["stock_check_mode"] = "preview"
     elif _PRICE_OR_COUPON_RE.search(text):
         intent = "price_or_coupon_check"
         sub_intent = "coupon" if "쿠폰" in text else "price"
@@ -2973,6 +2978,9 @@ def _extract_store_name(text: str) -> str | None:
 
 
 def _extract_product_name(text: str) -> str | None:
+    product_names = extract_product_names(text or "")
+    if product_names:
+        return product_names[0]
     normalized = (text or "").casefold()
     for needle, display_name in _PRODUCT_ALIASES:
         if needle.casefold() in normalized:

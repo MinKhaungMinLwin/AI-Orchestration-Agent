@@ -1176,6 +1176,14 @@ def build_turn_contract(
         known_slots["goal_type"] = intent
     if planner_intent in _QUICK_ORDER_EXECUTE_PLANNER_INTENTS and _has_quick_order_execute_slots(known_slots):
         intent = "quick_order_execute"
+    if (
+        code_intent == "quick_order_reservation"
+        and known_slots.get("product_name")
+        and known_slots.get("tire_size")
+        and (known_slots.get("ord_qty") or known_slots.get("quantity"))
+    ):
+        domain = "transaction"
+        intent = "quick_order_reservation"
     if code_intent == "order_cancel_status_lookup":
         intent = "order_cancel_status_lookup"
     if router_wins_intent:

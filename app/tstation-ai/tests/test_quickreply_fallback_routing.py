@@ -19341,6 +19341,47 @@ def test_preorder_event_uses_selected_vehicle_name_from_pending_context() -> Non
     assert preorder_event is not None
     assert preorder_event["data"]["orderInfo"]["carInfo"] == "Sorento (29조3344)"
 
+
+def test_preorder_event_prefers_canonical_product_name_over_freeform_model_text() -> None:
+    preorder_event = build_preorder_event(
+        SimpleNamespace(
+            domain="transaction",
+            response_decision={"template": "preOrder", "metadata": {"response_shape_key": "reservation_confirmation_ready"}},
+            flow_step="build_preorder",
+            action_mode="purchase_continuation",
+            intent="quick_order_reservation",
+        ),
+        {
+            "goods_no": "G000000309856",
+            "product_name": "Ventus S2 AS",
+            "tire_model": "Ventus S2 AS coupon applied request",
+            "pending_product_name": "Ventus S2 AS coupon applied request",
+            "tire_size": "275/35R20",
+            "ord_qty": 4,
+            "shop_id": "F00721",
+            "shop_name": "T-Station Pangyo Branch",
+            "requested_cal_day": "20260709",
+            "rsv_hour": "17",
+            "payment_amount": 955600,
+        },
+    )
+
+    assert preorder_event is not None
+    assert preorder_event["data"]["orderInfo"]["product"] == "Ventus S2 AS 275/35R20"
+    assert preorder_event["data"]["metadata"]["productName"] == "Ventus S2 AS"
+
+
+def test_purchase_product_size_quantity_with_coupon_phrase_stays_purchase_flow() -> None:
+    frame = build_transaction_intent_frame(
+        "벤투스 S2 AS 하려고 하는데 쿠폰 적용 2753520 4개 티스테이션 판교점에서 구매하고 싶어",
+        known_slots={},
+    )
+
+    assert frame.intent == "quick_order_reservation"
+    assert frame.known_slots["product_name"] == "Ventus S2 AS"
+    assert frame.known_slots["tire_size"] == "275/35R20"
+    assert frame.known_slots["ord_qty"] == 4
+
 def test_preorder_event_does_not_multiply_preview_total_amount_again() -> None:
     preorder_event = build_preorder_event(
         SimpleNamespace(
