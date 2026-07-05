@@ -445,6 +445,8 @@ def _is_contract_required_selected_store_schedule(
         "stock_store_search_slot_fill_store",
         "store_schedule",
         "selected_store_schedule",
+        "quick_order_reservation",
+        "quick_order_reservation_slot_fill_quantity",
     }:
         return False
     response_decision = turn_contract.response_decision or {}
@@ -461,6 +463,19 @@ def _is_contract_required_selected_store_schedule(
         return False
     if tuple(turn_contract.blocking_required_slots or ()):
         return False
+    if contract_intent in {"quick_order_reservation", "quick_order_reservation_slot_fill_quantity"}:
+        known_slots = _contract_read_through_known_slots(
+            turn_contract,
+            merged_slots,
+            allowed_flow_types=frozenset({"purchase"}),
+        )
+        return bool(
+            known_slots.get("shop_id")
+            and known_slots.get("goods_no")
+            and known_slots.get("tire_size")
+            and (known_slots.get("ord_qty") or known_slots.get("quantity"))
+        )
+
     selected_store_slots = _selected_store_slots_from_merged_slots(
         merged_slots,
         allowed_flow_types=frozenset({"stock", "store_schedule"}),
@@ -498,6 +513,17 @@ def _contract_required_selected_store_schedule_tool_input(
     shop_id = str(known_slots.get("shop_id") or "").strip()
     schedule_mode = str(known_slots.get("schedule_mode") or known_slots.get("inventory_mode") or "").strip()
     if str(turn_contract.intent or "").strip() in {"store_schedule", "selected_store_schedule"}:
+        schedule_mode = schedule_mode or "general"
+    if str(turn_contract.intent or "").strip() in {
+        "quick_order_reservation",
+        "quick_order_reservation_slot_fill_quantity",
+    }:
+        known_slots = _contract_read_through_known_slots(
+            turn_contract,
+            merged_slots,
+            allowed_flow_types=frozenset({"purchase"}),
+        )
+        shop_id = str(known_slots.get("shop_id") or shop_id).strip()
         schedule_mode = schedule_mode or "general"
     if not shop_id or not schedule_mode:
         return {}
