@@ -13,6 +13,7 @@ from services.tstation.policies.transaction_response_policy import decide_transa
 from services.tstation.policies.support_response_policy import decide_support_response
 from services.tstation.policies.turn_contract import (
     TurnContract,
+    _normalize_plan_intent,
     build_required_slot_clarification_event,
     build_response_policy_guard_event,
     build_turn_contract,
@@ -2095,7 +2096,7 @@ def test_event_anchored_product_lookup_stays_relation_contract(execution_plan: l
     contract = _discovery_event_contract("반짝블랙딜에 적용 가능한 상품이 뭐야", execution_plan)
 
     assert contract.intent == "event_applicable_products_lookup"
-    assert contract.preferred_tool == "get_events_tool"
+    assert contract.preferred_tool == "search_benefit_applicable_products_tool"
 
 
 def test_generic_event_list_stays_benefit_list_contract() -> None:
@@ -2105,3 +2106,30 @@ def test_generic_event_list_stays_benefit_list_contract() -> None:
 
     assert contract.intent == "benefit_event_list_lookup"
     assert contract.preferred_tool == "get_benefit_event_deal_list_tool"
+
+
+@pytest.mark.parametrize(
+    "plan_token",
+    (
+        "discovery:benefit_event_applicable_products_lookup",
+        "discovery:benefit_applicable_products_lookup",
+        "transaction:applicable_products_lookup",
+        "discovery:event_applicable_products_lookup",
+    ),
+)
+def test_router_followup_applicable_products_tokens_route_to_benefit_products(plan_token: str) -> None:
+    # Task 5: the router carry-over can emit varied "<benefit/event> applicable products"
+    # plan tokens for an elliptical promotion follow-up. Every variant must resolve to the
+    # benefit-applicable-products (direction Y) contract, not degrade to product_event (X).
+    contract = _discovery_event_contract("1월 키너지 EX 특가 프로모션은?", [plan_token])
+
+    assert contract.intent == "event_applicable_products_lookup"
+    assert contract.preferred_tool == "search_benefit_applicable_products_tool"
+
+
+def test_coupon_applicable_products_intent_not_swallowed_by_benefit_normalization() -> None:
+    # Boundary: coupon-specific applicable-products must keep its own intent and must not be
+    # collapsed into the benefit/event family by the Task 5 normalization rule.
+    assert _normalize_plan_intent("coupon_applicable_products") == "coupon_applicable_products"
+    # Direction X (product -> events) uses "applicable_events" and must be untouched.
+    assert _normalize_plan_intent("product_applicable_events") == "product_applicable_events"

@@ -39,6 +39,14 @@ def _fake_transaction_tools_module(monkeypatch):
     return transaction_tools
 
 
+def _fake_discovery_tools_module(monkeypatch):
+    discovery_tools = SimpleNamespace(
+        search_benefit_applicable_products_tool=SimpleNamespace(invoke=lambda tool_input: {}),
+    )
+    monkeypatch.setitem(sys.modules, "services.tstation.agents.b_discovery_agent.tools", discovery_tools)
+    return discovery_tools
+
+
 def test_contract_executor_and_base_agent_import_without_chat_module() -> None:
     result = subprocess.run(
         [
@@ -281,6 +289,96 @@ def test_coupon_applicable_products_required_tool_uses_discovery_source_domain()
     assert candidate.tool_name == "search_benefit_applicable_products_tool"
     assert candidate.tool_input == {"query": "쿠폰 뱃지 테스트", "lang_cd": "ko"}
     assert candidate.source_domain == "discovery"
+
+
+def test_direct_path_allows_event_applicable_products_followup_with_low_router_confidence() -> None:
+    contract = TurnContract(
+        domain="discovery",
+        intent="event_applicable_products_lookup",
+        known_slots={"benefit_applicable_products_query": "1월 키너지 EX 특가 프로모션"},
+        allowed_tools=("search_benefit_applicable_products_tool",),
+        forbidden_tools=("get_events_tool", "get_event_applicable_products_tool", "search_product_summary_tool"),
+        preferred_tool="search_benefit_applicable_products_tool",
+        tool_args_patch={"query": "1월 키너지 EX 특가 프로모션", "lang_cd": "ko"},
+        response_decision={"template": "quickReply", "metadata": {"response_shape_key": "event_applicable_products_lookup"}},
+    )
+
+    decision = evaluate_contract_direct_path(
+        turn_contract=contract,
+        router_evidence=_evidence(primary_action="lookup", confidence=0.0, domain="discovery"),
+        user_text="1월 키너지 EX 특가 프로모션은?",
+    )
+
+    assert decision.eligible is True
+    assert decision.reason == "event_applicable_products_lookup"
+    assert decision.tool == "search_benefit_applicable_products_tool"
+    assert decision.template == "quickReply"
+
+
+def test_contract_recovery_executes_event_applicable_products_direct_tool(monkeypatch) -> None:
+    from services.tstation.executors import contract_required_tool_executor as executor
+
+    discovery_tools = _fake_discovery_tools_module(monkeypatch)
+    captured_input: dict = {}
+
+    def fake_benefit_applicable_products_invoke(tool_input: dict):
+        captured_input.update(tool_input)
+        return {
+            "status": "success",
+            "data": {
+                "query": tool_input["query"],
+                "matches": [
+                    {
+                        "source_type": "event",
+                        "source_name": "1월 키너지 EX 특가 프로모션",
+                        "total_products": 1,
+                        "products": [{"goods_nm": "키너지 EX"}],
+                        "stores": [],
+                    }
+                ],
+            },
+        }
+
+    async def fake_to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    monkeypatch.setattr(
+        discovery_tools.search_benefit_applicable_products_tool,
+        "invoke",
+        fake_benefit_applicable_products_invoke,
+    )
+    monkeypatch.setattr(executor.asyncio, "to_thread", fake_to_thread)
+
+    recovery = asyncio.run(
+        _recover_contract_required_tool(
+            turn_contract=TurnContract(
+                domain="discovery",
+                intent="event_applicable_products_lookup",
+                known_slots={"benefit_applicable_products_query": "1월 키너지 EX 특가 프로모션"},
+                allowed_tools=("search_benefit_applicable_products_tool",),
+                forbidden_tools=("get_events_tool", "get_event_applicable_products_tool", "search_product_summary_tool"),
+                preferred_tool="search_benefit_applicable_products_tool",
+                tool_args_patch={"query": "1월 키너지 EX 특가 프로모션", "lang_cd": "ko"},
+                response_decision={
+                    "template": "quickReply",
+                    "metadata": {"response_shape_key": "event_applicable_products_lookup"},
+                },
+            ),
+            user_text="1월 키너지 EX 특가 프로모션은?",
+            merged_slots=ConversationSlots(),
+            blocked_fast_path_source="contract_direct_executor:event_applicable_products_lookup",
+        )
+    )
+
+    assert recovery is not None
+    assert recovery["tool_name"] == "search_benefit_applicable_products_tool"
+    assert captured_input == {"query": "1월 키너지 EX 특가 프로모션", "lang_cd": "ko"}
+    assert recovery["event"]["template"] == "quickReply"
+    assert recovery["event"]["source_domain"] == "discovery"
+    assert recovery["event"]["called_tools"] == ["search_benefit_applicable_products_tool"]
+    assert recovery["event"]["contract_intent"] == "event_applicable_products_lookup"
+    assert recovery["event"]["recovered_tool"] == "search_benefit_applicable_products_tool"
+    assert "키너지 EX" in recovery["event"]["data"]["assistantResponse"]
 
 
 def test_direct_path_allows_location_store_search_and_coupon_lookup() -> None:
