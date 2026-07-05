@@ -42,6 +42,30 @@ from services.tstation.policies.turn_contract import TurnContract, violates_resp
 logger = logging.getLogger(__name__)
 
 
+def _price_summary_context(
+    *,
+    turn_contract: TurnContract,
+    merged_slots: ConversationSlots | None,
+) -> dict[str, Any]:
+    known_slots = dict(getattr(turn_contract, "known_slots", {}) or {})
+    values: dict[str, Any] = {}
+    for key in (
+        "goods_no",
+        "product_name",
+        "tire_model",
+        "pending_product_name",
+        "tire_size",
+        "ord_qty",
+        "quantity",
+    ):
+        value = known_slots.get(key)
+        if value in (None, "", [], {}) and merged_slots is not None:
+            value = getattr(merged_slots, key, None)
+        if value not in (None, "", [], {}):
+            values[key] = value
+    return values
+
+
 def _enrich_best_selling_result_for_product_cards(tool_result: dict) -> dict:
     data = tool_result.get("data") if isinstance(tool_result, dict) else None
     if not isinstance(data, dict) or not isinstance(data.get("items"), list):
@@ -839,7 +863,7 @@ async def recover_blocked_fast_path_to_contract_tool(
     chained_recovery_reason = ""
 
     if execution_domain in {PolicyDomain.DISCOVERY.value, PolicyDomain.TRANSACTION.value}:
-        from services.tstation.template_mapper import try_build_template
+        from services.tstation.template_mapper import current_price_summary_context, try_build_template
 
         if execution_domain == PolicyDomain.DISCOVERY.value:
             from services.tstation.agents.b_discovery_agent import tools as discovery_tools
@@ -1035,7 +1059,16 @@ async def recover_blocked_fast_path_to_contract_tool(
                 "args": chained_tool_input,
                 "data": chained_tool_result,
             })
-        mapped_event = try_build_template(tool_data_list, assistant_text)
+        price_context_token = None
+        if preferred_tool == "get_final_price_tool" and contract_intent == "price_or_coupon_check":
+            price_context_token = current_price_summary_context.set(
+                _price_summary_context(turn_contract=turn_contract, merged_slots=merged_slots)
+            )
+        try:
+            mapped_event = try_build_template(tool_data_list, assistant_text)
+        finally:
+            if price_context_token is not None:
+                current_price_summary_context.reset(price_context_token)
         if not isinstance(mapped_event, dict) and preferred_tool == "get_my_reservations_tool":
             if contract_intent == "reservation_store_info_lookup":
                 reservation_row, match_reason = select_reservation_store_row(user_text, tool_result)

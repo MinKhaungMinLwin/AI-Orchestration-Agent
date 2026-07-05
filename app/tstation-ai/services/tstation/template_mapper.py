@@ -79,6 +79,9 @@ current_return_visit_store_flow: contextvars.ContextVar[bool] = contextvars.Cont
 current_excluded_store_ids: contextvars.ContextVar[set[str]] = contextvars.ContextVar(
     "current_excluded_store_ids", default=set()
 )
+current_price_summary_context: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar(
+    "current_price_summary_context", default={}
+)
 
 # True when the current turn asks whether a store is open/closed or bookable on
 # a specific date. In that case a single-day `get_store_detail_tool` result
@@ -3723,14 +3726,30 @@ def _map_price_or_coupon_summary(tool_data_list: list[dict], assistant_text: str
         row = items[0]
 
     args = _tool_args(entry)
+    context = current_price_summary_context.get() or {}
     product_name = (
         _get_str(args, "product_name", "productName")
+        or _get_str(context, "product_name", "productName", "tire_model", "pending_product_name")
         or _get_str(row, "goods_nm", "product_name", "productName", "title")
         or "해당 상품"
     )
-    tire_size = _get_str(args, "tire_size", "tireSize") or _get_str(row, "tire_size", "tireSize")
+    tire_size = (
+        _get_str(args, "tire_size", "tireSize")
+        or _get_str(context, "tire_size", "tireSize")
+        or _get_str(row, "tire_size", "tireSize")
+    )
     try:
-        quantity = max(1, int(args.get("ord_qty") or args.get("quantity") or row.get("ord_qty") or 1))
+        quantity = max(
+            1,
+            int(
+                args.get("ord_qty")
+                or args.get("quantity")
+                or context.get("ord_qty")
+                or context.get("quantity")
+                or row.get("ord_qty")
+                or 1
+            ),
+        )
     except (TypeError, ValueError):
         quantity = 1
 
