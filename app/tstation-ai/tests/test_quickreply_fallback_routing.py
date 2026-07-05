@@ -43999,6 +43999,44 @@ def test_response_policy_generic_fallback_names_missing_information() -> None:
     assert event["data"]["metadata"]["missingSlots"] == ["booking_datetime"]
 
 
+def test_response_policy_guard_does_not_invent_product_missing_slot_when_next_tool_is_ready() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="quick_order_reservation",
+        known_slots={
+            "goods_no": "G000000310126",
+            "product_name": "벤투스 S2 AS",
+            "tire_size": "245/45R19",
+            "ord_qty": 2,
+            "shop_name": "티스테이션 분당정자점",
+            "region": "분당",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        allowed_tools=("transaction_store_preview_tool",),
+        preferred_tool="transaction_store_preview_tool",
+        response_decision={
+            "template": "location",
+            "metadata": {
+                "response_shape_key": "reservation_store_candidates",
+                "flow_step": "resolve_store",
+                "missing_slots": [],
+            },
+            "forbidden_behaviors": ["unmapped_policy_violation"],
+        },
+        action_mode="purchase_continuation",
+        context_state="resumed",
+        flow_step="resolve_store",
+    )
+
+    event = build_response_policy_guard_event(contract)
+
+    assert event["assistant_response_source"] == "code_turn_contract_response_policy_guard"
+    assert "부족한 정보는 상품입니다" not in event["data"]["assistantResponse"]
+    assert "필요한 정보는 확인되어 있어요" in event["data"]["assistantResponse"]
+    assert event["data"]["metadata"]["missingSlots"] == []
+
+
 def test_unknown_store_service_policy_contract_blocks_datepick_and_schedule_style_reply() -> None:
     contract = build_turn_contract(
         user_text="튜닝도 해줘?",

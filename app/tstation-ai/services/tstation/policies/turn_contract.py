@@ -2631,13 +2631,20 @@ def build_response_policy_guard_event(contract: TurnContract) -> dict[str, Any]:
             {"label": "다른 매장 찾기", "domain": "TRANSACTION"},
         ]
     else:
-        missing_slots = _missing_slots_for_action_prompt(contract) or ("product",)
-        missing_summary = _missing_slot_summary_text(missing_slots)
-        message = (
-            "현재 확인된 정보만으로 바로 진행하기 어려워요. "
-            f"부족한 정보는 {missing_summary}입니다. 필요한 정보를 먼저 확인한 뒤 이어서 도와드릴게요."
-        )
-        quick_replies = _clarification_chips(missing_slots)
+        missing_slots = _missing_slots_for_action_prompt(contract)
+        if missing_slots:
+            missing_summary = _missing_slot_summary_text(missing_slots)
+            message = (
+                "현재 확인된 정보만으로 바로 진행하기 어려워요. "
+                f"부족한 정보는 {missing_summary}입니다. 필요한 정보를 먼저 확인한 뒤 이어서 도와드릴게요."
+            )
+            quick_replies = _clarification_chips(missing_slots)
+        else:
+            message = "필요한 정보는 확인되어 있어요. 조건을 다시 조회한 뒤 이어서 진행할게요."
+            quick_replies = [
+                {"label": "다시 조회", "domain": "TRANSACTION"},
+                {"label": "처음부터 다시", "domain": "LEADING"},
+            ]
 
     return _annotate_contract_guard_event({
         "type": "data",
