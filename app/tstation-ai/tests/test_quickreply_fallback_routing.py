@@ -36199,6 +36199,23 @@ def test_has_location_source_accepts_browser_location_without_region() -> None:
     assert has_location_source({"region": "구매하기"}) is False
 
 
+def test_request_user_location_slot_patch_promotes_browser_location_to_slots() -> None:
+    patch = chat_module._request_user_location_slot_patch(
+        {"location": {"xpos": 127.12, "ypos": 37.39}},
+    )
+    slots = ConversationSlots(
+        goods_no="G000000317735",
+        tire_size="225/45R17",
+        ord_qty=4,
+        pending_intent="order",
+        goal_type="place_order",
+    ).apply_runtime_values(patch, source="request_user_location")
+
+    assert slots.user_xpos == 127.12
+    assert slots.user_ypos == 37.39
+    assert has_location_source(slots.model_dump()) is True
+
+
 def test_purchase_flow_ignores_invalid_action_label_region() -> None:
     flow_state = resolve_purchase_order_flow(
         intent="quick_order_reservation",

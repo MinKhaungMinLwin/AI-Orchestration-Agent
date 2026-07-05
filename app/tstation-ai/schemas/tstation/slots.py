@@ -163,6 +163,8 @@ class ConversationSlots(BaseModel):
     ord_qty: Optional[int] = None        # e.g. 4
     shop_id: Optional[str] = None        # store code
     shop_name: Optional[str] = None      # e.g. "한남점"
+    user_xpos: Optional[float] = None    # browser/user longitude for nearby store search
+    user_ypos: Optional[float] = None    # browser/user latitude for nearby store search
     car_model: Optional[str] = None      # e.g. "쏘나타"
     car_no: Optional[str] = None         # e.g. "12가3456"
     car_lnc_cd: Optional[str] = None     # vehicle WCODE

@@ -16028,6 +16028,20 @@ def _build_missing_current_location_store_fallback_event(
     }
 
 
+def _request_user_location_slot_patch(user_info: Mapping[str, Any] | None) -> dict[str, float]:
+    if not isinstance(user_info, Mapping):
+        return {}
+    location = user_info.get("location")
+    if not isinstance(location, Mapping):
+        return {}
+    try:
+        xpos = float(location.get("xpos"))
+        ypos = float(location.get("ypos"))
+    except (TypeError, ValueError):
+        return {}
+    return {"user_xpos": xpos, "user_ypos": ypos}
+
+
 def _build_turn_contract_fallback_event(
     *,
     turn_contract: TurnContract | None,
@@ -24347,6 +24361,13 @@ class TStationChatServiceV2:
             if invalid_merged_store:
                 logger.info("[SLOTS] Cleared invalid store identity slot: %s", invalid_merged_store)
             merged_slots = _apply_pending_object_check_slots(merged_slots, user_text=last_user_text)
+            request_location_slot_patch = _request_user_location_slot_patch(request.user_info)
+            if request_location_slot_patch:
+                merged_slots = merged_slots.apply_runtime_values(
+                    request_location_slot_patch,
+                    source="request_user_location",
+                    fill_only=False,
+                )
             if _is_product_coupon_price_amount_query(last_user_text):
                 coupon_product_name = _coupon_target_product_name_for_query(last_user_text)
                 parsed_coupon_target = _split_product_size_quantity_from_text(coupon_product_name, last_user_text)
