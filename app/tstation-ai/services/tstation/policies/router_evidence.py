@@ -131,6 +131,36 @@ def router_evidence_known_slots(evidence: Mapping[str, Any] | None) -> dict[str,
     return slots
 
 
+def router_place_slot_patch(
+    evidence: Mapping[str, Any] | None,
+    *,
+    expected_slot: str | None = None,
+) -> dict[str, Any]:
+    """Return current-turn place slot patch from router entities only.
+
+    This intentionally ignores regex/free-text fallback. During store or region
+    slot-fill, the router's current-turn location/store entity is the authority
+    unless a structured UI action already supplied a slot patch.
+    """
+
+    raw = _mapping(evidence)
+    entities = _mapping(raw.get("entities"))
+    expected = _text(expected_slot)
+    store = _mapping(entities.get("store"))
+    location = _mapping(entities.get("location"))
+    store_name = _entity_name_if_confident(store)
+    location_name = _entity_name_if_confident(location)
+    if expected == "store" and store_name:
+        return {"shop_name": store_name}
+    if expected in {"region", "place"} and location_name:
+        return {"region": location_name, "place_query": location_name}
+    if store_name:
+        return {"shop_name": store_name}
+    if location_name:
+        return {"region": location_name, "place_query": location_name}
+    return {}
+
+
 def merge_router_evidence_known_slots(
     known_slots: Mapping[str, Any] | None,
     evidence: Mapping[str, Any] | None,
@@ -162,6 +192,17 @@ def merge_router_evidence_known_slots(
     if merged_sources:
         merged["slot_sources"] = merged_sources
     return _drop_empty(merged)
+
+
+def _entity_name_if_confident(entity: Mapping[str, Any] | None) -> str:
+    data = _mapping(entity)
+    try:
+        confidence = float(data.get("confidence") or 0.0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    if confidence < _ENTITY_CONFIDENCE_THRESHOLD:
+        return ""
+    return _text(data.get("name") or data.get("anchor"))
 
 
 def _execution_plan(routing_result: Any) -> tuple[str, ...]:

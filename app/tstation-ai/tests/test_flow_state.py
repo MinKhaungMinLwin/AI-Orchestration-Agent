@@ -79,6 +79,37 @@ def test_flow_state_values_applies_current_turn_region_over_legacy_context() -> 
     assert "rsv_hour" not in values
 
 
+def test_purchase_flow_merge_clears_stale_store_region_wait_after_store_and_schedule() -> None:
+    result = commit_purchase_flow_state(
+        {
+            "goods_no": "G000000319584",
+            "tire_size": "245/45R19",
+            "ord_qty": 2,
+            "awaiting_store_region": True,
+            "pending_step": "store_region_selection",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        {
+            "shop_id": "F00071",
+            "shop_name": "티스테이션 분당정자점",
+            "requested_cal_day": "20260706",
+            "rsv_hour": "16",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        source="datepick_event",
+    )
+    pending_context = result.state.to_pending_order_context()
+
+    assert pending_context["shop_id"] == "F00071"
+    assert pending_context["requested_cal_day"] == "20260706"
+    assert pending_context["rsv_hour"] == "16"
+    assert pending_context["current_step"] in {"resolve_price", "build_preorder"}
+    assert "awaiting_store_region" not in pending_context
+    assert pending_context.get("pending_step") != "store_region_selection"
+
+
 def test_flow_state_values_preserves_active_stock_sub_flow_on_current_turn_patch() -> None:
     slot_values = {
         "region": "고양시",

@@ -152,6 +152,7 @@ from services.tstation.policies.router_evidence import (
     build_router_evidence,
     merge_router_evidence_known_slots,
     router_entities_for_trace,
+    router_place_slot_patch,
 )
 from services.tstation.policies.flow_state import (
     apply_router_evidence_snapshot,
@@ -241,7 +242,6 @@ from services.tstation.policies.pickup_service_gate import decide_pickup_service
 from services.tstation.policies.ui_action_policy import (
     UIActionContext,
     RegionStoreInputContextResolution,
-    apply_region_or_store_input_context_resolution,
     apply_logistics_earliest_install_cta_action,
     apply_selected_order_context_for_purchase_cta as _apply_selected_order_context_for_purchase_cta,
     apply_preview_update_cta_action,
@@ -24910,13 +24910,8 @@ class TStationChatServiceV2:
                 merged_slots=merged_slots,
             )
             if region_store_input_resolution.resolved:
-                merged_slots = apply_region_or_store_input_context_resolution(
-                    merged_slots,
-                    region_store_input_resolution,
-                    source="region_store_followup_context",
-                )
                 logger.info(
-                    "[SLOTS] Resolved region/store follow-up context flow=%s source=%s promoted_slots=%s",
+                    "[SLOTS] Detected region/store follow-up evidence flow=%s source=%s candidate_slots=%s",
                     region_store_input_resolution.flow_type,
                     region_store_input_resolution.resolution_source,
                     dict(region_store_input_resolution.slots_to_promote),
@@ -27859,8 +27854,6 @@ class TStationChatServiceV2:
             resume_source = _resume_source_from_ui_action_context(vehicle_ui_action_context)
         if resume_source == "none" and location_selection_resume_source != "none":
             resume_source = location_selection_resume_source
-        if resume_source == "none" and region_store_input_resolution.resolved:
-            resume_source = region_store_input_resolution.resume_source
         if resume_source == "none" and router_location_slot_fill_resume_source != "none":
             resume_source = router_location_slot_fill_resume_source
         flow_transition = transition_current_flow(
@@ -28019,6 +28012,20 @@ class TStationChatServiceV2:
                 validated_slot="schedule",
             )
         if router_slot_fill["matched"]:
+            router_place_patch = router_place_slot_patch(
+                latest_router_evidence_snapshot,
+                expected_slot=str(router_slot_fill.get("expected_slot") or ""),
+            )
+            if router_place_patch:
+                next_router_slot_patch = dict(router_slot_fill.get("slot_patch") or {})
+                for field_name in ("region", "place_query", "shop_name"):
+                    next_router_slot_patch.pop(field_name, None)
+                next_router_slot_patch.update(router_place_patch)
+                router_slot_fill = {
+                    **router_slot_fill,
+                    "slot_patch": next_router_slot_patch,
+                    "slot_patch_source": "router_place_entity",
+                }
             router_resume_source = str(router_slot_fill.get("resume_source") or "none")
             if router_resume_source != "none":
                 resume_source = router_resume_source
@@ -28026,6 +28033,7 @@ class TStationChatServiceV2:
                 "router_slot_fill_validated": True,
                 "router_slot_patch": dict(router_slot_fill.get("slot_patch") or {}),
                 "slot_patch": dict(router_slot_fill.get("slot_patch") or {}),
+                "router_place_slot_patch": dict(router_place_patch),
             })
             vehicle_selection_trace_metadata.update({
                 "selection_source": router_resume_source,
@@ -28085,6 +28093,29 @@ class TStationChatServiceV2:
                     "slot_patch": dict(expected_slot_fill_precheck.get("slot_patch") or {}),
                     "contract_correction_source": str(routing_override.get("source") or "slot_fill_controller"),
                 })
+        validated_slot_patch = (
+            dict(router_slot_fill_metadata.get("slot_patch") or {})
+            if router_slot_fill_metadata.get("router_slot_fill_validated")
+            else {}
+        )
+        if validated_slot_patch:
+            merged_slots = merged_slots.apply_runtime_values(
+                validated_slot_patch,
+                source="validated_router_slot_fill",
+            )
+            router_slot_fill_context_payload = build_router_slot_fill_context(
+                slots=merged_slots,
+                user_text=last_user_text,
+                latest_product_tmpl=latest_product_tmpl,
+                latest_location_tmpl=latest_location_tmpl,
+                latest_datepick_tmpl=latest_datepick_tmpl,
+                has_purchase_anchor=_resume_source_from_current_turn(last_user_text) != "none",
+            )
+            vehicle_selection_trace_metadata.update({
+                "validated_slot_fill_applied": True,
+                "validated_slot_fill_patch": validated_slot_patch,
+            })
+            logger.info("[SLOTS] Applied validated router slot-fill patch: %s", validated_slot_patch)
         previous_pending_intent = str(getattr(merged_slots, "pending_intent", None) or "").strip() or None
         previous_goal_type = str(getattr(merged_slots, "goal_type", None) or "").strip() or None
         if region_store_input_resolution.resolved:

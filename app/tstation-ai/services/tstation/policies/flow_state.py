@@ -1187,6 +1187,24 @@ def _refresh_flow_progress(state: "FlowState") -> None:
     for key in _FLOW_PROGRESS_META_FIELDS:
         state.meta.pop(key, None)
     state.meta.update(progress)
+    _clear_stale_store_region_wait_meta(state)
+
+
+def _clear_stale_store_region_wait_meta(state: "FlowState") -> None:
+    current_step = str(state.meta.get("current_step") or "").strip()
+    missing_slots = {
+        str(slot or "").strip()
+        for slot in state.meta.get("missing_slots") or ()
+        if str(slot or "").strip()
+    }
+    still_waiting_for_store = current_step in {"ask_store", "resolve_store"} or "shop_id" in missing_slots
+    has_store = any(state.store.get(key) not in _EMPTY_VALUES for key in ("shop_id", "shop_name", "store_name"))
+    has_schedule = all(state.schedule.get(key) not in _EMPTY_VALUES for key in ("requested_cal_day", "rsv_hour"))
+    if still_waiting_for_store or not (has_store or has_schedule):
+        return
+    state.meta.pop("awaiting_store_region", None)
+    if state.meta.get("pending_step") == "store_region_selection":
+        state.meta.pop("pending_step", None)
 
 
 def flow_progress_from_active_context(
@@ -1674,6 +1692,7 @@ class FlowState:
         merged.status = (
             delta.status if delta.status in {"active", "dormant", "resumed", "completed"} else merged.status
         )
+        _refresh_flow_progress(merged)
         after = merged.to_pending_order_context()
 
         return FlowStateMergeResult(

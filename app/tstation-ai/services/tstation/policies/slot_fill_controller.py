@@ -242,20 +242,20 @@ def resolve_pre_router_slot_fill(
             },
             trace_metadata=trace,
         )
-    resolved_slots = (
+    hypothetical_slots = (
         merged_slots.apply_runtime_values(slot_patch, source="expected_slot_fill_precheck")
         if slot_patch
         else merged_slots
     )
     flow_state_reconciliation = _flow_state_reconciliation(
         user_text=user_text,
-        merged_slots=resolved_slots,
+        merged_slots=hypothetical_slots,
         slot_patch=slot_patch,
         precheck=precheck,
     )
     reconciliation_slot_patch = dict(flow_state_reconciliation.get("slot_patch") or {})
     if reconciliation_slot_patch:
-        resolved_slots = resolved_slots.apply_runtime_values(
+        hypothetical_slots = hypothetical_slots.apply_runtime_values(
             reconciliation_slot_patch,
             source="flow_state_after_slot_patch",
         )
@@ -275,7 +275,7 @@ def resolve_pre_router_slot_fill(
         trace_metadata["routing_override"] = routing_override
 
     return SlotFillDecision(
-        slots=resolved_slots,
+        slots=merged_slots,
         matched=True,
         slot_patch=slot_patch,
         filled_slot=str(precheck.get("filled_slot") or "none"),

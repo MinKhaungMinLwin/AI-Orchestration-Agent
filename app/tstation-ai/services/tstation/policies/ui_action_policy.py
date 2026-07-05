@@ -5796,13 +5796,18 @@ def resolve_region_or_store_input_context(
         ((ui_action or {}).get("action_type") or (ui_action or {}).get("cta_action") or cta_context.get("cta_action") or "")
     ).strip()
     block_region_text = action_type in _REGION_EXTRACTION_BLOCKED_ACTIONS
-    input_values = _region_store_input_values(
-        text,
-        merged_slots,
-        allow_region_fallback=False,
-        block_region_text=block_region_text,
+    has_structured_action = bool(ui_action or chip_context)
+    input_values = (
+        _region_store_input_values(
+            text,
+            merged_slots,
+            allow_region_fallback=False,
+            block_region_text=block_region_text,
+        )
+        if has_structured_action
+        else {}
     )
-    if not input_values and isinstance(cta_context.get("slots"), Mapping):
+    if has_structured_action and not input_values and isinstance(cta_context.get("slots"), Mapping):
         canonical_slot_values = canonical_context_from_template_boundary(cta_context.get("slots"))
         if canonical_slot_values.get("region") and not _is_invalid_region_candidate_text(canonical_slot_values.get("region")):
             input_values = {"region": canonical_slot_values["region"], "store_view_requested": True}
@@ -5821,7 +5826,7 @@ def resolve_region_or_store_input_context(
     resolution_source = None
     if isinstance(ui_action, Mapping) and ui_action:
         resolution_source = "ui_action"
-    elif cta_context:
+    elif chip_context and cta_context:
         resolution_source = "chip_context"
     else:
         prompt_detected, prompt_source = _region_store_prompt_signal(
@@ -5848,10 +5853,12 @@ def resolve_region_or_store_input_context(
             resolution_source = prompt_source
 
     if not input_values:
+        if resolution_source not in {"ui_action", "chip_context"}:
+            return RegionStoreInputContextResolution()
         input_values = _region_store_input_values(
             text,
             merged_slots,
-            allow_region_fallback=True,
+            allow_region_fallback=False,
             block_region_text=block_region_text,
         )
     if not input_values:

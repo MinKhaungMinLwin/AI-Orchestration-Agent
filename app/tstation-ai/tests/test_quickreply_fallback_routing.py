@@ -47,6 +47,7 @@ from services.tstation.policies.flow_state import (
     store_candidate_selection_patch,
     store_candidates_flow_delta,
 )
+from services.tstation.policies.router_evidence import router_place_slot_patch
 from services.tstation.agents.b_discovery_agent import tools as discovery_tools
 from services.tstation.agents.b_discovery_agent.agent import (
     DISCOVERY_AGENT_SYSTEM_PROMPT_TEMPLATE,
@@ -22570,7 +22571,7 @@ def test_region_followup_in_purchase_context_keeps_quick_order_reservation() -> 
     assert response.metadata["response_shape_key"] == "reservation_store_candidates"
 
 
-def test_region_input_context_resolution_marks_expected_region_slot_fill() -> None:
+def test_region_input_context_resolution_keeps_free_text_for_router_entity() -> None:
     resolution = resolve_region_or_store_input_context(
         user_text="분당",
         ui_action=None,
@@ -22594,10 +22595,74 @@ def test_region_input_context_resolution_marks_expected_region_slot_fill() -> No
         ),
     )
 
-    assert resolution.resolved is True
-    assert resolution.expected_contract_intent == "quick_order_reservation"
-    assert resolution.resume_source == "expected_slot_fill:region"
-    assert resolution.slots_to_promote["region"] == "분당"
+    assert resolution.resolved is False
+    assert resolution.resume_source == "none"
+
+
+def test_router_place_slot_patch_prefers_router_location_entity() -> None:
+    patch = router_place_slot_patch(
+        {
+            "entities": {
+                "location": {
+                    "mentioned": True,
+                    "name": "분당",
+                    "type": "region",
+                    "reference_text": "분당",
+                    "confidence": 0.91,
+                }
+            }
+        },
+        expected_slot="region",
+    )
+
+    assert patch == {"region": "분당", "place_query": "분당"}
+
+
+def test_pre_router_region_slot_fill_does_not_commit_free_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    from services.tstation.policies import slot_fill_controller
+
+    monkeypatch.setattr(slot_fill_controller, "_PRE_ROUTER_SLOT_FILL_ENABLED", True)
+    merged_slots = ConversationSlots(
+        goods_no="G000000319584",
+        tire_size="245/45R19",
+        ord_qty=2,
+        pending_intent="order",
+        goal_type="place_order",
+        stock_check_mode="preview",
+    )
+    resolution = resolve_region_or_store_input_context(
+        user_text="분당",
+        ui_action=None,
+        chip_context=None,
+        latest_quickreply_tmpl={
+            "template": "quickReply",
+            "data": {
+                "assistantResponse": "구매를 진행할 매장을 확인할 지역명을 입력해 주세요.",
+                "quickReplies": [{"label": "분당", "domain": "TRANSACTION"}],
+            },
+        },
+        latest_location_tmpl=None,
+        messages=[],
+        merged_slots=merged_slots,
+    )
+    router_context = build_router_slot_fill_context(
+        slots=merged_slots,
+        user_text="분당",
+        latest_product_tmpl=None,
+        latest_location_tmpl=None,
+        latest_datepick_tmpl=None,
+    )
+    decision = resolve_pre_router_slot_fill(
+        user_text="분당",
+        regex_slots=ConversationSlots.extract_from_user_text("분당"),
+        merged_slots=merged_slots,
+        router_context=router_context,
+        region_store_input_resolution=resolution,
+    )
+
+    assert decision.matched is False
+    assert decision.slots.region is None
+    assert merged_slots.region is None
 
 
 def test_region_input_context_resolution_rejects_order_history_queries() -> None:
