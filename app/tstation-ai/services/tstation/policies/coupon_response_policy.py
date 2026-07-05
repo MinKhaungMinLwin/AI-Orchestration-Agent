@@ -711,6 +711,9 @@ def _find_single_confident_coupon_from_owned_coupons(user_text: str, tool_result
     if len(prefix_like_matches) > 1:
         return None, prefix_like_matches[:3]
 
+    if len(candidates) == 1 and candidates[0][1] >= 10.0:
+        return candidates[0][0], []
+
     top_score = candidates[0][1]
     high_confidence = [row for row, score in candidates if score >= max(20.0, top_score - 5.0)]
     if len(high_confidence) == 1 and top_score >= 20.0:
