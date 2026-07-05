@@ -121,6 +121,7 @@ from services.tstation.chat import (
     _final_price_from_row,
     _should_attempt_direct_preorder_from_schedule_ui_action,
     _should_emit_direct_preorder_from_schedule_selection,
+    _is_schedule_selection_text,
     _schedule_selection_values_from_text,
     _should_recover_final_price_for_schedule_selection,
     _build_bare_product_search_tool_input,
@@ -444,6 +445,8 @@ from services.tstation.policies.resolved_context import (
 )
 from services.tstation.policies import schedule_tool_gate
 from services.tstation.policies import support_response_policy as support_response_policy_module
+from services.tstation.policies.contract_direct_executor import evaluate_contract_direct_path
+from services.tstation.policies.contract_required_tool_candidate import _contract_required_tool_candidate
 from services.tstation.policies.transaction_intent_policy import build_transaction_intent_frame, plan_transaction_tools
 from services.tstation.policies.transaction_response_policy import decide_transaction_response
 from services.tstation.policies.slot_fill_controller import (
@@ -38199,6 +38202,32 @@ def test_direct_preorder_schedule_ui_action_attempt_does_not_require_router_skip
     assert _should_attempt_direct_preorder_from_schedule_ui_action(store_context, {}) is False
     assert _should_attempt_direct_preorder_from_schedule_ui_action(None, {}) is False
 
+def test_schedule_selection_text_can_drive_direct_preorder_without_ui_action() -> None:
+    schedule_text = "2026\ub144 7\uc6d4 9\uc77c (\ubaa9) 10:00"
+    contract = _transaction_turn_contract(
+        schedule_text,
+        {
+            "goods_no": "G000000310119",
+            "tire_model": "\ubca4\ud22c\uc2a4 S2 AS",
+            "tire_size": "215/55R17",
+            "ord_qty": 4,
+            "shop_id": "F00721",
+            "shop_name": "\ud2f0\uc2a4\ud14c\uc774\uc158 \ud310\uad50\uc810",
+            "requested_cal_day": "20260709",
+            "rsv_hour": "10",
+            "payment_amount": 501600,
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+    contract = replace(contract, action_mode="purchase_continuation")
+
+    assert _is_schedule_selection_text(schedule_text) is True
+    assert _should_emit_direct_preorder_from_schedule_selection(
+        contract,
+        transaction_tool_plan=SimpleNamespace(metadata={}),
+    ) is True
+
 def test_schedule_selection_text_values_override_previous_schedule_context() -> None:
     assert _schedule_selection_values_from_text("2026년 7월 7일 (화)\n15:00") == {
         "requested_cal_day": "20260707",
@@ -44758,3 +44787,110 @@ def test_card_installment_prompts_forbid_general_smartpay_month_union() -> None:
     assert "일반 카드 무이자 [2,3,6] 과 스마트페이 [12,24] 를 절대 합산" in prompt_text
     assert "set 합집합" not in prompt_text
     assert "union" not in prompt_text.lower()
+
+
+def test_purchase_quantity_change_datepick_contract_is_direct_path_eligible() -> None:
+    contract = TurnContract(
+        domain=PolicyDomain.TRANSACTION.value,
+        intent="quick_order_reservation_slot_fill_quantity",
+        known_slots={
+            "goods_no": "G000000310119",
+            "tire_size": "215/55R17",
+            "ord_qty": 4,
+            "shop_id": "F00071",
+        },
+        allowed_tools=("get_store_schedule_tool", "get_multi_store_schedule_tool"),
+        forbidden_tools=("quick_order_tool",),
+        preferred_tool="get_store_schedule_tool",
+        response_decision={
+            "template": "datepick",
+            "metadata": {"response_shape_key": "reservation_slots", "flow_step": "show_schedule"},
+        },
+        tool_args_patch={
+            "goods_no": "G000000310119",
+            "tire_size": "215/55R17",
+            "ord_qty": 4,
+            "shop_id": "F00071",
+        },
+    )
+
+    decision = evaluate_contract_direct_path(
+        turn_contract=contract,
+        router_evidence={"primary_action": "reserve", "confidence": 1.0},
+        user_text="4 units",
+    )
+
+    assert decision.eligible is True
+    assert decision.tool == "get_store_schedule_tool"
+    assert decision.template == "datepick"
+
+    candidate = _contract_required_tool_candidate(
+        turn_contract=contract,
+        user_text="4 units",
+        merged_slots=None,
+    )
+
+    assert candidate is not None
+    assert candidate.tool_name == "get_store_schedule_tool"
+    assert candidate.tool_input == {"shop_id": "F00071", "mode": "general"}
+
+
+def test_purchase_product_change_preserves_region_and_place_query() -> None:
+    existing = FlowState.from_pending_order_context({
+        "goods_no": "G-OLD",
+        "product_name": "Old Product",
+        "tire_size": "215/55R17",
+        "ord_qty": 2,
+        "region": "Pangyo",
+        "place_query": "Pangyo",
+        "shop_id": "F00071",
+        "shop_name": "Pangyo Store",
+        "requested_cal_day": "20260707",
+        "rsv_hour": "15",
+        "payment_amount": 250800,
+    })
+    delta = FlowState.from_flat_delta({"product_name": "New Product"}, source="test")
+
+    result = existing.merge(delta, source="test")
+    context = result.state.to_pending_order_context()
+
+    assert context["product_name"] == "New Product"
+    assert context["tire_size"] == "215/55R17"
+    assert context["ord_qty"] == 2
+    assert context["region"] == "Pangyo"
+    assert context["place_query"] == "Pangyo"
+    assert "goods_no" not in context
+    assert "shop_id" not in context
+    assert "requested_cal_day" not in context
+    assert "rsv_hour" not in context
+    assert "payment_amount" not in context
+
+
+def test_purchase_region_change_resets_selected_store_schedule_and_price() -> None:
+    existing = FlowState.from_pending_order_context({
+        "goods_no": "G000000310119",
+        "product_name": "Ventus S2 AS",
+        "tire_size": "215/55R17",
+        "ord_qty": 2,
+        "shop_id": "F00071",
+        "shop_name": "Pangyo Store",
+        "requested_cal_day": "20260707",
+        "rsv_hour": "15",
+        "payment_amount": 250800,
+        "price_basis": "lowest_price",
+    })
+    delta = FlowState.from_flat_delta({"region": "Hannam"}, source="test")
+
+    result = existing.merge(delta, source="test")
+    context = result.state.to_pending_order_context()
+
+    assert context["goods_no"] == "G000000310119"
+    assert context["tire_size"] == "215/55R17"
+    assert context["ord_qty"] == 2
+    assert context["region"] == "Hannam"
+    assert "shop_id" not in context
+    assert "shop_name" not in context
+    assert "requested_cal_day" not in context
+    assert "rsv_hour" not in context
+    assert "payment_amount" not in context
+    assert "price_basis" not in context

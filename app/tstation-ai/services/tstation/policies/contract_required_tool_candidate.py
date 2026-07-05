@@ -445,6 +445,8 @@ def _is_contract_required_selected_store_schedule(
         "stock_store_search_slot_fill_store",
         "store_schedule",
         "selected_store_schedule",
+        "quick_order_reservation",
+        "quick_order_reservation_slot_fill_quantity",
     }:
         return False
     response_decision = turn_contract.response_decision or {}
@@ -461,6 +463,19 @@ def _is_contract_required_selected_store_schedule(
         return False
     if tuple(turn_contract.blocking_required_slots or ()):
         return False
+    if contract_intent in {"quick_order_reservation", "quick_order_reservation_slot_fill_quantity"}:
+        known_slots = _contract_read_through_known_slots(
+            turn_contract,
+            merged_slots,
+            allowed_flow_types=frozenset({"purchase"}),
+        )
+        return bool(
+            known_slots.get("shop_id")
+            and known_slots.get("goods_no")
+            and known_slots.get("tire_size")
+            and (known_slots.get("ord_qty") or known_slots.get("quantity"))
+        )
+
     selected_store_slots = _selected_store_slots_from_merged_slots(
         merged_slots,
         allowed_flow_types=frozenset({"stock", "store_schedule"}),
@@ -498,6 +513,17 @@ def _contract_required_selected_store_schedule_tool_input(
     shop_id = str(known_slots.get("shop_id") or "").strip()
     schedule_mode = str(known_slots.get("schedule_mode") or known_slots.get("inventory_mode") or "").strip()
     if str(turn_contract.intent or "").strip() in {"store_schedule", "selected_store_schedule"}:
+        schedule_mode = schedule_mode or "general"
+    if str(turn_contract.intent or "").strip() in {
+        "quick_order_reservation",
+        "quick_order_reservation_slot_fill_quantity",
+    }:
+        known_slots = _contract_read_through_known_slots(
+            turn_contract,
+            merged_slots,
+            allowed_flow_types=frozenset({"purchase"}),
+        )
+        shop_id = str(known_slots.get("shop_id") or shop_id).strip()
         schedule_mode = schedule_mode or "general"
     if not shop_id or not schedule_mode:
         return {}
@@ -664,6 +690,7 @@ def _is_contract_required_transaction_store_preview(
         merged_slots,
         allowed_flow_types=frozenset({"purchase", "stock"}),
     )
+    has_browser_location = _browser_location_coords(known_slots) != (None, None)
     return bool(
         known_slots.get("goods_no")
         and known_slots.get("tire_size")
@@ -673,8 +700,33 @@ def _is_contract_required_transaction_store_preview(
             or known_slots.get("shop_name")
             or known_slots.get("store_name")
             or known_slots.get("region")
+            or known_slots.get("place_query")
+            or has_browser_location
         )
     )
+
+
+def _browser_location_coords(values: Mapping[str, Any]) -> tuple[Any | None, Any | None]:
+    xpos = values.get("user_xpos") if values.get("user_xpos") not in (None, "") else values.get("xpos")
+    ypos = values.get("user_ypos") if values.get("user_ypos") not in (None, "") else values.get("ypos")
+    if xpos in (None, ""):
+        xpos = values.get("lng") or values.get("longitude")
+    if ypos in (None, ""):
+        ypos = values.get("lat") or values.get("latitude")
+    return (
+        xpos if xpos not in (None, "") else None,
+        ypos if ypos not in (None, "") else None,
+    )
+
+
+def _normalize_store_preview_location_args(tool_input: dict[str, Any]) -> None:
+    xpos, ypos = _browser_location_coords(tool_input)
+    if xpos is not None:
+        tool_input["user_xpos"] = xpos
+    if ypos is not None:
+        tool_input["user_ypos"] = ypos
+    for key in ("xpos", "ypos", "lat", "lng", "latitude", "longitude"):
+        tool_input.pop(key, None)
 
 
 def _contract_required_transaction_store_preview_tool_input(
@@ -697,6 +749,7 @@ def _contract_required_transaction_store_preview_tool_input(
         tool_input["quantity"] = tool_input["ord_qty"]
     if tool_input.get("store_name") in (None, "", [], {}) and tool_input.get("shop_name") not in (None, "", [], {}):
         tool_input["store_name"] = tool_input["shop_name"]
+    _normalize_store_preview_location_args(tool_input)
     if tool_input.get("pending_intent") == "order" or tool_input.get("goal_type") == "place_order":
         tool_input["pending_intent"] = "order"
         tool_input["goal_type"] = "place_order"
