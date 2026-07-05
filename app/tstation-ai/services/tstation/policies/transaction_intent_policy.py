@@ -373,6 +373,13 @@ _PRODUCT_HINT_RE = re.compile(
     re.IGNORECASE,
 )
 _PRICE_OR_COUPON_RE = re.compile(r"가격|할인가|최대\s*혜택|쿠폰|할인", re.IGNORECASE)
+_PRICE_OR_COUPON_ROUTER_INTENTS = frozenset({
+    "price_or_coupon_check",
+    "order_price_breakdown_lookup",
+    "order_discount_explanation",
+    "explain_discount_application",
+    "price_coupon_summary",
+})
 _TODAY_INSTALL_OR_RESERVATION_RE = re.compile(
     r"오늘\s*장착|오늘장착|오늘\s*서비스|오늘서비스|당일|"
     r"예약|방문|장착\s*가능|예약\s*가능|가능한\s*(?:시간|일정)|"
@@ -528,6 +535,34 @@ def _has_pending_today_install_context(slots: dict[str, Any]) -> bool:
         return True
     return bool(slots.get("requested_cal_day") and slots.get("goods_no") and (slots.get("quantity") or slots.get("ord_qty")))
 
+
+def _has_price_or_coupon_router_evidence(slots: Mapping[str, Any]) -> bool:
+    direct_intents = (
+        slots.get("router_transaction_intent"),
+        slots.get("planner_intent"),
+        slots.get("current_turn_intent"),
+    )
+    if any(str(intent or "").strip() in _PRICE_OR_COUPON_ROUTER_INTENTS for intent in direct_intents):
+        return True
+    availability_context = slots.get("availability_context")
+    if not isinstance(availability_context, Mapping):
+        return False
+    latest_router_evidence = availability_context.get("latest_router_evidence")
+    if not isinstance(latest_router_evidence, Mapping):
+        return False
+    router_intent = str(latest_router_evidence.get("intent") or "").strip()
+    if router_intent in _PRICE_OR_COUPON_ROUTER_INTENTS:
+        return True
+    execution_plan = latest_router_evidence.get("execution_plan")
+    if not isinstance(execution_plan, (list, tuple)):
+        return False
+    for item in execution_plan:
+        plan_intent = str(item or "").strip()
+        if plan_intent.partition(":")[2]:
+            plan_intent = plan_intent.partition(":")[2]
+        if plan_intent in _PRICE_OR_COUPON_ROUTER_INTENTS:
+            return True
+    return False
 
 def _has_confirmed_product_quantity_context(slots: dict[str, Any]) -> bool:
     return bool(slots.get("goods_no") and (slots.get("quantity") or slots.get("ord_qty")))
@@ -920,7 +955,7 @@ def build_transaction_intent_frame(
         or (_NOW_SERVICE_REQUEST_RE.search(text) and not _CURRENTLY_MOUNTED_TIRE_RE.search(text))
     )
     current_stock = bool(_STOCK_RE.search(text) or current_today_request)
-    current_price = bool(_PRICE_OR_COUPON_RE.search(text))
+    current_price = bool(_PRICE_OR_COUPON_RE.search(text) or _has_price_or_coupon_router_evidence(slots))
     router_alert_contract = str(slots.get("router_transaction_intent") or "") == "price_or_benefit_alert_request"
     current_maintenance_history_access_policy = bool(_MAINTENANCE_HISTORY_ACCESS_POLICY_RE.search(text))
     current_maintenance_history_lookup = bool(
@@ -1548,7 +1583,7 @@ def build_transaction_intent_frame(
         intent = "quick_order_reservation"
         sub_intent = "cart" if current_cart else "reservation"
         entities["stock_check_mode"] = "preview"
-    elif _PRICE_OR_COUPON_RE.search(text):
+    elif current_price:
         intent = "price_or_coupon_check"
         sub_intent = "coupon" if "쿠폰" in text else "price"
     elif (

@@ -117,7 +117,7 @@ class SessionInfo(BaseModel):
 
 
 class SessionListResponse(BaseModel):
-    """Response for GET /api/messages/sessions."""
+    """Response for GET /api/tstation/messages/sessions."""
     sessions: List[SessionInfo] = Field(default_factory=list, description="List of sessions")
     total: int = Field(default=0, description="Total number of sessions")
 
@@ -134,7 +134,7 @@ class MessageResponse(BaseModel):
 
 
 class ChatHistoryResponse(BaseModel):
-    """Response for GET /api/messages/history/{session_id}."""
+    """Response for GET /api/tstation/messages/history/{session_id}."""
     session_id: str = Field(..., description="Session ID")
     total: int = Field(default=0, description="Total messages")
     messages: List[MessageResponse] = Field(default_factory=list, description="List of messages")
@@ -151,14 +151,14 @@ class UserInfoResponse(BaseModel):
 
 
 class ValidateTokenResponse(BaseModel):
-    """Response for POST /api/messages/validate-token."""
+    """Response for POST /api/tstation/messages/validate-token."""
     valid: bool = Field(..., description="Token is valid or not")
     user_id: Optional[str] = Field(default=None, description="User ID if valid")
     reason: Optional[str] = Field(default=None, description="Error reason if invalid")
 
 
 class DeleteSessionResponse(BaseModel):
-    """Response for DELETE /api/messages/{session_id}."""
+    """Response for DELETE /api/tstation/messages/{session_id}."""
     success: bool = Field(..., description="Delete success flag")
     session_id: str = Field(..., description="Deleted session ID")
     messages_deleted: int = Field(default=0, description="Number of messages deleted")

@@ -36224,6 +36224,23 @@ class TStationChatServiceV2:
                 else dict(slot_state or {})
             )
             frame = build_transaction_intent_frame(user_query, known_slots=slot_values)
+            if frame.intent in _PRICE_OR_COUPON_RESPONSE_INTENTS:
+                price_contract = build_turn_contract(
+                    user_text=user_query,
+                    intent_frame=frame,
+                    tool_plan=plan_transaction_tools(frame),
+                    response_decision=decide_transaction_response(
+                        intent=frame.intent,
+                        user_text=user_query,
+                        known_slots=dict(frame.known_slots),
+                    ),
+                    merged_slots=slot_state,
+                    action_mode=getattr(turn_contract, "action_mode", "stock_check"),
+                    context_state=getattr(turn_contract, "context_state", "active"),
+                    previous_pending_intent=getattr(turn_contract, "previous_pending_intent", None),
+                    previous_goal_type=getattr(turn_contract, "previous_goal_type", None),
+                )
+                return ([], build_response_policy_guard_event(price_contract))
             allowed_stock_sub_intents = {"stock", "today_install", "reservation"}
             if frame.intent != "stock_store_search" or frame.sub_intent not in allowed_stock_sub_intents:
                 availability_context = bool(

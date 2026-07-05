@@ -6092,6 +6092,8 @@ def _map_datepick_from_preview(tool_data_list: list[dict], assistant_text: str) 
     if _is_other_store_request():
         return None
     transaction_decision = current_transaction_response_decision.get()
+    if transaction_decision and transaction_decision.forbids("datepick_for_price_or_coupon_check"):
+        return None
     decision_metadata = transaction_decision.metadata if transaction_decision is not None else {}
     response_shape_key = str(decision_metadata.get("response_shape_key") or "").strip()
     flow_step = str(decision_metadata.get("flow_step") or "").strip()
@@ -6204,6 +6206,8 @@ def _map_datepick(tool_data_list: list[dict], assistant_text: str) -> dict | Non
         return None
     transaction_decision = current_transaction_response_decision.get()
     same_turn_logistics_schedule_has_slots = _same_turn_logistics_schedule_has_slots(tool_data_list)
+    if transaction_decision and transaction_decision.forbids("datepick_for_price_or_coupon_check"):
+        return None
     if transaction_decision and transaction_decision.forbids("datepick_for_unverified_store"):
         return None
     if (
