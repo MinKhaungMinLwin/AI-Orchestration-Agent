@@ -17500,8 +17500,13 @@ def test_runtime_goods_no_change_preserves_active_size_and_quantity() -> None:
     base = ConversationSlots(
         goods_no="G-OLD",
         tire_model="벤투스 S2 AS",
+        pending_product_name="벤투스 S2 AS",
         tire_size="225/45R17",
         ord_qty=4,
+        shop_id="F001",
+        shop_name="티스테이션 한남점",
+        requested_cal_day="20260708",
+        rsv_hour="10",
         payment_amount=400000,
     )
 
@@ -17509,8 +17514,13 @@ def test_runtime_goods_no_change_preserves_active_size_and_quantity() -> None:
 
     assert updated.goods_no == "G-NEW"
     assert updated.tire_model is None
+    assert updated.pending_product_name is None
     assert updated.tire_size == "225/45R17"
     assert updated.ord_qty == 4
+    assert updated.shop_id is None
+    assert updated.shop_name is None
+    assert updated.requested_cal_day is None
+    assert updated.rsv_hour is None
     assert updated.payment_amount is None
 
 
@@ -17524,6 +17534,8 @@ def test_size_quantity_and_store_slot_resets_are_canonical() -> None:
         region="서울",
         shop_id="F001",
         shop_name="티스테이션 한남점",
+        requested_cal_day="20260708",
+        rsv_hour="10",
     )
 
     changed_size = base.apply_runtime_values({"tire_size": "245/45R18"}, source="tool_boundary")
@@ -17533,13 +17545,22 @@ def test_size_quantity_and_store_slot_resets_are_canonical() -> None:
     assert changed_size.tire_size == "245/45R18"
     assert changed_size.goods_no is None
     assert changed_size.payment_amount is None
-    assert changed_size.shop_id == "F001"
+    assert changed_size.shop_id is None
+    assert changed_size.shop_name is None
+    assert changed_size.requested_cal_day is None
+    assert changed_size.rsv_hour is None
     assert changed_qty.ord_qty == 4
     assert changed_qty.goods_no == "G-OLD"
     assert changed_qty.payment_amount is None
+    assert changed_qty.shop_id is None
+    assert changed_qty.shop_name is None
+    assert changed_qty.requested_cal_day is None
+    assert changed_qty.rsv_hour is None
     assert changed_region.region == "성남"
     assert changed_region.shop_id is None
     assert changed_region.shop_name is None
+    assert changed_region.requested_cal_day is None
+    assert changed_region.rsv_hour is None
 
 
 def test_structured_store_selection_turn_skips_same_store_cleanup() -> None:

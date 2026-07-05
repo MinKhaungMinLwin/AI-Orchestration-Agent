@@ -69,6 +69,25 @@ class RouterLocationSlotFillDecision:
     trace_metadata: Mapping[str, Any] = field(default_factory=dict)
 
 
+def can_promote_existing_store_for_expected_slot_fill(
+    *,
+    location_slot_fill_matched: bool,
+    location_selection_resume_source: str,
+    existing_shop_id: Any,
+) -> bool:
+    """Return whether a stored shop_id can fill an expected store slot.
+
+    A current-turn region/place search such as "고양시청 근처" changes the store
+    search area. In that turn, an old shop_id must not be reused as if the user
+    selected the previous store candidate.
+    """
+    if location_slot_fill_matched:
+        return False
+    if str(location_selection_resume_source or "") != "expected_slot_fill:store":
+        return False
+    return str(existing_shop_id or "").strip() != ""
+
+
 def build_router_slot_fill_context(
     *,
     slots: ConversationSlots | None,

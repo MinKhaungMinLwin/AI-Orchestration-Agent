@@ -107,6 +107,7 @@ from services.tstation.policies.transaction_response_policy import decide_transa
 from services.tstation.policies.slot_fill_controller import (
     apply_router_location_slot_fill,
     build_router_slot_fill_context,
+    can_promote_existing_store_for_expected_slot_fill,
     resolve_pre_router_slot_fill,
 )
 from services.tstation.policies.leading_response_policy import (
@@ -27957,8 +27958,11 @@ class TStationChatServiceV2:
             )
         if (
             not router_slot_fill["matched"]
-            and location_selection_resume_source == "expected_slot_fill:store"
-            and getattr(merged_slots, "shop_id", None)
+            and can_promote_existing_store_for_expected_slot_fill(
+                location_slot_fill_matched=router_location_slot_fill.matched,
+                location_selection_resume_source=location_selection_resume_source,
+                existing_shop_id=getattr(merged_slots, "shop_id", None),
+            )
         ):
             router_slot_fill = router_slot_fill_resolution(
                 routing_result,
