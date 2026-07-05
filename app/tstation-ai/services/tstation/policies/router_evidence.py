@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import re
 from typing import Any, Mapping
+
+from services.tstation.policies.router_intent_schema import canonical_router_intent
 
 
 _ENTITY_CONFIDENCE_THRESHOLD = 0.5
 _ROUTER_SLOT_SOURCE = "router_evidence"
+_LOCATION_SEARCH_SUFFIX_RE = re.compile(r"\s*(?:근처|인근|지역|쪽)\s*$")
 
 
 def build_router_evidence(
@@ -29,7 +33,10 @@ def build_router_evidence(
     execution_plan = _execution_plan(routing_result)
     primary_action = _primary_action(routing_result, execution_plan)
     router_domain = _router_domain(routing_result, domains, execution_plan)
-    router_intent = _router_intent(routing_result, execution_plan)
+    raw_router_intent = _router_intent(routing_result, execution_plan)
+    router_intent = canonical_router_intent(raw_router_intent)
+    raw_policy_intent = str(getattr(routing_result, "policy_intent", "") or "").strip()
+    policy_intent = canonical_router_intent(raw_policy_intent)
     entities = _normalized_entities(getattr(routing_result, "entity_candidates", None))
     entities = _merge_regex_supplemental(entities, regex_candidates or {})
     confidence = getattr(routing_result, "planner_confidence", None)
@@ -37,8 +44,10 @@ def build_router_evidence(
     evidence: dict[str, Any] = {
         "domain": router_domain,
         "intent": router_intent,
+        "raw_intent": raw_router_intent,
         "primary_action": primary_action,
-        "policy_intent": str(getattr(routing_result, "policy_intent", "") or "").strip(),
+        "policy_intent": policy_intent,
+        "raw_policy_intent": raw_policy_intent,
         "execution_plan": list(execution_plan),
         "entities": entities,
         "flow": str(getattr(routing_result, "flow", "") or "").strip(),
@@ -116,7 +125,7 @@ def router_evidence_known_slots(evidence: Mapping[str, Any] | None) -> dict[str,
         put("benefit_type_candidate", benefit_type)
 
     location = _mapping(entities.get("location"))
-    location_name = _text(location.get("name") or location.get("anchor"))
+    location_name = _normalize_location_search_query(location.get("name") or location.get("anchor"))
     location_type = _text(location.get("type"))
     if location_name:
         put("location_name", location_name)
@@ -129,6 +138,36 @@ def router_evidence_known_slots(evidence: Mapping[str, Any] | None) -> dict[str,
     if slot_sources:
         slots["slot_sources"] = slot_sources
     return slots
+
+
+def router_place_slot_patch(
+    evidence: Mapping[str, Any] | None,
+    *,
+    expected_slot: str | None = None,
+) -> dict[str, Any]:
+    """Return current-turn place slot patch from router entities only.
+
+    This intentionally ignores regex/free-text fallback. During store or region
+    slot-fill, the router's current-turn location/store entity is the authority
+    unless a structured UI action already supplied a slot patch.
+    """
+
+    raw = _mapping(evidence)
+    entities = _mapping(raw.get("entities"))
+    expected = _text(expected_slot)
+    store = _mapping(entities.get("store"))
+    location = _mapping(entities.get("location"))
+    store_name = _entity_name_if_confident(store)
+    location_name = _normalize_location_search_query(_entity_name_if_confident(location))
+    if expected == "store" and store_name:
+        return {"shop_name": store_name}
+    if expected in {"region", "place"} and location_name:
+        return {"region": location_name, "place_query": location_name}
+    if store_name:
+        return {"shop_name": store_name}
+    if location_name:
+        return {"region": location_name, "place_query": location_name}
+    return {}
 
 
 def merge_router_evidence_known_slots(
@@ -162,6 +201,25 @@ def merge_router_evidence_known_slots(
     if merged_sources:
         merged["slot_sources"] = merged_sources
     return _drop_empty(merged)
+
+
+def _entity_name_if_confident(entity: Mapping[str, Any] | None) -> str:
+    data = _mapping(entity)
+    try:
+        confidence = float(data.get("confidence") or 0.0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    if confidence < _ENTITY_CONFIDENCE_THRESHOLD:
+        return ""
+    return _text(data.get("name") or data.get("anchor"))
+
+
+def _normalize_location_search_query(value: Any) -> str:
+    text = _text(value)
+    if not text:
+        return ""
+    normalized = _LOCATION_SEARCH_SUFFIX_RE.sub("", text).strip()
+    return normalized or text
 
 
 def _execution_plan(routing_result: Any) -> tuple[str, ...]:

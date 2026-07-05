@@ -1,7 +1,10 @@
+import pytest
+
 from schemas.tstation.slots import ConversationSlots
 from services.tstation.policies.contract_required_tool_candidate import (
     _contract_required_tool_candidate,
     _is_contract_required_selected_store_schedule,
+    is_contract_required_price_or_coupon_final_price,
 )
 from services.tstation.policies.turn_contract import TurnContract
 
@@ -125,6 +128,26 @@ def test_forbidden_tool_suppresses_candidate_creation() -> None:
     assert candidate is None
 
 
+@pytest.mark.parametrize("intent", ["unclear", "out_of_scope", "unsupported"])
+def test_no_execution_intents_suppress_candidate_creation(intent: str) -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent=intent,
+        allowed_tools=("get_final_price_tool",),
+        preferred_tool="get_final_price_tool",
+        tool_args_patch={"goods_no": "G000000309780"},
+        context_state="active",
+    )
+
+    candidate = _contract_required_tool_candidate(
+        turn_contract=contract,
+        user_text="이거 봐줘",
+        merged_slots=None,
+    )
+
+    assert candidate is None
+
+
 def test_product_resolve_candidate_uses_known_goods_no() -> None:
     contract = TurnContract(
         domain="discovery",
@@ -204,6 +227,35 @@ def test_plain_store_search_candidate_uses_contract_tool_args_patch() -> None:
     assert candidate.tool_input == {"region_code": "Gangnam"}
 
 
+def test_store_service_search_candidate_uses_known_place_query_when_tool_args_empty() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="store_service_search",
+        known_slots={
+            "place_query": "고양시청",
+            "region": "고양시청",
+            "policy_intent": "store_service_search",
+        },
+        allowed_tools=("search_stores_tool", "get_store_list_tool", "get_nearby_stores_tool"),
+        forbidden_tools=("transaction_store_preview_tool", "get_store_schedule_tool"),
+        preferred_tool="search_stores_tool",
+        tool_args_patch={},
+        response_decision={"template": "location", "metadata": {"response_shape_key": "store_service_search"}},
+        context_state="dormant",
+    )
+
+    candidate = _contract_required_tool_candidate(
+        turn_contract=contract,
+        user_text="고양시청 근처는?",
+        merged_slots=None,
+    )
+
+    assert candidate is not None
+    assert candidate.tool_name == "search_stores_tool"
+    assert candidate.tool_input_source == "turn_contract_required_store_search"
+    assert candidate.tool_input == {"place_query": "고양시청"}
+
+
 def test_order_status_lookup_candidate_uses_owned_record_boundary() -> None:
     contract = TurnContract(
         domain="transaction",
@@ -219,6 +271,30 @@ def test_order_status_lookup_candidate_uses_owned_record_boundary() -> None:
     candidate = _contract_required_tool_candidate(
         turn_contract=contract,
         user_text="order delivery status",
+        merged_slots=None,
+    )
+
+    assert candidate is not None
+    assert candidate.tool_name == "get_orders_of_user_tool"
+    assert candidate.tool_input == {}
+    assert candidate.tool_input_source == "turn_contract_required_owned_record_lookup"
+
+
+def test_order_history_lookup_candidate_uses_owned_record_boundary() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="order_history_lookup",
+        known_slots={"owned_record_target": "order"},
+        allowed_tools=("get_orders_of_user_tool", "get_order_status_tool"),
+        forbidden_tools=("transaction_store_preview_tool", "get_store_schedule_tool"),
+        preferred_tool="get_orders_of_user_tool",
+        response_decision={"template": "quickReply", "metadata": {"response_shape_key": "order_history_lookup"}},
+        context_state="dormant",
+    )
+
+    candidate = _contract_required_tool_candidate(
+        turn_contract=contract,
+        user_text="내 주문 내역 보여줘",
         merged_slots=None,
     )
 
@@ -497,6 +573,93 @@ def test_schedule_slot_fill_price_lookup_candidate_requires_ready_order_slots() 
         turn_contract=contract,
         user_text="2026년 7월 5일 (일)\n15:00",
         merged_slots=ConversationSlots(),
+    )
+
+    assert candidate is None
+
+
+def test_price_or_coupon_contract_runs_final_price_for_confirmed_goods() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="price_or_coupon_check",
+        known_slots={"goods_no": "G000000310126", "ord_qty": 2},
+        allowed_tools=("search_product_tool", "get_final_price_tool", "get_my_coupons_tool"),
+        preferred_tool="get_final_price_tool",
+        response_decision={"template": "quickReply", "metadata": {"response_shape_key": "price_coupon_summary"}},
+        context_state="active",
+    )
+
+    candidate = _contract_required_tool_candidate(
+        turn_contract=contract,
+        user_text="적용된 할인이 뭐야?",
+        merged_slots=None,
+    )
+
+    assert candidate is not None
+    assert candidate.tool_name == "get_final_price_tool"
+    assert candidate.tool_input == {"goods_no": "G000000310126"}
+    assert candidate.tool_input_source == "turn_contract_price_or_coupon_check"
+    assert is_contract_required_price_or_coupon_final_price(contract, merged_slots=None) is True
+
+
+def test_price_or_coupon_contract_runs_final_price_even_when_preorder_slots_are_complete() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="price_or_coupon_check",
+        known_slots={
+            "goods_no": "G000000313182",
+            "product_name": "벤투스 S1 에보3",
+            "tire_size": "225/45R17",
+            "ord_qty": 2,
+            "shop_id": "F00098",
+            "shop_name": "티스테이션 역삼점",
+            "requested_cal_day": "20260706",
+            "rsv_hour": "14",
+            "payment_amount": 320800,
+        },
+        allowed_tools=("search_product_tool", "get_final_price_tool", "get_my_coupons_tool"),
+        preferred_tool="get_final_price_tool",
+        response_decision={"template": "quickReply", "metadata": {"response_shape_key": "price_coupon_summary"}},
+        context_state="resumed",
+        action_mode="info_only",
+    )
+
+    candidate = _contract_required_tool_candidate(
+        turn_contract=contract,
+        user_text="무슨 쿠폰이 적용된거야?",
+        merged_slots=ConversationSlots(
+            goods_no="G000000313182",
+            tire_size="225/45R17",
+            ord_qty=2,
+            shop_id="F00098",
+            shop_name="티스테이션 역삼점",
+            requested_cal_day="20260706",
+            rsv_hour="14",
+        ),
+    )
+
+    assert candidate is not None
+    assert candidate.tool_name == "get_final_price_tool"
+    assert candidate.tool_input == {"goods_no": "G000000313182"}
+    assert candidate.tool_input_source == "turn_contract_price_or_coupon_check"
+    assert is_contract_required_price_or_coupon_final_price(contract, merged_slots=None) is True
+
+
+def test_price_or_coupon_contract_does_not_use_stale_merged_goods_no() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="price_or_coupon_check",
+        known_slots={"product_name": "새로 물어본 상품", "ord_qty": 2},
+        allowed_tools=("search_product_tool", "get_final_price_tool", "get_my_coupons_tool"),
+        preferred_tool="get_final_price_tool",
+        response_decision={"template": "quickReply", "metadata": {"response_shape_key": "price_coupon_summary"}},
+        context_state="active",
+    )
+
+    candidate = _contract_required_tool_candidate(
+        turn_contract=contract,
+        user_text="이 상품 적용된 할인이 뭐야?",
+        merged_slots=ConversationSlots(goods_no="G000000_STALE"),
     )
 
     assert candidate is None

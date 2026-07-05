@@ -2650,6 +2650,7 @@ def test_metric_comparison_policy_answers_latest_product_confidently() -> None:
     assert "최신 상품은 다이나프로 HP3입니다." in assistant_response
     assert "**다이나프로 HPX**" in assistant_response
     assert "**다이나프로 HP3**" in assistant_response
+    assert result["data"]["quickReplies"] == []
     assert "| 출시 시점 | 2025년 2월 |" in assistant_response
     assert "| 출시 시점 | 2023년 1월 |" in assistant_response
     assert "사이즈:" not in assistant_response
@@ -3161,6 +3162,68 @@ def test_preview_logistics_datepick_without_explicit_today_service_uses_mode_cop
     assert result["template"] == "datepick"
     assert result["assistant_response_source"] == "code_mapper_schedule_mode"
     assert "오늘서비스는 어렵고" not in result["data"]["assistantResponse"]
+    assert result["data"]["assistantResponse"] == "물류 배송 후 장착 가능한 일정입니다. 예약하려는 날짜와 시간을 선택해 주세요."
+
+
+def test_purchase_store_selection_preview_maps_to_datepick_after_location_decision() -> None:
+    """Store selection in an active purchase flow should advance to schedule selection."""
+    current_action_mode.set("purchase_continuation")
+    current_pending_intent.set("order")
+    current_goal_type.set("place_order")
+    current_user_text.set("티스테이션 대화점")
+    current_transaction_response_decision.set(
+        ResponseDecision(
+            response_shape=ResponseShape.LOCATION,
+            template=TemplateName.LOCATION,
+            metadata={
+                "response_shape_key": "reservation_store_candidates",
+                "flow_step": "show_store_candidates",
+            },
+        )
+    )
+    entry = _preview_entry_with_schedule(
+        args={
+            "goods_no": "G000000318349",
+            "tire_size": "245/45R19",
+            "ord_qty": 2,
+            "shop_name": "대화점",
+            "store_name": "대화점",
+            "store_name_candidate": "티스테이션 대화점",
+            "place_query": "티스테이션 대화점",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "sub_flow_type": "purchase",
+            "stock_check_mode": "preview",
+        },
+        stores=[
+            _stub_store("F09192", "티스테이션 대화점"),
+            _stub_store("F00499", "티스테이션 덕이점"),
+        ],
+        schedule_stores=[{
+            "shop_id": "F09192",
+            "mode": "logistics_only",
+            "shop_nm": "티스테이션 대화점",
+            "is_installable": True,
+            "is_tna_delivery": True,
+            "slots": [
+                {"cal_day": "20260709", "tm": "10"},
+                {"cal_day": "20260709", "tm": "11"},
+                {"cal_day": "20260710", "tm": "13"},
+            ],
+        }],
+    )
+    entry["data"]["data"]["schedule"]["tier"] = "logistics_only"
+
+    result = try_build_template([entry], "물류 배송 후 장착 가능한 매장 2곳입니다. 원하시는 매장을 선택해 주세요.")
+
+    assert result is not None
+    assert result["template"] == "datepick"
+    assert result["assistant_response_source"] == "code_mapper_schedule_mode"
+    assert result["data"]["metadata"]["shopId"] == "F09192"
+    assert result["data"]["metadata"]["shopName"] == "티스테이션 대화점"
+    assert result["data"]["metadata"]["flow_step"] == "show_schedule"
+    assert result["data"]["metadata"]["current_step"] == "select_schedule"
+    assert result["data"]["metadata"]["missing_slots"] == ["booking_datetime"]
     assert result["data"]["assistantResponse"] == "물류 배송 후 장착 가능한 일정입니다. 예약하려는 날짜와 시간을 선택해 주세요."
 
 
@@ -4158,6 +4221,21 @@ def test_transaction_policy_invalid_store_blocks_datepick() -> None:
 
     assert _map_datepick([schedule_entry], "예약 가능한 시간을 확인했어요.") is None
 
+
+def test_price_or_coupon_policy_blocks_stale_schedule_datepick() -> None:
+    current_transaction_response_decision.set(ResponseDecision(
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        forbidden_behaviors=("datepick_for_price_or_coupon_check",),
+        metadata={"response_shape_key": "price_or_coupon_check"},
+    ))
+    schedule_entry = _schedule_entry(
+        mode="general",
+        is_installable=True,
+        slots=[{"cal_day": "20260707", "tm": "16"}],
+    )
+
+    assert _map_datepick([schedule_entry], "할인 내역을 확인했어요.") is None
 
 def test_schedule_datepick_filters_reservation_sale_dates_from_same_turn_preview() -> None:
     preview_entry = {

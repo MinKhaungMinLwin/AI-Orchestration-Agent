@@ -79,6 +79,9 @@ current_return_visit_store_flow: contextvars.ContextVar[bool] = contextvars.Cont
 current_excluded_store_ids: contextvars.ContextVar[set[str]] = contextvars.ContextVar(
     "current_excluded_store_ids", default=set()
 )
+current_price_summary_context: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar(
+    "current_price_summary_context", default={}
+)
 
 # True when the current turn asks whether a store is open/closed or bookable on
 # a specific date. In that case a single-day `get_store_detail_tool` result
@@ -756,6 +759,40 @@ def _preview_schedule_stores_by_shop_id(raw: dict) -> dict[str, dict]:
         if shop_id:
             stores_by_shop_id[shop_id] = store
     return stores_by_shop_id
+
+
+def _is_purchase_store_selection_preview(args: Mapping[str, Any], raw: dict) -> bool:
+    """True when preview output already advances a purchase flow past store selection."""
+    order_flow = (
+        current_pending_intent.get() == "order"
+        or current_goal_type.get() == "place_order"
+        or _get_str(dict(args), "pending_intent") == "order"
+        or _get_str(dict(args), "goal_type") == "place_order"
+        or _get_str(dict(args), "sub_flow_type") == "purchase"
+    )
+    if not order_flow:
+        return False
+    if not (_get_str(dict(args), "goods_no") and args.get("ord_qty")):
+        return False
+    has_store_selection = bool(
+        _get_str(
+            dict(args),
+            "shop_id",
+            "store_nm",
+            "shop_name",
+            "store_name",
+            "store_name_candidate",
+            "place_query",
+        )
+    )
+    if not has_store_selection:
+        return False
+    schedule = raw.get("schedule") if isinstance(raw.get("schedule"), dict) else {}
+    stores = schedule.get("stores") if isinstance(schedule.get("stores"), list) else []
+    if len(stores) != 1 or not isinstance(stores[0], dict):
+        return False
+    slots = stores[0].get("slots")
+    return isinstance(slots, list) and bool(slots)
 
 
 def _preview_location_metadata(
@@ -3435,7 +3472,10 @@ def _map_discovery_policy_quickreply(tool_data_list: list[dict], assistant_text:
         return None
     response = _with_discovery_claim_check_prefix(response)
     product_context = _single_sized_product_context(tool_data_list)
-    if response_shape_key == "product_search_summary" and _product_search_policy_requested_size(tool_data_list):
+    if response_shape_key in {"metric_comparison_summary", "grade_comparison_summary"}:
+        quick_replies = []
+        predicted_domains = ["DISCOVERY"]
+    elif response_shape_key == "product_search_summary" and _product_search_policy_requested_size(tool_data_list):
         quick_replies = _DISCOVERY_SIZED_PRODUCT_CHIPS
         predicted_domains = ["TRANSACTION"]
     else:
@@ -3499,7 +3539,8 @@ def _contract_policy_quickreply_event(
     if not response:
         return None
     response = _with_discovery_claim_check_prefix(response)
-    quick_replies = _DISCOVERY_RESTOCK_CHIPS if response_shape_key == "restock_inquiry_summary" else (
+    quick_replies = [] if response_shape_key in {"metric_comparison_summary", "grade_comparison_summary"} else (
+        _DISCOVERY_RESTOCK_CHIPS if response_shape_key == "restock_inquiry_summary" else
         _DISCOVERY_POLICY_QUICKREPLY_CHIPS
     )
     predicted_domains = ["DISCOVERY", "SUPPORT"] if response_shape_key == "restock_inquiry_summary" else ["DISCOVERY"]
@@ -3663,6 +3704,273 @@ def _map_contract_response_shape(tool_data_list: list[dict], assistant_text: str
     if not event:
         return None
     return _with_contract_renderer_metadata(event, response_shape_key)
+
+
+def _format_won(value: int | None) -> str:
+    if value is None:
+        return ""
+    return f"{int(value):,}원"
+
+
+def _map_price_or_coupon_summary(tool_data_list: list[dict], assistant_text: str) -> dict | None:
+    response_shape_key = _current_response_shape_key()
+    if response_shape_key not in {"price_coupon_summary", "product_coupon_discount_amount"}:
+        return None
+    entries = _find_entries(tool_data_list, "get_final_price_tool")
+    if not entries:
+        return None
+    entry = entries[-1]
+    row = _unwrap(entry)
+    if not isinstance(row, dict):
+        return None
+    if isinstance(row.get("data"), dict):
+        row = row["data"]
+    items = row.get("items")
+    if isinstance(items, list) and items and isinstance(items[0], dict):
+        row = items[0]
+
+    args = _tool_args(entry)
+    context = current_price_summary_context.get() or {}
+    product_name = (
+        _get_str(args, "product_name", "productName")
+        or _get_str(context, "product_name", "productName", "tire_model", "pending_product_name")
+        or _get_str(row, "goods_nm", "product_name", "productName", "title")
+        or "해당 상품"
+    )
+    tire_size = (
+        _get_str(args, "tire_size", "tireSize")
+        or _get_str(context, "tire_size", "tireSize")
+        or _get_str(row, "tire_size", "tireSize")
+    )
+    try:
+        quantity = max(
+            1,
+            int(
+                args.get("ord_qty")
+                or args.get("quantity")
+                or context.get("ord_qty")
+                or context.get("quantity")
+                or row.get("ord_qty")
+                or 1
+            ),
+        )
+    except (TypeError, ValueError):
+        quantity = 1
+
+    sale_unit = int(_get_num(row, "sale_prc", default=0)) or None
+    final_unit = _display_final_unit_price(row)
+    if sale_unit is None or final_unit is None:
+        return None
+    discount_unit = int(_get_num(row, "cheapest_total_discount", default=0)) or None
+    if discount_unit is None:
+        discount_unit = max(0, int(sale_unit) - int(final_unit))
+
+    coupons = row.get("cheapest_applied_coupons") or row.get("applied_coupons")
+    coupon_names: list[str] = []
+    if isinstance(coupons, list):
+        for coupon in coupons:
+            if not isinstance(coupon, Mapping):
+                continue
+            coupon_name = _get_str(coupon, "cpn_nm", "coupon_name", "name")
+            if coupon_name and coupon_name not in coupon_names:
+                coupon_names.append(coupon_name)
+
+    product_label = " ".join(part for part in (product_name, tire_size) if part)
+    lines = [
+        f"{product_label} {quantity}개 기준으로 적용 가능한 할인 내역을 확인했어요.",
+        "",
+        f"- 정가 합계: {_format_won(int(sale_unit) * quantity)}",
+        f"- 쿠폰/혜택 할인액: {_format_won(int(discount_unit) * quantity)}",
+        f"- 최종 혜택가: {_format_won(int(final_unit) * quantity)}",
+    ]
+    if coupon_names:
+        lines.append(f"- 적용 기준 쿠폰: {', '.join(coupon_names[:3])}")
+
+    return _with_contract_renderer_metadata(
+        {
+            "type": "data",
+            "template": "quickReply",
+            "source_domain": "transaction",
+            "assistant_response_source": "code_price_or_coupon_final_price",
+            "data": {
+                "assistantResponse": "\n".join(lines),
+                "quickReplies": [
+                    {"label": "구매하기", "domain": "TRANSACTION"},
+                    {"label": "장바구니 담기", "domain": "TRANSACTION"},
+                    {"label": "내 쿠폰 조회", "domain": "TRANSACTION"},
+                ],
+                "predictedDomains": ["TRANSACTION"],
+                "metadata": {
+                    "response_shape_key": response_shape_key,
+                    "goods_no": args.get("goods_no") or row.get("goods_no"),
+                    "ordQty": quantity,
+                    "ord_qty": quantity,
+                },
+            },
+        },
+        response_shape_key,
+    )
+
+
+def _order_history_rows(tool_result: dict) -> list[dict]:
+    data = tool_result.get("data") if isinstance(tool_result, dict) else None
+    if not isinstance(data, dict):
+        return []
+    rows = data.get("orders")
+    if not isinstance(rows, list):
+        rows = data.get("items")
+    return [row for row in rows or [] if isinstance(row, dict)]
+
+
+def _order_history_row_value(row: Mapping[str, Any], *keys: str) -> str:
+    detail = row.get("detail") if isinstance(row.get("detail"), Mapping) else {}
+    for key in keys:
+        value = row.get(key)
+        if value in (None, ""):
+            value = detail.get(key)
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _order_history_no(row: Mapping[str, Any]) -> str:
+    return _order_history_row_value(row, "ord_no", "ordNo", "order_no", "orderNo").upper()
+
+
+def _map_order_history_lookup(tool_data_list: list[dict], assistant_text: str) -> dict | None:
+    response_shape_key = _current_response_shape_key()
+    if response_shape_key != "order_history_lookup":
+        return None
+    entries = _find_entries(tool_data_list, "get_orders_of_user_tool")
+    if not entries:
+        return None
+    entry = entries[-1]
+    result = entry.get("data") if isinstance(entry.get("data"), dict) else {}
+    status = str(result.get("status") or "").strip().lower()
+    metadata = {
+        "response_shape_key": "order_history_lookup",
+        "orderHistoryLookup": True,
+    }
+    if status == "error":
+        return {
+            "type": "data",
+            "template": "quickReply",
+            "source_domain": "transaction",
+            "assistant_response_source": "code_order_history_lookup",
+            "data": {
+                "assistantResponse": "주문내역을 불러오지 못했어요. 잠시 후 다시 시도해 주세요.",
+                "quickReplies": [
+                    {"label": "다시 시도", "domain": "TRANSACTION"},
+                    {"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"},
+                ],
+                "predictedDomains": ["TRANSACTION"],
+                "metadata": metadata | {"orderCount": 0, "lookupFailed": True},
+            },
+        }
+
+    grouped: dict[str, dict[str, Any]] = {}
+    for row in _order_history_rows(result):
+        ord_no = _order_history_no(row)
+        if not ord_no:
+            continue
+        group = grouped.setdefault(
+            ord_no,
+            {"ord_no": ord_no, "rows": [], "status": "", "goods_nm": "", "qty": 0, "date": ""},
+        )
+        group["rows"].append(row)
+        if not group["status"]:
+            group["status"] = _order_history_row_value(row, "ord_prgs_stat_nm", "status_nm") or "상태 확인 필요"
+        if not group["goods_nm"]:
+            group["goods_nm"] = _order_history_row_value(row, "goods_nm", "goodsName") or "상품명 확인 필요"
+        qty_text = _order_history_row_value(row, "ord_qty", "ordQty")
+        if qty_text.isdigit():
+            group["qty"] += int(qty_text)
+        date_text = _simple_date_label(_order_history_row_value(row, "sys_reg_dtime", "ord_dtime", "orderDate"))
+        if date_text and date_text > str(group["date"] or ""):
+            group["date"] = date_text
+
+    summaries = sorted(grouped.values(), key=lambda item: str(item.get("date") or ""), reverse=True)
+    if not summaries:
+        return {
+            "type": "data",
+            "template": "quickReply",
+            "source_domain": "transaction",
+            "assistant_response_source": "code_order_history_lookup",
+            "data": {
+                "assistantResponse": "최근 주문 내역이 없어요.",
+                "quickReplies": [
+                    {"label": "상품 추천 받기", "domain": "DISCOVERY"},
+                    {"label": "매장 찾기", "domain": "TRANSACTION"},
+                ],
+                "predictedDomains": ["TRANSACTION", "DISCOVERY"],
+                "metadata": metadata | {"orderCount": 0, "lookupFailed": False},
+            },
+        }
+
+    table_lines = [
+        "| 주문번호 | 주문상태 | 상품명 | 수량 | 주문날짜 |",
+        "|---|---|---|---|---|",
+    ]
+    for item in summaries[:5]:
+        extra_count = max(len(item["rows"]) - 1, 0)
+        goods_nm = str(item["goods_nm"] or "상품명 확인 필요").replace("|", "/")
+        if extra_count:
+            goods_nm = f"{goods_nm} 외 {extra_count}개"
+        qty = item["qty"] if item["qty"] > 0 else "-"
+        status = str(item["status"] or "상태 확인 필요").replace("|", "/")
+        table_lines.append(f"| {item['ord_no']} | {status} | {goods_nm} | {qty} | {item['date'] or '-'} |")
+
+    latest_ord_no = str(summaries[0]["ord_no"] or "")
+    if len(summaries) == 1:
+        assistant_response = (
+            "최근 주문 1건을 확인했어요.\n\n"
+            + "\n".join(table_lines)
+            + "\n\n주문 상세도 함께 보실 수 있어요."
+        )
+        quick_replies = [
+            {
+                "label": "주문 상세 보기",
+                "url": CTAUrls.ORDER_HISTORY_DETAIL.replace("<ord_no>", latest_ord_no),
+                "domain": "TRANSACTION",
+            },
+            {"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"},
+        ]
+    else:
+        assistant_response = (
+            "최근 주문내역을 확인했어요.\n\n"
+            + "\n".join(table_lines)
+            + "\n\n어느 주문을 더 확인할지 주문번호를 말씀해 주세요. 전체 주문 내역은 아래 버튼에서 확인하실 수 있어요."
+        )
+        quick_replies = [{"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"}]
+        if latest_ord_no:
+            quick_replies.append(
+                {
+                    "label": "최근 주문 상세 보기",
+                    "url": CTAUrls.ORDER_HISTORY_DETAIL.replace("<ord_no>", latest_ord_no),
+                    "domain": "TRANSACTION",
+                }
+            )
+
+    return _with_contract_renderer_metadata(
+        {
+            "type": "data",
+            "template": "quickReply",
+            "source_domain": "transaction",
+            "assistant_response_source": "code_order_history_lookup",
+            "data": {
+                "assistantResponse": assistant_response,
+                "quickReplies": quick_replies,
+                "predictedDomains": ["TRANSACTION"],
+                "metadata": metadata | {
+                    "orderCount": len(summaries),
+                    "latestOrdNo": latest_ord_no,
+                    "lookupFailed": False,
+                },
+            },
+        },
+        response_shape_key,
+    )
 
 
 def _simple_date_label(value: Any) -> str:
@@ -6058,13 +6366,24 @@ def _map_datepick_from_preview(tool_data_list: list[dict], assistant_text: str) 
     if _is_other_store_request():
         return None
     transaction_decision = current_transaction_response_decision.get()
+    if transaction_decision and transaction_decision.forbids("datepick_for_price_or_coupon_check"):
+        return None
     decision_metadata = transaction_decision.metadata if transaction_decision is not None else {}
     response_shape_key = str(decision_metadata.get("response_shape_key") or "").strip()
     flow_step = str(decision_metadata.get("flow_step") or "").strip()
+    has_purchase_store_selection_preview = False
+    for entry in reversed(_find_entries(tool_data_list, "transaction_store_preview_tool")):
+        args = entry.get("args") if isinstance(entry.get("args"), dict) else entry.get("input")
+        args = args if isinstance(args, dict) else {}
+        raw = _unwrap(entry)
+        if isinstance(raw, dict) and _is_purchase_store_selection_preview(args, raw):
+            has_purchase_store_selection_preview = True
+            break
     if (
         transaction_decision is not None
         and transaction_decision.template == TemplateName.LOCATION
         and (response_shape_key == "reservation_store_candidates" or flow_step == "show_store_candidates")
+        and not has_purchase_store_selection_preview
     ):
         return None
     if current_action_mode.get() != "unspecified" and not _has_current_turn_transaction_action():
@@ -6073,11 +6392,17 @@ def _map_datepick_from_preview(tool_data_list: list[dict], assistant_text: str) 
     for entry in reversed(_find_entries(tool_data_list, "transaction_store_preview_tool")):
         args = entry.get("args") if isinstance(entry.get("args"), dict) else entry.get("input")
         args = args if isinstance(args, dict) else {}
+        raw = _unwrap(entry)
+        if not isinstance(raw, dict):
+            continue
         exact_order_preview = bool(
-            _get_str(args, "store_nm")
-            and _get_str(args, "goods_no")
-            and args.get("ord_qty")
-            and args.get("include_price")
+            _is_purchase_store_selection_preview(args, raw)
+            or (
+                _get_str(args, "store_nm")
+                and _get_str(args, "goods_no")
+                and args.get("ord_qty")
+                and args.get("include_price")
+            )
         )
         pending_intent = current_pending_intent.get()
         goal_type = current_goal_type.get()
@@ -6089,9 +6414,6 @@ def _map_datepick_from_preview(tool_data_list: list[dict], assistant_text: str) 
         ):
             return None
 
-        raw = _unwrap(entry)
-        if not isinstance(raw, dict):
-            continue
         event = build_datepick_from_preview_payload(
             raw,
             assistant_text=assistant_text,
@@ -6158,6 +6480,8 @@ def _map_datepick(tool_data_list: list[dict], assistant_text: str) -> dict | Non
         return None
     transaction_decision = current_transaction_response_decision.get()
     same_turn_logistics_schedule_has_slots = _same_turn_logistics_schedule_has_slots(tool_data_list)
+    if transaction_decision and transaction_decision.forbids("datepick_for_price_or_coupon_check"):
+        return None
     if transaction_decision and transaction_decision.forbids("datepick_for_unverified_store"):
         return None
     if (
@@ -6308,6 +6632,12 @@ def _build_datepick_metadata(
     metadata: dict[str, Any] = {"shopId": shop_id}
     if shop_name:
         metadata["shopName"] = shop_name
+    metadata["flowStep"] = "show_schedule"
+    metadata["flow_step"] = "show_schedule"
+    metadata["currentStep"] = "select_schedule"
+    metadata["current_step"] = "select_schedule"
+    metadata["missingSlots"] = ["booking_datetime"]
+    metadata["missing_slots"] = ["booking_datetime"]
 
     schedule = raw.get("schedule") if isinstance(raw.get("schedule"), dict) else {}
     schedule_stores = schedule.get("stores") if isinstance(schedule.get("stores"), list) else []
@@ -7052,6 +7382,7 @@ _MAPPERS: dict[str, Any] = {
     "get_stores_with_time_filter_tool": _map_time_filter_location,
     "get_store_schedule_tool": _map_datepick,
     "get_store_detail_tool": _map_store_detail_info,
+    "get_orders_of_user_tool": _map_order_history_lookup,
     "save_to_cart_tool": _map_order_complete,
     "quick_order_tool": _map_order_complete,
 }
@@ -7086,6 +7417,14 @@ def try_build_template(accumulated_tool_data: list[dict], assistant_text: str) -
             (contract_response_shape.get("data") or {}).get("metadata", {}).get("contract_renderer_key"),
         )
         return contract_response_shape
+
+    price_or_coupon_summary = _map_price_or_coupon_summary(accumulated_tool_data, assistant_text)
+    if price_or_coupon_summary is not None:
+        return price_or_coupon_summary
+
+    order_history_lookup = _map_order_history_lookup(accumulated_tool_data, assistant_text)
+    if order_history_lookup is not None:
+        return order_history_lookup
 
     unsized_tire_summary = _map_unsized_tire_summary(accumulated_tool_data, assistant_text)
     if unsized_tire_summary is not None:
@@ -7133,6 +7472,7 @@ def try_build_template(accumulated_tool_data: list[dict], assistant_text: str) -
         ("get_my_cars_tool", _map_list_car),
         ("get_user_vehicles_tool", _map_list_car),
         ("get_my_coupons_tool", _map_voucher),
+        ("get_orders_of_user_tool", _map_order_history_lookup),
         ("compare_discount_tool", _map_cheapest_product),
         ("get_cheapest_price_tool", _map_cheapest_product),
         ("search_youtube_video_tool", _map_preview_youtube),

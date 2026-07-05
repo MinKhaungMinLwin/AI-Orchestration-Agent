@@ -2300,9 +2300,13 @@ class BaseAgent(ABC):
         preferred_tool = str(getattr(tool_plan, "preferred_tool", None) or "")
         metadata = getattr(tool_plan, "metadata", None) or {}
         flow_id = str(metadata.get("flow_id") or "")
-        if decision.template != TemplateName.QUICK_REPLY and flow_id != "purchase_order":
-            return None
         contract_intent = str(metadata.get("response_intent") or "")
+        store_search_location_guard = bool(
+            decision.template == TemplateName.LOCATION
+            and contract_intent in {"store_search", "open_store_search", "store_service_search"}
+        )
+        if decision.template != TemplateName.QUICK_REPLY and flow_id != "purchase_order" and not store_search_location_guard:
+            return None
         required_slots = tuple(getattr(tool_plan, "required_slots", ()) or getattr(decision, "required_slots", ()) or ())
         if not forbidden_tools and not allowed_tools:
             return None
@@ -2350,6 +2354,23 @@ class BaseAgent(ABC):
                 )
                 flow_event["assistant_response_source"] = "code_contract_tool_guard"
                 return [*self._code_template_events(flow_event, response_streamer, answering_emitted)]
+        elif store_search_location_guard:
+            replacement_events = self._preferred_contract_tool_replacement_events(
+                blocked_tool=tool_name,
+                preferred_tool=preferred_tool,
+                tool_plan=tool_plan,
+                metadata=metadata,
+                contract_intent=contract_intent,
+                allowed_tools=allowed_tools,
+                forbidden_tools=forbidden_tools,
+                required_slots=required_slots,
+                block_reason=block_reason,
+                config=config,
+                response_streamer=response_streamer,
+                answering_emitted=answering_emitted,
+            )
+            if replacement_events is not None:
+                return replacement_events
 
         user_query = _latest_user_text(messages or [])
         logger.info(
@@ -2532,8 +2553,8 @@ class BaseAgent(ABC):
             for key, value in dict(getattr(tool_plan, "tool_args_patch", {}) or {}).items()
             if value not in (None, "", [], {})
         }
+        flow_slots = metadata.get("flow_slots") if isinstance(metadata.get("flow_slots"), dict) else {}
         if preferred_tool == "get_store_schedule_tool":
-            flow_slots = metadata.get("flow_slots") if isinstance(metadata.get("flow_slots"), dict) else {}
             shop_id = tool_input.get("shop_id") or flow_slots.get("shop_id")
             mode = (
                 tool_input.get("mode")
@@ -2555,6 +2576,26 @@ class BaseAgent(ABC):
                 for key, value in {"shop_id": shop_id, "mode": mode}.items()
                 if value not in (None, "", [], {})
             }
+        elif preferred_tool == "search_stores_tool" and not tool_input:
+            place_query = str(
+                flow_slots.get("place_query")
+                or flow_slots.get("region")
+                or flow_slots.get("location_name")
+                or ""
+            ).strip()
+            if place_query:
+                tool_input = {"place_query": place_query}
+        elif preferred_tool == "get_store_list_tool" and not tool_input:
+            store_nm = str(flow_slots.get("shop_name") or flow_slots.get("store_name") or "").strip()
+            region = str(flow_slots.get("region") or "").strip()
+            if store_nm:
+                tool_input = {"store_nm": store_nm}
+            elif region:
+                tool_input = {"region": region}
+        elif preferred_tool == "get_final_price_tool" and not tool_input:
+            goods_no = str(flow_slots.get("goods_no") or "").strip()
+            if goods_no:
+                tool_input = {"goods_no": goods_no}
         if not tool_input:
             return None
 

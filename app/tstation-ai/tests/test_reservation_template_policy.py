@@ -355,6 +355,33 @@ def test_order_preview_generic_quickreply_stock_context_is_not_coerced() -> None
     assert result is None
 
 
+def test_schedule_confirmation_quickreply_quick_order_failure_is_not_coerced() -> None:
+    event = {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "transaction",
+        "data": {
+            "assistantResponse": "주문서 생성에 실패했어요. 주문 정보를 다시 확인해 주세요.",
+            "quickReplies": [
+                {"label": "주문 정보 다시 확인", "domain": "TRANSACTION"},
+                {"label": "장바구니 확인", "domain": "TRANSACTION"},
+            ],
+            "metadata": {
+                "response_shape_key": "quick_order_execute",
+                "quickOrderResult": "failed",
+            },
+        },
+    }
+
+    result = coerce_schedule_confirmation_quickreply_to_datepick(
+        event,
+        user_text="예약 가능 시간 다시 볼래",
+        latest_datepick_data=_datepick_event()["data"],
+    )
+
+    assert result is None
+
+
 def test_weekend_request_keeps_first_weekend_block() -> None:
     result = filter_datepick_to_requested_weekday(_datepick_event(), "이번주말 예약 가능해?")
 

@@ -7,6 +7,7 @@ entry-path details such as schedule UI actions or QC correction paths.
 from __future__ import annotations
 
 import datetime
+import re
 from typing import Any, Mapping
 
 from services.tstation.policies.discovery_intent_policy import normalize_tire_size
@@ -67,8 +68,8 @@ def build_preorder_event(
     if ord_qty <= 0:
         return None
 
-    product_name = _product_name(slot_values)
-    product_label = f"{product_name} {tire_size}".strip() if product_name else tire_size
+    product_name = _product_name(slot_values, tire_size=tire_size)
+    product_label = _product_label(product_name, tire_size)
     booking_datetime = _booking_datetime(requested_cal_day, rsv_hour)
     payment_amount, price_basis, price_source_tool, payment_amount_source = _payment_amount(slot_values)
     car_info = _car_info(slot_values)
@@ -203,13 +204,40 @@ def _has_ready_preorder_slots(slots: Mapping[str, Any]) -> bool:
     )
 
 
-def _product_name(slots: Mapping[str, Any]) -> str:
+def _product_name(slots: Mapping[str, Any], *, tire_size: str = "") -> str:
     for context in _product_context_candidates(slots):
-        for key in ("product_name", "goods_nm", "goodsNm", "tire_model", "pending_product_name"):
+        for key in ("goods_nm", "goodsNm", "product_name", "tire_model", "pending_product_name"):
             product_name = str(context.get(key) or "").strip()
             if product_name:
-                return product_name
+                return _product_name_without_tire_size(product_name, tire_size)
     return ""
+
+
+def _product_name_without_tire_size(product_name: str, tire_size: str) -> str:
+    product_name = str(product_name or "").strip()
+    tire_size = normalize_tire_size(str(tire_size or "")) or normalize_tire_size(product_name) or ""
+    if not product_name or not tire_size:
+        return product_name
+    cleaned = re.sub(
+        r"\s*(?:LT)?\d{3}\s*/?\s*\d{2}\s*(?:ZR|R)?\s*\d{2}\s*$",
+        "",
+        product_name,
+        flags=re.IGNORECASE,
+    ).strip()
+    return cleaned or product_name
+
+
+def _product_label(product_name: str, tire_size: str) -> str:
+    product_name = str(product_name or "").strip()
+    tire_size = normalize_tire_size(str(tire_size or "")) or ""
+    if not product_name:
+        return tire_size
+    if not tire_size:
+        return product_name
+    product_name_size = normalize_tire_size(product_name)
+    if product_name_size and product_name_size == tire_size:
+        return product_name
+    return f"{product_name} {tire_size}".strip()
 
 
 def _payment_amount(slots: Mapping[str, Any]) -> tuple[int | None, str | None, str | None, str | None]:

@@ -7,6 +7,7 @@ import datetime
 from typing import Any, Mapping
 
 from services.tstation.policies.intent_frame import IntentFrame, PolicyDomain
+from services.tstation.policies.discovery_intent_policy import extract_product_names
 from services.tstation.policies.flow_controller import resolve_purchase_order_flow
 from services.tstation.policies.flow_state import flow_state_values_from_slot_values
 from services.tstation.policies.policy_text_matchers import is_general_card_cancel_timing_policy_query
@@ -22,6 +23,7 @@ from services.tstation.policies.store_service_gate import (
 
 _SIZE_COMPACT_RE = re.compile(r"\b(\d{3})\s*/?\s*(\d)(\d)(?:\3)?\s*R?\s*(\d{2})\b", re.IGNORECASE)
 _QUANTITY_RE = re.compile(r"(\d+)\s*(?:개|본|짝)")
+_LOCATION_SEARCH_SUFFIX_RE = re.compile(r"\s*(?:근처|인근|지역|쪽)\s*$")
 _TODAY_RE = re.compile(r"오늘|당일|바로|당장", re.IGNORECASE)
 _NOW_SERVICE_REQUEST_RE = re.compile(
     r"지금.{0,12}(?:장착|서비스|예약|방문|가능)|(?:장착|서비스|예약|방문).{0,12}지금",
@@ -372,6 +374,13 @@ _PRODUCT_HINT_RE = re.compile(
     re.IGNORECASE,
 )
 _PRICE_OR_COUPON_RE = re.compile(r"가격|할인가|최대\s*혜택|쿠폰|할인", re.IGNORECASE)
+_PRICE_OR_COUPON_ROUTER_INTENTS = frozenset({
+    "price_or_coupon_check",
+    "order_price_breakdown_lookup",
+    "order_discount_explanation",
+    "explain_discount_application",
+    "price_coupon_summary",
+})
 _TODAY_INSTALL_OR_RESERVATION_RE = re.compile(
     r"오늘\s*장착|오늘장착|오늘\s*서비스|오늘서비스|당일|"
     r"예약|방문|장착\s*가능|예약\s*가능|가능한\s*(?:시간|일정)|"
@@ -527,6 +536,34 @@ def _has_pending_today_install_context(slots: dict[str, Any]) -> bool:
         return True
     return bool(slots.get("requested_cal_day") and slots.get("goods_no") and (slots.get("quantity") or slots.get("ord_qty")))
 
+
+def _has_price_or_coupon_router_evidence(slots: Mapping[str, Any]) -> bool:
+    direct_intents = (
+        slots.get("router_transaction_intent"),
+        slots.get("planner_intent"),
+        slots.get("current_turn_intent"),
+    )
+    if any(str(intent or "").strip() in _PRICE_OR_COUPON_ROUTER_INTENTS for intent in direct_intents):
+        return True
+    availability_context = slots.get("availability_context")
+    if not isinstance(availability_context, Mapping):
+        return False
+    latest_router_evidence = availability_context.get("latest_router_evidence")
+    if not isinstance(latest_router_evidence, Mapping):
+        return False
+    router_intent = str(latest_router_evidence.get("intent") or "").strip()
+    if router_intent in _PRICE_OR_COUPON_ROUTER_INTENTS:
+        return True
+    execution_plan = latest_router_evidence.get("execution_plan")
+    if not isinstance(execution_plan, (list, tuple)):
+        return False
+    for item in execution_plan:
+        plan_intent = str(item or "").strip()
+        if plan_intent.partition(":")[2]:
+            plan_intent = plan_intent.partition(":")[2]
+        if plan_intent in _PRICE_OR_COUPON_ROUTER_INTENTS:
+            return True
+    return False
 
 def _has_confirmed_product_quantity_context(slots: dict[str, Any]) -> bool:
     return bool(slots.get("goods_no") and (slots.get("quantity") or slots.get("ord_qty")))
@@ -838,6 +875,7 @@ def build_transaction_intent_frame(
     explicit_tire_size = normalize_tire_size(text)
     current_store_name = _store_candidate_or_canonical(_extract_store_name(text), slots)
     router_current_region = _router_verified_region(slots)
+    router_current_place_query = _router_verified_place_query(slots)
     raw_current_region = router_current_region or _extract_region(text)
     current_product_name = _extract_product_name(text)
     current_has_product = bool(current_product_name or _PRODUCT_HINT_RE.search(text))
@@ -919,7 +957,7 @@ def build_transaction_intent_frame(
         or (_NOW_SERVICE_REQUEST_RE.search(text) and not _CURRENTLY_MOUNTED_TIRE_RE.search(text))
     )
     current_stock = bool(_STOCK_RE.search(text) or current_today_request)
-    current_price = bool(_PRICE_OR_COUPON_RE.search(text))
+    current_price = bool(_PRICE_OR_COUPON_RE.search(text) or _has_price_or_coupon_router_evidence(slots))
     router_alert_contract = str(slots.get("router_transaction_intent") or "") == "price_or_benefit_alert_request"
     current_maintenance_history_access_policy = bool(_MAINTENANCE_HISTORY_ACCESS_POLICY_RE.search(text))
     current_maintenance_history_lookup = bool(
@@ -1395,7 +1433,7 @@ def build_transaction_intent_frame(
         intent = "quick_order_reservation"
         sub_intent = "reservation"
         entities["stock_check_mode"] = "preview"
-        entities["place_query"] = router_current_region or text.strip()
+        entities["place_query"] = router_current_place_query or router_current_region or text.strip()
         entities["store_slot_fill_text"] = True
     elif current_store_holiday_lookup:
         intent = "store_holiday_lookup"
@@ -1543,7 +1581,11 @@ def build_transaction_intent_frame(
         intent = "stock_store_search"
         sub_intent = "reservation"
         entities["stock_check_mode"] = "preview"
-    elif _PRICE_OR_COUPON_RE.search(text):
+    elif current_purchase and has_product and tire_size and stored_quantity:
+        intent = "quick_order_reservation"
+        sub_intent = "cart" if current_cart else "reservation"
+        entities["stock_check_mode"] = "preview"
+    elif current_price:
         intent = "price_or_coupon_check"
         sub_intent = "coupon" if "쿠폰" in text else "price"
     elif (
@@ -2973,6 +3015,9 @@ def _extract_store_name(text: str) -> str | None:
 
 
 def _extract_product_name(text: str) -> str | None:
+    product_names = extract_product_names(text or "")
+    if product_names:
+        return product_names[0]
     normalized = (text or "").casefold()
     for needle, display_name in _PRODUCT_ALIASES:
         if needle.casefold() in normalized:
@@ -2984,7 +3029,15 @@ def _extract_region(text: str) -> str | None:
     match = _REGION_HINT_RE.search(text or "")
     if not match:
         return None
-    return match.group(1)
+    return _normalize_location_search_query(match.group(1))
+
+
+def _normalize_location_search_query(value: str | None) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    normalized = _LOCATION_SEARCH_SUFFIX_RE.sub("", text).strip()
+    return normalized or text
 
 
 def _router_verified_region(slots: Mapping[str, Any]) -> str | None:
@@ -3003,5 +3056,22 @@ def _router_verified_region(slots: Mapping[str, Any]) -> str | None:
     for field in ("location_name", "region", "place_query"):
         value = str(slots.get(field) or "").strip()
         if value:
-            return value
+            return _normalize_location_search_query(value)
+    return None
+
+
+def _router_verified_place_query(slots: Mapping[str, Any]) -> str | None:
+    slot_sources = slots.get("slot_sources")
+    if not isinstance(slot_sources, Mapping):
+        return None
+    has_router_location = any(
+        str(slot_sources.get(field) or "").strip() == "router_evidence"
+        for field in ("location_name", "place_query", "location_type")
+    )
+    if not has_router_location:
+        return None
+    for field in ("location_name", "place_query", "region"):
+        value = str(slots.get(field) or "").strip()
+        if value:
+            return _normalize_location_search_query(value)
     return None

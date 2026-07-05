@@ -1,3 +1,14 @@
+"""Canonical commerce flow state and progress evaluation.
+
+Scope:
+- Owns persisted flow sections: product, vehicle, store, schedule, payment, intent, candidates, and dormant flows.
+- Merges current-turn deltas into FlowState and clears dependent stale state when product/quantity/store/schedule changes.
+- Computes missing slots and the next action/tool/template via evaluate_flow_progress().
+
+Out of scope:
+- Interpreting raw user/UI events. flow_controller.py turns those events into deltas before they are merged here.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -141,11 +152,6 @@ _DEPENDENCY_FIELD_BLOCKS: dict[str, frozenset[str]] = {
         "store_name",
         "requested_cal_day",
         "rsv_hour",
-        "payment_amount",
-        "payment_amount_source",
-        "price_basis",
-        "price_source_tool",
-        "payment_amount_stale",
     }),
     "region_changed": frozenset({
         "shop_id",
@@ -153,11 +159,6 @@ _DEPENDENCY_FIELD_BLOCKS: dict[str, frozenset[str]] = {
         "store_name",
         "requested_cal_day",
         "rsv_hour",
-        "payment_amount",
-        "payment_amount_source",
-        "price_basis",
-        "price_source_tool",
-        "payment_amount_stale",
     }),
     "schedule_changed": frozenset({
         "payment_amount",
@@ -224,6 +225,7 @@ _INTENT_FIELDS = (
     "goal_type",
     "stock_check_mode",
     "schedule_mode",
+    "source_tool",
     "availability_intent",
     "store_search_condition",
     "requested_vehicle_experience",
@@ -285,6 +287,7 @@ _COMMERCE_SUB_FLOW_TYPES = {
     "recommendation",
     "stock",
     "booking",
+    "price_check",
     "store_search",
     "store_schedule",
     "store_service_search",
@@ -544,6 +547,9 @@ def _clear_product_dependent_context(
         for field_name in product_fields:
             if state.product.pop(field_name, None) not in _EMPTY_VALUES:
                 cleared_fields.append(field_name)
+    for field_name in ("ord_qty", "quantity"):
+        if state.product.pop(field_name, None) not in _EMPTY_VALUES:
+            cleared_fields.append(field_name)
     for field_name in ("shop_id", "shop_name", "store_name"):
         if state.store.pop(field_name, None) not in _EMPTY_VALUES:
             cleared_fields.append(field_name)
@@ -577,7 +583,6 @@ def _clear_dormant_product_dependencies(state: "FlowState", cleared_fields: list
 
 def _clear_dormant_store_dependencies(state: "FlowState", cleared_fields: list[str]) -> None:
     cleared_fields.extend(f"schedule.{field}" for field in _clear_section(state.schedule))
-    cleared_fields.extend(f"payment.{field}" for field in _clear_section(state.payment))
     if state.candidates:
         state.candidates = []
         cleared_fields.append("last_candidates")
@@ -1001,6 +1006,10 @@ def resume_dormant_flow(
     resumed_context = _non_empty_mapping(resumed.get("context"))
     resumed_context["status"] = "resumed"
     resumed_context["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    resumed_state = FlowState.from_active_flow_context(resumed_context)
+    _refresh_flow_progress(resumed_state)
+    resumed_context = resumed_state.to_active_flow_context()
+    resumed_context["status"] = "resumed"
     remaining = [
         dormant
         for dormant in _dormant_flow_values(list(dormant_flows or []))
@@ -1138,6 +1147,15 @@ def evaluate_flow_progress(state: "FlowState") -> dict[str, Any]:
                 "next_template": "preOrder",
                 "response_shape_key": "reservation_confirmation_ready",
             }
+        if str(intent.get("source_tool") or "") == "transaction_store_preview_tool":
+            return {
+                **base,
+                "current_step": "select_schedule",
+                "missing_slots": ["booking_datetime"],
+                "next_template": "datepick",
+                "response_shape_key": "reservation_slots",
+                "source_tool": "transaction_store_preview_tool",
+            }
         schedule_mode = str(intent.get("schedule_mode") or "general").strip()
         return {
             **base,
@@ -1190,9 +1208,30 @@ def _refresh_flow_progress(state: "FlowState") -> None:
     progress = evaluate_flow_progress(state)
     if not progress:
         return
+    current_step = str(progress.get("current_step") or "").strip()
+    if current_step:
+        state.flow_step = current_step
     for key in _FLOW_PROGRESS_META_FIELDS:
         state.meta.pop(key, None)
     state.meta.update(progress)
+    _clear_stale_store_region_wait_meta(state)
+
+
+def _clear_stale_store_region_wait_meta(state: "FlowState") -> None:
+    current_step = str(state.meta.get("current_step") or "").strip()
+    missing_slots = {
+        str(slot or "").strip()
+        for slot in state.meta.get("missing_slots") or ()
+        if str(slot or "").strip()
+    }
+    still_waiting_for_store = current_step in {"ask_store", "resolve_store"} or "shop_id" in missing_slots
+    has_store = any(state.store.get(key) not in _EMPTY_VALUES for key in ("shop_id", "shop_name", "store_name"))
+    has_schedule = all(state.schedule.get(key) not in _EMPTY_VALUES for key in ("requested_cal_day", "rsv_hour"))
+    if still_waiting_for_store or not (has_store or has_schedule):
+        return
+    state.meta.pop("awaiting_store_region", None)
+    if state.meta.get("pending_step") == "store_region_selection":
+        state.meta.pop("pending_step", None)
 
 
 def flow_progress_from_active_context(
@@ -1573,7 +1612,7 @@ class FlowState:
             conflict_key, conflict_values, clear_goods_no = product_change
             conflicts[conflict_key] = conflict_values
             _clear_product_dependent_context(merged, cleared_fields, clear_goods_no=clear_goods_no)
-            invalidated_sections.update(("store", "schedule", "payment"))
+            invalidated_sections.update(("store", "schedule"))
             dormant_product_patch.update(_non_empty_mapping(delta.product))
 
         if _tire_size_changed(existing_product, delta.product):
@@ -1582,7 +1621,7 @@ class FlowState:
                 "incoming": _normalize_vehicle_tire_size(delta.product.get("tire_size")),
             }
             _clear_product_dependent_context(merged, cleared_fields, clear_goods_no=True)
-            invalidated_sections.update(("store", "schedule", "payment"))
+            invalidated_sections.update(("store", "schedule"))
             dormant_product_patch.update(_non_empty_mapping(delta.product))
 
         existing_shop_id = str(merged.store.get("shop_id") or "").strip()
@@ -1590,8 +1629,7 @@ class FlowState:
         if existing_shop_id and incoming_shop_id and existing_shop_id != incoming_shop_id:
             conflicts["shop_id"] = {"existing": existing_shop_id, "incoming": incoming_shop_id}
             cleared_fields.extend(_clear_section(merged.schedule))
-            cleared_fields.extend(_clear_section(merged.payment))
-            invalidated_sections.update(("schedule", "payment"))
+            invalidated_sections.add("schedule")
             dormant_store_patch.update(_non_empty_mapping(delta.store))
 
         existing_region = str(merged.store.get("region") or "").strip()
@@ -1603,8 +1641,7 @@ class FlowState:
         )
         if region_changed:
             cleared_fields.extend(_clear_section(merged.schedule))
-            cleared_fields.extend(_clear_section(merged.payment))
-            invalidated_sections.update(("schedule", "payment"))
+            invalidated_sections.add("schedule")
             for field_name in ("shop_id", "shop_name", "store_name"):
                 if merged.store.pop(field_name, None) not in _EMPTY_VALUES:
                     cleared_fields.append(field_name)
@@ -1682,6 +1719,7 @@ class FlowState:
         merged.status = (
             delta.status if delta.status in {"active", "dormant", "resumed", "completed"} else merged.status
         )
+        _refresh_flow_progress(merged)
         after = merged.to_pending_order_context()
 
         return FlowStateMergeResult(
@@ -1714,6 +1752,8 @@ class FlowState:
         existing_schedule = dict(merged.schedule)
         dormant_product_patch: dict[str, Any] = {}
         dormant_store_patch: dict[str, Any] = {}
+        existing_sub_flow_type = effective_flow_type(merged.flow_type, merged.intent)
+        incoming_sub_flow_type = effective_flow_type(delta.flow_type, delta.intent)
 
         if delta.flow_type and merged.flow_type != delta.flow_type and _is_empty_implicit_flow_state(merged):
             merged = FlowState(flow_type=delta.flow_type, status=delta.status, flow_step=delta.flow_step)
@@ -1746,6 +1786,34 @@ class FlowState:
             existing_product = {}
             existing_vehicle = {}
             existing_schedule = {}
+        elif (
+            delta.flow_type
+            and incoming_sub_flow_type == "price_check"
+            and existing_sub_flow_type not in {"", "price_check"}
+            and canonical_flow_type(merged.flow_type) == canonical_flow_type(delta.flow_type)
+        ):
+            conflicts["sub_flow_type"] = {"existing": existing_sub_flow_type, "incoming": incoming_sub_flow_type}
+            previous_identity = flow_identity_for_context(before)
+            dormant_flows = upsert_dormant_flow(
+                merged.dormant_flows,
+                _flow_context_without_history(before),
+            )
+            flow_events = [
+                _new_flow_event(
+                    "deactivate",
+                    source=source,
+                    flow_identity=previous_identity,
+                    details={"incoming_sub_flow_type": incoming_sub_flow_type},
+                ),
+                *_flow_event_values(merged.flow_events),
+            ]
+            merged = FlowState(flow_type=delta.flow_type, status=delta.status, flow_step=delta.flow_step)
+            merged.dormant_flows = dormant_flows
+            merged.flow_events = flow_events
+            committed_fields.extend(["flow_type", "dormant_flows"])
+            existing_product = {}
+            existing_vehicle = {}
+            existing_schedule = {}
         elif delta.flow_step:
             merged.flow_step = delta.flow_step
             committed_fields.append("flow_step")
@@ -1770,7 +1838,7 @@ class FlowState:
             conflict_key, conflict_values, clear_goods_no = product_change
             conflicts[conflict_key] = conflict_values
             _clear_product_dependent_context(merged, cleared_fields, clear_goods_no=clear_goods_no)
-            invalidated_sections.update(("store", "schedule", "payment"))
+            invalidated_sections.update(("store", "schedule"))
             dormant_product_patch.update(_non_empty_mapping(delta.product))
 
         if _tire_size_changed(existing_product, delta.product):
@@ -1779,7 +1847,7 @@ class FlowState:
                 "incoming": _normalize_vehicle_tire_size(delta.product.get("tire_size")),
             }
             _clear_product_dependent_context(merged, cleared_fields, clear_goods_no=True)
-            invalidated_sections.update(("store", "schedule", "payment"))
+            invalidated_sections.update(("store", "schedule"))
             dormant_product_patch.update(_non_empty_mapping(delta.product))
 
         existing_shop_id = str(merged.store.get("shop_id") or "").strip()
@@ -1787,8 +1855,7 @@ class FlowState:
         if existing_shop_id and incoming_shop_id and existing_shop_id != incoming_shop_id:
             conflicts["shop_id"] = {"existing": existing_shop_id, "incoming": incoming_shop_id}
             cleared_fields.extend(_clear_section(merged.schedule))
-            cleared_fields.extend(_clear_section(merged.payment))
-            invalidated_sections.update(("schedule", "payment"))
+            invalidated_sections.add("schedule")
             dormant_store_patch.update(_non_empty_mapping(delta.store))
 
         existing_region = str(merged.store.get("region") or "").strip()
@@ -1800,8 +1867,7 @@ class FlowState:
         )
         if region_changed:
             cleared_fields.extend(_clear_section(merged.schedule))
-            cleared_fields.extend(_clear_section(merged.payment))
-            invalidated_sections.update(("schedule", "payment"))
+            invalidated_sections.add("schedule")
             for field_name in ("shop_id", "shop_name", "store_name"):
                 if merged.store.pop(field_name, None) not in _EMPTY_VALUES:
                     cleared_fields.append(field_name)
@@ -2256,7 +2322,7 @@ def store_candidate_selection_patch(
         "favorite_store",
     }:
         return {}
-    if active_flow.flow_step != "show_store_candidates":
+    if active_flow.flow_step not in {"show_store_candidates", "resolve_store"}:
         return {}
     if active_flow.status not in {"active", "resumed"}:
         return {}
@@ -2295,8 +2361,16 @@ def store_candidate_selection_patch(
         )
         if selected.get(key) not in _EMPTY_VALUES
     }
-    patch["_flow_type"] = active_flow_type
-    if active_flow_type == "stock":
+    if patch.get("source_tool") == "transaction_store_preview_tool":
+        patch.update({
+            "_flow_type": "purchase",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "flow_step": "store_selected",
+        })
+    else:
+        patch["_flow_type"] = active_flow_type
+    if active_flow_type == "stock" and patch.get("source_tool") != "transaction_store_preview_tool":
         patch.update({
             "pending_intent": "stock",
             "goal_type": "store_with_stock",
@@ -2318,7 +2392,13 @@ def selected_store_slots_from_active_flow_context(
     active_flow = FlowState.from_active_flow_context(active_flow_context)
     if active_flow.status not in {"active", "resumed"}:
         return {}
-    if active_flow.flow_step not in {"store_selected", "selected_store_schedule"}:
+    if active_flow.flow_step not in {
+        "store_selected",
+        "selected_store_schedule",
+        "resolve_schedule",
+        "show_schedule",
+        "select_schedule",
+    }:
         return {}
     active_flow_type = effective_flow_type(active_flow.flow_type, active_flow.intent)
     if not flow_type_matches_allowed(active_flow.flow_type, allowed_flow_types, active_flow.intent):
@@ -2710,6 +2790,16 @@ def _store_candidate_flow_type(
     contract_intent = str(event_contract_intent or "").strip()
     response_shape = str(event_response_shape or "").strip()
 
+    if (
+        source_tool == "transaction_store_preview_tool"
+        and raw_qty not in _EMPTY_VALUES
+        and raw_qty not in (0, "0")
+        and any(
+            meta.get(key) not in _EMPTY_VALUES
+            for key in ("goodsNo", "goods_no", "productName", "product_name", "tireSize", "tire_size")
+        )
+    ):
+        return "purchase"
     if pending_intent in {"order", "cart"} or goal_type in {"place_order", "add_to_cart"}:
         return "purchase"
     if (
@@ -2721,16 +2811,6 @@ def _store_candidate_flow_type(
         or response_shape in _STOCK_STORE_RESPONSE_SHAPES
     ):
         return "stock"
-    if (
-        source_tool == "transaction_store_preview_tool"
-        and raw_qty not in _EMPTY_VALUES
-        and raw_qty not in (0, "0")
-        and any(
-            meta.get(key) not in _EMPTY_VALUES
-            for key in ("goodsNo", "goods_no", "productName", "product_name", "tireSize", "tire_size")
-        )
-    ):
-        return "purchase"
     if source_tool == "get_favorite_stores_tool" or contract_intent == "favorite_store_lookup":
         return "favorite_store"
     if contract_intent in {"store_schedule", "selected_store_schedule"} or response_shape in _STORE_SCHEDULE_RESPONSE_SHAPES:
@@ -2802,12 +2882,14 @@ def _store_candidate_from_metadata(
             "pending_product_name": product_name,
             "tire_size": str(meta.get("tireSize") or meta.get("tire_size") or "").strip(),
             "pending_intent": str(
-                meta.get("pendingIntent")
+                ("order" if source_tool == "transaction_store_preview_tool" and flow_type == "purchase" else "")
+                or meta.get("pendingIntent")
                 or meta.get("pending_intent")
                 or ("stock" if flow_type == "stock" else "order")
             ).strip(),
             "goal_type": str(
-                meta.get("goalType")
+                ("place_order" if source_tool == "transaction_store_preview_tool" and flow_type == "purchase" else "")
+                or meta.get("goalType")
                 or meta.get("goal_type")
                 or ("store_with_stock" if flow_type == "stock" else "place_order")
             ).strip(),

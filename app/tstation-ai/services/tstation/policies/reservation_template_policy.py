@@ -564,6 +564,11 @@ def coerce_schedule_confirmation_quickreply_to_datepick(
     event_data = event.get("data")
     if not isinstance(event_data, dict):
         return None
+    event_metadata = event_data.get("metadata") if isinstance(event_data.get("metadata"), dict) else {}
+    response_shape_key = str(event_metadata.get("response_shape_key") or "").strip()
+    quick_order_result = str(event_metadata.get("quickOrderResult") or "").strip()
+    if response_shape_key == "quick_order_execute" and quick_order_result:
+        return None
     is_schedule_followup = bool(
         _SCHEDULE_CONFIRMATION_RE.search(user_text or "")
         or _SCHEDULE_REQUEST_RE.search(user_text or "")

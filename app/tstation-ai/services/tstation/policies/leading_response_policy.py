@@ -10,15 +10,10 @@ _COMPLAINT_SCOPE_SUPPORT_CHIPS: list[dict] = [
     {"label": "가격 조회", "domain": "DISCOVERY"},
     {"label": "매장 찾기", "domain": "TRANSACTION"},
 ]
-_COMPLAINT_SCOPE_UNCLEAR_CHIPS: list[dict] = [
-    {"label": "주문 조회", "domain": "TRANSACTION"},
-    {"label": "매장 찾기", "domain": "TRANSACTION"},
-    {"label": "1:1 문의", "domain": "SUPPORT"},
-]
 
 _COMPLAINT_TONE_RE = re.compile(
     r"짜증|화나|화가\s*나|열받|빡치|개빡|최악|엉망|이딴|드럽게|못해|못한다|되는\s*일이\s*없|"
-    r"불만|클레임|항의|뭐\s*이런|제대로\s*해|어이\s*없",
+    r"불만|클레임|항의|뭐\s*이런|제대로\s*해|어이\s*없|힘들|미칠|위로",
     re.IGNORECASE,
 )
 _TSTATION_COMPLAINT_SCOPE_RE = re.compile(
@@ -141,21 +136,6 @@ def build_complaint_scope_guard_event(scope: str) -> dict | None:
                 ),
                 "quickReplies": list(_COMPLAINT_SCOPE_SUPPORT_CHIPS),
                 "predictedDomains": ["DISCOVERY", "TRANSACTION"],
-            },
-            "source_domain": "leading",
-            "assistant_response_source": "code_complaint_scope_guard",
-        }
-    if scope == "unclear_complaint":
-        return {
-            "type": "data",
-            "template": "quickReply",
-            "data": {
-                "assistantResponse": (
-                    "어떤 부분이 불편하셨는지 조금만 더 알려주세요. "
-                    "타이어 상품, 주문/결제, 장착 매장 관련 문제라면 확인해드릴게요."
-                ),
-                "quickReplies": list(_COMPLAINT_SCOPE_UNCLEAR_CHIPS),
-                "predictedDomains": ["TRANSACTION", "SUPPORT"],
             },
             "source_domain": "leading",
             "assistant_response_source": "code_complaint_scope_guard",

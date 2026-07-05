@@ -680,6 +680,22 @@ def _normalize_product_identity_text(value: object) -> str:
     return re.sub(r"[^0-9a-z가-힣]+", "", str(value or "").casefold())
 
 
+def _product_name_without_tire_size(value: object, tire_size: object | None = None) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    normalized_size = normalize_tire_size(str(tire_size or "")) or normalize_tire_size(text)
+    if not normalized_size:
+        return text
+    cleaned = re.sub(
+        r"\s*(?:LT)?\d{3}\s*/?\s*\d{2}\s*(?:ZR|R)?\s*\d{2}\s*$",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    ).strip()
+    return cleaned or text
+
+
 def _product_identity_tokens(value: object) -> set[str]:
     tokens: set[str] = set()
     for raw in re.findall(r"[0-9A-Za-z가-힣]+", str(value or "")):
@@ -740,10 +756,12 @@ def _is_comparison_context_product_selection_override(
 def replace_current_turn_product_context(
     slots: Any,
     current_product_name: str | None = None,
+    current_goods_no: str | None = None,
 ) -> tuple[Any, dict[str, Any]]:
     """Replace stale product identity in stored context without authorizing execution."""
     current_product = str(current_product_name or "").strip()
-    if not current_product:
+    current_goods = str(current_goods_no or "").strip()
+    if not current_product and not current_goods:
         return slots, {}
 
     existing_product = str(
@@ -751,9 +769,12 @@ def replace_current_turn_product_context(
         or getattr(slots, "pending_product_name", None)
         or ""
     ).strip()
-    if existing_product and _is_same_product_identity(current_product, existing_product):
+    existing_goods = str(getattr(slots, "goods_no", None) or "").strip()
+    same_product = bool(current_product and existing_product and _is_same_product_identity(current_product, existing_product))
+    same_goods = bool(current_goods and existing_goods and current_goods == existing_goods)
+    if same_product and (same_goods or not current_goods or not existing_goods):
         return slots, {}
-    if not existing_product and getattr(slots, "goods_no", None) in (None, ""):
+    if not existing_product and not existing_goods:
         return slots, {}
 
     before = {
@@ -767,13 +788,11 @@ def replace_current_turn_product_context(
         "requested_cal_day": getattr(slots, "requested_cal_day", None),
         "rsv_hour": getattr(slots, "rsv_hour", None),
     }
-    updated = slots.apply_runtime_values(
-        {
-            "tire_model": current_product,
-            "pending_product_name": current_product,
-        },
-        source="current_turn_product_replacement",
-    )
+    replacement_values = {}
+    if current_product:
+        replacement_values["tire_model"] = current_product
+        replacement_values["pending_product_name"] = current_product
+    updated = slots.apply_runtime_values(replacement_values, source="current_turn_product_replacement")
     for slot_name in (
         "goods_no",
         "shop_id",
@@ -804,6 +823,8 @@ def replace_current_turn_product_context(
         "event": "product_changed",
         "previous_product_name": existing_product,
         "replacement_product_name": current_product,
+        "previous_goods_no": existing_goods or None,
+        "replacement_goods_no": current_goods or None,
         "blocked_fields": sorted(_PRODUCT_DEPENDENT_EXECUTION_FIELDS),
         "preserved_fields": ["tire_size", "ord_qty", "region", "place_query"],
     }
@@ -840,13 +861,15 @@ def replace_current_turn_product_context(
             product_values = dict(product_section)
             if product_values.pop("goods_no", None) not in (None, "", [], {}):
                 cleared.append("product.goods_no")
-            product_values["product_name"] = current_product
-            product_values["tire_model"] = current_product
-            product_values["pending_product_name"] = current_product
+            if current_product:
+                product_values["product_name"] = current_product
+                product_values["tire_model"] = current_product
+                product_values["pending_product_name"] = current_product
             context_values["product"] = product_values
-        context_values["product_name"] = current_product
-        context_values["tire_model"] = current_product
-        context_values["pending_product_name"] = current_product
+        if current_product:
+            context_values["product_name"] = current_product
+            context_values["tire_model"] = current_product
+            context_values["pending_product_name"] = current_product
         context_values["flow_state_dependency_event"] = dependency_event
         availability_context[context_name] = context_values
         if cleared:
@@ -870,6 +893,8 @@ def replace_current_turn_product_context(
         "current_turn_product_replaced": True,
         "replacement_product_name": current_product,
         "previous_product_name": existing_product,
+        "replacement_goods_no": current_goods or None,
+        "previous_goods_no": existing_goods or None,
         "product_context_before": before,
         "product_context_after": after,
         "cleared_context_fields": cleared_context_fields,
@@ -1406,6 +1431,19 @@ def _ui_action_slot_patch(raw_action: Mapping[str, Any]) -> dict[str, Any]:
                 continue
             continue
         patch[key] = value
+    for key, aliases in alias_map.items():
+        for alias in aliases:
+            alias_value = normalized.get(alias)
+            if alias_value in (None, "", []):
+                continue
+            if key == "ord_qty":
+                try:
+                    patch[key] = int(alias_value)
+                except (TypeError, ValueError):
+                    pass
+            else:
+                patch[key] = alias_value
+            break
     action_type = str(normalized.get("action_type") or normalized.get("cta_action") or "").strip()
     entity_type = str(normalized.get("entity_type") or normalized.get("entityType") or "").strip()
     entity_id = str(normalized.get("entity_id") or normalized.get("entityId") or "").strip()
@@ -1520,7 +1558,10 @@ def _build_ui_action_context_from_raw(
     contract_intent = expected_contract_intent or source_intent
     if not contract_intent:
         return None
+    action_type = str(normalized.get("action_type") or "").strip()
     slot_patch = _ui_action_slot_patch(normalized)
+    if action_type == "select_product":
+        slot_patch = _normalize_product_slot_patch(slot_patch)
     entity_label = str(
         normalized.get("entity_label")
         or normalized.get("label")
@@ -1535,7 +1576,6 @@ def _build_ui_action_context_from_raw(
         or slot_patch.get("car_no")
         or ""
     ).strip()
-    action_type = str(normalized.get("action_type") or "").strip()
     inferred_entity_type = (
         "vehicle"
         if contract_intent in _VEHICLE_SELECTION_CONTRACT_INTENTS or action_type == "select_vehicle_candidate"
@@ -1879,28 +1919,14 @@ def _with_existing_transaction_slot_fill_state(
 
     slot_patch = dict(action_context.slot_patch or {})
     context_patch = _purchase_ui_action_context_patch(existing_slots, slot_patch)
+    action_type = str(action_context.action_type or "").strip()
+    allowed_existing_fields = _existing_slot_fill_fields_for_action(action_type)
     for field_name, existing_value in context_patch.items():
+        if field_name not in allowed_existing_fields:
+            continue
         if slot_patch.get(field_name) in (None, "", []):
             slot_patch[field_name] = existing_value
-    for field_name in (
-        "goods_no",
-        "tire_size",
-        "tire_model",
-        "product_name",
-        "ord_qty",
-        "region",
-        "shop_id",
-        "shop_name",
-        "store_name",
-        "availability_intent",
-        "requested_cal_day",
-        "rsv_hour",
-        "pending_intent",
-        "goal_type",
-        "stock_check_mode",
-        "source_tool",
-        "schedule_mode",
-    ):
+    for field_name in allowed_existing_fields:
         if slot_patch.get(field_name) not in (None, "", []):
             continue
         existing_value = _slot_value_from_any(existing_slots, field_name)
@@ -1908,7 +1934,6 @@ def _with_existing_transaction_slot_fill_state(
             slot_patch[field_name] = existing_value
 
     expected_contract_intent = str(action_context.expected_contract_intent or "").strip()
-    action_type = str(action_context.action_type or "").strip()
     existing_pending_intent = str(_slot_value_from_any(existing_slots, "pending_intent") or "").strip() or None
     existing_goal_type = str(_slot_value_from_any(existing_slots, "goal_type") or "").strip() or None
     ui_pending_intent_before = str(slot_patch.get("pending_intent") or "").strip() or None
@@ -1996,6 +2021,61 @@ def _with_existing_transaction_slot_fill_state(
     )
 
 
+def _existing_slot_fill_fields_for_action(action_type: str) -> tuple[str, ...]:
+    if action_type == "select_product":
+        return (
+            "tire_size",
+            "ord_qty",
+            "region",
+            "availability_intent",
+            "pending_intent",
+            "goal_type",
+            "stock_check_mode",
+        )
+    if action_type == "select_quantity":
+        return (
+            "goods_no",
+            "tire_size",
+            "tire_model",
+            "product_name",
+            "pending_product_name",
+            "region",
+            "shop_id",
+            "shop_name",
+            "store_name",
+            "availability_intent",
+            "pending_intent",
+            "goal_type",
+            "stock_check_mode",
+            "source_tool",
+            "schedule_mode",
+            "schedule_tier",
+            "inventory_mode",
+        )
+    return (
+        "goods_no",
+        "tire_size",
+        "tire_model",
+        "product_name",
+        "pending_product_name",
+        "ord_qty",
+        "region",
+        "shop_id",
+        "shop_name",
+        "store_name",
+        "availability_intent",
+        "requested_cal_day",
+        "rsv_hour",
+        "pending_intent",
+        "goal_type",
+        "stock_check_mode",
+        "source_tool",
+        "schedule_mode",
+        "schedule_tier",
+        "inventory_mode",
+    )
+
+
 def _minimal_ui_action_slot_values(action_type: str, slot_values: Mapping[str, Any]) -> dict[str, Any]:
     keys_by_action = {
         "select_product": ("goods_no", "tire_size", "tire_model", "product_name"),
@@ -2023,6 +2103,27 @@ def _minimal_ui_action_slot_values(action_type: str, slot_values: Mapping[str, A
         for key in allowed_keys
         if slot_values.get(key) not in (None, "", [])
     }
+
+
+def _normalize_product_slot_patch(slot_patch: Mapping[str, Any]) -> dict[str, Any]:
+    normalized = dict(slot_patch)
+    tire_size = normalize_tire_size(str(normalized.get("tire_size") or ""))
+    if tire_size:
+        normalized["tire_size"] = tire_size
+    for key in ("product_name", "tire_model", "pending_product_name"):
+        value = normalized.get(key)
+        if value not in (None, "", [], {}):
+            normalized[key] = _product_name_without_tire_size(value, tire_size)
+    product_name = (
+        normalized.get("product_name")
+        or normalized.get("tire_model")
+        or normalized.get("pending_product_name")
+    )
+    if product_name not in (None, "", [], {}):
+        normalized.setdefault("product_name", product_name)
+        normalized.setdefault("tire_model", product_name)
+        normalized.setdefault("pending_product_name", product_name)
+    return normalized
 
 
 def resolve_ui_action_context(
@@ -2102,14 +2203,35 @@ def apply_ui_action_slot_patch(
     if action_context is None or not action_context.slot_patch:
         return base_slots, dict(action_context.trace_metadata) if action_context is not None else {}
 
-    updated_slots = slot_apply_fn(base_slots, dict(action_context.slot_patch))
     trace_metadata = dict(action_context.trace_metadata)
+    slot_patch = dict(action_context.slot_patch)
+    if str(action_context.action_type or "").strip() == "select_product":
+        slot_patch = _normalize_product_slot_patch(slot_patch)
+        trace_metadata["slot_patch"] = slot_patch
+    base_for_update = base_slots
+    if str(action_context.action_type or "").strip() == "select_product":
+        current_product_name = str(
+            slot_patch.get("product_name")
+            or slot_patch.get("tire_model")
+            or slot_patch.get("pending_product_name")
+            or action_context.entity_label
+            or ""
+        ).strip()
+        current_goods_no = str(slot_patch.get("goods_no") or action_context.entity_id or "").strip()
+        base_for_update, replacement_metadata = replace_current_turn_product_context(
+            base_slots,
+            current_product_name=current_product_name,
+            current_goods_no=current_goods_no,
+        )
+        trace_metadata.update(dict(replacement_metadata or {}))
+
+    updated_slots = slot_apply_fn(base_for_update, slot_patch)
     trace_metadata["slots_rewritten"] = True
     if not trace_metadata.get("selected_tire_size"):
         trace_metadata["selected_tire_size"] = str(
-            action_context.slot_patch.get("tire_size")
-            or action_context.slot_patch.get("tire_size_front")
-            or action_context.slot_patch.get("tire_size_rear")
+            slot_patch.get("tire_size")
+            or slot_patch.get("tire_size_front")
+            or slot_patch.get("tire_size_rear")
             or ""
         ).strip() or None
     return updated_slots, trace_metadata
@@ -2529,7 +2651,7 @@ def apply_history_product_selection_state(
             )
         )
         if product_name:
-            slot_patch["tire_model"] = product_name
+            slot_patch["tire_model"] = _product_name_without_tire_size(product_name, tire_size)
         if tire_size:
             slot_patch["tire_size"] = tire_size
         slot_patch.update(_selected_product_price_patch(resolved_row))
@@ -4198,6 +4320,7 @@ def resolve_product_row_from_template_selection(
                 or ""
             )
         )
+        product_name = _product_name_without_tire_size(product_name, tire_size)
         row = {
             "goods_no": goods_no,
             "product_name": product_name,
@@ -4298,7 +4421,7 @@ def confirmed_product_slot_values_from_event(event: Mapping[str, Any] | None) ->
         if tire_size:
             slot_values["tire_size"] = tire_size
         if tire_model:
-            slot_values["tire_model"] = tire_model
+            slot_values["tire_model"] = _product_name_without_tire_size(tire_model, tire_size)
         slot_values.update(_product_price_context_from_mapping(metadata, source="quickreply_metadata"))
         raw_qty = canonical_values.get("ord_qty")
         if raw_qty is not None:
@@ -4335,7 +4458,7 @@ def confirmed_product_slot_values_from_event(event: Mapping[str, Any] | None) ->
     if tire_size:
         slot_values["tire_size"] = tire_size
     if tire_model:
-        slot_values["tire_model"] = tire_model
+        slot_values["tire_model"] = _product_name_without_tire_size(tire_model, tire_size)
     for price_source in (product, meta):
         for key, value in _product_price_context_from_mapping(price_source, source="product_template").items():
             slot_values.setdefault(key, value)
@@ -5796,13 +5919,18 @@ def resolve_region_or_store_input_context(
         ((ui_action or {}).get("action_type") or (ui_action or {}).get("cta_action") or cta_context.get("cta_action") or "")
     ).strip()
     block_region_text = action_type in _REGION_EXTRACTION_BLOCKED_ACTIONS
-    input_values = _region_store_input_values(
-        text,
-        merged_slots,
-        allow_region_fallback=False,
-        block_region_text=block_region_text,
+    has_structured_action = bool(ui_action or chip_context)
+    input_values = (
+        _region_store_input_values(
+            text,
+            merged_slots,
+            allow_region_fallback=False,
+            block_region_text=block_region_text,
+        )
+        if has_structured_action
+        else {}
     )
-    if not input_values and isinstance(cta_context.get("slots"), Mapping):
+    if has_structured_action and not input_values and isinstance(cta_context.get("slots"), Mapping):
         canonical_slot_values = canonical_context_from_template_boundary(cta_context.get("slots"))
         if canonical_slot_values.get("region") and not _is_invalid_region_candidate_text(canonical_slot_values.get("region")):
             input_values = {"region": canonical_slot_values["region"], "store_view_requested": True}
@@ -5821,7 +5949,7 @@ def resolve_region_or_store_input_context(
     resolution_source = None
     if isinstance(ui_action, Mapping) and ui_action:
         resolution_source = "ui_action"
-    elif cta_context:
+    elif chip_context and cta_context:
         resolution_source = "chip_context"
     else:
         prompt_detected, prompt_source = _region_store_prompt_signal(
@@ -5847,11 +5975,17 @@ def resolve_region_or_store_input_context(
         if resolution_source is None:
             resolution_source = prompt_source
 
+    explicit_region_prompt = bool(
+        resolution_source in {"assistant_prompt", "assistant_message", "location_prompt"}
+        or str(resolution_source or "").startswith("quickreply:")
+    )
     if not input_values:
+        if resolution_source not in {"ui_action", "chip_context", "pending_step", "active_flow_context"} and not explicit_region_prompt:
+            return RegionStoreInputContextResolution()
         input_values = _region_store_input_values(
             text,
             merged_slots,
-            allow_region_fallback=True,
+            allow_region_fallback=resolution_source in {"pending_step", "active_flow_context"} or explicit_region_prompt,
             block_region_text=block_region_text,
         )
     if not input_values:

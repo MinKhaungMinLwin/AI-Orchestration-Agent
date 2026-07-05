@@ -23,8 +23,13 @@ from services.tstation.policies.preorder_event_builder import build_preorder_eve
 from services.tstation.policies.resolved_context import build_resolved_turn_context
 from services.tstation.policies.response_decision import ResponseDecision, ToolPlan
 from services.tstation.policies.router_evidence import merge_router_evidence_known_slots
+from services.tstation.policies.router_intent_schema import canonical_router_intent
 from services.tstation.policies.support_response_policy import (
     build_general_cancel_fee_policy_event,
+)
+from services.tstation.policies.tool_arg_schema import (
+    canonicalize_tool_args_patch,
+    should_use_known_slots_for_tool_args,
 )
 from services.tstation.policies.transaction_intent_policy import build_transaction_intent_frame
 _HIGH_RISK_INTENTS = frozenset({
@@ -42,6 +47,11 @@ _HIGH_RISK_INTENTS = frozenset({
     "quick_order_execute",
     "inventory_availability",
     "recent_product_set_size_availability",
+})
+_PRICE_OR_COUPON_RESPONSE_INTENTS = frozenset({
+    "price_or_coupon_check",
+    "order_discount_explanation",
+    "explain_discount_application",
 })
 _HIGH_RISK_DOMAINS = frozenset({"transaction"})
 _HARD_REQUIRED_SLOT_GUARD_INTENTS = frozenset({
@@ -85,6 +95,7 @@ _FORBIDDEN_BEHAVIOR_TEMPLATE_BLOCKS = {
     "schedule_tool_for_vehicle_experience_store_search": _STORE_ONLY_FLOW_BLOCK_TEMPLATES,
     "quick_order_for_vehicle_experience_store_search": frozenset({"preOrder", "orderComplete"}),
     "preorder_for_vehicle_experience_store_search": frozenset({"preOrder", "orderComplete"}),
+    "datepick_for_price_or_coupon_check": frozenset({"location", "datepick", "preOrder", "orderComplete"}),
 }
 _DISCOVERY_FIRST_LEG_BLOCK_RESPONSE_SHAPES = frozenset({
     "product_attribute_summary",
@@ -191,6 +202,24 @@ def _should_canonicalize_maintenance_timing_contract(
         _normalize_maintenance_timing_intent(_contract_seed_ui_action_intent(contract_seed)),
     }
     return "maintenance_timing_guidance" in intent_candidates
+
+
+def _should_canonicalize_vehicle_resolved_recommendation_contract(
+    *,
+    planner_intent: str | None,
+    policy_intent: str | None,
+    code_intent: str | None,
+    latest_router_intent: str | None = None,
+    contract_seed: Mapping[str, Any] | None = None,
+) -> bool:
+    intent_candidates = {
+        _normalize_plan_intent(str(planner_intent or "")),
+        _normalize_plan_intent(str(policy_intent or "")),
+        _normalize_plan_intent(str(code_intent or "")),
+        _normalize_plan_intent(str(latest_router_intent or "")),
+        _normalize_plan_intent(_contract_seed_ui_action_intent(contract_seed)),
+    }
+    return "vehicle_resolved_recommendation" in intent_candidates
 _COMPARISON_RESOLVER_TOOLS = _DISCOVERY_PRODUCT_SOURCE_TOOLS | frozenset({"get_product_description_tool"})
 _HIGH_RISK_TRANSACTION_TOOLS = frozenset({
     "get_final_price_tool",
@@ -775,6 +804,16 @@ def _has_comparison_product_scope(known_slots: Mapping[str, Any]) -> bool:
         return len([candidate for candidate in product_candidates if isinstance(candidate, Mapping)]) >= 2
     return False
 
+def _should_lock_ui_product_description_contract(contract_seed: Mapping[str, Any] | None) -> bool:
+    if not isinstance(contract_seed, Mapping):
+        return False
+    ui_action = contract_seed.get("ui_action")
+    if not isinstance(ui_action, Mapping):
+        return False
+    action_type = str(ui_action.get("action_type") or ui_action.get("cta_action") or "").strip()
+    expected_intent = str(ui_action.get("expected_contract_intent") or "").strip()
+    return action_type == "select_product" and expected_intent == "product_description"
+
 def build_turn_contract(
     *,
     user_text: str = "",
@@ -808,7 +847,8 @@ def build_turn_contract(
     )
     if planner_intent == "unknown":
         planner_intent = None
-    policy_intent = str(getattr(routing_result, "policy_intent", "") or "")
+    raw_policy_intent = str(getattr(routing_result, "policy_intent", "") or "")
+    policy_intent = canonical_router_intent(raw_policy_intent)
     router_wins_intent = _router_wins_current_turn_intent(
         user_text=user_text,
         planner_intent=planner_intent,
@@ -820,9 +860,18 @@ def build_turn_contract(
     )
     if _normalize_maintenance_timing_intent(router_wins_intent) == "maintenance_timing_guidance":
         router_wins_intent = "maintenance_timing_guidance"
+    if _should_lock_ui_product_description_contract(contract_seed):
+        router_wins_intent = "product_description"
     code_domain = _domain_value(intent_frame.domain) if intent_frame is not None else _domain_from_routing(routing_result)
     code_intent = intent_frame.intent if intent_frame is not None else _intent_from_cross_domain(cross_domain_plan)
     transaction_boundary_frame = _transaction_policy_boundary_frame(user_text=user_text, merged_slots=merged_slots)
+    if _price_or_coupon_boundary_interrupts_slot_fill(
+        transaction_boundary_frame=transaction_boundary_frame,
+        context_state=context_state,
+        resume_source=resume_source,
+        policy_intent=policy_intent,
+    ):
+        router_wins_intent = "price_or_coupon_check"
     if transaction_boundary_frame is not None and _should_apply_transaction_policy_boundary(
         planner_intent=planner_intent,
         policy_intent=policy_intent,
@@ -991,6 +1040,23 @@ def build_turn_contract(
             else policy_intent
         )
         known_slots["policy_intent"] = "maintenance_timing_guidance"
+    if _should_canonicalize_vehicle_resolved_recommendation_contract(
+        planner_intent=planner_intent,
+        policy_intent=policy_intent,
+        code_intent=code_intent,
+        latest_router_intent=latest_router_intent,
+        contract_seed=contract_seed,
+    ):
+        # A registered-vehicle selection meant to continue a Discovery recommendation
+        # (e.g. an active safe_service/sound_absorber eligibility check) must resolve
+        # in the Discovery domain, even if the router's own free-text intent guess
+        # (e.g. "confirm_registered_vehicle_selection") doesn't match any known handler
+        # and would otherwise fall through to a generic transaction_fallback stall.
+        domain = "discovery"
+        intent = "product_recommendation"
+        sub_intent = "vehicle_resolved_recommendation"
+        known_slots["policy_intent"] = "vehicle_resolved_recommendation"
+        known_slots["discovery_followup_action"] = "vehicle_resolved_recommendation"
     if planner_intent == "owned_coupon_lookup" or code_intent == "owned_coupon_lookup":
         domain = "transaction"
         intent = "owned_coupon_lookup"
@@ -1163,6 +1229,14 @@ def build_turn_contract(
         known_slots["goal_type"] = intent
     if planner_intent in _QUICK_ORDER_EXECUTE_PLANNER_INTENTS and _has_quick_order_execute_slots(known_slots):
         intent = "quick_order_execute"
+    if (
+        code_intent == "quick_order_reservation"
+        and known_slots.get("product_name")
+        and known_slots.get("tire_size")
+        and (known_slots.get("ord_qty") or known_slots.get("quantity"))
+    ):
+        domain = "transaction"
+        intent = "quick_order_reservation"
     if code_intent == "order_cancel_status_lookup":
         intent = "order_cancel_status_lookup"
     if router_wins_intent:
@@ -1234,6 +1308,7 @@ def build_turn_contract(
         known_slots=known_slots,
         cross_domain_plan=cross_domain_plan,
     )
+    active_preview_datepick_flow = _active_preview_datepick_flow_matches(known_slots)
     selected_store_schedule_continuation = _selected_store_schedule_continuation_matches(
         intent=intent,
         known_slots=known_slots,
@@ -1242,7 +1317,7 @@ def build_turn_contract(
     if selected_store_schedule_continuation:
         required_slots = tuple(
             slot for slot in required_slots
-            if slot not in {"requested_cal_day", "rsv_hour", "booking_datetime"}
+            if slot not in {"tire_size", "requested_cal_day", "rsv_hour", "booking_datetime"}
         )
     required_slots = _filter_satisfied_required_slots(required_slots, known_slots)
     resolvable_required_slots = _resolvable_required_slots(required_slots, cross_domain_plan, known_slots)
@@ -1267,6 +1342,33 @@ def build_turn_contract(
         cross_domain_plan=cross_domain_plan,
     )
     forbidden_tools = tuple(tool_plan.forbidden_tools) if tool_plan is not None else ()
+    if (
+        domain == "discovery"
+        and intent == "product_recommendation"
+        and sub_intent == "vehicle_resolved_recommendation"
+        and not allowed_tools
+        and any(str(known_slots.get(key) or "").strip() for key in ("tire_size", "car_lnc_cd"))
+    ):
+        allowed_tools = ("get_products_recommendations_tool",)
+        preferred_tool = "get_products_recommendations_tool"
+        expected_args = (
+            known_slots.get("recommendation_expected_tool_args")
+            if isinstance(known_slots.get("recommendation_expected_tool_args"), Mapping)
+            else {}
+        )
+        tool_args_patch = {
+            key: value
+            for key, value in {
+                "tire_size": known_slots.get("tire_size"),
+                "car_lnc_cd": known_slots.get("car_lnc_cd"),
+                "vehicle_type": known_slots.get("vehicle_type"),
+                "rcmd_type": expected_args.get("rcmd_type") if isinstance(expected_args, Mapping) else None,
+                "limit": expected_args.get("limit") if isinstance(expected_args, Mapping) else None,
+            }.items()
+            if value not in (None, "", [], {})
+        }
+        tool_args_patch.setdefault("rcmd_type", "tstation")
+        tool_args_patch.setdefault("limit", 10)
     if router_wins_intent:
         router_allowed_tools, router_forbidden_tools = _router_wins_tool_boundary(router_wins_intent)
         allowed_tools = router_allowed_tools
@@ -1277,12 +1379,32 @@ def build_turn_contract(
     if planner_intent in _QUICK_ORDER_EXECUTE_PLANNER_INTENTS and _has_quick_order_execute_slots(known_slots):
         allowed_tools = _merge_tuple(allowed_tools, ("quick_order_tool",))
         forbidden_tools = tuple(tool for tool in forbidden_tools if tool != "quick_order_tool")
-    if selected_store_schedule_continuation:
+    if selected_store_schedule_continuation and not active_preview_datepick_flow:
         allowed_tools = ("get_store_schedule_tool",)
         forbidden_tools = _merge_tuple(
             tuple(tool for tool in forbidden_tools if tool != "get_store_schedule_tool"),
             (
                 "transaction_store_preview_tool",
+                "get_store_inventory_tool",
+                "get_logistics_inventory_tool",
+                "get_store_list_tool",
+                "get_nearby_stores_tool",
+                "search_stores_tool",
+                "get_multi_store_schedule_tool",
+                "quick_order_tool",
+            ),
+        )
+        preferred_tool = "get_store_schedule_tool"
+        active_schedule_patch = _active_selected_store_schedule_tool_args_patch(known_slots)
+        if active_schedule_patch:
+            tool_args_patch = active_schedule_patch
+    elif active_preview_datepick_flow:
+        allowed_tools = ()
+        forbidden_tools = _merge_tuple(
+            tuple(forbidden_tools),
+            (
+                "transaction_store_preview_tool",
+                "get_store_schedule_tool",
                 "get_store_inventory_tool",
                 "get_logistics_inventory_tool",
                 "get_store_list_tool",
@@ -1304,6 +1426,36 @@ def build_turn_contract(
             ),
         )
         forbidden_tools = _merge_tuple(forbidden_tools, tuple(_INVENTORY_ONLY_STOCK_ACTION_TOOLS))
+    active_stock_inventory_flow = _active_stock_inventory_flow_contract_patch(
+        known_slots,
+        resume_source=resume_source,
+    )
+    if active_stock_inventory_flow is not None:
+        domain = "transaction"
+        intent = "stock_store_search"
+        sub_intent = "stock"
+        action_mode = "stock_check"
+        context_state = "resumed"
+        known_slots.update(active_stock_inventory_flow["slot_patch"])
+        required_slots = ()
+        resolvable_required_slots = ()
+        blocking_required_slots = ()
+        blocking_required_slots_source = "flow_controller:store_slot_fill"
+        allowed_tools = ("get_store_inventory_tool",)
+        forbidden_tools = _merge_tuple(
+            tuple(tool for tool in forbidden_tools if tool != "get_store_inventory_tool"),
+            (
+                "transaction_store_preview_tool",
+                "get_store_schedule_tool",
+                "get_multi_store_schedule_tool",
+                "quick_order_tool",
+                "preorder_with_null_required_fields",
+            ),
+        )
+        preferred_tool = "get_store_inventory_tool"
+        tool_args_patch = dict(active_stock_inventory_flow["tool_args_patch"])
+        flow_id = str(active_stock_inventory_flow.get("flow_id") or "stock_inventory")
+        flow_step = "check_inventory"
     if _is_owned_record_lookup_intent(intent):
         record_allowed_tools, record_forbidden_tools, record_preferred_tool = _owned_record_lookup_tool_boundary(intent)
         allowed_tools = record_allowed_tools
@@ -1406,8 +1558,13 @@ def build_turn_contract(
                 ),
             )
             preferred_tool = "search_benefit_applicable_products_tool"
-            query = str(known_slots.get("benefit_applicable_products_query") or "").strip()
+            query = str(
+                tool_args_patch.get("query")
+                or known_slots.get("benefit_applicable_products_query")
+                or ""
+            ).strip()
             if query:
+                known_slots["benefit_applicable_products_query"] = query
                 tool_args_patch = {"query": query, "lang_cd": "ko"}
     if intent == "maintenance_history_lookup":
         allowed_tools = _merge_tuple(allowed_tools, ("get_maintenance_history_tool",))
@@ -1759,6 +1916,8 @@ def build_turn_contract(
                 "flow_step": comparison_purchase_flow_state.flow_step,
             },
         }
+    if active_stock_inventory_flow is not None:
+        response_decision_payload = _active_stock_inventory_response_decision_payload()
     if selected_store_schedule_continuation and _selected_store_schedule_response_decision_mismatch(
         response_decision_payload
     ):
@@ -1959,6 +2118,19 @@ def build_turn_contract(
         if preferred_tool != original_preferred_tool:
             tool_args_patch = {}
 
+    tool_args_patch = canonicalize_tool_args_patch(
+        preferred_tool=preferred_tool,
+        known_slots=known_slots,
+        user_text=user_text,
+        existing_patch=tool_args_patch,
+        use_known_slots=should_use_known_slots_for_tool_args(
+            context_state=context_state,
+            resume_anchor_detected=resume_anchor_detected,
+            resume_source=resume_source,
+            action_mode=action_mode,
+        ),
+    )
+
     return TurnContract(
         domain=domain,
         intent=intent,
@@ -2052,10 +2224,62 @@ def should_guard_required_slots(contract: TurnContract | None) -> bool:
     return str(contract.intent or "") in _HARD_REQUIRED_SLOT_GUARD_INTENTS
 
 
-def align_tool_plan_to_turn_contract(tool_plan: ToolPlan | None, contract: TurnContract | None) -> ToolPlan | None:
-    """Keep router-wins execution ContextVar plans inside the final contract boundary."""
+def _contract_tool_args_patch_from_known_slots(contract: TurnContract, preferred_tool: str | None) -> dict[str, Any]:
+    known_slots = contract.known_slots or {}
+    tool = str(preferred_tool or "").strip()
+    if tool == "search_stores_tool":
+        place_query = str(
+            known_slots.get("place_query")
+            or known_slots.get("region")
+            or known_slots.get("location_name")
+            or ""
+        ).strip()
+        if place_query:
+            return {"place_query": place_query}
+    if tool == "get_store_list_tool":
+        shop_name = str(known_slots.get("shop_name") or known_slots.get("store_name") or "").strip()
+        if shop_name:
+            return {"store_nm": shop_name}
+        region = str(known_slots.get("region") or "").strip()
+        if region:
+            return {"region": region}
+    if tool == "get_final_price_tool":
+        goods_no = str(known_slots.get("goods_no") or "").strip()
+        if goods_no:
+            return {"goods_no": goods_no}
+    return {}
 
-    if tool_plan is None or contract is None or not contract.router_wins_applied:
+
+def _align_tool_args_patch_to_contract(
+    tool_args_patch: Mapping[str, Any],
+    contract: TurnContract,
+    preferred_tool: str | None,
+) -> dict[str, Any]:
+    aligned = {
+        str(key): value
+        for key, value in dict(tool_args_patch or {}).items()
+        if value not in (None, "", [], {})
+    }
+    contract_patch = _contract_tool_args_patch_from_known_slots(contract, preferred_tool)
+    if not contract_patch:
+        return aligned
+    tool = str(preferred_tool or "").strip()
+    if tool == "search_stores_tool":
+        for key in ("place_query", "region_code", "store_nm", "shop_name", "region"):
+            aligned.pop(key, None)
+    elif tool == "get_store_list_tool":
+        for key in ("place_query", "region_code", "store_nm", "shop_name", "region"):
+            aligned.pop(key, None)
+    elif tool == "get_final_price_tool":
+        aligned.pop("goods_no", None)
+    aligned.update(contract_patch)
+    return aligned
+
+
+def align_tool_plan_to_turn_contract(tool_plan: ToolPlan | None, contract: TurnContract | None) -> ToolPlan | None:
+    """Keep execution ContextVar plans inside the final TurnContract boundary."""
+
+    if tool_plan is None or contract is None:
         return tool_plan
     if not _should_align_router_wins_tool_plan(contract):
         return tool_plan
@@ -2068,16 +2292,28 @@ def align_tool_plan_to_turn_contract(tool_plan: ToolPlan | None, contract: TurnC
         and preferred_tool not in forbidden_tools
     )
     aligned_preferred_tool = preferred_tool if preferred_allowed else _router_wins_default_preferred_tool(contract)
+    aligned_tool_args_patch = _align_tool_args_patch_to_contract(
+        tool_plan.tool_args_patch or {},
+        contract,
+        aligned_preferred_tool,
+    )
+    known_slots = {
+        str(key): value
+        for key, value in dict(contract.known_slots or {}).items()
+        if value not in (None, "", [], {})
+    }
     metadata = {
         **dict(tool_plan.metadata or {}),
         "tool_plan_aligned_to_turn_contract": True,
         "turn_contract_intent": contract.intent,
-        "router_wins_applied": True,
+        "router_wins_applied": bool(contract.router_wins_applied),
+        "response_intent": contract.intent,
+        "flow_slots": known_slots,
     }
     return ToolPlan(
         allowed_tools=allowed_tools,
         preferred_tool=aligned_preferred_tool,
-        tool_args_patch=dict(tool_plan.tool_args_patch or {}),
+        tool_args_patch=aligned_tool_args_patch,
         forbidden_tools=forbidden_tools,
         required_slots=tuple(contract.required_slots or ()),
         metadata=metadata,
@@ -2354,12 +2590,61 @@ def _build_owned_record_lookup_guard_event(contract: TurnContract) -> dict[str, 
         },
     }
 
+
+def _build_price_or_coupon_guard_event(contract: TurnContract) -> dict[str, Any] | None:
+    intent = str(contract.intent or "")
+    if str(contract.domain or "") != "transaction" or intent not in _PRICE_OR_COUPON_RESPONSE_INTENTS:
+        return None
+    known_slots = contract.known_slots or {}
+    product_name = _product_name(known_slots)
+    payment_amount = known_slots.get("payment_amount") or known_slots.get("paymentAmount")
+    amount_text = None
+    if isinstance(payment_amount, int | float) and payment_amount > 0:
+        amount_text = f"{int(payment_amount):,}원"
+    if product_name and amount_text:
+        message = (
+            f"{product_name} 기준으로 현재 확인된 결제금액은 {amount_text}입니다. "
+            "표시된 혜택가는 적용 가능한 쿠폰과 할인 조건을 반영한 금액이며, 최종 적용 내역은 결제 단계에서 다시 확인할 수 있어요."
+        )
+    elif amount_text:
+        message = (
+            f"현재 확인된 결제금액은 {amount_text}입니다. "
+            "표시된 혜택가는 적용 가능한 쿠폰과 할인 조건을 반영한 금액이며, 최종 적용 내역은 결제 단계에서 다시 확인할 수 있어요."
+        )
+    else:
+        message = (
+            "선택하신 혜택가는 적용 가능한 쿠폰과 할인 조건을 반영한 기준입니다. "
+            "최종 적용 내역은 결제 단계에서 다시 확인할 수 있어요."
+        )
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "source_domain": "transaction",
+        "assistant_response_source": "code_turn_contract_price_or_coupon_guard",
+        "data": {
+            "assistantResponse": message,
+            "quickReplies": [],
+            "predictedDomains": ["TRANSACTION"],
+            "metadata": {
+                "turnContract": _guard_event_contract_snapshot(contract),
+                "responseShapeKey": "price_or_coupon_check",
+                "response_shape_key": "price_or_coupon_check",
+                "assistant_response_source": "code_turn_contract_price_or_coupon_guard",
+                "contract_intent": intent,
+            },
+        },
+    }
+
+
 def build_response_policy_guard_event(contract: TurnContract) -> dict[str, Any]:
     """Build a safe fallback when a template violates response policy, not slots."""
 
     response_decision = contract.response_decision or {}
     forbidden = response_decision.get("forbidden_behaviors") if isinstance(response_decision, Mapping) else ()
     forbidden_set = {str(item) for item in forbidden} if isinstance(forbidden, list | tuple) else set()
+    price_or_coupon_event = _build_price_or_coupon_guard_event(contract)
+    if price_or_coupon_event is not None:
+        return _annotate_contract_guard_event(price_or_coupon_event, contract, reason="response_policy_guard")
     if str(contract.domain or "") == "transaction" and str(contract.intent or "") == "general_cancel_fee_policy":
         user_query = str(contract.known_slots.get("region") or contract.known_slots.get("user_query") or "")
         event = build_general_cancel_fee_policy_event(user_query)
@@ -2561,13 +2846,20 @@ def build_response_policy_guard_event(contract: TurnContract) -> dict[str, Any]:
             {"label": "다른 매장 찾기", "domain": "TRANSACTION"},
         ]
     else:
-        missing_slots = _missing_slots_for_action_prompt(contract) or ("product",)
-        missing_summary = _missing_slot_summary_text(missing_slots)
-        message = (
-            "현재 확인된 정보만으로 바로 진행하기 어려워요. "
-            f"부족한 정보는 {missing_summary}입니다. 필요한 정보를 먼저 확인한 뒤 이어서 도와드릴게요."
-        )
-        quick_replies = _clarification_chips(missing_slots)
+        missing_slots = _missing_slots_for_action_prompt(contract)
+        if missing_slots:
+            missing_summary = _missing_slot_summary_text(missing_slots)
+            message = (
+                "현재 확인된 정보만으로 바로 진행하기 어려워요. "
+                f"부족한 정보는 {missing_summary}입니다. 필요한 정보를 먼저 확인한 뒤 이어서 도와드릴게요."
+            )
+            quick_replies = _clarification_chips(missing_slots)
+        else:
+            message = "필요한 정보는 확인되어 있어요. 조건을 다시 조회한 뒤 이어서 진행할게요."
+            quick_replies = [
+                {"label": "다시 조회", "domain": "TRANSACTION"},
+                {"label": "처음부터 다시", "domain": "LEADING"},
+            ]
 
     return _annotate_contract_guard_event({
         "type": "data",
@@ -3000,6 +3292,8 @@ def violates_response_template_contract(event: Mapping[str, Any], contract: Turn
         return True
     if _flow_step_template_violation(template=template, contract=contract):
         return True
+    if _price_or_coupon_template_violation(template=template, contract=contract):
+        return True
     if _is_discovery_product_template_compatible(event, contract):
         return False
     if _is_unsupported_discovery_product_template_without_current_source(event, contract):
@@ -3033,10 +3327,15 @@ def _flow_step_template_violation(*, template: str, contract: TurnContract) -> b
         return False
     intent = str(contract.intent or "")
     flow_step = str(contract.flow_step or "")
+    response_decision = contract.response_decision if isinstance(contract.response_decision, Mapping) else {}
+    response_metadata = response_decision.get("metadata") if isinstance(response_decision.get("metadata"), Mapping) else {}
+    decision_flow_step = str(response_metadata.get("flow_step") or response_metadata.get("flowStep") or "").strip()
     if intent in {"quick_order_reservation", "quick_order_reservation_continue"}:
         if flow_step in {"ask_size", "ask_quantity", "ask_store"}:
             return template in {"location", "datepick", "preOrder", "orderComplete"}
         if flow_step in {"show_store_candidates", "resolve_store"}:
+            if template == "datepick" and decision_flow_step in {"show_schedule", "resolve_schedule"}:
+                return False
             return template in {"datepick", "preOrder", "orderComplete"}
         if flow_step in {"show_schedule", "resolve_schedule"}:
             return template in {"preOrder", "orderComplete"}
@@ -3053,6 +3352,12 @@ def _flow_step_template_violation(*, template: str, contract: TurnContract) -> b
     }:
         return template in {"location", "datepick", "preOrder", "orderComplete"}
     return False
+
+
+def _price_or_coupon_template_violation(*, template: str, contract: TurnContract) -> bool:
+    if str(contract.intent or "") not in _PRICE_OR_COUPON_RESPONSE_INTENTS:
+        return False
+    return template in _FORBIDDEN_BEHAVIOR_TEMPLATE_BLOCKS["datepick_for_price_or_coupon_check"]
 
 
 def _discovery_product_payload_has_items(event: Mapping[str, Any]) -> bool:
@@ -3217,17 +3522,29 @@ def _selected_store_schedule_continuation_matches(
     known_slots: Mapping[str, Any],
     resume_source: str,
 ) -> bool:
+    if _active_selected_store_schedule_flow_matches(known_slots):
+        return True
+    if _active_preview_datepick_flow_matches(known_slots):
+        return True
     normalized_intent = str(intent or "").strip()
-    if normalized_intent not in {"stock_store_search", "stock_store_search_slot_fill_store"}:
+    if normalized_intent not in {
+        "stock_store_search",
+        "stock_store_search_slot_fill_store",
+        "quick_order_reservation_slot_fill_store",
+    }:
         pending_intent = str(known_slots.get("pending_intent") or "").strip()
         goal_type = str(known_slots.get("goal_type") or "").strip()
-        if normalized_intent != "unknown" or (pending_intent != "stock" and goal_type != "store_with_stock"):
+        if normalized_intent != "unknown" or (
+            pending_intent not in {"stock", "order"} and goal_type not in {"store_with_stock", "place_order"}
+        ):
             return False
     if str(resume_source or "") not in {
         "expected_slot_fill:store",
         "router_slot_fill:store",
         "validated_ui_action_slot_fill",
+        "validated_ui_action_slot_fill:store",
         "location_selection:stock_store_search",
+        "location_selection:purchase",
     }:
         return False
     schedule_mode = str(
@@ -3239,10 +3556,209 @@ def _selected_store_schedule_continuation_matches(
         known_slots.get("shop_id")
         and schedule_mode
         and known_slots.get("goods_no")
-        and known_slots.get("tire_size")
         and (known_slots.get("ord_qty") or known_slots.get("quantity"))
         and str(known_slots.get("source_tool") or "") == "transaction_store_preview_tool"
     )
+
+
+def _active_selected_store_schedule_flow_matches(known_slots: Mapping[str, Any]) -> bool:
+    active_flow, pending_order_context = _active_schedule_flow_contexts(known_slots)
+    if not isinstance(active_flow, Mapping):
+        return False
+    if str(active_flow.get("next_template") or "").strip() != "datepick":
+        return False
+    if str(active_flow.get("response_shape_key") or "").strip() != "reservation_slots":
+        return False
+    tool_flow = active_flow
+    if str(tool_flow.get("next_tool") or "").strip() != "get_store_schedule_tool":
+        tool_flow = pending_order_context
+    if not isinstance(tool_flow, Mapping) or str(tool_flow.get("next_tool") or "").strip() != "get_store_schedule_tool":
+        return False
+    allowed_tools = {
+        str(tool).strip()
+        for tool in tuple(tool_flow.get("allowed_tools") or ())
+        if str(tool).strip()
+    }
+    if allowed_tools and "get_store_schedule_tool" not in allowed_tools:
+        return False
+    product = active_flow.get("product") if isinstance(active_flow.get("product"), Mapping) else {}
+    store = active_flow.get("store") if isinstance(active_flow.get("store"), Mapping) else {}
+    intent = active_flow.get("intent") if isinstance(active_flow.get("intent"), Mapping) else {}
+    goods_no = str(product.get("goods_no") or known_slots.get("goods_no") or "").strip()
+    quantity = product.get("ord_qty") or product.get("quantity") or known_slots.get("ord_qty") or known_slots.get("quantity")
+    shop_id = str(store.get("shop_id") or known_slots.get("shop_id") or "").strip()
+    pending_intent = str(
+        intent.get("pending_intent")
+        or tool_flow.get("pending_intent")
+        or known_slots.get("pending_intent")
+        or ""
+    ).strip()
+    goal_type = str(intent.get("goal_type") or tool_flow.get("goal_type") or known_slots.get("goal_type") or "").strip()
+    return bool(
+        goods_no
+        and quantity
+        and shop_id
+        and (pending_intent in {"order", "stock"} or goal_type in {"place_order", "store_with_stock"})
+    )
+
+
+def _active_selected_store_schedule_tool_args_patch(known_slots: Mapping[str, Any]) -> dict[str, Any]:
+    active_flow, pending_order_context = _active_schedule_flow_contexts(known_slots)
+    tool_flow = active_flow
+    if not isinstance(tool_flow, Mapping) or str(tool_flow.get("next_tool") or "").strip() != "get_store_schedule_tool":
+        tool_flow = pending_order_context
+    if not isinstance(tool_flow, Mapping):
+        return {}
+    if str(tool_flow.get("next_tool") or "").strip() != "get_store_schedule_tool":
+        return {}
+    patch = tool_flow.get("tool_args_patch") if isinstance(tool_flow.get("tool_args_patch"), Mapping) else {}
+    return {str(key): value for key, value in dict(patch).items() if value not in (None, "", [], {})}
+
+
+def _active_schedule_flow_contexts(known_slots: Mapping[str, Any]) -> tuple[Mapping[str, Any] | None, Mapping[str, Any] | None]:
+    availability_context = (
+        known_slots.get("availability_context") if isinstance(known_slots.get("availability_context"), Mapping) else {}
+    )
+    active_flow = availability_context.get("active_flow_context") if isinstance(availability_context, Mapping) else None
+    if not isinstance(active_flow, Mapping):
+        active_flow = known_slots.get("active_flow_context")
+    pending_order_context = (
+        availability_context.get("pending_order_context") if isinstance(availability_context, Mapping) else None
+    )
+    return (
+        active_flow if isinstance(active_flow, Mapping) else None,
+        pending_order_context if isinstance(pending_order_context, Mapping) else None,
+    )
+
+
+def _active_preview_datepick_flow_matches(known_slots: Mapping[str, Any]) -> bool:
+    availability_context = (
+        known_slots.get("availability_context") if isinstance(known_slots.get("availability_context"), Mapping) else {}
+    )
+    active_flow = availability_context.get("active_flow_context") if isinstance(availability_context, Mapping) else None
+    if not isinstance(active_flow, Mapping):
+        active_flow = known_slots.get("active_flow_context")
+    if not isinstance(active_flow, Mapping):
+        return False
+    if str(active_flow.get("next_template") or "").strip() != "datepick":
+        return False
+    if str(active_flow.get("response_shape_key") or "").strip() != "reservation_slots":
+        return False
+    if str(active_flow.get("next_tool") or "").strip() == "get_store_schedule_tool":
+        return False
+    if _active_selected_store_schedule_tool_args_patch(known_slots):
+        return False
+    product = active_flow.get("product") if isinstance(active_flow.get("product"), Mapping) else {}
+    store = active_flow.get("store") if isinstance(active_flow.get("store"), Mapping) else {}
+    intent = active_flow.get("intent") if isinstance(active_flow.get("intent"), Mapping) else {}
+    payment = active_flow.get("payment") if isinstance(active_flow.get("payment"), Mapping) else {}
+    source_tool = str(intent.get("source_tool") or known_slots.get("source_tool") or "").strip()
+    price_source_tool = str(payment.get("price_source_tool") or known_slots.get("price_source_tool") or "").strip()
+    pending_intent = str(intent.get("pending_intent") or known_slots.get("pending_intent") or "").strip()
+    goal_type = str(intent.get("goal_type") or known_slots.get("goal_type") or "").strip()
+    goods_no = str(product.get("goods_no") or known_slots.get("goods_no") or "").strip()
+    quantity = product.get("ord_qty") or product.get("quantity") or known_slots.get("ord_qty") or known_slots.get("quantity")
+    shop_id = str(store.get("shop_id") or known_slots.get("shop_id") or "").strip()
+    return bool(
+        goods_no
+        and quantity
+        and shop_id
+        and (pending_intent == "order" or goal_type == "place_order")
+        and (
+            source_tool == "transaction_store_preview_tool"
+            or price_source_tool == "transaction_store_preview_tool"
+        )
+    )
+
+
+def _active_stock_inventory_flow_contract_patch(
+    known_slots: Mapping[str, Any],
+    *,
+    resume_source: str,
+) -> dict[str, Any] | None:
+    if str(resume_source or "") not in {
+        "expected_slot_fill:store",
+        "router_slot_fill:store",
+        "validated_ui_action_slot_fill",
+        "location_selection:stock_store_search",
+    }:
+        return None
+    availability_context = (
+        known_slots.get("availability_context") if isinstance(known_slots.get("availability_context"), Mapping) else {}
+    )
+    active_flow = availability_context.get("active_flow_context") if isinstance(availability_context, Mapping) else None
+    if not isinstance(active_flow, Mapping):
+        active_flow = known_slots.get("active_flow_context")
+    if not isinstance(active_flow, Mapping):
+        return None
+    if str(active_flow.get("next_tool") or active_flow.get("target_action") or "").strip() != "get_store_inventory_tool":
+        return None
+    if str(active_flow.get("current_step") or "").strip() != "check_inventory":
+        return None
+    if str(active_flow.get("progress_source") or "").strip() != "flow_controller:store_slot_fill":
+        return None
+
+    product = active_flow.get("product") if isinstance(active_flow.get("product"), Mapping) else {}
+    store = active_flow.get("store") if isinstance(active_flow.get("store"), Mapping) else {}
+    intent = active_flow.get("intent") if isinstance(active_flow.get("intent"), Mapping) else {}
+    tool_args_patch = (
+        dict(active_flow.get("tool_args_patch")) if isinstance(active_flow.get("tool_args_patch"), Mapping) else {}
+    )
+    goods_no = str(product.get("goods_no") or known_slots.get("goods_no") or "").strip()
+    tire_size = str(product.get("tire_size") or known_slots.get("tire_size") or "").strip()
+    quantity = product.get("ord_qty") or known_slots.get("ord_qty") or known_slots.get("quantity")
+    shop_id = str(store.get("shop_id") or known_slots.get("shop_id") or "").strip()
+    if not (goods_no and tire_size and quantity and shop_id and tool_args_patch):
+        return None
+    if not (tool_args_patch.get("goods_list") and tool_args_patch.get("shop_id_list")):
+        return None
+    slot_patch = {
+        "goods_no": goods_no,
+        "tire_size": tire_size,
+        "ord_qty": quantity,
+        "quantity": quantity,
+        "shop_id": shop_id,
+        "pending_intent": "stock",
+        "goal_type": "store_with_stock",
+        "stock_check_mode": "inventory_only",
+        "active_flow_context": active_flow,
+    }
+    for key, value in {
+        "product_name": product.get("product_name") or known_slots.get("product_name"),
+        "tire_model": product.get("tire_model") or known_slots.get("tire_model"),
+        "pending_product_name": product.get("pending_product_name") or known_slots.get("pending_product_name"),
+        "shop_name": store.get("shop_name") or known_slots.get("shop_name"),
+        "store_name": store.get("shop_name") or known_slots.get("store_name"),
+        "region": store.get("region") or known_slots.get("region"),
+        "sub_flow_type": intent.get("sub_flow_type") or "stock",
+    }.items():
+        if value not in (None, "", [], {}):
+            slot_patch[key] = value
+    return {
+        "flow_id": "stock_inventory",
+        "tool_args_patch": tool_args_patch,
+        "slot_patch": slot_patch,
+    }
+
+
+def _active_stock_inventory_response_decision_payload() -> dict[str, Any]:
+    return {
+        "response_shape": "location",
+        "template": "location",
+        "required_slots": [],
+        "forbidden_behaviors": [
+            "datepick_for_pure_inventory_flow",
+            "preorder_for_pure_inventory_flow",
+            "preorder_with_null_required_fields",
+        ],
+        "assistant_guidance": "선택된 매장의 순수 재고 확인 결과만 안내하고 예약 날짜 선택으로 확장하지 않는다.",
+        "metadata": {
+            "response_shape_key": "stock_inventory_lookup",
+            "stock_check_mode": "inventory_only",
+            "flow_id": "stock_inventory",
+            "flow_step": "check_inventory",
+        },
+    }
 
 
 def _selected_store_schedule_response_decision_mismatch(response_decision: Mapping[str, Any] | None) -> bool:
@@ -3335,6 +3851,7 @@ def _is_owned_record_lookup_intent(intent: str) -> bool:
     return intent in {
         "reservation_status_lookup",
         "reservation_store_info_lookup",
+        "order_history_lookup",
         "order_cancel_status_lookup",
         "order_arrival_status_lookup",
         "maintenance_history_lookup",
@@ -3347,7 +3864,7 @@ def _owned_record_lookup_tool_boundary(intent: str) -> tuple[tuple[str, ...], tu
             tuple(_OWNED_RECORD_LOOKUP_FORBIDDEN_TOOLS),
             "get_my_reservations_tool",
         )
-    if intent in {"order_cancel_status_lookup", "order_arrival_status_lookup"}:
+    if intent in {"order_history_lookup", "order_cancel_status_lookup", "order_arrival_status_lookup"}:
         return (
             ("get_orders_of_user_tool", "get_order_status_tool"),
             tuple(_OWNED_RECORD_LOOKUP_FORBIDDEN_TOOLS - {"get_orders_of_user_tool", "get_order_status_tool"}),
@@ -4181,6 +4698,18 @@ def _tool_contract_violation(
         return None
     if called_tool_set and called_tool_set <= _COMPARISON_RESOLVER_TOOLS and _is_comparison_contract(contract):
         return None
+    response_decision = contract.response_decision or {}
+    response_metadata = response_decision.get("metadata") if isinstance(response_decision, Mapping) else {}
+    if (
+        called_tool_set == {"transaction_store_preview_tool"}
+        and str(response_decision.get("template") or "") == "datepick"
+        and str(response_metadata.get("response_shape_key") or "") == "reservation_slots"
+        and (
+            str(contract.known_slots.get("pending_intent") or "") == "order"
+            or str(contract.known_slots.get("goal_type") or "") == "place_order"
+        )
+    ):
+        return None
     forbidden = [
         str(tool)
         for tool in called_tools
@@ -4222,8 +4751,10 @@ def _selected_store_schedule_contract_violation(
         return None
     known_slots = contract.known_slots or {}
     expected_shop_id = str(known_slots.get("shop_id") or "").strip()
+    contract_patch = contract.tool_args_patch if isinstance(contract.tool_args_patch, Mapping) else {}
     expected_mode = str(
-        known_slots.get("schedule_mode")
+        contract_patch.get("mode")
+        or known_slots.get("schedule_mode")
         or known_slots.get("inventory_mode")
         or ""
     ).strip()
@@ -4261,10 +4792,25 @@ def _normalize_service_code_values(value: Any) -> set[str]:
     return {str(value).strip()} if str(value).strip() else set()
 
 
+_STORE_SEARCH_REGION_AREA_SUFFIX_RE = re.compile(
+    r"^(서울|경기|인천|부산|대구|광주|대전|울산|세종|강원|충북|충남|전북|전남|경북|경남|제주)권$"
+)
+
+
+def _canonical_store_search_location_value(value: str | None) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    match = _STORE_SEARCH_REGION_AREA_SUFFIX_RE.fullmatch(text)
+    if match:
+        return match.group(1)
+    return text
+
+
 def _store_search_location_values_match(*, expected: str, actual: str, region: str = "") -> bool:
-    expected_value = str(expected or "").strip()
-    actual_value = str(actual or "").strip()
-    region_value = str(region or "").strip()
+    expected_value = _canonical_store_search_location_value(expected)
+    actual_value = _canonical_store_search_location_value(actual)
+    region_value = _canonical_store_search_location_value(region)
     if not expected_value or not actual_value:
         return True
     if expected_value == actual_value:
@@ -4299,7 +4845,12 @@ def _store_service_search_contract_violation(
         actual_service_codes = _normalize_service_code_values(
             args.get("svc_codes") or args.get("service_codes") or args.get("service_code") or args.get("svc_code")
         )
-        if expected_region and actual_region and expected_region != actual_region:
+        if (
+            expected_region
+            and actual_region
+            and _canonical_store_search_location_value(expected_region)
+            != _canonical_store_search_location_value(actual_region)
+        ):
             return {
                 "type": "store_service_search_region_contract_drift",
                 "known_region": expected_region,
@@ -5385,7 +5936,35 @@ def _transaction_policy_boundary_frame(*, user_text: str, merged_slots: Any | No
     frame = build_transaction_intent_frame(user_text, known_slots=_slots_from_model(merged_slots))
     if frame.intent in {"general_cancel_fee_policy", "owned_order_cancel_fee_inquiry"}:
         return frame
+    if frame.intent == "price_or_coupon_check" and (
+        frame.known_slots.get("goods_no")
+        or frame.known_slots.get("product_name")
+        or frame.known_slots.get("tire_model")
+        or frame.known_slots.get("pending_product_name")
+    ):
+        return frame
     return None
+
+
+def _price_or_coupon_boundary_interrupts_slot_fill(
+    *,
+    transaction_boundary_frame: IntentFrame | None,
+    context_state: str,
+    resume_source: str,
+    policy_intent: str,
+) -> bool:
+    if transaction_boundary_frame is None or transaction_boundary_frame.intent != "price_or_coupon_check":
+        return False
+    if str(context_state or "").strip() != "resumed":
+        return False
+    if not str(resume_source or "").strip().startswith("expected_slot_fill:"):
+        return False
+    normalized_policy_intent = str(policy_intent or "").strip()
+    return not (
+        normalized_policy_intent in ROUTER_WINS_INFORMATIONAL_INTENTS
+        or normalized_policy_intent.endswith("_policy")
+        or normalized_policy_intent.endswith("_guidance")
+    )
 
 
 def _should_apply_transaction_policy_boundary(
@@ -6031,6 +6610,9 @@ def _normalize_plan_intent(value: str) -> str:
     # applicable-products keeps its own dedicated intent, so it is excluded here.
     if "applicable_products" in normalized and "coupon" not in normalized:
         return "event_applicable_products_lookup"
+    canonical = canonical_router_intent(normalized)
+    if canonical and canonical != normalized:
+        return canonical
     aliases = {
         "resolve_product": "resolve_or_describe_product",
         "continue_purchase": "quick_order_reservation",
@@ -6565,6 +7147,36 @@ def _is_discovery_first_cross_domain_resolution_contract(
     )
 
 
+def _needs_product_resolution_before_transaction(
+    *,
+    intent: str,
+    known_slots: Mapping[str, Any],
+    cross_domain_plan: CrossDomainPlan | None,
+) -> bool:
+    if known_slots.get("goods_no"):
+        return False
+    if intent == "resolve_or_describe_product":
+        return _is_discovery_first_cross_domain_resolution_contract(
+            intent=intent,
+            known_slots=known_slots,
+            cross_domain_plan=cross_domain_plan,
+        )
+    if intent not in {"stock_store_search", "quick_order_reservation"}:
+        return False
+    if not (known_slots.get("product_name") or known_slots.get("tire_model") or known_slots.get("tire_size")):
+        return False
+    if cross_domain_plan is None or not cross_domain_plan.is_cross_domain:
+        return False
+    subtasks = tuple(cross_domain_plan.subtasks or ())
+    if len(subtasks) < 2:
+        return False
+    first_task = subtasks[0]
+    first_domain = str(getattr(first_task.domain, "value", first_task.domain) or "")
+    if first_domain != "discovery" or str(first_task.intent or "") != "resolve_or_describe_product":
+        return False
+    return any(str(getattr(task.domain, "value", task.domain) or "") == "transaction" for task in subtasks[1:])
+
+
 def _strip_downstream_transaction_required_slots_for_discovery_resolution(
     required_slots: tuple[str, ...],
     *,
@@ -6572,7 +7184,7 @@ def _strip_downstream_transaction_required_slots_for_discovery_resolution(
     known_slots: Mapping[str, Any],
     cross_domain_plan: CrossDomainPlan | None,
 ) -> tuple[str, ...]:
-    if not _is_discovery_first_cross_domain_resolution_contract(
+    if not _needs_product_resolution_before_transaction(
         intent=intent,
         known_slots=known_slots,
         cross_domain_plan=cross_domain_plan,
@@ -6590,7 +7202,7 @@ def _augment_allowed_tools_for_discovery_resolution(
 ) -> tuple[str, ...]:
     if intent == "best_seller_search":
         return _merge_tuple(allowed_tools, ("get_best_selling_products_tool",))
-    if not _is_discovery_first_cross_domain_resolution_contract(
+    if not _needs_product_resolution_before_transaction(
         intent=intent,
         known_slots=known_slots,
         cross_domain_plan=cross_domain_plan,

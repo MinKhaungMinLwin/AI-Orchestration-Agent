@@ -203,20 +203,13 @@ def util_product_flow_values_from_resolved_search(
     resolved_row: Mapping[str, Any],
     slots: Any | None,
 ) -> dict[str, Any]:
-    ord_qty = None
     pending_intent = None
     goal_type = None
     stock_check_mode = None
-    store_values: dict[str, Any] = {}
     if slots is not None:
-        ord_qty = getattr(slots, "ord_qty", None) or getattr(slots, "quantity", None)
         pending_intent = getattr(slots, "pending_intent", None)
         goal_type = getattr(slots, "goal_type", None)
         stock_check_mode = getattr(slots, "stock_check_mode", None)
-        for key in ("shop_id", "shop_name", "store_name", "region", "place_query", "user_xpos", "user_ypos"):
-            value = getattr(slots, key, None)
-            if value not in (None, "", [], {}):
-                store_values[key] = value
     if str(stock_check_mode or "").strip() == "inventory_only":
         pending_intent = pending_intent or "stock"
         goal_type = goal_type or "store_with_stock"
@@ -226,11 +219,9 @@ def util_product_flow_values_from_resolved_search(
         "tire_model": resolved_row.get("product_name"),
         "pending_product_name": resolved_row.get("product_name"),
         "tire_size": resolved_row.get("tire_size") or (getattr(slots, "tire_size", None) if slots else None),
-        "ord_qty": ord_qty,
         "pending_intent": pending_intent,
         "goal_type": goal_type,
         "stock_check_mode": stock_check_mode,
-        **store_values,
         **util_search_product_price_context(resolved_row),
     }
     return {key: value for key, value in values.items() if value not in (None, "", [], {})}

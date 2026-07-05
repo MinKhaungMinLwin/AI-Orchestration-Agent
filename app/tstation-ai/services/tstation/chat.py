@@ -43,6 +43,7 @@ from services.tstation.policies.reservation_template_policy import (
     coerce_schedule_confirmation_quickreply_to_datepick,
     filter_datepick_to_requested_weekday,
     latest_template_data_from_messages,
+    _GENERIC_DISCOVERY_FALLBACK_LABELS,
 )
 from services.tstation.policies.discovery_intent_policy import (
     best_seller_search_params_from_text,
@@ -107,7 +108,13 @@ from services.tstation.policies.transaction_response_policy import decide_transa
 from services.tstation.policies.slot_fill_controller import (
     apply_router_location_slot_fill,
     build_router_slot_fill_context,
+    can_promote_existing_store_for_expected_slot_fill,
     resolve_pre_router_slot_fill,
+    sanitize_region_slot_fill_transaction_state,
+)
+from services.tstation.policies.pending_clarification_policy import (
+    resolve_pending_clarification_answer,
+    stage_pending_clarification,
 )
 from services.tstation.policies.leading_response_policy import (
     build_complaint_scope_guard_event,
@@ -152,6 +159,7 @@ from services.tstation.policies.router_evidence import (
     build_router_evidence,
     merge_router_evidence_known_slots,
     router_entities_for_trace,
+    router_place_slot_patch,
 )
 from services.tstation.policies.flow_state import (
     apply_router_evidence_snapshot,
@@ -170,6 +178,7 @@ from services.tstation.policies.flow_state import (
     store_candidates_flow_delta,
 )
 from services.tstation.policies.turn_contract import (
+    _PRICE_OR_COUPON_RESPONSE_INTENTS,
     TurnContract,
     align_tool_plan_to_turn_contract,
     build_required_slot_clarification_event,
@@ -217,6 +226,7 @@ from services.tstation.policies.contract_required_tool_candidate import (
     _is_contract_required_stock_inventory_store_lookup,
     _is_contract_required_transaction_store_preview,
     _is_contract_required_vehicle_recommendation,
+    is_contract_required_price_or_coupon_final_price,
 )
 from services.tstation.policies.contract_direct_executor import evaluate_contract_direct_path
 from services.tstation.executors.contract_required_tool_executor import (
@@ -240,7 +250,6 @@ from services.tstation.policies.pickup_service_gate import decide_pickup_service
 from services.tstation.policies.ui_action_policy import (
     UIActionContext,
     RegionStoreInputContextResolution,
-    apply_region_or_store_input_context_resolution,
     apply_logistics_earliest_install_cta_action,
     apply_selected_order_context_for_purchase_cta as _apply_selected_order_context_for_purchase_cta,
     apply_preview_update_cta_action,
@@ -416,7 +425,7 @@ from services.tstation.helpers.quickreply import (
     _normalize_existing_reservation_change_quickreply as _normalize_existing_reservation_change_quickreply,
     _order_history_cta_allowed_for_contract as _order_history_cta_allowed_for_contract,
     _sanitize_transaction_cta_contracts as _sanitize_transaction_cta_contracts,
-    _should_replace_vague_store_detail_quickreply as _should_replace_vague_store_detail_quickreply,
+    _store_detail_quickreply_replacement_allowed as _store_detail_quickreply_replacement_allowed,
     _store_detail_quickreply_from_sources as _store_detail_quickreply_from_sources,
 )
 
@@ -1969,6 +1978,31 @@ def _allows_outer_tool_slot_staging(tool_name: str, action_mode: str | None) -> 
 
 
 _P0_AUTO_CHAIN_PENDING_INTENTS = {"price", "stock", "order"}
+_PRODUCT_OVERRIDE_CANDIDATES = frozenset({
+    "p0_auto_chain",
+    "p0b_transaction_redirect",
+    "fresh_sized_product_transaction",
+    "fresh_unsized_product_transaction",
+})
+
+
+def _router_contract_requires_current_turn_clarification(routing_result: MultiAgentDomain | None) -> bool:
+    """Return True when the router explicitly chose clarification over execution."""
+    if routing_result is None:
+        return False
+    if bool(getattr(routing_result, "needs_clarification", False)):
+        return True
+    referred_status = str(getattr(routing_result, "referred_object_status", "") or "").strip()
+    referred_type = str(getattr(routing_result, "referred_object_type", "") or "").strip()
+    if referred_status in {"missing", "ambiguous"} and referred_type in {"product", "product_set", "none", ""}:
+        return True
+    plan_text = " ".join(str(item or "").strip().lower() for item in (getattr(routing_result, "execution_plan", None) or ()))
+    domains = list(getattr(routing_result, "domains", []) or [])
+    if "clarify" not in plan_text:
+        return False
+    if any(token in plan_text for token in ("product", "item", "model", "상품", "모델", "대상")):
+        return True
+    return domains == [MultiAgentDomain.Domain.LEADING]
 
 
 def _has_current_turn_p0_auto_chain_anchor(
@@ -2044,6 +2078,11 @@ def _should_preserve_router_contract(
 ) -> bool:
     if routing_result is None:
         return False
+    if (
+        candidate_override in _PRODUCT_OVERRIDE_CANDIDATES
+        and _router_contract_requires_current_turn_clarification(routing_result)
+    ):
+        return True
     is_high_confidence_comparison = _router_contract_is_high_confidence_comparison(routing_result)
     is_high_confidence_event_content = _router_contract_is_high_confidence_event_content(routing_result)
     is_high_confidence_protected_action = _router_contract_is_high_confidence_protected_action(routing_result)
@@ -4452,6 +4491,35 @@ class StreamingMultiAgentCoordinator:
             return [MultiAgentDomain.Domain.LEADING], None
 
     @staticmethod
+    def _clear_injected_route_context(messages: list[dict]) -> list[dict]:
+        """Remove prior route/client injections before replacing the current-turn route context."""
+        cleaned: list[dict] = []
+        for message in messages:
+            if message.get("role") == "system" and str(message.get("content") or "").startswith("## CLIENT INSTRUCTIONS\n"):
+                continue
+            next_message = dict(message)
+            if next_message.get("role") == "user":
+                content = str(next_message.get("content") or "")
+                changed = True
+                while changed:
+                    changed = False
+                    while content.startswith("# Respond in Korean language\n## CONVERSATION CONTEXT\n"):
+                        content = content.removeprefix("# Respond in Korean language\n")
+                        changed = True
+                    while content.startswith("## CONVERSATION CONTEXT\n"):
+                        marker = "\n# Respond in Korean language\n"
+                        marker_index = content.find(marker)
+                        if marker_index < 0:
+                            break
+                        content = content[marker_index + 1 :]
+                        changed = True
+                while content.startswith("# Respond in Korean language\n# Respond in Korean language\n"):
+                    content = content.removeprefix("# Respond in Korean language\n")
+                next_message["content"] = content
+            cleaned.append(next_message)
+        return cleaned
+
+    @staticmethod
     def _inject_conversation_context(messages: list[dict], routing: MultiAgentDomain | None) -> list[dict]:
         """Inject conversation context (user_behavior, flow) above the Korean instruction
         in the last user message.
@@ -6502,7 +6570,8 @@ _COUPON_APPLICABILITY_INTENT_RE = re.compile(
 )
 _SPECIFIC_COUPON_USAGE_QUERY_RE = re.compile(
     r"(?=.*(?:쿠폰|할인권|할인|딜|deal))"
-    r"(?=.*(?:적용\s*가능|적용가능|사용\s*가능|사용가능|쓸\s*수|쓸수|어떻게\s*써|먹어|먹히|어디\s*(?:에)?\s*(?:써|쓸|사용)))",
+    r"(?=.*(?:적용\s*가능|적용가능|사용\s*가능|사용가능|쓸\s*수|쓸수|어떻게\s*써|먹어|먹히"
+    r"|어디\s*(?:에)?\s*(?:써|쓸|사용)|전용|에서만|만\s*(?:돼|가능|사용)))",
     re.IGNORECASE,
 )
 _COUPON_PRODUCT_APPLICABILITY_QUERY_RE = re.compile(
@@ -7592,11 +7661,11 @@ def _build_direct_preorder_event_from_slots(
         or str(active_flow_context.get("goods_nm") or "").strip()
         or str(active_flow_context.get("goodsNm") or "").strip()
         or str(active_flow_context.get("tire_model") or "").strip()
-        or str(slot_values.get("product_name") or "").strip()
         or str(slot_values.get("goods_nm") or "").strip()
         or str(slot_values.get("goodsNm") or "").strip()
         or str(slot_values.get("tire_model") or "").strip()
         or str(slot_values.get("pending_product_name") or "").strip()
+        or str(slot_values.get("product_name") or "").strip()
     )
     product_label = f"{product_name} {tire_size}".strip() if product_name else tire_size
 
@@ -13898,20 +13967,23 @@ def _build_product_comparison_event(
 
     compare_metric, comparison_followup_intent, sub_intent = _comparison_context_from_policy_or_text(user_text)
     (left_name, left_row), (right_name, right_row) = product_rows[:2]  # guarded by fallback above
-    resolved_products = [
-        {
-            "requestedName": requested_product_names[0] or left_name,
-            "goodsNo": str(left_row.get("goods_no") or "").strip(),
-            "productName": left_name,
-            "tireSize": normalize_tire_size(str(left_row.get("tire_size_1") or left_row.get("tire_size") or "")),
-        },
-        {
-            "requestedName": requested_product_names[1] or right_name,
-            "goodsNo": str(right_row.get("goods_no") or "").strip(),
-            "productName": right_name,
-            "tireSize": normalize_tire_size(str(right_row.get("tire_size_1") or right_row.get("tire_size") or "")),
-        },
-    ]
+    left_resolved_product = {
+        "requestedName": requested_product_names[0] or left_name,
+        "goodsNo": str(left_row.get("goods_no") or "").strip(),
+        "productName": left_name,
+    }
+    left_tire_size = normalize_tire_size(str(left_row.get("tire_size_1") or left_row.get("tire_size") or ""))
+    if left_tire_size:
+        left_resolved_product["tireSize"] = left_tire_size
+    right_resolved_product = {
+        "requestedName": requested_product_names[1] or right_name,
+        "goodsNo": str(right_row.get("goods_no") or "").strip(),
+        "productName": right_name,
+    }
+    right_tire_size = normalize_tire_size(str(right_row.get("tire_size_1") or right_row.get("tire_size") or ""))
+    if right_tire_size:
+        right_resolved_product["tireSize"] = right_tire_size
+    resolved_products = [left_resolved_product, right_resolved_product]
 
     if not compare_metric and sub_intent not in {"grade_compare", "mileage_compare", "latest_compare", "attribute_compare"}:
         assistant = _build_product_feature_review_comparison(left_name, left_row, right_name, right_row)
@@ -14080,12 +14152,8 @@ def _build_product_comparison_event(
         "assistant_response_source": "code_product_compare_resolver",
         "data": {
             "assistantResponse": assistant,
-            "quickReplies": [
-                {"label": "구매하기", "domain": "TRANSACTION"},
-                {"label": "다른 상품 비교", "domain": "DISCOVERY"},
-                {"label": "내 차량 보기", "domain": "DISCOVERY"},
-            ],
-            "predictedDomains": ["DISCOVERY", "TRANSACTION"],
+            "quickReplies": [],
+            "predictedDomains": ["DISCOVERY"],
             "metadata": {
                 "response_shape_key": (
                     "grade_comparison_summary"
@@ -16027,6 +16095,20 @@ def _build_missing_current_location_store_fallback_event(
     }
 
 
+def _request_user_location_slot_patch(user_info: Mapping[str, Any] | None) -> dict[str, float]:
+    if not isinstance(user_info, Mapping):
+        return {}
+    location = user_info.get("location")
+    if not isinstance(location, Mapping):
+        return {}
+    try:
+        xpos = float(location.get("xpos"))
+        ypos = float(location.get("ypos"))
+    except (TypeError, ValueError):
+        return {}
+    return {"user_xpos": xpos, "user_ypos": ypos}
+
+
 def _build_turn_contract_fallback_event(
     *,
     turn_contract: TurnContract | None,
@@ -16117,7 +16199,10 @@ def _should_recover_executable_store_search_contract_tool(turn_contract: TurnCon
     )
     return bool(
         str(turn_contract.domain or "") == "transaction"
-        and (str(turn_contract.intent or "") in {"store_search", "open_store_search"} or stale_stock_store_search)
+        and (
+            str(turn_contract.intent or "") in {"store_search", "open_store_search", "store_service_search"}
+            or stale_stock_store_search
+        )
         and preferred_tool in {"search_stores_tool", "get_store_list_tool"}
         and preferred_tool in allowed_tools
         and preferred_tool not in forbidden_tools
@@ -16292,6 +16377,23 @@ def _finalize_direct_code_event(
         required_tools=required_tools,
         emitted_template=actual_template,
     )
+
+
+def _guard_contract_recovery_event(
+    event: dict[str, Any],
+    *,
+    turn_contract: TurnContract | None,
+) -> dict[str, Any]:
+    if turn_contract is None or not violates_response_template_contract(event, turn_contract):
+        return event
+    guard_event = build_response_policy_guard_event(turn_contract)
+    logger.info(
+        "[CONTRACT_REQUIRED_TOOL_RECOVERY] replaced forbidden template=%s contract_intent=%s guard_template=%s",
+        event.get("template"),
+        turn_contract.intent,
+        guard_event.get("template"),
+    )
+    return guard_event
 
 
 def _pending_contract_required_tool_for_fast_path(
@@ -17925,11 +18027,7 @@ def _normalize_discovery_policy_quickreply(
             "두 상품의 프리미엄 등급 여부를 비교하려면 각 상품명을 정확히 확인해야 해요. "
             "비교할 상품명을 다시 알려주시면 등급과 포지션 기준으로 정리해 드릴게요."
         )
-        event_data["quickReplies"] = [
-            {"label": "상품명 다시 입력", "domain": "DISCOVERY"},
-            {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
-            {"label": "내 차량 보기", "domain": "DISCOVERY"},
-        ]
+        event_data["quickReplies"] = []
         event_data["predictedDomains"] = ["DISCOVERY"]
         return True
 
@@ -18054,11 +18152,7 @@ def _normalize_policy_guidance_leak_quickreply(
                 "두 상품의 프리미엄 등급 여부를 비교하려면 각 상품명을 정확히 확인해야 해요. "
                 "비교할 상품명을 다시 알려주시면 등급과 포지션 기준으로 정리해 드릴게요."
             )
-            event_data["quickReplies"] = [
-                {"label": "상품명 다시 입력", "domain": "DISCOVERY"},
-                {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
-                {"label": "내 차량 보기", "domain": "DISCOVERY"},
-            ]
+            event_data["quickReplies"] = []
             event_data["predictedDomains"] = ["DISCOVERY"]
             return True
 
@@ -18508,7 +18602,10 @@ _PENDING_CHECK_TOPIC_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
 )
 _PENDING_CHECK_EXPLICIT_NEW_INTENT_RE = re.compile(
     r"설명|알려줘|가격|얼마|최종가|쿠폰|재고|장착|예약|구매|주문|비교|차이|추천|"
-    r"등급|성능|특징|브랜드|제조사|원산지|출시|리뷰|영상",
+    r"등급|성능|특징|브랜드|제조사|원산지|출시|리뷰|영상|"
+    # A request to view/select from the user's registered vehicles is itself a distinct,
+    # new action (fetch + show the vehicle list), not an object answer for the pending check.
+    r"차량|보유차량|차\s*목록|내\s*차\b",
     re.IGNORECASE,
 )
 _PENDING_CHECK_ELIGIBILITY_ANCHOR_RE = re.compile(
@@ -18539,6 +18636,9 @@ def _pending_check_object_from_text(text: str | None) -> tuple[str | None, str |
         return "store", regex_slots.shop_name
     if regex_slots.car_model and len(text) <= 40:
         return "vehicle", regex_slots.car_model
+    plate_match = _VEHICLE_PLATE_RE.search(text)
+    if plate_match and len(text) <= 20:
+        return "vehicle", plate_match.group(0).strip()
     if _is_bare_product_name_search_query(text):
         tool_input = _build_bare_product_search_tool_input(text)
         keyword = str((tool_input or {}).get("keyword") or text).strip()
@@ -18559,6 +18659,17 @@ def _apply_pending_object_check_slots(slots: ConversationSlots, *, user_text: st
     """Carry a short-lived eligibility topic across object-only follow-up turns."""
     text = str(user_text or "").strip()
     if not text:
+        return slots
+
+    if (
+        text in _GENERIC_DISCOVERY_FALLBACK_LABELS
+        and str(getattr(slots, "pending_check_topic", "") or "").strip() in _PENDING_CHECK_TOPICS
+    ):
+        # A generic clarification-chip click (e.g. "보유차량 중 선택") is a UI
+        # navigation step toward answering the pending check, not a new
+        # intent and not an answer either — it must not consume the limited
+        # follow-up-turn budget or clear the topic before the real answer
+        # (e.g. an actual vehicle pick) arrives on the next turn.
         return slots
 
     explicit_topic = _pending_check_topic_from_text(text)
@@ -19054,6 +19165,17 @@ def _build_discovery_policy_context(
             last_user_text,
             known_slots=known_slots,
         )
+        if discovery_frame.entities.get("discovery_followup_action") == "vehicle_resolved_recommendation":
+            # A resolved vehicle continuing a pending eligibility check (e.g. safe_service)
+            # must inherit that objective directly from the slot, not from re-parsing
+            # context text — the vehicle answer itself (a plate number or a UI selection)
+            # carries no service_program wording of its own to re-derive it from.
+            pending_topic_for_vehicle = str(known_slots.get("pending_check_topic") or "").strip()
+            if pending_topic_for_vehicle in _PENDING_CHECK_TOPIC_ENTITY_PATCH:
+                entities = dict(discovery_frame.entities)
+                for patch_key, patch_value in _PENDING_CHECK_TOPIC_ENTITY_PATCH[pending_topic_for_vehicle].items():
+                    entities.setdefault(patch_key, patch_value)
+                discovery_frame = replace(discovery_frame, entities=entities)
         if active_flow_patch:
             entities = dict(discovery_frame.entities)
             entities["discovery_followup_action"] = "vehicle_based_recommendation_refinement"
@@ -19156,7 +19278,15 @@ def _build_discovery_policy_context(
                     sub_intent="general_recommendation",
                     entities=entities,
                 )
-        if not transaction_followup_priority and discovery_frame.intent == "product_recommendation":
+        if (
+            not transaction_followup_priority
+            and discovery_frame.intent == "product_recommendation"
+            # A generic clarification-chip label (e.g. "보유차량 중 선택") carries no
+            # recommendation criteria of its own; it's a request for the next input
+            # step, not a continuation of the prior filters, so it must not inherit
+            # them (e.g. safe_service) back onto an unrelated new action.
+            and str(last_user_text or "").strip() not in _GENERIC_DISCOVERY_FALLBACK_LABELS
+        ):
             context_frame = build_discovery_intent_frame(
                 context_text,
                 known_slots=known_slots,
@@ -20018,14 +20148,15 @@ def _build_purchase_size_selection_event_from_search_result(
     )
 
 
-def _preview_schedule_store_slot_values(tool_result: Mapping[str, Any] | None) -> dict[str, Any]:
+def _preview_schedule_store_slot_candidates(tool_result: Mapping[str, Any] | None) -> list[dict[str, Any]]:
     if not isinstance(tool_result, Mapping):
-        return {}
+        return []
     data = tool_result.get("data")
     schedule = data.get("schedule") if isinstance(data, Mapping) else None
     stores = schedule.get("stores") if isinstance(schedule, Mapping) else None
     if not isinstance(stores, list):
-        return {}
+        return []
+    candidates: list[dict[str, Any]] = []
     for store in stores:
         if not isinstance(store, Mapping):
             continue
@@ -20040,8 +20171,31 @@ def _preview_schedule_store_slot_values(tool_result: Mapping[str, Any] | None) -
             "shop_name": str(store.get("shop_nm") or store.get("shopName") or "").strip() or None,
             "schedule_mode": str(store.get("mode") or "").strip() or None,
         }
-        return {key: value for key, value in values.items() if value not in (None, "", [], {})}
-    return {}
+        candidates.append({key: value for key, value in values.items() if value not in (None, "", [], {})})
+    return candidates
+
+
+def _preview_schedule_store_slot_values(tool_result: Mapping[str, Any] | None) -> dict[str, Any]:
+    candidates = _preview_schedule_store_slot_candidates(tool_result)
+    return candidates[0] if candidates else {}
+
+
+def _has_explicit_store_hint_for_preview_promotion(slots: Mapping[str, Any]) -> bool:
+    return any(str(slots.get(field) or "").strip() for field in ("shop_id", "shop_name", "store_name"))
+
+
+def _has_purchase_order_intent(slots: Mapping[str, Any]) -> bool:
+    return (
+        str(slots.get("pending_intent") or "").strip() == "order"
+        or str(slots.get("goal_type") or "").strip() == "place_order"
+    )
+
+
+def _has_store_search_intent(slots: Mapping[str, Any]) -> bool:
+    return (
+        str(slots.get("pending_intent") or "").strip() == "store_search"
+        or str(slots.get("goal_type") or "").strip() == "store_search"
+    )
 
 
 def _post_tool_purchase_preview_contract_context(
@@ -20053,18 +20207,38 @@ def _post_tool_purchase_preview_contract_context(
     if tool_name != "transaction_store_preview_tool":
         return None
     slots = dict(known_slots or {})
-    if str(slots.get("pending_intent") or "").strip() != "order" and str(slots.get("goal_type") or "").strip() != "place_order":
+    if not _has_purchase_order_intent(slots):
         return None
-    schedule_store_slots = _preview_schedule_store_slot_values(tool_result)
-    if not schedule_store_slots:
-        return None
+    schedule_store_candidates = _preview_schedule_store_slot_candidates(tool_result)
     contract_slots = dict(slots)
-    contract_slots.update(schedule_store_slots)
+    if len(schedule_store_candidates) == 1 and _has_explicit_store_hint_for_preview_promotion(slots):
+        contract_slots.update(schedule_store_candidates[0])
+    else:
+        for field_name in ("shop_id", "shop_name", "store_name", "schedule_mode", "schedule_tier", "inventory_mode"):
+            contract_slots.pop(field_name, None)
     contract_slots.pop("stock_check_mode", None)
     return {
         "intent": "quick_order_reservation",
         "known_slots": contract_slots,
     }
+
+
+def _post_tool_store_search_response_decision() -> ResponseDecision:
+    return ResponseDecision(
+        response_shape=ResponseShape.LOCATION,
+        template=TemplateName.LOCATION,
+        required_slots=(),
+        forbidden_behaviors=(
+            "resume_stale_transaction_flow",
+            "datepick_for_store_search_flow",
+            "start_quick_order_execution",
+            "start_price_or_coupon_execution",
+            "emit_preorder_without_user_confirmation",
+            "emit_order_complete_without_quick_order_tool",
+        ),
+        assistant_guidance="현재 턴의 매장 검색 intent 기준으로 매장 후보를 location 카드로 제시한다.",
+        metadata={"response_shape_key": "store_search"},
+    )
 
 
 def _is_cross_domain_discovery_product_resolution_pending(
@@ -21247,10 +21421,36 @@ def _stage_dormant_transaction_context(slots: ConversationSlots, *, source: str)
     """Keep prior transaction context available for grounding without making it active."""
     _clear_invalid_action_label_region(slots, source=f"{source}:dormant_transaction_context")
     _clear_invalid_store_identity_slots(slots, source=f"{source}:dormant_transaction_context")
-    dormant_context = _pending_order_context_values(slots)
+    context = dict(slots.availability_context or {})
+    context_flow_values: dict[str, Any] = {}
+    for context_key in ("pending_order_context", "active_flow_context"):
+        source_context = context.get(context_key)
+        if not isinstance(source_context, Mapping):
+            continue
+        context_flow_values.update(
+            {
+                key: value
+                for key, value in flow_state_values_from_slot_values(
+                    source_context,
+                    source=f"{source}:dormant_transaction_context:{context_key}",
+                ).items()
+                if value not in (None, "", [], {})
+            }
+        )
+    if context_flow_values:
+        dormant_context = dict(context_flow_values)
+    else:
+        flow_context = flow_state_values_from_slot_values(slots, source=f"{source}:dormant_transaction_context")
+        dormant_context = {
+            key: value
+            for key, value in {
+                **dict(flow_context or {}),
+                **_pending_order_context_values(slots),
+            }.items()
+            if value not in (None, "", [], {})
+        }
     if not dormant_context:
         return {}
-    context = dict(slots.availability_context or {})
     pending_intent = str(dormant_context.get("pending_intent") or slots.pending_intent or "")
     if pending_intent in {"order", "cart"} or dormant_context.get("goal_type") in {"place_order", "add_to_cart"}:
         key = "dormant_purchase_context"
@@ -21268,12 +21468,17 @@ def _stage_dormant_transaction_context(slots: ConversationSlots, *, source: str)
                 {},
             ):
                 dormant_context[extra_key] = existing_context.get(extra_key)
+    active_context = context.get("active_flow_context") if isinstance(context.get("active_flow_context"), Mapping) else {}
+    for flow_key in ("flow_step", "current_step", "missing_slots"):
+        if active_context.get(flow_key) not in (None, "", [], {}) and dormant_context.get(flow_key) in (None, "", [], {}):
+            dormant_context[flow_key] = active_context.get(flow_key)
     dormant_context["source"] = source
     dormant_context["context_state"] = "dormant"
     context[key] = dormant_context
-    if dormant_context.get("awaiting_store_region"):
-        context["awaiting_store_region"] = True
-        context["pending_step"] = "store_region_selection"
+    context.pop("pending_order_context", None)
+    context.pop("active_flow_context", None)
+    context.pop("awaiting_store_region", None)
+    context.pop("pending_step", None)
     slots.availability_context = context
     return dormant_context
 
@@ -24329,6 +24534,13 @@ class TStationChatServiceV2:
             if invalid_merged_store:
                 logger.info("[SLOTS] Cleared invalid store identity slot: %s", invalid_merged_store)
             merged_slots = _apply_pending_object_check_slots(merged_slots, user_text=last_user_text)
+            request_location_slot_patch = _request_user_location_slot_patch(request.user_info)
+            if request_location_slot_patch:
+                merged_slots = merged_slots.apply_runtime_values(
+                    request_location_slot_patch,
+                    source="request_user_location",
+                    fill_only=False,
+                )
             if _is_product_coupon_price_amount_query(last_user_text):
                 coupon_product_name = _coupon_target_product_name_for_query(last_user_text)
                 parsed_coupon_target = _split_product_size_quantity_from_text(coupon_product_name, last_user_text)
@@ -24387,31 +24599,6 @@ class TStationChatServiceV2:
             fresh_product_transaction_request = _is_fresh_product_transaction_request(
                 last_user_text,
                 regex_slots.intent_candidate,
-            )
-            stale_goods_no = merged_slots.goods_no
-            stale_tire_model = merged_slots.tire_model
-            stale_payment_amount = merged_slots.payment_amount
-            if _clear_stale_product_identity_for_fresh_transaction(
-                merged_slots,
-                last_user_text,
-                regex_slots.intent_candidate,
-            ):
-                logger.info(
-                    "[SLOTS] Fresh product transaction request in current turn; clearing stale product slots "
-                    "goods_no=%r tire_model=%r payment_amount=%r",
-                    stale_goods_no,
-                    stale_tire_model,
-                    stale_payment_amount,
-                )
-            demoted_size_context = _demote_stale_tire_size_for_new_product_transaction(
-                merged_slots,
-                last_user_text,
-                regex_slots.intent_candidate,
-            )
-            if demoted_size_context:
-                logger.info(
-                    "[SLOTS] Demoted carried tire_size for fresh product transaction: %s",
-                    demoted_size_context,
             )
             preorder_slot_values = preorder_slot_values_from_data(latest_preorder_tmpl)
             preorder_confirmation_turn = _is_preorder_confirmation_reply(last_user_text, latest_preorder_tmpl)
@@ -24871,13 +25058,8 @@ class TStationChatServiceV2:
                 merged_slots=merged_slots,
             )
             if region_store_input_resolution.resolved:
-                merged_slots = apply_region_or_store_input_context_resolution(
-                    merged_slots,
-                    region_store_input_resolution,
-                    source="region_store_followup_context",
-                )
                 logger.info(
-                    "[SLOTS] Resolved region/store follow-up context flow=%s source=%s promoted_slots=%s",
+                    "[SLOTS] Detected region/store follow-up evidence flow=%s source=%s candidate_slots=%s",
                     region_store_input_resolution.flow_type,
                     region_store_input_resolution.resolution_source,
                     dict(region_store_input_resolution.slots_to_promote),
@@ -26625,6 +26807,69 @@ class TStationChatServiceV2:
         elif routing_result is not None:
             router_source_for_contract = "llm"
             contract_source_for_turn = "router"
+        pending_clarification_resolution = resolve_pending_clarification_answer(
+            merged_slots,
+            user_text=last_user_text,
+        )
+        if pending_clarification_resolution.resolved:
+            if pending_clarification_resolution.slots is not None:
+                merged_slots = pending_clarification_resolution.slots
+                await chat_history_svc.save_slots_async(request.session_id, merged_slots, user_id=request.user_id)
+            resolved_domain = pending_clarification_resolution.domain
+            if resolved_domain == "transaction":
+                domains = [MultiAgentDomain.Domain.TRANSACTION]
+                prompt_profile = (
+                    AgentPromptProfile.TRANSACTION_STORE
+                    if pending_clarification_resolution.intent in {"stock_store_search", "store_service_search"}
+                    else AgentPromptProfile.TRANSACTION_PRICE_STOCK
+                )
+            elif resolved_domain == "discovery":
+                domains = [MultiAgentDomain.Domain.DISCOVERY]
+                prompt_profile = AgentPromptProfile.DISCOVERY_SEARCH
+            else:
+                domains = [MultiAgentDomain.Domain.LEADING]
+                prompt_profile = AgentPromptProfile.FULL
+            routing_result = MultiAgentDomain(
+                reason="pending_clarification_resolved",
+                domains=domains,
+                execution_plan=list(pending_clarification_resolution.execution_plan),
+                user_behavior="resolved short answer within pending clarification candidates",
+                flow="pending_clarification_resolved",
+                claim_check_type="none",
+                complaint_scope="none",
+                agent_prompt_profile=prompt_profile,
+                policy_intent=(
+                    pending_clarification_resolution.intent
+                    if pending_clarification_resolution.domain == "transaction"
+                    else "none"
+                ),
+                planner_confidence=1.0,
+            )
+            skip_decision = False
+            speculative_classify_future = None
+            router_source_for_contract = "pending_clarification"
+            contract_source_for_turn = "pending_clarification"
+            messages = StreamingMultiAgentCoordinator._clear_injected_route_context(messages)
+            messages = StreamingMultiAgentCoordinator._inject_conversation_context(messages, routing_result)
+            messages = StreamingMultiAgentCoordinator._inject_client_prompt(messages)
+            vehicle_selection_trace_metadata.update({
+                "pending_clarification_status": "resolved",
+                "pending_clarification_intent": pending_clarification_resolution.intent,
+                "pending_clarification_domain": pending_clarification_resolution.domain,
+            })
+            logger.info(
+                "[PENDING_CLARIFICATION] resolved short answer intent=%s domain=%s",
+                pending_clarification_resolution.intent,
+                pending_clarification_resolution.domain,
+            )
+        elif pending_clarification_resolution.status == "cleared":
+            if pending_clarification_resolution.slots is not None:
+                merged_slots = pending_clarification_resolution.slots
+                await chat_history_svc.save_slots_async(request.session_id, merged_slots, user_id=request.user_id)
+            vehicle_selection_trace_metadata.update({
+                "pending_clarification_status": "cleared",
+                "pending_clarification_clear_reason": pending_clarification_resolution.reason,
+            })
         latest_router_evidence_snapshot = build_router_evidence(
             routing_result,
             domains=domains,
@@ -26907,6 +27152,60 @@ class TStationChatServiceV2:
             regex_slots=regex_slots,
             explicit_store_purchase_chain_request=explicit_store_purchase_chain_request,
         )
+        if (
+            not pending_clarification_resolution.resolved
+            and _router_contract_requires_current_turn_clarification(routing_result)
+        ):
+            staged_slots = stage_pending_clarification(
+                merged_slots,
+                user_text=last_user_text,
+                routing_result=routing_result,
+                source_turn_id=str(getattr(request, "message_id", "") or ""),
+                source="router_current_turn_clarification",
+            )
+            if staged_slots.model_dump() != merged_slots.model_dump():
+                merged_slots = staged_slots
+                await chat_history_svc.save_slots_async(request.session_id, merged_slots, user_id=request.user_id)
+                vehicle_selection_trace_metadata["pending_clarification_status"] = "staged"
+                logger.info("[PENDING_CLARIFICATION] staged candidates for current-turn clarification")
+        if fresh_product_transaction_request:
+            if _router_contract_requires_current_turn_clarification(routing_result):
+                logger.info(
+                    "[ROUTER_CONTRACT] blocked fresh product override because router requested clarification "
+                    "(session_id=%s domains=%s plan=%s referred_status=%s referred_type=%s)",
+                    request.session_id,
+                    [getattr(domain, "value", domain) for domain in list(getattr(routing_result, "domains", []) or [])],
+                    list(getattr(routing_result, "execution_plan", []) or []),
+                    getattr(routing_result, "referred_object_status", None),
+                    getattr(routing_result, "referred_object_type", None),
+                )
+                fresh_product_transaction_request = False
+            else:
+                stale_goods_no = merged_slots.goods_no
+                stale_tire_model = merged_slots.tire_model
+                stale_payment_amount = merged_slots.payment_amount
+                if _clear_stale_product_identity_for_fresh_transaction(
+                    merged_slots,
+                    last_user_text,
+                    regex_slots.intent_candidate,
+                ):
+                    logger.info(
+                        "[SLOTS] Fresh product transaction request after router validation; clearing stale product "
+                        "slots goods_no=%r tire_model=%r payment_amount=%r",
+                        stale_goods_no,
+                        stale_tire_model,
+                        stale_payment_amount,
+                    )
+                demoted_size_context = _demote_stale_tire_size_for_new_product_transaction(
+                    merged_slots,
+                    last_user_text,
+                    regex_slots.intent_candidate,
+                )
+                if demoted_size_context:
+                    logger.info(
+                        "[SLOTS] Demoted carried tire_size for router-validated fresh product transaction: %s",
+                        demoted_size_context,
+                    )
         if (
             explicit_store_purchase_chain_request
             and not _DATEPICK_SELECTION_RE.match(last_user_text or "")
@@ -27748,6 +28047,7 @@ class TStationChatServiceV2:
                 latest_router_evidence_metadata.get("latest_router_evidence_after"),
             )
         router_location_slot_fill_resume_source = "none"
+        router_location_patch: dict[str, Any] = {}
         router_location_slot_fill = apply_router_location_slot_fill(
             slots=merged_slots,
             routing_result=routing_result,
@@ -27820,8 +28120,6 @@ class TStationChatServiceV2:
             resume_source = _resume_source_from_ui_action_context(vehicle_ui_action_context)
         if resume_source == "none" and location_selection_resume_source != "none":
             resume_source = location_selection_resume_source
-        if resume_source == "none" and region_store_input_resolution.resolved:
-            resume_source = region_store_input_resolution.resume_source
         if resume_source == "none" and router_location_slot_fill_resume_source != "none":
             resume_source = router_location_slot_fill_resume_source
         flow_transition = transition_current_flow(
@@ -27925,8 +28223,11 @@ class TStationChatServiceV2:
             )
         if (
             not router_slot_fill["matched"]
-            and location_selection_resume_source == "expected_slot_fill:store"
-            and getattr(merged_slots, "shop_id", None)
+            and can_promote_existing_store_for_expected_slot_fill(
+                location_slot_fill_matched=router_location_slot_fill.matched,
+                location_selection_resume_source=location_selection_resume_source,
+                existing_shop_id=getattr(merged_slots, "shop_id", None),
+            )
         ):
             router_slot_fill = router_slot_fill_resolution(
                 routing_result,
@@ -27980,6 +28281,20 @@ class TStationChatServiceV2:
                 validated_slot="schedule",
             )
         if router_slot_fill["matched"]:
+            router_place_patch = router_place_slot_patch(
+                latest_router_evidence_snapshot,
+                expected_slot=str(router_slot_fill.get("expected_slot") or ""),
+            )
+            if router_place_patch:
+                next_router_slot_patch = dict(router_slot_fill.get("slot_patch") or {})
+                for field_name in ("region", "place_query", "shop_name"):
+                    next_router_slot_patch.pop(field_name, None)
+                next_router_slot_patch.update(router_place_patch)
+                router_slot_fill = {
+                    **router_slot_fill,
+                    "slot_patch": next_router_slot_patch,
+                    "slot_patch_source": "router_place_entity",
+                }
             router_resume_source = str(router_slot_fill.get("resume_source") or "none")
             if router_resume_source != "none":
                 resume_source = router_resume_source
@@ -27987,6 +28302,7 @@ class TStationChatServiceV2:
                 "router_slot_fill_validated": True,
                 "router_slot_patch": dict(router_slot_fill.get("slot_patch") or {}),
                 "slot_patch": dict(router_slot_fill.get("slot_patch") or {}),
+                "router_place_slot_patch": dict(router_place_patch),
             })
             vehicle_selection_trace_metadata.update({
                 "selection_source": router_resume_source,
@@ -28046,6 +28362,29 @@ class TStationChatServiceV2:
                     "slot_patch": dict(expected_slot_fill_precheck.get("slot_patch") or {}),
                     "contract_correction_source": str(routing_override.get("source") or "slot_fill_controller"),
                 })
+        validated_slot_patch = (
+            dict(router_slot_fill_metadata.get("slot_patch") or {})
+            if router_slot_fill_metadata.get("router_slot_fill_validated")
+            else {}
+        )
+        if validated_slot_patch:
+            merged_slots = merged_slots.apply_runtime_values(
+                validated_slot_patch,
+                source="validated_router_slot_fill",
+            )
+            router_slot_fill_context_payload = build_router_slot_fill_context(
+                slots=merged_slots,
+                user_text=last_user_text,
+                latest_product_tmpl=latest_product_tmpl,
+                latest_location_tmpl=latest_location_tmpl,
+                latest_datepick_tmpl=latest_datepick_tmpl,
+                has_purchase_anchor=_resume_source_from_current_turn(last_user_text) != "none",
+            )
+            vehicle_selection_trace_metadata.update({
+                "validated_slot_fill_applied": True,
+                "validated_slot_fill_patch": validated_slot_patch,
+            })
+            logger.info("[SLOTS] Applied validated router slot-fill patch: %s", validated_slot_patch)
         previous_pending_intent = str(getattr(merged_slots, "pending_intent", None) or "").strip() or None
         previous_goal_type = str(getattr(merged_slots, "goal_type", None) or "").strip() or None
         if region_store_input_resolution.resolved:
@@ -28443,6 +28782,18 @@ class TStationChatServiceV2:
             if seed_stock_mode and transaction_known_slots.get("stock_check_mode") == "inventory_only":
                 transaction_known_slots["stock_check_mode"] = seed_stock_mode
         availability_context = merged_slots.availability_context if isinstance(getattr(merged_slots, "availability_context", None), dict) else {}
+        if router_location_patch:
+            transaction_known_slots, availability_context, region_sanitize_metadata = (
+                sanitize_region_slot_fill_transaction_state(
+                    known_slots=transaction_known_slots,
+                    availability_context=availability_context,
+                    slot_patch=router_location_patch,
+                )
+            )
+            if region_sanitize_metadata:
+                merged_slots = merged_slots.model_copy()
+                merged_slots.availability_context = availability_context
+                vehicle_selection_trace_metadata.update(region_sanitize_metadata)
         pending_order_context = availability_context.get("pending_order_context") if isinstance(availability_context.get("pending_order_context"), dict) else {}
         if current_ui_action_context is not None and is_expected_transaction_slot_fill(current_ui_action_context):
             ui_action_metadata = {
@@ -29010,6 +29361,41 @@ class TStationChatServiceV2:
                         event=final_price_event,
                         turn_contract=turn_contract,
                         direct_return_reason="schedule_selection_final_price_before_preorder",
+                        extra_metadata=vehicle_selection_trace_metadata,
+                    )
+                    return StreamingResponse(
+                        TStationChatServiceV2._stream_contract_required_tool_response(final_price_recovery),
+                        media_type="text/event-stream",
+                        headers={
+                            "Cache-Control": "no-cache",
+                            "Connection": "keep-alive",
+                            "X-Accel-Buffering": "no",
+                        },
+                    )
+                event_data = final_price_event.get("data") if isinstance(final_price_event.get("data"), dict) else {}
+                return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
+
+        if is_contract_required_price_or_coupon_final_price(turn_contract, merged_slots=merged_slots):
+            final_price_recovery = await _recover_contract_required_tool(
+                turn_contract=turn_contract,
+                user_text=last_user_text,
+                merged_slots=merged_slots,
+                blocked_fast_path_source="price_or_coupon_check_before_guard",
+                member_no=request.user_id,
+            )
+            if final_price_recovery is not None:
+                final_price_event = final_price_recovery["event"]
+                if request.stream:
+                    _record_direct_return_trace(
+                        parent_span=_parent_span,
+                        trace_id=request.tracing_id,
+                        session_id=request.session_id,
+                        user_id=request.user_id,
+                        user_text=last_user_text,
+                        domains=domains,
+                        event=final_price_event,
+                        turn_contract=turn_contract,
+                        direct_return_reason="price_or_coupon_check_before_guard",
                         extra_metadata=vehicle_selection_trace_metadata,
                     )
                     return StreamingResponse(
@@ -32388,9 +32774,33 @@ class TStationChatServiceV2:
                 "source_domain": "transaction",
             })
 
+            if _is_specific_coupon_usage_query(user_query):
+                matched_coupon, _ambiguous_coupons = _find_single_confident_coupon_from_owned_coupons(
+                    user_query,
+                    my_coupons_result,
+                )
+                if matched_coupon is not None:
+                    channel_event = _build_coupon_channel_policy_event(
+                        matched_coupon,
+                        target_product_name=_coupon_target_product_name_for_query(user_query),
+                    )
+                    if channel_event is not None:
+                        finalized_event = _finalize_coupon_code_event(
+                            channel_event,
+                            source="code_owned_coupon_channel_policy",
+                            required_tools=("get_my_coupons_tool",),
+                        )
+                        return (emitted_events, finalized_event) if finalized_event is not None else None
+
             mapped_event = try_build_template(
                 [{"tool": "get_my_coupons_tool", "args": my_coupons_input, "data": my_coupons_result}],
-                _owned_coupon_lookup_summary_text(user_query, my_coupons_result) or "보유 쿠폰을 확인했어요.",
+                _owned_coupon_lookup_summary_text(
+                    user_query,
+                    my_coupons_result,
+                    coupon_hint=getattr(coupon_decision, "coupon_hint", None),
+                    product_name=getattr(coupon_decision, "product_name", None),
+                )
+                or "보유 쿠폰을 확인했어요.",
             )
             if mapped_event is not None:
                 mapped_event["source_domain"] = MultiAgentDomain.Domain.TRANSACTION.value
@@ -36154,6 +36564,8 @@ class TStationChatServiceV2:
             return
 
         async def _resolve_pure_inventory_stock_with_code() -> tuple[list[dict], dict] | None:
+            if str(turn_contract.intent or "") in _PRICE_OR_COUPON_RESPONSE_INTENTS:
+                return ([], build_response_policy_guard_event(turn_contract))
             slot_state = pending_slots or initial_slots
             if not _single_store_availability_ready(slot_state):
                 return None
@@ -36164,6 +36576,23 @@ class TStationChatServiceV2:
                 else dict(slot_state or {})
             )
             frame = build_transaction_intent_frame(user_query, known_slots=slot_values)
+            if frame.intent in _PRICE_OR_COUPON_RESPONSE_INTENTS:
+                price_contract = build_turn_contract(
+                    user_text=user_query,
+                    intent_frame=frame,
+                    tool_plan=plan_transaction_tools(frame),
+                    response_decision=decide_transaction_response(
+                        intent=frame.intent,
+                        user_text=user_query,
+                        known_slots=dict(frame.known_slots),
+                    ),
+                    merged_slots=slot_state,
+                    action_mode=getattr(turn_contract, "action_mode", "stock_check"),
+                    context_state=getattr(turn_contract, "context_state", "active"),
+                    previous_pending_intent=getattr(turn_contract, "previous_pending_intent", None),
+                    previous_goal_type=getattr(turn_contract, "previous_goal_type", None),
+                )
+                return ([], build_response_policy_guard_event(price_contract))
             allowed_stock_sub_intents = {"stock", "today_install", "reservation"}
             if frame.intent != "stock_store_search" or frame.sub_intent not in allowed_stock_sub_intents:
                 availability_context = bool(
@@ -36930,7 +37359,10 @@ class TStationChatServiceV2:
                 dict(recovery["tool_input"]),
                 dict(recovery["tool_result"]),
             )
-            recovered_event = recovery["event"]
+            recovered_event = _guard_contract_recovery_event(
+                recovery["event"],
+                turn_contract=turn_contract,
+            )
             _stage_comparison_context_slots(recovered_event)
             await _persist_pending_slots_for_direct_return()
             chunks = [
@@ -37012,6 +37444,14 @@ class TStationChatServiceV2:
             and str(contract_required_tool_recovery.get("tool_name") or "") != "get_products_recommendations_tool"
             else None
         )
+        if (
+            contract_required_store_flow_tool is None
+            and str(turn_contract.intent or "") in _PRICE_OR_COUPON_RESPONSE_INTENTS
+        ):
+            guard_event = build_response_policy_guard_event(turn_contract)
+            for chunk in TStationChatServiceV2._stream_policy_guard_response(guard_event):
+                yield chunk
+            return
         if contract_required_store_flow_tool is None:
             confirmed_stock_flow_advance = await _advance_stock_flow_from_confirmed_state(
                 turn_contract=turn_contract,
@@ -37307,6 +37747,9 @@ class TStationChatServiceV2:
                                         user_text=user_query,
                                         known_slots=policy_slots,
                                     )
+                                elif tool_name == "transaction_store_preview_tool" and _has_store_search_intent(policy_slots):
+                                    post_tool_intent = "store_search"
+                                    post_tool_response_decision = _post_tool_store_search_response_decision()
                                 else:
                                     post_tool_intent = "inventory_availability"
                                     post_tool_response_decision = decide_transaction_response(
@@ -38697,7 +39140,11 @@ class TStationChatServiceV2:
                     if (
                         source_domain == MultiAgentDomain.Domain.TRANSACTION.value
                         and event.get("template") == "quickReply"
-                        and _should_replace_vague_store_detail_quickreply(event_data)
+                        and _store_detail_quickreply_replacement_allowed(
+                            event_data,
+                            called_tool_names=called_tool_names,
+                            turn_contract=turn_contract,
+                        )
                         and not _is_active_order_flow_slots(pending_slots or initial_slots)
                     ):
                         store_detail_event = _store_detail_quickreply_from_sources(
@@ -39034,7 +39481,17 @@ class TStationChatServiceV2:
                     next_action = event.get("nextAction") or {}
                     is_handoff = isinstance(next_action, dict) and next_action.get("type") == "continue"
                     is_current_quickreply = event.get("template") == "quickReply"
-                    if is_current_quickreply and chips_empty and not is_handoff:
+                    event_metadata = event_data.get("metadata") if isinstance(event_data, dict) else {}
+                    event_response_shape_key = (
+                        str(event_metadata.get("response_shape_key") or event_metadata.get("responseShapeKey") or "")
+                        if isinstance(event_metadata, dict)
+                        else ""
+                    )
+                    is_comparison_summary_quickreply = event_response_shape_key in {
+                        "metric_comparison_summary",
+                        "grade_comparison_summary",
+                    }
+                    if is_current_quickreply and chips_empty and not is_handoff and not is_comparison_summary_quickreply:
                         fallback_chips, fallback_label = _choose_quickreply_fallback(
                             called_tool_names,
                             source_domain,

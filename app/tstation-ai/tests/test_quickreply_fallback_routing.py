@@ -47,6 +47,7 @@ from services.tstation.policies.flow_state import (
     store_candidate_selection_patch,
     store_candidates_flow_delta,
 )
+from services.tstation.policies.router_evidence import router_place_slot_patch
 from services.tstation.agents.b_discovery_agent import tools as discovery_tools
 from services.tstation.agents.b_discovery_agent.agent import (
     DISCOVERY_AGENT_SYSTEM_PROMPT_TEMPLATE,
@@ -265,6 +266,7 @@ from services.tstation.chat import (
     _router_contract_is_high_confidence_comparison,
     _router_contract_is_high_confidence_policy,
     _router_contract_is_high_confidence_transaction_flow,
+    _router_contract_requires_current_turn_clarification,
     _restore_store_service_search_contract,
     _store_attribute_selection_continuation_inquiry,
     _store_attribute_selection_continuation_from_location_selection,
@@ -309,6 +311,7 @@ from services.tstation.chat import (
     _is_quick_order_execute_contract_ready,
     _finalize_coerced_template_event,
     _finalize_direct_code_event,
+    _guard_contract_recovery_event,
     _choose_quickreply_fallback,
     _coerce_non_selection_listcar_to_quickreply,
     _coerce_unmatched_vehicle_listcar_to_owner_prompt,
@@ -355,6 +358,7 @@ from services.tstation.chat import (
     _normalize_existing_reservation_change_quickreply,
     _normalize_policy_guidance_leak_quickreply,
     _normalize_price_policy_quickreply,
+    _store_detail_quickreply_replacement_allowed,
     _store_detail_quickreply_from_sources,
     _normalize_vehicle_owner_lookup_text,
     _non_self_vehicle_plate_owner_lookup_plate,
@@ -706,6 +710,52 @@ def test_chat_message_request_preserves_ui_action_and_slot_patch() -> None:
     assert request.chip_context.model_dump()["slots"]["ord_qty"] == 4
 
 
+def test_pending_clarification_route_reinject_clears_previous_router_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(chat_module, "load_client_injection", lambda: "client prompt")
+    messages = [
+        {"role": "system", "content": "## CLIENT INSTRUCTIONS\nclient prompt"},
+        {
+            "role": "user",
+            "content": (
+                "## CONVERSATION CONTEXT\n"
+                "- User behavior: newer stale route\n"
+                "- Flow so far: stale_flow_2\n\n"
+                "# Respond in Korean language\n"
+                "## CONVERSATION CONTEXT\n"
+                "- User behavior: older stale route\n"
+                "- Flow so far: stale_flow_1\n\n"
+                "# Respond in Korean language\n"
+                "할인"
+            ),
+        },
+    ]
+    routing = MultiAgentDomain(
+        reason="pending_clarification_resolved",
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        execution_plan=["transaction:price_or_coupon_check"],
+        user_behavior="resolved short answer within pending clarification candidates",
+        flow="pending_clarification_resolved",
+        claim_check_type="none",
+        complaint_scope="none",
+        agent_prompt_profile=AgentPromptProfile.TRANSACTION_PRICE_STOCK,
+    )
+
+    cleaned = StreamingMultiAgentCoordinator._clear_injected_route_context(messages)
+    reinjected = StreamingMultiAgentCoordinator._inject_client_prompt(
+        StreamingMultiAgentCoordinator._inject_conversation_context(cleaned, routing)
+    )
+
+    user_content = next(message["content"] for message in reinjected if message["role"] == "user")
+    system_messages = [message for message in reinjected if message["role"] == "system"]
+
+    assert len(system_messages) == 1
+    assert user_content.count("## CONVERSATION CONTEXT") == 1
+    assert user_content.count("# Respond in Korean language") == 1
+    assert "pending_clarification_resolved" in user_content
+    assert "stale_flow_1" not in user_content
+    assert "stale_flow_2" not in user_content
+
+
 def test_prepare_ui_action_state_applies_generic_slot_patch_before_routing() -> None:
     slots = ConversationSlots(goods_no="G0001", ord_qty=None, pending_intent="stock", goal_type="store_with_stock")
 
@@ -734,6 +784,175 @@ def test_prepare_ui_action_state_applies_generic_slot_patch_before_routing() -> 
     assert prepared.trace_metadata["ui_action_detected"] is True
     assert prepared.trace_metadata["slots_rewritten"] is True
     assert prepared.rewritten_user_text == "4개"
+
+
+def test_product_ui_action_clears_stale_store_schedule_and_price_before_slot_patch() -> None:
+    slots = ConversationSlots(
+        goods_no="G-OLD",
+        tire_model="Old Product",
+        pending_product_name="Old Product",
+        tire_size="225/45R17",
+        ord_qty=2,
+        region="강남",
+        shop_id="F00098",
+        shop_name="티스테이션 역삼점",
+        requested_cal_day="20260706",
+        rsv_hour="14",
+        payment_amount=320800,
+        price_basis="cheapest_final_prc",
+        price_source_tool="transaction_store_preview_tool",
+        pending_intent="order",
+        goal_type="place_order",
+        availability_context={
+            "pending_order_context": {
+                "goods_no": "G-OLD",
+                "product_name": "Old Product",
+                "tire_size": "225/45R17",
+                "ord_qty": 2,
+                "region": "강남",
+                "shop_id": "F00098",
+                "shop_name": "티스테이션 역삼점",
+                "requested_cal_day": "20260706",
+                "rsv_hour": "14",
+                "payment_amount": 320800,
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            }
+        },
+    )
+
+    prepared = prepare_ui_action_state(
+        ui_action={
+            "action_type": "select_product",
+            "cta_action": "select_product",
+            "source_intent": "quick_order_reservation",
+            "expected_contract_intent": "quick_order_reservation",
+            "entity_type": "product",
+            "entity_id": "G-NEW",
+            "entity_label": "New Product",
+            "slots": {"goods_no": "G-NEW", "tire_model": "New Product", "tire_size": "225/45R17"},
+        },
+        chip_context=None,
+        request_slots=None,
+        latest_listcar_tmpl=None,
+        last_user_text="New Product 225/45R17",
+        existing_slots=slots,
+        generic_slot_apply_fn=lambda base_slots, values: base_slots.apply_runtime_values(values, source="ui_action"),
+        vehicle_slot_apply_fn=_apply_vehicle_selection_slot_values,
+    )
+
+    assert prepared.updated_slots.goods_no == "G-NEW"
+    assert prepared.updated_slots.tire_model == "New Product"
+    assert prepared.updated_slots.ord_qty == 2
+    assert prepared.updated_slots.region == "강남"
+    assert prepared.updated_slots.shop_id is None
+    assert prepared.updated_slots.shop_name is None
+    assert prepared.updated_slots.requested_cal_day is None
+    assert prepared.updated_slots.rsv_hour is None
+    assert prepared.updated_slots.payment_amount is None
+    assert prepared.updated_slots.price_basis is None
+    assert prepared.updated_slots.price_source_tool is None
+    pending_context = prepared.updated_slots.availability_context["pending_order_context"]
+    assert pending_context["product_name"] == "New Product"
+    assert pending_context["tire_size"] == "225/45R17"
+    assert pending_context["ord_qty"] == 2
+    assert pending_context["region"] == "강남"
+    assert "shop_id" not in pending_context
+    assert "requested_cal_day" not in pending_context
+    assert "payment_amount" not in pending_context
+    assert prepared.action_context is not None
+    assert "shop_id" not in prepared.action_context.slot_patch
+    assert "requested_cal_day" not in prepared.action_context.slot_patch
+    assert "payment_amount" not in prepared.action_context.slot_patch
+    assert prepared.trace_metadata["current_turn_product_replaced"] is True
+    assert prepared.trace_metadata["previous_goods_no"] == "G-OLD"
+    assert prepared.trace_metadata["replacement_goods_no"] == "G-NEW"
+
+
+def test_quantity_after_product_change_does_not_restore_stale_preorder_slots() -> None:
+    slots = ConversationSlots(
+        goods_no="G-OLD",
+        tire_model="Old Product",
+        pending_product_name="Old Product",
+        tire_size="225/45R17",
+        ord_qty=2,
+        region="강남",
+        shop_id="F00098",
+        shop_name="티스테이션 역삼점",
+        requested_cal_day="20260706",
+        rsv_hour="14",
+        payment_amount=320800,
+        price_basis="cheapest_final_prc",
+        price_source_tool="transaction_store_preview_tool",
+        pending_intent="order",
+        goal_type="place_order",
+        availability_context={
+            "pending_order_context": {
+                "goods_no": "G-OLD",
+                "product_name": "Old Product",
+                "tire_size": "225/45R17",
+                "ord_qty": 2,
+                "region": "강남",
+                "shop_id": "F00098",
+                "shop_name": "티스테이션 역삼점",
+                "requested_cal_day": "20260706",
+                "rsv_hour": "14",
+                "payment_amount": 320800,
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            }
+        },
+    )
+    selected_product = prepare_ui_action_state(
+        ui_action={
+            "action_type": "select_product",
+            "cta_action": "select_product",
+            "source_intent": "quick_order_reservation",
+            "expected_contract_intent": "quick_order_reservation",
+            "entity_type": "product",
+            "entity_id": "G-NEW",
+            "entity_label": "New Product",
+            "slots": {"goods_no": "G-NEW", "tire_model": "New Product", "tire_size": "225/45R17"},
+        },
+        chip_context=None,
+        request_slots=None,
+        latest_listcar_tmpl=None,
+        last_user_text="New Product 225/45R17",
+        existing_slots=slots,
+        generic_slot_apply_fn=lambda base_slots, values: base_slots.apply_runtime_values(values, source="ui_action"),
+        vehicle_slot_apply_fn=_apply_vehicle_selection_slot_values,
+    )
+
+    transition = transition_current_flow(
+        user_text="2개",
+        router_evidence={
+            "domain": "transaction",
+            "intent": "quick_order_reservation",
+            "execution_plan": ["transaction:quick_order_reservation:slot_fill:quantity"],
+            "source": "llm",
+        },
+        existing_slots=selected_product.updated_slots,
+        extracted_slots=ConversationSlots(ord_qty=2),
+        ui_action={
+            "action_type": "select_quantity",
+            "cta_action": "select_quantity",
+            "selection_source": "ui_action",
+            "expected_contract_intent": "quick_order_reservation",
+            "entity_type": "quantity",
+            "entity_label": "2개",
+            "slot_patch": {"ord_qty": 2},
+        },
+        resume_source="router_slot_fill:quantity",
+    )
+
+    active_flow_context = transition.flow_transition["active_flow_context"]
+    assert active_flow_context["product"]["goods_no"] == "G-NEW"
+    assert active_flow_context["product"]["product_name"] == "New Product"
+    assert active_flow_context["product"]["ord_qty"] == 2
+    assert active_flow_context["store"]["region"] == "강남"
+    assert "shop_id" not in active_flow_context.get("store", {})
+    assert "schedule" not in active_flow_context
+    assert "payment" not in active_flow_context
 
 
 def test_quickreply_cta_action_enter_region_asks_for_region_only() -> None:
@@ -2328,6 +2547,47 @@ def test_turn_contract_keeps_router_support_compatibility_over_product_descripti
     assert contract.response_decision["metadata"]["response_shape_key"] == "compatibility_advisory"
 
 
+def test_vehicle_selection_recommendation_restores_tool_boundary_when_router_says_leading() -> None:
+    routing = _routing_result(
+        domains=[MultiAgentDomain.Domain.LEADING],
+        execution_plan=["clarify selected vehicle from the shown list"],
+    )
+    frame = IntentFrame(
+        domain=PolicyDomain.LEADING,
+        intent="single_domain",
+        known_slots={
+            "tire_size": "225/45R17",
+            "car_lnc_cd": "W036269",
+            "vehicle_type": "passenger",
+            "recommendation_context": {"source_text": "타이어 추천"},
+        },
+    )
+    contract = build_turn_contract(
+        user_text="61거1836",
+        intent_frame=frame,
+        tool_plan=None,
+        routing_result=routing,
+        merged_slots=ConversationSlots(tire_size="225/45R17", car_lnc_cd="W036269"),
+        action_mode="info_only",
+        context_state="dormant",
+        contract_seed={
+            "ui_action": {
+                "action_type": "select_vehicle",
+                "expected_contract_intent": "vehicle_resolved_recommendation",
+            },
+            "user_text": "61거1836",
+        },
+    )
+
+    assert contract.domain == "discovery"
+    assert contract.intent == "product_recommendation"
+    assert contract.sub_intent == "vehicle_resolved_recommendation"
+    assert contract.allowed_tools == ("get_products_recommendations_tool",)
+    assert contract.preferred_tool == "get_products_recommendations_tool"
+    assert contract.tool_args_patch["tire_size"] == "225/45R17"
+    assert contract.tool_args_patch["rcmd_type"] == "tstation"
+
+
 def test_safe_service_tire_recommendation_policy_forces_discovery_over_support_router() -> None:
     plan = plan_cross_domain_turn("안심서비스 가능한 타이어는?", known_slots={})
     support_routing = _routing_result(
@@ -2501,6 +2761,35 @@ def test_high_confidence_transaction_router_contract_allows_explicit_product_res
 
     assert _router_contract_is_high_confidence_transaction_flow(routing)
     assert not _should_preserve_router_contract(
+        routing_result=routing,
+        candidate_override="p0b_transaction_redirect",
+        override_reason="missing_goods_no_for_explicit_transaction",
+    )
+
+
+def test_router_clarification_contract_blocks_fresh_product_override() -> None:
+    routing = MultiAgentDomain(
+        reason="missing product for price question",
+        domains=[MultiAgentDomain.Domain.LEADING],
+        execution_plan=["clarify what product or item the user means before pricing"],
+        user_behavior="asking price without naming a product",
+        flow="active purchase flow exists but current turn asks price without product",
+        claim_check_type="none",
+        complaint_scope="none",
+        planner_confidence=0.82,
+        needs_clarification=True,
+        referred_object_status="missing",
+        referred_object_type="product",
+        agent_prompt_profile="full",
+    )
+
+    assert _router_contract_requires_current_turn_clarification(routing) is True
+    assert _should_preserve_router_contract(
+        routing_result=routing,
+        candidate_override="fresh_unsized_product_transaction",
+        override_reason="missing_tire_size_for_explicit_purchase_product",
+    )
+    assert _should_preserve_router_contract(
         routing_result=routing,
         candidate_override="p0b_transaction_redirect",
         override_reason="missing_goods_no_for_explicit_transaction",
@@ -4605,7 +4894,7 @@ def test_grade_comparison_policy_runtime_replaces_internal_guidance_text() -> No
     assert changed is True
     assert "등급/포지션 근거로 비교한다" not in event_data["assistantResponse"]
     assert "두 상품의 프리미엄 등급 여부를 비교하려면" in event_data["assistantResponse"]
-    assert _labels(event_data["quickReplies"]) == ["상품명 다시 입력", "사이즈 직접 입력", "내 차량 보기"]
+    assert event_data["quickReplies"] == []
 
 
 def test_grade_comparison_event_prefers_higher_price_grade() -> None:
@@ -4625,7 +4914,7 @@ def test_grade_comparison_event_prefers_higher_price_grade() -> None:
     assert "| 상품 등급 | 스탠다드 |" in assistant
     assert "| 상품 등급 | 프리미엄 |" in assistant
     assert "벤투스 에어S이 키너지 EX보다 상위 등급입니다." in assistant
-    assert _labels(event["data"]["quickReplies"]) == ["구매하기", "다른 상품 비교", "내 차량 보기"]
+    assert event["data"]["quickReplies"] == []
 
 
 def test_final_price_from_row_prefers_member_best_price_before_generic_fields() -> None:
@@ -7378,12 +7667,7 @@ def test_unclear_complaint_asks_target_before_support_handoff() -> None:
 
     event = _build_complaint_scope_guard_event(_complaint_scope_for_turn("되는 일이 없어 짜증나", None))
 
-    assert event is not None
-    assert event["source_domain"] == MultiAgentDomain.Domain.LEADING.value
-    assistant_response = event["data"]["assistantResponse"]
-    assert "어떤 부분이 불편하셨는지" in assistant_response
-    assert "타이어 상품, 주문/결제, 장착 매장" in assistant_response
-    assert _labels(event["data"]["quickReplies"]) == ["주문 조회", "매장 찾기", "1:1 문의"]
+    assert event is None
 
 
 def test_private_contact_request_preempts_unclear_complaint() -> None:
@@ -10317,6 +10601,29 @@ def test_vague_store_detail_quickreply_rebuilds_from_tool_source() -> None:
     assert "월요일~일요일" not in assistant
 
 
+def test_vague_store_detail_quickreply_replacement_requires_current_detail_tool_and_intent() -> None:
+    event_data = {
+        "assistantResponse": "고객님, 매장 정보를 확인했어요.",
+        "quickReplies": [{"label": "매장 상세 페이지로 이동", "domain": "TRANSACTION"}],
+    }
+
+    assert _store_detail_quickreply_replacement_allowed(
+        event_data,
+        called_tool_names={"get_store_detail_tool"},
+        turn_contract=SimpleNamespace(intent="plain_store_info_lookup", sub_intent="store_detail"),
+    )
+    assert not _store_detail_quickreply_replacement_allowed(
+        event_data,
+        called_tool_names=set(),
+        turn_contract=SimpleNamespace(intent="plain_store_info_lookup", sub_intent="store_detail"),
+    )
+    assert not _store_detail_quickreply_replacement_allowed(
+        event_data,
+        called_tool_names={"get_store_detail_tool"},
+        turn_contract=SimpleNamespace(intent="store_service_search", sub_intent=None),
+    )
+
+
 def test_plain_store_info_query_extracts_store_name_without_reservation_action() -> None:
     assert _extract_plain_store_info_store_name("고양시청점 정보") == "고양시청점"
     assert _extract_plain_store_info_store_name("티스테이션 고양시청점 전화번호 알려줘") == "고양시청점"
@@ -10965,6 +11272,38 @@ def test_action_mode_keeps_order_history_as_owned_record_lookup_with_stale_order
     assert _context_state_for_action(action_mode=action_mode, resume_source="none", slots=slots) == "dormant"
 
 
+def test_turn_contract_order_history_lookup_uses_owned_order_tool_boundary() -> None:
+    routing_result = _routing_result(
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        execution_plan=["transaction:order_history_lookup"],
+    )
+    frame = build_transaction_intent_frame("내 주문내역 알려줘", known_slots={})
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text="내 주문내역 알려줘",
+        known_slots=frame.known_slots,
+    )
+
+    contract = build_turn_contract(
+        user_text="내 주문내역 알려줘",
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=response_decision,
+        routing_result=routing_result,
+        merged_slots=ConversationSlots(),
+        action_mode="owned_record_lookup",
+        context_state="dormant",
+    )
+
+    assert contract.intent == "order_history_lookup"
+    assert contract.allowed_tools == ("get_orders_of_user_tool", "get_order_status_tool")
+    assert contract.preferred_tool == "get_orders_of_user_tool"
+    assert "quick_order_tool" in contract.forbidden_tools
+    assert contract.required_slots == ()
+    assert contract.blocking_required_slots == ()
+
+
 def test_current_turn_action_mode_prefers_support_policy_for_delivery_delay_reservation_question() -> None:
     action_mode = _current_turn_action_mode(
         user_text="주문하면서 매장, 일정 다 예약했는데, 배송이 지연되고 있다고 문자가 왔어. 내 예약도 자동으로 변경되나?",
@@ -11155,6 +11494,132 @@ def test_promotion_gift_policy_beats_stale_purchase_context_without_high_confide
     assert slots.goal_type is None
     assert slots.ord_qty is None
     assert "dormant_purchase_context" in (slots.availability_context or {})
+
+
+def test_pivot_stages_active_purchase_flow_as_dormant_and_removes_executable_context() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000309780",
+        tire_size="225/45R17",
+        ord_qty=4,
+        region="분당",
+        pending_intent="order",
+        goal_type="place_order",
+        availability_context={
+            "pending_order_context": {
+                "goods_no": "G000000309780",
+                "tire_size": "225/45R17",
+                "ord_qty": 4,
+                "region": "분당",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            },
+            "active_flow_context": {
+                "flow_type": "purchase",
+                "flow_step": "show_schedule",
+                "status": "active",
+                "product": {
+                    "goods_no": "G000000309780",
+                    "tire_size": "225/45R17",
+                    "ord_qty": 4,
+                },
+                "store": {"region": "분당"},
+                "intent": {"pending_intent": "order", "goal_type": "place_order"},
+                "current_step": "select_schedule",
+                "missing_slots": ["booking_datetime"],
+            },
+        },
+    )
+
+    dormant = _stage_dormant_transaction_context(slots, source="pre_policy_context:price_lookup")
+    masked = _mask_dormant_transaction_action_slots(slots, source="pre_policy_context:price_lookup")
+
+    context = slots.availability_context or {}
+    assert dormant["goods_no"] == "G000000309780"
+    assert dormant["region"] == "분당"
+    assert dormant["context_state"] == "dormant"
+    assert "pending_order_context" not in context
+    assert "active_flow_context" not in context
+    assert context["dormant_purchase_context"]["flow_step"] == "show_schedule"
+    assert masked["pending_intent"] == "order"
+    assert masked["goal_type"] == "place_order"
+    assert slots.pending_intent is None
+    assert slots.goal_type is None
+    assert slots.ord_qty is None
+
+
+def test_pivot_staging_prefers_active_flow_snapshot_over_current_turn_flat_slots() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000309780",
+        tire_size="225/45R17",
+        ord_qty=2,
+        region="고양시청",
+        pending_intent="order",
+        goal_type="place_order",
+        availability_context={
+            "pending_order_context": {
+                "goods_no": "G000000309780",
+                "tire_size": "225/45R17",
+                "ord_qty": 4,
+                "region": "분당",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            },
+            "active_flow_context": {
+                "flow_type": "purchase",
+                "flow_step": "show_store_candidates",
+                "status": "active",
+                "product": {
+                    "goods_no": "G000000309780",
+                    "tire_size": "225/45R17",
+                },
+                "quantity": {"ord_qty": 4},
+                "store": {"region": "분당"},
+                "intent": {"pending_intent": "order", "goal_type": "place_order"},
+            },
+        },
+    )
+
+    dormant = _stage_dormant_transaction_context(slots, source="pre_policy_context:store_search")
+
+    assert dormant["ord_qty"] == 4
+    assert dormant["region"] == "분당"
+    assert dormant["context_state"] == "dormant"
+
+
+def test_resume_recalculates_purchase_next_step_from_dormant_slots_not_stale_flow_step() -> None:
+    slots = ConversationSlots(
+        availability_context={
+            "dormant_purchase_context": {
+                "goods_no": "G000000309780",
+                "tire_size": "225/45R17",
+                "ord_qty": 4,
+                "region": "분당",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+                "flow_step": "build_preorder",
+                "context_state": "dormant",
+            }
+        },
+    )
+
+    action_mode = _current_turn_action_mode(
+        user_text="계속 진행해줘",
+        domains=[MultiAgentDomain.Domain.LEADING],
+        routing_result=None,
+        regex_slots=ConversationSlots(),
+        merged_slots=slots,
+        explicit_override_reason=None,
+        resume_source="explicit_user",
+    )
+    state = resolve_purchase_order_flow(
+        intent="quick_order_reservation",
+        known_slots=slots.availability_context["dormant_purchase_context"],
+    )
+
+    assert action_mode == "purchase_continuation"
+    assert state is not None
+    assert state.flow_step == "show_store_candidates"
+    assert state.preferred_tool == "transaction_store_preview_tool"
 
 
 @pytest.mark.parametrize(
@@ -11876,6 +12341,46 @@ def test_router_wins_stock_store_search_aligns_stale_quick_order_tool_plan() -> 
     assert aligned.metadata["turn_contract_intent"] == "stock_store_search"
 
 
+def test_router_wins_store_service_search_overrides_stale_tool_args_patch() -> None:
+    routing_result = _routing_result(
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        execution_plan=["transaction:store_service_search"],
+        place_query="고양시청",
+        policy_intent="store_service_search",
+    )
+    stale_store_plan = ToolPlan(
+        allowed_tools=("search_stores_tool", "get_store_list_tool"),
+        preferred_tool="search_stores_tool",
+        forbidden_tools=("transaction_store_preview_tool", "get_store_schedule_tool"),
+        tool_args_patch={"region_code": "분당", "limit": 10},
+        metadata={"response_intent": "store_service_search"},
+    )
+    contract = build_turn_contract(
+        user_text="고양시청 근처는?",
+        intent_frame=IntentFrame(
+            domain=PolicyDomain.TRANSACTION,
+            intent="store_search",
+            known_slots={
+                "place_query": "고양시청",
+                "region": "고양시청",
+                "planner_policy_intent": "store_service_search",
+            },
+        ),
+        tool_plan=stale_store_plan,
+        routing_result=routing_result,
+        merged_slots=ConversationSlots(region="분당"),
+        action_mode="store_search",
+        context_state="dormant",
+    )
+
+    aligned = align_tool_plan_to_turn_contract(stale_store_plan, contract)
+
+    assert contract.intent == "store_service_search"
+    assert aligned is not None
+    assert aligned.preferred_tool == "search_stores_tool"
+    assert aligned.tool_args_patch == {"limit": 10, "place_query": "고양시청"}
+
+
 def test_router_wins_store_search_over_stale_quick_order_schedule_frame() -> None:
     routing_result = _routing_result(
         domains=[MultiAgentDomain.Domain.TRANSACTION],
@@ -11944,15 +12449,15 @@ def test_router_wins_store_search_over_stale_quick_order_schedule_frame() -> Non
     assert contract.router_wins_applied is True
     assert contract.required_slots == ()
     assert contract.blocking_required_slots == ()
-    assert "transaction_store_preview_tool" in contract.allowed_tools
     assert "get_store_list_tool" in contract.allowed_tools
+    assert "transaction_store_preview_tool" in contract.forbidden_tools
     assert "get_store_schedule_tool" in contract.forbidden_tools
     assert "quick_order_tool" in contract.forbidden_tools
     assert payload["drift_resolution"] == "router_intent:store_search_kept_over_code_frame:quick_order_reservation"
     assert payload["response_decision"]["template"] == "location"
     assert payload["response_decision"]["metadata"]["response_shape_key"] == "store_search"
     assert aligned is not None
-    assert aligned.preferred_tool == "transaction_store_preview_tool"
+    assert aligned.preferred_tool == "get_store_list_tool"
     assert aligned.allowed_tools == contract.allowed_tools
 
 
@@ -12028,6 +12533,92 @@ def test_router_wins_discount_question_over_stale_quick_order_schedule_frame() -
     assert aligned is not None
     assert aligned.preferred_tool == "get_final_price_tool"
     assert aligned.allowed_tools == contract.allowed_tools
+
+
+def test_price_or_coupon_check_blocks_stale_datepick_template_after_preorder() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="price_or_coupon_check",
+        known_slots={
+            "goods_no": "G000000309856",
+            "product_name": "벤투스 S2 AS",
+            "tire_size": "275/35R20",
+            "ord_qty": 4,
+            "shop_id": "F00721",
+            "shop_name": "티스테이션 판교점",
+            "requested_cal_day": "20260707",
+            "rsv_hour": "09",
+            "payment_amount": 955600,
+        },
+        allowed_tools=("get_final_price_tool", "get_my_coupons_tool", "get_coupon_applicable_products_tool"),
+        preferred_tool="get_final_price_tool",
+        response_decision={
+            "template": "quickReply",
+            "metadata": {"response_shape_key": "price_or_coupon_check"},
+        },
+        action_mode="stock_check",
+        context_state="active",
+    )
+
+    assert violates_response_template_contract({"template": "datepick"}, contract) is True
+
+    event = build_response_policy_guard_event(contract)
+
+    assert event["template"] == "quickReply"
+    assert event["data"]["metadata"]["contract_intent"] == "price_or_coupon_check"
+    assert "955,600원" in event["data"]["assistantResponse"]
+    assert "벤투스 S2 AS" in event["data"]["assistantResponse"]
+
+
+def test_contract_recovery_guard_replaces_stale_datepick_for_price_or_coupon_check() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="price_or_coupon_check",
+        known_slots={
+            "product_name": "벤투스 S2 AS",
+            "payment_amount": 955600,
+        },
+        response_decision={
+            "template": "quickReply",
+            "metadata": {"response_shape_key": "price_or_coupon_check"},
+        },
+    )
+    stale_event = {
+        "type": "data",
+        "template": "datepick",
+        "data": {"assistantResponse": "예약 시간을 선택해 주세요.", "dates": []},
+    }
+
+    guarded = _guard_contract_recovery_event(stale_event, turn_contract=contract)
+
+    assert guarded["template"] == "quickReply"
+    assert guarded["data"]["metadata"]["contract_intent"] == "price_or_coupon_check"
+    assert "955,600원" in guarded["data"]["assistantResponse"]
+
+
+def test_order_discount_explanation_blocks_stale_datepick_template_after_preorder() -> None:
+    for intent in ("order_discount_explanation", "explain_discount_application"):
+        contract = TurnContract(
+            domain="transaction",
+            intent=intent,
+            known_slots={
+                "product_name": "벤투스 S2 AS",
+                "payment_amount": 955600,
+                "ord_qty": 4,
+            },
+            response_decision={
+                "template": "quickReply",
+                "metadata": {"response_shape_key": "transaction_fallback"},
+            },
+        )
+
+        assert violates_response_template_contract({"template": "datepick"}, contract) is True
+
+        event = build_response_policy_guard_event(contract)
+
+        assert event["template"] == "quickReply"
+        assert event["data"]["metadata"]["contract_intent"] == intent
+        assert "955,600원" in event["data"]["assistantResponse"]
 
 
 def test_router_wins_plain_store_search_defaults_to_store_list_tool() -> None:
@@ -13979,8 +14570,8 @@ def test_stock_store_location_payload_stores_candidate_flow_state_without_event_
         active_flow_context=commit_flow_state(
             {},
             delta,
-            source="location_template:stock_store_candidates",
-            flow_type="stock",
+            source="location_template:preview_store_candidates",
+            flow_type=str(delta.get("flow_type") or "purchase"),
             flow_step="show_store_candidates",
         ).state.to_active_flow_context(),
         user_text="티스테이션 분당정자점",
@@ -13993,8 +14584,9 @@ def test_stock_store_location_payload_stores_candidate_flow_state_without_event_
     assert patch["source_tool"] == "transaction_store_preview_tool"
     assert patch["goods_no"] == "G000000310126"
     assert patch["ord_qty"] == 2
-    assert patch["pending_intent"] == "stock"
-    assert patch["goal_type"] == "store_with_stock"
+    assert patch["_flow_type"] == "purchase"
+    assert patch["pending_intent"] == "order"
+    assert patch["goal_type"] == "place_order"
 
 
 def test_stock_store_candidate_preserves_canonical_product_name() -> None:
@@ -15332,6 +15924,113 @@ def test_flow_transition_records_discovery_selected_product_flow_state_without_e
     assert active_flow_context.get("intent", {}).get("goal_type") is None
     assert slots.pending_intent is None
     assert slots.goal_type is None
+
+
+def test_turn_contract_keeps_product_description_ui_selection_over_purchase_router() -> None:
+    routing = _routing_result(
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        execution_plan=[
+            "continue quick order reservation flow",
+            "ask for quantity and proceed when provided",
+        ],
+    )
+    contract = build_turn_contract(
+        user_text="벤투스 S2 AS 225/45R17",
+        intent_frame=IntentFrame(
+            domain=PolicyDomain.TRANSACTION,
+            intent="stock_store_search",
+            known_slots={
+                "goods_no": "G000000309783",
+                "product_name": "Ventus S2 AS",
+                "tire_model": "벤투스 S2 AS",
+                "pending_product_name": "벤투스 S2 AS",
+                "tire_size": "225/45R17",
+                "availability_context": {
+                    "pending_order_context": {
+                        "goods_no": "G000000309783",
+                        "product_name": "벤투스 S2 AS",
+                        "tire_model": "벤투스 S2 AS",
+                        "pending_product_name": "벤투스 S2 AS",
+                        "tire_size": "225/45R17",
+                    },
+                    "active_flow_context": {
+                        "flow_type": "commerce",
+                        "status": "active",
+                        "flow_step": "product_selected",
+                        "product": {
+                            "goods_no": "G000000309783",
+                            "product_name": "벤투스 S2 AS",
+                            "tire_model": "벤투스 S2 AS",
+                            "pending_product_name": "벤투스 S2 AS",
+                            "tire_size": "225/45R17",
+                        },
+                        "intent": {"sub_flow_type": "purchase"},
+                        "source": "flow_controller:select_product",
+                    },
+                },
+            },
+        ),
+        tool_plan=ToolPlan(
+            allowed_tools=(
+                "search_product_tool",
+                "get_store_list_tool",
+                "search_stores_tool",
+                "get_store_inventory_tool",
+                "get_logistics_inventory_tool",
+            ),
+            forbidden_tools=(
+                "transaction_store_preview_tool",
+                "get_store_schedule_tool",
+                "quick_order_tool",
+            ),
+        ),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.CLARIFY,
+            template=TemplateName.QUICK_REPLY,
+            metadata={"response_shape_key": "transaction_fallback"},
+        ),
+        routing_result=routing,
+        action_mode="booking_continuation",
+        context_state="active",
+        contract_seed={
+            "ui_action": {
+                "action_type": "select_product",
+                "selection_source": "ui_action",
+                "expected_contract_intent": "product_description",
+                "entity_type": "product",
+                "entity_id": "G000000309783",
+                "entity_label": "벤투스 S2 AS 225/45R17",
+                "cta_action": "select_product",
+                "slot_patch": {
+                    "goods_no": "G000000309783",
+                    "tire_size": "225/45R17",
+                    "tire_model": "벤투스 S2 AS",
+                    "product_name": "벤투스 S2 AS",
+                    "pending_product_name": "벤투스 S2 AS",
+                },
+            },
+            "user_text": "벤투스 S2 AS 225/45R17",
+        },
+        context_evidence={
+            "selected_product": {
+                "goods_no": "G000000309783",
+                "product_name": "벤투스 S2 AS",
+                "tire_size": "225/45R17",
+                "selection_source": "ui_action",
+            }
+        },
+    )
+
+    assert contract.domain == "discovery"
+    assert contract.intent == "product_description"
+    assert contract.action_mode == "booking_continuation"
+    assert "get_product_description_tool" in contract.allowed_tools
+    assert "search_product_summary_tool" in contract.allowed_tools
+    assert "transaction_store_preview_tool" in contract.forbidden_tools
+    assert "get_store_inventory_tool" in contract.forbidden_tools
+    assert "get_store_schedule_tool" in contract.forbidden_tools
+    assert "quick_order_tool" in contract.forbidden_tools
+    assert contract.response_decision["metadata"]["response_shape_key"] == "neutral_product_description"
 
 
 def test_flow_transition_records_quantity_selection_without_executing() -> None:
@@ -17412,8 +18111,13 @@ def test_runtime_goods_no_change_preserves_active_size_and_quantity() -> None:
     base = ConversationSlots(
         goods_no="G-OLD",
         tire_model="벤투스 S2 AS",
+        pending_product_name="벤투스 S2 AS",
         tire_size="225/45R17",
         ord_qty=4,
+        shop_id="F001",
+        shop_name="티스테이션 한남점",
+        requested_cal_day="20260708",
+        rsv_hour="10",
         payment_amount=400000,
     )
 
@@ -17421,8 +18125,13 @@ def test_runtime_goods_no_change_preserves_active_size_and_quantity() -> None:
 
     assert updated.goods_no == "G-NEW"
     assert updated.tire_model is None
+    assert updated.pending_product_name is None
     assert updated.tire_size == "225/45R17"
     assert updated.ord_qty == 4
+    assert updated.shop_id is None
+    assert updated.shop_name is None
+    assert updated.requested_cal_day is None
+    assert updated.rsv_hour is None
     assert updated.payment_amount is None
 
 
@@ -17436,6 +18145,8 @@ def test_size_quantity_and_store_slot_resets_are_canonical() -> None:
         region="서울",
         shop_id="F001",
         shop_name="티스테이션 한남점",
+        requested_cal_day="20260708",
+        rsv_hour="10",
     )
 
     changed_size = base.apply_runtime_values({"tire_size": "245/45R18"}, source="tool_boundary")
@@ -17445,13 +18156,22 @@ def test_size_quantity_and_store_slot_resets_are_canonical() -> None:
     assert changed_size.tire_size == "245/45R18"
     assert changed_size.goods_no is None
     assert changed_size.payment_amount is None
-    assert changed_size.shop_id == "F001"
+    assert changed_size.shop_id is None
+    assert changed_size.shop_name is None
+    assert changed_size.requested_cal_day is None
+    assert changed_size.rsv_hour is None
     assert changed_qty.ord_qty == 4
     assert changed_qty.goods_no == "G-OLD"
     assert changed_qty.payment_amount is None
+    assert changed_qty.shop_id is None
+    assert changed_qty.shop_name is None
+    assert changed_qty.requested_cal_day is None
+    assert changed_qty.rsv_hour is None
     assert changed_region.region == "성남"
     assert changed_region.shop_id is None
     assert changed_region.shop_name is None
+    assert changed_region.requested_cal_day is None
+    assert changed_region.rsv_hour is None
 
 
 def test_structured_store_selection_turn_skips_same_store_cleanup() -> None:
@@ -19254,6 +19974,77 @@ def test_preorder_event_uses_selected_vehicle_name_from_pending_context() -> Non
     assert preorder_event is not None
     assert preorder_event["data"]["orderInfo"]["carInfo"] == "Sorento (29조3344)"
 
+
+def test_preorder_event_prefers_canonical_product_name_over_freeform_model_text() -> None:
+    preorder_event = build_preorder_event(
+        SimpleNamespace(
+            domain="transaction",
+            response_decision={"template": "preOrder", "metadata": {"response_shape_key": "reservation_confirmation_ready"}},
+            flow_step="build_preorder",
+            action_mode="purchase_continuation",
+            intent="quick_order_reservation",
+        ),
+        {
+            "goods_no": "G000000309856",
+            "product_name": "Ventus S2 AS",
+            "tire_model": "Ventus S2 AS coupon applied request",
+            "pending_product_name": "Ventus S2 AS coupon applied request",
+            "tire_size": "275/35R20",
+            "ord_qty": 4,
+            "shop_id": "F00721",
+            "shop_name": "T-Station Pangyo Branch",
+            "requested_cal_day": "20260709",
+            "rsv_hour": "17",
+            "payment_amount": 955600,
+        },
+    )
+
+    assert preorder_event is not None
+    assert preorder_event["data"]["orderInfo"]["product"] == "Ventus S2 AS 275/35R20"
+    assert preorder_event["data"]["metadata"]["productName"] == "Ventus S2 AS"
+
+
+def test_preorder_event_does_not_duplicate_size_when_product_name_already_contains_size() -> None:
+    preorder_event = build_preorder_event(
+        SimpleNamespace(
+            domain="transaction",
+            response_decision={"template": "preOrder", "metadata": {"response_shape_key": "reservation_confirmation_ready"}},
+            flow_step="build_preorder",
+            action_mode="purchase_continuation",
+            intent="quick_order_reservation",
+        ),
+        {
+            "goods_no": "G000000310126",
+            "product_name": "키너지 4S2 245/45R19",
+            "tire_model": "키너지 4S2 245/45R19",
+            "tire_size": "245/45R19",
+            "ord_qty": 2,
+            "shop_id": "F00071",
+            "shop_name": "티스테이션 분당정자점",
+            "requested_cal_day": "20260706",
+            "rsv_hour": "17",
+            "payment_amount": 308200,
+            "price_basis": "cheapest_final_prc",
+            "price_source_tool": "transaction_store_preview_tool",
+        },
+    )
+
+    assert preorder_event is not None
+    assert preorder_event["data"]["orderInfo"]["product"] == "키너지 4S2 245/45R19"
+    assert preorder_event["data"]["metadata"]["productName"] == "키너지 4S2"
+
+
+def test_purchase_product_size_quantity_with_coupon_phrase_stays_purchase_flow() -> None:
+    frame = build_transaction_intent_frame(
+        "벤투스 S2 AS 하려고 하는데 쿠폰 적용 2753520 4개 티스테이션 판교점에서 구매하고 싶어",
+        known_slots={},
+    )
+
+    assert frame.intent == "quick_order_reservation"
+    assert frame.known_slots["product_name"] == "Ventus S2 AS"
+    assert frame.known_slots["tire_size"] == "275/35R20"
+    assert frame.known_slots["ord_qty"] == 4
+
 def test_preorder_event_does_not_multiply_preview_total_amount_again() -> None:
     preorder_event = build_preorder_event(
         SimpleNamespace(
@@ -20852,14 +21643,14 @@ def test_prepare_ui_action_state_rewrites_structured_purchase_product_selection_
             "source_intent": "quick_order_reservation",
             "expected_contract_intent": "quick_order_reservation",
             "expected_behavior": "slot_fill",
-            "entity_label": "벤투스 에어S",
+            "entity_label": "벤투스 에어S 245/45R19",
             "slots": {
                 "goods_no": "G000000319584",
                 "tire_size": "245/45R19",
                 "ord_qty": 2,
                 "pending_intent": "order",
                 "goal_type": "place_order",
-                "tire_model": "벤투스 에어S",
+                "tire_model": "벤투스 에어S 245/45R19",
             },
         },
         chip_context=None,
@@ -20874,6 +21665,9 @@ def test_prepare_ui_action_state_rewrites_structured_purchase_product_selection_
     assert prepared.action_context is not None
     assert prepared.action_context.action_type == "select_product"
     assert prepared.updated_slots.goods_no == "G000000319584"
+    assert prepared.updated_slots.tire_model == "벤투스 에어S"
+    assert prepared.updated_slots.pending_product_name == "벤투스 에어S"
+    assert prepared.action_context.slot_patch["tire_model"] == "벤투스 에어S"
     assert prepared.updated_slots.pending_intent == "order"
     assert prepared.rewritten_user_text == "벤투스 에어S 245/45R19 2개 구매"
 
@@ -21808,6 +22602,7 @@ def test_router_slot_fill_context_payload_summarizes_purchase_state_and_candidat
 def test_router_slot_fill_context_payload_restores_dormant_purchase_snapshot() -> None:
     payload = _router_slot_fill_context_payload_for_test(
         slots=ConversationSlots(
+            pending_required_slot="quantity",
             availability_context={
                 "dormant_purchase_context": {
                     "goods_no": "G000000319584",
@@ -21832,6 +22627,91 @@ def test_router_slot_fill_context_payload_restores_dormant_purchase_snapshot() -
     assert payload["known_slots"]["payment_amount"] == 484200
     assert payload["missing_slots"] == ["quantity"]
     assert payload["last_requested_slot"] == "quantity"
+
+
+@pytest.mark.parametrize("user_text", ["4본", "4짝", "네 개"])
+def test_router_slot_fill_context_restores_prompted_dormant_purchase_quantity_variants(user_text: str) -> None:
+    payload = _router_slot_fill_context_payload_for_test(
+        slots=ConversationSlots(
+            pending_required_slot="quantity",
+            availability_context={
+                "dormant_purchase_context": {
+                    "goods_no": "G000000319584",
+                    "tire_size": "245/45R19",
+                    "product_name": "벤투스 에어S",
+                    "pending_intent": "order",
+                    "goal_type": "place_order",
+                }
+            },
+        ),
+        user_text=user_text,
+        latest_product_tmpl=None,
+        latest_location_tmpl=None,
+        latest_datepick_tmpl=None,
+    )
+
+    assert payload["current_flow"] == "quick_order_reservation"
+    assert payload["flow_step"] == "ask_quantity"
+    assert payload["missing_slots"] == ["quantity"]
+    assert payload["last_requested_slot"] == "quantity"
+
+
+def test_router_slot_fill_context_does_not_restore_dormant_purchase_for_unprompted_quantity() -> None:
+    payload = _router_slot_fill_context_payload_for_test(
+        slots=ConversationSlots(
+            availability_context={
+                "dormant_purchase_context": {
+                    "goods_no": "G000000319584",
+                    "tire_size": "245/45R19",
+                    "product_name": "벤투스 에어S",
+                    "payment_amount": 484200,
+                    "pending_intent": "order",
+                    "goal_type": "place_order",
+                }
+            }
+        ),
+        user_text="4개",
+        latest_product_tmpl=None,
+        latest_location_tmpl=None,
+        latest_datepick_tmpl=None,
+    )
+
+    assert payload["current_flow"] == "none"
+    assert payload["known_slots"] == {}
+    assert payload["missing_slots"] == []
+    assert payload["last_requested_slot"] == "none"
+
+
+@pytest.mark.parametrize(
+    "user_text",
+    ["2개 할인은?", "4개 가격은?", "두 개 쿠폰은?", "4개 프로모션은?", "4개 이벤트는?", "4개 행사는?"],
+)
+def test_router_slot_fill_context_does_not_restore_dormant_purchase_for_quantity_policy_question(
+    user_text: str,
+) -> None:
+    payload = _router_slot_fill_context_payload_for_test(
+        slots=ConversationSlots(
+            pending_required_slot="quantity",
+            availability_context={
+                "dormant_purchase_context": {
+                    "goods_no": "G000000319584",
+                    "tire_size": "245/45R19",
+                    "product_name": "벤투스 에어S",
+                    "payment_amount": 484200,
+                    "pending_intent": "order",
+                    "goal_type": "place_order",
+                }
+            },
+        ),
+        user_text=user_text,
+        latest_product_tmpl=None,
+        latest_location_tmpl=None,
+        latest_datepick_tmpl=None,
+    )
+
+    assert payload["current_flow"] == "none"
+    assert payload["known_slots"] == {}
+    assert payload["missing_slots"] == []
 
 
 def test_router_slot_fill_context_payload_restores_store_schedule_snapshot() -> None:
@@ -22442,7 +23322,7 @@ def test_region_followup_in_purchase_context_keeps_quick_order_reservation() -> 
     assert response.metadata["response_shape_key"] == "reservation_store_candidates"
 
 
-def test_region_input_context_resolution_marks_expected_region_slot_fill() -> None:
+def test_region_input_context_resolution_keeps_free_text_for_router_entity() -> None:
     resolution = resolve_region_or_store_input_context(
         user_text="분당",
         ui_action=None,
@@ -22466,10 +23346,93 @@ def test_region_input_context_resolution_marks_expected_region_slot_fill() -> No
         ),
     )
 
-    assert resolution.resolved is True
-    assert resolution.expected_contract_intent == "quick_order_reservation"
-    assert resolution.resume_source == "expected_slot_fill:region"
-    assert resolution.slots_to_promote["region"] == "분당"
+    assert resolution.resolved is False
+    assert resolution.resume_source == "none"
+
+
+def test_router_place_slot_patch_prefers_router_location_entity() -> None:
+    patch = router_place_slot_patch(
+        {
+            "entities": {
+                "location": {
+                    "mentioned": True,
+                    "name": "분당",
+                    "type": "region",
+                    "reference_text": "분당",
+                    "confidence": 0.91,
+                }
+            }
+        },
+        expected_slot="region",
+    )
+
+    assert patch == {"region": "분당", "place_query": "분당"}
+
+
+def test_router_place_slot_patch_strips_colloquial_location_suffix() -> None:
+    patch = router_place_slot_patch(
+        {
+            "entities": {
+                "location": {
+                    "mentioned": True,
+                    "name": "강남쪽",
+                    "type": "region",
+                    "reference_text": "강남쪽에는",
+                    "confidence": 0.93,
+                }
+            }
+        },
+        expected_slot="region",
+    )
+
+    assert patch == {"region": "강남", "place_query": "강남"}
+
+
+def test_pre_router_region_slot_fill_does_not_commit_free_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    from services.tstation.policies import slot_fill_controller
+
+    monkeypatch.setattr(slot_fill_controller, "_PRE_ROUTER_SLOT_FILL_ENABLED", True)
+    merged_slots = ConversationSlots(
+        goods_no="G000000319584",
+        tire_size="245/45R19",
+        ord_qty=2,
+        pending_intent="order",
+        goal_type="place_order",
+        stock_check_mode="preview",
+    )
+    resolution = resolve_region_or_store_input_context(
+        user_text="분당",
+        ui_action=None,
+        chip_context=None,
+        latest_quickreply_tmpl={
+            "template": "quickReply",
+            "data": {
+                "assistantResponse": "구매를 진행할 매장을 확인할 지역명을 입력해 주세요.",
+                "quickReplies": [{"label": "분당", "domain": "TRANSACTION"}],
+            },
+        },
+        latest_location_tmpl=None,
+        messages=[],
+        merged_slots=merged_slots,
+    )
+    router_context = build_router_slot_fill_context(
+        slots=merged_slots,
+        user_text="분당",
+        latest_product_tmpl=None,
+        latest_location_tmpl=None,
+        latest_datepick_tmpl=None,
+    )
+    decision = resolve_pre_router_slot_fill(
+        user_text="분당",
+        regex_slots=ConversationSlots.extract_from_user_text("분당"),
+        merged_slots=merged_slots,
+        router_context=router_context,
+        region_store_input_resolution=resolution,
+    )
+
+    assert decision.matched is False
+    assert decision.slots.region is None
+    assert merged_slots.region is None
 
 
 def test_region_input_context_resolution_rejects_order_history_queries() -> None:
@@ -27369,6 +28332,8 @@ def test_vehicle_resolved_all_weather_recommendation_contract_allows_product_car
     assert decision.metadata["response_shape_key"] == "vehicle_resolved_recommendation"
     assert decision.template == TemplateName.LIST_CAR
     assert "product_card_without_vehicle_selection" in decision.forbidden_behaviors
+    assert contract.intent == "product_recommendation"
+    assert contract.sub_intent == "vehicle_resolved_recommendation"
     assert contract.required_slots == ()
     assert contract.resolvable_required_slots == ()
     assert contract.blocking_required_slots == ()
@@ -29442,6 +30407,73 @@ def test_transaction_intent_policy_prefers_router_region_over_regex_region() -> 
     assert tool_plan.preferred_tool == "transaction_store_preview_tool"
     assert tool_plan.tool_args_patch["region"] == "고양시"
     assert tool_plan.tool_args_patch["place_query"] == "고양시"
+
+
+def test_transaction_intent_policy_prefers_router_place_query_over_raw_question_text() -> None:
+    known_slots = {
+        "goods_no": "G000000310126",
+        "product_name": "벤투스 S2 AS",
+        "tire_size": "245/45R19",
+        "ord_qty": 2,
+        "region": "고양시청 근처",
+        "place_query": "고양시청 근처",
+        "pending_intent": "order",
+        "goal_type": "place_order",
+        "location_name": "고양시청 근처",
+        "location_type": "place_query",
+        "router_primary_action": "store_selection",
+        "slot_sources": {
+            "location_name": "router_evidence",
+            "place_query": "router_evidence",
+            "location_type": "router_evidence",
+            "router_primary_action": "router_evidence",
+        },
+    }
+
+    frame = build_transaction_intent_frame("고양시청 근처에는?", known_slots=known_slots)
+    tool_plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "quick_order_reservation"
+    assert frame.known_slots["place_query"] == "고양시청"
+    assert tool_plan.preferred_tool == "transaction_store_preview_tool"
+    assert tool_plan.tool_args_patch["place_query"] == "고양시청"
+    assert tool_plan.tool_args_patch["place_query"] != "고양시청 근처에는?"
+
+
+def test_transaction_intent_policy_strips_location_search_suffixes() -> None:
+    cases = {
+        "고양시청 근처": "고양시청",
+        "대화역 인근": "대화역",
+        "분당 지역": "분당",
+        "강남쪽": "강남",
+        "강남 쪽": "강남",
+    }
+    for raw_location, expected_location in cases.items():
+        known_slots = {
+            "goods_no": "G000000310126",
+            "product_name": "벤투스 S2 AS",
+            "tire_size": "245/45R19",
+            "ord_qty": 2,
+            "region": raw_location,
+            "place_query": raw_location,
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "location_name": raw_location,
+            "location_type": "place_query",
+            "router_primary_action": "store_selection",
+            "slot_sources": {
+                "location_name": "router_evidence",
+                "place_query": "router_evidence",
+                "location_type": "router_evidence",
+                "router_primary_action": "router_evidence",
+            },
+        }
+
+        frame = build_transaction_intent_frame(f"{raw_location}에는?", known_slots=known_slots)
+        tool_plan = plan_transaction_tools(frame)
+
+        assert frame.known_slots["place_query"] == expected_location
+        assert tool_plan.tool_args_patch["place_query"] == frame.known_slots["place_query"]
 
 
 def test_transaction_intent_policy_keeps_pure_stock_region_query_inventory_only() -> None:
@@ -32244,6 +33276,66 @@ def test_event_applicable_products_lookup_uses_event_product_contract(user_text:
     assert response_decision.metadata["response_shape_key"] == "event_applicable_products_lookup"
 
 
+def test_event_applicable_products_lookup_uses_selected_product_as_query() -> None:
+    frame = IntentFrame(
+        domain=PolicyDomain.DISCOVERY,
+        intent="event_applicable_products_lookup",
+        sub_intent="event_applicable_products_lookup",
+        known_slots={
+            "goods_no": "G000000309630",
+            "tire_size": "225/45R17",
+            "tire_model": "벤투스 V12 에보2",
+            "pending_product_name": "벤투스 V12 에보2",
+        },
+    )
+    contract = build_turn_contract(
+        user_text="이 타이어에 적용 가능한 이벤트 있어?",
+        intent_frame=frame,
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY],
+            execution_plan=["discovery:event_applicable_products_lookup"],
+        ),
+        action_mode="info_only",
+        context_state="dormant",
+        resume_anchor_detected=True,
+    )
+
+    assert contract.intent == "event_applicable_products_lookup"
+    assert contract.preferred_tool == "search_benefit_applicable_products_tool"
+    assert contract.allowed_tools == ("search_benefit_applicable_products_tool",)
+    assert contract.tool_args_patch == {"query": "벤투스 V12 에보2", "lang_cd": "ko"}
+    assert "search_product_tool" in contract.forbidden_tools
+
+
+def test_event_applicable_products_lookup_does_not_use_dormant_product_without_anchor() -> None:
+    frame = IntentFrame(
+        domain=PolicyDomain.DISCOVERY,
+        intent="event_applicable_products_lookup",
+        sub_intent="event_applicable_products_lookup",
+        known_slots={
+            "goods_no": "G000000309630",
+            "tire_size": "225/45R17",
+            "tire_model": "벤투스 V12 에보2",
+            "pending_product_name": "벤투스 V12 에보2",
+        },
+    )
+    contract = build_turn_contract(
+        user_text="적용 가능한 이벤트 있어?",
+        intent_frame=frame,
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY],
+            execution_plan=["discovery:event_applicable_products_lookup"],
+        ),
+        action_mode="info_only",
+        context_state="dormant",
+        resume_anchor_detected=False,
+    )
+
+    assert contract.intent == "event_applicable_products_lookup"
+    assert contract.preferred_tool == "search_benefit_applicable_products_tool"
+    assert contract.tool_args_patch == {"lang_cd": "ko"}
+
+
 def test_benefit_applicable_products_template_maps_unified_response() -> None:
     event = try_build_template(
         [
@@ -32588,6 +33680,35 @@ def test_discovery_first_leg_product_search_no_result_is_not_contract_tool_viola
     )
 
     assert not violations
+
+
+def test_stock_store_search_allows_product_resolution_before_quantity_slot_guard() -> None:
+    user_text = "벤투스 S2AS 2454518 당일 장착가능한 판교근처 매장 알려줘"
+    frame = build_transaction_intent_frame(user_text, known_slots={})
+    cross_domain_plan = plan_cross_domain_turn(user_text, known_slots=dict(frame.known_slots))
+
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=frame,
+        tool_plan=plan_transaction_tools(frame),
+        response_decision=decide_transaction_response(
+            intent=frame.intent,
+            user_text=user_text,
+            known_slots=dict(frame.known_slots),
+        ),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY, MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["discovery:resolve_or_describe_product", "transaction:stock_store_or_reservation"],
+            agent_prompt_profile="discovery_search",
+        ),
+        cross_domain_plan=cross_domain_plan,
+    )
+
+    assert contract.intent == "stock_store_search"
+    assert contract.known_slots["product_name"] == "Ventus S2"
+    assert contract.known_slots["tire_size"] == "245/45R18"
+    assert "search_product_tool" in contract.allowed_tools
+    assert "quantity" not in contract.blocking_required_slots
 
 
 def test_cross_domain_plan_keeps_two_product_difference_as_discovery_comparison() -> None:
@@ -33388,6 +34509,35 @@ def test_turn_contract_ignores_freeform_execution_plan_as_planner_intent() -> No
         contract.intent,
         contract.planner_intent,
     }
+
+
+def test_turn_contract_canonicalizes_price_benefit_router_alias_without_drift() -> None:
+    contract = build_turn_contract(
+        user_text="적용된 할인이 뭐야?",
+        intent_frame=IntentFrame(domain=PolicyDomain.TRANSACTION, intent="price_or_coupon_check"),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["transaction:price_or_benefit_lookup"],
+        ),
+    )
+
+    assert contract.intent == "price_or_coupon_check"
+    assert contract.planner_intent == "price_or_coupon_check"
+    assert not [item for item in contract.contract_drift if item.get("field") == "intent"]
+
+
+def test_turn_contract_does_not_canonicalize_generic_benefit_lookup_to_price() -> None:
+    contract = build_turn_contract(
+        user_text="혜택 알려줘",
+        intent_frame=IntentFrame(domain=PolicyDomain.DISCOVERY, intent="benefit_event_list_lookup"),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY],
+            execution_plan=["discovery:benefit_lookup"],
+        ),
+    )
+
+    assert contract.planner_intent == "benefit_lookup"
+    assert contract.intent != "price_or_coupon_check"
 
 
 def test_turn_contract_does_not_clarify_normal_product_description() -> None:
@@ -34964,6 +36114,36 @@ def test_store_service_search_contract_detects_region_drift_against_tool_input()
     assert any(v["type"] == "store_service_search_region_contract_drift" for v in violations)
 
 
+def test_store_service_search_contract_allows_region_area_suffix_reduction() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="store_service_search",
+        known_slots={
+            "policy_intent": "store_service_search",
+            "region": "경기권",
+            "place_query": "경기권",
+            "service_code": "119",
+            "service_codes": ("119",),
+        },
+        allowed_tools=("search_stores_tool", "get_store_list_tool"),
+    )
+
+    violations = response_contract_violations(
+        template="location",
+        assistant_response_source="transaction_policy",
+        called_tools=["search_stores_tool"],
+        tool_inputs=[
+            {
+                "tool": "search_stores_tool",
+                "args": {"region_code": "경기", "place_query": "경기", "svc_codes": ["119"]},
+            }
+        ],
+        contract=contract,
+    )
+
+    assert not any(v["type"] == "store_service_search_region_contract_drift" for v in violations)
+
+
 def test_store_service_search_contract_allows_place_query_reduction_to_region() -> None:
     contract = TurnContract(
         domain="transaction",
@@ -36112,6 +37292,23 @@ def test_has_location_source_accepts_browser_location_without_region() -> None:
     assert has_location_source({"region": "구매하기"}) is False
 
 
+def test_request_user_location_slot_patch_promotes_browser_location_to_slots() -> None:
+    patch = chat_module._request_user_location_slot_patch(
+        {"location": {"xpos": 127.12, "ypos": 37.39}},
+    )
+    slots = ConversationSlots(
+        goods_no="G000000317735",
+        tire_size="225/45R17",
+        ord_qty=4,
+        pending_intent="order",
+        goal_type="place_order",
+    ).apply_runtime_values(patch, source="request_user_location")
+
+    assert slots.user_xpos == 127.12
+    assert slots.user_ypos == 37.39
+    assert has_location_source(slots.model_dump()) is True
+
+
 def test_purchase_flow_ignores_invalid_action_label_region() -> None:
     flow_state = resolve_purchase_order_flow(
         intent="quick_order_reservation",
@@ -37027,6 +38224,80 @@ def test_post_tool_purchase_preview_contract_context_promotes_schedule_slots_to_
     assert "stock_check_mode" not in promoted["known_slots"]
 
 
+def test_post_tool_purchase_preview_contract_context_keeps_purchase_for_multiple_store_candidates() -> None:
+    promoted = _post_tool_purchase_preview_contract_context(
+        tool_name="transaction_store_preview_tool",
+        known_slots={
+            "goods_no": "G000000317677",
+            "tire_size": "215/45R18",
+            "ord_qty": 2,
+            "shop_name": "한남점",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        tool_result={
+            "status": "success",
+            "data": {
+                "schedule": {
+                    "stores": [
+                        {
+                            "shop_id": "F07782",
+                            "shop_nm": "티스테이션 한남점",
+                            "mode": "in_store_logistics_combined",
+                            "slots": [{"cal_day": "20260628", "tm": "09"}],
+                        },
+                        {
+                            "shop_id": "F07783",
+                            "shop_nm": "티스테이션 한남2점",
+                            "mode": "in_store_logistics_combined",
+                            "slots": [{"cal_day": "20260628", "tm": "10"}],
+                        },
+                    ],
+                },
+            },
+        },
+    )
+
+    assert promoted is not None
+    assert promoted["intent"] == "quick_order_reservation"
+    assert promoted["known_slots"]["pending_intent"] == "order"
+    assert promoted["known_slots"]["goal_type"] == "place_order"
+    assert "shop_id" not in promoted["known_slots"]
+    assert "shop_name" not in promoted["known_slots"]
+
+
+def test_post_tool_purchase_preview_contract_context_keeps_purchase_without_explicit_store_hint() -> None:
+    promoted = _post_tool_purchase_preview_contract_context(
+        tool_name="transaction_store_preview_tool",
+        known_slots={
+            "goods_no": "G000000317677",
+            "tire_size": "215/45R18",
+            "ord_qty": 2,
+            "region": "한남",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        tool_result={
+            "status": "success",
+            "data": {
+                "schedule": {
+                    "stores": [{
+                        "shop_id": "F07782",
+                        "shop_nm": "티스테이션 한남점",
+                        "mode": "in_store_logistics_combined",
+                        "slots": [{"cal_day": "20260628", "tm": "09"}],
+                    }],
+                },
+            },
+        },
+    )
+
+    assert promoted is not None
+    assert promoted["intent"] == "quick_order_reservation"
+    assert promoted["known_slots"]["region"] == "한남"
+    assert "shop_id" not in promoted["known_slots"]
+
+
 def test_recommendation_product_pick_defaults_to_product_description_contract() -> None:
     routing_result = _routing_result(
         domains=[MultiAgentDomain.Domain.DISCOVERY],
@@ -37282,6 +38553,94 @@ def test_turn_contract_recovers_today_install_stock_from_transaction_fallback() 
 
     assert contract.intent == "stock_store_search"
     assert contract.fallback_reason == "high_risk_intent"
+
+
+def test_selected_stock_store_active_flow_runs_inventory_without_date_guard() -> None:
+    active_flow_context = {
+        "flow_type": "commerce",
+        "status": "resumed",
+        "flow_step": "store_selected",
+        "product": {
+            "goods_no": "G000000319584",
+            "product_name": "벤투스 에어S 245/45R19",
+            "tire_model": "벤투스 에어S 245/45R19",
+            "tire_size": "245/45R19",
+            "ord_qty": 4,
+        },
+        "store": {
+            "shop_id": "F00721",
+            "shop_name": "티스테이션 판교점",
+            "region": "분당",
+        },
+        "intent": {
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+            "stock_check_mode": "inventory_only",
+            "sub_flow_type": "stock",
+        },
+        "target_action": "get_store_inventory_tool",
+        "current_step": "check_inventory",
+        "missing_slots": [],
+        "next_tool": "get_store_inventory_tool",
+        "allowed_tools": ["get_store_inventory_tool"],
+        "tool_args_patch": {
+            "goods_list": [{"goodsNo": "G000000319584", "qty": "4"}],
+            "shop_id_list": [{"shopId": "F00721"}],
+        },
+        "progress_source": "flow_controller:store_slot_fill",
+    }
+    frame = IntentFrame(
+        domain=PolicyDomain.TRANSACTION,
+        intent="stock_store_search_slot_fill_store",
+        known_slots={
+            "goods_no": "G000000319584",
+            "tire_size": "245/45R19",
+            "ord_qty": 4,
+            "shop_id": "F00721",
+            "shop_name": "티스테이션 판교점",
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+            "stock_check_mode": "preview",
+            "availability_context": {"active_flow_context": active_flow_context},
+        },
+    )
+    tool_plan = ToolPlan(
+        allowed_tools=(),
+        preferred_tool=None,
+        forbidden_tools=(
+            "transaction_store_preview_tool",
+            "get_store_schedule_tool",
+            "get_store_inventory_tool",
+        ),
+        required_slots=("requested_cal_day",),
+        metadata={"stock_check_mode": "preview"},
+    )
+    response_decision = ResponseDecision(
+        response_shape=ResponseShape.CLARIFY,
+        template=TemplateName.QUICK_REPLY,
+        metadata={"response_shape_key": "missing_stock_search_slots"},
+    )
+
+    contract = build_turn_contract(
+        user_text="티스테이션 판교점",
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=response_decision,
+        resume_source="router_slot_fill:store",
+        action_mode="stock_check",
+        context_state="resumed",
+    )
+
+    assert contract.intent == "stock_store_search"
+    assert contract.flow_step == "check_inventory"
+    assert contract.blocking_required_slots == ()
+    assert not should_guard_required_slots(contract)
+    assert contract.allowed_tools == ("get_store_inventory_tool",)
+    assert contract.preferred_tool == "get_store_inventory_tool"
+    assert "get_store_inventory_tool" not in contract.forbidden_tools
+    assert contract.tool_args_patch == active_flow_context["tool_args_patch"]
+    assert contract.known_slots["stock_check_mode"] == "inventory_only"
+    assert contract.response_decision["metadata"]["response_shape_key"] == "stock_inventory_lookup"
 
 
 def test_quick_order_reservation_treats_selected_datepick_as_resolved_booking_datetime() -> None:
@@ -39801,6 +41160,283 @@ def test_turn_contract_allows_purchase_bound_preview_datepick_even_with_inventor
         assistant_response_source="code_mapper",
         response_shape_key="reservation_slots",
         called_tools=["transaction_store_preview_tool"],
+        source_domain="transaction",
+        contract=contract,
+    ) == []
+
+
+def test_turn_contract_uses_active_preview_datepick_flow_without_schedule_tool() -> None:
+    contract = build_turn_contract(
+        user_text="티스테이션 판교점",
+        intent_frame=IntentFrame(
+            domain=PolicyDomain.TRANSACTION,
+            intent="stock_store_search_slot_fill_store",
+            sub_intent="reservation",
+            known_slots={
+                "goods_no": "G000000310254",
+                "ord_qty": 4,
+                "shop_id": "F00721",
+                "shop_name": "티스테이션 판교점",
+                "region": "판교",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+                "stock_check_mode": "preview",
+                "source_tool": "transaction_store_preview_tool",
+                "schedule_mode": "in_store_logistics_combined",
+                "price_source_tool": "transaction_store_preview_tool",
+                "availability_context": {
+                    "active_flow_context": {
+                        "flow_type": "commerce",
+                        "status": "resumed",
+                        "flow_step": "select_schedule",
+                        "product": {"goods_no": "G000000310254", "ord_qty": 4},
+                        "store": {
+                            "shop_id": "F00721",
+                            "shop_name": "티스테이션 판교점",
+                            "region": "판교",
+                        },
+                        "payment": {
+                            "price_basis": "cheapest_final_prc",
+                            "price_source_tool": "transaction_store_preview_tool",
+                        },
+                        "intent": {
+                            "sub_flow_type": "purchase",
+                            "pending_intent": "order",
+                            "goal_type": "place_order",
+                            "source_tool": "transaction_store_preview_tool",
+                            "schedule_mode": "in_store_logistics_combined",
+                        },
+                        "next_template": "datepick",
+                        "response_shape_key": "reservation_slots",
+                        "progress_source": "flow_state_evaluator",
+                    }
+                },
+            },
+        ),
+        tool_plan=ToolPlan(
+            allowed_tools=(),
+            forbidden_tools=(
+                "get_store_schedule_tool",
+                "transaction_store_preview_tool",
+                "get_store_inventory_tool",
+            ),
+            metadata={"response_intent": "stock_store_search_slot_fill_store"},
+        ),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.CLARIFY,
+            template=TemplateName.QUICK_REPLY,
+            metadata={"response_shape_key": "missing_stock_search_slots"},
+        ),
+        resume_source="router_slot_fill:store",
+    )
+
+    assert contract.blocking_required_slots == ()
+    assert contract.required_slots == ()
+    assert contract.allowed_tools == ()
+    assert "get_store_schedule_tool" in contract.forbidden_tools
+    assert contract.response_decision["template"] == "datepick"
+    assert contract.response_decision["metadata"]["response_shape_key"] == "reservation_slots"
+
+
+def test_turn_contract_allows_active_purchase_schedule_flow_when_store_selected() -> None:
+    contract = build_turn_contract(
+        user_text="티스테이션 판교점",
+        intent_frame=IntentFrame(
+            domain=PolicyDomain.TRANSACTION,
+            intent="quick_order_reservation_slot_fill_store",
+            known_slots={
+                "goods_no": "G000000309783",
+                "tire_size": "225/45R17",
+                "ord_qty": 4,
+                "shop_id": "F00721",
+                "shop_name": "티스테이션 판교점",
+                "region": "분당",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+                "stock_check_mode": "preview",
+                "source_tool": "transaction_store_preview_tool",
+                "schedule_mode": "in_store_logistics_combined",
+                "price_source_tool": "transaction_store_preview_tool",
+                "availability_context": {
+                    "active_flow_context": {
+                        "flow_type": "commerce",
+                        "status": "resumed",
+                        "flow_step": "select_schedule",
+                        "product": {
+                            "goods_no": "G000000309783",
+                            "tire_size": "225/45R17",
+                            "ord_qty": 4,
+                        },
+                        "store": {
+                            "shop_id": "F00721",
+                            "shop_name": "티스테이션 판교점",
+                            "region": "분당",
+                        },
+                        "payment": {
+                            "price_basis": "cheapest_final_prc",
+                            "price_source_tool": "transaction_store_preview_tool",
+                        },
+                        "intent": {
+                            "sub_flow_type": "purchase",
+                            "pending_intent": "order",
+                            "goal_type": "place_order",
+                            "stock_check_mode": "preview",
+                            "schedule_mode": "in_store_logistics_combined",
+                            "source_tool": "transaction_store_preview_tool",
+                        },
+                        "current_step": "select_schedule",
+                        "missing_slots": ["booking_datetime"],
+                        "next_tool": "get_store_schedule_tool",
+                        "allowed_tools": ["get_store_schedule_tool"],
+                        "tool_args_patch": {"shop_id": "F00721", "mode": "general"},
+                        "next_template": "datepick",
+                        "response_shape_key": "reservation_slots",
+                        "progress_source": "flow_state_evaluator",
+                    }
+                },
+            },
+        ),
+        tool_plan=ToolPlan(
+            allowed_tools=(),
+            forbidden_tools=(
+                "transaction_store_preview_tool",
+                "get_store_schedule_tool",
+                "quick_order_tool",
+            ),
+            metadata={"response_intent": "quick_order_reservation_slot_fill_store"},
+        ),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.DATE_PICK,
+            template=TemplateName.DATE_PICK,
+            metadata={
+                "response_shape_key": "reservation_slots",
+                "stock_check_mode": "preview",
+                "schedule_mode": "in_store_logistics_combined",
+            },
+        ),
+        action_mode="purchase_continuation",
+        context_state="resumed",
+        resume_source="router_slot_fill:store",
+    )
+
+    assert contract.allowed_tools == ("get_store_schedule_tool",)
+    assert "get_store_schedule_tool" not in contract.forbidden_tools
+    assert "transaction_store_preview_tool" in contract.forbidden_tools
+    assert contract.preferred_tool == "get_store_schedule_tool"
+    assert contract.tool_args_patch == {"shop_id": "F00721", "mode": "general"}
+    assert contract.response_decision["template"] == "datepick"
+    assert contract.response_decision["metadata"]["response_shape_key"] == "reservation_slots"
+    assert response_contract_violations(
+        template="datepick",
+        assistant_response_source="code_mapper",
+        response_shape_key="reservation_slots",
+        called_tools=["get_store_schedule_tool"],
+        tool_inputs=[{"tool": "get_store_schedule_tool", "args": {"shop_id": "F00721", "mode": "general"}}],
+        source_domain="transaction",
+        contract=contract,
+    ) == []
+
+
+def test_turn_contract_allows_schedule_when_next_tool_is_in_pending_order_context() -> None:
+    contract = build_turn_contract(
+        user_text="티스테이션 판교점",
+        intent_frame=IntentFrame(
+            domain=PolicyDomain.TRANSACTION,
+            intent="stock_store_search_slot_fill_store",
+            sub_intent="reservation",
+            known_slots={
+                "goods_no": "G000000309783",
+                "tire_size": "225/45R17",
+                "ord_qty": 2,
+                "shop_id": "F00721",
+                "shop_name": "티스테이션 판교점",
+                "region": "분당",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+                "stock_check_mode": "preview",
+                "source_tool": "transaction_store_preview_tool",
+                "schedule_mode": "in_store_logistics_combined",
+                "price_source_tool": "transaction_store_preview_tool",
+                "availability_context": {
+                    "pending_order_context": {
+                        "goods_no": "G000000309783",
+                        "tire_size": "225/45R17",
+                        "ord_qty": 2,
+                        "shop_id": "F00721",
+                        "shop_name": "티스테이션 판교점",
+                        "pending_intent": "order",
+                        "goal_type": "place_order",
+                        "current_step": "resolve_schedule",
+                        "missing_slots": ["booking_datetime"],
+                        "next_tool": "get_store_schedule_tool",
+                        "allowed_tools": ["get_store_schedule_tool"],
+                        "tool_args_patch": {"shop_id": "F00721", "mode": "general"},
+                    },
+                    "active_flow_context": {
+                        "flow_type": "commerce",
+                        "status": "resumed",
+                        "flow_step": "select_schedule",
+                        "product": {
+                            "goods_no": "G000000309783",
+                            "tire_size": "225/45R17",
+                            "ord_qty": 2,
+                        },
+                        "store": {
+                            "shop_id": "F00721",
+                            "shop_name": "티스테이션 판교점",
+                            "region": "분당",
+                        },
+                        "intent": {
+                            "sub_flow_type": "purchase",
+                            "pending_intent": "order",
+                            "goal_type": "place_order",
+                            "stock_check_mode": "inventory_only",
+                            "schedule_mode": "in_store_logistics_combined",
+                            "source_tool": "transaction_store_preview_tool",
+                        },
+                        "current_step": "select_schedule",
+                        "missing_slots": ["booking_datetime"],
+                        "next_template": "datepick",
+                        "response_shape_key": "reservation_slots",
+                        "progress_source": "flow_state_evaluator",
+                    },
+                },
+            },
+        ),
+        tool_plan=ToolPlan(
+            allowed_tools=(),
+            forbidden_tools=(
+                "get_store_list_tool",
+                "get_store_schedule_tool",
+                "transaction_store_preview_tool",
+                "quick_order_tool",
+            ),
+            metadata={"response_intent": "stock_store_search_slot_fill_store"},
+        ),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.DATE_PICK,
+            template=TemplateName.DATE_PICK,
+            metadata={
+                "response_shape_key": "reservation_slots",
+                "stock_check_mode": "preview",
+                "schedule_mode": "in_store_logistics_combined",
+            },
+        ),
+        action_mode="stock_check",
+        context_state="resumed",
+        resume_source="router_slot_fill:store",
+    )
+
+    assert contract.allowed_tools == ("get_store_schedule_tool",)
+    assert contract.preferred_tool == "get_store_schedule_tool"
+    assert contract.tool_args_patch == {"shop_id": "F00721", "mode": "general"}
+    assert "get_store_schedule_tool" not in contract.forbidden_tools
+    assert response_contract_violations(
+        template="datepick",
+        assistant_response_source="code_mapper",
+        response_shape_key="reservation_slots",
+        called_tools=["get_store_schedule_tool"],
+        tool_inputs=[{"tool": "get_store_schedule_tool", "args": {"shop_id": "F00721", "mode": "general"}}],
         source_domain="transaction",
         contract=contract,
     ) == []
@@ -43422,6 +45058,84 @@ def test_base_agent_purchase_flow_tool_guard_replaces_inventory_drift_with_sched
     assert metadata["replacement_tool"] == "get_store_schedule_tool"
 
 
+def test_base_agent_store_service_guard_recovers_search_tool_from_known_slots(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _DummyAgent(BaseAgent):
+        OUTPUT_TEMPLATE = None
+        TOOL_TO_AF_MAP: dict[str, str] = {}
+
+        def __init__(self) -> None:
+            self.name = "Transaction Agent"
+
+    from services.tstation.agents.c_transaction_agent import tools as transaction_tools
+
+    captured_input: dict[str, Any] = {}
+
+    monkeypatch.setattr(
+        transaction_tools,
+        "search_stores_tool",
+        SimpleNamespace(
+            invoke=lambda payload: captured_input.update(payload)
+            or {"status": "success", "data": {"stores": [{"shop_id": "F00660", "shop_nm": "고양시청점"}]}}
+        ),
+    )
+    monkeypatch.setattr(
+        template_mapper_module,
+        "try_build_template",
+        lambda tool_data_list, assistant_text: {
+            "type": "data",
+            "template": "location",
+            "data": {
+                "assistantResponse": "고양시청 근처 매장을 확인했어요.",
+                "stores": [{"shopId": "F00660", "name": "고양시청점"}],
+                "metadata": {},
+            },
+        },
+    )
+
+    response_decision = ResponseDecision(
+        response_shape=ResponseShape.LOCATION,
+        template=TemplateName.LOCATION,
+        metadata={"response_shape_key": "store_service_search"},
+    )
+    tool_plan = ToolPlan(
+        allowed_tools=("search_stores_tool", "get_store_list_tool", "get_nearby_stores_tool"),
+        preferred_tool="search_stores_tool",
+        forbidden_tools=("transaction_store_preview_tool", "get_store_schedule_tool"),
+        tool_args_patch={},
+        metadata={
+            "response_intent": "store_service_search",
+            "flow_slots": {"place_query": "고양시청", "region": "고양시청"},
+        },
+    )
+    decision_token = current_transaction_response_decision.set(response_decision)
+    tool_plan_token = current_transaction_tool_plan.set(tool_plan)
+    try:
+        agent = _DummyAgent()
+        events = agent._contract_sensitive_tool_guard_events(
+            "transaction_store_preview_tool",
+            [{"role": "user", "content": "고양시청 근처는?"}],
+            config=None,
+            response_streamer=None,
+            answering_emitted=False,
+        )
+    finally:
+        current_transaction_response_decision.reset(decision_token)
+        current_transaction_tool_plan.reset(tool_plan_token)
+
+    assert events is not None
+    tool_event = next(event for event in events if event.get("type") == "tool")
+    assert tool_event["tool"] == "search_stores_tool"
+    assert tool_event["input"] == {"place_query": "고양시청"}
+    assert captured_input == {"place_query": "고양시청"}
+    data_event = next(event for event in events if event.get("type") == "data")
+    metadata = data_event["data"]["metadata"]
+    assert metadata["contract_tool_blocked"] is True
+    assert metadata["blocked_tool"] == "transaction_store_preview_tool"
+    assert metadata["replacement_tool"] == "search_stores_tool"
+
+
 def test_trace_shaped_general_cancel_fee_policy_blocks_order_lookup_and_replaces_with_faq(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -43852,6 +45566,44 @@ def test_response_policy_generic_fallback_names_missing_information() -> None:
     assert event["assistant_response_source"] == "code_turn_contract_response_policy_guard"
     assert "부족한 정보는 예약 날짜/시간입니다" in event["data"]["assistantResponse"]
     assert event["data"]["metadata"]["missingSlots"] == ["booking_datetime"]
+
+
+def test_response_policy_guard_does_not_invent_product_missing_slot_when_next_tool_is_ready() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="quick_order_reservation",
+        known_slots={
+            "goods_no": "G000000310126",
+            "product_name": "벤투스 S2 AS",
+            "tire_size": "245/45R19",
+            "ord_qty": 2,
+            "shop_name": "티스테이션 분당정자점",
+            "region": "분당",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        allowed_tools=("transaction_store_preview_tool",),
+        preferred_tool="transaction_store_preview_tool",
+        response_decision={
+            "template": "location",
+            "metadata": {
+                "response_shape_key": "reservation_store_candidates",
+                "flow_step": "resolve_store",
+                "missing_slots": [],
+            },
+            "forbidden_behaviors": ["unmapped_policy_violation"],
+        },
+        action_mode="purchase_continuation",
+        context_state="resumed",
+        flow_step="resolve_store",
+    )
+
+    event = build_response_policy_guard_event(contract)
+
+    assert event["assistant_response_source"] == "code_turn_contract_response_policy_guard"
+    assert "부족한 정보는 상품입니다" not in event["data"]["assistantResponse"]
+    assert "필요한 정보는 확인되어 있어요" in event["data"]["assistantResponse"]
+    assert event["data"]["metadata"]["missingSlots"] == []
 
 
 def test_unknown_store_service_policy_contract_blocks_datepick_and_schedule_style_reply() -> None:
