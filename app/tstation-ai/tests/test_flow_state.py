@@ -314,6 +314,64 @@ def test_preview_store_selection_progresses_to_datepick_template_without_schedul
     assert "next_tool" not in progress
 
 
+def test_preview_store_selection_overrides_stock_restored_context() -> None:
+    active_context = {
+        "flow_type": "commerce",
+        "status": "active",
+        "flow_step": "show_store_candidates",
+        "intent": {
+            "sub_flow_type": "stock",
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+            "stock_check_mode": "inventory_only",
+        },
+        "last_candidates": [
+            {
+                "type": "store",
+                "stable_id": "F00721",
+                "label": "티스테이션 판교점",
+                "shop_id": "F00721",
+                "shop_name": "티스테이션 판교점",
+                "source_tool": "transaction_store_preview_tool",
+                "schedule_mode": "in_store_logistics_combined",
+                "inventory_mode": "in_store_logistics_combined",
+                "region": "판교",
+                "goods_no": "G000000310254",
+                "tire_size": "245/45R18",
+                "ord_qty": 4,
+                "pending_intent": "stock",
+                "goal_type": "store_with_stock",
+                "stock_check_mode": "inventory_only",
+                "flow_type": "stock",
+            }
+        ],
+    }
+
+    selected_patch = store_candidate_selection_patch(
+        active_flow_context=active_context,
+        user_text="티스테이션 판교점",
+        selection_hint={"shop_id": "F00721"},
+    )
+    commit_result = commit_flow_state(
+        active_context,
+        {key: value for key, value in selected_patch.items() if not key.startswith("_")},
+        source="location_selection:preview",
+        flow_type=str(selected_patch.get("_flow_type") or "purchase"),
+        flow_step=str(selected_patch.get("flow_step") or "store_selected"),
+        status="resumed",
+    )
+    progress = evaluate_flow_progress(commit_result.state)
+
+    assert selected_patch["_flow_type"] == "purchase"
+    assert selected_patch["flow_step"] == "store_selected"
+    assert selected_patch["pending_intent"] == "order"
+    assert selected_patch["goal_type"] == "place_order"
+    assert commit_result.state.intent["sub_flow_type"] == "purchase"
+    assert progress["current_step"] == "select_schedule"
+    assert progress["next_template"] == "datepick"
+    assert "next_tool" not in progress
+
+
 def test_purchase_store_ui_action_preserves_product_and_quantity_for_schedule() -> None:
     transition = transition_current_flow(
         user_text="T-Station Hannam",

@@ -2347,13 +2347,16 @@ def store_candidate_selection_patch(
         )
         if selected.get(key) not in _EMPTY_VALUES
     }
-    patch["_flow_type"] = active_flow_type
     if patch.get("source_tool") == "transaction_store_preview_tool":
         patch.update({
+            "_flow_type": "purchase",
             "pending_intent": "order",
             "goal_type": "place_order",
+            "flow_step": "store_selected",
         })
-    if active_flow_type == "stock":
+    else:
+        patch["_flow_type"] = active_flow_type
+    if active_flow_type == "stock" and patch.get("source_tool") != "transaction_store_preview_tool":
         patch.update({
             "pending_intent": "stock",
             "goal_type": "store_with_stock",
