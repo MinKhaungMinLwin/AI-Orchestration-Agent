@@ -202,6 +202,24 @@ def _should_canonicalize_maintenance_timing_contract(
         _normalize_maintenance_timing_intent(_contract_seed_ui_action_intent(contract_seed)),
     }
     return "maintenance_timing_guidance" in intent_candidates
+
+
+def _should_canonicalize_vehicle_resolved_recommendation_contract(
+    *,
+    planner_intent: str | None,
+    policy_intent: str | None,
+    code_intent: str | None,
+    latest_router_intent: str | None = None,
+    contract_seed: Mapping[str, Any] | None = None,
+) -> bool:
+    intent_candidates = {
+        _normalize_plan_intent(str(planner_intent or "")),
+        _normalize_plan_intent(str(policy_intent or "")),
+        _normalize_plan_intent(str(code_intent or "")),
+        _normalize_plan_intent(str(latest_router_intent or "")),
+        _normalize_plan_intent(_contract_seed_ui_action_intent(contract_seed)),
+    }
+    return "vehicle_resolved_recommendation" in intent_candidates
 _COMPARISON_RESOLVER_TOOLS = _DISCOVERY_PRODUCT_SOURCE_TOOLS | frozenset({"get_product_description_tool"})
 _HIGH_RISK_TRANSACTION_TOOLS = frozenset({
     "get_final_price_tool",
@@ -1010,6 +1028,22 @@ def build_turn_contract(
             else policy_intent
         )
         known_slots["policy_intent"] = "maintenance_timing_guidance"
+    if _should_canonicalize_vehicle_resolved_recommendation_contract(
+        planner_intent=planner_intent,
+        policy_intent=policy_intent,
+        code_intent=code_intent,
+        latest_router_intent=latest_router_intent,
+        contract_seed=contract_seed,
+    ):
+        # A registered-vehicle selection meant to continue a Discovery recommendation
+        # (e.g. an active safe_service/sound_absorber eligibility check) must resolve
+        # in the Discovery domain, even if the router's own free-text intent guess
+        # (e.g. "confirm_registered_vehicle_selection") doesn't match any known handler
+        # and would otherwise fall through to a generic transaction_fallback stall.
+        domain = "discovery"
+        intent = "vehicle_resolved_recommendation"
+        known_slots["policy_intent"] = "vehicle_resolved_recommendation"
+        known_slots["discovery_followup_action"] = "vehicle_resolved_recommendation"
     if planner_intent == "owned_coupon_lookup" or code_intent == "owned_coupon_lookup":
         domain = "transaction"
         intent = "owned_coupon_lookup"
