@@ -29637,6 +29637,37 @@ def test_transaction_intent_policy_prefers_router_region_over_regex_region() -> 
     assert tool_plan.tool_args_patch["place_query"] == "고양시"
 
 
+def test_transaction_intent_policy_prefers_router_place_query_over_raw_question_text() -> None:
+    known_slots = {
+        "goods_no": "G000000310126",
+        "product_name": "벤투스 S2 AS",
+        "tire_size": "245/45R19",
+        "ord_qty": 2,
+        "region": "고양시청 근처",
+        "place_query": "고양시청 근처",
+        "pending_intent": "order",
+        "goal_type": "place_order",
+        "location_name": "고양시청 근처",
+        "location_type": "place_query",
+        "router_primary_action": "store_selection",
+        "slot_sources": {
+            "location_name": "router_evidence",
+            "place_query": "router_evidence",
+            "location_type": "router_evidence",
+            "router_primary_action": "router_evidence",
+        },
+    }
+
+    frame = build_transaction_intent_frame("고양시청 근처에는?", known_slots=known_slots)
+    tool_plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "quick_order_reservation"
+    assert frame.known_slots["place_query"] == "고양시청 근처"
+    assert tool_plan.preferred_tool == "transaction_store_preview_tool"
+    assert tool_plan.tool_args_patch["place_query"] == "고양시청 근처"
+    assert tool_plan.tool_args_patch["place_query"] != "고양시청 근처에는?"
+
+
 def test_transaction_intent_policy_keeps_pure_stock_region_query_inventory_only() -> None:
     known_slots = {
         "goods_no": "G000000317729",

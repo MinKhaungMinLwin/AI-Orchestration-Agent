@@ -839,6 +839,7 @@ def build_transaction_intent_frame(
     explicit_tire_size = normalize_tire_size(text)
     current_store_name = _store_candidate_or_canonical(_extract_store_name(text), slots)
     router_current_region = _router_verified_region(slots)
+    router_current_place_query = _router_verified_place_query(slots)
     raw_current_region = router_current_region or _extract_region(text)
     current_product_name = _extract_product_name(text)
     current_has_product = bool(current_product_name or _PRODUCT_HINT_RE.search(text))
@@ -1396,7 +1397,7 @@ def build_transaction_intent_frame(
         intent = "quick_order_reservation"
         sub_intent = "reservation"
         entities["stock_check_mode"] = "preview"
-        entities["place_query"] = router_current_region or text.strip()
+        entities["place_query"] = router_current_place_query or router_current_region or text.strip()
         entities["store_slot_fill_text"] = True
     elif current_store_holiday_lookup:
         intent = "store_holiday_lookup"
@@ -3009,6 +3010,23 @@ def _router_verified_region(slots: Mapping[str, Any]) -> str | None:
     if location_type and location_type != "region":
         return None
     for field in ("location_name", "region", "place_query"):
+        value = str(slots.get(field) or "").strip()
+        if value:
+            return value
+    return None
+
+
+def _router_verified_place_query(slots: Mapping[str, Any]) -> str | None:
+    slot_sources = slots.get("slot_sources")
+    if not isinstance(slot_sources, Mapping):
+        return None
+    has_router_location = any(
+        str(slot_sources.get(field) or "").strip() == "router_evidence"
+        for field in ("location_name", "place_query", "location_type")
+    )
+    if not has_router_location:
+        return None
+    for field in ("location_name", "place_query", "region"):
         value = str(slots.get(field) or "").strip()
         if value:
             return value
