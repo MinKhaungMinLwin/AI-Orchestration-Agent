@@ -8,6 +8,7 @@ from services.tstation.policies.slot_fill_controller import (
     apply_router_location_slot_fill,
     build_router_slot_fill_context,
     can_promote_existing_store_for_expected_slot_fill,
+    sanitize_region_slot_fill_transaction_state,
 )
 from services.tstation.policies.pending_clarification_policy import (
     resolve_pending_clarification_answer,
@@ -190,6 +191,12 @@ def test_router_location_slot_fill_replaces_stale_region_and_resets_store_schedu
                     "tire_size": "235/55R19",
                     "ord_qty": 4,
                 },
+                "store": {
+                    "region": "분당",
+                    "shop_id": "F00262",
+                    "shop_name": "티스테이션 분당점",
+                },
+                "schedule": {"requested_cal_day": "20260708", "rsv_hour": "16"},
                 "intent": {"sub_flow_type": "purchase", "pending_intent": "order", "goal_type": "place_order"},
                 "current_step": "ask_store",
                 "missing_slots": ["shop_id"],
@@ -239,12 +246,80 @@ def test_router_location_slot_fill_replaces_stale_region_and_resets_store_schedu
     assert "requested_cal_day" not in pending_context
     assert "rsv_hour" not in pending_context
     assert active_context["region"] == "고양시"
+    assert "store" not in active_context
+    assert "schedule" not in active_context
     assert active_context["flow_step"] == "show_store_candidates"
     assert active_context["current_step"] == "ask_store"
     assert active_context["missing_slots"] == ["shop_id"]
     assert active_context["tool_args_patch"]["region_code"] == "고양시"
     assert active_context["product"]["goods_no"] == "G000000320151"
     assert "last_candidates" not in active_context
+
+
+def test_region_slot_fill_sanitizes_known_slots_before_transaction_policy_context() -> None:
+    known_slots, availability_context, metadata = sanitize_region_slot_fill_transaction_state(
+        known_slots={
+            "goods_no": "G000000310126",
+            "tire_size": "245/45R19",
+            "ord_qty": 2,
+            "region": "분당",
+            "shop_id": "F00660",
+            "shop_name": "티스테이션 고양시청점",
+            "requested_cal_day": "20260706",
+            "rsv_hour": "16",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        availability_context={
+            "pending_order_context": {
+                "goods_no": "G000000310126",
+                "tire_size": "245/45R19",
+                "ord_qty": 2,
+                "region": "고양시청",
+                "shop_id": "F00660",
+                "shop_name": "티스테이션 고양시청점",
+                "requested_cal_day": "20260706",
+                "rsv_hour": "16",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            },
+            "active_flow_context": {
+                "flow_type": "commerce",
+                "status": "resumed",
+                "flow_step": "resolve_schedule",
+                "product": {"goods_no": "G000000310126", "tire_size": "245/45R19", "ord_qty": 2},
+                "store": {
+                    "region": "고양시청",
+                    "shop_id": "F00660",
+                    "shop_name": "티스테이션 고양시청점",
+                },
+                "schedule": {"requested_cal_day": "20260706", "rsv_hour": "16"},
+                "intent": {"sub_flow_type": "purchase", "pending_intent": "order", "goal_type": "place_order"},
+                "tool_args_patch": {"shop_id": "F00660", "mode": "general"},
+                "last_candidates": [{"shop_id": "F00660"}],
+            },
+        },
+        slot_patch={"region": "분당", "place_query": "분당"},
+    )
+
+    assert known_slots["region"] == "분당"
+    assert "shop_id" not in known_slots
+    assert "shop_name" not in known_slots
+    assert "requested_cal_day" not in known_slots
+    assert "rsv_hour" not in known_slots
+    pending_context = availability_context["pending_order_context"]
+    active_context = availability_context["active_flow_context"]
+    assert pending_context["region"] == "분당"
+    assert "shop_id" not in pending_context
+    assert "requested_cal_day" not in pending_context
+    assert active_context["region"] == "분당"
+    assert "store" not in active_context
+    assert "schedule" not in active_context
+    assert active_context["current_step"] == "ask_store"
+    assert active_context["missing_slots"] == ["shop_id"]
+    assert active_context["tool_args_patch"]["region_code"] == "분당"
+    assert "shop_id" not in active_context["tool_args_patch"]
+    assert metadata["region_slot_fill_state_sanitized"] is True
 
 
 def test_current_turn_region_fill_blocks_stale_store_slot_promotion() -> None:

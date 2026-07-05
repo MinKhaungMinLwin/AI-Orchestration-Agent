@@ -22,6 +22,16 @@ _QUANTITY_SLOT_FILL_POLICY_ANCHOR_RE = re.compile(
     r"할인|쿠폰|가격|얼마|견적|혜택|사은품|프로모션|이벤트|행사|적립|멤버십|보증|환불|취소|문의|상담",
     re.IGNORECASE,
 )
+_REGION_ONLY_STALE_STORE_FIELDS = (
+    "shop_id",
+    "shop_name",
+    "store_name",
+    "requested_cal_day",
+    "rsv_hour",
+    "schedule_mode",
+    "schedule_tier",
+    "inventory_mode",
+)
 
 _PURCHASE_RECONCILIATION_SLOT_FIELDS = (
     "goods_no",
@@ -502,6 +512,48 @@ def _apply_region_change_to_transaction_contexts(
         "context_patch_keys": patched_keys,
         "cleared_keys_by_context": cleared_keys_by_context,
     }
+
+
+def sanitize_region_slot_fill_transaction_state(
+    *,
+    known_slots: Mapping[str, Any] | None,
+    availability_context: Mapping[str, Any] | None = None,
+    slot_patch: Mapping[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """Remove stale store/schedule state after a region-only slot fill."""
+    patch = {
+        str(key): value
+        for key, value in dict(slot_patch or {}).items()
+        if value not in (None, "", [], {})
+    }
+    region = str(patch.get("region") or patch.get("place_query") or "").strip()
+    has_store_identity = any(
+        patch.get(key) not in (None, "", [], {})
+        for key in ("shop_id", "shop_name", "store_name")
+    )
+    if not region or has_store_identity:
+        return dict(known_slots or {}), dict(availability_context or {}), {}
+
+    sanitized_known_slots = dict(known_slots or {})
+    cleared_known_slots: list[str] = []
+    for field_name in _REGION_ONLY_STALE_STORE_FIELDS:
+        if sanitized_known_slots.pop(field_name, None) not in (None, "", [], {}):
+            cleared_known_slots.append(field_name)
+    sanitized_known_slots["region"] = region
+    if patch.get("place_query") not in (None, "", [], {}):
+        sanitized_known_slots["place_query"] = patch["place_query"]
+
+    sanitized_context, context_metadata = _apply_region_change_to_transaction_contexts(
+        availability_context,
+        region=region,
+    )
+    metadata = {
+        "region_slot_fill_state_sanitized": True,
+        "region_slot_fill_region": region,
+        "region_slot_fill_cleared_known_slots": sorted(dict.fromkeys(cleared_known_slots)),
+        **context_metadata,
+    }
+    return sanitized_known_slots, sanitized_context, metadata
 
 
 def _context_can_accept_region_patch(context: Mapping[str, Any]) -> bool:

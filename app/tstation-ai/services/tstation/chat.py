@@ -109,6 +109,7 @@ from services.tstation.policies.slot_fill_controller import (
     build_router_slot_fill_context,
     can_promote_existing_store_for_expected_slot_fill,
     resolve_pre_router_slot_fill,
+    sanitize_region_slot_fill_transaction_state,
 )
 from services.tstation.policies.pending_clarification_policy import (
     resolve_pending_clarification_answer,
@@ -28017,6 +28018,7 @@ class TStationChatServiceV2:
                 latest_router_evidence_metadata.get("latest_router_evidence_after"),
             )
         router_location_slot_fill_resume_source = "none"
+        router_location_patch: dict[str, Any] = {}
         router_location_slot_fill = apply_router_location_slot_fill(
             slots=merged_slots,
             routing_result=routing_result,
@@ -28751,6 +28753,18 @@ class TStationChatServiceV2:
             if seed_stock_mode and transaction_known_slots.get("stock_check_mode") == "inventory_only":
                 transaction_known_slots["stock_check_mode"] = seed_stock_mode
         availability_context = merged_slots.availability_context if isinstance(getattr(merged_slots, "availability_context", None), dict) else {}
+        if router_location_patch:
+            transaction_known_slots, availability_context, region_sanitize_metadata = (
+                sanitize_region_slot_fill_transaction_state(
+                    known_slots=transaction_known_slots,
+                    availability_context=availability_context,
+                    slot_patch=router_location_patch,
+                )
+            )
+            if region_sanitize_metadata:
+                merged_slots = merged_slots.model_copy()
+                merged_slots.availability_context = availability_context
+                vehicle_selection_trace_metadata.update(region_sanitize_metadata)
         pending_order_context = availability_context.get("pending_order_context") if isinstance(availability_context.get("pending_order_context"), dict) else {}
         if current_ui_action_context is not None and is_expected_transaction_slot_fill(current_ui_action_context):
             ui_action_metadata = {
