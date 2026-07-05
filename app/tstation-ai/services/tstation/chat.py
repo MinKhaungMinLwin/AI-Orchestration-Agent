@@ -43,6 +43,7 @@ from services.tstation.policies.reservation_template_policy import (
     coerce_schedule_confirmation_quickreply_to_datepick,
     filter_datepick_to_requested_weekday,
     latest_template_data_from_messages,
+    _GENERIC_DISCOVERY_FALLBACK_LABELS,
 )
 from services.tstation.policies.discovery_intent_policy import (
     best_seller_search_params_from_text,
@@ -18610,7 +18611,10 @@ _PENDING_CHECK_TOPIC_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
 )
 _PENDING_CHECK_EXPLICIT_NEW_INTENT_RE = re.compile(
     r"설명|알려줘|가격|얼마|최종가|쿠폰|재고|장착|예약|구매|주문|비교|차이|추천|"
-    r"등급|성능|특징|브랜드|제조사|원산지|출시|리뷰|영상",
+    r"등급|성능|특징|브랜드|제조사|원산지|출시|리뷰|영상|"
+    # A request to view/select from the user's registered vehicles is itself a distinct,
+    # new action (fetch + show the vehicle list), not an object answer for the pending check.
+    r"차량|보유차량|차\s*목록|내\s*차\b",
     re.IGNORECASE,
 )
 _PENDING_CHECK_ELIGIBILITY_ANCHOR_RE = re.compile(
@@ -19258,7 +19262,15 @@ def _build_discovery_policy_context(
                     sub_intent="general_recommendation",
                     entities=entities,
                 )
-        if not transaction_followup_priority and discovery_frame.intent == "product_recommendation":
+        if (
+            not transaction_followup_priority
+            and discovery_frame.intent == "product_recommendation"
+            # A generic clarification-chip label (e.g. "보유차량 중 선택") carries no
+            # recommendation criteria of its own; it's a request for the next input
+            # step, not a continuation of the prior filters, so it must not inherit
+            # them (e.g. safe_service) back onto an unrelated new action.
+            and str(last_user_text or "").strip() not in _GENERIC_DISCOVERY_FALLBACK_LABELS
+        ):
             context_frame = build_discovery_intent_frame(
                 context_text,
                 known_slots=known_slots,
