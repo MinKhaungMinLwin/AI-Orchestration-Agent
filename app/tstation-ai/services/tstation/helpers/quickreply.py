@@ -355,6 +355,14 @@ _VAGUE_STORE_DETAIL_TEXT_RE = re.compile(
     r"(?:매장|지점)?.{0,12}(?:정보|상세(?:정보)?).{0,12}확인(?:했|됐|되었)",
     re.IGNORECASE,
 )
+_STORE_DETAIL_REPLACEMENT_ALLOWED_INTENTS: frozenset[str] = frozenset({
+    "plain_store_info_lookup",
+    "store_detail",
+    "store_holiday_lookup",
+    "store_holiday",
+    "reservation_store_info_lookup",
+    "reservation_store_reference",
+})
 
 
 def _store_detail_quickreply_from_sources(
@@ -389,6 +397,19 @@ def _should_replace_vague_store_detail_quickreply(event_data: dict[str, Any]) ->
     if "• 매장명:" in assistant_text or "전화번호" in assistant_text or "영업시간" in assistant_text:
         return False
     return bool(_VAGUE_STORE_DETAIL_TEXT_RE.search(assistant_text))
+
+
+def _store_detail_quickreply_replacement_allowed(
+    event_data: dict[str, Any],
+    *,
+    called_tool_names: set[str],
+    turn_contract: Any | None,
+) -> bool:
+    if "get_store_detail_tool" not in called_tool_names:
+        return False
+    if _contract_intent_value(turn_contract) not in _STORE_DETAIL_REPLACEMENT_ALLOWED_INTENTS:
+        return False
+    return _should_replace_vague_store_detail_quickreply(event_data)
 
 
 _LISTCAR_SELECTION_NEEDLES: tuple[str, ...] = (

@@ -425,7 +425,7 @@ from services.tstation.helpers.quickreply import (
     _normalize_existing_reservation_change_quickreply as _normalize_existing_reservation_change_quickreply,
     _order_history_cta_allowed_for_contract as _order_history_cta_allowed_for_contract,
     _sanitize_transaction_cta_contracts as _sanitize_transaction_cta_contracts,
-    _should_replace_vague_store_detail_quickreply as _should_replace_vague_store_detail_quickreply,
+    _store_detail_quickreply_replacement_allowed as _store_detail_quickreply_replacement_allowed,
     _store_detail_quickreply_from_sources as _store_detail_quickreply_from_sources,
 )
 
@@ -39115,7 +39115,11 @@ class TStationChatServiceV2:
                     if (
                         source_domain == MultiAgentDomain.Domain.TRANSACTION.value
                         and event.get("template") == "quickReply"
-                        and _should_replace_vague_store_detail_quickreply(event_data)
+                        and _store_detail_quickreply_replacement_allowed(
+                            event_data,
+                            called_tool_names=called_tool_names,
+                            turn_contract=turn_contract,
+                        )
                         and not _is_active_order_flow_slots(pending_slots or initial_slots)
                     ):
                         store_detail_event = _store_detail_quickreply_from_sources(

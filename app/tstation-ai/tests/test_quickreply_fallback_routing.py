@@ -358,6 +358,7 @@ from services.tstation.chat import (
     _normalize_existing_reservation_change_quickreply,
     _normalize_policy_guidance_leak_quickreply,
     _normalize_price_policy_quickreply,
+    _store_detail_quickreply_replacement_allowed,
     _store_detail_quickreply_from_sources,
     _normalize_vehicle_owner_lookup_text,
     _non_self_vehicle_plate_owner_lookup_plate,
@@ -10557,6 +10558,29 @@ def test_vague_store_detail_quickreply_rebuilds_from_tool_source() -> None:
     assert "• 휴무일: 매장 사정에 따라 달라질 수 있어 매장 상세 또는 유선 확인이 필요해요." in assistant
     assert "영업시간:" not in assistant
     assert "월요일~일요일" not in assistant
+
+
+def test_vague_store_detail_quickreply_replacement_requires_current_detail_tool_and_intent() -> None:
+    event_data = {
+        "assistantResponse": "고객님, 매장 정보를 확인했어요.",
+        "quickReplies": [{"label": "매장 상세 페이지로 이동", "domain": "TRANSACTION"}],
+    }
+
+    assert _store_detail_quickreply_replacement_allowed(
+        event_data,
+        called_tool_names={"get_store_detail_tool"},
+        turn_contract=SimpleNamespace(intent="plain_store_info_lookup", sub_intent="store_detail"),
+    )
+    assert not _store_detail_quickreply_replacement_allowed(
+        event_data,
+        called_tool_names=set(),
+        turn_contract=SimpleNamespace(intent="plain_store_info_lookup", sub_intent="store_detail"),
+    )
+    assert not _store_detail_quickreply_replacement_allowed(
+        event_data,
+        called_tool_names={"get_store_detail_tool"},
+        turn_contract=SimpleNamespace(intent="store_service_search", sub_intent=None),
+    )
 
 
 def test_plain_store_info_query_extracts_store_name_without_reservation_action() -> None:
