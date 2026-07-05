@@ -75,6 +75,11 @@ _COUPON_APPLICABLE_PRODUCT_ANCHOR_RE = re.compile(
     r"적용\s*가능|적용가능|대상\s*상품|적용\s*상품|사용\s*가능|사용가능",
     re.IGNORECASE,
 )
+_APPLIED_ORDER_COUPON_RE = re.compile(
+    r"(?:적용|반영|사용).{0,12}(?:된|한)?\s*(?:쿠폰|할인|혜택).{0,16}(?:뭐|무엇|어떤|알려|내역|확인)|"
+    r"(?:쿠폰|할인|혜택).{0,12}(?:적용|반영|사용).{0,12}(?:됐|되었|된|했|한|뭐|무엇|어떤)",
+    re.IGNORECASE,
+)
 _COUPON_ISSUE_HOWTO_RE = re.compile(
     r"쿠폰.{0,24}(?:선물\s*받|발급|다운로드|받는?\s*방법|어디서\s*받|어디\s*서\s*받)|"
     r"(?:선물\s*받|발급|다운로드|받는?\s*방법|어디서\s*받|어디\s*서\s*받).{0,24}쿠폰",
@@ -204,6 +209,14 @@ def decide_coupon_query_gate(
             reason="No coupon-related trigger.",
         )
     text = user_text or ""
+    if _APPLIED_ORDER_COUPON_RE.search(text) and not _COUPON_APPLICABLE_PRODUCT_ANCHOR_RE.search(text):
+        return CouponQueryGateDecision(
+            intent=CouponQueryIntent.NONE,
+            confidence=0.95,
+            product_name=None,
+            coupon_hint=None,
+            reason="Applied coupon/discount detail belongs to price_or_coupon_check, not owned coupon lookup.",
+        )
     if _COUPON_STACKING_HOWTO_RE.search(text):
         return CouponQueryGateDecision(
             intent=CouponQueryIntent.STACKING,
