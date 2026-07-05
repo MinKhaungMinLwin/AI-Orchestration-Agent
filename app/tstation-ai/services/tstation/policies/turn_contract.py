@@ -106,6 +106,14 @@ _DISCOVERY_PRODUCT_SOURCE_TOOLS = frozenset({
     "get_best_selling_products_tool",
     "get_newest_products_tool",
 })
+# Ranked-list tools whose product cards are legitimately size-agnostic (a
+# bestseller/newest list is valid without any size filter). Unlike
+# search_product_tool/get_products_recommendations_tool, these don't need a
+# tire_size to be a compatible "product" card.
+_DISCOVERY_SIZE_AGNOSTIC_PRODUCT_SOURCE_TOOLS = frozenset({
+    "get_best_selling_products_tool",
+    "get_newest_products_tool",
+})
 _PENDING_CHECK_FOLLOWUP_PLANNER_INTENTS = frozenset({
     "coupon_applicability_check",
 })
@@ -3065,7 +3073,7 @@ def _is_discovery_product_template_compatible(
     if str(event.get("source_domain") or "").lower() != "discovery":
         return False
     called_tools = {str(tool) for tool in tuple(event.get("called_tools") or ()) if str(tool).strip()}
-    if not called_tools or not (called_tools & _DISCOVERY_PRODUCT_SOURCE_TOOLS):
+    if not called_tools or not (called_tools & _DISCOVERY_SIZE_AGNOSTIC_PRODUCT_SOURCE_TOOLS):
         return False
     forbidden_tools = {str(tool) for tool in tuple(contract.forbidden_tools or ()) if str(tool).strip()}
     if called_tools & forbidden_tools:
