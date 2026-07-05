@@ -4,7 +4,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from services.tstation.policies.flow_controller import resolve_purchase_order_flow, transition_current_flow
+from services.tstation.policies.flow_controller import (
+    build_purchase_flow_fallback_event,
+    resolve_purchase_order_flow,
+    transition_current_flow,
+)
 from services.tstation.policies.flow_state import commit_flow_state, resume_dormant_flow, upsert_dormant_flow
 from services.tstation.policies.intent_frame import IntentFrame, PolicyDomain
 from services.tstation.policies.preorder_event_builder import build_preorder_event
@@ -1903,6 +1907,186 @@ def test_mapper_priority_event_is_subordinate_to_current_contract() -> None:
     assert violates_response_template_contract(mapper_event, schedule_contract) is False
     assert violates_response_template_contract(mapper_event, support_contract) is True
     assert violates_response_template_contract(mapper_event, inventory_only_contract) is True
+
+
+def test_preview_datepick_is_not_blocked_by_stale_store_candidate_flow_step() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="quick_order_reservation",
+        known_slots={
+            "goods_no": "G000000310126",
+            "tire_size": "245/45R19",
+            "ord_qty": 2,
+            "region": "분당",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        allowed_tools=("transaction_store_preview_tool",),
+        preferred_tool="transaction_store_preview_tool",
+        response_decision={
+            "template": "datepick",
+            "required_slots": ("booking_datetime",),
+            "forbidden_behaviors": ("store_hours_instead_of_slots",),
+            "metadata": {
+                "response_shape_key": "reservation_slots",
+                "flow_step": "show_schedule",
+            },
+        },
+        action_mode="purchase_continuation",
+        context_state="resumed",
+        flow_step="show_store_candidates",
+    )
+    event = {
+        "template": "datepick",
+        "called_tools": ["transaction_store_preview_tool"],
+        "data": {
+            "metadata": {
+                "sourceTool": "transaction_store_preview_tool",
+                "flow_step": "show_schedule",
+                "missing_slots": ["booking_datetime"],
+            }
+        },
+    }
+
+    assert violates_response_template_contract(event, contract) is False
+    assert violates_response_template_contract({"template": "preOrder"}, contract) is True
+    assert violates_response_template_contract({"template": "orderComplete"}, contract) is True
+
+
+def test_purchase_flow_fallback_resolves_missing_booking_datetime_with_preview_slots() -> None:
+    event = build_purchase_flow_fallback_event(
+        intent="quick_order_reservation",
+        known_slots={
+            "goods_no": "G000000310126",
+            "product_name": "벤투스 S2 AS",
+            "tire_size": "245/45R19",
+            "ord_qty": 2,
+            "region": "분당",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        tool_data_list=[
+            {
+                "tool": "transaction_store_preview_tool",
+                "input": {
+                    "goods_no": "G000000310126",
+                    "ord_qty": 2,
+                    "region_code": "분당",
+                    "include_price": True,
+                },
+                "data": {
+                    "status": "success",
+                    "data": {
+                        "schedule": {
+                            "tier": "in_store_logistics_combined",
+                            "stores": [
+                                {
+                                    "shop_id": "F00071",
+                                    "shop_nm": "티스테이션 분당정자점",
+                                    "slots": [
+                                        {"cal_day": "20260706", "tm": "10"},
+                                        {"cal_day": "20260706", "tm": "11"},
+                                    ],
+                                }
+                            ],
+                        }
+                    },
+                },
+            }
+        ],
+    )
+
+    assert event is not None
+    assert event["template"] == "datepick"
+    assert event["assistant_response_source"] == "code_purchase_flow_schedule_fallback"
+    assert event["data"]["metadata"]["flow_step"] == "show_schedule"
+    assert event["data"]["metadata"]["current_step"] == "select_schedule"
+    assert event["data"]["metadata"]["missing_slots"] == ["booking_datetime"]
+    assert event["data"]["metadata"]["source_tool"] == "transaction_store_preview_tool"
+    assert event["data"]["metadata"]["shopId"] == "F00071"
+
+
+def test_purchase_flow_fallback_resolves_missing_product_with_search_candidates() -> None:
+    event = build_purchase_flow_fallback_event(
+        intent="quick_order_execute",
+        known_slots={
+            "tire_size": "245/45R19",
+            "ord_qty": 2,
+            "shop_id": "F00071",
+            "shop_name": "티스테이션 분당정자점",
+            "requested_cal_day": "20260706",
+            "rsv_hour": "10",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        tool_data_list=[
+            {
+                "tool": "search_product_tool",
+                "input": {"keyword": "벤투스", "size": "245/45R19", "brand_cd": "HK"},
+                "data": {
+                    "items": [
+                        {
+                            "goods_no": "G000000310126",
+                            "goods_nm": "벤투스 S2 AS",
+                            "tire_size_1": "245/45R19",
+                            "sale_prc": 282700,
+                            "extra_fvr_sale_prc": 220200,
+                        },
+                        {
+                            "goods_no": "G000000319584",
+                            "goods_nm": "벤투스 에어S",
+                            "tire_size_1": "245/45R19",
+                            "sale_prc": 300000,
+                            "extra_fvr_sale_prc": 242100,
+                        },
+                    ]
+                },
+            }
+        ],
+    )
+
+    assert event is not None
+    assert event["template"] == "product"
+    assert event["assistant_response_source"] == "code_purchase_flow_product_selection"
+    assert event["data"]["flowMetadata"]["flowStep"] == "resolve_product"
+    assert event["data"]["flowMetadata"]["missingSlots"] == ["product"]
+    assert [product["titleProductName"] for product in event["data"]["products"]] == ["벤투스 S2 AS", "벤투스 에어S"]
+    assert event["data"]["metadata"][0]["shopId"] == "F00071"
+    assert event["data"]["metadata"][0]["requestedCalDay"] == "20260706"
+
+
+def test_store_candidate_flow_still_blocks_datepick_when_response_policy_forbids_it() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="quick_order_reservation",
+        known_slots={
+            "goods_no": "G000000310126",
+            "tire_size": "245/45R19",
+            "ord_qty": 2,
+            "region": "분당",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        allowed_tools=("transaction_store_preview_tool",),
+        preferred_tool="transaction_store_preview_tool",
+        response_decision={
+            "template": "location",
+            "forbidden_behaviors": ("datepick_before_store_selection",),
+            "metadata": {
+                "response_shape_key": "reservation_store_candidates",
+                "flow_step": "show_store_candidates",
+            },
+        },
+        action_mode="purchase_continuation",
+        context_state="active",
+        flow_step="show_store_candidates",
+    )
+
+    assert violates_response_template_contract(
+        {"template": "datepick", "called_tools": ["transaction_store_preview_tool"]},
+        contract,
+    ) is True
+    assert violates_response_template_contract({"template": "location"}, contract) is False
 
 
 def _assert_guard_event_does_not_carry_stale_template_context(event: dict[str, object]) -> None:

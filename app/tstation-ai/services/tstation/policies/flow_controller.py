@@ -12,6 +12,7 @@ from services.tstation.common.cta_urls import CTAUrls
 from services.tstation.policies.discovery_intent_policy import normalize_tire_size
 from services.tstation.policies.flow_state import canonical_flow_type, commerce_sub_flow_type, resume_dormant_flow
 from services.tstation.policies.price_basis_policy import has_price_basis
+from services.tstation.policies.reservation_template_policy import build_datepick_from_preview_payload
 from services.tstation.policies.response_decision import TemplateName
 from services.tstation.policies.resolved_context import canonical_context_from_template_boundary
 from services.tstation.policies.support_response_policy import (
@@ -2076,6 +2077,21 @@ def build_purchase_flow_fallback_event(
         resumed_state = resolve_purchase_order_flow(intent=normalized_intent, known_slots=merged_slots)
         if resumed_state is not None:
             state = resumed_state
+    product_event = _purchase_product_selection_event_from_search(
+        state=state,
+        merged_slots=merged_slots,
+        tool_data_list=tool_data_list,
+        blocked_tool=blocked_tool,
+    )
+    if product_event is not None:
+        return product_event
+    schedule_event = _purchase_schedule_selection_event_from_preview(
+        state=state,
+        merged_slots=merged_slots,
+        tool_data_list=tool_data_list,
+    )
+    if schedule_event is not None:
+        return schedule_event
     metadata = {
         "flowId": state.flow_id,
         "flowStep": state.flow_step,
@@ -2197,6 +2213,114 @@ def _comparison_purchase_selection_event(*, state: FlowState) -> dict[str, Any] 
             },
         },
     }
+
+
+def _purchase_product_selection_event_from_search(
+    *,
+    state: FlowState,
+    merged_slots: Mapping[str, Any],
+    tool_data_list: list[dict] | None,
+    blocked_tool: str | None,
+) -> dict[str, Any] | None:
+    if "product" not in set(state.missing_slots) and state.flow_step != "resolve_product":
+        return None
+    if not _search_product_rows_from_entries(tool_data_list or []):
+        return None
+    product_state = FlowState(
+        flow_id=state.flow_id,
+        flow_step="resolve_product",
+        required_slots=("product",),
+        missing_slots=("product",),
+        allowed_tools=("search_product_tool",),
+        forbidden_tools=state.forbidden_tools,
+        preferred_tool="search_product_tool",
+        template=TemplateName.QUICK_REPLY,
+        response_shape_key="product_search_summary",
+        action_mode=state.action_mode,
+        slot_patch=state.slot_patch,
+        metadata=state.metadata,
+    )
+    return _purchase_product_resolution_event(
+        state=product_state,
+        slots=merged_slots,
+        tool_data_list=tool_data_list,
+        blocked_tool=blocked_tool,
+    )
+
+
+def _purchase_schedule_selection_event_from_preview(
+    *,
+    state: FlowState,
+    merged_slots: Mapping[str, Any],
+    tool_data_list: list[dict] | None,
+) -> dict[str, Any] | None:
+    if state.flow_step not in {"show_store_candidates", "resolve_store", "show_schedule", "resolve_schedule"}:
+        return None
+    if state.template not in {TemplateName.LOCATION, TemplateName.DATE_PICK}:
+        return None
+    if merged_slots.get("requested_cal_day") and merged_slots.get("rsv_hour"):
+        return None
+
+    for entry in reversed(tool_data_list or []):
+        if entry.get("tool") != "transaction_store_preview_tool":
+            continue
+        raw = _preview_payload_from_entry(entry)
+        if not isinstance(raw, dict):
+            continue
+        event = build_datepick_from_preview_payload(
+            raw,
+            assistant_text="예약하려는 날짜와 시간을 선택해 주세요.",
+            source_domain="transaction",
+            assistant_response_source="code_purchase_flow_schedule_fallback",
+            require_single_store=True,
+        )
+        if event is None:
+            continue
+
+        metadata = event.setdefault("data", {}).setdefault("metadata", {})
+        if not isinstance(metadata, dict):
+            metadata = {}
+            event["data"]["metadata"] = metadata
+        metadata.update(
+            {
+                "flowId": state.flow_id,
+                "flowStep": "show_schedule",
+                "flow_step": "show_schedule",
+                "currentStep": "select_schedule",
+                "current_step": "select_schedule",
+                "missingSlots": ["booking_datetime"],
+                "missing_slots": ["booking_datetime"],
+                "response_shape_key": "reservation_slots",
+                "sourceTool": "transaction_store_preview_tool",
+                "source_tool": "transaction_store_preview_tool",
+            }
+        )
+        for slot_key, metadata_key in (
+            ("goods_no", "goodsNo"),
+            ("product_name", "productName"),
+            ("tire_size", "tireSize"),
+            ("ord_qty", "ordQty"),
+            ("quantity", "ordQty"),
+        ):
+            value = merged_slots.get(slot_key)
+            if value not in (None, "", [], {}):
+                metadata.setdefault(metadata_key, value)
+        event["called_tools"] = ["transaction_store_preview_tool"]
+        event["contract_tool_recovery"] = True
+        return event
+    return None
+
+
+def _preview_payload_from_entry(entry: Mapping[str, Any]) -> dict[str, Any] | None:
+    payload = entry.get("data")
+    if isinstance(payload, dict):
+        if payload.get("status") == "success" and isinstance(payload.get("data"), dict):
+            return payload["data"]
+        nested = payload.get("data")
+        if isinstance(nested, dict) and isinstance(nested.get("data"), dict):
+            return nested["data"]
+        return payload
+    return None
 
 
 def _purchase_flow_intent(*, intent: str, known_slots: Mapping[str, Any] | None) -> str:

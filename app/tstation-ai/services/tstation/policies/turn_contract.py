@@ -3105,10 +3105,15 @@ def _flow_step_template_violation(*, template: str, contract: TurnContract) -> b
         return False
     intent = str(contract.intent or "")
     flow_step = str(contract.flow_step or "")
+    response_decision = contract.response_decision if isinstance(contract.response_decision, Mapping) else {}
+    response_metadata = response_decision.get("metadata") if isinstance(response_decision.get("metadata"), Mapping) else {}
+    decision_flow_step = str(response_metadata.get("flow_step") or response_metadata.get("flowStep") or "").strip()
     if intent in {"quick_order_reservation", "quick_order_reservation_continue"}:
         if flow_step in {"ask_size", "ask_quantity", "ask_store"}:
             return template in {"location", "datepick", "preOrder", "orderComplete"}
         if flow_step in {"show_store_candidates", "resolve_store"}:
+            if template == "datepick" and decision_flow_step in {"show_schedule", "resolve_schedule"}:
+                return False
             return template in {"datepick", "preOrder", "orderComplete"}
         if flow_step in {"show_schedule", "resolve_schedule"}:
             return template in {"preOrder", "orderComplete"}

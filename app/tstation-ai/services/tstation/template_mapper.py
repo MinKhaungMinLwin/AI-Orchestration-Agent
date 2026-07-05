@@ -6354,6 +6354,12 @@ def _build_datepick_metadata(
     metadata: dict[str, Any] = {"shopId": shop_id}
     if shop_name:
         metadata["shopName"] = shop_name
+    metadata["flowStep"] = "show_schedule"
+    metadata["flow_step"] = "show_schedule"
+    metadata["currentStep"] = "select_schedule"
+    metadata["current_step"] = "select_schedule"
+    metadata["missingSlots"] = ["booking_datetime"]
+    metadata["missing_slots"] = ["booking_datetime"]
 
     schedule = raw.get("schedule") if isinstance(raw.get("schedule"), dict) else {}
     schedule_stores = schedule.get("stores") if isinstance(schedule.get("stores"), list) else []

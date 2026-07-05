@@ -3220,6 +3220,9 @@ def test_purchase_store_selection_preview_maps_to_datepick_after_location_decisi
     assert result["assistant_response_source"] == "code_mapper_schedule_mode"
     assert result["data"]["metadata"]["shopId"] == "F09192"
     assert result["data"]["metadata"]["shopName"] == "티스테이션 대화점"
+    assert result["data"]["metadata"]["flow_step"] == "show_schedule"
+    assert result["data"]["metadata"]["current_step"] == "select_schedule"
+    assert result["data"]["metadata"]["missing_slots"] == ["booking_datetime"]
     assert result["data"]["assistantResponse"] == "물류 배송 후 장착 가능한 일정입니다. 예약하려는 날짜와 시간을 선택해 주세요."
 
 
