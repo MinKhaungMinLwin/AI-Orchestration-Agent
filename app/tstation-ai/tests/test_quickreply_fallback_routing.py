@@ -34301,7 +34301,7 @@ def test_product_recommendation_comparison_text_does_not_create_store_slot() -> 
     transaction_frame = build_transaction_intent_frame(user_text, known_slots=slots.model_dump(exclude_none=True))
     cross_domain_plan = plan_cross_domain_turn(user_text, known_slots=slots.model_dump(exclude_none=True))
 
-    assert slots.goal_type == "product_recommend"
+    assert slots.goal_candidate == "product_recommend"
     assert slots.shop_name is None
     assert "shop_name" not in transaction_frame.known_slots
     assert transaction_frame.intent != "store_attribute_inquiry"
