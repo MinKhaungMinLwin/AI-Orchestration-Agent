@@ -164,3 +164,24 @@ def test_flow_compatibility_allows_region_when_active_flow_expects_store() -> No
 
     assert decision.compatible is True
     assert decision.reason == "region_can_resolve_store"
+
+
+def test_flow_compatibility_allows_region_slot_fill_intent_when_active_flow_expects_store() -> None:
+    decision = evaluate_flow_compatibility(
+        active_flow={
+            "flow_type": "commerce",
+            "status": "active",
+            "product": {"goods_no": "G000000309783", "tire_size": "245/45R19", "ord_qty": 4},
+            "intent": {"sub_flow_type": "purchase", "pending_intent": "order", "goal_type": "place_order"},
+            "current_step": "ask_store",
+            "missing_slots": ["shop_id"],
+        },
+        proposed_slot_patch={"region": "분당"},
+        router_evidence={
+            "intent": "quick_order_reservation_slot_fill_region",
+            "execution_plan": ["transaction:quick_order_reservation:slot_fill:region"],
+        },
+    )
+
+    assert decision.compatible is True
+    assert decision.reason == "region_can_resolve_store"

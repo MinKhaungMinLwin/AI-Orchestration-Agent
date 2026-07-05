@@ -47,6 +47,7 @@ def _price_summary_context(
     turn_contract: TurnContract,
     merged_slots: ConversationSlots | None,
 ) -> dict[str, Any]:
+    del merged_slots
     known_slots = dict(getattr(turn_contract, "known_slots", {}) or {})
     values: dict[str, Any] = {}
     for key in (
@@ -59,8 +60,6 @@ def _price_summary_context(
         "quantity",
     ):
         value = known_slots.get(key)
-        if value in (None, "", [], {}) and merged_slots is not None:
-            value = getattr(merged_slots, key, None)
         if value not in (None, "", [], {}):
             values[key] = value
     return values

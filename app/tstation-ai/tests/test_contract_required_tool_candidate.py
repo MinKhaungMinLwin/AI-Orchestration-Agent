@@ -525,6 +525,26 @@ def test_price_or_coupon_contract_runs_final_price_for_confirmed_goods() -> None
     assert candidate.tool_input_source == "turn_contract_price_or_coupon_check"
 
 
+def test_price_or_coupon_contract_does_not_use_stale_merged_goods_no() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="price_or_coupon_check",
+        known_slots={"product_name": "새로 물어본 상품", "ord_qty": 2},
+        allowed_tools=("search_product_tool", "get_final_price_tool", "get_my_coupons_tool"),
+        preferred_tool="get_final_price_tool",
+        response_decision={"template": "quickReply", "metadata": {"response_shape_key": "price_coupon_summary"}},
+        context_state="active",
+    )
+
+    candidate = _contract_required_tool_candidate(
+        turn_contract=contract,
+        user_text="이 상품 적용된 할인이 뭐야?",
+        merged_slots=ConversationSlots(goods_no="G000000_STALE"),
+    )
+
+    assert candidate is None
+
+
 def test_selected_store_schedule_requires_datepick_contract_boundary() -> None:
     contract = TurnContract(
         domain="transaction",

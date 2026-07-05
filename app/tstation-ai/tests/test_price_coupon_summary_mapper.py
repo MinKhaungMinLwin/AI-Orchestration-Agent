@@ -1,4 +1,7 @@
+from schemas.tstation.slots import ConversationSlots
+from services.tstation.executors.contract_required_tool_executor import _price_summary_context
 from services.tstation.policies.response_decision import ResponseDecision, ResponseShape, TemplateName
+from services.tstation.policies.turn_contract import TurnContract
 from services.tstation.template_mapper import (
     current_price_summary_context,
     current_transaction_response_decision,
@@ -53,3 +56,21 @@ def test_price_or_coupon_summary_uses_context_quantity_and_coupon_names() -> Non
     assert "쿠폰/혜택 할인액: 102,400원" in response
     assert "최종 혜택가: 361,000원" in response
     assert "패밀리쿠폰 30%" in response
+
+
+def test_price_summary_context_ignores_stale_merged_slots() -> None:
+    context = _price_summary_context(
+        turn_contract=TurnContract(
+            domain="transaction",
+            intent="price_or_coupon_check",
+            known_slots={"goods_no": "G000000_NEW"},
+        ),
+        merged_slots=ConversationSlots(
+            goods_no="G000000_OLD",
+            product_name="이전 상품",
+            tire_size="245/45R19",
+            ord_qty=4,
+        ),
+    )
+
+    assert context == {"goods_no": "G000000_NEW"}

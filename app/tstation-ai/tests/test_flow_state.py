@@ -321,6 +321,65 @@ def test_transition_current_flow_pivots_price_check_without_resuming_dormant_pur
     assert transition.metadata["dormant_resume_applied"] is False
 
 
+def test_transition_current_flow_price_check_prefers_current_turn_product_snapshot() -> None:
+    transition = transition_current_flow(
+        user_text="새 상품 할인 얼마야?",
+        router_evidence={
+            "domain": "transaction",
+            "intent": "price_or_coupon_check",
+            "execution_plan": ["transaction:price_or_coupon_check"],
+        },
+        existing_slots=ConversationSlots(
+            goods_no="G000000_OLD",
+            tire_model="이전 상품",
+            tire_size="245/45R19",
+            ord_qty=4,
+        ),
+        extracted_slots=ConversationSlots(
+            goods_no="G000000_NEW",
+            tire_model="새 상품",
+            tire_size="275/50R20",
+            ord_qty=2,
+        ),
+        resume_source="none",
+    )
+
+    assert transition.flow_transition["applied"] is True
+    active_context = transition.flow_transition["active_flow_context"]
+    assert active_context["intent"]["sub_flow_type"] == "price_check"
+    assert active_context["product"]["goods_no"] == "G000000_NEW"
+    assert active_context["product"]["product_name"] == "새 상품"
+    assert active_context["product"]["tire_size"] == "275/50R20"
+    assert active_context["product"]["ord_qty"] == 2
+
+
+def test_transition_current_flow_price_check_drops_stale_goods_no_for_new_product_identity() -> None:
+    transition = transition_current_flow(
+        user_text="새 상품 할인 얼마야?",
+        router_evidence={
+            "domain": "transaction",
+            "intent": "price_or_coupon_check",
+            "execution_plan": ["transaction:price_or_coupon_check"],
+        },
+        existing_slots=ConversationSlots(
+            goods_no="G000000_OLD",
+            tire_model="이전 상품",
+            tire_size="245/45R19",
+            ord_qty=4,
+        ),
+        extracted_slots=ConversationSlots(
+            tire_model="새 상품",
+        ),
+        resume_source="none",
+    )
+
+    assert transition.flow_transition["applied"] is True
+    product = transition.flow_transition["active_flow_context"]["product"]
+    assert "goods_no" not in product
+    assert product["product_name"] == "새 상품"
+    assert product["tire_model"] == "새 상품"
+
+
 def test_transition_current_flow_resumes_dormant_purchase_from_explicit_anchor() -> None:
     dormant_purchase = commit_flow_state(
         None,

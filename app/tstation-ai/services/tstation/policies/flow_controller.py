@@ -188,7 +188,7 @@ def evaluate_flow_compatibility(
             current_intent=current_intent,
             active_flow_type=active_flow_type,
         )
-    if current_intent and current_intent not in _FLOW_SLOT_COMPATIBLE_INTENTS:
+    if current_intent and not _flow_compatibility_slot_intent_allowed(current_intent):
         return FlowCompatibilityDecision(
             action="reject_patch",
             reason="current_turn_intent_not_slot_fill_compatible",
@@ -240,6 +240,15 @@ def _flow_compatibility_current_intent(
         if text:
             return text
     return "none"
+
+
+def _flow_compatibility_slot_intent_allowed(intent: str) -> bool:
+    normalized = str(intent or "").strip()
+    if normalized in _FLOW_SLOT_COMPATIBLE_INTENTS:
+        return True
+    return normalized == "quick_order_reservation_slot_fill" or normalized.startswith(
+        "quick_order_reservation_slot_fill_"
+    )
 
 
 def _flow_compatibility_expected_slot(progress: Mapping[str, Any]) -> str:
@@ -1503,6 +1512,7 @@ def _current_turn_price_coupon_flow_context(
     *,
     router_evidence: Mapping[str, Any],
     existing_snapshot: Mapping[str, Any],
+    extracted_snapshot: Mapping[str, Any],
 ) -> dict[str, Any]:
     router_intent = str(router_evidence.get("intent") or "").strip()
     policy_intent = str(router_evidence.get("policy_intent") or "").strip()
@@ -1511,15 +1521,27 @@ def _current_turn_price_coupon_flow_context(
         "price_or_coupon_check" in item for item in plan
     ):
         return {}
+    current_turn_product_identity = any(
+        extracted_snapshot.get(key) not in (None, "", [], {})
+        for key in ("product_name", "tire_model", "pending_product_name", "tire_size")
+    )
     product = {
         key: value
         for key, value in {
-            "goods_no": existing_snapshot.get("goods_no"),
-            "product_name": existing_snapshot.get("product_name"),
-            "tire_model": existing_snapshot.get("tire_model"),
-            "pending_product_name": existing_snapshot.get("pending_product_name"),
-            "tire_size": existing_snapshot.get("tire_size"),
-            "ord_qty": existing_snapshot.get("ord_qty") or existing_snapshot.get("quantity"),
+            "goods_no": extracted_snapshot.get("goods_no")
+            or (None if current_turn_product_identity else existing_snapshot.get("goods_no")),
+            "product_name": extracted_snapshot.get("product_name")
+            or extracted_snapshot.get("tire_model")
+            or extracted_snapshot.get("pending_product_name")
+            or existing_snapshot.get("product_name"),
+            "tire_model": extracted_snapshot.get("tire_model") or existing_snapshot.get("tire_model"),
+            "pending_product_name": extracted_snapshot.get("pending_product_name")
+            or existing_snapshot.get("pending_product_name"),
+            "tire_size": extracted_snapshot.get("tire_size") or existing_snapshot.get("tire_size"),
+            "ord_qty": extracted_snapshot.get("ord_qty")
+            or extracted_snapshot.get("quantity")
+            or existing_snapshot.get("ord_qty")
+            or existing_snapshot.get("quantity"),
         }.items()
         if value not in (None, "", [], {})
     }
@@ -1895,10 +1917,12 @@ def transition_current_flow(
     current_turn_price_coupon_flow_context = _current_turn_price_coupon_flow_context(
         router_evidence=router_snapshot,
         existing_snapshot=existing_snapshot,
+        extracted_snapshot=extracted_snapshot,
     )
     current_turn_support_flow_context = _current_turn_support_flow_context(router_evidence=router_snapshot, user_text=user_text)
     active_flow_context = (
-        selected_product_flow_context
+        current_turn_price_coupon_flow_context
+        or selected_product_flow_context
         or selected_quantity_flow_context
         or selected_store_flow_context
         or current_turn_service_maintenance_flow_context
@@ -1906,11 +1930,12 @@ def transition_current_flow(
         or current_turn_reservation_management_flow_context
         or current_turn_store_search_flow_context
         or current_turn_discovery_flow_context
-        or current_turn_price_coupon_flow_context
         or resumed_active_flow_context
     )
     applied_reason = "metadata_only_shell"
-    if selected_product_flow_context:
+    if current_turn_price_coupon_flow_context:
+        applied_reason = "current_turn_price_coupon_flow_state"
+    elif selected_product_flow_context:
         applied_reason = "selected_product_flow_state"
     elif selected_quantity_flow_context:
         applied_reason = "selected_quantity_flow_state"
@@ -1926,8 +1951,6 @@ def transition_current_flow(
         applied_reason = "current_turn_store_search_flow_state"
     elif current_turn_discovery_flow_context:
         applied_reason = "current_turn_discovery_flow_state"
-    elif current_turn_price_coupon_flow_context:
-        applied_reason = "current_turn_price_coupon_flow_state"
     elif resumed_active_flow_context:
         applied_reason = "dormant_flow_resume"
     current_turn_seed = _current_turn_flow_seed(router_snapshot)

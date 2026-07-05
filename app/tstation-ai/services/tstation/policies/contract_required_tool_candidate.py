@@ -831,7 +831,6 @@ def _contract_required_price_or_coupon_final_price_tool_input(
     goods_no = str(
         tool_args_patch.get("goods_no")
         or known_slots.get("goods_no")
-        or getattr(merged_slots, "goods_no", None)
         or ""
     ).strip()
     if not goods_no:
