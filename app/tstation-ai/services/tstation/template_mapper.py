@@ -3472,7 +3472,10 @@ def _map_discovery_policy_quickreply(tool_data_list: list[dict], assistant_text:
         return None
     response = _with_discovery_claim_check_prefix(response)
     product_context = _single_sized_product_context(tool_data_list)
-    if response_shape_key == "product_search_summary" and _product_search_policy_requested_size(tool_data_list):
+    if response_shape_key in {"metric_comparison_summary", "grade_comparison_summary"}:
+        quick_replies = []
+        predicted_domains = ["DISCOVERY"]
+    elif response_shape_key == "product_search_summary" and _product_search_policy_requested_size(tool_data_list):
         quick_replies = _DISCOVERY_SIZED_PRODUCT_CHIPS
         predicted_domains = ["TRANSACTION"]
     else:
@@ -3536,7 +3539,8 @@ def _contract_policy_quickreply_event(
     if not response:
         return None
     response = _with_discovery_claim_check_prefix(response)
-    quick_replies = _DISCOVERY_RESTOCK_CHIPS if response_shape_key == "restock_inquiry_summary" else (
+    quick_replies = [] if response_shape_key in {"metric_comparison_summary", "grade_comparison_summary"} else (
+        _DISCOVERY_RESTOCK_CHIPS if response_shape_key == "restock_inquiry_summary" else
         _DISCOVERY_POLICY_QUICKREPLY_CHIPS
     )
     predicted_domains = ["DISCOVERY", "SUPPORT"] if response_shape_key == "restock_inquiry_summary" else ["DISCOVERY"]

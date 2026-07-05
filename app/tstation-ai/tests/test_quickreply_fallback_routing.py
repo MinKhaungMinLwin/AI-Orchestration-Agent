@@ -4852,7 +4852,7 @@ def test_grade_comparison_policy_runtime_replaces_internal_guidance_text() -> No
     assert changed is True
     assert "등급/포지션 근거로 비교한다" not in event_data["assistantResponse"]
     assert "두 상품의 프리미엄 등급 여부를 비교하려면" in event_data["assistantResponse"]
-    assert _labels(event_data["quickReplies"]) == ["상품명 다시 입력", "사이즈 직접 입력", "내 차량 보기"]
+    assert event_data["quickReplies"] == []
 
 
 def test_grade_comparison_event_prefers_higher_price_grade() -> None:
@@ -4872,7 +4872,7 @@ def test_grade_comparison_event_prefers_higher_price_grade() -> None:
     assert "| 상품 등급 | 스탠다드 |" in assistant
     assert "| 상품 등급 | 프리미엄 |" in assistant
     assert "벤투스 에어S이 키너지 EX보다 상위 등급입니다." in assistant
-    assert _labels(event["data"]["quickReplies"]) == ["구매하기", "다른 상품 비교", "내 차량 보기"]
+    assert event["data"]["quickReplies"] == []
 
 
 def test_final_price_from_row_prefers_member_best_price_before_generic_fields() -> None:

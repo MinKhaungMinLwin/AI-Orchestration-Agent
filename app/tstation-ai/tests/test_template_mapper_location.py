@@ -2650,6 +2650,7 @@ def test_metric_comparison_policy_answers_latest_product_confidently() -> None:
     assert "최신 상품은 다이나프로 HP3입니다." in assistant_response
     assert "**다이나프로 HPX**" in assistant_response
     assert "**다이나프로 HP3**" in assistant_response
+    assert result["data"]["quickReplies"] == []
     assert "| 출시 시점 | 2025년 2월 |" in assistant_response
     assert "| 출시 시점 | 2023년 1월 |" in assistant_response
     assert "사이즈:" not in assistant_response

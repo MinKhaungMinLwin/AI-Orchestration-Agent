@@ -13966,20 +13966,23 @@ def _build_product_comparison_event(
 
     compare_metric, comparison_followup_intent, sub_intent = _comparison_context_from_policy_or_text(user_text)
     (left_name, left_row), (right_name, right_row) = product_rows[:2]  # guarded by fallback above
-    resolved_products = [
-        {
-            "requestedName": requested_product_names[0] or left_name,
-            "goodsNo": str(left_row.get("goods_no") or "").strip(),
-            "productName": left_name,
-            "tireSize": normalize_tire_size(str(left_row.get("tire_size_1") or left_row.get("tire_size") or "")),
-        },
-        {
-            "requestedName": requested_product_names[1] or right_name,
-            "goodsNo": str(right_row.get("goods_no") or "").strip(),
-            "productName": right_name,
-            "tireSize": normalize_tire_size(str(right_row.get("tire_size_1") or right_row.get("tire_size") or "")),
-        },
-    ]
+    left_resolved_product = {
+        "requestedName": requested_product_names[0] or left_name,
+        "goodsNo": str(left_row.get("goods_no") or "").strip(),
+        "productName": left_name,
+    }
+    left_tire_size = normalize_tire_size(str(left_row.get("tire_size_1") or left_row.get("tire_size") or ""))
+    if left_tire_size:
+        left_resolved_product["tireSize"] = left_tire_size
+    right_resolved_product = {
+        "requestedName": requested_product_names[1] or right_name,
+        "goodsNo": str(right_row.get("goods_no") or "").strip(),
+        "productName": right_name,
+    }
+    right_tire_size = normalize_tire_size(str(right_row.get("tire_size_1") or right_row.get("tire_size") or ""))
+    if right_tire_size:
+        right_resolved_product["tireSize"] = right_tire_size
+    resolved_products = [left_resolved_product, right_resolved_product]
 
     if not compare_metric and sub_intent not in {"grade_compare", "mileage_compare", "latest_compare", "attribute_compare"}:
         assistant = _build_product_feature_review_comparison(left_name, left_row, right_name, right_row)
@@ -14148,12 +14151,8 @@ def _build_product_comparison_event(
         "assistant_response_source": "code_product_compare_resolver",
         "data": {
             "assistantResponse": assistant,
-            "quickReplies": [
-                {"label": "구매하기", "domain": "TRANSACTION"},
-                {"label": "다른 상품 비교", "domain": "DISCOVERY"},
-                {"label": "내 차량 보기", "domain": "DISCOVERY"},
-            ],
-            "predictedDomains": ["DISCOVERY", "TRANSACTION"],
+            "quickReplies": [],
+            "predictedDomains": ["DISCOVERY"],
             "metadata": {
                 "response_shape_key": (
                     "grade_comparison_summary"
@@ -18027,11 +18026,7 @@ def _normalize_discovery_policy_quickreply(
             "두 상품의 프리미엄 등급 여부를 비교하려면 각 상품명을 정확히 확인해야 해요. "
             "비교할 상품명을 다시 알려주시면 등급과 포지션 기준으로 정리해 드릴게요."
         )
-        event_data["quickReplies"] = [
-            {"label": "상품명 다시 입력", "domain": "DISCOVERY"},
-            {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
-            {"label": "내 차량 보기", "domain": "DISCOVERY"},
-        ]
+        event_data["quickReplies"] = []
         event_data["predictedDomains"] = ["DISCOVERY"]
         return True
 
@@ -18156,11 +18151,7 @@ def _normalize_policy_guidance_leak_quickreply(
                 "두 상품의 프리미엄 등급 여부를 비교하려면 각 상품명을 정확히 확인해야 해요. "
                 "비교할 상품명을 다시 알려주시면 등급과 포지션 기준으로 정리해 드릴게요."
             )
-            event_data["quickReplies"] = [
-                {"label": "상품명 다시 입력", "domain": "DISCOVERY"},
-                {"label": "사이즈 직접 입력", "domain": "DISCOVERY"},
-                {"label": "내 차량 보기", "domain": "DISCOVERY"},
-            ]
+            event_data["quickReplies"] = []
             event_data["predictedDomains"] = ["DISCOVERY"]
             return True
 
@@ -39443,7 +39434,17 @@ class TStationChatServiceV2:
                     next_action = event.get("nextAction") or {}
                     is_handoff = isinstance(next_action, dict) and next_action.get("type") == "continue"
                     is_current_quickreply = event.get("template") == "quickReply"
-                    if is_current_quickreply and chips_empty and not is_handoff:
+                    event_metadata = event_data.get("metadata") if isinstance(event_data, dict) else {}
+                    event_response_shape_key = (
+                        str(event_metadata.get("response_shape_key") or event_metadata.get("responseShapeKey") or "")
+                        if isinstance(event_metadata, dict)
+                        else ""
+                    )
+                    is_comparison_summary_quickreply = event_response_shape_key in {
+                        "metric_comparison_summary",
+                        "grade_comparison_summary",
+                    }
+                    if is_current_quickreply and chips_empty and not is_handoff and not is_comparison_summary_quickreply:
                         fallback_chips, fallback_label = _choose_quickreply_fallback(
                             called_tool_names,
                             source_domain,
