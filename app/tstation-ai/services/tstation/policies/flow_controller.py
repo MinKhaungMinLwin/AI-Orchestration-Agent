@@ -415,6 +415,13 @@ _SUPPORT_EXECUTION_PLAN_TOKENS = frozenset({
     "get_faq_tool",
     *_SUPPORT_FLOW_INTENTS,
 })
+_EXPLICIT_DORMANT_RESUME_RE = re.compile(
+    r"(?:계속|이어서|이어\s*서|진행|주문\s*진행|구매\s*진행|예약\s*계속|결제\s*진행|"
+    r"방금\s*(?:거|것)|아까\s*(?:선택한|고른)|그럼\s*(?:구매|주문)|주문할게|구매할게)",
+    re.IGNORECASE,
+)
+
+
 def _normalized_region_text(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip())
 
@@ -568,12 +575,21 @@ def _dormant_flows_from_context(availability_context: Mapping[str, Any]) -> list
 
 def _purchase_resume_anchor(
     *,
+    user_text: str,
     resume_source: str,
     router_evidence: Mapping[str, Any],
     existing_snapshot: Mapping[str, Any],
     extracted_snapshot: Mapping[str, Any],
 ) -> dict[str, Any]:
-    if str(resume_source or "").strip() in {"", "none"}:
+    resume = str(resume_source or "").strip()
+    has_explicit_text_anchor = _has_explicit_dormant_resume_anchor(user_text)
+    has_explicit_resume_source = bool(
+        resume
+        and resume != "none"
+        and not resume.startswith("expected_slot_fill:")
+        and not resume.startswith("router_slot_fill:")
+    )
+    if not has_explicit_text_anchor and not has_explicit_resume_source:
         return {}
     router_domain = str(router_evidence.get("domain") or "").strip()
     router_intent = str(router_evidence.get("intent") or "").strip()
@@ -585,15 +601,22 @@ def _purchase_resume_anchor(
         or "order" in execution_plan
         or "reservation" in execution_plan
     )
+    if has_explicit_text_anchor:
+        has_purchase_anchor = True
     if not has_purchase_anchor:
         return {}
 
-    anchor: dict[str, Any] = {"flow_type": "purchase"}
+    anchor: dict[str, Any] = {"flow_type": "commerce"}
     for key in ("goods_no", "product_name", "tire_model", "pending_product_name", "shop_id", "shop_name", "region"):
         value = extracted_snapshot.get(key) or existing_snapshot.get(key)
         if value not in (None, "", [], {}):
             anchor[key] = value
     return anchor
+
+
+def _has_explicit_dormant_resume_anchor(user_text: str) -> bool:
+    text = str(user_text or "").strip()
+    return bool(text and _EXPLICIT_DORMANT_RESUME_RE.search(text))
 
 
 def _compact_slot_snapshot(slots: Any | Mapping[str, Any] | None) -> dict[str, Any]:
@@ -1789,6 +1812,7 @@ def transition_current_flow(
     dormant_resume_result = None
     resumed_active_flow_context: dict[str, Any] = {}
     dormant_resume_anchor = _purchase_resume_anchor(
+        user_text=user_text,
         resume_source=resume_source,
         router_evidence=router_snapshot,
         existing_snapshot=existing_snapshot,
