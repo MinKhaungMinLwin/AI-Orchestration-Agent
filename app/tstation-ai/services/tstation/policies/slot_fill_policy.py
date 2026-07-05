@@ -141,6 +141,7 @@ def expected_slot_fill_precheck(
                 slot_patch["product_name"] = derived_product_name
     elif (
         ("schedule" in missing_slots or last_requested_slot == "schedule")
+        and has_current_schedule_signal
         and getattr(merged_slots, "requested_cal_day", None)
         and getattr(merged_slots, "rsv_hour", None)
     ):

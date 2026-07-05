@@ -10,6 +10,7 @@ import datetime
 from typing import Any, Mapping
 
 from services.tstation.policies.discovery_intent_policy import normalize_tire_size
+from services.tstation.policies.flow_state import flow_state_values_from_slot_values
 
 _WEEKDAY_KO = ("월", "화", "수", "목", "금", "토", "일")
 
@@ -164,8 +165,10 @@ def _with_context_vehicle_values(values: dict[str, Any]) -> dict[str, Any]:
     if values.get("car_no") and (values.get("car_model") or values.get("car_nm") or values.get("car_name")):
         return values
     availability_context = values.get("availability_context") if isinstance(values.get("availability_context"), Mapping) else {}
-    context_candidates: list[Mapping[str, Any]] = []
-    for key in ("pending_order_context", "dormant_purchase_context", "dormant_transaction_context"):
+    context_candidates: list[Mapping[str, Any]] = [
+        flow_state_values_from_slot_values(values, source="preorder_vehicle_context")
+    ]
+    for key in ("dormant_purchase_context", "dormant_transaction_context"):
         context = availability_context.get(key)
         if isinstance(context, Mapping):
             context_candidates.append(context)
@@ -294,12 +297,13 @@ def _context_candidates(slots: Mapping[str, Any]) -> list[Mapping[str, Any]]:
 
 
 def _append_availability_contexts(contexts: list[Mapping[str, Any]], availability_context: Mapping[str, Any]) -> None:
-    for key in (
-        "pending_order_context",
-        "dormant_purchase_context",
-        "dormant_stock_context",
-        "dormant_transaction_context",
-    ):
+    flow_context = flow_state_values_from_slot_values(
+        {"availability_context": availability_context},
+        source="preorder_context_candidates",
+    )
+    if flow_context:
+        contexts.append(flow_context)
+    for key in ("dormant_purchase_context", "dormant_stock_context", "dormant_transaction_context"):
         value = availability_context.get(key)
         if isinstance(value, Mapping):
             contexts.append(value)

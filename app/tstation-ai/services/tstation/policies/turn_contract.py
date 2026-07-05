@@ -16,6 +16,7 @@ from services.tstation.policies.discovery_intent_policy import (
     normalize_tire_size,
 )
 from services.tstation.policies.flow_controller import build_purchase_flow_fallback_event, resolve_purchase_order_flow
+from services.tstation.policies.flow_state import flow_state_values_from_slot_values
 from services.tstation.policies.intent_frame import IntentFrame
 from services.tstation.policies.price_basis_policy import has_price_basis
 from services.tstation.policies.preorder_event_builder import build_preorder_event
@@ -341,21 +342,8 @@ _STALE_PAYMENT_TOOL_ARG_FIELDS = frozenset({
 
 
 def _has_stale_purchase_payment_context(known_slots: Mapping[str, Any]) -> bool:
-    availability_context = (
-        known_slots.get("availability_context") if isinstance(known_slots.get("availability_context"), Mapping) else {}
-    )
-    pending_context = (
-        availability_context.get("pending_order_context")
-        if isinstance(availability_context.get("pending_order_context"), Mapping)
-        else {}
-    )
-    active_context = (
-        availability_context.get("active_flow_context")
-        if isinstance(availability_context.get("active_flow_context"), Mapping)
-        else {}
-    )
-    active_payment = active_context.get("payment") if isinstance(active_context.get("payment"), Mapping) else {}
-    return bool(pending_context.get("payment_amount_stale") or active_payment.get("payment_amount_stale"))
+    flow_values = flow_state_values_from_slot_values(known_slots, source="turn_contract_stale_payment_check")
+    return bool(flow_values.get("payment_amount_stale"))
 
 
 def _drop_stale_payment_tool_args(
@@ -2921,7 +2909,8 @@ def _missing_slot_quickreply_event(
 
 
 def _pending_order_context_from_slots(known_slots: Mapping[str, Any]) -> dict[str, Any]:
-    context: dict[str, Any] = {}
+    flow_values = flow_state_values_from_slot_values(known_slots, source="turn_contract_pending_context")
+    context: dict[str, Any] = dict(flow_values)
     for source_key, target_key in (
         ("goods_no", "goods_no"),
         ("goods_no", "goodsNo"),

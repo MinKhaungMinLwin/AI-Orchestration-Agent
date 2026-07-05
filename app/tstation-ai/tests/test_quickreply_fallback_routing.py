@@ -450,6 +450,7 @@ from services.tstation.policies.slot_fill_controller import (
     build_router_slot_fill_context,
     resolve_pre_router_slot_fill,
 )
+from services.tstation.policies.slot_fill_policy import expected_slot_fill_precheck
 from services.tstation.policies.support_response_policy import (
     build_support_faq_evidence_grounded_reply,
     build_support_faq_source_grounded_reply,
@@ -640,14 +641,14 @@ def _expected_slot_fill_precheck_for_test(
     router_context: Mapping[str, Any],
     region_store_input_resolution: Any | None = None,
 ) -> dict[str, Any]:
-    return dict(resolve_pre_router_slot_fill(
+    return dict(expected_slot_fill_precheck(
         user_text=user_text,
         regex_slots=regex_slots,
         merged_slots=merged_slots,
         router_context=router_context,
         region_store_input_resolution=region_store_input_resolution,
         has_purchase_anchor=_resume_source_from_current_turn(user_text) != "none",
-    ).precheck)
+    ))
 
 
 def test_chip_context_preserves_action_contract_fields() -> None:
@@ -17088,7 +17089,7 @@ def test_current_turn_product_replacement_clears_product_dependent_context_but_k
         goal_type="place_order",
     )
 
-    updated, metadata = replace_current_turn_product_context(slots, "벤투스 S2 AS 는?")
+    updated, metadata = replace_current_turn_product_context(slots, current_product_name="Ventus S2 AS")
 
     assert metadata["current_turn_product_replaced"] is True
     assert metadata["replacement_product_name"] == "Ventus S2 AS"
@@ -17237,7 +17238,7 @@ def test_current_turn_same_product_does_not_clear_existing_goods_no() -> None:
         payment_amount=300000,
     )
 
-    updated, metadata = replace_current_turn_product_context(slots, "벤투스 S2 AS 는?")
+    updated, metadata = replace_current_turn_product_context(slots, current_product_name="Ventus S2 AS")
 
     assert metadata == {}
     assert updated.goods_no == "G-S2"
@@ -17253,7 +17254,7 @@ def test_current_turn_same_product_korean_alias_does_not_clear_existing_goods_no
         payment_amount=300000,
     )
 
-    updated, metadata = replace_current_turn_product_context(slots, "벤투스 S2 AS 는?")
+    updated, metadata = replace_current_turn_product_context(slots, current_product_name="벤투스 S2 AS")
 
     assert metadata == {}
     assert updated.goods_no == "G-S2"
@@ -17269,11 +17270,30 @@ def test_current_turn_size_only_recommendation_does_not_replace_product_context(
         payment_amount=300000,
     )
 
-    updated, metadata = replace_current_turn_product_context(slots, "2454518 추천")
+    updated, metadata = replace_current_turn_product_context(slots)
 
     assert metadata == {}
     assert updated.goods_no == "G-S2"
     assert updated.pending_product_name == "Ventus S2 AS"
+
+
+def test_current_turn_price_correction_without_product_entity_does_not_replace_product_context() -> None:
+    slots = ConversationSlots(
+        goods_no="G-HP3",
+        pending_product_name="Dynapro HP3",
+        tire_model="Dynapro HP3",
+        tire_size="245/45R19",
+        ord_qty=2,
+        payment_amount=288200,
+    )
+
+    updated, metadata = replace_current_turn_product_context(slots)
+
+    assert metadata == {}
+    assert updated.goods_no == "G-HP3"
+    assert updated.pending_product_name == "Dynapro HP3"
+    assert updated.tire_model == "Dynapro HP3"
+    assert updated.payment_amount == 288200
 
 
 def test_user_merge_goods_no_change_requires_size_reconfirmation() -> None:
@@ -19220,9 +19240,9 @@ def test_product_selection_from_pending_order_context_builds_purchase_slot_fill_
 
     assert context["current_flow"] == "quick_order_reservation"
     assert context["flow_step"] == "resolve_store"
-    assert decision.precheck["matched"] is True
-    assert decision.precheck["filled_slot"] == "store"
-    assert decision.routing_override["intent"] == "quick_order_reservation"
+    assert decision.precheck["matched"] is False
+    assert decision.precheck["reason"] == "pre_router_slot_fill_disabled"
+    assert decision.routing_override == {}
     assert decision.slots.pending_intent == "order"
     assert decision.slots.goal_type == "place_order"
 
@@ -22000,18 +22020,11 @@ def test_slot_fill_controller_promotes_stock_schedule_to_parent_purchase_flow() 
 
     assert context["current_flow"] == "stock_store_search"
     precheck = decision.precheck
-    assert precheck["matched"] is True
+    assert precheck["matched"] is False
     assert precheck["current_flow"] == "stock_store_search"
-    assert precheck["filled_slot"] == "schedule"
-    assert precheck["slot_patch"] == {
-        "requested_cal_day": "20260708",
-        "rsv_hour": "16",
-    }
-    assert precheck["resume_source"] == "expected_slot_fill:schedule"
-    assert decision.flow_state_reconciliation["intent"] == "quick_order_reservation"
-    assert decision.flow_state_reconciliation["flow_step"] == "build_preorder"
-    assert decision.routing_override["intent"] == "quick_order_reservation"
-    assert decision.routing_override["source"] == "flow_state_after_slot_patch"
+    assert precheck["reason"] == "pre_router_slot_fill_disabled"
+    assert decision.flow_state_reconciliation == {}
+    assert decision.routing_override == {}
     assert decision.slots.pending_intent == "order"
     assert decision.slots.goal_type == "place_order"
 
@@ -29322,6 +29335,36 @@ def test_transaction_intent_policy_keeps_order_region_followup_on_preview_scope(
     assert "shop_id" not in tool_plan.tool_args_patch
     assert response_decision.metadata["response_shape_key"] == "stock_store_candidates"
     assert response_decision.metadata["stock_check_mode"] == "preview"
+
+
+def test_transaction_intent_policy_prefers_router_region_over_regex_region() -> None:
+    known_slots = {
+        "goods_no": "G000000317729",
+        "product_name": "다이나프로 HPX",
+        "tire_size": "235/55R19",
+        "ord_qty": 4,
+        "region": "고양시",
+        "place_query": "고양시",
+        "pending_intent": "order",
+        "goal_type": "place_order",
+        "location_name": "고양시",
+        "location_type": "region",
+        "slot_sources": {
+            "location_name": "router_evidence",
+            "place_query": "router_evidence",
+            "location_type": "router_evidence",
+        },
+    }
+
+    frame = build_transaction_intent_frame("분당 말고 고양시 매장", known_slots=known_slots)
+    tool_plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "quick_order_reservation"
+    assert frame.known_slots["region"] == "고양시"
+    assert frame.known_slots["place_query"] == "고양시"
+    assert tool_plan.preferred_tool == "transaction_store_preview_tool"
+    assert tool_plan.tool_args_patch["region"] == "고양시"
+    assert tool_plan.tool_args_patch["place_query"] == "고양시"
 
 
 def test_transaction_intent_policy_keeps_pure_stock_region_query_inventory_only() -> None:

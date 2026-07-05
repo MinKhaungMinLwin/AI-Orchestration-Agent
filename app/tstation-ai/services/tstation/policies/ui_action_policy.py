@@ -21,7 +21,7 @@ from services.tstation.policies.transaction_intent_policy import build_transacti
 from services.tstation.policies.turn_contract import build_turn_contract
 from services.tstation.policies.discovery_intent_policy import build_discovery_intent_frame, normalize_tire_size
 from services.tstation.policies.cta_registry import cta_trace_metadata, normalize_quickreply_ctas
-from services.tstation.policies.flow_state import effective_flow_type, upsert_dormant_flow
+from services.tstation.policies.flow_state import effective_flow_type, flow_state_values_from_slot_values, upsert_dormant_flow
 from services.tstation.policies.resolved_context import (
     canonical_context_from_slots,
     canonical_context_from_template_boundary,
@@ -80,12 +80,6 @@ _ORDER_HISTORY_LOOKUP_INPUT_RE = re.compile(
     r"$",
     re.IGNORECASE,
 )
-_PRODUCT_NAME_HINT_STOP_RE = re.compile(
-    r"타이어|상품|제품|사이즈|규격|구매하고|구매|주문|결제|장착|장바구니|담|사려고|사려|사고|살래|"
-    r"싶은데|싶|원해|주세요|해줘|할게|하고|가능|가격|재고|추천|찾|검색|\d+\s*개|는|은|\?",
-    re.IGNORECASE,
-)
-_COMPACT_TIRE_SIZE_RE = re.compile(r"\b\d{3}\s*[/ ]?\s*\d{2}\s*(?:R|\s|/)?\s*\d{2}\b", re.IGNORECASE)
 _PRODUCT_DEPENDENT_EXECUTION_FIELDS = frozenset({
     "goods_no",
     "shop_id",
@@ -721,38 +715,13 @@ def _is_same_product_identity(left: object, right: object) -> bool:
     return len(_product_identity_tokens(left_canonical) & _product_identity_tokens(right_canonical)) >= 2
 
 
-def current_turn_single_product_name(user_text: str, regex_slots: Any | None = None) -> str:
-    current_product = str(
-        getattr(regex_slots, "tire_model", None)
-        or getattr(regex_slots, "pending_product_name", None)
-        or ""
-    ).strip()
-    if not current_product:
-        try:
-            frame = build_discovery_intent_frame(str(user_text or ""))
-            product_names = tuple(frame.entities.get("product_names") or ())
-        except Exception:
-            product_names = ()
-        if len(product_names) == 1:
-            current_product = str(product_names[0]).strip()
-    if (
-        not current_product
-        and normalize_tire_size(str(user_text or ""))
-        and ConversationSlots.has_product_keyword(str(user_text or ""))
-    ):
-        current_product = _COMPACT_TIRE_SIZE_RE.sub(" ", str(user_text or ""))
-    current_product = _PRODUCT_NAME_HINT_STOP_RE.sub(" ", current_product)
-    return re.sub(r"\s+", " ", current_product).strip(" ,./")
-
-
 def _is_comparison_context_product_selection_override(
     slots: Any,
-    user_text: str,
-    regex_slots: Any | None = None,
+    current_product_name: str | None = None,
 ) -> bool:
     if getattr(slots, "goods_no", None) in (None, ""):
         return False
-    current_product = current_turn_single_product_name(user_text, regex_slots)
+    current_product = str(current_product_name or "").strip()
     if not current_product:
         return False
     comparison_context = ComparisonContext.from_mapping(getattr(slots, "comparison_context", None))
@@ -770,11 +739,10 @@ def _is_comparison_context_product_selection_override(
 
 def replace_current_turn_product_context(
     slots: Any,
-    user_text: str,
-    regex_slots: Any | None = None,
+    current_product_name: str | None = None,
 ) -> tuple[Any, dict[str, Any]]:
     """Replace stale product identity in stored context without authorizing execution."""
-    current_product = current_turn_single_product_name(user_text, regex_slots)
+    current_product = str(current_product_name or "").strip()
     if not current_product:
         return slots, {}
 
@@ -1627,11 +1595,7 @@ def _interactive_flow_contract_intent_from_slots(
         if isinstance(availability_context.get("active_flow_context"), Mapping)
         else {}
     )
-    pending_order_context = (
-        availability_context.get("pending_order_context")
-        if isinstance(availability_context.get("pending_order_context"), Mapping)
-        else {}
-    )
+    flow_context_values = flow_state_values_from_slot_values(slot_values, source="ui_action_contract_intent")
     dormant_purchase_context = (
         availability_context.get("dormant_purchase_context")
         if isinstance(availability_context.get("dormant_purchase_context"), Mapping)
@@ -1656,19 +1620,19 @@ def _interactive_flow_contract_intent_from_slots(
     active_flow_type = effective_flow_type(active_flow_context.get("flow_type"), active_flow_intent)
     active_pending_intent = str(active_flow_intent.get("pending_intent") or "").strip()
     active_goal_type = str(active_flow_intent.get("goal_type") or "").strip()
-    pending_context_intent = str(pending_order_context.get("pending_intent") or "").strip()
-    pending_context_goal = str(pending_order_context.get("goal_type") or "").strip()
+    pending_context_intent = str(flow_context_values.get("pending_intent") or "").strip()
+    pending_context_goal = str(flow_context_values.get("goal_type") or "").strip()
     router_intent = str(latest_router_evidence.get("intent") or "").strip()
     router_execution_plan = " ".join(str(item or "") for item in (latest_router_evidence.get("execution_plan") or ()))
     pending_context_has_purchase_shape = bool(
-        pending_order_context
+        flow_context_values
         and not (pending_context_intent == "stock" or pending_context_goal == "store_with_stock")
         and (
-            pending_order_context.get("ord_qty")
-            or pending_order_context.get("quantity")
-            or pending_order_context.get("shop_id")
-            or pending_order_context.get("shop_name")
-            or pending_order_context.get("region")
+            flow_context_values.get("ord_qty")
+            or flow_context_values.get("quantity")
+            or flow_context_values.get("shop_id")
+            or flow_context_values.get("shop_name")
+            or flow_context_values.get("region")
         )
     )
 
@@ -1833,11 +1797,14 @@ def _purchase_ui_action_context_patch(existing_slots: Any, slot_patch: Mapping[s
     return merged
 
 
-def _purchase_ui_action_context_candidates(availability_context: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+def _purchase_ui_action_context_candidates(availability_context: Mapping[str, Any]) -> list[Mapping[str, Any]]: 
     candidates: list[Mapping[str, Any]] = []
-    pending_order_context = availability_context.get("pending_order_context")
-    if isinstance(pending_order_context, Mapping) and _is_purchase_context(pending_order_context):
-        candidates.append(pending_order_context)
+    flow_context = flow_state_values_from_slot_values(
+        {"availability_context": availability_context},
+        source="ui_action_purchase_context_candidates",
+    )
+    if flow_context and _is_purchase_context(flow_context):
+        candidates.append(flow_context)
 
     active_flow_context = availability_context.get("active_flow_context")
     if isinstance(active_flow_context, Mapping):
@@ -1893,10 +1860,9 @@ def _existing_purchase_flow_state(slots: Any) -> bool:
     if pending_intent == "order" or goal_type == "place_order":
         return True
     availability_context = _slot_value_from_any(slots, "availability_context")
-    pending_order_context = (
-        availability_context.get("pending_order_context")
-        if isinstance(availability_context, Mapping) and isinstance(availability_context.get("pending_order_context"), Mapping)
-        else {}
+    pending_order_context = flow_state_values_from_slot_values(
+        {"availability_context": availability_context},
+        source="ui_action_existing_purchase_state",
     )
     return (
         str(pending_order_context.get("pending_intent") or "").strip() == "order"
@@ -2471,10 +2437,17 @@ def apply_history_product_selection_state(
     resolve_goods_no_from_selection_fn: Callable[[str, list[dict[str, Any]], str | None], str | None],
     latest_quickreply_tmpl: Mapping[str, Any] | None = None,
     latest_product_tmpl: Mapping[str, Any] | None = None,
+    current_product_name: str | None = None,
 ) -> HistoryProductSelectionState:
-    comparison_override = _is_comparison_context_product_selection_override(merged_slots, last_user_text)
+    comparison_override = _is_comparison_context_product_selection_override(
+        merged_slots,
+        current_product_name=current_product_name,
+    )
     if comparison_override:
-        replaced_slots, replacement_metadata = replace_current_turn_product_context(merged_slots, last_user_text)
+        replaced_slots, replacement_metadata = replace_current_turn_product_context(
+            merged_slots,
+            current_product_name=current_product_name,
+        )
         if replacement_metadata:
             return HistoryProductSelectionState(
                 updated_slots=replaced_slots,
@@ -2571,15 +2544,9 @@ def apply_history_product_selection_state(
         fallback_intent=None,
     )
     if expected_contract_intent in _TRANSACTION_SLOT_FILL_CONTRACT_INTENTS:
-        availability_context = (
-            getattr(merged_slots, "availability_context", None)
-            if isinstance(getattr(merged_slots, "availability_context", None), Mapping)
-            else {}
-        )
-        pending_order_context = (
-            availability_context.get("pending_order_context")
-            if isinstance(availability_context.get("pending_order_context"), Mapping)
-            else {}
+        pending_order_context = flow_state_values_from_slot_values(
+            merged_slots,
+            source="ui_action_transaction_slot_fill",
         )
         if expected_contract_intent == _QUICK_ORDER_RESERVATION_INTENT and pending_order_context:
             slot_patch.setdefault("pending_intent", pending_order_context.get("pending_intent") or "order")
