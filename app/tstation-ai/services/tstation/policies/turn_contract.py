@@ -5921,6 +5921,14 @@ def _planner_intent(routing_result: Any | None, plan: CrossDomainPlan | None) ->
 
 def _normalize_plan_intent(value: str) -> str:
     normalized = re.sub(r"[^a-zA-Z0-9_]+", "_", value.strip().lower()).strip("_")
+    # Router follow-up carry-over (Task 5) emits varied "<benefit/event/deal/promotion>
+    # applicable products" plan tokens (e.g. benefit_applicable_products_lookup,
+    # benefit_event_applicable_products_lookup, applicable_products_lookup). Collapse the
+    # whole family to the recognized benefit-applicable-products contract instead of
+    # letting an unrecognized token degrade to product_event_lookup. Coupon-specific
+    # applicable-products keeps its own dedicated intent, so it is excluded here.
+    if "applicable_products" in normalized and "coupon" not in normalized:
+        return "event_applicable_products_lookup"
     aliases = {
         "resolve_product": "resolve_or_describe_product",
         "continue_purchase": "quick_order_reservation",
