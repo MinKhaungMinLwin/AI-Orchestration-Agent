@@ -41015,6 +41015,79 @@ def test_turn_contract_allows_purchase_bound_preview_datepick_even_with_inventor
     ) == []
 
 
+def test_turn_contract_uses_active_preview_datepick_flow_without_schedule_tool() -> None:
+    contract = build_turn_contract(
+        user_text="티스테이션 판교점",
+        intent_frame=IntentFrame(
+            domain=PolicyDomain.TRANSACTION,
+            intent="stock_store_search_slot_fill_store",
+            sub_intent="reservation",
+            known_slots={
+                "goods_no": "G000000310254",
+                "ord_qty": 4,
+                "shop_id": "F00721",
+                "shop_name": "티스테이션 판교점",
+                "region": "판교",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+                "stock_check_mode": "preview",
+                "source_tool": "transaction_store_preview_tool",
+                "schedule_mode": "in_store_logistics_combined",
+                "price_source_tool": "transaction_store_preview_tool",
+                "availability_context": {
+                    "active_flow_context": {
+                        "flow_type": "commerce",
+                        "status": "resumed",
+                        "flow_step": "select_schedule",
+                        "product": {"goods_no": "G000000310254", "ord_qty": 4},
+                        "store": {
+                            "shop_id": "F00721",
+                            "shop_name": "티스테이션 판교점",
+                            "region": "판교",
+                        },
+                        "payment": {
+                            "price_basis": "cheapest_final_prc",
+                            "price_source_tool": "transaction_store_preview_tool",
+                        },
+                        "intent": {
+                            "sub_flow_type": "purchase",
+                            "pending_intent": "order",
+                            "goal_type": "place_order",
+                            "source_tool": "transaction_store_preview_tool",
+                            "schedule_mode": "in_store_logistics_combined",
+                        },
+                        "next_template": "datepick",
+                        "response_shape_key": "reservation_slots",
+                        "progress_source": "flow_state_evaluator",
+                    }
+                },
+            },
+        ),
+        tool_plan=ToolPlan(
+            allowed_tools=(),
+            forbidden_tools=(
+                "get_store_schedule_tool",
+                "transaction_store_preview_tool",
+                "get_store_inventory_tool",
+            ),
+            metadata={"response_intent": "stock_store_search_slot_fill_store"},
+        ),
+        response_decision=ResponseDecision(
+            response_shape=ResponseShape.CLARIFY,
+            template=TemplateName.QUICK_REPLY,
+            metadata={"response_shape_key": "missing_stock_search_slots"},
+        ),
+        resume_source="router_slot_fill:store",
+    )
+
+    assert contract.blocking_required_slots == ()
+    assert contract.required_slots == ()
+    assert contract.allowed_tools == ()
+    assert "get_store_schedule_tool" in contract.forbidden_tools
+    assert contract.response_decision["template"] == "datepick"
+    assert contract.response_decision["metadata"]["response_shape_key"] == "reservation_slots"
+
+
 def test_qc_recovery_scope_only_allows_inventory_only_preview_violation() -> None:
     assert chat_module._has_recoverable_inventory_only_preview_violation(
         [{"type": "unexpected_preview_tool_for_inventory_only_stock", "severity": "error"}]

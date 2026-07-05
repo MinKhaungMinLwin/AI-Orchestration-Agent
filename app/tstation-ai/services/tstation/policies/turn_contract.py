@@ -1295,6 +1295,7 @@ def build_turn_contract(
         known_slots=known_slots,
         cross_domain_plan=cross_domain_plan,
     )
+    active_preview_datepick_flow = _active_preview_datepick_flow_matches(known_slots)
     selected_store_schedule_continuation = _selected_store_schedule_continuation_matches(
         intent=intent,
         known_slots=known_slots,
@@ -1303,7 +1304,7 @@ def build_turn_contract(
     if selected_store_schedule_continuation:
         required_slots = tuple(
             slot for slot in required_slots
-            if slot not in {"requested_cal_day", "rsv_hour", "booking_datetime"}
+            if slot not in {"tire_size", "requested_cal_day", "rsv_hour", "booking_datetime"}
         )
     required_slots = _filter_satisfied_required_slots(required_slots, known_slots)
     resolvable_required_slots = _resolvable_required_slots(required_slots, cross_domain_plan, known_slots)
@@ -1338,12 +1339,28 @@ def build_turn_contract(
     if planner_intent in _QUICK_ORDER_EXECUTE_PLANNER_INTENTS and _has_quick_order_execute_slots(known_slots):
         allowed_tools = _merge_tuple(allowed_tools, ("quick_order_tool",))
         forbidden_tools = tuple(tool for tool in forbidden_tools if tool != "quick_order_tool")
-    if selected_store_schedule_continuation:
+    if selected_store_schedule_continuation and not active_preview_datepick_flow:
         allowed_tools = ("get_store_schedule_tool",)
         forbidden_tools = _merge_tuple(
             tuple(tool for tool in forbidden_tools if tool != "get_store_schedule_tool"),
             (
                 "transaction_store_preview_tool",
+                "get_store_inventory_tool",
+                "get_logistics_inventory_tool",
+                "get_store_list_tool",
+                "get_nearby_stores_tool",
+                "search_stores_tool",
+                "get_multi_store_schedule_tool",
+                "quick_order_tool",
+            ),
+        )
+    elif active_preview_datepick_flow:
+        allowed_tools = ()
+        forbidden_tools = _merge_tuple(
+            tuple(forbidden_tools),
+            (
+                "transaction_store_preview_tool",
+                "get_store_schedule_tool",
                 "get_store_inventory_tool",
                 "get_logistics_inventory_tool",
                 "get_store_list_tool",
@@ -3461,6 +3478,8 @@ def _selected_store_schedule_continuation_matches(
     known_slots: Mapping[str, Any],
     resume_source: str,
 ) -> bool:
+    if _active_preview_datepick_flow_matches(known_slots):
+        return True
     normalized_intent = str(intent or "").strip()
     if normalized_intent not in {"stock_store_search", "stock_store_search_slot_fill_store"}:
         pending_intent = str(known_slots.get("pending_intent") or "").strip()
@@ -3471,7 +3490,9 @@ def _selected_store_schedule_continuation_matches(
         "expected_slot_fill:store",
         "router_slot_fill:store",
         "validated_ui_action_slot_fill",
+        "validated_ui_action_slot_fill:store",
         "location_selection:stock_store_search",
+        "location_selection:purchase",
     }:
         return False
     schedule_mode = str(
@@ -3483,9 +3504,44 @@ def _selected_store_schedule_continuation_matches(
         known_slots.get("shop_id")
         and schedule_mode
         and known_slots.get("goods_no")
-        and known_slots.get("tire_size")
         and (known_slots.get("ord_qty") or known_slots.get("quantity"))
         and str(known_slots.get("source_tool") or "") == "transaction_store_preview_tool"
+    )
+
+
+def _active_preview_datepick_flow_matches(known_slots: Mapping[str, Any]) -> bool:
+    availability_context = (
+        known_slots.get("availability_context") if isinstance(known_slots.get("availability_context"), Mapping) else {}
+    )
+    active_flow = availability_context.get("active_flow_context") if isinstance(availability_context, Mapping) else None
+    if not isinstance(active_flow, Mapping):
+        active_flow = known_slots.get("active_flow_context")
+    if not isinstance(active_flow, Mapping):
+        return False
+    if str(active_flow.get("next_template") or "").strip() != "datepick":
+        return False
+    if str(active_flow.get("response_shape_key") or "").strip() != "reservation_slots":
+        return False
+    product = active_flow.get("product") if isinstance(active_flow.get("product"), Mapping) else {}
+    store = active_flow.get("store") if isinstance(active_flow.get("store"), Mapping) else {}
+    intent = active_flow.get("intent") if isinstance(active_flow.get("intent"), Mapping) else {}
+    payment = active_flow.get("payment") if isinstance(active_flow.get("payment"), Mapping) else {}
+    source_tool = str(intent.get("source_tool") or known_slots.get("source_tool") or "").strip()
+    price_source_tool = str(payment.get("price_source_tool") or known_slots.get("price_source_tool") or "").strip()
+    pending_intent = str(intent.get("pending_intent") or known_slots.get("pending_intent") or "").strip()
+    goal_type = str(intent.get("goal_type") or known_slots.get("goal_type") or "").strip()
+    goods_no = str(product.get("goods_no") or known_slots.get("goods_no") or "").strip()
+    quantity = product.get("ord_qty") or product.get("quantity") or known_slots.get("ord_qty") or known_slots.get("quantity")
+    shop_id = str(store.get("shop_id") or known_slots.get("shop_id") or "").strip()
+    return bool(
+        goods_no
+        and quantity
+        and shop_id
+        and (pending_intent == "order" or goal_type == "place_order")
+        and (
+            source_tool == "transaction_store_preview_tool"
+            or price_source_tool == "transaction_store_preview_tool"
+        )
     )
 
 
@@ -4515,6 +4571,18 @@ def _tool_contract_violation(
     ):
         return None
     if called_tool_set and called_tool_set <= _COMPARISON_RESOLVER_TOOLS and _is_comparison_contract(contract):
+        return None
+    response_decision = contract.response_decision or {}
+    response_metadata = response_decision.get("metadata") if isinstance(response_decision, Mapping) else {}
+    if (
+        called_tool_set == {"transaction_store_preview_tool"}
+        and str(response_decision.get("template") or "") == "datepick"
+        and str(response_metadata.get("response_shape_key") or "") == "reservation_slots"
+        and (
+            str(contract.known_slots.get("pending_intent") or "") == "order"
+            or str(contract.known_slots.get("goal_type") or "") == "place_order"
+        )
+    ):
         return None
     forbidden = [
         str(tool)
