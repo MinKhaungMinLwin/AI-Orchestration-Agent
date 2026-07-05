@@ -1330,6 +1330,33 @@ def build_turn_contract(
         cross_domain_plan=cross_domain_plan,
     )
     forbidden_tools = tuple(tool_plan.forbidden_tools) if tool_plan is not None else ()
+    if (
+        domain == "discovery"
+        and intent == "product_recommendation"
+        and sub_intent == "vehicle_resolved_recommendation"
+        and not allowed_tools
+        and any(str(known_slots.get(key) or "").strip() for key in ("tire_size", "car_lnc_cd"))
+    ):
+        allowed_tools = ("get_products_recommendations_tool",)
+        preferred_tool = "get_products_recommendations_tool"
+        expected_args = (
+            known_slots.get("recommendation_expected_tool_args")
+            if isinstance(known_slots.get("recommendation_expected_tool_args"), Mapping)
+            else {}
+        )
+        tool_args_patch = {
+            key: value
+            for key, value in {
+                "tire_size": known_slots.get("tire_size"),
+                "car_lnc_cd": known_slots.get("car_lnc_cd"),
+                "vehicle_type": known_slots.get("vehicle_type"),
+                "rcmd_type": expected_args.get("rcmd_type") if isinstance(expected_args, Mapping) else None,
+                "limit": expected_args.get("limit") if isinstance(expected_args, Mapping) else None,
+            }.items()
+            if value not in (None, "", [], {})
+        }
+        tool_args_patch.setdefault("rcmd_type", "tstation")
+        tool_args_patch.setdefault("limit", 10)
     if router_wins_intent:
         router_allowed_tools, router_forbidden_tools = _router_wins_tool_boundary(router_wins_intent)
         allowed_tools = router_allowed_tools

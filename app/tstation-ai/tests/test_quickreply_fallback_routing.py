@@ -2547,6 +2547,47 @@ def test_turn_contract_keeps_router_support_compatibility_over_product_descripti
     assert contract.response_decision["metadata"]["response_shape_key"] == "compatibility_advisory"
 
 
+def test_vehicle_selection_recommendation_restores_tool_boundary_when_router_says_leading() -> None:
+    routing = _routing_result(
+        domains=[MultiAgentDomain.Domain.LEADING],
+        execution_plan=["clarify selected vehicle from the shown list"],
+    )
+    frame = IntentFrame(
+        domain=PolicyDomain.LEADING,
+        intent="single_domain",
+        known_slots={
+            "tire_size": "225/45R17",
+            "car_lnc_cd": "W036269",
+            "vehicle_type": "passenger",
+            "recommendation_context": {"source_text": "타이어 추천"},
+        },
+    )
+    contract = build_turn_contract(
+        user_text="61거1836",
+        intent_frame=frame,
+        tool_plan=None,
+        routing_result=routing,
+        merged_slots=ConversationSlots(tire_size="225/45R17", car_lnc_cd="W036269"),
+        action_mode="info_only",
+        context_state="dormant",
+        contract_seed={
+            "ui_action": {
+                "action_type": "select_vehicle",
+                "expected_contract_intent": "vehicle_resolved_recommendation",
+            },
+            "user_text": "61거1836",
+        },
+    )
+
+    assert contract.domain == "discovery"
+    assert contract.intent == "product_recommendation"
+    assert contract.sub_intent == "vehicle_resolved_recommendation"
+    assert contract.allowed_tools == ("get_products_recommendations_tool",)
+    assert contract.preferred_tool == "get_products_recommendations_tool"
+    assert contract.tool_args_patch["tire_size"] == "225/45R17"
+    assert contract.tool_args_patch["rcmd_type"] == "tstation"
+
+
 def test_safe_service_tire_recommendation_policy_forces_discovery_over_support_router() -> None:
     plan = plan_cross_domain_turn("안심서비스 가능한 타이어는?", known_slots={})
     support_routing = _routing_result(
