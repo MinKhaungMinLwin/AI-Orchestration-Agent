@@ -37871,6 +37871,81 @@ def test_direct_preorder_event_recovers_product_and_payment_from_pending_order_c
     assert event["data"]["metadata"]["missingPreorderContext"] == []
 
 
+def test_direct_preorder_event_prefers_canonical_product_context_over_raw_tire_model() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000310126",
+        tire_model="벤투스 S2 AS 하려고 하는데 쿠폰 적용",
+        tire_size="275/35R20",
+        ord_qty=4,
+        shop_id="F00721",
+        shop_name="티스테이션 판교점",
+        requested_cal_day="20260709",
+        rsv_hour="17",
+        payment_amount=1059200,
+        pending_intent="order",
+        goal_type="place_order",
+        availability_context={
+            "active_flow_context": {
+                "flow_type": "commerce",
+                "status": "active",
+                "product": {
+                    "goods_no": "G000000310126",
+                    "product_name": "벤투스 S2 AS",
+                    "tire_size": "275/35R20",
+                },
+            }
+        },
+    )
+
+    event = _build_direct_preorder_event_from_slots(slots)
+
+    assert event is not None
+    assert event["data"]["orderInfo"]["product"] == "벤투스 S2 AS 275/35R20"
+    assert event["data"]["metadata"]["productName"] == "벤투스 S2 AS"
+
+
+def test_contract_preorder_event_prefers_canonical_product_context_over_raw_tire_model() -> None:
+    slots = {
+        "goods_no": "G000000310126",
+        "tire_model": "벤투스 S2 AS 하려고 하는데 쿠폰 적용",
+        "tire_size": "275/35R20",
+        "ord_qty": 4,
+        "shop_id": "F00721",
+        "shop_name": "티스테이션 판교점",
+        "requested_cal_day": "20260709",
+        "rsv_hour": "17",
+        "payment_amount": 1059200,
+        "availability_context": {
+            "active_flow_context": {
+                "flow_type": "commerce",
+                "status": "active",
+                "product": {
+                    "goods_no": "G000000310126",
+                    "product_name": "벤투스 S2 AS",
+                    "tire_size": "275/35R20",
+                },
+            }
+        },
+    }
+    contract = TurnContract(
+        domain="transaction",
+        intent="quick_order_reservation_slot_fill_schedule",
+        known_slots=slots,
+        response_decision={
+            "template": "preOrder",
+            "metadata": {"response_shape_key": "reservation_confirmation_ready", "flow_step": "build_preorder"},
+        },
+        action_mode="purchase_continuation",
+        flow_step="build_preorder",
+    )
+
+    event = build_preorder_event(contract, slots)
+
+    assert event is not None
+    assert event["data"]["orderInfo"]["product"] == "벤투스 S2 AS 275/35R20"
+    assert event["data"]["metadata"]["productName"] == "벤투스 S2 AS"
+
+
 def test_direct_preorder_event_does_not_recover_product_or_payment_from_template_payload() -> None:
     slots = ConversationSlots(
         goods_no="G000000310126",
