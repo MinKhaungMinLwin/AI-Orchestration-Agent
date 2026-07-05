@@ -3313,7 +3313,21 @@ def _owned_record_lookup_tool_boundary(intent: str) -> tuple[tuple[str, ...], tu
 
 def _current_turn_stock_owner_intent(intent: str, known_slots: Mapping[str, Any]) -> str:
     stock_check_mode = str(known_slots.get("stock_check_mode") or "")
-    if stock_check_mode and intent in {"resolve_or_describe_product", "transaction_fallback"}:
+    has_stock_context = bool(
+        known_slots.get("tire_size")
+        or known_slots.get("region")
+        or known_slots.get("shop_id")
+        or known_slots.get("shop_name")
+    )
+    if (
+        stock_check_mode
+        and has_stock_context
+        and intent in {"resolve_or_describe_product", "transaction_fallback"}
+    ):
+        # `stock_check_mode` defaults to "inventory_only" for every transaction frame
+        # (transaction_intent_policy.py) regardless of intent, so its presence alone
+        # isn't reliable; also require a real stock-relevant slot (size/store/region)
+        # before recovering stock_store_search.
         return "stock_store_search"
     return intent
 
@@ -6155,13 +6169,19 @@ def _is_blocking_reference(routing_result: Any | None, *, user_text: str = "", i
 
 
 def _has_blocking_reference(contract: TurnContract) -> bool:
-    if _reference_guard_exempt_intent(contract.intent):
-        return False
-    referred_type = str(contract.referred_objects.get("type") or "none")
-    if not (
+    router_confirmed_ambiguous_reference = bool(
         contract.referred_objects.get("needs_clarification")
         and contract.referred_objects.get("status") in {"missing", "ambiguous"}
-    ):
+    )
+    if not router_confirmed_ambiguous_reference:
+        return False
+    referred_type = str(contract.referred_objects.get("type") or "none")
+    # "product_set" means the router explicitly detected an ambiguous group of
+    # products (e.g. a price/coupon question spanning multiple candidates) -
+    # a stronger, more specific signal than the generic per-intent exemptions
+    # below, which exist for intents that structurally don't reference a
+    # specific prior object at all (e.g. plain recommendation/best-seller asks).
+    if referred_type != "product_set" and _reference_guard_exempt_intent(contract.intent):
         return False
     if referred_type == "none":
         return contract.has_reference_signal
@@ -6194,17 +6214,22 @@ def _should_apply_reference_guard(
 ) -> bool:
     if _OE_PART_NUMBER_REQUEST_RE.search(user_text or ""):
         return False
-    if _reference_guard_exempt_intent(intent):
-        return False
-    if _reference_guard_exempt_routing_result(routing_result):
-        return False
     referred = _referred_objects(routing_result)
-    if not (
+    router_confirmed_ambiguous_reference = bool(
         referred.get("needs_clarification")
         and referred.get("status") in {"missing", "ambiguous"}
-    ):
+    )
+    if not router_confirmed_ambiguous_reference:
         return False
     referred_type = str(referred.get("type") or "none")
+    # "product_set" is a stronger, more specific router signal (an explicitly
+    # ambiguous group of products) than the static exemptions below, which exist
+    # for intents/plans that structurally don't reference a specific prior
+    # object at all (e.g. plain recommendation/best-seller asks).
+    if referred_type != "product_set" and (
+        _reference_guard_exempt_intent(intent) or _reference_guard_exempt_routing_result(routing_result)
+    ):
+        return False
     if (
         referred_type in {"product", "product_set"}
         and is_best_seller_request(user_text, include_demographic_preference=False)

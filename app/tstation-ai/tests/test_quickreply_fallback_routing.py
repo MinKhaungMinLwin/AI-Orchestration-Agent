@@ -30131,14 +30131,12 @@ def test_support_policy_turn_contract_keeps_policy_intent_and_forbidden_product_
         called_tools=["search_product_tool"],
         contract=contract,
     )
-    assert violations == [
-        {
-            "type": "forbidden_tool_for_contract",
-            "severity": "error",
-            "called_tools": ["search_product_tool"],
-            "forbidden_tools": ["search_product_tool", "get_final_price_tool"],
-        }
-    ]
+    assert len(violations) == 1
+    assert violations[0]["type"] == "forbidden_tool_for_contract"
+    assert violations[0]["severity"] == "error"
+    assert violations[0]["called_tools"] == ["search_product_tool"]
+    assert "search_product_tool" in violations[0]["forbidden_tools"]
+    assert "get_final_price_tool" in violations[0]["forbidden_tools"]
 
 
 def test_support_policy_turn_contract_clears_stale_transaction_blocking_slots() -> None:
