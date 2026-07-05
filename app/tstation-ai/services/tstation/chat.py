@@ -99,6 +99,7 @@ from services.tstation.policies.price_response_policy import (
     price_row_from_final_price_result,
 )
 from services.tstation.policies.transaction_intent_policy import (
+    _PAYMENT_METHOD_CHANGE_RE,
     build_transaction_intent_frame,
     plan_transaction_tools,
 )
@@ -20290,6 +20291,12 @@ def _is_fresh_product_transaction_request(text: str, pending_intent: str | None)
     if not text or pending_intent not in {"price", "stock", "order"}:
         return False
     if _is_order_history_lookup_query(text):
+        return False
+    if _PAYMENT_METHOD_CHANGE_RE.search(text):
+        # A payment-method-change request references an existing order by number,
+        # not a product name. The fallback candidate extractor below can't tell
+        # the difference and will happily glue leftover sentence fragments
+        # together as a "product name" for text like this if allowed to run.
         return False
     has_product_hint = bool(
         ConversationSlots.has_product_keyword(text)
