@@ -7,6 +7,7 @@ from services.tstation.policies.slot_fill_controller import (
     _flow_state_reconciliation,
     apply_router_location_slot_fill,
 )
+from services.tstation.policies.slot_fill_policy import expected_slot_fill_precheck
 from services.tstation.policies.ui_action_policy import (
     _with_existing_transaction_slot_fill_state,
     prepare_ui_action_state,
@@ -187,6 +188,7 @@ def test_router_location_slot_fill_replaces_stale_region_and_resets_store_schedu
                 "current_step": "ask_store",
                 "missing_slots": ["shop_id"],
                 "last_candidates": [{"shop_id": "F00262"}],
+                "tool_args_patch": {"limit": 10, "region_code": "분당"},
             },
         },
     )
@@ -234,8 +236,35 @@ def test_router_location_slot_fill_replaces_stale_region_and_resets_store_schedu
     assert active_context["flow_step"] == "show_store_candidates"
     assert active_context["current_step"] == "ask_store"
     assert active_context["missing_slots"] == ["shop_id"]
+    assert active_context["tool_args_patch"]["region_code"] == "고양시"
     assert active_context["product"]["goods_no"] == "G000000320151"
     assert "last_candidates" not in active_context
+
+
+def test_schedule_slot_fill_requires_current_turn_schedule_signal() -> None:
+    precheck = expected_slot_fill_precheck(
+        user_text="1개 가격이 얼마야?",
+        regex_slots=ConversationSlots(),
+        merged_slots=ConversationSlots(
+            goods_no="G000000320151",
+            tire_size="235/55R19",
+            ord_qty=4,
+            shop_id="F00262",
+            requested_cal_day="20260708",
+            rsv_hour="16",
+            pending_intent="order",
+            goal_type="place_order",
+        ),
+        router_context={
+            "current_flow": "quick_order_reservation",
+            "flow_step": "show_schedule",
+            "missing_slots": ["schedule"],
+            "last_requested_slot": "schedule",
+        },
+    )
+
+    assert precheck["matched"] is False
+    assert precheck["reason"] == "input_does_not_fill_expected_slot"
 
 
 def test_router_location_slot_fill_requires_transaction_context() -> None:

@@ -398,6 +398,17 @@ def _apply_region_change_to_transaction_contexts(
         for field_name in ("store", "schedule", "selected_store", "selected_schedule"):
             if patched.pop(field_name, None) not in (None, "", [], {}):
                 cleared.append(field_name)
+        tool_args_patch = patched.get("tool_args_patch")
+        if isinstance(tool_args_patch, Mapping):
+            next_tool_args_patch = {
+                key: value
+                for key, value in dict(tool_args_patch).items()
+                if key not in {"region_code", "place_query", "store_nm", "shop_id"}
+            }
+            next_tool_args_patch["region_code"] = region
+            if next_tool_args_patch != tool_args_patch:
+                patched["tool_args_patch"] = next_tool_args_patch
+                cleared.append("tool_args_patch")
         if context_key in {"pending_order_context", "active_flow_context"}:
             patched["pending_step"] = "store_region_selection"
             if patched.get("flow_type") in {"purchase", "stock", "commerce"} or context_key == "pending_order_context":
