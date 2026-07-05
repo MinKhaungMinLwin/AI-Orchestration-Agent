@@ -332,6 +332,7 @@ _INVALID_REGION_LABELS = frozenset({
 _STORE_SEARCH_FLOW_INTENTS = frozenset({
     "store_search",
     "open_store_search",
+    "store_service_search",
     "store_recommendation_by_vehicle_experience",
 })
 _SERVICE_MAINTENANCE_FLOW_INTENTS = frozenset({
@@ -340,7 +341,6 @@ _SERVICE_MAINTENANCE_FLOW_INTENTS = frozenset({
     "store_attribute_inquiry",
     "store_service_advisory",
     "store_service_availability",
-    "store_service_search",
     "unsupported_or_unmapped_store_service_policy",
 })
 _RESERVATION_MANAGEMENT_FLOW_INTENTS = frozenset({
@@ -1384,6 +1384,22 @@ def _current_turn_store_search_intent(router_evidence: Mapping[str, Any]) -> str
     return ""
 
 
+def _router_location_name(router_evidence: Mapping[str, Any]) -> str:
+    entities = router_evidence.get("entities")
+    if not isinstance(entities, Mapping):
+        return ""
+    location = entities.get("location")
+    if isinstance(location, Mapping):
+        return str(
+            location.get("name")
+            or location.get("value")
+            or location.get("normalized")
+            or location.get("text")
+            or ""
+        ).strip()
+    return str(location or "").strip()
+
+
 def _current_turn_store_search_flow_context(
     *,
     router_evidence: Mapping[str, Any],
@@ -1394,10 +1410,32 @@ def _current_turn_store_search_flow_context(
     if not intent:
         return {}
 
-    region = _normalized_region_text(extracted_snapshot.get("region") or existing_snapshot.get("region"))
-    place_query = str(extracted_snapshot.get("place_query") or existing_snapshot.get("place_query") or "").strip()
-    shop_id = str(extracted_snapshot.get("shop_id") or existing_snapshot.get("shop_id") or "").strip()
-    shop_name = str(extracted_snapshot.get("shop_name") or existing_snapshot.get("shop_name") or "").strip()
+    router_location_name = _router_location_name(router_evidence)
+    current_turn_place = str(
+        extracted_snapshot.get("place_query")
+        or extracted_snapshot.get("region")
+        or router_evidence.get("place_query")
+        or router_evidence.get("region")
+        or router_location_name
+        or ""
+    ).strip()
+    region = _normalized_region_text(current_turn_place or existing_snapshot.get("region"))
+    place_query = str(
+        extracted_snapshot.get("place_query")
+        or extracted_snapshot.get("region")
+        or router_evidence.get("place_query")
+        or router_evidence.get("region")
+        or router_location_name
+        or existing_snapshot.get("place_query")
+        or ""
+    ).strip()
+    shop_id = str(extracted_snapshot.get("shop_id") or "").strip()
+    shop_name = str(extracted_snapshot.get("shop_name") or extracted_snapshot.get("store_name") or "").strip()
+    if not current_turn_place:
+        shop_id = shop_id or str(existing_snapshot.get("shop_id") or "").strip()
+        shop_name = shop_name or str(
+            existing_snapshot.get("shop_name") or existing_snapshot.get("store_name") or ""
+        ).strip()
     store: dict[str, Any] = {
         key: value
         for key, value in {

@@ -446,6 +446,30 @@ def test_direct_path_defaults_store_service_search_preferred_tool_when_contract_
     assert decision.template == "location"
 
 
+def test_direct_path_allows_store_search_primary_action_for_store_service_search() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="store_service_search",
+        known_slots={"place_query": "고양시", "region": "고양시"},
+        allowed_tools=("search_stores_tool", "get_store_list_tool", "get_nearby_stores_tool"),
+        forbidden_tools=("transaction_store_preview_tool", "get_store_schedule_tool"),
+        preferred_tool="search_stores_tool",
+        response_decision={"template": "location", "metadata": {"response_shape_key": "store_service_search"}},
+        context_state="dormant",
+    )
+
+    decision = evaluate_contract_direct_path(
+        turn_contract=contract,
+        router_evidence=_evidence(primary_action="store_search", domain="transaction"),
+        user_text="고양시에는 없어?",
+    )
+
+    assert decision.eligible is True
+    assert decision.reason == "store_search"
+    assert decision.tool == "search_stores_tool"
+    assert decision.template == "location"
+
+
 def test_direct_path_allows_price_or_coupon_final_price_contract() -> None:
     contract = TurnContract(
         domain="transaction",

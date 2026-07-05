@@ -34,6 +34,7 @@ _COMPLEX_EXPLANATION_RE = re.compile(
 _DIRECT_PRIMARY_ACTIONS = frozenset({
     "recommend",
     "search",
+    "store_search",
     "lookup",
     "compare",
     "book",

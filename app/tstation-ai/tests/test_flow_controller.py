@@ -211,6 +211,52 @@ def test_flow_compatibility_allows_region_slot_fill_intent_when_active_flow_expe
     assert decision.reason == "region_can_resolve_store"
 
 
+def test_current_turn_store_search_router_location_does_not_keep_stale_selected_store() -> None:
+    transition = transition_current_flow(
+        user_text="고양시에는 없어?",
+        router_evidence={
+            "domain": "transaction",
+            "intent": "store_service_search",
+            "policy_intent": "store_service_search",
+            "primary_action": "store_search",
+            "execution_plan": ["transaction:store_search"],
+            "entities": {"location": {"name": "고양시"}},
+        },
+        existing_slots={
+            "region": "분당",
+            "shop_id": "F00071",
+            "shop_name": "티스테이션 분당정자점",
+            "availability_context": {
+                "active_flow_context": {
+                    "flow_type": "commerce",
+                    "status": "active",
+                    "flow_step": "search_ready",
+                    "store": {
+                        "region": "분당",
+                        "place_query": "분당",
+                        "shop_id": "F00071",
+                        "shop_name": "티스테이션 분당정자점",
+                    },
+                    "intent": {
+                        "sub_flow_type": "store_search",
+                        "pending_intent": "store_search",
+                        "goal_type": "store_search",
+                    },
+                }
+            },
+        },
+        extracted_slots={},
+    )
+
+    active = transition.flow_transition["active_flow_context"]
+
+    assert transition.flow_transition["reason"] == "current_turn_store_search_flow_state"
+    assert active["store"]["region"] == "고양시"
+    assert active["store"]["place_query"] == "고양시"
+    assert "shop_id" not in active["store"]
+    assert "shop_name" not in active["store"]
+
+
 def test_explicit_resume_anchor_restores_single_dormant_purchase_context_by_slots() -> None:
     transition = transition_current_flow(
         user_text="계속 진행해줘",
