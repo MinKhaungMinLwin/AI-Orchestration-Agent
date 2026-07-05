@@ -205,7 +205,7 @@ def _has_ready_preorder_slots(slots: Mapping[str, Any]) -> bool:
 
 def _product_name(slots: Mapping[str, Any]) -> str:
     for context in _product_context_candidates(slots):
-        for key in ("goods_nm", "goodsNm", "tire_model", "pending_product_name", "product_name"):
+        for key in ("goods_nm", "goodsNm", "product_name", "tire_model", "pending_product_name"):
             product_name = str(context.get(key) or "").strip()
             if product_name:
                 return product_name
