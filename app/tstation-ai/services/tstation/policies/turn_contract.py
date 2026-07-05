@@ -321,6 +321,42 @@ def _prefer_router_product_keyword_for_purchase_resolution(
     slot_sources["pending_product_name"] = "router_evidence"
     slot_sources["tire_model"] = "router_evidence"
     known_slots["slot_sources"] = slot_sources
+
+_STALE_PAYMENT_TOOL_ARG_FIELDS = frozenset({
+    "requested_cal_day",
+    "rsv_hour",
+    "payment_amount",
+    "payment_amount_source",
+    "price_basis",
+    "price_source_tool",
+})
+
+
+def _has_stale_purchase_payment_context(known_slots: Mapping[str, Any]) -> bool:
+    availability_context = (
+        known_slots.get("availability_context") if isinstance(known_slots.get("availability_context"), Mapping) else {}
+    )
+    pending_context = (
+        availability_context.get("pending_order_context")
+        if isinstance(availability_context.get("pending_order_context"), Mapping)
+        else {}
+    )
+    active_context = (
+        availability_context.get("active_flow_context")
+        if isinstance(availability_context.get("active_flow_context"), Mapping)
+        else {}
+    )
+    active_payment = active_context.get("payment") if isinstance(active_context.get("payment"), Mapping) else {}
+    return bool(pending_context.get("payment_amount_stale") or active_payment.get("payment_amount_stale"))
+
+
+def _drop_stale_payment_tool_args(
+    tool_args_patch: Mapping[str, Any],
+    known_slots: Mapping[str, Any],
+) -> dict[str, Any]:
+    if not _has_stale_purchase_payment_context(known_slots):
+        return dict(tool_args_patch)
+    return {key: value for key, value in dict(tool_args_patch).items() if key not in _STALE_PAYMENT_TOOL_ARG_FIELDS}
 _OE_PART_NUMBER_REQUEST_RE = re.compile(
     r"(?:\bOE\b|순정|출고\s*타이어|출고용|출고때|출고 시).{0,40}(?:품번|부품\s*번호|파트\s*넘버|part\s*number)|"
     r"(?:품번|부품\s*번호|파트\s*넘버|part\s*number).{0,40}(?:\bOE\b|순정|출고\s*타이어|출고용|출고때|출고 시)",
@@ -1157,6 +1193,7 @@ def build_turn_contract(
         intent=intent,
         action_mode=action_mode,
     )
+    tool_args_patch = _drop_stale_payment_tool_args(tool_args_patch, known_slots)
     fallback_required_slots = (
         intent_frame.missing_slots
         if tool_plan is None and intent_frame is not None

@@ -29761,6 +29761,69 @@ def test_pending_order_context_qty_change_clears_stale_payment_amount() -> None:
     assert "price_source_tool" not in context
 
 
+def test_pending_order_context_qty_change_clears_flat_and_active_schedule_payment() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000310126",
+        tire_size="245/45R19",
+        ord_qty=4,
+        shop_id="F07782",
+        shop_name="T-Station Hannam",
+        requested_cal_day="20260706",
+        rsv_hour="10",
+        payment_amount=308200,
+        price_basis="cheapest_final_prc",
+        price_source_tool="transaction_store_preview_tool",
+        pending_intent="order",
+        goal_type="place_order",
+        availability_context={
+            "pending_order_context": {
+                "goods_no": "G000000310126",
+                "product_name": "Ventus S2 AS",
+                "ord_qty": 2,
+                "shop_id": "F07782",
+                "shop_name": "T-Station Hannam",
+                "requested_cal_day": "20260706",
+                "rsv_hour": "10",
+                "payment_amount": 308200,
+                "price_basis": "cheapest_final_prc",
+                "price_source_tool": "transaction_store_preview_tool",
+            },
+            "active_flow_context": {
+                "flow_type": "purchase",
+                "status": "active",
+                "flow_step": "schedule_selected",
+                "product": {"goods_no": "G000000310126", "tire_size": "245/45R19", "ord_qty": 2},
+                "store": {"shop_id": "F07782", "shop_name": "T-Station Hannam"},
+                "schedule": {"requested_cal_day": "20260706", "rsv_hour": "10"},
+                "payment": {
+                    "payment_amount": 308200,
+                    "price_basis": "cheapest_final_prc",
+                    "price_source_tool": "transaction_store_preview_tool",
+                },
+                "intent": {"pending_intent": "order", "goal_type": "place_order"},
+            },
+        },
+    )
+
+    context = _stage_pending_order_context(slots, source="quantity_followup")
+    active_context = slots.availability_context["active_flow_context"]
+
+    assert context["ord_qty"] == 4
+    assert context["shop_id"] == "F07782"
+    assert "requested_cal_day" not in context
+    assert "rsv_hour" not in context
+    assert "payment_amount" not in context
+    assert context["payment_amount_stale"] is True
+    assert slots.requested_cal_day is None
+    assert slots.rsv_hour is None
+    assert slots.payment_amount is None
+    assert slots.price_basis is None
+    assert slots.price_source_tool is None
+    assert "schedule" not in active_context
+    assert active_context["payment"] == {"payment_amount_stale": True}
+    assert active_context["product"]["ord_qty"] == 4
+
+
 def test_product_search_stages_pending_stock_context_before_size_followup() -> None:
     slots = ConversationSlots(
         region="광주",
