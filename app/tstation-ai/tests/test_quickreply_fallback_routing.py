@@ -17602,6 +17602,36 @@ def test_chip_vehicle_selection_resolves_matching_candidate_from_recent_listcar(
     assert resolved["selection_context"]["source_intent"] == "vehicle_tire_size_lookup"
 
 
+def test_select_vehicle_ui_action_hydrates_label_when_metadata_lacks_reg_seq() -> None:
+    template = {
+        "template": "listCar",
+        "data": {
+            "listCar": [{"licensePlate": "29조3344", "info": "Volkswagen Jetta"}],
+            "metadata": [{"carNo": "29조3344", "carLncCd": "W036270", "tireSize": "225/45R17"}],
+        },
+    }
+
+    resolved = resolve_vehicle_ui_selection_from_chip_context(
+        {
+            "cta_action": "select_vehicle",
+            "source_intent": "vehicle_resolved_recommendation",
+            "expected_contract_intent": "vehicle_resolved_recommendation",
+            "entity_id": "29조3344",
+            "slots": {
+                "car_no": "29조3344",
+                "car_lnc_cd": "W036270",
+                "mbr_car_reg_seq": "2000003015",
+                "tire_size": "225/45R17",
+            },
+        },
+        template,
+    )
+
+    assert resolved is not None
+    slot_values = _vehicle_selection_slot_values(resolved)
+    assert slot_values["car_no"] == "29조3344"
+    assert slot_values["car_model"] == "Volkswagen Jetta"
+
 def test_chip_vehicle_selection_rejects_candidate_not_present_in_recent_listcar() -> None:
     template = {
         "template": "listCar",
@@ -18741,6 +18771,40 @@ def test_recommendation_active_flow_does_not_resume_without_context_or_for_purch
         )
         == {}
     )
+
+
+def test_purchase_missing_product_vehicle_selection_resumes_recommendation_refinement() -> None:
+    patch = recommendation_vehicle_selection_patch(
+        active_flow_context={
+            "flow_type": "commerce",
+            "status": "active",
+            "flow_step": "ask_product",
+            "product": {"ord_qty": 4},
+            "store": {"shop_name": "Gwanggyo Branch"},
+            "intent": {"sub_flow_type": "purchase"},
+            "recommendation": {
+                "recommendation_scenario": "low_vibration",
+                "tool_args_patch": {"rcmd_type": "low_vibration"},
+            },
+            "current_step": "ask_product",
+            "missing_slots": ["product"],
+        },
+        selected_vehicle_slots={
+            "car_no": "CAR-293344",
+            "car_lnc_cd": "W036270",
+            "tire_size": "225/45R17",
+            "vehicle_type": "passenger",
+        },
+    )
+
+    assert patch["discovery_followup_action"] == "vehicle_based_recommendation_refinement"
+    assert patch["recommendation_scenario"] == "low_vibration"
+    assert patch["recommendation_context"]["fitment_source"] == "selected_vehicle"
+    assert patch["tire_size"] == "225/45R17"
+    assert patch["car_no"] == "CAR-293344"
+    assert patch["car_lnc_cd"] == "W036270"
+    assert patch["vehicle_type"] == "passenger"
+    assert patch["rcmd_type"] == "low_vibration"
 
 
 def test_recommendation_active_flow_does_not_resume_staggered_vehicle_without_selected_size() -> None:

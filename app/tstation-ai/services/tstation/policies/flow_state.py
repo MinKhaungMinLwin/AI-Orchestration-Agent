@@ -2298,7 +2298,19 @@ def recommendation_vehicle_selection_patch(
     selected_vehicle_slots: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
     active_flow = FlowState.from_active_flow_context(active_flow_context)
-    if effective_flow_type(active_flow.flow_type, active_flow.intent) != "recommendation" or active_flow.flow_step != "select_vehicle":
+    effective_type = effective_flow_type(active_flow.flow_type, active_flow.intent)
+    if effective_type == "recommendation":
+        if active_flow.flow_step != "select_vehicle":
+            return {}
+    elif effective_type == "purchase":
+        missing_slots = tuple(str(slot or "").strip() for slot in active_flow.meta.get("missing_slots") or ())
+        current_step = str(active_flow.meta.get("current_step") or active_flow.flow_step or "").strip()
+        if not active_flow.recommendation or "product" not in missing_slots or current_step not in {
+            "ask_product",
+            "resolve_product",
+        }:
+            return {}
+    else:
         return {}
     if active_flow.status not in {"active", "resumed"}:
         return {}
