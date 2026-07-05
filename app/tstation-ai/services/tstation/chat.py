@@ -1971,6 +1971,31 @@ def _allows_outer_tool_slot_staging(tool_name: str, action_mode: str | None) -> 
 
 
 _P0_AUTO_CHAIN_PENDING_INTENTS = {"price", "stock", "order"}
+_PRODUCT_OVERRIDE_CANDIDATES = frozenset({
+    "p0_auto_chain",
+    "p0b_transaction_redirect",
+    "fresh_sized_product_transaction",
+    "fresh_unsized_product_transaction",
+})
+
+
+def _router_contract_requires_current_turn_clarification(routing_result: MultiAgentDomain | None) -> bool:
+    """Return True when the router explicitly chose clarification over execution."""
+    if routing_result is None:
+        return False
+    if bool(getattr(routing_result, "needs_clarification", False)):
+        return True
+    referred_status = str(getattr(routing_result, "referred_object_status", "") or "").strip()
+    referred_type = str(getattr(routing_result, "referred_object_type", "") or "").strip()
+    if referred_status in {"missing", "ambiguous"} and referred_type in {"product", "product_set", "none", ""}:
+        return True
+    plan_text = " ".join(str(item or "").strip().lower() for item in (getattr(routing_result, "execution_plan", None) or ()))
+    domains = list(getattr(routing_result, "domains", []) or [])
+    if "clarify" not in plan_text:
+        return False
+    if any(token in plan_text for token in ("product", "item", "model", "상품", "모델", "대상")):
+        return True
+    return domains == [MultiAgentDomain.Domain.LEADING]
 
 
 def _has_current_turn_p0_auto_chain_anchor(
@@ -2046,6 +2071,11 @@ def _should_preserve_router_contract(
 ) -> bool:
     if routing_result is None:
         return False
+    if (
+        candidate_override in _PRODUCT_OVERRIDE_CANDIDATES
+        and _router_contract_requires_current_turn_clarification(routing_result)
+    ):
+        return True
     is_high_confidence_comparison = _router_contract_is_high_confidence_comparison(routing_result)
     is_high_confidence_event_content = _router_contract_is_high_confidence_event_content(routing_result)
     is_high_confidence_protected_action = _router_contract_is_high_confidence_protected_action(routing_result)
@@ -24472,31 +24502,6 @@ class TStationChatServiceV2:
                 last_user_text,
                 regex_slots.intent_candidate,
             )
-            stale_goods_no = merged_slots.goods_no
-            stale_tire_model = merged_slots.tire_model
-            stale_payment_amount = merged_slots.payment_amount
-            if _clear_stale_product_identity_for_fresh_transaction(
-                merged_slots,
-                last_user_text,
-                regex_slots.intent_candidate,
-            ):
-                logger.info(
-                    "[SLOTS] Fresh product transaction request in current turn; clearing stale product slots "
-                    "goods_no=%r tire_model=%r payment_amount=%r",
-                    stale_goods_no,
-                    stale_tire_model,
-                    stale_payment_amount,
-                )
-            demoted_size_context = _demote_stale_tire_size_for_new_product_transaction(
-                merged_slots,
-                last_user_text,
-                regex_slots.intent_candidate,
-            )
-            if demoted_size_context:
-                logger.info(
-                    "[SLOTS] Demoted carried tire_size for fresh product transaction: %s",
-                    demoted_size_context,
-            )
             preorder_slot_values = preorder_slot_values_from_data(latest_preorder_tmpl)
             preorder_confirmation_turn = _is_preorder_confirmation_reply(last_user_text, latest_preorder_tmpl)
             current_turn_order_recovery_anchor = _has_current_turn_order_recovery_anchor(
@@ -26986,6 +26991,44 @@ class TStationChatServiceV2:
             regex_slots=regex_slots,
             explicit_store_purchase_chain_request=explicit_store_purchase_chain_request,
         )
+        if fresh_product_transaction_request:
+            if _router_contract_requires_current_turn_clarification(routing_result):
+                logger.info(
+                    "[ROUTER_CONTRACT] blocked fresh product override because router requested clarification "
+                    "(session_id=%s domains=%s plan=%s referred_status=%s referred_type=%s)",
+                    request.session_id,
+                    [getattr(domain, "value", domain) for domain in list(getattr(routing_result, "domains", []) or [])],
+                    list(getattr(routing_result, "execution_plan", []) or []),
+                    getattr(routing_result, "referred_object_status", None),
+                    getattr(routing_result, "referred_object_type", None),
+                )
+                fresh_product_transaction_request = False
+            else:
+                stale_goods_no = merged_slots.goods_no
+                stale_tire_model = merged_slots.tire_model
+                stale_payment_amount = merged_slots.payment_amount
+                if _clear_stale_product_identity_for_fresh_transaction(
+                    merged_slots,
+                    last_user_text,
+                    regex_slots.intent_candidate,
+                ):
+                    logger.info(
+                        "[SLOTS] Fresh product transaction request after router validation; clearing stale product "
+                        "slots goods_no=%r tire_model=%r payment_amount=%r",
+                        stale_goods_no,
+                        stale_tire_model,
+                        stale_payment_amount,
+                    )
+                demoted_size_context = _demote_stale_tire_size_for_new_product_transaction(
+                    merged_slots,
+                    last_user_text,
+                    regex_slots.intent_candidate,
+                )
+                if demoted_size_context:
+                    logger.info(
+                        "[SLOTS] Demoted carried tire_size for router-validated fresh product transaction: %s",
+                        demoted_size_context,
+                    )
         if (
             explicit_store_purchase_chain_request
             and not _DATEPICK_SELECTION_RE.match(last_user_text or "")

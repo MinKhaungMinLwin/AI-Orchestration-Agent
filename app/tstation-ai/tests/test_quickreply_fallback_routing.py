@@ -266,6 +266,7 @@ from services.tstation.chat import (
     _router_contract_is_high_confidence_comparison,
     _router_contract_is_high_confidence_policy,
     _router_contract_is_high_confidence_transaction_flow,
+    _router_contract_requires_current_turn_clarification,
     _restore_store_service_search_contract,
     _store_attribute_selection_continuation_inquiry,
     _store_attribute_selection_continuation_from_location_selection,
@@ -2503,6 +2504,35 @@ def test_high_confidence_transaction_router_contract_allows_explicit_product_res
 
     assert _router_contract_is_high_confidence_transaction_flow(routing)
     assert not _should_preserve_router_contract(
+        routing_result=routing,
+        candidate_override="p0b_transaction_redirect",
+        override_reason="missing_goods_no_for_explicit_transaction",
+    )
+
+
+def test_router_clarification_contract_blocks_fresh_product_override() -> None:
+    routing = MultiAgentDomain(
+        reason="missing product for price question",
+        domains=[MultiAgentDomain.Domain.LEADING],
+        execution_plan=["clarify what product or item the user means before pricing"],
+        user_behavior="asking price without naming a product",
+        flow="active purchase flow exists but current turn asks price without product",
+        claim_check_type="none",
+        complaint_scope="none",
+        planner_confidence=0.82,
+        needs_clarification=True,
+        referred_object_status="missing",
+        referred_object_type="product",
+        agent_prompt_profile="full",
+    )
+
+    assert _router_contract_requires_current_turn_clarification(routing) is True
+    assert _should_preserve_router_contract(
+        routing_result=routing,
+        candidate_override="fresh_unsized_product_transaction",
+        override_reason="missing_tire_size_for_explicit_purchase_product",
+    )
+    assert _should_preserve_router_contract(
         routing_result=routing,
         candidate_override="p0b_transaction_redirect",
         override_reason="missing_goods_no_for_explicit_transaction",
