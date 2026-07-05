@@ -6,6 +6,7 @@ from schemas.tstation.slots import ConversationSlots
 from services.tstation.policies.slot_fill_controller import (
     _flow_state_reconciliation,
     apply_router_location_slot_fill,
+    can_promote_existing_store_for_expected_slot_fill,
 )
 from services.tstation.policies.slot_fill_policy import expected_slot_fill_precheck
 from services.tstation.policies.ui_action_policy import (
@@ -239,6 +240,19 @@ def test_router_location_slot_fill_replaces_stale_region_and_resets_store_schedu
     assert active_context["tool_args_patch"]["region_code"] == "고양시"
     assert active_context["product"]["goods_no"] == "G000000320151"
     assert "last_candidates" not in active_context
+
+
+def test_current_turn_region_fill_blocks_stale_store_slot_promotion() -> None:
+    assert not can_promote_existing_store_for_expected_slot_fill(
+        location_slot_fill_matched=True,
+        location_selection_resume_source="expected_slot_fill:store",
+        existing_shop_id="F00071",
+    )
+    assert can_promote_existing_store_for_expected_slot_fill(
+        location_slot_fill_matched=False,
+        location_selection_resume_source="expected_slot_fill:store",
+        existing_shop_id="F00071",
+    )
 
 
 def test_schedule_slot_fill_requires_current_turn_schedule_signal() -> None:

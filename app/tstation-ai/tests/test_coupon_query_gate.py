@@ -56,6 +56,45 @@ def test_coupon_gate_accepts_product_coupon_eligibility() -> None:
     assert decision.coupon_hint == "쿠폰"
 
 
+def test_coupon_gate_does_not_turn_applied_order_coupon_question_into_owned_lookup() -> None:
+    for user_text in (
+        "적용된 쿠폰이 뭐야?",
+        "어떤 쿠폰이 적용됐어?",
+        "할인 적용 내역 알려줘",
+    ):
+        decision = decide_coupon_query_gate(
+            user_text=user_text,
+            model=_FakeGateModel(
+                CouponQueryGateDecision(
+                    intent=CouponQueryIntent.OWNED_COUPON_LOOKUP,
+                    confidence=0.92,
+                    product_name=None,
+                    coupon_hint=None,
+                    reason="Incorrect owned coupon lookup route.",
+                )
+            ),
+        )
+
+        assert decision.intent == CouponQueryIntent.NONE
+
+
+def test_coupon_gate_still_allows_plain_owned_coupon_lookup() -> None:
+    decision = decide_coupon_query_gate(
+        user_text="내 보유 쿠폰 뭐 있어?",
+        model=_FakeGateModel(
+            CouponQueryGateDecision(
+                intent=CouponQueryIntent.PRODUCT_COUPON_ELIGIBILITY,
+                confidence=0.9,
+                product_name=None,
+                coupon_hint="쿠폰",
+                reason="Incorrect product route.",
+            )
+        ),
+    )
+
+    assert decision.intent == CouponQueryIntent.OWNED_COUPON_LOOKUP
+
+
 def test_coupon_gate_routes_product_name_usable_coupon_before_usage_policy() -> None:
     for user_text in (
         "키너지 ex에 쓸 수 있는 쿠폰은?",

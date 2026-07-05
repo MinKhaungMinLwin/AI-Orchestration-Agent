@@ -23,6 +23,7 @@ from services.tstation.policies.preorder_event_builder import build_preorder_eve
 from services.tstation.policies.resolved_context import build_resolved_turn_context
 from services.tstation.policies.response_decision import ResponseDecision, ToolPlan
 from services.tstation.policies.router_evidence import merge_router_evidence_known_slots
+from services.tstation.policies.router_intent_schema import canonical_router_intent
 from services.tstation.policies.support_response_policy import (
     build_general_cancel_fee_policy_event,
 )
@@ -814,7 +815,8 @@ def build_turn_contract(
     )
     if planner_intent == "unknown":
         planner_intent = None
-    policy_intent = str(getattr(routing_result, "policy_intent", "") or "")
+    raw_policy_intent = str(getattr(routing_result, "policy_intent", "") or "")
+    policy_intent = canonical_router_intent(raw_policy_intent)
     router_wins_intent = _router_wins_current_turn_intent(
         user_text=user_text,
         planner_intent=planner_intent,
@@ -2631,13 +2633,20 @@ def build_response_policy_guard_event(contract: TurnContract) -> dict[str, Any]:
             {"label": "다른 매장 찾기", "domain": "TRANSACTION"},
         ]
     else:
-        missing_slots = _missing_slots_for_action_prompt(contract) or ("product",)
-        missing_summary = _missing_slot_summary_text(missing_slots)
-        message = (
-            "현재 확인된 정보만으로 바로 진행하기 어려워요. "
-            f"부족한 정보는 {missing_summary}입니다. 필요한 정보를 먼저 확인한 뒤 이어서 도와드릴게요."
-        )
-        quick_replies = _clarification_chips(missing_slots)
+        missing_slots = _missing_slots_for_action_prompt(contract)
+        if missing_slots:
+            missing_summary = _missing_slot_summary_text(missing_slots)
+            message = (
+                "현재 확인된 정보만으로 바로 진행하기 어려워요. "
+                f"부족한 정보는 {missing_summary}입니다. 필요한 정보를 먼저 확인한 뒤 이어서 도와드릴게요."
+            )
+            quick_replies = _clarification_chips(missing_slots)
+        else:
+            message = "필요한 정보는 확인되어 있어요. 조건을 다시 조회한 뒤 이어서 진행할게요."
+            quick_replies = [
+                {"label": "다시 조회", "domain": "TRANSACTION"},
+                {"label": "처음부터 다시", "domain": "LEADING"},
+            ]
 
     return _annotate_contract_guard_event({
         "type": "data",
@@ -6142,6 +6151,9 @@ def _normalize_plan_intent(value: str) -> str:
     # applicable-products keeps its own dedicated intent, so it is excluded here.
     if "applicable_products" in normalized and "coupon" not in normalized:
         return "event_applicable_products_lookup"
+    canonical = canonical_router_intent(normalized)
+    if canonical and canonical != normalized:
+        return canonical
     aliases = {
         "resolve_product": "resolve_or_describe_product",
         "continue_purchase": "quick_order_reservation",

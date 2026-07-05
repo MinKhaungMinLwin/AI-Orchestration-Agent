@@ -133,9 +133,14 @@ def test_runtime_product_change_keeps_size_quantity_region_but_clears_product_de
     existing = ConversationSlots(
         goods_no="GOLD00000001",
         tire_model="벤투스 S2 AS",
+        pending_product_name="벤투스 S2 AS",
         tire_size="245/45R18",
         ord_qty=4,
         region="분당",
+        shop_id="F00001",
+        shop_name="티스테이션 분당점",
+        requested_cal_day="20260708",
+        rsv_hour="10",
         payment_amount=480000,
     )
 
@@ -143,10 +148,15 @@ def test_runtime_product_change_keeps_size_quantity_region_but_clears_product_de
 
     assert updated.goods_no == "GNEW00000001"
     assert updated.tire_model is None
+    assert updated.pending_product_name is None
     assert updated.payment_amount is None
     assert updated.tire_size == "245/45R18"
     assert updated.ord_qty == 4
     assert updated.region == "분당"
+    assert updated.shop_id is None
+    assert updated.shop_name is None
+    assert updated.requested_cal_day is None
+    assert updated.rsv_hour is None
 
 
 def test_merge_drops_action_label_residue_product_identity() -> None:
@@ -184,6 +194,9 @@ def test_runtime_size_change_requires_product_requery_but_keeps_model_quantity_s
         tire_size="245/45R18",
         ord_qty=2,
         shop_id="F00721",
+        shop_name="티스테이션 판교점",
+        requested_cal_day="20260708",
+        rsv_hour="10",
         payment_amount=240000,
     )
 
@@ -194,7 +207,10 @@ def test_runtime_size_change_requires_product_requery_but_keeps_model_quantity_s
     assert updated.payment_amount is None
     assert updated.tire_model == "벤투스 S2 AS"
     assert updated.ord_qty == 2
-    assert updated.shop_id == "F00721"
+    assert updated.shop_id is None
+    assert updated.shop_name is None
+    assert updated.requested_cal_day is None
+    assert updated.rsv_hour is None
 
 
 def test_named_store_stock_turn_extracts_store_name_without_region_reset() -> None:
@@ -224,12 +240,18 @@ def test_runtime_store_change_clears_store_dependent_amount() -> None:
         tire_size="245/45R18",
         ord_qty=2,
         shop_id="F00001",
+        shop_name="티스테이션 한남점",
+        requested_cal_day="20260708",
+        rsv_hour="10",
         payment_amount=240000,
     )
 
     updated = existing.apply_runtime_values({"shop_id": "F00002"}, source="store_selection")
 
     assert updated.shop_id == "F00002"
+    assert updated.shop_name is None
+    assert updated.requested_cal_day is None
+    assert updated.rsv_hour is None
     assert updated.payment_amount is None
     assert updated.goods_no == "G000000312970"
     assert updated.tire_size == "245/45R18"

@@ -629,6 +629,36 @@ def test_contract_direct_recommendation_preserves_explicit_rcmd_type(monkeypatch
     assert calls == [{"vehicle_type": "suv", "tire_size": "245/45R19", "rcmd_type": "low_vibration"}]
 
 
+def test_direct_path_allows_transaction_store_preview_when_purchase_slots_are_ready() -> None:
+    decision = evaluate_contract_direct_path(
+        turn_contract=TurnContract(
+            domain="transaction",
+            intent="quick_order_reservation",
+            known_slots={
+                "goods_no": "G000000310126",
+                "product_name": "벤투스 S2 AS",
+                "tire_size": "245/45R19",
+                "ord_qty": 2,
+                "shop_name": "티스테이션 분당정자점",
+                "region": "분당",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            },
+            allowed_tools=("transaction_store_preview_tool",),
+            preferred_tool="transaction_store_preview_tool",
+            response_decision={"template": "location", "metadata": {"response_shape_key": "reservation_store_candidates"}},
+            action_mode="purchase_continuation",
+            context_state="resumed",
+        ),
+        router_evidence={"primary_action": "reserve", "confidence": 0.99},
+        user_text="티스테이션 분당정자점",
+    )
+
+    assert decision.eligible is True
+    assert decision.tool == "transaction_store_preview_tool"
+    assert decision.reason == "transaction_store_preview"
+
+
 def test_contract_recovery_runs_active_flow_transaction_next_tool_from_discovery_contract(monkeypatch) -> None:
     from services.tstation import template_mapper
     from services.tstation.executors import contract_required_tool_executor as executor

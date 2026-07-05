@@ -1,3 +1,5 @@
+import pytest
+
 from schemas.tstation.slots import ConversationSlots
 from services.tstation.policies.contract_required_tool_candidate import (
     _contract_required_tool_candidate,
@@ -119,6 +121,26 @@ def test_forbidden_tool_suppresses_candidate_creation() -> None:
     candidate = _contract_required_tool_candidate(
         turn_contract=contract,
         user_text="Kinergy EX",
+        merged_slots=None,
+    )
+
+    assert candidate is None
+
+
+@pytest.mark.parametrize("intent", ["unclear", "out_of_scope", "unsupported"])
+def test_no_execution_intents_suppress_candidate_creation(intent: str) -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent=intent,
+        allowed_tools=("get_final_price_tool",),
+        preferred_tool="get_final_price_tool",
+        tool_args_patch={"goods_no": "G000000309780"},
+        context_state="active",
+    )
+
+    candidate = _contract_required_tool_candidate(
+        turn_contract=contract,
+        user_text="이거 봐줘",
         merged_slots=None,
     )
 
@@ -497,6 +519,49 @@ def test_schedule_slot_fill_price_lookup_candidate_requires_ready_order_slots() 
         turn_contract=contract,
         user_text="2026년 7월 5일 (일)\n15:00",
         merged_slots=ConversationSlots(),
+    )
+
+    assert candidate is None
+
+
+def test_price_or_coupon_contract_runs_final_price_for_confirmed_goods() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="price_or_coupon_check",
+        known_slots={"goods_no": "G000000310126", "ord_qty": 2},
+        allowed_tools=("search_product_tool", "get_final_price_tool", "get_my_coupons_tool"),
+        preferred_tool="get_final_price_tool",
+        response_decision={"template": "quickReply", "metadata": {"response_shape_key": "price_coupon_summary"}},
+        context_state="active",
+    )
+
+    candidate = _contract_required_tool_candidate(
+        turn_contract=contract,
+        user_text="적용된 할인이 뭐야?",
+        merged_slots=None,
+    )
+
+    assert candidate is not None
+    assert candidate.tool_name == "get_final_price_tool"
+    assert candidate.tool_input == {"goods_no": "G000000310126"}
+    assert candidate.tool_input_source == "turn_contract_price_or_coupon_check"
+
+
+def test_price_or_coupon_contract_does_not_use_stale_merged_goods_no() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="price_or_coupon_check",
+        known_slots={"product_name": "새로 물어본 상품", "ord_qty": 2},
+        allowed_tools=("search_product_tool", "get_final_price_tool", "get_my_coupons_tool"),
+        preferred_tool="get_final_price_tool",
+        response_decision={"template": "quickReply", "metadata": {"response_shape_key": "price_coupon_summary"}},
+        context_state="active",
+    )
+
+    candidate = _contract_required_tool_candidate(
+        turn_contract=contract,
+        user_text="이 상품 적용된 할인이 뭐야?",
+        merged_slots=ConversationSlots(goods_no="G000000_STALE"),
     )
 
     assert candidate is None

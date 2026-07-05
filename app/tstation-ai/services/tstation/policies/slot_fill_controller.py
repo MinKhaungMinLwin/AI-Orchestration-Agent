@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 from schemas.tstation.slots import ConversationSlots
-from services.tstation.policies.flow_controller import resolve_purchase_order_flow
+from services.tstation.policies.flow_controller import evaluate_flow_compatibility, resolve_purchase_order_flow
 from services.tstation.policies.flow_state import flow_state_values_from_slot_values
 from services.tstation.policies.price_basis_policy import PRICE_BASIS_FIELDS
 from services.tstation.policies.resolved_context import canonical_context_from_template_boundary
@@ -67,6 +67,25 @@ class RouterLocationSlotFillDecision:
     slot_patch: Mapping[str, Any] = field(default_factory=dict)
     resume_source: str = "none"
     trace_metadata: Mapping[str, Any] = field(default_factory=dict)
+
+
+def can_promote_existing_store_for_expected_slot_fill(
+    *,
+    location_slot_fill_matched: bool,
+    location_selection_resume_source: str,
+    existing_shop_id: Any,
+) -> bool:
+    """Return whether a stored shop_id can fill an expected store slot.
+
+    A current-turn region/place search such as "고양시청 근처" changes the store
+    search area. In that turn, an old shop_id must not be reused as if the user
+    selected the previous store candidate.
+    """
+    if location_slot_fill_matched:
+        return False
+    if str(location_selection_resume_source or "") != "expected_slot_fill:store":
+        return False
+    return str(existing_shop_id or "").strip() != ""
 
 
 def build_router_slot_fill_context(
@@ -131,6 +150,23 @@ def apply_router_location_slot_fill(
         return RouterLocationSlotFillDecision(
             slots=slots,
             trace_metadata={"router_location_slot_fill": {"matched": False}},
+        )
+    compatibility = evaluate_flow_compatibility(
+        active_flow=_active_flow_context_from_slots(slots),
+        proposed_slot_patch=location_patch,
+        router_evidence=_routing_result_snapshot(routing_result),
+    )
+    if not compatibility.compatible:
+        return RouterLocationSlotFillDecision(
+            slots=slots,
+            trace_metadata={
+                "router_location_slot_fill": {
+                    "matched": False,
+                    "reason": "flow_compatibility_blocked",
+                    "slot_patch": dict(location_patch),
+                    "compatibility": compatibility.to_dict(),
+                }
+            },
         )
 
     updated_slots = slots.apply_runtime_values(location_patch, source="router_location_slot_fill")
@@ -200,20 +236,45 @@ def resolve_pre_router_slot_fill(
         for key, value in dict(precheck.get("slot_patch") or {}).items()
         if value not in (None, "", [], {})
     }
-    resolved_slots = (
+    compatibility = evaluate_flow_compatibility(
+        active_flow=_active_flow_context_from_slots(merged_slots),
+        proposed_slot_patch=slot_patch,
+        router_evidence={
+            "intent": str(router_context.get("current_flow") or ""),
+            "slot_fill_source": "expected_slot_fill_precheck",
+        },
+        user_text=user_text,
+    )
+    if not compatibility.compatible:
+        trace = {
+            "expected_slot_fill_precheck": precheck,
+            "slot_patch": slot_patch,
+            "flow_compatibility": compatibility.to_dict(),
+        }
+        return SlotFillDecision(
+            slots=merged_slots,
+            precheck={
+                **dict(precheck),
+                "matched": False,
+                "reason": "flow_compatibility_blocked",
+                "flow_compatibility": compatibility.to_dict(),
+            },
+            trace_metadata=trace,
+        )
+    hypothetical_slots = (
         merged_slots.apply_runtime_values(slot_patch, source="expected_slot_fill_precheck")
         if slot_patch
         else merged_slots
     )
     flow_state_reconciliation = _flow_state_reconciliation(
         user_text=user_text,
-        merged_slots=resolved_slots,
+        merged_slots=hypothetical_slots,
         slot_patch=slot_patch,
         precheck=precheck,
     )
     reconciliation_slot_patch = dict(flow_state_reconciliation.get("slot_patch") or {})
     if reconciliation_slot_patch:
-        resolved_slots = resolved_slots.apply_runtime_values(
+        hypothetical_slots = hypothetical_slots.apply_runtime_values(
             reconciliation_slot_patch,
             source="flow_state_after_slot_patch",
         )
@@ -233,7 +294,7 @@ def resolve_pre_router_slot_fill(
         trace_metadata["routing_override"] = routing_override
 
     return SlotFillDecision(
-        slots=resolved_slots,
+        slots=merged_slots,
         matched=True,
         slot_patch=slot_patch,
         filled_slot=str(precheck.get("filled_slot") or "none"),
@@ -337,6 +398,27 @@ def _router_location_can_fill_transaction_region(
     }:
         return False
     return bool(_has_transaction_context_shape(slots))
+
+
+def _active_flow_context_from_slots(slots: ConversationSlots) -> dict[str, Any]:
+    availability_context = getattr(slots, "availability_context", None)
+    if isinstance(availability_context, Mapping) and isinstance(availability_context.get("active_flow_context"), Mapping):
+        return dict(availability_context["active_flow_context"])
+    return {}
+
+
+def _routing_result_snapshot(routing_result: Any | None) -> dict[str, Any]:
+    if routing_result is None:
+        return {}
+    if isinstance(routing_result, Mapping):
+        return dict(routing_result)
+    if hasattr(routing_result, "model_dump"):
+        return dict(routing_result.model_dump(exclude_none=True))
+    return {
+        key: value
+        for key in ("intent", "policy_intent", "sub_intent", "domain", "execution_plan")
+        if (value := getattr(routing_result, key, None)) not in (None, "", [], {})
+    }
 
 
 def _has_transaction_context_shape(slots: ConversationSlots) -> bool:

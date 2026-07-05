@@ -79,6 +79,9 @@ current_return_visit_store_flow: contextvars.ContextVar[bool] = contextvars.Cont
 current_excluded_store_ids: contextvars.ContextVar[set[str]] = contextvars.ContextVar(
     "current_excluded_store_ids", default=set()
 )
+current_price_summary_context: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar(
+    "current_price_summary_context", default={}
+)
 
 # True when the current turn asks whether a store is open/closed or bookable on
 # a specific date. In that case a single-day `get_store_detail_tool` result
@@ -3699,6 +3702,112 @@ def _map_contract_response_shape(tool_data_list: list[dict], assistant_text: str
     return _with_contract_renderer_metadata(event, response_shape_key)
 
 
+def _format_won(value: int | None) -> str:
+    if value is None:
+        return ""
+    return f"{int(value):,}원"
+
+
+def _map_price_or_coupon_summary(tool_data_list: list[dict], assistant_text: str) -> dict | None:
+    response_shape_key = _current_response_shape_key()
+    if response_shape_key not in {"price_coupon_summary", "product_coupon_discount_amount"}:
+        return None
+    entries = _find_entries(tool_data_list, "get_final_price_tool")
+    if not entries:
+        return None
+    entry = entries[-1]
+    row = _unwrap(entry)
+    if not isinstance(row, dict):
+        return None
+    if isinstance(row.get("data"), dict):
+        row = row["data"]
+    items = row.get("items")
+    if isinstance(items, list) and items and isinstance(items[0], dict):
+        row = items[0]
+
+    args = _tool_args(entry)
+    context = current_price_summary_context.get() or {}
+    product_name = (
+        _get_str(args, "product_name", "productName")
+        or _get_str(context, "product_name", "productName", "tire_model", "pending_product_name")
+        or _get_str(row, "goods_nm", "product_name", "productName", "title")
+        or "해당 상품"
+    )
+    tire_size = (
+        _get_str(args, "tire_size", "tireSize")
+        or _get_str(context, "tire_size", "tireSize")
+        or _get_str(row, "tire_size", "tireSize")
+    )
+    try:
+        quantity = max(
+            1,
+            int(
+                args.get("ord_qty")
+                or args.get("quantity")
+                or context.get("ord_qty")
+                or context.get("quantity")
+                or row.get("ord_qty")
+                or 1
+            ),
+        )
+    except (TypeError, ValueError):
+        quantity = 1
+
+    sale_unit = int(_get_num(row, "sale_prc", default=0)) or None
+    final_unit = _display_final_unit_price(row)
+    if sale_unit is None or final_unit is None:
+        return None
+    discount_unit = int(_get_num(row, "cheapest_total_discount", default=0)) or None
+    if discount_unit is None:
+        discount_unit = max(0, int(sale_unit) - int(final_unit))
+
+    coupons = row.get("cheapest_applied_coupons") or row.get("applied_coupons")
+    coupon_names: list[str] = []
+    if isinstance(coupons, list):
+        for coupon in coupons:
+            if not isinstance(coupon, Mapping):
+                continue
+            coupon_name = _get_str(coupon, "cpn_nm", "coupon_name", "name")
+            if coupon_name and coupon_name not in coupon_names:
+                coupon_names.append(coupon_name)
+
+    product_label = " ".join(part for part in (product_name, tire_size) if part)
+    lines = [
+        f"{product_label} {quantity}개 기준으로 적용 가능한 할인 내역을 확인했어요.",
+        "",
+        f"- 정가 합계: {_format_won(int(sale_unit) * quantity)}",
+        f"- 쿠폰/혜택 할인액: {_format_won(int(discount_unit) * quantity)}",
+        f"- 최종 혜택가: {_format_won(int(final_unit) * quantity)}",
+    ]
+    if coupon_names:
+        lines.append(f"- 적용 기준 쿠폰: {', '.join(coupon_names[:3])}")
+
+    return _with_contract_renderer_metadata(
+        {
+            "type": "data",
+            "template": "quickReply",
+            "source_domain": "transaction",
+            "assistant_response_source": "code_price_or_coupon_final_price",
+            "data": {
+                "assistantResponse": "\n".join(lines),
+                "quickReplies": [
+                    {"label": "구매하기", "domain": "TRANSACTION"},
+                    {"label": "장바구니 담기", "domain": "TRANSACTION"},
+                    {"label": "내 쿠폰 조회", "domain": "TRANSACTION"},
+                ],
+                "predictedDomains": ["TRANSACTION"],
+                "metadata": {
+                    "response_shape_key": response_shape_key,
+                    "goods_no": args.get("goods_no") or row.get("goods_no"),
+                    "ordQty": quantity,
+                    "ord_qty": quantity,
+                },
+            },
+        },
+        response_shape_key,
+    )
+
+
 def _simple_date_label(value: Any) -> str:
     text = str(value or "").strip()
     if not text:
@@ -7142,6 +7251,10 @@ def try_build_template(accumulated_tool_data: list[dict], assistant_text: str) -
             (contract_response_shape.get("data") or {}).get("metadata", {}).get("contract_renderer_key"),
         )
         return contract_response_shape
+
+    price_or_coupon_summary = _map_price_or_coupon_summary(accumulated_tool_data, assistant_text)
+    if price_or_coupon_summary is not None:
+        return price_or_coupon_summary
 
     unsized_tire_summary = _map_unsized_tire_summary(accumulated_tool_data, assistant_text)
     if unsized_tire_summary is not None:

@@ -47,6 +47,7 @@ from services.tstation.policies.flow_state import (
     store_candidate_selection_patch,
     store_candidates_flow_delta,
 )
+from services.tstation.policies.router_evidence import router_place_slot_patch
 from services.tstation.agents.b_discovery_agent import tools as discovery_tools
 from services.tstation.agents.b_discovery_agent.agent import (
     DISCOVERY_AGENT_SYSTEM_PROMPT_TEMPLATE,
@@ -265,6 +266,7 @@ from services.tstation.chat import (
     _router_contract_is_high_confidence_comparison,
     _router_contract_is_high_confidence_policy,
     _router_contract_is_high_confidence_transaction_flow,
+    _router_contract_requires_current_turn_clarification,
     _restore_store_service_search_contract,
     _store_attribute_selection_continuation_inquiry,
     _store_attribute_selection_continuation_from_location_selection,
@@ -2502,6 +2504,35 @@ def test_high_confidence_transaction_router_contract_allows_explicit_product_res
 
     assert _router_contract_is_high_confidence_transaction_flow(routing)
     assert not _should_preserve_router_contract(
+        routing_result=routing,
+        candidate_override="p0b_transaction_redirect",
+        override_reason="missing_goods_no_for_explicit_transaction",
+    )
+
+
+def test_router_clarification_contract_blocks_fresh_product_override() -> None:
+    routing = MultiAgentDomain(
+        reason="missing product for price question",
+        domains=[MultiAgentDomain.Domain.LEADING],
+        execution_plan=["clarify what product or item the user means before pricing"],
+        user_behavior="asking price without naming a product",
+        flow="active purchase flow exists but current turn asks price without product",
+        claim_check_type="none",
+        complaint_scope="none",
+        planner_confidence=0.82,
+        needs_clarification=True,
+        referred_object_status="missing",
+        referred_object_type="product",
+        agent_prompt_profile="full",
+    )
+
+    assert _router_contract_requires_current_turn_clarification(routing) is True
+    assert _should_preserve_router_contract(
+        routing_result=routing,
+        candidate_override="fresh_unsized_product_transaction",
+        override_reason="missing_tire_size_for_explicit_purchase_product",
+    )
+    assert _should_preserve_router_contract(
         routing_result=routing,
         candidate_override="p0b_transaction_redirect",
         override_reason="missing_goods_no_for_explicit_transaction",
@@ -17499,8 +17530,13 @@ def test_runtime_goods_no_change_preserves_active_size_and_quantity() -> None:
     base = ConversationSlots(
         goods_no="G-OLD",
         tire_model="벤투스 S2 AS",
+        pending_product_name="벤투스 S2 AS",
         tire_size="225/45R17",
         ord_qty=4,
+        shop_id="F001",
+        shop_name="티스테이션 한남점",
+        requested_cal_day="20260708",
+        rsv_hour="10",
         payment_amount=400000,
     )
 
@@ -17508,8 +17544,13 @@ def test_runtime_goods_no_change_preserves_active_size_and_quantity() -> None:
 
     assert updated.goods_no == "G-NEW"
     assert updated.tire_model is None
+    assert updated.pending_product_name is None
     assert updated.tire_size == "225/45R17"
     assert updated.ord_qty == 4
+    assert updated.shop_id is None
+    assert updated.shop_name is None
+    assert updated.requested_cal_day is None
+    assert updated.rsv_hour is None
     assert updated.payment_amount is None
 
 
@@ -17523,6 +17564,8 @@ def test_size_quantity_and_store_slot_resets_are_canonical() -> None:
         region="서울",
         shop_id="F001",
         shop_name="티스테이션 한남점",
+        requested_cal_day="20260708",
+        rsv_hour="10",
     )
 
     changed_size = base.apply_runtime_values({"tire_size": "245/45R18"}, source="tool_boundary")
@@ -17532,13 +17575,22 @@ def test_size_quantity_and_store_slot_resets_are_canonical() -> None:
     assert changed_size.tire_size == "245/45R18"
     assert changed_size.goods_no is None
     assert changed_size.payment_amount is None
-    assert changed_size.shop_id == "F001"
+    assert changed_size.shop_id is None
+    assert changed_size.shop_name is None
+    assert changed_size.requested_cal_day is None
+    assert changed_size.rsv_hour is None
     assert changed_qty.ord_qty == 4
     assert changed_qty.goods_no == "G-OLD"
     assert changed_qty.payment_amount is None
+    assert changed_qty.shop_id is None
+    assert changed_qty.shop_name is None
+    assert changed_qty.requested_cal_day is None
+    assert changed_qty.rsv_hour is None
     assert changed_region.region == "성남"
     assert changed_region.shop_id is None
     assert changed_region.shop_name is None
+    assert changed_region.requested_cal_day is None
+    assert changed_region.rsv_hour is None
 
 
 def test_structured_store_selection_turn_skips_same_store_cleanup() -> None:
@@ -22570,7 +22622,7 @@ def test_region_followup_in_purchase_context_keeps_quick_order_reservation() -> 
     assert response.metadata["response_shape_key"] == "reservation_store_candidates"
 
 
-def test_region_input_context_resolution_marks_expected_region_slot_fill() -> None:
+def test_region_input_context_resolution_keeps_free_text_for_router_entity() -> None:
     resolution = resolve_region_or_store_input_context(
         user_text="분당",
         ui_action=None,
@@ -22594,10 +22646,74 @@ def test_region_input_context_resolution_marks_expected_region_slot_fill() -> No
         ),
     )
 
-    assert resolution.resolved is True
-    assert resolution.expected_contract_intent == "quick_order_reservation"
-    assert resolution.resume_source == "expected_slot_fill:region"
-    assert resolution.slots_to_promote["region"] == "분당"
+    assert resolution.resolved is False
+    assert resolution.resume_source == "none"
+
+
+def test_router_place_slot_patch_prefers_router_location_entity() -> None:
+    patch = router_place_slot_patch(
+        {
+            "entities": {
+                "location": {
+                    "mentioned": True,
+                    "name": "분당",
+                    "type": "region",
+                    "reference_text": "분당",
+                    "confidence": 0.91,
+                }
+            }
+        },
+        expected_slot="region",
+    )
+
+    assert patch == {"region": "분당", "place_query": "분당"}
+
+
+def test_pre_router_region_slot_fill_does_not_commit_free_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    from services.tstation.policies import slot_fill_controller
+
+    monkeypatch.setattr(slot_fill_controller, "_PRE_ROUTER_SLOT_FILL_ENABLED", True)
+    merged_slots = ConversationSlots(
+        goods_no="G000000319584",
+        tire_size="245/45R19",
+        ord_qty=2,
+        pending_intent="order",
+        goal_type="place_order",
+        stock_check_mode="preview",
+    )
+    resolution = resolve_region_or_store_input_context(
+        user_text="분당",
+        ui_action=None,
+        chip_context=None,
+        latest_quickreply_tmpl={
+            "template": "quickReply",
+            "data": {
+                "assistantResponse": "구매를 진행할 매장을 확인할 지역명을 입력해 주세요.",
+                "quickReplies": [{"label": "분당", "domain": "TRANSACTION"}],
+            },
+        },
+        latest_location_tmpl=None,
+        messages=[],
+        merged_slots=merged_slots,
+    )
+    router_context = build_router_slot_fill_context(
+        slots=merged_slots,
+        user_text="분당",
+        latest_product_tmpl=None,
+        latest_location_tmpl=None,
+        latest_datepick_tmpl=None,
+    )
+    decision = resolve_pre_router_slot_fill(
+        user_text="분당",
+        regex_slots=ConversationSlots.extract_from_user_text("분당"),
+        merged_slots=merged_slots,
+        router_context=router_context,
+        region_store_input_resolution=resolution,
+    )
+
+    assert decision.matched is False
+    assert decision.slots.region is None
+    assert merged_slots.region is None
 
 
 def test_region_input_context_resolution_rejects_order_history_queries() -> None:
@@ -29572,6 +29688,71 @@ def test_transaction_intent_policy_prefers_router_region_over_regex_region() -> 
     assert tool_plan.tool_args_patch["place_query"] == "고양시"
 
 
+def test_transaction_intent_policy_prefers_router_place_query_over_raw_question_text() -> None:
+    known_slots = {
+        "goods_no": "G000000310126",
+        "product_name": "벤투스 S2 AS",
+        "tire_size": "245/45R19",
+        "ord_qty": 2,
+        "region": "고양시청 근처",
+        "place_query": "고양시청 근처",
+        "pending_intent": "order",
+        "goal_type": "place_order",
+        "location_name": "고양시청 근처",
+        "location_type": "place_query",
+        "router_primary_action": "store_selection",
+        "slot_sources": {
+            "location_name": "router_evidence",
+            "place_query": "router_evidence",
+            "location_type": "router_evidence",
+            "router_primary_action": "router_evidence",
+        },
+    }
+
+    frame = build_transaction_intent_frame("고양시청 근처에는?", known_slots=known_slots)
+    tool_plan = plan_transaction_tools(frame)
+
+    assert frame.intent == "quick_order_reservation"
+    assert frame.known_slots["place_query"] == "고양시청"
+    assert tool_plan.preferred_tool == "transaction_store_preview_tool"
+    assert tool_plan.tool_args_patch["place_query"] == "고양시청"
+    assert tool_plan.tool_args_patch["place_query"] != "고양시청 근처에는?"
+
+
+def test_transaction_intent_policy_strips_location_search_suffixes() -> None:
+    cases = {
+        "고양시청 근처": "고양시청",
+        "대화역 인근": "대화역",
+        "분당 지역": "분당",
+    }
+    for raw_location, expected_location in cases.items():
+        known_slots = {
+            "goods_no": "G000000310126",
+            "product_name": "벤투스 S2 AS",
+            "tire_size": "245/45R19",
+            "ord_qty": 2,
+            "region": raw_location,
+            "place_query": raw_location,
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "location_name": raw_location,
+            "location_type": "place_query",
+            "router_primary_action": "store_selection",
+            "slot_sources": {
+                "location_name": "router_evidence",
+                "place_query": "router_evidence",
+                "location_type": "router_evidence",
+                "router_primary_action": "router_evidence",
+            },
+        }
+
+        frame = build_transaction_intent_frame(f"{raw_location}에는?", known_slots=known_slots)
+        tool_plan = plan_transaction_tools(frame)
+
+        assert frame.known_slots["place_query"] == expected_location
+        assert tool_plan.tool_args_patch["place_query"] == frame.known_slots["place_query"]
+
+
 def test_transaction_intent_policy_keeps_pure_stock_region_query_inventory_only() -> None:
     known_slots = {
         "goods_no": "G000000317729",
@@ -33518,6 +33699,35 @@ def test_turn_contract_ignores_freeform_execution_plan_as_planner_intent() -> No
     }
 
 
+def test_turn_contract_canonicalizes_price_benefit_router_alias_without_drift() -> None:
+    contract = build_turn_contract(
+        user_text="적용된 할인이 뭐야?",
+        intent_frame=IntentFrame(domain=PolicyDomain.TRANSACTION, intent="price_or_coupon_check"),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.TRANSACTION],
+            execution_plan=["transaction:price_or_benefit_lookup"],
+        ),
+    )
+
+    assert contract.intent == "price_or_coupon_check"
+    assert contract.planner_intent == "price_or_coupon_check"
+    assert not [item for item in contract.contract_drift if item.get("field") == "intent"]
+
+
+def test_turn_contract_does_not_canonicalize_generic_benefit_lookup_to_price() -> None:
+    contract = build_turn_contract(
+        user_text="혜택 알려줘",
+        intent_frame=IntentFrame(domain=PolicyDomain.DISCOVERY, intent="benefit_event_list_lookup"),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY],
+            execution_plan=["discovery:benefit_lookup"],
+        ),
+    )
+
+    assert contract.planner_intent == "benefit_lookup"
+    assert contract.intent != "price_or_coupon_check"
+
+
 def test_turn_contract_does_not_clarify_normal_product_description() -> None:
     contract = _transaction_turn_contract("dynapro hp3 설명해줘")
 
@@ -37170,6 +37380,80 @@ def test_post_tool_purchase_preview_contract_context_promotes_schedule_slots_to_
     assert promoted["known_slots"]["shop_name"] == "티스테이션 한남점"
     assert promoted["known_slots"]["schedule_mode"] == "in_store_logistics_combined"
     assert "stock_check_mode" not in promoted["known_slots"]
+
+
+def test_post_tool_purchase_preview_contract_context_keeps_purchase_for_multiple_store_candidates() -> None:
+    promoted = _post_tool_purchase_preview_contract_context(
+        tool_name="transaction_store_preview_tool",
+        known_slots={
+            "goods_no": "G000000317677",
+            "tire_size": "215/45R18",
+            "ord_qty": 2,
+            "shop_name": "한남점",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        tool_result={
+            "status": "success",
+            "data": {
+                "schedule": {
+                    "stores": [
+                        {
+                            "shop_id": "F07782",
+                            "shop_nm": "티스테이션 한남점",
+                            "mode": "in_store_logistics_combined",
+                            "slots": [{"cal_day": "20260628", "tm": "09"}],
+                        },
+                        {
+                            "shop_id": "F07783",
+                            "shop_nm": "티스테이션 한남2점",
+                            "mode": "in_store_logistics_combined",
+                            "slots": [{"cal_day": "20260628", "tm": "10"}],
+                        },
+                    ],
+                },
+            },
+        },
+    )
+
+    assert promoted is not None
+    assert promoted["intent"] == "quick_order_reservation"
+    assert promoted["known_slots"]["pending_intent"] == "order"
+    assert promoted["known_slots"]["goal_type"] == "place_order"
+    assert "shop_id" not in promoted["known_slots"]
+    assert "shop_name" not in promoted["known_slots"]
+
+
+def test_post_tool_purchase_preview_contract_context_keeps_purchase_without_explicit_store_hint() -> None:
+    promoted = _post_tool_purchase_preview_contract_context(
+        tool_name="transaction_store_preview_tool",
+        known_slots={
+            "goods_no": "G000000317677",
+            "tire_size": "215/45R18",
+            "ord_qty": 2,
+            "region": "한남",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        tool_result={
+            "status": "success",
+            "data": {
+                "schedule": {
+                    "stores": [{
+                        "shop_id": "F07782",
+                        "shop_nm": "티스테이션 한남점",
+                        "mode": "in_store_logistics_combined",
+                        "slots": [{"cal_day": "20260628", "tm": "09"}],
+                    }],
+                },
+            },
+        },
+    )
+
+    assert promoted is not None
+    assert promoted["intent"] == "quick_order_reservation"
+    assert promoted["known_slots"]["region"] == "한남"
+    assert "shop_id" not in promoted["known_slots"]
 
 
 def test_recommendation_product_pick_defaults_to_product_description_contract() -> None:
@@ -43997,6 +44281,44 @@ def test_response_policy_generic_fallback_names_missing_information() -> None:
     assert event["assistant_response_source"] == "code_turn_contract_response_policy_guard"
     assert "부족한 정보는 예약 날짜/시간입니다" in event["data"]["assistantResponse"]
     assert event["data"]["metadata"]["missingSlots"] == ["booking_datetime"]
+
+
+def test_response_policy_guard_does_not_invent_product_missing_slot_when_next_tool_is_ready() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="quick_order_reservation",
+        known_slots={
+            "goods_no": "G000000310126",
+            "product_name": "벤투스 S2 AS",
+            "tire_size": "245/45R19",
+            "ord_qty": 2,
+            "shop_name": "티스테이션 분당정자점",
+            "region": "분당",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        allowed_tools=("transaction_store_preview_tool",),
+        preferred_tool="transaction_store_preview_tool",
+        response_decision={
+            "template": "location",
+            "metadata": {
+                "response_shape_key": "reservation_store_candidates",
+                "flow_step": "resolve_store",
+                "missing_slots": [],
+            },
+            "forbidden_behaviors": ["unmapped_policy_violation"],
+        },
+        action_mode="purchase_continuation",
+        context_state="resumed",
+        flow_step="resolve_store",
+    )
+
+    event = build_response_policy_guard_event(contract)
+
+    assert event["assistant_response_source"] == "code_turn_contract_response_policy_guard"
+    assert "부족한 정보는 상품입니다" not in event["data"]["assistantResponse"]
+    assert "필요한 정보는 확인되어 있어요" in event["data"]["assistantResponse"]
+    assert event["data"]["metadata"]["missingSlots"] == []
 
 
 def test_unknown_store_service_policy_contract_blocks_datepick_and_schedule_style_reply() -> None:

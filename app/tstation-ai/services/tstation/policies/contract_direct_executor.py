@@ -21,6 +21,7 @@ _DIRECT_TEMPLATE_TOOLS = frozenset({
     "search_stores_complex_tool",
     "get_store_list_tool",
     "get_nearby_stores_tool",
+    "transaction_store_preview_tool",
     "get_store_schedule_tool",
     "get_my_reservations_tool",
 })
@@ -188,6 +189,28 @@ def _evaluate_transaction_contract(
     if tool == "get_store_schedule_tool" and _is_reservation_datepick_contract(turn_contract):
         if known_slots.get("shop_id") or (turn_contract.tool_args_patch or {}).get("shop_id"):
             return DirectPathDecision(True, True, "reservation_schedule", None, tool, "datepick")
+        return _fallback("missing_required_slot")
+    if tool == "transaction_store_preview_tool" and intent in {
+        "quick_order_reservation",
+        "quick_order_with_product_and_quantity",
+        "stock_store_search",
+    }:
+        tool_args_patch = turn_contract.tool_args_patch or {}
+        has_quantity = known_slots.get("ord_qty") or known_slots.get("quantity") or tool_args_patch.get("ord_qty")
+        has_location = (
+            known_slots.get("shop_id")
+            or known_slots.get("shop_name")
+            or known_slots.get("store_name")
+            or known_slots.get("region")
+            or known_slots.get("place_query")
+            or tool_args_patch.get("shop_id")
+            or tool_args_patch.get("shop_name")
+            or tool_args_patch.get("store_name")
+            or tool_args_patch.get("region")
+            or tool_args_patch.get("place_query")
+        )
+        if known_slots.get("goods_no") and known_slots.get("tire_size") and has_quantity and has_location:
+            return DirectPathDecision(True, True, "transaction_store_preview", None, tool, "location")
         return _fallback("missing_required_slot")
     if intent in {"reservation_status_lookup", "reservation_store_info_lookup"} and tool == "get_my_reservations_tool":
         return DirectPathDecision(True, True, "reservation_lookup", None, tool, "quickReply")
