@@ -4221,6 +4221,21 @@ def test_transaction_policy_invalid_store_blocks_datepick() -> None:
     assert _map_datepick([schedule_entry], "예약 가능한 시간을 확인했어요.") is None
 
 
+def test_price_or_coupon_policy_blocks_stale_schedule_datepick() -> None:
+    current_transaction_response_decision.set(ResponseDecision(
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        forbidden_behaviors=("datepick_for_price_or_coupon_check",),
+        metadata={"response_shape_key": "price_or_coupon_check"},
+    ))
+    schedule_entry = _schedule_entry(
+        mode="general",
+        is_installable=True,
+        slots=[{"cal_day": "20260707", "tm": "16"}],
+    )
+
+    assert _map_datepick([schedule_entry], "할인 내역을 확인했어요.") is None
+
 def test_schedule_datepick_filters_reservation_sale_dates_from_same_turn_preview() -> None:
     preview_entry = {
         "tool": "transaction_store_preview_tool",
