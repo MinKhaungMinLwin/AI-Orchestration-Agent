@@ -848,6 +848,18 @@ def _contract_required_price_or_coupon_final_price_tool_input(
     return {"goods_no": goods_no}
 
 
+def is_contract_required_price_or_coupon_final_price(
+    turn_contract: TurnContract | None,
+    *,
+    merged_slots: ConversationSlots | None = None,
+) -> bool:
+    """Return whether price/coupon contract should run final-price before fallback prose."""
+
+    if turn_contract is None:
+        return False
+    return bool(_contract_required_price_or_coupon_final_price_tool_input(turn_contract, merged_slots=merged_slots))
+
+
 def _contract_required_transaction_tool_input(
     *,
     turn_contract: TurnContract,

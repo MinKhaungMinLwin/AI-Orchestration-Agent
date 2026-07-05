@@ -225,6 +225,7 @@ from services.tstation.policies.contract_required_tool_candidate import (
     _is_contract_required_stock_inventory_store_lookup,
     _is_contract_required_transaction_store_preview,
     _is_contract_required_vehicle_recommendation,
+    is_contract_required_price_or_coupon_final_price,
 )
 from services.tstation.policies.contract_direct_executor import evaluate_contract_direct_path
 from services.tstation.executors.contract_required_tool_executor import (
@@ -29332,6 +29333,41 @@ class TStationChatServiceV2:
                         event=final_price_event,
                         turn_contract=turn_contract,
                         direct_return_reason="schedule_selection_final_price_before_preorder",
+                        extra_metadata=vehicle_selection_trace_metadata,
+                    )
+                    return StreamingResponse(
+                        TStationChatServiceV2._stream_contract_required_tool_response(final_price_recovery),
+                        media_type="text/event-stream",
+                        headers={
+                            "Cache-Control": "no-cache",
+                            "Connection": "keep-alive",
+                            "X-Accel-Buffering": "no",
+                        },
+                    )
+                event_data = final_price_event.get("data") if isinstance(final_price_event.get("data"), dict) else {}
+                return TStationChatResponse(content=str(event_data.get("assistantResponse") or ""))
+
+        if is_contract_required_price_or_coupon_final_price(turn_contract, merged_slots=merged_slots):
+            final_price_recovery = await _recover_contract_required_tool(
+                turn_contract=turn_contract,
+                user_text=last_user_text,
+                merged_slots=merged_slots,
+                blocked_fast_path_source="price_or_coupon_check_before_guard",
+                member_no=request.user_id,
+            )
+            if final_price_recovery is not None:
+                final_price_event = final_price_recovery["event"]
+                if request.stream:
+                    _record_direct_return_trace(
+                        parent_span=_parent_span,
+                        trace_id=request.tracing_id,
+                        session_id=request.session_id,
+                        user_id=request.user_id,
+                        user_text=last_user_text,
+                        domains=domains,
+                        event=final_price_event,
+                        turn_contract=turn_contract,
+                        direct_return_reason="price_or_coupon_check_before_guard",
                         extra_metadata=vehicle_selection_trace_metadata,
                     )
                     return StreamingResponse(

@@ -4,6 +4,7 @@ from schemas.tstation.slots import ConversationSlots
 from services.tstation.policies.contract_required_tool_candidate import (
     _contract_required_tool_candidate,
     _is_contract_required_selected_store_schedule,
+    is_contract_required_price_or_coupon_final_price,
 )
 from services.tstation.policies.turn_contract import TurnContract
 
@@ -598,6 +599,50 @@ def test_price_or_coupon_contract_runs_final_price_for_confirmed_goods() -> None
     assert candidate.tool_name == "get_final_price_tool"
     assert candidate.tool_input == {"goods_no": "G000000310126"}
     assert candidate.tool_input_source == "turn_contract_price_or_coupon_check"
+    assert is_contract_required_price_or_coupon_final_price(contract, merged_slots=None) is True
+
+
+def test_price_or_coupon_contract_runs_final_price_even_when_preorder_slots_are_complete() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="price_or_coupon_check",
+        known_slots={
+            "goods_no": "G000000313182",
+            "product_name": "벤투스 S1 에보3",
+            "tire_size": "225/45R17",
+            "ord_qty": 2,
+            "shop_id": "F00098",
+            "shop_name": "티스테이션 역삼점",
+            "requested_cal_day": "20260706",
+            "rsv_hour": "14",
+            "payment_amount": 320800,
+        },
+        allowed_tools=("search_product_tool", "get_final_price_tool", "get_my_coupons_tool"),
+        preferred_tool="get_final_price_tool",
+        response_decision={"template": "quickReply", "metadata": {"response_shape_key": "price_coupon_summary"}},
+        context_state="resumed",
+        action_mode="info_only",
+    )
+
+    candidate = _contract_required_tool_candidate(
+        turn_contract=contract,
+        user_text="무슨 쿠폰이 적용된거야?",
+        merged_slots=ConversationSlots(
+            goods_no="G000000313182",
+            tire_size="225/45R17",
+            ord_qty=2,
+            shop_id="F00098",
+            shop_name="티스테이션 역삼점",
+            requested_cal_day="20260706",
+            rsv_hour="14",
+        ),
+    )
+
+    assert candidate is not None
+    assert candidate.tool_name == "get_final_price_tool"
+    assert candidate.tool_input == {"goods_no": "G000000313182"}
+    assert candidate.tool_input_source == "turn_contract_price_or_coupon_check"
+    assert is_contract_required_price_or_coupon_final_price(contract, merged_slots=None) is True
 
 
 def test_price_or_coupon_contract_does_not_use_stale_merged_goods_no() -> None:
