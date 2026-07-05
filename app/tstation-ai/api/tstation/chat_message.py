@@ -2,12 +2,12 @@
 Chat Message API - CRUD operations for conversations via Redis.
 
 Endpoints:
-- POST /api/messages/chat - Chat with content only (history managed by service)
-- GET /api/messages/sessions - List all sessions for user
-- GET /api/messages/history/{session_id} - Get messages for a session
-- DELETE /api/messages/{session_id} - Delete a session
-- GET /api/messages/user-info - Get user info from JWT
-- POST /api/messages/validate-token - Validate JWT token
+- POST /api/tstation/messages/chat - Chat with content only (history managed by service)
+- GET /api/tstation/messages/sessions - List all sessions for user
+- GET /api/tstation/messages/history/{session_id} - Get messages for a session
+- DELETE /api/tstation/messages/{session_id} - Delete a session
+- GET /api/tstation/messages/user-info - Get user info from JWT
+- POST /api/tstation/messages/validate-token - Validate JWT token
 """
 import asyncio
 import json

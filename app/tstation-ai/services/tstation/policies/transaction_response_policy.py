@@ -117,6 +117,8 @@ def decide_transaction_response(
         return _decide_store_holiday_lookup()
     if intent == "price_or_benefit_alert_request":
         return _decide_price_or_benefit_alert_request(slots=slots)
+    if intent == "price_or_coupon_check":
+        return _decide_price_or_coupon_check()
     if intent == "inventory_availability":
         return _decide_inventory_availability(slots=slots, tool_result=tool_result or {})
     if intent in {"quick_order_reservation", "quick_order_reservation_continue"}:
@@ -226,6 +228,18 @@ def _decide_price_or_benefit_alert_request(*, slots: dict[str, Any]) -> Response
         metadata={"alert_scope": "price_or_benefit"},
     )
 
+
+def _decide_price_or_coupon_check() -> ResponseDecision:
+    return _decision(
+        response_shape_key="price_or_coupon_check",
+        response_shape=ResponseShape.SUMMARY,
+        template=TemplateName.QUICK_REPLY,
+        forbidden_behaviors=("datepick_for_price_or_coupon_check",),
+        assistant_guidance=(
+            "현재 턴의 가격/할인 질문에 답한다. "
+            "이전 구매/예약 흐름을 재개하거나 예약 일정을 다시 요구하지 않는다."
+        ),
+    )
 
 def _decide_store_schedule(*, text: str, slots: dict[str, Any]) -> ResponseDecision:
     if slots.get("store_exact_match") is False:

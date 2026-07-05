@@ -45,6 +45,25 @@ def test_purchase_response_with_quantity_and_no_store_asks_store() -> None:
     assert "get_logistics_inventory_tool" in decision.forbidden_behaviors
 
 
+def test_price_or_coupon_response_blocks_schedule_reprompt() -> None:
+    decision = decide_transaction_response(
+        intent="price_or_coupon_check",
+        user_text="할인은 어떻게 적용된거야?",
+        known_slots={
+            "goods_no": "G000000309856",
+            "tire_size": "275/35R20",
+            "ord_qty": 4,
+            "shop_id": "F00721",
+            "requested_cal_day": "20260707",
+            "rsv_hour": "16",
+        },
+    )
+
+    assert decision.template == TemplateName.QUICK_REPLY
+    assert decision.response_shape == ResponseShape.SUMMARY
+    assert decision.metadata["response_shape_key"] == "price_or_coupon_check"
+    assert "datepick_for_price_or_coupon_check" in decision.forbidden_behaviors
+
 def test_purchase_response_with_product_family_only_prefers_product_card_clarify() -> None:
     decision = decide_transaction_response(
         intent="quick_order_reservation",

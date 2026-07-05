@@ -98,6 +98,13 @@ _COUPON_USAGE_POLICY_RE = re.compile(
     re.IGNORECASE,
 )
 _COUPON_STACKING_HOWTO_RE = re.compile(r"쿠폰.{0,24}(?:중복|같이|함께|동시)|(?:중복|같이|함께|동시).{0,24}쿠폰", re.IGNORECASE)
+# Coupon display names often carry their own trailing restriction label, e.g. "(중복할인 불가)".
+# That label states a fact about the coupon, it isn't the user asking a stacking question, so it
+# must not be allowed to steal routing away from whatever the user is actually asking this turn.
+_COUPON_STACKING_NAME_RESTRICTION_RE = re.compile(
+    r"(?:중복(?:\s*할인)?|같이|함께|동시)\s*(?:사용\s*)?(?:불가능?|제한|안\s*됨|안\s*돼)",
+    re.IGNORECASE,
+)
 _OWNED_COUPON_LOOKUP_RE = re.compile(r"(?:내|나의|보유|가지고\s*있는|있는).{0,16}쿠폰|쿠폰.{0,16}(?:뭐\s*있|보여|조회|확인)", re.IGNORECASE)
 # Extracts the qualifier immediately before "쿠폰" to identify a specific coupon.
 # "21% 상품할인쿠폰 오프라인?" → "상품할인" / "패밀리 쿠폰 오프라인?" → "패밀리"
@@ -146,7 +153,10 @@ def _extract_specific_coupon_hint(text: str) -> str | None:
 _PRODUCT_NAME_TOKEN = r"(?:벤투스|ventus|다이나프로|dynapro|키너지|kinergy|아이온|ion|옵티모|optimo|미쉐린|michelin|cc2)"
 _PRODUCT_COUPON_ELIGIBILITY_RE = re.compile(
     rf"{_PRODUCT_NAME_TOKEN}.{{0,30}}(?:쓸\s*수\s*있는|사용\s*가능(?:한)?|적용\s*가능(?:한)?).{{0,12}}(?:쿠폰|할인권)|"
-    rf"{_PRODUCT_NAME_TOKEN}.{{0,30}}(?:쿠폰|할인권).{{0,24}}(?:있|돼|되|쓸|사용|적용)|"
+    # A product name is often baked into the coupon's own display name (e.g. "키너지EX 특가전 쿠폰").
+    # When a channel word (온라인/오프라인/매장/현장/사용처) sits between "쿠폰" and the trailing verb,
+    # that verb belongs to a separate channel question, not a "does a coupon exist for this product" one.
+    rf"{_PRODUCT_NAME_TOKEN}.{{0,30}}(?:쿠폰|할인권)(?!.{{0,24}}(?:온라인|오프라인|매장|현장|사용처)).{{0,24}}(?:있|돼|되|쓸|사용|적용)|"
     rf"(?:쿠폰|할인권).{{0,24}}{_PRODUCT_NAME_TOKEN}",
     re.IGNORECASE,
 )
@@ -217,7 +227,7 @@ def decide_coupon_query_gate(
             coupon_hint=None,
             reason="Applied coupon/discount detail belongs to price_or_coupon_check, not owned coupon lookup.",
         )
-    if _COUPON_STACKING_HOWTO_RE.search(text):
+    if _COUPON_STACKING_HOWTO_RE.search(text) and not _COUPON_STACKING_NAME_RESTRICTION_RE.search(text):
         return CouponQueryGateDecision(
             intent=CouponQueryIntent.STACKING,
             confidence=0.9,

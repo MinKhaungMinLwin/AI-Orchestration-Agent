@@ -64,6 +64,44 @@ def test_purchase_flow_with_quantity_and_no_store_resolves_to_ask_store() -> Non
     assert "quick_order_tool" in plan.forbidden_tools
 
 
+def test_discount_router_evidence_after_preorder_stays_price_lookup() -> None:
+    frame = build_transaction_intent_frame(
+        "적용 내역 알려줘",
+        known_slots={
+            "goods_no": "G000000309856",
+            "product_name": "벤투스 S2 AS",
+            "tire_size": "275/35R20",
+            "ord_qty": 4,
+            "shop_id": "F00721",
+            "shop_name": "티스테이션 판교점",
+            "requested_cal_day": "20260707",
+            "rsv_hour": "16",
+            "payment_amount": 955600,
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "availability_intent": "today_install",
+            "availability_context": {
+                "latest_router_evidence": {
+                    "intent": "quick_order_reservation",
+                    "execution_plan": ["explain_discount_application"],
+                    "primary_action": "lookup",
+                }
+            },
+        },
+    )
+    plan = plan_transaction_tools(frame)
+    decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text="적용 내역 알려줘",
+        known_slots=dict(frame.known_slots),
+    )
+
+    assert frame.intent == "price_or_coupon_check"
+    assert plan.preferred_tool == "get_final_price_tool"
+    assert "get_store_schedule_tool" in plan.forbidden_tools
+    assert decision.template == TemplateName.QUICK_REPLY
+    assert "datepick_for_price_or_coupon_check" in decision.forbidden_behaviors
+
 def test_cart_free_text_with_product_context_keeps_cart_sub_intent() -> None:
     frame = build_transaction_intent_frame(
         "장바구니에 넣어줘",
