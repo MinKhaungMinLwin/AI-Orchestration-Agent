@@ -2935,7 +2935,7 @@ def resolve_vehicle_ui_selection_from_chip_context(
         or chip.get("action_name")
         or ""
     ).strip()
-    if not chip or action_name != "select_vehicle_candidate":
+    if not chip or action_name not in {"select_vehicle", "select_vehicle_candidate"}:
         return None
     if not isinstance(template_data, Mapping):
         return None
@@ -3004,9 +3004,13 @@ def resolve_vehicle_ui_selection_from_chip_context(
         meta_car_lnc_cd = str(meta.get("carLncCd") or meta.get("car_lnc_cd") or "").strip()
         if car_no and meta_car_no != car_no:
             continue
-        if mbr_car_reg_seq and meta_reg_seq != mbr_car_reg_seq:
+        if mbr_car_reg_seq and meta_reg_seq and meta_reg_seq != mbr_car_reg_seq:
             continue
-        if car_lnc_cd and meta_car_lnc_cd != car_lnc_cd:
+        if mbr_car_reg_seq and not meta_reg_seq and not car_no and not car_lnc_cd:
+            continue
+        if car_lnc_cd and meta_car_lnc_cd and meta_car_lnc_cd != car_lnc_cd:
+            continue
+        if car_lnc_cd and not meta_car_lnc_cd and not car_no and not mbr_car_reg_seq:
             continue
         matches.append(
             {

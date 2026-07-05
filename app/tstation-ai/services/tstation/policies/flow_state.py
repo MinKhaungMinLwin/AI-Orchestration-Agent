@@ -1498,6 +1498,7 @@ class FlowState:
 
         qty_changed = _quantity_changed(merged.product.get("ord_qty"), delta.product.get("ord_qty"))
         if qty_changed and delta.payment.get("payment_amount") in _EMPTY_VALUES:
+            cleared_fields.extend(_clear_section(merged.schedule))
             if merged.payment.pop("payment_amount", None) not in _EMPTY_VALUES:
                 cleared_fields.append("payment_amount")
             if not any(merged.payment.get(field) not in _EMPTY_VALUES for field in _PAYMENT_UNIT_PRICE_FIELDS):
@@ -1505,7 +1506,7 @@ class FlowState:
                     cleared_fields.append("price_basis")
                 if merged.payment.pop("price_source_tool", None) not in _EMPTY_VALUES:
                     cleared_fields.append("price_source_tool")
-            invalidated_sections.add("payment")
+            invalidated_sections.update(("schedule", "payment"))
             merged.payment.pop("payment_amount_stale", None)
             merged.payment["payment_amount_stale"] = True
             committed_fields.append("payment_amount_stale")
@@ -1668,6 +1669,7 @@ class FlowState:
             committed_fields.append("payment_amount_stale")
 
         if _quantity_changed(merged.product.get("ord_qty"), delta.product.get("ord_qty")):
+            cleared_fields.extend(_clear_section(merged.schedule))
             if merged.payment.pop("payment_amount", None) not in _EMPTY_VALUES:
                 cleared_fields.append("payment_amount")
             if not any(merged.payment.get(field) not in _EMPTY_VALUES for field in _PAYMENT_UNIT_PRICE_FIELDS):
@@ -1675,7 +1677,7 @@ class FlowState:
                     cleared_fields.append("price_basis")
                 if merged.payment.pop("price_source_tool", None) not in _EMPTY_VALUES:
                     cleared_fields.append("price_source_tool")
-            invalidated_sections.add("payment")
+            invalidated_sections.update(("schedule", "payment"))
             merged.payment.pop("payment_amount_stale", None)
             if delta.payment.get("payment_amount") in _EMPTY_VALUES:
                 merged.payment["payment_amount_stale"] = True
@@ -2298,7 +2300,19 @@ def recommendation_vehicle_selection_patch(
     selected_vehicle_slots: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
     active_flow = FlowState.from_active_flow_context(active_flow_context)
-    if effective_flow_type(active_flow.flow_type, active_flow.intent) != "recommendation" or active_flow.flow_step != "select_vehicle":
+    effective_type = effective_flow_type(active_flow.flow_type, active_flow.intent)
+    if effective_type == "recommendation":
+        if active_flow.flow_step != "select_vehicle":
+            return {}
+    elif effective_type == "purchase":
+        missing_slots = tuple(str(slot or "").strip() for slot in active_flow.meta.get("missing_slots") or ())
+        current_step = str(active_flow.meta.get("current_step") or active_flow.flow_step or "").strip()
+        if not active_flow.recommendation or "product" not in missing_slots or current_step not in {
+            "ask_product",
+            "resolve_product",
+        }:
+            return {}
+    else:
         return {}
     if active_flow.status not in {"active", "resumed"}:
         return {}

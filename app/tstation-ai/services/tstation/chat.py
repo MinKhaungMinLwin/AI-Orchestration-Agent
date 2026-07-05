@@ -20844,6 +20844,9 @@ def _merge_pending_order_context(
     except (TypeError, ValueError):
         qty_changed = False
     if qty_changed and incoming.get("payment_amount") in (None, "", [], {}):
+        for field in ("requested_cal_day", "rsv_hour"):
+            if merged.pop(field, None) not in (None, "", [], {}):
+                cleared_fields.append(field)
         if merged.pop("payment_amount", None) not in (None, "", [], {}):
             cleared_fields.append("payment_amount")
         if _preview_price_unit_and_basis(merged)[0] is None:
