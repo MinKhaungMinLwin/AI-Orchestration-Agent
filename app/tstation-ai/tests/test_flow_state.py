@@ -495,7 +495,7 @@ def test_active_purchase_new_product_identity_returns_to_product_resolution() ->
     assert context["product"]["product_name"] == "웨더플렉스"
     assert context["product"]["tire_size"] == "215/70R16"
     assert context["product"]["ord_qty"] == 2
-    assert "store" not in context
+    assert context["store"] == {"region": "분당"}
     assert "schedule" not in context
     assert "payment" not in context
     assert "last_candidates" not in context
@@ -841,7 +841,7 @@ def test_product_change_updates_dormant_flow_and_clears_execution_context() -> N
     assert result.metadata["dormant_dependency_cleared_fields"]
 
 
-def test_store_change_updates_dormant_flow_and_clears_schedule_payment() -> None:
+def test_store_change_updates_dormant_flow_and_clears_schedule_but_preserves_payment() -> None:
     dormant_flows = upsert_dormant_flow(
         [],
         {
@@ -881,7 +881,7 @@ def test_store_change_updates_dormant_flow_and_clears_schedule_payment() -> None
     assert dormant_context["store"]["shop_id"] == "S2"
     assert dormant_context["store"]["shop_name"] == "티스테이션 정발산점"
     assert "schedule" not in dormant_context
-    assert "payment" not in dormant_context
+    assert dormant_context["payment"] == {"payment_amount": 308200, "price_basis": "cheapest_final_prc"}
     assert "dormant_flows" in result.metadata["committed_fields"]
 
 

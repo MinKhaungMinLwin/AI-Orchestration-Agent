@@ -141,11 +141,6 @@ _DEPENDENCY_FIELD_BLOCKS: dict[str, frozenset[str]] = {
         "store_name",
         "requested_cal_day",
         "rsv_hour",
-        "payment_amount",
-        "payment_amount_source",
-        "price_basis",
-        "price_source_tool",
-        "payment_amount_stale",
     }),
     "region_changed": frozenset({
         "shop_id",
@@ -153,11 +148,6 @@ _DEPENDENCY_FIELD_BLOCKS: dict[str, frozenset[str]] = {
         "store_name",
         "requested_cal_day",
         "rsv_hour",
-        "payment_amount",
-        "payment_amount_source",
-        "price_basis",
-        "price_source_tool",
-        "payment_amount_stale",
     }),
     "schedule_changed": frozenset({
         "payment_amount",
@@ -577,7 +567,6 @@ def _clear_dormant_product_dependencies(state: "FlowState", cleared_fields: list
 
 def _clear_dormant_store_dependencies(state: "FlowState", cleared_fields: list[str]) -> None:
     cleared_fields.extend(f"schedule.{field}" for field in _clear_section(state.schedule))
-    cleared_fields.extend(f"payment.{field}" for field in _clear_section(state.payment))
     if state.candidates:
         state.candidates = []
         cleared_fields.append("last_candidates")
@@ -1590,8 +1579,7 @@ class FlowState:
         if existing_shop_id and incoming_shop_id and existing_shop_id != incoming_shop_id:
             conflicts["shop_id"] = {"existing": existing_shop_id, "incoming": incoming_shop_id}
             cleared_fields.extend(_clear_section(merged.schedule))
-            cleared_fields.extend(_clear_section(merged.payment))
-            invalidated_sections.update(("schedule", "payment"))
+            invalidated_sections.add("schedule")
             dormant_store_patch.update(_non_empty_mapping(delta.store))
 
         existing_region = str(merged.store.get("region") or "").strip()
@@ -1603,8 +1591,7 @@ class FlowState:
         )
         if region_changed:
             cleared_fields.extend(_clear_section(merged.schedule))
-            cleared_fields.extend(_clear_section(merged.payment))
-            invalidated_sections.update(("schedule", "payment"))
+            invalidated_sections.add("schedule")
             for field_name in ("shop_id", "shop_name", "store_name"):
                 if merged.store.pop(field_name, None) not in _EMPTY_VALUES:
                     cleared_fields.append(field_name)
@@ -1787,8 +1774,7 @@ class FlowState:
         if existing_shop_id and incoming_shop_id and existing_shop_id != incoming_shop_id:
             conflicts["shop_id"] = {"existing": existing_shop_id, "incoming": incoming_shop_id}
             cleared_fields.extend(_clear_section(merged.schedule))
-            cleared_fields.extend(_clear_section(merged.payment))
-            invalidated_sections.update(("schedule", "payment"))
+            invalidated_sections.add("schedule")
             dormant_store_patch.update(_non_empty_mapping(delta.store))
 
         existing_region = str(merged.store.get("region") or "").strip()
@@ -1800,8 +1786,7 @@ class FlowState:
         )
         if region_changed:
             cleared_fields.extend(_clear_section(merged.schedule))
-            cleared_fields.extend(_clear_section(merged.payment))
-            invalidated_sections.update(("schedule", "payment"))
+            invalidated_sections.add("schedule")
             for field_name in ("shop_id", "shop_name", "store_name"):
                 if merged.store.pop(field_name, None) not in _EMPTY_VALUES:
                     cleared_fields.append(field_name)

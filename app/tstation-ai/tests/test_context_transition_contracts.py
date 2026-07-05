@@ -242,7 +242,7 @@ def test_purchase_new_product_transition_invalidates_stale_store_schedule_and_pr
     assert context["next_tool"] == "search_product_tool"
 
 
-def test_purchase_store_change_does_not_recommit_stale_schedule_or_price_from_delta() -> None:
+def test_purchase_store_change_does_not_recommit_stale_schedule_but_preserves_price() -> None:
     result = commit_flow_state(
         {
             "flow_type": "purchase",
@@ -278,7 +278,7 @@ def test_purchase_store_change_does_not_recommit_stale_schedule_or_price_from_de
     assert context["store"]["shop_id"] == "F00999"
     assert context["current_step"] == "resolve_schedule"
     assert "schedule" not in context
-    assert "payment" not in context
+    assert context["payment"] == {"payment_amount": 420000, "price_basis": "cheapest_final_prc"}
     assert "shop_id" in result.metadata["flow_state_conflicts"]
 
 
@@ -1701,7 +1701,10 @@ def test_next_turn_stock_context_moves_to_purchase_only_with_explicit_purchase_i
     ).state.to_active_flow_context()
     assert stock_followup["intent"]["sub_flow_type"] == "stock"
     assert stock_followup["intent"]["pending_intent"] == "stock"
-    assert stock_followup["current_step"] == "check_inventory"
+    assert stock_followup["store"] == {"region": "Gangnam"}
+    assert stock_followup["current_step"] == "resolve_store"
+    assert stock_followup["next_tool"] == "get_store_list_tool"
+    assert stock_followup["tool_args_patch"] == {"limit": 10, "region_code": "Gangnam"}
 
     purchase_resume = commit_flow_state(
         persisted_stock,
