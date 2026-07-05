@@ -273,9 +273,9 @@ _FAVORITE_STORE_RE = re.compile(
 _ORDER_DIRECT_NO_RE = re.compile(r"\bO\d{8,}\b", re.IGNORECASE)
 _ORDER_NO_SUFFIX_RE = re.compile(r"(?:주문\s*)?(?P<suffix>\d{3,8})\s*번\s*주문|주문\s*(?:번호)?\s*(?P<suffix2>\d{3,8})\b", re.IGNORECASE)
 _PAYMENT_METHOD_CHANGE_RE = re.compile(
-    r"(?:주문|결제).{0,30}결제\s*수단.{0,30}(?:변경|바꾸|무통장|가상\s*계좌|입금)|"
-    r"결제\s*수단.{0,30}(?:변경|바꾸|무통장|가상\s*계좌|입금)|"
-    r"(?:무통장\s*입금|가상\s*계좌).{0,30}(?:변경|바꾸|결제\s*수단)",
+    r"(?:주문|결제).{0,30}결제\s*(?:수단|방법).{0,30}(?:변경|바꾸|무통장|가상\s*계좌|입금)|"
+    r"결제\s*(?:수단|방법).{0,30}(?:변경|바꾸|무통장|가상\s*계좌|입금)|"
+    r"(?:무통장\s*입금|가상\s*계좌).{0,30}(?:변경|바꾸|결제\s*(?:수단|방법))",
     re.IGNORECASE,
 )
 _PAYMENT_ACCOUNT_INFO_RE = re.compile(r"무통장\s*입금\s*기한|가상\s*계좌|입금\s*기한|결제\s*정보", re.IGNORECASE)
