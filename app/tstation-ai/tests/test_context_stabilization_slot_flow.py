@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from schemas.tstation.slots import ConversationSlots
-from services.tstation.policies.slot_fill_controller import _flow_state_reconciliation
+from services.tstation.policies.slot_fill_controller import (
+    _flow_state_reconciliation,
+    apply_router_location_slot_fill,
+)
 from services.tstation.policies.ui_action_policy import (
     _with_existing_transaction_slot_fill_state,
     prepare_ui_action_state,
@@ -140,3 +145,116 @@ def test_prepare_ui_action_state_applies_request_slots_before_schedule_context_r
     assert prepared.updated_slots.pending_intent == "order"
     assert prepared.updated_slots.goal_type == "place_order"
     assert prepared.trace_metadata["request_slots_applied"] is True
+
+
+def test_router_location_slot_fill_replaces_stale_region_and_resets_store_schedule() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000320151",
+        tire_size="235/55R19",
+        ord_qty=4,
+        region="분당",
+        shop_id="F00262",
+        shop_name="티스테이션 분당점",
+        requested_cal_day="20260708",
+        rsv_hour="16",
+        pending_intent="order",
+        goal_type="place_order",
+        availability_context={
+            "pending_order_context": {
+                "goods_no": "G000000320151",
+                "product_name": "Dynapro HP3",
+                "tire_size": "235/55R19",
+                "ord_qty": 4,
+                "region": "분당",
+                "shop_id": "F00262",
+                "shop_name": "티스테이션 분당점",
+                "requested_cal_day": "20260708",
+                "rsv_hour": "16",
+                "payment_amount": 420000,
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            },
+            "active_flow_context": {
+                "flow_type": "purchase",
+                "flow_step": "ask_store",
+                "goods_no": "G000000320151",
+                "ord_qty": 4,
+                "region": "분당",
+                "shop_id": "F00262",
+                "shop_name": "티스테이션 분당점",
+                "requested_cal_day": "20260708",
+                "rsv_hour": "16",
+                "last_candidates": [{"shop_id": "F00262"}],
+            },
+        },
+    )
+    routing_result = SimpleNamespace(
+        needs_clarification=False,
+        primary_action="store_search",
+        intent="quick_order_reservation",
+        execution_plan=["transaction:quick_order_reservation"],
+        entity_candidates={
+            "location": {
+                "mentioned": True,
+                "name": "고양시",
+                "type": "region",
+                "reference_text": "고양시",
+                "confidence": 0.96,
+            }
+        },
+    )
+
+    decision = apply_router_location_slot_fill(
+        slots=slots,
+        routing_result=routing_result,
+        router_context={"current_flow": "quick_order_reservation", "flow_step": "show_store_candidates"},
+    )
+
+    assert decision.matched is True
+    assert decision.slot_patch == {"region": "고양시"}
+    assert decision.resume_source == "router_slot_fill:region"
+    assert decision.slots.region == "고양시"
+    assert decision.slots.shop_id is None
+    assert decision.slots.shop_name is None
+    assert decision.slots.requested_cal_day is None
+    assert decision.slots.rsv_hour is None
+    assert decision.slots.goods_no == "G000000320151"
+    assert decision.slots.ord_qty == 4
+    pending_context = decision.slots.availability_context["pending_order_context"]
+    active_context = decision.slots.availability_context["active_flow_context"]
+    assert pending_context["region"] == "고양시"
+    assert pending_context["payment_amount"] == 420000
+    assert "shop_id" not in pending_context
+    assert "shop_name" not in pending_context
+    assert "requested_cal_day" not in pending_context
+    assert "rsv_hour" not in pending_context
+    assert active_context["region"] == "고양시"
+    assert active_context["flow_step"] == "show_store_candidates"
+    assert "last_candidates" not in active_context
+
+
+def test_router_location_slot_fill_requires_transaction_context() -> None:
+    routing_result = SimpleNamespace(
+        needs_clarification=False,
+        primary_action="store_search",
+        intent="store_search",
+        execution_plan=["transaction:store_search"],
+        entity_candidates={
+            "location": {
+                "mentioned": True,
+                "name": "고양시",
+                "type": "region",
+                "reference_text": "고양시",
+                "confidence": 0.96,
+            }
+        },
+    )
+
+    decision = apply_router_location_slot_fill(
+        slots=ConversationSlots(),
+        routing_result=routing_result,
+        router_context={"current_flow": "none", "flow_step": "none"},
+    )
+
+    assert decision.matched is False
+    assert decision.slots.region is None

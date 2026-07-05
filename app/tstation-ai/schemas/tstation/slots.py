@@ -264,7 +264,7 @@ class ConversationSlots(BaseModel):
         # previous store. Clear store identity so a stale shop_id cannot satisfy
         # the "매장 선택" step after a region-only follow-up like "성남은?".
         "goal_type": ["user_preferences_text"],
-        "region": ["shop_id", "shop_name"],
+        "region": ["shop_id", "shop_name", "requested_cal_day", "rsv_hour"],
     }
     RUNTIME_DEPENDENT_RESETS: ClassVar[dict[str, list[str]]] = {
         # Tool/template/history recovery dependencies. Runtime values are
@@ -283,7 +283,7 @@ class ConversationSlots(BaseModel):
         "ord_qty": ["payment_amount", "price_basis", "price_source_tool"],
         "shop_name": ["shop_id", "payment_amount", "price_basis", "price_source_tool"],
         "shop_id": ["payment_amount", "price_basis", "price_source_tool"],
-        "region": ["shop_id", "shop_name"],
+        "region": ["shop_id", "shop_name", "requested_cal_day", "rsv_hour"],
         "car_model": [
             "car_no",
             "car_lnc_cd",

@@ -104,6 +104,7 @@ from services.tstation.policies.transaction_intent_policy import (
 )
 from services.tstation.policies.transaction_response_policy import decide_transaction_response
 from services.tstation.policies.slot_fill_controller import (
+    apply_router_location_slot_fill,
     build_router_slot_fill_context,
     resolve_pre_router_slot_fill,
 )
@@ -27708,6 +27709,27 @@ class TStationChatServiceV2:
                 "[FLOW_STATE] Stored latest router evidence: %s",
                 latest_router_evidence_metadata.get("latest_router_evidence_after"),
             )
+        router_location_slot_fill_resume_source = "none"
+        router_location_slot_fill = apply_router_location_slot_fill(
+            slots=merged_slots,
+            routing_result=routing_result,
+            router_context=router_slot_fill_context_payload,
+        )
+        if router_location_slot_fill.matched:
+            merged_slots = router_location_slot_fill.slots
+            router_location_slot_fill_resume_source = router_location_slot_fill.resume_source
+            router_slot_fill_metadata.update(dict(router_location_slot_fill.trace_metadata or {}))
+            vehicle_selection_trace_metadata.update(dict(router_location_slot_fill.trace_metadata or {}))
+            await chat_history_svc.save_slots_async(request.session_id, merged_slots, user_id=request.user_id)
+            router_slot_fill_context_payload = build_router_slot_fill_context(
+                slots=merged_slots,
+                user_text=last_user_text,
+                latest_product_tmpl=latest_product_tmpl,
+                latest_location_tmpl=latest_location_tmpl,
+                latest_datepick_tmpl=latest_datepick_tmpl,
+                has_purchase_anchor=_resume_source_from_current_turn(last_user_text) != "none",
+            )
+            logger.info("[SLOTS] Promoted router location slot-fill: %s", router_location_slot_fill.slot_patch)
 
         # Publish the active goal_type to the request-scoped ContextVar consumed
         # by template_mapper. This lets _map_location / _map_product set
@@ -27754,6 +27776,8 @@ class TStationChatServiceV2:
             resume_source = location_selection_resume_source
         if resume_source == "none" and region_store_input_resolution.resolved:
             resume_source = region_store_input_resolution.resume_source
+        if resume_source == "none" and router_location_slot_fill_resume_source != "none":
+            resume_source = router_location_slot_fill_resume_source
         flow_transition = transition_current_flow(
             user_text=last_user_text,
             router_evidence=latest_router_evidence_snapshot,
