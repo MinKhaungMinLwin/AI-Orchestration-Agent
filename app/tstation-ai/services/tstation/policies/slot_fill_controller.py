@@ -263,7 +263,7 @@ def _router_location_slot_patch(
         confidence = float(location.get("confidence") or 0.0)
     except (TypeError, ValueError):
         confidence = 0.0
-    if confidence < 0.7:
+    if confidence < 0.8:
         return {}
     if not _router_location_can_fill_transaction_region(
         slots=slots,
@@ -352,6 +352,8 @@ def _has_transaction_context_shape(slots: ConversationSlots) -> bool:
             )
         ):
             return True
+        if isinstance(context, Mapping) and _context_can_accept_region_patch(context):
+            return True
     return False
 
 
@@ -384,8 +386,10 @@ def _apply_region_change_to_transaction_contexts(
                 cleared.append(field_name)
         if context_key in {"pending_order_context", "active_flow_context"}:
             patched["pending_step"] = "store_region_selection"
-            if patched.get("flow_type") in {"purchase", "stock"} or context_key == "pending_order_context":
+            if patched.get("flow_type") in {"purchase", "stock", "commerce"} or context_key == "pending_order_context":
                 patched["flow_step"] = "show_store_candidates"
+                patched["current_step"] = "ask_store"
+                patched["missing_slots"] = ["shop_id"]
         patched["source"] = "router_location_slot_fill"
         context_root[context_key] = patched
         patched_keys.append(context_key)
@@ -398,7 +402,7 @@ def _apply_region_change_to_transaction_contexts(
 
 
 def _context_can_accept_region_patch(context: Mapping[str, Any]) -> bool:
-    return any(
+    if any(
         context.get(field_name) not in (None, "", [], {})
         for field_name in (
             "goods_no",
@@ -413,6 +417,25 @@ def _context_can_accept_region_patch(context: Mapping[str, Any]) -> bool:
             "shop_id",
             "shop_name",
         )
+    ):
+        return True
+    product = context.get("product")
+    intent = context.get("intent")
+    if isinstance(product, Mapping) and any(
+        product.get(field_name) not in (None, "", [], {})
+        for field_name in (
+            "goods_no",
+            "product_name",
+            "tire_model",
+            "pending_product_name",
+            "ord_qty",
+            "quantity",
+        )
+    ):
+        return True
+    return isinstance(intent, Mapping) and any(
+        intent.get(field_name) not in (None, "", [], {})
+        for field_name in ("pending_intent", "goal_type", "sub_flow_type")
     )
 
 

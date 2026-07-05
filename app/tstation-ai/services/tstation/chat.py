@@ -27718,6 +27718,14 @@ class TStationChatServiceV2:
         if router_location_slot_fill.matched:
             merged_slots = router_location_slot_fill.slots
             router_location_slot_fill_resume_source = router_location_slot_fill.resume_source
+            router_location_patch = dict(router_location_slot_fill.slot_patch or {})
+            router_region = str(router_location_patch.get("region") or "").strip()
+            if router_region and str(getattr(regex_slots, "region", "") or "").strip() != router_region:
+                regex_slots = regex_slots.apply_runtime_values(
+                    {"region": router_region},
+                    source="router_location_slot_fill",
+                )
+                router_slot_fill_metadata["router_location_regex_region_rewritten"] = True
             router_slot_fill_metadata.update(dict(router_location_slot_fill.trace_metadata or {}))
             vehicle_selection_trace_metadata.update(dict(router_location_slot_fill.trace_metadata or {}))
             await chat_history_svc.save_slots_async(request.session_id, merged_slots, user_id=request.user_id)

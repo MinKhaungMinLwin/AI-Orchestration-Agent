@@ -175,15 +175,17 @@ def test_router_location_slot_fill_replaces_stale_region_and_resets_store_schedu
                 "goal_type": "place_order",
             },
             "active_flow_context": {
-                "flow_type": "purchase",
-                "flow_step": "ask_store",
-                "goods_no": "G000000320151",
-                "ord_qty": 4,
-                "region": "분당",
-                "shop_id": "F00262",
-                "shop_name": "티스테이션 분당점",
-                "requested_cal_day": "20260708",
-                "rsv_hour": "16",
+                "flow_type": "commerce",
+                "flow_step": "product_selected",
+                "product": {
+                    "goods_no": "G000000320151",
+                    "product_name": "Dynapro HP3",
+                    "tire_size": "235/55R19",
+                    "ord_qty": 4,
+                },
+                "intent": {"sub_flow_type": "purchase", "pending_intent": "order", "goal_type": "place_order"},
+                "current_step": "ask_store",
+                "missing_slots": ["shop_id"],
                 "last_candidates": [{"shop_id": "F00262"}],
             },
         },
@@ -230,6 +232,9 @@ def test_router_location_slot_fill_replaces_stale_region_and_resets_store_schedu
     assert "rsv_hour" not in pending_context
     assert active_context["region"] == "고양시"
     assert active_context["flow_step"] == "show_store_candidates"
+    assert active_context["current_step"] == "ask_store"
+    assert active_context["missing_slots"] == ["shop_id"]
+    assert active_context["product"]["goods_no"] == "G000000320151"
     assert "last_candidates" not in active_context
 
 
