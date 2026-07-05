@@ -805,8 +805,17 @@ def _selected_quantity_from_ui_action(ui_action_snapshot: Mapping[str, Any]) -> 
     if ord_qty <= 0:
         return {}
     return {
-        "ord_qty": ord_qty,
-        "selection_source": ui_action_snapshot.get("selection_source") or "ui_action",
+        key: value
+        for key, value in {
+            "ord_qty": ord_qty,
+            "goods_no": slot_patch.get("goods_no"),
+            "product_name": slot_patch.get("product_name") or slot_patch.get("tire_model"),
+            "tire_model": slot_patch.get("tire_model") or slot_patch.get("product_name"),
+            "pending_product_name": slot_patch.get("pending_product_name") or slot_patch.get("tire_model"),
+            "tire_size": slot_patch.get("tire_size"),
+            "selection_source": ui_action_snapshot.get("selection_source") or "ui_action",
+        }.items()
+        if value not in (None, "", [], {})
     }
 
 
@@ -1145,46 +1154,38 @@ def _selected_quantity_flow_context(
     )
     canonical_flow_type_value, _ = _flow_context_type(flow_type)
     product = dict(flow_context.get("product")) if isinstance(flow_context.get("product"), Mapping) else {}
+    # Quantity selection must not rebuild product identity from stale snapshots. Keep the active product,
+    # only filling blanks from the UI action first and legacy snapshot last.
     for key, value in {
-        "goods_no": existing_snapshot.get("goods_no"),
-        "tire_size": existing_snapshot.get("tire_size"),
-        "product_name": existing_snapshot.get("product_name")
+        "goods_no": selected_quantity.get("goods_no") or existing_snapshot.get("goods_no"),
+        "tire_size": selected_quantity.get("tire_size") or existing_snapshot.get("tire_size"),
+        "product_name": selected_quantity.get("product_name")
+        or selected_quantity.get("tire_model")
+        or selected_quantity.get("pending_product_name")
+        or existing_snapshot.get("product_name")
         or existing_snapshot.get("tire_model")
         or existing_snapshot.get("pending_product_name"),
-        "tire_model": existing_snapshot.get("tire_model") or existing_snapshot.get("pending_product_name"),
-        "pending_product_name": existing_snapshot.get("pending_product_name") or existing_snapshot.get("tire_model"),
+        "tire_model": selected_quantity.get("tire_model")
+        or selected_quantity.get("pending_product_name")
+        or existing_snapshot.get("tire_model")
+        or existing_snapshot.get("pending_product_name"),
+        "pending_product_name": selected_quantity.get("pending_product_name")
+        or selected_quantity.get("tire_model")
+        or existing_snapshot.get("pending_product_name")
+        or existing_snapshot.get("tire_model"),
     }.items():
         if value not in (None, "", [], {}) and product.get(key) in (None, "", [], {}):
             product[key] = value
     product["ord_qty"] = ord_qty
 
-    payment = dict(flow_context.get("payment")) if isinstance(flow_context.get("payment"), Mapping) else {}
+    store_source = flow_context.get("store") if isinstance(flow_context.get("store"), Mapping) else {}
+    store = {}
     for key, value in {
-        "payment_amount": existing_snapshot.get("payment_amount"),
-        "payment_amount_source": existing_snapshot.get("payment_amount_source"),
-        "price_basis": existing_snapshot.get("price_basis"),
-        "price_source_tool": existing_snapshot.get("price_source_tool"),
-        "sale_prc": existing_snapshot.get("sale_prc"),
-        "extra_fvr_sale_prc": existing_snapshot.get("extra_fvr_sale_prc"),
-        "cheapest_final_prc": existing_snapshot.get("cheapest_final_prc"),
-        "final_unit_price": existing_snapshot.get("final_unit_price"),
-        "final_prc": existing_snapshot.get("final_prc"),
-        "final_price": existing_snapshot.get("final_price"),
-        "finalPrice": existing_snapshot.get("finalPrice"),
-        "price": existing_snapshot.get("price"),
-        "wage_prc": existing_snapshot.get("wage_prc"),
+        "region": store_source.get("region") or existing_snapshot.get("region"),
+        "place_query": store_source.get("place_query") or existing_snapshot.get("place_query"),
+        "region_code": store_source.get("region_code") or existing_snapshot.get("region_code"),
     }.items():
-        if value not in (None, "", [], {}) and payment.get(key) in (None, "", [], {}):
-            payment[key] = value
-
-    store = dict(flow_context.get("store")) if isinstance(flow_context.get("store"), Mapping) else {}
-    for key, value in {
-        "region": existing_snapshot.get("region"),
-        "shop_id": existing_snapshot.get("shop_id"),
-        "shop_name": existing_snapshot.get("shop_name"),
-        "store_name": existing_snapshot.get("store_name"),
-    }.items():
-        if value not in (None, "", [], {}) and store.get(key) in (None, "", [], {}):
+        if value not in (None, "", [], {}):
             store[key] = value
 
     intent = dict(flow_context.get("intent")) if isinstance(flow_context.get("intent"), Mapping) else {}
@@ -1205,14 +1206,26 @@ def _selected_quantity_flow_context(
     })
     if product:
         flow_context["product"] = product
-    if payment:
-        flow_context["payment"] = payment
     if store:
         flow_context["store"] = store
     if intent:
         flow_context["intent"] = _flow_intent_with_sub_type(flow_type, intent)
     else:
         flow_context["intent"] = _flow_intent_with_sub_type(flow_type)
+    for key in (
+        "payment",
+        "schedule",
+        "last_candidates",
+        "target_action",
+        "current_step",
+        "missing_slots",
+        "next_tool",
+        "next_template",
+        "allowed_tools",
+        "tool_args_patch",
+        "progress_source",
+    ):
+        flow_context.pop(key, None)
     return {key: value for key, value in flow_context.items() if value not in (None, "", [], {})}
 
 

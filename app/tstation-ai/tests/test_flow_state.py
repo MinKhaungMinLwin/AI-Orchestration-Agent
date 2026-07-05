@@ -50,6 +50,66 @@ def test_flow_state_values_reads_active_context_before_legacy_pending_context() 
     assert values["pending_intent"] == "order"
 
 
+def test_select_quantity_preserves_product_and_clears_quantity_dependent_state() -> None:
+    transition = transition_current_flow(
+        user_text="4개",
+        router_evidence={
+            "domain": "transaction",
+            "intent": "quick_order_reservation",
+            "execution_plan": ["transaction:quick_order_reservation:slot_fill:quantity"],
+            "is_slot_fill": True,
+            "filled_slot": "quantity",
+        },
+        existing_slots=ConversationSlots(
+            availability_context={
+                "active_flow_context": {
+                    "flow_type": "purchase",
+                    "status": "active",
+                    "flow_step": "store_selected",
+                    "product": {
+                        "goods_no": "G000000310254",
+                        "product_name": "벤투스 S2 AS",
+                        "tire_size": "245/45R18",
+                        "ord_qty": 2,
+                    },
+                    "store": {
+                        "region": "판교",
+                        "shop_id": "F00721",
+                        "shop_name": "티스테이션 판교점",
+                    },
+                    "schedule": {"requested_cal_day": "20260708", "rsv_hour": "1400"},
+                    "payment": {"payment_amount": 361000, "price_basis": "cheapest_final_prc"},
+                    "intent": {"pending_intent": "order", "goal_type": "place_order"},
+                    "last_candidates": [{"shop_id": "F00721", "shop_name": "티스테이션 판교점"}],
+                    "next_template": "preOrder",
+                }
+            }
+        ),
+        extracted_slots=ConversationSlots(),
+        ui_action={
+            "action_type": "select_quantity",
+            "selection_source": "quick_reply",
+            "slots": {"ord_qty": 4},
+        },
+        resume_source="validated_ui_action_slot_fill:quantity",
+    )
+
+    assert transition.flow_transition["reason"] == "selected_quantity_flow_state"
+    active_context = transition.flow_transition["active_flow_context"]
+    assert active_context["flow_step"] == "quantity_selected"
+    assert active_context["product"] == {
+        "goods_no": "G000000310254",
+        "product_name": "벤투스 S2 AS",
+        "tire_size": "245/45R18",
+        "ord_qty": 4,
+    }
+    assert active_context["store"] == {"region": "판교"}
+    assert "payment" not in active_context
+    assert "schedule" not in active_context
+    assert "last_candidates" not in active_context
+    assert "next_template" not in active_context
+
+
 def test_flow_state_values_applies_current_turn_region_over_legacy_context() -> None:
     values = flow_state_values_from_slot_values(
         {
