@@ -29013,9 +29013,12 @@ class TStationChatServiceV2:
         direct_preorder_event: dict[str, Any] | None = None
         if (
             turn_contract is not None
-            and _should_attempt_direct_preorder_from_schedule_ui_action(
-                vehicle_ui_action_context,
-                validated_ui_action_router_skip_metadata,
+            and (
+                _should_attempt_direct_preorder_from_schedule_ui_action(
+                    vehicle_ui_action_context,
+                    validated_ui_action_router_skip_metadata,
+                )
+                or _is_schedule_selection_text(last_user_text)
             )
         ):
             if _should_emit_direct_preorder_from_schedule_selection(

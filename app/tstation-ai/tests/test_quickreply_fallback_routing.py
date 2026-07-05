@@ -121,6 +121,7 @@ from services.tstation.chat import (
     _final_price_from_row,
     _should_attempt_direct_preorder_from_schedule_ui_action,
     _should_emit_direct_preorder_from_schedule_selection,
+    _is_schedule_selection_text,
     _schedule_selection_values_from_text,
     _should_recover_final_price_for_schedule_selection,
     _build_bare_product_search_tool_input,
@@ -38223,6 +38224,32 @@ def test_direct_preorder_schedule_ui_action_attempt_does_not_require_router_skip
     assert _should_attempt_direct_preorder_from_schedule_ui_action(schedule_context, {}) is True
     assert _should_attempt_direct_preorder_from_schedule_ui_action(store_context, {}) is False
     assert _should_attempt_direct_preorder_from_schedule_ui_action(None, {}) is False
+
+def test_schedule_selection_text_can_drive_direct_preorder_without_ui_action() -> None:
+    schedule_text = "2026\ub144 7\uc6d4 9\uc77c (\ubaa9) 10:00"
+    contract = _transaction_turn_contract(
+        schedule_text,
+        {
+            "goods_no": "G000000310119",
+            "tire_model": "\ubca4\ud22c\uc2a4 S2 AS",
+            "tire_size": "215/55R17",
+            "ord_qty": 4,
+            "shop_id": "F00721",
+            "shop_name": "\ud2f0\uc2a4\ud14c\uc774\uc158 \ud310\uad50\uc810",
+            "requested_cal_day": "20260709",
+            "rsv_hour": "10",
+            "payment_amount": 501600,
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+    contract = replace(contract, action_mode="purchase_continuation")
+
+    assert _is_schedule_selection_text(schedule_text) is True
+    assert _should_emit_direct_preorder_from_schedule_selection(
+        contract,
+        transaction_tool_plan=SimpleNamespace(metadata={}),
+    ) is True
 
 def test_schedule_selection_text_values_override_previous_schedule_context() -> None:
     assert _schedule_selection_values_from_text("2026년 7월 7일 (화)\n15:00") == {
