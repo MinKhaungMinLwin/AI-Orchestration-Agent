@@ -228,6 +228,97 @@ def test_purchase_store_ui_action_preserves_product_and_quantity_for_schedule() 
     assert "store" not in next_state.missing_slots
 
 
+def test_transition_current_flow_resumes_dormant_purchase_on_explicit_order_anchor() -> None:
+    dormant_purchase = commit_flow_state(
+        None,
+        {
+            "goods_no": "G000000320152",
+            "product_name": "Dynapro HP3",
+            "tire_size": "245/45R19",
+            "ord_qty": 2,
+            "shop_id": "F00071",
+            "shop_name": "티스테이션 분당정자점",
+            "requested_cal_day": "20260705",
+            "rsv_hour": "1700",
+            "payment_amount": 288200,
+            "price_basis": "extra_fvr_sale_prc",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        source="test:purchase_ready",
+        flow_type="purchase",
+        flow_step="build_preorder",
+        status="active",
+    ).state.to_active_flow_context()
+    dormant_flows = upsert_dormant_flow([], dormant_purchase)
+
+    transition = transition_current_flow(
+        user_text="주문하기",
+        router_evidence={
+            "domain": "transaction",
+            "intent": "quick_order_reservation",
+            "execution_plan": ["transaction:quick_order_reservation"],
+        },
+        existing_slots=ConversationSlots(
+            goods_no="G000000320152",
+            availability_context={"dormant_flows": dormant_flows},
+        ),
+        extracted_slots=ConversationSlots(),
+        resume_source="explicit_user",
+    )
+
+    assert transition.flow_transition["reason"] == "dormant_flow_resume"
+    assert transition.metadata["dormant_resume_status"] == "resumed"
+    assert transition.metadata["dormant_resume_applied"] is True
+    active_context = transition.flow_transition["active_flow_context"]
+    assert active_context["status"] == "resumed"
+    assert active_context["product"]["goods_no"] == "G000000320152"
+    assert active_context["product"]["tire_size"] == "245/45R19"
+    assert active_context["product"]["ord_qty"] == 2
+    assert active_context["store"]["shop_id"] == "F00071"
+    assert active_context["schedule"]["requested_cal_day"] == "20260705"
+    assert active_context["schedule"]["rsv_hour"] == "1700"
+    assert active_context["payment"]["payment_amount"] == 288200
+
+
+def test_transition_current_flow_keeps_dormant_purchase_dormant_without_resume_anchor() -> None:
+    dormant_purchase = commit_flow_state(
+        None,
+        {
+            "goods_no": "G000000320152",
+            "product_name": "Dynapro HP3",
+            "tire_size": "245/45R19",
+            "ord_qty": 2,
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        source="test:purchase_ready",
+        flow_type="purchase",
+        flow_step="ask_store",
+        status="active",
+    ).state.to_active_flow_context()
+    dormant_flows = upsert_dormant_flow([], dormant_purchase)
+
+    transition = transition_current_flow(
+        user_text="가격이 얼마야?",
+        router_evidence={
+            "domain": "transaction",
+            "intent": "price_lookup",
+            "execution_plan": ["transaction:price_or_coupon_check"],
+        },
+        existing_slots=ConversationSlots(
+            goods_no="G000000320152",
+            availability_context={"dormant_flows": dormant_flows},
+        ),
+        extracted_slots=ConversationSlots(),
+        resume_source="none",
+    )
+
+    assert transition.flow_transition["applied"] is False
+    assert transition.metadata["dormant_resume_status"] == "not_attempted"
+    assert transition.metadata["dormant_resume_applied"] is False
+
+
 def test_purchase_store_ui_action_accepts_template_slot_aliases_without_entity_metadata() -> None:
     transition = transition_current_flow(
         user_text="선택",

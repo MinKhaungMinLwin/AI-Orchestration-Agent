@@ -10,7 +10,7 @@ from typing import Any, Mapping
 
 from services.tstation.common.cta_urls import CTAUrls
 from services.tstation.policies.discovery_intent_policy import normalize_tire_size
-from services.tstation.policies.flow_state import canonical_flow_type, commerce_sub_flow_type
+from services.tstation.policies.flow_state import canonical_flow_type, commerce_sub_flow_type, resume_dormant_flow
 from services.tstation.policies.price_basis_policy import has_price_basis
 from services.tstation.policies.response_decision import TemplateName
 from services.tstation.policies.resolved_context import canonical_context_from_template_boundary
@@ -352,6 +352,41 @@ def _parent_flow_context(availability_context: Mapping[str, Any]) -> dict[str, A
             context.setdefault("context_key", key)
             return context
     return {}
+
+
+def _dormant_flows_from_context(availability_context: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    dormant_flows = availability_context.get("dormant_flows") if isinstance(availability_context, Mapping) else None
+    return list(dormant_flows) if isinstance(dormant_flows, list) else []
+
+
+def _purchase_resume_anchor(
+    *,
+    resume_source: str,
+    router_evidence: Mapping[str, Any],
+    existing_snapshot: Mapping[str, Any],
+    extracted_snapshot: Mapping[str, Any],
+) -> dict[str, Any]:
+    if str(resume_source or "").strip() in {"", "none"}:
+        return {}
+    router_domain = str(router_evidence.get("domain") or "").strip()
+    router_intent = str(router_evidence.get("intent") or "").strip()
+    execution_plan = " ".join(str(item) for item in router_evidence.get("execution_plan") or ())
+    has_purchase_anchor = (
+        router_domain == "transaction"
+        or router_intent in {"quick_order_reservation", "quick_order_reservation_continue", "quick_order_execute", "order_request"}
+        or "quick_order" in execution_plan
+        or "order" in execution_plan
+        or "reservation" in execution_plan
+    )
+    if not has_purchase_anchor:
+        return {}
+
+    anchor: dict[str, Any] = {"flow_type": "purchase"}
+    for key in ("goods_no", "product_name", "tire_model", "pending_product_name", "shop_id", "shop_name", "region"):
+        value = extracted_snapshot.get(key) or existing_snapshot.get(key)
+        if value not in (None, "", [], {}):
+            anchor[key] = value
+    return anchor
 
 
 def _compact_slot_snapshot(slots: Any | Mapping[str, Any] | None) -> dict[str, Any]:
@@ -1498,9 +1533,28 @@ def transition_current_flow(
     router_snapshot = _non_empty_mapping(router_evidence)
     availability_context = _availability_context_from_slots(existing_slots)
     active_flow = _mapping_value(availability_context, "active_flow_context")
+    dormant_flows = _dormant_flows_from_context(availability_context)
     parent_flow = _parent_flow_context(availability_context)
     extracted_snapshot = _compact_slot_snapshot(extracted_slots)
     existing_snapshot = _compact_slot_snapshot(existing_slots)
+    dormant_resume_result = None
+    resumed_active_flow_context: dict[str, Any] = {}
+    dormant_resume_anchor = _purchase_resume_anchor(
+        resume_source=resume_source,
+        router_evidence=router_snapshot,
+        existing_snapshot=existing_snapshot,
+        extracted_snapshot=extracted_snapshot,
+    )
+    if dormant_resume_anchor and dormant_flows:
+        dormant_resume_result = resume_dormant_flow(
+            active_flow,
+            dormant_flows,
+            resume_anchor=dormant_resume_anchor,
+            source="flow_controller:explicit_resume",
+        )
+        if dormant_resume_result.status == "resumed" and isinstance(dormant_resume_result.active_flow_context, Mapping):
+            resumed_active_flow_context = dict(dormant_resume_result.active_flow_context)
+            active_flow = resumed_active_flow_context
     ui_action_snapshot = _ui_action_snapshot(ui_action)
     selected_product = _selected_product_from_ui_action(ui_action_snapshot)
     selected_quantity = _selected_quantity_from_ui_action(ui_action_snapshot)
@@ -1575,6 +1629,7 @@ def transition_current_flow(
         or current_turn_reservation_management_flow_context
         or current_turn_store_search_flow_context
         or current_turn_discovery_flow_context
+        or resumed_active_flow_context
     )
     applied_reason = "metadata_only_shell"
     if selected_product_flow_context:
@@ -1593,6 +1648,8 @@ def transition_current_flow(
         applied_reason = "current_turn_store_search_flow_state"
     elif current_turn_discovery_flow_context:
         applied_reason = "current_turn_discovery_flow_state"
+    elif resumed_active_flow_context:
+        applied_reason = "dormant_flow_resume"
     current_turn_seed = _current_turn_flow_seed(router_snapshot)
     contract_seed = {
         "router_evidence": router_snapshot,
@@ -1617,7 +1674,10 @@ def transition_current_flow(
         "current_turn_store_search_flow": current_turn_store_search_flow_context,
         "current_turn_discovery_flow": current_turn_discovery_flow_context,
         "current_turn_support_flow": current_turn_support_flow_context,
+        "dormant_resume_anchor": dormant_resume_anchor,
     }
+    if dormant_resume_result is not None:
+        context_evidence["dormant_resume_status"] = dormant_resume_result.status
     context_evidence = {key: value for key, value in context_evidence.items() if value not in (None, "", [], {})}
     metadata = {
         "flow_transition_shell": True,
@@ -1637,6 +1697,10 @@ def transition_current_flow(
         "current_turn_store_search_resolved": bool(current_turn_store_search_flow_context),
         "current_turn_discovery_resolved": bool(current_turn_discovery_flow_context),
         "current_turn_support_resolved": bool(current_turn_support_flow_context),
+        "dormant_resume_status": dormant_resume_result.status if dormant_resume_result is not None else "not_attempted",
+        "dormant_resume_applied": bool(
+            dormant_resume_result is not None and dormant_resume_result.status == "resumed"
+        ),
         "user_text_present": bool(str(user_text or "").strip()),
     }
     return FlowTransition(
