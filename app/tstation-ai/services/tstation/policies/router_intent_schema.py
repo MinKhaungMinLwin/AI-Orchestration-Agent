@@ -17,7 +17,6 @@ UNSUPPORTED_INTENT = "unsupported"
 _PRICE_OR_COUPON_ALIASES = {
     "applied_coupon_lookup",
     "applied_coupon_summary",
-    "benefit_lookup",
     "coupon_benefit_lookup",
     "coupon_or_discount_breakdown_inquiry",
     "discount_breakdown",

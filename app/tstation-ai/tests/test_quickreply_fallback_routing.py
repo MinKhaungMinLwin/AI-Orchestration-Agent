@@ -33598,6 +33598,20 @@ def test_turn_contract_canonicalizes_price_benefit_router_alias_without_drift() 
     assert not [item for item in contract.contract_drift if item.get("field") == "intent"]
 
 
+def test_turn_contract_does_not_canonicalize_generic_benefit_lookup_to_price() -> None:
+    contract = build_turn_contract(
+        user_text="혜택 알려줘",
+        intent_frame=IntentFrame(domain=PolicyDomain.DISCOVERY, intent="benefit_event_list_lookup"),
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.DISCOVERY],
+            execution_plan=["discovery:benefit_lookup"],
+        ),
+    )
+
+    assert contract.planner_intent == "benefit_lookup"
+    assert contract.intent != "price_or_coupon_check"
+
+
 def test_turn_contract_does_not_clarify_normal_product_description() -> None:
     contract = _transaction_turn_contract("dynapro hp3 설명해줘")
 

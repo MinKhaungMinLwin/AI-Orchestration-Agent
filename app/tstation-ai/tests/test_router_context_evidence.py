@@ -204,6 +204,21 @@ def test_router_evidence_canonicalizes_price_benefit_alias_and_preserves_raw_int
     assert evidence["raw_policy_intent"] == "price_or_benefit_lookup"
 
 
+def test_router_evidence_does_not_canonicalize_generic_benefit_lookup_to_price() -> None:
+    routing = _routing_result(
+        primary_action="lookup",
+        entity_candidates={},
+        execution_plan=["discovery:benefit_lookup"],
+        domains=["discovery"],
+    )
+
+    evidence = build_router_evidence(routing, domains=["discovery"])
+
+    assert evidence["domain"] == "discovery"
+    assert evidence["intent"] == "benefit_lookup"
+    assert evidence["raw_intent"] == "benefit_lookup"
+
+
 def test_router_context_compacts_append_description_and_card_payload() -> None:
     encoded = base64.b64encode(("상품 상세 설명" * 80).encode()).decode()
     messages = [
