@@ -121,6 +121,7 @@ from services.tstation.chat import (
     _final_price_from_row,
     _should_attempt_direct_preorder_from_schedule_ui_action,
     _should_emit_direct_preorder_from_schedule_selection,
+    _is_schedule_selection_text,
     _schedule_selection_values_from_text,
     _should_recover_final_price_for_schedule_selection,
     _build_bare_product_search_tool_input,
@@ -444,6 +445,8 @@ from services.tstation.policies.resolved_context import (
 )
 from services.tstation.policies import schedule_tool_gate
 from services.tstation.policies import support_response_policy as support_response_policy_module
+from services.tstation.policies.contract_direct_executor import evaluate_contract_direct_path
+from services.tstation.policies.contract_required_tool_candidate import _contract_required_tool_candidate
 from services.tstation.policies.transaction_intent_policy import build_transaction_intent_frame, plan_transaction_tools
 from services.tstation.policies.transaction_response_policy import decide_transaction_response
 from services.tstation.policies.slot_fill_controller import (
@@ -11950,6 +11953,80 @@ def test_router_wins_store_search_over_stale_quick_order_schedule_frame() -> Non
     assert payload["response_decision"]["metadata"]["response_shape_key"] == "store_search"
     assert aligned is not None
     assert aligned.preferred_tool == "transaction_store_preview_tool"
+    assert aligned.allowed_tools == contract.allowed_tools
+
+
+def test_router_wins_discount_question_over_stale_quick_order_schedule_frame() -> None:
+    user_text = "\ud560\uc778\uc740 \uc5b4\ub5bb\uac8c \uc801\uc6a9\ub41c\uac70\uc57c?"
+    routing_result = _routing_result(
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        execution_plan=["transaction:price_or_coupon_check"],
+        referred_object_type="product",
+    )
+    stale_order_frame = IntentFrame(
+        domain=PolicyDomain.TRANSACTION,
+        intent="quick_order_reservation",
+        sub_intent="reservation",
+        known_slots={
+            "pending_intent": "order",
+            "goal_type": "place_order",
+            "goods_no": "G000000310126",
+            "product_name": "Ventus S2 AS",
+            "tire_size": "245/45R19",
+            "ord_qty": 4,
+            "shop_id": "F00098",
+            "shop_name": "T-Station Yeoksam",
+        },
+        missing_slots=("requested_cal_day", "rsv_hour"),
+    )
+    stale_order_plan = ToolPlan(
+        allowed_tools=("get_store_schedule_tool", "quick_order_tool"),
+        preferred_tool="get_store_schedule_tool",
+        required_slots=("requested_cal_day", "rsv_hour"),
+        metadata={"response_intent": "quick_order_reservation"},
+    )
+    stale_order_response = ResponseDecision(
+        response_shape=ResponseShape.DATE_PICK,
+        template=TemplateName.DATE_PICK,
+        required_slots=("requested_cal_day", "rsv_hour"),
+        metadata={"response_shape_key": "reservation_slots"},
+    )
+
+    contract = build_turn_contract(
+        user_text=user_text,
+        intent_frame=stale_order_frame,
+        tool_plan=stale_order_plan,
+        response_decision=stale_order_response,
+        routing_result=routing_result,
+        merged_slots=ConversationSlots(
+            pending_intent="order",
+            goal_type="place_order",
+            goods_no="G000000310126",
+            product_name="Ventus S2 AS",
+            tire_size="245/45R19",
+            ord_qty=4,
+            shop_id="F00098",
+            shop_name="T-Station Yeoksam",
+        ),
+        action_mode="purchase_continuation",
+        context_state="resumed",
+        resume_source="expected_slot_fill:schedule",
+        previous_pending_intent="order",
+        previous_goal_type="place_order",
+    )
+    aligned = align_tool_plan_to_turn_contract(stale_order_plan, contract)
+    payload = contract.to_dict()
+
+    assert contract.intent == "price_or_coupon_check"
+    assert contract.router_wins_applied is True
+    assert contract.blocking_required_slots == ()
+    assert "get_final_price_tool" in contract.allowed_tools
+    assert "get_store_schedule_tool" in contract.forbidden_tools
+    assert "quick_order_tool" in contract.forbidden_tools
+    assert payload["response_decision"]["template"] == "quickReply"
+    assert payload["response_decision"]["metadata"]["response_shape_key"] == "price_or_coupon_check"
+    assert aligned is not None
+    assert aligned.preferred_tool == "get_final_price_tool"
     assert aligned.allowed_tools == contract.allowed_tools
 
 
@@ -31871,6 +31948,29 @@ def test_explicit_qna_router_alias_builds_human_escalation_contract(execution_in
     assert "search_faq_hybrid_tool" in contract.forbidden_tools
 
 
+@pytest.mark.parametrize("user_text", ["1:1 문의하기", "1:1 문의", "상담사 연결", "고객 상담 연결"])
+def test_explicit_qna_text_builds_human_escalation_contract_without_router_alias(user_text: str) -> None:
+    contract = build_turn_contract(
+        user_text=user_text,
+        routing_result=_routing_result(
+            domains=[MultiAgentDomain.Domain.LEADING],
+            execution_plan=["ask_for_clarification"],
+            policy_intent="none",
+        ),
+        action_mode="info_only",
+        previous_pending_intent="order",
+        previous_goal_type="place_order",
+    )
+
+    assert contract.domain == "support"
+    assert contract.intent == "human_escalation"
+    assert contract.allowed_tools == ("transfer_to_qna_tool",)
+    assert contract.preferred_tool == "transfer_to_qna_tool"
+    assert contract.response_decision["template"] == "qnaComplete"
+    assert contract.response_decision["metadata"]["response_shape_key"] == "human_escalation"
+    assert "search_faq_hybrid_tool" in contract.forbidden_tools
+
+
 def test_legal_action_complaint_routes_to_support_scope_without_legal_steps() -> None:
     user_text = "티스테이션 정자점 고소하는 법 알려줘"
 
@@ -37771,6 +37871,81 @@ def test_direct_preorder_event_recovers_product_and_payment_from_pending_order_c
     assert event["data"]["metadata"]["missingPreorderContext"] == []
 
 
+def test_direct_preorder_event_prefers_canonical_product_context_over_raw_tire_model() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000310126",
+        tire_model="벤투스 S2 AS 하려고 하는데 쿠폰 적용",
+        tire_size="275/35R20",
+        ord_qty=4,
+        shop_id="F00721",
+        shop_name="티스테이션 판교점",
+        requested_cal_day="20260709",
+        rsv_hour="17",
+        payment_amount=1059200,
+        pending_intent="order",
+        goal_type="place_order",
+        availability_context={
+            "active_flow_context": {
+                "flow_type": "commerce",
+                "status": "active",
+                "product": {
+                    "goods_no": "G000000310126",
+                    "product_name": "벤투스 S2 AS",
+                    "tire_size": "275/35R20",
+                },
+            }
+        },
+    )
+
+    event = _build_direct_preorder_event_from_slots(slots)
+
+    assert event is not None
+    assert event["data"]["orderInfo"]["product"] == "벤투스 S2 AS 275/35R20"
+    assert event["data"]["metadata"]["productName"] == "벤투스 S2 AS"
+
+
+def test_contract_preorder_event_prefers_canonical_product_context_over_raw_tire_model() -> None:
+    slots = {
+        "goods_no": "G000000310126",
+        "tire_model": "벤투스 S2 AS 하려고 하는데 쿠폰 적용",
+        "tire_size": "275/35R20",
+        "ord_qty": 4,
+        "shop_id": "F00721",
+        "shop_name": "티스테이션 판교점",
+        "requested_cal_day": "20260709",
+        "rsv_hour": "17",
+        "payment_amount": 1059200,
+        "availability_context": {
+            "active_flow_context": {
+                "flow_type": "commerce",
+                "status": "active",
+                "product": {
+                    "goods_no": "G000000310126",
+                    "product_name": "벤투스 S2 AS",
+                    "tire_size": "275/35R20",
+                },
+            }
+        },
+    }
+    contract = TurnContract(
+        domain="transaction",
+        intent="quick_order_reservation_slot_fill_schedule",
+        known_slots=slots,
+        response_decision={
+            "template": "preOrder",
+            "metadata": {"response_shape_key": "reservation_confirmation_ready", "flow_step": "build_preorder"},
+        },
+        action_mode="purchase_continuation",
+        flow_step="build_preorder",
+    )
+
+    event = build_preorder_event(contract, slots)
+
+    assert event is not None
+    assert event["data"]["orderInfo"]["product"] == "벤투스 S2 AS 275/35R20"
+    assert event["data"]["metadata"]["productName"] == "벤투스 S2 AS"
+
+
 def test_direct_preorder_event_does_not_recover_product_or_payment_from_template_payload() -> None:
     slots = ConversationSlots(
         goods_no="G000000310126",
@@ -38198,6 +38373,32 @@ def test_direct_preorder_schedule_ui_action_attempt_does_not_require_router_skip
     assert _should_attempt_direct_preorder_from_schedule_ui_action(schedule_context, {}) is True
     assert _should_attempt_direct_preorder_from_schedule_ui_action(store_context, {}) is False
     assert _should_attempt_direct_preorder_from_schedule_ui_action(None, {}) is False
+
+def test_schedule_selection_text_can_drive_direct_preorder_without_ui_action() -> None:
+    schedule_text = "2026\ub144 7\uc6d4 9\uc77c (\ubaa9) 10:00"
+    contract = _transaction_turn_contract(
+        schedule_text,
+        {
+            "goods_no": "G000000310119",
+            "tire_model": "\ubca4\ud22c\uc2a4 S2 AS",
+            "tire_size": "215/55R17",
+            "ord_qty": 4,
+            "shop_id": "F00721",
+            "shop_name": "\ud2f0\uc2a4\ud14c\uc774\uc158 \ud310\uad50\uc810",
+            "requested_cal_day": "20260709",
+            "rsv_hour": "10",
+            "payment_amount": 501600,
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+    contract = replace(contract, action_mode="purchase_continuation")
+
+    assert _is_schedule_selection_text(schedule_text) is True
+    assert _should_emit_direct_preorder_from_schedule_selection(
+        contract,
+        transaction_tool_plan=SimpleNamespace(metadata={}),
+    ) is True
 
 def test_schedule_selection_text_values_override_previous_schedule_context() -> None:
     assert _schedule_selection_values_from_text("2026년 7월 7일 (화)\n15:00") == {
@@ -44758,3 +44959,110 @@ def test_card_installment_prompts_forbid_general_smartpay_month_union() -> None:
     assert "일반 카드 무이자 [2,3,6] 과 스마트페이 [12,24] 를 절대 합산" in prompt_text
     assert "set 합집합" not in prompt_text
     assert "union" not in prompt_text.lower()
+
+
+def test_purchase_quantity_change_datepick_contract_is_direct_path_eligible() -> None:
+    contract = TurnContract(
+        domain=PolicyDomain.TRANSACTION.value,
+        intent="quick_order_reservation_slot_fill_quantity",
+        known_slots={
+            "goods_no": "G000000310119",
+            "tire_size": "215/55R17",
+            "ord_qty": 4,
+            "shop_id": "F00071",
+        },
+        allowed_tools=("get_store_schedule_tool", "get_multi_store_schedule_tool"),
+        forbidden_tools=("quick_order_tool",),
+        preferred_tool="get_store_schedule_tool",
+        response_decision={
+            "template": "datepick",
+            "metadata": {"response_shape_key": "reservation_slots", "flow_step": "show_schedule"},
+        },
+        tool_args_patch={
+            "goods_no": "G000000310119",
+            "tire_size": "215/55R17",
+            "ord_qty": 4,
+            "shop_id": "F00071",
+        },
+    )
+
+    decision = evaluate_contract_direct_path(
+        turn_contract=contract,
+        router_evidence={"primary_action": "reserve", "confidence": 1.0},
+        user_text="4 units",
+    )
+
+    assert decision.eligible is True
+    assert decision.tool == "get_store_schedule_tool"
+    assert decision.template == "datepick"
+
+    candidate = _contract_required_tool_candidate(
+        turn_contract=contract,
+        user_text="4 units",
+        merged_slots=None,
+    )
+
+    assert candidate is not None
+    assert candidate.tool_name == "get_store_schedule_tool"
+    assert candidate.tool_input == {"shop_id": "F00071", "mode": "general"}
+
+
+def test_purchase_product_change_preserves_region_and_place_query() -> None:
+    existing = FlowState.from_pending_order_context({
+        "goods_no": "G-OLD",
+        "product_name": "Old Product",
+        "tire_size": "215/55R17",
+        "ord_qty": 2,
+        "region": "Pangyo",
+        "place_query": "Pangyo",
+        "shop_id": "F00071",
+        "shop_name": "Pangyo Store",
+        "requested_cal_day": "20260707",
+        "rsv_hour": "15",
+        "payment_amount": 250800,
+    })
+    delta = FlowState.from_flat_delta({"product_name": "New Product"}, source="test")
+
+    result = existing.merge(delta, source="test")
+    context = result.state.to_pending_order_context()
+
+    assert context["product_name"] == "New Product"
+    assert context["tire_size"] == "215/55R17"
+    assert context["ord_qty"] == 2
+    assert context["region"] == "Pangyo"
+    assert context["place_query"] == "Pangyo"
+    assert "goods_no" not in context
+    assert "shop_id" not in context
+    assert "requested_cal_day" not in context
+    assert "rsv_hour" not in context
+    assert "payment_amount" not in context
+
+
+def test_purchase_region_change_resets_selected_store_schedule_and_price() -> None:
+    existing = FlowState.from_pending_order_context({
+        "goods_no": "G000000310119",
+        "product_name": "Ventus S2 AS",
+        "tire_size": "215/55R17",
+        "ord_qty": 2,
+        "shop_id": "F00071",
+        "shop_name": "Pangyo Store",
+        "requested_cal_day": "20260707",
+        "rsv_hour": "15",
+        "payment_amount": 250800,
+        "price_basis": "lowest_price",
+    })
+    delta = FlowState.from_flat_delta({"region": "Hannam"}, source="test")
+
+    result = existing.merge(delta, source="test")
+    context = result.state.to_pending_order_context()
+
+    assert context["goods_no"] == "G000000310119"
+    assert context["tire_size"] == "215/55R17"
+    assert context["ord_qty"] == 2
+    assert context["region"] == "Hannam"
+    assert "shop_id" not in context
+    assert "shop_name" not in context
+    assert "requested_cal_day" not in context
+    assert "rsv_hour" not in context
+    assert "payment_amount" not in context
+    assert "price_basis" not in context

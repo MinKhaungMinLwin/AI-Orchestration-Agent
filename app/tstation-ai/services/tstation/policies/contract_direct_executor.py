@@ -185,6 +185,10 @@ def _evaluate_transaction_contract(
         if known_slots.get("shop_id") or (turn_contract.tool_args_patch or {}).get("shop_id"):
             return DirectPathDecision(True, True, "store_schedule", None, tool, "datepick")
         return _fallback("missing_required_slot")
+    if tool == "get_store_schedule_tool" and _is_reservation_datepick_contract(turn_contract):
+        if known_slots.get("shop_id") or (turn_contract.tool_args_patch or {}).get("shop_id"):
+            return DirectPathDecision(True, True, "reservation_schedule", None, tool, "datepick")
+        return _fallback("missing_required_slot")
     if intent in {"reservation_status_lookup", "reservation_store_info_lookup"} and tool == "get_my_reservations_tool":
         return DirectPathDecision(True, True, "reservation_lookup", None, tool, "quickReply")
     if intent == "coupon_applicable_products" and tool == "search_benefit_applicable_products_tool":
@@ -206,6 +210,12 @@ def _evaluate_transaction_contract(
 def _fallback(reason: str) -> DirectPathDecision:
     return DirectPathDecision(True, False, None, reason, None, None)
 
+
+def _is_reservation_datepick_contract(turn_contract: TurnContract) -> bool:
+    response_decision = turn_contract.response_decision or {}
+    metadata = response_decision.get("metadata") if isinstance(response_decision, Mapping) else None
+    response_shape_key = str(metadata.get("response_shape_key") or "") if isinstance(metadata, Mapping) else ""
+    return str(response_decision.get("template") or "") == "datepick" and response_shape_key == "reservation_slots"
 
 def _router_confidence(router_evidence: Mapping[str, Any] | None) -> float:
     try:

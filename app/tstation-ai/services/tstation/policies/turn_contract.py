@@ -389,6 +389,12 @@ _REFERENCE_GUARD_EXEMPT_INTENTS = frozenset({
     "store_visit_advisory",
 })
 _SUPPORT_ANSWER_ACTION_MODES = frozenset({"support_policy_answer", "info_only"})
+_EXPLICIT_HUMAN_ESCALATION_TEXT_RE = re.compile(
+    r"(?:1\s*:\s*1|1\s*대\s*1|일\s*대\s*일)\s*(?:문의|상담)(?:\s*(?:하기|연결|접수|신청|하고\s*싶|해\s*줘|해주세요))?"
+    r"|(?:상담(?:원|사)?|사람|직원|고객\s*상담)\s*(?:연결|접수|문의|상담)(?:해\s*줘|해주세요|하고\s*싶)?"
+    r"|(?:문의|상담)\s*(?:접수|연결)(?:해\s*줘|해주세요|하고\s*싶)?",
+    re.IGNORECASE,
+)
 _REFERENCE_GUARD_EXEMPT_DISCOVERY_PLAN_TOKENS = frozenset({
     "general_recommendation",
     "condition_recommendation",
@@ -730,7 +736,12 @@ def _router_wins_information_interrupts_slot_fill(
         return False
     if not str(resume_source or "").strip().startswith("expected_slot_fill:"):
         return False
-    return intent in ROUTER_WINS_INFORMATIONAL_INTENTS or intent.endswith("_policy") or intent.endswith("_guidance")
+    return (
+        intent == "price_or_coupon_check"
+        or intent in ROUTER_WINS_INFORMATIONAL_INTENTS
+        or intent.endswith("_policy")
+        or intent.endswith("_guidance")
+    )
 
 def _drop_interrupted_slot_fill_values(
     values: Mapping[str, Any],
@@ -2075,7 +2086,11 @@ def align_tool_plan_to_turn_contract(tool_plan: ToolPlan | None, contract: TurnC
 
 def _should_align_router_wins_tool_plan(contract: TurnContract) -> bool:
     intent = str(contract.intent or "")
-    return intent in ROUTER_WINS_EXECUTION_BOUNDARY_INTENTS or intent in _SUPPORT_FAQ_POLICY_TOOL_INTENTS
+    return (
+        intent in ROUTER_WINS_EXECUTION_BOUNDARY_INTENTS
+        or intent in _SUPPORT_FAQ_POLICY_TOOL_INTENTS
+        or intent == "price_or_coupon_check"
+    )
 
 
 def _router_wins_default_preferred_tool(contract: TurnContract) -> str | None:
@@ -2110,6 +2125,7 @@ def _default_preferred_tool_for_boundary(
         "stock_store_search": "transaction_store_preview_tool",
         "store_search": "get_store_list_tool",
         "store_schedule": "get_store_schedule_tool",
+        "price_or_coupon_check": "get_final_price_tool",
         "open_store_search": "search_stores_complex_tool",
         "store_service_search": "search_stores_tool",
         "store_recommendation_by_vehicle_experience": "search_stores_complex_tool",
@@ -5268,6 +5284,8 @@ def _router_wins_information_intent(
     response_decision: ResponseDecision | None = None,
     action_mode: str = "",
 ) -> str | None:
+    if _is_explicit_human_escalation_text(user_text):
+        return "human_escalation"
     comparison_intent = _comparison_router_wins_intent(
         routing_result=routing_result,
         intent_frame=intent_frame,
@@ -5281,6 +5299,20 @@ def _router_wins_information_intent(
         str(planner_intent or "").strip(),
         str(getattr(intent_frame, "intent", "") or "").strip(),
     )
+    code_intent = str(getattr(intent_frame, "intent", "") or "").strip()
+    code_slots = getattr(intent_frame, "known_slots", {}) if intent_frame is not None else {}
+    has_code_product_context = isinstance(code_slots, Mapping) and bool(
+        code_slots.get("goods_no")
+        or code_slots.get("product_name")
+        or code_slots.get("tire_model")
+        or code_slots.get("pending_product_name")
+    )
+    if (
+        "price_or_coupon_check" in candidates[:2]
+        and code_intent != "price_or_coupon_check"
+        and has_code_product_context
+    ):
+        return "price_or_coupon_check"
     for candidate in candidates:
         if not candidate or candidate == "none" or candidate in _ROUTER_WINS_EXECUTION_EXCLUDED_INTENTS:
             continue
@@ -5298,6 +5330,13 @@ def _router_wins_information_intent(
     if complaint_scope == "tstation_service_complaint":
         return "tstation_service_complaint"
     return None
+
+
+def _is_explicit_human_escalation_text(user_text: str | None) -> bool:
+    text = re.sub(r"\s+", " ", str(user_text or "").strip())
+    if not text:
+        return False
+    return _EXPLICIT_HUMAN_ESCALATION_TEXT_RE.search(text) is not None
 
 
 def _router_wins_current_turn_intent(
@@ -5422,6 +5461,8 @@ def _router_wins_domain(intent: str, planner_domains: tuple[str, ...]) -> str:
         "competitor_counterpart_guidance",
     }:
         return "discovery"
+    if intent == "price_or_coupon_check":
+        return "transaction"
     if intent in ROUTER_WINS_INFORMATIONAL_INTENTS or intent.endswith("_policy") or intent.endswith("_guidance"):
         return "support"
     if intent in _OWNED_WARRANTY_LOOKUP_INTENTS:
@@ -5642,6 +5683,17 @@ def _router_wins_tool_boundary(intent: str) -> tuple[tuple[str, ...], tuple[str,
                 if tool not in allowed_tools
             ),
         )
+    if intent == "price_or_coupon_check":
+        allowed_tools = (
+            "search_product_tool",
+            "get_final_price_tool",
+            "get_my_coupons_tool",
+            "get_coupon_applicable_products_tool",
+        )
+        return (
+            allowed_tools,
+            tuple(tool for tool in _ROUTER_WINS_TRANSACTION_FORBIDDEN_TOOLS if tool not in allowed_tools),
+        )
     if intent in _SUPPORT_FAQ_POLICY_TOOL_INTENTS:
         return (
             _SUPPORT_SAFE_AGENT_TOOLS,
@@ -5739,6 +5791,8 @@ def _router_wins_response_decision(intent: str) -> dict[str, Any]:
         guidance = "현재 턴의 비교 대상 상품만 구분해 비교한다. 같은 goods_no 두 번 비교하거나 이전 추천 정책으로 응답하지 않는다."
     elif intent == "product_size_list_lookup":
         guidance = "현재 턴의 사이즈 목록 조회 의도에 맞춰 search_product_tool 결과의 규격 목록을 안내한다."
+    elif intent == "price_or_coupon_check":
+        guidance = "현재 턴의 가격/할인 질문에 답한다. 이전 구매/예약 흐름을 재개하거나 예약 일정을 다시 요구하지 않는다."
     elif intent == "tstation_service_complaint":
         guidance = "T-Station 범위의 불편 사항으로 응답하고, 이전 구매/예약/매장 문맥이 실행 flow를 재개하지 않게 한다."
     elif intent == "human_escalation":

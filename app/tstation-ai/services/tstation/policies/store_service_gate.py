@@ -181,8 +181,19 @@ _STORE_SERVICE_AVAILABILITY_SIGNAL_RE = re.compile(
     re.IGNORECASE,
 )
 _STORE_NAME_RE = re.compile(r"((?:티스테이션\s*)?(?:[가-힣A-Za-z0-9]+\s+)?[가-힣A-Za-z0-9]+(?:점|매장))")
+# Generic nouns that end in "점"/"매장" (the same suffix as a real branch name like
+# "강남점") but never name a store. The suffix pattern above can't tell these apart
+# from a real branch by shape alone, so any candidate ending in one of these must
+# be rejected regardless of context words or a leading modifier.
+_GENERIC_STORE_SUFFIX_NOUNS = frozenset({
+    "장착점",  # installation location/point — not a store name
+    "장단점",  # pros and cons
+    "판매점",  # generic "point of sale", not a specific branch
+    "취급점",  # generic "handling store", not a specific branch
+    "지점",  # generic "branch" — not a specific branch name
+})
 _STORE_MENTION_CONTEXT_RE = re.compile(
-    r"티스테이션|더타이어샵|매장|지점|장착점|주소|전화|연락처|영업|운영|휴무|"
+    r"티스테이션|더타이어샵|매장|지점|주소|전화|연락처|영업|운영|휴무|"
     r"예약|재고|입고|장착|교체|작업|확인|구매|주문|질소|보관|야간|심야|퇴근\s*후|퇴근후|저녁|늦게|"
     r"얼라인먼트|휠\s*얼라이먼트|리프트|공휴일|휴일|일요일|토요일|문\s*열",
     re.IGNORECASE,
@@ -275,7 +286,11 @@ def extract_valid_store_name(text: str) -> str | None:
     for match in _STORE_NAME_RE.finditer(value):
         candidate = re.sub(r"\s+", " ", match.group(1)).strip()
         normalized = _normalize_store_name(candidate)
-        if normalized in {"장착점", "지점"}:
+        # The suffix word alone (last token) decides genericness, independent of
+        # any leading modifier word the pattern also captured (e.g. a real 2-word
+        # branch name like "분당 정자점" vs. a verb glued onto a generic noun like
+        # "장착할래 장착점").
+        if normalized.split(" ")[-1] in _GENERIC_STORE_SUFFIX_NOUNS:
             continue
         return normalized
     return None

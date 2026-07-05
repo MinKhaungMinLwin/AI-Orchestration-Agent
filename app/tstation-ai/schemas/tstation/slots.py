@@ -331,8 +331,19 @@ class ConversationSlots(BaseModel):
     ]
     _GOODS_NO_PATTERN: ClassVar[re.Pattern] = re.compile(r"G\d{9,}")
     _SHOP_NAME_PATTERN: ClassVar[re.Pattern] = re.compile(r"([가-힣A-Za-z0-9]+(?:점|매장))")
+    # Generic nouns that end in "점"/"매장" (the same suffix as a real branch name
+    # like "강남점") but never name a store. `_SHOP_NAME_PATTERN` cannot tell these
+    # apart from a real branch by shape alone, so any candidate match equal to one
+    # of these must be rejected outright, regardless of surrounding context words.
+    _GENERIC_STORE_SUFFIX_NOUNS: ClassVar[frozenset[str]] = frozenset({
+        "장착점",  # installation location/point — not a store name
+        "장단점",  # pros and cons
+        "판매점",  # generic "point of sale", not a specific branch
+        "취급점",  # generic "handling store", not a specific branch
+        "지점",  # generic "branch" — not a specific branch name
+    })
     _STORE_MENTION_CONTEXT_PATTERN: ClassVar[re.Pattern] = re.compile(
-        r"티스테이션|더타이어샵|매장|지점|장착점|주소|전화|연락처|영업|운영|휴무|"
+        r"티스테이션|더타이어샵|매장|지점|주소|전화|연락처|영업|운영|휴무|"
         r"예약|재고|입고|장착|구매|주문|질소|보관|야간\s*(?:정비|서비스|작업)|야간정비|"
         r"얼라인먼트|휠\s*얼라이먼트|리프트|공휴일|휴일|일요일|토요일|문\s*열",
         re.IGNORECASE,
@@ -434,7 +445,11 @@ class ConversationSlots(BaseModel):
             r"매장|샵|지점|티스테이션|더타이어샵|올마이T|올마이티|"
             r"가까운\s*곳|근처(?:에)?\s*(?:매장|샵|지점)|"
             r"내\s*주변(?:에)?(?:\s*매장|\s*샵|\s*지점)?|"
-            r"어디.*(?:매장|샵|지점)|(?:매장|샵|지점).*어디"
+            r"어디.*(?:매장|샵|지점)|(?:매장|샵|지점).*어디|"
+            # "근처에 있어?" style existence/proximity questions without the word
+            # "매장" itself (e.g. "<지역> 근처에 있어?"). The store context is
+            # implied by the ongoing store/region-fill flow, not restated here.
+            r"근처(?:에)?\s*있(?:어|나요?|을까요?)"
         ),
     ]
 
@@ -817,7 +832,11 @@ class ConversationSlots(BaseModel):
             slots.ord_qty = extracted_qty
 
         shop_name_match = cls._SHOP_NAME_PATTERN.search(user_text)
-        if shop_name_match and cls.has_valid_store_mention_context(user_text):
+        if (
+            shop_name_match
+            and shop_name_match.group(1) not in cls._GENERIC_STORE_SUFFIX_NOUNS
+            and cls.has_valid_store_mention_context(user_text)
+        ):
             slots.shop_name = shop_name_match.group(1)
 
         # Intent hint: first matching pattern wins. This is a current-turn regex

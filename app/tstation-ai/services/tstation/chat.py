@@ -99,6 +99,7 @@ from services.tstation.policies.price_response_policy import (
     price_row_from_final_price_result,
 )
 from services.tstation.policies.transaction_intent_policy import (
+    _PAYMENT_METHOD_CHANGE_RE,
     build_transaction_intent_frame,
     plan_transaction_tools,
 )
@@ -7579,16 +7580,23 @@ def _build_direct_preorder_event_from_slots(
         else {}
     )
     product_name = (
-        str(slot_values.get("tire_model") or "").strip()
-        or str(slot_values.get("product_name") or "").strip()
-        or str(slot_values.get("pending_product_name") or "").strip()
-        or str(pending_order_context.get("product_name") or "").strip()
+        str(pending_order_context.get("product_name") or "").strip()
+        or str(pending_order_context.get("goods_nm") or "").strip()
+        or str(pending_order_context.get("goodsNm") or "").strip()
         or str(pending_order_context.get("tire_model") or "").strip()
         or str(active_flow_product.get("product_name") or "").strip()
-        or str(active_flow_product.get("tire_model") or "").strip()
         or str(active_flow_product.get("goods_nm") or "").strip()
+        or str(active_flow_product.get("goodsNm") or "").strip()
+        or str(active_flow_product.get("tire_model") or "").strip()
         or str(active_flow_context.get("product_name") or "").strip()
+        or str(active_flow_context.get("goods_nm") or "").strip()
+        or str(active_flow_context.get("goodsNm") or "").strip()
         or str(active_flow_context.get("tire_model") or "").strip()
+        or str(slot_values.get("product_name") or "").strip()
+        or str(slot_values.get("goods_nm") or "").strip()
+        or str(slot_values.get("goodsNm") or "").strip()
+        or str(slot_values.get("tire_model") or "").strip()
+        or str(slot_values.get("pending_product_name") or "").strip()
     )
     product_label = f"{product_name} {tire_size}".strip() if product_name else tire_size
 
@@ -20284,6 +20292,12 @@ def _is_fresh_product_transaction_request(text: str, pending_intent: str | None)
         return False
     if _is_order_history_lookup_query(text):
         return False
+    if _PAYMENT_METHOD_CHANGE_RE.search(text):
+        # A payment-method-change request references an existing order by number,
+        # not a product name. The fallback candidate extractor below can't tell
+        # the difference and will happily glue leftover sentence fragments
+        # together as a "product name" for text like this if allowed to run.
+        return False
     has_product_hint = bool(
         ConversationSlots.has_product_keyword(text)
         or _has_sized_product_name_hint(text)
@@ -29013,9 +29027,12 @@ class TStationChatServiceV2:
         direct_preorder_event: dict[str, Any] | None = None
         if (
             turn_contract is not None
-            and _should_attempt_direct_preorder_from_schedule_ui_action(
-                vehicle_ui_action_context,
-                validated_ui_action_router_skip_metadata,
+            and (
+                _should_attempt_direct_preorder_from_schedule_ui_action(
+                    vehicle_ui_action_context,
+                    validated_ui_action_router_skip_metadata,
+                )
+                or _is_schedule_selection_text(last_user_text)
             )
         ):
             if _should_emit_direct_preorder_from_schedule_selection(
