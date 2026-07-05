@@ -1327,6 +1327,36 @@ def build_turn_contract(
             ),
         )
         forbidden_tools = _merge_tuple(forbidden_tools, tuple(_INVENTORY_ONLY_STOCK_ACTION_TOOLS))
+    active_stock_inventory_flow = _active_stock_inventory_flow_contract_patch(
+        known_slots,
+        resume_source=resume_source,
+    )
+    if active_stock_inventory_flow is not None:
+        domain = "transaction"
+        intent = "stock_store_search"
+        sub_intent = "stock"
+        action_mode = "stock_check"
+        context_state = "resumed"
+        known_slots.update(active_stock_inventory_flow["slot_patch"])
+        required_slots = ()
+        resolvable_required_slots = ()
+        blocking_required_slots = ()
+        blocking_required_slots_source = "flow_controller:store_slot_fill"
+        allowed_tools = ("get_store_inventory_tool",)
+        forbidden_tools = _merge_tuple(
+            tuple(tool for tool in forbidden_tools if tool != "get_store_inventory_tool"),
+            (
+                "transaction_store_preview_tool",
+                "get_store_schedule_tool",
+                "get_multi_store_schedule_tool",
+                "quick_order_tool",
+                "preorder_with_null_required_fields",
+            ),
+        )
+        preferred_tool = "get_store_inventory_tool"
+        tool_args_patch = dict(active_stock_inventory_flow["tool_args_patch"])
+        flow_id = str(active_stock_inventory_flow.get("flow_id") or "stock_inventory")
+        flow_step = "check_inventory"
     if _is_owned_record_lookup_intent(intent):
         record_allowed_tools, record_forbidden_tools, record_preferred_tool = _owned_record_lookup_tool_boundary(intent)
         allowed_tools = record_allowed_tools
@@ -1782,6 +1812,8 @@ def build_turn_contract(
                 "flow_step": comparison_purchase_flow_state.flow_step,
             },
         }
+    if active_stock_inventory_flow is not None:
+        response_decision_payload = _active_stock_inventory_response_decision_payload()
     if selected_store_schedule_continuation and _selected_store_schedule_response_decision_mismatch(
         response_decision_payload
     ):
@@ -3399,6 +3431,96 @@ def _selected_store_schedule_continuation_matches(
         and (known_slots.get("ord_qty") or known_slots.get("quantity"))
         and str(known_slots.get("source_tool") or "") == "transaction_store_preview_tool"
     )
+
+
+def _active_stock_inventory_flow_contract_patch(
+    known_slots: Mapping[str, Any],
+    *,
+    resume_source: str,
+) -> dict[str, Any] | None:
+    if str(resume_source or "") not in {
+        "expected_slot_fill:store",
+        "router_slot_fill:store",
+        "validated_ui_action_slot_fill",
+        "location_selection:stock_store_search",
+    }:
+        return None
+    availability_context = (
+        known_slots.get("availability_context") if isinstance(known_slots.get("availability_context"), Mapping) else {}
+    )
+    active_flow = availability_context.get("active_flow_context") if isinstance(availability_context, Mapping) else None
+    if not isinstance(active_flow, Mapping):
+        active_flow = known_slots.get("active_flow_context")
+    if not isinstance(active_flow, Mapping):
+        return None
+    if str(active_flow.get("next_tool") or active_flow.get("target_action") or "").strip() != "get_store_inventory_tool":
+        return None
+    if str(active_flow.get("current_step") or "").strip() != "check_inventory":
+        return None
+    if str(active_flow.get("progress_source") or "").strip() != "flow_controller:store_slot_fill":
+        return None
+
+    product = active_flow.get("product") if isinstance(active_flow.get("product"), Mapping) else {}
+    store = active_flow.get("store") if isinstance(active_flow.get("store"), Mapping) else {}
+    intent = active_flow.get("intent") if isinstance(active_flow.get("intent"), Mapping) else {}
+    tool_args_patch = (
+        dict(active_flow.get("tool_args_patch")) if isinstance(active_flow.get("tool_args_patch"), Mapping) else {}
+    )
+    goods_no = str(product.get("goods_no") or known_slots.get("goods_no") or "").strip()
+    tire_size = str(product.get("tire_size") or known_slots.get("tire_size") or "").strip()
+    quantity = product.get("ord_qty") or known_slots.get("ord_qty") or known_slots.get("quantity")
+    shop_id = str(store.get("shop_id") or known_slots.get("shop_id") or "").strip()
+    if not (goods_no and tire_size and quantity and shop_id and tool_args_patch):
+        return None
+    if not (tool_args_patch.get("goods_list") and tool_args_patch.get("shop_id_list")):
+        return None
+    slot_patch = {
+        "goods_no": goods_no,
+        "tire_size": tire_size,
+        "ord_qty": quantity,
+        "quantity": quantity,
+        "shop_id": shop_id,
+        "pending_intent": "stock",
+        "goal_type": "store_with_stock",
+        "stock_check_mode": "inventory_only",
+        "active_flow_context": active_flow,
+    }
+    for key, value in {
+        "product_name": product.get("product_name") or known_slots.get("product_name"),
+        "tire_model": product.get("tire_model") or known_slots.get("tire_model"),
+        "pending_product_name": product.get("pending_product_name") or known_slots.get("pending_product_name"),
+        "shop_name": store.get("shop_name") or known_slots.get("shop_name"),
+        "store_name": store.get("shop_name") or known_slots.get("store_name"),
+        "region": store.get("region") or known_slots.get("region"),
+        "sub_flow_type": intent.get("sub_flow_type") or "stock",
+    }.items():
+        if value not in (None, "", [], {}):
+            slot_patch[key] = value
+    return {
+        "flow_id": "stock_inventory",
+        "tool_args_patch": tool_args_patch,
+        "slot_patch": slot_patch,
+    }
+
+
+def _active_stock_inventory_response_decision_payload() -> dict[str, Any]:
+    return {
+        "response_shape": "location",
+        "template": "location",
+        "required_slots": [],
+        "forbidden_behaviors": [
+            "datepick_for_pure_inventory_flow",
+            "preorder_for_pure_inventory_flow",
+            "preorder_with_null_required_fields",
+        ],
+        "assistant_guidance": "선택된 매장의 순수 재고 확인 결과만 안내하고 예약 날짜 선택으로 확장하지 않는다.",
+        "metadata": {
+            "response_shape_key": "stock_inventory_lookup",
+            "stock_check_mode": "inventory_only",
+            "flow_id": "stock_inventory",
+            "flow_step": "check_inventory",
+        },
+    }
 
 
 def _selected_store_schedule_response_decision_mismatch(response_decision: Mapping[str, Any] | None) -> bool:

@@ -38043,6 +38043,94 @@ def test_turn_contract_recovers_today_install_stock_from_transaction_fallback() 
     assert contract.fallback_reason == "high_risk_intent"
 
 
+def test_selected_stock_store_active_flow_runs_inventory_without_date_guard() -> None:
+    active_flow_context = {
+        "flow_type": "commerce",
+        "status": "resumed",
+        "flow_step": "store_selected",
+        "product": {
+            "goods_no": "G000000319584",
+            "product_name": "벤투스 에어S 245/45R19",
+            "tire_model": "벤투스 에어S 245/45R19",
+            "tire_size": "245/45R19",
+            "ord_qty": 4,
+        },
+        "store": {
+            "shop_id": "F00721",
+            "shop_name": "티스테이션 판교점",
+            "region": "분당",
+        },
+        "intent": {
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+            "stock_check_mode": "inventory_only",
+            "sub_flow_type": "stock",
+        },
+        "target_action": "get_store_inventory_tool",
+        "current_step": "check_inventory",
+        "missing_slots": [],
+        "next_tool": "get_store_inventory_tool",
+        "allowed_tools": ["get_store_inventory_tool"],
+        "tool_args_patch": {
+            "goods_list": [{"goodsNo": "G000000319584", "qty": "4"}],
+            "shop_id_list": [{"shopId": "F00721"}],
+        },
+        "progress_source": "flow_controller:store_slot_fill",
+    }
+    frame = IntentFrame(
+        domain=PolicyDomain.TRANSACTION,
+        intent="stock_store_search_slot_fill_store",
+        known_slots={
+            "goods_no": "G000000319584",
+            "tire_size": "245/45R19",
+            "ord_qty": 4,
+            "shop_id": "F00721",
+            "shop_name": "티스테이션 판교점",
+            "pending_intent": "stock",
+            "goal_type": "store_with_stock",
+            "stock_check_mode": "preview",
+            "availability_context": {"active_flow_context": active_flow_context},
+        },
+    )
+    tool_plan = ToolPlan(
+        allowed_tools=(),
+        preferred_tool=None,
+        forbidden_tools=(
+            "transaction_store_preview_tool",
+            "get_store_schedule_tool",
+            "get_store_inventory_tool",
+        ),
+        required_slots=("requested_cal_day",),
+        metadata={"stock_check_mode": "preview"},
+    )
+    response_decision = ResponseDecision(
+        response_shape=ResponseShape.CLARIFY,
+        template=TemplateName.QUICK_REPLY,
+        metadata={"response_shape_key": "missing_stock_search_slots"},
+    )
+
+    contract = build_turn_contract(
+        user_text="티스테이션 판교점",
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=response_decision,
+        resume_source="router_slot_fill:store",
+        action_mode="stock_check",
+        context_state="resumed",
+    )
+
+    assert contract.intent == "stock_store_search"
+    assert contract.flow_step == "check_inventory"
+    assert contract.blocking_required_slots == ()
+    assert not should_guard_required_slots(contract)
+    assert contract.allowed_tools == ("get_store_inventory_tool",)
+    assert contract.preferred_tool == "get_store_inventory_tool"
+    assert "get_store_inventory_tool" not in contract.forbidden_tools
+    assert contract.tool_args_patch == active_flow_context["tool_args_patch"]
+    assert contract.known_slots["stock_check_mode"] == "inventory_only"
+    assert contract.response_decision["metadata"]["response_shape_key"] == "stock_inventory_lookup"
+
+
 def test_quick_order_reservation_treats_selected_datepick_as_resolved_booking_datetime() -> None:
     contract = _transaction_turn_contract(
         "주문 확정",
