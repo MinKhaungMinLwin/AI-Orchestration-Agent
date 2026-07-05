@@ -187,6 +187,23 @@ def test_router_benefit_entity_fills_applicable_products_query_slot() -> None:
     assert plan.tool_args_patch == {"query": "반짝블랙딜", "lang_cd": "ko"}
 
 
+def test_router_evidence_canonicalizes_price_benefit_alias_and_preserves_raw_intent() -> None:
+    routing = _routing_result(
+        primary_action="lookup",
+        entity_candidates={},
+        execution_plan=["transaction:price_or_benefit_lookup"],
+        domains=["transaction"],
+        policy_intent="price_or_benefit_lookup",
+    )
+
+    evidence = build_router_evidence(routing, domains=["transaction"])
+
+    assert evidence["intent"] == "price_or_coupon_check"
+    assert evidence["raw_intent"] == "price_or_benefit_lookup"
+    assert evidence["policy_intent"] == "price_or_coupon_check"
+    assert evidence["raw_policy_intent"] == "price_or_benefit_lookup"
+
+
 def test_router_context_compacts_append_description_and_card_payload() -> None:
     encoded = base64.b64encode(("상품 상세 설명" * 80).encode()).decode()
     messages = [

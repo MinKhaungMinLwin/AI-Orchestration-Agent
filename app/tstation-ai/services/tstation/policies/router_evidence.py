@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Mapping
 
+from services.tstation.policies.router_intent_schema import canonical_router_intent
+
 
 _ENTITY_CONFIDENCE_THRESHOLD = 0.5
 _ROUTER_SLOT_SOURCE = "router_evidence"
@@ -29,7 +31,10 @@ def build_router_evidence(
     execution_plan = _execution_plan(routing_result)
     primary_action = _primary_action(routing_result, execution_plan)
     router_domain = _router_domain(routing_result, domains, execution_plan)
-    router_intent = _router_intent(routing_result, execution_plan)
+    raw_router_intent = _router_intent(routing_result, execution_plan)
+    router_intent = canonical_router_intent(raw_router_intent)
+    raw_policy_intent = str(getattr(routing_result, "policy_intent", "") or "").strip()
+    policy_intent = canonical_router_intent(raw_policy_intent)
     entities = _normalized_entities(getattr(routing_result, "entity_candidates", None))
     entities = _merge_regex_supplemental(entities, regex_candidates or {})
     confidence = getattr(routing_result, "planner_confidence", None)
@@ -37,8 +42,10 @@ def build_router_evidence(
     evidence: dict[str, Any] = {
         "domain": router_domain,
         "intent": router_intent,
+        "raw_intent": raw_router_intent,
         "primary_action": primary_action,
-        "policy_intent": str(getattr(routing_result, "policy_intent", "") or "").strip(),
+        "policy_intent": policy_intent,
+        "raw_policy_intent": raw_policy_intent,
         "execution_plan": list(execution_plan),
         "entities": entities,
         "flow": str(getattr(routing_result, "flow", "") or "").strip(),

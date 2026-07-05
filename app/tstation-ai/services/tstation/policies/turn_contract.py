@@ -23,6 +23,7 @@ from services.tstation.policies.preorder_event_builder import build_preorder_eve
 from services.tstation.policies.resolved_context import build_resolved_turn_context
 from services.tstation.policies.response_decision import ResponseDecision, ToolPlan
 from services.tstation.policies.router_evidence import merge_router_evidence_known_slots
+from services.tstation.policies.router_intent_schema import canonical_router_intent
 from services.tstation.policies.support_response_policy import (
     build_general_cancel_fee_policy_event,
 )
@@ -6149,6 +6150,9 @@ def _normalize_plan_intent(value: str) -> str:
     # applicable-products keeps its own dedicated intent, so it is excluded here.
     if "applicable_products" in normalized and "coupon" not in normalized:
         return "event_applicable_products_lookup"
+    canonical = canonical_router_intent(normalized)
+    if canonical and canonical != normalized:
+        return canonical
     aliases = {
         "resolve_product": "resolve_or_describe_product",
         "continue_purchase": "quick_order_reservation",
