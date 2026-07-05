@@ -32,6 +32,28 @@ def test_purchase_product_quantity_region_resolves_store_candidates_before_sched
     assert "quick_order_tool" in state.forbidden_tools
 
 
+def test_purchase_ambiguous_product_forbids_store_preview_until_variant_selected() -> None:
+    # goods_no unresolved (multiple same-spec variants, e.g. 흡음재 Y / 컴포트 N).
+    # A region-less transaction_store_preview_tool must stay forbidden so the flow
+    # re-offers variant selection instead of dead-ending on "매장을 찾지 못했어요".
+    state = resolve_purchase_order_flow(
+        intent="quick_order_reservation",
+        known_slots={
+            "product_name": "벤투스 에어S",
+            "tire_model": "벤투스 에어S",
+            "tire_size": "245/45R19",
+            "ord_qty": 4,
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+    )
+
+    assert state is not None
+    assert state.flow_step == "resolve_product"
+    assert "transaction_store_preview_tool" in state.forbidden_tools
+    assert "transaction_store_preview_tool" not in state.allowed_tools
+
+
 def test_purchase_product_quantity_store_resolves_schedule_before_preorder() -> None:
     state = resolve_purchase_order_flow(
         intent="quick_order_reservation",

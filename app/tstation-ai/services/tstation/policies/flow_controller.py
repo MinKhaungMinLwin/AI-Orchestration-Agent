@@ -1841,7 +1841,10 @@ def resolve_purchase_order_flow(
             required_slots=("product",),
             missing_slots=("product",) if not product_name else (),
             allowed_tools=("search_product_tool",),
-            forbidden_tools=tuple(tool for tool in _PURCHASE_FORBIDDEN_TOOLS if tool != "transaction_store_preview_tool"),
+            # goods_no still ambiguous (multiple variants): forbid store preview so a region-less
+            # transaction_store_preview_tool cannot dead-end ("매장을 찾지 못했어요") before the user
+            # selects a variant. Store preview reopens once goods_no resolves (ask_store step).
+            forbidden_tools=_PURCHASE_FORBIDDEN_TOOLS,
             preferred_tool="search_product_tool",
             template=TemplateName.QUICK_REPLY,
             response_shape_key="missing_order_slots" if product_name else "product_search_summary",
