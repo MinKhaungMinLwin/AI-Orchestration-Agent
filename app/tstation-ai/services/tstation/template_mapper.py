@@ -3808,6 +3808,167 @@ def _map_price_or_coupon_summary(tool_data_list: list[dict], assistant_text: str
     )
 
 
+def _order_history_rows(tool_result: dict) -> list[dict]:
+    data = tool_result.get("data") if isinstance(tool_result, dict) else None
+    if not isinstance(data, dict):
+        return []
+    rows = data.get("orders")
+    if not isinstance(rows, list):
+        rows = data.get("items")
+    return [row for row in rows or [] if isinstance(row, dict)]
+
+
+def _order_history_row_value(row: Mapping[str, Any], *keys: str) -> str:
+    detail = row.get("detail") if isinstance(row.get("detail"), Mapping) else {}
+    for key in keys:
+        value = row.get(key)
+        if value in (None, ""):
+            value = detail.get(key)
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _order_history_no(row: Mapping[str, Any]) -> str:
+    return _order_history_row_value(row, "ord_no", "ordNo", "order_no", "orderNo").upper()
+
+
+def _map_order_history_lookup(tool_data_list: list[dict], assistant_text: str) -> dict | None:
+    response_shape_key = _current_response_shape_key()
+    if response_shape_key != "order_history_lookup":
+        return None
+    entries = _find_entries(tool_data_list, "get_orders_of_user_tool")
+    if not entries:
+        return None
+    entry = entries[-1]
+    result = entry.get("data") if isinstance(entry.get("data"), dict) else {}
+    status = str(result.get("status") or "").strip().lower()
+    metadata = {
+        "response_shape_key": "order_history_lookup",
+        "orderHistoryLookup": True,
+    }
+    if status == "error":
+        return {
+            "type": "data",
+            "template": "quickReply",
+            "source_domain": "transaction",
+            "assistant_response_source": "code_order_history_lookup",
+            "data": {
+                "assistantResponse": "주문내역을 불러오지 못했어요. 잠시 후 다시 시도해 주세요.",
+                "quickReplies": [
+                    {"label": "다시 시도", "domain": "TRANSACTION"},
+                    {"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"},
+                ],
+                "predictedDomains": ["TRANSACTION"],
+                "metadata": metadata | {"orderCount": 0, "lookupFailed": True},
+            },
+        }
+
+    grouped: dict[str, dict[str, Any]] = {}
+    for row in _order_history_rows(result):
+        ord_no = _order_history_no(row)
+        if not ord_no:
+            continue
+        group = grouped.setdefault(
+            ord_no,
+            {"ord_no": ord_no, "rows": [], "status": "", "goods_nm": "", "qty": 0, "date": ""},
+        )
+        group["rows"].append(row)
+        if not group["status"]:
+            group["status"] = _order_history_row_value(row, "ord_prgs_stat_nm", "status_nm") or "상태 확인 필요"
+        if not group["goods_nm"]:
+            group["goods_nm"] = _order_history_row_value(row, "goods_nm", "goodsName") or "상품명 확인 필요"
+        qty_text = _order_history_row_value(row, "ord_qty", "ordQty")
+        if qty_text.isdigit():
+            group["qty"] += int(qty_text)
+        date_text = _simple_date_label(_order_history_row_value(row, "sys_reg_dtime", "ord_dtime", "orderDate"))
+        if date_text and date_text > str(group["date"] or ""):
+            group["date"] = date_text
+
+    summaries = sorted(grouped.values(), key=lambda item: str(item.get("date") or ""), reverse=True)
+    if not summaries:
+        return {
+            "type": "data",
+            "template": "quickReply",
+            "source_domain": "transaction",
+            "assistant_response_source": "code_order_history_lookup",
+            "data": {
+                "assistantResponse": "최근 주문 내역이 없어요.",
+                "quickReplies": [
+                    {"label": "상품 추천 받기", "domain": "DISCOVERY"},
+                    {"label": "매장 찾기", "domain": "TRANSACTION"},
+                ],
+                "predictedDomains": ["TRANSACTION", "DISCOVERY"],
+                "metadata": metadata | {"orderCount": 0, "lookupFailed": False},
+            },
+        }
+
+    table_lines = [
+        "| 주문번호 | 주문상태 | 상품명 | 수량 | 주문날짜 |",
+        "|---|---|---|---|---|",
+    ]
+    for item in summaries[:5]:
+        extra_count = max(len(item["rows"]) - 1, 0)
+        goods_nm = str(item["goods_nm"] or "상품명 확인 필요").replace("|", "/")
+        if extra_count:
+            goods_nm = f"{goods_nm} 외 {extra_count}개"
+        qty = item["qty"] if item["qty"] > 0 else "-"
+        status = str(item["status"] or "상태 확인 필요").replace("|", "/")
+        table_lines.append(f"| {item['ord_no']} | {status} | {goods_nm} | {qty} | {item['date'] or '-'} |")
+
+    latest_ord_no = str(summaries[0]["ord_no"] or "")
+    if len(summaries) == 1:
+        assistant_response = (
+            "최근 주문 1건을 확인했어요.\n\n"
+            + "\n".join(table_lines)
+            + "\n\n주문 상세도 함께 보실 수 있어요."
+        )
+        quick_replies = [
+            {
+                "label": "주문 상세 보기",
+                "url": CTAUrls.ORDER_HISTORY_DETAIL.replace("<ord_no>", latest_ord_no),
+                "domain": "TRANSACTION",
+            },
+            {"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"},
+        ]
+    else:
+        assistant_response = (
+            "최근 주문내역을 확인했어요.\n\n"
+            + "\n".join(table_lines)
+            + "\n\n어느 주문을 더 확인할지 주문번호를 말씀해 주세요. 전체 주문 내역은 아래 버튼에서 확인하실 수 있어요."
+        )
+        quick_replies = [{"label": "주문 내역 보기", "url": CTAUrls.ORDER_HISTORY, "domain": "TRANSACTION"}]
+        if latest_ord_no:
+            quick_replies.append(
+                {
+                    "label": "최근 주문 상세 보기",
+                    "url": CTAUrls.ORDER_HISTORY_DETAIL.replace("<ord_no>", latest_ord_no),
+                    "domain": "TRANSACTION",
+                }
+            )
+
+    return _with_contract_renderer_metadata(
+        {
+            "type": "data",
+            "template": "quickReply",
+            "source_domain": "transaction",
+            "assistant_response_source": "code_order_history_lookup",
+            "data": {
+                "assistantResponse": assistant_response,
+                "quickReplies": quick_replies,
+                "predictedDomains": ["TRANSACTION"],
+                "metadata": metadata | {
+                    "orderCount": len(summaries),
+                    "latestOrdNo": latest_ord_no,
+                    "lookupFailed": False,
+                },
+            },
+        },
+        response_shape_key,
+    )
+
+
 def _simple_date_label(value: Any) -> str:
     text = str(value or "").strip()
     if not text:
@@ -7217,6 +7378,7 @@ _MAPPERS: dict[str, Any] = {
     "get_stores_with_time_filter_tool": _map_time_filter_location,
     "get_store_schedule_tool": _map_datepick,
     "get_store_detail_tool": _map_store_detail_info,
+    "get_orders_of_user_tool": _map_order_history_lookup,
     "save_to_cart_tool": _map_order_complete,
     "quick_order_tool": _map_order_complete,
 }
@@ -7255,6 +7417,10 @@ def try_build_template(accumulated_tool_data: list[dict], assistant_text: str) -
     price_or_coupon_summary = _map_price_or_coupon_summary(accumulated_tool_data, assistant_text)
     if price_or_coupon_summary is not None:
         return price_or_coupon_summary
+
+    order_history_lookup = _map_order_history_lookup(accumulated_tool_data, assistant_text)
+    if order_history_lookup is not None:
+        return order_history_lookup
 
     unsized_tire_summary = _map_unsized_tire_summary(accumulated_tool_data, assistant_text)
     if unsized_tire_summary is not None:
@@ -7302,6 +7468,7 @@ def try_build_template(accumulated_tool_data: list[dict], assistant_text: str) -
         ("get_my_cars_tool", _map_list_car),
         ("get_user_vehicles_tool", _map_list_car),
         ("get_my_coupons_tool", _map_voucher),
+        ("get_orders_of_user_tool", _map_order_history_lookup),
         ("compare_discount_tool", _map_cheapest_product),
         ("get_cheapest_price_tool", _map_cheapest_product),
         ("search_youtube_video_tool", _map_preview_youtube),

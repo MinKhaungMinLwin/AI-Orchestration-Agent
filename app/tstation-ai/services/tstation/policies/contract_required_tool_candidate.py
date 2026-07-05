@@ -49,6 +49,7 @@ _OWNED_RECORD_RECOVERY_TOOLS = frozenset({
 _OWNED_RECORD_RECOVERY_INTENTS = frozenset({
     "reservation_status_lookup",
     "reservation_store_info_lookup",
+    "order_history_lookup",
     "order_cancel_status_lookup",
     "order_arrival_status_lookup",
 })

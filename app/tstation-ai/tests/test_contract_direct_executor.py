@@ -14,7 +14,9 @@ from services.tstation.executors.contract_required_tool_executor import (
 )
 from services.tstation.policies.contract_direct_executor import evaluate_contract_direct_path
 from services.tstation.policies.contract_required_tool_candidate import _contract_required_tool_candidate
+from services.tstation.policies.response_decision import ResponseDecision, ResponseShape, TemplateName
 from services.tstation.policies.turn_contract import TurnContract
+from services.tstation.template_mapper import current_transaction_response_decision
 from services.tstation.policies.reservation_history_policy import (
     build_reservation_status_lookup_event,
     build_reservation_store_info_event,
@@ -33,6 +35,7 @@ def _fake_transaction_tools_module(monkeypatch):
         get_store_inventory_tool=SimpleNamespace(),
         get_store_list_tool=SimpleNamespace(),
         get_my_reservations_tool=SimpleNamespace(),
+        get_orders_of_user_tool=SimpleNamespace(),
         get_store_schedule_tool=SimpleNamespace(),
     )
     monkeypatch.setitem(sys.modules, "services.tstation.agents.c_transaction_agent.tools", transaction_tools)
@@ -417,6 +420,112 @@ def test_direct_path_allows_location_store_search_and_coupon_lookup() -> None:
     assert coupon.eligible is True
     assert coupon.reason == "coupon_lookup"
     assert coupon.template == "voucher"
+
+
+def test_direct_path_defaults_store_service_search_preferred_tool_when_contract_has_multiple_allowed_tools() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="store_service_search",
+        known_slots={"place_query": "고양시청", "region": "고양시청"},
+        allowed_tools=("search_stores_tool", "get_store_list_tool", "get_nearby_stores_tool"),
+        forbidden_tools=("transaction_store_preview_tool", "get_store_schedule_tool"),
+        preferred_tool=None,
+        response_decision={"template": "location", "metadata": {"response_shape_key": "store_service_search"}},
+        context_state="dormant",
+    )
+
+    decision = evaluate_contract_direct_path(
+        turn_contract=contract,
+        router_evidence=_evidence(primary_action="search", domain="transaction"),
+        user_text="고양시청 근처는?",
+    )
+
+    assert decision.eligible is True
+    assert decision.reason == "store_search"
+    assert decision.tool == "search_stores_tool"
+    assert decision.template == "location"
+
+
+def test_direct_path_allows_price_or_coupon_final_price_contract() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="price_or_coupon_check",
+        known_slots={"goods_no": "G000000310126", "ord_qty": 2},
+        allowed_tools=("search_product_tool", "get_final_price_tool", "get_my_coupons_tool"),
+        preferred_tool="get_final_price_tool",
+        response_decision={"template": "quickReply", "metadata": {"response_shape_key": "price_coupon_summary"}},
+        context_state="active",
+    )
+
+    decision = evaluate_contract_direct_path(
+        turn_contract=contract,
+        router_evidence=_evidence(primary_action="lookup", domain="transaction"),
+        user_text="적용된 할인 뭐야?",
+    )
+
+    assert decision.eligible is True
+    assert decision.reason == "price_or_coupon_check"
+    assert decision.tool == "get_final_price_tool"
+    assert decision.template == "quickReply"
+
+
+def test_direct_path_allows_order_history_lookup_contract() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="order_history_lookup",
+        known_slots={"owned_record_target": "order"},
+        allowed_tools=("get_orders_of_user_tool", "get_order_status_tool"),
+        forbidden_tools=("transaction_store_preview_tool", "get_store_schedule_tool"),
+        preferred_tool="get_orders_of_user_tool",
+        response_decision={"template": "quickReply", "metadata": {"response_shape_key": "order_history_lookup"}},
+        context_state="dormant",
+    )
+
+    decision = evaluate_contract_direct_path(
+        turn_contract=contract,
+        router_evidence=_evidence(primary_action="lookup", domain="transaction"),
+        user_text="내 주문 내역 보여줘",
+    )
+
+    assert decision.eligible is True
+    assert decision.reason == "order_lookup"
+    assert decision.tool == "get_orders_of_user_tool"
+    assert decision.template == "quickReply"
+
+
+def test_direct_path_does_not_claim_order_status_lookup_without_renderer() -> None:
+    arrival = evaluate_contract_direct_path(
+        turn_contract=TurnContract(
+            domain="transaction",
+            intent="order_arrival_status_lookup",
+            known_slots={"owned_record_target": "order"},
+            allowed_tools=("get_orders_of_user_tool", "get_order_status_tool"),
+            preferred_tool="get_orders_of_user_tool",
+            response_decision={"template": "quickReply", "metadata": {"response_shape_key": "order_arrival_status_lookup"}},
+            context_state="dormant",
+        ),
+        router_evidence=_evidence(primary_action="lookup", domain="transaction"),
+        user_text="입고 문자 받았는데 방문해도 돼?",
+    )
+    cancel = evaluate_contract_direct_path(
+        turn_contract=TurnContract(
+            domain="transaction",
+            intent="order_cancel_status_lookup",
+            known_slots={"order_no": "O001"},
+            allowed_tools=("get_order_status_tool", "get_orders_of_user_tool"),
+            preferred_tool="get_order_status_tool",
+            tool_args_patch={"query_no": "O001"},
+            response_decision={"template": "quickReply", "metadata": {"response_shape_key": "order_cancel_status_summary"}},
+            context_state="dormant",
+        ),
+        router_evidence=_evidence(primary_action="lookup", domain="transaction"),
+        user_text="O001 취소됐는지 확인해줘",
+    )
+
+    assert arrival.eligible is False
+    assert arrival.fallback_reason == "no_deterministic_template"
+    assert cancel.eligible is False
+    assert cancel.fallback_reason == "no_deterministic_template"
 
 
 def test_registered_vehicle_direct_executor_runs_car_lookup_then_recommendation(monkeypatch) -> None:
@@ -1152,6 +1261,62 @@ def test_owned_reservation_lookup_recovery_runs_from_dormant_purchase_context(mo
     assert captured_input == {"sct_cd": "all"}
     assert recovery["event"]["template"] == "quickReply"
     assert recovery["event"]["recovered_tool"] == "get_my_reservations_tool"
+
+
+def test_order_history_lookup_recovery_runs_from_dormant_context(monkeypatch) -> None:
+    from services.tstation.executors import contract_required_tool_executor as executor
+
+    transaction_tools = _fake_transaction_tools_module(monkeypatch)
+    captured_input: dict = {}
+
+    def fake_orders_invoke(tool_input: dict):
+        captured_input.update(tool_input)
+        return {"status": "success", "data": {"items": [{"ord_no": "O001"}]}}
+
+    async def fake_to_thread(fn, *args, **kwargs):
+        return fn(*args, **kwargs)
+
+    monkeypatch.setattr(transaction_tools, "get_orders_of_user_tool", SimpleNamespace(invoke=fake_orders_invoke))
+    monkeypatch.setattr(executor.asyncio, "to_thread", fake_to_thread)
+
+    decision_token = current_transaction_response_decision.set(
+        ResponseDecision(
+            response_shape=ResponseShape.SUMMARY,
+            template=TemplateName.QUICK_REPLY,
+            metadata={"response_shape_key": "order_history_lookup"},
+        )
+    )
+    try:
+        recovery = asyncio.run(
+            _recover_contract_required_tool(
+                turn_contract=TurnContract(
+                    domain="transaction",
+                    intent="order_history_lookup",
+                    known_slots={"owned_record_target": "order"},
+                    allowed_tools=("get_orders_of_user_tool", "get_order_status_tool"),
+                    forbidden_tools=("quick_order_tool", "transaction_store_preview_tool", "get_store_schedule_tool"),
+                    preferred_tool="get_orders_of_user_tool",
+                    response_decision={
+                        "template": "quickReply",
+                        "metadata": {"response_shape_key": "order_history_lookup"},
+                    },
+                    action_mode="owned_record_lookup",
+                    context_state="dormant",
+                ),
+                user_text="내 주문 내역 보여줘",
+                merged_slots=None,
+                blocked_fast_path_source="contract_required_tool_executor",
+            )
+        )
+    finally:
+        current_transaction_response_decision.reset(decision_token)
+
+    assert recovery is not None
+    assert recovery["tool_name"] == "get_orders_of_user_tool"
+    assert captured_input == {}
+    assert recovery["event"]["template"] == "quickReply"
+    assert recovery["event"]["recovered_tool"] == "get_orders_of_user_tool"
+    assert "최근 주문" in recovery["event"]["data"]["assistantResponse"]
 
 
 def test_schedule_final_price_recovery_runs_before_preorder(monkeypatch) -> None:

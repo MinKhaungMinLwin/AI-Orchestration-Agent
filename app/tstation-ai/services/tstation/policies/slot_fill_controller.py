@@ -15,8 +15,13 @@ from services.tstation.policies.flow_state import flow_state_values_from_slot_va
 from services.tstation.policies.price_basis_policy import PRICE_BASIS_FIELDS
 from services.tstation.policies.resolved_context import canonical_context_from_template_boundary
 from services.tstation.policies.slot_fill_policy import expected_slot_fill_precheck
+from services.tstation.policies.ui_action_policy import is_quantity_only_stock_followup_text
 
 _PRE_ROUTER_SLOT_FILL_ENABLED = False
+_QUANTITY_SLOT_FILL_POLICY_ANCHOR_RE = re.compile(
+    r"할인|쿠폰|가격|얼마|견적|혜택|사은품|프로모션|이벤트|행사|적립|멤버십|보증|환불|취소|문의|상담",
+    re.IGNORECASE,
+)
 
 _PURCHASE_RECONCILIATION_SLOT_FIELDS = (
     "goods_no",
@@ -103,7 +108,7 @@ def build_router_slot_fill_context(
         user_text=user_text,
         has_purchase_anchor=has_purchase_anchor,
     )
-    known_slots = _router_slot_fill_known_slots(slots)
+    known_slots = _router_slot_fill_known_slots(slots, include_dormant_context=current_flow != "none")
     flow_step = _router_slot_fill_flow_step(current_flow, known_slots)
     if current_flow == "quick_order_reservation":
         flow_state = resolve_purchase_order_flow(intent="quick_order_reservation", known_slots=known_slots)
@@ -430,26 +435,7 @@ def _has_transaction_context_shape(slots: ConversationSlots) -> bool:
     availability_context = getattr(slots, "availability_context", None)
     if not isinstance(availability_context, Mapping):
         return False
-    flow_context = flow_state_values_from_slot_values(slots, source="slot_fill_transaction_context_shape")
-    if any(
-        flow_context.get(field_name) not in (None, "", [], {})
-        for field_name in (
-            "goods_no",
-            "product_name",
-            "ord_qty",
-            "pending_intent",
-            "goal_type",
-            "shop_id",
-            "shop_name",
-        )
-    ):
-        return True
-    for context_key in (
-        "active_flow_context",
-        "dormant_purchase_context",
-        "dormant_stock_context",
-        "dormant_transaction_context",
-    ):
+    for context_key in ("pending_order_context", "active_flow_context"):
         context = availability_context.get(context_key)
         if isinstance(context, Mapping) and any(
             context.get(field_name) not in (None, "", [], {})
@@ -477,13 +463,7 @@ def _apply_region_change_to_transaction_contexts(
     context_root = dict(availability_context or {})
     patched_keys: list[str] = []
     cleared_keys_by_context: dict[str, list[str]] = {}
-    for context_key in (
-        "pending_order_context",
-        "active_flow_context",
-        "dormant_purchase_context",
-        "dormant_stock_context",
-        "dormant_transaction_context",
-    ):
+    for context_key in ("pending_order_context", "active_flow_context"):
         context = context_root.get(context_key)
         if not isinstance(context, Mapping) or not _context_can_accept_region_patch(context):
             continue
@@ -610,7 +590,28 @@ def _router_slot_fill_current_flow(
         return "quick_order_reservation"
 
     availability_context = getattr(slots, "availability_context", None)
-    if isinstance(availability_context, Mapping):
+    has_expected_region_slot_fill = bool(
+        isinstance(availability_context, Mapping)
+        and (
+            availability_context.get("awaiting_store_region") is True
+            or str(availability_context.get("pending_step") or "") == "store_region_selection"
+        )
+    )
+    pending_required_slot = str(getattr(slots, "pending_required_slot", "") or "").strip()
+    has_expected_quantity_slot_fill = bool(
+        _is_expected_quantity_slot_fill_text(user_text)
+        and pending_required_slot in {"quantity", "ord_qty"}
+    )
+    independent_store_search = bool(
+        re.search(r"근처|주변|인근|매장|지점", str(user_text or ""), re.IGNORECASE)
+        and not has_purchase_anchor
+        and not has_expected_region_slot_fill
+    )
+    if (
+        isinstance(availability_context, Mapping)
+        and not independent_store_search
+        and (has_purchase_anchor or has_expected_region_slot_fill or has_expected_quantity_slot_fill)
+    ):
         for key in ("dormant_purchase_context",):
             context = availability_context.get(key)
             if not isinstance(context, Mapping):
@@ -637,7 +638,18 @@ def _router_slot_fill_current_flow(
     return "none"
 
 
-def _router_slot_fill_known_slots(slots: ConversationSlots | None) -> dict[str, Any]:
+def _is_expected_quantity_slot_fill_text(user_text: str) -> bool:
+    text = str(user_text or "").strip()
+    if not is_quantity_only_stock_followup_text(text):
+        return False
+    return not _QUANTITY_SLOT_FILL_POLICY_ANCHOR_RE.search(text)
+
+
+def _router_slot_fill_known_slots(
+    slots: ConversationSlots | None,
+    *,
+    include_dormant_context: bool = True,
+) -> dict[str, Any]:
     if slots is None:
         return {}
     values = {
@@ -657,7 +669,7 @@ def _router_slot_fill_known_slots(slots: ConversationSlots | None) -> dict[str, 
         if values.get(key) in (None, "", [], {}) and value not in (None, "", [], {}):
             values[key] = value
     availability_context = getattr(slots, "availability_context", None)
-    if isinstance(availability_context, Mapping):
+    if include_dormant_context and isinstance(availability_context, Mapping):
         for context_key in (
             "dormant_purchase_context",
             "dormant_stock_context",

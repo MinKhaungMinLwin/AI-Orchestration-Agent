@@ -5852,13 +5852,17 @@ def resolve_region_or_store_input_context(
         if resolution_source is None:
             resolution_source = prompt_source
 
+    explicit_region_prompt = bool(
+        resolution_source in {"assistant_prompt", "assistant_message", "location_prompt"}
+        or str(resolution_source or "").startswith("quickreply:")
+    )
     if not input_values:
-        if resolution_source not in {"ui_action", "chip_context"}:
+        if resolution_source not in {"ui_action", "chip_context", "pending_step", "active_flow_context"} and not explicit_region_prompt:
             return RegionStoreInputContextResolution()
         input_values = _region_store_input_values(
             text,
             merged_slots,
-            allow_region_fallback=False,
+            allow_region_fallback=resolution_source in {"pending_step", "active_flow_context"} or explicit_region_prompt,
             block_region_text=block_region_text,
         )
     if not input_values:

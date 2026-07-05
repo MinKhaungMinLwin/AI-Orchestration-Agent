@@ -110,6 +110,10 @@ from services.tstation.policies.slot_fill_controller import (
     can_promote_existing_store_for_expected_slot_fill,
     resolve_pre_router_slot_fill,
 )
+from services.tstation.policies.pending_clarification_policy import (
+    resolve_pending_clarification_answer,
+    stage_pending_clarification,
+)
 from services.tstation.policies.leading_response_policy import (
     build_complaint_scope_guard_event,
     build_privacy_contact_request_event,
@@ -4482,6 +4486,35 @@ class StreamingMultiAgentCoordinator:
                 )
                 return fallback_result.domains, fallback_result
             return [MultiAgentDomain.Domain.LEADING], None
+
+    @staticmethod
+    def _clear_injected_route_context(messages: list[dict]) -> list[dict]:
+        """Remove prior route/client injections before replacing the current-turn route context."""
+        cleaned: list[dict] = []
+        for message in messages:
+            if message.get("role") == "system" and str(message.get("content") or "").startswith("## CLIENT INSTRUCTIONS\n"):
+                continue
+            next_message = dict(message)
+            if next_message.get("role") == "user":
+                content = str(next_message.get("content") or "")
+                changed = True
+                while changed:
+                    changed = False
+                    while content.startswith("# Respond in Korean language\n## CONVERSATION CONTEXT\n"):
+                        content = content.removeprefix("# Respond in Korean language\n")
+                        changed = True
+                    while content.startswith("## CONVERSATION CONTEXT\n"):
+                        marker = "\n# Respond in Korean language\n"
+                        marker_index = content.find(marker)
+                        if marker_index < 0:
+                            break
+                        content = content[marker_index + 1 :]
+                        changed = True
+                while content.startswith("# Respond in Korean language\n# Respond in Korean language\n"):
+                    content = content.removeprefix("# Respond in Korean language\n")
+                next_message["content"] = content
+            cleaned.append(next_message)
+        return cleaned
 
     @staticmethod
     def _inject_conversation_context(messages: list[dict], routing: MultiAgentDomain | None) -> list[dict]:
@@ -16164,7 +16197,10 @@ def _should_recover_executable_store_search_contract_tool(turn_contract: TurnCon
     )
     return bool(
         str(turn_contract.domain or "") == "transaction"
-        and (str(turn_contract.intent or "") in {"store_search", "open_store_search"} or stale_stock_store_search)
+        and (
+            str(turn_contract.intent or "") in {"store_search", "open_store_search", "store_service_search"}
+            or stale_stock_store_search
+        )
         and preferred_tool in {"search_stores_tool", "get_store_list_tool"}
         and preferred_tool in allowed_tools
         and preferred_tool not in forbidden_tools
@@ -21355,10 +21391,36 @@ def _stage_dormant_transaction_context(slots: ConversationSlots, *, source: str)
     """Keep prior transaction context available for grounding without making it active."""
     _clear_invalid_action_label_region(slots, source=f"{source}:dormant_transaction_context")
     _clear_invalid_store_identity_slots(slots, source=f"{source}:dormant_transaction_context")
-    dormant_context = _pending_order_context_values(slots)
+    context = dict(slots.availability_context or {})
+    context_flow_values: dict[str, Any] = {}
+    for context_key in ("pending_order_context", "active_flow_context"):
+        source_context = context.get(context_key)
+        if not isinstance(source_context, Mapping):
+            continue
+        context_flow_values.update(
+            {
+                key: value
+                for key, value in flow_state_values_from_slot_values(
+                    source_context,
+                    source=f"{source}:dormant_transaction_context:{context_key}",
+                ).items()
+                if value not in (None, "", [], {})
+            }
+        )
+    if context_flow_values:
+        dormant_context = dict(context_flow_values)
+    else:
+        flow_context = flow_state_values_from_slot_values(slots, source=f"{source}:dormant_transaction_context")
+        dormant_context = {
+            key: value
+            for key, value in {
+                **dict(flow_context or {}),
+                **_pending_order_context_values(slots),
+            }.items()
+            if value not in (None, "", [], {})
+        }
     if not dormant_context:
         return {}
-    context = dict(slots.availability_context or {})
     pending_intent = str(dormant_context.get("pending_intent") or slots.pending_intent or "")
     if pending_intent in {"order", "cart"} or dormant_context.get("goal_type") in {"place_order", "add_to_cart"}:
         key = "dormant_purchase_context"
@@ -21376,12 +21438,17 @@ def _stage_dormant_transaction_context(slots: ConversationSlots, *, source: str)
                 {},
             ):
                 dormant_context[extra_key] = existing_context.get(extra_key)
+    active_context = context.get("active_flow_context") if isinstance(context.get("active_flow_context"), Mapping) else {}
+    for flow_key in ("flow_step", "current_step", "missing_slots"):
+        if active_context.get(flow_key) not in (None, "", [], {}) and dormant_context.get(flow_key) in (None, "", [], {}):
+            dormant_context[flow_key] = active_context.get(flow_key)
     dormant_context["source"] = source
     dormant_context["context_state"] = "dormant"
     context[key] = dormant_context
-    if dormant_context.get("awaiting_store_region"):
-        context["awaiting_store_region"] = True
-        context["pending_step"] = "store_region_selection"
+    context.pop("pending_order_context", None)
+    context.pop("active_flow_context", None)
+    context.pop("awaiting_store_region", None)
+    context.pop("pending_step", None)
     slots.availability_context = context
     return dormant_context
 
@@ -26710,6 +26777,69 @@ class TStationChatServiceV2:
         elif routing_result is not None:
             router_source_for_contract = "llm"
             contract_source_for_turn = "router"
+        pending_clarification_resolution = resolve_pending_clarification_answer(
+            merged_slots,
+            user_text=last_user_text,
+        )
+        if pending_clarification_resolution.resolved:
+            if pending_clarification_resolution.slots is not None:
+                merged_slots = pending_clarification_resolution.slots
+                await chat_history_svc.save_slots_async(request.session_id, merged_slots, user_id=request.user_id)
+            resolved_domain = pending_clarification_resolution.domain
+            if resolved_domain == "transaction":
+                domains = [MultiAgentDomain.Domain.TRANSACTION]
+                prompt_profile = (
+                    AgentPromptProfile.TRANSACTION_STORE
+                    if pending_clarification_resolution.intent in {"stock_store_search", "store_service_search"}
+                    else AgentPromptProfile.TRANSACTION_PRICE_STOCK
+                )
+            elif resolved_domain == "discovery":
+                domains = [MultiAgentDomain.Domain.DISCOVERY]
+                prompt_profile = AgentPromptProfile.DISCOVERY_SEARCH
+            else:
+                domains = [MultiAgentDomain.Domain.LEADING]
+                prompt_profile = AgentPromptProfile.FULL
+            routing_result = MultiAgentDomain(
+                reason="pending_clarification_resolved",
+                domains=domains,
+                execution_plan=list(pending_clarification_resolution.execution_plan),
+                user_behavior="resolved short answer within pending clarification candidates",
+                flow="pending_clarification_resolved",
+                claim_check_type="none",
+                complaint_scope="none",
+                agent_prompt_profile=prompt_profile,
+                policy_intent=(
+                    pending_clarification_resolution.intent
+                    if pending_clarification_resolution.domain == "transaction"
+                    else "none"
+                ),
+                planner_confidence=1.0,
+            )
+            skip_decision = False
+            speculative_classify_future = None
+            router_source_for_contract = "pending_clarification"
+            contract_source_for_turn = "pending_clarification"
+            messages = StreamingMultiAgentCoordinator._clear_injected_route_context(messages)
+            messages = StreamingMultiAgentCoordinator._inject_conversation_context(messages, routing_result)
+            messages = StreamingMultiAgentCoordinator._inject_client_prompt(messages)
+            vehicle_selection_trace_metadata.update({
+                "pending_clarification_status": "resolved",
+                "pending_clarification_intent": pending_clarification_resolution.intent,
+                "pending_clarification_domain": pending_clarification_resolution.domain,
+            })
+            logger.info(
+                "[PENDING_CLARIFICATION] resolved short answer intent=%s domain=%s",
+                pending_clarification_resolution.intent,
+                pending_clarification_resolution.domain,
+            )
+        elif pending_clarification_resolution.status == "cleared":
+            if pending_clarification_resolution.slots is not None:
+                merged_slots = pending_clarification_resolution.slots
+                await chat_history_svc.save_slots_async(request.session_id, merged_slots, user_id=request.user_id)
+            vehicle_selection_trace_metadata.update({
+                "pending_clarification_status": "cleared",
+                "pending_clarification_clear_reason": pending_clarification_resolution.reason,
+            })
         latest_router_evidence_snapshot = build_router_evidence(
             routing_result,
             domains=domains,
@@ -26992,6 +27122,22 @@ class TStationChatServiceV2:
             regex_slots=regex_slots,
             explicit_store_purchase_chain_request=explicit_store_purchase_chain_request,
         )
+        if (
+            not pending_clarification_resolution.resolved
+            and _router_contract_requires_current_turn_clarification(routing_result)
+        ):
+            staged_slots = stage_pending_clarification(
+                merged_slots,
+                user_text=last_user_text,
+                routing_result=routing_result,
+                source_turn_id=str(getattr(request, "message_id", "") or ""),
+                source="router_current_turn_clarification",
+            )
+            if staged_slots.model_dump() != merged_slots.model_dump():
+                merged_slots = staged_slots
+                await chat_history_svc.save_slots_async(request.session_id, merged_slots, user_id=request.user_id)
+                vehicle_selection_trace_metadata["pending_clarification_status"] = "staged"
+                logger.info("[PENDING_CLARIFICATION] staged candidates for current-turn clarification")
         if fresh_product_transaction_request:
             if _router_contract_requires_current_turn_clarification(routing_result):
                 logger.info(

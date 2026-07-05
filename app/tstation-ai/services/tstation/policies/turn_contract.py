@@ -2075,10 +2075,62 @@ def should_guard_required_slots(contract: TurnContract | None) -> bool:
     return str(contract.intent or "") in _HARD_REQUIRED_SLOT_GUARD_INTENTS
 
 
-def align_tool_plan_to_turn_contract(tool_plan: ToolPlan | None, contract: TurnContract | None) -> ToolPlan | None:
-    """Keep router-wins execution ContextVar plans inside the final contract boundary."""
+def _contract_tool_args_patch_from_known_slots(contract: TurnContract, preferred_tool: str | None) -> dict[str, Any]:
+    known_slots = contract.known_slots or {}
+    tool = str(preferred_tool or "").strip()
+    if tool == "search_stores_tool":
+        place_query = str(
+            known_slots.get("place_query")
+            or known_slots.get("region")
+            or known_slots.get("location_name")
+            or ""
+        ).strip()
+        if place_query:
+            return {"place_query": place_query}
+    if tool == "get_store_list_tool":
+        shop_name = str(known_slots.get("shop_name") or known_slots.get("store_name") or "").strip()
+        if shop_name:
+            return {"store_nm": shop_name}
+        region = str(known_slots.get("region") or "").strip()
+        if region:
+            return {"region": region}
+    if tool == "get_final_price_tool":
+        goods_no = str(known_slots.get("goods_no") or "").strip()
+        if goods_no:
+            return {"goods_no": goods_no}
+    return {}
 
-    if tool_plan is None or contract is None or not contract.router_wins_applied:
+
+def _align_tool_args_patch_to_contract(
+    tool_args_patch: Mapping[str, Any],
+    contract: TurnContract,
+    preferred_tool: str | None,
+) -> dict[str, Any]:
+    aligned = {
+        str(key): value
+        for key, value in dict(tool_args_patch or {}).items()
+        if value not in (None, "", [], {})
+    }
+    contract_patch = _contract_tool_args_patch_from_known_slots(contract, preferred_tool)
+    if not contract_patch:
+        return aligned
+    tool = str(preferred_tool or "").strip()
+    if tool == "search_stores_tool":
+        for key in ("place_query", "region_code", "store_nm", "shop_name", "region"):
+            aligned.pop(key, None)
+    elif tool == "get_store_list_tool":
+        for key in ("place_query", "region_code", "store_nm", "shop_name", "region"):
+            aligned.pop(key, None)
+    elif tool == "get_final_price_tool":
+        aligned.pop("goods_no", None)
+    aligned.update(contract_patch)
+    return aligned
+
+
+def align_tool_plan_to_turn_contract(tool_plan: ToolPlan | None, contract: TurnContract | None) -> ToolPlan | None:
+    """Keep execution ContextVar plans inside the final TurnContract boundary."""
+
+    if tool_plan is None or contract is None:
         return tool_plan
     if not _should_align_router_wins_tool_plan(contract):
         return tool_plan
@@ -2091,16 +2143,28 @@ def align_tool_plan_to_turn_contract(tool_plan: ToolPlan | None, contract: TurnC
         and preferred_tool not in forbidden_tools
     )
     aligned_preferred_tool = preferred_tool if preferred_allowed else _router_wins_default_preferred_tool(contract)
+    aligned_tool_args_patch = _align_tool_args_patch_to_contract(
+        tool_plan.tool_args_patch or {},
+        contract,
+        aligned_preferred_tool,
+    )
+    known_slots = {
+        str(key): value
+        for key, value in dict(contract.known_slots or {}).items()
+        if value not in (None, "", [], {})
+    }
     metadata = {
         **dict(tool_plan.metadata or {}),
         "tool_plan_aligned_to_turn_contract": True,
         "turn_contract_intent": contract.intent,
-        "router_wins_applied": True,
+        "router_wins_applied": bool(contract.router_wins_applied),
+        "response_intent": contract.intent,
+        "flow_slots": known_slots,
     }
     return ToolPlan(
         allowed_tools=allowed_tools,
         preferred_tool=aligned_preferred_tool,
-        tool_args_patch=dict(tool_plan.tool_args_patch or {}),
+        tool_args_patch=aligned_tool_args_patch,
         forbidden_tools=forbidden_tools,
         required_slots=tuple(contract.required_slots or ()),
         metadata=metadata,
@@ -3427,6 +3491,7 @@ def _is_owned_record_lookup_intent(intent: str) -> bool:
     return intent in {
         "reservation_status_lookup",
         "reservation_store_info_lookup",
+        "order_history_lookup",
         "order_cancel_status_lookup",
         "order_arrival_status_lookup",
         "maintenance_history_lookup",
@@ -3439,7 +3504,7 @@ def _owned_record_lookup_tool_boundary(intent: str) -> tuple[tuple[str, ...], tu
             tuple(_OWNED_RECORD_LOOKUP_FORBIDDEN_TOOLS),
             "get_my_reservations_tool",
         )
-    if intent in {"order_cancel_status_lookup", "order_arrival_status_lookup"}:
+    if intent in {"order_history_lookup", "order_cancel_status_lookup", "order_arrival_status_lookup"}:
         return (
             ("get_orders_of_user_tool", "get_order_status_tool"),
             tuple(_OWNED_RECORD_LOOKUP_FORBIDDEN_TOOLS - {"get_orders_of_user_tool", "get_order_status_tool"}),

@@ -6,7 +6,12 @@ from schemas.tstation.slots import ConversationSlots
 from services.tstation.policies.slot_fill_controller import (
     _flow_state_reconciliation,
     apply_router_location_slot_fill,
+    build_router_slot_fill_context,
     can_promote_existing_store_for_expected_slot_fill,
+)
+from services.tstation.policies.pending_clarification_policy import (
+    resolve_pending_clarification_answer,
+    stage_pending_clarification,
 )
 from services.tstation.policies.slot_fill_policy import expected_slot_fill_precheck
 from services.tstation.policies.ui_action_policy import (
@@ -306,3 +311,262 @@ def test_router_location_slot_fill_requires_transaction_context() -> None:
 
     assert decision.matched is False
     assert decision.slots.region is None
+
+
+def test_dormant_purchase_context_does_not_turn_general_store_search_into_slot_fill() -> None:
+    slots = ConversationSlots(
+        availability_context={
+            "dormant_purchase_context": {
+                "goods_no": "G000000320151",
+                "product_name": "Dynapro HP3",
+                "tire_size": "235/55R19",
+                "ord_qty": 4,
+                "region": "분당",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+                "context_state": "dormant",
+            }
+        },
+    )
+    routing_result = SimpleNamespace(
+        needs_clarification=False,
+        primary_action="store_search",
+        intent="store_service_search",
+        execution_plan=["transaction:store_service_search"],
+        entity_candidates={
+            "location": {
+                "mentioned": True,
+                "name": "고양시청",
+                "type": "place",
+                "reference_text": "고양시청 근처",
+                "confidence": 0.96,
+            }
+        },
+    )
+    router_context = build_router_slot_fill_context(
+        slots=slots,
+        user_text="고양시청 근처는?",
+        latest_product_tmpl=None,
+        latest_location_tmpl=None,
+        latest_datepick_tmpl=None,
+        has_purchase_anchor=False,
+    )
+
+    decision = apply_router_location_slot_fill(
+        slots=slots,
+        routing_result=routing_result,
+        router_context=router_context,
+    )
+
+    assert router_context["current_flow"] == "none"
+    assert decision.matched is False
+    assert decision.slots.availability_context["dormant_purchase_context"]["region"] == "분당"
+    assert decision.slots.region is None
+
+
+def test_router_location_slot_fill_does_not_patch_dormant_purchase_context() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000320151",
+        tire_model="Dynapro HP3",
+        tire_size="235/55R19",
+        ord_qty=4,
+        pending_intent="order",
+        goal_type="place_order",
+        availability_context={
+            "active_flow_context": {
+                "flow_type": "purchase",
+                "flow_step": "ask_store",
+                "status": "active",
+                "ord_qty": 4,
+                "product": {
+                    "goods_no": "G000000320151",
+                    "product_name": "Dynapro HP3",
+                    "tire_size": "235/55R19",
+                    "ord_qty": 4,
+                },
+                "quantity": {"ord_qty": 4},
+                "intent": {"pending_intent": "order", "goal_type": "place_order"},
+            },
+            "dormant_purchase_context": {
+                "goods_no": "G000000111111",
+                "tire_size": "225/45R17",
+                "ord_qty": 2,
+                "region": "분당",
+                "shop_id": "F12345",
+                "shop_name": "티스테이션 분당점",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+                "context_state": "dormant",
+            },
+        },
+    )
+    routing_result = SimpleNamespace(
+        needs_clarification=False,
+        primary_action="store_selection",
+        intent="quick_order_reservation",
+        execution_plan=["transaction:quick_order_reservation"],
+        entity_candidates={
+            "location": {
+                "mentioned": True,
+                "name": "강남",
+                "type": "region",
+                "reference_text": "강남",
+                "confidence": 0.95,
+            }
+        },
+    )
+    router_context = build_router_slot_fill_context(
+        slots=slots,
+        user_text="강남",
+        latest_product_tmpl=None,
+        latest_location_tmpl=None,
+        latest_datepick_tmpl=None,
+        has_purchase_anchor=True,
+    )
+
+    decision = apply_router_location_slot_fill(
+        slots=slots,
+        routing_result=routing_result,
+        router_context=router_context,
+    )
+
+    dormant = decision.slots.availability_context["dormant_purchase_context"]
+    assert decision.matched is True
+    assert decision.slots.region == "강남"
+    assert dormant["region"] == "분당"
+    assert dormant["shop_id"] == "F12345"
+    assert dormant["shop_name"] == "티스테이션 분당점"
+
+
+def test_dormant_purchase_context_does_not_resume_for_unanchored_quantity_question() -> None:
+    slots = ConversationSlots(
+        availability_context={
+            "dormant_purchase_context": {
+                "goods_no": "G000000320151",
+                "tire_size": "235/55R19",
+                "ord_qty": 4,
+                "region": "분당",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+                "context_state": "dormant",
+            }
+        },
+    )
+
+    router_context = build_router_slot_fill_context(
+        slots=slots,
+        user_text="2개 할인은?",
+        latest_product_tmpl=None,
+        latest_location_tmpl=None,
+        latest_datepick_tmpl=None,
+        has_purchase_anchor=False,
+    )
+
+    assert router_context["current_flow"] == "none"
+
+
+def test_pending_clarification_stores_candidates_and_resolves_discount_answer() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000319584",
+        tire_model="벤투스 에어S",
+        tire_size="245/45R19",
+        ord_qty=2,
+    )
+    routing_result = SimpleNamespace(
+        needs_clarification=True,
+        referred_object_status="ambiguous",
+        referred_object_type="product",
+    )
+
+    staged = stage_pending_clarification(
+        slots,
+        user_text="이거 괜찮아?",
+        routing_result=routing_result,
+        source_turn_id="turn-1",
+    )
+    pending = staged.availability_context["pending_clarification"]
+
+    assert pending["status"] == "pending"
+    assert [candidate["intent"] for candidate in pending["candidates"]] == [
+        "price_or_coupon_check",
+        "stock_store_search",
+        "product_description",
+    ]
+    assert pending["base_slots"]["goods_no"] == "G000000319584"
+
+    resolved = resolve_pending_clarification_answer(staged, user_text="할인")
+
+    assert resolved.resolved is True
+    assert resolved.intent == "price_or_coupon_check"
+    assert resolved.domain == "transaction"
+    assert resolved.execution_plan == ("transaction:price_or_coupon_check",)
+    assert resolved.slots.goods_no == "G000000319584"
+    assert "pending_clarification" not in resolved.slots.availability_context
+
+
+def test_pending_clarification_resolves_stock_and_description_only_from_candidates() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000319584",
+        tire_model="벤투스 에어S",
+        availability_context={
+            "pending_clarification": {
+                "status": "pending",
+                "candidates": [
+                    {"label": "재고", "intent": "stock_store_search", "domain": "transaction"},
+                    {"label": "성능", "intent": "product_description", "domain": "discovery"},
+                ],
+                "base_slots": {"goods_no": "G000000319584", "product_name": "벤투스 에어S"},
+            }
+        },
+    )
+
+    stock = resolve_pending_clarification_answer(slots, user_text="재고")
+    description = resolve_pending_clarification_answer(slots, user_text="성능")
+
+    assert stock.intent == "stock_store_search"
+    assert stock.execution_plan == ("transaction:stock_store_search",)
+    assert description.intent == "product_description"
+    assert description.execution_plan == ("discovery:product_description",)
+
+
+def test_pending_clarification_unrelated_answer_clears_and_falls_back_to_router() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000319584",
+        tire_model="벤투스 에어S",
+        availability_context={
+            "pending_clarification": {
+                "status": "pending",
+                "candidates": [
+                    {"label": "가격/할인", "intent": "price_or_coupon_check", "domain": "transaction"},
+                ],
+                "base_slots": {"goods_no": "G000000319584"},
+            }
+        },
+    )
+
+    resolved = resolve_pending_clarification_answer(slots, user_text="고양시청 근처는?")
+
+    assert resolved.status == "cleared"
+    assert resolved.reason == "unrelated_answer"
+    assert "pending_clarification" not in resolved.slots.availability_context
+
+
+def test_pending_clarification_base_context_change_clears_without_resolution() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000000002",
+        tire_model="다른 상품",
+        availability_context={
+            "pending_clarification": {
+                "status": "pending",
+                "candidates": [
+                    {"label": "가격/할인", "intent": "price_or_coupon_check", "domain": "transaction"},
+                ],
+                "base_slots": {"goods_no": "G000000000001"},
+            }
+        },
+    )
+
+    resolved = resolve_pending_clarification_answer(slots, user_text="할인")
+
+    assert resolved.status == "cleared"
+    assert resolved.reason == "base_context_changed"

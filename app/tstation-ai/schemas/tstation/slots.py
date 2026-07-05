@@ -220,6 +220,20 @@ class ConversationSlots(BaseModel):
     def _drop_invalid_product_identity(cls, value: Any) -> Any | None:
         return sanitize_product_identity_value(value)
 
+    @field_validator("pending_intent", mode="before")
+    @classmethod
+    def _normalize_pending_intent(cls, value: Any) -> Any | None:
+        if str(value or "").strip() == "store_search":
+            return None
+        return value
+
+    @field_validator("goal_type", mode="before")
+    @classmethod
+    def _normalize_goal_type(cls, value: Any) -> Any | None:
+        if str(value or "").strip() == "store_search":
+            return "store_finder"
+        return value
+
     # User/regex merge dependencies. These apply before tool/template recovery
     # and are intentionally stricter than runtime recovery: a user-supplied new
     # goods_no represents a new concrete SKU, so the old tire_size must be

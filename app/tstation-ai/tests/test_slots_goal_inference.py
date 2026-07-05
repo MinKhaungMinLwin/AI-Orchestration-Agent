@@ -234,6 +234,13 @@ def test_policy_like_purchase_text_keeps_quantity_but_not_transactional_pending_
     assert slots.goal_type is None
 
 
+def test_store_search_action_values_are_canonicalized_for_durable_slots() -> None:
+    slots = ConversationSlots(pending_intent="store_search", goal_type="store_search")
+
+    assert slots.pending_intent is None
+    assert slots.goal_type == "store_finder"
+
+
 def test_runtime_store_change_clears_store_dependent_amount() -> None:
     existing = ConversationSlots(
         goods_no="G000000312970",

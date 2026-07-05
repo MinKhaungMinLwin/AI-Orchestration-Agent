@@ -709,6 +709,52 @@ def test_chat_message_request_preserves_ui_action_and_slot_patch() -> None:
     assert request.chip_context.model_dump()["slots"]["ord_qty"] == 4
 
 
+def test_pending_clarification_route_reinject_clears_previous_router_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(chat_module, "load_client_injection", lambda: "client prompt")
+    messages = [
+        {"role": "system", "content": "## CLIENT INSTRUCTIONS\nclient prompt"},
+        {
+            "role": "user",
+            "content": (
+                "## CONVERSATION CONTEXT\n"
+                "- User behavior: newer stale route\n"
+                "- Flow so far: stale_flow_2\n\n"
+                "# Respond in Korean language\n"
+                "## CONVERSATION CONTEXT\n"
+                "- User behavior: older stale route\n"
+                "- Flow so far: stale_flow_1\n\n"
+                "# Respond in Korean language\n"
+                "할인"
+            ),
+        },
+    ]
+    routing = MultiAgentDomain(
+        reason="pending_clarification_resolved",
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        execution_plan=["transaction:price_or_coupon_check"],
+        user_behavior="resolved short answer within pending clarification candidates",
+        flow="pending_clarification_resolved",
+        claim_check_type="none",
+        complaint_scope="none",
+        agent_prompt_profile=AgentPromptProfile.TRANSACTION_PRICE_STOCK,
+    )
+
+    cleaned = StreamingMultiAgentCoordinator._clear_injected_route_context(messages)
+    reinjected = StreamingMultiAgentCoordinator._inject_client_prompt(
+        StreamingMultiAgentCoordinator._inject_conversation_context(cleaned, routing)
+    )
+
+    user_content = next(message["content"] for message in reinjected if message["role"] == "user")
+    system_messages = [message for message in reinjected if message["role"] == "system"]
+
+    assert len(system_messages) == 1
+    assert user_content.count("## CONVERSATION CONTEXT") == 1
+    assert user_content.count("# Respond in Korean language") == 1
+    assert "pending_clarification_resolved" in user_content
+    assert "stale_flow_1" not in user_content
+    assert "stale_flow_2" not in user_content
+
+
 def test_prepare_ui_action_state_applies_generic_slot_patch_before_routing() -> None:
     slots = ConversationSlots(goods_no="G0001", ord_qty=None, pending_intent="stock", goal_type="store_with_stock")
 
@@ -10997,6 +11043,38 @@ def test_action_mode_keeps_order_history_as_owned_record_lookup_with_stale_order
     assert _context_state_for_action(action_mode=action_mode, resume_source="none", slots=slots) == "dormant"
 
 
+def test_turn_contract_order_history_lookup_uses_owned_order_tool_boundary() -> None:
+    routing_result = _routing_result(
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        execution_plan=["transaction:order_history_lookup"],
+    )
+    frame = build_transaction_intent_frame("내 주문내역 알려줘", known_slots={})
+    tool_plan = plan_transaction_tools(frame)
+    response_decision = decide_transaction_response(
+        intent=frame.intent,
+        user_text="내 주문내역 알려줘",
+        known_slots=frame.known_slots,
+    )
+
+    contract = build_turn_contract(
+        user_text="내 주문내역 알려줘",
+        intent_frame=frame,
+        tool_plan=tool_plan,
+        response_decision=response_decision,
+        routing_result=routing_result,
+        merged_slots=ConversationSlots(),
+        action_mode="owned_record_lookup",
+        context_state="dormant",
+    )
+
+    assert contract.intent == "order_history_lookup"
+    assert contract.allowed_tools == ("get_orders_of_user_tool", "get_order_status_tool")
+    assert contract.preferred_tool == "get_orders_of_user_tool"
+    assert "quick_order_tool" in contract.forbidden_tools
+    assert contract.required_slots == ()
+    assert contract.blocking_required_slots == ()
+
+
 def test_current_turn_action_mode_prefers_support_policy_for_delivery_delay_reservation_question() -> None:
     action_mode = _current_turn_action_mode(
         user_text="주문하면서 매장, 일정 다 예약했는데, 배송이 지연되고 있다고 문자가 왔어. 내 예약도 자동으로 변경되나?",
@@ -11187,6 +11265,132 @@ def test_promotion_gift_policy_beats_stale_purchase_context_without_high_confide
     assert slots.goal_type is None
     assert slots.ord_qty is None
     assert "dormant_purchase_context" in (slots.availability_context or {})
+
+
+def test_pivot_stages_active_purchase_flow_as_dormant_and_removes_executable_context() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000309780",
+        tire_size="225/45R17",
+        ord_qty=4,
+        region="분당",
+        pending_intent="order",
+        goal_type="place_order",
+        availability_context={
+            "pending_order_context": {
+                "goods_no": "G000000309780",
+                "tire_size": "225/45R17",
+                "ord_qty": 4,
+                "region": "분당",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            },
+            "active_flow_context": {
+                "flow_type": "purchase",
+                "flow_step": "show_schedule",
+                "status": "active",
+                "product": {
+                    "goods_no": "G000000309780",
+                    "tire_size": "225/45R17",
+                    "ord_qty": 4,
+                },
+                "store": {"region": "분당"},
+                "intent": {"pending_intent": "order", "goal_type": "place_order"},
+                "current_step": "select_schedule",
+                "missing_slots": ["booking_datetime"],
+            },
+        },
+    )
+
+    dormant = _stage_dormant_transaction_context(slots, source="pre_policy_context:price_lookup")
+    masked = _mask_dormant_transaction_action_slots(slots, source="pre_policy_context:price_lookup")
+
+    context = slots.availability_context or {}
+    assert dormant["goods_no"] == "G000000309780"
+    assert dormant["region"] == "분당"
+    assert dormant["context_state"] == "dormant"
+    assert "pending_order_context" not in context
+    assert "active_flow_context" not in context
+    assert context["dormant_purchase_context"]["flow_step"] == "show_schedule"
+    assert masked["pending_intent"] == "order"
+    assert masked["goal_type"] == "place_order"
+    assert slots.pending_intent is None
+    assert slots.goal_type is None
+    assert slots.ord_qty is None
+
+
+def test_pivot_staging_prefers_active_flow_snapshot_over_current_turn_flat_slots() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000309780",
+        tire_size="225/45R17",
+        ord_qty=2,
+        region="고양시청",
+        pending_intent="order",
+        goal_type="place_order",
+        availability_context={
+            "pending_order_context": {
+                "goods_no": "G000000309780",
+                "tire_size": "225/45R17",
+                "ord_qty": 4,
+                "region": "분당",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+            },
+            "active_flow_context": {
+                "flow_type": "purchase",
+                "flow_step": "show_store_candidates",
+                "status": "active",
+                "product": {
+                    "goods_no": "G000000309780",
+                    "tire_size": "225/45R17",
+                },
+                "quantity": {"ord_qty": 4},
+                "store": {"region": "분당"},
+                "intent": {"pending_intent": "order", "goal_type": "place_order"},
+            },
+        },
+    )
+
+    dormant = _stage_dormant_transaction_context(slots, source="pre_policy_context:store_search")
+
+    assert dormant["ord_qty"] == 4
+    assert dormant["region"] == "분당"
+    assert dormant["context_state"] == "dormant"
+
+
+def test_resume_recalculates_purchase_next_step_from_dormant_slots_not_stale_flow_step() -> None:
+    slots = ConversationSlots(
+        availability_context={
+            "dormant_purchase_context": {
+                "goods_no": "G000000309780",
+                "tire_size": "225/45R17",
+                "ord_qty": 4,
+                "region": "분당",
+                "pending_intent": "order",
+                "goal_type": "place_order",
+                "flow_step": "build_preorder",
+                "context_state": "dormant",
+            }
+        },
+    )
+
+    action_mode = _current_turn_action_mode(
+        user_text="계속 진행해줘",
+        domains=[MultiAgentDomain.Domain.LEADING],
+        routing_result=None,
+        regex_slots=ConversationSlots(),
+        merged_slots=slots,
+        explicit_override_reason=None,
+        resume_source="explicit_user",
+    )
+    state = resolve_purchase_order_flow(
+        intent="quick_order_reservation",
+        known_slots=slots.availability_context["dormant_purchase_context"],
+    )
+
+    assert action_mode == "purchase_continuation"
+    assert state is not None
+    assert state.flow_step == "show_store_candidates"
+    assert state.preferred_tool == "transaction_store_preview_tool"
 
 
 @pytest.mark.parametrize(
@@ -11908,6 +12112,46 @@ def test_router_wins_stock_store_search_aligns_stale_quick_order_tool_plan() -> 
     assert aligned.metadata["turn_contract_intent"] == "stock_store_search"
 
 
+def test_router_wins_store_service_search_overrides_stale_tool_args_patch() -> None:
+    routing_result = _routing_result(
+        domains=[MultiAgentDomain.Domain.TRANSACTION],
+        execution_plan=["transaction:store_service_search"],
+        place_query="고양시청",
+        policy_intent="store_service_search",
+    )
+    stale_store_plan = ToolPlan(
+        allowed_tools=("search_stores_tool", "get_store_list_tool"),
+        preferred_tool="search_stores_tool",
+        forbidden_tools=("transaction_store_preview_tool", "get_store_schedule_tool"),
+        tool_args_patch={"region_code": "분당", "limit": 10},
+        metadata={"response_intent": "store_service_search"},
+    )
+    contract = build_turn_contract(
+        user_text="고양시청 근처는?",
+        intent_frame=IntentFrame(
+            domain=PolicyDomain.TRANSACTION,
+            intent="store_search",
+            known_slots={
+                "place_query": "고양시청",
+                "region": "고양시청",
+                "planner_policy_intent": "store_service_search",
+            },
+        ),
+        tool_plan=stale_store_plan,
+        routing_result=routing_result,
+        merged_slots=ConversationSlots(region="분당"),
+        action_mode="store_search",
+        context_state="dormant",
+    )
+
+    aligned = align_tool_plan_to_turn_contract(stale_store_plan, contract)
+
+    assert contract.intent == "store_service_search"
+    assert aligned is not None
+    assert aligned.preferred_tool == "search_stores_tool"
+    assert aligned.tool_args_patch == {"limit": 10, "place_query": "고양시청"}
+
+
 def test_router_wins_store_search_over_stale_quick_order_schedule_frame() -> None:
     routing_result = _routing_result(
         domains=[MultiAgentDomain.Domain.TRANSACTION],
@@ -11976,15 +12220,15 @@ def test_router_wins_store_search_over_stale_quick_order_schedule_frame() -> Non
     assert contract.router_wins_applied is True
     assert contract.required_slots == ()
     assert contract.blocking_required_slots == ()
-    assert "transaction_store_preview_tool" in contract.allowed_tools
     assert "get_store_list_tool" in contract.allowed_tools
+    assert "transaction_store_preview_tool" in contract.forbidden_tools
     assert "get_store_schedule_tool" in contract.forbidden_tools
     assert "quick_order_tool" in contract.forbidden_tools
     assert payload["drift_resolution"] == "router_intent:store_search_kept_over_code_frame:quick_order_reservation"
     assert payload["response_decision"]["template"] == "location"
     assert payload["response_decision"]["metadata"]["response_shape_key"] == "store_search"
     assert aligned is not None
-    assert aligned.preferred_tool == "transaction_store_preview_tool"
+    assert aligned.preferred_tool == "get_store_list_tool"
     assert aligned.allowed_tools == contract.allowed_tools
 
 
@@ -21988,6 +22232,7 @@ def test_router_slot_fill_context_payload_summarizes_purchase_state_and_candidat
 def test_router_slot_fill_context_payload_restores_dormant_purchase_snapshot() -> None:
     payload = _router_slot_fill_context_payload_for_test(
         slots=ConversationSlots(
+            pending_required_slot="quantity",
             availability_context={
                 "dormant_purchase_context": {
                     "goods_no": "G000000319584",
@@ -22012,6 +22257,91 @@ def test_router_slot_fill_context_payload_restores_dormant_purchase_snapshot() -
     assert payload["known_slots"]["payment_amount"] == 484200
     assert payload["missing_slots"] == ["quantity"]
     assert payload["last_requested_slot"] == "quantity"
+
+
+@pytest.mark.parametrize("user_text", ["4본", "4짝", "네 개"])
+def test_router_slot_fill_context_restores_prompted_dormant_purchase_quantity_variants(user_text: str) -> None:
+    payload = _router_slot_fill_context_payload_for_test(
+        slots=ConversationSlots(
+            pending_required_slot="quantity",
+            availability_context={
+                "dormant_purchase_context": {
+                    "goods_no": "G000000319584",
+                    "tire_size": "245/45R19",
+                    "product_name": "벤투스 에어S",
+                    "pending_intent": "order",
+                    "goal_type": "place_order",
+                }
+            },
+        ),
+        user_text=user_text,
+        latest_product_tmpl=None,
+        latest_location_tmpl=None,
+        latest_datepick_tmpl=None,
+    )
+
+    assert payload["current_flow"] == "quick_order_reservation"
+    assert payload["flow_step"] == "ask_quantity"
+    assert payload["missing_slots"] == ["quantity"]
+    assert payload["last_requested_slot"] == "quantity"
+
+
+def test_router_slot_fill_context_does_not_restore_dormant_purchase_for_unprompted_quantity() -> None:
+    payload = _router_slot_fill_context_payload_for_test(
+        slots=ConversationSlots(
+            availability_context={
+                "dormant_purchase_context": {
+                    "goods_no": "G000000319584",
+                    "tire_size": "245/45R19",
+                    "product_name": "벤투스 에어S",
+                    "payment_amount": 484200,
+                    "pending_intent": "order",
+                    "goal_type": "place_order",
+                }
+            }
+        ),
+        user_text="4개",
+        latest_product_tmpl=None,
+        latest_location_tmpl=None,
+        latest_datepick_tmpl=None,
+    )
+
+    assert payload["current_flow"] == "none"
+    assert payload["known_slots"] == {}
+    assert payload["missing_slots"] == []
+    assert payload["last_requested_slot"] == "none"
+
+
+@pytest.mark.parametrize(
+    "user_text",
+    ["2개 할인은?", "4개 가격은?", "두 개 쿠폰은?", "4개 프로모션은?", "4개 이벤트는?", "4개 행사는?"],
+)
+def test_router_slot_fill_context_does_not_restore_dormant_purchase_for_quantity_policy_question(
+    user_text: str,
+) -> None:
+    payload = _router_slot_fill_context_payload_for_test(
+        slots=ConversationSlots(
+            pending_required_slot="quantity",
+            availability_context={
+                "dormant_purchase_context": {
+                    "goods_no": "G000000319584",
+                    "tire_size": "245/45R19",
+                    "product_name": "벤투스 에어S",
+                    "payment_amount": 484200,
+                    "pending_intent": "order",
+                    "goal_type": "place_order",
+                }
+            },
+        ),
+        user_text=user_text,
+        latest_product_tmpl=None,
+        latest_location_tmpl=None,
+        latest_datepick_tmpl=None,
+    )
+
+    assert payload["current_flow"] == "none"
+    assert payload["known_slots"] == {}
+    assert payload["missing_slots"] == []
 
 
 def test_router_slot_fill_context_payload_restores_store_schedule_snapshot() -> None:
@@ -43849,6 +44179,84 @@ def test_base_agent_purchase_flow_tool_guard_replaces_inventory_drift_with_sched
     assert metadata["contract_tool_blocked"] is True
     assert metadata["blocked_tool"] == "get_store_inventory_tool"
     assert metadata["replacement_tool"] == "get_store_schedule_tool"
+
+
+def test_base_agent_store_service_guard_recovers_search_tool_from_known_slots(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _DummyAgent(BaseAgent):
+        OUTPUT_TEMPLATE = None
+        TOOL_TO_AF_MAP: dict[str, str] = {}
+
+        def __init__(self) -> None:
+            self.name = "Transaction Agent"
+
+    from services.tstation.agents.c_transaction_agent import tools as transaction_tools
+
+    captured_input: dict[str, Any] = {}
+
+    monkeypatch.setattr(
+        transaction_tools,
+        "search_stores_tool",
+        SimpleNamespace(
+            invoke=lambda payload: captured_input.update(payload)
+            or {"status": "success", "data": {"stores": [{"shop_id": "F00660", "shop_nm": "고양시청점"}]}}
+        ),
+    )
+    monkeypatch.setattr(
+        template_mapper_module,
+        "try_build_template",
+        lambda tool_data_list, assistant_text: {
+            "type": "data",
+            "template": "location",
+            "data": {
+                "assistantResponse": "고양시청 근처 매장을 확인했어요.",
+                "stores": [{"shopId": "F00660", "name": "고양시청점"}],
+                "metadata": {},
+            },
+        },
+    )
+
+    response_decision = ResponseDecision(
+        response_shape=ResponseShape.LOCATION,
+        template=TemplateName.LOCATION,
+        metadata={"response_shape_key": "store_service_search"},
+    )
+    tool_plan = ToolPlan(
+        allowed_tools=("search_stores_tool", "get_store_list_tool", "get_nearby_stores_tool"),
+        preferred_tool="search_stores_tool",
+        forbidden_tools=("transaction_store_preview_tool", "get_store_schedule_tool"),
+        tool_args_patch={},
+        metadata={
+            "response_intent": "store_service_search",
+            "flow_slots": {"place_query": "고양시청", "region": "고양시청"},
+        },
+    )
+    decision_token = current_transaction_response_decision.set(response_decision)
+    tool_plan_token = current_transaction_tool_plan.set(tool_plan)
+    try:
+        agent = _DummyAgent()
+        events = agent._contract_sensitive_tool_guard_events(
+            "transaction_store_preview_tool",
+            [{"role": "user", "content": "고양시청 근처는?"}],
+            config=None,
+            response_streamer=None,
+            answering_emitted=False,
+        )
+    finally:
+        current_transaction_response_decision.reset(decision_token)
+        current_transaction_tool_plan.reset(tool_plan_token)
+
+    assert events is not None
+    tool_event = next(event for event in events if event.get("type") == "tool")
+    assert tool_event["tool"] == "search_stores_tool"
+    assert tool_event["input"] == {"place_query": "고양시청"}
+    assert captured_input == {"place_query": "고양시청"}
+    data_event = next(event for event in events if event.get("type") == "data")
+    metadata = data_event["data"]["metadata"]
+    assert metadata["contract_tool_blocked"] is True
+    assert metadata["blocked_tool"] == "transaction_store_preview_tool"
+    assert metadata["replacement_tool"] == "search_stores_tool"
 
 
 def test_trace_shaped_general_cancel_fee_policy_blocks_order_lookup_and_replaces_with_faq(

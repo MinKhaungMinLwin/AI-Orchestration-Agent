@@ -23,7 +23,9 @@ _DIRECT_TEMPLATE_TOOLS = frozenset({
     "get_nearby_stores_tool",
     "transaction_store_preview_tool",
     "get_store_schedule_tool",
+    "get_final_price_tool",
     "get_my_reservations_tool",
+    "get_orders_of_user_tool",
 })
 _COMPLEX_EXPLANATION_RE = re.compile(
     r"왜|이유|설명|자세히|장단점|비교|차이|정책|규정|불만|오류|에러|문제|안\s*되|안되|고장|환불|교환|보증",
@@ -95,7 +97,11 @@ def evaluate_contract_direct_path(
     forbidden_tools = {str(tool) for tool in tuple(turn_contract.forbidden_tools or ()) if str(tool).strip()}
     if preferred_tool and preferred_tool in forbidden_tools:
         return _fallback("contract_tool_conflict")
-    clear_tool = preferred_tool if preferred_tool in allowed_tools else (allowed_tools[0] if len(allowed_tools) == 1 else "")
+    clear_tool = preferred_tool if preferred_tool in allowed_tools else _default_contract_tool(
+        turn_contract=turn_contract,
+        allowed_tools=allowed_tools,
+        forbidden_tools=forbidden_tools,
+    )
     if not clear_tool:
         return _fallback("ambiguous_contract_tool")
     if clear_tool not in _DIRECT_TEMPLATE_TOOLS:
@@ -124,6 +130,33 @@ def evaluate_contract_direct_path(
         template=template,
         known_slots=known_slots,
     )
+
+
+def _default_contract_tool(
+    *,
+    turn_contract: TurnContract,
+    allowed_tools: tuple[str, ...],
+    forbidden_tools: set[str],
+) -> str:
+    intent = str(turn_contract.intent or "").strip()
+    preferred_by_intent = {
+        "store_search": "get_store_list_tool",
+        "open_store_search": "search_stores_complex_tool",
+        "store_service_search": "search_stores_tool",
+        "stock_store_search": "transaction_store_preview_tool",
+        "price_or_coupon_check": "get_final_price_tool",
+        "store_schedule": "get_store_schedule_tool",
+        "selected_store_schedule": "get_store_schedule_tool",
+        "reservation_status_lookup": "get_my_reservations_tool",
+        "reservation_store_info_lookup": "get_my_reservations_tool",
+        "order_history_lookup": "get_orders_of_user_tool",
+    }
+    preferred = preferred_by_intent.get(intent)
+    if preferred and preferred in allowed_tools and preferred not in forbidden_tools:
+        return preferred
+    if len(allowed_tools) == 1 and allowed_tools[0] not in forbidden_tools:
+        return allowed_tools[0]
+    return ""
 
 
 def _evaluate_discovery_contract(
@@ -212,8 +245,14 @@ def _evaluate_transaction_contract(
         if known_slots.get("goods_no") and known_slots.get("tire_size") and has_quantity and has_location:
             return DirectPathDecision(True, True, "transaction_store_preview", None, tool, "location")
         return _fallback("missing_required_slot")
+    if intent == "price_or_coupon_check" and tool == "get_final_price_tool":
+        if known_slots.get("goods_no") or (turn_contract.tool_args_patch or {}).get("goods_no"):
+            return DirectPathDecision(True, True, "price_or_coupon_check", None, tool, "quickReply")
+        return _fallback("missing_required_slot")
     if intent in {"reservation_status_lookup", "reservation_store_info_lookup"} and tool == "get_my_reservations_tool":
         return DirectPathDecision(True, True, "reservation_lookup", None, tool, "quickReply")
+    if intent == "order_history_lookup" and tool == "get_orders_of_user_tool":
+        return DirectPathDecision(True, True, "order_lookup", None, tool, "quickReply")
     if intent == "coupon_applicable_products" and tool == "search_benefit_applicable_products_tool":
         query = str(
             (turn_contract.tool_args_patch or {}).get("query")
@@ -284,5 +323,7 @@ def _template_for_tool(tool: str) -> str:
         "get_store_list_tool": "location",
         "get_nearby_stores_tool": "location",
         "get_store_schedule_tool": "datepick",
+        "get_final_price_tool": "quickReply",
         "get_my_reservations_tool": "quickReply",
+        "get_orders_of_user_tool": "quickReply",
     }.get(tool, "")

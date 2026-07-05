@@ -15,6 +15,7 @@ from services.tstation.policies.flow_state import (
     canonical_flow_type,
     commerce_sub_flow_type,
     evaluate_flow_progress,
+    flow_identity_for_context,
     resume_dormant_flow,
 )
 from services.tstation.policies.price_basis_policy import has_price_basis
@@ -579,8 +580,40 @@ def _parent_flow_context(availability_context: Mapping[str, Any]) -> dict[str, A
 
 
 def _dormant_flows_from_context(availability_context: Mapping[str, Any]) -> list[Mapping[str, Any]]:
-    dormant_flows = availability_context.get("dormant_flows") if isinstance(availability_context, Mapping) else None
-    return list(dormant_flows) if isinstance(dormant_flows, list) else []
+    if not isinstance(availability_context, Mapping):
+        return []
+    dormant_flows = availability_context.get("dormant_flows")
+    flows = list(dormant_flows) if isinstance(dormant_flows, list) else []
+    seen_identities: set[str] = set()
+    for flow in flows:
+        if not isinstance(flow, Mapping):
+            continue
+        context = flow.get("context") if isinstance(flow.get("context"), Mapping) else flow
+        for identity in (
+            str(flow.get("flow_identity") or "").strip(),
+            str(flow_identity_for_context(context) or "").strip(),
+        ):
+            if identity:
+                seen_identities.add(identity)
+    for context_key, flow_type in (
+        ("dormant_purchase_context", "purchase"),
+        ("dormant_stock_context", "stock"),
+        ("dormant_transaction_context", "purchase"),
+    ):
+        context = availability_context.get(context_key)
+        if not isinstance(context, Mapping):
+            continue
+        normalized_context = dict(context)
+        normalized_context.setdefault("flow_type", flow_type)
+        normalized_context.setdefault("status", "dormant")
+        normalized_context.setdefault("source", context_key)
+        identity = str(flow_identity_for_context(normalized_context) or "").strip()
+        if identity and identity in seen_identities:
+            continue
+        if identity:
+            seen_identities.add(identity)
+        flows.append(normalized_context)
+    return flows
 
 
 def _purchase_resume_anchor(

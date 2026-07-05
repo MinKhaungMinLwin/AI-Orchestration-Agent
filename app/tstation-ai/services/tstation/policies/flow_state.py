@@ -1184,6 +1184,9 @@ def _refresh_flow_progress(state: "FlowState") -> None:
     progress = evaluate_flow_progress(state)
     if not progress:
         return
+    current_step = str(progress.get("current_step") or "").strip()
+    if current_step:
+        state.flow_step = current_step
     for key in _FLOW_PROGRESS_META_FIELDS:
         state.meta.pop(key, None)
     state.meta.update(progress)

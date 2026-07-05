@@ -279,6 +279,30 @@ def test_order_status_lookup_candidate_uses_owned_record_boundary() -> None:
     assert candidate.tool_input_source == "turn_contract_required_owned_record_lookup"
 
 
+def test_order_history_lookup_candidate_uses_owned_record_boundary() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="order_history_lookup",
+        known_slots={"owned_record_target": "order"},
+        allowed_tools=("get_orders_of_user_tool", "get_order_status_tool"),
+        forbidden_tools=("transaction_store_preview_tool", "get_store_schedule_tool"),
+        preferred_tool="get_orders_of_user_tool",
+        response_decision={"template": "quickReply", "metadata": {"response_shape_key": "order_history_lookup"}},
+        context_state="dormant",
+    )
+
+    candidate = _contract_required_tool_candidate(
+        turn_contract=contract,
+        user_text="내 주문 내역 보여줘",
+        merged_slots=None,
+    )
+
+    assert candidate is not None
+    assert candidate.tool_name == "get_orders_of_user_tool"
+    assert candidate.tool_input == {}
+    assert candidate.tool_input_source == "turn_contract_required_owned_record_lookup"
+
+
 def test_purchase_store_preview_candidate_uses_contract_patch() -> None:
     contract = TurnContract(
         domain="transaction",
