@@ -231,6 +231,10 @@ def location_source_type(known_slots: Mapping[str, Any] | None) -> str:
     region = _normalized_region_text(slots.get("region"))
     user_xpos = slots.get("user_xpos") if slots.get("user_xpos") not in ("", None) else slots.get("xpos")
     user_ypos = slots.get("user_ypos") if slots.get("user_ypos") not in ("", None) else slots.get("ypos")
+    if user_xpos in ("", None):
+        user_xpos = slots.get("lng") or slots.get("longitude")
+    if user_ypos in ("", None):
+        user_ypos = slots.get("lat") or slots.get("latitude")
 
     if shop_id or store_name:
         return "store"
@@ -2267,6 +2271,10 @@ def _purchase_slot_patch(slots: Mapping[str, Any]) -> dict[str, Any]:
         "user_ypos",
         "xpos",
         "ypos",
+        "lat",
+        "lng",
+        "latitude",
+        "longitude",
         "place",
         "requested_cal_day",
         "rsv_hour",

@@ -306,6 +306,80 @@ def test_purchase_store_preview_slot_fill_candidate_uses_contract_patch() -> Non
     assert candidate.tool_input["stock_check_mode"] == "preview"
 
 
+def test_purchase_store_preview_candidate_accepts_browser_location_without_region() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="quick_order_reservation",
+        known_slots={
+            "goods_no": "G000000309780",
+            "tire_size": "225/40R19",
+            "ord_qty": 4,
+            "user_xpos": 127.12,
+            "user_ypos": 37.39,
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        allowed_tools=("transaction_store_preview_tool",),
+        preferred_tool="transaction_store_preview_tool",
+        response_decision={
+            "template": "location",
+            "metadata": {"response_shape_key": "reservation_store_candidates"},
+        },
+        action_mode="purchase_continuation",
+        context_state="active",
+    )
+
+    candidate = _contract_required_tool_candidate(
+        turn_contract=contract,
+        user_text="내 주변 매장 찾기",
+        merged_slots=None,
+    )
+
+    assert candidate is not None
+    assert candidate.tool_name == "transaction_store_preview_tool"
+    assert candidate.tool_input_source == "turn_contract_required_transaction_store_preview"
+    assert candidate.tool_input["user_xpos"] == 127.12
+    assert candidate.tool_input["user_ypos"] == 37.39
+    assert candidate.tool_input["quantity"] == 4
+
+
+def test_purchase_store_preview_candidate_normalizes_lng_lat_browser_location() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="quick_order_reservation",
+        known_slots={
+            "goods_no": "G000000309780",
+            "tire_size": "225/40R19",
+            "ord_qty": 4,
+            "lng": 127.12,
+            "lat": 37.39,
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        allowed_tools=("transaction_store_preview_tool",),
+        preferred_tool="transaction_store_preview_tool",
+        response_decision={
+            "template": "location",
+            "metadata": {"response_shape_key": "reservation_store_candidates"},
+        },
+        action_mode="purchase_continuation",
+        context_state="active",
+    )
+
+    candidate = _contract_required_tool_candidate(
+        turn_contract=contract,
+        user_text="내 주변 매장 찾기",
+        merged_slots=None,
+    )
+
+    assert candidate is not None
+    assert candidate.tool_name == "transaction_store_preview_tool"
+    assert candidate.tool_input["user_xpos"] == 127.12
+    assert candidate.tool_input["user_ypos"] == 37.39
+    assert "lng" not in candidate.tool_input
+    assert "lat" not in candidate.tool_input
+
+
 def test_purchase_price_progress_candidate_allows_final_price_tool() -> None:
     active_flow_context = {
         "flow_type": "commerce",
