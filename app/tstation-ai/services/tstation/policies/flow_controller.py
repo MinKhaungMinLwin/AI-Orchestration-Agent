@@ -1140,7 +1140,6 @@ def _selected_product_flow_context(
             "tire_model": product_name,
             "pending_product_name": product_name,
             "tire_size": selected_product.get("tire_size") or slot_patch.get("tire_size"),
-            "ord_qty": slot_patch.get("ord_qty"),
         }.items()
         if value not in (None, "", [], {})
     }

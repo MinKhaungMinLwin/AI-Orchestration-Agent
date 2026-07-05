@@ -547,6 +547,9 @@ def _clear_product_dependent_context(
         for field_name in product_fields:
             if state.product.pop(field_name, None) not in _EMPTY_VALUES:
                 cleared_fields.append(field_name)
+    for field_name in ("ord_qty", "quantity"):
+        if state.product.pop(field_name, None) not in _EMPTY_VALUES:
+            cleared_fields.append(field_name)
     for field_name in ("shop_id", "shop_name", "store_name"):
         if state.store.pop(field_name, None) not in _EMPTY_VALUES:
             cleared_fields.append(field_name)
@@ -1609,7 +1612,7 @@ class FlowState:
             conflict_key, conflict_values, clear_goods_no = product_change
             conflicts[conflict_key] = conflict_values
             _clear_product_dependent_context(merged, cleared_fields, clear_goods_no=clear_goods_no)
-            invalidated_sections.update(("store", "schedule", "payment"))
+            invalidated_sections.update(("store", "schedule"))
             dormant_product_patch.update(_non_empty_mapping(delta.product))
 
         if _tire_size_changed(existing_product, delta.product):
@@ -1618,7 +1621,7 @@ class FlowState:
                 "incoming": _normalize_vehicle_tire_size(delta.product.get("tire_size")),
             }
             _clear_product_dependent_context(merged, cleared_fields, clear_goods_no=True)
-            invalidated_sections.update(("store", "schedule", "payment"))
+            invalidated_sections.update(("store", "schedule"))
             dormant_product_patch.update(_non_empty_mapping(delta.product))
 
         existing_shop_id = str(merged.store.get("shop_id") or "").strip()
@@ -1835,7 +1838,7 @@ class FlowState:
             conflict_key, conflict_values, clear_goods_no = product_change
             conflicts[conflict_key] = conflict_values
             _clear_product_dependent_context(merged, cleared_fields, clear_goods_no=clear_goods_no)
-            invalidated_sections.update(("store", "schedule", "payment"))
+            invalidated_sections.update(("store", "schedule"))
             dormant_product_patch.update(_non_empty_mapping(delta.product))
 
         if _tire_size_changed(existing_product, delta.product):
@@ -1844,7 +1847,7 @@ class FlowState:
                 "incoming": _normalize_vehicle_tire_size(delta.product.get("tire_size")),
             }
             _clear_product_dependent_context(merged, cleared_fields, clear_goods_no=True)
-            invalidated_sections.update(("store", "schedule", "payment"))
+            invalidated_sections.update(("store", "schedule"))
             dormant_product_patch.update(_non_empty_mapping(delta.product))
 
         existing_shop_id = str(merged.store.get("shop_id") or "").strip()

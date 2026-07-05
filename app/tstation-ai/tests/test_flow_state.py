@@ -18,6 +18,7 @@ from services.tstation.policies.flow_state import (
 )
 from schemas.tstation.slots import ConversationSlots
 from services.tstation.policies.flow_controller import resolve_purchase_order_flow, transition_current_flow
+from services.tstation.policies.util_search_product_context import util_product_flow_values_from_resolved_search
 
 
 def test_flow_state_values_reads_active_context_before_legacy_pending_context() -> None:
@@ -48,6 +49,85 @@ def test_flow_state_values_reads_active_context_before_legacy_pending_context() 
     assert values["ord_qty"] == 2
     assert values["region"] == "고양시"
     assert values["pending_intent"] == "order"
+
+
+def test_resolved_product_flow_values_do_not_carry_quantity_or_store_slots() -> None:
+    values = util_product_flow_values_from_resolved_search(
+        resolved_row={
+            "goods_no": "G-NEW",
+            "product_name": "벤투스 S2 AS",
+            "tire_size": "245/45R18",
+            "sale_prc": 245300,
+        },
+        slots=ConversationSlots(
+            ord_qty=4,
+            region="판교",
+            shop_id="F00721",
+            shop_name="티스테이션 판교점",
+            pending_intent="order",
+            goal_type="place_order",
+        ),
+    )
+
+    assert values["goods_no"] == "G-NEW"
+    assert values["tire_size"] == "245/45R18"
+    assert values["product_name"] == "벤투스 S2 AS"
+    assert values["pending_intent"] == "order"
+    assert values["goal_type"] == "place_order"
+    assert values["sale_prc"] == 245300
+    assert values["price_basis"] == "sale_prc"
+    assert values["price_source_tool"] == "search_product_tool"
+    assert "ord_qty" not in values
+    assert "quantity" not in values
+    assert "region" not in values
+    assert "shop_id" not in values
+    assert "shop_name" not in values
+
+
+def test_product_change_clears_quantity_store_schedule_and_payment() -> None:
+    result = commit_purchase_flow_state(
+        {
+            "goods_no": "G-OLD",
+            "product_name": "기존 상품",
+            "tire_size": "245/45R18",
+            "ord_qty": 4,
+            "region": "판교",
+            "shop_id": "F00721",
+            "shop_name": "티스테이션 판교점",
+            "requested_cal_day": "20260708",
+            "rsv_hour": "1400",
+            "payment_amount": 361000,
+            "price_basis": "cheapest_final_prc",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        {
+            "goods_no": "G-NEW",
+            "product_name": "새 상품",
+            "tire_size": "245/45R18",
+            "extra_fvr_sale_prc": 191000,
+            "price_basis": "extra_fvr_sale_prc",
+            "price_source_tool": "search_product_tool",
+            "pending_intent": "order",
+            "goal_type": "place_order",
+        },
+        source="tool:search_product_tool",
+    )
+    pending_context = result.state.to_pending_order_context()
+
+    assert pending_context["goods_no"] == "G-NEW"
+    assert pending_context["product_name"] == "새 상품"
+    assert pending_context["tire_size"] == "245/45R18"
+    assert pending_context["extra_fvr_sale_prc"] == 191000
+    assert pending_context["price_basis"] == "extra_fvr_sale_prc"
+    assert pending_context["price_source_tool"] == "search_product_tool"
+    assert "ord_qty" not in pending_context
+    assert "quantity" not in pending_context
+    assert "shop_id" not in pending_context
+    assert "shop_name" not in pending_context
+    assert "requested_cal_day" not in pending_context
+    assert "rsv_hour" not in pending_context
+    assert "payment_amount" not in pending_context
 
 
 def test_select_quantity_preserves_product_and_clears_quantity_dependent_state() -> None:
