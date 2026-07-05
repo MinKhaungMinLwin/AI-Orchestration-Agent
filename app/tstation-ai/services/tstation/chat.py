@@ -24342,10 +24342,26 @@ class TStationChatServiceV2:
                         parsed_tire_size,
                         parsed_quantity,
                     )
+            current_turn_product_name = str(
+                regex_slots.tire_model
+                or regex_slots.pending_product_name
+                or ""
+            ).strip()
+            if current_turn_product_name and not ConversationSlots.has_product_keyword(current_turn_product_name):
+                current_turn_product_name = ""
+            if not current_turn_product_name:
+                try:
+                    current_turn_product_frame = build_discovery_intent_frame(str(last_user_text or ""))
+                    current_turn_product_names = tuple(current_turn_product_frame.entities.get("product_names") or ())
+                except Exception:
+                    current_turn_product_names = ()
+                if len(current_turn_product_names) == 1:
+                    candidate_product_name = str(current_turn_product_names[0] or "").strip()
+                    if candidate_product_name and ConversationSlots.has_product_keyword(candidate_product_name):
+                        current_turn_product_name = candidate_product_name
             replaced_product_slots, product_replacement_metadata = replace_current_turn_product_context(
                 merged_slots,
-                last_user_text,
-                regex_slots,
+                current_product_name=current_turn_product_name,
             )
             if product_replacement_metadata:
                 merged_slots = replaced_product_slots
@@ -25668,6 +25684,7 @@ class TStationChatServiceV2:
                 ),
                 latest_quickreply_tmpl=latest_quickreply_tmpl,
                 latest_product_tmpl=latest_product_tmpl,
+                current_product_name=current_turn_product_name,
             )
             merged_slots = history_product_selection_state.updated_slots
             if history_product_selection_state.action_context is not None:

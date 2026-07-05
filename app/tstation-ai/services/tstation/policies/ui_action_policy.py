@@ -80,12 +80,6 @@ _ORDER_HISTORY_LOOKUP_INPUT_RE = re.compile(
     r"$",
     re.IGNORECASE,
 )
-_PRODUCT_NAME_HINT_STOP_RE = re.compile(
-    r"타이어|상품|제품|사이즈|규격|구매하고|구매|주문|결제|장착|장바구니|담|사려고|사려|사고|살래|"
-    r"싶은데|싶|원해|주세요|해줘|할게|하고|가능|가격|재고|추천|찾|검색|\d+\s*개|는|은|\?",
-    re.IGNORECASE,
-)
-_COMPACT_TIRE_SIZE_RE = re.compile(r"\b\d{3}\s*[/ ]?\s*\d{2}\s*(?:R|\s|/)?\s*\d{2}\b", re.IGNORECASE)
 _PRODUCT_DEPENDENT_EXECUTION_FIELDS = frozenset({
     "goods_no",
     "shop_id",
@@ -721,38 +715,13 @@ def _is_same_product_identity(left: object, right: object) -> bool:
     return len(_product_identity_tokens(left_canonical) & _product_identity_tokens(right_canonical)) >= 2
 
 
-def current_turn_single_product_name(user_text: str, regex_slots: Any | None = None) -> str:
-    current_product = str(
-        getattr(regex_slots, "tire_model", None)
-        or getattr(regex_slots, "pending_product_name", None)
-        or ""
-    ).strip()
-    if not current_product:
-        try:
-            frame = build_discovery_intent_frame(str(user_text or ""))
-            product_names = tuple(frame.entities.get("product_names") or ())
-        except Exception:
-            product_names = ()
-        if len(product_names) == 1:
-            current_product = str(product_names[0]).strip()
-    if (
-        not current_product
-        and normalize_tire_size(str(user_text or ""))
-        and ConversationSlots.has_product_keyword(str(user_text or ""))
-    ):
-        current_product = _COMPACT_TIRE_SIZE_RE.sub(" ", str(user_text or ""))
-    current_product = _PRODUCT_NAME_HINT_STOP_RE.sub(" ", current_product)
-    return re.sub(r"\s+", " ", current_product).strip(" ,./")
-
-
 def _is_comparison_context_product_selection_override(
     slots: Any,
-    user_text: str,
-    regex_slots: Any | None = None,
+    current_product_name: str | None = None,
 ) -> bool:
     if getattr(slots, "goods_no", None) in (None, ""):
         return False
-    current_product = current_turn_single_product_name(user_text, regex_slots)
+    current_product = str(current_product_name or "").strip()
     if not current_product:
         return False
     comparison_context = ComparisonContext.from_mapping(getattr(slots, "comparison_context", None))
@@ -770,11 +739,10 @@ def _is_comparison_context_product_selection_override(
 
 def replace_current_turn_product_context(
     slots: Any,
-    user_text: str,
-    regex_slots: Any | None = None,
+    current_product_name: str | None = None,
 ) -> tuple[Any, dict[str, Any]]:
     """Replace stale product identity in stored context without authorizing execution."""
-    current_product = current_turn_single_product_name(user_text, regex_slots)
+    current_product = str(current_product_name or "").strip()
     if not current_product:
         return slots, {}
 
@@ -2469,10 +2437,17 @@ def apply_history_product_selection_state(
     resolve_goods_no_from_selection_fn: Callable[[str, list[dict[str, Any]], str | None], str | None],
     latest_quickreply_tmpl: Mapping[str, Any] | None = None,
     latest_product_tmpl: Mapping[str, Any] | None = None,
+    current_product_name: str | None = None,
 ) -> HistoryProductSelectionState:
-    comparison_override = _is_comparison_context_product_selection_override(merged_slots, last_user_text)
+    comparison_override = _is_comparison_context_product_selection_override(
+        merged_slots,
+        current_product_name=current_product_name,
+    )
     if comparison_override:
-        replaced_slots, replacement_metadata = replace_current_turn_product_context(merged_slots, last_user_text)
+        replaced_slots, replacement_metadata = replace_current_turn_product_context(
+            merged_slots,
+            current_product_name=current_product_name,
+        )
         if replacement_metadata:
             return HistoryProductSelectionState(
                 updated_slots=replaced_slots,

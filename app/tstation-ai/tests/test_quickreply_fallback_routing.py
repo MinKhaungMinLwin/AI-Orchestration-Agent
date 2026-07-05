@@ -17089,7 +17089,7 @@ def test_current_turn_product_replacement_clears_product_dependent_context_but_k
         goal_type="place_order",
     )
 
-    updated, metadata = replace_current_turn_product_context(slots, "벤투스 S2 AS 는?")
+    updated, metadata = replace_current_turn_product_context(slots, current_product_name="Ventus S2 AS")
 
     assert metadata["current_turn_product_replaced"] is True
     assert metadata["replacement_product_name"] == "Ventus S2 AS"
@@ -17238,7 +17238,7 @@ def test_current_turn_same_product_does_not_clear_existing_goods_no() -> None:
         payment_amount=300000,
     )
 
-    updated, metadata = replace_current_turn_product_context(slots, "벤투스 S2 AS 는?")
+    updated, metadata = replace_current_turn_product_context(slots, current_product_name="Ventus S2 AS")
 
     assert metadata == {}
     assert updated.goods_no == "G-S2"
@@ -17254,7 +17254,7 @@ def test_current_turn_same_product_korean_alias_does_not_clear_existing_goods_no
         payment_amount=300000,
     )
 
-    updated, metadata = replace_current_turn_product_context(slots, "벤투스 S2 AS 는?")
+    updated, metadata = replace_current_turn_product_context(slots, current_product_name="벤투스 S2 AS")
 
     assert metadata == {}
     assert updated.goods_no == "G-S2"
@@ -17270,11 +17270,30 @@ def test_current_turn_size_only_recommendation_does_not_replace_product_context(
         payment_amount=300000,
     )
 
-    updated, metadata = replace_current_turn_product_context(slots, "2454518 추천")
+    updated, metadata = replace_current_turn_product_context(slots)
 
     assert metadata == {}
     assert updated.goods_no == "G-S2"
     assert updated.pending_product_name == "Ventus S2 AS"
+
+
+def test_current_turn_price_correction_without_product_entity_does_not_replace_product_context() -> None:
+    slots = ConversationSlots(
+        goods_no="G-HP3",
+        pending_product_name="Dynapro HP3",
+        tire_model="Dynapro HP3",
+        tire_size="245/45R19",
+        ord_qty=2,
+        payment_amount=288200,
+    )
+
+    updated, metadata = replace_current_turn_product_context(slots)
+
+    assert metadata == {}
+    assert updated.goods_no == "G-HP3"
+    assert updated.pending_product_name == "Dynapro HP3"
+    assert updated.tire_model == "Dynapro HP3"
+    assert updated.payment_amount == 288200
 
 
 def test_user_merge_goods_no_change_requires_size_reconfirmation() -> None:
