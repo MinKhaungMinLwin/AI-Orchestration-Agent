@@ -19831,6 +19831,36 @@ def test_preorder_event_prefers_canonical_product_name_over_freeform_model_text(
     assert preorder_event["data"]["metadata"]["productName"] == "Ventus S2 AS"
 
 
+def test_preorder_event_does_not_duplicate_size_when_product_name_already_contains_size() -> None:
+    preorder_event = build_preorder_event(
+        SimpleNamespace(
+            domain="transaction",
+            response_decision={"template": "preOrder", "metadata": {"response_shape_key": "reservation_confirmation_ready"}},
+            flow_step="build_preorder",
+            action_mode="purchase_continuation",
+            intent="quick_order_reservation",
+        ),
+        {
+            "goods_no": "G000000310126",
+            "product_name": "키너지 4S2 245/45R19",
+            "tire_model": "키너지 4S2 245/45R19",
+            "tire_size": "245/45R19",
+            "ord_qty": 2,
+            "shop_id": "F00071",
+            "shop_name": "티스테이션 분당정자점",
+            "requested_cal_day": "20260706",
+            "rsv_hour": "17",
+            "payment_amount": 308200,
+            "price_basis": "cheapest_final_prc",
+            "price_source_tool": "transaction_store_preview_tool",
+        },
+    )
+
+    assert preorder_event is not None
+    assert preorder_event["data"]["orderInfo"]["product"] == "키너지 4S2 245/45R19"
+    assert preorder_event["data"]["metadata"]["productName"] == "키너지 4S2"
+
+
 def test_purchase_product_size_quantity_with_coupon_phrase_stays_purchase_flow() -> None:
     frame = build_transaction_intent_frame(
         "벤투스 S2 AS 하려고 하는데 쿠폰 적용 2753520 4개 티스테이션 판교점에서 구매하고 싶어",
@@ -21440,14 +21470,14 @@ def test_prepare_ui_action_state_rewrites_structured_purchase_product_selection_
             "source_intent": "quick_order_reservation",
             "expected_contract_intent": "quick_order_reservation",
             "expected_behavior": "slot_fill",
-            "entity_label": "벤투스 에어S",
+            "entity_label": "벤투스 에어S 245/45R19",
             "slots": {
                 "goods_no": "G000000319584",
                 "tire_size": "245/45R19",
                 "ord_qty": 2,
                 "pending_intent": "order",
                 "goal_type": "place_order",
-                "tire_model": "벤투스 에어S",
+                "tire_model": "벤투스 에어S 245/45R19",
             },
         },
         chip_context=None,
@@ -21462,6 +21492,9 @@ def test_prepare_ui_action_state_rewrites_structured_purchase_product_selection_
     assert prepared.action_context is not None
     assert prepared.action_context.action_type == "select_product"
     assert prepared.updated_slots.goods_no == "G000000319584"
+    assert prepared.updated_slots.tire_model == "벤투스 에어S"
+    assert prepared.updated_slots.pending_product_name == "벤투스 에어S"
+    assert prepared.action_context.slot_patch["tire_model"] == "벤투스 에어S"
     assert prepared.updated_slots.pending_intent == "order"
     assert prepared.rewritten_user_text == "벤투스 에어S 245/45R19 2개 구매"
 

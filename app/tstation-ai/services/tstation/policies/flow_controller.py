@@ -756,18 +756,37 @@ def _ui_action_slot_patch(ui_action: Any | Mapping[str, Any] | None) -> dict[str
     return {**slots, **canonical_context_from_template_boundary(slots)}
 
 
+def _product_name_without_tire_size(value: Any, tire_size: Any | None = None) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    normalized_size = normalize_tire_size(str(tire_size or "")) or normalize_tire_size(text)
+    if not normalized_size:
+        return text
+    cleaned = re.sub(
+        r"\s*(?:LT)?\d{3}\s*/?\s*\d{2}\s*(?:ZR|R)?\s*\d{2}\s*$",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    ).strip()
+    return cleaned or text
+
+
 def _selected_product_from_ui_action(ui_action_snapshot: Mapping[str, Any]) -> dict[str, Any]:
     if str(ui_action_snapshot.get("action_type") or "").strip() != "select_product":
         return {}
     slot_patch = ui_action_snapshot.get("slot_patch") if isinstance(ui_action_snapshot.get("slot_patch"), Mapping) else {}
+    tire_size = normalize_tire_size(str(slot_patch.get("tire_size") or ""))
+    product_name = _product_name_without_tire_size(
+        slot_patch.get("product_name") or slot_patch.get("tire_model") or ui_action_snapshot.get("entity_label"),
+        tire_size,
+    )
     return {
         key: value
         for key, value in {
             "goods_no": ui_action_snapshot.get("entity_id") or slot_patch.get("goods_no"),
-            "product_name": ui_action_snapshot.get("entity_label")
-            or slot_patch.get("product_name")
-            or slot_patch.get("tire_model"),
-            "tire_size": slot_patch.get("tire_size"),
+            "product_name": product_name,
+            "tire_size": tire_size or slot_patch.get("tire_size"),
             "selection_source": ui_action_snapshot.get("selection_source"),
         }.items()
         if value not in (None, "", [], {})

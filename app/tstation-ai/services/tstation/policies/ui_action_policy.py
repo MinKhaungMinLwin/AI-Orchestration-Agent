@@ -680,6 +680,22 @@ def _normalize_product_identity_text(value: object) -> str:
     return re.sub(r"[^0-9a-z가-힣]+", "", str(value or "").casefold())
 
 
+def _product_name_without_tire_size(value: object, tire_size: object | None = None) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    normalized_size = normalize_tire_size(str(tire_size or "")) or normalize_tire_size(text)
+    if not normalized_size:
+        return text
+    cleaned = re.sub(
+        r"\s*(?:LT)?\d{3}\s*/?\s*\d{2}\s*(?:ZR|R)?\s*\d{2}\s*$",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    ).strip()
+    return cleaned or text
+
+
 def _product_identity_tokens(value: object) -> set[str]:
     tokens: set[str] = set()
     for raw in re.findall(r"[0-9A-Za-z가-힣]+", str(value or "")):
@@ -1542,7 +1558,10 @@ def _build_ui_action_context_from_raw(
     contract_intent = expected_contract_intent or source_intent
     if not contract_intent:
         return None
+    action_type = str(normalized.get("action_type") or "").strip()
     slot_patch = _ui_action_slot_patch(normalized)
+    if action_type == "select_product":
+        slot_patch = _normalize_product_slot_patch(slot_patch)
     entity_label = str(
         normalized.get("entity_label")
         or normalized.get("label")
@@ -1557,7 +1576,6 @@ def _build_ui_action_context_from_raw(
         or slot_patch.get("car_no")
         or ""
     ).strip()
-    action_type = str(normalized.get("action_type") or "").strip()
     inferred_entity_type = (
         "vehicle"
         if contract_intent in _VEHICLE_SELECTION_CONTRACT_INTENTS or action_type == "select_vehicle_candidate"
@@ -2087,6 +2105,27 @@ def _minimal_ui_action_slot_values(action_type: str, slot_values: Mapping[str, A
     }
 
 
+def _normalize_product_slot_patch(slot_patch: Mapping[str, Any]) -> dict[str, Any]:
+    normalized = dict(slot_patch)
+    tire_size = normalize_tire_size(str(normalized.get("tire_size") or ""))
+    if tire_size:
+        normalized["tire_size"] = tire_size
+    for key in ("product_name", "tire_model", "pending_product_name"):
+        value = normalized.get(key)
+        if value not in (None, "", [], {}):
+            normalized[key] = _product_name_without_tire_size(value, tire_size)
+    product_name = (
+        normalized.get("product_name")
+        or normalized.get("tire_model")
+        or normalized.get("pending_product_name")
+    )
+    if product_name not in (None, "", [], {}):
+        normalized.setdefault("product_name", product_name)
+        normalized.setdefault("tire_model", product_name)
+        normalized.setdefault("pending_product_name", product_name)
+    return normalized
+
+
 def resolve_ui_action_context(
     *,
     raw_action: Mapping[str, Any] | None = None,
@@ -2165,16 +2204,20 @@ def apply_ui_action_slot_patch(
         return base_slots, dict(action_context.trace_metadata) if action_context is not None else {}
 
     trace_metadata = dict(action_context.trace_metadata)
+    slot_patch = dict(action_context.slot_patch)
+    if str(action_context.action_type or "").strip() == "select_product":
+        slot_patch = _normalize_product_slot_patch(slot_patch)
+        trace_metadata["slot_patch"] = slot_patch
     base_for_update = base_slots
     if str(action_context.action_type or "").strip() == "select_product":
         current_product_name = str(
-            action_context.slot_patch.get("product_name")
-            or action_context.slot_patch.get("tire_model")
-            or action_context.slot_patch.get("pending_product_name")
+            slot_patch.get("product_name")
+            or slot_patch.get("tire_model")
+            or slot_patch.get("pending_product_name")
             or action_context.entity_label
             or ""
         ).strip()
-        current_goods_no = str(action_context.slot_patch.get("goods_no") or action_context.entity_id or "").strip()
+        current_goods_no = str(slot_patch.get("goods_no") or action_context.entity_id or "").strip()
         base_for_update, replacement_metadata = replace_current_turn_product_context(
             base_slots,
             current_product_name=current_product_name,
@@ -2182,13 +2225,13 @@ def apply_ui_action_slot_patch(
         )
         trace_metadata.update(dict(replacement_metadata or {}))
 
-    updated_slots = slot_apply_fn(base_for_update, dict(action_context.slot_patch))
+    updated_slots = slot_apply_fn(base_for_update, slot_patch)
     trace_metadata["slots_rewritten"] = True
     if not trace_metadata.get("selected_tire_size"):
         trace_metadata["selected_tire_size"] = str(
-            action_context.slot_patch.get("tire_size")
-            or action_context.slot_patch.get("tire_size_front")
-            or action_context.slot_patch.get("tire_size_rear")
+            slot_patch.get("tire_size")
+            or slot_patch.get("tire_size_front")
+            or slot_patch.get("tire_size_rear")
             or ""
         ).strip() or None
     return updated_slots, trace_metadata
@@ -2608,7 +2651,7 @@ def apply_history_product_selection_state(
             )
         )
         if product_name:
-            slot_patch["tire_model"] = product_name
+            slot_patch["tire_model"] = _product_name_without_tire_size(product_name, tire_size)
         if tire_size:
             slot_patch["tire_size"] = tire_size
         slot_patch.update(_selected_product_price_patch(resolved_row))
@@ -4277,6 +4320,7 @@ def resolve_product_row_from_template_selection(
                 or ""
             )
         )
+        product_name = _product_name_without_tire_size(product_name, tire_size)
         row = {
             "goods_no": goods_no,
             "product_name": product_name,
@@ -4377,7 +4421,7 @@ def confirmed_product_slot_values_from_event(event: Mapping[str, Any] | None) ->
         if tire_size:
             slot_values["tire_size"] = tire_size
         if tire_model:
-            slot_values["tire_model"] = tire_model
+            slot_values["tire_model"] = _product_name_without_tire_size(tire_model, tire_size)
         slot_values.update(_product_price_context_from_mapping(metadata, source="quickreply_metadata"))
         raw_qty = canonical_values.get("ord_qty")
         if raw_qty is not None:
@@ -4414,7 +4458,7 @@ def confirmed_product_slot_values_from_event(event: Mapping[str, Any] | None) ->
     if tire_size:
         slot_values["tire_size"] = tire_size
     if tire_model:
-        slot_values["tire_model"] = tire_model
+        slot_values["tire_model"] = _product_name_without_tire_size(tire_model, tire_size)
     for price_source in (product, meta):
         for key, value in _product_price_context_from_mapping(price_source, source="product_template").items():
             slot_values.setdefault(key, value)
