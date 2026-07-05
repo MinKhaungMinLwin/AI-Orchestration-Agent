@@ -952,9 +952,19 @@ def _contract_required_transaction_tool_input(
         return None
 
     tool_input = {str(key): value for key, value in tool_args_patch.items() if value not in (None, "", [], {})}
-    if not tool_input:
-        return None
     if preferred_tool == "search_stores_tool":
+        if not tool_input:
+            known_slots = dict(turn_contract.known_slots or {})
+            place_query = str(
+                known_slots.get("place_query")
+                or known_slots.get("region")
+                or known_slots.get("location_name")
+                or ""
+            ).strip()
+            if place_query:
+                tool_input = {"place_query": place_query}
+        if not tool_input:
+            return None
         if not (
             tool_input.get("place_query")
             or tool_input.get("region_code")
@@ -965,6 +975,8 @@ def _contract_required_transaction_tool_input(
             return None
         return tool_input, "turn_contract_required_store_search", "매장 검색 중..."
     if preferred_tool == "get_store_list_tool":
+        if not tool_input:
+            return None
         if not (tool_input.get("store_nm") or tool_input.get("shop_name") or tool_input.get("region")):
             return None
         return tool_input, "turn_contract_required_tool_args_patch", "매장 정보 확인 중..."

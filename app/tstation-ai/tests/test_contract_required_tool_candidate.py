@@ -226,6 +226,35 @@ def test_plain_store_search_candidate_uses_contract_tool_args_patch() -> None:
     assert candidate.tool_input == {"region_code": "Gangnam"}
 
 
+def test_store_service_search_candidate_uses_known_place_query_when_tool_args_empty() -> None:
+    contract = TurnContract(
+        domain="transaction",
+        intent="store_service_search",
+        known_slots={
+            "place_query": "고양시청",
+            "region": "고양시청",
+            "policy_intent": "store_service_search",
+        },
+        allowed_tools=("search_stores_tool", "get_store_list_tool", "get_nearby_stores_tool"),
+        forbidden_tools=("transaction_store_preview_tool", "get_store_schedule_tool"),
+        preferred_tool="search_stores_tool",
+        tool_args_patch={},
+        response_decision={"template": "location", "metadata": {"response_shape_key": "store_service_search"}},
+        context_state="dormant",
+    )
+
+    candidate = _contract_required_tool_candidate(
+        turn_contract=contract,
+        user_text="고양시청 근처는?",
+        merged_slots=None,
+    )
+
+    assert candidate is not None
+    assert candidate.tool_name == "search_stores_tool"
+    assert candidate.tool_input_source == "turn_contract_required_store_search"
+    assert candidate.tool_input == {"place_query": "고양시청"}
+
+
 def test_order_status_lookup_candidate_uses_owned_record_boundary() -> None:
     contract = TurnContract(
         domain="transaction",
