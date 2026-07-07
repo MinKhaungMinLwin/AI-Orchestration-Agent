@@ -1246,6 +1246,49 @@ def test_price_side_question_does_not_force_preorder() -> None:
     assert [call["tool_name"] for call in metadata["tool_calls"]] == ["get_final_price_tool"]
 
 
+def test_side_question_with_stale_purchase_slots_uses_current_turn_intent() -> None:
+    store = MemoryStateStore()
+    store.state = ConversationState()
+    store.state.commerce_state.product.goods_no = "G000000000003"
+    store.state.commerce_state.product.product_name = "아이온 에보"
+    store.state.commerce_state.quantity = 4
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.PRICE,
+                    reason="side question about applied discount",
+                    known_inputs={"goods_no": "G000000000003"},
+                )
+            ]
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=store,
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "적용된 할인이 뭐야?"}],
+        stream=False,
+        user_id="u1",
+        session_id="side-price-stale-slots",
+        slots={
+            "goodsNo": "G000000000003",
+            "productName": "아이온 에보",
+            "ordQty": 4,
+            "shopId": "S001",
+            "shopName": "티스테이션 판교점",
+            "requestedCalDay": "20260707",
+            "rsvHour": "10",
+        },
+    )
+
+    _, events, metadata = asyncio.run(runtime.run(request))
+
+    assert events == []
+    assert metadata["planner"]["selected_afs"][0]["af"] == "PriceAF"
+    assert [call["tool_name"] for call in metadata["tool_calls"]] == ["get_final_price_tool"]
+
+
 def test_runtime_applies_request_slot_patch_to_state() -> None:
     store = MemoryStateStore()
     runtime = LLMFirstRuntime(

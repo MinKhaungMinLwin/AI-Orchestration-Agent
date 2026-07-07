@@ -97,7 +97,7 @@ def _is_store_selection_request(request: TStationChatRequest, patch: dict[str, A
     action_type = str(values.get("action_type") or values.get("cta_action") or values.get("actionId") or "").strip()
     fills_slot = str(values.get("fills_slot") or values.get("fillsSlot") or "").strip()
     shop_id = values.get("shop_id") or values.get("shopId")
-    return bool(shop_id) and (action_type == "select_store" or fills_slot == "shop_id" or patch.get("shop_id") or patch.get("shopId"))
+    return bool(shop_id) and (action_type == "select_store" or fills_slot == "shop_id")
 
 
 def _selection_key(value: Any) -> str:
@@ -137,10 +137,16 @@ def _resolve_text_store_selection(request: TStationChatRequest, state: Any, user
     return state
 
 
-def _store_selection_schedule_plan(request: TStationChatRequest, state: Any, user_text: str) -> PlannerDecision | None:
+def _store_selection_schedule_plan(
+    request: TStationChatRequest,
+    state: Any,
+    user_text: str,
+    *,
+    text_selection_resolved: bool = False,
+) -> PlannerDecision | None:
     patch = _request_slot_patch(request)
     direct_selection = _is_store_selection_request(request, patch)
-    if not direct_selection and not state.commerce_state.store.shop_id:
+    if not (direct_selection or text_selection_resolved):
         return None
     commerce = state.commerce_state
     if commerce.schedule.date or commerce.schedule.time:
@@ -176,6 +182,10 @@ def _store_selection_schedule_plan(request: TStationChatRequest, state: Any, use
 def _has_purchase_progress_patch(request: TStationChatRequest) -> bool:
     patch = _request_slot_patch(request)
     values = _ui_action_values(request, patch)
+    action_type = str(values.get("action_type") or values.get("cta_action") or values.get("actionId") or "").strip()
+    fills_slot = str(values.get("fills_slot") or values.get("fillsSlot") or "").strip()
+    if not (action_type or fills_slot or request.ui_action or request.chip_context):
+        return False
     purchase_keys = {
         "ord_qty",
         "ordQty",
@@ -353,8 +363,19 @@ class LLMFirstRuntime:
         user_text = _last_user_text(request)
         set_trace_name(user_text[:60] if user_text else "llm_first_chat")
         state = _apply_request_patch(self.state_store.load(request.session_id), request)
+        store_shop_id_before_text_resolution = state.commerce_state.store.shop_id
         state = _resolve_text_store_selection(request, state, user_text)
-        planner = _store_selection_schedule_plan(request, state, user_text)
+        text_selection_resolved = (
+            not store_shop_id_before_text_resolution
+            and bool(state.commerce_state.store.shop_id)
+            and bool(state.commerce_state.product.goods_no and state.commerce_state.quantity)
+        )
+        planner = _store_selection_schedule_plan(
+            request,
+            state,
+            user_text,
+            text_selection_resolved=text_selection_resolved,
+        )
         if planner is None:
             planner = _vehicle_selection_recommendation_plan(request)
         if planner is None:
