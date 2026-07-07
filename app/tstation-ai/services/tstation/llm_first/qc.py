@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from services.tstation import qc_verifier
 from services.tstation.llm_first.models import FactBundle
-from services.tstation.llm_first.tools import CONFIRMABLE_SIDE_EFFECT_TOOLS, SIDE_EFFECT_TOOLS
+from services.tstation.llm_first.tooling.registry import CONFIRMABLE_SIDE_EFFECT_TOOLS, SIDE_EFFECT_TOOLS
 
 _COMPLETE_FORBIDDEN = ("주문이 완료", "예약이 완료", "장바구니에 담았", "쿠폰을 발급", "1:1 문의가 등록")
 

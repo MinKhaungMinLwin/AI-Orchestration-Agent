@@ -12,14 +12,14 @@ from langchain_litellm import ChatLiteLLM
 from config.env import settings
 from config.tracing import set_trace_name
 from schemas.tstation.chat import TStationChatRequest, TStationChatResponse
-from services.tstation.llm_first import legacy
+from services.tstation.llm_first.adapters import legacy
 from services.tstation.llm_first.composer import Composer
 from services.tstation.llm_first.executor import AFExecutor
 from services.tstation.llm_first.models import AgentFlow, PlannerDecision, SelectedAF
 from services.tstation.llm_first.planner import LeadingAgentPlanner
 from services.tstation.llm_first.qc import verify_response
 from services.tstation.llm_first.schedule_validation import build_past_schedule_selection_event
-from services.tstation.llm_first.state import LLMFirstStateStore, apply_state_rules
+from services.tstation.llm_first.persistence.state import LLMFirstStateStore, apply_state_rules
 
 logger = logging.getLogger(__name__)
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from services.tstation.llm_first.constants import MY_COUPON_LIST_LINK, PROMOTION_EVENT_LIST_URL
+from services.tstation.llm_first.ui.constants import MY_COUPON_LIST_LINK, PROMOTION_EVENT_LIST_URL
 
 _PRC_GRD_ALLOWED: frozenset[str] = frozenset({"프리미엄+", "프리미엄", "스탠다드", "이코노미"})
 _PRC_GRD_DISPLAY: dict[str, str] = {"프리미엄+": "프리미엄"}

@@ -7,7 +7,7 @@ from typing import Any
 
 from services.tstation.llm_first.models import AgentFlow, ConversationState, FactBundle, PlannerDecision, ToolCallRecord
 from services.tstation.llm_first.planner import normalize_tire_size
-from services.tstation.llm_first.state import apply_state_rules
+from services.tstation.llm_first.persistence.state import apply_state_rules
 from services.tstation.llm_first.templates import (
     build_benefit_applicable_products_template,
     build_benefit_event_deal_template,
@@ -20,8 +20,8 @@ from services.tstation.llm_first.templates import (
     build_product_template,
     build_voucher_template,
 )
-from services.tstation.llm_first import legacy
-from services.tstation.llm_first.tools import invoke_tool
+from services.tstation.llm_first.adapters import legacy
+from services.tstation.llm_first.tooling.registry import invoke_tool
 
 logger = logging.getLogger(__name__)
 
