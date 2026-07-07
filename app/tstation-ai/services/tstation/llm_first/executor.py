@@ -21,6 +21,7 @@ from services.tstation.llm_first.templates import (
     build_voucher_template,
 )
 from services.tstation.llm_first.adapters import legacy
+from services.tstation.llm_first.store_search_filters import resolve_store_search_filters
 from services.tstation.llm_first.tooling.registry import invoke_tool
 
 logger = logging.getLogger(__name__)
@@ -753,6 +754,10 @@ class AFExecutor:
             bundle.missing_inputs.append("region_or_store")
             return state
         search_args: dict[str, Any] = {"limit": 10}
+        store_attribute = str(known.get("store_attribute") or "").strip()
+        resolved_store_filters = resolve_store_search_filters(store_attribute)
+        if resolved_store_filters is not None:
+            search_args.update(resolved_store_filters.to_tool_args())
         if query:
             search_args["place_query"] = str(query)
         else:
@@ -762,13 +767,14 @@ class AFExecutor:
         if query and _is_domestic_region_gate_blocked(result):
             _append_template(bundle, _unsupported_region_event(query))
             return state
-        store_attribute = str(known.get("store_attribute") or "").strip()
         assistant_response = "매장 후보를 확인해 주세요."
-        if store_attribute:
+        if store_attribute and resolved_store_filters is None:
             assistant_response = (
                 f"조회된 매장 기본정보에는 {store_attribute} 여부가 포함되어 있지 않아요. "
                 "아래 매장은 지역 기준 후보이며, 방문 전 매장에 직접 확인해 주세요."
             )
+        elif store_attribute:
+            assistant_response = f"{store_attribute} 조건에 맞는 매장 후보를 확인해 주세요."
         is_booking_flow = bool(
             (known.get("goods_no") or state.commerce_state.product.goods_no)
             and (known.get("ord_qty") or state.commerce_state.quantity)

@@ -1735,6 +1735,42 @@ def test_store_attribute_searches_stores_and_marks_attribute_unconfirmed() -> No
     assert metadata["tool_calls"][0]["tool_name"] == "search_stores_tool"
 
 
+def test_store_attribute_search_uses_ev_specialty_filter() -> None:
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.STORE,
+                    reason="store lookup with ev specialty filter",
+                    known_inputs={"region": "서울", "store_attribute": "전기차 특화매장"},
+                )
+            ]
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=MemoryStateStore(),
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "서울 전기차 특화매장 찾아줘"}],
+        stream=False,
+        user_id="u1",
+        session_id="store-attribute-ev-specialty",
+    )
+
+    text, events, metadata = asyncio.run(runtime.run(request))
+
+    assert events[0]["template"] == "location"
+    assert events[0]["data"]["assistantResponse"] == "전기차 특화매장 조건에 맞는 매장 후보를 확인해 주세요."
+    assert "포함되어 있지 않아요" not in events[0]["data"]["assistantResponse"]
+    assert text == "확인한 결과를 안내드립니다."
+    assert metadata["tool_calls"][0]["tool_name"] == "search_stores_tool"
+    assert metadata["tool_calls"][0]["args"] == {
+        "limit": 10,
+        "place_query": "서울",
+        "ev_specialty_only": True,
+    }
+
+
 def test_favorite_store_lookup_uses_favorite_store_tool_and_location_template() -> None:
     runtime = LLMFirstRuntime(
         planner=StaticPlanner(PlannerDecision(

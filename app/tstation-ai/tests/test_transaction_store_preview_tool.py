@@ -590,6 +590,48 @@ def test_search_stores_complex_tool_passes_specialty_and_schedule_filters(monkey
     }]
 
 
+def test_search_stores_tool_delegates_ev_filters_to_complex_search(monkeypatch):
+    calls: list[dict] = []
+
+    def fake_complex_search(**kwargs):
+        calls.append(kwargs)
+        return {
+            "status": "success",
+            "http_status": 200,
+            "data": {
+                "stores": [{"shop_id": "T00009", "shop_nm": "티스테이션 강남EV점"}],
+                "search": {"source": "complex"},
+            },
+        }
+
+    monkeypatch.setattr(tools.search_stores_complex_tool, "func", fake_complex_search)
+
+    result = tools.search_stores_tool.func(
+        place_query="강남역",
+        ev_specialty_only=True,
+        limit=4,
+    )
+
+    assert result["status"] == "success"
+    assert result["data"]["stores"][0]["shop_id"] == "T00009"
+    assert calls == [{
+        "place_query": "강남역",
+        "region_code": None,
+        "store_nm": None,
+        "xpos": None,
+        "ypos": None,
+        "radius_km": 20.0,
+        "svc_codes": None,
+        "all_my_t_only": False,
+        "imported_car_only": False,
+        "ev_specialty_only": True,
+        "ev_charge_available_only": False,
+        "chl_sct_cd": None,
+        "sort_by": None,
+        "limit": 4,
+    }]
+
+
 def test_time_filter_tool_uses_complex_search_for_today_plus_two(monkeypatch):
     calls: list[dict] = []
 

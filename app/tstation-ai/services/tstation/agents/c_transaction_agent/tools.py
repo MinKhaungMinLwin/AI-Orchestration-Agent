@@ -1018,6 +1018,8 @@ def search_stores_tool(
     svc_codes: List[str] | None = None,
     all_my_t_only: bool = False,
     imported_car_only: bool = False,
+    ev_specialty_only: bool = False,
+    ev_charge_available_only: bool = False,
     chl_sct_cd: str | None = None,
     sort_by: str | None = None,
 ):
@@ -1039,7 +1041,8 @@ def search_stores_tool(
         radius_km (float): 좌표 검색 반경 km.
         candidate_limit (int): 내부 후보 조회 수 (1-30). 조건 적용 후 limit로 잘라 반환.
         limit (int): 최종 반환 매장 수 (1-10). 사용자가 "N개"를 말하면 이 값에 반영.
-        svc_codes/all_my_t_only/imported_car_only/chl_sct_cd/sort_by: get_store_list_tool과 동일 필터.
+        svc_codes/all_my_t_only/imported_car_only/ev_specialty_only/ev_charge_available_only/chl_sct_cd/sort_by:
+            get_store_list_tool / search_stores_complex_tool 과 동일 필터.
 
     Example: {"place_query": "남산타워", "limit": 5, "svc_codes": ["126"]}
     """
@@ -1050,18 +1053,38 @@ def search_stores_tool(
     logger.debug(
         "[TOOL][search_stores_tool] Called with: place_query=%s, region_code=%s, store_nm=%s, "
         "xpos=%s, ypos=%s, radius_km=%s, candidate_limit=%s, limit=%s, svc_codes=%s, "
-        "all_my_t_only=%s, imported_car_only=%s, chl_sct_cd=%s, sort_by=%s",
+        "all_my_t_only=%s, imported_car_only=%s, ev_specialty_only=%s, ev_charge_available_only=%s, "
+        "chl_sct_cd=%s, sort_by=%s",
         place_query, region_code, normalized_store_nm, xpos, ypos, radius_km, candidate_cap, final_limit,
-        svc_codes, all_my_t_only, imported_car_only, chl_sct_cd, sort_by,
+        svc_codes, all_my_t_only, imported_car_only, ev_specialty_only, ev_charge_available_only, chl_sct_cd, sort_by,
     )
 
     try:
+        if ev_specialty_only or ev_charge_available_only:
+            return search_stores_complex_tool.func(
+                place_query=place_query,
+                region_code=region_code,
+                store_nm=store_nm,
+                xpos=xpos,
+                ypos=ypos,
+                radius_km=radius_km,
+                svc_codes=svc_codes,
+                all_my_t_only=all_my_t_only,
+                imported_car_only=imported_car_only,
+                ev_specialty_only=ev_specialty_only,
+                ev_charge_available_only=ev_charge_available_only,
+                chl_sct_cd=chl_sct_cd,
+                sort_by=sort_by,
+                limit=final_limit,
+            )
         search_meta: dict[str, Any] = {
             "source": "list",
             "filters": {
                 "svc_codes": svc_codes,
                 "all_my_t_only": all_my_t_only,
                 "imported_car_only": imported_car_only,
+                "ev_specialty_only": ev_specialty_only,
+                "ev_charge_available_only": ev_charge_available_only,
                 "chl_sct_cd": chl_sct_cd,
                 "sort_by": sort_by,
             },
