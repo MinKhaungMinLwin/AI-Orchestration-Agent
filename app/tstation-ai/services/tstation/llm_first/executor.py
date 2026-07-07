@@ -57,6 +57,28 @@ def _escalation_confirmation_event(target: str) -> dict[str, Any]:
     }
 
 
+def _escalation_completion_event(target: str, result: Any) -> dict[str, Any]:
+    if isinstance(result, dict) and result.get("status") == "error":
+        message = "죄송해요, 지금은 연결에 실패했어요. 잠시 후 다시 시도해 주세요."
+    elif target == "human":
+        message = "상담사 연결 요청을 접수했어요. 곧 연결해 드릴게요."
+    else:
+        message = "1:1 문의가 접수됐어요. 확인 후 답변드릴게요."
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": message,
+            "quickReplies": [],
+            "predictedDomains": ["SUPPORT"],
+            "metadata": {
+                "source": "llm_first_escalation_complete",
+                "escalationTarget": target,
+            },
+        },
+    }
+
+
 def _favorite_store_empty_event() -> dict[str, Any]:
     return {
         "type": "data",
@@ -463,6 +485,13 @@ def _template_followup_context(event: dict[str, Any] | None, state: Conversation
         return summary, followup
 
     if template == "quickReply" and isinstance(metadata, dict):
+        if metadata.get("source") == "llm_first_escalation_confirmation":
+            target = str(metadata.get("escalationTarget") or "qna").strip()
+            followup.update({
+                "followup_type": "escalation_confirmation",
+                "pending_escalation_target": target,
+            })
+            return assistant_response, followup
         if response_shape_key == "metric_comparison_summary":
             compared_names = metadata.get("productNames") or []
             compare_metric = str(metadata.get("compareMetric") or metadata.get("compare_metric") or "detail")
@@ -991,19 +1020,39 @@ class AFExecutor:
 
     async def _fallback_escalation(self, user_text: str, state: ConversationState, known: dict[str, Any], bundle: FactBundle) -> ConversationState:
         target = str(known.get("escalation_target") or "qna").strip()
+        if str(known.get("confirmed_action") or "").strip() != "escalation":
+            _append_template(bundle, _escalation_confirmation_event(target))
+            return state
         if target == "human":
-            await self._call(bundle, AgentFlow.FALLBACK_ESCALATION, "escalate_tool", {
-                "mbr_no": known.get("mbr_no"),
-                "inq_type_cd": known.get("inq_type_cd"),
-                "msg_count": known.get("msg_count") or 0,
-                "summary": known.get("summary") or user_text,
-            })
+            result = await self._call(
+                bundle,
+                AgentFlow.FALLBACK_ESCALATION,
+                "escalate_tool",
+                {
+                    "mbr_no": known.get("mbr_no"),
+                    "inq_type_cd": known.get("inq_type_cd"),
+                    "msg_count": known.get("msg_count") or 0,
+                    "summary": known.get("summary") or user_text,
+                },
+                allow_side_effect=True,
+            )
         else:
-            await self._call(bundle, AgentFlow.FALLBACK_ESCALATION, "transfer_to_qna_tool", {
-                "cnsl_clss_seq": known.get("cnsl_clss_seq") or "10019",
-                "inq_tit_nm": known.get("inq_tit_nm") or user_text[:100],
-                "ai_summary": known.get("ai_summary") or user_text[:400],
-                "is_mobile": bool(known.get("is_mobile")),
-            })
-        _append_template(bundle, _escalation_confirmation_event(target))
-        return state
+            result = await self._call(
+                bundle,
+                AgentFlow.FALLBACK_ESCALATION,
+                "transfer_to_qna_tool",
+                {
+                    "cnsl_clss_seq": known.get("cnsl_clss_seq") or "10019",
+                    "inq_tit_nm": known.get("inq_tit_nm") or user_text[:100],
+                    "ai_summary": known.get("ai_summary") or user_text[:400],
+                    "is_mobile": bool(known.get("is_mobile")),
+                },
+                allow_side_effect=True,
+            )
+        _append_template(bundle, _escalation_completion_event(target, result))
+        # Clear the pending flag now that it's resolved — otherwise it stays in
+        # last_facts forever (the merge in _remember_followup_context only adds
+        # keys, it never drops stale ones) and would wrongly re-trigger the
+        # confirmed-escalation shortcut on a later, unrelated turn.
+        cleared_facts = {k: v for k, v in (state.last_facts or {}).items() if k != "pending_escalation_target"}
+        return state.model_copy(update={"last_facts": cleared_facts})
