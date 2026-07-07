@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -11,11 +12,12 @@ from langchain_litellm import ChatLiteLLM
 from config.env import settings
 from config.tracing import set_trace_name
 from schemas.tstation.chat import TStationChatRequest, TStationChatResponse
+from services.tstation.chat_history_service import get_chat_history_service
 from services.tstation.llm_first.composer import Composer
 from services.tstation.llm_first.executor import AFExecutor
+from services.tstation.llm_first.models import AgentFlow, PlannerDecision, SelectedAF
 from services.tstation.llm_first.planner import LeadingAgentPlanner
 from services.tstation.llm_first.qc import verify_response
-from services.tstation.llm_first.models import AgentFlow, PlannerDecision, SelectedAF
 from services.tstation.llm_first.state import LLMFirstStateStore, apply_state_rules
 
 logger = logging.getLogger(__name__)
@@ -85,9 +87,86 @@ def _is_store_selection_request(request: TStationChatRequest, patch: dict[str, A
     return bool(shop_id) and (action_type == "select_store" or fills_slot == "shop_id" or patch.get("shop_id") or patch.get("shopId"))
 
 
-def _store_selection_schedule_plan(request: TStationChatRequest, state: Any) -> PlannerDecision | None:
+def _selection_key(value: Any) -> str:
+    return re.sub(r"[^0-9a-z가-힣]", "", str(value or "").lower())
+
+
+def _account_lookup_plan(user_text: str) -> PlannerDecision | None:
+    compact = _selection_key(user_text)
+    if not compact:
+        return None
+    if "쿠폰" in compact and any(token in compact for token in ("목록", "내쿠폰", "보유", "조회", "보여")):
+        return PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.PRICE,
+                    reason="user asks to view owned coupons",
+                    required_inputs=[],
+                    known_inputs={"account_lookup": "coupons"},
+                    missing_inputs=[],
+                )
+            ],
+            conversation_goal="show_owned_coupons",
+            answer_mode="tool_grounded_answer",
+            requires_user_confirmation=False,
+            resume_previous_flow=False,
+        )
+    if "예약" in compact and any(token in compact for token in ("내역", "목록", "조회", "보여", "확인")):
+        return PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.ORDER_DELIVERY,
+                    reason="user asks to view reservation history",
+                    required_inputs=[],
+                    known_inputs={"account_lookup": "reservations"},
+                    missing_inputs=[],
+                )
+            ],
+            conversation_goal="show_reservation_history",
+            answer_mode="tool_grounded_answer",
+            requires_user_confirmation=False,
+            resume_previous_flow=False,
+        )
+    return None
+
+
+def _resolve_text_store_selection(request: TStationChatRequest, state: Any, user_text: str) -> Any:
+    commerce = state.commerce_state
+    if commerce.store.shop_id or commerce.schedule.date or commerce.schedule.time:
+        return state
+    if not (commerce.product.goods_no and commerce.quantity):
+        return state
+    user_key = _selection_key(user_text)
+    if not user_key:
+        return state
+    try:
+        latest_location = get_chat_history_service().get_latest_template_data(request.session_id, "location")
+    except Exception:
+        logger.warning("[LLM_FIRST_RUNTIME] failed to load latest location template", exc_info=True)
+        return state
+    if not isinstance(latest_location, dict) or latest_location.get("isBookingFlow") is not True:
+        return state
+    stores = latest_location.get("stores")
+    metadata = latest_location.get("metadata")
+    if not isinstance(stores, list) or not isinstance(metadata, list):
+        return state
+    for store, meta in zip(stores, metadata):
+        if not isinstance(store, dict) or not isinstance(meta, dict):
+            continue
+        shop_id = str(meta.get("shopId") or meta.get("shop_id") or "").strip()
+        name = str(store.get("nameAddress") or store.get("shopName") or store.get("name") or "").strip()
+        if not shop_id or not name:
+            continue
+        name_key = _selection_key(name)
+        if user_key == name_key or user_key in name_key or name_key in user_key:
+            return apply_state_rules(state, store_patch={"shop_id": shop_id, "shop_name": name})
+    return state
+
+
+def _store_selection_schedule_plan(request: TStationChatRequest, state: Any, user_text: str) -> PlannerDecision | None:
     patch = _request_slot_patch(request)
-    if not _is_store_selection_request(request, patch):
+    direct_selection = _is_store_selection_request(request, patch)
+    if not direct_selection and not state.commerce_state.store.shop_id:
         return None
     commerce = state.commerce_state
     if commerce.schedule.date or commerce.schedule.time:
@@ -178,7 +257,8 @@ class LLMFirstRuntime:
         user_text = _last_user_text(request)
         set_trace_name(user_text[:60] if user_text else "llm_first_chat")
         state = _apply_request_patch(self.state_store.load(request.session_id), request)
-        planner = _store_selection_schedule_plan(request, state)
+        state = _resolve_text_store_selection(request, state, user_text)
+        planner = _account_lookup_plan(user_text) or _store_selection_schedule_plan(request, state, user_text)
         if planner is None:
             planner = await self.planner.plan(
                 user_text=user_text,

@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from services.tstation.common.cta_urls import CTAUrls
+
 _PRC_GRD_ALLOWED: frozenset[str] = frozenset({"프리미엄+", "프리미엄", "스탠다드", "이코노미"})
 _PRC_GRD_DISPLAY: dict[str, str] = {"프리미엄+": "프리미엄"}
 _GOODS_PFM_LABELS: dict[str, str] = {
@@ -21,13 +23,17 @@ _SVC_CODE_LABELS: dict[str, str] = {
     "125": "배터리",
     "126": "엔진오일",
 }
+_MY_COUPON_LINK = {
+    "pc": CTAUrls.MY_COUPON_LIST_PC,
+    "mobile": CTAUrls.MY_COUPON_LIST_MOBILE,
+}
 
 
 def _items_from_payload(payload: Any) -> list[dict[str, Any]]:
     if isinstance(payload, dict):
         data = payload.get("data") if isinstance(payload.get("data"), (dict, list)) else payload
         if isinstance(data, dict):
-            for key in ("items", "products", "goods", "stores", "result", "results"):
+            for key in ("items", "products", "goods", "stores", "coupons", "reservations", "result", "results"):
                 value = data.get(key)
                 if isinstance(value, list):
                     return [item for item in value if isinstance(item, dict)]
@@ -337,6 +343,35 @@ def build_datepick_template(payload: Any, assistant_response: str) -> dict[str, 
             "dates": dates,
             "selectedDate": None,
             "metadata": {},
+        },
+    }
+
+
+def build_voucher_template(payload: Any, assistant_response: str) -> dict[str, Any] | None:
+    vouchers = []
+    metadata = []
+    for item in _items_from_payload(payload)[:5]:
+        coupon_id = _get_str(item, "cpn_no", "cpn_issu_no", "couponId")
+        name = _get_str(item, "cpn_nm", "disp_nm", "nameVoucher", "couponName")
+        if not coupon_id or not name:
+            continue
+        vouchers.append({
+            "nameVoucher": name,
+            "discount": _get_str(item, "rt_amt_val", "discount"),
+            "dateVoucher": _get_str(item, "use_end_dtime", "dateVoucher").split(" ")[0],
+            "downloadLink": "",
+            "myCouponLink": _MY_COUPON_LINK,
+        })
+        metadata.append({"couponId": coupon_id})
+    if not vouchers:
+        return None
+    return {
+        "type": "data",
+        "template": "voucher",
+        "data": {
+            "assistantResponse": assistant_response,
+            "vouchers": vouchers,
+            "metadata": metadata,
         },
     }
 

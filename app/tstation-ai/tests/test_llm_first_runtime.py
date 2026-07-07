@@ -58,7 +58,7 @@ from services.tstation.llm_first.qc import verify_response  # noqa: E402
 from services.tstation.llm_first.runtime import LLMFirstRuntime  # noqa: E402
 from services.tstation.llm_first.state import LLMFirstStateStore, apply_state_rules  # noqa: E402
 from services.tstation.llm_first.tools import invoke_tool  # noqa: E402
-from services.tstation.agents.templates.schemas import DatepickDataEvent, LocationDataEvent, PreOrderDataEvent, ProductDataEvent  # noqa: E402
+from services.tstation.agents.templates.schemas import DatepickDataEvent, LocationDataEvent, PreOrderDataEvent, ProductDataEvent, VoucherDataEvent  # noqa: E402
 
 
 class MemoryStateStore:
@@ -211,6 +211,34 @@ class FakeExecutor(AFExecutor):
                         "availableTimes": [10, 11, 12, 13],
                     }
                 ],
+            }
+        elif tool_name == "get_my_coupons_tool":
+            result = {
+                "status": "success",
+                "data": {
+                    "coupons": [
+                        {
+                            "cpn_no": "C001",
+                            "cpn_nm": "타이어 할인 쿠폰",
+                            "rt_amt_val": "10%",
+                            "use_end_dtime": "2026-12-31 23:59:59",
+                        }
+                    ]
+                },
+            }
+        elif tool_name == "get_my_reservations_tool":
+            result = {
+                "status": "success",
+                "data": {
+                    "reservations": [
+                        {
+                            "shop_rsv_no": "R001",
+                            "shop_nm": "티스테이션 판교점",
+                            "vst_rsv_dtime": "2026-07-07 10:00",
+                            "shop_vst_rsv_sts_label": "예약완료",
+                        }
+                    ]
+                },
             }
         else:
             result = {"status": "success", "data": []}
@@ -753,6 +781,50 @@ def test_quick_shopping_complete_inputs_emits_preorder_without_side_effect() -> 
     PreOrderDataEvent.model_validate(events[0])
     assert events[0]["data"]["isReadyToOrder"] is True
     assert all(call["tool_name"] not in {"quick_order_tool", "save_to_cart_tool"} for call in metadata["tool_calls"])
+
+
+def test_coupon_list_uses_coupon_tool_and_voucher_template() -> None:
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(selected_afs=[])),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=MemoryStateStore(),
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "쿠폰 목록"}],
+        stream=False,
+        user_id="u1",
+        session_id="coupon-list",
+    )
+
+    _, events, metadata = asyncio.run(runtime.run(request))
+
+    assert events[0]["template"] == "voucher"
+    VoucherDataEvent.model_validate(events[0])
+    assert events[0]["data"]["vouchers"][0]["nameVoucher"] == "타이어 할인 쿠폰"
+    assert metadata["planner"]["selected_afs"][0]["known_inputs"]["account_lookup"] == "coupons"
+    assert metadata["tool_calls"][0]["tool_name"] == "get_my_coupons_tool"
+
+
+def test_reservation_history_uses_reservation_tool_not_faq() -> None:
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(selected_afs=[])),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=MemoryStateStore(),
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "내 예약 내역 보여줘"}],
+        stream=False,
+        user_id="u1",
+        session_id="reservation-history",
+    )
+
+    _, events, metadata = asyncio.run(runtime.run(request))
+
+    assert events == []
+    assert metadata["planner"]["selected_afs"][0]["af"] == "OrderDeliveryAF"
+    assert metadata["tool_calls"][0]["tool_name"] == "get_my_reservations_tool"
 
 
 def test_qc_blocks_completion_claim_without_side_effect() -> None:

@@ -54,6 +54,7 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
     "get_store_schedule_tool": ToolSpec("get_store_schedule_tool", frozenset({AgentFlow.QUICK_SHOPPING, AgentFlow.STORE}), lambda: _tx_tool("get_store_schedule_tool"), required_args=frozenset({"shop_id", "mode"})),
     "get_final_price_tool": ToolSpec("get_final_price_tool", frozenset({AgentFlow.PRICE, AgentFlow.QUICK_SHOPPING}), lambda: _tx_tool("get_final_price_tool"), required_args=frozenset({"goods_no"})),
     "get_my_coupons_tool": ToolSpec("get_my_coupons_tool", frozenset({AgentFlow.PRICE}), lambda: _tx_tool("get_my_coupons_tool")),
+    "get_my_reservations_tool": ToolSpec("get_my_reservations_tool", frozenset({AgentFlow.ORDER_DELIVERY}), lambda: _tx_tool("get_my_reservations_tool")),
     "get_coupon_applicable_products_tool": ToolSpec("get_coupon_applicable_products_tool", frozenset({AgentFlow.PRICE}), lambda: _tx_tool("get_coupon_applicable_products_tool")),
     "get_product_promotions_tool": ToolSpec("get_product_promotions_tool", frozenset({AgentFlow.PRICE}), lambda: _tx_tool("get_product_promotions_tool"), required_args=frozenset({"goods_no"})),
     "transaction_store_preview_tool": ToolSpec("transaction_store_preview_tool", frozenset({AgentFlow.INVENTORY, AgentFlow.QUICK_SHOPPING}), lambda: _tx_tool("transaction_store_preview_tool"), required_args=frozenset({"goods_no", "ord_qty"})),

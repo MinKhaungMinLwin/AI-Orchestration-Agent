@@ -6,7 +6,7 @@ from typing import Any
 
 from services.tstation.llm_first.models import AgentFlow, ConversationState, FactBundle, PlannerDecision, ToolCallRecord
 from services.tstation.llm_first.state import apply_state_rules
-from services.tstation.llm_first.templates import build_datepick_template, build_location_template, build_preorder_template, build_product_template
+from services.tstation.llm_first.templates import build_datepick_template, build_location_template, build_preorder_template, build_product_template, build_voucher_template
 from services.tstation.llm_first.tools import invoke_tool
 
 logger = logging.getLogger(__name__)
@@ -44,7 +44,10 @@ class AFExecutor:
             elif selected.af == AgentFlow.PRODUCT_DESCRIPTION:
                 working_state = await self._description(user_text, working_state, selected.known_inputs, bundle)
             elif selected.af == AgentFlow.PRICE:
-                working_state = await self._price(user_text, working_state, selected.known_inputs, bundle)
+                if selected.known_inputs.get("account_lookup") == "coupons":
+                    working_state = await self._coupons(user_text, working_state, selected.known_inputs, bundle)
+                else:
+                    working_state = await self._price(user_text, working_state, selected.known_inputs, bundle)
             elif selected.af == AgentFlow.STORE:
                 working_state = await self._store(user_text, working_state, selected.known_inputs, bundle)
             elif selected.af == AgentFlow.INVENTORY:
@@ -53,6 +56,8 @@ class AFExecutor:
                 working_state = await self._quick_shopping(user_text, working_state, selected.known_inputs, bundle)
             elif selected.af == AgentFlow.FAQ:
                 working_state = await self._faq(user_text, working_state, selected.known_inputs, bundle)
+            elif selected.af == AgentFlow.ORDER_DELIVERY:
+                working_state = await self._reservations(user_text, working_state, selected.known_inputs, bundle)
         bundle.state = working_state
         bundle.facts["commerce_state"] = working_state.commerce_state.model_dump(exclude_none=True)
         return bundle
@@ -129,6 +134,15 @@ class AFExecutor:
         data = result.get("data", {}) if isinstance(result, dict) else {}
         final_price = data.get("cheapest_final_prc") or data.get("final_prc") or data.get("extra_fvr_sale_prc") or data.get("sale_prc")
         return apply_state_rules(next_state, price_patch={"final_price": final_price, "source": "get_final_price_tool"})
+
+    async def _coupons(self, user_text: str, state: ConversationState, known: dict[str, Any], bundle: FactBundle) -> ConversationState:
+        result = await self._call(bundle, AgentFlow.PRICE, "get_my_coupons_tool", {"lang_cd": "ko"})
+        _append_template(bundle, build_voucher_template(result, "보유 쿠폰 목록을 확인해 주세요."))
+        return state
+
+    async def _reservations(self, user_text: str, state: ConversationState, known: dict[str, Any], bundle: FactBundle) -> ConversationState:
+        await self._call(bundle, AgentFlow.ORDER_DELIVERY, "get_my_reservations_tool", {"sct_cd": "all"})
+        return state
 
     async def _store(self, user_text: str, state: ConversationState, known: dict[str, Any], bundle: FactBundle) -> ConversationState:
         query = known.get("region") or known.get("store_name") or state.commerce_state.store.region
