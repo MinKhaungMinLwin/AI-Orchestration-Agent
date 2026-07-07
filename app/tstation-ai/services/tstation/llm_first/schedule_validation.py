@@ -74,7 +74,7 @@ def build_past_schedule_selection_event(
     now = now or _kst_now()
     if now.tzinfo is None:
         now = now.replace(tzinfo=_KST)
-    if selected.date() >= now.date():
+    if selected >= now:
         return None
     today_label = now.strftime("%Y-%m-%d")
     return {

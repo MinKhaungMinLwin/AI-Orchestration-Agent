@@ -2692,7 +2692,7 @@ def test_schedule_selection_preorder_formats_hour_with_minutes(monkeypatch) -> N
     assert events[0]["data"]["metadata"]["rsvHour"] == "15"
 
 
-def test_schedule_selection_in_active_purchase_flow_allows_same_day_time(monkeypatch) -> None:
+def test_schedule_selection_in_active_purchase_flow_blocks_same_day_past_time(monkeypatch) -> None:
     monkeypatch.setattr(
         schedule_validation_module,
         "_kst_now",
@@ -2714,7 +2714,7 @@ def test_schedule_selection_in_active_purchase_flow_allows_same_day_time(monkeyp
         messages=[{"role": "user", "content": "2026년 07월 07일 16:00"}],
         stream=False,
         user_id="u1",
-        session_id="schedule-selection-same-day-time",
+        session_id="schedule-selection-same-day-past-time",
         ui_action={
             "action_type": "select_schedule",
             "slots": {
@@ -2726,11 +2726,53 @@ def test_schedule_selection_in_active_purchase_flow_allows_same_day_time(monkeyp
 
     text, events, metadata = asyncio.run(runtime.run(request))
 
+    assert events[0]["template"] == "quickReply"
+    assert events[0]["data"]["metadata"]["source"] == "llm_first_schedule_selection_past_datetime"
+    assert text == "지난 날짜의 예약 가능 여부는 조회가 불가능합니다. 오늘 날짜 2026-07-07 이후로 다시 선택해 주세요."
+    assert metadata["tool_calls"] == []
+    assert store.state.commerce_state.schedule.date is None
+    assert store.state.commerce_state.schedule.time is None
+
+
+def test_schedule_selection_in_active_purchase_flow_allows_same_day_future_time(monkeypatch) -> None:
+    monkeypatch.setattr(
+        schedule_validation_module,
+        "_kst_now",
+        lambda: datetime.datetime(2026, 7, 7, 16, 30, tzinfo=datetime.timezone(datetime.timedelta(hours=9))),
+    )
+    store = MemoryStateStore()
+    store.state.commerce_state.product.goods_no = "G000000000003"
+    store.state.commerce_state.product.product_name = "아이온 에보"
+    store.state.commerce_state.quantity = 4
+    store.state.commerce_state.store.shop_id = "S001"
+    store.state.commerce_state.store.shop_name = "티스테이션 판교점"
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(selected_afs=[])),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=store,
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "2026년 07월 07일 17:00"}],
+        stream=False,
+        user_id="u1",
+        session_id="schedule-selection-same-day-future-time",
+        ui_action={
+            "action_type": "select_schedule",
+            "slots": {
+                "requestedCalDay": "20260707",
+                "rsvHour": "17",
+            },
+        },
+    )
+
+    text, events, metadata = asyncio.run(runtime.run(request))
+
     assert events[0]["template"] == "preOrder"
     assert text == "확인한 결과를 안내드립니다."
     assert metadata["tool_calls"][0]["tool_name"] == "get_final_price_tool"
     assert store.state.commerce_state.schedule.date == "2026년 07월 07일"
-    assert store.state.commerce_state.schedule.time == "16"
+    assert store.state.commerce_state.schedule.time == "17"
 
 
 def test_schedule_selection_in_active_purchase_flow_blocks_past_date(monkeypatch) -> None:
