@@ -140,7 +140,7 @@ def _normalize_schedule_date(value: Any) -> str | None:
         return None
     digits = re.sub(r"\D", "", text)
     if len(digits) == 8:
-        return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
+        return f"{digits[:4]}년 {digits[4:6]}월 {digits[6:8]}일"
     return text
 
 

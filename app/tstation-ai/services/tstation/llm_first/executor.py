@@ -20,6 +20,8 @@ from services.tstation.llm_first.templates import (
     build_product_template,
     build_voucher_template,
 )
+from services.tstation.policies.ui_action_policy import normalize_vehicle_type_from_car_type
+from services.tstation.policies.vehicle_category_catalog import match_vehicle_model_category
 from services.tstation.llm_first.tools import invoke_tool
 
 logger = logging.getLogger(__name__)
@@ -172,11 +174,35 @@ def _vehicle_recommendation_args(row: dict[str, Any], known: dict[str, Any]) -> 
         args["car_lnc_cd"] = car_lnc_cd
     elif tire_size:
         args["tire_size"] = tire_size
+    vehicle_type = str(known.get("vehicle_type") or "").strip()
+    if not vehicle_type:
+        vehicle_type = (
+            normalize_vehicle_type_from_car_type(_vehicle_first_nonempty(row, "car_knd_nm", "car_type"))
+            or _infer_vehicle_type_from_text(
+                _vehicle_first_nonempty(row, "car_model_det", "carModelDet", "car_nm", "carName"),
+            )
+            or ""
+        )
+    if vehicle_type:
+        args["vehicle_type"] = vehicle_type
     for key in ("season_nm", "sort_by", "min_price", "max_price"):
         value = known.get(key)
         if value not in (None, "", "none"):
             args[key] = value
     return args
+
+
+def _vehicle_first_nonempty(row: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = row.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return ""
+
+
+def _infer_vehicle_type_from_text(text: str) -> str | None:
+    match = match_vehicle_model_category(text)
+    return match.category if match is not None else None
 
 
 def _remember_followup_context(
@@ -523,6 +549,10 @@ class AFExecutor:
             value = known.get(key)
             if value not in (None, "", "none"):
                 args[key] = value
+        if "vehicle_type" not in args:
+            inferred_vehicle_type = _infer_vehicle_type_from_text(str(known.get("car_model") or user_text or ""))
+            if inferred_vehicle_type:
+                args["vehicle_type"] = inferred_vehicle_type
         result = await self._call(bundle, AgentFlow.PRODUCT_RECOMMENDATION, "get_products_recommendations_tool", args)
         _append_template(bundle, build_product_template(result, "추천 상품을 확인해 주세요.", is_booking_flow=True))
         return apply_state_rules(state, product_patch={"tire_size": tire_size} if tire_size else None)
