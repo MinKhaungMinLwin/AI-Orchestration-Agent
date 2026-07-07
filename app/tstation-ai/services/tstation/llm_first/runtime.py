@@ -57,6 +57,31 @@ def _last_user_text(request: TStationChatRequest) -> str:
     return ""
 
 
+def _to_float(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _request_location_coords(request: TStationChatRequest) -> tuple[float | None, float | None]:
+    sources: list[dict[str, Any]] = []
+    for source in (request.user_info, request.metadata, request.slots):
+        if isinstance(source, dict):
+            sources.append(source)
+            location = source.get("location")
+            if isinstance(location, dict):
+                sources.append(location)
+    for source in sources:
+        xpos = _to_float(source.get("xpos") or source.get("user_xpos") or source.get("longitude") or source.get("lng"))
+        ypos = _to_float(source.get("ypos") or source.get("user_ypos") or source.get("latitude") or source.get("lat"))
+        if xpos is not None and ypos is not None:
+            return xpos, ypos
+    return None, None
+
+
 def _request_slot_patch(request: TStationChatRequest) -> dict[str, Any]:
     patch: dict[str, Any] = {}
     for source in (request.slots, request.ui_action, request.chip_context):
@@ -344,10 +369,13 @@ def _vehicle_selection_recommendation_plan(request: TStationChatRequest) -> Plan
 
 
 def _attach_runtime_known_inputs(planner: PlannerDecision, request: TStationChatRequest) -> PlannerDecision:
-    if not request.user_id:
-        return planner
+    xpos, ypos = _request_location_coords(request)
     for selected in planner.selected_afs:
-        selected.known_inputs.setdefault("mbr_no", request.user_id)
+        if request.user_id:
+            selected.known_inputs.setdefault("mbr_no", request.user_id)
+        if xpos is not None and ypos is not None:
+            selected.known_inputs.setdefault("user_xpos", xpos)
+            selected.known_inputs.setdefault("user_ypos", ypos)
     return planner
 
 

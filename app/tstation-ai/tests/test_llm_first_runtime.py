@@ -1439,6 +1439,60 @@ def test_store_flow_emits_location_template() -> None:
     assert metadata["tool_calls"][0]["tool_name"] == "search_stores_tool"
 
 
+def test_store_flow_uses_current_location_when_region_missing() -> None:
+    state_store = MemoryStateStore()
+    state_store.state.commerce_state.store.region = "이전지역"
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(af=AgentFlow.STORE, reason="store lookup near current location", known_inputs={})
+            ]
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=state_store,
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "근처 매장 보여줘"}],
+        stream=False,
+        user_id="u1",
+        session_id="store-current-location",
+        user_info={"location": {"xpos": 127.123, "ypos": 37.456}},
+    )
+
+    _, events, metadata = asyncio.run(runtime.run(request))
+
+    assert events[0]["template"] == "location"
+    assert metadata["tool_calls"][0]["tool_name"] == "search_stores_tool"
+    assert metadata["tool_calls"][0]["args"] == {"limit": 10, "xpos": 127.123, "ypos": 37.456}
+
+
+def test_store_flow_without_location_or_region_requests_location_input() -> None:
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(af=AgentFlow.STORE, reason="store lookup needs location", known_inputs={})
+            ]
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=MemoryStateStore(),
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "매장 보여줘"}],
+        stream=False,
+        user_id="u1",
+        session_id="store-missing-location",
+    )
+
+    text, events, metadata = asyncio.run(runtime.run(request))
+
+    assert text == "필요한 정보를 알려주세요."
+    assert events == []
+    assert metadata["missing_inputs"] == ["region_or_store"]
+    assert metadata["tool_calls"] == []
+
+
 def test_store_attribute_searches_stores_and_marks_attribute_unconfirmed() -> None:
     runtime = LLMFirstRuntime(
         planner=StaticPlanner(PlannerDecision(
@@ -1691,6 +1745,43 @@ def test_inventory_flow_with_required_inputs_emits_booking_location() -> None:
     assert events[0]["data"]["metadata"][0]["scheduleMode"] == "in_store_only"
     assert events[0]["data"]["metadata"][0]["scheduleTier"] == "in_store_only"
     assert events[0]["data"]["metadata"][0]["ctaAction"] == "select_store"
+
+
+def test_inventory_flow_uses_current_location_when_region_missing() -> None:
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.INVENTORY,
+                    reason="inventory check near current location",
+                    known_inputs={"goods_no": "G000000000002", "ord_qty": 4},
+                )
+            ]
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=MemoryStateStore(),
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "근처 장착 가능 매장 보여줘"}],
+        stream=False,
+        user_id="u1",
+        session_id="inventory-current-location",
+        user_info={"location": {"xpos": 127.123, "ypos": 37.456}},
+    )
+
+    _, events, metadata = asyncio.run(runtime.run(request))
+
+    assert events[0]["template"] == "location"
+    assert metadata["tool_calls"][0]["tool_name"] == "transaction_store_preview_tool"
+    assert metadata["tool_calls"][0]["args"] == {
+        "goods_no": "G000000000002",
+        "ord_qty": 4,
+        "region_code": None,
+        "store_nm": None,
+        "user_xpos": 127.123,
+        "user_ypos": 37.456,
+    }
 
 
 def test_quick_shopping_with_store_but_no_schedule_emits_datepick() -> None:

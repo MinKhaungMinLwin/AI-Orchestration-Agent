@@ -613,11 +613,20 @@ class AFExecutor:
             _append_template(bundle, event or _favorite_store_empty_event())
             return state
 
-        query = known.get("region") or known.get("store_name") or state.commerce_state.store.region
-        if not query:
+        user_xpos = known.get("user_xpos")
+        user_ypos = known.get("user_ypos")
+        has_coords = user_xpos not in (None, "") and user_ypos not in (None, "")
+        query = known.get("region") or known.get("store_name") or (None if has_coords else state.commerce_state.store.region)
+        if not query and not has_coords:
             bundle.missing_inputs.append("region_or_store")
             return state
-        result = await self._call(bundle, AgentFlow.STORE, "search_stores_tool", {"place_query": str(query), "limit": 10})
+        search_args: dict[str, Any] = {"limit": 10}
+        if query:
+            search_args["place_query"] = str(query)
+        else:
+            search_args["xpos"] = float(user_xpos)
+            search_args["ypos"] = float(user_ypos)
+        result = await self._call(bundle, AgentFlow.STORE, "search_stores_tool", search_args)
         store_attribute = str(known.get("store_attribute") or "").strip()
         assistant_response = "매장 후보를 확인해 주세요."
         if store_attribute:
@@ -634,12 +643,15 @@ class AFExecutor:
             assistant_response,
             is_booking_flow=is_booking_flow,
         ))
-        return apply_state_rules(state, store_patch={"region": str(query)})
+        return apply_state_rules(state, store_patch={"region": str(query)} if query else None)
 
     async def _inventory(self, user_text: str, state: ConversationState, known: dict[str, Any], bundle: FactBundle) -> ConversationState:
         next_state, goods_no = await self._resolve_product(user_text, state, known, bundle)
         qty = known.get("ord_qty") or next_state.commerce_state.quantity
-        region = known.get("region") or next_state.commerce_state.store.region
+        user_xpos = known.get("user_xpos")
+        user_ypos = known.get("user_ypos")
+        has_coords = user_xpos not in (None, "") and user_ypos not in (None, "")
+        region = known.get("region") or (None if has_coords else next_state.commerce_state.store.region)
         shop_id = known.get("shop_id") or next_state.commerce_state.store.shop_id
         if not goods_no:
             bundle.missing_inputs.append("goods_no")
@@ -648,10 +660,13 @@ class AFExecutor:
             bundle.missing_inputs.append("ord_qty")
             _append_template(bundle, _quantity_quickreply_event())
             return next_state
-        if not (region or shop_id):
+        if not (region or shop_id or has_coords):
             bundle.missing_inputs.append("region_or_store")
             return apply_state_rules(next_state, quantity=int(qty))
         args = {"goods_no": goods_no, "ord_qty": int(qty), "region_code": region, "store_nm": known.get("store_name")}
+        if has_coords and not (region or shop_id):
+            args["user_xpos"] = float(user_xpos)
+            args["user_ypos"] = float(user_ypos)
         result = await self._call(bundle, AgentFlow.INVENTORY, "transaction_store_preview_tool", args)
         _append_template(bundle, build_location_template(result, "장착 가능한 후보 매장을 확인해 주세요.", is_booking_flow=True))
         return apply_state_rules(next_state, quantity=int(qty), store_patch={"region": region})
@@ -682,16 +697,30 @@ class AFExecutor:
             schedule_patch={k: v for k, v in schedule_patch.items() if v not in (None, "")},
         )
         commerce = next_state.commerce_state
-        if not (commerce.store.shop_id or commerce.store.region or commerce.store.shop_name):
+        user_xpos = known.get("user_xpos")
+        user_ypos = known.get("user_ypos")
+        has_coords = user_xpos not in (None, "") and user_ypos not in (None, "")
+        effective_region = commerce.store.region
+        effective_store_name = commerce.store.shop_name
+        if has_coords:
+            if not known.get("region"):
+                effective_region = None
+            if not known.get("store_name"):
+                effective_store_name = None
+        if not (commerce.store.shop_id or effective_region or effective_store_name or has_coords):
             bundle.missing_inputs.append("store_or_region")
             return next_state
         if not commerce.store.shop_id:
-            result = await self._call(bundle, AgentFlow.INVENTORY, "transaction_store_preview_tool", {
+            preview_args: dict[str, Any] = {
                 "goods_no": goods_no,
                 "ord_qty": int(qty),
-                "region_code": commerce.store.region,
-                "store_nm": commerce.store.shop_name,
-            })
+                "region_code": effective_region,
+                "store_nm": effective_store_name,
+            }
+            if has_coords and not (effective_region or effective_store_name):
+                preview_args["user_xpos"] = float(user_xpos)
+                preview_args["user_ypos"] = float(user_ypos)
+            result = await self._call(bundle, AgentFlow.INVENTORY, "transaction_store_preview_tool", preview_args)
             _append_template(bundle, build_location_template(result, "장착 가능한 후보 매장을 확인해 주세요.", is_booking_flow=True))
             bundle.missing_inputs.append("store")
             return next_state
