@@ -36,6 +36,7 @@ def fallback_compose(user_text: str, bundle: FactBundle) -> str:
             "ord_qty": "수량",
             "region_or_store": "지역 또는 매장",
             "store_or_region": "매장 또는 지역",
+            "store": "매장",
             "schedule": "장착 일정",
             "tire_size_or_vehicle": "타이어 사이즈 또는 차량 정보",
         }

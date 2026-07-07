@@ -173,6 +173,69 @@ def _store_selection_schedule_plan(request: TStationChatRequest, state: Any, use
     )
 
 
+def _has_purchase_progress_patch(request: TStationChatRequest) -> bool:
+    patch = _request_slot_patch(request)
+    values = _ui_action_values(request, patch)
+    purchase_keys = {
+        "ord_qty",
+        "ordQty",
+        "quantity",
+        "shop_id",
+        "shopId",
+        "shop_name",
+        "shopName",
+        "storeName",
+        "region",
+        "region_code",
+        "regionCode",
+        "requested_cal_day",
+        "requestedCalDay",
+        "rsv_hour",
+        "rsvHour",
+        "date",
+        "time",
+    }
+    return any(values.get(key) not in (None, "") for key in purchase_keys)
+
+
+def _commerce_known_inputs(state: Any) -> dict[str, Any]:
+    commerce = state.commerce_state
+    known_inputs = {
+        "goods_no": commerce.product.goods_no,
+        "product_name": commerce.product.product_name,
+        "tire_size": commerce.product.tire_size,
+        "ord_qty": commerce.quantity,
+        "shop_id": commerce.store.shop_id,
+        "store_name": commerce.store.shop_name,
+        "region": commerce.store.region,
+        "date": commerce.schedule.date,
+        "time": commerce.schedule.time,
+    }
+    return {k: v for k, v in known_inputs.items() if v not in (None, "")}
+
+
+def _purchase_progress_plan(request: TStationChatRequest, state: Any) -> PlannerDecision | None:
+    if not _has_purchase_progress_patch(request):
+        return None
+    if not state.commerce_state.product.goods_no:
+        return None
+    return PlannerDecision(
+        selected_afs=[
+            SelectedAF(
+                af=AgentFlow.QUICK_SHOPPING,
+                reason="purchase slot value supplied for an active purchase flow; continue to the next required step",
+                required_inputs=["goods_no", "ord_qty", "shop_id", "schedule"],
+                known_inputs=_commerce_known_inputs(state),
+                missing_inputs=[],
+            )
+        ],
+        conversation_goal="continue_purchase_flow",
+        answer_mode="tool_grounded_answer",
+        requires_user_confirmation=False,
+        resume_previous_flow=True,
+    )
+
+
 def _attach_runtime_known_inputs(planner: PlannerDecision, request: TStationChatRequest) -> PlannerDecision:
     if not request.user_id:
         return planner
@@ -241,6 +304,8 @@ class LLMFirstRuntime:
         state = _apply_request_patch(self.state_store.load(request.session_id), request)
         state = _resolve_text_store_selection(request, state, user_text)
         planner = _store_selection_schedule_plan(request, state, user_text)
+        if planner is None:
+            planner = _purchase_progress_plan(request, state)
         if planner is None:
             planner = await self.planner.plan(
                 user_text=user_text,

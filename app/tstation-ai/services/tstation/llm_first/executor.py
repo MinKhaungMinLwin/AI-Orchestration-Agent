@@ -264,12 +264,37 @@ class AFExecutor:
             bundle.missing_inputs.append("quantity")
             return next_state
         next_state = apply_state_rules(next_state, quantity=int(qty))
-        if not (next_state.commerce_state.store.shop_id or next_state.commerce_state.store.region):
+        store_patch = {
+            "shop_id": known.get("shop_id"),
+            "shop_name": known.get("store_name"),
+            "region": known.get("region"),
+        }
+        schedule_patch = {
+            "date": known.get("date"),
+            "time": known.get("time"),
+        }
+        next_state = apply_state_rules(
+            next_state,
+            store_patch={k: v for k, v in store_patch.items() if v not in (None, "")},
+            schedule_patch={k: v for k, v in schedule_patch.items() if v not in (None, "")},
+        )
+        commerce = next_state.commerce_state
+        if not (commerce.store.shop_id or commerce.store.region or commerce.store.shop_name):
             bundle.missing_inputs.append("store_or_region")
             return next_state
-        if next_state.commerce_state.store.shop_id and not (next_state.commerce_state.schedule.date and next_state.commerce_state.schedule.time):
+        if not commerce.store.shop_id:
+            result = await self._call(bundle, AgentFlow.INVENTORY, "transaction_store_preview_tool", {
+                "goods_no": goods_no,
+                "ord_qty": int(qty),
+                "region_code": commerce.store.region,
+                "store_nm": commerce.store.shop_name,
+            })
+            _append_template(bundle, build_location_template(result, "장착 가능한 후보 매장을 확인해 주세요.", is_booking_flow=True))
+            bundle.missing_inputs.append("store")
+            return next_state
+        if not (commerce.schedule.date and commerce.schedule.time):
             result = await self._call(bundle, AgentFlow.QUICK_SHOPPING, "get_store_schedule_tool", {
-                "shop_id": next_state.commerce_state.store.shop_id,
+                "shop_id": commerce.store.shop_id,
                 "mode": "INSTALL",
             })
             _append_template(bundle, build_datepick_template(result, "가능한 일정을 선택해 주세요."))
