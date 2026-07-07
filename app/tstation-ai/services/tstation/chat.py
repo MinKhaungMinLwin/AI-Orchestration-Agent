@@ -24193,6 +24193,13 @@ class TStationChatServiceV2:
                 )
             return TStationChatResponse(content=guard_text)
 
+        from services.tstation.llm_first.runtime import enabled as _llm_first_enabled
+        if _llm_first_enabled():
+            logger.info("[CHAT_V2] LLM-first runtime enabled for session=%s", request.session_id)
+            from services.tstation.llm_first.runtime import chat as _llm_first_chat
+
+            return await _llm_first_chat(request)
+
         # Create parent "chat" span before classify so ALL sub-calls (classify,
         # agents, qc) are nested under it as children in Langfuse.
         _parent_span = None
