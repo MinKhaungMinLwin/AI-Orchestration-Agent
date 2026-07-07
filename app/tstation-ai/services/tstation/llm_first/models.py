@@ -51,6 +51,41 @@ class StructuredKnownInputs(BaseModel):
     car_no: str | None
     owner_nm: str | None
     car_model: str | None
+    car_lnc_cd: str | None
+    vehicle_type: Literal["none", "ev", "suv", "passenger", "truck_van"] | None
+    recommendation_type: Literal[
+        "none",
+        "tstation",
+        "discount",
+        "value",
+        "wet",
+        "snow",
+        "high_speed",
+        "performance",
+        "low_vibration",
+        "commute",
+        "long_distance",
+        "urban",
+        "family",
+        "ev",
+        "heavy_load",
+        "weekend",
+        "safe_kids",
+        "all_weather",
+        "warranty",
+        "summer",
+        "sound_absorber",
+    ] | None
+    recommendation_source: Literal["none", "recommendation", "best_seller"] | None
+    season_nm: Literal["none", "사계절", "올웨더", "여름", "겨울"] | None
+    sort_by: Literal["none", "price_asc", "price_desc", "rating_desc", "review_desc"] | None
+    min_price: int | None
+    max_price: int | None
+    limit: int | None
+    vehicle_query: str | None
+    months: int | None
+    from_date: str | None
+    to_date: str | None
     escalation_target: Literal["none", "qna", "human"] | None
     account_lookup: Literal[
         "none",

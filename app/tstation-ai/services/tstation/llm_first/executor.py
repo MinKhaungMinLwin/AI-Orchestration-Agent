@@ -114,17 +114,45 @@ class AFExecutor:
         return next_state, str(goods_no) if goods_no else None
 
     async def _recommend(self, user_text: str, state: ConversationState, known: dict[str, Any], bundle: FactBundle) -> ConversationState:
-        tire_size = known.get("tire_size") or state.commerce_state.product.tire_size
-        if not tire_size:
-            bundle.missing_inputs.append("tire_size_or_vehicle")
+        if known.get("recommendation_source") == "best_seller":
+            args: dict[str, Any] = {"limit": int(known.get("limit") or 5)}
+            if known.get("vehicle_query") or known.get("car_model"):
+                args["vehicle_query"] = known.get("vehicle_query") or known.get("car_model")
+            if known.get("months"):
+                args["months"] = int(known["months"])
+            if known.get("from_date") and known.get("to_date"):
+                args["from_date"] = known["from_date"]
+                args["to_date"] = known["to_date"]
+            result = await self._call(bundle, AgentFlow.PRODUCT_RECOMMENDATION, "get_best_selling_products_tool", args)
+            _append_template(bundle, build_product_template(result, "인기 상품을 확인해 주세요."))
             return state
-        result = await self._call(bundle, AgentFlow.PRODUCT_RECOMMENDATION, "get_products_recommendations_tool", {
-            "rcmd_type": "tstation",
-            "tire_size": tire_size,
-            "limit": 3,
-        })
+
+        tire_size = known.get("tire_size") or state.commerce_state.product.tire_size
+        recommendation_type = known.get("recommendation_type")
+        if recommendation_type in (None, "", "none"):
+            recommendation_type = "tstation"
+        args = {
+            "rcmd_type": recommendation_type,
+            "limit": min(max(int(known.get("limit") or 3), 1), 10),
+        }
+        optional_keys = (
+            "brand_cd",
+            "car_lnc_cd",
+            "vehicle_type",
+            "season_nm",
+            "sort_by",
+            "min_price",
+            "max_price",
+        )
+        if tire_size:
+            args["tire_size"] = tire_size
+        for key in optional_keys:
+            value = known.get(key)
+            if value not in (None, "", "none"):
+                args[key] = value
+        result = await self._call(bundle, AgentFlow.PRODUCT_RECOMMENDATION, "get_products_recommendations_tool", args)
         _append_template(bundle, build_product_template(result, "추천 상품을 확인해 주세요."))
-        return apply_state_rules(state, product_patch={"tire_size": tire_size})
+        return apply_state_rules(state, product_patch={"tire_size": tire_size} if tire_size else None)
 
     async def _description(self, user_text: str, state: ConversationState, known: dict[str, Any], bundle: FactBundle) -> ConversationState:
         next_state, goods_no = await self._resolve_product(user_text, state, known, bundle)

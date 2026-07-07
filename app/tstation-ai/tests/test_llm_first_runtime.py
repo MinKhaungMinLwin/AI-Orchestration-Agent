@@ -144,6 +144,24 @@ class FakeExecutor(AFExecutor):
                     ]
                 },
             }
+        elif tool_name == "get_best_selling_products_tool":
+            result = {
+                "status": "success",
+                "data": {
+                    "items": [
+                        {
+                            "goods_no": "G000000000004",
+                            "goods_nm": "키너지 EX",
+                            "tire_size_1": "205/55R16",
+                            "brand_nm": "한국타이어",
+                            "sale_prc": 130000,
+                            "extra_fvr_sale_prc": 110000,
+                            "rate": 4.7,
+                            "total_qty": 20,
+                        }
+                    ]
+                },
+            }
         elif tool_name == "get_final_price_tool":
             result = {
                 "status": "success",
@@ -378,6 +396,19 @@ def test_structured_planner_schema_requires_all_strict_fields() -> None:
         "car_no",
         "owner_nm",
         "car_model",
+        "car_lnc_cd",
+        "vehicle_type",
+        "recommendation_type",
+        "recommendation_source",
+        "season_nm",
+        "sort_by",
+        "min_price",
+        "max_price",
+        "limit",
+        "vehicle_query",
+        "months",
+        "from_date",
+        "to_date",
         "escalation_target",
         "account_lookup",
     }
@@ -544,6 +575,143 @@ def test_runtime_recommendation_stream_emits_product_and_done() -> None:
     assert product_events[0]["data"]["metadata"][0]["goodsId"] == "G000000000001"
     assert token_events[0]["content"] == "확인한 결과를 안내드립니다."
     assert "data: [DONE]" in body
+
+
+def test_general_tire_recommendation_does_not_require_size() -> None:
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.PRODUCT_RECOMMENDATION,
+                    reason="general tire recommendation",
+                    known_inputs={"recommendation_type": "tstation"},
+                )
+            ]
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=MemoryStateStore(),
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "타이어 추천해줘"}],
+        stream=False,
+        user_id="u1",
+        session_id="general-recommendation",
+    )
+
+    _, events, metadata = asyncio.run(runtime.run(request))
+
+    assert events[0]["template"] == "product"
+    assert metadata["missing_inputs"] == []
+    assert metadata["tool_calls"][0]["tool_name"] == "get_products_recommendations_tool"
+    assert metadata["tool_calls"][0]["args"] == {"rcmd_type": "tstation", "limit": 3}
+
+
+def test_sized_tire_recommendation_passes_tire_size() -> None:
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.PRODUCT_RECOMMENDATION,
+                    reason="size-tied tire recommendation",
+                    known_inputs={"tire_size": "225/45R17", "recommendation_type": "value", "limit": 4},
+                )
+            ]
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=MemoryStateStore(),
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "225/45R17 가성비 타이어 4개 추천"}],
+        stream=False,
+        user_id="u1",
+        session_id="sized-recommendation",
+    )
+
+    _, events, metadata = asyncio.run(runtime.run(request))
+
+    assert events[0]["template"] == "product"
+    assert metadata["tool_calls"][0]["args"] == {
+        "rcmd_type": "value",
+        "limit": 4,
+        "tire_size": "225/45R17",
+    }
+
+
+def test_vehicle_type_recommendation_passes_vehicle_type_without_size() -> None:
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.PRODUCT_RECOMMENDATION,
+                    reason="car-type tire recommendation",
+                    known_inputs={
+                        "recommendation_type": "low_vibration",
+                        "vehicle_type": "ev",
+                        "season_nm": "사계절",
+                    },
+                )
+            ]
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=MemoryStateStore(),
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "전기차 사계절 저소음 타이어 추천"}],
+        stream=False,
+        user_id="u1",
+        session_id="vehicle-type-recommendation",
+    )
+
+    _, events, metadata = asyncio.run(runtime.run(request))
+
+    assert events[0]["template"] == "product"
+    assert metadata["tool_calls"][0]["args"] == {
+        "rcmd_type": "low_vibration",
+        "limit": 3,
+        "vehicle_type": "ev",
+        "season_nm": "사계절",
+    }
+
+
+def test_best_seller_search_uses_best_selling_tool() -> None:
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.PRODUCT_RECOMMENDATION,
+                    reason="best-selling tire search",
+                    known_inputs={
+                        "recommendation_source": "best_seller",
+                        "vehicle_query": "그랜저",
+                        "months": 3,
+                        "limit": 5,
+                    },
+                )
+            ]
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=MemoryStateStore(),
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "최근 3개월 그랜저 베스트셀러 타이어"}],
+        stream=False,
+        user_id="u1",
+        session_id="best-seller",
+    )
+
+    _, events, metadata = asyncio.run(runtime.run(request))
+
+    assert events[0]["template"] == "product"
+    assert metadata["tool_calls"][0]["tool_name"] == "get_best_selling_products_tool"
+    assert metadata["tool_calls"][0]["args"] == {
+        "limit": 5,
+        "vehicle_query": "그랜저",
+        "months": 3,
+    }
 
 
 def test_price_flow_uses_search_then_final_price() -> None:
