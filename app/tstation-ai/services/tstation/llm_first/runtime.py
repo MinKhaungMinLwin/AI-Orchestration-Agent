@@ -173,6 +173,14 @@ def _store_selection_schedule_plan(request: TStationChatRequest, state: Any, use
     )
 
 
+def _attach_runtime_known_inputs(planner: PlannerDecision, request: TStationChatRequest) -> PlannerDecision:
+    if not request.user_id:
+        return planner
+    for selected in planner.selected_afs:
+        selected.known_inputs.setdefault("mbr_no", request.user_id)
+    return planner
+
+
 def _apply_request_patch(state: Any, request: TStationChatRequest) -> Any:
     patch = _request_slot_patch(request)
     if not patch:
@@ -241,6 +249,7 @@ class LLMFirstRuntime:
                 user_id=request.user_id,
                 trace_id=request.tracing_id,
             )
+        planner = _attach_runtime_known_inputs(planner, request)
         bundle = await self.executor.execute(user_text=user_text, state=state, planner=planner)
         text = await self.composer.compose(
             user_text=user_text,

@@ -37,6 +37,7 @@ def _items_from_payload(payload: Any) -> list[dict[str, Any]]:
                 value = data.get(key)
                 if isinstance(value, list):
                     return [item for item in value if isinstance(item, dict)]
+            return [data]
         if isinstance(data, list):
             return [item for item in data if isinstance(item, dict)]
     if isinstance(payload, list):
@@ -371,6 +372,68 @@ def build_voucher_template(payload: Any, assistant_response: str) -> dict[str, A
         "data": {
             "assistantResponse": assistant_response,
             "vouchers": vouchers,
+            "metadata": metadata,
+        },
+    }
+
+
+def build_list_car_template(payload: Any, assistant_response: str) -> dict[str, Any] | None:
+    cars = []
+    metadata = []
+    for item in _items_from_payload(payload)[:5]:
+        car_no = _get_str(item, "car_no", "carNo", "licensePlate")
+        car_name = _get_str(item, "car_model_det", "car_nm", "carName", "carModelDet")
+        maker = _get_str(item, "car_maker", "carMaker")
+        info = " ".join(part for part in (maker, car_name) if part).strip() or car_no
+        if not car_no or not info:
+            continue
+        tire_size = _get_str(item, "tire_size_fr", "tireSize")
+        tire_size_re = _get_str(item, "tire_size_re", "tireSizeRe")
+        cars.append({
+            "licensePlate": car_no,
+            "info": info,
+            "description": info,
+            "imageUrl": _get_str(item, "thnl_img_path_nm", "mo_img_path_nm", "pc_img_path_nm"),
+        })
+        metadata.append({
+            "carNo": car_no,
+            "car_no": car_no,
+            "carLncCd": _get_str(item, "car_lnc_cd", "carLncCd") or None,
+            "car_lnc_cd": _get_str(item, "car_lnc_cd", "carLncCd") or None,
+            "mbrCarRegSeq": _get_str(item, "mbr_car_reg_seq", "mbr_car_unif_no") or None,
+            "mbr_car_reg_seq": _get_str(item, "mbr_car_reg_seq", "mbr_car_unif_no") or None,
+            "carMaker": maker or None,
+            "carModelDet": _get_str(item, "car_model_det", "carModelDet") or None,
+            "car_model_det": _get_str(item, "car_model_det", "carModelDet") or None,
+            "carName": _get_str(item, "car_nm", "carName") or None,
+            "car_nm": _get_str(item, "car_nm", "carName") or None,
+            "carTrim": _get_str(item, "ver_opt_choc", "carTrim") or None,
+            "carEngine": _get_str(item, "car_engine", "carEngine") or None,
+            "carType": _get_str(item, "car_type", "carType") or None,
+            "car_type": _get_str(item, "car_type", "carType") or None,
+            "vehicleType": _get_str(item, "vehicle_type", "vehicleType") or None,
+            "vehicle_type": _get_str(item, "vehicle_type", "vehicleType") or None,
+            "tireSize": tire_size or None,
+            "tire_size_fr": tire_size or None,
+            "tireSizeRe": tire_size_re or None,
+            "tire_size_re": tire_size_re or None,
+            "availableSizes": None,
+            "available_sizes": None,
+            "ctaAction": "select_vehicle_candidate",
+            "cta_action": "select_vehicle_candidate",
+            "sourceIntent": "product_compatibility",
+            "source_intent": "product_compatibility",
+            "expectedContractIntent": "product_compatibility",
+            "expected_contract_intent": "product_compatibility",
+        })
+    if not cars:
+        return None
+    return {
+        "type": "data",
+        "template": "listCar",
+        "data": {
+            "assistantResponse": assistant_response,
+            "listCar": cars,
             "metadata": metadata,
         },
     }

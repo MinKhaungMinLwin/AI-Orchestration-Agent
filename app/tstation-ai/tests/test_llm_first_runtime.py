@@ -58,7 +58,7 @@ from services.tstation.llm_first.qc import verify_response  # noqa: E402
 from services.tstation.llm_first.runtime import LLMFirstRuntime  # noqa: E402
 from services.tstation.llm_first.state import LLMFirstStateStore, apply_state_rules  # noqa: E402
 from services.tstation.llm_first.tools import invoke_tool  # noqa: E402
-from services.tstation.agents.templates.schemas import DatepickDataEvent, LocationDataEvent, PreOrderDataEvent, ProductDataEvent, VoucherDataEvent  # noqa: E402
+from services.tstation.agents.templates.schemas import DatepickDataEvent, ListCarDataEvent, LocationDataEvent, PreOrderDataEvent, ProductDataEvent, VoucherDataEvent  # noqa: E402
 
 
 class MemoryStateStore:
@@ -283,6 +283,59 @@ class FakeExecutor(AFExecutor):
                     ]
                 },
             }
+        elif tool_name == "get_my_cars_tool":
+            result = {
+                "status": "success",
+                "data": {
+                    "items": [
+                        {
+                            "car_no": "12가3456",
+                            "car_maker": "현대",
+                            "car_nm": "쏘나타",
+                            "car_model_det": "쏘나타 DN8",
+                            "car_lnc_cd": "CAR001",
+                            "tire_size_fr": "205/65R16",
+                            "tire_size_re": "205/65R16",
+                        }
+                    ]
+                },
+            }
+        elif tool_name == "get_user_vehicles_tool":
+            result = {
+                "status": "success",
+                "data": {
+                    "car_no": args["car_no"],
+                    "car_maker": "기아",
+                    "car_nm": "K5",
+                    "car_model_det": "K5 DL3",
+                    "car_lnc_cd": "CAR002",
+                    "tire_size_fr": "215/55R17",
+                    "tire_size_re": "215/55R17",
+                },
+            }
+        elif tool_name == "search_car_model_groups_tool":
+            result = {
+                "status": "success",
+                "data": {
+                    "items": [
+                        {
+                            "car_model_det": "그랜저 GN7",
+                            "year_from": "2022",
+                            "year_to": "2026",
+                        }
+                    ]
+                },
+            }
+        elif tool_name in {"transfer_to_qna_tool", "escalate_tool"}:
+            result = None
+            bundle.tool_calls.append(ToolCallRecord(
+                af=af,
+                tool_name=tool_name,
+                args=args,
+                blocked=True,
+                reason=f"side-effect tool blocked in LLM-first MVP: {tool_name}",
+            ))
+            return result
         else:
             result = {"status": "success", "data": []}
         bundle.tool_calls.append(ToolCallRecord(af=af, tool_name=tool_name, args=args, result=result))
@@ -321,6 +374,11 @@ def test_structured_planner_schema_requires_all_strict_fields() -> None:
         "region",
         "date",
         "time",
+        "mbr_no",
+        "car_no",
+        "owner_nm",
+        "car_model",
+        "escalation_target",
         "account_lookup",
     }
 
@@ -1018,6 +1076,128 @@ def test_my_warranty_uses_warranty_tool_not_faq_search() -> None:
     assert metadata["planner"]["selected_afs"][0]["af"] == "FAQAF"
     assert metadata["planner"]["selected_afs"][0]["known_inputs"]["account_lookup"] == "warranties"
     assert metadata["tool_calls"][0]["tool_name"] == "get_my_warranties_tool"
+
+
+def test_product_compatibility_uses_my_cars_tool_and_listcar_template() -> None:
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.PRODUCT_COMPATIBILITY,
+                    reason="registered vehicle compatibility lookup",
+                    known_inputs={},
+                )
+            ]
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=MemoryStateStore(),
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "내 차에 맞는 타이어 보여줘"}],
+        stream=False,
+        user_id="M123",
+        session_id="compat-my-cars",
+    )
+
+    _, events, metadata = asyncio.run(runtime.run(request))
+
+    assert events[0]["template"] == "listCar"
+    ListCarDataEvent.model_validate(events[0])
+    assert events[0]["data"]["listCar"][0]["licensePlate"] == "12가3456"
+    assert metadata["planner"]["selected_afs"][0]["af"] == "ProductCompatibilityAF"
+    assert metadata["planner"]["selected_afs"][0]["known_inputs"]["mbr_no"] == "M123"
+    assert metadata["tool_calls"][0]["tool_name"] == "get_my_cars_tool"
+
+
+def test_product_compatibility_uses_owner_vehicle_lookup_when_plate_and_owner_known() -> None:
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.PRODUCT_COMPATIBILITY,
+                    reason="vehicle lookup by plate and owner",
+                    known_inputs={"car_no": "34나5678", "owner_nm": "홍길동"},
+                )
+            ]
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=MemoryStateStore(),
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "34나5678 홍길동 차량 타이어"}],
+        stream=False,
+        user_id="M123",
+        session_id="compat-owner-vehicle",
+    )
+
+    _, events, metadata = asyncio.run(runtime.run(request))
+
+    assert events[0]["template"] == "listCar"
+    assert events[0]["data"]["metadata"][0]["tireSize"] == "215/55R17"
+    assert metadata["tool_calls"][0]["tool_name"] == "get_user_vehicles_tool"
+    assert metadata["tool_calls"][0]["args"] == {"car_no": "34나5678", "owner_nm": "홍길동"}
+
+
+def test_product_compatibility_uses_car_model_group_search() -> None:
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.PRODUCT_COMPATIBILITY,
+                    reason="car model lookup",
+                    known_inputs={"car_model": "그랜저"},
+                )
+            ]
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=MemoryStateStore(),
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "그랜저 타이어 찾아줘"}],
+        stream=False,
+        user_id="M123",
+        session_id="compat-car-model",
+    )
+
+    _, events, metadata = asyncio.run(runtime.run(request))
+
+    assert events == []
+    assert metadata["tool_calls"][0]["tool_name"] == "search_car_model_groups_tool"
+    assert metadata["tool_calls"][0]["args"] == {"keyword": "그랜저"}
+
+
+def test_fallback_escalation_registers_side_effect_tool_as_blocked() -> None:
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.FALLBACK_ESCALATION,
+                    reason="explicit qna handoff",
+                    known_inputs={"escalation_target": "qna"},
+                )
+            ]
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=MemoryStateStore(),
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "1:1 문의 연결해줘"}],
+        stream=False,
+        user_id="M123",
+        session_id="fallback-escalation",
+    )
+
+    _, events, metadata = asyncio.run(runtime.run(request))
+
+    assert events == []
+    assert metadata["planner"]["selected_afs"][0]["af"] == "FallbackEscalationAF"
+    assert metadata["tool_calls"][0]["tool_name"] == "transfer_to_qna_tool"
+    assert metadata["tool_calls"][0]["blocked"] is True
+    assert metadata["missing_inputs"] == ["confirmation"]
 
 
 def test_qc_blocks_completion_claim_without_side_effect() -> None:

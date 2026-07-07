@@ -6,7 +6,7 @@ from typing import Any
 
 from services.tstation.llm_first.models import AgentFlow, ConversationState, FactBundle, PlannerDecision, ToolCallRecord
 from services.tstation.llm_first.state import apply_state_rules
-from services.tstation.llm_first.templates import build_datepick_template, build_location_template, build_preorder_template, build_product_template, build_voucher_template
+from services.tstation.llm_first.templates import build_datepick_template, build_list_car_template, build_location_template, build_preorder_template, build_product_template, build_voucher_template
 from services.tstation.llm_first.tools import invoke_tool
 
 logger = logging.getLogger(__name__)
@@ -61,6 +61,10 @@ class AFExecutor:
                     working_state = await self._faq(user_text, working_state, selected.known_inputs, bundle)
             elif selected.af == AgentFlow.ORDER_DELIVERY:
                 working_state = await self._account_order_delivery(user_text, working_state, selected.known_inputs, bundle)
+            elif selected.af == AgentFlow.PRODUCT_COMPATIBILITY:
+                working_state = await self._compatibility(user_text, working_state, selected.known_inputs, bundle)
+            elif selected.af == AgentFlow.FALLBACK_ESCALATION:
+                working_state = await self._fallback_escalation(user_text, working_state, selected.known_inputs, bundle)
         bundle.state = working_state
         bundle.facts["commerce_state"] = working_state.commerce_state.model_dump(exclude_none=True)
         return bundle
@@ -225,4 +229,47 @@ class AFExecutor:
 
     async def _warranties(self, user_text: str, state: ConversationState, known: dict[str, Any], bundle: FactBundle) -> ConversationState:
         await self._call(bundle, AgentFlow.FAQ, "get_my_warranties_tool", {})
+        return state
+
+    async def _compatibility(self, user_text: str, state: ConversationState, known: dict[str, Any], bundle: FactBundle) -> ConversationState:
+        car_no = str(known.get("car_no") or "").strip()
+        owner_nm = str(known.get("owner_nm") or "").strip()
+        car_model = str(known.get("car_model") or known.get("product_name") or "").strip()
+        mbr_no = str(known.get("mbr_no") or "").strip()
+        if car_no and owner_nm:
+            result = await self._call(bundle, AgentFlow.PRODUCT_COMPATIBILITY, "get_user_vehicles_tool", {
+                "car_no": car_no,
+                "owner_nm": owner_nm,
+            })
+            _append_template(bundle, build_list_car_template(result, "차량 정보를 확인해 주세요."))
+            return state
+        if car_model:
+            await self._call(bundle, AgentFlow.PRODUCT_COMPATIBILITY, "search_car_model_groups_tool", {
+                "keyword": car_model,
+            })
+            return state
+        if mbr_no:
+            result = await self._call(bundle, AgentFlow.PRODUCT_COMPATIBILITY, "get_my_cars_tool", {"mbr_no": mbr_no})
+            _append_template(bundle, build_list_car_template(result, "등록된 차량을 확인해 주세요."))
+            return state
+        bundle.missing_inputs.append("vehicle")
+        return state
+
+    async def _fallback_escalation(self, user_text: str, state: ConversationState, known: dict[str, Any], bundle: FactBundle) -> ConversationState:
+        target = str(known.get("escalation_target") or "qna").strip()
+        if target == "human":
+            await self._call(bundle, AgentFlow.FALLBACK_ESCALATION, "escalate_tool", {
+                "mbr_no": known.get("mbr_no"),
+                "inq_type_cd": known.get("inq_type_cd"),
+                "msg_count": known.get("msg_count") or 0,
+                "summary": known.get("summary") or user_text,
+            })
+        else:
+            await self._call(bundle, AgentFlow.FALLBACK_ESCALATION, "transfer_to_qna_tool", {
+                "cnsl_clss_seq": known.get("cnsl_clss_seq") or "10019",
+                "inq_tit_nm": known.get("inq_tit_nm") or user_text[:100],
+                "ai_summary": known.get("ai_summary") or user_text[:400],
+                "is_mobile": bool(known.get("is_mobile")),
+            })
+        bundle.missing_inputs.append("confirmation")
         return state

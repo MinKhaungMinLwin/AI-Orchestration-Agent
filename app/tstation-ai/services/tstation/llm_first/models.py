@@ -47,6 +47,11 @@ class StructuredKnownInputs(BaseModel):
     region: str | None
     date: str | None
     time: str | None
+    mbr_no: str | None
+    car_no: str | None
+    owner_nm: str | None
+    car_model: str | None
+    escalation_target: Literal["none", "qna", "human"] | None
     account_lookup: Literal[
         "none",
         "coupons",
