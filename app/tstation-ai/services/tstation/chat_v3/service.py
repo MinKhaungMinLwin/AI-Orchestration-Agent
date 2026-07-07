@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 
 from config.env import settings
 from schemas.tstation.chat import TStationChatRequest, TStationChatResponse
-from services.tstation.chat_v3 import composer, context, qc, sse
+from services.tstation.chat_v3 import composer, context, qc, sse, templates
 from services.tstation.chat_v3.executor import ToolLoopExecutor
 from services.tstation.chat_v3.prompts.persona import ERROR_RESPONSE, SYSTEM_PROMPT, TRANSACTION_WRITE_GUIDANCE
 from services.tstation.chat_v3.router.guards import get_guard
@@ -89,14 +89,18 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         yield sse.sse({"type": "qc_correction", "assistantResponse": corrected})
         answer = corrected
 
-    chips = await composer.suggest_quick_replies(user_text, answer)
     result["answer"] = answer
     yield sse.message(answer)
-    yield sse.data_event(
-        "quickReply",
-        {"assistantResponse": answer, "quickReplies": chips, "predictedDomains": [domain]},
-        source_domain=domain,
-    )
+    rich_event = await templates.build_rich_data_event(answer, executor.tool_calls)
+    if rich_event:
+        yield sse.sse({**rich_event, "source_domain": domain})
+    else:
+        chips = await composer.suggest_quick_replies(user_text, answer)
+        yield sse.data_event(
+            "quickReply",
+            {"assistantResponse": answer, "quickReplies": chips, "predictedDomains": [domain]},
+            source_domain=domain,
+        )
     yield sse.agent_flow("[DONE]", "success")
     for event in sse.done():
         yield event

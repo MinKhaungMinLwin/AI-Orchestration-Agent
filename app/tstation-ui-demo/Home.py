@@ -113,6 +113,7 @@ if access_token:
     if st.sidebar.button("➕ New Conversation", key="new_session_btn"):
         st.session_state["current_session_id"] = str(uuid.uuid4())
         st.session_state["messages"] = []
+        st.session_state["last_quick_replies"] = []
         st.rerun()
 
     # Session selector
@@ -155,6 +156,7 @@ if access_token:
         if new_session_id != st.session_state.get("current_session_id"):
             st.session_state["current_session_id"] = new_session_id
             st.session_state["messages"] = []
+            st.session_state["last_quick_replies"] = []
 
             # Load history if session selected
             if new_session_id and new_session_id in session_ids:
@@ -171,6 +173,7 @@ if access_token:
                 if delete_session(st.session_state["current_session_id"], access_token):
                     st.session_state["current_session_id"] = None
                     st.session_state["messages"] = []
+                    st.session_state["last_quick_replies"] = []
                     st.rerun()
     else:
         st.sidebar.info("No conversations yet")
@@ -420,22 +423,30 @@ def _chip_request_fields(chip: dict) -> tuple[dict, dict]:
 
 chips_container = st.container()
 
-with chips_container:
-    quick_reply_chips = st.session_state.get("last_quick_replies") or []
-    if quick_reply_chips and access_token:
-        cols = st.columns(min(len(quick_reply_chips), 4))
-        for idx, chip in enumerate(quick_reply_chips[:4]):
-            label = str(chip.get("label") or "")
-            with cols[idx % len(cols)]:
-                if chip.get("url"):
-                    st.link_button(label, str(chip["url"]))
-                else:
-                    st.button(
-                        label,
-                        key=f"quick_reply_chip_{idx}",
-                        on_click=_queue_quick_reply_chip,
-                        args=(chip,),
-                    )
+
+def render_quick_reply_chips() -> None:
+    """Fill the chips placeholder from session state.
+
+    Called at the END of the script run (see bottom of file) so chips captured
+    while streaming THIS turn's response show immediately — rendering here
+    inline would display the previous turn's chips (one-turn lag).
+    """
+    with chips_container:
+        quick_reply_chips = st.session_state.get("last_quick_replies") or []
+        if quick_reply_chips and access_token:
+            cols = st.columns(min(len(quick_reply_chips), 4))
+            for idx, chip in enumerate(quick_reply_chips[:4]):
+                label = str(chip.get("label") or "")
+                with cols[idx % len(cols)]:
+                    if chip.get("url"):
+                        st.link_button(label, str(chip["url"]))
+                    else:
+                        st.button(
+                            label,
+                            key=f"quick_reply_chip_{idx}",
+                            on_click=_queue_quick_reply_chip,
+                            args=(chip,),
+                        )
 
 input_container = st.container()
 
@@ -587,6 +598,8 @@ if outgoing_message:
 
     if 'random_example_index' in st.session_state:
         del st.session_state.random_example_index
+
+render_quick_reply_chips()
 
 st.markdown("""
 <style>
