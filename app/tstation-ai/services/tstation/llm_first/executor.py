@@ -191,13 +191,20 @@ class AFExecutor:
             bundle.missing_inputs.append("region_or_store")
             return state
         result = await self._call(bundle, AgentFlow.STORE, "search_stores_tool", {"place_query": str(query), "limit": 10})
+        store_attribute = str(known.get("store_attribute") or "").strip()
+        assistant_response = "매장 후보를 확인해 주세요."
+        if store_attribute:
+            assistant_response = (
+                f"조회된 매장 기본정보에는 {store_attribute} 여부가 포함되어 있지 않아요. "
+                "아래 매장은 지역 기준 후보이며, 방문 전 매장에 직접 확인해 주세요."
+            )
         is_booking_flow = bool(
             (known.get("goods_no") or state.commerce_state.product.goods_no)
             and (known.get("ord_qty") or state.commerce_state.quantity)
         )
         _append_template(bundle, build_location_template(
             result,
-            "매장 후보를 확인해 주세요.",
+            assistant_response,
             is_booking_flow=is_booking_flow,
         ))
         return apply_state_rules(state, store_patch={"region": str(query)})

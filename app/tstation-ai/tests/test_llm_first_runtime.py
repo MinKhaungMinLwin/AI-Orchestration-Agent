@@ -390,6 +390,7 @@ def test_structured_planner_schema_requires_all_strict_fields() -> None:
         "shop_id",
         "store_name",
         "region",
+        "store_attribute",
         "date",
         "time",
         "mbr_no",
@@ -855,6 +856,37 @@ def test_store_flow_emits_location_template() -> None:
     assert "평점: 4.8" in store["description"]
     assert "리뷰 27건" in store["description"]
     assert "서비스: 올마이티 | 온라인 장착 가능 | 얼라인먼트" in store["description"]
+    assert metadata["tool_calls"][0]["tool_name"] == "search_stores_tool"
+
+
+def test_store_attribute_searches_stores_and_marks_attribute_unconfirmed() -> None:
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.STORE,
+                    reason="store lookup with unverifiable staff condition",
+                    known_inputs={"region": "서울", "store_attribute": "여자 직원 근무 여부"},
+                )
+            ]
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=MemoryStateStore(),
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "서울에 여자직원 있는 매장 있어?"}],
+        stream=False,
+        user_id="u1",
+        session_id="store-attribute-guard",
+    )
+
+    text, events, metadata = asyncio.run(runtime.run(request))
+
+    assert events[0]["template"] == "location"
+    assert "여자 직원 근무 여부" in events[0]["data"]["assistantResponse"]
+    assert "포함되어 있지 않아요" in events[0]["data"]["assistantResponse"]
+    assert text == "확인한 결과를 안내드립니다."
     assert metadata["tool_calls"][0]["tool_name"] == "search_stores_tool"
 
 

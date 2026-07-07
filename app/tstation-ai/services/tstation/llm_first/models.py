@@ -45,6 +45,7 @@ class StructuredKnownInputs(BaseModel):
     shop_id: str | None
     store_name: str | None
     region: str | None
+    store_attribute: str | None
     date: str | None
     time: str | None
     mbr_no: str | None
