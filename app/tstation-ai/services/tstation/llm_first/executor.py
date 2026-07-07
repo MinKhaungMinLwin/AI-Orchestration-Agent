@@ -474,7 +474,7 @@ class AFExecutor:
                 args["from_date"] = known["from_date"]
                 args["to_date"] = known["to_date"]
             result = await self._call(bundle, AgentFlow.PRODUCT_RECOMMENDATION, "get_best_selling_products_tool", args)
-            _append_template(bundle, build_product_template(result, "인기 상품을 확인해 주세요."))
+            _append_template(bundle, build_product_template(result, "인기 상품을 확인해 주세요.", is_booking_flow=True))
             return state
 
         tire_size = known.get("tire_size") or state.commerce_state.product.tire_size
@@ -501,7 +501,7 @@ class AFExecutor:
             if value not in (None, "", "none"):
                 args[key] = value
         result = await self._call(bundle, AgentFlow.PRODUCT_RECOMMENDATION, "get_products_recommendations_tool", args)
-        _append_template(bundle, build_product_template(result, "추천 상품을 확인해 주세요."))
+        _append_template(bundle, build_product_template(result, "추천 상품을 확인해 주세요.", is_booking_flow=True))
         return apply_state_rules(state, product_patch={"tire_size": tire_size} if tire_size else None)
 
     async def _description(self, user_text: str, state: ConversationState, known: dict[str, Any], bundle: FactBundle) -> ConversationState:
@@ -727,7 +727,14 @@ class AFExecutor:
                             "get_products_recommendations_tool",
                             args,
                         )
-                        _append_template(bundle, build_product_template(recommendation, "내 차에 맞는 추천 상품을 확인해 주세요."))
+                        _append_template(
+                            bundle,
+                            build_product_template(
+                                recommendation,
+                                "내 차에 맞는 추천 상품을 확인해 주세요.",
+                                is_booking_flow=True,
+                            ),
+                        )
                         tire_size = args.get("tire_size") or normalize_tire_size(str(selected.get("tire_size_fr") or ""))
                         return apply_state_rules(state, product_patch={"tire_size": tire_size} if tire_size else None)
                 _append_template(

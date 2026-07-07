@@ -112,6 +112,41 @@ def _product_tags(item: dict[str, Any]) -> list[dict[str, Any]]:
     return tags
 
 
+def _product_card_description(item: dict[str, Any]) -> str:
+    explicit = _get_str(
+        item,
+        "description",
+        "goods_desc",
+        "pc_prod_tech_desc",
+        "pc_prod_remark_desc",
+        "slogan",
+    )
+    if explicit:
+        return explicit[:160]
+
+    parts: list[str] = []
+    season = _get_str(item, "season_nm")
+    car_type = _get_str(item, "car_knd_nm", "car_type")
+    performance = _GOODS_PFM_LABELS.get(_get_str(item, "goods_pfm_nm").upper()) or _get_str(item, "goods_dtl_pfm_nm")
+    intro = " ".join(part for part in (season, car_type) if part)
+    if intro:
+        parts.append(f"{intro}용 타이어예요.")
+    if performance:
+        parts.append(f"{performance} 중심 성향이에요.")
+    rating = float(_get_num(item, "rating_avg", "rate", default=0.0))
+    review_count = int(_get_num(item, "review_count", "total_qty", default=0))
+    if rating and review_count:
+        rating_text = int(rating) if rating.is_integer() else f"{rating:g}"
+        parts.append(f"평점 {rating_text}점, 리뷰 {review_count}건이에요.")
+    elif rating:
+        rating_text = int(rating) if rating.is_integer() else f"{rating:g}"
+        parts.append(f"평점 {rating_text}점이에요.")
+    release = _get_str(item, "t_rls_yearmon")
+    if release:
+        parts.append(f"{release} 출시 정보가 확인돼요.")
+    return " ".join(parts)[:160] or "상품 상세 설명은 /chat 경로에서 추가로 확인할 수 있어요."
+
+
 def _first_nonempty(values: list[str]) -> str:
     return next((value for value in values if value), "")
 
@@ -524,7 +559,7 @@ def build_product_template(
             "rate": float(_get_num(item, "rate", "rating", "rating_avg", default=0.0)),
             "totalQuantity": int(_get_num(item, "totalQuantity", "total_qty", "review_count", default=0)),
             "tags": _product_tags(item),
-            "description": _get_str(item, "description", "goods_desc", "goods_dtl_pfm_nm"),
+            "description": _product_card_description(item),
         })
         metadata.append({"goodsId": goods_no})
     if not products:
