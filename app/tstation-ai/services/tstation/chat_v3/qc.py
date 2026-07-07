@@ -35,7 +35,7 @@ async def verify_answer(answer: str, tool_calls: list[dict]) -> str:
         f"[{call['name']}] input={call['args']}\n{call['output'][:3000]}" for call in tool_calls
     )
     try:
-        llm = get_router_llm().with_structured_output(QCVerdict)
+        llm = get_router_llm().with_structured_output(QCVerdict, method="function_calling")
         verdict = await llm.ainvoke(
             [("system", _QC_PROMPT), ("user", f"## 도구 결과\n{facts[:12000]}\n\n## 챗봇 답변\n{answer}")]
         )

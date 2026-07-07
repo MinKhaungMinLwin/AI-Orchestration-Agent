@@ -35,7 +35,9 @@ def _router_input(request: TStationChatRequest) -> str:
 
 async def route_request(request: TStationChatRequest) -> RouteDecision | None:
     try:
-        llm = get_router_llm().with_structured_output(RouteDecision)
+        # json_schema (default) requires every field in `required` (OpenAI strict
+        # mode), which optional-field models fail — function_calling does not.
+        llm = get_router_llm().with_structured_output(RouteDecision, method="function_calling")
         decision = await llm.ainvoke([("system", ROUTER_PROMPT), ("user", _router_input(request))])
         logger.info(
             "[CHAT_V3] route guard=%s domain=%s intents=%s slots=%s",

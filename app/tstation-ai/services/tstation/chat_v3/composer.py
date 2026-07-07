@@ -28,7 +28,7 @@ class QuickReplySuggestion(BaseModel):
 async def suggest_quick_replies(user_text: str, answer: str) -> list[dict]:
     """Return [{label, domain}, ...] chips for the FE, or [] on failure."""
     try:
-        llm = get_router_llm().with_structured_output(QuickReplySuggestion)
+        llm = get_router_llm().with_structured_output(QuickReplySuggestion, method="function_calling")
         suggestion = await llm.ainvoke(
             [
                 ("system", QUICK_REPLY_PROMPT),
