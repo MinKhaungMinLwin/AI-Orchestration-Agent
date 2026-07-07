@@ -43,7 +43,7 @@ def verify_response(text: str, bundle: FactBundle) -> tuple[str, dict | None]:
     sources = [(call.tool_name, call.result) for call in bundle.tool_calls if not call.blocked]
     mismatches = qc_verifier.verify_draft(text, sources)
     if mismatches:
-        return "fact_mismatch", _guard_event("도구 결과와 답변 숫자가 맞지 않아 단정 안내를 중단했습니다. 다시 확인해 드릴게요.")
+        return "fact_mismatch", None
     return "ok", None
 
 
