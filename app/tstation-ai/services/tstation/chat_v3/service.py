@@ -1,0 +1,157 @@
+"""Chat V3 entrypoint — orchestrates route → guard/tools → answer.
+
+Turn pipeline (all decisions LLM-made, zero regex):
+  router (guard? domain? slots?) → guard: canned answer
+                                 → pass:  tool loop → QC → quick replies
+"""
+
+import logging
+import time
+
+from fastapi.responses import StreamingResponse
+
+from config.env import settings
+from schemas.tstation.chat import TStationChatRequest, TStationChatResponse
+from services.tstation.chat_v3 import composer, context, qc, sse
+from services.tstation.chat_v3.executor import ToolLoopExecutor
+from services.tstation.chat_v3.prompts.persona import ERROR_RESPONSE, SYSTEM_PROMPT, TRANSACTION_WRITE_GUIDANCE
+from services.tstation.chat_v3.router.guards import get_guard
+from services.tstation.chat_v3.router.route import route_request
+from services.tstation.chat_v3.slots.store import apply_patch, load_slots, save_slots, slots_context_block
+from services.tstation.chat_v3.tools import tools_for_domain
+from services.tstation.common.tstation_be_client import set_tstation_be_token, set_tstation_origin_host
+
+logger = logging.getLogger(__name__)
+
+_STREAM_HEADERS = {
+    "Cache-Control": "no-cache",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no",
+}
+
+
+def _tool_display_names() -> dict[str, str]:
+    from services.tstation.agents.base_agent import TOOL_DISPLAY_NAMES
+
+    return TOOL_DISPLAY_NAMES
+
+
+async def _run_turn(request: TStationChatRequest, result: dict):
+    t0 = time.perf_counter()
+    set_tstation_be_token(request.access_token)
+    set_tstation_origin_host(request.origin_host)
+    user_text = context.last_user_text(request)
+
+    yield sse.status("생각 중...")
+    decision = await route_request(request)
+    t_route = time.perf_counter()
+
+    guard = get_guard(decision.guard_id) if decision else None
+    if guard:
+        logger.info("[CHAT_V3] guard=%s for session=%s", guard.id, request.session_id)
+        result["answer"] = guard.text
+        yield sse.token(guard.text)
+        yield sse.message(guard.text)
+        yield sse.data_event(
+            "quickReply",
+            {
+                "assistantResponse": guard.text,
+                "quickReplies": guard.chips,
+                "predictedDomains": guard.predicted_domains,
+            },
+            assistant_response_source=f"llm_guard_{guard.id}",
+        )
+        for event in sse.done():
+            yield event
+        return
+
+    slots = await load_slots(request.session_id)
+    slots = apply_patch(slots, decision.slots_patch if decision else None)
+    domain = decision.domain.value if decision else "LEADING"
+
+    extra_context = []
+    if domain == "TRANSACTION":
+        extra_context.append(TRANSACTION_WRITE_GUIDANCE)
+    slots_block = slots_context_block(slots)
+    if slots_block:
+        extra_context.append(slots_block)
+    messages = context.build_messages(request, system_prompt=SYSTEM_PROMPT, extra_context=extra_context)
+
+    executor = ToolLoopExecutor(messages, tools_for_domain(domain), _tool_display_names())
+    yield sse.agent_flow(f"[V3 {domain} FLOW]", "start")
+    async for event in executor.stream():
+        yield event
+    t_tools = time.perf_counter()
+
+    answer = executor.final_text.strip() or ERROR_RESPONSE
+    corrected = await qc.verify_answer(answer, executor.tool_calls)
+    if corrected != answer:
+        yield sse.sse({"type": "qc_correction", "assistantResponse": corrected})
+        answer = corrected
+
+    chips = await composer.suggest_quick_replies(user_text, answer)
+    result["answer"] = answer
+    yield sse.message(answer)
+    yield sse.data_event(
+        "quickReply",
+        {"assistantResponse": answer, "quickReplies": chips, "predictedDomains": [domain]},
+        source_domain=domain,
+    )
+    yield sse.agent_flow("[DONE]", "success")
+    for event in sse.done():
+        yield event
+
+    await save_slots(request.session_id, slots, user_id=request.user_id)
+    logger.info(
+        "[CHAT_V3] session=%s domain=%s tools=%d route=%.0fms tools_stage=%.0fms total=%.0fms",
+        request.session_id,
+        domain,
+        len(executor.tool_calls),
+        (t_route - t0) * 1000,
+        (t_tools - t_route) * 1000,
+        (time.perf_counter() - t0) * 1000,
+    )
+
+
+async def _run_turn_safe(request: TStationChatRequest, result: dict):
+    """Never lets an exception kill the SSE stream — degrades to an error message."""
+    try:
+        async for event in _run_turn(request, result):
+            yield event
+    except Exception:
+        logger.exception("[CHAT_V3] turn failed for session=%s", request.session_id)
+        result["answer"] = ERROR_RESPONSE
+        yield sse.token(ERROR_RESPONSE)
+        yield sse.message(ERROR_RESPONSE)
+        yield sse.data_event(
+            "quickReply",
+            {"assistantResponse": ERROR_RESPONSE, "quickReplies": [], "predictedDomains": []},
+        )
+        for event in sse.done():
+            yield event
+
+
+class TStationChatServiceV3:
+    """V3 chat service: LLM-first, streams the same SSE contract as V2."""
+
+    @staticmethod
+    async def chat(request: TStationChatRequest):
+        logger.info("[CHAT_V3] chat for session=%s stream=%s", request.session_id, request.stream)
+        result: dict = {}
+        if request.stream:
+            return StreamingResponse(
+                _run_turn_safe(request, result),
+                media_type="text/event-stream",
+                headers=_STREAM_HEADERS,
+            )
+        async for _ in _run_turn_safe(request, result):
+            pass
+        return TStationChatResponse(content=result.get("answer") or ERROR_RESPONSE)
+
+
+async def chat(request: TStationChatRequest):
+    return await TStationChatServiceV3.chat(request)
+
+
+def enabled() -> bool:
+    return bool(getattr(settings, "AI_CHAT_V3_PURE_LLM_ENABLED", False))
