@@ -100,6 +100,8 @@ class StaticComposer:
                     "llm_first_benefit_event_deal_list",
                     "llm_first_event_applicable_products",
                     "llm_first_benefit_applicable_products",
+                    "llm_first_order_complete",
+                    "llm_first_cart_complete",
                 }:
                     return data["assistantResponse"]
         return "확인한 결과를 안내드립니다."
@@ -149,7 +151,7 @@ class StaticPlanner:
 
 
 class FakeExecutor(AFExecutor):
-    async def _call(self, bundle, af, tool_name, args):
+    async def _call(self, bundle, af, tool_name, args, *, allow_side_effect=False):
         if tool_name == "get_products_recommendations_tool":
             result = {
                 "status": "success",
@@ -470,6 +472,54 @@ class FakeExecutor(AFExecutor):
                     ]
                 },
             }
+        elif tool_name == "quick_order_tool":
+            if not allow_side_effect:
+                result = None
+                bundle.tool_calls.append(ToolCallRecord(
+                    af=af,
+                    tool_name=tool_name,
+                    args=args,
+                    blocked=True,
+                    reason=f"side-effect tool blocked in LLM-first MVP: {tool_name}",
+                ))
+                return result
+            result = {
+                "status": "success",
+                "http_status": 200,
+                "data": {
+                    "result": True,
+                    "message": "",
+                    "drtPurYn": "Y",
+                    "data": {
+                        "cartNoArrStr": "15722",
+                        "goodsInfoArrStr": f"{args['goods_no']}|{args['ord_qty']}|Y",
+                    },
+                },
+            }
+        elif tool_name == "save_to_cart_tool":
+            if not allow_side_effect:
+                result = None
+                bundle.tool_calls.append(ToolCallRecord(
+                    af=af,
+                    tool_name=tool_name,
+                    args=args,
+                    blocked=True,
+                    reason=f"side-effect tool blocked in LLM-first MVP: {tool_name}",
+                ))
+                return result
+            result = {
+                "status": "success",
+                "http_status": 200,
+                "data": {
+                    "result": True,
+                    "message": "",
+                    "drtPurYn": "N",
+                    "data": {
+                        "cartNoArrStr": "15766",
+                        "goodsInfoArrStr": f"{args['goods_no']}|{args['ord_qty']}|Y",
+                    },
+                },
+            }
         elif tool_name == "get_my_cars_tool":
             result = {
                 "status": "success",
@@ -540,9 +590,9 @@ class FakeExecutor(AFExecutor):
 
 
 class EmptyFavoriteStoreExecutor(FakeExecutor):
-    async def _call(self, bundle, af, tool_name, args):
+    async def _call(self, bundle, af, tool_name, args, *, allow_side_effect=False):
         if tool_name != "get_favorite_stores_tool":
-            return await super()._call(bundle, af, tool_name, args)
+            return await super()._call(bundle, af, tool_name, args, allow_side_effect=allow_side_effect)
         result = {"status": "success", "data": {"stores": []}}
         bundle.tool_calls.append(ToolCallRecord(af=af, tool_name=tool_name, args=args, result=result))
         bundle.facts[tool_name] = result
@@ -2075,6 +2125,95 @@ def test_quick_shopping_complete_inputs_emits_preorder_without_side_effect() -> 
     assert events[0]["data"]["isReadyToOrder"] is True
     assert events[0]["data"]["orderInfo"]["bookingDateTime"] == "2026년 07월 07일 10"
     assert all(call["tool_name"] not in {"quick_order_tool", "save_to_cart_tool"} for call in metadata["tool_calls"])
+
+
+def test_confirmed_preorder_ui_action_executes_quick_order_tool() -> None:
+    store = MemoryStateStore()
+    store.state.commerce_state.product.goods_no = "G000000000003"
+    store.state.commerce_state.product.product_name = "아이온 에보"
+    store.state.commerce_state.quantity = 4
+    store.state.commerce_state.store.shop_id = "S001"
+    store.state.commerce_state.store.shop_name = "티스테이션 판교점"
+    store.state.commerce_state.schedule.date = "2026년 07월 07일"
+    store.state.commerce_state.schedule.time = "10"
+    store.state.commerce_state.price.final_price = 500000
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(selected_afs=[])),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=store,
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "주문하기"}],
+        stream=False,
+        user_id="u1",
+        session_id="confirmed-order",
+        ui_action={
+            "action": "quick_order_execute",
+            "template": "preOrder",
+            "slots": {
+                "goodsId": "G000000000003",
+                "ordQty": 4,
+                "shopId": "S001",
+                "requestedCalDay": "20260707",
+                "rsvHour": "10",
+            },
+        },
+    )
+
+    text, events, metadata = asyncio.run(runtime.run(request))
+
+    assert events[0]["template"] == "orderComplete"
+    assert events[0]["data"]["autoMoveOrderPage"] is True
+    assert events[0]["data"]["metadata"]["source"] == "llm_first_order_complete"
+    assert "주문서가 준비되었습니다" in text
+    quick_order_calls = [call for call in metadata["tool_calls"] if call["tool_name"] == "quick_order_tool"]
+    assert len(quick_order_calls) == 1
+    assert quick_order_calls[0]["args"] == {
+        "goods_no": "G000000000003",
+        "ord_qty": 4,
+        "shop_id": "S001",
+        "rsv_date": "20260707",
+        "rsv_hour": "10",
+    }
+
+
+def test_confirmed_cart_ui_action_executes_save_to_cart_tool() -> None:
+    store = MemoryStateStore()
+    store.state.commerce_state.product.goods_no = "G000000000003"
+    store.state.commerce_state.product.product_name = "아이온 에보"
+    store.state.commerce_state.quantity = 2
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(selected_afs=[])),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=store,
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "장바구니 담기"}],
+        stream=False,
+        user_id="u1",
+        session_id="confirmed-cart",
+        ui_action={
+            "action": "save_to_cart",
+            "slots": {
+                "goodsId": "G000000000003",
+                "ordQty": 2,
+            },
+        },
+    )
+
+    text, events, metadata = asyncio.run(runtime.run(request))
+
+    assert events[0]["template"] == "quickReply"
+    assert events[0]["data"]["metadata"]["source"] == "llm_first_cart_complete"
+    assert "장바구니에 담았어요" in text
+    cart_calls = [call for call in metadata["tool_calls"] if call["tool_name"] == "save_to_cart_tool"]
+    assert len(cart_calls) == 1
+    assert cart_calls[0]["args"] == {
+        "goods_no": "G000000000003",
+        "ord_qty": 2,
+    }
 
 
 def test_coupon_list_uses_coupon_tool_and_voucher_template() -> None:

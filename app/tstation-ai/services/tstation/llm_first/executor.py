@@ -15,14 +15,17 @@ from services.tstation.llm_first.templates import (
     build_event_applicable_products_template,
     build_list_car_template,
     build_location_template,
+    build_oe_part_number_unavailable_template,
     build_preorder_template,
     build_product_comparison_template,
     build_product_template,
     build_voucher_template,
 )
+from services.tstation.policies.discovery_intent_policy import build_discovery_intent_frame
 from services.tstation.policies.ui_action_policy import normalize_vehicle_type_from_car_type
 from services.tstation.policies.vehicle_category_catalog import match_vehicle_model_category
 from services.tstation.llm_first.tools import invoke_tool
+from services.tstation.template_mapper import try_build_template
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +131,53 @@ def _items(result: Any) -> list[dict[str, Any]]:
                 return [item for item in value if isinstance(item, dict)]
         return [data]
     return []
+
+
+def _digits_date(value: Any) -> str | None:
+    digits = re.sub(r"\D", "", str(value or ""))
+    if len(digits) >= 8:
+        return digits[:8]
+    return None
+
+
+def _hour(value: Any) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    digits = re.sub(r"\D", "", text)
+    if len(digits) >= 4:
+        digits = digits[:2]
+    if len(digits) in {1, 2}:
+        hour = int(digits)
+        if 0 <= hour <= 23:
+            return f"{hour:02d}"
+    match = re.search(r"(\d{1,2})\s*시", text)
+    if match:
+        hour = int(match.group(1))
+        if 0 <= hour <= 23:
+            return f"{hour:02d}"
+    return None
+
+
+def _tool_data_list(bundle: FactBundle) -> list[dict[str, Any]]:
+    return [
+        {"tool": call.tool_name, "args": call.args, "data": call.result}
+        for call in bundle.tool_calls
+        if not call.blocked
+    ]
+
+
+def _mark_completion_event(event: dict[str, Any] | None, *, source: str, called_tool: str) -> dict[str, Any] | None:
+    if event is None:
+        return None
+    data = event.get("data")
+    if isinstance(data, dict):
+        metadata = data.setdefault("metadata", {})
+        if isinstance(metadata, dict):
+            metadata.setdefault("source", source)
+            metadata.setdefault("called_tools", [called_tool])
+    event.setdefault("assistant_response_source", source)
+    return event
 
 
 def _vehicle_key(value: Any) -> str:
@@ -465,9 +515,17 @@ class AFExecutor:
         bundle.facts["commerce_state"] = working_state.commerce_state.model_dump(exclude_none=True)
         return bundle
 
-    async def _call(self, bundle: FactBundle, af: AgentFlow, tool_name: str, args: dict[str, Any]) -> Any:
+    async def _call(
+        self,
+        bundle: FactBundle,
+        af: AgentFlow,
+        tool_name: str,
+        args: dict[str, Any],
+        *,
+        allow_side_effect: bool = False,
+    ) -> Any:
         try:
-            result = await asyncio.to_thread(invoke_tool, tool_name, args, af=af)
+            result = await asyncio.to_thread(invoke_tool, tool_name, args, af=af, allow_side_effect=allow_side_effect)
             bundle.tool_calls.append(ToolCallRecord(af=af, tool_name=tool_name, args=args, result=result))
             bundle.facts[tool_name] = result
             return result
@@ -560,6 +618,11 @@ class AFExecutor:
     async def _description(self, user_text: str, state: ConversationState, known: dict[str, Any], bundle: FactBundle) -> ConversationState:
         if known.get("benefit_lookup") not in (None, "", "none"):
             return await self._benefit_lookup(user_text, state, known, bundle)
+
+        discovery_frame = build_discovery_intent_frame(user_text)
+        if discovery_frame.sub_intent == "oe_part_number_unavailable":
+            _append_template(bundle, build_oe_part_number_unavailable_template(user_text))
+            return state
 
         product_names = [str(name).strip() for name in known.get("product_names") or [] if str(name).strip()]
         if len(product_names) >= 2:
@@ -712,6 +775,30 @@ class AFExecutor:
             _append_template(bundle, _quantity_quickreply_event())
             return next_state
         next_state = apply_state_rules(next_state, quantity=int(qty))
+        confirmed_action = str(known.get("confirmed_action") or "").strip()
+        if confirmed_action == "cart":
+            cart_args: dict[str, Any] = {
+                "goods_no": goods_no,
+                "ord_qty": int(qty),
+            }
+            if known.get("car_lnc_cd"):
+                cart_args["car_lnc_cd"] = str(known["car_lnc_cd"])
+            await self._call(
+                bundle,
+                AgentFlow.QUICK_SHOPPING,
+                "save_to_cart_tool",
+                cart_args,
+                allow_side_effect=True,
+            )
+            event = _mark_completion_event(
+                try_build_template(_tool_data_list(bundle), ""),
+                source="llm_first_cart_complete",
+                called_tool="save_to_cart_tool",
+            )
+            _append_template(bundle, event)
+            if event is None:
+                bundle.missing_inputs.append("cart_complete_template")
+            return next_state
         store_patch = {
             "shop_id": known.get("shop_id"),
             "shop_name": known.get("store_name"),
@@ -765,6 +852,37 @@ class AFExecutor:
             return next_state
         if not next_state.commerce_state.price.final_price:
             next_state = await self._price(user_text, next_state, {"goods_no": goods_no}, bundle)
+        if confirmed_action == "order":
+            rsv_date = _digits_date(known.get("requested_cal_day") or known.get("date") or commerce.schedule.date)
+            rsv_hour = _hour(known.get("rsv_hour") or known.get("time") or commerce.schedule.time)
+            if not (rsv_date and rsv_hour):
+                bundle.missing_inputs.append("schedule")
+                return next_state
+            order_args: dict[str, Any] = {
+                "goods_no": goods_no,
+                "ord_qty": int(qty),
+                "shop_id": commerce.store.shop_id,
+                "rsv_date": rsv_date,
+                "rsv_hour": rsv_hour,
+            }
+            if known.get("car_lnc_cd"):
+                order_args["car_lnc_cd"] = str(known["car_lnc_cd"])
+            await self._call(
+                bundle,
+                AgentFlow.QUICK_SHOPPING,
+                "quick_order_tool",
+                order_args,
+                allow_side_effect=True,
+            )
+            event = _mark_completion_event(
+                try_build_template(_tool_data_list(bundle), ""),
+                source="llm_first_order_complete",
+                called_tool="quick_order_tool",
+            )
+            _append_template(bundle, event)
+            if event is None:
+                bundle.missing_inputs.append("order_complete_template")
+            return next_state
         preorder = build_preorder_template(next_state, "주문 초안을 확인해 주세요. 실제 주문 실행은 아직 하지 않았습니다.")
         if preorder:
             bundle.templates.append(preorder)

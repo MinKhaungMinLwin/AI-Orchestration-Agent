@@ -144,6 +144,51 @@ def _normalize_schedule_date(value: Any) -> str | None:
     return text
 
 
+def _normalize_action_token(value: Any) -> str:
+    return re.sub(r"[^0-9a-z_가-힣]", "", str(value or "").strip().lower())
+
+
+def _confirmed_purchase_action(request: TStationChatRequest, patch: dict[str, Any]) -> str | None:
+    explicit_action_payload = request.ui_action if isinstance(request.ui_action, dict) else request.chip_context
+    if not isinstance(explicit_action_payload, dict):
+        return None
+    values = _ui_action_values(request, patch)
+    tokens = {
+        _normalize_action_token(values.get("action")),
+        _normalize_action_token(values.get("action_type")),
+        _normalize_action_token(values.get("cta_action")),
+        _normalize_action_token(values.get("ctaAction")),
+        _normalize_action_token(values.get("actionId")),
+        _normalize_action_token(values.get("confirmed_action")),
+        _normalize_action_token(values.get("confirmedAction")),
+        _normalize_action_token(values.get("source")),
+        _normalize_action_token(values.get("template")),
+    }
+    if tokens & {
+        "quick_order_execute",
+        "quick_order_reservation",
+        "quickorderexecute",
+        "quickorderreservation",
+        "confirm_order",
+        "order_confirm",
+        "orderconfirmed",
+        "order_confirmed",
+        "place_order",
+        "preorder_action",
+    }:
+        return "order"
+    if tokens & {
+        "save_to_cart",
+        "savetocart",
+        "add_to_cart",
+        "addtocart",
+        "cart_confirm",
+        "cart_confirmed",
+    }:
+        return "cart"
+    return None
+
+
 def _resolve_text_store_selection(request: TStationChatRequest, state: Any, user_text: str) -> Any:
     commerce = state.commerce_state
     if commerce.store.shop_id or commerce.schedule.date or commerce.schedule.time:
@@ -317,6 +362,42 @@ def _purchase_progress_plan(request: TStationChatRequest, state: Any) -> Planner
     )
 
 
+def _confirmed_purchase_plan(request: TStationChatRequest, state: Any) -> PlannerDecision | None:
+    patch = _request_slot_patch(request)
+    values = _ui_action_values(request, patch)
+    confirmed_action = _confirmed_purchase_action(request, patch)
+    if confirmed_action is None:
+        return None
+    if not state.commerce_state.product.goods_no:
+        return None
+    known_inputs = _commerce_known_inputs(state)
+    known_inputs["confirmed_action"] = confirmed_action
+    for target, aliases in {
+        "car_lnc_cd": ("car_lnc_cd", "carLncCd"),
+        "date": ("requested_cal_day", "requestedCalDay", "date"),
+        "time": ("rsv_hour", "rsvHour", "time"),
+    }.items():
+        for alias in aliases:
+            if values.get(alias) not in (None, ""):
+                known_inputs[target] = values[alias]
+                break
+    return PlannerDecision(
+        selected_afs=[
+            SelectedAF(
+                af=AgentFlow.QUICK_SHOPPING,
+                reason="confirmed purchase side-effect action from an explicit UI action",
+                required_inputs=["goods_no", "ord_qty"] if confirmed_action == "cart" else ["goods_no", "ord_qty", "shop_id", "schedule"],
+                known_inputs=known_inputs,
+                missing_inputs=[],
+            )
+        ],
+        conversation_goal=f"execute_confirmed_{confirmed_action}",
+        answer_mode="tool_grounded_answer",
+        requires_user_confirmation=False,
+        resume_previous_flow=True,
+    )
+
+
 def _vehicle_selection_recommendation_plan(request: TStationChatRequest) -> PlannerDecision | None:
     patch = _request_slot_patch(request)
     values = _ui_action_values(request, patch)
@@ -454,6 +535,8 @@ class LLMFirstRuntime:
         )
         if planner is None:
             planner = _vehicle_selection_recommendation_plan(request)
+        if planner is None:
+            planner = _confirmed_purchase_plan(request, state)
         if planner is None:
             planner = _purchase_progress_plan(request, state)
         if planner is None:

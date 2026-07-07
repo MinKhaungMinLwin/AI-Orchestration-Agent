@@ -14,6 +14,11 @@ SIDE_EFFECT_TOOLS = frozenset({
     "escalate_tool",
 })
 
+CONFIRMABLE_SIDE_EFFECT_TOOLS = frozenset({
+    "quick_order_tool",
+    "save_to_cart_tool",
+})
+
 
 @dataclass(frozen=True)
 class ToolSpec:
@@ -89,11 +94,19 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
 }
 
 
-def invoke_tool(name: str, args: dict[str, Any], *, af: AgentFlow | None = None) -> Any:
+def invoke_tool(
+    name: str,
+    args: dict[str, Any],
+    *,
+    af: AgentFlow | None = None,
+    allow_side_effect: bool = False,
+) -> Any:
     spec = TOOL_REGISTRY[name]
     if af is not None and af not in spec.afs:
         raise PermissionError(f"tool {name} is not allowed for {af.value}")
-    if not spec.read_only or name in SIDE_EFFECT_TOOLS:
+    is_side_effect = not spec.read_only or name in SIDE_EFFECT_TOOLS
+    is_confirmed_allowed = allow_side_effect and name in CONFIRMABLE_SIDE_EFFECT_TOOLS
+    if is_side_effect and not is_confirmed_allowed:
         raise PermissionError(f"side-effect tool blocked in LLM-first MVP: {name}")
     missing_args = [arg for arg in spec.required_args if args.get(arg) in (None, "")]
     if missing_args:

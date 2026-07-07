@@ -276,7 +276,7 @@ def _comparison_value(item: dict[str, Any], metric: str, key: str) -> str:
         review_summary = _representative_review_summary(item)
         if review_summary:
             parts.append(f"대표 리뷰: {review_summary}")
-        return "\n".join(parts) if parts else "평점 정보 확인되지 않음"
+        return " / ".join(parts) if parts else "평점 정보 확인되지 않음"
     if key == "sizes":
         sizes = _available_sizes(item)
         return ", ".join(sizes[:5]) if sizes else "사이즈 정보 확인되지 않음"
@@ -331,6 +331,32 @@ def build_product_comparison_template(
                 "compare_metric": metric,
                 "comparison_followup_intent": "none",
                 "source": "llm_first_product_comparison",
+            },
+        },
+        "assistant_response_source": "discovery_policy",
+    }
+
+
+def build_oe_part_number_unavailable_template(user_text: str) -> dict[str, Any]:
+    vehicle_text = "해당 차량"
+    compact_text = re.sub(r"\s+", " ", str(user_text or "")).strip()
+    if compact_text:
+        vehicle_text = compact_text.replace(" 품번이 뭐야?", "").replace(" 품번 알려줘", "").strip() or vehicle_text
+    assistant_response = (
+        f"{vehicle_text}의 OE 품번은 같은 차종이어도 연식, 트림, 휠 인치, 출고 시점의 장착 브랜드에 따라 달라질 수 있어요. "
+        "현재 보유한 데이터만으로는 차량별 OE 품번을 확정 조회할 수는 없어요. "
+        "원하시면 현재 장착 타이어의 사이즈나 브랜드 기준으로 교체용 상품은 이어서 안내해 드릴게요."
+    )
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": assistant_response,
+            "quickReplies": [],
+            "predictedDomains": ["DISCOVERY"],
+            "metadata": {
+                "source": "llm_first_oe_part_number_unavailable",
+                "response_shape_key": "oe_part_number_unavailable",
             },
         },
         "assistant_response_source": "discovery_policy",
@@ -964,6 +990,24 @@ def build_preorder_template(state: Any, assistant_response: str) -> dict[str, An
     product = commerce.product.product_name or commerce.product.goods_no
     if not (commerce.product.goods_no and product and commerce.quantity):
         return None
+    normalized_date = _normalize_schedule_date(commerce.schedule.date)
+    requested_cal_day = None
+    if commerce.schedule.date:
+        digits = "".join(ch for ch in str(commerce.schedule.date) if ch.isdigit())
+        if len(digits) >= 8:
+            requested_cal_day = digits[:8]
+    rsv_hour = None
+    if commerce.schedule.time:
+        digits = "".join(ch for ch in str(commerce.schedule.time) if ch.isdigit())
+        if len(digits) >= 4:
+            digits = digits[:2]
+        if len(digits) in {1, 2}:
+            try:
+                hour = int(digits)
+            except ValueError:
+                hour = -1
+            if 0 <= hour <= 23:
+                rsv_hour = f"{hour:02d}"
     return {
         "type": "data",
         "template": "preOrder",
@@ -975,7 +1019,7 @@ def build_preorder_template(state: Any, assistant_response: str) -> dict[str, An
                 "quantity": commerce.quantity,
                 "storeName": commerce.store.shop_name,
                 "bookingDateTime": " ".join(
-                    part for part in (_normalize_schedule_date(commerce.schedule.date), commerce.schedule.time) if part
+                    part for part in (normalized_date, commerce.schedule.time) if part
                 ) or None,
                 "paymentAmount": commerce.price.final_price,
             },
@@ -990,9 +1034,22 @@ def build_preorder_template(state: Any, assistant_response: str) -> dict[str, An
             "isReadyToAddToCart": False,
             "metadata": {
                 "goodsId": commerce.product.goods_no,
+                "goodsNo": commerce.product.goods_no,
+                "goods_no": commerce.product.goods_no,
+                "productName": commerce.product.product_name,
+                "quantity": commerce.quantity,
+                "ordQty": commerce.quantity,
+                "ord_qty": commerce.quantity,
                 "shopId": commerce.store.shop_id,
+                "shop_id": commerce.store.shop_id,
+                "storeName": commerce.store.shop_name,
+                "requestedCalDay": requested_cal_day,
+                "requested_cal_day": requested_cal_day,
+                "rsvHour": rsv_hour,
+                "rsv_hour": rsv_hour,
                 "carNo": None,
                 "carLncCd": None,
+                "source": "llm_first_preorder",
             },
         },
     }

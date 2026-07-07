@@ -493,12 +493,25 @@ class PreOrderMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     goodsId: str = Field(..., min_length=1)
+    goodsNo: str | None = None
+    goods_no: str | None = None
+    productName: str | None = None
+    quantity: int | None = None
+    ordQty: int | None = None
+    ord_qty: int | None = None
     # shopId: optional during cart-save flow (before store selection). Same
     # rationale as OrderInfo.storeName / carInfo — required would fail
     # validation and show fallback chips to the user instead of the cart card.
     shopId: str | None = None
+    shop_id: str | None = None
+    storeName: str | None = None
+    requestedCalDay: str | None = None
+    requested_cal_day: str | None = None
+    rsvHour: str | None = None
+    rsv_hour: str | None = None
     carNo: str | None = None
     carLncCd: str | None = None
+    source: str | None = None
 
 
 class PreOrderTemplate(TemplatePayload):
@@ -549,6 +562,8 @@ class OrderCompleteMeta(BaseModel):
     # base_agent fell back to quickReply + ["다시 시도", "상담사 연결", "처음으로"]
     # chips. Aligning the two metas eliminates that silent fallback path.
     shopId: str | None = None
+    source: str | None = None
+    called_tools: list[str] | None = None
 
 
 class OrderCompleteTemplate(TemplatePayload):
