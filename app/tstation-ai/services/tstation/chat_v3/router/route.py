@@ -40,9 +40,9 @@ async def route_request(request: TStationChatRequest) -> RouteDecision | None:
         llm = get_router_llm().with_structured_output(RouteDecision, method="function_calling")
         decision = await llm.ainvoke([("system", ROUTER_PROMPT), ("user", _router_input(request))])
         logger.info(
-            "[CHAT_V3] route guard=%s domain=%s intents=%s slots=%s",
+            "[CHAT_V3] route guard=%s domains=%s intents=%s slots=%s",
             decision.guard_id.value,
-            decision.domain.value,
+            "+".join(decision.all_domains()),
             decision.intents,
             decision.slots_patch.non_empty(),
         )

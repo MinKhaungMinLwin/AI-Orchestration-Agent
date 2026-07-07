@@ -31,10 +31,18 @@ def _tool_output_text(output: object) -> str:
 class ToolLoopExecutor:
     """One conversation turn: LLM ↔ tools until the model answers in text."""
 
-    def __init__(self, messages: list[BaseMessage], tools: list, display_names: dict[str, str]):
+    def __init__(
+        self,
+        messages: list[BaseMessage],
+        tools: list,
+        display_names: dict[str, str],
+        *,
+        stream_tokens: bool = True,
+    ):
         self._messages = list(messages)
         self._tools = {t.name: t for t in tools}
         self._display_names = display_names
+        self._stream_tokens = stream_tokens
         self.final_text: str = ""
         self.tool_calls: list[dict] = []
 
@@ -51,7 +59,8 @@ class ToolLoopExecutor:
                 text = sse.chunk_text(chunk.content)
                 if text:
                     round_text += text
-                    yield sse.token(text)
+                    if self._stream_tokens:
+                        yield sse.token(text)
 
             ai_message = accumulated if isinstance(accumulated, AIMessage) else AIMessage(content=round_text)
             tool_calls = getattr(ai_message, "tool_calls", None) or []
@@ -70,7 +79,8 @@ class ToolLoopExecutor:
             text = sse.chunk_text(chunk.content)
             if text:
                 final_text += text
-                yield sse.token(text)
+                if self._stream_tokens:
+                    yield sse.token(text)
         self.final_text = final_text
 
     async def _run_tool(self, call: dict):

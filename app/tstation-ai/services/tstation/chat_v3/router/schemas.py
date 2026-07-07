@@ -38,8 +38,19 @@ class RouteDecision(BaseModel):
     )
     domain: Domain = Field(
         default=Domain.LEADING,
-        description="이번 턴을 처리할 업무 영역",
+        description="이번 턴을 처리할 주 업무 영역",
     )
+    extra_domains: list[Domain] = Field(
+        default_factory=list,
+        description="주 영역 외에 이번 턴 처리에 함께 필요한 보조 영역 (예: 상품 미확정 상태의 주문 → DISCOVERY)",
+    )
+
+    def all_domains(self) -> list[str]:
+        ordered = [self.domain.value]
+        for extra in self.extra_domains:
+            if extra.value not in ordered:
+                ordered.append(extra.value)
+        return ordered
     intents: list[str] = Field(
         default_factory=list,
         description="이번 턴의 세부 의도 키워드 (자유 서술, 1~3개)",

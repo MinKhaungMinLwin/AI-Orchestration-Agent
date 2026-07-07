@@ -12,13 +12,14 @@ from fastapi.responses import StreamingResponse
 
 from config.env import settings
 from schemas.tstation.chat import TStationChatRequest, TStationChatResponse
-from services.tstation.chat_v3 import composer, context, qc, sse, templates
+from services.tstation.agents.b_discovery_agent._car_no_audit import set_user_message as _audit_set_user_message
+from services.tstation.chat_v3 import composer, context, memory, qc, sse, templates
 from services.tstation.chat_v3.executor import ToolLoopExecutor
 from services.tstation.chat_v3.prompts.persona import ERROR_RESPONSE, SYSTEM_PROMPT, TRANSACTION_WRITE_GUIDANCE
 from services.tstation.chat_v3.router.guards import get_guard
 from services.tstation.chat_v3.router.route import route_request
 from services.tstation.chat_v3.slots.store import apply_patch, load_slots, save_slots, slots_context_block
-from services.tstation.chat_v3.tools import tools_for_domain
+from services.tstation.chat_v3.tools import tools_for_domains
 from services.tstation.common.tstation_be_client import set_tstation_be_token, set_tstation_origin_host
 
 logger = logging.getLogger(__name__)
@@ -36,11 +37,18 @@ def _tool_display_names() -> dict[str, str]:
     return TOOL_DISPLAY_NAMES
 
 
+def _tokens_enabled() -> bool:
+    return bool(getattr(settings, "AI_CHAT_V3_STREAM_TOKENS", True))
+
+
 async def _run_turn(request: TStationChatRequest, result: dict):
     t0 = time.perf_counter()
     set_tstation_be_token(request.access_token)
     set_tstation_origin_host(request.origin_host)
     user_text = context.last_user_text(request)
+    # Deterministic guard inside discovery tools against recommending for a
+    # registered car the user did not name — V2 seeds this the same way.
+    _audit_set_user_message(user_text)
 
     yield sse.status("생각 중...")
     decision = await route_request(request)
@@ -50,7 +58,8 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     if guard:
         logger.info("[CHAT_V3] guard=%s for session=%s", guard.id, request.session_id)
         result["answer"] = guard.text
-        yield sse.token(guard.text)
+        if _tokens_enabled():
+            yield sse.token(guard.text)
         yield sse.message(guard.text)
         yield sse.data_event(
             "quickReply",
@@ -67,18 +76,27 @@ async def _run_turn(request: TStationChatRequest, result: dict):
 
     slots = await load_slots(request.session_id)
     slots = apply_patch(slots, decision.slots_patch if decision else None)
-    domain = decision.domain.value if decision else "LEADING"
+    domains = decision.all_domains() if decision else ["LEADING"]
+    domain = domains[0]
 
     extra_context = []
-    if domain == "TRANSACTION":
+    if "TRANSACTION" in domains:
         extra_context.append(TRANSACTION_WRITE_GUIDANCE)
     slots_block = slots_context_block(slots)
     if slots_block:
         extra_context.append(slots_block)
+    tool_ctx_block = await memory.load_tool_context_block(request.session_id)
+    if tool_ctx_block:
+        extra_context.append(tool_ctx_block)
     messages = context.build_messages(request, system_prompt=SYSTEM_PROMPT, extra_context=extra_context)
 
-    executor = ToolLoopExecutor(messages, tools_for_domain(domain), _tool_display_names())
-    yield sse.agent_flow(f"[V3 {domain} FLOW]", "start")
+    executor = ToolLoopExecutor(
+        messages,
+        tools_for_domains(domains),
+        _tool_display_names(),
+        stream_tokens=_tokens_enabled(),
+    )
+    yield sse.agent_flow(f"[V3 {'+'.join(domains)} FLOW]", "start")
     async for event in executor.stream():
         yield event
     t_tools = time.perf_counter()
@@ -91,8 +109,10 @@ async def _run_turn(request: TStationChatRequest, result: dict):
 
     result["answer"] = answer
     yield sse.message(answer)
+    chips: list[dict] = []
     rich_event = await templates.build_rich_data_event(answer, executor.tool_calls)
     if rich_event:
+        predicted_domains = [domain]
         yield sse.sse({**rich_event, "source_domain": domain})
     else:
         chips = await composer.suggest_quick_replies(user_text, answer)
@@ -110,10 +130,17 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         yield event
 
     await save_slots(request.session_id, slots, user_id=request.user_id)
-    logger.info(
-        "[CHAT_V3] session=%s domain=%s tools=%d route=%.0fms tools_stage=%.0fms total=%.0fms",
+    await memory.persist_turn_context(
         request.session_id,
-        domain,
+        tool_calls=executor.tool_calls,
+        quick_reply_domains=[chip["domain"] for chip in chips],
+        predicted_domains=predicted_domains,
+        user_id=request.user_id,
+    )
+    logger.info(
+        "[CHAT_V3] session=%s domains=%s tools=%d route=%.0fms tools_stage=%.0fms total=%.0fms",
+        request.session_id,
+        "+".join(domains),
         len(executor.tool_calls),
         (t_route - t0) * 1000,
         (t_tools - t_route) * 1000,
@@ -129,7 +156,8 @@ async def _run_turn_safe(request: TStationChatRequest, result: dict):
     except Exception:
         logger.exception("[CHAT_V3] turn failed for session=%s", request.session_id)
         result["answer"] = ERROR_RESPONSE
-        yield sse.token(ERROR_RESPONSE)
+        if _tokens_enabled():
+            yield sse.token(ERROR_RESPONSE)
         yield sse.message(ERROR_RESPONSE)
         yield sse.data_event(
             "quickReply",

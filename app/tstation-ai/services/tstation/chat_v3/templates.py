@@ -13,8 +13,11 @@ from pydantic import BaseModel
 
 from services.tstation.agents.templates.schemas import (
     CheapestProductTemplate,
+    DatepickTemplate,
     ListCarTemplate,
     LocationTemplate,
+    OrderCompleteTemplate,
+    PreOrderTemplate,
     ProductTemplate,
 )
 from services.tstation.chat_v3.llm import get_router_llm
@@ -42,6 +45,11 @@ _TOOL_TEMPLATES: dict[str, tuple[str, type[BaseModel]]] = {
     "get_user_vehicles_tool": ("listCar", ListCarTemplate),
     "get_my_cars_tool": ("listCar", ListCarTemplate),
     "get_cheapest_price_tool": ("cheapestProduct", CheapestProductTemplate),
+    "get_store_schedule_tool": ("datepick", DatepickTemplate),
+    "get_multi_store_schedule_tool": ("datepick", DatepickTemplate),
+    "transaction_store_preview_tool": ("preOrder", PreOrderTemplate),
+    "quick_order_tool": ("orderComplete", OrderCompleteTemplate),
+    "save_to_cart_tool": ("orderComplete", OrderCompleteTemplate),
 }
 
 

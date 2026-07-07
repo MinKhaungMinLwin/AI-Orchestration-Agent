@@ -22,11 +22,17 @@ ROUTER_PROMPT = """\
 - pickup_status: 신청한 픽업서비스의 기사 위치/도착 시간/진행 상태 문의
 - pickup_info: 스마트픽업 서비스가 무엇인지/신청 방법/가능 여부 문의
 
-## 2. domain — guard가 none일 때 이번 턴을 처리할 영역
+## 2. domain — guard가 none일 때 이번 턴을 처리할 주 영역
 - DISCOVERY: 타이어 추천, 상품 검색, 차량-타이어 호환, 내 차량 조회, 이벤트/혜택 상품 탐색
 - TRANSACTION: 가격/쿠폰 적용가, 재고, 매장 검색/예약, 주문/장바구니, 주문 조회
 - SUPPORT: 보증/워런티, FAQ, 반품/교환, 정비 이력, 상담사 연결
 - LEADING: 인사, 잡담, 서비스 소개, 불만 접수, 위 어디에도 명확히 속하지 않는 대화
+
+### extra_domains — 한 턴에 여러 영역이 필요할 때만 채우세요
+이번 턴을 끝까지 처리하려면 다른 영역의 데이터가 먼저 필요한 경우 그 영역을 추가하세요.
+- 예: "벤투스 주문해줘" 인데 대화에 상품(goods_no)이 아직 확정되지 않음 → domain=TRANSACTION, extra_domains=[DISCOVERY] (상품 검색 후 주문)
+- 예: "내 차에 맞는 타이어 제일 싼 매장에서 사고 싶어" → domain=TRANSACTION, extra_domains=[DISCOVERY]
+- 단일 영역으로 충분하면 빈 배열로 두세요.
 
 ## 3. intents — 세부 의도 1~3개 (자유 서술 키워드, 예: "tire_recommend", "store_search")
 

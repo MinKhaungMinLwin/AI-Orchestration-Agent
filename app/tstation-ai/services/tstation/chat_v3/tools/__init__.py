@@ -19,3 +19,16 @@ def tools_for_domain(domain: str) -> list:
 
         return SUPPORT_TOOLS
     return []  # LEADING — pure conversation, no tools
+
+
+def tools_for_domains(domains: list[str]) -> list:
+    """Union of the domains' tools, deduped by tool name (V2 chained agents
+    per domain; V3 gives one LLM every tool the turn needs instead)."""
+    seen: set[str] = set()
+    union = []
+    for domain in domains:
+        for tool in tools_for_domain(domain):
+            if tool.name not in seen:
+                seen.add(tool.name)
+                union.append(tool)
+    return union
