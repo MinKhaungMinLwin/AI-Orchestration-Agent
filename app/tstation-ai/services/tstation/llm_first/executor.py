@@ -671,9 +671,10 @@ class AFExecutor:
             bundle.missing_inputs.append("store")
             return next_state
         if not (commerce.schedule.date and commerce.schedule.time):
+            schedule_mode = str(known.get("schedule_mode") or known.get("inventory_mode") or "general").strip() or "general"
             result = await self._call(bundle, AgentFlow.QUICK_SHOPPING, "get_store_schedule_tool", {
                 "shop_id": commerce.store.shop_id,
-                "mode": "INSTALL",
+                "mode": schedule_mode,
             })
             _append_template(bundle, build_datepick_template(result, "가능한 일정을 선택해 주세요."))
             bundle.missing_inputs.append("schedule")

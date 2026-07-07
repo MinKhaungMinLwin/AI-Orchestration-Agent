@@ -97,7 +97,12 @@ def _is_store_selection_request(request: TStationChatRequest, patch: dict[str, A
     action_type = str(values.get("action_type") or values.get("cta_action") or values.get("actionId") or "").strip()
     fills_slot = str(values.get("fills_slot") or values.get("fillsSlot") or "").strip()
     shop_id = values.get("shop_id") or values.get("shopId")
-    return bool(shop_id) and (action_type == "select_store" or fills_slot == "shop_id")
+    explicit_action_payload = request.ui_action if isinstance(request.ui_action, dict) else request.chip_context
+    return bool(shop_id) and (
+        action_type == "select_store"
+        or fills_slot == "shop_id"
+        or isinstance(explicit_action_payload, dict)
+    )
 
 
 def _selection_key(value: Any) -> str:
@@ -162,6 +167,10 @@ def _store_selection_schedule_plan(
         "store_name": commerce.store.shop_name,
         "region": commerce.store.region,
     }
+    values = _ui_action_values(request, patch)
+    schedule_mode = values.get("schedule_mode") or values.get("scheduleMode") or values.get("inventory_mode") or values.get("inventoryMode")
+    if schedule_mode not in (None, ""):
+        known_inputs["schedule_mode"] = schedule_mode
     return PlannerDecision(
         selected_afs=[
             SelectedAF(

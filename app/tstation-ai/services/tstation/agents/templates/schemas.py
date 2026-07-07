@@ -6,7 +6,7 @@ returns the final FE payload in a guaranteed shape.
 
 import logging
 import re
-from typing import Annotated, ClassVar, Literal, Optional
+from typing import Annotated, Any, ClassVar, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
 
@@ -336,6 +336,42 @@ class LocationMeta(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     shopId: str = Field(..., min_length=1)
+    shopName: Optional[str] = None
+    ctaAction: Optional[str] = None
+    cta_action: Optional[str] = None
+    fillsSlot: Optional[str] = None
+    fills_slot: Optional[str] = None
+    sourceTool: Optional[str] = None
+    source_tool: Optional[str] = None
+    stockCheckMode: Optional[str] = None
+    stock_check_mode: Optional[str] = None
+    scheduleMode: Optional[str] = None
+    schedule_mode: Optional[str] = None
+    inventoryMode: Optional[str] = None
+    inventory_mode: Optional[str] = None
+    scheduleTier: Optional[str] = None
+    schedule_tier: Optional[str] = None
+    todayInstall: Optional[Any] = None
+    tnaDelivery: Optional[Any] = None
+    isInstallable: Optional[Any] = None
+    shopName: str | None = None
+    ctaAction: str | None = None
+    cta_action: str | None = None
+    fillsSlot: str | None = None
+    fills_slot: str | None = None
+    sourceTool: str | None = None
+    source_tool: str | None = None
+    stockCheckMode: str | None = None
+    stock_check_mode: str | None = None
+    scheduleMode: str | None = None
+    schedule_mode: str | None = None
+    inventoryMode: str | None = None
+    inventory_mode: str | None = None
+    scheduleTier: str | None = None
+    schedule_tier: str | None = None
+    todayInstall: bool | str | None = None
+    tnaDelivery: bool | str | None = None
+    isInstallable: bool | str | None = None
 
 
 class LocationItem(BaseModel):

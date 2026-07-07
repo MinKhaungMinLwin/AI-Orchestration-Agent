@@ -45,6 +45,15 @@ def _items_from_payload(payload: Any) -> list[dict[str, Any]]:
     return []
 
 
+def _data_from_payload(payload: Any) -> dict[str, Any]:
+    if isinstance(payload, dict):
+        data = payload.get("data")
+        if isinstance(data, dict):
+            return data
+        return payload
+    return {}
+
+
 def _get_str(item: dict[str, Any], *keys: str, default: str = "") -> str:
     for key in keys:
         value = item.get(key)
@@ -628,6 +637,61 @@ def _store_description(item: dict[str, Any], address: str, name: str, shop_id: s
     return "\n ".join(lines) or address or name or shop_id
 
 
+def _schedule_store_by_shop_id(payload: Any) -> dict[str, dict[str, Any]]:
+    data = _data_from_payload(payload)
+    schedule = data.get("schedule") if isinstance(data.get("schedule"), dict) else {}
+    stores = schedule.get("stores") if isinstance(schedule.get("stores"), list) else []
+    by_shop_id: dict[str, dict[str, Any]] = {}
+    for store in stores:
+        if not isinstance(store, dict):
+            continue
+        shop_id = _get_str(store, "shop_id", "shopId")
+        if shop_id:
+            by_shop_id[shop_id] = store
+    return by_shop_id
+
+
+def _location_metadata(payload: Any, item: dict[str, Any], shop_id: str, name: str) -> dict[str, Any]:
+    data = _data_from_payload(payload)
+    schedule = data.get("schedule") if isinstance(data.get("schedule"), dict) else {}
+    schedule_store = _schedule_store_by_shop_id(payload).get(shop_id, {})
+    schedule_mode = _get_str(schedule_store, "mode").lower()
+    schedule_tier = _get_str(schedule, "tier").lower()
+    metadata: dict[str, Any] = {
+        "shopId": shop_id,
+        "shopName": name,
+        "ctaAction": "select_store",
+        "cta_action": "select_store",
+        "fillsSlot": "shop_id",
+        "fills_slot": "shop_id",
+    }
+    if data.get("schedule") or data.get("inventory") or data.get("logistics") or data.get("candidate_shop_ids"):
+        metadata["sourceTool"] = "transaction_store_preview_tool"
+        metadata["source_tool"] = "transaction_store_preview_tool"
+        metadata["stockCheckMode"] = "preview"
+        metadata["stock_check_mode"] = "preview"
+    if schedule_mode:
+        metadata["scheduleMode"] = schedule_mode
+        metadata["schedule_mode"] = schedule_mode
+        metadata["inventoryMode"] = schedule_mode
+        metadata["inventory_mode"] = schedule_mode
+    if schedule_tier:
+        metadata["scheduleTier"] = schedule_tier
+        metadata["schedule_tier"] = schedule_tier
+    for source_key, target_key in (
+        ("today_install_yn", "todayInstall"),
+        ("todayInstall", "todayInstall"),
+        ("tna_delivery_yn", "tnaDelivery"),
+        ("tnaDelivery", "tnaDelivery"),
+        ("is_installable", "isInstallable"),
+        ("installable", "isInstallable"),
+    ):
+        value = item.get(source_key)
+        if value not in (None, "") and target_key not in metadata:
+            metadata[target_key] = value
+    return metadata
+
+
 def build_location_template(payload: Any, assistant_response: str, *, is_booking_flow: bool = False) -> dict[str, Any] | None:
     stores = []
     metadata = []
@@ -652,7 +716,7 @@ def build_location_template(payload: Any, assistant_response: str, *, is_booking
             "tnaDelivery": _flag(item, "tna_delivery_yn", "tnaDelivery", "is_tna_delivery"),
             "description": _store_description(item, address, name, shop_id),
         })
-        metadata.append({"shopId": shop_id})
+        metadata.append(_location_metadata(payload, item, shop_id, name))
     if not stores:
         return None
     return {
@@ -664,10 +728,64 @@ def build_location_template(payload: Any, assistant_response: str, *, is_booking
             "metadata": metadata,
             "isBookingFlow": is_booking_flow,
         },
-    }
+}
+
+
+def _slot_hour(value: Any) -> int | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    digits = re.sub(r"\D", "", text)
+    if not digits:
+        return None
+    try:
+        hour = int(digits[:2])
+    except ValueError:
+        return None
+    return hour if 0 <= hour <= 23 and hour != 12 else None
+
+
+def _datepick_rows_from_slots(payload: Any) -> list[dict[str, Any]]:
+    data = _data_from_payload(payload)
+    raw_slots = data.get("slots")
+    if not isinstance(raw_slots, list):
+        return []
+    by_day: dict[str, set[int]] = {}
+    for slot in raw_slots:
+        if not isinstance(slot, dict):
+            continue
+        day = _get_str(slot, "cal_day", "calDay", "date")
+        hour = _slot_hour(slot.get("tm") or slot.get("time") or slot.get("rsv_hour") or slot.get("rsvHour"))
+        if day and hour is not None:
+            by_day.setdefault(day, set()).add(hour)
+    return [
+        {
+            "date": day,
+            "available": bool(hours),
+            "availableTimes": sorted(hours),
+            "index": idx,
+        }
+        for idx, (day, hours) in enumerate(sorted(by_day.items()))
+    ]
 
 
 def build_datepick_template(payload: Any, assistant_response: str) -> dict[str, Any] | None:
+    slot_rows = _datepick_rows_from_slots(payload)
+    if slot_rows:
+        data = _data_from_payload(payload)
+        metadata = {
+            "shopId": _get_str(data, "shop_id", "shopId"),
+            "shopName": _get_str(data, "shop_nm", "shopName"),
+        }
+        return {
+            "type": "data",
+            "template": "datepick",
+            "data": {
+                "assistantResponse": assistant_response,
+                "dates": slot_rows,
+                "metadata": {k: v for k, v in metadata.items() if v},
+            },
+        }
     rows = _items_from_payload(payload)
     dates = []
     for idx, item in enumerate(rows[:31]):

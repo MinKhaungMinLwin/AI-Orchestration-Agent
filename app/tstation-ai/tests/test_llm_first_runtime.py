@@ -348,6 +348,20 @@ class FakeExecutor(AFExecutor):
             result = {
                 "status": "success",
                 "data": {
+                    "schedule": {
+                        "tier": "in_store_only",
+                        "stores": [
+                            {
+                                "shop_id": "S002",
+                                "shop_nm": "티스테이션 분당점",
+                                "mode": "in_store_only",
+                                "slots": [
+                                    {"cal_day": "20260707", "tm": "1000"},
+                                    {"cal_day": "20260707", "tm": "1100"},
+                                ],
+                            }
+                        ],
+                    },
                     "stores": [
                         {
                             "shop_id": "S002",
@@ -359,16 +373,32 @@ class FakeExecutor(AFExecutor):
                 },
             }
         elif tool_name == "get_store_schedule_tool":
-            result = {
-                "status": "success",
-                "data": [
-                    {
-                        "date": "20260707",
-                        "available": True,
-                        "availableTimes": [10, 11, 12, 13],
-                    }
-                ],
-            }
+            if args.get("mode") == "in_store_only":
+                result = {
+                    "status": "success",
+                    "data": {
+                        "shop_id": args["shop_id"],
+                        "shop_nm": "티스테이션 분당점",
+                        "mode": "in_store_only",
+                        "slots": [
+                            {"cal_day": "20260707", "tm": "1000"},
+                            {"cal_day": "20260707", "tm": "1100"},
+                            {"cal_day": "20260707", "tm": "1200"},
+                            {"cal_day": "20260708", "tm": "0900"},
+                        ],
+                    },
+                }
+            else:
+                result = {
+                    "status": "success",
+                    "data": [
+                        {
+                            "date": "20260707",
+                            "available": True,
+                            "availableTimes": [10, 11, 12, 13],
+                        }
+                    ],
+                }
         elif tool_name == "get_my_coupons_tool":
             result = {
                 "status": "success",
@@ -769,7 +799,8 @@ def test_runtime_recommendation_stream_emits_product_and_done() -> None:
         {"text": "정숙/승차감", "primary": False},
         {"text": "흡음재", "primary": False},
     ]
-    assert product_events[0]["data"]["isBookingFlow"] is False
+    assert product["description"] == "정숙/승차감 중심 성향이에요. 평점 4.5점, 리뷰 12건이에요."
+    assert product_events[0]["data"]["isBookingFlow"] is True
     assert product_events[0]["data"]["metadata"][0]["goodsId"] == "G000000000001"
     assert token_events[0]["content"] == "확인한 결과를 안내드립니다."
     assert "data: [DONE]" in body
@@ -1579,6 +1610,10 @@ def test_inventory_flow_with_required_inputs_emits_booking_location() -> None:
     LocationDataEvent.model_validate(events[0])
     assert events[0]["data"]["isBookingFlow"] is True
     assert metadata["tool_calls"][0]["tool_name"] == "transaction_store_preview_tool"
+    assert events[0]["data"]["metadata"][0]["sourceTool"] == "transaction_store_preview_tool"
+    assert events[0]["data"]["metadata"][0]["scheduleMode"] == "in_store_only"
+    assert events[0]["data"]["metadata"][0]["scheduleTier"] == "in_store_only"
+    assert events[0]["data"]["metadata"][0]["ctaAction"] == "select_store"
 
 
 def test_quick_shopping_with_store_but_no_schedule_emits_datepick() -> None:
@@ -1720,6 +1755,45 @@ def test_store_selection_in_active_purchase_flow_emits_datepick_without_planner_
     assert metadata["planner"]["selected_afs"][0]["af"] == "QuickShoppingAF"
     assert metadata["tool_calls"][0]["tool_name"] == "get_store_schedule_tool"
     assert store.state.commerce_state.store.shop_id == "S001"
+
+
+def test_shop_id_only_ui_action_in_active_purchase_flow_emits_datepick_with_schedule_mode() -> None:
+    store = MemoryStateStore()
+    store.state.commerce_state.product.goods_no = "G000000000003"
+    store.state.commerce_state.product.product_name = "아이온 에보"
+    store.state.commerce_state.quantity = 4
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(selected_afs=[])),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=store,
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "이 매장 선택"}],
+        stream=False,
+        user_id="u1",
+        session_id="store-selection-shopid-only",
+        ui_action={
+            "slots": {
+                "shopId": "S002",
+                "shopName": "티스테이션 분당점",
+                "scheduleMode": "in_store_only",
+                "sourceTool": "transaction_store_preview_tool",
+            },
+        },
+    )
+
+    _, events, metadata = asyncio.run(runtime.run(request))
+
+    assert events[0]["template"] == "datepick"
+    DatepickDataEvent.model_validate(events[0])
+    assert events[0]["data"]["dates"][0]["date"] == "20260707"
+    assert events[0]["data"]["dates"][0]["availableTimes"] == [10, 11]
+    assert events[0]["data"]["dates"][1]["date"] == "20260708"
+    assert metadata["planner"]["selected_afs"][0]["af"] == "QuickShoppingAF"
+    assert metadata["tool_calls"][0]["tool_name"] == "get_store_schedule_tool"
+    assert metadata["tool_calls"][0]["args"] == {"shop_id": "S002", "mode": "in_store_only"}
+    assert store.state.commerce_state.store.shop_id == "S002"
 
 
 def test_schedule_selection_in_active_purchase_flow_emits_preorder_without_planner_choice() -> None:
