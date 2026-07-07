@@ -59,6 +59,10 @@ def _get_str(item: dict[str, Any], *keys: str, default: str = "") -> str:
     return default
 
 
+def _norm_key(value: Any) -> str:
+    return re.sub(r"\s+", "", str(value or "").strip()).lower()
+
+
 def _get_num(item: dict[str, Any], *keys: str, default: int | float = 0) -> int | float:
     for key in keys:
         value = item.get(key)
@@ -79,6 +83,21 @@ def _normalize_schedule_date(value: Any) -> str:
     if len(digits) == 8:
         return f"{digits[:4]}년 {digits[4:6]}월 {digits[6:8]}일"
     return text
+
+
+def _normalize_preorder_hour(value: Any) -> str | None:
+    digits = re.sub(r"\D", "", str(value or ""))
+    if len(digits) >= 4:
+        digits = digits[:2]
+    if len(digits) not in {1, 2}:
+        return None
+    try:
+        hour = int(digits)
+    except ValueError:
+        return None
+    if not 0 <= hour <= 23:
+        return None
+    return f"{hour:02d}"
 
 
 def _display_price(item: dict[str, Any]) -> int | None:
@@ -534,13 +553,19 @@ def build_product_template(
     assistant_response: str,
     *,
     is_booking_flow: bool = False,
+    exclude_goods_ids: set[str] | None = None,
+    exclude_product_names: set[str] | None = None,
 ) -> dict[str, Any] | None:
     products = []
     metadata = []
+    excluded_goods_ids = {str(value).strip() for value in (exclude_goods_ids or set()) if str(value).strip()}
+    excluded_product_names = {_norm_key(value) for value in (exclude_product_names or set()) if _norm_key(value)}
     for item in _items_from_payload(payload)[:10]:
         goods_no = str(item.get("goods_no") or item.get("goodsNo") or "").strip()
         name = str(item.get("goods_nm") or item.get("goodsNm") or item.get("title") or item.get("name") or "").strip()
         if not goods_no or not name:
+            continue
+        if goods_no in excluded_goods_ids or _norm_key(name) in excluded_product_names:
             continue
         price = _display_price(item)
         original_price = _original_price(item, price)
@@ -734,12 +759,23 @@ def _location_metadata(payload: Any, item: dict[str, Any], shop_id: str, name: s
     return metadata
 
 
-def build_location_template(payload: Any, assistant_response: str, *, is_booking_flow: bool = False) -> dict[str, Any] | None:
+def build_location_template(
+    payload: Any,
+    assistant_response: str,
+    *,
+    is_booking_flow: bool = False,
+    exclude_shop_ids: set[str] | None = None,
+    exclude_store_names: set[str] | None = None,
+) -> dict[str, Any] | None:
     stores = []
     metadata = []
+    excluded_shop_ids = {str(value).strip() for value in (exclude_shop_ids or set()) if str(value).strip()}
+    excluded_store_names = {_norm_key(value) for value in (exclude_store_names or set()) if _norm_key(value)}
     for item in _items_from_payload(payload)[:10]:
         shop_id = str(item.get("shop_id") or item.get("shopId") or "").strip()
         name = str(item.get("shop_nm") or item.get("shopName") or item.get("name") or "").strip()
+        if shop_id in excluded_shop_ids or _norm_key(name) in excluded_store_names:
+            continue
         road_full = _join_address(item, "road_addr_base", "road_addr_dtl")
         jibun_full = _join_address(item, "addr_base", "addr_dtl")
         address = (
@@ -967,18 +1003,8 @@ def build_preorder_template(state: Any, assistant_response: str) -> dict[str, An
         digits = "".join(ch for ch in str(commerce.schedule.date) if ch.isdigit())
         if len(digits) >= 8:
             requested_cal_day = digits[:8]
-    rsv_hour = None
-    if commerce.schedule.time:
-        digits = "".join(ch for ch in str(commerce.schedule.time) if ch.isdigit())
-        if len(digits) >= 4:
-            digits = digits[:2]
-        if len(digits) in {1, 2}:
-            try:
-                hour = int(digits)
-            except ValueError:
-                hour = -1
-            if 0 <= hour <= 23:
-                rsv_hour = f"{hour:02d}"
+    rsv_hour = _normalize_preorder_hour(commerce.schedule.time)
+    display_time = f"{rsv_hour}:00" if rsv_hour else str(commerce.schedule.time or "").strip()
     return {
         "type": "data",
         "template": "preOrder",
@@ -990,7 +1016,7 @@ def build_preorder_template(state: Any, assistant_response: str) -> dict[str, An
                 "quantity": commerce.quantity,
                 "storeName": commerce.store.shop_name,
                 "bookingDateTime": " ".join(
-                    part for part in (normalized_date, commerce.schedule.time) if part
+                    part for part in (normalized_date, display_time) if part
                 ) or None,
                 "paymentAmount": commerce.price.final_price,
             },

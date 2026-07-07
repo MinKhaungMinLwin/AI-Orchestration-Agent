@@ -21,10 +21,10 @@ def support_tool(name: str) -> Any:
     return getattr(tools, name)
 
 
-def normalize_vehicle_type_from_car_type(value: Any) -> str | None:
+def normalize_vehicle_type_from_car_type(value: Any, *, fallback_text: str | None = None) -> str | None:
     from services.tstation.policies.ui_action_policy import normalize_vehicle_type_from_car_type as _normalize
 
-    return _normalize(value)
+    return _normalize(value, fallback_text=fallback_text)
 
 
 def match_vehicle_model_category(text: str) -> Any:

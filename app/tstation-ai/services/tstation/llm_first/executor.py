@@ -27,14 +27,71 @@ from services.tstation.llm_first.tooling.registry import invoke_tool
 
 logger = logging.getLogger(__name__)
 
-_STORE_PLACE_QUERY_OVERRIDES = {
-    "강남": "강남역",
-}
+_RECOMMENDATION_SIGNALS = ("추천", "권장", "골라", "고르", "뽑아", "좋은", "베스트", "best")
+_COMPARISON_SIGNALS = ("비교", "차이", "다른점", "다른 점", "vs", "대비", "뭐가 더", "어느게 더", "어느 게 더")
+_ALTERNATIVE_SIGNALS = ("다른", "다른거", "다른 것", "대안", "말고")
 
 
 def _append_template(bundle: FactBundle, event: dict[str, Any] | None) -> None:
     if event is not None:
+        _normalize_preorder_booking_datetime(event)
         bundle.templates.append(event)
+
+
+def _is_recommendation_request(text: str) -> bool:
+    normalized = str(text or "").lower()
+    return any(signal in normalized for signal in _RECOMMENDATION_SIGNALS)
+
+
+def _is_comparison_request(text: str) -> bool:
+    normalized = str(text or "").lower()
+    return any(signal in normalized for signal in _COMPARISON_SIGNALS)
+
+
+def _is_alternative_request(text: str) -> bool:
+    normalized = str(text or "").lower()
+    return any(signal in normalized for signal in _ALTERNATIVE_SIGNALS)
+
+
+def _alternative_target(text: str) -> str | None:
+    normalized = str(text or "").lower()
+    if not _is_alternative_request(normalized):
+        return None
+    if any(token in normalized for token in ("타이어", "상품", "제품")):
+        return "product"
+    if any(token in normalized for token in ("매장", "장착점", "지점", "지역")):
+        return "store"
+    return None
+
+
+def _normalize_preorder_booking_datetime(event: dict[str, Any]) -> None:
+    if event.get("template") != "preOrder":
+        return
+    data = event.get("data")
+    if not isinstance(data, dict):
+        return
+    order_info = data.get("orderInfo")
+    metadata = data.get("metadata")
+    if not isinstance(order_info, dict):
+        return
+    booking_datetime = str(order_info.get("bookingDateTime") or "").strip()
+    if not booking_datetime or re.search(r"\d{1,2}:\d{2}\s*$", booking_datetime):
+        return
+    rsv_hour = ""
+    if isinstance(metadata, dict):
+        rsv_hour = str(metadata.get("rsvHour") or metadata.get("rsv_hour") or "").strip()
+    digits = re.sub(r"\D", "", rsv_hour) or (re.search(r"(\d{1,2})\s*$", booking_datetime).group(1) if re.search(r"(\d{1,2})\s*$", booking_datetime) else "")
+    if len(digits) >= 4:
+        digits = digits[:2]
+    if len(digits) not in {1, 2}:
+        return
+    try:
+        hour = int(digits)
+    except ValueError:
+        return
+    if not 0 <= hour <= 23:
+        return
+    order_info["bookingDateTime"] = re.sub(r"\d{1,2}\s*$", f"{hour:02d}:00", booking_datetime)
 
 
 def _escalation_confirmation_event(target: str) -> dict[str, Any]:
@@ -266,15 +323,7 @@ def _vehicle_recommendation_args(row: dict[str, Any], known: dict[str, Any]) -> 
         args["car_lnc_cd"] = car_lnc_cd
     elif tire_size:
         args["tire_size"] = tire_size
-    vehicle_type = str(known.get("vehicle_type") or "").strip()
-    if not vehicle_type:
-        vehicle_type = (
-            legacy.normalize_vehicle_type_from_car_type(_vehicle_first_nonempty(row, "car_knd_nm", "car_type"))
-            or _infer_vehicle_type_from_text(
-                _vehicle_first_nonempty(row, "car_model_det", "carModelDet", "car_nm", "carName"),
-            )
-            or ""
-        )
+    vehicle_type = _vehicle_type_from_row(row, known)
     if vehicle_type:
         args["vehicle_type"] = vehicle_type
     for key in ("season_nm", "sort_by", "min_price", "max_price"):
@@ -292,9 +341,94 @@ def _vehicle_first_nonempty(row: dict[str, Any], *keys: str) -> str:
     return ""
 
 
+def _vehicle_type_from_row(row: dict[str, Any], known: dict[str, Any] | None = None) -> str | None:
+    explicit = str((known or {}).get("vehicle_type") or row.get("vehicle_type") or row.get("vehicleType") or "").strip()
+    if explicit and explicit != "none":
+        return explicit
+    fallback_text = " ".join(
+        part
+        for part in (
+            _vehicle_first_nonempty(row, "car_model_det", "carModelDet"),
+            _vehicle_first_nonempty(row, "car_nm", "carName"),
+            _vehicle_first_nonempty(row, "car_model", "carModel"),
+        )
+        if part
+    )
+    return (
+        legacy.normalize_vehicle_type_from_car_type(
+            _vehicle_first_nonempty(row, "car_knd_nm", "carKndNm", "car_type", "carType", "car_type_nm", "carTypeNm"),
+            fallback_text=fallback_text,
+        )
+        or _infer_vehicle_type_from_text(fallback_text)
+    )
+
+
 def _infer_vehicle_type_from_text(text: str) -> str | None:
     match = legacy.match_vehicle_model_category(text)
     return match.category if match is not None else None
+
+
+def _infer_vehicle_type_from_known(known: dict[str, Any], user_text: str) -> str | None:
+    explicit = str(known.get("vehicle_type") or "").strip()
+    if explicit and explicit != "none":
+        return explicit
+    fallback_text = " ".join(
+        str(known.get(key) or "").strip()
+        for key in ("vehicle_query", "car_model", "product_name")
+        if str(known.get(key) or "").strip()
+    )
+    car_type = str(known.get("car_type") or "").strip()
+    return (
+        legacy.normalize_vehicle_type_from_car_type(car_type, fallback_text=fallback_text or user_text)
+        or _infer_vehicle_type_from_text(fallback_text or user_text)
+    )
+
+
+def _current_product_exclusions(state: ConversationState, known: dict[str, Any]) -> dict[str, set[str]]:
+    goods_ids = {
+        str(value).strip()
+        for value in (state.commerce_state.product.goods_no, known.get("exclude_goods_no"), known.get("goods_no") if known.get("alternative_target") == "product" else None)
+        if str(value or "").strip()
+    }
+    names = {
+        str(value).strip()
+        for value in (state.commerce_state.product.product_name, known.get("exclude_product_name"), known.get("product_name") if known.get("alternative_target") == "product" else None)
+        if str(value or "").strip()
+    }
+    return {"goods_ids": goods_ids, "names": names}
+
+
+def _current_store_exclusions(state: ConversationState, known: dict[str, Any]) -> dict[str, set[str]]:
+    shop_ids = {
+        str(value).strip()
+        for value in (state.commerce_state.store.shop_id, known.get("exclude_shop_id"), known.get("shop_id") if known.get("alternative_target") == "store" else None)
+        if str(value or "").strip()
+    }
+    names = {
+        str(value).strip()
+        for value in (state.commerce_state.store.shop_name, known.get("exclude_store_name"), known.get("store_name") if known.get("alternative_target") == "store" else None)
+        if str(value or "").strip()
+    }
+    return {"shop_ids": shop_ids, "names": names}
+
+
+def _vehicle_type_recommendation_args(known: dict[str, Any], user_text: str) -> dict[str, Any] | None:
+    vehicle_type = _infer_vehicle_type_from_known(known, user_text)
+    if not vehicle_type:
+        return None
+    recommendation_type = known.get("recommendation_type")
+    if recommendation_type in (None, "", "none"):
+        recommendation_type = "tstation"
+    args: dict[str, Any] = {
+        "rcmd_type": recommendation_type,
+        "limit": min(max(int(known.get("limit") or 3), 1), 10),
+        "vehicle_type": vehicle_type,
+    }
+    for key in ("season_nm", "sort_by", "min_price", "max_price"):
+        value = known.get(key)
+        if value not in (None, "", "none"):
+            args[key] = value
+    return args
 
 
 def _remember_followup_context(
@@ -610,7 +744,11 @@ class AFExecutor:
         return next_state, str(goods_no) if goods_no else None
 
     async def _recommend(self, user_text: str, state: ConversationState, known: dict[str, Any], bundle: FactBundle) -> ConversationState:
-        if len([name for name in known.get("product_names") or [] if str(name).strip()]) >= 2:
+        if (
+            len([name for name in known.get("product_names") or [] if str(name).strip()]) >= 2
+            and _is_comparison_request(user_text)
+            and not _is_recommendation_request(user_text)
+        ):
             return await self._description(user_text, state, known, bundle)
 
         if known.get("recommendation_source") == "best_seller":
@@ -623,7 +761,17 @@ class AFExecutor:
                 args["from_date"] = known["from_date"]
                 args["to_date"] = known["to_date"]
             result = await self._call(bundle, AgentFlow.PRODUCT_RECOMMENDATION, "get_best_selling_products_tool", args)
-            _append_template(bundle, build_product_template(result, "인기 상품을 확인해 주세요.", is_booking_flow=True))
+            exclusions = _current_product_exclusions(state, known) if known.get("alternative_target") == "product" else {"goods_ids": set(), "names": set()}
+            _append_template(
+                bundle,
+                build_product_template(
+                    result,
+                    "인기 상품을 확인해 주세요.",
+                    is_booking_flow=True,
+                    exclude_goods_ids=exclusions["goods_ids"],
+                    exclude_product_names=exclusions["names"],
+                ),
+            )
             return state
 
         tire_size = known.get("tire_size") or state.commerce_state.product.tire_size
@@ -650,16 +798,34 @@ class AFExecutor:
             if value not in (None, "", "none"):
                 args[key] = value
         if "vehicle_type" not in args:
-            inferred_vehicle_type = _infer_vehicle_type_from_text(str(known.get("car_model") or user_text or ""))
+            inferred_vehicle_type = _infer_vehicle_type_from_known(known, user_text)
             if inferred_vehicle_type:
                 args["vehicle_type"] = inferred_vehicle_type
         result = await self._call(bundle, AgentFlow.PRODUCT_RECOMMENDATION, "get_products_recommendations_tool", args)
-        _append_template(bundle, build_product_template(result, "추천 상품을 확인해 주세요.", is_booking_flow=True))
+        exclusions = _current_product_exclusions(state, known) if known.get("alternative_target") == "product" else {"goods_ids": set(), "names": set()}
+        _append_template(
+            bundle,
+            build_product_template(
+                result,
+                "추천 상품을 확인해 주세요.",
+                is_booking_flow=True,
+                exclude_goods_ids=exclusions["goods_ids"],
+                exclude_product_names=exclusions["names"],
+            ),
+        )
         return apply_state_rules(state, product_patch={"tire_size": tire_size} if tire_size else None)
 
     async def _description(self, user_text: str, state: ConversationState, known: dict[str, Any], bundle: FactBundle) -> ConversationState:
         if known.get("benefit_lookup") not in (None, "", "none"):
             return await self._benefit_lookup(user_text, state, known, bundle)
+        if _is_recommendation_request(user_text) and not _is_comparison_request(user_text):
+            recommendation_known = {
+                key: value
+                for key, value in known.items()
+                if key not in {"product_names", "compare_metric"}
+            }
+            recommendation_known.setdefault("recommendation_type", "tstation")
+            return await self._recommend(user_text, state, recommendation_known, bundle)
 
         product_names = [str(name).strip() for name in known.get("product_names") or [] if str(name).strip()]
         if len(product_names) >= 2:
@@ -781,10 +947,13 @@ class AFExecutor:
             (known.get("goods_no") or state.commerce_state.product.goods_no)
             and (known.get("ord_qty") or state.commerce_state.quantity)
         )
+        exclusions = _current_store_exclusions(state, known) if known.get("alternative_target") == "store" else {"shop_ids": set(), "names": set()}
         _append_template(bundle, build_location_template(
             result,
             assistant_response,
             is_booking_flow=is_booking_flow,
+            exclude_shop_ids=exclusions["shop_ids"],
+            exclude_store_names=exclusions["names"],
         ))
         return apply_state_rules(state, store_patch={"region": str(raw_query)} if raw_query else None)
 
@@ -814,7 +983,17 @@ class AFExecutor:
         if region and _is_domestic_region_gate_blocked(result):
             _append_template(bundle, _unsupported_region_event(region))
             return apply_state_rules(next_state, quantity=int(qty))
-        _append_template(bundle, build_location_template(result, "장착 가능한 후보 매장을 확인해 주세요.", is_booking_flow=True))
+        exclusions = _current_store_exclusions(state, known) if known.get("alternative_target") == "store" else {"shop_ids": set(), "names": set()}
+        _append_template(
+            bundle,
+            build_location_template(
+                result,
+                "장착 가능한 후보 매장을 확인해 주세요.",
+                is_booking_flow=True,
+                exclude_shop_ids=exclusions["shop_ids"],
+                exclude_store_names=exclusions["names"],
+            ),
+        )
         return apply_state_rules(next_state, quantity=int(qty), store_patch={"region": region})
 
     async def _quick_shopping(self, user_text: str, state: ConversationState, known: dict[str, Any], bundle: FactBundle) -> ConversationState:
@@ -867,20 +1046,23 @@ class AFExecutor:
             schedule_patch={k: v for k, v in schedule_patch.items() if v not in (None, "")},
         )
         commerce = next_state.commerce_state
+        alternative_store_requested = known.get("alternative_target") == "store" or _alternative_target(user_text) == "store"
         user_xpos = known.get("user_xpos")
         user_ypos = known.get("user_ypos")
         has_coords = user_xpos not in (None, "") and user_ypos not in (None, "")
         effective_region = commerce.store.region
         effective_store_name = commerce.store.shop_name
+        if alternative_store_requested:
+            effective_store_name = None
         if has_coords:
             if not known.get("region"):
                 effective_region = None
             if not known.get("store_name"):
                 effective_store_name = None
-        if not (commerce.store.shop_id or effective_region or effective_store_name or has_coords):
+        if not ((commerce.store.shop_id and not alternative_store_requested) or effective_region or effective_store_name or has_coords):
             bundle.missing_inputs.append("store_or_region")
             return next_state
-        if not commerce.store.shop_id:
+        if alternative_store_requested or not commerce.store.shop_id:
             preview_args: dict[str, Any] = {
                 "goods_no": goods_no,
                 "ord_qty": int(qty),
@@ -894,7 +1076,17 @@ class AFExecutor:
             if effective_region and _is_domestic_region_gate_blocked(result):
                 _append_template(bundle, _unsupported_region_event(effective_region))
                 return next_state
-            _append_template(bundle, build_location_template(result, "장착 가능한 후보 매장을 확인해 주세요.", is_booking_flow=True))
+            exclusions = _current_store_exclusions(state, known) if alternative_store_requested else {"shop_ids": set(), "names": set()}
+            _append_template(
+                bundle,
+                build_location_template(
+                    result,
+                    "현재 선택된 매장을 제외한 후보 매장을 확인해 주세요." if alternative_store_requested else "장착 가능한 후보 매장을 확인해 주세요.",
+                    is_booking_flow=True,
+                    exclude_shop_ids=exclusions["shop_ids"],
+                    exclude_store_names=exclusions["names"],
+                ),
+            )
             bundle.missing_inputs.append("store")
             return next_state
         if not (commerce.schedule.date and commerce.schedule.time):
@@ -995,6 +1187,24 @@ class AFExecutor:
                         )
                         tire_size = args.get("tire_size") or normalize_tire_size(str(selected.get("tire_size_fr") or ""))
                         return apply_state_rules(state, product_patch={"tire_size": tire_size} if tire_size else None)
+                if car_model:
+                    args = _vehicle_type_recommendation_args(known, user_text)
+                    if args is not None:
+                        recommendation = await self._call(
+                            bundle,
+                            AgentFlow.PRODUCT_RECOMMENDATION,
+                            "get_products_recommendations_tool",
+                            args,
+                        )
+                        _append_template(
+                            bundle,
+                            build_product_template(
+                                recommendation,
+                                "차량 유형 기준 추천 상품을 확인해 주세요.",
+                                is_booking_flow=True,
+                            ),
+                        )
+                        return state
                 _append_template(
                     bundle,
                     build_list_car_template(

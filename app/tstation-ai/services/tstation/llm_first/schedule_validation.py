@@ -74,16 +74,16 @@ def build_past_schedule_selection_event(
     now = now or _kst_now()
     if now.tzinfo is None:
         now = now.replace(tzinfo=_KST)
-    if selected > now:
+    if selected.date() >= now.date():
         return None
-    now_label = now.strftime("%Y-%m-%d %H:%M")
+    today_label = now.strftime("%Y-%m-%d")
     return {
         "type": "data",
         "template": "quickReply",
         "data": {
             "assistantResponse": (
-                "이미 지난 날짜/시간은 선택할 수 없어요. "
-                f"현재 시각 {now_label} 이후 일정으로 다시 선택해 주세요."
+                "지난 날짜의 예약 가능 여부는 조회가 불가능합니다. "
+                f"오늘 날짜 {today_label} 이후로 다시 선택해 주세요."
             ),
             "quickReplies": [
                 {"label": "예약 가능 날짜 보기", "domain": "TRANSACTION"},

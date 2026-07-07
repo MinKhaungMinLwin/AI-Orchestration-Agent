@@ -689,6 +689,59 @@ class FakeExecutor(AFExecutor):
         return result
 
 
+class AlternativeFakeExecutor(FakeExecutor):
+    async def _call(self, bundle, af, tool_name, args, *, allow_side_effect=False):
+        if tool_name == "get_products_recommendations_tool":
+            result = {
+                "status": "success",
+                "data": {
+                    "items": [
+                        {
+                            "goods_no": "G000000000003",
+                            "goods_nm": "아이온 에보",
+                            "tire_size_1": "235/55R19",
+                            "brand_nm": "한국타이어",
+                            "sale_prc": 250000,
+                            "extra_fvr_sale_prc": 210000,
+                        },
+                        {
+                            "goods_no": "G000000000005",
+                            "goods_nm": "다이나프로 HPX",
+                            "tire_size_1": "235/55R19",
+                            "brand_nm": "한국타이어",
+                            "sale_prc": 230000,
+                            "extra_fvr_sale_prc": 190000,
+                        },
+                    ]
+                },
+            }
+            bundle.tool_calls.append(ToolCallRecord(af=af, tool_name=tool_name, args=args, result=result))
+            bundle.facts[tool_name] = result
+            return result
+        if tool_name == "transaction_store_preview_tool":
+            result = {
+                "status": "success",
+                "data": {
+                    "stores": [
+                        {
+                            "shop_id": "S001",
+                            "shop_nm": "티스테이션 판교점",
+                            "address": "경기 성남시 분당구 판교로",
+                        },
+                        {
+                            "shop_id": "S002",
+                            "shop_nm": "티스테이션 분당점",
+                            "address": "경기 성남시 분당구",
+                        },
+                    ]
+                },
+            }
+            bundle.tool_calls.append(ToolCallRecord(af=af, tool_name=tool_name, args=args, result=result))
+            bundle.facts[tool_name] = result
+            return result
+        return await super()._call(bundle, af, tool_name, args, allow_side_effect=allow_side_effect)
+
+
 class EmptyFavoriteStoreExecutor(FakeExecutor):
     async def _call(self, bundle, af, tool_name, args, *, allow_side_effect=False):
         if tool_name != "get_favorite_stores_tool":
@@ -1212,6 +1265,145 @@ def test_product_comparison_guard_handles_recommendation_af_with_product_names()
     assert all(event["template"] != "product" for event in events)
 
 
+def test_recommendation_af_with_product_names_still_emits_product_cards() -> None:
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.PRODUCT_RECOMMENDATION,
+                    reason="recommend among named products",
+                    known_inputs={
+                        "product_names": ["키너지 EX", "옵티모"],
+                        "compare_metric": "detail",
+                        "tire_size": "235/55R19",
+                    },
+                )
+            ]
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=MemoryStateStore(),
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "키너지 ex랑 옵티모 추천해줘"}],
+        stream=False,
+        user_id="u1",
+        session_id="product-recommendation-with-product-names",
+    )
+
+    _, events, metadata = asyncio.run(runtime.run(request))
+
+    assert events[0]["template"] == "product"
+    assert metadata["tool_calls"][0]["tool_name"] == "get_products_recommendations_tool"
+    assert events[0]["data"]["metadata"][0]["goodsId"] == "G000000000001"
+
+
+def test_description_af_recommendation_request_reroutes_to_product_cards() -> None:
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.PRODUCT_DESCRIPTION,
+                    reason="planner misclassified recommendation as description",
+                    known_inputs={
+                        "product_names": ["키너지 EX", "옵티모"],
+                        "compare_metric": "detail",
+                        "tire_size": "235/55R19",
+                    },
+                )
+            ]
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=MemoryStateStore(),
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "키너지 ex랑 옵티모 추천해줘"}],
+        stream=False,
+        user_id="u1",
+        session_id="product-description-reroutes-recommendation",
+    )
+
+    _, events, metadata = asyncio.run(runtime.run(request))
+
+    assert events[0]["template"] == "product"
+    assert metadata["tool_calls"][0]["tool_name"] == "get_products_recommendations_tool"
+    assert all(
+        not (
+            isinstance(event.get("data"), dict)
+            and isinstance(event["data"].get("metadata"), dict)
+            and event["data"]["metadata"].get("response_shape_key") == "metric_comparison_summary"
+        )
+        for event in events
+    )
+
+
+def test_alternative_tire_request_excludes_current_product() -> None:
+    state_store = MemoryStateStore()
+    state_store.state.commerce_state.product.goods_no = "G000000000003"
+    state_store.state.commerce_state.product.product_name = "아이온 에보"
+    state_store.state.commerce_state.product.tire_size = "235/55R19"
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(selected_afs=[])),
+        executor=AlternativeFakeExecutor(),
+        composer=StaticComposer(),
+        state_store=state_store,
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "다른 타이어 보여줘"}],
+        stream=False,
+        user_id="u1",
+        session_id="alternative-tire",
+    )
+
+    _, events, metadata = asyncio.run(runtime.run(request))
+
+    assert metadata["planner"]["conversation_goal"] == "show_alternative_products"
+    assert events[0]["template"] == "product"
+    assert [product["titleProductName"] for product in events[0]["data"]["products"]] == ["다이나프로 HPX"]
+    assert events[0]["data"]["metadata"] == [{"goodsId": "G000000000005"}]
+
+
+def test_alternative_store_request_excludes_current_store() -> None:
+    state_store = MemoryStateStore()
+    state_store.state.commerce_state.product.goods_no = "G000000000003"
+    state_store.state.commerce_state.product.product_name = "아이온 에보"
+    state_store.state.commerce_state.quantity = 4
+    state_store.state.commerce_state.store.shop_id = "S001"
+    state_store.state.commerce_state.store.shop_name = "티스테이션 판교점"
+    state_store.state.commerce_state.store.region = "판교"
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(selected_afs=[])),
+        executor=AlternativeFakeExecutor(),
+        composer=StaticComposer(),
+        state_store=state_store,
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "다른 매장 보여줘"}],
+        stream=False,
+        user_id="u1",
+        session_id="alternative-store",
+    )
+
+    _, events, metadata = asyncio.run(runtime.run(request))
+
+    assert metadata["planner"]["conversation_goal"] == "show_alternative_stores"
+    assert metadata["tool_calls"][0]["tool_name"] == "transaction_store_preview_tool"
+    assert metadata["tool_calls"][0]["args"]["region_code"] == "판교"
+    assert events[0]["template"] == "location"
+    assert [store["nameAddress"] for store in events[0]["data"]["stores"]] == ["티스테이션 분당점"]
+    assert events[0]["data"]["metadata"] == [
+        {
+            "shopId": "S002",
+            "shopName": "티스테이션 분당점",
+            "ctaAction": "select_store",
+            "cta_action": "select_store",
+            "fillsSlot": "shop_id",
+            "fills_slot": "shop_id",
+        }
+    ]
+
+
 def test_benefit_event_deal_list_uses_benefit_list_tool() -> None:
     runtime = LLMFirstRuntime(
         planner=StaticPlanner(PlannerDecision(
@@ -1596,6 +1788,9 @@ def test_side_question_with_stale_purchase_slots_uses_current_turn_intent() -> N
     assert events == []
     assert metadata["planner"]["selected_afs"][0]["af"] == "PriceAF"
     assert [call["tool_name"] for call in metadata["tool_calls"]] == ["get_final_price_tool"]
+    assert store.state.commerce_state.store.shop_id is None
+    assert store.state.commerce_state.schedule.date is None
+    assert store.state.commerce_state.schedule.time is None
 
 
 def test_schedule_stage_side_question_with_stale_ui_slots_uses_current_turn_intent() -> None:
@@ -1638,6 +1833,8 @@ def test_schedule_stage_side_question_with_stale_ui_slots_uses_current_turn_inte
     assert events == []
     assert metadata["planner"]["selected_afs"][0]["af"] == "PriceAF"
     assert [call["tool_name"] for call in metadata["tool_calls"]] == ["get_final_price_tool"]
+    assert store.state.commerce_state.schedule.date is None
+    assert store.state.commerce_state.schedule.time is None
 
 
 def test_runtime_applies_request_slot_patch_to_state() -> None:
@@ -2473,7 +2670,7 @@ def test_schedule_selection_in_active_purchase_flow_emits_preorder_without_plann
     assert events[0]["template"] == "preOrder"
     PreOrderDataEvent.model_validate(events[0])
     assert events[0]["data"]["isReadyToOrder"] is True
-    assert events[0]["data"]["orderInfo"]["bookingDateTime"] == "2026년 07월 07일 10"
+    assert events[0]["data"]["orderInfo"]["bookingDateTime"] == "2026년 07월 07일 10:00"
     assert metadata["planner"]["selected_afs"][0]["af"] == "QuickShoppingAF"
     assert metadata["planner"]["resume_previous_flow"] is True
     assert metadata["tool_calls"][0]["tool_name"] == "get_final_price_tool"
@@ -2481,7 +2678,46 @@ def test_schedule_selection_in_active_purchase_flow_emits_preorder_without_plann
     assert store.state.commerce_state.schedule.time == "10"
 
 
-def test_schedule_selection_in_active_purchase_flow_blocks_past_time(monkeypatch) -> None:
+def test_schedule_selection_preorder_formats_hour_with_minutes(monkeypatch) -> None:
+    monkeypatch.setattr(
+        schedule_validation_module,
+        "_kst_now",
+        lambda: datetime.datetime(2026, 7, 7, 9, 30, tzinfo=datetime.timezone(datetime.timedelta(hours=9))),
+    )
+    store = MemoryStateStore()
+    store.state.commerce_state.product.goods_no = "G000000000003"
+    store.state.commerce_state.product.product_name = "아이온 에보"
+    store.state.commerce_state.quantity = 4
+    store.state.commerce_state.store.shop_id = "S001"
+    store.state.commerce_state.store.shop_name = "티스테이션 판교점"
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(selected_afs=[])),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=store,
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "7월 15일 15시"}],
+        stream=False,
+        user_id="u1",
+        session_id="schedule-selection-preorder-hour-format",
+        ui_action={
+            "action_type": "select_schedule",
+            "slots": {
+                "requestedCalDay": "20260715",
+                "rsvHour": "15",
+            },
+        },
+    )
+
+    _, events, _ = asyncio.run(runtime.run(request))
+
+    assert events[0]["template"] == "preOrder"
+    assert events[0]["data"]["orderInfo"]["bookingDateTime"] == "2026년 07월 15일 15:00"
+    assert events[0]["data"]["metadata"]["rsvHour"] == "15"
+
+
+def test_schedule_selection_in_active_purchase_flow_allows_same_day_time(monkeypatch) -> None:
     monkeypatch.setattr(
         schedule_validation_module,
         "_kst_now",
@@ -2503,7 +2739,7 @@ def test_schedule_selection_in_active_purchase_flow_blocks_past_time(monkeypatch
         messages=[{"role": "user", "content": "2026년 07월 07일 16:00"}],
         stream=False,
         user_id="u1",
-        session_id="schedule-selection-past-time",
+        session_id="schedule-selection-same-day-time",
         ui_action={
             "action_type": "select_schedule",
             "slots": {
@@ -2515,9 +2751,50 @@ def test_schedule_selection_in_active_purchase_flow_blocks_past_time(monkeypatch
 
     text, events, metadata = asyncio.run(runtime.run(request))
 
+    assert events[0]["template"] == "preOrder"
+    assert text == "확인한 결과를 안내드립니다."
+    assert metadata["tool_calls"][0]["tool_name"] == "get_final_price_tool"
+    assert store.state.commerce_state.schedule.date == "2026년 07월 07일"
+    assert store.state.commerce_state.schedule.time == "16"
+
+
+def test_schedule_selection_in_active_purchase_flow_blocks_past_date(monkeypatch) -> None:
+    monkeypatch.setattr(
+        schedule_validation_module,
+        "_kst_now",
+        lambda: datetime.datetime(2026, 7, 7, 16, 30, tzinfo=datetime.timezone(datetime.timedelta(hours=9))),
+    )
+    store = MemoryStateStore()
+    store.state.commerce_state.product.goods_no = "G000000000003"
+    store.state.commerce_state.product.product_name = "아이온 에보"
+    store.state.commerce_state.quantity = 4
+    store.state.commerce_state.store.shop_id = "S001"
+    store.state.commerce_state.store.shop_name = "티스테이션 판교점"
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(selected_afs=[])),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=store,
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "2026년 07월 06일 17:00"}],
+        stream=False,
+        user_id="u1",
+        session_id="schedule-selection-past-date",
+        ui_action={
+            "action_type": "select_schedule",
+            "slots": {
+                "requestedCalDay": "20260706",
+                "rsvHour": "17",
+            },
+        },
+    )
+
+    text, events, metadata = asyncio.run(runtime.run(request))
+
     assert events[0]["template"] == "quickReply"
     assert events[0]["data"]["metadata"]["source"] == "llm_first_schedule_selection_past_datetime"
-    assert text == "이미 지난 날짜/시간은 선택할 수 없어요. 현재 시각 2026-07-07 16:30 이후 일정으로 다시 선택해 주세요."
+    assert text == "지난 날짜의 예약 가능 여부는 조회가 불가능합니다. 오늘 날짜 2026-07-07 이후로 다시 선택해 주세요."
     assert metadata["tool_calls"] == []
     assert store.state.commerce_state.schedule.date is None
     assert store.state.commerce_state.schedule.time is None
@@ -2556,7 +2833,7 @@ def test_quick_shopping_complete_inputs_emits_preorder_without_side_effect() -> 
     assert events[0]["template"] == "preOrder"
     PreOrderDataEvent.model_validate(events[0])
     assert events[0]["data"]["isReadyToOrder"] is True
-    assert events[0]["data"]["orderInfo"]["bookingDateTime"] == "2026년 07월 07일 10"
+    assert events[0]["data"]["orderInfo"]["bookingDateTime"] == "2026년 07월 07일 10:00"
     assert all(call["tool_name"] not in {"quick_order_tool", "save_to_cart_tool"} for call in metadata["tool_calls"])
 
 
@@ -2978,6 +3255,46 @@ def test_named_registered_vehicle_recommendation_auto_selects_unique_car() -> No
     }
 
 
+def test_named_registered_vehicle_recommendation_falls_back_to_model_vehicle_type() -> None:
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.PRODUCT_COMPATIBILITY,
+                    reason="named registered vehicle recommendation",
+                    known_inputs={
+                        "vehicle_recommendation": True,
+                        "car_model": "포터",
+                        "recommendation_type": "tstation",
+                    },
+                )
+            ]
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=MemoryStateStore(),
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "내차 포터 타이어 추천해줘"}],
+        stream=False,
+        user_id="M123",
+        session_id="vehicle-recommend-unmatched-named",
+    )
+
+    _, events, metadata = asyncio.run(runtime.run(request))
+
+    assert events[0]["template"] == "product"
+    assert [call["tool_name"] for call in metadata["tool_calls"]] == [
+        "get_my_cars_tool",
+        "get_products_recommendations_tool",
+    ]
+    assert metadata["tool_calls"][1]["args"] == {
+        "rcmd_type": "tstation",
+        "limit": 3,
+        "vehicle_type": "truck_van",
+    }
+
+
 def test_selected_registered_vehicle_continues_to_recommendation() -> None:
     runtime = LLMFirstRuntime(
         planner=StaticPlanner(PlannerDecision(selected_afs=[])),
@@ -2995,6 +3312,7 @@ def test_selected_registered_vehicle_continues_to_recommendation() -> None:
             "slots": {
                 "carLncCd": "CAR003",
                 "tireSize": "235/55R19",
+                "carType": "SUV",
                 "sourceIntent": "vehicle_resolved_recommendation",
             },
         },
@@ -3011,6 +3329,7 @@ def test_selected_registered_vehicle_continues_to_recommendation() -> None:
         "limit": 3,
         "tire_size": "235/55R19",
         "car_lnc_cd": "CAR003",
+        "vehicle_type": "suv",
     }
 
 

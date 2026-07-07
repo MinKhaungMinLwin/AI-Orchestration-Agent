@@ -23,6 +23,17 @@ from services.tstation.llm_first.persistence.state import LLMFirstStateStore, ap
 
 logger = logging.getLogger(__name__)
 
+_QUESTION_TEXT_RE = re.compile(
+    r"\?|뭐|무엇|어떤|어떻게|왜|언제|얼마|알려|설명|궁금|되나|돼|가능|차이|비교|"
+    r"할인|쿠폰|혜택|이벤트|프로모션|FAQ|faq",
+    re.IGNORECASE,
+)
+_PURCHASE_CONTINUATION_TEXT_RE = re.compile(
+    r"선택|예약|주문|구매|담아|장바구니|결제|장착|스케줄|일정|"
+    r"\d+\s*개|(?:\d{1,2}\s*월\s*)?\d{1,2}\s*일|\d{1,2}\s*시|^\s*\d{1,2}\s*:\s*\d{2}",
+    re.IGNORECASE,
+)
+
 
 def _make_llm(model_setting: str, *, streaming: bool = False, timeout: int = 60) -> ChatLiteLLM:
     return ChatLiteLLM(
@@ -116,6 +127,62 @@ def _ui_action_values(request: TStationChatRequest, patch: dict[str, Any]) -> di
         if isinstance(metadata, dict):
             values.update(metadata)
     return values
+
+
+def _looks_like_side_question(user_text: str) -> bool:
+    text = str(user_text or "").strip()
+    if not text:
+        return False
+    return bool(_QUESTION_TEXT_RE.search(text))
+
+
+def _allows_deterministic_purchase_resume(user_text: str, values: dict[str, Any], *, text_selection_resolved: bool = False) -> bool:
+    text = str(user_text or "").strip()
+    if text_selection_resolved:
+        return True
+    if not text:
+        return True
+    if _looks_like_side_question(text) and not _PURCHASE_CONTINUATION_TEXT_RE.search(text):
+        return False
+    action_type = str(values.get("action_type") or values.get("cta_action") or values.get("ctaAction") or values.get("actionId") or "").strip()
+    fills_slot = str(values.get("fills_slot") or values.get("fillsSlot") or "").strip()
+    if action_type or fills_slot:
+        return bool(_PURCHASE_CONTINUATION_TEXT_RE.search(text))
+    return True
+
+
+def _should_apply_request_patch(request: TStationChatRequest, user_text: str) -> bool:
+    patch = _request_slot_patch(request)
+    if not patch:
+        return False
+    values = _ui_action_values(request, patch)
+    purchase_patch_keys = {
+        "ord_qty",
+        "ordQty",
+        "quantity",
+        "shop_id",
+        "shopId",
+        "shop_name",
+        "shopName",
+        "storeName",
+        "requested_cal_day",
+        "requestedCalDay",
+        "rsv_hour",
+        "rsvHour",
+        "date",
+        "time",
+        "booking_datetime",
+        "bookingDateTime",
+    }
+    purchase_like_patch = (
+        _is_store_selection_request(request, patch)
+        or _has_purchase_progress_patch(request)
+        or _confirmed_purchase_action(request, patch) is not None
+        or any(values.get(key) not in (None, "") for key in purchase_patch_keys)
+    )
+    if purchase_like_patch and not _allows_deterministic_purchase_resume(user_text, values):
+        return False
+    return True
 
 
 def _is_store_selection_request(request: TStationChatRequest, patch: dict[str, Any]) -> bool:
@@ -234,6 +301,9 @@ def _store_selection_schedule_plan(
     direct_selection = _is_store_selection_request(request, patch)
     if not (direct_selection or text_selection_resolved):
         return None
+    values = _ui_action_values(request, patch)
+    if direct_selection and not _allows_deterministic_purchase_resume(user_text, values, text_selection_resolved=text_selection_resolved):
+        return None
     commerce = state.commerce_state
     if commerce.schedule.date or commerce.schedule.time:
         return None
@@ -248,7 +318,6 @@ def _store_selection_schedule_plan(
         "store_name": commerce.store.shop_name,
         "region": commerce.store.region,
     }
-    values = _ui_action_values(request, patch)
     schedule_mode = values.get("schedule_mode") or values.get("scheduleMode") or values.get("inventory_mode") or values.get("inventoryMode")
     if schedule_mode not in (None, ""):
         known_inputs["schedule_mode"] = schedule_mode
@@ -341,8 +410,73 @@ def _commerce_known_inputs(state: Any) -> dict[str, Any]:
     return {k: v for k, v in known_inputs.items() if v not in (None, "")}
 
 
+def _alternative_request_target(user_text: str) -> str | None:
+    text = str(user_text or "").lower()
+    if not any(token in text for token in ("다른", "다른거", "다른 것", "대안", "말고")):
+        return None
+    if any(token in text for token in ("타이어", "상품", "제품")):
+        return "product"
+    if any(token in text for token in ("매장", "장착점", "지점", "지역")):
+        return "store"
+    return None
+
+
+def _alternative_request_plan(user_text: str, state: Any) -> PlannerDecision | None:
+    target = _alternative_request_target(user_text)
+    if target is None:
+        return None
+    commerce = state.commerce_state
+    known_inputs = _commerce_known_inputs(state)
+    if target == "product" and commerce.product.goods_no:
+        known_inputs["alternative_target"] = "product"
+        known_inputs["exclude_goods_no"] = commerce.product.goods_no
+        if commerce.product.product_name:
+            known_inputs["exclude_product_name"] = commerce.product.product_name
+        known_inputs.setdefault("recommendation_type", "tstation")
+        return PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.PRODUCT_RECOMMENDATION,
+                    reason="user asked for alternative tire; recommend excluding current product",
+                    required_inputs=[],
+                    known_inputs=known_inputs,
+                    missing_inputs=[],
+                )
+            ],
+            conversation_goal="show_alternative_products",
+            answer_mode="tool_grounded_answer",
+            requires_user_confirmation=False,
+            resume_previous_flow=True,
+        )
+    if target == "store" and commerce.product.goods_no and commerce.quantity:
+        known_inputs["alternative_target"] = "store"
+        if commerce.store.shop_id:
+            known_inputs["exclude_shop_id"] = commerce.store.shop_id
+        if commerce.store.shop_name:
+            known_inputs["exclude_store_name"] = commerce.store.shop_name
+        return PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.QUICK_SHOPPING,
+                    reason="user asked for alternative store or region; search purchase store candidates excluding current store",
+                    required_inputs=["goods_no", "ord_qty", "store"],
+                    known_inputs=known_inputs,
+                    missing_inputs=[],
+                )
+            ],
+            conversation_goal="show_alternative_stores",
+            answer_mode="tool_grounded_answer",
+            requires_user_confirmation=False,
+            resume_previous_flow=True,
+        )
+    return None
+
+
 def _purchase_progress_plan(request: TStationChatRequest, state: Any) -> PlannerDecision | None:
     if not _has_purchase_progress_patch(request):
+        return None
+    patch = _request_slot_patch(request)
+    if not _allows_deterministic_purchase_resume(_last_user_text(request), _ui_action_values(request, patch)):
         return None
     if not state.commerce_state.product.goods_no:
         return None
@@ -368,6 +502,8 @@ def _confirmed_purchase_plan(request: TStationChatRequest, state: Any) -> Planne
     values = _ui_action_values(request, patch)
     confirmed_action = _confirmed_purchase_action(request, patch)
     if confirmed_action is None:
+        return None
+    if not _allows_deterministic_purchase_resume(_last_user_text(request), values):
         return None
     if not state.commerce_state.product.goods_no:
         return None
@@ -423,9 +559,21 @@ def _vehicle_selection_recommendation_plan(request: TStationChatRequest) -> Plan
     )
     if not (car_lnc_cd or tire_size):
         return None
+    vehicle_type = str(values.get("vehicle_type") or values.get("vehicleType") or "").strip()
+    if not vehicle_type:
+        fallback_text = " ".join(
+            str(values.get(key) or "").strip()
+            for key in ("car_model_det", "carModelDet", "car_nm", "carName", "car_model", "carModel")
+            if str(values.get(key) or "").strip()
+        )
+        vehicle_type = legacy.normalize_vehicle_type_from_car_type(
+            values.get("car_type") or values.get("carType") or values.get("car_type_nm") or values.get("carTypeNm"),
+            fallback_text=fallback_text,
+        ) or ""
     known_inputs = {
         "car_lnc_cd": car_lnc_cd,
         "tire_size": tire_size,
+        "vehicle_type": vehicle_type,
         "recommendation_type": values.get("recommendation_type") or values.get("rcmd_type") or "tstation",
         "season_nm": values.get("season_nm"),
         "sort_by": values.get("sort_by"),
@@ -554,7 +702,8 @@ class LLMFirstRuntime:
                 "missing_inputs": [],
             }
             return text, [guard_event], metadata
-        state = _apply_request_patch(state, request)
+        if _should_apply_request_patch(request, user_text):
+            state = _apply_request_patch(state, request)
         store_shop_id_before_text_resolution = state.commerce_state.store.shop_id
         state = _resolve_text_store_selection(request, state, user_text)
         text_selection_resolved = (
@@ -572,6 +721,8 @@ class LLMFirstRuntime:
             planner = _vehicle_selection_recommendation_plan(request)
         if planner is None:
             planner = _confirmed_purchase_plan(request, state)
+        if planner is None:
+            planner = _alternative_request_plan(user_text, state)
         if planner is None:
             planner = _purchase_progress_plan(request, state)
         if planner is None:
@@ -610,17 +761,17 @@ class LLMFirstRuntime:
         return text, events, metadata
 
     async def stream(self, request: TStationChatRequest) -> AsyncIterator[str]:
-        yield _sse({"type": "agent_flow", "agent": "[LLM-FIRST LEADING AGENT]", "status": "start"})
+        yield _sse({"type": "agent_flow", "agent": "[LEADING AGENT]", "status": "start"})
         try:
             text, events, metadata = await self.run(request)
-            yield _sse({"type": "agent_flow", "agent": "[LLM-FIRST LEADING AGENT]", "status": "done", "metadata": metadata})
+            yield _sse({"type": "agent_flow", "agent": "[LEADING AGENT]", "status": "done", "metadata": metadata})
             for event in events:
                 yield _sse(event)
             if text and not events:
                 yield _sse(_text_response_event(text))
             if text:
                 yield _sse({"type": "token", "content": text})
-                yield _sse({"type": "message", "content": text, "agent": "[LLM-FIRST COMPOSER]"})
+                yield _sse({"type": "message", "content": text, "agent": "[COMPOSER]"})
             yield _sse({"type": "DONE"})
             yield "data: [DONE]\n\n"
         except Exception as exc:
@@ -636,7 +787,7 @@ class LLMFirstRuntime:
                 },
             })
             yield _sse({"type": "token", "content": message})
-            yield _sse({"type": "message", "content": message, "agent": "[LLM-FIRST COMPOSER]"})
+            yield _sse({"type": "message", "content": message, "agent": "[COMPOSER]"})
             yield "data: [DONE]\n\n"
 
 
