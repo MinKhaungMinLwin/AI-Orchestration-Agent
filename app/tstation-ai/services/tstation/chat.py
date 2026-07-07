@@ -6154,7 +6154,7 @@ def _is_regional_cheapest_query(msg: str | None) -> bool:
 # with a fixed redirect payload, mirroring `_is_regional_cheapest_query`.
 
 _DATEPICK_SELECTION_RE = re.compile(
-    r"^\s*(?P<year>\d{4})년\s*(?P<month>\d{1,2})월\s*(?P<day>\d{1,2})일"
+    r"^\s*(?P<year>\d{4})(?:년\s*(?P<month_ko>\d{1,2})월\s*(?P<day_ko>\d{1,2})일|[./-]\s*(?P<month_iso>\d{1,2})\s*[./-]\s*(?P<day_iso>\d{1,2}))"
     r"\s*(?:\([^)]+\))?\s*[\n\s]+\s*(?P<hour>\d{1,2}):(?P<minute>\d{2})\s*$"
 )
 _TIRE_PRODUCT_CONTEXT_RE = re.compile(
@@ -9693,9 +9693,15 @@ def _date_only(value: object) -> str:
 def _cal_day_from_korean_date_text(value: str | None) -> str | None:
     text = str(value or "")
     match = re.search(r"(?P<year>20\d{2})년\s*(?P<month>\d{1,2})월\s*(?P<day>\d{1,2})일", text)
-    if not match:
+    if match:
+        return f"{int(match.group('year')):04d}{int(match.group('month')):02d}{int(match.group('day')):02d}"
+    iso_match = re.search(
+        r"(?<!\d)(?P<year>20\d{2})\s*[./-]\s*(?P<month>1[0-2]|0?[1-9])\s*[./-]\s*(?P<day>3[01]|[12]?\d)(?!\d)",
+        text,
+    )
+    if not iso_match:
         return None
-    return f"{int(match.group('year')):04d}{int(match.group('month')):02d}{int(match.group('day')):02d}"
+    return f"{int(iso_match.group('year')):04d}{int(iso_match.group('month')):02d}{int(iso_match.group('day')):02d}"
 
 
 def _reservation_hour_from_text(value: str | None) -> str | None:

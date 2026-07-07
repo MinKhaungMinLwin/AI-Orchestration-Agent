@@ -39765,6 +39765,14 @@ def test_schedule_selection_text_values_override_previous_schedule_context() -> 
         "rsv_hour": "15",
     }
 
+
+def test_schedule_selection_text_values_support_iso_hyphen_date() -> None:
+    assert _is_schedule_selection_text("2026-7-9\n10:00") is True
+    assert _schedule_selection_values_from_text("2026-7-9\n10:00") == {
+        "requested_cal_day": "20260709",
+        "rsv_hour": "10",
+    }
+
 def test_schedule_selection_price_lookup_recovers_final_price_before_preorder() -> None:
     contract = _transaction_turn_contract(
         "2026년 7월 7일 (화)\n15:00",
