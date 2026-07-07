@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class AgentFlow(str, Enum):
@@ -35,15 +35,33 @@ class PlannerDecision(BaseModel):
     resume_previous_flow: bool = False
 
 
+class StructuredKnownInputs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    goods_no: str | None
+    tire_size: str | None
+    ord_qty: int | None
+    product_name: str | None
+    shop_id: str | None
+    store_name: str | None
+    region: str | None
+    date: str | None
+    time: str | None
+
+
 class StructuredSelectedAF(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     af: AgentFlow
     reason: str
     required_inputs: list[str]
-    known_inputs: dict[str, Any]
+    known_inputs: StructuredKnownInputs
     missing_inputs: list[str]
 
 
 class StructuredPlannerDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     selected_afs: list[StructuredSelectedAF]
     conversation_goal: str
     answer_mode: Literal["clarification", "tool_grounded_answer", "blocked"]

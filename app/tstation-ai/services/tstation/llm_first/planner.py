@@ -116,7 +116,12 @@ class LeadingAgentPlanner:
                 [SystemMessage(content=prompt), HumanMessage(content=human)],
                 config=trace_config,
             )
-            decision = PlannerDecision.model_validate(decision.model_dump())
+            decision_payload = decision.model_dump()
+            for item in decision_payload.get("selected_afs", []):
+                item["known_inputs"] = {
+                    key: value for key, value in item.get("known_inputs", {}).items() if value is not None
+                }
+            decision = PlannerDecision.model_validate(decision_payload)
         except Exception:
             logger.warning("[LLM_FIRST_PLANNER] structured planner failed; asking clarification", exc_info=True)
             return _clarification_plan()

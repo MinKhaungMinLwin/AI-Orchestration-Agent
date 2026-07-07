@@ -218,6 +218,20 @@ def test_structured_planner_schema_requires_all_strict_fields() -> None:
         "known_inputs",
         "missing_inputs",
     }
+    known_inputs_ref = selected_af_schema["properties"]["known_inputs"]["$ref"].removeprefix("#/$defs/")
+    known_inputs_schema = schema["$defs"][known_inputs_ref]
+    assert known_inputs_schema["additionalProperties"] is False
+    assert set(known_inputs_schema["required"]) == {
+        "goods_no",
+        "tire_size",
+        "ord_qty",
+        "product_name",
+        "shop_id",
+        "store_name",
+        "region",
+        "date",
+        "time",
+    }
 
 
 def test_planner_selects_recommendation_for_tire_size() -> None:
