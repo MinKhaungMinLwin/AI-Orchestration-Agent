@@ -1599,6 +1599,31 @@ def test_store_flow_emits_location_template() -> None:
     assert metadata["tool_calls"][0]["tool_name"] == "search_stores_tool"
 
 
+def test_store_flow_uses_gangnam_station_place_query_override() -> None:
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(af=AgentFlow.STORE, reason="store lookup", known_inputs={"region": "강남"})
+            ]
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=MemoryStateStore(),
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "강남 매장 보여줘"}],
+        stream=False,
+        user_id="u1",
+        session_id="store-gangnam-override",
+    )
+
+    _, events, metadata = asyncio.run(runtime.run(request))
+
+    assert events[0]["template"] == "location"
+    assert metadata["tool_calls"][0]["tool_name"] == "search_stores_tool"
+    assert metadata["tool_calls"][0]["args"] == {"limit": 10, "place_query": "강남역"}
+
+
 def test_store_flow_uses_current_location_when_region_missing() -> None:
     state_store = MemoryStateStore()
     state_store.state.commerce_state.store.region = "이전지역"

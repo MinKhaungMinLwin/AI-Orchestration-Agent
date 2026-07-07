@@ -25,6 +25,10 @@ from services.tstation.llm_first.tooling.registry import invoke_tool
 
 logger = logging.getLogger(__name__)
 
+_STORE_PLACE_QUERY_OVERRIDES = {
+    "강남": "강남역",
+}
+
 
 def _append_template(bundle: FactBundle, event: dict[str, Any] | None) -> None:
     if event is not None:
@@ -98,6 +102,13 @@ def _unsupported_region_event(query: Any) -> dict[str, Any]:
             },
         },
     }
+
+
+def _store_search_query(value: Any) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    return _STORE_PLACE_QUERY_OVERRIDES.get(text, text)
 
 
 def _quantity_quickreply_event() -> dict[str, Any]:
@@ -736,7 +747,8 @@ class AFExecutor:
         user_xpos = known.get("user_xpos")
         user_ypos = known.get("user_ypos")
         has_coords = user_xpos not in (None, "") and user_ypos not in (None, "")
-        query = known.get("region") or known.get("store_name") or (None if has_coords else state.commerce_state.store.region)
+        raw_query = known.get("region") or known.get("store_name") or (None if has_coords else state.commerce_state.store.region)
+        query = _store_search_query(raw_query)
         if not query and not has_coords:
             bundle.missing_inputs.append("region_or_store")
             return state
@@ -766,7 +778,7 @@ class AFExecutor:
             assistant_response,
             is_booking_flow=is_booking_flow,
         ))
-        return apply_state_rules(state, store_patch={"region": str(query)} if query else None)
+        return apply_state_rules(state, store_patch={"region": str(raw_query)} if raw_query else None)
 
     async def _inventory(self, user_text: str, state: ConversationState, known: dict[str, Any], bundle: FactBundle) -> ConversationState:
         next_state, goods_no = await self._resolve_product(user_text, state, known, bundle)
