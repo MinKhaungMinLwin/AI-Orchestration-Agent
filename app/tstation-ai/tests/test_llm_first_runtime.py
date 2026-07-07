@@ -51,8 +51,9 @@ for key, value in _TEST_ENV_DEFAULTS.items():
 import pytest  # noqa: E402
 
 from schemas.tstation.chat import TStationChatRequest  # noqa: E402
+from services.tstation.llm_first.composer import Composer  # noqa: E402
 from services.tstation.llm_first.executor import AFExecutor  # noqa: E402
-from services.tstation.llm_first.models import AgentFlow, ConversationState, PlannerDecision, ProductState, SelectedAF, StructuredPlannerDecision, ToolCallRecord  # noqa: E402
+from services.tstation.llm_first.models import AgentFlow, ConversationState, FactBundle, PlannerDecision, ProductState, SelectedAF, StructuredPlannerDecision, ToolCallRecord  # noqa: E402
 from services.tstation.llm_first.planner import LeadingAgentPlanner  # noqa: E402
 from services.tstation.llm_first.qc import verify_response  # noqa: E402
 from services.tstation.llm_first.runtime import LLMFirstRuntime  # noqa: E402
@@ -445,6 +446,32 @@ def test_planner_without_llm_does_not_route_by_regex() -> None:
 
     assert decision.selected_afs == []
     assert decision.answer_mode == "clarification"
+
+
+def test_composer_explains_3pmsf_without_faq_evidence() -> None:
+    composer = Composer()
+    bundle = FactBundle(
+        planner=PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.FAQ,
+                    reason="general tire term question",
+                    known_inputs={},
+                )
+            ]
+        ),
+    )
+    bundle.tool_calls.append(ToolCallRecord(
+        af=AgentFlow.FAQ,
+        tool_name="search_faq_hybrid_tool",
+        args={"query": "3PMSF 설명해줘", "top_k": 5},
+        result={"status": "success", "data": {"items": []}},
+    ))
+
+    text = asyncio.run(composer.compose(user_text="3PMSF 설명해줘", bundle=bundle))
+
+    assert "Three-Peak Mountain Snowflake" in text
+    assert "M+S보다" in text
 
 
 def test_state_dependency_invalidation_on_product_change() -> None:

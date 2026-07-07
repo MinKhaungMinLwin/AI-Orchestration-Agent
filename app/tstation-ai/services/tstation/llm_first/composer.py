@@ -11,6 +11,14 @@ from services.tstation.llm_first.models import FactBundle
 
 logger = logging.getLogger(__name__)
 
+_GENERAL_TIRE_TERM_EXPLANATIONS: tuple[tuple[str, str], ...] = (
+    (
+        "3pmsf",
+        "3PMSF는 Three-Peak Mountain Snowflake 마크로, 눈길 성능 기준을 충족한 겨울용/올웨더 타이어에 "
+        "붙는 표시예요. 보통 M+S보다 눈길 성능 기준이 더 엄격한 편으로 이해하시면 됩니다.",
+    ),
+)
+
 
 def _compact_facts(bundle: FactBundle) -> dict[str, Any]:
     facts: dict[str, Any] = {}
@@ -58,6 +66,14 @@ def fallback_compose(user_text: str, bundle: FactBundle) -> str:
     return "요청하신 내용을 확인했습니다."
 
 
+def _general_tire_term_explanation(user_text: str) -> str | None:
+    normalized = user_text.casefold()
+    for term, explanation in _GENERAL_TIRE_TERM_EXPLANATIONS:
+        if term in normalized:
+            return explanation
+    return None
+
+
 def _fixed_template_response(bundle: FactBundle) -> str | None:
     if not bundle.templates:
         return None
@@ -87,6 +103,9 @@ class Composer:
         trace_id: str | None = None,
         parent_span_id: str | None = None,
     ) -> str:
+        if direct_explanation := _general_tire_term_explanation(user_text):
+            return direct_explanation
+
         fallback = fallback_compose(user_text, bundle)
         if fixed_response := _fixed_template_response(bundle):
             return fixed_response
