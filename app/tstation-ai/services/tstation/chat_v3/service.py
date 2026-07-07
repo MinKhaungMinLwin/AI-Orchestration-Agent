@@ -96,9 +96,13 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         yield sse.sse({**rich_event, "source_domain": domain})
     else:
         chips = await composer.suggest_quick_replies(user_text, answer)
+        # V2 semantics: predictedDomains = likely domains of the user's NEXT turn.
+        # The chips are exactly the next actions we offer, so their domains are
+        # the prediction; fall back to the current domain when there are no chips.
+        predicted_domains = list(dict.fromkeys(chip["domain"] for chip in chips)) or [domain]
         yield sse.data_event(
             "quickReply",
-            {"assistantResponse": answer, "quickReplies": chips, "predictedDomains": [domain]},
+            {"assistantResponse": answer, "quickReplies": chips, "predictedDomains": predicted_domains},
             source_domain=domain,
         )
     yield sse.agent_flow("[DONE]", "success")
