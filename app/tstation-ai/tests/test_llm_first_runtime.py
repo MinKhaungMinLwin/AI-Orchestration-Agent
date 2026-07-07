@@ -55,7 +55,7 @@ from schemas.tstation.chat import TStationChatRequest  # noqa: E402
 from services.tstation.llm_first.composer import Composer  # noqa: E402
 from services.tstation.llm_first.executor import AFExecutor  # noqa: E402
 from services.tstation.llm_first.models import AgentFlow, ConversationState, FactBundle, PlannerDecision, ProductState, SelectedAF, StructuredPlannerDecision, ToolCallRecord  # noqa: E402
-from services.tstation.llm_first.planner import LeadingAgentPlanner, extract_known_inputs  # noqa: E402
+from services.tstation.llm_first.planner import LeadingAgentPlanner, StructuredPurchasePivotDecision, extract_known_inputs  # noqa: E402
 from services.tstation.llm_first.qc import verify_response  # noqa: E402
 from services.tstation.llm_first.runtime import LLMFirstRuntime  # noqa: E402
 from services.tstation.llm_first import schedule_validation as schedule_validation_module  # noqa: E402
@@ -111,7 +111,7 @@ class StaticComposer:
 
 
 class StructuredFakeLLM:
-    def __init__(self, decision: PlannerDecision):
+    def __init__(self, decision):
         self.decision = decision
 
     async def ainvoke(self, messages, config=None):
@@ -119,13 +119,25 @@ class StructuredFakeLLM:
 
 
 class FakeLLM:
-    def __init__(self, decision: PlannerDecision):
+    def __init__(
+        self,
+        decision: PlannerDecision,
+        purchase_pivot_decision: StructuredPurchasePivotDecision | None = None,
+    ):
         self.decision = decision
+        self.purchase_pivot_decision = purchase_pivot_decision or StructuredPurchasePivotDecision(
+            should_resume_purchase=True,
+            pivot_af=None,
+            reason="continue purchase by default",
+        )
 
     def with_structured_output(self, schema, strict=True):
-        assert schema is StructuredPlannerDecision
         assert strict is True
-        return StructuredFakeLLM(self.decision)
+        if schema is StructuredPlannerDecision:
+            return StructuredFakeLLM(self.decision)
+        if schema is StructuredPurchasePivotDecision:
+            return StructuredFakeLLM(self.purchase_pivot_decision)
+        raise AssertionError(f"unexpected schema: {schema}")
 
 
 class CapturingStructuredPlannerLLM:
@@ -145,9 +157,18 @@ class CapturingPlannerLLM:
         self.structured = CapturingStructuredPlannerLLM(decision)
 
     def with_structured_output(self, schema, strict=True):
-        assert schema is StructuredPlannerDecision
         assert strict is True
-        return self.structured
+        if schema is StructuredPlannerDecision:
+            return self.structured
+        if schema is StructuredPurchasePivotDecision:
+            return StructuredFakeLLM(
+                StructuredPurchasePivotDecision(
+                    should_resume_purchase=True,
+                    pivot_af=None,
+                    reason="continue purchase by default",
+                )
+            )
+        raise AssertionError(f"unexpected schema: {schema}")
 
 
 class ComposerResult:
@@ -792,6 +813,73 @@ def test_planner_prompt_routes_unsupported_oe_part_number_queries_to_faq() -> No
     system_prompt = llm.structured.messages[0].content
     assert "select FAQAF instead of ProductDescriptionAF" in system_prompt
     assert "OE/factory tire part number" in system_prompt
+
+
+def test_planner_purchase_pivot_classifier_routes_reservation_window_question_to_faq() -> None:
+    state = ConversationState()
+    state.commerce_state.product.goods_no = "G000000317682"
+    state.commerce_state.product.product_name = "다이나프로 HPX 235/55R19"
+    state.commerce_state.product.tire_size = "235/55R19"
+    state.commerce_state.quantity = 4
+    state.commerce_state.store.shop_id = "F00721"
+    state.commerce_state.store.shop_name = "티스테이션 판교점"
+    planner = LeadingAgentPlanner(FakeLLM(
+        PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.QUICK_SHOPPING,
+                    reason="fallback planner result",
+                    known_inputs={},
+                    missing_inputs=["schedule"],
+                )
+            ]
+        ),
+        purchase_pivot_decision=StructuredPurchasePivotDecision(
+            should_resume_purchase=False,
+            pivot_af=AgentFlow.FAQ,
+            reason="general reservation-window policy question during active purchase",
+        ),
+    ))
+
+    decision = asyncio.run(planner.plan(
+        user_text="아니 이 매장을 말하는게 아니고 예약 가능 최대 몇 주 까지 늦게 예약할 수 있어?",
+        state=state,
+    ))
+
+    assert decision.selected_afs[0].af == AgentFlow.FAQ
+    assert decision.resume_previous_flow is False
+
+
+def test_planner_purchase_pivot_classifier_routes_price_question_to_price_af() -> None:
+    state = ConversationState()
+    state.commerce_state.product.goods_no = "G000000317682"
+    state.commerce_state.product.product_name = "다이나프로 HPX 235/55R19"
+    state.commerce_state.product.tire_size = "235/55R19"
+    planner = LeadingAgentPlanner(FakeLLM(
+        PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.QUICK_SHOPPING,
+                    reason="fallback planner result",
+                    known_inputs={},
+                    missing_inputs=["ord_qty", "store_or_region"],
+                )
+            ]
+        ),
+        purchase_pivot_decision=StructuredPurchasePivotDecision(
+            should_resume_purchase=False,
+            pivot_af=AgentFlow.PRICE,
+            reason="price question should pivot away from purchase slot filling",
+        ),
+    ))
+
+    decision = asyncio.run(planner.plan(
+        user_text="쿠폰 적용하면 얼마야?",
+        state=state,
+    ))
+
+    assert decision.selected_afs[0].af == AgentFlow.PRICE
+    assert decision.resume_previous_flow is False
 
 
 def test_state_dependency_invalidation_on_product_change() -> None:
