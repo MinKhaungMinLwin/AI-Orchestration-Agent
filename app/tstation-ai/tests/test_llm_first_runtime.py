@@ -125,6 +125,28 @@ class FakeLLM:
         return StructuredFakeLLM(self.decision)
 
 
+class CapturingStructuredPlannerLLM:
+    def __init__(self, decision: PlannerDecision):
+        self.decision = decision
+        self.messages = None
+        self.config = None
+
+    async def ainvoke(self, messages, config=None):
+        self.messages = messages
+        self.config = config
+        return self.decision
+
+
+class CapturingPlannerLLM:
+    def __init__(self, decision: PlannerDecision):
+        self.structured = CapturingStructuredPlannerLLM(decision)
+
+    def with_structured_output(self, schema, strict=True):
+        assert schema is StructuredPlannerDecision
+        assert strict is True
+        return self.structured
+
+
 class ComposerResult:
     def __init__(self, content: str):
         self.content = content
@@ -719,6 +741,32 @@ def test_composer_prompt_allows_general_tire_knowledge_without_faq_evidence() ->
     assert "Three-Peak Mountain Snowflake" in text
 
 
+def test_planner_prompt_routes_unsupported_oe_part_number_queries_to_faq() -> None:
+    llm = CapturingPlannerLLM(PlannerDecision(
+        selected_afs=[
+            SelectedAF(
+                af=AgentFlow.FAQ,
+                reason="unsupported oe part number lookup should be answered as faq limitation",
+                known_inputs={},
+                missing_inputs=[],
+            )
+        ],
+        conversation_goal="answer_unsupported_oe_lookup",
+    ))
+    planner = LeadingAgentPlanner(llm)
+
+    decision = asyncio.run(planner.plan(
+        user_text="벤츠 E클래스 W212 순정 출고 타이어(OE) 품번이 뭐야?",
+        state=ConversationState(),
+    ))
+
+    assert decision.selected_afs[0].af == AgentFlow.FAQ
+    assert llm.structured.messages is not None
+    system_prompt = llm.structured.messages[0].content
+    assert "select FAQAF instead of ProductDescriptionAF" in system_prompt
+    assert "OE/factory tire part number" in system_prompt
+
+
 def test_state_dependency_invalidation_on_product_change() -> None:
     state = ConversationState()
     state.commerce_state.product = ProductState(goods_no="G000000000001", product_name="old")
@@ -892,8 +940,8 @@ def test_product_comparison_uses_quickreply_summary_not_product_cards() -> None:
     assert "상품 정보를 상품별 표로 비교해드릴게요." in events[0]["data"]["assistantResponse"]
     assert "**키너지 EX**" in events[0]["data"]["assistantResponse"]
     assert "**옵티모**" in events[0]["data"]["assistantResponse"]
-    assert "4.5점\n리뷰 12건\n대표 리뷰: 승차감이 부드럽고 일상 주행에서 소음이 적다는 의견이 많아요." in events[0]["data"]["assistantResponse"]
-    assert "4점\n리뷰 8건\n대표 리뷰: 가격 부담이 낮고 기본 주행 성능이 무난하다는 평가가 있어요." in events[0]["data"]["assistantResponse"]
+    assert "4.5점 / 리뷰 12건 / 대표 리뷰: 승차감이 부드럽고 일상 주행에서 소음이 적다는 의견이 많아요." in events[0]["data"]["assistantResponse"]
+    assert "4점 / 리뷰 8건 / 대표 리뷰: 가격 부담이 낮고 기본 주행 성능이 무난하다는 평가가 있어요." in events[0]["data"]["assistantResponse"]
     assert [call["tool_name"] for call in metadata["tool_calls"]] == [
         "search_product_summary_tool",
         "search_product_summary_tool",

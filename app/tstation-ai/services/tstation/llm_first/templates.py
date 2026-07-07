@@ -337,32 +337,6 @@ def build_product_comparison_template(
     }
 
 
-def build_oe_part_number_unavailable_template(user_text: str) -> dict[str, Any]:
-    vehicle_text = "해당 차량"
-    compact_text = re.sub(r"\s+", " ", str(user_text or "")).strip()
-    if compact_text:
-        vehicle_text = compact_text.replace(" 품번이 뭐야?", "").replace(" 품번 알려줘", "").strip() or vehicle_text
-    assistant_response = (
-        f"{vehicle_text}의 OE 품번은 같은 차종이어도 연식, 트림, 휠 인치, 출고 시점의 장착 브랜드에 따라 달라질 수 있어요. "
-        "현재 보유한 데이터만으로는 차량별 OE 품번을 확정 조회할 수는 없어요. "
-        "원하시면 현재 장착 타이어의 사이즈나 브랜드 기준으로 교체용 상품은 이어서 안내해 드릴게요."
-    )
-    return {
-        "type": "data",
-        "template": "quickReply",
-        "data": {
-            "assistantResponse": assistant_response,
-            "quickReplies": [],
-            "predictedDomains": ["DISCOVERY"],
-            "metadata": {
-                "source": "llm_first_oe_part_number_unavailable",
-                "response_shape_key": "oe_part_number_unavailable",
-            },
-        },
-        "assistant_response_source": "discovery_policy",
-    }
-
-
 def _benefit_rows(payload: Any, section: str) -> list[dict[str, Any]]:
     if not isinstance(payload, dict):
         return []

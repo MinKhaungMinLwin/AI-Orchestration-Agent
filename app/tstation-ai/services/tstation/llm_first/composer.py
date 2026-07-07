@@ -68,7 +68,6 @@ def _fixed_template_response(bundle: FactBundle) -> str | None:
     if metadata.get("source") not in {
         "llm_first_escalation_confirmation",
         "llm_first_product_comparison",
-        "llm_first_oe_part_number_unavailable",
         "llm_first_favorite_store_empty",
         "llm_first_benefit_event_deal_list",
         "llm_first_event_applicable_products",

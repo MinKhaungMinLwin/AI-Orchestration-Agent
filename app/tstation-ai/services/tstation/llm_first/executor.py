@@ -15,13 +15,11 @@ from services.tstation.llm_first.templates import (
     build_event_applicable_products_template,
     build_list_car_template,
     build_location_template,
-    build_oe_part_number_unavailable_template,
     build_preorder_template,
     build_product_comparison_template,
     build_product_template,
     build_voucher_template,
 )
-from services.tstation.policies.discovery_intent_policy import build_discovery_intent_frame
 from services.tstation.policies.ui_action_policy import normalize_vehicle_type_from_car_type
 from services.tstation.policies.vehicle_category_catalog import match_vehicle_model_category
 from services.tstation.llm_first.tools import invoke_tool
@@ -618,11 +616,6 @@ class AFExecutor:
     async def _description(self, user_text: str, state: ConversationState, known: dict[str, Any], bundle: FactBundle) -> ConversationState:
         if known.get("benefit_lookup") not in (None, "", "none"):
             return await self._benefit_lookup(user_text, state, known, bundle)
-
-        discovery_frame = build_discovery_intent_frame(user_text)
-        if discovery_frame.sub_intent == "oe_part_number_unavailable":
-            _append_template(bundle, build_oe_part_number_unavailable_template(user_text))
-            return state
 
         product_names = [str(name).strip() for name in known.get("product_names") or [] if str(name).strip()]
         if len(product_names) >= 2:
