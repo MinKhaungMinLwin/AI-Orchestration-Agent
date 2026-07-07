@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from services.tstation.llm_first import legacy
 from services.tstation.llm_first.models import AgentFlow
 
 
@@ -33,21 +34,15 @@ class ToolSpec:
 
 
 def _tx_tool(name: str) -> Any:
-    from services.tstation.agents.c_transaction_agent import tools
-
-    return getattr(tools, name)
+    return legacy.transaction_tool(name)
 
 
 def _discovery_tool(name: str) -> Any:
-    from services.tstation.agents.b_discovery_agent import tools
-
-    return getattr(tools, name)
+    return legacy.discovery_tool(name)
 
 
 def _support_tool(name: str) -> Any:
-    from services.tstation.agents.e_support_agent import tools
-
-    return getattr(tools, name)
+    return legacy.support_tool(name)
 
 
 TOOL_REGISTRY: dict[str, ToolSpec] = {

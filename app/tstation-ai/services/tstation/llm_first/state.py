@@ -4,7 +4,7 @@ import json
 import logging
 from typing import Any
 
-from services.tstation.chat_history_service import CHAT_HISTORY_TTL_SECONDS, get_redis_client
+from services.tstation.llm_first import legacy
 from services.tstation.llm_first.models import ConversationState
 
 logger = logging.getLogger(__name__)
@@ -18,7 +18,7 @@ def _state_key(session_id: str) -> str:
 
 class LLMFirstStateStore:
     def __init__(self, redis_client: Any | None = None):
-        self.redis = redis_client or get_redis_client()
+        self.redis = redis_client or legacy.redis_client()
 
     def load(self, session_id: str) -> ConversationState:
         raw = self.redis.get(_state_key(session_id))
@@ -33,7 +33,7 @@ class LLMFirstStateStore:
     def save(self, session_id: str, state: ConversationState) -> None:
         self.redis.setex(
             _state_key(session_id),
-            CHAT_HISTORY_TTL_SECONDS,
+            legacy.chat_history_ttl_seconds(),
             state.model_dump_json(exclude_none=True),
         )
 

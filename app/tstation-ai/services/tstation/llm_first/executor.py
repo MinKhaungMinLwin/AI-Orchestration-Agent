@@ -20,10 +20,8 @@ from services.tstation.llm_first.templates import (
     build_product_template,
     build_voucher_template,
 )
-from services.tstation.policies.ui_action_policy import normalize_vehicle_type_from_car_type
-from services.tstation.policies.vehicle_category_catalog import match_vehicle_model_category
+from services.tstation.llm_first import legacy
 from services.tstation.llm_first.tools import invoke_tool
-from services.tstation.template_mapper import try_build_template
 
 logger = logging.getLogger(__name__)
 
@@ -261,7 +259,7 @@ def _vehicle_recommendation_args(row: dict[str, Any], known: dict[str, Any]) -> 
     vehicle_type = str(known.get("vehicle_type") or "").strip()
     if not vehicle_type:
         vehicle_type = (
-            normalize_vehicle_type_from_car_type(_vehicle_first_nonempty(row, "car_knd_nm", "car_type"))
+            legacy.normalize_vehicle_type_from_car_type(_vehicle_first_nonempty(row, "car_knd_nm", "car_type"))
             or _infer_vehicle_type_from_text(
                 _vehicle_first_nonempty(row, "car_model_det", "carModelDet", "car_nm", "carName"),
             )
@@ -285,7 +283,7 @@ def _vehicle_first_nonempty(row: dict[str, Any], *keys: str) -> str:
 
 
 def _infer_vehicle_type_from_text(text: str) -> str | None:
-    match = match_vehicle_model_category(text)
+    match = legacy.match_vehicle_model_category(text)
     return match.category if match is not None else None
 
 
@@ -826,7 +824,7 @@ class AFExecutor:
                 allow_side_effect=True,
             )
             event = _mark_completion_event(
-                try_build_template(_tool_data_list(bundle), ""),
+                legacy.build_template_from_tool_data(_tool_data_list(bundle), ""),
                 source="llm_first_cart_complete",
                 called_tool="save_to_cart_tool",
             )
@@ -913,7 +911,7 @@ class AFExecutor:
                 allow_side_effect=True,
             )
             event = _mark_completion_event(
-                try_build_template(_tool_data_list(bundle), ""),
+                legacy.build_template_from_tool_data(_tool_data_list(bundle), ""),
                 source="llm_first_order_complete",
                 called_tool="quick_order_tool",
             )

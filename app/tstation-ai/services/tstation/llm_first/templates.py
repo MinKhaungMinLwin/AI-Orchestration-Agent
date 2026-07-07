@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from services.tstation.common.cta_urls import CTAUrls
+from services.tstation.llm_first.constants import MY_COUPON_LIST_LINK, PROMOTION_EVENT_LIST_URL
 
 _PRC_GRD_ALLOWED: frozenset[str] = frozenset({"프리미엄+", "프리미엄", "스탠다드", "이코노미"})
 _PRC_GRD_DISPLAY: dict[str, str] = {"프리미엄+": "프리미엄"}
@@ -23,10 +23,7 @@ _SVC_CODE_LABELS: dict[str, str] = {
     "125": "배터리",
     "126": "엔진오일",
 }
-_MY_COUPON_LINK = {
-    "pc": CTAUrls.MY_COUPON_LIST_PC,
-    "mobile": CTAUrls.MY_COUPON_LIST_MOBILE,
-}
+_MY_COUPON_LINK = MY_COUPON_LIST_LINK
 
 
 def _items_from_payload(payload: Any) -> list[dict[str, Any]]:
@@ -388,7 +385,7 @@ def build_benefit_event_deal_template(payload: Any) -> dict[str, Any]:
         "data": {
             "assistantResponse": assistant_response,
             "quickReplies": [
-                {"label": "진행 중인 이벤트 보기", "url": CTAUrls.PROMOTION_EVENT_LIST, "domain": "DISCOVERY"},
+                {"label": "진행 중인 이벤트 보기", "url": PROMOTION_EVENT_LIST_URL, "domain": "DISCOVERY"},
             ],
             "predictedDomains": ["DISCOVERY"],
             "metadata": {
@@ -434,7 +431,7 @@ def build_event_applicable_products_template(payload: Any) -> dict[str, Any]:
         "data": {
             "assistantResponse": assistant_response,
             "quickReplies": [
-                {"label": "진행 중인 이벤트 보기", "url": CTAUrls.PROMOTION_EVENT_LIST, "domain": "DISCOVERY"},
+                {"label": "진행 중인 이벤트 보기", "url": PROMOTION_EVENT_LIST_URL, "domain": "DISCOVERY"},
             ],
             "predictedDomains": ["DISCOVERY"],
             "metadata": {
@@ -495,7 +492,7 @@ def build_benefit_applicable_products_template(payload: Any) -> dict[str, Any]:
         "data": {
             "assistantResponse": assistant_response,
             "quickReplies": [
-                {"label": "진행 중인 이벤트 보기", "url": CTAUrls.PROMOTION_EVENT_LIST, "domain": "DISCOVERY"},
+                {"label": "진행 중인 이벤트 보기", "url": PROMOTION_EVENT_LIST_URL, "domain": "DISCOVERY"},
             ],
             "predictedDomains": ["DISCOVERY"],
             "metadata": {

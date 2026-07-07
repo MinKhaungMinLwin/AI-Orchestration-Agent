@@ -12,7 +12,7 @@ from langchain_litellm import ChatLiteLLM
 from config.env import settings
 from config.tracing import set_trace_name
 from schemas.tstation.chat import TStationChatRequest, TStationChatResponse
-from services.tstation.chat_history_service import get_chat_history_service
+from services.tstation.llm_first import legacy
 from services.tstation.llm_first.composer import Composer
 from services.tstation.llm_first.executor import AFExecutor
 from services.tstation.llm_first.models import AgentFlow, PlannerDecision, SelectedAF
@@ -199,7 +199,7 @@ def _resolve_text_store_selection(request: TStationChatRequest, state: Any, user
     if not user_key:
         return state
     try:
-        latest_location = get_chat_history_service().get_latest_template_data(request.session_id, "location")
+        latest_location = legacy.latest_template_data(request.session_id, "location")
     except Exception:
         logger.warning("[LLM_FIRST_RUNTIME] failed to load latest location template", exc_info=True)
         return state
