@@ -55,6 +55,21 @@ _PRICE_PATTERNS = (
 _GOODS_NO_PATTERN = re.compile(r"\bG\d{12}\b")
 _SHOP_ID_PATTERN = re.compile(r"\b(?:C\d{5}|F\d{6})\b")
 
+# Store-name literal: "티스테이션 강남점" or bare "강남점". Requires 2+ leading
+# characters before the "점" suffix so 1-syllable generic nouns ("단점",
+# "관점", "시점", "요점", "이점", "초점", "거점", "종점") never match — those
+# are common in ordinary prose and are not store names.
+_STORE_NAME_PATTERN = re.compile(r"(?:티스테이션\s*)?([가-힣a-zA-Z0-9]{2,12}점)")
+# 2-syllable-or-longer "-점" nouns that describe a store *concept*, not a
+# specific named location, so they must never be treated as a store-name claim.
+_GENERIC_STORE_SUFFIX_NOUNS = frozenset({
+    "장착점", "장단점", "판매점", "취급점", "대리점", "직영점", "가맹점", "출발점", "도착점",
+})
+
+# ISO date (2026-07-15) and Korean month/day (7월 15일, optional year).
+_ISO_DATE_PATTERN = re.compile(r"\b(20\d{2})-(\d{2})-(\d{2})\b")
+_KOREAN_DATE_PATTERN = re.compile(r"(?:(20\d{2})\s*년\s*)?(\d{1,2})\s*월\s*(\d{1,2})\s*일")
+
 # Tire-size literals: width / aspect-ratio + optional speed rating (Z) + R + inch.
 # Matches "235/55R19", "225/45ZR17", "LT235/85R16". Load/speed index that often
 # follows ("235/55R19 95H") is intentionally not part of the canonical token —
@@ -127,6 +142,9 @@ _SHOP_ID_FIELDS: frozenset[str] = frozenset({"shop_id", "shopId"})
 # legacy alias still seen in some tool outputs. available_sizes is a list field
 # used by unsized search_product responses.
 _TIRE_SIZE_FIELDS: frozenset[str] = frozenset({"tire_size_1", "tire_size", "tireSize", "available_sizes"})
+_STORE_NAME_FIELDS: frozenset[str] = frozenset({"shop_nm", "shopName", "shop_name"})
+# Schedule/appointment date fields, canonically YYYY-MM-DD.
+_DATE_FIELDS: frozenset[str] = frozenset({"date", "cal_day", "calDay", "requestedCalDay", "requested_cal_day"})
 _PRODUCT_ROW_TOOLS: frozenset[str] = frozenset({
     "search_product_summary_tool",
     "search_product_tool",
@@ -196,6 +214,20 @@ def _as_pattern_string(pattern: re.Pattern[str]):
     return coerce
 
 
+def _as_store_name(value: Any) -> str | None:
+    name = str(value or "").strip()
+    return name or None
+
+
+def _as_iso_date(value: Any) -> tuple[str, str] | None:
+    """Return ``(iso_string, month_day)`` for a ``YYYY-MM-DD`` source value."""
+    match = _ISO_DATE_PATTERN.fullmatch(str(value or "").strip())
+    if not match:
+        return None
+    year, month, day = match.groups()
+    return f"{year}-{month}-{day}", f"{int(month)}-{int(day)}"
+
+
 def collect_source_values(structured_sources: Iterable[tuple[str, Any]]) -> dict[str, set]:
     """Collect all valid prices, goods_no, and shop_ids from tool outputs.
 
@@ -204,21 +236,36 @@ def collect_source_values(structured_sources: Iterable[tuple[str, Any]]) -> dict
 
     Returns:
         Dict with keys ``"prices"`` (set[int]), ``"goods_no"`` (set[str]),
-        ``"shop_ids"`` (set[str]), ``"tire_sizes"`` (set[str], uppercased).
+        ``"shop_ids"`` (set[str]), ``"tire_sizes"`` (set[str], uppercased),
+        ``"store_names"`` (set[str]), ``"dates"`` (set[str], ``YYYY-MM-DD``),
+        ``"month_days"`` (set[str], ``M-D`` with no year, for casual Korean
+        phrasing that omits the year).
     """
     prices: set[int] = set()
     goods_no: set[str] = set()
     shop_ids: set[str] = set()
     tire_sizes: set[str] = set()
+    store_names: set[str] = set()
+    dates: set[str] = set()
+    month_days: set[str] = set()
     for _tool, output in structured_sources:
         _walk(output, prices, _PRICE_FIELDS, _as_positive_int)
         _walk(output, goods_no, _GOODS_NO_FIELDS, _as_pattern_string(_GOODS_NO_PATTERN))
         _walk(output, shop_ids, _SHOP_ID_FIELDS, _as_pattern_string(_SHOP_ID_PATTERN))
         _walk(output, tire_sizes, _TIRE_SIZE_FIELDS, _as_normalized_tire_size)
+        _walk(output, store_names, _STORE_NAME_FIELDS, _as_store_name)
+        raw_dates: set[tuple[str, str]] = set()
+        _walk(output, raw_dates, _DATE_FIELDS, _as_iso_date)
+        for iso_date, month_day in raw_dates:
+            dates.add(iso_date)
+            month_days.add(month_day)
     return {
         "prices": prices,
         "goods_no": goods_no,
         "shop_ids": shop_ids,
+        "store_names": store_names,
+        "dates": dates,
+        "month_days": month_days,
         "tire_sizes": tire_sizes,
     }
 
@@ -520,6 +567,67 @@ def _is_price_explainable(value: int, source_prices: set[int]) -> bool:
 
 
 # --------------------------------------------------------------------------- #
+#  Store name / date explanation
+# --------------------------------------------------------------------------- #
+
+def _extract_store_name_candidates(draft: str) -> list[str]:
+    """Extract candidate store-name mentions, skipping generic "-점" nouns."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for match in _STORE_NAME_PATTERN.finditer(draft):
+        literal = match.group(1)
+        if literal in _GENERIC_STORE_SUFFIX_NOUNS or literal in seen:
+            continue
+        seen.add(literal)
+        out.append(literal)
+    return out
+
+
+def _is_store_name_explainable(candidate: str, valid_names: set[str]) -> bool:
+    """A candidate is explainable if it or a source name contains the other.
+
+    Tolerant containment (not exact equality) absorbs the "티스테이션 " brand
+    prefix the composer adds and any spacing differences from raw source data.
+    """
+    return any(candidate in name or name in candidate for name in valid_names)
+
+
+def _extract_date_literals(draft: str) -> list[tuple[str, str, str]]:
+    """Return ``(literal, iso_or_empty, month_day)`` for each date mention."""
+    out: list[tuple[str, str, str]] = []
+    seen: set[str] = set()
+    for match in _ISO_DATE_PATTERN.finditer(draft):
+        literal = match.group(0)
+        if literal in seen:
+            continue
+        seen.add(literal)
+        year, month, day = match.groups()
+        out.append((literal, f"{year}-{month}-{day}", f"{int(month)}-{int(day)}"))
+    for match in _KOREAN_DATE_PATTERN.finditer(draft):
+        literal = match.group(0)
+        if literal in seen:
+            continue
+        seen.add(literal)
+        year, month, day = match.groups()
+        iso = f"{year}-{int(month):02d}-{int(day):02d}" if year else ""
+        out.append((literal, iso, f"{int(month)}-{int(day)}"))
+    return out
+
+
+def _date_mismatches(draft: str, valid_dates: set[str], valid_month_days: set[str]) -> list[Mismatch]:
+    if not valid_dates:
+        return []
+    mismatches: list[Mismatch] = []
+    for literal, iso, month_day in _extract_date_literals(draft):
+        if iso and iso in valid_dates:
+            continue
+        if month_day in valid_month_days:
+            continue
+        mismatches.append(Mismatch(field="date", value=literal))
+    return mismatches
+
+
+# --------------------------------------------------------------------------- #
 #  Entry point
 # --------------------------------------------------------------------------- #
 
@@ -553,6 +661,9 @@ def verify_draft(
     valid_goods: set[str] = values["goods_no"]
     valid_shops: set[str] = values["shop_ids"]
     valid_sizes: set[str] = values["tire_sizes"]
+    valid_store_names: set[str] = values["store_names"]
+    valid_dates: set[str] = values["dates"]
+    valid_month_days: set[str] = values["month_days"]
 
     mismatches: list[Mismatch] = []
 
@@ -586,6 +697,13 @@ def verify_draft(
             seen_sizes.add(normalized)
             if normalized not in valid_sizes:
                 mismatches.append(Mismatch(field="tire_size", value=literal))
+
+    if valid_store_names:
+        for candidate in _extract_store_name_candidates(draft):
+            if not _is_store_name_explainable(candidate, valid_store_names):
+                mismatches.append(Mismatch(field="store_name", value=candidate))
+
+    mismatches.extend(_date_mismatches(draft, valid_dates, valid_month_days))
 
     if _has_tool_backed_available_inventory(sources) and _claims_inventory_unavailable(draft):
         mismatches.append(Mismatch(field="inventory_availability", value="tool_available_but_draft_unavailable"))

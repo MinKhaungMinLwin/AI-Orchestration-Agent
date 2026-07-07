@@ -374,6 +374,80 @@ def test_collect_source_skips_non_pattern_strings() -> None:
 
 
 # --------------------------------------------------------------------------- #
+#  Store name
+# --------------------------------------------------------------------------- #
+
+def test_known_store_name_passes(store_source) -> None:
+    assert verify_draft("티스테이션 강남점에서 확인해 보세요.", store_source) == []
+
+
+def test_bare_store_name_without_brand_prefix_passes(store_source) -> None:
+    assert verify_draft("한남점 방문을 추천드려요.", store_source) == []
+
+
+def test_hallucinated_store_name_caught(store_source) -> None:
+    mismatches = verify_draft("티스테이션 역삼점에서 확인해 보세요.", store_source)
+    assert Mismatch(field="store_name", value="역삼점") in mismatches
+
+
+def test_generic_jeom_suffix_nouns_do_not_false_positive(store_source) -> None:
+    """1-syllable and denylisted "-점" nouns are common prose, not store names."""
+    draft = "각각 장단점이 있고, 결정은 고객님의 관점과 시점에 따라 달라질 수 있어요."
+    assert verify_draft(draft, store_source) == []
+
+
+def test_store_name_check_skipped_when_source_empty() -> None:
+    source = [("get_faq_tool", {"data": {"faqs": []}})]
+    assert verify_draft("티스테이션 아무말점에서 확인해 보세요.", source) == []
+
+
+# --------------------------------------------------------------------------- #
+#  Date
+# --------------------------------------------------------------------------- #
+
+@pytest.fixture
+def schedule_source() -> list[tuple[str, dict]]:
+    """Mimics get_store_schedule_tool output."""
+    return [
+        (
+            "get_store_schedule_tool",
+            {
+                "status": "success",
+                "data": {
+                    "dates": [
+                        {"cal_day": "2026-07-15", "availableTimes": [10, 14]},
+                        {"cal_day": "2026-07-16", "availableTimes": [11]},
+                    ]
+                },
+            },
+        )
+    ]
+
+
+def test_known_iso_date_passes(schedule_source) -> None:
+    assert verify_draft("2026-07-15에 방문 가능해요.", schedule_source) == []
+
+
+def test_korean_month_day_without_year_passes(schedule_source) -> None:
+    """Casual Korean phrasing that omits the year must not be flagged."""
+    assert verify_draft("7월 15일에 방문 가능해요.", schedule_source) == []
+
+
+def test_korean_month_day_with_matching_year_passes(schedule_source) -> None:
+    assert verify_draft("2026년 7월 15일에 방문 가능해요.", schedule_source) == []
+
+
+def test_hallucinated_date_caught(schedule_source) -> None:
+    mismatches = verify_draft("7월 20일에 방문 가능해요.", schedule_source)
+    assert Mismatch(field="date", value="7월 20일") in mismatches
+
+
+def test_date_check_skipped_when_source_empty() -> None:
+    source = [("get_faq_tool", {"data": {"faqs": []}})]
+    assert verify_draft("7월 20일에 방문 가능해요.", source) == []
+
+
+# --------------------------------------------------------------------------- #
 #  parse_tool_output
 # --------------------------------------------------------------------------- #
 
