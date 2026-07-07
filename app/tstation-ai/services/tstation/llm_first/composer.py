@@ -57,6 +57,21 @@ def fallback_compose(user_text: str, bundle: FactBundle) -> str:
     return "요청하신 내용을 확인했습니다."
 
 
+def _fixed_template_response(bundle: FactBundle) -> str | None:
+    if not bundle.templates:
+        return None
+    data = bundle.templates[-1].get("data")
+    if not isinstance(data, dict):
+        return None
+    metadata = data.get("metadata")
+    if not isinstance(metadata, dict):
+        return None
+    if metadata.get("source") != "llm_first_escalation_confirmation":
+        return None
+    text = str(data.get("assistantResponse") or "").strip()
+    return text or None
+
+
 class Composer:
     def __init__(self, llm: Any | None = None):
         self.llm = llm
@@ -72,6 +87,8 @@ class Composer:
         parent_span_id: str | None = None,
     ) -> str:
         fallback = fallback_compose(user_text, bundle)
+        if fixed_response := _fixed_template_response(bundle):
+            return fixed_response
         if self.llm is None or bundle.missing_inputs:
             return fallback
 

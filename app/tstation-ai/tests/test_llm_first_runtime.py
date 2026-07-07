@@ -89,6 +89,11 @@ class StaticComposer:
     async def compose(self, *, user_text, bundle, **kwargs):
         if bundle.missing_inputs:
             return "필요한 정보를 알려주세요."
+        if bundle.templates:
+            data = bundle.templates[-1].get("data")
+            if isinstance(data, dict) and isinstance(data.get("metadata"), dict):
+                if data["metadata"].get("source") == "llm_first_escalation_confirmation":
+                    return data["assistantResponse"]
         return "확인한 결과를 안내드립니다."
 
 
@@ -1391,13 +1396,16 @@ def test_fallback_escalation_registers_side_effect_tool_as_blocked() -> None:
         session_id="fallback-escalation",
     )
 
-    _, events, metadata = asyncio.run(runtime.run(request))
+    text, events, metadata = asyncio.run(runtime.run(request))
 
-    assert events == []
+    assert events[0]["template"] == "quickReply"
+    assert events[0]["data"]["metadata"]["source"] == "llm_first_escalation_confirmation"
+    assert "1:1 문의 작성 페이지로 이동할까요?" in events[0]["data"]["assistantResponse"]
+    assert text == events[0]["data"]["assistantResponse"]
     assert metadata["planner"]["selected_afs"][0]["af"] == "FallbackEscalationAF"
     assert metadata["tool_calls"][0]["tool_name"] == "transfer_to_qna_tool"
     assert metadata["tool_calls"][0]["blocked"] is True
-    assert metadata["missing_inputs"] == ["confirmation"]
+    assert metadata["missing_inputs"] == []
 
 
 def test_qc_blocks_completion_claim_without_side_effect() -> None:

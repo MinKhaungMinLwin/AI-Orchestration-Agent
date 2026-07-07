@@ -17,6 +17,32 @@ def _append_template(bundle: FactBundle, event: dict[str, Any] | None) -> None:
         bundle.templates.append(event)
 
 
+def _escalation_confirmation_event(target: str) -> dict[str, Any]:
+    if target == "human":
+        assistant_response = "상담사 연결은 사용자 확인 후 진행할 수 있어요. 상담사 연결을 진행할까요?"
+        label = "상담사 연결하기"
+    else:
+        assistant_response = "1:1 문의 연결은 사용자 확인 후 진행할 수 있어요. 1:1 문의 작성 페이지로 이동할까요?"
+        label = "1:1 문의하기"
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": assistant_response,
+            "quickReplies": [
+                {"label": label, "domain": "SUPPORT"},
+                {"label": "아니요", "domain": "LEADING"},
+            ],
+            "predictedDomains": ["SUPPORT", "LEADING"],
+            "metadata": {
+                "source": "llm_first_escalation_confirmation",
+                "escalationTarget": target,
+                "requiresConfirmation": True,
+            },
+        },
+    }
+
+
 def _success_payload(result: Any) -> Any:
     if isinstance(result, dict) and result.get("status") == "error":
         return None
@@ -306,5 +332,5 @@ class AFExecutor:
                 "ai_summary": known.get("ai_summary") or user_text[:400],
                 "is_mobile": bool(known.get("is_mobile")),
             })
-        bundle.missing_inputs.append("confirmation")
+        _append_template(bundle, _escalation_confirmation_event(target))
         return state
