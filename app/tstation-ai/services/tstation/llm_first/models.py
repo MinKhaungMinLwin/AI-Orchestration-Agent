@@ -58,6 +58,7 @@ class StructuredKnownInputs(BaseModel):
     store_name: str | None
     region: str | None
     store_attribute: str | None
+    store_lookup: Literal["none", "favorite_stores"] | None
     date: str | None
     time: str | None
     mbr_no: str | None

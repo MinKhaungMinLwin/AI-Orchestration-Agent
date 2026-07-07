@@ -51,6 +51,25 @@ def _escalation_confirmation_event(target: str) -> dict[str, Any]:
     }
 
 
+def _favorite_store_empty_event() -> dict[str, Any]:
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": "등록된 단골매장이 없어요. 매장 검색으로 안내해 드릴까요?",
+            "quickReplies": [
+                {"label": "매장 검색", "domain": "TRANSACTION"},
+                {"label": "아니요", "domain": "LEADING"},
+            ],
+            "predictedDomains": ["TRANSACTION", "LEADING"],
+            "metadata": {
+                "source": "llm_first_favorite_store_empty",
+                "response_shape_key": "favorite_store_lookup",
+            },
+        },
+    }
+
+
 def _success_payload(result: Any) -> Any:
     if isinstance(result, dict) and result.get("status") == "error":
         return None
@@ -240,6 +259,16 @@ class AFExecutor:
         return state
 
     async def _store(self, user_text: str, state: ConversationState, known: dict[str, Any], bundle: FactBundle) -> ConversationState:
+        if known.get("store_lookup") == "favorite_stores":
+            result = await self._call(bundle, AgentFlow.STORE, "get_favorite_stores_tool", {})
+            event = build_location_template(
+                result,
+                "단골매장이에요. 원하시는 매장을 선택해 주세요.",
+                is_booking_flow=bool(state.commerce_state.product.goods_no and state.commerce_state.quantity),
+            )
+            _append_template(bundle, event or _favorite_store_empty_event())
+            return state
+
         query = known.get("region") or known.get("store_name") or state.commerce_state.store.region
         if not query:
             bundle.missing_inputs.append("region_or_store")

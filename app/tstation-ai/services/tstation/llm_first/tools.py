@@ -48,6 +48,7 @@ def _support_tool(name: str) -> Any:
 TOOL_REGISTRY: dict[str, ToolSpec] = {
     "search_place_tool": ToolSpec("search_place_tool", frozenset({AgentFlow.STORE}), lambda: _tx_tool("search_place_tool"), required_args=frozenset({"query"})),
     "get_nearby_stores_tool": ToolSpec("get_nearby_stores_tool", frozenset({AgentFlow.STORE}), lambda: _tx_tool("get_nearby_stores_tool")),
+    "get_favorite_stores_tool": ToolSpec("get_favorite_stores_tool", frozenset({AgentFlow.STORE}), lambda: _tx_tool("get_favorite_stores_tool")),
     "search_stores_tool": ToolSpec("search_stores_tool", frozenset({AgentFlow.STORE}), lambda: _tx_tool("search_stores_tool")),
     "search_stores_complex_tool": ToolSpec("search_stores_complex_tool", frozenset({AgentFlow.STORE}), lambda: _tx_tool("search_stores_complex_tool")),
     "get_store_detail_tool": ToolSpec("get_store_detail_tool", frozenset({AgentFlow.STORE}), lambda: _tx_tool("get_store_detail_tool"), required_args=frozenset({"shop_id"})),

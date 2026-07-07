@@ -96,6 +96,7 @@ class StaticComposer:
                 if data["metadata"].get("source") in {
                     "llm_first_escalation_confirmation",
                     "llm_first_product_comparison",
+                    "llm_first_favorite_store_empty",
                 }:
                     return data["assistantResponse"]
         return "확인한 결과를 안내드립니다."
@@ -248,6 +249,24 @@ class FakeExecutor(AFExecutor):
                             "is_all_my_t": True,
                             "is_installable": True,
                             "svc_codes": ["116"],
+                        }
+                    ]
+                },
+            }
+        elif tool_name == "get_favorite_stores_tool":
+            result = {
+                "status": "success",
+                "data": {
+                    "stores": [
+                        {
+                            "shop_id": "S003",
+                            "shop_nm": "티스테이션 단골점",
+                            "road_addr_base": "서울특별시 강남구",
+                            "road_addr_dtl": "1층",
+                            "tel_no": "02-000-0000",
+                            "is_all_my_t": True,
+                            "is_installable": True,
+                            "favored_at": "2026-07-01 10:00:00",
                         }
                     ]
                 },
@@ -408,6 +427,16 @@ class FakeExecutor(AFExecutor):
         return result
 
 
+class EmptyFavoriteStoreExecutor(FakeExecutor):
+    async def _call(self, bundle, af, tool_name, args):
+        if tool_name != "get_favorite_stores_tool":
+            return await super()._call(bundle, af, tool_name, args)
+        result = {"status": "success", "data": {"stores": []}}
+        bundle.tool_calls.append(ToolCallRecord(af=af, tool_name=tool_name, args=args, result=result))
+        bundle.facts[tool_name] = result
+        return result
+
+
 def test_structured_planner_schema_requires_all_strict_fields() -> None:
     schema = StructuredPlannerDecision.model_json_schema()
     assert set(schema["required"]) == {
@@ -440,6 +469,7 @@ def test_structured_planner_schema_requires_all_strict_fields() -> None:
         "store_name",
         "region",
         "store_attribute",
+        "store_lookup",
         "date",
         "time",
         "mbr_no",
@@ -1045,6 +1075,71 @@ def test_store_attribute_searches_stores_and_marks_attribute_unconfirmed() -> No
     assert "포함되어 있지 않아요" in events[0]["data"]["assistantResponse"]
     assert text == "확인한 결과를 안내드립니다."
     assert metadata["tool_calls"][0]["tool_name"] == "search_stores_tool"
+
+
+def test_favorite_store_lookup_uses_favorite_store_tool_and_location_template() -> None:
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.STORE,
+                    reason="favorite store lookup",
+                    known_inputs={"store_lookup": "favorite_stores"},
+                )
+            ]
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=MemoryStateStore(),
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "내 단골매장 보여줘"}],
+        stream=False,
+        user_id="u1",
+        session_id="favorite-store",
+    )
+
+    _, events, metadata = asyncio.run(runtime.run(request))
+
+    assert events[0]["template"] == "location"
+    LocationDataEvent.model_validate(events[0])
+    assert events[0]["data"]["assistantResponse"] == "단골매장이에요. 원하시는 매장을 선택해 주세요."
+    assert events[0]["data"]["stores"][0]["nameAddress"] == "티스테이션 단골점"
+    assert events[0]["data"]["isBookingFlow"] is False
+    assert metadata["tool_calls"][0]["tool_name"] == "get_favorite_stores_tool"
+    assert metadata["tool_calls"][0]["args"] == {}
+
+
+def test_empty_favorite_store_lookup_emits_quickreply_without_generic_store_search() -> None:
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.STORE,
+                    reason="favorite store lookup",
+                    known_inputs={"store_lookup": "favorite_stores"},
+                )
+            ]
+        )),
+        executor=EmptyFavoriteStoreExecutor(),
+        composer=StaticComposer(),
+        state_store=MemoryStateStore(),
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "내 단골매장 어디야?"}],
+        stream=False,
+        user_id="u1",
+        session_id="favorite-store-empty",
+    )
+
+    text, events, metadata = asyncio.run(runtime.run(request))
+
+    assert events[0]["template"] == "quickReply"
+    assert events[0]["data"]["assistantResponse"] == "등록된 단골매장이 없어요. 매장 검색으로 안내해 드릴까요?"
+    assert text == events[0]["data"]["assistantResponse"]
+    assert [reply["label"] for reply in events[0]["data"]["quickReplies"]] == ["매장 검색", "아니요"]
+    assert [call["tool_name"] for call in metadata["tool_calls"]] == ["get_favorite_stores_tool"]
+    assert metadata["missing_inputs"] == []
 
 
 def test_store_flow_with_active_product_and_quantity_is_booking_flow() -> None:
