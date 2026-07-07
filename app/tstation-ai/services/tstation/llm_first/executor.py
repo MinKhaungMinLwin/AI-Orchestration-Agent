@@ -78,6 +78,30 @@ def _favorite_store_empty_event() -> dict[str, Any]:
     }
 
 
+def _unsupported_region_event(query: Any) -> dict[str, Any]:
+    region = str(query or "").strip() or "입력하신 지역"
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": (
+                f"{region}은 티스테이션 매장 검색 서비스 지역으로 확인되지 않아요. "
+                "국내 지역명이나 현재 위치 기준으로 다시 검색해 주세요."
+            ),
+            "quickReplies": [
+                {"label": "현재 위치로 검색", "domain": "TRANSACTION"},
+                {"label": "지역 다시 입력", "domain": "TRANSACTION"},
+            ],
+            "predictedDomains": ["TRANSACTION"],
+            "metadata": {
+                "source": "llm_first_unsupported_region",
+                "response_shape_key": "unsupported_region_search",
+                "region": region,
+            },
+        },
+    }
+
+
 def _quantity_quickreply_event() -> dict[str, Any]:
     return {
         "type": "data",
@@ -105,6 +129,18 @@ def _success_payload(result: Any) -> Any:
     if isinstance(result, dict) and result.get("status") == "error":
         return None
     return result
+
+
+def _is_domestic_region_gate_blocked(result: Any) -> bool:
+    if not isinstance(result, dict):
+        return False
+    data = result.get("data")
+    if not isinstance(data, dict):
+        return False
+    search = data.get("search")
+    if not isinstance(search, dict):
+        return False
+    return search.get("source") == "place_fallback_blocked" and search.get("reason") == "not_domestic_search_area"
 
 
 def _first_item(result: Any) -> dict[str, Any] | None:
@@ -713,6 +749,9 @@ class AFExecutor:
             search_args["xpos"] = float(user_xpos)
             search_args["ypos"] = float(user_ypos)
         result = await self._call(bundle, AgentFlow.STORE, "search_stores_tool", search_args)
+        if query and _is_domestic_region_gate_blocked(result):
+            _append_template(bundle, _unsupported_region_event(query))
+            return state
         store_attribute = str(known.get("store_attribute") or "").strip()
         assistant_response = "매장 후보를 확인해 주세요."
         if store_attribute:
@@ -754,6 +793,9 @@ class AFExecutor:
             args["user_xpos"] = float(user_xpos)
             args["user_ypos"] = float(user_ypos)
         result = await self._call(bundle, AgentFlow.INVENTORY, "transaction_store_preview_tool", args)
+        if region and _is_domestic_region_gate_blocked(result):
+            _append_template(bundle, _unsupported_region_event(region))
+            return apply_state_rules(next_state, quantity=int(qty))
         _append_template(bundle, build_location_template(result, "장착 가능한 후보 매장을 확인해 주세요.", is_booking_flow=True))
         return apply_state_rules(next_state, quantity=int(qty), store_patch={"region": region})
 
@@ -831,6 +873,9 @@ class AFExecutor:
                 preview_args["user_xpos"] = float(user_xpos)
                 preview_args["user_ypos"] = float(user_ypos)
             result = await self._call(bundle, AgentFlow.INVENTORY, "transaction_store_preview_tool", preview_args)
+            if effective_region and _is_domestic_region_gate_blocked(result):
+                _append_template(bundle, _unsupported_region_event(effective_region))
+                return next_state
             _append_template(bundle, build_location_template(result, "장착 가능한 후보 매장을 확인해 주세요.", is_booking_flow=True))
             bundle.missing_inputs.append("store")
             return next_state

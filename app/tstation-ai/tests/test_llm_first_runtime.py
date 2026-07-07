@@ -102,6 +102,7 @@ class StaticComposer:
                     "llm_first_benefit_applicable_products",
                     "llm_first_order_complete",
                     "llm_first_cart_complete",
+                    "llm_first_unsupported_region",
                 }:
                     return data["assistantResponse"]
         return "확인한 결과를 안내드립니다."
@@ -329,27 +330,39 @@ class FakeExecutor(AFExecutor):
                 },
             }
         elif tool_name == "search_stores_tool":
-            result = {
-                "status": "success",
-                "data": {
-                    "stores": [
-                        {
-                            "shop_id": "S001",
-                            "shop_nm": "티스테이션 판교점",
-                            "road_addr_base": "경기 성남시 분당구 판교로",
-                            "road_addr_dtl": "123",
-                            "tel_no": "031-000-0000",
-                            "shop_biz_strt_time": "09:00",
-                            "shop_biz_end_time": "18:00",
-                            "rating_idx": 4.8,
-                            "review_count": 27,
-                            "is_all_my_t": True,
-                            "is_installable": True,
-                            "svc_codes": ["116"],
-                        }
-                    ]
-                },
-            }
+            if args.get("place_query") in {"우즈벡", "사우디", "평양"}:
+                result = {
+                    "status": "success",
+                    "data": {
+                        "stores": [],
+                        "search": {
+                            "source": "place_fallback_blocked",
+                            "reason": "not_domestic_search_area",
+                        },
+                    },
+                }
+            else:
+                result = {
+                    "status": "success",
+                    "data": {
+                        "stores": [
+                            {
+                                "shop_id": "S001",
+                                "shop_nm": "티스테이션 판교점",
+                                "road_addr_base": "경기 성남시 분당구 판교로",
+                                "road_addr_dtl": "123",
+                                "tel_no": "031-000-0000",
+                                "shop_biz_strt_time": "09:00",
+                                "shop_biz_end_time": "18:00",
+                                "rating_idx": 4.8,
+                                "review_count": 27,
+                                "is_all_my_t": True,
+                                "is_installable": True,
+                                "svc_codes": ["116"],
+                            }
+                        ]
+                    },
+                }
         elif tool_name == "get_favorite_stores_tool":
             result = {
                 "status": "success",
@@ -369,33 +382,45 @@ class FakeExecutor(AFExecutor):
                 },
             }
         elif tool_name == "transaction_store_preview_tool":
-            result = {
-                "status": "success",
-                "data": {
-                    "schedule": {
-                        "tier": "in_store_only",
+            if args.get("region_code") in {"우즈벡", "사우디", "평양"}:
+                result = {
+                    "status": "success",
+                    "data": {
+                        "stores": [],
+                        "search": {
+                            "source": "place_fallback_blocked",
+                            "reason": "not_domestic_search_area",
+                        },
+                    },
+                }
+            else:
+                result = {
+                    "status": "success",
+                    "data": {
+                        "schedule": {
+                            "tier": "in_store_only",
+                            "stores": [
+                                {
+                                    "shop_id": "S002",
+                                    "shop_nm": "티스테이션 분당점",
+                                    "mode": "in_store_only",
+                                    "slots": [
+                                        {"cal_day": "20260707", "tm": "1000"},
+                                        {"cal_day": "20260707", "tm": "1100"},
+                                    ],
+                                }
+                            ],
+                        },
                         "stores": [
                             {
                                 "shop_id": "S002",
                                 "shop_nm": "티스테이션 분당점",
-                                "mode": "in_store_only",
-                                "slots": [
-                                    {"cal_day": "20260707", "tm": "1000"},
-                                    {"cal_day": "20260707", "tm": "1100"},
-                                ],
+                                "address": "경기 성남시 분당구",
+                                "todayInstall": True,
                             }
-                        ],
+                        ]
                     },
-                    "stores": [
-                        {
-                            "shop_id": "S002",
-                            "shop_nm": "티스테이션 분당점",
-                            "address": "경기 성남시 분당구",
-                            "todayInstall": True,
-                        }
-                    ]
-                },
-            }
+                }
         elif tool_name == "get_store_schedule_tool":
             if args.get("mode") == "in_store_only":
                 result = {
@@ -1626,6 +1651,32 @@ def test_store_flow_without_location_or_region_requests_location_input() -> None
     assert metadata["tool_calls"] == []
 
 
+def test_store_flow_blocks_unsupported_foreign_region_gate_result() -> None:
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(af=AgentFlow.STORE, reason="store lookup outside service area", known_inputs={"region": "우즈벡"})
+            ]
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=MemoryStateStore(),
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "우즈벡 매장 찾아줘"}],
+        stream=False,
+        user_id="u1",
+        session_id="store-unsupported-region",
+    )
+
+    text, events, metadata = asyncio.run(runtime.run(request))
+
+    assert events[0]["template"] == "quickReply"
+    assert events[0]["data"]["metadata"]["source"] == "llm_first_unsupported_region"
+    assert "국내 지역명" in text
+    assert metadata["tool_calls"][0]["tool_name"] == "search_stores_tool"
+
+
 def test_store_attribute_searches_stores_and_marks_attribute_unconfirmed() -> None:
     runtime = LLMFirstRuntime(
         planner=StaticPlanner(PlannerDecision(
@@ -2020,6 +2071,42 @@ def test_quick_shopping_with_region_but_no_store_emits_booking_location() -> Non
     LocationDataEvent.model_validate(events[0])
     assert events[0]["data"]["isBookingFlow"] is True
     assert metadata["missing_inputs"] == ["store"]
+    assert metadata["tool_calls"][0]["tool_name"] == "transaction_store_preview_tool"
+
+
+def test_quick_shopping_blocks_unsupported_region_gate_result() -> None:
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.QUICK_SHOPPING,
+                    reason="continue order with unsupported region",
+                    known_inputs={
+                        "goods_no": "G000000000003",
+                        "product_name": "아이온 에보",
+                        "ord_qty": 4,
+                        "region": "사우디",
+                    },
+                )
+            ]
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=MemoryStateStore(),
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "사우디에서 장착할래"}],
+        stream=False,
+        user_id="u1",
+        session_id="purchase-unsupported-region",
+    )
+
+    text, events, metadata = asyncio.run(runtime.run(request))
+
+    assert events[0]["template"] == "quickReply"
+    assert events[0]["data"]["metadata"]["source"] == "llm_first_unsupported_region"
+    assert "국내 지역명" in text
+    assert metadata["missing_inputs"] == []
     assert metadata["tool_calls"][0]["tool_name"] == "transaction_store_preview_tool"
 
 
