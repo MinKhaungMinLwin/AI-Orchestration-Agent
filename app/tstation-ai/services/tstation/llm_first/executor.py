@@ -1296,6 +1296,9 @@ class AFExecutor:
                 },
                 allow_side_effect=True,
             )
+            # escalate_tool has no dedicated FE card in the legacy contract —
+            # a plain confirmation message is the correct, complete answer.
+            _append_template(bundle, _escalation_completion_event(target, result))
         else:
             result = await self._call(
                 bundle,
@@ -1309,5 +1312,15 @@ class AFExecutor:
                 },
                 allow_side_effect=True,
             )
-        _append_template(bundle, _escalation_completion_event(target, result))
+            # transfer_to_qna_tool has a dedicated qnaComplete FE card (inquiry
+            # link + category + summary) in the legacy template contract —
+            # reuse it instead of a bare text confirmation, same as order/cart.
+            event = None
+            if isinstance(result, dict) and result.get("status") != "error":
+                event = _mark_completion_event(
+                    legacy.build_template_from_tool_data(_tool_data_list(bundle), ""),
+                    source="llm_first_qna_complete",
+                    called_tool="transfer_to_qna_tool",
+                )
+            _append_template(bundle, event or _escalation_completion_event(target, result))
         return _clear_pending_escalation(state)

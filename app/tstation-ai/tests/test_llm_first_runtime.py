@@ -107,6 +107,7 @@ class StaticComposer:
                     "llm_first_unsupported_region",
                     "llm_first_escalation_complete",
                     "llm_first_escalation_declined",
+                    "llm_first_qna_complete",
                 }:
                     return data["assistantResponse"]
         return "확인한 결과를 안내드립니다."
@@ -666,7 +667,19 @@ class FakeExecutor(AFExecutor):
                     reason=f"side-effect tool blocked in LLM-first MVP: {tool_name}",
                 ))
                 return result
-            result = {"status": "success", "data": {"result": True}}
+            if tool_name == "transfer_to_qna_tool":
+                # Mirrors the real tool's flat (non-nested) return shape, which
+                # the legacy qnaComplete mapper reads directly.
+                result = {
+                    "status": "success",
+                    "response": "✅ 1:1 문의 작성 페이지로 이동합니다",
+                    "redictLink": {"pc": "https://tstation.example/qna?t=abc", "mobile": "https://m.tstation.example/qna?t=abc"},
+                    "cnsl_clss_seq": args.get("cnsl_clss_seq"),
+                    "inq_tit_nm": args.get("inq_tit_nm"),
+                    "ai_summary": args.get("ai_summary"),
+                }
+            else:
+                result = {"status": "success", "data": {"result": True}}
         else:
             result = {"status": "success", "data": []}
         bundle.tool_calls.append(ToolCallRecord(af=af, tool_name=tool_name, args=args, result=result))
@@ -3493,7 +3506,11 @@ def test_confirming_qna_escalation_label_executes_transfer_to_qna_tool() -> None
     qna_calls = [call for call in metadata["tool_calls"] if call["tool_name"] == "transfer_to_qna_tool"]
     assert len(qna_calls) == 1
     assert qna_calls[0]["blocked"] is False
-    assert events[0]["data"]["metadata"]["source"] == "llm_first_escalation_complete"
+    # transfer_to_qna_tool has a dedicated qnaComplete FE card (inquiry link),
+    # not a bare text confirmation — reusing the legacy template contract.
+    assert events[0]["template"] == "qnaComplete"
+    assert events[0]["data"]["metadata"]["source"] == "llm_first_qna_complete"
+    assert events[0]["data"]["redictLink"]["pc"]
     assert "접수" in text
     assert store.state.last_facts.get("pending_escalation_target") is None
 

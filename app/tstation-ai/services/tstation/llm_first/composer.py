@@ -77,6 +77,7 @@ def _fixed_template_response(bundle: FactBundle) -> str | None:
         "llm_first_unsupported_region",
         "llm_first_escalation_complete",
         "llm_first_escalation_declined",
+        "llm_first_qna_complete",
     }:
         return None
     text = str(data.get("assistantResponse") or "").strip()
