@@ -18,6 +18,7 @@ from services.tstation.llm_first.executor import AFExecutor
 from services.tstation.llm_first.models import AgentFlow, PlannerDecision, SelectedAF
 from services.tstation.llm_first.planner import LeadingAgentPlanner
 from services.tstation.llm_first.qc import verify_response
+from services.tstation.llm_first.schedule_validation import build_past_schedule_selection_event
 from services.tstation.llm_first.state import LLMFirstStateStore, apply_state_rules
 
 logger = logging.getLogger(__name__)
@@ -502,6 +503,22 @@ def _apply_request_patch(state: Any, request: TStationChatRequest) -> Any:
     )
 
 
+def _schedule_selection_guard_event(request: TStationChatRequest) -> dict[str, Any] | None:
+    patch = _request_slot_patch(request)
+    if not patch:
+        return None
+    values = _ui_action_values(request, patch)
+    action_type = str(values.get("action_type") or values.get("cta_action") or values.get("ctaAction") or "").strip()
+    fills_slot = str(values.get("fills_slot") or values.get("fillsSlot") or "").strip()
+    date_value = values.get("requested_cal_day") or values.get("requestedCalDay") or values.get("date")
+    time_value = values.get("rsv_hour") or values.get("rsvHour") or values.get("time")
+    if not (date_value and time_value):
+        return None
+    if action_type != "select_schedule" and "requested_cal_day" not in fills_slot and "rsv_hour" not in fills_slot:
+        return None
+    return build_past_schedule_selection_event(date_value, time_value)
+
+
 class LLMFirstRuntime:
     def __init__(
         self,
@@ -519,7 +536,25 @@ class LLMFirstRuntime:
     async def run(self, request: TStationChatRequest) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
         user_text = _last_user_text(request)
         set_trace_name(user_text[:60] if user_text else "llm_first_chat")
-        state = _apply_request_patch(self.state_store.load(request.session_id), request)
+        state = self.state_store.load(request.session_id)
+        if guard_event := _schedule_selection_guard_event(request):
+            self.state_store.save(request.session_id, state)
+            text = str(guard_event.get("data", {}).get("assistantResponse") or "")
+            metadata = {
+                "runtime": "llm_first",
+                "planner": PlannerDecision(
+                    selected_afs=[],
+                    conversation_goal="reject_past_schedule_selection",
+                    answer_mode="tool_grounded_answer",
+                    requires_user_confirmation=False,
+                    resume_previous_flow=True,
+                ).model_dump(mode="json"),
+                "qc_status": "ok",
+                "tool_calls": [],
+                "missing_inputs": [],
+            }
+            return text, [guard_event], metadata
+        state = _apply_request_patch(state, request)
         store_shop_id_before_text_resolution = state.commerce_state.store.shop_id
         state = _resolve_text_store_selection(request, state, user_text)
         text_selection_resolved = (

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import json
 import os
 
@@ -57,6 +58,7 @@ from services.tstation.llm_first.models import AgentFlow, ConversationState, Fac
 from services.tstation.llm_first.planner import LeadingAgentPlanner, extract_known_inputs  # noqa: E402
 from services.tstation.llm_first.qc import verify_response  # noqa: E402
 from services.tstation.llm_first.runtime import LLMFirstRuntime  # noqa: E402
+from services.tstation.llm_first import schedule_validation as schedule_validation_module  # noqa: E402
 from services.tstation.llm_first.state import LLMFirstStateStore, apply_state_rules  # noqa: E402
 from services.tstation.llm_first.tools import invoke_tool  # noqa: E402
 from services.tstation.agents.templates.schemas import DatepickDataEvent, ListCarDataEvent, LocationDataEvent, PreOrderDataEvent, ProductDataEvent, VoucherDataEvent  # noqa: E402
@@ -2185,7 +2187,12 @@ def test_shop_id_only_ui_action_in_active_purchase_flow_emits_datepick_with_sche
     assert store.state.commerce_state.store.shop_id == "S002"
 
 
-def test_schedule_selection_in_active_purchase_flow_emits_preorder_without_planner_choice() -> None:
+def test_schedule_selection_in_active_purchase_flow_emits_preorder_without_planner_choice(monkeypatch) -> None:
+    monkeypatch.setattr(
+        schedule_validation_module,
+        "_kst_now",
+        lambda: datetime.datetime(2026, 7, 7, 9, 30, tzinfo=datetime.timezone(datetime.timedelta(hours=9))),
+    )
     store = MemoryStateStore()
     store.state.commerce_state.product.goods_no = "G000000000003"
     store.state.commerce_state.product.product_name = "아이온 에보"
@@ -2223,6 +2230,48 @@ def test_schedule_selection_in_active_purchase_flow_emits_preorder_without_plann
     assert metadata["tool_calls"][0]["tool_name"] == "get_final_price_tool"
     assert store.state.commerce_state.schedule.date == "2026년 07월 07일"
     assert store.state.commerce_state.schedule.time == "10"
+
+
+def test_schedule_selection_in_active_purchase_flow_blocks_past_time(monkeypatch) -> None:
+    monkeypatch.setattr(
+        schedule_validation_module,
+        "_kst_now",
+        lambda: datetime.datetime(2026, 7, 7, 16, 30, tzinfo=datetime.timezone(datetime.timedelta(hours=9))),
+    )
+    store = MemoryStateStore()
+    store.state.commerce_state.product.goods_no = "G000000000003"
+    store.state.commerce_state.product.product_name = "아이온 에보"
+    store.state.commerce_state.quantity = 4
+    store.state.commerce_state.store.shop_id = "S001"
+    store.state.commerce_state.store.shop_name = "티스테이션 판교점"
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(selected_afs=[])),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=store,
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "2026년 07월 07일 16:00"}],
+        stream=False,
+        user_id="u1",
+        session_id="schedule-selection-past-time",
+        ui_action={
+            "action_type": "select_schedule",
+            "slots": {
+                "requestedCalDay": "20260707",
+                "rsvHour": "16",
+            },
+        },
+    )
+
+    text, events, metadata = asyncio.run(runtime.run(request))
+
+    assert events[0]["template"] == "quickReply"
+    assert events[0]["data"]["metadata"]["source"] == "llm_first_schedule_selection_past_datetime"
+    assert text == "이미 지난 날짜/시간은 선택할 수 없어요. 현재 시각 2026-07-07 16:30 이후 일정으로 다시 선택해 주세요."
+    assert metadata["tool_calls"] == []
+    assert store.state.commerce_state.schedule.date is None
+    assert store.state.commerce_state.schedule.time is None
 
 
 def test_quick_shopping_complete_inputs_emits_preorder_without_side_effect() -> None:
