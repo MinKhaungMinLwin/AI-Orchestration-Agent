@@ -90,6 +90,23 @@ def _first_item(result: Any) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
+def _remember_followup_context(
+    state: ConversationState,
+    *,
+    conversation_summary: str | None = None,
+    last_facts_patch: dict[str, Any] | None = None,
+) -> ConversationState:
+    updated = state.model_copy(deep=True)
+    if conversation_summary:
+        updated.conversation_summary = conversation_summary
+    if last_facts_patch:
+        updated.last_facts = {
+            **(updated.last_facts or {}),
+            **{key: value for key, value in last_facts_patch.items() if value not in (None, "", [], {})},
+        }
+    return updated
+
+
 class AFExecutor:
     async def execute(self, *, user_text: str, state: ConversationState, planner: PlannerDecision) -> FactBundle:
         bundle = FactBundle(planner=planner, state=state)
@@ -233,7 +250,24 @@ class AFExecutor:
             _append_template(bundle, event)
             if event is None:
                 bundle.missing_inputs.append("product_selection")
-            return state
+                return state
+            metadata = event.get("data", {}).get("metadata", {}) if isinstance(event, dict) else {}
+            compared_names = metadata.get("productNames") or product_names[:2]
+            compare_metric = str(metadata.get("compareMetric") or known.get("compare_metric") or "detail")
+            resolved_products = metadata.get("resolvedProducts")
+            summary = f"최근 비교 상품: {', '.join(compared_names[:2])} / 비교 기준: {compare_metric}"
+            return _remember_followup_context(
+                state,
+                conversation_summary=summary,
+                last_facts_patch={
+                    "followup_type": "product_comparison",
+                    "product_names": compared_names[:2],
+                    "requested_product_names": metadata.get("requestedProductNames") or product_names[:2],
+                    "compare_metric": compare_metric,
+                    "resolved_products": resolved_products,
+                    "response_shape_key": metadata.get("response_shape_key"),
+                },
+            )
         next_state, goods_no = await self._resolve_product(user_text, state, known, bundle)
         if not goods_no:
             return next_state

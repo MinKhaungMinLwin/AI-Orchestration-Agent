@@ -810,6 +810,41 @@ def test_product_comparison_uses_quickreply_summary_not_product_cards() -> None:
     assert metadata["missing_inputs"] == []
 
 
+def test_product_comparison_persists_followup_context_in_state() -> None:
+    state_store = MemoryStateStore()
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.PRODUCT_DESCRIPTION,
+                    reason="compare named tire products",
+                    known_inputs={
+                        "product_names": ["키너지 EX", "옵티모"],
+                        "compare_metric": "detail",
+                    },
+                )
+            ]
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=state_store,
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "키너지 ex랑 옵티모랑 비교해줘"}],
+        stream=False,
+        user_id="u1",
+        session_id="product-comparison-followup",
+    )
+
+    asyncio.run(runtime.run(request))
+
+    assert "키너지 EX" in state_store.state.conversation_summary
+    assert "옵티모" in state_store.state.conversation_summary
+    assert state_store.state.last_facts["followup_type"] == "product_comparison"
+    assert state_store.state.last_facts["product_names"] == ["키너지 EX", "옵티모"]
+    assert state_store.state.last_facts["compare_metric"] == "detail"
+
+
 def test_product_comparison_guard_handles_recommendation_af_with_product_names() -> None:
     runtime = LLMFirstRuntime(
         planner=StaticPlanner(PlannerDecision(
