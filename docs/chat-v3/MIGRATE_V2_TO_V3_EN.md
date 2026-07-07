@@ -163,6 +163,24 @@ request
 
 ---
 
+## Gap audit V2 → V3 (2026-07-07, full sweep of chat.py + policies/ + helpers/ + api layer)
+
+**Critical (production blockers):** — ✅ ALL 5 RESOLVED (2026-07-07, see per-item notes)
+1. ✅ **Multi-domain within one turn** — V2 chains agents (`[DISCOVERY, TRANSACTION]` auto-chains, execution_plan, nextAction continue, stall recovery). V3 binds exactly one domain's tools → "order a Ventus" with no goods_no stalls (search_product is DISCOVERY, ordering is TRANSACTION). → FIXED: `RouteDecision.extra_domains` + `tools_for_domains()` union (deduped by tool name); the router prompt explains when to add a secondary domain.
+2. ✅ **Cross-turn tool-context memory** — V2 stores tool outputs in Redis (`chat:tool_ctx:*`, 2h TTL) and injects them into the next turn's prompt (`_format_tool_context`); → FIXED: `chat_v3/memory.py` — reads `chat:tool_ctx` at turn start into a `PREVIOUS TOOL RESULTS` block, persists at turn end via `finalize_chat_context_async` (incl. quick_reply_domains/predicted_domains — V2-compatible).
+3. ✅ **Transactional templates** (`datepick`/`preOrder`/`orderComplete`) — ADDED to `_TOOL_TEMPLATES` (schedule tools → datepick, store_preview → preOrder, quick_order/save_to_cart → orderComplete) → the ordering flow can't render on the FE; the `quick_order_execute` CTA (`/actions/quick-order` endpoint) needs a `preOrder` template to complete the chain.
+4. ✅ **car_no audit not seeded** — FIXED: `service.py` calls `_audit_set_user_message(user_text)` at turn start — V2 calls `_car_no_audit.set_user_message(last_user_msg)` at turn start; V3 doesn't → the wrong-vehicle recommendation guard inside discovery tools is inert (2-line fix in `service.py`).
+5. ✅ **Token double-render on the real FE** — FIXED: `AI_CHAT_V3_STREAM_TOKENS` flag (default true for the demo UI; set false for the production FE, which renders from `data.assistantResponse` like V2) — V2 does **not** forward `token` events (FE renders from `data.assistantResponse`); V3 streams tokens. The demo UI is fine; the production FE must be checked for duplicated text.
+
+**Medium:**
+6. QC: V2 uses **deterministic** `qc_verifier.verify_draft` (compares prices/goods_no/shop_id/size/dates/ranking/brand against tool output, with a repair loop) — V3 should reuse it (free, no LLM call) and keep LLM QC as a second layer.
+7. Chips lack the **ui_action envelope** (`normalize_ui_action_metadata`: cta_id/cta_action/slot metadata) → V3 chip clicks send a poorer `chip_context` than V2; label-only CTAs (`enter_region`/`enter_date`) have no canned clarification.
+8. **Fallback chips** when the composer fails/returns empty (V2 has tool-aware `_FALLBACK_*` families) — V3 returns `[]`.
+9. **Order-flow slot recovery** (rehydration from preOrder/datepick templates, `_finalize_purchase_stock_slots_for_persistence`) — V3 relies on LLM extraction alone; long flows can drop goods_no/qty.
+10. Langfuse spans (already in the Phase 8 TODO).
+
+**Dropped deliberately (V3 philosophy — not ported):** ~200 direct-code fast-path handlers for known-answer queries, TurnContract + the entire template-coercion/contract-gate machinery, speculative classify + validated_ui_action_router_skip, the 3-layer classifier, router contract overrides. Precondition for confidence: the sample-sentence test set (Phase 2 TODO) must cover these cases.
+
 ## Ongoing quality controls
 
 - **Zero-regex check:** add to CI/pre-commit: `grep -rn "^import re\|^from re\|re\.compile\|re\.search\|re\.match" app/tstation-ai/services/tstation/chat_v3/` must return nothing.
