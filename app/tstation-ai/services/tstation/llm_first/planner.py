@@ -5,7 +5,6 @@ import re
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from pydantic import BaseModel, ConfigDict
 
 from config.tracing import build_trace_config
 from services.tstation.llm_first.models import (
@@ -21,14 +20,6 @@ logger = logging.getLogger(__name__)
 _GOODS_NO_RE = re.compile(r"\bG\d{12}\b", re.IGNORECASE)
 _TIRE_SIZE_RE = re.compile(r"\b(\d{3})\s*/?\s*(\d{2})\s*[Rr]?\s*(\d{2})\b")
 _QTY_RE = re.compile(r"(\d{1,2})\s*(?:개|본|짝)")
-
-
-class StructuredPurchasePivotDecision(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    should_resume_purchase: bool
-    pivot_af: AgentFlow | None = None
-    reason: str
 
 
 def normalize_tire_size(text: str) -> str | None:
@@ -142,75 +133,6 @@ class LeadingAgentPlanner:
         self._structured_llm = (
             llm.with_structured_output(StructuredPlannerDecision, strict=True) if llm is not None else None
         )
-        self._purchase_pivot_llm = (
-            llm.with_structured_output(StructuredPurchasePivotDecision, strict=True) if llm is not None else None
-        )
-
-    async def _purchase_pivot_plan(
-        self,
-        *,
-        user_text: str,
-        known_inputs: dict[str, Any],
-        purchase_context: dict[str, Any],
-        session_id: str | None,
-        user_id: str | None,
-        trace_id: str | None,
-        parent_span_id: str | None,
-    ) -> PlannerDecision | None:
-        if not purchase_context.get("active") or self._purchase_pivot_llm is None:
-            return None
-
-        prompt = (
-            "You are deciding whether the current turn should continue an active QuickShopping purchase flow or pivot away to a different flow. "
-            "Continue the purchase only when the user directly provides the missing purchase slot value "
-            "(quantity, store/region, or schedule date/time) or explicitly asks to keep buying/reserve/order. "
-            "If the user asks a separate question, pivot away and keep the purchase state dormant. "
-            "General reservation policy questions such as maximum bookable period, latest reservable date, cancellation/change policy, "
-            "or wording like 'not this store' / 'generally' / 'in general' should pivot away from QuickShopping. "
-            "Price, coupon, discount, benefit questions should pivot to PriceAF. "
-            "Product explanation, comparison, feature, or spec questions should pivot to ProductDescriptionAF. "
-            "Recommendation questions should pivot to ProductRecommendationAF. "
-            "General reservation-window or booking-policy questions should pivot to FAQAF even when a store is already selected. "
-            "Return should_resume_purchase=true only for a direct slot answer or explicit purchase continuation."
-        )
-        human = (
-            f"Current user text:\n{user_text}\n\n"
-            f"Known inputs:\n{known_inputs}\n\n"
-            f"Pending purchase context:\n{purchase_context}"
-        )
-        trace_config = build_trace_config(
-            run_name="llm_first_purchase_pivot",
-            session_id=session_id,
-            user_id=user_id,
-            trace_id=trace_id,
-            parent_span_id=parent_span_id,
-            tags=["llm_first", "planner", "purchase_pivot"],
-            prompt_name="llm_first_purchase_pivot",
-            extra_metadata={"runtime": "llm_first"},
-        )
-        decision = await self._purchase_pivot_llm.ainvoke(
-            [SystemMessage(content=prompt), HumanMessage(content=human)],
-            config=trace_config,
-        )
-        if decision.should_resume_purchase or decision.pivot_af is None:
-            return None
-
-        logger.info("[LLM_FIRST_PLANNER] purchase pivot -> %s (%s)", decision.pivot_af.value, decision.reason)
-        return PlannerDecision(
-            selected_afs=[
-                SelectedAF(
-                    af=decision.pivot_af,
-                    reason=decision.reason,
-                    required_inputs=[],
-                    known_inputs={k: v for k, v in known_inputs.items() if v not in (None, "")},
-                    missing_inputs=[],
-                )
-            ],
-            conversation_goal=f"pivot_from_purchase_to_{decision.pivot_af.value}",
-            answer_mode="tool_grounded_answer",
-            requires_user_confirmation=False,
-            resume_previous_flow=False,
-        )
 
     async def plan(
         self,
@@ -227,16 +149,6 @@ class LeadingAgentPlanner:
 
         known_inputs = extract_known_inputs(user_text, state)
         purchase_context = _purchase_router_context(state)
-        if pivot_plan := await self._purchase_pivot_plan(
-            user_text=user_text,
-            known_inputs=known_inputs,
-            purchase_context=purchase_context,
-            session_id=session_id,
-            user_id=user_id,
-            trace_id=trace_id,
-            parent_span_id=parent_span_id,
-        ):
-            return pivot_plan
         prompt = (
             "You are the LLM-first Leading Agent for T-Station. "
             "Select one or more MVP Agent Flows for the current user turn. "

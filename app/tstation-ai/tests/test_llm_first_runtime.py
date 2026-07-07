@@ -55,7 +55,7 @@ from schemas.tstation.chat import TStationChatRequest  # noqa: E402
 from services.tstation.llm_first.composer import Composer  # noqa: E402
 from services.tstation.llm_first.executor import AFExecutor  # noqa: E402
 from services.tstation.llm_first.models import AgentFlow, ConversationState, FactBundle, PlannerDecision, ProductState, SelectedAF, StructuredPlannerDecision, ToolCallRecord  # noqa: E402
-from services.tstation.llm_first.planner import LeadingAgentPlanner, StructuredPurchasePivotDecision, extract_known_inputs  # noqa: E402
+from services.tstation.llm_first.planner import LeadingAgentPlanner, extract_known_inputs  # noqa: E402
 from services.tstation.llm_first.qc import verify_response  # noqa: E402
 from services.tstation.llm_first.runtime import LLMFirstRuntime  # noqa: E402
 from services.tstation.llm_first import schedule_validation as schedule_validation_module  # noqa: E402
@@ -119,24 +119,13 @@ class StructuredFakeLLM:
 
 
 class FakeLLM:
-    def __init__(
-        self,
-        decision: PlannerDecision,
-        purchase_pivot_decision: StructuredPurchasePivotDecision | None = None,
-    ):
+    def __init__(self, decision: PlannerDecision):
         self.decision = decision
-        self.purchase_pivot_decision = purchase_pivot_decision or StructuredPurchasePivotDecision(
-            should_resume_purchase=True,
-            pivot_af=None,
-            reason="continue purchase by default",
-        )
 
     def with_structured_output(self, schema, strict=True):
         assert strict is True
         if schema is StructuredPlannerDecision:
             return StructuredFakeLLM(self.decision)
-        if schema is StructuredPurchasePivotDecision:
-            return StructuredFakeLLM(self.purchase_pivot_decision)
         raise AssertionError(f"unexpected schema: {schema}")
 
 
@@ -160,14 +149,6 @@ class CapturingPlannerLLM:
         assert strict is True
         if schema is StructuredPlannerDecision:
             return self.structured
-        if schema is StructuredPurchasePivotDecision:
-            return StructuredFakeLLM(
-                StructuredPurchasePivotDecision(
-                    should_resume_purchase=True,
-                    pivot_af=None,
-                    reason="continue purchase by default",
-                )
-            )
         raise AssertionError(f"unexpected schema: {schema}")
 
 
@@ -906,23 +887,18 @@ def test_planner_purchase_pivot_classifier_routes_reservation_window_question_to
     state.commerce_state.quantity = 4
     state.commerce_state.store.shop_id = "F00721"
     state.commerce_state.store.shop_name = "티스테이션 판교점"
-    planner = LeadingAgentPlanner(FakeLLM(
-        PlannerDecision(
-            selected_afs=[
-                SelectedAF(
-                    af=AgentFlow.QUICK_SHOPPING,
-                    reason="fallback planner result",
-                    known_inputs={},
-                    missing_inputs=["schedule"],
-                )
-            ]
-        ),
-        purchase_pivot_decision=StructuredPurchasePivotDecision(
-            should_resume_purchase=False,
-            pivot_af=AgentFlow.FAQ,
-            reason="general reservation-window policy question during active purchase",
-        ),
+    llm = CapturingPlannerLLM(PlannerDecision(
+        selected_afs=[
+            SelectedAF(
+                af=AgentFlow.FAQ,
+                reason="general reservation-window policy question during active purchase",
+                known_inputs={},
+                missing_inputs=[],
+            )
+        ],
+        resume_previous_flow=False,
     ))
+    planner = LeadingAgentPlanner(llm)
 
     decision = asyncio.run(planner.plan(
         user_text="아니 이 매장을 말하는게 아니고 예약 가능 최대 몇 주 까지 늦게 예약할 수 있어?",
@@ -931,6 +907,8 @@ def test_planner_purchase_pivot_classifier_routes_reservation_window_question_to
 
     assert decision.selected_afs[0].af == AgentFlow.FAQ
     assert decision.resume_previous_flow is False
+    assert llm.structured.messages is not None
+    assert "If the user asks a separate question while purchase is waiting" in llm.structured.messages[0].content
 
 
 def test_planner_purchase_pivot_classifier_routes_price_question_to_price_af() -> None:
@@ -938,23 +916,18 @@ def test_planner_purchase_pivot_classifier_routes_price_question_to_price_af() -
     state.commerce_state.product.goods_no = "G000000317682"
     state.commerce_state.product.product_name = "다이나프로 HPX 235/55R19"
     state.commerce_state.product.tire_size = "235/55R19"
-    planner = LeadingAgentPlanner(FakeLLM(
-        PlannerDecision(
-            selected_afs=[
-                SelectedAF(
-                    af=AgentFlow.QUICK_SHOPPING,
-                    reason="fallback planner result",
-                    known_inputs={},
-                    missing_inputs=["ord_qty", "store_or_region"],
-                )
-            ]
-        ),
-        purchase_pivot_decision=StructuredPurchasePivotDecision(
-            should_resume_purchase=False,
-            pivot_af=AgentFlow.PRICE,
-            reason="price question should pivot away from purchase slot filling",
-        ),
+    llm = CapturingPlannerLLM(PlannerDecision(
+        selected_afs=[
+            SelectedAF(
+                af=AgentFlow.PRICE,
+                reason="price question should pivot away from purchase slot filling",
+                known_inputs={},
+                missing_inputs=[],
+            )
+        ],
+        resume_previous_flow=False,
     ))
+    planner = LeadingAgentPlanner(llm)
 
     decision = asyncio.run(planner.plan(
         user_text="쿠폰 적용하면 얼마야?",
@@ -963,6 +936,8 @@ def test_planner_purchase_pivot_classifier_routes_price_question_to_price_af() -
 
     assert decision.selected_afs[0].af == AgentFlow.PRICE
     assert decision.resume_previous_flow is False
+    assert llm.structured.messages is not None
+    assert "product_applicable_benefits" in llm.structured.messages[0].content
 
 
 def test_state_dependency_invalidation_on_product_change() -> None:
@@ -3440,3 +3415,27 @@ def test_qc_blocks_completion_claim_without_side_effect() -> None:
     assert status == "completion_claim_blocked"
     assert event is not None
     assert event["template"] == "quickReply"
+
+
+def test_qc_fact_mismatch_is_metadata_only() -> None:
+    decision = PlannerDecision(
+        selected_afs=[SelectedAF(af=AgentFlow.PRICE)],
+    )
+
+    status, event = verify_response(
+        "확인된 가격은 999,999원입니다.",
+        FactBundle(
+            planner=decision,
+            tool_calls=[
+                ToolCallRecord(
+                    af=AgentFlow.PRICE,
+                    tool_name="get_final_price_tool",
+                    args={"goods_no": "G000000000001"},
+                    result={"status": "success", "data": {"cheapest_final_prc": 123000}},
+                )
+            ],
+        ),
+    )
+
+    assert status == "fact_mismatch"
+    assert event is None
