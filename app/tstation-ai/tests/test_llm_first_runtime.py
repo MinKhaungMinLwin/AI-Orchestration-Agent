@@ -129,7 +129,17 @@ class FakeExecutor(AFExecutor):
                             "goods_no": "G000000000001",
                             "goods_nm": "벤투스 S2 AS",
                             "tire_size_1": "245/45R19",
+                            "brand_nm": "한국 타이어",
+                            "prc_grd_nm": "프리미엄+",
+                            "goods_pfm_nm": "COMFORT",
+                            "sound_absorber_yn": "Y",
+                            "oe_badge_yn": "N",
+                            "t_oe_maker_1": "현대",
+                            "smrt_pay_yn": "Y",
+                            "sale_prc": 260000,
                             "extra_fvr_sale_prc": 200000,
+                            "rate": 4.5,
+                            "total_qty": 12,
                         }
                     ]
                 },
@@ -163,7 +173,16 @@ class FakeExecutor(AFExecutor):
                         {
                             "shop_id": "S001",
                             "shop_nm": "티스테이션 판교점",
-                            "address": "경기 성남시 분당구 판교",
+                            "road_addr_base": "경기 성남시 분당구 판교로",
+                            "road_addr_dtl": "123",
+                            "tel_no": "031-000-0000",
+                            "shop_biz_strt_time": "09:00",
+                            "shop_biz_end_time": "18:00",
+                            "rating_idx": 4.8,
+                            "review_count": 27,
+                            "is_all_my_t": True,
+                            "is_installable": True,
+                            "svc_codes": ["116"],
                         }
                     ]
                 },
@@ -372,8 +391,26 @@ def test_runtime_recommendation_stream_emits_product_and_done() -> None:
 
     assert '"template": "product"' in body
     ProductDataEvent.model_validate(product_events[0])
-    assert product_events[0]["data"]["products"][0]["tires"] == "245/45R19"
-    assert product_events[0]["data"]["products"][0]["rate"] == 0
+    product = product_events[0]["data"]["products"][0]
+    assert product["title"] == "벤투스 S2 AS 245/45R19"
+    assert product["tires"] == ""
+    assert product["titleTires"] == "245/45R19"
+    assert product["brandName"] == "한국타이어"
+    assert product["oeBadgeYn"] == "N"
+    assert product["oeMaker"] == "현대"
+    assert product["smrtPayYn"] == "Y"
+    assert product["price"] == 200000
+    assert product["originalPrice"] == 260000
+    assert product["discountAmount"] == 60000
+    assert product["discountRate"] == 23.1
+    assert product["rate"] == 4.5
+    assert product["totalQuantity"] == 12
+    assert product["tags"] == [
+        {"text": "프리미엄", "primary": True},
+        {"text": "정숙/승차감", "primary": False},
+        {"text": "흡음재", "primary": False},
+    ]
+    assert product_events[0]["data"]["isBookingFlow"] is False
     assert product_events[0]["data"]["metadata"][0]["goodsId"] == "G000000000001"
     assert token_events[0]["content"] == "확인한 결과를 안내드립니다."
     assert "data: [DONE]" in body
@@ -510,7 +547,16 @@ def test_store_flow_emits_location_template() -> None:
 
     assert events[0]["template"] == "location"
     LocationDataEvent.model_validate(events[0])
-    assert events[0]["data"]["stores"][0]["nameAddress"] == "티스테이션 판교점"
+    store = events[0]["data"]["stores"][0]
+    assert store["nameAddress"] == "티스테이션 판교점"
+    assert store["detailAddress"] == "경기 성남시 분당구 판교로 123"
+    assert store["isAllMyT"] is True
+    assert store["todayInstall"] is False
+    assert store["tnaDelivery"] is False
+    assert "전화: 031-000-0000" in store["description"]
+    assert "평점: 4.8" in store["description"]
+    assert "리뷰 27건" in store["description"]
+    assert "서비스: 올마이티 | 온라인 장착 가능 | 얼라인먼트" in store["description"]
     assert metadata["tool_calls"][0]["tool_name"] == "search_stores_tool"
 
 
