@@ -6,7 +6,15 @@ from typing import Any
 
 from services.tstation.llm_first.models import AgentFlow, ConversationState, FactBundle, PlannerDecision, ToolCallRecord
 from services.tstation.llm_first.state import apply_state_rules
-from services.tstation.llm_first.templates import build_datepick_template, build_list_car_template, build_location_template, build_preorder_template, build_product_template, build_voucher_template
+from services.tstation.llm_first.templates import (
+    build_datepick_template,
+    build_list_car_template,
+    build_location_template,
+    build_preorder_template,
+    build_product_comparison_template,
+    build_product_template,
+    build_voucher_template,
+)
 from services.tstation.llm_first.tools import invoke_tool
 
 logger = logging.getLogger(__name__)
@@ -140,6 +148,9 @@ class AFExecutor:
         return next_state, str(goods_no) if goods_no else None
 
     async def _recommend(self, user_text: str, state: ConversationState, known: dict[str, Any], bundle: FactBundle) -> ConversationState:
+        if len([name for name in known.get("product_names") or [] if str(name).strip()]) >= 2:
+            return await self._description(user_text, state, known, bundle)
+
         if known.get("recommendation_source") == "best_seller":
             args: dict[str, Any] = {"limit": int(known.get("limit") or 5)}
             if known.get("vehicle_query") or known.get("car_model"):
@@ -181,6 +192,23 @@ class AFExecutor:
         return apply_state_rules(state, product_patch={"tire_size": tire_size} if tire_size else None)
 
     async def _description(self, user_text: str, state: ConversationState, known: dict[str, Any], bundle: FactBundle) -> ConversationState:
+        product_names = [str(name).strip() for name in known.get("product_names") or [] if str(name).strip()]
+        if len(product_names) >= 2:
+            rows_by_name: dict[str, dict[str, Any] | None] = {}
+            for name in product_names[:4]:
+                result = await self._call(bundle, AgentFlow.PRODUCT_DESCRIPTION, "search_product_summary_tool", {
+                    "keyword": name,
+                    "limit": 5,
+                })
+                rows_by_name[name] = _first_item(_success_payload(result))
+            event = build_product_comparison_template(
+                rows_by_name,
+                compare_metric=str(known.get("compare_metric") or "detail"),
+            )
+            _append_template(bundle, event)
+            if event is None:
+                bundle.missing_inputs.append("product_selection")
+            return state
         next_state, goods_no = await self._resolve_product(user_text, state, known, bundle)
         if not goods_no:
             return next_state

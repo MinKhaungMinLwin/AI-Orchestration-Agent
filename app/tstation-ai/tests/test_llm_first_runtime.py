@@ -93,7 +93,10 @@ class StaticComposer:
         if bundle.templates:
             data = bundle.templates[-1].get("data")
             if isinstance(data, dict) and isinstance(data.get("metadata"), dict):
-                if data["metadata"].get("source") == "llm_first_escalation_confirmation":
+                if data["metadata"].get("source") in {
+                    "llm_first_escalation_confirmation",
+                    "llm_first_product_comparison",
+                }:
                     return data["assistantResponse"]
         return "확인한 결과를 안내드립니다."
 
@@ -185,6 +188,27 @@ class FakeExecutor(AFExecutor):
                         {
                             "goods_no": "G000000000002",
                             "goods_nm": "벤투스 S2 AS",
+                        }
+                    ]
+                },
+            }
+        elif tool_name == "search_product_summary_tool":
+            keyword = args.get("keyword")
+            result = {
+                "status": "success",
+                "data": {
+                    "items": [
+                        {
+                            "goods_nm": keyword,
+                            "ptrn_d_nm": keyword,
+                            "prc_grd_nm": "스탠다드" if keyword == "옵티모" else "프리미엄",
+                            "goods_pfm_nm": "COMFORT",
+                            "goods_dtl_pfm_nm": "컴포트",
+                            "season_nm": "사계절",
+                            "car_knd_nm": "승용차",
+                            "rating_avg": 4.5 if keyword == "키너지 EX" else 4.0,
+                            "review_count": 12 if keyword == "키너지 EX" else 8,
+                            "available_sizes": ["205/55R16", "215/55R17"],
                         }
                     ]
                 },
@@ -393,6 +417,8 @@ def test_structured_planner_schema_requires_all_strict_fields() -> None:
         "tire_size",
         "ord_qty",
         "product_name",
+        "product_names",
+        "compare_metric",
         "shop_id",
         "store_name",
         "region",
@@ -608,6 +634,82 @@ def test_runtime_recommendation_stream_emits_product_and_done() -> None:
     assert product_events[0]["data"]["metadata"][0]["goodsId"] == "G000000000001"
     assert token_events[0]["content"] == "확인한 결과를 안내드립니다."
     assert "data: [DONE]" in body
+
+
+def test_product_comparison_uses_quickreply_summary_not_product_cards() -> None:
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.PRODUCT_DESCRIPTION,
+                    reason="compare named tire products",
+                    known_inputs={
+                        "product_names": ["키너지 EX", "옵티모"],
+                        "compare_metric": "detail",
+                    },
+                )
+            ]
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=MemoryStateStore(),
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "키너지 ex랑 옵티모랑 비교해줘"}],
+        stream=False,
+        user_id="u1",
+        session_id="product-comparison",
+    )
+
+    text, events, metadata = asyncio.run(runtime.run(request))
+
+    assert text == events[0]["data"]["assistantResponse"]
+    assert events[0]["template"] == "quickReply"
+    assert events[0]["data"]["quickReplies"] == []
+    assert events[0]["data"]["predictedDomains"] == ["DISCOVERY"]
+    assert events[0]["data"]["metadata"]["response_shape_key"] == "metric_comparison_summary"
+    assert events[0]["data"]["metadata"]["productNames"] == ["키너지 EX", "옵티모"]
+    assert "상품 정보를 상품별 표로 비교해드릴게요." in events[0]["data"]["assistantResponse"]
+    assert "**키너지 EX**" in events[0]["data"]["assistantResponse"]
+    assert "**옵티모**" in events[0]["data"]["assistantResponse"]
+    assert [call["tool_name"] for call in metadata["tool_calls"]] == [
+        "search_product_summary_tool",
+        "search_product_summary_tool",
+    ]
+    assert metadata["missing_inputs"] == []
+
+
+def test_product_comparison_guard_handles_recommendation_af_with_product_names() -> None:
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.PRODUCT_RECOMMENDATION,
+                    reason="planner selected recommendation but supplied compared products",
+                    known_inputs={
+                        "product_names": ["키너지 EX", "옵티모"],
+                        "compare_metric": "detail",
+                        "tire_size": "235/55R19",
+                    },
+                )
+            ]
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=MemoryStateStore(),
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "키너지 ex랑 옵티모랑 비교해줘"}],
+        stream=False,
+        user_id="u1",
+        session_id="product-comparison-guard",
+    )
+
+    _, events, metadata = asyncio.run(runtime.run(request))
+
+    assert events[0]["template"] == "quickReply"
+    assert metadata["tool_calls"][0]["tool_name"] == "search_product_summary_tool"
+    assert all(event["template"] != "product" for event in events)
 
 
 def test_general_tire_recommendation_does_not_require_size() -> None:

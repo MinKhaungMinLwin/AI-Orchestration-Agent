@@ -83,7 +83,10 @@ def _fixed_template_response(bundle: FactBundle) -> str | None:
     metadata = data.get("metadata")
     if not isinstance(metadata, dict):
         return None
-    if metadata.get("source") != "llm_first_escalation_confirmation":
+    if metadata.get("source") not in {
+        "llm_first_escalation_confirmation",
+        "llm_first_product_comparison",
+    }:
         return None
     text = str(data.get("assistantResponse") or "").strip()
     return text or None

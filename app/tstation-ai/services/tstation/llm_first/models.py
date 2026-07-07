@@ -42,6 +42,18 @@ class StructuredKnownInputs(BaseModel):
     tire_size: str | None
     ord_qty: int | None
     product_name: str | None
+    product_names: list[str] | None
+    compare_metric: Literal[
+        "none",
+        "detail",
+        "mileage",
+        "noise",
+        "fuel_efficiency",
+        "wet",
+        "release",
+        "grade",
+        "car_type",
+    ] | None
     shop_id: str | None
     store_name: str | None
     region: str | None

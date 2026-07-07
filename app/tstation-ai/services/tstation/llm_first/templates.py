@@ -103,6 +103,165 @@ def _product_tags(item: dict[str, Any]) -> list[dict[str, Any]]:
     return tags
 
 
+def _first_nonempty(values: list[str]) -> str:
+    return next((value for value in values if value), "")
+
+
+def _available_sizes(item: dict[str, Any]) -> list[str]:
+    sizes: list[str] = []
+    raw_sizes = item.get("available_sizes") or item.get("availableSizes") or item.get("sizes")
+    if isinstance(raw_sizes, list):
+        sizes.extend(str(size).strip() for size in raw_sizes if str(size).strip())
+    for key in ("tire_size", "tireSize", "tire_size_1", "tire_size_2", "tireSize1", "tireSize2"):
+        value = _get_str(item, key)
+        if value:
+            sizes.append(value)
+    unique: list[str] = []
+    for size in sizes:
+        normalized = re.sub(r"\s+", "", size.upper())
+        if normalized and normalized not in unique:
+            unique.append(normalized)
+    return unique
+
+
+def _comparison_feature(item: dict[str, Any], metric: str) -> str:
+    if metric == "release":
+        return _first_nonempty([_get_str(item, "t_rls_yearmon"), _get_str(item, "sys_reg_dtime")[:10]])
+    if metric == "mileage":
+        return _get_str(item, "t_life_span", "t_milg_cvs") or "수명/마일리지 정보 확인되지 않음"
+    if metric == "noise":
+        grade = _get_str(item, "label_pnwave", "label_pnwave_nm")
+        db = _get_str(item, "label_pndb")
+        return ", ".join(part for part in (grade, f"{db}dB" if db else "") if part) or "정숙성 정보 확인되지 않음"
+    if metric == "fuel_efficiency":
+        return _get_str(item, "t_fuel_eff_convert", "rr") or "연비/회전저항 정보 확인되지 않음"
+    if metric == "wet":
+        return _get_str(item, "wet") or "젖은노면 제동 정보 확인되지 않음"
+    if metric == "car_type":
+        return _get_str(item, "car_knd_nm", "car_type") or "차종 정보 확인되지 않음"
+    values = [
+        " / ".join(part for part in (_get_str(item, "goods_pfm_nm"), _get_str(item, "goods_dtl_pfm_nm")) if part),
+        _get_str(item, "slogan"),
+        _get_str(item, "pc_prod_tech_desc"),
+        _get_str(item, "pc_prod_remark_desc"),
+    ]
+    return _first_nonempty(values)[:120] or "상세 특징 정보는 추가 확인이 필요해요"
+
+
+def _comparison_metric_note(metric: str) -> str:
+    if metric == "fuel_efficiency":
+        return "회전저항/RR은 등급 숫자가 낮을수록 연비 효율에 유리한 편입니다."
+    if metric == "release":
+        return "최신 여부는 DB의 상품 등록일 또는 출시 정보를 기준으로 비교했습니다."
+    if metric == "wet":
+        return "젖은노면 제동 등급은 규격별로 표시가 다를 수 있어요."
+    if metric == "mileage":
+        return "마일리지와 수명은 규격, 차종 호환, 주행환경에 따라 체감이 달라질 수 있어요."
+    return "표시된 특징은 규격과 차종에 따라 달라질 수 있어요."
+
+
+def _comparison_rows_for_metric(metric: str) -> tuple[tuple[str, str], ...]:
+    if metric == "release":
+        return (("출시 시점", "feature"), ("상품 등급", "grade"), ("주요 사이즈", "sizes"))
+    if metric == "grade":
+        return (("상품 등급", "grade"), ("특징", "feature"), ("평점", "rating"))
+    if metric == "mileage":
+        return (("마일리지/수명", "feature"), ("상품 등급", "grade"), ("평점", "rating"))
+    if metric == "noise":
+        return (("정숙성", "feature"), ("상품 등급", "grade"), ("평점", "rating"))
+    if metric == "fuel_efficiency":
+        return (("연비/회전저항", "feature"), ("상품 등급", "grade"), ("평점", "rating"))
+    if metric == "wet":
+        return (("빗길 성능", "feature"), ("상품 등급", "grade"), ("평점", "rating"))
+    if metric == "car_type":
+        return (("차종", "feature"), ("상품 등급", "grade"), ("주요 사이즈", "sizes"))
+    return (
+        ("특징", "feature"),
+        ("상품 등급", "grade"),
+        ("주요 성능", "performance"),
+        ("평점", "rating"),
+        ("주요 사이즈", "sizes"),
+    )
+
+
+def _comparison_value(item: dict[str, Any], metric: str, key: str) -> str:
+    if key == "feature":
+        return _comparison_feature(item, metric)
+    if key == "grade":
+        return _get_str(item, "prc_grd_nm") or "미확인"
+    if key == "performance":
+        return _first_nonempty([
+            _get_str(item, "goods_pfm_nm"),
+            _get_str(item, "goods_dtl_pfm_nm"),
+            _get_str(item, "description"),
+        ]) or "확인 가능한 주요 성능 정보가 부족해요"
+    if key == "rating":
+        rating = _get_num(item, "rating_avg", "rate", default=0.0)
+        review_count = int(_get_num(item, "review_count", "total_qty", default=0))
+        if rating:
+            rating_text = int(rating) if float(rating).is_integer() else f"{rating:g}"
+            return f"{rating_text}점" + (f", 리뷰 {review_count}건" if review_count else "")
+        return f"리뷰 {review_count}건" if review_count else "평점 정보 확인되지 않음"
+    if key == "sizes":
+        sizes = _available_sizes(item)
+        return ", ".join(sizes[:5]) if sizes else "사이즈 정보 확인되지 않음"
+    return "미확인"
+
+
+def build_product_comparison_template(
+    rows_by_requested_name: dict[str, dict[str, Any] | None],
+    *,
+    compare_metric: str = "detail",
+) -> dict[str, Any] | None:
+    resolved = [(requested, row) for requested, row in rows_by_requested_name.items() if isinstance(row, dict)]
+    if len(resolved) < 2:
+        return None
+    metric = compare_metric if compare_metric not in ("", "none", None) else "detail"
+    lines = ["비교 대상의 특징은 아래처럼 확인돼요.", "", "상품 정보를 상품별 표로 비교해드릴게요."]
+    product_names: list[str] = []
+    requested_names: list[str] = []
+    resolved_products: list[dict[str, Any]] = []
+    for requested, row in resolved[:4]:
+        display_name = _get_str(row, "goods_nm", "big_goods_nm", "ptrn_d_nm", "title") or requested
+        product_names.append(display_name)
+        requested_names.append(requested)
+        sizes = _available_sizes(row)
+        resolved_products.append({
+            key: value
+            for key, value in {
+                "requestedName": requested,
+                "goodsNo": _get_str(row, "goods_no", "goodsNo"),
+                "productName": display_name,
+                "tireSize": sizes[0] if sizes else "",
+            }.items()
+            if value
+        })
+        lines.extend(["", f"**{display_name}**", "", "| 항목 | 내용 |", "|---|---|"])
+        for label, key in _comparison_rows_for_metric(metric):
+            lines.append(f"| {label} | {_comparison_value(row, metric, key)} |")
+    lines.extend(["", _comparison_metric_note(metric)])
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": "\n".join(lines),
+            "quickReplies": [],
+            "predictedDomains": ["DISCOVERY"],
+            "metadata": {
+                "response_shape_key": "metric_comparison_summary",
+                "productNames": product_names[:2],
+                "requestedProductNames": requested_names[:2],
+                "resolvedProducts": resolved_products[:2],
+                "compareMetric": metric,
+                "compare_metric": metric,
+                "comparison_followup_intent": "none",
+                "source": "llm_first_product_comparison",
+            },
+        },
+        "assistant_response_source": "discovery_policy",
+    }
+
+
 def _original_price(item: dict[str, Any], price: int | None) -> int | None:
     original = int(_get_num(item, "sale_prc", "originalPrice", default=0))
     if original:
