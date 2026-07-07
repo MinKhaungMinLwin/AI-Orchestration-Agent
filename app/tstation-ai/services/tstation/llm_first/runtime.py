@@ -109,6 +109,16 @@ def _selection_key(value: Any) -> str:
     return re.sub(r"[^0-9a-z가-힣]", "", str(value or "").lower())
 
 
+def _normalize_schedule_date(value: Any) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    digits = re.sub(r"\D", "", text)
+    if len(digits) == 8:
+        return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
+    return text
+
+
 def _resolve_text_store_selection(request: TStationChatRequest, state: Any, user_text: str) -> Any:
     commerce = state.commerce_state
     if commerce.store.shop_id or commerce.schedule.date or commerce.schedule.time:
@@ -335,7 +345,9 @@ def _apply_request_patch(state: Any, request: TStationChatRequest) -> Any:
         "region": patch.get("region") or patch.get("region_code") or patch.get("regionCode"),
     }
     schedule_patch = {
-        "date": patch.get("requested_cal_day") or patch.get("requestedCalDay") or patch.get("date"),
+        "date": _normalize_schedule_date(
+            patch.get("requested_cal_day") or patch.get("requestedCalDay") or patch.get("date")
+        ),
         "time": patch.get("rsv_hour") or patch.get("rsvHour") or patch.get("time"),
     }
     raw_price = patch.get("final_price") or patch.get("paymentAmount") or patch.get("payment_amount")

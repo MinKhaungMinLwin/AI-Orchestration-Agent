@@ -1358,7 +1358,7 @@ def test_runtime_applies_request_slot_patch_to_state() -> None:
     assert store.state.commerce_state.product.goods_no == "G000000000003"
     assert store.state.commerce_state.quantity == 4
     assert store.state.commerce_state.store.shop_id == "S001"
-    assert store.state.commerce_state.schedule.date == "20260707"
+    assert store.state.commerce_state.schedule.date == "2026-07-07"
     assert store.state.commerce_state.price.final_price == 500000
 
 
@@ -1681,6 +1681,7 @@ def test_quick_shopping_with_store_but_no_schedule_emits_datepick() -> None:
 
     assert events[0]["template"] == "datepick"
     DatepickDataEvent.model_validate(events[0])
+    assert events[0]["data"]["dates"][0]["date"] == "2026-07-07"
     assert events[0]["data"]["dates"][0]["availableTimes"] == [10, 11, 13]
     assert metadata["missing_inputs"] == ["schedule"]
     assert metadata["tool_calls"][0]["tool_name"] == "get_store_schedule_tool"
@@ -1715,7 +1716,7 @@ def test_datepick_template_persists_followup_context_in_state() -> None:
     asyncio.run(runtime.run(request))
 
     assert state_store.state.last_facts["followup_type"] == "schedule_options"
-    assert state_store.state.last_facts["date_candidates"][0] == "20260707"
+    assert state_store.state.last_facts["date_candidates"][0] == "2026-07-07"
     assert state_store.state.last_facts["first_available_times"] == [10, 11, 13]
     assert state_store.state.last_facts["shop_id"] == "S001"
 
@@ -1822,9 +1823,9 @@ def test_shop_id_only_ui_action_in_active_purchase_flow_emits_datepick_with_sche
 
     assert events[0]["template"] == "datepick"
     DatepickDataEvent.model_validate(events[0])
-    assert events[0]["data"]["dates"][0]["date"] == "20260707"
+    assert events[0]["data"]["dates"][0]["date"] == "2026-07-07"
     assert events[0]["data"]["dates"][0]["availableTimes"] == [10, 11]
-    assert events[0]["data"]["dates"][1]["date"] == "20260708"
+    assert events[0]["data"]["dates"][1]["date"] == "2026-07-08"
     assert metadata["planner"]["selected_afs"][0]["af"] == "QuickShoppingAF"
     assert metadata["tool_calls"][0]["tool_name"] == "get_store_schedule_tool"
     assert metadata["tool_calls"][0]["args"] == {"shop_id": "S002", "mode": "in_store_only"}
@@ -1863,10 +1864,11 @@ def test_schedule_selection_in_active_purchase_flow_emits_preorder_without_plann
     assert events[0]["template"] == "preOrder"
     PreOrderDataEvent.model_validate(events[0])
     assert events[0]["data"]["isReadyToOrder"] is True
+    assert events[0]["data"]["orderInfo"]["bookingDateTime"] == "2026-07-07 10"
     assert metadata["planner"]["selected_afs"][0]["af"] == "QuickShoppingAF"
     assert metadata["planner"]["resume_previous_flow"] is True
     assert metadata["tool_calls"][0]["tool_name"] == "get_final_price_tool"
-    assert store.state.commerce_state.schedule.date == "20260707"
+    assert store.state.commerce_state.schedule.date == "2026-07-07"
     assert store.state.commerce_state.schedule.time == "10"
 
 
@@ -1903,6 +1905,7 @@ def test_quick_shopping_complete_inputs_emits_preorder_without_side_effect() -> 
     assert events[0]["template"] == "preOrder"
     PreOrderDataEvent.model_validate(events[0])
     assert events[0]["data"]["isReadyToOrder"] is True
+    assert events[0]["data"]["orderInfo"]["bookingDateTime"] == "2026-07-07 10"
     assert all(call["tool_name"] not in {"quick_order_tool", "save_to_cart_tool"} for call in metadata["tool_calls"])
 
 

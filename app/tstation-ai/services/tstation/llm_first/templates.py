@@ -74,6 +74,16 @@ def _get_num(item: dict[str, Any], *keys: str, default: int | float = 0) -> int 
     return default
 
 
+def _normalize_schedule_date(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    digits = re.sub(r"\D", "", text)
+    if len(digits) == 8:
+        return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
+    return text
+
+
 def _display_price(item: dict[str, Any]) -> int | None:
     for key in (
         "cheapest_final_prc",
@@ -789,7 +799,7 @@ def _datepick_rows_from_slots(payload: Any) -> list[dict[str, Any]]:
     for slot in raw_slots:
         if not isinstance(slot, dict):
             continue
-        day = _get_str(slot, "cal_day", "calDay", "date")
+        day = _normalize_schedule_date(_get_str(slot, "cal_day", "calDay", "date"))
         hour = _slot_hour(slot.get("tm") or slot.get("time") or slot.get("rsv_hour") or slot.get("rsvHour"))
         if day and hour is not None:
             by_day.setdefault(day, set()).add(hour)
@@ -824,7 +834,9 @@ def build_datepick_template(payload: Any, assistant_response: str) -> dict[str, 
     rows = _items_from_payload(payload)
     dates = []
     for idx, item in enumerate(rows[:31]):
-        date = str(item.get("date") or item.get("cal_day") or item.get("calDay") or item.get("requestedCalDay") or "").strip()
+        date = _normalize_schedule_date(
+            item.get("date") or item.get("cal_day") or item.get("calDay") or item.get("requestedCalDay")
+        )
         times = item.get("availableTimes") or item.get("times") or item.get("hours") or []
         if isinstance(times, list):
             available_times = [int(t) for t in times if str(t).isdigit() and int(t) != 12]
@@ -963,7 +975,7 @@ def build_preorder_template(state: Any, assistant_response: str) -> dict[str, An
                 "quantity": commerce.quantity,
                 "storeName": commerce.store.shop_name,
                 "bookingDateTime": " ".join(
-                    part for part in (commerce.schedule.date, commerce.schedule.time) if part
+                    part for part in (_normalize_schedule_date(commerce.schedule.date), commerce.schedule.time) if part
                 ) or None,
                 "paymentAmount": commerce.price.final_price,
             },
