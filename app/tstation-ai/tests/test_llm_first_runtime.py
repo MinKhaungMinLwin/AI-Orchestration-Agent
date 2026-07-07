@@ -105,6 +105,7 @@ class StaticComposer:
                     "llm_first_order_complete",
                     "llm_first_cart_complete",
                     "llm_first_unsupported_region",
+                    "llm_first_escalation_complete",
                 }:
                     return data["assistantResponse"]
         return "확인한 결과를 안내드립니다."
@@ -654,15 +655,17 @@ class FakeExecutor(AFExecutor):
                 },
             }
         elif tool_name in {"transfer_to_qna_tool", "escalate_tool"}:
-            result = None
-            bundle.tool_calls.append(ToolCallRecord(
-                af=af,
-                tool_name=tool_name,
-                args=args,
-                blocked=True,
-                reason=f"side-effect tool blocked in LLM-first MVP: {tool_name}",
-            ))
-            return result
+            if not allow_side_effect:
+                result = None
+                bundle.tool_calls.append(ToolCallRecord(
+                    af=af,
+                    tool_name=tool_name,
+                    args=args,
+                    blocked=True,
+                    reason=f"side-effect tool blocked in LLM-first MVP: {tool_name}",
+                ))
+                return result
+            result = {"status": "success", "data": {"result": True}}
         else:
             result = {"status": "success", "data": []}
         bundle.tool_calls.append(ToolCallRecord(af=af, tool_name=tool_name, args=args, result=result))
@@ -3409,7 +3412,7 @@ def test_product_compatibility_uses_car_model_group_search() -> None:
     assert metadata["tool_calls"][0]["args"] == {"keyword": "그랜저"}
 
 
-def test_fallback_escalation_registers_side_effect_tool_as_blocked() -> None:
+def test_fallback_escalation_asks_confirmation_without_calling_tool() -> None:
     runtime = LLMFirstRuntime(
         planner=StaticPlanner(PlannerDecision(
             selected_afs=[
@@ -3438,9 +3441,113 @@ def test_fallback_escalation_registers_side_effect_tool_as_blocked() -> None:
     assert "1:1 문의 작성 페이지로 이동할까요?" in events[0]["data"]["assistantResponse"]
     assert text == events[0]["data"]["assistantResponse"]
     assert metadata["planner"]["selected_afs"][0]["af"] == "FallbackEscalationAF"
-    assert metadata["tool_calls"][0]["tool_name"] == "transfer_to_qna_tool"
-    assert metadata["tool_calls"][0]["blocked"] is True
+    # Unconfirmed turn must not even attempt the side-effect tool.
+    assert metadata["tool_calls"] == []
     assert metadata["missing_inputs"] == []
+
+
+def test_confirming_qna_escalation_label_executes_transfer_to_qna_tool() -> None:
+    """Regression test: clicking the confirm button must not just re-ask."""
+    store = MemoryStateStore()
+    wrong_decision = PlannerDecision(
+        selected_afs=[SelectedAF(af=AgentFlow.FAQ, reason="planner should not be reached this turn")],
+    )
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.FALLBACK_ESCALATION,
+                    reason="explicit qna handoff",
+                    known_inputs={"escalation_target": "qna"},
+                )
+            ]
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=store,
+    )
+    first_request = TStationChatRequest(
+        messages=[{"role": "user", "content": "1:1 문의"}],
+        stream=False,
+        user_id="M123",
+        session_id="fallback-escalation-confirm",
+    )
+    asyncio.run(runtime.run(first_request))
+    assert store.state.last_facts.get("pending_escalation_target") == "qna"
+
+    # Second turn: the planner is swapped for one that would obviously fail
+    # the assertions below if ever reached — the confirmed-escalation
+    # shortcut must bypass it entirely, just like the purchase confirm flow.
+    runtime.planner = StaticPlanner(wrong_decision)
+    second_request = TStationChatRequest(
+        messages=[{"role": "user", "content": "1:1 문의하기"}],
+        stream=False,
+        user_id="M123",
+        session_id="fallback-escalation-confirm",
+    )
+
+    text, events, metadata = asyncio.run(runtime.run(second_request))
+
+    assert metadata["planner"]["selected_afs"][0]["af"] == "FallbackEscalationAF"
+    qna_calls = [call for call in metadata["tool_calls"] if call["tool_name"] == "transfer_to_qna_tool"]
+    assert len(qna_calls) == 1
+    assert qna_calls[0]["blocked"] is False
+    assert events[0]["data"]["metadata"]["source"] == "llm_first_escalation_complete"
+    assert "접수" in text
+    assert store.state.last_facts.get("pending_escalation_target") is None
+
+
+def test_confirming_human_escalation_with_plain_affirmative_executes_escalate_tool() -> None:
+    store = MemoryStateStore()
+    store.state.last_facts = {"pending_escalation_target": "human"}
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[SelectedAF(af=AgentFlow.FAQ, reason="planner should not be reached this turn")],
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=store,
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "네"}],
+        stream=False,
+        user_id="M123",
+        session_id="fallback-escalation-affirmative",
+    )
+
+    text, events, metadata = asyncio.run(runtime.run(request))
+
+    assert metadata["planner"]["selected_afs"][0]["af"] == "FallbackEscalationAF"
+    escalate_calls = [call for call in metadata["tool_calls"] if call["tool_name"] == "escalate_tool"]
+    assert len(escalate_calls) == 1
+    assert escalate_calls[0]["blocked"] is False
+    assert events[0]["data"]["metadata"]["source"] == "llm_first_escalation_complete"
+    assert "상담사" in text
+
+
+def test_unrelated_reply_after_escalation_prompt_does_not_trigger_confirmed_action() -> None:
+    """An unrelated message must fall through to normal planning, not escalate."""
+    store = MemoryStateStore()
+    store.state.last_facts = {"pending_escalation_target": "qna"}
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[SelectedAF(af=AgentFlow.PRICE, reason="user asked a new question")],
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=store,
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "가격 알려줘"}],
+        stream=False,
+        user_id="M123",
+        session_id="fallback-escalation-unrelated",
+    )
+
+    _, _, metadata = asyncio.run(runtime.run(request))
+
+    assert metadata["planner"]["selected_afs"][0]["af"] == "PriceAF"
+    assert not any(call["tool_name"] in {"transfer_to_qna_tool", "escalate_tool"} for call in metadata["tool_calls"])
 
 
 def test_qc_blocks_completion_claim_without_side_effect() -> None:

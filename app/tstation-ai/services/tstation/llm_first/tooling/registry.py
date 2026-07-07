@@ -18,6 +18,8 @@ SIDE_EFFECT_TOOLS = frozenset({
 CONFIRMABLE_SIDE_EFFECT_TOOLS = frozenset({
     "quick_order_tool",
     "save_to_cart_tool",
+    "transfer_to_qna_tool",
+    "escalate_tool",
 })
 
 

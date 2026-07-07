@@ -535,6 +535,44 @@ def _confirmed_purchase_plan(request: TStationChatRequest, state: Any) -> Planne
     )
 
 
+_ESCALATION_CONFIRM_LABELS = frozenset({"1:1 문의하기", "상담사 연결하기"})
+_ESCALATION_AFFIRMATIVE_RE = re.compile(r"^(?:네|응|어|예|좋아요?|진행(?:할게요?|해\s*주세요|해줘)?|해\s*주세요|해줘|콜)[.!~♥️😊]*$")
+
+
+def _confirmed_escalation_plan(state: Any, user_text: str) -> PlannerDecision | None:
+    """Detect confirmation of a just-shown escalation prompt from plain chat text.
+
+    Unlike the purchase confirm→execute flow, the escalation confirmation
+    quickReply carries no structured ui_action/cta metadata for the FE to echo
+    back — it is a plain label/domain chip, so a click just resubmits the
+    label text like any other typed message. The only signal available is:
+    a pending escalation target was recorded last turn, and this turn's text
+    matches the button label (or a plain "yes").
+    """
+    last_facts = state.last_facts if isinstance(state.last_facts, dict) else {}
+    pending_target = str(last_facts.get("pending_escalation_target") or "").strip()
+    if not pending_target:
+        return None
+    text = str(user_text or "").strip()
+    if text not in _ESCALATION_CONFIRM_LABELS and not _ESCALATION_AFFIRMATIVE_RE.match(text):
+        return None
+    return PlannerDecision(
+        selected_afs=[
+            SelectedAF(
+                af=AgentFlow.FALLBACK_ESCALATION,
+                reason="confirmed escalation from a prior confirmation prompt",
+                required_inputs=[],
+                known_inputs={"escalation_target": pending_target, "confirmed_action": "escalation"},
+                missing_inputs=[],
+            )
+        ],
+        conversation_goal="execute_confirmed_escalation",
+        answer_mode="tool_grounded_answer",
+        requires_user_confirmation=False,
+        resume_previous_flow=True,
+    )
+
+
 def _vehicle_selection_recommendation_plan(request: TStationChatRequest) -> PlannerDecision | None:
     patch = _request_slot_patch(request)
     values = _ui_action_values(request, patch)
@@ -725,6 +763,8 @@ class LLMFirstRuntime:
             planner = _alternative_request_plan(user_text, state)
         if planner is None:
             planner = _purchase_progress_plan(request, state)
+        if planner is None:
+            planner = _confirmed_escalation_plan(state, user_text)
         if planner is None:
             planner = await self.planner.plan(
                 user_text=user_text,
