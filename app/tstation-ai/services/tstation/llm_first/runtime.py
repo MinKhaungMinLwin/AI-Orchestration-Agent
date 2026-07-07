@@ -573,6 +573,43 @@ def _confirmed_escalation_plan(state: Any, user_text: str) -> PlannerDecision | 
     )
 
 
+_ESCALATION_DECLINE_LABELS = frozenset({"아니요", "아니오", "아니"})
+
+
+def _declined_escalation_plan(state: Any, user_text: str) -> PlannerDecision | None:
+    """Detect the user declining a just-shown escalation confirmation.
+
+    Same rationale as _confirmed_escalation_plan: "아니요" here is an exact
+    echo of a quickReply label this runtime generated itself moments ago, not
+    open-ended language that needs LLM interpretation. Without this, the
+    full Planner has no instruction for "cancel a pending escalation" and
+    just re-selects FallbackEscalationAF from scratch, re-asking the same
+    confirmation forever.
+    """
+    last_facts = state.last_facts if isinstance(state.last_facts, dict) else {}
+    pending_target = str(last_facts.get("pending_escalation_target") or "").strip()
+    if not pending_target:
+        return None
+    text = str(user_text or "").strip()
+    if text not in _ESCALATION_DECLINE_LABELS:
+        return None
+    return PlannerDecision(
+        selected_afs=[
+            SelectedAF(
+                af=AgentFlow.FALLBACK_ESCALATION,
+                reason="user declined a prior escalation confirmation prompt",
+                required_inputs=[],
+                known_inputs={"escalation_target": pending_target, "confirmed_action": "declined"},
+                missing_inputs=[],
+            )
+        ],
+        conversation_goal="cancel_escalation",
+        answer_mode="tool_grounded_answer",
+        requires_user_confirmation=False,
+        resume_previous_flow=False,
+    )
+
+
 def _vehicle_selection_recommendation_plan(request: TStationChatRequest) -> PlannerDecision | None:
     patch = _request_slot_patch(request)
     values = _ui_action_values(request, patch)
@@ -765,6 +802,8 @@ class LLMFirstRuntime:
             planner = _purchase_progress_plan(request, state)
         if planner is None:
             planner = _confirmed_escalation_plan(state, user_text)
+        if planner is None:
+            planner = _declined_escalation_plan(state, user_text)
         if planner is None:
             planner = await self.planner.plan(
                 user_text=user_text,

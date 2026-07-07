@@ -142,6 +142,32 @@ def _escalation_completion_event(target: str, result: Any) -> dict[str, Any]:
     }
 
 
+def _escalation_declined_event() -> dict[str, Any]:
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": "알겠습니다. 다른 도움이 필요하시면 말씀해 주세요.",
+            "quickReplies": [],
+            "predictedDomains": ["LEADING"],
+            "metadata": {
+                "source": "llm_first_escalation_declined",
+            },
+        },
+    }
+
+
+def _clear_pending_escalation(state: ConversationState) -> ConversationState:
+    """Drop the pending-escalation flag now that it's resolved (confirmed or declined).
+
+    last_facts merges are additive (see _remember_followup_context) — nothing
+    else removes a stale key, so leaving it set would wrongly re-trigger the
+    confirm/decline shortcuts on a later, unrelated turn.
+    """
+    cleared_facts = {k: v for k, v in (state.last_facts or {}).items() if k != "pending_escalation_target"}
+    return state.model_copy(update={"last_facts": cleared_facts})
+
+
 def _favorite_store_empty_event() -> dict[str, Any]:
     return {
         "type": "data",
@@ -1250,7 +1276,11 @@ class AFExecutor:
 
     async def _fallback_escalation(self, user_text: str, state: ConversationState, known: dict[str, Any], bundle: FactBundle) -> ConversationState:
         target = str(known.get("escalation_target") or "qna").strip()
-        if str(known.get("confirmed_action") or "").strip() != "escalation":
+        confirmed_action = str(known.get("confirmed_action") or "").strip()
+        if confirmed_action == "declined":
+            _append_template(bundle, _escalation_declined_event())
+            return _clear_pending_escalation(state)
+        if confirmed_action != "escalation":
             _append_template(bundle, _escalation_confirmation_event(target))
             return state
         if target == "human":
@@ -1280,9 +1310,4 @@ class AFExecutor:
                 allow_side_effect=True,
             )
         _append_template(bundle, _escalation_completion_event(target, result))
-        # Clear the pending flag now that it's resolved — otherwise it stays in
-        # last_facts forever (the merge in _remember_followup_context only adds
-        # keys, it never drops stale ones) and would wrongly re-trigger the
-        # confirmed-escalation shortcut on a later, unrelated turn.
-        cleared_facts = {k: v for k, v in (state.last_facts or {}).items() if k != "pending_escalation_target"}
-        return state.model_copy(update={"last_facts": cleared_facts})
+        return _clear_pending_escalation(state)

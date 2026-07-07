@@ -106,6 +106,7 @@ class StaticComposer:
                     "llm_first_cart_complete",
                     "llm_first_unsupported_region",
                     "llm_first_escalation_complete",
+                    "llm_first_escalation_declined",
                 }:
                     return data["assistantResponse"]
         return "확인한 결과를 안내드립니다."
@@ -3548,6 +3549,76 @@ def test_unrelated_reply_after_escalation_prompt_does_not_trigger_confirmed_acti
 
     assert metadata["planner"]["selected_afs"][0]["af"] == "PriceAF"
     assert not any(call["tool_name"] in {"transfer_to_qna_tool", "escalate_tool"} for call in metadata["tool_calls"])
+
+
+def test_declining_escalation_cancels_without_calling_tool_or_reasking() -> None:
+    """Regression test: clicking 아니요 must cancel, not re-show the prompt."""
+    store = MemoryStateStore()
+    store.state.last_facts = {"pending_escalation_target": "qna"}
+    wrong_decision = PlannerDecision(
+        selected_afs=[SelectedAF(af=AgentFlow.FALLBACK_ESCALATION, reason="planner should not be reached this turn", known_inputs={"escalation_target": "qna"})],
+    )
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(wrong_decision),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=store,
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "아니요"}],
+        stream=False,
+        user_id="M123",
+        session_id="fallback-escalation-decline",
+    )
+
+    text, events, metadata = asyncio.run(runtime.run(request))
+
+    assert metadata["planner"]["selected_afs"][0]["af"] == "FallbackEscalationAF"
+    assert metadata["planner"]["conversation_goal"] == "cancel_escalation"
+    assert metadata["tool_calls"] == []
+    assert events[0]["data"]["metadata"]["source"] == "llm_first_escalation_declined"
+    assert events[0]["data"]["metadata"].get("requiresConfirmation") is None
+    assert "다른 도움" in text
+    assert store.state.last_facts.get("pending_escalation_target") is None
+
+
+def test_declining_then_asking_again_shows_a_fresh_confirmation_not_a_loop() -> None:
+    """End-to-end regression for the exact loop reported: ask -> decline -> ask again."""
+    store = MemoryStateStore()
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(af=AgentFlow.FALLBACK_ESCALATION, reason="explicit qna handoff", known_inputs={"escalation_target": "qna"})
+            ]
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=store,
+    )
+
+    # Turn 1: ask -> confirmation prompt.
+    asyncio.run(runtime.run(TStationChatRequest(
+        messages=[{"role": "user", "content": "1:1 문의"}],
+        stream=False, user_id="M123", session_id="fallback-escalation-reloop",
+    )))
+    assert store.state.last_facts.get("pending_escalation_target") == "qna"
+
+    # Turn 2: decline -> cancelled, pending flag cleared.
+    _, decline_events, decline_metadata = asyncio.run(runtime.run(TStationChatRequest(
+        messages=[{"role": "user", "content": "아니요"}],
+        stream=False, user_id="M123", session_id="fallback-escalation-reloop",
+    )))
+    assert decline_events[0]["data"]["metadata"]["source"] == "llm_first_escalation_declined"
+    assert store.state.last_facts.get("pending_escalation_target") is None
+
+    # Turn 3: asking again afterward (as in the reported repro) must produce a
+    # fresh confirmation, proving the cycle isn't left in a broken state.
+    _, reask_events, _ = asyncio.run(runtime.run(TStationChatRequest(
+        messages=[{"role": "user", "content": "1:1 문의"}],
+        stream=False, user_id="M123", session_id="fallback-escalation-reloop",
+    )))
+    assert reask_events[0]["data"]["metadata"]["source"] == "llm_first_escalation_confirmation"
+    assert store.state.last_facts.get("pending_escalation_target") == "qna"
 
 
 def test_qc_blocks_completion_claim_without_side_effect() -> None:
