@@ -91,45 +91,6 @@ def _selection_key(value: Any) -> str:
     return re.sub(r"[^0-9a-z가-힣]", "", str(value or "").lower())
 
 
-def _account_lookup_plan(user_text: str) -> PlannerDecision | None:
-    compact = _selection_key(user_text)
-    if not compact:
-        return None
-    if "쿠폰" in compact and any(token in compact for token in ("목록", "내쿠폰", "보유", "조회", "보여")):
-        return PlannerDecision(
-            selected_afs=[
-                SelectedAF(
-                    af=AgentFlow.PRICE,
-                    reason="user asks to view owned coupons",
-                    required_inputs=[],
-                    known_inputs={"account_lookup": "coupons"},
-                    missing_inputs=[],
-                )
-            ],
-            conversation_goal="show_owned_coupons",
-            answer_mode="tool_grounded_answer",
-            requires_user_confirmation=False,
-            resume_previous_flow=False,
-        )
-    if "예약" in compact and any(token in compact for token in ("내역", "목록", "조회", "보여", "확인")):
-        return PlannerDecision(
-            selected_afs=[
-                SelectedAF(
-                    af=AgentFlow.ORDER_DELIVERY,
-                    reason="user asks to view reservation history",
-                    required_inputs=[],
-                    known_inputs={"account_lookup": "reservations"},
-                    missing_inputs=[],
-                )
-            ],
-            conversation_goal="show_reservation_history",
-            answer_mode="tool_grounded_answer",
-            requires_user_confirmation=False,
-            resume_previous_flow=False,
-        )
-    return None
-
-
 def _resolve_text_store_selection(request: TStationChatRequest, state: Any, user_text: str) -> Any:
     commerce = state.commerce_state
     if commerce.store.shop_id or commerce.schedule.date or commerce.schedule.time:
@@ -258,7 +219,7 @@ class LLMFirstRuntime:
         set_trace_name(user_text[:60] if user_text else "llm_first_chat")
         state = _apply_request_patch(self.state_store.load(request.session_id), request)
         state = _resolve_text_store_selection(request, state, user_text)
-        planner = _account_lookup_plan(user_text) or _store_selection_schedule_plan(request, state, user_text)
+        planner = _store_selection_schedule_plan(request, state, user_text)
         if planner is None:
             planner = await self.planner.plan(
                 user_text=user_text,

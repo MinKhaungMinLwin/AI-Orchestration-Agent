@@ -22,6 +22,130 @@ DB/API 결과에 근거해서 답변해야 합니다.
 - 기존 flow fallback으로 자동 복귀하는 방식
 - template mapper에서 고정 문구를 계속 조립하는 방식
 
+## llm_first 코드 수정 규정
+
+`app/tstation-ai/services/tstation/llm_first/` 하위 코드를 수정할 때는 아래 규정을 반드시 지킵니다.
+
+### 1. intent enum 확장으로 문제를 해결하지 않음
+
+신규 MVP의 핵심 판단 단위는 기존식 intent가 아니라 LLM Planner의 현재 턴 이해 결과입니다.
+
+금지:
+
+- 특정 문구 처리를 위해 intent 값을 계속 추가
+- `price_or_benefit_lookup`, `stock_store_search`처럼 세부 intent를 늘려 tool을 고정
+- intent 값만 보고 다음 tool/template/action을 확정
+- 기존 legacy intent taxonomy를 `llm_first`에 다시 이식
+
+허용:
+
+- 최초 기획의 Agent Flow 수준 분류
+  - `StoreAF`
+  - `PriceAF`
+  - `InventoryAF`
+  - `QuickShoppingAF`
+  - `ProductRecommendationAF`
+  - `ProductDescriptionAF`
+  - `FAQAF`
+  - `OrderDeliveryAF`
+  - `ProductCompatibilityAF`
+  - `FallbackEscalationAF`
+- LLM Planner가 선택한 AF, known input, missing input, subtask를 기준으로 실행 계획 구성
+- Tool Capability Registry가 해당 AF에서 실행 가능한 tool인지 검증
+
+### 2. 정규식으로 사용자 의도를 판단하지 않음
+
+정규식은 LLM이 이해한 내용을 보조하거나 구조화 값을 정규화하는 용도로만 사용합니다.
+
+금지:
+
+- 키워드 정규식으로 AF 선택
+- `구매`, `추천`, `할인`, `매장`, `재고`, `장착` 같은 단어만 보고 tool 실행
+- 지역/매장/상품명을 정규식으로 확정 저장
+- 정규식 결과가 LLM Planner 결과보다 우선하는 구조
+- 정규식 fast-path를 추가해 기존 legacy처럼 우회 실행하는 구조
+
+허용:
+
+- 타이어 사이즈 정규화
+  - 예: `2454519` -> `245/45R19`
+- 수량 정규화
+  - 예: `2개`, `4본` -> `ord_qty`
+- 날짜/시간 표준화
+- 차량번호, 주문번호 같은 명확한 구조화 값 추출
+- LLM Planner output의 값 검증 또는 보정
+
+### 3. tool 실행은 LLM 계획 + registry 검증을 모두 통과해야 함
+
+LLM Planner는 사용자의 목표와 필요한 작업을 제안합니다. 실제 tool 실행 여부는 Tool Capability Registry와 AF Executor가 검증합니다.
+
+필수 조건:
+
+- Planner가 현재 턴에서 해당 AF/subtask를 선택해야 함
+- Tool Capability Registry에서 해당 AF에 허용된 tool이어야 함
+- required input이 채워져 있어야 함
+- side-effect tool이 아니거나, 명시 확인이 완료되어야 함
+
+금지:
+
+- 코드에서 특정 문구를 보고 직접 tool 실행
+- 과거 state만 보고 tool 실행
+- FE template 이름만 보고 다음 action 실행
+- missing input이 있는데 임의 값으로 tool 실행
+
+### 4. state는 현재 턴을 덮지 못함
+
+ConversationState와 CommerceState는 LLM Planner의 판단 재료입니다. 기존 state가 현재 턴의 의도나 행동을 강제로 결정하면 안 됩니다.
+
+필수 원칙:
+
+- 현재 사용자 질문이 우선
+- 기존 구매 흐름은 보존하되 자동 실행하지 않음
+- 명시적 재개 발화가 있을 때만 구매/예약 흐름 재개
+- 상품/사이즈/수량/매장/스케줄 변경 시 종속 state 초기화
+
+금지:
+
+- 저장된 `goods_no`, `shop_id`, `ord_qty`만으로 구매 flow 자동 진행
+- 이전 template metadata로 현재 action 결정
+- 과거 가격/스케줄을 새 상품이나 새 매장에 재사용
+
+### 5. 고정 답변보다 LLM Composer를 우선함
+
+사용자-facing 답변은 가능한 LLM Composer가 작성합니다. 코드는 facts, template 구조, safety boundary만 제공합니다.
+
+금지:
+
+- 케이스별 고정 답변 문구를 계속 추가
+- template adapter에서 긴 assistantResponse 생성
+- 특정 질문 문구별 답변 분기 추가
+
+허용:
+
+- tool fact가 없을 때의 짧은 안전 fallback
+- side-effect 차단 안내
+- planner 실패 시 clarification
+- FE template 구조 생성
+
+### 6. 예외 처리는 legacy fallback이 아니라 신규 runtime 안에서 처리함
+
+`llm_first`는 기존 legacy runtime으로 자동 fallback하지 않습니다.
+
+처리 방식:
+
+- 이해 실패: clarification
+- 정보 부족: missing input 질문
+- tool 실패: 조회 실패 안내와 재시도/정보 요청
+- 지원 불가: 지원 불가 안내
+- side-effect 미확인: 확인 요청 또는 실행 차단
+
+금지:
+
+- `StreamingMultiAgentCoordinator`로 fallback
+- legacy `flow_controller`로 fallback
+- legacy `template_mapper` 고정 답변으로 fallback
+- legacy regex fast-path 호출
+
 챗봇이 지원해야 하는 주요 기능은 아래와 같습니다.
 
 - 매장 조회

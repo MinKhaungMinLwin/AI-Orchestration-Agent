@@ -47,6 +47,14 @@ class StructuredKnownInputs(BaseModel):
     region: str | None
     date: str | None
     time: str | None
+    account_lookup: Literal[
+        "none",
+        "coupons",
+        "reservations",
+        "orders",
+        "maintenance_history",
+        "warranties",
+    ] | None
 
 
 class StructuredSelectedAF(BaseModel):

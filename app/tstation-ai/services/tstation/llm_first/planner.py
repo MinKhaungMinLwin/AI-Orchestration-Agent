@@ -90,9 +90,12 @@ class LeadingAgentPlanner:
             "Use current-turn intent first. Do not force stale purchase context unless the user explicitly resumes. "
             "Return missing_inputs for each selected flow. Include product_name, region, store_name, ord_qty, "
             "goods_no, shop_id, tire_size, schedule date/time in known_inputs when the user or state provides them. "
+            "For authenticated account lookups, set known_inputs.account_lookup to one of: "
+            "coupons for owned coupon list, reservations for reservation history, orders for order history, "
+            "maintenance_history for service/maintenance history, warranties for owned warranty/assurance service. "
             "Allowed MVP flows: StoreAF, PriceAF, InventoryAF, QuickShoppingAF, "
-            "ProductRecommendationAF, ProductDescriptionAF, FAQAF. "
-            "OrderDeliveryAF, ProductCompatibilityAF, and FallbackEscalationAF are deferred. "
+            "ProductRecommendationAF, ProductDescriptionAF, FAQAF, OrderDeliveryAF. "
+            "ProductCompatibilityAF and FallbackEscalationAF are deferred. "
             "Side effects require confirmation and are blocked in MVP."
         )
         state_json = state.model_dump_json(exclude_none=True)
@@ -134,6 +137,7 @@ class LeadingAgentPlanner:
             AgentFlow.PRODUCT_RECOMMENDATION,
             AgentFlow.PRODUCT_DESCRIPTION,
             AgentFlow.FAQ,
+            AgentFlow.ORDER_DELIVERY,
         }
         filtered = [item for item in decision.selected_afs if item.af in allowed]
         if not filtered:

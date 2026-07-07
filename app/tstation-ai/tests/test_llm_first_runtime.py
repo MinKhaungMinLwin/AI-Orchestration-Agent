@@ -240,6 +240,49 @@ class FakeExecutor(AFExecutor):
                     ]
                 },
             }
+        elif tool_name == "get_orders_of_user_tool":
+            result = {
+                "status": "success",
+                "data": {
+                    "orders": [
+                        {
+                            "ord_no": "O001",
+                            "goods_nm": "벤투스 S2 AS",
+                            "ord_qty": 4,
+                            "sys_reg_dtime": "2026-07-07 09:00:00",
+                        }
+                    ]
+                },
+            }
+        elif tool_name == "get_maintenance_history_tool":
+            result = {
+                "status": "success",
+                "data": {
+                    "items": [
+                        {
+                            "car_svc_dt": "2026-07-01",
+                            "shop_nm": "티스테이션 판교점",
+                            "car_svc_info": "타이어 교체",
+                            "car_svc_qty": "4",
+                        }
+                    ]
+                },
+            }
+        elif tool_name == "get_my_warranties_tool":
+            result = {
+                "status": "success",
+                "data": {
+                    "warranties": [
+                        {
+                            "wrt_nm": "안심서비스",
+                            "goods_nm": "벤투스 S2 AS",
+                            "shop_nm": "티스테이션 판교점",
+                            "reg_dtime": "2026-07-01",
+                            "expr_dtime": "2027-07-01",
+                        }
+                    ]
+                },
+            }
         else:
             result = {"status": "success", "data": []}
         bundle.tool_calls.append(ToolCallRecord(af=af, tool_name=tool_name, args=args, result=result))
@@ -278,6 +321,7 @@ def test_structured_planner_schema_requires_all_strict_fields() -> None:
         "region",
         "date",
         "time",
+        "account_lookup",
     }
 
 
@@ -785,7 +829,15 @@ def test_quick_shopping_complete_inputs_emits_preorder_without_side_effect() -> 
 
 def test_coupon_list_uses_coupon_tool_and_voucher_template() -> None:
     runtime = LLMFirstRuntime(
-        planner=StaticPlanner(PlannerDecision(selected_afs=[])),
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.PRICE,
+                    reason="owned coupon lookup",
+                    known_inputs={"account_lookup": "coupons"},
+                )
+            ]
+        )),
         executor=FakeExecutor(),
         composer=StaticComposer(),
         state_store=MemoryStateStore(),
@@ -808,7 +860,15 @@ def test_coupon_list_uses_coupon_tool_and_voucher_template() -> None:
 
 def test_reservation_history_uses_reservation_tool_not_faq() -> None:
     runtime = LLMFirstRuntime(
-        planner=StaticPlanner(PlannerDecision(selected_afs=[])),
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.ORDER_DELIVERY,
+                    reason="reservation history lookup",
+                    known_inputs={"account_lookup": "reservations"},
+                )
+            ]
+        )),
         executor=FakeExecutor(),
         composer=StaticComposer(),
         state_store=MemoryStateStore(),
@@ -825,6 +885,96 @@ def test_reservation_history_uses_reservation_tool_not_faq() -> None:
     assert events == []
     assert metadata["planner"]["selected_afs"][0]["af"] == "OrderDeliveryAF"
     assert metadata["tool_calls"][0]["tool_name"] == "get_my_reservations_tool"
+
+
+def test_order_history_uses_order_tool_not_faq() -> None:
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.ORDER_DELIVERY,
+                    reason="order history lookup",
+                    known_inputs={"account_lookup": "orders"},
+                )
+            ]
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=MemoryStateStore(),
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "내 주문내역 보여줘"}],
+        stream=False,
+        user_id="u1",
+        session_id="order-history",
+    )
+
+    _, events, metadata = asyncio.run(runtime.run(request))
+
+    assert events == []
+    assert metadata["planner"]["selected_afs"][0]["af"] == "OrderDeliveryAF"
+    assert metadata["planner"]["selected_afs"][0]["known_inputs"]["account_lookup"] == "orders"
+    assert metadata["tool_calls"][0]["tool_name"] == "get_orders_of_user_tool"
+
+
+def test_maintenance_history_uses_maintenance_tool_not_faq() -> None:
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.ORDER_DELIVERY,
+                    reason="maintenance history lookup",
+                    known_inputs={"account_lookup": "maintenance_history"},
+                )
+            ]
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=MemoryStateStore(),
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "내 정비내역 보여줘"}],
+        stream=False,
+        user_id="u1",
+        session_id="maintenance-history",
+    )
+
+    _, events, metadata = asyncio.run(runtime.run(request))
+
+    assert events == []
+    assert metadata["planner"]["selected_afs"][0]["af"] == "OrderDeliveryAF"
+    assert metadata["planner"]["selected_afs"][0]["known_inputs"]["account_lookup"] == "maintenance_history"
+    assert metadata["tool_calls"][0]["tool_name"] == "get_maintenance_history_tool"
+
+
+def test_my_warranty_uses_warranty_tool_not_faq_search() -> None:
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.FAQ,
+                    reason="owned warranty lookup",
+                    known_inputs={"account_lookup": "warranties"},
+                )
+            ]
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=MemoryStateStore(),
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "나의 워런티 보여줘"}],
+        stream=False,
+        user_id="u1",
+        session_id="my-warranty",
+    )
+
+    _, events, metadata = asyncio.run(runtime.run(request))
+
+    assert events == []
+    assert metadata["planner"]["selected_afs"][0]["af"] == "FAQAF"
+    assert metadata["planner"]["selected_afs"][0]["known_inputs"]["account_lookup"] == "warranties"
+    assert metadata["tool_calls"][0]["tool_name"] == "get_my_warranties_tool"
 
 
 def test_qc_blocks_completion_claim_without_side_effect() -> None:

@@ -55,6 +55,8 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
     "get_final_price_tool": ToolSpec("get_final_price_tool", frozenset({AgentFlow.PRICE, AgentFlow.QUICK_SHOPPING}), lambda: _tx_tool("get_final_price_tool"), required_args=frozenset({"goods_no"})),
     "get_my_coupons_tool": ToolSpec("get_my_coupons_tool", frozenset({AgentFlow.PRICE}), lambda: _tx_tool("get_my_coupons_tool")),
     "get_my_reservations_tool": ToolSpec("get_my_reservations_tool", frozenset({AgentFlow.ORDER_DELIVERY}), lambda: _tx_tool("get_my_reservations_tool")),
+    "get_maintenance_history_tool": ToolSpec("get_maintenance_history_tool", frozenset({AgentFlow.ORDER_DELIVERY}), lambda: _tx_tool("get_maintenance_history_tool")),
+    "get_orders_of_user_tool": ToolSpec("get_orders_of_user_tool", frozenset({AgentFlow.ORDER_DELIVERY}), lambda: _tx_tool("get_orders_of_user_tool")),
     "get_coupon_applicable_products_tool": ToolSpec("get_coupon_applicable_products_tool", frozenset({AgentFlow.PRICE}), lambda: _tx_tool("get_coupon_applicable_products_tool")),
     "get_product_promotions_tool": ToolSpec("get_product_promotions_tool", frozenset({AgentFlow.PRICE}), lambda: _tx_tool("get_product_promotions_tool"), required_args=frozenset({"goods_no"})),
     "transaction_store_preview_tool": ToolSpec("transaction_store_preview_tool", frozenset({AgentFlow.INVENTORY, AgentFlow.QUICK_SHOPPING}), lambda: _tx_tool("transaction_store_preview_tool"), required_args=frozenset({"goods_no", "ord_qty"})),
@@ -71,6 +73,7 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
     "search_faq_rag_tool": ToolSpec("search_faq_rag_tool", frozenset({AgentFlow.FAQ}), lambda: _support_tool("search_faq_rag_tool")),
     "get_faq_tool": ToolSpec("get_faq_tool", frozenset({AgentFlow.FAQ}), lambda: _support_tool("get_faq_tool")),
     "get_card_installments_tool": ToolSpec("get_card_installments_tool", frozenset({AgentFlow.FAQ}), lambda: _support_tool("get_card_installments_tool")),
+    "get_my_warranties_tool": ToolSpec("get_my_warranties_tool", frozenset({AgentFlow.FAQ}), lambda: _support_tool("get_my_warranties_tool")),
     "quick_order_tool": ToolSpec("quick_order_tool", frozenset({AgentFlow.QUICK_SHOPPING}), lambda: _tx_tool("quick_order_tool"), read_only=False),
     "save_to_cart_tool": ToolSpec("save_to_cart_tool", frozenset({AgentFlow.QUICK_SHOPPING}), lambda: _tx_tool("save_to_cart_tool"), read_only=False),
 }

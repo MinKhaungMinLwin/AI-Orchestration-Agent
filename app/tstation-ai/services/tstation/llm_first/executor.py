@@ -55,9 +55,12 @@ class AFExecutor:
             elif selected.af == AgentFlow.QUICK_SHOPPING:
                 working_state = await self._quick_shopping(user_text, working_state, selected.known_inputs, bundle)
             elif selected.af == AgentFlow.FAQ:
-                working_state = await self._faq(user_text, working_state, selected.known_inputs, bundle)
+                if selected.known_inputs.get("account_lookup") == "warranties":
+                    working_state = await self._warranties(user_text, working_state, selected.known_inputs, bundle)
+                else:
+                    working_state = await self._faq(user_text, working_state, selected.known_inputs, bundle)
             elif selected.af == AgentFlow.ORDER_DELIVERY:
-                working_state = await self._reservations(user_text, working_state, selected.known_inputs, bundle)
+                working_state = await self._account_order_delivery(user_text, working_state, selected.known_inputs, bundle)
         bundle.state = working_state
         bundle.facts["commerce_state"] = working_state.commerce_state.model_dump(exclude_none=True)
         return bundle
@@ -140,8 +143,14 @@ class AFExecutor:
         _append_template(bundle, build_voucher_template(result, "보유 쿠폰 목록을 확인해 주세요."))
         return state
 
-    async def _reservations(self, user_text: str, state: ConversationState, known: dict[str, Any], bundle: FactBundle) -> ConversationState:
-        await self._call(bundle, AgentFlow.ORDER_DELIVERY, "get_my_reservations_tool", {"sct_cd": "all"})
+    async def _account_order_delivery(self, user_text: str, state: ConversationState, known: dict[str, Any], bundle: FactBundle) -> ConversationState:
+        lookup = known.get("account_lookup")
+        if lookup == "orders":
+            await self._call(bundle, AgentFlow.ORDER_DELIVERY, "get_orders_of_user_tool", {})
+        elif lookup == "maintenance_history":
+            await self._call(bundle, AgentFlow.ORDER_DELIVERY, "get_maintenance_history_tool", {"limit": 5})
+        else:
+            await self._call(bundle, AgentFlow.ORDER_DELIVERY, "get_my_reservations_tool", {"sct_cd": "all"})
         return state
 
     async def _store(self, user_text: str, state: ConversationState, known: dict[str, Any], bundle: FactBundle) -> ConversationState:
@@ -212,4 +221,8 @@ class AFExecutor:
 
     async def _faq(self, user_text: str, state: ConversationState, known: dict[str, Any], bundle: FactBundle) -> ConversationState:
         await self._call(bundle, AgentFlow.FAQ, "search_faq_hybrid_tool", {"query": user_text, "top_k": 5})
+        return state
+
+    async def _warranties(self, user_text: str, state: ConversationState, known: dict[str, Any], bundle: FactBundle) -> ConversationState:
+        await self._call(bundle, AgentFlow.FAQ, "get_my_warranties_tool", {})
         return state
