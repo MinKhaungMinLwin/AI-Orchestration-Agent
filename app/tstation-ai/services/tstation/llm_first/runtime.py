@@ -203,7 +203,34 @@ def _has_purchase_progress_patch(request: TStationChatRequest) -> bool:
     values = _ui_action_values(request, patch)
     action_type = str(values.get("action_type") or values.get("cta_action") or values.get("actionId") or "").strip()
     fills_slot = str(values.get("fills_slot") or values.get("fillsSlot") or "").strip()
-    if not (action_type or fills_slot or request.ui_action or request.chip_context):
+    purchase_action_types = {
+        "select_quantity",
+        "select_store",
+        "select_schedule",
+        "select_date",
+        "select_time",
+        "quick_order_reservation",
+    }
+    purchase_slots = {
+        "ord_qty",
+        "ordQty",
+        "quantity",
+        "shop_id",
+        "shopId",
+        "requested_cal_day",
+        "requestedCalDay",
+        "rsv_hour",
+        "rsvHour",
+        "date",
+        "time",
+        "booking_datetime",
+        "bookingDateTime",
+    }
+    if action_type and action_type not in purchase_action_types:
+        return False
+    if fills_slot and fills_slot not in purchase_slots:
+        return False
+    if not (action_type or fills_slot):
         return False
     purchase_keys = {
         "ord_qty",
