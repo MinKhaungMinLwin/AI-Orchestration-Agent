@@ -52,7 +52,7 @@ import pytest  # noqa: E402
 
 from schemas.tstation.chat import TStationChatRequest  # noqa: E402
 from services.tstation.llm_first.executor import AFExecutor  # noqa: E402
-from services.tstation.llm_first.models import AgentFlow, ConversationState, PlannerDecision, ProductState, SelectedAF, ToolCallRecord  # noqa: E402
+from services.tstation.llm_first.models import AgentFlow, ConversationState, PlannerDecision, ProductState, SelectedAF, StructuredPlannerDecision, ToolCallRecord  # noqa: E402
 from services.tstation.llm_first.planner import LeadingAgentPlanner  # noqa: E402
 from services.tstation.llm_first.qc import verify_response  # noqa: E402
 from services.tstation.llm_first.runtime import LLMFirstRuntime  # noqa: E402
@@ -105,6 +105,8 @@ class FakeLLM:
         self.decision = decision
 
     def with_structured_output(self, schema, strict=True):
+        assert schema is StructuredPlannerDecision
+        assert strict is True
         return StructuredFakeLLM(self.decision)
 
 
@@ -196,6 +198,26 @@ class FakeExecutor(AFExecutor):
         bundle.tool_calls.append(ToolCallRecord(af=af, tool_name=tool_name, args=args, result=result))
         bundle.facts[tool_name] = result
         return result
+
+
+def test_structured_planner_schema_requires_all_strict_fields() -> None:
+    schema = StructuredPlannerDecision.model_json_schema()
+    assert set(schema["required"]) == {
+        "selected_afs",
+        "conversation_goal",
+        "answer_mode",
+        "requires_user_confirmation",
+        "resume_previous_flow",
+    }
+    selected_af_ref = schema["properties"]["selected_afs"]["items"]["$ref"].removeprefix("#/$defs/")
+    selected_af_schema = schema["$defs"][selected_af_ref]
+    assert set(selected_af_schema["required"]) == {
+        "af",
+        "reason",
+        "required_inputs",
+        "known_inputs",
+        "missing_inputs",
+    }
 
 
 def test_planner_selects_recommendation_for_tire_size() -> None:

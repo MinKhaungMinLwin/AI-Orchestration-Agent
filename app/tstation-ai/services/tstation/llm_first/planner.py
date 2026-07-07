@@ -7,7 +7,7 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from config.tracing import build_trace_config
-from services.tstation.llm_first.models import AgentFlow, ConversationState, PlannerDecision
+from services.tstation.llm_first.models import AgentFlow, ConversationState, PlannerDecision, StructuredPlannerDecision
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +66,9 @@ def _clarification_plan() -> PlannerDecision:
 class LeadingAgentPlanner:
     def __init__(self, llm: Any | None = None):
         self.llm = llm
-        self._structured_llm = llm.with_structured_output(PlannerDecision, strict=True) if llm is not None else None
+        self._structured_llm = (
+            llm.with_structured_output(StructuredPlannerDecision, strict=True) if llm is not None else None
+        )
 
     async def plan(
         self,
@@ -114,6 +116,7 @@ class LeadingAgentPlanner:
                 [SystemMessage(content=prompt), HumanMessage(content=human)],
                 config=trace_config,
             )
+            decision = PlannerDecision.model_validate(decision.model_dump())
         except Exception:
             logger.warning("[LLM_FIRST_PLANNER] structured planner failed; asking clarification", exc_info=True)
             return _clarification_plan()

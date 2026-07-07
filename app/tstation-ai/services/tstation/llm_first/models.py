@@ -35,6 +35,22 @@ class PlannerDecision(BaseModel):
     resume_previous_flow: bool = False
 
 
+class StructuredSelectedAF(BaseModel):
+    af: AgentFlow
+    reason: str
+    required_inputs: list[str]
+    known_inputs: dict[str, Any]
+    missing_inputs: list[str]
+
+
+class StructuredPlannerDecision(BaseModel):
+    selected_afs: list[StructuredSelectedAF]
+    conversation_goal: str
+    answer_mode: Literal["clarification", "tool_grounded_answer", "blocked"]
+    requires_user_confirmation: bool
+    resume_previous_flow: bool
+
+
 class ProductState(BaseModel):
     goods_no: str | None = None
     product_name: str | None = None
@@ -88,4 +104,3 @@ class FactBundle(BaseModel):
     templates: list[dict[str, Any]] = Field(default_factory=list)
     missing_inputs: list[str] = Field(default_factory=list)
     state: ConversationState = Field(default_factory=ConversationState)
-
