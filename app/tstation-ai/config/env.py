@@ -73,6 +73,7 @@ class Settings(BaseSettings):
     AI_QC_ENABLED: bool = False
     AI_QC_PARALLEL: bool = False
     AI_LLM_FIRST_RUNTIME_ENABLED: bool = True
+    AI_CHAT_V3_PURE_LLM_ENABLED: bool = True  # V3: pure LLM chat, no rules/tools/regex
     AI_SPECULATIVE_CLASSIFY_ENABLED: bool = False
     AI_ROUTER_USE_SLIM_PROMPT_V2: bool = True
     AI_ROUTER_SKIP_VALIDATED_UI_ACTION: bool = True

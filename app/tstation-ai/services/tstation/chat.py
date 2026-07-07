@@ -23902,6 +23902,13 @@ class TStationChatServiceV2:
         """
         T-Station AI Chat V2 - Multi-Agent Streaming
         """
+        from services.tstation.chat_v3 import enabled as _chat_v3_enabled
+        if _chat_v3_enabled():
+            logger.info("[CHAT_V2] V3 pure-LLM chat enabled for session=%s", request.session_id)
+            from services.tstation.chat_v3 import TStationChatServiceV3
+
+            return await TStationChatServiceV3.chat(request)
+
         logger.debug(f"[CHAT_V2] Received request: {request}")
         _t0 = time.perf_counter()
         _t_slots = _t0  # fallback: if slot processing fails, slots latency shows 0ms
