@@ -75,6 +75,29 @@ def _favorite_store_empty_event() -> dict[str, Any]:
     }
 
 
+def _quantity_quickreply_event() -> dict[str, Any]:
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": "수량 정보를 알려주시면 이어서 확인해 드릴게요.",
+            "quickReplies": [
+                {"label": "1개", "domain": "TRANSACTION"},
+                {"label": "2개", "domain": "TRANSACTION"},
+                {"label": "3개", "domain": "TRANSACTION"},
+                {"label": "4개", "domain": "TRANSACTION"},
+            ],
+            "predictedDomains": ["TRANSACTION"],
+            "metadata": {
+                "source": "llm_first_quantity_missing",
+                "response_shape_key": "quantity_selection",
+                "fillsSlot": "ord_qty",
+                "fills_slot": "ord_qty",
+            },
+        },
+    }
+
+
 def _success_payload(result: Any) -> Any:
     if isinstance(result, dict) and result.get("status") == "error":
         return None
@@ -623,6 +646,7 @@ class AFExecutor:
             return next_state
         if not qty:
             bundle.missing_inputs.append("ord_qty")
+            _append_template(bundle, _quantity_quickreply_event())
             return next_state
         if not (region or shop_id):
             bundle.missing_inputs.append("region_or_store")
@@ -640,6 +664,7 @@ class AFExecutor:
             return next_state
         if not qty:
             bundle.missing_inputs.append("quantity")
+            _append_template(bundle, _quantity_quickreply_event())
             return next_state
         next_state = apply_state_rules(next_state, quantity=int(qty))
         store_patch = {

@@ -1577,8 +1577,43 @@ def test_inventory_flow_requires_qty_before_tool_call() -> None:
     text, events, metadata = asyncio.run(runtime.run(request))
 
     assert text == "필요한 정보를 알려주세요."
-    assert events == []
+    assert events[0]["template"] == "quickReply"
+    assert events[0]["data"]["assistantResponse"] == "수량 정보를 알려주시면 이어서 확인해 드릴게요."
+    assert [reply["label"] for reply in events[0]["data"]["quickReplies"]] == ["1개", "2개", "3개", "4개"]
+    assert all(reply["domain"] == "TRANSACTION" for reply in events[0]["data"]["quickReplies"])
+    assert events[0]["data"]["metadata"]["fillsSlot"] == "ord_qty"
     assert metadata["missing_inputs"] == ["ord_qty"]
+    assert metadata["tool_calls"] == []
+
+
+def test_quick_shopping_missing_quantity_emits_quantity_quickreply() -> None:
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.QUICK_SHOPPING,
+                    reason="purchase flow needs quantity",
+                    known_inputs={"goods_no": "G000000000003"},
+                )
+            ]
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=MemoryStateStore(),
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "이 상품 구매할래"}],
+        stream=False,
+        user_id="u1",
+        session_id="quick-shopping-quantity-missing",
+    )
+
+    text, events, metadata = asyncio.run(runtime.run(request))
+
+    assert text == "필요한 정보를 알려주세요."
+    assert events[0]["template"] == "quickReply"
+    assert [reply["label"] for reply in events[0]["data"]["quickReplies"]] == ["1개", "2개", "3개", "4개"]
+    assert metadata["missing_inputs"] == ["quantity"]
     assert metadata["tool_calls"] == []
 
 
