@@ -11,14 +11,6 @@ from services.tstation.llm_first.models import FactBundle
 
 logger = logging.getLogger(__name__)
 
-_GENERAL_TIRE_TERM_EXPLANATIONS: tuple[tuple[str, str], ...] = (
-    (
-        "3pmsf",
-        "3PMSF는 Three-Peak Mountain Snowflake 마크로, 눈길 성능 기준을 충족한 겨울용/올웨더 타이어에 "
-        "붙는 표시예요. 보통 M+S보다 눈길 성능 기준이 더 엄격한 편으로 이해하시면 됩니다.",
-    ),
-)
-
 
 def _compact_facts(bundle: FactBundle) -> dict[str, Any]:
     facts: dict[str, Any] = {}
@@ -60,18 +52,7 @@ def fallback_compose(user_text: str, bundle: FactBundle) -> str:
             return f"확인된 최종 기준 가격은 {price:,}원입니다. 실제 적용 금액은 보유 쿠폰과 주문 조건에 따라 달라질 수 있어요."
         return "가격 도구 결과에서 확정 가격을 찾지 못했습니다. 확인 가능한 상품을 다시 선택해 주세요."
 
-    if any(call.tool_name == "search_faq_hybrid_tool" for call in bundle.tool_calls):
-        return "관련 FAQ 근거를 확인했습니다. 세부 내용은 안내된 정책 기준으로 확인해 주세요."
-
     return "요청하신 내용을 확인했습니다."
-
-
-def _general_tire_term_explanation(user_text: str) -> str | None:
-    normalized = user_text.casefold()
-    for term, explanation in _GENERAL_TIRE_TERM_EXPLANATIONS:
-        if term in normalized:
-            return explanation
-    return None
 
 
 def _fixed_template_response(bundle: FactBundle) -> str | None:
@@ -106,9 +87,6 @@ class Composer:
         trace_id: str | None = None,
         parent_span_id: str | None = None,
     ) -> str:
-        if direct_explanation := _general_tire_term_explanation(user_text):
-            return direct_explanation
-
         fallback = fallback_compose(user_text, bundle)
         if fixed_response := _fixed_template_response(bundle):
             return fixed_response
@@ -117,9 +95,15 @@ class Composer:
 
         prompt = (
             "You are the QC/Composer for a T-Station LLM-first runtime. "
-            "Answer in Korean. Use only the provided tool facts. "
+            "Answer in Korean. "
             "Do not claim price, stock, schedule, order, reservation, cart, coupon issue, or QnA completion "
             "unless a matching tool fact proves it. "
+            "Treat T-Station/company policy, coupons, warranties/coverage, store service availability, and "
+            "any transactional status as tool-grounded only. "
+            "If FAQ/search facts are missing or weak but the user is asking a general tire concept question "
+            "(for example tire markings, standards, sidewall terminology, seasonal category meaning, or other "
+            "generic tire knowledge), you may answer from general tire knowledge instead of refusing. "
+            "Do not present general knowledge as T-Station policy or product-specific fact. "
             "Do not say an order or reservation was completed. Keep the answer concise."
         )
         payload = {

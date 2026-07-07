@@ -119,6 +119,23 @@ class FakeLLM:
         return StructuredFakeLLM(self.decision)
 
 
+class ComposerResult:
+    def __init__(self, content: str):
+        self.content = content
+
+
+class CapturingComposerLLM:
+    def __init__(self, content: str):
+        self.content = content
+        self.messages = None
+        self.config = None
+
+    async def ainvoke(self, messages, config=None):
+        self.messages = messages
+        self.config = config
+        return ComposerResult(self.content)
+
+
 class StaticPlanner:
     def __init__(self, decision: PlannerDecision):
         self.decision = decision
@@ -474,8 +491,11 @@ def test_planner_without_llm_does_not_route_by_regex() -> None:
     assert decision.answer_mode == "clarification"
 
 
-def test_composer_explains_3pmsf_without_faq_evidence() -> None:
-    composer = Composer()
+def test_composer_prompt_allows_general_tire_knowledge_without_faq_evidence() -> None:
+    llm = CapturingComposerLLM(
+        "3PMSF는 Three-Peak Mountain Snowflake 마크로, 눈길 성능 기준을 충족한 타이어 표시예요."
+    )
+    composer = Composer(llm)
     bundle = FactBundle(
         planner=PlannerDecision(
             selected_afs=[
@@ -496,8 +516,11 @@ def test_composer_explains_3pmsf_without_faq_evidence() -> None:
 
     text = asyncio.run(composer.compose(user_text="3PMSF 설명해줘", bundle=bundle))
 
+    assert llm.messages is not None
+    system_prompt = llm.messages[0].content
+    assert "you may answer from general tire knowledge instead of refusing".lower() in system_prompt.lower()
+    assert "Treat T-Station/company policy" in system_prompt
     assert "Three-Peak Mountain Snowflake" in text
-    assert "M+S보다" in text
 
 
 def test_state_dependency_invalidation_on_product_change() -> None:
