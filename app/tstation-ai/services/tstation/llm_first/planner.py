@@ -91,6 +91,36 @@ def _clarification_plan() -> PlannerDecision:
     )
 
 
+def _purchase_router_context(state: ConversationState) -> dict[str, Any]:
+    commerce = state.commerce_state
+    if not commerce.product.goods_no:
+        return {"active": False}
+    missing: list[str] = []
+    if commerce.quantity is None:
+        missing.append("ord_qty")
+    if not commerce.store.shop_id:
+        missing.append("store_or_region")
+    if commerce.store.shop_id and not (commerce.schedule.date and commerce.schedule.time):
+        missing.append("schedule")
+    if missing:
+        stage = f"waiting_{missing[0]}"
+    elif commerce.schedule.date and commerce.schedule.time:
+        stage = "ready_for_preorder"
+    else:
+        stage = "collecting_purchase_info"
+    return {
+        "active": True,
+        "stage": stage,
+        "missing": missing,
+        "known": commerce.model_dump(exclude_none=True),
+        "routing_rule": (
+            "Resume QuickShoppingAF only when the current user text supplies one of the missing values "
+            "or explicitly asks to continue buying/ordering. If the current user text asks a different question, "
+            "pivot to the matching flow and keep purchase state for later."
+        ),
+    }
+
+
 class LeadingAgentPlanner:
     def __init__(self, llm: Any | None = None):
         self.llm = llm
@@ -112,6 +142,7 @@ class LeadingAgentPlanner:
             return _clarification_plan()
 
         known_inputs = extract_known_inputs(user_text, state)
+        purchase_context = _purchase_router_context(state)
         prompt = (
             "You are the LLM-first Leading Agent for T-Station. "
             "Select one or more MVP Agent Flows for the current user turn. "
@@ -125,6 +156,13 @@ class LeadingAgentPlanner:
             "collect product or tire_size, ord_qty, store/region, and schedule date/time in order. "
             "If the current state has an active purchase and the user provides a missing purchase value "
             "such as quantity, store, region, date, or time, treat that as resuming the purchase flow and select QuickShoppingAF. "
+            "When pending_purchase_context.stage is waiting_store_or_region, a short branch/store phrase such as "
+            "'분당점', '강남점', or '티스테이션 분당점' should be interpreted as known_inputs.store_name and QuickShoppingAF. "
+            "Do not interpret generic store-type words such as '장착점', '매장', '가까운 장착점', or '근처 장착점' as store_name; "
+            "treat them as a request to search installable stores using current location when available, or ask for location/region if unavailable. "
+            "However, do not treat every message during a pending purchase as a purchase continuation. "
+            "If the user asks a separate question while purchase is waiting for a store, schedule, or quantity, "
+            "select the flow for that current question instead and set resume_previous_flow=false. "
             "If product and quantity are known but only a region/store name is known, QuickShoppingAF should show installable store candidates. "
             "If product, quantity, and shop_id are known but schedule is missing, QuickShoppingAF should show schedule choices. "
             "If product, quantity, shop_id, and schedule are known, QuickShoppingAF should prepare an order draft, not complete the order. "
@@ -184,7 +222,8 @@ class LeadingAgentPlanner:
         human = (
             f"Current user text:\n{user_text}\n\n"
             f"Current state:\n{state_json}\n\n"
-            f"Known scalar inputs extracted from explicit values/state:\n{known_inputs}"
+            f"Known scalar inputs extracted from explicit values/state:\n{known_inputs}\n\n"
+            f"pending_purchase_context:\n{purchase_context}"
         )
         try:
             trace_config = build_trace_config(
