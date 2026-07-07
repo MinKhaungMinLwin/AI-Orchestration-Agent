@@ -7,7 +7,10 @@ from typing import Any
 from services.tstation.llm_first.models import AgentFlow, ConversationState, FactBundle, PlannerDecision, ToolCallRecord
 from services.tstation.llm_first.state import apply_state_rules
 from services.tstation.llm_first.templates import (
+    build_benefit_applicable_products_template,
+    build_benefit_event_deal_template,
     build_datepick_template,
+    build_event_applicable_products_template,
     build_list_car_template,
     build_location_template,
     build_preorder_template,
@@ -211,6 +214,9 @@ class AFExecutor:
         return apply_state_rules(state, product_patch={"tire_size": tire_size} if tire_size else None)
 
     async def _description(self, user_text: str, state: ConversationState, known: dict[str, Any], bundle: FactBundle) -> ConversationState:
+        if known.get("benefit_lookup") not in (None, "", "none"):
+            return await self._benefit_lookup(user_text, state, known, bundle)
+
         product_names = [str(name).strip() for name in known.get("product_names") or [] if str(name).strip()]
         if len(product_names) >= 2:
             rows_by_name: dict[str, dict[str, Any] | None] = {}
@@ -233,6 +239,29 @@ class AFExecutor:
             return next_state
         await self._call(bundle, AgentFlow.PRODUCT_DESCRIPTION, "get_product_description_tool", {"goods_no": goods_no})
         return next_state
+
+    async def _benefit_lookup(self, user_text: str, state: ConversationState, known: dict[str, Any], bundle: FactBundle) -> ConversationState:
+        lookup = str(known.get("benefit_lookup") or "").strip()
+        query = str(known.get("benefit_query") or known.get("product_name") or user_text).strip()
+        if lookup == "event_deal_list":
+            result = await self._call(bundle, AgentFlow.PRODUCT_DESCRIPTION, "get_benefit_event_deal_list_tool", {"lang_cd": "ko"})
+            _append_template(bundle, build_benefit_event_deal_template(result))
+            return state
+        if lookup == "event_applicable_products" and known.get("evt_no_list"):
+            result = await self._call(bundle, AgentFlow.PRODUCT_DESCRIPTION, "get_event_applicable_products_tool", {
+                "evt_no_list": known["evt_no_list"],
+            })
+            _append_template(bundle, build_event_applicable_products_template(result))
+            return state
+        if not query:
+            bundle.missing_inputs.append("benefit_query")
+            return state
+        result = await self._call(bundle, AgentFlow.PRODUCT_DESCRIPTION, "search_benefit_applicable_products_tool", {
+            "query": query,
+            "lang_cd": "ko",
+        })
+        _append_template(bundle, build_benefit_applicable_products_template(result))
+        return state
 
     async def _price(self, user_text: str, state: ConversationState, known: dict[str, Any], bundle: FactBundle) -> ConversationState:
         next_state, goods_no = await self._resolve_product(user_text, state, known, bundle)

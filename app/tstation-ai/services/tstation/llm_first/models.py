@@ -91,6 +91,14 @@ class StructuredKnownInputs(BaseModel):
         "sound_absorber",
     ] | None
     recommendation_source: Literal["none", "recommendation", "best_seller"] | None
+    benefit_lookup: Literal[
+        "none",
+        "event_deal_list",
+        "event_applicable_products",
+        "product_applicable_benefits",
+    ] | None
+    benefit_query: str | None
+    evt_no_list: list[str] | None
     season_nm: Literal["none", "사계절", "올웨더", "여름", "겨울"] | None
     sort_by: Literal["none", "price_asc", "price_desc", "rating_desc", "review_desc"] | None
     min_price: int | None

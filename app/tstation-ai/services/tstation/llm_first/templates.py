@@ -283,6 +283,176 @@ def build_product_comparison_template(
     }
 
 
+def _benefit_rows(payload: Any, section: str) -> list[dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return []
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+    raw_section = data.get(section) if isinstance(data, dict) else None
+    return _items_from_payload(raw_section)
+
+
+def _benefit_line(item: dict[str, Any], *, kind: str) -> str:
+    if kind == "event":
+        name = _get_str(item, "evt_nm", "event_nm", "title", "name")
+        start = _get_str(item, "evt_strt_dtime", "start_date", "startDate")[:10]
+        end = _get_str(item, "evt_end_dtime", "end_date", "endDate")[:10]
+        link = _get_str(item, "evt_url_addr", "eventUrl", "url")
+    else:
+        name = _get_str(item, "deal_nm", "deal_nm_ko", "title", "name")
+        start = _get_str(item, "deal_strt_dtime", "start_date", "startDate")[:10]
+        end = _get_str(item, "deal_end_dtime", "end_date", "endDate")[:10]
+        link = _get_str(item, "dtl_conts_url_addr", "dealUrl", "url")
+    if not name:
+        return ""
+    period = f"{start} ~ {end}" if start and end else start or end
+    pieces = [name]
+    if period:
+        pieces.append(period)
+    if link:
+        pieces.append(link)
+    return f"- {' · '.join(pieces)}"
+
+
+def build_benefit_event_deal_template(payload: Any) -> dict[str, Any]:
+    event_rows = _benefit_rows(payload, "events")[:5]
+    deal_rows = _benefit_rows(payload, "deals")[:5]
+    event_lines = [line for row in event_rows if (line := _benefit_line(row, kind="event"))]
+    deal_lines = [line for row in deal_rows if (line := _benefit_line(row, kind="deal"))]
+    if not event_lines and not deal_lines:
+        assistant_response = "현재 진행 중인 이벤트나 기획전이 없어요. 잠시 후에 다시 확인해 주세요."
+    else:
+        lines = ["현재 진행 중인 이벤트와 기획전을 안내드릴게요."]
+        if event_lines:
+            lines.extend(["", "이벤트", *event_lines])
+        if deal_lines:
+            lines.extend(["", "기획전", *deal_lines])
+        lines.extend(["", "자세한 조건은 변경될 수 있어요. 상세 페이지에서 꼭 확인해 주세요."])
+        assistant_response = "\n".join(lines)
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": assistant_response,
+            "quickReplies": [
+                {"label": "진행 중인 이벤트 보기", "url": CTAUrls.PROMOTION_EVENT_LIST, "domain": "DISCOVERY"},
+            ],
+            "predictedDomains": ["DISCOVERY"],
+            "metadata": {
+                "source": "llm_first_benefit_event_deal_list",
+                "response_shape_key": "benefit_event_list_lookup",
+                "eventCount": len(event_rows),
+                "dealCount": len(deal_rows),
+            },
+        },
+        "assistant_response_source": "code_default_benefit_event_deal",
+    }
+
+
+def build_event_applicable_products_template(payload: Any) -> dict[str, Any]:
+    rows = _benefit_rows(payload, "events")
+    if not rows:
+        assistant_response = "현재 해당 이벤트/기획전/프로모션에 적용 가능한 상품은 확인되지 않아요."
+    else:
+        lines = ["현재 이벤트/기획전/프로모션 적용 상품이에요."]
+        for event in rows[:6]:
+            event_name = _get_str(event, "evt_nm", "event_nm", "deal_nm", "title", default="이벤트")
+            items = event.get("items")
+            if not isinstance(items, list):
+                items = []
+            product_names: list[str] = []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                name = _get_str(item, "goods_nm", "big_goods_nm", "goods_name", "title")
+                if name and name not in product_names:
+                    product_names.append(name)
+            lines.extend(["", f"**{event_name}**"])
+            if product_names:
+                lines.extend(f"- {name}" for name in product_names[:5])
+                if len(product_names) > 5:
+                    lines.append(f"- 외 {len(product_names) - 5}개")
+            else:
+                lines.append("- 적용 상품 확인되지 않음")
+        assistant_response = "\n".join(lines)
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": assistant_response,
+            "quickReplies": [
+                {"label": "진행 중인 이벤트 보기", "url": CTAUrls.PROMOTION_EVENT_LIST, "domain": "DISCOVERY"},
+            ],
+            "predictedDomains": ["DISCOVERY"],
+            "metadata": {
+                "source": "llm_first_event_applicable_products",
+                "response_shape_key": "event_applicable_products_lookup",
+            },
+        },
+        "assistant_response_source": "code_event_applicable_products",
+    }
+
+
+def build_benefit_applicable_products_template(payload: Any) -> dict[str, Any]:
+    data = payload.get("data") if isinstance(payload, dict) and isinstance(payload.get("data"), dict) else payload
+    query = _get_str(data, "query", default="요청하신 혜택") if isinstance(data, dict) else "요청하신 혜택"
+    matches = data.get("matches") if isinstance(data, dict) else None
+    if not isinstance(matches, list) or not matches:
+        assistant_response = f"'{query}'에 매칭되는 쿠폰/이벤트/기획전 적용 상품은 확인되지 않아요."
+    else:
+        source_labels = {"coupon": "쿠폰", "event": "이벤트", "deal": "기획전"}
+        lines = [f"'{query}'에 매칭되는 적용 상품/매장이에요."]
+        for match in matches[:6]:
+            if not isinstance(match, dict):
+                continue
+            source_type = _get_str(match, "source_type")
+            source_label = source_labels.get(source_type.lower(), "혜택")
+            source_name = _get_str(match, "source_name", default=source_label)
+            lines.extend(["", f"**{source_name}** ({source_label})"])
+            products = match.get("products")
+            product_names: list[str] = []
+            if isinstance(products, list):
+                for product in products:
+                    if not isinstance(product, dict):
+                        continue
+                    name = _get_str(product, "goods_nm", "goods_name", "big_goods_nm")
+                    if name and name not in product_names:
+                        product_names.append(name)
+            if product_names:
+                lines.append("적용 상품:")
+                lines.extend(f"- {name}" for name in product_names[:5])
+            else:
+                lines.append("- 적용 상품 확인되지 않음")
+            stores = match.get("stores")
+            store_names: list[str] = []
+            if isinstance(stores, list):
+                for store in stores:
+                    if not isinstance(store, dict):
+                        continue
+                    name = _get_str(store, "shop_nm", "shop_name")
+                    if name and name not in store_names:
+                        store_names.append(name)
+            if store_names:
+                lines.append("적용 매장:")
+                lines.extend(f"- {name}" for name in store_names[:5])
+        assistant_response = "\n".join(lines)
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": assistant_response,
+            "quickReplies": [
+                {"label": "진행 중인 이벤트 보기", "url": CTAUrls.PROMOTION_EVENT_LIST, "domain": "DISCOVERY"},
+            ],
+            "predictedDomains": ["DISCOVERY"],
+            "metadata": {
+                "source": "llm_first_benefit_applicable_products",
+                "response_shape_key": "benefit_applicable_products_lookup",
+            },
+        },
+        "assistant_response_source": "code_benefit_applicable_products",
+    }
+
+
 def _original_price(item: dict[str, Any], price: int | None) -> int | None:
     original = int(_get_num(item, "sale_prc", "originalPrice", default=0))
     if original:

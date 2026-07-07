@@ -39,6 +39,7 @@ def fallback_compose(user_text: str, bundle: FactBundle) -> str:
             "store": "매장",
             "schedule": "장착 일정",
             "tire_size_or_vehicle": "타이어 사이즈 또는 차량 정보",
+            "benefit_query": "혜택/이벤트/기획전 이름",
         }
         missing = [labels.get(item, item) for item in dict.fromkeys(bundle.missing_inputs)]
         return f"{', '.join(missing)} 정보를 알려주시면 이어서 확인해 드릴게요."
@@ -68,6 +69,9 @@ def _fixed_template_response(bundle: FactBundle) -> str | None:
         "llm_first_escalation_confirmation",
         "llm_first_product_comparison",
         "llm_first_favorite_store_empty",
+        "llm_first_benefit_event_deal_list",
+        "llm_first_event_applicable_products",
+        "llm_first_benefit_applicable_products",
     }:
         return None
     text = str(data.get("assistantResponse") or "").strip()

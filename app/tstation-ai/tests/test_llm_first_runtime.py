@@ -97,6 +97,9 @@ class StaticComposer:
                     "llm_first_escalation_confirmation",
                     "llm_first_product_comparison",
                     "llm_first_favorite_store_empty",
+                    "llm_first_benefit_event_deal_list",
+                    "llm_first_event_applicable_products",
+                    "llm_first_benefit_applicable_products",
                 }:
                     return data["assistantResponse"]
         return "확인한 결과를 안내드립니다."
@@ -238,6 +241,67 @@ class FakeExecutor(AFExecutor):
                             "available_sizes": ["205/55R16", "215/55R17"],
                         }
                     ]
+                },
+            }
+        elif tool_name == "get_benefit_event_deal_list_tool":
+            result = {
+                "status": "success",
+                "data": {
+                    "events": {
+                        "items": [
+                            {
+                                "evt_nm": "한국타이어 페스타",
+                                "evt_strt_dtime": "2026-06-01 00:00:00",
+                                "evt_end_dtime": "2026-06-30 23:59:59",
+                                "evt_url_addr": "https://wwwqa.tstation.com/promotion/event/festa",
+                            }
+                        ]
+                    },
+                    "deals": {
+                        "items": [
+                            {
+                                "deal_nm": "여름맞이 기획전",
+                                "deal_strt_dtime": "2026-06-01 00:00:00",
+                                "deal_end_dtime": "2026-07-15 23:59:59",
+                                "dtl_conts_url_addr": "https://wwwqa.tstation.com/promotion/deal/summer",
+                            }
+                        ]
+                    },
+                },
+            }
+        elif tool_name == "get_event_applicable_products_tool":
+            result = {
+                "status": "success",
+                "data": {
+                    "events": [
+                        {
+                            "evt_nm": "한국타이어 페스타",
+                            "items": [
+                                {"goods_nm": "키너지 EX"},
+                                {"goods_nm": "벤투스 S2 AS"},
+                            ],
+                        }
+                    ]
+                },
+            }
+        elif tool_name == "search_benefit_applicable_products_tool":
+            result = {
+                "status": "success",
+                "data": {
+                    "query": args.get("query"),
+                    "matches": [
+                        {
+                            "source_type": "event",
+                            "source_name": "한국타이어 페스타",
+                            "products": [
+                                {"goods_nm": "키너지 EX"},
+                                {"goods_nm": "벤투스 S2 AS"},
+                            ],
+                            "stores": [
+                                {"shop_nm": "티스테이션 판교점"},
+                            ],
+                        }
+                    ],
                 },
             }
         elif tool_name == "search_stores_tool":
@@ -489,6 +553,9 @@ def test_structured_planner_schema_requires_all_strict_fields() -> None:
         "vehicle_type",
         "recommendation_type",
         "recommendation_source",
+        "benefit_lookup",
+        "benefit_query",
+        "evt_no_list",
         "season_nm",
         "sort_by",
         "min_price",
@@ -774,6 +841,110 @@ def test_product_comparison_guard_handles_recommendation_af_with_product_names()
     assert events[0]["template"] == "quickReply"
     assert metadata["tool_calls"][0]["tool_name"] == "search_product_summary_tool"
     assert all(event["template"] != "product" for event in events)
+
+
+def test_benefit_event_deal_list_uses_benefit_list_tool() -> None:
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.PRODUCT_DESCRIPTION,
+                    reason="current event and deal list",
+                    known_inputs={"benefit_lookup": "event_deal_list"},
+                )
+            ]
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=MemoryStateStore(),
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "지금 이벤트랑 기획전 뭐 있어?"}],
+        stream=False,
+        user_id="u1",
+        session_id="benefit-list",
+    )
+
+    text, events, metadata = asyncio.run(runtime.run(request))
+
+    assert events[0]["template"] == "quickReply"
+    assert text == events[0]["data"]["assistantResponse"]
+    assert events[0]["data"]["metadata"]["response_shape_key"] == "benefit_event_list_lookup"
+    assert "한국타이어 페스타" in events[0]["data"]["assistantResponse"]
+    assert "여름맞이 기획전" in events[0]["data"]["assistantResponse"]
+    assert metadata["tool_calls"][0]["tool_name"] == "get_benefit_event_deal_list_tool"
+    assert metadata["tool_calls"][0]["args"] == {"lang_cd": "ko"}
+
+
+def test_event_applicable_products_with_event_number_uses_event_products_tool() -> None:
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.PRODUCT_DESCRIPTION,
+                    reason="event applicable products by event id",
+                    known_inputs={
+                        "benefit_lookup": "event_applicable_products",
+                        "evt_no_list": ["E000001234"],
+                    },
+                )
+            ]
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=MemoryStateStore(),
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "E000001234 이벤트 적용 상품 알려줘"}],
+        stream=False,
+        user_id="u1",
+        session_id="event-products",
+    )
+
+    _, events, metadata = asyncio.run(runtime.run(request))
+
+    assert events[0]["template"] == "quickReply"
+    assert events[0]["data"]["metadata"]["response_shape_key"] == "event_applicable_products_lookup"
+    assert "현재 이벤트/기획전/프로모션 적용 상품이에요." in events[0]["data"]["assistantResponse"]
+    assert "키너지 EX" in events[0]["data"]["assistantResponse"]
+    assert metadata["tool_calls"][0]["tool_name"] == "get_event_applicable_products_tool"
+    assert metadata["tool_calls"][0]["args"] == {"evt_no_list": ["E000001234"]}
+
+
+def test_named_benefit_or_product_benefit_lookup_uses_benefit_applicable_products_tool() -> None:
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.PRODUCT_DESCRIPTION,
+                    reason="named benefit applicable products",
+                    known_inputs={
+                        "benefit_lookup": "product_applicable_benefits",
+                        "benefit_query": "키너지 EX",
+                    },
+                )
+            ]
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=MemoryStateStore(),
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "키너지 EX에 적용되는 이벤트 기획전 쿠폰 알려줘"}],
+        stream=False,
+        user_id="u1",
+        session_id="product-benefits",
+    )
+
+    _, events, metadata = asyncio.run(runtime.run(request))
+
+    assert events[0]["template"] == "quickReply"
+    assert events[0]["data"]["metadata"]["response_shape_key"] == "benefit_applicable_products_lookup"
+    assert "'키너지 EX'에 매칭되는 적용 상품/매장이에요." in events[0]["data"]["assistantResponse"]
+    assert "한국타이어 페스타" in events[0]["data"]["assistantResponse"]
+    assert "티스테이션 판교점" in events[0]["data"]["assistantResponse"]
+    assert metadata["tool_calls"][0]["tool_name"] == "search_benefit_applicable_products_tool"
+    assert metadata["tool_calls"][0]["args"] == {"query": "키너지 EX", "lang_cd": "ko"}
 
 
 def test_general_tire_recommendation_does_not_require_size() -> None:
