@@ -887,6 +887,49 @@ def test_reservation_history_uses_reservation_tool_not_faq() -> None:
     assert metadata["tool_calls"][0]["tool_name"] == "get_my_reservations_tool"
 
 
+def test_text_only_stream_emits_quickreply_data_for_fe_rendering() -> None:
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.ORDER_DELIVERY,
+                    reason="reservation history lookup",
+                    known_inputs={"account_lookup": "reservations"},
+                )
+            ]
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=MemoryStateStore(),
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "내 예약 내역 보여줘"}],
+        stream=True,
+        user_id="u1",
+        session_id="reservation-history-stream",
+    )
+
+    async def _collect() -> list[str]:
+        return [chunk async for chunk in runtime.stream(request)]
+
+    chunks = asyncio.run(_collect())
+    body = "".join(chunks)
+    data_events = []
+    message_events = []
+    for line in body.splitlines():
+        if not line.startswith("data: {"):
+            continue
+        event = json.loads(line.removeprefix("data: "))
+        if event.get("template") == "quickReply":
+            data_events.append(event)
+        if event.get("type") == "message":
+            message_events.append(event)
+
+    assert data_events[0]["data"]["assistantResponse"] == "확인한 결과를 안내드립니다."
+    assert data_events[0]["data"]["metadata"]["source"] == "llm_first_text_response"
+    assert message_events[0]["content"] == "확인한 결과를 안내드립니다."
+
+
 def test_order_history_uses_order_tool_not_faq() -> None:
     runtime = LLMFirstRuntime(
         planner=StaticPlanner(PlannerDecision(

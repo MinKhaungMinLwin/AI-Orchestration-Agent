@@ -37,6 +37,19 @@ def _sse(event: dict[str, Any]) -> str:
     return f"data: {json.dumps(event, ensure_ascii=False, default=str)}\n\n"
 
 
+def _text_response_event(text: str) -> dict[str, Any]:
+    return {
+        "type": "data",
+        "template": "quickReply",
+        "data": {
+            "assistantResponse": text,
+            "quickReplies": [],
+            "predictedDomains": [],
+            "metadata": {"source": "llm_first_text_response"},
+        },
+    }
+
+
 def _last_user_text(request: TStationChatRequest) -> str:
     for message in reversed(request.messages):
         if message.get("role") == "user":
@@ -261,6 +274,8 @@ class LLMFirstRuntime:
             yield _sse({"type": "agent_flow", "agent": "[LLM-FIRST LEADING AGENT]", "status": "done", "metadata": metadata})
             for event in events:
                 yield _sse(event)
+            if text and not events:
+                yield _sse(_text_response_event(text))
             if text:
                 yield _sse({"type": "token", "content": text})
                 yield _sse({"type": "message", "content": text, "agent": "[LLM-FIRST COMPOSER]"})
