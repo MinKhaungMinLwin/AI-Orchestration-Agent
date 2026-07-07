@@ -560,6 +560,34 @@ def test_store_flow_emits_location_template() -> None:
     assert metadata["tool_calls"][0]["tool_name"] == "search_stores_tool"
 
 
+def test_store_flow_with_active_product_and_quantity_is_booking_flow() -> None:
+    store = MemoryStateStore()
+    store.state.commerce_state.product.goods_no = "G000000000002"
+    store.state.commerce_state.quantity = 4
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(af=AgentFlow.STORE, reason="store lookup", known_inputs={"region": "판교"})
+            ]
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=store,
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "판교 매장 보여줘"}],
+        stream=False,
+        user_id="u1",
+        session_id="booking-store-list",
+    )
+
+    _, events, _ = asyncio.run(runtime.run(request))
+
+    assert events[0]["template"] == "location"
+    LocationDataEvent.model_validate(events[0])
+    assert events[0]["data"]["isBookingFlow"] is True
+
+
 def test_inventory_flow_requires_qty_before_tool_call() -> None:
     runtime = LLMFirstRuntime(
         planner=StaticPlanner(PlannerDecision(
@@ -653,6 +681,42 @@ def test_quick_shopping_with_store_but_no_schedule_emits_datepick() -> None:
     assert events[0]["data"]["dates"][0]["availableTimes"] == [10, 11, 13]
     assert metadata["missing_inputs"] == ["schedule"]
     assert metadata["tool_calls"][0]["tool_name"] == "get_store_schedule_tool"
+
+
+def test_store_selection_in_active_purchase_flow_emits_datepick_without_planner_choice() -> None:
+    store = MemoryStateStore()
+    store.state.commerce_state.product.goods_no = "G000000000003"
+    store.state.commerce_state.product.product_name = "아이온 에보"
+    store.state.commerce_state.quantity = 4
+    store.state.commerce_state.store.region = "판교"
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(selected_afs=[])),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=store,
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "이 매장 선택"}],
+        stream=False,
+        user_id="u1",
+        session_id="store-selection-datepick",
+        ui_action={
+            "action_type": "select_store",
+            "fills_slot": "shop_id",
+            "slots": {
+                "shop_id": "S001",
+                "shop_name": "티스테이션 판교점",
+            },
+        },
+    )
+
+    _, events, metadata = asyncio.run(runtime.run(request))
+
+    assert events[0]["template"] == "datepick"
+    DatepickDataEvent.model_validate(events[0])
+    assert metadata["planner"]["selected_afs"][0]["af"] == "QuickShoppingAF"
+    assert metadata["tool_calls"][0]["tool_name"] == "get_store_schedule_tool"
+    assert store.state.commerce_state.store.shop_id == "S001"
 
 
 def test_quick_shopping_complete_inputs_emits_preorder_without_side_effect() -> None:

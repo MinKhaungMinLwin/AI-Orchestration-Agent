@@ -15,6 +15,7 @@ from services.tstation.llm_first.composer import Composer
 from services.tstation.llm_first.executor import AFExecutor
 from services.tstation.llm_first.planner import LeadingAgentPlanner
 from services.tstation.llm_first.qc import verify_response
+from services.tstation.llm_first.models import AgentFlow, PlannerDecision, SelectedAF
 from services.tstation.llm_first.state import LLMFirstStateStore, apply_state_rules
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,70 @@ def _request_slot_patch(request: TStationChatRequest) -> dict[str, Any]:
             if isinstance(metadata, dict):
                 patch.update(metadata)
     return patch
+
+
+def _ui_action_values(request: TStationChatRequest, patch: dict[str, Any]) -> dict[str, Any]:
+    values: dict[str, Any] = {}
+    for source in (request.ui_action, request.chip_context, request.metadata, patch):
+        if not isinstance(source, dict):
+            continue
+        values.update(source)
+        ui_action = source.get("ui_action")
+        if isinstance(ui_action, dict):
+            values.update(ui_action)
+            slots = ui_action.get("slots")
+            if isinstance(slots, dict):
+                values.update(slots)
+        slots = source.get("slots")
+        if isinstance(slots, dict):
+            values.update(slots)
+        metadata = source.get("metadata")
+        if isinstance(metadata, dict):
+            values.update(metadata)
+    return values
+
+
+def _is_store_selection_request(request: TStationChatRequest, patch: dict[str, Any]) -> bool:
+    values = _ui_action_values(request, patch)
+    action_type = str(values.get("action_type") or values.get("cta_action") or values.get("actionId") or "").strip()
+    fills_slot = str(values.get("fills_slot") or values.get("fillsSlot") or "").strip()
+    shop_id = values.get("shop_id") or values.get("shopId")
+    return bool(shop_id) and (action_type == "select_store" or fills_slot == "shop_id" or patch.get("shop_id") or patch.get("shopId"))
+
+
+def _store_selection_schedule_plan(request: TStationChatRequest, state: Any) -> PlannerDecision | None:
+    patch = _request_slot_patch(request)
+    if not _is_store_selection_request(request, patch):
+        return None
+    commerce = state.commerce_state
+    if commerce.schedule.date or commerce.schedule.time:
+        return None
+    if not (commerce.product.goods_no and commerce.quantity and commerce.store.shop_id):
+        return None
+    known_inputs = {
+        "goods_no": commerce.product.goods_no,
+        "product_name": commerce.product.product_name,
+        "tire_size": commerce.product.tire_size,
+        "ord_qty": commerce.quantity,
+        "shop_id": commerce.store.shop_id,
+        "store_name": commerce.store.shop_name,
+        "region": commerce.store.region,
+    }
+    return PlannerDecision(
+        selected_afs=[
+            SelectedAF(
+                af=AgentFlow.QUICK_SHOPPING,
+                reason="store selected for an active purchase or inventory flow; show schedule choices",
+                required_inputs=["goods_no", "ord_qty", "shop_id"],
+                known_inputs={k: v for k, v in known_inputs.items() if v not in (None, "")},
+                missing_inputs=[],
+            )
+        ],
+        conversation_goal="show_store_schedule_after_store_selection",
+        answer_mode="tool_grounded_answer",
+        requires_user_confirmation=False,
+        resume_previous_flow=True,
+    )
 
 
 def _apply_request_patch(state: Any, request: TStationChatRequest) -> Any:
@@ -113,13 +178,15 @@ class LLMFirstRuntime:
         user_text = _last_user_text(request)
         set_trace_name(user_text[:60] if user_text else "llm_first_chat")
         state = _apply_request_patch(self.state_store.load(request.session_id), request)
-        planner = await self.planner.plan(
-            user_text=user_text,
-            state=state,
-            session_id=request.session_id,
-            user_id=request.user_id,
-            trace_id=request.tracing_id,
-        )
+        planner = _store_selection_schedule_plan(request, state)
+        if planner is None:
+            planner = await self.planner.plan(
+                user_text=user_text,
+                state=state,
+                session_id=request.session_id,
+                user_id=request.user_id,
+                trace_id=request.tracing_id,
+            )
         bundle = await self.executor.execute(user_text=user_text, state=state, planner=planner)
         text = await self.composer.compose(
             user_text=user_text,

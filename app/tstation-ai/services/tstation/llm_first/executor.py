@@ -136,7 +136,15 @@ class AFExecutor:
             bundle.missing_inputs.append("region_or_store")
             return state
         result = await self._call(bundle, AgentFlow.STORE, "search_stores_tool", {"place_query": str(query), "limit": 10})
-        _append_template(bundle, build_location_template(result, "매장 후보를 확인해 주세요."))
+        is_booking_flow = bool(
+            (known.get("goods_no") or state.commerce_state.product.goods_no)
+            and (known.get("ord_qty") or state.commerce_state.quantity)
+        )
+        _append_template(bundle, build_location_template(
+            result,
+            "매장 후보를 확인해 주세요.",
+            is_booking_flow=is_booking_flow,
+        ))
         return apply_state_rules(state, store_patch={"region": str(query)})
 
     async def _inventory(self, user_text: str, state: ConversationState, known: dict[str, Any], bundle: FactBundle) -> ConversationState:
