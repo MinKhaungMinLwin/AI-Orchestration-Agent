@@ -184,6 +184,21 @@ def _comparison_rows_for_metric(metric: str) -> tuple[tuple[str, str], ...]:
     )
 
 
+def _representative_review_summary(item: dict[str, Any]) -> str:
+    reviews = item.get("reviews")
+    if not isinstance(reviews, list):
+        return ""
+    for review in reviews:
+        if not isinstance(review, dict):
+            continue
+        text = _get_str(review, "summary", "review_summary", "gdas_cont", "content")
+        text = re.sub(r"<[^>]+>", " ", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        if text:
+            return text[:70].rstrip()
+    return ""
+
+
 def _comparison_value(item: dict[str, Any], metric: str, key: str) -> str:
     if key == "feature":
         return _comparison_feature(item, metric)
@@ -198,10 +213,16 @@ def _comparison_value(item: dict[str, Any], metric: str, key: str) -> str:
     if key == "rating":
         rating = _get_num(item, "rating_avg", "rate", default=0.0)
         review_count = int(_get_num(item, "review_count", "total_qty", default=0))
+        parts: list[str] = []
         if rating:
             rating_text = int(rating) if float(rating).is_integer() else f"{rating:g}"
-            return f"{rating_text}점" + (f", 리뷰 {review_count}건" if review_count else "")
-        return f"리뷰 {review_count}건" if review_count else "평점 정보 확인되지 않음"
+            parts.append(f"{rating_text}점")
+        if review_count:
+            parts.append(f"리뷰 {review_count}건")
+        review_summary = _representative_review_summary(item)
+        if review_summary:
+            parts.append(f"대표 리뷰: {review_summary}")
+        return "\n".join(parts) if parts else "평점 정보 확인되지 않음"
     if key == "sizes":
         sizes = _available_sizes(item)
         return ", ".join(sizes[:5]) if sizes else "사이즈 정보 확인되지 않음"

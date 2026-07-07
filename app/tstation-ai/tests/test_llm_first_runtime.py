@@ -226,6 +226,15 @@ class FakeExecutor(AFExecutor):
                             "car_knd_nm": "승용차",
                             "rating_avg": 4.5 if keyword == "키너지 EX" else 4.0,
                             "review_count": 12 if keyword == "키너지 EX" else 8,
+                            "reviews": [
+                                {
+                                    "gdas_cont": (
+                                        "승차감이 부드럽고 일상 주행에서 소음이 적다는 의견이 많아요."
+                                        if keyword == "키너지 EX"
+                                        else "가격 부담이 낮고 기본 주행 성능이 무난하다는 평가가 있어요."
+                                    )
+                                }
+                            ],
                             "available_sizes": ["205/55R16", "215/55R17"],
                         }
                     ]
@@ -725,6 +734,8 @@ def test_product_comparison_uses_quickreply_summary_not_product_cards() -> None:
     assert "상품 정보를 상품별 표로 비교해드릴게요." in events[0]["data"]["assistantResponse"]
     assert "**키너지 EX**" in events[0]["data"]["assistantResponse"]
     assert "**옵티모**" in events[0]["data"]["assistantResponse"]
+    assert "4.5점\n리뷰 12건\n대표 리뷰: 승차감이 부드럽고 일상 주행에서 소음이 적다는 의견이 많아요." in events[0]["data"]["assistantResponse"]
+    assert "4점\n리뷰 8건\n대표 리뷰: 가격 부담이 낮고 기본 주행 성능이 무난하다는 평가가 있어요." in events[0]["data"]["assistantResponse"]
     assert [call["tool_name"] for call in metadata["tool_calls"]] == [
         "search_product_summary_tool",
         "search_product_summary_tool",
