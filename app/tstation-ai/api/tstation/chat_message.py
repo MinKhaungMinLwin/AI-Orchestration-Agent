@@ -289,6 +289,56 @@ def _dict_tool_result(raw_result) -> dict:
     return {"status": "success", "data": raw_result}
 
 
+def _append_should_route_to_chat(request: AppendMessageRequest) -> bool:
+    if request.role != "user":
+        return False
+    if request.ui_action or request.chip_context or request.slots or request.user_info or request.tracing_id:
+        return True
+    template_data = request.template_data if isinstance(request.template_data, dict) else {}
+    if not template_data:
+        return False
+    for key in ("ui_action", "chip_context", "slots", "user_info", "tracing_id"):
+        value = template_data.get(key)
+        if isinstance(value, dict) and value:
+            return True
+        if isinstance(value, str) and value.strip():
+            return True
+    metadata = template_data.get("metadata")
+    if isinstance(metadata, dict):
+        nested_ui_action = metadata.get("ui_action")
+        nested_slots = metadata.get("slots")
+        if isinstance(nested_ui_action, dict) and nested_ui_action:
+            return True
+        if isinstance(nested_slots, dict) and nested_slots:
+            return True
+    return False
+
+
+def _append_request_to_chat_body(request: AppendMessageRequest) -> ChatMessageRequest:
+    template_data = request.template_data if isinstance(request.template_data, dict) else {}
+    chip_context = request.chip_context
+    template_chip_context = template_data.get("chip_context")
+    if chip_context is None and isinstance(template_chip_context, dict):
+        chip_context = template_chip_context
+
+    template_metadata = template_data.get("metadata")
+    template_ui_action = template_data.get("ui_action")
+    template_slots = template_data.get("slots")
+    metadata_ui_action = template_metadata.get("ui_action") if isinstance(template_metadata, dict) else None
+    metadata_slots = template_metadata.get("slots") if isinstance(template_metadata, dict) else None
+
+    return ChatMessageRequest(
+        content=request.content,
+        session_id=request.session_id,
+        stream=False,
+        user_info=request.user_info or template_data.get("user_info"),
+        tracing_id=request.tracing_id or template_data.get("tracing_id"),
+        chip_context=chip_context,
+        ui_action=request.ui_action or template_ui_action or metadata_ui_action,
+        slots=request.slots or template_slots or metadata_slots,
+    )
+
+
 @router.post("/chat", dependencies=[Depends(get_api_key)])
 async def chat(chat_body: ChatMessageRequest, http_request: Request, user: dict = Security(get_api_key)):
     """
@@ -766,9 +816,10 @@ async def get_history(
     )
 
 
-@router.post("/append", dependencies=[Depends(get_api_key)], response_model=AppendMessageResponse)
+@router.post("/append", dependencies=[Depends(get_api_key)], response_model=AppendMessageResponse | ChatMessageResponse)
 async def append_message(
     request: AppendMessageRequest,
+    http_request: Request,
     user: dict = Security(get_api_key),
 ):
     """
@@ -801,6 +852,9 @@ async def append_message(
     # Validate role
     if request.role not in ("user", "assistant"):
         raise HTTPException(status_code=400, detail="Role must be 'user' or 'assistant'")
+
+    if _append_should_route_to_chat(request):
+        return await chat(_append_request_to_chat_body(request), http_request, user)
 
     # Append message (saved at end due to timestamp score)
     msg_id = await asyncio.to_thread(

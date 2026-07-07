@@ -170,6 +170,14 @@ class AppendMessageRequest(BaseModel):
     content: str = Field(..., description="Message content")
     role: str = Field(default="user", description="Role (user/assistant)")
     template_data: Optional[dict] = Field(default=None, description="Optional template data for assistant messages")
+    user_info: Optional[dict] = Field(default=None, description="Additional user info from UI (overrides JWT fields)")
+    tracing_id: Optional[str] = Field(default=None, description="Tracing ID for Langfuse (eval use)")
+    chip_context: Optional[ChipContext] = Field(
+        default=None,
+        description="Structured chip context. If present on a user append, backend can promote it to /chat handling.",
+    )
+    ui_action: Optional[dict] = Field(default=None, description="Normalized UI action payload sent by the FE.")
+    slots: Optional[dict] = Field(default=None, description="Current-turn slot patch sent by the FE.")
 
 
 class AppendMessageResponse(BaseModel):
