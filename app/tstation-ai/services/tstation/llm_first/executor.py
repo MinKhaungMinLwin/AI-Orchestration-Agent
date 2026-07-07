@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import Any
 
 from services.tstation.llm_first.models import AgentFlow, ConversationState, FactBundle, PlannerDecision, ToolCallRecord
+from services.tstation.llm_first.planner import normalize_tire_size
 from services.tstation.llm_first.state import apply_state_rules
 from services.tstation.llm_first.templates import (
     build_benefit_applicable_products_template,
@@ -90,6 +92,70 @@ def _first_item(result: Any) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
+def _items(result: Any) -> list[dict[str, Any]]:
+    if not isinstance(result, dict):
+        return []
+    data = result.get("data") if isinstance(result.get("data"), dict) else result
+    if isinstance(data, dict):
+        for key in ("items", "cars", "vehicles"):
+            value = data.get(key)
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+        return [data]
+    return []
+
+
+def _vehicle_key(value: Any) -> str:
+    return re.sub(r"[^0-9a-z가-힣]", "", str(value or "").lower())
+
+
+def _vehicle_aliases(row: dict[str, Any]) -> set[str]:
+    aliases = {
+        row.get("car_no"),
+        row.get("car_nm"),
+        row.get("carName"),
+        row.get("car_model_det"),
+        row.get("carModelDet"),
+        row.get("ver_opt_choc"),
+        row.get("carTrim"),
+    }
+    normalized = {_vehicle_key(alias) for alias in aliases if alias}
+    return {alias for alias in normalized if alias}
+
+
+def _match_registered_vehicle(rows: list[dict[str, Any]], anchor: str) -> dict[str, Any] | None:
+    key = _vehicle_key(anchor)
+    if not key:
+        return None
+    matches = [row for row in rows if any(alias and (alias in key or key in alias) for alias in _vehicle_aliases(row))]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _vehicle_recommendation_args(row: dict[str, Any], known: dict[str, Any]) -> dict[str, Any] | None:
+    car_lnc_cd = str(row.get("car_lnc_cd") or row.get("carLncCd") or "").strip()
+    tire_size = normalize_tire_size(str(row.get("tire_size_fr") or row.get("tireSize") or "")) or normalize_tire_size(
+        str(row.get("tire_size_re") or row.get("tireSizeRe") or "")
+    )
+    if not (car_lnc_cd or tire_size):
+        return None
+    recommendation_type = known.get("recommendation_type")
+    if recommendation_type in (None, "", "none"):
+        recommendation_type = "tstation"
+    args: dict[str, Any] = {
+        "rcmd_type": recommendation_type,
+        "limit": min(max(int(known.get("limit") or 3), 1), 10),
+    }
+    if car_lnc_cd:
+        args["car_lnc_cd"] = car_lnc_cd
+    elif tire_size:
+        args["tire_size"] = tire_size
+    for key in ("season_nm", "sort_by", "min_price", "max_price"):
+        value = known.get(key)
+        if value not in (None, "", "none"):
+            args[key] = value
+    return args
+
+
 def _remember_followup_context(
     state: ConversationState,
     *,
@@ -105,6 +171,213 @@ def _remember_followup_context(
             **{key: value for key, value in last_facts_patch.items() if value not in (None, "", [], {})},
         }
     return updated
+
+
+def _preview_text(value: Any, *, limit: int = 140) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
+
+
+def _template_followup_context(event: dict[str, Any] | None, state: ConversationState, bundle: FactBundle) -> tuple[str | None, dict[str, Any] | None]:
+    if not isinstance(event, dict):
+        return None, None
+    template = str(event.get("template") or "").strip()
+    data = event.get("data")
+    if not isinstance(data, dict):
+        return None, None
+    assistant_response = _preview_text(data.get("assistantResponse"))
+    response_shape_key = ""
+    metadata = data.get("metadata")
+    if isinstance(metadata, dict):
+        response_shape_key = str(metadata.get("response_shape_key") or "").strip()
+    followup: dict[str, Any] = {
+        "template": template,
+        "assistant_response_preview": assistant_response,
+        "tool_names": [call.tool_name for call in bundle.tool_calls],
+    }
+    if response_shape_key:
+        followup["response_shape_key"] = response_shape_key
+
+    if template == "product":
+        products = data.get("products") if isinstance(data.get("products"), list) else []
+        meta_list = metadata if isinstance(metadata, list) else []
+        product_names = [str(item.get("titleProductName") or item.get("title") or "").strip() for item in products if isinstance(item, dict)]
+        resolved_products: list[dict[str, Any]] = []
+        for index, item in enumerate(products):
+            if not isinstance(item, dict):
+                continue
+            goods_no = ""
+            if index < len(meta_list) and isinstance(meta_list[index], dict):
+                goods_no = str(meta_list[index].get("goodsId") or "").strip()
+            resolved_products.append({
+                key: value
+                for key, value in {
+                    "goodsNo": goods_no,
+                    "productName": str(item.get("titleProductName") or item.get("title") or "").strip(),
+                    "tireSize": str(item.get("titleTires") or "").strip(),
+                }.items()
+                if value
+            })
+        summary = f"최근 상품 후보: {', '.join(product_names[:2])}" if product_names else assistant_response
+        followup.update({
+            "followup_type": "product_list",
+            "product_names": product_names[:5],
+            "resolved_products": resolved_products[:5],
+            "is_booking_flow": data.get("isBookingFlow") is True,
+        })
+        if len(product_names) == 1:
+            followup["product_name"] = product_names[0]
+        if resolved_products and resolved_products[0].get("goodsNo"):
+            followup["goods_no"] = resolved_products[0]["goodsNo"]
+        return summary, followup
+
+    if template == "location":
+        stores = data.get("stores") if isinstance(data.get("stores"), list) else []
+        meta_list = metadata if isinstance(metadata, list) else []
+        store_names = [str(item.get("nameAddress") or "").strip() for item in stores if isinstance(item, dict)]
+        shop_ids = [
+            str(item.get("shopId") or "").strip()
+            for item in meta_list
+            if isinstance(item, dict) and str(item.get("shopId") or "").strip()
+        ]
+        summary = f"최근 매장 후보: {', '.join(store_names[:2])}" if store_names else assistant_response
+        followup.update({
+            "followup_type": "store_list",
+            "store_names": store_names[:5],
+            "shop_ids": shop_ids[:5],
+            "is_booking_flow": data.get("isBookingFlow") is True,
+        })
+        if len(store_names) == 1:
+            followup["store_name"] = store_names[0]
+        if len(shop_ids) == 1:
+            followup["shop_id"] = shop_ids[0]
+        return summary, followup
+
+    if template == "datepick":
+        dates = data.get("dates") if isinstance(data.get("dates"), list) else []
+        date_candidates = [str(item.get("date") or "").strip() for item in dates if isinstance(item, dict) and str(item.get("date") or "").strip()]
+        first_times: list[int] = []
+        if dates and isinstance(dates[0], dict) and isinstance(dates[0].get("availableTimes"), list):
+            first_times = [int(t) for t in dates[0]["availableTimes"] if str(t).isdigit()]
+        summary = (
+            f"최근 일정 후보: {date_candidates[0]} 포함 {len(date_candidates)}일"
+            if date_candidates else assistant_response
+        )
+        followup.update({
+            "followup_type": "schedule_options",
+            "date_candidates": date_candidates[:10],
+            "first_available_times": first_times[:10],
+            "shop_id": state.commerce_state.store.shop_id,
+            "store_name": state.commerce_state.store.shop_name,
+            "goods_no": state.commerce_state.product.goods_no,
+            "product_name": state.commerce_state.product.product_name,
+        })
+        return summary, followup
+
+    if template == "voucher":
+        vouchers = data.get("vouchers") if isinstance(data.get("vouchers"), list) else []
+        meta_list = metadata if isinstance(metadata, list) else []
+        voucher_names = [str(item.get("nameVoucher") or "").strip() for item in vouchers if isinstance(item, dict)]
+        coupon_ids = [
+            str(item.get("couponId") or "").strip()
+            for item in meta_list
+            if isinstance(item, dict) and str(item.get("couponId") or "").strip()
+        ]
+        summary = f"최근 쿠폰 조회: {', '.join(voucher_names[:2])}" if voucher_names else assistant_response
+        followup.update({
+            "followup_type": "coupon_list",
+            "voucher_names": voucher_names[:5],
+            "coupon_ids": coupon_ids[:5],
+        })
+        return summary, followup
+
+    if template == "listCar":
+        cars = data.get("listCar") if isinstance(data.get("listCar"), list) else []
+        meta_list = metadata if isinstance(metadata, list) else []
+        car_numbers = [str(item.get("licensePlate") or "").strip() for item in cars if isinstance(item, dict)]
+        car_infos = [str(item.get("info") or item.get("description") or "").strip() for item in cars if isinstance(item, dict)]
+        first_meta = meta_list[0] if meta_list and isinstance(meta_list[0], dict) else {}
+        summary = f"최근 차량 조회: {', '.join(car_numbers[:2])}" if car_numbers else assistant_response
+        followup.update({
+            "followup_type": "vehicle_list",
+            "car_numbers": car_numbers[:5],
+            "car_infos": car_infos[:5],
+            "car_no": first_meta.get("carNo") or first_meta.get("car_no"),
+            "car_model": first_meta.get("carModelDet") or first_meta.get("car_model_det") or first_meta.get("carName"),
+            "tire_size": first_meta.get("tireSize") or first_meta.get("tire_size_fr"),
+        })
+        return summary, followup
+
+    if template == "preOrder":
+        order_info = data.get("orderInfo") if isinstance(data.get("orderInfo"), dict) else {}
+        meta_dict = metadata if isinstance(metadata, dict) else {}
+        product = str(order_info.get("product") or "").strip()
+        quantity = order_info.get("quantity")
+        store_name = str(order_info.get("storeName") or "").strip()
+        booking = str(order_info.get("bookingDateTime") or "").strip()
+        summary_parts = [part for part in [product, f"{quantity}개" if quantity else "", store_name, booking] if part]
+        summary = f"최근 주문 초안: {' / '.join(summary_parts)}" if summary_parts else assistant_response
+        followup.update({
+            "followup_type": "preorder",
+            "product_name": product,
+            "ord_qty": quantity,
+            "store_name": store_name,
+            "shop_id": meta_dict.get("shopId"),
+            "goods_no": meta_dict.get("goodsId"),
+            "booking_datetime": booking,
+            "payment_amount": order_info.get("paymentAmount"),
+        })
+        return summary, followup
+
+    if template == "quickReply" and isinstance(metadata, dict):
+        if response_shape_key == "metric_comparison_summary":
+            compared_names = metadata.get("productNames") or []
+            compare_metric = str(metadata.get("compareMetric") or metadata.get("compare_metric") or "detail")
+            summary = (
+                f"최근 비교 상품: {', '.join(compared_names[:2])} / 비교 기준: {compare_metric}"
+                if compared_names else assistant_response
+            )
+            followup.update({
+                "followup_type": "product_comparison",
+                "product_names": compared_names[:5],
+                "requested_product_names": metadata.get("requestedProductNames"),
+                "resolved_products": metadata.get("resolvedProducts"),
+                "compare_metric": compare_metric,
+            })
+            return summary, followup
+        summary = assistant_response
+        followup.update({
+            "followup_type": "quick_reply",
+        })
+        return summary, followup
+
+    if assistant_response:
+        followup["followup_type"] = "generic_response"
+        return assistant_response, followup
+    return None, None
+
+
+def _finalize_followup_state(state: ConversationState, bundle: FactBundle) -> ConversationState:
+    event = bundle.templates[-1] if bundle.templates else None
+    summary, last_facts_patch = _template_followup_context(event, state, bundle)
+    if summary or last_facts_patch:
+        return _remember_followup_context(
+            state,
+            conversation_summary=summary,
+            last_facts_patch=last_facts_patch,
+        )
+    if bundle.tool_calls:
+        return _remember_followup_context(
+            state,
+            conversation_summary=f"최근 처리 흐름: {', '.join(call.tool_name for call in bundle.tool_calls[:3])}",
+            last_facts_patch={
+                "followup_type": "tool_only",
+                "tool_names": [call.tool_name for call in bundle.tool_calls],
+            },
+        )
+    return state
 
 
 class AFExecutor:
@@ -138,6 +411,7 @@ class AFExecutor:
                 working_state = await self._compatibility(user_text, working_state, selected.known_inputs, bundle)
             elif selected.af == AgentFlow.FALLBACK_ESCALATION:
                 working_state = await self._fallback_escalation(user_text, working_state, selected.known_inputs, bundle)
+        working_state = _finalize_followup_state(working_state, bundle)
         bundle.state = working_state
         bundle.facts["commerce_state"] = working_state.commerce_state.model_dump(exclude_none=True)
         return bundle
@@ -251,23 +525,7 @@ class AFExecutor:
             if event is None:
                 bundle.missing_inputs.append("product_selection")
                 return state
-            metadata = event.get("data", {}).get("metadata", {}) if isinstance(event, dict) else {}
-            compared_names = metadata.get("productNames") or product_names[:2]
-            compare_metric = str(metadata.get("compareMetric") or known.get("compare_metric") or "detail")
-            resolved_products = metadata.get("resolvedProducts")
-            summary = f"최근 비교 상품: {', '.join(compared_names[:2])} / 비교 기준: {compare_metric}"
-            return _remember_followup_context(
-                state,
-                conversation_summary=summary,
-                last_facts_patch={
-                    "followup_type": "product_comparison",
-                    "product_names": compared_names[:2],
-                    "requested_product_names": metadata.get("requestedProductNames") or product_names[:2],
-                    "compare_metric": compare_metric,
-                    "resolved_products": resolved_products,
-                    "response_shape_key": metadata.get("response_shape_key"),
-                },
-            )
+            return state
         next_state, goods_no = await self._resolve_product(user_text, state, known, bundle)
         if not goods_no:
             return next_state
@@ -449,13 +707,37 @@ class AFExecutor:
             })
             _append_template(bundle, build_list_car_template(result, "차량 정보를 확인해 주세요."))
             return state
-        if car_model:
+        if car_model and not (mbr_no and known.get("vehicle_recommendation")):
             await self._call(bundle, AgentFlow.PRODUCT_COMPATIBILITY, "search_car_model_groups_tool", {
                 "keyword": car_model,
             })
             return state
         if mbr_no:
             result = await self._call(bundle, AgentFlow.PRODUCT_COMPATIBILITY, "get_my_cars_tool", {"mbr_no": mbr_no})
+            if known.get("vehicle_recommendation"):
+                rows = _items(_success_payload(result))
+                selected = _match_registered_vehicle(rows, car_model) if car_model else None
+                if selected is not None:
+                    args = _vehicle_recommendation_args(selected, known)
+                    if args is not None:
+                        recommendation = await self._call(
+                            bundle,
+                            AgentFlow.PRODUCT_RECOMMENDATION,
+                            "get_products_recommendations_tool",
+                            args,
+                        )
+                        _append_template(bundle, build_product_template(recommendation, "내 차에 맞는 추천 상품을 확인해 주세요."))
+                        tire_size = args.get("tire_size") or normalize_tire_size(str(selected.get("tire_size_fr") or ""))
+                        return apply_state_rules(state, product_patch={"tire_size": tire_size} if tire_size else None)
+                _append_template(
+                    bundle,
+                    build_list_car_template(
+                        result,
+                        "내 차에 맞는 타이어를 추천하려면 차량을 먼저 선택해 주세요.",
+                        source_intent="vehicle_resolved_recommendation",
+                    ),
+                )
+                return state
             _append_template(bundle, build_list_car_template(result, "등록된 차량을 확인해 주세요."))
             return state
         bundle.missing_inputs.append("vehicle")

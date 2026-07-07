@@ -66,6 +66,7 @@ class StructuredKnownInputs(BaseModel):
     owner_nm: str | None
     car_model: str | None
     car_lnc_cd: str | None
+    vehicle_recommendation: bool | None
     vehicle_type: Literal["none", "ev", "suv", "passenger", "truck_van"] | None
     recommendation_type: Literal[
         "none",

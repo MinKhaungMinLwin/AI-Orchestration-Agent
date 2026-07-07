@@ -236,6 +236,57 @@ def _purchase_progress_plan(request: TStationChatRequest, state: Any) -> Planner
     )
 
 
+def _vehicle_selection_recommendation_plan(request: TStationChatRequest) -> PlannerDecision | None:
+    patch = _request_slot_patch(request)
+    values = _ui_action_values(request, patch)
+    source_intent = str(
+        values.get("sourceIntent")
+        or values.get("source_intent")
+        or values.get("expectedContractIntent")
+        or values.get("expected_contract_intent")
+        or ""
+    ).strip()
+    action_type = str(values.get("action_type") or values.get("cta_action") or values.get("ctaAction") or "").strip()
+    if source_intent != "vehicle_resolved_recommendation" and action_type != "select_vehicle_candidate":
+        return None
+    car_lnc_cd = values.get("car_lnc_cd") or values.get("carLncCd")
+    tire_size = (
+        values.get("tire_size")
+        or values.get("tireSize")
+        or values.get("tire_size_fr")
+        or values.get("tireSizeFr")
+        or values.get("tire_size_re")
+        or values.get("tireSizeRe")
+    )
+    if not (car_lnc_cd or tire_size):
+        return None
+    known_inputs = {
+        "car_lnc_cd": car_lnc_cd,
+        "tire_size": tire_size,
+        "recommendation_type": values.get("recommendation_type") or values.get("rcmd_type") or "tstation",
+        "season_nm": values.get("season_nm"),
+        "sort_by": values.get("sort_by"),
+        "min_price": values.get("min_price"),
+        "max_price": values.get("max_price"),
+        "limit": values.get("limit") or 3,
+    }
+    return PlannerDecision(
+        selected_afs=[
+            SelectedAF(
+                af=AgentFlow.PRODUCT_RECOMMENDATION,
+                reason="registered vehicle selected; continue vehicle-based tire recommendation",
+                required_inputs=[],
+                known_inputs={k: v for k, v in known_inputs.items() if v not in (None, "")},
+                missing_inputs=[],
+            )
+        ],
+        conversation_goal="recommend_tires_for_selected_vehicle",
+        answer_mode="tool_grounded_answer",
+        requires_user_confirmation=False,
+        resume_previous_flow=True,
+    )
+
+
 def _attach_runtime_known_inputs(planner: PlannerDecision, request: TStationChatRequest) -> PlannerDecision:
     if not request.user_id:
         return planner
@@ -304,6 +355,8 @@ class LLMFirstRuntime:
         state = _apply_request_patch(self.state_store.load(request.session_id), request)
         state = _resolve_text_store_selection(request, state, user_text)
         planner = _store_selection_schedule_plan(request, state, user_text)
+        if planner is None:
+            planner = _vehicle_selection_recommendation_plan(request)
         if planner is None:
             planner = _purchase_progress_plan(request, state)
         if planner is None:

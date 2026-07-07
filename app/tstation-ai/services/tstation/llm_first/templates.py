@@ -727,7 +727,12 @@ def build_voucher_template(payload: Any, assistant_response: str) -> dict[str, A
     }
 
 
-def build_list_car_template(payload: Any, assistant_response: str) -> dict[str, Any] | None:
+def build_list_car_template(
+    payload: Any,
+    assistant_response: str,
+    *,
+    source_intent: str = "product_compatibility",
+) -> dict[str, Any] | None:
     cars = []
     metadata = []
     for item in _items_from_payload(payload)[:5]:
@@ -771,10 +776,10 @@ def build_list_car_template(payload: Any, assistant_response: str) -> dict[str, 
             "available_sizes": None,
             "ctaAction": "select_vehicle_candidate",
             "cta_action": "select_vehicle_candidate",
-            "sourceIntent": "product_compatibility",
-            "source_intent": "product_compatibility",
-            "expectedContractIntent": "product_compatibility",
-            "expected_contract_intent": "product_compatibility",
+            "sourceIntent": source_intent,
+            "source_intent": source_intent,
+            "expectedContractIntent": source_intent,
+            "expected_contract_intent": source_intent,
         })
     if not cars:
         return None

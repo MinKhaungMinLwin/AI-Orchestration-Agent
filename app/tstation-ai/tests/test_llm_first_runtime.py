@@ -54,7 +54,7 @@ from schemas.tstation.chat import TStationChatRequest  # noqa: E402
 from services.tstation.llm_first.composer import Composer  # noqa: E402
 from services.tstation.llm_first.executor import AFExecutor  # noqa: E402
 from services.tstation.llm_first.models import AgentFlow, ConversationState, FactBundle, PlannerDecision, ProductState, SelectedAF, StructuredPlannerDecision, ToolCallRecord  # noqa: E402
-from services.tstation.llm_first.planner import LeadingAgentPlanner  # noqa: E402
+from services.tstation.llm_first.planner import LeadingAgentPlanner, extract_known_inputs  # noqa: E402
 from services.tstation.llm_first.qc import verify_response  # noqa: E402
 from services.tstation.llm_first.runtime import LLMFirstRuntime  # noqa: E402
 from services.tstation.llm_first.state import LLMFirstStateStore, apply_state_rules  # noqa: E402
@@ -453,6 +453,15 @@ class FakeExecutor(AFExecutor):
                             "car_lnc_cd": "CAR001",
                             "tire_size_fr": "205/65R16",
                             "tire_size_re": "205/65R16",
+                        },
+                        {
+                            "car_no": "34나5678",
+                            "car_maker": "제네시스",
+                            "car_nm": "GV70",
+                            "car_model_det": "GV70 2.5T",
+                            "car_lnc_cd": "CAR003",
+                            "tire_size_fr": "235/55R19",
+                            "tire_size_re": "235/55R19",
                         }
                     ]
                 },
@@ -550,6 +559,7 @@ def test_structured_planner_schema_requires_all_strict_fields() -> None:
         "owner_nm",
         "car_model",
         "car_lnc_cd",
+        "vehicle_recommendation",
         "vehicle_type",
         "recommendation_type",
         "recommendation_source",
@@ -843,6 +853,56 @@ def test_product_comparison_persists_followup_context_in_state() -> None:
     assert state_store.state.last_facts["followup_type"] == "product_comparison"
     assert state_store.state.last_facts["product_names"] == ["키너지 EX", "옵티모"]
     assert state_store.state.last_facts["compare_metric"] == "detail"
+
+
+def test_product_template_persists_followup_context_in_state() -> None:
+    state_store = MemoryStateStore()
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.PRODUCT_RECOMMENDATION,
+                    reason="recommend tires",
+                    known_inputs={"recommendation_type": "tstation", "tire_size": "245/45R19"},
+                )
+            ]
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=state_store,
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "245/45R19 추천해줘"}],
+        stream=False,
+        user_id="u1",
+        session_id="product-followup",
+    )
+
+    asyncio.run(runtime.run(request))
+
+    assert state_store.state.last_facts["followup_type"] == "product_list"
+    assert state_store.state.last_facts["product_names"] == ["벤투스 S2 AS"]
+    assert state_store.state.last_facts["goods_no"] == "G000000000001"
+    assert "벤투스 S2 AS" in state_store.state.conversation_summary
+
+
+def test_extract_known_inputs_uses_last_facts_fallback() -> None:
+    state = ConversationState()
+    state.last_facts = {
+        "product_names": ["키너지 EX", "옵티모"],
+        "compare_metric": "detail",
+        "shop_id": "S001",
+        "store_name": "티스테이션 판교점",
+        "car_model": "GV70",
+    }
+
+    known = extract_known_inputs("가격은?", state)
+
+    assert known["product_names"] == ["키너지 EX", "옵티모"]
+    assert known["compare_metric"] == "detail"
+    assert known["shop_id"] == "S001"
+    assert known["store_name"] == "티스테이션 판교점"
+    assert known["car_model"] == "GV70"
 
 
 def test_product_comparison_guard_handles_recommendation_af_with_product_names() -> None:
@@ -1327,6 +1387,37 @@ def test_favorite_store_lookup_uses_favorite_store_tool_and_location_template() 
     assert metadata["tool_calls"][0]["args"] == {}
 
 
+def test_location_template_persists_followup_context_in_state() -> None:
+    state_store = MemoryStateStore()
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.STORE,
+                    reason="favorite store lookup",
+                    known_inputs={"store_lookup": "favorite_stores"},
+                )
+            ]
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=state_store,
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "내 단골매장 보여줘"}],
+        stream=False,
+        user_id="u1",
+        session_id="favorite-store-followup",
+    )
+
+    asyncio.run(runtime.run(request))
+
+    assert state_store.state.last_facts["followup_type"] == "store_list"
+    assert state_store.state.last_facts["store_names"] == ["티스테이션 단골점"]
+    assert state_store.state.last_facts["shop_ids"] == ["S003"]
+    assert "티스테이션 단골점" in state_store.state.conversation_summary
+
+
 def test_empty_favorite_store_lookup_emits_quickreply_without_generic_store_search() -> None:
     runtime = LLMFirstRuntime(
         planner=StaticPlanner(PlannerDecision(
@@ -1480,6 +1571,40 @@ def test_quick_shopping_with_store_but_no_schedule_emits_datepick() -> None:
     assert events[0]["data"]["dates"][0]["availableTimes"] == [10, 11, 13]
     assert metadata["missing_inputs"] == ["schedule"]
     assert metadata["tool_calls"][0]["tool_name"] == "get_store_schedule_tool"
+
+
+def test_datepick_template_persists_followup_context_in_state() -> None:
+    state_store = MemoryStateStore()
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(af=AgentFlow.QUICK_SHOPPING, reason="order draft", known_inputs={})
+            ]
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=state_store,
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "주문 진행해줘"}],
+        stream=False,
+        user_id="u1",
+        session_id="datepick-followup",
+        slots={
+            "goodsNo": "G000000000003",
+            "productName": "아이온 에보",
+            "ordQty": 4,
+            "shopId": "S001",
+            "shopName": "티스테이션 판교점",
+        },
+    )
+
+    asyncio.run(runtime.run(request))
+
+    assert state_store.state.last_facts["followup_type"] == "schedule_options"
+    assert state_store.state.last_facts["date_candidates"][0] == "20260707"
+    assert state_store.state.last_facts["first_available_times"] == [10, 11, 13]
+    assert state_store.state.last_facts["shop_id"] == "S001"
 
 
 def test_quick_shopping_with_region_but_no_store_emits_booking_location() -> None:
@@ -1852,6 +1977,145 @@ def test_product_compatibility_uses_my_cars_tool_and_listcar_template() -> None:
     assert metadata["planner"]["selected_afs"][0]["af"] == "ProductCompatibilityAF"
     assert metadata["planner"]["selected_afs"][0]["known_inputs"]["mbr_no"] == "M123"
     assert metadata["tool_calls"][0]["tool_name"] == "get_my_cars_tool"
+
+
+def test_listcar_template_persists_followup_context_in_state() -> None:
+    state_store = MemoryStateStore()
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.PRODUCT_COMPATIBILITY,
+                    reason="registered vehicle compatibility lookup",
+                    known_inputs={},
+                )
+            ]
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=state_store,
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "내 차 보여줘"}],
+        stream=False,
+        user_id="M123",
+        session_id="compat-followup",
+    )
+
+    asyncio.run(runtime.run(request))
+
+    assert state_store.state.last_facts["followup_type"] == "vehicle_list"
+    assert state_store.state.last_facts["car_numbers"][:2] == ["12가3456", "34나5678"]
+    assert state_store.state.last_facts["car_no"] == "12가3456"
+    assert state_store.state.last_facts["car_model"] == "쏘나타 DN8"
+
+
+def test_vehicle_recommendation_first_shows_my_car_list() -> None:
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.PRODUCT_COMPATIBILITY,
+                    reason="registered vehicle recommendation needs vehicle selection",
+                    known_inputs={"vehicle_recommendation": True},
+                )
+            ]
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=MemoryStateStore(),
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "내차에 맞는 타이어 추천해줘"}],
+        stream=False,
+        user_id="M123",
+        session_id="vehicle-recommend-list",
+    )
+
+    _, events, metadata = asyncio.run(runtime.run(request))
+
+    assert events[0]["template"] == "listCar"
+    assert events[0]["data"]["assistantResponse"] == "내 차에 맞는 타이어를 추천하려면 차량을 먼저 선택해 주세요."
+    assert events[0]["data"]["metadata"][0]["sourceIntent"] == "vehicle_resolved_recommendation"
+    assert events[0]["data"]["metadata"][0]["carLncCd"] == "CAR001"
+    assert events[0]["data"]["metadata"][0]["tireSize"] == "205/65R16"
+    assert [call["tool_name"] for call in metadata["tool_calls"]] == ["get_my_cars_tool"]
+
+
+def test_named_registered_vehicle_recommendation_auto_selects_unique_car() -> None:
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.PRODUCT_COMPATIBILITY,
+                    reason="named registered vehicle recommendation",
+                    known_inputs={
+                        "vehicle_recommendation": True,
+                        "car_model": "쏘나타",
+                        "recommendation_type": "tstation",
+                    },
+                )
+            ]
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=MemoryStateStore(),
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "내차 중에 쏘나타에 맞는 타이어 추천해줘"}],
+        stream=False,
+        user_id="M123",
+        session_id="vehicle-recommend-named",
+    )
+
+    _, events, metadata = asyncio.run(runtime.run(request))
+
+    assert events[0]["template"] == "product"
+    assert [call["tool_name"] for call in metadata["tool_calls"]] == [
+        "get_my_cars_tool",
+        "get_products_recommendations_tool",
+    ]
+    assert metadata["tool_calls"][1]["args"] == {
+        "rcmd_type": "tstation",
+        "limit": 3,
+        "car_lnc_cd": "CAR001",
+    }
+
+
+def test_selected_registered_vehicle_continues_to_recommendation() -> None:
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(selected_afs=[])),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=MemoryStateStore(),
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "이 차량 선택"}],
+        stream=False,
+        user_id="M123",
+        session_id="vehicle-selection-recommend",
+        ui_action={
+            "action_type": "select_vehicle_candidate",
+            "slots": {
+                "carLncCd": "CAR003",
+                "tireSize": "235/55R19",
+                "sourceIntent": "vehicle_resolved_recommendation",
+            },
+        },
+    )
+
+    _, events, metadata = asyncio.run(runtime.run(request))
+
+    assert events[0]["template"] == "product"
+    assert metadata["planner"]["selected_afs"][0]["af"] == "ProductRecommendationAF"
+    assert metadata["planner"]["resume_previous_flow"] is True
+    assert metadata["tool_calls"][0]["tool_name"] == "get_products_recommendations_tool"
+    assert metadata["tool_calls"][0]["args"] == {
+        "rcmd_type": "tstation",
+        "limit": 3,
+        "tire_size": "235/55R19",
+        "car_lnc_cd": "CAR003",
+    }
 
 
 def test_product_compatibility_uses_owner_vehicle_lookup_when_plate_and_owner_known() -> None:

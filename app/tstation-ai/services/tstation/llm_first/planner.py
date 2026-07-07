@@ -27,12 +27,15 @@ def normalize_tire_size(text: str) -> str | None:
 def extract_known_inputs(user_text: str, state: ConversationState) -> dict[str, Any]:
     text = user_text.strip()
     known: dict[str, Any] = {}
+    last_facts = state.last_facts if isinstance(state.last_facts, dict) else {}
     if goods := _GOODS_NO_RE.search(text):
         known["goods_no"] = goods.group(0).upper()
     elif state.commerce_state.product.goods_no:
         known["goods_no"] = state.commerce_state.product.goods_no
+    elif last_facts.get("goods_no"):
+        known["goods_no"] = last_facts["goods_no"]
 
-    tire_size = normalize_tire_size(text) or state.commerce_state.product.tire_size
+    tire_size = normalize_tire_size(text) or state.commerce_state.product.tire_size or last_facts.get("tire_size")
     if tire_size:
         known["tire_size"] = tire_size
 
@@ -40,15 +43,40 @@ def extract_known_inputs(user_text: str, state: ConversationState) -> dict[str, 
         known["ord_qty"] = int(qty.group(1))
     elif state.commerce_state.quantity:
         known["ord_qty"] = state.commerce_state.quantity
+    elif last_facts.get("ord_qty"):
+        known["ord_qty"] = last_facts["ord_qty"]
 
     if state.commerce_state.product.product_name:
         known["product_name"] = state.commerce_state.product.product_name
+    elif last_facts.get("product_name"):
+        known["product_name"] = last_facts["product_name"]
+    product_names = last_facts.get("product_names")
+    if isinstance(product_names, list):
+        normalized_names = [str(name).strip() for name in product_names if str(name).strip()]
+        if normalized_names:
+            known["product_names"] = normalized_names[:5]
+    if last_facts.get("compare_metric"):
+        known["compare_metric"] = last_facts["compare_metric"]
     if state.commerce_state.store.shop_id:
         known["shop_id"] = state.commerce_state.store.shop_id
+    elif last_facts.get("shop_id"):
+        known["shop_id"] = last_facts["shop_id"]
     if state.commerce_state.store.shop_name:
         known["store_name"] = state.commerce_state.store.shop_name
+    elif last_facts.get("store_name"):
+        known["store_name"] = last_facts["store_name"]
     if state.commerce_state.store.region:
         known["region"] = state.commerce_state.store.region
+    elif last_facts.get("region"):
+        known["region"] = last_facts["region"]
+    if last_facts.get("date"):
+        known["date"] = last_facts["date"]
+    if last_facts.get("time"):
+        known["time"] = last_facts["time"]
+    if last_facts.get("car_no"):
+        known["car_no"] = last_facts["car_no"]
+    if last_facts.get("car_model"):
+        known["car_model"] = last_facts["car_model"]
 
     return known
 
@@ -90,7 +118,8 @@ class LeadingAgentPlanner:
             "Use current-turn intent first. Do not force stale purchase context unless the user explicitly resumes. "
             "Return missing_inputs for each selected flow. Include product_name, product_names, compare_metric, "
             "benefit_lookup, benefit_query, evt_no_list, region, store_name, store_lookup, ord_qty, goods_no, "
-            "shop_id, tire_size, schedule date/time, car_no, owner_nm, car_model, store_attribute in known_inputs "
+            "shop_id, tire_size, schedule date/time, car_no, owner_nm, car_model, car_lnc_cd, "
+            "vehicle_recommendation, store_attribute in known_inputs "
             "when the user or state provides them. "
             "For purchase/order intent, use QuickShoppingAF and keep the flow continuous across turns: "
             "collect product or tire_size, ord_qty, store/region, and schedule date/time in order. "
@@ -119,8 +148,13 @@ class LeadingAgentPlanner:
             "For authenticated account lookups, set known_inputs.account_lookup to one of: "
             "coupons for owned coupon list, reservations for reservation history, orders for order history, "
             "maintenance_history for service/maintenance history, warranties for owned warranty/assurance service. "
-            "For tire recommendations, use ProductRecommendationAF and classify like legacy Discovery Flow A: "
-            "A1 vehicle-tied when the user asks by my car/registered car/car model, A2 size-tied when tire_size is present, "
+            "For tire recommendations, use ProductRecommendationAF and classify like legacy Discovery Flow A. "
+            "For registered my-car recommendations such as '내차에 맞는 타이어 추천' or '내 차량 기반 추천', "
+            "select ProductCompatibilityAF first, set vehicle_recommendation=true, and rely on runtime mbr_no to fetch saved cars. "
+            "If the user names one of their cars such as '내차 중에 제타/GV70/쏘나타', still select ProductCompatibilityAF, "
+            "set vehicle_recommendation=true and car_model to that named car; executor will fetch saved cars and auto-select only a unique match. "
+            "Do not jump straight to generic ProductRecommendationAF without a selected registered car for my-car wording. "
+            "Use A2 size-tied when tire_size is present, "
             "A3 general/scenario-only when no vehicle or size is present. A3 must still recommend immediately without asking for size. "
             "Set known_inputs.recommendation_type default tstation, or map scenarios: value, discount, wet, snow, "
             "high_speed, performance, low_vibration, commute, long_distance, urban, family, ev, heavy_load, "
