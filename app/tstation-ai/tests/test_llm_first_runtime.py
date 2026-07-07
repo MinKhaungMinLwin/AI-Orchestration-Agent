@@ -386,6 +386,36 @@ class FakeExecutor(AFExecutor):
                         ]
                     },
                 }
+        elif tool_name == "search_stores_complex_tool":
+            result = {
+                "status": "success",
+                "data": {
+                    "stores": [
+                        {
+                            "shop_id": "S001",
+                            "shop_nm": "티스테이션 판교점",
+                            "road_addr_base": "경기 성남시 분당구 판교로",
+                            "road_addr_dtl": "123",
+                            "tel_no": "031-000-0000",
+                            "shop_biz_strt_time": "09:00",
+                            "shop_biz_end_time": "18:00",
+                            "rating_idx": 4.8,
+                            "review_count": 27,
+                            "is_all_my_t": True,
+                            "is_installable": True,
+                            "svc_codes": ["116"],
+                        }
+                    ],
+                    "search": {
+                        "source": "complex",
+                        "filters": {
+                            "cal_days": args.get("cal_days"),
+                            "open_only": args.get("open_only"),
+                            "time_after_hour": args.get("time_after_hour"),
+                        },
+                    },
+                },
+            }
         elif tool_name == "get_favorite_stores_tool":
             result = {
                 "status": "success",
@@ -1856,6 +1886,76 @@ def test_store_attribute_search_uses_ev_specialty_filter() -> None:
         "limit": 10,
         "place_query": "서울",
         "ev_specialty_only": True,
+    }
+
+
+def test_store_schedule_search_uses_complex_tool_for_specific_date_and_normalizes_gyeonggi() -> None:
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.STORE,
+                    reason="specific-date store schedule search",
+                    known_inputs={"region": "경기권", "date": "2026-07-12"},
+                )
+            ]
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=MemoryStateStore(),
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "경기권에서 2026-07-12 장착 가능한 매장 보여줘"}],
+        stream=False,
+        user_id="u1",
+        session_id="store-schedule-complex-date",
+    )
+
+    _, events, metadata = asyncio.run(runtime.run(request))
+
+    assert events[0]["template"] == "location"
+    LocationDataEvent.model_validate(events[0])
+    assert metadata["tool_calls"][0]["tool_name"] == "search_stores_complex_tool"
+    assert metadata["tool_calls"][0]["args"] == {
+        "limit": 10,
+        "cal_days": ["20260712"],
+        "open_only": True,
+        "place_query": "경기도",
+    }
+
+
+def test_store_schedule_search_uses_complex_tool_for_weekend() -> None:
+    runtime = LLMFirstRuntime(
+        planner=StaticPlanner(PlannerDecision(
+            selected_afs=[
+                SelectedAF(
+                    af=AgentFlow.STORE,
+                    reason="weekend store schedule search",
+                    known_inputs={"region": "경기지역"},
+                )
+            ]
+        )),
+        executor=FakeExecutor(),
+        composer=StaticComposer(),
+        state_store=MemoryStateStore(),
+    )
+    request = TStationChatRequest(
+        messages=[{"role": "user", "content": "경기지역 이번주말 장착 가능한 매장 보여줘"}],
+        stream=False,
+        user_id="u1",
+        session_id="store-schedule-complex-weekend",
+    )
+
+    _, events, metadata = asyncio.run(runtime.run(request))
+
+    assert events[0]["template"] == "location"
+    LocationDataEvent.model_validate(events[0])
+    assert metadata["tool_calls"][0]["tool_name"] == "search_stores_complex_tool"
+    assert metadata["tool_calls"][0]["args"] == {
+        "limit": 10,
+        "cal_days": ["20260711", "20260712"],
+        "open_only": True,
+        "place_query": "경기도",
     }
 
 

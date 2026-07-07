@@ -21,6 +21,7 @@ from services.tstation.llm_first.templates import (
     build_voucher_template,
 )
 from services.tstation.llm_first.adapters import legacy
+from services.tstation.llm_first.store_schedule_search import normalize_store_place_query, resolve_store_schedule_search
 from services.tstation.llm_first.store_search_filters import resolve_store_search_filters
 from services.tstation.llm_first.tooling.registry import invoke_tool
 
@@ -106,10 +107,7 @@ def _unsupported_region_event(query: Any) -> dict[str, Any]:
 
 
 def _store_search_query(value: Any) -> str | None:
-    text = str(value or "").strip()
-    if not text:
-        return None
-    return _STORE_PLACE_QUERY_OVERRIDES.get(text, text)
+    return normalize_store_place_query(value)
 
 
 def _quantity_quickreply_event() -> dict[str, Any]:
@@ -756,14 +754,18 @@ class AFExecutor:
         search_args: dict[str, Any] = {"limit": 10}
         store_attribute = str(known.get("store_attribute") or "").strip()
         resolved_store_filters = resolve_store_search_filters(store_attribute)
+        schedule_search_filters = resolve_store_schedule_search(user_text, known)
         if resolved_store_filters is not None:
             search_args.update(resolved_store_filters.to_tool_args())
+        if schedule_search_filters is not None:
+            search_args.update(schedule_search_filters)
         if query:
             search_args["place_query"] = str(query)
         else:
             search_args["xpos"] = float(user_xpos)
             search_args["ypos"] = float(user_ypos)
-        result = await self._call(bundle, AgentFlow.STORE, "search_stores_tool", search_args)
+        tool_name = "search_stores_complex_tool" if schedule_search_filters is not None else "search_stores_tool"
+        result = await self._call(bundle, AgentFlow.STORE, tool_name, search_args)
         if query and _is_domestic_region_gate_blocked(result):
             _append_template(bundle, _unsupported_region_event(query))
             return state
