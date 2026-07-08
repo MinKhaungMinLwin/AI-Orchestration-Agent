@@ -112,6 +112,15 @@ _TOOL_TEMPLATES: dict[str, tuple[str, type[BaseModel]]] = {
     "quick_order_tool": ("orderComplete", OrderCompleteTemplate),
 }
 
+_INFO_GATED_TOOLS = {"search_product_tool", "search_product_summary_tool"}
+
+
+def _is_selection_search(call: dict) -> bool:
+    """Price-range browse (min/max_price) is always a selection — show the card
+    regardless of the router signal (deterministic; honors the 'price range' case)."""
+    args = call.get("args") or {}
+    return args.get("min_price") is not None or args.get("max_price") is not None
+
 
 def _has_rows(output: str) -> bool:
     """True when the tool output parses to non-empty JSON data."""
@@ -1016,6 +1025,7 @@ async def build_rich_data_event(
     trace_config: dict | None = None,
     *,
     slots: ConversationSlots | None = None,
+    allow_selection_cards: bool = True,
 ) -> dict | None:
     """Return a validated FE data event dict, or None to fall back to quickReply."""
     source = _pick_source(tool_calls)
@@ -1029,6 +1039,13 @@ async def build_rich_data_event(
         return build_preorder_data_event(
             answer, _parse_tool_output(call.get("output")), source="chat_v3_k1_order_preview"
         )
+    
+    if (
+        call.get("name") in _INFO_GATED_TOOLS
+        and not allow_selection_cards
+        and not _is_selection_search(call)
+    ):
+        return None
     try:
         wrapper_model = _relevance_wrapper(template_model)
         llm = get_router_llm().with_structured_output(wrapper_model, method="function_calling")

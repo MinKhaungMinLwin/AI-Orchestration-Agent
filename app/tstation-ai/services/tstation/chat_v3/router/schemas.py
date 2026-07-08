@@ -59,3 +59,10 @@ class RouteDecision(BaseModel):
         default_factory=SlotsPatch,
         description="이번 사용자 발화에서 새로 알 수 있게 된 슬롯 값만",
     )
+    needs_selection_card: bool = Field(
+        default=True,
+        description=(
+            "사용자가 이번 턴에 상품 목록에서 골라야 하거나(모델 선택·가격대별·추천 등) 카드가 꼭 필요하면 true. "
+            "특정 상품의 리뷰·스펙·비교·단순 가격 문의 등 정보만 원하면 false. 확실치 않으면 true."
+        ),
+    )
