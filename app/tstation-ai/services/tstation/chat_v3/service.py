@@ -102,6 +102,8 @@ async def _run_turn(request: TStationChatRequest, result: dict):
         yield event
     t_tools = time.perf_counter()
 
+    slots = templates.harvest_order_slots(slots, executor.tool_calls)
+
     answer = executor.final_text.strip() or ERROR_RESPONSE
     corrected = await qc.verify_answer(answer, executor.tool_calls)
     if corrected != answer:
@@ -113,9 +115,16 @@ async def _run_turn(request: TStationChatRequest, result: dict):
     result["answer"] = answer
     yield sse.message(answer)
     chips: list[dict] = []
-    quantity_chips = templates.quantity_quick_replies(answer)
-    rich_event = None if quantity_chips else await templates.build_rich_data_event(answer, executor.tool_calls)
-    if quantity_chips:
+    rich_event = await templates.build_rich_data_event(answer, executor.tool_calls)
+    preorder_event = None if rich_event else templates.build_preorder_fallback(answer, slots, decision)
+    quantity_chips = [] if rich_event or preorder_event else templates.quantity_quick_replies(answer)
+    if rich_event:
+        predicted_domains = [domain]
+        yield sse.sse({**rich_event, "source_domain": domain})
+    elif preorder_event:
+        predicted_domains = ["TRANSACTION"]
+        yield sse.sse({**preorder_event, "source_domain": domain})
+    elif quantity_chips:
         chips = quantity_chips
         predicted_domains = ["TRANSACTION"]
         yield sse.data_event(
@@ -123,9 +132,6 @@ async def _run_turn(request: TStationChatRequest, result: dict):
             {"assistantResponse": answer, "quickReplies": chips, "predictedDomains": predicted_domains},
             source_domain=domain,
         )
-    elif rich_event:
-        predicted_domains = [domain]
-        yield sse.sse({**rich_event, "source_domain": domain})
     else:
         chips = await composer.suggest_quick_replies(user_text, answer)
         # V2 semantics: predictedDomains = likely domains of the user's NEXT turn.

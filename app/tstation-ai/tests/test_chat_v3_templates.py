@@ -49,7 +49,9 @@ for key, value in _TEST_ENV_DEFAULTS.items():
     os.environ.setdefault(key, value)
 
 from services.tstation.agents.templates.schemas import LocationTemplate  # noqa: E402
+from schemas.tstation.slots import ConversationSlots  # noqa: E402
 from services.tstation.chat_v3 import templates  # noqa: E402
+from services.tstation.chat_v3.router.schemas import Domain, RouteDecision  # noqa: E402
 
 
 class _FakeStructuredLLM:
@@ -201,3 +203,74 @@ def test_quantity_question_uses_fixed_quantity_quick_replies():
         {"label": "3개", "domain": "TRANSACTION"},
         {"label": "4개", "domain": "TRANSACTION"},
     ]
+
+
+def test_preorder_fallback_builds_ready_order_card_from_slots():
+    slots = ConversationSlots(
+        goods_no="G000000309783",
+        tire_model="벤투스 S2 AS",
+        tire_size="245/45R19",
+        ord_qty=2,
+        shop_id="F00721",
+        shop_name="티스테이션 한남점",
+        requested_cal_day="20260708",
+        rsv_hour="14",
+        payment_amount=308200,
+        pending_intent="order",
+        goal_type="place_order",
+    )
+    decision = RouteDecision(
+        domain=Domain.TRANSACTION,
+        intents=["place_order"],
+        slots_patch={"rsv_hour": "14"},
+    )
+
+    event = templates.build_preorder_fallback(
+        "아래 내용으로 구매 진행해도 될까요?",
+        slots,
+        decision,
+    )
+
+    assert event is not None
+    assert event["template"] == "preOrder"
+    assert event["data"]["isReadyToOrder"] is True
+    assert event["data"]["metadata"]["goodsId"] == "G000000309783"
+    assert event["data"]["orderInfo"]["storeName"] == "티스테이션 한남점"
+    assert event["data"]["orderInfo"]["bookingDateTime"] == "2026년 07월 08일 14:00"
+
+
+def test_preorder_fallback_skips_irrelevant_followup_even_with_ready_slots():
+    slots = ConversationSlots(
+        goods_no="G000000309783",
+        ord_qty=2,
+        shop_id="F00721",
+        requested_cal_day="20260708",
+        rsv_hour="14",
+        pending_intent="order",
+        goal_type="place_order",
+    )
+
+    event = templates.build_preorder_fallback(
+        "무이자 할부도 되나요?",
+        slots,
+        RouteDecision(domain=Domain.TRANSACTION, intents=["installment"]),
+    )
+
+    assert event is None
+
+
+def test_transaction_preview_source_maps_to_location_not_preorder():
+    source = templates._pick_source(  # noqa: SLF001
+        [{"name": "transaction_store_preview_tool", "args": {}, "output": json.dumps({"data": {"stores": [{}]}})}]
+    )
+
+    assert source is not None
+    assert source[0] == "location"
+
+
+def test_save_to_cart_does_not_emit_order_complete_rich_template():
+    source = templates._pick_source(  # noqa: SLF001
+        [{"name": "save_to_cart_tool", "args": {}, "output": json.dumps({"status": "success", "data": {"result": True}})}]
+    )
+
+    assert source is None
