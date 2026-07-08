@@ -43,6 +43,7 @@ from services.tstation.policies.reservation_template_policy import (
     coerce_schedule_confirmation_quickreply_to_datepick,
     filter_datepick_to_requested_weekday,
     latest_template_data_from_messages,
+    strip_stale_quantity_quickreply,
     _GENERIC_DISCOVERY_FALLBACK_LABELS,
 )
 from services.tstation.policies.discovery_intent_policy import (
@@ -38478,6 +38479,26 @@ class TStationChatServiceV2:
                         last_template = "datepick"
                         last_template_source = "code_mapper"
                         last_assistant_response_source = "code_mapper_order_preview_quickreply"
+                    event_data = event.get("data", {})
+                coerced_event = strip_stale_quantity_quickreply(
+                    event,
+                    structured_sources,
+                    pending_slots or initial_slots,
+                )
+                if coerced_event is not None:
+                    logger.warning(
+                        "[TEMPLATE_COERCE] stale quantity quickReply chips on resolved-qty turn"
+                    )
+                    event, coercion_allowed = _finalize_coerced_template_event(
+                        coerced_event,
+                        original_event=event,
+                        turn_contract=turn_contract,
+                        source="code_mapper_stale_qty_chip",
+                    )
+                    if coercion_allowed:
+                        last_template = event.get("template", last_template)
+                        last_template_source = "code_mapper"
+                        last_assistant_response_source = "code_mapper_stale_qty_chip"
                     event_data = event.get("data", {})
                 coerced_event = filter_datepick_to_requested_weekday(event, user_query)
                 if coerced_event is not None:
