@@ -21,7 +21,16 @@ TRANSACTION_WRITE_GUIDANCE = (
     "주문 확정 단계(상품 goods_no·수량·매장·희망일정·결제금액이 모두 확정)에 도달하면, 텍스트로만 요약하지 말고 "
     "present_order_preview_tool 을 호출해 주문 확인 카드(preOrder)를 보여준 뒤 사용자의 확인을 기다리세요. "
     "장바구니 흐름(매장 미정)이면 goods_no·수량만 확정된 상태로 is_ready_to_add_to_cart=True 로 호출하세요. "
-    "present_order_preview_tool 은 미리보기일 뿐 실제 주문을 생성하지 않습니다."
+    "present_order_preview_tool 은 미리보기일 뿐 실제 주문을 생성하지 않습니다.\n\n"
+    "## 확인 후 실행 — 가장 놓치기 쉬운 단계\n"
+    "사용자가 직전에 보여준 주문/장바구니 요약(또는 preOrder 카드)에 '네', '진행해주세요', '네 진행해주세요', "
+    "'맞아요' 등으로 확인했다면, 그 즉시 quick_order_tool(매장 확정 시) 또는 save_to_cart_tool(매장 미정 시)을 "
+    "호출해 실제로 주문/장바구니를 실행하세요. 아래 CONVERSATION SLOTS 에 있는 goods_no·ord_qty·shop_id·"
+    "requested_cal_day·rsv_hour 값을 그대로 재사용하세요 — 이미 확인받은 값이므로 다시 상품을 검색하거나, "
+    "사용자에게 타이어·매장을 다시 확인해 달라고 되묻거나, 확인을 한 번 더 요청하지 마세요.\n"
+    "quick_order_tool 호출 전에 재고·설치 가능 여부를 다시 점검해야 한다고 판단되면, 사용자에게 되묻지 말고 "
+    "get_logistics_inventory_tool / get_store_detail_tool 을 스스로 호출해 확인한 뒤 곧바로 이어서 "
+    "quick_order_tool 을 호출하세요. 확정된 정보가 있는데도 사용자에게 재확인을 요청하며 흐름을 멈추지 마세요."
 )
 
 ERROR_RESPONSE = "요청을 처리하는 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
