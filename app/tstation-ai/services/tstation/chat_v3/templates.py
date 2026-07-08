@@ -432,20 +432,40 @@ def _answer_requests_store_selection(answer: str) -> bool:
     return any(action in text for action in ("알려", "선택", "골라", "말씀", "입력", "정해"))
 
 
+def _has_product_size_quantity(slots: ConversationSlots | None) -> bool:
+    if slots is None:
+        return False
+    return bool(slots.goods_no and slots.tire_size and _has_confirmed_quantity(slots))
+
+
 def _pick_source(
     tool_calls: list[dict],
     slots: ConversationSlots | None = None,
     previous_slots: ConversationSlots | None = None,
 ) -> tuple[str, type[BaseModel], dict] | None:
     """Most recent tool call whose output can feed a rich template."""
+    candidates: list[tuple[str, type[BaseModel], dict]] = []
     for call in reversed(tool_calls):
         entry = _TOOL_TEMPLATES.get(call.get("name") or "")
         output = str(call.get("output") or "")
         if entry and _should_skip_product_source(entry[0], slots, previous_slots):
             continue
         if entry and not output.startswith("Tool error") and _has_rows(output):
-            return entry[0], entry[1], call
-    return None
+            candidates.append((entry[0], entry[1], call))
+    if not candidates:
+        return None
+
+    if _has_product_size_quantity(slots):
+        if not slots.shop_id:
+            for candidate in candidates:
+                if candidate[0] == "location":
+                    return candidate
+            return None
+        for candidate in candidates:
+            if candidate[0] == "datepick":
+                return candidate
+
+    return candidates[0]
 
 
 def _should_gate_info_product_source(

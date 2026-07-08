@@ -941,3 +941,91 @@ def test_booking_flow_hint_offers_order_when_all_slots_ready():
 def test_booking_flow_hint_none_outside_booking_context():
     assert templates.booking_flow_hint(ConversationSlots()) is None
     assert templates.booking_flow_hint(None) is None
+
+
+def test_booking_flow_with_product_size_quantity_prioritizes_store_list_before_schedule(monkeypatch):
+    monkeypatch.setattr(templates, "get_router_llm", lambda: _FakeDatepickRouterLLM())
+    slots = ConversationSlots(
+        goods_no="G0001",
+        tire_size="245/45R19",
+        ord_qty=4,
+        pending_intent="order",
+    )
+    store_output = {
+        "status": "success",
+        "data": {
+            "stores": [
+                {
+                    "shop_id": "F00721",
+                    "shop_nm": "티스테이션 정발산점",
+                    "addr_base": "경기도 고양시 일산동구",
+                    "addr_dtl": "대산로 15",
+                    "is_installable": True,
+                }
+            ]
+        },
+    }
+    schedule_output = {
+        "status": "success",
+        "data": {"dates": [{"date": "20260709", "available": True, "availableTimes": [9, 10]}]},
+    }
+
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "고양시에서 구매/장착 가능한 매장 후보를 확인했어요.",
+            [
+                {"name": "search_stores_tool", "args": {"region": "고양시"}, "output": json.dumps(store_output)},
+                {"name": "get_multi_store_schedule_tool", "args": {}, "output": json.dumps(schedule_output)},
+            ],
+            slots=slots,
+        )
+    )
+
+    assert event is not None
+    assert event["template"] == "location"
+    assert event["source_tool"] == "search_stores_tool"
+    assert event["data"]["metadata"][0]["shopId"] == "F00721"
+
+
+def test_booking_flow_with_store_selected_prioritizes_schedule_template(monkeypatch):
+    monkeypatch.setattr(templates, "get_router_llm", lambda: _FakeDatepickRouterLLM())
+    slots = ConversationSlots(
+        goods_no="G0001",
+        tire_size="245/45R19",
+        ord_qty=4,
+        shop_id="F00721",
+        pending_intent="order",
+    )
+    store_output = {
+        "status": "success",
+        "data": {
+            "stores": [
+                {
+                    "shop_id": "F00721",
+                    "shop_nm": "티스테이션 정발산점",
+                    "addr_base": "경기도 고양시 일산동구",
+                    "addr_dtl": "대산로 15",
+                }
+            ]
+        },
+    }
+    schedule_output = {
+        "status": "success",
+        "data": {"dates": [{"date": "20260709", "available": True, "availableTimes": [9, 10]}]},
+    }
+
+    event = asyncio.run(
+        templates.build_rich_data_event(
+            "정발산점에서 예약 가능한 일정을 확인했어요.",
+            [
+                {"name": "get_multi_store_schedule_tool", "args": {"shop_id": "F00721"}, "output": json.dumps(schedule_output)},
+                {"name": "search_stores_tool", "args": {"region": "고양시"}, "output": json.dumps(store_output)},
+            ],
+            slots=slots,
+        )
+    )
+
+    assert event is not None
+    assert event["template"] == "datepick"
+    assert event["source_tool"] == "get_multi_store_schedule_tool"
+    assert event["data"]["metadata"]["slots"]["shop_id"] == "F00721"
