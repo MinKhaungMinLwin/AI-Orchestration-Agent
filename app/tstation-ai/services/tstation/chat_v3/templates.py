@@ -47,6 +47,17 @@ _QUANTITY_CHIPS = [
     {"label": "4개", "domain": "TRANSACTION"},
 ]
 
+_CNSL_TYPE_MAP = {
+    "10002": "\uc0c1\ud488\ubb38\uc758",
+    "10006": "\uc8fc\ubb38/\uacb0\uc81c/\ubc30\uc1a1",
+    "10010": "\ubc18\ud488/\uad50\ud658/\ud658\ubd88",
+    "10013": "\uc81c\uacf5\uc11c\ube44\uc2a4/\uc774\ubca4\ud2b8/\ud61c\ud0dd",
+    "10017": "\ud68c\uc6d0",
+    "10019": "\uae30\ud0c0",
+    "10025": "\uac00\ub9f9\uc810\uc81c\ud734\ubb38\uc758",
+    "10034": "\uc774\ub825\uc11c\uc811\uc218",
+}
+
 # Which template a tool's output can feed — data availability, not routing.
 _TOOL_TEMPLATES: dict[str, tuple[str, type[BaseModel]]] = {
     "search_product_tool": ("product", ProductTemplate),
@@ -122,6 +133,11 @@ def _answer_without_urls(answer: str) -> str:
     return compact_answer_spacing("\n".join(lines))
 
 
+def _cnsl_type_label(cnsl_clss_seq: object) -> str:
+    seq = str(cnsl_clss_seq or "").strip()
+    return _CNSL_TYPE_MAP.get(seq, seq or "1:1")
+
+
 def build_qna_complete_event(answer: str, tool_calls: list[dict]) -> dict | None:
     """Build qnaComplete directly from transfer_to_qna_tool output."""
     raw = _latest_tool_output(tool_calls, "transfer_to_qna_tool")
@@ -137,7 +153,7 @@ def build_qna_complete_event(answer: str, tool_calls: list[dict]) -> dict | None
     payload = QnaCompleteTemplate(
         assistantResponse=assistant_response,
         redictLink=redict_link,
-        cnslType=str(raw.get("cnsl_clss_seq") or "1:1"),
+        cnslType=_cnsl_type_label(raw.get("cnsl_clss_seq")),
         title=title,
         summary=summary,
     )

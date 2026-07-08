@@ -225,10 +225,33 @@ def test_qna_complete_event_uses_redirect_link_without_exposing_url_in_answer():
     assert event["template"] == "qnaComplete"
     assert event["source_tool"] == "transfer_to_qna_tool"
     assert event["data"]["redictLink"] == tool_output["redictLink"]
+    assert event["data"]["cnslType"] == "\uae30\ud0c0"
     assert event["data"]["title"] == "Need help"
     assert event["data"]["summary"] == "Need help with my order"
     assert event["data"]["assistantResponse"] == "Please continue here."
     assert "http" not in event["data"]["assistantResponse"]
+
+
+def test_qna_complete_event_maps_consultation_category_code_to_label():
+    tool_output = {
+        "status": "success",
+        "redictLink": {
+            "pc": "https://www.tstation.com/customer-service/qna.do?mode=write&payload=abc",
+            "mobile": "https://m.tstation.com/customer-service/qna.do?mode=write&payload=abc",
+        },
+        "cnsl_clss_seq": "10002",
+        "inq_tit_nm": "Product question",
+        "ai_summary": "Product question summary",
+    }
+
+    event = templates.build_qna_complete_event(
+        "Please submit the 1:1 inquiry.",
+        [{"name": "transfer_to_qna_tool", "args": {}, "output": json.dumps(tool_output)}],
+    )
+
+    assert event is not None
+    assert event["data"]["cnslType"] == "\uc0c1\ud488\ubb38\uc758"
+    assert event["data"]["cnslType"] != "10002"
 
 
 def test_v3_support_tools_use_qna_handoff_instead_of_legacy_escalation():
