@@ -133,7 +133,9 @@ async def _assert_preorder_stream_does_not_emit_duplicate_message(monkeypatch: p
             events.append(event)
 
     assert not [event for event in events if event.get("type") in {"message", "token"}]
-    assert any(
-        event.get("type") == "data" and event.get("template") == "preOrder"
-        for event in events
-    )
+    pre_order_events = [
+        event for event in events
+        if event.get("type") == "data" and event.get("template") == "preOrder"
+    ]
+    assert pre_order_events
+    assert "assistantResponse" not in pre_order_events[0]["data"]

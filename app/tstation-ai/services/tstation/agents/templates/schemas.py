@@ -519,7 +519,7 @@ class PreOrderTemplate(TemplatePayload):
 
     TEMPLATE_NAME: ClassVar[str] = "preOrder"
 
-    assistantResponse: str = Field(..., min_length=1)
+    assistantResponse: str | None = None
     orderInfo: OrderInfo
     isReadyToOrder: bool
     isReadyToAddToCart: bool
