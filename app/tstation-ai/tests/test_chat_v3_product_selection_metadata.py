@@ -51,6 +51,8 @@ os.environ["REDIS_QUEUE_URL"] = "redis://localhost:6379/1"
 os.environ["REDIS_URL"] = "redis://localhost:6379/2"
 
 from services.tstation.chat_v3.slots.derive import fe_slot_patch  # noqa: E402
+from services.tstation.chat_v3.slots.schemas import SlotsPatch  # noqa: E402
+from services.tstation.chat_v3.slots.store import apply_patch  # noqa: E402
 from services.tstation.chat_v3.templates import (  # noqa: E402
     _normalize_datepick_payload,
     _normalize_product_selection_payload,
@@ -165,3 +167,33 @@ def test_harvest_order_slots_resolves_goods_no_from_product_name_and_size() -> N
 
     assert updated.goods_no == "G000000309783"
     assert updated.pending_product_name == "Ventus S2 AS"
+
+
+def test_product_label_patch_preserves_confirmed_goods_no() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000309783",
+        pending_product_name="Ventus S2 AS",
+        tire_size="225/45R17",
+        ord_qty=2,
+        pending_intent="order",
+        goal_type="place_order",
+    )
+
+    updated = apply_patch(slots, SlotsPatch(tire_model="Ventus S2 AS 225/45R17"))
+
+    assert updated.goods_no == "G000000309783"
+
+
+def test_different_product_label_patch_resets_confirmed_goods_no() -> None:
+    slots = ConversationSlots(
+        goods_no="G000000309783",
+        pending_product_name="Ventus S2 AS",
+        tire_size="225/45R17",
+        ord_qty=2,
+        pending_intent="order",
+        goal_type="place_order",
+    )
+
+    updated = apply_patch(slots, SlotsPatch(tire_model="Ventus V12 evo2 225/45R17"))
+
+    assert updated.goods_no is None
